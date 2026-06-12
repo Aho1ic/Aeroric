@@ -33,6 +33,12 @@
 - `pnpm test` 通过：9 个 test files，63 个 tests。
 - `cargo test` 通过：77 个 Rust tests。
 - `pnpm build` 通过；仍保留既有 chunk size warning。
+- `pnpm tauri build` 通过，生成：
+  - `src-tauri/target/release/bundle/macos/NeZha.app`
+  - `src-tauri/target/release/bundle/dmg/NeZha_0.4.1_aarch64.dmg`
+- 已用 `rsync -aE --delete src-tauri/target/release/bundle/macos/NeZha.app/ /Applications/NeZha.app/` 替换应用。
+- 构建产物与 `/Applications/NeZha.app/Contents/MacOS/nezha` 的 SHA256 均为 `0a8f6a4d133830575665bed904bec0dc40ccb242056f8d35fdcacdea2b1b79bd`。
+- `/Applications/NeZha.app/Contents/Info.plist` 显示 `CFBundleShortVersionString` / `CFBundleVersion` 均为 `0.4.1`。
 
 ## 2026-06-11 CLAUDE Banner, SSH Center Terminal, Goal Mode
 
