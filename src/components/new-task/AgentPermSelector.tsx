@@ -13,17 +13,13 @@ import * as Popover from "@radix-ui/react-popover";
 import * as Select from "@radix-ui/react-select";
 import type { AgentType, PermissionMode } from "../../types";
 import { permissionModeLabel } from "../../types";
+import { AGENT_OPTIONS, agentDisplayLabel } from "../../agents";
 import { useI18n } from "../../i18n";
 import s from "../../styles";
 import claudeLogo from "../../assets/claude.svg";
 import chatgptLogo from "../../assets/chatgpt.svg";
 
-const AGENTS: AgentType[] = ["claude", "codex"];
 const PERMS: PermissionMode[] = ["ask", "auto_edit", "full_access"];
-
-function agentLabel(agent: AgentType): string {
-  return agent === "claude" ? "Claude Code" : "Codex";
-}
 
 function agentIcon(agent: AgentType): string {
   return agent === "claude" ? claudeLogo : chatgptLogo;
@@ -203,7 +199,7 @@ export function AgentPermSelector({
                 opacity: agent === "claude" ? 1 : 0.72,
               }}
             />
-            <span>{agentLabel(agent)}</span>
+            <span>{agentDisplayLabel(agent)}</span>
             <Select.Icon>
               <ChevronDown size={12} strokeWidth={2.5} style={{ opacity: 0.58 }} />
             </Select.Icon>
@@ -211,7 +207,7 @@ export function AgentPermSelector({
           <Select.Portal>
             <Select.Content position="popper" sideOffset={6} style={s.toolbarMenuContent}>
               <Select.Viewport>
-                {AGENTS.map((item) => (
+                {AGENT_OPTIONS.map(({ value: item }) => (
                   <Select.Item
                     key={item}
                     value={item}
@@ -228,7 +224,7 @@ export function AgentPermSelector({
                         opacity: item === "claude" ? 1 : 0.72,
                       }}
                     />
-                    <Select.ItemText>{agentLabel(item)}</Select.ItemText>
+                    <Select.ItemText>{agentDisplayLabel(item)}</Select.ItemText>
                   </Select.Item>
                 ))}
               </Select.Viewport>

@@ -1,9 +1,9 @@
+use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 use std::fs;
 use std::io::{Read, Write};
 use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 use tauri::ipc::Channel;
 use tauri::{AppHandle, Emitter, Manager, State};
 
@@ -13,8 +13,8 @@ use crate::TaskManager;
 const SESSION_WAIT_POLL: Duration = Duration::from_millis(50);
 const SESSION_WAIT_MAX: Duration = Duration::from_millis(500);
 const PTY_READ_BUFFER_SIZE: usize = 32 * 1024;
-const PTY_EMIT_FLUSH_INTERVAL: Duration = Duration::from_millis(16);
-const PTY_EMIT_MAX_BATCH_BYTES: usize = 64 * 1024;
+pub(crate) const PTY_EMIT_FLUSH_INTERVAL: Duration = Duration::from_millis(16);
+pub(crate) const PTY_EMIT_MAX_BATCH_BYTES: usize = 64 * 1024;
 /// 有界 channel 容量：满时 reader 线程阻塞，反压传播至 OS 内核 PTY 缓冲区，
 /// 最终使写入进程（Claude/Codex）的 write() 系统调用阻塞，从源头限流。
 const PTY_EMIT_CHANNEL_CAPACITY: usize = 32;
@@ -58,7 +58,10 @@ fn finalize_task_exit(
         let tm = app.state::<TaskManager>();
         let mut cancelled = tm.cancelled_tasks.lock();
         let mut manually_completed = tm.manually_completed_tasks.lock();
-        (cancelled.remove(task_id), manually_completed.remove(task_id))
+        (
+            cancelled.remove(task_id),
+            manually_completed.remove(task_id),
+        )
     };
 
     let had_agent_session;
@@ -93,7 +96,11 @@ fn finalize_task_exit(
         return;
     }
 
-    let status = if exit_ok || had_agent_session { "done" } else { "failed" };
+    let status = if exit_ok || had_agent_session {
+        "done"
+    } else {
+        "failed"
+    };
     let payload = if status == "failed" {
         let reason = match exit_code {
             Some(code) => format!("Process exited with code {}", code),
@@ -189,7 +196,7 @@ fn release_claimed_session_paths(task_manager: &TaskManager, task_id: &str) {
 // ── 共享 PTY 辅助函数 ────────────────────────────────────────────────────────
 
 /// 设置 CommandBuilder 的标准环境变量。
-fn setup_env(cmd: &mut CommandBuilder) {
+pub(crate) fn setup_env(cmd: &mut CommandBuilder) {
     let login_env = crate::app_settings::get_login_shell_env();
     for (key, value) in login_env {
         cmd.env(key, value);
@@ -223,7 +230,7 @@ fn setup_nezha_env(cmd: &mut CommandBuilder, task_id: &str, agent: &str) {
 }
 
 /// 将 PTY master/writer/child 注册到 TaskManager 的三个 HashMap 中。
-fn register_pty_handles(
+pub(crate) fn register_pty_handles(
     task_manager: &TaskManager,
     id: &str,
     master: Box<dyn portable_pty::MasterPty + Send>,
@@ -246,7 +253,7 @@ fn register_pty_handles(
 }
 
 #[derive(Clone, Copy)]
-enum PtyEmitMode {
+pub(crate) enum PtyEmitMode {
     Immediate,
     Batched {
         flush_interval: Duration,
@@ -257,7 +264,7 @@ enum PtyEmitMode {
 /// 输出归宿：agent 任务用 Channel 直投单一前端订阅者，跳过事件总线的全局广播 + JSON
 /// 事件 payload；shell 终端仍走 emit 事件，多面板挂载时由前端按 shell_id 筛选。
 #[derive(Clone)]
-enum OutputSink {
+pub(crate) enum OutputSink {
     Event {
         event_name: &'static str,
         id_key: &'static str,
@@ -269,7 +276,10 @@ fn send_pty_chunk(app: &AppHandle, id: &str, sink: &OutputSink, data: String) {
     match sink {
         OutputSink::Event { event_name, id_key } => {
             let mut payload = serde_json::Map::new();
-            payload.insert((*id_key).to_string(), serde_json::Value::String(id.to_string()));
+            payload.insert(
+                (*id_key).to_string(),
+                serde_json::Value::String(id.to_string()),
+            );
             payload.insert("data".to_string(), serde_json::Value::String(data));
             let _ = app.emit(event_name, serde_json::Value::Object(payload));
         }
@@ -291,7 +301,7 @@ fn flush_pty_batch(app: &AppHandle, id: &str, sink: &OutputSink, batch: &mut Str
 /// - `sink`：agent 任务传 `OutputSink::Channel`（直投单订阅者），shell 传 `OutputSink::Event`
 /// - `session_tx`：可选 channel，用于将原始文本转发给 session watcher
 /// - `on_finish`：PTY 关闭后执行的可选清理回调
-fn spawn_pty_reader(
+pub(crate) fn spawn_pty_reader(
     app: AppHandle,
     id: String,
     sink: OutputSink,
@@ -322,29 +332,14 @@ fn spawn_pty_reader(
                             Ok(chunk) => {
                                 batch.push_str(&chunk);
                                 if batch.len() >= max_batch_bytes {
-                                    flush_pty_batch(
-                                        &emit_app,
-                                        &emit_id,
-                                        &worker_sink,
-                                        &mut batch,
-                                    );
+                                    flush_pty_batch(&emit_app, &emit_id, &worker_sink, &mut batch);
                                 }
                             }
                             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                                flush_pty_batch(
-                                    &emit_app,
-                                    &emit_id,
-                                    &worker_sink,
-                                    &mut batch,
-                                );
+                                flush_pty_batch(&emit_app, &emit_id, &worker_sink, &mut batch);
                             }
                             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
-                                flush_pty_batch(
-                                    &emit_app,
-                                    &emit_id,
-                                    &worker_sink,
-                                    &mut batch,
-                                );
+                                flush_pty_batch(&emit_app, &emit_id, &worker_sink, &mut batch);
                                 break;
                             }
                         }
@@ -416,7 +411,11 @@ fn spawn_exit_monitor(app: AppHandle, task_id: String, project_path: String, is_
 
         if let Some(status) = exit_status {
             let exit_ok = status.success();
-            let exit_code = if exit_ok { None } else { Some(status.exit_code()) };
+            let exit_code = if exit_ok {
+                None
+            } else {
+                Some(status.exit_code())
+            };
             // 等待会话注册完成
             wait_for_session(&app, &task_id, is_codex);
             finalize_task_exit(&app, &task_id, &project_path, is_codex, exit_ok, exit_code);
@@ -529,23 +528,31 @@ pub async fn run_task(
     let prompt_with_images = if image_paths.is_empty() {
         base_prompt
     } else {
-        format!("{}\n\n[Attached images]\n{}", base_prompt, image_paths.join("\n"))
+        format!(
+            "{}\n\n[Attached images]\n{}",
+            base_prompt,
+            image_paths.join("\n")
+        )
     };
 
     // 将文本附件路径追加到提示词
     let final_prompt = if text_paths.is_empty() {
         prompt_with_images
     } else {
-        format!("{}\n\n[Attached text files — read these for full context]\n{}", prompt_with_images, text_paths.join("\n"))
+        format!(
+            "{}\n\n[Attached text files — read these for full context]\n{}",
+            prompt_with_images,
+            text_paths.join("\n")
+        )
     };
 
     let launch = crate::app_settings::get_agent_launch_spec(&agent);
     let agent_bin = launch.program.clone();
-    let is_codex = agent == "codex";
+    let is_codex = crate::app_settings::is_codex_like_agent(&agent);
 
     // 版本统一走全局探测（带缓存），判断是否支持 --session-id。
     // 缓存未命中时 *_version_gte 会启子进程探测，故放进 spawn_blocking 避免阻塞 async runtime。
-    let use_explicit_session = !is_codex
+    let use_explicit_session = agent == "claude"
         && tokio::task::spawn_blocking(|| crate::app_settings::claude_version_gte("2.1.87"))
             .await
             .unwrap_or(false);
@@ -739,12 +746,7 @@ pub async fn complete_task(
 pub async fn get_active_task_ids(
     task_manager: State<'_, TaskManager>,
 ) -> Result<Vec<String>, String> {
-    Ok(task_manager
-        .child_handles
-        .lock()
-        .keys()
-        .cloned()
-        .collect())
+    Ok(task_manager.child_handles.lock().keys().cloned().collect())
 }
 
 #[tauri::command]
@@ -815,7 +817,8 @@ pub async fn resume_task(
             .unwrap_or(false)
     };
 
-    let mut cmd = if agent == "codex" {
+    let is_codex = crate::app_settings::is_codex_like_agent(&agent);
+    let mut cmd = if is_codex {
         let mut c = build_codex_cmd(&agent_bin, &permission_mode);
         // Nezha 注入的 hook 默认未信任会被 Codex skip;来源可信,免 trust 直接运行。
         if use_hooks {
@@ -858,7 +861,7 @@ pub async fn resume_task(
         serde_json::json!({ "task_id": task_id, "status": "running" }),
     );
 
-    let is_codex = agent == "codex";
+    let is_codex = crate::app_settings::is_codex_like_agent(&agent);
 
     // resume 时 session_id 已知，直接查找文件并开始监视(hook 可信时跳过)
     if !use_hooks {
@@ -895,7 +898,9 @@ pub async fn send_input(
 ) -> Result<(), String> {
     let mut writers = task_manager.pty_writers.lock();
     if let Some(writer) = writers.get_mut(&task_id) {
-        writer.write_all(data.as_bytes()).map_err(|e| e.to_string())?;
+        writer
+            .write_all(data.as_bytes())
+            .map_err(|e| e.to_string())?;
         writer.flush().map_err(|e| e.to_string())?;
     }
     Ok(())
@@ -917,7 +922,12 @@ pub async fn resize_pty(
     let masters = task_manager.pty_masters.lock();
     if let Some(master) = masters.get(&task_id) {
         master
-            .resize(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 })
+            .resize(PtySize {
+                rows,
+                cols,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
             .map_err(|e| e.to_string())?;
     }
     Ok(())
@@ -934,11 +944,7 @@ pub async fn open_shell(
 ) -> Result<(), String> {
     // 先终止已存在的同 ID Shell
     {
-        let child_arc = task_manager
-            .child_handles
-            .lock()
-            .get(&shell_id)
-            .cloned();
+        let child_arc = task_manager.child_handles.lock().get(&shell_id).cloned();
         if let Some(arc) = child_arc {
             let _ = arc.lock().unwrap().kill();
         }
@@ -997,11 +1003,7 @@ pub async fn kill_shell(
     task_manager: State<'_, TaskManager>,
     shell_id: String,
 ) -> Result<(), String> {
-    let child_arc = task_manager
-        .child_handles
-        .lock()
-        .get(&shell_id)
-        .cloned();
+    let child_arc = task_manager.child_handles.lock().get(&shell_id).cloned();
     if let Some(arc) = child_arc {
         let _ = arc.lock().unwrap().kill();
     }

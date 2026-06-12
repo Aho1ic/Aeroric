@@ -75,7 +75,7 @@ async fn run_naming_agent_with_timeout(
 
     let mut cmd = tokio::process::Command::new(&launch.program);
     crate::subprocess::configure_background_tokio_command(&mut cmd);
-    if agent == "codex" {
+    if crate::app_settings::is_codex_like_agent(agent) {
         cmd.args([
             "exec",
             "--sandbox",
@@ -282,10 +282,10 @@ pub async fn generate_task_name(
     session_path: Option<String>,
     original_prompt: String,
 ) -> Result<String, String> {
-    if !matches!(agent.as_str(), "claude" | "codex") {
+    if !matches!(agent.as_str(), "claude" | "claude_gpt55" | "codex") {
         return Err(format!("Unsupported agent: {}", agent));
     }
-    let is_codex = agent == "codex";
+    let is_codex = crate::app_settings::is_codex_like_agent(&agent);
 
     // 1. 校验 project_path 合法（M-3）
     let project_for_validation = project_path.clone();

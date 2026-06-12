@@ -33,8 +33,13 @@ import { r } from "@codemirror/legacy-modes/mode/r";
 import type { Extension } from "@codemirror/state";
 import { ImagePreviewPane } from "./file-viewer/ImagePreviewPane";
 import type { OpenFileTab } from "../hooks/useProjectPanels";
-import type { ThemeVariant } from "../types";
+import type { SshConnection, ThemeVariant } from "../types";
 import { useI18n } from "../i18n";
+
+type RemoteFileContext = {
+  connection: SshConnection;
+  projectPath: string;
+};
 
 function isMarkdownFile(fileName: string): boolean {
   const ext = fileName.split(".").pop()?.toLowerCase();
@@ -276,12 +281,14 @@ function FilePreviewPane({
   projectPath,
   themeVariant,
   previewMode,
+  remote,
 }: {
   filePath: string;
   fileName: string;
   projectPath: string;
   themeVariant: ThemeVariant;
   previewMode: boolean;
+  remote?: RemoteFileContext;
 }) {
   const editorTheme =
     themeVariant === "dark"
@@ -342,12 +349,30 @@ function FilePreviewPane({
     setSaveStatus("idle");
 
     const loadFile = isPreviewableImage
-      ? invoke<ImagePreviewData>("read_image_preview", { path: filePath, projectPath }).then((preview) => {
+      ? invoke<ImagePreviewData>(
+          remote ? "remote_read_image_preview" : "read_image_preview",
+          remote
+            ? {
+                connection: remote.connection,
+                remotePath: filePath,
+                remoteProjectPath: remote.projectPath,
+              }
+            : { path: filePath, projectPath },
+        ).then((preview) => {
           if (cancelled) return;
           setImagePreview(preview);
           setLoading(false);
         })
-      : invoke<string>("read_file_content", { path: filePath, projectPath }).then((nextContent) => {
+      : invoke<string>(
+          remote ? "remote_read_file_content" : "read_file_content",
+          remote
+            ? {
+                connection: remote.connection,
+                remotePath: filePath,
+                remoteProjectPath: remote.projectPath,
+              }
+            : { path: filePath, projectPath },
+        ).then((nextContent) => {
           if (cancelled) return;
           setContent(nextContent);
           setLoading(false);
@@ -363,7 +388,7 @@ function FilePreviewPane({
     return () => {
       cancelled = true;
     };
-  }, [filePath, projectPath, isPreviewableImage]);
+  }, [filePath, projectPath, isPreviewableImage, remote]);
 
   useEffect(
     () => () => {
@@ -382,7 +407,16 @@ function FilePreviewPane({
     setSaveStatus("saving");
     saveTimerRef.current = setTimeout(async () => {
       try {
-        await invoke("write_file_content", { path: filePath, content: value, projectPath });
+        if (remote) {
+          await invoke("remote_write_file_content", {
+            connection: remote.connection,
+            remotePath: filePath,
+            remoteProjectPath: remote.projectPath,
+            content: value,
+          });
+        } else {
+          await invoke("write_file_content", { path: filePath, content: value, projectPath });
+        }
         setSaveStatus("saved");
         savedResetRef.current = setTimeout(() => setSaveStatus("idle"), 2000);
       } catch {
@@ -548,6 +582,7 @@ export function FileViewer({
   onCloseAllTabs,
   themeVariant,
   onRunMakeTarget: _onRunMakeTarget,
+  remote,
 }: {
   tabs: OpenFileTab[];
   activeFilePath: string | null;
@@ -559,6 +594,7 @@ export function FileViewer({
   onCloseAllTabs: () => void;
   themeVariant: ThemeVariant;
   onRunMakeTarget?: (target: string) => void;
+  remote?: RemoteFileContext;
 }) {
   const { t } = useI18n();
   const [previewModes, setPreviewModes] = useState<Record<string, boolean>>({});
@@ -829,6 +865,7 @@ export function FileViewer({
                 projectPath={projectPath}
                 themeVariant={themeVariant}
                 previewMode={!!previewModes[tab.path]}
+                remote={remote}
               />
             </div>
           );

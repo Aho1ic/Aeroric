@@ -11,6 +11,8 @@ pub struct Project {
     pub id: String,
     pub name: String,
     pub path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub location: Option<ProjectLocation>,
     pub branch: Option<String>,
     #[serde(rename = "lastOpenedAt")]
     pub last_opened_at: i64,
@@ -21,6 +23,20 @@ pub struct Project {
         skip_serializing_if = "std::ops::Not::not"
     )]
     pub hidden_from_rail: bool,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(tag = "kind")]
+pub enum ProjectLocation {
+    #[serde(rename = "local")]
+    Local { path: String },
+    #[serde(rename = "ssh")]
+    Ssh {
+        #[serde(rename = "connectionId")]
+        connection_id: String,
+        #[serde(rename = "remotePath")]
+        remote_path: String,
+    },
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -37,7 +53,10 @@ pub struct Task {
     pub status: String,
     #[serde(rename = "createdAt")]
     pub created_at: i64,
-    #[serde(rename = "attentionRequestedAt", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "attentionRequestedAt",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub attention_requested_at: Option<i64>,
     #[serde(rename = "claudeSessionId", skip_serializing_if = "Option::is_none")]
     pub claude_session_id: Option<String>,
@@ -68,7 +87,8 @@ pub struct Task {
 // ── Path helpers ─────────────────────────────────────────────────────────────
 
 pub(crate) fn nezha_dir() -> Result<PathBuf, String> {
-    let home = crate::platform::home_dir().ok_or_else(|| "Cannot find home directory".to_string())?;
+    let home =
+        crate::platform::home_dir().ok_or_else(|| "Cannot find home directory".to_string())?;
     Ok(home.join(".nezha"))
 }
 
@@ -153,4 +173,44 @@ pub fn atomic_write(path: &Path, content: &str) -> Result<(), String> {
     let tmp = path.with_file_name(format!(".{file_name}.{uid}.tmp"));
     fs::write(&tmp, content).map_err(|e| e.to_string())?;
     fs::rename(&tmp, path).map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn legacy_project_without_location_deserializes() {
+        let raw = r#"{
+          "id":"p1",
+          "name":"legacy",
+          "path":"/Users/me/work/legacy",
+          "lastOpenedAt":1700000000000
+        }"#;
+
+        let project: Project = serde_json::from_str(raw).unwrap();
+
+        assert_eq!(project.location, None);
+    }
+
+    #[test]
+    fn ssh_project_location_round_trips() {
+        let raw = r#"{
+          "id":"p2",
+          "name":"remote",
+          "path":"ssh://conn-1/srv/app",
+          "location":{"kind":"ssh","connectionId":"conn-1","remotePath":"/srv/app"},
+          "lastOpenedAt":1700000000000
+        }"#;
+
+        let project: Project = serde_json::from_str(raw).unwrap();
+
+        assert_eq!(
+            project.location,
+            Some(ProjectLocation::Ssh {
+                connection_id: "conn-1".to_string(),
+                remote_path: "/srv/app".to_string(),
+            })
+        );
+    }
 }

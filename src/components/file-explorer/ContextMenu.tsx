@@ -10,6 +10,7 @@ export function FileExplorerContextMenu({
   onDelete,
   onOpenInSystem,
   onCopyPath,
+  showOpenInSystem = true,
 }: {
   ctxMenu: ContextMenuState;
   onClose: () => void;
@@ -18,6 +19,7 @@ export function FileExplorerContextMenu({
   onDelete: () => void;
   onOpenInSystem: (e: React.MouseEvent, path: string) => void;
   onCopyPath: (e: React.MouseEvent, path: string, withAt: boolean) => void;
+  showOpenInSystem?: boolean;
 }) {
   const { t } = useI18n();
 
@@ -25,7 +27,7 @@ export function FileExplorerContextMenu({
     { label: t("file.newFile"), action: "newFile" },
     { label: t("file.newFolder"), action: "newFolder" },
     { action: "separator" },
-    { label: t("file.openInSystemFolder"), action: "open" },
+    ...(showOpenInSystem ? ([{ label: t("file.openInSystemFolder"), action: "open" }] as const) : []),
     { label: t("file.copyFullPath"), action: "copy", withAt: false },
     { label: t("file.copyAtFullPath"), action: "copy", withAt: true },
     ...(ctxMenu.isRoot

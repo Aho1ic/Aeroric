@@ -4,8 +4,9 @@ import type { AgentType, PermissionMode } from "../../types";
 import { permissionModeLabel } from "../../types";
 import { useI18n } from "../../i18n";
 import s from "../../styles";
+import { AGENT_OPTIONS, agentDisplayLabel } from "../../agents";
 
-const AGENTS: AgentType[] = ["claude", "codex"];
+const AGENTS: AgentType[] = AGENT_OPTIONS.map((item) => item.value);
 const PERMS: PermissionMode[] = ["ask", "auto_edit", "full_access"];
 
 export function TaskEditDialog({
@@ -54,7 +55,7 @@ export function TaskEditDialog({
           style={{ ...s.toolbarBtn, fontSize: 12 }}
           onClick={() => setEditAgent(AGENTS[(AGENTS.indexOf(editAgent) + 1) % AGENTS.length])}
         >
-          {editAgent === "claude" ? "Claude Code" : "Codex"}
+          {agentDisplayLabel(editAgent)}
         </button>
         <button
           style={{ ...s.toolbarBtn, fontSize: 12 }}

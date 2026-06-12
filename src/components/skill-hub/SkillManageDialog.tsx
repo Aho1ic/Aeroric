@@ -15,12 +15,19 @@ interface Props {
   onChanged: () => void;
 }
 
-const AGENT_LABEL: Record<AgentType, string> = {
+type SkillAgent = "claude" | "codex";
+type SkillAgentInstallation = SkillInstallation & { agent: SkillAgent };
+
+function isSkillAgent(agent: AgentType): agent is SkillAgent {
+  return agent === "claude" || agent === "codex";
+}
+
+const AGENT_LABEL: Record<SkillAgent, string> = {
   claude: "Claude",
   codex: "Codex",
 };
 
-const AGENT_LOGO: Record<AgentType, string> = {
+const AGENT_LOGO: Record<SkillAgent, string> = {
   claude: claudeLogo,
   codex: chatgptLogo,
 };
@@ -28,7 +35,7 @@ const AGENT_LOGO: Record<AgentType, string> = {
 export function SkillManageDialog({ skill, allProjects, onClose, onChanged }: Props) {
   const { t } = useI18n();
   const [installations, setInstallations] = useState<SkillInstallation[]>([]);
-  const [activeAgent, setActiveAgent] = useState<AgentType>("claude");
+  const [activeAgent, setActiveAgent] = useState<SkillAgent>("claude");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [installDialogOpen, setInstallDialogOpen] = useState(false);
@@ -71,7 +78,9 @@ export function SkillManageDialog({ skill, allProjects, onClose, onChanged }: Pr
     claude: installations.filter((ins) => ins.agent === "claude").length,
     codex: installations.filter((ins) => ins.agent === "codex").length,
   };
-  const visibleInstallations = installations.filter((ins) => ins.agent === activeAgent);
+  const visibleInstallations = installations.filter(
+    (ins): ins is SkillAgentInstallation => isSkillAgent(ins.agent) && ins.agent === activeAgent,
+  );
 
   return (
     <div style={s.modalOverlay} onClick={handleOverlayClick}>

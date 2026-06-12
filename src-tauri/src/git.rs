@@ -189,7 +189,7 @@ fn run_agent_commit_message_command(
     let launch = crate::app_settings::get_agent_launch_spec(agent);
     let mut cmd = Command::new(&launch.program);
     crate::subprocess::configure_background_command(&mut cmd);
-    if agent == "codex" {
+    if crate::app_settings::is_codex_like_agent(agent) {
         cmd.args(["exec", prompt]);
     } else {
         cmd.args(["-p", prompt, "--output-format", "text"]);
@@ -1169,14 +1169,7 @@ pub async fn create_task_worktree(
 
         let output = run_git(
             &project_path,
-            &[
-                "worktree",
-                "add",
-                &wt_path_str,
-                "-b",
-                &branch,
-                &base_branch,
-            ],
+            &["worktree", "add", &wt_path_str, "-b", &branch, &base_branch],
         )?;
         if !output.status.success() {
             return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
@@ -1209,7 +1202,9 @@ pub async fn merge_task_worktree(
         // 0) worktree 自身有未提交修改 → 拒绝合并，避免丢失工作进度
         let wt_status = run_git(&worktree_path, &["status", "--porcelain"])?;
         if !wt_status.status.success() {
-            return Err(String::from_utf8_lossy(&wt_status.stderr).trim().to_string());
+            return Err(String::from_utf8_lossy(&wt_status.stderr)
+                .trim()
+                .to_string());
         }
         if !wt_status.stdout.is_empty() {
             return Err(
@@ -1254,10 +1249,7 @@ pub async fn merge_task_worktree(
                 err.trim()
             ));
         }
-        Ok(format!(
-            "Fast-forwarded '{}' to '{}'",
-            base_branch, branch
-        ))
+        Ok(format!("Fast-forwarded '{}' to '{}'", base_branch, branch))
     })
     .await
     .map_err(|e| format!("Merge task panicked: {}", e))?

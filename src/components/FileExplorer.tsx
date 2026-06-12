@@ -27,6 +27,12 @@ import {
   pathSeparator,
   updateNode,
 } from "./file-explorer/treeUtils";
+import type { SshConnection } from "../types";
+
+type RemoteFileContext = {
+  connection: SshConnection;
+  projectPath: string;
+};
 
 export function FileExplorer({
   projectPath,
@@ -34,12 +40,14 @@ export function FileExplorer({
   onFileSelect,
   active = true,
   width = 240,
+  remote,
 }: {
   projectPath: string;
   projectName: string;
   onFileSelect: (path: string, name: string) => void;
   active?: boolean;
   width?: number;
+  remote?: RemoteFileContext;
 }) {
   const { t } = useI18n();
   const [nodes, setNodes] = useState<TreeNode[]>([]);
@@ -127,8 +135,15 @@ export function FileExplorer({
   }, [nodes]);
 
   const readEntries = useCallback(
-    (path: string) => safeInvoke<FsEntry[]>("read_dir_entries", { path, projectPath }),
-    [projectPath, safeInvoke],
+    (path: string) =>
+      remote
+        ? safeInvoke<FsEntry[]>("remote_read_dir_entries", {
+            connection: remote.connection,
+            remotePath: path,
+            remoteProjectPath: remote.projectPath,
+          })
+        : safeInvoke<FsEntry[]>("read_dir_entries", { path, projectPath }),
+    [projectPath, remote, safeInvoke],
   );
 
   const refresh = useCallback(
@@ -311,9 +326,25 @@ export function FileExplorer({
     const parentPath = creating.parentPath;
     try {
       if (kind === "file") {
-        await safeInvoke("create_file", { path: fullPath, projectPath });
+        if (remote) {
+          await safeInvoke("remote_create_file", {
+            connection: remote.connection,
+            remotePath: fullPath,
+            remoteProjectPath: remote.projectPath,
+          });
+        } else {
+          await safeInvoke("create_file", { path: fullPath, projectPath });
+        }
       } else {
-        await safeInvoke("create_directory", { path: fullPath, projectPath });
+        if (remote) {
+          await safeInvoke("remote_create_directory", {
+            connection: remote.connection,
+            remotePath: fullPath,
+            remoteProjectPath: remote.projectPath,
+          });
+        } else {
+          await safeInvoke("create_directory", { path: fullPath, projectPath });
+        }
       }
       if (isCancelled()) return;
       setCreating(null);
@@ -343,6 +374,7 @@ export function FileExplorer({
     onFileSelect,
     projectPath,
     refresh,
+    remote,
     safeInvoke,
     showToast,
     t,
@@ -388,7 +420,15 @@ export function FileExplorer({
 
     deleteInFlightRef.current = true;
     try {
-      await safeInvoke("delete_path", { path: targetPath, projectPath });
+      if (remote) {
+        await safeInvoke("remote_delete_path", {
+          connection: remote.connection,
+          remotePath: targetPath,
+          remoteProjectPath: remote.projectPath,
+        });
+      } else {
+        await safeInvoke("delete_path", { path: targetPath, projectPath });
+      }
       if (isCancelled()) return;
       const sep = pathSeparator(targetPath);
       const descendantPrefix = targetPath + sep;
@@ -406,7 +446,7 @@ export function FileExplorer({
     } finally {
       deleteInFlightRef.current = false;
     }
-  }, [ctxMenu, isCancelled, projectPath, refresh, safeInvoke, showToast, t]);
+  }, [ctxMenu, isCancelled, projectPath, refresh, remote, safeInvoke, showToast, t]);
 
   return (
     <div style={{ ...s.fileExplorerRoot, width }}>
@@ -419,6 +459,7 @@ export function FileExplorer({
           onDelete={() => void handleDelete()}
           onOpenInSystem={(event, path) => void openInSystemFolder(event, path)}
           onCopyPath={(event, path, withAt) => void copyPath(event, path, withAt)}
+          showOpenInSystem={!remote}
         />
       )}
       {/* Header */}

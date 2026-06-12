@@ -5,6 +5,7 @@ import {
   GitBranch,
   Layers,
   Plus,
+  Server,
   Trash2,
   Clock,
   Blocks,
@@ -20,13 +21,16 @@ import type {
   TaskDisplayWindow,
   FontFamily,
   SkillHubConfig,
+  SshConnection,
 } from "../types";
+import { isRemoteProject } from "../types";
 import { getAvatarGradient, shortenPath } from "../utils";
 import { ProjectAvatar } from "./ProjectAvatar";
 import { SidebarFooterActions } from "./SidebarFooterActions";
 import { OPEN_APP_SETTINGS_EVENT } from "./app-settings/types";
 import { TimelineView } from "./TimelineView";
 import { SkillHubView } from "./skill-hub/SkillHubView";
+import { SshProjectDialog, type SshProjectInput } from "./ssh/SshProjectDialog";
 import { useI18n, pluralKey } from "../i18n";
 import s from "../styles";
 
@@ -111,6 +115,9 @@ export function WelcomePage({
   onMonoFontFamilyChange,
   skillHubConfig,
   onEnterSkillHub,
+  sshConnections,
+  onSshConnectionsChange,
+  onOpenSshProject,
 }: {
   projects: Project[];
   allProjects: Project[];
@@ -136,12 +143,16 @@ export function WelcomePage({
   onMonoFontFamilyChange: (family: FontFamily) => void;
   skillHubConfig: SkillHubConfig | null;
   onEnterSkillHub: () => void;
+  sshConnections: SshConnection[];
+  onSshConnectionsChange: (connections: SshConnection[]) => void;
+  onOpenSshProject: (input: SshProjectInput) => void;
 }) {
   const { t } = useI18n();
   const [query, setQuery] = useState("");
   const [hov, setHov] = useState<string | null>(null);
   const [searchFocused, setSearchFocused] = useState(false);
   const [view, setView] = useState<"projects" | "timeline" | "skills">("projects");
+  const [sshProjectDialogOpen, setSshProjectDialogOpen] = useState(false);
 
   const filtered = useMemo(() => {
     if (!query.trim()) return projects;
@@ -258,6 +269,10 @@ export function WelcomePage({
               </div>
 
               <div style={s.actionRow}>
+                <button style={s.secondaryActionBtn} onClick={() => setSshProjectDialogOpen(true)}>
+                  <Server size={14} strokeWidth={2.2} />
+                  <span>{t("sshProject.open")}</span>
+                </button>
                 <button style={s.primaryActionBtn} onClick={onOpen}>
                   <Plus size={14} strokeWidth={2.3} />
                   <span>{t("welcome.openProject")}</span>
@@ -309,7 +324,9 @@ export function WelcomePage({
                         <div style={s.projectMeta}>{shortenPath(p.path)}</div>
                       </div>
 
-                      {p.branch ? (
+                      {isRemoteProject(p) ? (
+                        <span style={s.projectTag}>{t("welcome.ssh")}</span>
+                      ) : p.branch ? (
                         <span style={s.branchBadge}>
                           <GitBranch size={10} strokeWidth={2} />
                           {p.branch}
@@ -390,6 +407,17 @@ export function WelcomePage({
           </div>
         )}
       </div>
+      {sshProjectDialogOpen && (
+        <SshProjectDialog
+          connections={sshConnections}
+          onConnectionsChange={onSshConnectionsChange}
+          onClose={() => setSshProjectDialogOpen(false)}
+          onOpen={(input) => {
+            onOpenSshProject(input);
+            setSshProjectDialogOpen(false);
+          }}
+        />
+      )}
     </div>
   );
 }

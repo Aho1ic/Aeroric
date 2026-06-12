@@ -32,6 +32,14 @@ const NAV_ITEMS: AppSettingsNavItem[] = [
     lang: "json",
   },
   {
+    key: "claude_gpt55",
+    labelKey: "Claude GPT55",
+    section: "agents",
+    logo: chatgptLogo,
+    filePath: getAgentSettingsFilePath("claude_gpt55"),
+    lang: "shellscript",
+  },
+  {
     key: "codex",
     labelKey: "Codex",
     section: "agents",
@@ -55,7 +63,7 @@ function NavItemIcon({ item, size }: { item: AppSettingsNavItem; size: number })
     return (
       <img
         src={item.logo}
-        style={{ width: size, height: size, opacity: item.key === "codex" ? 0.7 : 1 }}
+        style={{ width: size, height: size, opacity: item.key === "claude" ? 1 : 0.7 }}
       />
     );
   }

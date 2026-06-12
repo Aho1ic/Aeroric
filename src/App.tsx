@@ -14,6 +14,7 @@ import type {
   TerminalFontSize,
   TaskDisplayWindow,
   SkillHubConfig,
+  SshConnection,
 } from "./types";
 import {
   isActiveTaskStatus,
@@ -21,6 +22,8 @@ import {
   clampTerminalFontSize,
   DEFAULT_TASK_DISPLAY_WINDOW,
   normalizeTaskDisplayWindow,
+  resolveProjectLocation,
+  sshProjectPath,
 } from "./types";
 import {
   DEFAULT_UI_FONT,
@@ -28,11 +31,13 @@ import {
 } from "./types";
 import type { FontFamily } from "./types";
 import { WelcomePage } from "./components/WelcomePage";
+import type { SshProjectInput } from "./components/ssh/SshProjectDialog";
 import { ProjectPage } from "./components/ProjectPage";
 import { SKILL_HUB_CHANGED_EVENT } from "./components/app-settings/types";
 import { useToast } from "./components/Toast";
 import { isHideWindowShortcut } from "./shortcuts";
 import { APP_PLATFORM } from "./platform";
+import { isCodexLikeAgent } from "./agents";
 import { useTerminalManager } from "./hooks/useTerminalManager";
 import { useWorktreeDiffStats } from "./hooks/useWorktreeDiffStats";
 import { useI18n } from "./i18n";
@@ -45,6 +50,11 @@ function deriveProjectName(path: string): string {
 
   const parts = trimmed.split(/[\\/]/);
   return parts[parts.length - 1] || path;
+}
+
+function normalizeRemotePath(path: string): string {
+  const trimmed = path.trim();
+  return trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
 }
 
 function persistProjects(
@@ -199,6 +209,7 @@ function App() {
   const [mountedProjectIds, setMountedProjectIds] = useState<string[]>([]);
   const [taskRunCounts, setTaskRunCounts] = useState<Record<string, number>>({});
   const [skillHubConfig, setSkillHubConfig] = useState<SkillHubConfig | null>(null);
+  const [sshConnections, setSshConnections] = useState<SshConnection[]>([]);
   const [hubMode, setHubMode] = useState(false);
 
   const tm = useTerminalManager();
@@ -225,6 +236,17 @@ function App() {
     setTasks,
     persistTasks: persistTasksForHook,
   });
+
+  const handleSshConnectionsChange = useCallback(
+    (connections: SshConnection[]) => {
+      setSshConnections(connections);
+      invoke("save_ssh_connections", { connections }).catch((e: unknown) => {
+        console.error(e);
+        showToast(t("toast.saveSshConnectionsFailed", { error: String(e) }), "error");
+      });
+    },
+    [showToast, t],
+  );
 
   const mountProject = useCallback((projectId: string) => {
     setMountedProjectIds((prev) => (prev.includes(projectId) ? prev : [...prev, projectId]));
@@ -336,7 +358,9 @@ function App() {
     async function init() {
       // Load projects from ~/.nezha/projects.json
       const loadedProjects = await invoke<Project[]>("load_projects");
+      const loadedSshConnections = await invoke<SshConnection[]>("load_ssh_connections");
       setProjects(loadedProjects);
+      setSshConnections(loadedSshConnections);
 
       // Load tasks for all known projects
       const chunks = await Promise.all(
@@ -449,6 +473,39 @@ function App() {
     });
   }
 
+  function handleOpenSshProject(input: SshProjectInput) {
+    const remotePath = normalizeRemotePath(input.remotePath);
+    const path = sshProjectPath(input.connectionId, remotePath);
+    const now = Date.now();
+    const existing = projects.find((p) => {
+      const location = resolveProjectLocation(p);
+      return (
+        location.kind === "ssh" &&
+        location.connectionId === input.connectionId &&
+        location.remotePath === remotePath
+      );
+    });
+    const project: Project = existing
+      ? { ...existing, name: input.name, path, lastOpenedAt: now }
+      : {
+          id: `${now}`,
+          name: input.name,
+          path,
+          location: { kind: "ssh", connectionId: input.connectionId, remotePath },
+          lastOpenedAt: now,
+        };
+
+    setProjects((prev) => {
+      const next = [project, ...prev.filter((p) => p.id !== project.id)];
+      persistProjects(next, showToast, formatSaveProjectsError);
+      return next;
+    });
+    setActiveProject(project);
+    setHubMode(false);
+    mountProject(project.id);
+    updateProjectView(project.id, createDefaultProjectViewState());
+  }
+
   function handleProjectClick(project: Project) {
     const updated = { ...project, lastOpenedAt: Date.now() };
     setProjects((prev) => {
@@ -459,6 +516,7 @@ function App() {
     setActiveProject(updated);
     setHubMode(false);
     mountProject(updated.id);
+    if (resolveProjectLocation(updated).kind === "ssh") return;
     invoke("init_project_config", { projectPath: project.path }).catch((e: unknown) => {
       showToast(t("toast.initProjectConfigFailed", { error: String(e) }), "warning");
     });
@@ -478,6 +536,24 @@ function App() {
       permissionMode: task.permissionMode,
       images,
       texts,
+      cols: tm.terminalSizeRef.current.cols,
+      rows: tm.terminalSizeRef.current.rows,
+      onOutput: tm.createOutputChannel(task.id),
+    }).catch((err: unknown) => {
+      const msg = err instanceof Error ? err.message : String(err);
+      tm.writeErrorToTerminal(task.id, `\r\nError: ${msg}\r\n`);
+      updateTaskStatus(task.id, "failed", undefined, msg);
+    });
+  }
+
+  function invokeRemoteRunTask(task: Task, connection: SshConnection, remoteProjectPath: string) {
+    invoke("run_remote_task", {
+      taskId: task.id,
+      connection,
+      remoteProjectPath,
+      prompt: task.prompt,
+      agent: task.agent,
+      permissionMode: task.permissionMode,
       cols: tm.terminalSizeRef.current.cols,
       rows: tm.terminalSizeRef.current.rows,
       onOutput: tm.createOutputChannel(task.id),
@@ -511,6 +587,26 @@ function App() {
     },
   ) {
     const taskId = `${Date.now()}`;
+    const projectLocation = resolveProjectLocation(project);
+    const remoteConnection =
+      projectLocation.kind === "ssh"
+        ? sshConnections.find((connection) => connection.id === projectLocation.connectionId)
+        : null;
+
+    if (projectLocation.kind === "ssh") {
+      if (!remoteConnection) {
+        showToast(t("toast.remoteProjectMissingConnection"), "error");
+        return;
+      }
+      if (launchMode === "worktree") {
+        showToast(t("toast.remoteProjectNoWorktree"), "warning");
+        return;
+      }
+      if (images.length > 0 || texts.length > 0) {
+        showToast(t("toast.remoteProjectNoAttachments"), "warning");
+        return;
+      }
+    }
 
     if (launchMode === "worktree" && !baseBranch) {
       showToast(t("toast.worktreeBaseRequired"), "warning");
@@ -542,6 +638,11 @@ function App() {
 
     // 2) 终端 buffer 在 PTY 启动前就要建好，否则首批输出会进不来 buffer。
     tm.resetTaskTerminal(taskId);
+
+    if (projectLocation.kind === "ssh") {
+      invokeRemoteRunTask(baseTask, remoteConnection!, projectLocation.remotePath);
+      return;
+    }
 
     // 3) 如果是 worktree 模式，先创建 worktree，成功后把字段补回 task 再启动 PTY。
     let worktreePath: string | undefined;
@@ -608,6 +709,17 @@ function App() {
     });
     tm.resetTaskTerminal(task.id);
     updateProjectView(task.projectId, { selectedTaskId: task.id, isNewTask: false });
+    const projectLocation = resolveProjectLocation(project);
+    if (projectLocation.kind === "ssh") {
+      const connection = sshConnections.find((item) => item.id === projectLocation.connectionId);
+      if (!connection) {
+        showToast(t("toast.remoteProjectMissingConnection"), "error");
+        updateTaskStatus(task.id, "failed", undefined, t("toast.remoteProjectMissingConnection"));
+        return;
+      }
+      invokeRemoteRunTask(task, connection, projectLocation.remotePath);
+      return;
+    }
     invokeRunTask(task, task.worktreePath ?? project.path, []);
   }
 
@@ -673,6 +785,12 @@ function App() {
     delete pendingResumeStartsRef.current[taskId];
     const task = tasks.find((t) => t.id === taskId);
     const project = projects.find((p) => p.id === task?.projectId);
+    if (project && resolveProjectLocation(project).kind === "ssh") {
+      invoke("cancel_remote_task", { taskId }).catch((e: unknown) => {
+        showToast(t("toast.cancelTaskFailed", { error: String(e) }));
+      });
+      return;
+    }
     const projectPath = task?.worktreePath ?? project?.path ?? "";
     invoke("cancel_task", { taskId, projectPath }).catch((e: unknown) => {
       showToast(t("toast.cancelTaskFailed", { error: String(e) }));
@@ -680,6 +798,31 @@ function App() {
   }
 
   function invokeResumeTask(task: Task, project: Project, sessionId: string) {
+    const projectLocation = resolveProjectLocation(project);
+    if (projectLocation.kind === "ssh") {
+      const connection = sshConnections.find((item) => item.id === projectLocation.connectionId);
+      if (!connection) {
+        showToast(t("toast.remoteProjectMissingConnection"), "error");
+        updateTaskStatus(task.id, "failed", undefined, t("toast.remoteProjectMissingConnection"));
+        return;
+      }
+      invoke("resume_remote_task", {
+        taskId: task.id,
+        connection,
+        remoteProjectPath: projectLocation.remotePath,
+        agent: task.agent,
+        sessionId,
+        permissionMode: task.permissionMode,
+        cols: tm.terminalSizeRef.current.cols,
+        rows: tm.terminalSizeRef.current.rows,
+        onOutput: tm.createOutputChannel(task.id),
+      }).catch((err: unknown) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        tm.writeErrorToTerminal(task.id, `\r\nError: ${msg}\r\n`);
+        updateTaskStatus(task.id, "failed", undefined, msg);
+      });
+      return;
+    }
     invoke("resume_task", {
       taskId: task.id,
       projectPath: task.worktreePath ?? project.path,
@@ -699,7 +842,7 @@ function App() {
 
   function handleResumeTask(taskId: string) {
     const task = tasks.find((t) => t.id === taskId);
-    const sessionId = task?.agent === "codex" ? task.codexSessionId : task?.claudeSessionId;
+    const sessionId = task && isCodexLikeAgent(task.agent) ? task.codexSessionId : task?.claudeSessionId;
     if (!task) return;
     if (!sessionId) {
       showToast(t("running.resumeUnavailable"), "warning");
@@ -729,7 +872,7 @@ function App() {
   async function handleReconnectTask(taskId: string) {
     const task = tasks.find((t) => t.id === taskId);
     if (!task) return;
-    const sessionId = task.agent === "codex" ? task.codexSessionId : task.claudeSessionId;
+    const sessionId = isCodexLikeAgent(task.agent) ? task.codexSessionId : task.claudeSessionId;
     if (!sessionId) {
       showToast(t("running.resumeUnavailable"), "warning");
       return;
@@ -890,7 +1033,7 @@ function App() {
     if (!project) return;
     // 按 agent 选择对应字段，避免历史数据两个字段都有时取错
     const sessionPath =
-      task.agent === "codex"
+      isCodexLikeAgent(task.agent)
         ? (task.codexSessionPath ?? null)
         : (task.claudeSessionPath ?? null);
     // 点击瞬间的快照，用于 await 完成后的并发校验（防止用户期间 rerun/resume/手改名）
@@ -917,7 +1060,7 @@ function App() {
         if (current.prompt !== expectedPrompt) return prev;
         if (current.status !== expectedStatus) return prev;
         const currentSessionPath =
-          current.agent === "codex"
+          isCodexLikeAgent(current.agent)
             ? (current.codexSessionPath ?? null)
             : (current.claudeSessionPath ?? null);
         if (currentSessionPath !== expectedSessionPath) return prev;
@@ -1169,6 +1312,8 @@ function App() {
               onUiFontFamilyChange={setUiFontFamily}
               monoFontFamily={monoFontFamily}
               onMonoFontFamilyChange={setMonoFontFamily}
+              sshConnections={sshConnections}
+              onSshConnectionsChange={handleSshConnectionsChange}
             />
           );
         })}
@@ -1186,11 +1331,14 @@ function App() {
             allProjects={sortedProjects}
             tasks={tasks}
             onOpen={handleOpen}
+            onOpenSshProject={handleOpenSshProject}
             onProjectClick={handleProjectClick}
             onDeleteProject={handleDeleteProject}
             onToggleProjectHidden={handleToggleProjectHidden}
             skillHubConfig={skillHubConfig}
             onEnterSkillHub={handleEnterSkillHub}
+            sshConnections={sshConnections}
+            onSshConnectionsChange={handleSshConnectionsChange}
             themeVariant={themeVariant}
             themeMode={themeMode}
             systemPrefersDark={systemPrefersDark}

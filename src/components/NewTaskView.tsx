@@ -2,6 +2,8 @@ import { useState, useRef, useEffect, useMemo } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { TriangleAlert, Sparkles } from "lucide-react";
 import type { Project, AgentType, PermissionMode } from "../types";
+import { isRemoteProject } from "../types";
+import { agentDisplayLabel, isCodexLikeAgent } from "../agents";
 import type { HookAgentReadiness } from "./app-settings/types";
 import { useToast } from "./Toast";
 import {
@@ -19,6 +21,7 @@ import { ImageAttachments } from "./new-task/ImageAttachments";
 import { TextAttachments, type PastedText } from "./new-task/TextAttachments";
 import { AgentPermSelector } from "./new-task/AgentPermSelector";
 import { LaunchModeSelector, type LaunchMode } from "./new-task/LaunchModeSelector";
+import { buildPromptWithGoalMode, shouldShowInstructionsBanner } from "./new-task/goalMode";
 import { useI18n } from "../i18n";
 import { APP_PLATFORM } from "../platform";
 import {
@@ -89,10 +92,13 @@ export function NewTaskView({
 }) {
   const { t } = useI18n();
   const { showToast } = useToast();
+  const remoteProject = isRemoteProject(project);
   const [agent, setAgent] = useState<AgentType>(initialDraft?.agent ?? "claude");
   const [permMode, setPermMode] = useState<PermissionMode>(initialDraft?.permMode ?? "ask");
   const [planMode, setPlanMode] = useState(initialDraft?.planMode ?? false);
-  const [launchMode, setLaunchMode] = useState<LaunchMode>(initialDraft?.launchMode ?? "local");
+  const [launchMode, setLaunchMode] = useState<LaunchMode>(
+    remoteProject ? "local" : (initialDraft?.launchMode ?? "local"),
+  );
   const [baseBranch, setBaseBranch] = useState<string>(initialDraft?.baseBranch ?? "");
 
   const [allFiles, setAllFiles] = useState<FileEntry[]>([]);
@@ -171,6 +177,12 @@ export function NewTaskView({
   }, []);
 
   useEffect(() => {
+    if (remoteProject) {
+      setLaunchMode("local");
+    }
+  }, [remoteProject]);
+
+  useEffect(() => {
     function loadSendShortcut() {
       invoke<{ send_shortcut?: string }>("load_app_settings")
         .then((settings) => setSendShortcut(normalizeSendShortcut(settings.send_shortcut)))
@@ -184,14 +196,14 @@ export function NewTaskView({
 
   // Load default agent and permission mode from project config when project changes
   useEffect(() => {
-    if (initialDraft) return;
+    if (initialDraft || remoteProject) return;
     invoke<{ agent: { default: string; default_permission_mode?: string } }>(
       "read_project_config",
       { projectPath: project.path },
     )
       .then((cfg) => {
         const defaultAgent = cfg.agent.default;
-        if (defaultAgent === "claude" || defaultAgent === "codex") {
+        if (defaultAgent === "claude" || defaultAgent === "claude_gpt55" || defaultAgent === "codex") {
           setAgent(defaultAgent);
         }
         const defaultPerm = cfg.agent.default_permission_mode;
@@ -201,20 +213,24 @@ export function NewTaskView({
       })
       .catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [project.id]);
+  }, [project.id, remoteProject]);
 
   const [hasMdFile, setHasMdFile] = useState<boolean | null>(null);
 
   useEffect(() => {
+    if (remoteProject) {
+      setHasMdFile(null);
+      return;
+    }
     setHasMdFile(null);
-    const filename = agent === "claude" ? "CLAUDE.md" : "AGENTS.md";
+    const filename = isCodexLikeAgent(agent) ? "AGENTS.md" : "CLAUDE.md";
     invoke<string>("read_file_content", {
       path: `${project.path}/${filename}`,
       projectPath: project.path,
     })
       .then(() => setHasMdFile(true))
       .catch(() => setHasMdFile(false));
-  }, [project.path, agent]);
+  }, [project.path, agent, remoteProject]);
 
   // Hook 就绪状态：版本过低 / 无 node 时软提示用户(任务仍可启动,已回退轮询)。
   const [hookReadiness, setHookReadiness] = useState<HookAgentReadiness[] | null>(null);
@@ -236,7 +252,7 @@ export function NewTaskView({
   const agentReadiness = hookReadiness?.find((r) => r.agent === agent) ?? null;
   const hookBanner = (() => {
     if (!agentReadiness || agentReadiness.usable) return null;
-    const agentName = agent === "claude" ? "Claude Code" : "Codex";
+    const agentName = agentDisplayLabel(agent);
     if (agentReadiness.reason === "version_too_low") {
       return t("newTask.hookVersionLow", {
         agent: agentName,
@@ -255,7 +271,11 @@ export function NewTaskView({
 
   // Load current project file list
   useEffect(() => {
-    if (!project.path) return;
+    if (!project.path || remoteProject) {
+      setAllFiles([]);
+      setFilesLoading(false);
+      return;
+    }
     setAllFiles([]);
     setFilesLoading(true);
     invoke<string[]>("list_project_files", { projectPath: project.path })
@@ -270,13 +290,15 @@ export function NewTaskView({
       })
       .finally(() => setFilesLoading(false));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [project.path]);
+  }, [project.path, remoteProject]);
 
   // Lazily load cross-project files when user enters cross-project mode
   useEffect(() => {
     if (mentionSearch === null || otherProjects.length === 0) return;
     const cp = parseCrossProject(mentionSearch, otherProjects);
     if (!cp || loadedProjectIds.current.has(cp.id)) return;
+    const sourceProject = otherProjects.find((p) => p.id === cp.id);
+    if (sourceProject && isRemoteProject(sourceProject)) return;
     loadedProjectIds.current.add(cp.id);
     invoke<string[]>("list_project_files", { projectPath: cp.path })
       .then((files) => {
@@ -293,6 +315,8 @@ export function NewTaskView({
 
     const cp = parseCrossProject(mentionSearch, otherProjects);
     if (cp) {
+      const sourceProject = otherProjects.find((p) => p.id === cp.id);
+      if (sourceProject && isRemoteProject(sourceProject)) return [];
       const files = crossProjectFiles.get(cp.id) ?? [];
       const search = mentionSearch.substring(mentionSearch.indexOf("/") + 1);
       return files
@@ -318,6 +342,7 @@ export function NewTaskView({
       .map((f) => ({ kind: "file", file: f }));
 
     const matchingProjects: MentionItem[] = otherProjects
+      .filter((p) => !isRemoteProject(p))
       .filter((p) => !search || p.name.toLowerCase().includes(search.toLowerCase()))
       .slice(0, 5)
       .map((p) => ({ kind: "project", project: p }));
@@ -358,7 +383,7 @@ export function NewTaskView({
   }
 
   function handleInitializeMd() {
-    const filename = agent === "claude" ? "CLAUDE.md" : "AGENTS.md";
+    const filename = isCodexLikeAgent(agent) ? "AGENTS.md" : "CLAUDE.md";
     const prompt = t("newTask.initializePrompt", { file: filename });
     // 初始化 md 文件不涉及代码改动，强制走本地，避免无谓的 worktree 开销
     onSubmit({
@@ -381,7 +406,7 @@ export function NewTaskView({
       return;
     }
     submittedRef.current = true;
-    const finalPrompt = planMode && text ? `${text}\n\nPlease use plan mode.` : text;
+    const finalPrompt = buildPromptWithGoalMode(text, planMode);
     onSubmit({
       prompt: finalPrompt,
       agent,
@@ -433,15 +458,15 @@ export function NewTaskView({
       </div>
 
       {/* Missing context file warning */}
-      {hasMdFile === false && (
+      {shouldShowInstructionsBanner(agent, hasMdFile) && (
         <div style={s.agentMissingMdBanner}>
           <TriangleAlert size={15} style={{ color: "var(--warning)", flexShrink: 0, marginTop: 1 }} />
           <div style={s.agentMissingMdBody}>
             <div style={{ fontSize: 13, lineHeight: 1.55, color: "var(--text-secondary)" }}>
               <span style={{ fontWeight: 650, color: "var(--text-primary)" }}>
                 {t("newTask.instructionsMissing", {
-                  file: agent === "claude" ? "CLAUDE.md" : "AGENTS.md",
-                }).split(agent === "claude" ? "CLAUDE.md" : "AGENTS.md")[0]}
+                  file: isCodexLikeAgent(agent) ? "AGENTS.md" : "CLAUDE.md",
+                }).split(isCodexLikeAgent(agent) ? "AGENTS.md" : "CLAUDE.md")[0]}
                 <code
                   style={{
                     fontFamily: "var(--font-mono)",
@@ -451,15 +476,15 @@ export function NewTaskView({
                     borderRadius: 3,
                   }}
                 >
-                  {agent === "claude" ? "CLAUDE.md" : "AGENTS.md"}
+                  {isCodexLikeAgent(agent) ? "AGENTS.md" : "CLAUDE.md"}
                 </code>{" "}
                 {t("newTask.instructionsMissing", {
-                  file: agent === "claude" ? "CLAUDE.md" : "AGENTS.md",
-                }).split(agent === "claude" ? "CLAUDE.md" : "AGENTS.md")[1]}
+                  file: isCodexLikeAgent(agent) ? "AGENTS.md" : "CLAUDE.md",
+                }).split(isCodexLikeAgent(agent) ? "AGENTS.md" : "CLAUDE.md")[1]}
               </span>{" "}
               {t("newTask.addInstructions", {
-                file: agent === "claude" ? "CLAUDE.md" : "AGENTS.md",
-                agent: agent === "claude" ? "Claude Code" : "Codex",
+                file: isCodexLikeAgent(agent) ? "AGENTS.md" : "CLAUDE.md",
+                agent: agentDisplayLabel(agent),
               })}
             </div>
             <button
@@ -598,6 +623,7 @@ export function NewTaskView({
       </div>
 
       {/* Launch mode + base branch (compose card 外、独立一栏) */}
+      {!remoteProject && (
       <div style={s.launchModeBar}>
         <LaunchModeSelector
           projectPath={project.path}
@@ -607,6 +633,7 @@ export function NewTaskView({
           onSetBaseBranch={setBaseBranch}
         />
       </div>
+      )}
     </div>
   );
 }

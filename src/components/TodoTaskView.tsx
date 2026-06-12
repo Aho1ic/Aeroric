@@ -4,6 +4,7 @@ import { permissionModeLabel } from "../types";
 import { Play, Pencil } from "lucide-react";
 import { TaskEditDialog } from "./task-panel/TaskEditDialog";
 import { useI18n } from "../i18n";
+import { agentDisplayLabel } from "../agents";
 
 export function TodoTaskView({
   task,
@@ -132,7 +133,7 @@ export function TodoTaskView({
                   padding: "2px 7px",
                 }}
               >
-                {task.agent === "claude" ? "Claude Code" : "Codex"}
+                {agentDisplayLabel(task.agent)}
               </span>
               <span
                 style={{

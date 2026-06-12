@@ -10,7 +10,9 @@ import type {
   TerminalFontSize,
   TaskDisplayWindow,
   FontFamily,
+  SshConnection,
 } from "../types";
+import { resolveProjectLocation } from "../types";
 import { TaskPanel } from "./TaskPanel";
 import { NewTaskView, type NewTaskDraft } from "./NewTaskView";
 import { RunningView } from "./RunningView";
@@ -25,9 +27,11 @@ import { SettingsDialog } from "./SettingsDialog";
 import { RightToolbar } from "./RightToolbar";
 import { TodoTaskView } from "./TodoTaskView";
 import { ShellTerminalPanel, type ShellTerminalPanelHandle } from "./ShellTerminalPanel";
+import { SshTerminalPanel } from "./ssh/SshTerminalPanel";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { useProjectPanels } from "../hooks/useProjectPanels";
 import { useI18n } from "../i18n";
+import { shouldShowRemoteSshTerminal } from "./project-page/viewMode";
 import s from "../styles";
 
 export function ProjectPage({
@@ -81,6 +85,8 @@ export function ProjectPage({
   onMonoFontFamilyChange,
   hubMode = false,
   onExitSkillHub,
+  sshConnections,
+  onSshConnectionsChange,
 }: {
   project: Project;
   visible?: boolean;
@@ -147,6 +153,8 @@ export function ProjectPage({
   onMonoFontFamilyChange: (family: FontFamily) => void;
   hubMode?: boolean;
   onExitSkillHub?: () => void;
+  sshConnections: SshConnection[];
+  onSshConnectionsChange: (connections: SshConnection[]) => void;
 }) {
   const { t } = useI18n();
   const {
@@ -190,6 +198,37 @@ export function ProjectPage({
     () => tasks.filter((t) => t.projectId === project.id),
     [tasks, project.id],
   );
+  const projectLocation = resolveProjectLocation(project);
+  const remoteConnection = useMemo(
+    () =>
+      projectLocation.kind === "ssh"
+        ? sshConnections.find((connection) => connection.id === projectLocation.connectionId)
+        : undefined,
+    [projectLocation, sshConnections],
+  );
+  const remoteFileContext = useMemo(
+    () =>
+      projectLocation.kind === "ssh" && remoteConnection
+        ? { connection: remoteConnection, projectPath: projectLocation.remotePath }
+        : undefined,
+    [projectLocation, remoteConnection],
+  );
+  const fileRootPath =
+    projectLocation.kind === "ssh" ? projectLocation.remotePath : project.path;
+  const filesDisabled = projectLocation.kind === "ssh" && !remoteFileContext;
+  const gitDisabled = projectLocation.kind === "ssh";
+  const terminalDisabled = projectLocation.kind === "ssh";
+  const searchDisabled = projectLocation.kind === "ssh";
+  const settingsDisabled = projectLocation.kind === "ssh";
+  const showRemoteSshTerminal = shouldShowRemoteSshTerminal(
+    projectLocation,
+    Boolean(remoteConnection),
+  );
+  const visibleRightPanel =
+    (rightPanel === "files" && filesDisabled) ||
+    ((rightPanel === "git-changes" || rightPanel === "git-history") && gitDisabled)
+      ? null
+      : rightPanel;
   const selectedTask = projectTasks.find((t) => t.id === selectedTaskId) ?? null;
   // GitChanges/GitHistory 的 cwd：worktree 任务用 worktree 路径，否则用主仓。
   // 主仓 git status 看不到 worktree 内未提交修改，必须切到 worktree cwd 才能查看 / 暂存 / 提交。
@@ -389,7 +428,7 @@ export function ProjectPage({
               <FileViewer
                 tabs={openFiles}
                 activeFilePath={activeFilePath}
-                projectPath={project.path}
+                projectPath={fileRootPath}
                 onSelectTab={handleFileTabSelect}
                 onCloseTab={handleFileTabClose}
                 onCloseOtherTabs={handleCloseOtherFileTabs}
@@ -397,6 +436,20 @@ export function ProjectPage({
                 onCloseAllTabs={handleCloseAllFileTabs}
                 themeVariant={themeVariant}
                 onRunMakeTarget={handleRunMakeTarget}
+                remote={remoteFileContext}
+              />
+            ) : showRemoteSshTerminal && remoteConnection ? (
+              <SshTerminalPanel
+                connections={sshConnections}
+                onConnectionsChange={onSshConnectionsChange}
+                active={visible}
+                width="100%"
+                themeVariant={themeVariant}
+                terminalFontSize={terminalFontSize}
+                monoFontFamily={monoFontFamily}
+                initialConnectionId={remoteConnection.id}
+                autoConnect
+                hideConnectionList
               />
             ) : isNewTask || !selectedTask ? (
               <NewTaskView
@@ -455,7 +508,7 @@ export function ProjectPage({
               );
             })}
         </div>
-        {showShellTerminal && (
+        {showShellTerminal && !terminalDisabled && (
           <ShellTerminalPanel
             ref={shellRef}
             projectPath={project.path}
@@ -472,7 +525,7 @@ export function ProjectPage({
         )}
       </div>
 
-      {rightPanel && (
+      {visibleRightPanel && (
         <div style={{ position: "relative", display: "flex", flexShrink: 0 }}>
           <div
             onMouseDown={handleRightResizeStart}
@@ -486,18 +539,19 @@ export function ProjectPage({
               zIndex: 10,
             }}
           />
-          {rightPanel === "files" && (
+          {visibleRightPanel === "files" && (
             <ErrorBoundary label="文件浏览器">
               <FileExplorer
-                projectPath={project.path}
+                projectPath={fileRootPath}
                 projectName={project.name}
                 onFileSelect={handleFileSelect}
                 active={visible}
                 width={rightPanelWidth}
+                remote={remoteFileContext}
               />
             </ErrorBoundary>
           )}
-          {rightPanel === "git-changes" && (
+          {visibleRightPanel === "git-changes" && (
             <ErrorBoundary label="Git 变更">
               <GitChanges
                 projectPath={gitContextPath}
@@ -507,7 +561,7 @@ export function ProjectPage({
               />
             </ErrorBoundary>
           )}
-          {rightPanel === "git-history" && (
+          {visibleRightPanel === "git-history" && (
             <ErrorBoundary label="Git 历史">
               <GitHistory
                 projectPath={gitContextPath}
@@ -517,19 +571,37 @@ export function ProjectPage({
               />
             </ErrorBoundary>
           )}
+          {visibleRightPanel === "ssh" && (
+            <ErrorBoundary label="SSH">
+              <SshTerminalPanel
+                connections={sshConnections}
+                onConnectionsChange={onSshConnectionsChange}
+                active={visible}
+                width={rightPanelWidth}
+                themeVariant={themeVariant}
+                terminalFontSize={terminalFontSize}
+                monoFontFamily={monoFontFamily}
+              />
+            </ErrorBoundary>
+          )}
         </div>
       )}
 
       <RightToolbar
-        activePanel={rightPanel}
+        activePanel={visibleRightPanel}
         onToggle={handleTogglePanel}
         terminalActive={showShellTerminal}
         onToggleTerminal={() => setShowShellTerminal((v) => !v)}
         onOpenSearch={() => setShowFileSearch(true)}
         onOpenSettings={() => setShowSettings(true)}
+        filesDisabled={filesDisabled}
+        gitDisabled={gitDisabled}
+        terminalDisabled={terminalDisabled}
+        searchDisabled={searchDisabled}
+        settingsDisabled={settingsDisabled}
       />
 
-      {showFileSearch && (
+      {showFileSearch && !searchDisabled && (
         <FileSearchDialog
           projectPath={project.path}
           onFileSelect={handleSearchFileSelect}
@@ -537,7 +609,7 @@ export function ProjectPage({
         />
       )}
 
-      {showSettings && (
+      {showSettings && !settingsDisabled && (
         <SettingsDialog projectPath={project.path} onClose={() => setShowSettings(false)} />
       )}
     </div>

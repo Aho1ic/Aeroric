@@ -241,7 +241,10 @@ fn build_codex_block(_node_path: &str, script: &str) -> String {
         // Codex 的 `command` 只能是字符串(无 args 数组),在 Windows 上经
         // `cmd.exe /C` 执行、Unix 经 `/bin/sh -lc` 执行;裸 `node "<script>"`
         // 两边都成立。toml_quote 负责把内层的 `"` 与路径反斜杠转义成合法 TOML。
-        out.push_str(&format!("command = {}\n", toml_quote(&hook_command(script))));
+        out.push_str(&format!(
+            "command = {}\n",
+            toml_quote(&hook_command(script))
+        ));
         out.push('\n');
     }
     out.push_str(CODEX_END);
@@ -447,10 +450,15 @@ pub fn usable_for(agent: &str) -> bool {
     if status.node_path.is_empty() {
         return false;
     }
-    if agent == "codex" {
-        status.codex_installed && crate::app_settings::codex_version_gte(CODEX_HOOK_MIN_VERSION)
-    } else {
-        status.claude_installed && crate::app_settings::claude_version_gte(CLAUDE_HOOK_MIN_VERSION)
+    match agent {
+        "codex" => {
+            status.codex_installed && crate::app_settings::codex_version_gte(CODEX_HOOK_MIN_VERSION)
+        }
+        "claude" => {
+            status.claude_installed
+                && crate::app_settings::claude_version_gte(CLAUDE_HOOK_MIN_VERSION)
+        }
+        _ => false,
     }
 }
 

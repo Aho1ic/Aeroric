@@ -10,6 +10,7 @@ import { useToast } from "./Toast";
 import { shortenPath, getUsageColor } from "../utils";
 import { useUsageSnapshot } from "../hooks/useUsageSnapshot";
 import { ENABLE_USAGE_INSIGHTS } from "../platform";
+import { agentDisplayLabel, isCodexLikeAgent } from "../agents";
 import { useI18n } from "../i18n";
 import s from "../styles";
 import {
@@ -110,7 +111,8 @@ export function RunningView({
   const isDetached = task.status === "detached";
   const isInterrupted = task.status === "interrupted";
   const sessionPath = task.claudeSessionPath ?? task.codexSessionPath;
-  const resumeSessionId = task.agent === "codex" ? task.codexSessionId : task.claudeSessionId;
+  const codexLike = isCodexLikeAgent(task.agent);
+  const resumeSessionId = codexLike ? task.codexSessionId : task.claudeSessionId;
   const restoreState = getRestoreState?.() ?? {};
 
   const { snapshot: usageSnapshot } = useUsageSnapshot(visible && ENABLE_USAGE_INSIGHTS);
@@ -168,14 +170,14 @@ export function RunningView({
       await invoke<void>("export_session_markdown", {
         sessionPath,
         projectPath,
-        isCodex: task.agent === "codex",
+        isCodex: codexLike,
         outputPath,
         taskMeta: {
           name: task.name,
           prompt: task.prompt,
           agent: task.agent,
           createdAt: task.createdAt,
-          sessionId: task.agent === "codex" ? task.codexSessionId : task.claudeSessionId,
+          sessionId: codexLike ? task.codexSessionId : task.claudeSessionId,
           worktreeBranch: task.worktreeBranch,
           baseBranch: task.baseBranch,
           additions: task.additions,
@@ -461,7 +463,7 @@ export function RunningView({
       >
         <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, color: "var(--text-muted)" }}>
           <span>
-            {task.agent === "claude" ? "✦ Claude Code" : "⬡ Codex"} ·{" "}
+            {task.agent === "claude" ? "✦" : "⬡"} {agentDisplayLabel(task.agent)} ·{" "}
             {permissionModeLabel(task.permissionMode, task.agent)}
           </span>
           {ENABLE_USAGE_INSIGHTS && usageSnapshot && (task.agent === "claude"

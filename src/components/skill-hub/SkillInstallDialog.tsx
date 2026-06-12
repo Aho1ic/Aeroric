@@ -8,13 +8,14 @@ import type {
   Project,
   Skill,
   SkillInstallation,
-  AgentType,
   SkillInstallResult,
   SkillInstallStrategy,
 } from "../../types";
 import { useI18n } from "../../i18n";
 import s from "../../styles";
 import { SkillConflictDialog } from "./SkillConflictDialog";
+
+type SkillAgent = "claude" | "codex";
 
 interface Props {
   skill: Skill;
@@ -24,7 +25,7 @@ interface Props {
   onInstalled: () => void;
 }
 
-const AGENT_LOGO: Record<AgentType, string> = {
+const AGENT_LOGO: Record<SkillAgent, string> = {
   claude: claudeLogo,
   codex: chatgptLogo,
 };
@@ -40,7 +41,7 @@ export function SkillInstallDialog({
 }: Props) {
   const { t } = useI18n();
   const [projectId, setProjectId] = useState<string | null>(allProjects[0]?.id ?? null);
-  const [agent, setAgent] = useState<AgentType>("claude");
+  const [agent, setAgent] = useState<SkillAgent>("claude");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [conflict, setConflict] = useState<SkillInstallResult["conflict"] | null>(null);

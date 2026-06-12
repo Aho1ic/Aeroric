@@ -53,7 +53,9 @@ fn duration_from(first: Option<f64>, last: Option<f64>) -> f64 {
 /// token/tool_calls 全部归零；判定标准必须与会话查看器保持一致。
 fn is_codex_session(content: &str) -> bool {
     for line in content.lines().take(10) {
-        let Ok(v) = serde_json::from_str::<Value>(line) else { continue };
+        let Ok(v) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
         match v.get("type").and_then(|t| t.as_str()) {
             Some("session_meta") | Some("event_msg") => return true,
             _ => {}
@@ -73,19 +75,35 @@ fn parse_claude_metrics(content: &str) -> SessionMetrics {
     let mut last_ts: Option<f64> = None;
 
     for line in content.lines() {
-        let Ok(val) = serde_json::from_str::<Value>(line) else { continue };
+        let Ok(val) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
         track_timestamp(&val, &mut first_ts, &mut last_ts);
 
         if val.get("type").and_then(|v| v.as_str()) != Some("assistant") {
             continue;
         }
-        let Some(message) = val.get("message") else { continue };
+        let Some(message) = val.get("message") else {
+            continue;
+        };
 
         if let Some(usage) = message.get("usage") {
-            let inp = usage.get("input_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
-            let out = usage.get("output_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
-            let cc = usage.get("cache_creation_input_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
-            let cr = usage.get("cache_read_input_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
+            let inp = usage
+                .get("input_tokens")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+            let out = usage
+                .get("output_tokens")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+            let cc = usage
+                .get("cache_creation_input_tokens")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+            let cr = usage
+                .get("cache_read_input_tokens")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
             input_tokens += inp;
             output_tokens += out;
             cache_creation += cc;
@@ -119,7 +137,9 @@ fn parse_codex_metrics(content: &str) -> SessionMetrics {
     let mut last_ts: Option<f64> = None;
 
     for line in content.lines() {
-        let Ok(val) = serde_json::from_str::<Value>(line) else { continue };
+        let Ok(val) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
         track_timestamp(&val, &mut first_ts, &mut last_ts);
 
         let t = val.get("type").and_then(|v| v.as_str()).unwrap_or("");
@@ -230,4 +250,3 @@ pub async fn read_session_metrics(session_path: String) -> Result<SessionMetrics
     .await
     .map_err(|e| format!("read_session_metrics join error: {}", e))?
 }
-

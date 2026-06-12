@@ -2,13 +2,44 @@ export interface Project {
   id: string;
   name: string;
   path: string;
+  location?: ProjectLocation;
   branch?: string;
   lastOpenedAt: number;
   /** 为 true 时不在左侧常驻竖条显示，仅可从首页或「展开全部」抽屉访问。缺省=常驻。 */
   hiddenFromRail?: boolean;
 }
 
-export type AgentType = "claude" | "codex";
+export type ProjectLocation =
+  | { kind: "local"; path: string }
+  | { kind: "ssh"; connectionId: string; remotePath: string };
+
+export function resolveProjectLocation(project: Project): ProjectLocation {
+  return project.location ?? { kind: "local", path: project.path };
+}
+
+export function isRemoteProject(project: Project): boolean {
+  return resolveProjectLocation(project).kind === "ssh";
+}
+
+export function sshProjectPath(connectionId: string, remotePath: string): string {
+  const normalizedRemotePath = remotePath.startsWith("/") ? remotePath : `/${remotePath}`;
+  return `ssh://${connectionId}${normalizedRemotePath}`;
+}
+
+export interface SshConnection {
+  id: string;
+  name: string;
+  host: string;
+  port: number;
+  username: string;
+  identityFile?: string;
+  password?: string;
+  remotePath?: string;
+  createdAt: number;
+  lastConnectedAt?: number;
+}
+
+export type AgentType = "claude" | "claude_gpt55" | "codex";
 export type ThemeMode = "system" | "dark" | "light" | "eyecare";
 export type ThemeVariant = "dark" | "light" | "eyecare";
 export type PermissionMode = "ask" | "auto_edit" | "full_access";
@@ -93,7 +124,7 @@ export function permissionModeLabel(
   agent?: AgentType,
   askLabel = PERM_LABELS.ask,
 ): string {
-  if (agent === "codex" && mode === "auto_edit") {
+  if ((agent === "codex" || agent === "claude_gpt55") && mode === "auto_edit") {
     return "Auto Mode";
   }
   if (mode === "ask") return askLabel;

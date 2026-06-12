@@ -4,6 +4,7 @@ import type { Task } from "../../types";
 import { StatusIcon } from "../StatusIcon";
 import { useI18n } from "../../i18n";
 import s from "../../styles";
+import { agentDisplayLabel, isCodexLikeAgent } from "../../agents";
 import claudeLogo from "../../assets/claude.svg";
 import chatgptLogo from "../../assets/chatgpt.svg";
 
@@ -49,6 +50,7 @@ export const TaskListItem = memo(
     const { t } = useI18n();
     const [hov, setHov] = useState(false);
     const displayTitle = task.name ?? task.prompt;
+    const codexLike = isCodexLikeAgent(task.agent);
     return (
       <div
         style={{
@@ -84,14 +86,14 @@ export const TaskListItem = memo(
         </div>
         <img
           src={task.agent === "claude" ? claudeLogo : chatgptLogo}
-          title={task.agent === "claude" ? "Claude Code" : "Codex"}
+          title={agentDisplayLabel(task.agent)}
           style={{
             ...s.agentBadge,
             position: "absolute",
             right: 16,
             top: 11,
             opacity: hov ? 0 : 1,
-            filter: task.agent === "codex" ? "var(--agent-badge-filter)" : "none",
+            filter: codexLike ? "var(--agent-badge-filter)" : "none",
             pointerEvents: "none",
             transition: "opacity 0.12s ease",
             zIndex: 1,

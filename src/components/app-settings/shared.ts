@@ -42,28 +42,30 @@ export function renderShortcutKeys(keys: string[], keyStyle = shortcutKeyStyle) 
 
 export function getAgentSettingsFilePath(agent: AgentKey): string {
   if (APP_PLATFORM === "windows") {
-    return agent === "claude"
-      ? "%USERPROFILE%\\.claude\\settings.json"
-      : "%USERPROFILE%\\.codex\\config.toml";
+    if (agent === "claude") return "%USERPROFILE%\\.claude\\settings.json";
+    if (agent === "claude_gpt55") return "%USERPROFILE%\\.claude\\start-gpt55.sh";
+    return "%USERPROFILE%\\.codex\\config.toml";
   }
 
-  return agent === "claude" ? "~/.claude/settings.json" : "~/.codex/config.toml";
+  if (agent === "claude") return "~/.claude/settings.json";
+  if (agent === "claude_gpt55") return "~/.claude/start-gpt55.sh";
+  return "~/.codex/config.toml";
 }
 
 export function getAgentExecutablePlaceholder(agent: AgentKey): string {
   if (APP_PLATFORM === "windows") {
-    return agent === "claude"
-      ? "claude or C:\\Users\\<you>\\AppData\\Roaming\\npm\\claude.cmd"
-      : "codex or C:\\Users\\<you>\\AppData\\Roaming\\npm\\codex.cmd";
+    if (agent === "claude") return "claude or C:\\Users\\<you>\\AppData\\Roaming\\npm\\claude.cmd";
+    if (agent === "claude_gpt55") return "%USERPROFILE%\\.claude\\start-gpt55.sh";
+    return "codex or C:\\Users\\<you>\\AppData\\Roaming\\npm\\codex.cmd";
   }
 
   if (APP_PLATFORM === "macos") {
-    return agent === "claude"
-      ? "claude or /opt/homebrew/bin/claude"
-      : "codex or /opt/homebrew/bin/codex";
+    if (agent === "claude") return "claude or /opt/homebrew/bin/claude";
+    if (agent === "claude_gpt55") return "/Users/<you>/.claude/start-gpt55.sh";
+    return "codex or /opt/homebrew/bin/codex";
   }
 
-  return agent === "claude"
-    ? "claude or /usr/local/bin/claude"
-    : "codex or /usr/local/bin/codex";
+  if (agent === "claude") return "claude or /usr/local/bin/claude";
+  if (agent === "claude_gpt55") return "~/.claude/start-gpt55.sh";
+  return "codex or /usr/local/bin/codex";
 }

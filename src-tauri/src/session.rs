@@ -940,10 +940,7 @@ pub(crate) fn validate_session_path(
     if allowed_roots.is_empty() {
         return Err("No allowed session roots are available for this agent".into());
     }
-    if allowed_roots
-        .iter()
-        .any(|root| canonical.starts_with(root))
-    {
+    if allowed_roots.iter().any(|root| canonical.starts_with(root)) {
         Ok(canonical)
     } else {
         Err(format!(
@@ -1216,7 +1213,11 @@ fn extract_claude_status_session_id(output: &str) -> Option<String> {
         .chars()
         .take_while(|c| c.is_ascii_hexdigit() || *c == '-')
         .collect();
-    if is_uuid_like(&id) { Some(id) } else { None }
+    if is_uuid_like(&id) {
+        Some(id)
+    } else {
+        None
+    }
 }
 
 /// 从 Codex 的 `/status` 输出中提取 Session ID。
@@ -1239,7 +1240,11 @@ fn extract_codex_status_session_id(output: &str) -> Option<String> {
         .chars()
         .take_while(|c| c.is_ascii_hexdigit() || *c == '-')
         .collect();
-    if is_uuid_like(&id) { Some(id) } else { None }
+    if is_uuid_like(&id) {
+        Some(id)
+    } else {
+        None
+    }
 }
 
 /// 轮询最多 5 秒，直到会话文件出现。
@@ -1539,94 +1544,94 @@ fn run_status_session_watcher(
     is_codex: bool,
     rx: mpsc::Receiver<String>,
 ) {
-        let start_time = Instant::now();
-        let mut status_sent = false;
-        let mut status_sent_at: Option<Instant> = None;
-        let mut status_send_count: u32 = 0;
-        let mut first_output_at = None;
-        let mut accumulated = String::new();
-        // 发送 /status 后的独立缓冲，避免大量输出将 /status 响应挤出裁剪窗口
-        let mut status_response_buf = String::new();
-        let mut collecting_response = false;
+    let start_time = Instant::now();
+    let mut status_sent = false;
+    let mut status_sent_at: Option<Instant> = None;
+    let mut status_send_count: u32 = 0;
+    let mut first_output_at = None;
+    let mut accumulated = String::new();
+    // 发送 /status 后的独立缓冲，避免大量输出将 /status 响应挤出裁剪窗口
+    let mut status_response_buf = String::new();
+    let mut collecting_response = false;
 
-        loop {
-            if !is_task_active(&app, &task_id) {
-                break;
-            }
+    loop {
+        if !is_task_active(&app, &task_id) {
+            break;
+        }
 
-            let should_send_status = should_send_status_command(
-                status_sent,
-                is_codex,
-                start_time.elapsed(),
-                first_output_at.map(|instant: Instant| instant.elapsed()),
-            );
+        let should_send_status = should_send_status_command(
+            status_sent,
+            is_codex,
+            start_time.elapsed(),
+            first_output_at.map(|instant: Instant| instant.elapsed()),
+        );
 
-            // 首次发送或重试：若已发送但 3 秒内未提取到 Session ID，则再发一次。
-            // Codex 在 session 创建前 /status 不含 Session 字段，需要在任务真正开始后重试。
-            // 最多重试 5 次（含首次发送），避免对长时间无法解析的任务持续干扰 PTY 输入流。
-            let should_retry = status_sent
-                && status_send_count < 5
-                && status_sent_at
-                    .map(|t| t.elapsed() >= Duration::from_secs(3))
-                    .unwrap_or(false);
+        // 首次发送或重试：若已发送但 3 秒内未提取到 Session ID，则再发一次。
+        // Codex 在 session 创建前 /status 不含 Session 字段，需要在任务真正开始后重试。
+        // 最多重试 5 次（含首次发送），避免对长时间无法解析的任务持续干扰 PTY 输入流。
+        let should_retry = status_sent
+            && status_send_count < 5
+            && status_sent_at
+                .map(|t| t.elapsed() >= Duration::from_secs(3))
+                .unwrap_or(false);
 
-            if should_send_status || should_retry {
-                status_sent = true;
-                status_send_count += 1;
-                status_sent_at = Some(Instant::now());
-                collecting_response = true;
-                status_response_buf.clear();
-                send_status_command(&app, &task_id, is_codex);
-            }
+        if should_send_status || should_retry {
+            status_sent = true;
+            status_send_count += 1;
+            status_sent_at = Some(Instant::now());
+            collecting_response = true;
+            status_response_buf.clear();
+            send_status_command(&app, &task_id, is_codex);
+        }
 
-            match rx.recv_timeout(Duration::from_millis(200)) {
-                Ok(chunk) => {
-                    if is_codex && first_output_at.is_none() {
-                        first_output_at = Some(Instant::now());
-                    }
-                    accumulated.push_str(&chunk);
-                    // 限制缓冲区大小，防止内存占用过大
-                    if accumulated.len() > 65536 {
-                        let trim = accumulated.len() - 32768;
-                        accumulated.drain(..trim);
-                    }
+        match rx.recv_timeout(Duration::from_millis(200)) {
+            Ok(chunk) => {
+                if is_codex && first_output_at.is_none() {
+                    first_output_at = Some(Instant::now());
+                }
+                accumulated.push_str(&chunk);
+                // 限制缓冲区大小，防止内存占用过大
+                if accumulated.len() > 65536 {
+                    let trim = accumulated.len() - 32768;
+                    accumulated.drain(..trim);
+                }
 
-                    // /status 发送后，额外收集响应到独立缓冲（最多 8KB），
-                    // 避免主缓冲裁剪把 Session ID 丢掉
-                    if collecting_response {
-                        status_response_buf.push_str(&chunk);
-                        if status_response_buf.len() > 8192 {
-                            collecting_response = false;
-                        }
-                    }
-
-                    let session_id = if is_codex {
-                        extract_codex_status_session_id(&status_response_buf)
-                            .or_else(|| extract_codex_status_session_id(&accumulated))
-                    } else {
-                        extract_claude_status_session_id(&status_response_buf)
-                            .or_else(|| extract_claude_status_session_id(&accumulated))
-                    };
-
-                    if let Some(sid) = session_id {
-                        register_and_watch_session(&app, &task_id, &sid, &project_path, is_codex);
-                        // Claude Code 的 /status 以全屏面板形式展示，需发送 ESC 关闭；
-                        // Codex 无此面板，无需处理
-                        if !is_codex {
-                            let tm = app.state::<TaskManager>();
-                            let mut writers = tm.pty_writers.lock();
-                            if let Some(writer) = writers.get_mut(&task_id) {
-                                let _ = writer.write_all(b"\x1b");
-                                let _ = writer.flush();
-                            }
-                        }
-                        break;
+                // /status 发送后，额外收集响应到独立缓冲（最多 8KB），
+                // 避免主缓冲裁剪把 Session ID 丢掉
+                if collecting_response {
+                    status_response_buf.push_str(&chunk);
+                    if status_response_buf.len() > 8192 {
+                        collecting_response = false;
                     }
                 }
-                Err(mpsc::RecvTimeoutError::Timeout) => {}
-                Err(mpsc::RecvTimeoutError::Disconnected) => break,
+
+                let session_id = if is_codex {
+                    extract_codex_status_session_id(&status_response_buf)
+                        .or_else(|| extract_codex_status_session_id(&accumulated))
+                } else {
+                    extract_claude_status_session_id(&status_response_buf)
+                        .or_else(|| extract_claude_status_session_id(&accumulated))
+                };
+
+                if let Some(sid) = session_id {
+                    register_and_watch_session(&app, &task_id, &sid, &project_path, is_codex);
+                    // Claude Code 的 /status 以全屏面板形式展示，需发送 ESC 关闭；
+                    // Codex 无此面板，无需处理
+                    if !is_codex {
+                        let tm = app.state::<TaskManager>();
+                        let mut writers = tm.pty_writers.lock();
+                        if let Some(writer) = writers.get_mut(&task_id) {
+                            let _ = writer.write_all(b"\x1b");
+                            let _ = writer.flush();
+                        }
+                    }
+                    break;
+                }
             }
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Err(mpsc::RecvTimeoutError::Disconnected) => break,
         }
+    }
 }
 
 /// 供 `resume_task` 使用：根据已知的 session_id 查找会话文件并开始监视。
@@ -1694,8 +1699,8 @@ fn export_session_markdown_inner(
     let canonical = validate_session_path(session_path, project_path, is_codex)?;
     let canonical_out = validate_export_output_path(output_path)?;
 
-    let metadata = fs::metadata(&canonical)
-        .map_err(|e| format!("Cannot read session metadata: {}", e))?;
+    let metadata =
+        fs::metadata(&canonical).map_err(|e| format!("Cannot read session metadata: {}", e))?;
     if metadata.len() > MAX_SESSION_BYTES_FOR_EXPORT {
         return Err(format!(
             "Session file is too large to export ({} MB > {} MB limit)",
@@ -1707,8 +1712,8 @@ fn export_session_markdown_inner(
     // 按行读取 JSONL：避免 `read_to_string` + `lines().collect()` 的临时双份持有
     // （整段 String + 切片 Vec<&str>）。真正的流式解析需要重写 parse_*_session
     // （它们消费 &[&str]），收益不抵复杂度。
-    let session_file = File::open(&canonical)
-        .map_err(|e| format!("Cannot open session file: {}", e))?;
+    let session_file =
+        File::open(&canonical).map_err(|e| format!("Cannot open session file: {}", e))?;
     let mut lines: Vec<String> = Vec::new();
     for line in BufReader::new(session_file).lines() {
         let line = line.map_err(|e| format!("Cannot read session file: {}", e))?;
@@ -1724,8 +1729,8 @@ fn export_session_markdown_inner(
     };
 
     // 直接写到 BufWriter，避免先构建一整段 Markdown String 再 write。
-    let out_file = File::create(&canonical_out)
-        .map_err(|e| format!("Cannot create markdown file: {}", e))?;
+    let out_file =
+        File::create(&canonical_out).map_err(|e| format!("Cannot create markdown file: {}", e))?;
     let mut writer = BufWriter::new(out_file);
     write_export_markdown(&mut writer, meta, &messages)
         .map_err(|e| format!("Cannot write markdown file: {}", e))?;
@@ -1788,7 +1793,11 @@ fn write_export_markdown<W: Write>(
     // Metadata
     writeln!(out, "## Metadata\n")?;
     writeln!(out, "- **Agent**: {}", sanitize_md_inline(&meta.agent))?;
-    writeln!(out, "- **Created**: {}", format_timestamp_ms(meta.created_at))?;
+    writeln!(
+        out,
+        "- **Created**: {}",
+        format_timestamp_ms(meta.created_at)
+    )?;
     if let Some(sid) = &meta.session_id {
         if !sid.is_empty() {
             writeln!(out, "- **Session ID**: `{}`", sanitize_md_code_span(sid))?;
@@ -1807,11 +1816,7 @@ fn write_export_markdown<W: Write>(
     }
     if let Some(reason) = &meta.failure_reason {
         if !reason.is_empty() {
-            writeln!(
-                out,
-                "- **Failure reason**: {}",
-                sanitize_md_inline(reason)
-            )?;
+            writeln!(out, "- **Failure reason**: {}", sanitize_md_inline(reason))?;
         }
     }
     writeln!(out)?;
@@ -1928,7 +1933,10 @@ mod tests {
 
     #[test]
     fn extract_claude_status_session_id_returns_none_when_absent() {
-        assert_eq!(extract_claude_status_session_id("no session info here"), None);
+        assert_eq!(
+            extract_claude_status_session_id("no session info here"),
+            None
+        );
     }
 
     #[test]
@@ -1962,7 +1970,10 @@ mod tests {
 
     #[test]
     fn extract_codex_status_session_id_returns_none_when_absent() {
-        assert_eq!(extract_codex_status_session_id("no session info here"), None);
+        assert_eq!(
+            extract_codex_status_session_id("no session info here"),
+            None
+        );
     }
 
     #[test]
@@ -2184,9 +2195,17 @@ mod tests {
         );
         // session_id / branch 在行内代码 span 里，反引号必须被替换掉
         assert!(md.contains("- **Session ID**: `abc'evil'123`"), "{}", md);
-        assert!(md.contains("- **Branch**: `feat/'branch` → `main`"), "{}", md);
+        assert!(
+            md.contains("- **Branch**: `feat/'branch` → `main`"),
+            "{}",
+            md
+        );
         // failure reason 的换行被折叠成单空格，不破坏列表项
-        assert!(md.contains("- **Failure reason**: first line second line"), "{}", md);
+        assert!(
+            md.contains("- **Failure reason**: first line second line"),
+            "{}",
+            md
+        );
     }
 
     #[test]
@@ -2198,10 +2217,9 @@ mod tests {
     #[test]
     fn validate_export_output_path_rejects_missing_parent() {
         // 极不可能存在的父目录
-        assert!(validate_export_output_path(
-            "/nonexistent-9c3a/__nezha_export_test__/out.md"
-        )
-        .is_err());
+        assert!(
+            validate_export_output_path("/nonexistent-9c3a/__nezha_export_test__/out.md").is_err()
+        );
     }
 
     #[test]

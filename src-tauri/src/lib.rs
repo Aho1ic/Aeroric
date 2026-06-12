@@ -16,8 +16,11 @@ mod hooks;
 mod notification;
 mod platform;
 mod pty;
+mod remote_fs;
+mod remote_git;
 mod session;
 mod skills;
+mod ssh;
 mod storage;
 mod subprocess;
 mod usage;
@@ -162,6 +165,13 @@ pub fn run() {
             fs::delete_path,
             fs::list_project_files,
             fs::search_project_files,
+            remote_fs::remote_read_dir_entries,
+            remote_fs::remote_read_file_content,
+            remote_fs::remote_read_image_preview,
+            remote_fs::remote_write_file_content,
+            remote_fs::remote_create_file,
+            remote_fs::remote_create_directory,
+            remote_fs::remote_delete_path,
             git::generate_commit_message,
             agent_assist::generate_task_name,
             git::git_status,
@@ -187,6 +197,8 @@ pub fn run() {
             git::merge_task_worktree,
             git::remove_task_worktree,
             git::worktree_diff_stats,
+            remote_git::remote_git_status,
+            remote_git::remote_git_show_diff,
             analytics::read_session_metrics,
             session::read_session_messages,
             session::export_session_markdown,
@@ -200,6 +212,13 @@ pub fn run() {
             storage::save_projects,
             storage::load_project_tasks,
             storage::save_project_tasks,
+            ssh::load_ssh_connections,
+            ssh::save_ssh_connections,
+            ssh::open_ssh_shell,
+            ssh::kill_ssh_shell,
+            ssh::run_remote_task,
+            ssh::resume_remote_task,
+            ssh::cancel_remote_task,
             app_settings::load_app_settings,
             app_settings::save_app_settings,
             app_settings::save_agent_paths,

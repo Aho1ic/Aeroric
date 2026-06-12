@@ -100,6 +100,7 @@ export function ShortcutsPanel() {
   const { t } = useI18n();
   const [settings, setSettings] = useState<AppSettings>({
     claude_path: "",
+    claude_gpt55_path: "",
     codex_path: "",
     send_shortcut: DEFAULT_SEND_SHORTCUT,
     terminal_shift_enter_newline: DEFAULT_SHIFT_ENTER_NEWLINE,

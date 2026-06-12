@@ -14,6 +14,9 @@ import { getAgentExecutablePlaceholder } from "./shared";
 
 const AUTO_VERSION_DETECT_DELAY_MS = 350;
 
+type AgentPathField = "claude_path" | "claude_gpt55_path" | "codex_path";
+type AgentVersionField = "claude_version" | "claude_gpt55_version" | "codex_version";
+
 const inputStyle: React.CSSProperties = {
   width: "100%",
   padding: "7px 10px",
@@ -62,14 +65,34 @@ const actionButtonStyle: React.CSSProperties = {
 
 export function AgentPathSection({ agentKey }: { agentKey: AgentKey }) {
   const { t } = useI18n();
-  const pathField: keyof AppSettings = agentKey === "claude" ? "claude_path" : "codex_path";
-  const versionField: keyof AgentVersions =
-    agentKey === "claude" ? "claude_version" : "codex_version";
-  const pathLabel = t(agentKey === "claude" ? "appSettings.claudePath" : "appSettings.codexPath");
-  const pathHint = t(agentKey === "claude" ? "appSettings.claudePathHint" : "appSettings.codexPathHint");
+  const pathFieldByAgent: Record<AgentKey, AgentPathField> = {
+    claude: "claude_path",
+    claude_gpt55: "claude_gpt55_path",
+    codex: "codex_path",
+  };
+  const versionFieldByAgent: Record<AgentKey, AgentVersionField> = {
+    claude: "claude_version",
+    claude_gpt55: "claude_gpt55_version",
+    codex: "codex_version",
+  };
+  const pathLabelKeyByAgent: Record<AgentKey, string> = {
+    claude: "appSettings.claudePath",
+    claude_gpt55: "appSettings.claudeGpt55Path",
+    codex: "appSettings.codexPath",
+  };
+  const pathHintKeyByAgent: Record<AgentKey, string> = {
+    claude: "appSettings.claudePathHint",
+    claude_gpt55: "appSettings.claudeGpt55PathHint",
+    codex: "appSettings.codexPathHint",
+  };
+  const pathField = pathFieldByAgent[agentKey];
+  const versionField = versionFieldByAgent[agentKey];
+  const pathLabel = t(pathLabelKeyByAgent[agentKey]);
+  const pathHint = t(pathHintKeyByAgent[agentKey]);
 
   const emptySettings: AppSettings = {
     claude_path: "",
+    claude_gpt55_path: "",
     codex_path: "",
     send_shortcut: DEFAULT_SEND_SHORTCUT,
     terminal_shift_enter_newline: DEFAULT_SHIFT_ENTER_NEWLINE,
@@ -78,6 +101,7 @@ export function AgentPathSection({ agentKey }: { agentKey: AgentKey }) {
   const [originalSettings, setOriginalSettings] = useState<AppSettings>(emptySettings);
   const [versions, setVersions] = useState<AgentVersions>({
     claude_version: "",
+    claude_gpt55_version: "",
     codex_version: "",
   });
   const [loading, setLoading] = useState(true);
@@ -185,6 +209,7 @@ export function AgentPathSection({ agentKey }: { agentKey: AgentKey }) {
     try {
       const next = await invoke<AppSettings>("save_agent_paths", {
         claudePath: settings.claude_path,
+        claudeGpt55Path: settings.claude_gpt55_path,
         codexPath: settings.codex_path,
       });
       setSettings(next);

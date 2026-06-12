@@ -10,6 +10,7 @@ export type NavKey =
   | "skills"
   | "about"
   | "claude"
+  | "claude_gpt55"
   | "codex";
 
 export interface HookInstallStatus {
@@ -32,6 +33,7 @@ export interface HookAgentReadiness {
 
 export interface AppSettings {
   claude_path: string;
+  claude_gpt55_path: string;
   codex_path: string;
   send_shortcut: SendShortcut;
   terminal_shift_enter_newline: boolean;
@@ -39,10 +41,11 @@ export interface AppSettings {
 
 export interface AgentVersions {
   claude_version: string;
+  claude_gpt55_version: string;
   codex_version: string;
 }
 
-export type AgentKey = "claude" | "codex";
+export type AgentKey = "claude" | "claude_gpt55" | "codex";
 
 export type NavSection = "application" | "agents" | "about";
 
