@@ -1,5 +1,172 @@
 # Local Change Log
 
+> 目的：记录本仓库相对上游 `hanshuaikang/nezha` 的本地个性化改动，供后续合并新版（如 0.4.2）时逐项核对，避免被上游覆盖。
+> 安全规则：不要在本文记录 SSH 密码、API key、私钥、账号 token 等敏感值。
+
+## 当前基线（合并 0.4.2 前先读）
+
+- 当前上游基线：`v0.4.1` / `origin/main` 的 `d06e8f4` 已合入。
+- 当前本地分支：`codex/ssh-remote-mvp`。
+- 本地合并后提交：
+  - `b0ec3a8`：合并 0.4.1 前的本地个性化改动检查点。
+  - `7eed7b2`：合并上游 `v0.4.1`。
+  - `cc7789b`：记录 0.4.1 App 替换结果。
+- 已安装应用：`/Applications/NeZha.app`，`Info.plist` 版本为 `0.4.1`。
+- 已安装二进制 SHA256：`0a8f6a4d133830575665bed904bec0dc40ccb242056f8d35fdcacdea2b1b79bd`。
+
+## 下次合并新版的固定流程
+
+1. 先读本文件的“当前基线”“本地个性化改动总览”“合并冲突热点”和“读写规范”。
+2. 执行 `git status --short --branch`，确认是否有未提交改动；如有，先判断是否属于用户本地改动。
+3. 合并前在仓库外保存保护材料：
+   - `git diff > ../nezha-merge-backups/local-before-<version>.diff`
+   - `git status --short > ../nezha-merge-backups/local-before-<version>-status.txt`
+4. 合并前建立本地检查点提交，提交信息建议：`chore(local): checkpoint personalized changes before <version> merge`。
+5. 拉取上游：`git fetch --prune --tags origin`。
+6. 对比上游新版影响范围：
+   - `git log --oneline v0.4.1..v<next>`
+   - `git diff --name-status v0.4.1..v<next>`
+   - `git diff --name-status v0.4.1..HEAD`
+7. 合并新版 tag 或目标提交，优先保留本地个性化功能；遇到行为取舍不明确的冲突，暂停交给用户判断。
+8. 合并后至少执行：
+   - `pnpm lint`
+   - `pnpm test`
+   - `cargo test`（在 `src-tauri/`）
+   - `pnpm build`
+   - `pnpm tauri build`
+9. 替换 `/Applications/NeZha.app` 后，记录构建产物和已安装 App 的 SHA256、`Info.plist` 版本、DMG 路径。
+
+## 本地个性化改动总览（合并时必须保留）
+
+### SSH / 远程项目
+
+必须保留的行为：
+- SSH 连接支持可选密码字段，密码模式通过 `sshpass -e` 和 `SSHPASS` 环境变量传递。
+- SSH 项目支持中心区域自动连接的 SSH 终端。
+- SSH 项目右侧文件浏览器支持远程目录、文本、图片预览、创建文件/目录、删除路径。
+- SSH 项目继续禁用本地专属能力：本地 shell、Git 面板、文件搜索、项目设置、worktree、附件上传。
+
+关键文件：
+- `src-tauri/src/ssh.rs`
+- `src-tauri/src/remote_fs.rs`
+- `src-tauri/src/remote_git.rs`
+- `src-tauri/src/lib.rs`
+- `src/components/ssh/*`
+- `src/components/project-page/viewMode.ts`
+- `src/components/ProjectPage.tsx`
+- `src/components/FileExplorer.tsx`
+- `src/components/FileViewer.tsx`
+- `src/components/RightToolbar.tsx`
+- `src/types.ts`
+- `src/test/ssh-validation.test.ts`
+- `src/test/ssh-session.test.ts`
+- `src/test/project-location.test.ts`
+- `src/test/project-main-view.test.ts`
+
+### Agent Profiles / Claude GPT55
+
+必须保留的行为：
+- `AgentType` 支持 `"claude" | "claude_gpt55" | "codex"`。
+- `claude_gpt55` 默认使用 `~/.claude/start-gpt55.sh`，脚本内部依赖独立 Codex 配置。
+- `claude_gpt55` 是 Codex-like profile：任务启动、恢复、标题生成、提交信息生成、会话字段选择按 Codex-compatible 路径处理。
+- Skill Hub 安装目标只面向真实 `claude` / `codex`，不要把 `claude_gpt55` 当成独立 skill 安装目标。
+- Hook 能力判断只对真实 `claude` / `codex` 返回可用，`claude_gpt55` 不复用 Claude/Codex hook profile。
+- 0.4.1 上游临时策略已合入：任务命名与提交信息生成优先使用真实 `codex` headless；但任务会话摘要仍要按原任务 agent 判断。
+
+关键文件：
+- `src/agents.ts`
+- `src/types.ts`
+- `src-tauri/src/app_settings.rs`
+- `src-tauri/src/config.rs`
+- `src-tauri/src/pty.rs`
+- `src-tauri/src/agent_assist.rs`
+- `src-tauri/src/git.rs`
+- `src-tauri/src/hooks.rs`
+- `src/components/new-task/AgentPermSelector.tsx`
+- `src/components/NewTaskView.tsx`
+- `src/components/AppSettingsDialog.tsx`
+- `src/components/app-settings/*`
+- `src/components/RunningView.tsx`
+- `src/components/TodoTaskView.tsx`
+- `src/components/task-panel/TaskEditDialog.tsx`
+- `src/components/task-panel/TaskListItem.tsx`
+- `src/components/SettingsDialog.tsx`
+- `src/components/skill-hub/SkillInstallDialog.tsx`
+- `src/components/skill-hub/SkillManageDialog.tsx`
+- `src/test/agent-options.test.ts`
+
+### `/goal` 模式和任务创建体验
+
+必须保留的行为：
+- `+` 菜单中的 plan mode 已改为 `/goal mode` / `/goal 模式`。
+- 开启 `/goal` 时，任务提示词追加“先列 plan -> 再修改 -> 完成后审查”的工作流。
+- 真实 Claude Code 缺少项目根 `CLAUDE.md` 时不显示初始化提示；Codex-compatible profile 仍保留 `AGENTS.md` 提示。
+
+关键文件：
+- `src/components/new-task/goalMode.ts`
+- `src/components/NewTaskView.tsx`
+- `src/components/new-task/AgentPermSelector.tsx`
+- `src/i18n.tsx`
+- `src/test/new-task-goal-mode.test.ts`
+
+### 技能库 / Skill Hub
+
+必须保留的行为：
+- NeZha 的技能库通过 `~/.nezha/skill_hub.json` 指向外部目录加载，不写入 `.app` 包内部。
+- 当前本机技能库路径为 `~/.nezha/skills_hub`，包含从本地 `同步空间` / `LYX` 汇总的 skills，包括 `superpowers` 和 `Trellis`。
+- 项目内 Skill Hub 相关安装目标和路径安全校验不能放宽。
+
+关键文件：
+- `src-tauri/src/skills.rs`
+- `src/components/skill-hub/*`
+- `src/components/app-settings/SkillsPanel.tsx`
+- `src/styles/skill-hub.ts`
+- `src/i18n.tsx`
+
+### 其他本地文档 / 项目文件
+
+- `local_change.md`：本地改动记录和合并规范，必须保留。
+- `plan.md`、`docs/project-overview.md`：合并前已存在，除非用户明确要求，不要删除。
+
+## 合并冲突热点
+
+下次合并 0.4.2 时重点检查这些文件：
+- `src/components/ProjectPage.tsx`：上游 Git 面板、Diff 交互常与本地 SSH 中心终端/远程文件能力重叠。
+- `src/components/AppSettingsDialog.tsx`、`src/components/app-settings/types.ts`：上游设置页导航常与本地 `claude_gpt55` 面板重叠。
+- `src-tauri/src/agent_assist.rs`、`src-tauri/src/git.rs`、`src-tauri/src/app_settings.rs`：上游 Codex/Claude 策略常与本地 GPT55 profile 重叠。
+- `src/i18n.tsx`：上游新增文案常与本地 SSH/GPT55/goal 文案重叠。
+- `src/styles/panels.ts`：上游新增面板样式常与本地 SSH 面板样式重叠；处理方式通常是两边都保留，避免删除 `ssh*` 和 `thanks*` 样式。
+- `src-tauri/src/lib.rs`：新增 Tauri 命令注册容易互相覆盖，必须同时保留上游命令和本地远程命令。
+- `src/types.ts`：数据模型变化必须兼容本地 `SshConnection.password`、`AgentType` 三 profile、项目 `location` 等字段。
+
+## `local_change.md` 读写规范
+
+### 读取规范
+
+- 合并上游、打包替换、修改 SSH/GPT55/goal/Skill Hub 相关逻辑前，必须先读本文件。
+- 不只看最新流水记录；必须优先看置顶的“当前基线”“本地个性化改动总览”“合并冲突热点”。
+- 如果本文与实际代码不一致，以实际代码为准，同时更新本文说明差异。
+
+### 写入规范
+
+- 新记录写在“历史记录”顶部，按时间倒序追加，标题格式：`## YYYY-MM-DD 主题`。
+- 每次合并新版后，必须更新“当前基线”：
+  - 上游 tag / commit。
+  - 本地合并提交。
+  - `/Applications/NeZha.app` 版本。
+  - 已安装二进制 SHA256。
+- 如果新增或修改本地个性化功能，必须同步更新“本地个性化改动总览”的行为说明和关键文件。
+- 如果发生冲突，必须记录：
+  - 冲突文件。
+  - 选择保留哪边。
+  - 是否需要用户判断。
+  - 最终验证命令。
+- 不要记录敏感值。涉及 SSH 密码、token、私钥时，只记录“字段/能力存在”，不要记录具体内容。
+- 保留历史记录，不要为了精简删除旧版本验证结果；旧记录用于回溯当时的打包和安装状态。
+- 命令验证要写实际执行结果，不写“应该可用”“预计通过”。
+
+## 历史记录
+
 ## 2026-06-12 合并上游 v0.4.1
 
 ### 合并策略

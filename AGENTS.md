@@ -23,6 +23,14 @@ Rust 后端位于 `src-tauri/`，修改后需重启 `tauri dev`。
 
 ---
 
+## 本地个性化改动记录
+
+- 本仓库维护本地改动记录文件：`local_change.md`。
+- 合并上游新版、修改 SSH / `claude_gpt55` / `/goal` / Skill Hub 相关逻辑、打包替换 `/Applications/NeZha.app` 前，必须先阅读 `local_change.md` 的置顶部分。
+- 读写 `local_change.md` 时遵守其中的“`local_change.md` 读写规范”：更新当前基线、本地个性化改动总览、冲突热点和验证结果；不要记录 SSH 密码、API key、私钥、token 等敏感值。
+
+---
+
 ## 架构设计
 
 ### 前端（`src/`）
