@@ -9,6 +9,8 @@ export type NavKey =
   | "hooks"
   | "skills"
   | "about"
+  | "thanks"
+  | "community"
   | "claude"
   | "claude_gpt55"
   | "codex";
@@ -47,16 +49,22 @@ export interface AgentVersions {
 
 export type AgentKey = "claude" | "claude_gpt55" | "codex";
 
-export type NavSection = "application" | "agents" | "about";
+export type NavSection = "application" | "agents" | "community" | "about";
 
 export interface AppSettingsNavItem {
   key: NavKey;
   labelKey: string;
   section: NavSection;
   icon?: LucideIcon;
+  /** 覆盖图标描边颜色（默认 var(--text-secondary)） */
+  iconColor?: string;
+  /** 图标填充色（默认 "none"，传入颜色即为实心图标） */
+  iconFill?: string;
   logo?: string;
   filePath?: string;
   lang?: string;
+  /** 设置后点击该项不切换面板，而是用浏览器打开此外链 */
+  url?: string;
 }
 
 export const APP_SETTINGS_CHANGED_EVENT = "nezha:app-settings-changed";

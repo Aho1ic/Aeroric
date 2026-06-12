@@ -300,6 +300,36 @@ export function ProjectPage({
     onNewTask();
   }, [onNewTask, clearFileAndDiff]);
 
+  const collapseTaskPanelForNewDiff = useCallback(() => {
+    if (!openDiff) {
+      setTaskPanelCollapsed(true);
+    }
+  }, [openDiff]);
+
+  const handleDiffFileSelectWithCollapse = useCallback(
+    (filePath: string, staged: boolean, label: string) => {
+      collapseTaskPanelForNewDiff();
+      handleDiffFileSelect(filePath, staged, label);
+    },
+    [collapseTaskPanelForNewDiff, handleDiffFileSelect],
+  );
+
+  const handleCommitSelectWithCollapse = useCallback(
+    (hash: string, message: string) => {
+      collapseTaskPanelForNewDiff();
+      handleCommitSelect(hash, message);
+    },
+    [collapseTaskPanelForNewDiff, handleCommitSelect],
+  );
+
+  const handleCommitFileClickWithCollapse = useCallback(
+    (hash: string, filePath: string, label: string) => {
+      collapseTaskPanelForNewDiff();
+      handleCommitFileClick(hash, filePath, label);
+    },
+    [collapseTaskPanelForNewDiff, handleCommitFileClick],
+  );
+
   const currentTaskCreatedAt = selectedTask?.createdAt ?? null;
 
   return (
@@ -556,7 +586,7 @@ export function ProjectPage({
               <GitChanges
                 projectPath={gitContextPath}
                 currentTaskCreatedAt={currentTaskCreatedAt}
-                onFileSelect={handleDiffFileSelect}
+                onFileSelect={handleDiffFileSelectWithCollapse}
                 width={rightPanelWidth}
               />
             </ErrorBoundary>
@@ -565,8 +595,8 @@ export function ProjectPage({
             <ErrorBoundary label="Git 历史">
               <GitHistory
                 projectPath={gitContextPath}
-                onCommitSelect={handleCommitSelect}
-                onFileClick={handleCommitFileClick}
+                onCommitSelect={handleCommitSelectWithCollapse}
+                onFileClick={handleCommitFileClickWithCollapse}
                 width={rightPanelWidth}
               />
             </ErrorBoundary>

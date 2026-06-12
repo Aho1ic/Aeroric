@@ -1,5 +1,39 @@
 # Local Change Log
 
+## 2026-06-12 合并上游 v0.4.1
+
+### 合并策略
+
+- 上游来源：`https://github.com/hanshuaikang/nezha.git`
+- 目标版本：`v0.4.1`
+- 本地基线：`v0.4.0` 之后的个性化改动已先提交为本地检查点，避免合并时覆盖 SSH、GPT55、远程文件浏览器、技能库等本地功能。
+- 合并冲突仅出现在 `src/styles/panels.ts`：
+  - 保留本地 SSH 连接/终端/中心面板样式。
+  - 追加上游 `ThanksPanel` 相关样式与 `thanksNameBase` 共用常量。
+
+### 上游 v0.4.1 已合入内容
+
+- Git 文件列表树形视图与批量 Git 操作命令。
+- Git 首次提交前取消暂存修复。
+- 任务命名和提交信息生成在 Claude headless 计费变动期间优先使用真实 Codex。
+- 通知轮询。
+- App 设置中的社区入口、感谢页和相关资源。
+- 版本号更新到 `0.4.1`。
+
+### 本地个性化改动保留点
+
+- SSH 连接密码、远程任务、远程文件浏览器相关前后端代码保留。
+- `claude_gpt55` Agent profile、App 设置面板、Codex-like 路径处理保留。
+- `/goal` 模式提示词、Claude 缺少 `CLAUDE.md` 时不提示初始化、SSH 项目中心终端保留。
+- 技能库相关本地功能保留。
+
+### 合并后验证
+
+- `pnpm lint` 通过。
+- `pnpm test` 通过：9 个 test files，63 个 tests。
+- `cargo test` 通过：77 个 Rust tests。
+- `pnpm build` 通过；仍保留既有 chunk size warning。
+
 ## 2026-06-11 CLAUDE Banner, SSH Center Terminal, Goal Mode
 
 ### 本轮 Plan
