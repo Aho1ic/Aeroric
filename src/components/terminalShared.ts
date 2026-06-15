@@ -8,26 +8,26 @@ import type { ThemeVariant } from "../types";
 // ── Theme ────────────────────────────────────────────────────────────────────
 
 export const DARK_THEME = {
-  background: "#1e2230",
-  foreground: "#cdd6f4",
-  cursor: "#cdd6f4",
-  selectionBackground: "#45475a",
-  black: "#484f58",
+  background: "#050506",
+  foreground: "#d6dce8",
+  cursor: "#eadfff",
+  selectionBackground: "#30224b",
+  black: "#14161d",
   red: "#ff7b72",
-  green: "#3fb950",
-  yellow: "#d29922",
-  blue: "#58a6ff",
-  magenta: "#d2a8ff",
-  cyan: "#39c5cf",
-  white: "#b1bac4",
-  brightBlack: "#6e7681",
+  green: "#98d978",
+  yellow: "#f1c86b",
+  blue: "#8fb8ff",
+  magenta: "#c88cff",
+  cyan: "#68d8e8",
+  white: "#b8c0ce",
+  brightBlack: "#7b8494",
   brightRed: "#ffa198",
-  brightGreen: "#56d364",
-  brightYellow: "#e3b341",
-  brightBlue: "#79c0ff",
-  brightMagenta: "#f0a1ff",
-  brightCyan: "#56d4dd",
-  brightWhite: "#f0f6fc",
+  brightGreen: "#b9f59a",
+  brightYellow: "#ffda84",
+  brightBlue: "#abcaff",
+  brightMagenta: "#dfb6ff",
+  brightCyan: "#92eff7",
+  brightWhite: "#eef1f7",
 };
 
 export const LIGHT_THEME = {
@@ -87,6 +87,37 @@ export function themeFor(variant: ThemeVariant) {
 
 const HIGH_WATER = 128 * 1024; // 128 KB：超过时停止写入
 const LOW_WATER  =  16 * 1024; //  16 KB：恢复写入
+const ANSI_FG_RESET = "\x1b[39m";
+const TERMINAL_HIGHLIGHT_PATTERN =
+  /\b(error|exception|traceback|failed|fail|warning|warn|success|passed|pass|running|done)\b|\b\d+(?:\.\d+)?(?:%|ms|s|MB|GB|KB)?\b/gi;
+
+function hasTerminalControlSequence(data: string): boolean {
+  for (let index = 0; index < data.length; index += 1) {
+    const code = data.charCodeAt(index);
+    if (code === 0x1b || code === 0x9b || code === 0x07 || code === 0x08) return true;
+  }
+  return false;
+}
+
+export function colorizePlainTerminalOutput(data: string): string {
+  if (!data || hasTerminalControlSequence(data)) return data;
+  return data.replace(TERMINAL_HIGHLIGHT_PATTERN, (match) => {
+    const lower = match.toLowerCase();
+    if (lower === "error" || lower === "exception" || lower === "traceback" || lower === "failed" || lower === "fail") {
+      return `\x1b[31m${match}${ANSI_FG_RESET}`;
+    }
+    if (lower === "warning" || lower === "warn") {
+      return `\x1b[33m${match}${ANSI_FG_RESET}`;
+    }
+    if (lower === "success" || lower === "passed" || lower === "pass" || lower === "done") {
+      return `\x1b[32m${match}${ANSI_FG_RESET}`;
+    }
+    if (lower === "running") {
+      return `\x1b[35m${match}${ANSI_FG_RESET}`;
+    }
+    return `\x1b[36m${match}${ANSI_FG_RESET}`;
+  });
+}
 
 export interface SmartWriter {
   write: (data: string, callback?: () => void) => void;
@@ -257,9 +288,10 @@ export function createSmartWriter(term: Terminal): SmartWriter {
   };
 
   function flushOne(data: string, callback?: () => void) {
-    state.watermark += data.length;
-    term.write(data, () => {
-      state.watermark -= data.length;
+    const output = colorizePlainTerminalOutput(data);
+    state.watermark += output.length;
+    term.write(output, () => {
+      state.watermark -= output.length;
       callback?.();
       if (state.paused && state.watermark < LOW_WATER) {
         state.paused = false;
@@ -346,7 +378,7 @@ export function initTerminal(
  * - DOM renderer 的代价：高频 mousemove（鼠标在终端区域移动）+ 高速文本输出时
  *   持续中等卡顿（每次 mousemove 触发多个 row DOM 节点的 reflow/composite，
  *   rec10 实测 1233 mousemove/2.7s 下出现 511ms 单帧）
- * - Nezha 日常以"鼠标在终端区域活动"为主，长拖选区相对罕见，因此 WebGL 的
+ * - Aeroric 日常以"鼠标在终端区域活动"为主，长拖选区相对罕见，因此 WebGL 的
  *   "偶发爆点"比 DOM 的"持续小卡顿"更可接受。
  *
  * 不要为了"避免偶发卡顿"再把这里关掉——见 timeline rec10。

@@ -141,7 +141,13 @@ function NotificationEntry({
   );
 }
 
-export function NotificationBell() {
+export function NotificationBell({
+  buttonStyle,
+  iconSize = 14,
+}: {
+  buttonStyle?: CSSProperties;
+  iconSize?: number;
+} = {}) {
   const { t } = useI18n();
   const [open, setOpen] = useState(false);
   const { result, loading, error, markRead, markAllRead } = useNotifications();
@@ -166,11 +172,12 @@ export function NotificationBell() {
         style={{
           ...s.sidebarIconBtn,
           opacity: isActive ? 1 : 0.5,
+          ...buttonStyle,
         }}
         title={t("notification.title")}
         onClick={() => setOpen((v) => !v)}
       >
-        <Bell size={14} strokeWidth={1.6} color={bellColor} />
+        <Bell size={iconSize} strokeWidth={1.6} color={bellColor} />
         {unreadCount > 0 && (
           <span
             style={{

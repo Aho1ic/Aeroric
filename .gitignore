@@ -23,8 +23,21 @@ dist-ssr
 *.sw?
 .nezha
 .claude
+.aeroric
 .husky
 .local_docs
+AGENTS.md
+CLAUDE.md
+local_change.md
+plan.md
+superpowers/
+.superpowers/
+docs/superpowers/
+Trellis/
+trellis/
+.trellis/
+docs/Trellis/
+docs/trellis/
 bump-version.sh
 .env*
 

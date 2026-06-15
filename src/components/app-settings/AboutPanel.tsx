@@ -1,11 +1,11 @@
 import { useEffect, useState } from "react";
 import { getVersion } from "@tauri-apps/api/app";
-import { ExternalLink, Star } from "lucide-react";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { useI18n } from "../../i18n";
 import s from "../../styles";
 import appLogo from "../../assets/app-logo.png";
 
-const GITHUB_REPO_URL = "https://github.com/hanshuaikang/nezha";
+const GITHUB_URL = "https://github.com/Aho1ic/Aeroric.git";
 
 export function AboutPanel() {
   const { t } = useI18n();
@@ -38,7 +38,7 @@ export function AboutPanel() {
       >
         <img
           src={appLogo}
-          alt="NeZha logo"
+          alt="Aeroric logo"
           style={{
             width: 64,
             height: 64,
@@ -50,9 +50,9 @@ export function AboutPanel() {
 
         <div style={{ minWidth: 0, display: "flex", flexDirection: "column", gap: 14 }}>
           <div>
-            <div style={{ fontSize: 16, fontWeight: 700, color: "var(--text-primary)" }}>NeZha</div>
+            <div style={{ fontSize: 16, fontWeight: 700, color: "var(--text-primary)" }}>Aeroric</div>
             <div style={{ fontSize: 12.5, color: "var(--text-secondary)", marginTop: 4 }}>
-              {t("appSettings.nezhaDescription")}
+              {t("appSettings.description")}
             </div>
           </div>
 
@@ -71,48 +71,27 @@ export function AboutPanel() {
                 {appVersion || t("common.loading")}
               </div>
             </div>
-
             <div>
               <div style={{ fontSize: 11, color: "var(--text-hint)", marginBottom: 4 }}>
-                {t("appSettings.github")}
+                GitHub
               </div>
-              <a
-                href={GITHUB_REPO_URL}
-                target="_blank"
-                rel="noreferrer"
+              <button
+                type="button"
+                onClick={() => void openUrl(GITHUB_URL)}
                 style={{
-                  display: "inline-flex",
-                  alignItems: "center",
-                  gap: 6,
+                  padding: 0,
+                  border: "none",
+                  background: "transparent",
                   color: "var(--accent)",
                   fontSize: 12.5,
-                  textDecoration: "none",
-                  wordBreak: "break-all",
+                  fontFamily: "var(--font-mono)",
+                  cursor: "pointer",
+                  textAlign: "left",
                 }}
               >
-                {GITHUB_REPO_URL}
-                <ExternalLink size={13} />
-              </a>
+                {GITHUB_URL}
+              </button>
             </div>
-          </div>
-
-          <div
-            style={{
-              display: "flex",
-              alignItems: "flex-start",
-              gap: 8,
-              padding: "10px 12px",
-              borderRadius: 10,
-              background: "color-mix(in srgb, var(--accent) 8%, transparent)",
-              color: "var(--text-secondary)",
-              fontSize: 12.5,
-              lineHeight: 1.5,
-            }}
-          >
-            <Star size={14} color="var(--text-hint)" style={{ flexShrink: 0, marginTop: 2 }} />
-            <span>
-              {t("appSettings.starHint")}
-            </span>
           </div>
         </div>
       </div>

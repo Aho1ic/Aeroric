@@ -26,6 +26,19 @@ export function SshConnectionList({
   onDelete,
 }: Props) {
   const { t } = useI18n();
+  const groupedConnections = connections.reduce<Array<[string, SshConnection[]]>>(
+    (groups, connection) => {
+      const groupName = connection.group?.trim() || t("ssh.defaultGroup");
+      const existing = groups.find(([name]) => name === groupName);
+      if (existing) {
+        existing[1].push(connection);
+      } else {
+        groups.push([groupName, [connection]]);
+      }
+      return groups;
+    },
+    [],
+  );
 
   return (
     <div style={s.sshListWrap}>
@@ -50,63 +63,68 @@ export function SshConnectionList({
         </div>
       ) : (
         <div style={s.sshConnectionRows}>
-          {connections.map((connection) => {
-            const selected = connection.id === selectedId;
-            return (
-              <button
-                key={connection.id}
-                type="button"
-                style={selected ? s.sshConnectionRowSelected : s.sshConnectionRow}
-                onClick={() => onSelect(connection)}
-              >
-                <Server size={16} color={selected ? "var(--control-active-fg)" : "var(--text-hint)"} />
-                <span style={s.sshConnectionText}>
-                  <span style={s.sshConnectionName}>{connection.name}</span>
-                  <span style={s.sshConnectionMeta}>{connectionSubtitle(connection)}</span>
-                </span>
-                <span style={s.sshConnectionActions}>
-                  <span
-                    role="button"
-                    tabIndex={0}
-                    style={s.sshRowAction}
-                    title={t("common.edit")}
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      onEdit(connection);
-                    }}
-                    onKeyDown={(event) => {
-                      if (event.key === "Enter" || event.key === " ") {
-                        event.preventDefault();
-                        event.stopPropagation();
-                        onEdit(connection);
-                      }
-                    }}
+          {groupedConnections.map(([group, groupConnections]) => (
+            <div key={group} style={s.sshConnectionGroup}>
+              <div style={s.sshConnectionGroupTitle}>{group}</div>
+              {groupConnections.map((connection) => {
+                const selected = connection.id === selectedId;
+                return (
+                  <button
+                    key={connection.id}
+                    type="button"
+                    style={selected ? s.sshConnectionRowSelected : s.sshConnectionRow}
+                    onClick={() => onSelect(connection)}
                   >
-                    <Edit3 size={13} />
-                  </span>
-                  <span
-                    role="button"
-                    tabIndex={0}
-                    style={s.sshRowAction}
-                    title={t("common.delete")}
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      onDelete(connection.id);
-                    }}
-                    onKeyDown={(event) => {
-                      if (event.key === "Enter" || event.key === " ") {
-                        event.preventDefault();
-                        event.stopPropagation();
-                        onDelete(connection.id);
-                      }
-                    }}
-                  >
-                    <Trash2 size={13} />
-                  </span>
-                </span>
-              </button>
-            );
-          })}
+                    <Server size={16} color={selected ? "var(--control-active-fg)" : "var(--text-hint)"} />
+                    <span style={s.sshConnectionText}>
+                      <span style={s.sshConnectionName}>{connection.name}</span>
+                      <span style={s.sshConnectionMeta}>{connectionSubtitle(connection)}</span>
+                    </span>
+                    <span style={s.sshConnectionActions}>
+                      <span
+                        role="button"
+                        tabIndex={0}
+                        style={s.sshRowAction}
+                        title={t("common.edit")}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          onEdit(connection);
+                        }}
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter" || event.key === " ") {
+                            event.preventDefault();
+                            event.stopPropagation();
+                            onEdit(connection);
+                          }
+                        }}
+                      >
+                        <Edit3 size={13} />
+                      </span>
+                      <span
+                        role="button"
+                        tabIndex={0}
+                        style={s.sshRowAction}
+                        title={t("common.delete")}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          onDelete(connection.id);
+                        }}
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter" || event.key === " ") {
+                            event.preventDefault();
+                            event.stopPropagation();
+                            onDelete(connection.id);
+                          }
+                        }}
+                      >
+                        <Trash2 size={13} />
+                      </span>
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          ))}
         </div>
       )}
     </div>

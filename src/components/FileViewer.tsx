@@ -3,38 +3,18 @@ import { invoke } from "@tauri-apps/api/core";
 import { Marked } from "marked";
 import DOMPurify from "dompurify";
 import * as Popover from "@radix-ui/react-popover";
-import { X, AlertCircle, Eye, PencilLine, MoreHorizontal, List, ChevronRight } from "lucide-react";
+import { X, AlertCircle, Eye, PencilLine, MoreHorizontal, List, ChevronRight, Play, Check } from "lucide-react";
 import { getFileColor } from "../utils";
 import ReactCodeMirror, { EditorView } from "@uiw/react-codemirror";
 import { githubDark, githubLight } from "@uiw/codemirror-theme-github";
 import { solarizedLight } from "@uiw/codemirror-theme-solarized";
-import { javascript } from "@codemirror/lang-javascript";
-import { python } from "@codemirror/lang-python";
-import { rust } from "@codemirror/lang-rust";
-import { go } from "@codemirror/lang-go";
-import { java } from "@codemirror/lang-java";
-import { cpp } from "@codemirror/lang-cpp";
-import { css as langCss } from "@codemirror/lang-css";
-import { html as langHtml } from "@codemirror/lang-html";
-import { json } from "@codemirror/lang-json";
-import { markdown } from "@codemirror/lang-markdown";
-import { sql } from "@codemirror/lang-sql";
-import { xml } from "@codemirror/lang-xml";
-import { yaml } from "@codemirror/lang-yaml";
 import { StreamLanguage } from "@codemirror/language";
-import { shell } from "@codemirror/legacy-modes/mode/shell";
-import { toml } from "@codemirror/legacy-modes/mode/toml";
-import { dockerFile } from "@codemirror/legacy-modes/mode/dockerfile";
-import { ruby } from "@codemirror/legacy-modes/mode/ruby";
-import { lua } from "@codemirror/legacy-modes/mode/lua";
-import { swift } from "@codemirror/legacy-modes/mode/swift";
-import { kotlin } from "@codemirror/legacy-modes/mode/clike";
-import { r } from "@codemirror/legacy-modes/mode/r";
 import type { Extension } from "@codemirror/state";
 import { ImagePreviewPane } from "./file-viewer/ImagePreviewPane";
 import type { OpenFileTab } from "../hooks/useProjectPanels";
-import type { SshConnection, ThemeVariant } from "../types";
+import type { CondaEnvironment, SshConnection, ThemeVariant } from "../types";
 import { useI18n } from "../i18n";
+import { isRunnableScriptFile, selectDefaultCondaEnvironment } from "./file-viewer/run";
 
 type RemoteFileContext = {
   connection: SshConnection;
@@ -83,28 +63,49 @@ function isPreviewableImageFile(fileName: string): boolean {
   return ext === "png" || ext === "jpg" || ext === "jpeg" || ext === "gif" || ext === "webp" || ext === "bmp" || ext === "svg";
 }
 
-function getLanguageExtension(fileName: string): Extension {
-  const nameMap: Record<string, () => Extension> = {
-    dockerfile: () => StreamLanguage.define(dockerFile),
-    "dockerfile.dev": () => StreamLanguage.define(dockerFile),
-    "dockerfile.prod": () => StreamLanguage.define(dockerFile),
-    makefile: () => StreamLanguage.define(shell),
-    gnumakefile: () => StreamLanguage.define(shell),
-    justfile: () => StreamLanguage.define(shell),
-    gemfile: () => StreamLanguage.define(ruby),
-    rakefile: () => StreamLanguage.define(ruby),
-    vagrantfile: () => StreamLanguage.define(ruby),
-    procfile: () => StreamLanguage.define(shell),
-    "cmakelists.txt": () => StreamLanguage.define(shell),
-    ".gitignore": () => StreamLanguage.define(shell),
-    ".dockerignore": () => StreamLanguage.define(shell),
-    ".env": () => StreamLanguage.define(shell),
-    ".env.local": () => StreamLanguage.define(shell),
-    ".env.example": () => StreamLanguage.define(shell),
-    ".npmrc": () => StreamLanguage.define(toml),
-    ".yarnrc": () => yaml(),
-    "changelog.md": () => markdown(),
-    readme: () => markdown(),
+async function loadLanguageExtension(fileName: string): Promise<Extension> {
+  const shellLanguage = async () => {
+    const { shell } = await import("@codemirror/legacy-modes/mode/shell");
+    return StreamLanguage.define(shell);
+  };
+  const rubyLanguage = async () => {
+    const { ruby } = await import("@codemirror/legacy-modes/mode/ruby");
+    return StreamLanguage.define(ruby);
+  };
+
+  const nameMap: Record<string, () => Promise<Extension>> = {
+    dockerfile: async () => {
+      const { dockerFile } = await import("@codemirror/legacy-modes/mode/dockerfile");
+      return StreamLanguage.define(dockerFile);
+    },
+    "dockerfile.dev": async () => {
+      const { dockerFile } = await import("@codemirror/legacy-modes/mode/dockerfile");
+      return StreamLanguage.define(dockerFile);
+    },
+    "dockerfile.prod": async () => {
+      const { dockerFile } = await import("@codemirror/legacy-modes/mode/dockerfile");
+      return StreamLanguage.define(dockerFile);
+    },
+    makefile: shellLanguage,
+    gnumakefile: shellLanguage,
+    justfile: shellLanguage,
+    gemfile: rubyLanguage,
+    rakefile: rubyLanguage,
+    vagrantfile: rubyLanguage,
+    procfile: shellLanguage,
+    "cmakelists.txt": shellLanguage,
+    ".gitignore": shellLanguage,
+    ".dockerignore": shellLanguage,
+    ".env": shellLanguage,
+    ".env.local": shellLanguage,
+    ".env.example": shellLanguage,
+    ".npmrc": async () => {
+      const { toml } = await import("@codemirror/legacy-modes/mode/toml");
+      return StreamLanguage.define(toml);
+    },
+    ".yarnrc": async () => (await import("@codemirror/lang-yaml")).yaml(),
+    "changelog.md": async () => (await import("@codemirror/lang-markdown")).markdown(),
+    readme: async () => (await import("@codemirror/lang-markdown")).markdown(),
   };
 
   const lower = fileName.toLowerCase();
@@ -113,69 +114,72 @@ function getLanguageExtension(fileName: string): Extension {
   const ext = fileName.split(".").pop()?.toLowerCase() ?? "";
   switch (ext) {
     case "ts":
-      return javascript({ typescript: true });
+      return (await import("@codemirror/lang-javascript")).javascript({ typescript: true });
     case "tsx":
-      return javascript({ jsx: true, typescript: true });
+      return (await import("@codemirror/lang-javascript")).javascript({
+        jsx: true,
+        typescript: true,
+      });
     case "js":
     case "mjs":
     case "cjs":
-      return javascript();
+      return (await import("@codemirror/lang-javascript")).javascript();
     case "jsx":
-      return javascript({ jsx: true });
+      return (await import("@codemirror/lang-javascript")).javascript({ jsx: true });
     case "json":
     case "jsonc":
-      return json();
+      return (await import("@codemirror/lang-json")).json();
     case "rs":
-      return rust();
+      return (await import("@codemirror/lang-rust")).rust();
     case "html":
     case "htm":
-      return langHtml();
+      return (await import("@codemirror/lang-html")).html();
     case "css":
     case "scss":
     case "sass":
-      return langCss();
+      return (await import("@codemirror/lang-css")).css();
     case "md":
     case "mdx":
-      return markdown();
+      return (await import("@codemirror/lang-markdown")).markdown();
     case "yaml":
     case "yml":
-      return yaml();
+      return (await import("@codemirror/lang-yaml")).yaml();
     case "toml":
-      return StreamLanguage.define(toml);
+      return StreamLanguage.define((await import("@codemirror/legacy-modes/mode/toml")).toml);
     case "sh":
     case "bash":
     case "zsh":
     case "fish":
-      return StreamLanguage.define(shell);
+      return shellLanguage();
     case "py":
-      return python();
+      return (await import("@codemirror/lang-python")).python();
     case "go":
-      return go();
+      return (await import("@codemirror/lang-go")).go();
     case "java":
-      return java();
+      return (await import("@codemirror/lang-java")).java();
     case "c":
     case "h":
-      return cpp();
+      return (await import("@codemirror/lang-cpp")).cpp();
     case "cpp":
     case "cc":
     case "hpp":
-      return cpp();
+      return (await import("@codemirror/lang-cpp")).cpp();
     case "sql":
-      return sql();
+      return (await import("@codemirror/lang-sql")).sql();
     case "xml":
-      return xml();
+      return (await import("@codemirror/lang-xml")).xml();
     case "swift":
-      return StreamLanguage.define(swift);
+      return StreamLanguage.define((await import("@codemirror/legacy-modes/mode/swift")).swift);
     case "kt":
-      return StreamLanguage.define(kotlin);
+      return StreamLanguage.define((await import("@codemirror/legacy-modes/mode/clike")).kotlin);
     case "rb":
-      return StreamLanguage.define(ruby);
+      return rubyLanguage();
     case "lua":
-      return StreamLanguage.define(lua);
+      return StreamLanguage.define((await import("@codemirror/legacy-modes/mode/lua")).lua);
     case "r":
-      return StreamLanguage.define(r);
+      return StreamLanguage.define((await import("@codemirror/legacy-modes/mode/r")).r);
     case "proto":
-      return StreamLanguage.define(shell);
+      return shellLanguage();
     default:
       return [];
   }
@@ -425,7 +429,23 @@ function FilePreviewPane({
     }, 1500);
   };
 
-  const extensions = useMemo(() => [getLanguageExtension(fileName), editorBaseTheme], [fileName]);
+  const [languageExtension, setLanguageExtension] = useState<Extension>([]);
+  useEffect(() => {
+    let cancelled = false;
+    setLanguageExtension([]);
+    loadLanguageExtension(fileName)
+      .then((extension) => {
+        if (!cancelled) setLanguageExtension(extension);
+      })
+      .catch((e: unknown) => {
+        console.error(e);
+        if (!cancelled) setLanguageExtension([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [fileName]);
+  const extensions = useMemo(() => [languageExtension, editorBaseTheme], [languageExtension]);
 
   const saveLabel =
     saveStatus === "saving"
@@ -505,17 +525,17 @@ function FilePreviewPane({
             />
           ) : content !== null ? (
             isMarkdown && previewMode ? (
-              <>
+              <div className="md-preview-layout">
+                {toc.length > 0 && (
+                  <MarkdownToc toc={toc} activeId={activeHeadingId} onJump={jumpToHeading} />
+                )}
                 <div ref={scrollRef} className="md-preview-scroll">
                   <div
                     className="md-preview"
                     dangerouslySetInnerHTML={{ __html: markdownHtml }}
                   />
                 </div>
-                {toc.length > 0 && (
-                  <MarkdownToc toc={toc} activeId={activeHeadingId} onJump={jumpToHeading} />
-                )}
-              </>
+              </div>
             ) : (
               <ReactCodeMirror
                 value={content}
@@ -583,6 +603,10 @@ export function FileViewer({
   themeVariant,
   onRunMakeTarget: _onRunMakeTarget,
   remote,
+  condaEnvironments = [],
+  selectedCondaEnvPath,
+  onSelectedCondaEnvPathChange,
+  onRunPythonFile,
 }: {
   tabs: OpenFileTab[];
   activeFilePath: string | null;
@@ -595,6 +619,10 @@ export function FileViewer({
   themeVariant: ThemeVariant;
   onRunMakeTarget?: (target: string) => void;
   remote?: RemoteFileContext;
+  condaEnvironments?: CondaEnvironment[];
+  selectedCondaEnvPath?: string | null;
+  onSelectedCondaEnvPathChange?: (path: string | null) => void;
+  onRunPythonFile?: (path: string) => void;
 }) {
   const { t } = useI18n();
   const [previewModes, setPreviewModes] = useState<Record<string, boolean>>({});
@@ -619,6 +647,8 @@ export function FileViewer({
 
   const activePreviewMode = !!previewModes[activeTab.path];
   const activeIsMarkdown = isMarkdownFile(activeTab.name);
+  const activeCondaEnv = selectDefaultCondaEnvironment(condaEnvironments, selectedCondaEnvPath);
+  const canRunScript = isRunnableScriptFile(activeTab.path, Boolean(remote)) && !!onRunPythonFile;
   const canCloseOtherTabs = tabs.length > 1;
   const activeTabIndex = tabs.findIndex((tab) => tab.path === activeTab.path);
   const canCloseTabsToRight = activeTabIndex !== -1 && activeTabIndex < tabs.length - 1;
@@ -770,6 +800,30 @@ export function FileViewer({
               {activePreviewMode ? t("common.edit") : t("common.preview")}
             </button>
           )}
+          <button
+            type="button"
+            disabled={!canRunScript}
+            onClick={() => onRunPythonFile?.(activeTab.path)}
+            title={canRunScript ? t("file.runCurrent") : t("file.runPythonOnly")}
+            aria-label={t("file.runCurrent")}
+            style={{
+              background: "none",
+              border: "none",
+              cursor: canRunScript ? "pointer" : "not-allowed",
+              padding: "4px",
+              borderRadius: 4,
+              display: "flex",
+              alignItems: "center",
+              color: canRunScript ? "var(--accent)" : "var(--text-hint)",
+              opacity: canRunScript ? 1 : 0.42,
+            }}
+            onMouseEnter={(e) => {
+              if (canRunScript) e.currentTarget.style.background = "var(--bg-hover)";
+            }}
+            onMouseLeave={(e) => (e.currentTarget.style.background = "none")}
+          >
+            <Play size={15} fill="currentColor" />
+          </button>
           <Popover.Root open={menuOpen} onOpenChange={setMenuOpen}>
             <Popover.Trigger asChild>
               <button
@@ -870,6 +924,72 @@ export function FileViewer({
             </div>
           );
         })}
+      </div>
+
+      <div
+        style={{
+          height: 24,
+          flexShrink: 0,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "flex-end",
+          gap: 6,
+          padding: "0 8px",
+          borderTop: "1px solid var(--border-dim)",
+          background: "color-mix(in srgb, var(--bg-sidebar) 84%, transparent)",
+        }}
+      >
+        <Popover.Root>
+          <Popover.Trigger asChild>
+            <button
+              type="button"
+              title={t("file.condaEnvironment")}
+              aria-label={t("file.condaEnvironment")}
+              style={{
+                maxWidth: 220,
+                height: 18,
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 5,
+                padding: "0 7px",
+                border: "1px solid var(--border-dim)",
+                borderRadius: 999,
+                background: "color-mix(in srgb, var(--bg-card) 70%, transparent)",
+                color: "var(--text-muted)",
+                fontSize: 10.5,
+                cursor: condaEnvironments.length > 0 ? "pointer" : "default",
+                fontFamily: "var(--font-ui)",
+              }}
+            >
+              <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                {activeCondaEnv?.name ?? t("file.noCondaEnvironment")}
+              </span>
+            </button>
+          </Popover.Trigger>
+          <Popover.Portal>
+            <Popover.Content sideOffset={6} align="end" className="file-viewer-tab-menu">
+              {condaEnvironments.length === 0 ? (
+                <div className="file-viewer-tab-menu-item" style={{ cursor: "default", color: "var(--text-hint)" }}>
+                  {t("file.noCondaEnvironment")}
+                </div>
+              ) : (
+                condaEnvironments.map((env) => (
+                  <button
+                    type="button"
+                    key={env.path}
+                    className="file-viewer-tab-menu-item"
+                    onClick={() => onSelectedCondaEnvPathChange?.(env.path)}
+                  >
+                    <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" }}>
+                      {env.name}
+                    </span>
+                    {activeCondaEnv?.path === env.path && <Check size={12} color="var(--accent)" />}
+                  </button>
+                ))
+              )}
+            </Popover.Content>
+          </Popover.Portal>
+        </Popover.Root>
       </div>
     </div>
   );

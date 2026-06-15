@@ -11,11 +11,46 @@ import {
 import s from "../../styles";
 import { APP_SETTINGS_CHANGED_EVENT, type AgentVersions, type AppSettings, type AgentKey } from "./types";
 import { getAgentExecutablePlaceholder } from "./shared";
+import {
+  agentDisplayLabel,
+  isBuiltInAgent,
+  normalizeAgentConfigLang,
+  type CustomAgentProfile,
+} from "../../agents";
+import type { BuiltInAgentType } from "../../types";
 
 const AUTO_VERSION_DETECT_DELAY_MS = 350;
 
 type AgentPathField = "claude_path" | "claude_gpt55_path" | "codex_path";
 type AgentVersionField = "claude_version" | "claude_gpt55_version" | "codex_version";
+
+const pathFieldByAgent: Record<BuiltInAgentType, AgentPathField> = {
+  claude: "claude_path",
+  claude_gpt55: "claude_gpt55_path",
+  codex: "codex_path",
+};
+
+const versionFieldByAgent: Record<BuiltInAgentType, AgentVersionField> = {
+  claude: "claude_version",
+  claude_gpt55: "claude_gpt55_version",
+  codex: "codex_version",
+};
+
+const pathLabelKeyByAgent: Record<BuiltInAgentType, string> = {
+  claude: "appSettings.claudePath",
+  claude_gpt55: "appSettings.claudeGpt55Path",
+  codex: "appSettings.codexPath",
+};
+
+const pathHintKeyByAgent: Record<BuiltInAgentType, string> = {
+  claude: "appSettings.claudePathHint",
+  claude_gpt55: "appSettings.claudeGpt55PathHint",
+  codex: "appSettings.codexPathHint",
+};
+
+function findCustomAgent(settings: AppSettings, agentKey: AgentKey): CustomAgentProfile | null {
+  return settings.custom_agents?.find((profile) => profile.id === agentKey) ?? null;
+}
 
 const inputStyle: React.CSSProperties = {
   width: "100%",
@@ -65,35 +100,21 @@ const actionButtonStyle: React.CSSProperties = {
 
 export function AgentPathSection({ agentKey }: { agentKey: AgentKey }) {
   const { t } = useI18n();
-  const pathFieldByAgent: Record<AgentKey, AgentPathField> = {
-    claude: "claude_path",
-    claude_gpt55: "claude_gpt55_path",
-    codex: "codex_path",
-  };
-  const versionFieldByAgent: Record<AgentKey, AgentVersionField> = {
-    claude: "claude_version",
-    claude_gpt55: "claude_gpt55_version",
-    codex: "codex_version",
-  };
-  const pathLabelKeyByAgent: Record<AgentKey, string> = {
-    claude: "appSettings.claudePath",
-    claude_gpt55: "appSettings.claudeGpt55Path",
-    codex: "appSettings.codexPath",
-  };
-  const pathHintKeyByAgent: Record<AgentKey, string> = {
-    claude: "appSettings.claudePathHint",
-    claude_gpt55: "appSettings.claudeGpt55PathHint",
-    codex: "appSettings.codexPathHint",
-  };
-  const pathField = pathFieldByAgent[agentKey];
-  const versionField = versionFieldByAgent[agentKey];
-  const pathLabel = t(pathLabelKeyByAgent[agentKey]);
-  const pathHint = t(pathHintKeyByAgent[agentKey]);
+  const builtInAgent = isBuiltInAgent(agentKey) ? agentKey : null;
+  const pathField = builtInAgent ? pathFieldByAgent[builtInAgent] : null;
+  const versionField = builtInAgent ? versionFieldByAgent[builtInAgent] : null;
+  const pathLabel = builtInAgent
+    ? t(pathLabelKeyByAgent[builtInAgent])
+    : t("appSettings.customAgentPath", { agent: agentDisplayLabel(agentKey) });
+  const pathHint = builtInAgent
+    ? t(pathHintKeyByAgent[builtInAgent])
+    : t("appSettings.customAgentPathHint");
 
   const emptySettings: AppSettings = {
     claude_path: "",
     claude_gpt55_path: "",
     codex_path: "",
+    custom_agents: [],
     send_shortcut: DEFAULT_SEND_SHORTCUT,
     terminal_shift_enter_newline: DEFAULT_SHIFT_ENTER_NEWLINE,
   };
@@ -104,6 +125,7 @@ export function AgentPathSection({ agentKey }: { agentKey: AgentKey }) {
     claude_gpt55_version: "",
     codex_version: "",
   });
+  const [customVersion, setCustomVersion] = useState("");
   const [loading, setLoading] = useState(true);
   const [detecting, setDetecting] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
@@ -119,9 +141,14 @@ export function AgentPathSection({ agentKey }: { agentKey: AgentKey }) {
     versionRequestIdRef.current = requestId;
     setRefreshing(true);
     try {
-      const detected = await invoke<AgentVersions>("detect_agent_versions_for_settings", {
-        settings: next,
-      });
+      if (!builtInAgent) {
+        const detected = await invoke<string>("detect_agent_version", { agent: agentKey });
+        if (versionRequestIdRef.current === requestId) {
+          setCustomVersion(detected);
+        }
+        return;
+      }
+      const detected = await invoke<AgentVersions>("detect_agent_versions_for_settings", { settings: next });
       if (versionRequestIdRef.current === requestId) {
         setVersions(detected);
       }
@@ -134,7 +161,7 @@ export function AgentPathSection({ agentKey }: { agentKey: AgentKey }) {
         setRefreshing(false);
       }
     }
-  }, []);
+  }, [agentKey, builtInAgent]);
 
   useEffect(() => {
     let cancelled = false;
@@ -180,10 +207,15 @@ export function AgentPathSection({ agentKey }: { agentKey: AgentKey }) {
   function clearVersions() {
     versionRequestIdRef.current += 1;
     setRefreshing(false);
-    setVersions((prev) => ({ ...prev, [versionField]: "" }));
+    if (versionField) {
+      setVersions((prev) => ({ ...prev, [versionField]: "" }));
+    } else {
+      setCustomVersion("");
+    }
   }
 
   async function handleDetect() {
+    if (!pathField) return;
     setDetecting(true);
     setError(null);
     try {
@@ -207,11 +239,21 @@ export function AgentPathSection({ agentKey }: { agentKey: AgentKey }) {
     setError(null);
     setSaved(false);
     try {
-      const next = await invoke<AppSettings>("save_agent_paths", {
-        claudePath: settings.claude_path,
-        claudeGpt55Path: settings.claude_gpt55_path,
-        codexPath: settings.codex_path,
-      });
+      const next = pathField
+        ? await invoke<AppSettings>("save_agent_paths", {
+            claudePath: settings.claude_path,
+            claudeGpt55Path: settings.claude_gpt55_path,
+            codexPath: settings.codex_path,
+          })
+        : await invoke<AppSettings>("save_custom_agent_profile", {
+            profile: {
+              id: agentKey,
+              label: findCustomAgent(settings, agentKey)?.label ?? agentDisplayLabel(agentKey),
+              path: findCustomAgent(settings, agentKey)?.path ?? "",
+              codex_like: findCustomAgent(settings, agentKey)?.codex_like ?? true,
+              config_lang: normalizeAgentConfigLang(findCustomAgent(settings, agentKey)?.config_lang),
+            },
+          });
       setSettings(next);
       setOriginalSettings(next);
       skipNextChangeEventRef.current = true;
@@ -226,8 +268,12 @@ export function AgentPathSection({ agentKey }: { agentKey: AgentKey }) {
     }
   }
 
-  const isDirty = settings[pathField] !== originalSettings[pathField];
-  const versionValue = versions[versionField];
+  const currentCustomAgent = findCustomAgent(settings, agentKey);
+  const originalCustomAgent = findCustomAgent(originalSettings, agentKey);
+  const currentPath = pathField ? settings[pathField] : (currentCustomAgent?.path ?? "");
+  const originalPath = pathField ? originalSettings[pathField] : (originalCustomAgent?.path ?? "");
+  const isDirty = currentPath !== originalPath;
+  const versionValue = versionField ? versions[versionField] : customVersion;
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12, marginBottom: 18 }}>
@@ -247,18 +293,20 @@ export function AgentPathSection({ agentKey }: { agentKey: AgentKey }) {
           {loading && (
             <span style={{ color: "var(--text-hint)", fontSize: 12 }}>{t("common.loading")}</span>
           )}
-          <button
-            style={{
-              ...actionButtonStyle,
-              cursor: detecting ? "default" : "pointer",
-              opacity: detecting ? 0.6 : 1,
-            }}
-            onClick={handleDetect}
-            disabled={detecting}
-          >
-            <RefreshCw size={12} className={detecting ? "spin" : undefined} />
-            {detecting ? t("appSettings.detecting") : t("appSettings.autoDetect")}
-          </button>
+          {pathField && (
+            <button
+              style={{
+                ...actionButtonStyle,
+                cursor: detecting ? "default" : "pointer",
+                opacity: detecting ? 0.6 : 1,
+              }}
+              onClick={handleDetect}
+              disabled={detecting}
+            >
+              <RefreshCw size={12} className={detecting ? "spin" : undefined} />
+              {detecting ? t("appSettings.detecting") : t("appSettings.autoDetect")}
+            </button>
+          )}
           <button
             style={{
               ...actionButtonStyle,
@@ -282,10 +330,19 @@ export function AgentPathSection({ agentKey }: { agentKey: AgentKey }) {
             opacity: loading ? 0.65 : 1,
             cursor: loading ? "wait" : "text",
           }}
-          value={settings[pathField]}
+          value={currentPath}
           onChange={(e) => {
             clearVersions();
-            setSettings((prev) => ({ ...prev, [pathField]: e.target.value }));
+            const nextPath = e.target.value;
+            setSettings((prev) => {
+              if (pathField) return { ...prev, [pathField]: nextPath };
+              return {
+                ...prev,
+                custom_agents: (prev.custom_agents ?? []).map((profile) =>
+                  profile.id === agentKey ? { ...profile, path: nextPath } : profile,
+                ),
+              };
+            });
           }}
           placeholder={getAgentExecutablePlaceholder(agentKey)}
           disabled={loading}

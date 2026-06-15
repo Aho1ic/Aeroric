@@ -639,19 +639,52 @@ pub(crate) enum SessionContent {
 }
 
 #[tauri::command]
-pub async fn read_session_messages(session_path: String) -> Result<Vec<SessionMessage>, String> {
-    let content = std::fs::read_to_string(&session_path).map_err(|e| e.to_string())?;
-    let lines: Vec<&str> = content.lines().filter(|l| !l.trim().is_empty()).collect();
-    if is_codex_format(&lines) {
-        Ok(parse_codex_session(&lines))
-    } else {
-        Ok(parse_claude_session(&lines))
-    }
+pub async fn read_session_messages(
+    session_path: String,
+    project_path: String,
+    is_codex: bool,
+) -> Result<Vec<SessionMessage>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let canonical = validate_session_path(&session_path, &project_path, is_codex)?;
+        let file = File::open(&canonical).map_err(|e| e.to_string())?;
+        let reader = BufReader::new(file);
+        let mut messages = Vec::new();
+        let mut first_lines = Vec::new();
+        let mut detected_codex: Option<bool> = None;
+
+        for line in reader.lines() {
+            let line = line.map_err(|e| e.to_string())?;
+            if line.trim().is_empty() {
+                continue;
+            }
+            if detected_codex.is_none() {
+                first_lines.push(line);
+                if first_lines.len() < 10 {
+                    continue;
+                }
+                detected_codex = Some(is_codex_format(&first_lines));
+                parse_session_lines(&first_lines, detected_codex.unwrap(), &mut messages);
+                first_lines.clear();
+                continue;
+            }
+
+            parse_session_line(&line, detected_codex.unwrap(), &mut messages);
+        }
+
+        if detected_codex.is_none() {
+            let codex_format = is_codex_format(&first_lines);
+            parse_session_lines(&first_lines, codex_format, &mut messages);
+        }
+
+        Ok(messages)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
-fn is_codex_format(lines: &[&str]) -> bool {
+fn is_codex_format<S: AsRef<str>>(lines: &[S]) -> bool {
     for line in lines.iter().take(10) {
-        if let Ok(val) = serde_json::from_str::<serde_json::Value>(line) {
+        if let Ok(val) = serde_json::from_str::<serde_json::Value>(line.as_ref()) {
             match val.get("type").and_then(|v| v.as_str()) {
                 Some("session_meta") | Some("event_msg") => return true,
                 _ => {}
@@ -661,46 +694,64 @@ fn is_codex_format(lines: &[&str]) -> bool {
     false
 }
 
+fn parse_session_lines(lines: &[String], is_codex: bool, messages: &mut Vec<SessionMessage>) {
+    for line in lines {
+        parse_session_line(line, is_codex, messages);
+    }
+}
+
+fn parse_session_line(line: &str, is_codex: bool, messages: &mut Vec<SessionMessage>) {
+    if is_codex {
+        parse_codex_session_line(line, messages);
+    } else {
+        parse_claude_session_line(line, messages);
+    }
+}
+
 fn parse_claude_session(lines: &[&str]) -> Vec<SessionMessage> {
     let mut messages = Vec::new();
 
     for line in lines {
-        let Ok(val) = serde_json::from_str::<serde_json::Value>(line) else {
-            continue;
-        };
-        let msg_type = val.get("type").and_then(|v| v.as_str()).unwrap_or("");
-        let Some(message) = val.get("message") else {
-            continue;
-        };
-
-        match msg_type {
-            "user" => {
-                let parts = claude_user_content(message.get("content"));
-                if !parts.is_empty() {
-                    messages.push(SessionMessage {
-                        role: "user".to_string(),
-                        content: parts,
-                    });
-                }
-            }
-            "assistant" => {
-                let parts = message
-                    .get("content")
-                    .and_then(|c| c.as_array())
-                    .map(|arr| claude_assistant_blocks(arr))
-                    .unwrap_or_default();
-                if !parts.is_empty() {
-                    messages.push(SessionMessage {
-                        role: "assistant".to_string(),
-                        content: parts,
-                    });
-                }
-            }
-            _ => {}
-        }
+        parse_claude_session_line(line, &mut messages);
     }
 
     messages
+}
+
+fn parse_claude_session_line(line: &str, messages: &mut Vec<SessionMessage>) {
+    let Ok(val) = serde_json::from_str::<serde_json::Value>(line) else {
+        return;
+    };
+    let msg_type = val.get("type").and_then(|v| v.as_str()).unwrap_or("");
+    let Some(message) = val.get("message") else {
+        return;
+    };
+
+    match msg_type {
+        "user" => {
+            let parts = claude_user_content(message.get("content"));
+            if !parts.is_empty() {
+                messages.push(SessionMessage {
+                    role: "user".to_string(),
+                    content: parts,
+                });
+            }
+        }
+        "assistant" => {
+            let parts = message
+                .get("content")
+                .and_then(|c| c.as_array())
+                .map(|arr| claude_assistant_blocks(arr))
+                .unwrap_or_default();
+            if !parts.is_empty() {
+                messages.push(SessionMessage {
+                    role: "assistant".to_string(),
+                    content: parts,
+                });
+            }
+        }
+        _ => {}
+    }
 }
 
 fn claude_user_content(content: Option<&serde_json::Value>) -> Vec<SessionContent> {
@@ -775,121 +826,125 @@ fn parse_codex_session(lines: &[&str]) -> Vec<SessionMessage> {
     let mut messages: Vec<SessionMessage> = Vec::new();
 
     for line in lines {
-        let Ok(val) = serde_json::from_str::<serde_json::Value>(line) else {
-            continue;
-        };
-        let event_type = val.get("type").and_then(|v| v.as_str()).unwrap_or("");
-        let payload = val.get("payload");
-
-        match event_type {
-            "event_msg" => {
-                let payload_type = payload
-                    .and_then(|p| p.get("type"))
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("");
-                if payload_type == "user_message" {
-                    let text = payload
-                        .and_then(|p| p.get("message"))
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("");
-                    if !text.trim().is_empty() {
-                        messages.push(SessionMessage {
-                            role: "user".to_string(),
-                            content: vec![SessionContent::Text {
-                                text: text.to_string(),
-                            }],
-                        });
-                    }
-                }
-            }
-            "response_item" => {
-                let payload_type = payload
-                    .and_then(|p| p.get("type"))
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("");
-
-                match payload_type {
-                    "message" => {
-                        let role = payload
-                            .and_then(|p| p.get("role"))
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("");
-                        if role != "assistant" {
-                            continue;
-                        }
-                        let parts: Vec<SessionContent> = payload
-                            .and_then(|p| p.get("content"))
-                            .and_then(|v| v.as_array())
-                            .map(|blocks| {
-                                blocks
-                                    .iter()
-                                    .filter_map(|b| {
-                                        let t = b.get("type").and_then(|v| v.as_str())?;
-                                        if matches!(t, "output_text" | "text") {
-                                            let text = b.get("text").and_then(|v| v.as_str())?;
-                                            if !text.trim().is_empty() {
-                                                return Some(SessionContent::Text {
-                                                    text: text.to_string(),
-                                                });
-                                            }
-                                        }
-                                        None
-                                    })
-                                    .collect()
-                            })
-                            .unwrap_or_default();
-                        if !parts.is_empty() {
-                            if messages.last().map(|m| m.role.as_str()) == Some("assistant") {
-                                messages.last_mut().unwrap().content.extend(parts);
-                            } else {
-                                messages.push(SessionMessage {
-                                    role: "assistant".to_string(),
-                                    content: parts,
-                                });
-                            }
-                        }
-                    }
-                    "function_call" => {
-                        let call_id = payload
-                            .and_then(|p| p.get("call_id"))
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("")
-                            .to_string();
-                        let name = payload
-                            .and_then(|p| p.get("name"))
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("")
-                            .to_string();
-                        let raw = payload
-                            .and_then(|p| p.get("arguments"))
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("{}");
-                        let input = serde_json::from_str::<serde_json::Value>(raw)
-                            .ok()
-                            .and_then(|v| serde_json::to_string_pretty(&v).ok())
-                            .unwrap_or_else(|| raw.to_string());
-                        let part = SessionContent::ToolUse {
-                            id: call_id,
-                            name,
-                            input,
-                        };
-                        if messages.last().map(|m| m.role.as_str()) == Some("assistant") {
-                            messages.last_mut().unwrap().content.push(part);
-                        } else {
-                            messages.push(SessionMessage {
-                                role: "assistant".to_string(),
-                                content: vec![part],
-                            });
-                        }
-                    }
-                    _ => {}
-                }
-            }
-            _ => {}
-        }
+        parse_codex_session_line(line, &mut messages);
     }
 
     messages
+}
+
+fn parse_codex_session_line(line: &str, messages: &mut Vec<SessionMessage>) {
+    let Ok(val) = serde_json::from_str::<serde_json::Value>(line) else {
+        return;
+    };
+    let event_type = val.get("type").and_then(|v| v.as_str()).unwrap_or("");
+    let payload = val.get("payload");
+
+    match event_type {
+        "event_msg" => {
+            let payload_type = payload
+                .and_then(|p| p.get("type"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            if payload_type == "user_message" {
+                let text = payload
+                    .and_then(|p| p.get("message"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                if !text.trim().is_empty() {
+                    messages.push(SessionMessage {
+                        role: "user".to_string(),
+                        content: vec![SessionContent::Text {
+                            text: text.to_string(),
+                        }],
+                    });
+                }
+            }
+        }
+        "response_item" => {
+            let payload_type = payload
+                .and_then(|p| p.get("type"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+
+            match payload_type {
+                "message" => {
+                    let role = payload
+                        .and_then(|p| p.get("role"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+                    if role != "assistant" {
+                        return;
+                    }
+                    let parts: Vec<SessionContent> = payload
+                        .and_then(|p| p.get("content"))
+                        .and_then(|v| v.as_array())
+                        .map(|blocks| {
+                            blocks
+                                .iter()
+                                .filter_map(|b| {
+                                    let t = b.get("type").and_then(|v| v.as_str())?;
+                                    if matches!(t, "output_text" | "text") {
+                                        let text = b.get("text").and_then(|v| v.as_str())?;
+                                        if !text.trim().is_empty() {
+                                            return Some(SessionContent::Text {
+                                                text: text.to_string(),
+                                            });
+                                        }
+                                    }
+                                    None
+                                })
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    if !parts.is_empty() {
+                        if messages.last().map(|m| m.role.as_str()) == Some("assistant") {
+                            messages.last_mut().unwrap().content.extend(parts);
+                        } else {
+                            messages.push(SessionMessage {
+                                role: "assistant".to_string(),
+                                content: parts,
+                            });
+                        }
+                    }
+                }
+                "function_call" => {
+                    let call_id = payload
+                        .and_then(|p| p.get("call_id"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    let name = payload
+                        .and_then(|p| p.get("name"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    let raw = payload
+                        .and_then(|p| p.get("arguments"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("{}");
+                    let input = serde_json::from_str::<serde_json::Value>(raw)
+                        .ok()
+                        .and_then(|v| serde_json::to_string_pretty(&v).ok())
+                        .unwrap_or_else(|| raw.to_string());
+                    let part = SessionContent::ToolUse {
+                        id: call_id,
+                        name,
+                        input,
+                    };
+                    if messages.last().map(|m| m.role.as_str()) == Some("assistant") {
+                        messages.last_mut().unwrap().content.push(part);
+                    } else {
+                        messages.push(SessionMessage {
+                            role: "assistant".to_string(),
+                            content: vec![part],
+                        });
+                    }
+                }
+                _ => {}
+            }
+        }
+        _ => {}
+    }
 }
 
 // ── 会话摘要提取（供任务命名等上下文感知功能复用） ─────────────────────────────
@@ -1346,33 +1401,27 @@ fn should_send_status_command(
 }
 
 fn send_status_command(app: &AppHandle, task_id: &str, is_codex: bool) {
+    fn write_to_pty(app: &AppHandle, task_id: &str, bytes: &[u8]) {
+        let writer = {
+            let tm = app.state::<TaskManager>();
+            let writer = tm.pty_writers.lock().get(task_id).cloned();
+            writer
+        };
+        if let Some(writer) = writer {
+            let mut writer = writer.lock();
+            let _ = writer.write_all(bytes);
+            let _ = writer.flush();
+        }
+    }
+
     if is_codex {
         // Codex 有自动补全菜单，需先输入 /status 触发菜单，
         // 再延迟发送 \r 选中执行；两次写入之间释放锁，避免长时间持锁
-        {
-            let tm = app.state::<TaskManager>();
-            let mut writers = tm.pty_writers.lock();
-            if let Some(writer) = writers.get_mut(task_id) {
-                let _ = writer.write_all(b"/status");
-                let _ = writer.flush();
-            }
-        }
+        write_to_pty(app, task_id, b"/status");
         thread::sleep(Duration::from_millis(100));
-        {
-            let tm = app.state::<TaskManager>();
-            let mut writers = tm.pty_writers.lock();
-            if let Some(writer) = writers.get_mut(task_id) {
-                let _ = writer.write_all(b"\r");
-                let _ = writer.flush();
-            }
-        }
+        write_to_pty(app, task_id, b"\r");
     } else {
-        let tm = app.state::<TaskManager>();
-        let mut writers = tm.pty_writers.lock();
-        if let Some(writer) = writers.get_mut(task_id) {
-            let _ = writer.write_all(b"/status\r");
-            let _ = writer.flush();
-        }
+        write_to_pty(app, task_id, b"/status\r");
     }
 }
 
@@ -1618,9 +1667,13 @@ fn run_status_session_watcher(
                     // Claude Code 的 /status 以全屏面板形式展示，需发送 ESC 关闭；
                     // Codex 无此面板，无需处理
                     if !is_codex {
-                        let tm = app.state::<TaskManager>();
-                        let mut writers = tm.pty_writers.lock();
-                        if let Some(writer) = writers.get_mut(&task_id) {
+                        let writer = {
+                            let tm = app.state::<TaskManager>();
+                            let writer = tm.pty_writers.lock().get(&task_id).cloned();
+                            writer
+                        };
+                        if let Some(writer) = writer {
+                            let mut writer = writer.lock();
                             let _ = writer.write_all(b"\x1b");
                             let _ = writer.flush();
                         }
@@ -2218,14 +2271,15 @@ mod tests {
     fn validate_export_output_path_rejects_missing_parent() {
         // 极不可能存在的父目录
         assert!(
-            validate_export_output_path("/nonexistent-9c3a/__nezha_export_test__/out.md").is_err()
+            validate_export_output_path("/nonexistent-9c3a/__aeroric_export_test__/out.md")
+                .is_err()
         );
     }
 
     #[test]
     fn validate_export_output_path_accepts_md_under_existing_dir() {
         let dir = std::env::temp_dir();
-        let candidate = dir.join("nezha-validate-output.md");
+        let candidate = dir.join("aeroric-validate-output.md");
         // 文件本身不必存在；只要父目录存在即可。
         let canonical = validate_export_output_path(candidate.to_str().unwrap())
             .expect("temp dir export path should validate");

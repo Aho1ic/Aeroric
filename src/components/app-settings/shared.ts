@@ -44,11 +44,13 @@ export function getAgentSettingsFilePath(agent: AgentKey): string {
   if (APP_PLATFORM === "windows") {
     if (agent === "claude") return "%USERPROFILE%\\.claude\\settings.json";
     if (agent === "claude_gpt55") return "%USERPROFILE%\\.claude\\start-gpt55.sh";
+    if (agent !== "codex") return "%USERPROFILE%\\.claude\\start-agent.sh";
     return "%USERPROFILE%\\.codex\\config.toml";
   }
 
   if (agent === "claude") return "~/.claude/settings.json";
   if (agent === "claude_gpt55") return "~/.claude/start-gpt55.sh";
+  if (agent !== "codex") return "~/.claude/start-agent.sh";
   return "~/.codex/config.toml";
 }
 
@@ -56,16 +58,19 @@ export function getAgentExecutablePlaceholder(agent: AgentKey): string {
   if (APP_PLATFORM === "windows") {
     if (agent === "claude") return "claude or C:\\Users\\<you>\\AppData\\Roaming\\npm\\claude.cmd";
     if (agent === "claude_gpt55") return "%USERPROFILE%\\.claude\\start-gpt55.sh";
+    if (agent !== "codex") return "%USERPROFILE%\\.claude\\start-agent.sh";
     return "codex or C:\\Users\\<you>\\AppData\\Roaming\\npm\\codex.cmd";
   }
 
   if (APP_PLATFORM === "macos") {
     if (agent === "claude") return "claude or /opt/homebrew/bin/claude";
     if (agent === "claude_gpt55") return "/Users/<you>/.claude/start-gpt55.sh";
+    if (agent !== "codex") return "/Users/<you>/.claude/start-agent.sh";
     return "codex or /opt/homebrew/bin/codex";
   }
 
   if (agent === "claude") return "claude or /usr/local/bin/claude";
   if (agent === "claude_gpt55") return "~/.claude/start-gpt55.sh";
+  if (agent !== "codex") return "~/.claude/start-agent.sh";
   return "codex or /usr/local/bin/codex";
 }

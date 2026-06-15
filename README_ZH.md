@@ -1,57 +1,34 @@
 <p align="center">
-  <img src="docs/images/logo.png" alt="Nezha Logo" width="150" />
+  <img src="docs/images/logo.png" alt="Aeroric Logo" width="150" />
 </p>
 
-<h1 align="center">哪吒(Nezha): 三头六臂，并发编程</h1>
+<h1 align="center">Aeroric: Agent-First AI 编程工作台</h1>
 
 <p align="center">
-  专为 AI 编程量身打造的高效率轻量级 AI-Native IDE 
+  专为 AI 编程量身打造的高效率轻量级 AI-Native IDE
 </p>
 
 <p align="center">
   多项目工作区, 快速切换多个项目的 vibecoding 任务 · 实时终端 · 会话自动发现 · 原生 Git 集成 · 轻量级代码编辑器 · 实时套餐额度显示
 </p>
 <p align="center">
-  <a href="https://github.com/hanshuaikang/nezha/actions/workflows/checks.yml"><img alt="Checks" src="https://img.shields.io/github/actions/workflow/status/hanshuaikang/nezha/checks.yml?label=checks"></a>
-  <a href="https://github.com/hanshuaikang/nezha/releases"><img alt="Release" src="https://img.shields.io/github/v/release/hanshuaikang/nezha"></a>
-  <a href="https://github.com/hanshuaikang/nezha/stargazers"><img alt="Stars" src="https://img.shields.io/github/stars/hanshuaikang/nezha"></a>
+  <img src="docs/images/index.gif" alt="Aeroric 产品图" width="80%" />
 </p>
 
-<div align="center">
-  <table>
-    <tr>
-      <td align="center">
-        <a href="https://www.producthunt.com/products/nezha-2?embed=true&utm_source=badge-featured&utm_medium=badge&utm_campaign=badge-nezha" target="_blank" rel="noopener noreferrer">
-          <img alt="NeZha - Run multiple AI coding agents across projects | Product Hunt" src="https://api.producthunt.com/widgets/embed-image/v1/featured.svg?post_id=1120473&theme=light&t=1775898930608" width="150" height="48" />
-        </a>
-      </td>
-      <td align="center">
-        <a href="https://hellogithub.com/repository/hanshuaikang/nezha" target="_blank" rel="noopener noreferrer">
-          <img src="https://abroad.hellogithub.com/v1/widgets/recommend.svg?rid=4dd4bd67871b461fa8bd3641d803db05&claim_uid=uT2Sc8Xli4PUA76&theme=neutral" alt="Featured｜HelloGitHub" width="155" height="48" />
-        </a>
-      </td>
-    </tr>
-  </table>
-</div>
+Aeroric 是一款专为 AI 编程场景打造的桌面应用。它把多项目管理、任务生命周期追踪、原生终端体验、会话回放、代码浏览和完整 Git 工作流整合到同一个界面里，让你不必在终端、编辑器、Git 工具和会话记录之间来回切换。只需要通过鼠标点击，就可以瞬间切换到不同的项目或任务。同时安装包体积轻量，告别传统 IDE 的笨重。
 
-<p align="center">
-  <img src="docs/images/index.gif" alt="Nezha 产品图" width="80%" />
-</p>
+## 为什么是 Aeroric
 
-Nezha 是一款专为 AI 编程场景打造的桌面应用。它把多项目管理、任务生命周期追踪、原生终端体验、会话回放、代码浏览和完整 Git 工作流整合到同一个界面里，让你不必在终端、编辑器、Git 工具和会话记录之间来回切换。只需要通过鼠标点击，就可以瞬间切换到不同的项目或任务。同时安装包只有 7M 大小，告别 IDE 的笨重。
+传统的 IDE 和 VS Code 这样的编辑器本质上是以开发者为核心设计的，在古法编程时代，插件系统、重构、变量联想等诸多功能都是为了提升效率而存在。而现在 AI 写的代码越来越多，写代码本身真的开始并行了，这在以前是不敢想的事情，但是人的注意力是有限的，如何快速跟踪多个项目的任务，就是 Aeroric 需要解决的事情。
 
-## 为什么是 Nezha
-
-传统的 IDE 和 VS Code 这样的编辑器本质上是以开发者为核心设计的，在古法编程时代，插件系统，重构，变量联想等诸多功能都是为了提升效率而存在。而现在 AI 写的代码越来越多，写代码本身真的开始并行了，这在以前是不敢想的事情，但是人的注意力是有限的，如何快速跟踪多个项目的任务，就是哪吒需要解决的事情。
-
-哪吒以 Agent 优先设计，内置终端直接集成原生 Claude Code 和 Codex。并在此之上集成 任务系统，Git, 终端和代码编辑器。使得对于轻度需求无需打开笨重的 IDE 即可完成任务下发，代码 Review，代码提交等操作的闭环，而且不会打断你在其他项目进行中的工作。
+Aeroric 以 Agent 优先设计，内置终端直接集成原生 Claude Code 和 Codex。并在此之上集成任务系统、Git、终端和代码编辑器。使得对于轻度需求无需打开笨重的 IDE 即可完成任务下发、代码 Review、代码提交等操作的闭环，而且不会打断你在其他项目进行中的工作。
 
 
-## 安装 Nezha
-在使用哪吒之前你需要先安装好 Claude Code / Codex, 初次安装会遇到"“NeZha”已损坏，无法打开。 你应该将它移到废纸篓。"。这是由于安装包未签名导致的，执行以下语句即可:
+## 安装 Aeroric
+在使用 Aeroric 之前你需要先安装好 Claude Code / Codex，初次安装可能会遇到““Aeroric”已损坏，无法打开。你应该将它移到废纸篓。”这是由于安装包未签名导致的，执行以下语句即可:
 
 ``` bash
-xattr -rd com.apple.quarantine /Applications/nezha.app
+xattr -rd com.apple.quarantine /Applications/Aeroric.app
 ```
 
 ## 核心功能
@@ -125,7 +102,7 @@ xattr -rd com.apple.quarantine /Applications/nezha.app
 
 ## 🙏 鸣谢
 
-Nezha 的诞生离不开以下优秀的开源项目，向它们致敬：
+Aeroric 的诞生离不开以下优秀的开源项目，向它们致敬：
 
 - [Tauri](https://github.com/tauri-apps/tauri) - 构建更小、更快、更安全的桌面应用
 - [React](https://github.com/facebook/react) - 构建用户界面的 JavaScript 库

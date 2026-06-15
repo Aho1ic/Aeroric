@@ -152,7 +152,7 @@ export function FontPanel({
               <span style={s.fontCodeLine}>
                 <span style={s.fontCodeLineNo}>2</span>
                 <span style={s.fontCodeText}>
-                  {"  "}name: <span style={s.fontCodeString}>"Nezha"</span>,
+                  {"  "}name: <span style={s.fontCodeString}>"Aeroric"</span>,
                   status: <span style={s.fontCodeString}>"running"</span>,
                 </span>
               </span>

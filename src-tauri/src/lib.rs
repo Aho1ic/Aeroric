@@ -8,7 +8,9 @@ use usage::CodexRpcClient;
 mod agent_assist;
 mod analytics;
 mod app_settings;
+mod conda;
 mod config;
+mod docker;
 mod event_watcher;
 mod fs;
 mod git;
@@ -19,6 +21,7 @@ mod pty;
 mod remote_fs;
 mod remote_git;
 mod session;
+mod sftp;
 mod skills;
 mod ssh;
 mod storage;
@@ -28,8 +31,9 @@ mod usage;
 use session::{ClaudeSessionInfo, CodexSessionInfo};
 
 pub struct TaskManager {
-    pub(crate) pty_masters: Mutex<HashMap<String, Box<dyn portable_pty::MasterPty + Send>>>,
-    pub(crate) pty_writers: Mutex<HashMap<String, Box<dyn Write + Send>>>,
+    pub(crate) pty_masters:
+        Mutex<HashMap<String, Arc<Mutex<Box<dyn portable_pty::MasterPty + Send>>>>>,
+    pub(crate) pty_writers: Mutex<HashMap<String, Arc<Mutex<Box<dyn Write + Send>>>>>,
     pub(crate) child_handles:
         Mutex<HashMap<String, Arc<std::sync::Mutex<Box<dyn portable_pty::Child + Send + Sync>>>>>,
     pub(crate) cancelled_tasks: Mutex<HashSet<String>>,
@@ -163,6 +167,9 @@ pub fn run() {
             fs::create_file,
             fs::create_directory,
             fs::delete_path,
+            fs::rename_path,
+            fs::copy_paths_to_directory,
+            fs::read_clipboard_file_paths,
             fs::list_project_files,
             fs::search_project_files,
             remote_fs::remote_read_dir_entries,
@@ -172,6 +179,18 @@ pub fn run() {
             remote_fs::remote_create_file,
             remote_fs::remote_create_directory,
             remote_fs::remote_delete_path,
+            remote_fs::remote_rename_path,
+            remote_fs::remote_copy_paths_to_directory,
+            remote_fs::remote_upload_local_paths_to_directory,
+            sftp::sftp_read_dir,
+            sftp::sftp_read_text_file,
+            sftp::sftp_read_image_preview,
+            sftp::sftp_read_directory_summary,
+            sftp::sftp_create_directory,
+            sftp::sftp_delete_paths,
+            sftp::sftp_rename_path,
+            sftp::sftp_copy_paths,
+            sftp::sftp_move_paths,
             git::generate_commit_message,
             agent_assist::generate_task_name,
             git::git_status,
@@ -225,11 +244,20 @@ pub fn run() {
             app_settings::load_app_settings,
             app_settings::save_app_settings,
             app_settings::save_agent_paths,
+            app_settings::save_custom_agent_profile,
+            app_settings::delete_custom_agent_profile,
             app_settings::save_send_shortcut,
             app_settings::save_shift_enter_newline,
             app_settings::detect_agent_paths,
             app_settings::detect_agent_versions_for_settings,
+            app_settings::detect_agent_version,
             app_settings::get_system_fonts,
+            conda::detect_conda_environments,
+            docker::list_docker_resources,
+            docker::docker_container_action,
+            docker::docker_container_logs,
+            docker::docker_delete_image,
+            docker::docker_tag_image,
             notification::get_notifications,
             notification::mark_notification_read,
             notification::mark_all_notifications_read,

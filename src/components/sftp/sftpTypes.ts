@@ -1,0 +1,214 @@
+import type { SshConnection } from "../../types";
+
+export type SftpEndpoint =
+  | { kind: "local"; path: string }
+  | { kind: "ssh"; connectionId: string; connectionName: string; path: string };
+
+export type SftpOperation = "copy" | "move";
+
+export type SftpEntry = {
+  name: string;
+  path: string;
+  isDir: boolean;
+  extension?: string | null;
+  size?: number | null;
+};
+
+export type SftpTreeRow = {
+  entry: SftpEntry;
+  depth: number;
+};
+
+export type SftpBreadcrumbSegment = {
+  label: string;
+  path: string;
+};
+
+export type SftpFileIconKind =
+  | "folder"
+  | "image"
+  | "markdown"
+  | "json"
+  | "archive"
+  | "code"
+  | "text"
+  | "file";
+
+export type SftpTauriEndpoint =
+  | { kind: "local"; path: string }
+  | { kind: "ssh"; connection: SshConnection; path: string };
+
+export function sftpEndpointKey(endpoint: SftpEndpoint): string {
+  return endpoint.kind === "local"
+    ? `local:${endpoint.path}`
+    : `ssh:${endpoint.connectionId}:${endpoint.path}`;
+}
+
+export function sftpDropOperation(source: SftpEndpoint, target: SftpEndpoint): SftpOperation {
+  void source;
+  void target;
+  return "move";
+}
+
+export function sftpClickAction({
+  isDir,
+  isSelected,
+}: {
+  isDir: boolean;
+  isSelected: boolean;
+}): "select" | "toggle" {
+  return isDir && isSelected ? "toggle" : "select";
+}
+
+export function sftpKeyAction(event: {
+  metaKey?: boolean;
+  ctrlKey?: boolean;
+  key: string;
+  code?: string;
+}): "copy" | "paste" | "delete" | "preview" | null {
+  if (event.code === "Space" || event.key === " ") return "preview";
+  const mod = Boolean(event.metaKey || event.ctrlKey);
+  if (!mod) return null;
+  if (event.code === "KeyC" || event.key.toLowerCase() === "c") return "copy";
+  if (event.code === "KeyV" || event.key.toLowerCase() === "v") return "paste";
+  if (event.key === "Backspace" || event.key === "Delete") return "delete";
+  return null;
+}
+
+export function defaultSftpPathForEndpoint(
+  kind: SftpEndpoint["kind"],
+  connection: SshConnection | undefined,
+  localDefaultPath: string,
+): string {
+  if (kind === "local") return localDefaultPath;
+  return connection?.remotePath?.trim() || "/";
+}
+
+export function sftpFileName(path: string): string {
+  const trimmed = path.replace(/\/+$/, "");
+  return trimmed.split("/").pop() || path;
+}
+
+export function sftpParentPath(path: string): string {
+  const trimmed = path.replace(/\/+$/, "");
+  if (!trimmed || trimmed === "/") return "/";
+  const idx = trimmed.lastIndexOf("/");
+  if (idx <= 0) return "/";
+  return trimmed.slice(0, idx);
+}
+
+export function sftpJoinPath(parent: string, name: string): string {
+  if (!parent || parent === "/") return `/${name}`;
+  return `${parent.replace(/\/+$/, "")}/${name}`;
+}
+
+export function sftpBreadcrumbSegments(path: string): SftpBreadcrumbSegment[] {
+  const trimmed = path.trim().replace(/\/+$/, "");
+  if (!trimmed || trimmed === "/") return [{ label: "/", path: "/" }];
+  const parts = trimmed.split("/").filter(Boolean);
+  return parts.map((part, index) => ({
+    label: part,
+    path: `/${parts.slice(0, index + 1).join("/")}`,
+  }));
+}
+
+export function flattenSftpTreeEntries(
+  entries: SftpEntry[],
+  expandedPaths: Set<string>,
+  childrenByPath: Map<string, SftpEntry[]>,
+): SftpTreeRow[] {
+  const rows: SftpTreeRow[] = [];
+  const append = (items: SftpEntry[], depth: number) => {
+    for (const entry of items) {
+      rows.push({ entry, depth });
+      if (!entry.isDir || !expandedPaths.has(entry.path)) continue;
+      append(childrenByPath.get(entry.path) ?? [], depth + 1);
+    }
+  };
+  append(entries, 0);
+  return rows;
+}
+
+function normalizeTreePath(path: string): string {
+  const normalized = path.replace(/\/+$/, "");
+  return normalized || "/";
+}
+
+function isSameOrAncestorPath(candidate: string, path: string): boolean {
+  const normalizedCandidate = normalizeTreePath(candidate);
+  const normalizedPath = normalizeTreePath(path);
+  if (normalizedCandidate === "/") return true;
+  return (
+    normalizedCandidate === normalizedPath ||
+    normalizedPath.startsWith(`${normalizedCandidate}/`)
+  );
+}
+
+function isSameOrDescendantPath(candidate: string, path: string): boolean {
+  const normalizedCandidate = normalizeTreePath(candidate);
+  const normalizedPath = normalizeTreePath(path);
+  if (normalizedPath === "/") return true;
+  return (
+    normalizedCandidate === normalizedPath ||
+    normalizedCandidate.startsWith(`${normalizedPath}/`)
+  );
+}
+
+export function pruneExpandedPathsForFolderSelection(
+  expandedPaths: Set<string>,
+  selectedFolderPath: string,
+): Set<string> {
+  const next = new Set<string>();
+  for (const path of expandedPaths) {
+    if (
+      isSameOrAncestorPath(path, selectedFolderPath) ||
+      isSameOrDescendantPath(path, selectedFolderPath)
+    ) {
+      next.add(path);
+    }
+  }
+  return next;
+}
+
+export function sftpFileIconKind(entry: SftpEntry): SftpFileIconKind {
+  if (entry.isDir) return "folder";
+  const ext = (entry.extension ?? entry.name.split(".").pop() ?? "").toLowerCase();
+  if (["png", "jpg", "jpeg", "gif", "webp", "bmp", "svg"].includes(ext)) return "image";
+  if (["md", "mdx"].includes(ext)) return "markdown";
+  if (["json", "jsonc"].includes(ext)) return "json";
+  if (["zip", "tar", "gz", "tgz", "bz2", "xz", "7z", "rar"].includes(ext)) return "archive";
+  if (
+    [
+      "ts",
+      "tsx",
+      "js",
+      "jsx",
+      "py",
+      "rs",
+      "go",
+      "css",
+      "scss",
+      "html",
+      "htm",
+      "yaml",
+      "yml",
+      "toml",
+      "sh",
+      "sql",
+      "java",
+      "c",
+      "cpp",
+      "h",
+      "hpp",
+    ].includes(ext)
+  ) {
+    return "code";
+  }
+  if (["txt", "log", "env", "ini", "conf"].includes(ext)) return "text";
+  return "file";
+}
+
+export function isSftpImageFile(name: string): boolean {
+  const ext = name.split(".").pop()?.toLowerCase();
+  return ["png", "jpg", "jpeg", "gif", "webp", "bmp", "svg"].includes(ext ?? "");
+}

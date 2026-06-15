@@ -1,6 +1,5 @@
 import { useMemo, useState } from "react";
-import * as Select from "@radix-ui/react-select";
-import { Check, ChevronDown, FolderOpen, Plus, X } from "lucide-react";
+import { Edit3, FolderOpen, Plus, Server, Users } from "lucide-react";
 import type { SshConnection } from "../../types";
 import { useI18n } from "../../i18n";
 import s from "../../styles";
@@ -14,171 +13,284 @@ export interface SshProjectInput {
 
 interface Props {
   connections: SshConnection[];
+  groups?: string[];
   onConnectionsChange: (connections: SshConnection[]) => void;
   onClose: () => void;
   onOpen: (input: SshProjectInput) => void;
 }
 
-function deriveRemoteProjectName(remotePath: string): string {
+export function deriveRemoteProjectName(remotePath: string, fallback: string): string {
   const trimmed = remotePath.trim().replace(/\/+$/, "");
-  if (!trimmed) return "";
+  if (!trimmed) return fallback.trim() || "remote";
   const parts = trimmed.split("/");
-  return parts[parts.length - 1] || trimmed;
+  return parts[parts.length - 1] || fallback.trim() || "remote";
 }
 
-export function SshProjectDialog({ connections, onConnectionsChange, onClose, onOpen }: Props) {
+export function sshProjectInputForConnection(connection: SshConnection): SshProjectInput | null {
+  const remotePath = connection.remotePath?.trim() ?? "";
+  if (!remotePath) return null;
+  return {
+    connectionId: connection.id,
+    remotePath,
+    name: deriveRemoteProjectName(remotePath, connection.name),
+  };
+}
+
+function connectionTarget(connection: SshConnection): string {
+  return `${connection.username}@${connection.host}:${connection.port}`;
+}
+
+function groupConnections(connections: SshConnection[], fallbackGroup: string) {
+  const map = new Map<string, SshConnection[]>();
+  for (const connection of connections) {
+    const group = connection.group?.trim() || fallbackGroup;
+    map.set(group, [...(map.get(group) ?? []), connection]);
+  }
+  return Array.from(map.entries());
+}
+
+function GroupNameDialog({
+  onClose,
+  onSubmit,
+}: {
+  onClose: () => void;
+  onSubmit: (name: string) => void;
+}) {
   const { t } = useI18n();
-  const firstConnection = connections[0];
-  const [connectionDialogOpen, setConnectionDialogOpen] = useState(false);
-  const [connectionId, setConnectionId] = useState(firstConnection?.id ?? "");
-  const selectedConnection = useMemo(
-    () => connections.find((connection) => connection.id === connectionId) ?? firstConnection,
-    [connectionId, connections, firstConnection],
-  );
-  const [remotePath, setRemotePath] = useState(selectedConnection?.remotePath ?? "");
-  const [name, setName] = useState(() => deriveRemoteProjectName(firstConnection?.remotePath ?? ""));
-  const normalizedRemotePath = remotePath.trim();
-  const normalizedName = name.trim() || deriveRemoteProjectName(normalizedRemotePath);
-  const canSubmit = Boolean(selectedConnection && normalizedRemotePath && normalizedName);
-
-  function handleConnectionChange(nextId: string) {
-    const nextConnection = connections.find((connection) => connection.id === nextId);
-    setConnectionId(nextId);
-    if (nextConnection?.remotePath) {
-      setRemotePath(nextConnection.remotePath);
-      setName((current) => current || deriveRemoteProjectName(nextConnection.remotePath ?? ""));
-    }
-  }
-
-  function handleSubmit(event: React.FormEvent) {
-    event.preventDefault();
-    if (!canSubmit || !selectedConnection) return;
-    onOpen({
-      connectionId: selectedConnection.id,
-      remotePath: normalizedRemotePath,
-      name: normalizedName,
-    });
-  }
-
+  const [name, setName] = useState("");
+  const normalized = name.trim();
   return (
-    <div style={s.sshDialogOverlay} onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <form style={s.sshDialog} onSubmit={handleSubmit}>
+    <div style={s.sshDialogOverlay} onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
+      <form
+        style={s.sshDialog}
+        onSubmit={(event) => {
+          event.preventDefault();
+          if (!normalized) return;
+          onSubmit(normalized);
+        }}
+      >
         <div style={s.sshDialogHeader}>
-          <div style={s.sshDialogTitle}>{t("sshProject.title")}</div>
-          <button type="button" style={s.modalCloseBtn} onClick={onClose}>
-            <X size={16} />
-          </button>
+          <div style={s.sshDialogTitle}>{t("sshProject.newGroup")}</div>
         </div>
-
         <div style={s.sshDialogBody}>
-          {connections.length === 0 ? (
-            <div style={s.sshSecretNote}>{t("sshProject.noConnections")}</div>
-          ) : (
-            <>
-              <label style={s.sshField}>
-                <span style={s.sshLabel}>{t("sshProject.connection")}</span>
-                <Select.Root value={connectionId} onValueChange={handleConnectionChange}>
-                  <Select.Trigger aria-label={t("sshProject.connection")} style={s.settingsSelectTrigger}>
-                    <Select.Value>
-                      {selectedConnection
-                        ? `${selectedConnection.name} (${selectedConnection.username}@${selectedConnection.host})`
-                        : t("sshProject.connection")}
-                    </Select.Value>
-                    <Select.Icon>
-                      <ChevronDown size={13} strokeWidth={2.2} color="var(--text-hint)" />
-                    </Select.Icon>
-                  </Select.Trigger>
-                  <Select.Portal>
-                    <Select.Content position="popper" sideOffset={4} style={s.settingsSelectContent}>
-                      <Select.Viewport style={s.settingsSelectViewport}>
-                        {connections.map((connection) => {
-                          const selected = connection.id === selectedConnection?.id;
-                          return (
-                            <Select.Item
-                              key={connection.id}
-                              value={connection.id}
-                              className="radix-select-item"
-                              style={selected ? s.settingsSelectOptionSelected : s.settingsSelectOption}
-                            >
-                              <Select.ItemText>
-                                {connection.name} ({connection.username}@{connection.host})
-                              </Select.ItemText>
-                              <Select.ItemIndicator style={s.settingsSelectIndicator}>
-                                <Check size={13} style={s.settingsSelectCheck} />
-                              </Select.ItemIndicator>
-                            </Select.Item>
-                          );
-                        })}
-                      </Select.Viewport>
-                    </Select.Content>
-                  </Select.Portal>
-                </Select.Root>
-              </label>
-              <label style={s.sshField}>
-                <span style={s.sshLabel}>{t("ssh.field.remotePath")}</span>
-                <input
-                  value={remotePath}
-                  onChange={(event) => {
-                    const nextPath = event.target.value;
-                    setRemotePath(nextPath);
-                    setName((current) => current || deriveRemoteProjectName(nextPath));
-                  }}
-                  placeholder="/srv/app"
-                  style={s.sshInput}
-                  autoFocus
-                />
-              </label>
-              <label style={s.sshField}>
-                <span style={s.sshLabel}>{t("sshProject.projectName")}</span>
-                <input
-                  value={name}
-                  onChange={(event) => setName(event.target.value)}
-                  placeholder={deriveRemoteProjectName(remotePath) || "app"}
-                  style={s.sshInput}
-                />
-              </label>
-            </>
-          )}
+          <label style={s.sshField}>
+            <span style={s.sshLabel}>{t("ssh.field.group")}</span>
+            <input
+              value={name}
+              onChange={(event) => setName(event.target.value)}
+              placeholder={t("ssh.defaultGroup")}
+              style={s.sshInput}
+              autoFocus
+            />
+          </label>
+          <div style={s.sshSecretNote}>{t("sshProject.newGroupHint")}</div>
         </div>
-
         <div style={s.sshDialogFooter}>
-          <button
-            type="button"
-            style={s.sshSecondaryButton}
-            onClick={() => setConnectionDialogOpen(true)}
-          >
-            <Plus size={14} />
-            {t("ssh.newConnection")}
-          </button>
-          <div style={{ flex: 1 }} />
           <button type="button" style={s.sshSecondaryButton} onClick={onClose}>
             {t("common.cancel")}
           </button>
           <button
             type="submit"
-            style={canSubmit ? s.sshPrimaryButton : s.sshPrimaryButtonDisabled}
-            disabled={!canSubmit}
+            style={normalized ? s.sshPrimaryButton : s.sshPrimaryButtonDisabled}
+            disabled={!normalized}
           >
-            <FolderOpen size={14} />
-            {t("sshProject.open")}
+            <Plus size={14} />
+            {t("sshProject.createGroup")}
           </button>
         </div>
       </form>
-      {connectionDialogOpen && (
+    </div>
+  );
+}
+
+export function SshProjectPage({
+  connections,
+  groups = [],
+  onConnectionsChange,
+  onClose,
+  onOpen,
+}: Props) {
+  const { t } = useI18n();
+  const firstOpenable = connections.find((connection) => connection.remotePath?.trim());
+  const [selectedId, setSelectedId] = useState(firstOpenable?.id ?? connections[0]?.id ?? "");
+  const [editingConnection, setEditingConnection] = useState<SshConnection | null>(null);
+  const [creatingConnection, setCreatingConnection] = useState(false);
+  const [groupDialogOpen, setGroupDialogOpen] = useState(false);
+  const [initialGroup, setInitialGroup] = useState("");
+  const selectedConnection = useMemo(
+    () => connections.find((connection) => connection.id === selectedId) ?? connections[0] ?? null,
+    [connections, selectedId],
+  );
+  const groupedConnections = useMemo(
+    () => groupConnections(connections, t("ssh.defaultGroup")),
+    [connections, t],
+  );
+  const knownGroups = useMemo(
+    () =>
+      Array.from(
+        new Set([
+          ...groups,
+          ...connections
+            .map((connection) => connection.group?.trim())
+            .filter((group): group is string => Boolean(group)),
+          initialGroup,
+        ].filter(Boolean)),
+      ),
+    [connections, groups, initialGroup],
+  );
+  const selectedRemotePath = selectedConnection?.remotePath?.trim() ?? "";
+  const canOpen = Boolean(selectedConnection && selectedRemotePath);
+
+  function saveConnection(connection: SshConnection) {
+    const exists = connections.some((item) => item.id === connection.id);
+    const nextConnections = exists
+      ? connections.map((item) => (item.id === connection.id ? connection : item))
+      : [connection, ...connections];
+    onConnectionsChange(nextConnections);
+    setSelectedId(connection.id);
+    setEditingConnection(null);
+    setCreatingConnection(false);
+    setInitialGroup("");
+  }
+
+  function openConnection(connection: SshConnection) {
+    const input = sshProjectInputForConnection(connection);
+    if (input) onOpen(input);
+  }
+
+  function handleOpen() {
+    if (!selectedConnection || !selectedRemotePath) return;
+    openConnection(selectedConnection);
+  }
+
+  return (
+    <div style={s.sshProjectPage}>
+      <div style={s.sshProjectPageHeader}>
+        <div>
+          <div style={s.sshProjectPageTitle}>{t("sshProject.title")}</div>
+          <div style={s.sshProjectPageSubtitle}>{t("sshProject.subtitle")}</div>
+        </div>
+        <button type="button" style={s.sshSecondaryButton} onClick={onClose}>
+          {t("project.backHome")}
+        </button>
+      </div>
+
+      <div style={s.sshProjectPageBody}>
+        {connections.length === 0 ? (
+          <div style={s.sshEmptyState}>
+            <Server size={28} />
+            <div style={s.sshEmptyTitle}>{t("ssh.emptyTitle")}</div>
+            <div style={s.sshSecretNote}>{t("sshProject.noConnections")}</div>
+          </div>
+        ) : (
+          <div style={s.sshProjectConnectionPicker}>
+            {groupedConnections.map(([group, grouped]) => (
+              <section key={group} style={s.sshProjectGroupSection}>
+                <div style={s.sshProjectGroupTitle}>{group}</div>
+                <div style={s.sshProjectCardGrid}>
+                  {grouped.map((connection) => {
+                    const selected = connection.id === selectedConnection?.id;
+                    const hasRemotePath = Boolean(connection.remotePath?.trim());
+                    return (
+                      <div key={connection.id} style={selected ? s.sshProjectCardSelected : s.sshProjectCard}>
+                        <button
+                          type="button"
+                          style={s.sshProjectCardSelect}
+                          onClick={() => setSelectedId(connection.id)}
+                          onDoubleClick={(event) => {
+                            event.preventDefault();
+                            openConnection(connection);
+                          }}
+                        >
+                          <span style={s.sshProjectCardIcon}>
+                            <Server size={18} strokeWidth={2} />
+                          </span>
+                          <span style={s.sshProjectCardText}>
+                            <span style={s.sshProjectCardName}>{connection.name}</span>
+                            <span style={s.sshProjectCardMeta}>{connectionTarget(connection)}</span>
+                            <span
+                              style={{
+                                ...s.sshProjectCardMeta,
+                                color: hasRemotePath ? "var(--text-muted)" : "var(--warning)",
+                              }}
+                            >
+                              {hasRemotePath ? connection.remotePath : t("sshProject.remotePathMissing")}
+                            </span>
+                          </span>
+                        </button>
+                        <button
+                          type="button"
+                          title={t("common.edit")}
+                          aria-label={t("common.edit")}
+                          style={s.sshProjectCardEdit}
+                          onClick={() => setEditingConnection(connection)}
+                        >
+                          <Edit3 size={14} />
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              </section>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div style={s.sshProjectPageFooter}>
+        <button
+          type="button"
+          style={s.sshSecondaryButton}
+          onClick={() => {
+            setInitialGroup("");
+            setCreatingConnection(true);
+          }}
+        >
+          <Plus size={14} />
+          {t("ssh.newConnection")}
+        </button>
+        <button type="button" style={s.sshSecondaryButton} onClick={() => setGroupDialogOpen(true)}>
+          <Users size={14} />
+          {t("sshProject.newGroup")}
+        </button>
+        <div style={{ flex: 1 }} />
+        <button
+          type="button"
+          style={canOpen ? s.sshPrimaryButton : s.sshPrimaryButtonDisabled}
+          disabled={!canOpen}
+          onClick={handleOpen}
+          title={canOpen ? t("sshProject.open") : t("sshProject.remotePathMissing")}
+        >
+          <FolderOpen size={14} />
+          {t("sshProject.open")}
+        </button>
+      </div>
+
+      {(creatingConnection || editingConnection) && (
         <SshConnectionDialog
-          onClose={() => setConnectionDialogOpen(false)}
-          onSave={(connection) => {
-            const nextConnections = [connection, ...connections];
-            onConnectionsChange(nextConnections);
-            setConnectionId(connection.id);
-            if (connection.remotePath) {
-              setRemotePath(connection.remotePath);
-              setName((current) => current || deriveRemoteProjectName(connection.remotePath ?? ""));
-            }
-            setConnectionDialogOpen(false);
+          connection={editingConnection}
+          groups={knownGroups}
+          initialGroup={initialGroup}
+          onClose={() => {
+            setCreatingConnection(false);
+            setEditingConnection(null);
+            setInitialGroup("");
+          }}
+          onSave={saveConnection}
+        />
+      )}
+      {groupDialogOpen && (
+        <GroupNameDialog
+          onClose={() => setGroupDialogOpen(false)}
+          onSubmit={(group) => {
+            setInitialGroup(group);
+            setCreatingConnection(true);
+            setGroupDialogOpen(false);
           }}
         />
       )}
     </div>
   );
 }
+
+export const SshProjectDialog = SshProjectPage;

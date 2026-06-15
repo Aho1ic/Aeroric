@@ -1,14 +1,14 @@
 //! Hooks 注入与卸载。
 //!
 //! 设计:
-//! - 共享 mjs 脚本 `~/.nezha/hooks/nezha-hook.mjs`
+//! - 共享 mjs 脚本 `~/.aeroric/hooks/aeroric-hook.mjs`
 //! - Claude:解析 `~/.claude/settings.json`,在每个 event 的数组里追加一个
-//!   带 `_nezha_managed: "1"` 字段的对象。Claude 对未知字段 ignore,我们靠
+//!   带 `_aeroric_managed: "1"` 字段的对象。Claude 对未知字段 ignore,我们靠
 //!   这个 marker 实现幂等升级与精确卸载。
-//! - Codex:在 `~/.codex/config.toml` 中用 `# >>> nezha-managed-begin >>>` /
-//!   `# <<< nezha-managed-end <<<` 注释包裹的区域整体替换。区域外的用户内容
+//! - Codex:在 `~/.codex/config.toml` 中用 `# >>> aeroric-managed-begin >>>` /
+//!   `# <<< aeroric-managed-end <<<` 注释包裹的区域整体替换。区域外的用户内容
 //!   按字符串切片完整保留。
-//! - hook 脚本依靠 NEZHA_TASK_ID + NEZHA_EVENT_DIR 环境变量守卫;用户手动跑
+//! - hook 脚本依靠 AERORIC_TASK_ID + AERORIC_EVENT_DIR 环境变量守卫;用户手动跑
 //!   agent 时 hook 立即 exit 0,无任何副作用。
 
 use std::fs;
@@ -27,12 +27,12 @@ use crate::storage::atomic_write;
 const CODEX_HOOK_MIN_VERSION: &str = "0.131.0";
 const CLAUDE_HOOK_MIN_VERSION: &str = "2.1.87";
 
-const HOOK_SCRIPT: &str = include_str!("nezha-hook.mjs");
+const HOOK_SCRIPT: &str = include_str!("aeroric-hook.mjs");
 
-const NEZHA_MARKER_FIELD: &str = "_nezha_managed";
+const AERORIC_MARKER_FIELD: &str = "_aeroric_managed";
 
-const CODEX_BEGIN: &str = "# >>> nezha-managed-begin (do not edit; managed by Nezha) >>>";
-const CODEX_END: &str = "# <<< nezha-managed-end <<<";
+const CODEX_BEGIN: &str = "# >>> aeroric-managed-begin (do not edit; managed by Aeroric) >>>";
+const CODEX_END: &str = "# <<< aeroric-managed-end <<<";
 
 const CLAUDE_EVENTS: &[&str] = &[
     "SessionStart",
@@ -73,15 +73,15 @@ fn home_dir() -> Result<PathBuf, String> {
 }
 
 pub fn hooks_dir() -> Result<PathBuf, String> {
-    Ok(home_dir()?.join(".nezha").join("hooks"))
+    Ok(home_dir()?.join(".aeroric").join("hooks"))
 }
 
 pub fn script_path() -> Result<PathBuf, String> {
-    Ok(hooks_dir()?.join("nezha-hook.mjs"))
+    Ok(hooks_dir()?.join("aeroric-hook.mjs"))
 }
 
 pub fn events_root() -> Result<PathBuf, String> {
-    Ok(home_dir()?.join(".nezha").join("events"))
+    Ok(home_dir()?.join(".aeroric").join("events"))
 }
 
 pub fn events_dir_for(task_id: &str) -> Result<PathBuf, String> {
@@ -130,10 +130,10 @@ pub fn write_hook_script() -> Result<PathBuf, String> {
 
 // ── Claude (命令行 --settings) ───────────────────────────────────────────────
 
-/// Nezha 自有的 Claude hooks 配置文件路径(~/.nezha/hooks/claude-settings.json)。
+/// Aeroric 自有的 Claude hooks 配置文件路径(~/.aeroric/hooks/claude-settings.json)。
 /// Claude 任务启动时通过 `--settings <此路径>` 传入,完全不修改用户的
 /// ~/.claude/settings.json。配置是静态的(node + 脚本路径),写一次复用。
-pub fn nezha_claude_settings_path() -> Result<PathBuf, String> {
+pub fn aeroric_claude_settings_path() -> Result<PathBuf, String> {
     Ok(hooks_dir()?.join("claude-settings.json"))
 }
 
@@ -153,7 +153,7 @@ fn hook_command(script: &str) -> String {
     format!("node \"{}\"", script)
 }
 
-/// 构造仅含 Nezha hooks 的 Claude settings 值。只放 `hooks`(数组型,Claude 会
+/// 构造仅含 Aeroric hooks 的 Claude settings 值。只放 `hooks`(数组型,Claude 会
 /// 跨来源 merge + 按 command 去重),不含任何标量 key,因此不会覆盖用户配置。
 fn build_claude_settings_value(_node_path: &str, script: &str) -> Value {
     let entry = serde_json::json!({
@@ -166,13 +166,13 @@ fn build_claude_settings_value(_node_path: &str, script: &str) -> Value {
     serde_json::json!({ "hooks": Value::Object(hooks) })
 }
 
-/// 写入 Nezha 自有 Claude settings 文件。用 serde_json 序列化——Windows 路径里的
+/// 写入 Aeroric 自有 Claude settings 文件。用 serde_json 序列化——Windows 路径里的
 /// 反斜杠会被正确转义;且传给 Claude 的是纯文件路径,不经历命令行字符串转义,
 /// 跨平台(含 Windows CreateProcess)安全。
 fn write_claude_settings(node_path: &str, script: &str) -> Result<PathBuf, String> {
     let dir = hooks_dir()?;
     fs::create_dir_all(&dir).map_err(|e| format!("create {}: {}", dir.display(), e))?;
-    let path = nezha_claude_settings_path()?;
+    let path = aeroric_claude_settings_path()?;
     let value = build_claude_settings_value(node_path, script);
     let raw = serde_json::to_string_pretty(&value).map_err(|e| e.to_string())?;
     atomic_write(&path, &raw)?;
@@ -181,17 +181,20 @@ fn write_claude_settings(node_path: &str, script: &str) -> Result<PathBuf, Strin
 
 // ── Claude 旧版注入清理(迁移用)─────────────────────────────────────────────
 // 现版本走命令行 `--settings`,不再写用户 settings.json;以下函数仅用于清理
-// 旧版本曾注入用户 settings.json 的 `_nezha_managed` 条目。
+// 旧版本曾注入用户 settings.json 的 `_aeroric_managed` 条目。
 
-fn is_nezha_managed(value: &Value) -> bool {
+fn is_aeroric_managed(value: &Value) -> bool {
     value
         .as_object()
-        .and_then(|obj| obj.get(NEZHA_MARKER_FIELD))
+        .and_then(|obj| {
+            obj.get(AERORIC_MARKER_FIELD)
+                .or_else(|| obj.get("_nezha_managed"))
+        })
         .and_then(|v| v.as_str())
         .is_some()
 }
 
-/// 从 settings JSON 对象上移除 Nezha hooks。
+/// 从 settings JSON 对象上移除 Aeroric hooks。
 fn uninject_claude_value(mut root: Value) -> Value {
     let Some(root_obj) = root.as_object_mut() else {
         return root;
@@ -206,7 +209,7 @@ fn uninject_claude_value(mut root: Value) -> Value {
         .collect();
     for key in event_keys {
         if let Some(arr) = hooks.get_mut(&key).and_then(|v| v.as_array_mut()) {
-            arr.retain(|entry| !is_nezha_managed(entry));
+            arr.retain(|entry| !is_aeroric_managed(entry));
         }
     }
     // 不删除空数组也不删除 hooks 对象本身,保留用户既有结构
@@ -271,7 +274,7 @@ fn toml_quote(s: &str) -> String {
     out
 }
 
-/// 将 Nezha 块写入(或更新)指定 TOML 内容。
+/// 将 Aeroric 块写入(或更新)指定 TOML 内容。
 fn inject_codex_text(existing: &str, node_path: &str, script: &str) -> String {
     let block = build_codex_block(node_path, script);
     if let (Some(begin), Some(end)) = (existing.find(CODEX_BEGIN), existing.find(CODEX_END)) {
@@ -310,7 +313,7 @@ fn inject_codex_text(existing: &str, node_path: &str, script: &str) -> String {
     out
 }
 
-/// 从 TOML 内容里移除 Nezha 块。
+/// 从 TOML 内容里移除 Aeroric 块。
 fn uninject_codex_text(existing: &str) -> String {
     let (Some(begin), Some(end)) = (existing.find(CODEX_BEGIN), existing.find(CODEX_END)) else {
         return existing.to_string();
@@ -356,7 +359,7 @@ fn inject_codex_config_at(path: &Path, node_path: &str, script: &str) -> Result<
     let updated = inject_codex_text(&existing, node_path, script);
     // 校验合法 TOML
     toml::from_str::<toml::Value>(&updated)
-        .map_err(|e| format!("Nezha-injected TOML parse error: {}", e))?;
+        .map_err(|e| format!("Aeroric-injected TOML parse error: {}", e))?;
     atomic_write(path, &updated)
 }
 
@@ -482,13 +485,13 @@ pub fn ensure_installed() -> HookInstallStatus {
     };
     status.script_path = script.clone();
 
-    // Claude:命令行 --settings 模式——把 hooks 写进 Nezha 自有文件,启动任务时通过
+    // Claude:命令行 --settings 模式——把 hooks 写进 Aeroric 自有文件,启动任务时通过
     // `--settings <path>` 传入,完全不修改用户的 ~/.claude/settings.json。
     match write_claude_settings(&node, &script) {
         Ok(_) => status.claude_installed = true,
         Err(e) => status.error = format!("claude settings: {}", e),
     }
-    // 迁移清理:移除旧版本曾注入用户 ~/.claude/settings.json 的 nezha 条目(best-effort,
+    // 迁移清理:移除旧版本曾注入用户 ~/.claude/settings.json 的 nezha/aeroric 条目(best-effort,
     // 失败不影响命令行模式)。
     if let Ok(p) = claude_settings_path() {
         let _ = uninject_claude_settings_at(&p);
@@ -508,11 +511,11 @@ pub fn ensure_installed() -> HookInstallStatus {
     status
 }
 
-/// 卸载 Nezha 注入的 hooks(不删除脚本本身)。
+/// 卸载 Aeroric 注入的 hooks(不删除脚本本身)。
 pub fn uninstall() -> Result<(), String> {
-    // Claude:删除 Nezha 自有 settings 文件,并清理旧版本可能残留在用户
+    // Claude:删除 Aeroric 自有 settings 文件,并清理旧版本可能残留在用户
     // ~/.claude/settings.json 里的注入条目。
-    if let Ok(p) = nezha_claude_settings_path() {
+    if let Ok(p) = aeroric_claude_settings_path() {
         let _ = fs::remove_file(&p);
     }
     let claude = claude_settings_path()?;
@@ -533,17 +536,17 @@ pub fn current_status() -> HookInstallStatus {
             .unwrap_or_default(),
         ..Default::default()
     };
-    // Claude 命令行模式:Nezha 自有 settings 文件存在即视为就绪。
-    if let Ok(p) = nezha_claude_settings_path() {
+    // Claude 命令行模式:Aeroric 自有 settings 文件存在即视为就绪。
+    if let Ok(p) = aeroric_claude_settings_path() {
         status.claude_installed = p.exists();
     }
     if let Ok(p) = codex_config_path() {
-        status.codex_installed = codex_config_has_nezha(&p);
+        status.codex_installed = codex_config_has_aeroric(&p);
     }
     status
 }
 
-fn codex_config_has_nezha(path: &Path) -> bool {
+fn codex_config_has_aeroric(path: &Path) -> bool {
     let Ok(raw) = fs::read_to_string(path) else {
         return false;
     };
@@ -627,27 +630,27 @@ mod tests {
     fn claude_settings_value_escapes_windows_paths() {
         // 命令是裸 node + 双引号脚本路径;序列化后脚本路径的反斜杠必须被正确转义,
         // 保证 Windows 路径是合法 JSON。
-        let v = build_claude_settings_value(r"C:\node.exe", r"C:\hooks\nezha-hook.mjs");
+        let v = build_claude_settings_value(r"C:\node.exe", r"C:\hooks\aeroric-hook.mjs");
         let raw = serde_json::to_string(&v).unwrap();
-        assert!(raw.contains(r"C:\\hooks\\nezha-hook.mjs"));
+        assert!(raw.contains(r"C:\\hooks\\aeroric-hook.mjs"));
         // 回环解析得到原始命令
         let parsed: Value = serde_json::from_str(&raw).unwrap();
         let cmd = parsed["hooks"]["SessionStart"][0]["hooks"][0]["command"]
             .as_str()
             .unwrap();
-        assert_eq!(cmd, "node \"C:\\hooks\\nezha-hook.mjs\"");
+        assert_eq!(cmd, "node \"C:\\hooks\\aeroric-hook.mjs\"");
     }
 
     // ── Claude 旧版注入清理(迁移)────────────────────────────────────────────
 
     #[test]
-    fn claude_uninject_removes_nezha_only() {
-        // 模拟旧版本注入后的 settings:用户条目 + 带 marker 的 nezha 条目
+    fn claude_uninject_removes_aeroric_only() {
+        // 模拟旧版本注入后的 settings:用户条目 + 带 marker 的 aeroric 条目
         let injected = serde_json::json!({
             "hooks": {
                 "Stop": [
                     { "hooks": [{ "type": "command", "command": "user-script.sh" }] },
-                    { NEZHA_MARKER_FIELD: "1", "hooks": [{ "type": "command", "command": "nezha" }] }
+                    { AERORIC_MARKER_FIELD: "1", "hooks": [{ "type": "command", "command": "aeroric" }] }
                 ]
             }
         });
@@ -655,7 +658,7 @@ mod tests {
         // Stop 数组里应只剩用户的条目
         let stop = restored["hooks"]["Stop"].as_array().unwrap();
         assert_eq!(stop.len(), 1);
-        assert!(!is_nezha_managed(&stop[0]));
+        assert!(!is_aeroric_managed(&stop[0]));
     }
 
     #[test]
@@ -752,7 +755,7 @@ command = \"echo user-stop\"\n";
 
     #[test]
     fn codex_inject_file_round_trip() {
-        let tmp = std::env::temp_dir().join(format!("nezha-codex-{}.toml", std::process::id()));
+        let tmp = std::env::temp_dir().join(format!("aeroric-codex-{}.toml", std::process::id()));
         let _ = fs::remove_file(&tmp);
 
         inject_codex_config_at(&tmp, "/node", "/script.mjs").expect("inject");

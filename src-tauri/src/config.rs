@@ -5,8 +5,7 @@ use crate::storage::atomic_write;
 
 const DEFAULT_COMMIT_MESSAGE_TIMEOUT_SECS: u64 = 15;
 
-const DEFAULT_CONFIG: &str = r#"# Nezha project configuration
-# https://github.com/hanshuaikang/nezha
+const DEFAULT_CONFIG: &str = r#"# Aeroric project configuration
 
 [agent]
 # Default agent to use for new tasks: "claude", "claude_gpt55", or "codex"
@@ -69,14 +68,14 @@ impl Default for ProjectConfig {
     }
 }
 
-/// Creates `.nezha/config.toml` in the project directory if it doesn't already exist.
-/// Also ensures `.nezha/attachments/` exists.
+/// Creates `.aeroric/config.toml` in the project directory if it doesn't already exist.
+/// Also ensures `.aeroric/attachments/` exists.
 /// Returns the parsed config.
 #[tauri::command]
 pub fn init_project_config(project_path: String) -> Result<ProjectConfig, String> {
-    let nezha_dir = Path::new(&project_path).join(".nezha");
-    let config_path = nezha_dir.join("config.toml");
-    let attachments_dir = nezha_dir.join("attachments");
+    let aeroric_dir = Path::new(&project_path).join(".aeroric");
+    let config_path = aeroric_dir.join("config.toml");
+    let attachments_dir = aeroric_dir.join("attachments");
 
     fs::create_dir_all(&attachments_dir).map_err(|e| e.to_string())?;
 
@@ -90,11 +89,13 @@ pub fn init_project_config(project_path: String) -> Result<ProjectConfig, String
     Ok(config)
 }
 
-/// Reads `.nezha/config.toml` from the project directory.
+/// Reads `.aeroric/config.toml` from the project directory.
 /// Returns the default config if the file doesn't exist yet.
 #[tauri::command]
 pub fn read_project_config(project_path: String) -> Result<ProjectConfig, String> {
-    let config_path = Path::new(&project_path).join(".nezha").join("config.toml");
+    let config_path = Path::new(&project_path)
+        .join(".aeroric")
+        .join("config.toml");
     if !config_path.exists() {
         return Ok(ProjectConfig::default());
     }
@@ -103,12 +104,12 @@ pub fn read_project_config(project_path: String) -> Result<ProjectConfig, String
     Ok(config)
 }
 
-/// Writes updated config to `.nezha/config.toml`, creating the directory if needed.
+/// Writes updated config to `.aeroric/config.toml`, creating the directory if needed.
 #[tauri::command]
 pub fn write_project_config(project_path: String, config: ProjectConfig) -> Result<(), String> {
-    let nezha_dir = Path::new(&project_path).join(".nezha");
-    fs::create_dir_all(&nezha_dir).map_err(|e| e.to_string())?;
-    let config_path = nezha_dir.join("config.toml");
+    let aeroric_dir = Path::new(&project_path).join(".aeroric");
+    fs::create_dir_all(&aeroric_dir).map_err(|e| e.to_string())?;
+    let config_path = aeroric_dir.join("config.toml");
     let raw = toml::to_string_pretty(&config).map_err(|e| e.to_string())?;
     atomic_write(&config_path, &raw)
 }
@@ -123,7 +124,9 @@ fn agent_config_path(agent: &str) -> Result<std::path::PathBuf, String> {
         "claude" => Ok(home.join(".claude").join("settings.json")),
         "claude_gpt55" => Ok(home.join(".claude").join("start-gpt55.sh")),
         "codex" => Ok(home.join(".codex").join("config.toml")),
-        _ => Err(format!("Unknown agent: {}", agent)),
+        _ => crate::app_settings::get_custom_agent_profile(agent)
+            .map(|profile| std::path::PathBuf::from(profile.path))
+            .ok_or_else(|| format!("Unknown agent: {}", agent)),
     }
 }
 

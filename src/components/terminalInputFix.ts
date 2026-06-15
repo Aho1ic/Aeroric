@@ -14,6 +14,26 @@ function isSymbolInputType(inputType: string): boolean {
   return inputType === "insertText" || inputType === "insertCompositionText";
 }
 
+export function normalizeCommittedCompositionText(text: string): string {
+  const apostropheCount = (text.match(/'/g) ?? []).length;
+  const normalized = text.replace(/(?<=[A-Za-z])'(?=[A-Za-z])/g, "");
+  if (apostropheCount === 1) {
+    for (let size = 1; size <= Math.floor(normalized.length / 2); size += 1) {
+      if (normalized.length % size !== 0) continue;
+      const unit = normalized.slice(0, size);
+      if (unit && unit.repeat(normalized.length / size) === normalized) return unit;
+    }
+  }
+  return normalized;
+}
+
+export function shouldLetBrowserRenderCompositionPreview(
+  inputType: string,
+  isComposing: boolean,
+): boolean {
+  return isComposing && inputType === "insertCompositionText";
+}
+
 export function attachMacWebKitShiftInputFix(term: TerminalWithInput): () => void {
   if (!IS_MAC_WEBKIT || !term.textarea) return () => {};
 
@@ -60,7 +80,7 @@ export function attachLinuxIMEFix(
   term: Terminal,
   onDataCallback: (data: string) => void,
 ): { dispose: () => void } {
-  if (!IS_OTHER_WEBKIT || !term.textarea) {
+  if (!(IS_OTHER_WEBKIT || IS_MAC_WEBKIT) || !term.textarea) {
     const disposable = term.onData(onDataCallback);
     return { dispose: () => disposable.dispose() };
   }
@@ -68,37 +88,61 @@ export function attachLinuxIMEFix(
   const textarea = term.textarea;
   let isComposing = false;
   let compositionText = "";
+  let ignoredPostCompositionText: string | null = null;
+  let ignoredPostCompositionNormalized: string | null = null;
+  let ignorePostCompositionUntil = 0;
 
   const sendText = (text: string | null | undefined) => {
     if (!text) return;
-    onDataCallback(text);
+    onDataCallback(normalizeCommittedCompositionText(text));
   };
 
   const handleCompositionStartCapture = (event: CompositionEvent) => {
     isComposing = true;
     compositionText = "";
-    textarea.value = "";
-    event.stopImmediatePropagation();
+    void event;
   };
 
   const handleCompositionUpdateCapture = (event: CompositionEvent) => {
     compositionText = event.data ?? "";
-    event.stopImmediatePropagation();
   };
 
   const handleCompositionEndCapture = (event: CompositionEvent) => {
     const text = event.data || compositionText;
     isComposing = false;
     compositionText = "";
+    const normalized = normalizeCommittedCompositionText(text);
+    ignoredPostCompositionText = text || null;
+    ignoredPostCompositionNormalized = normalized || null;
+    ignorePostCompositionUntil = performance.now() + 180;
     textarea.value = "";
     event.stopImmediatePropagation();
-    sendText(text);
+    sendText(normalized);
   };
 
   const handleBeforeInputCapture = (event: InputEvent) => {
+    if (
+      event.inputType === "insertText" &&
+      event.data &&
+      performance.now() <= ignorePostCompositionUntil &&
+      (event.data === ignoredPostCompositionText || event.data === ignoredPostCompositionNormalized)
+    ) {
+      textarea.value = "";
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      ignoredPostCompositionText = null;
+      ignoredPostCompositionNormalized = null;
+      return;
+    }
+
+    if (shouldLetBrowserRenderCompositionPreview(event.inputType, isComposing)) {
+      compositionText = event.data ?? compositionText;
+      event.stopImmediatePropagation();
+      return;
+    }
+
     if (event.inputType === "insertCompositionText") {
       compositionText = event.data ?? compositionText;
-      event.preventDefault();
       event.stopImmediatePropagation();
       return;
     }
@@ -119,9 +163,7 @@ export function attachLinuxIMEFix(
   };
 
   const handleKeyDownCapture = (event: KeyboardEvent) => {
-    if (event.keyCode === 229 || isComposing) {
-      event.stopImmediatePropagation();
-    }
+    if (!isComposing && event.keyCode === 229) event.stopImmediatePropagation();
   };
 
   const disposable = term.onData(onDataCallback);

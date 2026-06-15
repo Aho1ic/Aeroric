@@ -20,7 +20,7 @@ describe("getAvatarGradient", () => {
   });
 
   it("相同名称始终返回相同颜色（幂等性）", () => {
-    expect(getAvatarGradient("nezha")).toEqual(getAvatarGradient("nezha"));
+    expect(getAvatarGradient("aeroric")).toEqual(getAvatarGradient("aeroric"));
   });
 
   it("不同名称通常返回不同颜色", () => {
@@ -46,7 +46,7 @@ describe("shortenPath", () => {
   });
 
   it("用户名包含点和连字符时正确处理", () => {
-    expect(shortenPath("/Users/xxxx/workspace/nezha")).toBe("~/workspace/nezha");
+    expect(shortenPath("/Users/xxxx/workspace/aeroric")).toBe("~/workspace/aeroric");
   });
 
   it("非 /Users/ 路径保持不变", () => {

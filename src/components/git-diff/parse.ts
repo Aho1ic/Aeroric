@@ -97,7 +97,7 @@ export function cleanDiffPath(raw: string, projectPath?: string): string {
   const unquoted = unquoteGitPath(raw);
   if (unquoted === "/dev/null") return unquoted;
   const withoutPrefix = unquoted.replace(/^a\//, "").replace(/^b\//, "");
-  if (/(^|\/)nezha-empty-[0-9a-f-]+\.tmp$/i.test(withoutPrefix)) {
+  if (/(^|\/)aeroric-empty-[0-9a-f-]+\.tmp$/i.test(withoutPrefix)) {
     return "/dev/null";
   }
   const normalized =

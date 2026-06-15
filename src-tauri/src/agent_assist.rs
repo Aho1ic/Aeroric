@@ -282,7 +282,7 @@ pub async fn generate_task_name(
     session_path: Option<String>,
     original_prompt: String,
 ) -> Result<String, String> {
-    if !matches!(agent.as_str(), "claude" | "claude_gpt55" | "codex") {
+    if !crate::app_settings::is_known_agent(&agent) {
         return Err(format!("Unsupported agent: {}", agent));
     }
     let is_codex = crate::app_settings::is_codex_like_agent(&agent);

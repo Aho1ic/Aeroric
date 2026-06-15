@@ -8,20 +8,16 @@ import {
   Type,
   Zap,
   Blocks,
-  Heart,
-  ExternalLink,
+  Plus,
 } from "lucide-react";
-import { openUrl } from "@tauri-apps/plugin-opener";
 import type { ThemeMode, ThemeVariant, TerminalFontSize, TaskDisplayWindow, FontFamily } from "../types";
 import { useI18n } from "../i18n";
 import s from "../styles";
 import claudeLogo from "../assets/claude.svg";
 import chatgptLogo from "../assets/chatgpt.svg";
-import wechatLogo from "../assets/wechat.png";
 
-const WECHAT_GROUP_URL = "https://github.com/hanshuaikang/nezha/issues/66";
 import { AboutPanel } from "./app-settings/AboutPanel";
-import { ThanksPanel } from "./app-settings/ThanksPanel";
+import { AddAgentPanel } from "./app-settings/AddAgentPanel";
 import { AgentConfigPanel } from "./app-settings/AgentConfigPanel";
 import { GeneralPanel } from "./app-settings/GeneralPanel";
 import { ShortcutsPanel } from "./app-settings/ShortcutsPanel";
@@ -29,64 +25,26 @@ import { ThemePanel } from "./app-settings/ThemePanel";
 import { FontPanel } from "./app-settings/FontPanel";
 import { HooksPanel } from "./app-settings/HooksPanel";
 import { SkillsPanel } from "./app-settings/SkillsPanel";
-import { getAgentSettingsFilePath } from "./app-settings/shared";
 import type { AgentKey, AppSettingsNavItem, NavKey, NavSection } from "./app-settings/types";
+import { useAgentOptions } from "../hooks/useAgentOptions";
 
-const NAV_ITEMS: AppSettingsNavItem[] = [
+const ADD_AGENT_NAV_KEY = "__add_agent__";
+
+const BASE_NAV_ITEMS: AppSettingsNavItem[] = [
   { key: "general", labelKey: "appSettings.general", section: "application", icon: SettingsIcon },
   { key: "theme", labelKey: "appSettings.theme", section: "application", icon: Monitor },
   { key: "fonts", labelKey: "appSettings.fonts", section: "application", icon: Type },
   { key: "shortcuts", labelKey: "appSettings.shortcuts", section: "application", icon: Keyboard },
   { key: "hooks", labelKey: "appSettings.hooks", section: "application", icon: Zap },
   { key: "skills", labelKey: "skill.settings.navLabel", section: "application", icon: Blocks },
-  {
-    key: "claude",
-    labelKey: "Claude Code",
-    section: "agents",
-    logo: claudeLogo,
-    filePath: getAgentSettingsFilePath("claude"),
-    lang: "json",
-  },
-  {
-    key: "claude_gpt55",
-    labelKey: "Claude GPT55",
-    section: "agents",
-    logo: chatgptLogo,
-    filePath: getAgentSettingsFilePath("claude_gpt55"),
-    lang: "shellscript",
-  },
-  {
-    key: "codex",
-    labelKey: "Codex",
-    section: "agents",
-    logo: chatgptLogo,
-    filePath: getAgentSettingsFilePath("codex"),
-    lang: "toml",
-  },
-  {
-    key: "community",
-    labelKey: "appSettings.community",
-    section: "community",
-    logo: wechatLogo,
-    url: WECHAT_GROUP_URL,
-  },
   { key: "about", labelKey: "appSettings.about", section: "about", icon: Info },
-  {
-    key: "thanks",
-    labelKey: "appSettings.thanks",
-    section: "about",
-    icon: Heart,
-    iconColor: "#ef4444",
-    iconFill: "#ef4444",
-  },
 ];
 
-const SECTION_ORDER: NavSection[] = ["application", "agents", "community", "about"];
+const SECTION_ORDER: NavSection[] = ["application", "agents", "about"];
 
 const SECTION_LABEL_KEY: Record<NavSection, string> = {
   application: "appSettings.section.application",
   agents: "appSettings.section.agents",
-  community: "appSettings.section.community",
   about: "appSettings.section.about",
 };
 
@@ -147,18 +105,45 @@ export function AppSettingsDialog({
   onMonoFontFamilyChange: (family: FontFamily) => void;
 }) {
   const { t } = useI18n();
+  const agentOptions = useAgentOptions();
   const [activeNav, setActiveNav] = useState<NavKey>("general");
 
   function handleOverlayClick(e: React.MouseEvent) {
     if (e.target === e.currentTarget) onClose();
   }
 
-  const activeItem = NAV_ITEMS.find((n) => n.key === activeNav)!;
-  const activeLabel = t(activeItem.labelKey);
+  const agentNavItems: AppSettingsNavItem[] = [
+    ...agentOptions.map((option) => ({
+      key: option.value,
+      label: option.label,
+      section: "agents" as const,
+      logo: option.codexLike ? chatgptLogo : claudeLogo,
+      filePath: option.configFile,
+      lang: option.configLang,
+    })),
+    {
+      key: ADD_AGENT_NAV_KEY,
+      labelKey: "appSettings.addAgent",
+      section: "agents" as const,
+      icon: Plus,
+    },
+  ];
+  const navItems = [
+    ...BASE_NAV_ITEMS.filter((item) => item.section !== "about"),
+    ...agentNavItems,
+    ...BASE_NAV_ITEMS.filter((item) => item.section === "about"),
+  ];
+
+  const activeItem = navItems.find((n) => n.key === activeNav) ?? navItems[0];
+  const activeAgentItem =
+    activeNav === ADD_AGENT_NAV_KEY
+      ? null
+      : agentNavItems.find((item) => item.key === activeNav) ?? null;
+  const activeLabel = activeItem.label ?? t(activeItem.labelKey ?? activeItem.key);
 
   const sectionGroups = SECTION_ORDER.map((section) => ({
     section,
-    items: NAV_ITEMS.filter((item) => item.section === section),
+    items: navItems.filter((item) => item.section === section),
   })).filter((group) => group.items.length > 0);
 
   return (
@@ -186,16 +171,11 @@ export function AppSettingsDialog({
                     fontWeight: activeNav === item.key ? 600 : 500,
                   }}
                   onClick={() => {
-                    if (item.url) {
-                      openUrl(item.url).catch(() => {});
-                    } else {
-                      setActiveNav(item.key);
-                    }
+                    setActiveNav(item.key);
                   }}
                 >
                   <NavItemIcon item={item} size={14} />
-                  {t(item.labelKey)}
-                  {item.url ? <ExternalLink size={12} style={s.settingsNavExternalIcon} /> : null}
+                  {item.label ?? t(item.labelKey ?? item.key)}
                 </button>
               ))}
             </Fragment>
@@ -246,15 +226,23 @@ export function AppSettingsDialog({
             <SkillsPanel key="skills" />
           ) : activeNav === "about" ? (
             <AboutPanel key="about" />
-          ) : activeNav === "thanks" ? (
-            <ThanksPanel key="thanks" />
-          ) : (
+          ) : activeNav === ADD_AGENT_NAV_KEY ? (
+            <AddAgentPanel key="add-agent" onSaved={(agentId) => setActiveNav(agentId)} />
+          ) : activeAgentItem ? (
             <AgentConfigPanel
               key={activeNav}
               agentKey={activeNav as AgentKey}
-              filePath={activeItem.filePath!}
-              lang={activeItem.lang!}
+              filePath={activeAgentItem.filePath!}
+              lang={activeAgentItem.lang!}
               themeVariant={themeVariant}
+            />
+          ) : (
+            <GeneralPanel
+              key="general-fallback"
+              taskDisplayWindow={taskDisplayWindow}
+              onTaskDisplayWindowChange={onTaskDisplayWindowChange}
+              attentionBadge={attentionBadge}
+              onAttentionBadgeChange={onAttentionBadgeChange}
             />
           )}
         </div>

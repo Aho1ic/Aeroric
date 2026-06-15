@@ -21,7 +21,7 @@ const PTY_EMIT_CHANNEL_CAPACITY: usize = 32;
 
 fn task_attachments_dir(project_path: &str, task_id: &str) -> std::path::PathBuf {
     Path::new(project_path)
-        .join(".nezha")
+        .join(".aeroric")
         .join("attachments")
         .join(task_id)
 }
@@ -218,14 +218,14 @@ pub(crate) fn setup_env(cmd: &mut CommandBuilder) {
     cmd.env("COLORTERM", "truecolor");
 }
 
-/// 注入 Nezha hook 守卫所需的环境变量。
-/// hook 脚本依靠 NEZHA_TASK_ID + NEZHA_EVENT_DIR 同时存在才工作,
-/// 用户在 Nezha 之外手动跑 agent 时这些变量缺失,脚本立即 exit 0。
-fn setup_nezha_env(cmd: &mut CommandBuilder, task_id: &str, agent: &str) {
+/// 注入 Aeroric hook 守卫所需的环境变量。
+/// hook 脚本依靠 AERORIC_TASK_ID + AERORIC_EVENT_DIR 同时存在才工作,
+/// 用户在 Aeroric 之外手动跑 agent 时这些变量缺失,脚本立即 exit 0。
+fn setup_aeroric_env(cmd: &mut CommandBuilder, task_id: &str, agent: &str) {
     if let Ok(dir) = crate::hooks::events_dir_for(task_id) {
-        cmd.env("NEZHA_TASK_ID", task_id);
-        cmd.env("NEZHA_EVENT_DIR", dir.to_string_lossy().as_ref());
-        cmd.env("NEZHA_AGENT", agent);
+        cmd.env("AERORIC_TASK_ID", task_id);
+        cmd.env("AERORIC_EVENT_DIR", dir.to_string_lossy().as_ref());
+        cmd.env("AERORIC_AGENT", agent);
     }
 }
 
@@ -240,11 +240,11 @@ pub(crate) fn register_pty_handles(
     task_manager
         .pty_masters
         .lock()
-        .insert(id.to_string(), master);
+        .insert(id.to_string(), Arc::new(parking_lot::Mutex::new(master)));
     task_manager
         .pty_writers
         .lock()
-        .insert(id.to_string(), writer);
+        .insert(id.to_string(), Arc::new(parking_lot::Mutex::new(writer)));
     task_manager
         .child_handles
         .lock()
@@ -502,10 +502,10 @@ pub async fn run_task(
         })
         .map_err(|e| e.to_string())?;
 
-    // 将图片保存至 .nezha/attachments/ 并获取文件路径
+    // 将图片保存至 .aeroric/attachments/ 并获取文件路径
     let image_paths = save_task_images(&project_path, &task_id, &images.unwrap_or_default())?;
 
-    // 将文本附件保存至 .nezha/attachments/ 并获取文件路径
+    // 将文本附件保存至 .aeroric/attachments/ 并获取文件路径
     // 用 spawn_blocking 把同步文件 I/O 移出 Tokio runtime（AGENTS.md 要求）
     let text_paths = {
         let project_path = project_path.clone();
@@ -564,7 +564,7 @@ pub async fn run_task(
         None
     };
 
-    // hook 链路是否可信:可信则注入 NEZHA_* 守卫变量让 hook 脚本上报事件,会话发现
+    // hook 链路是否可信:可信则注入 AERORIC_* 守卫变量让 hook 脚本上报事件,会话发现
     // 与状态全部由 event_watcher 驱动、跳过 /status 轮询 watcher;不可信(无 node /
     // 未安装 / 版本过低)则不注入 env、并回退轮询路径——否则旧版但仍支持 hook 的 agent
     // 会同时触发已安装 hook 与轮询 watcher,导致 session 注册/状态重复上报。
@@ -579,8 +579,8 @@ pub async fn run_task(
 
     let mut cmd = if is_codex {
         let mut c = build_codex_cmd(&agent_bin, &permission_mode);
-        // Codex 对非 managed 的 command hook 默认要求 trust,Nezha 注入的是新 hash 会被
-        // skip;由 Nezha 注入、来源可信,这里免 trust 直接运行。必须在 `--`/prompt 之前。
+        // Codex 对非 managed 的 command hook 默认要求 trust,Aeroric 注入的是新 hash 会被
+        // skip;由 Aeroric 注入、来源可信,这里免 trust 直接运行。必须在 `--`/prompt 之前。
         if use_hooks {
             c.arg("--dangerously-bypass-hook-trust");
         }
@@ -597,10 +597,10 @@ pub async fn run_task(
             c.arg("--session-id");
             c.arg(sid);
         }
-        // Claude:hook 可信时通过 `--settings <Nezha 自有文件>` 传入 hooks,不修改用户的
+        // Claude:hook 可信时通过 `--settings <Aeroric 自有文件>` 传入 hooks,不修改用户的
         // ~/.claude/settings.json(Claude 对 hooks 跨源 merge,用户 hook 不受影响)。
         if use_hooks {
-            if let Ok(p) = crate::hooks::nezha_claude_settings_path() {
+            if let Ok(p) = crate::hooks::aeroric_claude_settings_path() {
                 c.arg("--settings");
                 c.arg(p.to_string_lossy().as_ref());
             }
@@ -614,7 +614,7 @@ pub async fn run_task(
     cmd.cwd(&project_path);
     setup_env(&mut cmd);
     if use_hooks {
-        setup_nezha_env(&mut cmd, &task_id, &agent);
+        setup_aeroric_env(&mut cmd, &task_id, &agent);
     }
     for (key, value) in &launch.extra_env {
         cmd.env(key, value);
@@ -807,7 +807,7 @@ pub async fn resume_task(
     let launch = crate::app_settings::get_agent_launch_spec(&agent);
     let agent_bin = launch.program.clone();
     // hook 可信时会话发现/状态由 event_watcher 驱动,跳过轮询 watcher;否则回退,
-    // 且不注入 NEZHA_* 守卫变量,避免旧版但已安装 hook 的 agent 与轮询路径并行重复
+    // 且不注入 AERORIC_* 守卫变量,避免旧版但已安装 hook 的 agent 与轮询路径并行重复
     // 上报。版本统一走全局带缓存的探测。
     // 先于 cmd 构建计算,因 Codex 的 bypass flag 需加在 `resume` 子命令之前。
     let use_hooks = {
@@ -820,7 +820,7 @@ pub async fn resume_task(
     let is_codex = crate::app_settings::is_codex_like_agent(&agent);
     let mut cmd = if is_codex {
         let mut c = build_codex_cmd(&agent_bin, &permission_mode);
-        // Nezha 注入的 hook 默认未信任会被 Codex skip;来源可信,免 trust 直接运行。
+        // Aeroric 注入的 hook 默认未信任会被 Codex skip;来源可信,免 trust 直接运行。
         if use_hooks {
             c.arg("--dangerously-bypass-hook-trust");
         }
@@ -832,9 +832,9 @@ pub async fn resume_task(
         let mut c = build_claude_cmd(&agent_bin, &permission_mode);
         c.arg("--resume");
         c.arg(&session_id);
-        // Claude:命令行 `--settings` 传入 Nezha 自有 hooks 文件,不改用户配置。
+        // Claude:命令行 `--settings` 传入 Aeroric 自有 hooks 文件,不改用户配置。
         if use_hooks {
-            if let Ok(p) = crate::hooks::nezha_claude_settings_path() {
+            if let Ok(p) = crate::hooks::aeroric_claude_settings_path() {
                 c.arg("--settings");
                 c.arg(p.to_string_lossy().as_ref());
             }
@@ -844,7 +844,7 @@ pub async fn resume_task(
     cmd.cwd(&project_path);
     setup_env(&mut cmd);
     if use_hooks {
-        setup_nezha_env(&mut cmd, &task_id, &agent);
+        setup_aeroric_env(&mut cmd, &task_id, &agent);
     }
     for (key, value) in &launch.extra_env {
         cmd.env(key, value);
@@ -896,8 +896,9 @@ pub async fn send_input(
     task_id: String,
     data: String,
 ) -> Result<(), String> {
-    let mut writers = task_manager.pty_writers.lock();
-    if let Some(writer) = writers.get_mut(&task_id) {
+    let writer = task_manager.pty_writers.lock().get(&task_id).cloned();
+    if let Some(writer) = writer {
+        let mut writer = writer.lock();
         writer
             .write_all(data.as_bytes())
             .map_err(|e| e.to_string())?;
@@ -919,8 +920,9 @@ pub async fn resize_pty(
     if cols < 2 || rows < 2 || cols > 10_000 || rows > 10_000 {
         return Ok(());
     }
-    let masters = task_manager.pty_masters.lock();
-    if let Some(master) = masters.get(&task_id) {
+    let master = task_manager.pty_masters.lock().get(&task_id).cloned();
+    if let Some(master) = master {
+        let master = master.lock();
         master
             .resize(PtySize {
                 rows,

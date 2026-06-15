@@ -9,6 +9,7 @@ import {
   shouldSubmitPromptKey,
   type SendShortcut,
 } from "../../shortcuts";
+import { normalizeCommittedCompositionText } from "../terminalInputFix";
 import s from "../../styles";
 
 const FILE_CODE_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M10 12.5 8 15l2 2.5"/><path d="m14 12.5 2 2.5-2 2.5"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7z"/></svg>`;
@@ -144,6 +145,31 @@ function removeChipAtCaret(chip: HTMLElement) {
   sel?.addRange(range);
 }
 
+export function normalizeEditorCompositionText(editor: HTMLDivElement): boolean {
+  const walker = document.createTreeWalker(editor, NodeFilter.SHOW_TEXT);
+  let changed = false;
+  const nodes: Text[] = [];
+  while (walker.nextNode()) {
+    nodes.push(walker.currentNode as Text);
+  }
+  for (const node of nodes) {
+    const next = normalizeCommittedCompositionText(node.textContent ?? "");
+    if (next !== node.textContent) {
+      node.textContent = next;
+      changed = true;
+    }
+  }
+  if (!changed) return false;
+
+  const range = document.createRange();
+  range.selectNodeContents(editor);
+  range.collapse(false);
+  const sel = window.getSelection();
+  sel?.removeAllRanges();
+  sel?.addRange(range);
+  return true;
+}
+
 function serializeEditor(editor: HTMLDivElement): string {
   const parts: string[] = [];
 
@@ -190,6 +216,20 @@ function insertEditorLineBreak() {
   range.collapse(true);
   sel.removeAllRanges();
   sel.addRange(range);
+}
+
+function insertPlainTextAtSelection(text: string): boolean {
+  const sel = window.getSelection();
+  if (!sel || sel.rangeCount === 0) return false;
+  const range = sel.getRangeAt(0);
+  range.deleteContents();
+  const textNode = document.createTextNode(text);
+  range.insertNode(textNode);
+  range.setStartAfter(textNode);
+  range.collapse(true);
+  sel.removeAllRanges();
+  sel.addRange(range);
+  return true;
 }
 
 export interface PromptEditorHandle {
@@ -338,6 +378,7 @@ export function PromptEditor({
     if (!editor) return;
     // Skip processing during IME composition to prevent duplicate text on Linux WebKitGTK
     if (isComposingRef.current) return;
+    normalizeEditorCompositionText(editor);
     const text = editor.textContent || "";
     const hasChips = !!editor.querySelector("[data-file-path]");
     onSetIsEmpty(!text.trim() && !hasChips);
@@ -436,6 +477,24 @@ export function PromptEditor({
     onUpdateMention();
   }
 
+  function handleBeforeInputCapture(e: React.FormEvent<HTMLDivElement>) {
+    const event = e.nativeEvent as InputEvent;
+    if (event.inputType !== "insertText" || !event.data) return;
+    const normalized = normalizeCommittedCompositionText(event.data);
+    if (normalized === event.data) return;
+    event.preventDefault();
+    e.stopPropagation();
+    isComposingRef.current = false;
+    if (!insertPlainTextAtSelection(normalized)) return;
+    const editor = editorRef.current;
+    if (!editor) return;
+    const text = editor.textContent || "";
+    const hasChips = !!editor.querySelector("[data-file-path]");
+    onSetIsEmpty(!text.trim() && !hasChips);
+    captureContent();
+    onUpdateMention();
+  }
+
   return (
     <div style={{ position: "relative" }}>
       {isEmpty && (
@@ -464,17 +523,23 @@ export function PromptEditor({
         aria-multiline="true"
         suppressContentEditableWarning
         onInput={handleInput}
+        onBeforeInputCapture={handleBeforeInputCapture}
         onKeyDown={handleKeyDown}
         onPaste={handlePaste}
         onSelect={updateMentionState}
         onCompositionStart={() => {
           isComposingRef.current = true;
         }}
+        onCompositionUpdate={() => {
+          onSetIsEmpty(false);
+          captureContent();
+        }}
         onCompositionEnd={() => {
           isComposingRef.current = false;
           // Capture the final composed text after IME composition completes
           const editor = editorRef.current;
           if (editor) {
+            normalizeEditorCompositionText(editor);
             const text = editor.textContent || "";
             const hasChips = !!editor.querySelector("[data-file-path]");
             onSetIsEmpty(!text.trim() && !hasChips);

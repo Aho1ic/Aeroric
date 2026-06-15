@@ -39,6 +39,25 @@ pub fn get_login_shell_path() -> &'static str {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct CustomAgentProfile {
+    pub id: String,
+    pub label: String,
+    pub path: String,
+    #[serde(default = "default_custom_agent_codex_like")]
+    pub codex_like: bool,
+    #[serde(default = "default_custom_agent_config_lang")]
+    pub config_lang: String,
+}
+
+fn default_custom_agent_codex_like() -> bool {
+    true
+}
+
+fn default_custom_agent_config_lang() -> String {
+    "shellscript".to_string()
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct AppSettings {
     #[serde(default)]
     pub claude_path: String,
@@ -46,6 +65,8 @@ pub struct AppSettings {
     pub claude_gpt55_path: String,
     #[serde(default)]
     pub codex_path: String,
+    #[serde(default)]
+    pub custom_agents: Vec<CustomAgentProfile>,
     #[serde(default = "default_send_shortcut")]
     pub send_shortcut: String,
     #[serde(default = "default_shift_enter_newline")]
@@ -58,6 +79,7 @@ impl Default for AppSettings {
             claude_path: String::new(),
             claude_gpt55_path: String::new(),
             codex_path: String::new(),
+            custom_agents: Vec::new(),
             send_shortcut: default_send_shortcut(),
             terminal_shift_enter_newline: default_shift_enter_newline(),
         }
@@ -71,7 +93,31 @@ pub struct AgentLaunchSpec {
 }
 
 pub fn is_codex_like_agent(agent: &str) -> bool {
-    matches!(agent, "codex" | "claude_gpt55")
+    match agent {
+        "claude" => false,
+        "codex" | "claude_gpt55" => true,
+        other => load_settings_internal()
+            .custom_agents
+            .iter()
+            .find(|profile| profile.id == other)
+            .map(|profile| profile.codex_like)
+            .unwrap_or(true),
+    }
+}
+
+pub fn is_known_agent(agent: &str) -> bool {
+    matches!(agent, "claude" | "claude_gpt55" | "codex")
+        || load_settings_internal()
+            .custom_agents
+            .iter()
+            .any(|profile| profile.id == agent)
+}
+
+pub fn get_custom_agent_profile(agent: &str) -> Option<CustomAgentProfile> {
+    load_settings_internal()
+        .custom_agents
+        .into_iter()
+        .find(|profile| profile.id == agent)
 }
 
 fn default_claude_gpt55_path() -> String {
@@ -81,7 +127,77 @@ fn default_claude_gpt55_path() -> String {
         .unwrap_or_else(|| "~/.claude/start-gpt55.sh".to_string())
 }
 
+fn sanitize_custom_agent_id(value: &str) -> String {
+    let mut out = String::new();
+    let mut last_was_sep = false;
+    for ch in value.trim().to_ascii_lowercase().chars() {
+        let keep = ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-');
+        if keep {
+            out.push(ch);
+            last_was_sep = false;
+        } else if !last_was_sep {
+            out.push('_');
+            last_was_sep = true;
+        }
+    }
+    let trimmed = out
+        .trim_matches(|c| matches!(c, '.' | '_' | '-'))
+        .to_string();
+    match trimmed.as_str() {
+        "" => String::new(),
+        "claude" | "claude_gpt55" | "codex" => format!("local_{}", trimmed),
+        _ => trimmed,
+    }
+}
+
+fn normalize_config_lang(value: String) -> String {
+    match value.as_str() {
+        "json" | "toml" | "shellscript" => value,
+        _ => default_custom_agent_config_lang(),
+    }
+}
+
+fn normalize_custom_agent_profile(profile: CustomAgentProfile) -> Option<CustomAgentProfile> {
+    let id = sanitize_custom_agent_id(&profile.id);
+    let label = profile.label.trim().to_string();
+    let path = profile.path.trim().to_string();
+    if id.is_empty() || label.is_empty() || path.is_empty() {
+        return None;
+    }
+    Some(CustomAgentProfile {
+        id,
+        label,
+        path: resolve_agent_launch_spec_from_path(&profile.id, &path).program,
+        codex_like: profile.codex_like,
+        config_lang: normalize_config_lang(profile.config_lang),
+    })
+}
+
+fn normalize_custom_agents(profiles: Vec<CustomAgentProfile>) -> Vec<CustomAgentProfile> {
+    let mut normalized = Vec::new();
+    for profile in profiles {
+        let Some(profile) = normalize_custom_agent_profile(profile) else {
+            continue;
+        };
+        if normalized
+            .iter()
+            .any(|existing: &CustomAgentProfile| existing.id == profile.id)
+        {
+            continue;
+        }
+        normalized.push(profile);
+    }
+    normalized
+}
+
 fn get_agent_configured_path(settings: &AppSettings, agent: &str) -> String {
+    if let Some(profile) = settings
+        .custom_agents
+        .iter()
+        .find(|profile| profile.id == agent)
+    {
+        return profile.path.clone();
+    }
     match agent {
         "claude_gpt55" => {
             if settings.claude_gpt55_path.is_empty() {
@@ -118,14 +234,14 @@ fn settings_lock() -> &'static Mutex<()> {
     SETTINGS_LOCK.get_or_init(|| Mutex::new(()))
 }
 
-fn nezha_dir() -> Result<PathBuf, String> {
+fn aeroric_dir() -> Result<PathBuf, String> {
     let home =
         crate::platform::home_dir().ok_or_else(|| "Cannot find home directory".to_string())?;
-    Ok(home.join(".nezha"))
+    Ok(home.join(".aeroric"))
 }
 
 fn settings_path() -> Result<PathBuf, String> {
-    Ok(nezha_dir()?.join("settings.json"))
+    Ok(aeroric_dir()?.join("settings.json"))
 }
 
 fn detect_path(binary: &str) -> String {
@@ -355,6 +471,7 @@ fn normalize_settings(settings: AppSettings) -> AppSettings {
         )
         .program,
         codex_path: resolve_agent_launch_spec_from_path("codex", &settings.codex_path).program,
+        custom_agents: normalize_custom_agents(settings.custom_agents),
         send_shortcut: normalize_send_shortcut(settings.send_shortcut),
         terminal_shift_enter_newline: settings.terminal_shift_enter_newline,
     }
@@ -371,10 +488,11 @@ fn load_settings_unlocked() -> AppSettings {
             claude_path: detect_path("claude"),
             claude_gpt55_path: default_claude_gpt55_path(),
             codex_path: detect_path("codex"),
+            custom_agents: Vec::new(),
             send_shortcut: default_send_shortcut(),
             terminal_shift_enter_newline: default_shift_enter_newline(),
         });
-        if let Ok(dir) = nezha_dir() {
+        if let Ok(dir) = aeroric_dir() {
             let _ = fs::create_dir_all(&dir);
         }
         if let Ok(raw) = serde_json::to_string_pretty(&settings) {
@@ -425,7 +543,7 @@ pub async fn load_app_settings() -> Result<AppSettings, String> {
 pub fn save_app_settings(settings: AppSettings) -> Result<(), String> {
     {
         let _guard = settings_lock().lock();
-        let dir = nezha_dir()?;
+        let dir = aeroric_dir()?;
         fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
         let path = settings_path()?;
         let normalized = normalize_settings(settings);
@@ -449,7 +567,57 @@ pub async fn save_agent_paths(
         settings.claude_gpt55_path = claude_gpt55_path;
         settings.codex_path = codex_path;
 
-        let dir = nezha_dir()?;
+        let dir = aeroric_dir()?;
+        fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        let path = settings_path()?;
+        let normalized = normalize_settings(settings);
+        let raw = serde_json::to_string_pretty(&normalized).map_err(|e| e.to_string())?;
+        atomic_write(&path, &raw)?;
+        Ok::<AppSettings, String>(normalized)
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    clear_cached_versions();
+    Ok(normalized)
+}
+
+#[tauri::command]
+pub async fn save_custom_agent_profile(profile: CustomAgentProfile) -> Result<AppSettings, String> {
+    let normalized = tokio::task::spawn_blocking(move || {
+        let _guard = settings_lock().lock();
+        let mut settings = load_settings_unlocked();
+        let profile = normalize_custom_agent_profile(profile)
+            .ok_or_else(|| "Invalid custom agent profile".to_string())?;
+        settings
+            .custom_agents
+            .retain(|existing| existing.id != profile.id);
+        settings.custom_agents.push(profile);
+
+        let dir = aeroric_dir()?;
+        fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        let path = settings_path()?;
+        let normalized = normalize_settings(settings);
+        let raw = serde_json::to_string_pretty(&normalized).map_err(|e| e.to_string())?;
+        atomic_write(&path, &raw)?;
+        Ok::<AppSettings, String>(normalized)
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    clear_cached_versions();
+    Ok(normalized)
+}
+
+#[tauri::command]
+pub async fn delete_custom_agent_profile(id: String) -> Result<AppSettings, String> {
+    let normalized = tokio::task::spawn_blocking(move || {
+        let _guard = settings_lock().lock();
+        let mut settings = load_settings_unlocked();
+        let normalized_id = sanitize_custom_agent_id(&id);
+        settings
+            .custom_agents
+            .retain(|profile| profile.id != normalized_id);
+
+        let dir = aeroric_dir()?;
         fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
         let path = settings_path()?;
         let normalized = normalize_settings(settings);
@@ -470,7 +638,7 @@ pub async fn save_send_shortcut(send_shortcut: String) -> Result<AppSettings, St
         let mut settings = load_settings_unlocked();
         settings.send_shortcut = normalize_send_shortcut(send_shortcut);
 
-        let dir = nezha_dir()?;
+        let dir = aeroric_dir()?;
         fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
         let path = settings_path()?;
         let normalized = normalize_settings(settings);
@@ -489,7 +657,7 @@ pub async fn save_shift_enter_newline(enabled: bool) -> Result<AppSettings, Stri
         let mut settings = load_settings_unlocked();
         settings.terminal_shift_enter_newline = enabled;
 
-        let dir = nezha_dir()?;
+        let dir = aeroric_dir()?;
         fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
         let path = settings_path()?;
         let normalized = normalize_settings(settings);
@@ -606,6 +774,15 @@ pub async fn detect_agent_versions_for_settings(
     tokio::task::spawn_blocking(move || detect_versions_for_settings(&settings))
         .await
         .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn detect_agent_version(agent: String) -> Result<String, String> {
+    tokio::task::spawn_blocking(move || {
+        detect_version(&get_agent_launch_spec(&agent)).unwrap_or_default()
+    })
+    .await
+    .map_err(|e| e.to_string())
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]

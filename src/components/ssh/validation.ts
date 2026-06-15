@@ -2,6 +2,7 @@ import type { SshConnection } from "../../types";
 
 export interface SshConnectionDraft {
   name: string;
+  group: string;
   host: string;
   port: string;
   username: string;
@@ -15,6 +16,7 @@ export type SshConnectionDraftErrors = Partial<Record<keyof SshConnectionDraft, 
 export function draftFromConnection(connection?: SshConnection | null): SshConnectionDraft {
   return {
     name: connection?.name ?? "",
+    group: connection?.group ?? "",
     host: connection?.host ?? "",
     port: String(connection?.port ?? 22),
     username: connection?.username ?? "",
@@ -56,9 +58,11 @@ export function normalizeSshConnectionDraft(
   const identityFile = draft.identityFile.trim();
   const password = draft.password.trim();
   const remotePath = draft.remotePath.trim();
+  const group = draft.group.trim() || existing?.group?.trim() || "";
   return {
     id: existing?.id ?? String(idSeed),
     name: draft.name.trim(),
+    ...(group ? { group } : {}),
     host: draft.host.trim(),
     port,
     username: draft.username.trim(),

@@ -15,6 +15,7 @@ import type {
   TaskDisplayWindow,
   SkillHubConfig,
   SshConnection,
+  CondaEnvironment,
 } from "./types";
 import {
   isActiveTaskStatus,
@@ -33,6 +34,7 @@ import type { FontFamily } from "./types";
 import { WelcomePage } from "./components/WelcomePage";
 import type { SshProjectInput } from "./components/ssh/SshProjectDialog";
 import { ProjectPage } from "./components/ProjectPage";
+import { selectDefaultCondaEnvironment } from "./components/file-viewer/run";
 import { SKILL_HUB_CHANGED_EVENT } from "./components/app-settings/types";
 import { useToast } from "./components/Toast";
 import { isHideWindowShortcut } from "./shortcuts";
@@ -41,6 +43,7 @@ import { isCodexLikeAgent } from "./agents";
 import { useTerminalManager } from "./hooks/useTerminalManager";
 import { useWorktreeDiffStats } from "./hooks/useWorktreeDiffStats";
 import { useI18n } from "./i18n";
+import { createProjectTaskPersister } from "./taskPersistence";
 import s from "./styles";
 import "./App.css";
 
@@ -68,26 +71,21 @@ function persistProjects(
   });
 }
 
+const queuedProjectTaskPersist = createProjectTaskPersister((projectId, tasks) =>
+  invoke("save_project_tasks", { projectId, tasks }),
+);
+
 function persistProjectTasks(
   projectId: string,
   allTasks: Task[],
   onError: (msg: string) => void,
   formatError: (error: string, projectId: string) => string,
 ) {
-  invoke("save_project_tasks", {
-    projectId,
-    tasks: allTasks.filter((t) => t.projectId === projectId),
-  }).catch((e: unknown) => {
-    console.error(e);
-    onError(formatError(String(e), projectId));
-  });
+  queuedProjectTaskPersist(projectId, allTasks, { onError, formatError });
 }
 
 function persistProjectTasksQuietly(projectId: string, allTasks: Task[]) {
-  invoke("save_project_tasks", {
-    projectId,
-    tasks: allTasks.filter((t) => t.projectId === projectId),
-  }).catch(console.error);
+  queuedProjectTaskPersist(projectId, allTasks);
 }
 
 interface ProjectViewState {
@@ -149,7 +147,7 @@ function getSystemPrefersDark() {
 }
 
 function getInitialThemeMode(): ThemeMode {
-  const stored = localStorage.getItem("nezha:theme");
+  const stored = localStorage.getItem("aeroric:theme");
   return stored === "dark" || stored === "light" || stored === "system" || stored === "eyecare"
     ? stored
     : "system";
@@ -161,26 +159,28 @@ function resolveThemeVariant(mode: ThemeMode, systemPrefersDark: boolean): Theme
 }
 
 function getInitialTerminalFontSize(): TerminalFontSize {
-  const stored = localStorage.getItem("nezha:terminalFontSize");
+  const stored = localStorage.getItem("aeroric:terminalFontSize");
   if (stored == null) return DEFAULT_TERMINAL_FONT_SIZE;
   const parsed = Number(stored);
   return Number.isFinite(parsed) ? clampTerminalFontSize(parsed) : DEFAULT_TERMINAL_FONT_SIZE;
 }
 
 function getInitialTaskDisplayWindow(): TaskDisplayWindow {
-  const stored = localStorage.getItem("nezha:taskDisplayWindow");
+  const stored = localStorage.getItem("aeroric:taskDisplayWindow");
   return stored == null ? DEFAULT_TASK_DISPLAY_WINDOW : normalizeTaskDisplayWindow(stored);
 }
 
 function getInitialAttentionBadge(): boolean {
   // 默认开启:项目栏显示待确认任务数量角标;关闭后回退为黄色小圆点
-  return localStorage.getItem("nezha:attentionBadge") !== "0";
+  return localStorage.getItem("aeroric:attentionBadge") !== "0";
 }
 
 function getInitialFontFamily(key: string, fallback: FontFamily): FontFamily {
   const stored = localStorage.getItem(key);
   return stored || fallback;
 }
+
+const SELECTED_CONDA_ENV_KEY = "aeroric:selectedCondaEnvPath";
 
 function App() {
   const { showToast } = useToast();
@@ -197,10 +197,10 @@ function App() {
   );
   const [attentionBadge, setAttentionBadge] = useState<boolean>(getInitialAttentionBadge);
   const [uiFontFamily, setUiFontFamily] = useState<FontFamily>(() =>
-    getInitialFontFamily("nezha:uiFontFamily", DEFAULT_UI_FONT),
+    getInitialFontFamily("aeroric:uiFontFamily", DEFAULT_UI_FONT),
   );
   const [monoFontFamily, setMonoFontFamily] = useState<FontFamily>(() =>
-    getInitialFontFamily("nezha:monoFontFamily", DEFAULT_MONO_FONT),
+    getInitialFontFamily("aeroric:monoFontFamily", DEFAULT_MONO_FONT),
   );
   const [projects, setProjects] = useState<Project[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
@@ -210,10 +210,31 @@ function App() {
   const [taskRunCounts, setTaskRunCounts] = useState<Record<string, number>>({});
   const [skillHubConfig, setSkillHubConfig] = useState<SkillHubConfig | null>(null);
   const [sshConnections, setSshConnections] = useState<SshConnection[]>([]);
+  const [condaEnvironments, setCondaEnvironments] = useState<CondaEnvironment[]>([]);
+  const [selectedCondaEnvPath, setSelectedCondaEnvPath] = useState<string | null>(() =>
+    localStorage.getItem(SELECTED_CONDA_ENV_KEY),
+  );
   const [hubMode, setHubMode] = useState(false);
 
   const tm = useTerminalManager();
   const pendingResumeStartsRef = useRef<Record<string, () => void>>({});
+
+  useEffect(() => {
+    invoke<CondaEnvironment[]>("detect_conda_environments")
+      .then((envs) => {
+        setCondaEnvironments(envs);
+        setSelectedCondaEnvPath((prev) => selectDefaultCondaEnvironment(envs, prev)?.path ?? null);
+      })
+      .catch(() => setCondaEnvironments([]));
+  }, []);
+
+  useEffect(() => {
+    if (selectedCondaEnvPath) {
+      localStorage.setItem(SELECTED_CONDA_ENV_KEY, selectedCondaEnvPath);
+    } else {
+      localStorage.removeItem(SELECTED_CONDA_ENV_KEY);
+    }
+  }, [selectedCondaEnvPath]);
 
   const formatSaveProjectsError = useCallback(
     (error: string) => t("toast.saveProjectsFailed", { error }),
@@ -290,7 +311,7 @@ function App() {
     const root = document.documentElement;
     root.classList.toggle("dark", themeVariant === "dark");
     root.classList.toggle("eyecare", themeVariant === "eyecare");
-    localStorage.setItem("nezha:theme", themeMode);
+    localStorage.setItem("aeroric:theme", themeMode);
   }, [themeVariant, themeMode]);
 
   useEffect(() => {
@@ -319,26 +340,26 @@ function App() {
   }, []);
 
   useEffect(() => {
-    localStorage.setItem("nezha:terminalFontSize", String(terminalFontSize));
+    localStorage.setItem("aeroric:terminalFontSize", String(terminalFontSize));
   }, [terminalFontSize]);
 
   useEffect(() => {
-    localStorage.setItem("nezha:taskDisplayWindow", String(taskDisplayWindow));
+    localStorage.setItem("aeroric:taskDisplayWindow", String(taskDisplayWindow));
   }, [taskDisplayWindow]);
 
   useEffect(() => {
-    localStorage.setItem("nezha:attentionBadge", attentionBadge ? "1" : "0");
+    localStorage.setItem("aeroric:attentionBadge", attentionBadge ? "1" : "0");
   }, [attentionBadge]);
 
   useEffect(() => {
     const value = uiFontFamily.trim() || DEFAULT_UI_FONT;
-    localStorage.setItem("nezha:uiFontFamily", value);
+    localStorage.setItem("aeroric:uiFontFamily", value);
     document.documentElement.style.setProperty("--font-ui", value);
   }, [uiFontFamily]);
 
   useEffect(() => {
     const value = monoFontFamily.trim() || DEFAULT_MONO_FONT;
-    localStorage.setItem("nezha:monoFontFamily", value);
+    localStorage.setItem("aeroric:monoFontFamily", value);
     document.documentElement.style.setProperty("--font-mono", value);
   }, [monoFontFamily]);
 
@@ -356,7 +377,7 @@ function App() {
 
   useEffect(() => {
     async function init() {
-      // Load projects from ~/.nezha/projects.json
+      // Load projects from ~/.aeroric/projects.json
       const loadedProjects = await invoke<Project[]>("load_projects");
       const loadedSshConnections = await invoke<SshConnection[]>("load_ssh_connections");
       setProjects(loadedProjects);
@@ -1314,6 +1335,9 @@ function App() {
               onMonoFontFamilyChange={setMonoFontFamily}
               sshConnections={sshConnections}
               onSshConnectionsChange={handleSshConnectionsChange}
+              condaEnvironments={condaEnvironments}
+              selectedCondaEnvPath={selectedCondaEnvPath}
+              onSelectedCondaEnvPathChange={setSelectedCondaEnvPath}
             />
           );
         })}

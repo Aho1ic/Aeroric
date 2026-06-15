@@ -1,17 +1,21 @@
-import { useState, useMemo } from "react";
+import { useCallback, useState, useMemo } from "react";
 import {
   Search,
   FolderOpen,
+  ChevronDown,
   GitBranch,
   Layers,
   Plus,
   Server,
+  Container,
   Trash2,
   Clock,
   Blocks,
   Pin,
   PinOff,
+  ArrowLeftRight,
 } from "lucide-react";
+import * as Popover from "@radix-ui/react-popover";
 import type {
   Project,
   Task,
@@ -30,7 +34,9 @@ import { SidebarFooterActions } from "./SidebarFooterActions";
 import { OPEN_APP_SETTINGS_EVENT } from "./app-settings/types";
 import { TimelineView } from "./TimelineView";
 import { SkillHubView } from "./skill-hub/SkillHubView";
-import { SshProjectDialog, type SshProjectInput } from "./ssh/SshProjectDialog";
+import { SshProjectPage, type SshProjectInput } from "./ssh/SshProjectDialog";
+import { SftpPanel } from "./sftp/SftpPanel";
+import { DockerServiceView } from "./docker/DockerServiceView";
 import { useI18n, pluralKey } from "../i18n";
 import s from "../styles";
 
@@ -55,9 +61,11 @@ function SidebarItem({
         color: active ? "var(--text-primary)" : "var(--text-muted)",
       }}
       onClick={onClick}
+      title={label}
+      aria-label={label}
     >
       <span style={{ display: "flex", alignItems: "center" }}>{icon}</span>
-      <span style={{ marginLeft: 10, fontSize: 13, fontWeight: active ? 600 : 500 }}>{label}</span>
+      <span style={{ marginLeft: 6, fontSize: 12, fontWeight: active ? 650 : 540 }}>{label}</span>
       {meta && <span style={s.sidebarItemMeta}>{meta}</span>}
     </div>
   );
@@ -151,8 +159,24 @@ export function WelcomePage({
   const [query, setQuery] = useState("");
   const [hov, setHov] = useState<string | null>(null);
   const [searchFocused, setSearchFocused] = useState(false);
-  const [view, setView] = useState<"projects" | "timeline" | "skills">("projects");
-  const [sshProjectDialogOpen, setSshProjectDialogOpen] = useState(false);
+  const [view, setView] = useState<"projects" | "timeline" | "skills" | "docker" | "ssh">("projects");
+  const [openProjectMenu, setOpenProjectMenu] = useState(false);
+  const [sftpOpen, setSftpOpen] = useState(false);
+  const sshGroups = useMemo(
+    () =>
+      Array.from(
+        new Set(
+          sshConnections
+            .map((connection) => connection.group?.trim())
+            .filter((group): group is string => Boolean(group)),
+        ),
+      ),
+    [sshConnections],
+  );
+  const switchWelcomeView = useCallback((nextView: "projects" | "timeline" | "skills" | "docker" | "ssh") => {
+    setSftpOpen(false);
+    setView(nextView);
+  }, []);
 
   const filtered = useMemo(() => {
     if (!query.trim()) return projects;
@@ -168,11 +192,10 @@ export function WelcomePage({
         <div style={s.sidebar}>
           <div style={s.sidebarBrand}>
             <div style={s.sidebarBrandIcon}>
-              <span style={s.sidebarBrandBadge}>NZ</span>
+              <span style={s.sidebarBrandBadge}>A</span>
             </div>
             <div>
-              <div style={s.sidebarBrandTitle}>Nezha</div>
-              <div style={s.sidebarBrandMeta}>{t("welcome.agentWorkspace")}</div>
+              <div style={s.sidebarBrandTitle}>Aeroric</div>
             </div>
           </div>
 
@@ -182,19 +205,31 @@ export function WelcomePage({
               icon={<Layers size={15} />}
               label={t("welcome.projects")}
               active={view === "projects"}
-              onClick={() => setView("projects")}
+              onClick={() => switchWelcomeView("projects")}
             />
             <SidebarItem
               icon={<Clock size={15} />}
               label={t("welcome.timeline")}
               active={view === "timeline"}
-              onClick={() => setView("timeline")}
+              onClick={() => switchWelcomeView("timeline")}
             />
             <SidebarItem
               icon={<Blocks size={15} />}
               label={t("welcome.skillHub")}
               active={view === "skills"}
-              onClick={() => setView("skills")}
+              onClick={() => switchWelcomeView("skills")}
+            />
+            <SidebarItem
+              icon={<Container size={15} />}
+              label={t("docker.title")}
+              active={view === "docker"}
+              onClick={() => switchWelcomeView("docker")}
+            />
+            <SidebarItem
+              icon={<ArrowLeftRight size={15} />}
+              label={t("sftp.title")}
+              active={sftpOpen}
+              onClick={() => setSftpOpen(true)}
             />
           </nav>
 
@@ -219,7 +254,16 @@ export function WelcomePage({
           </div>
         </div>
 
-        {view === "timeline" ? (
+        {sftpOpen ? (
+          <SftpPanel
+            sshConnections={sshConnections}
+            localDefaultPath="/Users/macbook"
+            active={sftpOpen}
+            width="100%"
+            themeVariant={themeVariant}
+            onClose={() => setSftpOpen(false)}
+          />
+        ) : view === "timeline" ? (
           <TimelineView
             projects={allProjects}
             tasks={tasks}
@@ -240,6 +284,19 @@ export function WelcomePage({
             onOpenAppSettings={() =>
               window.dispatchEvent(new CustomEvent(OPEN_APP_SETTINGS_EVENT))
             }
+          />
+        ) : view === "docker" ? (
+          <DockerServiceView />
+        ) : view === "ssh" ? (
+          <SshProjectPage
+            connections={sshConnections}
+            groups={sshGroups}
+            onConnectionsChange={onSshConnectionsChange}
+            onClose={() => switchWelcomeView("projects")}
+            onOpen={(input) => {
+              onOpenSshProject(input);
+              switchWelcomeView("projects");
+            }}
           />
         ) : (
           <div style={s.welcomePane}>
@@ -269,14 +326,45 @@ export function WelcomePage({
               </div>
 
               <div style={s.actionRow}>
-                <button style={s.secondaryActionBtn} onClick={() => setSshProjectDialogOpen(true)}>
-                  <Server size={14} strokeWidth={2.2} />
-                  <span>{t("sshProject.open")}</span>
-                </button>
-                <button style={s.primaryActionBtn} onClick={onOpen}>
-                  <Plus size={14} strokeWidth={2.3} />
-                  <span>{t("welcome.openProject")}</span>
-                </button>
+                <Popover.Root open={openProjectMenu} onOpenChange={setOpenProjectMenu}>
+                  <Popover.Trigger asChild>
+                    <button style={s.primaryActionBtn}>
+                      <Plus size={14} strokeWidth={2.3} />
+                      <span>{t("welcome.openProject")}</span>
+                      <ChevronDown size={13} strokeWidth={2.3} />
+                    </button>
+                  </Popover.Trigger>
+                  <Popover.Portal>
+                    <Popover.Content
+                      sideOffset={8}
+                      align="end"
+                      style={{ ...s.toolbarMenuContent, minWidth: 190 }}
+                    >
+                      <button
+                        type="button"
+                        style={{ ...s.toolbarMenuItem, width: "100%", border: "none", background: "transparent" }}
+                        onClick={() => {
+                          setOpenProjectMenu(false);
+                          onOpen();
+                        }}
+                      >
+                        <FolderOpen size={14} strokeWidth={2.1} color="var(--text-muted)" />
+                        <span>{t("welcome.openLocalProject")}</span>
+                      </button>
+                      <button
+                        type="button"
+                        style={{ ...s.toolbarMenuItem, width: "100%", border: "none", background: "transparent" }}
+                        onClick={() => {
+                          setOpenProjectMenu(false);
+                          switchWelcomeView("ssh");
+                        }}
+                      >
+                        <Server size={14} strokeWidth={2.1} color="var(--text-muted)" />
+                        <span>{t("welcome.openRemoteHost")}</span>
+                      </button>
+                    </Popover.Content>
+                  </Popover.Portal>
+                </Popover.Root>
               </div>
             </div>
 
@@ -407,17 +495,6 @@ export function WelcomePage({
           </div>
         )}
       </div>
-      {sshProjectDialogOpen && (
-        <SshProjectDialog
-          connections={sshConnections}
-          onConnectionsChange={onSshConnectionsChange}
-          onClose={() => setSshProjectDialogOpen(false)}
-          onOpen={(input) => {
-            onOpenSshProject(input);
-            setSshProjectDialogOpen(false);
-          }}
-        />
-      )}
     </div>
   );
 }

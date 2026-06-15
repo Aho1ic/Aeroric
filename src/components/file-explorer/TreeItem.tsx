@@ -10,6 +10,7 @@ export function TreeItem({
   contextPath,
   onSelect,
   onToggle,
+  onOpen,
   onContextMenu,
 }: {
   node: TreeNode;
@@ -18,6 +19,7 @@ export function TreeItem({
   contextPath: string | null;
   onSelect: (node: TreeNode) => void;
   onToggle: (path: string) => void;
+  onOpen: (node: TreeNode) => void;
   onContextMenu: (e: React.MouseEvent, node: TreeNode) => void;
 }) {
   const isSelected = selectedPath === node.path;
@@ -25,7 +27,8 @@ export function TreeItem({
   const isHighlighted = isSelected || isContextTarget;
   return (
     <div
-      onClick={() => (node.is_dir ? onToggle(node.path) : onSelect(node))}
+      onClick={() => onSelect(node)}
+      onDoubleClick={() => onOpen(node)}
       onContextMenu={(e) => onContextMenu(e, node)}
       style={{
         ...s.fileTreeRow,
@@ -43,7 +46,14 @@ export function TreeItem({
         }
       }}
     >
-      <span style={s.fileTreeChevron}>
+      <span
+        style={s.fileTreeChevron}
+        onClick={(e) => {
+          if (!node.is_dir) return;
+          e.stopPropagation();
+          onToggle(node.path);
+        }}
+      >
         {node.is_dir && (node.expanded ? <ChevronDown size={11} /> : <ChevronRight size={11} />)}
       </span>
       <FileIcon

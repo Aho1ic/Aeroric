@@ -33,6 +33,7 @@ describe("validateSshConnectionDraft", () => {
           identityFile: "",
           password: "",
           remotePath: "",
+          group: "",
         }),
     ).toEqual({
       name: "Name is required.",
@@ -55,6 +56,7 @@ describe("normalizeSshConnectionDraft", () => {
           identityFile: " ",
           password: " ",
           remotePath: " /srv/app ",
+          group: " 生产 ",
         },
         123,
         456,
@@ -66,6 +68,7 @@ describe("normalizeSshConnectionDraft", () => {
       port: 2200,
       username: "deploy",
       remotePath: "/srv/app",
+      group: "生产",
       createdAt: 456,
     });
   });
@@ -81,6 +84,7 @@ describe("normalizeSshConnectionDraft", () => {
           identityFile: "",
           password: " secret ",
           remotePath: "",
+          group: "",
         },
         123,
         456,
@@ -97,10 +101,39 @@ describe("normalizeSshConnectionDraft", () => {
           identityFile: "",
           password: " ",
           remotePath: "",
+          group: "",
         },
         123,
         456,
       ),
     ).not.toHaveProperty("password");
+  });
+
+  it("preserves an existing connection group when editing without a new group", () => {
+    expect(
+      normalizeSshConnectionDraft(
+        {
+          name: "prod",
+          host: "server.example.com",
+          port: "22",
+          username: "deploy",
+          identityFile: "",
+          password: "",
+          remotePath: "",
+          group: "",
+        },
+        123,
+        456,
+        {
+          id: "existing",
+          name: "old",
+          host: "old.example.com",
+          port: 22,
+          username: "root",
+          group: "默认分组",
+          createdAt: 111,
+        },
+      ),
+    ).toMatchObject({ id: "existing", group: "默认分组", createdAt: 111 });
   });
 });

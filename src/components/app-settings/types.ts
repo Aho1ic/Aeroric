@@ -1,19 +1,9 @@
 import type { LucideIcon } from "lucide-react";
 import type { SendShortcut } from "../../shortcuts";
+import type { AgentType } from "../../types";
+import type { CustomAgentProfile } from "../../agents";
 
-export type NavKey =
-  | "general"
-  | "theme"
-  | "fonts"
-  | "shortcuts"
-  | "hooks"
-  | "skills"
-  | "about"
-  | "thanks"
-  | "community"
-  | "claude"
-  | "claude_gpt55"
-  | "codex";
+export type NavKey = string;
 
 export interface HookInstallStatus {
   node_path: string;
@@ -37,6 +27,7 @@ export interface AppSettings {
   claude_path: string;
   claude_gpt55_path: string;
   codex_path: string;
+  custom_agents?: CustomAgentProfile[];
   send_shortcut: SendShortcut;
   terminal_shift_enter_newline: boolean;
 }
@@ -47,13 +38,14 @@ export interface AgentVersions {
   codex_version: string;
 }
 
-export type AgentKey = "claude" | "claude_gpt55" | "codex";
+export type AgentKey = AgentType;
 
-export type NavSection = "application" | "agents" | "community" | "about";
+export type NavSection = "application" | "agents" | "about";
 
 export interface AppSettingsNavItem {
   key: NavKey;
-  labelKey: string;
+  labelKey?: string;
+  label?: string;
   section: NavSection;
   icon?: LucideIcon;
   /** 覆盖图标描边颜色（默认 var(--text-secondary)） */
@@ -63,13 +55,11 @@ export interface AppSettingsNavItem {
   logo?: string;
   filePath?: string;
   lang?: string;
-  /** 设置后点击该项不切换面板，而是用浏览器打开此外链 */
-  url?: string;
 }
 
-export const APP_SETTINGS_CHANGED_EVENT = "nezha:app-settings-changed";
-export const SKILL_HUB_CHANGED_EVENT = "nezha:skill-hub-changed";
-export const OPEN_APP_SETTINGS_EVENT = "nezha:open-app-settings";
+export const APP_SETTINGS_CHANGED_EVENT = "aeroric:app-settings-changed";
+export const SKILL_HUB_CHANGED_EVENT = "aeroric:skill-hub-changed";
+export const OPEN_APP_SETTINGS_EVENT = "aeroric:open-app-settings";
 
 /**
  * `SKILL_HUB_CHANGED_EVENT` 可携带 `detail.projects`（来自后端 `set_skill_hub_path` 的完整列表），

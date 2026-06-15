@@ -204,8 +204,8 @@ export function TerminalView({
         });
     }
     loadNewlineShortcut();
-    window.addEventListener("nezha:app-settings-changed", loadNewlineShortcut);
-    return () => window.removeEventListener("nezha:app-settings-changed", loadNewlineShortcut);
+    window.addEventListener("aeroric:app-settings-changed", loadNewlineShortcut);
+    return () => window.removeEventListener("aeroric:app-settings-changed", loadNewlineShortcut);
   }, []);
 
   useEffect(() => {

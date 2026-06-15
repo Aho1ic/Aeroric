@@ -9,7 +9,13 @@ import { useI18n } from "../i18n";
 import { writeClipboardText } from "./file-explorer/clipboard";
 import { FileExplorerContextMenu } from "./file-explorer/ContextMenu";
 import { CreateInputRow } from "./file-explorer/CreateInputRow";
+import { RenameInputRow } from "./file-explorer/RenameInputRow";
 import { TreeItem } from "./file-explorer/TreeItem";
+import {
+  fileExplorerClickAction,
+  fileExplorerKeyAction,
+  pasteTargetDirectory,
+} from "./file-explorer/keyboard";
 import {
   AUTO_REFRESH_MS,
   ROW_HEIGHT,
@@ -63,9 +69,14 @@ export function FileExplorer({
     kind: CreateKind;
   } | null>(null);
   const [creatingValue, setCreatingValue] = useState("");
+  const [renamingPath, setRenamingPath] = useState<string | null>(null);
+  const [renamingValue, setRenamingValue] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
+  const renameInputRef = useRef<HTMLInputElement>(null);
   const commitInFlightRef = useRef(false);
   const deleteInFlightRef = useRef(false);
+  const renameInFlightRef = useRef(false);
+  const pasteInFlightRef = useRef(false);
 
   const handleContextMenu = useCallback((e: React.MouseEvent, node: TreeNode) => {
     e.preventDefault();
@@ -209,6 +220,10 @@ export function FileExplorer({
     () => flattenVisible(nodes, projectPath, creating),
     [nodes, projectPath, creating],
   );
+  const selectedNode = useMemo(
+    () => (selectedPath ? findNode(nodes, selectedPath) : null),
+    [nodes, selectedPath],
+  );
 
   // The create-input row is rendered outside the virtualized slice (see render block) so its
   // DOM node remains mounted even when scrolled out of view — otherwise the input ref would
@@ -221,6 +236,15 @@ export function FileExplorer({
     if (row.kind !== "input") return null;
     return { index: idx, depth: row.depth, kind: row.createKind };
   }, [flat, creating]);
+
+  const renamingPlacement = useMemo(() => {
+    if (!renamingPath) return null;
+    const idx = flat.findIndex((row) => row.kind === "node" && row.node.path === renamingPath);
+    if (idx < 0) return null;
+    const row = flat[idx];
+    if (row.kind !== "node") return null;
+    return { index: idx, depth: row.depth, node: row.node };
+  }, [flat, renamingPath]);
 
   const OVERSCAN = 5;
   const startIdx = Math.max(0, Math.floor(scrollTop / ROW_HEIGHT) - OVERSCAN);
@@ -267,10 +291,30 @@ export function FileExplorer({
 
   const handleSelect = useCallback(
     (node: TreeNode) => {
+      scrollRef.current?.focus({ preventScroll: true });
+      if (fileExplorerClickAction({ isDir: node.is_dir, isSelected: selectedPath === node.path }) === "toggle") {
+        handleToggle(node.path);
+        return;
+      }
       setSelectedPath(node.path);
-      onFileSelect(node.path, node.name);
+      if (!node.is_dir) {
+        onFileSelect(node.path, node.name);
+      }
     },
-    [onFileSelect],
+    [handleToggle, onFileSelect, selectedPath],
+  );
+
+  const handleOpen = useCallback(
+    (node: TreeNode) => {
+      scrollRef.current?.focus({ preventScroll: true });
+      if (node.is_dir) {
+        handleToggle(node.path);
+      } else {
+        setSelectedPath(node.path);
+        onFileSelect(node.path, node.name);
+      }
+    },
+    [handleToggle, onFileSelect],
   );
 
   const ensureExpanded = useCallback(
@@ -306,6 +350,11 @@ export function FileExplorer({
   const cancelCreate = useCallback(() => {
     setCreating(null);
     setCreatingValue("");
+  }, []);
+
+  const cancelRename = useCallback(() => {
+    setRenamingPath(null);
+    setRenamingValue("");
   }, []);
 
   const commitCreate = useCallback(async () => {
@@ -393,60 +442,272 @@ export function FileExplorer({
   }, [creating, creatingPlacement]);
 
   useEffect(() => {
+    if (!renamingPath || !renamingPlacement) return;
+    const el = scrollRef.current;
+    if (!el) return;
+    const rowTop = renamingPlacement.index * ROW_HEIGHT;
+    const rowBottom = rowTop + ROW_HEIGHT;
+    if (rowTop < el.scrollTop || rowBottom > el.scrollTop + el.clientHeight) {
+      const targetTop = Math.max(0, rowTop - el.clientHeight / 2 + ROW_HEIGHT);
+      el.scrollTo({ top: targetTop, behavior: "auto" });
+    }
+  }, [renamingPath, renamingPlacement]);
+
+  useEffect(() => {
     if (creating && inputRef.current) {
       inputRef.current.focus();
       inputRef.current.select();
     }
   }, [creating]);
 
-  const handleDelete = useCallback(async () => {
-    if (!ctxMenu || ctxMenu.isRoot) return;
-    if (deleteInFlightRef.current) return;
-    const targetPath = ctxMenu.path;
-    const isDir = ctxMenu.isDir;
-    const idx = Math.max(targetPath.lastIndexOf("/"), targetPath.lastIndexOf("\\"));
-    const name = idx >= 0 ? targetPath.slice(idx + 1) : targetPath;
-    setCtxMenu(null);
+  useEffect(() => {
+    if (renamingPath && renameInputRef.current) {
+      renameInputRef.current.focus();
+      renameInputRef.current.select();
+    }
+  }, [renamingPath]);
 
-    const ok = await confirm(
-      t(isDir ? "file.confirmDeleteFolder" : "file.confirmDeleteFile", { name }),
-      {
-        title: t("file.confirmDeleteTitle", { name }),
-        kind: "warning",
-        okLabel: t("file.delete"),
-      },
-    );
-    if (!ok) return;
+  const startRenameSelected = useCallback(() => {
+    if (!selectedNode) return;
+    setCreating(null);
+    setCreatingValue("");
+    setRenamingPath(selectedNode.path);
+    setRenamingValue(selectedNode.name);
+  }, [selectedNode]);
 
-    deleteInFlightRef.current = true;
+  const commitRename = useCallback(async () => {
+    if (!renamingPath || !renamingPlacement) return;
+    if (renameInFlightRef.current) return;
+    const name = renamingValue.trim();
+    if (!name || name === renamingPlacement.node.name) {
+      cancelRename();
+      return;
+    }
+    if (name.includes("/") || name.includes("\\")) {
+      showToast(t("file.renameFailed", { error: "Invalid file name" }));
+      return;
+    }
+    renameInFlightRef.current = true;
+    const oldPath = renamingPath;
+    const parentPath = parentPathOf(oldPath);
+    const nextPath = joinPath(parentPath, name);
     try {
       if (remote) {
-        await safeInvoke("remote_delete_path", {
+        await safeInvoke("remote_rename_path", {
           connection: remote.connection,
-          remotePath: targetPath,
+          remotePath: oldPath,
+          newName: name,
           remoteProjectPath: remote.projectPath,
         });
       } else {
-        await safeInvoke("delete_path", { path: targetPath, projectPath });
+        await safeInvoke("rename_path", { path: oldPath, newName: name, projectPath });
       }
       if (isCancelled()) return;
-      const sep = pathSeparator(targetPath);
-      const descendantPrefix = targetPath + sep;
-      setSelectedPath((prev) => {
-        if (!prev) return prev;
-        if (prev === targetPath) return null;
-        if (prev.startsWith(descendantPrefix)) return null;
-        return prev;
-      });
+      cancelRename();
       await refresh();
+      if (isCancelled()) return;
+      setSelectedPath(nextPath);
+      if (!renamingPlacement.node.is_dir) {
+        onFileSelect(nextPath, name);
+      }
     } catch (error) {
       if (!isCancelled()) {
-        showToast(t("file.deleteFailed", { error: String(error) }));
+        showToast(t("file.renameFailed", { error: String(error) }));
       }
     } finally {
-      deleteInFlightRef.current = false;
+      renameInFlightRef.current = false;
     }
-  }, [ctxMenu, isCancelled, projectPath, refresh, remote, safeInvoke, showToast, t]);
+  }, [
+    cancelRename,
+    isCancelled,
+    onFileSelect,
+    projectPath,
+    refresh,
+    remote,
+    renamingPath,
+    renamingPlacement,
+    renamingValue,
+    safeInvoke,
+    showToast,
+    t,
+  ]);
+
+  const pasteSourcePaths = useCallback(
+    async (sourcePaths: string[]) => {
+      if (sourcePaths.length === 0) {
+        showToast(t("file.pasteNoFiles"), "warning");
+        return;
+      }
+      if (pasteInFlightRef.current) return;
+      const targetDirectory = pasteTargetDirectory({
+        selectedPath,
+        selectedIsDir: selectedNode?.is_dir ?? false,
+        rootPath: projectPath,
+      });
+      pasteInFlightRef.current = true;
+      try {
+        if (remote) {
+          await safeInvoke("remote_upload_local_paths_to_directory", {
+            connection: remote.connection,
+            localSourcePaths: sourcePaths,
+            targetDirectory,
+            remoteProjectPath: remote.projectPath,
+          });
+        } else {
+          await safeInvoke("copy_paths_to_directory", {
+            sourcePaths,
+            targetDirectory,
+            projectPath,
+          });
+        }
+        if (isCancelled()) return;
+        ensureExpanded(targetDirectory);
+        await refresh();
+      } catch (error) {
+        if (!isCancelled()) {
+          showToast(t("file.pasteFailed", { error: String(error) }));
+        }
+      } finally {
+        pasteInFlightRef.current = false;
+      }
+    },
+    [
+      ensureExpanded,
+      isCancelled,
+      projectPath,
+      refresh,
+      remote,
+      safeInvoke,
+      selectedNode,
+      selectedPath,
+      showToast,
+      t,
+    ],
+  );
+
+  const pasteFiles = useCallback(
+    async (files: FileList | null) => {
+      const sourcePaths = Array.from(files ?? [])
+        .map((file) => ("path" in file ? String((file as File & { path?: string }).path ?? "") : ""))
+        .filter(Boolean);
+      await pasteSourcePaths(sourcePaths);
+    },
+    [pasteSourcePaths],
+  );
+
+  const pasteFromSystemClipboard = useCallback(async () => {
+    try {
+      const sourcePaths = await safeInvoke<string[]>("read_clipboard_file_paths");
+      if (isCancelled() || !sourcePaths) return;
+      await pasteSourcePaths(sourcePaths);
+    } catch (error) {
+      if (!isCancelled()) {
+        showToast(t("file.pasteFailed", { error: String(error) }));
+      }
+    }
+  }, [isCancelled, pasteSourcePaths, safeInvoke, showToast, t]);
+
+  const deletePath = useCallback(
+    async (targetPath: string, isDir: boolean) => {
+      if (deleteInFlightRef.current) return;
+      const idx = Math.max(targetPath.lastIndexOf("/"), targetPath.lastIndexOf("\\"));
+      const name = idx >= 0 ? targetPath.slice(idx + 1) : targetPath;
+
+      const ok = await confirm(
+        t(isDir ? "file.confirmDeleteFolder" : "file.confirmDeleteFile", { name }),
+        {
+          title: t("file.confirmDeleteTitle", { name }),
+          kind: "warning",
+          okLabel: t("file.delete"),
+        },
+      );
+      if (!ok) return;
+
+      deleteInFlightRef.current = true;
+      try {
+        if (remote) {
+          await safeInvoke("remote_delete_path", {
+            connection: remote.connection,
+            remotePath: targetPath,
+            remoteProjectPath: remote.projectPath,
+          });
+        } else {
+          await safeInvoke("delete_path", { path: targetPath, projectPath });
+        }
+        if (isCancelled()) return;
+        const sep = pathSeparator(targetPath);
+        const descendantPrefix = targetPath + sep;
+        setSelectedPath((prev) => {
+          if (!prev) return prev;
+          if (prev === targetPath) return null;
+          if (prev.startsWith(descendantPrefix)) return null;
+          return prev;
+        });
+        await refresh();
+      } catch (error) {
+        if (!isCancelled()) {
+          showToast(t("file.deleteFailed", { error: String(error) }));
+        }
+      } finally {
+        deleteInFlightRef.current = false;
+      }
+    },
+    [isCancelled, projectPath, refresh, remote, safeInvoke, showToast, t],
+  );
+
+  const handleTreeKeyDown = useCallback(
+    (event: React.KeyboardEvent<HTMLDivElement>) => {
+      const action = fileExplorerKeyAction(event);
+      if (!action) return;
+      if ((event.target as HTMLElement).tagName === "INPUT") return;
+      event.preventDefault();
+      event.stopPropagation();
+      if (action === "copyPath") {
+        if (!selectedPath) return;
+        void writeClipboardText(selectedPath)
+          .then(() => showToast(t("file.pathCopied")))
+          .catch((error) => {
+            console.error("Failed to copy file path", error);
+            showToast(t("file.copyPathFailed", { error: String(error) }));
+          });
+      } else if (action === "rename") {
+        startRenameSelected();
+      } else if (action === "paste") {
+        void pasteFromSystemClipboard();
+      } else if (action === "delete") {
+        if (selectedNode) {
+          void deletePath(selectedNode.path, selectedNode.is_dir);
+        }
+      }
+    },
+    [
+      deletePath,
+      pasteFromSystemClipboard,
+      selectedNode,
+      selectedPath,
+      showToast,
+      startRenameSelected,
+      t,
+    ],
+  );
+
+  const handleTreePaste = useCallback(
+    (event: React.ClipboardEvent<HTMLDivElement>) => {
+      if ((event.target as HTMLElement).tagName === "INPUT") return;
+      if (!event.clipboardData.files.length) return;
+      event.preventDefault();
+      void pasteFiles(event.clipboardData.files);
+    },
+    [pasteFiles],
+  );
+
+  const handleDelete = useCallback(async () => {
+    if (!ctxMenu || ctxMenu.isRoot) return;
+    const targetPath = ctxMenu.path;
+    const isDir = ctxMenu.isDir;
+    setCtxMenu(null);
+    await deletePath(targetPath, isDir);
+  }, [ctxMenu, deletePath]);
 
   return (
     <div style={{ ...s.fileExplorerRoot, width }}>
@@ -489,8 +750,11 @@ export function FileExplorer({
       {/* Tree */}
       <div
         ref={scrollRef}
+        tabIndex={0}
         onScroll={(e) => setScrollTop(e.currentTarget.scrollTop)}
         onContextMenu={handleEmptyContextMenu}
+        onKeyDown={handleTreeKeyDown}
+        onPaste={handleTreePaste}
         style={s.fileExplorerTreeScroll}
       >
         {loading ? (
@@ -508,6 +772,7 @@ export function FileExplorer({
           >
             {flat.slice(startIdx, endIdx + 1).map((row, i) => {
               if (row.kind === "input") return null;
+              if (row.node.path === renamingPath && renamingPlacement) return null;
               const top = (startIdx + i) * ROW_HEIGHT + 2;
               return (
                 <div key={row.node.path} style={{ ...s.fileExplorerVirtualRow, top }}>
@@ -518,6 +783,7 @@ export function FileExplorer({
                     contextPath={ctxMenu?.path ?? null}
                     onSelect={handleSelect}
                     onToggle={handleToggle}
+                    onOpen={handleOpen}
                     onContextMenu={handleContextMenu}
                   />
                 </div>
@@ -541,6 +807,27 @@ export function FileExplorer({
                   }}
                   onCancel={cancelCreate}
                   inputRef={inputRef}
+                />
+              </div>
+            )}
+            {renamingPath && renamingPlacement && (
+              <div
+                key="__rename_row__"
+                style={{
+                  ...s.fileExplorerVirtualRow,
+                  top: renamingPlacement.index * ROW_HEIGHT + 2,
+                }}
+              >
+                <RenameInputRow
+                  node={renamingPlacement.node}
+                  depth={renamingPlacement.depth}
+                  value={renamingValue}
+                  onChange={setRenamingValue}
+                  onCommit={() => {
+                    void commitRename();
+                  }}
+                  onCancel={cancelRename}
+                  inputRef={renameInputRef}
                 />
               </div>
             )}

@@ -158,7 +158,7 @@ export function RunningView({
           .replace(/[^\w\u4e00-\u9fa5-]+/g, "_")
           .replace(/^_+|_+$/g, "") || "session";
       const date = new Date().toISOString().slice(0, 10);
-      const defaultName = `nezha-${slug}-${date}.md`;
+      const defaultName = `aeroric-${slug}-${date}.md`;
 
       const outputPath = await saveDialog({
         title: t("running.exportSaveDialogTitle"),
@@ -593,7 +593,11 @@ export function RunningView({
             </div>
           </div>
           {sessionPath ? (
-            <SessionView sessionPath={sessionPath} />
+            <SessionView
+              sessionPath={sessionPath}
+              projectPath={projectPath}
+              isCodex={isCodexLikeAgent(task.agent)}
+            />
           ) : (
             <div style={s.interruptedNoSessionPane}>
               {t(isDetached ? "running.detachedNoSession" : "running.interruptedNoSession")}
@@ -618,7 +622,11 @@ export function RunningView({
           />
         </div>
       ) : (
-        <SessionView sessionPath={sessionPath} />
+        <SessionView
+          sessionPath={sessionPath}
+          projectPath={projectPath}
+          isCodex={isCodexLikeAgent(task.agent)}
+        />
       )}
 
       {/* Status bar when task is done and no session path (terminal fallback) */}

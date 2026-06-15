@@ -11,7 +11,7 @@ use crate::storage::atomic_write;
 
 // ── Security: hardcoded allowed notification source ──────────────────────────
 
-const NOTIFICATIONS_URL: &str = "https://nezha.hanshutx.com/notifications.json";
+const RELEASES_URL: &str = "https://api.github.com/repos/Aho1ic/Aeroric/releases";
 const MAX_RESPONSE_BYTES: usize = 1024 * 1024; // 1MB limit
 const FETCH_INTERVAL_SECS: i64 = 3600; // 1 hour
 const REQUEST_TIMEOUT_SECS: u64 = 15;
@@ -36,14 +36,22 @@ struct RemoteNotification {
 }
 
 #[derive(Debug, Deserialize)]
-struct RemoteResponse {
-    notifications: Vec<RemoteNotification>,
+struct GitHubRelease {
+    id: u64,
+    tag_name: String,
+    name: Option<String>,
+    body: Option<String>,
+    html_url: String,
+    published_at: Option<String>,
+    draft: bool,
+    prerelease: bool,
 }
 
 // ── Local storage types ──────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct NotificationStore {
+    source: Option<String>,
     read_ids: Vec<String>,
     last_fetched_at: Option<String>,
     cached_notifications: Option<Vec<RemoteNotification>>,
@@ -52,6 +60,7 @@ struct NotificationStore {
 impl Default for NotificationStore {
     fn default() -> Self {
         Self {
+            source: Some(RELEASES_URL.to_string()),
             read_ids: vec![],
             last_fetched_at: None,
             cached_notifications: None,
@@ -85,14 +94,14 @@ pub struct NotificationResult {
 
 // ── Path helpers ─────────────────────────────────────────────────────────────
 
-fn nezha_dir() -> Result<PathBuf, String> {
+fn aeroric_dir() -> Result<PathBuf, String> {
     let home =
         crate::platform::home_dir().ok_or_else(|| "Cannot find home directory".to_string())?;
-    Ok(home.join(".nezha"))
+    Ok(home.join(".aeroric"))
 }
 
 fn store_path() -> Result<PathBuf, String> {
-    Ok(nezha_dir()?.join("notifications.json"))
+    Ok(aeroric_dir()?.join("notifications.json"))
 }
 
 // ── Storage I/O ──────────────────────────────────────────────────────────────
@@ -102,7 +111,14 @@ fn load_store() -> NotificationStore {
         return NotificationStore::default();
     };
     match fs::read_to_string(&path) {
-        Ok(data) => serde_json::from_str(&data).unwrap_or_default(),
+        Ok(data) => {
+            let store: NotificationStore = serde_json::from_str(&data).unwrap_or_default();
+            if store.source.as_deref() == Some(RELEASES_URL) {
+                store
+            } else {
+                NotificationStore::default()
+            }
+        }
         Err(_) => NotificationStore::default(),
     }
 }
@@ -153,6 +169,7 @@ fn should_fetch(store: &NotificationStore) -> bool {
 fn apply_fetched_notifications(store: &mut NotificationStore, remote: Vec<RemoteNotification>) {
     let remote_ids: HashSet<&str> = remote.iter().map(|n| n.id.as_str()).collect();
     store.read_ids.retain(|id| remote_ids.contains(id.as_str()));
+    store.source = Some(RELEASES_URL.to_string());
     store.last_fetched_at = Some(Utc::now().to_rfc3339());
     store.cached_notifications = Some(remote);
 }
@@ -233,15 +250,16 @@ async fn fetch_remote() -> Result<Vec<RemoteNotification>, String> {
         .map_err(|e| format!("HTTP client error: {e}"))?;
 
     let resp = client
-        .get(NOTIFICATIONS_URL)
-        .header("Accept", "application/json")
+        .get(RELEASES_URL)
+        .header("Accept", "application/vnd.github+json")
+        .header("User-Agent", "Aeroric")
         .send()
         .await
         .map_err(|e| format!("Fetch failed: {e}"))?;
 
     // Verify response is from the expected domain (guard against redirect tricks)
     let final_url = resp.url().as_str();
-    if !final_url.starts_with("https://nezha.hanshutx.com/") {
+    if !final_url.starts_with(RELEASES_URL) {
         return Err(format!("Unexpected response URL: {final_url}"));
     }
 
@@ -266,15 +284,51 @@ async fn fetch_remote() -> Result<Vec<RemoteNotification>, String> {
         return Err("Response exceeds 1MB limit".to_string());
     }
 
-    let remote: RemoteResponse =
+    let releases: Vec<GitHubRelease> =
         serde_json::from_slice(&bytes).map_err(|e| format!("Invalid JSON: {e}"))?;
 
     // Limit notification count to prevent memory abuse
-    if remote.notifications.len() > 200 {
+    if releases.len() > 200 {
         return Err("Too many notifications".to_string());
     }
 
-    Ok(remote.notifications)
+    Ok(releases
+        .into_iter()
+        .filter(|release| !release.draft)
+        .map(|release| {
+            let title = release
+                .name
+                .as_deref()
+                .filter(|name| !name.trim().is_empty())
+                .unwrap_or(release.tag_name.as_str())
+                .to_string();
+            let body = release
+                .body
+                .as_deref()
+                .filter(|body| !body.trim().is_empty())
+                .unwrap_or("No release notes.")
+                .to_string();
+            let suffix = if release.prerelease {
+                " · prerelease"
+            } else {
+                ""
+            };
+            RemoteNotification {
+                id: format!("release-{}", release.id),
+                level: "info".to_string(),
+                title: format!("{}{}", title, suffix),
+                body,
+                body_zh: None,
+                url: Some(release.html_url),
+                created_at: release
+                    .published_at
+                    .unwrap_or_else(|| Utc::now().to_rfc3339()),
+                expires_at: None,
+                min_app_version: None,
+                max_app_version: None,
+            }
+        })
+        .collect())
 }
 
 // ── Tauri commands ───────────────────────────────────────────────────────────
@@ -392,6 +446,7 @@ mod tests {
     #[test]
     fn apply_fetched_notifications_keeps_only_existing_read_ids_in_remote() {
         let mut store = NotificationStore {
+            source: Some(RELEASES_URL.to_string()),
             read_ids: vec!["keep".to_string(), "drop".to_string()],
             last_fetched_at: None,
             cached_notifications: None,

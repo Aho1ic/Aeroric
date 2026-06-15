@@ -13,12 +13,15 @@ import {
 
 interface Props {
   connection?: SshConnection | null;
+  groups?: string[];
+  initialGroup?: string;
   onClose: () => void;
   onSave: (connection: SshConnection) => void;
 }
 
 const FIELD_ORDER: Array<keyof SshConnectionDraft> = [
   "name",
+  "group",
   "host",
   "port",
   "username",
@@ -27,15 +30,19 @@ const FIELD_ORDER: Array<keyof SshConnectionDraft> = [
   "remotePath",
 ];
 
-export function SshConnectionDialog({ connection, onClose, onSave }: Props) {
+export function SshConnectionDialog({ connection, groups = [], initialGroup = "", onClose, onSave }: Props) {
   const { t } = useI18n();
-  const [draft, setDraft] = useState<SshConnectionDraft>(() => draftFromConnection(connection));
+  const [draft, setDraft] = useState<SshConnectionDraft>(() => ({
+    ...draftFromConnection(connection),
+    group: connection?.group ?? initialGroup,
+  }));
   const [errors, setErrors] = useState<SshConnectionDraftErrors>({});
   const isEditing = Boolean(connection);
 
   const labels = useMemo<Record<keyof SshConnectionDraft, string>>(
     () => ({
       name: t("ssh.field.name"),
+      group: t("ssh.field.group"),
       host: t("ssh.field.host"),
       port: t("ssh.field.port"),
       username: t("ssh.field.username"),
@@ -49,6 +56,7 @@ export function SshConnectionDialog({ connection, onClose, onSave }: Props) {
   const placeholders = useMemo<Record<keyof SshConnectionDraft, string>>(
     () => ({
       name: "prod",
+      group: t("ssh.defaultGroup"),
       host: "prod.example.com",
       port: "22",
       username: "deploy",
@@ -56,7 +64,7 @@ export function SshConnectionDialog({ connection, onClose, onSave }: Props) {
       password: "",
       remotePath: "/srv/app",
     }),
-    [],
+    [t],
   );
 
   function updateField(field: keyof SshConnectionDraft, value: string) {
@@ -101,11 +109,19 @@ export function SshConnectionDialog({ connection, onClose, onSave }: Props) {
                 placeholder={placeholders[field]}
                 style={errors[field] ? s.sshInputInvalid : s.sshInput}
                 type={field === "password" ? "password" : "text"}
+                list={field === "group" && groups.length > 0 ? "ssh-connection-groups" : undefined}
                 autoFocus={field === "name"}
               />
               {errors[field] && <span style={s.sshErrorText}>{errors[field]}</span>}
             </label>
           ))}
+          {groups.length > 0 && (
+            <datalist id="ssh-connection-groups">
+              {groups.map((group) => (
+                <option key={group} value={group} />
+              ))}
+            </datalist>
+          )}
           <div style={s.sshSecretNote}>{t("ssh.passwordStorageHint")}</div>
         </div>
 

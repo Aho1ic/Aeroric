@@ -86,14 +86,14 @@ pub struct Task {
 
 // ── Path helpers ─────────────────────────────────────────────────────────────
 
-pub(crate) fn nezha_dir() -> Result<PathBuf, String> {
+pub(crate) fn aeroric_dir() -> Result<PathBuf, String> {
     let home =
         crate::platform::home_dir().ok_or_else(|| "Cannot find home directory".to_string())?;
-    Ok(home.join(".nezha"))
+    Ok(home.join(".aeroric"))
 }
 
 fn projects_path() -> Result<PathBuf, String> {
-    Ok(nezha_dir()?.join("projects.json"))
+    Ok(aeroric_dir()?.join("projects.json"))
 }
 
 fn tasks_path(project_id: &str) -> Result<PathBuf, String> {
@@ -101,11 +101,11 @@ fn tasks_path(project_id: &str) -> Result<PathBuf, String> {
 }
 
 fn project_dir(project_id: &str) -> Result<PathBuf, String> {
-    Ok(nezha_dir()?.join("projects").join(project_id))
+    Ok(aeroric_dir()?.join("projects").join(project_id))
 }
 
-pub(crate) fn ensure_nezha_dirs() -> Result<(), String> {
-    fs::create_dir_all(nezha_dir()?).map_err(|e| e.to_string())
+pub(crate) fn ensure_aeroric_dirs() -> Result<(), String> {
+    fs::create_dir_all(aeroric_dir()?).map_err(|e| e.to_string())
 }
 
 fn ensure_project_dir(project_id: &str) -> Result<(), String> {
@@ -126,7 +126,7 @@ pub fn load_projects() -> Result<Vec<Project>, String> {
 
 #[tauri::command]
 pub fn save_projects(projects: Vec<Project>) -> Result<(), String> {
-    ensure_nezha_dirs()?;
+    ensure_aeroric_dirs()?;
     let raw = serde_json::to_string_pretty(&projects).map_err(|e| e.to_string())?;
     atomic_write(&projects_path()?, &raw)
 }

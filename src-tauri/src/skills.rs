@@ -6,7 +6,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
 
 use crate::storage::{
-    atomic_write, ensure_nezha_dirs, load_projects, nezha_dir, save_projects, Project,
+    aeroric_dir, atomic_write, ensure_aeroric_dirs, load_projects, save_projects, Project,
 };
 
 // ── Data types ───────────────────────────────────────────────────────────────
@@ -108,11 +108,11 @@ pub struct DeleteResult {
 // ── Path helpers ─────────────────────────────────────────────────────────────
 
 fn skill_hub_path() -> Result<PathBuf, String> {
-    Ok(nezha_dir()?.join("skill_hub.json"))
+    Ok(aeroric_dir()?.join("skill_hub.json"))
 }
 
 fn installations_path() -> Result<PathBuf, String> {
-    Ok(nezha_dir()?.join("skill_installations.json"))
+    Ok(aeroric_dir()?.join("skill_installations.json"))
 }
 
 fn now_ms() -> i64 {
@@ -172,7 +172,7 @@ fn load_hub_config_internal() -> SkillHubConfig {
 }
 
 fn save_hub_config_internal(config: &SkillHubConfig) -> Result<(), String> {
-    ensure_nezha_dirs()?;
+    ensure_aeroric_dirs()?;
     let raw = serde_json::to_string_pretty(config).map_err(|e| e.to_string())?;
     atomic_write(&skill_hub_path()?, &raw)
 }
@@ -191,7 +191,7 @@ fn load_installations_internal() -> InstallationsFile {
 }
 
 fn save_installations_internal(file: &InstallationsFile) -> Result<(), String> {
-    ensure_nezha_dirs()?;
+    ensure_aeroric_dirs()?;
     let raw = serde_json::to_string_pretty(file).map_err(|e| e.to_string())?;
     atomic_write(&installations_path()?, &raw)
 }

@@ -29,6 +29,7 @@ export function sshProjectPath(connectionId: string, remotePath: string): string
 export interface SshConnection {
   id: string;
   name: string;
+  group?: string;
   host: string;
   port: number;
   username: string;
@@ -39,7 +40,38 @@ export interface SshConnection {
   lastConnectedAt?: number;
 }
 
-export type AgentType = "claude" | "claude_gpt55" | "codex";
+export interface CondaEnvironment {
+  name: string;
+  path: string;
+  pythonPath: string;
+}
+
+export interface DockerImageSummary {
+  id: string;
+  repository: string;
+  tag: string;
+  digest: string;
+  createdSince: string;
+  size: string;
+}
+
+export interface DockerContainerSummary {
+  id: string;
+  image: string;
+  names: string;
+  state: string;
+  status: string;
+  ports: string;
+  createdAt: string;
+}
+
+export interface DockerResources {
+  images: DockerImageSummary[];
+  containers: DockerContainerSummary[];
+}
+
+export type BuiltInAgentType = "claude" | "claude_gpt55" | "codex";
+export type AgentType = BuiltInAgentType | (string & {});
 export type ThemeMode = "system" | "dark" | "light" | "eyecare";
 export type ThemeVariant = "dark" | "light" | "eyecare";
 export type PermissionMode = "ask" | "auto_edit" | "full_access";
@@ -61,7 +93,7 @@ export type TerminalFontSize = number;
 export const TERMINAL_FONT_SIZE_MIN = 10;
 export const TERMINAL_FONT_SIZE_MAX = 20;
 export const TERMINAL_FONT_SIZE_STEP = 1;
-export const DEFAULT_TERMINAL_FONT_SIZE: TerminalFontSize = 12;
+export const DEFAULT_TERMINAL_FONT_SIZE: TerminalFontSize = 11;
 
 export function clampTerminalFontSize(value: number): TerminalFontSize {
   if (!Number.isFinite(value)) return DEFAULT_TERMINAL_FONT_SIZE;

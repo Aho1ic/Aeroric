@@ -1,5 +1,5 @@
 use base64::Engine;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 #[derive(serde::Serialize)]
@@ -181,6 +181,25 @@ fn validate_entry_name(name: &str) -> Result<(), String> {
         }
     }
 
+    Ok(())
+}
+
+fn ensure_not_protected_path(path: &Path, root: &Path, action: &str) -> Result<(), String> {
+    if path == root {
+        return Err(format!("Cannot {} the project root", action));
+    }
+    if let Ok(rel) = path.strip_prefix(root) {
+        if let Some(first) = rel.components().next() {
+            if let Some(name) = first.as_os_str().to_str() {
+                if PROTECTED_FIRST_SEGMENTS
+                    .iter()
+                    .any(|protected| protected.eq_ignore_ascii_case(name))
+                {
+                    return Err(format!("Cannot {} protected directory: {}", action, name));
+                }
+            }
+        }
+    }
     Ok(())
 }
 
@@ -370,22 +389,26 @@ pub async fn read_dir_entries(path: String, project_path: String) -> Result<Vec<
 
 #[tauri::command]
 pub async fn read_file_content(path: String, project_path: String) -> Result<String, String> {
-    validate_path_within(&path, &project_path, true)?;
+    let validated_path = validate_path_within(&path, &project_path, true)?;
 
-    use std::io::Read;
-    let file = std::fs::File::open(&path).map_err(|e| e.to_string())?;
-    let meta = file.metadata().map_err(|e| e.to_string())?;
-    if meta.len() > 2 * 1024 * 1024 {
-        return Err(format!(
-            "File too large ({:.1} MB)",
-            meta.len() as f64 / 1024.0 / 1024.0
-        ));
-    }
-    let mut buf = String::with_capacity(meta.len() as usize);
-    std::io::BufReader::new(file)
-        .read_to_string(&mut buf)
-        .map_err(|e| e.to_string())?;
-    Ok(buf)
+    tauri::async_runtime::spawn_blocking(move || {
+        use std::io::Read;
+        let file = std::fs::File::open(&validated_path).map_err(|e| e.to_string())?;
+        let meta = file.metadata().map_err(|e| e.to_string())?;
+        if meta.len() > 2 * 1024 * 1024 {
+            return Err(format!(
+                "File too large ({:.1} MB)",
+                meta.len() as f64 / 1024.0 / 1024.0
+            ));
+        }
+        let mut buf = String::with_capacity(meta.len() as usize);
+        std::io::BufReader::new(file)
+            .read_to_string(&mut buf)
+            .map_err(|e| e.to_string())?;
+        Ok(buf)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -481,7 +504,7 @@ pub async fn create_directory(path: String, project_path: String) -> Result<(), 
 }
 
 /// First-segment names under the project root that are never deletable through this command.
-const PROTECTED_FIRST_SEGMENTS: &[&str] = &[".git", ".nezha"];
+const PROTECTED_FIRST_SEGMENTS: &[&str] = &[".git", ".aeroric"];
 
 /// Validate a deletion target. Unlike `validate_path_within`, the target itself is NOT
 /// canonicalized — only its parent — so symlinks are moved to trash as themselves rather than
@@ -518,27 +541,11 @@ fn validate_existing_path_for_delete(
 
     let resolved = canonical_parent.join(file_name);
 
-    if resolved == canonical_root {
-        return Err("Cannot delete the project root".to_string());
-    }
-
     if resolved.symlink_metadata().is_err() {
         return Err("Path does not exist".to_string());
     }
 
-    if let Ok(rel) = resolved.strip_prefix(&canonical_root) {
-        if let Some(first) = rel.components().next() {
-            if let Some(name) = first.as_os_str().to_str() {
-                if PROTECTED_FIRST_SEGMENTS
-                    .iter()
-                    .any(|protected| protected.eq_ignore_ascii_case(name))
-                {
-                    return Err(format!("Cannot delete protected directory: {}", name));
-                }
-            }
-        }
-    }
-
+    ensure_not_protected_path(&resolved, &canonical_root, "delete")?;
     Ok(resolved)
 }
 
@@ -550,6 +557,272 @@ pub async fn delete_path(path: String, project_path: String) -> Result<(), Strin
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+fn validate_existing_path_for_modify(
+    target: &str,
+    allowed_root: &str,
+    action: &str,
+) -> Result<(PathBuf, PathBuf), String> {
+    let target_path = Path::new(target);
+
+    if !target_path.is_absolute() {
+        return Err("Path must be absolute".to_string());
+    }
+
+    let file_name = target_path
+        .file_name()
+        .and_then(|s| s.to_str())
+        .ok_or_else(|| "Invalid file name".to_string())?;
+
+    let parent = target_path
+        .parent()
+        .ok_or_else(|| "Cannot resolve parent directory".to_string())?;
+    let canonical_parent = parent
+        .canonicalize()
+        .map_err(|e| format!("Cannot resolve parent directory: {}", e))?;
+    let canonical_root = Path::new(allowed_root)
+        .canonicalize()
+        .map_err(|e| format!("Cannot resolve root directory: {}", e))?;
+
+    if !canonical_parent.starts_with(&canonical_root) {
+        return Err("Path is outside the allowed directory".to_string());
+    }
+
+    let resolved = canonical_parent.join(file_name);
+    if resolved.symlink_metadata().is_err() {
+        return Err("Path does not exist".to_string());
+    }
+    ensure_not_protected_path(&resolved, &canonical_root, action)?;
+    Ok((resolved, canonical_root))
+}
+
+fn copy_path_recursive(source: &Path, destination: &Path) -> Result<(), String> {
+    let metadata = source.symlink_metadata().map_err(|e| e.to_string())?;
+    if metadata.file_type().is_symlink() {
+        let target = std::fs::read_link(source).map_err(|e| e.to_string())?;
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(target, destination).map_err(|e| e.to_string())?;
+        }
+        #[cfg(windows)]
+        {
+            if source.is_dir() {
+                std::os::windows::fs::symlink_dir(target, destination)
+                    .map_err(|e| e.to_string())?;
+            } else {
+                std::os::windows::fs::symlink_file(target, destination)
+                    .map_err(|e| e.to_string())?;
+            }
+        }
+        return Ok(());
+    }
+    if metadata.is_dir() {
+        std::fs::create_dir(destination).map_err(|e| match e.kind() {
+            std::io::ErrorKind::AlreadyExists => {
+                "A file or folder with that name already exists".to_string()
+            }
+            _ => e.to_string(),
+        })?;
+        for entry in std::fs::read_dir(source).map_err(|e| e.to_string())? {
+            let entry = entry.map_err(|e| e.to_string())?;
+            copy_path_recursive(&entry.path(), &destination.join(entry.file_name()))?;
+        }
+        return Ok(());
+    }
+    std::fs::copy(source, destination)
+        .map(|_| ())
+        .map_err(|e| match e.kind() {
+            std::io::ErrorKind::AlreadyExists => {
+                "A file or folder with that name already exists".to_string()
+            }
+            _ => e.to_string(),
+        })
+}
+
+fn ensure_copy_target_not_inside_source(source: &Path, target: &Path) -> Result<(), String> {
+    if !source.is_dir() {
+        return Ok(());
+    }
+    let canonical_source = source
+        .canonicalize()
+        .map_err(|e| format!("Cannot resolve source directory: {}", e))?;
+    let canonical_target = target
+        .canonicalize()
+        .map_err(|e| format!("Cannot resolve paste target: {}", e))?;
+    if canonical_target.starts_with(&canonical_source) {
+        return Err("Cannot copy a folder into itself".to_string());
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn rename_path(
+    path: String,
+    new_name: String,
+    project_path: String,
+) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let name = new_name.trim();
+        validate_entry_name(name)?;
+        let (source, _) = validate_existing_path_for_modify(&path, &project_path, "rename")?;
+        let parent = source
+            .parent()
+            .ok_or_else(|| "Cannot resolve parent directory".to_string())?;
+        let destination = parent.join(name);
+        if destination.exists() {
+            return Err("A file or folder with that name already exists".to_string());
+        }
+        std::fs::rename(&source, &destination).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn copy_paths_to_directory(
+    source_paths: Vec<String>,
+    target_directory: String,
+    project_path: String,
+) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        if source_paths.is_empty() {
+            return Ok(());
+        }
+        let target = validate_path_within(&target_directory, &project_path, false)?;
+        if !target.is_dir() {
+            return Err("Paste target must be a directory".to_string());
+        }
+        for source_path in source_paths {
+            let source = PathBuf::from(&source_path);
+            if !source.is_absolute() {
+                return Err("Source path must be absolute".to_string());
+            }
+            if !source.exists() {
+                return Err(format!("Source path does not exist: {}", source_path));
+            }
+            let name = source
+                .file_name()
+                .and_then(|s| s.to_str())
+                .ok_or_else(|| "Invalid source file name".to_string())?;
+            validate_entry_name(name)?;
+            let destination = target.join(name);
+            if destination.exists() {
+                return Err("A file or folder with that name already exists".to_string());
+            }
+            ensure_copy_target_not_inside_source(&source, &target)?;
+            copy_path_recursive(&source, &destination)?;
+        }
+        Ok(())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+fn parse_clipboard_file_paths_output(raw: &str) -> Vec<String> {
+    raw.lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && *line != "missing value")
+        .map(ToString::to_string)
+        .collect()
+}
+
+#[cfg(target_os = "macos")]
+fn read_clipboard_file_paths_sync() -> Result<Vec<String>, String> {
+    let script = r#"
+use framework "AppKit"
+use scripting additions
+set pb to current application's NSPasteboard's generalPasteboard()
+set urls to pb's readObjectsForClasses:{current application's NSURL} options:(missing value)
+if urls is missing value then return ""
+set out to {}
+repeat with u in urls
+  set p to (u's |path|()) as text
+  if p is not "missing value" then set end of out to p
+end repeat
+set AppleScript's text item delimiters to linefeed
+return out as text
+"#;
+    let mut cmd = Command::new("osascript");
+    for line in script
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+    {
+        cmd.arg("-e").arg(line);
+    }
+    crate::subprocess::configure_background_command(&mut cmd);
+    let output = cmd.output().map_err(|e| e.to_string())?;
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+    }
+    Ok(parse_clipboard_file_paths_output(&String::from_utf8_lossy(
+        &output.stdout,
+    )))
+}
+
+#[cfg(not(target_os = "macos"))]
+fn read_clipboard_file_paths_sync() -> Result<Vec<String>, String> {
+    Ok(Vec::new())
+}
+
+#[tauri::command]
+pub async fn read_clipboard_file_paths() -> Result<Vec<String>, String> {
+    tauri::async_runtime::spawn_blocking(read_clipboard_file_paths_sync)
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn unique_test_dir(name: &str) -> PathBuf {
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock before epoch")
+            .as_nanos();
+        std::env::temp_dir().join(format!("aeroric-fs-test-{}-{}", name, suffix))
+    }
+
+    #[test]
+    fn rejects_copying_directory_into_its_own_descendant() {
+        let root = unique_test_dir("copy-descendant");
+        let source = root.join("source");
+        let target = source.join("child");
+        std::fs::create_dir_all(&target).expect("create test directories");
+
+        let result = ensure_copy_target_not_inside_source(&source, &target);
+
+        let _ = std::fs::remove_dir_all(&root);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn allows_copying_file_into_child_directory() {
+        let root = unique_test_dir("copy-file");
+        let source = root.join("source.txt");
+        let target = root.join("target");
+        std::fs::create_dir_all(&target).expect("create target directory");
+        std::fs::write(&source, "data").expect("create source file");
+
+        let result = ensure_copy_target_not_inside_source(&source, &target);
+
+        let _ = std::fs::remove_dir_all(&root);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn parses_clipboard_file_paths_output() {
+        assert_eq!(
+            parse_clipboard_file_paths_output("/Users/me/a.txt\n/Users/me/Folder\n\n"),
+            vec![
+                "/Users/me/a.txt".to_string(),
+                "/Users/me/Folder".to_string()
+            ]
+        );
+    }
 }
 
 #[tauri::command]

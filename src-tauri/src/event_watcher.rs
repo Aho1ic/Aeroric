@@ -1,7 +1,7 @@
 //! 监听 hook 脚本写入的 events.jsonl,把事件投递给前端。
 //!
 //! 工作机制:
-//! - 一个长驻线程,200ms 轮询 `~/.nezha/events/<task_id>/events.jsonl`
+//! - 一个长驻线程,200ms 轮询 `~/.aeroric/events/<task_id>/events.jsonl`
 //! - 每个文件维护 byte offset,只读增量行
 //! - 解析每行 JSON 后,按 event 字段 dispatch:
 //!   * SessionStart → 注册 session 到 TaskManager + emit `task-session`

@@ -220,7 +220,7 @@ fn git_has_head(worktree_root: &str) -> Result<bool, String> {
     Ok(output.status.success())
 }
 
-const PROTECTED_FIRST_SEGMENTS: &[&str] = &[".git", ".nezha"];
+const PROTECTED_FIRST_SEGMENTS: &[&str] = &[".git", ".aeroric"];
 
 fn is_protected_project_relative_path(relative_path: &str) -> bool {
     Path::new(relative_path)
@@ -266,7 +266,7 @@ fn run_agent_commit_message_command(
 }
 
 fn create_empty_temp_file() -> Result<PathBuf, String> {
-    let path = std::env::temp_dir().join(format!("nezha-empty-{}.tmp", uuid::Uuid::new_v4()));
+    let path = std::env::temp_dir().join(format!("aeroric-empty-{}.tmp", uuid::Uuid::new_v4()));
     std::fs::File::create(&path)
         .map_err(|e| format!("Failed to create temporary file for git diff: {e}"))?;
     Ok(path)
@@ -1194,35 +1194,43 @@ pub async fn git_show_file_diff(
 
 #[tauri::command]
 pub async fn git_push(project_path: String, branch: Option<String>) -> Result<String, String> {
-    let mut args = vec!["push".to_string()];
-    if let Some(ref b) = branch.filter(|s| !s.is_empty()) {
-        args.push("origin".to_string());
-        args.push(b.clone());
-    }
-    let output = run_git(&project_path, &args)?;
-    let combined = format!(
-        "{}{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    if !output.status.success() {
-        return Err(combined);
-    }
-    Ok(combined.trim().to_string())
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut args = vec!["push".to_string()];
+        if let Some(ref b) = branch.filter(|s| !s.is_empty()) {
+            args.push("origin".to_string());
+            args.push(b.clone());
+        }
+        let output = run_git(&project_path, &args)?;
+        let combined = format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        if !output.status.success() {
+            return Err(combined);
+        }
+        Ok(combined.trim().to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
 pub async fn git_pull(project_path: String) -> Result<String, String> {
-    let output = run_git(&project_path, &["pull"])?;
-    let combined = format!(
-        "{}{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    if !output.status.success() {
-        return Err(combined);
-    }
-    Ok(combined.trim().to_string())
+    tauri::async_runtime::spawn_blocking(move || {
+        let output = run_git(&project_path, &["pull"])?;
+        let combined = format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        if !output.status.success() {
+            return Err(combined);
+        }
+        Ok(combined.trim().to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[derive(serde::Serialize)]
@@ -1290,21 +1298,21 @@ fn task_worktree_branch_name(task_id: &str) -> String {
     } else {
         task_id
     };
-    format!("nezha/task-{}", short)
+    format!("aeroric/task-{}", short)
 }
 
-/// 校验 worktree 路径必须落在 `<project>/.nezha/worktrees/` 之下，
+/// 校验 worktree 路径必须落在 `<project>/.aeroric/worktrees/` 之下，
 /// 防止 remove_task_worktree 被传入任意路径。
 fn ensure_path_under_worktrees_root(project_path: &str, worktree_path: &str) -> Result<(), String> {
     let project = Path::new(project_path)
         .canonicalize()
         .map_err(|e| format!("Cannot resolve project path: {}", e))?;
-    let expected_root = project.join(".nezha").join("worktrees");
+    let expected_root = project.join(".aeroric").join("worktrees");
     let target = Path::new(worktree_path)
         .canonicalize()
         .map_err(|e| format!("Cannot resolve worktree path: {}", e))?;
     if !target.starts_with(&expected_root) {
-        return Err("Worktree path is outside .nezha/worktrees".to_string());
+        return Err("Worktree path is outside .aeroric/worktrees".to_string());
     }
     Ok(())
 }
@@ -1324,7 +1332,7 @@ pub async fn create_task_worktree(
     }
 
     tokio::task::spawn_blocking(move || -> Result<WorktreeCreated, String> {
-        let worktrees_dir = Path::new(&project_path).join(".nezha").join("worktrees");
+        let worktrees_dir = Path::new(&project_path).join(".aeroric").join("worktrees");
         std::fs::create_dir_all(&worktrees_dir)
             .map_err(|e| format!("Failed to create worktrees dir: {}", e))?;
 
@@ -1560,7 +1568,7 @@ mod tests {
     impl TempRepo {
         fn new() -> Self {
             let path =
-                std::env::temp_dir().join(format!("nezha-git-test-{}", uuid::Uuid::new_v4()));
+                std::env::temp_dir().join(format!("aeroric-git-test-{}", uuid::Uuid::new_v4()));
             fs::create_dir_all(&path).unwrap();
             let output = Command::new("git").arg("init").arg(&path).output().unwrap();
             assert!(
@@ -1633,13 +1641,13 @@ mod tests {
 
     #[test]
     fn detects_protected_project_metadata_paths() {
-        assert!(is_protected_project_relative_path(".nezha/config.toml"));
+        assert!(is_protected_project_relative_path(".aeroric/config.toml"));
         assert!(is_protected_project_relative_path("./.git/index"));
         assert!(is_protected_project_relative_path(
-            ".Nezha/attachments/file.png"
+            ".Aeroric/attachments/file.png"
         ));
         assert!(!is_protected_project_relative_path(
-            "src/.nezha/config.toml"
+            "src/.aeroric/config.toml"
         ));
         assert!(!is_protected_project_relative_path(".gitignore"));
         assert!(!is_protected_project_relative_path("src/git.rs"));

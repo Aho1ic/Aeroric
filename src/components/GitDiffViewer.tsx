@@ -9,7 +9,7 @@ import { load, save } from "../utils";
 import { useI18n } from "../i18n";
 import s from "../styles";
 
-const VIEW_MODE_KEY = "nezha.diffViewMode";
+const VIEW_MODE_KEY = "aeroric.diffViewMode";
 
 interface Props {
   projectPath: string;

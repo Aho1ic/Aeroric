@@ -119,7 +119,7 @@ impl CodexRpcClient {
                     "id": 1,
                     "method": "initialize",
                     "params": {
-                        "clientInfo": { "name": "nezha", "version": env!("CARGO_PKG_VERSION") },
+                        "clientInfo": { "name": "aeroric", "version": env!("CARGO_PKG_VERSION") },
                         "capabilities": {}
                     }
                 }),

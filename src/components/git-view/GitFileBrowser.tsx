@@ -28,7 +28,7 @@ import { getFileColor, getGitStatusColor, getGitStatusLabel, load, save } from "
 
 export type GitFileViewMode = "tree" | "list";
 
-export const GIT_FILE_VIEW_MODE_KEY = "nezha.git.fileViewMode";
+export const GIT_FILE_VIEW_MODE_KEY = "aeroric.git.fileViewMode";
 const GIT_FILE_BROWSER_OVERSCAN = 8;
 const GIT_FILE_BROWSER_AUTO_COLLAPSE_FILE_COUNT = 25;
 const TREE_NODE_COLLATOR = new Intl.Collator(undefined, {

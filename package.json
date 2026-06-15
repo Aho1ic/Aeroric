@@ -1,17 +1,9 @@
 {
-  "name": "nezha",
+  "name": "aeroric",
   "private": true,
-  "version": "0.4.1",
-  "description": "An Agent-First Application For Vibe Coding",
-  "author": "Hanshuaikang",
-  "homepage": "https://github.com/hanshuaikang/nezha",
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/hanshuaikang/nezha.git"
-  },
-  "bugs": {
-    "url": "https://github.com/hanshuaikang/nezha/issues"
-  },
+  "version": "1.0.0",
+  "description": "Desktop task manager for AI coding agents",
+  "author": "Aeroric",
   "type": "module",
   "scripts": {
     "dev": "vite",

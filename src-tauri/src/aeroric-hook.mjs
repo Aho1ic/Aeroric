@@ -1,13 +1,13 @@
 #!/usr/bin/env node
-// Nezha hook bridge — managed by the Nezha desktop app.
-// 仅在 NEZHA_TASK_ID + NEZHA_EVENT_DIR 同时存在时收集事件,
+// Aeroric hook bridge — managed by the Aeroric desktop app.
+// 仅在 AERORIC_TASK_ID + AERORIC_EVENT_DIR 同时存在时收集事件,
 // 其它场景(用户手动启动 claude/codex)直接退出,零副作用。
 
 import { appendFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 
-const taskId = process.env.NEZHA_TASK_ID;
-const eventDir = process.env.NEZHA_EVENT_DIR;
+const taskId = process.env.AERORIC_TASK_ID;
+const eventDir = process.env.AERORIC_EVENT_DIR;
 if (!taskId || !eventDir) {
   process.exit(0);
 }
@@ -36,7 +36,7 @@ function finish() {
       JSON.stringify({
         ts: Date.now(),
         task_id: taskId,
-        agent: process.env.NEZHA_AGENT || "",
+        agent: process.env.AERORIC_AGENT || "",
         event: pick(payload, "hook_event_name", "event_name", "hookEventName", "event"),
         session_id:
           pick(payload, "session_id", "conversation_id", "sessionId", "conversationId") ||

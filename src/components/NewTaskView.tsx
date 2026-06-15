@@ -4,6 +4,7 @@ import { TriangleAlert, Sparkles } from "lucide-react";
 import type { Project, AgentType, PermissionMode } from "../types";
 import { isRemoteProject } from "../types";
 import { agentDisplayLabel, isCodexLikeAgent } from "../agents";
+import { useAgentOptions } from "../hooks/useAgentOptions";
 import type { HookAgentReadiness } from "./app-settings/types";
 import { useToast } from "./Toast";
 import {
@@ -19,9 +20,9 @@ import {
 } from "./new-task/PromptEditor";
 import { ImageAttachments } from "./new-task/ImageAttachments";
 import { TextAttachments, type PastedText } from "./new-task/TextAttachments";
-import { AgentPermSelector } from "./new-task/AgentPermSelector";
+import { AgentPermSelector, type ComposeMenu } from "./new-task/AgentPermSelector";
 import { LaunchModeSelector, type LaunchMode } from "./new-task/LaunchModeSelector";
-import { buildPromptWithGoalMode, shouldShowInstructionsBanner } from "./new-task/goalMode";
+import { buildPromptWithTaskModes, shouldShowInstructionsBanner } from "./new-task/goalMode";
 import { useI18n } from "../i18n";
 import { APP_PLATFORM } from "../platform";
 import {
@@ -44,6 +45,7 @@ export interface NewTaskDraft {
   agent: AgentType;
   permMode: PermissionMode;
   planMode: boolean;
+  goalMode?: boolean;
   pastedImages: PastedImage[];
   pastedTexts?: PastedText[];
   launchMode?: LaunchMode;
@@ -74,6 +76,7 @@ export function NewTaskView({
   onSubmit,
   initialDraft,
   onCacheDraft,
+  compactControls = false,
 }: {
   project: Project;
   otherProjects?: Project[];
@@ -89,17 +92,21 @@ export function NewTaskView({
   }) => void;
   initialDraft?: NewTaskDraft | null;
   onCacheDraft?: (draft: NewTaskDraft | null) => void;
+  compactControls?: boolean;
 }) {
   const { t } = useI18n();
   const { showToast } = useToast();
+  const agentOptions = useAgentOptions();
   const remoteProject = isRemoteProject(project);
   const [agent, setAgent] = useState<AgentType>(initialDraft?.agent ?? "claude");
   const [permMode, setPermMode] = useState<PermissionMode>(initialDraft?.permMode ?? "ask");
   const [planMode, setPlanMode] = useState(initialDraft?.planMode ?? false);
+  const [goalMode, setGoalMode] = useState(initialDraft?.goalMode ?? false);
   const [launchMode, setLaunchMode] = useState<LaunchMode>(
     remoteProject ? "local" : (initialDraft?.launchMode ?? "local"),
   );
   const [baseBranch, setBaseBranch] = useState<string>(initialDraft?.baseBranch ?? "");
+  const [composeOpenMenu, setComposeOpenMenu] = useState<ComposeMenu>(null);
 
   const [allFiles, setAllFiles] = useState<FileEntry[]>([]);
   const [filesLoading, setFilesLoading] = useState(false);
@@ -145,10 +152,10 @@ export function NewTaskView({
   // Cache draft on unmount so reopening the new-task view restores work in progress.
   // Cleared after submit to avoid re-restoring the just-sent prompt.
   const submittedRef = useRef(false);
-  const draftDataRef = useRef({ agent, permMode, planMode, pastedImages, pastedTexts, launchMode, baseBranch });
+  const draftDataRef = useRef({ agent, permMode, planMode, goalMode, pastedImages, pastedTexts, launchMode, baseBranch });
   useEffect(() => {
-    draftDataRef.current = { agent, permMode, planMode, pastedImages, pastedTexts, launchMode, baseBranch };
-  }, [agent, permMode, planMode, pastedImages, pastedTexts, launchMode, baseBranch]);
+    draftDataRef.current = { agent, permMode, planMode, goalMode, pastedImages, pastedTexts, launchMode, baseBranch };
+  }, [agent, permMode, planMode, goalMode, pastedImages, pastedTexts, launchMode, baseBranch]);
   useEffect(() => {
     return () => {
       if (!onCacheDraft) return;
@@ -167,6 +174,7 @@ export function NewTaskView({
         agent: data.agent,
         permMode: data.permMode,
         planMode: data.planMode,
+        goalMode: data.goalMode,
         pastedImages: data.pastedImages,
         pastedTexts: data.pastedTexts,
         launchMode: data.launchMode,
@@ -190,8 +198,8 @@ export function NewTaskView({
     }
 
     loadSendShortcut();
-    window.addEventListener("nezha:app-settings-changed", loadSendShortcut);
-    return () => window.removeEventListener("nezha:app-settings-changed", loadSendShortcut);
+    window.addEventListener("aeroric:app-settings-changed", loadSendShortcut);
+    return () => window.removeEventListener("aeroric:app-settings-changed", loadSendShortcut);
   }, []);
 
   // Load default agent and permission mode from project config when project changes
@@ -203,8 +211,8 @@ export function NewTaskView({
     )
       .then((cfg) => {
         const defaultAgent = cfg.agent.default;
-        if (defaultAgent === "claude" || defaultAgent === "claude_gpt55" || defaultAgent === "codex") {
-          setAgent(defaultAgent);
+        if (agentOptions.some((option) => option.value === defaultAgent)) {
+          setAgent(defaultAgent as AgentType);
         }
         const defaultPerm = cfg.agent.default_permission_mode;
         if (defaultPerm === "ask" || defaultPerm === "auto_edit" || defaultPerm === "full_access") {
@@ -213,7 +221,7 @@ export function NewTaskView({
       })
       .catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [project.id, remoteProject]);
+  }, [agentOptions, project.id, remoteProject]);
 
   const [hasMdFile, setHasMdFile] = useState<boolean | null>(null);
 
@@ -223,14 +231,14 @@ export function NewTaskView({
       return;
     }
     setHasMdFile(null);
-    const filename = isCodexLikeAgent(agent) ? "AGENTS.md" : "CLAUDE.md";
+    const filename = isCodexLikeAgent(agent, agentOptions) ? "AGENTS.md" : "CLAUDE.md";
     invoke<string>("read_file_content", {
       path: `${project.path}/${filename}`,
       projectPath: project.path,
     })
       .then(() => setHasMdFile(true))
       .catch(() => setHasMdFile(false));
-  }, [project.path, agent, remoteProject]);
+  }, [agentOptions, project.path, agent, remoteProject]);
 
   // Hook 就绪状态：版本过低 / 无 node 时软提示用户(任务仍可启动,已回退轮询)。
   const [hookReadiness, setHookReadiness] = useState<HookAgentReadiness[] | null>(null);
@@ -252,7 +260,7 @@ export function NewTaskView({
   const agentReadiness = hookReadiness?.find((r) => r.agent === agent) ?? null;
   const hookBanner = (() => {
     if (!agentReadiness || agentReadiness.usable) return null;
-    const agentName = agentDisplayLabel(agent);
+    const agentName = agentDisplayLabel(agent, agentOptions);
     if (agentReadiness.reason === "version_too_low") {
       return t("newTask.hookVersionLow", {
         agent: agentName,
@@ -383,7 +391,7 @@ export function NewTaskView({
   }
 
   function handleInitializeMd() {
-    const filename = isCodexLikeAgent(agent) ? "AGENTS.md" : "CLAUDE.md";
+    const filename = isCodexLikeAgent(agent, agentOptions) ? "AGENTS.md" : "CLAUDE.md";
     const prompt = t("newTask.initializePrompt", { file: filename });
     // 初始化 md 文件不涉及代码改动，强制走本地，避免无谓的 worktree 开销
     onSubmit({
@@ -406,7 +414,7 @@ export function NewTaskView({
       return;
     }
     submittedRef.current = true;
-    const finalPrompt = buildPromptWithGoalMode(text, planMode);
+    const finalPrompt = buildPromptWithTaskModes(text, { planMode, goalMode });
     onSubmit({
       prompt: finalPrompt,
       agent,
@@ -465,8 +473,8 @@ export function NewTaskView({
             <div style={{ fontSize: 13, lineHeight: 1.55, color: "var(--text-secondary)" }}>
               <span style={{ fontWeight: 650, color: "var(--text-primary)" }}>
                 {t("newTask.instructionsMissing", {
-                  file: isCodexLikeAgent(agent) ? "AGENTS.md" : "CLAUDE.md",
-                }).split(isCodexLikeAgent(agent) ? "AGENTS.md" : "CLAUDE.md")[0]}
+                  file: isCodexLikeAgent(agent, agentOptions) ? "AGENTS.md" : "CLAUDE.md",
+                }).split(isCodexLikeAgent(agent, agentOptions) ? "AGENTS.md" : "CLAUDE.md")[0]}
                 <code
                   style={{
                     fontFamily: "var(--font-mono)",
@@ -476,15 +484,15 @@ export function NewTaskView({
                     borderRadius: 3,
                   }}
                 >
-                  {isCodexLikeAgent(agent) ? "AGENTS.md" : "CLAUDE.md"}
+                  {isCodexLikeAgent(agent, agentOptions) ? "AGENTS.md" : "CLAUDE.md"}
                 </code>{" "}
                 {t("newTask.instructionsMissing", {
-                  file: isCodexLikeAgent(agent) ? "AGENTS.md" : "CLAUDE.md",
-                }).split(isCodexLikeAgent(agent) ? "AGENTS.md" : "CLAUDE.md")[1]}
+                  file: isCodexLikeAgent(agent, agentOptions) ? "AGENTS.md" : "CLAUDE.md",
+                }).split(isCodexLikeAgent(agent, agentOptions) ? "AGENTS.md" : "CLAUDE.md")[1]}
               </span>{" "}
               {t("newTask.addInstructions", {
-                file: isCodexLikeAgent(agent) ? "AGENTS.md" : "CLAUDE.md",
-                agent: agentDisplayLabel(agent),
+                file: isCodexLikeAgent(agent, agentOptions) ? "AGENTS.md" : "CLAUDE.md",
+                agent: agentDisplayLabel(agent, agentOptions),
               })}
             </div>
             <button
@@ -594,46 +602,48 @@ export function NewTaskView({
           </div>
         )}
 
-        {/* Toolbar */}
-        <AgentPermSelector
-          agent={agent}
-          permMode={permMode}
-          planMode={planMode}
-          isEmpty={isEmpty}
-          hasImages={pastedImages.length > 0 || pastedTexts.length > 0}
-          saveAsTodoDisabledReason={
-            launchMode === "worktree" ? t("newTask.worktreeMustSend") : undefined
-          }
-          sendShortcutKeys={getSendShortcutKeys(sendShortcut, APP_PLATFORM)}
-          onSetAgent={setAgent}
-          onSetPermMode={setPermMode}
-          onTogglePlanMode={() => setPlanMode((v) => !v)}
-          onAddImages={(dataUrls) => {
-            setPastedImages((prev) => [
-              ...prev,
-              ...dataUrls.map((dataUrl) => ({
-                id: `${Date.now()}-${Math.random()}`,
-                dataUrl,
-              })),
-            ]);
-            setIsEmpty(false);
-          }}
-          onSubmit={handleSubmit}
-        />
       </div>
 
-      {/* Launch mode + base branch (compose card 外、独立一栏) */}
-      {!remoteProject && (
-      <div style={s.launchModeBar}>
-        <LaunchModeSelector
-          projectPath={project.path}
-          launchMode={launchMode}
-          baseBranch={baseBranch}
-          onSetLaunchMode={setLaunchMode}
-          onSetBaseBranch={setBaseBranch}
-        />
+      <div style={s.composeActionDock}>
+        <div style={s.composeActionRow}>
+          <AgentPermSelector
+            agent={agent}
+            permMode={permMode}
+            planMode={planMode}
+            goalMode={goalMode}
+            isEmpty={isEmpty}
+            hasImages={pastedImages.length > 0 || pastedTexts.length > 0}
+            saveAsTodoDisabledReason={
+              launchMode === "worktree" ? t("newTask.worktreeMustSend") : undefined
+            }
+            sendShortcutKeys={getSendShortcutKeys(sendShortcut, APP_PLATFORM)}
+            compact={compactControls}
+            launchControls={
+              !remoteProject ? (
+                <div style={s.launchModeBar}>
+                  <LaunchModeSelector
+                    projectPath={project.path}
+                    launchMode={launchMode}
+                    baseBranch={baseBranch}
+                    compact={compactControls}
+                    openMenu={composeOpenMenu}
+                    onOpenMenuChange={setComposeOpenMenu}
+                    onSetLaunchMode={setLaunchMode}
+                    onSetBaseBranch={setBaseBranch}
+                  />
+                </div>
+              ) : null
+            }
+            onSetAgent={setAgent}
+            onSetPermMode={setPermMode}
+            openMenu={composeOpenMenu}
+            onOpenMenuChange={setComposeOpenMenu}
+            onTogglePlanMode={() => setPlanMode((v) => !v)}
+            onToggleGoalMode={() => setGoalMode((v) => !v)}
+            onSubmit={handleSubmit}
+          />
+        </div>
       </div>
-      )}
     </div>
   );
 }

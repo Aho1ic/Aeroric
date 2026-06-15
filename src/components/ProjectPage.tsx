@@ -11,9 +11,9 @@ import type {
   TaskDisplayWindow,
   FontFamily,
   SshConnection,
+  CondaEnvironment,
 } from "../types";
 import { resolveProjectLocation } from "../types";
-import { TaskPanel } from "./TaskPanel";
 import { NewTaskView, type NewTaskDraft } from "./NewTaskView";
 import { RunningView } from "./RunningView";
 import { FileExplorer } from "./FileExplorer";
@@ -26,12 +26,30 @@ import { ProjectRail } from "./ProjectRail";
 import { SettingsDialog } from "./SettingsDialog";
 import { RightToolbar } from "./RightToolbar";
 import { TodoTaskView } from "./TodoTaskView";
-import { ShellTerminalPanel, type ShellTerminalPanelHandle } from "./ShellTerminalPanel";
+import {
+  deriveShellTerminalFontSize,
+  ShellTerminalPanel,
+  type ShellTerminalPanelHandle,
+} from "./ShellTerminalPanel";
 import { SshTerminalPanel } from "./ssh/SshTerminalPanel";
+import { SftpPanel } from "./sftp/SftpPanel";
+import { DockerServiceView } from "./docker/DockerServiceView";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { useProjectPanels } from "../hooks/useProjectPanels";
-import { useI18n } from "../i18n";
-import { shouldShowRemoteSshTerminal } from "./project-page/viewMode";
+import {
+  centerWorkspaceMode,
+  projectResponsiveLayout,
+  shellCenterContentStyle,
+  shellCenterLayerStyle,
+  shouldShowRemoteSshTerminalLayer,
+  shouldShowRemoteSshTerminal,
+  shouldShowRunningTaskInCenter,
+  shouldShowShellInCenter,
+  shouldShowTaskWorkspace,
+  visibleDockPanel,
+} from "./project-page/viewMode";
+import { projectVisibilityStyle } from "./project-page/visibility";
+import { buildRunnableFileCommand, selectDefaultCondaEnvironment } from "./file-viewer/run";
 import s from "../styles";
 
 export function ProjectPage({
@@ -47,7 +65,6 @@ export function ProjectPage({
   onNewTask,
   onSelectTask,
   onDeleteTask,
-  onDeleteAllTasks,
   onToggleTaskStar,
   onRenameTask,
   onGenerateTaskName,
@@ -69,24 +86,17 @@ export function ProjectPage({
   onSwitchProject,
   onOpen,
   themeVariant,
-  themeMode,
-  systemPrefersDark,
-  onThemeModeChange,
   onToggleTheme,
   terminalFontSize,
-  onTerminalFontSizeChange,
-  taskDisplayWindow,
-  onTaskDisplayWindowChange,
   attentionBadge,
-  onAttentionBadgeChange,
-  uiFontFamily,
-  onUiFontFamilyChange,
   monoFontFamily,
-  onMonoFontFamilyChange,
   hubMode = false,
   onExitSkillHub,
   sshConnections,
   onSshConnectionsChange,
+  condaEnvironments,
+  selectedCondaEnvPath,
+  onSelectedCondaEnvPathChange,
 }: {
   project: Project;
   visible?: boolean;
@@ -155,15 +165,16 @@ export function ProjectPage({
   onExitSkillHub?: () => void;
   sshConnections: SshConnection[];
   onSshConnectionsChange: (connections: SshConnection[]) => void;
+  condaEnvironments: CondaEnvironment[];
+  selectedCondaEnvPath: string | null;
+  onSelectedCondaEnvPathChange: (path: string | null) => void;
 }) {
-  const { t } = useI18n();
   const {
     rightPanel,
     openFiles,
     activeFilePath,
     openDiff,
     rightPanelWidth,
-    terminalHeight,
     setOpenDiff,
     openRightPanel,
     handleTogglePanel,
@@ -178,17 +189,22 @@ export function ProjectPage({
     handleCommitFileClick,
     clearFileAndDiff,
     handleRightResizeStart,
-    handleTerminalResizeStart,
   } = useProjectPanels();
 
   const [showShellTerminal, setShowShellTerminal] = useState(false);
+  const [shellTerminalMounted, setShellTerminalMounted] = useState(false);
+  const [rightSshMounted, setRightSshMounted] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [showFileSearch, setShowFileSearch] = useState(false);
-  const [taskPanelCollapsed, setTaskPanelCollapsed] = useState(false);
+  const [responsiveLayout, setResponsiveLayout] = useState({
+    autoCollapseRail: false,
+    compactComposeControls: false,
+  });
   const [mountedTaskIds, setMountedTaskIds] = useState<Set<string>>(() => new Set());
+  const projectBodyRef = useRef<HTMLDivElement>(null);
   const shellRef = useRef<ShellTerminalPanelHandle>(null);
+  const shellReadyRef = useRef(false);
   const pendingCmdRef = useRef<string | null>(null);
-  const prevHadDiffRef = useRef(false);
   const newTaskDraftRef = useRef<NewTaskDraft | null>(null);
   const handleCacheNewTaskDraft = useCallback((draft: NewTaskDraft | null) => {
     newTaskDraftRef.current = draft;
@@ -224,11 +240,16 @@ export function ProjectPage({
     projectLocation,
     Boolean(remoteConnection),
   );
-  const visibleRightPanel =
-    (rightPanel === "files" && filesDisabled) ||
-    ((rightPanel === "git-changes" || rightPanel === "git-history") && gitDisabled)
-      ? null
-      : rightPanel;
+  const centerMode = centerWorkspaceMode(rightPanel, showShellTerminal);
+  const isSftpMode = centerMode === "sftp";
+  const isShellMode = centerMode === "shell";
+  const isDockerMode = centerMode === "docker";
+  const shellVisibleInCenter = shouldShowShellInCenter({
+    shellMode: isShellMode,
+    hasOpenFiles: openFiles.length > 0,
+    hasOpenDiff: Boolean(openDiff),
+  });
+  const visibleRightPanel = visibleDockPanel(rightPanel, { filesDisabled, gitDisabled });
   const selectedTask = projectTasks.find((t) => t.id === selectedTaskId) ?? null;
   // GitChanges/GitHistory 的 cwd：worktree 任务用 worktree 路径，否则用主仓。
   // 主仓 git status 看不到 worktree 内未提交修改，必须切到 worktree cwd 才能查看 / 暂存 / 提交。
@@ -256,17 +277,6 @@ export function ProjectPage({
     }
   }, [selectedTaskId, isNewTask]);
 
-  // diff viewer 打开/关闭时自动联动任务面板的折叠态，但只在 "无 diff → 有 diff" 或
-  // "有 diff → 无 diff" 跨界的那一刻同步一次。用户中途手动展/收，以及切换不同 diff
-  // 文件（openDiff 引用变化但仍是 truthy）都不会被覆盖。
-  useEffect(() => {
-    const hasDiff = Boolean(openDiff);
-    if (hasDiff !== prevHadDiffRef.current) {
-      setTaskPanelCollapsed(hasDiff);
-      prevHadDiffRef.current = hasDiff;
-    }
-  }, [openDiff]);
-
   const handleSelectTask = useCallback(
     (id: string) => {
       clearFileAndDiff();
@@ -275,120 +285,155 @@ export function ProjectPage({
     [onSelectTask, clearFileAndDiff],
   );
 
+  const sendOrQueueShellCommand = useCallback((cmd: string) => {
+    setShellTerminalMounted(true);
+    setShowShellTerminal(true);
+    if (shellReadyRef.current && shellRef.current) {
+      shellRef.current.sendCommand(cmd);
+      return;
+    }
+    pendingCmdRef.current = cmd;
+  }, []);
+
   const handleRunMakeTarget = useCallback(
     (target: string) => {
-      const cmd = `make ${target}\n`;
-      if (showShellTerminal && shellRef.current) {
-        shellRef.current.sendCommand(cmd);
-      } else {
-        pendingCmdRef.current = cmd;
-        setShowShellTerminal(true);
-      }
+      sendOrQueueShellCommand(`make ${target}\n`);
     },
-    [showShellTerminal],
+    [sendOrQueueShellCommand],
+  );
+
+  const flushPendingShellCommand = useCallback(() => {
+    if (!pendingCmdRef.current || !shellRef.current) return;
+    shellRef.current.sendCommand(pendingCmdRef.current);
+    pendingCmdRef.current = null;
+  }, []);
+
+  const handleRunPythonFile = useCallback(
+    (filePath: string) => {
+      const env = selectDefaultCondaEnvironment(condaEnvironments, selectedCondaEnvPath);
+      const cmd = buildRunnableFileCommand(filePath, env);
+      if (!cmd) return;
+      sendOrQueueShellCommand(cmd);
+    },
+    [condaEnvironments, selectedCondaEnvPath, sendOrQueueShellCommand],
   );
 
   const handleShellReady = useCallback(() => {
-    if (pendingCmdRef.current) {
-      shellRef.current?.sendCommand(pendingCmdRef.current);
-      pendingCmdRef.current = null;
-    }
-  }, []);
+    shellReadyRef.current = true;
+    flushPendingShellCommand();
+  }, [flushPendingShellCommand]);
 
   const handleNewTask = useCallback(() => {
     clearFileAndDiff();
     onNewTask();
   }, [onNewTask, clearFileAndDiff]);
 
-  const collapseTaskPanelForNewDiff = useCallback(() => {
-    if (!openDiff) {
-      setTaskPanelCollapsed(true);
-    }
-  }, [openDiff]);
-
   const handleDiffFileSelectWithCollapse = useCallback(
     (filePath: string, staged: boolean, label: string) => {
-      collapseTaskPanelForNewDiff();
       handleDiffFileSelect(filePath, staged, label);
     },
-    [collapseTaskPanelForNewDiff, handleDiffFileSelect],
+    [handleDiffFileSelect],
   );
 
   const handleCommitSelectWithCollapse = useCallback(
     (hash: string, message: string) => {
-      collapseTaskPanelForNewDiff();
       handleCommitSelect(hash, message);
     },
-    [collapseTaskPanelForNewDiff, handleCommitSelect],
+    [handleCommitSelect],
   );
 
   const handleCommitFileClickWithCollapse = useCallback(
     (hash: string, filePath: string, label: string) => {
-      collapseTaskPanelForNewDiff();
       handleCommitFileClick(hash, filePath, label);
     },
-    [collapseTaskPanelForNewDiff, handleCommitFileClick],
+    [handleCommitFileClick],
   );
 
   const currentTaskCreatedAt = selectedTask?.createdAt ?? null;
+  const remoteSshMainVisible = shouldShowRemoteSshTerminalLayer({
+    showRemoteSshTerminal,
+    hasRemoteConnection: Boolean(remoteConnection),
+    hasOpenFiles: openFiles.length > 0,
+    hasOpenDiff: Boolean(openDiff),
+    isSftpMode,
+    isShellMode,
+    isDockerMode,
+  });
+  const shellTerminalFontSize = useMemo(
+    () => deriveShellTerminalFontSize(terminalFontSize),
+    [terminalFontSize],
+  );
+  const taskWorkspaceVisible = shouldShowTaskWorkspace({
+    isNewTask,
+    hasSelectedTask: Boolean(selectedTask),
+    taskStatus: selectedTask?.status ?? "todo",
+    hasSessionPath: Boolean(selectedTask?.claudeSessionPath ?? selectedTask?.codexSessionPath),
+  });
+  const activeWorkspaceTask = taskWorkspaceVisible ? selectedTask : null;
+
+  useEffect(() => {
+    if (rightPanel === "ssh") {
+      setRightSshMounted(true);
+    }
+  }, [rightPanel]);
+
+  useEffect(() => {
+    const element = projectBodyRef.current;
+    if (!element) return;
+
+    const updateLayout = () => {
+      const next = projectResponsiveLayout({
+        width: element.getBoundingClientRect().width,
+        rightPanelWidth,
+        rightPanelVisible: Boolean(visibleRightPanel),
+      });
+      setResponsiveLayout((prev) =>
+        prev.autoCollapseRail === next.autoCollapseRail &&
+        prev.compactComposeControls === next.compactComposeControls
+          ? prev
+          : next,
+      );
+    };
+
+    updateLayout();
+    if (typeof ResizeObserver === "undefined") {
+      window.addEventListener("resize", updateLayout);
+      return () => window.removeEventListener("resize", updateLayout);
+    }
+    const observer = new ResizeObserver(updateLayout);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [rightPanelWidth, visibleRightPanel]);
 
   return (
     <div
+      ref={projectBodyRef}
       style={{
         ...s.projectBody,
         position: "absolute",
         inset: 0,
-        // 非激活项目用 display:none 而非 visibility:hidden——visibility:hidden
-        // 仍把元素留在 layout tree 中，macOS WKWebView 的 NSTextInputClient
-        // 在中文 IME 拖选时会扫描全部 RenderText（含非激活项目子树里的 emoji/img），
-        // 触发 hit-test 风暴。display:none 把整棵子树从 layout tree 移除，
-        // 风暴范围只剩当前可见项目。xterm buffer 在 display:none 下仍同步更新，
-        // 切回时 ResizeObserver 触发 fit 不丢数据。
-        display: visible ? "flex" : "none",
-        pointerEvents: visible ? "auto" : "none",
-        zIndex: visible ? 1 : 0,
+        ...projectVisibilityStyle(visible),
       }}
     >
       <ProjectRail
         projects={allProjects}
         allTasks={tasks}
         activeProjectId={project.id}
+        selectedTaskId={selectedTaskId}
+        isNewTask={isNewTask}
         attentionBadge={attentionBadge}
+        themeVariant={themeVariant}
+        onToggleTheme={onToggleTheme}
         onSwitch={onSwitchProject}
         onOpen={onOpen}
-        singleProjectMode={hubMode}
-      />
-      <TaskPanel
-        project={project}
-        tasks={projectTasks}
-        selectedId={selectedTaskId}
-        isNewTask={isNewTask}
+        onBack={hubMode ? (onExitSkillHub ?? onBack) : onBack}
         onNewTask={handleNewTask}
         onSelectTask={handleSelectTask}
         onDeleteTask={onDeleteTask}
-        onDeleteAllTasks={onDeleteAllTasks}
         onToggleTaskStar={onToggleTaskStar}
         onRunTodo={onRunTodoTask}
-        onBack={hubMode ? (onExitSkillHub ?? onBack) : onBack}
-        backTitle={hubMode ? t("skill.taskView.back") : undefined}
-        themeVariant={themeVariant}
-        themeMode={themeMode}
-        systemPrefersDark={systemPrefersDark}
-        onThemeModeChange={onThemeModeChange}
-        onToggleTheme={onToggleTheme}
-        terminalFontSize={terminalFontSize}
-        onTerminalFontSizeChange={onTerminalFontSizeChange}
-        taskDisplayWindow={taskDisplayWindow}
-        onTaskDisplayWindowChange={onTaskDisplayWindowChange}
-        attentionBadge={attentionBadge}
-        onAttentionBadgeChange={onAttentionBadgeChange}
-        uiFontFamily={uiFontFamily}
-        onUiFontFamilyChange={onUiFontFamilyChange}
-        monoFontFamily={monoFontFamily}
-        onMonoFontFamilyChange={onMonoFontFamilyChange}
-        active={visible}
-        collapsed={taskPanelCollapsed}
-        onToggleCollapsed={() => setTaskPanelCollapsed((v) => !v)}
+        singleProjectMode={hubMode}
+        forceCollapsed={responsiveLayout.autoCollapseRail}
       />
       <div style={{ ...s.mainContent, flexDirection: "column" }}>
         <div
@@ -401,7 +446,7 @@ export function ProjectPage({
             position: "relative",
           }}
         >
-          {/* Foreground: file viewer, diff, or new-task composer */}
+          {/* Foreground: SFTP, file viewer, diff, SSH shell, or new-task composer */}
           <ErrorBoundary
             label="主内容区"
             fallback={(error, reset) => (
@@ -426,7 +471,24 @@ export function ProjectPage({
               </div>
             )}
           >
-            {openDiff ? (
+            {isSftpMode ? (
+              <SftpPanel
+                sshConnections={sshConnections}
+                localDefaultPath={projectLocation.kind === "local" ? project.path : "/Users/macbook"}
+                active={visible && isSftpMode}
+                width="100%"
+                themeVariant={themeVariant}
+              />
+            ) : isDockerMode ? (
+              <DockerServiceView
+                remote={projectLocation.kind === "ssh" ? remoteConnection : undefined}
+                sourceLabel={
+                  projectLocation.kind === "ssh" && remoteConnection
+                    ? `${remoteConnection.name} · ${projectLocation.remotePath}`
+                    : project.path
+                }
+              />
+            ) : openDiff ? (
               openDiff.kind === "file" ? (
                 <GitDiffViewer
                   projectPath={gitContextPath}
@@ -467,48 +529,102 @@ export function ProjectPage({
                 themeVariant={themeVariant}
                 onRunMakeTarget={handleRunMakeTarget}
                 remote={remoteFileContext}
+                condaEnvironments={condaEnvironments}
+                selectedCondaEnvPath={selectedCondaEnvPath}
+                onSelectedCondaEnvPathChange={onSelectedCondaEnvPathChange}
+                onRunPythonFile={handleRunPythonFile}
               />
-            ) : showRemoteSshTerminal && remoteConnection ? (
-              <SshTerminalPanel
-                connections={sshConnections}
-                onConnectionsChange={onSshConnectionsChange}
-                active={visible}
-                width="100%"
-                themeVariant={themeVariant}
-                terminalFontSize={terminalFontSize}
-                monoFontFamily={monoFontFamily}
-                initialConnectionId={remoteConnection.id}
-                autoConnect
-                hideConnectionList
-              />
-            ) : isNewTask || !selectedTask ? (
+            ) : !activeWorkspaceTask ? (
               <NewTaskView
                 project={project}
                 otherProjects={otherProjects}
                 onSubmit={onSubmitTask}
                 initialDraft={newTaskDraftRef.current}
                 onCacheDraft={handleCacheNewTaskDraft}
+                compactControls={responsiveLayout.compactComposeControls}
               />
-            ) : selectedTask.status === ("todo" as TaskStatus) ? (
+            ) : activeWorkspaceTask.status === ("todo" as TaskStatus) ? (
               <TodoTaskView
-                task={selectedTask}
+                task={activeWorkspaceTask}
                 onRunTodo={onRunTodoTask}
                 onUpdateTodo={onUpdateTodo}
               />
             ) : null}
           </ErrorBoundary>
 
+          {shellTerminalMounted && !terminalDisabled && (
+            <div
+              style={shellCenterLayerStyle(shellVisibleInCenter)}
+            >
+              <div style={shellCenterContentStyle()}>
+                <ErrorBoundary label="终端">
+                  <ShellTerminalPanel
+                    ref={shellRef}
+                    projectPath={project.path}
+                    projectId={project.id}
+                    isActive={visible && shellVisibleInCenter && showShellTerminal}
+                    visible={shellVisibleInCenter && showShellTerminal}
+                    onMinimize={() => setShowShellTerminal(false)}
+                    onClose={() => {
+                      setShowShellTerminal(false);
+                      setShellTerminalMounted(false);
+                      shellReadyRef.current = false;
+                      pendingCmdRef.current = null;
+                    }}
+                    themeVariant={themeVariant}
+                    terminalFontSize={shellTerminalFontSize}
+                    monoFontFamily={monoFontFamily}
+                    onReady={handleShellReady}
+                    height="100%"
+                  />
+                </ErrorBoundary>
+              </div>
+            </div>
+          )}
+
+          {showRemoteSshTerminal && remoteConnection && (
+            <div
+              style={{
+                position: "absolute",
+                inset: 0,
+                display: remoteSshMainVisible ? "flex" : "none",
+                zIndex: remoteSshMainVisible ? 2 : 0,
+              }}
+            >
+              <ErrorBoundary label="SSH">
+                <SshTerminalPanel
+                  connections={sshConnections}
+                  onConnectionsChange={onSshConnectionsChange}
+                  active={visible && remoteSshMainVisible}
+                  width="100%"
+                  themeVariant={themeVariant}
+                  terminalFontSize={terminalFontSize}
+                  monoFontFamily={monoFontFamily}
+                  initialConnectionId={remoteConnection.id}
+                  autoConnect
+                  hideConnectionList
+                />
+              </ErrorBoundary>
+            </div>
+          )}
+
           {/* Background terminals */}
           {projectTasks
             .filter((t) => mountedTaskIds.has(t.id))
             .map((task) => {
-              const isVisible =
-                openFiles.length === 0 &&
-                !openDiff &&
-                !isNewTask &&
-                !!selectedTask &&
-                task.id === selectedTaskId &&
-                task.status !== "todo";
+              const isVisible = shouldShowRunningTaskInCenter({
+                hasOpenFiles: openFiles.length > 0,
+                hasOpenDiff: Boolean(openDiff),
+                isShellMode,
+                isSftpMode,
+                isDockerMode,
+                isNewTask: !taskWorkspaceVisible,
+                hasSelectedTask: Boolean(selectedTask),
+                taskId: task.id,
+                selectedTaskId,
+                taskStatus: task.status,
+                hasSessionPath: Boolean(task.claudeSessionPath ?? task.codexSessionPath),
+              });
               return (
                 <RunningView
                   key={task.id}
@@ -538,25 +654,16 @@ export function ProjectPage({
               );
             })}
         </div>
-        {showShellTerminal && !terminalDisabled && (
-          <ShellTerminalPanel
-            ref={shellRef}
-            projectPath={project.path}
-            projectId={project.id}
-            isActive={visible}
-            onClose={() => setShowShellTerminal(false)}
-            themeVariant={themeVariant}
-            terminalFontSize={terminalFontSize}
-            monoFontFamily={monoFontFamily}
-            onReady={handleShellReady}
-            height={terminalHeight}
-            onResizeStart={handleTerminalResizeStart}
-          />
-        )}
       </div>
 
-      {visibleRightPanel && (
-        <div style={{ position: "relative", display: "flex", flexShrink: 0 }}>
+      {(visibleRightPanel || rightSshMounted) && (
+        <div
+          style={{
+            position: "relative",
+            display: visibleRightPanel ? "flex" : "none",
+            flexShrink: 0,
+          }}
+        >
           <div
             onMouseDown={handleRightResizeStart}
             style={{
@@ -601,32 +708,42 @@ export function ProjectPage({
               />
             </ErrorBoundary>
           )}
-          {visibleRightPanel === "ssh" && (
+          <div
+            style={{
+              display: rightPanel === "ssh" ? "flex" : "none",
+              width: rightPanelWidth,
+              minHeight: 0,
+            }}
+          >
             <ErrorBoundary label="SSH">
               <SshTerminalPanel
                 connections={sshConnections}
                 onConnectionsChange={onSshConnectionsChange}
-                active={visible}
+                active={visible && rightPanel === "ssh"}
                 width={rightPanelWidth}
                 themeVariant={themeVariant}
                 terminalFontSize={terminalFontSize}
                 monoFontFamily={monoFontFamily}
               />
             </ErrorBoundary>
-          )}
+          </div>
         </div>
       )}
 
       <RightToolbar
-        activePanel={visibleRightPanel}
+        activePanel={rightPanel}
         onToggle={handleTogglePanel}
         terminalActive={showShellTerminal}
-        onToggleTerminal={() => setShowShellTerminal((v) => !v)}
+        onToggleTerminal={() => {
+          setShellTerminalMounted(true);
+          setShowShellTerminal((v) => !v);
+        }}
         onOpenSearch={() => setShowFileSearch(true)}
         onOpenSettings={() => setShowSettings(true)}
         filesDisabled={filesDisabled}
         gitDisabled={gitDisabled}
         terminalDisabled={terminalDisabled}
+        dockerDisabled={projectLocation.kind === "ssh" && !remoteConnection}
         searchDisabled={searchDisabled}
         settingsDisabled={settingsDisabled}
       />

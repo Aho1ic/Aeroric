@@ -5,7 +5,7 @@ use super::ShellCommand;
 
 static LOGIN_SHELL_ENV: OnceLock<Vec<(String, String)>> = OnceLock::new();
 static LOGIN_SHELL_PATH: OnceLock<String> = OnceLock::new();
-const ENV_SENTINEL: &[u8] = b"__NEZHA_ENV_START__\0";
+const ENV_SENTINEL: &[u8] = b"__AERORIC_ENV_START__\0";
 
 pub(crate) fn home_dir() -> Option<std::path::PathBuf> {
     std::env::var_os("HOME").map(std::path::PathBuf::from)
@@ -69,9 +69,14 @@ fn resolve_login_shell_env() -> Vec<(String, String)> {
 
 fn read_shell_env(shell: &str, interactive: bool) -> Option<Vec<(String, String)>> {
     let args: &[&str] = if interactive {
-        &["-l", "-i", "-c", "printf '__NEZHA_ENV_START__\\0'; env -0"]
+        &[
+            "-l",
+            "-i",
+            "-c",
+            "printf '__AERORIC_ENV_START__\\0'; env -0",
+        ]
     } else {
-        &["-l", "-c", "printf '__NEZHA_ENV_START__\\0'; env -0"]
+        &["-l", "-c", "printf '__AERORIC_ENV_START__\\0'; env -0"]
     };
 
     let output = Command::new(shell)

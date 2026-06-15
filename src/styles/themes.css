@@ -191,41 +191,41 @@ html.eyecare {
 
 /* Design tokens: dark theme */
 html.dark {
-  --bg-root: #1d212a;
-  --bg-shell: #262b36;
-  --bg-titlebar: #2b313e;
-  --bg-sidebar: #242a35;
-  --bg-sidebar-elevated: #202631;
-  --bg-panel: #2b313d;
-  --bg-card: #313847;
-  --bg-hover: #394154;
-  --bg-selected: #34446d;
-  --bg-subtle: #343b4a;
-  --bg-input: #343b4a;
+  --bg-root: #050506;
+  --bg-shell: #050506;
+  --bg-titlebar: #07080b;
+  --bg-sidebar: #08090d;
+  --bg-sidebar-elevated: #0b0d12;
+  --bg-panel: #090a0f;
+  --bg-card: #101117;
+  --bg-hover: #171923;
+  --bg-selected: #1f2330;
+  --bg-subtle: #0d0f15;
+  --bg-input: #07080c;
 
-  --border-dim: rgba(255, 255, 255, 0.07);
-  --border-medium: rgba(255, 255, 255, 0.12);
-  --border-strong: rgba(141, 163, 255, 0.3);
-  --border-focus: #f1f4fb;
+  --border-dim: rgba(210, 218, 235, 0.08);
+  --border-medium: rgba(210, 218, 235, 0.14);
+  --border-strong: rgba(192, 147, 255, 0.36);
+  --border-focus: #c093ff;
 
-  --text-primary: #f1f4fb;
-  --text-secondary: #d6dbe8;
-  --text-muted: #a4adc2;
-  --text-hint: #727b8f;
-  --control-active-bg: rgba(255, 255, 255, 0.12);
-  --control-active-fg: #f1f4fb;
-  --control-selected-bg: rgba(255, 255, 255, 0.16);
-  --control-selected-fg: #f1f4fb;
-  --control-knob-bg: #ffffff;
-  --primary-action-bg: #f1f4fb;
-  --primary-action-fg: #171b24;
-  --primary-action-hover: #ffffff;
+  --text-primary: #dce1ea;
+  --text-secondary: #aeb6c4;
+  --text-muted: #7d8798;
+  --text-hint: #5f6878;
+  --control-active-bg: rgba(192, 147, 255, 0.18);
+  --control-active-fg: #e5e8f0;
+  --control-selected-bg: rgba(192, 147, 255, 0.24);
+  --control-selected-fg: #ece8f8;
+  --control-knob-bg: #e3e6ee;
+  --primary-action-bg: #c093ff;
+  --primary-action-fg: #050506;
+  --primary-action-hover: #d5bcff;
 
-  --accent: #7f9aff;
-  --accent-strong: #6987ff;
-  --accent-soft: rgba(127, 154, 255, 0.34);
-  --accent-hover: #6f8eff;
-  --accent-subtle: rgba(127, 154, 255, 0.14);
+  --accent: #c093ff;
+  --accent-strong: #a979ff;
+  --accent-soft: rgba(192, 147, 255, 0.34);
+  --accent-hover: #d5bcff;
+  --accent-subtle: rgba(192, 147, 255, 0.14);
 
   --icon-folder: #8f98a7;
   --icon-folder-open: #a0a9b8;
@@ -282,7 +282,7 @@ html.dark {
   --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.22);
   --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.3), 0 1px 2px rgba(0, 0, 0, 0.2);
   --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.3), 0 2px 4px rgba(0, 0, 0, 0.2);
-  --shadow-compose: 0 6px 18px rgba(0, 0, 0, 0.18);
+  --shadow-compose: 0 6px 18px rgba(0, 0, 0, 0.14);
   --shadow-popover: 0 8px 32px rgba(0, 0, 0, 0.55);
   --shadow-drawer: 4px 0 16px rgba(0, 0, 0, 0.4);
   --shadow-control: 0 1px 0 rgba(0, 0, 0, 0.35);

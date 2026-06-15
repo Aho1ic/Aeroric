@@ -1,6 +1,6 @@
 import { useState, useCallback, useRef } from "react";
 
-type RightPanel = "files" | "git-changes" | "git-history" | "ssh" | null;
+type RightPanel = "files" | "git-changes" | "git-history" | "ssh" | "sftp" | "docker" | null;
 type OpenFileTab = { path: string; name: string };
 
 type OpenDiff =

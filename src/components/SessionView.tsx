@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { ChevronDown, ChevronRight, Wrench, Copy, Check } from "lucide-react";
 import { marked } from "marked";
+import DOMPurify from "dompurify";
 import { useI18n } from "../i18n";
 
 interface SessionContent {
@@ -16,6 +17,10 @@ interface SessionContent {
 interface SessionMessage {
   role: "user" | "assistant";
   content: SessionContent[];
+}
+
+export function renderSessionMarkdown(text: string): string {
+  return DOMPurify.sanitize(marked(text, { async: false }) as string);
 }
 
 function ToolUseCard({ name, input }: { name: string; input: string }) {
@@ -219,7 +224,7 @@ function MessageBlock({ message }: { message: SessionMessage }) {
         <div
           key={i}
           className="session-prose"
-          dangerouslySetInnerHTML={{ __html: marked(t.text ?? "", { async: false }) as string }}
+          dangerouslySetInnerHTML={{ __html: renderSessionMarkdown(t.text ?? "") }}
         />
       ))}
       {toolParts.map((t, i) => (
@@ -229,7 +234,15 @@ function MessageBlock({ message }: { message: SessionMessage }) {
   );
 }
 
-export function SessionView({ sessionPath }: { sessionPath: string }) {
+export function SessionView({
+  sessionPath,
+  projectPath,
+  isCodex,
+}: {
+  sessionPath: string;
+  projectPath: string;
+  isCodex: boolean;
+}) {
   const { t } = useI18n();
   const [messages, setMessages] = useState<SessionMessage[]>([]);
   const [loading, setLoading] = useState(true);
@@ -239,7 +252,7 @@ export function SessionView({ sessionPath }: { sessionPath: string }) {
   useEffect(() => {
     setLoading(true);
     setError(null);
-    invoke<SessionMessage[]>("read_session_messages", { sessionPath })
+    invoke<SessionMessage[]>("read_session_messages", { sessionPath, projectPath, isCodex })
       .then((msgs) => {
         setMessages(msgs);
         setLoading(false);
@@ -248,7 +261,7 @@ export function SessionView({ sessionPath }: { sessionPath: string }) {
         setError(String(err));
         setLoading(false);
       });
-  }, [sessionPath]);
+  }, [sessionPath, projectPath, isCodex]);
 
   return (
     <div

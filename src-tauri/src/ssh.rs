@@ -14,6 +14,8 @@ use tauri::{AppHandle, Manager, State};
 pub struct SshConnection {
     pub id: String,
     pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub group: Option<String>,
     pub host: String,
     pub port: u16,
     pub username: String,
@@ -30,7 +32,7 @@ pub struct SshConnection {
 }
 
 fn ssh_connections_path() -> Result<PathBuf, String> {
-    Ok(crate::storage::nezha_dir()?.join("ssh-connections.json"))
+    Ok(crate::storage::aeroric_dir()?.join("ssh-connections.json"))
 }
 
 pub(crate) fn shell_quote_posix(value: &str) -> String {
@@ -197,6 +199,15 @@ fn ssh_command_spec(connection: &SshConnection, remote_command: Option<String>) 
         .filter(|value| !value.is_empty());
 
     if let Some(password) = password {
+        ssh_args.splice(
+            0..0,
+            [
+                "-o".to_string(),
+                "PreferredAuthentications=password,keyboard-interactive".to_string(),
+                "-o".to_string(),
+                "PubkeyAuthentication=no".to_string(),
+            ],
+        );
         let mut args = vec!["-e".to_string(), "ssh".to_string()];
         args.extend(ssh_args);
         SshCommandSpec {
@@ -365,7 +376,7 @@ pub async fn load_ssh_connections() -> Result<Vec<SshConnection>, String> {
 #[tauri::command]
 pub async fn save_ssh_connections(connections: Vec<SshConnection>) -> Result<(), String> {
     tokio::task::spawn_blocking(move || {
-        crate::storage::ensure_nezha_dirs()?;
+        crate::storage::ensure_aeroric_dirs()?;
         let raw = serde_json::to_string_pretty(&connections).map_err(|e| e.to_string())?;
         crate::storage::atomic_write(&ssh_connections_path()?, &raw)
     })
@@ -549,6 +560,7 @@ mod tests {
         let args = build_ssh_args(&SshConnection {
             id: "conn-1".to_string(),
             name: "prod".to_string(),
+            group: None,
             host: "prod.example.com".to_string(),
             port: 22,
             username: "deploy".to_string(),
@@ -567,6 +579,7 @@ mod tests {
         let args = build_ssh_args(&SshConnection {
             id: "conn-1".to_string(),
             name: "prod".to_string(),
+            group: None,
             host: "prod.example.com".to_string(),
             port: 2200,
             username: "deploy".to_string(),
@@ -601,8 +614,8 @@ mod tests {
     #[test]
     fn remote_command_changes_directory_before_login_shell() {
         assert_eq!(
-            build_remote_start_command("/srv/nezha app"),
-            "cd -- '/srv/nezha app' && exec \"${SHELL:-/bin/sh}\" -l"
+            build_remote_start_command("/srv/aeroric app"),
+            "cd -- '/srv/aeroric app' && exec \"${SHELL:-/bin/sh}\" -l"
         );
     }
 
@@ -611,6 +624,7 @@ mod tests {
         let args = build_ssh_args(&SshConnection {
             id: "conn-1".to_string(),
             name: "prod".to_string(),
+            group: None,
             host: "prod.example.com; touch /tmp/bad".to_string(),
             port: 22,
             username: "deploy && whoami".to_string(),
@@ -631,6 +645,7 @@ mod tests {
             &SshConnection {
                 id: "conn-1".to_string(),
                 name: "prod".to_string(),
+                group: None,
                 host: "prod.example.com".to_string(),
                 port: 22,
                 username: "deploy".to_string(),
@@ -651,6 +666,36 @@ mod tests {
             spec.env,
             vec![("SSHPASS".to_string(), "secret".to_string())]
         );
+    }
+
+    #[test]
+    fn ssh_command_spec_disables_publickey_for_passwords() {
+        let spec = ssh_command_spec_for_remote_command(
+            &SshConnection {
+                id: "conn-1".to_string(),
+                name: "prod".to_string(),
+                group: None,
+                host: "prod.example.com".to_string(),
+                port: 22,
+                username: "deploy".to_string(),
+                identity_file: None,
+                password: Some("secret".to_string()),
+                remote_path: None,
+                created_at: 1,
+                last_connected_at: None,
+            },
+            "echo ok".to_string(),
+        );
+
+        assert!(spec.args.windows(2).any(|pair| pair
+            == [
+                "-o",
+                "PreferredAuthentications=password,keyboard-interactive"
+            ]));
+        assert!(spec
+            .args
+            .windows(2)
+            .any(|pair| pair == ["-o", "PubkeyAuthentication=no"]));
     }
 
     #[test]

@@ -9,6 +9,31 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
 
 [[package]]
+name = "aeroric"
+version = "1.0.0"
+dependencies = [
+ "base64 0.22.1",
+ "chrono",
+ "font-kit",
+ "libc",
+ "notify",
+ "once_cell",
+ "parking_lot",
+ "portable-pty",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-dialog",
+ "tauri-plugin-opener",
+ "tokio",
+ "toml 0.8.2",
+ "trash",
+ "uuid",
+]
+
+[[package]]
 name = "aho-corasick"
 version = "1.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2434,31 +2459,6 @@ name = "new_debug_unreachable"
 version = "1.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "650eef8c711430f1a879fdd01d4745a7deea475becfb90269c06775983bbf086"
-
-[[package]]
-name = "nezha"
-version = "0.4.1"
-dependencies = [
- "base64 0.22.1",
- "chrono",
- "font-kit",
- "libc",
- "notify",
- "once_cell",
- "parking_lot",
- "portable-pty",
- "reqwest",
- "serde",
- "serde_json",
- "tauri",
- "tauri-build",
- "tauri-plugin-dialog",
- "tauri-plugin-opener",
- "tokio",
- "toml 0.8.2",
- "trash",
- "uuid",
-]
 
 [[package]]
 name = "nix"

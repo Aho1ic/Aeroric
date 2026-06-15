@@ -21,7 +21,7 @@ import {
 } from "../terminalShared";
 import { SshConnectionDialog } from "./SshConnectionDialog";
 import { SshConnectionList } from "./SshConnectionList";
-import { createSshShellId } from "./session";
+import { createSshShellId, shouldAttemptSshAutoConnect } from "./session";
 import "@xterm/xterm/css/xterm.css";
 
 interface ShellOutputEvent {
@@ -64,6 +64,7 @@ export function SshTerminalPanel({
   const terminalRef = useRef<XTerm | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
   const lastSizeRef = useRef<{ cols: number; rows: number } | null>(null);
+  const activeRef = useRef(active);
   const [selectedId, setSelectedId] = useState<string | null>(
     () => initialConnectionId ?? connections[0]?.id ?? null,
   );
@@ -72,10 +73,23 @@ export function SshTerminalPanel({
   const [activeSession, setActiveSession] = useState<ActiveSshSession | null>(null);
   const [error, setError] = useState<string | null>(null);
   const autoConnectStartedRef = useRef<string | null>(null);
+  activeRef.current = active;
 
   const selectedConnection = useMemo(
     () => connections.find((connection) => connection.id === selectedId) ?? connections[0] ?? null,
     [connections, selectedId],
+  );
+  const terminalTheme = themeFor(themeVariant);
+  const connectionGroups = useMemo(
+    () =>
+      Array.from(
+        new Set(
+          connections
+            .map((connection) => connection.group?.trim())
+            .filter((group): group is string => Boolean(group)),
+        ),
+      ),
+    [connections],
   );
 
   useEffect(() => {
@@ -152,11 +166,24 @@ export function SshTerminalPanel({
   }, [activeSession]);
 
   useEffect(() => {
-    if (!autoConnect || activeSession || !selectedConnection) return;
-    if (autoConnectStartedRef.current === selectedConnection.id) return;
-    autoConnectStartedRef.current = selectedConnection.id;
+    if (!active) {
+      autoConnectStartedRef.current = null;
+      return;
+    }
+    if (
+      !shouldAttemptSshAutoConnect({
+        autoConnect,
+        active,
+        hasActiveSession: Boolean(activeSession),
+        connectionId: selectedConnection?.id,
+        lastStartedConnectionId: autoConnectStartedRef.current,
+      })
+    ) {
+      return;
+    }
+    autoConnectStartedRef.current = selectedConnection?.id ?? null;
     handleConnect();
-  }, [activeSession, autoConnect, handleConnect, selectedConnection]);
+  }, [active, activeSession, autoConnect, handleConnect, selectedConnection]);
 
   useEffect(() => {
     if (!activeSession || !terminalContainerRef.current) return;
@@ -202,7 +229,7 @@ export function SshTerminalPanel({
         rows: term.rows,
       })
         .then(() => {
-          if (active) term.focus();
+          if (activeRef.current) term.focus();
         })
         .catch((e: unknown) => {
           const message = String(e);
@@ -213,7 +240,7 @@ export function SshTerminalPanel({
 
     const resizeObserver = new ResizeObserver(() => {
       window.setTimeout(() => {
-        if (active) fit();
+        if (activeRef.current) fit();
       }, 50);
     });
     resizeObserver.observe(container);
@@ -240,9 +267,28 @@ export function SshTerminalPanel({
       fitAddonRef.current = null;
       lastSizeRef.current = null;
       term.dispose();
-      invoke("kill_ssh_shell", { shellId: activeSession.shellId }).catch(() => {});
     };
-  }, [activeSession, active, monoFontFamily, terminalFontSize, themeVariant]);
+  }, [activeSession, monoFontFamily, terminalFontSize, themeVariant]);
+
+  useEffect(() => {
+    if (!active || !terminalRef.current || !fitAddonRef.current || !terminalContainerRef.current || !activeSession) {
+      return;
+    }
+    window.requestAnimationFrame(() => {
+      if (!terminalRef.current || !fitAddonRef.current || !terminalContainerRef.current) return;
+      const size = safeFit(fitAddonRef.current, terminalRef.current, terminalContainerRef.current);
+      if (size) {
+        const last = lastSizeRef.current;
+        if (!last || last.cols !== size.cols || last.rows !== size.rows) {
+          lastSizeRef.current = size;
+          invoke("resize_pty", { taskId: activeSession.shellId, cols: size.cols, rows: size.rows }).catch(
+            () => {},
+          );
+        }
+      }
+      terminalRef.current.focus();
+    });
+  }, [active, activeSession]);
 
   useEffect(() => {
     if (!terminalRef.current) return;
@@ -325,9 +371,17 @@ export function SshTerminalPanel({
 
       {error && <div style={s.sshErrorBanner}>{error}</div>}
 
-      <div style={s.sshTerminalFrame}>
+      <div
+        style={{
+          ...s.sshTerminalFrame,
+          background: activeSession ? terminalTheme.background : "var(--bg-panel)",
+        }}
+      >
         {activeSession ? (
-          <div ref={terminalContainerRef} style={s.sshTerminalCanvas} />
+          <div
+            ref={terminalContainerRef}
+            style={{ ...s.sshTerminalCanvas, background: terminalTheme.background }}
+          />
         ) : (
           <div style={s.sshTerminalPlaceholder}>{t("ssh.selectAndConnect")}</div>
         )}
@@ -336,6 +390,7 @@ export function SshTerminalPanel({
       {dialogOpen && !hideConnectionList && (
         <SshConnectionDialog
           connection={editingConnection}
+          groups={connectionGroups}
           onClose={() => {
             setDialogOpen(false);
             setEditingConnection(null);

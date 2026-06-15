@@ -17,8 +17,9 @@ import {
   applyTerminalFontFamily,
 } from "./terminalShared";
 import { attachLinuxIMEFix, attachMacWebKitShiftInputFix } from "./terminalInputFix";
-import { Plus, Terminal as TerminalIcon, Trash2, X } from "lucide-react";
+import { Minus, Plus, Terminal as TerminalIcon, Trash2, X } from "lucide-react";
 import { useI18n } from "../i18n";
+import { shellTerminalPanelRootStyle } from "./project-page/viewMode";
 import "@xterm/xterm/css/xterm.css";
 
 interface ShellOutputEvent {
@@ -44,15 +45,21 @@ interface Props {
   projectId: string;
   isActive?: boolean;
   onClose: () => void;
+  onMinimize?: () => void;
   themeVariant: ThemeVariant;
   terminalFontSize: TerminalFontSize;
   monoFontFamily: FontFamily;
   onReady?: () => void;
-  height?: number;
+  height?: number | string;
+  visible?: boolean;
   onResizeStart?: (e: React.MouseEvent) => void;
 }
 
 const MAX_SHELLS = 5;
+
+export function deriveShellTerminalFontSize(size: TerminalFontSize): TerminalFontSize {
+  return Math.max(10, size - 1);
+}
 
 function createShellSession(projectId: string, index: number): ShellSession {
   return {
@@ -99,6 +106,16 @@ const ShellTerminalInstance = forwardRef<ShellTerminalInstanceHandle, {
       [shellId],
     );
 
+    const focusTerminal = useCallback(() => {
+      const term = terminalRef.current;
+      if (!term) return;
+      if (term.textarea?.disabled) {
+        term.textarea.disabled = false;
+      }
+      term.focus();
+      term.textarea?.focus({ preventScroll: true });
+    }, []);
+
     useEffect(() => {
       if (!containerRef.current) return;
       const container = containerRef.current;
@@ -143,9 +160,7 @@ const ShellTerminalInstance = forwardRef<ShellTerminalInstanceHandle, {
             }, 300);
           })
           .catch(console.error);
-        if (isActiveRef.current) {
-          term.focus();
-        }
+        if (isActiveRef.current) focusTerminal();
       }, 50);
 
       const disposeSmartCopy = attachSmartCopy(term);
@@ -167,11 +182,11 @@ const ShellTerminalInstance = forwardRef<ShellTerminalInstanceHandle, {
         if (document.visibilityState !== "visible" || !terminalRef.current || !isActiveRef.current) return;
         window.requestAnimationFrame(() => {
           fit();
-        const t = terminalRef.current;
-        if (t) {
-            t.focus();
-        }
-      });
+          const t = terminalRef.current;
+          if (t) {
+            focusTerminal();
+          }
+        });
       };
       document.addEventListener("visibilitychange", handleVisibilityChange);
 
@@ -206,9 +221,8 @@ const ShellTerminalInstance = forwardRef<ShellTerminalInstanceHandle, {
         disposeMacWebKitGuard();
         disposeInputFix();
         term.dispose();
-        invoke("kill_shell", { shellId }).catch(() => {});
       };
-    }, [shellId, projectPath]);
+    }, [focusTerminal, shellId, projectPath]);
 
     useEffect(() => {
       if (!isActive) return;
@@ -222,9 +236,9 @@ const ShellTerminalInstance = forwardRef<ShellTerminalInstanceHandle, {
             invoke("resize_pty", { taskId: shellId, cols: s.cols, rows: s.rows }).catch(() => {});
           }
         }
-        terminalRef.current.focus();
+        focusTerminal();
       });
-    }, [isActive, shellId]);
+    }, [focusTerminal, isActive, shellId]);
 
     useEffect(() => {
       if (terminalRef.current) {
@@ -265,6 +279,9 @@ const ShellTerminalInstance = forwardRef<ShellTerminalInstanceHandle, {
     return (
       <div
         ref={containerRef}
+        onMouseDown={() => {
+          if (isActive) focusTerminal();
+        }}
         style={{
           position: "absolute",
           inset: 0,
@@ -286,11 +303,13 @@ export const ShellTerminalPanel = forwardRef<ShellTerminalPanelHandle, Props>(
       projectId,
       isActive = true,
       onClose,
+      onMinimize,
       themeVariant,
       terminalFontSize,
       monoFontFamily,
       onReady,
       height = 240,
+      visible = true,
       onResizeStart,
     },
     ref,
@@ -333,6 +352,7 @@ export const ShellTerminalPanel = forwardRef<ShellTerminalPanelHandle, Props>(
         if (closingIndex === -1) return;
 
         const nextShells = shells.filter((shell) => shell.id !== shellId);
+        invoke("kill_shell", { shellId }).catch(() => {});
         setShells(nextShells);
         delete shellRefs.current[shellId];
 
@@ -353,15 +373,27 @@ export const ShellTerminalPanel = forwardRef<ShellTerminalPanelHandle, Props>(
       [activeShellId, onClose, shells],
     );
 
+    const handleCloseAll = useCallback(() => {
+      for (const shell of shells) {
+        invoke("kill_shell", { shellId: shell.id }).catch(() => {});
+        delete shellRefs.current[shell.id];
+      }
+      setShells([]);
+      setActiveShellId(null);
+      onClose();
+    }, [onClose, shells]);
+
     return (
       <div
         style={{
-          flexShrink: 0,
-          height,
+          ...shellTerminalPanelRootStyle({ visible, height }),
           borderTop: "1px solid var(--border-dim)",
           display: "flex",
           flexDirection: "column",
           background: themeFor(themeVariant).background,
+          overflow: "hidden",
+          visibility: visible ? "visible" : "hidden",
+          pointerEvents: visible ? "auto" : "none",
         }}
       >
         {onResizeStart && (
@@ -381,10 +413,10 @@ export const ShellTerminalPanel = forwardRef<ShellTerminalPanelHandle, Props>(
             flexShrink: 0,
             display: "flex",
             alignItems: "center",
-            padding: "0 10px 0 14px",
+            padding: "0 8px 0 12px",
             borderBottom: "1px solid var(--border-dim)",
-            background: "var(--bg-sidebar)",
-            gap: 8,
+            background: "color-mix(in srgb, var(--bg-sidebar) 92%, transparent)",
+            gap: 6,
           }}
         >
           <span style={{ fontSize: 12, fontWeight: 600, color: "var(--text-primary)", flex: 1 }}>
@@ -393,8 +425,26 @@ export const ShellTerminalPanel = forwardRef<ShellTerminalPanelHandle, Props>(
           <span style={{ fontSize: 11, color: "var(--text-muted)" }}>
             {shells.length}/{MAX_SHELLS}
           </span>
+          {onMinimize && (
+            <button
+              onClick={onMinimize}
+              title={t("terminal.minimize")}
+              style={{
+                background: "none",
+                border: "none",
+                cursor: "pointer",
+                padding: 3,
+                borderRadius: 4,
+                display: "flex",
+                alignItems: "center",
+                color: "var(--text-hint)",
+              }}
+            >
+              <Minus size={14} />
+            </button>
+          )}
           <button
-            onClick={onClose}
+            onClick={handleCloseAll}
             title={t("terminal.closeTerminals")}
             style={{
               background: "none",
@@ -410,132 +460,123 @@ export const ShellTerminalPanel = forwardRef<ShellTerminalPanelHandle, Props>(
             <X size={14} />
           </button>
         </div>
-        <div style={{ flex: 1, display: "flex", minHeight: 0 }}>
-          <div style={{ flex: 1, minWidth: 0, minHeight: 0, position: "relative" }}>
-            {shells.map((shell) => (
-              <ShellTerminalInstance
-                key={shell.id}
-                ref={(instance) => {
-                  shellRefs.current[shell.id] = instance;
-                }}
-                shellId={shell.id}
-                projectPath={projectPath}
-                isActive={isActive && activeShellId === shell.id}
-                themeVariant={themeVariant}
-                terminalFontSize={terminalFontSize}
-                monoFontFamily={monoFontFamily}
-                onReady={onReady}
-              />
-            ))}
-          </div>
-          <div
-            style={{
-              width: 104,
-              flexShrink: 0,
-              borderLeft: "1px solid var(--border-dim)",
-              background: "var(--bg-sidebar)",
-              display: "flex",
-              flexDirection: "column",
-              minHeight: 0,
-            }}
-          >
-            <div
-              style={{
-                height: 28,
-                flexShrink: 0,
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "flex-end",
-                padding: "0 4px",
-                borderBottom: "1px solid var(--border-dim)",
-              }}
-            >
+        <div
+          style={{
+            minHeight: 30,
+            flexShrink: 0,
+            display: "flex",
+            alignItems: "center",
+            gap: 5,
+            padding: "4px 8px",
+            borderBottom: "1px solid var(--border-dim)",
+            background: "color-mix(in srgb, var(--bg-root) 72%, var(--bg-sidebar))",
+            overflowX: "auto",
+          }}
+        >
+          {shells.map((shell, index) => {
+            const selected = activeShellId === shell.id;
+            return (
               <button
-                onClick={handleAddShell}
-                disabled={shells.length >= MAX_SHELLS}
-                title={shells.length >= MAX_SHELLS ? t("terminal.limitReached") : t("terminal.newTerminal")}
+                key={shell.id}
+                type="button"
+                onClick={() => setActiveShellId(shell.id)}
+                title={shell.title}
                 style={{
-                  width: 20,
-                  height: 20,
-                  borderRadius: 4,
-                  border: "none",
-                  background: "transparent",
-                  color:
-                    shells.length >= MAX_SHELLS ? "var(--text-hint)" : "var(--text-secondary)",
-                  cursor: shells.length >= MAX_SHELLS ? "not-allowed" : "pointer",
-                  display: "flex",
+                  height: 22,
+                  minWidth: 0,
+                  maxWidth: 106,
+                  display: "inline-flex",
                   alignItems: "center",
-                  justifyContent: "center",
+                  gap: 5,
+                  padding: "0 5px 0 7px",
+                  border: `1px solid ${selected ? "var(--border-strong)" : "var(--border-dim)"}`,
+                  borderRadius: 999,
+                  background: selected ? "var(--control-active-bg)" : "transparent",
+                  color: selected ? "var(--control-active-fg)" : "var(--text-muted)",
+                  cursor: "pointer",
+                  flexShrink: 0,
+                  fontSize: 11,
+                  fontWeight: selected ? 650 : 560,
                 }}
               >
-                <Plus size={13} />
+                <TerminalIcon size={11.5} />
+                <span
+                  style={{
+                    minWidth: 0,
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  zsh {index + 1}
+                </span>
+                <span
+                  role="button"
+                  tabIndex={0}
+                  title={t("terminal.closeShell", { title: shell.title })}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    handleCloseShell(shell.id);
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key !== "Enter" && event.key !== " ") return;
+                    event.preventDefault();
+                    event.stopPropagation();
+                    handleCloseShell(shell.id);
+                  }}
+                  style={{
+                    width: 14,
+                    height: 14,
+                    display: "inline-flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    borderRadius: 999,
+                    color: "var(--text-hint)",
+                    flexShrink: 0,
+                  }}
+                >
+                  <Trash2 size={9.5} />
+                </span>
               </button>
-            </div>
-            <div style={{ flex: 1, overflowY: "auto", padding: "4px 0" }}>
-              {shells.map((shell) => {
-                const selected = activeShellId === shell.id;
-                return (
-                  <div
-                    key={shell.id}
-                    onClick={() => setActiveShellId(shell.id)}
-                    style={{
-                      height: 28,
-                      padding: "0 4px 0 8px",
-                      borderLeft: selected
-                        ? "2px solid var(--control-active-fg)"
-                        : "2px solid transparent",
-                      background: selected ? "var(--bg-hover)" : "transparent",
-                      color: "var(--text-primary)",
-                      cursor: "pointer",
-                      display: "flex",
-                      alignItems: "center",
-                      gap: 6,
-                    }}
-                  >
-                    <TerminalIcon
-                      size={13}
-                      color={selected ? "var(--control-active-fg)" : "var(--text-hint)"}
-                    />
-                    <div
-                      style={{
-                        flex: 1,
-                        minWidth: 0,
-                        fontSize: 11.5,
-                        fontWeight: selected ? 600 : 500,
-                        whiteSpace: "nowrap",
-                        overflow: "hidden",
-                        textOverflow: "ellipsis",
-                        color: selected ? "var(--text-primary)" : "var(--text-secondary)",
-                      }}
-                    >
-                      zsh
-                    </div>
-                    <button
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        handleCloseShell(shell.id);
-                      }}
-                      title={t("terminal.closeShell", { title: shell.title })}
-                      style={{
-                        background: "none",
-                        border: "none",
-                        color: "var(--text-hint)",
-                        display: "flex",
-                        alignItems: "center",
-                        justifyContent: "center",
-                        padding: 1,
-                        borderRadius: 4,
-                        cursor: "pointer",
-                        flexShrink: 0,
-                      }}
-                    >
-                      <Trash2 size={12} />
-                    </button>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
+            );
+          })}
+          <button
+            onClick={handleAddShell}
+            disabled={shells.length >= MAX_SHELLS}
+            title={shells.length >= MAX_SHELLS ? t("terminal.limitReached") : t("terminal.newTerminal")}
+            style={{
+              width: 22,
+              height: 22,
+              borderRadius: 999,
+              border: "1px solid var(--border-dim)",
+              background: shells.length >= MAX_SHELLS ? "transparent" : "var(--bg-hover)",
+              color: shells.length >= MAX_SHELLS ? "var(--text-hint)" : "var(--text-secondary)",
+              cursor: shells.length >= MAX_SHELLS ? "not-allowed" : "pointer",
+              display: "inline-flex",
+              alignItems: "center",
+              justifyContent: "center",
+              flexShrink: 0,
+            }}
+          >
+            <Plus size={12} />
+          </button>
+        </div>
+        <div style={{ flex: 1, minWidth: 0, minHeight: 0, position: "relative" }}>
+          {shells.map((shell) => (
+            <ShellTerminalInstance
+              key={shell.id}
+              ref={(instance) => {
+                shellRefs.current[shell.id] = instance;
+              }}
+              shellId={shell.id}
+              projectPath={projectPath}
+              isActive={isActive && activeShellId === shell.id}
+              themeVariant={themeVariant}
+              terminalFontSize={terminalFontSize}
+              monoFontFamily={monoFontFamily}
+              onReady={onReady}
+            />
+          ))}
         </div>
       </div>
     );
