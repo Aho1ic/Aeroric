@@ -28,6 +28,7 @@ import {
 import type { SshConnection, ThemeVariant } from "../../types";
 import { useI18n } from "../../i18n";
 import { useToast } from "../Toast";
+import { writeClipboardText } from "../file-explorer/clipboard";
 import {
   createSftpDirectory,
   deleteSftpPaths,
@@ -415,6 +416,20 @@ export function SftpPanel({
     [panes, showToast, t],
   );
 
+  const copySelectedPath = useCallback(
+    async (side: PaneSide) => {
+      const pane = panes[side];
+      if (!pane.selectedPath) return;
+      try {
+        await writeClipboardText(pane.selectedPath);
+        showToast(t("file.pathCopied"));
+      } catch (error) {
+        showToast(t("sftp.operationFailed", { error: String(error) }));
+      }
+    },
+    [panes, showToast, t],
+  );
+
   const pasteIntoPane = useCallback(
     async (side: PaneSide) => {
       if (!clipboardPayload) return;
@@ -664,6 +679,7 @@ export function SftpPanel({
                 if (!action) return;
                 event.preventDefault();
                 if (action === "copy") copySelected(side);
+                if (action === "copyPath") void copySelectedPath(side);
                 if (action === "paste") void pasteIntoPane(side);
                 if (action === "delete") void deleteSelected(side);
                 if (action === "preview") previewSelected(side);

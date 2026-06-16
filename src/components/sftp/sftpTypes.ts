@@ -62,13 +62,15 @@ export function sftpClickAction({
 
 export function sftpKeyAction(event: {
   metaKey?: boolean;
+  altKey?: boolean;
   ctrlKey?: boolean;
   key: string;
   code?: string;
-}): "copy" | "paste" | "delete" | "preview" | null {
+}): "copy" | "copyPath" | "paste" | "delete" | "preview" | null {
   if (event.code === "Space" || event.key === " ") return "preview";
   const mod = Boolean(event.metaKey || event.ctrlKey);
   if (!mod) return null;
+  if (event.altKey && (event.code === "KeyC" || event.key.toLowerCase() === "c")) return "copyPath";
   if (event.code === "KeyC" || event.key.toLowerCase() === "c") return "copy";
   if (event.code === "KeyV" || event.key.toLowerCase() === "v") return "paste";
   if (event.key === "Backspace" || event.key === "Delete") return "delete";

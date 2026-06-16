@@ -47,6 +47,11 @@ describe("project main view mode", () => {
     expect(visibleDockPanel("sftp", { filesDisabled: false, gitDisabled: false })).toBe(null);
   });
 
+  it("renders SSH in the center workspace instead of the right dock panel", () => {
+    expect(centerWorkspaceMode("ssh", false)).toBe("ssh");
+    expect(visibleDockPanel("ssh", { filesDisabled: false, gitDisabled: false })).toBe(null);
+  });
+
   it("renders Docker in the center workspace instead of the right dock panel until the shell is opened", () => {
     expect(centerWorkspaceMode("docker", false)).toBe("docker");
     expect(centerWorkspaceMode("docker", true)).toBe("shell");
@@ -63,6 +68,22 @@ describe("project main view mode", () => {
         isSftpMode: false,
         isShellMode: false,
         isDockerMode: true,
+        isSshMode: false,
+      }),
+    ).toBe(false);
+  });
+
+  it("does not cover the SSH workspace with the remote SSH terminal layer", () => {
+    expect(
+      shouldShowRemoteSshTerminalLayer({
+        showRemoteSshTerminal: true,
+        hasRemoteConnection: true,
+        hasOpenFiles: false,
+        hasOpenDiff: false,
+        isSftpMode: false,
+        isShellMode: false,
+        isDockerMode: false,
+        isSshMode: true,
       }),
     ).toBe(false);
   });
@@ -74,6 +95,7 @@ describe("project main view mode", () => {
         hasOpenDiff: false,
         isShellMode: false,
         isSftpMode: true,
+        isSshMode: false,
         isNewTask: false,
         hasSelectedTask: true,
         taskId: "task-1",
@@ -101,6 +123,7 @@ describe("project main view mode", () => {
         hasOpenDiff: false,
         isShellMode: false,
         isSftpMode: false,
+        isSshMode: true,
         isDockerMode: false,
         isNewTask: false,
         hasSelectedTask: true,

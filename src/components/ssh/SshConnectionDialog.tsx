@@ -111,6 +111,9 @@ export function SshConnectionDialog({ connection, groups = [], initialGroup = ""
                 type={field === "password" ? "password" : "text"}
                 list={field === "group" && groups.length > 0 ? "ssh-connection-groups" : undefined}
                 autoFocus={field === "name"}
+                autoCapitalize="none"
+                autoCorrect="off"
+                spellCheck={false}
               />
               {errors[field] && <span style={s.sshErrorText}>{errors[field]}</span>}
             </label>

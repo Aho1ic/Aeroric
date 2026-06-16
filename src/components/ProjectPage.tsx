@@ -32,7 +32,10 @@ import {
   type ShellTerminalPanelHandle,
 } from "./ShellTerminalPanel";
 import { SshTerminalPanel } from "./ssh/SshTerminalPanel";
+import { SshWorkspace } from "./ssh/SshWorkspace";
 import { SftpPanel } from "./sftp/SftpPanel";
+import { SftpPreview } from "./sftp/SftpPreview";
+import type { SftpEndpoint } from "./sftp/sftpTypes";
 import { DockerServiceView } from "./docker/DockerServiceView";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { useProjectPanels } from "../hooks/useProjectPanels";
@@ -203,6 +206,12 @@ export function ProjectPage({
   });
   const [projectBodyWidth, setProjectBodyWidth] = useState(0);
   const [mountedTaskIds, setMountedTaskIds] = useState<Set<string>>(() => new Set());
+  const [filePreviewTarget, setFilePreviewTarget] = useState<{
+    endpoint: SftpEndpoint;
+    filePath: string;
+    isDirectory: boolean;
+    connections: SshConnection[];
+  } | null>(null);
   const projectBodyRef = useRef<HTMLDivElement>(null);
   const shellRef = useRef<ShellTerminalPanelHandle>(null);
   const shellReadyRef = useRef(false);
@@ -246,6 +255,7 @@ export function ProjectPage({
   const isSftpMode = centerMode === "sftp";
   const isShellMode = centerMode === "shell";
   const isDockerMode = centerMode === "docker";
+  const isSshMode = centerMode === "ssh";
   const shellVisibleInCenter = shouldShowShellInCenter({
     shellMode: isShellMode,
     hasOpenFiles: openFiles.length > 0,
@@ -360,9 +370,12 @@ export function ProjectPage({
       if (panel === "files" || panel === "git-changes" || panel === "git-history" || panel === "ssh") {
         setShowShellTerminal(false);
       }
+      if (panel === "ssh") {
+        clearFileAndDiff();
+      }
       handleTogglePanel(panel);
     },
-    [handleTogglePanel],
+    [clearFileAndDiff, handleTogglePanel],
   );
 
   const handleFileSelectWithShellMinimize = useCallback(
@@ -382,6 +395,7 @@ export function ProjectPage({
     isSftpMode,
     isShellMode,
     isDockerMode,
+    isSshMode,
   });
   const shellTerminalFontSize = useMemo(
     () => deriveShellTerminalFontSize(terminalFontSize),
@@ -507,10 +521,20 @@ export function ProjectPage({
             {isSftpMode ? (
               <SftpPanel
                 sshConnections={sshConnections}
-                localDefaultPath={projectLocation.kind === "local" ? project.path : "/"}
+                localDefaultPath={projectLocation.kind === "local" ? project.path : "/Users/macbook/Downloads/同步空间"}
                 active={visible && isSftpMode}
                 width="100%"
                 themeVariant={themeVariant}
+              />
+            ) : isSshMode ? (
+              <SshWorkspace
+                connections={sshConnections}
+                onConnectionsChange={onSshConnectionsChange}
+                active={visible && isSshMode}
+                themeVariant={themeVariant}
+                terminalFontSize={terminalFontSize}
+                monoFontFamily={monoFontFamily}
+                remoteConnection={projectLocation.kind === "ssh" ? remoteConnection : undefined}
               />
             ) : isDockerMode ? (
               <DockerServiceView
@@ -619,16 +643,20 @@ export function ProjectPage({
             <div
               style={{
                 position: "absolute",
-                inset: 0,
-                display: remoteSshMainVisible ? "flex" : "none",
-                zIndex: remoteSshMainVisible ? 2 : 0,
+                left: 0,
+                top: 0,
+                bottom: 0,
+                right: isSshMode ? "50%" : 0,
+                display: remoteSshMainVisible || isSshMode ? "flex" : "none",
+                zIndex: remoteSshMainVisible || isSshMode ? 4 : 0,
+                borderRight: isSshMode ? "1px solid var(--border-dim)" : "none",
               }}
             >
               <ErrorBoundary label="SSH">
                 <SshTerminalPanel
                   connections={sshConnections}
                   onConnectionsChange={onSshConnectionsChange}
-                  active={visible && remoteSshMainVisible}
+                  active={visible && (remoteSshMainVisible || isSshMode)}
                   width="100%"
                   themeVariant={themeVariant}
                   terminalFontSize={terminalFontSize}
@@ -641,6 +669,28 @@ export function ProjectPage({
             </div>
           )}
 
+          {filePreviewTarget && (
+            <div
+              className="sftp-preview-overlay"
+              role="dialog"
+              aria-modal="true"
+              onMouseDown={(event) => {
+                if (event.target === event.currentTarget) setFilePreviewTarget(null);
+              }}
+            >
+              <div className={`sftp-preview-dialog${filePreviewTarget.isDirectory ? " compact" : ""}`}>
+                <SftpPreview
+                  endpoint={filePreviewTarget.endpoint}
+                  filePath={filePreviewTarget.filePath}
+                  isDirectory={filePreviewTarget.isDirectory}
+                  connections={filePreviewTarget.connections}
+                  themeVariant={themeVariant}
+                  onClose={() => setFilePreviewTarget(null)}
+                />
+              </div>
+            </div>
+          )}
+
           {/* Background terminals */}
           {projectTasks
             .filter((t) => mountedTaskIds.has(t.id))
@@ -650,6 +700,7 @@ export function ProjectPage({
                 hasOpenDiff: Boolean(openDiff),
                 isShellMode,
                 isSftpMode,
+                isSshMode,
                 isDockerMode,
                 isNewTask: !taskWorkspaceVisible,
                 hasSelectedTask: Boolean(selectedTask),
@@ -719,6 +770,7 @@ export function ProjectPage({
                 width={effectiveRightPanelWidth}
                 remote={remoteFileContext}
                 themeVariant={themeVariant}
+                onPreviewRequest={setFilePreviewTarget}
               />
             </ErrorBoundary>
           )}

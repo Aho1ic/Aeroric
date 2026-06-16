@@ -43,6 +43,13 @@ type RemoteFileContext = {
   projectPath: string;
 };
 
+type FilePreviewRequest = {
+  endpoint: SftpEndpoint;
+  filePath: string;
+  isDirectory: boolean;
+  connections: SshConnection[];
+};
+
 export function FileExplorer({
   projectPath,
   projectName,
@@ -51,6 +58,7 @@ export function FileExplorer({
   width = 240,
   remote,
   themeVariant,
+  onPreviewRequest,
 }: {
   projectPath: string;
   projectName: string;
@@ -59,6 +67,7 @@ export function FileExplorer({
   width?: number;
   remote?: RemoteFileContext;
   themeVariant: ThemeVariant;
+  onPreviewRequest?: (request: FilePreviewRequest) => void;
 }) {
   const { t } = useI18n();
   const [nodes, setNodes] = useState<TreeNode[]>([]);
@@ -692,7 +701,27 @@ export function FileExplorer({
         }
       } else if (action === "preview") {
         if (selectedNode) {
-          setPreviewTarget({ path: selectedNode.path, isDir: selectedNode.is_dir });
+          if (onPreviewRequest) {
+            const endpoint = fileExplorerPreviewEndpoint({ selectedPath: selectedNode.path, remote });
+            if (!endpoint) return;
+            const baseEndpoint: SftpEndpoint =
+              endpoint.kind === "local"
+                ? { kind: "local", path: projectPath }
+                : {
+                    kind: "ssh",
+                    connectionId: endpoint.connection.id,
+                    connectionName: endpoint.connection.name,
+                    path: remote?.projectPath ?? endpoint.path,
+                  };
+            onPreviewRequest({
+              endpoint: baseEndpoint,
+              filePath: selectedNode.path,
+              isDirectory: selectedNode.is_dir,
+              connections: remote ? [remote.connection] : [],
+            });
+          } else {
+            setPreviewTarget({ path: selectedNode.path, isDir: selectedNode.is_dir });
+          }
         }
       }
     },
@@ -704,6 +733,9 @@ export function FileExplorer({
       showToast,
       startRenameSelected,
       t,
+      onPreviewRequest,
+      projectPath,
+      remote,
     ],
   );
 
@@ -743,7 +775,7 @@ export function FileExplorer({
 
   return (
     <div style={{ ...s.fileExplorerRoot, width }}>
-      {previewTarget && previewBaseEndpoint && (
+      {!onPreviewRequest && previewTarget && previewBaseEndpoint && (
         <div
           className="sftp-preview-overlay"
           role="dialog"

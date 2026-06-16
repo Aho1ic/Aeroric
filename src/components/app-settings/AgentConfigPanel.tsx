@@ -90,7 +90,9 @@ export function AgentConfigPanel({
       .then((c) => {
         if (cancelled) return;
         if (c === null) {
-          setFileState({ status: "missing" });
+          setFileState({ status: "loaded", content: "" });
+          setOriginal("");
+          setEditing(true);
           return;
         }
         if (c === undefined) return;

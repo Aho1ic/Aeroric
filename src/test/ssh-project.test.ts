@@ -23,11 +23,11 @@ describe("SSH project opening", () => {
     expect(deriveRemoteProjectName("   ", "Prod")).toBe("Prod");
   });
 
-  it("builds the open-project input used by the SSH card double click", () => {
+  it("uses the SSH connection name for the opened remote project", () => {
     expect(sshProjectInputForConnection(connection("/srv/apps/aeroric"))).toEqual({
       connectionId: "conn-1",
       remotePath: "/srv/apps/aeroric",
-      name: "aeroric",
+      name: "Prod",
     });
     expect(sshProjectInputForConnection(connection())).toBeNull();
   });

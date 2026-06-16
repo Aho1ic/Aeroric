@@ -33,6 +33,7 @@ import {
 import type { FontFamily } from "./types";
 import { WelcomePage } from "./components/WelcomePage";
 import type { SshProjectInput } from "./components/ssh/SshProjectDialog";
+import { deriveRemoteProjectName } from "./components/ssh/SshProjectDialog";
 import { ProjectPage } from "./components/ProjectPage";
 import { selectDefaultCondaEnvironment } from "./components/file-viewer/run";
 import { SKILL_HUB_CHANGED_EVENT } from "./components/app-settings/types";
@@ -58,6 +59,24 @@ function deriveProjectName(path: string): string {
 function normalizeRemotePath(path: string): string {
   const trimmed = path.trim();
   return trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
+}
+
+function normalizeSshProjectNames(projects: Project[], connections: SshConnection[]): Project[] {
+  const connectionById = new Map(connections.map((connection) => [connection.id, connection]));
+  let changed = false;
+  const normalized = projects.map((project) => {
+    const location = resolveProjectLocation(project);
+    if (location.kind !== "ssh") return project;
+    const connection = connectionById.get(location.connectionId);
+    const connectionName = connection?.name.trim();
+    if (!connectionName) return project;
+    const legacyName = deriveRemoteProjectName(location.remotePath, connectionName);
+    if (project.name && project.name !== legacyName) return project;
+    if (project.name === connectionName) return project;
+    changed = true;
+    return { ...project, name: connectionName };
+  });
+  return changed ? normalized : projects;
 }
 
 function persistProjects(
@@ -380,12 +399,16 @@ function App() {
       // Load projects from ~/.aeroric/projects.json
       const loadedProjects = await invoke<Project[]>("load_projects");
       const loadedSshConnections = await invoke<SshConnection[]>("load_ssh_connections");
-      setProjects(loadedProjects);
+      const normalizedProjects = normalizeSshProjectNames(loadedProjects, loadedSshConnections);
+      setProjects(normalizedProjects);
       setSshConnections(loadedSshConnections);
+      if (normalizedProjects !== loadedProjects) {
+        persistProjects(normalizedProjects, showToast, formatSaveProjectsError);
+      }
 
       // Load tasks for all known projects
       const chunks = await Promise.all(
-        loadedProjects.map((p) => invoke<Task[]>("load_project_tasks", { projectId: p.id })),
+        normalizedProjects.map((p) => invoke<Task[]>("load_project_tasks", { projectId: p.id })),
       );
       const activeTaskIds = new Set(await invoke<string[]>("get_active_task_ids"));
       const { tasks: loadedTasks, changedProjectIds } = normalizeInterruptedTasksOnStartup(
@@ -399,7 +422,7 @@ function App() {
     }
 
     init().catch(console.error);
-  }, []);
+  }, [formatSaveProjectsError, showToast]);
 
   useEffect(() => {
     // 用 backend 列表作为权威，merge 进前端 state：
@@ -507,7 +530,7 @@ function App() {
       );
     });
     const project: Project = existing
-      ? { ...existing, name: input.name, path, lastOpenedAt: now }
+      ? { ...existing, path, lastOpenedAt: now }
       : {
           id: `${now}`,
           name: input.name,
@@ -1137,6 +1160,17 @@ function App() {
     });
   }
 
+  function handleRenameProject(projectId: string, name: string) {
+    const normalized = name.trim();
+    if (!normalized) return;
+    setProjects((prev) => {
+      const next = prev.map((p) => (p.id === projectId ? { ...p, name: normalized } : p));
+      persistProjects(next, showToast, formatSaveProjectsError);
+      return next;
+    });
+    setActiveProject((prev) => (prev?.id === projectId ? { ...prev, name: normalized } : prev));
+  }
+
   function handleToggleProjectHidden(projectId: string) {
     setProjects((prev) => {
       const next = prev.map((p) =>
@@ -1358,6 +1392,7 @@ function App() {
             onOpenSshProject={handleOpenSshProject}
             onProjectClick={handleProjectClick}
             onDeleteProject={handleDeleteProject}
+            onRenameProject={handleRenameProject}
             onToggleProjectHidden={handleToggleProjectHidden}
             skillHubConfig={skillHubConfig}
             onEnterSkillHub={handleEnterSkillHub}

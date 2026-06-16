@@ -14,6 +14,7 @@ import {
   Pin,
   PinOff,
   ArrowLeftRight,
+  Pencil,
 } from "lucide-react";
 import * as Popover from "@radix-ui/react-popover";
 import type {
@@ -105,6 +106,7 @@ export function WelcomePage({
   onOpen,
   onProjectClick,
   onDeleteProject,
+  onRenameProject,
   onToggleProjectHidden,
   themeVariant,
   themeMode,
@@ -133,6 +135,7 @@ export function WelcomePage({
   onOpen: () => void;
   onProjectClick: (p: Project) => void;
   onDeleteProject: (projectId: string) => void;
+  onRenameProject: (projectId: string, name: string) => void;
   onToggleProjectHidden: (projectId: string) => void;
   themeVariant: ThemeVariant;
   themeMode: ThemeMode;
@@ -257,7 +260,7 @@ export function WelcomePage({
         {sftpOpen ? (
           <SftpPanel
             sshConnections={sshConnections}
-            localDefaultPath="/"
+            localDefaultPath="/Users/macbook/Downloads/同步空间"
             active={sftpOpen}
             width="100%"
             themeVariant={themeVariant}
@@ -457,6 +460,38 @@ export function WelcomePage({
                           ? t("welcome.notPinnedToRail")
                           : t("welcome.pinnedToRail")}
                       </span>
+
+                      <button
+                        type="button"
+                        style={{
+                          marginLeft: 8,
+                          padding: "4px 6px",
+                          background: "transparent",
+                          border: "none",
+                          borderRadius: 6,
+                          cursor: "pointer",
+                          color: "var(--text-muted)",
+                          display: "flex",
+                          alignItems: "center",
+                          opacity: hov === p.id ? 1 : 0,
+                          transition: "opacity 0.15s, color 0.15s",
+                        }}
+                        onMouseEnter={(e) => {
+                          (e.currentTarget as HTMLButtonElement).style.color =
+                            "var(--text-primary)";
+                        }}
+                        onMouseLeave={(e) => {
+                          (e.currentTarget as HTMLButtonElement).style.color = "var(--text-muted)";
+                        }}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          const nextName = window.prompt(t("welcome.renameProject"), p.name)?.trim();
+                          if (nextName) onRenameProject(p.id, nextName);
+                        }}
+                        title={t("welcome.renameProject")}
+                      >
+                        <Pencil size={14} strokeWidth={1.8} />
+                      </button>
 
                       <button
                         style={{

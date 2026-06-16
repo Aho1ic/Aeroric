@@ -1,6 +1,6 @@
 [package]
 name = "aeroric"
-version = "1.0.2"
+version = "1.0.3"
 description = "Desktop task manager for AI coding agents"
 authors = ["Aeroric"]
 edition = "2021"

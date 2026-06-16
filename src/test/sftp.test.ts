@@ -72,6 +72,7 @@ describe("sftp panel helpers", () => {
 
   it("maps macOS keyboard shortcuts and space preview for selected items", () => {
     expect(sftpKeyAction({ metaKey: true, key: "c", code: "KeyC" })).toBe("copy");
+    expect(sftpKeyAction({ metaKey: true, altKey: true, key: "c", code: "KeyC" })).toBe("copyPath");
     expect(sftpKeyAction({ metaKey: true, key: "v", code: "KeyV" })).toBe("paste");
     expect(sftpKeyAction({ metaKey: true, key: "Backspace", code: "Backspace" })).toBe("delete");
     expect(sftpKeyAction({ key: " ", code: "Space" })).toBe("preview");

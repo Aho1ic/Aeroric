@@ -23,6 +23,7 @@ export function shouldShowRemoteSshTerminalLayer({
   isSftpMode,
   isShellMode,
   isDockerMode,
+  isSshMode = false,
 }: {
   showRemoteSshTerminal: boolean;
   hasRemoteConnection: boolean;
@@ -31,6 +32,7 @@ export function shouldShowRemoteSshTerminalLayer({
   isSftpMode: boolean;
   isShellMode: boolean;
   isDockerMode: boolean;
+  isSshMode?: boolean;
 }): boolean {
   return (
     showRemoteSshTerminal &&
@@ -39,12 +41,14 @@ export function shouldShowRemoteSshTerminalLayer({
     !hasOpenFiles &&
     !isSftpMode &&
     !isShellMode &&
-    !isDockerMode
+    !isDockerMode &&
+    !isSshMode
   );
 }
 
-export function centerWorkspaceMode(rightPanel: RightPanel, shellActive = false): "sftp" | "shell" | "docker" | null {
+export function centerWorkspaceMode(rightPanel: RightPanel, shellActive = false): "sftp" | "shell" | "docker" | "ssh" | null {
   if (rightPanel === "sftp") return "sftp";
+  if (rightPanel === "ssh") return "ssh";
   if (shellActive) return "shell";
   if (rightPanel === "docker") return "docker";
   return null;
@@ -72,8 +76,8 @@ export function visibleDockPanel(
     filesDisabled: boolean;
     gitDisabled: boolean;
   },
-): Exclude<RightPanel, "sftp" | "docker"> {
-  if (rightPanel === "sftp" || rightPanel === "docker") return null;
+): Exclude<RightPanel, "sftp" | "docker" | "ssh"> {
+  if (rightPanel === "sftp" || rightPanel === "docker" || rightPanel === "ssh") return null;
   if (rightPanel === "files" && filesDisabled) return null;
   if ((rightPanel === "git-changes" || rightPanel === "git-history") && gitDisabled) return null;
   return rightPanel;
@@ -182,6 +186,7 @@ export function shouldShowRunningTaskInCenter({
   hasOpenDiff,
   isShellMode,
   isSftpMode,
+  isSshMode,
   isDockerMode,
   isNewTask,
   hasSelectedTask,
@@ -194,6 +199,7 @@ export function shouldShowRunningTaskInCenter({
   hasOpenDiff: boolean;
   isShellMode: boolean;
   isSftpMode: boolean;
+  isSshMode?: boolean;
   isDockerMode?: boolean;
   isNewTask: boolean;
   hasSelectedTask: boolean;
@@ -208,6 +214,7 @@ export function shouldShowRunningTaskInCenter({
     !hasOpenDiff &&
     !isShellMode &&
     !isSftpMode &&
+    !isSshMode &&
     !isDockerMode &&
     !isNewTask &&
     hasSelectedTask &&

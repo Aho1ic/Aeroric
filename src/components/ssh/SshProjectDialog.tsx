@@ -32,7 +32,7 @@ export function sshProjectInputForConnection(connection: SshConnection): SshProj
   return {
     connectionId: connection.id,
     remotePath,
-    name: deriveRemoteProjectName(remotePath, connection.name),
+    name: connection.name.trim() || deriveRemoteProjectName(remotePath, connection.name),
   };
 }
 
