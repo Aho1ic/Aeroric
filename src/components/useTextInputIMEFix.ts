@@ -3,6 +3,7 @@ import type React from "react";
 import {
   buildPostCompositionIgnoredCandidates,
   normalizeCommittedCompositionText,
+  POST_COMPOSITION_REPLAY_IGNORE_MS,
   shouldIgnorePostCompositionCandidate,
 } from "./terminalInputFix";
 
@@ -42,7 +43,7 @@ export function useTextInputIMEFix<T extends TextInputElement>(setValue: (value:
       committedText,
       preeditText,
     );
-    ignorePostCompositionUntilRef.current = performance.now() + 180;
+    ignorePostCompositionUntilRef.current = performance.now() + POST_COMPOSITION_REPLAY_IGNORE_MS;
     compositionTextRef.current = "";
 
     const normalizedCommitted = normalizeCommittedCompositionText(committedText);

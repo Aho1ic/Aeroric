@@ -14,8 +14,11 @@ import { TreeItem } from "./file-explorer/TreeItem";
 import {
   fileExplorerClickAction,
   fileExplorerKeyAction,
+  fileExplorerPreviewEndpoint,
   pasteTargetDirectory,
 } from "./file-explorer/keyboard";
+import { SftpPreview } from "./sftp/SftpPreview";
+import type { SftpEndpoint } from "./sftp/sftpTypes";
 import {
   AUTO_REFRESH_MS,
   ROW_HEIGHT,
@@ -33,7 +36,7 @@ import {
   pathSeparator,
   updateNode,
 } from "./file-explorer/treeUtils";
-import type { SshConnection } from "../types";
+import type { SshConnection, ThemeVariant } from "../types";
 
 type RemoteFileContext = {
   connection: SshConnection;
@@ -47,6 +50,7 @@ export function FileExplorer({
   active = true,
   width = 240,
   remote,
+  themeVariant,
 }: {
   projectPath: string;
   projectName: string;
@@ -54,6 +58,7 @@ export function FileExplorer({
   active?: boolean;
   width?: number;
   remote?: RemoteFileContext;
+  themeVariant: ThemeVariant;
 }) {
   const { t } = useI18n();
   const [nodes, setNodes] = useState<TreeNode[]>([]);
@@ -71,6 +76,7 @@ export function FileExplorer({
   const [creatingValue, setCreatingValue] = useState("");
   const [renamingPath, setRenamingPath] = useState<string | null>(null);
   const [renamingValue, setRenamingValue] = useState("");
+  const [previewTarget, setPreviewTarget] = useState<{ path: string; isDir: boolean } | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const renameInputRef = useRef<HTMLInputElement>(null);
   const commitInFlightRef = useRef(false);
@@ -292,7 +298,13 @@ export function FileExplorer({
   const handleSelect = useCallback(
     (node: TreeNode) => {
       scrollRef.current?.focus({ preventScroll: true });
-      if (fileExplorerClickAction({ isDir: node.is_dir, isSelected: selectedPath === node.path }) === "toggle") {
+      const action = fileExplorerClickAction({ isDir: node.is_dir, isSelected: selectedPath === node.path });
+      if (action === "toggle") {
+        handleToggle(node.path);
+        return;
+      }
+      if (action === "selectAndToggle") {
+        setSelectedPath(node.path);
         handleToggle(node.path);
         return;
       }
@@ -678,6 +690,10 @@ export function FileExplorer({
         if (selectedNode) {
           void deletePath(selectedNode.path, selectedNode.is_dir);
         }
+      } else if (action === "preview") {
+        if (selectedNode) {
+          setPreviewTarget({ path: selectedNode.path, isDir: selectedNode.is_dir });
+        }
       }
     },
     [
@@ -690,6 +706,22 @@ export function FileExplorer({
       t,
     ],
   );
+
+  const previewEndpoint = useMemo(
+    () => fileExplorerPreviewEndpoint({ selectedPath: previewTarget?.path ?? null, remote }),
+    [previewTarget, remote],
+  );
+
+  const previewBaseEndpoint = useMemo<SftpEndpoint | null>(() => {
+    if (!previewEndpoint) return null;
+    if (previewEndpoint.kind === "local") return { kind: "local", path: projectPath };
+    return {
+      kind: "ssh",
+      connectionId: previewEndpoint.connection.id,
+      connectionName: previewEndpoint.connection.name,
+      path: remote?.projectPath ?? previewEndpoint.path,
+    };
+  }, [previewEndpoint, projectPath, remote]);
 
   const handleTreePaste = useCallback(
     (event: React.ClipboardEvent<HTMLDivElement>) => {
@@ -711,6 +743,27 @@ export function FileExplorer({
 
   return (
     <div style={{ ...s.fileExplorerRoot, width }}>
+      {previewTarget && previewBaseEndpoint && (
+        <div
+          className="sftp-preview-overlay"
+          role="dialog"
+          aria-modal="true"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) setPreviewTarget(null);
+          }}
+        >
+          <div className={`sftp-preview-dialog${previewTarget.isDir ? " compact" : ""}`}>
+            <SftpPreview
+              endpoint={previewBaseEndpoint}
+              filePath={previewTarget.path}
+              isDirectory={previewTarget.isDir}
+              connections={remote ? [remote.connection] : []}
+              themeVariant={themeVariant}
+              onClose={() => setPreviewTarget(null)}
+            />
+          </div>
+        </div>
+      )}
       {ctxMenu && (
         <FileExplorerContextMenu
           ctxMenu={ctxMenu}

@@ -150,7 +150,7 @@ function getInitialThemeMode(): ThemeMode {
   const stored = localStorage.getItem("aeroric:theme");
   return stored === "dark" || stored === "light" || stored === "system" || stored === "eyecare"
     ? stored
-    : "system";
+    : "light";
 }
 
 function resolveThemeVariant(mode: ThemeMode, systemPrefersDark: boolean): ThemeVariant {

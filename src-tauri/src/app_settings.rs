@@ -206,20 +206,8 @@ fn get_agent_configured_path(settings: &AppSettings, agent: &str) -> String {
                 settings.claude_gpt55_path.clone()
             }
         }
-        "codex" => {
-            if settings.codex_path.is_empty() {
-                "codex".to_string()
-            } else {
-                settings.codex_path.clone()
-            }
-        }
-        _ => {
-            if settings.claude_path.is_empty() {
-                "claude".to_string()
-            } else {
-                settings.claude_path.clone()
-            }
-        }
+        "codex" => settings.codex_path.clone(),
+        _ => settings.claude_path.clone(),
     }
 }
 
@@ -248,10 +236,10 @@ fn detect_path(binary: &str) -> String {
     crate::platform::detect_path(binary)
 }
 
-fn resolve_input_path(path: &str, binary: &str) -> String {
+fn resolve_input_path(path: &str, _binary: &str) -> String {
     let trimmed = path.trim();
     if trimmed.is_empty() {
-        return detect_path(binary);
+        return String::new();
     }
 
     let detected = detect_path(trimmed);
@@ -465,11 +453,12 @@ fn get_agent_launch_spec_from_settings(settings: &AppSettings, agent: &str) -> A
 fn normalize_settings(settings: AppSettings) -> AppSettings {
     AppSettings {
         claude_path: resolve_agent_launch_spec_from_path("claude", &settings.claude_path).program,
-        claude_gpt55_path: resolve_agent_launch_spec_from_path(
-            "claude_gpt55",
-            &get_agent_configured_path(&settings, "claude_gpt55"),
-        )
-        .program,
+        claude_gpt55_path: if settings.claude_gpt55_path.is_empty() {
+            String::new()
+        } else {
+            resolve_agent_launch_spec_from_path("claude_gpt55", &settings.claude_gpt55_path)
+                .program
+        },
         codex_path: resolve_agent_launch_spec_from_path("codex", &settings.codex_path).program,
         custom_agents: normalize_custom_agents(settings.custom_agents),
         send_shortcut: normalize_send_shortcut(settings.send_shortcut),
@@ -485,9 +474,9 @@ fn load_settings_unlocked() -> AppSettings {
 
     if !path.exists() {
         let settings = normalize_settings(AppSettings {
-            claude_path: detect_path("claude"),
-            claude_gpt55_path: default_claude_gpt55_path(),
-            codex_path: detect_path("codex"),
+            claude_path: String::new(),
+            claude_gpt55_path: String::new(),
+            codex_path: String::new(),
             custom_agents: Vec::new(),
             send_shortcut: default_send_shortcut(),
             terminal_shift_enter_newline: default_shift_enter_newline(),

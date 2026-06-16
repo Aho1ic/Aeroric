@@ -3,8 +3,8 @@ import type { RightPanel } from "../../hooks/useProjectPanels";
 import type React from "react";
 
 export const PROJECT_RAIL_EXPANDED_WIDTH = 252;
-const PROJECT_RAIL_COLLAPSED_WIDTH = 52;
-const RIGHT_TOOLBAR_WIDTH = 44;
+export const PROJECT_RAIL_COLLAPSED_WIDTH = 52;
+export const RIGHT_TOOLBAR_WIDTH = 44;
 const COMPOSE_COMFORT_WIDTH = 760;
 const COMPOSE_ICON_ONLY_WIDTH = 680;
 
@@ -45,9 +45,22 @@ export function shouldShowRemoteSshTerminalLayer({
 
 export function centerWorkspaceMode(rightPanel: RightPanel, shellActive = false): "sftp" | "shell" | "docker" | null {
   if (rightPanel === "sftp") return "sftp";
-  if (rightPanel === "docker") return "docker";
   if (shellActive) return "shell";
+  if (rightPanel === "docker") return "docker";
   return null;
+}
+
+export function projectSshRightPanelWidth({
+  containerWidth,
+  railCollapsed,
+}: {
+  containerWidth: number;
+  railCollapsed: boolean;
+}): number {
+  if (!Number.isFinite(containerWidth) || containerWidth <= 0) return 420;
+  const railWidth = railCollapsed ? PROJECT_RAIL_COLLAPSED_WIDTH : PROJECT_RAIL_EXPANDED_WIDTH;
+  const available = Math.max(360, containerWidth - railWidth - RIGHT_TOOLBAR_WIDTH);
+  return Math.floor(available / 2);
 }
 
 export function visibleDockPanel(

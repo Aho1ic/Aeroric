@@ -3,6 +3,7 @@ import type { ProjectLocation } from "../types";
 import {
   centerWorkspaceMode,
   projectResponsiveLayout,
+  projectSshRightPanelWidth,
   shellCenterContentStyle,
   shellCenterLayerStyle,
   shellTerminalPanelRootStyle,
@@ -46,9 +47,9 @@ describe("project main view mode", () => {
     expect(visibleDockPanel("sftp", { filesDisabled: false, gitDisabled: false })).toBe(null);
   });
 
-  it("renders Docker in the center workspace instead of the right dock panel", () => {
+  it("renders Docker in the center workspace instead of the right dock panel until the shell is opened", () => {
     expect(centerWorkspaceMode("docker", false)).toBe("docker");
-    expect(centerWorkspaceMode("docker", true)).toBe("docker");
+    expect(centerWorkspaceMode("docker", true)).toBe("shell");
     expect(visibleDockPanel("docker", { filesDisabled: false, gitDisabled: false })).toBe(null);
   });
 
@@ -181,5 +182,10 @@ describe("project main view mode", () => {
     expect(
       projectResponsiveLayout({ width: 1100, rightPanelWidth: 280, rightPanelVisible: false }),
     ).toEqual({ autoCollapseRail: false, compactComposeControls: false });
+  });
+
+  it("sizes the SSH right panel to half of the available workspace", () => {
+    expect(projectSshRightPanelWidth({ containerWidth: 1100, railCollapsed: false })).toBe(402);
+    expect(projectSshRightPanelWidth({ containerWidth: 1100, railCollapsed: true })).toBe(502);
   });
 });

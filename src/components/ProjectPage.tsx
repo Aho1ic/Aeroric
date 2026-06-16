@@ -39,6 +39,7 @@ import { useProjectPanels } from "../hooks/useProjectPanels";
 import {
   centerWorkspaceMode,
   projectResponsiveLayout,
+  projectSshRightPanelWidth,
   shellCenterContentStyle,
   shellCenterLayerStyle,
   shouldShowRemoteSshTerminalLayer,
@@ -200,6 +201,7 @@ export function ProjectPage({
     autoCollapseRail: false,
     compactComposeControls: false,
   });
+  const [projectBodyWidth, setProjectBodyWidth] = useState(0);
   const [mountedTaskIds, setMountedTaskIds] = useState<Set<string>>(() => new Set());
   const projectBodyRef = useRef<HTMLDivElement>(null);
   const shellRef = useRef<ShellTerminalPanelHandle>(null);
@@ -260,6 +262,7 @@ export function ProjectPage({
 
   const handleSearchFileSelect = useCallback(
     (path: string, name: string) => {
+      setShowShellTerminal(false);
       handleFileSelect(path, name);
       openRightPanel("files");
     },
@@ -330,6 +333,7 @@ export function ProjectPage({
 
   const handleDiffFileSelectWithCollapse = useCallback(
     (filePath: string, staged: boolean, label: string) => {
+      setShowShellTerminal(false);
       handleDiffFileSelect(filePath, staged, label);
     },
     [handleDiffFileSelect],
@@ -337,6 +341,7 @@ export function ProjectPage({
 
   const handleCommitSelectWithCollapse = useCallback(
     (hash: string, message: string) => {
+      setShowShellTerminal(false);
       handleCommitSelect(hash, message);
     },
     [handleCommitSelect],
@@ -344,9 +349,28 @@ export function ProjectPage({
 
   const handleCommitFileClickWithCollapse = useCallback(
     (hash: string, filePath: string, label: string) => {
+      setShowShellTerminal(false);
       handleCommitFileClick(hash, filePath, label);
     },
     [handleCommitFileClick],
+  );
+
+  const handleToggleRightPanel = useCallback(
+    (panel: Parameters<typeof handleTogglePanel>[0]) => {
+      if (panel === "files" || panel === "git-changes" || panel === "git-history" || panel === "ssh") {
+        setShowShellTerminal(false);
+      }
+      handleTogglePanel(panel);
+    },
+    [handleTogglePanel],
+  );
+
+  const handleFileSelectWithShellMinimize = useCallback(
+    (path: string, name: string) => {
+      setShowShellTerminal(false);
+      handleFileSelect(path, name);
+    },
+    [handleFileSelect],
   );
 
   const currentTaskCreatedAt = selectedTask?.createdAt ?? null;
@@ -387,6 +411,7 @@ export function ProjectPage({
         rightPanelWidth,
         rightPanelVisible: Boolean(visibleRightPanel),
       });
+      setProjectBodyWidth(element.getBoundingClientRect().width);
       setResponsiveLayout((prev) =>
         prev.autoCollapseRail === next.autoCollapseRail &&
         prev.compactComposeControls === next.compactComposeControls
@@ -404,6 +429,14 @@ export function ProjectPage({
     observer.observe(element);
     return () => observer.disconnect();
   }, [rightPanelWidth, visibleRightPanel]);
+
+  const effectiveRightPanelWidth =
+    rightPanel === "ssh"
+      ? projectSshRightPanelWidth({
+          containerWidth: projectBodyWidth,
+          railCollapsed: responsiveLayout.autoCollapseRail,
+        })
+      : rightPanelWidth;
 
   return (
     <div
@@ -681,10 +714,11 @@ export function ProjectPage({
               <FileExplorer
                 projectPath={fileRootPath}
                 projectName={project.name}
-                onFileSelect={handleFileSelect}
+                onFileSelect={handleFileSelectWithShellMinimize}
                 active={visible}
-                width={rightPanelWidth}
+                width={effectiveRightPanelWidth}
                 remote={remoteFileContext}
+                themeVariant={themeVariant}
               />
             </ErrorBoundary>
           )}
@@ -694,7 +728,7 @@ export function ProjectPage({
                 projectPath={gitContextPath}
                 currentTaskCreatedAt={currentTaskCreatedAt}
                 onFileSelect={handleDiffFileSelectWithCollapse}
-                width={rightPanelWidth}
+                width={effectiveRightPanelWidth}
               />
             </ErrorBoundary>
           )}
@@ -704,14 +738,14 @@ export function ProjectPage({
                 projectPath={gitContextPath}
                 onCommitSelect={handleCommitSelectWithCollapse}
                 onFileClick={handleCommitFileClickWithCollapse}
-                width={rightPanelWidth}
+                width={effectiveRightPanelWidth}
               />
             </ErrorBoundary>
           )}
           <div
             style={{
               display: rightPanel === "ssh" ? "flex" : "none",
-              width: rightPanelWidth,
+              width: effectiveRightPanelWidth,
               minHeight: 0,
             }}
           >
@@ -720,7 +754,7 @@ export function ProjectPage({
                 connections={sshConnections}
                 onConnectionsChange={onSshConnectionsChange}
                 active={visible && rightPanel === "ssh"}
-                width={rightPanelWidth}
+                width={effectiveRightPanelWidth}
                 themeVariant={themeVariant}
                 terminalFontSize={terminalFontSize}
                 monoFontFamily={monoFontFamily}
@@ -732,7 +766,7 @@ export function ProjectPage({
 
       <RightToolbar
         activePanel={rightPanel}
-        onToggle={handleTogglePanel}
+        onToggle={handleToggleRightPanel}
         terminalActive={showShellTerminal}
         onToggleTerminal={() => {
           setShellTerminalMounted(true);

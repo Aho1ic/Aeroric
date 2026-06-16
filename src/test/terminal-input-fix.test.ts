@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildPostCompositionIgnoredCandidates,
   normalizeCommittedCompositionText,
+  POST_COMPOSITION_REPLAY_IGNORE_MS,
   shouldIgnorePostCompositionCandidate,
   shouldIgnorePostCompositionInsert,
   shouldLetBrowserRenderCompositionPreview,
@@ -36,6 +37,10 @@ describe("terminal input fixes", () => {
     expect(shouldIgnorePostCompositionCandidate("ceshi", candidates)).toBe(true);
     expect(shouldIgnorePostCompositionCandidate("测试", candidates)).toBe(true);
     expect(shouldIgnorePostCompositionCandidate("hello", candidates)).toBe(false);
+  });
+
+  it("keeps the post-composition replay guard long enough for delayed macOS WebKit insertText", () => {
+    expect(POST_COMPOSITION_REPLAY_IGNORE_MS).toBeGreaterThanOrEqual(1000);
   });
 
   it("ignores pinyin replay when switching IME to English mid-composition", () => {

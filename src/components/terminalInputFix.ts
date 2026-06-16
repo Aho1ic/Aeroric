@@ -3,6 +3,8 @@ import { IS_MAC_WEBKIT, IS_OTHER_WEBKIT } from "../platform";
 
 type TerminalWithInput = Pick<Terminal, "input" | "textarea">;
 
+export const POST_COMPOSITION_REPLAY_IGNORE_MS = 1200;
+
 function getPrintableSymbolInput(data: string | null): string | null {
   if (data === null || data.length === 0) return null;
   if (data.length > 8) return null;
@@ -161,7 +163,7 @@ export function attachLinuxIMEFix(
     compositionText = "";
     const normalized = normalizeCommittedCompositionText(text);
     ignoredPostCompositionCandidates = buildPostCompositionIgnoredCandidates(text, preeditText);
-    ignorePostCompositionUntil = performance.now() + 180;
+    ignorePostCompositionUntil = performance.now() + POST_COMPOSITION_REPLAY_IGNORE_MS;
     textarea.value = "";
     event.stopImmediatePropagation();
     sendText(normalized);

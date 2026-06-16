@@ -7,18 +7,13 @@ import {
 } from "../components/new-task/AgentPermSelector";
 
 describe("agent options", () => {
-  it("exposes the three configured launch profiles in dropdown order", () => {
-    expect(AGENT_OPTIONS.map((agent) => agent.value)).toEqual([
-      "claude",
-      "claude_gpt55",
-      "codex",
-    ]);
+  it("exposes only clean release launch profiles in dropdown order", () => {
+    expect(AGENT_OPTIONS.map((agent) => agent.value)).toEqual(["claude", "codex"]);
   });
 
-  it("labels the configured launch profiles clearly", () => {
-    expect(agentDisplayLabel("claude")).toBe("mimo");
-    expect(agentDisplayLabel("claude_gpt55")).toBe("gancaopu");
-    expect(agentDisplayLabel("codex")).toBe("rawchat");
+  it("labels the release launch profiles clearly", () => {
+    expect(agentDisplayLabel("claude")).toBe("Claude Code");
+    expect(agentDisplayLabel("codex")).toBe("Codex");
   });
 
   it("treats the GPT55 script as codex-compatible because it execs codex", () => {

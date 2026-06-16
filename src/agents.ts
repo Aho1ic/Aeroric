@@ -22,21 +22,14 @@ export interface AgentOption {
 export const AGENT_OPTIONS: AgentOption[] = [
   {
     value: "claude",
-    label: "mimo",
+    label: "Claude Code",
     configFile: "~/.claude/settings.json",
     configLang: "json",
     codexLike: false,
   },
   {
-    value: "claude_gpt55",
-    label: "gancaopu",
-    configFile: "~/.claude/start-gpt55.sh",
-    configLang: "shellscript",
-    codexLike: true,
-  },
-  {
     value: "codex",
-    label: "rawchat",
+    label: "Codex",
     configFile: "~/.codex/config.toml",
     configLang: "toml",
     codexLike: true,
