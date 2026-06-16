@@ -6,6 +6,7 @@ import { permissionModeLabel, type PermissionMode, type AgentType } from "../typ
 import { useAgentOptions } from "../hooks/useAgentOptions";
 import { useI18n } from "../i18n";
 import s from "../styles";
+import { useTextInputIMEFix } from "./useTextInputIMEFix";
 
 interface ProjectConfig {
   agent: {
@@ -90,6 +91,8 @@ function ProjectSettings({ projectPath, onClose }: { projectPath: string; onClos
   );
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const promptPrefixImeFix = useTextInputIMEFix<HTMLTextAreaElement>(setPromptPrefix);
+  const commitPromptImeFix = useTextInputIMEFix<HTMLTextAreaElement>(setCommitPrompt);
 
   useEffect(() => {
     invoke<ProjectConfig>("read_project_config", { projectPath })
@@ -227,6 +230,7 @@ function ProjectSettings({ projectPath, onClose }: { projectPath: string; onClos
                   style={s.modalTextarea}
                   value={promptPrefix}
                   onChange={(e) => setPromptPrefix(e.target.value)}
+                  {...promptPrefixImeFix}
                   rows={3}
                   spellCheck={false}
                   placeholder={t("settings.promptPrefixPlaceholder")}
@@ -267,6 +271,7 @@ function ProjectSettings({ projectPath, onClose }: { projectPath: string; onClos
                   style={s.modalTextarea}
                   value={commitPrompt}
                   onChange={(e) => setCommitPrompt(e.target.value)}
+                  {...commitPromptImeFix}
                   rows={8}
                   spellCheck={false}
                 />

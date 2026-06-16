@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildPostCompositionIgnoredCandidates,
   normalizeCommittedCompositionText,
+  shouldIgnorePostCompositionCandidate,
   shouldIgnorePostCompositionInsert,
   shouldLetBrowserRenderCompositionPreview,
 } from "../components/terminalInputFix";
@@ -26,6 +28,22 @@ describe("terminal input fixes", () => {
     expect(shouldIgnorePostCompositionInsert("shuo'huashuohua", "shuo'hua", "shuohua")).toBe(true);
     expect(shouldIgnorePostCompositionInsert("shuohua", "shuo'hua", "shuohua")).toBe(true);
     expect(shouldIgnorePostCompositionInsert("abc", "s'd", "sd")).toBe(false);
+  });
+
+  it("ignores raw pinyin replay after committing Chinese text", () => {
+    const candidates = buildPostCompositionIgnoredCandidates("测试", "ceshi");
+
+    expect(shouldIgnorePostCompositionCandidate("ceshi", candidates)).toBe(true);
+    expect(shouldIgnorePostCompositionCandidate("测试", candidates)).toBe(true);
+    expect(shouldIgnorePostCompositionCandidate("hello", candidates)).toBe(false);
+  });
+
+  it("ignores pinyin replay when switching IME to English mid-composition", () => {
+    const candidates = buildPostCompositionIgnoredCandidates("shuo'hua", "shuo'hua");
+
+    expect(shouldIgnorePostCompositionCandidate("shuohua", candidates)).toBe(true);
+    expect(shouldIgnorePostCompositionCandidate("shuo'huashuohua", candidates)).toBe(true);
+    expect(shouldIgnorePostCompositionCandidate("shuo", candidates)).toBe(false);
   });
 
   it("lets WebKit render live IME composition text before commit", () => {

@@ -181,9 +181,11 @@ function UserMessageBubble({ text }: { text: string }) {
         <div
           style={{
             padding: "10px 16px",
-            background: "var(--bg-subtle)",
+            background: "color-mix(in srgb, var(--accent) 12%, transparent)",
+            border: "1px solid color-mix(in srgb, var(--accent) 22%, transparent)",
+            boxShadow: "inset 0 1px 0 color-mix(in srgb, #fff 18%, transparent)",
             color: "var(--text-primary)",
-            borderRadius: 20,
+            borderRadius: 14,
             fontSize: 13.5,
             lineHeight: 1.6,
             whiteSpace: "pre-wrap",

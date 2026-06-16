@@ -2,7 +2,7 @@ import type React from "react";
 
 export const task = {
   taskPanel: {
-    width: 260,
+    width: 248,
     flexShrink: 0,
     background: "var(--bg-sidebar)",
     borderRight: "1px solid var(--border-dim)",

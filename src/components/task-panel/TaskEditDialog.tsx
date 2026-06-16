@@ -6,6 +6,7 @@ import { useI18n } from "../../i18n";
 import s from "../../styles";
 import { agentDisplayLabel } from "../../agents";
 import { useAgentOptions } from "../../hooks/useAgentOptions";
+import { useTextInputIMEFix } from "../useTextInputIMEFix";
 
 const PERMS: PermissionMode[] = ["ask", "auto_edit", "full_access"];
 
@@ -28,12 +29,14 @@ export function TaskEditDialog({
   const [editPrompt, setEditPrompt] = useState(initialPrompt);
   const [editAgent, setEditAgent] = useState<AgentType>(initialAgent);
   const [editPermMode, setEditPermMode] = useState<PermissionMode>(initialPermMode);
+  const promptImeFix = useTextInputIMEFix<HTMLTextAreaElement>(setEditPrompt);
 
   return (
     <>
       <textarea
         value={editPrompt}
         onChange={(e) => setEditPrompt(e.target.value)}
+        {...promptImeFix}
         autoFocus
         style={{
           width: "100%",

@@ -27,6 +27,39 @@ export function normalizeCommittedCompositionText(text: string): string {
   return normalized;
 }
 
+function addIgnoredCandidate(candidates: Set<string>, text: string | null | undefined): void {
+  if (!text) return;
+  candidates.add(text);
+  const normalized = normalizeCommittedCompositionText(text);
+  if (normalized) candidates.add(normalized);
+}
+
+export function buildPostCompositionIgnoredCandidates(
+  committedText: string | null | undefined,
+  preeditText: string | null | undefined,
+): Set<string> {
+  const candidates = new Set<string>();
+  addIgnoredCandidate(candidates, committedText);
+  addIgnoredCandidate(candidates, preeditText);
+  return candidates;
+}
+
+export function shouldIgnorePostCompositionCandidate(
+  text: string | null | undefined,
+  candidates: ReadonlySet<string>,
+): boolean {
+  if (!text || candidates.size === 0) return false;
+  const normalized = normalizeCommittedCompositionText(text);
+  if (candidates.has(text) || candidates.has(normalized)) return true;
+
+  for (const candidate of candidates) {
+    if (shouldIgnorePostCompositionInsert(text, candidate, normalizeCommittedCompositionText(candidate))) {
+      return true;
+    }
+  }
+  return false;
+}
+
 export function shouldIgnorePostCompositionInsert(
   text: string | null | undefined,
   ignoredText: string | null,
@@ -103,8 +136,7 @@ export function attachLinuxIMEFix(
   const textarea = term.textarea;
   let isComposing = false;
   let compositionText = "";
-  let ignoredPostCompositionText: string | null = null;
-  let ignoredPostCompositionNormalized: string | null = null;
+  let ignoredPostCompositionCandidates = new Set<string>();
   let ignorePostCompositionUntil = 0;
 
   const sendText = (text: string | null | undefined) => {
@@ -123,12 +155,12 @@ export function attachLinuxIMEFix(
   };
 
   const handleCompositionEndCapture = (event: CompositionEvent) => {
-    const text = event.data || compositionText;
+    const preeditText = compositionText;
+    const text = event.data || preeditText;
     isComposing = false;
     compositionText = "";
     const normalized = normalizeCommittedCompositionText(text);
-    ignoredPostCompositionText = text || null;
-    ignoredPostCompositionNormalized = normalized || null;
+    ignoredPostCompositionCandidates = buildPostCompositionIgnoredCandidates(text, preeditText);
     ignorePostCompositionUntil = performance.now() + 180;
     textarea.value = "";
     event.stopImmediatePropagation();
@@ -140,17 +172,12 @@ export function attachLinuxIMEFix(
       event.inputType === "insertText" &&
       event.data &&
       performance.now() <= ignorePostCompositionUntil &&
-      shouldIgnorePostCompositionInsert(
-        event.data,
-        ignoredPostCompositionText,
-        ignoredPostCompositionNormalized,
-      )
+      shouldIgnorePostCompositionCandidate(event.data, ignoredPostCompositionCandidates)
     ) {
       textarea.value = "";
       event.preventDefault();
       event.stopImmediatePropagation();
-      ignoredPostCompositionText = null;
-      ignoredPostCompositionNormalized = null;
+      ignoredPostCompositionCandidates = new Set<string>();
       return;
     }
 
@@ -185,7 +212,21 @@ export function attachLinuxIMEFix(
     if (!isComposing && event.keyCode === 229) event.stopImmediatePropagation();
   };
 
-  const disposable = term.onData(onDataCallback);
+  const handleTerminalData = (data: string) => {
+    if (isComposing && /^[\p{L}\p{N}'`]+$/u.test(data)) {
+      return;
+    }
+    if (
+      performance.now() <= ignorePostCompositionUntil &&
+      shouldIgnorePostCompositionCandidate(data, ignoredPostCompositionCandidates)
+    ) {
+      ignoredPostCompositionCandidates = new Set<string>();
+      return;
+    }
+    onDataCallback(data);
+  };
+
+  const disposable = term.onData(handleTerminalData);
 
   textarea.addEventListener("compositionstart", handleCompositionStartCapture, true);
   textarea.addEventListener("compositionupdate", handleCompositionUpdateCapture, true);

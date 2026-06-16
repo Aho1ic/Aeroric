@@ -10,8 +10,9 @@ import {
   type SendShortcut,
 } from "../../shortcuts";
 import {
+  buildPostCompositionIgnoredCandidates,
   normalizeCommittedCompositionText,
-  shouldIgnorePostCompositionInsert,
+  shouldIgnorePostCompositionCandidate,
 } from "../terminalInputFix";
 import s from "../../styles";
 
@@ -295,8 +296,7 @@ export function PromptEditor({
 }) {
   const { t } = useI18n();
   const compositionTextRef = useRef("");
-  const ignoredPostCompositionTextRef = useRef<string | null>(null);
-  const ignoredPostCompositionNormalizedRef = useRef<string | null>(null);
+  const ignoredPostCompositionCandidatesRef = useRef<Set<string>>(new Set());
   const ignorePostCompositionUntilRef = useRef(0);
 
   const captureContent = useCallback(() => {
@@ -490,17 +490,12 @@ export function PromptEditor({
     if (event.inputType !== "insertText" || !event.data) return;
     if (
       performance.now() <= ignorePostCompositionUntilRef.current &&
-      shouldIgnorePostCompositionInsert(
-        event.data,
-        ignoredPostCompositionTextRef.current,
-        ignoredPostCompositionNormalizedRef.current,
-      )
+      shouldIgnorePostCompositionCandidate(event.data, ignoredPostCompositionCandidatesRef.current)
     ) {
       event.preventDefault();
       event.stopImmediatePropagation();
       e.stopPropagation();
-      ignoredPostCompositionTextRef.current = null;
-      ignoredPostCompositionNormalizedRef.current = null;
+      ignoredPostCompositionCandidatesRef.current = new Set();
       return;
     }
     const normalized = normalizeCommittedCompositionText(event.data);
@@ -562,10 +557,12 @@ export function PromptEditor({
         }}
         onCompositionEnd={(event) => {
           isComposingRef.current = false;
-          const committedText = event.data || compositionTextRef.current;
-          const normalized = normalizeCommittedCompositionText(committedText);
-          ignoredPostCompositionTextRef.current = committedText || null;
-          ignoredPostCompositionNormalizedRef.current = normalized || null;
+          const preeditText = compositionTextRef.current;
+          const committedText = event.data || preeditText;
+          ignoredPostCompositionCandidatesRef.current = buildPostCompositionIgnoredCandidates(
+            committedText,
+            preeditText,
+          );
           ignorePostCompositionUntilRef.current = performance.now() + 180;
           compositionTextRef.current = "";
           // Capture the final composed text after IME composition completes

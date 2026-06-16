@@ -199,6 +199,9 @@ fn release_claimed_session_paths(task_manager: &TaskManager, task_id: &str) {
 pub(crate) fn setup_env(cmd: &mut CommandBuilder) {
     let login_env = crate::app_settings::get_login_shell_env();
     for (key, value) in login_env {
+        if key == "NO_COLOR" || key == "CLICOLOR" || key == "CLICOLOR_FORCE" || key == "FORCE_COLOR" {
+            continue;
+        }
         cmd.env(key, value);
     }
 
@@ -216,6 +219,9 @@ pub(crate) fn setup_env(cmd: &mut CommandBuilder) {
     // 设置终端类型，使 Claude Code / Codex 输出正确的转义序列
     cmd.env("TERM", "xterm-256color");
     cmd.env("COLORTERM", "truecolor");
+    cmd.env("CLICOLOR", "1");
+    cmd.env("CLICOLOR_FORCE", "1");
+    cmd.env("FORCE_COLOR", "3");
 }
 
 /// 注入 Aeroric hook 守卫所需的环境变量。

@@ -6,6 +6,7 @@ import s from "../../styles";
 import { AgentPathSection } from "./AgentPathSection";
 import type { AgentKey } from "./types";
 import type { ThemeVariant } from "../../types";
+import { useTextInputIMEFix } from "../useTextInputIMEFix";
 
 import type { Highlighter } from "shiki";
 let _highlighterPromise: Promise<Highlighter> | null = null;
@@ -62,6 +63,9 @@ export function AgentConfigPanel({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
+  const fileContentImeFix = useTextInputIMEFix<HTMLTextAreaElement>((content) =>
+    setFileState({ status: "loaded", content }),
+  );
 
   // Load file
   useEffect(() => {
@@ -300,6 +304,7 @@ export function AgentConfigPanel({
             }}
             value={fileState.content}
             onChange={(e) => setFileState({ status: "loaded", content: e.target.value })}
+            {...fileContentImeFix}
             spellCheck={false}
           />
         )}

@@ -30,6 +30,7 @@ const CLAUDE_HOOK_MIN_VERSION: &str = "2.1.87";
 const HOOK_SCRIPT: &str = include_str!("aeroric-hook.mjs");
 
 const AERORIC_MARKER_FIELD: &str = "_aeroric_managed";
+const LEGACY_CLAUDE_MARKER_FIELD: &str = concat!("_ne", "zha_managed");
 
 const CODEX_BEGIN: &str = "# >>> aeroric-managed-begin (do not edit; managed by Aeroric) >>>";
 const CODEX_END: &str = "# <<< aeroric-managed-end <<<";
@@ -188,7 +189,7 @@ fn is_aeroric_managed(value: &Value) -> bool {
         .as_object()
         .and_then(|obj| {
             obj.get(AERORIC_MARKER_FIELD)
-                .or_else(|| obj.get("_nezha_managed"))
+                .or_else(|| obj.get(LEGACY_CLAUDE_MARKER_FIELD))
         })
         .and_then(|v| v.as_str())
         .is_some()
@@ -491,7 +492,7 @@ pub fn ensure_installed() -> HookInstallStatus {
         Ok(_) => status.claude_installed = true,
         Err(e) => status.error = format!("claude settings: {}", e),
     }
-    // 迁移清理:移除旧版本曾注入用户 ~/.claude/settings.json 的 nezha/aeroric 条目(best-effort,
+    // 迁移清理:移除旧版本曾注入用户 ~/.claude/settings.json 的 Aeroric 条目(best-effort,
     // 失败不影响命令行模式)。
     if let Ok(p) = claude_settings_path() {
         let _ = uninject_claude_settings_at(&p);

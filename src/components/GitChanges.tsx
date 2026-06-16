@@ -20,6 +20,7 @@ import {
   type GitDirectoryActionTarget,
   useGitFileViewMode,
 } from "./git-view/GitFileBrowser";
+import { useTextInputIMEFix } from "./useTextInputIMEFix";
 
 interface GitFileChange {
   path: string;
@@ -54,6 +55,7 @@ export function GitChanges({
   const [error, setError] = useState<string | null>(null);
   const [commitMsgError, setCommitMsgError] = useState(false);
   const [textareaFocused, setTextareaFocused] = useState(false);
+  const commitMsgImeFix = useTextInputIMEFix<HTMLTextAreaElement>(setCommitMsg);
   const [trackedCollapsed, setTrackedCollapsed] = useState(false);
   const [untrackedCollapsed, setUntrackedCollapsed] = useState(false);
   const [fileViewMode, setFileViewMode] = useGitFileViewMode();
@@ -564,6 +566,7 @@ export function GitChanges({
               setCommitMsg(e.target.value);
               if (commitMsgError) setCommitMsgError(false);
             }}
+            {...commitMsgImeFix}
             onFocus={() => setTextareaFocused(true)}
             onBlur={() => setTextareaFocused(false)}
             placeholder={t("git.commitMessage")}
