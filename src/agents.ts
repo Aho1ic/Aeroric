@@ -19,18 +19,20 @@ export interface AgentOption {
   custom?: boolean;
 }
 
+export type AgentLabelOverrides = Partial<Record<AgentType, string>>;
+
 export const AGENT_OPTIONS: AgentOption[] = [
   {
     value: "claude",
     label: "Claude Code",
-    configFile: "~/.claude/settings.json",
+    configFile: "",
     configLang: "json",
     codexLike: false,
   },
   {
     value: "codex",
     label: "Codex",
-    configFile: "~/.codex/config.toml",
+    configFile: "",
     configLang: "toml",
     codexLike: true,
   },
@@ -72,7 +74,17 @@ export function customAgentToOption(profile: CustomAgentProfile): AgentOption {
   };
 }
 
-export function agentOptionsFromProfiles(profiles: CustomAgentProfile[] = []): AgentOption[] {
+function withLabelOverrides(options: AgentOption[], labelOverrides: AgentLabelOverrides = {}) {
+  return options.map((option) => {
+    const label = labelOverrides[option.value]?.trim();
+    return label ? { ...option, label } : option;
+  });
+}
+
+export function agentOptionsFromProfiles(
+  profiles: CustomAgentProfile[] = [],
+  labelOverrides: AgentLabelOverrides = {},
+): AgentOption[] {
   const seen = new Set<string>();
   const custom = profiles
     .map((profile) => ({
@@ -89,7 +101,7 @@ export function agentOptionsFromProfiles(profiles: CustomAgentProfile[] = []): A
       return true;
     })
     .map(customAgentToOption);
-  return [...AGENT_OPTIONS, ...custom];
+  return withLabelOverrides([...AGENT_OPTIONS, ...custom], labelOverrides);
 }
 
 export function agentOption(agent: AgentType, options: AgentOption[] = AGENT_OPTIONS): AgentOption {

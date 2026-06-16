@@ -79,10 +79,10 @@ describe("sftp panel helpers", () => {
   });
 
   it("creates clickable breadcrumb segments for absolute paths", () => {
-    expect(sftpBreadcrumbSegments("/Users/macbook/Documents")).toEqual([
+    expect(sftpBreadcrumbSegments("/Users/example/Documents")).toEqual([
       { label: "Users", path: "/Users" },
-      { label: "macbook", path: "/Users/macbook" },
-      { label: "Documents", path: "/Users/macbook/Documents" },
+      { label: "example", path: "/Users/example" },
+      { label: "Documents", path: "/Users/example/Documents" },
     ]);
     expect(sftpBreadcrumbSegments("/")).toEqual([{ label: "/", path: "/" }]);
   });

@@ -257,7 +257,7 @@ export function WelcomePage({
         {sftpOpen ? (
           <SftpPanel
             sshConnections={sshConnections}
-            localDefaultPath="/Users/macbook"
+            localDefaultPath="/"
             active={sftpOpen}
             width="100%"
             themeVariant={themeVariant}

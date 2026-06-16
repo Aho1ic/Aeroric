@@ -102,6 +102,11 @@ export function ShortcutsPanel() {
     claude_path: "",
     claude_gpt55_path: "",
     codex_path: "",
+    claude_config_path: "",
+    claude_gpt55_config_path: "",
+    codex_config_path: "",
+    agent_label_overrides: {},
+    custom_agents: [],
     send_shortcut: DEFAULT_SEND_SHORTCUT,
     terminal_shift_enter_newline: DEFAULT_SHIFT_ENTER_NEWLINE,
   });

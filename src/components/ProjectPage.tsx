@@ -507,7 +507,7 @@ export function ProjectPage({
             {isSftpMode ? (
               <SftpPanel
                 sshConnections={sshConnections}
-                localDefaultPath={projectLocation.kind === "local" ? project.path : "/Users/macbook"}
+                localDefaultPath={projectLocation.kind === "local" ? project.path : "/"}
                 active={visible && isSftpMode}
                 width="100%"
                 themeVariant={themeVariant}

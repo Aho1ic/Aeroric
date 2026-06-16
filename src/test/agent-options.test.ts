@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { AGENT_OPTIONS, agentDisplayLabel, isCodexLikeAgent } from "../agents";
+import { AGENT_OPTIONS, agentDisplayLabel, agentOptionsFromProfiles, isCodexLikeAgent } from "../agents";
 import {
   composeControlOrder,
   composePermissionLabel,
@@ -12,6 +12,22 @@ describe("agent options", () => {
   });
 
   it("labels the release launch profiles clearly", () => {
+    expect(agentDisplayLabel("claude")).toBe("Claude Code");
+    expect(agentDisplayLabel("codex")).toBe("Codex");
+  });
+
+  it("ships release profiles without local config file paths", () => {
+    expect(AGENT_OPTIONS.map((agent) => [agent.value, agent.configFile])).toEqual([
+      ["claude", ""],
+      ["codex", ""],
+    ]);
+  });
+
+  it("applies local display-name overrides without changing release defaults", () => {
+    const options = agentOptionsFromProfiles([], { claude: "Local Claude", codex: "Local Codex" });
+
+    expect(agentDisplayLabel("claude", options)).toBe("Local Claude");
+    expect(agentDisplayLabel("codex", options)).toBe("Local Codex");
     expect(agentDisplayLabel("claude")).toBe("Claude Code");
     expect(agentDisplayLabel("codex")).toBe("Codex");
   });

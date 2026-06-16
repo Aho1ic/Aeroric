@@ -1,4 +1,5 @@
 use std::fs;
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::OnceLock;
@@ -66,6 +67,14 @@ pub struct AppSettings {
     #[serde(default)]
     pub codex_path: String,
     #[serde(default)]
+    pub claude_config_path: String,
+    #[serde(default)]
+    pub claude_gpt55_config_path: String,
+    #[serde(default)]
+    pub codex_config_path: String,
+    #[serde(default)]
+    pub agent_label_overrides: HashMap<String, String>,
+    #[serde(default)]
     pub custom_agents: Vec<CustomAgentProfile>,
     #[serde(default = "default_send_shortcut")]
     pub send_shortcut: String,
@@ -79,6 +88,10 @@ impl Default for AppSettings {
             claude_path: String::new(),
             claude_gpt55_path: String::new(),
             codex_path: String::new(),
+            claude_config_path: String::new(),
+            claude_gpt55_config_path: String::new(),
+            codex_config_path: String::new(),
+            agent_label_overrides: HashMap::new(),
             custom_agents: Vec::new(),
             send_shortcut: default_send_shortcut(),
             terminal_shift_enter_newline: default_shift_enter_newline(),
@@ -111,13 +124,6 @@ pub fn is_known_agent(agent: &str) -> bool {
             .custom_agents
             .iter()
             .any(|profile| profile.id == agent)
-}
-
-pub fn get_custom_agent_profile(agent: &str) -> Option<CustomAgentProfile> {
-    load_settings_internal()
-        .custom_agents
-        .into_iter()
-        .find(|profile| profile.id == agent)
 }
 
 fn default_claude_gpt55_path() -> String {
@@ -188,6 +194,51 @@ fn normalize_custom_agents(profiles: Vec<CustomAgentProfile>) -> Vec<CustomAgent
         normalized.push(profile);
     }
     normalized
+}
+
+fn normalize_config_path(path: String) -> String {
+    let trimmed = path.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    if let Some(stripped) = trimmed.strip_prefix("~/") {
+        if let Some(home) = crate::platform::home_dir() {
+            return home.join(stripped).to_string_lossy().into_owned();
+        }
+    }
+    trimmed.to_string()
+}
+
+fn normalize_agent_label_key(value: &str) -> String {
+    let mut out = String::new();
+    let mut last_was_sep = false;
+    for ch in value.trim().to_ascii_lowercase().chars() {
+        let keep = ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-');
+        if keep {
+            out.push(ch);
+            last_was_sep = false;
+        } else if !last_was_sep {
+            out.push('_');
+            last_was_sep = true;
+        }
+    }
+    out.trim_matches(|c| matches!(c, '.' | '_' | '-'))
+        .to_string()
+}
+
+fn normalize_agent_label_overrides(overrides: HashMap<String, String>) -> HashMap<String, String> {
+    overrides
+        .into_iter()
+        .filter_map(|(agent, label)| {
+            let key = normalize_agent_label_key(&agent);
+            let label = label.trim().to_string();
+            if key.is_empty() || label.is_empty() {
+                None
+            } else {
+                Some((key, label))
+            }
+        })
+        .collect()
 }
 
 fn get_agent_configured_path(settings: &AppSettings, agent: &str) -> String {
@@ -460,6 +511,10 @@ fn normalize_settings(settings: AppSettings) -> AppSettings {
                 .program
         },
         codex_path: resolve_agent_launch_spec_from_path("codex", &settings.codex_path).program,
+        claude_config_path: normalize_config_path(settings.claude_config_path),
+        claude_gpt55_config_path: normalize_config_path(settings.claude_gpt55_config_path),
+        codex_config_path: normalize_config_path(settings.codex_config_path),
+        agent_label_overrides: normalize_agent_label_overrides(settings.agent_label_overrides),
         custom_agents: normalize_custom_agents(settings.custom_agents),
         send_shortcut: normalize_send_shortcut(settings.send_shortcut),
         terminal_shift_enter_newline: settings.terminal_shift_enter_newline,
@@ -477,6 +532,10 @@ fn load_settings_unlocked() -> AppSettings {
             claude_path: String::new(),
             claude_gpt55_path: String::new(),
             codex_path: String::new(),
+            claude_config_path: String::new(),
+            claude_gpt55_config_path: String::new(),
+            codex_config_path: String::new(),
+            agent_label_overrides: HashMap::new(),
             custom_agents: Vec::new(),
             send_shortcut: default_send_shortcut(),
             terminal_shift_enter_newline: default_shift_enter_newline(),

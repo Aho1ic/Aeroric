@@ -27,6 +27,10 @@ export interface AppSettings {
   claude_path: string;
   claude_gpt55_path: string;
   codex_path: string;
+  claude_config_path: string;
+  claude_gpt55_config_path: string;
+  codex_config_path: string;
+  agent_label_overrides?: Record<string, string>;
   custom_agents?: CustomAgentProfile[];
   send_shortcut: SendShortcut;
   terminal_shift_enter_newline: boolean;

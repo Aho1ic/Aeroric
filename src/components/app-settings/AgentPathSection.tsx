@@ -22,6 +22,7 @@ import type { BuiltInAgentType } from "../../types";
 const AUTO_VERSION_DETECT_DELAY_MS = 350;
 
 type AgentPathField = "claude_path" | "claude_gpt55_path" | "codex_path";
+type AgentConfigPathField = "claude_config_path" | "claude_gpt55_config_path" | "codex_config_path";
 type AgentVersionField = "claude_version" | "claude_gpt55_version" | "codex_version";
 
 const pathFieldByAgent: Record<BuiltInAgentType, AgentPathField> = {
@@ -34,6 +35,12 @@ const versionFieldByAgent: Record<BuiltInAgentType, AgentVersionField> = {
   claude: "claude_version",
   claude_gpt55: "claude_gpt55_version",
   codex: "codex_version",
+};
+
+const configPathFieldByAgent: Record<BuiltInAgentType, AgentConfigPathField> = {
+  claude: "claude_config_path",
+  claude_gpt55: "claude_gpt55_config_path",
+  codex: "codex_config_path",
 };
 
 const pathLabelKeyByAgent: Record<BuiltInAgentType, string> = {
@@ -102,6 +109,7 @@ export function AgentPathSection({ agentKey }: { agentKey: AgentKey }) {
   const { t } = useI18n();
   const builtInAgent = isBuiltInAgent(agentKey) ? agentKey : null;
   const pathField = builtInAgent ? pathFieldByAgent[builtInAgent] : null;
+  const configPathField = builtInAgent ? configPathFieldByAgent[builtInAgent] : null;
   const versionField = builtInAgent ? versionFieldByAgent[builtInAgent] : null;
   const pathLabel = builtInAgent
     ? t(pathLabelKeyByAgent[builtInAgent])
@@ -114,6 +122,10 @@ export function AgentPathSection({ agentKey }: { agentKey: AgentKey }) {
     claude_path: "",
     claude_gpt55_path: "",
     codex_path: "",
+    claude_config_path: "",
+    claude_gpt55_config_path: "",
+    codex_config_path: "",
+    agent_label_overrides: {},
     custom_agents: [],
     send_shortcut: DEFAULT_SEND_SHORTCUT,
     terminal_shift_enter_newline: DEFAULT_SHIFT_ENTER_NEWLINE,
@@ -240,11 +252,9 @@ export function AgentPathSection({ agentKey }: { agentKey: AgentKey }) {
     setSaved(false);
     try {
       const next = pathField
-        ? await invoke<AppSettings>("save_agent_paths", {
-            claudePath: settings.claude_path,
-            claudeGpt55Path: settings.claude_gpt55_path,
-            codexPath: settings.codex_path,
-          })
+        ? await invoke("save_app_settings", { settings }).then(() =>
+            invoke<AppSettings>("load_app_settings"),
+          )
         : await invoke<AppSettings>("save_custom_agent_profile", {
             profile: {
               id: agentKey,
@@ -272,7 +282,20 @@ export function AgentPathSection({ agentKey }: { agentKey: AgentKey }) {
   const originalCustomAgent = findCustomAgent(originalSettings, agentKey);
   const currentPath = pathField ? settings[pathField] : (currentCustomAgent?.path ?? "");
   const originalPath = pathField ? originalSettings[pathField] : (originalCustomAgent?.path ?? "");
-  const isDirty = currentPath !== originalPath;
+  const currentConfigPath = configPathField ? settings[configPathField] : "";
+  const originalConfigPath = configPathField ? originalSettings[configPathField] : "";
+  const currentLabelOverride =
+    builtInAgent && settings.agent_label_overrides?.[builtInAgent]
+      ? settings.agent_label_overrides[builtInAgent]
+      : "";
+  const originalLabelOverride =
+    builtInAgent && originalSettings.agent_label_overrides?.[builtInAgent]
+      ? originalSettings.agent_label_overrides[builtInAgent]
+      : "";
+  const isDirty =
+    currentPath !== originalPath ||
+    currentConfigPath !== originalConfigPath ||
+    currentLabelOverride !== originalLabelOverride;
   const versionValue = versionField ? versions[versionField] : customVersion;
 
   return (
@@ -323,6 +346,28 @@ export function AgentPathSection({ agentKey }: { agentKey: AgentKey }) {
       </div>
 
       <div style={fieldStyle}>
+        <label style={labelStyle}>{t("appSettings.displayName")}</label>
+        <input
+          style={inputStyle}
+          value={currentLabelOverride}
+          onChange={(e) => {
+            const nextLabel = e.target.value;
+            setSettings((prev) => ({
+              ...prev,
+              agent_label_overrides: {
+                ...(prev.agent_label_overrides ?? {}),
+                ...(builtInAgent ? { [builtInAgent]: nextLabel } : {}),
+              },
+            }));
+          }}
+          placeholder={builtInAgent ? agentDisplayLabel(builtInAgent) : agentDisplayLabel(agentKey)}
+          disabled={loading || !builtInAgent}
+          spellCheck={false}
+        />
+        <span style={hintStyle}>{t("appSettings.displayNameHint")}</span>
+      </div>
+
+      <div style={fieldStyle}>
         <label style={labelStyle}>{pathLabel}</label>
         <input
           style={{
@@ -350,6 +395,28 @@ export function AgentPathSection({ agentKey }: { agentKey: AgentKey }) {
         />
         <span style={hintStyle}>{pathHint}</span>
       </div>
+
+      {configPathField && (
+        <div style={fieldStyle}>
+          <label style={labelStyle}>{t("appSettings.configFilePath")}</label>
+          <input
+            style={{
+              ...inputStyle,
+              opacity: loading ? 0.65 : 1,
+              cursor: loading ? "wait" : "text",
+            }}
+            value={currentConfigPath}
+            onChange={(e) => {
+              const nextPath = e.target.value;
+              setSettings((prev) => ({ ...prev, [configPathField]: nextPath }));
+            }}
+            placeholder={t("appSettings.configFilePathPlaceholder")}
+            disabled={loading}
+            spellCheck={false}
+          />
+          <span style={hintStyle}>{t("appSettings.configFilePathHint")}</span>
+        </div>
+      )}
 
       <div style={fieldStyle}>
         <label style={labelStyle}>{t("appSettings.installedVersions")}</label>

@@ -13,7 +13,12 @@ export function useAgentOptions(): AgentOption[] {
       invoke<AppSettings>("load_app_settings")
         .then((settings) => {
           if (!cancelled) {
-            setOptions(agentOptionsFromProfiles(settings.custom_agents ?? []));
+            setOptions(
+              agentOptionsFromProfiles(
+                settings.custom_agents ?? [],
+                settings.agent_label_overrides ?? {},
+              ),
+            );
           }
         })
         .catch(() => {

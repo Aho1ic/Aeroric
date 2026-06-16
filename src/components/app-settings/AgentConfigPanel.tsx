@@ -24,6 +24,7 @@ function getHighlighter(): Promise<Highlighter> {
 
 type FileState =
   | { status: "loading" }
+  | { status: "unconfigured" }
   | { status: "missing" }
   | { status: "loaded"; content: string };
 
@@ -67,32 +68,42 @@ export function AgentConfigPanel({
     setFileState({ status: "loaded", content }),
   );
 
-  // Load file
   useEffect(() => {
     setResolvedFilePath(filePath);
-    invoke<string>("get_agent_config_file_path", { agent: agentKey })
-      .then((resolvedPath) => setResolvedFilePath(resolvedPath))
-      .catch(() => setResolvedFilePath(filePath));
-  }, [agentKey, filePath]);
-
-  useEffect(() => {
+    let cancelled = false;
     setFileState({ status: "loading" });
     setEditing(false);
     setHighlighted(null);
     setHighlightError(null);
     setError(null);
     setSaved(false);
-    invoke<string | null>("read_agent_config_file", { agent: agentKey })
+    invoke<string>("get_agent_config_file_path", { agent: agentKey })
+      .then((resolvedPath) => {
+        if (cancelled) return;
+        setResolvedFilePath(resolvedPath);
+        if (!resolvedPath.trim()) {
+          setFileState({ status: "unconfigured" });
+          return null;
+        }
+        return invoke<string | null>("read_agent_config_file", { agent: agentKey });
+      })
       .then((c) => {
+        if (cancelled) return;
         if (c === null) {
           setFileState({ status: "missing" });
-        } else {
-          setFileState({ status: "loaded", content: c });
-          setOriginal(c);
+          return;
         }
+        if (c === undefined) return;
+        setFileState({ status: "loaded", content: c });
+        setOriginal(c);
       })
-      .catch((e) => setError(String(e)));
-  }, [agentKey]);
+      .catch((e) => {
+        if (!cancelled) setError(String(e));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [agentKey, filePath]);
 
   // Re-highlight when content or theme changes
   useEffect(() => {
@@ -196,7 +207,7 @@ export function AgentConfigPanel({
               padding: "4px 9px",
             }}
           >
-            {resolvedFilePath}
+            {resolvedFilePath || t("skill.settings.notConfigured")}
           </div>
           {fileState.status === "loaded" && !editing && (
             <button
@@ -245,6 +256,12 @@ export function AgentConfigPanel({
 
         {fileState.status === "loading" && !error && (
           <div style={{ color: "var(--text-hint)", fontSize: 13 }}>{t("common.loading")}</div>
+        )}
+
+        {fileState.status === "unconfigured" && (
+          <div style={{ color: "var(--text-muted)", fontSize: 13 }}>
+            {t("appSettings.configFileNotConfigured")}
+          </div>
         )}
 
         {fileState.status === "missing" && (
