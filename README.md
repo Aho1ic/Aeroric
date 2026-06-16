@@ -1,122 +1,69 @@
 <p align="center">
-  <img src="docs/images/logo.png" alt="Aeroric Logo" width="150" />
+  <img src="docs/images/logo.png" alt="NeZha Logo" width="150" />
 </p>
 
-<h1 align="center">Aeroric: An Agent-First IDE For Vibe Coding </h1>
+<h1 align="center">NeZha: Desktop Workspace for AI Coding Agents</h1>
 
 <p align="center">
-Claude Code + Codex, Git, editing, and task management, all in one place.</p>
-
-<p align="center">
-  Multi-project Workspace · Fast Switching Between VibeCoding Tasks · Real-time Terminal · Session Auto-discovery · Native Git Integration · Lightweight Code Editor · Real-time Usage
-</p>
-<p align="center">
-  <img src="docs/images/index.gif" alt="Aeroric Product Showcase" width="80%" />
+Run Claude Code, Codex, and custom agents across projects with live terminals, task tracking, Git, SSH, Skill Hub, and usage analytics in one lightweight desktop app.
 </p>
 
-Aeroric is an Agent-First Vibe Coding desktop application built for true parallel programming. It lets Claude Code and Codex run together across multiple projects, while unifying task lifecycle tracking, a native terminal experience, session playback, code browsing, and a complete Git workflow in one interface. Say goodbye to constantly toggling between terminals, editors, Git clients, and session logs. With just a few clicks, you can instantly switch contexts between different projects or tasks. Moreover, with an installation package size of just 7MB, Aeroric completely eliminates the bulkiness associated with traditional IDEs.
+<p align="center">
+  <img src="docs/images/index.gif" alt="NeZha current workspace" width="86%" />
+</p>
 
-[**中文文档 (Chinese Documentation)**](./README_ZH.md)
+[中文文档](./README_ZH.md)
 
-## Why Aeroric?
+## Why NeZha
 
-Traditional IDEs and editors like VS Code are fundamentally designed with the human developer at the center. In the era of manual programming, features such as plugin ecosystems, refactoring tools, and variable autocomplete existed to enhance individual coding efficiency. However, as AI takes over more of the actual code generation, the act of programming is becoming increasingly parallelized—a paradigm shift that was previously unimaginable. Yet, human attention remains limited. How to rapidly track and manage tasks across multiple projects concurrently is precisely the challenge Aeroric solves.
+NeZha is built for agent-first development, where several AI coding tasks may run at the same time across different repositories or remote machines. Instead of switching between terminal tabs, editor windows, Git clients, and session logs, NeZha keeps the full workflow in one place: start work, watch terminal output, review generated changes, inspect files, resume sessions, and commit code.
 
-Aeroric is engineered with an **Agent-First** philosophy. It features a built-in terminal that directly integrates native Claude Code and Codex, so your AI coding agents can work in parallel instead of waiting in sequence. Building upon this foundation, it incorporates a comprehensive task system, Git integration, a terminal emulator, and a code editor. For everyday tasks, you no longer need to launch a heavy IDE; you can achieve a closed-loop workflow—from task delegation and code review to final code submission—all without interrupting your ongoing work in other projects.
+The app uses native Claude Code and Codex CLIs rather than replacing them. It adds a desktop control layer around those tools: multi-project navigation, permission-aware task launch, PTY-backed terminals, automatic session discovery, local task persistence, and a focused code review surface.
 
 ## Installation
 
-Before using Aeroric, ensure that you have installed Claude Code / Codex.
-
-Upon the first installation on macOS, you might encounter the following security prompt: *"“Aeroric” is damaged and can’t be opened. You should move it to the Trash."* This occurs because the installation package is unsigned. You can easily resolve this by executing the following command in your terminal:
+Install Claude Code and/or Codex before using NeZha. On macOS, if the unsigned app is blocked by Gatekeeper, run:
 
 ```bash
-xattr -rd com.apple.quarantine /Applications/Aeroric.app
+xattr -rd com.apple.quarantine /Applications/NeZha.app
 ```
 
-## Core Features
+## Current Feature Set
 
-- **Centralized Multi-Tasking**: Manage multiple projects and VibeCoding tasks simultaneously within a single interface. The virtual terminal runs native Claude Code / Codex, providing real-time output and interactive experience that rivals a local terminal.
-- **Intelligent Session Management**: Automatically detects and associates Claude Code / Codex sessions. The system intelligently alerts users when tasks require manual confirmation or input.
-- **Visualized Session History**: Intuitively view the detailed interaction history between you and Claude Code / Codex directly within the UI. You can seamlessly resume interrupted tasks at any time.
-- **Polished Interface Design**: A carefully crafted visual style balances information density with clarity, while built-in light and dark themes keep the workspace comfortable day and night.
-- **Native Git & Code Editing**: Features native Git integration with AI-assisted Git commit message generation. The built-in lightweight code and Markdown editors provide syntax highlighting for all major programming languages.
-- **Usage Analytics**: Provides weekly statistics on Token consumption and tool invocations, helping you quantify agent efficiency and track operational costs.
+- **Multi-project workspace**: switch between local and SSH projects while active tasks keep running in the background.
+- **Agent task lifecycle**: create todo tasks, launch Claude Code/Codex/custom agents, resume sessions, cancel work, and track pending, running, input-required, done, failed, and cancelled states.
+- **Terminal-first execution**: xterm.js terminals stream real PTY output, support interactive input, smart copy, configurable newline shortcuts, font controls, and IME-safe text entry.
+- **Session discovery and replay**: Claude Code and Codex JSONL sessions are detected automatically and shown in the UI for review and recovery.
+- **Native Git workflow**: inspect unstaged/staged changes, review diffs, generate commit messages, commit, push, pull, and browse history without leaving the app.
+- **Code and file tools**: browse the project tree, preview images, edit source and Markdown with syntax highlighting, and search project files for prompt mentions.
+- **SSH and SFTP support**: open remote projects, run remote shells, browse remote files, and manage local connection settings.
+- **Skill Hub**: register a local skills folder, edit skills as a project, and keep Superpowers/Trellis-style skill libraries available to agents.
+- **Usage analytics**: read agent session metrics for token usage and tool calls so long-running work remains visible.
+- **App settings**: configure agent paths, custom agents, language, theme, font family, terminal font size, and task display preferences.
 
-## 🌟 Feature Overview
-
-### 🗂️ Multi-Project Workspace
-
-> **One-click context switching between VibeCoding tasks across multiple projects.**
-
-- ✨ **Quick Switch**: Use the left-hand project navigation bar to seamlessly toggle between multiple codebases with a single click, while your terminals remain actively running in the background.
-- 🔄 **Real-Time Synchronization**: Task statuses are synchronized in real-time across all projects. Projects containing sessions that await user confirmation are explicitly highlighted with a yellow indicator.
-- 🚀 **Multi-Agent Support**: Run multiple Claude Code / Codex instances simultaneously. Each instance can independently manage its own set of tasks.
+## Screenshots
 
 <p align="center">
-  <img src="docs/images/workspace.png" alt="Workspace" width="48%" />
-  <img src="docs/images/switch-project.png" alt="Switch Project" width="48%" />
+  <img src="docs/images/workspace.png" alt="NeZha workspace" width="86%" />
 </p>
-
-### 📊 Full Task Lifecycle Visualization
-
-> **Comprehensive tracking for active and pending tasks.**
-
-- 🎯 **Transparent Statuses**: Track tasks seamlessly from creation and execution to waiting for input and final completion.
-- ⏪ **Session Playback & Recovery**: Upon task completion, the corresponding session records are automatically visualized. Supports task resumption at any time.
-- 🧠 **Personalized Configuration**: The task input interface supports rich interactions including `@` mentions, image pasting, Pre-Prompts, and more.
 
 <p align="center">
-  <img src="docs/images/task.png" alt="Task View" width="90%" />
+  <img src="docs/images/dark.png" alt="NeZha dark mode" width="86%" />
 </p>
 
-### 📝 Built-in Code & Markdown Editors
+## Development
 
-> **A lightweight yet uncompromising coding experience.**
+```bash
+pnpm dev            # Start Vite dev server on port 1420
+pnpm build          # Type-check and build frontend
+pnpm lint           # Run ESLint
+pnpm test           # Run Vitest
+pnpm tauri dev      # Start the desktop app
+pnpm tauri build    # Build production desktop bundles
+```
 
-- 📁 **Clear Structure**: A complete file tree browsing experience with rapid directory expansion and collapse.
-- 🎨 **Status Highlighting**: Real-time Git status annotations ensure file changes are identifiable at a glance.
-- 💅 **Professional Highlighting**: Professional-grade syntax highlighting and editing capabilities powered by Shiki and CodeMirror.
+The frontend is React 19 + TypeScript + Vite. The desktop shell is Tauri 2 + Rust. Backend commands live in `src-tauri/src/`, and most application state is owned by `src/App.tsx` and persisted through Tauri storage commands.
 
-<p align="center">
-  <img src="docs/images/code.png" alt="Code Browsing" width="48%" />
-  <img src="docs/images/markdown.png" alt="Markdown Editor" width="48%" />
-</p>
+## Acknowledgments
 
-### 🌳 Git Integration
-
-> **Built-in Git integration for branch management, code commits, and AI message generation.**
-
-- 📦 **Git Diff View**: Intuitively review staged and unstaged modifications with comprehensive code highlighting.
-- 🕒 **Git Logs**: Easily navigate commit history and inspect detailed diffs for any given commit.
-- 🤖 **AI Git Messages**: Smart assistance for generating Commit Messages that adhere to your project's formatting standards.
-- 🚦 **Branch Management**: Full support for creating, switching, merging, and deleting branches, alongside branch history visualization.
-
-<p align="center">
-  <img src="docs/images/git.png" alt="Git Integration" width="90%" />
-</p>
-
-### 🎨 Carefully Crafted UI Style with Light and Dark Modes
-
-<p align="center">
-  <img src="docs/images/dark.png" alt="Dark Theme" width="48%" />
-  <img src="docs/images/light.png" alt="Light Theme" width="48%" />
-</p>
-
-## 🙏 Acknowledgments
-
-The creation of Aeroric was made possible by the following outstanding open-source projects. We extend our deepest gratitude to them:
-
-- [Tauri](https://github.com/tauri-apps/tauri) - Build smaller, faster, and more secure desktop applications with a web frontend.
-- [React](https://github.com/facebook/react) - The library for web and native user interfaces.
-- [xterm.js](https://github.com/xtermjs/xterm.js) - A terminal for the web.
-
-Thanks to the following media creators for covering and sharing this project. The order is in no particular order, and you may want to follow them if you're interested.
-
-| Platform | Account |
-| --- | --- |
-| Twitter | [@aigclink](https://x.com/aigclink), [@QingQ77](https://x.com/QingQ77), [@ilovek8s](https://x.com/ilovek8s) |
-| WeChat Official Account | 码问 |
-
-### 👬 Friend Links
-<a href="https://linux.do">Linux.do</a>
+NeZha builds on excellent open-source projects including [Tauri](https://github.com/tauri-apps/tauri), [React](https://github.com/facebook/react), [xterm.js](https://github.com/xtermjs/xterm.js), [CodeMirror](https://codemirror.net/), and [Shiki](https://shiki.style/).

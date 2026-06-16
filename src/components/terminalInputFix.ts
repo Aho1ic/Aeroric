@@ -27,6 +27,21 @@ export function normalizeCommittedCompositionText(text: string): string {
   return normalized;
 }
 
+export function shouldIgnorePostCompositionInsert(
+  text: string | null | undefined,
+  ignoredText: string | null,
+  ignoredNormalized: string | null,
+): boolean {
+  if (!text || (!ignoredText && !ignoredNormalized)) return false;
+  const normalized = normalizeCommittedCompositionText(text);
+  return (
+    text === ignoredText ||
+    text === ignoredNormalized ||
+    normalized === ignoredText ||
+    normalized === ignoredNormalized
+  );
+}
+
 export function shouldLetBrowserRenderCompositionPreview(
   inputType: string,
   isComposing: boolean,
@@ -125,7 +140,11 @@ export function attachLinuxIMEFix(
       event.inputType === "insertText" &&
       event.data &&
       performance.now() <= ignorePostCompositionUntil &&
-      (event.data === ignoredPostCompositionText || event.data === ignoredPostCompositionNormalized)
+      shouldIgnorePostCompositionInsert(
+        event.data,
+        ignoredPostCompositionText,
+        ignoredPostCompositionNormalized,
+      )
     ) {
       textarea.value = "";
       event.preventDefault();

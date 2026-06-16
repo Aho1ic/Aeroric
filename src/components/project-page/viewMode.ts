@@ -2,7 +2,7 @@ import type { ProjectLocation, TaskStatus } from "../../types";
 import type { RightPanel } from "../../hooks/useProjectPanels";
 import type React from "react";
 
-const PROJECT_RAIL_EXPANDED_WIDTH = 284;
+export const PROJECT_RAIL_EXPANDED_WIDTH = 268;
 const PROJECT_RAIL_COLLAPSED_WIDTH = 52;
 const RIGHT_TOOLBAR_WIDTH = 44;
 const COMPOSE_COMFORT_WIDTH = 760;

@@ -18,6 +18,7 @@ import { ProjectAvatar } from "./ProjectAvatar";
 import { StatusIcon } from "./StatusIcon";
 import { NotificationBell } from "./NotificationBell";
 import { useI18n } from "../i18n";
+import { PROJECT_RAIL_EXPANDED_WIDTH } from "./project-page/viewMode";
 import s from "../styles";
 import claudeWaveGif from "../assets/gif/claude-wave.gif";
 
@@ -566,7 +567,7 @@ export function ProjectRail({
     <div
       style={{
         position: "relative",
-        width: 284,
+        width: PROJECT_RAIL_EXPANDED_WIDTH,
         flexShrink: 0,
         background: "var(--bg-sidebar)",
         borderRight: "1px solid var(--border-dim)",

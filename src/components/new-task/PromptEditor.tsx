@@ -9,7 +9,10 @@ import {
   shouldSubmitPromptKey,
   type SendShortcut,
 } from "../../shortcuts";
-import { normalizeCommittedCompositionText } from "../terminalInputFix";
+import {
+  normalizeCommittedCompositionText,
+  shouldIgnorePostCompositionInsert,
+} from "../terminalInputFix";
 import s from "../../styles";
 
 const FILE_CODE_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M10 12.5 8 15l2 2.5"/><path d="m14 12.5 2 2.5-2 2.5"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7z"/></svg>`;
@@ -291,6 +294,11 @@ export function PromptEditor({
   onPasteLargeText?: (text: string) => void;
 }) {
   const { t } = useI18n();
+  const compositionTextRef = useRef("");
+  const ignoredPostCompositionTextRef = useRef<string | null>(null);
+  const ignoredPostCompositionNormalizedRef = useRef<string | null>(null);
+  const ignorePostCompositionUntilRef = useRef(0);
+
   const captureContent = useCallback(() => {
     const editor = editorRef.current;
     if (!editor) return;
@@ -480,9 +488,25 @@ export function PromptEditor({
   function handleBeforeInputCapture(e: React.FormEvent<HTMLDivElement>) {
     const event = e.nativeEvent as InputEvent;
     if (event.inputType !== "insertText" || !event.data) return;
+    if (
+      performance.now() <= ignorePostCompositionUntilRef.current &&
+      shouldIgnorePostCompositionInsert(
+        event.data,
+        ignoredPostCompositionTextRef.current,
+        ignoredPostCompositionNormalizedRef.current,
+      )
+    ) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      e.stopPropagation();
+      ignoredPostCompositionTextRef.current = null;
+      ignoredPostCompositionNormalizedRef.current = null;
+      return;
+    }
     const normalized = normalizeCommittedCompositionText(event.data);
     if (normalized === event.data) return;
     event.preventDefault();
+    event.stopImmediatePropagation();
     e.stopPropagation();
     isComposingRef.current = false;
     if (!insertPlainTextAtSelection(normalized)) return;
@@ -529,13 +553,21 @@ export function PromptEditor({
         onSelect={updateMentionState}
         onCompositionStart={() => {
           isComposingRef.current = true;
+          compositionTextRef.current = "";
         }}
-        onCompositionUpdate={() => {
+        onCompositionUpdate={(event) => {
+          compositionTextRef.current = event.data ?? "";
           onSetIsEmpty(false);
           captureContent();
         }}
-        onCompositionEnd={() => {
+        onCompositionEnd={(event) => {
           isComposingRef.current = false;
+          const committedText = event.data || compositionTextRef.current;
+          const normalized = normalizeCommittedCompositionText(committedText);
+          ignoredPostCompositionTextRef.current = committedText || null;
+          ignoredPostCompositionNormalizedRef.current = normalized || null;
+          ignorePostCompositionUntilRef.current = performance.now() + 180;
+          compositionTextRef.current = "";
           // Capture the final composed text after IME composition completes
           const editor = editorRef.current;
           if (editor) {

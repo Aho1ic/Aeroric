@@ -1,120 +1,69 @@
 <p align="center">
-  <img src="docs/images/logo.png" alt="Aeroric Logo" width="150" />
+  <img src="docs/images/logo.png" alt="NeZha Logo" width="150" />
 </p>
 
-<h1 align="center">Aeroric: Agent-First AI 编程工作台</h1>
+<h1 align="center">NeZha：面向 AI 编程智能体的桌面工作台</h1>
 
 <p align="center">
-  专为 AI 编程量身打造的高效率轻量级 AI-Native IDE
+  在一个轻量桌面应用里同时管理 Claude Code、Codex、自定义智能体、多项目任务、实时终端、Git、SSH、Skill Hub 和用量分析。
 </p>
 
 <p align="center">
-  多项目工作区, 快速切换多个项目的 vibecoding 任务 · 实时终端 · 会话自动发现 · 原生 Git 集成 · 轻量级代码编辑器 · 实时套餐额度显示
-</p>
-<p align="center">
-  <img src="docs/images/index.gif" alt="Aeroric 产品图" width="80%" />
+  <img src="docs/images/index.gif" alt="NeZha 当前工作区" width="86%" />
 </p>
 
-Aeroric 是一款专为 AI 编程场景打造的桌面应用。它把多项目管理、任务生命周期追踪、原生终端体验、会话回放、代码浏览和完整 Git 工作流整合到同一个界面里，让你不必在终端、编辑器、Git 工具和会话记录之间来回切换。只需要通过鼠标点击，就可以瞬间切换到不同的项目或任务。同时安装包体积轻量，告别传统 IDE 的笨重。
+[English README](./README.md)
 
-## 为什么是 Aeroric
+## 为什么是 NeZha
 
-传统的 IDE 和 VS Code 这样的编辑器本质上是以开发者为核心设计的，在古法编程时代，插件系统、重构、变量联想等诸多功能都是为了提升效率而存在。而现在 AI 写的代码越来越多，写代码本身真的开始并行了，这在以前是不敢想的事情，但是人的注意力是有限的，如何快速跟踪多个项目的任务，就是 Aeroric 需要解决的事情。
+NeZha 面向 agent-first 的开发方式：多个 AI 编程任务可能同时在不同仓库、本机项目或远程机器上运行。你不需要在终端、编辑器、Git 客户端和会话日志之间来回切换，NeZha 把任务下发、终端输出、会话回放、代码查看、Git Review、提交和恢复都放到同一个工作台里。
 
-Aeroric 以 Agent 优先设计，内置终端直接集成原生 Claude Code 和 Codex。并在此之上集成任务系统、Git、终端和代码编辑器。使得对于轻度需求无需打开笨重的 IDE 即可完成任务下发、代码 Review、代码提交等操作的闭环，而且不会打断你在其他项目进行中的工作。
+NeZha 不替代 Claude Code 或 Codex，而是直接调用本机 CLI，并在外层补齐桌面任务管理能力：多项目导航、权限模式选择、PTY 终端、会话自动发现、本地任务持久化、文件浏览、Git 差异查看和用量统计。
 
+## 安装
 
-## 安装 Aeroric
-在使用 Aeroric 之前你需要先安装好 Claude Code / Codex，初次安装可能会遇到““Aeroric”已损坏，无法打开。你应该将它移到废纸篓。”这是由于安装包未签名导致的，执行以下语句即可:
+使用前请先安装 Claude Code 和/或 Codex。macOS 首次打开未签名应用时，如果系统提示应用已损坏或无法打开，执行：
 
-``` bash
-xattr -rd com.apple.quarantine /Applications/Aeroric.app
+```bash
+xattr -rd com.apple.quarantine /Applications/NeZha.app
 ```
 
-## 核心功能
+## 当前功能
 
-- 在单一界面中同时管理多个项目与多个 vibecoding 任务，虚拟终端运行原生的 Claude Code / Codex, 提供接近本地终端的实时输出与交互体验.
-- 自动识别并关联 Claude Code / Codex 会话, 当任务需要手动确认时，自动提醒用户。
-- 可视化会话历史，你可以直接在页面上可视化查看你和 Claude Code / Codex 每一次的会话详情，并随时 Resume 任务。
-- 精选打磨的 UI 风格，兼顾信息密度与可读性，并内置白天/黑夜主题模式，长时间使用也更舒适。
-- 原生集成 Git, AI 生成 Git Message。 原生集成轻量级代码编辑器和Markdown编辑器，支持所有常见编程语言代码高亮。
-- 按周统计 Token 与工具调用，帮助量化智能体效率与成本。
-## 🌟 功能概览
+- **多项目工作区**：在本地项目和 SSH 远程项目之间切换，后台任务继续运行。
+- **智能体任务生命周期**：创建 todo 任务，启动 Claude Code、Codex 或自定义智能体，恢复会话、取消任务，并跟踪 pending、running、input_required、done、failed、cancelled 等状态。
+- **实时终端执行**：基于 xterm.js 的 PTY 终端展示真实输出，支持交互输入、智能复制、换行快捷键、字体设置和输入法安全输入。
+- **会话自动发现与回放**：自动关联 Claude Code / Codex 的 JSONL 会话文件，在 UI 中查看历史消息并恢复任务。
+- **原生 Git 工作流**：查看未暂存/已暂存变更、阅读 diff、生成 commit message、提交、推送、拉取和浏览历史。
+- **代码与文件工具**：浏览项目文件树、预览图片、编辑源码和 Markdown，并在提示词中使用文件提及。
+- **SSH 与 SFTP**：打开远程项目、运行远程 Shell、浏览远程文件，并管理本地连接配置。
+- **Skill Hub**：登记本地技能库，把 skills 作为项目编辑，并让 Superpowers / Trellis 风格的技能库可被智能体使用。
+- **用量分析**：读取会话指标，展示 token 消耗和工具调用，方便跟踪长任务成本。
+- **应用设置**：配置智能体路径、自定义智能体、界面语言、主题、字体、终端字号和任务展示偏好。
 
-### 🗂️ 多项目工作区
-
-> **多项目工作区, 一键切换多个项目的 vibecoding 任务**
-
-- ✨ **快速切换**：左侧项目导航栏，一键在多个代码库间无缝切换，终端会在后台保持活跃。
-- 🔄 **实时同步**：任务状态跨项目实时同步，待确认的会话对应的项目会亮黄灯显式提醒。
-- 🚀 **多Agent支持**：支持同时运行多个 Claude Code / Codex 实例，每个实例可以独立管理任务。
+## 截图
 
 <p align="center">
-  <img src="docs/images/workspace.png" alt="工作区" width="48%" />
-  <img src="docs/images/switch-project.png" alt="切换项目" width="48%" />
+  <img src="docs/images/workspace.png" alt="NeZha 工作区" width="86%" />
 </p>
-
-### 📊 任务全生命周期可视化
-
-> **支持任务/待办任务**
-
-- 🎯 **状态透明**：从创建、运行、等待输入到最终完成。
-- ⏪ **会话可视化展示和恢复**：任务完成自动可视化展示对应的会话记录，支持随时恢复。
-- 🧠 **个性化配置**：任务输入框支持 @ 操作，图片粘贴，Pre Prompt 等操作。
 
 <p align="center">
-  <img src="docs/images/task.png" alt="任务视图" width="90%" />
+  <img src="docs/images/dark.png" alt="NeZha 暗色模式" width="86%" />
 </p>
 
+## 开发
 
-### 📝 内置代码编辑器与MarkDown编辑器
+```bash
+pnpm dev            # 启动 Vite 开发服务器，端口 1420
+pnpm build          # 类型检查并构建前端
+pnpm lint           # 运行 ESLint
+pnpm test           # 运行 Vitest
+pnpm tauri dev      # 启动桌面应用
+pnpm tauri build    # 构建生产桌面包
+```
 
-> **轻量却不妥协的编码体验**
+前端使用 React 19 + TypeScript + Vite，桌面壳使用 Tauri 2 + Rust。后端命令位于 `src-tauri/src/`，核心应用状态由 `src/App.tsx` 管理，并通过 Tauri 存储命令持久化。
 
-- 📁 **结构清晰**：完整的文件树浏览体验，支持目录的快速展开与折叠。
-- 🎨 **状态高亮**：Git 状态实时标注，文件变更一览无余。
-- 💅 **专业高亮**：基于 Shiki / CodeMirror 打造的专业级语法高亮查看与编辑体验。
+## 致谢
 
-<p align="center">
-  <img src="docs/images/code.png" alt="代码浏览" width="48%" />
-  <img src="docs/images/markdown.png" alt="Markdown 编辑器" width="48%" />
-</p>
-
-### 🌳 Git 集成
-
-> **内置 Git 集成，分支管理，代码提交，Git Message 生成**
-
-- 📦 **Git Diff 视图**：直观查看暂存与未暂存的改动，支持代码高亮。
-- 🕒 **Git Logs**：轻松浏览提交历史，查看任意一次 Commit 的详尽差异。
-- 🤖 **Git Message 生成**：智能辅助生成契合项目规范的 Commit Message。  
-- 🚦 **分支管理**：支持创建、切换、合并、删除分支，以及查看分支历史。
-
-<p align="center">
-  <img src="docs/images/git.png" alt="Git 集成" width="90%" />
-</p>
-
-### 🎨 精心打磨的 UI 风格，支持白天和黑夜模式
-
-<p align="center">
-  <img src="docs/images/dark.png" alt="Dark Theme" width="48%" />
-  <img src="docs/images/light.png" alt="Light Theme" width="48%" />
-</p>
-
-## 🙏 鸣谢
-
-Aeroric 的诞生离不开以下优秀的开源项目，向它们致敬：
-
-- [Tauri](https://github.com/tauri-apps/tauri) - 构建更小、更快、更安全的桌面应用
-- [React](https://github.com/facebook/react) - 构建用户界面的 JavaScript 库
-- [xterm.js](https://github.com/xtermjs/xterm.js) - 强大的 Web 终端组件
-
-感谢以下自媒体对本项目的关注和转发(以下排名不分先后), 大家感兴趣的话可以关注下他们 ～
-
-| 平台 | 账号 |
-| --- | --- |
-| 推特 | [@aigclink](https://x.com/aigclink)、[@QingQ77](https://x.com/QingQ77)、[@ilovek8s](https://x.com/ilovek8s) |
-| 公众号 | 码问 |
-
-
-### 👬 友情链接
-<a href="https://linux.do">Linux.do</a>
+NeZha 基于 [Tauri](https://github.com/tauri-apps/tauri)、[React](https://github.com/facebook/react)、[xterm.js](https://github.com/xtermjs/xterm.js)、[CodeMirror](https://codemirror.net/) 和 [Shiki](https://shiki.style/) 等优秀开源项目构建。
