@@ -6,6 +6,7 @@ import {
   ChevronRight,
   Database,
   FilePlus,
+  Plus,
   Play,
   Plug,
   RefreshCcw,
@@ -32,6 +33,7 @@ interface Props {
 }
 
 const PAGE_SIZE = 100;
+type DatabaseRow = { rowId?: number | null; keyValues: Array<{ column: string; value: unknown }> };
 
 function endpointLabel(endpoint: DbEndpoint): string {
   if (endpoint.kind === "local") return endpoint.path;
@@ -46,6 +48,18 @@ function valueToText(value: unknown): string {
 
 function textToCellValue(value: string): string | null {
   return value.trim().toUpperCase() === "NULL" ? null : value;
+}
+
+function rowKeyFor(row: DatabaseRow) {
+  return {
+    rowId: row.rowId ?? null,
+    keyValues: row.keyValues
+      .filter((item) => item.column !== "__aeroric_rowid__")
+      .map((item) => ({
+        column: item.column,
+        value: item.value === null || item.value === undefined ? null : String(item.value),
+      })),
+  };
 }
 
 function createConnectionName(endpoint: DbEndpoint): string {
@@ -171,6 +185,7 @@ export function DatabaseView({
         id: `db:${now}:${Math.random().toString(36).slice(2)}`,
         name: createConnectionName(endpoint),
         endpoint,
+        readOnly: false,
         createdAt: now,
         lastOpenedAt: now,
       };
@@ -222,6 +237,7 @@ export function DatabaseView({
 
   const handleDeleteConnection = useCallback(
     (connectionId: string) => {
+      if (!window.confirm(t("database.confirmDeleteConnection"))) return;
       const next = connections.filter((connection) => connection.id !== connectionId);
       saveConnections(next);
       if (activeConnectionId === connectionId) {
@@ -232,8 +248,18 @@ export function DatabaseView({
         setSqlResult(null);
       }
     },
-    [activeConnectionId, connections, saveConnections],
+    [activeConnectionId, connections, saveConnections, t],
   );
+
+  const toggleReadOnly = useCallback(() => {
+    if (!activeConnection) return;
+    const next = connections.map((connection) =>
+      connection.id === activeConnection.id
+        ? { ...connection, readOnly: !connection.readOnly }
+        : connection,
+    );
+    saveConnections(next);
+  }, [activeConnection, connections, saveConnections]);
 
   const loadTable = useCallback(
     async (object: DbObject, nextPage: number) => {
@@ -274,7 +300,9 @@ export function DatabaseView({
       const result = await invoke<DbExecuteResult>("db_execute_sql", {
         endpoint: activeEndpoint,
         sql,
+        page: 1,
         pageSize: PAGE_SIZE,
+        readOnly: activeConnection?.readOnly ?? false,
         projectRoot,
       });
       setSqlResult(result);
@@ -294,16 +322,22 @@ export function DatabaseView({
   }, [activeConnection, activeEndpoint, projectRoot, sql]);
 
   const updateCell = useCallback(
-    async (rowId: number | null | undefined, column: string, value: string, original: string) => {
-      if (!activeEndpoint || !activeObject || rowId == null || value === original) return;
+    async (
+      row: DatabaseRow,
+      column: string,
+      value: string,
+      original: string,
+    ) => {
+      if (!activeEndpoint || !activeObject || value === original || activeConnection?.readOnly) return;
       setError(null);
       try {
         await invoke("db_update_cell", {
           endpoint: activeEndpoint,
           table: activeObject.name,
-          rowId,
+          rowKey: rowKeyFor(row),
           column,
           value: textToCellValue(value),
+          readOnly: activeConnection?.readOnly ?? false,
           projectRoot,
         });
         await loadTable(activeObject, page);
@@ -311,7 +345,57 @@ export function DatabaseView({
         setError(String(err));
       }
     },
-    [activeEndpoint, activeObject, loadTable, page, projectRoot],
+    [activeConnection?.readOnly, activeEndpoint, activeObject, loadTable, page, projectRoot],
+  );
+
+  const insertRow = useCallback(async () => {
+    if (!activeEndpoint || !activeObject || activeConnection?.readOnly) return;
+    setError(null);
+    const sample = Object.fromEntries(
+      activeObject.columns
+        .filter((column) => !column.primaryKey && !column.defaultValue)
+        .map((column) => [column.name, null]),
+    );
+    const raw = window.prompt(t("database.insertJsonPrompt"), JSON.stringify(sample));
+    if (!raw) return;
+    try {
+      const parsed = JSON.parse(raw) as Record<string, unknown>;
+      const values = Object.entries(parsed).map(([column, value]) => ({
+        column,
+        value: value === null || value === undefined ? null : String(value),
+      }));
+      await invoke("db_insert_row", {
+        endpoint: activeEndpoint,
+        table: activeObject.name,
+        values,
+        readOnly: activeConnection?.readOnly ?? false,
+        projectRoot,
+      });
+      await loadTable(activeObject, page);
+    } catch (err) {
+      setError(String(err));
+    }
+  }, [activeConnection?.readOnly, activeEndpoint, activeObject, loadTable, page, projectRoot, t]);
+
+  const deleteRow = useCallback(
+    async (row: DatabaseRow) => {
+      if (!activeEndpoint || !activeObject || activeConnection?.readOnly) return;
+      if (!window.confirm(t("database.confirmDeleteRow"))) return;
+      setError(null);
+      try {
+        await invoke("db_delete_row", {
+          endpoint: activeEndpoint,
+          table: activeObject.name,
+          rowKey: rowKeyFor(row),
+          readOnly: activeConnection?.readOnly ?? false,
+          projectRoot,
+        });
+        await loadTable(activeObject, page);
+      } catch (err) {
+        setError(String(err));
+      }
+    },
+    [activeConnection?.readOnly, activeEndpoint, activeObject, loadTable, page, projectRoot, t],
   );
 
   return (
@@ -337,6 +421,21 @@ export function DatabaseView({
               <span>{t("database.addRemote")}</span>
             </button>
           </div>
+          {activeConnection && (
+            <button
+              type="button"
+              style={{
+                ...s.databaseSmallButton,
+                justifyContent: "flex-start",
+                padding: "0 9px",
+                background: activeConnection.readOnly ? "var(--warning-surface)" : "var(--bg-card)",
+                color: activeConnection.readOnly ? "var(--warning)" : "var(--text-secondary)",
+              }}
+              onClick={toggleReadOnly}
+            >
+              <span>{activeConnection.readOnly ? t("database.readOnlyOn") : t("database.readOnlyOff")}</span>
+            </button>
+          )}
         </div>
 
         <div style={s.databaseScroll}>
@@ -389,6 +488,39 @@ export function DatabaseView({
               </button>
             ))}
           </div>
+
+          {activeObject && (
+            <div style={s.databaseSection}>
+              <div style={s.databaseSectionTitle}>{t("database.structure")}</div>
+              <div style={{ padding: "0 6px", display: "flex", flexDirection: "column", gap: 8 }}>
+                <div style={{ fontSize: 11.5, color: "var(--text-muted)", lineHeight: 1.5 }}>
+                  {activeObject.primaryKeys.length > 0
+                    ? t("database.primaryKeys", { keys: activeObject.primaryKeys.join(", ") })
+                    : activeObject.hasRowId
+                      ? t("database.rowidEditable")
+                      : t("database.notEditable")}
+                </div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                  {activeObject.columns.map((column) => (
+                    <div key={column.name} style={{ fontSize: 11.5, color: "var(--text-secondary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={`${column.name} ${column.dataType}`}>
+                      {column.primaryKey ? "* " : ""}
+                      {column.name}
+                      <span style={{ color: "var(--text-hint)" }}> {column.dataType || "TEXT"}</span>
+                    </div>
+                  ))}
+                </div>
+                {(activeObject.indexes.length > 0 || activeObject.foreignKeys.length > 0 || activeObject.triggers.length > 0) && (
+                  <div style={{ fontSize: 11, color: "var(--text-hint)", lineHeight: 1.5 }}>
+                    {t("database.objectStats", {
+                      indexes: activeObject.indexes.length,
+                      foreignKeys: activeObject.foreignKeys.length,
+                      triggers: activeObject.triggers.length,
+                    })}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
         </div>
       </aside>
 
@@ -419,6 +551,15 @@ export function DatabaseView({
           <button
             type="button"
             style={s.databaseSmallButton}
+            disabled={!activeObject || !queryResult?.editable || activeConnection?.readOnly || loading}
+            onClick={insertRow}
+          >
+            <Plus size={13} />
+            <span>{t("database.insert")}</span>
+          </button>
+          <button
+            type="button"
+            style={s.databaseSmallButton}
             disabled={!activeObject || page <= 1 || loading}
             onClick={() => activeObject && loadTable(activeObject, Math.max(1, page - 1))}
           >
@@ -439,7 +580,11 @@ export function DatabaseView({
             <ChevronRight size={13} />
           </button>
           <span style={{ color: "var(--text-hint)", fontSize: 12 }}>
-            {loading ? t("database.loading") : sqlResult?.message}
+            {loading
+              ? t("database.loading")
+              : activeConnection?.readOnly
+                ? t("database.readOnlyBadge")
+                : sqlResult?.message}
           </span>
         </div>
 
@@ -451,6 +596,7 @@ export function DatabaseView({
               <thead>
                 <tr>
                   <th style={{ ...s.databaseTh, width: 86 }}>rowid</th>
+                  {queryResult && <th style={{ ...s.databaseTh, width: 74 }}>{t("database.actions")}</th>}
                   {tableColumns.map((column) => (
                     <th key={column} style={s.databaseTh} title={column}>
                       {column}
@@ -462,9 +608,26 @@ export function DatabaseView({
                 {tableRows.map((row, rowIndex) => (
                   <tr key={`${row.rowId ?? "sql"}:${rowIndex}`}>
                     <td style={{ ...s.databaseTd, color: "var(--text-hint)" }}>{row.rowId ?? "-"}</td>
+                    {queryResult && (
+                      <td style={s.databaseTd}>
+                        <button
+                          type="button"
+                          style={{ ...s.databaseSmallButton, height: 24, padding: "0 8px" }}
+                          disabled={!queryResult.editable || activeConnection?.readOnly}
+                          onClick={() => deleteRow(row)}
+                        >
+                          <Trash2 size={12} />
+                        </button>
+                      </td>
+                    )}
                     {tableColumns.map((column, columnIndex) => {
                       const original = valueToText(row.values[columnIndex]);
-                      const editable = Boolean(queryResult && activeObject?.objectType === "table" && row.rowId != null);
+                      const editable = Boolean(
+                        queryResult &&
+                          activeObject?.objectType === "table" &&
+                          queryResult.editable &&
+                          !activeConnection?.readOnly,
+                      );
                       return (
                         <td key={`${column}:${columnIndex}`} style={s.databaseTd} title={original}>
                           {editable ? (
@@ -478,7 +641,7 @@ export function DatabaseView({
                               onBlur={(event) => {
                                 event.currentTarget.style.borderColor = "transparent";
                                 event.currentTarget.style.background = "transparent";
-                                updateCell(row.rowId, column, event.currentTarget.value, original);
+                                updateCell(row, column, event.currentTarget.value, original);
                               }}
                             />
                           ) : (

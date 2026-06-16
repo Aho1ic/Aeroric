@@ -78,6 +78,7 @@ export interface DbConnectionConfig {
   id: string;
   name: string;
   endpoint: DbEndpoint;
+  readOnly?: boolean;
   createdAt: number;
   lastOpenedAt?: number | null;
 }
@@ -85,15 +86,44 @@ export interface DbConnectionConfig {
 export interface DbColumn {
   name: string;
   dataType: string;
+  nullable: boolean;
   notNull: boolean;
   primaryKey: boolean;
+  primaryKeyOrdinal: number;
+  defaultValue?: string | null;
+}
+
+export interface DbIndex {
+  name: string;
+  unique: boolean;
+  columns: string[];
+}
+
+export interface DbForeignKey {
+  table: string;
+  from: string;
+  to: string;
+  onUpdate: string;
+  onDelete: string;
+}
+
+export interface DbTrigger {
+  name: string;
+  sql?: string | null;
 }
 
 export interface DbObject {
   name: string;
   objectType: "table" | "view" | string;
   columns: DbColumn[];
+  indexes: DbIndex[];
+  foreignKeys: DbForeignKey[];
+  triggers: DbTrigger[];
+  ddl?: string | null;
   rowCount?: number | null;
+  editable: boolean;
+  primaryKeys: string[];
+  hasRowId: boolean;
 }
 
 export interface DbSchema {
@@ -102,6 +132,7 @@ export interface DbSchema {
 
 export interface DbRow {
   rowId?: number | null;
+  keyValues: Array<{ column: string; value: unknown }>;
   values: unknown[];
 }
 
@@ -111,6 +142,9 @@ export interface DbQueryResult {
   page: number;
   pageSize: number;
   totalRows?: number | null;
+  editable: boolean;
+  primaryKeys: string[];
+  hasRowId: boolean;
 }
 
 export interface DbExecuteResult {

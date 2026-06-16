@@ -2,8 +2,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use rusqlite::types::ValueRef;
-use rusqlite::{params, Connection};
+use rusqlite::types::{Value as SqlValue, ValueRef};
+use rusqlite::{params, Connection, ToSql};
 use serde::{Deserialize, Serialize};
 use serde_json::{Number, Value};
 use uuid::Uuid;
@@ -12,6 +12,7 @@ use crate::ssh::SshConnection;
 
 const MAX_PAGE_SIZE: i64 = 500;
 const DEFAULT_PAGE_SIZE: i64 = 100;
+const ROWID_KEY: &str = "__aeroric_rowid__";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
@@ -33,6 +34,8 @@ pub(crate) struct DbConnectionConfig {
     id: String,
     name: String,
     endpoint: DbEndpoint,
+    #[serde(default)]
+    read_only: bool,
     created_at: i64,
     last_opened_at: Option<i64>,
 }
@@ -42,8 +45,36 @@ pub(crate) struct DbConnectionConfig {
 pub(crate) struct DbColumn {
     name: String,
     data_type: String,
+    nullable: bool,
     not_null: bool,
     primary_key: bool,
+    primary_key_ordinal: i64,
+    default_value: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct DbIndex {
+    name: String,
+    unique: bool,
+    columns: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct DbForeignKey {
+    table: String,
+    from: String,
+    to: String,
+    on_update: String,
+    on_delete: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct DbTrigger {
+    name: String,
+    sql: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -52,7 +83,14 @@ pub(crate) struct DbObject {
     name: String,
     object_type: String,
     columns: Vec<DbColumn>,
+    indexes: Vec<DbIndex>,
+    foreign_keys: Vec<DbForeignKey>,
+    triggers: Vec<DbTrigger>,
+    ddl: Option<String>,
     row_count: Option<i64>,
+    editable: bool,
+    primary_keys: Vec<String>,
+    has_row_id: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -65,7 +103,31 @@ pub(crate) struct DbSchema {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct DbRow {
     row_id: Option<i64>,
+    key_values: Vec<DbKeyValue>,
     values: Vec<Value>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct DbKeyValue {
+    column: String,
+    value: Value,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct DbCellValue {
+    column: String,
+    value: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct DbRowKey {
+    #[serde(default)]
+    row_id: Option<i64>,
+    #[serde(default)]
+    key_values: Vec<DbCellValue>,
 }
 
 #[derive(Debug, Serialize)]
@@ -76,6 +138,9 @@ pub(crate) struct DbQueryResult {
     page: i64,
     page_size: i64,
     total_rows: Option<i64>,
+    editable: bool,
+    primary_keys: Vec<String>,
+    has_row_id: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -286,12 +351,133 @@ fn value_ref_to_json(value: ValueRef<'_>) -> Value {
     }
 }
 
+fn cell_value_to_sql(value: Option<String>) -> SqlValue {
+    match value {
+        None => SqlValue::Null,
+        Some(value) if value.trim().eq_ignore_ascii_case("NULL") => SqlValue::Null,
+        Some(value) => SqlValue::Text(value),
+    }
+}
+
+fn sql_params(values: &[SqlValue]) -> Vec<&dyn ToSql> {
+    values.iter().map(|value| value as &dyn ToSql).collect()
+}
+
+fn table_columns(conn: &Connection, table: &str) -> Result<Vec<DbColumn>, String> {
+    let pragma_sql = format!("PRAGMA table_info({})", quote_identifier(table)?);
+    let mut column_stmt = conn.prepare(&pragma_sql).map_err(|e| e.to_string())?;
+    let columns = column_stmt
+        .query_map([], |row| {
+            let not_null = row.get::<_, i64>(3)? != 0;
+            let primary_key_ordinal = row.get::<_, i64>(5)?;
+            Ok(DbColumn {
+                name: row.get(1)?,
+                data_type: row.get::<_, String>(2)?,
+                nullable: !not_null,
+                not_null,
+                primary_key: primary_key_ordinal > 0,
+                primary_key_ordinal,
+                default_value: row.get(4)?,
+            })
+        })
+        .map_err(|e| e.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())?;
+    Ok(columns)
+}
+
+fn primary_keys(columns: &[DbColumn]) -> Vec<String> {
+    let mut keys = columns
+        .iter()
+        .filter(|column| column.primary_key)
+        .map(|column| (column.primary_key_ordinal, column.name.clone()))
+        .collect::<Vec<_>>();
+    keys.sort_by_key(|(ordinal, _)| *ordinal);
+    keys.into_iter().map(|(_, name)| name).collect()
+}
+
+fn table_has_rowid(conn: &Connection, table: &str) -> bool {
+    let sql = format!(
+        "SELECT rowid FROM {} LIMIT 1",
+        quote_identifier(table).unwrap_or_else(|_| "\"\"".to_string())
+    );
+    conn.prepare(&sql).is_ok()
+}
+
+fn table_indexes(conn: &Connection, table: &str) -> Result<Vec<DbIndex>, String> {
+    let pragma_sql = format!("PRAGMA index_list({})", quote_identifier(table)?);
+    let mut stmt = conn.prepare(&pragma_sql).map_err(|e| e.to_string())?;
+    let raw = stmt
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(1)?, row.get::<_, i64>(2)? != 0))
+        })
+        .map_err(|e| e.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())?;
+    let mut result = Vec::new();
+    for (name, unique) in raw {
+        let detail_sql = format!("PRAGMA index_info({})", quote_identifier(&name)?);
+        let mut detail = conn.prepare(&detail_sql).map_err(|e| e.to_string())?;
+        let columns = detail
+            .query_map([], |row| row.get::<_, String>(2))
+            .map_err(|e| e.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())?;
+        result.push(DbIndex {
+            name,
+            unique,
+            columns,
+        });
+    }
+    Ok(result)
+}
+
+fn table_foreign_keys(conn: &Connection, table: &str) -> Result<Vec<DbForeignKey>, String> {
+    let pragma_sql = format!("PRAGMA foreign_key_list({})", quote_identifier(table)?);
+    let mut stmt = conn.prepare(&pragma_sql).map_err(|e| e.to_string())?;
+    let foreign_keys = stmt
+        .query_map([], |row| {
+            Ok(DbForeignKey {
+                table: row.get(2)?,
+                from: row.get(3)?,
+                to: row.get(4)?,
+                on_update: row.get(5)?,
+                on_delete: row.get(6)?,
+            })
+        })
+        .map_err(|e| e.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())?;
+    Ok(foreign_keys)
+}
+
+fn table_triggers(conn: &Connection, table: &str) -> Result<Vec<DbTrigger>, String> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT name, sql FROM sqlite_master \
+             WHERE type = 'trigger' AND tbl_name = ? ORDER BY name",
+        )
+        .map_err(|e| e.to_string())?;
+    let triggers = stmt
+        .query_map([table], |row| {
+            Ok(DbTrigger {
+                name: row.get(0)?,
+                sql: row.get(1)?,
+            })
+        })
+        .map_err(|e| e.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())?;
+    Ok(triggers)
+}
+
 fn query_rows(
     conn: &Connection,
     sql: &str,
     page: i64,
     page_size: i64,
     rowid_column: bool,
+    key_columns: &[String],
 ) -> Result<DbQueryResult, String> {
     let offset = page.saturating_sub(1) * page_size;
     let mut statement = conn.prepare(sql).map_err(|e| e.to_string())?;
@@ -309,6 +495,15 @@ fn query_rows(
     let mut rows = statement
         .query(params![page_size, offset])
         .map_err(|e| e.to_string())?;
+    let key_indexes = key_columns
+        .iter()
+        .filter_map(|key| {
+            columns
+                .iter()
+                .position(|column| column.eq_ignore_ascii_case(key))
+                .map(|index| (key.clone(), index))
+        })
+        .collect::<Vec<_>>();
     let mut result_rows = Vec::new();
     while let Some(row) = rows.next().map_err(|e| e.to_string())? {
         let row_id = if rowid_column {
@@ -323,7 +518,26 @@ fn query_rows(
                 row.get_ref(index).map_err(|e| e.to_string())?,
             ));
         }
-        result_rows.push(DbRow { row_id, values });
+        let mut key_values = Vec::new();
+        if let Some(row_id) = row_id {
+            key_values.push(DbKeyValue {
+                column: ROWID_KEY.to_string(),
+                value: Value::Number(Number::from(row_id)),
+            });
+        }
+        for (column, value_index) in &key_indexes {
+            if let Some(value) = values.get(*value_index) {
+                key_values.push(DbKeyValue {
+                    column: column.clone(),
+                    value: value.clone(),
+                });
+            }
+        }
+        result_rows.push(DbRow {
+            row_id,
+            key_values,
+            values,
+        });
     }
     Ok(DbQueryResult {
         columns,
@@ -331,6 +545,9 @@ fn query_rows(
         page,
         page_size,
         total_rows: None,
+        editable: false,
+        primary_keys: key_columns.to_vec(),
+        has_row_id: rowid_column,
     })
 }
 
@@ -339,35 +556,28 @@ fn inspect_schema(path: &Path) -> Result<DbSchema, String> {
         .map_err(|e| e.to_string())?;
     let mut stmt = conn
         .prepare(
-            "SELECT name, type FROM sqlite_master \
+            "SELECT name, type, sql FROM sqlite_master \
              WHERE type IN ('table', 'view') AND name NOT LIKE 'sqlite_%' \
              ORDER BY type, name",
         )
         .map_err(|e| e.to_string())?;
     let objects = stmt
         .query_map([], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, Option<String>>(2)?,
+            ))
         })
         .map_err(|e| e.to_string())?
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| e.to_string())?;
 
     let mut result = Vec::new();
-    for (name, object_type) in objects {
-        let pragma_sql = format!("PRAGMA table_info({})", quote_identifier(&name)?);
-        let mut column_stmt = conn.prepare(&pragma_sql).map_err(|e| e.to_string())?;
-        let columns = column_stmt
-            .query_map([], |row| {
-                Ok(DbColumn {
-                    name: row.get(1)?,
-                    data_type: row.get::<_, String>(2)?,
-                    not_null: row.get::<_, i64>(3)? != 0,
-                    primary_key: row.get::<_, i64>(5)? != 0,
-                })
-            })
-            .map_err(|e| e.to_string())?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| e.to_string())?;
+    for (name, object_type, ddl) in objects {
+        let columns = table_columns(&conn, &name)?;
+        let primary_keys = primary_keys(&columns);
+        let has_row_id = object_type == "table" && table_has_rowid(&conn, &name);
         let row_count = if object_type == "table" {
             let count_sql = format!("SELECT COUNT(*) FROM {}", quote_identifier(&name)?);
             conn.query_row(&count_sql, [], |row| row.get::<_, i64>(0))
@@ -375,11 +585,33 @@ fn inspect_schema(path: &Path) -> Result<DbSchema, String> {
         } else {
             None
         };
+        let indexes = if object_type == "table" {
+            table_indexes(&conn, &name).unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+        let foreign_keys = if object_type == "table" {
+            table_foreign_keys(&conn, &name).unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+        let triggers = if object_type == "table" {
+            table_triggers(&conn, &name).unwrap_or_default()
+        } else {
+            Vec::new()
+        };
         result.push(DbObject {
             name,
             object_type,
             columns,
+            indexes,
+            foreign_keys,
+            triggers,
+            ddl,
             row_count,
+            editable: has_row_id || !primary_keys.is_empty(),
+            primary_keys,
+            has_row_id,
         });
     }
     Ok(DbSchema { objects: result })
@@ -394,6 +626,9 @@ fn query_table(
     let conn = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
         .map_err(|e| e.to_string())?;
     let table_ident = quote_identifier(table)?;
+    let columns_meta = table_columns(&conn, table)?;
+    let primary_keys = primary_keys(&columns_meta);
+    let has_row_id = table_has_rowid(&conn, table);
     let page = page.max(1);
     let page_size = normalize_page_size(Some(page_size));
     let total_rows = conn
@@ -401,72 +636,250 @@ fn query_table(
             row.get::<_, i64>(0)
         })
         .ok();
-    let sql = format!("SELECT rowid AS __aeroric_rowid__, * FROM {table_ident} LIMIT ? OFFSET ?");
-    match query_rows(&conn, &sql, page, page_size, true) {
-        Ok(mut result) => {
-            result.total_rows = total_rows;
-            Ok(result)
+    let sql = if has_row_id {
+        format!("SELECT rowid AS {ROWID_KEY}, * FROM {table_ident} LIMIT ? OFFSET ?")
+    } else {
+        format!("SELECT * FROM {table_ident} LIMIT ? OFFSET ?")
+    };
+    let mut result = query_rows(&conn, &sql, page, page_size, has_row_id, &primary_keys)?;
+    result.total_rows = total_rows;
+    result.editable = has_row_id || !primary_keys.is_empty();
+    result.primary_keys = primary_keys;
+    result.has_row_id = has_row_id;
+    Ok(result)
+}
+
+fn build_row_where_clause(row_key: DbRowKey) -> Result<(String, Vec<SqlValue>), String> {
+    if let Some(row_id) = row_key.row_id {
+        return Ok((
+            format!("{} = ?", quote_identifier("rowid")?),
+            vec![SqlValue::Integer(row_id)],
+        ));
+    }
+    if row_key.key_values.is_empty() {
+        return Err(
+            "Row cannot be edited because no rowid or primary key is available".to_string(),
+        );
+    }
+    let mut clauses = Vec::new();
+    let mut values = Vec::new();
+    for key in row_key.key_values {
+        if key.column == ROWID_KEY {
+            let row_id = key
+                .value
+                .as_deref()
+                .ok_or_else(|| "Invalid rowid value".to_string())?
+                .parse::<i64>()
+                .map_err(|e| e.to_string())?;
+            clauses.push(format!("{} = ?", quote_identifier("rowid")?));
+            values.push(SqlValue::Integer(row_id));
+            continue;
         }
-        Err(_) => {
-            let sql = format!("SELECT * FROM {table_ident} LIMIT ? OFFSET ?");
-            let mut result = query_rows(&conn, &sql, page, page_size, false)?;
-            result.total_rows = total_rows;
-            Ok(result)
+        let value = cell_value_to_sql(key.value);
+        if matches!(value, SqlValue::Null) {
+            clauses.push(format!("{} IS NULL", quote_identifier(&key.column)?));
+        } else {
+            clauses.push(format!("{} = ?", quote_identifier(&key.column)?));
+            values.push(value);
         }
+    }
+    if clauses.is_empty() {
+        return Err("Row key is empty".to_string());
+    }
+    Ok((clauses.join(" AND "), values))
+}
+
+fn ensure_writable(read_only: bool) -> Result<(), String> {
+    if read_only {
+        Err("Connection is read-only".to_string())
+    } else {
+        Ok(())
     }
 }
 
 fn update_cell(
     path: &Path,
     table: &str,
-    row_id: i64,
+    row_key: DbRowKey,
     column: &str,
     value: Option<String>,
+    read_only: bool,
 ) -> Result<(), String> {
+    ensure_writable(read_only)?;
     let conn = Connection::open(path).map_err(|e| e.to_string())?;
+    let (where_clause, mut values) = build_row_where_clause(row_key)?;
+    values.insert(0, cell_value_to_sql(value));
     let sql = format!(
-        "UPDATE {} SET {} = ?1 WHERE rowid = ?2",
+        "UPDATE {} SET {} = ? WHERE {}",
         quote_identifier(table)?,
-        quote_identifier(column)?
+        quote_identifier(column)?,
+        where_clause
     );
-    conn.execute(&sql, params![value, row_id])
+    let params = sql_params(&values);
+    conn.execute(&sql, params.as_slice())
         .map_err(|e| e.to_string())?;
     Ok(())
 }
 
-fn execute_sql(path: &Path, sql: &str, page_size: Option<i64>) -> Result<DbExecuteResult, String> {
-    let trimmed = sql.trim().trim_end_matches(';').trim();
-    if trimmed.is_empty() {
+fn insert_row(
+    path: &Path,
+    table: &str,
+    values: Vec<DbCellValue>,
+    read_only: bool,
+) -> Result<(), String> {
+    ensure_writable(read_only)?;
+    if values.is_empty() {
+        return Err("Insert requires at least one value".to_string());
+    }
+    let conn = Connection::open(path).map_err(|e| e.to_string())?;
+    let columns = values
+        .iter()
+        .map(|value| quote_identifier(&value.column))
+        .collect::<Result<Vec<_>, _>>()?;
+    let placeholders = std::iter::repeat("?")
+        .take(values.len())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let sql_values = values
+        .into_iter()
+        .map(|value| cell_value_to_sql(value.value))
+        .collect::<Vec<_>>();
+    let sql = format!(
+        "INSERT INTO {} ({}) VALUES ({})",
+        quote_identifier(table)?,
+        columns.join(", "),
+        placeholders
+    );
+    let params = sql_params(&sql_values);
+    conn.execute(&sql, params.as_slice())
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+fn delete_row(path: &Path, table: &str, row_key: DbRowKey, read_only: bool) -> Result<(), String> {
+    ensure_writable(read_only)?;
+    let conn = Connection::open(path).map_err(|e| e.to_string())?;
+    let (where_clause, values) = build_row_where_clause(row_key)?;
+    let sql = format!(
+        "DELETE FROM {} WHERE {}",
+        quote_identifier(table)?,
+        where_clause
+    );
+    let params = sql_params(&values);
+    conn.execute(&sql, params.as_slice())
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+fn split_sql_statements(sql: &str) -> Vec<String> {
+    let mut statements = Vec::new();
+    let mut current = String::new();
+    let mut in_single = false;
+    let mut in_double = false;
+    let mut escape_next = false;
+    for ch in sql.chars() {
+        current.push(ch);
+        if escape_next {
+            escape_next = false;
+            continue;
+        }
+        if ch == '\\' {
+            escape_next = true;
+            continue;
+        }
+        match ch {
+            '\'' if !in_double => in_single = !in_single,
+            '"' if !in_single => in_double = !in_double,
+            ';' if !in_single && !in_double => {
+                let statement = current.trim().trim_end_matches(';').trim();
+                if !statement.is_empty() {
+                    statements.push(statement.to_string());
+                }
+                current.clear();
+            }
+            _ => {}
+        }
+    }
+    let statement = current.trim().trim_end_matches(';').trim();
+    if !statement.is_empty() {
+        statements.push(statement.to_string());
+    }
+    statements
+}
+
+fn first_sql_word(sql: &str) -> String {
+    sql.trim()
+        .split_whitespace()
+        .next()
+        .unwrap_or("")
+        .to_ascii_lowercase()
+}
+
+fn is_query_statement(sql: &str) -> bool {
+    matches!(first_sql_word(sql).as_str(), "select" | "with" | "pragma")
+}
+
+fn execute_query_sql(
+    conn: &Connection,
+    statement: &str,
+    page: i64,
+    page_size: i64,
+) -> Result<DbExecuteResult, String> {
+    let first = first_sql_word(statement);
+    let limited_sql = if matches!(first.as_str(), "select" | "with") {
+        format!("SELECT * FROM ({statement}) AS aeroric_query LIMIT ? OFFSET ?")
+    } else {
+        format!("{statement} LIMIT ? OFFSET ?")
+    };
+    let result = query_rows(conn, &limited_sql, page, page_size, false, &[])?;
+    Ok(DbExecuteResult {
+        columns: result.columns,
+        rows: result.rows,
+        rows_affected: 0,
+        message: "Query completed".to_string(),
+    })
+}
+
+fn execute_sql(
+    path: &Path,
+    sql: &str,
+    page: i64,
+    page_size: Option<i64>,
+    read_only: bool,
+) -> Result<DbExecuteResult, String> {
+    let statements = split_sql_statements(sql);
+    if statements.is_empty() {
         return Err("SQL cannot be empty".to_string());
     }
     let conn = Connection::open(path).map_err(|e| e.to_string())?;
     let page_size = normalize_page_size(page_size);
-    let first = trimmed
-        .split_whitespace()
-        .next()
-        .unwrap_or("")
-        .to_ascii_lowercase();
-    if matches!(first.as_str(), "select" | "with") {
-        let limited_sql = format!("SELECT * FROM ({trimmed}) AS aeroric_query LIMIT ? OFFSET ?");
-        let result = query_rows(&conn, &limited_sql, 1, page_size, false)?;
-        return Ok(DbExecuteResult {
-            columns: result.columns,
-            rows: result.rows,
-            rows_affected: 0,
-            message: "Query completed".to_string(),
-        });
+    if read_only
+        && statements
+            .iter()
+            .any(|statement| !is_query_statement(statement))
+    {
+        return Err("Connection is read-only".to_string());
     }
-    if first == "pragma" {
-        let limited_sql = format!("{trimmed} LIMIT ? OFFSET ?");
-        let result = query_rows(&conn, &limited_sql, 1, page_size, false)?;
-        return Ok(DbExecuteResult {
-            columns: result.columns,
-            rows: result.rows,
-            rows_affected: 0,
-            message: "Query completed".to_string(),
-        });
+    if statements.len() == 1 && is_query_statement(&statements[0]) {
+        return execute_query_sql(&conn, &statements[0], page.max(1), page_size);
     }
-    let rows_affected = conn.execute(trimmed, []).map_err(|e| e.to_string())?;
+
+    let mut rows_affected = 0usize;
+    for statement in statements.iter().take(statements.len().saturating_sub(1)) {
+        rows_affected += conn.execute(statement, []).map_err(|e| e.to_string())?;
+    }
+    let last = statements.last().expect("non-empty statements");
+    if is_query_statement(last) {
+        let mut result = execute_query_sql(&conn, last, page.max(1), page_size)?;
+        result.rows_affected = rows_affected;
+        result.message = if rows_affected > 0 {
+            format!("{rows_affected} row(s) affected; query completed")
+        } else {
+            "Query completed".to_string()
+        };
+        return Ok(result);
+    }
+    rows_affected += conn.execute(last, []).map_err(|e| e.to_string())?;
     Ok(DbExecuteResult {
         columns: Vec::new(),
         rows: Vec::new(),
@@ -534,14 +947,56 @@ pub async fn db_query_table(
 pub async fn db_update_cell(
     endpoint: DbEndpoint,
     table: String,
-    row_id: i64,
+    row_key: DbRowKey,
     column: String,
     value: Option<String>,
+    read_only: Option<bool>,
     project_root: Option<String>,
 ) -> Result<(), String> {
     tokio::task::spawn_blocking(move || {
         with_sqlite(endpoint, project_root, true, |path| {
-            update_cell(path, &table, row_id, &column, value)
+            update_cell(
+                path,
+                &table,
+                row_key,
+                &column,
+                value,
+                read_only.unwrap_or(false),
+            )
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn db_insert_row(
+    endpoint: DbEndpoint,
+    table: String,
+    values: Vec<DbCellValue>,
+    read_only: Option<bool>,
+    project_root: Option<String>,
+) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || {
+        with_sqlite(endpoint, project_root, true, |path| {
+            insert_row(path, &table, values, read_only.unwrap_or(false))
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn db_delete_row(
+    endpoint: DbEndpoint,
+    table: String,
+    row_key: DbRowKey,
+    read_only: Option<bool>,
+    project_root: Option<String>,
+) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || {
+        with_sqlite(endpoint, project_root, true, |path| {
+            delete_row(path, &table, row_key, read_only.unwrap_or(false))
         })
     })
     .await
@@ -552,21 +1007,23 @@ pub async fn db_update_cell(
 pub async fn db_execute_sql(
     endpoint: DbEndpoint,
     sql: String,
+    page: Option<i64>,
     page_size: Option<i64>,
+    read_only: Option<bool>,
     project_root: Option<String>,
 ) -> Result<DbExecuteResult, String> {
-    let is_write = !matches!(
-        sql.trim()
-            .split_whitespace()
-            .next()
-            .unwrap_or("")
-            .to_ascii_lowercase()
-            .as_str(),
-        "select" | "with" | "pragma"
-    );
+    let is_write = split_sql_statements(&sql)
+        .iter()
+        .any(|statement| !is_query_statement(statement));
     tokio::task::spawn_blocking(move || {
         with_sqlite(endpoint, project_root, is_write, |path| {
-            execute_sql(path, &sql, page_size)
+            execute_sql(
+                path,
+                &sql,
+                page.unwrap_or(1),
+                page_size,
+                read_only.unwrap_or(false),
+            )
         })
     })
     .await
@@ -610,9 +1067,127 @@ mod tests {
         let first = query_table(&path, "notes", 1, 100).unwrap();
         assert_eq!(first.columns, vec!["title".to_string(), "body".to_string()]);
         let row_id = first.rows[0].row_id.unwrap();
-        update_cell(&path, "notes", row_id, "body", Some("done".to_string())).unwrap();
+        update_cell(
+            &path,
+            "notes",
+            DbRowKey {
+                row_id: Some(row_id),
+                key_values: Vec::new(),
+            },
+            "body",
+            Some("done".to_string()),
+            false,
+        )
+        .unwrap();
         let second = query_table(&path, "notes", 1, 100).unwrap();
         assert_eq!(second.rows[0].values[1], Value::String("done".to_string()));
+        insert_row(
+            &path,
+            "notes",
+            vec![
+                DbCellValue {
+                    column: "title".to_string(),
+                    value: Some("two".to_string()),
+                },
+                DbCellValue {
+                    column: "body".to_string(),
+                    value: Some("new".to_string()),
+                },
+            ],
+            false,
+        )
+        .unwrap();
+        let third = query_table(&path, "notes", 1, 100).unwrap();
+        assert_eq!(third.rows.len(), 2);
+        delete_row(
+            &path,
+            "notes",
+            DbRowKey {
+                row_id: third.rows[1].row_id,
+                key_values: Vec::new(),
+            },
+            false,
+        )
+        .unwrap();
+        let fourth = query_table(&path, "notes", 1, 100).unwrap();
+        assert_eq!(fourth.rows.len(), 1);
+
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn updates_without_rowid_table_by_primary_key() {
+        let path = std::env::temp_dir().join(format!("aeroric-test-{}.db", Uuid::new_v4()));
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute(
+                "CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT) WITHOUT ROWID",
+                [],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO settings (key, value) VALUES ('theme', 'dark')",
+                [],
+            )
+            .unwrap();
+        }
+
+        let first = query_table(&path, "settings", 1, 100).unwrap();
+        assert!(!first.has_row_id);
+        assert_eq!(first.primary_keys, vec!["key".to_string()]);
+        update_cell(
+            &path,
+            "settings",
+            DbRowKey {
+                row_id: None,
+                key_values: vec![DbCellValue {
+                    column: "key".to_string(),
+                    value: Some("theme".to_string()),
+                }],
+            },
+            "value",
+            Some("light".to_string()),
+            false,
+        )
+        .unwrap();
+        let second = query_table(&path, "settings", 1, 100).unwrap();
+        assert_eq!(second.rows[0].values[1], Value::String("light".to_string()));
+
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn executes_multi_statement_script_and_returns_last_query() {
+        let path = std::env::temp_dir().join(format!("aeroric-test-{}.db", Uuid::new_v4()));
+        let result = execute_sql(
+            &path,
+            "CREATE TABLE logs (message TEXT); INSERT INTO logs VALUES ('ok'); SELECT message FROM logs;",
+            1,
+            Some(100),
+            false,
+        )
+        .unwrap();
+        assert_eq!(result.columns, vec!["message".to_string()]);
+        assert_eq!(result.rows[0].values[0], Value::String("ok".to_string()));
+
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn read_only_rejects_write_operations() {
+        let path = std::env::temp_dir().join(format!("aeroric-test-{}.db", Uuid::new_v4()));
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute("CREATE TABLE notes (title TEXT)", []).unwrap();
+        }
+        assert!(execute_sql(
+            &path,
+            "INSERT INTO notes VALUES ('nope')",
+            1,
+            Some(100),
+            true,
+        )
+        .is_err());
 
         let _ = fs::remove_file(path);
     }

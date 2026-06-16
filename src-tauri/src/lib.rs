@@ -259,6 +259,8 @@ pub fn run() {
             database::db_inspect,
             database::db_query_table,
             database::db_update_cell,
+            database::db_insert_row,
+            database::db_delete_row,
             database::db_execute_sql,
             docker::list_docker_resources,
             docker::docker_container_action,
