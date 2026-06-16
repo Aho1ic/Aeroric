@@ -163,7 +163,11 @@ const ShellTerminalInstance = forwardRef<ShellTerminalInstanceHandle, {
         if (isActiveRef.current) focusTerminal();
       }, 50);
 
-      const disposeSmartCopy = attachSmartCopy(term);
+      const disposeSmartCopy = attachSmartCopy(term, {
+        onPaste: (text) => {
+          invoke("send_input", { taskId: shellId, data: text }).catch(() => {});
+        },
+      });
       const linuxIME = attachLinuxIMEFix(term, (data) => {
         invoke("send_input", { taskId: shellId, data }).catch(() => {});
       });

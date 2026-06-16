@@ -70,6 +70,56 @@ export interface DockerResources {
   containers: DockerContainerSummary[];
 }
 
+export type DbEndpoint =
+  | { kind: "local"; path: string }
+  | { kind: "ssh"; connection: SshConnection; path: string; projectPath?: string };
+
+export interface DbConnectionConfig {
+  id: string;
+  name: string;
+  endpoint: DbEndpoint;
+  createdAt: number;
+  lastOpenedAt?: number | null;
+}
+
+export interface DbColumn {
+  name: string;
+  dataType: string;
+  notNull: boolean;
+  primaryKey: boolean;
+}
+
+export interface DbObject {
+  name: string;
+  objectType: "table" | "view" | string;
+  columns: DbColumn[];
+  rowCount?: number | null;
+}
+
+export interface DbSchema {
+  objects: DbObject[];
+}
+
+export interface DbRow {
+  rowId?: number | null;
+  values: unknown[];
+}
+
+export interface DbQueryResult {
+  columns: string[];
+  rows: DbRow[];
+  page: number;
+  pageSize: number;
+  totalRows?: number | null;
+}
+
+export interface DbExecuteResult {
+  columns: string[];
+  rows: DbRow[];
+  rowsAffected: number;
+  message: string;
+}
+
 export type BuiltInAgentType = "claude" | "claude_gpt55" | "codex";
 export type AgentType = BuiltInAgentType | (string & {});
 export type ThemeMode = "system" | "dark" | "light" | "eyecare";

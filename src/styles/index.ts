@@ -1,6 +1,7 @@
 import type React from "react";
 
 import { common } from "./common";
+import { database } from "./database";
 import { dialogs } from "./dialogs";
 import { font } from "./font";
 import { gitDiff } from "./git-diff";
@@ -19,6 +20,7 @@ const s = {
   ...task,
   ...gitDiff,
   ...common,
+  ...database,
   ...font,
   ...timeline,
   ...skillHub,
@@ -26,4 +28,4 @@ const s = {
 
 export default s;
 
-export { common, dialogs, font, gitDiff, layout, panels, skillHub, task, terminal, timeline };
+export { common, database, dialogs, font, gitDiff, layout, panels, skillHub, task, terminal, timeline };

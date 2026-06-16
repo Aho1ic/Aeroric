@@ -10,6 +10,7 @@ mod analytics;
 mod app_settings;
 mod conda;
 mod config;
+mod database;
 mod docker;
 mod event_watcher;
 mod fs;
@@ -253,6 +254,12 @@ pub fn run() {
             app_settings::detect_agent_version,
             app_settings::get_system_fonts,
             conda::detect_conda_environments,
+            database::db_load_connections,
+            database::db_save_connections,
+            database::db_inspect,
+            database::db_query_table,
+            database::db_update_cell,
+            database::db_execute_sql,
             docker::list_docker_resources,
             docker::docker_container_action,
             docker::docker_container_logs,

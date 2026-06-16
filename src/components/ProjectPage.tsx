@@ -37,6 +37,7 @@ import { SftpPanel } from "./sftp/SftpPanel";
 import { SftpPreview } from "./sftp/SftpPreview";
 import type { SftpEndpoint } from "./sftp/sftpTypes";
 import { DockerServiceView } from "./docker/DockerServiceView";
+import { DatabaseView } from "./database/DatabaseView";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { useProjectPanels } from "../hooks/useProjectPanels";
 import {
@@ -256,6 +257,7 @@ export function ProjectPage({
   const isShellMode = centerMode === "shell";
   const isDockerMode = centerMode === "docker";
   const isSshMode = centerMode === "ssh";
+  const isDatabaseMode = centerMode === "database";
   const shellVisibleInCenter = shouldShowShellInCenter({
     shellMode: isShellMode,
     hasOpenFiles: openFiles.length > 0,
@@ -367,10 +369,16 @@ export function ProjectPage({
 
   const handleToggleRightPanel = useCallback(
     (panel: Parameters<typeof handleTogglePanel>[0]) => {
-      if (panel === "files" || panel === "git-changes" || panel === "git-history" || panel === "ssh") {
+      if (
+        panel === "files" ||
+        panel === "git-changes" ||
+        panel === "git-history" ||
+        panel === "ssh" ||
+        panel === "database"
+      ) {
         setShowShellTerminal(false);
       }
-      if (panel === "ssh") {
+      if (panel === "ssh" || panel === "database") {
         clearFileAndDiff();
       }
       handleTogglePanel(panel);
@@ -396,6 +404,7 @@ export function ProjectPage({
     isShellMode,
     isDockerMode,
     isSshMode,
+    isDatabaseMode,
   });
   const shellTerminalFontSize = useMemo(
     () => deriveShellTerminalFontSize(terminalFontSize),
@@ -448,7 +457,7 @@ export function ProjectPage({
     rightPanel === "ssh"
       ? projectSshRightPanelWidth({
           containerWidth: projectBodyWidth,
-          railCollapsed: responsiveLayout.autoCollapseRail,
+        railCollapsed: responsiveLayout.autoCollapseRail || isDatabaseMode,
         })
       : rightPanelWidth;
 
@@ -480,7 +489,7 @@ export function ProjectPage({
         onToggleTaskStar={onToggleTaskStar}
         onRunTodo={onRunTodoTask}
         singleProjectMode={hubMode}
-        forceCollapsed={responsiveLayout.autoCollapseRail}
+        forceCollapsed={responsiveLayout.autoCollapseRail || isDatabaseMode}
       />
       <div style={{ ...s.mainContent, flexDirection: "column" }}>
         <div
@@ -544,6 +553,13 @@ export function ProjectPage({
                     ? `${remoteConnection.name} · ${projectLocation.remotePath}`
                     : project.path
                 }
+              />
+            ) : isDatabaseMode ? (
+              <DatabaseView
+                projectRoot={projectLocation.kind === "local" ? project.path : undefined}
+                remoteConnection={projectLocation.kind === "ssh" ? remoteConnection : undefined}
+                remoteProjectPath={projectLocation.kind === "ssh" ? projectLocation.remotePath : undefined}
+                sshConnections={sshConnections}
               />
             ) : openDiff ? (
               openDiff.kind === "file" ? (
@@ -702,6 +718,7 @@ export function ProjectPage({
                 isSftpMode,
                 isSshMode,
                 isDockerMode,
+                isDatabaseMode,
                 isNewTask: !taskWorkspaceVisible,
                 hasSelectedTask: Boolean(selectedTask),
                 taskId: task.id,

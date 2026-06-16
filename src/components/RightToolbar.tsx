@@ -1,6 +1,17 @@
 import type { ReactNode } from "react";
 import { IconButton } from "./IconButton";
-import { Folder, Search, GitBranch, History, Settings, Server, Terminal, ArrowLeftRight, Container } from "lucide-react";
+import {
+  Folder,
+  Search,
+  GitBranch,
+  History,
+  Settings,
+  Server,
+  Terminal,
+  ArrowLeftRight,
+  Container,
+  Database,
+} from "lucide-react";
 import { useI18n } from "../i18n";
 import type { RightPanel } from "../hooks/useProjectPanels";
 
@@ -58,6 +69,7 @@ export function RightToolbar({
     },
     { key: "ssh", icon: <Server size={17} />, title: t("ssh.title") },
     { key: "sftp", icon: <ArrowLeftRight size={17} />, title: t("sftp.title") },
+    { key: "database", icon: <Database size={17} />, title: t("database.title") },
     {
       key: "docker",
       icon: <Container size={17} />,

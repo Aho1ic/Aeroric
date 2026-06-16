@@ -200,7 +200,11 @@ export function SshTerminalPanel({
     loadWebglAddon(term);
     const writer = createSmartWriter(term);
     const disposeMacWebKitGuard = attachMacWebKitTerminalGuard({ term, container, writer });
-    const disposeSmartCopy = attachSmartCopy(term);
+    const disposeSmartCopy = attachSmartCopy(term, {
+      onPaste: (text) => {
+        invoke("send_input", { taskId: activeSession.shellId, data: text }).catch(console.error);
+      },
+    });
     const input = attachLinuxIMEFix(term, (data) => {
       invoke("send_input", { taskId: activeSession.shellId, data }).catch(console.error);
     });

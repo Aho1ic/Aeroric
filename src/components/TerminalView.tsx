@@ -136,6 +136,7 @@ export function TerminalView({
     const disposeSmartCopy = attachSmartCopy(term, {
       matchesNewline: (e) => matchesTerminalNewline(e, shiftEnterNewlineRef.current),
       onNewline: () => onInputRef.current(TERMINAL_NEWLINE_SEQUENCE),
+      onPaste: (text) => onInputRef.current(text),
     });
     const linuxIME = attachLinuxIMEFix(term, (data) => onInputRef.current(data));
     const disposeOnData = { dispose: () => linuxIME.dispose() };

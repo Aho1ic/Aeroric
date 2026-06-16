@@ -15,6 +15,7 @@ import {
   PinOff,
   ArrowLeftRight,
   Pencil,
+  Database,
 } from "lucide-react";
 import * as Popover from "@radix-ui/react-popover";
 import type {
@@ -38,6 +39,7 @@ import { SkillHubView } from "./skill-hub/SkillHubView";
 import { SshProjectPage, type SshProjectInput } from "./ssh/SshProjectDialog";
 import { SftpPanel } from "./sftp/SftpPanel";
 import { DockerServiceView } from "./docker/DockerServiceView";
+import { DatabaseView } from "./database/DatabaseView";
 import { useI18n, pluralKey } from "../i18n";
 import s from "../styles";
 
@@ -162,7 +164,9 @@ export function WelcomePage({
   const [query, setQuery] = useState("");
   const [hov, setHov] = useState<string | null>(null);
   const [searchFocused, setSearchFocused] = useState(false);
-  const [view, setView] = useState<"projects" | "timeline" | "skills" | "docker" | "ssh">("projects");
+  const [view, setView] = useState<
+    "projects" | "timeline" | "skills" | "docker" | "ssh" | "database"
+  >("projects");
   const [openProjectMenu, setOpenProjectMenu] = useState(false);
   const [sftpOpen, setSftpOpen] = useState(false);
   const sshGroups = useMemo(
@@ -176,7 +180,7 @@ export function WelcomePage({
       ),
     [sshConnections],
   );
-  const switchWelcomeView = useCallback((nextView: "projects" | "timeline" | "skills" | "docker" | "ssh") => {
+  const switchWelcomeView = useCallback((nextView: typeof view) => {
     setSftpOpen(false);
     setView(nextView);
   }, []);
@@ -234,6 +238,12 @@ export function WelcomePage({
               active={sftpOpen}
               onClick={() => setSftpOpen(true)}
             />
+            <SidebarItem
+              icon={<Database size={15} />}
+              label={t("database.title")}
+              active={view === "database" && !sftpOpen}
+              onClick={() => switchWelcomeView("database")}
+            />
           </nav>
 
           <div style={s.sidebarFooter}>
@@ -290,6 +300,8 @@ export function WelcomePage({
           />
         ) : view === "docker" ? (
           <DockerServiceView />
+        ) : view === "database" ? (
+          <DatabaseView sshConnections={sshConnections} />
         ) : view === "ssh" ? (
           <SshProjectPage
             connections={sshConnections}

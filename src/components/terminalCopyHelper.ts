@@ -162,6 +162,8 @@ export interface TerminalKeyOptions {
   matchesNewline?: (e: KeyboardEvent) => boolean;
   /** Called (instead of the default submit) when that combo is pressed. */
   onNewline?: () => void;
+  /** Called with clipboard text when the terminal receives a right-click paste. */
+  onPaste?: (text: string) => void;
 }
 
 /**
@@ -175,6 +177,7 @@ export function attachSmartCopy(
   keyOptions?: TerminalKeyOptions,
 ): () => void {
   let copyInProgress = false;
+  let pasteInProgress = false;
 
   const handleCustomKeyEvent = (e: KeyboardEvent) => {
     // Insert-newline shortcut (e.g. Shift/Alt + Enter): emit our own sequence
@@ -213,7 +216,27 @@ export function attachSmartCopy(
 
   terminal.attachCustomKeyEventHandler(handleCustomKeyEvent);
 
+  const handleContextMenu = (e: MouseEvent) => {
+    if (!keyOptions?.onPaste) return;
+    e.preventDefault();
+    if (pasteInProgress) return;
+    pasteInProgress = true;
+    terminal.focus();
+    navigator.clipboard
+      .readText()
+      .then((text) => {
+        if (text) keyOptions.onPaste?.(text);
+      })
+      .catch(() => {})
+      .finally(() => {
+        pasteInProgress = false;
+      });
+  };
+
+  terminal.element?.addEventListener("contextmenu", handleContextMenu);
+
   return () => {
+    terminal.element?.removeEventListener("contextmenu", handleContextMenu);
     terminal.attachCustomKeyEventHandler(() => true);
   };
 }
