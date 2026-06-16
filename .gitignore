@@ -21,7 +21,6 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
-.nezha
 .claude
 .aeroric
 .husky

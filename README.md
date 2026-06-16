@@ -1,31 +1,31 @@
 <p align="center">
-  <img src="docs/images/logo.png" alt="NeZha Logo" width="150" />
+  <img src="docs/images/logo.png" alt="Aeroric Logo" width="150" />
 </p>
 
-<h1 align="center">NeZha: Desktop Workspace for AI Coding Agents</h1>
+<h1 align="center">Aeroric: Desktop Workspace for AI Coding Agents</h1>
 
 <p align="center">
 Run Claude Code, Codex, and custom agents across projects with live terminals, task tracking, Git, SSH, Skill Hub, and usage analytics in one lightweight desktop app.
 </p>
 
 <p align="center">
-  <img src="docs/images/index.gif" alt="NeZha current workspace" width="86%" />
+  <img src="docs/images/index.gif" alt="Aeroric current workspace" width="86%" />
 </p>
 
 [中文文档](./README_ZH.md)
 
-## Why NeZha
+## Why Aeroric
 
-NeZha is built for agent-first development, where several AI coding tasks may run at the same time across different repositories or remote machines. Instead of switching between terminal tabs, editor windows, Git clients, and session logs, NeZha keeps the full workflow in one place: start work, watch terminal output, review generated changes, inspect files, resume sessions, and commit code.
+Aeroric is built for agent-first development, where several AI coding tasks may run at the same time across different repositories or remote machines. Instead of switching between terminal tabs, editor windows, Git clients, and session logs, Aeroric keeps the full workflow in one place: start work, watch terminal output, review generated changes, inspect files, resume sessions, and commit code.
 
 The app uses native Claude Code and Codex CLIs rather than replacing them. It adds a desktop control layer around those tools: multi-project navigation, permission-aware task launch, PTY-backed terminals, automatic session discovery, local task persistence, and a focused code review surface.
 
 ## Installation
 
-Install Claude Code and/or Codex before using NeZha. On macOS, if the unsigned app is blocked by Gatekeeper, run:
+Install Claude Code and/or Codex before using Aeroric. On macOS, if the unsigned app is blocked by Gatekeeper, run:
 
 ```bash
-xattr -rd com.apple.quarantine /Applications/NeZha.app
+xattr -rd com.apple.quarantine /Applications/Aeroric.app
 ```
 
 ## Current Feature Set
@@ -44,11 +44,11 @@ xattr -rd com.apple.quarantine /Applications/NeZha.app
 ## Screenshots
 
 <p align="center">
-  <img src="docs/images/workspace.png" alt="NeZha workspace" width="86%" />
+  <img src="docs/images/workspace.png" alt="Aeroric workspace" width="86%" />
 </p>
 
 <p align="center">
-  <img src="docs/images/dark.png" alt="NeZha dark mode" width="86%" />
+  <img src="docs/images/dark.png" alt="Aeroric dark mode" width="86%" />
 </p>
 
 ## Development
@@ -66,4 +66,4 @@ The frontend is React 19 + TypeScript + Vite. The desktop shell is Tauri 2 + Rus
 
 ## Acknowledgments
 
-NeZha builds on excellent open-source projects including [Tauri](https://github.com/tauri-apps/tauri), [React](https://github.com/facebook/react), [xterm.js](https://github.com/xtermjs/xterm.js), [CodeMirror](https://codemirror.net/), and [Shiki](https://shiki.style/).
+Aeroric builds on excellent open-source projects including [Tauri](https://github.com/tauri-apps/tauri), [React](https://github.com/facebook/react), [xterm.js](https://github.com/xtermjs/xterm.js), [CodeMirror](https://codemirror.net/), and [Shiki](https://shiki.style/).

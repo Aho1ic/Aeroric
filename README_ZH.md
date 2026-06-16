@@ -1,31 +1,31 @@
 <p align="center">
-  <img src="docs/images/logo.png" alt="NeZha Logo" width="150" />
+  <img src="docs/images/logo.png" alt="Aeroric Logo" width="150" />
 </p>
 
-<h1 align="center">NeZha：面向 AI 编程智能体的桌面工作台</h1>
+<h1 align="center">Aeroric：面向 AI 编程智能体的桌面工作台</h1>
 
 <p align="center">
   在一个轻量桌面应用里同时管理 Claude Code、Codex、自定义智能体、多项目任务、实时终端、Git、SSH、Skill Hub 和用量分析。
 </p>
 
 <p align="center">
-  <img src="docs/images/index.gif" alt="NeZha 当前工作区" width="86%" />
+  <img src="docs/images/index.gif" alt="Aeroric 当前工作区" width="86%" />
 </p>
 
 [English README](./README.md)
 
-## 为什么是 NeZha
+## 为什么是 Aeroric
 
-NeZha 面向 agent-first 的开发方式：多个 AI 编程任务可能同时在不同仓库、本机项目或远程机器上运行。你不需要在终端、编辑器、Git 客户端和会话日志之间来回切换，NeZha 把任务下发、终端输出、会话回放、代码查看、Git Review、提交和恢复都放到同一个工作台里。
+Aeroric 面向 agent-first 的开发方式：多个 AI 编程任务可能同时在不同仓库、本机项目或远程机器上运行。你不需要在终端、编辑器、Git 客户端和会话日志之间来回切换，Aeroric 把任务下发、终端输出、会话回放、代码查看、Git Review、提交和恢复都放到同一个工作台里。
 
-NeZha 不替代 Claude Code 或 Codex，而是直接调用本机 CLI，并在外层补齐桌面任务管理能力：多项目导航、权限模式选择、PTY 终端、会话自动发现、本地任务持久化、文件浏览、Git 差异查看和用量统计。
+Aeroric 不替代 Claude Code 或 Codex，而是直接调用本机 CLI，并在外层补齐桌面任务管理能力：多项目导航、权限模式选择、PTY 终端、会话自动发现、本地任务持久化、文件浏览、Git 差异查看和用量统计。
 
 ## 安装
 
 使用前请先安装 Claude Code 和/或 Codex。macOS 首次打开未签名应用时，如果系统提示应用已损坏或无法打开，执行：
 
 ```bash
-xattr -rd com.apple.quarantine /Applications/NeZha.app
+xattr -rd com.apple.quarantine /Applications/Aeroric.app
 ```
 
 ## 当前功能
@@ -44,11 +44,11 @@ xattr -rd com.apple.quarantine /Applications/NeZha.app
 ## 截图
 
 <p align="center">
-  <img src="docs/images/workspace.png" alt="NeZha 工作区" width="86%" />
+  <img src="docs/images/workspace.png" alt="Aeroric 工作区" width="86%" />
 </p>
 
 <p align="center">
-  <img src="docs/images/dark.png" alt="NeZha 暗色模式" width="86%" />
+  <img src="docs/images/dark.png" alt="Aeroric 暗色模式" width="86%" />
 </p>
 
 ## 开发
@@ -66,4 +66,4 @@ pnpm tauri build    # 构建生产桌面包
 
 ## 致谢
 
-NeZha 基于 [Tauri](https://github.com/tauri-apps/tauri)、[React](https://github.com/facebook/react)、[xterm.js](https://github.com/xtermjs/xterm.js)、[CodeMirror](https://codemirror.net/) 和 [Shiki](https://shiki.style/) 等优秀开源项目构建。
+Aeroric 基于 [Tauri](https://github.com/tauri-apps/tauri)、[React](https://github.com/facebook/react)、[xterm.js](https://github.com/xtermjs/xterm.js)、[CodeMirror](https://codemirror.net/) 和 [Shiki](https://shiki.style/) 等优秀开源项目构建。
