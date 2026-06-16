@@ -170,6 +170,15 @@ describe("sftp panel helpers", () => {
   it("formats Finder-style folder preview metadata", () => {
     expect(formatSftpPreviewSize(1536)).toBe("1.5 KB");
     expect(formatSftpFolderCounts({ directoryCount: 2, fileCount: 3 })).toBe("2 个文件夹，3 个文件");
-    expect(formatSftpPreviewModifiedTime(1_709_568_000_000)).toBe("2024/3/5 00:00");
+    const timestamp = 1_709_568_000_000;
+    const expected = new Intl.DateTimeFormat("zh-CN", {
+      year: "numeric",
+      month: "numeric",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+    }).format(new Date(timestamp));
+    expect(formatSftpPreviewModifiedTime(timestamp)).toBe(expected);
   });
 });
