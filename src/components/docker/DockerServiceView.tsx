@@ -1,5 +1,5 @@
 import type React from "react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import {
   AlertCircle,
@@ -423,7 +423,11 @@ export function DockerServiceView({
 }) {
   const { t } = useI18n();
   const remoteKey = dockerRemoteKey(remote);
-  const remoteTarget = useMemo(() => remote ?? null, [remoteKey]);
+  const remoteSnapshotRef = useRef<{ key: string; target: SshConnection | null } | null>(null);
+  if (remoteSnapshotRef.current?.key !== remoteKey) {
+    remoteSnapshotRef.current = { key: remoteKey, target: remote ?? null };
+  }
+  const remoteTarget = remoteSnapshotRef.current.target;
   const [tab, setTab] = useState<DockerTab>("containers");
   const [resources, setResources] = useState<DockerResources | null>(null);
   const [loading, setLoading] = useState(false);
