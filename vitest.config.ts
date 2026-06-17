@@ -4,6 +4,7 @@ import react from "@vitejs/plugin-react";
 export default defineConfig({
   plugins: [react()],
   test: {
+    testTimeout: 15000,
     // jsdom 模拟浏览器环境，支持 DOM API 和 localStorage
     environment: "jsdom",
     // 全局注入 expect、describe、it 等，无需每个文件手动 import

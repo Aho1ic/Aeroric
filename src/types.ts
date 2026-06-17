@@ -70,89 +70,61 @@ export interface DockerResources {
   containers: DockerContainerSummary[];
 }
 
-export type DbEndpoint =
-  | { kind: "local"; path: string }
-  | { kind: "ssh"; connection: SshConnection; path: string; projectPath?: string };
-
-export interface DbConnectionConfig {
-  id: string;
-  name: string;
-  endpoint: DbEndpoint;
-  readOnly?: boolean;
-  createdAt: number;
-  lastOpenedAt?: number | null;
-}
-
-export interface DbColumn {
-  name: string;
-  dataType: string;
-  nullable: boolean;
-  notNull: boolean;
-  primaryKey: boolean;
-  primaryKeyOrdinal: number;
-  defaultValue?: string | null;
-}
-
-export interface DbIndex {
-  name: string;
-  unique: boolean;
-  columns: string[];
-}
-
-export interface DbForeignKey {
-  table: string;
-  from: string;
-  to: string;
-  onUpdate: string;
-  onDelete: string;
-}
-
-export interface DbTrigger {
-  name: string;
-  sql?: string | null;
-}
-
-export interface DbObject {
-  name: string;
-  objectType: "table" | "view" | string;
-  columns: DbColumn[];
-  indexes: DbIndex[];
-  foreignKeys: DbForeignKey[];
-  triggers: DbTrigger[];
-  ddl?: string | null;
-  rowCount?: number | null;
-  editable: boolean;
-  primaryKeys: string[];
-  hasRowId: boolean;
-}
-
-export interface DbSchema {
-  objects: DbObject[];
-}
-
-export interface DbRow {
-  rowId?: number | null;
-  keyValues: Array<{ column: string; value: unknown }>;
-  values: unknown[];
-}
-
-export interface DbQueryResult {
-  columns: string[];
-  rows: DbRow[];
-  page: number;
-  pageSize: number;
-  totalRows?: number | null;
-  editable: boolean;
-  primaryKeys: string[];
-  hasRowId: boolean;
-}
-
-export interface DbExecuteResult {
-  columns: string[];
-  rows: DbRow[];
-  rowsAffected: number;
-  message: string;
-}
+export type {
+  AeroricDbConnectionConfig,
+  DbCellValue,
+  DbColumn,
+  DbConnectionConfig,
+  DbEndpoint,
+  DbExecuteResult,
+  DbForeignKey,
+  DbIndex,
+  DbObject,
+  DbQueryResult,
+  DbRow,
+  DbSchema,
+  DbSshConnection,
+  DbTrigger,
+  DbxColumnInfo,
+  DbxDatabaseInfo,
+  DbxDatabaseType,
+  DbxObjectInfo,
+  DbxQueryResult,
+  ExecuteQueryRequest,
+  DataGridColumnInfo,
+  DataGridSaveStatementOptions,
+  DataGridTableMeta,
+  DatabaseDriverCapabilities,
+  DatabaseDriverManifest,
+  DatabaseDriverManifestEntry,
+  DatabaseExportRequest,
+  DriverRuntimeMode,
+  DriverSupportLevel,
+  ExecuteSqlFileRequest,
+  GridSaveRequest,
+  MongoDeleteDocumentsRequest,
+  MongoDocumentResult,
+  MongoFindDocumentsRequest,
+  MongoInsertDocumentRequest,
+  MongoUpdateDocumentRequest,
+  RedisDatabaseInfo,
+  RedisKeyInfo,
+  RedisKeyRequest,
+  RedisScanKeysRequest,
+  RedisScanResult,
+  RedisSetTtlRequest,
+  RedisSetValueRequest,
+  RedisValue,
+  SqlPreviewResponse,
+  TableExportRequest,
+  TableImportColumnMapping,
+  TableImportMode,
+  TableImportPreview,
+  TableImportRequest,
+  TableImportSummary,
+  TableDataRequest,
+  TableDataResponse,
+} from "./types/database";
 
 export type BuiltInAgentType = "claude" | "claude_gpt55" | "codex";
 export type AgentType = BuiltInAgentType | (string & {});

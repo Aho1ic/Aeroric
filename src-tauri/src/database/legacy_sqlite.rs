@@ -917,6 +917,22 @@ pub async fn db_save_connections(connections: Vec<DbConnectionConfig>) -> Result
 }
 
 #[tauri::command]
+pub async fn db_read_sql_file(path: String) -> Result<String, String> {
+    tokio::task::spawn_blocking(move || {
+        let path = PathBuf::from(path);
+        if !path.is_absolute() {
+            return Err("SQL file path must be absolute".to_string());
+        }
+        if path.extension().and_then(|value| value.to_str()) != Some("sql") {
+            return Err("Only .sql files can be executed from this action".to_string());
+        }
+        fs::read_to_string(path).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
 pub async fn db_inspect(
     endpoint: DbEndpoint,
     project_root: Option<String>,
@@ -1190,5 +1206,16 @@ mod tests {
         .is_err());
 
         let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn split_sql_keeps_semicolon_inside_string() {
+        let parts = split_sql_statements("select ';'; select 2;");
+        assert_eq!(parts, vec!["select ';'", "select 2"]);
+    }
+
+    #[test]
+    fn quote_identifier_escapes_double_quotes() {
+        assert_eq!(quote_identifier("a\"b").unwrap(), "\"a\"\"b\"");
     }
 }

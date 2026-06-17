@@ -187,8 +187,14 @@ mod tests {
     fn built_in_agent_config_paths_are_unconfigured_by_default() {
         let settings = AppSettings::default();
 
-        assert_eq!(agent_config_path_from_settings("claude", &settings).unwrap(), None);
-        assert_eq!(agent_config_path_from_settings("codex", &settings).unwrap(), None);
+        assert_eq!(
+            agent_config_path_from_settings("claude", &settings).unwrap(),
+            None
+        );
+        assert_eq!(
+            agent_config_path_from_settings("codex", &settings).unwrap(),
+            None
+        );
     }
 
     #[test]

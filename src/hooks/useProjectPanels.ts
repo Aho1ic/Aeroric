@@ -41,6 +41,10 @@ export function useProjectPanels() {
     setRightPanel(panel);
   }, []);
 
+  const closeRightPanel = useCallback(() => {
+    setRightPanel(null);
+  }, []);
+
   const handleFileSelect = useCallback((path: string, name: string) => {
     setOpenDiff(null);
     setOpenFilesState((prev) => ({
@@ -174,6 +178,7 @@ export function useProjectPanels() {
     terminalHeight,
     setOpenDiff,
     openRightPanel,
+    closeRightPanel,
     handleTogglePanel,
     handleFileSelect,
     handleFileTabSelect,

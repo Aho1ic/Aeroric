@@ -1,5 +1,5 @@
-use std::fs;
 use std::collections::HashMap;
+use std::fs;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::OnceLock;
@@ -507,8 +507,7 @@ fn normalize_settings(settings: AppSettings) -> AppSettings {
         claude_gpt55_path: if settings.claude_gpt55_path.is_empty() {
             String::new()
         } else {
-            resolve_agent_launch_spec_from_path("claude_gpt55", &settings.claude_gpt55_path)
-                .program
+            resolve_agent_launch_spec_from_path("claude_gpt55", &settings.claude_gpt55_path).program
         },
         codex_path: resolve_agent_launch_spec_from_path("codex", &settings.codex_path).program,
         claude_config_path: normalize_config_path(settings.claude_config_path),

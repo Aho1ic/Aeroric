@@ -40,6 +40,7 @@ uuid = { version = "1", features = ["v4"] }
 trash = "=5.2.6"
 font-kit = "=0.14.3"
 rusqlite = { version = "0.32", features = ["bundled"] }
+dbx-core = { path = "../../dbx/crates/dbx-core", default-features = false }
 
 [profile.dev]
 debug = 0

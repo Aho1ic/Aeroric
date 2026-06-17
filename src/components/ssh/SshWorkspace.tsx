@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Columns2, Edit3, Maximize2, Plus, Server } from "lucide-react";
+import { Check, Columns2, Copy, Edit3, Maximize2, Plus, Server } from "lucide-react";
 import type { FontFamily, SshConnection, TerminalFontSize, ThemeVariant } from "../../types";
 import { useI18n } from "../../i18n";
 import s from "../../styles";
@@ -31,6 +31,12 @@ function connectionGroups(connections: SshConnection[]) {
   );
 }
 
+async function copyConnectionPassword(connection: SshConnection) {
+  const password = connection.password ?? "";
+  if (!password || !navigator.clipboard?.writeText) return;
+  await navigator.clipboard.writeText(password);
+}
+
 function SshCardPicker({
   connections,
   selectedId,
@@ -43,6 +49,7 @@ function SshCardPicker({
   onEdit: (connection: SshConnection) => void;
 }) {
   const { t } = useI18n();
+  const [copiedConnectionId, setCopiedConnectionId] = useState<string | null>(null);
   const grouped = useMemo(
     () => groupConnections(connections, t("ssh.defaultGroup")),
     [connections, t],
@@ -65,6 +72,7 @@ function SshCardPicker({
           <div style={s.sshProjectCardGrid}>
             {items.map((connection) => {
               const selected = selectedId === connection.id;
+              const canCopyPassword = Boolean(connection.password);
               return (
                 <div key={connection.id} style={selected ? s.sshProjectCardSelected : s.sshProjectCard}>
                   <button
@@ -88,12 +96,49 @@ function SshCardPicker({
                     type="button"
                     style={s.sshProjectCardEdit}
                     title={t("common.edit")}
+                    aria-label={t("common.edit")}
                     onClick={(event) => {
                       event.stopPropagation();
                       onEdit(connection);
                     }}
                   >
                     <Edit3 size={14} />
+                  </button>
+                  <button
+                    type="button"
+                    style={{
+                      ...s.sshProjectCardEdit,
+                      opacity: canCopyPassword ? 1 : 0.35,
+                      cursor: canCopyPassword ? "pointer" : "not-allowed",
+                      transform: copiedConnectionId === connection.id ? "scale(1.12)" : "scale(1)",
+                      color:
+                        copiedConnectionId === connection.id
+                          ? "var(--success)"
+                          : s.sshProjectCardEdit.color,
+                      border:
+                        copiedConnectionId === connection.id
+                          ? "1px solid var(--success)"
+                          : s.sshProjectCardEdit.border,
+                      transition: "transform 0.16s ease, color 0.16s ease, border-color 0.16s ease",
+                    }}
+                    data-copied={copiedConnectionId === connection.id ? "true" : undefined}
+                    title={canCopyPassword ? t("ssh.copyPassword") : t("ssh.noPasswordHint")}
+                    aria-label={t("ssh.copyPassword")}
+                    disabled={!canCopyPassword}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      if (!canCopyPassword) return;
+                      void copyConnectionPassword(connection).then(() => {
+                        setCopiedConnectionId(connection.id);
+                        window.setTimeout(() => {
+                          setCopiedConnectionId((current) =>
+                            current === connection.id ? null : current,
+                          );
+                        }, 900);
+                      });
+                    }}
+                  >
+                    {copiedConnectionId === connection.id ? <Check size={14} /> : <Copy size={14} />}
                   </button>
                 </div>
               );

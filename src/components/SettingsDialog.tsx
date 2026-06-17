@@ -314,39 +314,41 @@ export function SettingsDialog({
 
   return (
     <div style={s.modalOverlay} onClick={handleOverlayClick}>
-      <div style={s.modalBox}>
-        {/* Left nav */}
-        <div style={s.settingsNav}>
-          <div style={s.settingsNavTitle}>{t("settings.title")}</div>
-          {NAV_ITEMS.map((item) => (
-            <button
-              key={item.key}
-              style={{
-                ...s.settingsNavItem,
-                background: activeNav === item.key ? "var(--bg-hover)" : "none",
-                color: activeNav === item.key ? "var(--text-primary)" : "var(--text-secondary)",
-                fontWeight: activeNav === item.key ? 600 : 500,
-              }}
-              onClick={() => setActiveNav(item.key)}
-            >
-              <FolderOpen size={14} />
-              {t(item.label)}
-            </button>
-          ))}
-        </div>
-
-        {/* Right content */}
-        <div style={s.settingsContent}>
-          <div style={s.settingsContentHeader}>
-            <span style={s.settingsContentTitle}>{activeLabel}</span>
-            <button style={s.modalCloseBtn} onClick={onClose} title={t("common.close")}>
-              <X size={16} strokeWidth={2} />
-            </button>
+      <div style={{ ...s.modalBox, position: "relative", background: "var(--bg-card)" }}>
+        <div style={{ position: "relative", zIndex: 1, display: "flex", flex: 1, minWidth: 0 }}>
+          {/* Left nav */}
+          <div style={s.settingsNav}>
+            <div style={s.settingsNavTitle}>{t("settings.title")}</div>
+            {NAV_ITEMS.map((item) => (
+              <button
+                key={item.key}
+                style={{
+                  ...s.settingsNavItem,
+                  background: activeNav === item.key ? "var(--bg-hover)" : "none",
+                  color: activeNav === item.key ? "var(--text-primary)" : "var(--text-secondary)",
+                  fontWeight: activeNav === item.key ? 600 : 500,
+                }}
+                onClick={() => setActiveNav(item.key)}
+              >
+                <FolderOpen size={14} />
+                {t(item.label)}
+              </button>
+            ))}
           </div>
 
-          {activeNav === "project" && (
-            <ProjectSettings projectPath={projectPath} onClose={onClose} />
-          )}
+          {/* Right content */}
+          <div style={s.settingsContent}>
+            <div style={s.settingsContentHeader}>
+              <span style={s.settingsContentTitle}>{activeLabel}</span>
+              <button style={s.modalCloseBtn} onClick={onClose} title={t("common.close")}>
+                <X size={16} strokeWidth={2} />
+              </button>
+            </div>
+
+            {activeNav === "project" && (
+              <ProjectSettings projectPath={projectPath} onClose={onClose} />
+            )}
+          </div>
         </div>
       </div>
     </div>

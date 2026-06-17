@@ -148,103 +148,105 @@ export function AppSettingsDialog({
 
   return (
     <div style={s.modalOverlay} onClick={handleOverlayClick}>
-      <div style={s.modalBox}>
-        <div style={s.settingsNav}>
-          <div style={s.settingsNavTitle}>{t("appSettings.title")}</div>
-          {sectionGroups.map((group, groupIndex) => (
-            <Fragment key={group.section}>
-              <div
-                style={{
-                  ...s.settingsNavSectionLabel,
-                  ...(groupIndex === 0 ? s.settingsNavSectionLabelFirst : null),
-                }}
-              >
-                {t(SECTION_LABEL_KEY[group.section])}
-              </div>
-              {group.items.map((item) => (
-                <button
-                  key={item.key}
+      <div style={{ ...s.modalBox, position: "relative", background: "var(--bg-card)" }}>
+        <div style={{ position: "relative", zIndex: 1, display: "flex", flex: 1, minWidth: 0 }}>
+          <div style={s.settingsNav}>
+            <div style={s.settingsNavTitle}>{t("appSettings.title")}</div>
+            {sectionGroups.map((group, groupIndex) => (
+              <Fragment key={group.section}>
+                <div
                   style={{
-                    ...s.settingsNavItem,
-                    background: activeNav === item.key ? "var(--bg-hover)" : "none",
-                    color: activeNav === item.key ? "var(--text-primary)" : "var(--text-secondary)",
-                    fontWeight: activeNav === item.key ? 600 : 500,
-                  }}
-                  onClick={() => {
-                    setActiveNav(item.key);
+                    ...s.settingsNavSectionLabel,
+                    ...(groupIndex === 0 ? s.settingsNavSectionLabelFirst : null),
                   }}
                 >
-                  <NavItemIcon item={item} size={14} />
-                  {item.label ?? t(item.labelKey ?? item.key)}
-                </button>
-              ))}
-            </Fragment>
-          ))}
-        </div>
-
-        <div style={s.settingsContent}>
-          <div style={s.settingsContentHeader}>
-            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <NavItemIcon item={activeItem} size={16} />
-              <span style={s.settingsContentTitle}>{activeLabel}</span>
-            </div>
-            <button style={s.modalCloseBtn} onClick={onClose} title={t("common.close")}>
-              <X size={16} strokeWidth={2} />
-            </button>
+                  {t(SECTION_LABEL_KEY[group.section])}
+                </div>
+                {group.items.map((item) => (
+                  <button
+                    key={item.key}
+                    style={{
+                      ...s.settingsNavItem,
+                      background: activeNav === item.key ? "var(--bg-hover)" : "none",
+                      color: activeNav === item.key ? "var(--text-primary)" : "var(--text-secondary)",
+                      fontWeight: activeNav === item.key ? 600 : 500,
+                    }}
+                    onClick={() => {
+                      setActiveNav(item.key);
+                    }}
+                  >
+                    <NavItemIcon item={item} size={14} />
+                    {item.label ?? t(item.labelKey ?? item.key)}
+                  </button>
+                ))}
+              </Fragment>
+            ))}
           </div>
 
-          {activeNav === "general" ? (
-            <GeneralPanel
-              key="general"
-              taskDisplayWindow={taskDisplayWindow}
-              onTaskDisplayWindowChange={onTaskDisplayWindowChange}
-              attentionBadge={attentionBadge}
-              onAttentionBadgeChange={onAttentionBadgeChange}
-            />
-          ) : activeNav === "theme" ? (
-            <ThemePanel
-              key="theme"
-              themeMode={themeMode}
-              systemPrefersDark={systemPrefersDark}
-              onThemeModeChange={onThemeModeChange}
-            />
-          ) : activeNav === "fonts" ? (
-            <FontPanel
-              key="fonts"
-              terminalFontSize={terminalFontSize}
-              onTerminalFontSizeChange={onTerminalFontSizeChange}
-              uiFontFamily={uiFontFamily}
-              onUiFontFamilyChange={onUiFontFamilyChange}
-              monoFontFamily={monoFontFamily}
-              onMonoFontFamilyChange={onMonoFontFamilyChange}
-            />
-          ) : activeNav === "shortcuts" ? (
-            <ShortcutsPanel key="shortcuts" />
-          ) : activeNav === "hooks" ? (
-            <HooksPanel key="hooks" />
-          ) : activeNav === "skills" ? (
-            <SkillsPanel key="skills" />
-          ) : activeNav === "about" ? (
-            <AboutPanel key="about" />
-          ) : activeNav === ADD_AGENT_NAV_KEY ? (
-            <AddAgentPanel key="add-agent" onSaved={(agentId) => setActiveNav(agentId)} />
-          ) : activeAgentItem ? (
-            <AgentConfigPanel
-              key={activeNav}
-              agentKey={activeNav as AgentKey}
-              filePath={activeAgentItem.filePath!}
-              lang={activeAgentItem.lang!}
-              themeVariant={themeVariant}
-            />
-          ) : (
-            <GeneralPanel
-              key="general-fallback"
-              taskDisplayWindow={taskDisplayWindow}
-              onTaskDisplayWindowChange={onTaskDisplayWindowChange}
-              attentionBadge={attentionBadge}
-              onAttentionBadgeChange={onAttentionBadgeChange}
-            />
-          )}
+          <div style={s.settingsContent}>
+            <div style={s.settingsContentHeader}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <NavItemIcon item={activeItem} size={16} />
+                <span style={s.settingsContentTitle}>{activeLabel}</span>
+              </div>
+              <button style={s.modalCloseBtn} onClick={onClose} title={t("common.close")}>
+                <X size={16} strokeWidth={2} />
+              </button>
+            </div>
+
+            {activeNav === "general" ? (
+              <GeneralPanel
+                key="general"
+                taskDisplayWindow={taskDisplayWindow}
+                onTaskDisplayWindowChange={onTaskDisplayWindowChange}
+                attentionBadge={attentionBadge}
+                onAttentionBadgeChange={onAttentionBadgeChange}
+              />
+            ) : activeNav === "theme" ? (
+              <ThemePanel
+                key="theme"
+                themeMode={themeMode}
+                systemPrefersDark={systemPrefersDark}
+                onThemeModeChange={onThemeModeChange}
+              />
+            ) : activeNav === "fonts" ? (
+              <FontPanel
+                key="fonts"
+                terminalFontSize={terminalFontSize}
+                onTerminalFontSizeChange={onTerminalFontSizeChange}
+                uiFontFamily={uiFontFamily}
+                onUiFontFamilyChange={onUiFontFamilyChange}
+                monoFontFamily={monoFontFamily}
+                onMonoFontFamilyChange={onMonoFontFamilyChange}
+              />
+            ) : activeNav === "shortcuts" ? (
+              <ShortcutsPanel key="shortcuts" />
+            ) : activeNav === "hooks" ? (
+              <HooksPanel key="hooks" />
+            ) : activeNav === "skills" ? (
+              <SkillsPanel key="skills" />
+            ) : activeNav === "about" ? (
+              <AboutPanel key="about" />
+            ) : activeNav === ADD_AGENT_NAV_KEY ? (
+              <AddAgentPanel key="add-agent" onSaved={(agentId) => setActiveNav(agentId)} />
+            ) : activeAgentItem ? (
+              <AgentConfigPanel
+                key={activeNav}
+                agentKey={activeNav as AgentKey}
+                filePath={activeAgentItem.filePath!}
+                lang={activeAgentItem.lang!}
+                themeVariant={themeVariant}
+              />
+            ) : (
+              <GeneralPanel
+                key="general-fallback"
+                taskDisplayWindow={taskDisplayWindow}
+                onTaskDisplayWindowChange={onTaskDisplayWindowChange}
+                attentionBadge={attentionBadge}
+                onAttentionBadgeChange={onAttentionBadgeChange}
+              />
+            )}
+          </div>
         </div>
       </div>
     </div>

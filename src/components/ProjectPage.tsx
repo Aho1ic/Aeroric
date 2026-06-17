@@ -182,6 +182,7 @@ export function ProjectPage({
     rightPanelWidth,
     setOpenDiff,
     openRightPanel,
+    closeRightPanel,
     handleTogglePanel,
     handleFileSelect,
     handleFileTabSelect,
@@ -369,15 +370,7 @@ export function ProjectPage({
 
   const handleToggleRightPanel = useCallback(
     (panel: Parameters<typeof handleTogglePanel>[0]) => {
-      if (
-        panel === "files" ||
-        panel === "git-changes" ||
-        panel === "git-history" ||
-        panel === "ssh" ||
-        panel === "database"
-      ) {
-        setShowShellTerminal(false);
-      }
+      setShowShellTerminal(false);
       if (panel === "ssh" || panel === "database") {
         clearFileAndDiff();
       }
@@ -500,34 +493,45 @@ export function ProjectPage({
             overflow: "hidden",
             minHeight: 0,
             position: "relative",
+            background: "var(--bg-panel)",
           }}
         >
           {/* Foreground: SFTP, file viewer, diff, SSH shell, or new-task composer */}
-          <ErrorBoundary
-            label="主内容区"
-            fallback={(error, reset) => (
-              <div style={s.errorBoundaryWrap}>
-                <div style={s.errorBoundaryIcon}>⚠</div>
-                <div style={s.errorBoundaryTitle}>内容区渲染出错</div>
-                <div style={s.errorBoundaryMessage}>{error.message || "未知错误"}</div>
-                <div style={s.errorBoundaryActions}>
-                  <button onClick={reset} style={s.errorBoundaryBtn}>
-                    重试
-                  </button>
-                  <button
-                    onClick={() => {
-                      clearFileAndDiff();
-                      reset();
-                    }}
-                    style={s.errorBoundaryBtn}
-                  >
-                    返回任务视图
-                  </button>
-                </div>
-              </div>
-            )}
+          <div
+            style={{
+              position: "relative",
+              zIndex: 1,
+              minHeight: 0,
+              display: "flex",
+              flexDirection: "column",
+              flex: 1,
+            }}
           >
-            {isSftpMode ? (
+            <ErrorBoundary
+              label="主内容区"
+              fallback={(error, reset) => (
+                <div style={s.errorBoundaryWrap}>
+                  <div style={s.errorBoundaryIcon}>⚠</div>
+                  <div style={s.errorBoundaryTitle}>内容区渲染出错</div>
+                  <div style={s.errorBoundaryMessage}>{error.message || "未知错误"}</div>
+                  <div style={s.errorBoundaryActions}>
+                    <button onClick={reset} style={s.errorBoundaryBtn}>
+                      重试
+                    </button>
+                    <button
+                      onClick={() => {
+                        clearFileAndDiff();
+                        reset();
+                      }}
+                      style={s.errorBoundaryBtn}
+                    >
+                      返回任务视图
+                    </button>
+                  </div>
+                </div>
+              )}
+            >
+              {isSftpMode ? (
               <SftpPanel
                 sshConnections={sshConnections}
                 localDefaultPath={projectLocation.kind === "local" ? project.path : "/Users/macbook/Downloads/同步空间"}
@@ -622,8 +626,9 @@ export function ProjectPage({
                 onRunTodo={onRunTodoTask}
                 onUpdateTodo={onUpdateTodo}
               />
-            ) : null}
-          </ErrorBoundary>
+              ) : null}
+            </ErrorBoundary>
+          </div>
 
           {shellTerminalMounted && !terminalDisabled && (
             <div
@@ -838,6 +843,7 @@ export function ProjectPage({
         onToggle={handleToggleRightPanel}
         terminalActive={showShellTerminal}
         onToggleTerminal={() => {
+          closeRightPanel();
           setShellTerminalMounted(true);
           setShowShellTerminal((v) => !v);
         }}

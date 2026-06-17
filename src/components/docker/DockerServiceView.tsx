@@ -1,5 +1,5 @@
 import type React from "react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import {
   AlertCircle,
@@ -24,6 +24,22 @@ import { useI18n } from "../../i18n";
 
 type DockerTab = "images" | "containers";
 type ContainerAction = "start" | "restart" | "stop" | "delete";
+
+function dockerRemoteKey(remote?: SshConnection): string {
+  if (!remote) return "local";
+  return [
+    remote.id,
+    remote.name,
+    remote.host,
+    remote.port,
+    remote.username,
+    remote.remotePath,
+    remote.identityFile,
+    remote.password,
+  ]
+    .map((value) => value ?? "")
+    .join("\u001f");
+}
 
 const pageStyle: React.CSSProperties = {
   flex: 1,
@@ -251,6 +267,14 @@ function imageReference(image: DockerImageSummary): string {
   return image.id;
 }
 
+function removeDeletedImage(resources: DockerResources | null, ref: string): DockerResources | null {
+  if (!resources) return resources;
+  return {
+    ...resources,
+    images: resources.images.filter((image) => imageReference(image) !== ref && image.id !== ref),
+  };
+}
+
 function ImageTable({
   images,
   busyKey,
@@ -398,6 +422,8 @@ export function DockerServiceView({
   sourceLabel?: string;
 }) {
   const { t } = useI18n();
+  const remoteKey = dockerRemoteKey(remote);
+  const remoteTarget = useMemo(() => remote ?? null, [remoteKey]);
   const [tab, setTab] = useState<DockerTab>("containers");
   const [resources, setResources] = useState<DockerResources | null>(null);
   const [loading, setLoading] = useState(false);
@@ -405,18 +431,22 @@ export function DockerServiceView({
   const [busyKey, setBusyKey] = useState<string | null>(null);
   const [logView, setLogView] = useState<{ title: string; content: string } | null>(null);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (options: { preserveOnError?: boolean } = {}) => {
     setLoading(true);
     setError(null);
     try {
-      setResources(await invoke<DockerResources>("list_docker_resources", { remote: remote ?? null }));
+      setResources(await invoke<DockerResources>("list_docker_resources", { remote: remoteTarget }));
     } catch (err) {
-      setResources(null);
-      setError(String(err));
+      if (!options.preserveOnError) {
+        setResources(null);
+        setError(String(err));
+      } else {
+        console.warn("Failed to refresh Docker resources after action", err);
+      }
     } finally {
       setLoading(false);
     }
-  }, [remote]);
+  }, [remoteTarget]);
 
   const runContainerAction = useCallback(
     async (container: DockerContainerSummary, action: ContainerAction) => {
@@ -425,7 +455,7 @@ export function DockerServiceView({
       setError(null);
       try {
         await invoke("docker_container_action", {
-          remote: remote ?? null,
+          remote: remoteTarget,
           action,
           containerId: container.id,
         });
@@ -436,7 +466,7 @@ export function DockerServiceView({
         setBusyKey(null);
       }
     },
-    [load, remote, t],
+    [load, remoteTarget, t],
   );
 
   const loadContainerLogs = useCallback(
@@ -445,7 +475,7 @@ export function DockerServiceView({
       setError(null);
       try {
         const content = await invoke<string>("docker_container_logs", {
-          remote: remote ?? null,
+          remote: remoteTarget,
           containerId: container.id,
         });
         setLogView({ title: `${container.names} · ${t("docker.logs")}`, content });
@@ -455,7 +485,7 @@ export function DockerServiceView({
         setBusyKey(null);
       }
     },
-    [remote, t],
+    [remoteTarget, t],
   );
 
   const deleteImage = useCallback(
@@ -465,15 +495,16 @@ export function DockerServiceView({
       setBusyKey(ref);
       setError(null);
       try {
-        await invoke("docker_delete_image", { remote: remote ?? null, image: ref });
-        await load();
+        await invoke("docker_delete_image", { remote: remoteTarget, image: ref });
+        setResources((current) => removeDeletedImage(current, ref));
+        await load({ preserveOnError: true });
       } catch (err) {
         setError(String(err));
       } finally {
         setBusyKey(null);
       }
     },
-    [load, remote, t],
+    [load, remoteTarget, t],
   );
 
   const tagImage = useCallback(
@@ -484,7 +515,7 @@ export function DockerServiceView({
       setBusyKey(source);
       setError(null);
       try {
-        await invoke("docker_tag_image", { remote: remote ?? null, source, target: target.trim() });
+        await invoke("docker_tag_image", { remote: remoteTarget, source, target: target.trim() });
         await load();
       } catch (err) {
         setError(String(err));
@@ -492,7 +523,7 @@ export function DockerServiceView({
         setBusyKey(null);
       }
     },
-    [load, remote, t],
+    [load, remoteTarget, t],
   );
 
   useEffect(() => {

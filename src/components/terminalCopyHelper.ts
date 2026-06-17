@@ -110,6 +110,21 @@ async function readSelectionChunked(terminal: Terminal): Promise<string> {
   return chunks.join("");
 }
 
+async function readSelectedText(terminal: Terminal): Promise<string> {
+  const sel = getSelectionService(terminal);
+  let lineCount = 0;
+  if (sel?.selectionStart && sel?.selectionEnd) {
+    lineCount = Math.abs(sel.selectionEnd[1] - sel.selectionStart[1]) + 1;
+  }
+
+  if (lineCount <= FAST_PATH_MAX_LINES) {
+    const text = terminal.getSelection();
+    if (text.length <= FAST_PATH_MAX_BYTES) return text;
+  }
+
+  return readSelectionChunked(terminal);
+}
+
 /**
  * Smart copy: fast path for small selections, chunked async path for large ones.
  * Returns true if the copy was handled, false if the caller should fall through
@@ -118,26 +133,7 @@ async function readSelectionChunked(terminal: Terminal): Promise<string> {
 export async function smartCopy(terminal: Terminal): Promise<boolean> {
   if (!terminal.hasSelection()) return false;
 
-  const sel = getSelectionService(terminal);
-  let lineCount = 0;
-  if (sel?.selectionStart && sel?.selectionEnd) {
-    lineCount = Math.abs(sel.selectionEnd[1] - sel.selectionStart[1]) + 1;
-  }
-
-  let text: string;
-
-  if (lineCount <= FAST_PATH_MAX_LINES) {
-    // Fast path: synchronous — small enough to not matter
-    text = terminal.getSelection();
-    if (text.length > FAST_PATH_MAX_BYTES) {
-      // Oops, still large (very wide lines). Fall through to chunked.
-      text = await readSelectionChunked(terminal);
-    }
-  } else {
-    // Chunked path: yield between batches of lines
-    text = await readSelectionChunked(terminal);
-  }
-
+  const text = await readSelectedText(terminal);
   if (!text) return false;
 
   try {
@@ -166,6 +162,50 @@ export interface TerminalKeyOptions {
   onPaste?: (text: string) => void;
 }
 
+interface TerminalContextMenuState {
+  copyInProgress: boolean;
+  pasteInProgress: boolean;
+}
+
+export async function handleTerminalContextMenu(
+  terminal: Terminal,
+  keyOptions: TerminalKeyOptions | undefined,
+  e: MouseEvent,
+  state: TerminalContextMenuState,
+): Promise<void> {
+  if (!terminal.hasSelection() && !keyOptions?.onPaste) return;
+
+  e.preventDefault();
+  terminal.focus();
+
+  if (terminal.hasSelection()) {
+    if (state.copyInProgress) return;
+    state.copyInProgress = true;
+    try {
+      const text = await readSelectedText(terminal);
+      if (text && keyOptions?.onPaste) {
+        keyOptions.onPaste(text);
+      } else if (text) {
+        await smartCopy(terminal);
+      }
+    } finally {
+      state.copyInProgress = false;
+    }
+    return;
+  }
+
+  if (!keyOptions?.onPaste || state.pasteInProgress) return;
+  state.pasteInProgress = true;
+  try {
+    const text = await navigator.clipboard.readText();
+    if (text) keyOptions.onPaste(text);
+  } catch {
+    /* ignore clipboard read failures */
+  } finally {
+    state.pasteInProgress = false;
+  }
+}
+
 /**
  * Attach the smart copy handler to a terminal instance. Optionally also
  * intercepts the configured "insert newline" combo. xterm allows a single
@@ -177,7 +217,10 @@ export function attachSmartCopy(
   keyOptions?: TerminalKeyOptions,
 ): () => void {
   let copyInProgress = false;
-  let pasteInProgress = false;
+  const contextMenuState = {
+    copyInProgress: false,
+    pasteInProgress: false,
+  };
 
   const handleCustomKeyEvent = (e: KeyboardEvent) => {
     // Insert-newline shortcut (e.g. Shift/Alt + Enter): emit our own sequence
@@ -217,20 +260,7 @@ export function attachSmartCopy(
   terminal.attachCustomKeyEventHandler(handleCustomKeyEvent);
 
   const handleContextMenu = (e: MouseEvent) => {
-    if (!keyOptions?.onPaste) return;
-    e.preventDefault();
-    if (pasteInProgress) return;
-    pasteInProgress = true;
-    terminal.focus();
-    navigator.clipboard
-      .readText()
-      .then((text) => {
-        if (text) keyOptions.onPaste?.(text);
-      })
-      .catch(() => {})
-      .finally(() => {
-        pasteInProgress = false;
-      });
+    void handleTerminalContextMenu(terminal, keyOptions, e, contextMenuState);
   };
 
   terminal.element?.addEventListener("contextmenu", handleContextMenu);

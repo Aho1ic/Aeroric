@@ -1,4 +1,4 @@
-import { Edit3, Plus, Server, Trash2 } from "lucide-react";
+import { Copy, Edit3, Plus, Server, Trash2 } from "lucide-react";
 import type { SshConnection } from "../../types";
 import { useI18n } from "../../i18n";
 import s from "../../styles";
@@ -68,6 +68,8 @@ export function SshConnectionList({
               <div style={s.sshConnectionGroupTitle}>{group}</div>
               {groupConnections.map((connection) => {
                 const selected = connection.id === selectedId;
+                const password = connection.password?.trim() ?? "";
+                const canCopyPassword = password.length > 0;
                 return (
                   <button
                     key={connection.id}
@@ -81,6 +83,32 @@ export function SshConnectionList({
                       <span style={s.sshConnectionMeta}>{connectionSubtitle(connection)}</span>
                     </span>
                     <span style={s.sshConnectionActions}>
+                      <span
+                        role="button"
+                        tabIndex={canCopyPassword ? 0 : -1}
+                        aria-disabled={!canCopyPassword}
+                        aria-label={t("ssh.copyPassword")}
+                        style={{
+                          ...s.sshRowAction,
+                          opacity: canCopyPassword ? 1 : 0.35,
+                          cursor: canCopyPassword ? "pointer" : "not-allowed",
+                        }}
+                        title={canCopyPassword ? t("ssh.copyPassword") : t("ssh.noPasswordHint")}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          if (!canCopyPassword) return;
+                          void navigator.clipboard?.writeText(password);
+                        }}
+                        onKeyDown={(event) => {
+                          if (event.key !== "Enter" && event.key !== " ") return;
+                          event.preventDefault();
+                          event.stopPropagation();
+                          if (!canCopyPassword) return;
+                          void navigator.clipboard?.writeText(password);
+                        }}
+                      >
+                        <Copy size={13} />
+                      </span>
                       <span
                         role="button"
                         tabIndex={0}

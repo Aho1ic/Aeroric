@@ -13,8 +13,8 @@ export function ProjectAvatar({
   const [from, to] = getAvatarGradient(name);
   const initials =
     name.length >= 2
-      ? (name[0] + (name.match(/[-_\s]([a-zA-Z])/)?.[1] ?? name[1])).toUpperCase()
-      : name.slice(0, 2).toUpperCase();
+      ? name[0] + (name.match(/[-_\s]([a-zA-Z])/)?.[1] ?? name[1])
+      : name.slice(0, 2);
   return (
     <div
       style={{

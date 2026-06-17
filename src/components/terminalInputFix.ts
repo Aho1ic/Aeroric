@@ -17,6 +17,11 @@ function isSymbolInputType(inputType: string): boolean {
 }
 
 export function normalizeCommittedCompositionText(text: string): string {
+  const mixedChineseWithPinyin = text.match(/^([\p{Script=Han}]+)([A-Za-z][A-Za-z']+)$/u);
+  if (mixedChineseWithPinyin && mixedChineseWithPinyin[2].includes("'")) {
+    return mixedChineseWithPinyin[1];
+  }
+
   const apostropheCount = (text.match(/'/g) ?? []).length;
   const normalized = text.replace(/(?<=[A-Za-z])'(?=[A-Za-z])/g, "");
   if (apostropheCount === 1) {
@@ -55,6 +60,12 @@ export function shouldIgnorePostCompositionCandidate(
   if (candidates.has(text) || candidates.has(normalized)) return true;
 
   for (const candidate of candidates) {
+    if (
+      text.startsWith(candidate) &&
+      shouldIgnorePostCompositionCandidate(text.slice(candidate.length), candidates)
+    ) {
+      return true;
+    }
     if (shouldIgnorePostCompositionInsert(text, candidate, normalizeCommittedCompositionText(candidate))) {
       return true;
     }
@@ -77,11 +88,11 @@ export function shouldIgnorePostCompositionInsert(
   );
 }
 
-export function shouldLetBrowserRenderCompositionPreview(
+export function shouldSuppressBrowserCompositionPreview(
   inputType: string,
   isComposing: boolean,
 ): boolean {
-  return isComposing && inputType === "insertCompositionText";
+  return isComposing && (inputType === "insertCompositionText" || inputType === "insertText");
 }
 
 export function attachMacWebKitShiftInputFix(term: TerminalWithInput): () => void {
@@ -141,6 +152,25 @@ export function attachLinuxIMEFix(
   let ignoredPostCompositionCandidates = new Set<string>();
   let ignorePostCompositionUntil = 0;
 
+  const clearTextarea = () => {
+    textarea.value = "";
+    try {
+      textarea.setSelectionRange(0, 0);
+    } catch {
+      // Some WebKit IME states reject selection changes while committing.
+    }
+  };
+
+  const clearTextareaNowAndNextFrame = () => {
+    clearTextarea();
+    const schedule =
+      typeof window !== "undefined" && typeof window.requestAnimationFrame === "function"
+        ? window.requestAnimationFrame.bind(window)
+        : (callback: FrameRequestCallback) =>
+            globalThis.setTimeout(() => callback(performance.now()), 0);
+    schedule(() => clearTextarea());
+  };
+
   const sendText = (text: string | null | undefined) => {
     if (!text) return;
     onDataCallback(normalizeCommittedCompositionText(text));
@@ -149,11 +179,13 @@ export function attachLinuxIMEFix(
   const handleCompositionStartCapture = (event: CompositionEvent) => {
     isComposing = true;
     compositionText = "";
+    clearTextareaNowAndNextFrame();
     void event;
   };
 
   const handleCompositionUpdateCapture = (event: CompositionEvent) => {
     compositionText = event.data ?? "";
+    clearTextareaNowAndNextFrame();
   };
 
   const handleCompositionEndCapture = (event: CompositionEvent) => {
@@ -164,40 +196,44 @@ export function attachLinuxIMEFix(
     const normalized = normalizeCommittedCompositionText(text);
     ignoredPostCompositionCandidates = buildPostCompositionIgnoredCandidates(text, preeditText);
     ignorePostCompositionUntil = performance.now() + POST_COMPOSITION_REPLAY_IGNORE_MS;
-    textarea.value = "";
+    clearTextareaNowAndNextFrame();
     event.stopImmediatePropagation();
     sendText(normalized);
   };
 
   const handleBeforeInputCapture = (event: InputEvent) => {
     if (
-      event.inputType === "insertText" &&
+      (event.inputType === "insertText" || event.inputType === "insertCompositionText") &&
       event.data &&
       performance.now() <= ignorePostCompositionUntil &&
       shouldIgnorePostCompositionCandidate(event.data, ignoredPostCompositionCandidates)
     ) {
-      textarea.value = "";
+      clearTextareaNowAndNextFrame();
       event.preventDefault();
       event.stopImmediatePropagation();
       ignoredPostCompositionCandidates = new Set<string>();
       return;
     }
 
-    if (shouldLetBrowserRenderCompositionPreview(event.inputType, isComposing)) {
+    if (shouldSuppressBrowserCompositionPreview(event.inputType, isComposing)) {
       compositionText = event.data ?? compositionText;
+      clearTextareaNowAndNextFrame();
+      event.preventDefault();
       event.stopImmediatePropagation();
       return;
     }
 
     if (event.inputType === "insertCompositionText") {
       compositionText = event.data ?? compositionText;
+      clearTextareaNowAndNextFrame();
+      event.preventDefault();
       event.stopImmediatePropagation();
       return;
     }
 
     const symbol = getPrintableSymbolInput(event.data);
     if (symbol !== null && isSymbolInputType(event.inputType)) {
-      textarea.value = "";
+      clearTextareaNowAndNextFrame();
       event.preventDefault();
       event.stopImmediatePropagation();
       sendText(symbol);
@@ -205,7 +241,15 @@ export function attachLinuxIMEFix(
     }
 
     if (isComposing) {
+      clearTextareaNowAndNextFrame();
       event.preventDefault();
+      event.stopImmediatePropagation();
+    }
+  };
+
+  const handleInputCapture = (event: Event) => {
+    if (isComposing || performance.now() <= ignorePostCompositionUntil) {
+      clearTextareaNowAndNextFrame();
       event.stopImmediatePropagation();
     }
   };
@@ -234,6 +278,7 @@ export function attachLinuxIMEFix(
   textarea.addEventListener("compositionupdate", handleCompositionUpdateCapture, true);
   textarea.addEventListener("compositionend", handleCompositionEndCapture, true);
   textarea.addEventListener("beforeinput", handleBeforeInputCapture, true);
+  textarea.addEventListener("input", handleInputCapture, true);
   textarea.addEventListener("keydown", handleKeyDownCapture, true);
 
   return {
@@ -242,6 +287,7 @@ export function attachLinuxIMEFix(
       textarea.removeEventListener("compositionupdate", handleCompositionUpdateCapture, true);
       textarea.removeEventListener("compositionend", handleCompositionEndCapture, true);
       textarea.removeEventListener("beforeinput", handleBeforeInputCapture, true);
+      textarea.removeEventListener("input", handleInputCapture, true);
       textarea.removeEventListener("keydown", handleKeyDownCapture, true);
       disposable.dispose();
     },

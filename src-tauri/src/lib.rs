@@ -2,6 +2,7 @@ use parking_lot::Mutex;
 use std::collections::{HashMap, HashSet};
 use std::io::Write;
 use std::sync::Arc;
+use tauri::Manager;
 
 use usage::CodexRpcClient;
 
@@ -110,6 +111,9 @@ fn hide_main_window(window: tauri::Window) {
 pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
+            let dbx_state = crate::database::dbx_state::DbxState::new_blocking()
+                .expect("Failed to initialize DBX database state");
+            app.manage(dbx_state);
             // 后台预热 login shell 环境，避免第一次启动任务时阻塞
             std::thread::spawn(|| {
                 crate::app_settings::get_login_shell_path();
@@ -254,14 +258,65 @@ pub fn run() {
             app_settings::detect_agent_version,
             app_settings::get_system_fonts,
             conda::detect_conda_environments,
-            database::db_load_connections,
-            database::db_save_connections,
-            database::db_inspect,
-            database::db_query_table,
-            database::db_update_cell,
-            database::db_insert_row,
-            database::db_delete_row,
-            database::db_execute_sql,
+            database::legacy_sqlite::db_load_connections,
+            database::legacy_sqlite::db_save_connections,
+            database::legacy_sqlite::db_read_sql_file,
+            database::legacy_sqlite::db_inspect,
+            database::legacy_sqlite::db_query_table,
+            database::legacy_sqlite::db_update_cell,
+            database::legacy_sqlite::db_insert_row,
+            database::legacy_sqlite::db_delete_row,
+            database::legacy_sqlite::db_execute_sql,
+            database::connections::dbx_list_connections,
+            database::connections::dbx_save_connection,
+            database::connections::dbx_delete_connection,
+            database::connections::dbx_test_connection,
+            database::connections::dbx_connect,
+            database::connections::dbx_disconnect,
+            database::schema::dbx_list_databases,
+            database::schema::dbx_list_schemas,
+            database::schema::dbx_list_objects,
+            database::schema::dbx_get_columns,
+            database::schema::dbx_get_table_ddl,
+            database::query::dbx_execute_query,
+            database::query::dbx_execute_multi,
+            database::query::dbx_cancel_query,
+            database::query::dbx_close_result_session,
+            database::grid::dbx_query_table_data,
+            database::grid::dbx_update_cell,
+            database::grid::dbx_insert_row,
+            database::grid::dbx_delete_rows,
+            database::grid::dbx_preview_grid_sql,
+            database::import_export::dbx_export_table_csv,
+            database::import_export::dbx_export_table_json,
+            database::import_export::dbx_export_table_markdown,
+            database::import_export::dbx_export_table_insert_sql,
+            database::import_export::dbx_export_table_update_sql,
+            database::import_export::dbx_export_table_xlsx,
+            database::import_export::dbx_preview_table_import_file,
+            database::import_export::dbx_import_table_file,
+            database::import_export::dbx_export_database,
+            database::import_export::dbx_execute_sql_file,
+            database::redis::dbx_redis_list_databases,
+            database::redis::dbx_redis_scan_keys,
+            database::redis::dbx_redis_get_value,
+            database::redis::dbx_redis_set_value,
+            database::redis::dbx_redis_delete_key,
+            database::redis::dbx_redis_set_ttl,
+            database::mongo::dbx_mongo_list_databases,
+            database::mongo::dbx_mongo_list_collections,
+            database::mongo::dbx_mongo_find_documents,
+            database::mongo::dbx_mongo_insert_document,
+            database::mongo::dbx_mongo_update_document,
+            database::mongo::dbx_mongo_delete_documents,
+            database::drivers::dbx_driver_manifest,
+            database::transfer::dbx_start_transfer,
+            database::transfer::dbx_cancel_transfer,
+            database::transfer::dbx_prepare_schema_diff,
+            database::transfer::dbx_generate_schema_sync_sql,
+            database::transfer::dbx_prepare_data_compare,
+            database::transfer::dbx_build_data_compare_sync_plan,
+            database::transfer::dbx_prepare_data_compare_from_tables,
             docker::list_docker_resources,
             docker::docker_container_action,
             docker::docker_container_logs,

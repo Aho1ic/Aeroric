@@ -1,9 +1,16 @@
-import { describe, expect, it } from "vitest";
+import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import React from "react";
+import { describe, expect, it, vi } from "vitest";
+import { I18nProvider } from "../i18n";
 import type { SshConnection } from "../types";
 import {
   deriveRemoteProjectName,
+  SshProjectPage,
   sshProjectInputForConnection,
 } from "../components/ssh/SshProjectDialog";
+import { SshConnectionList } from "../components/ssh/SshConnectionList";
+import { SshWorkspace } from "../components/ssh/SshWorkspace";
 
 function connection(remotePath?: string): SshConnection {
   return {
@@ -30,5 +37,106 @@ describe("SSH project opening", () => {
       name: "Prod",
     });
     expect(sshProjectInputForConnection(connection())).toBeNull();
+  });
+
+  it("copies the saved SSH password from a project card", async () => {
+    const user = userEvent.setup();
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      value: { writeText },
+      configurable: true,
+    });
+
+    render(
+      React.createElement(
+        I18nProvider,
+        null,
+        React.createElement(SshProjectPage, {
+          connections: [{ ...connection("/srv/apps/aeroric"), password: "secret-pass" }],
+          onConnectionsChange: () => {},
+          onClose: () => {},
+          onOpen: () => {},
+        }),
+      ),
+    );
+
+    await user.click(screen.getByRole("button", { name: "Copy password" }));
+
+    expect(writeText).toHaveBeenCalledWith("secret-pass");
+  });
+
+  it("disables project-card password copy when no password is saved", () => {
+    render(
+      React.createElement(
+        I18nProvider,
+        null,
+        React.createElement(SshProjectPage, {
+          connections: [connection("/srv/apps/aeroric")],
+          onConnectionsChange: () => {},
+          onClose: () => {},
+          onOpen: () => {},
+        }),
+      ),
+    );
+
+    expect(screen.getByRole("button", { name: "Copy password" })).toBeDisabled();
+  });
+
+  it("copies the saved SSH password from a sidebar SSH connection card", async () => {
+    const user = userEvent.setup();
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      value: { writeText },
+      configurable: true,
+    });
+
+    render(
+      React.createElement(
+        I18nProvider,
+        null,
+        React.createElement(SshConnectionList, {
+          connections: [{ ...connection("/srv/apps/aeroric"), password: "card-secret" }],
+          selectedId: null,
+          onSelect: vi.fn(),
+          onCreate: vi.fn(),
+          onEdit: vi.fn(),
+          onDelete: vi.fn(),
+        }),
+      ),
+    );
+
+    await user.click(screen.getByRole("button", { name: "Copy password" }));
+
+    expect(writeText).toHaveBeenCalledWith("card-secret");
+  });
+
+  it("copies the saved SSH password from a project page SSH workspace card", async () => {
+    const user = userEvent.setup();
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      value: { writeText },
+      configurable: true,
+    });
+
+    render(
+      React.createElement(
+        I18nProvider,
+        null,
+        React.createElement(SshWorkspace, {
+          connections: [{ ...connection("/srv/apps/aeroric"), password: "workspace-secret" }],
+          onConnectionsChange: vi.fn(),
+          active: true,
+          themeVariant: "light",
+          terminalFontSize: 11,
+          monoFontFamily: "monospace",
+        }),
+      ),
+    );
+
+    const copyButton = screen.getByRole("button", { name: "Copy password" });
+    await user.click(copyButton);
+
+    expect(writeText).toHaveBeenCalledWith("workspace-secret");
+    expect(copyButton).toHaveAttribute("data-copied", "true");
   });
 });

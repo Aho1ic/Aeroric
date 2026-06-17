@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Edit3, FolderOpen, Plus, Server, Users } from "lucide-react";
+import { Copy, Edit3, FolderOpen, Plus, Server, Users } from "lucide-react";
 import type { SshConnection } from "../../types";
 import { useI18n } from "../../i18n";
 import s from "../../styles";
@@ -38,6 +38,12 @@ export function sshProjectInputForConnection(connection: SshConnection): SshProj
 
 function connectionTarget(connection: SshConnection): string {
   return `${connection.username}@${connection.host}:${connection.port}`;
+}
+
+async function copyConnectionPassword(connection: SshConnection) {
+  const password = connection.password ?? "";
+  if (!password || !navigator.clipboard?.writeText) return;
+  await navigator.clipboard.writeText(password);
 }
 
 function groupConnections(connections: SshConnection[], fallbackGroup: string) {
@@ -191,6 +197,7 @@ export function SshProjectPage({
                   {grouped.map((connection) => {
                     const selected = connection.id === selectedConnection?.id;
                     const hasRemotePath = Boolean(connection.remotePath?.trim());
+                    const canCopyPassword = Boolean(connection.password?.trim());
                     return (
                       <div key={connection.id} style={selected ? s.sshProjectCardSelected : s.sshProjectCard}>
                         <button
@@ -226,6 +233,23 @@ export function SshProjectPage({
                           onClick={() => setEditingConnection(connection)}
                         >
                           <Edit3 size={14} />
+                        </button>
+                        <button
+                          type="button"
+                          title={canCopyPassword ? t("ssh.copyPassword") : t("ssh.noPasswordHint")}
+                          aria-label={t("ssh.copyPassword")}
+                          style={{
+                            ...s.sshProjectCardEdit,
+                            opacity: canCopyPassword ? 1 : 0.35,
+                            cursor: canCopyPassword ? "pointer" : "not-allowed",
+                          }}
+                          disabled={!canCopyPassword}
+                          onClick={() => {
+                            if (!canCopyPassword) return;
+                            void copyConnectionPassword(connection);
+                          }}
+                        >
+                          <Copy size={14} />
                         </button>
                       </div>
                     );

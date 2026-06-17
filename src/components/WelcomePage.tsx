@@ -1,4 +1,4 @@
-import { useCallback, useState, useMemo } from "react";
+import { useCallback, useEffect, useRef, useState, useMemo } from "react";
 import {
   Search,
   FolderOpen,
@@ -29,7 +29,7 @@ import type {
   SkillHubConfig,
   SshConnection,
 } from "../types";
-import { isRemoteProject } from "../types";
+import { isRemoteProject, resolveProjectLocation } from "../types";
 import { getAvatarGradient, shortenPath } from "../utils";
 import { ProjectAvatar } from "./ProjectAvatar";
 import { SidebarFooterActions } from "./SidebarFooterActions";
@@ -40,6 +40,7 @@ import { SshProjectPage, type SshProjectInput } from "./ssh/SshProjectDialog";
 import { SftpPanel } from "./sftp/SftpPanel";
 import { DockerServiceView } from "./docker/DockerServiceView";
 import { DatabaseView } from "./database/DatabaseView";
+import RecursiveHeroCanvas from "./recursive-hero-effect/RecursiveHeroCanvas";
 import { useI18n, pluralKey } from "../i18n";
 import s from "../styles";
 
@@ -99,6 +100,16 @@ function WelcomeEmpty({ hasProjects, onOpen }: { hasProjects: boolean; onOpen: (
       )}
     </div>
   );
+}
+
+export function projectMetaLabel(project: Project, sshConnections: SshConnection[]): string {
+  const location = resolveProjectLocation(project);
+  if (location.kind === "ssh") {
+    const connection = sshConnections.find((item) => item.id === location.connectionId);
+    if (connection) return `${connection.username},${connection.host}`;
+    return location.remotePath;
+  }
+  return shortenPath(project.path);
 }
 
 export function WelcomePage({
@@ -164,11 +175,17 @@ export function WelcomePage({
   const [query, setQuery] = useState("");
   const [hov, setHov] = useState<string | null>(null);
   const [searchFocused, setSearchFocused] = useState(false);
+  const [editingProjectId, setEditingProjectId] = useState<string | null>(null);
+  const [editingProjectName, setEditingProjectName] = useState("");
+  const editingProjectNameRef = useRef("");
+  const editingProjectInputRef = useRef<HTMLInputElement | null>(null);
+  const suppressProjectClickRef = useRef<string | null>(null);
   const [view, setView] = useState<
     "projects" | "timeline" | "skills" | "docker" | "ssh" | "database"
   >("projects");
   const [openProjectMenu, setOpenProjectMenu] = useState(false);
   const [sftpOpen, setSftpOpen] = useState(false);
+  const showRecursiveBackground = themeVariant === "light";
   const sshGroups = useMemo(
     () =>
       Array.from(
@@ -193,8 +210,48 @@ export function WelcomePage({
     );
   }, [projects, query]);
 
+  const startProjectRename = useCallback((project: Project) => {
+    setEditingProjectId(project.id);
+    setEditingProjectName(project.name);
+    editingProjectNameRef.current = project.name;
+  }, []);
+
+  const cancelProjectRename = useCallback(() => {
+    setEditingProjectId(null);
+    setEditingProjectName("");
+    editingProjectNameRef.current = "";
+  }, []);
+
+  const commitProjectRename = useCallback(
+    (projectId: string) => {
+      const nextName = editingProjectNameRef.current.trim();
+      const currentName = allProjects.find((project) => project.id === projectId)?.name ?? "";
+      if (nextName && nextName !== currentName) {
+        onRenameProject(projectId, nextName);
+      }
+      cancelProjectRename();
+    },
+    [allProjects, cancelProjectRename, onRenameProject],
+  );
+
+  useEffect(() => {
+    if (!editingProjectId) return;
+    const frame = window.requestAnimationFrame(() => {
+      const input = editingProjectInputRef.current;
+      if (!input) return;
+      input.focus();
+      input.select();
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [editingProjectId]);
+
   return (
     <div style={s.welcomeBody}>
+      {showRecursiveBackground && (
+        <div data-testid="welcome-recursive-background" style={s.welcomeRecursiveBackground}>
+          <RecursiveHeroCanvas className="recursive-hero-effect__canvas--welcome" />
+        </div>
+      )}
       <div style={s.welcomeMain}>
         <div style={s.sidebar}>
           <div style={s.sidebarBrand}>
@@ -404,17 +461,39 @@ export function WelcomePage({
               ) : (
                 filtered.map((p) => {
                   const [from] = getAvatarGradient(p.name);
+                  const isEditingProject = editingProjectId === p.id;
                   return (
-                    <button
+                    <div
                       key={p.id}
+                      role="button"
+                      tabIndex={0}
                       style={{
                         ...s.projectItem,
-                        background: hov === p.id ? "var(--bg-hover)" : "transparent",
+                        background: "transparent",
                         borderColor: hov === p.id ? "var(--border-medium)" : "transparent",
+                        boxShadow: hov === p.id ? "inset 0 0 0 1px var(--border-dim)" : "none",
+                      }}
+                      onMouseDown={(event) => {
+                        if (!isEditingProject) return;
+                        if (event.target === editingProjectInputRef.current) return;
+                        suppressProjectClickRef.current = p.id;
                       }}
                       onMouseEnter={() => setHov(p.id)}
                       onMouseLeave={() => setHov(null)}
-                      onClick={() => onProjectClick(p)}
+                      onClick={(event) => {
+                        if (isEditingProject || suppressProjectClickRef.current === p.id) {
+                          suppressProjectClickRef.current = null;
+                          event.preventDefault();
+                          return;
+                        }
+                        onProjectClick(p);
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key !== "Enter" && e.key !== " ") return;
+                        e.preventDefault();
+                        if (isEditingProject) return;
+                        onProjectClick(p);
+                      }}
                     >
                       <ProjectAvatar
                         name={p.name}
@@ -423,8 +502,36 @@ export function WelcomePage({
                       />
 
                       <div style={{ flex: 1, minWidth: 0 }}>
-                        <div style={s.projectName}>{p.name}</div>
-                        <div style={s.projectMeta}>{shortenPath(p.path)}</div>
+                        {isEditingProject ? (
+                          <input
+                            aria-label={t("welcome.renameProject")}
+                            ref={editingProjectInputRef}
+                            value={editingProjectName}
+                            autoCapitalize="off"
+                            autoCorrect="off"
+                            spellCheck={false}
+                            style={s.projectNameInput}
+                            onChange={(event) => {
+                              const nextName = event.currentTarget.value;
+                              setEditingProjectName(nextName);
+                              editingProjectNameRef.current = nextName;
+                            }}
+                            onBlur={() => commitProjectRename(p.id)}
+                            onKeyDown={(event) => {
+                              event.stopPropagation();
+                              if (event.key === "Enter") {
+                                event.preventDefault();
+                                commitProjectRename(p.id);
+                              } else if (event.key === "Escape") {
+                                event.preventDefault();
+                                cancelProjectRename();
+                              }
+                            }}
+                          />
+                        ) : (
+                          <div style={s.projectName}>{p.name}</div>
+                        )}
+                        <div style={s.projectMeta}>{projectMetaLabel(p, sshConnections)}</div>
                       </div>
 
                       {isRemoteProject(p) ? (
@@ -495,10 +602,13 @@ export function WelcomePage({
                         onMouseLeave={(e) => {
                           (e.currentTarget as HTMLButtonElement).style.color = "var(--text-muted)";
                         }}
+                        onMouseDown={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                        }}
                         onClick={(e) => {
                           e.stopPropagation();
-                          const nextName = window.prompt(t("welcome.renameProject"), p.name)?.trim();
-                          if (nextName) onRenameProject(p.id, nextName);
+                          startProjectRename(p);
                         }}
                         title={t("welcome.renameProject")}
                       >
@@ -534,7 +644,7 @@ export function WelcomePage({
                       >
                         <Trash2 size={14} strokeWidth={1.8} />
                       </button>
-                    </button>
+                    </div>
                   );
                 })
               )}

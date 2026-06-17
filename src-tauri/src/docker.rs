@@ -1,5 +1,5 @@
 use std::path::PathBuf;
-use std::process::Command;
+use std::process::{Command, Output};
 
 use serde::{Deserialize, Serialize};
 
@@ -72,12 +72,47 @@ fn docker_candidates() -> Vec<PathBuf> {
     candidates
 }
 
+fn command_error(label: &str, output: &Output) -> String {
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    if stderr.is_empty() {
+        format!("{} exited with status {}", label, output.status)
+    } else {
+        stderr
+    }
+}
+
+fn should_retry_docker_with_sudo(stderr: &str) -> bool {
+    let normalized = stderr.to_lowercase();
+    normalized.contains("authorized users only")
+        || normalized.contains("permission denied")
+        || normalized.contains("access denied")
+        || normalized.contains("operation not permitted")
+        || normalized.contains("a password is required")
+        || normalized.contains("no tty present")
+        || normalized.contains("a terminal is required")
+        || (normalized.contains("connection to ") && normalized.contains(" closed"))
+}
+
+fn run_local_docker_command(
+    docker: &PathBuf,
+    args: &[String],
+    sudo: bool,
+) -> std::io::Result<Output> {
+    let mut command = if sudo {
+        let mut command = Command::new("sudo");
+        command.arg("-n").arg(docker);
+        command
+    } else {
+        Command::new(docker)
+    };
+    crate::subprocess::configure_background_command(&mut command);
+    command.args(args).output()
+}
+
 fn run_local_docker_args(args: &[String]) -> Result<String, String> {
     let mut last_error = None;
     for docker in docker_candidates() {
-        let mut command = Command::new(&docker);
-        crate::subprocess::configure_background_command(&mut command);
-        let output = match command.args(args).output() {
+        let output = match run_local_docker_command(&docker, args, false) {
             Ok(output) => output,
             Err(err) => {
                 last_error = Some(err.to_string());
@@ -87,12 +122,23 @@ fn run_local_docker_args(args: &[String]) -> Result<String, String> {
         if output.status.success() {
             return String::from_utf8(output.stdout).map_err(|err| err.to_string());
         }
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        last_error = Some(if stderr.is_empty() {
-            format!("docker exited with status {}", output.status)
-        } else {
-            stderr
-        });
+        let error = command_error("docker", &output);
+        if should_retry_docker_with_sudo(&error) {
+            match run_local_docker_command(&docker, args, true) {
+                Ok(sudo_output) if sudo_output.status.success() => {
+                    return String::from_utf8(sudo_output.stdout).map_err(|err| err.to_string());
+                }
+                Ok(sudo_output) => {
+                    last_error = Some(command_error("sudo docker", &sudo_output));
+                    continue;
+                }
+                Err(err) => {
+                    last_error = Some(err.to_string());
+                    continue;
+                }
+            }
+        }
+        last_error = Some(error);
     }
     Err(last_error.unwrap_or_else(|| "Docker CLI not found".to_string()))
 }
@@ -104,6 +150,35 @@ fn build_remote_docker_command(args: &[String]) -> String {
         .collect::<Vec<_>>()
         .join(" ");
     format!("sh -lc {}", crate::ssh::shell_word_posix(&docker_command))
+}
+
+fn build_remote_docker_sudo_no_password_command(args: &[String]) -> String {
+    let docker_command = std::iter::once("docker".to_string())
+        .chain(args.iter().cloned())
+        .map(|arg| crate::ssh::shell_word_posix(&arg))
+        .collect::<Vec<_>>()
+        .join(" ");
+    format!(
+        "sudo -n sh -lc {}",
+        crate::ssh::shell_word_posix(&docker_command)
+    )
+}
+
+fn build_remote_docker_sudo_password_command(args: &[String], password: &str) -> String {
+    let docker_command = std::iter::once("docker".to_string())
+        .chain(args.iter().cloned())
+        .map(|arg| crate::ssh::shell_word_posix(&arg))
+        .collect::<Vec<_>>()
+        .join(" ");
+    format!(
+        "printf '%s\\n' {} | sudo -S -p '' sh -lc {}",
+        crate::ssh::shell_word_posix(password),
+        crate::ssh::shell_word_posix(&docker_command)
+    )
+}
+
+fn should_retry_remote_docker_with_sudo(stderr: &str) -> bool {
+    should_retry_docker_with_sudo(stderr)
 }
 
 fn run_remote_docker_args(
@@ -118,12 +193,41 @@ fn run_remote_docker_args(
     if output.status.success() {
         return String::from_utf8(output.stdout).map_err(|err| err.to_string());
     }
-    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-    Err(if stderr.is_empty() {
-        format!("remote docker exited with status {}", output.status)
-    } else {
-        stderr
-    })
+    let stderr = command_error("remote docker", &output);
+    if should_retry_remote_docker_with_sudo(&stderr) {
+        let sudo_no_password_output = crate::ssh::std_ssh_command_for_remote_command(
+            &connection,
+            build_remote_docker_sudo_no_password_command(args),
+        )
+        .output()
+        .map_err(|err| err.to_string())?;
+        if sudo_no_password_output.status.success() {
+            return String::from_utf8(sudo_no_password_output.stdout)
+                .map_err(|err| err.to_string());
+        }
+        let sudo_no_password_error = command_error("remote sudo docker", &sudo_no_password_output);
+
+        let password = connection
+            .password
+            .as_ref()
+            .map(|value| value.trim())
+            .filter(|value| !value.is_empty());
+        if let Some(password) = password {
+            let sudo_password_output = crate::ssh::std_ssh_command_for_remote_command(
+                &connection,
+                build_remote_docker_sudo_password_command(args, password),
+            )
+            .output()
+            .map_err(|err| err.to_string())?;
+            if sudo_password_output.status.success() {
+                return String::from_utf8(sudo_password_output.stdout)
+                    .map_err(|err| err.to_string());
+            }
+            return Err(command_error("remote sudo docker", &sudo_password_output));
+        }
+        return Err(sudo_no_password_error);
+    }
+    Err(stderr)
 }
 
 fn run_docker_args(target: DockerTarget, args: Vec<String>) -> Result<String, String> {
@@ -324,7 +428,9 @@ pub async fn docker_tag_image(
 #[cfg(test)]
 mod tests {
     use super::{
-        build_remote_docker_command, parse_containers, parse_images, strip_docker_created_timezone,
+        build_remote_docker_command, build_remote_docker_sudo_no_password_command,
+        build_remote_docker_sudo_password_command, parse_containers, parse_images,
+        should_retry_remote_docker_with_sudo, strip_docker_created_timezone,
     };
 
     #[test]
@@ -377,5 +483,70 @@ mod tests {
         assert!(command.contains("docker tag"));
         assert!(command.contains("repo/app"));
         assert!(command.contains("'"));
+    }
+
+    #[test]
+    fn builds_remote_docker_sudo_no_password_command_with_shell_quoting() {
+        let command =
+            build_remote_docker_sudo_no_password_command(&["ps".to_string(), "--all".to_string()]);
+
+        assert!(command.starts_with("sudo -n sh -lc "));
+        assert!(command.contains("docker ps"));
+    }
+
+    #[test]
+    fn builds_remote_docker_sudo_password_command_with_shell_quoting() {
+        let command = build_remote_docker_sudo_password_command(
+            &["ps".to_string(), "--all".to_string()],
+            "pass word",
+        );
+
+        assert!(command.contains("sudo -S -p ''"));
+        assert!(command.contains("printf '%s\\n' 'pass word'"));
+        assert!(command.contains("docker ps"));
+    }
+
+    #[test]
+    fn builds_remote_docker_sudo_password_command_for_image_delete() {
+        let command = build_remote_docker_sudo_password_command(
+            &[
+                "image".to_string(),
+                "rm".to_string(),
+                "repo/app:latest".to_string(),
+            ],
+            "pa'ss word",
+        );
+
+        assert!(command.contains("printf '%s\\n' 'pa'\\''ss word'"));
+        assert!(command.contains("sudo -S -p ''"));
+        assert!(command.contains("docker image rm repo/app:latest"));
+    }
+
+    #[test]
+    fn detects_remote_docker_permission_errors_for_sudo_retry() {
+        assert!(should_retry_remote_docker_with_sudo(
+            "Authorized users only. All activities may be monitored and reported."
+        ));
+        assert!(should_retry_remote_docker_with_sudo(
+            "Got permission denied while trying to connect to the Docker daemon socket"
+        ));
+        assert!(should_retry_remote_docker_with_sudo(
+            "dial unix /var/run/docker.sock: connect: permission denied"
+        ));
+        assert!(should_retry_remote_docker_with_sudo(
+            "sudo: a password is required"
+        ));
+        assert!(should_retry_remote_docker_with_sudo(
+            "sudo: a terminal is required to read the password"
+        ));
+        assert!(should_retry_remote_docker_with_sudo(
+            "Connection to 192.168.10.100 closed."
+        ));
+        assert!(!should_retry_remote_docker_with_sudo(
+            "Cannot connect to the Docker daemon"
+        ));
+        assert!(!should_retry_remote_docker_with_sudo(
+            "Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?"
+        ));
     }
 }

@@ -199,7 +199,8 @@ fn release_claimed_session_paths(task_manager: &TaskManager, task_id: &str) {
 pub(crate) fn setup_env(cmd: &mut CommandBuilder) {
     let login_env = crate::app_settings::get_login_shell_env();
     for (key, value) in login_env {
-        if key == "NO_COLOR" || key == "CLICOLOR" || key == "CLICOLOR_FORCE" || key == "FORCE_COLOR" {
+        if key == "NO_COLOR" || key == "CLICOLOR" || key == "CLICOLOR_FORCE" || key == "FORCE_COLOR"
+        {
             continue;
         }
         cmd.env(key, value);

@@ -5,7 +5,7 @@ import {
   POST_COMPOSITION_REPLAY_IGNORE_MS,
   shouldIgnorePostCompositionCandidate,
   shouldIgnorePostCompositionInsert,
-  shouldLetBrowserRenderCompositionPreview,
+  shouldSuppressBrowserCompositionPreview,
 } from "../components/terminalInputFix";
 import { normalizeEditorCompositionText } from "../components/new-task/PromptEditor";
 
@@ -36,7 +36,17 @@ describe("terminal input fixes", () => {
 
     expect(shouldIgnorePostCompositionCandidate("ceshi", candidates)).toBe(true);
     expect(shouldIgnorePostCompositionCandidate("测试", candidates)).toBe(true);
+    expect(shouldIgnorePostCompositionCandidate("测试ceshi", candidates)).toBe(true);
     expect(shouldIgnorePostCompositionCandidate("hello", candidates)).toBe(false);
+  });
+
+  it("removes pinyin preedit text appended after committed Chinese text", () => {
+    expect(normalizeCommittedCompositionText("是的shi'de")).toBe("是的");
+    expect(normalizeCommittedCompositionText("测试ce'shi")).toBe("测试");
+  });
+
+  it("keeps intentional Chinese and English mixed input", () => {
+    expect(normalizeCommittedCompositionText("测试abc")).toBe("测试abc");
   });
 
   it("keeps the post-composition replay guard long enough for delayed macOS WebKit insertText", () => {
@@ -51,10 +61,11 @@ describe("terminal input fixes", () => {
     expect(shouldIgnorePostCompositionCandidate("shuo", candidates)).toBe(false);
   });
 
-  it("lets WebKit render live IME composition text before commit", () => {
-    expect(shouldLetBrowserRenderCompositionPreview("insertCompositionText", true)).toBe(true);
-    expect(shouldLetBrowserRenderCompositionPreview("insertText", true)).toBe(false);
-    expect(shouldLetBrowserRenderCompositionPreview("insertCompositionText", false)).toBe(false);
+  it("suppresses WebKit live IME composition preview in terminal textarea", () => {
+    expect(shouldSuppressBrowserCompositionPreview("insertCompositionText", true)).toBe(true);
+    expect(shouldSuppressBrowserCompositionPreview("insertText", true)).toBe(true);
+    expect(shouldSuppressBrowserCompositionPreview("insertCompositionText", false)).toBe(false);
+    expect(shouldSuppressBrowserCompositionPreview("insertText", false)).toBe(false);
   });
 
   it("normalizes committed pinyin text inside the new-task editor", () => {
