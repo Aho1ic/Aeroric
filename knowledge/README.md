@@ -17,3 +17,4 @@
 | 文档 | 描述 | 标签 |
 |------|------|------|
 | [Claude Code 与 Codex 的 Hook 支持](./references/agent-hooks-support.md) | 两个 agent 当前版本的 hook 事件/payload 字段/配置方式/信任机制全量对照，以及 Aeroric 订阅哪些事件、为何这样映射，面向 hook 链路开发与排查 | `hooks`, `claude-code`, `codex`, `event-watcher`, `session-discovery`, `input-required` |
+| [Aeroric 多项 Bug 提示词处理流程](./references/aeroric-bug-report-workflow.md) | 将“逐个修改、先复现、参考截图、检查整个项目、测试审查、打包替换”等中文提示词映射为固定工程流程，面向下次多 bug 修复任务前的必读校准 | `bug-report`, `workflow`, `review`, `packaging`, `aeroric` |

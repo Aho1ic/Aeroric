@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import { confirm, open as openDialog } from "@tauri-apps/plugin-dialog";
 import {
   ChevronLeft,
   ChevronRight,
@@ -15,6 +15,11 @@ import {
   Server,
   Trash2,
   Wrench,
+  GitCompare,
+  GitMerge,
+  Network,
+  Table2,
+  Copy,
 } from "lucide-react";
 import type {
   AeroricDbConnectionConfig,
@@ -22,6 +27,7 @@ import type {
   DbEndpoint,
   DbExecuteResult,
   DatabaseDriverManifest,
+  DbxColumnInfo,
   DbxDatabaseType,
   DbxDatabaseInfo,
   DbxObjectInfo,
@@ -34,6 +40,11 @@ import type {
 import { useI18n } from "../../i18n";
 import { databaseApi } from "../../lib/databaseApi";
 import s from "../../styles";
+import { DatabaseAdvancedTools, type DatabaseAdvancedToolMode } from "./DatabaseAdvancedTools";
+import { ErDiagramPanel } from "./ErDiagramPanel";
+import { MongoBrowser } from "./MongoBrowser";
+import { RedisBrowser } from "./RedisBrowser";
+import { TableStructurePanel } from "./TableStructurePanel";
 
 interface Props {
   projectRoot?: string;
@@ -46,7 +57,24 @@ const PAGE_SIZE = 100;
 type DatabaseRow = { rowId?: number | null; keyValues: Array<{ column: string; value: unknown }> };
 type DbWizardStep = "type" | "config";
 type DbConfigTab = "connection" | "tls" | "transport" | "advanced";
-type DbWorkspaceMode = "table" | "query" | "sql-file" | "drivers";
+type DbWorkspaceMode =
+  | "table"
+  | "query"
+  | "sql-file"
+  | "drivers"
+  | "redis"
+  | "mongo"
+  | "transfer"
+  | "schema-diff"
+  | "data-compare"
+  | "er-diagram"
+  | "table-structure";
+type DatabaseContextMenuState = {
+  x: number;
+  y: number;
+  connectionId: string;
+  kind: "legacy" | "dbx";
+} | null;
 type DbProfileKey =
   | "sqlite"
   | "mysql"
@@ -65,19 +93,49 @@ interface DbProfile {
   port: number;
   user: string;
   localFile?: boolean;
+  iconText: string;
 }
 
 const DB_PROFILES: DbProfile[] = [
-  { key: "sqlite", label: "SQLite", accent: "#3f8fce", port: 0, user: "", localFile: true },
-  { key: "mysql", label: "MySQL", accent: "#2f6f9f", port: 3306, user: "root" },
-  { key: "postgres", label: "PostgreSQL", accent: "#336791", port: 5432, user: "postgres" },
-  { key: "redis", label: "Redis", accent: "#d82c20", port: 6379, user: "" },
-  { key: "mongodb", label: "MongoDB", accent: "#13aa52", port: 27017, user: "" },
-  { key: "sqlserver", label: "SQL Server", accent: "#cc2927", port: 1433, user: "sa" },
-  { key: "oracle", label: "Oracle", accent: "#f80000", port: 1521, user: "system" },
-  { key: "duckdb", label: "DuckDB", accent: "#ffd43b", port: 0, user: "", localFile: true },
-  { key: "clickhouse", label: "ClickHouse", accent: "#ffcc01", port: 8123, user: "default" },
+  { key: "sqlite", label: "SQLite", accent: "#3f8fce", port: 0, user: "", localFile: true, iconText: "S" },
+  { key: "mysql", label: "MySQL", accent: "#2f6f9f", port: 3306, user: "root", iconText: "My" },
+  { key: "postgres", label: "PostgreSQL", accent: "#336791", port: 5432, user: "postgres", iconText: "Pg" },
+  { key: "redis", label: "Redis", accent: "#d82c20", port: 6379, user: "", iconText: "R" },
+  { key: "mongodb", label: "MongoDB", accent: "#13aa52", port: 27017, user: "", iconText: "M" },
+  { key: "sqlserver", label: "SQL Server", accent: "#cc2927", port: 1433, user: "sa", iconText: "MS" },
+  { key: "oracle", label: "Oracle", accent: "#f80000", port: 1521, user: "system", iconText: "O" },
+  { key: "duckdb", label: "DuckDB", accent: "#b68b00", port: 0, user: "", localFile: true, iconText: "D" },
+  { key: "clickhouse", label: "ClickHouse", accent: "#d6a700", port: 8123, user: "default", iconText: "C" },
 ];
+
+function profileForDbType(dbType: string | null | undefined): DbProfile {
+  return DB_PROFILES.find((profile) => profile.key === dbType) ?? DB_PROFILES[0];
+}
+
+function DatabaseProfileIcon({ profile, size = 23 }: { profile: DbProfile; size?: number }) {
+  return (
+    <span
+      aria-hidden="true"
+      style={{
+        width: size,
+        height: size,
+        borderRadius: profile.key === "redis" ? 5 : profile.key === "mongodb" ? 999 : 7,
+        display: "inline-flex",
+        alignItems: "center",
+        justifyContent: "center",
+        background: `${profile.accent}22`,
+        border: `1px solid ${profile.accent}66`,
+        color: profile.accent,
+        fontSize: Math.max(9, size * 0.42),
+        fontWeight: 800,
+        fontFamily: "var(--font-ui)",
+        lineHeight: 1,
+      }}
+    >
+      {profile.iconText}
+    </span>
+  );
+}
 
 function endpointLabel(endpoint: DbEndpoint): string {
   if (endpoint.kind === "local") return endpoint.path;
@@ -140,6 +198,31 @@ function dbxSqlFileResultsToExecuteResult(results: DbxQueryResult[]): DbExecuteR
   };
 }
 
+function isSqlDbxConnection(connection: AeroricDbConnectionConfig | null | undefined) {
+  return Boolean(connection && !["redis", "mongodb"].includes(connection.dbType));
+}
+
+function configuredTargetDatabase(connection: AeroricDbConnectionConfig | null | undefined): string | null {
+  if (!connection?.dbx || typeof connection.dbx !== "object") return null;
+  const database = (connection.dbx as { database?: unknown }).database;
+  return typeof database === "string" && database.trim() ? database.trim() : null;
+}
+
+function dbxObjectKey(object: DbxObjectInfo) {
+  return object.schema ? `${object.schema}.${object.name}` : object.name;
+}
+
+function GuidancePanel({ title, message }: { title: string; message: string }) {
+  return (
+    <div style={s.databaseWorkspacePanel}>
+      <div>
+        <div style={s.databaseWorkspaceTitle}>{title}</div>
+        <div style={s.databaseDialogHint}>{message}</div>
+      </div>
+    </div>
+  );
+}
+
 export function DatabaseView({
   projectRoot,
 }: Props) {
@@ -186,6 +269,8 @@ export function DatabaseView({
   const [sqlFilePath, setSqlFilePath] = useState("");
   const [sqlFilePreview, setSqlFilePreview] = useState("");
   const [sqlFileTimeoutSecs, setSqlFileTimeoutSecs] = useState("60");
+  const [dbxColumnsByTable, setDbxColumnsByTable] = useState<Record<string, DbxColumnInfo[]>>({});
+  const [contextMenu, setContextMenu] = useState<DatabaseContextMenuState>(null);
 
   const activeConnection = useMemo(
     () => connections.find((connection) => connection.id === activeConnectionId) ?? null,
@@ -198,8 +283,12 @@ export function DatabaseView({
 
   const activeEndpoint = activeConnection?.endpoint ?? null;
   const selectedProfile = DB_PROFILES.find((profile) => profile.key === selectedProfileKey) ?? DB_PROFILES[0];
-  const dbxHasSqlObjectBrowser = Boolean(
-    activeDbxConnection && !["redis", "mongodb"].includes(activeDbxConnection.dbType),
+  const dbxHasSqlObjectBrowser = isSqlDbxConnection(activeDbxConnection);
+  const sqlDbxConnections = useMemo(() => dbxConnections.filter((connection) => isSqlDbxConnection(connection)), [dbxConnections]);
+  const dbxTableObjects = useMemo(() => dbxObjects.filter((object) => object.object_type === "table"), [dbxObjects]);
+  const selectedDbxTable = useMemo(
+    () => activeDbxObject && activeDbxObject.object_type === "table" ? activeDbxObject : dbxTableObjects[0] ?? null,
+    [activeDbxObject, dbxTableObjects],
   );
   const activeSqlCapable = Boolean(activeEndpoint || (activeDbxConnection && dbxHasSqlObjectBrowser));
   const tableRows = queryResult?.rows ?? sqlResult?.rows ?? [];
@@ -208,6 +297,10 @@ export function DatabaseView({
     queryResult?.totalRows && queryResult.totalRows > 0
       ? Math.max(1, Math.ceil(queryResult.totalRows / queryResult.pageSize))
       : null;
+  const activeDbxTargetDatabase = configuredTargetDatabase(activeDbxConnection);
+  const visibleDbxDatabases = activeDbxTargetDatabase
+    ? dbxDatabases.filter((database) => database.name === activeDbxTargetDatabase)
+    : dbxDatabases;
 
   const saveConnections = useCallback((next: DbConnectionConfig[]) => {
     setConnections(next);
@@ -464,12 +557,70 @@ export function DatabaseView({
   }, [projectRoot]);
 
   const handleExecuteSqlFile = useCallback(() => {
-    if (!activeSqlCapable) return;
     setWorkspaceMode("sql-file");
-    setError(null);
+    setError(activeSqlCapable ? null : t("database.selectSqlConnection"));
     setSqlResult(null);
     setQueryResult(null);
-  }, [activeSqlCapable]);
+  }, [activeSqlCapable, t]);
+
+  const openAdvancedTool = useCallback((mode: DatabaseAdvancedToolMode) => {
+    setWorkspaceMode(mode);
+    setError(activeDbxConnection && dbxHasSqlObjectBrowser ? null : t("database.selectDbxSqlConnection"));
+    setSqlResult(null);
+    setQueryResult(null);
+  }, [activeDbxConnection, dbxHasSqlObjectBrowser, t]);
+
+  const loadDbxColumnsForTables = useCallback(
+    async (objects: DbxObjectInfo[], connection = activeDbxConnection, database = activeDbxDatabase) => {
+      if (!connection || !isSqlDbxConnection(connection)) return;
+      const nextColumns: Record<string, DbxColumnInfo[]> = {};
+      for (const object of objects.filter((item) => item.object_type === "table").slice(0, 12)) {
+        try {
+          nextColumns[dbxObjectKey(object)] = await databaseApi.dbxGetColumns(
+            connection.id,
+            object.name,
+            database,
+            object.schema ?? null,
+          );
+        } catch {
+          nextColumns[dbxObjectKey(object)] = [];
+        }
+      }
+      setDbxColumnsByTable((current) => ({ ...current, ...nextColumns }));
+    },
+    [activeDbxConnection, activeDbxDatabase],
+  );
+
+  const openErDiagram = useCallback(async () => {
+    setWorkspaceMode("er-diagram");
+    setError(activeDbxConnection && dbxHasSqlObjectBrowser ? null : t("database.selectDbxSqlConnection"));
+    if (!activeDbxConnection || !dbxHasSqlObjectBrowser) return;
+    let objects = dbxObjects;
+    if (objects.length === 0) {
+      try {
+        objects = await databaseApi.dbxListObjects(activeDbxConnection.id, activeDbxDatabase, null);
+        setDbxObjects(objects);
+      } catch (err) {
+        setError(String(err));
+        return;
+      }
+    }
+    await loadDbxColumnsForTables(objects, activeDbxConnection, activeDbxDatabase);
+  }, [activeDbxConnection, activeDbxDatabase, dbxHasSqlObjectBrowser, dbxObjects, loadDbxColumnsForTables, t]);
+
+  const openTableStructure = useCallback(async () => {
+    setWorkspaceMode("table-structure");
+    setError(activeDbxConnection && dbxHasSqlObjectBrowser ? null : t("database.selectDbxTable"));
+    if (!activeDbxConnection || !dbxHasSqlObjectBrowser) return;
+    const targetObject = selectedDbxTable;
+    if (!targetObject) return;
+    setActiveDbxObject(targetObject);
+    try {
+      await loadDbxColumnsForTables([targetObject], activeDbxConnection, activeDbxDatabase);
+    } catch (err) {
+      setError(String(err));
+    }
+  }, [activeDbxConnection, activeDbxDatabase, dbxHasSqlObjectBrowser, loadDbxColumnsForTables, selectedDbxTable, t]);
 
   const executeSqlFileFromPanel = useCallback(async () => {
     if (!sqlFilePath.trim()) return;
@@ -554,6 +705,7 @@ export function DatabaseView({
 
       if (["redis", "mongodb"].includes(connection.dbType)) {
         setActiveDbxDatabase(null);
+        setWorkspaceMode(connection.dbType === "redis" ? "redis" : "mongo");
         return;
       }
 
@@ -561,8 +713,17 @@ export function DatabaseView({
       try {
         await databaseApi.dbxConnect(connection.id);
         const databases = await databaseApi.dbxListDatabases(connection.id);
-        setDbxDatabases(databases);
-        const database = databases[0]?.name ?? null;
+        const targetDatabase = configuredTargetDatabase(connection);
+        const visibleDatabases = targetDatabase
+          ? databases.filter((database) => database.name === targetDatabase)
+          : databases;
+        if (targetDatabase && visibleDatabases.length === 0) {
+          setActiveDbxDatabase(null);
+          setError(t("database.configuredDatabaseMissing", { database: targetDatabase }));
+          return;
+        }
+        setDbxDatabases(visibleDatabases);
+        const database = targetDatabase ?? visibleDatabases[0]?.name ?? null;
         setActiveDbxDatabase(database);
         const objects = await databaseApi.dbxListObjects(connection.id, database, null);
         setDbxObjects(objects);
@@ -572,7 +733,7 @@ export function DatabaseView({
         setLoading(false);
       }
     },
-    [],
+    [t],
   );
 
   const loadDbxObject = useCallback(
@@ -683,8 +844,14 @@ export function DatabaseView({
   );
 
   const handleDeleteConnection = useCallback(
-    (connectionId: string) => {
-      if (!window.confirm(t("database.confirmDeleteConnection"))) return;
+    async (connectionId: string) => {
+      const ok = await confirm(t("database.confirmDeleteConnection"), {
+        title: t("database.deleteConnection"),
+        kind: "warning",
+        okLabel: t("file.delete"),
+        cancelLabel: t("common.cancel"),
+      });
+      if (!ok) return;
       const next = connections.filter((connection) => connection.id !== connectionId);
       saveConnections(next);
       if (activeConnectionId === connectionId) {
@@ -700,7 +867,13 @@ export function DatabaseView({
 
   const handleDeleteDbxConnection = useCallback(
     async (connectionId: string) => {
-      if (!window.confirm(t("database.confirmDeleteConnection"))) return;
+      const ok = await confirm(t("database.confirmDeleteConnection"), {
+        title: t("database.deleteConnection"),
+        kind: "warning",
+        okLabel: t("file.delete"),
+        cancelLabel: t("common.cancel"),
+      });
+      if (!ok) return;
       setLoading(true);
       setError(null);
       try {
@@ -763,7 +936,116 @@ export function DatabaseView({
 
   const refresh = useCallback(() => {
     if (activeConnection) inspect(activeConnection);
-  }, [activeConnection, inspect]);
+    if (activeDbxConnection) void loadDbxConnection(activeDbxConnection);
+  }, [activeConnection, activeDbxConnection, inspect, loadDbxConnection]);
+
+  const copyDbxConnection = useCallback(async (connection: AeroricDbConnectionConfig) => {
+    const copy: AeroricDbConnectionConfig = {
+      ...connection,
+      id: `dbx:${Date.now()}:${Math.random().toString(36).slice(2)}`,
+      name: `${connection.name} Copy`,
+      createdAt: Date.now(),
+      lastOpenedAt: Date.now(),
+    };
+    await databaseApi.dbxSaveConnection(copy);
+    setDbxConnections(await databaseApi.dbxListConnections());
+  }, []);
+
+  const copyLegacyConnection = useCallback(
+    (connection: DbConnectionConfig) => {
+      const now = Date.now();
+      saveConnections([
+        {
+          ...connection,
+          id: `db:${now}:${Math.random().toString(36).slice(2)}`,
+          name: `${connection.name} Copy`,
+          createdAt: now,
+          lastOpenedAt: now,
+        },
+        ...connections,
+      ]);
+    },
+    [connections, saveConnections],
+  );
+
+  const runContextMenuAction = useCallback(
+    async (
+      action:
+        | "close"
+        | "newQuery"
+        | "executeSqlFile"
+        | "refresh"
+        | "copy"
+        | "delete",
+    ) => {
+      const menu = contextMenu;
+      setContextMenu(null);
+      if (!menu) return;
+      const legacy = connections.find((connection) => connection.id === menu.connectionId) ?? null;
+      const dbx = dbxConnections.find((connection) => connection.id === menu.connectionId) ?? null;
+
+      if (action === "newQuery") {
+        if (legacy) handleSelectConnection(legacy);
+        if (dbx) await loadDbxConnection(dbx);
+        handleNewQuery();
+        return;
+      }
+      if (action === "executeSqlFile") {
+        if (legacy) handleSelectConnection(legacy);
+        if (dbx) await loadDbxConnection(dbx);
+        handleExecuteSqlFile();
+        return;
+      }
+      if (action === "refresh") {
+        if (legacy) await inspect(legacy);
+        if (dbx) await loadDbxConnection(dbx);
+        return;
+      }
+      if (action === "close") {
+        if (dbx) await databaseApi.dbxDisconnect(dbx.id);
+        if (activeDbxConnectionId === menu.connectionId) {
+          setActiveDbxConnectionId(null);
+          setDbxDatabases([]);
+          setDbxObjects([]);
+          setActiveDbxDatabase(null);
+          setActiveDbxObject(null);
+        }
+        if (activeConnectionId === menu.connectionId) {
+          setActiveConnectionId(null);
+          setSchema(null);
+          setActiveObject(null);
+          setQueryResult(null);
+        }
+        return;
+      }
+      if (action === "copy") {
+        if (legacy) copyLegacyConnection(legacy);
+        if (dbx) await copyDbxConnection(dbx);
+        return;
+      }
+      if (action === "delete") {
+        if (legacy) handleDeleteConnection(legacy.id);
+        if (dbx) await handleDeleteDbxConnection(dbx.id);
+        return;
+      }
+    },
+    [
+      activeConnectionId,
+      activeDbxConnectionId,
+      connections,
+      contextMenu,
+      copyDbxConnection,
+      copyLegacyConnection,
+      dbxConnections,
+      handleDeleteConnection,
+      handleDeleteDbxConnection,
+      handleExecuteSqlFile,
+      handleNewQuery,
+      handleSelectConnection,
+      inspect,
+      loadDbxConnection,
+    ],
+  );
 
   const runSql = useCallback(async () => {
     if (!activeEndpoint && !activeDbxConnection) return;
@@ -870,7 +1152,13 @@ export function DatabaseView({
   const deleteRow = useCallback(
     async (row: DatabaseRow) => {
       if (!activeEndpoint || !activeObject || activeConnection?.readOnly) return;
-      if (!window.confirm(t("database.confirmDeleteRow"))) return;
+      const ok = await confirm(t("database.confirmDeleteRow"), {
+        title: t("database.deleteConnection"),
+        kind: "warning",
+        okLabel: t("file.delete"),
+        cancelLabel: t("common.cancel"),
+      });
+      if (!ok) return;
       setError(null);
       try {
         await databaseApi.deleteRow({
@@ -899,13 +1187,33 @@ export function DatabaseView({
           <FilePlus size={14} />
           <span>{t("database.newQuery")}</span>
         </button>
-        <button type="button" style={s.databaseToolbarButton} onClick={handleExecuteSqlFile} disabled={!activeSqlCapable || loading}>
+        <button type="button" style={s.databaseToolbarButton} onClick={handleExecuteSqlFile} disabled={loading}>
           <FileCode size={14} />
           <span>{t("database.executeSqlFile")}</span>
         </button>
         <button type="button" style={s.databaseToolbarButton} onClick={openDriverManager}>
           <Wrench size={14} />
           <span>{t("database.driverManager")}</span>
+        </button>
+        <button type="button" style={s.databaseToolbarButton} onClick={() => openAdvancedTool("transfer")}>
+          <GitMerge size={14} />
+          <span>{t("database.dataTransfer")}</span>
+        </button>
+        <button type="button" style={s.databaseToolbarButton} onClick={() => openAdvancedTool("schema-diff")}>
+          <GitCompare size={14} />
+          <span>{t("database.schemaDiff")}</span>
+        </button>
+        <button type="button" style={s.databaseToolbarButton} onClick={() => openAdvancedTool("data-compare")}>
+          <Network size={14} />
+          <span>{t("database.dataCompare")}</span>
+        </button>
+        <button type="button" style={s.databaseToolbarButton} onClick={() => void openErDiagram()}>
+          <Table2 size={14} />
+          <span>{t("database.erDiagram")}</span>
+        </button>
+        <button type="button" style={s.databaseToolbarButton} onClick={() => void openTableStructure()}>
+          <SlidersHorizontal size={14} />
+          <span>{t("database.tableStructure")}</span>
         </button>
       </div>
       <aside style={s.databaseSidebar}>
@@ -915,7 +1223,7 @@ export function DatabaseView({
               <Database size={16} />
               <span style={s.databaseTitle}>{t("database.title")}</span>
             </div>
-            <button type="button" style={s.databaseIconButton} onClick={refresh} disabled={!activeConnection || loading} title={t("common.refresh")}>
+            <button type="button" style={s.databaseIconButton} onClick={refresh} disabled={(!activeConnection && !activeDbxConnection) || loading} title={t("common.refresh")}>
               <RefreshCcw size={13} />
             </button>
           </div>
@@ -948,8 +1256,21 @@ export function DatabaseView({
                   ...(connection.id === activeConnectionId ? s.databaseListButtonActive : {}),
                 }}
                 onClick={() => handleSelectConnection(connection)}
+                onContextMenu={(event) => {
+                  event.preventDefault();
+                  setContextMenu({
+                    x: event.clientX,
+                    y: event.clientY,
+                    connectionId: connection.id,
+                    kind: "legacy",
+                  });
+                }}
               >
-                {connection.endpoint.kind === "local" ? <Database size={14} /> : <Plug size={14} />}
+                {connection.endpoint.kind === "local" ? (
+                  <DatabaseProfileIcon profile={profileForDbType("sqlite")} size={16} />
+                ) : (
+                  <Plug size={14} />
+                )}
                 <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                   {connection.name}
                 </span>
@@ -971,8 +1292,17 @@ export function DatabaseView({
                   ...(connection.id === activeDbxConnectionId ? s.databaseListButtonActive : {}),
                 }}
                 onClick={() => handleSelectDbxConnection(connection)}
+                onContextMenu={(event) => {
+                  event.preventDefault();
+                  setContextMenu({
+                    x: event.clientX,
+                    y: event.clientY,
+                    connectionId: connection.id,
+                    kind: "dbx",
+                  });
+                }}
               >
-                <Server size={14} />
+                <DatabaseProfileIcon profile={profileForDbType(connection.dbType)} size={16} />
                 <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                   {connection.name}
                 </span>
@@ -988,10 +1318,10 @@ export function DatabaseView({
             ))}
           </div>
 
-          {activeDbxConnection && dbxDatabases.length > 0 && (
+          {activeDbxConnection && visibleDbxDatabases.length > 0 && (
             <div style={s.databaseSection}>
               <div style={s.databaseSectionTitle}>{t("database.databases")}</div>
-              {dbxDatabases.map((database) => (
+              {visibleDbxDatabases.map((database) => (
                 <button
                   key={database.name}
                   type="button"
@@ -1051,8 +1381,14 @@ export function DatabaseView({
               </button>
             ))}
             {activeDbxConnection && !dbxHasSqlObjectBrowser && (
-              <div style={{ padding: "0 6px", fontSize: 11.5, color: "var(--text-muted)", lineHeight: 1.5 }}>
-                {t("database.specializedBrowserPending")}
+              <div style={{ padding: "0 6px", display: "flex", flexDirection: "column", gap: 6 }}>
+                <button
+                  type="button"
+                  style={s.databaseSmallButton}
+                  onClick={() => setWorkspaceMode(activeDbxConnection.dbType === "redis" ? "redis" : "mongo")}
+                >
+                  {activeDbxConnection.dbType === "redis" ? "Redis" : "MongoDB"}
+                </button>
               </div>
             )}
           </div>
@@ -1102,7 +1438,21 @@ export function DatabaseView({
                   ? t("database.executeSqlFile")
                   : workspaceMode === "drivers"
                     ? t("database.driverManager")
-                    : activeObject?.name ?? t("database.noSelection")}
+                    : workspaceMode === "redis"
+                      ? "Redis"
+                      : workspaceMode === "mongo"
+                        ? "MongoDB"
+                        : workspaceMode === "transfer"
+                          ? t("database.dataTransfer")
+                          : workspaceMode === "schema-diff"
+                            ? t("database.schemaDiff")
+                            : workspaceMode === "data-compare"
+                              ? t("database.dataCompare")
+                              : workspaceMode === "er-diagram"
+                                ? t("database.erDiagram")
+                                : workspaceMode === "table-structure"
+                                  ? t("database.tableStructure")
+                                  : activeObject?.name ?? t("database.noSelection")}
             </div>
             <div style={s.databasePath}>
               {activeEndpoint
@@ -1213,6 +1563,58 @@ export function DatabaseView({
               </table>
             </div>
           </div>
+        ) : workspaceMode === "redis" && activeDbxConnection ? (
+          <RedisBrowser connectionId={activeDbxConnection.id} readOnly={activeDbxConnection.readOnly} />
+        ) : workspaceMode === "mongo" && activeDbxConnection ? (
+          <MongoBrowser connectionId={activeDbxConnection.id} readOnly={activeDbxConnection.readOnly} />
+        ) : (workspaceMode === "transfer" || workspaceMode === "schema-diff" || workspaceMode === "data-compare") && (!activeDbxConnection || !dbxHasSqlObjectBrowser) ? (
+          <GuidancePanel
+            title={
+              workspaceMode === "transfer"
+                ? t("database.dataTransfer")
+                : workspaceMode === "schema-diff"
+                  ? t("database.schemaDiff")
+                  : t("database.dataCompare")
+            }
+            message={t("database.selectDbxSqlConnection")}
+          />
+        ) : (workspaceMode === "transfer" || workspaceMode === "schema-diff" || workspaceMode === "data-compare") && activeDbxConnection ? (
+          <DatabaseAdvancedTools
+            connectionId={activeDbxConnection.id}
+            mode={workspaceMode}
+            database={activeDbxDatabase}
+            schema={selectedDbxTable?.schema ?? null}
+            table={selectedDbxTable?.name ?? null}
+            availableConnections={sqlDbxConnections}
+            sourceObjects={dbxTableObjects}
+            sourceColumnsByTable={dbxColumnsByTable}
+            sourceDatabaseType={activeDbxConnection.dbType}
+          />
+        ) : workspaceMode === "er-diagram" && (!activeDbxConnection || !dbxHasSqlObjectBrowser) ? (
+          <GuidancePanel title={t("database.erDiagram")} message={t("database.selectDbxSqlConnection")} />
+        ) : workspaceMode === "er-diagram" && activeDbxConnection ? (
+          <ErDiagramPanel
+            tables={dbxTableObjects}
+            columnsByTable={dbxColumnsByTable}
+          />
+        ) : workspaceMode === "table-structure" && (!activeDbxConnection || !dbxHasSqlObjectBrowser) ? (
+          <GuidancePanel title={t("database.tableStructure")} message={t("database.selectDbxTable")} />
+        ) : workspaceMode === "table-structure" && !selectedDbxTable ? (
+          <GuidancePanel title={t("database.tableStructure")} message={t("database.selectDbxTable")} />
+        ) : workspaceMode === "table-structure" && selectedDbxTable ? (
+          <TableStructurePanel
+            connectionId={activeDbxConnection?.id}
+            database={activeDbxDatabase}
+            schema={selectedDbxTable.schema ?? null}
+            databaseType={activeDbxConnection?.dbType ?? null}
+            tableName={selectedDbxTable.name}
+            columns={
+              dbxColumnsByTable[
+                selectedDbxTable.schema ? `${selectedDbxTable.schema}.${selectedDbxTable.name}` : selectedDbxTable.name
+              ] ?? []
+            }
+            readOnly={activeDbxConnection?.readOnly ?? true}
+          />
         ) : (
           <>
         <div style={s.databaseSqlPanel}>
@@ -1391,7 +1793,7 @@ export function DatabaseView({
                         onClick={() => handleProfileSelect(profile.key)}
                       >
                         <span style={{ ...s.databaseTypeIcon, background: `${profile.accent}1f`, color: profile.accent }}>
-                          <Database size={23} strokeWidth={1.9} />
+                          <DatabaseProfileIcon profile={profile} size={25} />
                         </span>
                         <span style={s.databaseTypeLabel}>{profile.label}</span>
                       </button>
@@ -1403,7 +1805,7 @@ export function DatabaseView({
                   <div style={s.databaseConfigHeader}>
                     <button type="button" style={s.databaseTypeMiniCard} onClick={() => setWizardStep("type")}>
                       <span style={{ ...s.databaseTypeIconSmall, background: `${selectedProfile.accent}1f`, color: selectedProfile.accent }}>
-                        <Database size={14} strokeWidth={1.9} />
+                        <DatabaseProfileIcon profile={selectedProfile} size={16} />
                       </span>
                       <span>{selectedProfile.label}</span>
                     </button>
@@ -1566,6 +1968,42 @@ export function DatabaseView({
             </div>
           </form>
         </div>
+      )}
+      {contextMenu && (
+        <>
+          <div style={s.fileCtxBackdrop} onClick={() => setContextMenu(null)} />
+          <div
+            role="menu"
+            style={{
+              ...s.fileCtxMenu,
+              left: contextMenu.x,
+              top: contextMenu.y,
+              minWidth: 190,
+            }}
+          >
+            {[
+              ["close", "database.closeConnection"],
+              ["newQuery", "database.newQuery"],
+              ["executeSqlFile", "database.executeSqlFile"],
+              ["refresh", "database.refresh"],
+              ["copy", "database.copyConnection"],
+              ["delete", "database.deleteConnection"],
+            ].map(([action, labelKey]) => (
+              <button
+                key={action}
+                type="button"
+                role="menuitem"
+                style={{ ...s.fileCtxMenuItem, display: "flex", alignItems: "center", gap: 8 }}
+                onClick={() => {
+                  void runContextMenuAction(action as Parameters<typeof runContextMenuAction>[0]);
+                }}
+              >
+                {action === "copy" && <Copy size={13} />}
+                <span>{t(labelKey)}</span>
+              </button>
+            ))}
+          </div>
+        </>
       )}
     </div>
   );

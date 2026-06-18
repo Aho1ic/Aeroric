@@ -199,6 +199,25 @@ function getInitialFontFamily(key: string, fallback: FontFamily): FontFamily {
   return stored || fallback;
 }
 
+function disableTextInputAutoFeatures(target: EventTarget | null): void {
+  if (!(target instanceof HTMLElement)) return;
+  const input =
+    target instanceof HTMLTextAreaElement
+      ? target
+      : target instanceof HTMLInputElement
+        ? target
+        : null;
+  if (!input) return;
+  if (input instanceof HTMLInputElement) {
+    const type = input.type.toLowerCase();
+    if (!["", "text", "search", "password", "email", "url", "tel"].includes(type)) return;
+  }
+  input.setAttribute("autocomplete", "off");
+  input.setAttribute("autocorrect", "off");
+  input.setAttribute("autocapitalize", "off");
+  input.setAttribute("spellcheck", "false");
+}
+
 const SELECTED_CONDA_ENV_KEY = "aeroric:selectedCondaEnvPath";
 
 function App() {
@@ -356,6 +375,13 @@ function App() {
     }
     window.addEventListener("keydown", handleHideWindow, true);
     return () => window.removeEventListener("keydown", handleHideWindow, true);
+  }, []);
+
+  useEffect(() => {
+    const handleFocusIn = (event: FocusEvent) => disableTextInputAutoFeatures(event.target);
+    document.addEventListener("focusin", handleFocusIn, true);
+    document.querySelectorAll("input, textarea").forEach(disableTextInputAutoFeatures);
+    return () => document.removeEventListener("focusin", handleFocusIn, true);
   }, []);
 
   useEffect(() => {

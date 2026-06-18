@@ -21,6 +21,20 @@ pub(crate) enum SftpEndpoint {
     },
 }
 
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) enum SftpConflictStrategy {
+    Fail,
+    Merge,
+    Replace,
+}
+
+impl Default for SftpConflictStrategy {
+    fn default() -> Self {
+        Self::Fail
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct SftpEntry {
@@ -195,6 +209,48 @@ fn build_remote_conflict_check_command(
     ))
 }
 
+fn build_remote_delete_target_names_command(
+    names: &[String],
+    target_directory: &str,
+) -> Result<String, String> {
+    if names.is_empty() {
+        return Ok(":".to_string());
+    }
+    let target = crate::ssh::shell_quote_posix(target_directory);
+    let names = names
+        .iter()
+        .map(|name| {
+            validate_entry_name(name)?;
+            Ok(crate::ssh::shell_quote_posix(name))
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    Ok(format!(
+        "target={target}; [ -d \"$target\" ] && for name in {names}; do rm -rf -- \"$target/$name\"; done",
+        names = names.join(" ")
+    ))
+}
+
+fn build_remote_merge_conflict_check_command(
+    names: &[String],
+    target_directory: &str,
+) -> Result<String, String> {
+    if names.is_empty() {
+        return Ok(":".to_string());
+    }
+    let target = crate::ssh::shell_quote_posix(target_directory);
+    let names = names
+        .iter()
+        .map(|name| {
+            validate_entry_name(name)?;
+            Ok(crate::ssh::shell_quote_posix(name))
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    Ok(format!(
+        "target={target}; [ -d \"$target\" ] && for name in {names}; do [ ! -e \"$target/$name\" ] || [ -d \"$target/$name\" ] || {{ echo \"Cannot merge a file into an existing file\" >&2; exit 1; }}; done",
+        names = names.join(" ")
+    ))
+}
+
 fn build_remote_rename_command(remote_path: &str, new_name: &str) -> Result<String, String> {
     validate_entry_name(new_name)?;
     let destination = join_remote_path(remote_parent(remote_path)?, new_name);
@@ -209,6 +265,7 @@ fn build_remote_copy_or_move_command(
     source_paths: &[String],
     target_directory: &str,
     move_paths: bool,
+    conflict_strategy: SftpConflictStrategy,
 ) -> Result<String, String> {
     if source_paths.is_empty() {
         return Ok(":".to_string());
@@ -218,13 +275,27 @@ fn build_remote_copy_or_move_command(
         .iter()
         .map(|source| {
             validate_entry_name(basename(source)?)?;
+            if remote_parent(source)? == target_directory {
+                return Err("Cannot replace a file or folder with itself".to_string());
+            }
             Ok(crate::ssh::shell_quote_posix(source))
         })
         .collect::<Result<Vec<_>, String>>()?;
     let tool = if move_paths { "mv" } else { "cp -R" };
+    let sources = sources.join(" ");
+    let preflight = match conflict_strategy {
+        SftpConflictStrategy::Fail => format!(
+            "for src in {sources}; do name=${{src##*/}}; [ ! -e \"$target/$name\" ] || {{ echo \"A file or folder with that name already exists\" >&2; exit 1; }}; done && "
+        ),
+        SftpConflictStrategy::Merge => format!(
+            "for src in {sources}; do name=${{src##*/}}; [ ! -e \"$target/$name\" ] || [ -d \"$target/$name\" ] || {{ echo \"Cannot merge a file into an existing file\" >&2; exit 1; }}; done && "
+        ),
+        SftpConflictStrategy::Replace => format!(
+            "for src in {sources}; do name=${{src##*/}}; rm -rf -- \"$target/$name\"; done && "
+        ),
+    };
     Ok(format!(
-        "target={target}; [ -d \"$target\" ] && for src in {sources}; do name=${{src##*/}}; [ ! -e \"$target/$name\" ] || {{ echo \"A file or folder with that name already exists\" >&2; exit 1; }}; done && {tool} -- {sources} \"$target/\"",
-        sources = sources.join(" ")
+        "target={target}; [ -d \"$target\" ] && {preflight}{tool} -- {sources} \"$target/\"",
     ))
 }
 
@@ -485,8 +556,15 @@ fn parse_remote_directory_summary(raw: &[u8]) -> Result<SftpDirectorySummary, St
     })
 }
 
-fn copy_path_recursive(source: &Path, destination: &Path) -> Result<(), String> {
+fn copy_path_recursive(
+    source: &Path,
+    destination: &Path,
+    conflict_strategy: SftpConflictStrategy,
+) -> Result<(), String> {
     let metadata = source.symlink_metadata().map_err(|e| e.to_string())?;
+    if destination.exists() && conflict_strategy == SftpConflictStrategy::Replace {
+        delete_local_path(destination)?;
+    }
     if metadata.file_type().is_symlink() {
         let target = std::fs::read_link(source).map_err(|e| e.to_string())?;
         #[cfg(unix)]
@@ -504,12 +582,23 @@ fn copy_path_recursive(source: &Path, destination: &Path) -> Result<(), String> 
         return Ok(());
     }
     if metadata.is_dir() {
-        std::fs::create_dir(destination).map_err(|e| e.to_string())?;
+        if !destination.exists() {
+            std::fs::create_dir(destination).map_err(|e| e.to_string())?;
+        } else if !destination.is_dir() {
+            return Err("Cannot merge a directory into a file".to_string());
+        }
         for entry in std::fs::read_dir(source).map_err(|e| e.to_string())? {
             let entry = entry.map_err(|e| e.to_string())?;
-            copy_path_recursive(&entry.path(), &destination.join(entry.file_name()))?;
+            copy_path_recursive(
+                &entry.path(),
+                &destination.join(entry.file_name()),
+                conflict_strategy,
+            )?;
         }
         return Ok(());
+    }
+    if destination.exists() && conflict_strategy == SftpConflictStrategy::Merge {
+        return Err("Cannot merge a file into an existing file".to_string());
     }
     std::fs::copy(source, destination)
         .map(|_| ())
@@ -519,6 +608,7 @@ fn copy_path_recursive(source: &Path, destination: &Path) -> Result<(), String> 
 fn copy_local_paths_to_directory(
     source_paths: Vec<String>,
     target_directory: String,
+    conflict_strategy: SftpConflictStrategy,
 ) -> Result<(), String> {
     let target = validate_sftp_local_path(&target_directory)?;
     if !target.is_dir() {
@@ -532,10 +622,16 @@ fn copy_local_paths_to_directory(
             .ok_or_else(|| "Invalid file name".to_string())?;
         validate_entry_name(name)?;
         let destination = target.join(name);
-        if destination.exists() {
+        if source == destination {
+            return Err("Cannot replace a file or folder with itself".to_string());
+        }
+        if destination.exists() && conflict_strategy == SftpConflictStrategy::Fail {
             return Err("A file or folder with that name already exists".to_string());
         }
-        copy_path_recursive(&source, &destination)?;
+        if destination.exists() && conflict_strategy == SftpConflictStrategy::Replace {
+            delete_local_path(&destination)?;
+        }
+        copy_path_recursive(&source, &destination, conflict_strategy)?;
     }
     Ok(())
 }
@@ -569,6 +665,7 @@ fn remote_basenames(paths: &[String]) -> Result<Vec<String>, String> {
 fn ensure_local_target_names_available(
     names: &[String],
     target_directory: &str,
+    conflict_strategy: SftpConflictStrategy,
 ) -> Result<(), String> {
     let target = validate_sftp_local_path(target_directory)?;
     if !target.is_dir() {
@@ -576,21 +673,28 @@ fn ensure_local_target_names_available(
     }
     for name in names {
         validate_entry_name(name)?;
-        if target.join(name).exists() {
+        if target.join(name).exists() && conflict_strategy == SftpConflictStrategy::Fail {
             return Err("A file or folder with that name already exists".to_string());
+        }
+        if target.join(name).exists() && conflict_strategy == SftpConflictStrategy::Replace {
+            delete_local_path(&target.join(name))?;
         }
     }
     Ok(())
 }
 
+fn delete_local_path(path: &Path) -> Result<(), String> {
+    if path.is_dir() {
+        std::fs::remove_dir_all(path).map_err(|e| e.to_string())
+    } else {
+        std::fs::remove_file(path).map_err(|e| e.to_string())
+    }
+}
+
 fn delete_local_sources(paths: &[String]) -> Result<(), String> {
     for path in paths {
         let path = validate_sftp_local_path(path)?;
-        if path.is_dir() {
-            std::fs::remove_dir_all(&path).map_err(|e| e.to_string())?;
-        } else {
-            std::fs::remove_file(&path).map_err(|e| e.to_string())?;
-        }
+        delete_local_path(&path)?;
     }
     Ok(())
 }
@@ -598,6 +702,7 @@ fn delete_local_sources(paths: &[String]) -> Result<(), String> {
 fn move_local_paths_to_directory(
     source_paths: Vec<String>,
     target_directory: String,
+    conflict_strategy: SftpConflictStrategy,
 ) -> Result<(), String> {
     let target = validate_sftp_local_path(&target_directory)?;
     if !target.is_dir() {
@@ -611,11 +716,17 @@ fn move_local_paths_to_directory(
             .ok_or_else(|| "Invalid file name".to_string())?;
         validate_entry_name(name)?;
         let destination = target.join(name);
-        if destination.exists() {
+        if source == destination {
+            return Err("Cannot replace a file or folder with itself".to_string());
+        }
+        if destination.exists() && conflict_strategy == SftpConflictStrategy::Fail {
             return Err("A file or folder with that name already exists".to_string());
         }
+        if destination.exists() && conflict_strategy == SftpConflictStrategy::Replace {
+            delete_local_path(&destination)?;
+        }
         std::fs::rename(&source, &destination).or_else(|_| {
-            copy_path_recursive(&source, &destination)?;
+            copy_path_recursive(&source, &destination, conflict_strategy)?;
             if source.is_dir() {
                 std::fs::remove_dir_all(&source).map_err(|e| e.to_string())
             } else {
@@ -819,10 +930,19 @@ pub async fn sftp_copy_paths(
     source: SftpEndpoint,
     paths: Vec<String>,
     target: SftpEndpoint,
+    conflict_strategy: Option<SftpConflictStrategy>,
 ) -> Result<(), String> {
-    tokio::task::spawn_blocking(move || copy_or_move_paths(source, paths, target, false))
-        .await
-        .map_err(|e| e.to_string())?
+    tokio::task::spawn_blocking(move || {
+        copy_or_move_paths(
+            source,
+            paths,
+            target,
+            false,
+            conflict_strategy.unwrap_or_default(),
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -830,10 +950,19 @@ pub async fn sftp_move_paths(
     source: SftpEndpoint,
     paths: Vec<String>,
     target: SftpEndpoint,
+    conflict_strategy: Option<SftpConflictStrategy>,
 ) -> Result<(), String> {
-    tokio::task::spawn_blocking(move || copy_or_move_paths(source, paths, target, true))
-        .await
-        .map_err(|e| e.to_string())?
+    tokio::task::spawn_blocking(move || {
+        copy_or_move_paths(
+            source,
+            paths,
+            target,
+            true,
+            conflict_strategy.unwrap_or_default(),
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 fn copy_or_move_paths(
@@ -841,6 +970,7 @@ fn copy_or_move_paths(
     paths: Vec<String>,
     target: SftpEndpoint,
     move_paths: bool,
+    conflict_strategy: SftpConflictStrategy,
 ) -> Result<(), String> {
     if paths.is_empty() {
         return Ok(());
@@ -848,9 +978,9 @@ fn copy_or_move_paths(
     match (&source, &target) {
         (SftpEndpoint::Local { .. }, SftpEndpoint::Local { path: target_path }) => {
             if move_paths {
-                move_local_paths_to_directory(paths, target_path.clone())
+                move_local_paths_to_directory(paths, target_path.clone(), conflict_strategy)
             } else {
-                copy_local_paths_to_directory(paths, target_path.clone())
+                copy_local_paths_to_directory(paths, target_path.clone(), conflict_strategy)
             }
         }
         (
@@ -867,7 +997,12 @@ fn copy_or_move_paths(
             let target_path = validate_sftp_remote_path(target_path)?;
             run_ssh_output(
                 connection,
-                build_remote_copy_or_move_command(&source_paths, &target_path, move_paths)?,
+                build_remote_copy_or_move_command(
+                    &source_paths,
+                    &target_path,
+                    move_paths,
+                    conflict_strategy,
+                )?,
             )
             .map(|_| ())
         }
@@ -880,10 +1015,22 @@ fn copy_or_move_paths(
         ) => {
             let target_path = validate_sftp_remote_path(target_path)?;
             let names = local_basenames(&paths)?;
-            run_ssh_output(
-                connection,
-                build_remote_conflict_check_command(&names, &target_path)?,
-            )?;
+            if conflict_strategy == SftpConflictStrategy::Fail {
+                run_ssh_output(
+                    connection,
+                    build_remote_conflict_check_command(&names, &target_path)?,
+                )?;
+            } else if conflict_strategy == SftpConflictStrategy::Merge {
+                run_ssh_output(
+                    connection,
+                    build_remote_merge_conflict_check_command(&names, &target_path)?,
+                )?;
+            } else if conflict_strategy == SftpConflictStrategy::Replace {
+                run_ssh_output(
+                    connection,
+                    build_remote_delete_target_names_command(&names, &target_path)?,
+                )?;
+            }
             run_command_spec(scp_upload_spec(connection, &paths, &target_path)?)?;
             if move_paths {
                 delete_local_sources(&paths)?;
@@ -895,7 +1042,11 @@ fn copy_or_move_paths(
                 .into_iter()
                 .map(|path| validate_sftp_remote_path(&path))
                 .collect::<Result<Vec<_>, String>>()?;
-            ensure_local_target_names_available(&remote_basenames(&source_paths)?, target_path)?;
+            ensure_local_target_names_available(
+                &remote_basenames(&source_paths)?,
+                target_path,
+                conflict_strategy,
+            )?;
             run_command_spec(scp_download_spec(connection, &source_paths, target_path)?)?;
             if move_paths {
                 run_ssh_output(connection, build_remote_delete_command(&source_paths))?;
@@ -930,13 +1081,23 @@ fn copy_or_move_paths(
                     .map(|entry| entry.path().to_string_lossy().into_owned())
                     .collect::<Vec<_>>();
                 let target_path = validate_sftp_remote_path(target_path)?;
-                run_ssh_output(
-                    target_connection,
-                    build_remote_conflict_check_command(
-                        &remote_basenames(&source_paths)?,
-                        &target_path,
-                    )?,
-                )?;
+                let names = remote_basenames(&source_paths)?;
+                if conflict_strategy == SftpConflictStrategy::Fail {
+                    run_ssh_output(
+                        target_connection,
+                        build_remote_conflict_check_command(&names, &target_path)?,
+                    )?;
+                } else if conflict_strategy == SftpConflictStrategy::Merge {
+                    run_ssh_output(
+                        target_connection,
+                        build_remote_merge_conflict_check_command(&names, &target_path)?,
+                    )?;
+                } else if conflict_strategy == SftpConflictStrategy::Replace {
+                    run_ssh_output(
+                        target_connection,
+                        build_remote_delete_target_names_command(&names, &target_path)?,
+                    )?;
+                }
                 run_command_spec(scp_upload_spec(
                     target_connection,
                     &local_paths,
@@ -1069,6 +1230,37 @@ mod tests {
     }
 
     #[test]
+    fn remote_copy_merge_checks_file_conflicts_before_copy() {
+        let command = super::build_remote_copy_or_move_command(
+            &["/srv/source/same.txt".to_string()],
+            "/srv/target",
+            false,
+            super::SftpConflictStrategy::Merge,
+        )
+        .expect("build command");
+
+        assert!(command.contains("[ ! -e \"$target/$name\" ] || [ -d \"$target/$name\" ]"));
+        assert!(command.contains("Cannot merge a file into an existing file"));
+        assert!(command.contains("cp -R --"));
+        assert!(command.contains("/srv/source/same.txt"));
+        assert!(command.contains("\"$target/\""));
+    }
+
+    #[test]
+    fn remote_merge_conflict_check_allows_only_missing_or_directory_targets() {
+        let command = super::build_remote_merge_conflict_check_command(
+            &["same.txt".to_string()],
+            "/srv/target",
+        )
+        .expect("build command");
+
+        assert!(command.contains("for name in"));
+        assert!(command.contains("same.txt"));
+        assert!(command.contains("[ ! -e \"$target/$name\" ] || [ -d \"$target/$name\" ]"));
+        assert!(command.contains("Cannot merge a file into an existing file"));
+    }
+
+    #[test]
     fn local_copy_rejects_existing_destination() {
         let root = unique_test_dir("copy-conflict");
         let source_dir = root.join("source");
@@ -1081,10 +1273,80 @@ mod tests {
         let result = super::copy_local_paths_to_directory(
             vec![source_dir.join("same.txt").to_string_lossy().into_owned()],
             target_dir.to_string_lossy().into_owned(),
+            super::SftpConflictStrategy::Fail,
         );
 
         let _ = std::fs::remove_dir_all(&root);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn local_copy_replaces_existing_destination_when_requested() {
+        let root = unique_test_dir("copy-replace");
+        let source_dir = root.join("source");
+        let target_dir = root.join("target");
+        std::fs::create_dir_all(&source_dir).expect("create source");
+        std::fs::create_dir_all(&target_dir).expect("create target");
+        std::fs::write(source_dir.join("same.txt"), "source").expect("write source");
+        std::fs::write(target_dir.join("same.txt"), "target").expect("write target");
+
+        let result = super::copy_local_paths_to_directory(
+            vec![source_dir.join("same.txt").to_string_lossy().into_owned()],
+            target_dir.to_string_lossy().into_owned(),
+            super::SftpConflictStrategy::Replace,
+        );
+
+        assert!(result.is_ok());
+        assert_eq!(
+            std::fs::read_to_string(target_dir.join("same.txt")).expect("read target"),
+            "source"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn local_copy_merge_rejects_file_overwrite() {
+        let root = unique_test_dir("copy-merge-file-conflict");
+        let source_dir = root.join("source");
+        let target_dir = root.join("target");
+        std::fs::create_dir_all(&source_dir).expect("create source");
+        std::fs::create_dir_all(&target_dir).expect("create target");
+        std::fs::write(source_dir.join("same.txt"), "source").expect("write source");
+        std::fs::write(target_dir.join("same.txt"), "target").expect("write target");
+
+        let result = super::copy_local_paths_to_directory(
+            vec![source_dir.join("same.txt").to_string_lossy().into_owned()],
+            target_dir.to_string_lossy().into_owned(),
+            super::SftpConflictStrategy::Merge,
+        );
+
+        assert!(result.is_err());
+        assert_eq!(
+            std::fs::read_to_string(target_dir.join("same.txt")).expect("read target"),
+            "target"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn local_copy_rejects_replacing_source_with_itself() {
+        let root = unique_test_dir("copy-replace-self");
+        std::fs::create_dir_all(&root).expect("create root");
+        let source = root.join("same.txt");
+        std::fs::write(&source, "source").expect("write source");
+
+        let result = super::copy_local_paths_to_directory(
+            vec![source.to_string_lossy().into_owned()],
+            root.to_string_lossy().into_owned(),
+            super::SftpConflictStrategy::Replace,
+        );
+
+        assert!(result.is_err());
+        assert_eq!(
+            std::fs::read_to_string(&source).expect("source should remain"),
+            "source"
+        );
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
@@ -1100,6 +1362,7 @@ mod tests {
         let result = super::move_local_paths_to_directory(
             vec![source.to_string_lossy().into_owned()],
             target_dir.to_string_lossy().into_owned(),
+            super::SftpConflictStrategy::Fail,
         );
 
         assert!(result.is_ok());

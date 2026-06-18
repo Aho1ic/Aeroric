@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { Terminal as XTerm } from "@xterm/xterm";
@@ -45,9 +45,14 @@ interface Props {
   initialConnectionId?: string;
   autoConnect?: boolean;
   hideConnectionList?: boolean;
+  onReady?: () => void;
 }
 
-export function SshTerminalPanel({
+export interface SshTerminalPanelHandle {
+  sendCommand: (cmd: string) => void;
+}
+
+export const SshTerminalPanel = forwardRef<SshTerminalPanelHandle, Props>(function SshTerminalPanel({
   connections,
   onConnectionsChange,
   active,
@@ -58,7 +63,8 @@ export function SshTerminalPanel({
   initialConnectionId,
   autoConnect = false,
   hideConnectionList = false,
-}: Props) {
+  onReady,
+}, ref) {
   const { t } = useI18n();
   const terminalContainerRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<XTerm | null>(null);
@@ -74,6 +80,14 @@ export function SshTerminalPanel({
   const [error, setError] = useState<string | null>(null);
   const autoConnectStartedRef = useRef<string | null>(null);
   activeRef.current = active;
+
+  useImperativeHandle(ref, () => ({
+    sendCommand: (cmd: string) => {
+      const session = activeSession;
+      if (!session) return;
+      invoke("send_input", { taskId: session.shellId, data: cmd }).catch(console.error);
+    },
+  }), [activeSession]);
 
   const selectedConnection = useMemo(
     () => connections.find((connection) => connection.id === selectedId) ?? connections[0] ?? null,
@@ -233,6 +247,7 @@ export function SshTerminalPanel({
         rows: term.rows,
       })
         .then(() => {
+          onReady?.();
           if (activeRef.current) term.focus();
         })
         .catch((e: unknown) => {
@@ -272,7 +287,7 @@ export function SshTerminalPanel({
       lastSizeRef.current = null;
       term.dispose();
     };
-  }, [activeSession, monoFontFamily, terminalFontSize, themeVariant]);
+  }, [activeSession, monoFontFamily, onReady, terminalFontSize, themeVariant]);
 
   useEffect(() => {
     if (!active || !terminalRef.current || !fitAddonRef.current || !terminalContainerRef.current || !activeSession) {
@@ -404,4 +419,4 @@ export function SshTerminalPanel({
       )}
     </div>
   );
-}
+});

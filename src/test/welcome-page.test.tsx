@@ -91,6 +91,35 @@ describe("WelcomePage project cards", () => {
     expect(screen.queryByText("ssh://conn-1/data")).not.toBeInTheDocument();
   });
 
+  it("opens the SSH configuration page from the home sidebar", async () => {
+    const user = userEvent.setup();
+
+    renderWelcome();
+
+    await user.click(screen.getByRole("button", { name: "SSH" }));
+
+    expect(screen.getAllByText("Open SSH project").length).toBeGreaterThan(0);
+  });
+
+  it("uses the Docker logo icon in the home sidebar", () => {
+    renderWelcome();
+
+    expect(screen.getByRole("button", { name: "Docker" })).not.toHaveTextContent("🐳");
+    expect(screen.getByTestId("docker-logo-icon")).toBeInTheDocument();
+  });
+
+  it("shows the recursive animation only on the home project page", async () => {
+    const user = userEvent.setup();
+
+    renderWelcome({ themeVariant: "light" });
+
+    expect(screen.getByTestId("welcome-recursive-background")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Skills" }));
+
+    expect(screen.queryByTestId("welcome-recursive-background")).not.toBeInTheDocument();
+  });
+
   it("renames a project from the home page edit button", async () => {
     const user = userEvent.setup();
     const onRenameProject = vi.fn();

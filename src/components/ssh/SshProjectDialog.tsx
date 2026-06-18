@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Copy, Edit3, FolderOpen, Plus, Server, Users } from "lucide-react";
+import { Check, Copy, Edit3, FolderOpen, Plus, Server, Users } from "lucide-react";
 import type { SshConnection } from "../../types";
 import { useI18n } from "../../i18n";
 import s from "../../styles";
@@ -123,6 +123,7 @@ export function SshProjectPage({
   const [creatingConnection, setCreatingConnection] = useState(false);
   const [groupDialogOpen, setGroupDialogOpen] = useState(false);
   const [initialGroup, setInitialGroup] = useState("");
+  const [copiedConnectionId, setCopiedConnectionId] = useState<string | null>(null);
   const selectedConnection = useMemo(
     () => connections.find((connection) => connection.id === selectedId) ?? connections[0] ?? null,
     [connections, selectedId],
@@ -198,6 +199,7 @@ export function SshProjectPage({
                     const selected = connection.id === selectedConnection?.id;
                     const hasRemotePath = Boolean(connection.remotePath?.trim());
                     const canCopyPassword = Boolean(connection.password?.trim());
+                    const copied = copiedConnectionId === connection.id;
                     return (
                       <div key={connection.id} style={selected ? s.sshProjectCardSelected : s.sshProjectCard}>
                         <button
@@ -242,14 +244,26 @@ export function SshProjectPage({
                             ...s.sshProjectCardEdit,
                             opacity: canCopyPassword ? 1 : 0.35,
                             cursor: canCopyPassword ? "pointer" : "not-allowed",
+                            transform: copied ? "scale(1.12)" : "scale(1)",
+                            color: copied ? "var(--success)" : s.sshProjectCardEdit.color,
+                            border: copied ? "1px solid var(--success)" : s.sshProjectCardEdit.border,
+                            transition: "transform 0.16s ease, color 0.16s ease, border-color 0.16s ease",
                           }}
+                          data-copied={copied ? "true" : undefined}
                           disabled={!canCopyPassword}
                           onClick={() => {
                             if (!canCopyPassword) return;
-                            void copyConnectionPassword(connection);
+                            void copyConnectionPassword(connection).then(() => {
+                              setCopiedConnectionId(connection.id);
+                              window.setTimeout(() => {
+                                setCopiedConnectionId((current) =>
+                                  current === connection.id ? null : current,
+                                );
+                              }, 900);
+                            });
                           }}
                         >
-                          <Copy size={14} />
+                          {copied ? <Check size={14} /> : <Copy size={14} />}
                         </button>
                       </div>
                     );

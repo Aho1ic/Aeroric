@@ -1,9 +1,9 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import React from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
-import { open } from "@tauri-apps/plugin-dialog";
+import { confirm, open } from "@tauri-apps/plugin-dialog";
 import { I18nProvider } from "../i18n";
 import type { SshConnection } from "../types";
 import { DatabaseView } from "../components/database/DatabaseView";
@@ -13,6 +13,7 @@ vi.mock("@tauri-apps/api/core", () => ({
 }));
 
 vi.mock("@tauri-apps/plugin-dialog", () => ({
+  confirm: vi.fn(),
   open: vi.fn(),
 }));
 
@@ -23,6 +24,22 @@ const legacyConnection = {
   readOnly: false,
   createdAt: 1,
   lastOpenedAt: 1,
+};
+
+const dbxConnection = {
+  id: "dbx-source",
+  name: "DBX Source",
+  dbType: "postgres",
+  readOnly: false,
+  createdAt: 1,
+  lastOpenedAt: 1,
+};
+
+const dbxConnectionWithTargetDatabase = {
+  ...dbxConnection,
+  dbx: {
+    database: "target_db",
+  },
 };
 
 function connection(): SshConnection {
@@ -40,6 +57,7 @@ function connection(): SshConnection {
 describe("DatabaseView connection flow", () => {
   beforeEach(() => {
     vi.mocked(invoke).mockReset();
+    vi.mocked(confirm).mockReset();
     vi.mocked(open).mockReset();
     vi.mocked(invoke).mockImplementation((command) => {
       if (command === "db_load_connections") return Promise.resolve([]);
@@ -48,6 +66,30 @@ describe("DatabaseView connection flow", () => {
       if (command === "db_inspect") return Promise.resolve({ objects: [] });
       return Promise.resolve(undefined);
     });
+  });
+
+  it("does not delete a DBX connection until the confirmation resolves true", async () => {
+    const user = userEvent.setup();
+    vi.mocked(confirm).mockResolvedValue(false);
+    vi.mocked(invoke).mockImplementation((command) => {
+      if (command === "db_load_connections") return Promise.resolve([]);
+      if (command === "dbx_list_connections") return Promise.resolve([dbxConnection]);
+      return Promise.resolve(undefined);
+    });
+
+    render(
+      React.createElement(
+        I18nProvider,
+        null,
+        React.createElement(DatabaseView, { sshConnections: [connection()] }),
+      ),
+    );
+
+    const row = await screen.findByRole("button", { name: /DBX Source/i });
+    await user.click(row.querySelector("svg") as SVGElement);
+
+    await waitFor(() => expect(confirm).toHaveBeenCalled());
+    expect(invoke).not.toHaveBeenCalledWith("dbx_delete_connection", expect.anything());
   });
 
   it("opens the dbx-style new connection wizard without remote path fields", async () => {
@@ -170,5 +212,170 @@ describe("DatabaseView connection flow", () => {
     expect(await screen.findByText("PostgreSQL")).toBeInTheDocument();
     expect(screen.getByText("native")).toBeInTheDocument();
     expect(screen.getByText(/queryExecution/)).toBeInTheDocument();
+  });
+
+  it("shows only implemented database connection actions from the connection context menu", async () => {
+    vi.mocked(invoke).mockImplementation((command) => {
+      if (command === "db_load_connections") return Promise.resolve([]);
+      if (command === "dbx_list_connections") return Promise.resolve([dbxConnection]);
+      if (command === "dbx_connect") return Promise.resolve(undefined);
+      if (command === "dbx_list_databases") return Promise.resolve([{ name: "main" }]);
+      if (command === "dbx_list_objects") return Promise.resolve([]);
+      return Promise.resolve(undefined);
+    });
+
+    render(
+      React.createElement(
+        I18nProvider,
+        null,
+        React.createElement(DatabaseView, { sshConnections: [connection()] }),
+      ),
+    );
+
+    fireEvent.contextMenu(await screen.findByRole("button", { name: /DBX Source/i }));
+
+    for (const label of [
+      "Close connection",
+      "New query",
+      "Execute SQL file",
+      "Refresh",
+      "Copy connection",
+      "Delete connection",
+    ]) {
+      expect(screen.getByRole("menuitem", { name: label })).toBeInTheDocument();
+    }
+
+    for (const label of [
+      "Query history",
+      "Users and permissions",
+      "Create database",
+      "Move to group",
+      "Select visible databases",
+      "Edit connection",
+    ]) {
+      expect(screen.queryByRole("menuitem", { name: label })).not.toBeInTheDocument();
+    }
+  });
+
+  it("limits DBX database and table browsing to the configured target database", async () => {
+    const user = userEvent.setup();
+    vi.mocked(invoke).mockImplementation((command, args) => {
+      if (command === "db_load_connections") return Promise.resolve([]);
+      if (command === "dbx_list_connections") return Promise.resolve([dbxConnectionWithTargetDatabase]);
+      if (command === "dbx_connect") return Promise.resolve(undefined);
+      if (command === "dbx_list_databases") {
+        return Promise.resolve([{ name: "target_db" }, { name: "other_db" }]);
+      }
+      if (command === "dbx_list_objects") {
+        return Promise.resolve(
+          (args as { database?: string | null }).database === "target_db"
+            ? [{ name: "target_table", object_type: "table", schema: "public" }]
+            : [{ name: "other_table", object_type: "table", schema: "public" }],
+        );
+      }
+      return Promise.resolve(undefined);
+    });
+
+    render(
+      React.createElement(
+        I18nProvider,
+        null,
+        React.createElement(DatabaseView, { sshConnections: [connection()] }),
+      ),
+    );
+
+    await user.click(await screen.findByRole("button", { name: /DBX Source/i }));
+
+    expect(await screen.findByText("target_db")).toBeInTheDocument();
+    expect(screen.queryByText("other_db")).not.toBeInTheDocument();
+    expect(await screen.findByText("public.target_table")).toBeInTheDocument();
+    expect(screen.queryByText("other_table")).not.toBeInTheDocument();
+    expect(invoke).toHaveBeenCalledWith("dbx_list_objects", {
+      connectionId: "dbx-source",
+      database: "target_db",
+      schema: null,
+    });
+  });
+
+  it("reports a missing configured target database instead of loading another database", async () => {
+    const user = userEvent.setup();
+    vi.mocked(invoke).mockImplementation((command) => {
+      if (command === "db_load_connections") return Promise.resolve([]);
+      if (command === "dbx_list_connections") return Promise.resolve([dbxConnectionWithTargetDatabase]);
+      if (command === "dbx_connect") return Promise.resolve(undefined);
+      if (command === "dbx_list_databases") return Promise.resolve([{ name: "other_db" }]);
+      if (command === "dbx_list_objects") return Promise.resolve([{ name: "other_table", object_type: "table", schema: "public" }]);
+      return Promise.resolve(undefined);
+    });
+
+    render(
+      React.createElement(
+        I18nProvider,
+        null,
+        React.createElement(DatabaseView, { sshConnections: [connection()] }),
+      ),
+    );
+
+    await user.click(await screen.findByRole("button", { name: /DBX Source/i }));
+
+    expect(await screen.findByText(/Configured database "target_db" was not found/i)).toBeInTheDocument();
+    expect(screen.queryByText("other_db")).not.toBeInTheDocument();
+    expect(invoke).not.toHaveBeenCalledWith("dbx_list_objects", expect.anything());
+  });
+
+  it("opens DBX advanced workspaces from toolbar buttons", async () => {
+    const user = userEvent.setup();
+    vi.mocked(invoke).mockImplementation((command) => {
+      if (command === "db_load_connections") return Promise.resolve([]);
+      if (command === "dbx_list_connections") return Promise.resolve([dbxConnection]);
+      if (command === "dbx_connect") return Promise.resolve(undefined);
+      if (command === "dbx_list_databases") return Promise.resolve([{ name: "main" }]);
+      if (command === "dbx_list_objects") return Promise.resolve([{ name: "users", object_type: "table", schema: "public" }]);
+      if (command === "dbx_get_columns") return Promise.resolve([{ name: "id", data_type: "int", is_nullable: false, is_primary_key: true }]);
+      return Promise.resolve(undefined);
+    });
+
+    render(
+      React.createElement(
+        I18nProvider,
+        null,
+        React.createElement(DatabaseView, { sshConnections: [connection()] }),
+      ),
+    );
+
+    await user.click(await screen.findByRole("button", { name: /DBX Source/i }));
+
+    await user.click(screen.getByRole("button", { name: /Data transfer/i }));
+    expect(screen.getByLabelText("Source connection")).toHaveValue("dbx-source");
+    expect(screen.getByLabelText("Target connection")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /Schema diff/i }));
+    expect(screen.getAllByRole("button", { name: /Compare/i }).length).toBeGreaterThan(0);
+
+    await user.click(screen.getByRole("button", { name: /Data compare/i }));
+    expect(screen.getAllByRole("button", { name: /Compare/i }).length).toBeGreaterThan(0);
+
+    await user.click(screen.getByRole("button", { name: /ER diagram/i }));
+    expect(screen.getByText("Inspect table nodes and loaded column metadata.")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /Table structure/i }));
+    expect(await screen.findByDisplayValue("id")).toBeInTheDocument();
+  });
+
+  it("shows guidance instead of silently ignoring DBX-only toolbar buttons without a DBX selection", async () => {
+    const user = userEvent.setup();
+    render(
+      React.createElement(
+        I18nProvider,
+        null,
+        React.createElement(DatabaseView, { sshConnections: [connection()] }),
+      ),
+    );
+
+    await user.click(screen.getByRole("button", { name: /Data transfer/i }));
+    expect(screen.getAllByText("Select a SQL-capable DBX connection to use this tool.").length).toBeGreaterThan(0);
+
+    await user.click(screen.getByRole("button", { name: /Table structure/i }));
+    expect(screen.getAllByText("Select a DBX SQL table to inspect or edit its structure.").length).toBeGreaterThan(0);
   });
 });

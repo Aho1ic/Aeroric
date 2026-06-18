@@ -367,6 +367,33 @@ export interface RedisSetTtlRequest extends RedisKeyRequest {
   ttl: number;
 }
 
+export type RedisCreateKeyType = "string" | "hash" | "list" | "set" | "zset" | "stream" | "json";
+
+export interface RedisCreateKeyRequest {
+  connectionId: string;
+  db: number;
+  keyRaw: string;
+  keyType: RedisCreateKeyType;
+  value: string;
+  field?: string | null;
+  score?: number | null;
+  entryId?: string | null;
+  ttl?: number | null;
+}
+
+export interface RedisCommandRequest {
+  connectionId: string;
+  db: number;
+  command: string;
+  skipSafetyCheck?: boolean;
+}
+
+export interface RedisCommandResult {
+  command: string;
+  safety: "allowed" | "confirm" | "blocked" | string;
+  value: unknown;
+}
+
 export interface MongoDocumentResult {
   documents: unknown[];
   total: number;
@@ -400,6 +427,44 @@ export interface MongoDeleteDocumentsRequest {
   collection: string;
   filterJson: string;
   many?: boolean;
+}
+
+export interface EditableStructureColumn {
+  id: string;
+  name: string;
+  dataType: string;
+  isNullable: boolean;
+  defaultValue?: string;
+  comment?: string;
+  isPrimaryKey?: boolean;
+  original?: {
+    name: string;
+    data_type: string;
+    is_nullable: boolean;
+    column_default?: string | null;
+    is_primary_key?: boolean;
+    extra?: string | null;
+    comment?: string | null;
+  } | null;
+  originalPosition?: number | null;
+  markedForDrop?: boolean;
+}
+
+export interface TableStructureSqlOptions {
+  databaseType?: string | null;
+  schema?: string | null;
+  tableName: string;
+  columns: EditableStructureColumn[];
+  indexes?: unknown[];
+  foreignKeys?: unknown[];
+  triggers?: unknown[];
+  tableComment?: string | null;
+  originalTableComment?: string | null;
+}
+
+export interface TableStructureSqlResult {
+  statements: string[];
+  warnings: string[];
 }
 
 export type DriverRuntimeMode = "native" | "file" | "jdbc" | "agent" | string;

@@ -2,6 +2,8 @@ import { useCallback, useState } from "react";
 import { databaseApi } from "../lib/databaseApi";
 import type {
   RedisDatabaseInfo,
+  RedisCommandRequest,
+  RedisCreateKeyRequest,
   RedisKeyInfo,
   RedisScanKeysRequest,
   RedisScanResult,
@@ -107,6 +109,19 @@ export function useRedisBrowser(connectionId: string | null) {
     [requireConnection],
   );
 
+  const createKey = useCallback(
+    async (request: Omit<RedisCreateKeyRequest, "connectionId">) => {
+      await databaseApi.dbxRedisCreateKey({ ...request, connectionId: requireConnection() });
+    },
+    [requireConnection],
+  );
+
+  const executeCommand = useCallback(
+    async (request: Omit<RedisCommandRequest, "connectionId">) =>
+      databaseApi.dbxRedisExecuteCommand({ ...request, connectionId: requireConnection() }),
+    [requireConnection],
+  );
+
   return {
     databases,
     keys,
@@ -120,5 +135,7 @@ export function useRedisBrowser(connectionId: string | null) {
     setValue,
     deleteKey,
     setTtl,
+    createKey,
+    executeCommand,
   };
 }

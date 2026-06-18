@@ -113,6 +113,17 @@ function projectPageProps(): React.ComponentProps<typeof ProjectPage> {
 }
 
 describe("ProjectPage right toolbar", () => {
+  it("uses a drawn Docker toolbar icon instead of an emoji glyph", () => {
+    render(
+      <I18nProvider>
+        <ProjectPage {...projectPageProps()} />
+      </I18nProvider>,
+    );
+
+    expect(screen.getByTitle("Docker")).not.toHaveTextContent("🐳");
+    expect(screen.getByTestId("docker-logo-icon")).toBeInTheDocument();
+  });
+
   it("hides the SSH workspace when Terminal is opened next", async () => {
     const user = userEvent.setup();
 

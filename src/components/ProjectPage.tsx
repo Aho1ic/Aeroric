@@ -31,7 +31,7 @@ import {
   ShellTerminalPanel,
   type ShellTerminalPanelHandle,
 } from "./ShellTerminalPanel";
-import { SshTerminalPanel } from "./ssh/SshTerminalPanel";
+import { SshTerminalPanel, type SshTerminalPanelHandle } from "./ssh/SshTerminalPanel";
 import { SshWorkspace } from "./ssh/SshWorkspace";
 import { SftpPanel } from "./sftp/SftpPanel";
 import { SftpPreview } from "./sftp/SftpPreview";
@@ -216,8 +216,11 @@ export function ProjectPage({
   } | null>(null);
   const projectBodyRef = useRef<HTMLDivElement>(null);
   const shellRef = useRef<ShellTerminalPanelHandle>(null);
+  const remoteSshRef = useRef<SshTerminalPanelHandle>(null);
   const shellReadyRef = useRef(false);
+  const remoteSshReadyRef = useRef(false);
   const pendingCmdRef = useRef<string | null>(null);
+  const pendingRemoteSshCmdRef = useRef<string | null>(null);
   const newTaskDraftRef = useRef<NewTaskDraft | null>(null);
   const handleCacheNewTaskDraft = useCallback((draft: NewTaskDraft | null) => {
     newTaskDraftRef.current = draft;
@@ -272,6 +275,7 @@ export function ProjectPage({
     selectedTask?.worktreePath && !selectedTask.worktreeDiscarded
       ? selectedTask.worktreePath
       : project.path;
+  const remoteProjectPathKey = projectLocation.kind === "ssh" ? projectLocation.remotePath : "";
 
   const handleSearchFileSelect = useCallback(
     (path: string, name: string) => {
@@ -293,6 +297,11 @@ export function ProjectPage({
     }
   }, [selectedTaskId, isNewTask]);
 
+  useEffect(() => {
+    remoteSshReadyRef.current = false;
+    pendingRemoteSshCmdRef.current = null;
+  }, [project.id, projectLocation.kind, remoteConnection?.id, remoteProjectPathKey]);
+
   const handleSelectTask = useCallback(
     (id: string) => {
       clearFileAndDiff();
@@ -302,6 +311,15 @@ export function ProjectPage({
   );
 
   const sendOrQueueShellCommand = useCallback((cmd: string) => {
+    if (projectLocation.kind === "ssh") {
+      openRightPanel("ssh");
+      if (remoteSshReadyRef.current && remoteSshRef.current) {
+        remoteSshRef.current.sendCommand(cmd);
+      } else {
+        pendingRemoteSshCmdRef.current = cmd;
+      }
+      return;
+    }
     setShellTerminalMounted(true);
     setShowShellTerminal(true);
     if (shellReadyRef.current && shellRef.current) {
@@ -309,7 +327,7 @@ export function ProjectPage({
       return;
     }
     pendingCmdRef.current = cmd;
-  }, []);
+  }, [openRightPanel, projectLocation.kind]);
 
   const handleRunMakeTarget = useCallback(
     (target: string) => {
@@ -322,6 +340,12 @@ export function ProjectPage({
     if (!pendingCmdRef.current || !shellRef.current) return;
     shellRef.current.sendCommand(pendingCmdRef.current);
     pendingCmdRef.current = null;
+  }, []);
+
+  const flushPendingRemoteSshCommand = useCallback(() => {
+    if (!pendingRemoteSshCmdRef.current || !remoteSshRef.current) return;
+    remoteSshRef.current.sendCommand(pendingRemoteSshCmdRef.current);
+    pendingRemoteSshCmdRef.current = null;
   }, []);
 
   const handleRunPythonFile = useCallback(
@@ -338,6 +362,11 @@ export function ProjectPage({
     shellReadyRef.current = true;
     flushPendingShellCommand();
   }, [flushPendingShellCommand]);
+
+  const handleRemoteSshReady = useCallback(() => {
+    remoteSshReadyRef.current = true;
+    flushPendingRemoteSshCommand();
+  }, [flushPendingRemoteSshCommand]);
 
   const handleNewTask = useCallback(() => {
     clearFileAndDiff();
@@ -675,6 +704,7 @@ export function ProjectPage({
             >
               <ErrorBoundary label="SSH">
                 <SshTerminalPanel
+                  ref={remoteSshRef}
                   connections={sshConnections}
                   onConnectionsChange={onSshConnectionsChange}
                   active={visible && (remoteSshMainVisible || isSshMode)}
@@ -685,6 +715,7 @@ export function ProjectPage({
                   initialConnectionId={remoteConnection.id}
                   autoConnect
                   hideConnectionList
+                  onReady={handleRemoteSshReady}
                 />
               </ErrorBoundary>
             </div>

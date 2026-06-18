@@ -1,6 +1,7 @@
 import type React from "react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { confirm } from "@tauri-apps/plugin-dialog";
 import {
   AlertCircle,
   ArrowLeft,
@@ -123,12 +124,13 @@ const refreshButtonStyle: React.CSSProperties = {
   cursor: "pointer",
 };
 
-const bodyStyle: React.CSSProperties = {
+export const dockerBodyStyle: React.CSSProperties = {
   flex: 1,
   minWidth: 0,
   minHeight: 0,
   overflow: "auto",
-  padding: "16px 22px 22px",
+  padding: "0 22px 22px",
+  paddingTop: 0,
 };
 
 const tableStyle: React.CSSProperties = {
@@ -275,7 +277,14 @@ function StateBadge({ state }: { state: string }) {
 }
 
 function imageReference(image: DockerImageSummary): string {
-  if (image.repository !== "-" && image.tag !== "-") return `${image.repository}:${image.tag}`;
+  if (
+    image.repository !== "-" &&
+    image.repository !== "<none>" &&
+    image.tag !== "-" &&
+    image.tag !== "<none>"
+  ) {
+    return `${image.repository}:${image.tag}`;
+  }
   return image.id;
 }
 
@@ -436,9 +445,17 @@ export function DockerServiceView({
   const { t } = useI18n();
   const remoteKey = dockerRemoteKey(remote);
   const actionInProgressRef = useRef(false);
+  const pendingRemoteRefreshRef = useRef<{ key: string; target: SshConnection | null } | null>(null);
   const remoteSnapshotRef = useRef<{ key: string; target: SshConnection | null } | null>(null);
-  if (!remoteSnapshotRef.current || (!actionInProgressRef.current && remoteSnapshotRef.current.key !== remoteKey)) {
+  if (!remoteSnapshotRef.current) {
     remoteSnapshotRef.current = { key: remoteKey, target: remote ?? null };
+  } else if (remoteSnapshotRef.current.key !== remoteKey) {
+    const nextSnapshot = { key: remoteKey, target: remote ?? null };
+    if (actionInProgressRef.current) {
+      pendingRemoteRefreshRef.current = nextSnapshot;
+    } else {
+      remoteSnapshotRef.current = nextSnapshot;
+    }
   }
   const currentRemote = remoteSnapshotRef.current.target;
   const [tab, setTab] = useState<DockerTab>("containers");
@@ -447,14 +464,15 @@ export function DockerServiceView({
   const [error, setError] = useState<string | null>(null);
   const [busyKey, setBusyKey] = useState<string | null>(null);
   const [logView, setLogView] = useState<{ title: string; content: string } | null>(null);
+  const [tagDraft, setTagDraft] = useState<{ image: DockerImageSummary; source: string; target: string } | null>(null);
 
   const load = useCallback(async (options: { preserveOnError?: boolean; remote?: SshConnection | null } = {}) => {
     setLoading(true);
     setError(null);
+    const requestRemote = options.remote ?? remoteSnapshotRef.current?.target ?? currentRemote;
     try {
-      const remote = options.remote ?? currentRemote;
-      const nextResources = await invoke<DockerResources>("list_docker_resources", { remote });
-      if (!isSameDockerRemote(remote, currentRemote)) return;
+      const nextResources = await invoke<DockerResources>("list_docker_resources", { remote: requestRemote });
+      if (!isSameDockerRemote(requestRemote, remoteSnapshotRef.current?.target)) return;
       setResources(nextResources);
     } catch (err) {
       if (!options.preserveOnError) {
@@ -470,13 +488,30 @@ export function DockerServiceView({
     }
   }, [currentRemote]);
 
+  const applyPendingRemoteRefresh = useCallback(() => {
+    const pending = pendingRemoteRefreshRef.current;
+    if (!pending) return;
+    pendingRemoteRefreshRef.current = null;
+    remoteSnapshotRef.current = pending;
+    void load({ remote: pending.target });
+  }, [load]);
+
   const runContainerAction = useCallback(
     async (container: DockerContainerSummary, action: ContainerAction) => {
       const actionRemote = currentRemote;
       actionInProgressRef.current = true;
-      if (action === "delete" && !window.confirm(t("docker.confirmDeleteContainer", { name: container.names }))) {
-        actionInProgressRef.current = false;
-        return;
+      if (action === "delete") {
+        const ok = await confirm(t("docker.confirmDeleteContainer", { name: container.names }), {
+          title: t("docker.deleteContainer"),
+          kind: "warning",
+          okLabel: t("file.delete"),
+          cancelLabel: t("common.cancel"),
+        });
+        if (!ok) {
+          actionInProgressRef.current = false;
+          applyPendingRemoteRefresh();
+          return;
+        }
       }
       setBusyKey(container.id);
       setError(null);
@@ -492,9 +527,10 @@ export function DockerServiceView({
       } finally {
         setBusyKey(null);
         actionInProgressRef.current = false;
+        applyPendingRemoteRefresh();
       }
     },
-    [currentRemote, load, t],
+    [applyPendingRemoteRefresh, currentRemote, load, t],
   );
 
   const loadContainerLogs = useCallback(
@@ -521,8 +557,15 @@ export function DockerServiceView({
       const ref = imageReference(image);
       const actionRemote = currentRemote;
       actionInProgressRef.current = true;
-      if (!window.confirm(t("docker.confirmDeleteImage", { name: ref }))) {
+      const ok = await confirm(t("docker.confirmDeleteImage", { name: ref }), {
+        title: t("docker.deleteImage"),
+        kind: "warning",
+        okLabel: t("file.delete"),
+        cancelLabel: t("common.cancel"),
+      });
+      if (!ok) {
         actionInProgressRef.current = false;
+        applyPendingRemoteRefresh();
         return;
       }
       setBusyKey(ref);
@@ -536,21 +579,34 @@ export function DockerServiceView({
       } finally {
         setBusyKey(null);
         actionInProgressRef.current = false;
+        applyPendingRemoteRefresh();
       }
     },
-    [currentRemote, load, t],
+    [applyPendingRemoteRefresh, currentRemote, load, t],
   );
 
   const tagImage = useCallback(
+    (image: DockerImageSummary) => {
+      const source = imageReference(image);
+      setTagDraft({ image, source, target: source });
+    },
+    [],
+  );
+
+  const submitTagImage = useCallback(
     async (image: DockerImageSummary) => {
       const actionRemote = currentRemote;
       const source = imageReference(image);
-      const target = window.prompt(t("docker.tagPrompt"), source);
-      if (!target?.trim() || target.trim() === source) return;
+      const target = tagDraft?.target.trim();
+      if (!target || target === source) {
+        setTagDraft(null);
+        return;
+      }
       setBusyKey(source);
       setError(null);
       try {
-        await invoke("docker_tag_image", { remote: actionRemote, source, target: target.trim() });
+        await invoke("docker_tag_image", { remote: actionRemote, source, target });
+        setTagDraft(null);
         await load({ preserveOnError: true, remote: actionRemote });
       } catch (err) {
         setError(String(err));
@@ -558,7 +614,7 @@ export function DockerServiceView({
         setBusyKey(null);
       }
     },
-    [currentRemote, load, t],
+    [currentRemote, load, tagDraft?.target],
   );
 
   useEffect(() => {
@@ -597,7 +653,7 @@ export function DockerServiceView({
           </button>
         </div>
       </div>
-      <div style={bodyStyle}>
+      <div style={dockerBodyStyle}>
         {logView ? (
           <pre
             style={{
@@ -641,6 +697,74 @@ export function DockerServiceView({
           />
         )}
       </div>
+      {tagDraft && (
+        <div
+          style={{
+            position: "fixed",
+            inset: 0,
+            zIndex: 3000,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            background: "rgba(0, 0, 0, 0.28)",
+          }}
+          role="dialog"
+          aria-modal="true"
+          aria-label={t("docker.tagImage")}
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) setTagDraft(null);
+          }}
+        >
+          <form
+            style={{
+              width: 380,
+              maxWidth: "calc(100vw - 32px)",
+              border: "1px solid var(--border-medium)",
+              borderRadius: 10,
+              background: "var(--bg-panel)",
+              boxShadow: "0 18px 48px rgba(0, 0, 0, 0.24)",
+              overflow: "hidden",
+            }}
+            onSubmit={(event) => {
+              event.preventDefault();
+              void submitTagImage(tagDraft.image);
+            }}
+          >
+            <div style={{ padding: "14px 16px", borderBottom: "1px solid var(--border-dim)", fontWeight: 750, color: "var(--text-primary)" }}>
+              {t("docker.tagImage")}
+            </div>
+            <div style={{ padding: 16, display: "flex", flexDirection: "column", gap: 8 }}>
+              <label style={{ fontSize: 12, color: "var(--text-muted)" }}>{t("docker.tagPrompt")}</label>
+              <input
+                value={tagDraft.target}
+                onChange={(event) => setTagDraft((current) => current ? { ...current, target: event.target.value } : current)}
+                autoFocus
+                autoCapitalize="off"
+                autoCorrect="off"
+                spellCheck={false}
+                style={{
+                  height: 34,
+                  border: "1px solid var(--border-medium)",
+                  borderRadius: 7,
+                  background: "var(--bg-input)",
+                  color: "var(--text-primary)",
+                  padding: "0 10px",
+                  fontSize: 12.5,
+                  outline: "none",
+                }}
+              />
+            </div>
+            <div style={{ padding: "12px 16px", display: "flex", justifyContent: "flex-end", gap: 8, borderTop: "1px solid var(--border-dim)" }}>
+              <button type="button" style={refreshButtonStyle} onClick={() => setTagDraft(null)}>
+                {t("common.cancel")}
+              </button>
+              <button type="submit" style={refreshButtonStyle} disabled={!tagDraft.target.trim() || tagDraft.target.trim() === tagDraft.source}>
+                {t("docker.tag")}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
     </div>
   );
 }

@@ -1,11 +1,13 @@
 import type { CondaEnvironment } from "../../types";
 
 export function isRunnablePythonFile(path: string, remote: boolean): boolean {
-  return !remote && path.toLowerCase().endsWith(".py");
+  void remote;
+  return path.toLowerCase().endsWith(".py");
 }
 
 export function isRunnableShellScriptFile(path: string, remote: boolean): boolean {
-  return !remote && path.toLowerCase().endsWith(".sh");
+  void remote;
+  return path.toLowerCase().endsWith(".sh");
 }
 
 export function isRunnableScriptFile(path: string, remote: boolean): boolean {

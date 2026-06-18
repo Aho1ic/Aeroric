@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useMemo } from "react";
+import { useCallback, useState, useEffect, useRef, useMemo } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Marked } from "marked";
 import DOMPurify from "dompurify";
@@ -228,7 +228,7 @@ const editorBaseTheme = EditorView.theme({
   },
 });
 
-type SaveStatus = "idle" | "saving" | "saved" | "error";
+type SaveStatus = "idle" | "dirty" | "saving" | "saved" | "error";
 type ImagePreviewData = {
   dataUrl: string;
   mimeType: string;
@@ -286,6 +286,7 @@ function FilePreviewPane({
   themeVariant,
   previewMode,
   remote,
+  onDirtyChange,
 }: {
   filePath: string;
   fileName: string;
@@ -293,6 +294,7 @@ function FilePreviewPane({
   themeVariant: ThemeVariant;
   previewMode: boolean;
   remote?: RemoteFileContext;
+  onDirtyChange?: (path: string, dirty: boolean) => void;
 }) {
   const editorTheme =
     themeVariant === "dark"
@@ -310,6 +312,7 @@ function FilePreviewPane({
   const isPreviewableImage = isPreviewableImageFile(fileName);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const savedResetRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const saveRevisionRef = useRef(0);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const [activeHeadingId, setActiveHeadingId] = useState<string | null>(null);
   const showMarkdownPreview = isMarkdown && previewMode && content !== null;
@@ -351,6 +354,7 @@ function FilePreviewPane({
     setImagePreview(null);
     setError(null);
     setSaveStatus("idle");
+    onDirtyChange?.(filePath, false);
 
     const loadFile = isPreviewableImage
       ? invoke<ImagePreviewData>(
@@ -392,7 +396,7 @@ function FilePreviewPane({
     return () => {
       cancelled = true;
     };
-  }, [filePath, projectPath, isPreviewableImage, remote]);
+  }, [filePath, projectPath, isPreviewableImage, remote, onDirtyChange]);
 
   useEffect(
     () => () => {
@@ -402,14 +406,13 @@ function FilePreviewPane({
     [],
   );
 
-  const handleChange = (value: string) => {
-    setContent(value);
-
-    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
-    if (savedResetRef.current) clearTimeout(savedResetRef.current);
-
-    setSaveStatus("saving");
-    saveTimerRef.current = setTimeout(async () => {
+  const saveContent = useCallback(
+    async (value: string) => {
+      if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+      if (savedResetRef.current) clearTimeout(savedResetRef.current);
+      const revision = saveRevisionRef.current + 1;
+      saveRevisionRef.current = revision;
+      setSaveStatus("saving");
       try {
         if (remote) {
           await invoke("remote_write_file_content", {
@@ -421,11 +424,26 @@ function FilePreviewPane({
         } else {
           await invoke("write_file_content", { path: filePath, content: value, projectPath });
         }
+        if (saveRevisionRef.current !== revision) return;
+        onDirtyChange?.(filePath, false);
         setSaveStatus("saved");
         savedResetRef.current = setTimeout(() => setSaveStatus("idle"), 2000);
       } catch {
+        if (saveRevisionRef.current !== revision) return;
         setSaveStatus("error");
       }
+    },
+    [filePath, onDirtyChange, projectPath, remote],
+  );
+
+  const handleChange = (value: string) => {
+    setContent(value);
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    if (savedResetRef.current) clearTimeout(savedResetRef.current);
+    onDirtyChange?.(filePath, true);
+    setSaveStatus("dirty");
+    saveTimerRef.current = setTimeout(() => {
+      void saveContent(value);
     }, 1500);
   };
 
@@ -450,7 +468,9 @@ function FilePreviewPane({
   const saveLabel =
     saveStatus === "saving"
       ? t("file.saving")
-      : saveStatus === "saved"
+      : saveStatus === "dirty"
+        ? t("file.unsaved")
+        : saveStatus === "saved"
         ? t("file.saved")
         : saveStatus === "error"
           ? t("file.saveFailed")
@@ -471,6 +491,13 @@ function FilePreviewPane({
         minWidth: 0,
         minHeight: 0,
         background: "var(--bg-panel)",
+      }}
+      onKeyDownCapture={(event) => {
+        if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "s" && content !== null) {
+          event.preventDefault();
+          event.stopPropagation();
+          void saveContent(content);
+        }
       }}
     >
       <div
@@ -627,6 +654,17 @@ export function FileViewer({
   const { t } = useI18n();
   const [previewModes, setPreviewModes] = useState<Record<string, boolean>>({});
   const [menuOpen, setMenuOpen] = useState(false);
+  const [dirtyTabs, setDirtyTabs] = useState<Record<string, boolean>>({});
+
+  const handleDirtyChange = useCallback((path: string, dirty: boolean) => {
+    setDirtyTabs((prev) => {
+      if (dirty) return prev[path] ? prev : { ...prev, [path]: true };
+      if (!prev[path]) return prev;
+      const next = { ...prev };
+      delete next[path];
+      return next;
+    });
+  }, []);
 
   useEffect(() => {
     setPreviewModes((prev) => {
@@ -634,6 +672,16 @@ export function FileViewer({
       for (const tab of tabs) {
         if (prev[tab.path]) next[tab.path] = true;
       }
+      return Object.keys(next).length === Object.keys(prev).length ? prev : next;
+    });
+  }, [tabs]);
+
+  useEffect(() => {
+    setDirtyTabs((prev) => {
+      const openPaths = new Set(tabs.map((tab) => tab.path));
+      const next = Object.fromEntries(
+        Object.entries(prev).filter(([path]) => openPaths.has(path)),
+      );
       return Object.keys(next).length === Object.keys(prev).length ? prev : next;
     });
   }, [tabs]);
@@ -692,6 +740,7 @@ export function FileViewer({
           {tabs.map((tab) => {
             const isActive = tab.path === activeTab.path;
             const fileColor = getFileColor(tab.name);
+            const isDirty = Boolean(dirtyTabs[tab.path]);
             return (
               <button
                 key={tab.path}
@@ -718,10 +767,11 @@ export function FileViewer({
               >
                 <span
                   style={{
-                    width: 5,
-                    height: 14,
-                    borderRadius: 2,
-                    background: fileColor,
+                    width: isDirty ? 8 : 5,
+                    height: isDirty ? 8 : 14,
+                    borderRadius: isDirty ? 999 : 2,
+                    background: isDirty ? "var(--warning)" : fileColor,
+                    boxShadow: isDirty ? "0 0 0 2px color-mix(in srgb, var(--warning) 20%, transparent)" : undefined,
                     flexShrink: 0,
                     display: "inline-block",
                   }}
@@ -804,7 +854,7 @@ export function FileViewer({
             type="button"
             disabled={!canRunScript}
             onClick={() => onRunPythonFile?.(activeTab.path)}
-            title={canRunScript ? t("file.runCurrent") : t("file.runPythonOnly")}
+            title={canRunScript ? t("file.runCurrent") : t("file.runScriptOnly")}
             aria-label={t("file.runCurrent")}
             style={{
               background: "none",
@@ -920,6 +970,7 @@ export function FileViewer({
                 themeVariant={themeVariant}
                 previewMode={!!previewModes[tab.path]}
                 remote={remote}
+                onDirtyChange={handleDirtyChange}
               />
             </div>
           );

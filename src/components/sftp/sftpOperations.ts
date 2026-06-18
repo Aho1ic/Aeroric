@@ -1,6 +1,11 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { SshConnection } from "../../types";
-import type { SftpEndpoint, SftpEntry, SftpTauriEndpoint } from "./sftpTypes";
+import type {
+  SftpConflictStrategy,
+  SftpEndpoint,
+  SftpEntry,
+  SftpTauriEndpoint,
+} from "./sftpTypes";
 
 export interface SftpDirectorySummary {
   fileCount: number;
@@ -93,10 +98,12 @@ export async function transferSftpPaths(
   paths: string[],
   target: SftpEndpoint,
   connections: SshConnection[],
+  conflictStrategy: SftpConflictStrategy = "fail",
 ) {
   return invoke(operation === "copy" ? "sftp_copy_paths" : "sftp_move_paths", {
     source: toTauriSftpEndpoint(source, connections),
     paths,
     target: toTauriSftpEndpoint(target, connections),
+    conflictStrategy,
   });
 }

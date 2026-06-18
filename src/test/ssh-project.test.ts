@@ -63,6 +63,7 @@ describe("SSH project opening", () => {
     await user.click(screen.getByRole("button", { name: "Copy password" }));
 
     expect(writeText).toHaveBeenCalledWith("secret-pass");
+    expect(screen.getByRole("button", { name: "Copy password" })).toHaveAttribute("data-copied", "true");
   });
 
   it("disables project-card password copy when no password is saved", () => {
@@ -80,6 +81,103 @@ describe("SSH project opening", () => {
     );
 
     expect(screen.getByRole("button", { name: "Copy password" })).toBeDisabled();
+  });
+
+  it("uses a real dropdown for existing groups when creating an SSH connection", async () => {
+    const user = userEvent.setup();
+
+    render(
+      React.createElement(
+        I18nProvider,
+        null,
+        React.createElement(SshProjectPage, {
+          connections: [connection("/srv/apps/aeroric")],
+          groups: ["Production", "Staging"],
+          onConnectionsChange: vi.fn(),
+          onClose: vi.fn(),
+          onOpen: vi.fn(),
+        }),
+      ),
+    );
+
+    await user.click(screen.getByRole("button", { name: "New connection" }));
+
+    const groupSelect = screen.getByLabelText("Group");
+    expect(groupSelect.tagName).toBe("SELECT");
+    expect(screen.getByRole("option", { name: "Production" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "Staging" })).toBeInTheDocument();
+  });
+
+  it("shows the SSH password storage hint without a bordered note box", async () => {
+    const user = userEvent.setup();
+
+    render(
+      React.createElement(
+        I18nProvider,
+        null,
+        React.createElement(SshProjectPage, {
+          connections: [connection("/srv/apps/aeroric")],
+          onConnectionsChange: vi.fn(),
+          onClose: vi.fn(),
+          onOpen: vi.fn(),
+        }),
+      ),
+    );
+
+    await user.click(screen.getByRole("button", { name: "Edit" }));
+
+    expect(
+      screen.getByText(
+        "Passwords are stored locally in Aeroric connection settings and passed to system SSH via sshpass environment variables.",
+      ),
+    ).toHaveStyle({ borderStyle: "none" });
+  });
+
+  it("shows the new group hint without a bordered note box", async () => {
+    const user = userEvent.setup();
+
+    render(
+      React.createElement(
+        I18nProvider,
+        null,
+        React.createElement(SshProjectPage, {
+          connections: [connection("/srv/apps/aeroric")],
+          onConnectionsChange: vi.fn(),
+          onClose: vi.fn(),
+          onOpen: vi.fn(),
+        }),
+      ),
+    );
+
+    await user.click(screen.getByRole("button", { name: "New group" }));
+
+    expect(screen.getByText("A group is saved when you create a connection in it.")).toHaveStyle({
+      borderStyle: "none",
+    });
+  });
+
+  it("renders SSH edit dialogs above project split panes and terminals", async () => {
+    const user = userEvent.setup();
+
+    render(
+      React.createElement(
+        I18nProvider,
+        null,
+        React.createElement(SshProjectPage, {
+          connections: [connection("/srv/apps/aeroric")],
+          onConnectionsChange: vi.fn(),
+          onClose: vi.fn(),
+          onOpen: vi.fn(),
+        }),
+      ),
+    );
+
+    await user.click(screen.getByRole("button", { name: "Edit" }));
+
+    const dialog = screen.getByRole("dialog", { name: "Edit connection" });
+    const overlay = dialog.parentElement as HTMLElement;
+    expect(Number(overlay.style.zIndex)).toBeGreaterThan(2000);
+    expect(overlay.parentElement).toBe(document.body);
   });
 
   it("copies the saved SSH password from a sidebar SSH connection card", async () => {

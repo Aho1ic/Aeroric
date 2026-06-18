@@ -127,6 +127,43 @@ describe("databaseApi", () => {
     });
   });
 
+  it("wraps dbx_redis_create_key with the typed create-key request", async () => {
+    vi.mocked(invoke).mockResolvedValueOnce(undefined);
+    const request = {
+      connectionId: "redis",
+      db: 2,
+      keyRaw: "users:1",
+      keyType: "hash" as const,
+      value: "Ada",
+      field: "name",
+      score: 0,
+      entryId: "*",
+      ttl: 120,
+    };
+
+    await databaseApi.dbxRedisCreateKey(request);
+
+    expect(invoke).toHaveBeenCalledWith("dbx_redis_create_key", { request });
+  });
+
+  it("wraps dbx_redis_execute_command with command text and safety override", async () => {
+    vi.mocked(invoke).mockResolvedValueOnce({ command: "GET", safety: "allowed", value: "Ada" });
+
+    await databaseApi.dbxRedisExecuteCommand({
+      connectionId: "redis",
+      db: 0,
+      command: "GET users:1",
+      skipSafetyCheck: false,
+    });
+
+    expect(invoke).toHaveBeenCalledWith("dbx_redis_execute_command", {
+      connectionId: "redis",
+      db: 0,
+      command: "GET users:1",
+      skipSafetyCheck: false,
+    });
+  });
+
   it("wraps dbx_mongo_find_documents with collection query parameters", async () => {
     vi.mocked(invoke).mockResolvedValueOnce({ documents: [], total: 0 });
     const request = {
@@ -158,6 +195,23 @@ describe("databaseApi", () => {
     await databaseApi.dbxMongoDeleteDocuments(request);
 
     expect(invoke).toHaveBeenCalledWith("dbx_mongo_delete_documents", request);
+  });
+
+  it("wraps dbx_build_table_structure_change_sql with DBX Core options", async () => {
+    vi.mocked(invoke).mockResolvedValueOnce({ statements: ["ALTER TABLE users ADD COLUMN age int;"], warnings: [] });
+    const options = {
+      databaseType: "postgres",
+      schema: "public",
+      tableName: "users",
+      columns: [],
+      indexes: [],
+      foreignKeys: [],
+      triggers: [],
+    };
+
+    await databaseApi.dbxBuildTableStructureChangeSql(options);
+
+    expect(invoke).toHaveBeenCalledWith("dbx_build_table_structure_change_sql", { options });
   });
 
   it("wraps dbx_driver_manifest", async () => {

@@ -9,11 +9,11 @@ import {
   Server,
   Terminal,
   ArrowLeftRight,
-  Container,
   Database,
 } from "lucide-react";
 import { useI18n } from "../i18n";
 import type { RightPanel } from "../hooks/useProjectPanels";
+import { DockerIcon } from "./DockerIcon";
 
 export function RightToolbar({
   activePanel,
@@ -72,7 +72,7 @@ export function RightToolbar({
     { key: "database", icon: <Database size={17} />, title: t("database.title") },
     {
       key: "docker",
-      icon: <Container size={17} />,
+      icon: <DockerIcon size={19} />,
       title: t("docker.title"),
       disabled: dockerDisabled,
     },

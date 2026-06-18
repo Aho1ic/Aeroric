@@ -47,6 +47,8 @@ import {
   sftpFileName,
   sftpKeyAction,
   sftpParentPath,
+  shouldPromptForUnknownSftpConflict,
+  type SftpConflictStrategy,
   type SftpEndpoint,
   type SftpEntry,
   type SftpOperation,
@@ -79,12 +81,22 @@ type DragPayload = {
 type ClipboardPayload = {
   endpoint: SftpEndpoint;
   paths: string[];
+  sourceSide: PaneSide;
 };
 
 type PreviewTarget = {
   endpoint: SftpEndpoint;
   path: string;
   isDir: boolean;
+} | null;
+
+type TransferConflict = {
+  operation: SftpOperation;
+  sourceEndpoint: SftpEndpoint;
+  sourceSide: PaneSide;
+  targetSide: PaneSide;
+  paths: string[];
+  targetEndpoint: SftpEndpoint;
 } | null;
 
 function endpointLabel(endpoint: SftpEndpoint): string {
@@ -199,6 +211,7 @@ export function SftpPanel({
   const [clipboardPayload, setClipboardPayload] = useState<ClipboardPayload | null>(null);
   const [focusedSide, setFocusedSide] = useState<PaneSide>("left");
   const [previewTarget, setPreviewTarget] = useState<PreviewTarget>(null);
+  const [transferConflict, setTransferConflict] = useState<TransferConflict>(null);
 
   const updatePane = useCallback((side: PaneSide, updater: (pane: PaneState) => PaneState) => {
     if (side === "left") setLeft(updater);
@@ -389,13 +402,48 @@ export function SftpPanel({
   );
 
   const runTransfer = useCallback(
-    async (operation: SftpOperation, sourceSide: PaneSide, targetSide: PaneSide, paths?: string[]) => {
+    async (
+      operation: SftpOperation,
+      sourceSide: PaneSide,
+      targetSide: PaneSide,
+      paths?: string[],
+      targetOverride?: SftpEndpoint,
+      conflictStrategy: SftpConflictStrategy = "fail",
+      sourceOverride?: SftpEndpoint,
+    ) => {
       const source = panes[sourceSide];
       const target = panes[targetSide];
       const selectedPaths = paths ?? (source.selectedPath ? [source.selectedPath] : []);
       if (selectedPaths.length === 0) return;
+      const sourceEndpoint = sourceOverride ?? source.endpoint;
+      const targetEndpoint = targetOverride ?? target.endpoint;
+      const targetEntries =
+        targetEndpoint.path === target.endpoint.path
+          ? target.entries
+          : target.childrenByPath.get(targetEndpoint.path);
+      if (
+        conflictStrategy === "fail" &&
+        shouldPromptForUnknownSftpConflict(selectedPaths, targetEntries)
+      ) {
+        setTransferConflict({
+          operation,
+          sourceEndpoint,
+          sourceSide,
+          targetSide,
+          paths: selectedPaths,
+          targetEndpoint,
+        });
+        return;
+      }
       try {
-        await transferSftpPaths(operation, source.endpoint, selectedPaths, target.endpoint, sshConnections);
+        await transferSftpPaths(
+          operation,
+          sourceEndpoint,
+          selectedPaths,
+          targetEndpoint,
+          sshConnections,
+          conflictStrategy,
+        );
         showToast(t(operation === "copy" ? "sftp.copyDone" : "sftp.moveDone"));
         await refreshPane(sourceSide, source);
         await refreshPane(targetSide, target);
@@ -406,11 +454,29 @@ export function SftpPanel({
     [panes, refreshPane, showToast, sshConnections, t],
   );
 
+  const resolveTransferConflict = useCallback(
+    (strategy: "cancel" | "merge" | "replace") => {
+      const pending = transferConflict;
+      setTransferConflict(null);
+      if (!pending || strategy === "cancel") return;
+      void runTransfer(
+        pending.operation,
+        pending.sourceSide,
+        pending.targetSide,
+        pending.paths,
+        pending.targetEndpoint,
+        strategy,
+        pending.sourceEndpoint,
+      );
+    },
+    [runTransfer, transferConflict],
+  );
+
   const copySelected = useCallback(
     (side: PaneSide) => {
       const pane = panes[side];
       if (!pane.selectedPath) return;
-      setClipboardPayload({ endpoint: pane.endpoint, paths: [pane.selectedPath] });
+      setClipboardPayload({ endpoint: pane.endpoint, paths: [pane.selectedPath], sourceSide: side });
       showToast(t("sftp.copiedToClipboard"));
     },
     [panes, showToast, t],
@@ -435,6 +501,21 @@ export function SftpPanel({
       if (!clipboardPayload) return;
       const target = panes[side];
       const targetEndpoint = selectedDirectoryEndpoint(target);
+      const targetEntries =
+        targetEndpoint.path === target.endpoint.path
+          ? target.entries
+          : target.childrenByPath.get(targetEndpoint.path);
+      if (shouldPromptForUnknownSftpConflict(clipboardPayload.paths, targetEntries)) {
+        setTransferConflict({
+          operation: "copy",
+          sourceEndpoint: clipboardPayload.endpoint,
+          sourceSide: clipboardPayload.sourceSide,
+          targetSide: side,
+          paths: clipboardPayload.paths,
+          targetEndpoint,
+        });
+        return;
+      }
       try {
         await transferSftpPaths(
           "copy",
@@ -442,6 +523,7 @@ export function SftpPanel({
           clipboardPayload.paths,
           targetEndpoint,
           sshConnections,
+          "fail",
         );
         showToast(t("sftp.copyDone"));
         await refreshPane(side, target);
@@ -727,16 +809,13 @@ export function SftpPanel({
                       event.stopPropagation();
                       if (!dragPayload || !entry.isDir) return;
                       const targetEndpoint = { ...pane.endpoint, path: entry.path };
-                      void transferSftpPaths(
+                      void runTransfer(
                         "move",
-                        dragPayload.endpoint,
+                        dragPayload.side,
+                        side,
                         dragPayload.paths,
                         targetEndpoint,
-                        sshConnections,
-                      )
-                        .then(() => refreshPane(side, pane))
-                        .then(() => refreshPane(dragPayload.side, panes[dragPayload.side]))
-                        .catch((error) => showToast(t("sftp.operationFailed", { error: String(error) })));
+                      );
                       setDragPayload(null);
                     }}
                   >
@@ -817,6 +896,45 @@ export function SftpPanel({
               themeVariant={themeVariant}
               onClose={() => setPreviewTarget(null)}
             />
+          </div>
+        </div>
+      )}
+      {transferConflict && (
+        <div
+          className="sftp-preview-overlay"
+          role="dialog"
+          aria-modal="true"
+          aria-label={t("sftp.conflictTitle")}
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) resolveTransferConflict("cancel");
+          }}
+        >
+          <div className="sftp-conflict-dialog">
+            <div className="sftp-conflict-title">{t("sftp.conflictTitle")}</div>
+            <div className="sftp-conflict-message">{t("sftp.conflictMessage")}</div>
+            <div className="sftp-conflict-actions">
+              <button
+                type="button"
+                className="sftp-action-btn"
+                onClick={() => resolveTransferConflict("cancel")}
+              >
+                {t("common.cancel")}
+              </button>
+              <button
+                type="button"
+                className="sftp-action-btn"
+                onClick={() => resolveTransferConflict("merge")}
+              >
+                {t("sftp.merge")}
+              </button>
+              <button
+                type="button"
+                className="sftp-action-btn danger"
+                onClick={() => resolveTransferConflict("replace")}
+              >
+                {t("sftp.replace")}
+              </button>
+            </div>
           </div>
         </div>
       )}

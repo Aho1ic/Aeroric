@@ -14,6 +14,8 @@ import {
   sftpEndpointKey,
   sftpFileIconKind,
   sftpKeyAction,
+  shouldPromptForSftpConflict,
+  shouldPromptForUnknownSftpConflict,
   type SftpEndpoint,
   type SftpEntry,
 } from "../components/sftp/sftpTypes";
@@ -77,6 +79,22 @@ describe("sftp panel helpers", () => {
     expect(sftpKeyAction({ metaKey: true, key: "Backspace", code: "Backspace" })).toBe("delete");
     expect(sftpKeyAction({ key: " ", code: "Space" })).toBe("preview");
     expect(sftpKeyAction({ metaKey: false, key: "Backspace", code: "Backspace" })).toBe(null);
+  });
+
+  it("detects existing destination names before copy and move operations", () => {
+    const entries: SftpEntry[] = [
+      { name: "same.txt", path: "/target/same.txt", isDir: false },
+      { name: "docs", path: "/target/docs", isDir: true },
+    ];
+
+    expect(shouldPromptForSftpConflict(["/source/same.txt"], entries)).toBe(true);
+    expect(shouldPromptForSftpConflict(["/source/docs/"], entries)).toBe(true);
+    expect(shouldPromptForSftpConflict(["/source/new.txt"], entries)).toBe(false);
+  });
+
+  it("prompts conservatively when dropping into an unloaded directory", () => {
+    expect(shouldPromptForUnknownSftpConflict(["/source/same.txt"], undefined)).toBe(true);
+    expect(shouldPromptForUnknownSftpConflict(["/source/same.txt"], [])).toBe(false);
   });
 
   it("creates clickable breadcrumb segments for absolute paths", () => {

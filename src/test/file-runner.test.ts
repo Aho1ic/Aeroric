@@ -14,11 +14,12 @@ const envs: CondaEnvironment[] = [
 ];
 
 describe("file runner helpers", () => {
-  it("only enables direct running for local Python and shell scripts", () => {
+  it("enables direct running for Python and shell scripts in local or SSH projects", () => {
     expect(isRunnableScriptFile("/repo/train.py", false)).toBe(true);
     expect(isRunnableScriptFile("/repo/scripts/setup.sh", false)).toBe(true);
     expect(isRunnableScriptFile("/repo/README.md", false)).toBe(false);
-    expect(isRunnableScriptFile("/repo/train.py", true)).toBe(false);
+    expect(isRunnableScriptFile("/repo/train.py", true)).toBe(true);
+    expect(isRunnableScriptFile("/repo/scripts/setup.sh", true)).toBe(true);
   });
 
   it("builds a quoted Python command with the selected conda environment", () => {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { dockerActionButtonStyle } from "../components/docker/DockerServiceView";
+import { dockerActionButtonStyle, dockerBodyStyle } from "../components/docker/DockerServiceView";
 
 describe("DockerServiceView action button styles", () => {
   it("uses transparent backgrounds for container action buttons", () => {
@@ -14,5 +14,9 @@ describe("DockerServiceView action button styles", () => {
 
   it("uses a lighter green for the start button", () => {
     expect(dockerActionButtonStyle("start").color).toBe("#4ade80");
+  });
+
+  it("places the container table directly against the top of the scroll body", () => {
+    expect(dockerBodyStyle.paddingTop).toBe(0);
   });
 });

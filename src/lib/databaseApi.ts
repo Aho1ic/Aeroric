@@ -22,6 +22,9 @@ import type {
   MongoInsertDocumentRequest,
   MongoUpdateDocumentRequest,
   RedisDatabaseInfo,
+  RedisCommandRequest,
+  RedisCommandResult,
+  RedisCreateKeyRequest,
   RedisKeyRequest,
   RedisScanKeysRequest,
   RedisScanResult,
@@ -35,6 +38,8 @@ import type {
   TableImportSummary,
   TableDataRequest,
   TableDataResponse,
+  TableStructureSqlOptions,
+  TableStructureSqlResult,
 } from "../types/database";
 
 export const databaseApi = {
@@ -176,6 +181,15 @@ export const databaseApi = {
     invoke<void>("dbx_redis_delete_key", { ...request }),
   dbxRedisSetTtl: (request: RedisSetTtlRequest) =>
     invoke<void>("dbx_redis_set_ttl", { ...request }),
+  dbxRedisCreateKey: (request: RedisCreateKeyRequest) =>
+    invoke<void>("dbx_redis_create_key", { request }),
+  dbxRedisExecuteCommand: (request: RedisCommandRequest) =>
+    invoke<RedisCommandResult>("dbx_redis_execute_command", {
+      connectionId: request.connectionId,
+      db: request.db,
+      command: request.command,
+      skipSafetyCheck: request.skipSafetyCheck ?? false,
+    }),
   dbxMongoListDatabases: (connectionId: string) =>
     invoke<string[]>("dbx_mongo_list_databases", { connectionId }),
   dbxMongoListCollections: (connectionId: string, database: string) =>
@@ -211,4 +225,6 @@ export const databaseApi = {
     invoke<unknown>("dbx_build_data_compare_sync_plan", { options }),
   dbxPrepareDataCompareFromTables: (options: unknown) =>
     invoke<unknown>("dbx_prepare_data_compare_from_tables", { options }),
+  dbxBuildTableStructureChangeSql: (options: TableStructureSqlOptions) =>
+    invoke<TableStructureSqlResult>("dbx_build_table_structure_change_sql", { options }),
 };

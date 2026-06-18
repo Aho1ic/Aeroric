@@ -1404,6 +1404,36 @@ body {
   min-height: 0;
 }
 
+.sftp-conflict-dialog {
+  width: min(420px, 100%);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 18px;
+  border: 1px solid color-mix(in srgb, var(--border-medium) 68%, transparent);
+  border-radius: 12px;
+  background: var(--bg-panel);
+  box-shadow: 0 22px 64px color-mix(in srgb, #000 26%, transparent);
+}
+
+.sftp-conflict-title {
+  color: var(--text-primary);
+  font-size: 14px;
+  font-weight: 740;
+}
+
+.sftp-conflict-message {
+  color: var(--text-secondary);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.sftp-conflict-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
 .ssh-workspace {
   position: absolute;
   inset: 0;

@@ -10,6 +10,11 @@ lerna-debug.log*
 node_modules
 dist
 dist-ssr
+coverage
+test-results
+playwright-report
+blob-report
+*.trace.zip
 *.local
 
 # Editor directories and files
@@ -31,6 +36,8 @@ local_change.md
 plan.md
 superpowers/
 .superpowers/
+skills/
+.skills/
 docs/superpowers/
 Trellis/
 trellis/

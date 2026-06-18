@@ -237,6 +237,15 @@ fn run_docker_args(target: DockerTarget, args: Vec<String>) -> Result<String, St
     }
 }
 
+fn docker_delete_image_args(image: &str) -> Vec<String> {
+    vec![
+        "image".to_string(),
+        "rm".to_string(),
+        "--force".to_string(),
+        image.to_string(),
+    ]
+}
+
 fn parse_json_lines<T>(raw: &str, label: &str) -> Result<Vec<T>, String>
 where
     T: for<'de> Deserialize<'de>,
@@ -398,11 +407,7 @@ pub async fn docker_delete_image(
     image: String,
 ) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {
-        run_docker_args(
-            DockerTarget { remote },
-            vec!["image".to_string(), "rm".to_string(), image],
-        )
-        .map(|_| ())
+        run_docker_args(DockerTarget { remote }, docker_delete_image_args(&image)).map(|_| ())
     })
     .await
     .map_err(|err| err.to_string())?
@@ -429,8 +434,8 @@ pub async fn docker_tag_image(
 mod tests {
     use super::{
         build_remote_docker_command, build_remote_docker_sudo_no_password_command,
-        build_remote_docker_sudo_password_command, parse_containers, parse_images,
-        should_retry_remote_docker_with_sudo, strip_docker_created_timezone,
+        build_remote_docker_sudo_password_command, docker_delete_image_args, parse_containers,
+        parse_images, should_retry_remote_docker_with_sudo, strip_docker_created_timezone,
     };
 
     #[test]
@@ -520,6 +525,19 @@ mod tests {
         assert!(command.contains("printf '%s\\n' 'pa'\\''ss word'"));
         assert!(command.contains("sudo -S -p ''"));
         assert!(command.contains("docker image rm repo/app:latest"));
+    }
+
+    #[test]
+    fn deletes_images_with_force_to_remove_container_references() {
+        assert_eq!(
+            docker_delete_image_args("repo/app:latest"),
+            vec![
+                "image".to_string(),
+                "rm".to_string(),
+                "--force".to_string(),
+                "repo/app:latest".to_string(),
+            ]
+        );
     }
 
     #[test]

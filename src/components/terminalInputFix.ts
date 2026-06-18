@@ -3,7 +3,7 @@ import { IS_MAC_WEBKIT, IS_OTHER_WEBKIT } from "../platform";
 
 type TerminalWithInput = Pick<Terminal, "input" | "textarea">;
 
-export const POST_COMPOSITION_REPLAY_IGNORE_MS = 1200;
+export const POST_COMPOSITION_REPLAY_IGNORE_MS = 3000;
 
 export function applyTerminalTextareaInputAttributes(term: { textarea?: HTMLTextAreaElement | null }): void {
   if (!term.textarea) return;
@@ -22,6 +22,10 @@ function getPrintableSymbolInput(data: string | null): string | null {
 }
 
 function isSymbolInputType(inputType: string): boolean {
+  return inputType === "insertText" || inputType === "insertCompositionText";
+}
+
+function isTextInsertInputType(inputType: string): boolean {
   return inputType === "insertText" || inputType === "insertCompositionText";
 }
 
@@ -48,6 +52,19 @@ function addIgnoredCandidate(candidates: Set<string>, text: string | null | unde
   candidates.add(text);
   const normalized = normalizeCommittedCompositionText(text);
   if (normalized) candidates.add(normalized);
+}
+
+function removeMatchedPostCompositionCandidates(
+  candidates: ReadonlySet<string>,
+  text: string,
+): Set<string> {
+  const next = new Set<string>();
+  for (const candidate of candidates) {
+    if (!shouldIgnorePostCompositionInsert(text, candidate, normalizeCommittedCompositionText(candidate))) {
+      next.add(candidate);
+    }
+  }
+  return next;
 }
 
 export function buildPostCompositionIgnoredCandidates(
@@ -82,6 +99,33 @@ export function shouldIgnorePostCompositionCandidate(
   return false;
 }
 
+function shouldIgnoreReplayByCharacters(text: string, candidates: ReadonlySet<string>): boolean {
+  if (text.length === 0) return true;
+  for (let index = 1; index <= text.length; index += 1) {
+    const prefix = text.slice(0, index);
+    const normalizedPrefix = normalizeCommittedCompositionText(prefix);
+    if (!candidates.has(prefix) && !candidates.has(normalizedPrefix)) {
+      continue;
+    }
+    if (shouldIgnoreReplayByCharacters(text.slice(index), candidates)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+export function isPostCompositionReplayPrefix(
+  text: string | null | undefined,
+  candidates: ReadonlySet<string>,
+): boolean {
+  if (!text || candidates.size === 0) return false;
+  const normalized = normalizeCommittedCompositionText(text);
+  for (const candidate of candidates) {
+    if (candidate.startsWith(text) || candidate.startsWith(normalized)) return true;
+  }
+  return false;
+}
+
 export function shouldIgnorePostCompositionInsert(
   text: string | null | undefined,
   ignoredText: string | null,
@@ -101,7 +145,7 @@ export function shouldSuppressBrowserCompositionPreview(
   inputType: string,
   isComposing: boolean,
 ): boolean {
-  return isComposing && (inputType === "insertCompositionText" || inputType === "insertText");
+  return isComposing && inputType === "insertCompositionText";
 }
 
 export function shouldDeferRomanizedCompositionCommit(
@@ -115,6 +159,10 @@ export function shouldDeferRomanizedCompositionCommit(
   const normalized = normalizeCommittedCompositionText(value);
   const normalizedPreedit = normalizeCommittedCompositionText(preeditText ?? "");
   return normalized === normalizedPreedit || normalizedPreedit.length === 0;
+}
+
+function containsCommittedCjkText(text: string | null | undefined): boolean {
+  return Boolean(text && /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/u.test(text));
 }
 
 export function attachMacWebKitShiftInputFix(term: TerminalWithInput): () => void {
@@ -171,6 +219,7 @@ export function attachLinuxIMEFix(
   const textarea = term.textarea;
   let isComposing = false;
   let compositionText = "";
+  let ignoredReplayProgress = "";
   let ignoredPostCompositionCandidates = new Set<string>();
   let ignorePostCompositionUntil = 0;
   let pendingCompositionCommit:
@@ -213,6 +262,7 @@ export function attachLinuxIMEFix(
 
   const commitCompositionText = (text: string, preeditText: string) => {
     const normalized = normalizeCommittedCompositionText(text);
+    ignoredReplayProgress = "";
     ignoredPostCompositionCandidates = buildPostCompositionIgnoredCandidates(text, preeditText);
     ignorePostCompositionUntil = performance.now() + POST_COMPOSITION_REPLAY_IGNORE_MS;
     clearTextareaNowAndNextFrame();
@@ -231,6 +281,7 @@ export function attachLinuxIMEFix(
         commitCompositionText(pending.text, pending.preeditText);
       }, 30),
     };
+    ignoredReplayProgress = "";
     ignoredPostCompositionCandidates = buildPostCompositionIgnoredCandidates(text, preeditText);
     ignorePostCompositionUntil = performance.now() + POST_COMPOSITION_REPLAY_IGNORE_MS;
     clearTextareaNowAndNextFrame();
@@ -240,6 +291,7 @@ export function attachLinuxIMEFix(
     clearPendingCompositionCommit();
     isComposing = true;
     compositionText = "";
+    ignoredReplayProgress = "";
     clearTextareaNowAndNextFrame();
     void event;
   };
@@ -252,6 +304,17 @@ export function attachLinuxIMEFix(
   const handleCompositionEndCapture = (event: CompositionEvent) => {
     const preeditText = compositionText;
     const text = event.data || preeditText;
+    if (
+      performance.now() <= ignorePostCompositionUntil &&
+      (shouldIgnorePostCompositionCandidate(text, ignoredPostCompositionCandidates) ||
+        shouldIgnoreReplayByCharacters(text, ignoredPostCompositionCandidates))
+    ) {
+      isComposing = false;
+      compositionText = "";
+      clearTextareaNowAndNextFrame();
+      event.stopImmediatePropagation();
+      return;
+    }
     isComposing = false;
     compositionText = "";
     event.stopImmediatePropagation();
@@ -264,8 +327,28 @@ export function attachLinuxIMEFix(
 
   const handleBeforeInputCapture = (event: InputEvent) => {
     if (
+      event.data &&
+      isTextInsertInputType(event.inputType) &&
+      performance.now() <= ignorePostCompositionUntil &&
+      isPostCompositionReplayPrefix(ignoredReplayProgress + event.data, ignoredPostCompositionCandidates)
+    ) {
+      ignoredReplayProgress += event.data;
+      if (shouldIgnorePostCompositionCandidate(ignoredReplayProgress, ignoredPostCompositionCandidates)) {
+        ignoredPostCompositionCandidates = removeMatchedPostCompositionCandidates(
+          ignoredPostCompositionCandidates,
+          ignoredReplayProgress,
+        );
+        ignoredReplayProgress = "";
+      }
+      clearTextareaNowAndNextFrame();
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      return;
+    }
+
+    if (
       pendingCompositionCommit &&
-      (event.inputType === "insertText" || event.inputType === "insertCompositionText") &&
+      isTextInsertInputType(event.inputType) &&
       event.data
     ) {
       const pending = pendingCompositionCommit;
@@ -283,15 +366,54 @@ export function attachLinuxIMEFix(
     }
 
     if (
-      (event.inputType === "insertText" || event.inputType === "insertCompositionText") &&
+      isTextInsertInputType(event.inputType) &&
       event.data &&
       performance.now() <= ignorePostCompositionUntil &&
-      shouldIgnorePostCompositionCandidate(event.data, ignoredPostCompositionCandidates)
+      (shouldIgnorePostCompositionCandidate(event.data, ignoredPostCompositionCandidates) ||
+        shouldIgnoreReplayByCharacters(event.data, ignoredPostCompositionCandidates))
     ) {
       clearTextareaNowAndNextFrame();
       event.preventDefault();
       event.stopImmediatePropagation();
-      ignoredPostCompositionCandidates = new Set<string>();
+      ignoredReplayProgress = "";
+      ignoredPostCompositionCandidates = removeMatchedPostCompositionCandidates(
+        ignoredPostCompositionCandidates,
+        event.data,
+      );
+      return;
+    }
+
+    if (
+      isComposing &&
+      event.inputType === "insertText" &&
+      containsCommittedCjkText(event.data)
+    ) {
+      const preeditText = compositionText;
+      isComposing = false;
+      compositionText = "";
+      clearPendingCompositionCommit();
+      ignoredReplayProgress = "";
+      ignoredPostCompositionCandidates = buildPostCompositionIgnoredCandidates(event.data, preeditText);
+      ignorePostCompositionUntil = performance.now() + POST_COMPOSITION_REPLAY_IGNORE_MS;
+      clearTextareaNowAndNextFrame();
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      sendText(event.data);
+      return;
+    }
+
+    if (
+      isComposing &&
+      event.inputType === "insertText" &&
+      shouldDeferRomanizedCompositionCommit(event.data, compositionText)
+    ) {
+      const preeditText = compositionText;
+      isComposing = false;
+      compositionText = "";
+      clearPendingCompositionCommit();
+      deferCompositionCommit(event.data ?? "", preeditText);
+      event.preventDefault();
+      event.stopImmediatePropagation();
       return;
     }
 
@@ -303,15 +425,7 @@ export function attachLinuxIMEFix(
       return;
     }
 
-    if (event.inputType === "insertCompositionText") {
-      compositionText = event.data ?? compositionText;
-      clearTextareaNowAndNextFrame();
-      event.preventDefault();
-      event.stopImmediatePropagation();
-      return;
-    }
-
-    const symbol = getPrintableSymbolInput(event.data);
+    const symbol = isComposing ? null : getPrintableSymbolInput(event.data);
     if (symbol !== null && isSymbolInputType(event.inputType)) {
       clearTextareaNowAndNextFrame();
       event.preventDefault();
@@ -320,7 +434,7 @@ export function attachLinuxIMEFix(
       return;
     }
 
-    if (isComposing) {
+    if (isComposing && !isTextInsertInputType(event.inputType)) {
       clearTextareaNowAndNextFrame();
       event.preventDefault();
       event.stopImmediatePropagation();
@@ -344,21 +458,49 @@ export function attachLinuxIMEFix(
     }
     if (
       pendingCompositionCommit &&
-      shouldIgnorePostCompositionCandidate(
+      (shouldIgnorePostCompositionCandidate(
         data,
         buildPostCompositionIgnoredCandidates(
           pendingCompositionCommit.text,
           pendingCompositionCommit.preeditText,
         ),
-      )
+      ) ||
+        shouldIgnoreReplayByCharacters(
+          data,
+          buildPostCompositionIgnoredCandidates(
+            pendingCompositionCommit.text,
+            pendingCompositionCommit.preeditText,
+          ),
+        ))
     ) {
       return;
     }
     if (
       performance.now() <= ignorePostCompositionUntil &&
-      shouldIgnorePostCompositionCandidate(data, ignoredPostCompositionCandidates)
+      data &&
+      isPostCompositionReplayPrefix(ignoredReplayProgress + data, ignoredPostCompositionCandidates)
     ) {
-      ignoredPostCompositionCandidates = new Set<string>();
+      ignoredReplayProgress += data;
+      if (shouldIgnorePostCompositionCandidate(ignoredReplayProgress, ignoredPostCompositionCandidates)) {
+        ignoredPostCompositionCandidates = removeMatchedPostCompositionCandidates(
+          ignoredPostCompositionCandidates,
+          ignoredReplayProgress,
+        );
+        ignoredReplayProgress = "";
+      }
+      return;
+    }
+    ignoredReplayProgress = "";
+    if (
+      performance.now() <= ignorePostCompositionUntil &&
+      (shouldIgnorePostCompositionCandidate(data, ignoredPostCompositionCandidates) ||
+        shouldIgnoreReplayByCharacters(data, ignoredPostCompositionCandidates))
+    ) {
+      ignoredReplayProgress = "";
+      ignoredPostCompositionCandidates = removeMatchedPostCompositionCandidates(
+        ignoredPostCompositionCandidates,
+        data,
+      );
       return;
     }
     onDataCallback(data);

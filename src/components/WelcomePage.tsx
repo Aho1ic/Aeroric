@@ -7,7 +7,6 @@ import {
   Layers,
   Plus,
   Server,
-  Container,
   Trash2,
   Clock,
   Blocks,
@@ -40,6 +39,7 @@ import { SshProjectPage, type SshProjectInput } from "./ssh/SshProjectDialog";
 import { SftpPanel } from "./sftp/SftpPanel";
 import { DockerServiceView } from "./docker/DockerServiceView";
 import { DatabaseView } from "./database/DatabaseView";
+import { DockerIcon } from "./DockerIcon";
 import RecursiveHeroCanvas from "./recursive-hero-effect/RecursiveHeroCanvas";
 import { useI18n, pluralKey } from "../i18n";
 import s from "../styles";
@@ -58,11 +58,16 @@ function SidebarItem({
   onClick?: () => void;
 }) {
   return (
-    <div
+    <button
+      type="button"
       style={{
         ...s.sidebarItem,
         background: active ? "var(--bg-selected)" : "transparent",
         color: active ? "var(--text-primary)" : "var(--text-muted)",
+        width: "100%",
+        border: "1px solid transparent",
+        fontFamily: "var(--font-ui)",
+        textAlign: "left",
       }}
       onClick={onClick}
       title={label}
@@ -71,7 +76,7 @@ function SidebarItem({
       <span style={{ display: "flex", alignItems: "center" }}>{icon}</span>
       <span style={{ marginLeft: 6, fontSize: 12, fontWeight: active ? 650 : 540 }}>{label}</span>
       {meta && <span style={s.sidebarItemMeta}>{meta}</span>}
-    </div>
+    </button>
   );
 }
 
@@ -185,7 +190,7 @@ export function WelcomePage({
   >("projects");
   const [openProjectMenu, setOpenProjectMenu] = useState(false);
   const [sftpOpen, setSftpOpen] = useState(false);
-  const showRecursiveBackground = themeVariant === "light";
+  const showRecursiveBackground = themeVariant === "light" && view === "projects" && !sftpOpen;
   const sshGroups = useMemo(
     () =>
       Array.from(
@@ -284,7 +289,7 @@ export function WelcomePage({
               onClick={() => switchWelcomeView("skills")}
             />
             <SidebarItem
-              icon={<Container size={15} />}
+              icon={<DockerIcon size={15} />}
               label={t("docker.title")}
               active={view === "docker"}
               onClick={() => switchWelcomeView("docker")}
@@ -294,6 +299,12 @@ export function WelcomePage({
               label={t("sftp.title")}
               active={sftpOpen}
               onClick={() => setSftpOpen(true)}
+            />
+            <SidebarItem
+              icon={<Server size={15} />}
+              label={t("ssh.title")}
+              active={view === "ssh" && !sftpOpen}
+              onClick={() => switchWelcomeView("ssh")}
             />
             <SidebarItem
               icon={<Database size={15} />}

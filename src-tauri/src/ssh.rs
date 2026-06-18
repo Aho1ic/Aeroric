@@ -143,9 +143,9 @@ fn build_remote_resume_command(
     )
 }
 
-fn build_ssh_args(connection: &SshConnection) -> Vec<String> {
+fn build_ssh_args(connection: &SshConnection, force_tty: bool) -> Vec<String> {
     let mut args = vec![
-        "-tt".to_string(),
+        if force_tty { "-tt" } else { "-T" }.to_string(),
         "-p".to_string(),
         connection.port.to_string(),
     ];
@@ -186,8 +186,12 @@ fn sshpass_program() -> String {
     }
 }
 
-fn ssh_command_spec(connection: &SshConnection, remote_command: Option<String>) -> SshCommandSpec {
-    let mut ssh_args = build_ssh_args(connection);
+fn ssh_command_spec(
+    connection: &SshConnection,
+    remote_command: Option<String>,
+    force_tty: bool,
+) -> SshCommandSpec {
+    let mut ssh_args = build_ssh_args(connection, force_tty);
     if let Some(remote_command) = remote_command {
         ssh_args.push(remote_command);
     }
@@ -237,7 +241,7 @@ fn command_builder_from_spec(spec: SshCommandSpec) -> CommandBuilder {
 }
 
 fn build_ssh_command(connection: &SshConnection) -> CommandBuilder {
-    command_builder_from_spec(ssh_command_spec(connection, None))
+    command_builder_from_spec(ssh_command_spec(connection, None, true))
 }
 
 fn build_ssh_remote_command(connection: &SshConnection, remote_command: String) -> CommandBuilder {
@@ -247,6 +251,7 @@ fn build_ssh_remote_command(connection: &SshConnection, remote_command: String) 
             ..connection.clone()
         },
         Some(remote_command),
+        true,
     ))
 }
 
@@ -260,6 +265,7 @@ pub(crate) fn ssh_command_spec_for_remote_command(
             ..connection.clone()
         },
         Some(remote_command),
+        false,
     )
 }
 
@@ -557,38 +563,44 @@ mod tests {
 
     #[test]
     fn ssh_args_include_default_port_and_target() {
-        let args = build_ssh_args(&SshConnection {
-            id: "conn-1".to_string(),
-            name: "prod".to_string(),
-            group: None,
-            host: "prod.example.com".to_string(),
-            port: 22,
-            username: "deploy".to_string(),
-            identity_file: None,
-            password: None,
-            remote_path: None,
-            created_at: 1,
-            last_connected_at: None,
-        });
+        let args = build_ssh_args(
+            &SshConnection {
+                id: "conn-1".to_string(),
+                name: "prod".to_string(),
+                group: None,
+                host: "prod.example.com".to_string(),
+                port: 22,
+                username: "deploy".to_string(),
+                identity_file: None,
+                password: None,
+                remote_path: None,
+                created_at: 1,
+                last_connected_at: None,
+            },
+            true,
+        );
 
         assert_eq!(args, vec!["-tt", "-p", "22", "deploy@prod.example.com"]);
     }
 
     #[test]
     fn ssh_args_include_identity_file() {
-        let args = build_ssh_args(&SshConnection {
-            id: "conn-1".to_string(),
-            name: "prod".to_string(),
-            group: None,
-            host: "prod.example.com".to_string(),
-            port: 2200,
-            username: "deploy".to_string(),
-            identity_file: Some("/Users/me/.ssh/prod key".to_string()),
-            password: None,
-            remote_path: None,
-            created_at: 1,
-            last_connected_at: None,
-        });
+        let args = build_ssh_args(
+            &SshConnection {
+                id: "conn-1".to_string(),
+                name: "prod".to_string(),
+                group: None,
+                host: "prod.example.com".to_string(),
+                port: 2200,
+                username: "deploy".to_string(),
+                identity_file: Some("/Users/me/.ssh/prod key".to_string()),
+                password: None,
+                remote_path: None,
+                created_at: 1,
+                last_connected_at: None,
+            },
+            true,
+        );
 
         assert_eq!(
             args,
@@ -621,19 +633,22 @@ mod tests {
 
     #[test]
     fn ssh_args_keep_target_as_single_ssh_argument() {
-        let args = build_ssh_args(&SshConnection {
-            id: "conn-1".to_string(),
-            name: "prod".to_string(),
-            group: None,
-            host: "prod.example.com; touch /tmp/bad".to_string(),
-            port: 22,
-            username: "deploy && whoami".to_string(),
-            identity_file: None,
-            password: None,
-            remote_path: None,
-            created_at: 1,
-            last_connected_at: None,
-        });
+        let args = build_ssh_args(
+            &SshConnection {
+                id: "conn-1".to_string(),
+                name: "prod".to_string(),
+                group: None,
+                host: "prod.example.com; touch /tmp/bad".to_string(),
+                port: 22,
+                username: "deploy && whoami".to_string(),
+                identity_file: None,
+                password: None,
+                remote_path: None,
+                created_at: 1,
+                last_connected_at: None,
+            },
+            true,
+        );
 
         assert_eq!(args[3], "deploy && whoami@prod.example.com; touch /tmp/bad");
         assert_eq!(args.len(), 4);
@@ -661,6 +676,8 @@ mod tests {
         assert!(spec.program.ends_with("sshpass"));
         assert_eq!(spec.args[0], "-e");
         assert_eq!(spec.args[1], "ssh");
+        assert!(spec.args.iter().any(|arg| arg == "-T"));
+        assert!(!spec.args.iter().any(|arg| arg == "-tt"));
         assert_eq!(spec.args.last().map(String::as_str), Some("echo ok"));
         assert_eq!(
             spec.env,

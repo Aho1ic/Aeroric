@@ -1,4 +1,7 @@
-use dbx_core::db::redis_driver::{RedisDatabaseInfo, RedisScanResult, RedisValue};
+use dbx_core::db::redis_driver::{
+    RedisCommandResult, RedisCommandSafety, RedisDatabaseInfo, RedisScanResult, RedisValue,
+};
+use serde::Deserialize;
 use tauri::State;
 
 use super::connections;
@@ -19,6 +22,39 @@ fn normalize_pattern(pattern: Option<String>) -> String {
 
 fn normalize_count(count: Option<usize>) -> usize {
     count.unwrap_or(200).clamp(1, 5000)
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct RedisCreateKeyRequest {
+    connection_id: String,
+    db: u32,
+    key_raw: String,
+    key_type: String,
+    value: String,
+    #[serde(default)]
+    field: Option<String>,
+    #[serde(default)]
+    score: Option<f64>,
+    #[serde(default)]
+    entry_id: Option<String>,
+    #[serde(default)]
+    ttl: Option<i64>,
+}
+
+fn normalize_key_type(value: &str) -> String {
+    value.trim().to_ascii_lowercase()
+}
+
+fn non_empty(value: Option<String>) -> Option<String> {
+    value.and_then(|value| {
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
+    })
 }
 
 #[tauri::command]
@@ -119,9 +155,129 @@ pub async fn dbx_redis_set_ttl(
     .await
 }
 
+#[tauri::command]
+pub async fn dbx_redis_create_key(
+    state: State<'_, DbxState>,
+    request: RedisCreateKeyRequest,
+) -> Result<(), String> {
+    connections::ensure_connected(&state, &request.connection_id).await?;
+    connections::ensure_writable(&state, &request.connection_id, "Create key").await?;
+    let key_type = normalize_key_type(&request.key_type);
+    match key_type.as_str() {
+        "string" => {
+            dbx_core::redis_ops::redis_set_string_in_db_core(
+                &state.app_state,
+                &request.connection_id,
+                request.db,
+                &request.key_raw,
+                &request.value,
+                request.ttl,
+            )
+            .await
+        }
+        "hash" => {
+            let field = non_empty(request.field).unwrap_or_else(|| "field".to_string());
+            dbx_core::redis_ops::redis_hash_set_in_db_core(
+                &state.app_state,
+                &request.connection_id,
+                request.db,
+                &request.key_raw,
+                &field,
+                &request.value,
+                request.ttl,
+            )
+            .await
+        }
+        "list" => {
+            dbx_core::redis_ops::redis_list_push_in_db_core(
+                &state.app_state,
+                &request.connection_id,
+                request.db,
+                &request.key_raw,
+                &request.value,
+                request.ttl,
+            )
+            .await
+        }
+        "set" => {
+            dbx_core::redis_ops::redis_set_add_in_db_core(
+                &state.app_state,
+                &request.connection_id,
+                request.db,
+                &request.key_raw,
+                &request.value,
+                request.ttl,
+            )
+            .await
+        }
+        "zset" => {
+            dbx_core::redis_ops::redis_zadd_in_db_core(
+                &state.app_state,
+                &request.connection_id,
+                request.db,
+                &request.key_raw,
+                &request.value,
+                request.score.unwrap_or(0.0),
+                request.ttl,
+            )
+            .await
+        }
+        "stream" => {
+            let field = non_empty(request.field).unwrap_or_else(|| "field".to_string());
+            let entry_id = non_empty(request.entry_id).unwrap_or_else(|| "*".to_string());
+            dbx_core::redis_ops::redis_stream_add_in_db_core(
+                &state.app_state,
+                &request.connection_id,
+                request.db,
+                &request.key_raw,
+                &entry_id,
+                vec![(field, request.value)],
+                request.ttl,
+            )
+            .await
+        }
+        "json" => {
+            dbx_core::redis_ops::redis_json_set_in_db_core(
+                &state.app_state,
+                &request.connection_id,
+                request.db,
+                &request.key_raw,
+                &request.value,
+                request.ttl,
+            )
+            .await
+        }
+        _ => Err(format!("Unsupported Redis key type: {}", request.key_type)),
+    }
+}
+
+#[tauri::command]
+pub async fn dbx_redis_execute_command(
+    state: State<'_, DbxState>,
+    connection_id: String,
+    db: u32,
+    command: String,
+    skip_safety_check: Option<bool>,
+) -> Result<RedisCommandResult, String> {
+    connections::ensure_connected(&state, &connection_id).await?;
+    let command_name = command.split_whitespace().next().unwrap_or("");
+    let safety = dbx_core::db::redis_driver::classify_command(command_name);
+    if safety != RedisCommandSafety::Allowed {
+        connections::ensure_writable(&state, &connection_id, command_name).await?;
+    }
+    dbx_core::redis_ops::redis_execute_command_core(
+        &state.app_state,
+        &connection_id,
+        db,
+        &command,
+        skip_safety_check.unwrap_or(false),
+    )
+    .await
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{normalize_count, normalize_pattern};
+    use super::{non_empty, normalize_count, normalize_key_type, normalize_pattern};
 
     #[test]
     fn redis_scan_defaults_are_bounded() {
@@ -133,5 +289,21 @@ mod tests {
         assert_eq!(normalize_count(None), 200);
         assert_eq!(normalize_count(Some(0)), 1);
         assert_eq!(normalize_count(Some(10_000)), 5000);
+    }
+
+    #[test]
+    fn redis_create_key_type_is_normalized() {
+        assert_eq!(normalize_key_type(" String "), "string");
+        assert_eq!(normalize_key_type("ZSET"), "zset");
+    }
+
+    #[test]
+    fn blank_create_key_field_is_ignored() {
+        assert_eq!(
+            non_empty(Some(" field ".to_string())),
+            Some("field".to_string())
+        );
+        assert_eq!(non_empty(Some("   ".to_string())), None);
+        assert_eq!(non_empty(None), None);
     }
 }

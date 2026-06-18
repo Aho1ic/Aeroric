@@ -6,6 +6,8 @@ export type SftpEndpoint =
 
 export type SftpOperation = "copy" | "move";
 
+export type SftpConflictStrategy = "fail" | "merge" | "replace";
+
 export type SftpEntry = {
   name: string;
   path: string;
@@ -89,6 +91,20 @@ export function defaultSftpPathForEndpoint(
 export function sftpFileName(path: string): string {
   const trimmed = path.replace(/\/+$/, "");
   return trimmed.split("/").pop() || path;
+}
+
+export function shouldPromptForSftpConflict(paths: string[], targetEntries: SftpEntry[]): boolean {
+  const existingNames = new Set(targetEntries.map((entry) => entry.name));
+  return paths.some((path) => existingNames.has(sftpFileName(path)));
+}
+
+export function shouldPromptForUnknownSftpConflict(
+  paths: string[],
+  targetEntries: SftpEntry[] | undefined,
+): boolean {
+  if (paths.length === 0) return false;
+  if (!targetEntries) return true;
+  return shouldPromptForSftpConflict(paths, targetEntries);
 }
 
 export function sftpParentPath(path: string): string {

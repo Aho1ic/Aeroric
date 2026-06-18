@@ -168,6 +168,13 @@ pub async fn dbx_close_result_session(
     .map(|_| ())
 }
 
+#[tauri::command]
+pub fn dbx_build_table_structure_change_sql(
+    options: dbx_core::table_structure_sql::TableStructureSqlOptions,
+) -> Result<dbx_core::table_structure_sql::TableStructureSqlResult, String> {
+    Ok(dbx_core::table_structure_sql::build_table_structure_change_sql(options))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

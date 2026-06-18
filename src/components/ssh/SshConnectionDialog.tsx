@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { createPortal } from "react-dom";
 import { Save, X } from "lucide-react";
 import type { SshConnection } from "../../types";
 import { useI18n } from "../../i18n";
@@ -32,6 +33,17 @@ const FIELD_ORDER: Array<keyof SshConnectionDraft> = [
 
 export function SshConnectionDialog({ connection, groups = [], initialGroup = "", onClose, onSave }: Props) {
   const { t } = useI18n();
+  const groupOptions = useMemo(
+    () =>
+      Array.from(
+        new Set(
+          [...groups, connection?.group ?? "", initialGroup]
+            .map((group) => group.trim())
+            .filter(Boolean),
+        ),
+      ),
+    [connection?.group, groups, initialGroup],
+  );
   const [draft, setDraft] = useState<SshConnectionDraft>(() => ({
     ...draftFromConnection(connection),
     group: connection?.group ?? initialGroup,
@@ -87,9 +99,15 @@ export function SshConnectionDialog({ connection, groups = [], initialGroup = ""
     onSave(normalized);
   }
 
-  return (
+  const dialog = (
     <div style={s.sshDialogOverlay} onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <form style={s.sshDialog} onSubmit={handleSubmit}>
+      <form
+        role="dialog"
+        aria-modal="true"
+        aria-label={isEditing ? t("ssh.editConnection") : t("ssh.newConnection")}
+        style={s.sshDialog}
+        onSubmit={handleSubmit}
+      >
         <div style={s.sshDialogHeader}>
           <div style={s.sshDialogTitle}>
             {isEditing ? t("ssh.editConnection") : t("ssh.newConnection")}
@@ -103,28 +121,36 @@ export function SshConnectionDialog({ connection, groups = [], initialGroup = ""
           {FIELD_ORDER.map((field) => (
             <label key={field} style={s.sshField}>
               <span style={s.sshLabel}>{labels[field]}</span>
-              <input
-                value={draft[field]}
-                onChange={(event) => updateField(field, event.target.value)}
-                placeholder={placeholders[field]}
-                style={errors[field] ? s.sshInputInvalid : s.sshInput}
-                type={field === "password" ? "password" : "text"}
-                list={field === "group" && groups.length > 0 ? "ssh-connection-groups" : undefined}
-                autoFocus={field === "name"}
-                autoCapitalize="none"
-                autoCorrect="off"
-                spellCheck={false}
-              />
+              {field === "group" && groupOptions.length > 0 ? (
+                <select
+                  aria-label={labels[field]}
+                  value={draft.group}
+                  onChange={(event) => updateField("group", event.target.value)}
+                  style={errors[field] ? s.sshInputInvalid : s.sshInput}
+                >
+                  <option value="">{t("ssh.defaultGroup")}</option>
+                  {groupOptions.map((group) => (
+                    <option key={group} value={group}>
+                      {group}
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <input
+                  value={draft[field]}
+                  onChange={(event) => updateField(field, event.target.value)}
+                  placeholder={placeholders[field]}
+                  style={errors[field] ? s.sshInputInvalid : s.sshInput}
+                  type={field === "password" ? "password" : "text"}
+                  autoFocus={field === "name"}
+                  autoCapitalize="none"
+                  autoCorrect="off"
+                  spellCheck={false}
+                />
+              )}
               {errors[field] && <span style={s.sshErrorText}>{errors[field]}</span>}
             </label>
           ))}
-          {groups.length > 0 && (
-            <datalist id="ssh-connection-groups">
-              {groups.map((group) => (
-                <option key={group} value={group} />
-              ))}
-            </datalist>
-          )}
           <div style={s.sshSecretNote}>{t("ssh.passwordStorageHint")}</div>
         </div>
 
@@ -140,4 +166,6 @@ export function SshConnectionDialog({ connection, groups = [], initialGroup = ""
       </form>
     </div>
   );
+
+  return createPortal(dialog, document.body);
 }
