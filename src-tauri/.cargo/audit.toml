@@ -1,0 +1,5 @@
+[advisories]
+ignore = [
+    "RUSTSEC-2026-0104", # rustls-webpki: reachable panic in CRL parsing - upstream tiberius dependency
+    "RUSTSEC-2024-0370", # proc-macro-error: unmaintained - upstream tauri/glib dependency
+]
