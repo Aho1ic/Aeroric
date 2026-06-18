@@ -3,6 +3,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import { Unicode11Addon } from "@xterm/addon-unicode11";
 import { WebglAddon } from "@xterm/addon-webgl";
 import { IS_MAC_WEBKIT } from "../platform";
+import { applyTerminalTextareaInputAttributes } from "./terminalInputFix";
 import type { ThemeVariant } from "../types";
 
 // ── Theme ────────────────────────────────────────────────────────────────────
@@ -132,15 +133,7 @@ interface TerminalSelectionGuardOptions {
 }
 
 function setMacWebKitTextareaAttrs(term: Terminal): void {
-  if (!term.textarea) return;
-  term.textarea.setAttribute("autocomplete", "off");
-  term.textarea.setAttribute("autocorrect", "off");
-  term.textarea.setAttribute("autocapitalize", "off");
-  term.textarea.setAttribute("spellcheck", "false");
-  // hint WKWebView 不需要候选条 UI，跳过 EditorState::stringForCandidateRequest
-  // 路径上的 wordRangeFromPosition → ICU 簇分析——这条路径每帧 willCommitMainFrameData
-  // 都跑一次（即使 textarea 已 blur），是 spellcheck=false 三件套覆盖不到的独立入口。
-  term.textarea.setAttribute("inputmode", "none");
+  applyTerminalTextareaInputAttributes(term);
 }
 
 // macOS WKWebView 在 xterm 选区拖动期间会被 NSTextInputClient 持续查询

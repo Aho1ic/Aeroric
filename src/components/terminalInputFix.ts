@@ -5,6 +5,15 @@ type TerminalWithInput = Pick<Terminal, "input" | "textarea">;
 
 export const POST_COMPOSITION_REPLAY_IGNORE_MS = 1200;
 
+export function applyTerminalTextareaInputAttributes(term: { textarea?: HTMLTextAreaElement | null }): void {
+  if (!term.textarea) return;
+  term.textarea.setAttribute("autocomplete", "off");
+  term.textarea.setAttribute("autocorrect", "off");
+  term.textarea.setAttribute("autocapitalize", "off");
+  term.textarea.setAttribute("spellcheck", "false");
+  term.textarea.removeAttribute("inputmode");
+}
+
 function getPrintableSymbolInput(data: string | null): string | null {
   if (data === null || data.length === 0) return null;
   if (data.length > 8) return null;
@@ -95,6 +104,19 @@ export function shouldSuppressBrowserCompositionPreview(
   return isComposing && (inputType === "insertCompositionText" || inputType === "insertText");
 }
 
+export function shouldDeferRomanizedCompositionCommit(
+  text: string | null | undefined,
+  preeditText: string | null | undefined,
+): boolean {
+  const value = text?.trim();
+  if (!value) return false;
+  if (/[\p{Script=Han}]/u.test(value)) return false;
+  if (!/^[A-Za-z][A-Za-z'`\s]*$/u.test(value)) return false;
+  const normalized = normalizeCommittedCompositionText(value);
+  const normalizedPreedit = normalizeCommittedCompositionText(preeditText ?? "");
+  return normalized === normalizedPreedit || normalizedPreedit.length === 0;
+}
+
 export function attachMacWebKitShiftInputFix(term: TerminalWithInput): () => void {
   if (!IS_MAC_WEBKIT || !term.textarea) return () => {};
 
@@ -151,6 +173,13 @@ export function attachLinuxIMEFix(
   let compositionText = "";
   let ignoredPostCompositionCandidates = new Set<string>();
   let ignorePostCompositionUntil = 0;
+  let pendingCompositionCommit:
+    | {
+        text: string;
+        preeditText: string;
+        timer: ReturnType<typeof globalThis.setTimeout>;
+      }
+    | null = null;
 
   const clearTextarea = () => {
     textarea.value = "";
@@ -176,7 +205,39 @@ export function attachLinuxIMEFix(
     onDataCallback(normalizeCommittedCompositionText(text));
   };
 
+  const clearPendingCompositionCommit = () => {
+    if (!pendingCompositionCommit) return;
+    globalThis.clearTimeout(pendingCompositionCommit.timer);
+    pendingCompositionCommit = null;
+  };
+
+  const commitCompositionText = (text: string, preeditText: string) => {
+    const normalized = normalizeCommittedCompositionText(text);
+    ignoredPostCompositionCandidates = buildPostCompositionIgnoredCandidates(text, preeditText);
+    ignorePostCompositionUntil = performance.now() + POST_COMPOSITION_REPLAY_IGNORE_MS;
+    clearTextareaNowAndNextFrame();
+    sendText(normalized);
+  };
+
+  const deferCompositionCommit = (text: string, preeditText: string) => {
+    clearPendingCompositionCommit();
+    pendingCompositionCommit = {
+      text,
+      preeditText,
+      timer: globalThis.setTimeout(() => {
+        const pending = pendingCompositionCommit;
+        pendingCompositionCommit = null;
+        if (!pending) return;
+        commitCompositionText(pending.text, pending.preeditText);
+      }, 30),
+    };
+    ignoredPostCompositionCandidates = buildPostCompositionIgnoredCandidates(text, preeditText);
+    ignorePostCompositionUntil = performance.now() + POST_COMPOSITION_REPLAY_IGNORE_MS;
+    clearTextareaNowAndNextFrame();
+  };
+
   const handleCompositionStartCapture = (event: CompositionEvent) => {
+    clearPendingCompositionCommit();
     isComposing = true;
     compositionText = "";
     clearTextareaNowAndNextFrame();
@@ -193,15 +254,34 @@ export function attachLinuxIMEFix(
     const text = event.data || preeditText;
     isComposing = false;
     compositionText = "";
-    const normalized = normalizeCommittedCompositionText(text);
-    ignoredPostCompositionCandidates = buildPostCompositionIgnoredCandidates(text, preeditText);
-    ignorePostCompositionUntil = performance.now() + POST_COMPOSITION_REPLAY_IGNORE_MS;
-    clearTextareaNowAndNextFrame();
     event.stopImmediatePropagation();
-    sendText(normalized);
+    if (shouldDeferRomanizedCompositionCommit(text, preeditText)) {
+      deferCompositionCommit(text, preeditText);
+      return;
+    }
+    commitCompositionText(text, preeditText);
   };
 
   const handleBeforeInputCapture = (event: InputEvent) => {
+    if (
+      pendingCompositionCommit &&
+      (event.inputType === "insertText" || event.inputType === "insertCompositionText") &&
+      event.data
+    ) {
+      const pending = pendingCompositionCommit;
+      clearPendingCompositionCommit();
+      ignoredPostCompositionCandidates = buildPostCompositionIgnoredCandidates(
+        event.data,
+        pending.preeditText || pending.text,
+      );
+      ignorePostCompositionUntil = performance.now() + POST_COMPOSITION_REPLAY_IGNORE_MS;
+      clearTextareaNowAndNextFrame();
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      sendText(event.data);
+      return;
+    }
+
     if (
       (event.inputType === "insertText" || event.inputType === "insertCompositionText") &&
       event.data &&
@@ -248,7 +328,7 @@ export function attachLinuxIMEFix(
   };
 
   const handleInputCapture = (event: Event) => {
-    if (isComposing || performance.now() <= ignorePostCompositionUntil) {
+    if (isComposing || pendingCompositionCommit || performance.now() <= ignorePostCompositionUntil) {
       clearTextareaNowAndNextFrame();
       event.stopImmediatePropagation();
     }
@@ -260,6 +340,18 @@ export function attachLinuxIMEFix(
 
   const handleTerminalData = (data: string) => {
     if (isComposing && /^[\p{L}\p{N}'`]+$/u.test(data)) {
+      return;
+    }
+    if (
+      pendingCompositionCommit &&
+      shouldIgnorePostCompositionCandidate(
+        data,
+        buildPostCompositionIgnoredCandidates(
+          pendingCompositionCommit.text,
+          pendingCompositionCommit.preeditText,
+        ),
+      )
+    ) {
       return;
     }
     if (
@@ -289,6 +381,7 @@ export function attachLinuxIMEFix(
       textarea.removeEventListener("beforeinput", handleBeforeInputCapture, true);
       textarea.removeEventListener("input", handleInputCapture, true);
       textarea.removeEventListener("keydown", handleKeyDownCapture, true);
+      clearPendingCompositionCommit();
       disposable.dispose();
     },
   };

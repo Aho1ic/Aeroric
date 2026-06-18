@@ -1,13 +1,20 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildPostCompositionIgnoredCandidates,
   normalizeCommittedCompositionText,
   POST_COMPOSITION_REPLAY_IGNORE_MS,
+  applyTerminalTextareaInputAttributes,
   shouldIgnorePostCompositionCandidate,
   shouldIgnorePostCompositionInsert,
+  shouldDeferRomanizedCompositionCommit,
   shouldSuppressBrowserCompositionPreview,
 } from "../components/terminalInputFix";
 import { normalizeEditorCompositionText } from "../components/new-task/PromptEditor";
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.resetModules();
+});
 
 describe("terminal input fixes", () => {
   it("normalizes macOS WebKit pinyin text committed while IME is closing", () => {
@@ -68,11 +75,77 @@ describe("terminal input fixes", () => {
     expect(shouldSuppressBrowserCompositionPreview("insertText", false)).toBe(false);
   });
 
+  it("defers romanized composition commits that may be followed by committed Chinese text", () => {
+    expect(shouldDeferRomanizedCompositionCommit("ceshi", "ceshi")).toBe(true);
+    expect(shouldDeferRomanizedCompositionCommit("ce'shi", "ce'shi")).toBe(true);
+    expect(shouldDeferRomanizedCompositionCommit("测试", "ceshi")).toBe(false);
+    expect(shouldDeferRomanizedCompositionCommit("hello world", "ceshi")).toBe(false);
+  });
+
+  it("sends committed Chinese from WebKit beforeinput instead of stale pinyin from compositionend", async () => {
+    vi.resetModules();
+    vi.doMock("../platform", () => ({
+      APP_PLATFORM: "macos",
+      ENABLE_USAGE_INSIGHTS: true,
+      IS_MAC_WEBKIT: true,
+      IS_OTHER_WEBKIT: false,
+      detectAppPlatform: () => "macos",
+      isAppleWebKit: () => true,
+    }));
+    const { attachLinuxIMEFix } = await import("../components/terminalInputFix");
+    const textarea = document.createElement("textarea");
+    const sent: string[] = [];
+    const listeners: Array<{ event: string; listener: EventListenerOrEventListenerObject; options?: boolean | AddEventListenerOptions }> = [];
+    const term = {
+      textarea,
+      onData: (listener: (data: string) => void) => {
+        void listener;
+        return { dispose: vi.fn() };
+      },
+    };
+    const originalAddEventListener = textarea.addEventListener.bind(textarea);
+    vi.spyOn(textarea, "addEventListener").mockImplementation((event, listener, options) => {
+      listeners.push({ event, listener, options });
+      originalAddEventListener(event, listener, options);
+    });
+
+    attachLinuxIMEFix(term as never, (data) => sent.push(data));
+
+    textarea.dispatchEvent(new CompositionEvent("compositionstart", { data: "" }));
+    textarea.dispatchEvent(new CompositionEvent("compositionupdate", { data: "ceshi" }));
+    textarea.dispatchEvent(new CompositionEvent("compositionend", { data: "ceshi" }));
+    expect(sent).toEqual([]);
+
+    const beforeInput = new InputEvent("beforeinput", {
+      inputType: "insertText",
+      data: "测试",
+      bubbles: true,
+      cancelable: true,
+    });
+    textarea.dispatchEvent(beforeInput);
+
+    expect(beforeInput.defaultPrevented).toBe(true);
+    expect(sent).toEqual(["测试"]);
+    expect(listeners.some((item) => item.event === "compositionend")).toBe(true);
+  });
+
   it("normalizes committed pinyin text inside the new-task editor", () => {
     const editor = document.createElement("div");
     editor.textContent = "shuo'huashuohua";
 
     expect(normalizeEditorCompositionText(editor)).toBe(true);
     expect(editor.textContent).toBe("shuohua");
+  });
+
+  it("keeps terminal textarea compatible with Chinese IME composition", () => {
+    const textarea = document.createElement("textarea");
+
+    applyTerminalTextareaInputAttributes({ textarea });
+
+    expect(textarea.getAttribute("autocomplete")).toBe("off");
+    expect(textarea.getAttribute("autocorrect")).toBe("off");
+    expect(textarea.getAttribute("autocapitalize")).toBe("off");
+    expect(textarea.getAttribute("spellcheck")).toBe("false");
+    expect(textarea.getAttribute("inputmode")).not.toBe("none");
   });
 });

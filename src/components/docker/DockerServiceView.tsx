@@ -41,6 +41,18 @@ function dockerRemoteKey(remote?: SshConnection): string {
     .join("\u001f");
 }
 
+export function isIgnorableDockerRefreshError(error: unknown): boolean {
+  const normalized = String(error).toLowerCase();
+  return (
+    normalized.includes("authorized users only") ||
+    (normalized.includes("connection to ") && normalized.includes(" closed"))
+  );
+}
+
+function isSameDockerRemote(a: SshConnection | null | undefined, b: SshConnection | null | undefined): boolean {
+  return dockerRemoteKey(a ?? undefined) === dockerRemoteKey(b ?? undefined);
+}
+
 const pageStyle: React.CSSProperties = {
   flex: 1,
   display: "flex",
@@ -423,11 +435,12 @@ export function DockerServiceView({
 }) {
   const { t } = useI18n();
   const remoteKey = dockerRemoteKey(remote);
+  const actionInProgressRef = useRef(false);
   const remoteSnapshotRef = useRef<{ key: string; target: SshConnection | null } | null>(null);
-  if (remoteSnapshotRef.current?.key !== remoteKey) {
+  if (!remoteSnapshotRef.current || (!actionInProgressRef.current && remoteSnapshotRef.current.key !== remoteKey)) {
     remoteSnapshotRef.current = { key: remoteKey, target: remote ?? null };
   }
-  const remoteTarget = remoteSnapshotRef.current.target;
+  const currentRemote = remoteSnapshotRef.current.target;
   const [tab, setTab] = useState<DockerTab>("containers");
   const [resources, setResources] = useState<DockerResources | null>(null);
   const [loading, setLoading] = useState(false);
@@ -435,42 +448,53 @@ export function DockerServiceView({
   const [busyKey, setBusyKey] = useState<string | null>(null);
   const [logView, setLogView] = useState<{ title: string; content: string } | null>(null);
 
-  const load = useCallback(async (options: { preserveOnError?: boolean } = {}) => {
+  const load = useCallback(async (options: { preserveOnError?: boolean; remote?: SshConnection | null } = {}) => {
     setLoading(true);
     setError(null);
     try {
-      setResources(await invoke<DockerResources>("list_docker_resources", { remote: remoteTarget }));
+      const remote = options.remote ?? currentRemote;
+      const nextResources = await invoke<DockerResources>("list_docker_resources", { remote });
+      if (!isSameDockerRemote(remote, currentRemote)) return;
+      setResources(nextResources);
     } catch (err) {
       if (!options.preserveOnError) {
         setResources(null);
         setError(String(err));
+      } else if (isIgnorableDockerRefreshError(err)) {
+        console.warn("Ignoring Docker post-action refresh error", err);
       } else {
         console.warn("Failed to refresh Docker resources after action", err);
       }
     } finally {
       setLoading(false);
     }
-  }, [remoteTarget]);
+  }, [currentRemote]);
 
   const runContainerAction = useCallback(
     async (container: DockerContainerSummary, action: ContainerAction) => {
-      if (action === "delete" && !window.confirm(t("docker.confirmDeleteContainer", { name: container.names }))) return;
+      const actionRemote = currentRemote;
+      actionInProgressRef.current = true;
+      if (action === "delete" && !window.confirm(t("docker.confirmDeleteContainer", { name: container.names }))) {
+        actionInProgressRef.current = false;
+        return;
+      }
       setBusyKey(container.id);
       setError(null);
       try {
         await invoke("docker_container_action", {
-          remote: remoteTarget,
+          remote: actionRemote,
           action,
           containerId: container.id,
         });
-        await load();
+        await load({ preserveOnError: true, remote: actionRemote });
       } catch (err) {
         setError(String(err));
       } finally {
         setBusyKey(null);
+        actionInProgressRef.current = false;
       }
     },
-    [load, remoteTarget, t],
+    [currentRemote, load, t],
   );
 
   const loadContainerLogs = useCallback(
@@ -479,7 +503,7 @@ export function DockerServiceView({
       setError(null);
       try {
         const content = await invoke<string>("docker_container_logs", {
-          remote: remoteTarget,
+          remote: currentRemote,
           containerId: container.id,
         });
         setLogView({ title: `${container.names} · ${t("docker.logs")}`, content });
@@ -489,48 +513,56 @@ export function DockerServiceView({
         setBusyKey(null);
       }
     },
-    [remoteTarget, t],
+    [currentRemote, t],
   );
 
   const deleteImage = useCallback(
     async (image: DockerImageSummary) => {
       const ref = imageReference(image);
-      if (!window.confirm(t("docker.confirmDeleteImage", { name: ref }))) return;
+      const actionRemote = currentRemote;
+      actionInProgressRef.current = true;
+      if (!window.confirm(t("docker.confirmDeleteImage", { name: ref }))) {
+        actionInProgressRef.current = false;
+        return;
+      }
       setBusyKey(ref);
       setError(null);
       try {
-        await invoke("docker_delete_image", { remote: remoteTarget, image: ref });
+        await invoke("docker_delete_image", { remote: actionRemote, image: ref });
         setResources((current) => removeDeletedImage(current, ref));
-        await load({ preserveOnError: true });
+        await load({ preserveOnError: true, remote: actionRemote });
       } catch (err) {
         setError(String(err));
       } finally {
         setBusyKey(null);
+        actionInProgressRef.current = false;
       }
     },
-    [load, remoteTarget, t],
+    [currentRemote, load, t],
   );
 
   const tagImage = useCallback(
     async (image: DockerImageSummary) => {
+      const actionRemote = currentRemote;
       const source = imageReference(image);
       const target = window.prompt(t("docker.tagPrompt"), source);
       if (!target?.trim() || target.trim() === source) return;
       setBusyKey(source);
       setError(null);
       try {
-        await invoke("docker_tag_image", { remote: remoteTarget, source, target: target.trim() });
-        await load();
+        await invoke("docker_tag_image", { remote: actionRemote, source, target: target.trim() });
+        await load({ preserveOnError: true, remote: actionRemote });
       } catch (err) {
         setError(String(err));
       } finally {
         setBusyKey(null);
       }
     },
-    [load, remoteTarget, t],
+    [currentRemote, load, t],
   );
 
   useEffect(() => {
+    if (actionInProgressRef.current) return;
     void load();
   }, [load]);
 
