@@ -72,6 +72,12 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v6
 
+      - name: Checkout dbx dependency
+        uses: actions/checkout@v6
+        with:
+          repository: Aho1ic/dbx
+          path: ../dbx
+
       - name: Install Linux system dependencies
         if: runner.os == 'Linux'
         run: |
