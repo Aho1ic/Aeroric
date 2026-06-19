@@ -16,11 +16,7 @@ export function FileIcon({
   isGitignored?: boolean;
 }) {
   if (isDir) {
-    const folderColor = isGitignored
-      ? GITIGNORED_COLOR
-      : expanded
-        ? "var(--icon-folder-open)"
-        : "var(--icon-folder)";
+    const folderColor = isGitignored ? GITIGNORED_COLOR : "var(--icon-folder)";
     return (
       <span style={{ ...s.fileIconFolder, color: folderColor }}>
         {expanded ? (

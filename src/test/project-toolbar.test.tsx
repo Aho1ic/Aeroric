@@ -26,6 +26,33 @@ vi.mock("../components/ssh/SshWorkspace", () => ({
   SshWorkspace: () => <div data-testid="ssh-workspace">ssh workspace</div>,
 }));
 
+vi.mock("../components/FileExplorer", () => ({
+  FileExplorer: ({ onFileSelect }: { onFileSelect: (path: string, name: string) => void }) => (
+    <button onClick={() => onFileSelect("/srv/app/run.py", "run.py")}>run.py</button>
+  ),
+}));
+
+vi.mock("../components/FileViewer", () => ({
+  FileViewer: ({ onRunPythonFile }: { onRunPythonFile?: (path: string) => void }) => (
+    <button title="Run current file" onClick={() => onRunPythonFile?.("/srv/app/run.py")}>
+      run file
+    </button>
+  ),
+}));
+
+vi.mock("../components/ssh/SshTerminalPanel", async () => {
+  const ReactModule = await import("react");
+  return {
+    SshTerminalPanel: ReactModule.forwardRef(function MockSshTerminalPanel(
+      props: { active: boolean },
+      ref,
+    ) {
+      ReactModule.useImperativeHandle(ref, () => ({ sendCommand: () => {} }));
+      return props.active ? <div data-testid="ssh-terminal">ssh terminal</div> : null;
+    }),
+  };
+});
+
 vi.mock("../components/docker/DockerServiceView", () => ({
   DockerServiceView: () => <div data-testid="docker-view">docker</div>,
 }));
@@ -53,8 +80,23 @@ function localProject(): Project {
   };
 }
 
-function projectPageProps(): React.ComponentProps<typeof ProjectPage> {
-  const project = localProject();
+function sshProject(): Project {
+  return {
+    id: "project-ssh",
+    name: "remote-app",
+    path: "ssh://conn-2/srv/app",
+    location: {
+      kind: "ssh",
+      connectionId: "conn-2",
+      remotePath: "/srv/app",
+    },
+    lastOpenedAt: 1,
+  };
+}
+
+function projectPageProps(
+  project: Project = localProject(),
+): React.ComponentProps<typeof ProjectPage> {
   return {
     project,
     visible: true,
@@ -104,7 +146,25 @@ function projectPageProps(): React.ComponentProps<typeof ProjectPage> {
     onUiFontFamilyChange: vi.fn(),
     monoFontFamily: "monospace",
     onMonoFontFamilyChange: vi.fn(),
-    sshConnections: [],
+    sshConnections: [
+      {
+        id: "conn-1",
+        name: "Staging",
+        host: "staging.example.com",
+        port: 22,
+        username: "deploy",
+        createdAt: 1,
+      },
+      {
+        id: "conn-2",
+        name: "Production",
+        host: "prod.example.com",
+        port: 22,
+        username: "deploy",
+        remotePath: "/srv/app",
+        createdAt: 2,
+      },
+    ],
     onSshConnectionsChange: vi.fn(),
     condaEnvironments: [],
     selectedCondaEnvPath: null,
@@ -113,6 +173,24 @@ function projectPageProps(): React.ComponentProps<typeof ProjectPage> {
 }
 
 describe("ProjectPage right toolbar", () => {
+  it("colors only the active toolbar icon while keeping the button background transparent", async () => {
+    const user = userEvent.setup();
+
+    render(
+      <I18nProvider>
+        <ProjectPage {...projectPageProps()} />
+      </I18nProvider>,
+    );
+
+    const sshButton = screen.getByTitle("SSH");
+    await user.click(sshButton);
+
+    expect(sshButton).toHaveStyle({
+      background: "none",
+      color: "var(--accent)",
+    });
+  });
+
   it("uses a drawn Docker toolbar icon instead of an emoji glyph", () => {
     render(
       <I18nProvider>
@@ -164,5 +242,22 @@ describe("ProjectPage right toolbar", () => {
     await user.click(screen.getByTitle("SSH"));
     expect(screen.queryByTestId("shell-terminal")).not.toBeInTheDocument();
     expect(screen.getByTestId("ssh-workspace")).toBeInTheDocument();
+  });
+
+  it("runs a remote file in the SSH terminal without opening the SSH workspace", async () => {
+    const user = userEvent.setup();
+
+    render(
+      <I18nProvider>
+        <ProjectPage {...projectPageProps(sshProject())} />
+      </I18nProvider>,
+    );
+
+    await user.click(screen.getByTitle("File Explorer"));
+    await user.click(screen.getByText("run.py"));
+    await user.click(screen.getByTitle("Run current file"));
+
+    expect(screen.getByTestId("ssh-terminal")).toBeInTheDocument();
+    expect(screen.queryByTestId("ssh-workspace")).not.toBeInTheDocument();
   });
 });

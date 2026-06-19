@@ -128,9 +128,7 @@ function endpointFromStorageValue(
   };
 }
 
-function makeInitialPane(
-  endpoint: SftpEndpoint,
-): PaneState {
+function makeInitialPane(endpoint: SftpEndpoint): PaneState {
   return {
     endpoint,
     entries: [],
@@ -185,6 +183,7 @@ export function SftpPanel({
   active: _active,
   width,
   themeVariant,
+  currentSshConnectionId,
   onClose,
 }: {
   sshConnections: SshConnection[];
@@ -192,13 +191,18 @@ export function SftpPanel({
   active: boolean;
   width?: number | string;
   themeVariant: ThemeVariant;
+  currentSshConnectionId?: string;
   onClose?: () => void;
 }) {
   const { t } = useI18n();
   const { showToast } = useToast();
-  const [left, setLeft] = useState(() => makeInitialPane({ kind: "local", path: localDefaultPath }));
+  const [left, setLeft] = useState(() =>
+    makeInitialPane({ kind: "local", path: localDefaultPath }),
+  );
   const [right, setRight] = useState(() => {
-    const first = sshConnections[0];
+    const first =
+      sshConnections.find((connection) => connection.id === currentSshConnectionId) ??
+      sshConnections[0];
     if (!first) return makeInitialPane({ kind: "local", path: localDefaultPath });
     return makeInitialPane({
       kind: "ssh",
@@ -277,22 +281,23 @@ export function SftpPanel({
     [sshConnections, updatePane],
   );
 
-  const panes = useMemo(
-    () => ({ left, right }),
-    [left, right],
-  );
+  const panes = useMemo(() => ({ left, right }), [left, right]);
 
   const findEntryInPane = useCallback((pane: PaneState, path: string | null) => {
     if (!path) return undefined;
-    return flattenSftpTreeEntries(pane.entries, pane.expandedPaths, pane.childrenByPath)
-      .find((row) => row.entry.path === path)?.entry;
+    return flattenSftpTreeEntries(pane.entries, pane.expandedPaths, pane.childrenByPath).find(
+      (row) => row.entry.path === path,
+    )?.entry;
   }, []);
 
-  const selectedDirectoryEndpoint = useCallback((pane: PaneState): SftpEndpoint => {
-    const selected = findEntryInPane(pane, pane.selectedPath);
-    if (!selected?.isDir) return pane.endpoint;
-    return { ...pane.endpoint, path: selected.path };
-  }, [findEntryInPane]);
+  const selectedDirectoryEndpoint = useCallback(
+    (pane: PaneState): SftpEndpoint => {
+      const selected = findEntryInPane(pane, pane.selectedPath);
+      if (!selected?.isDir) return pane.endpoint;
+      return { ...pane.endpoint, path: selected.path };
+    },
+    [findEntryInPane],
+  );
 
   const setEndpoint = useCallback(
     (side: PaneSide, endpoint: SftpEndpoint) => {
@@ -476,7 +481,11 @@ export function SftpPanel({
     (side: PaneSide) => {
       const pane = panes[side];
       if (!pane.selectedPath) return;
-      setClipboardPayload({ endpoint: pane.endpoint, paths: [pane.selectedPath], sourceSide: side });
+      setClipboardPayload({
+        endpoint: pane.endpoint,
+        paths: [pane.selectedPath],
+        sourceSide: side,
+      });
       showToast(t("sftp.copiedToClipboard"));
     },
     [panes, showToast, t],
@@ -607,7 +616,12 @@ export function SftpPanel({
           <Select.Root
             value={endpointStorageValue(pane.endpoint)}
             onValueChange={(value) => {
-              const nextEndpoint = endpointFromStorageValue(value, pane.endpoint.path, sshConnections, localDefaultPath);
+              const nextEndpoint = endpointFromStorageValue(
+                value,
+                pane.endpoint.path,
+                sshConnections,
+                localDefaultPath,
+              );
               updatePane(side, () => makeInitialPane(nextEndpoint));
             }}
           >
@@ -627,7 +641,11 @@ export function SftpPanel({
                     </Select.ItemIndicator>
                   </Select.Item>
                   {sshConnections.map((connection) => (
-                    <Select.Item key={connection.id} value={`ssh:${connection.id}`} style={s.fileSearchTypeItem}>
+                    <Select.Item
+                      key={connection.id}
+                      value={`ssh:${connection.id}`}
+                      style={s.fileSearchTypeItem}
+                    >
                       <Select.ItemText>{connection.name}</Select.ItemText>
                       <Select.ItemIndicator style={s.settingsSelectIndicator}>
                         <Check size={13} />
@@ -697,7 +715,11 @@ export function SftpPanel({
               <ArrowRight size={14} />
             </button>
           )}
-          <button className="sftp-icon-btn" title={t("common.refresh")} onClick={() => refreshPane(side, pane)}>
+          <button
+            className="sftp-icon-btn"
+            title={t("common.refresh")}
+            onClick={() => refreshPane(side, pane)}
+          >
             <RefreshCw size={14} />
           </button>
         </div>
@@ -712,7 +734,9 @@ export function SftpPanel({
             <div className="sftp-actions">
               <button
                 className="sftp-action-btn"
-                onClick={() => setEndpoint(side, { ...pane.endpoint, path: sftpParentPath(pane.endpoint.path) })}
+                onClick={() =>
+                  setEndpoint(side, { ...pane.endpoint, path: sftpParentPath(pane.endpoint.path) })
+                }
               >
                 <ArrowUp size={13} />
                 {t("sftp.up")}
@@ -721,7 +745,11 @@ export function SftpPanel({
                 <FolderPlus size={13} />
                 {t("sftp.newFolder")}
               </button>
-              <button className="sftp-action-btn" disabled={!pane.selectedPath} onClick={() => renameSelected(side)}>
+              <button
+                className="sftp-action-btn"
+                disabled={!pane.selectedPath}
+                onClick={() => renameSelected(side)}
+              >
                 <Pencil size={13} />
                 {t("sftp.rename")}
               </button>
@@ -844,7 +872,9 @@ export function SftpPanel({
                         <span className="sftp-row-error">{pane.childErrors.get(entry.path)}</span>
                       )}
                     </span>
-                    <span className="sftp-row-size">{entry.isDir ? "" : formatSize(entry.size)}</span>
+                    <span className="sftp-row-size">
+                      {entry.isDir ? "" : formatSize(entry.size)}
+                    </span>
                   </div>
                 ))}
             </div>
@@ -867,7 +897,12 @@ export function SftpPanel({
             {focusedSide === "left" ? t("sftp.leftActive") : t("sftp.rightActive")}
           </div>
           {onClose && (
-            <button className="sftp-icon-btn" type="button" title={t("common.close")} onClick={onClose}>
+            <button
+              className="sftp-icon-btn"
+              type="button"
+              title={t("common.close")}
+              onClick={onClose}
+            >
               <X size={14} />
             </button>
           )}
