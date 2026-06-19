@@ -45,8 +45,8 @@
   --brand-mark-fg: #ffffff;
   --badge-muted-bg: rgba(123, 139, 166, 0.14);
 
-  --icon-folder: #8f98a7;
-  --icon-folder-open: #737d8b;
+  --icon-folder: #d9a441;
+  --icon-folder-open: #d9a441;
   --icon-folder-root: #7d8795;
   --icon-file-default: #94a3b8;
   --icon-file-ignored: #8b94a3;
@@ -227,8 +227,8 @@ html.dark {
   --accent-hover: #d5bcff;
   --accent-subtle: rgba(192, 147, 255, 0.14);
 
-  --icon-folder: #8f98a7;
-  --icon-folder-open: #a0a9b8;
+  --icon-folder: #d9a441;
+  --icon-folder-open: #d9a441;
   --icon-folder-root: #9aa3b2;
   --icon-file-default: #94a3b8;
   --icon-file-ignored: #6b7280;

@@ -109,6 +109,7 @@ export function RightToolbar({
           icon={btn.icon}
           title={btn.title}
           active={activePanel === btn.key}
+          activeVariant="icon"
           disabled={btn.disabled}
           onClick={() => onToggle(btn.key)}
         />
@@ -118,6 +119,7 @@ export function RightToolbar({
         icon={<Terminal size={17} />}
         title={t("terminal.title")}
         active={terminalActive}
+        activeVariant="icon"
         disabled={terminalDisabled}
         onClick={onToggleTerminal}
       />

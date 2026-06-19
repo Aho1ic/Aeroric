@@ -245,8 +245,7 @@ export function ProjectPage({
         : undefined,
     [projectLocation, remoteConnection],
   );
-  const fileRootPath =
-    projectLocation.kind === "ssh" ? projectLocation.remotePath : project.path;
+  const fileRootPath = projectLocation.kind === "ssh" ? projectLocation.remotePath : project.path;
   const filesDisabled = projectLocation.kind === "ssh" && !remoteFileContext;
   const gitDisabled = projectLocation.kind === "ssh";
   const terminalDisabled = projectLocation.kind === "ssh";
@@ -310,24 +309,28 @@ export function ProjectPage({
     [onSelectTask, clearFileAndDiff],
   );
 
-  const sendOrQueueShellCommand = useCallback((cmd: string) => {
-    if (projectLocation.kind === "ssh") {
-      openRightPanel("ssh");
-      if (remoteSshReadyRef.current && remoteSshRef.current) {
-        remoteSshRef.current.sendCommand(cmd);
-      } else {
-        pendingRemoteSshCmdRef.current = cmd;
+  const sendOrQueueShellCommand = useCallback(
+    (cmd: string) => {
+      if (projectLocation.kind === "ssh") {
+        clearFileAndDiff();
+        setShowShellTerminal(false);
+        if (remoteSshReadyRef.current && remoteSshRef.current) {
+          remoteSshRef.current.sendCommand(cmd);
+        } else {
+          pendingRemoteSshCmdRef.current = cmd;
+        }
+        return;
       }
-      return;
-    }
-    setShellTerminalMounted(true);
-    setShowShellTerminal(true);
-    if (shellReadyRef.current && shellRef.current) {
-      shellRef.current.sendCommand(cmd);
-      return;
-    }
-    pendingCmdRef.current = cmd;
-  }, [openRightPanel, projectLocation.kind]);
+      setShellTerminalMounted(true);
+      setShowShellTerminal(true);
+      if (shellReadyRef.current && shellRef.current) {
+        shellRef.current.sendCommand(cmd);
+        return;
+      }
+      pendingCmdRef.current = cmd;
+    },
+    [clearFileAndDiff, projectLocation.kind],
+  );
 
   const handleRunMakeTarget = useCallback(
     (target: string) => {
@@ -479,7 +482,7 @@ export function ProjectPage({
     rightPanel === "ssh"
       ? projectSshRightPanelWidth({
           containerWidth: projectBodyWidth,
-        railCollapsed: responsiveLayout.autoCollapseRail || isDatabaseMode,
+          railCollapsed: responsiveLayout.autoCollapseRail || isDatabaseMode,
         })
       : rightPanelWidth;
 
@@ -561,108 +564,115 @@ export function ProjectPage({
               )}
             >
               {isSftpMode ? (
-              <SftpPanel
-                sshConnections={sshConnections}
-                localDefaultPath={projectLocation.kind === "local" ? project.path : "/Users/macbook/Downloads/同步空间"}
-                active={visible && isSftpMode}
-                width="100%"
-                themeVariant={themeVariant}
-              />
-            ) : isSshMode ? (
-              <SshWorkspace
-                connections={sshConnections}
-                onConnectionsChange={onSshConnectionsChange}
-                active={visible && isSshMode}
-                themeVariant={themeVariant}
-                terminalFontSize={terminalFontSize}
-                monoFontFamily={monoFontFamily}
-                remoteConnection={projectLocation.kind === "ssh" ? remoteConnection : undefined}
-              />
-            ) : isDockerMode ? (
-              <DockerServiceView
-                remote={projectLocation.kind === "ssh" ? remoteConnection : undefined}
-                sourceLabel={
-                  projectLocation.kind === "ssh" && remoteConnection
-                    ? `${remoteConnection.name} · ${projectLocation.remotePath}`
-                    : project.path
-                }
-              />
-            ) : isDatabaseMode ? (
-              <DatabaseView
-                projectRoot={projectLocation.kind === "local" ? project.path : undefined}
-                remoteConnection={projectLocation.kind === "ssh" ? remoteConnection : undefined}
-                remoteProjectPath={projectLocation.kind === "ssh" ? projectLocation.remotePath : undefined}
-                sshConnections={sshConnections}
-              />
-            ) : openDiff ? (
-              openDiff.kind === "file" ? (
-                <GitDiffViewer
-                  projectPath={gitContextPath}
-                  mode="file"
-                  filePath={openDiff.filePath}
-                  staged={openDiff.staged}
-                  title={openDiff.label}
-                  onClose={() => setOpenDiff(null)}
+                <SftpPanel
+                  sshConnections={sshConnections}
+                  localDefaultPath={
+                    projectLocation.kind === "local"
+                      ? project.path
+                      : "/Users/macbook/Downloads/同步空间"
+                  }
+                  active={visible && isSftpMode}
+                  width="100%"
+                  themeVariant={themeVariant}
+                  currentSshConnectionId={
+                    projectLocation.kind === "ssh" ? projectLocation.connectionId : undefined
+                  }
                 />
-              ) : openDiff.kind === "commit-file" ? (
-                <GitDiffViewer
-                  projectPath={gitContextPath}
-                  mode="commit-file"
-                  commitHash={openDiff.hash}
-                  filePath={openDiff.filePath}
-                  title={openDiff.label}
-                  onClose={() => setOpenDiff(null)}
+              ) : isSshMode ? (
+                <SshWorkspace
+                  connections={sshConnections}
+                  onConnectionsChange={onSshConnectionsChange}
+                  active={visible && isSshMode}
+                  themeVariant={themeVariant}
+                  terminalFontSize={terminalFontSize}
+                  monoFontFamily={monoFontFamily}
+                  remoteConnection={projectLocation.kind === "ssh" ? remoteConnection : undefined}
                 />
-              ) : (
-                <GitDiffViewer
-                  projectPath={gitContextPath}
-                  mode="commit"
-                  commitHash={openDiff.hash}
-                  title={openDiff.message}
-                  onClose={() => setOpenDiff(null)}
+              ) : isDockerMode ? (
+                <DockerServiceView
+                  remote={projectLocation.kind === "ssh" ? remoteConnection : undefined}
+                  sourceLabel={
+                    projectLocation.kind === "ssh" && remoteConnection
+                      ? `${remoteConnection.name} · ${projectLocation.remotePath}`
+                      : project.path
+                  }
                 />
-              )
-            ) : openFiles.length > 0 ? (
-              <FileViewer
-                tabs={openFiles}
-                activeFilePath={activeFilePath}
-                projectPath={fileRootPath}
-                onSelectTab={handleFileTabSelect}
-                onCloseTab={handleFileTabClose}
-                onCloseOtherTabs={handleCloseOtherFileTabs}
-                onCloseTabsToRight={handleCloseTabsToRight}
-                onCloseAllTabs={handleCloseAllFileTabs}
-                themeVariant={themeVariant}
-                onRunMakeTarget={handleRunMakeTarget}
-                remote={remoteFileContext}
-                condaEnvironments={condaEnvironments}
-                selectedCondaEnvPath={selectedCondaEnvPath}
-                onSelectedCondaEnvPathChange={onSelectedCondaEnvPathChange}
-                onRunPythonFile={handleRunPythonFile}
-              />
-            ) : !activeWorkspaceTask ? (
-              <NewTaskView
-                project={project}
-                otherProjects={otherProjects}
-                onSubmit={onSubmitTask}
-                initialDraft={newTaskDraftRef.current}
-                onCacheDraft={handleCacheNewTaskDraft}
-                compactControls={responsiveLayout.compactComposeControls}
-              />
-            ) : activeWorkspaceTask.status === ("todo" as TaskStatus) ? (
-              <TodoTaskView
-                task={activeWorkspaceTask}
-                onRunTodo={onRunTodoTask}
-                onUpdateTodo={onUpdateTodo}
-              />
+              ) : isDatabaseMode ? (
+                <DatabaseView
+                  projectRoot={projectLocation.kind === "local" ? project.path : undefined}
+                  remoteConnection={projectLocation.kind === "ssh" ? remoteConnection : undefined}
+                  remoteProjectPath={
+                    projectLocation.kind === "ssh" ? projectLocation.remotePath : undefined
+                  }
+                  sshConnections={sshConnections}
+                />
+              ) : openDiff ? (
+                openDiff.kind === "file" ? (
+                  <GitDiffViewer
+                    projectPath={gitContextPath}
+                    mode="file"
+                    filePath={openDiff.filePath}
+                    staged={openDiff.staged}
+                    title={openDiff.label}
+                    onClose={() => setOpenDiff(null)}
+                  />
+                ) : openDiff.kind === "commit-file" ? (
+                  <GitDiffViewer
+                    projectPath={gitContextPath}
+                    mode="commit-file"
+                    commitHash={openDiff.hash}
+                    filePath={openDiff.filePath}
+                    title={openDiff.label}
+                    onClose={() => setOpenDiff(null)}
+                  />
+                ) : (
+                  <GitDiffViewer
+                    projectPath={gitContextPath}
+                    mode="commit"
+                    commitHash={openDiff.hash}
+                    title={openDiff.message}
+                    onClose={() => setOpenDiff(null)}
+                  />
+                )
+              ) : openFiles.length > 0 ? (
+                <FileViewer
+                  tabs={openFiles}
+                  activeFilePath={activeFilePath}
+                  projectPath={fileRootPath}
+                  onSelectTab={handleFileTabSelect}
+                  onCloseTab={handleFileTabClose}
+                  onCloseOtherTabs={handleCloseOtherFileTabs}
+                  onCloseTabsToRight={handleCloseTabsToRight}
+                  onCloseAllTabs={handleCloseAllFileTabs}
+                  themeVariant={themeVariant}
+                  onRunMakeTarget={handleRunMakeTarget}
+                  remote={remoteFileContext}
+                  condaEnvironments={condaEnvironments}
+                  selectedCondaEnvPath={selectedCondaEnvPath}
+                  onSelectedCondaEnvPathChange={onSelectedCondaEnvPathChange}
+                  onRunPythonFile={handleRunPythonFile}
+                />
+              ) : !activeWorkspaceTask ? (
+                <NewTaskView
+                  project={project}
+                  otherProjects={otherProjects}
+                  onSubmit={onSubmitTask}
+                  initialDraft={newTaskDraftRef.current}
+                  onCacheDraft={handleCacheNewTaskDraft}
+                  compactControls={responsiveLayout.compactComposeControls}
+                />
+              ) : activeWorkspaceTask.status === ("todo" as TaskStatus) ? (
+                <TodoTaskView
+                  task={activeWorkspaceTask}
+                  onRunTodo={onRunTodoTask}
+                  onUpdateTodo={onUpdateTodo}
+                />
               ) : null}
             </ErrorBoundary>
           </div>
 
           {shellTerminalMounted && !terminalDisabled && (
-            <div
-              style={shellCenterLayerStyle(shellVisibleInCenter)}
-            >
+            <div style={shellCenterLayerStyle(shellVisibleInCenter)}>
               <div style={shellCenterContentStyle()}>
                 <ErrorBoundary label="终端">
                   <ShellTerminalPanel
@@ -730,7 +740,9 @@ export function ProjectPage({
                 if (event.target === event.currentTarget) setFilePreviewTarget(null);
               }}
             >
-              <div className={`sftp-preview-dialog${filePreviewTarget.isDirectory ? " compact" : ""}`}>
+              <div
+                className={`sftp-preview-dialog${filePreviewTarget.isDirectory ? " compact" : ""}`}
+              >
                 <SftpPreview
                   endpoint={filePreviewTarget.endpoint}
                   filePath={filePreviewTarget.filePath}
