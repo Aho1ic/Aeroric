@@ -72,6 +72,14 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v6
 
+      - name: Checkout dbx dependency
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone https://github.com/t8y2/dbx.git ../dbx
+          git -C ../dbx checkout --detach db7b730dd37ea641757e41562d61cdfbc085bdb0
+          test -f ../dbx/crates/dbx-core/Cargo.toml
+
       - name: Install Linux system dependencies
         if: runner.os == 'Linux'
         run: |
