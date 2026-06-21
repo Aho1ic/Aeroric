@@ -38,12 +38,10 @@ superpowers/
 .superpowers/
 skills/
 .skills/
-docs/superpowers/
+docs/
 Trellis/
 trellis/
 .trellis/
-docs/Trellis/
-docs/trellis/
 bump-version.sh
 .env*
 
