@@ -54,7 +54,7 @@ import {
   visibleDockPanel,
 } from "./project-page/viewMode";
 import { projectVisibilityStyle } from "./project-page/visibility";
-import { buildRunnableFileCommand, selectDefaultCondaEnvironment } from "./file-viewer/run";
+import { buildRunnableFileCommand, selectRunnableCondaEnvironment } from "./file-viewer/run";
 import s from "../styles";
 
 export function ProjectPage({
@@ -353,12 +353,16 @@ export function ProjectPage({
 
   const handleRunPythonFile = useCallback(
     (filePath: string) => {
-      const env = selectDefaultCondaEnvironment(condaEnvironments, selectedCondaEnvPath);
+      const env = selectRunnableCondaEnvironment(
+        condaEnvironments,
+        selectedCondaEnvPath,
+        projectLocation.kind === "ssh",
+      );
       const cmd = buildRunnableFileCommand(filePath, env);
       if (!cmd) return;
       sendOrQueueShellCommand(cmd);
     },
-    [condaEnvironments, selectedCondaEnvPath, sendOrQueueShellCommand],
+    [condaEnvironments, projectLocation.kind, selectedCondaEnvPath, sendOrQueueShellCommand],
   );
 
   const handleShellReady = useCallback(() => {

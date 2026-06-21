@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { databaseApi } from "../lib/databaseApi";
 import type {
   MongoDeleteDocumentsRequest,
@@ -15,6 +15,21 @@ export function useMongoBrowser(connectionId: string | null) {
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const requestGeneration = useRef(0);
+
+  const resetBrowserState = useCallback(() => {
+    requestGeneration.current += 1;
+    setDatabases([]);
+    setCollections([]);
+    setDocuments([]);
+    setTotal(0);
+    setLoading(false);
+    setError(null);
+  }, []);
+
+  useEffect(() => {
+    resetBrowserState();
+  }, [connectionId, resetBrowserState]);
 
   const requireConnection = useCallback(() => {
     if (!connectionId) {
@@ -24,55 +39,61 @@ export function useMongoBrowser(connectionId: string | null) {
   }, [connectionId]);
 
   const loadDatabases = useCallback(async () => {
+    const generation = requestGeneration.current;
     setLoading(true);
     setError(null);
     try {
       const next = await databaseApi.dbxMongoListDatabases(requireConnection());
-      setDatabases(next);
+      if (requestGeneration.current === generation) setDatabases(next);
       return next;
     } catch (err) {
-      setError(String(err));
+      if (requestGeneration.current === generation) setError(String(err));
       throw err;
     } finally {
-      setLoading(false);
+      if (requestGeneration.current === generation) setLoading(false);
     }
   }, [requireConnection]);
 
   const loadCollections = useCallback(
     async (database: string) => {
+      const generation = requestGeneration.current;
       setLoading(true);
       setError(null);
       try {
         const next = await databaseApi.dbxMongoListCollections(requireConnection(), database);
-        setCollections(next);
+        if (requestGeneration.current === generation) setCollections(next);
         return next;
       } catch (err) {
-        setError(String(err));
+        if (requestGeneration.current === generation) setError(String(err));
         throw err;
       } finally {
-        setLoading(false);
+        if (requestGeneration.current === generation) setLoading(false);
       }
     },
     [requireConnection],
   );
 
   const findDocuments = useCallback(
-    async (request: Omit<MongoFindDocumentsRequest, "connectionId">): Promise<MongoDocumentResult> => {
+    async (request: Omit<MongoFindDocumentsRequest, "connectionId"> & { append?: boolean }): Promise<MongoDocumentResult> => {
+      const generation = requestGeneration.current;
+      const { append, ...payload } = request;
       setLoading(true);
       setError(null);
       try {
         const result = await databaseApi.dbxMongoFindDocuments({
-          ...request,
+          ...payload,
           connectionId: requireConnection(),
         });
-        setDocuments(result.documents);
-        setTotal(result.total);
+        if (requestGeneration.current === generation) {
+          setDocuments((current) => (append ? [...current, ...result.documents] : result.documents));
+          setTotal(result.total);
+        }
         return result;
       } catch (err) {
-        setError(String(err));
+        if (requestGeneration.current === generation) setError(String(err));
         throw err;
       } finally {
-        setLoading(false);
+        if (requestGeneration.current === generation) setLoading(false);
       }
     },
     [requireConnection],
@@ -96,6 +117,17 @@ export function useMongoBrowser(connectionId: string | null) {
     [requireConnection],
   );
 
+  const clearDocuments = useCallback(() => {
+    requestGeneration.current += 1;
+    setDocuments([]);
+    setTotal(0);
+  }, []);
+
+  const clearCollections = useCallback(() => {
+    requestGeneration.current += 1;
+    setCollections([]);
+  }, []);
+
   return {
     databases,
     collections,
@@ -109,5 +141,8 @@ export function useMongoBrowser(connectionId: string | null) {
     insertDocument,
     updateDocument,
     deleteDocuments,
+    clearDocuments,
+    clearCollections,
+    resetBrowserState,
   };
 }

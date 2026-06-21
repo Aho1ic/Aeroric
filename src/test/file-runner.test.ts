@@ -4,6 +4,7 @@ import {
   buildPythonRunCommand,
   buildRunnableFileCommand,
   isRunnableScriptFile,
+  selectRunnableCondaEnvironment,
   selectDefaultCondaEnvironment,
 } from "../components/file-viewer/run";
 import type { CondaEnvironment } from "../types";
@@ -32,6 +33,13 @@ describe("file runner helpers", () => {
     expect(buildPythonRunCommand("/repo/train.py", null)).toBe("python3 '/repo/train.py'\r");
     expect(selectDefaultCondaEnvironment(envs, "/opt/miniconda3/envs/cv")).toEqual(envs[1]);
     expect(selectDefaultCondaEnvironment(envs, "/missing")).toEqual(envs[0]);
+  });
+
+  it("does not reuse local conda environments for SSH project file runs", () => {
+    expect(selectRunnableCondaEnvironment(envs, "/opt/miniconda3/envs/cv", true)).toBeNull();
+    expect(buildRunnableFileCommand("/Users/lyx/Documents/Snowflake.py", null)).toBe(
+      "python3 '/Users/lyx/Documents/Snowflake.py'\r",
+    );
   });
 
   it("builds a quoted shell script command", () => {

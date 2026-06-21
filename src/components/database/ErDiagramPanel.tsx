@@ -2,6 +2,7 @@ import { Download } from "lucide-react";
 import { useI18n } from "../../i18n";
 import s from "../../styles";
 import type { DbxColumnInfo, DbxObjectInfo } from "../../types/database";
+import { DbxButton } from "./DbxButton";
 
 interface Props {
   tables: DbxObjectInfo[];
@@ -18,10 +19,9 @@ export function ErDiagramPanel({ tables, columnsByTable }: Props) {
           <div style={s.databaseWorkspaceTitle}>{t("database.erDiagram")}</div>
           <div style={s.databaseDialogHint}>{t("database.erDiagramHint")}</div>
         </div>
-        <button type="button" style={s.databaseSmallButton} disabled>
-          <Download size={13} />
-          <span>{t("database.exportSvg")}</span>
-        </button>
+        <DbxButton variant="outline" size="sm" icon={Download} disabled>
+          {t("database.exportSvg")}
+        </DbxButton>
       </div>
       <div style={s.databaseDiagramCanvas}>
         {tables.map((table, index) => {

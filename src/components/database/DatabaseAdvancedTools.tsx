@@ -4,6 +4,7 @@ import { useI18n } from "../../i18n";
 import { databaseApi } from "../../lib/databaseApi";
 import s from "../../styles";
 import type { AeroricDbConnectionConfig, DbxColumnInfo, DbxDatabaseType, DbxObjectInfo } from "../../types";
+import { DbxButton } from "./DbxButton";
 
 export type DatabaseAdvancedToolMode = "transfer" | "schema-diff" | "data-compare";
 
@@ -223,10 +224,9 @@ export function DatabaseAdvancedTools({
           <div style={s.databaseWorkspaceTitle}>{title}</div>
           <div style={s.databaseDialogHint}>{t("database.advancedToolsHint")}</div>
         </div>
-        <button type="button" style={s.databaseSmallButton} onClick={() => void run()} disabled={loading || Boolean(missingReason)}>
-          {loading ? <RefreshCcw size={13} /> : <Play size={13} />}
-          <span>{mode === "transfer" ? t("database.startTransfer") : t("database.compare")}</span>
-        </button>
+        <DbxButton variant="default" size="sm" icon={loading ? RefreshCcw : Play} onClick={() => void run()} disabled={loading || Boolean(missingReason)}>
+          {mode === "transfer" ? t("database.startTransfer") : t("database.compare")}
+        </DbxButton>
       </div>
       <div style={s.databaseDialogFormGrid}>
         <label style={s.databaseDialogField}>

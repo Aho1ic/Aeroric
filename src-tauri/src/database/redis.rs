@@ -101,6 +101,29 @@ pub async fn dbx_redis_get_value(
 }
 
 #[tauri::command]
+pub async fn dbx_redis_load_more(
+    state: State<'_, DbxState>,
+    connection_id: String,
+    db: u32,
+    key_raw: String,
+    key_type: String,
+    cursor: u64,
+    count: Option<usize>,
+) -> Result<RedisValue, String> {
+    connections::ensure_connected(&state, &connection_id).await?;
+    dbx_core::redis_ops::redis_load_more_in_db_core(
+        &state.app_state,
+        &connection_id,
+        db,
+        &key_raw,
+        &key_type,
+        cursor,
+        normalize_count(count),
+    )
+    .await
+}
+
+#[tauri::command]
 pub async fn dbx_redis_set_value(
     state: State<'_, DbxState>,
     connection_id: String,
@@ -249,6 +272,200 @@ pub async fn dbx_redis_create_key(
         }
         _ => Err(format!("Unsupported Redis key type: {}", request.key_type)),
     }
+}
+
+#[tauri::command]
+pub async fn dbx_redis_hash_del(
+    state: State<'_, DbxState>,
+    connection_id: String,
+    db: u32,
+    key_raw: String,
+    field: String,
+) -> Result<(), String> {
+    connections::ensure_connected(&state, &connection_id).await?;
+    connections::ensure_writable(&state, &connection_id, "HDEL").await?;
+    dbx_core::redis_ops::redis_hash_del_in_db_core(
+        &state.app_state,
+        &connection_id,
+        db,
+        &key_raw,
+        &field,
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn dbx_redis_hash_set(
+    state: State<'_, DbxState>,
+    connection_id: String,
+    db: u32,
+    key_raw: String,
+    field: String,
+    value: String,
+    ttl: Option<i64>,
+) -> Result<(), String> {
+    connections::ensure_connected(&state, &connection_id).await?;
+    connections::ensure_writable(&state, &connection_id, "HSET").await?;
+    dbx_core::redis_ops::redis_hash_set_in_db_core(
+        &state.app_state,
+        &connection_id,
+        db,
+        &key_raw,
+        &field,
+        &value,
+        ttl,
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn dbx_redis_list_remove(
+    state: State<'_, DbxState>,
+    connection_id: String,
+    db: u32,
+    key_raw: String,
+    index: i64,
+) -> Result<(), String> {
+    connections::ensure_connected(&state, &connection_id).await?;
+    connections::ensure_writable(&state, &connection_id, "LREM").await?;
+    dbx_core::redis_ops::redis_list_remove_in_db_core(
+        &state.app_state,
+        &connection_id,
+        db,
+        &key_raw,
+        index,
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn dbx_redis_list_push(
+    state: State<'_, DbxState>,
+    connection_id: String,
+    db: u32,
+    key_raw: String,
+    value: String,
+    ttl: Option<i64>,
+) -> Result<(), String> {
+    connections::ensure_connected(&state, &connection_id).await?;
+    connections::ensure_writable(&state, &connection_id, "RPUSH").await?;
+    dbx_core::redis_ops::redis_list_push_in_db_core(
+        &state.app_state,
+        &connection_id,
+        db,
+        &key_raw,
+        &value,
+        ttl,
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn dbx_redis_list_set(
+    state: State<'_, DbxState>,
+    connection_id: String,
+    db: u32,
+    key_raw: String,
+    index: i64,
+    value: String,
+) -> Result<(), String> {
+    connections::ensure_connected(&state, &connection_id).await?;
+    connections::ensure_writable(&state, &connection_id, "LSET").await?;
+    dbx_core::redis_ops::redis_list_set_in_db_core(
+        &state.app_state,
+        &connection_id,
+        db,
+        &key_raw,
+        index,
+        &value,
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn dbx_redis_set_remove(
+    state: State<'_, DbxState>,
+    connection_id: String,
+    db: u32,
+    key_raw: String,
+    member: String,
+) -> Result<(), String> {
+    connections::ensure_connected(&state, &connection_id).await?;
+    connections::ensure_writable(&state, &connection_id, "SREM").await?;
+    dbx_core::redis_ops::redis_set_remove_in_db_core(
+        &state.app_state,
+        &connection_id,
+        db,
+        &key_raw,
+        &member,
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn dbx_redis_set_add(
+    state: State<'_, DbxState>,
+    connection_id: String,
+    db: u32,
+    key_raw: String,
+    member: String,
+    ttl: Option<i64>,
+) -> Result<(), String> {
+    connections::ensure_connected(&state, &connection_id).await?;
+    connections::ensure_writable(&state, &connection_id, "SADD").await?;
+    dbx_core::redis_ops::redis_set_add_in_db_core(
+        &state.app_state,
+        &connection_id,
+        db,
+        &key_raw,
+        &member,
+        ttl,
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn dbx_redis_zrem(
+    state: State<'_, DbxState>,
+    connection_id: String,
+    db: u32,
+    key_raw: String,
+    member: String,
+) -> Result<(), String> {
+    connections::ensure_connected(&state, &connection_id).await?;
+    connections::ensure_writable(&state, &connection_id, "ZREM").await?;
+    dbx_core::redis_ops::redis_zrem_in_db_core(
+        &state.app_state,
+        &connection_id,
+        db,
+        &key_raw,
+        &member,
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn dbx_redis_zadd(
+    state: State<'_, DbxState>,
+    connection_id: String,
+    db: u32,
+    key_raw: String,
+    member: String,
+    score: f64,
+    ttl: Option<i64>,
+) -> Result<(), String> {
+    connections::ensure_connected(&state, &connection_id).await?;
+    connections::ensure_writable(&state, &connection_id, "ZADD").await?;
+    dbx_core::redis_ops::redis_zadd_in_db_core(
+        &state.app_state,
+        &connection_id,
+        db,
+        &key_raw,
+        &member,
+        score,
+        ttl,
+    )
+    .await
 }
 
 #[tauri::command]

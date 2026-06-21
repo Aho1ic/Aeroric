@@ -48,6 +48,8 @@ export interface AeroricDbConnectionConfig extends Omit<DbConnectionConfig, "end
   readOnly: boolean;
   dbx?: unknown;
   migratedFromLegacy?: boolean;
+  connectionGroup?: string | null;
+  pinned?: boolean;
 }
 
 export interface DbColumn {
@@ -107,6 +109,8 @@ export type DbCellValue = string | null;
 
 export interface DbQueryResult {
   columns: string[];
+  columnTypes?: string[];
+  columnSortables?: boolean[];
   rows: DbRow[];
   page: number;
   pageSize: number;
@@ -138,6 +142,15 @@ export interface DbxObjectInfo {
   parent_name?: string | null;
 }
 
+export type DbxObjectSourceKind = "VIEW" | "PROCEDURE" | "FUNCTION" | "SEQUENCE" | "PACKAGE" | "PACKAGE_BODY";
+
+export interface DbxObjectSource {
+  name: string;
+  object_type: DbxObjectSourceKind;
+  schema?: string | null;
+  source: string;
+}
+
 export interface DbxColumnInfo {
   name: string;
   data_type: string;
@@ -149,6 +162,34 @@ export interface DbxColumnInfo {
   numeric_precision?: number | null;
   numeric_scale?: number | null;
   character_maximum_length?: number | null;
+}
+
+export interface DatabaseSearchColumn {
+  name: string;
+  data_type: string;
+  is_primary_key?: boolean;
+}
+
+export interface DatabaseSearchSqlOptions {
+  databaseType?: DbxDatabaseType | null;
+  schema?: string | null;
+  tableName: string;
+  columns: DatabaseSearchColumn[];
+  term: string;
+  limit?: number | null;
+}
+
+export interface DatabaseSearchSql {
+  sql: string;
+  searchableColumns: string[];
+}
+
+export interface SearchResultWhereOptions {
+  databaseType?: DbxDatabaseType | null;
+  columns: DatabaseSearchColumn[];
+  resultColumns: string[];
+  row: unknown[];
+  matchedColumns?: string[];
 }
 
 export interface DbxQueryResult {
@@ -220,6 +261,41 @@ export interface DataGridSaveStatementOptions {
   dirtyRows?: Array<[number, Array<[number, unknown]>]>;
   deletedRows?: number[];
   newRows?: unknown[][];
+}
+
+export interface DataGridCopyUpdateStatementOptions {
+  databaseType?: string | null;
+  tableMeta: DataGridTableMeta;
+  columns: string[];
+  sourceColumns?: Array<string | null>;
+  rows?: unknown[][];
+}
+
+export interface DataGridCopyInsertStatementOptions {
+  databaseType?: string | null;
+  tableMeta?: DataGridTableMeta | null;
+  columns: string[];
+  sourceColumns?: Array<string | null>;
+  rows?: unknown[][];
+  excludePrimaryKeys?: boolean;
+}
+
+export type DataGridContextFilterMode =
+  | "equals"
+  | "not-equals"
+  | "is-null"
+  | "is-not-null"
+  | "like"
+  | "not-like"
+  | "less-than"
+  | "greater-than";
+
+export interface DataGridContextFilterConditionOptions {
+  databaseType?: string | null;
+  columnName: string;
+  mode: DataGridContextFilterMode;
+  value: unknown;
+  columnInfo?: DataGridColumnInfo | null;
 }
 
 export interface GridSaveRequest {
@@ -352,6 +428,61 @@ export interface RedisScanKeysRequest {
   count?: number | null;
 }
 
+export interface RedisLoadMoreRequest {
+  connectionId: string;
+  db: number;
+  keyRaw: string;
+  keyType: string;
+  cursor: number;
+  count?: number | null;
+}
+
+export interface RedisHashFieldRequest {
+  connectionId: string;
+  db: number;
+  keyRaw: string;
+  field: string;
+}
+
+export interface RedisHashSetRequest extends RedisHashFieldRequest {
+  value: string;
+  ttl?: number | null;
+}
+
+export interface RedisListIndexRequest {
+  connectionId: string;
+  db: number;
+  keyRaw: string;
+  index: number;
+}
+
+export interface RedisListPushRequest {
+  connectionId: string;
+  db: number;
+  keyRaw: string;
+  value: string;
+  ttl?: number | null;
+}
+
+export interface RedisListSetRequest extends RedisListIndexRequest {
+  value: string;
+}
+
+export interface RedisSetMemberRequest {
+  connectionId: string;
+  db: number;
+  keyRaw: string;
+  member: string;
+}
+
+export interface RedisSetAddRequest extends RedisSetMemberRequest {
+  ttl?: number | null;
+}
+
+export interface RedisZaddRequest extends RedisSetAddRequest {
+  score: number;
+}
+
 export interface RedisKeyRequest {
   connectionId: string;
   db: number;
@@ -462,9 +593,78 @@ export interface TableStructureSqlOptions {
   originalTableComment?: string | null;
 }
 
+export interface SingleColumnAlterSqlOptions {
+  databaseType?: string | null;
+  schema?: string | null;
+  tableName: string;
+  column: EditableStructureColumn;
+}
+
 export interface TableStructureSqlResult {
   statements: string[];
   warnings: string[];
+}
+
+export type DatabaseObjectType = "TABLE" | "VIEW" | "PROCEDURE" | "FUNCTION" | "SEQUENCE" | "PACKAGE" | "PACKAGE_BODY" | string;
+export type TableChildObjectType = "COLUMN" | "INDEX" | "FOREIGN_KEY" | "TRIGGER";
+
+export interface CreateDatabaseSqlOptions {
+  databaseType?: string | null;
+  driverProfile?: string | null;
+  name: string;
+  charset?: string | null;
+  collation?: string | null;
+}
+
+export interface DuckDbAttachDatabaseSqlOptions {
+  path: string;
+  name: string;
+}
+
+export interface RenameObjectSqlOptions {
+  databaseType?: string | null;
+  objectType: DatabaseObjectType;
+  schema?: string | null;
+  oldName: string;
+  newName: string;
+}
+
+export interface DatabaseNameSqlOptions {
+  databaseType?: string | null;
+  name: string;
+}
+
+export interface SchemaNameSqlOptions {
+  databaseType?: string | null;
+  name: string;
+}
+
+export interface TableAdminSqlOptions {
+  databaseType?: string | null;
+  schema?: string | null;
+  tableName: string;
+}
+
+export interface DropObjectSqlOptions {
+  databaseType?: string | null;
+  objectType: DatabaseObjectType;
+  schema?: string | null;
+  name: string;
+}
+
+export interface DropTableChildObjectSqlOptions {
+  databaseType?: string | null;
+  objectType: TableChildObjectType;
+  schema?: string | null;
+  tableName: string;
+  name: string;
+}
+
+export interface DuplicateTableStructureSqlOptions {
+  databaseType?: string | null;
+  schema?: string | null;
+  sourceName: string;
+  targetName: string;
 }
 
 export type DriverRuntimeMode = "native" | "file" | "jdbc" | "agent" | string;

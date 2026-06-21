@@ -35,4 +35,8 @@ pub(crate) struct AeroricDbConnectionConfig {
     pub created_at: i64,
     pub last_opened_at: Option<i64>,
     pub migrated_from_legacy: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub connection_group: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pinned: Option<bool>,
 }

@@ -73,6 +73,30 @@ pub async fn dbx_get_table_ddl(
         &database,
         &schema,
         &table,
+        None,
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn dbx_get_object_source(
+    state: State<'_, DbxState>,
+    connection_id: String,
+    database: Option<String>,
+    schema: Option<String>,
+    name: String,
+    object_type: db::ObjectSourceKind,
+) -> Result<db::ObjectSource, String> {
+    connections::ensure_connected(&state, &connection_id).await?;
+    let database = required(database, "");
+    let schema = required(schema, "");
+    dbx_core::schema::get_object_source_core(
+        &state.app_state,
+        &connection_id,
+        &database,
+        &schema,
+        &name,
+        object_type,
     )
     .await
 }

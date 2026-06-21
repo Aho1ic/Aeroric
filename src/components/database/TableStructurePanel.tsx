@@ -4,6 +4,7 @@ import { useI18n } from "../../i18n";
 import { databaseApi } from "../../lib/databaseApi";
 import s from "../../styles";
 import type { DbxColumnInfo, EditableStructureColumn } from "../../types/database";
+import { DbxButton, DbxIconButton } from "./DbxButton";
 
 interface Props {
   connectionId?: string;
@@ -91,14 +92,12 @@ export function TableStructurePanel({ databaseType, schema, tableName, columns, 
           <div style={s.databaseDialogHint}>{t("database.tableStructureHint")}</div>
         </div>
         <div style={s.databaseButtonRow}>
-          <button type="button" style={s.databaseSmallButton} disabled={readOnly} onClick={addDraft}>
-            <Plus size={13} />
-            <span>{t("database.addColumn")}</span>
-          </button>
-          <button type="button" style={s.databaseSmallButton} disabled={readOnly || editableColumns.length === columns.length} onClick={() => void previewSql()}>
-            <Code size={13} />
-            <span>{t("database.previewSql")}</span>
-          </button>
+          <DbxButton variant="outline" size="sm" icon={Plus} disabled={readOnly} onClick={addDraft}>
+            {t("database.addColumn")}
+          </DbxButton>
+          <DbxButton variant="outline" size="sm" icon={Code} disabled={readOnly || editableColumns.length === columns.length} onClick={() => void previewSql()}>
+            {t("database.previewSql")}
+          </DbxButton>
         </div>
       </div>
       <div style={s.databaseTableWrap}>
@@ -126,9 +125,7 @@ export function TableStructurePanel({ databaseType, schema, tableName, columns, 
                 <td style={s.databaseTd}>{column.is_primary_key ? "PK" : ""}</td>
                 <td style={s.databaseTd}>{column.column_default ?? ""}</td>
                 <td style={s.databaseTd}>
-                  <button type="button" style={s.databaseIconButton} disabled={readOnly}>
-                    <Trash2 size={13} />
-                  </button>
+                  <DbxIconButton icon={Trash2} size="icon-xs" disabled={readOnly} aria-label={t("common.delete")} />
                 </td>
               </tr>
             ))}
@@ -154,9 +151,7 @@ export function TableStructurePanel({ databaseType, schema, tableName, columns, 
                 <td style={s.databaseTd} />
                 <td style={s.databaseTd} />
                 <td style={s.databaseTd}>
-                  <button type="button" style={s.databaseIconButton} onClick={() => removeDraft(draft.id)}>
-                    <Trash2 size={13} />
-                  </button>
+                  <DbxIconButton icon={Trash2} size="icon-xs" onClick={() => removeDraft(draft.id)} aria-label={t("common.delete")} />
                 </td>
               </tr>
             ))}

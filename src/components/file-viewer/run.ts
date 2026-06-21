@@ -49,3 +49,12 @@ export function selectDefaultCondaEnvironment(
   if (environments.length === 0) return null;
   return environments.find((env) => env.path === preferredPath) ?? environments[0];
 }
+
+export function selectRunnableCondaEnvironment(
+  environments: CondaEnvironment[],
+  preferredPath: string | null | undefined,
+  remote: boolean,
+): CondaEnvironment | null {
+  if (remote) return null;
+  return selectDefaultCondaEnvironment(environments, preferredPath);
+}

@@ -131,6 +131,7 @@ fn default_connection_config(
         redis_key_separator: default_redis_key_separator(),
         etcd_endpoints: String::new(),
         gbase_server: String::new(),
+        informix_server: String::new(),
         external_config: None,
         jdbc_driver_class: None,
         jdbc_driver_paths: Vec::new(),
@@ -188,6 +189,8 @@ fn legacy_to_aeroric(connection: LegacyConnection) -> AeroricDbConnectionConfig 
         created_at: connection.created_at,
         last_opened_at: connection.last_opened_at,
         migrated_from_legacy: Some(true),
+        connection_group: None,
+        pinned: None,
     }
 }
 
@@ -453,6 +456,57 @@ pub async fn dbx_disconnect(
     Ok(())
 }
 
+#[tauri::command]
+pub async fn dbx_backup_sqlite_database(
+    state: State<'_, DbxState>,
+    connection_id: String,
+    destination_path: String,
+) -> Result<(), String> {
+    ensure_loaded(&state).await?;
+    let connection = state
+        .connections
+        .read()
+        .await
+        .get(&connection_id)
+        .cloned()
+        .ok_or_else(|| "Connection not found".to_string())?;
+    let config = parse_core_config(&connection)?;
+    if config.db_type != DatabaseType::Sqlite {
+        return Err("Only SQLite connections can be backed up".to_string());
+    }
+    let source_path = config.host.trim().to_string();
+    if source_path.is_empty() || source_path.eq_ignore_ascii_case(":memory:") {
+        return Err("SQLite backup requires a file-backed database".to_string());
+    }
+    let destination_path = destination_path.trim().to_string();
+    if destination_path.is_empty() {
+        return Err("Backup destination path is required".to_string());
+    }
+
+    tauri::async_runtime::spawn_blocking(move || {
+        let source = PathBuf::from(&source_path);
+        if !source.exists() {
+            return Err("SQLite database file not found".to_string());
+        }
+        let destination = PathBuf::from(&destination_path);
+        if let Some(parent) = destination.parent() {
+            if !parent.as_os_str().is_empty() {
+                fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+            }
+        }
+        let source_connection = rusqlite::Connection::open_with_flags(
+            &source,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+        )
+        .map_err(|e| e.to_string())?;
+        source_connection
+            .backup(rusqlite::DatabaseName::Main, &destination, None)
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -502,6 +556,8 @@ mod tests {
             created_at: 1,
             last_opened_at: None,
             migrated_from_legacy: None,
+            connection_group: None,
+            pinned: None,
         };
 
         let sanitized = sanitized(&connection);

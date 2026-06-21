@@ -14,7 +14,7 @@ import { ImagePreviewPane } from "./file-viewer/ImagePreviewPane";
 import type { OpenFileTab } from "../hooks/useProjectPanels";
 import type { CondaEnvironment, SshConnection, ThemeVariant } from "../types";
 import { useI18n } from "../i18n";
-import { isRunnableScriptFile, selectDefaultCondaEnvironment } from "./file-viewer/run";
+import { isRunnableScriptFile, selectRunnableCondaEnvironment } from "./file-viewer/run";
 
 type RemoteFileContext = {
   connection: SshConnection;
@@ -695,7 +695,12 @@ export function FileViewer({
 
   const activePreviewMode = !!previewModes[activeTab.path];
   const activeIsMarkdown = isMarkdownFile(activeTab.name);
-  const activeCondaEnv = selectDefaultCondaEnvironment(condaEnvironments, selectedCondaEnvPath);
+  const activeCondaEnv = selectRunnableCondaEnvironment(
+    condaEnvironments,
+    selectedCondaEnvPath,
+    Boolean(remote),
+  );
+  const selectableCondaEnvironments = remote ? [] : condaEnvironments;
   const canRunScript = isRunnableScriptFile(activeTab.path, Boolean(remote)) && !!onRunPythonFile;
   const canCloseOtherTabs = tabs.length > 1;
   const activeTabIndex = tabs.findIndex((tab) => tab.path === activeTab.path);
@@ -1008,7 +1013,7 @@ export function FileViewer({
                 background: "color-mix(in srgb, var(--bg-card) 70%, transparent)",
                 color: "var(--text-muted)",
                 fontSize: 10.5,
-                cursor: condaEnvironments.length > 0 ? "pointer" : "default",
+                cursor: selectableCondaEnvironments.length > 0 ? "pointer" : "default",
                 fontFamily: "var(--font-ui)",
               }}
             >
@@ -1019,12 +1024,12 @@ export function FileViewer({
           </Popover.Trigger>
           <Popover.Portal>
             <Popover.Content sideOffset={6} align="end" className="file-viewer-tab-menu">
-              {condaEnvironments.length === 0 ? (
+              {selectableCondaEnvironments.length === 0 ? (
                 <div className="file-viewer-tab-menu-item" style={{ cursor: "default", color: "var(--text-hint)" }}>
                   {t("file.noCondaEnvironment")}
                 </div>
               ) : (
-                condaEnvironments.map((env) => (
+                selectableCondaEnvironments.map((env) => (
                   <button
                     type="button"
                     key={env.path}

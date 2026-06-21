@@ -50,6 +50,7 @@ describe("terminal input fixes", () => {
   it("removes pinyin preedit text appended after committed Chinese text", () => {
     expect(normalizeCommittedCompositionText("是的shi'de")).toBe("是的");
     expect(normalizeCommittedCompositionText("测试ce'shi")).toBe("测试");
+    expect(normalizeCommittedCompositionText("你好ni'hao")).toBe("你好");
   });
 
   it("keeps intentional Chinese and English mixed input", () => {
@@ -95,7 +96,11 @@ describe("terminal input fixes", () => {
     const { attachLinuxIMEFix } = await import("../components/terminalInputFix");
     const textarea = document.createElement("textarea");
     const sent: string[] = [];
-    const listeners: Array<{ event: string; listener: EventListenerOrEventListenerObject; options?: boolean | AddEventListenerOptions }> = [];
+    const listeners: Array<{
+      event: string;
+      listener: EventListenerOrEventListenerObject;
+      options?: boolean | AddEventListenerOptions;
+    }> = [];
     const term = {
       textarea,
       onData: (listener: (data: string) => void) => {
@@ -291,12 +296,14 @@ describe("terminal input fixes", () => {
 
     textarea.dispatchEvent(new CompositionEvent("compositionstart", { data: "" }));
     textarea.dispatchEvent(new CompositionEvent("compositionupdate", { data: "ni'hao" }));
-    textarea.dispatchEvent(new InputEvent("beforeinput", {
-      inputType: "insertText",
-      data: "你好",
-      bubbles: true,
-      cancelable: true,
-    }));
+    textarea.dispatchEvent(
+      new InputEvent("beforeinput", {
+        inputType: "insertText",
+        data: "你好",
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
     vi.runOnlyPendingTimers();
     textarea.value = "ni'hao";
     textarea.dispatchEvent(new CompositionEvent("compositionend", { data: "ni'hao" }));
@@ -334,33 +341,262 @@ describe("terminal input fixes", () => {
     textarea.dispatchEvent(new CompositionEvent("compositionstart", { data: "" }));
     textarea.dispatchEvent(new CompositionEvent("compositionupdate", { data: "s'd" }));
     textarea.dispatchEvent(new CompositionEvent("compositionend", { data: "是的" }));
-    textarea.dispatchEvent(new InputEvent("beforeinput", {
-      inputType: "insertText",
-      data: "是的",
-      bubbles: true,
-      cancelable: true,
-    }));
-    textarea.dispatchEvent(new InputEvent("beforeinput", {
-      inputType: "insertText",
-      data: "s",
-      bubbles: true,
-      cancelable: true,
-    }));
-    textarea.dispatchEvent(new InputEvent("beforeinput", {
-      inputType: "insertText",
-      data: "'",
-      bubbles: true,
-      cancelable: true,
-    }));
-    textarea.dispatchEvent(new InputEvent("beforeinput", {
-      inputType: "insertText",
-      data: "d",
-      bubbles: true,
-      cancelable: true,
-    }));
+    textarea.dispatchEvent(
+      new InputEvent("beforeinput", {
+        inputType: "insertText",
+        data: "是的",
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    textarea.dispatchEvent(
+      new InputEvent("beforeinput", {
+        inputType: "insertText",
+        data: "s",
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    textarea.dispatchEvent(
+      new InputEvent("beforeinput", {
+        inputType: "insertText",
+        data: "'",
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    textarea.dispatchEvent(
+      new InputEvent("beforeinput", {
+        inputType: "insertText",
+        data: "d",
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
     vi.runOnlyPendingTimers();
 
     expect(sent).toEqual(["是的"]);
+    vi.useRealTimers();
+  });
+
+  it("normalizes xterm data that contains committed Chinese plus a pinyin tail", async () => {
+    vi.resetModules();
+    vi.doMock("../platform", () => ({
+      APP_PLATFORM: "macos",
+      ENABLE_USAGE_INSIGHTS: true,
+      IS_MAC_WEBKIT: true,
+      IS_OTHER_WEBKIT: false,
+      detectAppPlatform: () => "macos",
+      isAppleWebKit: () => true,
+    }));
+    const { attachLinuxIMEFix } = await import("../components/terminalInputFix");
+    const textarea = document.createElement("textarea");
+    const sent: string[] = [];
+    const dataListeners: Array<(data: string) => void> = [];
+    const term = {
+      textarea,
+      onData: (listener: (data: string) => void) => {
+        dataListeners.push(listener);
+        return { dispose: vi.fn() };
+      },
+    };
+
+    attachLinuxIMEFix(term as never, (data) => sent.push(data));
+    expect(dataListeners).toHaveLength(1);
+    dataListeners[0]("你好ni'hao");
+
+    expect(sent).toEqual(["你好"]);
+  });
+
+  it("waits for delayed committed Chinese before sending stale romanized composition text", async () => {
+    vi.useFakeTimers();
+    vi.resetModules();
+    vi.doMock("../platform", () => ({
+      APP_PLATFORM: "macos",
+      ENABLE_USAGE_INSIGHTS: true,
+      IS_MAC_WEBKIT: true,
+      IS_OTHER_WEBKIT: false,
+      detectAppPlatform: () => "macos",
+      isAppleWebKit: () => true,
+    }));
+    const { attachLinuxIMEFix } = await import("../components/terminalInputFix");
+    const textarea = document.createElement("textarea");
+    const sent: string[] = [];
+    const dataListeners: Array<(data: string) => void> = [];
+    const term = {
+      textarea,
+      onData: (listener: (data: string) => void) => {
+        dataListeners.push(listener);
+        return { dispose: vi.fn() };
+      },
+    };
+
+    attachLinuxIMEFix(term as never, (data) => sent.push(data));
+
+    textarea.dispatchEvent(new CompositionEvent("compositionstart", { data: "" }));
+    textarea.dispatchEvent(new CompositionEvent("compositionupdate", { data: "shi'de" }));
+    textarea.dispatchEvent(new CompositionEvent("compositionend", { data: "shi'de" }));
+    vi.advanceTimersByTime(80);
+    const beforeInput = new InputEvent("beforeinput", {
+      inputType: "insertText",
+      data: "是的shi'de",
+      bubbles: true,
+      cancelable: true,
+    });
+    textarea.dispatchEvent(beforeInput);
+    dataListeners[0]("是的shi'de");
+    vi.runOnlyPendingTimers();
+
+    expect(beforeInput.defaultPrevented).toBe(true);
+    expect(sent).toEqual(["是的"]);
+    vi.useRealTimers();
+  });
+
+  it("clears delayed WebKit textarea pinyin tail after committed Chinese input", async () => {
+    vi.useFakeTimers();
+    vi.resetModules();
+    vi.doMock("../platform", () => ({
+      APP_PLATFORM: "macos",
+      ENABLE_USAGE_INSIGHTS: true,
+      IS_MAC_WEBKIT: true,
+      IS_OTHER_WEBKIT: false,
+      detectAppPlatform: () => "macos",
+      isAppleWebKit: () => true,
+    }));
+    const { attachLinuxIMEFix } = await import("../components/terminalInputFix");
+    const textarea = document.createElement("textarea");
+    const sent: string[] = [];
+    const term = {
+      textarea,
+      onData: (listener: (data: string) => void) => {
+        void listener;
+        return { dispose: vi.fn() };
+      },
+    };
+
+    attachLinuxIMEFix(term as never, (data) => sent.push(data));
+
+    textarea.dispatchEvent(new CompositionEvent("compositionstart", { data: "" }));
+    textarea.dispatchEvent(new CompositionEvent("compositionupdate", { data: "shi'de" }));
+    textarea.dispatchEvent(new CompositionEvent("compositionend", { data: "shi'de" }));
+    vi.advanceTimersByTime(80);
+    textarea.dispatchEvent(
+      new InputEvent("beforeinput", {
+        inputType: "insertText",
+        data: "是的shi'de",
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+
+    globalThis.setTimeout(() => {
+      textarea.value = "shi'de";
+      textarea.setSelectionRange(0, textarea.value.length);
+    }, 40);
+    vi.advanceTimersByTime(100);
+
+    expect(sent).toEqual(["是的"]);
+    expect(textarea.value).toBe("");
+    expect(textarea.selectionStart).toBe(0);
+    expect(textarea.selectionEnd).toBe(0);
+    vi.useRealTimers();
+  });
+
+  it("temporarily resets the WebKit textarea input client after committed Chinese input", async () => {
+    vi.useFakeTimers();
+    vi.resetModules();
+    vi.doMock("../platform", () => ({
+      APP_PLATFORM: "macos",
+      ENABLE_USAGE_INSIGHTS: true,
+      IS_MAC_WEBKIT: true,
+      IS_OTHER_WEBKIT: false,
+      detectAppPlatform: () => "macos",
+      isAppleWebKit: () => true,
+    }));
+    const { attachLinuxIMEFix } = await import("../components/terminalInputFix");
+    const textarea = document.createElement("textarea");
+    const focus = vi.spyOn(textarea, "focus").mockImplementation(() => {});
+    const sent: string[] = [];
+    const term = {
+      textarea,
+      onData: (listener: (data: string) => void) => {
+        void listener;
+        return { dispose: vi.fn() };
+      },
+    };
+
+    attachLinuxIMEFix(term as never, (data) => sent.push(data));
+
+    textarea.dispatchEvent(new CompositionEvent("compositionstart", { data: "" }));
+    textarea.dispatchEvent(new CompositionEvent("compositionupdate", { data: "shi'de" }));
+    textarea.dispatchEvent(
+      new InputEvent("beforeinput", {
+        inputType: "insertText",
+        data: "是的shi'de",
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+
+    expect(sent).toEqual(["是的"]);
+    expect(textarea.disabled).toBe(true);
+
+    vi.advanceTimersByTime(40);
+
+    expect(textarea.disabled).toBe(false);
+    expect(focus).toHaveBeenCalledWith({ preventScroll: true });
+    vi.useRealTimers();
+  });
+
+  it("hides xterm composition view when suppressing compositionend replay", async () => {
+    vi.useFakeTimers();
+    vi.resetModules();
+    vi.doMock("../platform", () => ({
+      APP_PLATFORM: "macos",
+      ENABLE_USAGE_INSIGHTS: true,
+      IS_MAC_WEBKIT: true,
+      IS_OTHER_WEBKIT: false,
+      detectAppPlatform: () => "macos",
+      isAppleWebKit: () => true,
+    }));
+    const { attachLinuxIMEFix } = await import("../components/terminalInputFix");
+    const terminalElement = document.createElement("div");
+    terminalElement.className = "xterm";
+    const textarea = document.createElement("textarea");
+    const compositionView = document.createElement("div");
+    compositionView.className = "composition-view active";
+    compositionView.textContent = "shi'de";
+    terminalElement.append(textarea, compositionView);
+    document.body.appendChild(terminalElement);
+    const sent: string[] = [];
+    const term = {
+      textarea,
+      onData: (listener: (data: string) => void) => {
+        void listener;
+        return { dispose: vi.fn() };
+      },
+    };
+
+    const disposable = attachLinuxIMEFix(term as never, (data) => sent.push(data));
+
+    textarea.dispatchEvent(new CompositionEvent("compositionstart", { data: "" }));
+    textarea.dispatchEvent(new CompositionEvent("compositionupdate", { data: "shi'de" }));
+    textarea.dispatchEvent(new CompositionEvent("compositionend", { data: "shi'de" }));
+    textarea.dispatchEvent(
+      new InputEvent("beforeinput", {
+        inputType: "insertText",
+        data: "是的shi'de",
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+
+    expect(sent).toEqual(["是的"]);
+    expect(compositionView.classList.contains("active")).toBe(false);
+    expect(compositionView.textContent).toBe("");
+
+    disposable.dispose();
+    terminalElement.remove();
     vi.useRealTimers();
   });
 
@@ -401,6 +637,226 @@ describe("terminal input fixes", () => {
 
     expect(beforeInput.defaultPrevented).toBe(true);
     expect(sent).toEqual(["sd"]);
+    vi.useRealTimers();
+  });
+
+  it("promptly commits romanized text when switching IME to English", async () => {
+    vi.useFakeTimers();
+    vi.resetModules();
+    vi.doMock("../platform", () => ({
+      APP_PLATFORM: "macos",
+      ENABLE_USAGE_INSIGHTS: true,
+      IS_MAC_WEBKIT: true,
+      IS_OTHER_WEBKIT: false,
+      detectAppPlatform: () => "macos",
+      isAppleWebKit: () => true,
+    }));
+    const { attachLinuxIMEFix } = await import("../components/terminalInputFix");
+    const textarea = document.createElement("textarea");
+    const sent: string[] = [];
+    const term = {
+      textarea,
+      onData: (listener: (data: string) => void) => {
+        void listener;
+        return { dispose: vi.fn() };
+      },
+    };
+
+    attachLinuxIMEFix(term as never, (data) => sent.push(data));
+
+    textarea.dispatchEvent(new CompositionEvent("compositionstart", { data: "" }));
+    textarea.dispatchEvent(new CompositionEvent("compositionupdate", { data: "ye's" }));
+    textarea.dispatchEvent(new CompositionEvent("compositionend", { data: "ye's" }));
+    vi.advanceTimersByTime(150);
+
+    expect(sent).toEqual(["yes"]);
+    vi.useRealTimers();
+  });
+
+  it("flushes pending romanized text before the next English keystroke", async () => {
+    vi.useFakeTimers();
+    vi.resetModules();
+    vi.doMock("../platform", () => ({
+      APP_PLATFORM: "macos",
+      ENABLE_USAGE_INSIGHTS: true,
+      IS_MAC_WEBKIT: true,
+      IS_OTHER_WEBKIT: false,
+      detectAppPlatform: () => "macos",
+      isAppleWebKit: () => true,
+    }));
+    const { attachLinuxIMEFix } = await import("../components/terminalInputFix");
+    const textarea = document.createElement("textarea");
+    const sent: string[] = [];
+    const term = {
+      textarea,
+      onData: (listener: (data: string) => void) => {
+        void listener;
+        return { dispose: vi.fn() };
+      },
+    };
+
+    attachLinuxIMEFix(term as never, (data) => sent.push(data));
+
+    textarea.dispatchEvent(new CompositionEvent("compositionstart", { data: "" }));
+    textarea.dispatchEvent(new CompositionEvent("compositionupdate", { data: "ye's" }));
+    textarea.dispatchEvent(new CompositionEvent("compositionend", { data: "ye's" }));
+    vi.advanceTimersByTime(40);
+    const nextInput = new InputEvent("beforeinput", {
+      inputType: "insertText",
+      data: "a",
+      bubbles: true,
+      cancelable: true,
+    });
+    textarea.dispatchEvent(nextInput);
+
+    expect(nextInput.defaultPrevented).toBe(true);
+    expect(sent).toEqual(["yes", "a"]);
+    vi.useRealTimers();
+  });
+
+  it("recovers romanized composition when IME switches without compositionend", async () => {
+    vi.useFakeTimers();
+    vi.resetModules();
+    vi.doMock("../platform", () => ({
+      APP_PLATFORM: "macos",
+      ENABLE_USAGE_INSIGHTS: true,
+      IS_MAC_WEBKIT: true,
+      IS_OTHER_WEBKIT: false,
+      detectAppPlatform: () => "macos",
+      isAppleWebKit: () => true,
+    }));
+    const { attachLinuxIMEFix } = await import("../components/terminalInputFix");
+    const textarea = document.createElement("textarea");
+    const sent: string[] = [];
+    const term = {
+      textarea,
+      onData: (listener: (data: string) => void) => {
+        void listener;
+        return { dispose: vi.fn() };
+      },
+    };
+
+    attachLinuxIMEFix(term as never, (data) => sent.push(data));
+
+    textarea.dispatchEvent(new CompositionEvent("compositionstart", { data: "" }));
+    textarea.dispatchEvent(new CompositionEvent("compositionupdate", { data: "shi'de" }));
+    const nextInput = new InputEvent("beforeinput", {
+      inputType: "insertText",
+      data: "a",
+      bubbles: true,
+      cancelable: true,
+    });
+    textarea.dispatchEvent(nextInput);
+
+    expect(nextInput.defaultPrevented).toBe(true);
+    expect(sent).toEqual(["shide", "a"]);
+    vi.useRealTimers();
+  });
+
+  it("commits romanized composition on blur during IME switch", async () => {
+    vi.useFakeTimers();
+    vi.resetModules();
+    vi.doMock("../platform", () => ({
+      APP_PLATFORM: "macos",
+      ENABLE_USAGE_INSIGHTS: true,
+      IS_MAC_WEBKIT: true,
+      IS_OTHER_WEBKIT: false,
+      detectAppPlatform: () => "macos",
+      isAppleWebKit: () => true,
+    }));
+    const { attachLinuxIMEFix } = await import("../components/terminalInputFix");
+    const textarea = document.createElement("textarea");
+    const sent: string[] = [];
+    const term = {
+      textarea,
+      onData: (listener: (data: string) => void) => {
+        void listener;
+        return { dispose: vi.fn() };
+      },
+    };
+
+    attachLinuxIMEFix(term as never, (data) => sent.push(data));
+
+    textarea.dispatchEvent(new CompositionEvent("compositionstart", { data: "" }));
+    textarea.dispatchEvent(new CompositionEvent("compositionupdate", { data: "shi'de" }));
+    textarea.dispatchEvent(new FocusEvent("blur"));
+
+    expect(sent).toEqual(["shide"]);
+    vi.useRealTimers();
+  });
+
+  it("lets xterm observe compositionend so its internal IME state is released", async () => {
+    vi.useFakeTimers();
+    vi.resetModules();
+    vi.doMock("../platform", () => ({
+      APP_PLATFORM: "macos",
+      ENABLE_USAGE_INSIGHTS: true,
+      IS_MAC_WEBKIT: true,
+      IS_OTHER_WEBKIT: false,
+      detectAppPlatform: () => "macos",
+      isAppleWebKit: () => true,
+    }));
+    const { attachLinuxIMEFix } = await import("../components/terminalInputFix");
+    const textarea = document.createElement("textarea");
+    const sent: string[] = [];
+    const term = {
+      textarea,
+      onData: (listener: (data: string) => void) => {
+        void listener;
+        return { dispose: vi.fn() };
+      },
+    };
+
+    attachLinuxIMEFix(term as never, (data) => sent.push(data));
+    let xtermCompositionEnded = false;
+    textarea.addEventListener("compositionend", () => {
+      xtermCompositionEnded = true;
+    });
+
+    textarea.dispatchEvent(new CompositionEvent("compositionstart", { data: "" }));
+    textarea.dispatchEvent(new CompositionEvent("compositionupdate", { data: "shi'de" }));
+    textarea.dispatchEvent(new CompositionEvent("compositionend", { data: "shi'de" }));
+
+    expect(xtermCompositionEnded).toBe(true);
+    vi.runOnlyPendingTimers();
+    expect(sent).toEqual(["shide"]);
+    vi.useRealTimers();
+  });
+
+  it("synthesizes compositionend for xterm when IME switch blurs without native compositionend", async () => {
+    vi.useFakeTimers();
+    vi.resetModules();
+    vi.doMock("../platform", () => ({
+      APP_PLATFORM: "macos",
+      ENABLE_USAGE_INSIGHTS: true,
+      IS_MAC_WEBKIT: true,
+      IS_OTHER_WEBKIT: false,
+      detectAppPlatform: () => "macos",
+      isAppleWebKit: () => true,
+    }));
+    const { attachLinuxIMEFix } = await import("../components/terminalInputFix");
+    const textarea = document.createElement("textarea");
+    const sent: string[] = [];
+    const term = {
+      textarea,
+      onData: (listener: (data: string) => void) => {
+        void listener;
+        return { dispose: vi.fn() };
+      },
+    };
+
+    attachLinuxIMEFix(term as never, (data) => sent.push(data));
+    let xtermCompositionEnded = false;
+    textarea.addEventListener("compositionend", () => {
+      xtermCompositionEnded = true;
+    });
+
+    textarea.dispatchEvent(new CompositionEvent("compositionstart", { data: "" }));
+    textarea.dispatchEvent(new CompositionEvent("compositionupdate", { data: "shi'de" }));
+    textarea.dispatchEvent(new FocusEvent("blur"));
+
+    expect(sent).toEqual(["shide"]);
+    expect(xtermCompositionEnded).toBe(true);
     vi.useRealTimers();
   });
 

@@ -33,6 +33,17 @@ describe("databaseApi", () => {
     expect(invoke).toHaveBeenCalledWith("dbx_save_connection", { connection });
   });
 
+  it("wraps dbx_backup_sqlite_database with connection and destination paths", async () => {
+    vi.mocked(invoke).mockResolvedValueOnce(undefined);
+
+    await databaseApi.dbxBackupSqliteDatabase("sqlite-source", "/tmp/app.backup.db");
+
+    expect(invoke).toHaveBeenCalledWith("dbx_backup_sqlite_database", {
+      connectionId: "sqlite-source",
+      destinationPath: "/tmp/app.backup.db",
+    });
+  });
+
   it("wraps dbx_list_objects with nullable database and schema scope", async () => {
     vi.mocked(invoke).mockResolvedValueOnce([]);
 
@@ -42,6 +53,20 @@ describe("databaseApi", () => {
       connectionId: "conn",
       database: "main",
       schema: "public",
+    });
+  });
+
+  it("wraps dbx_get_object_source with object source scope", async () => {
+    vi.mocked(invoke).mockResolvedValueOnce({ name: "refresh_stats", object_type: "PROCEDURE", source: "CREATE PROCEDURE ..." });
+
+    await databaseApi.dbxGetObjectSource("conn", "main", "public", "refresh_stats", "PROCEDURE");
+
+    expect(invoke).toHaveBeenCalledWith("dbx_get_object_source", {
+      connectionId: "conn",
+      database: "main",
+      schema: "public",
+      name: "refresh_stats",
+      objectType: "PROCEDURE",
     });
   });
 
@@ -74,6 +99,69 @@ describe("databaseApi", () => {
     await databaseApi.dbxQueryTableData(request);
 
     expect(invoke).toHaveBeenCalledWith("dbx_query_table_data", { request });
+  });
+
+  it("wraps DBX grid save commands with request payloads", async () => {
+    vi.mocked(invoke).mockResolvedValue({ statements: [], rollbackStatements: [], validationError: null });
+    const request = {
+      connectionId: "conn",
+      database: "main",
+      schema: "public",
+      execute: false,
+      options: {
+        databaseType: "postgres",
+        tableMeta: { schema: "public", tableName: "users", primaryKeys: ["id"] },
+        columns: ["id", "email"],
+        rows: [[1, "alice@example.com"]],
+        dirtyRows: [[0, [[1, "alice@new.test"]]]] as Array<[number, Array<[number, unknown]>]>,
+      },
+    };
+
+    await databaseApi.dbxUpdateCell(request);
+    await databaseApi.dbxInsertRow({ ...request, options: { ...request.options, dirtyRows: [], newRows: [[2, "bob@example.com"]] } });
+    await databaseApi.dbxDeleteRows({ ...request, options: { ...request.options, dirtyRows: [], deletedRows: [0] } });
+
+    expect(invoke).toHaveBeenCalledWith("dbx_update_cell", { request });
+    expect(invoke).toHaveBeenCalledWith("dbx_insert_row", {
+      request: { ...request, options: { ...request.options, dirtyRows: [], newRows: [[2, "bob@example.com"]] } },
+    });
+    expect(invoke).toHaveBeenCalledWith("dbx_delete_rows", {
+      request: { ...request, options: { ...request.options, dirtyRows: [], deletedRows: [0] } },
+    });
+  });
+
+  it("wraps DBX grid row copy SQL builders with options payloads", async () => {
+    vi.mocked(invoke).mockResolvedValue(undefined);
+    const insertOptions = {
+      databaseType: "postgres",
+      tableMeta: { schema: "public", tableName: "users", primaryKeys: ["id"] },
+      columns: ["id", "email"],
+      sourceColumns: ["id", "email"],
+      rows: [[1, "alice@example.com"]],
+      excludePrimaryKeys: false,
+    };
+    const updateOptions = {
+      databaseType: "postgres",
+      tableMeta: { schema: "public", tableName: "users", primaryKeys: ["id"] },
+      columns: ["id", "email"],
+      sourceColumns: ["id", "email"],
+      rows: [[1, "alice@example.com"]],
+    };
+    const filterOptions = {
+      databaseType: "postgres",
+      columnName: "email",
+      mode: "like" as const,
+      value: "alice@example.com",
+      columnInfo: { name: "email", data_type: "text", is_nullable: true, is_primary_key: false },
+    };
+
+    await databaseApi.dbxBuildDataGridCopyInsertStatement(insertOptions);
+    await databaseApi.dbxBuildDataGridCopyUpdateStatements(updateOptions);
+    await databaseApi.dbxBuildDataGridContextFilterCondition(filterOptions);
+
+    expect(invoke).toHaveBeenCalledWith("dbx_build_data_grid_copy_insert_statement", { options: insertOptions });
+    expect(invoke).toHaveBeenCalledWith("dbx_build_data_grid_copy_update_statements", { options: updateOptions });
+    expect(invoke).toHaveBeenCalledWith("dbx_build_data_grid_context_filter_condition", { options: filterOptions });
   });
 
   it("wraps dbx_export_table_csv with an export request", async () => {
@@ -124,6 +212,218 @@ describe("databaseApi", () => {
       keyRaw: "session:1",
       value: "active",
       ttl: 60,
+    });
+  });
+
+  it("wraps dbx_redis_load_more with collection pagination payload", async () => {
+    vi.mocked(invoke).mockResolvedValueOnce({
+      key_display: "profile:1",
+      key_raw: "profile:1",
+      key_type: "hash",
+      ttl: -1,
+      value_is_binary: false,
+      value: [],
+      total: null,
+      scan_cursor: null,
+    });
+
+    await databaseApi.dbxRedisLoadMore({
+      connectionId: "redis",
+      db: 0,
+      keyRaw: "profile:1",
+      keyType: "hash",
+      cursor: 12,
+    });
+
+    expect(invoke).toHaveBeenCalledWith("dbx_redis_load_more", {
+      connectionId: "redis",
+      db: 0,
+      keyRaw: "profile:1",
+      keyType: "hash",
+      cursor: 12,
+      count: 200,
+    });
+  });
+
+  it("wraps Redis collection member delete commands", async () => {
+    vi.mocked(invoke).mockResolvedValue(undefined);
+
+    await databaseApi.dbxRedisHashDel({
+      connectionId: "redis",
+      db: 0,
+      keyRaw: "profile:1",
+      field: "name",
+    });
+    await databaseApi.dbxRedisListRemove({
+      connectionId: "redis",
+      db: 1,
+      keyRaw: "queue",
+      index: 2,
+    });
+    await databaseApi.dbxRedisSetRemove({
+      connectionId: "redis",
+      db: 2,
+      keyRaw: "tags",
+      member: "admin",
+    });
+    await databaseApi.dbxRedisZrem({
+      connectionId: "redis",
+      db: 3,
+      keyRaw: "rank",
+      member: "ada",
+    });
+
+    expect(invoke).toHaveBeenCalledWith("dbx_redis_hash_del", {
+      connectionId: "redis",
+      db: 0,
+      keyRaw: "profile:1",
+      field: "name",
+    });
+    expect(invoke).toHaveBeenCalledWith("dbx_redis_list_remove", {
+      connectionId: "redis",
+      db: 1,
+      keyRaw: "queue",
+      index: 2,
+    });
+    expect(invoke).toHaveBeenCalledWith("dbx_redis_set_remove", {
+      connectionId: "redis",
+      db: 2,
+      keyRaw: "tags",
+      member: "admin",
+    });
+    expect(invoke).toHaveBeenCalledWith("dbx_redis_zrem", {
+      connectionId: "redis",
+      db: 3,
+      keyRaw: "rank",
+      member: "ada",
+    });
+  });
+
+  it("wraps Redis collection member edit commands", async () => {
+    vi.mocked(invoke).mockResolvedValue(undefined);
+
+    await databaseApi.dbxRedisHashSet({
+      connectionId: "redis",
+      db: 0,
+      keyRaw: "profile:1",
+      field: "name",
+      value: "Grace",
+      ttl: 60,
+    });
+    await databaseApi.dbxRedisListSet({
+      connectionId: "redis",
+      db: 1,
+      keyRaw: "queue",
+      index: 2,
+      value: "retry",
+    });
+    await databaseApi.dbxRedisSetAdd({
+      connectionId: "redis",
+      db: 2,
+      keyRaw: "tags",
+      member: "staff",
+      ttl: 120,
+    });
+    await databaseApi.dbxRedisZadd({
+      connectionId: "redis",
+      db: 3,
+      keyRaw: "rank",
+      member: "ada",
+      score: 42.5,
+      ttl: 180,
+    });
+
+    expect(invoke).toHaveBeenCalledWith("dbx_redis_hash_set", {
+      connectionId: "redis",
+      db: 0,
+      keyRaw: "profile:1",
+      field: "name",
+      value: "Grace",
+      ttl: 60,
+    });
+    expect(invoke).toHaveBeenCalledWith("dbx_redis_list_set", {
+      connectionId: "redis",
+      db: 1,
+      keyRaw: "queue",
+      index: 2,
+      value: "retry",
+    });
+    expect(invoke).toHaveBeenCalledWith("dbx_redis_set_add", {
+      connectionId: "redis",
+      db: 2,
+      keyRaw: "tags",
+      member: "staff",
+      ttl: 120,
+    });
+    expect(invoke).toHaveBeenCalledWith("dbx_redis_zadd", {
+      connectionId: "redis",
+      db: 3,
+      keyRaw: "rank",
+      member: "ada",
+      score: 42.5,
+      ttl: 180,
+    });
+  });
+
+  it("wraps Redis collection member add commands", async () => {
+    vi.mocked(invoke).mockResolvedValue(undefined);
+
+    await databaseApi.dbxRedisListPush({
+      connectionId: "redis",
+      db: 0,
+      keyRaw: "queue",
+      value: "next",
+    });
+    await databaseApi.dbxRedisHashSet({
+      connectionId: "redis",
+      db: 1,
+      keyRaw: "profile:1",
+      field: "city",
+      value: "Paris",
+    });
+    await databaseApi.dbxRedisSetAdd({
+      connectionId: "redis",
+      db: 2,
+      keyRaw: "tags",
+      member: "admin",
+    });
+    await databaseApi.dbxRedisZadd({
+      connectionId: "redis",
+      db: 3,
+      keyRaw: "rank",
+      member: "ada",
+      score: 99,
+    });
+
+    expect(invoke).toHaveBeenCalledWith("dbx_redis_list_push", {
+      connectionId: "redis",
+      db: 0,
+      keyRaw: "queue",
+      value: "next",
+      ttl: null,
+    });
+    expect(invoke).toHaveBeenCalledWith("dbx_redis_hash_set", {
+      connectionId: "redis",
+      db: 1,
+      keyRaw: "profile:1",
+      field: "city",
+      value: "Paris",
+      ttl: null,
+    });
+    expect(invoke).toHaveBeenCalledWith("dbx_redis_set_add", {
+      connectionId: "redis",
+      db: 2,
+      keyRaw: "tags",
+      member: "admin",
+      ttl: null,
+    });
+    expect(invoke).toHaveBeenCalledWith("dbx_redis_zadd", {
+      connectionId: "redis",
+      db: 3,
+      keyRaw: "rank",
+      member: "ada",
+      score: 99,
+      ttl: null,
     });
   });
 
@@ -214,6 +514,151 @@ describe("databaseApi", () => {
     expect(invoke).toHaveBeenCalledWith("dbx_build_table_structure_change_sql", { options });
   });
 
+  it("wraps dbx admin SQL builder commands with options", async () => {
+    vi.mocked(invoke).mockResolvedValueOnce("CREATE DATABASE `app` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;");
+    await databaseApi.dbxBuildCreateDatabaseSql({
+      databaseType: "mysql",
+      driverProfile: "mysql",
+      name: "app",
+      charset: "utf8mb4",
+      collation: "utf8mb4_unicode_ci",
+    });
+    expect(invoke).toHaveBeenCalledWith("dbx_build_create_database_sql", {
+      options: {
+        databaseType: "mysql",
+        driverProfile: "mysql",
+        name: "app",
+        charset: "utf8mb4",
+        collation: "utf8mb4_unicode_ci",
+      },
+    });
+
+    vi.mocked(invoke).mockResolvedValueOnce("ATTACH '/tmp/app.duckdb' AS app;");
+    await databaseApi.dbxBuildDuckDbAttachDatabaseSql("/tmp/app.duckdb", "app");
+    expect(invoke).toHaveBeenCalledWith("dbx_build_duckdb_attach_database_sql", {
+      options: { path: "/tmp/app.duckdb", name: "app" },
+    });
+
+    vi.mocked(invoke).mockResolvedValueOnce("DROP DATABASE \"app\";");
+    await databaseApi.dbxBuildDropDatabaseSql({ databaseType: "postgres", name: "app" });
+    expect(invoke).toHaveBeenCalledWith("dbx_build_drop_database_sql", {
+      options: { databaseType: "postgres", name: "app" },
+    });
+
+    vi.mocked(invoke).mockResolvedValueOnce("CREATE SCHEMA \"analytics\";");
+    await databaseApi.dbxBuildCreateSchemaSql({ databaseType: "postgres", name: "analytics" });
+    expect(invoke).toHaveBeenCalledWith("dbx_build_create_schema_sql", {
+      options: { databaseType: "postgres", name: "analytics" },
+    });
+
+    vi.mocked(invoke).mockResolvedValueOnce("DROP SCHEMA \"analytics\" CASCADE;");
+    await databaseApi.dbxBuildDropSchemaSql({ databaseType: "postgres", name: "analytics" });
+    expect(invoke).toHaveBeenCalledWith("dbx_build_drop_schema_sql", {
+      options: { databaseType: "postgres", name: "analytics" },
+    });
+  });
+
+  it("wraps dbx table administration SQL builder commands with options", async () => {
+    const tableOptions = {
+      databaseType: "postgres",
+      schema: "public",
+      tableName: "users",
+    };
+
+    vi.mocked(invoke).mockResolvedValueOnce("DROP TABLE \"public\".\"users\";");
+    await databaseApi.dbxBuildDropTableSql(tableOptions);
+    expect(invoke).toHaveBeenCalledWith("dbx_build_drop_table_sql", { options: tableOptions });
+
+    vi.mocked(invoke).mockResolvedValueOnce("TRUNCATE TABLE \"public\".\"users\";");
+    await databaseApi.dbxBuildTruncateTableSql(tableOptions);
+    expect(invoke).toHaveBeenCalledWith("dbx_build_truncate_table_sql", { options: tableOptions });
+
+    vi.mocked(invoke).mockResolvedValueOnce("DELETE FROM \"public\".\"users\";");
+    await databaseApi.dbxBuildEmptyTableSql(tableOptions);
+    expect(invoke).toHaveBeenCalledWith("dbx_build_empty_table_sql", { options: tableOptions });
+
+    const renameObjectOptions = {
+      databaseType: "postgres",
+      objectType: "TABLE" as const,
+      schema: "public",
+      oldName: "users",
+      newName: "app_users",
+    };
+    vi.mocked(invoke).mockResolvedValueOnce("ALTER TABLE \"public\".\"users\" RENAME TO \"app_users\";");
+    await databaseApi.dbxBuildRenameObjectSql(renameObjectOptions);
+    expect(invoke).toHaveBeenCalledWith("dbx_build_rename_object_sql", { options: renameObjectOptions });
+
+    const dropObjectOptions = {
+      databaseType: "postgres",
+      objectType: "VIEW" as const,
+      schema: "public",
+      name: "active_users",
+    };
+    vi.mocked(invoke).mockResolvedValueOnce("DROP VIEW \"public\".\"active_users\";");
+    await databaseApi.dbxBuildDropObjectSql(dropObjectOptions);
+    expect(invoke).toHaveBeenCalledWith("dbx_build_drop_object_sql", { options: dropObjectOptions });
+
+    const dropChildOptions = {
+      databaseType: "postgres",
+      objectType: "COLUMN" as const,
+      schema: "public",
+      tableName: "users",
+      name: "legacy_id",
+    };
+    vi.mocked(invoke).mockResolvedValueOnce("ALTER TABLE \"public\".\"users\" DROP COLUMN \"legacy_id\";");
+    await databaseApi.dbxBuildDropTableChildObjectSql(dropChildOptions);
+    expect(invoke).toHaveBeenCalledWith("dbx_build_drop_table_child_object_sql", {
+      options: dropChildOptions,
+    });
+
+    const duplicateOptions = {
+      databaseType: "postgres",
+      schema: "public",
+      sourceName: "users",
+      targetName: "users_copy",
+    };
+    vi.mocked(invoke).mockResolvedValueOnce("CREATE TABLE \"public\".\"users_copy\" (LIKE \"public\".\"users\" INCLUDING ALL);");
+    await databaseApi.dbxBuildDuplicateTableStructureSql(duplicateOptions);
+    expect(invoke).toHaveBeenCalledWith("dbx_build_duplicate_table_structure_sql", {
+      options: duplicateOptions,
+    });
+  });
+
+  it("wraps dbx database search SQL builder commands with options", async () => {
+    const searchOptions = {
+      databaseType: "postgres" as const,
+      schema: "public",
+      tableName: "users",
+      columns: [
+        { name: "id", data_type: "integer", is_primary_key: true },
+        { name: "email", data_type: "text", is_primary_key: false },
+      ],
+      term: "alice",
+      limit: 20,
+    };
+    vi.mocked(invoke).mockResolvedValueOnce({
+      sql: 'SELECT * FROM "public"."users" WHERE (LOWER(CAST("email" AS TEXT)) LIKE \'%alice%\') LIMIT 20;',
+      searchableColumns: ["email"],
+    });
+
+    await databaseApi.dbxBuildDatabaseSearchSql(searchOptions);
+
+    expect(invoke).toHaveBeenCalledWith("dbx_build_database_search_sql", { options: searchOptions });
+
+    const whereOptions = {
+      databaseType: "postgres" as const,
+      columns: searchOptions.columns,
+      resultColumns: ["id", "email"],
+      row: [1, "alice@example.com"],
+      matchedColumns: ["email"],
+    };
+    vi.mocked(invoke).mockResolvedValueOnce('"id" = 1');
+
+    await databaseApi.dbxBuildSearchResultWhere(whereOptions);
+
+    expect(invoke).toHaveBeenCalledWith("dbx_build_search_result_where", { options: whereOptions });
+  });
+
   it("wraps dbx_driver_manifest", async () => {
     vi.mocked(invoke).mockResolvedValueOnce({ schemaVersion: 1, drivers: [] });
 
@@ -245,6 +690,26 @@ describe("databaseApi", () => {
     await databaseApi.dbxImportTableFile(request);
 
     expect(invoke).toHaveBeenCalledWith("dbx_import_table_file", { request });
+  });
+
+  it("wraps dbx database export", async () => {
+    const request = {
+      exportId: "export-1",
+      connectionId: "pg",
+      database: "postgres",
+      schema: "public",
+      filePath: "/tmp/postgres.sql",
+      selectedTables: ["users"],
+      includeStructure: true,
+      includeData: true,
+      includeObjects: true,
+      dropTableIfExists: false,
+      batchSize: 1000,
+    };
+
+    await databaseApi.dbxExportDatabase(request);
+
+    expect(invoke).toHaveBeenCalledWith("dbx_export_database", { request });
   });
 
   it("wraps dbx transfer and comparison commands", async () => {

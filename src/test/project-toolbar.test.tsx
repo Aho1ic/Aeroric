@@ -202,6 +202,33 @@ describe("ProjectPage right toolbar", () => {
     expect(screen.getByTestId("docker-logo-icon")).toBeInTheDocument();
   });
 
+  it("keeps the Docker toolbar icon monochrome until Docker is selected", async () => {
+    const user = userEvent.setup();
+
+    render(
+      <I18nProvider>
+        <ProjectPage {...projectPageProps()} />
+      </I18nProvider>,
+    );
+
+    const dockerButton = screen.getByTitle("Docker");
+    const dockerIcon = screen.getByTestId("docker-logo-icon");
+
+    expect(dockerButton).toHaveStyle({
+      background: "none",
+      color: "var(--text-hint)",
+    });
+    expect(dockerIcon.querySelectorAll('[fill="#2496ED"]')).toHaveLength(0);
+
+    await user.click(dockerButton);
+
+    expect(dockerButton).toHaveStyle({
+      background: "none",
+      color: "var(--accent)",
+    });
+    expect(screen.getByTestId("docker-view")).toBeInTheDocument();
+  });
+
   it("hides the SSH workspace when Terminal is opened next", async () => {
     const user = userEvent.setup();
 
