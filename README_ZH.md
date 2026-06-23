@@ -73,7 +73,7 @@ Claude Code 和其他智能体运行在 PTY 终端中，支持实时输出、交
 Aeroric 把文件浏览、源码编辑和命令执行放在同一工作流里，适合智能体辅助调试、脚本迭代和仓库维护。
 
 <p align="center">
-  <img src="./Aeroric_frame/浏览:修改:运行脚本.png" alt="浏览、修改、运行脚本" width="86%" />
+  <img src="./Aeroric_frame/浏览-修改-运行脚本.png" alt="浏览、修改、运行脚本" width="86%" />
 </p>
 
 ### 阅读模式查看 Markdown 文件

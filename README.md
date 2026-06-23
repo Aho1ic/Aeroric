@@ -73,7 +73,7 @@ Claude Code and other agents run in PTY-backed terminals with live output, inter
 Aeroric keeps file browsing, source edits, and command execution in the same workflow, which is useful for agent-assisted debugging, script iteration, and repository maintenance.
 
 <p align="center">
-  <img src="./Aeroric_frame/浏览:修改:运行脚本.png" alt="Browse, modify, and run scripts" width="86%" />
+  <img src="./Aeroric_frame/浏览-修改-运行脚本.png" alt="Browse, modify, and run scripts" width="86%" />
 </p>
 
 ### Markdown Reading Mode
