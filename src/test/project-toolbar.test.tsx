@@ -11,8 +11,38 @@ vi.mock("@tauri-apps/api/core", () => ({
 }));
 
 vi.mock("../components/NewTaskView", () => ({
-  NewTaskView: ({ onStartTerminal }: { onStartTerminal?: () => void }) => (
-    <button onClick={() => onStartTerminal?.()}>Start Terminal</button>
+  NewTaskView: ({
+    onSubmit,
+    draftPrompt = "",
+  }: {
+    onSubmit?: (task: {
+      prompt: string;
+      agent: "claude";
+      permissionMode: "ask";
+      images: string[];
+      texts: string[];
+      immediate: boolean;
+      launchMode: "local";
+      baseBranch: string;
+    }) => void;
+    draftPrompt?: string;
+  }) => (
+    <button
+      onClick={() =>
+        onSubmit?.({
+          prompt: draftPrompt,
+          agent: "claude",
+          permissionMode: "ask",
+          images: [],
+          texts: [],
+          immediate: true,
+          launchMode: "local",
+          baseBranch: "",
+        })
+      }
+    >
+      Start Terminal
+    </button>
   ),
 }));
 
@@ -290,7 +320,7 @@ describe("ProjectPage right toolbar", () => {
     expect(screen.queryByTestId("ssh-workspace")).not.toBeInTheDocument();
   });
 
-  it("opens the right toolbar terminal instead of submitting a blank task", async () => {
+  it("creates an agent terminal task from the composer even when the prompt is blank", async () => {
     const user = userEvent.setup();
     const onSubmitTask = vi.fn();
 
@@ -301,6 +331,28 @@ describe("ProjectPage right toolbar", () => {
     );
 
     await user.click(screen.getByRole("button", { name: "Start Terminal" }));
+
+    expect(screen.queryByTestId("shell-terminal")).not.toBeInTheDocument();
+    expect(onSubmitTask).toHaveBeenCalledWith(
+      expect.objectContaining({
+        prompt: "",
+        agent: "claude",
+        immediate: true,
+      }),
+    );
+  });
+
+  it("keeps the right toolbar terminal as a regular shell terminal", async () => {
+    const user = userEvent.setup();
+    const onSubmitTask = vi.fn();
+
+    render(
+      <I18nProvider>
+        <ProjectPage {...projectPageProps()} onSubmitTask={onSubmitTask} />
+      </I18nProvider>,
+    );
+
+    await user.click(screen.getByTitle("Terminal"));
 
     expect(screen.getByTestId("shell-terminal")).toBeInTheDocument();
     expect(onSubmitTask).not.toHaveBeenCalled();

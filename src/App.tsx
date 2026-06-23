@@ -40,7 +40,7 @@ import { SKILL_HUB_CHANGED_EVENT } from "./components/app-settings/types";
 import { useToast } from "./components/Toast";
 import { isHideWindowShortcut } from "./shortcuts";
 import { APP_PLATFORM } from "./platform";
-import { isCodexLikeAgent } from "./agents";
+import { agentDisplayLabel, isCodexLikeAgent } from "./agents";
 import { useTerminalManager } from "./hooks/useTerminalManager";
 import { useWorktreeDiffStats } from "./hooks/useWorktreeDiffStats";
 import { useI18n } from "./i18n";
@@ -689,7 +689,7 @@ function App() {
       id: taskId,
       projectId: project.id,
       prompt,
-      name: prompt ? undefined : `task-${taskId}`,
+      name: prompt.trim() ? undefined : `${agentDisplayLabel(agent)} Terminal`,
       agent,
       permissionMode,
       status: immediate ? "pending" : "todo",

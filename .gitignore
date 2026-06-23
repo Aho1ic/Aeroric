@@ -39,6 +39,10 @@ superpowers/
 skills/
 .skills/
 docs/
+!docs/
+docs/*
+!docs/images/
+!docs/images/*
 Trellis/
 trellis/
 .trellis/

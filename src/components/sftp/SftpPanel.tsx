@@ -108,6 +108,13 @@ type TransferConflict = {
   targetEndpoint: SftpEndpoint;
 } | null;
 
+type TransferTask = {
+  id: string;
+  operation: SftpOperation;
+  names: string[];
+  status: "running" | "completed" | "failed";
+};
+
 function endpointLabel(endpoint: SftpEndpoint): string {
   return endpoint.kind === "local" ? "Local" : endpoint.connectionName;
 }
@@ -231,6 +238,24 @@ export function SftpPanel({
   const [focusedSide, setFocusedSide] = useState<PaneSide>("left");
   const [previewTarget, setPreviewTarget] = useState<PreviewTarget>(null);
   const [transferConflict, setTransferConflict] = useState<TransferConflict>(null);
+  const [transferTasks, setTransferTasks] = useState<TransferTask[]>([]);
+
+  const beginTransferTask = useCallback((operation: SftpOperation, paths: string[]) => {
+    const task: TransferTask = {
+      id: `sftp-transfer-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+      operation,
+      names: paths.map(sftpFileName),
+      status: "running",
+    };
+    setTransferTasks((current) => [task, ...current].slice(0, 8));
+    return task.id;
+  }, []);
+
+  const finishTransferTask = useCallback((id: string, status: TransferTask["status"]) => {
+    setTransferTasks((current) =>
+      current.map((task) => (task.id === id ? { ...task, status } : task)),
+    );
+  }, []);
 
   const updatePane = useCallback((side: PaneSide, updater: (pane: PaneState) => PaneState) => {
     if (side === "left") setLeft(updater);
@@ -455,6 +480,7 @@ export function SftpPanel({
         });
         return;
       }
+      const taskId = beginTransferTask(operation, selectedPaths);
       try {
         await transferSftpPaths(
           operation,
@@ -464,14 +490,16 @@ export function SftpPanel({
           sshConnections,
           conflictStrategy,
         );
+        finishTransferTask(taskId, "completed");
         showToast(t(operation === "copy" ? "sftp.copyDone" : "sftp.moveDone"));
         await refreshPane(sourceSide, source);
         await refreshPane(targetSide, target);
       } catch (error) {
+        finishTransferTask(taskId, "failed");
         showToast(t("sftp.operationFailed", { error: String(error) }));
       }
     },
-    [panes, refreshPane, showToast, sshConnections, t],
+    [beginTransferTask, finishTransferTask, panes, refreshPane, showToast, sshConnections, t],
   );
 
   const resolveTransferConflict = useCallback(
@@ -540,6 +568,7 @@ export function SftpPanel({
         });
         return;
       }
+      const taskId = beginTransferTask("copy", clipboardPayload.paths);
       try {
         await transferSftpPaths(
           "copy",
@@ -549,13 +578,25 @@ export function SftpPanel({
           sshConnections,
           "fail",
         );
+        finishTransferTask(taskId, "completed");
         showToast(t("sftp.copyDone"));
         await refreshPane(side, target);
       } catch (error) {
+        finishTransferTask(taskId, "failed");
         showToast(t("sftp.operationFailed", { error: String(error) }));
       }
     },
-    [clipboardPayload, panes, refreshPane, selectedDirectoryEndpoint, showToast, sshConnections, t],
+    [
+      beginTransferTask,
+      clipboardPayload,
+      finishTransferTask,
+      panes,
+      refreshPane,
+      selectedDirectoryEndpoint,
+      showToast,
+      sshConnections,
+      t,
+    ],
   );
 
   const deleteSelected = useCallback(
@@ -958,6 +999,32 @@ export function SftpPanel({
     );
   };
 
+  const runningTransferCount = transferTasks.filter((task) => task.status === "running").length;
+  const lastTransfer = transferTasks[0] ?? null;
+  const progressState = runningTransferCount > 0 ? "running" : lastTransfer?.status ?? "idle";
+  const transferProgressLabel =
+    progressState === "running"
+      ? t("sftp.transferProgressRunning", { count: runningTransferCount })
+      : progressState === "completed"
+        ? t("sftp.transferProgressCompleted")
+        : progressState === "failed"
+          ? t("sftp.transferProgressFailed")
+          : t("sftp.transferProgress");
+  const transferTaskLine = (task: TransferTask) => {
+    const name = task.names.join(", ");
+    if (task.status === "running") {
+      return t(task.operation === "copy" ? "sftp.transferCopying" : "sftp.transferMoving", {
+        name,
+      });
+    }
+    if (task.status === "completed") {
+      return t(task.operation === "copy" ? "sftp.transferCopied" : "sftp.transferMoved", {
+        name,
+      });
+    }
+    return t("sftp.transferFailed", { name });
+  };
+
   return (
     <div className="sftp-panel" style={{ width }}>
       <div className="sftp-header">
@@ -966,6 +1033,29 @@ export function SftpPanel({
           {t("sftp.title")}
         </div>
         <div className="sftp-header-actions">
+          {transferTasks.length > 0 && (
+            <div className="sftp-transfer-progress">
+              <button
+                type="button"
+                className={`sftp-transfer-progress-btn ${progressState}`}
+                aria-label={transferProgressLabel}
+                aria-busy={runningTransferCount > 0}
+                title={transferProgressLabel}
+              >
+                <span className="sftp-progress-ring" aria-hidden="true" />
+                <span className="sftp-progress-count">{transferTasks.length}</span>
+              </button>
+              <div className="sftp-transfer-popover" role="status">
+                <div className="sftp-transfer-popover-title">{t("sftp.transferTasks")}</div>
+                {transferTasks.map((task) => (
+                  <div key={task.id} className={`sftp-transfer-task ${task.status}`}>
+                    <span className="sftp-transfer-task-dot" aria-hidden="true" />
+                    <span>{transferTaskLine(task)}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
           <div className="sftp-transfer-hint">
             <ArrowLeftRight size={13} />
             {focusedSide === "left" ? t("sftp.leftActive") : t("sftp.rightActive")}

@@ -6302,6 +6302,45 @@ export function DatabaseView({
   const contextMenuTreeNodePinned = currentContextMenuPinnedNodeId ? pinnedTreeNodeIds.has(currentContextMenuPinnedNodeId) : false;
   const activeDbxGridPrimaryKeys = activeObject?.primaryKeys ?? queryResult?.primaryKeys ?? [];
   const connectionDialogTitle = editingDbxConnectionId ? t("database.editConnection") : t("database.newConnection");
+  const hideDatabaseWorkspaceTopbar =
+    workspaceMode === "drivers" ||
+    workspaceMode === "transfer" ||
+    workspaceMode === "schema-diff" ||
+    workspaceMode === "data-compare";
+  const databaseWorkspaceTitle = (mode: DbWorkspaceMode) => {
+    switch (mode) {
+      case "query":
+        return t("database.newQuery");
+      case "sql-file":
+        return t("database.executeSqlFile");
+      case "query-history":
+        return t("database.queryHistory");
+      case "drivers":
+        return t("database.driverManager");
+      case "redis":
+        return "Redis";
+      case "mongo":
+        return "MongoDB";
+      case "transfer":
+        return t("database.dataTransfer");
+      case "schema-diff":
+        return t("database.schemaDiff");
+      case "data-compare":
+        return t("database.dataCompare");
+      case "user-admin":
+        return t("database.userAdmin");
+      case "er-diagram":
+        return t("database.erDiagram");
+      case "database-search":
+        return t("database.databaseSearch");
+      case "table-structure":
+        return t("database.tableStructure");
+      case "table-info":
+        return t("database.tableInfo");
+      default:
+        return activeObject?.name ?? t("database.noSelection");
+    }
+  };
 
   return (
     <div style={{ ...s.databaseRoot, gridTemplateColumns: `${databaseSidebarWidth}px minmax(0, 1fr)` }}>
@@ -6695,39 +6734,11 @@ export function DatabaseView({
           </div>
         )}
 
-        {workspaceTabs.length === 0 && (
+        {workspaceTabs.length === 0 && !hideDatabaseWorkspaceTopbar && (
           <div style={s.databaseTopbar}>
             <div style={{ minWidth: 0 }}>
               <div style={s.databaseTitle}>
-                {workspaceMode === "query"
-                  ? t("database.newQuery")
-                  : workspaceMode === "sql-file"
-                    ? t("database.executeSqlFile")
-                    : workspaceMode === "query-history"
-                      ? t("database.queryHistory")
-                      : workspaceMode === "drivers"
-                        ? t("database.driverManager")
-                        : workspaceMode === "redis"
-                          ? "Redis"
-                          : workspaceMode === "mongo"
-                            ? "MongoDB"
-                            : workspaceMode === "transfer"
-                              ? t("database.dataTransfer")
-                              : workspaceMode === "schema-diff"
-                                ? t("database.schemaDiff")
-                                : workspaceMode === "data-compare"
-                                  ? t("database.dataCompare")
-                                  : workspaceMode === "user-admin"
-                                    ? t("database.userAdmin")
-                                    : workspaceMode === "er-diagram"
-                                      ? t("database.erDiagram")
-                                      : workspaceMode === "database-search"
-                                        ? t("database.databaseSearch")
-                                        : workspaceMode === "table-structure"
-                                          ? t("database.tableStructure")
-                                          : workspaceMode === "table-info"
-                                            ? t("database.tableInfo")
-                                            : activeObject?.name ?? t("database.noSelection")}
+                {databaseWorkspaceTitle(workspaceMode)}
               </div>
               <div style={s.databasePath}>
                 {activeEndpoint

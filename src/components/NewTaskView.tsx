@@ -74,7 +74,6 @@ export function NewTaskView({
   project,
   otherProjects = [],
   onSubmit,
-  onStartTerminal,
   initialDraft,
   onCacheDraft,
   compactControls = false,
@@ -410,11 +409,6 @@ export function NewTaskView({
 
   function handleSubmit(immediate: boolean) {
     const text = editorHandle.serialize();
-    if (immediate && !text && pastedImages.length === 0 && pastedTexts.length === 0) {
-      submittedRef.current = true;
-      onStartTerminal?.();
-      return;
-    }
     if (!text && pastedImages.length === 0 && pastedTexts.length === 0 && !immediate) return;
     if (!immediate && launchMode === "worktree") {
       showToast(t("newTask.worktreeMustSend"), "warning");

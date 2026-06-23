@@ -25,6 +25,7 @@ export function shouldShowRemoteSshTerminalLayer({
   isDockerMode,
   isSshMode = false,
   isDatabaseMode = false,
+  isNotesMode = false,
 }: {
   showRemoteSshTerminal: boolean;
   hasRemoteConnection: boolean;
@@ -35,6 +36,7 @@ export function shouldShowRemoteSshTerminalLayer({
   isDockerMode: boolean;
   isSshMode?: boolean;
   isDatabaseMode?: boolean;
+  isNotesMode?: boolean;
 }): boolean {
   return (
     showRemoteSshTerminal &&
@@ -45,17 +47,19 @@ export function shouldShowRemoteSshTerminalLayer({
     !isShellMode &&
     !isDockerMode &&
     !isSshMode &&
-    !isDatabaseMode
+    !isDatabaseMode &&
+    !isNotesMode
   );
 }
 
 export function centerWorkspaceMode(
   rightPanel: RightPanel,
   shellActive = false,
-): "sftp" | "shell" | "docker" | "ssh" | "database" | null {
+): "sftp" | "shell" | "docker" | "ssh" | "database" | "notes" | null {
   if (rightPanel === "sftp") return "sftp";
   if (rightPanel === "ssh") return "ssh";
   if (rightPanel === "database") return "database";
+  if (rightPanel === "notes") return "notes";
   if (shellActive) return "shell";
   if (rightPanel === "docker") return "docker";
   return null;
@@ -74,6 +78,28 @@ export function projectSshRightPanelWidth({
   return Math.floor(available / 2);
 }
 
+export function projectNotebookPanelStyle({
+  containerWidth: _containerWidth,
+}: {
+  containerWidth: number;
+}): React.CSSProperties {
+  return {
+    position: "absolute",
+    inset: 0,
+    zIndex: 2,
+    width: "100%",
+    display: "flex",
+    minWidth: 0,
+    minHeight: 0,
+    background: "var(--bg-panel)",
+  };
+}
+
+export function shouldShowAgentTaskTabs({ taskCount }: { taskCount: number }): boolean {
+  void taskCount;
+  return false;
+}
+
 export function visibleDockPanel(
   rightPanel: RightPanel,
   {
@@ -83,12 +109,13 @@ export function visibleDockPanel(
     filesDisabled: boolean;
     gitDisabled: boolean;
   },
-): Exclude<RightPanel, "sftp" | "docker" | "ssh" | "database"> {
+): Exclude<RightPanel, "sftp" | "docker" | "ssh" | "database" | "notes"> {
   if (
     rightPanel === "sftp" ||
     rightPanel === "docker" ||
     rightPanel === "ssh" ||
-    rightPanel === "database"
+    rightPanel === "database" ||
+    rightPanel === "notes"
   ) {
     return null;
   }
@@ -203,6 +230,7 @@ export function shouldShowRunningTaskInCenter({
   isSshMode,
   isDockerMode,
   isDatabaseMode,
+  isNotesMode,
   isNewTask,
   hasSelectedTask,
   taskId,
@@ -217,6 +245,7 @@ export function shouldShowRunningTaskInCenter({
   isSshMode?: boolean;
   isDockerMode?: boolean;
   isDatabaseMode?: boolean;
+  isNotesMode?: boolean;
   isNewTask: boolean;
   hasSelectedTask: boolean;
   taskId: string;
@@ -233,6 +262,7 @@ export function shouldShowRunningTaskInCenter({
     !isSshMode &&
     !isDockerMode &&
     !isDatabaseMode &&
+    !isNotesMode &&
     !isNewTask &&
     hasSelectedTask &&
     taskId === selectedTaskId &&

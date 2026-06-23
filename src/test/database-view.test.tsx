@@ -620,6 +620,8 @@ describe("DatabaseView connection flow", () => {
     expect(await screen.findByText("PostgreSQL")).toBeInTheDocument();
     expect(screen.getByText("native")).toBeInTheDocument();
     expect(screen.getByText(/queryExecution/)).toBeInTheDocument();
+    expect(screen.queryByText("No table selected")).not.toBeInTheDocument();
+    expect(screen.queryByText("Select a database connection")).not.toBeInTheDocument();
   });
 
   it("shows only implemented database connection actions from the connection context menu", async () => {
@@ -4888,6 +4890,8 @@ describe("DatabaseView connection flow", () => {
     await user.click(screen.getByRole("button", { name: /Data transfer/i }));
     expect(screen.getByLabelText("Source connection")).toHaveValue("dbx-source");
     expect(screen.getByLabelText("Target connection")).toBeInTheDocument();
+    expect(screen.queryByText("No table selected")).not.toBeInTheDocument();
+    expect(screen.queryByText("Select a database connection")).not.toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: /Schema diff/i }));
     expect(screen.getAllByRole("button", { name: /Compare/i }).length).toBeGreaterThan(0);

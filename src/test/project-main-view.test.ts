@@ -3,6 +3,8 @@ import type { ProjectLocation } from "../types";
 import {
   centerWorkspaceMode,
   projectResponsiveLayout,
+  projectNotebookPanelStyle,
+  shouldShowAgentTaskTabs,
   projectSshRightPanelWidth,
   shellCenterContentStyle,
   shellCenterLayerStyle,
@@ -210,5 +212,24 @@ describe("project main view mode", () => {
   it("sizes the SSH right panel to half of the available workspace", () => {
     expect(projectSshRightPanelWidth({ containerWidth: 1100, railCollapsed: false })).toBe(402);
     expect(projectSshRightPanelWidth({ containerWidth: 1100, railCollapsed: true })).toBe(502);
+  });
+
+  it("renders project notes as a center workspace panel", () => {
+    expect(
+      projectNotebookPanelStyle({
+        containerWidth: 1100,
+      }),
+    ).toMatchObject({
+      position: "absolute",
+      inset: 0,
+      width: "100%",
+      display: "flex",
+    });
+  });
+
+  it("keeps agent task tabs hidden because conversations live in the project task list", () => {
+    expect(shouldShowAgentTaskTabs({ taskCount: 0 })).toBe(false);
+    expect(shouldShowAgentTaskTabs({ taskCount: 1 })).toBe(false);
+    expect(shouldShowAgentTaskTabs({ taskCount: 4 })).toBe(false);
   });
 });

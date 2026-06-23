@@ -704,6 +704,25 @@ fn delete_local_path(path: &Path) -> Result<(), String> {
     }
 }
 
+fn delete_local_path_after_trash_result(
+    path: &Path,
+    trash_result: Result<(), String>,
+) -> Result<(), String> {
+    match trash_result {
+        Ok(()) => Ok(()),
+        Err(trash_error) => delete_local_path(path).map_err(|delete_error| {
+            format!(
+                "{}; fallback direct delete failed: {}",
+                trash_error, delete_error
+            )
+        }),
+    }
+}
+
+fn trash_or_delete_local_path(path: &Path) -> Result<(), String> {
+    delete_local_path_after_trash_result(path, trash::delete(path).map_err(|e| e.to_string()))
+}
+
 fn delete_local_sources(paths: &[String]) -> Result<(), String> {
     for path in paths {
         let path = validate_sftp_local_path(path)?;
@@ -890,7 +909,7 @@ pub async fn sftp_delete_paths(endpoint: SftpEndpoint, paths: Vec<String>) -> Re
         SftpEndpoint::Local { .. } => {
             for path in paths {
                 let path = validate_sftp_local_path(&path)?;
-                trash::delete(&path).map_err(|e| e.to_string())?;
+                trash_or_delete_local_path(&path)?;
             }
             Ok(())
         }
@@ -1168,6 +1187,23 @@ mod tests {
         assert_eq!(summary.directory_count, 2);
         assert_eq!(summary.total_size, 5 + 13 + 11);
 
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn local_trash_delete_falls_back_to_direct_delete() {
+        let root = unique_test_dir("trash-fallback");
+        std::fs::create_dir_all(&root).expect("create root");
+        let file = root.join("README.md");
+        std::fs::write(&file, "delete me").expect("write file");
+
+        let result = super::delete_local_path_after_trash_result(
+            &file,
+            Err("Finder trash failed".to_string()),
+        );
+
+        assert!(result.is_ok());
+        assert!(!file.exists());
         let _ = std::fs::remove_dir_all(root);
     }
 

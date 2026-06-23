@@ -44,10 +44,12 @@ import { ErrorBoundary } from "./ErrorBoundary";
 import { useProjectPanels } from "../hooks/useProjectPanels";
 import {
   centerWorkspaceMode,
+  projectNotebookPanelStyle,
   projectResponsiveLayout,
   projectSshRightPanelWidth,
   shellCenterContentStyle,
   shellCenterLayerStyle,
+  shouldShowAgentTaskTabs,
   shouldShowRemoteSshTerminalLayer,
   shouldShowRemoteSshTerminal,
   shouldShowRunningTaskInCenter,
@@ -57,6 +59,7 @@ import {
 } from "./project-page/viewMode";
 import { projectVisibilityStyle } from "./project-page/visibility";
 import { buildRunnableFileCommand, selectRunnableCondaEnvironment } from "./file-viewer/run";
+import { agentDisplayLabel } from "../agents";
 import s from "../styles";
 
 export function ProjectPage({
@@ -266,6 +269,7 @@ export function ProjectPage({
   const isDockerMode = centerMode === "docker";
   const isSshMode = centerMode === "ssh";
   const isDatabaseMode = centerMode === "database";
+  const isNotesMode = centerMode === "notes";
   const shellVisibleInCenter = shouldShowShellInCenter({
     shellMode: isShellMode,
     hasOpenFiles: openFiles.length > 0,
@@ -405,12 +409,6 @@ export function ProjectPage({
     onNewTask();
   }, [onNewTask, clearFileAndDiff]);
 
-  const handleStartTerminalFromComposer = useCallback(() => {
-    closeRightPanel();
-    setShellTerminalMounted(true);
-    setShowShellTerminal(true);
-  }, [closeRightPanel]);
-
   const handleDiffFileSelectWithCollapse = useCallback(
     (filePath: string, staged: boolean, label: string) => {
       setShowShellTerminal(false);
@@ -438,9 +436,9 @@ export function ProjectPage({
   const handleToggleRightPanel = useCallback(
     (panel: Parameters<typeof handleTogglePanel>[0]) => {
       setShowShellTerminal(false);
-    if (panel === "ssh" || panel === "database") {
-      clearFileAndDiff();
-    }
+      if (panel === "ssh" || panel === "database" || panel === "notes") {
+        clearFileAndDiff();
+      }
       handleTogglePanel(panel);
     },
     [clearFileAndDiff, handleTogglePanel],
@@ -465,6 +463,7 @@ export function ProjectPage({
     isDockerMode,
     isSshMode,
     isDatabaseMode,
+    isNotesMode,
   });
   const shellTerminalFontSize = useMemo(
     () => deriveShellTerminalFontSize(terminalFontSize),
@@ -520,6 +519,7 @@ export function ProjectPage({
           railCollapsed: responsiveLayout.autoCollapseRail || isDatabaseMode,
         })
       : rightPanelWidth;
+  const showAgentTabs = shouldShowAgentTaskTabs({ taskCount: projectTasks.length });
 
   return (
     <div
@@ -552,6 +552,67 @@ export function ProjectPage({
         forceCollapsed={responsiveLayout.autoCollapseRail || isDatabaseMode}
       />
       <div style={{ ...s.mainContent, flexDirection: "column" }}>
+        {showAgentTabs && (
+          <div
+            aria-label="Agent terminal tabs"
+            style={{
+              height: 34,
+              flexShrink: 0,
+              display: "flex",
+              alignItems: "center",
+              gap: 6,
+              padding: "4px 8px",
+              borderBottom: "1px solid var(--border-dim)",
+              background: "color-mix(in srgb, var(--bg-root) 72%, var(--bg-sidebar))",
+              overflowX: "auto",
+            }}
+          >
+            {projectTasks.map((task) => {
+              const selected = task.id === selectedTaskId && !isNewTask;
+              const title =
+                (task.name ?? task.prompt).trim() || `${agentDisplayLabel(task.agent)} Terminal`;
+              return (
+                <button
+                  key={task.id}
+                  type="button"
+                  title={title}
+                  onClick={() => handleSelectTask(task.id)}
+                  style={{
+                    height: 24,
+                    maxWidth: 240,
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: 6,
+                    padding: "0 9px",
+                    border: `1px solid ${selected ? "var(--border-strong)" : "var(--border-dim)"}`,
+                    borderRadius: 6,
+                    background: selected ? "var(--control-active-bg)" : "transparent",
+                    color: selected ? "var(--control-active-fg)" : "var(--text-muted)",
+                    cursor: "pointer",
+                    flexShrink: 0,
+                    fontSize: 11,
+                    fontWeight: selected ? 650 : 560,
+                  }}
+                >
+                  <span>{agentDisplayLabel(task.agent)}</span>
+                  <span
+                    style={{
+                      minWidth: 0,
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    {title}
+                  </span>
+                  <span style={{ color: selected ? "inherit" : "var(--text-hint)" }}>
+                    {task.status}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        )}
         <div
           style={{
             flex: 1,
@@ -641,6 +702,12 @@ export function ProjectPage({
                   }
                   sshConnections={sshConnections}
                 />
+              ) : isNotesMode ? (
+                <div style={projectNotebookPanelStyle({ containerWidth: projectBodyWidth })}>
+                  <ErrorBoundary label="记事本">
+                    <NotebookPanel width="100%" />
+                  </ErrorBoundary>
+                </div>
               ) : openDiff ? (
                 openDiff.kind === "file" ? (
                   <GitDiffViewer
@@ -692,7 +759,6 @@ export function ProjectPage({
                   project={project}
                   otherProjects={otherProjects}
                   onSubmit={onSubmitTask}
-                  onStartTerminal={handleStartTerminalFromComposer}
                   initialDraft={newTaskDraftRef.current}
                   onCacheDraft={handleCacheNewTaskDraft}
                   compactControls={responsiveLayout.compactComposeControls}
@@ -803,6 +869,7 @@ export function ProjectPage({
                 isSshMode,
                 isDockerMode,
                 isDatabaseMode,
+                isNotesMode,
                 isNewTask: !taskWorkspaceVisible,
                 hasSelectedTask: Boolean(selectedTask),
                 taskId: task.id,
@@ -893,11 +960,6 @@ export function ProjectPage({
                 onFileClick={handleCommitFileClickWithCollapse}
                 width={effectiveRightPanelWidth}
               />
-            </ErrorBoundary>
-          )}
-          {visibleRightPanel === "notes" && (
-            <ErrorBoundary label="记事本">
-              <NotebookPanel width={effectiveRightPanelWidth} />
             </ErrorBoundary>
           )}
           <div

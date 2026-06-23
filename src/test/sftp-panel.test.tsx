@@ -1,4 +1,6 @@
-import { render, screen } from "@testing-library/react";
+import { invoke } from "@tauri-apps/api/core";
+import { render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { I18nProvider } from "../i18n";
 import { SftpPanel } from "../components/sftp/SftpPanel";
@@ -51,5 +53,63 @@ describe("SftpPanel", () => {
     expect(triggers[0]).toHaveTextContent("Local");
     expect(triggers[1]).toHaveTextContent("Production");
     expect(screen.getByDisplayValue("/srv/app")).toBeInTheDocument();
+  });
+
+  it("shows transfer progress and task details while copying files", async () => {
+    const user = userEvent.setup();
+    const transferControl: { finish?: () => void } = {};
+    vi.mocked(invoke).mockImplementation((command, args) => {
+      if (command === "sftp_read_dir") {
+        const endpoint = (args as { endpoint: { kind: string } }).endpoint;
+        if (endpoint.kind === "local") {
+          return Promise.resolve([
+            {
+              name: "README.md",
+              path: "/Users/me/README.md",
+              isDir: false,
+              extension: "md",
+              size: 128,
+              modifiedAtMs: null,
+            },
+          ]);
+        }
+        return Promise.resolve([]);
+      }
+      if (command === "sftp_copy_paths") {
+        return new Promise((resolve) => {
+          transferControl.finish = () => resolve(undefined);
+        });
+      }
+      return Promise.resolve([]);
+    });
+
+    render(
+      <I18nProvider>
+        <SftpPanel
+          sshConnections={connections}
+          localDefaultPath="/Users/me"
+          active
+          themeVariant="light"
+          currentSshConnectionId="conn-2"
+        />
+      </I18nProvider>,
+    );
+
+    const openButtons = screen.getAllByRole("button", { name: "Open pane" });
+    await user.click(openButtons[0]);
+    await user.click(openButtons[1]);
+    await user.click(await screen.findByText("README.md"));
+    await user.click(screen.getAllByRole("button", { name: "Copy" })[0]);
+
+    const progressButton = await screen.findByRole("button", { name: /Transfer progress/i });
+    expect(progressButton).toHaveAttribute("aria-busy", "true");
+
+    await user.hover(progressButton);
+    expect(screen.getByText(/Copying README.md/i)).toBeInTheDocument();
+
+    transferControl.finish?.();
+    await waitFor(() => expect(progressButton).toHaveAttribute("aria-busy", "false"));
+    await user.hover(progressButton);
+    expect(screen.getByText(/Copied README.md/i)).toBeInTheDocument();
   });
 });
