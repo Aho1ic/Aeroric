@@ -258,6 +258,7 @@ pub fn run() {
             app_settings::detect_agent_version,
             app_settings::get_system_fonts,
             conda::detect_conda_environments,
+            conda::detect_remote_conda_environments,
             database::legacy_sqlite::db_load_connections,
             database::legacy_sqlite::db_save_connections,
             database::legacy_sqlite::db_read_sql_file,

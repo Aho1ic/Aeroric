@@ -5,6 +5,7 @@ export interface FsEntry {
   path: string;
   is_dir: boolean;
   extension?: string;
+  modifiedAtMs?: number | null;
   is_gitignored: boolean;
 }
 

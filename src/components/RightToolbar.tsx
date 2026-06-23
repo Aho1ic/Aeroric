@@ -10,6 +10,7 @@ import {
   Terminal,
   ArrowLeftRight,
   Database,
+  NotebookTabs,
 } from "lucide-react";
 import { useI18n } from "../i18n";
 import type { RightPanel } from "../hooks/useProjectPanels";
@@ -70,6 +71,7 @@ export function RightToolbar({
     { key: "ssh", icon: <Server size={17} />, title: t("ssh.title") },
     { key: "sftp", icon: <ArrowLeftRight size={17} />, title: t("sftp.title") },
     { key: "database", icon: <Database size={17} />, title: t("database.title") },
+    { key: "notes", icon: <NotebookTabs size={17} />, title: t("notebook.title") },
     {
       key: "docker",
       icon: <DockerIcon size={19} />,

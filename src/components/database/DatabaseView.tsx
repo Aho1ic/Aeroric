@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { DragEvent, KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent } from "react";
+import type { CSSProperties, DragEvent, KeyboardEvent as ReactKeyboardEvent, MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { confirm, open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
 import {
@@ -27,9 +27,9 @@ import {
   Pin,
   Table2,
   Copy,
-  Download,
   Eraser,
   Eye,
+  EyeOff,
   Search,
   Square,
   UsersRound,
@@ -70,10 +70,8 @@ import {
   dbxGridRowsToTsv,
   dbxGridRowsToJson,
   isTextEditingShortcutTarget,
-  isNullGridValue,
   valueToText,
   quoteSqlName,
-  sqlLiteral,
   clampDbxGridColumnWidth,
   estimateDbxGridColumnWidth,
   initialDbxGridColumnWidths,
@@ -94,6 +92,43 @@ import { RedisBrowser } from "./RedisBrowser";
 import { TableStructurePanel } from "./TableStructurePanel";
 import { DatabaseUserAdminPanel, supportsDbxUserAdmin } from "./DatabaseUserAdminPanel";
 
+function PasswordInput({ value, onChange, show, onToggle, style }: {
+  value: string;
+  onChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
+  show: boolean;
+  onToggle: () => void;
+  style?: React.CSSProperties;
+}) {
+  return (
+    <div style={{ position: "relative", display: "flex", alignItems: "center" }}>
+      <input
+        style={{ ...style, paddingRight: 36 }}
+        type={show ? "text" : "password"}
+        value={value}
+        onChange={onChange}
+      />
+      <button
+        type="button"
+        onClick={onToggle}
+        style={{
+          position: "absolute",
+          right: 8,
+          background: "transparent",
+          border: "none",
+          cursor: "pointer",
+          color: "var(--text-hint)",
+          padding: 2,
+          display: "flex",
+          alignItems: "center",
+        }}
+        aria-label={show ? "Hide password" : "Show password"}
+      >
+        {show ? <EyeOff size={14} /> : <Eye size={14} />}
+      </button>
+    </div>
+  );
+}
+
 interface Props {
   projectRoot?: string;
   remoteConnection?: SshConnection;
@@ -105,6 +140,9 @@ const PAGE_SIZE = 100;
 const MONGO_SIDEBAR_DOCUMENT_PREVIEW_LIMIT = 20;
 const DBX_GRID_PAGE_SIZE_OPTIONS = [50, 100, 200, 500, 1000] as const;
 const DBX_GRID_DEFAULT_COLUMN_WIDTH = 180;
+const DATABASE_SIDEBAR_DEFAULT_WIDTH = 284;
+const DATABASE_SIDEBAR_MIN_WIDTH = 220;
+const DATABASE_SIDEBAR_MAX_WIDTH = 520;
 const EMPTY_DBX_COLUMNS: DbxColumnInfo[] = [];
 type DatabaseRow = { rowId?: number | null; keyValues: Array<{ column: string; value: unknown }>; values: unknown[] };
 type RedisSidebarScanState = { cursor: number; totalKeys: number };
@@ -130,6 +168,7 @@ type DbWorkspaceMode =
   | "table-info"
   | "object-browser"
   | "field-lineage";
+type DbxHoveredCell = { rowIndex: number; columnIndex: number } | null;
 type DatabaseContextMenuState = {
   x: number;
   y: number;
@@ -241,6 +280,11 @@ type DatabaseContextMenuState = {
   column: string;
   value: unknown;
   kind: "dbx-grid-cell";
+} | {
+  x: number;
+  y: number;
+  tabId: string;
+  kind: "workspace-tab";
 } | null;
 type DbxContextMenuItem<Action extends string> = [action: Action, labelKey: string];
 type DbxGridCellContextMenuAction =
@@ -273,6 +317,12 @@ type DbxGridHeaderContextMenuAction =
   | "sortAscending"
   | "sortDescending"
   | "clearSort";
+type WorkspaceTabContextMenuAction =
+  | "toggleShortTitle"
+  | "pinTab"
+  | "closeTab"
+  | "closeOtherTabs"
+  | "closeAllTabs";
 type DbxDatabaseContextMenuAction =
   | "copyName"
   | "togglePin"
@@ -419,6 +469,10 @@ function contextMenuPinnedNodeId(menu: DatabaseContextMenuState): string | null 
   return null;
 }
 
+function contextMenuConnectionId(menu: DatabaseContextMenuState): string | null {
+  return menu && "connectionId" in menu ? menu.connectionId : null;
+}
+
 type DbProfileKey =
   | "sqlite"
   | "mysql"
@@ -479,6 +533,12 @@ const SYSTEM_DATABASE_NAMES: Partial<Record<DbxDatabaseType, ReadonlySet<string>
   mongodb: new Set(["admin", "config", "local"]),
 };
 type TableExportFormat = "csv" | "json" | "markdown" | "insertSql" | "updateSql" | "xlsx";
+const DATA_TOOL_EXPORT_FORMATS: Array<{ format: TableExportFormat; labelKey: string; label: string }> = [
+  { format: "csv", labelKey: "database.exportCsv", label: "CSV" },
+  { format: "json", labelKey: "database.exportJson", label: "JSON" },
+  { format: "insertSql", labelKey: "database.exportInsertSql", label: "SQL INSERT" },
+  { format: "xlsx", labelKey: "database.exportXlsx", label: "XLSX" },
+];
 type ParsedConnectionUrl = {
   host?: string;
   port?: string;
@@ -603,6 +663,35 @@ function dbxSqlFileResultsToExecuteResult(results: DbxQueryResult[]): DbExecuteR
     rowsAffected: results.reduce((sum, item) => sum + (item.affected_rows ?? 0), 0),
     message: `${statementCount} statement${statementCount === 1 ? "" : "s"} executed`,
   };
+}
+
+function dbxDataTypeStyle(dataType: string): CSSProperties {
+  const normalized = dataType.toLowerCase().trim();
+  if (/\b(tinyint|smallint|mediumint|bigint|integer|int|serial|bigserial)\b/.test(normalized)) {
+    return s.databaseTypeInteger;
+  }
+  if (/\b(varchar|char|character varying|nchar|nvarchar|string)\b/.test(normalized)) {
+    return s.databaseTypeString;
+  }
+  if (/\b(text|clob|longtext|mediumtext|tinytext)\b/.test(normalized)) {
+    return s.databaseTypeText;
+  }
+  if (/\b(decimal|numeric|number|float|double|real|money)\b/.test(normalized)) {
+    return s.databaseTypeNumber;
+  }
+  if (/\b(date|time|timestamp|datetime|interval|year)\b/.test(normalized)) {
+    return s.databaseTypeDate;
+  }
+  if (/\b(bool|boolean|bit)\b/.test(normalized)) {
+    return s.databaseTypeBoolean;
+  }
+  if (/\b(json|jsonb|xml|array|map|struct)\b/.test(normalized)) {
+    return s.databaseTypeJson;
+  }
+  if (/\b(blob|binary|varbinary|bytea|bytes|image)\b/.test(normalized)) {
+    return s.databaseTypeBinary;
+  }
+  return s.databaseTypeDefault;
 }
 
 function isSqlDbxConnection(connection: AeroricDbConnectionConfig | null | undefined) {
@@ -1376,6 +1465,54 @@ export function DatabaseView({
   const [exportProgress, setExportProgress] = useState<{ active: boolean; format: string; filePath: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [workspaceMode, setWorkspaceMode] = useState<DbWorkspaceMode>("table");
+  type WorkspaceTab = { id: string; mode: DbWorkspaceMode; label: string; closable: boolean };
+  const [workspaceTabs, setWorkspaceTabs] = useState<WorkspaceTab[]>([]);
+  const [activeTabId, setActiveTabId] = useState<string>("");
+  const [shortWorkspaceTabIds, setShortWorkspaceTabIds] = useState<Set<string>>(new Set());
+
+  const closeWorkspaceTab = useCallback((tabId: string) => {
+    setWorkspaceTabs((prev) => {
+      const next = prev.filter((t) => t.id !== tabId);
+      if (activeTabId === tabId && next.length > 0) {
+        const last = next[next.length - 1];
+        setActiveTabId(last.id);
+        setWorkspaceMode(last.mode);
+      } else if (activeTabId === tabId) {
+        setActiveTabId("");
+      }
+      return next;
+    });
+    setShortWorkspaceTabIds((current) => {
+      const next = new Set(current);
+      next.delete(tabId);
+      return next;
+    });
+  }, [activeTabId]);
+
+  const activateWorkspaceTab = useCallback((tab: WorkspaceTab | undefined) => {
+    if (!tab) {
+      setActiveTabId("");
+      return;
+    }
+    setActiveTabId(tab.id);
+    setWorkspaceMode(tab.mode);
+  }, []);
+
+  const closeWorkspaceTabs = useCallback((tabIds: Set<string>) => {
+    setWorkspaceTabs((prev) => {
+      const next = prev.filter((tab) => !tabIds.has(tab.id));
+      if (tabIds.has(activeTabId)) {
+        activateWorkspaceTab(next[next.length - 1]);
+      }
+      return next;
+    });
+    setShortWorkspaceTabIds((current) => {
+      const next = new Set(current);
+      tabIds.forEach((tabId) => next.delete(tabId));
+      return next;
+    });
+  }, [activeTabId, activateWorkspaceTab]);
+
   const [connectionDialogOpen, setConnectionDialogOpen] = useState(false);
   const [connectionTestResult, setConnectionTestResult] = useState<{ success: boolean; message: string } | null>(null);
   const [editingDbxConnectionId, setEditingDbxConnectionId] = useState<string | null>(null);
@@ -1393,6 +1530,10 @@ export function DatabaseView({
   const [draftUser, setDraftUser] = useState("");
   const [draftDatabase, setDraftDatabase] = useState("");
   const [draftPassword, setDraftPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
+  const [showSentinelPassword, setShowSentinelPassword] = useState(false);
+  const [showTransportPassword, setShowTransportPassword] = useState(false);
+  const [showTransportPassphrase, setShowTransportPassphrase] = useState(false);
   const [draftFilePath, setDraftFilePath] = useState("");
   const [draftReadOnly, setDraftReadOnly] = useState(false);
   const [draftUrlParams, setDraftUrlParams] = useState("");
@@ -1445,16 +1586,30 @@ export function DatabaseView({
   const [dbxGridSearch, setDbxGridSearch] = useState("");
   const [dbxGridColumnSearch, setDbxGridColumnSearch] = useState("");
   const [dbxGridHiddenColumns, setDbxGridHiddenColumns] = useState<Set<string>>(new Set());
+  const [dbxDataToolsOpen, setDbxDataToolsOpen] = useState(false);
+  const [dbxDataToolsMode, setDbxDataToolsMode] = useState<"root" | "export">("root");
+  const [dbxFieldFilterOpen, setDbxFieldFilterOpen] = useState(false);
   const [dbxGridColumnWidths, setDbxGridColumnWidths] = useState<Record<string, number>>({});
   const [resizingDbxGridColumn, setResizingDbxGridColumn] = useState<string | null>(null);
   const [dbxGridPageSize, setDbxGridPageSize] = useState(PAGE_SIZE);
   const [dbxGridSelectedRows, setDbxGridSelectedRows] = useState<Set<number>>(new Set());
+  const [dbxGridSelectionAnchor, setDbxGridSelectionAnchor] = useState<number | null>(null);
   const [dbxGridExportFormat, setDbxGridExportFormat] = useState<TableExportFormat>("csv");
   const [dbxSqlPreviewOpen, setDbxSqlPreviewOpen] = useState(false);
   const [dbxSqlPreviewStatements, setDbxSqlPreviewStatements] = useState<string[]>([]);
   const [dbxSqlPreviewRollback, setDbxSqlPreviewRollback] = useState<string[]>([]);
   const [dbxSqlPreviewDescription, setDbxSqlPreviewDescription] = useState("");
   const [dbxCellPreview, setDbxCellPreview] = useState<{ column: string; value: unknown } | null>(null);
+  const [dbxCellDetail, setDbxCellDetail] = useState<{
+    column: string;
+    columnIndex: number;
+    rowIndex: number;
+    value: unknown;
+    columnInfo?: DbxColumnInfo;
+  } | null>(null);
+  const [dbxSelectedCell, setDbxSelectedCell] = useState<{ rowIndex: number; columnIndex: number; column: string } | null>(null);
+  const [dbxEditingCell, setDbxEditingCell] = useState<{ rowIndex: number; columnIndex: number; column: string } | null>(null);
+  const [dbxHoveredCell, setDbxHoveredCell] = useState<DbxHoveredCell>(null);
   const [dbxRowPreview, setDbxRowPreview] = useState<{ rowIndex: number; row: DatabaseRow } | null>(null);
   const [dbxRowPreviewSearch, setDbxRowPreviewSearch] = useState("");
   const [dbxColumnPreview, setDbxColumnPreview] = useState<{ column: string; columnIndex: number } | null>(null);
@@ -1494,12 +1649,48 @@ export function DatabaseView({
   const [tableImportLoading, setTableImportLoading] = useState(false);
   const [tableImportError, setTableImportError] = useState("");
   const [contextMenu, setContextMenu] = useState<DatabaseContextMenuState>(null);
+  const runWorkspaceTabContextMenuAction = useCallback((action: WorkspaceTabContextMenuAction) => {
+    const menu = contextMenu?.kind === "workspace-tab" ? contextMenu : null;
+    setContextMenu(null);
+    if (!menu) return;
+    if (action === "toggleShortTitle") {
+      setShortWorkspaceTabIds((current) => {
+        const next = new Set(current);
+        if (next.has(menu.tabId)) next.delete(menu.tabId);
+        else next.add(menu.tabId);
+        return next;
+      });
+      return;
+    }
+    if (action === "pinTab") {
+      setWorkspaceTabs((prev) => {
+        const tab = prev.find((item) => item.id === menu.tabId);
+        if (!tab) return prev;
+        return [tab, ...prev.filter((item) => item.id !== menu.tabId)];
+      });
+      return;
+    }
+    if (action === "closeTab") {
+      closeWorkspaceTab(menu.tabId);
+      return;
+    }
+    if (action === "closeOtherTabs") {
+      closeWorkspaceTabs(new Set(workspaceTabs.filter((tab) => tab.id !== menu.tabId).map((tab) => tab.id)));
+      return;
+    }
+    if (action === "closeAllTabs") {
+      closeWorkspaceTabs(new Set(workspaceTabs.map((tab) => tab.id)));
+    }
+  }, [closeWorkspaceTab, closeWorkspaceTabs, contextMenu, workspaceTabs]);
   const [tableInfoActiveTab, setTableInfoActiveTab] = useState<TableInfoTab>("columns");
   const [tableInfoSearch, setTableInfoSearch] = useState("");
   const [tableInfoDdl, setTableInfoDdl] = useState("");
   const [tableInfoDdlLoading, setTableInfoDdlLoading] = useState(false);
   const [tableInfoDdlError, setTableInfoDdlError] = useState("");
   const dbxGridColumnResizeStartRef = useRef({ column: "", x: 0, width: DBX_GRID_DEFAULT_COLUMN_WIDTH });
+  const databaseSidebarResizeStartRef = useRef({ x: 0, width: DATABASE_SIDEBAR_DEFAULT_WIDTH });
+  const [databaseSidebarWidth, setDatabaseSidebarWidth] = useState(DATABASE_SIDEBAR_DEFAULT_WIDTH);
+  const [resizingDatabaseSidebar, setResizingDatabaseSidebar] = useState(false);
   const [pinnedTreeNodeIds, setPinnedTreeNodeIds] = useState<Set<string>>(loadPinnedTreeNodeIds);
   const [extraDbxConnectionGroups, setExtraDbxConnectionGroups] = useState<string[]>(loadExtraDbxConnectionGroups);
 
@@ -1638,12 +1829,6 @@ export function DatabaseView({
     if (!query) return tableColumns;
     return tableColumns.filter((column) => column.toLowerCase().includes(query));
   }, [dbxGridColumnSearch, tableColumns]);
-  const dbxGridNullColumns = useMemo(() => {
-    if (rawTableRows.length === 0) return new Set<string>();
-    return new Set(
-      tableColumns.filter((_, columnIndex) => rawTableRows.every((row) => isNullGridValue(row.values[columnIndex]))),
-    );
-  }, [rawTableRows, tableColumns]);
   const tableRows = useMemo(() => {
     const query = dbxGridSearch.trim().toLowerCase();
     if (!query) return rawTableRows;
@@ -1689,17 +1874,6 @@ export function DatabaseView({
     if (!query) return dbxColumnPreviewFields;
     return dbxColumnPreviewFields.filter((field) => field.preview.toLowerCase().includes(query) || String(field.rowNumber).includes(query));
   }, [dbxColumnPreviewFields, dbxColumnPreviewSearch]);
-  const visibleDbxGridRowIndexes = useMemo(
-    () =>
-      queryResult && activeDbxConnection
-        ? tableRows
-            .map((row) => queryResult.rows.indexOf(row))
-            .filter((rowIndex) => rowIndex >= 0)
-        : [],
-    [activeDbxConnection, queryResult, tableRows],
-  );
-  const allVisibleDbxGridRowsSelected =
-    visibleDbxGridRowIndexes.length > 0 && visibleDbxGridRowIndexes.every((rowIndex) => dbxGridSelectedRows.has(rowIndex));
   const dbxGridCellContextRowCount = useMemo(() => {
     if (!queryResult || contextMenu?.kind !== "dbx-grid-cell") return 0;
     if (dbxGridSelectedRows.has(contextMenu.rowIndex) && dbxGridSelectedRows.size > 0) {
@@ -1711,6 +1885,29 @@ export function DatabaseView({
     queryResult?.totalRows && queryResult.totalRows > 0
       ? Math.max(1, Math.ceil(queryResult.totalRows / queryResult.pageSize))
       : null;
+  const tableFooterRowCountText = useMemo(() => {
+    if (!queryResult) return "";
+    const totalRows = queryResult.totalRows ?? queryResult.rows.length;
+    return t("database.totalRows", { count: totalRows });
+  }, [queryResult, t]);
+  const tableFooterSqlText = useMemo(() => {
+    if (!queryResult) return sql.trim();
+    if (activeDbxConnection && activeDbxObject) {
+      const tableName = activeDbxObject.schema
+        ? `${quoteSqlName(activeDbxObject.schema)}.${quoteSqlName(activeDbxObject.name)}`
+        : quoteSqlName(activeDbxObject.name);
+      const clauses = [`SELECT * FROM ${tableName}`];
+      const whereInput = dbxGridWhereInput.trim();
+      const orderByInput = dbxGridOrderByInput.trim();
+      if (whereInput) clauses.push(`WHERE ${whereInput}`);
+      if (orderByInput) clauses.push(`ORDER BY ${orderByInput}`);
+      clauses.push(`LIMIT ${queryResult.pageSize}`);
+      const offset = Math.max(0, (page - 1) * queryResult.pageSize);
+      if (offset > 0) clauses.push(`OFFSET ${offset}`);
+      return `${clauses.join(" ")};`;
+    }
+    return sql.trim();
+  }, [activeDbxConnection, activeDbxObject, dbxGridOrderByInput, dbxGridWhereInput, page, queryResult, sql]);
   const activeDbxTargetDatabase = configuredTargetDatabase(activeDbxConnection);
   const visibleDbxDatabases = activeDbxTargetDatabase
     ? dbxDatabases.filter((database) => database.name === activeDbxTargetDatabase)
@@ -1886,6 +2083,46 @@ export function DatabaseView({
     };
   }, [resizingDbxGridColumn]);
 
+  useEffect(() => {
+    if (!resizingDatabaseSidebar) return undefined;
+    const originalCursor = document.body.style.cursor;
+    const originalUserSelect = document.body.style.userSelect;
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+    const handlePointerMove = (event: PointerEvent) => {
+      const { width, x } = databaseSidebarResizeStartRef.current;
+      const nextWidth = Math.min(
+        DATABASE_SIDEBAR_MAX_WIDTH,
+        Math.max(DATABASE_SIDEBAR_MIN_WIDTH, Math.round(width + event.clientX - x)),
+      );
+      setDatabaseSidebarWidth((current) => (current === nextWidth ? current : nextWidth));
+    };
+    const handlePointerUp = () => {
+      setResizingDatabaseSidebar(false);
+    };
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", handlePointerUp);
+    return () => {
+      document.body.style.cursor = originalCursor;
+      document.body.style.userSelect = originalUserSelect;
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", handlePointerUp);
+    };
+  }, [resizingDatabaseSidebar]);
+
+  const startDatabaseSidebarResize = useCallback(
+    (event: ReactPointerEvent<HTMLButtonElement>) => {
+      event.preventDefault();
+      event.stopPropagation();
+      databaseSidebarResizeStartRef.current = {
+        x: event.clientX,
+        width: databaseSidebarWidth,
+      };
+      setResizingDatabaseSidebar(true);
+    },
+    [databaseSidebarWidth],
+  );
+
   const addConnection = useCallback(
     (endpoint: DbEndpoint) => {
       const now = Date.now();
@@ -1942,6 +2179,10 @@ export function DatabaseView({
     setDraftUser(profile.user);
     setDraftDatabase("");
     setDraftPassword("");
+    setShowPassword(false);
+    setShowSentinelPassword(false);
+    setShowTransportPassword(false);
+    setShowTransportPassphrase(false);
     setDraftFilePath("");
     setDraftReadOnly(false);
     setDraftUrlParams("");
@@ -2841,9 +3082,16 @@ export function DatabaseView({
         const primaryKeys = objectColumns.filter((column) => column.is_primary_key).map((column) => column.name);
         const editable = isDbxTableObject(object) && primaryKeys.length > 0 && !connection.readOnly;
         const resultRows = dbxRowsToDatabaseRows(result.result.rows);
+        const headerColumnTypes = result.result.columns.map((column, index) => {
+          const metadataColumn = objectColumns.find((item) => item.name.toLowerCase() === column.toLowerCase());
+          return metadataColumn?.data_type ?? result.result.column_types?.[index] ?? "";
+        });
         setActiveDbxObject(object);
         setActiveDbxSchema(object.schema ?? null);
         setWorkspaceMode("table");
+        const tabId = `table:${object.name}`;
+        setWorkspaceTabs((prev) => prev.some((t) => t.id === tabId) ? prev : [...prev, { id: tabId, mode: "table", label: object.name, closable: true }]);
+        setActiveTabId(tabId);
         setActiveObject({
           name: object.name,
           objectType: object.object_type,
@@ -2875,10 +3123,10 @@ export function DatabaseView({
           setDbxGridSearch("");
           setDbxGridColumnSearch("");
           setDbxGridHiddenColumns(new Set());
-          setDbxGridColumnWidths(initialDbxGridColumnWidths(result.result.columns, resultRows));
+          setDbxGridColumnWidths(initialDbxGridColumnWidths(result.result.columns, resultRows, headerColumnTypes));
         } else {
           setDbxGridColumnWidths((current) =>
-            Object.keys(current).length === 0 ? initialDbxGridColumnWidths(result.result.columns, resultRows) : current,
+            Object.keys(current).length === 0 ? initialDbxGridColumnWidths(result.result.columns, resultRows, headerColumnTypes) : current,
           );
         }
         setSql(result.sql);
@@ -2986,19 +3234,6 @@ export function DatabaseView({
     });
   }, [tableColumns]);
 
-  const hideNullDbxGridColumns = useCallback(() => {
-    if (dbxGridNullColumns.size === 0) return;
-    setDbxGridHiddenColumns((current) => {
-      const next = new Set(current);
-      dbxGridNullColumns.forEach((column) => next.add(column));
-      if (tableColumns.length > 0 && next.size >= tableColumns.length) {
-        const fallbackColumn = tableColumns.find((column) => !current.has(column)) ?? tableColumns[0];
-        next.delete(fallbackColumn);
-      }
-      return next;
-    });
-  }, [dbxGridNullColumns, tableColumns]);
-
   const startDbxGridColumnResize = useCallback(
     (column: string, event: ReactPointerEvent<HTMLButtonElement>) => {
       event.preventDefault();
@@ -3017,14 +3252,29 @@ export function DatabaseView({
     (column: string) => {
       const columnIndex = tableColumns.indexOf(column);
       if (columnIndex < 0) return;
-      const nextWidth = estimateDbxGridColumnWidth(column, columnIndex, rawTableRows);
+      const dbxColumnInfo = activeDbxGridColumnsByName.get(column.toLowerCase());
+      const legacyColumnInfo = activeObject?.columns.find((item) => item.name.toLowerCase() === column.toLowerCase());
+      const columnType = dbxColumnInfo?.data_type ?? dbxGridColumnType(queryResult, columnIndex) ?? legacyColumnInfo?.dataType ?? "";
+      const nextWidth = estimateDbxGridColumnWidth(column, columnIndex, rawTableRows, columnType);
       setDbxGridColumnWidths((current) => (current[column] === nextWidth ? current : { ...current, [column]: nextWidth }));
       setResizingDbxGridColumn(null);
     },
-    [rawTableRows, tableColumns],
+    [activeDbxGridColumnsByName, activeObject, queryResult, rawTableRows, tableColumns],
   );
 
-  const toggleDbxGridRowSelection = useCallback((rowIndex: number) => {
+  const toggleDbxGridRowSelection = useCallback((rowIndex: number, event?: ReactMouseEvent) => {
+    if (rowIndex < 0) return;
+    setDbxSelectedCell(null);
+    if (event?.shiftKey && dbxGridSelectionAnchor !== null) {
+      const rowCount = queryResult?.rows.length ?? 0;
+      const maxRowIndex = Math.max(0, rowCount - 1);
+      const anchor = Math.max(0, Math.min(dbxGridSelectionAnchor, maxRowIndex));
+      const target = Math.max(0, Math.min(rowIndex, maxRowIndex));
+      const [start, end] = anchor < target ? [anchor, target] : [target, anchor];
+      setDbxGridSelectedRows(new Set(Array.from({ length: end - start + 1 }, (_, offset) => start + offset)));
+      setDbxGridSelectionAnchor(rowIndex);
+      return;
+    }
     setDbxGridSelectedRows((current) => {
       const next = new Set(current);
       if (next.has(rowIndex)) {
@@ -3034,19 +3284,8 @@ export function DatabaseView({
       }
       return next;
     });
-  }, []);
-
-  const toggleVisibleDbxGridRowsSelection = useCallback(() => {
-    setDbxGridSelectedRows((current) => {
-      const next = new Set(current);
-      if (allVisibleDbxGridRowsSelected) {
-        visibleDbxGridRowIndexes.forEach((rowIndex) => next.delete(rowIndex));
-      } else {
-        visibleDbxGridRowIndexes.forEach((rowIndex) => next.add(rowIndex));
-      }
-      return next;
-    });
-  }, [allVisibleDbxGridRowsSelected, visibleDbxGridRowIndexes]);
+    setDbxGridSelectionAnchor(rowIndex);
+  }, [dbxGridSelectionAnchor, queryResult?.rows.length]);
 
   const testDbxConnectionDraft = useCallback(async () => {
     setLoading(true);
@@ -4020,14 +4259,14 @@ export function DatabaseView({
     [],
   );
 
-  const exportActiveDbxGrid = useCallback(async () => {
+  const exportActiveDbxGrid = useCallback(async (format: TableExportFormat = dbxGridExportFormat) => {
     if (!activeDbxConnection || !activeDbxObject || !queryResult || visibleTableColumns.length === 0) return;
     const columns = visibleTableColumns.map(({ column }) => column);
     const columnTypes = columns.map((column) => {
       const metadata = activeObject?.columns.find((item) => item.name.toLowerCase() === column.toLowerCase());
       return metadata?.dataType ?? null;
     });
-    await exportDbxTableObject(activeDbxConnection, activeDbxDatabase, activeDbxObject, dbxGridExportFormat, {
+    await exportDbxTableObject(activeDbxConnection, activeDbxDatabase, activeDbxObject, format, {
       columns,
       columnTypes,
       primaryKeys: activeObject?.primaryKeys ?? [],
@@ -4047,30 +4286,6 @@ export function DatabaseView({
     queryResult,
     visibleTableColumns,
   ]);
-
-  const exportSelectedDbxRows = useCallback(async () => {
-    if (!activeDbxConnection || !activeDbxObject || !queryResult || dbxGridSelectedRows.size === 0) return;
-    const primaryKeys = activeObject?.primaryKeys ?? queryResult.primaryKeys ?? [];
-    if (primaryKeys.length === 0) return;
-    const selectedRows = Array.from(dbxGridSelectedRows)
-      .map((rowIndex) => queryResult.rows[rowIndex])
-      .filter(Boolean);
-    if (selectedRows.length === 0) return;
-    const conditions = selectedRows.map((row) => {
-      const parts = primaryKeys.map((pk) => {
-        const colIndex = queryResult.columns.indexOf(pk);
-        const value = colIndex >= 0 ? row.values[colIndex] : null;
-        return value === null || value === undefined
-          ? `${quoteSqlName(pk)} IS NULL`
-          : `${quoteSqlName(pk)} = ${sqlLiteral(value)}`;
-      });
-      return parts.length === 1 ? parts[0] : `(${parts.join(" AND ")})`;
-    });
-    const whereClause = conditions.length === 1 ? conditions[0] : `(${conditions.join(" OR ")})`;
-    await exportDbxTableObject(activeDbxConnection, activeDbxDatabase, activeDbxObject, dbxGridExportFormat, {
-      whereInput: whereClause,
-    });
-  }, [activeDbxConnection, activeDbxDatabase, activeDbxObject, activeObject?.primaryKeys, dbxGridExportFormat, dbxGridSelectedRows, exportDbxTableObject, queryResult]);
 
   const copyDbxObjectStructure = useCallback(
     async (connection: AeroricDbConnectionConfig, database: string | null, object: DbxObjectInfo, format: "markdown" | "tsv") => {
@@ -4347,6 +4562,9 @@ export function DatabaseView({
         setActiveDbxSchema(menu.object.schema ?? null);
         setActiveDbxObject(menu.object);
         setWorkspaceMode("table-info");
+        const tabId = `table-info:${menu.object.name}`;
+        setWorkspaceTabs((prev) => prev.some((t) => t.id === tabId) ? prev : [...prev, { id: tabId, mode: "table-info", label: `${t("database.tableProperties")}: ${menu.object.name}`, closable: true }]);
+        setActiveTabId(tabId);
         await loadDbxColumnsForTables([menu.object], connection, menu.database);
         return;
       }
@@ -5214,8 +5432,10 @@ export function DatabaseView({
       setContextMenu(null);
       if (!menu) return;
       if (menu.kind === "connection-group") return;
-      const legacy = connections.find((connection) => connection.id === menu.connectionId) ?? null;
-      const dbx = dbxConnections.find((connection) => connection.id === menu.connectionId) ?? null;
+      const menuConnectionId = contextMenuConnectionId(menu);
+      if (!menuConnectionId) return;
+      const legacy = connections.find((connection) => connection.id === menuConnectionId) ?? null;
+      const dbx = dbxConnections.find((connection) => connection.id === menuConnectionId) ?? null;
 
       if (action === "open") {
         if (legacy) await inspect(legacy);
@@ -5312,14 +5532,14 @@ export function DatabaseView({
       }
       if (action === "close") {
         if (dbx) await databaseApi.dbxDisconnect(dbx.id);
-        if (activeDbxConnectionId === menu.connectionId) {
+        if (activeDbxConnectionId === menuConnectionId) {
           setActiveDbxConnectionId(null);
           setDbxDatabases([]);
           setDbxObjects([]);
           setActiveDbxDatabase(null);
           setActiveDbxObject(null);
         }
-        if (activeConnectionId === menu.connectionId) {
+        if (activeConnectionId === menuConnectionId) {
           setActiveConnectionId(null);
           setSchema(null);
           setActiveObject(null);
@@ -5884,11 +6104,24 @@ export function DatabaseView({
     (event: ReactKeyboardEvent<HTMLDivElement>) => {
       if (isTextEditingShortcutTarget(event.target)) return;
       if (!(event.metaKey || event.ctrlKey) || event.altKey || event.shiftKey || event.key.toLowerCase() !== "c") return;
-      if (!queryResult || !activeDbxConnection || dbxGridSelectedRows.size === 0) return;
-      event.preventDefault();
-      void copySelectedDbxRows();
+      if (!queryResult || !activeDbxConnection) return;
+      if (dbxGridSelectedRows.size > 0) {
+        event.preventDefault();
+        void copySelectedDbxRows();
+        return;
+      }
+      if (dbxSelectedCell) {
+        const row = queryResult.rows[dbxSelectedCell.rowIndex];
+        if (row) {
+          const value = row.values[dbxSelectedCell.columnIndex];
+          const text = valueToText(value);
+          navigator.clipboard?.writeText(text);
+        }
+        event.preventDefault();
+        return;
+      }
     },
-    [activeDbxConnection, copySelectedDbxRows, dbxGridSelectedRows.size, queryResult],
+    [activeDbxConnection, copySelectedDbxRows, dbxGridSelectedRows.size, queryResult, dbxSelectedCell],
   );
 
   const runDbxGridHeaderContextMenuAction = useCallback(
@@ -6050,52 +6283,6 @@ export function DatabaseView({
     ],
   );
 
-  const deleteRow = useCallback(
-    async (row: DatabaseRow) => {
-      if (activeDbxConnection && activeDbxObject && queryResult) {
-        const rowIndex = queryResult.rows.indexOf(row);
-        if (rowIndex >= 0) {
-          await deleteDbxRowsByIndexes([rowIndex], t("database.confirmDeleteRow"), t("database.deleteRow"));
-        }
-        return;
-      }
-      if (!activeEndpoint || !activeObject || activeConnection?.readOnly) return;
-      const ok = await confirm(t("database.confirmDeleteRow"), {
-        title: t("database.deleteRow"),
-        kind: "warning",
-        okLabel: t("file.delete"),
-        cancelLabel: t("common.cancel"),
-      });
-      if (!ok) return;
-      setError(null);
-      try {
-        await databaseApi.deleteRow({
-          endpoint: activeEndpoint,
-          table: activeObject.name,
-          rowKey: rowKeyFor(row),
-          readOnly: activeConnection?.readOnly ?? false,
-          projectRoot,
-        });
-        await loadTable(activeObject, page);
-      } catch (err) {
-        setError(String(err));
-      }
-    },
-    [
-      activeConnection?.readOnly,
-      activeDbxConnection,
-      activeDbxObject,
-      activeEndpoint,
-      activeObject,
-      deleteDbxRowsByIndexes,
-      loadTable,
-      page,
-      projectRoot,
-      queryResult,
-      t,
-    ],
-  );
-
   const contextMenuDbxConnection =
     contextMenu?.kind === "dbx" || contextMenu?.kind === "user-admin"
       ? dbxConnections.find((connection) => connection.id === contextMenu.connectionId) ?? null
@@ -6117,7 +6304,7 @@ export function DatabaseView({
   const connectionDialogTitle = editingDbxConnectionId ? t("database.editConnection") : t("database.newConnection");
 
   return (
-    <div style={s.databaseRoot}>
+    <div style={{ ...s.databaseRoot, gridTemplateColumns: `${databaseSidebarWidth}px minmax(0, 1fr)` }}>
       <div style={s.databaseTopToolbar}>
         <DbxButton variant="ghost" size="sm" icon={Database} onClick={openNewConnectionDialog}>
           {t("database.newConnection")}
@@ -6153,7 +6340,7 @@ export function DatabaseView({
           {t("database.tableStructure")}
         </DbxButton>
       </div>
-      <aside style={s.databaseSidebar}>
+      <aside style={{ ...s.databaseSidebar, width: databaseSidebarWidth }}>
         <div style={s.databaseSidebarHeader}>
           <div style={s.databaseTitleRow}>
             <div style={{ display: "flex", alignItems: "center", gap: 7, minWidth: 0 }}>
@@ -6446,52 +6633,113 @@ export function DatabaseView({
             });
           }}
         />
+        <button
+          type="button"
+          role="separator"
+          aria-label={t("database.resizeSidebar")}
+          aria-orientation="vertical"
+          title={t("database.resizeSidebar")}
+          onPointerDown={startDatabaseSidebarResize}
+          style={{
+            ...s.databaseSidebarResizeHandle,
+            ...(resizingDatabaseSidebar ? s.databaseSidebarResizeHandleActive : undefined),
+          }}
+        />
       </aside>
 
       <main style={s.databaseMain}>
-        <div style={s.databaseTopbar}>
-          <div style={{ minWidth: 0 }}>
-            <div style={s.databaseTitle}>
-              {workspaceMode === "query"
-                ? t("database.newQuery")
-                : workspaceMode === "sql-file"
-                  ? t("database.executeSqlFile")
-                  : workspaceMode === "query-history"
-                    ? t("database.queryHistory")
-                    : workspaceMode === "drivers"
-                      ? t("database.driverManager")
-                      : workspaceMode === "redis"
-                        ? "Redis"
-                        : workspaceMode === "mongo"
-                          ? "MongoDB"
-                          : workspaceMode === "transfer"
-                            ? t("database.dataTransfer")
-                            : workspaceMode === "schema-diff"
-                              ? t("database.schemaDiff")
-                              : workspaceMode === "data-compare"
-                                ? t("database.dataCompare")
-                                : workspaceMode === "user-admin"
-                                  ? t("database.userAdmin")
-                                  : workspaceMode === "er-diagram"
-                                    ? t("database.erDiagram")
-                                    : workspaceMode === "database-search"
-                                      ? t("database.databaseSearch")
-                                      : workspaceMode === "table-structure"
-                                        ? t("database.tableStructure")
-                                        : workspaceMode === "table-info"
-                                          ? t("database.tableInfo")
-                                          : activeObject?.name ?? t("database.noSelection")}
-            </div>
-            <div style={s.databasePath}>
-              {activeEndpoint
-                ? endpointLabel(activeEndpoint)
-                : activeDbxConnection
-                  ? `${activeDbxConnection.dbType}: ${activeDbxConnection.name}`
-                  : t("database.chooseConnection")}
-            </div>
+        {workspaceTabs.length > 0 && (
+          <div style={s.databaseTabBar}>
+            {workspaceTabs.map((tab) => (
+              <button
+                key={tab.id}
+                role="tab"
+                aria-selected={activeTabId === tab.id}
+                type="button"
+                style={{
+                  ...s.databaseTab,
+                  ...(activeTabId === tab.id ? s.databaseTabActive : undefined),
+                }}
+                title={tab.label}
+                onClick={() => {
+                  activateWorkspaceTab(tab);
+                }}
+                onContextMenu={(event) => {
+                  event.preventDefault();
+                  setContextMenu({
+                    x: event.clientX,
+                    y: event.clientY,
+                    tabId: tab.id,
+                    kind: "workspace-tab",
+                  });
+                }}
+              >
+                <span style={{ maxWidth: shortWorkspaceTabIds.has(tab.id) ? 72 : 160, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  {tab.label}
+                </span>
+                {tab.closable && (
+                  <span
+                    role="button"
+                    tabIndex={-1}
+                    style={s.databaseTabClose}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      closeWorkspaceTab(tab.id);
+                    }}
+                  >
+                    ×
+                  </span>
+                )}
+              </button>
+            ))}
           </div>
-          {error && <div style={s.databaseError} title={error}>{error}</div>}
-        </div>
+        )}
+
+        {workspaceTabs.length === 0 && (
+          <div style={s.databaseTopbar}>
+            <div style={{ minWidth: 0 }}>
+              <div style={s.databaseTitle}>
+                {workspaceMode === "query"
+                  ? t("database.newQuery")
+                  : workspaceMode === "sql-file"
+                    ? t("database.executeSqlFile")
+                    : workspaceMode === "query-history"
+                      ? t("database.queryHistory")
+                      : workspaceMode === "drivers"
+                        ? t("database.driverManager")
+                        : workspaceMode === "redis"
+                          ? "Redis"
+                          : workspaceMode === "mongo"
+                            ? "MongoDB"
+                            : workspaceMode === "transfer"
+                              ? t("database.dataTransfer")
+                              : workspaceMode === "schema-diff"
+                                ? t("database.schemaDiff")
+                                : workspaceMode === "data-compare"
+                                  ? t("database.dataCompare")
+                                  : workspaceMode === "user-admin"
+                                    ? t("database.userAdmin")
+                                    : workspaceMode === "er-diagram"
+                                      ? t("database.erDiagram")
+                                      : workspaceMode === "database-search"
+                                        ? t("database.databaseSearch")
+                                        : workspaceMode === "table-structure"
+                                          ? t("database.tableStructure")
+                                          : workspaceMode === "table-info"
+                                            ? t("database.tableInfo")
+                                            : activeObject?.name ?? t("database.noSelection")}
+              </div>
+              <div style={s.databasePath}>
+                {activeEndpoint
+                  ? endpointLabel(activeEndpoint)
+                  : activeDbxConnection
+                    ? `${activeDbxConnection.dbType}: ${activeDbxConnection.name}`
+                    : t("database.chooseConnection")}
+              </div>
+            </div>
+            {error && <div style={s.databaseError} title={error}>{error}</div>}
+          </div>
+        )}
 
         {workspaceMode === "query-history" ? (
           <div style={s.databaseWorkspacePanel}>
@@ -6733,7 +6981,6 @@ export function DatabaseView({
           <div style={s.databaseTableInfoRoot}>
             <div style={s.databaseTableInfoHeader}>
               <div>
-                <div style={s.databaseWorkspaceTitle}>{t("database.tableInfo")}</div>
                 <div style={s.databaseDialogHint}>
                   {activeDbxDatabase ? `${activeDbxDatabase} / ` : ""}
                   {dbxObjectKey(selectedDbxInfoObject)}
@@ -6809,25 +7056,26 @@ export function DatabaseView({
                   <thead>
                     <tr>
                       <th style={s.databaseTh}>{t("database.columnName")}</th>
-                      <th style={s.databaseTh}>{t("database.dataType")}</th>
-                      <th style={s.databaseTh}>{t("database.nullable")}</th>
-                      <th style={s.databaseTh}>{t("database.primaryKey")}</th>
+                      <th style={s.databaseTh}>{t("database.columnType")}</th>
                       <th style={s.databaseTh}>{t("database.defaultValue")}</th>
+                      <th style={s.databaseTh}>{t("database.columnComment")}</th>
                     </tr>
                   </thead>
                   <tbody>
                     {filteredDbxInfoColumns.map((column) => (
                       <tr key={column.name}>
-                        <td style={s.databaseTd}>{column.name}</td>
-                        <td style={s.databaseTd}>{column.data_type}</td>
-                        <td style={s.databaseTd}>{column.is_nullable ? t("database.yes") : t("database.no")}</td>
-                        <td style={s.databaseTd}>{column.is_primary_key ? t("database.yes") : t("database.no")}</td>
+                        <td style={s.databaseTd}>
+                          {column.is_primary_key && <span title={t("database.primaryKey")} style={{ marginRight: 4 }}>🔑</span>}
+                          <span style={{ fontWeight: 700 }}>{column.name}</span>
+                        </td>
+                        <td style={s.databaseTd}>{column.data_type}{column.is_nullable ? " NULL" : " NOT NULL"}</td>
                         <td style={s.databaseTd}>{column.column_default ?? "-"}</td>
+                        <td style={s.databaseTd}>{column.comment ?? "-"}</td>
                       </tr>
                     ))}
                     {filteredDbxInfoColumns.length === 0 && (
                       <tr>
-                        <td style={s.databaseTd} colSpan={5}>{t("database.empty")}</td>
+                        <td style={s.databaseTd} colSpan={4}>{t("database.empty")}</td>
                       </tr>
                     )}
                   </tbody>
@@ -6919,19 +7167,162 @@ export function DatabaseView({
             </DbxButton>
           )}
           {queryResult && activeDbxConnection && activeDbxObject && (
-            <DbxButton
-              variant="outline"
-              size="sm"
-              icon={SlidersHorizontal}
-              disabled={loading}
-              onClick={() => {
-                setWorkspaceMode("table-info");
-                setTableInfoActiveTab("columns");
-                void loadDbxColumnsForTables([activeDbxObject], activeDbxConnection, activeDbxDatabase);
-              }}
-            >
-              {t("database.tableProperties")}
-            </DbxButton>
+            <>
+              <DbxButton
+                variant="outline"
+                size="sm"
+                icon={SlidersHorizontal}
+                disabled={loading}
+                onClick={() => {
+                  setWorkspaceMode("table-info");
+                  setTableInfoActiveTab("columns");
+                  const tabId = `table-info:${activeDbxObject?.name ?? ""}`;
+                  setWorkspaceTabs((prev) => prev.some((t) => t.id === tabId) ? prev : [...prev, { id: tabId, mode: "table-info", label: `${t("database.tableProperties")}: ${activeDbxObject?.name ?? ""}`, closable: true }]);
+                  setActiveTabId(tabId);
+                  void loadDbxColumnsForTables([activeDbxObject], activeDbxConnection, activeDbxDatabase);
+                }}
+              >
+                {t("database.tableProperties")}
+              </DbxButton>
+              <div style={s.databaseToolbarMenuAnchor}>
+                <DbxButton
+                  variant="outline"
+                  size="sm"
+                  icon={Wrench}
+                  disabled={loading}
+                  onClick={() => {
+                    setDbxDataToolsOpen((open) => !open);
+                    setDbxFieldFilterOpen(false);
+                    setDbxDataToolsMode("root");
+                  }}
+                >
+                  {t("database.dataTools")}
+                </DbxButton>
+                {dbxDataToolsOpen && (
+                  <div role="menu" aria-label={t("database.dataTools")} style={s.databaseToolbarMenu}>
+                    {dbxDataToolsMode === "root" ? (
+                      <>
+                        <button
+                          type="button"
+                          role="menuitem"
+                          style={s.databaseToolbarMenuButton}
+                          disabled={!queryResult?.editable || activeDbxConnection.readOnly || loading}
+                          onClick={() => {
+                            setDbxDataToolsOpen(false);
+                            insertRow();
+                          }}
+                        >
+                          {t("database.generateData")}
+                        </button>
+                        <button
+                          type="button"
+                          role="menuitem"
+                          style={s.databaseToolbarMenuButton}
+                          disabled={activeDbxConnection.readOnly || loading}
+                          onClick={() => {
+                            setDbxDataToolsOpen(false);
+                            void openTableImportDialog(activeDbxConnection, activeDbxDatabase, activeDbxObject);
+                          }}
+                        >
+                          {t("database.importData")}
+                        </button>
+                        <button
+                          type="button"
+                          role="menuitem"
+                          style={s.databaseToolbarMenuButton}
+                          disabled={visibleTableColumns.length === 0 || loading}
+                          onClick={() => setDbxDataToolsMode("export")}
+                        >
+                          {t("database.exportData")}
+                          <ChevronRight size={14} aria-hidden="true" />
+                        </button>
+                      </>
+                    ) : (
+                      <>
+                        <button
+                          type="button"
+                          style={s.databaseToolbarMenuButton}
+                          onClick={() => setDbxDataToolsMode("root")}
+                        >
+                          <ChevronLeft size={14} aria-hidden="true" />
+                          {t("common.back")}
+                        </button>
+                        {DATA_TOOL_EXPORT_FORMATS.map((item) => (
+                          <button
+                            key={item.format}
+                            type="button"
+                            role="menuitem"
+                            style={s.databaseToolbarMenuButton}
+                            disabled={visibleTableColumns.length === 0 || loading}
+                            onClick={() => {
+                              setDbxGridExportFormat(item.format);
+                              setDbxDataToolsOpen(false);
+                              void exportActiveDbxGrid(item.format);
+                            }}
+                          >
+                            {item.label}
+                          </button>
+                        ))}
+                      </>
+                    )}
+                  </div>
+                )}
+              </div>
+              <div style={s.databaseToolbarMenuAnchor}>
+                <DbxButton
+                  variant="outline"
+                  size="sm"
+                  icon={Eye}
+                  disabled={tableColumns.length === 0}
+                  onClick={() => {
+                    setDbxFieldFilterOpen((open) => !open);
+                    setDbxDataToolsOpen(false);
+                  }}
+                >
+                  {t("database.fieldFilter")}
+                </DbxButton>
+                {dbxFieldFilterOpen && (
+                  <div role="menu" aria-label={t("database.fieldFilter")} style={{ ...s.databaseToolbarMenu, ...s.databaseToolbarMenuWide }}>
+                    <input
+                      style={s.databaseDialogInput}
+                      value={dbxGridColumnSearch}
+                      onChange={(event) => setDbxGridColumnSearch(event.target.value)}
+                      placeholder={t("database.gridSearchColumns")}
+                      aria-label={t("database.gridSearchColumns")}
+                    />
+                    <div style={s.databaseFieldFilterList}>
+                      {filteredDbxGridColumnOptions.length > 0 ? (
+                        filteredDbxGridColumnOptions.map((column) => {
+                          const hidden = dbxGridHiddenColumns.has(column);
+                          const visibleCount = tableColumns.filter((item) => !dbxGridHiddenColumns.has(item)).length;
+                          return (
+                            <label key={column} style={s.databaseFieldFilterItem}>
+                              <input
+                                type="checkbox"
+                                checked={!hidden}
+                                disabled={!hidden && visibleCount <= 1}
+                                onChange={() => toggleDbxGridColumnVisibility(column)}
+                              />
+                              <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{column}</span>
+                            </label>
+                          );
+                        })
+                      ) : (
+                        <span style={{ color: "var(--text-hint)", fontSize: 12 }}>{t("database.gridNoSearchResults")}</span>
+                      )}
+                    </div>
+                    <div style={s.databaseFieldFilterFooter}>
+                      <DbxButton variant="outline" size="xs" disabled={tableColumns.length <= 1} onClick={invertDbxGridColumnVisibility}>
+                        {t("database.gridInvertColumnVisibility")}
+                      </DbxButton>
+                      <DbxButton variant="outline" size="xs" disabled={dbxGridHiddenColumns.size === 0} onClick={showAllDbxGridColumns}>
+                        {t("database.gridShowAllColumns")}
+                      </DbxButton>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </>
           )}
           {queryResult && activeDbxConnection && (
             <>
@@ -6944,71 +7335,20 @@ export function DatabaseView({
               >
                 {t("database.copySelectedRowsCount", { count: dbxGridSelectedRows.size })}
               </DbxButton>
+              <DbxButton
+                variant="destructive"
+                size="sm"
+                icon={Trash2}
+                disabled={!queryResult.editable || activeDbxConnection.readOnly || dbxGridSelectedRows.size === 0 || loading}
+                onClick={() => void deleteSelectedDbxRows()}
+              >
+                {t("database.deleteSelectedRowsCount", { count: dbxGridSelectedRows.size })}
+              </DbxButton>
+              <DbxButton variant="outline" size="sm" icon={RefreshCcw} disabled={loading} onClick={() => void resetActiveDbxGrid()}>
+                {t("database.gridReset")}
+              </DbxButton>
             </>
           )}
-          <DbxButton
-            variant="ghost"
-            size="icon-sm"
-            icon={ChevronLeft}
-            disabled={!activeObject || page <= 1 || loading}
-            onClick={() => {
-              if (activeDbxConnection && activeDbxObject) {
-                loadDbxObject(activeDbxObject, Math.max(1, page - 1), activeDbxConnection, activeDbxDatabase, dbxGridWhereInput, dbxGridOrderByInput);
-              } else if (activeObject) {
-                loadTable(activeObject, Math.max(1, page - 1));
-              }
-            }}
-          />
-          <span style={{ fontSize: 12, color: "var(--text-muted)" }}>
-            {t("database.page", {
-              page,
-              total: totalPages ?? "?",
-            })}
-          </span>
-          {queryResult && activeDbxConnection && (
-            <label style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12, color: "var(--text-muted)" }}>
-              <span>{t("database.gridRowsPerPage")}</span>
-              <select
-                style={{ ...s.databaseDialogInput, width: 82, height: 28, padding: "0 6px" }}
-                value={(DBX_GRID_PAGE_SIZE_OPTIONS as readonly number[]).includes(dbxGridPageSize) ? dbxGridPageSize : "custom"}
-                disabled={loading}
-                aria-label={t("database.gridRowsPerPage")}
-                onChange={(event) => {
-                  const val = event.currentTarget.value;
-                  if (val === "custom") {
-                    const custom = window.prompt(t("database.gridCustomPageSize"), String(dbxGridPageSize));
-                    if (custom) {
-                      const num = Number(custom);
-                      if (Number.isFinite(num) && num >= 1 && num <= 10000) void changeDbxGridPageSize(num);
-                    }
-                  } else {
-                    void changeDbxGridPageSize(Number(val));
-                  }
-                }}
-              >
-                {DBX_GRID_PAGE_SIZE_OPTIONS.map((option) => (
-                  <option key={option} value={option}>{option}</option>
-                ))}
-                {!(DBX_GRID_PAGE_SIZE_OPTIONS as readonly number[]).includes(dbxGridPageSize) && (
-                  <option value="custom">{dbxGridPageSize}</option>
-                )}
-                <option value="custom">{t("database.gridCustomPageSize")}</option>
-              </select>
-            </label>
-          )}
-          <DbxButton
-            variant="ghost"
-            size="icon-sm"
-            icon={ChevronRight}
-            disabled={!activeObject || loading || (totalPages != null && page >= totalPages)}
-            onClick={() => {
-              if (activeDbxConnection && activeDbxObject) {
-                loadDbxObject(activeDbxObject, page + 1, activeDbxConnection, activeDbxDatabase, dbxGridWhereInput, dbxGridOrderByInput);
-              } else if (activeObject) {
-                loadTable(activeObject, page + 1);
-              }
-            }}
-          />
           <span style={{ color: "var(--text-hint)", fontSize: 12 }}>
             {loading
               ? t("database.loading")
@@ -7019,7 +7359,17 @@ export function DatabaseView({
         </div>
 
         {queryResult && activeDbxConnection && activeDbxObject && (
-          <div role="group" aria-label="Table filters" style={s.databaseGridFilterBar}>
+          <div
+            role="group"
+            aria-label="Table filters"
+            style={s.databaseGridFilterBar}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" && !event.shiftKey && !event.metaKey && !event.ctrlKey && !event.altKey) {
+                event.preventDefault();
+                void reloadActiveDbxGrid();
+              }
+            }}
+          >
             <label style={{ ...s.databaseDialogField, minWidth: 220, flex: "1 1 240px" }}>
               <span style={s.databaseDialogLabel}>{t("database.gridWhere")}</span>
               <input
@@ -7050,106 +7400,6 @@ export function DatabaseView({
                 aria-label={t("database.gridSearchCurrentPage")}
               />
             </label>
-            <DbxButton variant="outline" size="sm" icon={Search} disabled={loading} onClick={() => void reloadActiveDbxGrid()} style={{ alignSelf: "end" }}>
-              {t("database.applyFilter")}
-            </DbxButton>
-            <DbxButton variant="outline" size="sm" icon={RefreshCcw} disabled={loading} onClick={() => void resetActiveDbxGrid()} style={{ alignSelf: "end" }}>
-              {t("database.gridReset")}
-            </DbxButton>
-            <label style={{ ...s.databaseDialogField, minWidth: 150, flex: "0 1 170px" }}>
-              <span style={s.databaseDialogLabel}>{t("database.exportFormat")}</span>
-              <select
-                style={s.databaseDialogInput}
-                value={dbxGridExportFormat}
-                disabled={loading}
-                aria-label={t("database.exportFormat")}
-                onChange={(event) => setDbxGridExportFormat(event.currentTarget.value as TableExportFormat)}
-              >
-                <option value="csv">{t("database.exportCsv")}</option>
-                <option value="json">{t("database.exportJson")}</option>
-                <option value="markdown">{t("database.exportMarkdown")}</option>
-                <option value="insertSql">{t("database.exportInsertSql")}</option>
-                <option value="updateSql">{t("database.exportUpdateSql")}</option>
-                <option value="xlsx">{t("database.exportXlsx")}</option>
-              </select>
-            </label>
-            <DbxButton variant="outline" size="sm" icon={Download} disabled={loading || visibleTableColumns.length === 0} onClick={() => void exportActiveDbxGrid()} style={{ alignSelf: "end" }}>
-              {t("database.exportGrid")}
-            </DbxButton>
-            {dbxGridSelectedRows.size > 0 && (
-              <DbxButton variant="outline" size="sm" icon={Download} disabled={loading || visibleTableColumns.length === 0} onClick={() => void exportSelectedDbxRows()} style={{ alignSelf: "end" }}>
-                {t("database.exportSelectedRows", { count: dbxGridSelectedRows.size })}
-              </DbxButton>
-            )}
-            <div
-              role="group"
-              aria-label={t("database.gridColumnVisibility")}
-              style={{
-                flexBasis: "100%",
-                display: "grid",
-                gridTemplateColumns: "minmax(180px, 280px) minmax(0, 1fr)",
-                gap: 8,
-                alignItems: "end",
-              }}
-            >
-              <label style={s.databaseDialogField}>
-                <span style={s.databaseDialogLabel}>{t("database.gridColumnVisibility")}</span>
-                <input
-                  style={s.databaseDialogInput}
-                  value={dbxGridColumnSearch}
-                  onChange={(event) => setDbxGridColumnSearch(event.target.value)}
-                  placeholder={t("database.gridSearchColumns")}
-                  aria-label={t("database.gridSearchColumns")}
-                />
-              </label>
-              <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
-                <DbxButton variant="outline" size="xs" icon={Eye} disabled={dbxGridHiddenColumns.size === 0} onClick={showAllDbxGridColumns}>
-                  {t("database.gridShowAllColumns")}
-                </DbxButton>
-                <DbxButton variant="outline" size="xs" icon={SlidersHorizontal} disabled={tableColumns.length <= 1} onClick={invertDbxGridColumnVisibility}>
-                  {t("database.gridInvertColumnVisibility")}
-                </DbxButton>
-                <DbxButton variant="outline" size="xs" icon={Eraser} disabled={dbxGridNullColumns.size === 0} onClick={hideNullDbxGridColumns}>
-                  {t("database.gridHideNullColumns")}
-                </DbxButton>
-                <DbxButton
-                  variant="destructive"
-                  size="xs"
-                  icon={Trash2}
-                  disabled={!queryResult.editable || activeDbxConnection.readOnly || dbxGridSelectedRows.size === 0 || loading}
-                  onClick={() => void deleteSelectedDbxRows()}
-                >
-                  {t("database.deleteSelectedRowsCount", { count: dbxGridSelectedRows.size })}
-                </DbxButton>
-                <span style={{ color: "var(--text-hint)", fontSize: 12 }}>
-                  {visibleTableColumns.length}/{tableColumns.length} - {t("database.gridColumnVisibilityHint")}
-                </span>
-              </div>
-              <div style={{ gridColumn: "1 / -1", display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
-                {filteredDbxGridColumnOptions.length > 0 ? (
-                  filteredDbxGridColumnOptions.map((column) => {
-                    const hidden = dbxGridHiddenColumns.has(column);
-                    const nullOnly = dbxGridNullColumns.has(column);
-                    return (
-                      <DbxButton
-                        variant="ghost"
-                        size="xs"
-                        icon={hidden ? Square : CheckSquare}
-                        key={column}
-                        onClick={() => toggleDbxGridColumnVisibility(column)}
-                        aria-pressed={!hidden}
-                        title={nullOnly ? t("database.gridHideNullColumns") : column}
-                        style={{ color: hidden ? "var(--text-hint)" : "var(--text-primary)" }}
-                      >
-                        {column}
-                      </DbxButton>
-                    );
-                  })
-                ) : (
-                  <span style={{ color: "var(--text-hint)", fontSize: 12 }}>{t("database.gridNoSearchResults")}</span>
-                )}
-              </div>
-            </div>
           </div>
         )}
 
@@ -7158,6 +7408,7 @@ export function DatabaseView({
         ) : (
           <div
             style={s.databaseTableWrap}
+            role={queryResult && activeDbxConnection ? "grid" : undefined}
             tabIndex={queryResult && activeDbxConnection ? 0 : undefined}
             aria-label={queryResult && activeDbxConnection ? t("database.gridData") : undefined}
             onKeyDown={queryResult && activeDbxConnection ? handleDbxGridKeyDown : undefined}
@@ -7167,24 +7418,18 @@ export function DatabaseView({
                 <tr>
                   {queryResult && activeDbxConnection && (
                     <th style={{ ...s.databaseTh, ...s.databaseGridControlTh, width: 42 }}>
-                      <input
-                        type="checkbox"
-                        aria-label={t("database.selectVisibleRows")}
-                        checked={allVisibleDbxGridRowsSelected}
-                        disabled={visibleDbxGridRowIndexes.length === 0 || loading}
-                        onChange={toggleVisibleDbxGridRowsSelection}
-                      />
+                      #
                     </th>
                   )}
                   {showRowIdColumn && <th style={{ ...s.databaseTh, width: 86 }}>rowid</th>}
-                  {queryResult && <th style={{ ...s.databaseTh, ...s.databaseGridControlTh, width: 74 }}>{t("database.actions")}</th>}
                   {visibleTableColumns.map(({ column }) => {
                     const columnWidth = dbxGridColumnWidths[column] ?? DBX_GRID_DEFAULT_COLUMN_WIDTH;
                     const columnIndex = tableColumns.indexOf(column);
                     const sortable = dbxGridColumnSortable(queryResult, columnIndex);
                     const dbxColumnInfo = activeDbxGridColumnsByName.get(column.toLowerCase());
                     const legacyColumnInfo = activeObject?.columns.find((item) => item.name.toLowerCase() === column.toLowerCase());
-                    const columnType = dbxGridColumnType(queryResult, columnIndex) ?? dbxColumnInfo?.data_type ?? legacyColumnInfo?.dataType ?? "";
+                    const columnType = dbxColumnInfo?.data_type ?? dbxGridColumnType(queryResult, columnIndex) ?? legacyColumnInfo?.dataType ?? "";
+                    const columnTypeStyle = columnType ? dbxDataTypeStyle(columnType) : s.databaseTypeDefault;
                     const columnComment = dbxColumnInfo?.comment?.trim() ?? "";
                     const nullableText = dbxColumnInfo
                       ? dbxColumnInfo.is_nullable ? t("database.yes") : t("database.no")
@@ -7208,7 +7453,10 @@ export function DatabaseView({
                     const columnHeaderContent = (
                       <span style={s.databaseGridHeaderStack}>
                         <span style={s.databaseGridHeaderName}>{column}</span>
-                        <span style={s.databaseGridHeaderTypeLine} title={columnType ? t("database.gridColumnType", { type: columnType }) : undefined}>
+                        <span
+                          style={{ ...s.databaseGridHeaderTypeLine, ...columnTypeStyle }}
+                          title={columnType ? t("database.gridColumnType", { type: columnType }) : undefined}
+                        >
                           {columnType || "-"}
                         </span>
                         <span style={s.databaseGridHeaderCommentLine} title={columnComment || undefined}>
@@ -7250,17 +7498,7 @@ export function DatabaseView({
                               <button
                                 type="button"
                                 style={{
-                                  display: "inline-flex",
-                                  alignItems: "center",
-                                  gap: 5,
-                                  width: "100%",
-                                  minHeight: 50,
-                                  padding: 0,
-                                  paddingRight: 8,
-                                  border: "none",
-                                  background: "transparent",
-                                  color: "inherit",
-                                  font: "inherit",
+                                  ...s.databaseGridHeaderButton,
                                   cursor: loading ? "default" : "pointer",
                                 }}
                                 aria-label={column}
@@ -7268,13 +7506,15 @@ export function DatabaseView({
                                 onClick={() => void toggleDbxGridColumnSort(column)}
                               >
                                 {columnHeaderContent}
-                                {dbxGridOrderByInput.toLowerCase() === `${quoteSqlName(column)} asc`.toLowerCase() ? (
-                                  <span aria-label={t("database.sortAscending")}>ASC</span>
-                                ) : dbxGridOrderByInput.toLowerCase() === `${quoteSqlName(column)} desc`.toLowerCase() ? (
-                                  <span aria-label={t("database.sortDescending")}>DESC</span>
-                                ) : (
-                                  <span aria-hidden="true" style={{ color: "var(--text-hint)" }}>--</span>
-                                )}
+                                <span style={s.databaseGridHeaderSortIcon}>
+                                  {dbxGridOrderByInput.toLowerCase() === `${quoteSqlName(column)} asc`.toLowerCase() ? (
+                                    <ArrowUp size={14} aria-label={t("database.sortAscending")} />
+                                  ) : dbxGridOrderByInput.toLowerCase() === `${quoteSqlName(column)} desc`.toLowerCase() ? (
+                                    <ArrowDown size={14} aria-label={t("database.sortDescending")} />
+                                  ) : (
+                                    <ArrowUpDown size={14} aria-hidden="true" style={{ color: "var(--text-hint)" }} />
+                                  )}
+                                </span>
                               </button>
                             ) : (
                               <span
@@ -7325,38 +7565,34 @@ export function DatabaseView({
               <tbody>
                 {tableRows.map((row, rowIndex) => {
                   const dbxRowIndex = queryResult && activeDbxConnection ? queryResult.rows.indexOf(row) : -1;
+                  const rowSelected = dbxRowIndex >= 0 && dbxGridSelectedRows.has(dbxRowIndex);
                   return (
-                  <tr key={`${row.rowId ?? "sql"}:${rowIndex}`}>
+                  <tr key={`${row.rowId ?? "sql"}:${rowIndex}`} style={rowSelected ? s.databaseGridRowSelected : undefined}>
                     {queryResult && activeDbxConnection && (
-                      <td style={{ ...s.databaseTd, ...s.databaseGridControlTd }}>
-                        <input
-                          type="checkbox"
+                      <td style={{ ...s.databaseTd, ...s.databaseGridControlTd, ...(rowSelected ? s.databaseGridRowSelected : undefined) }}>
+                        <button
+                          type="button"
                           aria-label={t("database.selectRow", { row: rowIndex + 1 })}
-                          checked={dbxRowIndex >= 0 && dbxGridSelectedRows.has(dbxRowIndex)}
                           disabled={dbxRowIndex < 0 || loading}
-                          onChange={() => {
-                            if (dbxRowIndex >= 0) toggleDbxGridRowSelection(dbxRowIndex);
+                          style={{
+                            ...s.databaseGridRowNumberButton,
+                            ...(rowSelected ? s.databaseGridRowNumberButtonSelected : undefined),
                           }}
-                        />
+                          onClick={(event) => {
+                            if (dbxRowIndex >= 0) toggleDbxGridRowSelection(dbxRowIndex, event);
+                          }}
+                        >
+                          {dbxRowIndex >= 0 ? dbxRowIndex + 1 : rowIndex + 1}
+                        </button>
                       </td>
                     )}
-                    {showRowIdColumn && <td style={{ ...s.databaseTd, color: "var(--text-hint)" }}>{row.rowId ?? "-"}</td>}
-                    {queryResult && (
-                      <td style={{ ...s.databaseTd, ...s.databaseGridControlTd }}>
-                        <DbxButton
-                          variant="destructive"
-                          size="xs"
-                          icon={Trash2}
-                          disabled={!queryResult.editable || activeConnection?.readOnly || activeDbxConnection?.readOnly}
-                          aria-label={t("database.deleteRow")}
-                          title={t("database.deleteRow")}
-                          onClick={() => deleteRow(row)}
-                        />
-                      </td>
-                    )}
+                    {showRowIdColumn && <td style={{ ...s.databaseTd, color: "var(--text-hint)", ...(rowSelected ? s.databaseGridRowSelected : undefined) }}>{row.rowId ?? "-"}</td>}
                     {visibleTableColumns.map(({ column, index: columnIndex }) => {
                       const original = valueToText(row.values[columnIndex]);
                       const previewable = Boolean(queryResult && activeDbxConnection);
+                      const isCellSelected = dbxSelectedCell?.rowIndex === dbxRowIndex && dbxSelectedCell?.columnIndex === columnIndex;
+                      const isCellEditing = dbxEditingCell?.rowIndex === dbxRowIndex && dbxEditingCell?.columnIndex === columnIndex;
+                      const showCellPreview = previewable && dbxHoveredCell?.rowIndex === dbxRowIndex && dbxHoveredCell?.columnIndex === columnIndex;
                       const editable = Boolean(
                           queryResult &&
                           activeObject?.objectType === "table" &&
@@ -7369,11 +7605,21 @@ export function DatabaseView({
                           key={`${column}:${columnIndex}`}
                           style={{
                             ...s.databaseTd,
+                            ...(rowSelected ? s.databaseGridRowSelected : undefined),
+                            ...(isCellSelected ? s.databaseCellSelected : undefined),
                             width: dbxGridColumnWidths[column] ?? DBX_GRID_DEFAULT_COLUMN_WIDTH,
                             minWidth: dbxGridColumnWidths[column] ?? DBX_GRID_DEFAULT_COLUMN_WIDTH,
                             maxWidth: dbxGridColumnWidths[column] ?? DBX_GRID_DEFAULT_COLUMN_WIDTH,
                           }}
                           title={original}
+                          onMouseEnter={() => setDbxHoveredCell({ rowIndex: dbxRowIndex, columnIndex })}
+                          onMouseLeave={() => setDbxHoveredCell((current) =>
+                            current?.rowIndex === dbxRowIndex && current.columnIndex === columnIndex ? null : current,
+                          )}
+                          onClick={() => setDbxSelectedCell({ rowIndex: dbxRowIndex, columnIndex, column })}
+                          onDoubleClick={() => {
+                            if (editable) setDbxEditingCell({ rowIndex: dbxRowIndex, columnIndex, column });
+                          }}
                           onContextMenu={
                             queryResult && activeDbxConnection
                               ? (event) => {
@@ -7392,33 +7638,43 @@ export function DatabaseView({
                               : undefined
                           }
                         >
-                          <div style={{ display: "flex", alignItems: "center", gap: 4, minWidth: 0 }}>
-                            {editable ? (
+                          <div style={s.databaseGridCellContent}>
+                            {isCellEditing && editable ? (
                               <input
-                                style={{ ...s.databaseCellInput, minWidth: 0, flex: "1 1 auto" }}
+                                style={{ ...s.databaseCellInput, minWidth: 0, flex: "1 1 auto", borderColor: "var(--border-focus)", background: "var(--bg-input)" }}
                                 defaultValue={original}
-                                onFocus={(event) => {
-                                  event.currentTarget.style.borderColor = "var(--border-focus)";
-                                  event.currentTarget.style.background = "var(--bg-input)";
-                                }}
+                                autoFocus
                                 onBlur={(event) => {
-                                  event.currentTarget.style.borderColor = "transparent";
-                                  event.currentTarget.style.background = "transparent";
                                   updateCell(row, column, event.currentTarget.value, original);
+                                  setDbxEditingCell(null);
+                                }}
+                                onKeyDown={(event) => {
+                                  if (event.key === "Escape") setDbxEditingCell(null);
                                 }}
                               />
                             ) : (
-                              <span style={{ minWidth: 0, flex: "1 1 auto", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{original}</span>
+                              <span style={s.databaseGridCellValue}>{original}</span>
                             )}
-                            {previewable && (
-                              <DbxButton
-                                variant="ghost"
-                                size="icon-xs"
-                                icon={Eye}
+                            {showCellPreview && (
+                              <button
+                                type="button"
                                 aria-label={t("database.previewCellValue", { column })}
                                 title={t("database.previewCellValue", { column })}
-                                onClick={() => setDbxCellPreview({ column, value: row.values[columnIndex] })}
-                              />
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  const colInfo = activeDbxGridColumnsByName.get(column.toLowerCase());
+                                  setDbxCellDetail({
+                                    column,
+                                    columnIndex,
+                                    rowIndex: dbxRowIndex,
+                                    value: row.values[columnIndex],
+                                    columnInfo: colInfo,
+                                  });
+                                }}
+                                style={s.databaseGridCellPreviewButton}
+                              >
+                                i
+                              </button>
                             )}
                           </div>
                         </td>
@@ -7431,7 +7687,168 @@ export function DatabaseView({
             </table>
           </div>
         )}
-          </>
+        {queryResult && (
+          <div style={s.databaseGridFooter}>
+            <div role="status" aria-label={t("database.tableRowCount")} style={s.databaseGridFooterRows}>
+              {tableFooterRowCountText}
+            </div>
+            <div role="status" aria-label={t("database.currentSql")} style={s.databaseGridFooterSql} title={tableFooterSqlText}>
+              {tableFooterSqlText || "-"}
+            </div>
+            <div role="group" aria-label={t("database.tablePagination")} style={s.databaseGridFooterPager}>
+              <DbxButton
+                variant="ghost"
+                size="icon-sm"
+                icon={ChevronLeft}
+                disabled={!activeObject || page <= 1 || loading}
+                onClick={() => {
+                  if (activeDbxConnection && activeDbxObject) {
+                    loadDbxObject(activeDbxObject, Math.max(1, page - 1), activeDbxConnection, activeDbxDatabase, dbxGridWhereInput, dbxGridOrderByInput);
+                  } else if (activeObject) {
+                    loadTable(activeObject, Math.max(1, page - 1));
+                  }
+                }}
+              />
+              <span style={{ fontSize: 12, color: "var(--text-muted)" }}>
+                {t("database.page", {
+                  page,
+                  total: totalPages ?? "?",
+                })}
+              </span>
+              {activeDbxConnection && (
+                <label style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12, color: "var(--text-muted)", whiteSpace: "nowrap" }}>
+                  <span>{t("database.gridRowsPerPage")}</span>
+                  <select
+                    style={{ ...s.databaseDialogInput, width: 82, height: 28, padding: "0 6px" }}
+                    value={(DBX_GRID_PAGE_SIZE_OPTIONS as readonly number[]).includes(dbxGridPageSize) ? dbxGridPageSize : "custom"}
+                    disabled={loading}
+                    aria-label={t("database.gridRowsPerPage")}
+                    onChange={(event) => {
+                      const val = event.currentTarget.value;
+                      if (val === "custom") {
+                        const custom = window.prompt(t("database.gridCustomPageSize"), String(dbxGridPageSize));
+                        if (custom) {
+                          const num = Number(custom);
+                          if (Number.isFinite(num) && num >= 1 && num <= 10000) void changeDbxGridPageSize(num);
+                        }
+                      } else {
+                        void changeDbxGridPageSize(Number(val));
+                      }
+                    }}
+                  >
+                    {DBX_GRID_PAGE_SIZE_OPTIONS.map((option) => (
+                      <option key={option} value={option}>{option}</option>
+                    ))}
+                    {!(DBX_GRID_PAGE_SIZE_OPTIONS as readonly number[]).includes(dbxGridPageSize) && (
+                      <option value="custom">{dbxGridPageSize}</option>
+                    )}
+                    <option value="custom">{t("database.gridCustomPageSize")}</option>
+                  </select>
+                </label>
+              )}
+              <DbxButton
+                variant="ghost"
+                size="icon-sm"
+                icon={ChevronRight}
+                disabled={!activeObject || loading || (totalPages != null && page >= totalPages)}
+                onClick={() => {
+                  if (activeDbxConnection && activeDbxObject) {
+                    loadDbxObject(activeDbxObject, page + 1, activeDbxConnection, activeDbxDatabase, dbxGridWhereInput, dbxGridOrderByInput);
+                  } else if (activeObject) {
+                    loadTable(activeObject, page + 1);
+                  }
+                }}
+              />
+            </div>
+          </div>
+        )}
+      </>
+        )}
+        {dbxCellDetail && (
+          <div style={s.databaseCellDetailPanel}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4 }}>
+              <div style={{ fontWeight: 700, fontSize: 13 }}>{t("database.cellDetail")}</div>
+              <button
+                type="button"
+                onClick={() => setDbxCellDetail(null)}
+                style={{ background: "transparent", border: "none", cursor: "pointer", color: "var(--text-hint)", fontSize: 18, padding: "0 4px" }}
+              >
+                ×
+              </button>
+            </div>
+            <div style={s.databaseCellDetailGrid}>
+              <div style={s.databaseCellDetailField}>
+                <span style={s.databaseCellDetailLabel}>{t("database.columnName")}</span>
+                <span style={{ ...s.databaseCellDetailValue, fontWeight: 700 }}>{dbxCellDetail.column}</span>
+              </div>
+              <div style={s.databaseCellDetailField}>
+                <span style={s.databaseCellDetailLabel}>{t("database.rowNumber")}</span>
+                <span style={s.databaseCellDetailValue}>{dbxCellDetail.rowIndex + 1}</span>
+              </div>
+              <div style={s.databaseCellDetailField}>
+                <span style={s.databaseCellDetailLabel}>{t("database.columnType")}</span>
+                <span style={{ ...s.databaseCellDetailValue, ...dbxDataTypeStyle(dbxCellDetail.columnInfo?.data_type ?? "") }}>
+                  {dbxCellDetail.columnInfo?.data_type ?? "-"}
+                </span>
+              </div>
+              <div style={s.databaseCellDetailField}>
+                <span style={s.databaseCellDetailLabel}>NULL</span>
+                <span style={s.databaseCellDetailValue}>{dbxCellDetail.columnInfo?.is_nullable ? "YES" : "NO"}</span>
+              </div>
+              <div style={s.databaseCellDetailField}>
+                <span style={s.databaseCellDetailLabel}>{t("database.length")}</span>
+                <span style={s.databaseCellDetailValue}>{dbxCellDetail.columnInfo?.character_maximum_length ?? "-"}</span>
+              </div>
+              <div style={s.databaseCellDetailField}>
+                <span style={s.databaseCellDetailLabel}>{t("database.columnComment")}</span>
+                <span style={s.databaseCellDetailValue}>{dbxCellDetail.columnInfo?.comment ?? "-"}</span>
+              </div>
+            </div>
+            <div style={{ marginTop: 4 }}>
+              <span style={s.databaseCellDetailLabel}>{t("database.cellValue")}</span>
+              <textarea
+                style={{ width: "100%", minHeight: 60, marginTop: 4, fontFamily: "var(--font-mono)", fontSize: 12, padding: 6, background: "var(--bg-input)", color: "var(--text-primary)", border: "1px solid var(--border-dim)", borderRadius: 4, resize: "vertical" }}
+                defaultValue={valueToText(dbxCellDetail.value)}
+                readOnly
+              />
+            </div>
+            <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
+              <DbxButton variant="outline" size="sm" onClick={() => { navigator.clipboard?.writeText(valueToText(dbxCellDetail.value)); }}>
+                {t("common.copy")}
+              </DbxButton>
+              <DbxButton
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  const rows = queryResult?.rows;
+                  if (rows && dbxCellDetail.rowIndex >= 0 && dbxCellDetail.rowIndex < rows.length) {
+                    const row = rows[dbxCellDetail.rowIndex];
+                    if (row) {
+                      updateCell(row, dbxCellDetail.column, "", valueToText(dbxCellDetail.value));
+                    }
+                  }
+                }}
+              >
+                {t("database.setNull")}
+              </DbxButton>
+              <DbxButton
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  const rows = queryResult?.rows;
+                  if (rows && dbxCellDetail.rowIndex >= 0 && dbxCellDetail.rowIndex < rows.length) {
+                    const row = rows[dbxCellDetail.rowIndex];
+                    if (row) {
+                      const original = valueToText(row.values[dbxCellDetail.columnIndex]);
+                      updateCell(row, dbxCellDetail.column, original, original);
+                    }
+                  }
+                }}
+              >
+                {t("database.restore")}
+              </DbxButton>
+            </div>
+          </div>
         )}
       </main>
       {exportProgress?.active && (
@@ -8035,7 +8452,7 @@ export function DatabaseView({
                               </label>
                               <label style={s.databaseDialogField}>
                                 <span style={s.databaseDialogLabel}>{t("database.password")}</span>
-                                <input style={s.databaseDialogInput} type="password" value={draftPassword} onChange={(event) => setDraftPassword(event.target.value)} />
+                                <PasswordInput style={s.databaseDialogInput} value={draftPassword} onChange={(event) => setDraftPassword(event.target.value)} show={showPassword} onToggle={() => setShowPassword((v) => !v)} />
                               </label>
                               <label style={s.databaseDialogField}>
                                 <span style={s.databaseDialogLabel}>{t("database.databaseName")}</span>
@@ -8127,7 +8544,7 @@ export function DatabaseView({
                                   </label>
                                   <label style={s.databaseDialogField}>
                                     <span style={s.databaseDialogLabel}>{t("database.redisSentinelPassword")}</span>
-                                    <input style={s.databaseDialogInput} type="password" value={draftRedisSentinelPassword} onChange={(event) => setDraftRedisSentinelPassword(event.target.value)} />
+                                    <PasswordInput style={s.databaseDialogInput} value={draftRedisSentinelPassword} onChange={(event) => setDraftRedisSentinelPassword(event.target.value)} show={showSentinelPassword} onToggle={() => setShowSentinelPassword((v) => !v)} />
                                   </label>
                                   <label style={s.databaseSwitchRow}>
                                     <input type="checkbox" checked={draftRedisSentinelTls} onChange={(event) => setDraftRedisSentinelTls(event.target.checked)} />
@@ -8376,7 +8793,7 @@ export function DatabaseView({
                               </label>
                               <label style={s.databaseDialogField}>
                                 <span style={s.databaseDialogLabel}>{t("database.sshPassword")}</span>
-                                <input style={s.databaseDialogInput} type="password" value={selectedTransportLayer.password} onChange={(event) => updateTransportLayer(selectedTransportLayer.id, { password: event.target.value })} />
+                                <PasswordInput style={s.databaseDialogInput} value={selectedTransportLayer.password} onChange={(event) => updateTransportLayer(selectedTransportLayer.id, { password: event.target.value })} show={showTransportPassword} onToggle={() => setShowTransportPassword((v) => !v)} />
                               </label>
                               <label style={s.databaseDialogField}>
                                 <span style={s.databaseDialogLabel}>{t("database.sshKeyPath")}</span>
@@ -8384,7 +8801,7 @@ export function DatabaseView({
                               </label>
                               <label style={s.databaseDialogField}>
                                 <span style={s.databaseDialogLabel}>{t("database.sshKeyPassphrase")}</span>
-                                <input style={s.databaseDialogInput} type="password" value={selectedTransportLayer.keyPassphrase} onChange={(event) => updateTransportLayer(selectedTransportLayer.id, { keyPassphrase: event.target.value })} />
+                                <PasswordInput style={s.databaseDialogInput} value={selectedTransportLayer.keyPassphrase} onChange={(event) => updateTransportLayer(selectedTransportLayer.id, { keyPassphrase: event.target.value })} show={showTransportPassphrase} onToggle={() => setShowTransportPassphrase((v) => !v)} />
                               </label>
                               <label style={s.databaseDialogField}>
                                 <span style={s.databaseDialogLabel}>{t("database.connectTimeoutSecs")}</span>
@@ -8421,7 +8838,7 @@ export function DatabaseView({
                               </label>
                               <label style={s.databaseDialogField}>
                                 <span style={s.databaseDialogLabel}>{t("database.proxyPassword")}</span>
-                                <input style={s.databaseDialogInput} type="password" value={selectedTransportLayer.password} onChange={(event) => updateTransportLayer(selectedTransportLayer.id, { password: event.target.value })} />
+                                <PasswordInput style={s.databaseDialogInput} value={selectedTransportLayer.password} onChange={(event) => updateTransportLayer(selectedTransportLayer.id, { password: event.target.value })} show={showTransportPassword} onToggle={() => setShowTransportPassword((v) => !v)} />
                               </label>
                             </>
                           )}
@@ -9120,6 +9537,7 @@ export function DatabaseView({
           <div style={s.fileCtxBackdrop} onClick={() => setContextMenu(null)} />
           <div
             role="menu"
+            aria-label={contextMenu.kind === "workspace-tab" ? t("database.tabActions") : undefined}
             style={{
               ...s.fileCtxMenu,
               left: contextMenu.x,
@@ -9161,6 +9579,39 @@ export function DatabaseView({
                     {action === "clearSort" && <ArrowUpDown size={13} />}
                     <span>{t(labelKey)}</span>
                   </button>
+                  );
+                })
+              : contextMenu.kind === "workspace-tab"
+              ? ([
+                  ["toggleShortTitle", "database.shortenTabTitle"],
+                  ["pinTab", "database.pinTab"],
+                  ["closeTab", "database.closeTab"],
+                  ["closeOtherTabs", "database.closeOtherTabs"],
+                  ["closeAllTabs", "database.closeAllTabs"],
+                ] as const).map(([action, labelKey]) => {
+                  const checked = action === "toggleShortTitle" && shortWorkspaceTabIds.has(contextMenu.tabId);
+                  return (
+                    <button
+                      key={action}
+                      type="button"
+                      role={action === "toggleShortTitle" ? "menuitemcheckbox" : "menuitem"}
+                      aria-checked={action === "toggleShortTitle" ? checked : undefined}
+                      style={{
+                        ...s.fileCtxMenuItem,
+                        display: "grid",
+                        gridTemplateColumns: "16px minmax(0, 1fr)",
+                        alignItems: "center",
+                        gap: 8,
+                      }}
+                      onClick={() => {
+                        runWorkspaceTabContextMenuAction(action);
+                      }}
+                    >
+                      <span style={{ width: 16, display: "inline-flex", alignItems: "center", justifyContent: "center" }}>
+                        {action === "toggleShortTitle" && checked ? "✓" : action === "pinTab" ? <Pin size={13} /> : ""}
+                      </span>
+                      <span>{t(labelKey)}</span>
+                    </button>
                   );
                 })
               : contextMenu.kind === "dbx-grid-cell"

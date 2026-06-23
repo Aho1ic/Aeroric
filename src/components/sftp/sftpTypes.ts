@@ -14,6 +14,7 @@ export type SftpEntry = {
   isDir: boolean;
   extension?: string | null;
   size?: number | null;
+  modifiedAtMs?: number | null;
 };
 
 export type SftpTreeRow = {
@@ -28,6 +29,10 @@ export type SftpBreadcrumbSegment = {
 
 export type SftpFileIconKind =
   | "folder"
+  | "database"
+  | "model"
+  | "video"
+  | "package"
   | "image"
   | "markdown"
   | "json"
@@ -35,6 +40,9 @@ export type SftpFileIconKind =
   | "code"
   | "text"
   | "file";
+
+export type SftpSortField = "name" | "modified";
+export type SftpSortDirection = "asc" | "desc";
 
 export type SftpTauriEndpoint =
   | { kind: "local"; path: string }
@@ -134,10 +142,12 @@ export function flattenSftpTreeEntries(
   entries: SftpEntry[],
   expandedPaths: Set<string>,
   childrenByPath: Map<string, SftpEntry[]>,
+  sortField: SftpSortField = "name",
+  sortDirection: SftpSortDirection = "asc",
 ): SftpTreeRow[] {
   const rows: SftpTreeRow[] = [];
   const append = (items: SftpEntry[], depth: number) => {
-    for (const entry of items) {
+    for (const entry of sortSftpEntries(items, sortField, sortDirection)) {
       rows.push({ entry, depth });
       if (!entry.isDir || !expandedPaths.has(entry.path)) continue;
       append(childrenByPath.get(entry.path) ?? [], depth + 1);
@@ -145,6 +155,22 @@ export function flattenSftpTreeEntries(
   };
   append(entries, 0);
   return rows;
+}
+
+export function sortSftpEntries(
+  entries: SftpEntry[],
+  field: SftpSortField,
+  direction: SftpSortDirection,
+): SftpEntry[] {
+  const sign = direction === "asc" ? 1 : -1;
+  return [...entries].sort((a, b) => {
+    if (a.isDir !== b.isDir) return a.isDir ? -1 : 1;
+    if (field === "modified") {
+      const modifiedDiff = ((a.modifiedAtMs ?? 0) - (b.modifiedAtMs ?? 0)) * sign;
+      if (modifiedDiff !== 0) return modifiedDiff;
+    }
+    return a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" }) * sign;
+  });
 }
 
 function normalizeTreePath(path: string): string {
@@ -191,6 +217,10 @@ export function pruneExpandedPathsForFolderSelection(
 export function sftpFileIconKind(entry: SftpEntry): SftpFileIconKind {
   if (entry.isDir) return "folder";
   const ext = (entry.extension ?? entry.name.split(".").pop() ?? "").toLowerCase();
+  if (["db", "sqlite", "sqlite3"].includes(ext)) return "database";
+  if (["pt", "pth", "onnx"].includes(ext)) return "model";
+  if (["mp4", "mov", "mkv", "avi", "webm"].includes(ext)) return "video";
+  if (["whl"].includes(ext)) return "package";
   if (["png", "jpg", "jpeg", "gif", "webp", "bmp", "svg"].includes(ext)) return "image";
   if (["md", "mdx"].includes(ext)) return "markdown";
   if (["json", "jsonc"].includes(ext)) return "json";

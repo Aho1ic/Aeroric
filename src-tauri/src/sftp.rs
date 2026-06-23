@@ -1,5 +1,6 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::UNIX_EPOCH;
 
 use base64::Engine;
 use serde::{Deserialize, Serialize};
@@ -43,6 +44,7 @@ pub(crate) struct SftpEntry {
     is_dir: bool,
     extension: Option<String>,
     size: Option<u64>,
+    modified_at_ms: Option<u64>,
 }
 
 #[derive(Serialize)]
@@ -139,7 +141,7 @@ fn extension_for_name(name: &str, is_dir: bool) -> Option<String> {
 }
 
 fn build_remote_read_dir_command(remote_path: &str) -> String {
-    let script = "cd \"$1\" && for p in ./* ./.[!.]* ./..?*; do [ -e \"$p\" ] || continue; name=${p#./}; if [ \"$name\" = \".\" ] || [ \"$name\" = \"..\" ]; then continue; fi; if [ -d \"$p\" ]; then type=d; else type=f; fi; size=\"\"; if [ \"$type\" = f ]; then size=$(wc -c < \"$p\" 2>/dev/null || true); fi; printf '%s\\t%s\\t%s\\n' \"$name\" \"$type\" \"$size\"; done";
+    let script = "cd \"$1\" && for p in ./* ./.[!.]* ./..?*; do [ -e \"$p\" ] || continue; name=${p#./}; if [ \"$name\" = \".\" ] || [ \"$name\" = \"..\" ]; then continue; fi; if [ -d \"$p\" ]; then type=d; else type=f; fi; size=\"\"; if [ \"$type\" = f ]; then size=$(wc -c < \"$p\" 2>/dev/null || true); fi; mtime=$(stat -c %Y \"$p\" 2>/dev/null || stat -f %m \"$p\" 2>/dev/null || echo 0); printf '%s\\t%s\\t%s\\t%s\\n' \"$name\" \"$type\" \"$size\" \"$mtime\"; done";
     format!(
         "sh -c {} sh {}",
         crate::ssh::shell_quote_posix(script),
@@ -441,6 +443,10 @@ fn parse_remote_entries(remote_path: &str, raw: &str) -> Vec<SftpEntry> {
             let name = parts.next()?;
             let kind = parts.next()?;
             let size = parts.next().and_then(|value| value.parse::<u64>().ok());
+            let modified_at_ms = parts
+                .next()
+                .and_then(|value| value.parse::<u64>().ok())
+                .map(|seconds| seconds.saturating_mul(1000));
             let is_dir = kind == "d";
             Some(SftpEntry {
                 name: name.to_string(),
@@ -448,6 +454,7 @@ fn parse_remote_entries(remote_path: &str, raw: &str) -> Vec<SftpEntry> {
                 is_dir,
                 extension: extension_for_name(name, is_dir),
                 size,
+                modified_at_ms,
             })
         })
         .collect::<Vec<_>>();
@@ -471,12 +478,18 @@ fn read_local_dir(path: String) -> Result<Vec<SftpEntry>, String> {
             let name = entry.file_name().to_string_lossy().into_owned();
             let meta = entry.metadata().ok();
             let is_dir = meta.as_ref().is_some_and(|meta| meta.is_dir());
+            let modified_at_ms = meta
+                .as_ref()
+                .and_then(|metadata| metadata.modified().ok())
+                .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
+                .map(|duration| duration.as_millis() as u64);
             SftpEntry {
                 name: name.clone(),
                 path: path.to_string_lossy().into_owned(),
                 is_dir,
                 extension: extension_for_name(&name, is_dir),
                 size: meta.filter(|meta| meta.is_file()).map(|meta| meta.len()),
+                modified_at_ms,
             }
         })
         .collect::<Vec<_>>();

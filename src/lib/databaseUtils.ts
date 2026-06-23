@@ -112,19 +112,20 @@ export function clampDbxGridColumnWidth(width: number): number {
 /**
  * Estimate a DBX grid column width based on content
  */
-export function estimateDbxGridColumnWidth(column: string, columnIndex: number, rows: DatabaseRow[]): number {
+export function estimateDbxGridColumnWidth(column: string, columnIndex: number, rows: DatabaseRow[], columnType = ""): number {
+  const headerLength = Math.max(column.length, columnType.trim().length);
   const longestTextLength = rows.reduce((length, row) => {
     const text = valueToText(row.values[columnIndex]);
     return Math.max(length, Math.min(text.length, 60));
-  }, column.length);
+  }, headerLength);
   return clampDbxGridColumnWidth(longestTextLength * DBX_GRID_AUTOFIT_CHAR_WIDTH + DBX_GRID_AUTOFIT_PADDING);
 }
 
 /**
  * Initialize DBX grid column widths
  */
-export function initialDbxGridColumnWidths(columns: string[], rows: DatabaseRow[]): Record<string, number> {
-  return Object.fromEntries(columns.map((column, index) => [column, estimateDbxGridColumnWidth(column, index, rows)]));
+export function initialDbxGridColumnWidths(columns: string[], rows: DatabaseRow[], columnTypes: string[] = []): Record<string, number> {
+  return Object.fromEntries(columns.map((column, index) => [column, estimateDbxGridColumnWidth(column, index, rows, columnTypes[index] ?? "")]));
 }
 
 /**

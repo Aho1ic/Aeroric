@@ -14,6 +14,7 @@ import {
   sftpEndpointKey,
   sftpFileIconKind,
   sftpKeyAction,
+  sortSftpEntries,
   shouldPromptForSftpConflict,
   shouldPromptForUnknownSftpConflict,
   type SftpEndpoint,
@@ -133,6 +134,37 @@ describe("sftp panel helpers", () => {
       ["/repo/src/main.ts", 1],
       ["/repo/README.md", 0],
     ]);
+  });
+
+  it("keeps folders above files when sorting SFTP entries by name or modification time", () => {
+    const entries: SftpEntry[] = [
+      { name: "z.py", path: "/repo/z.py", isDir: false, extension: "py", modifiedAtMs: 300 },
+      { name: "src", path: "/repo/src", isDir: true, modifiedAtMs: 100 },
+      { name: "README.md", path: "/repo/README.md", isDir: false, extension: "md", modifiedAtMs: 500 },
+      { name: "docs", path: "/repo/docs", isDir: true, modifiedAtMs: 900 },
+    ];
+
+    expect(sortSftpEntries(entries, "name", "asc").map((entry) => entry.name)).toEqual([
+      "docs",
+      "src",
+      "README.md",
+      "z.py",
+    ]);
+    expect(sortSftpEntries(entries, "modified", "desc").map((entry) => entry.name)).toEqual([
+      "docs",
+      "src",
+      "README.md",
+      "z.py",
+    ]);
+  });
+
+  it("uses specific icon kinds for database, model, video, and wheel files", () => {
+    expect(sftpFileIconKind({ name: "index.db", path: "/repo/index.db", isDir: false })).toBe("database");
+    expect(sftpFileIconKind({ name: "model.pt", path: "/repo/model.pt", isDir: false })).toBe("model");
+    expect(sftpFileIconKind({ name: "model.pth", path: "/repo/model.pth", isDir: false })).toBe("model");
+    expect(sftpFileIconKind({ name: "detector.onnx", path: "/repo/detector.onnx", isDir: false })).toBe("model");
+    expect(sftpFileIconKind({ name: "clip.mp4", path: "/repo/clip.mp4", isDir: false })).toBe("video");
+    expect(sftpFileIconKind({ name: "pkg.whl", path: "/repo/pkg.whl", isDir: false })).toBe("package");
   });
 
   it("collapses sibling expanded folders when selecting another folder but keeps the selected subtree", () => {

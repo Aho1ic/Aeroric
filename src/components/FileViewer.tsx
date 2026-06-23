@@ -700,7 +700,7 @@ export function FileViewer({
     selectedCondaEnvPath,
     Boolean(remote),
   );
-  const selectableCondaEnvironments = remote ? [] : condaEnvironments;
+  const selectableCondaEnvironments = condaEnvironments;
   const canRunScript = isRunnableScriptFile(activeTab.path, Boolean(remote)) && !!onRunPythonFile;
   const canCloseOtherTabs = tabs.length > 1;
   const activeTabIndex = tabs.findIndex((tab) => tab.path === activeTab.path);

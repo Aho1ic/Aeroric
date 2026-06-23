@@ -4,6 +4,8 @@ use std::process::Command;
 
 use serde::Serialize;
 
+use crate::ssh::SshConnection;
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct CondaEnvironment {
@@ -100,6 +102,36 @@ fn detect_conda_environments_sync() -> Vec<CondaEnvironment> {
     Vec::new()
 }
 
+fn build_remote_conda_env_list_command() -> String {
+    let candidates = [
+        "${CONDA_EXE:-}",
+        "/opt/miniconda3/bin/conda",
+        "/opt/homebrew/bin/conda",
+        "/usr/local/bin/conda",
+        "$HOME/miniconda3/bin/conda",
+        "$HOME/anaconda3/bin/conda",
+        "$HOME/mambaforge/bin/conda",
+        "conda",
+    ];
+    let script = format!(
+        "for c in {}; do [ -n \"$c\" ] || continue; if command -v \"$c\" >/dev/null 2>&1 || [ -x \"$c\" ]; then raw=$(\"$c\" env list --json) || continue; if command -v python3 >/dev/null 2>&1; then python3 -c 'import json,os,sys; data=json.load(sys.stdin); data[\"envs\"]=[p for p in data.get(\"envs\", []) if isinstance(p, str) and os.path.exists(p.rstrip(\"/\") + \"/bin/python\")]; print(json.dumps(data))' <<EOF\n$raw\nEOF\nelse printf '%s\\n' \"$raw\"; fi; exit 0; fi; done; exit 1",
+        candidates.join(" ")
+    );
+    format!("sh -lc {}", crate::ssh::shell_quote_posix(&script))
+}
+
+fn run_remote_conda_env_list(connection: &SshConnection) -> Result<Vec<u8>, String> {
+    let mut command =
+        crate::ssh::std_ssh_command_for_remote_command(connection, build_remote_conda_env_list_command());
+    crate::subprocess::configure_background_command(&mut command);
+    let output = command.output().map_err(|e| e.to_string())?;
+    if output.status.success() {
+        Ok(output.stdout)
+    } else {
+        Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
+    }
+}
+
 #[tauri::command]
 pub async fn detect_conda_environments() -> Result<Vec<CondaEnvironment>, String> {
     tauri::async_runtime::spawn_blocking(detect_conda_environments_sync)
@@ -107,9 +139,24 @@ pub async fn detect_conda_environments() -> Result<Vec<CondaEnvironment>, String
         .map_err(|e| e.to_string())
 }
 
+#[tauri::command]
+pub async fn detect_remote_conda_environments(
+    connection: SshConnection,
+) -> Result<Vec<CondaEnvironment>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let raw = run_remote_conda_env_list(&connection)?;
+        Ok(parse_conda_envs_with_python_exists(&raw, |_| true))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{conda_candidates, env_name_from_path, parse_conda_envs_with_python_exists};
+    use super::{
+        build_remote_conda_env_list_command, conda_candidates, env_name_from_path,
+        parse_conda_envs_with_python_exists,
+    };
     use std::path::Path;
 
     #[test]
@@ -151,5 +198,15 @@ mod tests {
             names,
             vec!["base", "codex", "detect", "kiro", "labelimg", "labelme", "mahjong"]
         );
+    }
+
+    #[test]
+    fn remote_conda_command_checks_common_install_locations() {
+        let command = build_remote_conda_env_list_command();
+
+        assert!(command.starts_with("sh -lc "));
+        assert!(command.contains("conda"));
+        assert!(command.contains("env list --json"));
+        assert!(command.contains("$HOME/miniconda3/bin/conda"));
     }
 }

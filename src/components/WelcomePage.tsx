@@ -15,6 +15,7 @@ import {
   ArrowLeftRight,
   Pencil,
   Database,
+  NotebookTabs,
 } from "lucide-react";
 import * as Popover from "@radix-ui/react-popover";
 import type {
@@ -39,6 +40,7 @@ import { SshProjectPage, type SshProjectInput } from "./ssh/SshProjectDialog";
 import { SftpPanel } from "./sftp/SftpPanel";
 import { DockerServiceView } from "./docker/DockerServiceView";
 import { DatabaseView } from "./database/DatabaseView";
+import { NotebookPanel } from "./notebook/NotebookPanel";
 import { DockerIcon } from "./DockerIcon";
 import RecursiveHeroCanvas from "./recursive-hero-effect/RecursiveHeroCanvas";
 import { useI18n, pluralKey } from "../i18n";
@@ -186,7 +188,7 @@ export function WelcomePage({
   const editingProjectInputRef = useRef<HTMLInputElement | null>(null);
   const suppressProjectClickRef = useRef<string | null>(null);
   const [view, setView] = useState<
-    "projects" | "timeline" | "skills" | "docker" | "ssh" | "database"
+    "projects" | "timeline" | "skills" | "docker" | "ssh" | "database" | "notes"
   >("projects");
   const [openProjectMenu, setOpenProjectMenu] = useState(false);
   const [sftpOpen, setSftpOpen] = useState(false);
@@ -312,6 +314,12 @@ export function WelcomePage({
               active={view === "database" && !sftpOpen}
               onClick={() => switchWelcomeView("database")}
             />
+            <SidebarItem
+              icon={<NotebookTabs size={15} />}
+              label={t("notebook.title")}
+              active={view === "notes" && !sftpOpen}
+              onClick={() => switchWelcomeView("notes")}
+            />
           </nav>
 
           <div style={s.sidebarFooter}>
@@ -370,6 +378,8 @@ export function WelcomePage({
           <DockerServiceView />
         ) : view === "database" ? (
           <DatabaseView sshConnections={sshConnections} />
+        ) : view === "notes" ? (
+          <NotebookPanel />
         ) : view === "ssh" ? (
           <SshProjectPage
             connections={sshConnections}

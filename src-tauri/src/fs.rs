@@ -1,6 +1,7 @@
 use base64::Engine;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::UNIX_EPOCH;
 
 #[derive(serde::Serialize)]
 pub(crate) struct FsEntry {
@@ -8,6 +9,7 @@ pub(crate) struct FsEntry {
     path: String,
     is_dir: bool,
     extension: Option<String>,
+    modified_at_ms: Option<u64>,
     is_gitignored: bool,
 }
 
@@ -331,11 +333,18 @@ pub async fn read_dir_entries(path: String, project_path: String) -> Result<Vec<
                     .extension()
                     .and_then(|e| e.to_str())
                     .map(|s| s.to_lowercase());
+                let modified_at_ms = entry
+                    .metadata()
+                    .ok()
+                    .and_then(|metadata| metadata.modified().ok())
+                    .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
+                    .map(|duration| duration.as_millis() as u64);
                 FsEntry {
                     name,
                     path: p.to_string_lossy().into_owned(),
                     is_dir,
                     extension,
+                    modified_at_ms,
                     is_gitignored: false,
                 }
             })

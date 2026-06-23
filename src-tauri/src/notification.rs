@@ -149,7 +149,10 @@ where
 
 // ── Utilities ────────────────────────────────────────────────────────────────
 
-fn should_fetch(store: &NotificationStore) -> bool {
+fn should_fetch(store: &NotificationStore, force: bool) -> bool {
+    if force {
+        return true;
+    }
     if store.cached_notifications.is_none() {
         return true;
     }
@@ -334,12 +337,12 @@ async fn fetch_remote() -> Result<Vec<RemoteNotification>, String> {
 // ── Tauri commands ───────────────────────────────────────────────────────────
 
 #[tauri::command]
-pub async fn get_notifications() -> Result<NotificationResult, String> {
+pub async fn get_notifications(force: Option<bool>) -> Result<NotificationResult, String> {
     let mut store = tokio::task::spawn_blocking(load_store)
         .await
         .map_err(|e| e.to_string())?;
 
-    let notifications = if should_fetch(&store) {
+    let notifications = if should_fetch(&store, force.unwrap_or(false)) {
         match fetch_remote().await {
             Ok(remote) => {
                 let cached_remote = remote.clone();
@@ -457,5 +460,18 @@ mod tests {
         assert_eq!(store.read_ids, vec!["keep".to_string()]);
         assert_eq!(store.cached_notifications.unwrap().len(), 2);
         assert!(store.last_fetched_at.is_some());
+    }
+
+    #[test]
+    fn should_fetch_when_forced_even_with_fresh_cache() {
+        let store = NotificationStore {
+            source: Some(RELEASES_URL.to_string()),
+            read_ids: vec![],
+            last_fetched_at: Some(Utc::now().to_rfc3339()),
+            cached_notifications: Some(vec![notification("cached")]),
+        };
+
+        assert!(should_fetch(&store, true));
+        assert!(!should_fetch(&store, false));
     }
 }

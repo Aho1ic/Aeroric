@@ -1183,6 +1183,12 @@ body {
   transform: translateY(-1px);
 }
 
+.sftp-action-btn.active {
+  color: var(--text-primary);
+  border-color: var(--accent);
+  background: var(--bg-selected);
+}
+
 .sftp-action-btn:disabled {
   opacity: 0.45;
   cursor: default;
@@ -1253,6 +1259,22 @@ body {
 
 .sftp-entry-icon.folder {
   color: #d9a441;
+}
+
+.sftp-entry-icon.database {
+  color: var(--icon-file-sql);
+}
+
+.sftp-entry-icon.model {
+  color: var(--accent);
+}
+
+.sftp-entry-icon.video {
+  color: var(--warning);
+}
+
+.sftp-entry-icon.package {
+  color: var(--icon-file-package);
 }
 
 .sftp-entry-icon.image {

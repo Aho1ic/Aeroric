@@ -1984,8 +1984,8 @@ describe("DatabaseView connection flow", () => {
     fireEvent.contextMenu(await screen.findByRole("button", { name: /^users\s+table$/i }));
     await user.click(screen.getByRole("menuitem", { name: "Table info" }));
 
-    expect(await screen.findAllByText("Table info")).toHaveLength(2);
-    expect(screen.getByText("main / public.users")).toBeInTheDocument();
+    expect(await screen.findByText("main / public.users")).toBeInTheDocument();
+    expect(screen.queryByText("Table info")).not.toBeInTheDocument();
     const tableInfoTabs = screen.getByRole("tablist", { name: "Table info sections" });
     const columnsTab = within(tableInfoTabs).getByRole("tab", { name: /Columns 2/i });
     const indexesTab = within(tableInfoTabs).getByRole("tab", { name: /Indexes 1/i });
@@ -2002,12 +2002,11 @@ describe("DatabaseView connection flow", () => {
     expect(screen.getAllByText("table").length).toBeGreaterThanOrEqual(1);
     expect(screen.getAllByText("public").length).toBeGreaterThanOrEqual(1);
     expect(screen.getAllByText("id").length).toBeGreaterThanOrEqual(1);
-    expect(screen.getAllByText("integer").length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText(/integer/).length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText("nextval('users_id_seq'::regclass)")).toBeInTheDocument();
     expect(screen.getAllByText("email").length).toBeGreaterThanOrEqual(1);
-    expect(screen.getAllByText("text").length).toBeGreaterThanOrEqual(1);
-    expect(screen.getAllByText("Yes")).toHaveLength(2);
-    expect(screen.getAllByText("No")).toHaveLength(2);
+    expect(screen.getAllByText(/text/).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText("🔑").length).toBeGreaterThanOrEqual(1);
     await user.click(indexesTab);
     expect(screen.getAllByText("users_email_idx").length).toBeGreaterThanOrEqual(1);
     await user.click(foreignKeysTab);
@@ -2043,7 +2042,7 @@ describe("DatabaseView connection flow", () => {
       if (command === "dbx_get_columns") {
         return Promise.resolve([
           { name: "id", data_type: "integer", is_nullable: false, is_primary_key: true, comment: "User id" },
-          { name: "email", data_type: "text", is_nullable: true, is_primary_key: false, comment: "Email address" },
+          { name: "email", data_type: "varchar(50)", is_nullable: true, is_primary_key: false, comment: "Email address" },
           { name: "status", data_type: "text", is_nullable: true, is_primary_key: false },
           { name: "notes", data_type: "text", is_nullable: true, is_primary_key: false },
         ]);
@@ -2052,7 +2051,7 @@ describe("DatabaseView connection flow", () => {
         return Promise.resolve({
           result: {
             columns: ["id", "email", "status", "notes"],
-            column_types: ["integer", "text", "text", "text"],
+            column_types: ["integer", "varchar(50)", "text", "text"],
             column_sortables: [true, true, false, true],
             rows: [
               [1, "alice@example.com", "active", null],
@@ -2077,8 +2076,8 @@ describe("DatabaseView connection flow", () => {
 
     await user.click(await screen.findByRole("button", { name: /DBX Source/i }));
     await user.click(await screen.findByRole("button", { name: /^users\s+table$/i }));
-    expect(await screen.findByDisplayValue("alice@example.com")).toBeInTheDocument();
-    expect(screen.getByDisplayValue("bob@example.com")).toBeInTheDocument();
+    expect(await screen.findByText("alice@example.com")).toBeInTheDocument();
+    expect(screen.getByText("bob@example.com")).toBeInTheDocument();
     expect(screen.queryByPlaceholderText("Run SQL against the active database connection")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Run" })).not.toBeInTheDocument();
     expect(screen.queryByRole("columnheader", { name: "rowid" })).not.toBeInTheDocument();
@@ -2089,7 +2088,16 @@ describe("DatabaseView connection flow", () => {
     expect(within(filterGroup).getByLabelText("WHERE")).toBeInTheDocument();
     expect(within(filterGroup).getByLabelText("ORDER BY")).toBeInTheDocument();
     expect(within(filterGroup).getByLabelText("Search page")).toBeInTheDocument();
-    expect(within(filterGroup).getByLabelText("Export format")).toBeInTheDocument();
+    expect(within(filterGroup).queryByLabelText("Export format")).not.toBeInTheDocument();
+    expect(within(filterGroup).queryByRole("button", { name: "Apply filter" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Data tools" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Field filter" })).toBeInTheDocument();
+    expect(screen.getByRole("status", { name: "Table row count" })).toHaveTextContent("2 rows total");
+    expect(screen.getByRole("status", { name: "Current SQL" })).toHaveTextContent('SELECT * FROM "public"."users" LIMIT 100;');
+    const paginationGroup = screen.getByRole("group", { name: "Table pagination" });
+    expect(paginationGroup).toHaveTextContent("Page 1 / 1");
+    expect(paginationGroup).toHaveStyle({ whiteSpace: "nowrap" });
+    expect(screen.getByText("Rows").closest("label")).toHaveStyle({ whiteSpace: "nowrap" });
 
     await user.selectOptions(screen.getByLabelText("Rows"), "200");
     await waitFor(() => {
@@ -2107,7 +2115,7 @@ describe("DatabaseView connection flow", () => {
 
     await user.type(screen.getByLabelText("WHERE"), "status = 'active'");
     await user.type(screen.getByLabelText("ORDER BY"), "email DESC");
-    await user.click(screen.getByRole("button", { name: "Apply filter" }));
+    await user.keyboard("{Enter}");
 
     await waitFor(() => {
       expect(invoke).toHaveBeenCalledWith("dbx_query_table_data", {
@@ -2125,7 +2133,7 @@ describe("DatabaseView connection flow", () => {
 
     const idHeaderButton = screen
       .getAllByRole("button", { name: "id" })
-      .find((button) => !button.hasAttribute("aria-pressed") && button.textContent?.includes("--")) as HTMLButtonElement;
+      .find((button) => !button.hasAttribute("aria-pressed") && button.querySelector("svg")) as HTMLButtonElement;
     await user.click(idHeaderButton);
     await waitFor(() => {
       expect(invoke).toHaveBeenCalledWith("dbx_query_table_data", {
@@ -2137,8 +2145,17 @@ describe("DatabaseView connection flow", () => {
     });
 
     const table = screen.getByRole("table");
-    expect(within(table).getByTitle("Column type: integer")).toHaveTextContent("integer");
-    expect(within(table).getAllByTitle("Column type: text")).toHaveLength(3);
+    const idType = within(table).getByTitle("Column type: integer");
+    expect(idType).toHaveTextContent("integer");
+    expect(idType).toHaveStyle({ color: "#3b82f6", fontWeight: "800" });
+    const emailType = within(table).getByTitle("Column type: varchar(50)");
+    expect(emailType).toHaveTextContent("varchar(50)");
+    expect(emailType).toHaveStyle({ color: "#f59e0b", fontWeight: "800" });
+    expect(emailType.style.fontFamily).toContain("Monaco");
+    expect(emailType.parentElement).toHaveStyle({ alignItems: "flex-start", textAlign: "left" });
+    expect(within(table).getAllByTitle("Column type: text")).toHaveLength(2);
+    const emailHeaderButton = within(within(table).getByRole("columnheader", { name: /email/ })).getByRole("button", { name: "email" });
+    expect(emailHeaderButton).toHaveStyle({ display: "grid", gridTemplateColumns: "minmax(0, 1fr) 30px" });
     const idHeader = within(table).getByRole("columnheader", { name: /id/ });
     expect(idHeader).toHaveTextContent("id");
     expect(idHeader).toHaveTextContent("integer");
@@ -2148,27 +2165,39 @@ describe("DatabaseView connection flow", () => {
     const statusHeader = within(table).getByRole("columnheader", { name: "status" });
     expect(within(statusHeader).getAllByRole("button")).toHaveLength(1);
     expect(within(statusHeader).getByRole("button", { name: "Resize status" })).toBeInTheDocument();
+    expect(screen.queryByText("Table")).not.toBeInTheDocument();
+    expect(screen.queryByText("postgres: DBX Source")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Select visible rows")).not.toBeInTheDocument();
+    expect(screen.queryByRole("checkbox", { name: "Select row 1" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Select row 1" })).toHaveTextContent("1");
+    const emailCellText = screen.getByText("alice@example.com");
+    expect(emailCellText).toHaveStyle({ fontWeight: "700" });
+    expect(screen.queryByRole("button", { name: "Preview email" })).not.toBeInTheDocument();
+    fireEvent.mouseEnter(emailCellText.closest("td") as HTMLTableCellElement);
+    expect(screen.getAllByRole("button", { name: "Preview email" }).length).toBeGreaterThanOrEqual(1);
+    fireEvent.mouseLeave(emailCellText.closest("td") as HTMLTableCellElement);
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Preview email" })).not.toBeInTheDocument());
 
     await user.type(screen.getByLabelText("Search page"), "active");
     await waitFor(() => {
-      expect(screen.getAllByDisplayValue(/@example\.com$/)).toHaveLength(1);
+      expect(screen.getAllByText(/@example\.com$/)).toHaveLength(1);
     });
-    expect(screen.getByDisplayValue("alice@example.com")).toBeInTheDocument();
+    expect(screen.getByText("alice@example.com")).toBeInTheDocument();
     await user.clear(screen.getByLabelText("Search page"));
 
-    const columnOptions = screen.getByRole("group", { name: "Columns" });
-    await user.type(within(columnOptions).getByLabelText("Search columns..."), "note");
-    expect(within(columnOptions).getByRole("button", { name: "notes" })).toBeInTheDocument();
-    expect(within(columnOptions).queryByRole("button", { name: "email" })).not.toBeInTheDocument();
-    await user.clear(within(columnOptions).getByLabelText("Search columns..."));
+    expect(screen.queryByRole("group", { name: "Columns" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Field filter" }));
+    const fieldFilter = screen.getByRole("menu", { name: "Field filter" });
+    await user.type(within(fieldFilter).getByLabelText("Search columns..."), "note");
+    expect(within(fieldFilter).getByRole("checkbox", { name: "notes" })).toBeInTheDocument();
+    expect(within(fieldFilter).queryByRole("checkbox", { name: "email" })).not.toBeInTheDocument();
+    await user.clear(within(fieldFilter).getByLabelText("Search columns..."));
 
-    expect(screen.getAllByDisplayValue("NULL")).toHaveLength(2);
-    const deleteSelectedInColumnOptions = within(columnOptions).getByRole("button", { name: "Delete selected (0)" });
-    expect(deleteSelectedInColumnOptions).toBeDisabled();
-    await user.click(within(columnOptions).getByRole("button", { name: "Hide null columns" }));
-    expect(screen.queryAllByDisplayValue("NULL")).toHaveLength(0);
-    await user.click(within(columnOptions).getByRole("button", { name: "Show all" }));
-    expect(screen.getAllByDisplayValue("NULL")).toHaveLength(2);
+    expect(screen.getAllByText("NULL").length).toBeGreaterThanOrEqual(2);
+    await user.click(within(fieldFilter).getByRole("button", { name: "Invert" }));
+    expect(screen.queryAllByText("NULL")).toHaveLength(0);
+    await user.click(within(fieldFilter).getByRole("button", { name: "Show all" }));
+    expect(screen.getAllByText("NULL").length).toBeGreaterThanOrEqual(2);
 
     const emailResizeHandle = screen.getByRole("button", { name: "Resize email" });
     expect(emailResizeHandle.closest("th")).toHaveStyle({ width: "184px" });
@@ -2180,20 +2209,153 @@ describe("DatabaseView connection flow", () => {
     fireEvent.doubleClick(emailResizeHandle);
     await waitFor(() => expect(emailResizeHandle.closest("th")).toHaveStyle({ width: "184px" }));
 
-    const emailVisibilityButton = screen
-      .getAllByRole("button", { name: /email/i })
-      .find((button) => button.getAttribute("aria-pressed") === "true") as HTMLButtonElement;
+    const emailVisibilityButton = within(fieldFilter).getByRole("checkbox", { name: "email" });
     await user.click(emailVisibilityButton);
 
     expect(screen.queryAllByDisplayValue(/@example\.com$/)).toHaveLength(0);
-    expect(screen.getByDisplayValue("active")).toBeInTheDocument();
-    expect(screen.getByDisplayValue("pending")).toBeInTheDocument();
+    expect(screen.getByText("active")).toBeInTheDocument();
+    expect(screen.getByText("pending")).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Table properties" }));
     expect(await screen.findByText("main / public.users")).toBeInTheDocument();
+    expect(screen.queryByText("Table info")).not.toBeInTheDocument();
     const tableInfoTabs = screen.getByRole("tablist", { name: "Table info sections" });
     const ddlTab = within(tableInfoTabs).getByRole("tab", { name: /DDL/i });
     expect(ddlTab).toBeInTheDocument();
+  });
+
+  it("keeps long DBX column type text clear of sort controls", async () => {
+    const user = userEvent.setup();
+    vi.mocked(invoke).mockImplementation((command) => {
+      if (command === "db_load_connections") return Promise.resolve([]);
+      if (command === "dbx_list_connections") return Promise.resolve([dbxConnection]);
+      if (command === "dbx_connect") return Promise.resolve(undefined);
+      if (command === "dbx_list_databases") return Promise.resolve([{ name: "main" }]);
+      if (command === "dbx_list_schemas") return Promise.resolve(["public"]);
+      if (command === "dbx_list_objects") return Promise.resolve([{ name: "users", object_type: "table", schema: "public" }]);
+      if (command === "dbx_get_columns") {
+        return Promise.resolve([
+          { name: "description", data_type: "varchar(1000)", is_nullable: true, is_primary_key: false, comment: "Long text" },
+        ]);
+      }
+      if (command === "dbx_query_table_data") {
+        return Promise.resolve({
+          result: {
+            columns: ["description"],
+            column_types: ["text"],
+            column_sortables: [true],
+            rows: [["long value"]],
+          },
+          totalRows: 100,
+          sql: 'SELECT * FROM "public"."users"',
+          countSql: 'SELECT count(*) FROM "public"."users"',
+        });
+      }
+      return Promise.resolve(undefined);
+    });
+
+    render(
+      React.createElement(
+        I18nProvider,
+        null,
+        React.createElement(DatabaseView, { sshConnections: [connection()] }),
+      ),
+    );
+
+    await user.click(await screen.findByRole("button", { name: /DBX Source/i }));
+    await user.click(await screen.findByRole("button", { name: /^users\s+table$/i }));
+
+    const table = await screen.findByRole("table");
+    const header = within(table).getByRole("columnheader", { name: /description/ });
+    expect(within(header).getByTitle("Column type: varchar(1000)")).toHaveTextContent("varchar(1000)");
+    expect(header).toHaveStyle({ width: "152px", minWidth: "152px", maxWidth: "152px" });
+    expect(within(header).getByRole("button", { name: "description" })).toHaveStyle({
+      gridTemplateColumns: "minmax(0, 1fr) 30px",
+      gap: "8px",
+    });
+  });
+
+  it("resizes the database sidebar from its right edge", async () => {
+    vi.mocked(invoke).mockImplementation((command) => {
+      if (command === "db_load_connections") return Promise.resolve([]);
+      if (command === "dbx_list_connections") return Promise.resolve([dbxConnection]);
+      return Promise.resolve(undefined);
+    });
+
+    render(
+      React.createElement(
+        I18nProvider,
+        null,
+        React.createElement(DatabaseView, { sshConnections: [connection()] }),
+      ),
+    );
+
+    const resizeHandle = await screen.findByRole("separator", { name: "Resize database sidebar" });
+    const root = resizeHandle.closest("aside")?.parentElement;
+    expect(root).toHaveStyle({ gridTemplateColumns: "284px minmax(0, 1fr)" });
+
+    fireEvent.pointerDown(resizeHandle, { clientX: 284 });
+    await waitFor(() => expect(document.body.style.cursor).toBe("col-resize"));
+    fireEvent.pointerMove(window, { clientX: 404 });
+    await waitFor(() => expect(root).toHaveStyle({ gridTemplateColumns: "404px minmax(0, 1fr)" }));
+    fireEvent.pointerUp(window);
+  });
+
+  it("opens workspace tab context menu with title, pin, and close actions", async () => {
+    const user = userEvent.setup();
+    vi.mocked(invoke).mockImplementation((command) => {
+      if (command === "db_load_connections") return Promise.resolve([]);
+      if (command === "dbx_list_connections") return Promise.resolve([dbxConnection]);
+      if (command === "dbx_connect") return Promise.resolve(undefined);
+      if (command === "dbx_list_databases") return Promise.resolve([{ name: "main" }]);
+      if (command === "dbx_list_schemas") return Promise.resolve(["public"]);
+      if (command === "dbx_list_objects") return Promise.resolve([{ name: "users", object_type: "table", schema: "public" }]);
+      if (command === "dbx_get_columns") {
+        return Promise.resolve([
+          { name: "id", data_type: "integer", is_nullable: false, is_primary_key: true },
+        ]);
+      }
+      if (command === "dbx_query_table_data") {
+        return Promise.resolve({
+          result: {
+            columns: ["id"],
+            column_types: ["integer"],
+            column_sortables: [true],
+            rows: [[1]],
+          },
+          totalRows: 1,
+          sql: 'SELECT * FROM "public"."users"',
+          countSql: 'SELECT count(*) FROM "public"."users"',
+        });
+      }
+      return Promise.resolve(undefined);
+    });
+
+    render(
+      React.createElement(
+        I18nProvider,
+        null,
+        React.createElement(DatabaseView, { sshConnections: [connection()] }),
+      ),
+    );
+
+    await user.click(await screen.findByRole("button", { name: /DBX Source/i }));
+    await user.click(await screen.findByRole("button", { name: /^users\s+table$/i }));
+    const tab = await screen.findByRole("tab", { name: /users/ });
+    fireEvent.contextMenu(tab);
+
+    const menu = await screen.findByRole("menu", { name: "Tab actions" });
+    expect(within(menu).getByRole("menuitemcheckbox", { name: "Shorten tab title" })).toHaveAttribute("aria-checked", "false");
+    expect(within(menu).getByRole("menuitem", { name: "Pin" })).toBeInTheDocument();
+    expect(within(menu).getByRole("menuitem", { name: "Close tab" })).toBeInTheDocument();
+    expect(within(menu).getByRole("menuitem", { name: "Close other tabs" })).toBeInTheDocument();
+    expect(within(menu).getByRole("menuitem", { name: "Close all tabs" })).toBeInTheDocument();
+
+    await user.click(within(menu).getByRole("menuitemcheckbox", { name: "Shorten tab title" }));
+    await waitFor(() => expect(screen.queryByRole("menu", { name: "Tab actions" })).not.toBeInTheDocument());
+    await waitFor(() => {
+      expect(within(screen.getByRole("tab", { name: /users/ })).getByText("users")).toHaveStyle({ maxWidth: "72px" });
+    });
   });
 
   it("exports the active DBX grid with filters, ordering, and visible columns", async () => {
@@ -2239,15 +2401,18 @@ describe("DatabaseView connection flow", () => {
 
     await user.click(await screen.findByRole("button", { name: /DBX Source/i }));
     await user.click(await screen.findByRole("button", { name: /^users\s+table$/i }));
-    await screen.findByDisplayValue("alice@example.com");
+    await screen.findByText("alice@example.com");
     await user.type(screen.getByLabelText("WHERE"), "status = 'active'");
     await user.type(screen.getByLabelText("ORDER BY"), "email DESC");
-    const emailVisibilityButton = screen
-      .getAllByRole("button", { name: /email/i })
-      .find((button) => button.getAttribute("aria-pressed") === "true") as HTMLButtonElement;
+    await user.click(screen.getByRole("button", { name: "Field filter" }));
+    const fieldFilter = screen.getByRole("menu", { name: "Field filter" });
+    const emailVisibilityButton = within(fieldFilter).getByRole("checkbox", { name: "email" });
     await user.click(emailVisibilityButton);
-    await user.selectOptions(screen.getByLabelText("Export format"), "json");
-    await user.click(screen.getByRole("button", { name: "Export grid" }));
+    expect(screen.queryByLabelText("Export format")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Data tools" }));
+    const dataTools = screen.getByRole("menu", { name: "Data tools" });
+    await user.click(within(dataTools).getByRole("menuitem", { name: "Export data" }));
+    await user.click(within(dataTools).getByRole("menuitem", { name: "JSON" }));
 
     await waitFor(() => {
       expect(save).toHaveBeenCalledWith({
@@ -2343,6 +2508,8 @@ describe("DatabaseView connection flow", () => {
     "editor"
   ]
 }`;
+    const firstProfileText = await screen.findByText('{"name":"Alice","roles":["admin","editor"]}');
+    fireEvent.mouseEnter(firstProfileText.closest("td") as HTMLTableCellElement);
     await screen.findAllByRole("button", { name: "Preview profile" });
     const openProfileCellMenu = async () => {
       await waitFor(() => expect(screen.queryByRole("menu")).not.toBeInTheDocument());
@@ -2619,7 +2786,10 @@ describe("DatabaseView connection flow", () => {
 
     await user.click(await screen.findByRole("button", { name: /DBX Source/i }));
     await user.click(await screen.findByRole("button", { name: /^users\s+table$/i }));
-    const emailInput = await screen.findByDisplayValue("alice@example.com");
+    const emailSpan = await screen.findByText("alice@example.com");
+    const emailTd = emailSpan.closest("td") as HTMLTableCellElement;
+    await user.dblClick(emailTd);
+    const emailInput = emailTd.querySelector("input") as HTMLInputElement;
     await user.clear(emailInput);
     await user.type(emailInput, "alice@new.test");
     fireEvent.blur(emailInput);
@@ -2715,7 +2885,7 @@ describe("DatabaseView connection flow", () => {
 
     await user.click(await screen.findByRole("button", { name: /DBX Source/i }));
     await user.click(await screen.findByRole("button", { name: /^users\s+table$/i }));
-    await screen.findByDisplayValue("alice@example.com");
+    await screen.findByText("alice@example.com");
     await user.click(screen.getByRole("button", { name: "Insert" }));
 
     expect(promptSpy).toHaveBeenCalledWith("Insert row as JSON object", '{"email":null}');
@@ -2810,8 +2980,9 @@ describe("DatabaseView connection flow", () => {
 
     await user.click(await screen.findByRole("button", { name: /DBX Source/i }));
     await user.click(await screen.findByRole("button", { name: /^users\s+table$/i }));
-    await screen.findByDisplayValue("alice@example.com");
-    await user.click(screen.getByRole("button", { name: "Delete row" }));
+    await screen.findByText("alice@example.com");
+    await user.click(screen.getByRole("button", { name: "Select row 1" }));
+    await user.click(screen.getByRole("button", { name: /Delete selected/i }));
 
     await waitFor(() => {
       expect(invoke).toHaveBeenCalledWith("dbx_delete_rows", {
@@ -2835,7 +3006,7 @@ describe("DatabaseView connection flow", () => {
       });
     });
     expect(confirm).toHaveBeenCalledWith(expect.stringContaining('DELETE FROM "public"."users" WHERE "id"'), {
-      title: "Delete row",
+      title: "Delete selected",
       kind: "warning",
       okLabel: "Delete",
       cancelLabel: "Cancel",
@@ -2917,9 +3088,10 @@ describe("DatabaseView connection flow", () => {
 
     await user.click(await screen.findByRole("button", { name: /DBX Source/i }));
     await user.click(await screen.findByRole("button", { name: /^users\s+table$/i }));
-    await screen.findByDisplayValue("alice@example.com");
-    await user.click(screen.getByLabelText("Select visible rows"));
-    const emailCell = screen.getByDisplayValue("alice@example.com").closest("td") as HTMLTableCellElement;
+    await screen.findByText("alice@example.com");
+    await user.click(screen.getByRole("button", { name: "Select row 1" }));
+    await user.click(screen.getByRole("button", { name: "Select row 2" }));
+    const emailCell = screen.getByText("alice@example.com").closest("td") as HTMLTableCellElement;
     fireEvent.contextMenu(emailCell);
     const menu = await screen.findByRole("menu");
     expect(within(menu).getByRole("menuitem", { name: "Copy 2 Rows (JSON)" })).toBeInTheDocument();
@@ -2932,7 +3104,8 @@ describe("DatabaseView connection flow", () => {
       { id: 2, email: "bob@example.com" },
     ], null, 2)));
     writeText.mockClear();
-    fireEvent.keyDown(screen.getByLabelText("Select visible rows"), { key: "c", metaKey: true });
+    await user.click(emailCell);
+    fireEvent.keyDown(screen.getByRole("grid", { name: "Data grid" }), { key: "c", metaKey: true });
     await waitFor(() => expect(writeText).toHaveBeenCalledWith("id\temail\n1\talice@example.com\n2\tbob@example.com"));
     writeText.mockClear();
     await user.click(screen.getByRole("button", { name: "Copy selected (2)" }));
@@ -2978,6 +3151,66 @@ describe("DatabaseView connection flow", () => {
         }),
       }),
     });
+  });
+
+  it("selects a contiguous DBX row range with shift-click and keeps row numbers borderless", async () => {
+    const user = userEvent.setup();
+    vi.mocked(invoke).mockImplementation((command) => {
+      if (command === "db_load_connections") return Promise.resolve([]);
+      if (command === "dbx_list_connections") return Promise.resolve([dbxConnection]);
+      if (command === "dbx_connect") return Promise.resolve(undefined);
+      if (command === "dbx_list_databases") return Promise.resolve([{ name: "main" }]);
+      if (command === "dbx_list_schemas") return Promise.resolve(["public"]);
+      if (command === "dbx_list_objects") return Promise.resolve([{ name: "users", object_type: "table", schema: "public" }]);
+      if (command === "dbx_get_columns") {
+        return Promise.resolve([
+          { name: "id", data_type: "integer", is_nullable: false, is_primary_key: true },
+          { name: "email", data_type: "text", is_nullable: true, is_primary_key: false },
+        ]);
+      }
+      if (command === "dbx_query_table_data") {
+        return Promise.resolve({
+          result: {
+            columns: ["id", "email"],
+            column_types: ["integer", "text"],
+            column_sortables: [true, true],
+            rows: [
+              [1, "alice@example.com"],
+              [2, "bob@example.com"],
+              [3, "carol@example.com"],
+            ],
+          },
+          totalRows: 3,
+          sql: 'SELECT * FROM "public"."users"',
+          countSql: 'SELECT count(*) FROM "public"."users"',
+        });
+      }
+      return Promise.resolve(undefined);
+    });
+
+    render(
+      React.createElement(
+        I18nProvider,
+        null,
+        React.createElement(DatabaseView, { sshConnections: [connection()] }),
+      ),
+    );
+
+    await user.click(await screen.findByRole("button", { name: /DBX Source/i }));
+    await user.click(await screen.findByRole("button", { name: /^users\s+table$/i }));
+    await screen.findByText("carol@example.com");
+
+    const rowOne = screen.getByRole("button", { name: "Select row 1" });
+    const rowThree = screen.getByRole("button", { name: "Select row 3" });
+    await user.click(rowOne);
+    await user.keyboard("{Shift>}");
+    await user.click(rowThree);
+    await user.keyboard("{/Shift}");
+
+    expect(screen.getByRole("button", { name: "Copy selected (3)" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Delete selected (3)" })).toBeEnabled();
+    expect(rowOne).toHaveStyle({ borderStyle: "none" });
+    expect(rowThree).toHaveStyle({ borderStyle: "none" });
   });
 
   it("opens DBX object DDL and creates SQL drafts from the object context menu", async () => {
@@ -4666,7 +4899,7 @@ describe("DatabaseView connection flow", () => {
     expect(screen.getByText("Inspect table nodes and loaded column metadata.")).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: /Table structure/i }));
-    expect(await screen.findByDisplayValue("id")).toBeInTheDocument();
+    expect((await screen.findAllByText("id")).length).toBeGreaterThanOrEqual(1);
   });
 
   it("orders DBX NoSQL database and collection node context menus like dbx", async () => {

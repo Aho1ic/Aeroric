@@ -4,7 +4,7 @@ import { IS_MAC_WEBKIT, IS_OTHER_WEBKIT } from "../platform";
 type TerminalWithInput = Pick<Terminal, "input" | "textarea">;
 
 export const POST_COMPOSITION_REPLAY_IGNORE_MS = 3000;
-const ROMANIZED_COMPOSITION_COMMIT_DELAY_MS = 120;
+const ROMANIZED_COMPOSITION_COMMIT_DELAY_MS = 90;
 const POST_COMPOSITION_TEXTAREA_CLEAR_DELAYS_MS = [0, 16, 40, 80, 160, 320, 640];
 const TEXTAREA_INPUT_CLIENT_RESET_MS = 24;
 
@@ -32,6 +32,33 @@ function isSymbolInputType(inputType: string): boolean {
 
 function isTextInsertInputType(inputType: string): boolean {
   return inputType === "insertText" || inputType === "insertCompositionText";
+}
+
+function isRepeatableEditingKey(key: string): boolean {
+  return (
+    key === "Backspace" ||
+    key === "Delete" ||
+    key === "ArrowLeft" ||
+    key === "ArrowRight" ||
+    key === "ArrowUp" ||
+    key === "ArrowDown"
+  );
+}
+
+function isPrintableKey(key: string): boolean {
+  return key.length === 1;
+}
+
+export function shouldSuppressPrintableKeyRepeat(event: KeyboardEvent): boolean {
+  if (event.type === "keydown" && event.repeat && event.keyCode === 229) {
+    return true;
+  }
+  return (
+    event.type === "keydown" &&
+    event.repeat &&
+    isPrintableKey(event.key) &&
+    !isRepeatableEditingKey(event.key)
+  );
 }
 
 export function normalizeCommittedCompositionText(text: string): string {
@@ -270,6 +297,7 @@ export function attachLinuxIMEFix(
   let textareaClearTimers: Array<ReturnType<typeof globalThis.setTimeout>> = [];
   let textareaInputClientResetTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
   let isReleasingXtermComposition = false;
+  let suppressNextTextInsertAfterRepeatedKey: string | true | null = null;
   let pendingCompositionCommit: {
     text: string;
     preeditText: string;
@@ -426,6 +454,7 @@ export function attachLinuxIMEFix(
     textareaClearGeneration += 1;
     clearScheduledTextareaClears();
     clearPendingCompositionCommit();
+    suppressNextTextInsertAfterRepeatedKey = null;
     isComposing = true;
     compositionText = "";
     ignoredReplayProgress = "";
@@ -464,11 +493,42 @@ export function attachLinuxIMEFix(
   };
 
   const handleBeforeInputCapture = (event: InputEvent) => {
+    if (
+      suppressNextTextInsertAfterRepeatedKey !== null &&
+      event.data &&
+      isTextInsertInputType(event.inputType)
+    ) {
+      const suppressedText = suppressNextTextInsertAfterRepeatedKey;
+      suppressNextTextInsertAfterRepeatedKey = null;
+      if (suppressedText === true || event.data === suppressedText) {
+        clearTextareaNowAndNextFrame();
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        return;
+      }
+    }
+
+    if (
+      isComposing &&
+      event.data &&
+      event.inputType === "insertText" &&
+      event.isComposing &&
+      !containsCommittedCjkText(event.data) &&
+      shouldDeferRomanizedCompositionCommit(event.data, compositionText)
+    ) {
+      compositionText = event.data;
+      clearTextareaNowAndNextFrame();
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      return;
+    }
+
     const committedRomanizedText =
       isComposing &&
       event.data &&
       isTextInsertInputType(event.inputType) &&
-      !containsCommittedCjkText(event.data)
+      !containsCommittedCjkText(event.data) &&
+      !shouldDeferRomanizedCompositionCommit(event.data, compositionText)
         ? commitActiveRomanizedComposition()
         : null;
     if (committedRomanizedText !== null) {
@@ -651,6 +711,14 @@ export function attachLinuxIMEFix(
   };
 
   const handleKeyDownCapture = (event: KeyboardEvent) => {
+    if (shouldSuppressPrintableKeyRepeat(event)) {
+      suppressNextTextInsertAfterRepeatedKey =
+        event.keyCode === 229 ? true : isPrintableKey(event.key) ? event.key : true;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      return;
+    }
+    suppressNextTextInsertAfterRepeatedKey = null;
     if (!isComposing && event.keyCode === 229) event.stopImmediatePropagation();
   };
 

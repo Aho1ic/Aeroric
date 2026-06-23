@@ -55,6 +55,6 @@ export function selectRunnableCondaEnvironment(
   preferredPath: string | null | undefined,
   remote: boolean,
 ): CondaEnvironment | null {
-  if (remote) return null;
+  void remote;
   return selectDefaultCondaEnvironment(environments, preferredPath);
 }

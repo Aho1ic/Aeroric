@@ -271,9 +271,12 @@ async fn load_connections_from_disk() -> Result<Vec<AeroricDbConnectionConfig>, 
 
 async fn save_connections_to_disk(connections: &[AeroricDbConnectionConfig]) -> Result<(), String> {
     crate::storage::ensure_aeroric_dirs()?;
-    let sanitized: Vec<_> = connections.iter().map(sanitized).collect();
-    let data = serde_json::to_string_pretty(&sanitized).map_err(|e| e.to_string())?;
+    let data = connections_disk_json(connections)?;
     fs::write(v2_connections_path()?, format!("{data}\n")).map_err(|e| e.to_string())
+}
+
+fn connections_disk_json(connections: &[AeroricDbConnectionConfig]) -> Result<String, String> {
+    serde_json::to_string_pretty(connections).map_err(|e| e.to_string())
 }
 
 pub(crate) async fn ensure_loaded(state: &DbxState) -> Result<(), String> {
@@ -372,6 +375,7 @@ pub async fn dbx_save_connection(
 ) -> Result<(), String> {
     ensure_loaded(&state).await?;
     let connection = normalize_incoming(connection)?;
+    let connection = preserve_existing_secrets(&state, connection).await;
     let core_config = parse_core_config(&connection)?;
     state
         .app_state
@@ -386,6 +390,67 @@ pub async fn dbx_save_connection(
         .insert(connection.id.clone(), connection);
     persist_state_connections(&state).await?;
     Ok(())
+}
+
+async fn preserve_existing_secrets(
+    state: &DbxState,
+    incoming: AeroricDbConnectionConfig,
+) -> AeroricDbConnectionConfig {
+    let map = state.connections.read().await;
+    let existing = match map.get(&incoming.id) {
+        Some(e) => e.clone(),
+        None => return incoming,
+    };
+    drop(map);
+
+    preserve_existing_secrets_from_existing(incoming, &existing)
+}
+
+fn preserve_existing_secrets_from_existing(
+    mut incoming: AeroricDbConnectionConfig,
+    existing: &AeroricDbConnectionConfig,
+) -> AeroricDbConnectionConfig {
+    merge_sensitive_json(&mut incoming.dbx, &existing.dbx);
+    incoming
+}
+
+fn is_sensitive_key(key: &str) -> bool {
+    let key = key.to_ascii_lowercase();
+    key.contains("password") || key.contains("passphrase") || key == "client_key"
+}
+
+fn merge_sensitive_json(incoming: &mut Value, existing: &Value) {
+    match (incoming, existing) {
+        (Value::Object(incoming_map), Value::Object(existing_map)) => {
+            for (key, existing_value) in existing_map {
+                if is_sensitive_key(key) {
+                    let incoming_empty = incoming_map
+                        .get(key)
+                        .and_then(|value| value.as_str())
+                        .map(|value| value.is_empty())
+                        .unwrap_or(true);
+                    if incoming_empty {
+                        if let Some(existing_text) = existing_value.as_str() {
+                            if !existing_text.is_empty() {
+                                incoming_map
+                                    .insert(key.clone(), Value::String(existing_text.to_string()));
+                            }
+                        }
+                    }
+                    continue;
+                }
+                if let Some(incoming_value) = incoming_map.get_mut(key) {
+                    merge_sensitive_json(incoming_value, existing_value);
+                }
+            }
+        }
+        (Value::Array(incoming_items), Value::Array(existing_items)) => {
+            for (incoming_item, existing_item) in incoming_items.iter_mut().zip(existing_items) {
+                merge_sensitive_json(incoming_item, existing_item);
+            }
+        }
+        _ => {}
+    }
 }
 
 #[tauri::command]
@@ -511,6 +576,22 @@ pub async fn dbx_backup_sqlite_database(
 mod tests {
     use super::*;
 
+    fn mysql_connection_with_dbx(dbx: Value) -> AeroricDbConnectionConfig {
+        AeroricDbConnectionConfig {
+            id: "mysql-1".to_string(),
+            name: "mysql".to_string(),
+            db_type: DbxDatabaseType::Mysql,
+            read_only: false,
+            project_scope: None,
+            dbx,
+            created_at: 1,
+            last_opened_at: None,
+            migrated_from_legacy: None,
+            connection_group: None,
+            pinned: None,
+        }
+    }
+
     #[test]
     fn legacy_local_connection_migrates_to_sqlite_dbx_config() {
         let legacy = LegacyConnection {
@@ -565,5 +646,74 @@ mod tests {
         assert_eq!(sanitized.dbx["password"], "");
         assert_eq!(sanitized.dbx["transport_layers"][0]["password"], "");
         assert_eq!(sanitized.dbx["transport_layers"][0]["key_passphrase"], "");
+    }
+
+    #[test]
+    fn disk_connection_json_keeps_password_for_restart_reconnect() {
+        let connection = mysql_connection_with_dbx(json!({
+            "id": "mysql-1",
+            "name": "mysql",
+            "db_type": "mysql",
+            "host": "127.0.0.1",
+            "port": 3306,
+            "username": "root",
+            "password": "root-secret",
+            "database": null
+        }));
+
+        let api_connection = sanitized(&connection);
+        let disk_json = connections_disk_json(&[connection]).unwrap();
+
+        assert_eq!(api_connection.dbx["password"], "");
+        assert!(disk_json.contains("\"password\": \"root-secret\""));
+    }
+
+    #[test]
+    fn sanitized_edit_preserves_existing_sensitive_values() {
+        let existing = mysql_connection_with_dbx(json!({
+            "id": "mysql-1",
+            "name": "mysql",
+            "db_type": "mysql",
+            "host": "127.0.0.1",
+            "port": 3306,
+            "username": "root",
+            "password": "root-secret",
+            "redis_sentinel_password": "sentinel-secret",
+            "transport_layers": [{
+                "id": "transport-1",
+                "type": "ssh",
+                "password": "ssh-secret",
+                "key_passphrase": "key-secret"
+            }]
+        }));
+        let incoming = mysql_connection_with_dbx(json!({
+            "id": "mysql-1",
+            "name": "mysql",
+            "db_type": "mysql",
+            "host": "127.0.0.1",
+            "port": 3306,
+            "username": "root",
+            "password": "",
+            "redis_sentinel_password": "",
+            "transport_layers": [{
+                "id": "transport-1",
+                "type": "ssh",
+                "password": "",
+                "key_passphrase": ""
+            }]
+        }));
+
+        let preserved = preserve_existing_secrets_from_existing(incoming, &existing);
+
+        assert_eq!(preserved.dbx["password"], "root-secret");
+        assert_eq!(preserved.dbx["redis_sentinel_password"], "sentinel-secret");
+        assert_eq!(
+            preserved.dbx["transport_layers"][0]["password"],
+            "ssh-secret"
+        );
+        assert_eq!(
+            preserved.dbx["transport_layers"][0]["key_passphrase"],
+            "key-secret"
+        );
     }
 }

@@ -11,7 +11,9 @@ vi.mock("@tauri-apps/api/core", () => ({
 }));
 
 vi.mock("../components/NewTaskView", () => ({
-  NewTaskView: () => <div>new task</div>,
+  NewTaskView: ({ onStartTerminal }: { onStartTerminal?: () => void }) => (
+    <button onClick={() => onStartTerminal?.()}>Start Terminal</button>
+  ),
 }));
 
 vi.mock("../components/RunningView", () => ({
@@ -286,5 +288,21 @@ describe("ProjectPage right toolbar", () => {
 
     expect(screen.getByTestId("ssh-terminal")).toBeInTheDocument();
     expect(screen.queryByTestId("ssh-workspace")).not.toBeInTheDocument();
+  });
+
+  it("opens the right toolbar terminal instead of submitting a blank task", async () => {
+    const user = userEvent.setup();
+    const onSubmitTask = vi.fn();
+
+    render(
+      <I18nProvider>
+        <ProjectPage {...projectPageProps()} onSubmitTask={onSubmitTask} />
+      </I18nProvider>,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Start Terminal" }));
+
+    expect(screen.getByTestId("shell-terminal")).toBeInTheDocument();
+    expect(onSubmitTask).not.toHaveBeenCalled();
   });
 });

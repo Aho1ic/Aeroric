@@ -1,4 +1,5 @@
 import { useMemo, useState, useCallback, useEffect, useRef } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import type {
   Project,
   Task,
@@ -38,6 +39,7 @@ import { SftpPreview } from "./sftp/SftpPreview";
 import type { SftpEndpoint } from "./sftp/sftpTypes";
 import { DockerServiceView } from "./docker/DockerServiceView";
 import { DatabaseView } from "./database/DatabaseView";
+import { NotebookPanel } from "./notebook/NotebookPanel";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { useProjectPanels } from "../hooks/useProjectPanels";
 import {
@@ -245,6 +247,9 @@ export function ProjectPage({
         : undefined,
     [projectLocation, remoteConnection],
   );
+  const [remoteCondaEnvironments, setRemoteCondaEnvironments] = useState<CondaEnvironment[]>([]);
+  const runnableCondaEnvironments =
+    projectLocation.kind === "ssh" ? remoteCondaEnvironments : condaEnvironments;
   const fileRootPath = projectLocation.kind === "ssh" ? projectLocation.remotePath : project.path;
   const filesDisabled = projectLocation.kind === "ssh" && !remoteFileContext;
   const gitDisabled = projectLocation.kind === "ssh";
@@ -268,6 +273,26 @@ export function ProjectPage({
   });
   const visibleRightPanel = visibleDockPanel(rightPanel, { filesDisabled, gitDisabled });
   const selectedTask = projectTasks.find((t) => t.id === selectedTaskId) ?? null;
+
+  useEffect(() => {
+    if (!remoteFileContext) {
+      setRemoteCondaEnvironments([]);
+      return;
+    }
+    let cancelled = false;
+    invoke<CondaEnvironment[]>("detect_remote_conda_environments", {
+      connection: remoteFileContext.connection,
+    })
+      .then((envs) => {
+        if (!cancelled) setRemoteCondaEnvironments(Array.isArray(envs) ? envs : []);
+      })
+      .catch(() => {
+        if (!cancelled) setRemoteCondaEnvironments([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [remoteFileContext]);
   // GitChanges/GitHistory 的 cwd：worktree 任务用 worktree 路径，否则用主仓。
   // 主仓 git status 看不到 worktree 内未提交修改，必须切到 worktree cwd 才能查看 / 暂存 / 提交。
   const gitContextPath =
@@ -354,7 +379,7 @@ export function ProjectPage({
   const handleRunPythonFile = useCallback(
     (filePath: string) => {
       const env = selectRunnableCondaEnvironment(
-        condaEnvironments,
+        runnableCondaEnvironments,
         selectedCondaEnvPath,
         projectLocation.kind === "ssh",
       );
@@ -362,7 +387,7 @@ export function ProjectPage({
       if (!cmd) return;
       sendOrQueueShellCommand(cmd);
     },
-    [condaEnvironments, projectLocation.kind, selectedCondaEnvPath, sendOrQueueShellCommand],
+    [projectLocation.kind, runnableCondaEnvironments, selectedCondaEnvPath, sendOrQueueShellCommand],
   );
 
   const handleShellReady = useCallback(() => {
@@ -379,6 +404,12 @@ export function ProjectPage({
     clearFileAndDiff();
     onNewTask();
   }, [onNewTask, clearFileAndDiff]);
+
+  const handleStartTerminalFromComposer = useCallback(() => {
+    closeRightPanel();
+    setShellTerminalMounted(true);
+    setShowShellTerminal(true);
+  }, [closeRightPanel]);
 
   const handleDiffFileSelectWithCollapse = useCallback(
     (filePath: string, staged: boolean, label: string) => {
@@ -407,9 +438,9 @@ export function ProjectPage({
   const handleToggleRightPanel = useCallback(
     (panel: Parameters<typeof handleTogglePanel>[0]) => {
       setShowShellTerminal(false);
-      if (panel === "ssh" || panel === "database") {
-        clearFileAndDiff();
-      }
+    if (panel === "ssh" || panel === "database") {
+      clearFileAndDiff();
+    }
       handleTogglePanel(panel);
     },
     [clearFileAndDiff, handleTogglePanel],
@@ -651,7 +682,7 @@ export function ProjectPage({
                   themeVariant={themeVariant}
                   onRunMakeTarget={handleRunMakeTarget}
                   remote={remoteFileContext}
-                  condaEnvironments={condaEnvironments}
+                  condaEnvironments={runnableCondaEnvironments}
                   selectedCondaEnvPath={selectedCondaEnvPath}
                   onSelectedCondaEnvPathChange={onSelectedCondaEnvPathChange}
                   onRunPythonFile={handleRunPythonFile}
@@ -661,6 +692,7 @@ export function ProjectPage({
                   project={project}
                   otherProjects={otherProjects}
                   onSubmit={onSubmitTask}
+                  onStartTerminal={handleStartTerminalFromComposer}
                   initialDraft={newTaskDraftRef.current}
                   onCacheDraft={handleCacheNewTaskDraft}
                   compactControls={responsiveLayout.compactComposeControls}
@@ -861,6 +893,11 @@ export function ProjectPage({
                 onFileClick={handleCommitFileClickWithCollapse}
                 width={effectiveRightPanelWidth}
               />
+            </ErrorBoundary>
+          )}
+          {visibleRightPanel === "notes" && (
+            <ErrorBoundary label="记事本">
+              <NotebookPanel width={effectiveRightPanelWidth} />
             </ErrorBoundary>
           )}
           <div

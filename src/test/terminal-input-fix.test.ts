@@ -4,6 +4,7 @@ import {
   normalizeCommittedCompositionText,
   POST_COMPOSITION_REPLAY_IGNORE_MS,
   applyTerminalTextareaInputAttributes,
+  shouldSuppressPrintableKeyRepeat,
   shouldIgnorePostCompositionCandidate,
   shouldIgnorePostCompositionInsert,
   shouldDeferRomanizedCompositionCommit,
@@ -169,6 +170,78 @@ describe("terminal input fixes", () => {
 
     expect(beforeInput.defaultPrevented).toBe(true);
     expect(sent).toEqual(["测试"]);
+  });
+
+  it("does not send growing pinyin preedit text before Chinese composition commits", async () => {
+    vi.useFakeTimers();
+    vi.resetModules();
+    vi.doMock("../platform", () => ({
+      APP_PLATFORM: "macos",
+      ENABLE_USAGE_INSIGHTS: true,
+      IS_MAC_WEBKIT: true,
+      IS_OTHER_WEBKIT: false,
+      detectAppPlatform: () => "macos",
+      isAppleWebKit: () => true,
+    }));
+    const { attachLinuxIMEFix } = await import("../components/terminalInputFix");
+    const textarea = document.createElement("textarea");
+    const sent: string[] = [];
+    const term = {
+      textarea,
+      onData: (listener: (data: string) => void) => {
+        void listener;
+        return { dispose: vi.fn() };
+      },
+    };
+
+    attachLinuxIMEFix(term as never, (data) => sent.push(data));
+
+    textarea.dispatchEvent(new CompositionEvent("compositionstart", { data: "" }));
+    textarea.dispatchEvent(new CompositionEvent("compositionupdate", { data: "s" }));
+    const firstPreedit = new InputEvent("beforeinput", {
+      inputType: "insertText",
+      data: "s",
+      bubbles: true,
+      cancelable: true,
+    });
+    Object.defineProperty(firstPreedit, "isComposing", { value: true });
+    textarea.dispatchEvent(firstPreedit);
+
+    textarea.dispatchEvent(new CompositionEvent("compositionupdate", { data: "sd" }));
+    const secondPreedit = new InputEvent("beforeinput", {
+      inputType: "insertText",
+      data: "sd",
+      bubbles: true,
+      cancelable: true,
+    });
+    Object.defineProperty(secondPreedit, "isComposing", { value: true });
+    textarea.dispatchEvent(secondPreedit);
+
+    textarea.dispatchEvent(new CompositionEvent("compositionupdate", { data: "sda" }));
+    const thirdPreedit = new InputEvent("beforeinput", {
+      inputType: "insertText",
+      data: "sda",
+      bubbles: true,
+      cancelable: true,
+    });
+    Object.defineProperty(thirdPreedit, "isComposing", { value: true });
+    textarea.dispatchEvent(thirdPreedit);
+
+    const committedChinese = new InputEvent("beforeinput", {
+      inputType: "insertText",
+      data: "是的啊",
+      bubbles: true,
+      cancelable: true,
+    });
+    textarea.dispatchEvent(committedChinese);
+    vi.runOnlyPendingTimers();
+
+    expect(firstPreedit.defaultPrevented).toBe(true);
+    expect(secondPreedit.defaultPrevented).toBe(true);
+    expect(thirdPreedit.defaultPrevented).toBe(true);
+    expect(committedChinese.defaultPrevented).toBe(true);
+    expect(sent).toEqual(["是的啊"]);
+    vi.useRealTimers();
   });
 
   it("ignores split pinyin replay after committed Chinese text", async () => {
@@ -673,6 +746,39 @@ describe("terminal input fixes", () => {
     vi.useRealTimers();
   });
 
+  it("commits romanized text within 100ms when switching IME to English", async () => {
+    vi.useFakeTimers();
+    vi.resetModules();
+    vi.doMock("../platform", () => ({
+      APP_PLATFORM: "macos",
+      ENABLE_USAGE_INSIGHTS: true,
+      IS_MAC_WEBKIT: true,
+      IS_OTHER_WEBKIT: false,
+      detectAppPlatform: () => "macos",
+      isAppleWebKit: () => true,
+    }));
+    const { attachLinuxIMEFix } = await import("../components/terminalInputFix");
+    const textarea = document.createElement("textarea");
+    const sent: string[] = [];
+    const term = {
+      textarea,
+      onData: (listener: (data: string) => void) => {
+        void listener;
+        return { dispose: vi.fn() };
+      },
+    };
+
+    attachLinuxIMEFix(term as never, (data) => sent.push(data));
+
+    textarea.dispatchEvent(new CompositionEvent("compositionstart", { data: "" }));
+    textarea.dispatchEvent(new CompositionEvent("compositionupdate", { data: "sdh" }));
+    textarea.dispatchEvent(new CompositionEvent("compositionend", { data: "sdh" }));
+    vi.advanceTimersByTime(100);
+
+    expect(sent).toEqual(["sdh"]);
+    vi.useRealTimers();
+  });
+
   it("flushes pending romanized text before the next English keystroke", async () => {
     vi.useFakeTimers();
     vi.resetModules();
@@ -887,5 +993,146 @@ describe("terminal input fixes", () => {
     expect(textarea.getAttribute("autocapitalize")).toBe("off");
     expect(textarea.getAttribute("spellcheck")).toBe("false");
     expect(textarea.getAttribute("inputmode")).not.toBe("none");
+  });
+
+  it("suppresses repeated printable keydown events while preserving navigation repeats", () => {
+    expect(
+      shouldSuppressPrintableKeyRepeat(new KeyboardEvent("keydown", { key: "s", repeat: true })),
+    ).toBe(true);
+    expect(
+      shouldSuppressPrintableKeyRepeat(
+        new KeyboardEvent("keydown", { key: "ArrowLeft", repeat: true }),
+      ),
+    ).toBe(false);
+    expect(
+      shouldSuppressPrintableKeyRepeat(new KeyboardEvent("keydown", { key: "s", repeat: false })),
+    ).toBe(false);
+  });
+
+  it("suppresses repeated IME process keydown events from Chinese input", () => {
+    const event = new KeyboardEvent("keydown", { key: "Process", repeat: true });
+    Object.defineProperty(event, "keyCode", { value: 229 });
+
+    expect(shouldSuppressPrintableKeyRepeat(event)).toBe(true);
+  });
+
+  it("prevents repeated printable keydown events before xterm receives them", async () => {
+    vi.resetModules();
+    vi.doMock("../platform", () => ({
+      APP_PLATFORM: "macos",
+      ENABLE_USAGE_INSIGHTS: true,
+      IS_MAC_WEBKIT: true,
+      IS_OTHER_WEBKIT: false,
+      detectAppPlatform: () => "macos",
+      isAppleWebKit: () => true,
+    }));
+    const { attachLinuxIMEFix } = await import("../components/terminalInputFix");
+    const textarea = document.createElement("textarea");
+    const downstream = vi.fn();
+    const term = {
+      textarea,
+      onData: () => ({ dispose: vi.fn() }),
+    };
+
+    attachLinuxIMEFix(term as never, vi.fn());
+    textarea.addEventListener("keydown", downstream);
+
+    const event = new KeyboardEvent("keydown", {
+      key: "s",
+      repeat: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    textarea.dispatchEvent(event);
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(downstream).not.toHaveBeenCalled();
+  });
+
+  it("suppresses text insertion that follows a repeated IME keydown", async () => {
+    vi.resetModules();
+    vi.doMock("../platform", () => ({
+      APP_PLATFORM: "macos",
+      ENABLE_USAGE_INSIGHTS: true,
+      IS_MAC_WEBKIT: true,
+      IS_OTHER_WEBKIT: false,
+      detectAppPlatform: () => "macos",
+      isAppleWebKit: () => true,
+    }));
+    const { attachLinuxIMEFix } = await import("../components/terminalInputFix");
+    const textarea = document.createElement("textarea");
+    const sent: string[] = [];
+    const term = {
+      textarea,
+      onData: () => ({ dispose: vi.fn() }),
+    };
+
+    attachLinuxIMEFix(term as never, (data) => sent.push(data));
+
+    const repeatKeydown = new KeyboardEvent("keydown", {
+      key: "Process",
+      repeat: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    Object.defineProperty(repeatKeydown, "keyCode", { value: 229 });
+    textarea.dispatchEvent(repeatKeydown);
+
+    const repeatedInput = new InputEvent("beforeinput", {
+      inputType: "insertText",
+      data: "w",
+      bubbles: true,
+      cancelable: true,
+    });
+    textarea.dispatchEvent(repeatedInput);
+
+    expect(repeatKeydown.defaultPrevented).toBe(true);
+    expect(repeatedInput.defaultPrevented).toBe(true);
+    expect(sent).toEqual([]);
+  });
+
+  it("suppresses repeated IME insertText while composition is still active", async () => {
+    vi.resetModules();
+    vi.doMock("../platform", () => ({
+      APP_PLATFORM: "macos",
+      ENABLE_USAGE_INSIGHTS: true,
+      IS_MAC_WEBKIT: true,
+      IS_OTHER_WEBKIT: false,
+      detectAppPlatform: () => "macos",
+      isAppleWebKit: () => true,
+    }));
+    const { attachLinuxIMEFix } = await import("../components/terminalInputFix");
+    const textarea = document.createElement("textarea");
+    const sent: string[] = [];
+    const term = {
+      textarea,
+      onData: () => ({ dispose: vi.fn() }),
+    };
+
+    attachLinuxIMEFix(term as never, (data) => sent.push(data));
+
+    textarea.dispatchEvent(new CompositionEvent("compositionstart", { data: "" }));
+    textarea.dispatchEvent(new CompositionEvent("compositionupdate", { data: "w" }));
+
+    const repeatKeydown = new KeyboardEvent("keydown", {
+      key: "Process",
+      repeat: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    Object.defineProperty(repeatKeydown, "keyCode", { value: 229 });
+    textarea.dispatchEvent(repeatKeydown);
+
+    const repeatedInput = new InputEvent("beforeinput", {
+      inputType: "insertText",
+      data: "w",
+      bubbles: true,
+      cancelable: true,
+    });
+    textarea.dispatchEvent(repeatedInput);
+
+    expect(repeatKeydown.defaultPrevented).toBe(true);
+    expect(repeatedInput.defaultPrevented).toBe(true);
+    expect(sent).toEqual([]);
   });
 });

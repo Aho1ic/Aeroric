@@ -8,6 +8,7 @@ type RightPanel =
   | "sftp"
   | "database"
   | "docker"
+  | "notes"
   | null;
 type OpenFileTab = { path: string; name: string };
 

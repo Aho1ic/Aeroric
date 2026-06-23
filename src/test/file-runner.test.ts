@@ -35,10 +35,10 @@ describe("file runner helpers", () => {
     expect(selectDefaultCondaEnvironment(envs, "/missing")).toEqual(envs[0]);
   });
 
-  it("does not reuse local conda environments for SSH project file runs", () => {
-    expect(selectRunnableCondaEnvironment(envs, "/opt/miniconda3/envs/cv", true)).toBeNull();
-    expect(buildRunnableFileCommand("/Users/lyx/Documents/Snowflake.py", null)).toBe(
-      "python3 '/Users/lyx/Documents/Snowflake.py'\r",
+  it("uses remote conda environments for SSH project file runs when they are supplied", () => {
+    expect(selectRunnableCondaEnvironment(envs, "/opt/miniconda3/envs/cv", true)).toEqual(envs[1]);
+    expect(buildRunnableFileCommand("/srv/app/Snowflake.py", envs[1])).toBe(
+      "'/opt/miniconda3/envs/cv/bin/python' '/srv/app/Snowflake.py'\r",
     );
   });
 

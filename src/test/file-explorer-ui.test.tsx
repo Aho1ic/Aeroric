@@ -1,0 +1,96 @@
+import { render, screen, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import React from "react";
+import { describe, expect, it, vi, beforeEach } from "vitest";
+import { invoke } from "@tauri-apps/api/core";
+import { I18nProvider } from "../i18n";
+import { FileExplorer } from "../components/FileExplorer";
+
+vi.mock("@tauri-apps/api/core", () => ({
+  invoke: vi.fn(),
+}));
+
+vi.mock("@tauri-apps/plugin-dialog", () => ({
+  confirm: vi.fn(),
+}));
+
+class ResizeObserverMock {
+  observe = vi.fn();
+  unobserve = vi.fn();
+  disconnect = vi.fn();
+}
+
+vi.stubGlobal("ResizeObserver", ResizeObserverMock);
+
+const entries = [
+  {
+    name: "app.tsx",
+    path: "/repo/app.tsx",
+    is_dir: false,
+    extension: "tsx",
+    is_gitignored: false,
+    modifiedAtMs: 200,
+  },
+  {
+    name: "README.md",
+    path: "/repo/README.md",
+    is_dir: false,
+    extension: "md",
+    is_gitignored: false,
+    modifiedAtMs: 100,
+  },
+];
+
+function renderExplorer() {
+  return render(
+    React.createElement(
+      I18nProvider,
+      null,
+      React.createElement(FileExplorer, {
+        projectPath: "/repo",
+        projectName: "repo",
+        onFileSelect: vi.fn(),
+        themeVariant: "light",
+      }),
+    ),
+  );
+}
+
+describe("FileExplorer UI", () => {
+  beforeEach(() => {
+    vi.mocked(invoke).mockReset();
+    vi.mocked(invoke).mockImplementation((command) => {
+      if (command === "read_dir_entries") return Promise.resolve(entries);
+      return Promise.resolve(undefined);
+    });
+  });
+
+  it("keeps file icons separated from names", async () => {
+    renderExplorer();
+
+    const fileRow = await screen.findByText("app.tsx");
+    const icon = fileRow.parentElement?.querySelector("[data-kind='code']") as HTMLElement;
+
+    expect(icon).toBeInTheDocument();
+    expect(icon).toHaveStyle({ width: "18px", display: "inline-flex", marginRight: "4px" });
+  });
+
+  it("toggles sort direction from the active field button and removes the old direction button", async () => {
+    const user = userEvent.setup();
+    renderExplorer();
+
+    await screen.findByText("app.tsx");
+    const sortControls = screen.getByRole("button", { name: /Name/i }).parentElement as HTMLElement;
+    const nameButton = within(sortControls).getByRole("button", { name: /Name ascending/i });
+    const modifiedButton = within(sortControls).getByRole("button", { name: /Modified/i });
+
+    expect(within(nameButton).getByTestId("sort-arrow-up")).toBeInTheDocument();
+    expect(within(sortControls).queryByRole("button", { name: /^Asc$|^Desc$/i })).not.toBeInTheDocument();
+
+    await user.click(nameButton);
+    expect(within(nameButton).getByTestId("sort-arrow-down")).toBeInTheDocument();
+
+    await user.click(modifiedButton);
+    expect(within(modifiedButton).getByTestId("sort-arrow-up")).toBeInTheDocument();
+  });
+});

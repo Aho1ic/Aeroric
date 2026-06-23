@@ -106,9 +106,8 @@ export function TableStructurePanel({ databaseType, schema, tableName, columns, 
             <tr>
               <th style={s.databaseTh}>{t("database.columnName")}</th>
               <th style={s.databaseTh}>{t("database.columnType")}</th>
-              <th style={s.databaseTh}>{t("database.nullable")}</th>
-              <th style={s.databaseTh}>{t("database.primaryKey")}</th>
               <th style={s.databaseTh}>{t("database.defaultValue")}</th>
+              <th style={s.databaseTh}>{t("database.columnComment")}</th>
               <th style={{ ...s.databaseTh, width: 72 }}>{t("database.actions")}</th>
             </tr>
           </thead>
@@ -116,14 +115,12 @@ export function TableStructurePanel({ databaseType, schema, tableName, columns, 
             {columns.map((column) => (
               <tr key={column.name}>
                 <td style={s.databaseTd}>
-                  <input style={s.databaseCellInput} value={column.name} readOnly />
+                  {column.is_primary_key && <span title={t("database.primaryKey")} style={{ marginRight: 4 }}>🔑</span>}
+                  <span style={{ fontWeight: 700 }}>{column.name}</span>
                 </td>
-                <td style={s.databaseTd}>
-                  <input style={s.databaseCellInput} value={column.data_type} readOnly />
-                </td>
-                <td style={s.databaseTd}>{column.is_nullable ? "YES" : "NO"}</td>
-                <td style={s.databaseTd}>{column.is_primary_key ? "PK" : ""}</td>
+                <td style={s.databaseTd}>{column.data_type}{column.is_nullable ? " NULL" : " NOT NULL"}</td>
                 <td style={s.databaseTd}>{column.column_default ?? ""}</td>
+                <td style={s.databaseTd}>{column.comment ?? ""}</td>
                 <td style={s.databaseTd}>
                   <DbxIconButton icon={Trash2} size="icon-xs" disabled={readOnly} aria-label={t("common.delete")} />
                 </td>
@@ -147,7 +144,6 @@ export function TableStructurePanel({ databaseType, schema, tableName, columns, 
                     onChange={(event) => updateDraft(draft.id, { dataType: event.target.value })}
                   />
                 </td>
-                <td style={s.databaseTd}>YES</td>
                 <td style={s.databaseTd} />
                 <td style={s.databaseTd} />
                 <td style={s.databaseTd}>

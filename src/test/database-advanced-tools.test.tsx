@@ -155,7 +155,7 @@ describe("database advanced tools", () => {
     );
 
     expect(screen.getAllByText("users").length).toBeGreaterThan(0);
-    expect(screen.getByDisplayValue("id")).toBeInTheDocument();
-    expect(screen.getByDisplayValue("int")).toBeInTheDocument();
+    expect((screen.getAllByText("id")).length).toBeGreaterThanOrEqual(1);
+    expect((screen.getAllByText(/int/)).length).toBeGreaterThanOrEqual(1);
   });
 });

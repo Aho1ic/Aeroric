@@ -17,6 +17,7 @@ pub(crate) struct RemoteFsEntry {
     path: String,
     is_dir: bool,
     extension: Option<String>,
+    modified_at_ms: Option<u64>,
     is_gitignored: bool,
 }
 
@@ -29,7 +30,7 @@ pub(crate) struct RemoteImagePreviewData {
 }
 
 fn build_remote_read_dir_command(remote_path: &str) -> String {
-    let script = "cd \"$1\" && for p in ./* ./.[!.]* ./..?*; do [ -e \"$p\" ] || continue; name=${p#./}; if [ \"$name\" = \".\" ] || [ \"$name\" = \"..\" ]; then continue; fi; if [ -d \"$p\" ]; then type=d; else type=f; fi; printf '%s\\t%s\\n' \"$name\" \"$type\"; done";
+    let script = "cd \"$1\" && for p in ./* ./.[!.]* ./..?*; do [ -e \"$p\" ] || continue; name=${p#./}; if [ \"$name\" = \".\" ] || [ \"$name\" = \"..\" ]; then continue; fi; if [ -d \"$p\" ]; then type=d; else type=f; fi; mtime=$(stat -c %Y \"$p\" 2>/dev/null || stat -f %m \"$p\" 2>/dev/null || echo 0); printf '%s\\t%s\\t%s\\n' \"$name\" \"$type\" \"$mtime\"; done";
     format!(
         "sh -c {} sh {}",
         crate::ssh::shell_quote_posix(script),
@@ -302,7 +303,13 @@ fn std_scp_upload_command(
 fn parse_remote_dir_entries(remote_path: &str, raw: &str) -> Vec<RemoteFsEntry> {
     raw.lines()
         .filter_map(|line| {
-            let (name, kind) = line.split_once('\t')?;
+            let mut parts = line.split('\t');
+            let name = parts.next()?;
+            let kind = parts.next()?;
+            let modified_at_ms = parts
+                .next()
+                .and_then(|value| value.parse::<u64>().ok())
+                .map(|seconds| seconds.saturating_mul(1000));
             let is_dir = kind == "d";
             let extension = if is_dir {
                 None
@@ -316,6 +323,7 @@ fn parse_remote_dir_entries(remote_path: &str, raw: &str) -> Vec<RemoteFsEntry> 
                 path: format!("{}/{}", remote_path.trim_end_matches('/'), name),
                 is_dir,
                 extension,
+                modified_at_ms,
                 is_gitignored: false,
             })
         })
@@ -610,7 +618,7 @@ mod tests {
         assert!(!command.contains("-printf"));
         assert!(!command.contains("cd --"));
         assert!(command.contains("printf"));
-        assert!(command.contains("%s\\t%s\\n"));
+        assert!(command.contains("%s\\t%s\\t%s\\n"));
     }
 
     #[test]

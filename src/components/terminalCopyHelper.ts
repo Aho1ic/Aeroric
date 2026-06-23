@@ -1,4 +1,5 @@
 import type { Terminal } from "@xterm/xterm";
+import { shouldSuppressPrintableKeyRepeat } from "./terminalInputFix";
 
 /** Threshold below which we use the fast synchronous path. */
 const FAST_PATH_MAX_LINES = 200;
@@ -212,10 +213,7 @@ export async function handleTerminalContextMenu(
  * custom key event handler, so both behaviours share this one.
  * Returns a dispose function.
  */
-export function attachSmartCopy(
-  terminal: Terminal,
-  keyOptions?: TerminalKeyOptions,
-): () => void {
+export function attachSmartCopy(terminal: Terminal, keyOptions?: TerminalKeyOptions): () => void {
   let copyInProgress = false;
   const contextMenuState = {
     copyInProgress: false,
@@ -223,20 +221,17 @@ export function attachSmartCopy(
   };
 
   const handleCustomKeyEvent = (e: KeyboardEvent) => {
+    if (shouldSuppressPrintableKeyRepeat(e)) return false;
+
     // Insert-newline shortcut (e.g. Shift/Alt + Enter): emit our own sequence
     // instead of letting xterm send a bare CR, which the agent treats as submit.
-    if (
-      e.type === "keydown" &&
-      keyOptions?.onNewline &&
-      keyOptions.matchesNewline?.(e)
-    ) {
+    if (e.type === "keydown" && keyOptions?.onNewline && keyOptions.matchesNewline?.(e)) {
       e.preventDefault();
       keyOptions.onNewline();
       return false;
     }
 
-    const isCopy =
-      (e.metaKey || e.ctrlKey) && e.key === "c" && e.type === "keydown";
+    const isCopy = (e.metaKey || e.ctrlKey) && e.key === "c" && e.type === "keydown";
 
     if (!isCopy) return true; // Let xterm handle other keys
     if (!terminal.hasSelection()) return true; // No selection → send SIGINT as normal

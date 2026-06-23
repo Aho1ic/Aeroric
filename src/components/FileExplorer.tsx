@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useCancellableInvoke } from "../hooks/useCancellableInvoke";
 import { invoke } from "@tauri-apps/api/core";
 import { confirm } from "@tauri-apps/plugin-dialog";
-import { RotateCcw } from "lucide-react";
+import { ArrowDown, ArrowUp, RotateCcw } from "lucide-react";
 import s from "../styles";
 import { useToast } from "./Toast";
 import { useI18n } from "../i18n";
@@ -19,6 +19,11 @@ import {
 } from "./file-explorer/keyboard";
 import { SftpPreview } from "./sftp/SftpPreview";
 import type { SftpEndpoint } from "./sftp/sftpTypes";
+import {
+  type FileSortDirection,
+  type FileSortField,
+  sortFileEntries,
+} from "./file-explorer/fileEntryUtils";
 import {
   AUTO_REFRESH_MS,
   ROW_HEIGHT,
@@ -49,6 +54,18 @@ type FilePreviewRequest = {
   isDirectory: boolean;
   connections: SshConnection[];
 };
+
+function sortTreeNodes(
+  nodes: TreeNode[],
+  field: FileSortField,
+  direction: FileSortDirection,
+): TreeNode[] {
+  return sortFileEntries(nodes, field, direction).map((node) => {
+    if (!node.children) return node;
+    const children = sortTreeNodes(node.children, field, direction);
+    return children === node.children ? node : { ...node, children };
+  });
+}
 
 export function FileExplorer({
   projectPath,
@@ -85,6 +102,8 @@ export function FileExplorer({
   const [creatingValue, setCreatingValue] = useState("");
   const [renamingPath, setRenamingPath] = useState<string | null>(null);
   const [renamingValue, setRenamingValue] = useState("");
+  const [sortField, setSortField] = useState<FileSortField>("name");
+  const [sortDirection, setSortDirection] = useState<FileSortDirection>("asc");
   const [previewTarget, setPreviewTarget] = useState<{ path: string; isDir: boolean } | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const renameInputRef = useRef<HTMLInputElement>(null);
@@ -104,6 +123,24 @@ export function FileExplorer({
       isRoot: false,
     });
   }, []);
+
+  const handleSortFieldClick = useCallback((field: FileSortField) => {
+    if (field === sortField) {
+      setSortDirection((current) => (current === "asc" ? "desc" : "asc"));
+      return;
+    }
+    setSortField(field);
+    setSortDirection("asc");
+  }, [sortField]);
+
+  const renderSortArrow = (field: FileSortField) => {
+    if (field !== sortField) return null;
+    return sortDirection === "asc" ? (
+      <ArrowUp size={11} strokeWidth={2} data-testid="sort-arrow-up" aria-hidden="true" />
+    ) : (
+      <ArrowDown size={11} strokeWidth={2} data-testid="sort-arrow-down" aria-hidden="true" />
+    );
+  };
 
   const handleEmptyContextMenu = useCallback(
     (e: React.MouseEvent) => {
@@ -160,6 +197,10 @@ export function FileExplorer({
     nodesRef.current = nodes;
   }, [nodes]);
 
+  useEffect(() => {
+    setNodes((prev) => sortTreeNodes(prev, sortField, sortDirection));
+  }, [sortDirection, sortField]);
+
   const readEntries = useCallback(
     (path: string) =>
       remote
@@ -179,7 +220,10 @@ export function FileExplorer({
       if (showLoading) setLoading(true);
 
       try {
-        const nextNodes = await loadTreeNodes(projectPath, nodesRef.current, readEntries);
+        const nextNodes = await loadTreeNodes(projectPath, nodesRef.current, async (path) => {
+          const entries = await readEntries(path);
+          return entries ? sortFileEntries(entries, sortField, sortDirection) : entries;
+        });
         if (nextNodes === null || refreshId !== refreshIdRef.current) return;
         if (nextNodes !== nodesRef.current) {
           setNodes(nextNodes);
@@ -191,7 +235,7 @@ export function FileExplorer({
         }
       }
     },
-    [isCancelled, projectPath, readEntries],
+    [isCancelled, projectPath, readEntries, sortDirection, sortField],
   );
 
   useEffect(() => {
@@ -292,7 +336,10 @@ export function FileExplorer({
 
       void (async () => {
         const currentChildren = findNode(nodesRef.current, dirPath)?.children ?? [];
-        const nextChildren = await loadTreeNodes(dirPath, currentChildren, readEntries);
+        const nextChildren = await loadTreeNodes(dirPath, currentChildren, async (path) => {
+          const entries = await readEntries(path);
+          return entries ? sortFileEntries(entries, sortField, sortDirection) : entries;
+        });
         if (nextChildren === null) return;
         setNodes((prev) =>
           updateNode(prev, dirPath, (node) =>
@@ -301,7 +348,7 @@ export function FileExplorer({
         );
       })();
     },
-    [readEntries],
+    [readEntries, sortDirection, sortField],
   );
 
   const handleSelect = useCallback(
@@ -811,6 +858,44 @@ export function FileExplorer({
       {/* Header */}
       <div style={s.fileExplorerHeader}>
         <span style={s.fileExplorerHeaderTitle}>{t("file.files")}</span>
+        <div style={s.fileExplorerSortControls}>
+          <button
+            type="button"
+            aria-label={`${t("file.sortByName")} ${
+              sortField === "name"
+                ? sortDirection === "asc"
+                  ? "ascending"
+                  : "descending"
+                : ""
+            }`.trim()}
+            style={{
+              ...s.fileExplorerSortBtn,
+              ...(sortField === "name" ? s.fileExplorerSortBtnActive : undefined),
+            }}
+            onClick={() => handleSortFieldClick("name")}
+          >
+            {t("file.sortByName")}
+            {renderSortArrow("name")}
+          </button>
+          <button
+            type="button"
+            aria-label={`${t("file.sortByModified")} ${
+              sortField === "modified"
+                ? sortDirection === "asc"
+                  ? "ascending"
+                  : "descending"
+                : ""
+            }`.trim()}
+            style={{
+              ...s.fileExplorerSortBtn,
+              ...(sortField === "modified" ? s.fileExplorerSortBtnActive : undefined),
+            }}
+            onClick={() => handleSortFieldClick("modified")}
+          >
+            {t("file.sortByModified")}
+            {renderSortArrow("modified")}
+          </button>
+        </div>
         <button
           onClick={() => void refresh()}
           title={t("common.refresh")}

@@ -243,6 +243,23 @@ describe("DatabaseSidebarTree", () => {
     expect(pinnedTable.compareDocumentPosition(unpinnedTable) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
+  it("toggles DBX table child rows from the table expand button", async () => {
+    const props = renderTree();
+
+    await screen.findByRole("button", { name: /^users\s+TABLE$/i });
+    expect(screen.getByText("email").closest("button")).toBeInTheDocument();
+    expect(screen.getByText("users_email_idx").closest("button")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Collapse users" }));
+    expect(screen.queryByText("email")).not.toBeInTheDocument();
+    expect(screen.queryByText("users_email_idx")).not.toBeInTheDocument();
+    expect(props.onSelectDbxObject).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Expand users" }));
+    expect(screen.getByText("email").closest("button")).toBeInTheDocument();
+    expect(screen.getByText("users_email_idx").closest("button")).toBeInTheDocument();
+  });
+
   it("fires context menu callbacks for object, column, table child object, schema, database, and group nodes", async () => {
     const props = renderTree();
 
@@ -544,5 +561,29 @@ describe("DatabaseSidebarTree", () => {
     expect(screen.getByRole("button", { name: /^users\s+TABLE$/i })).toBeInTheDocument();
     expect(screen.getByText("email").closest("button")).toBeInTheDocument();
     expect(screen.getByText("users_email_idx").closest("button")).toBeInTheDocument();
+  });
+
+  it("uses compact indentation for DBX database, schema, and table rows", async () => {
+    renderTree({
+      dbxConnections: [dbxConnection],
+      activeDbxConnectionId: "dbx",
+      activeDbxConnection: dbxConnection,
+      activeDbxDatabase: "main",
+      activeDbxSchema: "public",
+      visibleDbxDatabases: [{ name: "main" }],
+      dbxSchemas: ["public"],
+      dbxObjects: [
+        {
+          name: "very_long_customer_order_event_history",
+          object_type: "table",
+          schema: "public",
+        },
+      ],
+      dbxHasSqlObjectBrowser: true,
+    });
+
+    expect(await screen.findByRole("button", { name: "main" })).toHaveStyle({ paddingLeft: "18px" });
+    expect(screen.getByRole("button", { name: "public" })).toHaveStyle({ paddingLeft: "30px" });
+    expect(screen.getByRole("button", { name: /very_long_customer_order_event_history/i })).toHaveStyle({ paddingLeft: "42px" });
   });
 });

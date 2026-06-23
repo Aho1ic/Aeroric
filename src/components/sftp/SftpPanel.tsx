@@ -11,6 +11,8 @@ import {
   ChevronDown,
   Code2,
   Copy,
+  Cpu,
+  Database,
   File,
   FileImage,
   FileJson,
@@ -20,9 +22,11 @@ import {
   HardDrive,
   MoveRight,
   Pencil,
+  Package,
   RefreshCw,
   Server,
   Trash2,
+  Video,
   X,
 } from "lucide-react";
 import type { SshConnection, ThemeVariant } from "../../types";
@@ -48,10 +52,13 @@ import {
   sftpKeyAction,
   sftpParentPath,
   shouldPromptForUnknownSftpConflict,
+  sortSftpEntries,
   type SftpConflictStrategy,
   type SftpEndpoint,
   type SftpEntry,
   type SftpOperation,
+  type SftpSortDirection,
+  type SftpSortField,
 } from "./sftpTypes";
 import s from "../../styles";
 
@@ -70,6 +77,8 @@ type PaneState = {
   childrenByPath: Map<string, SftpEntry[]>;
   loadingChildren: Set<string>;
   childErrors: Map<string, string>;
+  sortField: SftpSortField;
+  sortDirection: SftpSortDirection;
 };
 
 type DragPayload = {
@@ -142,6 +151,8 @@ function makeInitialPane(endpoint: SftpEndpoint): PaneState {
     childrenByPath: new Map(),
     loadingChildren: new Set(),
     childErrors: new Map(),
+    sortField: "name",
+    sortDirection: "asc",
   };
 }
 
@@ -159,6 +170,10 @@ function EntryIcon({ entry }: { entry: SftpEntry }) {
   return (
     <span className={`sftp-entry-icon ${kind}`}>
       {kind === "folder" && <Folder {...iconProps} />}
+      {kind === "database" && <Database {...iconProps} />}
+      {kind === "model" && <Cpu {...iconProps} />}
+      {kind === "video" && <Video {...iconProps} />}
+      {kind === "package" && <Package {...iconProps} />}
       {kind === "image" && <FileImage {...iconProps} />}
       {kind === "markdown" && <FileText {...iconProps} />}
       {kind === "json" && <FileJson {...iconProps} />}
@@ -229,7 +244,7 @@ export function SftpPanel({
         const entries = await readSftpDir(pane.endpoint, sshConnections);
         updatePane(side, (prev) => ({
           ...prev,
-          entries,
+          entries: sortSftpEntries(entries, prev.sortField, prev.sortDirection),
           loading: false,
           error: null,
           selectedPath: entries.some((entry) => entry.path === prev.selectedPath)
@@ -263,7 +278,7 @@ export function SftpPanel({
           const childrenByPath = cloneMap(prev.childrenByPath);
           const loadingChildren = cloneSet(prev.loadingChildren);
           const childErrors = cloneMap(prev.childErrors);
-          childrenByPath.set(path, entries);
+          childrenByPath.set(path, sortSftpEntries(entries, prev.sortField, prev.sortDirection));
           loadingChildren.delete(path);
           childErrors.delete(path);
           return { ...prev, childrenByPath, loadingChildren, childErrors };
@@ -602,6 +617,8 @@ export function SftpPanel({
       pane.entries,
       pane.expandedPaths,
       pane.childrenByPath,
+      pane.sortField,
+      pane.sortDirection,
     );
     return (
       <div className={`sftp-pane${focusedSide === side ? " focused" : ""}`}>
@@ -732,6 +749,63 @@ export function SftpPanel({
         {pane.configured && (
           <>
             <div className="sftp-actions">
+              <button
+                className={`sftp-action-btn${pane.sortField === "name" ? " active" : ""}`}
+                onClick={() =>
+                  updatePane(side, (prev) => ({
+                    ...prev,
+                    sortField: "name",
+                    entries: sortSftpEntries(prev.entries, "name", prev.sortDirection),
+                    childrenByPath: new Map(
+                      Array.from(prev.childrenByPath.entries()).map(([path, entries]) => [
+                        path,
+                        sortSftpEntries(entries, "name", prev.sortDirection),
+                      ]),
+                    ),
+                  }))
+                }
+              >
+                {t("file.sortByName")}
+              </button>
+              <button
+                className={`sftp-action-btn${pane.sortField === "modified" ? " active" : ""}`}
+                onClick={() =>
+                  updatePane(side, (prev) => ({
+                    ...prev,
+                    sortField: "modified",
+                    entries: sortSftpEntries(prev.entries, "modified", prev.sortDirection),
+                    childrenByPath: new Map(
+                      Array.from(prev.childrenByPath.entries()).map(([path, entries]) => [
+                        path,
+                        sortSftpEntries(entries, "modified", prev.sortDirection),
+                      ]),
+                    ),
+                  }))
+                }
+              >
+                {t("file.sortByModified")}
+              </button>
+              <button
+                className="sftp-action-btn"
+                onClick={() =>
+                  updatePane(side, (prev) => {
+                    const sortDirection = prev.sortDirection === "asc" ? "desc" : "asc";
+                    return {
+                      ...prev,
+                      sortDirection,
+                      entries: sortSftpEntries(prev.entries, prev.sortField, sortDirection),
+                      childrenByPath: new Map(
+                        Array.from(prev.childrenByPath.entries()).map(([path, entries]) => [
+                          path,
+                          sortSftpEntries(entries, prev.sortField, sortDirection),
+                        ]),
+                      ),
+                    };
+                  })
+                }
+              >
+                {pane.sortDirection === "asc" ? t("file.sortAsc") : t("file.sortDesc")}
+              </button>
               <button
                 className="sftp-action-btn"
                 onClick={() =>

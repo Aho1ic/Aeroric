@@ -7,7 +7,7 @@ interface NotificationsContextValue {
   result: NotificationResult | null;
   loading: boolean;
   error: string | null;
-  fetchNotifications: () => Promise<void>;
+  fetchNotifications: (force?: boolean) => Promise<void>;
   markRead: (id: string) => Promise<void>;
   markAllRead: () => Promise<void>;
 }
@@ -20,10 +20,10 @@ export function NotificationsProvider({ children }: { children: React.ReactNode 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const fetchNotifications = useCallback(async () => {
+  const fetchNotifications = useCallback(async (force = true) => {
     setLoading(true);
     try {
-      const data = await invoke<NotificationResult>("get_notifications");
+      const data = await invoke<NotificationResult>("get_notifications", { force });
       setResult(data);
       setError(null);
     } catch (err) {
@@ -41,13 +41,22 @@ export function NotificationsProvider({ children }: { children: React.ReactNode 
   }, [t]);
 
   useEffect(() => {
-    fetchNotifications();
-    // Long-running desktop app: poll periodically so users who never restart
-    // still receive new notifications. The backend throttles actual remote
-    // fetches to once per hour, so this only triggers a network hit every 6h.
-    const POLL_INTERVAL_MS = 6 * 60 * 60 * 1000;
-    const interval = setInterval(fetchNotifications, POLL_INTERVAL_MS);
-    return () => clearInterval(interval);
+    fetchNotifications(true);
+    const POLL_INTERVAL_MS = 60 * 1000;
+    const interval = setInterval(() => fetchNotifications(true), POLL_INTERVAL_MS);
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible") void fetchNotifications(true);
+    };
+    const handleFocus = () => {
+      void fetchNotifications(true);
+    };
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    window.addEventListener("focus", handleFocus);
+    return () => {
+      clearInterval(interval);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      window.removeEventListener("focus", handleFocus);
+    };
   }, [fetchNotifications]);
 
   const markRead = useCallback(async (id: string) => {
