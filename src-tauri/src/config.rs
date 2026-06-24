@@ -22,6 +22,10 @@ prompt_prefix = ""
 commit_prompt = "You are a git commit message generator. Based on the provided git diff, write a concise and descriptive commit message. Follow these rules:\n1. Use the imperative mood (e.g., \"Add feature\" not \"Added feature\")\n2. First line: type(scope): short summary (50 chars or less)\n   Types: feat, fix, docs, style, refactor, test, chore\n3. If needed, add a blank line then a brief body explaining what and why\n4. Output ONLY the commit message text, no explanations or markdown formatting"
 # Timeout in seconds when generating commit messages via the AI agent
 commit_message_timeout_secs = 15
+
+[editor]
+# Format editable local files after saving
+format_on_save = false
 "#;
 
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
@@ -48,10 +52,18 @@ fn default_commit_message_timeout_secs() -> u64 {
     DEFAULT_COMMIT_MESSAGE_TIMEOUT_SECS
 }
 
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, Default)]
+pub struct EditorConfig {
+    #[serde(default)]
+    pub format_on_save: bool,
+}
+
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
 pub struct ProjectConfig {
     pub agent: AgentConfig,
     pub git: GitConfig,
+    #[serde(default)]
+    pub editor: EditorConfig,
 }
 
 impl Default for ProjectConfig {
@@ -66,6 +78,7 @@ impl Default for ProjectConfig {
                 commit_prompt: "You are a git commit message generator. Based on the provided git diff, write a concise and descriptive commit message. Follow these rules:\n1. Use the imperative mood (e.g., \"Add feature\" not \"Added feature\")\n2. First line: type(scope): short summary (50 chars or less)\n   Types: feat, fix, docs, style, refactor, test, chore\n3. If needed, add a blank line then a brief body explaining what and why\n4. Output ONLY the commit message text, no explanations or markdown formatting".to_string(),
                 commit_message_timeout_secs: default_commit_message_timeout_secs(),
             },
+            editor: EditorConfig::default(),
         }
     }
 }
@@ -182,6 +195,55 @@ pub fn write_agent_config_file(agent: String, content: String) -> Result<(), Str
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn default_project_config_disables_format_on_save() {
+        assert!(!ProjectConfig::default().editor.format_on_save);
+
+        let config: ProjectConfig = toml::from_str(DEFAULT_CONFIG).unwrap();
+        assert!(!config.editor.format_on_save);
+    }
+
+    #[test]
+    fn parses_enabled_format_on_save_from_editor_config() {
+        let config: ProjectConfig = toml::from_str(
+            r#"
+[agent]
+default = "claude"
+default_permission_mode = "ask"
+prompt_prefix = ""
+
+[git]
+commit_prompt = "commit"
+commit_message_timeout_secs = 15
+
+[editor]
+format_on_save = true
+"#,
+        )
+        .unwrap();
+
+        assert!(config.editor.format_on_save);
+    }
+
+    #[test]
+    fn old_project_config_without_editor_uses_default_format_on_save() {
+        let config: ProjectConfig = toml::from_str(
+            r#"
+[agent]
+default = "claude"
+default_permission_mode = "ask"
+prompt_prefix = ""
+
+[git]
+commit_prompt = "commit"
+commit_message_timeout_secs = 15
+"#,
+        )
+        .unwrap();
+
+        assert!(!config.editor.format_on_save);
+    }
 
     #[test]
     fn built_in_agent_config_paths_are_unconfigured_by_default() {

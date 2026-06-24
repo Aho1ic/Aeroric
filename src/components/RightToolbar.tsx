@@ -11,6 +11,9 @@ import {
   ArrowLeftRight,
   Database,
   NotebookTabs,
+  CircleAlert,
+  FlaskConical,
+  Play,
 } from "lucide-react";
 import { useI18n } from "../i18n";
 import type { RightPanel } from "../hooks/useProjectPanels";
@@ -67,6 +70,24 @@ export function RightToolbar({
       icon: <History size={17} />,
       title: t("toolbar.gitHistory"),
       disabled: gitDisabled,
+    },
+    {
+      key: "problems",
+      icon: <CircleAlert size={17} />,
+      title: t("problems.title"),
+      disabled: gitDisabled,
+    },
+    {
+      key: "tests",
+      icon: <FlaskConical size={17} />,
+      title: t("tests.title"),
+      disabled: terminalDisabled,
+    },
+    {
+      key: "run",
+      icon: <Play size={17} />,
+      title: t("run.title"),
+      disabled: terminalDisabled,
     },
     { key: "ssh", icon: <Server size={17} />, title: t("ssh.title") },
     { key: "sftp", icon: <ArrowLeftRight size={17} />, title: t("sftp.title") },

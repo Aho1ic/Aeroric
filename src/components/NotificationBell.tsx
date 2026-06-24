@@ -1,8 +1,19 @@
 import { useState } from "react";
 import type { CSSProperties } from "react";
-import { Bell, X, ExternalLink, Check, CheckCheck, Info, AlertTriangle, AlertCircle } from "lucide-react";
+import {
+  Bell,
+  X,
+  ExternalLink,
+  Check,
+  CheckCheck,
+  Info,
+  AlertTriangle,
+  AlertCircle,
+  Download,
+} from "lucide-react";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import type { NotificationItem } from "../types";
+import { invoke } from "@tauri-apps/api/core";
+import type { NotificationItem, ReleaseInstallResult } from "../types";
 import { useNotifications } from "../hooks/useNotifications";
 import { useI18n } from "../i18n";
 import s from "../styles";
@@ -43,11 +54,34 @@ function NotificationEntry({
 }) {
   const { t } = useI18n();
   const [hov, setHov] = useState(false);
+  const [installing, setInstalling] = useState(false);
+  const [installError, setInstallError] = useState<string | null>(null);
+  const [installResult, setInstallResult] = useState<ReleaseInstallResult | null>(null);
+  const releaseTag = item.releaseTag ?? null;
+  const canInstallUpdate = Boolean(item.updateInstallSupported && releaseTag && !installResult);
 
   const handleClick = async () => {
     if (!item.isRead) onMarkRead(item.id);
     if (item.url) {
       await openUrl(item.url);
+    }
+  };
+
+  const handleInstallClick = async (event: React.MouseEvent<HTMLButtonElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (!releaseTag || installing) return;
+    setInstalling(true);
+    setInstallError(null);
+    try {
+      const result = await invoke<ReleaseInstallResult>("install_release_update", {
+        tagName: releaseTag,
+      });
+      setInstallResult(result);
+    } catch (error) {
+      setInstallError(String(error));
+    } finally {
+      setInstalling(false);
     }
   };
 
@@ -104,6 +138,52 @@ function NotificationEntry({
         </div>
         <div style={notificationBodyStyle}>{item.body}</div>
         {item.bodyZh && <div style={notificationBodyZhStyle}>{item.bodyZh}</div>}
+        {canInstallUpdate && (
+          <button
+            type="button"
+            disabled={installing || Boolean(installResult)}
+            onClick={handleInstallClick}
+            aria-label={t("notification.installReleaseAria", { tag: releaseTag ?? "" })}
+            style={{
+              marginTop: 8,
+              height: 24,
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 6,
+              padding: "0 8px",
+              border: "1px solid var(--border-dim)",
+              borderRadius: 6,
+              background: "var(--control-active-bg)",
+              color: "var(--control-active-fg)",
+              fontSize: 11,
+              fontWeight: 650,
+              cursor: installing ? "default" : "pointer",
+              opacity: installing ? 0.72 : 1,
+            }}
+          >
+            <Download size={12} strokeWidth={2.4} />
+            {installing
+              ? t("notification.installingRelease")
+              : t("notification.installRelease", { tag: releaseTag ?? "" })}
+          </button>
+        )}
+        {installResult && (
+          <div style={{ ...notificationBodyStyle, marginTop: 6, WebkitLineClamp: 2 }}>
+            {t("notification.installCompleteRestarting", { path: installResult.installedAppPath })}
+          </div>
+        )}
+        {installError && (
+          <div
+            style={{
+              ...notificationBodyStyle,
+              marginTop: 6,
+              color: "var(--danger)",
+              WebkitLineClamp: 2,
+            }}
+          >
+            {t("notification.installFailed", { error: installError })}
+          </div>
+        )}
         <div
           style={{
             fontSize: 10.5,
@@ -204,10 +284,7 @@ export function NotificationBell({
       </button>
 
       {open && (
-        <div
-          style={s.modalOverlay}
-          onClick={handleOverlayClick}
-        >
+        <div style={s.modalOverlay} onClick={handleOverlayClick}>
           <div
             style={{
               width: 420,

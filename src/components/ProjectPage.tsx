@@ -13,6 +13,9 @@ import type {
   FontFamily,
   SshConnection,
   CondaEnvironment,
+  TextSearchMatch,
+  DiagnosticItem,
+  TestFailure,
 } from "../types";
 import { resolveProjectLocation } from "../types";
 import { NewTaskView, type NewTaskDraft } from "./NewTaskView";
@@ -20,6 +23,11 @@ import { RunningView } from "./RunningView";
 import { FileExplorer } from "./FileExplorer";
 import { FileSearchDialog } from "./file-explorer/SearchPanel";
 import { FileViewer } from "./FileViewer";
+import { CommandPalette, type CommandPaletteCommand } from "./command-palette/CommandPalette";
+import { SearchPanel } from "./search/SearchPanel";
+import { ProblemsPanel } from "./problems/ProblemsPanel";
+import { RunConfigurationsPanel } from "./run/RunConfigurationsPanel";
+import { TestExplorerPanel } from "./tests/TestExplorerPanel";
 import { GitChanges } from "./GitChanges";
 import { GitHistory } from "./GitHistory";
 import { GitDiffViewer } from "./GitDiffViewer";
@@ -60,7 +68,25 @@ import {
 import { projectVisibilityStyle } from "./project-page/visibility";
 import { buildRunnableFileCommand, selectRunnableCondaEnvironment } from "./file-viewer/run";
 import { agentDisplayLabel } from "../agents";
+import { useI18n } from "../i18n";
 import s from "../styles";
+
+function escapeDraftHtml(text: string): string {
+  return text.replace(/[&<>"']/g, (char) => {
+    switch (char) {
+      case "&":
+        return "&amp;";
+      case "<":
+        return "&lt;";
+      case ">":
+        return "&gt;";
+      case '"':
+        return "&quot;";
+      default:
+        return "&#39;";
+    }
+  });
+}
 
 export function ProjectPage({
   project,
@@ -179,10 +205,11 @@ export function ProjectPage({
   selectedCondaEnvPath: string | null;
   onSelectedCondaEnvPathChange: (path: string | null) => void;
 }) {
+  const { t } = useI18n();
   const {
     rightPanel,
-    openFiles,
-    activeFilePath,
+    editorGroups,
+    activeEditorGroupId,
     openDiff,
     rightPanelWidth,
     setOpenDiff,
@@ -190,6 +217,8 @@ export function ProjectPage({
     closeRightPanel,
     handleTogglePanel,
     handleFileSelect,
+    handleEditorGroupFocus,
+    handleSplitEditorGroupRight,
     handleFileTabSelect,
     handleFileTabClose,
     handleCloseOtherFileTabs,
@@ -207,6 +236,7 @@ export function ProjectPage({
   const [rightSshMounted, setRightSshMounted] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [showFileSearch, setShowFileSearch] = useState(false);
+  const [commandPaletteInitialInput, setCommandPaletteInitialInput] = useState<string | null>(null);
   const [responsiveLayout, setResponsiveLayout] = useState({
     autoCollapseRail: false,
     compactComposeControls: false,
@@ -270,12 +300,18 @@ export function ProjectPage({
   const isSshMode = centerMode === "ssh";
   const isDatabaseMode = centerMode === "database";
   const isNotesMode = centerMode === "notes";
+  const hasEditorGroups = editorGroups.length > 0;
   const shellVisibleInCenter = shouldShowShellInCenter({
     shellMode: isShellMode,
-    hasOpenFiles: openFiles.length > 0,
+    hasOpenFiles: hasEditorGroups,
     hasOpenDiff: Boolean(openDiff),
   });
-  const visibleRightPanel = visibleDockPanel(rightPanel, { filesDisabled, gitDisabled });
+  const visibleRightPanel = visibleDockPanel(rightPanel, {
+    filesDisabled,
+    gitDisabled,
+    runDisabled: terminalDisabled,
+    testsDisabled: terminalDisabled,
+  });
   const selectedTask = projectTasks.find((t) => t.id === selectedTaskId) ?? null;
 
   useEffect(() => {
@@ -313,6 +349,50 @@ export function ProjectPage({
     },
     [handleFileSelect, openRightPanel],
   );
+
+  const handleTextSearchMatchOpen = useCallback(
+    (match: TextSearchMatch) => {
+      setShowShellTerminal(false);
+      handleFileSelect(match.path, match.name, { line: match.line, column: match.column });
+      openRightPanel("files");
+    },
+    [handleFileSelect, openRightPanel],
+  );
+
+  const handleDiagnosticOpen = useCallback(
+    (diagnostic: DiagnosticItem) => {
+      const name = diagnostic.file.split(/[\\/]/).pop() ?? diagnostic.file;
+      setShowShellTerminal(false);
+      handleFileSelect(diagnostic.file, name, {
+        line: diagnostic.line,
+        column: diagnostic.column,
+      });
+      openRightPanel("files");
+    },
+    [handleFileSelect, openRightPanel],
+  );
+
+  const handleTestFailureOpen = useCallback(
+    (failure: TestFailure) => {
+      const name = failure.file.split(/[\\/]/).pop() ?? failure.file;
+      setShowShellTerminal(false);
+      handleFileSelect(failure.file, name, {
+        line: failure.line,
+        column: failure.column,
+      });
+      openRightPanel("files");
+    },
+    [handleFileSelect, openRightPanel],
+  );
+
+  const handleOpenTextSearch = useCallback(() => {
+    setShowShellTerminal(false);
+    openRightPanel("search");
+  }, [openRightPanel]);
+
+  const openCommandPalette = useCallback((initialInput: string) => {
+    setCommandPaletteInitialInput(initialInput);
+  }, []);
 
   // 只挂载当前选中的任务的 xterm 实例，其他任务通过 snapshot 序列化后卸载。
   // 这样同时只有 1 个 WebGL context 存活，避免长时间运行后 GPU 内存累积。
@@ -391,7 +471,12 @@ export function ProjectPage({
       if (!cmd) return;
       sendOrQueueShellCommand(cmd);
     },
-    [projectLocation.kind, runnableCondaEnvironments, selectedCondaEnvPath, sendOrQueueShellCommand],
+    [
+      projectLocation.kind,
+      runnableCondaEnvironments,
+      selectedCondaEnvPath,
+      sendOrQueueShellCommand,
+    ],
   );
 
   const handleShellReady = useCallback(() => {
@@ -408,6 +493,26 @@ export function ProjectPage({
     clearFileAndDiff();
     onNewTask();
   }, [onNewTask, clearFileAndDiff]);
+
+  const handleCreateProblemsAgentTask = useCallback(
+    (prompt: string) => {
+      const existing = newTaskDraftRef.current;
+      newTaskDraftRef.current = {
+        promptHtml: escapeDraftHtml(prompt),
+        agent: existing?.agent ?? "claude",
+        permMode: existing?.permMode ?? "ask",
+        planMode: existing?.planMode ?? false,
+        goalMode: existing?.goalMode ?? false,
+        pastedImages: [],
+        pastedTexts: [],
+        launchMode: "local",
+        baseBranch: "",
+      };
+      clearFileAndDiff();
+      onNewTask();
+    },
+    [clearFileAndDiff, onNewTask],
+  );
 
   const handleDiffFileSelectWithCollapse = useCallback(
     (filePath: string, staged: boolean, label: string) => {
@@ -452,11 +557,106 @@ export function ProjectPage({
     [handleFileSelect],
   );
 
+  const commandPaletteCommands = useMemo<CommandPaletteCommand[]>(
+    () => [
+      {
+        id: "new-task",
+        title: t("commandPalette.command.newTask"),
+        keywords: ["agent", "task", "compose"],
+        run: handleNewTask,
+      },
+      {
+        id: "file-explorer",
+        title: t("toolbar.fileExplorer"),
+        keywords: ["files", "explorer"],
+        run: () => handleToggleRightPanel("files"),
+      },
+      {
+        id: "search-files",
+        title: t("toolbar.search"),
+        keywords: ["find", "text", "workspace"],
+        run: handleOpenTextSearch,
+      },
+      {
+        id: "terminal",
+        title: t("terminal.title"),
+        keywords: ["shell"],
+        run: () => {
+          closeRightPanel();
+          setShellTerminalMounted(true);
+          setShowShellTerminal(true);
+        },
+      },
+      {
+        id: "git-changes",
+        title: t("toolbar.gitChanges"),
+        keywords: ["source control", "changes"],
+        run: () => handleToggleRightPanel("git-changes"),
+      },
+      {
+        id: "git-history",
+        title: t("toolbar.gitHistory"),
+        keywords: ["commits", "log"],
+        run: () => handleToggleRightPanel("git-history"),
+      },
+      {
+        id: "run-configurations",
+        title: t("run.title"),
+        keywords: ["run", "configuration", "task"],
+        run: () => handleToggleRightPanel("run"),
+      },
+      {
+        id: "test-explorer",
+        title: t("tests.title"),
+        keywords: ["test", "vitest", "cargo"],
+        run: () => handleToggleRightPanel("tests"),
+      },
+      {
+        id: "settings",
+        title: t("settings.title"),
+        keywords: ["preferences"],
+        run: () => setShowSettings(true),
+      },
+      {
+        id: "toggle-theme",
+        title: t("commandPalette.command.toggleTheme"),
+        keywords: ["appearance", "dark", "light"],
+        run: onToggleTheme,
+      },
+    ],
+    [
+      closeRightPanel,
+      handleNewTask,
+      handleOpenTextSearch,
+      handleToggleRightPanel,
+      onToggleTheme,
+      t,
+    ],
+  );
+
+  useEffect(() => {
+    if (!visible) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      const modifier = event.metaKey || event.ctrlKey;
+      if (!modifier || event.altKey) return;
+      const key = event.key.toLowerCase();
+      if (event.shiftKey && key === "p") {
+        event.preventDefault();
+        openCommandPalette("> ");
+      } else if (!event.shiftKey && key === "p") {
+        event.preventDefault();
+        openCommandPalette("");
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [openCommandPalette, visible]);
+
   const currentTaskCreatedAt = selectedTask?.createdAt ?? null;
   const remoteSshMainVisible = shouldShowRemoteSshTerminalLayer({
     showRemoteSshTerminal,
     hasRemoteConnection: Boolean(remoteConnection),
-    hasOpenFiles: openFiles.length > 0,
+    hasOpenFiles: hasEditorGroups,
     hasOpenDiff: Boolean(openDiff),
     isSftpMode,
     isShellMode,
@@ -736,24 +936,59 @@ export function ProjectPage({
                     onClose={() => setOpenDiff(null)}
                   />
                 )
-              ) : openFiles.length > 0 ? (
-                <FileViewer
-                  tabs={openFiles}
-                  activeFilePath={activeFilePath}
-                  projectPath={fileRootPath}
-                  onSelectTab={handleFileTabSelect}
-                  onCloseTab={handleFileTabClose}
-                  onCloseOtherTabs={handleCloseOtherFileTabs}
-                  onCloseTabsToRight={handleCloseTabsToRight}
-                  onCloseAllTabs={handleCloseAllFileTabs}
-                  themeVariant={themeVariant}
-                  onRunMakeTarget={handleRunMakeTarget}
-                  remote={remoteFileContext}
-                  condaEnvironments={runnableCondaEnvironments}
-                  selectedCondaEnvPath={selectedCondaEnvPath}
-                  onSelectedCondaEnvPathChange={onSelectedCondaEnvPathChange}
-                  onRunPythonFile={handleRunPythonFile}
-                />
+              ) : editorGroups.length > 0 ? (
+                <div
+                  style={{
+                    flex: 1,
+                    minWidth: 0,
+                    minHeight: 0,
+                    display: "flex",
+                    overflow: "hidden",
+                    background: "var(--bg-panel)",
+                  }}
+                >
+                  {editorGroups.map((group, index) => (
+                    <div
+                      key={group.id}
+                      onMouseDown={() => handleEditorGroupFocus(group.id)}
+                      style={{
+                        flex: "1 1 0",
+                        minWidth: 0,
+                        minHeight: 0,
+                        display: "flex",
+                        borderLeft: index === 0 ? "none" : "1px solid var(--border-dim)",
+                        boxShadow:
+                          group.id === activeEditorGroupId
+                            ? "inset 0 0 0 1px var(--accent)"
+                            : "none",
+                      }}
+                    >
+                      <FileViewer
+                        tabs={group.tabs}
+                        activeFilePath={group.activePath}
+                        projectPath={fileRootPath}
+                        onSelectTab={(path) => handleFileTabSelect(path, group.id)}
+                        onCloseTab={(path) => handleFileTabClose(path, group.id)}
+                        onCloseOtherTabs={(path) => handleCloseOtherFileTabs(path, group.id)}
+                        onCloseTabsToRight={(path) => handleCloseTabsToRight(path, group.id)}
+                        onCloseAllTabs={() => handleCloseAllFileTabs(group.id)}
+                        themeVariant={themeVariant}
+                        onRunMakeTarget={handleRunMakeTarget}
+                        remote={remoteFileContext}
+                        condaEnvironments={runnableCondaEnvironments}
+                        selectedCondaEnvPath={selectedCondaEnvPath}
+                        onSelectedCondaEnvPathChange={onSelectedCondaEnvPathChange}
+                        onRunPythonFile={handleRunPythonFile}
+                        onFocusGroup={() => handleEditorGroupFocus(group.id)}
+                        onSplitRight={
+                          group.id === "main" && group.id === activeEditorGroupId
+                            ? handleSplitEditorGroupRight
+                            : undefined
+                        }
+                      />
+                    </div>
+                  ))}
+                </div>
               ) : !activeWorkspaceTask ? (
                 <NewTaskView
                   project={project}
@@ -862,7 +1097,7 @@ export function ProjectPage({
             .filter((t) => mountedTaskIds.has(t.id))
             .map((task) => {
               const isVisible = shouldShowRunningTaskInCenter({
-                hasOpenFiles: openFiles.length > 0,
+                hasOpenFiles: hasEditorGroups,
                 hasOpenDiff: Boolean(openDiff),
                 isShellMode,
                 isSftpMode,
@@ -962,6 +1197,40 @@ export function ProjectPage({
               />
             </ErrorBoundary>
           )}
+          {visibleRightPanel === "search" && (
+            <ErrorBoundary label="搜索">
+              <SearchPanel
+                projectPath={project.path}
+                width={effectiveRightPanelWidth}
+                onOpenMatch={handleTextSearchMatchOpen}
+              />
+            </ErrorBoundary>
+          )}
+          {visibleRightPanel === "problems" && (
+            <ErrorBoundary label="Problems">
+              <ProblemsPanel
+                projectPath={project.path}
+                width={effectiveRightPanelWidth}
+                onOpenDiagnostic={handleDiagnosticOpen}
+                onCreateAgentTask={handleCreateProblemsAgentTask}
+              />
+            </ErrorBoundary>
+          )}
+          {visibleRightPanel === "tests" && (
+            <ErrorBoundary label="Tests">
+              <TestExplorerPanel
+                projectPath={project.path}
+                width={effectiveRightPanelWidth}
+                onOpenFailure={handleTestFailureOpen}
+                onCreateAgentTask={handleCreateProblemsAgentTask}
+              />
+            </ErrorBoundary>
+          )}
+          {visibleRightPanel === "run" && (
+            <ErrorBoundary label="Run">
+              <RunConfigurationsPanel projectPath={project.path} width={effectiveRightPanelWidth} />
+            </ErrorBoundary>
+          )}
           <div
             style={{
               display: rightPanel === "ssh" ? "flex" : "none",
@@ -993,7 +1262,7 @@ export function ProjectPage({
           setShellTerminalMounted(true);
           setShowShellTerminal((v) => !v);
         }}
-        onOpenSearch={() => setShowFileSearch(true)}
+        onOpenSearch={() => handleToggleRightPanel("search")}
         onOpenSettings={() => setShowSettings(true)}
         filesDisabled={filesDisabled}
         gitDisabled={gitDisabled}
@@ -1008,6 +1277,16 @@ export function ProjectPage({
           projectPath={project.path}
           onFileSelect={handleSearchFileSelect}
           onClose={() => setShowFileSearch(false)}
+        />
+      )}
+
+      {commandPaletteInitialInput !== null && !searchDisabled && (
+        <CommandPalette
+          projectPath={project.path}
+          initialInput={commandPaletteInitialInput}
+          commands={commandPaletteCommands}
+          onOpenFile={handleSearchFileSelect}
+          onClose={() => setCommandPaletteInitialInput(null)}
         />
       )}
 

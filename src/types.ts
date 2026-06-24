@@ -264,11 +264,174 @@ export interface NotificationItem {
   url: string | null;
   createdAt: string;
   isRead: boolean;
+  releaseTag?: string | null;
+  updateInstallSupported?: boolean;
 }
 
 export interface NotificationResult {
   notifications: NotificationItem[];
   unreadCount: number;
+}
+
+export interface ReleaseInstallResult {
+  tagName: string;
+  assetName: string;
+  installedAppPath: string;
+  restarted: boolean;
+}
+
+export interface TextSearchMatch {
+  path: string;
+  name: string;
+  line: number;
+  column: number;
+  lineText: string;
+  matchText: string;
+}
+
+export interface TextSearchOptions {
+  caseSensitive?: boolean;
+  regex?: boolean;
+  wholeWord?: boolean;
+  includeGlob?: string | null;
+  excludeGlob?: string | null;
+  limit?: number;
+}
+
+export interface TextSearchFileGroup {
+  path: string;
+  name: string;
+  matches: TextSearchMatch[];
+}
+
+export interface TextReplacement {
+  path: string;
+  start: number;
+  end: number;
+  matchText: string;
+  replacementText: string;
+}
+
+export interface ReplacePreviewMatch extends TextSearchMatch {
+  replacementText: string;
+  start: number;
+  end: number;
+}
+
+export interface ReplacePreviewFile {
+  path: string;
+  name: string;
+  matches: ReplacePreviewMatch[];
+}
+
+export interface ReplacePreview {
+  query: string;
+  replacement: string;
+  files: ReplacePreviewFile[];
+  totalMatches: number;
+  truncated: boolean;
+}
+
+export interface ReplaceSummary {
+  filesChanged: number;
+  replacementsApplied: number;
+  replacementsSkipped: number;
+}
+
+export type DiagnosticSeverity = "error" | "warning" | "info";
+
+export interface DiagnosticItem {
+  source: string;
+  severity: DiagnosticSeverity;
+  message: string;
+  file: string;
+  line: number;
+  column: number;
+  code?: string | null;
+}
+
+export interface DiagnosticRunResult {
+  profile: string;
+  diagnostics: DiagnosticItem[];
+  rawOutput: string;
+}
+
+export type RunConfigType = "shell";
+
+export interface RunConfig {
+  id: string;
+  name: string;
+  type: RunConfigType;
+  command: string;
+  cwd: string;
+  env: Record<string, string>;
+}
+
+export interface RunConfigDocument {
+  version: 1;
+  configs: RunConfig[];
+}
+
+export type RunProcessStatus = "running" | "exited" | "failed" | "stopped";
+
+export interface RunProcessSnapshot {
+  runId: string;
+  configId: string;
+  name: string;
+  command: string;
+  cwd: string;
+  status: RunProcessStatus;
+  output: string;
+  exitCode?: number | null;
+  startedAt: number;
+  finishedAt?: number | null;
+}
+
+export type TestRunStatus = "passed" | "failed" | "error";
+
+export interface TestProfile {
+  id: string;
+  label: string;
+  command: string;
+}
+
+export interface TestCase {
+  profile: string;
+  name: string;
+  file: string;
+  line: number;
+  column: number;
+  status: TestRunStatus;
+  durationMs?: number | null;
+}
+
+export interface TestFailure {
+  profile: string;
+  name: string;
+  file: string;
+  line: number;
+  column: number;
+  message: string;
+}
+
+export interface TestRunResult {
+  profile: string;
+  status: TestRunStatus;
+  total: number;
+  passed: number;
+  failed: number;
+  tests: TestCase[];
+  failures: TestFailure[];
+  rawOutput: string;
+}
+
+export interface TestDiscoveryResult {
+  profiles: TestProfile[];
+}
+
+export interface FormatFileResult {
+  filePath: string;
+  command: string;
 }
 
 export interface UsageWindow {

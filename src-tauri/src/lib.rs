@@ -12,22 +12,28 @@ mod app_settings;
 mod conda;
 mod config;
 mod database;
+mod diagnostics;
 mod docker;
 mod event_watcher;
+mod formatter;
 mod fs;
 mod git;
 mod hooks;
+mod lsp;
 mod notification;
 mod platform;
 mod pty;
 mod remote_fs;
 mod remote_git;
+mod run_config;
+mod search;
 mod session;
 mod sftp;
 mod skills;
 mod ssh;
 mod storage;
 mod subprocess;
+mod tests;
 mod usage;
 
 use session::{ClaudeSessionInfo, CodexSessionInfo};
@@ -138,6 +144,7 @@ pub fn run() {
             claimed_session_paths: Mutex::new(HashSet::new()),
             codex_rpc: Arc::new(Mutex::new(None)),
         })
+        .manage(run_config::RunConfigState::default())
         .on_window_event(|window, event| {
             // macOS: 点关闭按钮(红灯)时隐藏窗口而非退出,与 Cmd+W 行为一致;
             // 点 Dock 图标可唤回(见下方 Reopen 处理)。
@@ -169,6 +176,7 @@ pub fn run() {
             fs::read_file_content,
             fs::read_image_preview,
             fs::write_file_content,
+            formatter::format_file,
             fs::create_file,
             fs::create_directory,
             fs::delete_path,
@@ -177,6 +185,20 @@ pub fn run() {
             fs::read_clipboard_file_paths,
             fs::list_project_files,
             fs::search_project_files,
+            search::search_text,
+            search::replace_text_preview,
+            search::apply_text_replacements,
+            lsp::lsp_server_status,
+            lsp::lsp_hover,
+            lsp::lsp_definition,
+            lsp::lsp_completion,
+            run_config::read_run_configs,
+            run_config::write_run_configs,
+            run_config::start_run_config,
+            run_config::stop_run_config,
+            run_config::read_run_process,
+            tests::discover_tests,
+            tests::run_tests,
             remote_fs::remote_read_dir_entries,
             remote_fs::remote_read_file_content,
             remote_fs::remote_read_image_preview,
@@ -226,6 +248,7 @@ pub fn run() {
             git::worktree_diff_stats,
             remote_git::remote_git_status,
             remote_git::remote_git_show_diff,
+            diagnostics::run_diagnostics,
             analytics::read_session_metrics,
             session::read_session_messages,
             session::export_session_markdown,
@@ -359,6 +382,7 @@ pub fn run() {
             notification::get_notifications,
             notification::mark_notification_read,
             notification::mark_all_notifications_read,
+            notification::install_release_update,
             usage::read_usage_snapshot,
             hooks::get_hook_status,
             hooks::get_hook_readiness,

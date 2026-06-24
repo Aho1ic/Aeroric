@@ -1,16 +1,31 @@
 import { useState, useCallback, useRef } from "react";
+import {
+  MAIN_EDITOR_GROUP_ID,
+  createDefaultEditorGroupsState,
+  openFileInEditorGroup,
+  splitEditorGroupRight,
+  type EditorGroup,
+  type EditorGroupId,
+  type EditorGroupsState,
+  type OpenFileSelection,
+  type OpenFileTab,
+  type OpenFilesState,
+} from "./projectPanelsState";
 
 type RightPanel =
   | "files"
   | "git-changes"
   | "git-history"
+  | "search"
+  | "problems"
+  | "tests"
+  | "run"
   | "ssh"
   | "sftp"
   | "database"
   | "docker"
   | "notes"
   | null;
-type OpenFileTab = { path: string; name: string };
 
 type OpenDiff =
   | { kind: "file"; filePath: string; staged: boolean; label: string }
@@ -19,13 +34,9 @@ type OpenDiff =
 
 export function useProjectPanels() {
   const [rightPanel, setRightPanel] = useState<RightPanel>(null);
-  const [openFilesState, setOpenFilesState] = useState<{
-    tabs: OpenFileTab[];
-    activePath: string | null;
-  }>({
-    tabs: [],
-    activePath: null,
-  });
+  const [editorGroupsState, setEditorGroupsState] = useState<EditorGroupsState>(() =>
+    createDefaultEditorGroupsState(),
+  );
   const [openDiff, setOpenDiff] = useState<OpenDiff | null>(null);
   const [rightPanelWidth, setRightPanelWidth] = useState(280);
   const [terminalHeight, setTerminalHeight] = useState(240);
@@ -46,68 +57,153 @@ export function useProjectPanels() {
     setRightPanel(null);
   }, []);
 
-  const handleFileSelect = useCallback((path: string, name: string) => {
-    setOpenDiff(null);
-    setOpenFilesState((prev) => ({
-      tabs: prev.tabs.some((tab) => tab.path === path) ? prev.tabs : [...prev.tabs, { path, name }],
-      activePath: path,
+  const handleFileSelect = useCallback(
+    (path: string, name: string, selection?: OpenFileSelection) => {
+      setOpenDiff(null);
+      setEditorGroupsState((prev) =>
+        openFileInEditorGroup(prev, { path, name, selection }, prev.activeGroupId),
+      );
+    },
+    [],
+  );
+
+  const resolveEditorGroupId = useCallback(
+    (state: EditorGroupsState, groupId?: EditorGroupId): EditorGroupId => {
+      if (groupId && state.groups.some((group) => group.id === groupId)) return groupId;
+      if (state.groups.some((group) => group.id === state.activeGroupId)) {
+        return state.activeGroupId;
+      }
+      return MAIN_EDITOR_GROUP_ID;
+    },
+    [],
+  );
+
+  const updateEditorGroup = useCallback(
+    (groupId: EditorGroupId | undefined, updater: (group: OpenFilesState) => OpenFilesState) => {
+      setEditorGroupsState((prev) => {
+        const targetGroupId = resolveEditorGroupId(prev, groupId);
+        const groups = prev.groups.map((group) => {
+          if (group.id !== targetGroupId) return group;
+          return { ...updater(group), id: group.id };
+        });
+        const nextActiveGroupId =
+          groups.find((group) => group.id === targetGroupId && group.tabs.length > 0)?.id ??
+          groups.find((group) => group.tabs.length > 0)?.id ??
+          MAIN_EDITOR_GROUP_ID;
+        return {
+          activeGroupId: nextActiveGroupId,
+          groups,
+        };
+      });
+    },
+    [resolveEditorGroupId],
+  );
+
+  const handleEditorGroupFocus = useCallback((groupId: EditorGroupId) => {
+    setEditorGroupsState((prev) => {
+      if (!prev.groups.some((group) => group.id === groupId)) return prev;
+      return { ...prev, activeGroupId: groupId };
+    });
+  }, []);
+
+  const handleSplitEditorGroupRight = useCallback(() => {
+    setEditorGroupsState((prev) => splitEditorGroupRight(prev));
+  }, []);
+
+  const handleFileTabSelect = useCallback(
+    (path: string, groupId?: EditorGroupId) => {
+      updateEditorGroup(groupId, (group) => ({
+        tabs: group.tabs,
+        activePath: group.tabs.some((tab) => tab.path === path) ? path : group.activePath,
+      }));
+    },
+    [updateEditorGroup],
+  );
+
+  const handleFileTabClose = useCallback(
+    (path: string, groupId?: EditorGroupId) => {
+      updateEditorGroup(groupId, (group) => {
+        const closingIndex = group.tabs.findIndex((tab) => tab.path === path);
+        if (closingIndex === -1) return group;
+
+        const nextTabs = group.tabs.filter((tab) => tab.path !== path);
+        const nextActivePath =
+          group.activePath !== path
+            ? group.activePath
+            : (nextTabs[Math.min(closingIndex, nextTabs.length - 1)]?.path ?? null);
+
+        return {
+          tabs: nextTabs,
+          activePath: nextActivePath,
+        };
+      });
+    },
+    [updateEditorGroup],
+  );
+
+  const handleCloseOtherFileTabs = useCallback(
+    (path: string, groupId?: EditorGroupId) => {
+      updateEditorGroup(groupId, (group) => {
+        const activeTab = group.tabs.find((tab) => tab.path === path);
+        if (!activeTab) return group;
+        return {
+          tabs: [activeTab],
+          activePath: activeTab.path,
+        };
+      });
+    },
+    [updateEditorGroup],
+  );
+
+  const handleCloseTabsToRight = useCallback(
+    (path: string, groupId?: EditorGroupId) => {
+      updateEditorGroup(groupId, (group) => {
+        const activeIndex = group.tabs.findIndex((tab) => tab.path === path);
+        if (activeIndex === -1) return group;
+
+        const nextTabs = group.tabs.slice(0, activeIndex + 1);
+        return {
+          tabs: nextTabs,
+          activePath: nextTabs.some((tab) => tab.path === group.activePath)
+            ? group.activePath
+            : path,
+        };
+      });
+    },
+    [updateEditorGroup],
+  );
+
+  const handleCloseAllFileTabs = useCallback(
+    (groupId?: EditorGroupId) => {
+      updateEditorGroup(groupId, () => ({
+        tabs: [],
+        activePath: null,
+      }));
+    },
+    [updateEditorGroup],
+  );
+
+  const activeEditorGroup =
+    editorGroupsState.groups.find((group) => group.id === editorGroupsState.activeGroupId) ??
+    editorGroupsState.groups[0] ??
+    null;
+
+  const openFiles = activeEditorGroup?.tabs ?? [];
+  const activeFilePath = activeEditorGroup?.activePath ?? null;
+
+  const openEditorGroups = editorGroupsState.groups.filter((group) => group.tabs.length > 0);
+
+  const handleLegacyFileTabSelect = useCallback((path: string) => {
+    setEditorGroupsState((prev) => ({
+      ...prev,
+      groups: prev.groups.map((group) => {
+        if (group.id !== prev.activeGroupId) return group;
+        return {
+          ...group,
+          activePath: group.tabs.some((tab) => tab.path === path) ? path : group.activePath,
+        };
+      }),
     }));
-  }, []);
-
-  const handleFileTabSelect = useCallback((path: string) => {
-    setOpenFilesState((prev) => ({
-      tabs: prev.tabs,
-      activePath: prev.tabs.some((tab) => tab.path === path) ? path : prev.activePath,
-    }));
-  }, []);
-
-  const handleFileTabClose = useCallback((path: string) => {
-    setOpenFilesState((prev) => {
-      const closingIndex = prev.tabs.findIndex((tab) => tab.path === path);
-      if (closingIndex === -1) return prev;
-
-      const nextTabs = prev.tabs.filter((tab) => tab.path !== path);
-      const nextActivePath =
-        prev.activePath !== path
-          ? prev.activePath
-          : nextTabs[Math.min(closingIndex, nextTabs.length - 1)]?.path ?? null;
-
-      return {
-        tabs: nextTabs,
-        activePath: nextActivePath,
-      };
-    });
-  }, []);
-
-  const handleCloseOtherFileTabs = useCallback((path: string) => {
-    setOpenFilesState((prev) => {
-      const activeTab = prev.tabs.find((tab) => tab.path === path);
-      if (!activeTab) return prev;
-      return {
-        tabs: [activeTab],
-        activePath: activeTab.path,
-      };
-    });
-  }, []);
-
-  const handleCloseTabsToRight = useCallback((path: string) => {
-    setOpenFilesState((prev) => {
-      const activeIndex = prev.tabs.findIndex((tab) => tab.path === path);
-      if (activeIndex === -1) return prev;
-
-      const nextTabs = prev.tabs.slice(0, activeIndex + 1);
-      return {
-        tabs: nextTabs,
-        activePath: nextTabs.some((tab) => tab.path === prev.activePath) ? prev.activePath : path,
-      };
-    });
-  }, []);
-
-  const handleCloseAllFileTabs = useCallback(() => {
-    setOpenFilesState({
-      tabs: [],
-      activePath: null,
-    });
   }, []);
 
   const handleDiffFileSelect = useCallback((filePath: string, staged: boolean, label: string) => {
@@ -123,10 +219,7 @@ export function useProjectPanels() {
   }, []);
 
   const clearFileAndDiff = useCallback(() => {
-    setOpenFilesState({
-      tabs: [],
-      activePath: null,
-    });
+    setEditorGroupsState(createDefaultEditorGroupsState());
     setOpenDiff(null);
   }, []);
 
@@ -172,8 +265,10 @@ export function useProjectPanels() {
 
   return {
     rightPanel,
-    openFiles: openFilesState.tabs,
-    activeFilePath: openFilesState.activePath,
+    editorGroups: openEditorGroups,
+    activeEditorGroupId: editorGroupsState.activeGroupId,
+    openFiles,
+    activeFilePath,
     openDiff,
     rightPanelWidth,
     terminalHeight,
@@ -182,7 +277,10 @@ export function useProjectPanels() {
     closeRightPanel,
     handleTogglePanel,
     handleFileSelect,
+    handleEditorGroupFocus,
+    handleSplitEditorGroupRight,
     handleFileTabSelect,
+    handleLegacyFileTabSelect,
     handleFileTabClose,
     handleCloseOtherFileTabs,
     handleCloseTabsToRight,
@@ -196,4 +294,4 @@ export function useProjectPanels() {
   };
 }
 
-export type { RightPanel, OpenDiff, OpenFileTab };
+export type { RightPanel, OpenDiff, OpenFileTab, OpenFileSelection, EditorGroup, EditorGroupId };

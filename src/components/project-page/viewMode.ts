@@ -105,9 +105,13 @@ export function visibleDockPanel(
   {
     filesDisabled,
     gitDisabled,
+    runDisabled = false,
+    testsDisabled = false,
   }: {
     filesDisabled: boolean;
     gitDisabled: boolean;
+    runDisabled?: boolean;
+    testsDisabled?: boolean;
   },
 ): Exclude<RightPanel, "sftp" | "docker" | "ssh" | "database" | "notes"> {
   if (
@@ -121,6 +125,8 @@ export function visibleDockPanel(
   }
   if (rightPanel === "files" && filesDisabled) return null;
   if ((rightPanel === "git-changes" || rightPanel === "git-history") && gitDisabled) return null;
+  if (rightPanel === "run" && runDisabled) return null;
+  if (rightPanel === "tests" && testsDisabled) return null;
   return rightPanel;
 }
 
@@ -138,8 +144,7 @@ export function projectResponsiveLayout({
   }
 
   const dockWidth = rightPanelVisible ? rightPanelWidth : 0;
-  const expandedCenterWidth =
-    width - RIGHT_TOOLBAR_WIDTH - dockWidth - PROJECT_RAIL_EXPANDED_WIDTH;
+  const expandedCenterWidth = width - RIGHT_TOOLBAR_WIDTH - dockWidth - PROJECT_RAIL_EXPANDED_WIDTH;
   const autoCollapseRail = rightPanelVisible && expandedCenterWidth < COMPOSE_COMFORT_WIDTH;
   const railWidth = autoCollapseRail ? PROJECT_RAIL_COLLAPSED_WIDTH : PROJECT_RAIL_EXPANDED_WIDTH;
   const centerWidth = width - RIGHT_TOOLBAR_WIDTH - dockWidth - railWidth;
@@ -150,7 +155,9 @@ export function projectResponsiveLayout({
   };
 }
 
-export function shouldShowShellInCenter({ shellMode }: {
+export function shouldShowShellInCenter({
+  shellMode,
+}: {
   shellMode: boolean;
   hasOpenFiles: boolean;
   hasOpenDiff: boolean;

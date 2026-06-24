@@ -3,22 +3,47 @@ import { invoke } from "@tauri-apps/api/core";
 import { Marked } from "marked";
 import DOMPurify from "dompurify";
 import * as Popover from "@radix-ui/react-popover";
-import { X, AlertCircle, Eye, PencilLine, MoreHorizontal, List, ChevronRight, Play, Check } from "lucide-react";
+import {
+  X,
+  AlertCircle,
+  Eye,
+  PencilLine,
+  MoreHorizontal,
+  List,
+  ChevronRight,
+  Play,
+  Check,
+  WandSparkles,
+  Columns2,
+} from "lucide-react";
 import { getFileColor } from "../utils";
-import ReactCodeMirror, { EditorView } from "@uiw/react-codemirror";
+import ReactCodeMirror, { EditorView, type ViewUpdate } from "@uiw/react-codemirror";
 import { githubDark, githubLight } from "@uiw/codemirror-theme-github";
 import { solarizedLight } from "@uiw/codemirror-theme-solarized";
 import { StreamLanguage } from "@codemirror/language";
 import type { Extension } from "@codemirror/state";
 import { ImagePreviewPane } from "./file-viewer/ImagePreviewPane";
 import type { OpenFileTab } from "../hooks/useProjectPanels";
-import type { CondaEnvironment, SshConnection, ThemeVariant } from "../types";
+import type { CondaEnvironment, FormatFileResult, SshConnection, ThemeVariant } from "../types";
 import { useI18n } from "../i18n";
 import { isRunnableScriptFile, selectRunnableCondaEnvironment } from "./file-viewer/run";
+import { lineColumnToOffset } from "./file-viewer/position";
+import type { OpenFileSelection } from "../hooks/projectPanelsState";
+import { useLanguageServer } from "../hooks/useLanguageServer";
 
 type RemoteFileContext = {
   connection: SshConnection;
   projectPath: string;
+};
+
+type ProjectEditorSettings = {
+  editor?: {
+    format_on_save?: boolean;
+  };
+};
+
+type SaveContentOptions = {
+  formatAfterSave?: boolean;
 };
 
 function isMarkdownFile(fileName: string): boolean {
@@ -60,7 +85,15 @@ function renderMarkdownWithToc(content: string): { html: string; toc: TocEntry[]
 
 function isPreviewableImageFile(fileName: string): boolean {
   const ext = fileName.split(".").pop()?.toLowerCase();
-  return ext === "png" || ext === "jpg" || ext === "jpeg" || ext === "gif" || ext === "webp" || ext === "bmp" || ext === "svg";
+  return (
+    ext === "png" ||
+    ext === "jpg" ||
+    ext === "jpeg" ||
+    ext === "gif" ||
+    ext === "webp" ||
+    ext === "bmp" ||
+    ext === "svg"
+  );
 }
 
 async function loadLanguageExtension(fileName: string): Promise<Extension> {
@@ -235,6 +268,11 @@ type ImagePreviewData = {
   byteLength: number;
 };
 
+type CursorPosition = {
+  line: number;
+  column: number;
+};
+
 function MarkdownToc({
   toc,
   activeId,
@@ -285,6 +323,7 @@ function FilePreviewPane({
   projectPath,
   themeVariant,
   previewMode,
+  selection,
   remote,
   onDirtyChange,
 }: {
@@ -293,6 +332,7 @@ function FilePreviewPane({
   projectPath: string;
   themeVariant: ThemeVariant;
   previewMode: boolean;
+  selection?: OpenFileSelection;
   remote?: RemoteFileContext;
   onDirtyChange?: (path: string, dirty: boolean) => void;
 }) {
@@ -308,18 +348,34 @@ function FilePreviewPane({
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("idle");
+  const [formatting, setFormatting] = useState(false);
+  const [formatError, setFormatError] = useState<string | null>(null);
+  const [formatOnSave, setFormatOnSave] = useState(false);
   const isMarkdown = isMarkdownFile(fileName);
   const isPreviewableImage = isPreviewableImageFile(fileName);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const savedResetRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const saveRevisionRef = useRef(0);
+  const formatRunRef = useRef(0);
   const scrollRef = useRef<HTMLDivElement | null>(null);
+  const editorViewRef = useRef<EditorView | null>(null);
+  const appliedSelectionKeyRef = useRef<string | null>(null);
   const [activeHeadingId, setActiveHeadingId] = useState<string | null>(null);
+  const [cursorPosition, setCursorPosition] = useState<CursorPosition>({ line: 1, column: 1 });
   const showMarkdownPreview = isMarkdown && previewMode && content !== null;
   const { html: markdownHtml, toc } = useMemo(
     () => (isMarkdown && content !== null ? renderMarkdownWithToc(content) : { html: "", toc: [] }),
     [isMarkdown, content],
   );
+  const selectionKey = selection ? `${filePath}:${selection.line}:${selection.column ?? 1}` : null;
+  const languageServer = useLanguageServer({
+    projectPath,
+    filePath,
+    content,
+    cursorLine: cursorPosition.line,
+    cursorColumn: cursorPosition.column,
+    enabled: !remote,
+  });
 
   const jumpToHeading = (id: string) => {
     const target = scrollRef.current?.querySelector<HTMLElement>(`#${CSS.escape(id)}`);
@@ -349,11 +405,16 @@ function FilePreviewPane({
   useEffect(() => {
     let cancelled = false;
 
+    saveRevisionRef.current += 1;
     setLoading(true);
     setContent(null);
     setImagePreview(null);
     setError(null);
+    setFormatError(null);
     setSaveStatus("idle");
+    setCursorPosition({ line: 1, column: 1 });
+    editorViewRef.current = null;
+    appliedSelectionKeyRef.current = null;
     onDirtyChange?.(filePath, false);
 
     const loadFile = isPreviewableImage
@@ -386,17 +447,39 @@ function FilePreviewPane({
           setLoading(false);
         });
 
-    loadFile
-      .catch((err) => {
-        if (cancelled) return;
-        setError(String(err));
-        setLoading(false);
-      });
+    loadFile.catch((err) => {
+      if (cancelled) return;
+      setError(String(err));
+      setLoading(false);
+    });
 
     return () => {
       cancelled = true;
     };
   }, [filePath, projectPath, isPreviewableImage, remote, onDirtyChange]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    if (remote) {
+      setFormatOnSave(false);
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    invoke<ProjectEditorSettings>("read_project_config", { projectPath })
+      .then((config) => {
+        if (!cancelled) setFormatOnSave(Boolean(config.editor?.format_on_save));
+      })
+      .catch(() => {
+        if (!cancelled) setFormatOnSave(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [projectPath, remote]);
 
   useEffect(
     () => () => {
@@ -407,12 +490,13 @@ function FilePreviewPane({
   );
 
   const saveContent = useCallback(
-    async (value: string) => {
+    async (value: string, options: SaveContentOptions = {}) => {
       if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
       if (savedResetRef.current) clearTimeout(savedResetRef.current);
       const revision = saveRevisionRef.current + 1;
       saveRevisionRef.current = revision;
       setSaveStatus("saving");
+      setFormatError(null);
       try {
         if (remote) {
           await invoke("remote_write_file_content", {
@@ -424,22 +508,94 @@ function FilePreviewPane({
         } else {
           await invoke("write_file_content", { path: filePath, content: value, projectPath });
         }
-        if (saveRevisionRef.current !== revision) return;
+        if (saveRevisionRef.current !== revision) return false;
         onDirtyChange?.(filePath, false);
+
+        const shouldFormatAfterSave = !remote && (options.formatAfterSave ?? formatOnSave);
+        if (shouldFormatAfterSave) {
+          const formatRun = formatRunRef.current + 1;
+          formatRunRef.current = formatRun;
+          setFormatting(true);
+          try {
+            await invoke<FormatFileResult>("format_file", { projectPath, filePath });
+            if (saveRevisionRef.current !== revision) return false;
+            const nextContent = await invoke<string>("read_file_content", {
+              path: filePath,
+              projectPath,
+            });
+            if (saveRevisionRef.current !== revision) return false;
+            setContent(nextContent);
+          } catch (err) {
+            if (saveRevisionRef.current !== revision) return false;
+            setSaveStatus("error");
+            setFormatError(String(err));
+            return false;
+          } finally {
+            if (formatRunRef.current === formatRun) setFormatting(false);
+          }
+        }
+
+        if (saveRevisionRef.current !== revision) return false;
         setSaveStatus("saved");
         savedResetRef.current = setTimeout(() => setSaveStatus("idle"), 2000);
+        return true;
       } catch {
-        if (saveRevisionRef.current !== revision) return;
+        if (saveRevisionRef.current !== revision) return false;
         setSaveStatus("error");
+        return false;
       }
     },
-    [filePath, onDirtyChange, projectPath, remote],
+    [filePath, formatOnSave, onDirtyChange, projectPath, remote],
   );
 
+  const handleFormatFile = useCallback(async () => {
+    if (remote || content === null || isPreviewableImage || formatting) return;
+    const formatRun = formatRunRef.current + 1;
+    formatRunRef.current = formatRun;
+    setFormatting(true);
+    setFormatError(null);
+    try {
+      if (saveStatus === "dirty") {
+        const saved = await saveContent(content, { formatAfterSave: false });
+        if (!saved) return;
+      }
+      const revision = saveRevisionRef.current + 1;
+      saveRevisionRef.current = revision;
+      await invoke<FormatFileResult>("format_file", { projectPath, filePath });
+      if (saveRevisionRef.current !== revision) return;
+      const nextContent = await invoke<string>("read_file_content", {
+        path: filePath,
+        projectPath,
+      });
+      if (saveRevisionRef.current !== revision) return;
+      setContent(nextContent);
+      onDirtyChange?.(filePath, false);
+      setSaveStatus("saved");
+      savedResetRef.current = setTimeout(() => setSaveStatus("idle"), 2000);
+    } catch (err) {
+      setSaveStatus("error");
+      setFormatError(String(err));
+    } finally {
+      if (formatRunRef.current === formatRun) setFormatting(false);
+    }
+  }, [
+    content,
+    filePath,
+    formatting,
+    isPreviewableImage,
+    onDirtyChange,
+    projectPath,
+    remote,
+    saveContent,
+    saveStatus,
+  ]);
+
   const handleChange = (value: string) => {
+    saveRevisionRef.current += 1;
     setContent(value);
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     if (savedResetRef.current) clearTimeout(savedResetRef.current);
+    setFormatError(null);
     onDirtyChange?.(filePath, true);
     setSaveStatus("dirty");
     saveTimerRef.current = setTimeout(() => {
@@ -465,21 +621,60 @@ function FilePreviewPane({
   }, [fileName]);
   const extensions = useMemo(() => [languageExtension, editorBaseTheme], [languageExtension]);
 
+  const applySelection = useCallback(
+    (view: EditorView, value: string) => {
+      if (!selection || !selectionKey || appliedSelectionKeyRef.current === selectionKey) return;
+      const offset = lineColumnToOffset(value, selection);
+      view.dispatch({
+        selection: { anchor: offset },
+        effects: EditorView.scrollIntoView(offset, { y: "center" }),
+      });
+      const line = view.state.doc.lineAt(offset);
+      setCursorPosition({ line: line.number, column: offset - line.from + 1 });
+      appliedSelectionKeyRef.current = selectionKey;
+      view.focus();
+    },
+    [selection, selectionKey],
+  );
+
+  const updateCursorPosition = useCallback((update: ViewUpdate) => {
+    const anchor = update.state.selection.main.head;
+    const line = update.state.doc.lineAt(anchor);
+    setCursorPosition({ line: line.number, column: anchor - line.from + 1 });
+  }, []);
+
+  useEffect(() => {
+    if (content === null || isPreviewableImage) return;
+    const view = editorViewRef.current;
+    if (!view) return;
+    applySelection(view, content);
+  }, [applySelection, content, isPreviewableImage]);
+
   const saveLabel =
     saveStatus === "saving"
       ? t("file.saving")
       : saveStatus === "dirty"
         ? t("file.unsaved")
         : saveStatus === "saved"
-        ? t("file.saved")
-        : saveStatus === "error"
-          ? t("file.saveFailed")
-          : null;
+          ? t("file.saved")
+          : saveStatus === "error"
+            ? t("file.saveFailed")
+            : null;
   const statusLabel = isPreviewableImage
     ? imagePreview
       ? `${imagePreview.mimeType} · ${t("file.readOnly")}`
       : t("file.imagePreview")
     : saveLabel;
+  const languageServerLabel =
+    !isPreviewableImage && content !== null && languageServer.supported
+      ? languageServer.loading
+        ? t("file.lspChecking")
+        : languageServer.status?.available
+          ? t("file.lspReady")
+          : languageServer.message
+            ? t("file.lspUnavailable")
+            : null
+      : null;
 
   return (
     <div
@@ -493,7 +688,11 @@ function FilePreviewPane({
         background: "var(--bg-panel)",
       }}
       onKeyDownCapture={(event) => {
-        if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "s" && content !== null) {
+        if (
+          (event.metaKey || event.ctrlKey) &&
+          event.key.toLowerCase() === "s" &&
+          content !== null
+        ) {
           event.preventDefault();
           event.stopPropagation();
           void saveContent(content);
@@ -557,16 +756,18 @@ function FilePreviewPane({
                   <MarkdownToc toc={toc} activeId={activeHeadingId} onJump={jumpToHeading} />
                 )}
                 <div ref={scrollRef} className="md-preview-scroll">
-                  <div
-                    className="md-preview"
-                    dangerouslySetInnerHTML={{ __html: markdownHtml }}
-                  />
+                  <div className="md-preview" dangerouslySetInnerHTML={{ __html: markdownHtml }} />
                 </div>
               </div>
             ) : (
               <ReactCodeMirror
                 value={content}
                 onChange={handleChange}
+                onCreateEditor={(view) => {
+                  editorViewRef.current = view;
+                  applySelection(view, content);
+                }}
+                onUpdate={updateCursorPosition}
                 theme={editorTheme}
                 extensions={extensions}
                 height="100%"
@@ -597,20 +798,99 @@ function FilePreviewPane({
         }}
       >
         <span
-          style={{ fontSize: 11, color: "var(--text-muted)", fontFamily: "var(--font-mono)" }}
+          style={{
+            minWidth: 0,
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+            fontSize: 11,
+            color: "var(--text-muted)",
+            fontFamily: "var(--font-mono)",
+          }}
         >
           {filePath}
         </span>
-        {statusLabel && (
+        {!isPreviewableImage && content !== null && (
           <span
             style={{
               marginLeft: "auto",
+              fontSize: 11,
+              color: "var(--text-muted)",
+              fontFamily: "var(--font-mono)",
+              flexShrink: 0,
+            }}
+          >
+            {t("file.cursorPosition", {
+              line: String(cursorPosition.line),
+              column: String(cursorPosition.column),
+            })}
+          </span>
+        )}
+        {!remote && !isPreviewableImage && content !== null && (
+          <button
+            type="button"
+            disabled={formatting}
+            onClick={() => void handleFormatFile()}
+            title={t("file.formatCurrent")}
+            aria-label={t("file.formatCurrent")}
+            style={{
+              height: 18,
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 4,
+              padding: "0 6px",
+              border: "1px solid var(--border-dim)",
+              borderRadius: 5,
+              background: formatting ? "var(--bg-hover)" : "transparent",
+              color: "var(--text-muted)",
+              fontSize: 10.5,
+              cursor: formatting ? "default" : "pointer",
+              flexShrink: 0,
+            }}
+          >
+            <WandSparkles size={11} />
+            {formatting ? t("file.formatting") : t("file.format")}
+          </button>
+        )}
+        {languageServerLabel && (
+          <span
+            title={languageServer.message ?? undefined}
+            style={{
+              fontSize: 11,
+              color: languageServer.status?.available ? "var(--text-muted)" : "var(--warning)",
+              fontFamily: "var(--font-mono)",
+              flexShrink: 0,
+            }}
+          >
+            {languageServerLabel}
+          </span>
+        )}
+        {statusLabel && (
+          <span
+            style={{
+              marginLeft: isPreviewableImage || content === null ? "auto" : 0,
               fontSize: 11,
               color: saveStatus === "error" ? "var(--danger-fg)" : "var(--text-muted)",
               fontFamily: "var(--font-mono)",
             }}
           >
             {statusLabel}
+          </span>
+        )}
+        {formatError && (
+          <span
+            title={formatError}
+            style={{
+              maxWidth: 220,
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+              fontSize: 11,
+              color: "var(--danger-fg)",
+              fontFamily: "var(--font-mono)",
+            }}
+          >
+            {t("file.formatFailed", { error: formatError })}
           </span>
         )}
       </div>
@@ -634,6 +914,8 @@ export function FileViewer({
   selectedCondaEnvPath,
   onSelectedCondaEnvPathChange,
   onRunPythonFile,
+  onFocusGroup,
+  onSplitRight,
 }: {
   tabs: OpenFileTab[];
   activeFilePath: string | null;
@@ -650,6 +932,8 @@ export function FileViewer({
   selectedCondaEnvPath?: string | null;
   onSelectedCondaEnvPathChange?: (path: string | null) => void;
   onRunPythonFile?: (path: string) => void;
+  onFocusGroup?: () => void;
+  onSplitRight?: () => void;
 }) {
   const { t } = useI18n();
   const [previewModes, setPreviewModes] = useState<Record<string, boolean>>({});
@@ -679,9 +963,7 @@ export function FileViewer({
   useEffect(() => {
     setDirtyTabs((prev) => {
       const openPaths = new Set(tabs.map((tab) => tab.path));
-      const next = Object.fromEntries(
-        Object.entries(prev).filter(([path]) => openPaths.has(path)),
-      );
+      const next = Object.fromEntries(Object.entries(prev).filter(([path]) => openPaths.has(path)));
       return Object.keys(next).length === Object.keys(prev).length ? prev : next;
     });
   }, [tabs]);
@@ -708,6 +990,7 @@ export function FileViewer({
 
   return (
     <div
+      onMouseDown={onFocusGroup}
       style={{
         flex: 1,
         display: "flex",
@@ -776,7 +1059,9 @@ export function FileViewer({
                     height: isDirty ? 8 : 14,
                     borderRadius: isDirty ? 999 : 2,
                     background: isDirty ? "var(--warning)" : fileColor,
-                    boxShadow: isDirty ? "0 0 0 2px color-mix(in srgb, var(--warning) 20%, transparent)" : undefined,
+                    boxShadow: isDirty
+                      ? "0 0 0 2px color-mix(in srgb, var(--warning) 20%, transparent)"
+                      : undefined,
                     flexShrink: 0,
                     display: "inline-block",
                   }}
@@ -853,6 +1138,28 @@ export function FileViewer({
             >
               {activePreviewMode ? <PencilLine size={13} /> : <Eye size={13} />}
               {activePreviewMode ? t("common.edit") : t("common.preview")}
+            </button>
+          )}
+          {onSplitRight && (
+            <button
+              type="button"
+              onClick={onSplitRight}
+              title={t("file.splitRight")}
+              aria-label={t("file.splitRight")}
+              style={{
+                background: "none",
+                border: "none",
+                cursor: "pointer",
+                padding: "4px",
+                borderRadius: 4,
+                display: "flex",
+                alignItems: "center",
+                color: "var(--text-hint)",
+              }}
+              onMouseEnter={(e) => (e.currentTarget.style.background = "var(--bg-hover)")}
+              onMouseLeave={(e) => (e.currentTarget.style.background = "none")}
+            >
+              <Columns2 size={15} />
             </button>
           )}
           <button
@@ -974,6 +1281,7 @@ export function FileViewer({
                 projectPath={projectPath}
                 themeVariant={themeVariant}
                 previewMode={!!previewModes[tab.path]}
+                selection={tab.selection}
                 remote={remote}
                 onDirtyChange={handleDirtyChange}
               />
@@ -1025,7 +1333,10 @@ export function FileViewer({
           <Popover.Portal>
             <Popover.Content sideOffset={6} align="end" className="file-viewer-tab-menu">
               {selectableCondaEnvironments.length === 0 ? (
-                <div className="file-viewer-tab-menu-item" style={{ cursor: "default", color: "var(--text-hint)" }}>
+                <div
+                  className="file-viewer-tab-menu-item"
+                  style={{ cursor: "default", color: "var(--text-hint)" }}
+                >
                   {t("file.noCondaEnvironment")}
                 </div>
               ) : (
@@ -1036,7 +1347,9 @@ export function FileViewer({
                     className="file-viewer-tab-menu-item"
                     onClick={() => onSelectedCondaEnvPathChange?.(env.path)}
                   >
-                    <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" }}>
+                    <span
+                      style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" }}
+                    >
                       {env.name}
                     </span>
                     {activeCondaEnv?.path === env.path && <Check size={12} color="var(--accent)" />}

@@ -121,8 +121,10 @@ fn build_remote_conda_env_list_command() -> String {
 }
 
 fn run_remote_conda_env_list(connection: &SshConnection) -> Result<Vec<u8>, String> {
-    let mut command =
-        crate::ssh::std_ssh_command_for_remote_command(connection, build_remote_conda_env_list_command());
+    let mut command = crate::ssh::std_ssh_command_for_remote_command(
+        connection,
+        build_remote_conda_env_list_command(),
+    );
     crate::subprocess::configure_background_command(&mut command);
     let output = command.output().map_err(|e| e.to_string())?;
     if output.status.success() {

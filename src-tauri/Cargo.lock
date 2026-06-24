@@ -41,6 +41,7 @@ dependencies = [
  "once_cell",
  "parking_lot",
  "portable-pty",
+ "regex",
  "reqwest 0.13.2",
  "rusqlite",
  "serde",

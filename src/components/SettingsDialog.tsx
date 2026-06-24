@@ -18,6 +18,9 @@ interface ProjectConfig {
     commit_prompt: string;
     commit_message_timeout_secs?: number;
   };
+  editor?: {
+    format_on_save?: boolean;
+  };
 }
 
 const PERMISSION_MODES: PermissionMode[] = ["ask", "auto_edit", "full_access"];
@@ -89,6 +92,7 @@ function ProjectSettings({ projectPath, onClose }: { projectPath: string; onClos
   const [commitMessageTimeoutSecs, setCommitMessageTimeoutSecs] = useState(
     String(DEFAULT_COMMIT_MESSAGE_TIMEOUT_SECS),
   );
+  const [formatOnSave, setFormatOnSave] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const promptPrefixImeFix = useTextInputIMEFix<HTMLTextAreaElement>(setPromptPrefix);
@@ -105,7 +109,8 @@ function ProjectSettings({ projectPath, onClose }: { projectPath: string; onClos
         }
         setPromptPrefix(c.agent.prompt_prefix ?? "");
         setCommitPrompt(c.git.commit_prompt);
-        const timeoutSecs = c.git.commit_message_timeout_secs ?? DEFAULT_COMMIT_MESSAGE_TIMEOUT_SECS;
+        const timeoutSecs =
+          c.git.commit_message_timeout_secs ?? DEFAULT_COMMIT_MESSAGE_TIMEOUT_SECS;
         setCommitMessageTimeoutSecs(
           String(
             Math.min(
@@ -114,6 +119,7 @@ function ProjectSettings({ projectPath, onClose }: { projectPath: string; onClos
             ),
           ),
         );
+        setFormatOnSave(Boolean(c.editor?.format_on_save));
       })
       .catch((e) => setError(String(e)));
   }, [projectPath]);
@@ -146,6 +152,7 @@ function ProjectSettings({ projectPath, onClose }: { projectPath: string; onClos
   }
 
   async function handleSave() {
+    if (!config) return;
     setSaving(true);
     setError(null);
     try {
@@ -162,14 +169,21 @@ function ProjectSettings({ projectPath, onClose }: { projectPath: string; onClos
       await invoke("write_project_config", {
         projectPath,
         config: {
+          ...config,
           agent: {
+            ...config.agent,
             default: agentDefault,
             default_permission_mode: defaultPermissionMode,
             prompt_prefix: promptPrefix,
           },
           git: {
+            ...config.git,
             commit_prompt: commitPrompt,
             commit_message_timeout_secs: timeoutSecs,
+          },
+          editor: {
+            ...(config.editor ?? {}),
+            format_on_save: formatOnSave,
           },
         },
       });
@@ -208,9 +222,7 @@ function ProjectSettings({ projectPath, onClose }: { projectPath: string; onClos
               <div style={s.modalField}>
                 <label style={s.modalLabel}>
                   {t("settings.defaultPermissionMode")}
-                  <span style={s.modalLabelHint}>
-                    {t("settings.defaultPermissionModeHint")}
-                  </span>
+                  <span style={s.modalLabelHint}>{t("settings.defaultPermissionModeHint")}</span>
                 </label>
                 <Select
                   value={defaultPermissionMode}
@@ -239,13 +251,39 @@ function ProjectSettings({ projectPath, onClose }: { projectPath: string; onClos
             </div>
 
             <div style={s.modalSection}>
+              <div style={s.modalSectionTitle}>{t("settings.editor")}</div>
+              <div style={s.modalField}>
+                <label
+                  style={{
+                    ...s.modalLabel,
+                    display: "flex",
+                    alignItems: "flex-start",
+                    gap: 9,
+                    cursor: "pointer",
+                  }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={formatOnSave}
+                    onChange={(e) => setFormatOnSave(e.target.checked)}
+                    style={{ marginTop: 1 }}
+                  />
+                  <span>
+                    {t("settings.formatOnSave")}
+                    <span style={{ ...s.modalLabelHint, display: "block", marginLeft: 0 }}>
+                      {t("settings.formatOnSaveHint")}
+                    </span>
+                  </span>
+                </label>
+              </div>
+            </div>
+
+            <div style={s.modalSection}>
               <div style={s.modalSectionTitle}>{t("settings.git")}</div>
               <div style={s.modalField}>
                 <label style={s.modalLabel}>
                   {t("settings.commitMessageTimeout")}
-                  <span style={s.modalLabelHint}>
-                    {t("settings.commitMessageTimeoutHint")}
-                  </span>
+                  <span style={s.modalLabelHint}>{t("settings.commitMessageTimeoutHint")}</span>
                 </label>
                 <div style={s.settingsFlexRow}>
                   <input
@@ -263,9 +301,7 @@ function ProjectSettings({ projectPath, onClose }: { projectPath: string; onClos
               <div style={s.modalField}>
                 <label style={s.modalLabel}>
                   {t("settings.commitPrompt")}
-                  <span style={s.modalLabelHint}>
-                    {t("settings.commitPromptHint")}
-                  </span>
+                  <span style={s.modalLabelHint}>{t("settings.commitPromptHint")}</span>
                 </label>
                 <textarea
                   style={s.modalTextarea}
