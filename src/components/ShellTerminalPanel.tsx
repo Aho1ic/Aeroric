@@ -55,7 +55,7 @@ interface Props {
   onResizeStart?: (e: React.MouseEvent) => void;
 }
 
-const MAX_SHELLS = 5;
+export const SHELL_TERMINAL_MAX_SESSIONS = 10;
 
 export function deriveShellTerminalFontSize(size: TerminalFontSize): TerminalFontSize {
   return Math.max(10, size - 1);
@@ -344,7 +344,7 @@ export const ShellTerminalPanel = forwardRef<ShellTerminalPanelHandle, Props>(
     );
 
     const handleAddShell = useCallback(() => {
-      if (shells.length >= MAX_SHELLS) return;
+      if (shells.length >= SHELL_TERMINAL_MAX_SESSIONS) return;
       const nextShell = createShellSession(projectId, nextShellIndexRef.current++);
       setShells((prev) => [...prev, nextShell]);
       setActiveShellId(nextShell.id);
@@ -427,7 +427,7 @@ export const ShellTerminalPanel = forwardRef<ShellTerminalPanelHandle, Props>(
             {t("terminal.title")}
           </span>
           <span style={{ fontSize: 11, color: "var(--text-muted)" }}>
-            {shells.length}/{MAX_SHELLS}
+            {shells.length}/{SHELL_TERMINAL_MAX_SESSIONS}
           </span>
           {onMinimize && (
             <button
@@ -546,16 +546,24 @@ export const ShellTerminalPanel = forwardRef<ShellTerminalPanelHandle, Props>(
           })}
           <button
             onClick={handleAddShell}
-            disabled={shells.length >= MAX_SHELLS}
-            title={shells.length >= MAX_SHELLS ? t("terminal.limitReached") : t("terminal.newTerminal")}
+            disabled={shells.length >= SHELL_TERMINAL_MAX_SESSIONS}
+            title={
+              shells.length >= SHELL_TERMINAL_MAX_SESSIONS
+                ? t("terminal.limitReached")
+                : t("terminal.newTerminal")
+            }
             style={{
               width: 22,
               height: 22,
               borderRadius: 999,
               border: "1px solid var(--border-dim)",
-              background: shells.length >= MAX_SHELLS ? "transparent" : "var(--bg-hover)",
-              color: shells.length >= MAX_SHELLS ? "var(--text-hint)" : "var(--text-secondary)",
-              cursor: shells.length >= MAX_SHELLS ? "not-allowed" : "pointer",
+              background:
+                shells.length >= SHELL_TERMINAL_MAX_SESSIONS ? "transparent" : "var(--bg-hover)",
+              color:
+                shells.length >= SHELL_TERMINAL_MAX_SESSIONS
+                  ? "var(--text-hint)"
+                  : "var(--text-secondary)",
+              cursor: shells.length >= SHELL_TERMINAL_MAX_SESSIONS ? "not-allowed" : "pointer",
               display: "inline-flex",
               alignItems: "center",
               justifyContent: "center",

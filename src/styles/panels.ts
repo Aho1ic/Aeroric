@@ -946,6 +946,7 @@ export const panels = {
     minWidth: 148,
     padding: "3px 0",
     fontSize: 12.5,
+    color: "var(--text-primary)",
   },
   fileCtxSeparator: {
     height: 1,
@@ -971,6 +972,7 @@ export const panels = {
     fontFamily: "var(--font-ui)",
     lineHeight: "28px",
     gap: 8,
+    color: "var(--text-primary)",
   },
   attachmentsRow: {
     display: "flex",
@@ -1658,5 +1660,4 @@ export const panels = {
     fontSize: 12,
     lineHeight: 1.5,
   },
-
 } satisfies Record<string, React.CSSProperties>;

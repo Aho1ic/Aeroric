@@ -80,17 +80,57 @@ describe("FileExplorer UI", () => {
     renderExplorer();
 
     await screen.findByText("app.tsx");
-    const sortControls = screen.getByRole("button", { name: /Name/i }).parentElement as HTMLElement;
-    const nameButton = within(sortControls).getByRole("button", { name: /Name ascending/i });
-    const modifiedButton = within(sortControls).getByRole("button", { name: /Modified/i });
+    const sortControls = screen.getByRole("button", { name: /Modified/i }).parentElement as HTMLElement;
+    const nameButton = within(sortControls).getByRole("button", { name: /Name/i });
+    const modifiedButton = within(sortControls).getByRole("button", { name: /Modified descending/i });
 
-    expect(within(nameButton).getByTestId("sort-arrow-up")).toBeInTheDocument();
+    expect(within(modifiedButton).getByTestId("sort-arrow-down")).toBeInTheDocument();
     expect(within(sortControls).queryByRole("button", { name: /^Asc$|^Desc$/i })).not.toBeInTheDocument();
-
-    await user.click(nameButton);
-    expect(within(nameButton).getByTestId("sort-arrow-down")).toBeInTheDocument();
 
     await user.click(modifiedButton);
     expect(within(modifiedButton).getByTestId("sort-arrow-up")).toBeInTheDocument();
+
+    await user.click(nameButton);
+    expect(within(nameButton).getByTestId("sort-arrow-up")).toBeInTheDocument();
+  });
+
+  it("opens sqlite database files in the database workspace", async () => {
+    const user = userEvent.setup();
+    const onFileSelect = vi.fn();
+    const onOpenDatabaseFile = vi.fn();
+    vi.mocked(invoke).mockImplementation((command) => {
+      if (command === "read_dir_entries") {
+        return Promise.resolve([
+          {
+            name: "app.db",
+            path: "/repo/app.db",
+            is_dir: false,
+            extension: "db",
+            is_gitignored: false,
+            modifiedAtMs: 300,
+          },
+        ]);
+      }
+      return Promise.resolve(undefined);
+    });
+
+    render(
+      React.createElement(
+        I18nProvider,
+        null,
+        React.createElement(FileExplorer, {
+          projectPath: "/repo",
+          projectName: "repo",
+          onFileSelect,
+          onOpenDatabaseFile,
+          themeVariant: "light",
+        }),
+      ),
+    );
+
+    await user.click(await screen.findByText("app.db"));
+
+    expect(onOpenDatabaseFile).toHaveBeenCalledWith("/repo/app.db", "app.db");
+    expect(onFileSelect).not.toHaveBeenCalled();
   });
 });

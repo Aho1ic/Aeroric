@@ -67,6 +67,7 @@ import {
 } from "./project-page/viewMode";
 import { projectVisibilityStyle } from "./project-page/visibility";
 import { buildRunnableFileCommand, selectRunnableCondaEnvironment } from "./file-viewer/run";
+import { isSqliteDatabaseFileName } from "./file-explorer/fileEntryUtils";
 import { agentDisplayLabel } from "../agents";
 import { useI18n } from "../i18n";
 import s from "../styles";
@@ -249,6 +250,7 @@ export function ProjectPage({
     isDirectory: boolean;
     connections: SshConnection[];
   } | null>(null);
+  const [databaseFilePath, setDatabaseFilePath] = useState<string | null>(null);
   const projectBodyRef = useRef<HTMLDivElement>(null);
   const shellRef = useRef<ShellTerminalPanelHandle>(null);
   const remoteSshRef = useRef<SshTerminalPanelHandle>(null);
@@ -552,9 +554,26 @@ export function ProjectPage({
   const handleFileSelectWithShellMinimize = useCallback(
     (path: string, name: string) => {
       setShowShellTerminal(false);
+      if (isSqliteDatabaseFileName(name)) {
+        setDatabaseFilePath(path);
+        clearFileAndDiff();
+        openRightPanel("database");
+        return;
+      }
       handleFileSelect(path, name);
     },
-    [handleFileSelect],
+    [clearFileAndDiff, handleFileSelect, openRightPanel],
+  );
+
+  const handleOpenDatabaseFile = useCallback(
+    (path: string, name: string) => {
+      if (!isSqliteDatabaseFileName(name)) return;
+      setShowShellTerminal(false);
+      setDatabaseFilePath(path);
+      clearFileAndDiff();
+      openRightPanel("database");
+    },
+    [clearFileAndDiff, openRightPanel],
   );
 
   const commandPaletteCommands = useMemo<CommandPaletteCommand[]>(
@@ -896,6 +915,7 @@ export function ProjectPage({
               ) : isDatabaseMode ? (
                 <DatabaseView
                   projectRoot={projectLocation.kind === "local" ? project.path : undefined}
+                  initialSqliteFilePath={databaseFilePath ?? undefined}
                   remoteConnection={projectLocation.kind === "ssh" ? remoteConnection : undefined}
                   remoteProjectPath={
                     projectLocation.kind === "ssh" ? projectLocation.remotePath : undefined
@@ -904,7 +924,7 @@ export function ProjectPage({
                 />
               ) : isNotesMode ? (
                 <div style={projectNotebookPanelStyle({ containerWidth: projectBodyWidth })}>
-                  <ErrorBoundary label="记事本">
+                  <ErrorBoundary label="随手记">
                     <NotebookPanel width="100%" />
                   </ErrorBoundary>
                 </div>
@@ -1174,6 +1194,7 @@ export function ProjectPage({
                 remote={remoteFileContext}
                 themeVariant={themeVariant}
                 onPreviewRequest={setFilePreviewTarget}
+                onOpenDatabaseFile={handleOpenDatabaseFile}
               />
             </ErrorBoundary>
           )}

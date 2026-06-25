@@ -1,6 +1,26 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { DragEvent, KeyboardEvent, MouseEvent } from "react";
-import { Braces, ChevronDown, ChevronRight, Crosshair, Database, Eye, Folder, Hash, KeyRound, ListTree, Package, Pin, Plug, ScrollText, Search, Table2, Trash2, UsersRound, Zap } from "lucide-react";
+import {
+  Braces,
+  ChevronDown,
+  ChevronRight,
+  Crosshair,
+  Database,
+  Eye,
+  Folder,
+  Hash,
+  KeyRound,
+  ListTree,
+  Package,
+  Pin,
+  Plug,
+  ScrollText,
+  Search,
+  Table2,
+  Trash2,
+  UsersRound,
+  Zap,
+} from "lucide-react";
 import type {
   AeroricDbConnectionConfig,
   DbConnectionConfig,
@@ -21,7 +41,10 @@ type SearchScope = "all" | "connections" | "databases" | "objects";
 type DbxObjectGroupKey = "tables" | "views" | "procedures" | "functions" | "sequences" | "packages";
 type RedisSidebarScanState = { cursor: number; totalKeys: number };
 
-const databaseObjectNameCollator = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
+const databaseObjectNameCollator = new Intl.Collator(undefined, {
+  numeric: true,
+  sensitivity: "base",
+});
 const EMPTY_PINNED_TREE_NODE_IDS = new Set<string>();
 
 interface DatabaseSidebarTreeProps {
@@ -56,7 +79,11 @@ interface DatabaseSidebarTreeProps {
   onDeleteConnection: (connectionId: string) => void;
   onDeleteDbxConnection: (connectionId: string) => void;
   onSelectDatabase: (connection: AeroricDbConnectionConfig, database: string | null) => void;
-  onSelectDbxSchema: (connection: AeroricDbConnectionConfig, database: string, schema: string) => void;
+  onSelectDbxSchema: (
+    connection: AeroricDbConnectionConfig,
+    database: string,
+    schema: string,
+  ) => void;
   onSelectLegacyObject: (object: DbObject) => void;
   onSelectDbxObject: (object: DbxObjectInfo) => void;
   onOpenUserAdmin: (connection: AeroricDbConnectionConfig) => void;
@@ -64,12 +91,28 @@ interface DatabaseSidebarTreeProps {
   onSelectRedisDatabase: (connection: AeroricDbConnectionConfig, database: number) => void;
   onExpandRedisDatabase: (connection: AeroricDbConnectionConfig, database: number) => void;
   onLoadMoreRedisKeys: (connection: AeroricDbConnectionConfig, database: number) => void;
-  onSelectRedisKey: (connection: AeroricDbConnectionConfig, database: number, keyRaw: string) => void;
+  onSelectRedisKey: (
+    connection: AeroricDbConnectionConfig,
+    database: number,
+    keyRaw: string,
+  ) => void;
   onSelectMongoDatabase: (connection: AeroricDbConnectionConfig, database: string) => void;
   onExpandMongoDatabase: (connection: AeroricDbConnectionConfig, database: string) => void;
-  onSelectMongoCollection: (connection: AeroricDbConnectionConfig, database: string, collection: string) => void;
-  onExpandMongoCollection: (connection: AeroricDbConnectionConfig, database: string, collection: string) => void;
-  onLoadMoreMongoDocuments: (connection: AeroricDbConnectionConfig, database: string, collection: string) => void;
+  onSelectMongoCollection: (
+    connection: AeroricDbConnectionConfig,
+    database: string,
+    collection: string,
+  ) => void;
+  onExpandMongoCollection: (
+    connection: AeroricDbConnectionConfig,
+    database: string,
+    collection: string,
+  ) => void;
+  onLoadMoreMongoDocuments: (
+    connection: AeroricDbConnectionConfig,
+    database: string,
+    collection: string,
+  ) => void;
   onSelectMongoDocument: (
     connection: AeroricDbConnectionConfig,
     database: string,
@@ -81,11 +124,23 @@ interface DatabaseSidebarTreeProps {
   onRefreshConnection: (connection: DbConnectionConfig) => void;
   onRefreshDbxConnection: (connection: AeroricDbConnectionConfig) => void;
   onRefreshDatabase: (connection: AeroricDbConnectionConfig, database: string | null) => void;
-  onRefreshDbxSchema: (connection: AeroricDbConnectionConfig, database: string, schema: string) => void;
+  onRefreshDbxSchema: (
+    connection: AeroricDbConnectionConfig,
+    database: string,
+    schema: string,
+  ) => void;
   onCopyNodeName: (name: string) => void;
   onDropDatabase: (connection: AeroricDbConnectionConfig, database: string) => void;
-  onDropDbxSchema: (connection: AeroricDbConnectionConfig, database: string, schema: string) => void;
-  onDropDbxObject: (connection: AeroricDbConnectionConfig, database: string | null, object: DbxObjectInfo) => void;
+  onDropDbxSchema: (
+    connection: AeroricDbConnectionConfig,
+    database: string,
+    schema: string,
+  ) => void;
+  onDropDbxObject: (
+    connection: AeroricDbConnectionConfig,
+    database: string | null,
+    object: DbxObjectInfo,
+  ) => void;
   onDropDbxColumn: (
     connection: AeroricDbConnectionConfig,
     database: string | null,
@@ -103,19 +158,9 @@ interface DatabaseSidebarTreeProps {
     connectionId: string,
     kind: "legacy" | "dbx",
   ) => void;
-  onConnectionGroupContextMenu: (
-    event: MouseEvent,
-    groupName: string,
-  ) => void;
-  onUserAdminContextMenu: (
-    event: MouseEvent,
-    connectionId: string,
-  ) => void;
-  onDbxDatabaseContextMenu: (
-    event: MouseEvent,
-    connectionId: string,
-    database: string,
-  ) => void;
+  onConnectionGroupContextMenu: (event: MouseEvent, groupName: string) => void;
+  onUserAdminContextMenu: (event: MouseEvent, connectionId: string) => void;
+  onDbxDatabaseContextMenu: (event: MouseEvent, connectionId: string, database: string) => void;
   onDbxSchemaContextMenu: (
     event: MouseEvent,
     connectionId: string,
@@ -150,22 +195,14 @@ interface DatabaseSidebarTreeProps {
     groupKey: DbxObjectGroupKey,
     label: string,
   ) => void;
-  onRedisDatabaseContextMenu: (
-    event: MouseEvent,
-    connectionId: string,
-    database: number,
-  ) => void;
+  onRedisDatabaseContextMenu: (event: MouseEvent, connectionId: string, database: number) => void;
   onRedisKeyContextMenu: (
     event: MouseEvent,
     connectionId: string,
     database: number,
     keyRaw: string,
   ) => void;
-  onMongoDatabaseContextMenu: (
-    event: MouseEvent,
-    connectionId: string,
-    database: string,
-  ) => void;
+  onMongoDatabaseContextMenu: (event: MouseEvent, connectionId: string, database: string) => void;
   onMongoCollectionContextMenu: (
     event: MouseEvent,
     connectionId: string,
@@ -210,7 +247,10 @@ function connectionConfigColor(connection: DbConnectionConfig | AeroricDbConnect
 }
 
 function connectionBadgeColor(connection: DbConnectionConfig | AeroricDbConnectionConfig) {
-  return connectionConfigColor(connection) ?? CONNECTION_BADGE_COLORS[stableNameHash(connection.name) % CONNECTION_BADGE_COLORS.length];
+  return (
+    connectionConfigColor(connection) ??
+    CONNECTION_BADGE_COLORS[stableNameHash(connection.name) % CONNECTION_BADGE_COLORS.length]
+  );
 }
 
 function connectionBadgeText(name: string) {
@@ -218,16 +258,29 @@ function connectionBadgeText(name: string) {
   if (!trimmed) return "DB";
   if (/^(localhost|127(?:\.\d{1,3}){3}|::1|\d{1,3}(?:\.\d{1,3}){3})$/i.test(trimmed)) return "IP";
 
-  const hanText = Array.from(trimmed.match(/\p{Script=Han}/gu)?.join("") ?? "").slice(0, 2).join("");
+  const hanText = Array.from(trimmed.match(/\p{Script=Han}/gu)?.join("") ?? "")
+    .slice(0, 2)
+    .join("");
   if (hanText) return hanText;
 
   const words = trimmed.match(/[A-Za-z0-9]+/g) ?? [];
-  if (words.length >= 2) return words.slice(0, 2).map((word) => word[0]).join("").toUpperCase();
+  if (words.length >= 2)
+    return words
+      .slice(0, 2)
+      .map((word) => word[0])
+      .join("")
+      .toUpperCase();
   if (words.length === 1) return words[0].slice(0, 2).toUpperCase();
   return Array.from(trimmed).slice(0, 2).join("").toUpperCase();
 }
 
-function ConnectionNameBadge({ connection, size = 22 }: { connection: DbConnectionConfig | AeroricDbConnectionConfig; size?: number }) {
+function ConnectionNameBadge({
+  connection,
+  size = 22,
+}: {
+  connection: DbConnectionConfig | AeroricDbConnectionConfig;
+  size?: number;
+}) {
   const text = connectionBadgeText(connection.name);
   const color = connectionBadgeColor(connection);
   return (
@@ -321,11 +374,18 @@ function mongoCollectionNodeKey(connectionId: string, database: string, collecti
 }
 
 function mongoDocumentId(document: unknown, fallback: number) {
-  if (document && typeof document === "object" && "_id" in document) return String((document as { _id: unknown })._id);
+  if (document && typeof document === "object" && "_id" in document)
+    return String((document as { _id: unknown })._id);
   return `#${fallback + 1}`;
 }
 
-function mongoDocumentNodeKey(connectionId: string, database: string, collection: string, document: unknown, index: number) {
+function mongoDocumentNodeKey(
+  connectionId: string,
+  database: string,
+  collection: string,
+  document: unknown,
+  index: number,
+) {
   return `mongo-document:${connectionId}:${database}:${collection}:${mongoDocumentId(document, index)}`;
 }
 
@@ -340,7 +400,10 @@ function mongoDocumentPreview(document: unknown, index: number) {
   const previewFields = Object.entries(record)
     .filter(([key]) => key !== "_id")
     .slice(0, 2)
-    .map(([key, value]) => `${key}: ${typeof value === "object" ? JSON.stringify(value) : String(value)}`);
+    .map(
+      ([key, value]) =>
+        `${key}: ${typeof value === "object" ? JSON.stringify(value) : String(value)}`,
+    );
   return previewFields.length > 0 ? `${id} ${previewFields.join(", ")}` : id;
 }
 
@@ -348,7 +411,9 @@ function normalizeDbxObjectType(objectType: string) {
   return objectType.toUpperCase().replace(/[\s-]+/g, "_");
 }
 
-function dbxTableChildObjectType(object: DbxObjectInfo): Exclude<TableChildObjectType, "COLUMN"> | null {
+function dbxTableChildObjectType(
+  object: DbxObjectInfo,
+): Exclude<TableChildObjectType, "COLUMN"> | null {
   const objectType = normalizeDbxObjectType(object.object_type);
   if (objectType.includes("FOREIGN_KEY")) return "FOREIGN_KEY";
   if (objectType.includes("TRIGGER")) return "TRIGGER";
@@ -365,9 +430,12 @@ function sameDatabaseName(left: string | null | undefined, right: string | null 
 }
 
 function dbxChildObjectBelongsToTable(childObject: DbxObjectInfo, tableObject: DbxObjectInfo) {
-  if (!childObject.parent_name || !sameDatabaseName(childObject.parent_name, tableObject.name)) return false;
+  if (!childObject.parent_name || !sameDatabaseName(childObject.parent_name, tableObject.name))
+    return false;
   if (!tableObject.schema) return true;
-  return !childObject.parent_schema || sameDatabaseName(childObject.parent_schema, tableObject.schema);
+  return (
+    !childObject.parent_schema || sameDatabaseName(childObject.parent_schema, tableObject.schema)
+  );
 }
 
 function dbxChildObjectSearchText(childObject: DbxObjectInfo, parentObject: DbxObjectInfo) {
@@ -408,7 +476,9 @@ function groupDbxObjects(objects: DbxObjectInfo[]) {
       ...group,
       objects: uniqueObjects
         .filter((object) => supportedTypes.has(normalizeDbxObjectType(object.object_type)))
-        .sort((left, right) => databaseObjectNameCollator.compare(dbxObjectLabel(left), dbxObjectLabel(right))),
+        .sort((left, right) =>
+          databaseObjectNameCollator.compare(dbxObjectLabel(left), dbxObjectLabel(right)),
+        ),
     };
   }).filter((group) => group.objects.length > 0);
 }
@@ -531,7 +601,9 @@ export function DatabaseSidebarTree({
   const [expandedSchemaKeys, setExpandedSchemaKeys] = useState<Set<string>>(new Set());
   const [expandedObjectNodeKeys, setExpandedObjectNodeKeys] = useState<Set<string>>(new Set());
   const [collapsedObjectNodeKeys, setCollapsedObjectNodeKeys] = useState<Set<string>>(new Set());
-  const [collapsedConnectionGroups, setCollapsedConnectionGroups] = useState<Set<string>>(new Set());
+  const [collapsedConnectionGroups, setCollapsedConnectionGroups] = useState<Set<string>>(
+    new Set(),
+  );
   const [collapsedObjectGroupKeys, setCollapsedObjectGroupKeys] = useState<Set<string>>(new Set());
   const [searchDraft, setSearchDraft] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
@@ -582,11 +654,20 @@ export function DatabaseSidebarTree({
     });
   }, [activeDbxObject]);
 
-  const dbxRootObjects = useMemo(() => dbxObjects.filter((object) => !isDbxTableChildObject(object)), [dbxObjects]);
-  const dbxTableChildObjects = useMemo(() => dbxObjects.filter(isDbxTableChildObject), [dbxObjects]);
+  const dbxRootObjects = useMemo(
+    () => dbxObjects.filter((object) => !isDbxTableChildObject(object)),
+    [dbxObjects],
+  );
+  const dbxTableChildObjects = useMemo(
+    () => dbxObjects.filter(isDbxTableChildObject),
+    [dbxObjects],
+  );
 
   const dbxTableChildObjectsFor = useCallback(
-    (object: DbxObjectInfo) => dbxTableChildObjects.filter((childObject) => dbxChildObjectBelongsToTable(childObject, object)),
+    (object: DbxObjectInfo) =>
+      dbxTableChildObjects.filter((childObject) =>
+        dbxChildObjectBelongsToTable(childObject, object),
+      ),
     [dbxTableChildObjects],
   );
 
@@ -598,11 +679,14 @@ export function DatabaseSidebarTree({
   const filteredLegacyConnections = useMemo(
     () =>
       connections.filter((connection) => {
-        const matchesConnection = scopeAllows(searchScope, "connections") && matchesSearch(connection.name, searchQuery);
+        const matchesConnection =
+          scopeAllows(searchScope, "connections") && matchesSearch(connection.name, searchQuery);
         const matchesActiveObject =
           connection.id === activeConnectionId &&
           scopeAllows(searchScope, "objects") &&
-          legacyObjects.some((object) => matchesSearch(`${object.objectType} ${object.name}`, searchQuery));
+          legacyObjects.some((object) =>
+            matchesSearch(`${object.objectType} ${object.name}`, searchQuery),
+          );
         return matchesConnection || matchesActiveObject;
       }),
     [activeConnectionId, connections, legacyObjects, searchQuery, searchScope],
@@ -612,7 +696,8 @@ export function DatabaseSidebarTree({
     () =>
       dbxConnections.filter((connection) => {
         const matchesConnection =
-          scopeAllows(searchScope, "connections") && matchesSearch(`${connection.name} ${connection.dbType}`, searchQuery);
+          scopeAllows(searchScope, "connections") &&
+          matchesSearch(`${connection.name} ${connection.dbType}`, searchQuery);
         const matchesActiveDatabase =
           connection.id === activeDbxConnectionId &&
           scopeAllows(searchScope, "databases") &&
@@ -621,36 +706,59 @@ export function DatabaseSidebarTree({
           connection.id === activeDbxConnectionId &&
           scopeAllows(searchScope, "objects") &&
           (connection.dbType === "redis"
-            ? (redisDatabasesByConnection[connection.id] ?? []).some((database) =>
-                matchesSearch(`redis db${database.db} ${database.keys}`, searchQuery) ||
-                (redisKeysByDatabase[`${connection.id}:${database.db}`] ?? []).some((key) =>
-                  matchesSearch(`redis key db${database.db} ${key.key_display} ${key.key_raw} ${key.key_type}`, searchQuery),
-                ),
+            ? (redisDatabasesByConnection[connection.id] ?? []).some(
+                (database) =>
+                  matchesSearch(`redis db${database.db} ${database.keys}`, searchQuery) ||
+                  (redisKeysByDatabase[`${connection.id}:${database.db}`] ?? []).some((key) =>
+                    matchesSearch(
+                      `redis key db${database.db} ${key.key_display} ${key.key_raw} ${key.key_type}`,
+                      searchQuery,
+                    ),
+                  ),
               )
             : connection.dbType === "mongodb"
               ? (mongoDatabasesByConnection[connection.id] ?? []).some((database) => {
-                  const matchesDatabase = matchesSearch(`mongodb database ${database}`, searchQuery);
-                  const matchesCollection = (mongoCollectionsByDatabase[`${connection.id}:${database}`] ?? []).some((collection) =>
-                    matchesSearch(`mongodb collection ${database} ${collection}`, searchQuery) ||
-                    (mongoDocumentsByCollection[`${connection.id}:${database}:${collection}`] ?? []).some((document, index) =>
-                      matchesSearch(`mongodb document ${database} ${collection} ${mongoDocumentPreview(document, index)}`, searchQuery),
-                    ),
+                  const matchesDatabase = matchesSearch(
+                    `mongodb database ${database}`,
+                    searchQuery,
+                  );
+                  const matchesCollection = (
+                    mongoCollectionsByDatabase[`${connection.id}:${database}`] ?? []
+                  ).some(
+                    (collection) =>
+                      matchesSearch(`mongodb collection ${database} ${collection}`, searchQuery) ||
+                      (
+                        mongoDocumentsByCollection[`${connection.id}:${database}:${collection}`] ??
+                        []
+                      ).some((document, index) =>
+                        matchesSearch(
+                          `mongodb document ${database} ${collection} ${mongoDocumentPreview(document, index)}`,
+                          searchQuery,
+                        ),
+                      ),
                   );
                   return matchesDatabase || matchesCollection;
                 })
               : (supportsDbxUserAdmin(connection.dbType) &&
-                matchesSearch(`${t("database.userAdmin")} users privileges`, searchQuery)) ||
-            dbxSchemas.some((schema) => matchesSearch(`schema ${schema}`, searchQuery)) ||
-            dbxRootObjects.some((object) => {
-              const matchesObject = matchesSearch(`${object.object_type} ${dbxObjectLabel(object)}`, searchQuery);
-              const matchesColumn = (dbxColumnsByTable[dbxObjectKey(object)] ?? []).some((column) =>
-                matchesSearch(`column ${dbxObjectLabel(object)} ${column.name} ${column.data_type}`, searchQuery),
-              );
-              const matchesChildObject = dbxTableChildObjectsFor(object).some((childObject) =>
-                matchesSearch(dbxChildObjectSearchText(childObject, object), searchQuery),
-              );
-              return matchesObject || matchesColumn || matchesChildObject;
-            }));
+                  matchesSearch(`${t("database.userAdmin")} users privileges`, searchQuery)) ||
+                dbxSchemas.some((schema) => matchesSearch(`schema ${schema}`, searchQuery)) ||
+                dbxRootObjects.some((object) => {
+                  const matchesObject = matchesSearch(
+                    `${object.object_type} ${dbxObjectLabel(object)}`,
+                    searchQuery,
+                  );
+                  const matchesColumn = (dbxColumnsByTable[dbxObjectKey(object)] ?? []).some(
+                    (column) =>
+                      matchesSearch(
+                        `column ${dbxObjectLabel(object)} ${column.name} ${column.data_type}`,
+                        searchQuery,
+                      ),
+                  );
+                  const matchesChildObject = dbxTableChildObjectsFor(object).some((childObject) =>
+                    matchesSearch(dbxChildObjectSearchText(childObject, object), searchQuery),
+                  );
+                  return matchesObject || matchesColumn || matchesChildObject;
+                }));
         return matchesConnection || matchesActiveDatabase || matchesActiveObject;
       }),
     [
@@ -675,7 +783,9 @@ export function DatabaseSidebarTree({
   const filteredDbxConnectionGroups = useMemo(() => {
     const groups = new Map<string, AeroricDbConnectionConfig[]>();
     const ungrouped: AeroricDbConnectionConfig[] = [];
-    const extraGroupNames = Array.from(new Set(extraDbxConnectionGroups.map((group) => group.trim()).filter(Boolean)));
+    const extraGroupNames = Array.from(
+      new Set(extraDbxConnectionGroups.map((group) => group.trim()).filter(Boolean)),
+    );
     for (const connection of filteredDbxConnections) {
       const groupName = connectionGroupName(connection);
       if (!groupName) {
@@ -711,22 +821,30 @@ export function DatabaseSidebarTree({
     () =>
       orderPinnedFirst(
         visibleDbxDatabases.filter((database) => {
-        const matchesDatabase = scopeAllows(searchScope, "databases") && matchesSearch(database.name, searchQuery);
-        const matchesActiveObject =
-          database.name === activeDbxDatabase &&
-          scopeAllows(searchScope, "objects") &&
-          (dbxSchemas.some((schema) => matchesSearch(`schema ${schema}`, searchQuery)) ||
-            dbxRootObjects.some((object) => {
-              const matchesObject = matchesSearch(`${object.object_type} ${dbxObjectLabel(object)}`, searchQuery);
-              const matchesColumn = (dbxColumnsByTable[dbxObjectKey(object)] ?? []).some((column) =>
-                matchesSearch(`column ${dbxObjectLabel(object)} ${column.name} ${column.data_type}`, searchQuery),
-              );
-              const matchesChildObject = dbxTableChildObjectsFor(object).some((childObject) =>
-                matchesSearch(dbxChildObjectSearchText(childObject, object), searchQuery),
-              );
-              return matchesObject || matchesColumn || matchesChildObject;
-            }));
-        return matchesDatabase || matchesActiveObject;
+          const matchesDatabase =
+            scopeAllows(searchScope, "databases") && matchesSearch(database.name, searchQuery);
+          const matchesActiveObject =
+            database.name === activeDbxDatabase &&
+            scopeAllows(searchScope, "objects") &&
+            (dbxSchemas.some((schema) => matchesSearch(`schema ${schema}`, searchQuery)) ||
+              dbxRootObjects.some((object) => {
+                const matchesObject = matchesSearch(
+                  `${object.object_type} ${dbxObjectLabel(object)}`,
+                  searchQuery,
+                );
+                const matchesColumn = (dbxColumnsByTable[dbxObjectKey(object)] ?? []).some(
+                  (column) =>
+                    matchesSearch(
+                      `column ${dbxObjectLabel(object)} ${column.name} ${column.data_type}`,
+                      searchQuery,
+                    ),
+                );
+                const matchesChildObject = dbxTableChildObjectsFor(object).some((childObject) =>
+                  matchesSearch(dbxChildObjectSearchText(childObject, object), searchQuery),
+                );
+                return matchesObject || matchesColumn || matchesChildObject;
+              }));
+          return matchesDatabase || matchesActiveObject;
         }),
         (database) => pinnedTreeNodeIds.has(dbxDatabaseNodeKey(database.name)),
       ),
@@ -748,29 +866,51 @@ export function DatabaseSidebarTree({
       scopeAllows(searchScope, "objects")
         ? orderPinnedFirst(
             dbxSchemas.filter((schema) => {
-            const matchesSchema = matchesSearch(`schema ${schema}`, searchQuery);
-            const matchesObject = dbxObjectsForSchema(schema).some((object) => {
-              const matchesObjectName = matchesSearch(`${object.object_type} ${dbxObjectLabel(object)}`, searchQuery);
-              const matchesColumn = (dbxColumnsByTable[dbxObjectKey(object)] ?? []).some((column) =>
-                matchesSearch(`column ${dbxObjectLabel(object)} ${column.name} ${column.data_type}`, searchQuery),
-              );
-              const matchesChildObject = dbxTableChildObjectsFor(object).some((childObject) =>
-                matchesSearch(dbxChildObjectSearchText(childObject, object), searchQuery),
-              );
-              return matchesObjectName || matchesColumn || matchesChildObject;
-            });
-            return matchesSchema || matchesObject;
+              const matchesSchema = matchesSearch(`schema ${schema}`, searchQuery);
+              const matchesObject = dbxObjectsForSchema(schema).some((object) => {
+                const matchesObjectName = matchesSearch(
+                  `${object.object_type} ${dbxObjectLabel(object)}`,
+                  searchQuery,
+                );
+                const matchesColumn = (dbxColumnsByTable[dbxObjectKey(object)] ?? []).some(
+                  (column) =>
+                    matchesSearch(
+                      `column ${dbxObjectLabel(object)} ${column.name} ${column.data_type}`,
+                      searchQuery,
+                    ),
+                );
+                const matchesChildObject = dbxTableChildObjectsFor(object).some((childObject) =>
+                  matchesSearch(dbxChildObjectSearchText(childObject, object), searchQuery),
+                );
+                return matchesObjectName || matchesColumn || matchesChildObject;
+              });
+              return matchesSchema || matchesObject;
             }),
-            (schema) => Boolean(activeDbxDatabase && pinnedTreeNodeIds.has(dbxSchemaNodeKey(activeDbxDatabase, schema))),
+            (schema) =>
+              Boolean(
+                activeDbxDatabase &&
+                pinnedTreeNodeIds.has(dbxSchemaNodeKey(activeDbxDatabase, schema)),
+              ),
           )
         : [],
-    [activeDbxDatabase, dbxColumnsByTable, dbxObjectsForSchema, dbxSchemas, dbxTableChildObjectsFor, pinnedTreeNodeIds, searchQuery, searchScope],
+    [
+      activeDbxDatabase,
+      dbxColumnsByTable,
+      dbxObjectsForSchema,
+      dbxSchemas,
+      dbxTableChildObjectsFor,
+      pinnedTreeNodeIds,
+      searchQuery,
+      searchScope,
+    ],
   );
 
   const filteredLegacyObjects = useMemo(
     () =>
       scopeAllows(searchScope, "objects")
-        ? legacyObjects.filter((object) => matchesSearch(`${object.objectType} ${object.name}`, searchQuery))
+        ? legacyObjects.filter((object) =>
+            matchesSearch(`${object.objectType} ${object.name}`, searchQuery),
+          )
         : [],
     [legacyObjects, searchQuery, searchScope],
   );
@@ -779,9 +919,15 @@ export function DatabaseSidebarTree({
     () =>
       scopeAllows(searchScope, "objects")
         ? dbxRootObjects.filter((object) => {
-            const matchesObject = matchesSearch(`${object.object_type} ${dbxObjectLabel(object)}`, searchQuery);
+            const matchesObject = matchesSearch(
+              `${object.object_type} ${dbxObjectLabel(object)}`,
+              searchQuery,
+            );
             const matchesColumn = (dbxColumnsByTable[dbxObjectKey(object)] ?? []).some((column) =>
-              matchesSearch(`column ${dbxObjectLabel(object)} ${column.name} ${column.data_type}`, searchQuery),
+              matchesSearch(
+                `column ${dbxObjectLabel(object)} ${column.name} ${column.data_type}`,
+                searchQuery,
+              ),
             );
             const matchesChildObject = dbxTableChildObjectsFor(object).some((childObject) =>
               matchesSearch(dbxChildObjectSearchText(childObject, object), searchQuery),
@@ -793,7 +939,8 @@ export function DatabaseSidebarTree({
   );
 
   const orderDbxObjectsForTree = useCallback(
-    (objects: DbxObjectInfo[]) => orderPinnedFirst(objects, (object) => pinnedTreeNodeIds.has(dbxObjectNodeKey(object))),
+    (objects: DbxObjectInfo[]) =>
+      orderPinnedFirst(objects, (object) => pinnedTreeNodeIds.has(dbxObjectNodeKey(object))),
     [pinnedTreeNodeIds],
   );
 
@@ -811,19 +958,28 @@ export function DatabaseSidebarTree({
           const objectChildObjects = dbxTableChildObjectsFor(object);
           const visibleColumns = searchQuery
             ? objectColumns.filter((column) =>
-                matchesSearch(`column ${dbxObjectLabel(object)} ${column.name} ${column.data_type}`, searchQuery),
+                matchesSearch(
+                  `column ${dbxObjectLabel(object)} ${column.name} ${column.data_type}`,
+                  searchQuery,
+                ),
               )
             : objectColumns;
           const visibleChildObjects = searchQuery
-            ? objectChildObjects.filter((childObject) => matchesSearch(dbxChildObjectSearchText(childObject, object), searchQuery))
+            ? objectChildObjects.filter((childObject) =>
+                matchesSearch(dbxChildObjectSearchText(childObject, object), searchQuery),
+              )
             : objectChildObjects;
-          const isActiveObject = object.name === activeDbxObject?.name && object.schema === activeDbxObject?.schema;
+          const isActiveObject =
+            object.name === activeDbxObject?.name && object.schema === activeDbxObject?.schema;
           const objectNodeKey = dbxObjectNodeKey(object);
           const objectExpanded =
-            Boolean(searchQuery) || (!collapsedObjectNodeKeys.has(objectNodeKey) && (isActiveObject || expandedObjectNodeKeys.has(objectNodeKey)));
+            Boolean(searchQuery) ||
+            (!collapsedObjectNodeKeys.has(objectNodeKey) &&
+              (isActiveObject || expandedObjectNodeKeys.has(objectNodeKey)));
           if (!objectExpanded) continue;
           for (const column of visibleColumns) keys.push(dbxColumnNodeKey(object, column));
-          for (const childObject of visibleChildObjects) keys.push(dbxTableChildObjectNodeKey(object, childObject));
+          for (const childObject of visibleChildObjects)
+            keys.push(dbxTableChildObjectNodeKey(object, childObject));
         }
       }
       return keys;
@@ -851,8 +1007,12 @@ export function DatabaseSidebarTree({
     }
 
     for (const connectionGroup of filteredDbxConnectionGroups) {
-      const groupCollapsed = Boolean(connectionGroup.groupName) && collapsedConnectionGroups.has(connectionGroup.groupName) && !searchQuery;
-      if (connectionGroup.groupName) keys.push(dbxConnectionGroupNodeKey(connectionGroup.groupName));
+      const groupCollapsed =
+        Boolean(connectionGroup.groupName) &&
+        collapsedConnectionGroups.has(connectionGroup.groupName) &&
+        !searchQuery;
+      if (connectionGroup.groupName)
+        keys.push(dbxConnectionGroupNodeKey(connectionGroup.groupName));
       if (groupCollapsed) continue;
       for (const connection of connectionGroup.connections) {
         keys.push(dbxConnectionNodeKey(connection));
@@ -863,7 +1023,9 @@ export function DatabaseSidebarTree({
           if (connection.dbType === "redis") {
             for (const database of redisDatabasesByConnection[connection.id] ?? []) {
               keys.push(redisDatabaseNodeKey(connection.id, database.db));
-              const databaseExpanded = expandedDatabaseNames.has(`redis:${connection.id}:${database.db}`) || Boolean(searchQuery);
+              const databaseExpanded =
+                expandedDatabaseNames.has(`redis:${connection.id}:${database.db}`) ||
+                Boolean(searchQuery);
               if (!databaseExpanded) continue;
               for (const key of redisKeysByDatabase[`${connection.id}:${database.db}`] ?? []) {
                 keys.push(redisKeyNodeKey(connection.id, database.db, key.key_raw));
@@ -874,23 +1036,30 @@ export function DatabaseSidebarTree({
               keys.push(mongoDatabaseNodeKey(connection.id, database));
               const databaseExpanded = expandedDatabaseNames.has(database) || Boolean(searchQuery);
               if (!databaseExpanded) continue;
-              for (const collection of mongoCollectionsByDatabase[`${connection.id}:${database}`] ?? []) {
+              for (const collection of mongoCollectionsByDatabase[`${connection.id}:${database}`] ??
+                []) {
                 keys.push(mongoCollectionNodeKey(connection.id, database, collection));
                 const collectionExpansionKey = `mongo:${connection.id}:${database}:${collection}`;
-                const collectionExpanded = expandedSchemaKeys.has(collectionExpansionKey) || Boolean(searchQuery);
+                const collectionExpanded =
+                  expandedSchemaKeys.has(collectionExpansionKey) || Boolean(searchQuery);
                 if (!collectionExpanded) continue;
                 const collectionKey = `${connection.id}:${database}:${collection}`;
                 const loadedDocuments = mongoDocumentsByCollection[collectionKey] ?? [];
                 for (const [index, document] of loadedDocuments.entries()) {
-                  keys.push(mongoDocumentNodeKey(connection.id, database, collection, document, index));
+                  keys.push(
+                    mongoDocumentNodeKey(connection.id, database, collection, document, index),
+                  );
                 }
-                if (loadedDocuments.length < (mongoDocumentTotalsByCollection[collectionKey] ?? 0)) {
+                if (
+                  loadedDocuments.length < (mongoDocumentTotalsByCollection[collectionKey] ?? 0)
+                ) {
                   keys.push(mongoDocumentLoadMoreNodeKey(connection.id, database, collection));
                 }
               }
             }
           }
-          if (supportsDbxUserAdmin(connection.dbType)) keys.push(dbxUserAdminNodeKey(connection.id));
+          if (supportsDbxUserAdmin(connection.dbType))
+            keys.push(dbxUserAdminNodeKey(connection.id));
           continue;
         }
         for (const database of filteredDatabases) {
@@ -902,7 +1071,12 @@ export function DatabaseSidebarTree({
             filteredDbxSchemas.length === 1 &&
             filteredDbxSchemas[0] === database.name
           ) {
-            keys.push(...visibleDbxObjectNodeKeys(filteredDbxObjects.filter((object) => (object.schema ?? "") === database.name), database.name));
+            keys.push(
+              ...visibleDbxObjectNodeKeys(
+                filteredDbxObjects.filter((object) => (object.schema ?? "") === database.name),
+                database.name,
+              ),
+            );
           } else if (dbxSchemas.length > 0) {
             for (const schemaName of filteredDbxSchemas) {
               keys.push(dbxSchemaNodeKey(database.name, schemaName));
@@ -913,7 +1087,12 @@ export function DatabaseSidebarTree({
                 schemaName === activeDbxSchema ||
                 filteredDbxSchemas.length === 1;
               if (!schemaExpanded) continue;
-              keys.push(...visibleDbxObjectNodeKeys(filteredDbxObjects.filter((object) => (object.schema ?? "") === schemaName), schemaKey));
+              keys.push(
+                ...visibleDbxObjectNodeKeys(
+                  filteredDbxObjects.filter((object) => (object.schema ?? "") === schemaName),
+                  schemaKey,
+                ),
+              );
             }
           } else {
             keys.push(...visibleDbxObjectNodeKeys(filteredDbxObjects, database.name));
@@ -957,7 +1136,8 @@ export function DatabaseSidebarTree({
       const next = new Set([...current].filter((key) => visibleKeys.has(key)));
       return next.size === current.size ? current : next;
     });
-    if (selectionAnchorKey && !visibleTreeNodeKeys.includes(selectionAnchorKey)) setSelectionAnchorKey(null);
+    if (selectionAnchorKey && !visibleTreeNodeKeys.includes(selectionAnchorKey))
+      setSelectionAnchorKey(null);
   }, [selectionAnchorKey, visibleTreeNodeKeys]);
 
   const hasResults =
@@ -1040,6 +1220,8 @@ export function DatabaseSidebarTree({
     </DbxButton>
   );
 
+  const treeNodeClassName = "database-tree-node";
+
   const treeNodeSelectionStyle = (nodeKey: string, active = false) => {
     const selected = selectedTreeNodeKeys.has(nodeKey);
     return {
@@ -1063,7 +1245,8 @@ export function DatabaseSidebarTree({
       const anchorIndex = visibleTreeNodeKeys.indexOf(selectionAnchorKey);
       const targetIndex = visibleTreeNodeKeys.indexOf(nodeKey);
       if (anchorIndex >= 0 && targetIndex >= 0) {
-        const [start, end] = anchorIndex < targetIndex ? [anchorIndex, targetIndex] : [targetIndex, anchorIndex];
+        const [start, end] =
+          anchorIndex < targetIndex ? [anchorIndex, targetIndex] : [targetIndex, anchorIndex];
         setSelectedTreeNodeKeys(new Set(visibleTreeNodeKeys.slice(start, end + 1)));
         setSelectionAnchorKey(nodeKey);
         return;
@@ -1086,12 +1269,15 @@ export function DatabaseSidebarTree({
     activate();
   };
 
-  const handleKeyShortcut = (event: KeyboardEvent, actions: {
-    copyName: string;
-    refresh?: () => void;
-    delete?: () => void;
-    rename?: () => void;
-  }) => {
+  const handleKeyShortcut = (
+    event: KeyboardEvent,
+    actions: {
+      copyName: string;
+      refresh?: () => void;
+      delete?: () => void;
+      rename?: () => void;
+    },
+  ) => {
     if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "c") {
       event.preventDefault();
       onCopyNodeName(actions.copyName);
@@ -1150,33 +1336,50 @@ export function DatabaseSidebarTree({
       <span
         aria-label={t("database.pinned")}
         role="img"
-        style={{ display: "inline-flex", alignItems: "center", color: "var(--accent)", flexShrink: 0 }}
+        style={{
+          display: "inline-flex",
+          alignItems: "center",
+          color: "var(--accent)",
+          flexShrink: 0,
+        }}
       >
         <Pin aria-hidden="true" size={12} fill="currentColor" />
       </span>
     ) : null;
 
-  const renderDbxObjectRows = (objects: DbxObjectInfo[], objectPaddingLeft = 42, childPaddingLeft = 56) => {
+  const renderDbxObjectRows = (
+    objects: DbxObjectInfo[],
+    objectPaddingLeft = 42,
+    childPaddingLeft = 56,
+  ) => {
     if (!activeDbxConnection || !activeDbxDatabase || objects.length === 0) return null;
     return (
       <div style={{ display: "flex", flexDirection: "column", gap: 3, marginTop: 3 }}>
         {orderDbxObjectsForTree(objects).map((object) => {
           const objectNodeKey = dbxObjectNodeKey(object);
-          const isActiveObject = object.name === activeDbxObject?.name && object.schema === activeDbxObject?.schema;
+          const isActiveObject =
+            object.name === activeDbxObject?.name && object.schema === activeDbxObject?.schema;
           const objectColumns = dbxColumnsByTable[dbxObjectKey(object)] ?? [];
           const objectChildObjects = dbxTableChildObjectsFor(object);
           const visibleColumns = searchQuery
             ? objectColumns.filter((column) =>
-                matchesSearch(`column ${dbxObjectLabel(object)} ${column.name} ${column.data_type}`, searchQuery),
+                matchesSearch(
+                  `column ${dbxObjectLabel(object)} ${column.name} ${column.data_type}`,
+                  searchQuery,
+                ),
               )
             : objectColumns;
           const visibleChildObjects = searchQuery
-            ? objectChildObjects.filter((childObject) => matchesSearch(dbxChildObjectSearchText(childObject, object), searchQuery))
+            ? objectChildObjects.filter((childObject) =>
+                matchesSearch(dbxChildObjectSearchText(childObject, object), searchQuery),
+              )
             : objectChildObjects;
           const draggableObjectReference = canDragDbxObjectReference(object);
           const hasChildRows = visibleColumns.length > 0 || visibleChildObjects.length > 0;
           const objectExpanded =
-            Boolean(searchQuery) || (!collapsedObjectNodeKeys.has(objectNodeKey) && (isActiveObject || expandedObjectNodeKeys.has(objectNodeKey)));
+            Boolean(searchQuery) ||
+            (!collapsedObjectNodeKeys.has(objectNodeKey) &&
+              (isActiveObject || expandedObjectNodeKeys.has(objectNodeKey)));
           const showChildRows = objectExpanded && hasChildRows;
           return (
             <div key={`${object.object_type}:${object.schema ?? ""}:${object.name}`}>
@@ -1184,12 +1387,18 @@ export function DatabaseSidebarTree({
                 {hasChildRows && (
                   <button
                     type="button"
-                    aria-label={t(objectExpanded ? "database.collapseTableNode" : "database.expandTableNode", {
-                      name: dbxObjectDisplayName(object),
-                    })}
-                    title={t(objectExpanded ? "database.collapseTableNode" : "database.expandTableNode", {
-                      name: dbxObjectDisplayName(object),
-                    })}
+                    aria-label={t(
+                      objectExpanded ? "database.collapseTableNode" : "database.expandTableNode",
+                      {
+                        name: dbxObjectDisplayName(object),
+                      },
+                    )}
+                    title={t(
+                      objectExpanded ? "database.collapseTableNode" : "database.expandTableNode",
+                      {
+                        name: dbxObjectDisplayName(object),
+                      },
+                    )}
                     onClick={(event) => {
                       event.preventDefault();
                       event.stopPropagation();
@@ -1217,6 +1426,7 @@ export function DatabaseSidebarTree({
                 )}
                 <button
                   type="button"
+                  className={treeNodeClassName}
                   aria-label={`${dbxObjectDisplayName(object)} ${object.object_type}`}
                   style={{
                     ...s.databaseListButton,
@@ -1226,8 +1436,14 @@ export function DatabaseSidebarTree({
                   }}
                   {...treeNodeSelectionAttrs(objectNodeKey)}
                   draggable={draggableObjectReference}
-                  onDragStart={draggableObjectReference ? (event) => handleDbxObjectDragStart(event, object) : undefined}
-                  onClick={(event) => handleTreeNodeClick(event, objectNodeKey, () => onSelectDbxObject(object))}
+                  onDragStart={
+                    draggableObjectReference
+                      ? (event) => handleDbxObjectDragStart(event, object)
+                      : undefined
+                  }
+                  onClick={(event) =>
+                    handleTreeNodeClick(event, objectNodeKey, () => onSelectDbxObject(object))
+                  }
                   onKeyDown={(event) =>
                     handleKeyShortcut(event, {
                       copyName: dbxObjectLabel(object),
@@ -1235,14 +1451,28 @@ export function DatabaseSidebarTree({
                       delete: () => onDropDbxObject(activeDbxConnection, activeDbxDatabase, object),
                     })
                   }
-                  onContextMenu={(event) => onDbxObjectContextMenu(event, activeDbxConnection.id, activeDbxDatabase, object)}
+                  onContextMenu={(event) =>
+                    onDbxObjectContextMenu(event, activeDbxConnection.id, activeDbxDatabase, object)
+                  }
                 >
                   <Table2 size={13} />
-                  <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  <span
+                    style={{
+                      flex: 1,
+                      minWidth: 0,
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
                     {dbxObjectDisplayName(object)}
                   </span>
                   {pinnedNodeIcon(objectNodeKey)}
-                  <span style={{ color: "var(--text-hint)", fontSize: 10, textTransform: "uppercase" }}>{object.object_type}</span>
+                  <span
+                    style={{ color: "var(--text-hint)", fontSize: 10, textTransform: "uppercase" }}
+                  >
+                    {object.object_type}
+                  </span>
                 </button>
               </div>
               {showChildRows && (
@@ -1253,6 +1483,7 @@ export function DatabaseSidebarTree({
                       <button
                         key={`${dbxObjectKey(object)}:${column.name}`}
                         type="button"
+                        className={treeNodeClassName}
                         style={{
                           ...s.databaseListButton,
                           minHeight: 25,
@@ -1261,21 +1492,61 @@ export function DatabaseSidebarTree({
                           ...treeNodeSelectionStyle(columnNodeKey),
                         }}
                         {...treeNodeSelectionAttrs(columnNodeKey)}
-                        onClick={(event) => handleTreeNodeClick(event, columnNodeKey, () => onSelectDbxObject(object))}
+                        onClick={(event) =>
+                          handleTreeNodeClick(event, columnNodeKey, () => onSelectDbxObject(object))
+                        }
                         onKeyDown={(event) =>
                           handleKeyShortcut(event, {
                             copyName: column.name,
                             refresh: () => onSelectDbxObject(object),
-                            delete: () => onDropDbxColumn(activeDbxConnection, activeDbxDatabase, object, column),
+                            delete: () =>
+                              onDropDbxColumn(
+                                activeDbxConnection,
+                                activeDbxDatabase,
+                                object,
+                                column,
+                              ),
                           })
                         }
-                        onContextMenu={(event) => onDbxColumnContextMenu(event, activeDbxConnection.id, activeDbxDatabase, object, column)}
+                        onContextMenu={(event) =>
+                          onDbxColumnContextMenu(
+                            event,
+                            activeDbxConnection.id,
+                            activeDbxDatabase,
+                            object,
+                            column,
+                          )
+                        }
                       >
-                        <span style={{ color: "var(--text-hint)", fontFamily: "var(--font-mono)", fontSize: 12 }}>#</span>
-                        <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                        <span
+                          style={{
+                            color: "var(--text-hint)",
+                            fontFamily: "var(--font-mono)",
+                            fontSize: 12,
+                          }}
+                        >
+                          #
+                        </span>
+                        <span
+                          style={{
+                            flex: 1,
+                            minWidth: 0,
+                            overflow: "hidden",
+                            textOverflow: "ellipsis",
+                            whiteSpace: "nowrap",
+                          }}
+                        >
                           {column.name}
                         </span>
-                        <span style={{ color: "var(--text-hint)", fontSize: 10, textTransform: "uppercase" }}>{column.data_type}</span>
+                        <span
+                          style={{
+                            color: "var(--text-hint)",
+                            fontSize: 10,
+                            textTransform: "uppercase",
+                          }}
+                        >
+                          {column.data_type}
+                        </span>
                       </button>
                     );
                   })}
@@ -1286,6 +1557,7 @@ export function DatabaseSidebarTree({
                       <button
                         key={`${dbxObjectKey(object)}:${childObject.object_type}:${childObject.name}`}
                         type="button"
+                        className={treeNodeClassName}
                         style={{
                           ...s.databaseListButton,
                           minHeight: 25,
@@ -1294,24 +1566,54 @@ export function DatabaseSidebarTree({
                           ...treeNodeSelectionStyle(childObjectNodeKey),
                         }}
                         {...treeNodeSelectionAttrs(childObjectNodeKey)}
-                        onClick={(event) => handleTreeNodeClick(event, childObjectNodeKey, () => onSelectDbxObject(object))}
+                        onClick={(event) =>
+                          handleTreeNodeClick(event, childObjectNodeKey, () =>
+                            onSelectDbxObject(object),
+                          )
+                        }
                         onKeyDown={(event) =>
                           handleKeyShortcut(event, {
                             copyName: childObject.name,
                             refresh: () => onSelectDbxObject(object),
-                            delete: () => onDropDbxTableChildObject(activeDbxConnection, activeDbxDatabase, object, childObject),
+                            delete: () =>
+                              onDropDbxTableChildObject(
+                                activeDbxConnection,
+                                activeDbxDatabase,
+                                object,
+                                childObject,
+                              ),
                           })
                         }
                         onContextMenu={(event) =>
-                          onDbxTableChildObjectContextMenu(event, activeDbxConnection.id, activeDbxDatabase, object, childObject)
+                          onDbxTableChildObjectContextMenu(
+                            event,
+                            activeDbxConnection.id,
+                            activeDbxDatabase,
+                            object,
+                            childObject,
+                          )
                         }
                       >
                         {tableChildObjectIcon(childObject)}
-                        <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                        <span
+                          style={{
+                            flex: 1,
+                            minWidth: 0,
+                            overflow: "hidden",
+                            textOverflow: "ellipsis",
+                            whiteSpace: "nowrap",
+                          }}
+                        >
                           {childObject.name}
                         </span>
                         {childType && (
-                          <span style={{ color: "var(--text-hint)", fontSize: 10, textTransform: "uppercase" }}>
+                          <span
+                            style={{
+                              color: "var(--text-hint)",
+                              fontSize: 10,
+                              textTransform: "uppercase",
+                            }}
+                          >
                             {childType.replace("_", " ")}
                           </span>
                         )}
@@ -1349,6 +1651,7 @@ export function DatabaseSidebarTree({
             <div key={groupStateKey}>
               <button
                 type="button"
+                className={treeNodeClassName}
                 aria-label={label}
                 style={{
                   ...s.databaseListButton,
@@ -1358,7 +1661,11 @@ export function DatabaseSidebarTree({
                   ...treeNodeSelectionStyle(groupNodeKey),
                 }}
                 {...treeNodeSelectionAttrs(groupNodeKey)}
-                onClick={(event) => handleTreeNodeClick(event, groupNodeKey, () => toggleObjectGroup(scopeKey, group.key))}
+                onClick={(event) =>
+                  handleTreeNodeClick(event, groupNodeKey, () =>
+                    toggleObjectGroup(scopeKey, group.key),
+                  )
+                }
                 onKeyDown={(event) =>
                   handleKeyShortcut(event, {
                     copyName: label,
@@ -1381,7 +1688,15 @@ export function DatabaseSidebarTree({
               >
                 <ExpansionGlyph expanded={expanded} />
                 {objectGroupIcon(group.key)}
-                <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                <span
+                  style={{
+                    flex: 1,
+                    minWidth: 0,
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                  }}
+                >
                   {label}
                 </span>
                 <span aria-hidden="true" style={{ color: "var(--text-hint)", fontSize: 10 }}>
@@ -1409,7 +1724,8 @@ export function DatabaseSidebarTree({
           {redisDatabases.map((database) => {
             const nodeKey = redisDatabaseNodeKey(connection.id, database.db);
             const databaseExpansionKey = `redis:${connection.id}:${database.db}`;
-            const databaseExpanded = expandedDatabaseNames.has(databaseExpansionKey) || Boolean(searchQuery);
+            const databaseExpanded =
+              expandedDatabaseNames.has(databaseExpansionKey) || Boolean(searchQuery);
             const active = activeDbxDatabase === `db${database.db}`;
             const toggleRedisDatabase = (loadOnExpand = true) => {
               toggleDatabase(databaseExpansionKey);
@@ -1418,15 +1734,20 @@ export function DatabaseSidebarTree({
             const databaseKey = `${connection.id}:${database.db}`;
             const loadedKeys = redisKeysByDatabase[databaseKey] ?? [];
             const keys = loadedKeys.filter((key) =>
-              matchesSearch(`redis key db${database.db} ${key.key_display} ${key.key_raw} ${key.key_type}`, searchQuery),
+              matchesSearch(
+                `redis key db${database.db} ${key.key_display} ${key.key_raw} ${key.key_type}`,
+                searchQuery,
+              ),
             );
             const scanState = redisScanStateByDatabase[databaseKey];
-            const canLoadMoreKeys = !searchQuery && loadedKeys.length > 0 && (scanState?.cursor ?? 0) !== 0;
+            const canLoadMoreKeys =
+              !searchQuery && loadedKeys.length > 0 && (scanState?.cursor ?? 0) !== 0;
             const redisTotalKeys = scanState?.totalKeys ?? database.keys;
             return (
               <div key={database.db}>
                 <button
                   type="button"
+                  className={treeNodeClassName}
                   style={{
                     ...s.databaseListButton,
                     minHeight: 28,
@@ -1440,7 +1761,9 @@ export function DatabaseSidebarTree({
                       onSelectRedisDatabase(connection, database.db);
                     })
                   }
-                  onContextMenu={(event) => onRedisDatabaseContextMenu(event, connection.id, database.db)}
+                  onContextMenu={(event) =>
+                    onRedisDatabaseContextMenu(event, connection.id, database.db)
+                  }
                   onKeyDown={(event) =>
                     handleKeyShortcut(event, {
                       copyName: `db${database.db}`,
@@ -1453,23 +1776,37 @@ export function DatabaseSidebarTree({
                       event.stopPropagation();
                       toggleRedisDatabase();
                     }}
-                    style={{ display: "inline-flex", alignItems: "center", color: "var(--text-hint)" }}
+                    style={{
+                      display: "inline-flex",
+                      alignItems: "center",
+                      color: "var(--text-hint)",
+                    }}
                   >
                     <ExpansionGlyph expanded={databaseExpanded} />
                   </span>
                   <Database size={13} />
-                  <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  <span
+                    style={{
+                      flex: 1,
+                      minWidth: 0,
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
                     db{database.db}
                   </span>
                   {getDefaultDatabase(connection) === String(database.db) && (
-                    <span style={{
-                      fontSize: 10,
-                      padding: "1px 5px",
-                      borderRadius: 4,
-                      background: "var(--accent-dim)",
-                      color: "var(--accent)",
-                      flexShrink: 0,
-                    }}>
+                    <span
+                      style={{
+                        fontSize: 10,
+                        padding: "1px 5px",
+                        borderRadius: 4,
+                        background: "var(--accent-dim)",
+                        color: "var(--accent)",
+                        flexShrink: 0,
+                      }}
+                    >
                       {t("database.defaultDatabaseBadge")}
                     </span>
                   )}
@@ -1480,11 +1817,13 @@ export function DatabaseSidebarTree({
                   <div style={{ display: "flex", flexDirection: "column", gap: 2, marginTop: 2 }}>
                     {keys.map((key) => {
                       const keyNodeKey = redisKeyNodeKey(connection.id, database.db, key.key_raw);
-                      const keyActive = activeDbxDatabase === `db${database.db}` && activeDbxSchema === key.key_raw;
+                      const keyActive =
+                        activeDbxDatabase === `db${database.db}` && activeDbxSchema === key.key_raw;
                       return (
                         <button
                           key={key.key_raw}
                           type="button"
+                          className={treeNodeClassName}
                           style={{
                             ...s.databaseListButton,
                             minHeight: 25,
@@ -1494,9 +1833,13 @@ export function DatabaseSidebarTree({
                           }}
                           {...treeNodeSelectionAttrs(keyNodeKey, keyActive)}
                           onClick={(event) =>
-                            handleTreeNodeClick(event, keyNodeKey, () => onSelectRedisKey(connection, database.db, key.key_raw))
+                            handleTreeNodeClick(event, keyNodeKey, () =>
+                              onSelectRedisKey(connection, database.db, key.key_raw),
+                            )
                           }
-                          onContextMenu={(event) => onRedisKeyContextMenu(event, connection.id, database.db, key.key_raw)}
+                          onContextMenu={(event) =>
+                            onRedisKeyContextMenu(event, connection.id, database.db, key.key_raw)
+                          }
                           onKeyDown={(event) =>
                             handleKeyShortcut(event, {
                               copyName: key.key_raw,
@@ -1505,7 +1848,15 @@ export function DatabaseSidebarTree({
                           }
                         >
                           <Hash size={12} />
-                          <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                          <span
+                            style={{
+                              flex: 1,
+                              minWidth: 0,
+                              overflow: "hidden",
+                              textOverflow: "ellipsis",
+                              whiteSpace: "nowrap",
+                            }}
+                          >
                             {key.key_display || key.key_raw}
                           </span>
                           <span style={s.databasePill}>{key.key_type}</span>
@@ -1515,6 +1866,7 @@ export function DatabaseSidebarTree({
                     {canLoadMoreKeys && (
                       <button
                         type="button"
+                        className={treeNodeClassName}
                         style={{
                           ...s.databaseListButton,
                           minHeight: 25,
@@ -1525,7 +1877,15 @@ export function DatabaseSidebarTree({
                         onClick={() => onLoadMoreRedisKeys(connection, database.db)}
                       >
                         <ListTree size={12} />
-                        <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                        <span
+                          style={{
+                            flex: 1,
+                            minWidth: 0,
+                            overflow: "hidden",
+                            textOverflow: "ellipsis",
+                            whiteSpace: "nowrap",
+                          }}
+                        >
                           {t("database.loadMore")} ({loadedKeys.length}/{redisTotalKeys})
                         </span>
                       </button>
@@ -1535,19 +1895,25 @@ export function DatabaseSidebarTree({
               </div>
             );
           })}
-          {redisDatabases.length === 0 && <div style={s.databaseEmptyCompact}>{t("database.empty")}</div>}
+          {redisDatabases.length === 0 && (
+            <div style={s.databaseEmptyCompact}>{t("database.empty")}</div>
+          )}
         </div>
       );
     }
 
     if (connection.dbType === "mongodb") {
-      const mongoDatabases = (mongoDatabasesByConnection[connection.id] ?? []).filter((database) => {
-        const matchesDatabase = matchesSearch(`mongodb database ${database}`, searchQuery);
-        const matchesCollection = (mongoCollectionsByDatabase[`${connection.id}:${database}`] ?? []).some((collection) =>
-          matchesSearch(`mongodb collection ${database} ${collection}`, searchQuery),
-        );
-        return matchesDatabase || matchesCollection;
-      });
+      const mongoDatabases = (mongoDatabasesByConnection[connection.id] ?? []).filter(
+        (database) => {
+          const matchesDatabase = matchesSearch(`mongodb database ${database}`, searchQuery);
+          const matchesCollection = (
+            mongoCollectionsByDatabase[`${connection.id}:${database}`] ?? []
+          ).some((collection) =>
+            matchesSearch(`mongodb collection ${database} ${collection}`, searchQuery),
+          );
+          return matchesDatabase || matchesCollection;
+        },
+      );
       const orderedMongoDatabases = orderPinnedFirst(mongoDatabases, (database) =>
         pinnedTreeNodeIds.has(mongoDatabaseNodeKey(connection.id, database)),
       );
@@ -1561,15 +1927,18 @@ export function DatabaseSidebarTree({
               if (loadOnExpand && !databaseExpanded) onExpandMongoDatabase(connection, database);
             };
             const collections = orderPinnedFirst(
-              (mongoCollectionsByDatabase[`${connection.id}:${database}`] ?? []).filter((collection) =>
-                matchesSearch(`mongodb collection ${database} ${collection}`, searchQuery),
+              (mongoCollectionsByDatabase[`${connection.id}:${database}`] ?? []).filter(
+                (collection) =>
+                  matchesSearch(`mongodb collection ${database} ${collection}`, searchQuery),
               ),
-              (collection) => pinnedTreeNodeIds.has(mongoCollectionNodeKey(connection.id, database, collection)),
+              (collection) =>
+                pinnedTreeNodeIds.has(mongoCollectionNodeKey(connection.id, database, collection)),
             );
             return (
               <div key={database}>
                 <button
                   type="button"
+                  className={treeNodeClassName}
                   style={{
                     ...s.databaseListButton,
                     minHeight: 28,
@@ -1583,7 +1952,9 @@ export function DatabaseSidebarTree({
                       onSelectMongoDatabase(connection, database);
                     })
                   }
-                  onContextMenu={(event) => onMongoDatabaseContextMenu(event, connection.id, database)}
+                  onContextMenu={(event) =>
+                    onMongoDatabaseContextMenu(event, connection.id, database)
+                  }
                   onKeyDown={(event) =>
                     handleKeyShortcut(event, {
                       copyName: database,
@@ -1596,23 +1967,37 @@ export function DatabaseSidebarTree({
                       event.stopPropagation();
                       toggleMongoDatabase();
                     }}
-                    style={{ display: "inline-flex", alignItems: "center", color: "var(--text-hint)" }}
+                    style={{
+                      display: "inline-flex",
+                      alignItems: "center",
+                      color: "var(--text-hint)",
+                    }}
                   >
                     <ExpansionGlyph expanded={databaseExpanded} />
                   </span>
                   <Database size={13} />
-                  <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  <span
+                    style={{
+                      flex: 1,
+                      minWidth: 0,
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
                     {database}
                   </span>
                   {getDefaultDatabase(connection) === database && (
-                    <span style={{
-                      fontSize: 10,
-                      padding: "1px 5px",
-                      borderRadius: 4,
-                      background: "var(--accent-dim)",
-                      color: "var(--accent)",
-                      flexShrink: 0,
-                    }}>
+                    <span
+                      style={{
+                        fontSize: 10,
+                        padding: "1px 5px",
+                        borderRadius: 4,
+                        background: "var(--accent-dim)",
+                        color: "var(--accent)",
+                        flexShrink: 0,
+                      }}
+                    >
                       {t("database.defaultDatabaseBadge")}
                     </span>
                   )}
@@ -1621,43 +2006,72 @@ export function DatabaseSidebarTree({
                 {databaseExpanded && collections.length > 0 && (
                   <div style={{ display: "flex", flexDirection: "column", gap: 2, marginTop: 2 }}>
                     {collections.map((collection) => {
-                      const collectionNodeKey = mongoCollectionNodeKey(connection.id, database, collection);
+                      const collectionNodeKey = mongoCollectionNodeKey(
+                        connection.id,
+                        database,
+                        collection,
+                      );
                       const collectionExpansionKey = `mongo:${connection.id}:${database}:${collection}`;
-                      const collectionExpanded = expandedSchemaKeys.has(collectionExpansionKey) || Boolean(searchQuery);
+                      const collectionExpanded =
+                        expandedSchemaKeys.has(collectionExpansionKey) || Boolean(searchQuery);
                       const toggleMongoCollection = (loadOnExpand = true) => {
                         toggleSchema("mongo", `${connection.id}:${database}:${collection}`);
-                        if (loadOnExpand && !collectionExpanded) onExpandMongoCollection(connection, database, collection);
+                        if (loadOnExpand && !collectionExpanded)
+                          onExpandMongoCollection(connection, database, collection);
                       };
-                      const documents = (mongoDocumentsByCollection[`${connection.id}:${database}:${collection}`] ?? []).filter((document, index) =>
-                        matchesSearch(`mongodb document ${database} ${collection} ${mongoDocumentPreview(document, index)}`, searchQuery),
+                      const documents = (
+                        mongoDocumentsByCollection[`${connection.id}:${database}:${collection}`] ??
+                        []
+                      ).filter((document, index) =>
+                        matchesSearch(
+                          `mongodb document ${database} ${collection} ${mongoDocumentPreview(document, index)}`,
+                          searchQuery,
+                        ),
                       );
                       const collectionDocumentKey = `${connection.id}:${database}:${collection}`;
-                      const loadedDocumentCount = mongoDocumentsByCollection[collectionDocumentKey]?.length ?? 0;
-                      const totalDocumentCount = mongoDocumentTotalsByCollection[collectionDocumentKey] ?? 0;
+                      const loadedDocumentCount =
+                        mongoDocumentsByCollection[collectionDocumentKey]?.length ?? 0;
+                      const totalDocumentCount =
+                        mongoDocumentTotalsByCollection[collectionDocumentKey] ?? 0;
                       const hasMoreDocuments = loadedDocumentCount < totalDocumentCount;
                       return (
                         <div key={collection}>
                           <button
                             type="button"
+                            className={treeNodeClassName}
                             style={{
                               ...s.databaseListButton,
                               minHeight: 25,
                               padding: "4px 8px 4px 54px",
                               color: "var(--text-muted)",
-                              ...treeNodeSelectionStyle(collectionNodeKey, activeDbxDatabase === database && activeDbxSchema === collection),
+                              ...treeNodeSelectionStyle(
+                                collectionNodeKey,
+                                activeDbxDatabase === database && activeDbxSchema === collection,
+                              ),
                             }}
-                            {...treeNodeSelectionAttrs(collectionNodeKey, activeDbxDatabase === database && activeDbxSchema === collection)}
+                            {...treeNodeSelectionAttrs(
+                              collectionNodeKey,
+                              activeDbxDatabase === database && activeDbxSchema === collection,
+                            )}
                             onClick={(event) =>
                               handleTreeNodeClick(event, collectionNodeKey, () => {
                                 toggleMongoCollection(false);
                                 onSelectMongoCollection(connection, database, collection);
                               })
                             }
-                            onContextMenu={(event) => onMongoCollectionContextMenu(event, connection.id, database, collection)}
+                            onContextMenu={(event) =>
+                              onMongoCollectionContextMenu(
+                                event,
+                                connection.id,
+                                database,
+                                collection,
+                              )
+                            }
                             onKeyDown={(event) =>
                               handleKeyShortcut(event, {
                                 copyName: collection,
-                                refresh: () => onExpandMongoCollection(connection, database, collection),
+                                refresh: () =>
+                                  onExpandMongoCollection(connection, database, collection),
                               })
                             }
                           >
@@ -1666,20 +2080,45 @@ export function DatabaseSidebarTree({
                                 event.stopPropagation();
                                 toggleMongoCollection();
                               }}
-                              style={{ display: "inline-flex", alignItems: "center", color: "var(--text-hint)" }}
+                              style={{
+                                display: "inline-flex",
+                                alignItems: "center",
+                                color: "var(--text-hint)",
+                              }}
                             >
                               <ExpansionGlyph expanded={collectionExpanded} />
                             </span>
                             <ListTree size={12} />
-                            <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                            <span
+                              style={{
+                                flex: 1,
+                                minWidth: 0,
+                                overflow: "hidden",
+                                textOverflow: "ellipsis",
+                                whiteSpace: "nowrap",
+                              }}
+                            >
                               {collection}
                             </span>
                             {pinnedNodeIcon(collectionNodeKey)}
                           </button>
                           {collectionExpanded && documents.length > 0 && (
-                            <div style={{ display: "flex", flexDirection: "column", gap: 2, marginTop: 2 }}>
+                            <div
+                              style={{
+                                display: "flex",
+                                flexDirection: "column",
+                                gap: 2,
+                                marginTop: 2,
+                              }}
+                            >
                               {documents.map((document, index) => {
-                                const documentNodeKey = mongoDocumentNodeKey(connection.id, database, collection, document, index);
+                                const documentNodeKey = mongoDocumentNodeKey(
+                                  connection.id,
+                                  database,
+                                  collection,
+                                  document,
+                                  index,
+                                );
                                 const documentId = mongoDocumentId(document, index);
                                 const documentActive =
                                   activeDbxDatabase === database &&
@@ -1689,6 +2128,7 @@ export function DatabaseSidebarTree({
                                   <button
                                     key={documentNodeKey}
                                     type="button"
+                                    className={treeNodeClassName}
                                     style={{
                                       ...s.databaseListButton,
                                       minHeight: 24,
@@ -1699,19 +2139,41 @@ export function DatabaseSidebarTree({
                                     {...treeNodeSelectionAttrs(documentNodeKey, documentActive)}
                                     onClick={(event) =>
                                       handleTreeNodeClick(event, documentNodeKey, () =>
-                                        onSelectMongoDocument(connection, database, collection, document),
+                                        onSelectMongoDocument(
+                                          connection,
+                                          database,
+                                          collection,
+                                          document,
+                                        ),
                                       )
                                     }
-                                    onContextMenu={(event) => onMongoDocumentContextMenu(event, connection.id, database, collection, document)}
+                                    onContextMenu={(event) =>
+                                      onMongoDocumentContextMenu(
+                                        event,
+                                        connection.id,
+                                        database,
+                                        collection,
+                                        document,
+                                      )
+                                    }
                                     onKeyDown={(event) =>
                                       handleKeyShortcut(event, {
                                         copyName: documentId,
-                                        refresh: () => onExpandMongoCollection(connection, database, collection),
+                                        refresh: () =>
+                                          onExpandMongoCollection(connection, database, collection),
                                       })
                                     }
                                   >
                                     <Braces size={12} />
-                                    <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                                    <span
+                                      style={{
+                                        flex: 1,
+                                        minWidth: 0,
+                                        overflow: "hidden",
+                                        textOverflow: "ellipsis",
+                                        whiteSpace: "nowrap",
+                                      }}
+                                    >
                                       {mongoDocumentPreview(document, index)}
                                     </span>
                                   </button>
@@ -1720,28 +2182,61 @@ export function DatabaseSidebarTree({
                               {hasMoreDocuments && (
                                 <button
                                   type="button"
+                                  className={treeNodeClassName}
                                   style={{
                                     ...s.databaseListButton,
                                     minHeight: 24,
                                     padding: "4px 8px 4px 74px",
                                     color: "var(--text-muted)",
                                   }}
-                                  {...treeNodeSelectionAttrs(mongoDocumentLoadMoreNodeKey(connection.id, database, collection), false)}
+                                  {...treeNodeSelectionAttrs(
+                                    mongoDocumentLoadMoreNodeKey(
+                                      connection.id,
+                                      database,
+                                      collection,
+                                    ),
+                                    false,
+                                  )}
                                   onClick={(event) =>
-                                    handleTreeNodeClick(event, mongoDocumentLoadMoreNodeKey(connection.id, database, collection), () =>
-                                      onLoadMoreMongoDocuments(connection, database, collection),
+                                    handleTreeNodeClick(
+                                      event,
+                                      mongoDocumentLoadMoreNodeKey(
+                                        connection.id,
+                                        database,
+                                        collection,
+                                      ),
+                                      () =>
+                                        onLoadMoreMongoDocuments(connection, database, collection),
                                     )
                                   }
                                   onKeyDown={(event) =>
                                     handleKeyShortcut(event, {
                                       copyName: t("database.loadMore"),
-                                      refresh: () => onLoadMoreMongoDocuments(connection, database, collection),
+                                      refresh: () =>
+                                        onLoadMoreMongoDocuments(connection, database, collection),
                                     })
                                   }
                                 >
-                                  <span style={{ width: 12, textAlign: "center", color: "var(--text-hint)" }}>+</span>
-                                  <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                                    {t("database.loadMore")} ({loadedDocumentCount}/{totalDocumentCount})
+                                  <span
+                                    style={{
+                                      width: 12,
+                                      textAlign: "center",
+                                      color: "var(--text-hint)",
+                                    }}
+                                  >
+                                    +
+                                  </span>
+                                  <span
+                                    style={{
+                                      flex: 1,
+                                      minWidth: 0,
+                                      overflow: "hidden",
+                                      textOverflow: "ellipsis",
+                                      whiteSpace: "nowrap",
+                                    }}
+                                  >
+                                    {t("database.loadMore")} ({loadedDocumentCount}/
+                                    {totalDocumentCount})
                                   </span>
                                 </button>
                               )}
@@ -1755,7 +2250,9 @@ export function DatabaseSidebarTree({
               </div>
             );
           })}
-          {orderedMongoDatabases.length === 0 && <div style={s.databaseEmptyCompact}>{t("database.empty")}</div>}
+          {orderedMongoDatabases.length === 0 && (
+            <div style={s.databaseEmptyCompact}>{t("database.empty")}</div>
+          )}
         </div>
       );
     }
@@ -1823,15 +2320,21 @@ export function DatabaseSidebarTree({
             <div key={connection.id}>
               <button
                 type="button"
+                className={treeNodeClassName}
                 style={{
                   ...s.databaseListButton,
-                  ...treeNodeSelectionStyle(connectionNodeKey, connection.id === activeConnectionId),
+                  ...treeNodeSelectionStyle(
+                    connectionNodeKey,
+                    connection.id === activeConnectionId,
+                  ),
                 }}
                 {...treeNodeSelectionAttrs(connectionNodeKey)}
-                onClick={(event) => handleTreeNodeClick(event, connectionNodeKey, () => {
-                  toggleConnection(connection.id);
-                  onSelectConnection(connection);
-                })}
+                onClick={(event) =>
+                  handleTreeNodeClick(event, connectionNodeKey, () => {
+                    toggleConnection(connection.id);
+                    onSelectConnection(connection);
+                  })
+                }
                 onKeyDown={(event) =>
                   handleKeyShortcut(event, {
                     copyName: connection.name,
@@ -1847,7 +2350,11 @@ export function DatabaseSidebarTree({
                     event.stopPropagation();
                     toggleConnection(connection.id);
                   }}
-                  style={{ display: "inline-flex", alignItems: "center", color: "var(--text-hint)" }}
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    color: "var(--text-hint)",
+                  }}
                 >
                   <ExpansionGlyph expanded={expanded} />
                 </span>
@@ -1856,7 +2363,15 @@ export function DatabaseSidebarTree({
                 ) : (
                   <Plug size={14} />
                 )}
-                <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                <span
+                  style={{
+                    flex: 1,
+                    minWidth: 0,
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                  }}
+                >
                   {connection.name}
                 </span>
                 <Trash2
@@ -1867,50 +2382,76 @@ export function DatabaseSidebarTree({
                   }}
                 />
               </button>
-              {expanded && connection.id === activeConnectionId && filteredLegacyObjects.length > 0 && (
-                <div style={{ display: "flex", flexDirection: "column", gap: 3, marginTop: 3 }}>
-                  {filteredLegacyObjects.map((object) => {
-                    const objectNodeKey = legacyObjectNodeKey(object);
-                    return (
-                      <button
-                        key={`${object.objectType}:${object.name}`}
-                        type="button"
-                        style={{
-                          ...s.databaseListButton,
-                          minHeight: 28,
-                          padding: "5px 8px 5px 26px",
-                          ...treeNodeSelectionStyle(objectNodeKey, object.name === activeObject?.name),
-                        }}
-                        {...treeNodeSelectionAttrs(objectNodeKey)}
-                        onClick={(event) => handleTreeNodeClick(event, objectNodeKey, () => onSelectLegacyObject(object))}
-                        onKeyDown={(event) =>
-                          handleKeyShortcut(event, {
-                            copyName: object.name,
-                            refresh: () => onSelectLegacyObject(object),
-                          })
-                        }
-                      >
-                        <Table2 size={13} />
-                        <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                          {object.name}
-                        </span>
-                        {object.rowCount != null && <span style={{ color: "var(--text-hint)", fontSize: 11 }}>{object.rowCount}</span>}
-                      </button>
-                    );
-                  })}
-                </div>
-              )}
+              {expanded &&
+                connection.id === activeConnectionId &&
+                filteredLegacyObjects.length > 0 && (
+                  <div style={{ display: "flex", flexDirection: "column", gap: 3, marginTop: 3 }}>
+                    {filteredLegacyObjects.map((object) => {
+                      const objectNodeKey = legacyObjectNodeKey(object);
+                      return (
+                        <button
+                          key={`${object.objectType}:${object.name}`}
+                          type="button"
+                          className={treeNodeClassName}
+                          style={{
+                            ...s.databaseListButton,
+                            minHeight: 28,
+                            padding: "5px 8px 5px 26px",
+                            ...treeNodeSelectionStyle(
+                              objectNodeKey,
+                              object.name === activeObject?.name,
+                            ),
+                          }}
+                          {...treeNodeSelectionAttrs(objectNodeKey)}
+                          onClick={(event) =>
+                            handleTreeNodeClick(event, objectNodeKey, () =>
+                              onSelectLegacyObject(object),
+                            )
+                          }
+                          onKeyDown={(event) =>
+                            handleKeyShortcut(event, {
+                              copyName: object.name,
+                              refresh: () => onSelectLegacyObject(object),
+                            })
+                          }
+                        >
+                          <Table2 size={13} />
+                          <span
+                            style={{
+                              flex: 1,
+                              minWidth: 0,
+                              overflow: "hidden",
+                              textOverflow: "ellipsis",
+                              whiteSpace: "nowrap",
+                            }}
+                          >
+                            {object.name}
+                          </span>
+                          {object.rowCount != null && (
+                            <span style={{ color: "var(--text-hint)", fontSize: 11 }}>
+                              {object.rowCount}
+                            </span>
+                          )}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
             </div>
           );
         })}
 
         {filteredDbxConnectionGroups.map((connectionGroup) => {
-          const groupCollapsed = Boolean(connectionGroup.groupName) && collapsedConnectionGroups.has(connectionGroup.groupName) && !searchQuery;
+          const groupCollapsed =
+            Boolean(connectionGroup.groupName) &&
+            collapsedConnectionGroups.has(connectionGroup.groupName) &&
+            !searchQuery;
           return (
             <div key={connectionGroup.key}>
               {connectionGroup.groupName && (
                 <button
                   type="button"
+                  className={treeNodeClassName}
                   style={{
                     ...s.databaseListButton,
                     minHeight: 27,
@@ -1920,15 +2461,27 @@ export function DatabaseSidebarTree({
                   }}
                   {...treeNodeSelectionAttrs(dbxConnectionGroupNodeKey(connectionGroup.groupName))}
                   onClick={(event) =>
-                    handleTreeNodeClick(event, dbxConnectionGroupNodeKey(connectionGroup.groupName), () =>
-                      toggleConnectionGroup(connectionGroup.groupName),
+                    handleTreeNodeClick(
+                      event,
+                      dbxConnectionGroupNodeKey(connectionGroup.groupName),
+                      () => toggleConnectionGroup(connectionGroup.groupName),
                     )
                   }
-                  onContextMenu={(event) => onConnectionGroupContextMenu(event, connectionGroup.groupName)}
+                  onContextMenu={(event) =>
+                    onConnectionGroupContextMenu(event, connectionGroup.groupName)
+                  }
                 >
                   <ExpansionGlyph expanded={!groupCollapsed} />
                   <Folder size={13} />
-                  <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  <span
+                    style={{
+                      flex: 1,
+                      minWidth: 0,
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
                     {connectionGroup.label}
                   </span>
                   <span aria-hidden="true" style={{ color: "var(--text-hint)", fontSize: 10 }}>
@@ -1936,218 +2489,370 @@ export function DatabaseSidebarTree({
                   </span>
                 </button>
               )}
-	              {!groupCollapsed && connectionGroup.connections.map((connection) => {
-	          const expanded = expandedConnectionIds.has(connection.id) || Boolean(searchQuery);
-	          const isActive = connection.id === activeDbxConnectionId;
-	          const connectionNodeKey = dbxConnectionNodeKey(connection);
-	          const userAdminNodeKey = dbxUserAdminNodeKey(connection.id);
-	          const showUserAdminNode =
-	            supportsDbxUserAdmin(connection.dbType) &&
-	            (!searchQuery || matchesSearch(`${t("database.userAdmin")} users privileges`, searchQuery));
-	          return (
-            <div key={connection.id}>
-              <button
-                type="button"
-                style={{
-                  ...s.databaseListButton,
-                  ...treeNodeSelectionStyle(connectionNodeKey, isActive),
-                }}
-                {...treeNodeSelectionAttrs(connectionNodeKey)}
-                onClick={(event) => handleTreeNodeClick(event, connectionNodeKey, () => {
-                  toggleConnection(connection.id);
-                  onSelectDbxConnection(connection);
-                })}
-                onKeyDown={(event) =>
-                  handleKeyShortcut(event, {
-                    copyName: connection.name,
-                    refresh: () => onRefreshDbxConnection(connection),
-                    delete: () => onDeleteDbxConnection(connection.id),
-                    rename: () => onRenameDbxConnection(connection),
-                  })
-                }
-                onContextMenu={(event) => onConnectionContextMenu(event, connection.id, "dbx")}
-              >
-                <span
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    toggleConnection(connection.id);
-                  }}
-                  style={{ display: "inline-flex", alignItems: "center", color: "var(--text-hint)" }}
-                >
-                  <ExpansionGlyph expanded={expanded} />
-                </span>
-                <ConnectionNameBadge connection={connection} />
-                <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                  {connection.name}
-                </span>
-                {connection.pinned && <Pin size={12} fill="currentColor" style={{ color: "var(--accent)" }} />}
-                <span style={{ color: "var(--text-hint)", fontSize: 10, textTransform: "uppercase" }}>{connection.dbType}</span>
-                <Trash2
-                  size={13}
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    onDeleteDbxConnection(connection.id);
-                  }}
-                />
-              </button>
-
-              {expanded && isActive && activeDbxConnection && dbxHasSqlObjectBrowser && filteredDatabases.length > 0 && (
-                <div style={{ display: "flex", flexDirection: "column", gap: 3, marginTop: 3 }}>
-                  {filteredDatabases.map((database) => {
-                    const databaseNodeKey = dbxDatabaseNodeKey(database.name);
-                    const databaseExpanded = expandedDatabaseNames.has(database.name) || Boolean(searchQuery);
-                    return (
-                      <div key={database.name}>
-                        <button
-                          type="button"
-                          style={{
-                            ...s.databaseListButton,
-                            minHeight: 30,
-                            padding: "5px 8px 5px 18px",
-                            ...treeNodeSelectionStyle(databaseNodeKey, database.name === activeDbxDatabase),
+              {!groupCollapsed &&
+                connectionGroup.connections.map((connection) => {
+                  const expanded = expandedConnectionIds.has(connection.id) || Boolean(searchQuery);
+                  const isActive = connection.id === activeDbxConnectionId;
+                  const connectionNodeKey = dbxConnectionNodeKey(connection);
+                  const userAdminNodeKey = dbxUserAdminNodeKey(connection.id);
+                  const showUserAdminNode =
+                    supportsDbxUserAdmin(connection.dbType) &&
+                    (!searchQuery ||
+                      matchesSearch(`${t("database.userAdmin")} users privileges`, searchQuery));
+                  return (
+                    <div key={connection.id}>
+                      <button
+                        type="button"
+                        className={treeNodeClassName}
+                        style={{
+                          ...s.databaseListButton,
+                          ...treeNodeSelectionStyle(connectionNodeKey, isActive),
+                        }}
+                        {...treeNodeSelectionAttrs(connectionNodeKey)}
+                        onClick={(event) =>
+                          handleTreeNodeClick(event, connectionNodeKey, () => {
+                            toggleConnection(connection.id);
+                            onSelectDbxConnection(connection);
+                          })
+                        }
+                        onKeyDown={(event) =>
+                          handleKeyShortcut(event, {
+                            copyName: connection.name,
+                            refresh: () => onRefreshDbxConnection(connection),
+                            delete: () => onDeleteDbxConnection(connection.id),
+                            rename: () => onRenameDbxConnection(connection),
+                          })
+                        }
+                        onContextMenu={(event) =>
+                          onConnectionContextMenu(event, connection.id, "dbx")
+                        }
+                      >
+                        <span
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            toggleConnection(connection.id);
                           }}
-                          {...treeNodeSelectionAttrs(databaseNodeKey)}
-                          onClick={(event) => handleTreeNodeClick(event, databaseNodeKey, () => {
-                            toggleDatabase(database.name);
-                            onSelectDatabase(activeDbxConnection, database.name);
-                          })}
-                          onKeyDown={(event) =>
-                            handleKeyShortcut(event, {
-                              copyName: database.name,
-                              refresh: () => onRefreshDatabase(activeDbxConnection, database.name),
-                              delete: () => onDropDatabase(activeDbxConnection, database.name),
-                            })
-                          }
-                          onContextMenu={(event) => onDbxDatabaseContextMenu(event, activeDbxConnection.id, database.name)}
+                          style={{
+                            display: "inline-flex",
+                            alignItems: "center",
+                            color: "var(--text-hint)",
+                          }}
                         >
-                          <span
-                            onClick={(event) => {
-                              event.stopPropagation();
-                              toggleDatabase(database.name);
+                          <ExpansionGlyph expanded={expanded} />
+                        </span>
+                        <ConnectionNameBadge connection={connection} />
+                        <span
+                          style={{
+                            flex: 1,
+                            minWidth: 0,
+                            overflow: "hidden",
+                            textOverflow: "ellipsis",
+                            whiteSpace: "nowrap",
+                          }}
+                        >
+                          {connection.name}
+                        </span>
+                        {connection.pinned && (
+                          <Pin size={12} fill="currentColor" style={{ color: "var(--accent)" }} />
+                        )}
+                        <span
+                          style={{
+                            color: "var(--text-hint)",
+                            fontSize: 10,
+                            textTransform: "uppercase",
+                          }}
+                        >
+                          {connection.dbType}
+                        </span>
+                        <Trash2
+                          size={13}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            onDeleteDbxConnection(connection.id);
+                          }}
+                        />
+                      </button>
+
+                      {expanded &&
+                        isActive &&
+                        activeDbxConnection &&
+                        dbxHasSqlObjectBrowser &&
+                        filteredDatabases.length > 0 && (
+                          <div
+                            style={{
+                              display: "flex",
+                              flexDirection: "column",
+                              gap: 3,
+                              marginTop: 3,
                             }}
-                            style={{ display: "inline-flex", alignItems: "center", color: "var(--text-hint)" }}
                           >
-                            <ExpansionGlyph expanded={databaseExpanded} />
-                          </span>
-                          <Database size={13} />
-                          <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                            {database.name}
-                          </span>
-                          {pinnedNodeIcon(databaseNodeKey)}
-                        </button>
-                        {databaseExpanded &&
-                          database.name === activeDbxDatabase &&
-                          dbxSchemas.length === 1 &&
-                          filteredDbxSchemas.length === 1 &&
-                          filteredDbxSchemas[0] === database.name &&
-                          renderDbxObjectGroups(
-                            filteredDbxObjects.filter((object) => (object.schema ?? "") === database.name),
-                            database.name,
-                          )}
-                        {databaseExpanded &&
-                          database.name === activeDbxDatabase &&
-                          !(dbxSchemas.length === 1 && filteredDbxSchemas.length === 1 && filteredDbxSchemas[0] === database.name) &&
-                          dbxSchemas.length > 0 &&
-                          filteredDbxSchemas.length > 0 && (
-                          <div style={{ display: "flex", flexDirection: "column", gap: 3, marginTop: 3 }}>
-                            {filteredDbxSchemas.map((schemaName) => {
-                              const schemaKey = `${database.name}:${schemaName}`;
-                              const schemaNodeKey = dbxSchemaNodeKey(database.name, schemaName);
-                              const schemaExpanded =
-                                expandedSchemaKeys.has(schemaKey) ||
-                                Boolean(searchQuery) ||
-                                schemaName === activeDbxSchema ||
-                                filteredDbxSchemas.length === 1;
-                              const schemaObjects = filteredDbxObjects.filter((object) => (object.schema ?? "") === schemaName);
+                            {filteredDatabases.map((database) => {
+                              const databaseNodeKey = dbxDatabaseNodeKey(database.name);
+                              const databaseExpanded =
+                                expandedDatabaseNames.has(database.name) || Boolean(searchQuery);
                               return (
-                                <div key={schemaKey}>
+                                <div key={database.name}>
                                   <button
                                     type="button"
+                                    className={treeNodeClassName}
                                     style={{
                                       ...s.databaseListButton,
-                                      minHeight: 28,
-                                      padding: "5px 8px 5px 30px",
-                                      ...treeNodeSelectionStyle(schemaNodeKey, schemaName === activeDbxSchema),
+                                      minHeight: 30,
+                                      padding: "5px 8px 5px 18px",
+                                      ...treeNodeSelectionStyle(
+                                        databaseNodeKey,
+                                        database.name === activeDbxDatabase,
+                                      ),
                                     }}
-                                    {...treeNodeSelectionAttrs(schemaNodeKey)}
-                                    onClick={(event) => handleTreeNodeClick(event, schemaNodeKey, () => {
-                                      toggleSchema(database.name, schemaName);
-                                      onSelectDbxSchema(activeDbxConnection, database.name, schemaName);
-                                    })}
+                                    {...treeNodeSelectionAttrs(databaseNodeKey)}
+                                    onClick={(event) =>
+                                      handleTreeNodeClick(event, databaseNodeKey, () => {
+                                        toggleDatabase(database.name);
+                                        onSelectDatabase(activeDbxConnection, database.name);
+                                      })
+                                    }
                                     onKeyDown={(event) =>
                                       handleKeyShortcut(event, {
-                                        copyName: schemaName,
-                                        refresh: () => onRefreshDbxSchema(activeDbxConnection, database.name, schemaName),
-                                        delete: () => onDropDbxSchema(activeDbxConnection, database.name, schemaName),
+                                        copyName: database.name,
+                                        refresh: () =>
+                                          onRefreshDatabase(activeDbxConnection, database.name),
+                                        delete: () =>
+                                          onDropDatabase(activeDbxConnection, database.name),
                                       })
                                     }
                                     onContextMenu={(event) =>
-                                      onDbxSchemaContextMenu(event, activeDbxConnection.id, database.name, schemaName)
+                                      onDbxDatabaseContextMenu(
+                                        event,
+                                        activeDbxConnection.id,
+                                        database.name,
+                                      )
                                     }
                                   >
                                     <span
                                       onClick={(event) => {
                                         event.stopPropagation();
-                                        toggleSchema(database.name, schemaName);
+                                        toggleDatabase(database.name);
                                       }}
-                                      style={{ display: "inline-flex", alignItems: "center", color: "var(--text-hint)" }}
+                                      style={{
+                                        display: "inline-flex",
+                                        alignItems: "center",
+                                        color: "var(--text-hint)",
+                                      }}
                                     >
-                                      <ExpansionGlyph expanded={schemaExpanded} />
+                                      <ExpansionGlyph expanded={databaseExpanded} />
                                     </span>
-                                    <ListTree size={13} />
-                                    <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                                      {schemaName}
+                                    <Database size={13} />
+                                    <span
+                                      style={{
+                                        flex: 1,
+                                        minWidth: 0,
+                                        overflow: "hidden",
+                                        textOverflow: "ellipsis",
+                                        whiteSpace: "nowrap",
+                                      }}
+                                    >
+                                      {database.name}
                                     </span>
-                                    {pinnedNodeIcon(schemaNodeKey)}
+                                    {pinnedNodeIcon(databaseNodeKey)}
                                   </button>
-                                  {schemaExpanded && renderDbxObjectGroups(schemaObjects, schemaKey, 36, 42, 56, schemaName)}
+                                  {databaseExpanded &&
+                                    database.name === activeDbxDatabase &&
+                                    dbxSchemas.length === 1 &&
+                                    filteredDbxSchemas.length === 1 &&
+                                    filteredDbxSchemas[0] === database.name &&
+                                    renderDbxObjectGroups(
+                                      filteredDbxObjects.filter(
+                                        (object) => (object.schema ?? "") === database.name,
+                                      ),
+                                      database.name,
+                                    )}
+                                  {databaseExpanded &&
+                                    database.name === activeDbxDatabase &&
+                                    !(
+                                      dbxSchemas.length === 1 &&
+                                      filteredDbxSchemas.length === 1 &&
+                                      filteredDbxSchemas[0] === database.name
+                                    ) &&
+                                    dbxSchemas.length > 0 &&
+                                    filteredDbxSchemas.length > 0 && (
+                                      <div
+                                        style={{
+                                          display: "flex",
+                                          flexDirection: "column",
+                                          gap: 3,
+                                          marginTop: 3,
+                                        }}
+                                      >
+                                        {filteredDbxSchemas.map((schemaName) => {
+                                          const schemaKey = `${database.name}:${schemaName}`;
+                                          const schemaNodeKey = dbxSchemaNodeKey(
+                                            database.name,
+                                            schemaName,
+                                          );
+                                          const schemaExpanded =
+                                            expandedSchemaKeys.has(schemaKey) ||
+                                            Boolean(searchQuery) ||
+                                            schemaName === activeDbxSchema ||
+                                            filteredDbxSchemas.length === 1;
+                                          const schemaObjects = filteredDbxObjects.filter(
+                                            (object) => (object.schema ?? "") === schemaName,
+                                          );
+                                          return (
+                                            <div key={schemaKey}>
+                                              <button
+                                                type="button"
+                                                className={treeNodeClassName}
+                                                style={{
+                                                  ...s.databaseListButton,
+                                                  minHeight: 28,
+                                                  padding: "5px 8px 5px 30px",
+                                                  ...treeNodeSelectionStyle(
+                                                    schemaNodeKey,
+                                                    schemaName === activeDbxSchema,
+                                                  ),
+                                                }}
+                                                {...treeNodeSelectionAttrs(schemaNodeKey)}
+                                                onClick={(event) =>
+                                                  handleTreeNodeClick(event, schemaNodeKey, () => {
+                                                    toggleSchema(database.name, schemaName);
+                                                    onSelectDbxSchema(
+                                                      activeDbxConnection,
+                                                      database.name,
+                                                      schemaName,
+                                                    );
+                                                  })
+                                                }
+                                                onKeyDown={(event) =>
+                                                  handleKeyShortcut(event, {
+                                                    copyName: schemaName,
+                                                    refresh: () =>
+                                                      onRefreshDbxSchema(
+                                                        activeDbxConnection,
+                                                        database.name,
+                                                        schemaName,
+                                                      ),
+                                                    delete: () =>
+                                                      onDropDbxSchema(
+                                                        activeDbxConnection,
+                                                        database.name,
+                                                        schemaName,
+                                                      ),
+                                                  })
+                                                }
+                                                onContextMenu={(event) =>
+                                                  onDbxSchemaContextMenu(
+                                                    event,
+                                                    activeDbxConnection.id,
+                                                    database.name,
+                                                    schemaName,
+                                                  )
+                                                }
+                                              >
+                                                <span
+                                                  onClick={(event) => {
+                                                    event.stopPropagation();
+                                                    toggleSchema(database.name, schemaName);
+                                                  }}
+                                                  style={{
+                                                    display: "inline-flex",
+                                                    alignItems: "center",
+                                                    color: "var(--text-hint)",
+                                                  }}
+                                                >
+                                                  <ExpansionGlyph expanded={schemaExpanded} />
+                                                </span>
+                                                <ListTree size={13} />
+                                                <span
+                                                  style={{
+                                                    flex: 1,
+                                                    minWidth: 0,
+                                                    overflow: "hidden",
+                                                    textOverflow: "ellipsis",
+                                                    whiteSpace: "nowrap",
+                                                  }}
+                                                >
+                                                  {schemaName}
+                                                </span>
+                                                {pinnedNodeIcon(schemaNodeKey)}
+                                              </button>
+                                              {schemaExpanded &&
+                                                renderDbxObjectGroups(
+                                                  schemaObjects,
+                                                  schemaKey,
+                                                  36,
+                                                  42,
+                                                  56,
+                                                  schemaName,
+                                                )}
+                                            </div>
+                                          );
+                                        })}
+                                      </div>
+                                    )}
+                                  {databaseExpanded &&
+                                    database.name === activeDbxDatabase &&
+                                    dbxSchemas.length === 0 &&
+                                    renderDbxObjectGroups(filteredDbxObjects, database.name)}
                                 </div>
                               );
                             })}
                           </div>
                         )}
-                        {databaseExpanded && database.name === activeDbxDatabase && dbxSchemas.length === 0 && renderDbxObjectGroups(filteredDbxObjects, database.name)}
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
 
-	              {expanded && isActive && activeDbxConnection && !dbxHasSqlObjectBrowser && renderNoSqlTreeRows(activeDbxConnection)}
+                      {expanded &&
+                        isActive &&
+                        activeDbxConnection &&
+                        !dbxHasSqlObjectBrowser &&
+                        renderNoSqlTreeRows(activeDbxConnection)}
 
-	              {expanded && isActive && showUserAdminNode && (
-	                <button
-	                  type="button"
-	                  style={{
-	                    ...s.databaseListButton,
-	                    minHeight: 28,
-	                    padding: "5px 8px 5px 18px",
-	                    color: "var(--text-muted)",
-	                    ...treeNodeSelectionStyle(userAdminNodeKey, userAdminActive),
-	                  }}
-	                  {...treeNodeSelectionAttrs(userAdminNodeKey, userAdminActive)}
-	                  onClick={(event) => handleTreeNodeClick(event, userAdminNodeKey, () => onOpenUserAdmin(connection))}
-	                  onContextMenu={(event) => onUserAdminContextMenu(event, connection.id)}
-	                  onKeyDown={(event) =>
-	                    handleKeyShortcut(event, {
-	                      copyName: t("database.userAdmin"),
-	                    })
-	                  }
-	                >
-	                  <UsersRound size={13} />
-	                  <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-	                    {t("database.userAdmin")}
-	                  </span>
-	                </button>
-	              )}
-	            </div>
-	          );
-              })}
+                      {expanded && isActive && showUserAdminNode && (
+                        <button
+                          type="button"
+                          className={treeNodeClassName}
+                          style={{
+                            ...s.databaseListButton,
+                            minHeight: 28,
+                            padding: "5px 8px 5px 18px",
+                            color: "var(--text-muted)",
+                            ...treeNodeSelectionStyle(userAdminNodeKey, userAdminActive),
+                          }}
+                          {...treeNodeSelectionAttrs(userAdminNodeKey, userAdminActive)}
+                          onClick={(event) =>
+                            handleTreeNodeClick(event, userAdminNodeKey, () =>
+                              onOpenUserAdmin(connection),
+                            )
+                          }
+                          onContextMenu={(event) => onUserAdminContextMenu(event, connection.id)}
+                          onKeyDown={(event) =>
+                            handleKeyShortcut(event, {
+                              copyName: t("database.userAdmin"),
+                            })
+                          }
+                        >
+                          <UsersRound size={13} />
+                          <span
+                            style={{
+                              flex: 1,
+                              minWidth: 0,
+                              overflow: "hidden",
+                              textOverflow: "ellipsis",
+                              whiteSpace: "nowrap",
+                            }}
+                          >
+                            {t("database.userAdmin")}
+                          </span>
+                        </button>
+                      )}
+                    </div>
+                  );
+                })}
             </div>
           );
         })}
 
-        {searchQuery && !hasResults && <div style={s.databaseEmptyCompact}>{t("database.sidebarSearchNoResults")}</div>}
+        {searchQuery && !hasResults && (
+          <div style={s.databaseEmptyCompact}>{t("database.sidebarSearchNoResults")}</div>
+        )}
       </div>
 
       {activeObject && (
@@ -2165,7 +2870,13 @@ export function DatabaseSidebarTree({
               {activeObject.columns.map((column) => (
                 <div
                   key={column.name}
-                  style={{ fontSize: 11.5, color: "var(--text-secondary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+                  style={{
+                    fontSize: 11.5,
+                    color: "var(--text-secondary)",
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                  }}
                   title={`${column.name} ${column.dataType}`}
                 >
                   {column.primaryKey ? "* " : ""}
@@ -2174,7 +2885,9 @@ export function DatabaseSidebarTree({
                 </div>
               ))}
             </div>
-            {(activeObject.indexes.length > 0 || activeObject.foreignKeys.length > 0 || activeObject.triggers.length > 0) && (
+            {(activeObject.indexes.length > 0 ||
+              activeObject.foreignKeys.length > 0 ||
+              activeObject.triggers.length > 0) && (
               <div style={{ fontSize: 11, color: "var(--text-hint)", lineHeight: 1.5 }}>
                 {t("database.objectStats", {
                   indexes: activeObject.indexes.length,

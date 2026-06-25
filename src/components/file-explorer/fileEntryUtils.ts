@@ -63,6 +63,17 @@ export function fileIconKind(entry: Pick<FsEntry, "name" | "extension" | "is_dir
   return "file";
 }
 
+export function isSqliteDatabaseFileName(name: string, ext?: string | null): boolean {
+  return ["db", "sqlite", "sqlite3"].includes(fileExtension(name, ext));
+}
+
+export function isSqliteDatabaseFile(
+  entry: Pick<FsEntry, "name" | "extension" | "is_dir">,
+): boolean {
+  if (entry.is_dir) return false;
+  return isSqliteDatabaseFileName(entry.name, entry.extension);
+}
+
 export function sortFileEntries<T extends Pick<FsEntry, "name" | "is_dir" | "modifiedAtMs">>(
   entries: T[],
   field: FileSortField,

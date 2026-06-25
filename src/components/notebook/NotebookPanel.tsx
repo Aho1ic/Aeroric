@@ -1,11 +1,9 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type React from "react";
 import DOMPurify from "dompurify";
 import { marked } from "marked";
 import {
   Bold,
-  ChevronLeft,
-  ChevronRight,
   Code2,
   FileText,
   Highlighter,
@@ -22,7 +20,7 @@ import {
 } from "lucide-react";
 import { useI18n } from "../../i18n";
 
-type NotebookFormat = "markdown" | "txt";
+type NotebookFormat = "markdown" | "richtext";
 
 type NotebookNote = {
   id: string;
@@ -32,7 +30,38 @@ type NotebookNote = {
   updatedAt: number;
 };
 
+type StoredNotebookNote = Partial<Omit<NotebookNote, "format">> & {
+  format?: NotebookFormat | "txt";
+};
+
+type RichTextToolbarState = {
+  bold: boolean;
+  italic: boolean;
+  underline: boolean;
+  strike: boolean;
+  bulletList: boolean;
+  numberedList: boolean;
+  heading: boolean;
+  subheading: boolean;
+};
+
+type NotebookContextMenuState = {
+  x: number;
+  y: number;
+  format: NotebookFormat;
+};
+
 const STORAGE_KEY = "aeroric:notebook:v1";
+const DEFAULT_RICH_TEXT_STATE: RichTextToolbarState = {
+  bold: false,
+  italic: false,
+  underline: false,
+  strike: false,
+  bulletList: false,
+  numberedList: false,
+  heading: false,
+  subheading: false,
+};
 
 function createNote(title: string, format: NotebookFormat): NotebookNote {
   const now = Date.now();
@@ -46,26 +75,51 @@ function createNote(title: string, format: NotebookFormat): NotebookNote {
 }
 
 function normalizeFormat(value: unknown): NotebookFormat {
-  return value === "txt" ? "txt" : "markdown";
+  return value === "richtext" || value === "txt" ? "richtext" : "markdown";
+}
+
+function escapeHtml(text: string): string {
+  return text.replace(/[&<>"']/g, (char) => {
+    switch (char) {
+      case "&":
+        return "&amp;";
+      case "<":
+        return "&lt;";
+      case ">":
+        return "&gt;";
+      case '"':
+        return "&quot;";
+      default:
+        return "&#39;";
+    }
+  });
+}
+
+function plainTextToRichTextHtml(text: string): string {
+  const lines = text.split(/\r?\n/);
+  return lines.map((line) => `<p>${escapeHtml(line) || "<br>"}</p>`).join("");
 }
 
 function loadNotes(): NotebookNote[] {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return [];
-    const parsed = JSON.parse(raw) as Array<Partial<NotebookNote>>;
+    const parsed = JSON.parse(raw) as StoredNotebookNote[];
     if (!Array.isArray(parsed)) return [];
     return parsed
-      .filter((item): item is Partial<NotebookNote> & { id: string; title: string } =>
+      .filter((item): item is StoredNotebookNote & { id: string; title: string } =>
         Boolean(item.id && typeof item.title === "string"),
       )
-      .map((item) => ({
-        id: item.id,
-        title: item.title || "Untitled memo",
-        body: typeof item.body === "string" ? item.body : "",
-        format: normalizeFormat(item.format),
-        updatedAt: typeof item.updatedAt === "number" ? item.updatedAt : 0,
-      }))
+      .map((item) => {
+        const body = typeof item.body === "string" ? item.body : "";
+        return {
+          id: item.id,
+          title: item.title || "Untitled quick note",
+          body: item.format === "txt" ? plainTextToRichTextHtml(body) : body,
+          format: normalizeFormat(item.format),
+          updatedAt: typeof item.updatedAt === "number" ? item.updatedAt : 0,
+        };
+      })
       .sort((a, b) => b.updatedAt - a.updatedAt);
   } catch {
     return [];
@@ -80,24 +134,30 @@ function renderMarkdown(body: string): string {
   return DOMPurify.sanitize(marked(body || "", { async: false }) as string);
 }
 
-function formatLabel(format: NotebookFormat) {
-  return format === "markdown" ? "Markdown" : "TXT";
+function renderRichText(body: string): string {
+  return DOMPurify.sanitize(body || "");
 }
 
 function ToolButton({
   label,
   children,
   onClick,
+  onMouseDown,
+  pressed,
 }: {
   label: string;
   children: React.ReactNode;
   onClick: () => void;
+  onMouseDown?: (event: React.MouseEvent<HTMLButtonElement>) => void;
+  pressed?: boolean;
 }) {
   return (
     <button
       type="button"
       aria-label={label}
+      aria-pressed={typeof pressed === "boolean" ? pressed : undefined}
       title={label}
+      onMouseDown={onMouseDown}
       onClick={onClick}
       style={{
         width: 26,
@@ -107,8 +167,8 @@ function ToolButton({
         justifyContent: "center",
         border: "1px solid var(--border-dim)",
         borderRadius: 5,
-        background: "var(--bg-card)",
-        color: "var(--text-secondary)",
+        background: pressed ? "var(--control-active-bg)" : "var(--bg-card)",
+        color: pressed ? "var(--control-active-fg)" : "var(--text-secondary)",
         cursor: "pointer",
         flexShrink: 0,
       }}
@@ -122,16 +182,19 @@ function ColorTool({
   label,
   value,
   children,
+  onMouseDown,
   onChange,
 }: {
   label: string;
   value: string;
   children: React.ReactNode;
+  onMouseDown?: (event: React.MouseEvent<HTMLLabelElement>) => void;
   onChange: (value: string) => void;
 }) {
   return (
     <label
       title={label}
+      onMouseDown={onMouseDown}
       style={{
         position: "relative",
         width: 34,
@@ -175,24 +238,31 @@ function ColorTool({
   );
 }
 
-export function NotebookPanel({
-  width = "100%",
-}: {
-  width?: number | string;
-}) {
+export function NotebookPanel({ width = "100%" }: { width?: number | string }) {
   const { t } = useI18n();
-  const contentRef = useRef<HTMLTextAreaElement | null>(null);
+  const markdownContentRef = useRef<HTMLTextAreaElement | null>(null);
+  const richTextRef = useRef<HTMLDivElement | null>(null);
+  const createPanelRef = useRef<HTMLDivElement | null>(null);
+  const titleInputRef = useRef<HTMLInputElement | null>(null);
+  const savedRichTextRangeRef = useRef<Range | null>(null);
+  const richTextSyncedNoteIdRef = useRef<string | null>(null);
   const [notes, setNotes] = useState<NotebookNote[]>(() => loadNotes());
   const [activeId, setActiveId] = useState<string | null>(() => notes[0]?.id ?? null);
   const [mode, setMode] = useState<"edit" | "read">("edit");
-  const [listCollapsed, setListCollapsed] = useState(false);
   const [creating, setCreating] = useState(false);
-  const [newTitle, setNewTitle] = useState("");
-  const [newFormat, setNewFormat] = useState<NotebookFormat>("markdown");
+  const [pendingTitleFocusId, setPendingTitleFocusId] = useState<string | null>(null);
   const [textColor, setTextColor] = useState("#2563eb");
   const [backgroundColor, setBackgroundColor] = useState("#fef08a");
+  const [richTextState, setRichTextState] = useState<RichTextToolbarState>(DEFAULT_RICH_TEXT_STATE);
+  const [contextMenu, setContextMenu] = useState<NotebookContextMenuState | null>(null);
+  const [tablePickerOpen, setTablePickerOpen] = useState(false);
+  const [tableHoverSize, setTableHoverSize] = useState({ rows: 2, cols: 2 });
   const activeNote = notes.find((note) => note.id === activeId) ?? notes[0] ?? null;
   const markdownHtml = useMemo(() => renderMarkdown(activeNote?.body ?? ""), [activeNote?.body]);
+  const richTextHtml = useMemo(() => renderRichText(activeNote?.body ?? ""), [activeNote?.body]);
+  const activeFormat = activeNote?.format ?? "markdown";
+  const formatLabel = (format: NotebookFormat) =>
+    format === "markdown" ? "Markdown" : t("notebook.formatText");
 
   useEffect(() => {
     saveNotes(notes);
@@ -205,6 +275,51 @@ export function NotebookPanel({
     }
   }, [activeId, notes]);
 
+  useEffect(() => {
+    if (!creating) return;
+    const handlePointerDown = (event: MouseEvent) => {
+      const target = event.target;
+      if (target instanceof Node && createPanelRef.current?.contains(target)) return;
+      setCreating(false);
+    };
+    document.addEventListener("mousedown", handlePointerDown);
+    return () => document.removeEventListener("mousedown", handlePointerDown);
+  }, [creating]);
+
+  useLayoutEffect(() => {
+    if (!pendingTitleFocusId || activeNote?.id !== pendingTitleFocusId) return;
+    titleInputRef.current?.focus();
+    titleInputRef.current?.select();
+    setPendingTitleFocusId(null);
+  }, [activeNote?.id, pendingTitleFocusId]);
+
+  useEffect(() => {
+    if (mode !== "edit" || activeNote?.format !== "richtext") return;
+    const editor = richTextRef.current;
+    if (!editor) return;
+    const html = renderRichText(activeNote.body);
+    const noteChanged = richTextSyncedNoteIdRef.current !== activeNote.id;
+    if (noteChanged || document.activeElement !== editor) {
+      editor.innerHTML = html;
+      richTextSyncedNoteIdRef.current = activeNote.id;
+    }
+  }, [activeNote?.body, activeNote?.format, activeNote?.id, mode]);
+
+  useEffect(() => {
+    const close = (event: MouseEvent) => {
+      const target = event.target;
+      if (
+        target instanceof Element &&
+        target.closest("[data-notebook-table-picker], [data-notebook-context-menu]")
+      )
+        return;
+      setContextMenu(null);
+      setTablePickerOpen(false);
+    };
+    document.addEventListener("mousedown", close);
+    return () => document.removeEventListener("mousedown", close);
+  }, []);
+
   const updateActiveNote = (patch: Partial<Pick<NotebookNote, "title" | "body">>) => {
     if (!activeNote) return;
     const updatedAt = Date.now();
@@ -215,23 +330,21 @@ export function NotebookPanel({
     );
   };
 
+  const cancelCreate = () => {
+    setCreating(false);
+  };
+
   const startCreate = () => {
-    setListCollapsed(false);
-    setCreating(true);
-    setNewTitle("");
-    setNewFormat("markdown");
+    setCreating((current) => !current);
     setMode("edit");
   };
 
-  const addNote = () => {
-    const title = newTitle.trim();
-    if (!title) return;
-    const note = createNote(title, newFormat);
+  const addNote = (format: NotebookFormat) => {
+    const note = createNote("", format);
     setNotes((current) => [note, ...current]);
     setActiveId(note.id);
-    setCreating(false);
-    setNewTitle("");
-    setNewFormat("markdown");
+    setPendingTitleFocusId(note.id);
+    cancelCreate();
     setMode("edit");
   };
 
@@ -240,9 +353,66 @@ export function NotebookPanel({
     setNotes((current) => current.filter((note) => note.id !== activeNote.id));
   };
 
+  const readRichTextCommandState = () => {
+    if (activeFormat !== "richtext") {
+      setRichTextState(DEFAULT_RICH_TEXT_STATE);
+      return;
+    }
+    const stateOf = (command: string) =>
+      typeof document.queryCommandState === "function"
+        ? Boolean(document.queryCommandState(command))
+        : false;
+    const valueOf = (command: string) =>
+      typeof document.queryCommandValue === "function"
+        ? String(document.queryCommandValue(command)).toLowerCase()
+        : "";
+    const block = valueOf("formatBlock").replace(/[<>]/g, "");
+    setRichTextState({
+      bold: stateOf("bold"),
+      italic: stateOf("italic"),
+      underline: stateOf("underline"),
+      strike: stateOf("strikeThrough"),
+      bulletList: stateOf("insertUnorderedList"),
+      numberedList: stateOf("insertOrderedList"),
+      heading: block === "h1",
+      subheading: block === "h2",
+    });
+  };
+
+  const saveRichTextSelection = () => {
+    const editor = richTextRef.current;
+    const selection = document.getSelection();
+    if (!editor || !selection || selection.rangeCount === 0) return;
+    const range = selection.getRangeAt(0);
+    if (!editor.contains(range.commonAncestorContainer)) return;
+    savedRichTextRangeRef.current = range.cloneRange();
+  };
+
+  const restoreRichTextSelection = () => {
+    const editor = richTextRef.current;
+    const range = savedRichTextRangeRef.current;
+    const selection = document.getSelection();
+    if (!editor || !range || !selection) return false;
+    if (!editor.contains(range.commonAncestorContainer)) return false;
+    editor.focus();
+    selection.removeAllRanges();
+    selection.addRange(range);
+    return true;
+  };
+
+  const keepRichTextSelectionOnMouseDown = (event: React.MouseEvent) => {
+    if (activeFormat !== "richtext") return;
+    saveRichTextSelection();
+    event.preventDefault();
+  };
+
+  const saveRichTextSelectionOnMouseDown = () => {
+    if (activeFormat === "richtext") saveRichTextSelection();
+  };
+
   const replaceSelection = (transform: (selected: string) => string) => {
     if (!activeNote) return;
-    const textarea = contentRef.current;
+    const textarea = markdownContentRef.current;
     const body = activeNote.body;
     const start = textarea?.selectionStart ?? body.length;
     const end = textarea?.selectionEnd ?? body.length;
@@ -251,7 +421,7 @@ export function NotebookPanel({
     const nextBody = `${body.slice(0, start)}${replacement}${body.slice(end)}`;
     updateActiveNote({ body: nextBody });
     window.requestAnimationFrame(() => {
-      const next = contentRef.current;
+      const next = markdownContentRef.current;
       if (!next) return;
       next.focus();
       next.setSelectionRange(start, start + replacement.length);
@@ -259,10 +429,7 @@ export function NotebookPanel({
   };
 
   const stripListPrefix = (line: string) => line.replace(/^\s*(?:[-*]\s+|\d+\.\s+)/, "");
-  const transformLines = (
-    selected: string,
-    transform: (line: string, index: number) => string,
-  ) => {
+  const transformLines = (selected: string, transform: (line: string, index: number) => string) => {
     const lines = selected.length > 0 ? selected.split(/\r?\n/) : [""];
     return lines.map(transform).join("\n");
   };
@@ -298,6 +465,156 @@ export function NotebookPanel({
     });
   };
 
+  const clearMarkdownBackground = () => {
+    replaceSelection((selected) =>
+      selected
+        .replace(/<mark>([\s\S]*?)<\/mark>/g, "$1")
+        .replace(
+          /<span\s+style=["']background-color:[^"']+["']>([\s\S]*?)<\/span>/g,
+          "$1",
+        ),
+    );
+  };
+
+  const updateRichTextFromDom = () => {
+    if (!activeNote || !richTextRef.current) return;
+    updateActiveNote({ body: renderRichText(richTextRef.current.innerHTML) });
+  };
+
+  const runRichTextCommand = (command: string, value?: string) => {
+    restoreRichTextSelection();
+    richTextRef.current?.focus();
+    if (typeof document.execCommand === "function") {
+      if (value === undefined) {
+        document.execCommand(command, false);
+      } else {
+        document.execCommand(command, false, value);
+      }
+    }
+    updateRichTextFromDom();
+    saveRichTextSelection();
+    readRichTextCommandState();
+  };
+
+  const applyRichCodeBlock = () => {
+    runRichTextCommand("insertHTML", "<pre><code>Code</code></pre>");
+  };
+
+  const richTableHtml = (rows: number, cols: number) => {
+    const header = Array.from({ length: cols }, (_, index) => `<th>Column ${index + 1}</th>`).join(
+      "",
+    );
+    const body = Array.from(
+      { length: rows },
+      () => `<tr>${Array.from({ length: cols }, () => "<td><br></td>").join("")}</tr>`,
+    ).join("");
+    return `<table><thead><tr>${header}</tr></thead><tbody>${body}</tbody></table>`;
+  };
+
+  const applyRichTable = (rows = 2, cols = 2) => {
+    runRichTextCommand("insertHTML", richTableHtml(rows, cols));
+    setTablePickerOpen(false);
+  };
+
+  const applyInlineWrap = (before: string, after: string, command: string, value?: string) => {
+    if (activeFormat === "markdown") {
+      applyWrap(before, after);
+      return;
+    }
+    runRichTextCommand(command, value);
+  };
+  const clearBackgroundCommand = () => {
+    if (activeFormat === "markdown") {
+      clearMarkdownBackground();
+      return;
+    }
+    runRichTextCommand("hiliteColor", "transparent");
+  };
+  const applyHeading = (prefix: string, richBlock: string) => {
+    if (activeFormat === "markdown") {
+      applyLinePrefix(prefix);
+      return;
+    }
+    runRichTextCommand("formatBlock", richBlock);
+  };
+  const applyListCommand = (ordered: boolean) => {
+    if (activeFormat === "markdown") {
+      applyList(ordered);
+      return;
+    }
+    runRichTextCommand(ordered ? "insertOrderedList" : "insertUnorderedList");
+  };
+  const applyBodyCommand = () => {
+    if (activeFormat === "markdown") {
+      applyBodyText();
+      return;
+    }
+    runRichTextCommand("formatBlock", "div");
+  };
+  const applyCodeBlockCommand = () => {
+    if (activeFormat === "markdown") {
+      applyCodeBlock();
+      return;
+    }
+    applyRichCodeBlock();
+  };
+  const applyTableCommand = () => {
+    if (activeFormat === "markdown") {
+      applyTable();
+      return;
+    }
+    setTablePickerOpen((open) => !open);
+  };
+
+  const runContextMenuAction = (action: string) => {
+    const menuFormat = contextMenu?.format ?? activeFormat;
+    setContextMenu(null);
+    if (action === "cut" || action === "copy" || action === "paste") {
+      if (typeof document.execCommand === "function") document.execCommand(action, false);
+      return;
+    }
+    if (menuFormat === "markdown") {
+      if (action === "bold") applyWrap("**", "**");
+      if (action === "italic") applyWrap("*", "*");
+      if (action === "underline") applyWrap("<u>", "</u>");
+      if (action === "strike") applyWrap("~~", "~~");
+      if (action === "bullet") applyList(false);
+      if (action === "numbered") applyList(true);
+      if (action === "table") applyTable();
+      return;
+    }
+    if (action === "table") {
+      setTablePickerOpen(true);
+      return;
+    }
+    const commandByAction: Record<string, string> = {
+      cut: "cut",
+      copy: "copy",
+      paste: "paste",
+      bold: "bold",
+      italic: "italic",
+      underline: "underline",
+      strike: "strikeThrough",
+      bullet: "insertUnorderedList",
+      numbered: "insertOrderedList",
+    };
+    const command = commandByAction[action];
+    if (command) runRichTextCommand(command);
+  };
+
+  const contextMenuItems = [
+    ["cut", t("notebook.cut")],
+    ["copy", t("notebook.copy")],
+    ["paste", t("notebook.paste")],
+    ["bold", t("notebook.bold")],
+    ["italic", t("notebook.italic")],
+    ["underline", t("notebook.underline")],
+    ["strike", t("notebook.strike")],
+    ["bullet", t("notebook.bulletList")],
+    ["numbered", t("notebook.numberedList")],
+    ["table", t("notebook.table")],
+  ];
+
   return (
     <section
       aria-label={t("notebook.title")}
@@ -307,7 +624,7 @@ export function NotebookPanel({
         minHeight: 0,
         height: "100%",
         display: "grid",
-        gridTemplateColumns: listCollapsed ? "42px minmax(0, 1fr)" : "170px minmax(0, 1fr)",
+        gridTemplateColumns: "170px minmax(0, 1fr)",
         background: "var(--bg-panel)",
         color: "var(--text-primary)",
       }}
@@ -332,25 +649,8 @@ export function NotebookPanel({
           }}
         >
           <FileText size={14} />
-          {!listCollapsed && (
-            <strong style={{ fontSize: 12, flex: 1 }}>{t("notebook.title")}</strong>
-          )}
-          <button
-            type="button"
-            aria-label={listCollapsed ? t("notebook.expandList") : t("notebook.collapseList")}
-            title={listCollapsed ? t("notebook.expandList") : t("notebook.collapseList")}
-            onClick={() => setListCollapsed((current) => !current)}
-            style={{
-              border: "none",
-              background: "transparent",
-              color: "var(--text-muted)",
-              cursor: "pointer",
-              padding: 3,
-            }}
-          >
-            {listCollapsed ? <ChevronRight size={14} /> : <ChevronLeft size={14} />}
-          </button>
-          {!listCollapsed && (
+          <strong style={{ fontSize: 12, flex: 1 }}>{t("notebook.title")}</strong>
+          <div ref={createPanelRef} style={{ position: "relative", display: "inline-flex" }}>
             <button
               type="button"
               aria-label={t("notebook.newMemo")}
@@ -366,202 +666,90 @@ export function NotebookPanel({
             >
               <Plus size={14} />
             </button>
-          )}
-        </div>
-        {listCollapsed ? (
-          <button
-            type="button"
-            aria-label={t("notebook.newMemo")}
-            title={t("notebook.newMemo")}
-            onClick={startCreate}
-            style={{
-              margin: 8,
-              width: 26,
-              height: 26,
-              border: "1px solid var(--border-dim)",
-              borderRadius: 6,
-              background: "var(--bg-card)",
-              color: "var(--text-secondary)",
-              cursor: "pointer",
-            }}
-          >
-            <Plus size={14} />
-          </button>
-        ) : (
-          <div
-            style={{
-              flex: 1,
-              overflowY: "auto",
-              padding: 6,
-              display: "flex",
-              flexDirection: "column",
-              gap: 6,
-            }}
-          >
             {creating && (
               <div
+                role="menu"
+                aria-label={t("notebook.newMemo")}
                 style={{
+                  position: "absolute",
+                  top: 24,
+                  right: 0,
+                  zIndex: 30,
+                  minWidth: 92,
+                  padding: 4,
                   display: "flex",
                   flexDirection: "column",
-                  gap: 8,
-                  padding: 10,
-                  border: "1px solid var(--border-dim)",
-                  borderRadius: 8,
-                  background: "var(--bg-card)",
+                  gap: 2,
+                  background: "var(--bg-sidebar)",
+                  boxShadow: "var(--shadow-popover)",
                 }}
               >
-                <label
-                  style={{
-                    display: "flex",
-                    flexDirection: "column",
-                    gap: 5,
-                    fontSize: 11,
-                    color: "var(--text-muted)",
-                    fontWeight: 650,
-                  }}
-                >
-                  {t("notebook.memoName")}
-                <input
-                  aria-label={t("notebook.memoName")}
-                  value={newTitle}
-                  autoFocus
-                  onChange={(event) => setNewTitle(event.currentTarget.value)}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter") addNote();
-                    if (event.key === "Escape") setCreating(false);
-                  }}
-                  style={{
-                    minWidth: 0,
-                    border: "1px solid var(--border-dim)",
-                    borderRadius: 5,
-                    background: "var(--bg-input)",
-                    color: "var(--text-primary)",
-                    padding: "5px 6px",
-                    fontSize: 12,
-                    outline: "none",
-                  }}
-                />
-                </label>
-                <div
-                  role="radiogroup"
-                  aria-label="Memo format"
-                  style={{
-                    display: "grid",
-                    gridTemplateColumns: "1fr 1fr",
-                    gap: 4,
-                    padding: 3,
-                    border: "1px solid var(--border-dim)",
-                    borderRadius: 7,
-                    background: "var(--bg-input)",
-                  }}
-                >
-                  {(["markdown", "txt"] as const).map((format) => (
-                    <label
-                      key={format}
-                      style={{
-                        display: "inline-flex",
-                        alignItems: "center",
-                        justifyContent: "center",
-                        gap: 5,
-                        minHeight: 26,
-                        borderRadius: 5,
-                        fontSize: 11,
-                        fontWeight: 650,
-                        color:
-                          newFormat === format
-                            ? "var(--control-active-fg)"
-                            : "var(--text-secondary)",
-                        background:
-                          newFormat === format ? "var(--control-active-bg)" : "transparent",
-                        cursor: "pointer",
-                      }}
-                    >
-                      <input
-                        type="radio"
-                        name="notebook-format"
-                        checked={newFormat === format}
-                        onChange={() => setNewFormat(format)}
-                        style={{
-                          width: 12,
-                          height: 12,
-                          margin: 0,
-                          accentColor: "var(--accent)",
-                        }}
-                      />
-                      {formatLabel(format)}
-                    </label>
-                  ))}
-                </div>
-                <div style={{ display: "flex", gap: 6 }}>
+                {(["markdown", "richtext"] as const).map((format) => (
                   <button
+                    key={format}
                     type="button"
-                    disabled={!newTitle.trim()}
-                    onClick={addNote}
-                    style={{
-                      flex: 1,
-                      height: 28,
-                      border: "1px solid var(--border-medium)",
-                      borderRadius: 6,
-                      background: newTitle.trim() ? "var(--control-active-bg)" : "var(--bg-muted)",
-                      color: newTitle.trim() ? "var(--control-active-fg)" : "var(--text-hint)",
-                      cursor: newTitle.trim() ? "pointer" : "not-allowed",
-                      fontSize: 12,
-                      fontWeight: 650,
-                    }}
-                  >
-                    {t("notebook.createMemo")}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setCreating(false)}
+                    role="menuitem"
+                    onClick={() => addNote(format)}
                     style={{
                       height: 28,
-                      border: "1px solid var(--border-dim)",
-                      borderRadius: 6,
-                      background: "transparent",
-                      color: "var(--text-secondary)",
-                      cursor: "pointer",
                       padding: "0 8px",
+                      border: "none",
+                      borderRadius: 0,
+                      background: "transparent",
+                      color: "var(--text-primary)",
+                      textAlign: "left",
+                      cursor: "pointer",
                       fontSize: 12,
                     }}
                   >
-                    {t("common.cancel")}
+                    {formatLabel(format)}
                   </button>
-                </div>
+                ))}
               </div>
-            )}
-            {notes.length === 0 ? (
-              <div style={{ padding: 10, fontSize: 12, color: "var(--text-hint)", lineHeight: 1.4 }}>
-                {t("notebook.empty")}
-              </div>
-            ) : (
-              notes.map((note) => (
-                <button
-                  type="button"
-                  key={note.id}
-                  title={note.title}
-                  onClick={() => setActiveId(note.id)}
-                  style={{
-                    minHeight: 30,
-                    border: "1px solid transparent",
-                    borderRadius: 6,
-                    background: note.id === activeNote?.id ? "var(--bg-selected)" : "transparent",
-                    color: "var(--text-primary)",
-                    textAlign: "left",
-                    padding: "5px 7px",
-                    cursor: "pointer",
-                    overflow: "hidden",
-                    textOverflow: "ellipsis",
-                    whiteSpace: "nowrap",
-                    fontSize: 12,
-                  }}
-                >
-                  {note.title || t("notebook.untitled")}
-                </button>
-              ))
             )}
           </div>
-        )}
+        </div>
+        <div
+          style={{
+            flex: 1,
+            overflowY: "auto",
+            padding: 6,
+            display: "flex",
+            flexDirection: "column",
+            gap: 6,
+          }}
+        >
+          {notes.length === 0 ? (
+            <div style={{ padding: 10, fontSize: 12, color: "var(--text-hint)", lineHeight: 1.4 }}>
+              {t("notebook.empty")}
+            </div>
+          ) : (
+            notes.map((note) => (
+              <button
+                type="button"
+                key={note.id}
+                title={note.title}
+                onClick={() => setActiveId(note.id)}
+                style={{
+                  minHeight: 30,
+                  border: "1px solid transparent",
+                  borderRadius: 6,
+                  background: note.id === activeNote?.id ? "var(--bg-selected)" : "transparent",
+                  color: "var(--text-primary)",
+                  textAlign: "left",
+                  padding: "5px 7px",
+                  cursor: "pointer",
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap",
+                  fontSize: 12,
+                }}
+              >
+                {note.title || t("notebook.untitled")}
+              </button>
+            ))
+          )}
+        </div>
       </aside>
       <div style={{ minWidth: 0, minHeight: 0, display: "flex", flexDirection: "column" }}>
         {activeNote ? (
@@ -577,6 +765,7 @@ export function NotebookPanel({
               }}
             >
               <input
+                ref={titleInputRef}
                 aria-label={t("notebook.memoName")}
                 value={activeNote.title}
                 onChange={(event) => updateActiveNote({ title: event.currentTarget.value })}
@@ -640,27 +829,54 @@ export function NotebookPanel({
                   flexShrink: 0,
                 }}
               >
-                <ToolButton label={t("notebook.bold")} onClick={() => applyWrap("**", "**")}>
+                <ToolButton
+                  label={t("notebook.bold")}
+                  pressed={activeFormat === "richtext" ? richTextState.bold : undefined}
+                  onMouseDown={keepRichTextSelectionOnMouseDown}
+                  onClick={() => applyInlineWrap("**", "**", "bold")}
+                >
                   <Bold size={13} />
                 </ToolButton>
-                <ToolButton label={t("notebook.italic")} onClick={() => applyWrap("*", "*")}>
+                <ToolButton
+                  label={t("notebook.italic")}
+                  pressed={activeFormat === "richtext" ? richTextState.italic : undefined}
+                  onMouseDown={keepRichTextSelectionOnMouseDown}
+                  onClick={() => applyInlineWrap("*", "*", "italic")}
+                >
                   <Italic size={13} />
                 </ToolButton>
-                <ToolButton label={t("notebook.underline")} onClick={() => applyWrap("<u>", "</u>")}>
+                <ToolButton
+                  label={t("notebook.underline")}
+                  pressed={activeFormat === "richtext" ? richTextState.underline : undefined}
+                  onMouseDown={keepRichTextSelectionOnMouseDown}
+                  onClick={() => applyInlineWrap("<u>", "</u>", "underline")}
+                >
                   <Underline size={13} />
                 </ToolButton>
-                <ToolButton label={t("notebook.strike")} onClick={() => applyWrap("~~", "~~")}>
+                <ToolButton
+                  label={t("notebook.strike")}
+                  pressed={activeFormat === "richtext" ? richTextState.strike : undefined}
+                  onMouseDown={keepRichTextSelectionOnMouseDown}
+                  onClick={() => applyInlineWrap("~~", "~~", "strikeThrough")}
+                >
                   <Strikethrough size={13} />
                 </ToolButton>
-                <ToolButton label={t("notebook.highlight")} onClick={() => applyWrap("<mark>", "</mark>")}>
+                <ToolButton
+                  label={t("notebook.highlight")}
+                  onMouseDown={keepRichTextSelectionOnMouseDown}
+                  onClick={() =>
+                    applyInlineWrap("<mark>", "</mark>", "hiliteColor", backgroundColor)
+                  }
+                >
                   <Highlighter size={13} />
                 </ToolButton>
                 <ColorTool
                   label={t("notebook.textColor")}
                   value={textColor}
+                  onMouseDown={saveRichTextSelectionOnMouseDown}
                   onChange={(value) => {
                     setTextColor(value);
-                    applyWrap(`<span style="color:${value}">`, "</span>");
+                    applyInlineWrap(`<span style="color:${value}">`, "</span>", "foreColor", value);
                   }}
                 >
                   <Palette size={13} />
@@ -668,42 +884,157 @@ export function NotebookPanel({
                 <ColorTool
                   label={t("notebook.backgroundColor")}
                   value={backgroundColor}
+                  onMouseDown={saveRichTextSelectionOnMouseDown}
                   onChange={(value) => {
                     setBackgroundColor(value);
-                    applyWrap(`<span style="background-color:${value}">`, "</span>");
+                    applyInlineWrap(
+                      `<span style="background-color:${value}">`,
+                      "</span>",
+                      "hiliteColor",
+                      value,
+                    );
                   }}
                 >
                   <PaintBucket size={13} />
                 </ColorTool>
-                <ToolButton label={t("notebook.heading")} onClick={() => applyLinePrefix("# ")}>
+                <ToolButton
+                  label={t("notebook.noColor")}
+                  onMouseDown={keepRichTextSelectionOnMouseDown}
+                  onClick={clearBackgroundCommand}
+                >
+                  Ø
+                </ToolButton>
+                <ToolButton
+                  label={t("notebook.heading")}
+                  pressed={activeFormat === "richtext" ? richTextState.heading : undefined}
+                  onMouseDown={keepRichTextSelectionOnMouseDown}
+                  onClick={() => applyHeading("# ", "h1")}
+                >
                   H1
                 </ToolButton>
-                <ToolButton label={t("notebook.subheading")} onClick={() => applyLinePrefix("## ")}>
+                <ToolButton
+                  label={t("notebook.subheading")}
+                  pressed={activeFormat === "richtext" ? richTextState.subheading : undefined}
+                  onMouseDown={keepRichTextSelectionOnMouseDown}
+                  onClick={() => applyHeading("## ", "h2")}
+                >
                   H2
                 </ToolButton>
-                <ToolButton label={t("notebook.bodyText")} onClick={applyBodyText}>
+                <ToolButton
+                  label={t("notebook.bodyText")}
+                  onMouseDown={keepRichTextSelectionOnMouseDown}
+                  onClick={applyBodyCommand}
+                >
                   T
                 </ToolButton>
-                <ToolButton label={t("notebook.bulletList")} onClick={() => applyList(false)}>
+                <ToolButton
+                  label={t("notebook.bulletList")}
+                  pressed={activeFormat === "richtext" ? richTextState.bulletList : undefined}
+                  onMouseDown={keepRichTextSelectionOnMouseDown}
+                  onClick={() => applyListCommand(false)}
+                >
                   <List size={13} />
                 </ToolButton>
-                <ToolButton label={t("notebook.numberedList")} onClick={() => applyList(true)}>
+                <ToolButton
+                  label={t("notebook.numberedList")}
+                  pressed={activeFormat === "richtext" ? richTextState.numberedList : undefined}
+                  onMouseDown={keepRichTextSelectionOnMouseDown}
+                  onClick={() => applyListCommand(true)}
+                >
                   <ListOrdered size={13} />
                 </ToolButton>
-                <ToolButton label={t("notebook.codeBlock")} onClick={applyCodeBlock}>
+                <ToolButton
+                  label={t("notebook.codeBlock")}
+                  onMouseDown={keepRichTextSelectionOnMouseDown}
+                  onClick={applyCodeBlockCommand}
+                >
                   <Code2 size={13} />
                 </ToolButton>
-                <ToolButton label={t("notebook.table")} onClick={applyTable}>
-                  <Table2 size={13} />
-                </ToolButton>
+                <div style={{ position: "relative", flexShrink: 0 }} data-notebook-table-picker>
+                  <ToolButton
+                    label={t("notebook.table")}
+                    onMouseDown={keepRichTextSelectionOnMouseDown}
+                    onClick={applyTableCommand}
+                  >
+                    <Table2 size={13} />
+                  </ToolButton>
+                  {tablePickerOpen && activeFormat === "richtext" && (
+                    <div
+                      role="dialog"
+                      aria-label={t("notebook.tableSize")}
+                      style={{
+                        position: "absolute",
+                        top: 30,
+                        right: 0,
+                        zIndex: 20,
+                        width: 168,
+                        padding: 8,
+                        border: "1px solid var(--border-dim)",
+                        borderRadius: 8,
+                        background: "var(--bg-sidebar)",
+                        boxShadow: "var(--shadow-popover)",
+                      }}
+                    >
+                      <div
+                        style={{ display: "grid", gridTemplateColumns: "repeat(6, 18px)", gap: 4 }}
+                      >
+                        {Array.from({ length: 6 }, (_, rowIndex) =>
+                          Array.from({ length: 6 }, (_, colIndex) => {
+                            const rows = rowIndex + 1;
+                            const cols = colIndex + 1;
+                            const active =
+                              rows <= tableHoverSize.rows && cols <= tableHoverSize.cols;
+                            return (
+                              <button
+                                key={`${rows}-${cols}`}
+                                type="button"
+                                aria-label={`${rows} x ${cols}`}
+                                onMouseDown={keepRichTextSelectionOnMouseDown}
+                                onMouseEnter={() => setTableHoverSize({ rows, cols })}
+                                onClick={() => applyRichTable(rows, cols)}
+                                style={{
+                                  width: 18,
+                                  height: 18,
+                                  padding: 0,
+                                  border: `1px solid ${active ? "var(--accent)" : "var(--border-medium)"}`,
+                                  borderRadius: 3,
+                                  background: active ? "var(--accent-subtle)" : "var(--bg-card)",
+                                  cursor: "pointer",
+                                  transition:
+                                    "background 0.1s ease, border-color 0.1s ease, transform 0.1s ease",
+                                  transform: active ? "scale(1.04)" : "scale(1)",
+                                }}
+                              />
+                            );
+                          }),
+                        )}
+                      </div>
+                      <div
+                        style={{
+                          marginTop: 7,
+                          fontSize: 12,
+                          fontWeight: 700,
+                          color: "var(--text-secondary)",
+                          textAlign: "center",
+                        }}
+                      >
+                        {tableHoverSize.rows} x {tableHoverSize.cols}
+                      </div>
+                    </div>
+                  )}
+                </div>
               </div>
             )}
-            {mode === "edit" ? (
+            {mode === "edit" && activeNote.format === "markdown" ? (
               <textarea
-                ref={contentRef}
+                ref={markdownContentRef}
                 aria-label={t("notebook.memoContent")}
                 value={activeNote.body}
                 onChange={(event) => updateActiveNote({ body: event.currentTarget.value })}
+                onContextMenu={(event) => {
+                  event.preventDefault();
+                  setContextMenu({ x: event.clientX, y: event.clientY, format: "markdown" });
+                }}
                 spellCheck={false}
                 style={{
                   flex: 1,
@@ -714,32 +1045,74 @@ export function NotebookPanel({
                   background: "var(--bg-panel)",
                   color: "var(--text-primary)",
                   padding: 12,
-                  fontFamily: activeNote.format === "markdown" ? "var(--font-mono)" : "var(--font-ui)",
+                  fontFamily:
+                    activeNote.format === "markdown" ? "var(--font-mono)" : "var(--font-ui)",
+                  fontSize: 12.5,
+                  lineHeight: 1.6,
+                }}
+              />
+            ) : mode === "edit" ? (
+              <div
+                ref={richTextRef}
+                role="textbox"
+                aria-label={t("notebook.memoContent")}
+                contentEditable
+                suppressContentEditableWarning
+                onInput={(event) => {
+                  updateActiveNote({
+                    body: renderRichText(event.currentTarget.innerHTML),
+                  });
+                  readRichTextCommandState();
+                }}
+                onFocus={readRichTextCommandState}
+                onKeyUp={() => {
+                  saveRichTextSelection();
+                  readRichTextCommandState();
+                }}
+                onMouseUp={() => {
+                  saveRichTextSelection();
+                  readRichTextCommandState();
+                }}
+                onContextMenu={(event) => {
+                  event.preventDefault();
+                  saveRichTextSelection();
+                  setContextMenu({ x: event.clientX, y: event.clientY, format: "richtext" });
+                  readRichTextCommandState();
+                }}
+                style={{
+                  flex: 1,
+                  minHeight: 0,
+                  overflow: "auto",
+                  outline: "none",
+                  background: "var(--bg-panel)",
+                  color: "var(--text-primary)",
+                  padding: 12,
+                  fontFamily: "var(--font-ui)",
                   fontSize: 12.5,
                   lineHeight: 1.6,
                 }}
               />
             ) : activeNote.format === "markdown" ? (
               <div style={{ flex: 1, minHeight: 0, overflow: "auto", padding: 14 }}>
-                <div className="md-preview notebook-markdown-preview" dangerouslySetInnerHTML={{ __html: markdownHtml }} />
+                <div
+                  className="md-preview notebook-markdown-preview"
+                  dangerouslySetInnerHTML={{ __html: markdownHtml }}
+                />
               </div>
             ) : (
-              <pre
+              <div
                 style={{
                   flex: 1,
                   minHeight: 0,
                   overflow: "auto",
-                  margin: 0,
                   padding: 14,
-                  whiteSpace: "pre-wrap",
                   color: "var(--text-primary)",
                   fontFamily: "var(--font-ui)",
                   fontSize: 12.5,
                   lineHeight: 1.6,
                 }}
-              >
-                {activeNote.body}
-              </pre>
+                dangerouslySetInnerHTML={{ __html: richTextHtml }}
+              />
             )}
           </>
         ) : (
@@ -748,6 +1121,53 @@ export function NotebookPanel({
           </div>
         )}
       </div>
+      {contextMenu && (
+        <div
+          role="menu"
+          data-notebook-context-menu
+          style={{
+            position: "fixed",
+            left: contextMenu.x,
+            top: contextMenu.y,
+            zIndex: 1000,
+            minWidth: 148,
+            padding: "4px 0",
+            border: "1px solid var(--border-dim)",
+            borderRadius: 7,
+            background: "var(--bg-sidebar)",
+            boxShadow: "var(--shadow-popover)",
+          }}
+        >
+          {contextMenuItems.map(([action, label]) => (
+            <button
+              key={action}
+              type="button"
+              role="menuitem"
+              onMouseDown={
+                contextMenu.format === "richtext" ? keepRichTextSelectionOnMouseDown : undefined
+              }
+              onClick={() => runContextMenuAction(action)}
+              style={{
+                width: "calc(100% - 8px)",
+                height: 28,
+                margin: "1px 4px",
+                padding: "0 10px",
+                border: "none",
+                borderRadius: 5,
+                background: "transparent",
+                color: "var(--text-primary)",
+                display: "flex",
+                alignItems: "center",
+                textAlign: "left",
+                cursor: "pointer",
+                fontSize: 13,
+              }}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      )}
     </section>
   );
 }

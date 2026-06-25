@@ -158,8 +158,8 @@ function makeInitialPane(endpoint: SftpEndpoint): PaneState {
     childrenByPath: new Map(),
     loadingChildren: new Set(),
     childErrors: new Map(),
-    sortField: "name",
-    sortDirection: "asc",
+    sortField: "modified",
+    sortDirection: "desc",
   };
 }
 
@@ -796,11 +796,12 @@ export function SftpPanel({
                   updatePane(side, (prev) => ({
                     ...prev,
                     sortField: "name",
-                    entries: sortSftpEntries(prev.entries, "name", prev.sortDirection),
+                    sortDirection: "asc",
+                    entries: sortSftpEntries(prev.entries, "name", "asc"),
                     childrenByPath: new Map(
                       Array.from(prev.childrenByPath.entries()).map(([path, entries]) => [
                         path,
-                        sortSftpEntries(entries, "name", prev.sortDirection),
+                        sortSftpEntries(entries, "name", "asc"),
                       ]),
                     ),
                   }))
@@ -814,11 +815,12 @@ export function SftpPanel({
                   updatePane(side, (prev) => ({
                     ...prev,
                     sortField: "modified",
-                    entries: sortSftpEntries(prev.entries, "modified", prev.sortDirection),
+                    sortDirection: "desc",
+                    entries: sortSftpEntries(prev.entries, "modified", "desc"),
                     childrenByPath: new Map(
                       Array.from(prev.childrenByPath.entries()).map(([path, entries]) => [
                         path,
-                        sortSftpEntries(entries, "modified", prev.sortDirection),
+                        sortSftpEntries(entries, "modified", "desc"),
                       ]),
                     ),
                   }))

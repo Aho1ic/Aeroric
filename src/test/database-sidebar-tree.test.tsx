@@ -57,6 +57,7 @@ const legacyObject: DbObject = {
 };
 
 const usersObject: DbxObjectInfo = { name: "users", object_type: "TABLE", schema: "public" };
+const ordersObject: DbxObjectInfo = { name: "orders", object_type: "TABLE", schema: "public" };
 const activeUsersView: DbxObjectInfo = { name: "active_users", object_type: "VIEW", schema: "public" };
 const usersIndex: DbxObjectInfo = {
   name: "users_email_idx",
@@ -69,6 +70,11 @@ const usersIndex: DbxObjectInfo = {
 const userColumns: DbxColumnInfo[] = [
   { name: "id", data_type: "integer", is_nullable: false, is_primary_key: true },
   { name: "email", data_type: "text", is_nullable: true, is_primary_key: false },
+];
+
+const orderColumns: DbxColumnInfo[] = [
+  { name: "order_id", data_type: "integer", is_nullable: false, is_primary_key: true },
+  { name: "total", data_type: "numeric", is_nullable: true, is_primary_key: false },
 ];
 
 function renderTree(overrides: Partial<React.ComponentProps<typeof DatabaseSidebarTree>> = {}) {
@@ -258,6 +264,33 @@ describe("DatabaseSidebarTree", () => {
     fireEvent.click(screen.getByRole("button", { name: "Expand users" }));
     expect(screen.getByText("email").closest("button")).toBeInTheDocument();
     expect(screen.getByText("users_email_idx").closest("button")).toBeInTheDocument();
+  });
+
+  it("keeps previously expanded DBX table child rows visible when another table expands", async () => {
+    renderTree({
+      activeDbxObject: null,
+      dbxObjects: [usersObject, ordersObject],
+      dbxColumnsByTable: {
+        "public.users": userColumns,
+        "public.orders": orderColumns,
+      },
+    });
+
+    await screen.findByRole("button", { name: /^users\s+TABLE$/i });
+    expect(screen.queryByText("email")).not.toBeInTheDocument();
+    expect(screen.queryByText("total")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Expand users" }));
+    expect(screen.getByText("email").closest("button")).toBeInTheDocument();
+    expect(screen.queryByText("total")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Expand orders" }));
+    expect(screen.getByText("email").closest("button")).toBeInTheDocument();
+    expect(screen.getByText("total").closest("button")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Collapse users" }));
+    expect(screen.queryByText("email")).not.toBeInTheDocument();
+    expect(screen.getByText("total").closest("button")).toBeInTheDocument();
   });
 
   it("fires context menu callbacks for object, column, table child object, schema, database, and group nodes", async () => {

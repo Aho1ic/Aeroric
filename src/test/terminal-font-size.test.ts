@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { DEFAULT_TERMINAL_FONT_SIZE } from "../types";
-import { deriveShellTerminalFontSize } from "../components/ShellTerminalPanel";
+import {
+  deriveShellTerminalFontSize,
+  SHELL_TERMINAL_MAX_SESSIONS,
+} from "../components/ShellTerminalPanel";
 
 describe("terminal font sizing", () => {
   it("defaults terminal font size to one point smaller than before", () => {
@@ -10,5 +13,9 @@ describe("terminal font sizing", () => {
   it("uses one point smaller font for shell terminals without going below the minimum", () => {
     expect(deriveShellTerminalFontSize(12)).toBe(11);
     expect(deriveShellTerminalFontSize(10)).toBe(10);
+  });
+
+  it("allows up to ten shell terminal tabs", () => {
+    expect(SHELL_TERMINAL_MAX_SESSIONS).toBe(10);
   });
 });

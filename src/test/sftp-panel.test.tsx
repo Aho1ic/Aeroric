@@ -112,4 +112,49 @@ describe("SftpPanel", () => {
     await user.hover(progressButton);
     expect(screen.getByText(/Copied README.md/i)).toBeInTheDocument();
   });
+
+  it("defaults panes to modification time descending sort", async () => {
+    vi.mocked(invoke).mockImplementation((command) => {
+      if (command === "sftp_read_dir") {
+        return Promise.resolve([
+          {
+            name: "old.txt",
+            path: "/Users/me/old.txt",
+            isDir: false,
+            extension: "txt",
+            size: 1,
+            modifiedAtMs: 100,
+          },
+          {
+            name: "new.txt",
+            path: "/Users/me/new.txt",
+            isDir: false,
+            extension: "txt",
+            size: 1,
+            modifiedAtMs: 300,
+          },
+        ]);
+      }
+      return Promise.resolve([]);
+    });
+
+    render(
+      <I18nProvider>
+        <SftpPanel
+          sshConnections={connections}
+          localDefaultPath="/Users/me"
+          active
+          themeVariant="light"
+          currentSshConnectionId="conn-2"
+        />
+      </I18nProvider>,
+    );
+
+    await userEvent.click(screen.getAllByRole("button", { name: "Open pane" })[0]);
+
+    const rows = await screen.findAllByText(/\.txt$/);
+    expect(rows.map((row) => row.textContent)).toEqual(["new.txt", "old.txt"]);
+    expect(screen.getAllByRole("button", { name: "Modified" })[0]).toHaveClass("active");
+    expect(screen.getAllByRole("button", { name: "Desc" })[0]).toBeInTheDocument();
+  });
 });

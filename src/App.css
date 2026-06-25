@@ -1328,8 +1328,11 @@ body {
   min-height: 160px;
   overflow: auto;
   outline: none;
-  background:
-    linear-gradient(180deg, color-mix(in srgb, var(--bg-panel) 94%, var(--bg-hover)), var(--bg-panel));
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--bg-panel) 94%, var(--bg-hover)),
+    var(--bg-panel)
+  );
 }
 
 .sftp-list-head,
@@ -1793,6 +1796,24 @@ body {
   color: var(--text-secondary);
   font-size: 13px;
   line-height: 1.35;
+}
+
+.database-tree-node {
+  will-change: transform, background-color, border-color;
+}
+
+.database-tree-node:hover,
+.database-tree-node:focus-visible {
+  background: var(--bg-hover) !important;
+  border-color: var(--border-medium) !important;
+  color: var(--text-primary) !important;
+  transform: translateX(1px);
+}
+
+.database-tree-node[data-selected="true"]:hover,
+.database-tree-node[data-selected="true"]:focus-visible {
+  background: var(--bg-selected) !important;
+  transform: translateX(1px);
 }
 
 @media (max-width: 980px) {

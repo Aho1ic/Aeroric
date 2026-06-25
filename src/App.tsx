@@ -689,7 +689,7 @@ function App() {
       id: taskId,
       projectId: project.id,
       prompt,
-      name: prompt.trim() ? undefined : `${agentDisplayLabel(agent)} Terminal`,
+      name: prompt.trim() ? undefined : agentDisplayLabel(agent),
       agent,
       permissionMode,
       status: immediate ? "pending" : "todo",

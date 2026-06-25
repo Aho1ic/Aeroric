@@ -22,6 +22,7 @@ import type { SftpEndpoint } from "./sftp/sftpTypes";
 import {
   type FileSortDirection,
   type FileSortField,
+  isSqliteDatabaseFile,
   sortFileEntries,
 } from "./file-explorer/fileEntryUtils";
 import {
@@ -76,6 +77,7 @@ export function FileExplorer({
   remote,
   themeVariant,
   onPreviewRequest,
+  onOpenDatabaseFile,
 }: {
   projectPath: string;
   projectName: string;
@@ -85,6 +87,7 @@ export function FileExplorer({
   remote?: RemoteFileContext;
   themeVariant: ThemeVariant;
   onPreviewRequest?: (request: FilePreviewRequest) => void;
+  onOpenDatabaseFile?: (path: string, name: string) => void;
 }) {
   const { t } = useI18n();
   const [nodes, setNodes] = useState<TreeNode[]>([]);
@@ -102,8 +105,8 @@ export function FileExplorer({
   const [creatingValue, setCreatingValue] = useState("");
   const [renamingPath, setRenamingPath] = useState<string | null>(null);
   const [renamingValue, setRenamingValue] = useState("");
-  const [sortField, setSortField] = useState<FileSortField>("name");
-  const [sortDirection, setSortDirection] = useState<FileSortDirection>("asc");
+  const [sortField, setSortField] = useState<FileSortField>("modified");
+  const [sortDirection, setSortDirection] = useState<FileSortDirection>("desc");
   const [previewTarget, setPreviewTarget] = useState<{ path: string; isDir: boolean } | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const renameInputRef = useRef<HTMLInputElement>(null);
@@ -130,7 +133,7 @@ export function FileExplorer({
       return;
     }
     setSortField(field);
-    setSortDirection("asc");
+    setSortDirection(field === "modified" ? "desc" : "asc");
   }, [sortField]);
 
   const renderSortArrow = (field: FileSortField) => {
@@ -366,10 +369,14 @@ export function FileExplorer({
       }
       setSelectedPath(node.path);
       if (!node.is_dir) {
+        if (onOpenDatabaseFile && isSqliteDatabaseFile(node)) {
+          onOpenDatabaseFile(node.path, node.name);
+          return;
+        }
         onFileSelect(node.path, node.name);
       }
     },
-    [handleToggle, onFileSelect, selectedPath],
+    [handleToggle, onFileSelect, onOpenDatabaseFile, selectedPath],
   );
 
   const handleOpen = useCallback(
@@ -379,10 +386,14 @@ export function FileExplorer({
         handleToggle(node.path);
       } else {
         setSelectedPath(node.path);
+        if (onOpenDatabaseFile && isSqliteDatabaseFile(node)) {
+          onOpenDatabaseFile(node.path, node.name);
+          return;
+        }
         onFileSelect(node.path, node.name);
       }
     },
-    [handleToggle, onFileSelect],
+    [handleToggle, onFileSelect, onOpenDatabaseFile],
   );
 
   const ensureExpanded = useCallback(
