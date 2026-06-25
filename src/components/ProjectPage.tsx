@@ -16,6 +16,9 @@ import type {
   TextSearchMatch,
   DiagnosticItem,
   TestFailure,
+  DebugSessionSnapshot,
+  DebugBreakpoint,
+  RunProcessSnapshot,
 } from "../types";
 import { resolveProjectLocation } from "../types";
 import { NewTaskView, type NewTaskDraft } from "./NewTaskView";
@@ -27,9 +30,13 @@ import { CommandPalette, type CommandPaletteCommand } from "./command-palette/Co
 import { SearchPanel } from "./search/SearchPanel";
 import { ProblemsPanel } from "./problems/ProblemsPanel";
 import { RunConfigurationsPanel } from "./run/RunConfigurationsPanel";
+import { DebugPanel } from "./debug/DebugPanel";
+import { WebPreviewPanel } from "./preview/WebPreviewPanel";
+import { extractRunPreviewCandidates } from "./preview/portPanelState";
 import { TestExplorerPanel } from "./tests/TestExplorerPanel";
 import { GitChanges } from "./GitChanges";
 import { GitHistory } from "./GitHistory";
+import { GitAdvancedPanel } from "./git-advanced/GitAdvancedPanel";
 import { GitDiffViewer } from "./GitDiffViewer";
 import { ProjectRail } from "./ProjectRail";
 import { SettingsDialog } from "./SettingsDialog";
@@ -70,6 +77,11 @@ import { buildRunnableFileCommand, selectRunnableCondaEnvironment } from "./file
 import { isSqliteDatabaseFileName } from "./file-explorer/fileEntryUtils";
 import { agentDisplayLabel } from "../agents";
 import { useI18n } from "../i18n";
+import { getCommandPaletteIdeTools, type IdeToolAvailability } from "../plugins/ideToolRegistry";
+import {
+  debugBreakpointFileForProject,
+  toggleLineDebugBreakpoint,
+} from "./debug/debugBreakpointState";
 import s from "../styles";
 
 function escapeDraftHtml(text: string): string {
@@ -211,6 +223,7 @@ export function ProjectPage({
     rightPanel,
     editorGroups,
     activeEditorGroupId,
+    activeFilePath,
     openDiff,
     rightPanelWidth,
     setOpenDiff,
@@ -238,6 +251,11 @@ export function ProjectPage({
   const [showSettings, setShowSettings] = useState(false);
   const [showFileSearch, setShowFileSearch] = useState(false);
   const [commandPaletteInitialInput, setCommandPaletteInitialInput] = useState<string | null>(null);
+  const [launchedDebugSession, setLaunchedDebugSession] = useState<DebugSessionSnapshot | null>(
+    null,
+  );
+  const [launchedRunProcess, setLaunchedRunProcess] = useState<RunProcessSnapshot | null>(null);
+  const [editorDebugBreakpoints, setEditorDebugBreakpoints] = useState<DebugBreakpoint[]>([]);
   const [responsiveLayout, setResponsiveLayout] = useState({
     autoCollapseRail: false,
     compactComposeControls: false,
@@ -258,6 +276,7 @@ export function ProjectPage({
   const remoteSshReadyRef = useRef(false);
   const pendingCmdRef = useRef<string | null>(null);
   const pendingRemoteSshCmdRef = useRef<string | null>(null);
+  const previewOpenedForRunRef = useRef<string | null>(null);
   const newTaskDraftRef = useRef<NewTaskDraft | null>(null);
   const handleCacheNewTaskDraft = useCallback((draft: NewTaskDraft | null) => {
     newTaskDraftRef.current = draft;
@@ -268,6 +287,13 @@ export function ProjectPage({
     [tasks, project.id],
   );
   const projectLocation = resolveProjectLocation(project);
+  useEffect(() => {
+    setLaunchedDebugSession(null);
+    setLaunchedRunProcess(null);
+    previewOpenedForRunRef.current = null;
+    setEditorDebugBreakpoints([]);
+  }, [project.path]);
+
   const remoteConnection = useMemo(
     () =>
       projectLocation.kind === "ssh"
@@ -288,8 +314,11 @@ export function ProjectPage({
   const fileRootPath = projectLocation.kind === "ssh" ? projectLocation.remotePath : project.path;
   const filesDisabled = projectLocation.kind === "ssh" && !remoteFileContext;
   const gitDisabled = projectLocation.kind === "ssh";
+  const problemsDisabled = projectLocation.kind === "ssh";
   const terminalDisabled = projectLocation.kind === "ssh";
   const searchDisabled = projectLocation.kind === "ssh";
+  const debugDisabled = projectLocation.kind === "ssh";
+  const previewDisabled = projectLocation.kind === "ssh";
   const settingsDisabled = projectLocation.kind === "ssh";
   const showRemoteSshTerminal = shouldShowRemoteSshTerminal(
     projectLocation,
@@ -311,8 +340,12 @@ export function ProjectPage({
   const visibleRightPanel = visibleDockPanel(rightPanel, {
     filesDisabled,
     gitDisabled,
+    problemsDisabled,
     runDisabled: terminalDisabled,
+    searchDisabled,
     testsDisabled: terminalDisabled,
+    debugDisabled,
+    previewDisabled,
   });
   const selectedTask = projectTasks.find((t) => t.id === selectedTaskId) ?? null;
 
@@ -387,10 +420,23 @@ export function ProjectPage({
     [handleFileSelect, openRightPanel],
   );
 
-  const handleOpenTextSearch = useCallback(() => {
-    setShowShellTerminal(false);
-    openRightPanel("search");
-  }, [openRightPanel]);
+  const handleDebugLocationOpen = useCallback(
+    (path: string, name: string, selection?: { line: number; column?: number }) => {
+      setShowShellTerminal(false);
+      handleFileSelect(path, name, selection);
+      openRightPanel("files");
+    },
+    [handleFileSelect, openRightPanel],
+  );
+
+  const handleGitAdvancedFileOpen = useCallback(
+    (path: string, name: string, selection?: { line: number; column?: number }) => {
+      setShowShellTerminal(false);
+      handleFileSelect(path, name, selection);
+      openRightPanel("files");
+    },
+    [handleFileSelect, openRightPanel],
+  );
 
   const openCommandPalette = useCallback((initialInput: string) => {
     setCommandPaletteInitialInput(initialInput);
@@ -576,6 +622,79 @@ export function ProjectPage({
     [clearFileAndDiff, openRightPanel],
   );
 
+  const handleRunDebugStarted = useCallback(
+    (snapshot: DebugSessionSnapshot) => {
+      setShowShellTerminal(false);
+      setLaunchedDebugSession(snapshot);
+      openRightPanel("debug");
+    },
+    [openRightPanel],
+  );
+
+  const handleRunProcessChanged = useCallback(
+    (snapshot: RunProcessSnapshot) => {
+      setLaunchedRunProcess(snapshot);
+      if (
+        snapshot.status === "running" &&
+        previewOpenedForRunRef.current !== snapshot.runId &&
+        extractRunPreviewCandidates(snapshot).length > 0
+      ) {
+        previewOpenedForRunRef.current = snapshot.runId;
+        setShowShellTerminal(false);
+        openRightPanel("preview");
+      }
+    },
+    [openRightPanel],
+  );
+
+  const handleToggleEditorDebugBreakpoint = useCallback(
+    (filePath: string, line: number) => {
+      setEditorDebugBreakpoints((prev) =>
+        toggleLineDebugBreakpoint(prev, {
+          file: debugBreakpointFileForProject(project.path, filePath),
+          line,
+          column: 1,
+        }),
+      );
+    },
+    [project.path],
+  );
+
+  const ideToolAvailability = useMemo<IdeToolAvailability>(
+    () => ({
+      filesDisabled,
+      gitDisabled,
+      problemsDisabled,
+      terminalDisabled,
+      searchDisabled,
+      debugDisabled,
+      previewDisabled,
+    }),
+    [
+      debugDisabled,
+      filesDisabled,
+      gitDisabled,
+      previewDisabled,
+      problemsDisabled,
+      searchDisabled,
+      terminalDisabled,
+    ],
+  );
+
+  const commandPaletteIdeToolCommands = useMemo<CommandPaletteCommand[]>(
+    () =>
+      getCommandPaletteIdeTools(ideToolAvailability).map((tool) => ({
+        id: tool.commandId,
+        title: t(tool.titleKey),
+        keywords: [...tool.commandKeywords],
+        run: () => {
+          setShowShellTerminal(false);
+          openRightPanel(tool.panel);
+        },
+      })),
+    [ideToolAvailability, openRightPanel, t],
+  );
+
   const commandPaletteCommands = useMemo<CommandPaletteCommand[]>(
     () => [
       {
@@ -589,12 +708,6 @@ export function ProjectPage({
         title: t("toolbar.fileExplorer"),
         keywords: ["files", "explorer"],
         run: () => handleToggleRightPanel("files"),
-      },
-      {
-        id: "search-files",
-        title: t("toolbar.search"),
-        keywords: ["find", "text", "workspace"],
-        run: handleOpenTextSearch,
       },
       {
         id: "terminal",
@@ -618,18 +731,7 @@ export function ProjectPage({
         keywords: ["commits", "log"],
         run: () => handleToggleRightPanel("git-history"),
       },
-      {
-        id: "run-configurations",
-        title: t("run.title"),
-        keywords: ["run", "configuration", "task"],
-        run: () => handleToggleRightPanel("run"),
-      },
-      {
-        id: "test-explorer",
-        title: t("tests.title"),
-        keywords: ["test", "vitest", "cargo"],
-        run: () => handleToggleRightPanel("tests"),
-      },
+      ...commandPaletteIdeToolCommands,
       {
         id: "settings",
         title: t("settings.title"),
@@ -645,8 +747,8 @@ export function ProjectPage({
     ],
     [
       closeRightPanel,
+      commandPaletteIdeToolCommands,
       handleNewTask,
-      handleOpenTextSearch,
       handleToggleRightPanel,
       onToggleTheme,
       t,
@@ -999,6 +1101,10 @@ export function ProjectPage({
                         selectedCondaEnvPath={selectedCondaEnvPath}
                         onSelectedCondaEnvPathChange={onSelectedCondaEnvPathChange}
                         onRunPythonFile={handleRunPythonFile}
+                        debugBreakpoints={debugDisabled ? [] : editorDebugBreakpoints}
+                        onToggleDebugBreakpoint={
+                          debugDisabled ? undefined : handleToggleEditorDebugBreakpoint
+                        }
                         onFocusGroup={() => handleEditorGroupFocus(group.id)}
                         onSplitRight={
                           group.id === "main" && group.id === activeEditorGroupId
@@ -1218,6 +1324,16 @@ export function ProjectPage({
               />
             </ErrorBoundary>
           )}
+          {visibleRightPanel === "git-advanced" && (
+            <ErrorBoundary label="Git Advanced">
+              <GitAdvancedPanel
+                projectPath={gitContextPath}
+                activeFilePath={activeFilePath}
+                width={effectiveRightPanelWidth}
+                onOpenFile={handleGitAdvancedFileOpen}
+              />
+            </ErrorBoundary>
+          )}
           {visibleRightPanel === "search" && (
             <ErrorBoundary label="搜索">
               <SearchPanel
@@ -1249,7 +1365,33 @@ export function ProjectPage({
           )}
           {visibleRightPanel === "run" && (
             <ErrorBoundary label="Run">
-              <RunConfigurationsPanel projectPath={project.path} width={effectiveRightPanelWidth} />
+              <RunConfigurationsPanel
+                projectPath={project.path}
+                width={effectiveRightPanelWidth}
+                editorBreakpoints={editorDebugBreakpoints}
+                onDebugStarted={handleRunDebugStarted}
+                onRunProcessChanged={handleRunProcessChanged}
+              />
+            </ErrorBoundary>
+          )}
+          {visibleRightPanel === "preview" && (
+            <ErrorBoundary label="Preview">
+              <WebPreviewPanel
+                projectPath={project.path}
+                width={effectiveRightPanelWidth}
+                runProcessTarget={launchedRunProcess}
+              />
+            </ErrorBoundary>
+          )}
+          {visibleRightPanel === "debug" && (
+            <ErrorBoundary label="Debug">
+              <DebugPanel
+                projectPath={project.path}
+                width={effectiveRightPanelWidth}
+                onOpenLocation={handleDebugLocationOpen}
+                launchedSession={launchedDebugSession}
+                editorBreakpoints={editorDebugBreakpoints}
+              />
             </ErrorBoundary>
           )}
           <div
@@ -1283,13 +1425,15 @@ export function ProjectPage({
           setShellTerminalMounted(true);
           setShowShellTerminal((v) => !v);
         }}
-        onOpenSearch={() => handleToggleRightPanel("search")}
         onOpenSettings={() => setShowSettings(true)}
         filesDisabled={filesDisabled}
         gitDisabled={gitDisabled}
+        problemsDisabled={problemsDisabled}
         terminalDisabled={terminalDisabled}
         dockerDisabled={projectLocation.kind === "ssh" && !remoteConnection}
         searchDisabled={searchDisabled}
+        debugDisabled={debugDisabled}
+        previewDisabled={previewDisabled}
         settingsDisabled={settingsDisabled}
       />
 

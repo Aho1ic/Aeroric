@@ -15,21 +15,43 @@ import {
   Check,
   WandSparkles,
   Columns2,
+  GitBranch,
 } from "lucide-react";
 import { getFileColor } from "../utils";
-import ReactCodeMirror, { EditorView, type ViewUpdate } from "@uiw/react-codemirror";
+import ReactCodeMirror, {
+  Decoration,
+  EditorView,
+  GutterMarker,
+  WidgetType,
+  gutter,
+  type ViewUpdate,
+} from "@uiw/react-codemirror";
 import { githubDark, githubLight } from "@uiw/codemirror-theme-github";
 import { solarizedLight } from "@uiw/codemirror-theme-solarized";
 import { StreamLanguage } from "@codemirror/language";
 import type { Extension } from "@codemirror/state";
 import { ImagePreviewPane } from "./file-viewer/ImagePreviewPane";
 import type { OpenFileTab } from "../hooks/useProjectPanels";
-import type { CondaEnvironment, FormatFileResult, SshConnection, ThemeVariant } from "../types";
+import type {
+  CondaEnvironment,
+  DebugBreakpoint,
+  FormatFileResult,
+  GitBlameLine,
+  GitBlameResult,
+  SshConnection,
+  ThemeVariant,
+} from "../types";
 import { useI18n } from "../i18n";
 import { isRunnableScriptFile, selectRunnableCondaEnvironment } from "./file-viewer/run";
 import { lineColumnToOffset } from "./file-viewer/position";
 import type { OpenFileSelection } from "../hooks/projectPanelsState";
 import { useLanguageServer } from "../hooks/useLanguageServer";
+import { debugBreakpointLinesForFile } from "./debug/debugBreakpointState";
+import {
+  inlineBlameText,
+  inlineBlameTitle,
+  projectRelativeGitPath,
+} from "./git-advanced/gitAdvancedState";
 
 type RemoteFileContext = {
   connection: SshConnection;
@@ -259,7 +281,149 @@ const editorBaseTheme = EditorView.theme({
   ".cm-focused .cm-activeLine, .cm-activeLine": {
     background: "var(--code-line-hover-bg)",
   },
+  ".cm-debug-breakpoint-gutter .cm-gutterElement": {
+    width: "18px",
+    padding: "0 3px",
+    cursor: "pointer",
+  },
+  ".cm-debug-breakpoint-marker": {
+    width: "8px",
+    height: "8px",
+    display: "inline-block",
+    borderRadius: "999px",
+    border: "1px solid transparent",
+    boxSizing: "border-box",
+  },
+  ".cm-debug-breakpoint-marker.active": {
+    background: "var(--danger)",
+    borderColor: "var(--danger)",
+    boxShadow: "0 0 0 2px color-mix(in srgb, var(--danger) 18%, transparent)",
+  },
+  ".cm-debug-breakpoint-marker.spacer": {
+    opacity: 0,
+  },
+  ".cm-inline-blame": {
+    marginLeft: "16px",
+    color: "var(--text-hint)",
+    fontSize: "11px",
+    fontFamily: "var(--font-mono)",
+    opacity: 0.72,
+    whiteSpace: "nowrap",
+    pointerEvents: "none",
+  },
+  ".cm-line:hover .cm-inline-blame": {
+    opacity: 1,
+  },
 });
+
+class DebugBreakpointGutterMarker extends GutterMarker {
+  constructor(
+    private readonly label: string,
+    private readonly active: boolean,
+  ) {
+    super();
+  }
+
+  eq(other: GutterMarker): boolean {
+    return (
+      other instanceof DebugBreakpointGutterMarker &&
+      other.label === this.label &&
+      other.active === this.active
+    );
+  }
+
+  toDOM(): Node {
+    const marker = document.createElement("span");
+    marker.className = `cm-debug-breakpoint-marker${this.active ? " active" : " spacer"}`;
+    marker.title = this.label;
+    return marker;
+  }
+}
+
+function createDebugBreakpointGutter({
+  breakpointLines,
+  label,
+  onToggleLine,
+}: {
+  breakpointLines: Set<number>;
+  label: string;
+  onToggleLine?: (line: number) => void;
+}): Extension {
+  if (!onToggleLine && breakpointLines.size === 0) return [];
+  const activeMarker = new DebugBreakpointGutterMarker(label, true);
+  const spacerMarker = new DebugBreakpointGutterMarker(label, false);
+  return gutter({
+    class: "cm-debug-breakpoint-gutter",
+    renderEmptyElements: true,
+    initialSpacer: () => spacerMarker,
+    lineMarker: (view, line) => {
+      const lineNumber = view.state.doc.lineAt(line.from).number;
+      return breakpointLines.has(lineNumber) ? activeMarker : null;
+    },
+    lineMarkerChange: () => true,
+    domEventHandlers: {
+      mousedown(view, line, event) {
+        if (!onToggleLine) return false;
+        event.preventDefault();
+        onToggleLine(view.state.doc.lineAt(line.from).number);
+        return true;
+      },
+    },
+  });
+}
+
+class InlineBlameWidget extends WidgetType {
+  constructor(private readonly line: GitBlameLine) {
+    super();
+  }
+
+  eq(other: WidgetType): boolean {
+    return (
+      other instanceof InlineBlameWidget &&
+      other.line.commit === this.line.commit &&
+      other.line.line === this.line.line &&
+      other.line.author === this.line.author &&
+      other.line.summary === this.line.summary
+    );
+  }
+
+  toDOM(): HTMLElement {
+    const marker = document.createElement("span");
+    marker.className = "cm-inline-blame";
+    marker.textContent = inlineBlameText(this.line);
+    marker.title = inlineBlameTitle(this.line);
+    return marker;
+  }
+
+  ignoreEvent(): boolean {
+    return true;
+  }
+}
+
+function createInlineBlameExtension({
+  enabled,
+  lines,
+}: {
+  enabled: boolean;
+  lines: GitBlameLine[];
+}): Extension {
+  if (!enabled || lines.length === 0) return [];
+  const sortedLines = [...lines].sort((a, b) => a.line - b.line).slice(0, 5000);
+  return EditorView.decorations.compute([], (state) => {
+    const widgets = [];
+    for (const line of sortedLines) {
+      if (line.line < 1 || line.line > state.doc.lines) continue;
+      const docLine = state.doc.line(line.line);
+      widgets.push(
+        Decoration.widget({
+          widget: new InlineBlameWidget(line),
+          side: 1,
+        }).range(docLine.to),
+      );
+    }
+    return Decoration.set(widgets, true);
+  });
+}
 
 type SaveStatus = "idle" | "dirty" | "saving" | "saved" | "error";
 type ImagePreviewData = {
@@ -325,6 +489,8 @@ function FilePreviewPane({
   previewMode,
   selection,
   remote,
+  debugBreakpoints = [],
+  onToggleDebugBreakpoint,
   onDirtyChange,
 }: {
   filePath: string;
@@ -334,6 +500,8 @@ function FilePreviewPane({
   previewMode: boolean;
   selection?: OpenFileSelection;
   remote?: RemoteFileContext;
+  debugBreakpoints?: DebugBreakpoint[];
+  onToggleDebugBreakpoint?: (filePath: string, line: number) => void;
   onDirtyChange?: (path: string, dirty: boolean) => void;
 }) {
   const editorTheme =
@@ -351,6 +519,10 @@ function FilePreviewPane({
   const [formatting, setFormatting] = useState(false);
   const [formatError, setFormatError] = useState<string | null>(null);
   const [formatOnSave, setFormatOnSave] = useState(false);
+  const [inlineBlameVisible, setInlineBlameVisible] = useState(false);
+  const [inlineBlameLoading, setInlineBlameLoading] = useState(false);
+  const [inlineBlame, setInlineBlame] = useState<GitBlameResult | null>(null);
+  const [inlineBlameError, setInlineBlameError] = useState<string | null>(null);
   const isMarkdown = isMarkdownFile(fileName);
   const isPreviewableImage = isPreviewableImageFile(fileName);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -368,6 +540,35 @@ function FilePreviewPane({
     [isMarkdown, content],
   );
   const selectionKey = selection ? `${filePath}:${selection.line}:${selection.column ?? 1}` : null;
+  const breakpointLines = useMemo(
+    () => debugBreakpointLinesForFile(debugBreakpoints, projectPath, filePath),
+    [debugBreakpoints, filePath, projectPath],
+  );
+  const inlineBlamePath = useMemo(
+    () => projectRelativeGitPath(projectPath, filePath),
+    [filePath, projectPath],
+  );
+  const debugBreakpointGutter = useMemo(
+    () =>
+      createDebugBreakpointGutter({
+        breakpointLines,
+        label: t("file.toggleBreakpoint"),
+        onToggleLine: remote
+          ? undefined
+          : (line) => {
+              onToggleDebugBreakpoint?.(filePath, line);
+            },
+    }),
+    [breakpointLines, filePath, onToggleDebugBreakpoint, remote, t],
+  );
+  const inlineBlameExtension = useMemo(
+    () =>
+      createInlineBlameExtension({
+        enabled: inlineBlameVisible,
+        lines: inlineBlame?.filePath === inlineBlamePath ? inlineBlame.lines : [],
+      }),
+    [inlineBlame, inlineBlamePath, inlineBlameVisible],
+  );
   const languageServer = useLanguageServer({
     projectPath,
     filePath,
@@ -412,6 +613,10 @@ function FilePreviewPane({
     setError(null);
     setFormatError(null);
     setSaveStatus("idle");
+    setInlineBlameVisible(false);
+    setInlineBlameLoading(false);
+    setInlineBlame(null);
+    setInlineBlameError(null);
     setCursorPosition({ line: 1, column: 1 });
     editorViewRef.current = null;
     appliedSelectionKeyRef.current = null;
@@ -590,6 +795,42 @@ function FilePreviewPane({
     saveStatus,
   ]);
 
+  const toggleInlineBlame = useCallback(async () => {
+    if (remote || !inlineBlamePath || content === null || isPreviewableImage) return;
+    if (inlineBlameVisible) {
+      setInlineBlameVisible(false);
+      return;
+    }
+    if (inlineBlame?.filePath === inlineBlamePath) {
+      setInlineBlameVisible(true);
+      return;
+    }
+
+    setInlineBlameLoading(true);
+    setInlineBlameError(null);
+    try {
+      const result = await invoke<GitBlameResult>("git_blame_file", {
+        projectPath,
+        filePath: inlineBlamePath,
+      });
+      setInlineBlame(result);
+      setInlineBlameVisible(true);
+    } catch (err) {
+      setInlineBlameVisible(false);
+      setInlineBlameError(String(err));
+    } finally {
+      setInlineBlameLoading(false);
+    }
+  }, [
+    content,
+    inlineBlame,
+    inlineBlamePath,
+    inlineBlameVisible,
+    isPreviewableImage,
+    projectPath,
+    remote,
+  ]);
+
   const handleChange = (value: string) => {
     saveRevisionRef.current += 1;
     setContent(value);
@@ -619,7 +860,10 @@ function FilePreviewPane({
       cancelled = true;
     };
   }, [fileName]);
-  const extensions = useMemo(() => [languageExtension, editorBaseTheme], [languageExtension]);
+  const extensions = useMemo(
+    () => [languageExtension, debugBreakpointGutter, inlineBlameExtension, editorBaseTheme],
+    [debugBreakpointGutter, inlineBlameExtension, languageExtension],
+  );
 
   const applySelection = useCallback(
     (view: EditorView, value: string) => {
@@ -829,6 +1073,36 @@ function FilePreviewPane({
         {!remote && !isPreviewableImage && content !== null && (
           <button
             type="button"
+            disabled={inlineBlameLoading || !inlineBlamePath}
+            onClick={() => void toggleInlineBlame()}
+            title={
+              inlineBlameError
+                ? t("file.inlineBlameFailed", { error: inlineBlameError })
+                : t("file.inlineBlame")
+            }
+            aria-label={t("file.inlineBlame")}
+            style={{
+              height: 18,
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 4,
+              padding: "0 6px",
+              border: "1px solid var(--border-dim)",
+              borderRadius: 5,
+              background: inlineBlameVisible ? "var(--bg-hover)" : "transparent",
+              color: inlineBlameError ? "var(--danger-fg)" : "var(--text-muted)",
+              fontSize: 10.5,
+              cursor: inlineBlameLoading || !inlineBlamePath ? "default" : "pointer",
+              flexShrink: 0,
+            }}
+          >
+            <GitBranch size={11} />
+            {inlineBlameLoading ? t("file.inlineBlameLoading") : t("file.inlineBlame")}
+          </button>
+        )}
+        {!remote && !isPreviewableImage && content !== null && (
+          <button
+            type="button"
             disabled={formatting}
             onClick={() => void handleFormatFile()}
             title={t("file.formatCurrent")}
@@ -893,6 +1167,22 @@ function FilePreviewPane({
             {t("file.formatFailed", { error: formatError })}
           </span>
         )}
+        {inlineBlameError && (
+          <span
+            title={inlineBlameError}
+            style={{
+              maxWidth: 220,
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+              fontSize: 11,
+              color: "var(--danger-fg)",
+              fontFamily: "var(--font-mono)",
+            }}
+          >
+            {t("file.inlineBlameFailed", { error: inlineBlameError })}
+          </span>
+        )}
       </div>
     </div>
   );
@@ -914,6 +1204,8 @@ export function FileViewer({
   selectedCondaEnvPath,
   onSelectedCondaEnvPathChange,
   onRunPythonFile,
+  debugBreakpoints,
+  onToggleDebugBreakpoint,
   onFocusGroup,
   onSplitRight,
 }: {
@@ -932,6 +1224,8 @@ export function FileViewer({
   selectedCondaEnvPath?: string | null;
   onSelectedCondaEnvPathChange?: (path: string | null) => void;
   onRunPythonFile?: (path: string) => void;
+  debugBreakpoints?: DebugBreakpoint[];
+  onToggleDebugBreakpoint?: (filePath: string, line: number) => void;
   onFocusGroup?: () => void;
   onSplitRight?: () => void;
 }) {
@@ -1283,6 +1577,8 @@ export function FileViewer({
                 previewMode={!!previewModes[tab.path]}
                 selection={tab.selection}
                 remote={remote}
+                debugBreakpoints={debugBreakpoints}
+                onToggleDebugBreakpoint={onToggleDebugBreakpoint}
                 onDirtyChange={handleDirtyChange}
               />
             </div>

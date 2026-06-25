@@ -4,6 +4,8 @@ use std::process::{Command, Output, Stdio};
 use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncReadExt};
 
+const MAX_STASH_DIFF_CHARS: usize = 200_000;
+
 // ── 辅助函数 ─────────────────────────────────────────────────────────────────
 
 /// Validate that project_path is absolute and looks like a real project directory.
@@ -270,6 +272,384 @@ fn create_empty_temp_file() -> Result<PathBuf, String> {
     std::fs::File::create(&path)
         .map_err(|e| format!("Failed to create temporary file for git diff: {e}"))?;
     Ok(path)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct GitBlameLine {
+    line: u32,
+    commit: String,
+    short_commit: String,
+    author: String,
+    author_time: i64,
+    summary: String,
+    content: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct GitBlameResult {
+    file_path: String,
+    lines: Vec<GitBlameLine>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct GitBranchGraphCommit {
+    hash: String,
+    short_hash: String,
+    parents: Vec<String>,
+    refs: Vec<String>,
+    subject: String,
+    author: String,
+    relative_time: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct GitBranchGraphResult {
+    commits: Vec<GitBranchGraphCommit>,
+    truncated: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct GitStashEntry {
+    index: u32,
+    name: String,
+    commit: String,
+    date: String,
+    message: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct GitStashDiff {
+    stash_ref: String,
+    diff: String,
+    truncated: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct GitConflictFile {
+    path: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct GitConflictHunk {
+    index: u32,
+    ours: String,
+    base: Option<String>,
+    theirs: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct GitConflictPreview {
+    file_path: String,
+    hunks: Vec<GitConflictHunk>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum GitConflictResolution {
+    Ours,
+    Theirs,
+    Both,
+}
+
+fn short_commit_hash(commit: &str) -> String {
+    commit
+        .trim_start_matches('^')
+        .chars()
+        .take(8)
+        .collect::<String>()
+}
+
+fn parse_blame_porcelain(stdout: &[u8]) -> Vec<GitBlameLine> {
+    let mut lines = Vec::new();
+    let mut commit = String::new();
+    let mut final_line = 0u32;
+    let mut author = String::new();
+    let mut author_time = 0i64;
+    let mut summary = String::new();
+
+    for line in String::from_utf8_lossy(stdout).lines() {
+        if let Some(content) = line.strip_prefix('\t') {
+            lines.push(GitBlameLine {
+                line: final_line,
+                short_commit: short_commit_hash(&commit),
+                commit: commit.clone(),
+                author: author.clone(),
+                author_time,
+                summary: summary.clone(),
+                content: content.to_string(),
+            });
+            continue;
+        }
+
+        if let Some(value) = line.strip_prefix("author ") {
+            author = value.to_string();
+            continue;
+        }
+        if let Some(value) = line.strip_prefix("author-time ") {
+            author_time = value.parse().unwrap_or(0);
+            continue;
+        }
+        if let Some(value) = line.strip_prefix("summary ") {
+            summary = value.to_string();
+            continue;
+        }
+
+        let parts = line.split_whitespace().collect::<Vec<_>>();
+        if parts.len() >= 3
+            && parts[0]
+                .chars()
+                .all(|ch| ch == '^' || ch.is_ascii_hexdigit())
+        {
+            commit = parts[0].to_string();
+            final_line = parts[2].parse().unwrap_or(0);
+            author.clear();
+            author_time = 0;
+            summary.clear();
+        }
+    }
+
+    lines
+}
+
+fn parse_branch_graph_log(stdout: &[u8]) -> Vec<GitBranchGraphCommit> {
+    String::from_utf8_lossy(stdout)
+        .lines()
+        .filter_map(|line| {
+            let mut parts = line.splitn(6, '\x1f');
+            let hash = parts.next()?.trim().to_string();
+            if hash.is_empty() {
+                return None;
+            }
+            let parents = parts
+                .next()
+                .unwrap_or_default()
+                .split_whitespace()
+                .map(|parent| parent.to_string())
+                .collect::<Vec<_>>();
+            let refs = parts
+                .next()
+                .unwrap_or_default()
+                .split(", ")
+                .map(str::trim)
+                .filter(|reference| !reference.is_empty())
+                .map(|reference| reference.to_string())
+                .collect::<Vec<_>>();
+            let author = parts.next().unwrap_or_default().trim().to_string();
+            let relative_time = parts.next().unwrap_or_default().trim().to_string();
+            let subject = parts.next().unwrap_or_default().trim().to_string();
+
+            Some(GitBranchGraphCommit {
+                short_hash: short_commit_hash(&hash),
+                hash,
+                parents,
+                refs,
+                subject,
+                author,
+                relative_time,
+            })
+        })
+        .collect()
+}
+
+fn parse_stash_list(stdout: &[u8]) -> Vec<GitStashEntry> {
+    String::from_utf8_lossy(stdout)
+        .lines()
+        .filter_map(|line| {
+            let mut parts = line.splitn(4, '\x1f');
+            let name = parts.next()?.trim().to_string();
+            let commit = parts.next().unwrap_or_default().trim().to_string();
+            let date = parts.next().unwrap_or_default().trim().to_string();
+            let message = parts.next().unwrap_or_default().trim().to_string();
+            if name.is_empty() {
+                return None;
+            }
+            let index = name
+                .strip_prefix("stash@{")
+                .and_then(|value| value.strip_suffix('}'))
+                .and_then(|value| value.parse::<u32>().ok())
+                .unwrap_or(0);
+            Some(GitStashEntry {
+                index,
+                name,
+                commit,
+                date,
+                message,
+            })
+        })
+        .collect()
+}
+
+fn parse_conflict_paths_z(stdout: &[u8]) -> Vec<GitConflictFile> {
+    stdout
+        .split(|byte| *byte == 0)
+        .filter(|entry| !entry.is_empty())
+        .map(|entry| GitConflictFile {
+            path: String::from_utf8_lossy(entry).into_owned(),
+        })
+        .collect()
+}
+
+fn validate_stash_ref(stash_ref: &str) -> Result<(), String> {
+    let Some(index) = stash_ref
+        .strip_prefix("stash@{")
+        .and_then(|value| value.strip_suffix('}'))
+    else {
+        return Err("Invalid stash reference".to_string());
+    };
+    if index.is_empty() || !index.chars().all(|ch| ch.is_ascii_digit()) {
+        return Err("Invalid stash reference".to_string());
+    }
+    Ok(())
+}
+
+fn truncate_text(value: String, max_chars: usize) -> (String, bool) {
+    if value.chars().count() <= max_chars {
+        return (value, false);
+    }
+    let cutoff = value
+        .char_indices()
+        .nth(max_chars)
+        .map(|(index, _)| index)
+        .unwrap_or(value.len());
+    (format!("{}...(truncated)", &value[..cutoff]), true)
+}
+
+fn parse_conflict_hunks(content: &str) -> Result<Vec<GitConflictHunk>, String> {
+    enum State {
+        Normal,
+        Ours,
+        Base,
+        Theirs,
+    }
+
+    let mut state = State::Normal;
+    let mut ours = String::new();
+    let mut base = String::new();
+    let mut theirs = String::new();
+    let mut hunks = Vec::new();
+
+    for line in content.split_inclusive('\n') {
+        let marker = line.trim_end_matches(['\r', '\n']);
+        match state {
+            State::Normal if marker.starts_with("<<<<<<< ") => {
+                state = State::Ours;
+                ours.clear();
+                base.clear();
+                theirs.clear();
+            }
+            State::Ours if marker.starts_with("||||||| ") => {
+                state = State::Base;
+            }
+            State::Ours if marker.starts_with("=======") => {
+                state = State::Theirs;
+            }
+            State::Ours => ours.push_str(line),
+            State::Base if marker.starts_with("=======") => {
+                state = State::Theirs;
+            }
+            State::Base => base.push_str(line),
+            State::Theirs if marker.starts_with(">>>>>>> ") => {
+                hunks.push(GitConflictHunk {
+                    index: hunks.len() as u32 + 1,
+                    ours: ours.clone(),
+                    base: (!base.is_empty()).then(|| base.clone()),
+                    theirs: theirs.clone(),
+                });
+                state = State::Normal;
+            }
+            State::Normal => {}
+            State::Theirs => theirs.push_str(line),
+        }
+    }
+
+    if !matches!(state, State::Normal) {
+        return Err("Unclosed conflict marker block".to_string());
+    }
+    if hunks.is_empty() {
+        return Err("No conflict markers found".to_string());
+    }
+    Ok(hunks)
+}
+
+fn resolve_conflict_markers_keep_both(content: &str) -> Result<String, String> {
+    enum State {
+        Normal,
+        Ours,
+        Base,
+        Theirs,
+    }
+
+    parse_conflict_hunks(content)?;
+
+    let mut state = State::Normal;
+    let mut output = String::new();
+    let mut ours = String::new();
+    let mut theirs = String::new();
+
+    for line in content.split_inclusive('\n') {
+        let marker = line.trim_end_matches(['\r', '\n']);
+        match state {
+            State::Normal if marker.starts_with("<<<<<<< ") => {
+                state = State::Ours;
+                ours.clear();
+                theirs.clear();
+            }
+            State::Normal => output.push_str(line),
+            State::Ours if marker.starts_with("||||||| ") => {
+                state = State::Base;
+            }
+            State::Ours if marker.starts_with("=======") => {
+                state = State::Theirs;
+            }
+            State::Ours => ours.push_str(line),
+            State::Base if marker.starts_with("=======") => {
+                state = State::Theirs;
+            }
+            State::Base => {}
+            State::Theirs if marker.starts_with(">>>>>>> ") => {
+                output.push_str(&ours);
+                if !ours.is_empty() && !theirs.is_empty() && !ours.ends_with('\n') {
+                    output.push('\n');
+                }
+                output.push_str(&theirs);
+                state = State::Normal;
+            }
+            State::Theirs => theirs.push_str(line),
+        }
+    }
+    Ok(output)
+}
+
+fn resolve_project_relative_file_path(
+    project_path: &str,
+    file_path: &str,
+) -> Result<PathBuf, String> {
+    validate_git_relative_path(file_path)?;
+    let project = Path::new(project_path)
+        .canonicalize()
+        .map_err(|e| format!("Cannot resolve project path: {}", e))?;
+    let target = project.join(file_path);
+    let parent = target
+        .parent()
+        .ok_or_else(|| "Cannot resolve parent directory".to_string())?
+        .canonicalize()
+        .map_err(|e| format!("Cannot resolve parent directory: {}", e))?;
+    if !parent.starts_with(&project) {
+        return Err("File path is outside project root".to_string());
+    }
+    let file_name = target
+        .file_name()
+        .ok_or_else(|| "Cannot resolve file name".to_string())?;
+    Ok(parent.join(file_name))
 }
 
 // ── Tauri 命令 ───────────────────────────────────────────────────────────────
@@ -1280,6 +1660,274 @@ pub async fn git_remote_counts(
     })
 }
 
+#[tauri::command]
+pub async fn git_blame_file(
+    project_path: String,
+    file_path: String,
+) -> Result<GitBlameResult, String> {
+    validate_git_relative_path(&file_path)?;
+    let args = vec![
+        "-c".to_string(),
+        "core.quotePath=false".to_string(),
+        "blame".to_string(),
+        "--line-porcelain".to_string(),
+        "--".to_string(),
+        file_path.clone(),
+    ];
+    let output = run_git_with_timeout(project_path, args, Duration::from_secs(10)).await?;
+    if !output.status.success() {
+        return Err(git_command_error(&output, "Failed to load git blame"));
+    }
+    Ok(GitBlameResult {
+        file_path,
+        lines: parse_blame_porcelain(&output.stdout),
+    })
+}
+
+#[tauri::command]
+pub async fn git_branch_graph(
+    project_path: String,
+    limit: Option<u32>,
+) -> Result<GitBranchGraphResult, String> {
+    let worktree_root = git_worktree_root(&project_path)?;
+    let worktree_root = path_to_string(&worktree_root)?;
+    if !git_has_head(&worktree_root)? {
+        return Ok(GitBranchGraphResult {
+            commits: Vec::new(),
+            truncated: false,
+        });
+    }
+
+    let limit = limit.unwrap_or(80).clamp(1, 200);
+    let fetch_limit = limit + 1;
+    let args = vec![
+        "log".to_string(),
+        "--all".to_string(),
+        "--decorate=short".to_string(),
+        "--date=relative".to_string(),
+        "--pretty=format:%H%x1f%P%x1f%D%x1f%an%x1f%cr%x1f%s".to_string(),
+        "-n".to_string(),
+        fetch_limit.to_string(),
+    ];
+    let output = run_git_with_timeout(worktree_root, args, Duration::from_secs(10)).await?;
+    if !output.status.success() {
+        return Err(git_command_error(
+            &output,
+            "Failed to load git branch graph",
+        ));
+    }
+
+    let mut commits = parse_branch_graph_log(&output.stdout);
+    let truncated = commits.len() > limit as usize;
+    if truncated {
+        commits.truncate(limit as usize);
+    }
+    Ok(GitBranchGraphResult { commits, truncated })
+}
+
+#[tauri::command]
+pub async fn git_stash_list(project_path: String) -> Result<Vec<GitStashEntry>, String> {
+    let args = vec![
+        "stash".to_string(),
+        "list".to_string(),
+        "--format=%gd%x1f%H%x1f%cr%x1f%s".to_string(),
+    ];
+    let output = run_git_with_timeout(project_path, args, Duration::from_secs(10)).await?;
+    if !output.status.success() {
+        return Err(git_command_error(&output, "Failed to list git stashes"));
+    }
+    Ok(parse_stash_list(&output.stdout))
+}
+
+#[tauri::command]
+pub async fn git_stash_diff(
+    project_path: String,
+    stash_ref: String,
+) -> Result<GitStashDiff, String> {
+    validate_stash_ref(&stash_ref)?;
+    let output = run_git_with_timeout(
+        project_path,
+        vec![
+            "stash".to_string(),
+            "show".to_string(),
+            "--patch".to_string(),
+            "--stat".to_string(),
+            "--include-untracked".to_string(),
+            "--no-ext-diff".to_string(),
+            "--no-color".to_string(),
+            stash_ref.clone(),
+        ],
+        Duration::from_secs(10),
+    )
+    .await?;
+    if !output.status.success() {
+        return Err(git_command_error(&output, "Failed to load git stash diff"));
+    }
+    let raw = String::from_utf8_lossy(&output.stdout).into_owned();
+    let (diff, truncated) = truncate_text(raw, MAX_STASH_DIFF_CHARS);
+    Ok(GitStashDiff {
+        stash_ref,
+        diff,
+        truncated,
+    })
+}
+
+#[tauri::command]
+pub async fn git_stash_push(
+    project_path: String,
+    message: Option<String>,
+    include_untracked: bool,
+) -> Result<String, String> {
+    let mut args = vec!["stash".to_string(), "push".to_string()];
+    if include_untracked {
+        args.push("--include-untracked".to_string());
+    }
+    if let Some(message) = message
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+    {
+        args.push("-m".to_string());
+        args.push(message);
+    }
+    let output = run_git_with_timeout(project_path, args, Duration::from_secs(20)).await?;
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    )
+    .trim()
+    .to_string();
+    if !output.status.success() {
+        return Err(if combined.is_empty() {
+            "Failed to create git stash".to_string()
+        } else {
+            combined
+        });
+    }
+    Ok(combined)
+}
+
+#[tauri::command]
+pub async fn git_stash_apply(project_path: String, stash_ref: String) -> Result<String, String> {
+    validate_stash_ref(&stash_ref)?;
+    let output = run_git_with_timeout(
+        project_path,
+        vec!["stash".to_string(), "apply".to_string(), stash_ref],
+        Duration::from_secs(20),
+    )
+    .await?;
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    )
+    .trim()
+    .to_string();
+    if !output.status.success() {
+        return Err(if combined.is_empty() {
+            "Failed to apply git stash".to_string()
+        } else {
+            combined
+        });
+    }
+    Ok(combined)
+}
+
+#[tauri::command]
+pub async fn git_stash_drop(project_path: String, stash_ref: String) -> Result<String, String> {
+    validate_stash_ref(&stash_ref)?;
+    let output = run_git_with_timeout(
+        project_path,
+        vec!["stash".to_string(), "drop".to_string(), stash_ref],
+        Duration::from_secs(10),
+    )
+    .await?;
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    )
+    .trim()
+    .to_string();
+    if !output.status.success() {
+        return Err(if combined.is_empty() {
+            "Failed to drop git stash".to_string()
+        } else {
+            combined
+        });
+    }
+    Ok(combined)
+}
+
+#[tauri::command]
+pub async fn git_conflict_files(project_path: String) -> Result<Vec<GitConflictFile>, String> {
+    let output = run_git_with_timeout(
+        project_path,
+        vec![
+            "diff".to_string(),
+            "--name-only".to_string(),
+            "--diff-filter=U".to_string(),
+            "-z".to_string(),
+        ],
+        Duration::from_secs(10),
+    )
+    .await?;
+    if !output.status.success() {
+        return Err(git_command_error(&output, "Failed to list conflict files"));
+    }
+    Ok(parse_conflict_paths_z(&output.stdout))
+}
+
+#[tauri::command]
+pub async fn git_conflict_preview(
+    project_path: String,
+    file_path: String,
+) -> Result<GitConflictPreview, String> {
+    tauri::async_runtime::spawn_blocking(move || -> Result<GitConflictPreview, String> {
+        validate_project_path(&project_path)?;
+        let target = resolve_project_relative_file_path(&project_path, &file_path)?;
+        let content = std::fs::read_to_string(&target)
+            .map_err(|e| format!("Failed to read conflict file: {}", e))?;
+        Ok(GitConflictPreview {
+            file_path,
+            hunks: parse_conflict_hunks(&content)?,
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn git_resolve_conflict(
+    project_path: String,
+    file_path: String,
+    resolution: GitConflictResolution,
+) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || -> Result<(), String> {
+        validate_project_path(&project_path)?;
+        validate_git_relative_path(&file_path)?;
+        match resolution {
+            GitConflictResolution::Ours => {
+                run_git_check(&project_path, &["checkout", "--ours", "--", &file_path])?;
+            }
+            GitConflictResolution::Theirs => {
+                run_git_check(&project_path, &["checkout", "--theirs", "--", &file_path])?;
+            }
+            GitConflictResolution::Both => {
+                let target = resolve_project_relative_file_path(&project_path, &file_path)?;
+                let content = std::fs::read_to_string(&target)
+                    .map_err(|e| format!("Failed to read conflict file: {}", e))?;
+                let resolved = resolve_conflict_markers_keep_both(&content)?;
+                std::fs::write(&target, resolved)
+                    .map_err(|e| format!("Failed to write resolved conflict file: {}", e))?;
+            }
+        }
+        run_git_check(&project_path, &["add", "--", &file_path])
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 // ── Task worktree management ─────────────────────────────────────────────────
 
 #[derive(serde::Serialize)]
@@ -1555,9 +2203,14 @@ fn accumulate_numstat(stdout: &[u8], additions: &mut i32, deletions: &mut i32) {
 #[cfg(test)]
 mod tests {
     use super::{
-        git_has_head, git_worktree_root, is_protected_project_relative_path, list_untracked_files,
-        parse_porcelain_z_status, path_to_string, run_git_check, untracked_files_under_directory,
-        GitFileChange,
+        git_blame_file, git_branch_graph, git_conflict_files, git_conflict_preview, git_has_head,
+        git_resolve_conflict, git_stash_diff, git_stash_list, git_stash_push, git_worktree_root,
+        is_protected_project_relative_path, list_untracked_files, parse_blame_porcelain,
+        parse_branch_graph_log, parse_conflict_hunks, parse_conflict_paths_z,
+        parse_porcelain_z_status, parse_stash_list, path_to_string,
+        resolve_conflict_markers_keep_both, run_git, run_git_check,
+        untracked_files_under_directory, validate_stash_ref, GitBlameLine, GitBranchGraphCommit,
+        GitConflictFile, GitConflictResolution, GitFileChange, GitStashEntry,
     };
     use std::{fs, path::PathBuf, process::Command};
 
@@ -1581,6 +2234,27 @@ mod tests {
 
         fn path_string(&self) -> String {
             path_to_string(&self.path.canonicalize().unwrap()).unwrap()
+        }
+
+        fn configure_identity(&self) {
+            let repo_path = self.path_string();
+            run_git_check(
+                &repo_path,
+                &["config", "user.email", "aeroric@example.test"],
+            )
+            .unwrap();
+            run_git_check(&repo_path, &["config", "user.name", "Aeroric Test"]).unwrap();
+        }
+
+        fn commit_file(&self, file_path: &str, content: &str, message: &str) {
+            let repo_path = self.path_string();
+            let path = self.path.join(file_path);
+            if let Some(parent) = path.parent() {
+                fs::create_dir_all(parent).unwrap();
+            }
+            fs::write(path, content).unwrap();
+            run_git_check(&repo_path, &["add", file_path]).unwrap();
+            run_git_check(&repo_path, &["commit", "-m", message]).unwrap();
         }
     }
 
@@ -1637,6 +2311,276 @@ mod tests {
                 staged: true,
             }]
         );
+    }
+
+    #[test]
+    fn parses_line_porcelain_blame_output() {
+        let blame = parse_blame_porcelain(
+            b"abcdef1234567890 1 1 1\nauthor Ada Lovelace\nauthor-time 1710000000\nsummary initial commit\n\tconst value = 1;\n",
+        );
+
+        assert_eq!(
+            blame,
+            vec![GitBlameLine {
+                line: 1,
+                commit: "abcdef1234567890".to_string(),
+                short_commit: "abcdef12".to_string(),
+                author: "Ada Lovelace".to_string(),
+                author_time: 1710000000,
+                summary: "initial commit".to_string(),
+                content: "const value = 1;".to_string(),
+            }]
+        );
+    }
+
+    #[test]
+    fn parses_stash_list_format() {
+        let stashes =
+            parse_stash_list(b"stash@{1}\x1fabc123\x1f2 hours ago\x1fWIP on main: change UI\n");
+
+        assert_eq!(
+            stashes,
+            vec![GitStashEntry {
+                index: 1,
+                name: "stash@{1}".to_string(),
+                commit: "abc123".to_string(),
+                date: "2 hours ago".to_string(),
+                message: "WIP on main: change UI".to_string(),
+            }]
+        );
+    }
+
+    #[test]
+    fn parses_branch_graph_log_records() {
+        let commits = parse_branch_graph_log(
+            b"abcdef123456\x1f111111111111 222222222222\x1fHEAD -> main, origin/main, tag: v1.0.0\x1fAda\x1f2 minutes ago\x1fAdd graph\n",
+        );
+
+        assert_eq!(
+            commits,
+            vec![GitBranchGraphCommit {
+                hash: "abcdef123456".to_string(),
+                short_hash: "abcdef12".to_string(),
+                parents: vec!["111111111111".to_string(), "222222222222".to_string()],
+                refs: vec![
+                    "HEAD -> main".to_string(),
+                    "origin/main".to_string(),
+                    "tag: v1.0.0".to_string(),
+                ],
+                subject: "Add graph".to_string(),
+                author: "Ada".to_string(),
+                relative_time: "2 minutes ago".to_string(),
+            }]
+        );
+    }
+
+    #[test]
+    fn validates_stash_refs_conservatively() {
+        assert!(validate_stash_ref("stash@{0}").is_ok());
+        assert!(validate_stash_ref("stash@{12}").is_ok());
+        assert!(validate_stash_ref("stash@{main}").is_err());
+        assert!(validate_stash_ref("HEAD").is_err());
+    }
+
+    #[test]
+    fn parses_conflict_paths_from_nul_separated_output() {
+        assert_eq!(
+            parse_conflict_paths_z(b"src/app.ts\0README.md\0"),
+            vec![
+                GitConflictFile {
+                    path: "src/app.ts".to_string(),
+                },
+                GitConflictFile {
+                    path: "README.md".to_string(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn resolves_conflict_markers_by_keeping_both_sides() {
+        let resolved = resolve_conflict_markers_keep_both(
+            "before\n<<<<<<< HEAD\nours\n=======\ntheirs\n>>>>>>> feature\nafter\n",
+        )
+        .unwrap();
+
+        assert_eq!(resolved, "before\nours\ntheirs\nafter\n");
+    }
+
+    #[test]
+    fn resolves_diff3_conflict_markers_by_dropping_base() {
+        let resolved = resolve_conflict_markers_keep_both(
+            "before\n<<<<<<< HEAD\nours\n||||||| base\nbase\n=======\ntheirs\n>>>>>>> feature\nafter\n",
+        )
+        .unwrap();
+
+        assert_eq!(resolved, "before\nours\ntheirs\nafter\n");
+    }
+
+    #[test]
+    fn parses_conflict_hunks_for_three_column_preview() {
+        let hunks = parse_conflict_hunks(
+            "before\n<<<<<<< HEAD\nours\n||||||| base\nbase\n=======\ntheirs\n>>>>>>> feature\nafter\n",
+        )
+        .unwrap();
+
+        assert_eq!(hunks.len(), 1);
+        assert_eq!(hunks[0].index, 1);
+        assert_eq!(hunks[0].ours, "ours\n");
+        assert_eq!(hunks[0].base.as_deref(), Some("base\n"));
+        assert_eq!(hunks[0].theirs, "theirs\n");
+    }
+
+    #[tokio::test]
+    async fn git_blame_file_returns_committed_lines() {
+        let repo = TempRepo::new();
+        repo.configure_identity();
+        repo.commit_file("src/app.js", "const value = 1;\n", "initial");
+
+        let blame = git_blame_file(repo.path_string(), "src/app.js".to_string())
+            .await
+            .unwrap();
+
+        assert_eq!(blame.file_path, "src/app.js");
+        assert_eq!(blame.lines.len(), 1);
+        assert_eq!(blame.lines[0].author, "Aeroric Test");
+        assert_eq!(blame.lines[0].content, "const value = 1;");
+    }
+
+    #[tokio::test]
+    async fn git_stash_commands_create_and_list_stashes() {
+        let repo = TempRepo::new();
+        repo.configure_identity();
+        repo.commit_file("app.js", "one\n", "initial");
+        fs::write(repo.path.join("app.js"), "two\n").unwrap();
+
+        git_stash_push(
+            repo.path_string(),
+            Some("save app change".to_string()),
+            false,
+        )
+        .await
+        .unwrap();
+        let stashes = git_stash_list(repo.path_string()).await.unwrap();
+
+        assert_eq!(stashes.len(), 1);
+        assert_eq!(stashes[0].name, "stash@{0}");
+        assert!(stashes[0].message.contains("save app change"));
+    }
+
+    #[tokio::test]
+    async fn git_stash_diff_returns_patch() {
+        let repo = TempRepo::new();
+        repo.configure_identity();
+        repo.commit_file("app.js", "one\n", "initial");
+        fs::write(repo.path.join("app.js"), "two\n").unwrap();
+
+        git_stash_push(repo.path_string(), Some("preview".to_string()), false)
+            .await
+            .unwrap();
+        let diff = git_stash_diff(repo.path_string(), "stash@{0}".to_string())
+            .await
+            .unwrap();
+
+        assert_eq!(diff.stash_ref, "stash@{0}");
+        assert!(!diff.truncated);
+        assert!(diff.diff.contains("diff --git"));
+        assert!(diff.diff.contains("-one"));
+        assert!(diff.diff.contains("+two"));
+    }
+
+    #[tokio::test]
+    async fn git_branch_graph_returns_recent_commits_and_refs() {
+        let repo = TempRepo::new();
+        repo.configure_identity();
+        let repo_path = repo.path_string();
+        repo.commit_file("app.txt", "base\n", "initial");
+        let base_branch_output = run_git(&repo_path, &["rev-parse", "--abbrev-ref", "HEAD"])
+            .unwrap();
+        let base_branch = String::from_utf8_lossy(&base_branch_output.stdout)
+            .trim()
+            .to_string();
+        run_git_check(&repo_path, &["checkout", "-b", "feature"]).unwrap();
+        repo.commit_file("feature.txt", "feature\n", "feature change");
+        run_git_check(&repo_path, &["checkout", base_branch.as_str()]).unwrap();
+        repo.commit_file("main.txt", "main\n", "main change");
+
+        let graph = git_branch_graph(repo_path, Some(20)).await.unwrap();
+
+        assert!(!graph.truncated);
+        assert!(graph.commits.len() >= 3);
+        assert!(graph
+            .commits
+            .iter()
+            .any(|commit| commit.refs.iter().any(|name| name.contains(&base_branch))));
+        assert!(graph
+            .commits
+            .iter()
+            .any(|commit| commit.refs.iter().any(|name| name.contains("feature"))));
+    }
+
+    #[tokio::test]
+    async fn git_conflict_files_detects_and_resolves_ours() {
+        let repo = TempRepo::new();
+        repo.configure_identity();
+        let repo_path = repo.path_string();
+        repo.commit_file("app.txt", "base\n", "initial");
+
+        run_git_check(&repo_path, &["checkout", "-b", "feature"]).unwrap();
+        repo.commit_file("app.txt", "feature\n", "feature change");
+        run_git_check(&repo_path, &["checkout", "-"]).unwrap();
+        repo.commit_file("app.txt", "main\n", "main change");
+        let merge = run_git(&repo_path, &["merge", "feature"]).unwrap();
+        assert!(!merge.status.success());
+
+        let conflicts = git_conflict_files(repo_path.clone()).await.unwrap();
+        assert_eq!(
+            conflicts,
+            vec![GitConflictFile {
+                path: "app.txt".to_string(),
+            }]
+        );
+
+        git_resolve_conflict(
+            repo_path.clone(),
+            "app.txt".to_string(),
+            GitConflictResolution::Ours,
+        )
+        .await
+        .unwrap();
+
+        assert!(git_conflict_files(repo_path.clone())
+            .await
+            .unwrap()
+            .is_empty());
+        assert_eq!(
+            fs::read_to_string(repo.path.join("app.txt")).unwrap(),
+            "main\n"
+        );
+    }
+
+    #[tokio::test]
+    async fn git_conflict_preview_returns_marker_hunks() {
+        let repo = TempRepo::new();
+        repo.configure_identity();
+        let repo_path = repo.path_string();
+        repo.commit_file("app.txt", "base\n", "initial");
+
+        run_git_check(&repo_path, &["checkout", "-b", "feature"]).unwrap();
+        repo.commit_file("app.txt", "feature\n", "feature change");
+        run_git_check(&repo_path, &["checkout", "-"]).unwrap();
+        repo.commit_file("app.txt", "main\n", "main change");
+        let merge = run_git(&repo_path, &["merge", "feature"]).unwrap();
+        assert!(!merge.status.success());
+
+        let preview = git_conflict_preview(repo_path, "app.txt".to_string())
+            .await
+            .unwrap();
+
+        assert_eq!(preview.file_path, "app.txt");
+        assert_eq!(preview.hunks.len(), 1);
+        assert!(preview.hunks[0].ours.contains("main"));
+        assert!(preview.hunks[0].theirs.contains("feature"));
     }
 
     #[test]

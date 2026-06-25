@@ -12,11 +12,18 @@ import {
   Database,
   NotebookTabs,
   CircleAlert,
+  Bug,
   FlaskConical,
   Play,
+  Globe,
 } from "lucide-react";
 import { useI18n } from "../i18n";
 import type { RightPanel } from "../hooks/useProjectPanels";
+import {
+  getToolbarIdeTools,
+  type IdeToolAvailability,
+  type IdeToolIcon,
+} from "../plugins/ideToolRegistry";
 import { DockerIcon } from "./DockerIcon";
 
 export function RightToolbar({
@@ -24,12 +31,14 @@ export function RightToolbar({
   onToggle,
   terminalActive,
   onToggleTerminal,
-  onOpenSearch,
   onOpenSettings,
   filesDisabled = false,
   gitDisabled = false,
+  problemsDisabled = false,
   terminalDisabled = false,
   searchDisabled = false,
+  debugDisabled = false,
+  previewDisabled = false,
   settingsDisabled = false,
   dockerDisabled = false,
 }: {
@@ -37,16 +46,58 @@ export function RightToolbar({
   onToggle: (panel: Exclude<RightPanel, null>) => void;
   terminalActive: boolean;
   onToggleTerminal: () => void;
-  onOpenSearch: () => void;
   onOpenSettings: () => void;
   filesDisabled?: boolean;
   gitDisabled?: boolean;
+  problemsDisabled?: boolean;
   terminalDisabled?: boolean;
   searchDisabled?: boolean;
+  debugDisabled?: boolean;
+  previewDisabled?: boolean;
   settingsDisabled?: boolean;
   dockerDisabled?: boolean;
 }) {
   const { t } = useI18n();
+  const ideToolAvailability: IdeToolAvailability = {
+    filesDisabled,
+    gitDisabled,
+    problemsDisabled,
+    terminalDisabled,
+    searchDisabled,
+    debugDisabled,
+    previewDisabled,
+  };
+  const ideTools = getToolbarIdeTools(ideToolAvailability);
+  const renderIdeToolIcon = (icon: IdeToolIcon): ReactNode => {
+    switch (icon) {
+      case "bug":
+        return <Bug size={17} />;
+      case "circle-alert":
+        return <CircleAlert size={17} />;
+      case "flask":
+        return <FlaskConical size={17} />;
+      case "git-branch":
+        return <GitBranch size={17} />;
+      case "globe":
+        return <Globe size={17} />;
+      case "play":
+        return <Play size={17} />;
+      case "search":
+        return <Search size={17} />;
+    }
+  };
+  const toToolbarButton = (tool: (typeof ideTools)[number]) => ({
+    key: tool.panel,
+    icon: renderIdeToolIcon(tool.icon),
+    title: t(tool.titleKey),
+    disabled: tool.disabled,
+  });
+  const primaryIdeButtons = ideTools
+    .filter((tool) => tool.toolbarGroup === "primary")
+    .map(toToolbarButton);
+  const utilityIdeButtons = ideTools
+    .filter((tool) => tool.toolbarGroup === "utility")
+    .map(toToolbarButton);
   const buttons: Array<{
     key: Exclude<RightPanel, null>;
     icon: ReactNode;
@@ -71,24 +122,7 @@ export function RightToolbar({
       title: t("toolbar.gitHistory"),
       disabled: gitDisabled,
     },
-    {
-      key: "problems",
-      icon: <CircleAlert size={17} />,
-      title: t("problems.title"),
-      disabled: gitDisabled,
-    },
-    {
-      key: "tests",
-      icon: <FlaskConical size={17} />,
-      title: t("tests.title"),
-      disabled: terminalDisabled,
-    },
-    {
-      key: "run",
-      icon: <Play size={17} />,
-      title: t("run.title"),
-      disabled: terminalDisabled,
-    },
+    ...primaryIdeButtons,
     { key: "ssh", icon: <Server size={17} />, title: t("ssh.title") },
     { key: "sftp", icon: <ArrowLeftRight size={17} />, title: t("sftp.title") },
     { key: "database", icon: <Database size={17} />, title: t("database.title") },
@@ -149,12 +183,17 @@ export function RightToolbar({
 
       <div style={{ width: 20, height: 1, background: "var(--border-dim)", margin: "4px 0" }} />
 
-      <IconButton
-        icon={<Search size={17} />}
-        title={t("toolbar.search")}
-        disabled={searchDisabled}
-        onClick={onOpenSearch}
-      />
+      {utilityIdeButtons.map((btn) => (
+        <IconButton
+          key={btn.key}
+          icon={btn.icon}
+          title={btn.title}
+          active={activePanel === btn.key}
+          activeVariant="icon"
+          disabled={btn.disabled}
+          onClick={() => onToggle(btn.key)}
+        />
+      ))}
 
       <div style={{ flex: 1 }} />
 

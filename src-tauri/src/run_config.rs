@@ -16,21 +16,44 @@ const MAX_OUTPUT_CHARS: usize = 200_000;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
-pub enum RunConfigType {
-    Shell,
+pub enum RunDebugConfigType {
+    Node,
+    Python,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub struct RunConfig {
-    pub id: String,
-    pub name: String,
-    #[serde(rename = "type")]
-    pub config_type: RunConfigType,
-    pub command: String,
-    pub cwd: String,
-    #[serde(default)]
-    pub env: BTreeMap<String, String>,
+pub struct RunDebugBreakpoint {
+    pub file: String,
+    pub line: u32,
+    pub column: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "type", rename_all = "lowercase")]
+pub enum RunConfig {
+    Shell {
+        id: String,
+        name: String,
+        command: String,
+        cwd: String,
+        #[serde(default)]
+        env: BTreeMap<String, String>,
+    },
+    Debug {
+        id: String,
+        name: String,
+        #[serde(rename = "debugType", default = "default_run_debug_config_type")]
+        debug_type: RunDebugConfigType,
+        program: String,
+        cwd: String,
+        #[serde(default)]
+        args: Vec<String>,
+        #[serde(default)]
+        env: BTreeMap<String, String>,
+        #[serde(default)]
+        breakpoints: Vec<RunDebugBreakpoint>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -90,6 +113,10 @@ fn default_run_config_version() -> u32 {
     RUN_CONFIG_VERSION
 }
 
+fn default_run_debug_config_type() -> RunDebugConfigType {
+    RunDebugConfigType::Node
+}
+
 fn now_millis() -> u128 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -129,10 +156,10 @@ fn normalize_path_lexically(path: &Path) -> PathBuf {
     normalized
 }
 
-fn cwd_candidate(root: &Path, cwd: &str) -> Result<PathBuf, String> {
-    let trimmed = cwd.trim();
+fn path_candidate(root: &Path, value: &str, empty_error: &str) -> Result<PathBuf, String> {
+    let trimmed = value.trim();
     if trimmed.is_empty() {
-        return Err("Run config cwd cannot be empty".to_string());
+        return Err(empty_error.to_string());
     }
     let path = Path::new(trimmed);
     Ok(if path.is_absolute() {
@@ -142,28 +169,86 @@ fn cwd_candidate(root: &Path, cwd: &str) -> Result<PathBuf, String> {
     })
 }
 
-fn ensure_path_inside_root(root: &Path, path: &Path) -> Result<(), String> {
+fn cwd_candidate(root: &Path, cwd: &str) -> Result<PathBuf, String> {
+    path_candidate(root, cwd, "Run config cwd cannot be empty")
+}
+
+fn ensure_path_inside_root(root: &Path, path: &Path, label: &str) -> Result<(), String> {
     let normalized_root = normalize_path_lexically(root);
     let normalized_path = normalize_path_lexically(path);
     if normalized_path.starts_with(&normalized_root) {
         Ok(())
     } else {
-        Err("Run config cwd is outside project root".to_string())
+        Err(format!("{label} is outside project root"))
     }
 }
 
 fn validate_run_config(root: &Path, config: &RunConfig) -> Result<(), String> {
-    if config.id.trim().is_empty() {
+    match config {
+        RunConfig::Shell {
+            id,
+            name,
+            command,
+            cwd,
+            ..
+        } => {
+            validate_run_config_identity(id, name)?;
+            if command.trim().is_empty() {
+                return Err("Run config command cannot be empty".to_string());
+            }
+            let candidate = cwd_candidate(root, cwd)?;
+            ensure_path_inside_root(root, &candidate, "Run config cwd")
+        }
+        RunConfig::Debug {
+            id,
+            name,
+            program,
+            cwd,
+            breakpoints,
+            ..
+        } => {
+            validate_run_config_identity(id, name)?;
+            if program.trim().is_empty() {
+                return Err("Run debug program cannot be empty".to_string());
+            }
+            let program = path_candidate(root, program, "Run debug program cannot be empty")?;
+            ensure_path_inside_root(root, &program, "Run debug program")?;
+            let cwd = cwd_candidate(root, cwd)?;
+            ensure_path_inside_root(root, &cwd, "Run config cwd")?;
+            for breakpoint in breakpoints {
+                validate_run_debug_breakpoint(root, breakpoint)?;
+            }
+            Ok(())
+        }
+    }
+}
+
+fn validate_run_config_identity(id: &str, name: &str) -> Result<(), String> {
+    if id.trim().is_empty() {
         return Err("Run config id cannot be empty".to_string());
     }
-    if config.name.trim().is_empty() {
+    if name.trim().is_empty() {
         return Err("Run config name cannot be empty".to_string());
     }
-    if config.command.trim().is_empty() {
-        return Err("Run config command cannot be empty".to_string());
+    Ok(())
+}
+
+fn validate_run_debug_breakpoint(
+    root: &Path,
+    breakpoint: &RunDebugBreakpoint,
+) -> Result<(), String> {
+    if breakpoint.line == 0 {
+        return Err("Run debug breakpoint line must be at least 1".to_string());
     }
-    let candidate = cwd_candidate(root, &config.cwd)?;
-    ensure_path_inside_root(root, &candidate)
+    if breakpoint.column == 0 {
+        return Err("Run debug breakpoint column must be at least 1".to_string());
+    }
+    let file = path_candidate(
+        root,
+        &breakpoint.file,
+        "Run debug breakpoint file cannot be empty",
+    )?;
+    ensure_path_inside_root(root, &file, "Run debug breakpoint")
 }
 
 fn resolve_run_cwd(root: &Path, cwd: &str) -> Result<PathBuf, String> {
@@ -338,14 +423,24 @@ pub fn start_run_config(
 ) -> Result<RunProcessSnapshot, String> {
     let root = validate_project_root(&project_path)?;
     validate_run_config(&root, &config)?;
-    let cwd = resolve_run_cwd(&root, &config.cwd)?;
+    let RunConfig::Shell {
+        id,
+        name,
+        command,
+        cwd,
+        env,
+    } = config
+    else {
+        return Err("Debug run configs must be started with the debug launcher".to_string());
+    };
+    let cwd = resolve_run_cwd(&root, &cwd)?;
     let run_id = format!("run-{}", Uuid::new_v4());
     let started_at = now_millis();
-    let mut command = shell_command(&config.command);
-    crate::subprocess::configure_background_command(&mut command);
-    let mut child = command
+    let mut shell = shell_command(&command);
+    crate::subprocess::configure_background_command(&mut shell);
+    let mut child = shell
         .current_dir(&cwd)
-        .envs(config.env.iter())
+        .envs(env.iter())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
@@ -353,9 +448,9 @@ pub fn start_run_config(
 
     let snapshot = Arc::new(Mutex::new(RunProcessSnapshot {
         run_id: run_id.clone(),
-        config_id: config.id.clone(),
-        name: config.name.clone(),
-        command: config.command.clone(),
+        config_id: id,
+        name,
+        command,
         cwd: cwd.to_string_lossy().into_owned(),
         status: RunProcessStatus::Running,
         output: String::new(),
@@ -474,11 +569,103 @@ mod tests {
         let document = read_run_configs_from_root(&root).unwrap();
 
         assert_eq!(document.configs.len(), 1);
-        assert_eq!(document.configs[0].id, "dev");
-        assert_eq!(
-            document.configs[0].env.get("PORT").map(String::as_str),
-            Some("5173")
-        );
+        match &document.configs[0] {
+            RunConfig::Shell { id, env, .. } => {
+                assert_eq!(id, "dev");
+                assert_eq!(env.get("PORT").map(String::as_str), Some("5173"));
+            }
+            RunConfig::Debug { .. } => panic!("expected shell run config"),
+        }
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn reads_debug_run_config_from_aeroric_directory() {
+        let root = unique_test_dir("read-debug");
+        fs::create_dir_all(root.join(".aeroric")).unwrap();
+        fs::write(
+            root.join(".aeroric").join("run-configs.json"),
+            r#"{
+              "version": 1,
+              "configs": [
+                {
+                  "id": "debug-app",
+                  "name": "Debug App",
+                  "type": "debug",
+                  "debugType": "node",
+                  "program": "src/index.js",
+                  "cwd": ".",
+                  "args": ["--flag"],
+                  "env": { "NODE_ENV": "test" },
+                  "breakpoints": [
+                    { "file": "src/index.js", "line": 12, "column": 1 }
+                  ]
+                }
+              ]
+            }"#,
+        )
+        .unwrap();
+
+        let document = read_run_configs_from_root(&root).unwrap();
+
+        assert_eq!(document.configs.len(), 1);
+        match &document.configs[0] {
+            RunConfig::Debug {
+                id,
+                debug_type,
+                program,
+                args,
+                breakpoints,
+                ..
+            } => {
+                assert_eq!(id, "debug-app");
+                assert_eq!(*debug_type, RunDebugConfigType::Node);
+                assert_eq!(program, "src/index.js");
+                assert_eq!(args, &vec!["--flag".to_string()]);
+                assert_eq!(breakpoints[0].line, 12);
+            }
+            RunConfig::Shell { .. } => panic!("expected debug run config"),
+        }
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn reads_python_debug_run_config_from_aeroric_directory() {
+        let root = unique_test_dir("read-python-debug");
+        fs::create_dir_all(root.join(".aeroric")).unwrap();
+        fs::write(
+            root.join(".aeroric").join("run-configs.json"),
+            r#"{
+              "version": 1,
+              "configs": [
+                {
+                  "id": "debug-python",
+                  "name": "Debug Python",
+                  "type": "debug",
+                  "debugType": "python",
+                  "program": "app/main.py",
+                  "cwd": "."
+                }
+              ]
+            }"#,
+        )
+        .unwrap();
+
+        let document = read_run_configs_from_root(&root).unwrap();
+
+        match &document.configs[0] {
+            RunConfig::Debug {
+                debug_type,
+                program,
+                ..
+            } => {
+                assert_eq!(*debug_type, RunDebugConfigType::Python);
+                assert_eq!(program, "app/main.py");
+            }
+            RunConfig::Shell { .. } => panic!("expected python debug run config"),
+        }
 
         fs::remove_dir_all(root).unwrap();
     }
@@ -486,13 +673,54 @@ mod tests {
     #[test]
     fn rejects_config_cwd_outside_project_root() {
         let root = Path::new("/repo");
-        let config = RunConfig {
+        let config = RunConfig::Shell {
             id: "bad".to_string(),
             name: "Bad".to_string(),
-            config_type: RunConfigType::Shell,
             command: "echo bad".to_string(),
             cwd: "../outside".to_string(),
             env: Default::default(),
+        };
+
+        let error = validate_run_config(root, &config).unwrap_err();
+
+        assert!(error.contains("outside project root"));
+    }
+
+    #[test]
+    fn rejects_debug_run_config_program_outside_project_root() {
+        let root = Path::new("/repo");
+        let config = RunConfig::Debug {
+            id: "bad".to_string(),
+            name: "Bad".to_string(),
+            debug_type: RunDebugConfigType::Node,
+            program: "../outside/index.js".to_string(),
+            cwd: ".".to_string(),
+            args: Vec::new(),
+            env: Default::default(),
+            breakpoints: Vec::new(),
+        };
+
+        let error = validate_run_config(root, &config).unwrap_err();
+
+        assert!(error.contains("outside project root"));
+    }
+
+    #[test]
+    fn rejects_debug_run_config_breakpoint_outside_project_root() {
+        let root = Path::new("/repo");
+        let config = RunConfig::Debug {
+            id: "bad".to_string(),
+            name: "Bad".to_string(),
+            debug_type: RunDebugConfigType::Node,
+            program: "src/index.js".to_string(),
+            cwd: ".".to_string(),
+            args: Vec::new(),
+            env: Default::default(),
+            breakpoints: vec![RunDebugBreakpoint {
+                file: "../outside.js".to_string(),
+                line: 1,
+                column: 1,
+            }],
         };
 
         let error = validate_run_config(root, &config).unwrap_err();

@@ -105,13 +105,21 @@ export function visibleDockPanel(
   {
     filesDisabled,
     gitDisabled,
+    problemsDisabled = false,
     runDisabled = false,
+    searchDisabled = false,
     testsDisabled = false,
+    debugDisabled = false,
+    previewDisabled = false,
   }: {
     filesDisabled: boolean;
     gitDisabled: boolean;
+    problemsDisabled?: boolean;
     runDisabled?: boolean;
+    searchDisabled?: boolean;
     testsDisabled?: boolean;
+    debugDisabled?: boolean;
+    previewDisabled?: boolean;
   },
 ): Exclude<RightPanel, "sftp" | "docker" | "ssh" | "database" | "notes"> {
   if (
@@ -124,9 +132,20 @@ export function visibleDockPanel(
     return null;
   }
   if (rightPanel === "files" && filesDisabled) return null;
-  if ((rightPanel === "git-changes" || rightPanel === "git-history") && gitDisabled) return null;
+  if (rightPanel === "search" && searchDisabled) return null;
+  if (rightPanel === "problems" && problemsDisabled) return null;
+  if (
+    (rightPanel === "git-changes" ||
+      rightPanel === "git-history" ||
+      rightPanel === "git-advanced") &&
+    gitDisabled
+  ) {
+    return null;
+  }
   if (rightPanel === "run" && runDisabled) return null;
   if (rightPanel === "tests" && testsDisabled) return null;
+  if (rightPanel === "debug" && debugDisabled) return null;
+  if (rightPanel === "preview" && previewDisabled) return null;
   return rightPanel;
 }
 

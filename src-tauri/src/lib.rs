@@ -11,6 +11,7 @@ mod analytics;
 mod app_settings;
 mod conda;
 mod config;
+mod dap;
 mod database;
 mod diagnostics;
 mod docker;
@@ -22,6 +23,7 @@ mod hooks;
 mod lsp;
 mod notification;
 mod platform;
+mod ports;
 mod pty;
 mod remote_fs;
 mod remote_git;
@@ -145,6 +147,7 @@ pub fn run() {
             codex_rpc: Arc::new(Mutex::new(None)),
         })
         .manage(run_config::RunConfigState::default())
+        .manage(dap::DebugState::default())
         .on_window_event(|window, event| {
             // macOS: 点关闭按钮(红灯)时隐藏窗口而非退出,与 Cmd+W 行为一致;
             // 点 Dock 图标可唤回(见下方 Reopen 处理)。
@@ -188,6 +191,16 @@ pub fn run() {
             search::search_text,
             search::replace_text_preview,
             search::apply_text_replacements,
+            dap::read_debug_configs,
+            dap::write_debug_configs,
+            dap::start_debug_config,
+            dap::continue_debug_config,
+            dap::step_over_debug_config,
+            dap::step_into_debug_config,
+            dap::step_out_debug_config,
+            dap::expand_debug_variable,
+            dap::stop_debug_config,
+            dap::read_debug_session,
             lsp::lsp_server_status,
             lsp::lsp_hover,
             lsp::lsp_definition,
@@ -242,6 +255,17 @@ pub fn run() {
             git::git_push,
             git::git_pull,
             git::git_remote_counts,
+            git::git_blame_file,
+            git::git_branch_graph,
+            git::git_stash_list,
+            git::git_stash_diff,
+            git::git_stash_push,
+            git::git_stash_apply,
+            git::git_stash_drop,
+            git::git_conflict_files,
+            git::git_conflict_preview,
+            git::git_resolve_conflict,
+            ports::list_listening_ports,
             git::create_task_worktree,
             git::merge_task_worktree,
             git::remove_task_worktree,

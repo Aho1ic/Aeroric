@@ -356,16 +356,171 @@ export interface DiagnosticRunResult {
   rawOutput: string;
 }
 
-export type RunConfigType = "shell";
+export interface GitBlameLine {
+  line: number;
+  commit: string;
+  shortCommit: string;
+  author: string;
+  authorTime: number;
+  summary: string;
+  content: string;
+}
 
-export interface RunConfig {
+export interface GitBlameResult {
+  filePath: string;
+  lines: GitBlameLine[];
+}
+
+export interface GitBranchGraphCommit {
+  hash: string;
+  shortHash: string;
+  parents: string[];
+  refs: string[];
+  subject: string;
+  author: string;
+  relativeTime: string;
+}
+
+export interface GitBranchGraphResult {
+  commits: GitBranchGraphCommit[];
+  truncated: boolean;
+}
+
+export interface GitStashEntry {
+  index: number;
+  name: string;
+  commit: string;
+  date: string;
+  message: string;
+}
+
+export interface GitStashDiff {
+  stashRef: string;
+  diff: string;
+  truncated: boolean;
+}
+
+export interface GitConflictFile {
+  path: string;
+}
+
+export interface GitConflictHunk {
+  index: number;
+  ours: string;
+  base?: string | null;
+  theirs: string;
+}
+
+export interface GitConflictPreview {
+  filePath: string;
+  hunks: GitConflictHunk[];
+}
+
+export type GitConflictResolution = "ours" | "theirs" | "both";
+
+export interface ListeningPort {
+  port: number;
+  address: string;
+  protocol: string;
+  pid: number;
+  processName: string;
+  url: string;
+  projectContext: "project" | "other" | "unknown";
+}
+
+export type DebugConfigType = "node" | "python";
+
+export interface DebugBreakpoint {
+  file: string;
+  line: number;
+  column: number;
+}
+
+export interface DebugConfig {
   id: string;
   name: string;
-  type: RunConfigType;
+  type: DebugConfigType;
+  program: string;
+  cwd: string;
+  args: string[];
+  env: Record<string, string>;
+  breakpoints: DebugBreakpoint[];
+}
+
+export interface DebugConfigDocument {
+  version: 1;
+  configs: DebugConfig[];
+}
+
+export type DebugSessionStatus =
+  | "starting"
+  | "running"
+  | "paused"
+  | "exited"
+  | "failed"
+  | "stopped";
+
+export interface DebugCallFrame {
+  functionName: string;
+  file: string;
+  line: number;
+  column: number;
+}
+
+export interface DebugVariable {
+  name: string;
+  value: string;
+  typeName?: string | null;
+  objectId?: string | null;
+  hasChildren?: boolean;
+}
+
+export interface DebugVariableScope {
+  name: string;
+  variables: DebugVariable[];
+}
+
+export interface DebugSessionSnapshot {
+  debugId: string;
+  configId: string;
+  name: string;
+  program: string;
+  cwd: string;
+  status: DebugSessionStatus;
+  output: string;
+  pausedReason?: string | null;
+  callStack: DebugCallFrame[];
+  scopes: DebugVariableScope[];
+  exitCode?: number | null;
+  startedAt: number;
+  finishedAt?: number | null;
+}
+
+export type RunConfigType = "shell" | "debug";
+export type RunDebugConfigType = DebugConfigType;
+
+export interface ShellRunConfig {
+  id: string;
+  name: string;
+  type: "shell";
   command: string;
   cwd: string;
   env: Record<string, string>;
 }
+
+export interface DebugRunConfig {
+  id: string;
+  name: string;
+  type: "debug";
+  debugType: RunDebugConfigType;
+  program: string;
+  cwd: string;
+  args: string[];
+  env: Record<string, string>;
+  breakpoints: DebugBreakpoint[];
+}
+
+export type RunConfig = ShellRunConfig | DebugRunConfig;
 
 export interface RunConfigDocument {
   version: 1;

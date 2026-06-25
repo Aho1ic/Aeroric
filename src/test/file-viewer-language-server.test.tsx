@@ -34,10 +34,18 @@ vi.mock("@uiw/react-codemirror", async () => {
 
   return {
     default: MockCodeMirror,
+    Decoration: {
+      set: () => [],
+      widget: () => ({ range: () => ({}) }),
+    },
     EditorView: {
+      decorations: { compute: () => [] },
       theme: () => [],
       scrollIntoView: () => ({}),
     },
+    GutterMarker: class {},
+    WidgetType: class {},
+    gutter: () => [],
   };
 });
 

@@ -1,6 +1,6 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { invoke } from "@tauri-apps/api/core";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { FileViewer } from "../components/FileViewer";
 import { I18nProvider } from "../i18n";
 
@@ -12,11 +12,9 @@ vi.mock("@uiw/react-codemirror", async () => {
   const React = await import("react");
   function MockCodeMirror({
     value,
-    onChange,
     onCreateEditor,
   }: {
     value: string;
-    onChange: (value: string) => void;
     onCreateEditor?: (view: unknown) => void;
   }) {
     React.useEffect(() => {
@@ -31,13 +29,7 @@ vi.mock("@uiw/react-codemirror", async () => {
       onCreateEditor?.(view);
     }, [onCreateEditor]);
 
-    return (
-      <textarea
-        aria-label="editor"
-        value={value}
-        onChange={(event) => onChange(event.target.value)}
-      />
-    );
+    return <textarea aria-label="editor" readOnly value={value} />;
   }
 
   return {
@@ -61,8 +53,8 @@ function renderFileViewer() {
   render(
     <I18nProvider>
       <FileViewer
-        tabs={[{ path: "/tmp/aeroric/a.txt", name: "a.txt" }]}
-        activeFilePath="/tmp/aeroric/a.txt"
+        tabs={[{ path: "/tmp/aeroric/src/app.txt", name: "app.txt" }]}
+        activeFilePath="/tmp/aeroric/src/app.txt"
         projectPath="/tmp/aeroric"
         onSelectTab={vi.fn()}
         onCloseTab={vi.fn()}
@@ -75,56 +67,47 @@ function renderFileViewer() {
   );
 }
 
-describe("FileViewer format on save", () => {
+describe("FileViewer inline blame", () => {
   beforeEach(() => {
     vi.mocked(invoke).mockReset();
   });
 
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-
-  it("formats and refreshes local file content after autosave when enabled", async () => {
-    let readCount = 0;
+  it("loads git blame for the active local file on demand", async () => {
     vi.mocked(invoke).mockImplementation((command) => {
       if (command === "read_project_config") {
-        return Promise.resolve({ editor: { format_on_save: true } });
+        return Promise.resolve({ editor: { format_on_save: false } });
       }
       if (command === "read_file_content") {
-        readCount += 1;
-        return Promise.resolve(readCount === 1 ? "initial" : "formatted");
+        return Promise.resolve("one\ntwo\n");
       }
-      if (command === "write_file_content" || command === "format_file") {
-        return Promise.resolve(undefined);
+      if (command === "git_blame_file") {
+        return Promise.resolve({
+          filePath: "src/app.txt",
+          lines: [
+            {
+              line: 1,
+              commit: "abcdef123456",
+              shortCommit: "abcdef1",
+              author: "Ada",
+              authorTime: 1,
+              summary: "Add app",
+              content: "one",
+            },
+          ],
+        });
       }
       return Promise.reject(new Error(`unexpected command: ${command}`));
     });
 
     renderFileViewer();
 
-    const editor = await screen.findByLabelText("editor");
-    vi.useFakeTimers();
-    fireEvent.change(editor, { target: { value: "changed" } });
-
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(1500);
-    });
-    vi.useRealTimers();
+    fireEvent.click(await screen.findByRole("button", { name: "Blame" }));
 
     await waitFor(() => {
-      expect(vi.mocked(invoke).mock.calls.some(([command]) => command === "format_file")).toBe(
-        true,
-      );
+      expect(vi.mocked(invoke)).toHaveBeenCalledWith("git_blame_file", {
+        projectPath: "/tmp/aeroric",
+        filePath: "src/app.txt",
+      });
     });
-    expect(vi.mocked(invoke)).toHaveBeenCalledWith("write_file_content", {
-      path: "/tmp/aeroric/a.txt",
-      content: "changed",
-      projectPath: "/tmp/aeroric",
-    });
-    expect(vi.mocked(invoke)).toHaveBeenCalledWith("format_file", {
-      projectPath: "/tmp/aeroric",
-      filePath: "/tmp/aeroric/a.txt",
-    });
-    await waitFor(() => expect(editor).toHaveValue("formatted"));
   });
 });

@@ -143,9 +143,15 @@ describe("project main view mode", () => {
   });
 
   it("keeps the local shell terminal covering files and diffs when active", () => {
-    expect(shouldShowShellInCenter({ shellMode: true, hasOpenFiles: false, hasOpenDiff: false })).toBe(true);
-    expect(shouldShowShellInCenter({ shellMode: true, hasOpenFiles: true, hasOpenDiff: false })).toBe(true);
-    expect(shouldShowShellInCenter({ shellMode: true, hasOpenFiles: false, hasOpenDiff: true })).toBe(true);
+    expect(
+      shouldShowShellInCenter({ shellMode: true, hasOpenFiles: false, hasOpenDiff: false }),
+    ).toBe(true);
+    expect(
+      shouldShowShellInCenter({ shellMode: true, hasOpenFiles: true, hasOpenDiff: false }),
+    ).toBe(true);
+    expect(
+      shouldShowShellInCenter({ shellMode: true, hasOpenFiles: false, hasOpenDiff: true }),
+    ).toBe(true);
   });
 
   it("sizes the local shell overlay and panel to fill the center workspace", () => {
@@ -186,7 +192,61 @@ describe("project main view mode", () => {
     expect(visibleDockPanel("git-changes", { filesDisabled: false, gitDisabled: false })).toBe(
       "git-changes",
     );
+    expect(visibleDockPanel("git-advanced", { filesDisabled: false, gitDisabled: false })).toBe(
+      "git-advanced",
+    );
+    expect(visibleDockPanel("search", { filesDisabled: false, gitDisabled: false })).toBe("search");
+    expect(visibleDockPanel("problems", { filesDisabled: false, gitDisabled: false })).toBe(
+      "problems",
+    );
+    expect(visibleDockPanel("debug", { filesDisabled: false, gitDisabled: false })).toBe("debug");
+    expect(visibleDockPanel("preview", { filesDisabled: false, gitDisabled: false })).toBe(
+      "preview",
+    );
     expect(centerWorkspaceMode("files", false)).toBe(null);
+  });
+
+  it("hides advanced Git tools when Git is unavailable", () => {
+    expect(visibleDockPanel("git-advanced", { filesDisabled: false, gitDisabled: true })).toBe(
+      null,
+    );
+  });
+
+  it("hides local analysis panels when they are unavailable", () => {
+    expect(
+      visibleDockPanel("search", {
+        filesDisabled: false,
+        gitDisabled: false,
+        searchDisabled: true,
+      }),
+    ).toBe(null);
+    expect(
+      visibleDockPanel("problems", {
+        filesDisabled: false,
+        gitDisabled: false,
+        problemsDisabled: true,
+      }),
+    ).toBe(null);
+  });
+
+  it("hides the debug panel when debug is unavailable", () => {
+    expect(
+      visibleDockPanel("debug", {
+        filesDisabled: false,
+        gitDisabled: false,
+        debugDisabled: true,
+      }),
+    ).toBe(null);
+  });
+
+  it("hides the preview panel when local port scanning is unavailable", () => {
+    expect(
+      visibleDockPanel("preview", {
+        filesDisabled: false,
+        gitDisabled: false,
+        previewDisabled: true,
+      }),
+    ).toBe(null);
   });
 
   it("hides inactive projects without display none so terminals stay mounted", () => {

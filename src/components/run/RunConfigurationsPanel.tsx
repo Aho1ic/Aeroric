@@ -1,27 +1,54 @@
 import { invoke } from "@tauri-apps/api/core";
-import { ListVideo, Play, Plus, RotateCcw, Save, Square, Trash2 } from "lucide-react";
+import {
+  Bug,
+  ListVideo,
+  Play,
+  Plus,
+  RotateCcw,
+  Save,
+  Square,
+  Terminal,
+  Trash2,
+} from "lucide-react";
 import type React from "react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useI18n } from "../../i18n";
-import type { RunConfig, RunConfigDocument, RunProcessSnapshot } from "../../types";
+import type {
+  DebugBreakpoint,
+  DebugSessionSnapshot,
+  RunConfig,
+  RunConfigDocument,
+  RunProcessSnapshot,
+} from "../../types";
 import {
   buildRunConfigDraft,
   defaultRunConfigDraft,
+  isRunConfigDraftLaunchable,
+  isRunConfigLaunchable,
   isRunProcessActive,
   removeRunConfig,
+  runConfigSummary,
+  runConfigToDebugConfig,
   runConfigToDraft,
   upsertRunConfig,
   type RunConfigDraft,
 } from "./runConfigState";
+import { mergeDebugConfigBreakpoints } from "../debug/debugBreakpointState";
 
 const emptyDocument: RunConfigDocument = { version: 1, configs: [] };
 
 export function RunConfigurationsPanel({
   projectPath,
   width,
+  editorBreakpoints = [],
+  onDebugStarted,
+  onRunProcessChanged,
 }: {
   projectPath: string;
   width: number;
+  editorBreakpoints?: DebugBreakpoint[];
+  onDebugStarted?: (snapshot: DebugSessionSnapshot) => void;
+  onRunProcessChanged?: (snapshot: RunProcessSnapshot) => void;
 }) {
   const { t } = useI18n();
   const [document, setDocument] = useState<RunConfigDocument>(emptyDocument);
@@ -32,12 +59,13 @@ export function RunConfigurationsPanel({
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [process, setProcess] = useState<RunProcessSnapshot | null>(null);
+  const [debugSession, setDebugSession] = useState<DebugSessionSnapshot | null>(null);
 
   const selectedConfig = useMemo(
     () => document.configs.find((config) => config.id === selectedId) ?? null,
     [document.configs, selectedId],
   );
-  const processActive = isRunProcessActive(process);
+  const processActive = draft.type === "shell" && isRunProcessActive(process);
 
   const selectConfig = useCallback((config: RunConfig) => {
     setSelectedId(config.id);
@@ -79,7 +107,10 @@ export function RunConfigurationsPanel({
     const timer = window.setInterval(() => {
       invoke<RunProcessSnapshot>("read_run_process", { runId: process.runId })
         .then((next) => {
-          if (!cancelled) setProcess(next);
+          if (!cancelled) {
+            setProcess(next);
+            onRunProcessChanged?.(next);
+          }
         })
         .catch((err) => {
           if (!cancelled) setError(String(err));
@@ -89,15 +120,38 @@ export function RunConfigurationsPanel({
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, [process?.runId, process?.status]);
+  }, [onRunProcessChanged, process?.runId, process?.status]);
+
+  useEffect(() => {
+    if (
+      !debugSession?.debugId ||
+      !["starting", "running", "paused"].includes(debugSession.status)
+    ) {
+      return;
+    }
+    let cancelled = false;
+    const timer = window.setInterval(() => {
+      invoke<DebugSessionSnapshot>("read_debug_session", { debugId: debugSession.debugId })
+        .then((next) => {
+          if (!cancelled) setDebugSession(next);
+        })
+        .catch((err) => {
+          if (!cancelled) setError(String(err));
+        });
+    }, 700);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [debugSession?.debugId, debugSession?.status]);
 
   const saveDraft = async (): Promise<RunConfig | null> => {
     setSaving(true);
     setError(null);
     try {
       const config = buildRunConfigDraft(draft);
-      if (!config.id || !config.name || !config.command) {
-        setError(t("run.invalidConfig"));
+      if (!isRunConfigLaunchable(config)) {
+        setError(t(config.type === "debug" ? "run.invalidDebugConfig" : "run.invalidConfig"));
         return null;
       }
       const nextDocument = upsertRunConfig(document, config);
@@ -143,8 +197,20 @@ export function RunConfigurationsPanel({
     setError(null);
     try {
       const config = buildRunConfigDraft(draft);
-      if (!config.id || !config.name || !config.command) {
-        setError(t("run.invalidConfig"));
+      if (!isRunConfigLaunchable(config)) {
+        setError(t(config.type === "debug" ? "run.invalidDebugConfig" : "run.invalidConfig"));
+        return;
+      }
+      if (config.type === "debug") {
+        const debugConfig = runConfigToDebugConfig(config);
+        if (!debugConfig) return;
+        const snapshot = await invoke<DebugSessionSnapshot>("start_debug_config", {
+          projectPath,
+          config: mergeDebugConfigBreakpoints(debugConfig, editorBreakpoints),
+        });
+        setProcess(null);
+        setDebugSession(snapshot);
+        onDebugStarted?.(snapshot);
         return;
       }
       const snapshot = await invoke<RunProcessSnapshot>("start_run_config", {
@@ -152,6 +218,7 @@ export function RunConfigurationsPanel({
         config,
       });
       setProcess(snapshot);
+      onRunProcessChanged?.(snapshot);
     } catch (err) {
       setError(String(err));
     } finally {
@@ -168,6 +235,7 @@ export function RunConfigurationsPanel({
         runId: process.runId,
       });
       setProcess(snapshot);
+      onRunProcessChanged?.(snapshot);
     } catch (err) {
       setError(String(err));
     } finally {
@@ -175,8 +243,19 @@ export function RunConfigurationsPanel({
     }
   };
 
-  const statusLabel = process ? t(`run.status.${process.status}`) : t("run.noRun");
-  const canRun = Boolean(draft.name.trim() && draft.command.trim() && !running);
+  const statusLabel =
+    draft.type === "debug"
+      ? debugSession
+        ? t(`debug.status.${debugSession.status}`)
+        : t("debug.noSession")
+      : process
+        ? t(`run.status.${process.status}`)
+        : t("run.noRun");
+  const canRun = isRunConfigDraftLaunchable(draft) && !running;
+  const outputText =
+    draft.type === "debug"
+      ? debugSession?.output || t("run.noOutput")
+      : process?.output || t("run.noOutput");
 
   return (
     <div style={rootStyle(width)}>
@@ -226,10 +305,10 @@ export function RunConfigurationsPanel({
                 type="button"
                 style={configButtonStyle(config.id === selectedId)}
                 onClick={() => selectConfig(config)}
-                title={config.command}
+                title={runConfigSummary(config)}
               >
                 <span style={configNameStyle}>{config.name}</span>
-                <span style={configCommandStyle}>{config.command}</span>
+                <span style={configCommandStyle}>{runConfigSummary(config)}</span>
               </button>
             ))
           )}
@@ -252,15 +331,97 @@ export function RunConfigurationsPanel({
               style={inputStyle}
             />
           </label>
-          <label style={labelStyle}>
-            {t("run.command")}
-            <input
-              value={draft.command}
-              onChange={(event) => setDraft((prev) => ({ ...prev, command: event.target.value }))}
-              placeholder="pnpm dev"
-              style={inputStyle}
-            />
-          </label>
+          <div style={labelStyle}>
+            {t("run.type")}
+            <div style={typeSelectorStyle} role="group" aria-label={t("run.type")}>
+              <button
+                type="button"
+                style={typeButtonStyle(draft.type === "shell")}
+                onClick={() => setDraft((prev) => ({ ...prev, type: "shell" }))}
+              >
+                <Terminal size={13} />
+                {t("run.type.shell")}
+              </button>
+              <button
+                type="button"
+                style={typeButtonStyle(draft.type === "debug")}
+                onClick={() => setDraft((prev) => ({ ...prev, type: "debug" }))}
+              >
+                <Bug size={13} />
+                {t("run.type.debug")}
+              </button>
+            </div>
+          </div>
+          {draft.type === "shell" ? (
+            <label style={labelStyle}>
+              {t("run.command")}
+              <input
+                value={draft.command}
+                onChange={(event) =>
+                  setDraft((prev) => ({ ...prev, command: event.target.value }))
+                }
+                placeholder="pnpm dev"
+                style={inputStyle}
+              />
+            </label>
+          ) : (
+            <>
+              <div style={labelStyle}>
+                {t("debug.runtime")}
+                <div style={typeSelectorStyle} role="group" aria-label={t("debug.runtime")}>
+                  <button
+                    type="button"
+                    style={typeButtonStyle(draft.debugRuntime === "node")}
+                    onClick={() => setDraft((prev) => ({ ...prev, debugRuntime: "node" }))}
+                  >
+                    {t("debug.runtime.node")}
+                  </button>
+                  <button
+                    type="button"
+                    style={typeButtonStyle(draft.debugRuntime === "python")}
+                    onClick={() => setDraft((prev) => ({ ...prev, debugRuntime: "python" }))}
+                  >
+                    {t("debug.runtime.python")}
+                  </button>
+                </div>
+              </div>
+              <label style={labelStyle}>
+                {t("run.program")}
+                <input
+                  value={draft.program}
+                  onChange={(event) =>
+                    setDraft((prev) => ({ ...prev, program: event.target.value }))
+                  }
+                  placeholder={draft.debugRuntime === "python" ? "src/main.py" : "src/index.js"}
+                  style={inputStyle}
+                />
+              </label>
+              <label style={labelStyle}>
+                {t("run.args")}
+                <textarea
+                  value={draft.argsText}
+                  onChange={(event) =>
+                    setDraft((prev) => ({ ...prev, argsText: event.target.value }))
+                  }
+                  placeholder="--inspect"
+                  rows={2}
+                  style={textareaStyle}
+                />
+              </label>
+              <label style={labelStyle}>
+                {t("run.breakpoints")}
+                <textarea
+                  value={draft.breakpointsText}
+                  onChange={(event) =>
+                    setDraft((prev) => ({ ...prev, breakpointsText: event.target.value }))
+                  }
+                  placeholder="src/index.js:12"
+                  rows={3}
+                  style={textareaStyle}
+                />
+              </label>
+            </>
+          )}
           <label style={labelStyle}>
             {t("run.cwd")}
             <input
@@ -308,7 +469,7 @@ export function RunConfigurationsPanel({
       {error && <div style={errorStyle}>{t("run.failed", { error })}</div>}
 
       <div style={outputHeaderStyle}>{t("run.output")}</div>
-      <pre style={outputStyle}>{process?.output || t("run.noOutput")}</pre>
+      <pre style={outputStyle}>{outputText}</pre>
     </div>
   );
 }
@@ -372,6 +533,12 @@ const labelStyle: React.CSSProperties = {
   color: "var(--text-muted)",
   fontSize: 11,
   fontWeight: 650,
+};
+
+const typeSelectorStyle: React.CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "1fr 1fr",
+  gap: 6,
 };
 
 const inputStyle: React.CSSProperties = {
@@ -453,6 +620,13 @@ function iconTextButtonStyle(active: boolean): React.CSSProperties {
     fontWeight: 650,
     cursor: "pointer",
     padding: "0 8px",
+  };
+}
+
+function typeButtonStyle(active: boolean): React.CSSProperties {
+  return {
+    ...iconTextButtonStyle(active),
+    width: "100%",
   };
 }
 
