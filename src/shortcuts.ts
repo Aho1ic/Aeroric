@@ -41,19 +41,14 @@ export function getNewlineShortcutKeys(shortcut: SendShortcut, platform: AppPlat
  * Cmd+W (macOS) / Ctrl+W (其他平台) —— 收起窗口（隐藏到 Dock/任务栏）。
  * 在全局 keydown 捕获阶段匹配，绕过 webview 默认的关闭行为。
  */
-export function isHideWindowShortcut(
-  event: PromptKeyEventLike,
-  platform: AppPlatform,
-): boolean {
+export function isHideWindowShortcut(event: PromptKeyEventLike, platform: AppPlatform): boolean {
   if (event.key !== "w" && event.key !== "W") {
     return false;
   }
   if (event.shiftKey) {
     return false;
   }
-  return platform === "macos"
-    ? event.metaKey && !event.ctrlKey
-    : event.ctrlKey && !event.metaKey;
+  return platform === "macos" ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey;
 }
 
 export function shouldInsertPromptNewlineKey(
@@ -67,9 +62,7 @@ export function shouldInsertPromptNewlineKey(
   if (shortcut !== "enter" || event.shiftKey) {
     return false;
   }
-  return platform === "macos"
-    ? event.metaKey && !event.ctrlKey
-    : event.ctrlKey && !event.metaKey;
+  return platform === "macos" ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey;
 }
 
 export function shouldSubmitPromptKey(

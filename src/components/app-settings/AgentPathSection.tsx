@@ -9,7 +9,12 @@ import {
   normalizeSendShortcut,
 } from "../../shortcuts";
 import s from "../../styles";
-import { APP_SETTINGS_CHANGED_EVENT, type AgentVersions, type AppSettings, type AgentKey } from "./types";
+import {
+  APP_SETTINGS_CHANGED_EVENT,
+  type AgentVersions,
+  type AppSettings,
+  type AgentKey,
+} from "./types";
 import { getAgentExecutablePlaceholder } from "./shared";
 import {
   agentDisplayLabel,
@@ -148,32 +153,37 @@ export function AgentPathSection({ agentKey }: { agentKey: AgentKey }) {
   const versionRequestIdRef = useRef(0);
   const skipNextChangeEventRef = useRef(false);
 
-  const loadVersions = useCallback(async (next: AppSettings) => {
-    const requestId = versionRequestIdRef.current + 1;
-    versionRequestIdRef.current = requestId;
-    setRefreshing(true);
-    try {
-      if (!builtInAgent) {
-        const detected = await invoke<string>("detect_agent_version", { agent: agentKey });
-        if (versionRequestIdRef.current === requestId) {
-          setCustomVersion(detected);
+  const loadVersions = useCallback(
+    async (next: AppSettings) => {
+      const requestId = versionRequestIdRef.current + 1;
+      versionRequestIdRef.current = requestId;
+      setRefreshing(true);
+      try {
+        if (!builtInAgent) {
+          const detected = await invoke<string>("detect_agent_version", { agent: agentKey });
+          if (versionRequestIdRef.current === requestId) {
+            setCustomVersion(detected);
+          }
+          return;
         }
-        return;
+        const detected = await invoke<AgentVersions>("detect_agent_versions_for_settings", {
+          settings: next,
+        });
+        if (versionRequestIdRef.current === requestId) {
+          setVersions(detected);
+        }
+      } catch (e) {
+        if (versionRequestIdRef.current === requestId) {
+          setError(String(e));
+        }
+      } finally {
+        if (versionRequestIdRef.current === requestId) {
+          setRefreshing(false);
+        }
       }
-      const detected = await invoke<AgentVersions>("detect_agent_versions_for_settings", { settings: next });
-      if (versionRequestIdRef.current === requestId) {
-        setVersions(detected);
-      }
-    } catch (e) {
-      if (versionRequestIdRef.current === requestId) {
-        setError(String(e));
-      }
-    } finally {
-      if (versionRequestIdRef.current === requestId) {
-        setRefreshing(false);
-      }
-    }
-  }, [agentKey, builtInAgent]);
+    },
+    [agentKey, builtInAgent],
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -261,7 +271,9 @@ export function AgentPathSection({ agentKey }: { agentKey: AgentKey }) {
               label: findCustomAgent(settings, agentKey)?.label ?? agentDisplayLabel(agentKey),
               path: findCustomAgent(settings, agentKey)?.path ?? "",
               codex_like: findCustomAgent(settings, agentKey)?.codex_like ?? true,
-              config_lang: normalizeAgentConfigLang(findCustomAgent(settings, agentKey)?.config_lang),
+              config_lang: normalizeAgentConfigLang(
+                findCustomAgent(settings, agentKey)?.config_lang,
+              ),
             },
           });
       setSettings(next);

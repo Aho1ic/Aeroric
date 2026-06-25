@@ -28,4 +28,16 @@ const s = {
 
 export default s;
 
-export { common, database, dialogs, font, gitDiff, layout, panels, skillHub, task, terminal, timeline };
+export {
+  common,
+  database,
+  dialogs,
+  font,
+  gitDiff,
+  layout,
+  panels,
+  skillHub,
+  task,
+  terminal,
+  timeline,
+};

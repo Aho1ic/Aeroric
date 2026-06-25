@@ -346,19 +346,13 @@ export function RunningView({
                 color: isActive ? "var(--text-hint)" : "var(--text-secondary)",
                 opacity: generatingName ? 1 : isActive ? 0.4 : hoverHeader ? 1 : 0.65,
                 background:
-                  hoverHeader && !isActive && !generatingName
-                    ? "var(--bg-input)"
-                    : "transparent",
+                  hoverHeader && !isActive && !generatingName ? "var(--bg-input)" : "transparent",
                 cursor: generatingName || isActive ? "not-allowed" : "pointer",
                 transition: "opacity 0.15s ease, background 0.15s ease, color 0.15s ease",
               }}
               onClick={handleGenerateClick}
             >
-              <Sparkles
-                size={13}
-                strokeWidth={2.25}
-                className={generatingName ? "spin" : ""}
-              />
+              <Sparkles size={13} strokeWidth={2.25} className={generatingName ? "spin" : ""} />
             </button>
           )}
         </div>
@@ -431,28 +425,30 @@ export function RunningView({
           task.worktreeBranch &&
           !task.worktreeDiscarded &&
           onDiscardWorktree && (
-          <button
-            style={{
-              ...s.cancelBtn,
-              opacity: worktreeBusy ? 0.6 : 1,
-              cursor: worktreeBusy ? "not-allowed" : "pointer",
-            }}
-            disabled={!!worktreeBusy}
-            onClick={async () => {
-              setWorktreeBusy("discard");
-              try {
-                await onDiscardWorktree();
-              } finally {
-                setWorktreeBusy(null);
-              }
-            }}
-          >
-            <Trash2 size={12} strokeWidth={2.5} />
-            <span>
-              {worktreeBusy === "discard" ? t("running.discarding") : t("running.discardWorktree")}
-            </span>
-          </button>
-        )}
+            <button
+              style={{
+                ...s.cancelBtn,
+                opacity: worktreeBusy ? 0.6 : 1,
+                cursor: worktreeBusy ? "not-allowed" : "pointer",
+              }}
+              disabled={!!worktreeBusy}
+              onClick={async () => {
+                setWorktreeBusy("discard");
+                try {
+                  await onDiscardWorktree();
+                } finally {
+                  setWorktreeBusy(null);
+                }
+              }}
+            >
+              <Trash2 size={12} strokeWidth={2.5} />
+              <span>
+                {worktreeBusy === "discard"
+                  ? t("running.discarding")
+                  : t("running.discardWorktree")}
+              </span>
+            </button>
+          )}
       </div>
       <div
         style={{
@@ -461,33 +457,54 @@ export function RunningView({
           flexShrink: 0,
         }}
       >
-        <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, color: "var(--text-muted)" }}>
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 6,
+            fontSize: 11,
+            color: "var(--text-muted)",
+          }}
+        >
           <span>
             {task.agent === "claude" ? "✦" : "⬡"} {agentDisplayLabel(task.agent)} ·{" "}
             {permissionModeLabel(task.permissionMode, task.agent)}
           </span>
-          {ENABLE_USAGE_INSIGHTS && usageSnapshot && (task.agent === "claude"
-            ? usageSnapshot.claude.status === "available" && (
-                <>
-                  {usageSnapshot.claude.data.fiveHour && (
-                    <><span>·</span><InlineWindow label="5h" window={usageSnapshot.claude.data.fiveHour} /></>
-                  )}
-                  {usageSnapshot.claude.data.sevenDay && (
-                    <><span>·</span><InlineWindow label="7d" window={usageSnapshot.claude.data.sevenDay} /></>
-                  )}
-                </>
-              )
-            : usageSnapshot.codex.status === "available" && (
-                <>
-                  {usageSnapshot.codex.data.primary && (
-                    <><span>·</span><InlineWindow label="5h" window={usageSnapshot.codex.data.primary} /></>
-                  )}
-                  {usageSnapshot.codex.data.secondary && (
-                    <><span>·</span><InlineWindow label="7d" window={usageSnapshot.codex.data.secondary} /></>
-                  )}
-                </>
-              )
-          )}
+          {ENABLE_USAGE_INSIGHTS &&
+            usageSnapshot &&
+            (task.agent === "claude"
+              ? usageSnapshot.claude.status === "available" && (
+                  <>
+                    {usageSnapshot.claude.data.fiveHour && (
+                      <>
+                        <span>·</span>
+                        <InlineWindow label="5h" window={usageSnapshot.claude.data.fiveHour} />
+                      </>
+                    )}
+                    {usageSnapshot.claude.data.sevenDay && (
+                      <>
+                        <span>·</span>
+                        <InlineWindow label="7d" window={usageSnapshot.claude.data.sevenDay} />
+                      </>
+                    )}
+                  </>
+                )
+              : usageSnapshot.codex.status === "available" && (
+                  <>
+                    {usageSnapshot.codex.data.primary && (
+                      <>
+                        <span>·</span>
+                        <InlineWindow label="5h" window={usageSnapshot.codex.data.primary} />
+                      </>
+                    )}
+                    {usageSnapshot.codex.data.secondary && (
+                      <>
+                        <span>·</span>
+                        <InlineWindow label="7d" window={usageSnapshot.codex.data.secondary} />
+                      </>
+                    )}
+                  </>
+                ))}
         </div>
         {task.worktreePath && task.worktreeBranch && task.baseBranch && (
           <div
@@ -531,7 +548,10 @@ export function RunningView({
               flexWrap: "wrap" as const,
             }}
           >
-            <MetricPill label={t("running.duration")} value={formatDuration(metrics.duration_secs)} />
+            <MetricPill
+              label={t("running.duration")}
+              value={formatDuration(metrics.duration_secs)}
+            />
             <MetricPill label={t("running.tokens")} value={formatTokens(metrics.total_tokens)} />
             {metrics.context_window > 0 && metrics.context_tokens > 0 && (
               <MetricPill

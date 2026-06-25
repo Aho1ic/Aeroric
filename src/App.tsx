@@ -26,10 +26,7 @@ import {
   resolveProjectLocation,
   sshProjectPath,
 } from "./types";
-import {
-  DEFAULT_UI_FONT,
-  DEFAULT_MONO_FONT,
-} from "./types";
+import { DEFAULT_UI_FONT, DEFAULT_MONO_FONT } from "./types";
 import type { FontFamily } from "./types";
 import { WelcomePage } from "./components/WelcomePage";
 import type { SshProjectInput } from "./components/ssh/SshProjectDialog";
@@ -355,11 +352,8 @@ function App() {
   useEffect(() => {
     // Tauri window theme only understands light/dark/null; map eyecare to light
     // so the native chrome (titlebar, scrollbars) stays in the light family.
-    const nativeTheme =
-      themeMode === "system" ? null : themeMode === "dark" ? "dark" : "light";
-    getCurrentWindow()
-      .setTheme(nativeTheme)
-      .catch(console.error);
+    const nativeTheme = themeMode === "system" ? null : themeMode === "dark" ? "dark" : "light";
+    getCurrentWindow().setTheme(nativeTheme).catch(console.error);
   }, [themeMode]);
 
   useEffect(() => {
@@ -797,9 +791,7 @@ function App() {
     setTasks((prev) => {
       const task = prev.find((x) => x.id === taskId);
       if (!task) return prev;
-      const next = prev.map((x) =>
-        x.id === taskId ? { ...x, worktreeDiscarded: true } : x,
-      );
+      const next = prev.map((x) => (x.id === taskId ? { ...x, worktreeDiscarded: true } : x));
       persistProjectTasks(task.projectId, next, showToast, formatSaveTasksError);
       return next;
     });
@@ -912,7 +904,8 @@ function App() {
 
   function handleResumeTask(taskId: string) {
     const task = tasks.find((t) => t.id === taskId);
-    const sessionId = task && isCodexLikeAgent(task.agent) ? task.codexSessionId : task?.claudeSessionId;
+    const sessionId =
+      task && isCodexLikeAgent(task.agent) ? task.codexSessionId : task?.claudeSessionId;
     if (!task) return;
     if (!sessionId) {
       showToast(t("running.resumeUnavailable"), "warning");
@@ -1068,10 +1061,13 @@ function App() {
       .filter((task) => task.projectId === project.id)
       .map((task) => task.id);
     if (projectTaskIds.length === 0) return;
-    const ok = await confirm(t("task.clearPrompt", { count: projectTaskIds.length, project: project.name }), {
-      title: t("task.clearTitle"),
-      kind: "warning",
-    });
+    const ok = await confirm(
+      t("task.clearPrompt", { count: projectTaskIds.length, project: project.name }),
+      {
+        title: t("task.clearTitle"),
+        kind: "warning",
+      },
+    );
     if (!ok) return;
     deleteTasks(projectTaskIds);
   }
@@ -1102,10 +1098,9 @@ function App() {
     const project = projects.find((p) => p.id === task.projectId);
     if (!project) return;
     // 按 agent 选择对应字段，避免历史数据两个字段都有时取错
-    const sessionPath =
-      isCodexLikeAgent(task.agent)
-        ? (task.codexSessionPath ?? null)
-        : (task.claudeSessionPath ?? null);
+    const sessionPath = isCodexLikeAgent(task.agent)
+      ? (task.codexSessionPath ?? null)
+      : (task.claudeSessionPath ?? null);
     // 点击瞬间的快照，用于 await 完成后的并发校验（防止用户期间 rerun/resume/手改名）
     const expectedPriorName = task.name ?? "";
     const expectedPrompt = task.prompt;
@@ -1129,10 +1124,9 @@ function App() {
         if ((current.name ?? "") !== expectedPriorName) return prev;
         if (current.prompt !== expectedPrompt) return prev;
         if (current.status !== expectedStatus) return prev;
-        const currentSessionPath =
-          isCodexLikeAgent(current.agent)
-            ? (current.codexSessionPath ?? null)
-            : (current.claudeSessionPath ?? null);
+        const currentSessionPath = isCodexLikeAgent(current.agent)
+          ? (current.codexSessionPath ?? null)
+          : (current.claudeSessionPath ?? null);
         if (currentSessionPath !== expectedSessionPath) return prev;
 
         const next = prev.map((x) => (x.id === taskId ? { ...x, name: trimmed || undefined } : x));

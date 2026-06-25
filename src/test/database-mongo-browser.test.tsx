@@ -63,7 +63,9 @@ describe("MongoBrowser", () => {
     await userEvent.click(await screen.findByText("app"));
     await userEvent.click(await screen.findByText("users"));
     await userEvent.click(await screen.findByText(/Ada/));
-    expect(screen.getByLabelText(/文档 JSON|Document JSON/)).toHaveValue(JSON.stringify({ _id: "1", name: "Ada" }, null, 2));
+    expect(screen.getByLabelText(/文档 JSON|Document JSON/)).toHaveValue(
+      JSON.stringify({ _id: "1", name: "Ada" }, null, 2),
+    );
 
     await userEvent.click(screen.getByText("logs"));
 
@@ -138,7 +140,8 @@ describe("MongoBrowser", () => {
   });
 
   it("clears stale Mongo documents immediately when switching collections", async () => {
-    let resolveAuditDocuments: (value: { documents: unknown[]; total: number }) => void = () => undefined;
+    let resolveAuditDocuments: (value: { documents: unknown[]; total: number }) => void = () =>
+      undefined;
     vi.mocked(invoke).mockImplementation((command, args) => {
       if (command === "dbx_mongo_list_databases") return Promise.resolve(["app"]);
       if (command === "dbx_mongo_list_collections") return Promise.resolve(["users", "audits"]);
@@ -163,7 +166,9 @@ describe("MongoBrowser", () => {
     await userEvent.click(await screen.findByText("app"));
     await userEvent.click(await screen.findByText("users"));
     await userEvent.click(await screen.findByText(/Ada/));
-    expect(screen.getByLabelText(/文档 JSON|Document JSON/)).toHaveValue(JSON.stringify({ _id: "1", name: "Ada" }, null, 2));
+    expect(screen.getByLabelText(/文档 JSON|Document JSON/)).toHaveValue(
+      JSON.stringify({ _id: "1", name: "Ada" }, null, 2),
+    );
 
     await userEvent.click(screen.getByText("audits"));
 
@@ -175,7 +180,8 @@ describe("MongoBrowser", () => {
   });
 
   it("ignores late Mongo document results from the previous collection", async () => {
-    let resolveUsersDocuments: (value: { documents: unknown[]; total: number }) => void = () => undefined;
+    let resolveUsersDocuments: (value: { documents: unknown[]; total: number }) => void = () =>
+      undefined;
     vi.mocked(invoke).mockImplementation((command, args) => {
       if (command === "dbx_mongo_list_databases") return Promise.resolve(["app"]);
       if (command === "dbx_mongo_list_collections") return Promise.resolve(["users", "audits"]);
@@ -233,7 +239,9 @@ describe("MongoBrowser", () => {
     await userEvent.click(await screen.findByText("app"));
     await userEvent.click(await screen.findByText("users"));
     await userEvent.click(await screen.findByText(/Ada/));
-    expect(screen.getByLabelText(/文档 JSON|Document JSON/)).toHaveValue(JSON.stringify({ _id: "1", name: "Ada" }, null, 2));
+    expect(screen.getByLabelText(/文档 JSON|Document JSON/)).toHaveValue(
+      JSON.stringify({ _id: "1", name: "Ada" }, null, 2),
+    );
 
     rerender(
       <I18nProvider>
@@ -321,9 +329,13 @@ describe("MongoBrowser", () => {
     vi.mocked(invoke).mockImplementation((command, args) => {
       if (command === "dbx_mongo_list_databases") return Promise.resolve(["app"]);
       if (command === "dbx_mongo_list_collections") return Promise.resolve(["users"]);
-      if (command === "dbx_mongo_find_documents") return Promise.resolve({ documents, total: documents.length });
+      if (command === "dbx_mongo_find_documents")
+        return Promise.resolve({ documents, total: documents.length });
       if (command === "dbx_mongo_insert_document") {
-        const inserted = JSON.parse((args as { docJson: string }).docJson) as { _id: string; name: string };
+        const inserted = JSON.parse((args as { docJson: string }).docJson) as {
+          _id: string;
+          name: string;
+        };
         documents = [...documents, inserted];
         return Promise.resolve(inserted._id);
       }
@@ -357,9 +369,12 @@ describe("MongoBrowser", () => {
     vi.mocked(invoke).mockImplementation((command, args) => {
       if (command === "dbx_mongo_list_databases") return Promise.resolve(["app"]);
       if (command === "dbx_mongo_list_collections") return Promise.resolve(["users"]);
-      if (command === "dbx_mongo_find_documents") return Promise.resolve({ documents: [currentDocument], total: 1 });
+      if (command === "dbx_mongo_find_documents")
+        return Promise.resolve({ documents: [currentDocument], total: 1 });
       if (command === "dbx_mongo_update_document") {
-        currentDocument = JSON.parse((args as { docJson: string }).docJson) as typeof currentDocument;
+        currentDocument = JSON.parse(
+          (args as { docJson: string }).docJson,
+        ) as typeof currentDocument;
         return Promise.resolve(1);
       }
       return Promise.resolve(undefined);
@@ -496,7 +511,9 @@ describe("MongoBrowser", () => {
 
     expect(screen.queryByRole("columnheader", { name: "role" })).not.toBeInTheDocument();
     expect(screen.queryByRole("cell", { name: "admin" })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /Columns .*2\/3|字段显示 .*2\/3/ })).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /Columns .*2\/3|字段显示 .*2\/3/ }),
+    ).toBeInTheDocument();
 
     await userEvent.click(screen.getByRole("menuitem", { name: /Show all|显示全部/ }));
 
@@ -531,7 +548,9 @@ describe("MongoBrowser", () => {
     await userEvent.click(screen.getByRole("button", { name: /Table|表格/ }));
     await userEvent.click(screen.getByRole("button", { name: /Columns|字段显示/ }));
     const columnSearch = screen.getByRole("textbox", { name: /Search columns|搜索字段/ });
-    expect(screen.getByText(/At least one column stays visible|至少保留一列可见/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/At least one column stays visible|至少保留一列可见/),
+    ).toBeInTheDocument();
 
     await userEvent.type(columnSearch, "rol");
 
@@ -549,7 +568,9 @@ describe("MongoBrowser", () => {
     expect(screen.getByRole("columnheader", { name: "_id" })).toBeInTheDocument();
     expect(screen.queryByRole("columnheader", { name: "name" })).not.toBeInTheDocument();
     expect(screen.queryByRole("columnheader", { name: "role" })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /Columns .*1\/3|字段显示 .*1\/3/ })).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /Columns .*1\/3|字段显示 .*1\/3/ }),
+    ).toBeInTheDocument();
 
     await userEvent.click(screen.getByRole("menuitem", { name: /Show all|显示全部/ }));
 
@@ -677,7 +698,9 @@ describe("MongoBrowser", () => {
     await userEvent.click(await screen.findByText("users"));
     expect(await screen.findByText(/Ada/)).toBeInTheDocument();
 
-    await userEvent.click(screen.getByRole("button", { name: /Load more \(1\/2\)|加载更多 \(1\/2\)/ }));
+    await userEvent.click(
+      screen.getByRole("button", { name: /Load more \(1\/2\)|加载更多 \(1\/2\)/ }),
+    );
 
     expect(await screen.findByText(/Grace/)).toBeInTheDocument();
     expect(invoke).toHaveBeenCalledWith("dbx_mongo_find_documents", {
@@ -796,7 +819,8 @@ describe("MongoBrowser", () => {
     vi.mocked(invoke).mockImplementation((command) => {
       if (command === "dbx_mongo_list_databases") return Promise.resolve(["app"]);
       if (command === "dbx_mongo_list_collections") return Promise.resolve(["users"]);
-      if (command === "dbx_mongo_find_documents") return Promise.resolve({ documents: [], total: 0 });
+      if (command === "dbx_mongo_find_documents")
+        return Promise.resolve({ documents: [], total: 0 });
       return Promise.resolve(undefined);
     });
 
@@ -849,8 +873,14 @@ describe("MongoBrowser", () => {
 
     await userEvent.click(screen.getByRole("button", { name: /^(Filter|过滤)$/ }));
     const dialog = screen.getByRole("dialog", { name: /Filter|过滤/ });
-    await userEvent.selectOptions(within(dialog).getByRole("combobox", { name: /Column|字段/ }), "name");
-    await userEvent.selectOptions(within(dialog).getByRole("combobox", { name: /Condition|条件/ }), "like");
+    await userEvent.selectOptions(
+      within(dialog).getByRole("combobox", { name: /Column|字段/ }),
+      "name",
+    );
+    await userEvent.selectOptions(
+      within(dialog).getByRole("combobox", { name: /Condition|条件/ }),
+      "like",
+    );
     await userEvent.type(within(dialog).getByRole("textbox", { name: /Value|值/ }), "ada");
     await userEvent.click(within(dialog).getByRole("button", { name: /Apply filter|应用过滤/ }));
 
@@ -869,7 +899,8 @@ describe("MongoBrowser", () => {
     vi.mocked(invoke).mockImplementation((command) => {
       if (command === "dbx_mongo_list_databases") return Promise.resolve(["app"]);
       if (command === "dbx_mongo_list_collections") return Promise.resolve(["users"]);
-      if (command === "dbx_mongo_find_documents") return Promise.resolve({ documents: [], total: 0 });
+      if (command === "dbx_mongo_find_documents")
+        return Promise.resolve({ documents: [], total: 0 });
       return Promise.resolve(undefined);
     });
 
@@ -919,7 +950,9 @@ describe("MongoBrowser", () => {
     );
 
     await userEvent.click(await screen.findByText("app"));
-    const collectionButton = (await screen.findByText("users")).closest("button") as HTMLButtonElement;
+    const collectionButton = (await screen.findByText("users")).closest(
+      "button",
+    ) as HTMLButtonElement;
     fireEvent.contextMenu(collectionButton);
     expect(screen.getByRole("menuitem", { name: /Copy name|复制名称/ })).toBeInTheDocument();
     expect(screen.getByRole("menuitem", { name: /Refresh|刷新/ })).toBeInTheDocument();
@@ -932,18 +965,23 @@ describe("MongoBrowser", () => {
     expect(await screen.findByText(/Ada/)).toBeInTheDocument();
 
     fireEvent.contextMenu(collectionButton);
-    const deleteMatchingItem = screen.getByRole("menuitem", { name: /Delete matching documents|删除匹配文档/ });
+    const deleteMatchingItem = screen.getByRole("menuitem", {
+      name: /Delete matching documents|删除匹配文档/,
+    });
     expect(deleteMatchingItem).toHaveStyle({
       background: "var(--danger-subtle, rgba(239, 68, 68, 0.1))",
       borderRadius: "8px",
     });
     await userEvent.click(deleteMatchingItem);
-    expect(confirm).toHaveBeenCalledWith('Delete documents in "users" matching the current filter?\n\nFilter: {}', {
-      title: "Delete matching documents",
-      kind: "warning",
-      okLabel: "Delete matching documents",
-      cancelLabel: "Cancel",
-    });
+    expect(confirm).toHaveBeenCalledWith(
+      'Delete documents in "users" matching the current filter?\n\nFilter: {}',
+      {
+        title: "Delete matching documents",
+        kind: "warning",
+        okLabel: "Delete matching documents",
+        cancelLabel: "Cancel",
+      },
+    );
     expect(invoke).toHaveBeenCalledWith("dbx_mongo_delete_documents", {
       connectionId: "mongo",
       database: "app",
@@ -976,12 +1014,18 @@ describe("MongoBrowser", () => {
     const documentCard = (await screen.findByText(/Ada/)).closest("pre") as HTMLPreElement;
 
     fireEvent.contextMenu(documentCard);
-    expect(screen.getByRole("menuitem", { name: /Copy document JSON|复制文档 JSON/ })).toBeInTheDocument();
+    expect(
+      screen.getByRole("menuitem", { name: /Copy document JSON|复制文档 JSON/ }),
+    ).toBeInTheDocument();
     expect(screen.getByRole("menuitem", { name: /Refresh|刷新/ })).toBeInTheDocument();
     expect(screen.getByRole("menuitem", { name: /Delete document|删除文档/ })).toBeInTheDocument();
 
-    await userEvent.click(screen.getByRole("menuitem", { name: /Copy document JSON|复制文档 JSON/ }));
-    expect(navigator.clipboard.writeText).toHaveBeenCalledWith(JSON.stringify({ _id: "1", name: "Ada" }, null, 2));
+    await userEvent.click(
+      screen.getByRole("menuitem", { name: /Copy document JSON|复制文档 JSON/ }),
+    );
+    expect(navigator.clipboard.writeText).toHaveBeenCalledWith(
+      JSON.stringify({ _id: "1", name: "Ada" }, null, 2),
+    );
 
     fireEvent.contextMenu(documentCard);
     const deleteDocumentItem = screen.getByRole("menuitem", { name: /Delete document|删除文档/ });
@@ -1010,7 +1054,8 @@ describe("MongoBrowser", () => {
     vi.mocked(invoke).mockImplementation((command) => {
       if (command === "dbx_mongo_list_databases") return Promise.resolve(["app"]);
       if (command === "dbx_mongo_list_collections") return Promise.resolve(["users"]);
-      if (command === "dbx_mongo_find_documents") return Promise.resolve({ documents: [{ _id: "1", name: "Ada" }], total: 1 });
+      if (command === "dbx_mongo_find_documents")
+        return Promise.resolve({ documents: [{ _id: "1", name: "Ada" }], total: 1 });
       if (command === "dbx_mongo_delete_documents") return Promise.resolve(1);
       return Promise.resolve(undefined);
     });
@@ -1039,7 +1084,8 @@ describe("MongoBrowser", () => {
     vi.mocked(invoke).mockImplementation((command) => {
       if (command === "dbx_mongo_list_databases") return Promise.resolve(["app"]);
       if (command === "dbx_mongo_list_collections") return Promise.resolve(["users"]);
-      if (command === "dbx_mongo_find_documents") return Promise.resolve({ documents: [currentDocument], total: 1 });
+      if (command === "dbx_mongo_find_documents")
+        return Promise.resolve({ documents: [currentDocument], total: 1 });
       return Promise.resolve(undefined);
     });
 

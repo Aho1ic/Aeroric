@@ -23,10 +23,7 @@ export function buildPythonRunCommand(filePath: string, env: CondaEnvironment | 
   return `${python} ${shellQuote(filePath)}\r`;
 }
 
-export function buildShellScriptRunCommand(
-  filePath: string,
-  env: CondaEnvironment | null,
-): string {
+export function buildShellScriptRunCommand(filePath: string, env: CondaEnvironment | null): string {
   if (!env?.path) return `bash ${shellQuote(filePath)}\r`;
   const binPath = `${env.path.replace(/\/+$/, "")}/bin`;
   return `CONDA_PREFIX=${shellQuote(env.path)} PATH=${shellQuote(binPath)}:"$PATH" bash ${shellQuote(filePath)}\r`;

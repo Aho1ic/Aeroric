@@ -21,15 +21,18 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
   const [toasts, setToasts] = useState<ToastItem[]>([]);
   const timerMap = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
 
-  const showToast = useCallback((message: string, type: "error" | "warning" | "success" = "error") => {
-    const id = `${Date.now()}-${Math.random()}`;
-    setToasts((prev) => [...prev.slice(-2), { id, message, type }]);
-    const timer = setTimeout(() => {
-      setToasts((prev) => prev.filter((t) => t.id !== id));
-      timerMap.current.delete(id);
-    }, 5000);
-    timerMap.current.set(id, timer);
-  }, []);
+  const showToast = useCallback(
+    (message: string, type: "error" | "warning" | "success" = "error") => {
+      const id = `${Date.now()}-${Math.random()}`;
+      setToasts((prev) => [...prev.slice(-2), { id, message, type }]);
+      const timer = setTimeout(() => {
+        setToasts((prev) => prev.filter((t) => t.id !== id));
+        timerMap.current.delete(id);
+      }, 5000);
+      timerMap.current.set(id, timer);
+    },
+    [],
+  );
 
   const dismiss = useCallback((id: string) => {
     const timer = timerMap.current.get(id);

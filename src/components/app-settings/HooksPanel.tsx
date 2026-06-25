@@ -156,7 +156,11 @@ export function HooksPanel() {
 
       <div style={s.hooksPanelActions}>
         <button
-          style={busy ? { ...s.hooksPanelPrimaryBtn, ...s.hooksPanelBtnDisabled } : s.hooksPanelPrimaryBtn}
+          style={
+            busy
+              ? { ...s.hooksPanelPrimaryBtn, ...s.hooksPanelBtnDisabled }
+              : s.hooksPanelPrimaryBtn
+          }
           disabled={busy}
           onClick={reinstall}
         >
@@ -167,7 +171,9 @@ export function HooksPanel() {
         </button>
         <button
           style={
-            uninstallDisabled ? { ...s.hooksPanelDangerBtn, ...s.hooksPanelBtnDisabled } : s.hooksPanelDangerBtn
+            uninstallDisabled
+              ? { ...s.hooksPanelDangerBtn, ...s.hooksPanelBtnDisabled }
+              : s.hooksPanelDangerBtn
           }
           disabled={uninstallDisabled}
           onClick={uninstall}
@@ -177,7 +183,11 @@ export function HooksPanel() {
             : t("appSettings.hooks.uninstall")}
         </button>
         <button
-          style={busy ? { ...s.hooksPanelSecondaryBtn, ...s.hooksPanelBtnDisabled } : s.hooksPanelSecondaryBtn}
+          style={
+            busy
+              ? { ...s.hooksPanelSecondaryBtn, ...s.hooksPanelBtnDisabled }
+              : s.hooksPanelSecondaryBtn
+          }
           disabled={busy}
           onClick={refresh}
         >

@@ -1,11 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { SshConnection } from "../../types";
-import type {
-  SftpConflictStrategy,
-  SftpEndpoint,
-  SftpEntry,
-  SftpTauriEndpoint,
-} from "./sftpTypes";
+import type { SftpConflictStrategy, SftpEndpoint, SftpEntry, SftpTauriEndpoint } from "./sftpTypes";
 
 export interface SftpDirectorySummary {
   fileCount: number;
@@ -46,12 +41,18 @@ export async function readSftpTextFile(endpoint: SftpEndpoint, connections: SshC
 }
 
 export async function readSftpImagePreview(endpoint: SftpEndpoint, connections: SshConnection[]) {
-  return invoke<{ dataUrl: string; mimeType: string; byteLength: number }>("sftp_read_image_preview", {
-    endpoint: toTauriSftpEndpoint(endpoint, connections),
-  });
+  return invoke<{ dataUrl: string; mimeType: string; byteLength: number }>(
+    "sftp_read_image_preview",
+    {
+      endpoint: toTauriSftpEndpoint(endpoint, connections),
+    },
+  );
 }
 
-export async function readSftpDirectorySummary(endpoint: SftpEndpoint, connections: SshConnection[]) {
+export async function readSftpDirectorySummary(
+  endpoint: SftpEndpoint,
+  connections: SshConnection[],
+) {
   return invoke<SftpDirectorySummary>("sftp_read_directory_summary", {
     endpoint: toTauriSftpEndpoint(endpoint, connections),
   });

@@ -42,8 +42,18 @@ export function useDatabaseQuery() {
   }, []);
 
   const closeResultSession = useCallback(
-    async (connectionId: string, sessionId: string, database?: string | null, clientSessionId?: string | null) => {
-      await databaseApi.dbxCloseResultSession({ connectionId, sessionId, database, clientSessionId });
+    async (
+      connectionId: string,
+      sessionId: string,
+      database?: string | null,
+      clientSessionId?: string | null,
+    ) => {
+      await databaseApi.dbxCloseResultSession({
+        connectionId,
+        sessionId,
+        database,
+        clientSessionId,
+      });
       setResults((current) => current.filter((result) => result.session_id !== sessionId));
     },
     [],

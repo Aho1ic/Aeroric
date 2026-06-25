@@ -74,7 +74,9 @@ export function useMongoBrowser(connectionId: string | null) {
   );
 
   const findDocuments = useCallback(
-    async (request: Omit<MongoFindDocumentsRequest, "connectionId"> & { append?: boolean }): Promise<MongoDocumentResult> => {
+    async (
+      request: Omit<MongoFindDocumentsRequest, "connectionId"> & { append?: boolean },
+    ): Promise<MongoDocumentResult> => {
       const generation = requestGeneration.current;
       const { append, ...payload } = request;
       setLoading(true);
@@ -85,7 +87,9 @@ export function useMongoBrowser(connectionId: string | null) {
           connectionId: requireConnection(),
         });
         if (requestGeneration.current === generation) {
-          setDocuments((current) => (append ? [...current, ...result.documents] : result.documents));
+          setDocuments((current) =>
+            append ? [...current, ...result.documents] : result.documents,
+          );
           setTotal(result.total);
         }
         return result;

@@ -72,13 +72,7 @@ function renderWelcome(overrides: Partial<React.ComponentProps<typeof WelcomePag
     onOpenSshProject: overrides.onOpenSshProject ?? vi.fn(),
   };
 
-  return render(
-    React.createElement(
-      I18nProvider,
-      null,
-      React.createElement(WelcomePage, props),
-    ),
-  );
+  return render(React.createElement(I18nProvider, null, React.createElement(WelcomePage, props)));
 }
 
 describe("WelcomePage project cards", () => {

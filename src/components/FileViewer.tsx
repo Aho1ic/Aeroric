@@ -558,7 +558,7 @@ function FilePreviewPane({
           : (line) => {
               onToggleDebugBreakpoint?.(filePath, line);
             },
-    }),
+      }),
     [breakpointLines, filePath, onToggleDebugBreakpoint, remote, t],
   );
   const inlineBlameExtension = useMemo(

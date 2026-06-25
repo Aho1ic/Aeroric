@@ -41,25 +41,28 @@ export function useDataGrid() {
     }
   }, []);
 
-  const commitGridChange = useCallback(async (kind: "update" | "insert" | "delete", request: GridSaveRequest) => {
-    setLoading(true);
-    setError(null);
-    try {
-      const result =
-        kind === "update"
-          ? await databaseApi.dbxUpdateCell(request)
-          : kind === "insert"
-            ? await databaseApi.dbxInsertRow(request)
-            : await databaseApi.dbxDeleteRows(request);
-      setPreview(result);
-      return result;
-    } catch (err) {
-      setError(String(err));
-      throw err;
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+  const commitGridChange = useCallback(
+    async (kind: "update" | "insert" | "delete", request: GridSaveRequest) => {
+      setLoading(true);
+      setError(null);
+      try {
+        const result =
+          kind === "update"
+            ? await databaseApi.dbxUpdateCell(request)
+            : kind === "insert"
+              ? await databaseApi.dbxInsertRow(request)
+              : await databaseApi.dbxDeleteRows(request);
+        setPreview(result);
+        return result;
+      } catch (err) {
+        setError(String(err));
+        throw err;
+      } finally {
+        setLoading(false);
+      }
+    },
+    [],
+  );
 
   return {
     data,

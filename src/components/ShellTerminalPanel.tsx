@@ -68,237 +68,244 @@ function createShellSession(projectId: string, index: number): ShellSession {
   };
 }
 
-const ShellTerminalInstance = forwardRef<ShellTerminalInstanceHandle, {
-  shellId: string;
-  projectPath: string;
-  isActive: boolean;
-  themeVariant: ThemeVariant;
-  terminalFontSize: TerminalFontSize;
-  monoFontFamily: FontFamily;
-  onReady?: () => void;
-}>(
-  function ShellTerminalInstance(
-    { shellId, projectPath, isActive, themeVariant, terminalFontSize, monoFontFamily, onReady },
+const ShellTerminalInstance = forwardRef<
+  ShellTerminalInstanceHandle,
+  {
+    shellId: string;
+    projectPath: string;
+    isActive: boolean;
+    themeVariant: ThemeVariant;
+    terminalFontSize: TerminalFontSize;
+    monoFontFamily: FontFamily;
+    onReady?: () => void;
+  }
+>(function ShellTerminalInstance(
+  { shellId, projectPath, isActive, themeVariant, terminalFontSize, monoFontFamily, onReady },
+  ref,
+) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const terminalRef = useRef<XTerm | null>(null);
+  const fitAddonRef = useRef<FitAddon | null>(null);
+  const themeVariantRef = useRef(themeVariant);
+  const isActiveRef = useRef(isActive);
+  const terminalFontSizeRef = useRef(terminalFontSize);
+  const monoFontFamilyRef = useRef(monoFontFamily);
+  const onReadyRef = useRef(onReady);
+  const lastSizeRef = useRef<{ cols: number; rows: number } | null>(null);
+  themeVariantRef.current = themeVariant;
+  isActiveRef.current = isActive;
+  terminalFontSizeRef.current = terminalFontSize;
+  monoFontFamilyRef.current = monoFontFamily;
+  onReadyRef.current = onReady;
+
+  useImperativeHandle(
     ref,
-  ) {
-    const containerRef = useRef<HTMLDivElement>(null);
-    const terminalRef = useRef<XTerm | null>(null);
-    const fitAddonRef = useRef<FitAddon | null>(null);
-    const themeVariantRef = useRef(themeVariant);
-    const isActiveRef = useRef(isActive);
-    const terminalFontSizeRef = useRef(terminalFontSize);
-    const monoFontFamilyRef = useRef(monoFontFamily);
-    const onReadyRef = useRef(onReady);
-    const lastSizeRef = useRef<{ cols: number; rows: number } | null>(null);
-    themeVariantRef.current = themeVariant;
-    isActiveRef.current = isActive;
-    terminalFontSizeRef.current = terminalFontSize;
-    monoFontFamilyRef.current = monoFontFamily;
-    onReadyRef.current = onReady;
+    () => ({
+      sendCommand: (cmd: string) => {
+        invoke("send_input", { taskId: shellId, data: cmd }).catch(console.error);
+      },
+    }),
+    [shellId],
+  );
 
-    useImperativeHandle(
-      ref,
-      () => ({
-        sendCommand: (cmd: string) => {
-          invoke("send_input", { taskId: shellId, data: cmd }).catch(console.error);
-        },
-      }),
-      [shellId],
+  const focusTerminal = useCallback(() => {
+    const term = terminalRef.current;
+    if (!term) return;
+    if (term.textarea?.disabled) {
+      term.textarea.disabled = false;
+    }
+    term.focus();
+    term.textarea?.focus({ preventScroll: true });
+  }, []);
+
+  useEffect(() => {
+    if (!containerRef.current) return;
+    const container = containerRef.current;
+    let cleaned = false;
+    let initTimeoutId: number | null = null;
+    let readyTimeoutId: number | null = null;
+
+    const { term, fitAddon } = initTerminal(
+      themeVariantRef.current,
+      5000,
+      terminalFontSizeRef.current,
+      monoFontFamilyRef.current,
     );
+    terminalRef.current = term;
+    fitAddonRef.current = fitAddon;
+    term.open(container);
+    const disposeInputFix = attachMacWebKitShiftInputFix(term);
+    loadWebglAddon(term);
+    const writer = createSmartWriter(term);
+    const disposeMacWebKitGuard = attachMacWebKitTerminalGuard({ term, container, writer });
 
-    const focusTerminal = useCallback(() => {
-      const term = terminalRef.current;
-      if (!term) return;
-      if (term.textarea?.disabled) {
-        term.textarea.disabled = false;
-      }
-      term.focus();
-      term.textarea?.focus({ preventScroll: true });
-    }, []);
+    const fit = () => {
+      if (cleaned) return;
+      const s = safeFit(fitAddon, term, container);
+      if (!s) return;
+      const last = lastSizeRef.current;
+      if (last && last.cols === s.cols && last.rows === s.rows) return;
+      lastSizeRef.current = { cols: s.cols, rows: s.rows };
+      invoke("resize_pty", { taskId: shellId, cols: s.cols, rows: s.rows }).catch(() => {});
+    };
 
-    useEffect(() => {
-      if (!containerRef.current) return;
-      const container = containerRef.current;
-      let cleaned = false;
-      let initTimeoutId: number | null = null;
-      let readyTimeoutId: number | null = null;
-
-      const { term, fitAddon } = initTerminal(themeVariantRef.current, 5000, terminalFontSizeRef.current, monoFontFamilyRef.current);
-      terminalRef.current = term;
-      fitAddonRef.current = fitAddon;
-      term.open(container);
-      const disposeInputFix = attachMacWebKitShiftInputFix(term);
-      loadWebglAddon(term);
-      const writer = createSmartWriter(term);
-      const disposeMacWebKitGuard = attachMacWebKitTerminalGuard({ term, container, writer });
-
-      const fit = () => {
-        if (cleaned) return;
-        const s = safeFit(fitAddon, term, container);
-        if (!s) return;
-        const last = lastSizeRef.current;
-        if (last && last.cols === s.cols && last.rows === s.rows) return;
-        lastSizeRef.current = { cols: s.cols, rows: s.rows };
-        invoke("resize_pty", { taskId: shellId, cols: s.cols, rows: s.rows }).catch(() => {});
-      };
-
-      initTimeoutId = window.setTimeout(() => {
-        if (cleaned) return;
-        fit();
-        invoke<void>("open_shell", {
-          shellId,
-          projectPath,
-          cols: term.cols,
-          rows: term.rows,
+    initTimeoutId = window.setTimeout(() => {
+      if (cleaned) return;
+      fit();
+      invoke<void>("open_shell", {
+        shellId,
+        projectPath,
+        cols: term.cols,
+        rows: term.rows,
+      })
+        .then(() => {
+          if (cleaned) return;
+          readyTimeoutId = window.setTimeout(() => {
+            if (!cleaned) {
+              onReadyRef.current?.();
+            }
+          }, 300);
         })
-          .then(() => {
-            if (cleaned) return;
-            readyTimeoutId = window.setTimeout(() => {
-              if (!cleaned) {
-                onReadyRef.current?.();
-              }
-            }, 300);
-          })
-          .catch(console.error);
-        if (isActiveRef.current) focusTerminal();
-      }, 50);
+        .catch(console.error);
+      if (isActiveRef.current) focusTerminal();
+    }, 50);
 
-      const disposeSmartCopy = attachSmartCopy(term, {
-        onPaste: (text) => {
-          invoke("send_input", { taskId: shellId, data: text }).catch(() => {});
-        },
-      });
-      const linuxIME = attachLinuxIMEFix(term, (data) => {
-        invoke("send_input", { taskId: shellId, data }).catch(() => {});
-      });
-      const disposeOnData = { dispose: () => linuxIME.dispose() };
+    const disposeSmartCopy = attachSmartCopy(term, {
+      onPaste: (text) => {
+        invoke("send_input", { taskId: shellId, data: text }).catch(() => {});
+      },
+    });
+    const linuxIME = attachLinuxIMEFix(term, (data) => {
+      invoke("send_input", { taskId: shellId, data }).catch(() => {});
+    });
+    const disposeOnData = { dispose: () => linuxIME.dispose() };
 
-      const resizeObserver = new ResizeObserver(() => {
-        setTimeout(() => {
-          if (isActiveRef.current) {
-            fit();
-          }
-        }, 50);
-      });
-      resizeObserver.observe(container);
-
-      const handleVisibilityChange = () => {
-        if (document.visibilityState !== "visible" || !terminalRef.current || !isActiveRef.current) return;
-        window.requestAnimationFrame(() => {
+    const resizeObserver = new ResizeObserver(() => {
+      setTimeout(() => {
+        if (isActiveRef.current) {
           fit();
-          const t = terminalRef.current;
-          if (t) {
-            focusTerminal();
-          }
-        });
-      };
-      document.addEventListener("visibilitychange", handleVisibilityChange);
+        }
+      }, 50);
+    });
+    resizeObserver.observe(container);
 
-      let unlisten: (() => void) | null = null;
-      listen<ShellOutputEvent>("shell-output", (event) => {
-        if (event.payload.shell_id === shellId && terminalRef.current) {
-          writer.write(event.payload.data);
-        }
-      }).then((fn) => {
-        if (cleaned) {
-          fn();
-        } else {
-          unlisten = fn;
-        }
-      });
-
-      return () => {
-        cleaned = true;
-        if (initTimeoutId !== null) {
-          window.clearTimeout(initTimeoutId);
-        }
-        if (readyTimeoutId !== null) {
-          window.clearTimeout(readyTimeoutId);
-        }
-        unlisten?.();
-        disposeSmartCopy();
-        disposeOnData.dispose();
-        resizeObserver.disconnect();
-        document.removeEventListener("visibilitychange", handleVisibilityChange);
-        terminalRef.current = null;
-        fitAddonRef.current = null;
-        disposeMacWebKitGuard();
-        disposeInputFix();
-        term.dispose();
-      };
-    }, [focusTerminal, shellId, projectPath]);
-
-    useEffect(() => {
-      if (!isActive) return;
+    const handleVisibilityChange = () => {
+      if (document.visibilityState !== "visible" || !terminalRef.current || !isActiveRef.current)
+        return;
       window.requestAnimationFrame(() => {
-        if (!fitAddonRef.current || !terminalRef.current || !containerRef.current) return;
-        const s = safeFit(fitAddonRef.current, terminalRef.current, containerRef.current);
-        if (s) {
-          const last = lastSizeRef.current;
-          if (!last || last.cols !== s.cols || last.rows !== s.rows) {
-            lastSizeRef.current = { cols: s.cols, rows: s.rows };
-            invoke("resize_pty", { taskId: shellId, cols: s.cols, rows: s.rows }).catch(() => {});
-          }
+        fit();
+        const t = terminalRef.current;
+        if (t) {
+          focusTerminal();
         }
-        focusTerminal();
       });
-    }, [focusTerminal, isActive, shellId]);
+    };
+    document.addEventListener("visibilitychange", handleVisibilityChange);
 
-    useEffect(() => {
-      if (terminalRef.current) {
-        terminalRef.current.options.theme = themeFor(themeVariant);
+    let unlisten: (() => void) | null = null;
+    listen<ShellOutputEvent>("shell-output", (event) => {
+      if (event.payload.shell_id === shellId && terminalRef.current) {
+        writer.write(event.payload.data);
       }
-    }, [themeVariant]);
+    }).then((fn) => {
+      if (cleaned) {
+        fn();
+      } else {
+        unlisten = fn;
+      }
+    });
 
-    useEffect(() => {
-      if (!terminalRef.current || !fitAddonRef.current || !containerRef.current) return;
-      const size = applyTerminalFontSize(
-        terminalRef.current,
-        fitAddonRef.current,
-        terminalFontSize,
-        containerRef.current,
-      );
-      if (!size) return;
-      const last = lastSizeRef.current;
-      if (last && last.cols === size.cols && last.rows === size.rows) return;
-      lastSizeRef.current = { cols: size.cols, rows: size.rows };
-      invoke("resize_pty", { taskId: shellId, cols: size.cols, rows: size.rows }).catch(() => {});
-    }, [terminalFontSize, shellId]);
+    return () => {
+      cleaned = true;
+      if (initTimeoutId !== null) {
+        window.clearTimeout(initTimeoutId);
+      }
+      if (readyTimeoutId !== null) {
+        window.clearTimeout(readyTimeoutId);
+      }
+      unlisten?.();
+      disposeSmartCopy();
+      disposeOnData.dispose();
+      resizeObserver.disconnect();
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      terminalRef.current = null;
+      fitAddonRef.current = null;
+      disposeMacWebKitGuard();
+      disposeInputFix();
+      term.dispose();
+    };
+  }, [focusTerminal, shellId, projectPath]);
 
-    useEffect(() => {
-      if (!terminalRef.current || !fitAddonRef.current || !containerRef.current) return;
-      const size = applyTerminalFontFamily(
-        terminalRef.current,
-        fitAddonRef.current,
-        monoFontFamily,
-        containerRef.current,
-      );
-      if (!size) return;
-      const last = lastSizeRef.current;
-      if (last && last.cols === size.cols && last.rows === size.rows) return;
-      lastSizeRef.current = { cols: size.cols, rows: size.rows };
-      invoke("resize_pty", { taskId: shellId, cols: size.cols, rows: size.rows }).catch(() => {});
-    }, [monoFontFamily, shellId]);
+  useEffect(() => {
+    if (!isActive) return;
+    window.requestAnimationFrame(() => {
+      if (!fitAddonRef.current || !terminalRef.current || !containerRef.current) return;
+      const s = safeFit(fitAddonRef.current, terminalRef.current, containerRef.current);
+      if (s) {
+        const last = lastSizeRef.current;
+        if (!last || last.cols !== s.cols || last.rows !== s.rows) {
+          lastSizeRef.current = { cols: s.cols, rows: s.rows };
+          invoke("resize_pty", { taskId: shellId, cols: s.cols, rows: s.rows }).catch(() => {});
+        }
+      }
+      focusTerminal();
+    });
+  }, [focusTerminal, isActive, shellId]);
 
-    return (
-      <div
-        ref={containerRef}
-        onMouseDown={() => {
-          if (isActive) focusTerminal();
-        }}
-        style={{
-          position: "absolute",
-          inset: 0,
-          overflow: "hidden",
-          padding: "4px 6px",
-          cursor: "text",
-          visibility: isActive ? "visible" : "hidden",
-          pointerEvents: isActive ? "auto" : "none",
-        }}
-      />
+  useEffect(() => {
+    if (terminalRef.current) {
+      terminalRef.current.options.theme = themeFor(themeVariant);
+    }
+  }, [themeVariant]);
+
+  useEffect(() => {
+    if (!terminalRef.current || !fitAddonRef.current || !containerRef.current) return;
+    const size = applyTerminalFontSize(
+      terminalRef.current,
+      fitAddonRef.current,
+      terminalFontSize,
+      containerRef.current,
     );
-  },
-);
+    if (!size) return;
+    const last = lastSizeRef.current;
+    if (last && last.cols === size.cols && last.rows === size.rows) return;
+    lastSizeRef.current = { cols: size.cols, rows: size.rows };
+    invoke("resize_pty", { taskId: shellId, cols: size.cols, rows: size.rows }).catch(() => {});
+  }, [terminalFontSize, shellId]);
+
+  useEffect(() => {
+    if (!terminalRef.current || !fitAddonRef.current || !containerRef.current) return;
+    const size = applyTerminalFontFamily(
+      terminalRef.current,
+      fitAddonRef.current,
+      monoFontFamily,
+      containerRef.current,
+    );
+    if (!size) return;
+    const last = lastSizeRef.current;
+    if (last && last.cols === size.cols && last.rows === size.rows) return;
+    lastSizeRef.current = { cols: size.cols, rows: size.rows };
+    invoke("resize_pty", { taskId: shellId, cols: size.cols, rows: size.rows }).catch(() => {});
+  }, [monoFontFamily, shellId]);
+
+  return (
+    <div
+      ref={containerRef}
+      onMouseDown={() => {
+        if (isActive) focusTerminal();
+      }}
+      style={{
+        position: "absolute",
+        inset: 0,
+        overflow: "hidden",
+        padding: "4px 6px",
+        cursor: "text",
+        visibility: isActive ? "visible" : "hidden",
+        pointerEvents: isActive ? "auto" : "none",
+      }}
+    />
+  );
+});
 
 export const ShellTerminalPanel = forwardRef<ShellTerminalPanelHandle, Props>(
   function ShellTerminalPanel(
@@ -327,7 +334,9 @@ export const ShellTerminalPanel = forwardRef<ShellTerminalPanelHandle, Props>(
     const nextShellIndexRef = useRef(2);
     const shellRefs = useRef<Record<string, ShellTerminalInstanceHandle | null>>({});
     const [shells, setShells] = useState<ShellSession[]>(() => [initialShellRef.current!]);
-    const [activeShellId, setActiveShellId] = useState<string | null>(() => initialShellRef.current!.id);
+    const [activeShellId, setActiveShellId] = useState<string | null>(
+      () => initialShellRef.current!.id,
+    );
     const activeShellIdRef = useRef(activeShellId);
     activeShellIdRef.current = activeShellId;
 

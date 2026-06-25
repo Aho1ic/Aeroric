@@ -27,7 +27,9 @@ export function FileExplorerContextMenu({
     { label: t("file.newFile"), action: "newFile" },
     { label: t("file.newFolder"), action: "newFolder" },
     { action: "separator" },
-    ...(showOpenInSystem ? ([{ label: t("file.openInSystemFolder"), action: "open" }] as const) : []),
+    ...(showOpenInSystem
+      ? ([{ label: t("file.openInSystemFolder"), action: "open" }] as const)
+      : []),
     { label: t("file.copyFullPath"), action: "copy", withAt: false },
     { label: t("file.copyAtFullPath"), action: "copy", withAt: true },
     ...(ctxMenu.isRoot

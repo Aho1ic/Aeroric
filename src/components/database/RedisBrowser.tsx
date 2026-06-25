@@ -195,7 +195,8 @@ function redisStreamEntries(value: unknown): Array<Record<string, unknown>> {
   return redisArrayValue(value).flatMap((item): Array<Record<string, unknown>> => {
     if (!item || typeof item !== "object") return [];
     const row = item as { fields?: unknown };
-    if (row.fields && typeof row.fields === "object") return [row.fields as Record<string, unknown>];
+    if (row.fields && typeof row.fields === "object")
+      return [row.fields as Record<string, unknown>];
     return [item as Record<string, unknown>];
   });
 }
@@ -289,14 +290,22 @@ function RedisJsonTree({ value, wordWrap }: { value: unknown; wordWrap: boolean 
               icon={collapsed ? ChevronRight : ChevronDown}
               onClick={() => togglePath(node.path)}
               aria-label={collapsed ? `Expand JSON ${node.path}` : `Collapse JSON ${node.path}`}
-              style={{ width: 18, height: 18, marginTop: 1, flex: "0 0 auto", color: "var(--text-muted)" }}
+              style={{
+                width: 18,
+                height: 18,
+                marginTop: 1,
+                flex: "0 0 auto",
+                color: "var(--text-muted)",
+              }}
             />
           ) : (
             <span style={{ width: 18, flex: "0 0 auto" }} />
           )}
           {node.parentKind !== "root" && (
             <>
-              <span style={{ color: node.parentKind === "array" ? "var(--text-muted)" : "#1d4ed8" }}>
+              <span
+                style={{ color: node.parentKind === "array" ? "var(--text-muted)" : "#1d4ed8" }}
+              >
                 {node.parentKind === "array" ? `[${node.label}]` : JSON.stringify(node.label)}
               </span>
               <span style={{ color: "var(--text-muted)" }}>:</span>
@@ -309,7 +318,12 @@ function RedisJsonTree({ value, wordWrap }: { value: unknown; wordWrap: boolean 
               <span style={{ fontWeight: 650, color: "var(--text-primary)" }}>{bracketClose}</span>
             </>
           ) : (
-            <span style={{ color: redisJsonScalarColor(node.value), fontStyle: node.value === null ? "italic" : undefined }}>
+            <span
+              style={{
+                color: redisJsonScalarColor(node.value),
+                fontStyle: node.value === null ? "italic" : undefined,
+              }}
+            >
               {redisJsonScalarText(node.value)}
             </span>
           )}
@@ -411,9 +425,10 @@ function redisMemberRows(value: RedisValue | null | undefined): RedisMemberRow[]
       if (!item || typeof item !== "object") return [];
       const entry = item as { id?: unknown; fields?: unknown };
       const entryId = String(entry.id ?? entryIndex);
-      const fields = entry.fields && typeof entry.fields === "object"
-        ? Object.entries(entry.fields as Record<string, unknown>)
-        : Object.entries(item as Record<string, unknown>).filter(([field]) => field !== "id");
+      const fields =
+        entry.fields && typeof entry.fields === "object"
+          ? Object.entries(entry.fields as Record<string, unknown>)
+          : Object.entries(item as Record<string, unknown>).filter(([field]) => field !== "id");
       return fields.map(([field, fieldValue], fieldIndex) => {
         const text = redisMemberValueText(fieldValue);
         return {
@@ -456,14 +471,20 @@ function redisMemberColumnKeys(kind: RedisMemberKind | null): string[] {
   if (kind === "set") return ["database.redisColumnMember"];
   if (kind === "hash") return ["database.redisColumnField", "database.redisColumnValue"];
   if (kind === "zset") return ["database.redisColumnScore", "database.redisColumnMember"];
-  if (kind === "stream") return ["database.redisColumnEntryId", "database.redisColumnField", "database.redisColumnValue"];
+  if (kind === "stream")
+    return [
+      "database.redisColumnEntryId",
+      "database.redisColumnField",
+      "database.redisColumnValue",
+    ];
   return [];
 }
 
 function redisValueMemberKind(value: RedisValue | null | undefined): RedisMemberKind | null {
   if (!value || value.value_is_binary) return null;
   const type = value.key_type.toLowerCase();
-  if (type === "list" || type === "set" || type === "hash" || type === "zset" || type === "stream") return type;
+  if (type === "list" || type === "set" || type === "hash" || type === "zset" || type === "stream")
+    return type;
   return null;
 }
 
@@ -496,14 +517,22 @@ function redisInsertStatement(value: RedisValue): string | null {
     const members = redisArrayValue(value.value).map((item) => escapeRedisArg(String(item)));
     if (members.length > 0) commands.push(`SADD ${key} ${members.join(" ")}`);
   } else if (type === "zset") {
-    const pairs = redisZsetPairs(value.value).map((item) => `${String(item.score ?? 0)} ${escapeRedisArg(String(item.member))}`);
+    const pairs = redisZsetPairs(value.value).map(
+      (item) => `${String(item.score ?? 0)} ${escapeRedisArg(String(item.member))}`,
+    );
     if (pairs.length > 0) commands.push(`ZADD ${key} ${pairs.join(" ")}`);
   } else if (type === "hash") {
-    const pairs = redisHashPairs(value.value).map(([field, fieldValue]) => `${escapeRedisArg(field)} ${escapeRedisArg(String(fieldValue ?? ""))}`);
+    const pairs = redisHashPairs(value.value).map(
+      ([field, fieldValue]) =>
+        `${escapeRedisArg(field)} ${escapeRedisArg(String(fieldValue ?? ""))}`,
+    );
     if (pairs.length > 0) commands.push(`HSET ${key} ${pairs.join(" ")}`);
   } else if (type === "stream") {
     for (const entry of redisStreamEntries(value.value)) {
-      const fields = Object.entries(entry).map(([field, fieldValue]) => `${escapeRedisArg(field)} ${escapeRedisArg(String(fieldValue ?? ""))}`);
+      const fields = Object.entries(entry).map(
+        ([field, fieldValue]) =>
+          `${escapeRedisArg(field)} ${escapeRedisArg(String(fieldValue ?? ""))}`,
+      );
       if (fields.length > 0) commands.push(`XADD ${key} * ${fields.join(" ")}`);
     }
   } else if (type === "json" || type === "rejson-rl") {
@@ -514,7 +543,13 @@ function redisInsertStatement(value: RedisValue): string | null {
   return commands.length > 0 ? commands.join("\n") : null;
 }
 
-export function RedisBrowser({ connectionId, readOnly, initialDb, initialKey, keySeparator = ":" }: Props) {
+export function RedisBrowser({
+  connectionId,
+  readOnly,
+  initialDb,
+  initialKey,
+  keySeparator = ":",
+}: Props) {
   const { t } = useI18n();
   const redis = useRedisBrowser(connectionId);
   const [activeDb, setActiveDb] = useState(0);
@@ -556,7 +591,9 @@ export function RedisBrowser({ connectionId, readOnly, initialDb, initialKey, ke
   const [commandHistory, setCommandHistory] = useState<RedisCommandHistoryEntry[]>([]);
   const [commandRunning, setCommandRunning] = useState(false);
   const [showCreateKey, setShowCreateKey] = useState(false);
-  const [createKeyType, setCreateKeyType] = useState<"string" | "hash" | "list" | "set" | "zset" | "stream" | "json">("string");
+  const [createKeyType, setCreateKeyType] = useState<
+    "string" | "hash" | "list" | "set" | "zset" | "stream" | "json"
+  >("string");
   const [createKeyName, setCreateKeyName] = useState("");
   const [createKeyValue, setCreateKeyValue] = useState("");
   const [createKeyField, setCreateKeyField] = useState("");
@@ -618,10 +655,14 @@ export function RedisBrowser({ connectionId, readOnly, initialDb, initialKey, ke
     setKeyContextMenu(null);
     setGroupContextMenu(null);
     redis.resetBrowserState();
-    redis.loadDatabases()
+    redis
+      .loadDatabases()
       .then((items) => {
         if (cancelled) return undefined;
-        const targetDb = typeof initialDb === "number" && Number.isFinite(initialDb) ? initialDb : items[0]?.db ?? 0;
+        const targetDb =
+          typeof initialDb === "number" && Number.isFinite(initialDb)
+            ? initialDb
+            : (items[0]?.db ?? 0);
         setActiveDb(targetDb);
         setCommandDb(targetDb);
         return redis.scanKeys({ db: targetDb, pattern: "*", count: 100 }).then(() => {
@@ -703,7 +744,11 @@ export function RedisBrowser({ connectionId, readOnly, initialDb, initialKey, ke
     setValueDraft(nextValueDraft);
     setValueDetailView(selectedValueIsStringJson ? "json" : "raw");
     setValueFormatError("");
-    setTtlDraft(redis.selectedValue?.ttl != null && redis.selectedValue.ttl >= 0 ? String(redis.selectedValue.ttl) : "");
+    setTtlDraft(
+      redis.selectedValue?.ttl != null && redis.selectedValue.ttl >= 0
+        ? String(redis.selectedValue.ttl)
+        : "",
+    );
     setEditingTtl(false);
     setTtlError("");
     setSelectedMemberId(null);
@@ -731,7 +776,8 @@ export function RedisBrowser({ connectionId, readOnly, initialDb, initialKey, ke
   }, [redis.keys]);
 
   const effectivePattern = (value = pattern) => redisKeySearchPattern(value, fuzzyKeySearch);
-  const refreshKeys = (value = pattern) => redis.scanKeys({ db: activeDb, pattern: effectivePattern(value), count: 100 });
+  const refreshKeys = (value = pattern) =>
+    redis.scanKeys({ db: activeDb, pattern: effectivePattern(value), count: 100 });
   const appendCommandHistory = (entry: RedisCommandHistoryDraft, persist = false) => {
     setCommandHistory((current) => {
       const lastId = current.length > 0 ? current[current.length - 1].id : 0;
@@ -756,7 +802,12 @@ export function RedisBrowser({ connectionId, readOnly, initialDb, initialKey, ke
   };
   const loadMoreKeys = () => {
     if (!redis.cursor) return;
-    void redis.scanKeys({ db: activeDb, pattern: effectivePattern(), cursor: redis.cursor, count: 100 });
+    void redis.scanKeys({
+      db: activeDb,
+      pattern: effectivePattern(),
+      cursor: redis.cursor,
+      count: 100,
+    });
   };
   const fetchAllKeys = async () => {
     if (!redis.cursor || fetchingAllKeys) return;
@@ -770,7 +821,12 @@ export function RedisBrowser({ connectionId, readOnly, initialDb, initialKey, ke
     try {
       while (nextCursor !== 0 && !seenCursors.has(nextCursor) && !stopFetchAllKeysRef.current) {
         seenCursors.add(nextCursor);
-        const result = await redis.scanKeys({ db: activeDb, pattern: effectivePattern(), cursor: nextCursor, count: 100 });
+        const result = await redis.scanKeys({
+          db: activeDb,
+          pattern: effectivePattern(),
+          cursor: nextCursor,
+          count: 100,
+        });
         loadedKeys += result.keys.length;
         setFetchAllLoadedKeys(loadedKeys);
         setFetchAllTotalKeys(result.total_keys);
@@ -789,21 +845,30 @@ export function RedisBrowser({ connectionId, readOnly, initialDb, initialKey, ke
   };
   const copyValue = () => {
     if (!redis.selectedValue) return;
-    navigator.clipboard?.writeText(redisValueText(redis.selectedValue.value)).catch(() => undefined);
+    navigator.clipboard
+      ?.writeText(redisValueText(redis.selectedValue.value))
+      .catch(() => undefined);
   };
   const selectedValueText = redisValueText(redis.selectedValue?.value ?? "");
   const selectedValueIsStream = redis.selectedValue?.key_type.toLowerCase() === "stream";
   const selectedValueIsBinaryString =
-    redis.selectedValue?.key_type.toLowerCase() === "string" && Boolean(redis.selectedValue.value_is_binary);
+    redis.selectedValue?.key_type.toLowerCase() === "string" &&
+    Boolean(redis.selectedValue.value_is_binary);
   const showValueDraftEditor = !selectedValueIsStream;
   const valueDraftDirty = Boolean(redis.selectedValue && valueDraft !== selectedValueText);
   const selectedKeyInfo = useMemo(
     () => redis.keys.find((key) => key.key_raw === redis.selectedValue?.key_raw) ?? null,
     [redis.keys, redis.selectedValue?.key_raw],
   );
-  const selectedKeySizeLabel = selectedKeyInfo ? redisKeySizeLabel(selectedKeyInfo.key_type, selectedKeyInfo.size) : "";
+  const selectedKeySizeLabel = selectedKeyInfo
+    ? redisKeySizeLabel(selectedKeyInfo.key_type, selectedKeyInfo.size)
+    : "";
   const selectedValueJson = useMemo(() => {
-    if (redis.selectedValue?.key_type.toLowerCase() !== "string" || redis.selectedValue.value_is_binary) return null;
+    if (
+      redis.selectedValue?.key_type.toLowerCase() !== "string" ||
+      redis.selectedValue.value_is_binary
+    )
+      return null;
     return redisJsonValue(valueDraft);
   }, [redis.selectedValue, valueDraft]);
   const memberKind = redisValueMemberKind(redis.selectedValue);
@@ -818,18 +883,21 @@ export function RedisBrowser({ connectionId, readOnly, initialDb, initialKey, ke
   );
   const selectedMemberIsEditing = selectedMember != null && selectedMember.id === editingMemberId;
   const selectedMemberJsonText = useMemo(
-    () => (selectedMember?.format === "json" ? redisJsonText(selectedMember.detailText, true) : null),
+    () =>
+      selectedMember?.format === "json" ? redisJsonText(selectedMember.detailText, true) : null,
     [selectedMember],
   );
   const selectedMemberJsonValue = useMemo(
     () => (selectedMember?.format === "json" ? redisJsonValue(selectedMember.detailText) : null),
     [selectedMember],
   );
-  const memberDetailText = selectedMemberJsonText && memberDetailView === "json"
-    ? selectedMemberJsonText
-    : selectedMember?.detailText ?? "";
+  const memberDetailText =
+    selectedMemberJsonText && memberDetailView === "json"
+      ? selectedMemberJsonText
+      : (selectedMember?.detailText ?? "");
   const memberColumnKeys = useMemo(() => redisMemberColumnKeys(memberKind), [memberKind]);
-  const canAddMember = memberKind === "list" || memberKind === "hash" || memberKind === "set" || memberKind === "zset";
+  const canAddMember =
+    memberKind === "list" || memberKind === "hash" || memberKind === "set" || memberKind === "zset";
   const canSubmitNewMember =
     canAddMember &&
     !readOnly &&
@@ -853,7 +921,8 @@ export function RedisBrowser({ connectionId, readOnly, initialDb, initialKey, ke
         ? t("database.redisLoadedMembers", { loaded, total })
         : t("database.redisMembers", { count: loaded });
     }
-    if (memberKind === "stream") return t("database.redisEntries", { count: redisStreamEntryCount(redis.selectedValue) });
+    if (memberKind === "stream")
+      return t("database.redisEntries", { count: redisStreamEntryCount(redis.selectedValue) });
     return total != null && total > loaded
       ? t("database.redisLoadedItems", { loaded, total })
       : t("database.redisItems", { count: loaded });
@@ -873,7 +942,10 @@ export function RedisBrowser({ connectionId, readOnly, initialDb, initialKey, ke
     memberDetailResizeStartRef.current = { x: event.clientX, width: memberDetailPanelWidth };
     setResizingMemberDetail(true);
   };
-  const startMemberColumnResize = (kind: "hash" | "zset", event: ReactPointerEvent<HTMLDivElement>) => {
+  const startMemberColumnResize = (
+    kind: "hash" | "zset",
+    event: ReactPointerEvent<HTMLDivElement>,
+  ) => {
     event.preventDefault();
     memberColumnResizeStartRef.current = {
       x: event.clientX,
@@ -898,15 +970,30 @@ export function RedisBrowser({ connectionId, readOnly, initialDb, initialKey, ke
     setSavingMember(true);
     try {
       if (action.kind === "hash") {
-        await redis.setHashField({ db: activeDb, keyRaw, field: action.field, value: memberEditValue });
+        await redis.setHashField({
+          db: activeDb,
+          keyRaw,
+          field: action.field,
+          value: memberEditValue,
+        });
       } else if (action.kind === "list") {
-        await redis.setListItem({ db: activeDb, keyRaw, index: action.index, value: memberEditValue });
+        await redis.setListItem({
+          db: activeDb,
+          keyRaw,
+          index: action.index,
+          value: memberEditValue,
+        });
       } else if (action.kind === "set") {
         await redis.removeSetMember({ db: activeDb, keyRaw, member: action.member });
         await redis.addSetMember({ db: activeDb, keyRaw, member: memberEditValue });
       } else {
         await redis.removeZsetMember({ db: activeDb, keyRaw, member: action.member });
-        await redis.addZsetMember({ db: activeDb, keyRaw, member: memberEditValue, score: action.score });
+        await redis.addZsetMember({
+          db: activeDb,
+          keyRaw,
+          member: memberEditValue,
+          score: action.score,
+        });
       }
       setEditingMemberId(null);
       setMemberEditValue("");
@@ -981,11 +1068,15 @@ export function RedisBrowser({ connectionId, readOnly, initialDb, initialKey, ke
   const deleteMember = async (row: RedisMemberRow) => {
     if (!redis.selectedValue || readOnly || !row.deleteAction) return;
     const keyRaw = redis.selectedValue.key_raw;
-    const message = row.deleteAction.kind === "hash"
-      ? t("database.confirmDeleteRedisHashField", { key: keyRaw, field: row.deleteAction.field })
-      : row.deleteAction.kind === "list"
-        ? t("database.confirmDeleteRedisListItem", { key: keyRaw, index: row.deleteAction.index })
-        : t("database.confirmDeleteRedisSetMember", { key: keyRaw, member: row.deleteAction.member });
+    const message =
+      row.deleteAction.kind === "hash"
+        ? t("database.confirmDeleteRedisHashField", { key: keyRaw, field: row.deleteAction.field })
+        : row.deleteAction.kind === "list"
+          ? t("database.confirmDeleteRedisListItem", { key: keyRaw, index: row.deleteAction.index })
+          : t("database.confirmDeleteRedisSetMember", {
+              key: keyRaw,
+              member: row.deleteAction.member,
+            });
     const ok = await confirm(message, {
       title: t("database.redisDeleteMember"),
       kind: "warning",
@@ -1125,12 +1216,15 @@ export function RedisBrowser({ connectionId, readOnly, initialDb, initialKey, ke
   };
   const deleteKeyGroup = async (groupName: string, keyRaws: string[]) => {
     if (keyRaws.length === 0) return;
-    const ok = await confirm(t("database.confirmDeleteRedisKeyGroup", { name: groupName, count: keyRaws.length }), {
-      title: t("database.redisDeleteKeyGroup"),
-      kind: "warning",
-      okLabel: t("database.redisDeleteKeyGroup"),
-      cancelLabel: t("common.cancel"),
-    });
+    const ok = await confirm(
+      t("database.confirmDeleteRedisKeyGroup", { name: groupName, count: keyRaws.length }),
+      {
+        title: t("database.redisDeleteKeyGroup"),
+        kind: "warning",
+        okLabel: t("database.redisDeleteKeyGroup"),
+        cancelLabel: t("common.cancel"),
+      },
+    );
     if (!ok) return;
     for (const keyRaw of keyRaws) {
       await redis.deleteKey(activeDb, keyRaw);
@@ -1174,8 +1268,14 @@ export function RedisBrowser({ connectionId, readOnly, initialDb, initialKey, ke
     });
   };
 
-  const redisKeyTree = useMemo(() => buildRedisKeyTree(redis.keys, activeDb, keySeparator || ":"), [activeDb, keySeparator, redis.keys]);
-  const redisKeyRows = useMemo(() => flattenVisibleRedisKeyTree(redisKeyTree, expandedKeyGroups), [expandedKeyGroups, redisKeyTree]);
+  const redisKeyTree = useMemo(
+    () => buildRedisKeyTree(redis.keys, activeDb, keySeparator || ":"),
+    [activeDb, keySeparator, redis.keys],
+  );
+  const redisKeyRows = useMemo(
+    () => flattenVisibleRedisKeyTree(redisKeyTree, expandedKeyGroups),
+    [expandedKeyGroups, redisKeyTree],
+  );
 
   useEffect(() => {
     const availableGroups = collectRedisGroupIds(redisKeyTree);
@@ -1269,23 +1369,29 @@ export function RedisBrowser({ connectionId, readOnly, initialDb, initialKey, ke
         command,
         skipSafetyCheck: safety === "confirm",
       });
-      appendCommandHistory({
-        prompt,
-        command,
-        output: formatRedisCommandResult(result.value),
-        error: false,
-      }, true);
+      appendCommandHistory(
+        {
+          prompt,
+          command,
+          output: formatRedisCommandResult(result.value),
+          error: false,
+        },
+        true,
+      );
       setCommandDb((currentDb) => nextRedisCommandDb(currentDb, command, result.value));
       if (safety === "confirm" || result.safety === "confirm") {
         await refreshKeys();
       }
     } catch (error) {
-      appendCommandHistory({
-        prompt,
-        command,
-        output: error instanceof Error ? error.message : String(error),
-        error: true,
-      }, true);
+      appendCommandHistory(
+        {
+          prompt,
+          command,
+          output: error instanceof Error ? error.message : String(error),
+          error: true,
+        },
+        true,
+      );
     } finally {
       setCommandRunning(false);
     }
@@ -1354,7 +1460,13 @@ export function RedisBrowser({ connectionId, readOnly, initialDb, initialKey, ke
             <div style={s.databaseWorkspaceTitle}>Redis</div>
             <div style={s.databaseDialogHint}>{t("database.redisBrowserHint")}</div>
           </div>
-          <DbxButton variant="ghost" size="icon-sm" icon={RefreshCcw} onClick={() => void refreshKeys()} aria-label={t("database.refresh")} />
+          <DbxButton
+            variant="ghost"
+            size="icon-sm"
+            icon={RefreshCcw}
+            onClick={() => void refreshKeys()}
+            aria-label={t("database.refresh")}
+          />
         </div>
         <div style={s.databaseButtonRow}>
           {redis.databases.map((database) => (
@@ -1418,7 +1530,9 @@ export function RedisBrowser({ connectionId, readOnly, initialDb, initialKey, ke
         </label>
         {selectedKeyRaws.size > 0 && (
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <span style={s.databaseDialogHint}>{t("database.redisSelectedKeys", { count: selectedKeyRaws.size })}</span>
+            <span style={s.databaseDialogHint}>
+              {t("database.redisSelectedKeys", { count: selectedKeyRaws.size })}
+            </span>
             <DbxButton
               variant="destructive"
               size="sm"
@@ -1443,12 +1557,27 @@ export function RedisBrowser({ connectionId, readOnly, initialDb, initialKey, ke
                   type="button"
                   style={{ ...s.databaseListButton, paddingLeft }}
                   onClick={() => toggleKeyGroup(node.id)}
-                  onContextMenu={(event) => openGroupContextMenu(event, node.pathSegments.join(keySeparator || ":"), collectRedisGroupKeyRaws(node))}
+                  onContextMenu={(event) =>
+                    openGroupContextMenu(
+                      event,
+                      node.pathSegments.join(keySeparator || ":"),
+                      collectRedisGroupKeyRaws(node),
+                    )
+                  }
                   aria-expanded={expanded}
                 >
                   {expanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
                   <Folder size={13} />
-                  <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", textAlign: "left" }}>
+                  <span
+                    style={{
+                      flex: 1,
+                      minWidth: 0,
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                      textAlign: "left",
+                    }}
+                  >
                     {node.label}
                   </span>
                   <span style={s.databasePill}>{countRedisTreeLeaves(node)}</span>
@@ -1461,7 +1590,11 @@ export function RedisBrowser({ connectionId, readOnly, initialDb, initialKey, ke
               <button
                 key={node.id}
                 type="button"
-                style={{ ...s.databaseListButton, ...(active ? s.databaseListButtonActive : {}), paddingLeft }}
+                style={{
+                  ...s.databaseListButton,
+                  ...(active ? s.databaseListButtonActive : {}),
+                  paddingLeft,
+                }}
                 onClick={() => void redis.loadValue(activeDb, node.keyRaw)}
                 onContextMenu={(event) => openKeyContextMenu(event, node.keyRaw)}
                 aria-label={`${node.fullKeyDisplay} ${node.keyType}`}
@@ -1480,30 +1613,57 @@ export function RedisBrowser({ connectionId, readOnly, initialDb, initialKey, ke
                   style={{ width: 14, height: 14, flexShrink: 0 }}
                 />
                 <KeyRound size={13} />
-                <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", textAlign: "left" }}>
+                <span
+                  style={{
+                    flex: 1,
+                    minWidth: 0,
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                    textAlign: "left",
+                  }}
+                >
                   {node.label}
                 </span>
                 <span style={s.databasePill}>{node.keyType}</span>
               </button>
             );
           })}
-          {redis.keys.length === 0 && <div style={s.databaseEmptyCompact}>{redis.loading ? t("database.loading") : t("database.empty")}</div>}
-          {redis.keys.length > 0 && redis.cursor !== 0 && (
-            fetchingAllKeys ? (
+          {redis.keys.length === 0 && (
+            <div style={s.databaseEmptyCompact}>
+              {redis.loading ? t("database.loading") : t("database.empty")}
+            </div>
+          )}
+          {redis.keys.length > 0 &&
+            redis.cursor !== 0 &&
+            (fetchingAllKeys ? (
               <div style={{ display: "grid", gap: 6 }}>
                 <div style={{ ...s.databaseDialogHint, textAlign: "center" }}>
                   {fetchAllTotalKeys > 0
-                    ? t("database.redisFetchAllProgress", { loaded: fetchAllLoadedKeys, total: fetchAllTotalKeys })
+                    ? t("database.redisFetchAllProgress", {
+                        loaded: fetchAllLoadedKeys,
+                        total: fetchAllTotalKeys,
+                      })
                     : t("database.redisFetchAllProgressUnknown", { loaded: fetchAllLoadedKeys })}
                 </div>
-                <button type="button" style={{ ...s.databaseListButton, color: "var(--danger)" }} onClick={stopFetchAllKeys}>
+                <button
+                  type="button"
+                  style={{ ...s.databaseListButton, color: "var(--danger)" }}
+                  onClick={stopFetchAllKeys}
+                >
                   {t("database.redisStopFetchAll")}
                 </button>
               </div>
             ) : (
               <div style={{ display: "flex", gap: 6 }}>
-                <button type="button" style={{ ...s.databaseListButton, flex: 1 }} onClick={loadMoreKeys} disabled={redis.loading}>
-                  {t("database.loadMore")} ({redis.keys.length}/{redis.totalKeys || redis.keys.length})
+                <button
+                  type="button"
+                  style={{ ...s.databaseListButton, flex: 1 }}
+                  onClick={loadMoreKeys}
+                  disabled={redis.loading}
+                >
+                  {t("database.loadMore")} ({redis.keys.length}/
+                  {redis.totalKeys || redis.keys.length})
                 </button>
                 <button
                   type="button"
@@ -1514,17 +1674,20 @@ export function RedisBrowser({ connectionId, readOnly, initialDb, initialKey, ke
                   {t("database.redisFetchAllKeys")}
                 </button>
               </div>
-            )
-          )}
+            ))}
         </div>
       </div>
       <div style={s.databaseBrowserMain}>
         <div style={s.databaseWorkspaceHeader}>
           <div>
-            <div style={s.databaseWorkspaceTitle}>{redis.selectedValue?.key_display ?? t("database.redisValue")}</div>
+            <div style={s.databaseWorkspaceTitle}>
+              {redis.selectedValue?.key_display ?? t("database.redisValue")}
+            </div>
             <div style={s.databaseDialogHint}>
               {redis.selectedValue ? (
-                <span style={{ display: "inline-flex", alignItems: "center", flexWrap: "wrap", gap: 6 }}>
+                <span
+                  style={{ display: "inline-flex", alignItems: "center", flexWrap: "wrap", gap: 6 }}
+                >
                   <span style={s.databasePill}>{redis.selectedValue.key_type}</span>
                   {selectedKeySizeLabel && (
                     <span style={s.databasePill}>
@@ -1550,7 +1713,12 @@ export function RedisBrowser({ connectionId, readOnly, initialDb, initialKey, ke
                     <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
                       <input
                         aria-label={t("database.redisTtlSecondsInput")}
-                        style={{ ...s.databaseDialogInput, width: 118, height: 26, padding: "3px 8px" }}
+                        style={{
+                          ...s.databaseDialogInput,
+                          width: 118,
+                          height: 26,
+                          padding: "3px 8px",
+                        }}
                         value={ttlDraft}
                         onChange={(event) => {
                           setTtlDraft(event.target.value);
@@ -1590,15 +1758,49 @@ export function RedisBrowser({ connectionId, readOnly, initialDb, initialKey, ke
               aria-label={t("database.refresh")}
               title={t("database.refresh")}
             />
-            <DbxButton variant="ghost" size="icon-sm" icon={Copy} disabled={!redis.selectedValue} onClick={copyValue} aria-label={t("database.copyValue")} title={t("database.copyValue")} />
-            <DbxButton variant="ghost" size="icon-sm" icon={Terminal} disabled={!redis.selectedValue} onClick={copyInsertStatement} aria-label={t("database.copyRedisInsertStatement")} title={t("database.copyRedisInsertStatement")} />
-            <DbxButton variant="outline" size="sm" icon={Plus} disabled={readOnly} onClick={() => setShowCreateKey((value) => !value)}>
+            <DbxButton
+              variant="ghost"
+              size="icon-sm"
+              icon={Copy}
+              disabled={!redis.selectedValue}
+              onClick={copyValue}
+              aria-label={t("database.copyValue")}
+              title={t("database.copyValue")}
+            />
+            <DbxButton
+              variant="ghost"
+              size="icon-sm"
+              icon={Terminal}
+              disabled={!redis.selectedValue}
+              onClick={copyInsertStatement}
+              aria-label={t("database.copyRedisInsertStatement")}
+              title={t("database.copyRedisInsertStatement")}
+            />
+            <DbxButton
+              variant="outline"
+              size="sm"
+              icon={Plus}
+              disabled={readOnly}
+              onClick={() => setShowCreateKey((value) => !value)}
+            >
               {t("database.redisCreateKey")}
             </DbxButton>
-            <DbxButton variant="outline" size="sm" icon={Trash2} disabled={readOnly || !redis.selectedValue} onClick={() => redis.selectedValue && void deleteKey(redis.selectedValue.key_raw)}>
+            <DbxButton
+              variant="outline"
+              size="sm"
+              icon={Trash2}
+              disabled={readOnly || !redis.selectedValue}
+              onClick={() => redis.selectedValue && void deleteKey(redis.selectedValue.key_raw)}
+            >
               {t("database.redisDeleteKey")}
             </DbxButton>
-            <DbxButton variant="destructive" size="sm" icon={Eraser} disabled={readOnly} onClick={() => void flushCurrentDb()}>
+            <DbxButton
+              variant="destructive"
+              size="sm"
+              icon={Eraser}
+              disabled={readOnly}
+              onClick={() => void flushCurrentDb()}
+            >
               {t("database.redisFlushDb")}
             </DbxButton>
           </div>
@@ -1642,21 +1844,42 @@ export function RedisBrowser({ connectionId, readOnly, initialDb, initialKey, ke
             </label>
             <label style={s.databaseDialogField}>
               <span style={s.databaseDialogLabel}>{t("database.redisCreateField")}</span>
-              <input style={s.databaseDialogInput} value={createKeyField} onChange={(event) => setCreateKeyField(event.target.value)} />
+              <input
+                style={s.databaseDialogInput}
+                value={createKeyField}
+                onChange={(event) => setCreateKeyField(event.target.value)}
+              />
             </label>
             <label style={s.databaseDialogField}>
               <span style={s.databaseDialogLabel}>{t("database.redisCreateScore")}</span>
-              <input style={s.databaseDialogInput} value={createKeyScore} onChange={(event) => setCreateKeyScore(event.target.value)} />
+              <input
+                style={s.databaseDialogInput}
+                value={createKeyScore}
+                onChange={(event) => setCreateKeyScore(event.target.value)}
+              />
             </label>
             <label style={s.databaseDialogField}>
               <span style={s.databaseDialogLabel}>{t("database.redisCreateEntryId")}</span>
-              <input style={s.databaseDialogInput} value={createKeyEntryId} onChange={(event) => setCreateKeyEntryId(event.target.value)} />
+              <input
+                style={s.databaseDialogInput}
+                value={createKeyEntryId}
+                onChange={(event) => setCreateKeyEntryId(event.target.value)}
+              />
             </label>
             <label style={s.databaseDialogField}>
               <span style={s.databaseDialogLabel}>{t("database.redisTtl")}</span>
-              <input style={s.databaseDialogInput} value={createKeyTtl} onChange={(event) => setCreateKeyTtl(event.target.value)} />
+              <input
+                style={s.databaseDialogInput}
+                value={createKeyTtl}
+                onChange={(event) => setCreateKeyTtl(event.target.value)}
+              />
             </label>
-            <DbxButton variant="default" size="sm" onClick={() => void createKey()} disabled={!createKeyName.trim()}>
+            <DbxButton
+              variant="default"
+              size="sm"
+              onClick={() => void createKey()}
+              disabled={!createKeyName.trim()}
+            >
               {t("database.saveKey")}
             </DbxButton>
           </div>
@@ -1695,7 +1918,12 @@ export function RedisBrowser({ connectionId, readOnly, initialDb, initialKey, ke
                   {memberKind === "hash" && (
                     <input
                       aria-label={t("database.redisNewMemberField")}
-                      style={{ ...s.databaseDialogInput, width: 110, height: 26, padding: "3px 8px" }}
+                      style={{
+                        ...s.databaseDialogInput,
+                        width: 110,
+                        height: 26,
+                        padding: "3px 8px",
+                      }}
                       value={newMemberField}
                       disabled={readOnly || addingMember}
                       onChange={(event) => {
@@ -1708,7 +1936,12 @@ export function RedisBrowser({ connectionId, readOnly, initialDb, initialKey, ke
                   {memberKind === "zset" && (
                     <input
                       aria-label={t("database.redisNewMemberScore")}
-                      style={{ ...s.databaseDialogInput, width: 86, height: 26, padding: "3px 8px" }}
+                      style={{
+                        ...s.databaseDialogInput,
+                        width: 86,
+                        height: 26,
+                        padding: "3px 8px",
+                      }}
                       value={newMemberScore}
                       disabled={readOnly || addingMember}
                       onChange={(event) => {
@@ -1720,16 +1953,31 @@ export function RedisBrowser({ connectionId, readOnly, initialDb, initialKey, ke
                   )}
                   <input
                     aria-label={t("database.redisNewMemberValue")}
-                    style={{ ...s.databaseDialogInput, width: memberKind === "hash" || memberKind === "zset" ? 132 : 170, height: 26, padding: "3px 8px" }}
+                    style={{
+                      ...s.databaseDialogInput,
+                      width: memberKind === "hash" || memberKind === "zset" ? 132 : 170,
+                      height: 26,
+                      padding: "3px 8px",
+                    }}
                     value={newMemberValue}
                     disabled={readOnly || addingMember}
                     onChange={(event) => {
                       setNewMemberValue(event.target.value);
                       setMemberActionError("");
                     }}
-                    placeholder={memberKind === "set" || memberKind === "zset" ? t("database.redisColumnMember") : t("database.redisColumnValue")}
+                    placeholder={
+                      memberKind === "set" || memberKind === "zset"
+                        ? t("database.redisColumnMember")
+                        : t("database.redisColumnValue")
+                    }
                   />
-                  <DbxButton type="submit" variant="default" size="xs" icon={Plus} disabled={!canSubmitNewMember}>
+                  <DbxButton
+                    type="submit"
+                    variant="default"
+                    size="xs"
+                    icon={Plus}
+                    disabled={!canSubmitNewMember}
+                  >
                     <span>
                       {memberKind === "list"
                         ? t("database.redisPushMember")
@@ -1754,7 +2002,16 @@ export function RedisBrowser({ connectionId, readOnly, initialDb, initialKey, ke
               )}
             </div>
             {memberActionError && (
-              <div style={{ ...s.databaseError, margin: 0, borderRadius: 0, borderLeft: "none", borderRight: "none", borderTop: "none" }}>
+              <div
+                style={{
+                  ...s.databaseError,
+                  margin: 0,
+                  borderRadius: 0,
+                  borderLeft: "none",
+                  borderRight: "none",
+                  borderTop: "none",
+                }}
+              >
                 {memberActionError}
               </div>
             )}
@@ -1776,7 +2033,9 @@ export function RedisBrowser({ connectionId, readOnly, initialDb, initialKey, ke
                       fontSize: 12,
                     }}
                   >
-                    <div style={{ marginBottom: 5, color: "var(--text-muted)", fontSize: 11.5 }}>{group.entryId}</div>
+                    <div style={{ marginBottom: 5, color: "var(--text-muted)", fontSize: 11.5 }}>
+                      {group.entryId}
+                    </div>
                     <div style={{ display: "grid", gap: 2 }}>
                       {group.rows.map((row) => {
                         const active = selectedMember?.id === row.id;
@@ -1825,21 +2084,30 @@ export function RedisBrowser({ connectionId, readOnly, initialDb, initialKey, ke
                             >
                               {fieldValue}
                             </span>
-                            <span style={{ display: "flex", justifyContent: "flex-end" }}>{renderMemberRowActions(row)}</span>
+                            <span style={{ display: "flex", justifyContent: "flex-end" }}>
+                              {renderMemberRowActions(row)}
+                            </span>
                           </div>
                         );
                       })}
                     </div>
                   </div>
                 ))}
-                {streamMemberGroups.length === 0 && <div style={s.databaseEmptyCompact}>{t("database.empty")}</div>}
+                {streamMemberGroups.length === 0 && (
+                  <div style={s.databaseEmptyCompact}>{t("database.empty")}</div>
+                )}
               </div>
             ) : (
               <div style={{ ...s.databaseTableWrap, flex: "unset", height: 190 }}>
                 <table style={s.databaseTable}>
                   {(memberKind === "hash" || memberKind === "zset") && (
                     <colgroup>
-                      <col style={{ width: memberKind === "hash" ? memberHashFieldWidth : memberZsetScoreWidth }} />
+                      <col
+                        style={{
+                          width:
+                            memberKind === "hash" ? memberHashFieldWidth : memberZsetScoreWidth,
+                        }}
+                      />
                       <col />
                       <col style={{ width: 140 }} />
                     </colgroup>
@@ -1847,46 +2115,56 @@ export function RedisBrowser({ connectionId, readOnly, initialDb, initialKey, ke
                   <thead>
                     <tr>
                       {memberColumnKeys.map((labelKey, index) => {
-                        const resizeKind = memberKind === "hash" || memberKind === "zset" ? memberKind : null;
+                        const resizeKind =
+                          memberKind === "hash" || memberKind === "zset" ? memberKind : null;
                         const resizable = index === 0 && resizeKind != null;
-                        const resizeLabel = resizeKind === "hash" ? t("database.redisResizeHashFieldColumn") : t("database.redisResizeZsetScoreColumn");
+                        const resizeLabel =
+                          resizeKind === "hash"
+                            ? t("database.redisResizeHashFieldColumn")
+                            : t("database.redisResizeZsetScoreColumn");
                         return (
-                        <th
-                          key={labelKey}
-                          style={{
-                            ...s.databaseTh,
-                            ...(resizable
-                              ? {
-                                  position: "sticky",
-                                  width: resizeKind === "hash" ? memberHashFieldWidth : memberZsetScoreWidth,
-                                  userSelect: "none",
-                                }
-                              : {}),
-                          }}
-                        >
-                          {t(labelKey)}
-                          {resizable && (
-                            <div
-                              role="separator"
-                              aria-orientation="vertical"
-                              aria-label={resizeLabel}
-                              title={resizeLabel}
-                              onPointerDown={(event) => {
-                                if (resizeKind) startMemberColumnResize(resizeKind, event);
-                              }}
-                              style={{
-                                position: "absolute",
-                                top: 0,
-                                right: -4,
-                                width: 8,
-                                height: "100%",
-                                cursor: "col-resize",
-                                zIndex: 2,
-                                borderRight: resizingMemberColumn === resizeKind ? "1px solid var(--accent)" : "1px solid transparent",
-                              }}
-                            />
-                          )}
-                        </th>
+                          <th
+                            key={labelKey}
+                            style={{
+                              ...s.databaseTh,
+                              ...(resizable
+                                ? {
+                                    position: "sticky",
+                                    width:
+                                      resizeKind === "hash"
+                                        ? memberHashFieldWidth
+                                        : memberZsetScoreWidth,
+                                    userSelect: "none",
+                                  }
+                                : {}),
+                            }}
+                          >
+                            {t(labelKey)}
+                            {resizable && (
+                              <div
+                                role="separator"
+                                aria-orientation="vertical"
+                                aria-label={resizeLabel}
+                                title={resizeLabel}
+                                onPointerDown={(event) => {
+                                  if (resizeKind) startMemberColumnResize(resizeKind, event);
+                                }}
+                                style={{
+                                  position: "absolute",
+                                  top: 0,
+                                  right: -4,
+                                  width: 8,
+                                  height: "100%",
+                                  cursor: "col-resize",
+                                  zIndex: 2,
+                                  borderRight:
+                                    resizingMemberColumn === resizeKind
+                                      ? "1px solid var(--accent)"
+                                      : "1px solid transparent",
+                                }}
+                              />
+                            )}
+                          </th>
                         );
                       })}
                       <th style={{ ...s.databaseTh, width: 140 }} />
@@ -1912,7 +2190,10 @@ export function RedisBrowser({ connectionId, readOnly, initialDb, initialKey, ke
                               key={`${row.id}:${index}`}
                               style={{
                                 ...s.databaseTd,
-                                color: index === 0 && row.kind === "hash" ? "var(--accent)" : s.databaseTd.color,
+                                color:
+                                  index === 0 && row.kind === "hash"
+                                    ? "var(--accent)"
+                                    : s.databaseTd.color,
                                 fontFamily: "var(--font-mono)",
                               }}
                               title={cell}
@@ -1920,7 +2201,9 @@ export function RedisBrowser({ connectionId, readOnly, initialDb, initialKey, ke
                               {cell}
                             </td>
                           ))}
-                          <td style={{ ...s.databaseTd, width: 140 }}>{renderMemberRowActions(row)}</td>
+                          <td style={{ ...s.databaseTd, width: 140 }}>
+                            {renderMemberRowActions(row)}
+                          </td>
                         </tr>
                       );
                     })}
@@ -1936,7 +2219,8 @@ export function RedisBrowser({ connectionId, readOnly, initialDb, initialKey, ke
                   disabled={loadingMoreMembers}
                   onClick={() => void loadMoreMembers()}
                 >
-                  {t("database.loadMore")} ({memberRows.length}/{redis.selectedValue?.total ?? memberRows.length})
+                  {t("database.loadMore")} ({memberRows.length}/
+                  {redis.selectedValue?.total ?? memberRows.length})
                 </button>
               </div>
             )}
@@ -1976,7 +2260,9 @@ export function RedisBrowser({ connectionId, readOnly, initialDb, initialKey, ke
                     width: 8,
                     cursor: "col-resize",
                     zIndex: 1,
-                    borderLeft: resizingMemberDetail ? "1px solid var(--accent)" : "1px solid transparent",
+                    borderLeft: resizingMemberDetail
+                      ? "1px solid var(--accent)"
+                      : "1px solid transparent",
                   }}
                 />
                 <div
@@ -1989,10 +2275,22 @@ export function RedisBrowser({ connectionId, readOnly, initialDb, initialKey, ke
                     borderBottom: "1px solid var(--border-dim)",
                   }}
                 >
-                  <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 13, fontWeight: 600 }}>
+                  <span
+                    style={{
+                      flex: 1,
+                      minWidth: 0,
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                      fontSize: 13,
+                      fontWeight: 600,
+                    }}
+                  >
                     {t("database.redisMemberDetail")}: {selectedMember.title}
                   </span>
-                  <span style={s.databasePill}>{selectedMember.format === "json" ? "JSON" : t("database.redisRawContent")}</span>
+                  <span style={s.databasePill}>
+                    {selectedMember.format === "json" ? "JSON" : t("database.redisRawContent")}
+                  </span>
                   {!selectedMemberIsEditing && (
                     <DbxButton
                       variant="ghost"
@@ -2176,42 +2474,55 @@ export function RedisBrowser({ connectionId, readOnly, initialDb, initialKey, ke
                     }}
                     autoFocus
                   />
+                ) : selectedMember.format === "json" &&
+                  memberDetailView === "json" &&
+                  selectedMemberJsonValue ? (
+                  <div
+                    style={{
+                      flex: 1,
+                      minHeight: 0,
+                      margin: 0,
+                      overflow: "auto",
+                      color: "var(--text-primary)",
+                      fontFamily: "var(--font-mono)",
+                      fontSize: 12,
+                      lineHeight: 1.5,
+                      padding: 10,
+                    }}
+                  >
+                    <RedisJsonTree
+                      value={selectedMemberJsonValue.value}
+                      wordWrap={memberJsonWordWrap}
+                    />
+                  </div>
                 ) : (
-                  selectedMember.format === "json" && memberDetailView === "json" && selectedMemberJsonValue ? (
-                    <div
-                      style={{
-                        flex: 1,
-                        minHeight: 0,
-                        margin: 0,
-                        overflow: "auto",
-                        color: "var(--text-primary)",
-                        fontFamily: "var(--font-mono)",
-                        fontSize: 12,
-                        lineHeight: 1.5,
-                        padding: 10,
-                      }}
-                    >
-                      <RedisJsonTree value={selectedMemberJsonValue.value} wordWrap={memberJsonWordWrap} />
-                    </div>
-                  ) : (
-                    <pre
-                      style={{
-                        flex: 1,
-                        minHeight: 0,
-                        margin: 0,
-                        overflow: "auto",
-                        whiteSpace: selectedMember.format === "json" ? (memberJsonWordWrap ? "pre-wrap" : "pre") : "pre-wrap",
-                        wordBreak: selectedMember.format === "json" ? (memberJsonWordWrap ? "break-word" : "normal") : "break-word",
-                        color: "var(--text-primary)",
-                        fontFamily: "var(--font-mono)",
-                        fontSize: 12,
-                        lineHeight: 1.5,
-                        padding: 10,
-                      }}
-                    >
-                      {memberDetailText}
-                    </pre>
-                  )
+                  <pre
+                    style={{
+                      flex: 1,
+                      minHeight: 0,
+                      margin: 0,
+                      overflow: "auto",
+                      whiteSpace:
+                        selectedMember.format === "json"
+                          ? memberJsonWordWrap
+                            ? "pre-wrap"
+                            : "pre"
+                          : "pre-wrap",
+                      wordBreak:
+                        selectedMember.format === "json"
+                          ? memberJsonWordWrap
+                            ? "break-word"
+                            : "normal"
+                          : "break-word",
+                      color: "var(--text-primary)",
+                      fontFamily: "var(--font-mono)",
+                      fontSize: 12,
+                      lineHeight: 1.5,
+                      padding: 10,
+                    }}
+                  >
+                    {memberDetailText}
+                  </pre>
                 )}
               </div>
             )}
@@ -2273,7 +2584,16 @@ export function RedisBrowser({ connectionId, readOnly, initialDb, initialKey, ke
                 />
               </span>
             )}
-            <label style={{ display: "inline-flex", alignItems: "center", gap: 5, color: "var(--text-muted)", fontSize: 12, whiteSpace: "nowrap" }}>
+            <label
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 5,
+                color: "var(--text-muted)",
+                fontSize: 12,
+                whiteSpace: "nowrap",
+              }}
+            >
               <WrapText size={13} />
               <span>{t("database.redisWordWrap")}</span>
               <input
@@ -2285,8 +2605,8 @@ export function RedisBrowser({ connectionId, readOnly, initialDb, initialKey, ke
             </label>
           </div>
         )}
-        {showValueDraftEditor && (
-          selectedValueJson && valueDetailView === "json" ? (
+        {showValueDraftEditor &&
+          (selectedValueJson && valueDetailView === "json" ? (
             <div
               style={{
                 ...s.databaseLargeTextArea,
@@ -2311,10 +2631,11 @@ export function RedisBrowser({ connectionId, readOnly, initialDb, initialKey, ke
               }}
               readOnly={readOnly || !redis.selectedValue || selectedValueIsBinaryString}
             />
-          )
-        )}
+          ))}
         {showValueDraftEditor && selectedValueIsBinaryString && (
-          <div style={{ color: "var(--text-muted)", fontSize: 12, padding: "0 2px" }}>{t("database.redisBinaryStringReadonlyHint")}</div>
+          <div style={{ color: "var(--text-muted)", fontSize: 12, padding: "0 2px" }}>
+            {t("database.redisBinaryStringReadonlyHint")}
+          </div>
         )}
         <div
           style={{
@@ -2334,10 +2655,20 @@ export function RedisBrowser({ connectionId, readOnly, initialDb, initialKey, ke
           onClick={() => document.getElementById("redis-command-input")?.focus()}
         >
           <div style={{ flex: 1, minHeight: 0, overflow: "auto", padding: 12 }}>
-            <div style={{ marginBottom: 8, color: "#94a3b8" }}>{t("database.redisCommandWelcome")}</div>
+            <div style={{ marginBottom: 8, color: "#94a3b8" }}>
+              {t("database.redisCommandWelcome")}
+            </div>
             {commandHistory.map((entry) => (
               <div key={entry.id} style={{ marginBottom: 8 }}>
-                <div style={{ display: "flex", alignItems: "flex-start", gap: 8, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "flex-start",
+                    gap: 8,
+                    whiteSpace: "pre-wrap",
+                    wordBreak: "break-word",
+                  }}
+                >
                   <span style={{ flexShrink: 0, color: "#d7ba7d" }}>{entry.prompt}</span>
                   <span style={{ minWidth: 0, color: "#e5e7eb" }}>{entry.command}</span>
                 </div>
@@ -2393,7 +2724,12 @@ export function RedisBrowser({ connectionId, readOnly, initialDb, initialKey, ke
               spellCheck={false}
               placeholder="GET user:1"
             />
-            <DbxButton type="submit" variant="default" size="sm" disabled={!commandText.trim() || commandRunning}>
+            <DbxButton
+              type="submit"
+              variant="default"
+              size="sm"
+              disabled={!commandText.trim() || commandRunning}
+            >
               {t("database.redisRunCommand")}
             </DbxButton>
           </form>
@@ -2403,10 +2739,26 @@ export function RedisBrowser({ connectionId, readOnly, initialDb, initialKey, ke
             <>
               {!selectedValueJson && (
                 <>
-                  <DbxButton variant="outline" size="sm" icon={Braces} disabled={readOnly || !redis.selectedValue || redis.selectedValue.value_is_binary} onClick={() => updateJsonDraft(true)}>
+                  <DbxButton
+                    variant="outline"
+                    size="sm"
+                    icon={Braces}
+                    disabled={
+                      readOnly || !redis.selectedValue || redis.selectedValue.value_is_binary
+                    }
+                    onClick={() => updateJsonDraft(true)}
+                  >
                     {t("database.redisFormatJson")}
                   </DbxButton>
-                  <DbxButton variant="outline" size="sm" icon={Minimize2} disabled={readOnly || !redis.selectedValue || redis.selectedValue.value_is_binary} onClick={() => updateJsonDraft(false)}>
+                  <DbxButton
+                    variant="outline"
+                    size="sm"
+                    icon={Minimize2}
+                    disabled={
+                      readOnly || !redis.selectedValue || redis.selectedValue.value_is_binary
+                    }
+                    onClick={() => updateJsonDraft(false)}
+                  >
                     {t("database.redisCompressJson")}
                   </DbxButton>
                 </>
@@ -2419,16 +2771,32 @@ export function RedisBrowser({ connectionId, readOnly, initialDb, initialKey, ke
                 placeholder="TTL"
               />
               {valueDraftDirty && !selectedValueIsBinaryString && (
-                <DbxButton variant="outline" size="sm" icon={X} disabled={readOnly} onClick={discardValueDraft}>
+                <DbxButton
+                  variant="outline"
+                  size="sm"
+                  icon={X}
+                  disabled={readOnly}
+                  onClick={discardValueDraft}
+                >
                   {t("database.discardValue")}
                 </DbxButton>
               )}
-              <DbxButton variant="default" size="sm" disabled={readOnly || !redis.selectedValue || selectedValueIsBinaryString} onClick={() => void saveValue()}>
+              <DbxButton
+                variant="default"
+                size="sm"
+                disabled={readOnly || !redis.selectedValue || selectedValueIsBinaryString}
+                onClick={() => void saveValue()}
+              >
                 {t("database.saveValue")}
               </DbxButton>
             </>
           )}
-          <DbxButton variant="outline" size="sm" onClick={clearCommandHistory} disabled={commandHistory.length === 0}>
+          <DbxButton
+            variant="outline"
+            size="sm"
+            onClick={clearCommandHistory}
+            disabled={commandHistory.length === 0}
+          >
             {t("database.redisClearHistory")}
           </DbxButton>
         </div>
@@ -2448,11 +2816,13 @@ export function RedisBrowser({ connectionId, readOnly, initialDb, initialKey, ke
               minWidth: 190,
             }}
           >
-            {([
-              ["copyName", "database.copyName"],
-              ["refresh", "database.refresh"],
-              ["deleteKey", "database.redisDeleteKey"],
-            ] as const).map(([action, labelKey]) => (
+            {(
+              [
+                ["copyName", "database.copyName"],
+                ["refresh", "database.refresh"],
+                ["deleteKey", "database.redisDeleteKey"],
+              ] as const
+            ).map(([action, labelKey]) => (
               <DbxMenuItem
                 key={action}
                 icon={action === "copyName" ? Copy : action === "refresh" ? RefreshCcw : Trash2}
@@ -2488,15 +2858,20 @@ export function RedisBrowser({ connectionId, readOnly, initialDb, initialKey, ke
               minWidth: 210,
             }}
           >
-            {([
-              ["copyName", "database.copyName"],
-              ["refresh", "database.refresh"],
-              ["deleteGroup", "database.redisDeleteKeyGroup"],
-            ] as const).map(([action, labelKey]) => (
+            {(
+              [
+                ["copyName", "database.copyName"],
+                ["refresh", "database.refresh"],
+                ["deleteGroup", "database.redisDeleteKeyGroup"],
+              ] as const
+            ).map(([action, labelKey]) => (
               <DbxMenuItem
                 key={action}
                 icon={action === "copyName" ? Copy : action === "refresh" ? RefreshCcw : Trash2}
-                disabled={(action === "deleteGroup" && readOnly) || (action === "deleteGroup" && groupContextMenu.keyRaws.length === 0)}
+                disabled={
+                  (action === "deleteGroup" && readOnly) ||
+                  (action === "deleteGroup" && groupContextMenu.keyRaws.length === 0)
+                }
                 destructive={action === "deleteGroup"}
                 onClick={() => {
                   const menu = groupContextMenu;

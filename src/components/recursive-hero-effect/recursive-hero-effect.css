@@ -14,7 +14,13 @@
   z-index: 1;
   pointer-events: none;
   background:
-    linear-gradient(90deg, color-mix(in srgb, var(--bg-panel) 96%, transparent) 0%, color-mix(in srgb, var(--bg-panel) 88%, transparent) 34%, color-mix(in srgb, var(--bg-panel) 18%, transparent) 68%, transparent 100%),
+    linear-gradient(
+      90deg,
+      color-mix(in srgb, var(--bg-panel) 96%, transparent) 0%,
+      color-mix(in srgb, var(--bg-panel) 88%, transparent) 34%,
+      color-mix(in srgb, var(--bg-panel) 18%, transparent) 68%,
+      transparent 100%
+    ),
     linear-gradient(0deg, color-mix(in srgb, var(--bg-panel) 92%, transparent) 0%, transparent 24%);
 }
 
@@ -48,7 +54,16 @@
 @media (max-width: 1023px) {
   .recursive-hero-effect::after {
     background:
-      linear-gradient(180deg, color-mix(in srgb, var(--bg-panel) 98%, transparent) 0%, color-mix(in srgb, var(--bg-panel) 88%, transparent) 44%, color-mix(in srgb, var(--bg-panel) 36%, transparent) 100%),
-      linear-gradient(0deg, color-mix(in srgb, var(--bg-panel) 90%, transparent) 0%, transparent 34%);
+      linear-gradient(
+        180deg,
+        color-mix(in srgb, var(--bg-panel) 98%, transparent) 0%,
+        color-mix(in srgb, var(--bg-panel) 88%, transparent) 44%,
+        color-mix(in srgb, var(--bg-panel) 36%, transparent) 100%
+      ),
+      linear-gradient(
+        0deg,
+        color-mix(in srgb, var(--bg-panel) 90%, transparent) 0%,
+        transparent 34%
+      );
   }
 }

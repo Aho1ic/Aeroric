@@ -64,8 +64,13 @@ export function buildProjectTaskGroups(projects: Project[], tasks: Task[]): Proj
   }));
 }
 
-export function getDefaultExpandedProjectIds(projects: Project[], activeProjectId: string): Set<string> {
-  return new Set(projects.some((project) => project.id === activeProjectId) ? [activeProjectId] : []);
+export function getDefaultExpandedProjectIds(
+  projects: Project[],
+  activeProjectId: string,
+): Set<string> {
+  return new Set(
+    projects.some((project) => project.id === activeProjectId) ? [activeProjectId] : [],
+  );
 }
 
 export type ProjectRailFooterAction = "backHome" | "openProject" | "notifications" | "theme";
@@ -115,7 +120,12 @@ function RailTaskItem({
         padding: "2px 3px 2px 7px",
         border: "none",
         borderRadius: 5,
-        background: selected && !isNewTask ? "var(--bg-selected)" : hovered ? "var(--bg-hover)" : "transparent",
+        background:
+          selected && !isNewTask
+            ? "var(--bg-selected)"
+            : hovered
+              ? "var(--bg-hover)"
+              : "transparent",
         color: "var(--text-primary)",
         cursor: "pointer",
         textAlign: "left",
@@ -391,7 +401,10 @@ export function ProjectRail({
     getDefaultExpandedProjectIds(projects, activeProjectId),
   );
 
-  const projectGroups = useMemo(() => buildProjectTaskGroups(projects, allTasks), [projects, allTasks]);
+  const projectGroups = useMemo(
+    () => buildProjectTaskGroups(projects, allTasks),
+    [projects, allTasks],
+  );
 
   useEffect(() => {
     setExpandedProjectIds((prev) => {
@@ -452,7 +465,11 @@ export function ProjectRail({
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
-        background: active ? "var(--accent-subtle)" : hovered ? "var(--bg-hover)" : "var(--bg-card)",
+        background: active
+          ? "var(--accent-subtle)"
+          : hovered
+            ? "var(--bg-hover)"
+            : "var(--bg-card)",
         border: "1px solid var(--border-dim)",
         borderRadius: 8,
         cursor: "pointer",
@@ -558,7 +575,6 @@ export function ProjectRail({
             themeHov,
             setThemeHov,
           )}
-
       </div>
     );
   }
@@ -587,7 +603,15 @@ export function ProjectRail({
           borderBottom: "1px solid var(--border-dim)",
         }}
       >
-        <span style={{ flex: 1, minWidth: 0, fontSize: 13, fontWeight: 720, color: "var(--text-primary)" }}>
+        <span
+          style={{
+            flex: 1,
+            minWidth: 0,
+            fontSize: 13,
+            fontWeight: 720,
+            color: "var(--text-primary)",
+          }}
+        >
           {t("welcome.projects")}
         </span>
         <button
@@ -698,13 +722,20 @@ export function ProjectRail({
                       {project.name}
                     </span>
                     {taskCountLabel && (
-                      <span style={{ display: "block", fontSize: 10.8, color: "var(--text-muted)" }}>
+                      <span
+                        style={{ display: "block", fontSize: 10.8, color: "var(--text-muted)" }}
+                      >
                         {taskCountLabel}
                       </span>
                     )}
                   </span>
                   {project.hiddenFromRail && (
-                    <PinOff size={12} strokeWidth={2} color="var(--text-hint)" style={s.railHiddenIcon} />
+                    <PinOff
+                      size={12}
+                      strokeWidth={2}
+                      color="var(--text-hint)"
+                      style={s.railHiddenIcon}
+                    />
                   )}
                 </button>
                 {isActive && (
@@ -733,7 +764,15 @@ export function ProjectRail({
               </div>
 
               {expanded && (
-                <div style={{ marginLeft: 22, paddingTop: 3, display: "flex", flexDirection: "column", gap: 1 }}>
+                <div
+                  style={{
+                    marginLeft: 22,
+                    paddingTop: 3,
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: 1,
+                  }}
+                >
                   {tasks.length === 0 ? (
                     <div
                       style={{
@@ -780,45 +819,45 @@ export function ProjectRail({
           borderTop: "1px solid var(--border-dim)",
         }}
       >
-      {getProjectRailFooterActions(singleProjectMode).includes("backHome") ? (
-        <>
-          {footerIconButton(
-            t("project.backHome"),
-            <Home size={14} strokeWidth={2.2} />,
-            onBack,
-            homeHov,
-            setHomeHov,
-          )}
+        {getProjectRailFooterActions(singleProjectMode).includes("backHome") ? (
+          <>
+            {footerIconButton(
+              t("project.backHome"),
+              <Home size={14} strokeWidth={2.2} />,
+              onBack,
+              homeHov,
+              setHomeHov,
+            )}
 
-          {footerIconButton(
-            t("welcome.openProject"),
-            <Plus size={14} strokeWidth={2.5} />,
-            onOpen,
-            addHov,
-            setAddHov,
-          )}
+            {footerIconButton(
+              t("welcome.openProject"),
+              <Plus size={14} strokeWidth={2.5} />,
+              onOpen,
+              addHov,
+              setAddHov,
+            )}
 
-          <NotificationBell
-            buttonStyle={{
-              width: 32,
-              height: 32,
-              justifyContent: "center",
-              border: "1px solid var(--border-dim)",
-              background: "var(--bg-card)",
-              opacity: 1,
-            }}
-            iconSize={14}
-          />
+            <NotificationBell
+              buttonStyle={{
+                width: 32,
+                height: 32,
+                justifyContent: "center",
+                border: "1px solid var(--border-dim)",
+                background: "var(--bg-card)",
+                opacity: 1,
+              }}
+              iconSize={14}
+            />
 
-          {footerIconButton(
-            isDark ? t("theme.switchToLight") : t("theme.switchToDark"),
-            isDark ? <Sun size={14} strokeWidth={2} /> : <Moon size={14} strokeWidth={2} />,
-            onToggleTheme,
-            themeHov,
-            setThemeHov,
-          )}
-        </>
-      ) : null}
+            {footerIconButton(
+              isDark ? t("theme.switchToLight") : t("theme.switchToDark"),
+              isDark ? <Sun size={14} strokeWidth={2} /> : <Moon size={14} strokeWidth={2} />,
+              onToggleTheme,
+              themeHov,
+              setThemeHov,
+            )}
+          </>
+        ) : null}
       </div>
     </div>
   );

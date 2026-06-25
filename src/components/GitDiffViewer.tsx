@@ -173,11 +173,7 @@ export function GitDiffViewer({
         ) : (
           <div style={s.diffFileList}>
             {parsedFiles.map((file, index) => (
-              <DiffFileBlock
-                key={`${file.displayPath}-${index}`}
-                file={file}
-                viewMode={viewMode}
-              />
+              <DiffFileBlock key={`${file.displayPath}-${index}`} file={file} viewMode={viewMode} />
             ))}
           </div>
         )}

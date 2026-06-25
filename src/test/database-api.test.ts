@@ -57,7 +57,11 @@ describe("databaseApi", () => {
   });
 
   it("wraps dbx_get_object_source with object source scope", async () => {
-    vi.mocked(invoke).mockResolvedValueOnce({ name: "refresh_stats", object_type: "PROCEDURE", source: "CREATE PROCEDURE ..." });
+    vi.mocked(invoke).mockResolvedValueOnce({
+      name: "refresh_stats",
+      object_type: "PROCEDURE",
+      source: "CREATE PROCEDURE ...",
+    });
 
     await databaseApi.dbxGetObjectSource("conn", "main", "public", "refresh_stats", "PROCEDURE");
 
@@ -85,7 +89,11 @@ describe("databaseApi", () => {
   });
 
   it("wraps dbx_query_table_data with grid request options", async () => {
-    vi.mocked(invoke).mockResolvedValueOnce({ result: { columns: [], rows: [] }, sql: "", countSql: "" });
+    vi.mocked(invoke).mockResolvedValueOnce({
+      result: { columns: [], rows: [] },
+      sql: "",
+      countSql: "",
+    });
     const request = {
       connectionId: "conn",
       database: "main",
@@ -102,7 +110,11 @@ describe("databaseApi", () => {
   });
 
   it("wraps DBX grid save commands with request payloads", async () => {
-    vi.mocked(invoke).mockResolvedValue({ statements: [], rollbackStatements: [], validationError: null });
+    vi.mocked(invoke).mockResolvedValue({
+      statements: [],
+      rollbackStatements: [],
+      validationError: null,
+    });
     const request = {
       connectionId: "conn",
       database: "main",
@@ -118,12 +130,21 @@ describe("databaseApi", () => {
     };
 
     await databaseApi.dbxUpdateCell(request);
-    await databaseApi.dbxInsertRow({ ...request, options: { ...request.options, dirtyRows: [], newRows: [[2, "bob@example.com"]] } });
-    await databaseApi.dbxDeleteRows({ ...request, options: { ...request.options, dirtyRows: [], deletedRows: [0] } });
+    await databaseApi.dbxInsertRow({
+      ...request,
+      options: { ...request.options, dirtyRows: [], newRows: [[2, "bob@example.com"]] },
+    });
+    await databaseApi.dbxDeleteRows({
+      ...request,
+      options: { ...request.options, dirtyRows: [], deletedRows: [0] },
+    });
 
     expect(invoke).toHaveBeenCalledWith("dbx_update_cell", { request });
     expect(invoke).toHaveBeenCalledWith("dbx_insert_row", {
-      request: { ...request, options: { ...request.options, dirtyRows: [], newRows: [[2, "bob@example.com"]] } },
+      request: {
+        ...request,
+        options: { ...request.options, dirtyRows: [], newRows: [[2, "bob@example.com"]] },
+      },
     });
     expect(invoke).toHaveBeenCalledWith("dbx_delete_rows", {
       request: { ...request, options: { ...request.options, dirtyRows: [], deletedRows: [0] } },
@@ -159,9 +180,15 @@ describe("databaseApi", () => {
     await databaseApi.dbxBuildDataGridCopyUpdateStatements(updateOptions);
     await databaseApi.dbxBuildDataGridContextFilterCondition(filterOptions);
 
-    expect(invoke).toHaveBeenCalledWith("dbx_build_data_grid_copy_insert_statement", { options: insertOptions });
-    expect(invoke).toHaveBeenCalledWith("dbx_build_data_grid_copy_update_statements", { options: updateOptions });
-    expect(invoke).toHaveBeenCalledWith("dbx_build_data_grid_context_filter_condition", { options: filterOptions });
+    expect(invoke).toHaveBeenCalledWith("dbx_build_data_grid_copy_insert_statement", {
+      options: insertOptions,
+    });
+    expect(invoke).toHaveBeenCalledWith("dbx_build_data_grid_copy_update_statements", {
+      options: updateOptions,
+    });
+    expect(invoke).toHaveBeenCalledWith("dbx_build_data_grid_context_filter_condition", {
+      options: filterOptions,
+    });
   });
 
   it("wraps dbx_export_table_csv with an export request", async () => {
@@ -472,8 +499,8 @@ describe("databaseApi", () => {
       collection: "users",
       skip: 20,
       limit: 10,
-      filter: "{\"active\":true}",
-      sort: "{\"createdAt\":-1}",
+      filter: '{"active":true}',
+      sort: '{"createdAt":-1}',
       executionId: "mongo-find-1",
     };
 
@@ -488,7 +515,7 @@ describe("databaseApi", () => {
       connectionId: "mongo",
       database: "app",
       collection: "events",
-      filterJson: "{\"archived\":true}",
+      filterJson: '{"archived":true}',
       many: true,
     };
 
@@ -498,7 +525,10 @@ describe("databaseApi", () => {
   });
 
   it("wraps dbx_build_table_structure_change_sql with DBX Core options", async () => {
-    vi.mocked(invoke).mockResolvedValueOnce({ statements: ["ALTER TABLE users ADD COLUMN age int;"], warnings: [] });
+    vi.mocked(invoke).mockResolvedValueOnce({
+      statements: ["ALTER TABLE users ADD COLUMN age int;"],
+      warnings: [],
+    });
     const options = {
       databaseType: "postgres",
       schema: "public",
@@ -515,7 +545,9 @@ describe("databaseApi", () => {
   });
 
   it("wraps dbx admin SQL builder commands with options", async () => {
-    vi.mocked(invoke).mockResolvedValueOnce("CREATE DATABASE `app` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;");
+    vi.mocked(invoke).mockResolvedValueOnce(
+      "CREATE DATABASE `app` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;",
+    );
     await databaseApi.dbxBuildCreateDatabaseSql({
       databaseType: "mysql",
       driverProfile: "mysql",
@@ -539,19 +571,19 @@ describe("databaseApi", () => {
       options: { path: "/tmp/app.duckdb", name: "app" },
     });
 
-    vi.mocked(invoke).mockResolvedValueOnce("DROP DATABASE \"app\";");
+    vi.mocked(invoke).mockResolvedValueOnce('DROP DATABASE "app";');
     await databaseApi.dbxBuildDropDatabaseSql({ databaseType: "postgres", name: "app" });
     expect(invoke).toHaveBeenCalledWith("dbx_build_drop_database_sql", {
       options: { databaseType: "postgres", name: "app" },
     });
 
-    vi.mocked(invoke).mockResolvedValueOnce("CREATE SCHEMA \"analytics\";");
+    vi.mocked(invoke).mockResolvedValueOnce('CREATE SCHEMA "analytics";');
     await databaseApi.dbxBuildCreateSchemaSql({ databaseType: "postgres", name: "analytics" });
     expect(invoke).toHaveBeenCalledWith("dbx_build_create_schema_sql", {
       options: { databaseType: "postgres", name: "analytics" },
     });
 
-    vi.mocked(invoke).mockResolvedValueOnce("DROP SCHEMA \"analytics\" CASCADE;");
+    vi.mocked(invoke).mockResolvedValueOnce('DROP SCHEMA "analytics" CASCADE;');
     await databaseApi.dbxBuildDropSchemaSql({ databaseType: "postgres", name: "analytics" });
     expect(invoke).toHaveBeenCalledWith("dbx_build_drop_schema_sql", {
       options: { databaseType: "postgres", name: "analytics" },
@@ -565,15 +597,15 @@ describe("databaseApi", () => {
       tableName: "users",
     };
 
-    vi.mocked(invoke).mockResolvedValueOnce("DROP TABLE \"public\".\"users\";");
+    vi.mocked(invoke).mockResolvedValueOnce('DROP TABLE "public"."users";');
     await databaseApi.dbxBuildDropTableSql(tableOptions);
     expect(invoke).toHaveBeenCalledWith("dbx_build_drop_table_sql", { options: tableOptions });
 
-    vi.mocked(invoke).mockResolvedValueOnce("TRUNCATE TABLE \"public\".\"users\";");
+    vi.mocked(invoke).mockResolvedValueOnce('TRUNCATE TABLE "public"."users";');
     await databaseApi.dbxBuildTruncateTableSql(tableOptions);
     expect(invoke).toHaveBeenCalledWith("dbx_build_truncate_table_sql", { options: tableOptions });
 
-    vi.mocked(invoke).mockResolvedValueOnce("DELETE FROM \"public\".\"users\";");
+    vi.mocked(invoke).mockResolvedValueOnce('DELETE FROM "public"."users";');
     await databaseApi.dbxBuildEmptyTableSql(tableOptions);
     expect(invoke).toHaveBeenCalledWith("dbx_build_empty_table_sql", { options: tableOptions });
 
@@ -584,9 +616,11 @@ describe("databaseApi", () => {
       oldName: "users",
       newName: "app_users",
     };
-    vi.mocked(invoke).mockResolvedValueOnce("ALTER TABLE \"public\".\"users\" RENAME TO \"app_users\";");
+    vi.mocked(invoke).mockResolvedValueOnce('ALTER TABLE "public"."users" RENAME TO "app_users";');
     await databaseApi.dbxBuildRenameObjectSql(renameObjectOptions);
-    expect(invoke).toHaveBeenCalledWith("dbx_build_rename_object_sql", { options: renameObjectOptions });
+    expect(invoke).toHaveBeenCalledWith("dbx_build_rename_object_sql", {
+      options: renameObjectOptions,
+    });
 
     const dropObjectOptions = {
       databaseType: "postgres",
@@ -594,9 +628,11 @@ describe("databaseApi", () => {
       schema: "public",
       name: "active_users",
     };
-    vi.mocked(invoke).mockResolvedValueOnce("DROP VIEW \"public\".\"active_users\";");
+    vi.mocked(invoke).mockResolvedValueOnce('DROP VIEW "public"."active_users";');
     await databaseApi.dbxBuildDropObjectSql(dropObjectOptions);
-    expect(invoke).toHaveBeenCalledWith("dbx_build_drop_object_sql", { options: dropObjectOptions });
+    expect(invoke).toHaveBeenCalledWith("dbx_build_drop_object_sql", {
+      options: dropObjectOptions,
+    });
 
     const dropChildOptions = {
       databaseType: "postgres",
@@ -605,7 +641,9 @@ describe("databaseApi", () => {
       tableName: "users",
       name: "legacy_id",
     };
-    vi.mocked(invoke).mockResolvedValueOnce("ALTER TABLE \"public\".\"users\" DROP COLUMN \"legacy_id\";");
+    vi.mocked(invoke).mockResolvedValueOnce(
+      'ALTER TABLE "public"."users" DROP COLUMN "legacy_id";',
+    );
     await databaseApi.dbxBuildDropTableChildObjectSql(dropChildOptions);
     expect(invoke).toHaveBeenCalledWith("dbx_build_drop_table_child_object_sql", {
       options: dropChildOptions,
@@ -617,7 +655,9 @@ describe("databaseApi", () => {
       sourceName: "users",
       targetName: "users_copy",
     };
-    vi.mocked(invoke).mockResolvedValueOnce("CREATE TABLE \"public\".\"users_copy\" (LIKE \"public\".\"users\" INCLUDING ALL);");
+    vi.mocked(invoke).mockResolvedValueOnce(
+      'CREATE TABLE "public"."users_copy" (LIKE "public"."users" INCLUDING ALL);',
+    );
     await databaseApi.dbxBuildDuplicateTableStructureSql(duplicateOptions);
     expect(invoke).toHaveBeenCalledWith("dbx_build_duplicate_table_structure_sql", {
       options: duplicateOptions,
@@ -643,7 +683,9 @@ describe("databaseApi", () => {
 
     await databaseApi.dbxBuildDatabaseSearchSql(searchOptions);
 
-    expect(invoke).toHaveBeenCalledWith("dbx_build_database_search_sql", { options: searchOptions });
+    expect(invoke).toHaveBeenCalledWith("dbx_build_database_search_sql", {
+      options: searchOptions,
+    });
 
     const whereOptions = {
       databaseType: "postgres" as const,
@@ -674,7 +716,11 @@ describe("databaseApi", () => {
       filePath: "/tmp/users.csv",
     });
 
-    vi.mocked(invoke).mockResolvedValueOnce({ importId: "import-1", rowsImported: 2, totalRows: 2 });
+    vi.mocked(invoke).mockResolvedValueOnce({
+      importId: "import-1",
+      rowsImported: 2,
+      totalRows: 2,
+    });
     const request = {
       importId: "import-1",
       connectionId: "pg",
@@ -735,7 +781,10 @@ describe("databaseApi", () => {
     await databaseApi.dbxPrepareSchemaDiff(schemaOptions);
     expect(invoke).toHaveBeenCalledWith("dbx_prepare_schema_diff", { options: schemaOptions });
 
-    vi.mocked(invoke).mockResolvedValueOnce({ result: { added: [], removed: [], modified: [] }, syncSql: "" });
+    vi.mocked(invoke).mockResolvedValueOnce({
+      result: { added: [], removed: [], modified: [] },
+      syncSql: "",
+    });
     const compareOptions = { tableName: "users", columns: ["id"], keyColumns: ["id"] };
     await databaseApi.dbxPrepareDataCompare(compareOptions);
     expect(invoke).toHaveBeenCalledWith("dbx_prepare_data_compare", { options: compareOptions });

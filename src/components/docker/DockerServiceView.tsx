@@ -50,7 +50,10 @@ export function isIgnorableDockerRefreshError(error: unknown): boolean {
   );
 }
 
-function isSameDockerRemote(a: SshConnection | null | undefined, b: SshConnection | null | undefined): boolean {
+function isSameDockerRemote(
+  a: SshConnection | null | undefined,
+  b: SshConnection | null | undefined,
+): boolean {
   return dockerRemoteKey(a ?? undefined) === dockerRemoteKey(b ?? undefined);
 }
 
@@ -200,7 +203,9 @@ const actionGroupStyle: React.CSSProperties = {
   gap: 4,
 };
 
-export function dockerActionButtonStyle(tone: "neutral" | "start" | "restart" | "stop" | "logs" | "danger" = "neutral"): React.CSSProperties {
+export function dockerActionButtonStyle(
+  tone: "neutral" | "start" | "restart" | "stop" | "logs" | "danger" = "neutral",
+): React.CSSProperties {
   const colors = {
     neutral: "var(--text-secondary)",
     start: "#4ade80",
@@ -229,19 +234,43 @@ export function dockerActionButtonStyle(tone: "neutral" | "start" | "restart" | 
 function stateBadgeTone(state: string): { bg: string; fg: string; border: string } {
   switch (state.toLowerCase()) {
     case "running":
-      return { bg: "color-mix(in srgb, var(--success) 14%, transparent)", fg: "var(--success)", border: "var(--success)" };
+      return {
+        bg: "color-mix(in srgb, var(--success) 14%, transparent)",
+        fg: "var(--success)",
+        border: "var(--success)",
+      };
     case "exited":
-      return { bg: "color-mix(in srgb, var(--text-muted) 14%, transparent)", fg: "var(--text-muted)", border: "var(--text-muted)" };
+      return {
+        bg: "color-mix(in srgb, var(--text-muted) 14%, transparent)",
+        fg: "var(--text-muted)",
+        border: "var(--text-muted)",
+      };
     case "paused":
-      return { bg: "color-mix(in srgb, var(--warning) 16%, transparent)", fg: "var(--warning)", border: "var(--warning)" };
+      return {
+        bg: "color-mix(in srgb, var(--warning) 16%, transparent)",
+        fg: "var(--warning)",
+        border: "var(--warning)",
+      };
     case "restarting":
-      return { bg: "color-mix(in srgb, var(--accent) 16%, transparent)", fg: "var(--accent)", border: "var(--accent)" };
+      return {
+        bg: "color-mix(in srgb, var(--accent) 16%, transparent)",
+        fg: "var(--accent)",
+        border: "var(--accent)",
+      };
     case "created":
     case "configured":
-      return { bg: "color-mix(in srgb, #0891b2 14%, transparent)", fg: "#0891b2", border: "#0891b2" };
+      return {
+        bg: "color-mix(in srgb, #0891b2 14%, transparent)",
+        fg: "#0891b2",
+        border: "#0891b2",
+      };
     case "dead":
     case "removing":
-      return { bg: "color-mix(in srgb, var(--danger) 14%, transparent)", fg: "var(--danger)", border: "var(--danger)" };
+      return {
+        bg: "color-mix(in srgb, var(--danger) 14%, transparent)",
+        fg: "var(--danger)",
+        border: "var(--danger)",
+      };
     default:
       return { bg: "var(--bg-hover)", fg: "var(--text-secondary)", border: "var(--border-medium)" };
   }
@@ -288,7 +317,10 @@ function imageReference(image: DockerImageSummary): string {
   return image.id;
 }
 
-function removeDeletedImage(resources: DockerResources | null, ref: string): DockerResources | null {
+function removeDeletedImage(
+  resources: DockerResources | null,
+  ref: string,
+): DockerResources | null {
   if (!resources) return resources;
   return {
     ...resources,
@@ -335,24 +367,51 @@ function ImageTable({
           const busy = busyKey === ref;
           const accent = rowAccentColor(ref);
           return (
-          <tr key={`${image.id}:${image.repository}:${image.tag}`} style={{ boxShadow: `inset 3px 0 0 ${accent}` }}>
-            <td style={nameCellStyle} title={image.repository}>{image.repository}</td>
-            <td style={tdStyle} title={image.tag}>{image.tag}</td>
-            <td style={monoCellStyle} title={image.id}>{image.id}</td>
-            <td style={monoCellStyle} title={image.digest}>{image.digest}</td>
-            <td style={tdStyle} title={image.createdSince}>{image.createdSince}</td>
-            <td style={tdStyle} title={image.size}>{image.size}</td>
-            <td style={tdStyle}>
-              <span style={actionGroupStyle}>
-                <button type="button" style={dockerActionButtonStyle()} disabled={busy} title={t("docker.tagImage")} onClick={() => onTag(image)}>
-                  <Tag size={13} />
-                </button>
-                <button type="button" style={dockerActionButtonStyle("danger")} disabled={busy} title={t("docker.deleteImage")} onClick={() => onDelete(image)}>
-                  <Trash2 size={13} />
-                </button>
-              </span>
-            </td>
-          </tr>
+            <tr
+              key={`${image.id}:${image.repository}:${image.tag}`}
+              style={{ boxShadow: `inset 3px 0 0 ${accent}` }}
+            >
+              <td style={nameCellStyle} title={image.repository}>
+                {image.repository}
+              </td>
+              <td style={tdStyle} title={image.tag}>
+                {image.tag}
+              </td>
+              <td style={monoCellStyle} title={image.id}>
+                {image.id}
+              </td>
+              <td style={monoCellStyle} title={image.digest}>
+                {image.digest}
+              </td>
+              <td style={tdStyle} title={image.createdSince}>
+                {image.createdSince}
+              </td>
+              <td style={tdStyle} title={image.size}>
+                {image.size}
+              </td>
+              <td style={tdStyle}>
+                <span style={actionGroupStyle}>
+                  <button
+                    type="button"
+                    style={dockerActionButtonStyle()}
+                    disabled={busy}
+                    title={t("docker.tagImage")}
+                    onClick={() => onTag(image)}
+                  >
+                    <Tag size={13} />
+                  </button>
+                  <button
+                    type="button"
+                    style={dockerActionButtonStyle("danger")}
+                    disabled={busy}
+                    title={t("docker.deleteImage")}
+                    onClick={() => onDelete(image)}
+                  >
+                    <Trash2 size={13} />
+                  </button>
+                </span>
+              </td>
+            </tr>
           );
         })}
       </tbody>
@@ -400,34 +459,78 @@ function ContainerTable({
           const isRunning = container.state.toLowerCase() === "running";
           const accent = stateBadgeTone(container.state).border;
           return (
-          <tr key={container.id} style={{ boxShadow: `inset 3px 0 0 ${accent}` }}>
-            <td style={nameCellStyle} title={container.names}>{container.names}</td>
-            <td style={nameCellStyle} title={container.image}>{container.image}</td>
-            <td style={monoCellStyle} title={container.id}>{container.id}</td>
-            <td style={tdStyle} title={container.state}><StateBadge state={container.state} /></td>
-            <td style={tdStyle} title={container.status}>{container.status}</td>
-            <td style={tdStyle} title={container.ports}>{container.ports}</td>
-            <td style={tdStyle} title={container.createdAt}>{container.createdAt}</td>
-            <td style={tdStyle}>
-              <span style={actionGroupStyle}>
-                <button type="button" style={dockerActionButtonStyle("start")} disabled={busy || isRunning} title={t("docker.start")} onClick={() => onAction(container, "start")}>
-                  <Play size={13} fill="currentColor" />
-                </button>
-                <button type="button" style={dockerActionButtonStyle("restart")} disabled={busy} title={t("docker.restart")} onClick={() => onAction(container, "restart")}>
-                  <RotateCw size={13} />
-                </button>
-                <button type="button" style={dockerActionButtonStyle("stop")} disabled={busy || !isRunning} title={t("docker.stop")} onClick={() => onAction(container, "stop")}>
-                  <Square size={12} fill="currentColor" />
-                </button>
-                <button type="button" style={dockerActionButtonStyle("logs")} disabled={busy} title={t("docker.logs")} onClick={() => onLogs(container)}>
-                  <ScrollText size={13} />
-                </button>
-                <button type="button" style={dockerActionButtonStyle("danger")} disabled={busy} title={t("docker.deleteContainer")} onClick={() => onAction(container, "delete")}>
-                  <Trash2 size={13} />
-                </button>
-              </span>
-            </td>
-          </tr>
+            <tr key={container.id} style={{ boxShadow: `inset 3px 0 0 ${accent}` }}>
+              <td style={nameCellStyle} title={container.names}>
+                {container.names}
+              </td>
+              <td style={nameCellStyle} title={container.image}>
+                {container.image}
+              </td>
+              <td style={monoCellStyle} title={container.id}>
+                {container.id}
+              </td>
+              <td style={tdStyle} title={container.state}>
+                <StateBadge state={container.state} />
+              </td>
+              <td style={tdStyle} title={container.status}>
+                {container.status}
+              </td>
+              <td style={tdStyle} title={container.ports}>
+                {container.ports}
+              </td>
+              <td style={tdStyle} title={container.createdAt}>
+                {container.createdAt}
+              </td>
+              <td style={tdStyle}>
+                <span style={actionGroupStyle}>
+                  <button
+                    type="button"
+                    style={dockerActionButtonStyle("start")}
+                    disabled={busy || isRunning}
+                    title={t("docker.start")}
+                    onClick={() => onAction(container, "start")}
+                  >
+                    <Play size={13} fill="currentColor" />
+                  </button>
+                  <button
+                    type="button"
+                    style={dockerActionButtonStyle("restart")}
+                    disabled={busy}
+                    title={t("docker.restart")}
+                    onClick={() => onAction(container, "restart")}
+                  >
+                    <RotateCw size={13} />
+                  </button>
+                  <button
+                    type="button"
+                    style={dockerActionButtonStyle("stop")}
+                    disabled={busy || !isRunning}
+                    title={t("docker.stop")}
+                    onClick={() => onAction(container, "stop")}
+                  >
+                    <Square size={12} fill="currentColor" />
+                  </button>
+                  <button
+                    type="button"
+                    style={dockerActionButtonStyle("logs")}
+                    disabled={busy}
+                    title={t("docker.logs")}
+                    onClick={() => onLogs(container)}
+                  >
+                    <ScrollText size={13} />
+                  </button>
+                  <button
+                    type="button"
+                    style={dockerActionButtonStyle("danger")}
+                    disabled={busy}
+                    title={t("docker.deleteContainer")}
+                    onClick={() => onAction(container, "delete")}
+                  >
+                    <Trash2 size={13} />
+                  </button>
+                </span>
+              </td>
+            </tr>
           );
         })}
       </tbody>
@@ -445,7 +548,9 @@ export function DockerServiceView({
   const { t } = useI18n();
   const remoteKey = dockerRemoteKey(remote);
   const actionInProgressRef = useRef(false);
-  const pendingRemoteRefreshRef = useRef<{ key: string; target: SshConnection | null } | null>(null);
+  const pendingRemoteRefreshRef = useRef<{ key: string; target: SshConnection | null } | null>(
+    null,
+  );
   const remoteSnapshotRef = useRef<{ key: string; target: SshConnection | null } | null>(null);
   if (!remoteSnapshotRef.current) {
     remoteSnapshotRef.current = { key: remoteKey, target: remote ?? null };
@@ -464,29 +569,38 @@ export function DockerServiceView({
   const [error, setError] = useState<string | null>(null);
   const [busyKey, setBusyKey] = useState<string | null>(null);
   const [logView, setLogView] = useState<{ title: string; content: string } | null>(null);
-  const [tagDraft, setTagDraft] = useState<{ image: DockerImageSummary; source: string; target: string } | null>(null);
+  const [tagDraft, setTagDraft] = useState<{
+    image: DockerImageSummary;
+    source: string;
+    target: string;
+  } | null>(null);
 
-  const load = useCallback(async (options: { preserveOnError?: boolean; remote?: SshConnection | null } = {}) => {
-    setLoading(true);
-    setError(null);
-    const requestRemote = options.remote ?? remoteSnapshotRef.current?.target ?? currentRemote;
-    try {
-      const nextResources = await invoke<DockerResources>("list_docker_resources", { remote: requestRemote });
-      if (!isSameDockerRemote(requestRemote, remoteSnapshotRef.current?.target)) return;
-      setResources(nextResources);
-    } catch (err) {
-      if (!options.preserveOnError) {
-        setResources(null);
-        setError(String(err));
-      } else if (isIgnorableDockerRefreshError(err)) {
-        console.warn("Ignoring Docker post-action refresh error", err);
-      } else {
-        console.warn("Failed to refresh Docker resources after action", err);
+  const load = useCallback(
+    async (options: { preserveOnError?: boolean; remote?: SshConnection | null } = {}) => {
+      setLoading(true);
+      setError(null);
+      const requestRemote = options.remote ?? remoteSnapshotRef.current?.target ?? currentRemote;
+      try {
+        const nextResources = await invoke<DockerResources>("list_docker_resources", {
+          remote: requestRemote,
+        });
+        if (!isSameDockerRemote(requestRemote, remoteSnapshotRef.current?.target)) return;
+        setResources(nextResources);
+      } catch (err) {
+        if (!options.preserveOnError) {
+          setResources(null);
+          setError(String(err));
+        } else if (isIgnorableDockerRefreshError(err)) {
+          console.warn("Ignoring Docker post-action refresh error", err);
+        } else {
+          console.warn("Failed to refresh Docker resources after action", err);
+        }
+      } finally {
+        setLoading(false);
       }
-    } finally {
-      setLoading(false);
-    }
-  }, [currentRemote]);
+    },
+    [currentRemote],
+  );
 
   const applyPendingRemoteRefresh = useCallback(() => {
     const pending = pendingRemoteRefreshRef.current;
@@ -585,13 +699,10 @@ export function DockerServiceView({
     [applyPendingRemoteRefresh, currentRemote, load, t],
   );
 
-  const tagImage = useCallback(
-    (image: DockerImageSummary) => {
-      const source = imageReference(image);
-      setTagDraft({ image, source, target: source });
-    },
-    [],
-  );
+  const tagImage = useCallback((image: DockerImageSummary) => {
+    const source = imageReference(image);
+    setTagDraft({ image, source, target: source });
+  }, []);
 
   const submitTagImage = useCallback(
     async (image: DockerImageSummary) => {
@@ -628,7 +739,11 @@ export function DockerServiceView({
         <div style={titleStyle}>
           <Container size={18} strokeWidth={2} color="var(--accent)" />
           <span>{t("docker.title")}</span>
-          {sourceLabel && <span style={{ color: "var(--text-muted)", fontSize: 12, fontWeight: 560 }}>{sourceLabel}</span>}
+          {sourceLabel && (
+            <span style={{ color: "var(--text-muted)", fontSize: 12, fontWeight: 560 }}>
+              {sourceLabel}
+            </span>
+          )}
         </div>
         <div style={tabRowStyle}>
           {logView && (
@@ -637,7 +752,11 @@ export function DockerServiceView({
               {t("common.back")}
             </button>
           )}
-          <button type="button" style={tabStyle(tab === "containers")} onClick={() => setTab("containers")}>
+          <button
+            type="button"
+            style={tabStyle(tab === "containers")}
+            onClick={() => setTab("containers")}
+          >
             <Container size={14} />
             {t("docker.containers")}
             {resources ? ` ${resources.containers.length}` : ""}
@@ -647,7 +766,12 @@ export function DockerServiceView({
             {t("docker.images")}
             {resources ? ` ${resources.images.length}` : ""}
           </button>
-          <button type="button" style={refreshButtonStyle} disabled={loading} onClick={() => void load()}>
+          <button
+            type="button"
+            style={refreshButtonStyle}
+            disabled={loading}
+            onClick={() => void load()}
+          >
             <RefreshCw size={13} className={loading ? "spin" : undefined} />
             {t("common.refresh")}
           </button>
@@ -676,7 +800,9 @@ export function DockerServiceView({
         ) : error ? (
           <div style={emptyStyle}>
             <AlertCircle size={28} strokeWidth={1.6} color="var(--danger-fg)" />
-            <div style={{ color: "var(--text-secondary)", fontWeight: 650 }}>{t("docker.loadFailed")}</div>
+            <div style={{ color: "var(--text-secondary)", fontWeight: 650 }}>
+              {t("docker.loadFailed")}
+            </div>
             <div style={{ maxWidth: 720, textAlign: "center", fontSize: 12 }}>{error}</div>
           </div>
         ) : loading && !resources ? (
@@ -730,14 +856,27 @@ export function DockerServiceView({
               void submitTagImage(tagDraft.image);
             }}
           >
-            <div style={{ padding: "14px 16px", borderBottom: "1px solid var(--border-dim)", fontWeight: 750, color: "var(--text-primary)" }}>
+            <div
+              style={{
+                padding: "14px 16px",
+                borderBottom: "1px solid var(--border-dim)",
+                fontWeight: 750,
+                color: "var(--text-primary)",
+              }}
+            >
               {t("docker.tagImage")}
             </div>
             <div style={{ padding: 16, display: "flex", flexDirection: "column", gap: 8 }}>
-              <label style={{ fontSize: 12, color: "var(--text-muted)" }}>{t("docker.tagPrompt")}</label>
+              <label style={{ fontSize: 12, color: "var(--text-muted)" }}>
+                {t("docker.tagPrompt")}
+              </label>
               <input
                 value={tagDraft.target}
-                onChange={(event) => setTagDraft((current) => current ? { ...current, target: event.target.value } : current)}
+                onChange={(event) =>
+                  setTagDraft((current) =>
+                    current ? { ...current, target: event.target.value } : current,
+                  )
+                }
                 autoFocus
                 autoCapitalize="off"
                 autoCorrect="off"
@@ -754,11 +893,23 @@ export function DockerServiceView({
                 }}
               />
             </div>
-            <div style={{ padding: "12px 16px", display: "flex", justifyContent: "flex-end", gap: 8, borderTop: "1px solid var(--border-dim)" }}>
+            <div
+              style={{
+                padding: "12px 16px",
+                display: "flex",
+                justifyContent: "flex-end",
+                gap: 8,
+                borderTop: "1px solid var(--border-dim)",
+              }}
+            >
               <button type="button" style={refreshButtonStyle} onClick={() => setTagDraft(null)}>
                 {t("common.cancel")}
               </button>
-              <button type="submit" style={refreshButtonStyle} disabled={!tagDraft.target.trim() || tagDraft.target.trim() === tagDraft.source}>
+              <button
+                type="submit"
+                style={refreshButtonStyle}
+                disabled={!tagDraft.target.trim() || tagDraft.target.trim() === tagDraft.source}
+              >
                 {t("docker.tag")}
               </button>
             </div>

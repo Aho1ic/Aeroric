@@ -12,11 +12,7 @@ import {
   X,
 } from "lucide-react";
 import { useI18n } from "../i18n";
-import {
-  GitFileBrowser,
-  GitFileViewToggle,
-  useGitFileViewMode,
-} from "./git-view/GitFileBrowser";
+import { GitFileBrowser, GitFileViewToggle, useGitFileViewMode } from "./git-view/GitFileBrowser";
 
 interface GitCommit {
   hash: string;
@@ -301,7 +297,9 @@ export function GitHistory({ projectPath, onCommitSelect, onFileClick, width = 2
                 {t("git.pushing")}
               </>
             ) : (
-              <>{t("git.push")} ↑{remoteCounts.ahead}</>
+              <>
+                {t("git.push")} ↑{remoteCounts.ahead}
+              </>
             )}
           </button>
           <button
@@ -416,9 +414,7 @@ export function GitHistory({ projectPath, onCommitSelect, onFileClick, width = 2
                   );
                 })}
                 {filteredBranches.length === 0 && (
-                  <div className="branch-popover-empty">
-                    {t("branch.noBranchesFound")}
-                  </div>
+                  <div className="branch-popover-empty">{t("branch.noBranchesFound")}</div>
                 )}
               </div>
             </div>
@@ -635,7 +631,9 @@ function CommitRow({
           ))}
         </div>
         <div style={{ display: "flex", gap: 6, marginTop: 2 }}>
-          <span style={{ fontSize: 10.5, color: "var(--text-hint)", fontFamily: "var(--font-mono)" }}>
+          <span
+            style={{ fontSize: 10.5, color: "var(--text-hint)", fontFamily: "var(--font-mono)" }}
+          >
             {commit.short_hash}
           </span>
           <span style={{ fontSize: 10.5, color: "var(--text-hint)" }}>{commit.author}</span>

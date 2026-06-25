@@ -63,7 +63,10 @@ describe("SSH project opening", () => {
     await user.click(screen.getByRole("button", { name: "Copy password" }));
 
     expect(writeText).toHaveBeenCalledWith("secret-pass");
-    expect(screen.getByRole("button", { name: "Copy password" })).toHaveAttribute("data-copied", "true");
+    expect(screen.getByRole("button", { name: "Copy password" })).toHaveAttribute(
+      "data-copied",
+      "true",
+    );
   });
 
   it("disables project-card password copy when no password is saved", () => {

@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { AGENT_OPTIONS, agentDisplayLabel, agentOptionsFromProfiles, isCodexLikeAgent } from "../agents";
+import {
+  AGENT_OPTIONS,
+  agentDisplayLabel,
+  agentOptionsFromProfiles,
+  isCodexLikeAgent,
+} from "../agents";
 import {
   composeControlOrder,
   composePermissionLabel,
@@ -45,7 +50,14 @@ describe("agent options", () => {
   });
 
   it("keeps compose controls in the requested order", () => {
-    expect(composeControlOrder()).toEqual(["more", "agent", "permission", "launch", "branch", "send"]);
+    expect(composeControlOrder()).toEqual([
+      "more",
+      "agent",
+      "permission",
+      "launch",
+      "branch",
+      "send",
+    ]);
   });
 
   it("keeps only one compose dropdown open at a time", () => {

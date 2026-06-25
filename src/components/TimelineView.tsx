@@ -155,14 +155,9 @@ export function TimelineView({
             <header style={s.timelineGroupHeader}>
               <span style={s.timelineGroupTitle}>{titleFor(group.bucket)}</span>
               <span style={s.timelineGroupCount}>
-                {t(
-                  pluralKey(
-                    "timeline.taskCount",
-                    "timeline.taskCountPlural",
-                    group.totalCount,
-                  ),
-                  { count: group.totalCount },
-                )}
+                {t(pluralKey("timeline.taskCount", "timeline.taskCountPlural", group.totalCount), {
+                  count: group.totalCount,
+                })}
               </span>
             </header>
             {group.projects.map((projectGroup) => {
@@ -187,11 +182,7 @@ export function TimelineView({
                   </div>
                   <div style={s.timelineList}>
                     {projectGroup.tasks.map((task) => (
-                      <TimelineRow
-                        key={task.id}
-                        task={task}
-                        onClick={() => onTaskClick(task)}
-                      />
+                      <TimelineRow key={task.id} task={task} onClick={() => onTaskClick(task)} />
                     ))}
                   </div>
                 </div>

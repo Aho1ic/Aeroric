@@ -50,7 +50,9 @@ export function AboutPanel() {
 
         <div style={{ minWidth: 0, display: "flex", flexDirection: "column", gap: 14 }}>
           <div>
-            <div style={{ fontSize: 16, fontWeight: 700, color: "var(--text-primary)" }}>Aeroric</div>
+            <div style={{ fontSize: 16, fontWeight: 700, color: "var(--text-primary)" }}>
+              Aeroric
+            </div>
             <div style={{ fontSize: 12.5, color: "var(--text-secondary)", marginTop: 4 }}>
               {t("appSettings.description")}
             </div>
@@ -72,9 +74,7 @@ export function AboutPanel() {
               </div>
             </div>
             <div>
-              <div style={{ fontSize: 11, color: "var(--text-hint)", marginBottom: 4 }}>
-                GitHub
-              </div>
+              <div style={{ fontSize: 11, color: "var(--text-hint)", marginBottom: 4 }}>GitHub</div>
               <button
                 type="button"
                 onClick={() => void openUrl(GITHUB_URL)}

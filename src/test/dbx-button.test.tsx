@@ -30,7 +30,10 @@ describe("DbxButton", () => {
       </DbxButtonGroup>,
     );
 
-    expect(screen.getByRole("group", { name: "View mode" })).toHaveAttribute("data-slot", "button-group");
+    expect(screen.getByRole("group", { name: "View mode" })).toHaveAttribute(
+      "data-slot",
+      "button-group",
+    );
     expect(screen.getByRole("button", { name: /icon/i })).toHaveAttribute("aria-pressed", "true");
   });
 

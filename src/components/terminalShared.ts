@@ -87,7 +87,7 @@ export function themeFor(variant: ThemeVariant) {
 // ── Watermark flow control ───────────────────────────────────────────────────
 
 const HIGH_WATER = 128 * 1024; // 128 KB：超过时停止写入
-const LOW_WATER  =  16 * 1024; //  16 KB：恢复写入
+const LOW_WATER = 16 * 1024; //  16 KB：恢复写入
 const ANSI_FG_RESET = "\x1b[39m";
 const TERMINAL_HIGHLIGHT_PATTERN =
   /\b(error|exception|traceback|failed|fail|warning|warn|success|passed|pass|running|done)\b|\b\d+(?:\.\d+)?(?:%|ms|s|MB|GB|KB)?\b/gi;
@@ -104,7 +104,13 @@ export function colorizePlainTerminalOutput(data: string): string {
   if (!data || hasTerminalControlSequence(data)) return data;
   return data.replace(TERMINAL_HIGHLIGHT_PATTERN, (match) => {
     const lower = match.toLowerCase();
-    if (lower === "error" || lower === "exception" || lower === "traceback" || lower === "failed" || lower === "fail") {
+    if (
+      lower === "error" ||
+      lower === "exception" ||
+      lower === "traceback" ||
+      lower === "failed" ||
+      lower === "fail"
+    ) {
       return `\x1b[31m${match}${ANSI_FG_RESET}`;
     }
     if (lower === "warning" || lower === "warn") {

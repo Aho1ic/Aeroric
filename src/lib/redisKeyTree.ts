@@ -52,7 +52,13 @@ function sortNodes(nodes: RedisKeyTreeNode[]): RedisKeyTreeNode[] {
   );
 }
 
-function insertKey(root: RedisKeyTreeNode[], groups: Map<string, RedisKeyTreeGroupNode>, key: RedisKeyInfo, db: number, separator: string) {
+function insertKey(
+  root: RedisKeyTreeNode[],
+  groups: Map<string, RedisKeyTreeGroupNode>,
+  key: RedisKeyInfo,
+  db: number,
+  separator: string,
+) {
   const rawSegments = separator ? key.key_display.split(separator) : [key.key_display];
   const pathSegments = rawSegments.map((part) => part.trim()).filter(Boolean);
   const segments = pathSegments.length > 0 ? pathSegments : [key.key_display || key.key_raw];
@@ -107,7 +113,11 @@ function insertKey(root: RedisKeyTreeNode[], groups: Map<string, RedisKeyTreeGro
   });
 }
 
-export function buildRedisKeyTree(keys: RedisKeyInfo[], db: number, separator = ":"): RedisKeyTreeNode[] {
+export function buildRedisKeyTree(
+  keys: RedisKeyInfo[],
+  db: number,
+  separator = ":",
+): RedisKeyTreeNode[] {
   const root: RedisKeyTreeNode[] = [];
   const groups = new Map<string, RedisKeyTreeGroupNode>();
   const seen = new Set<string>();
@@ -121,7 +131,11 @@ export function buildRedisKeyTree(keys: RedisKeyInfo[], db: number, separator = 
   return sortNodes(root);
 }
 
-export function flattenVisibleRedisKeyTree(nodes: RedisKeyTreeNode[], expandedGroupIds: ReadonlySet<string>, depth = 0): RedisKeyTreeRow[] {
+export function flattenVisibleRedisKeyTree(
+  nodes: RedisKeyTreeNode[],
+  expandedGroupIds: ReadonlySet<string>,
+  depth = 0,
+): RedisKeyTreeRow[] {
   const rows: RedisKeyTreeRow[] = [];
   for (const node of nodes) {
     rows.push({ node, depth });

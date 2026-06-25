@@ -36,7 +36,10 @@ export interface DbConnectionConfig {
   lastOpenedAt?: number | null;
 }
 
-export interface AeroricDbConnectionConfig extends Omit<DbConnectionConfig, "endpoint" | "readOnly"> {
+export interface AeroricDbConnectionConfig extends Omit<
+  DbConnectionConfig,
+  "endpoint" | "readOnly"
+> {
   endpoint?: DbEndpoint;
   projectScope?: {
     kind: "local" | "ssh" | string;
@@ -142,7 +145,13 @@ export interface DbxObjectInfo {
   parent_name?: string | null;
 }
 
-export type DbxObjectSourceKind = "VIEW" | "PROCEDURE" | "FUNCTION" | "SEQUENCE" | "PACKAGE" | "PACKAGE_BODY";
+export type DbxObjectSourceKind =
+  | "VIEW"
+  | "PROCEDURE"
+  | "FUNCTION"
+  | "SEQUENCE"
+  | "PACKAGE"
+  | "PACKAGE_BODY";
 
 export interface DbxObjectSource {
   name: string;
@@ -605,7 +614,15 @@ export interface TableStructureSqlResult {
   warnings: string[];
 }
 
-export type DatabaseObjectType = "TABLE" | "VIEW" | "PROCEDURE" | "FUNCTION" | "SEQUENCE" | "PACKAGE" | "PACKAGE_BODY" | string;
+export type DatabaseObjectType =
+  | "TABLE"
+  | "VIEW"
+  | "PROCEDURE"
+  | "FUNCTION"
+  | "SEQUENCE"
+  | "PACKAGE"
+  | "PACKAGE_BODY"
+  | string;
 export type TableChildObjectType = "COLUMN" | "INDEX" | "FOREIGN_KEY" | "TRIGGER";
 
 export interface CreateDatabaseSqlOptions {

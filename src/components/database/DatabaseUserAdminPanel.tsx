@@ -24,10 +24,33 @@ interface Props {
 }
 
 const USER_ADMIN_TYPES = new Set<DbxDatabaseType>(["mysql", "postgres"]);
-const MYSQL_COMMON_PRIVILEGES = ["SELECT", "INSERT", "UPDATE", "DELETE", "CREATE", "DROP", "ALTER", "INDEX", "REFERENCES", "EXECUTE", "SHOW VIEW", "TRIGGER", "EVENT", "CREATE TEMPORARY TABLES"] as const;
+const MYSQL_COMMON_PRIVILEGES = [
+  "SELECT",
+  "INSERT",
+  "UPDATE",
+  "DELETE",
+  "CREATE",
+  "DROP",
+  "ALTER",
+  "INDEX",
+  "REFERENCES",
+  "EXECUTE",
+  "SHOW VIEW",
+  "TRIGGER",
+  "EVENT",
+  "CREATE TEMPORARY TABLES",
+] as const;
 const POSTGRES_DATABASE_PRIVILEGES = ["CONNECT", "CREATE", "TEMPORARY"] as const;
 const POSTGRES_SCHEMA_PRIVILEGES = ["USAGE", "CREATE"] as const;
-const POSTGRES_TABLE_PRIVILEGES = ["SELECT", "INSERT", "UPDATE", "DELETE", "TRUNCATE", "REFERENCES", "TRIGGER"] as const;
+const POSTGRES_TABLE_PRIVILEGES = [
+  "SELECT",
+  "INSERT",
+  "UPDATE",
+  "DELETE",
+  "TRUNCATE",
+  "REFERENCES",
+  "TRIGGER",
+] as const;
 
 export function supportsDbxUserAdmin(dbType: DbxDatabaseType | undefined): boolean {
   return !!dbType && USER_ADMIN_TYPES.has(dbType);
@@ -155,7 +178,10 @@ FROM (
 ORDER BY sort, line;`.trim();
 }
 
-function createUserSql(input: DatabaseUserIdentity & { password: string; canLogin?: boolean }, dialect: UserAdminDialect): string {
+function createUserSql(
+  input: DatabaseUserIdentity & { password: string; canLogin?: boolean },
+  dialect: UserAdminDialect,
+): string {
   if (dialect === "postgres") {
     const login = input.canLogin === false ? "NOLOGIN" : "LOGIN";
     return `CREATE ROLE ${quotePostgresIdentifier(input.user)} ${login} PASSWORD ${quoteSqlString(input.password)};`;
@@ -163,20 +189,30 @@ function createUserSql(input: DatabaseUserIdentity & { password: string; canLogi
   return `CREATE USER ${mysqlUserAccount(input)} IDENTIFIED BY ${quoteMySqlString(input.password)};`;
 }
 
-function alterPasswordSql(user: DatabaseUserIdentity, password: string, dialect: UserAdminDialect): string {
+function alterPasswordSql(
+  user: DatabaseUserIdentity,
+  password: string,
+  dialect: UserAdminDialect,
+): string {
   return dialect === "postgres"
     ? `ALTER ROLE ${postgresRole(user)} PASSWORD ${quoteSqlString(password)};`
     : `ALTER USER ${mysqlUserAccount(user)} IDENTIFIED BY ${quoteMySqlString(password)};`;
 }
 
-function alterLoginSql(user: DatabaseUserIdentity, enabled: boolean, dialect: UserAdminDialect): string {
+function alterLoginSql(
+  user: DatabaseUserIdentity,
+  enabled: boolean,
+  dialect: UserAdminDialect,
+): string {
   return dialect === "postgres"
     ? `ALTER ROLE ${postgresRole(user)} ${enabled ? "LOGIN" : "NOLOGIN"};`
     : `ALTER USER ${mysqlUserAccount(user)} ACCOUNT ${enabled ? "UNLOCK" : "LOCK"};`;
 }
 
 function dropUserSql(user: DatabaseUserIdentity, dialect: UserAdminDialect): string {
-  return dialect === "postgres" ? `DROP ROLE ${postgresRole(user)};` : `DROP USER ${mysqlUserAccount(user)};`;
+  return dialect === "postgres"
+    ? `DROP ROLE ${postgresRole(user)};`
+    : `DROP USER ${mysqlUserAccount(user)};`;
 }
 
 function postgresDefaultPrivilege(scope: PrivilegeScope): string {
@@ -203,20 +239,29 @@ function privilegeTokens(value: string, fallback = "SELECT"): string[] {
     .split(",")
     .map((item) => item.trim().toUpperCase())
     .filter(Boolean);
-  return Array.from(new Set(privileges.length > 0 ? privileges : (fallback ? [fallback] : [])));
+  return Array.from(new Set(privileges.length > 0 ? privileges : fallback ? [fallback] : []));
 }
 
 function normalizePrivileges(value: string, fallback = "SELECT"): string {
   return privilegeTokens(value, fallback).join(", ");
 }
 
-function grantTargetSql(dialect: UserAdminDialect, scope: PrivilegeScope, database: string, schema: string, table: string): string {
+function grantTargetSql(
+  dialect: UserAdminDialect,
+  scope: PrivilegeScope,
+  database: string,
+  schema: string,
+  table: string,
+): string {
   if (dialect === "postgres") {
-    if (scope === "database") return `DATABASE ${quotePostgresIdentifier(database.trim() || "postgres")}`;
+    if (scope === "database")
+      return `DATABASE ${quotePostgresIdentifier(database.trim() || "postgres")}`;
     const schemaSql = quotePostgresIdentifier(schema.trim() || "public");
     if (scope === "schema") return `SCHEMA ${schemaSql}`;
     const tableName = table.trim() || "*";
-    return tableName === "*" ? `ALL TABLES IN SCHEMA ${schemaSql}` : `TABLE ${schemaSql}.${quotePostgresIdentifier(tableName)}`;
+    return tableName === "*"
+      ? `ALL TABLES IN SCHEMA ${schemaSql}`
+      : `TABLE ${schemaSql}.${quotePostgresIdentifier(tableName)}`;
   }
   const db = database.trim() || "*";
   const tableName = table.trim() || "*";
@@ -239,10 +284,15 @@ function grantSql(
   if (dialect === "postgres" && scope === "role") {
     return `GRANT ${quotePostgresIdentifier(role.trim())} TO ${postgresRole(user)}${grantOption ? " WITH ADMIN OPTION" : ""};`;
   }
-  const privileges = normalizePrivileges(privilegesText, dialect === "postgres" ? postgresDefaultPrivilege(scope) : "SELECT");
+  const privileges = normalizePrivileges(
+    privilegesText,
+    dialect === "postgres" ? postgresDefaultPrivilege(scope) : "SELECT",
+  );
   const target = grantTargetSql(dialect, scope, database, schema, table);
   const suffix = grantOption ? " WITH GRANT OPTION" : "";
-  return dialect === "postgres" ? `GRANT ${privileges} ON ${target} TO ${postgresRole(user)}${suffix};` : `GRANT ${privileges} ON ${target} TO ${mysqlUserAccount(user)}${suffix};`;
+  return dialect === "postgres"
+    ? `GRANT ${privileges} ON ${target} TO ${postgresRole(user)}${suffix};`
+    : `GRANT ${privileges} ON ${target} TO ${mysqlUserAccount(user)}${suffix};`;
 }
 
 function revokeSql(
@@ -258,9 +308,14 @@ function revokeSql(
   if (dialect === "postgres" && scope === "role") {
     return `REVOKE ${quotePostgresIdentifier(role.trim())} FROM ${postgresRole(user)};`;
   }
-  const privileges = normalizePrivileges(privilegesText, dialect === "postgres" ? postgresDefaultPrivilege(scope) : "SELECT");
+  const privileges = normalizePrivileges(
+    privilegesText,
+    dialect === "postgres" ? postgresDefaultPrivilege(scope) : "SELECT",
+  );
   const target = grantTargetSql(dialect, scope, database, schema, table);
-  return dialect === "postgres" ? `REVOKE ${privileges} ON ${target} FROM ${postgresRole(user)};` : `REVOKE ${privileges} ON ${target} FROM ${mysqlUserAccount(user)};`;
+  return dialect === "postgres"
+    ? `REVOKE ${privileges} ON ${target} FROM ${postgresRole(user)};`
+    : `REVOKE ${privileges} ON ${target} FROM ${mysqlUserAccount(user)};`;
 }
 
 function columnIndex(result: DbxQueryResult, ...names: string[]): number {
@@ -289,10 +344,12 @@ function parseMySqlFallbackUsers(result: DbxQueryResult): DatabaseUserIdentity[]
     const raw = String(row[granteeIndex] ?? "").trim();
     const match = /^'((?:''|[^'])*)'@'((?:''|[^'])*)'$/.exec(raw);
     if (!match) return [];
-    return [{
-      user: match[1].replace(/''/g, "'"),
-      host: match[2].replace(/''/g, "'"),
-    }];
+    return [
+      {
+        user: match[1].replace(/''/g, "'"),
+        host: match[2].replace(/''/g, "'"),
+      },
+    ];
   });
 }
 
@@ -301,7 +358,9 @@ function grantsText(result: DbxQueryResult): string {
   return result.rows
     .map((row) => {
       if (row.length === 1) return String(row[0] ?? "");
-      return result.columns.map((column, index) => `${column}: ${String(row[index] ?? "")}`).join(" | ");
+      return result.columns
+        .map((column, index) => `${column}: ${String(row[index] ?? "")}`)
+        .join(" | ");
     })
     .join("\n");
 }
@@ -324,11 +383,19 @@ export function DatabaseUserAdminPanel({ connection, database, schema }: Props) 
   const [grantDatabase, setGrantDatabase] = useState(database ?? "");
   const [grantSchema, setGrantSchema] = useState(schema ?? "public");
   const [grantTable, setGrantTable] = useState("");
-  const [privilegeScope, setPrivilegeScope] = useState<PrivilegeScope>(dialect === "postgres" ? "database" : "mysql");
+  const [privilegeScope, setPrivilegeScope] = useState<PrivilegeScope>(
+    dialect === "postgres" ? "database" : "mysql",
+  );
   const [privilegeRole, setPrivilegeRole] = useState("");
   const [grantOption, setGrantOption] = useState(false);
-  const availablePrivileges = useMemo(() => privilegesForScope(dialect, privilegeScope), [dialect, privilegeScope]);
-  const selectedPrivilegeSet = useMemo(() => new Set(privilegeTokens(privileges, "")), [privileges]);
+  const availablePrivileges = useMemo(
+    () => privilegesForScope(dialect, privilegeScope),
+    [dialect, privilegeScope],
+  );
+  const selectedPrivilegeSet = useMemo(
+    () => new Set(privilegeTokens(privileges, "")),
+    [privileges],
+  );
 
   const selectedUser = useMemo(
     () => users.find((user) => userLabel(user, dialect) === selectedLabel) ?? users[0] ?? null,
@@ -409,7 +476,13 @@ export function DatabaseUserAdminPanel({ connection, database, schema }: Props) 
         setStatus(t("database.userAdminFallbackUsers"));
       }
       setUsers(parsed);
-      setSelectedLabel((current) => (parsed.some((user) => userLabel(user, dialect) === current) ? current : (parsed[0] ? userLabel(parsed[0], dialect) : "")));
+      setSelectedLabel((current) =>
+        parsed.some((user) => userLabel(user, dialect) === current)
+          ? current
+          : parsed[0]
+            ? userLabel(parsed[0], dialect)
+            : "",
+      );
       if (parsed.length === 0) setGrants("");
     } catch (err) {
       setStatus(String(err));
@@ -444,7 +517,10 @@ export function DatabaseUserAdminPanel({ connection, database, schema }: Props) 
   }, [selectedLabel]);
 
   async function executeConfirmed(sql: string, messageKey: string) {
-    const accepted = await confirm(`${t(messageKey)}\n\n${sql}`, { title: t("database.previewSql"), kind: "warning" });
+    const accepted = await confirm(`${t(messageKey)}\n\n${sql}`, {
+      title: t("database.previewSql"),
+      kind: "warning",
+    });
     if (!accepted) return;
     setStatus("");
     await databaseApi.dbxExecuteMulti({
@@ -463,7 +539,15 @@ export function DatabaseUserAdminPanel({ connection, database, schema }: Props) 
   async function createUser() {
     if (!draftUser.trim() || !draftPassword) return;
     await executeConfirmed(
-      createUserSql({ user: draftUser.trim(), host: draftHost.trim() || "%", password: draftPassword, canLogin: draftCanLogin }, dialect),
+      createUserSql(
+        {
+          user: draftUser.trim(),
+          host: draftHost.trim() || "%",
+          password: draftPassword,
+          canLogin: draftCanLogin,
+        },
+        dialect,
+      ),
       "database.confirmCreateUser",
     );
     setDraftPassword("");
@@ -471,13 +555,19 @@ export function DatabaseUserAdminPanel({ connection, database, schema }: Props) 
 
   async function alterPassword() {
     if (!selectedUser || !draftPassword) return;
-    await executeConfirmed(alterPasswordSql(selectedUser, draftPassword, dialect), "database.confirmAlterUserPassword");
+    await executeConfirmed(
+      alterPasswordSql(selectedUser, draftPassword, dialect),
+      "database.confirmAlterUserPassword",
+    );
     setDraftPassword("");
   }
 
   async function alterLogin(enabled: boolean) {
     if (!selectedUser) return;
-    await executeConfirmed(alterLoginSql(selectedUser, enabled, dialect), enabled ? "database.confirmEnableUserLogin" : "database.confirmDisableUserLogin");
+    await executeConfirmed(
+      alterLoginSql(selectedUser, enabled, dialect),
+      enabled ? "database.confirmEnableUserLogin" : "database.confirmDisableUserLogin",
+    );
   }
 
   async function dropUser() {
@@ -490,9 +580,31 @@ export function DatabaseUserAdminPanel({ connection, database, schema }: Props) 
     if (dialect === "postgres" && privilegeScope === "role" && !privilegeRole.trim()) return;
     const sql =
       action === "grant"
-        ? grantSql(selectedUser, dialect, privilegeScope, privileges, grantDatabase, grantSchema, grantTable, privilegeRole, grantOption)
-        : revokeSql(selectedUser, dialect, privilegeScope, privileges, grantDatabase, grantSchema, grantTable, privilegeRole);
-    await executeConfirmed(sql, action === "grant" ? "database.confirmGrantPrivileges" : "database.confirmRevokePrivileges");
+        ? grantSql(
+            selectedUser,
+            dialect,
+            privilegeScope,
+            privileges,
+            grantDatabase,
+            grantSchema,
+            grantTable,
+            privilegeRole,
+            grantOption,
+          )
+        : revokeSql(
+            selectedUser,
+            dialect,
+            privilegeScope,
+            privileges,
+            grantDatabase,
+            grantSchema,
+            grantTable,
+            privilegeRole,
+          );
+    await executeConfirmed(
+      sql,
+      action === "grant" ? "database.confirmGrantPrivileges" : "database.confirmRevokePrivileges",
+    );
   }
 
   return (
@@ -502,17 +614,33 @@ export function DatabaseUserAdminPanel({ connection, database, schema }: Props) 
           <div style={s.databaseWorkspaceTitle}>{t("database.userAdmin")}</div>
           <div style={s.databaseDialogHint}>{t("database.userAdminHint")}</div>
         </div>
-        <DbxButton variant="outline" size="sm" icon={RefreshCcw} onClick={() => void loadUsers()} disabled={loadingUsers}>
+        <DbxButton
+          variant="outline"
+          size="sm"
+          icon={RefreshCcw}
+          onClick={() => void loadUsers()}
+          disabled={loadingUsers}
+        >
           {t("database.refresh")}
         </DbxButton>
       </div>
-      <div style={{ display: "grid", gridTemplateColumns: "minmax(220px, 320px) minmax(0, 1fr)", gap: 12, minHeight: 0 }}>
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "minmax(220px, 320px) minmax(0, 1fr)",
+          gap: 12,
+          minHeight: 0,
+        }}
+      >
         <div style={{ ...s.databaseDialogPanel, minHeight: 260 }}>
           <div style={s.databaseDialogLabel}>{t("database.users")}</div>
           <label style={{ ...s.databaseDialogField, marginTop: 8 }}>
             <span style={s.databaseDialogLabel}>{t("database.userAdminSearchUser")}</span>
             <span style={{ position: "relative", display: "flex", alignItems: "center" }}>
-              <Search size={13} style={{ position: "absolute", left: 8, color: "var(--text-muted)" }} />
+              <Search
+                size={13}
+                style={{ position: "absolute", left: 8, color: "var(--text-muted)" }}
+              />
               <input
                 style={{ ...s.databaseDialogInput, paddingLeft: 28 }}
                 value={userSearch}
@@ -532,7 +660,10 @@ export function DatabaseUserAdminPanel({ connection, database, schema }: Props) 
                   onClick={() => setSelectedLabel(label)}
                   style={{
                     justifyContent: "flex-start",
-                    borderColor: selectedUser && userLabel(selectedUser, dialect) === label ? "var(--accent)" : "var(--border-dim)",
+                    borderColor:
+                      selectedUser && userLabel(selectedUser, dialect) === label
+                        ? "var(--accent)"
+                        : "var(--border-dim)",
                   }}
                 >
                   <span>{label}</span>
@@ -540,7 +671,9 @@ export function DatabaseUserAdminPanel({ connection, database, schema }: Props) 
                 </DbxButton>
               );
             })}
-            {!loadingUsers && users.length === 0 && <div style={s.databaseDialogHint}>{t("database.userAdminNoUsers")}</div>}
+            {!loadingUsers && users.length === 0 && (
+              <div style={s.databaseDialogHint}>{t("database.userAdminNoUsers")}</div>
+            )}
             {!loadingUsers && users.length > 0 && filteredUsers.length === 0 && (
               <div style={s.databaseDialogHint}>{t("database.userAdminNoSearchResults")}</div>
             )}
@@ -550,39 +683,93 @@ export function DatabaseUserAdminPanel({ connection, database, schema }: Props) 
           <div style={s.databaseDialogFormGrid}>
             <label style={s.databaseDialogField}>
               <span style={s.databaseDialogLabel}>{t("database.userName")}</span>
-              <input style={s.databaseDialogInput} value={draftUser} onChange={(event) => setDraftUser(event.target.value)} />
+              <input
+                style={s.databaseDialogInput}
+                value={draftUser}
+                onChange={(event) => setDraftUser(event.target.value)}
+              />
             </label>
             {dialect === "mysql" && (
               <label style={s.databaseDialogField}>
                 <span style={s.databaseDialogLabel}>{t("database.userHost")}</span>
-                <input style={s.databaseDialogInput} value={draftHost} onChange={(event) => setDraftHost(event.target.value)} />
+                <input
+                  style={s.databaseDialogInput}
+                  value={draftHost}
+                  onChange={(event) => setDraftHost(event.target.value)}
+                />
               </label>
             )}
             <label style={s.databaseDialogField}>
               <span style={s.databaseDialogLabel}>{t("database.password")}</span>
-              <input style={s.databaseDialogInput} type="password" value={draftPassword} onChange={(event) => setDraftPassword(event.target.value)} />
+              <input
+                style={s.databaseDialogInput}
+                type="password"
+                value={draftPassword}
+                onChange={(event) => setDraftPassword(event.target.value)}
+              />
             </label>
             {dialect === "postgres" && (
-              <label style={{ ...s.databaseDialogField, flexDirection: "row", alignItems: "center", gap: 8 }}>
-                <input type="checkbox" checked={draftCanLogin} onChange={(event) => setDraftCanLogin(event.target.checked)} />
+              <label
+                style={{
+                  ...s.databaseDialogField,
+                  flexDirection: "row",
+                  alignItems: "center",
+                  gap: 8,
+                }}
+              >
+                <input
+                  type="checkbox"
+                  checked={draftCanLogin}
+                  onChange={(event) => setDraftCanLogin(event.target.checked)}
+                />
                 <span style={s.databaseDialogLabel}>{t("database.createUserCanLogin")}</span>
               </label>
             )}
           </div>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-            <DbxButton variant="default" size="sm" icon={UserPlus} onClick={() => void createUser()} disabled={!draftUser.trim() || !draftPassword || connection.readOnly}>
+            <DbxButton
+              variant="default"
+              size="sm"
+              icon={UserPlus}
+              onClick={() => void createUser()}
+              disabled={!draftUser.trim() || !draftPassword || connection.readOnly}
+            >
               {t("database.createUser")}
             </DbxButton>
-            <DbxButton variant="outline" size="sm" icon={KeyRound} onClick={() => void alterPassword()} disabled={!selectedUser || !draftPassword || connection.readOnly}>
+            <DbxButton
+              variant="outline"
+              size="sm"
+              icon={KeyRound}
+              onClick={() => void alterPassword()}
+              disabled={!selectedUser || !draftPassword || connection.readOnly}
+            >
               {t("database.alterPassword")}
             </DbxButton>
-            <DbxButton variant="outline" size="sm" icon={Lock} onClick={() => void alterLogin(false)} disabled={!selectedUser || connection.readOnly}>
+            <DbxButton
+              variant="outline"
+              size="sm"
+              icon={Lock}
+              onClick={() => void alterLogin(false)}
+              disabled={!selectedUser || connection.readOnly}
+            >
               {dialect === "postgres" ? t("database.disableLogin") : t("database.lockUser")}
             </DbxButton>
-            <DbxButton variant="outline" size="sm" icon={Unlock} onClick={() => void alterLogin(true)} disabled={!selectedUser || connection.readOnly}>
+            <DbxButton
+              variant="outline"
+              size="sm"
+              icon={Unlock}
+              onClick={() => void alterLogin(true)}
+              disabled={!selectedUser || connection.readOnly}
+            >
               {dialect === "postgres" ? t("database.enableLogin") : t("database.unlockUser")}
             </DbxButton>
-            <DbxButton variant="destructive" size="sm" icon={Trash2} onClick={() => void dropUser()} disabled={!selectedUser || connection.readOnly}>
+            <DbxButton
+              variant="destructive"
+              size="sm"
+              icon={Trash2}
+              onClick={() => void dropUser()}
+              disabled={!selectedUser || connection.readOnly}
+            >
               {t("database.dropUser")}
             </DbxButton>
           </div>
@@ -590,7 +777,11 @@ export function DatabaseUserAdminPanel({ connection, database, schema }: Props) 
             {dialect === "postgres" && (
               <label style={s.databaseDialogField}>
                 <span style={s.databaseDialogLabel}>{t("database.privilegeScope")}</span>
-                <select style={s.databaseDialogInput} value={privilegeScope} onChange={(event) => setPrivilegeScope(event.target.value as PrivilegeScope)}>
+                <select
+                  style={s.databaseDialogInput}
+                  value={privilegeScope}
+                  onChange={(event) => setPrivilegeScope(event.target.value as PrivilegeScope)}
+                >
                   <option value="database">{t("database.scopeDatabase")}</option>
                   <option value="schema">{t("database.scopeSchema")}</option>
                   <option value="table">{t("database.scopeTable")}</option>
@@ -601,15 +792,30 @@ export function DatabaseUserAdminPanel({ connection, database, schema }: Props) 
             {dialect === "postgres" && privilegeScope === "role" ? (
               <label style={s.databaseDialogField}>
                 <span style={s.databaseDialogLabel}>{t("database.memberRole")}</span>
-                <input style={s.databaseDialogInput} value={privilegeRole} onChange={(event) => setPrivilegeRole(event.target.value)} />
+                <input
+                  style={s.databaseDialogInput}
+                  value={privilegeRole}
+                  onChange={(event) => setPrivilegeRole(event.target.value)}
+                />
               </label>
             ) : null}
             <label style={s.databaseDialogField}>
               <span style={s.databaseDialogLabel}>{t("database.privileges")}</span>
-              <input style={s.databaseDialogInput} value={privileges} onChange={(event) => setPrivileges(event.target.value)} disabled={dialect === "postgres" && privilegeScope === "role"} />
+              <input
+                style={s.databaseDialogInput}
+                value={privileges}
+                onChange={(event) => setPrivileges(event.target.value)}
+                disabled={dialect === "postgres" && privilegeScope === "role"}
+              />
             </label>
             {availablePrivileges.length > 0 && (
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(104px, 1fr))", gap: 6 }}>
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "repeat(auto-fit, minmax(104px, 1fr))",
+                  gap: 6,
+                }}
+              >
                 {availablePrivileges.map((privilege) => {
                   const selected = selectedPrivilegeSet.has(privilege);
                   return (
@@ -635,12 +841,21 @@ export function DatabaseUserAdminPanel({ connection, database, schema }: Props) 
             )}
             {!(dialect === "postgres" && privilegeScope === "role") && (
               <label style={s.databaseDialogField}>
-                <span style={s.databaseDialogLabel}>{dialect === "postgres" && privilegeScope !== "database" ? t("database.schemaName") : t("database.databaseName")}</span>
+                <span style={s.databaseDialogLabel}>
+                  {dialect === "postgres" && privilegeScope !== "database"
+                    ? t("database.schemaName")
+                    : t("database.databaseName")}
+                </span>
                 <input
                   style={s.databaseDialogInput}
-                  value={dialect === "postgres" && privilegeScope !== "database" ? grantSchema : grantDatabase}
+                  value={
+                    dialect === "postgres" && privilegeScope !== "database"
+                      ? grantSchema
+                      : grantDatabase
+                  }
                   onChange={(event) => {
-                    if (dialect === "postgres" && privilegeScope !== "database") setGrantSchema(event.target.value);
+                    if (dialect === "postgres" && privilegeScope !== "database")
+                      setGrantSchema(event.target.value);
                     else setGrantDatabase(event.target.value);
                   }}
                 />
@@ -649,22 +864,59 @@ export function DatabaseUserAdminPanel({ connection, database, schema }: Props) 
             {(dialect === "mysql" || privilegeScope === "table") && (
               <label style={s.databaseDialogField}>
                 <span style={s.databaseDialogLabel}>{t("database.tableName")}</span>
-                <input style={s.databaseDialogInput} value={grantTable} onChange={(event) => setGrantTable(event.target.value)} />
+                <input
+                  style={s.databaseDialogInput}
+                  value={grantTable}
+                  onChange={(event) => setGrantTable(event.target.value)}
+                />
               </label>
             )}
-            <label style={{ ...s.databaseDialogField, flexDirection: "row", alignItems: "center", gap: 8 }}>
-              <input type="checkbox" checked={grantOption} onChange={(event) => setGrantOption(event.target.checked)} />
-              <span style={s.databaseDialogLabel}>{dialect === "postgres" && privilegeScope === "role" ? t("database.adminOption") : t("database.grantOption")}</span>
+            <label
+              style={{
+                ...s.databaseDialogField,
+                flexDirection: "row",
+                alignItems: "center",
+                gap: 8,
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={grantOption}
+                onChange={(event) => setGrantOption(event.target.checked)}
+              />
+              <span style={s.databaseDialogLabel}>
+                {dialect === "postgres" && privilegeScope === "role"
+                  ? t("database.adminOption")
+                  : t("database.grantOption")}
+              </span>
             </label>
           </div>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-            <DbxButton variant="default" size="sm" icon={Play} onClick={() => void changePrivileges("grant")} disabled={!selectedUser || connection.readOnly}>
+            <DbxButton
+              variant="default"
+              size="sm"
+              icon={Play}
+              onClick={() => void changePrivileges("grant")}
+              disabled={!selectedUser || connection.readOnly}
+            >
               {t("database.grantPrivileges")}
             </DbxButton>
-            <DbxButton variant="outline" size="sm" icon={Play} onClick={() => void changePrivileges("revoke")} disabled={!selectedUser || connection.readOnly}>
+            <DbxButton
+              variant="outline"
+              size="sm"
+              icon={Play}
+              onClick={() => void changePrivileges("revoke")}
+              disabled={!selectedUser || connection.readOnly}
+            >
               {t("database.revokePrivileges")}
             </DbxButton>
-            <DbxButton variant="outline" size="sm" icon={RefreshCcw} onClick={() => void loadGrants()} disabled={!selectedUser || loadingGrants}>
+            <DbxButton
+              variant="outline"
+              size="sm"
+              icon={RefreshCcw}
+              onClick={() => void loadGrants()}
+              disabled={!selectedUser || loadingGrants}
+            >
               {t("database.refreshGrants")}
             </DbxButton>
           </div>

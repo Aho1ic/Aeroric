@@ -88,8 +88,7 @@ export function getFileColor(name: string, ext?: string): string {
   const e = ext ?? (name.includes(".") ? name.split(".").pop()!.toLowerCase() : "");
 
   if (n === "dockerfile" || n.startsWith("dockerfile.")) return "var(--icon-file-docker)";
-  if (n === "makefile" || n === "gnumakefile" || n === "justfile")
-    return "var(--icon-file-build)";
+  if (n === "makefile" || n === "gnumakefile" || n === "justfile") return "var(--icon-file-build)";
   if (n === "gemfile" || n === "rakefile") return "var(--icon-file-ruby)";
   if (n.startsWith(".git") || n.startsWith(".docker") || n === ".editorconfig" || n === ".npmrc")
     return "var(--icon-file-config)";

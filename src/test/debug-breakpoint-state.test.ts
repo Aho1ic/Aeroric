@@ -19,15 +19,17 @@ describe("debug breakpoint state", () => {
 
   it("finds breakpoint lines for project-relative and absolute file paths", () => {
     expect(
-      [...debugBreakpointLinesForFile(
-        [
-          { file: "src/index.js", line: 12, column: 1 },
-          { file: "/Users/dev/project/src/index.js", line: 20, column: 1 },
-          { file: "src/other.js", line: 1, column: 1 },
-        ],
-        "/Users/dev/project",
-        "/Users/dev/project/src/index.js",
-      )].sort((a, b) => a - b),
+      [
+        ...debugBreakpointLinesForFile(
+          [
+            { file: "src/index.js", line: 12, column: 1 },
+            { file: "/Users/dev/project/src/index.js", line: 20, column: 1 },
+            { file: "src/other.js", line: 1, column: 1 },
+          ],
+          "/Users/dev/project",
+          "/Users/dev/project/src/index.js",
+        ),
+      ].sort((a, b) => a - b),
     ).toEqual([12, 20]);
   });
 
@@ -67,4 +69,3 @@ describe("debug breakpoint state", () => {
     ]);
   });
 });
-

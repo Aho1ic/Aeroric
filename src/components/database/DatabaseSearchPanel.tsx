@@ -3,7 +3,12 @@ import { RefreshCcw, Search, Square, Table2 } from "lucide-react";
 import { useI18n } from "../../i18n";
 import { databaseApi } from "../../lib/databaseApi";
 import s from "../../styles";
-import type { AeroricDbConnectionConfig, DatabaseSearchColumn, DbxColumnInfo, DbxObjectInfo } from "../../types";
+import type {
+  AeroricDbConnectionConfig,
+  DatabaseSearchColumn,
+  DbxColumnInfo,
+  DbxObjectInfo,
+} from "../../types";
 import { DbxButton } from "./DbxButton";
 
 interface SearchResultItem {
@@ -24,8 +29,28 @@ interface Props {
 
 const MAX_TABLES = 200;
 
-const TEXT_TYPES = ["char", "text", "clob", "varchar", "nvarchar", "nchar", "uuid", "uniqueidentifier", "enum"];
-const NUMBER_TYPES = ["int", "serial", "number", "numeric", "decimal", "float", "double", "real", "money"];
+const TEXT_TYPES = [
+  "char",
+  "text",
+  "clob",
+  "varchar",
+  "nvarchar",
+  "nchar",
+  "uuid",
+  "uniqueidentifier",
+  "enum",
+];
+const NUMBER_TYPES = [
+  "int",
+  "serial",
+  "number",
+  "numeric",
+  "decimal",
+  "float",
+  "double",
+  "real",
+  "money",
+];
 const SKIPPED_TYPES = ["blob", "binary", "bytea", "image", "geometry", "geography"];
 
 function normalizedObjectType(object: DbxObjectInfo): string {
@@ -62,7 +87,12 @@ function parseNumericTerm(term: string): string | null {
   return /^[+-]?(?:\d+|\d+\.\d+|\.\d+)$/.test(trimmed) ? trimmed : null;
 }
 
-function findMatchedColumns(resultColumns: string[], row: unknown[], columns: DatabaseSearchColumn[], term: string): string[] {
+function findMatchedColumns(
+  resultColumns: string[],
+  row: unknown[],
+  columns: DatabaseSearchColumn[],
+  term: string,
+): string[] {
   const query = term.trim().toLowerCase();
   const numericTerm = parseNumericTerm(term);
   if (!query) return [];
@@ -71,7 +101,8 @@ function findMatchedColumns(resultColumns: string[], row: unknown[], columns: Da
     if (value === null || value === undefined) return false;
     const column = columns.find((item) => item.name.toLowerCase() === columnName.toLowerCase());
     if (!column) return false;
-    if (numericTerm && isNumericSearchColumn(column) && String(value).trim() === numericTerm) return true;
+    if (numericTerm && isNumericSearchColumn(column) && String(value).trim() === numericTerm)
+      return true;
     return isTextSearchColumn(column) && String(value).toLowerCase().includes(query);
   });
 }
@@ -97,7 +128,13 @@ function makeExecutionId(): string {
   return `database-search-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
-export function DatabaseSearchPanel({ connection, database, schema, objects, onOpenResult }: Props) {
+export function DatabaseSearchPanel({
+  connection,
+  database,
+  schema,
+  objects,
+  onOpenResult,
+}: Props) {
   const { t } = useI18n();
   const [keyword, setKeyword] = useState("");
   const [limit, setLimit] = useState("20");
@@ -112,7 +149,9 @@ export function DatabaseSearchPanel({ connection, database, schema, objects, onO
   const runId = useRef(0);
 
   const searchTables = useMemo(() => {
-    const filtered = objects.filter((object) => isSearchableTable(object) && (!schema || object.schema === schema));
+    const filtered = objects.filter(
+      (object) => isSearchableTable(object) && (!schema || object.schema === schema),
+    );
     return filtered.slice(0, MAX_TABLES);
   }, [objects, schema]);
 
@@ -140,14 +179,19 @@ export function DatabaseSearchPanel({ connection, database, schema, objects, onO
     setErrors([]);
     setProgressDone(0);
     setProgressTotal(searchTables.length);
-    setLimitedTables(objects.filter((object) => isSearchableTable(object) && (!schema || object.schema === schema)).length > MAX_TABLES);
+    setLimitedTables(
+      objects.filter((object) => isSearchableTable(object) && (!schema || object.schema === schema))
+        .length > MAX_TABLES,
+    );
 
     try {
       for (const object of searchTables) {
         if (cancelled.current || currentRun !== runId.current) break;
         const tableSchema = object.schema ?? schema ?? null;
         try {
-          const columns = (await databaseApi.dbxGetColumns(connection.id, object.name, database, tableSchema)).map(columnForSearch);
+          const columns = (
+            await databaseApi.dbxGetColumns(connection.id, object.name, database, tableSchema)
+          ).map(columnForSearch);
           const query = await databaseApi.dbxBuildDatabaseSearchSql({
             databaseType: connection.dbType,
             schema: tableSchema,
@@ -191,7 +235,13 @@ export function DatabaseSearchPanel({ connection, database, schema, objects, onO
           }
           if (nextItems.length) setResults((current) => [...current, ...nextItems]);
         } catch (err) {
-          setErrors((current) => [...current, { table: object.schema ? `${object.schema}.${object.name}` : object.name, message: String(err) }]);
+          setErrors((current) => [
+            ...current,
+            {
+              table: object.schema ? `${object.schema}.${object.name}` : object.name,
+              message: String(err),
+            },
+          ]);
         } finally {
           setProgressDone((current) => current + 1);
         }
@@ -209,7 +259,9 @@ export function DatabaseSearchPanel({ connection, database, schema, objects, onO
       <div style={s.databaseWorkspaceHeader}>
         <div>
           <div style={s.databaseWorkspaceTitle}>{t("database.databaseSearch")}</div>
-          <div style={s.databaseDialogHint}>{scopeLabel || t("database.selectDbxSqlConnection")}</div>
+          <div style={s.databaseDialogHint}>
+            {scopeLabel || t("database.selectDbxSqlConnection")}
+          </div>
         </div>
       </div>
 
@@ -245,11 +297,22 @@ export function DatabaseSearchPanel({ connection, database, schema, objects, onO
           />
         </label>
         <div style={{ display: "flex", alignItems: "flex-end", gap: 8 }}>
-          <DbxButton variant="default" size="sm" icon={running ? RefreshCcw : Search} disabled={!canSearch} onClick={() => void startSearch()}>
+          <DbxButton
+            variant="default"
+            size="sm"
+            icon={running ? RefreshCcw : Search}
+            disabled={!canSearch}
+            onClick={() => void startSearch()}
+          >
             {running ? t("database.databaseSearchSearching") : t("database.databaseSearchRun")}
           </DbxButton>
           {running && (
-            <DbxButton variant="destructive" size="sm" icon={Square} onClick={() => void stopSearch()}>
+            <DbxButton
+              variant="destructive"
+              size="sm"
+              icon={Square}
+              onClick={() => void stopSearch()}
+            >
               {t("database.databaseSearchStop")}
             </DbxButton>
           )}
@@ -257,7 +320,10 @@ export function DatabaseSearchPanel({ connection, database, schema, objects, onO
       </div>
 
       <div style={{ ...s.databaseDialogHint, marginTop: 12 }}>
-        {t("database.databaseSearchProgress", { done: progressDone, total: progressTotal || searchTables.length })}
+        {t("database.databaseSearchProgress", {
+          done: progressDone,
+          total: progressTotal || searchTables.length,
+        })}
         {limitedTables ? ` ${t("database.databaseSearchLimited", { count: MAX_TABLES })}` : ""}
       </div>
 
@@ -272,7 +338,9 @@ export function DatabaseSearchPanel({ connection, database, schema, objects, onO
       )}
 
       <div style={{ ...s.databaseWorkspaceHeader, marginTop: 14 }}>
-        <div style={s.databaseWorkspaceTitle}>{t("database.databaseSearchResults", { count: results.length })}</div>
+        <div style={s.databaseWorkspaceTitle}>
+          {t("database.databaseSearchResults", { count: results.length })}
+        </div>
       </div>
       <div style={{ display: "grid", gap: 8 }}>
         {results.map((item) => (
@@ -282,18 +350,31 @@ export function DatabaseSearchPanel({ connection, database, schema, objects, onO
             size="sm"
             icon={Table2}
             onClick={() => onOpenResult(item.object, item.whereInput)}
-            style={{ height: "auto", justifyContent: "flex-start", padding: "9px 10px", textAlign: "left" }}
+            style={{
+              height: "auto",
+              justifyContent: "flex-start",
+              padding: "9px 10px",
+              textAlign: "left",
+            }}
           >
             <span style={{ minWidth: 0 }}>
               <span style={{ display: "block", color: "var(--text-primary)" }}>
-                {item.object.schema ? `${item.object.schema}.${item.object.name}` : item.object.name}
+                {item.object.schema
+                  ? `${item.object.schema}.${item.object.name}`
+                  : item.object.name}
                 {item.matchedColumns.length ? ` (${item.matchedColumns.join(", ")})` : ""}
               </span>
-              <span style={{ display: "block", color: "var(--text-hint)", marginTop: 2 }}>{item.preview}</span>
+              <span style={{ display: "block", color: "var(--text-hint)", marginTop: 2 }}>
+                {item.preview}
+              </span>
             </span>
           </DbxButton>
         ))}
-        {results.length === 0 && <div style={s.databaseEmpty}>{running ? t("database.databaseSearchWaiting") : t("database.databaseSearchNoResults")}</div>}
+        {results.length === 0 && (
+          <div style={s.databaseEmpty}>
+            {running ? t("database.databaseSearchWaiting") : t("database.databaseSearchNoResults")}
+          </div>
+        )}
       </div>
     </div>
   );

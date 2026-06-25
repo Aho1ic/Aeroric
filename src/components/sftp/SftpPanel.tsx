@@ -1003,7 +1003,7 @@ export function SftpPanel({
 
   const runningTransferCount = transferTasks.filter((task) => task.status === "running").length;
   const lastTransfer = transferTasks[0] ?? null;
-  const progressState = runningTransferCount > 0 ? "running" : lastTransfer?.status ?? "idle";
+  const progressState = runningTransferCount > 0 ? "running" : (lastTransfer?.status ?? "idle");
   const transferProgressLabel =
     progressState === "running"
       ? t("sftp.transferProgressRunning", { count: runningTransferCount })

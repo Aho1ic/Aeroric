@@ -40,18 +40,10 @@ export function SkillConflictDialog({ conflict, onChoose, onClose }: Props) {
           ) : null}
         </div>
         <div style={s.skillConflictFooter}>
-          <button
-            type="button"
-            style={s.modalCancelBtn}
-            onClick={() => onChoose("cancel")}
-          >
+          <button type="button" style={s.modalCancelBtn} onClick={() => onChoose("cancel")}>
             {t("skill.conflict.cancel")}
           </button>
-          <button
-            type="button"
-            style={s.skillConflictSkipBtn}
-            onClick={() => onChoose("skip")}
-          >
+          <button type="button" style={s.skillConflictSkipBtn} onClick={() => onChoose("skip")}>
             {t("skill.conflict.skip")}
           </button>
           <button

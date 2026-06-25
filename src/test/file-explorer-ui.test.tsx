@@ -80,12 +80,17 @@ describe("FileExplorer UI", () => {
     renderExplorer();
 
     await screen.findByText("app.tsx");
-    const sortControls = screen.getByRole("button", { name: /Modified/i }).parentElement as HTMLElement;
+    const sortControls = screen.getByRole("button", { name: /Modified/i })
+      .parentElement as HTMLElement;
     const nameButton = within(sortControls).getByRole("button", { name: /Name/i });
-    const modifiedButton = within(sortControls).getByRole("button", { name: /Modified descending/i });
+    const modifiedButton = within(sortControls).getByRole("button", {
+      name: /Modified descending/i,
+    });
 
     expect(within(modifiedButton).getByTestId("sort-arrow-down")).toBeInTheDocument();
-    expect(within(sortControls).queryByRole("button", { name: /^Asc$|^Desc$/i })).not.toBeInTheDocument();
+    expect(
+      within(sortControls).queryByRole("button", { name: /^Asc$|^Desc$/i }),
+    ).not.toBeInTheDocument();
 
     await user.click(modifiedButton);
     expect(within(modifiedButton).getByTestId("sort-arrow-up")).toBeInTheDocument();

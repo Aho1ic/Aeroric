@@ -67,18 +67,21 @@ export function WebPreviewPanel({
     }
   }, [runProcessTarget]);
 
-  const refresh = useCallback(async (options?: { silent?: boolean }) => {
-    if (!options?.silent) setLoading(true);
-    setError(null);
-    try {
-      const result = await invoke<ListeningPort[]>("list_listening_ports", { projectPath });
-      setPorts(result);
-    } catch (err) {
-      setError(String(err));
-    } finally {
-      if (!options?.silent) setLoading(false);
-    }
-  }, [projectPath]);
+  const refresh = useCallback(
+    async (options?: { silent?: boolean }) => {
+      if (!options?.silent) setLoading(true);
+      setError(null);
+      try {
+        const result = await invoke<ListeningPort[]>("list_listening_ports", { projectPath });
+        setPorts(result);
+      } catch (err) {
+        setError(String(err));
+      } finally {
+        if (!options?.silent) setLoading(false);
+      }
+    },
+    [projectPath],
+  );
 
   useEffect(() => {
     void refresh();

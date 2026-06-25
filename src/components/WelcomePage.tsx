@@ -370,9 +370,7 @@ export function WelcomePage({
             config={skillHubConfig}
             allProjects={projects}
             onEnterSkillHub={onEnterSkillHub}
-            onOpenAppSettings={() =>
-              window.dispatchEvent(new CustomEvent(OPEN_APP_SETTINGS_EVENT))
-            }
+            onOpenAppSettings={() => window.dispatchEvent(new CustomEvent(OPEN_APP_SETTINGS_EVENT))}
           />
         ) : view === "docker" ? (
           <DockerServiceView />
@@ -435,7 +433,12 @@ export function WelcomePage({
                     >
                       <button
                         type="button"
-                        style={{ ...s.toolbarMenuItem, width: "100%", border: "none", background: "transparent" }}
+                        style={{
+                          ...s.toolbarMenuItem,
+                          width: "100%",
+                          border: "none",
+                          background: "transparent",
+                        }}
                         onClick={() => {
                           setOpenProjectMenu(false);
                           onOpen();
@@ -446,7 +449,12 @@ export function WelcomePage({
                       </button>
                       <button
                         type="button"
-                        style={{ ...s.toolbarMenuItem, width: "100%", border: "none", background: "transparent" }}
+                        style={{
+                          ...s.toolbarMenuItem,
+                          width: "100%",
+                          border: "none",
+                          background: "transparent",
+                        }}
                         onClick={() => {
                           setOpenProjectMenu(false);
                           switchWelcomeView("ssh");
@@ -466,12 +474,26 @@ export function WelcomePage({
                 <div style={s.projectSectionTitle}>{t("welcome.projects")}</div>
                 <div style={s.projectSectionCaption}>
                   {query.trim()
-                    ? t(pluralKey("welcome.resultCount", "welcome.resultCountPlural", filtered.length), {
-                        count: filtered.length,
-                      })
-                    : t(pluralKey("welcome.projectCount", "welcome.projectCountPlural", projects.length), {
-                        count: projects.length,
-                      })}
+                    ? t(
+                        pluralKey(
+                          "welcome.resultCount",
+                          "welcome.resultCountPlural",
+                          filtered.length,
+                        ),
+                        {
+                          count: filtered.length,
+                        },
+                      )
+                    : t(
+                        pluralKey(
+                          "welcome.projectCount",
+                          "welcome.projectCountPlural",
+                          projects.length,
+                        ),
+                        {
+                          count: projects.length,
+                        },
+                      )}
                 </div>
               </div>
             </div>
@@ -571,9 +593,7 @@ export function WelcomePage({
                         tabIndex={0}
                         style={{
                           ...s.projectPinBtn,
-                          ...(p.hiddenFromRail
-                            ? s.projectPinBtnHidden
-                            : s.projectPinBtnPinned),
+                          ...(p.hiddenFromRail ? s.projectPinBtnHidden : s.projectPinBtnPinned),
                         }}
                         onClick={(e) => {
                           e.stopPropagation();
@@ -586,9 +606,7 @@ export function WelcomePage({
                           onToggleProjectHidden(p.id);
                         }}
                         title={
-                          p.hiddenFromRail
-                            ? t("welcome.pinToRail")
-                            : t("welcome.unpinFromRail")
+                          p.hiddenFromRail ? t("welcome.pinToRail") : t("welcome.unpinFromRail")
                         }
                       >
                         {p.hiddenFromRail ? (
@@ -651,8 +669,7 @@ export function WelcomePage({
                           transition: "opacity 0.15s, color 0.15s",
                         }}
                         onMouseEnter={(e) => {
-                          (e.currentTarget as HTMLButtonElement).style.color =
-                            "var(--danger)";
+                          (e.currentTarget as HTMLButtonElement).style.color = "var(--danger)";
                         }}
                         onMouseLeave={(e) => {
                           (e.currentTarget as HTMLButtonElement).style.color = "var(--text-muted)";

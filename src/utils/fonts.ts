@@ -22,7 +22,10 @@ export function parseFirstFontName(stack: string): string {
   const first = trimmed.split(",")[0].trim();
 
   // Strip surrounding quotes
-  if ((first.startsWith('"') && first.endsWith('"')) || (first.startsWith("'") && first.endsWith("'"))) {
+  if (
+    (first.startsWith('"') && first.endsWith('"')) ||
+    (first.startsWith("'") && first.endsWith("'"))
+  ) {
     return first.slice(1, -1);
   }
   return first;

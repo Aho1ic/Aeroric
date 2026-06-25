@@ -5,7 +5,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
 import { confirm } from "@tauri-apps/plugin-dialog";
 import { I18nProvider } from "../i18n";
-import { DockerServiceView, isIgnorableDockerRefreshError } from "../components/docker/DockerServiceView";
+import {
+  DockerServiceView,
+  isIgnorableDockerRefreshError,
+} from "../components/docker/DockerServiceView";
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(),
@@ -45,13 +48,7 @@ describe("DockerServiceView image deletion", () => {
         "Authorized users only. All activities may be monitored and reported. Connection to 192.168.10.100 closed.",
       );
 
-    render(
-      React.createElement(
-        I18nProvider,
-        null,
-        React.createElement(DockerServiceView),
-      ),
-    );
+    render(React.createElement(I18nProvider, null, React.createElement(DockerServiceView)));
 
     await user.click(screen.getByRole("button", { name: /Images/i }));
     await screen.findByText("repo/app");
@@ -64,12 +61,14 @@ describe("DockerServiceView image deletion", () => {
       });
     });
 
-    expect(confirm).toHaveBeenCalledWith("Delete image repo/app:latest?", expect.objectContaining({
-      title: "Delete image",
-    }));
+    expect(confirm).toHaveBeenCalledWith(
+      "Delete image repo/app:latest?",
+      expect.objectContaining({
+        title: "Delete image",
+      }),
+    );
     expect(screen.queryByText("Failed to load Docker resources")).not.toBeInTheDocument();
     expect(screen.getByText("No Docker images")).toBeInTheDocument();
-
   });
 
   it("deletes dangling images by id instead of an invalid <none>:<none> reference", async () => {
@@ -94,13 +93,7 @@ describe("DockerServiceView image deletion", () => {
       .mockResolvedValueOnce(undefined)
       .mockResolvedValueOnce({ containers: [], images: [] });
 
-    render(
-      React.createElement(
-        I18nProvider,
-        null,
-        React.createElement(DockerServiceView),
-      ),
-    );
+    render(React.createElement(I18nProvider, null, React.createElement(DockerServiceView)));
 
     await user.click(screen.getByRole("button", { name: /Images/i }));
     await screen.findByText("5f91320248dc");
@@ -133,13 +126,7 @@ describe("DockerServiceView image deletion", () => {
     vi.mocked(confirm).mockResolvedValue(false);
     vi.mocked(invoke).mockResolvedValueOnce(resources);
 
-    render(
-      React.createElement(
-        I18nProvider,
-        null,
-        React.createElement(DockerServiceView),
-      ),
-    );
+    render(React.createElement(I18nProvider, null, React.createElement(DockerServiceView)));
 
     await user.click(screen.getByRole("button", { name: /Images/i }));
     await screen.findByText("repo/app");
@@ -169,13 +156,7 @@ describe("DockerServiceView image deletion", () => {
       .mockResolvedValueOnce(undefined)
       .mockResolvedValueOnce(resources);
 
-    render(
-      React.createElement(
-        I18nProvider,
-        null,
-        React.createElement(DockerServiceView),
-      ),
-    );
+    render(React.createElement(I18nProvider, null, React.createElement(DockerServiceView)));
 
     await user.click(screen.getByRole("button", { name: /Images/i }));
     await screen.findByText("repo/app");
@@ -212,11 +193,7 @@ describe("DockerServiceView image deletion", () => {
     vi.mocked(invoke).mockResolvedValue(resources);
 
     const { rerender } = render(
-      React.createElement(
-        I18nProvider,
-        null,
-        React.createElement(DockerServiceView, { remote }),
-      ),
+      React.createElement(I18nProvider, null, React.createElement(DockerServiceView, { remote })),
     );
 
     await waitFor(() => {
@@ -254,11 +231,7 @@ describe("DockerServiceView image deletion", () => {
     vi.mocked(invoke).mockResolvedValue(resources);
 
     const { rerender } = render(
-      React.createElement(
-        I18nProvider,
-        null,
-        React.createElement(DockerServiceView, { remote }),
-      ),
+      React.createElement(I18nProvider, null, React.createElement(DockerServiceView, { remote })),
     );
 
     await waitFor(() => {
@@ -315,11 +288,7 @@ describe("DockerServiceView image deletion", () => {
       );
 
     const { rerender } = render(
-      React.createElement(
-        I18nProvider,
-        null,
-        React.createElement(DockerServiceView, { remote }),
-      ),
+      React.createElement(I18nProvider, null, React.createElement(DockerServiceView, { remote })),
     );
     vi.mocked(confirm).mockImplementation(async () => {
       rerender(
@@ -379,11 +348,7 @@ describe("DockerServiceView image deletion", () => {
       .mockResolvedValueOnce(resources);
 
     const { rerender } = render(
-      React.createElement(
-        I18nProvider,
-        null,
-        React.createElement(DockerServiceView, { remote }),
-      ),
+      React.createElement(I18nProvider, null, React.createElement(DockerServiceView, { remote })),
     );
     vi.mocked(confirm).mockImplementation(async () => {
       rerender(

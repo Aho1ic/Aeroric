@@ -48,9 +48,11 @@ describe("new task goal mode", () => {
   });
 
   it("leaves prompts unchanged when /goal mode is off", () => {
-    expect(buildPromptWithTaskModes("修复 SSH 终端显示", {
-      planMode: false,
-      goalMode: false,
-    })).toBe("修复 SSH 终端显示");
+    expect(
+      buildPromptWithTaskModes("修复 SSH 终端显示", {
+        planMode: false,
+        goalMode: false,
+      }),
+    ).toBe("修复 SSH 终端显示");
   });
 });

@@ -85,9 +85,9 @@ describe("port panel state", () => {
     ];
 
     expect(hasKnownProjectContext(ports)).toBe(true);
-    expect(filterListeningPortsByProjectContext(ports, "project").map((item) => item.port)).toEqual([
-      5173,
-    ]);
+    expect(filterListeningPortsByProjectContext(ports, "project").map((item) => item.port)).toEqual(
+      [5173],
+    );
     expect(filterListeningPortsByProjectContext(ports, "all").map((item) => item.port)).toEqual([
       5173, 9000, 5432,
     ]);
@@ -101,9 +101,9 @@ describe("port panel state", () => {
 
     expect(hasKnownProjectContext(ports)).toBe(false);
     expect(effectivePortFilterMode(ports, "project")).toBe("all");
-    expect(filterListeningPortsByProjectContext(ports, "project").map((item) => item.port)).toEqual([
-      5173, 9000,
-    ]);
+    expect(filterListeningPortsByProjectContext(ports, "project").map((item) => item.port)).toEqual(
+      [5173, 9000],
+    );
   });
 
   it("extracts preview ports from run output and command text", () => {

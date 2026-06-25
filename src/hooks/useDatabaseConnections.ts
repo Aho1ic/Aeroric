@@ -54,7 +54,7 @@ export function useDatabaseConnections() {
         await databaseApi.dbxDeleteConnection(connectionId);
         const next = await refreshConnections();
         setActiveConnectionId((current) =>
-          current === connectionId ? next[0]?.id ?? null : current,
+          current === connectionId ? (next[0]?.id ?? null) : current,
         );
       } catch (err) {
         setError(String(err));

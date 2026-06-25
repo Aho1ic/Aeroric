@@ -190,22 +190,22 @@ export function FileSearchDialog({
             <Select.Portal>
               <Select.Content position="popper" sideOffset={4} style={s.fileSearchTypeContent}>
                 <Select.Viewport style={s.settingsSelectViewport}>
-                {FILE_FILTERS.map((filter) => {
-                  const selected = filter.id === filterId;
-                  const highlighted = selected || filter.id === hoveredFilterId;
-                  return (
-                    <Select.Item
-                      key={filter.id}
-                      value={filter.id}
-                      onMouseEnter={() => setHoveredFilterId(filter.id)}
-                      onMouseLeave={() => setHoveredFilterId(null)}
-                      onFocus={() => setHoveredFilterId(filter.id)}
-                      onBlur={() => setHoveredFilterId(null)}
-                      style={{
-                        ...s.fileSearchTypeItem,
-                        ...(highlighted ? s.fileSearchTypeItemSelected : null),
-                      }}
-                    >
+                  {FILE_FILTERS.map((filter) => {
+                    const selected = filter.id === filterId;
+                    const highlighted = selected || filter.id === hoveredFilterId;
+                    return (
+                      <Select.Item
+                        key={filter.id}
+                        value={filter.id}
+                        onMouseEnter={() => setHoveredFilterId(filter.id)}
+                        onMouseLeave={() => setHoveredFilterId(null)}
+                        onFocus={() => setHoveredFilterId(filter.id)}
+                        onBlur={() => setHoveredFilterId(null)}
+                        style={{
+                          ...s.fileSearchTypeItem,
+                          ...(highlighted ? s.fileSearchTypeItemSelected : null),
+                        }}
+                      >
                         <Select.ItemText>{filterLabel(filter, t)}</Select.ItemText>
                         <Select.ItemIndicator style={s.settingsSelectIndicator}>
                           <Check size={12} />

@@ -125,7 +125,11 @@ describe("sftp panel helpers", () => {
         [{ name: "App.tsx", path: "/repo/src/components/App.tsx", isDir: false }],
       ],
     ]);
-    const flattened = flattenSftpTreeEntries(entries, new Set(["/repo/src", "/repo/src/components"]), children);
+    const flattened = flattenSftpTreeEntries(
+      entries,
+      new Set(["/repo/src", "/repo/src/components"]),
+      children,
+    );
 
     expect(flattened.map((item) => [item.entry.path, item.depth])).toEqual([
       ["/repo/src", 0],
@@ -140,7 +144,13 @@ describe("sftp panel helpers", () => {
     const entries: SftpEntry[] = [
       { name: "z.py", path: "/repo/z.py", isDir: false, extension: "py", modifiedAtMs: 300 },
       { name: "src", path: "/repo/src", isDir: true, modifiedAtMs: 100 },
-      { name: "README.md", path: "/repo/README.md", isDir: false, extension: "md", modifiedAtMs: 500 },
+      {
+        name: "README.md",
+        path: "/repo/README.md",
+        isDir: false,
+        extension: "md",
+        modifiedAtMs: 500,
+      },
       { name: "docs", path: "/repo/docs", isDir: true, modifiedAtMs: 900 },
     ];
 
@@ -159,22 +169,29 @@ describe("sftp panel helpers", () => {
   });
 
   it("uses specific icon kinds for database, model, video, and wheel files", () => {
-    expect(sftpFileIconKind({ name: "index.db", path: "/repo/index.db", isDir: false })).toBe("database");
-    expect(sftpFileIconKind({ name: "model.pt", path: "/repo/model.pt", isDir: false })).toBe("model");
-    expect(sftpFileIconKind({ name: "model.pth", path: "/repo/model.pth", isDir: false })).toBe("model");
-    expect(sftpFileIconKind({ name: "detector.onnx", path: "/repo/detector.onnx", isDir: false })).toBe("model");
-    expect(sftpFileIconKind({ name: "clip.mp4", path: "/repo/clip.mp4", isDir: false })).toBe("video");
-    expect(sftpFileIconKind({ name: "pkg.whl", path: "/repo/pkg.whl", isDir: false })).toBe("package");
+    expect(sftpFileIconKind({ name: "index.db", path: "/repo/index.db", isDir: false })).toBe(
+      "database",
+    );
+    expect(sftpFileIconKind({ name: "model.pt", path: "/repo/model.pt", isDir: false })).toBe(
+      "model",
+    );
+    expect(sftpFileIconKind({ name: "model.pth", path: "/repo/model.pth", isDir: false })).toBe(
+      "model",
+    );
+    expect(
+      sftpFileIconKind({ name: "detector.onnx", path: "/repo/detector.onnx", isDir: false }),
+    ).toBe("model");
+    expect(sftpFileIconKind({ name: "clip.mp4", path: "/repo/clip.mp4", isDir: false })).toBe(
+      "video",
+    );
+    expect(sftpFileIconKind({ name: "pkg.whl", path: "/repo/pkg.whl", isDir: false })).toBe(
+      "package",
+    );
   });
 
   it("collapses sibling expanded folders when selecting another folder but keeps the selected subtree", () => {
     const expanded = pruneExpandedPathsForFolderSelection(
-      new Set([
-        "/repo/src",
-        "/repo/src/components",
-        "/repo/docs",
-        "/repo/docs/api",
-      ]),
+      new Set(["/repo/src", "/repo/src/components", "/repo/docs", "/repo/docs/api"]),
       "/repo/src/components",
     );
 
@@ -183,12 +200,7 @@ describe("sftp panel helpers", () => {
 
   it("keeps descendants of the selected folder expanded", () => {
     const expanded = pruneExpandedPathsForFolderSelection(
-      new Set([
-        "/repo/src",
-        "/repo/src/components",
-        "/repo/src/components/ui",
-        "/repo/docs",
-      ]),
+      new Set(["/repo/src", "/repo/src/components", "/repo/src/components/ui", "/repo/docs"]),
       "/repo/src",
     );
 
@@ -210,17 +222,29 @@ describe("sftp panel helpers", () => {
 
   it("classifies file icon kinds by extension", () => {
     expect(sftpFileIconKind({ name: "src", path: "/repo/src", isDir: true })).toBe("folder");
-    expect(sftpFileIconKind({ name: "photo.png", path: "/repo/photo.png", isDir: false })).toBe("image");
-    expect(sftpFileIconKind({ name: "README.md", path: "/repo/README.md", isDir: false })).toBe("markdown");
-    expect(sftpFileIconKind({ name: "package.json", path: "/repo/package.json", isDir: false })).toBe("json");
-    expect(sftpFileIconKind({ name: "archive.zip", path: "/repo/archive.zip", isDir: false })).toBe("archive");
+    expect(sftpFileIconKind({ name: "photo.png", path: "/repo/photo.png", isDir: false })).toBe(
+      "image",
+    );
+    expect(sftpFileIconKind({ name: "README.md", path: "/repo/README.md", isDir: false })).toBe(
+      "markdown",
+    );
+    expect(
+      sftpFileIconKind({ name: "package.json", path: "/repo/package.json", isDir: false }),
+    ).toBe("json");
+    expect(sftpFileIconKind({ name: "archive.zip", path: "/repo/archive.zip", isDir: false })).toBe(
+      "archive",
+    );
     expect(sftpFileIconKind({ name: "main.ts", path: "/repo/main.ts", isDir: false })).toBe("code");
-    expect(sftpFileIconKind({ name: "notes.txt", path: "/repo/notes.txt", isDir: false })).toBe("text");
+    expect(sftpFileIconKind({ name: "notes.txt", path: "/repo/notes.txt", isDir: false })).toBe(
+      "text",
+    );
   });
 
   it("formats Finder-style folder preview metadata", () => {
     expect(formatSftpPreviewSize(1536)).toBe("1.5 KB");
-    expect(formatSftpFolderCounts({ directoryCount: 2, fileCount: 3 })).toBe("2 个文件夹，3 个文件");
+    expect(formatSftpFolderCounts({ directoryCount: 2, fileCount: 3 })).toBe(
+      "2 个文件夹，3 个文件",
+    );
     const timestamp = 1_709_568_000_000;
     const expected = new Intl.DateTimeFormat("zh-CN", {
       year: "numeric",

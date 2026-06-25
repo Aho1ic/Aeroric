@@ -268,8 +268,9 @@ export function AgentConfigPanel({
           </div>
         )}
 
-        {fileState.status === "loaded" && !editing && (
-          highlighted ? (
+        {fileState.status === "loaded" &&
+          !editing &&
+          (highlighted ? (
             <div
               className="file-viewer-code"
               style={{
@@ -302,8 +303,7 @@ export function AgentConfigPanel({
               }}
               dangerouslySetInnerHTML={{ __html: escapeHtml(fileState.content) }}
             />
-          )
-        )}
+          ))}
 
         {fileState.status === "loaded" && editing && (
           <textarea

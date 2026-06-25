@@ -58,7 +58,9 @@ export function TaskEditDialog({
       <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
         <button
           style={{ ...s.toolbarBtn, fontSize: 12 }}
-          onClick={() => setEditAgent(agents[(agents.indexOf(editAgent) + 1) % agents.length] ?? "claude")}
+          onClick={() =>
+            setEditAgent(agents[(agents.indexOf(editAgent) + 1) % agents.length] ?? "claude")
+          }
         >
           {agentDisplayLabel(editAgent, agentOptions)}
         </button>

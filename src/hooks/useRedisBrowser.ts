@@ -98,14 +98,18 @@ export function useRedisBrowser(connectionId: string | null) {
         if (requestGeneration.current === generation && scanGeneration.current === scan) {
           setCursor(result.cursor);
           setTotalKeys(result.total_keys);
-          setKeys((current) => (request.cursor && request.cursor > 0 ? [...current, ...result.keys] : result.keys));
+          setKeys((current) =>
+            request.cursor && request.cursor > 0 ? [...current, ...result.keys] : result.keys,
+          );
         }
         return result;
       } catch (err) {
-        if (requestGeneration.current === generation && scanGeneration.current === scan) setError(String(err));
+        if (requestGeneration.current === generation && scanGeneration.current === scan)
+          setError(String(err));
         throw err;
       } finally {
-        if (requestGeneration.current === generation && scanGeneration.current === scan) setLoading(false);
+        if (requestGeneration.current === generation && scanGeneration.current === scan)
+          setLoading(false);
       }
     },
     [requireConnection],

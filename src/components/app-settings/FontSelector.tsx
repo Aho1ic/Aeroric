@@ -20,7 +20,14 @@ interface FontSelectorProps {
   preview?: React.ReactNode;
 }
 
-export function FontSelector({ value, onChange, label, hint, defaultFont, preview }: FontSelectorProps) {
+export function FontSelector({
+  value,
+  onChange,
+  label,
+  hint,
+  defaultFont,
+  preview,
+}: FontSelectorProps) {
   const { t } = useI18n();
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
@@ -49,7 +56,9 @@ export function FontSelector({ value, onChange, label, hint, defaultFont, previe
       setFonts(result);
       setLoaded(true);
     });
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, [open, loaded]);
 
   useEffect(() => {
@@ -107,9 +116,7 @@ export function FontSelector({ value, onChange, label, hint, defaultFont, previe
       <div style={s.fontSelectorInner}>
         <div style={s.fontSelectorLabelSection}>
           <div style={s.fontSelectorLabelRow}>
-            <span style={s.fontSettingLabel}>
-              {label}
-            </span>
+            <span style={s.fontSettingLabel}>{label}</span>
             <button
               type="button"
               onClick={() => onChange(defaultFont)}
@@ -122,24 +129,27 @@ export function FontSelector({ value, onChange, label, hint, defaultFont, previe
               {t("common.reset")}
             </button>
           </div>
-          <span style={s.fontSettingHint}>
-            {hint}
-          </span>
+          <span style={s.fontSettingHint}>{hint}</span>
         </div>
 
-        <Popover.Root open={open} onOpenChange={(v) => { setOpen(v); if (!v) setSearch(""); }}>
+        <Popover.Root
+          open={open}
+          onOpenChange={(v) => {
+            setOpen(v);
+            if (!v) setSearch("");
+          }}
+        >
           <Popover.Trigger asChild>
-            <button
-              type="button"
-              className="radix-select-trigger"
-              style={s.fontSelectorTrigger}
-            >
-              <span
-                style={{ ...s.fontSelectorTriggerContent, fontFamily: value }}
-              >
+            <button type="button" className="radix-select-trigger" style={s.fontSelectorTrigger}>
+              <span style={{ ...s.fontSelectorTriggerContent, fontFamily: value }}>
                 {displayName || t("fontSelector.notAvailable")}
               </span>
-              <ChevronDown size={13} strokeWidth={2} color="var(--text-hint)" style={{ flexShrink: 0 }} />
+              <ChevronDown
+                size={13}
+                strokeWidth={2}
+                color="var(--text-hint)"
+                style={{ flexShrink: 0 }}
+              />
             </button>
           </Popover.Trigger>
           <Popover.Portal>
@@ -159,7 +169,11 @@ export function FontSelector({ value, onChange, label, hint, defaultFont, previe
                   onChange={(e) => setSearch(e.target.value)}
                 />
                 {search && (
-                  <button type="button" className="font-selector-clear" onClick={() => setSearch("")}>
+                  <button
+                    type="button"
+                    className="font-selector-clear"
+                    onClick={() => setSearch("")}
+                  >
                     <X size={11} />
                   </button>
                 )}
@@ -172,9 +186,7 @@ export function FontSelector({ value, onChange, label, hint, defaultFont, previe
                 onScroll={(e) => setScrollTop(e.currentTarget.scrollTop)}
                 style={filtered.length > 0 ? { height: listHeight } : undefined}
               >
-                {!loaded && (
-                  <div className="font-selector-empty">{t("fontSelector.loading")}</div>
-                )}
+                {!loaded && <div className="font-selector-empty">{t("fontSelector.loading")}</div>}
                 {loaded && filtered.length === 0 && !search && (
                   <div className="font-selector-empty">{t("fontSelector.notAvailable")}</div>
                 )}
@@ -182,7 +194,10 @@ export function FontSelector({ value, onChange, label, hint, defaultFont, previe
                   <div className="font-selector-empty">{t("fontSelector.noResults")}</div>
                 )}
                 {filtered.length > 0 && (
-                  <div className="font-selector-virtual-spacer" style={{ height: filtered.length * FONT_ITEM_HEIGHT }}>
+                  <div
+                    className="font-selector-virtual-spacer"
+                    style={{ height: filtered.length * FONT_ITEM_HEIGHT }}
+                  >
                     {visibleFonts.map((font, offset) => {
                       const index = visibleStart + offset;
                       const selected = isSelected(font);
@@ -198,18 +213,24 @@ export function FontSelector({ value, onChange, label, hint, defaultFont, previe
                             top: index * FONT_ITEM_HEIGHT,
                             height: FONT_ITEM_HEIGHT,
                             fontFamily: selected ? font : undefined,
-                            background: focusedIndex === index
-                              ? "var(--bg-hover)"
-                              : selected
-                                ? "var(--control-active-bg)"
-                                : undefined,
+                            background:
+                              focusedIndex === index
+                                ? "var(--bg-hover)"
+                                : selected
+                                  ? "var(--control-active-bg)"
+                                  : undefined,
                           }}
                           onClick={() => handleSelect(font)}
                           onMouseEnter={() => setFocusedIndex(index)}
                         >
                           <span className="font-selector-item-name">{font}</span>
                           {selected && (
-                            <Check size={12} strokeWidth={2.5} color="var(--accent)" style={{ flexShrink: 0 }} />
+                            <Check
+                              size={12}
+                              strokeWidth={2.5}
+                              color="var(--accent)"
+                              style={{ flexShrink: 0 }}
+                            />
                           )}
                         </button>
                       );

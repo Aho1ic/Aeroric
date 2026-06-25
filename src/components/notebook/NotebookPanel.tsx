@@ -469,10 +469,7 @@ export function NotebookPanel({ width = "100%" }: { width?: number | string }) {
     replaceSelection((selected) =>
       selected
         .replace(/<mark>([\s\S]*?)<\/mark>/g, "$1")
-        .replace(
-          /<span\s+style=["']background-color:[^"']+["']>([\s\S]*?)<\/span>/g,
-          "$1",
-        ),
+        .replace(/<span\s+style=["']background-color:[^"']+["']>([\s\S]*?)<\/span>/g, "$1"),
     );
   };
 

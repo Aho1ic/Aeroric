@@ -28,7 +28,9 @@ describe("database advanced tools", () => {
           ]}
           sourceObjects={[{ name: "users", object_type: "table", schema: "public" }]}
           sourceColumnsByTable={{
-            "public.users": [{ name: "id", data_type: "int", is_nullable: false, is_primary_key: true }],
+            "public.users": [
+              { name: "id", data_type: "int", is_nullable: false, is_primary_key: true },
+            ],
           }}
           database="main"
           schema="public"
@@ -46,7 +48,9 @@ describe("database advanced tools", () => {
         sourceDetails: [
           expect.objectContaining({
             name: "users",
-            columns: [expect.objectContaining({ name: "id", data_type: "int", is_primary_key: true })],
+            columns: [
+              expect.objectContaining({ name: "id", data_type: "int", is_primary_key: true }),
+            ],
           }),
         ],
         databaseType: "mysql",
@@ -155,7 +159,7 @@ describe("database advanced tools", () => {
     );
 
     expect(screen.getAllByText("users").length).toBeGreaterThan(0);
-    expect((screen.getAllByText("id")).length).toBeGreaterThanOrEqual(1);
-    expect((screen.getAllByText(/int/)).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText("id").length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText(/int/).length).toBeGreaterThanOrEqual(1);
   });
 });

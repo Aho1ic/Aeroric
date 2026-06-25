@@ -95,7 +95,9 @@ export function GitAdvancedPanel({
     setLoadingBranchGraph(true);
     setError(null);
     try {
-      setBranchGraph(await invoke<GitBranchGraphResult>("git_branch_graph", { projectPath, limit: 80 }));
+      setBranchGraph(
+        await invoke<GitBranchGraphResult>("git_branch_graph", { projectPath, limit: 80 }),
+      );
     } catch (err) {
       setError(String(err));
     } finally {
@@ -213,14 +215,11 @@ export function GitAdvancedPanel({
   };
 
   const resolveConflict = async (file: GitConflictFile, resolution: GitConflictResolution) => {
-    const ok = await confirm(
-      t(`gitAdvanced.confirmResolve.${resolution}`, { name: file.path }),
-      {
-        title: t("gitAdvanced.resolveConflict"),
-        kind: "warning",
-        okLabel: t(`gitAdvanced.resolution.${resolution}`),
-      },
-    );
+    const ok = await confirm(t(`gitAdvanced.confirmResolve.${resolution}`, { name: file.path }), {
+      title: t("gitAdvanced.resolveConflict"),
+      kind: "warning",
+      okLabel: t(`gitAdvanced.resolution.${resolution}`),
+    });
     if (!ok) return;
     setWorking(`resolve:${file.path}:${resolution}`);
     setError(null);
@@ -296,7 +295,9 @@ export function GitAdvancedPanel({
                     <div style={refListStyle}>
                       {commit.refs.map((ref) => (
                         <span key={`${commit.hash}:${ref}`} style={refChipStyle}>
-                          {ref.startsWith("HEAD -> ") ? ref.slice("HEAD -> ".length) : ref.replace(/^tag: /, "")}
+                          {ref.startsWith("HEAD -> ")
+                            ? ref.slice("HEAD -> ".length)
+                            : ref.replace(/^tag: /, "")}
                         </span>
                       ))}
                     </div>
@@ -500,7 +501,9 @@ export function GitAdvancedPanel({
         <div style={conflictPreviewBlockStyle}>
           <div style={conflictPreviewHeaderStyle}>
             <span>{t("gitAdvanced.conflictPreview")}</span>
-            {conflictPreview && <span style={conflictPreviewPathStyle}>{conflictPreview.filePath}</span>}
+            {conflictPreview && (
+              <span style={conflictPreviewPathStyle}>{conflictPreview.filePath}</span>
+            )}
           </div>
           {conflictPreview?.hunks.length ? (
             <div style={conflictHunksStyle}>
@@ -511,17 +514,25 @@ export function GitAdvancedPanel({
                   </div>
                   <div style={conflictColumnsStyle}>
                     <div style={conflictColumnStyle}>
-                      <div style={conflictColumnHeaderStyle}>{t("gitAdvanced.resolution.ours")}</div>
-                      <pre style={conflictColumnBodyStyle}>{hunk.ours || t("gitAdvanced.emptySide")}</pre>
+                      <div style={conflictColumnHeaderStyle}>
+                        {t("gitAdvanced.resolution.ours")}
+                      </div>
+                      <pre style={conflictColumnBodyStyle}>
+                        {hunk.ours || t("gitAdvanced.emptySide")}
+                      </pre>
                     </div>
                     <div style={conflictColumnStyle}>
-                      <div style={conflictColumnHeaderStyle}>{t("gitAdvanced.resolution.base")}</div>
+                      <div style={conflictColumnHeaderStyle}>
+                        {t("gitAdvanced.resolution.base")}
+                      </div>
                       <pre style={conflictColumnBodyStyle}>
                         {hunk.base || t("gitAdvanced.noBaseSide")}
                       </pre>
                     </div>
                     <div style={conflictColumnStyle}>
-                      <div style={conflictColumnHeaderStyle}>{t("gitAdvanced.resolution.theirs")}</div>
+                      <div style={conflictColumnHeaderStyle}>
+                        {t("gitAdvanced.resolution.theirs")}
+                      </div>
                       <pre style={conflictColumnBodyStyle}>
                         {hunk.theirs || t("gitAdvanced.emptySide")}
                       </pre>

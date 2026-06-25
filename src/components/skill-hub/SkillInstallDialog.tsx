@@ -53,9 +53,7 @@ export function SkillInstallDialog({
     [existingInstallations],
   );
 
-  const alreadyInstalled = projectId
-    ? existingKey.has(`${projectId}::${agent}`)
-    : false;
+  const alreadyInstalled = projectId ? existingKey.has(`${projectId}::${agent}`) : false;
 
   const filteredProjects = useMemo(() => {
     const q = projectQuery.trim().toLocaleLowerCase();
@@ -160,9 +158,7 @@ export function SkillInstallDialog({
                     </div>
                     <div style={s.skillInstallProjectList}>
                       {allProjects.length === 0 ? (
-                        <div style={s.skillInstallEmptyOption}>
-                          {t("skill.install.noProjects")}
-                        </div>
+                        <div style={s.skillInstallEmptyOption}>{t("skill.install.noProjects")}</div>
                       ) : filteredProjects.length === 0 ? (
                         <div style={s.skillInstallEmptyOption}>
                           {t("skill.install.noMatchingProjects")}
@@ -233,12 +229,7 @@ export function SkillInstallDialog({
           </div>
 
           <div style={s.skillInstallDialogFooter}>
-            <button
-              type="button"
-              style={s.modalCancelBtn}
-              onClick={onClose}
-              disabled={busy}
-            >
+            <button type="button" style={s.modalCancelBtn} onClick={onClose} disabled={busy}>
               {t("skill.install.cancel")}
             </button>
             <button

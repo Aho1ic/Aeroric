@@ -60,10 +60,14 @@ export function TableStructurePanel({ databaseType, schema, tableName, columns, 
     return [...existing, ...added];
   }, [columns, drafts]);
 
-  const addDraft = () => setDrafts((current) => [...current, { id: `new:${Date.now()}`, name: "", dataType: "" }]);
+  const addDraft = () =>
+    setDrafts((current) => [...current, { id: `new:${Date.now()}`, name: "", dataType: "" }]);
   const updateDraft = (id: string, patch: Partial<{ name: string; dataType: string }>) =>
-    setDrafts((current) => current.map((draft) => (draft.id === id ? { ...draft, ...patch } : draft)));
-  const removeDraft = (id: string) => setDrafts((current) => current.filter((draft) => draft.id !== id));
+    setDrafts((current) =>
+      current.map((draft) => (draft.id === id ? { ...draft, ...patch } : draft)),
+    );
+  const removeDraft = (id: string) =>
+    setDrafts((current) => current.filter((draft) => draft.id !== id));
 
   const previewSql = async () => {
     setError("");
@@ -88,14 +92,22 @@ export function TableStructurePanel({ databaseType, schema, tableName, columns, 
     <div style={s.databaseWorkspacePanel}>
       <div style={s.databaseWorkspaceHeader}>
         <div>
-          <div style={s.databaseWorkspaceTitle}>{t("database.tableStructure")}: {tableName}</div>
+          <div style={s.databaseWorkspaceTitle}>
+            {t("database.tableStructure")}: {tableName}
+          </div>
           <div style={s.databaseDialogHint}>{t("database.tableStructureHint")}</div>
         </div>
         <div style={s.databaseButtonRow}>
           <DbxButton variant="outline" size="sm" icon={Plus} disabled={readOnly} onClick={addDraft}>
             {t("database.addColumn")}
           </DbxButton>
-          <DbxButton variant="outline" size="sm" icon={Code} disabled={readOnly || editableColumns.length === columns.length} onClick={() => void previewSql()}>
+          <DbxButton
+            variant="outline"
+            size="sm"
+            icon={Code}
+            disabled={readOnly || editableColumns.length === columns.length}
+            onClick={() => void previewSql()}
+          >
             {t("database.previewSql")}
           </DbxButton>
         </div>
@@ -115,14 +127,26 @@ export function TableStructurePanel({ databaseType, schema, tableName, columns, 
             {columns.map((column) => (
               <tr key={column.name}>
                 <td style={s.databaseTd}>
-                  {column.is_primary_key && <span title={t("database.primaryKey")} style={{ marginRight: 4 }}>🔑</span>}
+                  {column.is_primary_key && (
+                    <span title={t("database.primaryKey")} style={{ marginRight: 4 }}>
+                      🔑
+                    </span>
+                  )}
                   <span style={{ fontWeight: 700 }}>{column.name}</span>
                 </td>
-                <td style={s.databaseTd}>{column.data_type}{column.is_nullable ? " NULL" : " NOT NULL"}</td>
+                <td style={s.databaseTd}>
+                  {column.data_type}
+                  {column.is_nullable ? " NULL" : " NOT NULL"}
+                </td>
                 <td style={s.databaseTd}>{column.column_default ?? ""}</td>
                 <td style={s.databaseTd}>{column.comment ?? ""}</td>
                 <td style={s.databaseTd}>
-                  <DbxIconButton icon={Trash2} size="icon-xs" disabled={readOnly} aria-label={t("common.delete")} />
+                  <DbxIconButton
+                    icon={Trash2}
+                    size="icon-xs"
+                    disabled={readOnly}
+                    aria-label={t("common.delete")}
+                  />
                 </td>
               </tr>
             ))}
@@ -147,7 +171,12 @@ export function TableStructurePanel({ databaseType, schema, tableName, columns, 
                 <td style={s.databaseTd} />
                 <td style={s.databaseTd} />
                 <td style={s.databaseTd}>
-                  <DbxIconButton icon={Trash2} size="icon-xs" onClick={() => removeDraft(draft.id)} aria-label={t("common.delete")} />
+                  <DbxIconButton
+                    icon={Trash2}
+                    size="icon-xs"
+                    onClick={() => removeDraft(draft.id)}
+                    aria-label={t("common.delete")}
+                  />
                 </td>
               </tr>
             ))}

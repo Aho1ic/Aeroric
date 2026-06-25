@@ -357,9 +357,7 @@ export function RunConfigurationsPanel({
               {t("run.command")}
               <input
                 value={draft.command}
-                onChange={(event) =>
-                  setDraft((prev) => ({ ...prev, command: event.target.value }))
-                }
+                onChange={(event) => setDraft((prev) => ({ ...prev, command: event.target.value }))}
                 placeholder="pnpm dev"
                 style={inputStyle}
               />

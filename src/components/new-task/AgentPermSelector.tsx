@@ -167,9 +167,7 @@ export function AgentPermSelector({
   const sendLabel = isEmpty && !hasImages ? t("newTask.startTerminal") : t("newTask.send");
   const controlButtonStyle = compact ? s.toolbarBtnIconOnly : s.toolbarBtn;
   const saveAsTodoDisabled = hasImages || !!saveAsTodoDisabledReason;
-  const saveAsTodoTitle = hasImages
-    ? t("newTask.imagesMustSend")
-    : saveAsTodoDisabledReason;
+  const saveAsTodoTitle = hasImages ? t("newTask.imagesMustSend") : saveAsTodoDisabledReason;
 
   return (
     <div style={s.toolbar}>

@@ -56,11 +56,7 @@ function ToolUseCard({ name, input }: { name: string; input: string }) {
           <ChevronRight size={11} style={{ flexShrink: 0 }} />
         )}
         <Wrench size={11} style={{ color: "var(--text-hint)", flexShrink: 0 }} />
-        <span
-          style={{ fontFamily: "var(--font-mono)", fontWeight: 600 }}
-        >
-          {name}
-        </span>
+        <span style={{ fontFamily: "var(--font-mono)", fontWeight: 600 }}>{name}</span>
       </button>
       {expanded && (
         <pre

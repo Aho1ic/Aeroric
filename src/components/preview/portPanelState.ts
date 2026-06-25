@@ -33,7 +33,10 @@ export function sortListeningPorts(ports: ListeningPort[]): ListeningPort[] {
   });
 }
 
-export function resolvePreviewUrl(ports: ListeningPort[], currentUrl: string | null): string | null {
+export function resolvePreviewUrl(
+  ports: ListeningPort[],
+  currentUrl: string | null,
+): string | null {
   if (currentUrl && ports.some((port) => port.url === currentUrl)) {
     return currentUrl;
   }

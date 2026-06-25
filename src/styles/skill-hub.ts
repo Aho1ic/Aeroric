@@ -143,7 +143,12 @@ export const skillHub = {
     color: "var(--text-muted)",
   },
   skillHubEmptyTitle: { fontSize: 14, fontWeight: 600, color: "var(--text-secondary)" },
-  skillHubEmptyHint: { fontSize: 12.5, color: "var(--text-muted)", maxWidth: 380, textAlign: "center" as const },
+  skillHubEmptyHint: {
+    fontSize: 12.5,
+    color: "var(--text-muted)",
+    maxWidth: 380,
+    textAlign: "center" as const,
+  },
   skillHubEmptyBtn: {
     display: "inline-flex",
     alignItems: "center",
@@ -165,7 +170,12 @@ export const skillHub = {
     marginBottom: 14,
   },
   skillHubHeaderMain: { flex: 1, minWidth: 0 },
-  skillHubHeaderTitle: { fontSize: 18, fontWeight: 700, color: "var(--text-primary)", marginBottom: 4 },
+  skillHubHeaderTitle: {
+    fontSize: 18,
+    fontWeight: 700,
+    color: "var(--text-primary)",
+    marginBottom: 4,
+  },
   skillHubHeaderPath: {
     fontSize: 12,
     color: "var(--text-muted)",
@@ -401,7 +411,13 @@ export const skillHub = {
     border: "1px solid var(--border-dim)",
     borderRadius: 8,
   },
-  skillInstallRowMain: { flex: 1, minWidth: 0, display: "flex", flexDirection: "column" as const, gap: 4 },
+  skillInstallRowMain: {
+    flex: 1,
+    minWidth: 0,
+    display: "flex",
+    flexDirection: "column" as const,
+    gap: 4,
+  },
   skillInstallRowTitle: { fontSize: 13, fontWeight: 600, color: "var(--text-primary)" },
   skillInstallRowMeta: {
     display: "flex",

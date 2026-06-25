@@ -10,7 +10,13 @@ import {
   Blocks,
   Plus,
 } from "lucide-react";
-import type { ThemeMode, ThemeVariant, TerminalFontSize, TaskDisplayWindow, FontFamily } from "../types";
+import type {
+  ThemeMode,
+  ThemeVariant,
+  TerminalFontSize,
+  TaskDisplayWindow,
+  FontFamily,
+} from "../types";
 import { useI18n } from "../i18n";
 import s from "../styles";
 import claudeLogo from "../assets/claude.svg";
@@ -138,7 +144,7 @@ export function AppSettingsDialog({
   const activeAgentItem =
     activeNav === ADD_AGENT_NAV_KEY
       ? null
-      : agentNavItems.find((item) => item.key === activeNav) ?? null;
+      : (agentNavItems.find((item) => item.key === activeNav) ?? null);
   const activeLabel = activeItem.label ?? t(activeItem.labelKey ?? activeItem.key);
 
   const sectionGroups = SECTION_ORDER.map((section) => ({
@@ -168,7 +174,8 @@ export function AppSettingsDialog({
                     style={{
                       ...s.settingsNavItem,
                       background: activeNav === item.key ? "var(--bg-hover)" : "none",
-                      color: activeNav === item.key ? "var(--text-primary)" : "var(--text-secondary)",
+                      color:
+                        activeNav === item.key ? "var(--text-primary)" : "var(--text-secondary)",
                       fontWeight: activeNav === item.key ? 600 : 500,
                     }}
                     onClick={() => {

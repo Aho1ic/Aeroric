@@ -124,11 +124,7 @@ export function TaskList({
         task.status === "interrupted"
       ) {
         attentionTasks.push(task);
-      } else if (
-        task.status === "done" &&
-        !!task.worktreePath &&
-        !task.worktreeDiscarded
-      ) {
+      } else if (task.status === "done" && !!task.worktreePath && !task.worktreeDiscarded) {
         pendingMergeTasks.push(task);
       } else if (task.starred) {
         starredTasks.push(task);

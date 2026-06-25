@@ -13,11 +13,7 @@ import {
   type CrossProjectRef,
   type MentionItem,
 } from "./new-task/MentionPopover";
-import {
-  PromptEditor,
-  usePromptEditor,
-  type PromptEditorContent,
-} from "./new-task/PromptEditor";
+import { PromptEditor, usePromptEditor, type PromptEditorContent } from "./new-task/PromptEditor";
 import { ImageAttachments } from "./new-task/ImageAttachments";
 import { TextAttachments, type PastedText } from "./new-task/TextAttachments";
 import { AgentPermSelector, type ComposeMenu } from "./new-task/AgentPermSelector";
@@ -116,12 +112,8 @@ export function NewTaskView({
 
   const [mentionSearch, setMentionSearch] = useState<string | null>(null);
   const [mentionIndex, setMentionIndex] = useState(0);
-  const [pastedImages, setPastedImages] = useState<PastedImage[]>(
-    initialDraft?.pastedImages ?? [],
-  );
-  const [pastedTexts, setPastedTexts] = useState<PastedText[]>(
-    initialDraft?.pastedTexts ?? [],
-  );
+  const [pastedImages, setPastedImages] = useState<PastedImage[]>(initialDraft?.pastedImages ?? []);
+  const [pastedTexts, setPastedTexts] = useState<PastedText[]>(initialDraft?.pastedTexts ?? []);
   const [isEmpty, setIsEmpty] = useState(
     () =>
       !(initialDraft?.promptHtml ?? "").replace(/<[^>]+>/g, "").trim() &&
@@ -153,9 +145,27 @@ export function NewTaskView({
   // Cache draft on unmount so reopening the new-task view restores work in progress.
   // Cleared after submit to avoid re-restoring the just-sent prompt.
   const submittedRef = useRef(false);
-  const draftDataRef = useRef({ agent, permMode, planMode, goalMode, pastedImages, pastedTexts, launchMode, baseBranch });
+  const draftDataRef = useRef({
+    agent,
+    permMode,
+    planMode,
+    goalMode,
+    pastedImages,
+    pastedTexts,
+    launchMode,
+    baseBranch,
+  });
   useEffect(() => {
-    draftDataRef.current = { agent, permMode, planMode, goalMode, pastedImages, pastedTexts, launchMode, baseBranch };
+    draftDataRef.current = {
+      agent,
+      permMode,
+      planMode,
+      goalMode,
+      pastedImages,
+      pastedTexts,
+      launchMode,
+      baseBranch,
+    };
   }, [agent, permMode, planMode, goalMode, pastedImages, pastedTexts, launchMode, baseBranch]);
   useEffect(() => {
     return () => {
@@ -166,7 +176,12 @@ export function NewTaskView({
       }
       const data = draftDataRef.current;
       const editorContent = editorContentRef.current;
-      if (!editorContent.text.trim() && !editorContent.hasChips && data.pastedImages.length === 0 && data.pastedTexts.length === 0) {
+      if (
+        !editorContent.text.trim() &&
+        !editorContent.hasChips &&
+        data.pastedImages.length === 0 &&
+        data.pastedTexts.length === 0
+      ) {
         onCacheDraft(null);
         return;
       }
@@ -292,10 +307,7 @@ export function NewTaskView({
         setAllFiles(files.map(parseFileEntry));
       })
       .catch((e: unknown) => {
-        showToast(
-          t("toast.loadProjectFilesFailed", { error: String(e) }),
-          "warning",
-        );
+        showToast(t("toast.loadProjectFilesFailed", { error: String(e) }), "warning");
       })
       .finally(() => setFilesLoading(false));
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -458,24 +470,25 @@ export function NewTaskView({
     <div style={s.newTaskOuter}>
       {/* Header */}
       <div style={s.newTaskHeader}>
-        <img
-          src={agent === "claude" ? claudeGif : codexGif}
-          alt=""
-          style={s.newTaskClaudeGif}
-        />
+        <img src={agent === "claude" ? claudeGif : codexGif} alt="" style={s.newTaskClaudeGif} />
         <span style={s.newTaskTitle}>{t("newTask.title")}</span>
       </div>
 
       {/* Missing context file warning */}
       {shouldShowInstructionsBanner(agent, hasMdFile) && (
         <div style={s.agentMissingMdBanner}>
-          <TriangleAlert size={15} style={{ color: "var(--warning)", flexShrink: 0, marginTop: 1 }} />
+          <TriangleAlert
+            size={15}
+            style={{ color: "var(--warning)", flexShrink: 0, marginTop: 1 }}
+          />
           <div style={s.agentMissingMdBody}>
             <div style={{ fontSize: 13, lineHeight: 1.55, color: "var(--text-secondary)" }}>
               <span style={{ fontWeight: 650, color: "var(--text-primary)" }}>
-                {t("newTask.instructionsMissing", {
-                  file: isCodexLikeAgent(agent, agentOptions) ? "AGENTS.md" : "CLAUDE.md",
-                }).split(isCodexLikeAgent(agent, agentOptions) ? "AGENTS.md" : "CLAUDE.md")[0]}
+                {
+                  t("newTask.instructionsMissing", {
+                    file: isCodexLikeAgent(agent, agentOptions) ? "AGENTS.md" : "CLAUDE.md",
+                  }).split(isCodexLikeAgent(agent, agentOptions) ? "AGENTS.md" : "CLAUDE.md")[0]
+                }
                 <code
                   style={{
                     fontFamily: "var(--font-mono)",
@@ -487,9 +500,11 @@ export function NewTaskView({
                 >
                   {isCodexLikeAgent(agent, agentOptions) ? "AGENTS.md" : "CLAUDE.md"}
                 </code>{" "}
-                {t("newTask.instructionsMissing", {
-                  file: isCodexLikeAgent(agent, agentOptions) ? "AGENTS.md" : "CLAUDE.md",
-                }).split(isCodexLikeAgent(agent, agentOptions) ? "AGENTS.md" : "CLAUDE.md")[1]}
+                {
+                  t("newTask.instructionsMissing", {
+                    file: isCodexLikeAgent(agent, agentOptions) ? "AGENTS.md" : "CLAUDE.md",
+                  }).split(isCodexLikeAgent(agent, agentOptions) ? "AGENTS.md" : "CLAUDE.md")[1]
+                }
               </span>{" "}
               {t("newTask.addInstructions", {
                 file: isCodexLikeAgent(agent, agentOptions) ? "AGENTS.md" : "CLAUDE.md",
@@ -602,7 +617,6 @@ export function NewTaskView({
             />
           </div>
         )}
-
       </div>
 
       <div style={s.composeActionDock}>

@@ -125,19 +125,12 @@ describe("WebPreviewPanel", () => {
 
     render(
       <I18nProvider>
-        <WebPreviewPanel
-          projectPath="/tmp/aeroric"
-          width={360}
-          runProcessTarget={process}
-        />
+        <WebPreviewPanel projectPath="/tmp/aeroric" width={360} runProcessTarget={process} />
       </I18nProvider>,
     );
 
     await waitFor(() => {
-      expect(screen.getByTitle("Embedded preview")).toHaveAttribute(
-        "src",
-        "http://localhost:5173",
-      );
+      expect(screen.getByTitle("Embedded preview")).toHaveAttribute("src", "http://localhost:5173");
     });
   });
 });

@@ -27,9 +27,7 @@ import "@xterm/xterm/css/xterm.css";
 interface TerminalViewProps {
   onInput: (data: string) => void;
   onResize: (cols: number, rows: number) => void;
-  onRegisterTerminal: (
-    writeFn: ((data: string, callback?: () => void) => void) | null,
-  ) => number;
+  onRegisterTerminal: (writeFn: ((data: string, callback?: () => void) => void) | null) => number;
   onReady?: (generation: number) => void;
   themeVariant: ThemeVariant;
   terminalFontSize: TerminalFontSize;

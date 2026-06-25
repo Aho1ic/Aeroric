@@ -74,7 +74,10 @@ function SshCardPicker({
               const selected = selectedId === connection.id;
               const canCopyPassword = Boolean(connection.password);
               return (
-                <div key={connection.id} style={selected ? s.sshProjectCardSelected : s.sshProjectCard}>
+                <div
+                  key={connection.id}
+                  style={selected ? s.sshProjectCardSelected : s.sshProjectCard}
+                >
                   <button
                     type="button"
                     style={s.sshProjectCardSelect}
@@ -138,7 +141,11 @@ function SshCardPicker({
                       });
                     }}
                   >
-                    {copiedConnectionId === connection.id ? <Check size={14} /> : <Copy size={14} />}
+                    {copiedConnectionId === connection.id ? (
+                      <Check size={14} />
+                    ) : (
+                      <Copy size={14} />
+                    )}
                   </button>
                 </div>
               );
@@ -173,7 +180,12 @@ function SshWorkspaceHeader({
         {t("ssh.title")}
       </div>
       <div className="ssh-workspace-actions">
-        <button type="button" className="ssh-workspace-icon-btn" title={t("ssh.newConnection")} onClick={onNewConnection}>
+        <button
+          type="button"
+          className="ssh-workspace-icon-btn"
+          title={t("ssh.newConnection")}
+          onClick={onNewConnection}
+        >
           <Plus size={15} />
         </button>
         <button

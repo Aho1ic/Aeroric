@@ -127,14 +127,17 @@ export function FileExplorer({
     });
   }, []);
 
-  const handleSortFieldClick = useCallback((field: FileSortField) => {
-    if (field === sortField) {
-      setSortDirection((current) => (current === "asc" ? "desc" : "asc"));
-      return;
-    }
-    setSortField(field);
-    setSortDirection(field === "modified" ? "desc" : "asc");
-  }, [sortField]);
+  const handleSortFieldClick = useCallback(
+    (field: FileSortField) => {
+      if (field === sortField) {
+        setSortDirection((current) => (current === "asc" ? "desc" : "asc"));
+        return;
+      }
+      setSortField(field);
+      setSortDirection(field === "modified" ? "desc" : "asc");
+    },
+    [sortField],
+  );
 
   const renderSortArrow = (field: FileSortField) => {
     if (field !== sortField) return null;
@@ -357,7 +360,10 @@ export function FileExplorer({
   const handleSelect = useCallback(
     (node: TreeNode) => {
       scrollRef.current?.focus({ preventScroll: true });
-      const action = fileExplorerClickAction({ isDir: node.is_dir, isSelected: selectedPath === node.path });
+      const action = fileExplorerClickAction({
+        isDir: node.is_dir,
+        isSelected: selectedPath === node.path,
+      });
       if (action === "toggle") {
         handleToggle(node.path);
         return;
@@ -667,7 +673,9 @@ export function FileExplorer({
   const pasteFiles = useCallback(
     async (files: FileList | null) => {
       const sourcePaths = Array.from(files ?? [])
-        .map((file) => ("path" in file ? String((file as File & { path?: string }).path ?? "") : ""))
+        .map((file) =>
+          "path" in file ? String((file as File & { path?: string }).path ?? "") : "",
+        )
         .filter(Boolean);
       await pasteSourcePaths(sourcePaths);
     },
@@ -760,7 +768,10 @@ export function FileExplorer({
       } else if (action === "preview") {
         if (selectedNode) {
           if (onPreviewRequest) {
-            const endpoint = fileExplorerPreviewEndpoint({ selectedPath: selectedNode.path, remote });
+            const endpoint = fileExplorerPreviewEndpoint({
+              selectedPath: selectedNode.path,
+              remote,
+            });
             if (!endpoint) return;
             const baseEndpoint: SftpEndpoint =
               endpoint.kind === "local"
@@ -873,11 +884,7 @@ export function FileExplorer({
           <button
             type="button"
             aria-label={`${t("file.sortByName")} ${
-              sortField === "name"
-                ? sortDirection === "asc"
-                  ? "ascending"
-                  : "descending"
-                : ""
+              sortField === "name" ? (sortDirection === "asc" ? "ascending" : "descending") : ""
             }`.trim()}
             style={{
               ...s.fileExplorerSortBtn,
@@ -891,11 +898,7 @@ export function FileExplorer({
           <button
             type="button"
             aria-label={`${t("file.sortByModified")} ${
-              sortField === "modified"
-                ? sortDirection === "asc"
-                  ? "ascending"
-                  : "descending"
-                : ""
+              sortField === "modified" ? (sortDirection === "asc" ? "ascending" : "descending") : ""
             }`.trim()}
             style={{
               ...s.fileExplorerSortBtn,

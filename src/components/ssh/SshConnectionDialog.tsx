@@ -31,7 +31,13 @@ const FIELD_ORDER: Array<keyof SshConnectionDraft> = [
   "remotePath",
 ];
 
-export function SshConnectionDialog({ connection, groups = [], initialGroup = "", onClose, onSave }: Props) {
+export function SshConnectionDialog({
+  connection,
+  groups = [],
+  initialGroup = "",
+  onClose,
+  onSave,
+}: Props) {
   const { t } = useI18n();
   const groupOptions = useMemo(
     () =>

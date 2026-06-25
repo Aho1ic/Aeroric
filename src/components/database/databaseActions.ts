@@ -78,7 +78,12 @@ export const DATABASE_ACTIONS: DatabaseActionDefinition[] = [
   { id: "saveSql", labelKey: "database.saveSql", icon: Save, group: "query" },
   { id: "openSql", labelKey: "database.openSql", icon: FileCode, group: "query" },
   { id: "executeSqlFile", labelKey: "database.executeSqlFile", icon: FileUp, group: "query" },
-  { id: "importResultArchive", labelKey: "database.importResultArchive", icon: Upload, group: "query" },
+  {
+    id: "importResultArchive",
+    labelKey: "database.importResultArchive",
+    icon: Upload,
+    group: "query",
+  },
   { id: "driverManager", labelKey: "database.driverManager", icon: Shield, group: "tools" },
   { id: "refresh", labelKey: "database.refresh", icon: RefreshCcw, group: "connection" },
   { id: "tableImport", labelKey: "database.tableImport", icon: Upload, group: "grid" },
@@ -91,8 +96,18 @@ export const DATABASE_ACTIONS: DatabaseActionDefinition[] = [
   { id: "tableStructure", labelKey: "database.tableStructure", icon: PencilRuler, group: "grid" },
   { id: "redisCreateKey", labelKey: "database.redisCreateKey", icon: Braces, group: "redis" },
   { id: "redisDeleteKey", labelKey: "database.redisDeleteKey", icon: Trash2, group: "redis" },
-  { id: "mongoInsertDocument", labelKey: "database.mongoInsertDocument", icon: Braces, group: "mongo" },
-  { id: "mongoDeleteDocument", labelKey: "database.mongoDeleteDocument", icon: Trash2, group: "mongo" },
+  {
+    id: "mongoInsertDocument",
+    labelKey: "database.mongoInsertDocument",
+    icon: Braces,
+    group: "mongo",
+  },
+  {
+    id: "mongoDeleteDocument",
+    labelKey: "database.mongoDeleteDocument",
+    icon: Trash2,
+    group: "mongo",
+  },
 ];
 
 const sqlTypes = new Set<DbxDatabaseType>([
@@ -109,27 +124,45 @@ export function isSqlDatabase(dbType?: DbxDatabaseType | null): boolean {
   return !!dbType && sqlTypes.has(dbType);
 }
 
-export function isDatabaseActionEnabled(id: DatabaseActionId, context: DatabaseActionContext): boolean {
+export function isDatabaseActionEnabled(
+  id: DatabaseActionId,
+  context: DatabaseActionContext,
+): boolean {
   if (id === "newConnection" || id === "driverManager") return true;
   if (!context.hasConnection) return false;
   if (id === "cancel") return context.isExecuting || context.isExplaining;
-  if (id === "execute") return isSqlDatabase(context.dbType) && context.hasSql && !context.isExecuting;
+  if (id === "execute")
+    return isSqlDatabase(context.dbType) && context.hasSql && !context.isExecuting;
   if (id === "explain") {
-    return isSqlDatabase(context.dbType) && context.hasSql && !context.isExecuting && !context.isExplaining;
+    return (
+      isSqlDatabase(context.dbType) &&
+      context.hasSql &&
+      !context.isExecuting &&
+      !context.isExplaining
+    );
   }
-  if (id === "formatSql" || id === "saveSql") return isSqlDatabase(context.dbType) && context.hasSql;
-  if (id === "openSql" || id === "executeSqlFile" || id === "newQuery" || id === "importResultArchive") {
+  if (id === "formatSql" || id === "saveSql")
+    return isSqlDatabase(context.dbType) && context.hasSql;
+  if (
+    id === "openSql" ||
+    id === "executeSqlFile" ||
+    id === "newQuery" ||
+    id === "importResultArchive"
+  ) {
     return isSqlDatabase(context.dbType);
   }
   if (id === "refresh") return true;
   if (id === "tableExport" || id === "databaseExport" || id === "erDiagram") {
     return isSqlDatabase(context.dbType) && context.hasSelectedTable;
   }
-  if (id === "schemaDiff" || id === "dataCompare" || id === "dataTransfer") return isSqlDatabase(context.dbType);
+  if (id === "schemaDiff" || id === "dataCompare" || id === "dataTransfer")
+    return isSqlDatabase(context.dbType);
   if (id === "tableImport" || id === "tableStructure") {
     return isSqlDatabase(context.dbType) && context.hasSelectedTable && !context.readOnly;
   }
-  if (id === "redisCreateKey" || id === "redisDeleteKey") return context.dbType === "redis" && !context.readOnly;
-  if (id === "mongoInsertDocument" || id === "mongoDeleteDocument") return context.dbType === "mongodb" && !context.readOnly;
+  if (id === "redisCreateKey" || id === "redisDeleteKey")
+    return context.dbType === "redis" && !context.readOnly;
+  if (id === "mongoInsertDocument" || id === "mongoDeleteDocument")
+    return context.dbType === "mongodb" && !context.readOnly;
   return false;
 }

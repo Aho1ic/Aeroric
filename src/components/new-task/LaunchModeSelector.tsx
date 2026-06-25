@@ -120,7 +120,11 @@ export function LaunchModeSelector({
           setOpenMenu(null);
         }}
       >
-        <Select.Trigger style={controlButtonStyle} aria-label={t("newTask.launchMode")} title={modeLabel(launchMode)}>
+        <Select.Trigger
+          style={controlButtonStyle}
+          aria-label={t("newTask.launchMode")}
+          title={modeLabel(launchMode)}
+        >
           {modeIcon(launchMode)}
           {!compact && <span>{modeLabel(launchMode)}</span>}
           {!compact && (
@@ -170,11 +174,7 @@ export function LaunchModeSelector({
           </button>
         </Popover.Trigger>
         <Popover.Portal>
-          <Popover.Content
-            className="branch-popover-content"
-            sideOffset={6}
-            align="start"
-          >
+          <Popover.Content className="branch-popover-content" sideOffset={6} align="start">
             <div className="branch-popover-search">
               <Search
                 size={13}

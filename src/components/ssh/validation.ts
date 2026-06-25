@@ -34,9 +34,7 @@ export function normalizeSshPort(value: string): number | null {
   return parsed >= 1 && parsed <= 65535 ? parsed : null;
 }
 
-export function validateSshConnectionDraft(
-  draft: SshConnectionDraft,
-): SshConnectionDraftErrors {
+export function validateSshConnectionDraft(draft: SshConnectionDraft): SshConnectionDraftErrors {
   const errors: SshConnectionDraftErrors = {};
   if (!draft.name.trim()) errors.name = "Name is required.";
   if (!draft.host.trim()) errors.host = "Host is required.";

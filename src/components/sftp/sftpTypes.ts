@@ -183,8 +183,7 @@ function isSameOrAncestorPath(candidate: string, path: string): boolean {
   const normalizedPath = normalizeTreePath(path);
   if (normalizedCandidate === "/") return true;
   return (
-    normalizedCandidate === normalizedPath ||
-    normalizedPath.startsWith(`${normalizedCandidate}/`)
+    normalizedCandidate === normalizedPath || normalizedPath.startsWith(`${normalizedCandidate}/`)
   );
 }
 
@@ -193,8 +192,7 @@ function isSameOrDescendantPath(candidate: string, path: string): boolean {
   const normalizedPath = normalizeTreePath(path);
   if (normalizedPath === "/") return true;
   return (
-    normalizedCandidate === normalizedPath ||
-    normalizedCandidate.startsWith(`${normalizedPath}/`)
+    normalizedCandidate === normalizedPath || normalizedCandidate.startsWith(`${normalizedPath}/`)
   );
 }
 

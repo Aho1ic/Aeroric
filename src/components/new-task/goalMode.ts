@@ -8,10 +8,9 @@ const GOAL_MODE_INSTRUCTIONS = [
   "3. 修改完成后进行审查，并说明审查结果。",
 ].join("\n");
 
-const PLAN_MODE_INSTRUCTIONS = [
-  "plan mode on",
-  "请先给出实现计划，等待确认后再修改文件。",
-].join("\n");
+const PLAN_MODE_INSTRUCTIONS = ["plan mode on", "请先给出实现计划，等待确认后再修改文件。"].join(
+  "\n",
+);
 
 export interface TaskModeOptions {
   planMode: boolean;

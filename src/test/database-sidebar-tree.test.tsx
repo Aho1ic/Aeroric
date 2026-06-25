@@ -4,7 +4,13 @@ import React from "react";
 import { describe, expect, it, vi } from "vitest";
 import { I18nProvider } from "../i18n";
 import { DatabaseSidebarTree } from "../components/database/DatabaseSidebarTree";
-import type { AeroricDbConnectionConfig, DbConnectionConfig, DbObject, DbxColumnInfo, DbxObjectInfo } from "../types";
+import type {
+  AeroricDbConnectionConfig,
+  DbConnectionConfig,
+  DbObject,
+  DbxColumnInfo,
+  DbxObjectInfo,
+} from "../types";
 
 const legacyConnection: DbConnectionConfig = {
   id: "legacy",
@@ -58,7 +64,11 @@ const legacyObject: DbObject = {
 
 const usersObject: DbxObjectInfo = { name: "users", object_type: "TABLE", schema: "public" };
 const ordersObject: DbxObjectInfo = { name: "orders", object_type: "TABLE", schema: "public" };
-const activeUsersView: DbxObjectInfo = { name: "active_users", object_type: "VIEW", schema: "public" };
+const activeUsersView: DbxObjectInfo = {
+  name: "active_users",
+  object_type: "VIEW",
+  schema: "public",
+};
 const usersIndex: DbxObjectInfo = {
   name: "users_email_idx",
   object_type: "INDEX",
@@ -218,7 +228,11 @@ describe("DatabaseSidebarTree", () => {
   });
 
   it("orders pinned DBX database, schema, and object nodes before unpinned siblings", async () => {
-    const accountsObject: DbxObjectInfo = { name: "accounts", object_type: "TABLE", schema: "public" };
+    const accountsObject: DbxObjectInfo = {
+      name: "accounts",
+      object_type: "TABLE",
+      schema: "public",
+    };
     renderTree({
       activeDbxDatabase: "zeta",
       activeDbxSchema: "public",
@@ -236,17 +250,23 @@ describe("DatabaseSidebarTree", () => {
     const pinnedDatabase = await screen.findByRole("button", { name: /main/i });
     const unpinnedDatabase = screen.getByRole("button", { name: /^zeta$/i });
     expect(within(pinnedDatabase).getByLabelText("Pinned")).toBeInTheDocument();
-    expect(pinnedDatabase.compareDocumentPosition(unpinnedDatabase) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(
+      pinnedDatabase.compareDocumentPosition(unpinnedDatabase) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
 
     const pinnedSchema = screen.getByRole("button", { name: /archive/i });
     const unpinnedSchema = screen.getByRole("button", { name: /^public$/i });
     expect(within(pinnedSchema).getByLabelText("Pinned")).toBeInTheDocument();
-    expect(pinnedSchema.compareDocumentPosition(unpinnedSchema) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(
+      pinnedSchema.compareDocumentPosition(unpinnedSchema) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
 
     const pinnedTable = screen.getByRole("button", { name: /^users\s+TABLE$/i });
     const unpinnedTable = screen.getByRole("button", { name: /^accounts\s+TABLE$/i });
     expect(within(pinnedTable).getByLabelText("Pinned")).toBeInTheDocument();
-    expect(pinnedTable.compareDocumentPosition(unpinnedTable) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(
+      pinnedTable.compareDocumentPosition(unpinnedTable) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
   });
 
   it("toggles DBX table child rows from the table expand button", async () => {
@@ -297,26 +317,60 @@ describe("DatabaseSidebarTree", () => {
     const props = renderTree();
 
     fireEvent.contextMenu(await screen.findByRole("button", { name: /^users\s+TABLE$/i }));
-    expect(props.onDbxObjectContextMenu).toHaveBeenCalledWith(expect.anything(), "dbx", "main", usersObject);
+    expect(props.onDbxObjectContextMenu).toHaveBeenCalledWith(
+      expect.anything(),
+      "dbx",
+      "main",
+      usersObject,
+    );
 
     fireEvent.contextMenu(screen.getByText("email").closest("button") as HTMLButtonElement);
-    expect(props.onDbxColumnContextMenu).toHaveBeenCalledWith(expect.anything(), "dbx", "main", usersObject, userColumns[1]);
+    expect(props.onDbxColumnContextMenu).toHaveBeenCalledWith(
+      expect.anything(),
+      "dbx",
+      "main",
+      usersObject,
+      userColumns[1],
+    );
 
-    fireEvent.contextMenu(screen.getByText("users_email_idx").closest("button") as HTMLButtonElement);
-    expect(props.onDbxTableChildObjectContextMenu).toHaveBeenCalledWith(expect.anything(), "dbx", "main", usersObject, usersIndex);
+    fireEvent.contextMenu(
+      screen.getByText("users_email_idx").closest("button") as HTMLButtonElement,
+    );
+    expect(props.onDbxTableChildObjectContextMenu).toHaveBeenCalledWith(
+      expect.anything(),
+      "dbx",
+      "main",
+      usersObject,
+      usersIndex,
+    );
 
     fireEvent.contextMenu(screen.getByRole("button", { name: /^public$/i }));
-    expect(props.onDbxSchemaContextMenu).toHaveBeenCalledWith(expect.anything(), "dbx", "main", "public");
+    expect(props.onDbxSchemaContextMenu).toHaveBeenCalledWith(
+      expect.anything(),
+      "dbx",
+      "main",
+      "public",
+    );
 
     fireEvent.contextMenu(screen.getByRole("button", { name: /^main$/i }));
     expect(props.onDbxDatabaseContextMenu).toHaveBeenCalledWith(expect.anything(), "dbx", "main");
 
     const publicSchemaBranch = screen.getByRole("button", { name: /^public$/i }).parentElement!;
     fireEvent.contextMenu(within(publicSchemaBranch).getByRole("button", { name: "Tables" }));
-    expect(props.onDbxObjectGroupContextMenu).toHaveBeenCalledWith(expect.anything(), "dbx", "main", "public", "tables", "Tables");
+    expect(props.onDbxObjectGroupContextMenu).toHaveBeenCalledWith(
+      expect.anything(),
+      "dbx",
+      "main",
+      "public",
+      "tables",
+      "Tables",
+    );
 
     fireEvent.contextMenu(screen.getByRole("button", { name: /Production/i }));
-    expect(props.onConnectionGroupContextMenu).toHaveBeenCalledWith(expect.anything(), "Production");
+    expect(props.onConnectionGroupContextMenu).toHaveBeenCalledWith(
+      expect.anything(),
+      "Production",
+    );
   });
 
   it("supports copy, refresh, rename, and delete keyboard shortcuts on DBX tree nodes", async () => {
@@ -388,7 +442,12 @@ describe("DatabaseSidebarTree", () => {
       dbxSchemas: [],
       dbxObjects: [],
       dbxColumnsByTable: {},
-      redisDatabasesByConnection: { redis: [{ db: 0, keys: 12 }, { db: 2, keys: 0 }] },
+      redisDatabasesByConnection: {
+        redis: [
+          { db: 0, keys: 12 },
+          { db: 2, keys: 0 },
+        ],
+      },
     });
 
     expect(await screen.findByRole("button", { name: /Redis Source/i })).toBeInTheDocument();
@@ -414,7 +473,14 @@ describe("DatabaseSidebarTree", () => {
       redisDatabasesByConnection: { redis: [{ db: 0, keys: 12 }] },
       redisKeysByDatabase: {
         "redis:0": [
-          { key_display: "user:1", key_raw: "user:1", key_type: "string", ttl: -1, size: 3, value_preview: "Ada" },
+          {
+            key_display: "user:1",
+            key_raw: "user:1",
+            key_type: "string",
+            ttl: -1,
+            size: 3,
+            value_preview: "Ada",
+          },
         ],
       },
       redisScanStateByDatabase: { "redis:0": { cursor: 42, totalKeys: 12 } },
@@ -428,7 +494,12 @@ describe("DatabaseSidebarTree", () => {
     const keyButton = (await screen.findByText("user:1")).closest("button") as HTMLButtonElement;
     expect(keyButton).toHaveAttribute("data-selected", "true");
     fireEvent.contextMenu(keyButton);
-    expect(props.onRedisKeyContextMenu).toHaveBeenCalledWith(expect.anything(), "redis", 0, "user:1");
+    expect(props.onRedisKeyContextMenu).toHaveBeenCalledWith(
+      expect.anything(),
+      "redis",
+      0,
+      "user:1",
+    );
     await userEvent.click(screen.getByRole("button", { name: /Load more \(1\/12\)/i }));
     expect(props.onLoadMoreRedisKeys).toHaveBeenCalledWith(redisConnection, 0);
     await userEvent.click(keyButton);
@@ -455,7 +526,10 @@ describe("DatabaseSidebarTree", () => {
 
     expect(await screen.findByRole("button", { name: /Mongo Source/i })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /^app$/i })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /^users$/i })).toHaveAttribute("data-selected", "true");
+    expect(screen.getByRole("button", { name: /^users$/i })).toHaveAttribute(
+      "data-selected",
+      "true",
+    );
 
     await user.click(screen.getByRole("button", { name: /^events$/i }));
     expect(props.onSelectMongoCollection).toHaveBeenCalledWith(mongoConnection, "app", "events");
@@ -510,14 +584,27 @@ describe("DatabaseSidebarTree", () => {
       mongoDocumentTotalsByCollection: { "mongo:app:users": 2 },
     });
 
-    const documentButton = (await screen.findByText(/1 name: Ada/)).closest("button") as HTMLButtonElement;
+    const documentButton = (await screen.findByText(/1 name: Ada/)).closest(
+      "button",
+    ) as HTMLButtonElement;
     expect(documentButton).toHaveAttribute("data-selected", "true");
     fireEvent.contextMenu(documentButton);
-    expect(props.onMongoDocumentContextMenu).toHaveBeenCalledWith(expect.anything(), "mongo", "app", "users", document);
+    expect(props.onMongoDocumentContextMenu).toHaveBeenCalledWith(
+      expect.anything(),
+      "mongo",
+      "app",
+      "users",
+      document,
+    );
     await userEvent.click(screen.getByRole("button", { name: /Load more \(1\/2\)/i }));
     expect(props.onLoadMoreMongoDocuments).toHaveBeenCalledWith(mongoConnection, "app", "users");
     await userEvent.click(documentButton);
-    expect(props.onSelectMongoDocument).toHaveBeenCalledWith(mongoConnection, "app", "users", document);
+    expect(props.onSelectMongoDocument).toHaveBeenCalledWith(
+      mongoConnection,
+      "app",
+      "users",
+      document,
+    );
   });
 
   it("fires context menu callbacks for Redis and MongoDB tree nodes", async () => {
@@ -539,10 +626,19 @@ describe("DatabaseSidebarTree", () => {
     });
 
     fireEvent.contextMenu(await screen.findByRole("button", { name: /^app$/i }));
-    expect(props.onMongoDatabaseContextMenu).toHaveBeenCalledWith(expect.anything(), "mongo", "app");
+    expect(props.onMongoDatabaseContextMenu).toHaveBeenCalledWith(
+      expect.anything(),
+      "mongo",
+      "app",
+    );
 
     fireEvent.contextMenu(screen.getByRole("button", { name: /^users$/i }));
-    expect(props.onMongoCollectionContextMenu).toHaveBeenCalledWith(expect.anything(), "mongo", "app", "users");
+    expect(props.onMongoCollectionContextMenu).toHaveBeenCalledWith(
+      expect.anything(),
+      "mongo",
+      "app",
+      "users",
+    );
 
     cleanup();
     props = renderTree({
@@ -568,7 +664,9 @@ describe("DatabaseSidebarTree", () => {
     renderTree();
     const dataTransfer = createMockDataTransfer();
 
-    fireEvent.dragStart(await screen.findByRole("button", { name: /^users\s+TABLE$/i }), { dataTransfer });
+    fireEvent.dragStart(await screen.findByRole("button", { name: /^users\s+TABLE$/i }), {
+      dataTransfer,
+    });
 
     expect(dataTransfer.setData).toHaveBeenCalledWith("text/plain", "public.users");
     expect(dataTransfer.setData).toHaveBeenCalledWith(
@@ -589,7 +687,9 @@ describe("DatabaseSidebarTree", () => {
     await user.type(screen.getByLabelText("Sidebar search"), "email");
 
     await waitFor(() => {
-      expect(screen.queryByRole("button", { name: /^active_users\s+VIEW$/i })).not.toBeInTheDocument();
+      expect(
+        screen.queryByRole("button", { name: /^active_users\s+VIEW$/i }),
+      ).not.toBeInTheDocument();
     });
     expect(screen.getByRole("button", { name: /^users\s+TABLE$/i })).toBeInTheDocument();
     expect(screen.getByText("email").closest("button")).toBeInTheDocument();
@@ -615,8 +715,12 @@ describe("DatabaseSidebarTree", () => {
       dbxHasSqlObjectBrowser: true,
     });
 
-    expect(await screen.findByRole("button", { name: "main" })).toHaveStyle({ paddingLeft: "18px" });
+    expect(await screen.findByRole("button", { name: "main" })).toHaveStyle({
+      paddingLeft: "18px",
+    });
     expect(screen.getByRole("button", { name: "public" })).toHaveStyle({ paddingLeft: "30px" });
-    expect(screen.getByRole("button", { name: /very_long_customer_order_event_history/i })).toHaveStyle({ paddingLeft: "42px" });
+    expect(
+      screen.getByRole("button", { name: /very_long_customer_order_event_history/i }),
+    ).toHaveStyle({ paddingLeft: "42px" });
   });
 });

@@ -91,9 +91,7 @@ export function SkillManageDialog({ skill, allProjects, onClose, onChanged }: Pr
             {skill.displayName && skill.displayName !== skill.name ? (
               <div style={s.skillDialogSubtitle}>{skill.name}</div>
             ) : null}
-            {skill.description ? (
-              <div style={s.skillDialogDesc}>{skill.description}</div>
-            ) : null}
+            {skill.description ? <div style={s.skillDialogDesc}>{skill.description}</div> : null}
           </div>
           <button type="button" style={s.modalCloseBtn} onClick={onClose}>
             <X size={16} strokeWidth={2} />

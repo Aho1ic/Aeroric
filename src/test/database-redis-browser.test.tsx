@@ -69,11 +69,14 @@ describe("RedisBrowser", () => {
     vi.mocked(invoke).mockImplementation((command, args) => {
       if (command === "dbx_redis_list_databases") {
         const request = args as { connectionId?: string };
-        return Promise.resolve(request.connectionId === "redis-b" ? [{ db: 2, keys: 0 }] : [{ db: 0, keys: 1 }]);
+        return Promise.resolve(
+          request.connectionId === "redis-b" ? [{ db: 2, keys: 0 }] : [{ db: 0, keys: 1 }],
+        );
       }
       if (command === "dbx_redis_scan_keys") {
         const request = args as { connectionId?: string };
-        if (request.connectionId === "redis-b") return Promise.resolve({ cursor: 0, total_keys: 0, keys: [] });
+        if (request.connectionId === "redis-b")
+          return Promise.resolve({ cursor: 0, total_keys: 0, keys: [] });
         return Promise.resolve({
           cursor: 0,
           total_keys: 1,
@@ -178,7 +181,9 @@ describe("RedisBrowser", () => {
 
     await userEvent.click(screen.getByRole("button", { name: "db1" }));
 
-    await waitFor(() => expect(screen.queryByRole("button", { name: /user:1 string/i })).not.toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: /user:1 string/i })).not.toBeInTheDocument(),
+    );
     expect(screen.queryByText("Ada")).not.toBeInTheDocument();
     expect(screen.queryByDisplayValue("Ada")).not.toBeInTheDocument();
   });
@@ -186,7 +191,8 @@ describe("RedisBrowser", () => {
   it("creates a Redis key and runs a Redis command", async () => {
     vi.mocked(invoke).mockImplementation((command) => {
       if (command === "dbx_redis_list_databases") return Promise.resolve([{ db: 0, keys: 0 }]);
-      if (command === "dbx_redis_scan_keys") return Promise.resolve({ cursor: 0, total_keys: 0, keys: [] });
+      if (command === "dbx_redis_scan_keys")
+        return Promise.resolve({ cursor: 0, total_keys: 0, keys: [] });
       if (command === "dbx_redis_create_key") return Promise.resolve(undefined);
       if (command === "dbx_redis_execute_command") {
         return Promise.resolve({ command: "GET", safety: "allowed", value: "Ada" });
@@ -231,7 +237,8 @@ describe("RedisBrowser", () => {
   it("blocks unsafe Redis commands before invoking Tauri", async () => {
     vi.mocked(invoke).mockImplementation((command) => {
       if (command === "dbx_redis_list_databases") return Promise.resolve([{ db: 0, keys: 0 }]);
-      if (command === "dbx_redis_scan_keys") return Promise.resolve({ cursor: 0, total_keys: 0, keys: [] });
+      if (command === "dbx_redis_scan_keys")
+        return Promise.resolve({ cursor: 0, total_keys: 0, keys: [] });
       return Promise.resolve(undefined);
     });
 
@@ -245,16 +252,22 @@ describe("RedisBrowser", () => {
     await userEvent.type(screen.getByLabelText(/Redis 命令|Redis command/), "KEYS *");
     await userEvent.click(screen.getByRole("button", { name: /运行命令|Run command/ }));
 
-    expect(await screen.findByText(/Redis command blocked|Redis 安全策略已阻止/)).toBeInTheDocument();
-    expect(vi.mocked(invoke).mock.calls.some(([command]) => command === "dbx_redis_execute_command")).toBe(false);
+    expect(
+      await screen.findByText(/Redis command blocked|Redis 安全策略已阻止/),
+    ).toBeInTheDocument();
+    expect(
+      vi.mocked(invoke).mock.calls.some(([command]) => command === "dbx_redis_execute_command"),
+    ).toBe(false);
   });
 
   it("confirms destructive Redis commands and executes them with the safety override", async () => {
     vi.mocked(confirm).mockResolvedValue(true);
     vi.mocked(invoke).mockImplementation((command) => {
       if (command === "dbx_redis_list_databases") return Promise.resolve([{ db: 0, keys: 1 }]);
-      if (command === "dbx_redis_scan_keys") return Promise.resolve({ cursor: 0, total_keys: 0, keys: [] });
-      if (command === "dbx_redis_execute_command") return Promise.resolve({ command: "DEL", safety: "confirm", value: 1 });
+      if (command === "dbx_redis_scan_keys")
+        return Promise.resolve({ cursor: 0, total_keys: 0, keys: [] });
+      if (command === "dbx_redis_execute_command")
+        return Promise.resolve({ command: "DEL", safety: "confirm", value: 1 });
       return Promise.resolve(undefined);
     });
 
@@ -289,7 +302,8 @@ describe("RedisBrowser", () => {
     vi.mocked(confirm).mockResolvedValue(false);
     vi.mocked(invoke).mockImplementation((command) => {
       if (command === "dbx_redis_list_databases") return Promise.resolve([{ db: 0, keys: 0 }]);
-      if (command === "dbx_redis_scan_keys") return Promise.resolve({ cursor: 0, total_keys: 0, keys: [] });
+      if (command === "dbx_redis_scan_keys")
+        return Promise.resolve({ cursor: 0, total_keys: 0, keys: [] });
       return Promise.resolve(undefined);
     });
 
@@ -304,7 +318,9 @@ describe("RedisBrowser", () => {
     await userEvent.click(screen.getByRole("button", { name: /运行命令|Run command/ }));
 
     expect(confirm).toHaveBeenCalled();
-    expect(vi.mocked(invoke).mock.calls.some(([command]) => command === "dbx_redis_execute_command")).toBe(false);
+    expect(
+      vi.mocked(invoke).mock.calls.some(([command]) => command === "dbx_redis_execute_command"),
+    ).toBe(false);
   });
 
   it("confirms and flushes the current Redis database from the workspace", async () => {
@@ -313,14 +329,25 @@ describe("RedisBrowser", () => {
       if (command === "dbx_redis_list_databases") return Promise.resolve([{ db: 0, keys: 1 }]);
       if (command === "dbx_redis_scan_keys") {
         const request = args as { cursor?: number };
-        if (request.cursor && request.cursor > 0) return Promise.resolve({ cursor: 0, total_keys: 0, keys: [] });
+        if (request.cursor && request.cursor > 0)
+          return Promise.resolve({ cursor: 0, total_keys: 0, keys: [] });
         return Promise.resolve({
           cursor: 0,
           total_keys: 1,
-          keys: [{ key_display: "user:1", key_raw: "user:1", key_type: "string", ttl: -1, size: 3, value_preview: "Ada" }],
+          keys: [
+            {
+              key_display: "user:1",
+              key_raw: "user:1",
+              key_type: "string",
+              ttl: -1,
+              size: 3,
+              value_preview: "Ada",
+            },
+          ],
         });
       }
-      if (command === "dbx_redis_execute_command") return Promise.resolve({ command: "FLUSHDB", safety: "confirm", value: "OK" });
+      if (command === "dbx_redis_execute_command")
+        return Promise.resolve({ command: "FLUSHDB", safety: "confirm", value: "OK" });
       return Promise.resolve(undefined);
     });
 
@@ -333,12 +360,15 @@ describe("RedisBrowser", () => {
     await screen.findByText("db0");
     await userEvent.click(screen.getByRole("button", { name: /Clear current DB|清空当前 DB/ }));
 
-    expect(confirm).toHaveBeenCalledWith("This will delete every key in Redis db0 and cannot be undone. Continue?", {
-      title: "Clear current DB",
-      kind: "warning",
-      okLabel: "Clear DB",
-      cancelLabel: "Cancel",
-    });
+    expect(confirm).toHaveBeenCalledWith(
+      "This will delete every key in Redis db0 and cannot be undone. Continue?",
+      {
+        title: "Clear current DB",
+        kind: "warning",
+        okLabel: "Clear DB",
+        cancelLabel: "Cancel",
+      },
+    );
     await waitFor(() => {
       expect(invoke).toHaveBeenCalledWith("dbx_redis_execute_command", {
         connectionId: "redis",
@@ -358,11 +388,17 @@ describe("RedisBrowser", () => {
 
   it("updates the Redis command prompt after a successful SELECT command", async () => {
     vi.mocked(invoke).mockImplementation((command, args) => {
-      if (command === "dbx_redis_list_databases") return Promise.resolve([{ db: 0, keys: 0 }, { db: 2, keys: 0 }]);
-      if (command === "dbx_redis_scan_keys") return Promise.resolve({ cursor: 0, total_keys: 0, keys: [] });
+      if (command === "dbx_redis_list_databases")
+        return Promise.resolve([
+          { db: 0, keys: 0 },
+          { db: 2, keys: 0 },
+        ]);
+      if (command === "dbx_redis_scan_keys")
+        return Promise.resolve({ cursor: 0, total_keys: 0, keys: [] });
       if (command === "dbx_redis_execute_command") {
         const request = args as { command: string };
-        if (request.command === "SELECT 2") return Promise.resolve({ command: "SELECT", safety: "allowed", value: "OK" });
+        if (request.command === "SELECT 2")
+          return Promise.resolve({ command: "SELECT", safety: "allowed", value: "OK" });
         return Promise.resolve({ command: "GET", safety: "allowed", value: "Grace" });
       }
       return Promise.resolve(undefined);
@@ -396,8 +432,10 @@ describe("RedisBrowser", () => {
   it("clears the Redis command terminal with clear without invoking Tauri", async () => {
     vi.mocked(invoke).mockImplementation((command) => {
       if (command === "dbx_redis_list_databases") return Promise.resolve([{ db: 0, keys: 0 }]);
-      if (command === "dbx_redis_scan_keys") return Promise.resolve({ cursor: 0, total_keys: 0, keys: [] });
-      if (command === "dbx_redis_execute_command") return Promise.resolve({ command: "GET", safety: "allowed", value: "Ada" });
+      if (command === "dbx_redis_scan_keys")
+        return Promise.resolve({ cursor: 0, total_keys: 0, keys: [] });
+      if (command === "dbx_redis_execute_command")
+        return Promise.resolve({ command: "GET", safety: "allowed", value: "Ada" });
       return Promise.resolve(undefined);
     });
 
@@ -411,20 +449,26 @@ describe("RedisBrowser", () => {
     await userEvent.type(commandInput, "GET user:1");
     await userEvent.click(screen.getByRole("button", { name: /运行命令|Run command/ }));
     expect(await screen.findByText("Ada")).toBeInTheDocument();
-    const executeCallsBeforeClear = vi.mocked(invoke).mock.calls.filter(([command]) => command === "dbx_redis_execute_command").length;
+    const executeCallsBeforeClear = vi
+      .mocked(invoke)
+      .mock.calls.filter(([command]) => command === "dbx_redis_execute_command").length;
 
     await userEvent.type(commandInput, "clear");
     await userEvent.click(screen.getByRole("button", { name: /运行命令|Run command/ }));
 
     expect(screen.queryByText("Ada")).not.toBeInTheDocument();
-    expect(vi.mocked(invoke).mock.calls.filter(([command]) => command === "dbx_redis_execute_command")).toHaveLength(executeCallsBeforeClear);
+    expect(
+      vi.mocked(invoke).mock.calls.filter(([command]) => command === "dbx_redis_execute_command"),
+    ).toHaveLength(executeCallsBeforeClear);
   });
 
   it("persists Redis command terminal history for the connection", async () => {
     vi.mocked(invoke).mockImplementation((command) => {
       if (command === "dbx_redis_list_databases") return Promise.resolve([{ db: 0, keys: 0 }]);
-      if (command === "dbx_redis_scan_keys") return Promise.resolve({ cursor: 0, total_keys: 0, keys: [] });
-      if (command === "dbx_redis_execute_command") return Promise.resolve({ command: "GET", safety: "allowed", value: "Ada" });
+      if (command === "dbx_redis_scan_keys")
+        return Promise.resolve({ cursor: 0, total_keys: 0, keys: [] });
+      if (command === "dbx_redis_execute_command")
+        return Promise.resolve({ command: "GET", safety: "allowed", value: "Ada" });
       return Promise.resolve(undefined);
     });
 
@@ -450,14 +494,18 @@ describe("RedisBrowser", () => {
 
     expect(await screen.findByText("Ada")).toBeInTheDocument();
     expect(screen.getByText("GET user:1")).toBeInTheDocument();
-    expect(vi.mocked(invoke).mock.calls.some(([command]) => command === "dbx_redis_execute_command")).toBe(false);
+    expect(
+      vi.mocked(invoke).mock.calls.some(([command]) => command === "dbx_redis_execute_command"),
+    ).toBe(false);
   });
 
   it("clears persisted Redis command terminal history from the toolbar action", async () => {
     vi.mocked(invoke).mockImplementation((command) => {
       if (command === "dbx_redis_list_databases") return Promise.resolve([{ db: 0, keys: 0 }]);
-      if (command === "dbx_redis_scan_keys") return Promise.resolve({ cursor: 0, total_keys: 0, keys: [] });
-      if (command === "dbx_redis_execute_command") return Promise.resolve({ command: "GET", safety: "allowed", value: "Ada" });
+      if (command === "dbx_redis_scan_keys")
+        return Promise.resolve({ cursor: 0, total_keys: 0, keys: [] });
+      if (command === "dbx_redis_execute_command")
+        return Promise.resolve({ command: "GET", safety: "allowed", value: "Ada" });
       return Promise.resolve(undefined);
     });
 
@@ -495,7 +543,16 @@ describe("RedisBrowser", () => {
         return Promise.resolve({
           cursor: 0,
           total_keys: 1,
-          keys: [{ key_display: "user:1", key_raw: "user:1", key_type: "string", ttl: -1, size: 3, value_preview: "Ada" }],
+          keys: [
+            {
+              key_display: "user:1",
+              key_raw: "user:1",
+              key_type: "string",
+              ttl: -1,
+              size: 3,
+              value_preview: "Ada",
+            },
+          ],
         });
       }
       if (command === "dbx_redis_get_value") {
@@ -566,9 +623,30 @@ describe("RedisBrowser", () => {
           cursor: 0,
           total_keys: 3,
           keys: [
-            { key_display: "order:1", key_raw: "order:1", key_type: "hash", ttl: -1, size: 2, value_preview: "" },
-            { key_display: "user:1", key_raw: "user:1", key_type: "string", ttl: -1, size: 3, value_preview: "Ada" },
-            { key_display: "user:2", key_raw: "user:2", key_type: "string", ttl: -1, size: 5, value_preview: "Grace" },
+            {
+              key_display: "order:1",
+              key_raw: "order:1",
+              key_type: "hash",
+              ttl: -1,
+              size: 2,
+              value_preview: "",
+            },
+            {
+              key_display: "user:1",
+              key_raw: "user:1",
+              key_type: "string",
+              ttl: -1,
+              size: 3,
+              value_preview: "Ada",
+            },
+            {
+              key_display: "user:2",
+              key_raw: "user:2",
+              key_type: "string",
+              ttl: -1,
+              size: 5,
+              value_preview: "Grace",
+            },
           ],
         });
       }
@@ -584,7 +662,9 @@ describe("RedisBrowser", () => {
 
     const userGroup = await screen.findByRole("button", { name: /^user 2$/i });
     fireEvent.contextMenu(userGroup);
-    expect(screen.getByRole("menuitem", { name: /Delete key group|删除键分组/ })).toBeInTheDocument();
+    expect(
+      screen.getByRole("menuitem", { name: /Delete key group|删除键分组/ }),
+    ).toBeInTheDocument();
 
     await userEvent.click(screen.getByRole("menuitem", { name: /Copy name|复制名称/ }));
     expect(navigator.clipboard.writeText).toHaveBeenCalledWith("user");
@@ -592,7 +672,9 @@ describe("RedisBrowser", () => {
     fireEvent.contextMenu(userGroup);
     await userEvent.click(screen.getByRole("menuitem", { name: /Refresh|刷新/ }));
     await waitFor(() => {
-      expect(vi.mocked(invoke).mock.calls.filter(([command]) => command === "dbx_redis_scan_keys")).toHaveLength(2);
+      expect(
+        vi.mocked(invoke).mock.calls.filter(([command]) => command === "dbx_redis_scan_keys"),
+      ).toHaveLength(2);
     });
 
     fireEvent.contextMenu(userGroup);
@@ -636,9 +718,30 @@ describe("RedisBrowser", () => {
           cursor: 0,
           total_keys: 3,
           keys: [
-            { key_display: "order:1", key_raw: "order:1", key_type: "hash", ttl: -1, size: 2, value_preview: "" },
-            { key_display: "user:1", key_raw: "user:1", key_type: "string", ttl: -1, size: 3, value_preview: "Ada" },
-            { key_display: "user:2", key_raw: "user:2", key_type: "string", ttl: -1, size: 5, value_preview: "Grace" },
+            {
+              key_display: "order:1",
+              key_raw: "order:1",
+              key_type: "hash",
+              ttl: -1,
+              size: 2,
+              value_preview: "",
+            },
+            {
+              key_display: "user:1",
+              key_raw: "user:1",
+              key_type: "string",
+              ttl: -1,
+              size: 3,
+              value_preview: "Ada",
+            },
+            {
+              key_display: "user:2",
+              key_raw: "user:2",
+              key_type: "string",
+              ttl: -1,
+              size: 5,
+              value_preview: "Grace",
+            },
           ],
         });
       }
@@ -655,7 +758,9 @@ describe("RedisBrowser", () => {
     await userEvent.click(await screen.findByRole("button", { name: /^user 2$/i }));
     await userEvent.click(screen.getByLabelText(/Delete selected: user:1|删除已选: user:1/));
     await userEvent.click(screen.getByLabelText(/Delete selected: user:2|删除已选: user:2/));
-    await userEvent.click(screen.getByRole("button", { name: /Delete selected \(2\)|删除已选 \(2\)/ }));
+    await userEvent.click(
+      screen.getByRole("button", { name: /Delete selected \(2\)|删除已选 \(2\)/ }),
+    );
 
     expect(confirm).toHaveBeenCalledWith("Delete 2 selected Redis keys?", {
       title: "Delete selected",
@@ -730,7 +835,11 @@ describe("RedisBrowser", () => {
   });
 
   it("ignores late Redis scan results from a previous key pattern", async () => {
-    let resolveFooScan: (value: { cursor: number; total_keys: number; keys: unknown[] }) => void = () => undefined;
+    let resolveFooScan: (value: {
+      cursor: number;
+      total_keys: number;
+      keys: unknown[];
+    }) => void = () => undefined;
     vi.mocked(invoke).mockImplementation((command, args) => {
       if (command === "dbx_redis_list_databases") return Promise.resolve([{ db: 0, keys: 2 }]);
       if (command === "dbx_redis_scan_keys") {
@@ -803,13 +912,31 @@ describe("RedisBrowser", () => {
           return Promise.resolve({
             cursor: 0,
             total_keys: 2,
-            keys: [{ key_display: "user:2", key_raw: "user:2", key_type: "string", ttl: -1, size: 5, value_preview: "Grace" }],
+            keys: [
+              {
+                key_display: "user:2",
+                key_raw: "user:2",
+                key_type: "string",
+                ttl: -1,
+                size: 5,
+                value_preview: "Grace",
+              },
+            ],
           });
         }
         return Promise.resolve({
           cursor: 7,
           total_keys: 2,
-          keys: [{ key_display: "user:1", key_raw: "user:1", key_type: "string", ttl: -1, size: 3, value_preview: "Ada" }],
+          keys: [
+            {
+              key_display: "user:1",
+              key_raw: "user:1",
+              key_type: "string",
+              ttl: -1,
+              size: 3,
+              value_preview: "Ada",
+            },
+          ],
         });
       }
       return Promise.resolve(undefined);
@@ -823,7 +950,9 @@ describe("RedisBrowser", () => {
 
     await userEvent.click(await screen.findByRole("button", { name: /^user/i }));
     expect(await screen.findByRole("button", { name: /user:1 string/i })).toBeInTheDocument();
-    await userEvent.click(screen.getByRole("button", { name: /Load more \(1\/2\)|加载更多 \(1\/2\)/ }));
+    await userEvent.click(
+      screen.getByRole("button", { name: /Load more \(1\/2\)|加载更多 \(1\/2\)/ }),
+    );
 
     expect(await screen.findByRole("button", { name: /user:2 string/i })).toBeInTheDocument();
     expect(invoke).toHaveBeenCalledWith("dbx_redis_scan_keys", {
@@ -844,20 +973,47 @@ describe("RedisBrowser", () => {
           return Promise.resolve({
             cursor: 8,
             total_keys: 3,
-            keys: [{ key_display: "user:2", key_raw: "user:2", key_type: "string", ttl: -1, size: 5, value_preview: "Grace" }],
+            keys: [
+              {
+                key_display: "user:2",
+                key_raw: "user:2",
+                key_type: "string",
+                ttl: -1,
+                size: 5,
+                value_preview: "Grace",
+              },
+            ],
           });
         }
         if (request.cursor === 8) {
           return Promise.resolve({
             cursor: 0,
             total_keys: 3,
-            keys: [{ key_display: "user:3", key_raw: "user:3", key_type: "string", ttl: -1, size: 4, value_preview: "Lin" }],
+            keys: [
+              {
+                key_display: "user:3",
+                key_raw: "user:3",
+                key_type: "string",
+                ttl: -1,
+                size: 4,
+                value_preview: "Lin",
+              },
+            ],
           });
         }
         return Promise.resolve({
           cursor: 5,
           total_keys: 3,
-          keys: [{ key_display: "user:1", key_raw: "user:1", key_type: "string", ttl: -1, size: 3, value_preview: "Ada" }],
+          keys: [
+            {
+              key_display: "user:1",
+              key_raw: "user:1",
+              key_type: "string",
+              ttl: -1,
+              size: 3,
+              value_preview: "Ada",
+            },
+          ],
         });
       }
       return Promise.resolve(undefined);
@@ -909,13 +1065,31 @@ describe("RedisBrowser", () => {
           return Promise.resolve({
             cursor: 0,
             total_keys: 3,
-            keys: [{ key_display: "user:3", key_raw: "user:3", key_type: "string", ttl: -1, size: 4, value_preview: "Lin" }],
+            keys: [
+              {
+                key_display: "user:3",
+                key_raw: "user:3",
+                key_type: "string",
+                ttl: -1,
+                size: 4,
+                value_preview: "Lin",
+              },
+            ],
           });
         }
         return Promise.resolve({
           cursor: 5,
           total_keys: 3,
-          keys: [{ key_display: "user:1", key_raw: "user:1", key_type: "string", ttl: -1, size: 3, value_preview: "Ada" }],
+          keys: [
+            {
+              key_display: "user:1",
+              key_raw: "user:1",
+              key_type: "string",
+              ttl: -1,
+              size: 3,
+              value_preview: "Ada",
+            },
+          ],
         });
       }
       return Promise.resolve(undefined);
@@ -930,13 +1104,24 @@ describe("RedisBrowser", () => {
     await userEvent.click(await screen.findByRole("button", { name: /^user 1$/i }));
     await userEvent.click(screen.getByRole("button", { name: /Fetch all|获取全部/ }));
 
-    expect(await screen.findByText(/1 of 3 keys loaded|已加载 1 \/ 共 3 条 key/)).toBeInTheDocument();
+    expect(
+      await screen.findByText(/1 of 3 keys loaded|已加载 1 \/ 共 3 条 key/),
+    ).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: /Stop|停止/ }));
 
     resolvePendingFetchPage({
       cursor: 8,
       total_keys: 3,
-      keys: [{ key_display: "user:2", key_raw: "user:2", key_type: "string", ttl: -1, size: 5, value_preview: "Grace" }],
+      keys: [
+        {
+          key_display: "user:2",
+          key_raw: "user:2",
+          key_type: "string",
+          ttl: -1,
+          size: 5,
+          value_preview: "Grace",
+        },
+      ],
     });
 
     expect(await screen.findByRole("button", { name: /user:2 string/i })).toBeInTheDocument();
@@ -944,7 +1129,12 @@ describe("RedisBrowser", () => {
       expect(screen.queryByText(/keys loaded|条 key/)).not.toBeInTheDocument();
     });
     expect(
-      vi.mocked(invoke).mock.calls.some(([command, args]) => command === "dbx_redis_scan_keys" && (args as { cursor?: number })?.cursor === 8),
+      vi
+        .mocked(invoke)
+        .mock.calls.some(
+          ([command, args]) =>
+            command === "dbx_redis_scan_keys" && (args as { cursor?: number })?.cursor === 8,
+        ),
     ).toBe(false);
   });
 
@@ -989,11 +1179,14 @@ describe("RedisBrowser", () => {
     await userEvent.click(await screen.findByRole("button", { name: /^user/i }));
     await userEvent.click(screen.getByRole("button", { name: /user:1 string/i }));
     const jsonTree = await screen.findByRole("tree", { name: /Redis JSON tree/ });
-    expect(screen.getByRole("button", { name: /JSON view|JSON 视图/ })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: /JSON view|JSON 视图/ })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
     expect(jsonTree).toHaveStyle("white-space: pre-wrap");
     expect(screen.getByText("Object(2)")).toBeInTheDocument();
-    expect(screen.getByText("\"name\"")).toBeInTheDocument();
-    expect(screen.getByText("\"roles\"")).toBeInTheDocument();
+    expect(screen.getByText('"name"')).toBeInTheDocument();
+    expect(screen.getByText('"roles"')).toBeInTheDocument();
     const wordWrap = screen.getByRole("checkbox", { name: /Word wrap|自动换行/ });
     await userEvent.click(wordWrap);
     expect(jsonTree).toHaveStyle("white-space: pre");
@@ -1014,7 +1207,9 @@ describe("RedisBrowser", () => {
     await userEvent.click(screen.getByRole("button", { name: /^Format$|^格式化$/ }));
 
     expect(await screen.findByText(/Invalid JSON format|JSON 格式无效/)).toBeInTheDocument();
-    expect(vi.mocked(invoke).mock.calls.some(([command]) => command === "dbx_redis_set_value")).toBe(false);
+    expect(
+      vi.mocked(invoke).mock.calls.some(([command]) => command === "dbx_redis_set_value"),
+    ).toBe(false);
   });
 
   it("reloads the selected Redis value and key preview after saving a value draft", async () => {
@@ -1075,7 +1270,9 @@ describe("RedisBrowser", () => {
     expect(valueEditor).toHaveValue("Ada");
     expect(ttlInput).toHaveValue("120");
     expect(screen.queryByRole("button", { name: /Discard|丢弃/ })).not.toBeInTheDocument();
-    expect(vi.mocked(invoke).mock.calls.some(([command]) => command === "dbx_redis_set_value")).toBe(false);
+    expect(
+      vi.mocked(invoke).mock.calls.some(([command]) => command === "dbx_redis_set_value"),
+    ).toBe(false);
 
     fireEvent.change(valueEditor, { target: { value: "Grace" } });
     await userEvent.click(screen.getByRole("button", { name: /Save value|保存值/ }));
@@ -1101,7 +1298,9 @@ describe("RedisBrowser", () => {
         count: 100,
       });
     });
-    expect(await screen.findByRole("button", { name: /TTL: 120s|TTL：120 秒/ })).toBeInTheDocument();
+    expect(
+      await screen.findByRole("button", { name: /TTL: 120s|TTL：120 秒/ }),
+    ).toBeInTheDocument();
     expect(await screen.findByText(/Size: 5 B|大小: 5 B/)).toBeInTheDocument();
   });
 
@@ -1112,7 +1311,16 @@ describe("RedisBrowser", () => {
         return Promise.resolve({
           cursor: 0,
           total_keys: 1,
-          keys: [{ key_display: "user:1", key_raw: "user:1", key_type: "string", ttl: 60, size: 3, value_preview: "Ada" }],
+          keys: [
+            {
+              key_display: "user:1",
+              key_raw: "user:1",
+              key_type: "string",
+              ttl: 60,
+              size: 3,
+              value_preview: "Ada",
+            },
+          ],
         });
       }
       if (command === "dbx_redis_get_value") {
@@ -1143,7 +1351,9 @@ describe("RedisBrowser", () => {
     await userEvent.click(screen.getByRole("button", { name: /Save value|保存值/ }));
 
     expect(await screen.findByText(/Enter a valid TTL|请输入有效 TTL/)).toBeInTheDocument();
-    expect(vi.mocked(invoke).mock.calls.some(([command]) => command === "dbx_redis_set_value")).toBe(false);
+    expect(
+      vi.mocked(invoke).mock.calls.some(([command]) => command === "dbx_redis_set_value"),
+    ).toBe(false);
   });
 
   it("copies the selected Redis value and DBX-style insert statement", async () => {
@@ -1153,7 +1363,16 @@ describe("RedisBrowser", () => {
         return Promise.resolve({
           cursor: 0,
           total_keys: 1,
-          keys: [{ key_display: "user:1", key_raw: "user:1", key_type: "string", ttl: 60, size: 3, value_preview: "Ada" }],
+          keys: [
+            {
+              key_display: "user:1",
+              key_raw: "user:1",
+              key_type: "string",
+              ttl: 60,
+              size: 3,
+              value_preview: "Ada",
+            },
+          ],
         });
       }
       if (command === "dbx_redis_get_value") {
@@ -1182,8 +1401,12 @@ describe("RedisBrowser", () => {
     await userEvent.click(screen.getByRole("button", { name: /Copy value|复制值/ }));
     expect(navigator.clipboard.writeText).toHaveBeenCalledWith("Ada");
 
-    await userEvent.click(screen.getByRole("button", { name: /Copy insert statement|复制插入语句/ }));
-    expect(navigator.clipboard.writeText).toHaveBeenCalledWith('SET "user:1" "Ada"\nEXPIRE "user:1" 60');
+    await userEvent.click(
+      screen.getByRole("button", { name: /Copy insert statement|复制插入语句/ }),
+    );
+    expect(navigator.clipboard.writeText).toHaveBeenCalledWith(
+      'SET "user:1" "Ada"\nEXPIRE "user:1" 60',
+    );
   });
 
   it("renders DBX-style grouped Redis stream entries", async () => {
@@ -1193,7 +1416,16 @@ describe("RedisBrowser", () => {
         return Promise.resolve({
           cursor: 0,
           total_keys: 1,
-          keys: [{ key_display: "events", key_raw: "events", key_type: "stream", ttl: -1, size: 2, value_preview: "1-0" }],
+          keys: [
+            {
+              key_display: "events",
+              key_raw: "events",
+              key_type: "stream",
+              ttl: -1,
+              size: 2,
+              value_preview: "1-0",
+            },
+          ],
         });
       }
       if (command === "dbx_redis_get_value") {
@@ -1234,11 +1466,19 @@ describe("RedisBrowser", () => {
     expect(screen.queryByRole("button", { name: /Save value|保存值/ })).not.toBeInTheDocument();
     expect(screen.getByRole("textbox", { name: /Redis command|Redis 命令/ })).toBeInTheDocument();
 
-    await userEvent.click(screen.getByRole("button", { name: /Copy member: 1-0 .* role|复制成员: 1-0 .* role/ }));
+    await userEvent.click(
+      screen.getByRole("button", { name: /Copy member: 1-0 .* role|复制成员: 1-0 .* role/ }),
+    );
     expect(navigator.clipboard.writeText).toHaveBeenCalledWith("admin");
 
-    await userEvent.click(screen.getByRole("button", { name: /View full value: 1-0 .* role|查看完整内容: 1-0 .* role/ }));
-    expect(screen.getByRole("dialog", { name: /Member detail: 1-0 .* role|成员详情: 1-0 .* role/ })).toBeInTheDocument();
+    await userEvent.click(
+      screen.getByRole("button", {
+        name: /View full value: 1-0 .* role|查看完整内容: 1-0 .* role/,
+      }),
+    );
+    expect(
+      screen.getByRole("dialog", { name: /Member detail: 1-0 .* role|成员详情: 1-0 .* role/ }),
+    ).toBeInTheDocument();
   });
 
   it("renders DBX-style Redis hash member rows with detail and copy actions", async () => {
@@ -1248,7 +1488,16 @@ describe("RedisBrowser", () => {
         return Promise.resolve({
           cursor: 0,
           total_keys: 1,
-          keys: [{ key_display: "profile:1", key_raw: "profile:1", key_type: "hash", ttl: -1, size: 3, value_preview: "name=Ada" }],
+          keys: [
+            {
+              key_display: "profile:1",
+              key_raw: "profile:1",
+              key_type: "hash",
+              ttl: -1,
+              size: 3,
+              value_preview: "name=Ada",
+            },
+          ],
         });
       }
       if (command === "dbx_redis_get_value") {
@@ -1262,7 +1511,7 @@ describe("RedisBrowser", () => {
           scan_cursor: 0,
           value: [
             { field: "name", value: "Ada" },
-            { field: "bio", value: "{\"city\":\"Paris\"}" },
+            { field: "bio", value: '{"city":"Paris"}' },
           ],
         });
       }
@@ -1278,37 +1527,52 @@ describe("RedisBrowser", () => {
     await userEvent.click(await screen.findByRole("button", { name: /^profile/i }));
     await userEvent.click(screen.getByRole("button", { name: /profile:1 hash/i }));
 
-    expect(await screen.findByText(/2 of 3 fields loaded|已加载 2 \/ 共 3 个字段/)).toBeInTheDocument();
+    expect(
+      await screen.findByText(/2 of 3 fields loaded|已加载 2 \/ 共 3 个字段/),
+    ).toBeInTheDocument();
     const fieldHeader = screen.getByRole("columnheader", { name: /Field|字段/ });
     expect(fieldHeader).toBeInTheDocument();
     expect(screen.getByRole("columnheader", { name: /Value|值/ })).toBeInTheDocument();
-    fireEvent.pointerDown(screen.getByRole("separator", { name: /Resize hash field column|调整 Hash 字段列宽/ }), { clientX: 100 });
+    fireEvent.pointerDown(
+      screen.getByRole("separator", { name: /Resize hash field column|调整 Hash 字段列宽/ }),
+      { clientX: 100 },
+    );
     fireEvent.pointerMove(window, { clientX: 180 });
     fireEvent.pointerUp(window);
     await waitFor(() => expect(fieldHeader).toHaveStyle("width: 260px"));
     expect(screen.getByText("name")).toBeInTheDocument();
     expect(screen.getByText("bio")).toBeInTheDocument();
-    expect(screen.getByText("{\"city\":\"Paris\"}")).toBeInTheDocument();
-    expect(screen.queryByRole("dialog", { name: /Member detail|成员详情/ })).not.toBeInTheDocument();
+    expect(screen.getByText('{"city":"Paris"}')).toBeInTheDocument();
+    expect(
+      screen.queryByRole("dialog", { name: /Member detail|成员详情/ }),
+    ).not.toBeInTheDocument();
 
-    await userEvent.click(screen.getByRole("button", { name: /View full value: bio|查看完整内容: bio/ }));
+    await userEvent.click(
+      screen.getByRole("button", { name: /View full value: bio|查看完整内容: bio/ }),
+    );
     const detailDialog = screen.getByRole("dialog", { name: /Member detail: bio|成员详情: bio/ });
     expect(detailDialog).toHaveStyle("position: fixed");
     expect(screen.getByText(/Member detail: bio|成员详情: bio/)).toBeInTheDocument();
-    fireEvent.pointerDown(screen.getByRole("separator", { name: /Resize member detail|调整成员详情宽度/ }), { clientX: 100 });
+    fireEvent.pointerDown(
+      screen.getByRole("separator", { name: /Resize member detail|调整成员详情宽度/ }),
+      { clientX: 100 },
+    );
     fireEvent.pointerMove(window, { clientX: 20 });
     fireEvent.pointerUp(window);
     await waitFor(() => expect(detailDialog).toHaveStyle("width: 500px"));
-    expect(screen.getByRole("button", { name: /JSON view|JSON 视图/ })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: /JSON view|JSON 视图/ })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
     const jsonTree = screen.getByRole("tree", { name: /Redis JSON tree/ });
     expect(jsonTree).toHaveStyle("white-space: pre-wrap");
     expect(screen.getByText("Object(1)")).toBeInTheDocument();
-    expect(screen.getByText("\"city\"")).toBeInTheDocument();
-    expect(screen.getByText("\"Paris\"")).toBeInTheDocument();
+    expect(screen.getByText('"city"')).toBeInTheDocument();
+    expect(screen.getByText('"Paris"')).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: /Collapse JSON \$/ }));
-    expect(screen.queryByText("\"city\"")).not.toBeInTheDocument();
+    expect(screen.queryByText('"city"')).not.toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: /Expand JSON \$/ }));
-    expect(screen.getByText("\"city\"")).toBeInTheDocument();
+    expect(screen.getByText('"city"')).toBeInTheDocument();
     const wordWrap = screen.getByRole("checkbox", { name: /Word wrap|自动换行/ });
     expect(wordWrap).toBeChecked();
     await userEvent.click(wordWrap);
@@ -1316,20 +1580,33 @@ describe("RedisBrowser", () => {
     expect(window.localStorage.getItem("dbx-redis-json-word-wrap")).toBe("false");
     expect(jsonTree).toHaveStyle("white-space: pre");
 
-    await userEvent.click(within(detailDialog).getByRole("button", { name: /Copy member: bio|复制成员: bio/ }));
-    expect(navigator.clipboard.writeText).toHaveBeenCalledWith("{\"city\":\"Paris\"}");
+    await userEvent.click(
+      within(detailDialog).getByRole("button", { name: /Copy member: bio|复制成员: bio/ }),
+    );
+    expect(navigator.clipboard.writeText).toHaveBeenCalledWith('{"city":"Paris"}');
 
     const rawButton = screen.getByRole("button", { name: /Raw content|原始内容/ });
     await userEvent.click(rawButton);
     expect(rawButton).toHaveAttribute("aria-pressed", "true");
-    expect(screen.getByText((_, element) => element?.tagName.toLowerCase() === "pre" && element.textContent === "{\"city\":\"Paris\"}")).toHaveStyle("white-space: pre");
-    await userEvent.click(screen.getByRole("button", { name: /Format member JSON|格式化成员 JSON/ }));
+    expect(
+      screen.getByText(
+        (_, element) =>
+          element?.tagName.toLowerCase() === "pre" && element.textContent === '{"city":"Paris"}',
+      ),
+    ).toHaveStyle("white-space: pre");
+    await userEvent.click(
+      screen.getByRole("button", { name: /Format member JSON|格式化成员 JSON/ }),
+    );
     const memberValue = screen.getByRole("textbox", { name: /Redis member value|Redis 成员值/ });
-    expect(memberValue).toHaveValue("{\n  \"city\": \"Paris\"\n}");
-    await userEvent.click(screen.getByRole("button", { name: /Compress member JSON|压缩成员 JSON/ }));
-    expect(memberValue).toHaveValue("{\"city\":\"Paris\"}");
+    expect(memberValue).toHaveValue('{\n  "city": "Paris"\n}');
+    await userEvent.click(
+      screen.getByRole("button", { name: /Compress member JSON|压缩成员 JSON/ }),
+    );
+    expect(memberValue).toHaveValue('{"city":"Paris"}');
     await userEvent.click(screen.getByRole("button", { name: /Close|关闭/ }));
-    expect(screen.queryByRole("dialog", { name: /Member detail: bio|成员详情: bio/ })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("dialog", { name: /Member detail: bio|成员详情: bio/ }),
+    ).not.toBeInTheDocument();
   });
 
   it("resizes DBX-style Redis sorted set score column", async () => {
@@ -1339,7 +1616,16 @@ describe("RedisBrowser", () => {
         return Promise.resolve({
           cursor: 0,
           total_keys: 1,
-          keys: [{ key_display: "leaders", key_raw: "leaders", key_type: "zset", ttl: -1, size: 1, value_preview: "Ada" }],
+          keys: [
+            {
+              key_display: "leaders",
+              key_raw: "leaders",
+              key_type: "zset",
+              ttl: -1,
+              size: 1,
+              value_preview: "Ada",
+            },
+          ],
         });
       }
       if (command === "dbx_redis_get_value") {
@@ -1365,7 +1651,12 @@ describe("RedisBrowser", () => {
 
     await userEvent.click(await screen.findByRole("button", { name: /leaders zset/i }));
     const scoreHeader = await screen.findByRole("columnheader", { name: /Score|分数/ });
-    fireEvent.pointerDown(screen.getByRole("separator", { name: /Resize sorted set score column|调整有序集合分数列宽/ }), { clientX: 100 });
+    fireEvent.pointerDown(
+      screen.getByRole("separator", {
+        name: /Resize sorted set score column|调整有序集合分数列宽/,
+      }),
+      { clientX: 100 },
+    );
     fireEvent.pointerMove(window, { clientX: 150 });
     fireEvent.pointerUp(window);
     await waitFor(() => expect(scoreHeader).toHaveStyle("width: 170px"));
@@ -1379,7 +1670,16 @@ describe("RedisBrowser", () => {
         return Promise.resolve({
           cursor: 0,
           total_keys: 1,
-          keys: [{ key_display: "profile:1", key_raw: "profile:1", key_type: "hash", ttl: -1, size: 3, value_preview: "name=Ada" }],
+          keys: [
+            {
+              key_display: "profile:1",
+              key_raw: "profile:1",
+              key_type: "hash",
+              ttl: -1,
+              size: 3,
+              value_preview: "name=Ada",
+            },
+          ],
         });
       }
       if (command === "dbx_redis_get_value") {
@@ -1429,8 +1729,12 @@ describe("RedisBrowser", () => {
     await userEvent.click(await screen.findByRole("button", { name: /^profile/i }));
     await userEvent.click(screen.getByRole("button", { name: /profile:1 hash/i }));
 
-    expect(await screen.findByText(/1 of 3 fields loaded|已加载 1 \/ 共 3 个字段/)).toBeInTheDocument();
-    await userEvent.click(screen.getByRole("button", { name: /Load more \(1\/3\)|加载更多 \(1\/3\)/ }));
+    expect(
+      await screen.findByText(/1 of 3 fields loaded|已加载 1 \/ 共 3 个字段/),
+    ).toBeInTheDocument();
+    await userEvent.click(
+      screen.getByRole("button", { name: /Load more \(1\/3\)|加载更多 \(1\/3\)/ }),
+    );
 
     expect(await screen.findByText(/3 fields|3 个字段/)).toBeInTheDocument();
     expect(screen.getByText("role")).toBeInTheDocument();
@@ -1449,7 +1753,16 @@ describe("RedisBrowser", () => {
         return Promise.resolve({
           cursor: 0,
           total_keys: 1,
-          keys: [{ key_display: "profile:1", key_raw: "profile:1", key_type: "hash", ttl: -1, size: deleted ? 1 : 2, value_preview: "name=Ada" }],
+          keys: [
+            {
+              key_display: "profile:1",
+              key_raw: "profile:1",
+              key_type: "hash",
+              ttl: -1,
+              size: deleted ? 1 : 2,
+              value_preview: "name=Ada",
+            },
+          ],
         });
       }
       if (command === "dbx_redis_get_value") {
@@ -1494,9 +1807,14 @@ describe("RedisBrowser", () => {
 
     await userEvent.click(screen.getByRole("button", { name: /Delete member: bio|删除成员: bio/ }));
 
-    expect(confirm).toHaveBeenCalledWith(expect.stringMatching(/Delete field "bio"|删除 Redis 键/), expect.any(Object));
+    expect(confirm).toHaveBeenCalledWith(
+      expect.stringMatching(/Delete field "bio"|删除 Redis 键/),
+      expect.any(Object),
+    );
     await waitFor(() => {
-      expect(vi.mocked(invoke).mock.calls.some(([command]) => command === "dbx_redis_hash_del")).toBe(true);
+      expect(
+        vi.mocked(invoke).mock.calls.some(([command]) => command === "dbx_redis_hash_del"),
+      ).toBe(true);
       expect(screen.queryByText("bio")).not.toBeInTheDocument();
     });
     expect(screen.getByText("name")).toBeInTheDocument();
@@ -1569,7 +1887,9 @@ describe("RedisBrowser", () => {
     await userEvent.click(screen.getByRole("button", { name: /Save member|保存成员/ }));
 
     await waitFor(() => {
-      expect(vi.mocked(invoke).mock.calls.some(([command]) => command === "dbx_redis_hash_set")).toBe(true);
+      expect(
+        vi.mocked(invoke).mock.calls.some(([command]) => command === "dbx_redis_hash_set"),
+      ).toBe(true);
     });
     expect(await screen.findByText("London")).toBeInTheDocument();
     expect(screen.queryByText("Paris")).not.toBeInTheDocument();
@@ -1637,12 +1957,20 @@ describe("RedisBrowser", () => {
     await userEvent.click(screen.getByRole("button", { name: /profile:1 hash/i }));
     expect(await screen.findByText("name")).toBeInTheDocument();
 
-    await userEvent.type(screen.getByRole("textbox", { name: /Redis new member field|Redis 新成员字段/ }), "city");
-    await userEvent.type(screen.getByRole("textbox", { name: /Redis new member value|Redis 新成员值/ }), "Paris");
+    await userEvent.type(
+      screen.getByRole("textbox", { name: /Redis new member field|Redis 新成员字段/ }),
+      "city",
+    );
+    await userEvent.type(
+      screen.getByRole("textbox", { name: /Redis new member value|Redis 新成员值/ }),
+      "Paris",
+    );
     await userEvent.click(screen.getByRole("button", { name: /Set|设置/ }));
 
     await waitFor(() => {
-      expect(vi.mocked(invoke).mock.calls.some(([command]) => command === "dbx_redis_hash_set")).toBe(true);
+      expect(
+        vi.mocked(invoke).mock.calls.some(([command]) => command === "dbx_redis_hash_set"),
+      ).toBe(true);
     });
     expect(await screen.findByText("city")).toBeInTheDocument();
     expect(screen.getByText("Paris")).toBeInTheDocument();
@@ -1656,7 +1984,16 @@ describe("RedisBrowser", () => {
         return Promise.resolve({
           cursor: 0,
           total_keys: 1,
-          keys: [{ key_display: "queue", key_raw: "queue", key_type: "list", ttl: -1, size: added ? 2 : 1, value_preview: added ? "second" : "first" }],
+          keys: [
+            {
+              key_display: "queue",
+              key_raw: "queue",
+              key_type: "list",
+              ttl: -1,
+              size: added ? 2 : 1,
+              value_preview: added ? "second" : "first",
+            },
+          ],
         });
       }
       if (command === "dbx_redis_get_value") {
@@ -1694,11 +2031,16 @@ describe("RedisBrowser", () => {
     await userEvent.click(await screen.findByRole("button", { name: /queue list/i }));
     expect((await screen.findAllByText("first")).length).toBeGreaterThan(0);
 
-    await userEvent.type(screen.getByRole("textbox", { name: /Redis new member value|Redis 新成员值/ }), "second");
+    await userEvent.type(
+      screen.getByRole("textbox", { name: /Redis new member value|Redis 新成员值/ }),
+      "second",
+    );
     await userEvent.click(screen.getByRole("button", { name: /Push|推入/ }));
 
     await waitFor(() => {
-      expect(vi.mocked(invoke).mock.calls.some(([command]) => command === "dbx_redis_list_push")).toBe(true);
+      expect(
+        vi.mocked(invoke).mock.calls.some(([command]) => command === "dbx_redis_list_push"),
+      ).toBe(true);
     });
     expect(await screen.findByText("second")).toBeInTheDocument();
   });
@@ -1710,7 +2052,16 @@ describe("RedisBrowser", () => {
         return Promise.resolve({
           cursor: 0,
           total_keys: 1,
-          keys: [{ key_display: "blob:1", key_raw: "blob:1", key_type: "string", ttl: -1, size: 3, value_preview: "<binary>" }],
+          keys: [
+            {
+              key_display: "blob:1",
+              key_raw: "blob:1",
+              key_type: "string",
+              ttl: -1,
+              size: 3,
+              value_preview: "<binary>",
+            },
+          ],
         });
       }
       if (command === "dbx_redis_get_value") {
@@ -1749,9 +2100,15 @@ describe("RedisBrowser", () => {
     expect(copyInsert).toBeEnabled();
     await userEvent.click(copyInsert);
 
-    expect(await screen.findByText(/Cannot generate insert statement for binary data|无法为二进制数据生成插入语句/)).toBeInTheDocument();
+    expect(
+      await screen.findByText(
+        /Cannot generate insert statement for binary data|无法为二进制数据生成插入语句/,
+      ),
+    ).toBeInTheDocument();
     expect(navigator.clipboard.writeText).not.toHaveBeenCalled();
-    expect(vi.mocked(invoke).mock.calls.some(([command]) => command === "dbx_redis_set_value")).toBe(false);
+    expect(
+      vi.mocked(invoke).mock.calls.some(([command]) => command === "dbx_redis_set_value"),
+    ).toBe(false);
   });
 
   it("edits the selected Redis key TTL from the DBX-style TTL badge", async () => {
@@ -1762,7 +2119,16 @@ describe("RedisBrowser", () => {
         return Promise.resolve({
           cursor: 0,
           total_keys: 1,
-          keys: [{ key_display: "user:1", key_raw: "user:1", key_type: "string", ttl: currentTtl, size: 3, value_preview: "Ada" }],
+          keys: [
+            {
+              key_display: "user:1",
+              key_raw: "user:1",
+              key_type: "string",
+              ttl: currentTtl,
+              size: 3,
+              value_preview: "Ada",
+            },
+          ],
         });
       }
       if (command === "dbx_redis_get_value") {
@@ -1802,6 +2168,8 @@ describe("RedisBrowser", () => {
       keyRaw: "user:1",
       ttl: 120,
     });
-    expect(await screen.findByRole("button", { name: /TTL: 120s|TTL：120 秒/ })).toBeInTheDocument();
+    expect(
+      await screen.findByRole("button", { name: /TTL: 120s|TTL：120 秒/ }),
+    ).toBeInTheDocument();
   });
 });

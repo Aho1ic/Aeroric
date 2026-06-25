@@ -41,13 +41,18 @@ describe("project rail task grouping", () => {
   });
 
   it("expands the active project by default", () => {
-    expect(getDefaultExpandedProjectIds([project("p1", "App"), project("p2", "Docs")], "p2")).toEqual(
-      new Set(["p2"]),
-    );
+    expect(
+      getDefaultExpandedProjectIds([project("p1", "App"), project("p2", "Docs")], "p2"),
+    ).toEqual(new Set(["p2"]));
   });
 
   it("keeps the expanded project footer as icon-only utility actions", () => {
-    expect(getProjectRailFooterActions(false)).toEqual(["backHome", "openProject", "notifications", "theme"]);
+    expect(getProjectRailFooterActions(false)).toEqual([
+      "backHome",
+      "openProject",
+      "notifications",
+      "theme",
+    ]);
     expect(getProjectRailFooterActions(true)).toEqual([]);
   });
 

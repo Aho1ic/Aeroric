@@ -2,7 +2,13 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { confirm } from "@tauri-apps/plugin-dialog";
 import { Settings as SettingsIcon, Blocks, ExternalLink, AlertCircle, Trash2 } from "lucide-react";
-import type { Project, Skill, SkillDeleteResult, SkillHubConfig, SkillInstallation } from "../../types";
+import type {
+  Project,
+  Skill,
+  SkillDeleteResult,
+  SkillHubConfig,
+  SkillInstallation,
+} from "../../types";
 import { useI18n } from "../../i18n";
 import { SKILL_HUB_CHANGED_EVENT } from "../app-settings/types";
 import { shortenPath } from "../../utils";
@@ -130,9 +136,7 @@ export function SkillHubView({ config, allProjects, onEnterSkillHub, onOpenAppSe
       </div>
 
       <div style={s.skillHubMeta}>
-        {loading
-          ? t("skill.list.loading")
-          : t("skill.list.count", { count: skills.length })}
+        {loading ? t("skill.list.loading") : t("skill.list.count", { count: skills.length })}
       </div>
 
       {error ? (
@@ -209,11 +213,7 @@ function SkillRow({
         ) : null}
       </div>
       <div style={s.skillRowActions}>
-        <button
-          type="button"
-          style={s.skillRowManageBtn}
-          onClick={onManage}
-        >
+        <button type="button" style={s.skillRowManageBtn} onClick={onManage}>
           {t("skill.row.manage")}
         </button>
         <button

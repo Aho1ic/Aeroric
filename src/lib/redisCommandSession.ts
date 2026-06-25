@@ -25,7 +25,9 @@ function redisCommandHistoryStorageKey(connectionId: string): string {
   return `aeroric:database:redis-command-history:${connectionId}`;
 }
 
-function parsePersistedRedisCommandHistory(value: string | null): PersistedRedisCommandHistoryEntry[] {
+function parsePersistedRedisCommandHistory(
+  value: string | null,
+): PersistedRedisCommandHistoryEntry[] {
   if (!value) return [];
   try {
     const parsed = JSON.parse(value);
@@ -50,10 +52,15 @@ function parsePersistedRedisCommandHistory(value: string | null): PersistedRedis
 
 export function loadRedisCommandHistory(connectionId: string): PersistedRedisCommandHistoryEntry[] {
   if (typeof window === "undefined") return [];
-  return parsePersistedRedisCommandHistory(window.localStorage.getItem(redisCommandHistoryStorageKey(connectionId)));
+  return parsePersistedRedisCommandHistory(
+    window.localStorage.getItem(redisCommandHistoryStorageKey(connectionId)),
+  );
 }
 
-export function saveRedisCommandHistory(connectionId: string, entries: PersistedRedisCommandHistoryEntry[]) {
+export function saveRedisCommandHistory(
+  connectionId: string,
+  entries: PersistedRedisCommandHistoryEntry[],
+) {
   if (typeof window === "undefined") return;
   const next = entries.slice(-REDIS_COMMAND_HISTORY_LIMIT);
   window.localStorage.setItem(redisCommandHistoryStorageKey(connectionId), JSON.stringify(next));

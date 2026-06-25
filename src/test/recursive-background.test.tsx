@@ -28,7 +28,9 @@ vi.mock("../components/NotificationBell", () => ({
 
 vi.mock("../components/recursive-hero-effect/recursive-hero-effect", async (importOriginal) => {
   const actual =
-    await importOriginal<typeof import("../components/recursive-hero-effect/recursive-hero-effect")>();
+    await importOriginal<
+      typeof import("../components/recursive-hero-effect/recursive-hero-effect")
+    >();
   return {
     ...actual,
     createRecursiveHeroEffect: vi.fn(() => ({

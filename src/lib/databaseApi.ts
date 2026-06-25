@@ -156,13 +156,19 @@ export const databaseApi = {
     schema: string | null | undefined,
     name: string,
     objectType: DbxObjectSourceKind,
-  ) => invoke<DbxObjectSource>("dbx_get_object_source", { connectionId, database, schema, name, objectType }),
+  ) =>
+    invoke<DbxObjectSource>("dbx_get_object_source", {
+      connectionId,
+      database,
+      schema,
+      name,
+      objectType,
+    }),
   dbxExecuteQuery: (request: ExecuteQueryRequest) =>
     invoke<DbxQueryResult>("dbx_execute_query", { request }),
   dbxExecuteMulti: (request: ExecuteQueryRequest) =>
     invoke<DbxQueryResult[]>("dbx_execute_multi", { request }),
-  dbxCancelQuery: (executionId: string) =>
-    invoke<void>("dbx_cancel_query", { executionId }),
+  dbxCancelQuery: (executionId: string) => invoke<void>("dbx_cancel_query", { executionId }),
   dbxCloseResultSession: (params: {
     connectionId: string;
     sessionId: string;
@@ -248,8 +254,7 @@ export const databaseApi = {
     invoke<void>("dbx_redis_set_remove", { ...request }),
   dbxRedisSetAdd: (request: RedisSetAddRequest) =>
     invoke<void>("dbx_redis_set_add", { ...request, ttl: request.ttl ?? null }),
-  dbxRedisZrem: (request: RedisSetMemberRequest) =>
-    invoke<void>("dbx_redis_zrem", { ...request }),
+  dbxRedisZrem: (request: RedisSetMemberRequest) => invoke<void>("dbx_redis_zrem", { ...request }),
   dbxRedisZadd: (request: RedisZaddRequest) =>
     invoke<void>("dbx_redis_zadd", { ...request, ttl: request.ttl ?? null }),
   dbxRedisExecuteCommand: (request: RedisCommandRequest) =>
@@ -272,10 +277,8 @@ export const databaseApi = {
   dbxMongoDeleteDocuments: (request: MongoDeleteDocumentsRequest) =>
     invoke<number>("dbx_mongo_delete_documents", { ...request }),
   dbxDriverManifest: () => invoke<DatabaseDriverManifest>("dbx_driver_manifest"),
-  dbxStartTransfer: (request: unknown) =>
-    invoke<void>("dbx_start_transfer", { request }),
-  dbxCancelTransfer: (transferId: string) =>
-    invoke<void>("dbx_cancel_transfer", { transferId }),
+  dbxStartTransfer: (request: unknown) => invoke<void>("dbx_start_transfer", { request }),
+  dbxCancelTransfer: (transferId: string) => invoke<void>("dbx_cancel_transfer", { transferId }),
   dbxPrepareSchemaDiff: (options: unknown) =>
     invoke<unknown>("dbx_prepare_schema_diff", { options }),
   dbxGenerateSchemaSyncSql: (params: {

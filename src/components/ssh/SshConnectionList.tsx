@@ -45,9 +45,16 @@ export function SshConnectionList({
       <div style={s.sshListHeader}>
         <div>
           <div style={s.sshPanelTitle}>{t("ssh.connections")}</div>
-          <div style={s.sshPanelSubtitle}>{t("ssh.connectionCount", { count: connections.length })}</div>
+          <div style={s.sshPanelSubtitle}>
+            {t("ssh.connectionCount", { count: connections.length })}
+          </div>
         </div>
-        <button type="button" style={s.sshIconButton} title={t("ssh.newConnection")} onClick={onCreate}>
+        <button
+          type="button"
+          style={s.sshIconButton}
+          title={t("ssh.newConnection")}
+          onClick={onCreate}
+        >
           <Plus size={15} />
         </button>
       </div>
@@ -77,7 +84,10 @@ export function SshConnectionList({
                     style={selected ? s.sshConnectionRowSelected : s.sshConnectionRow}
                     onClick={() => onSelect(connection)}
                   >
-                    <Server size={16} color={selected ? "var(--control-active-fg)" : "var(--text-hint)"} />
+                    <Server
+                      size={16}
+                      color={selected ? "var(--control-active-fg)" : "var(--text-hint)"}
+                    />
                     <span style={s.sshConnectionText}>
                       <span style={s.sshConnectionName}>{connection.name}</span>
                       <span style={s.sshConnectionMeta}>{connectionSubtitle(connection)}</span>

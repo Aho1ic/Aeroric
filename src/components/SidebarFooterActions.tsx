@@ -1,6 +1,12 @@
 import { useEffect, useState } from "react";
 import { Settings, Moon, Sun } from "lucide-react";
-import type { ThemeMode, ThemeVariant, TerminalFontSize, TaskDisplayWindow, FontFamily } from "../types";
+import type {
+  ThemeMode,
+  ThemeVariant,
+  TerminalFontSize,
+  TaskDisplayWindow,
+  FontFamily,
+} from "../types";
 import { AppSettingsDialog } from "./AppSettingsDialog";
 import { OPEN_APP_SETTINGS_EVENT } from "./app-settings/types";
 import { NotificationBell } from "./NotificationBell";

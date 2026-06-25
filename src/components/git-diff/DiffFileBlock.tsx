@@ -84,16 +84,10 @@ function SplitCell({ row, side }: { row?: DiffRow; side: "old" | "new" }) {
 }
 
 function SplitPair({ children }: { children: ReactNode }) {
-  return (
-    <div style={SPLIT_PAIR_GRID}>
-      {children}
-    </div>
-  );
+  return <div style={SPLIT_PAIR_GRID}>{children}</div>;
 }
 
-const SPLIT_DIVIDER = (
-  <div style={{ background: "var(--border-dim)" }} aria-hidden />
-);
+const SPLIT_DIVIDER = <div style={{ background: "var(--border-dim)" }} aria-hidden />;
 
 function SplitRows({ rows }: { rows: DiffRow[] }) {
   const rendered: ReactNode[] = [];
@@ -303,7 +297,9 @@ export function DiffFileBlock({ file, viewMode }: { file: DiffFile; viewMode: Di
             <div style={s.diffFileEmpty}>{t("git.binaryFileNotShown")}</div>
           ) : file.hunks.length === 0 ? (
             <div style={s.diffFileEmpty}>
-              {file.headerLines.length > 0 ? file.headerLines.join("\n") : t("git.noTextualChanges")}
+              {file.headerLines.length > 0
+                ? file.headerLines.join("\n")
+                : t("git.noTextualChanges")}
             </div>
           ) : (
             file.hunks.map((hunk, index) => (

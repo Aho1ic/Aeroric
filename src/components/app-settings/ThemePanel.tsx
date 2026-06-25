@@ -10,11 +10,7 @@ interface ThemePanelProps {
   onThemeModeChange: (mode: ThemeMode) => void;
 }
 
-export function ThemePanel({
-  themeMode,
-  systemPrefersDark,
-  onThemeModeChange,
-}: ThemePanelProps) {
+export function ThemePanel({ themeMode, systemPrefersDark, onThemeModeChange }: ThemePanelProps) {
   const { t } = useI18n();
   type ManualMode = Extract<ThemeMode, "dark" | "light" | "eyecare">;
   const manualThemeModes: ManualMode[] = ["dark", "light", "eyecare"];
@@ -51,7 +47,9 @@ export function ThemePanel({
 
     if (event.key === "ArrowLeft" || event.key === "ArrowUp") {
       event.preventDefault();
-      onThemeModeChange(manualThemeModes[(currentIndex - 1 + manualThemeModes.length) % manualThemeModes.length]);
+      onThemeModeChange(
+        manualThemeModes[(currentIndex - 1 + manualThemeModes.length) % manualThemeModes.length],
+      );
       return;
     }
 
@@ -162,10 +160,7 @@ export function ThemePanel({
             <div
               style={{
                 borderRadius: 7,
-                background:
-                  mode === "dark"
-                    ? "rgba(255,255,255,0.05)"
-                    : "rgba(23,27,36,0.06)",
+                background: mode === "dark" ? "rgba(255,255,255,0.05)" : "rgba(23,27,36,0.06)",
                 border:
                   mode === "dark"
                     ? "1px solid rgba(255,255,255,0.06)"
@@ -260,7 +255,8 @@ export function ThemePanel({
                 <div
                   style={{
                     borderRadius: 6,
-                    background: mode === "dark" ? "rgba(255,255,255,0.07)" : "rgba(255,255,255,0.9)",
+                    background:
+                      mode === "dark" ? "rgba(255,255,255,0.07)" : "rgba(255,255,255,0.9)",
                     border:
                       mode === "dark"
                         ? "1px solid rgba(255,255,255,0.06)"
@@ -273,9 +269,7 @@ export function ThemePanel({
                       height: 18,
                       borderRadius: 6,
                       background:
-                        mode === "dark"
-                          ? "rgba(255,255,255,0.09)"
-                          : "rgba(255,255,255,0.92)",
+                        mode === "dark" ? "rgba(255,255,255,0.09)" : "rgba(255,255,255,0.92)",
                       border:
                         mode === "dark"
                           ? "1px solid rgba(255,255,255,0.06)"
@@ -287,9 +281,7 @@ export function ThemePanel({
                       flex: 1,
                       borderRadius: 6,
                       background:
-                        mode === "dark"
-                          ? "rgba(255,255,255,0.05)"
-                          : "rgba(255,255,255,0.82)",
+                        mode === "dark" ? "rgba(255,255,255,0.05)" : "rgba(255,255,255,0.82)",
                       border:
                         mode === "dark"
                           ? "1px solid rgba(255,255,255,0.05)"
@@ -362,9 +354,12 @@ export function ThemePanel({
               borderRadius: 999,
               border: "none",
               padding: 3,
-              background: themeMode === "system" ? "var(--primary-action-bg)" : "var(--border-medium)",
+              background:
+                themeMode === "system" ? "var(--primary-action-bg)" : "var(--border-medium)",
               boxShadow:
-                themeMode === "system" ? "0 0 0 4px var(--control-active-bg)" : "inset 0 0 0 1px var(--border-dim)",
+                themeMode === "system"
+                  ? "0 0 0 4px var(--control-active-bg)"
+                  : "inset 0 0 0 1px var(--border-dim)",
               transition: "background 0.12s, box-shadow 0.12s",
             }}
           >

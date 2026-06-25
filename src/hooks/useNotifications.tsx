@@ -20,25 +20,28 @@ export function NotificationsProvider({ children }: { children: React.ReactNode 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const fetchNotifications = useCallback(async (force = true) => {
-    setLoading(true);
-    try {
-      const data = await invoke<NotificationResult>("get_notifications", { force });
-      setResult(data);
-      setError(null);
-    } catch (err) {
-      const message =
-        typeof err === "string"
-          ? err
-          : err instanceof Error
-            ? err.message
-            : t("notification.loadingFailed");
-      setError(message);
-      console.error("Failed to load notifications:", err);
-    } finally {
-      setLoading(false);
-    }
-  }, [t]);
+  const fetchNotifications = useCallback(
+    async (force = true) => {
+      setLoading(true);
+      try {
+        const data = await invoke<NotificationResult>("get_notifications", { force });
+        setResult(data);
+        setError(null);
+      } catch (err) {
+        const message =
+          typeof err === "string"
+            ? err
+            : err instanceof Error
+              ? err.message
+              : t("notification.loadingFailed");
+        setError(message);
+        console.error("Failed to load notifications:", err);
+      } finally {
+        setLoading(false);
+      }
+    },
+    [t],
+  );
 
   useEffect(() => {
     fetchNotifications(true);

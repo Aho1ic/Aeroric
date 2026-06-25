@@ -33,7 +33,9 @@ function nodeKey(
 }
 
 export function useDatabaseSchema() {
-  const [databasesByConnection, setDatabasesByConnection] = useState<Record<string, DbxDatabaseInfo[]>>({});
+  const [databasesByConnection, setDatabasesByConnection] = useState<
+    Record<string, DbxDatabaseInfo[]>
+  >({});
   const [schemasByNode, setSchemasByNode] = useState<Record<string, string[]>>({});
   const [objectsByNode, setObjectsByNode] = useState<Record<string, DbxObjectInfo[]>>({});
   const [loadingNodes, setLoadingNodes] = useState<Record<string, boolean>>({});
@@ -119,10 +121,7 @@ export function useDatabaseSchema() {
     [loadConnectionRoot, loadDatabase, loadSchema],
   );
 
-  const allObjects = useMemo(
-    () => Object.values(objectsByNode).flat(),
-    [objectsByNode],
-  );
+  const allObjects = useMemo(() => Object.values(objectsByNode).flat(), [objectsByNode]);
 
   const searchTree = useCallback(
     (query: string) => {

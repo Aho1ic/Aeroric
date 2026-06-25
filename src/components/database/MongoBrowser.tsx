@@ -1,7 +1,21 @@
 import { useEffect, useMemo, useState } from "react";
 import type { MouseEvent } from "react";
 import { confirm } from "@tauri-apps/plugin-dialog";
-import { ArrowDown, ArrowUp, Check, ChevronLeft, ChevronRight, Columns3, Copy, Filter, Plus, RefreshCcw, Search, Trash2, Wrench } from "lucide-react";
+import {
+  ArrowDown,
+  ArrowUp,
+  Check,
+  ChevronLeft,
+  ChevronRight,
+  Columns3,
+  Copy,
+  Filter,
+  Plus,
+  RefreshCcw,
+  Search,
+  Trash2,
+  Wrench,
+} from "lucide-react";
 import { useI18n } from "../../i18n";
 import { useMongoBrowser } from "../../hooks/useMongoBrowser";
 import s from "../../styles";
@@ -13,7 +27,12 @@ interface Props {
   initialDatabase?: string;
   initialCollection?: string;
   initialDocumentId?: string;
-  onDocumentsQueryApplied?: (database: string, collection: string, filter: string, sort: string) => void;
+  onDocumentsQueryApplied?: (
+    database: string,
+    collection: string,
+    filter: string,
+    sort: string,
+  ) => void;
 }
 
 const MONGO_WORKSPACE_DEFAULT_PAGE_SIZE = 100;
@@ -21,7 +40,15 @@ const MONGO_WORKSPACE_PAGE_SIZE_OPTIONS = [50, 100, 200, 500, 1000] as const;
 const EMPTY_DOCUMENT_DRAFT = "{\n  \n}";
 const MONGO_VIEW_MODE_STORAGE_KEY = "dbx-mongo-view-mode";
 type MongoViewMode = "document" | "table";
-type MongoFilterMode = "equals" | "not-equals" | "like" | "not-like" | "greater-than" | "less-than" | "is-null" | "is-not-null";
+type MongoFilterMode =
+  | "equals"
+  | "not-equals"
+  | "like"
+  | "not-like"
+  | "greater-than"
+  | "less-than"
+  | "is-null"
+  | "is-not-null";
 type MongoFilterRule = {
   id: string;
   fieldName: string;
@@ -60,14 +87,16 @@ function loadMongoViewMode(): MongoViewMode {
 
 function saveMongoViewMode(value: MongoViewMode) {
   try {
-    if (typeof window !== "undefined") window.localStorage.setItem(MONGO_VIEW_MODE_STORAGE_KEY, value);
+    if (typeof window !== "undefined")
+      window.localStorage.setItem(MONGO_VIEW_MODE_STORAGE_KEY, value);
   } catch {
     // Ignore storage failures; the view mode still changes for the current session.
   }
 }
 
 function mongoDocumentId(document: unknown) {
-  if (document && typeof document === "object" && "_id" in document) return String((document as { _id: unknown })._id);
+  if (document && typeof document === "object" && "_id" in document)
+    return String((document as { _id: unknown })._id);
   return "";
 }
 
@@ -143,7 +172,9 @@ function parseMongoFilterInput(input: string): Record<string, unknown> | null {
   if (!trimmed || trimmed === "{}") return {};
   try {
     const parsed = JSON.parse(trimmed);
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : null;
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : null;
   } catch {
     return null;
   }
@@ -173,7 +204,10 @@ function buildMongoFilterCondition(rule: MongoFilterRule): Record<string, unknow
   }
 }
 
-function combineMongoFilterConditions(conditions: Record<string, unknown>[], rules: Pick<MongoFilterRule, "conjunction">[]): Record<string, unknown> | null {
+function combineMongoFilterConditions(
+  conditions: Record<string, unknown>[],
+  rules: Pick<MongoFilterRule, "conjunction">[],
+): Record<string, unknown> | null {
   if (conditions.length === 0) return null;
   let result = conditions[0];
   for (let index = 1; index < conditions.length; index += 1) {
@@ -183,15 +217,32 @@ function combineMongoFilterConditions(conditions: Record<string, unknown>[], rul
   return result;
 }
 
-function mongoFilterJson(manualFilter: string, structuredFilter: Record<string, unknown> | null): string {
+function mongoFilterJson(
+  manualFilter: string,
+  structuredFilter: Record<string, unknown> | null,
+): string {
   const manual = parseMongoFilterInput(manualFilter);
-  if (!structuredFilter) return manual ? (Object.keys(manual).length ? JSON.stringify(manual) : "{}") : (manualFilter.trim() || "{}");
+  if (!structuredFilter)
+    return manual
+      ? Object.keys(manual).length
+        ? JSON.stringify(manual)
+        : "{}"
+      : manualFilter.trim() || "{}";
   if (!manual) return JSON.stringify(structuredFilter);
-  const combined = Object.keys(manual).length ? { $and: [manual, structuredFilter] } : structuredFilter;
+  const combined = Object.keys(manual).length
+    ? { $and: [manual, structuredFilter] }
+    : structuredFilter;
   return Object.keys(combined).length ? JSON.stringify(combined) : "{}";
 }
 
-export function MongoBrowser({ connectionId, readOnly, initialDatabase, initialCollection, initialDocumentId, onDocumentsQueryApplied }: Props) {
+export function MongoBrowser({
+  connectionId,
+  readOnly,
+  initialDatabase,
+  initialCollection,
+  initialDocumentId,
+  onDocumentsQueryApplied,
+}: Props) {
   const { t } = useI18n();
   const mongo = useMongoBrowser(connectionId);
   const [activeDatabase, setActiveDatabase] = useState("");
@@ -199,7 +250,10 @@ export function MongoBrowser({ connectionId, readOnly, initialDatabase, initialC
   const [filter, setFilter] = useState("{}");
   const [structuredFilterOpen, setStructuredFilterOpen] = useState(false);
   const [filterRules, setFilterRules] = useState<MongoFilterRule[]>([]);
-  const [appliedStructuredFilter, setAppliedStructuredFilter] = useState<Record<string, unknown> | null>(null);
+  const [appliedStructuredFilter, setAppliedStructuredFilter] = useState<Record<
+    string,
+    unknown
+  > | null>(null);
   const [sort, setSort] = useState("{}");
   const [page, setPage] = useState(0);
   const [pageSize, setPageSize] = useState<number>(MONGO_WORKSPACE_DEFAULT_PAGE_SIZE);
@@ -223,13 +277,23 @@ export function MongoBrowser({ connectionId, readOnly, initialDatabase, initialC
   const [hiddenTableColumns, setHiddenTableColumns] = useState<Set<string>>(new Set());
   const [hideNullTableColumns, setHideNullTableColumns] = useState(false);
   const tableColumns = useMemo(() => mongoDocumentColumns(mongo.documents), [mongo.documents]);
-  const effectiveFilter = useMemo(() => mongoFilterJson(filter, appliedStructuredFilter), [appliedStructuredFilter, filter]);
+  const effectiveFilter = useMemo(
+    () => mongoFilterJson(filter, appliedStructuredFilter),
+    [appliedStructuredFilter, filter],
+  );
   const filteredTableColumns = useMemo(() => {
     const query = columnVisibilityQuery.trim().toLowerCase();
     return tableColumns.filter((column) => !query || column.toLowerCase().includes(query));
   }, [columnVisibilityQuery, tableColumns]);
   const allNullTableColumns = useMemo(
-    () => new Set(tableColumns.filter((column) => mongo.documents.length > 0 && mongo.documents.every((document) => mongoCellValue(document, column) == null))),
+    () =>
+      new Set(
+        tableColumns.filter(
+          (column) =>
+            mongo.documents.length > 0 &&
+            mongo.documents.every((document) => mongoCellValue(document, column) == null),
+        ),
+      ),
     [mongo.documents, tableColumns],
   );
   const manuallyVisibleTableColumns = useMemo(
@@ -240,10 +304,15 @@ export function MongoBrowser({ connectionId, readOnly, initialDatabase, initialC
     () => manuallyVisibleTableColumns.filter((column) => allNullTableColumns.has(column)),
     [allNullTableColumns, manuallyVisibleTableColumns],
   );
-  const canHideNullTableColumns = manuallyVisibleNullTableColumns.length > 0 && manuallyVisibleTableColumns.length > manuallyVisibleNullTableColumns.length;
+  const canHideNullTableColumns =
+    manuallyVisibleNullTableColumns.length > 0 &&
+    manuallyVisibleTableColumns.length > manuallyVisibleNullTableColumns.length;
   const effectiveHideNullTableColumns = hideNullTableColumns && canHideNullTableColumns;
   const visibleTableColumns = useMemo(
-    () => manuallyVisibleTableColumns.filter((column) => !(effectiveHideNullTableColumns && allNullTableColumns.has(column))),
+    () =>
+      manuallyVisibleTableColumns.filter(
+        (column) => !(effectiveHideNullTableColumns && allNullTableColumns.has(column)),
+      ),
     [allNullTableColumns, effectiveHideNullTableColumns, manuallyVisibleTableColumns],
   );
 
@@ -264,7 +333,8 @@ export function MongoBrowser({ connectionId, readOnly, initialDatabase, initialC
     setColumnVisibilityQuery("");
     setTableOptionsOpen(false);
     mongo.resetBrowserState();
-    mongo.loadDatabases()
+    mongo
+      .loadDatabases()
       .then(async () => {
         if (!initialDatabase) return;
         setActiveDatabase(initialDatabase);
@@ -281,7 +351,9 @@ export function MongoBrowser({ connectionId, readOnly, initialDatabase, initialC
           limit: MONGO_WORKSPACE_DEFAULT_PAGE_SIZE,
         });
         if (!initialDocumentId) return;
-        const index = result.documents.findIndex((document) => mongoDocumentId(document) === initialDocumentId);
+        const index = result.documents.findIndex(
+          (document) => mongoDocumentId(document) === initialDocumentId,
+        );
         if (index >= 0) selectDocument(index, result.documents[index]);
       })
       .catch(() => undefined);
@@ -379,13 +451,32 @@ export function MongoBrowser({ connectionId, readOnly, initialDatabase, initialC
   };
   const changePageSize = (nextPageSize: number) => {
     setPageSize(nextPageSize);
-    loadDocuments(activeDatabase, activeCollection, filter, sort, nextPageSize, appliedStructuredFilter);
+    loadDocuments(
+      activeDatabase,
+      activeCollection,
+      filter,
+      sort,
+      nextPageSize,
+      appliedStructuredFilter,
+    );
   };
   const sortByColumn = (column: string) => {
     const currentDirection = mongoSortDirection(sort, column);
-    const nextSort = currentDirection === "asc" ? JSON.stringify({ [column]: -1 }) : currentDirection === "desc" ? "{}" : JSON.stringify({ [column]: 1 });
+    const nextSort =
+      currentDirection === "asc"
+        ? JSON.stringify({ [column]: -1 })
+        : currentDirection === "desc"
+          ? "{}"
+          : JSON.stringify({ [column]: 1 });
     setSort(nextSort);
-    loadDocuments(activeDatabase, activeCollection, filter, nextSort, pageSize, appliedStructuredFilter);
+    loadDocuments(
+      activeDatabase,
+      activeCollection,
+      filter,
+      nextSort,
+      pageSize,
+      appliedStructuredFilter,
+    );
   };
   const toggleTableColumn = (column: string) => {
     setHiddenTableColumns((current) => {
@@ -396,9 +487,14 @@ export function MongoBrowser({ connectionId, readOnly, initialDatabase, initialC
         if (visibleTableColumns.includes(column) && visibleTableColumns.length <= 1) return current;
         next.add(column);
         const nextManualColumns = tableColumns.filter((candidate) => !next.has(candidate));
-        const nextNullColumns = nextManualColumns.filter((candidate) => allNullTableColumns.has(candidate));
-        const nextHideNullApplies = hideNullTableColumns && nextManualColumns.length > nextNullColumns.length;
-        const nextVisibleCount = nextManualColumns.filter((candidate) => !(nextHideNullApplies && allNullTableColumns.has(candidate))).length;
+        const nextNullColumns = nextManualColumns.filter((candidate) =>
+          allNullTableColumns.has(candidate),
+        );
+        const nextHideNullApplies =
+          hideNullTableColumns && nextManualColumns.length > nextNullColumns.length;
+        const nextVisibleCount = nextManualColumns.filter(
+          (candidate) => !(nextHideNullApplies && allNullTableColumns.has(candidate)),
+        ).length;
         if (nextVisibleCount < 1) return current;
       }
       return next;
@@ -412,8 +508,11 @@ export function MongoBrowser({ connectionId, readOnly, initialDatabase, initialC
     }
     const nextManualColumns = tableColumns.filter((column) => !next.has(column));
     const nextNullColumns = nextManualColumns.filter((column) => allNullTableColumns.has(column));
-    const nextHideNullApplies = hideNullTableColumns && nextManualColumns.length > nextNullColumns.length;
-    const nextVisibleColumns = nextManualColumns.filter((column) => !(nextHideNullApplies && allNullTableColumns.has(column)));
+    const nextHideNullApplies =
+      hideNullTableColumns && nextManualColumns.length > nextNullColumns.length;
+    const nextVisibleColumns = nextManualColumns.filter(
+      (column) => !(nextHideNullApplies && allNullTableColumns.has(column)),
+    );
     if (nextVisibleColumns.length === 0 && hideNullTableColumns) {
       setHideNullTableColumns(false);
     }
@@ -434,15 +533,19 @@ export function MongoBrowser({ connectionId, readOnly, initialDatabase, initialC
     setFilterRules((current) => [...current, createMongoFilterRule(tableColumns[0] ?? "")]);
   };
   const updateFilterRule = (id: string, patch: Partial<MongoFilterRule>) => {
-    setFilterRules((current) => current.map((rule) => {
-      if (rule.id !== id) return rule;
-      const next = { ...rule, ...patch };
-      if (patch.mode && !mongoFilterModeNeedsValue(patch.mode)) next.rawValue = "";
-      return next;
-    }));
+    setFilterRules((current) =>
+      current.map((rule) => {
+        if (rule.id !== id) return rule;
+        const next = { ...rule, ...patch };
+        if (patch.mode && !mongoFilterModeNeedsValue(patch.mode)) next.rawValue = "";
+        return next;
+      }),
+    );
   };
   const removeFilterRule = (id: string) => {
-    setFilterRules((current) => (current.length <= 1 ? current : current.filter((rule) => rule.id !== id)));
+    setFilterRules((current) =>
+      current.length <= 1 ? current : current.filter((rule) => rule.id !== id),
+    );
   };
   const resetStructuredFilterBuilder = () => {
     setAppliedStructuredFilter(null);
@@ -451,7 +554,10 @@ export function MongoBrowser({ connectionId, readOnly, initialDatabase, initialC
   const applyStructuredFilters = () => {
     const items = filterRules
       .map((rule) => ({ rule, condition: buildMongoFilterCondition(rule) }))
-      .filter((item): item is { rule: MongoFilterRule; condition: Record<string, unknown> } => item.condition != null);
+      .filter(
+        (item): item is { rule: MongoFilterRule; condition: Record<string, unknown> } =>
+          item.condition != null,
+      );
     const structured = combineMongoFilterConditions(
       items.map((item) => item.condition),
       items.map((item) => item.rule),
@@ -501,19 +607,26 @@ export function MongoBrowser({ connectionId, readOnly, initialDatabase, initialC
   const insertDocument = async (collection = activeCollection) => {
     if (!activeDatabase || !collection) return;
     setActiveCollection(collection);
-    const insertedId = await mongo.insertDocument({ database: activeDatabase, collection, docJson: documentDraft });
+    const insertedId = await mongo.insertDocument({
+      database: activeDatabase,
+      collection,
+      docJson: documentDraft,
+    });
     setPage(0);
     await refreshDocumentsKeepingSelection(insertedId, activeDatabase, collection, 0);
   };
   const deleteMatchingDocuments = async (collection = activeCollection) => {
     if (!activeDatabase || !collection) return;
     const queryFilter = mongoFilterJson(filter, appliedStructuredFilter);
-    const ok = await confirm(t("database.confirmDeleteMongoDocuments", { collection, filter: queryFilter }), {
-      title: t("database.mongoDeleteMatchingDocuments"),
-      kind: "warning",
-      okLabel: t("database.mongoDeleteMatchingDocuments"),
-      cancelLabel: t("common.cancel"),
-    });
+    const ok = await confirm(
+      t("database.confirmDeleteMongoDocuments", { collection, filter: queryFilter }),
+      {
+        title: t("database.mongoDeleteMatchingDocuments"),
+        kind: "warning",
+        okLabel: t("database.mongoDeleteMatchingDocuments"),
+        cancelLabel: t("common.cancel"),
+      },
+    );
     if (!ok) return;
     setActiveCollection(collection);
     await mongo.deleteDocuments({
@@ -529,12 +642,15 @@ export function MongoBrowser({ connectionId, readOnly, initialDatabase, initialC
     const rawId = mongoDocumentRawId(document);
     const id = mongoDocumentId(document);
     if (rawId == null || !id) return;
-    const ok = await confirm(t("database.confirmDeleteMongoDocument", { collection: activeCollection, id }), {
-      title: t("database.mongoDeleteDocument"),
-      kind: "warning",
-      okLabel: t("database.mongoDeleteDocument"),
-      cancelLabel: t("common.cancel"),
-    });
+    const ok = await confirm(
+      t("database.confirmDeleteMongoDocument", { collection: activeCollection, id }),
+      {
+        title: t("database.mongoDeleteDocument"),
+        kind: "warning",
+        okLabel: t("database.mongoDeleteDocument"),
+        cancelLabel: t("common.cancel"),
+      },
+    );
     if (!ok) return;
     await mongo.deleteDocuments({
       database: activeDatabase,
@@ -595,7 +711,13 @@ export function MongoBrowser({ connectionId, readOnly, initialDatabase, initialC
             <div style={s.databaseWorkspaceTitle}>MongoDB</div>
             <div style={s.databaseDialogHint}>{t("database.mongoBrowserHint")}</div>
           </div>
-          <DbxButton variant="ghost" size="icon-sm" icon={RefreshCcw} onClick={() => loadDocuments()} aria-label={t("database.refresh")} />
+          <DbxButton
+            variant="ghost"
+            size="icon-sm"
+            icon={RefreshCcw}
+            onClick={() => loadDocuments()}
+            aria-label={t("database.refresh")}
+          />
         </div>
         <div style={s.databaseSection}>
           <div style={s.databaseSectionTitle}>{t("database.databases")}</div>
@@ -603,7 +725,10 @@ export function MongoBrowser({ connectionId, readOnly, initialDatabase, initialC
             <button
               key={database}
               type="button"
-              style={{ ...s.databaseListButton, ...(activeDatabase === database ? s.databaseListButtonActive : {}) }}
+              style={{
+                ...s.databaseListButton,
+                ...(activeDatabase === database ? s.databaseListButtonActive : {}),
+              }}
               onClick={() => {
                 setActiveDatabase(database);
                 setActiveCollection("");
@@ -628,7 +753,10 @@ export function MongoBrowser({ connectionId, readOnly, initialDatabase, initialC
             <button
               key={collection}
               type="button"
-              style={{ ...s.databaseListButton, ...(activeCollection === collection ? s.databaseListButtonActive : {}) }}
+              style={{
+                ...s.databaseListButton,
+                ...(activeCollection === collection ? s.databaseListButtonActive : {}),
+              }}
               onClick={() => {
                 selectCollection(collection);
               }}
@@ -642,8 +770,12 @@ export function MongoBrowser({ connectionId, readOnly, initialDatabase, initialC
       <div style={s.databaseBrowserMain}>
         <div style={s.databaseWorkspaceHeader}>
           <div>
-            <div style={s.databaseWorkspaceTitle}>{activeCollection || t("database.mongoCollection")}</div>
-            <div style={s.databaseDialogHint}>{t("database.mongoTotal", { total: mongo.total })}</div>
+            <div style={s.databaseWorkspaceTitle}>
+              {activeCollection || t("database.mongoCollection")}
+            </div>
+            <div style={s.databaseDialogHint}>
+              {t("database.mongoTotal", { total: mongo.total })}
+            </div>
           </div>
           <div style={s.databaseButtonRow}>
             <DbxButton
@@ -684,7 +816,9 @@ export function MongoBrowser({ connectionId, readOnly, initialDatabase, initialC
                 >
                   {t("database.gridColumnVisibility")}
                   {hiddenTableColumns.size > 0 && (
-                    <span style={s.databasePill}>{visibleTableColumns.length}/{tableColumns.length}</span>
+                    <span style={s.databasePill}>
+                      {visibleTableColumns.length}/{tableColumns.length}
+                    </span>
                   )}
                 </DbxButton>
                 {columnVisibilityOpen && (
@@ -711,8 +845,16 @@ export function MongoBrowser({ connectionId, readOnly, initialDatabase, initialC
                         borderBottom: "1px solid var(--border-dim)",
                       }}
                     >
-                      <span style={{ fontSize: 12, fontWeight: 700 }}>{t("database.gridColumnVisibility")}</span>
-                      <span style={{ fontSize: 11, color: "var(--text-muted)", fontVariantNumeric: "tabular-nums" }}>
+                      <span style={{ fontSize: 12, fontWeight: 700 }}>
+                        {t("database.gridColumnVisibility")}
+                      </span>
+                      <span
+                        style={{
+                          fontSize: 11,
+                          color: "var(--text-muted)",
+                          fontVariantNumeric: "tabular-nums",
+                        }}
+                      >
                         {visibleTableColumns.length}/{tableColumns.length}
                       </span>
                     </div>
@@ -748,7 +890,8 @@ export function MongoBrowser({ connectionId, readOnly, initialDatabase, initialC
                       {filteredTableColumns.map((column) => {
                         const visible = !hiddenTableColumns.has(column);
                         const effectivelyVisible = visibleTableColumns.includes(column);
-                        const disableHide = visible && effectivelyVisible && visibleTableColumns.length <= 1;
+                        const disableHide =
+                          visible && effectivelyVisible && visibleTableColumns.length <= 1;
                         return (
                           <label
                             key={column}
@@ -768,14 +911,29 @@ export function MongoBrowser({ connectionId, readOnly, initialDatabase, initialC
                               onChange={() => toggleTableColumn(column)}
                               aria-label={column}
                             />
-                            <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontFamily: "var(--font-mono)" }}>
+                            <span
+                              style={{
+                                minWidth: 0,
+                                overflow: "hidden",
+                                textOverflow: "ellipsis",
+                                whiteSpace: "nowrap",
+                                fontFamily: "var(--font-mono)",
+                              }}
+                            >
                               {column}
                             </span>
                           </label>
                         );
                       })}
                       {filteredTableColumns.length === 0 && (
-                        <div style={{ padding: "18px 10px", textAlign: "center", fontSize: 12, color: "var(--text-muted)" }}>
+                        <div
+                          style={{
+                            padding: "18px 10px",
+                            textAlign: "center",
+                            fontSize: 12,
+                            color: "var(--text-muted)",
+                          }}
+                        >
                           {t("database.gridNoSearchResults")}
                         </div>
                       )}
@@ -878,10 +1036,24 @@ export function MongoBrowser({ connectionId, readOnly, initialDatabase, initialC
                         disabled={!hideNullTableColumns && !canHideNullTableColumns}
                         onChange={toggleHideNullTableColumns}
                       />
-                      <span style={{ minWidth: 0, display: "inline-flex", alignItems: "center", gap: 4 }}>
+                      <span
+                        style={{
+                          minWidth: 0,
+                          display: "inline-flex",
+                          alignItems: "center",
+                          gap: 4,
+                        }}
+                      >
                         <span>{t("database.gridHideNullColumns")}</span>
                         {manuallyVisibleNullTableColumns.length > 0 && (
-                          <span style={{ color: "var(--text-muted)", fontVariantNumeric: "tabular-nums" }}>({manuallyVisibleNullTableColumns.length})</span>
+                          <span
+                            style={{
+                              color: "var(--text-muted)",
+                              fontVariantNumeric: "tabular-nums",
+                            }}
+                          >
+                            ({manuallyVisibleNullTableColumns.length})
+                          </span>
                         )}
                       </span>
                     </label>
@@ -947,7 +1119,15 @@ export function MongoBrowser({ connectionId, readOnly, initialDatabase, initialC
                   zIndex: 20,
                 }}
               >
-                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, marginBottom: 8 }}>
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    gap: 10,
+                    marginBottom: 8,
+                  }}
+                >
                   <span style={{ fontSize: 12, fontWeight: 700 }}>{t("database.gridFilter")}</span>
                   <DbxButton variant="outline" size="sm" icon={Plus} onClick={addFilterRule}>
                     {t("database.filterBuilderAddRule")}
@@ -961,32 +1141,56 @@ export function MongoBrowser({ connectionId, readOnly, initialDatabase, initialC
                           <DbxButton
                             variant="outline"
                             size="xs"
-                            onClick={() => updateFilterRule(rule.id, { conjunction: rule.conjunction === "AND" ? "OR" : "AND" })}
+                            onClick={() =>
+                              updateFilterRule(rule.id, {
+                                conjunction: rule.conjunction === "AND" ? "OR" : "AND",
+                              })
+                            }
                             style={{ width: 54, justifySelf: "center" }}
                           >
                             {rule.conjunction}
                           </DbxButton>
                         )}
-                        <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr) 30px", gap: 6, alignItems: "center" }}>
+                        <div
+                          style={{
+                            display: "grid",
+                            gridTemplateColumns:
+                              "minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr) 30px",
+                            gap: 6,
+                            alignItems: "center",
+                          }}
+                        >
                           <select
                             style={{ ...s.databaseDialogInput, height: 30, padding: "0 6px" }}
                             value={rule.fieldName}
                             aria-label={t("database.filterBuilderColumn")}
-                            onChange={(event) => updateFilterRule(rule.id, { fieldName: event.currentTarget.value })}
+                            onChange={(event) =>
+                              updateFilterRule(rule.id, { fieldName: event.currentTarget.value })
+                            }
                           >
-                            {tableColumns.length === 0 && <option value="">{t("database.filterBuilderColumn")}</option>}
+                            {tableColumns.length === 0 && (
+                              <option value="">{t("database.filterBuilderColumn")}</option>
+                            )}
                             {tableColumns.map((column) => (
-                              <option key={column} value={column}>{column}</option>
+                              <option key={column} value={column}>
+                                {column}
+                              </option>
                             ))}
                           </select>
                           <select
                             style={{ ...s.databaseDialogInput, height: 30, padding: "0 6px" }}
                             value={rule.mode}
                             aria-label={t("database.filterBuilderMode")}
-                            onChange={(event) => updateFilterRule(rule.id, { mode: event.currentTarget.value as MongoFilterMode })}
+                            onChange={(event) =>
+                              updateFilterRule(rule.id, {
+                                mode: event.currentTarget.value as MongoFilterMode,
+                              })
+                            }
                           >
                             {MONGO_FILTER_MODE_OPTIONS.map((option) => (
-                              <option key={option.value} value={option.value}>{t(option.labelKey)}</option>
+                              <option key={option.value} value={option.value}>
+                                {t(option.labelKey)}
+                              </option>
                             ))}
                           </select>
                           {mongoFilterModeNeedsValue(rule.mode) ? (
@@ -995,7 +1199,9 @@ export function MongoBrowser({ connectionId, readOnly, initialDatabase, initialC
                               value={rule.rawValue}
                               placeholder={t("database.filterBuilderValue")}
                               aria-label={t("database.filterBuilderValue")}
-                              onChange={(event) => updateFilterRule(rule.id, { rawValue: event.target.value })}
+                              onChange={(event) =>
+                                updateFilterRule(rule.id, { rawValue: event.target.value })
+                              }
                               onKeyDown={(event) => {
                                 if (event.key === "Enter") applyStructuredFilters();
                               }}
@@ -1027,11 +1233,27 @@ export function MongoBrowser({ connectionId, readOnly, initialDatabase, initialC
                     ))}
                   </div>
                 ) : (
-                  <div style={{ border: "1px dashed var(--border-medium)", borderRadius: 7, padding: 14, textAlign: "center", color: "var(--text-muted)", fontSize: 12 }}>
+                  <div
+                    style={{
+                      border: "1px dashed var(--border-medium)",
+                      borderRadius: 7,
+                      padding: 14,
+                      textAlign: "center",
+                      color: "var(--text-muted)",
+                      fontSize: 12,
+                    }}
+                  >
                     {t("database.filterBuilderEmpty")}
                   </div>
                 )}
-                <div style={{ display: "flex", justifyContent: "space-between", gap: 8, marginTop: 10 }}>
+                <div
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    gap: 8,
+                    marginTop: 10,
+                  }}
+                >
                   <DbxButton variant="outline" size="sm" onClick={clearDocumentFilters}>
                     {t("database.clearFilter")}
                   </DbxButton>
@@ -1047,29 +1269,76 @@ export function MongoBrowser({ connectionId, readOnly, initialDatabase, initialC
               </div>
             )}
           </span>
-          <DbxButton variant="outline" size="sm" onClick={() => loadDocuments()} disabled={!activeDatabase || !activeCollection}>
+          <DbxButton
+            variant="outline"
+            size="sm"
+            onClick={() => loadDocuments()}
+            disabled={!activeDatabase || !activeCollection}
+          >
             {t("database.applyFilter")}
           </DbxButton>
-          <DbxButton variant="outline" size="sm" onClick={clearDocumentFilters} disabled={!activeDatabase || !activeCollection}>
+          <DbxButton
+            variant="outline"
+            size="sm"
+            onClick={clearDocumentFilters}
+            disabled={!activeDatabase || !activeCollection}
+          >
             {t("database.clearFilter")}
           </DbxButton>
-          <DbxButton variant="outline" size="sm" icon={Plus} disabled={readOnly || !activeDatabase || !activeCollection} onClick={() => void insertDocument()}>
+          <DbxButton
+            variant="outline"
+            size="sm"
+            icon={Plus}
+            disabled={readOnly || !activeDatabase || !activeCollection}
+            onClick={() => void insertDocument()}
+          >
             {t("database.mongoInsertDocument")}
           </DbxButton>
-          <DbxButton variant="destructive" size="sm" icon={Trash2} disabled={readOnly || !activeDatabase || !activeCollection} onClick={() => void deleteMatchingDocuments()}>
+          <DbxButton
+            variant="destructive"
+            size="sm"
+            icon={Trash2}
+            disabled={readOnly || !activeDatabase || !activeCollection}
+            onClick={() => void deleteMatchingDocuments()}
+          >
             {t("database.mongoDeleteMatchingDocuments")}
           </DbxButton>
-          <DbxButton variant="outline" size="sm" disabled={!activeDatabase || !activeCollection || page * pageSize + mongo.documents.length >= mongo.total || mongo.loading} onClick={loadMoreDocuments}>
+          <DbxButton
+            variant="outline"
+            size="sm"
+            disabled={
+              !activeDatabase ||
+              !activeCollection ||
+              page * pageSize + mongo.documents.length >= mongo.total ||
+              mongo.loading
+            }
+            onClick={loadMoreDocuments}
+          >
             {t("database.loadMore")} ({mongo.documents.length}/{mongo.total})
           </DbxButton>
-          <DbxButton variant="ghost" size="icon-sm" icon={ChevronLeft} aria-label={t("database.previousPage")} disabled={!activeDatabase || !activeCollection || page <= 0 || mongo.loading} onClick={() => loadDocumentPage(page - 1)} />
+          <DbxButton
+            variant="ghost"
+            size="icon-sm"
+            icon={ChevronLeft}
+            aria-label={t("database.previousPage")}
+            disabled={!activeDatabase || !activeCollection || page <= 0 || mongo.loading}
+            onClick={() => loadDocumentPage(page - 1)}
+          />
           <span style={{ fontSize: 12, color: "var(--text-muted)" }}>
             {t("database.page", {
               page: page + 1,
               total: Math.max(1, Math.ceil(mongo.total / pageSize)),
             })}
           </span>
-          <label style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12, color: "var(--text-muted)" }}>
+          <label
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 6,
+              fontSize: 12,
+              color: "var(--text-muted)",
+            }}
+          >
             <span>{t("database.gridRowsPerPage")}</span>
             <select
               style={{ ...s.databaseDialogInput, width: 82, height: 28, padding: "0 6px" }}
@@ -1081,7 +1350,9 @@ export function MongoBrowser({ connectionId, readOnly, initialDatabase, initialC
               }}
             >
               {MONGO_WORKSPACE_PAGE_SIZE_OPTIONS.map((option) => (
-                <option key={option} value={option}>{option}</option>
+                <option key={option} value={option}>
+                  {option}
+                </option>
               ))}
             </select>
           </label>
@@ -1090,7 +1361,12 @@ export function MongoBrowser({ connectionId, readOnly, initialDatabase, initialC
             size="icon-sm"
             icon={ChevronRight}
             aria-label={t("database.nextPage")}
-            disabled={!activeDatabase || !activeCollection || (page + 1) * pageSize >= mongo.total || mongo.loading}
+            disabled={
+              !activeDatabase ||
+              !activeCollection ||
+              (page + 1) * pageSize >= mongo.total ||
+              mongo.loading
+            }
             onClick={() => loadDocumentPage(page + 1)}
           />
         </div>
@@ -1119,7 +1395,17 @@ export function MongoBrowser({ connectionId, readOnly, initialDatabase, initialC
                   {visibleTableColumns.map((column) => {
                     const direction = mongoSortDirection(sort, column);
                     return (
-                      <th key={column} style={s.databaseTh} aria-sort={direction === "asc" ? "ascending" : direction === "desc" ? "descending" : "none"}>
+                      <th
+                        key={column}
+                        style={s.databaseTh}
+                        aria-sort={
+                          direction === "asc"
+                            ? "ascending"
+                            : direction === "desc"
+                              ? "descending"
+                              : "none"
+                        }
+                      >
                         <button
                           type="button"
                           style={{
@@ -1141,7 +1427,16 @@ export function MongoBrowser({ connectionId, readOnly, initialDatabase, initialC
                           disabled={!activeDatabase || !activeCollection || mongo.loading}
                           onClick={() => sortByColumn(column)}
                         >
-                          <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{column}</span>
+                          <span
+                            style={{
+                              minWidth: 0,
+                              overflow: "hidden",
+                              textOverflow: "ellipsis",
+                              whiteSpace: "nowrap",
+                            }}
+                          >
+                            {column}
+                          </span>
                           {direction === "asc" && <ArrowUp size={12} aria-hidden="true" />}
                           {direction === "desc" && <ArrowDown size={12} aria-hidden="true" />}
                         </button>
@@ -1200,15 +1495,25 @@ export function MongoBrowser({ connectionId, readOnly, initialDatabase, initialC
               minWidth: 210,
             }}
           >
-            {([
-              ["copyName", "database.copyName"],
-              ["refresh", "database.refresh"],
-              ["insertDocument", "database.mongoInsertDocument"],
-              ["deleteDocuments", "database.mongoDeleteMatchingDocuments"],
-            ] as const).map(([action, labelKey]) => (
+            {(
+              [
+                ["copyName", "database.copyName"],
+                ["refresh", "database.refresh"],
+                ["insertDocument", "database.mongoInsertDocument"],
+                ["deleteDocuments", "database.mongoDeleteMatchingDocuments"],
+              ] as const
+            ).map(([action, labelKey]) => (
               <DbxMenuItem
                 key={action}
-                icon={action === "copyName" ? Copy : action === "refresh" ? RefreshCcw : action === "insertDocument" ? Plus : Trash2}
+                icon={
+                  action === "copyName"
+                    ? Copy
+                    : action === "refresh"
+                      ? RefreshCcw
+                      : action === "insertDocument"
+                        ? Plus
+                        : Trash2
+                }
                 disabled={(action === "insertDocument" || action === "deleteDocuments") && readOnly}
                 destructive={action === "deleteDocuments"}
                 onClick={() => {
@@ -1243,15 +1548,20 @@ export function MongoBrowser({ connectionId, readOnly, initialDatabase, initialC
               minWidth: 210,
             }}
           >
-            {([
-              ["copyDocument", "database.copyDocumentJson"],
-              ["refresh", "database.refresh"],
-              ["deleteDocument", "database.mongoDeleteDocument"],
-            ] as const).map(([action, labelKey]) => (
+            {(
+              [
+                ["copyDocument", "database.copyDocumentJson"],
+                ["refresh", "database.refresh"],
+                ["deleteDocument", "database.mongoDeleteDocument"],
+              ] as const
+            ).map(([action, labelKey]) => (
               <DbxMenuItem
                 key={action}
                 icon={action === "copyDocument" ? Copy : action === "refresh" ? RefreshCcw : Trash2}
-                disabled={action === "deleteDocument" && (readOnly || mongoDocumentRawId(documentContextMenu.document) == null)}
+                disabled={
+                  action === "deleteDocument" &&
+                  (readOnly || mongoDocumentRawId(documentContextMenu.document) == null)
+                }
                 destructive={action === "deleteDocument"}
                 onClick={() => {
                   const menu = documentContextMenu;

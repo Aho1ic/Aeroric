@@ -66,7 +66,10 @@ function GroupNameDialog({
   const [name, setName] = useState("");
   const normalized = name.trim();
   return (
-    <div style={s.sshDialogOverlay} onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
+    <div
+      style={s.sshDialogOverlay}
+      onMouseDown={(event) => event.target === event.currentTarget && onClose()}
+    >
       <form
         style={s.sshDialog}
         onSubmit={(event) => {
@@ -135,13 +138,15 @@ export function SshProjectPage({
   const knownGroups = useMemo(
     () =>
       Array.from(
-        new Set([
-          ...groups,
-          ...connections
-            .map((connection) => connection.group?.trim())
-            .filter((group): group is string => Boolean(group)),
-          initialGroup,
-        ].filter(Boolean)),
+        new Set(
+          [
+            ...groups,
+            ...connections
+              .map((connection) => connection.group?.trim())
+              .filter((group): group is string => Boolean(group)),
+            initialGroup,
+          ].filter(Boolean),
+        ),
       ),
     [connections, groups, initialGroup],
   );
@@ -201,7 +206,10 @@ export function SshProjectPage({
                     const canCopyPassword = Boolean(connection.password?.trim());
                     const copied = copiedConnectionId === connection.id;
                     return (
-                      <div key={connection.id} style={selected ? s.sshProjectCardSelected : s.sshProjectCard}>
+                      <div
+                        key={connection.id}
+                        style={selected ? s.sshProjectCardSelected : s.sshProjectCard}
+                      >
                         <button
                           type="button"
                           style={s.sshProjectCardSelect}
@@ -223,7 +231,9 @@ export function SshProjectPage({
                                 color: hasRemotePath ? "var(--text-muted)" : "var(--warning)",
                               }}
                             >
-                              {hasRemotePath ? connection.remotePath : t("sshProject.remotePathMissing")}
+                              {hasRemotePath
+                                ? connection.remotePath
+                                : t("sshProject.remotePathMissing")}
                             </span>
                           </span>
                         </button>
@@ -246,8 +256,11 @@ export function SshProjectPage({
                             cursor: canCopyPassword ? "pointer" : "not-allowed",
                             transform: copied ? "scale(1.12)" : "scale(1)",
                             color: copied ? "var(--success)" : s.sshProjectCardEdit.color,
-                            border: copied ? "1px solid var(--success)" : s.sshProjectCardEdit.border,
-                            transition: "transform 0.16s ease, color 0.16s ease, border-color 0.16s ease",
+                            border: copied
+                              ? "1px solid var(--success)"
+                              : s.sshProjectCardEdit.border,
+                            transition:
+                              "transform 0.16s ease, color 0.16s ease, border-color 0.16s ease",
                           }}
                           data-copied={copied ? "true" : undefined}
                           disabled={!canCopyPassword}

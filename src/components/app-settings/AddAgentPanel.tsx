@@ -79,7 +79,15 @@ export function AddAgentPanel({ onSaved }: { onSaved: (agentId: string) => void 
     >
       {error && <div style={{ color: "var(--danger)", fontSize: 12.5 }}>{error}</div>}
       {saved && (
-        <div style={{ display: "flex", alignItems: "center", gap: 6, color: "var(--success)", fontSize: 12.5 }}>
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 6,
+            color: "var(--success)",
+            fontSize: 12.5,
+          }}
+        >
           <Check size={13} /> {t("common.saved")}
         </div>
       )}
@@ -124,8 +132,20 @@ export function AddAgentPanel({ onSaved }: { onSaved: (agentId: string) => void 
         />
       </div>
 
-      <label style={{ display: "flex", alignItems: "center", gap: 9, fontSize: 12.5, color: "var(--text-secondary)" }}>
-        <input type="checkbox" checked={codexLike} onChange={(event) => setCodexLike(event.target.checked)} />
+      <label
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 9,
+          fontSize: 12.5,
+          color: "var(--text-secondary)",
+        }}
+      >
+        <input
+          type="checkbox"
+          checked={codexLike}
+          onChange={(event) => setCodexLike(event.target.checked)}
+        />
         {t("appSettings.codexCompatible")}
       </label>
 

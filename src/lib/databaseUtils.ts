@@ -9,7 +9,11 @@ const DBX_GRID_AUTOFIT_CHAR_WIDTH = 8;
 const DBX_GRID_AUTOFIT_PADDING = 48;
 
 // DatabaseRow type definition
-type DatabaseRow = { rowId?: number | null; keyValues: Array<{ column: string; value: unknown }>; values: unknown[] };
+type DatabaseRow = {
+  rowId?: number | null;
+  keyValues: Array<{ column: string; value: unknown }>;
+  values: unknown[];
+};
 
 /**
  * Escape a value for TSV output
@@ -28,9 +32,7 @@ export function dbxGridRowsToTsv(
   return [
     columns.map(({ column }) => escapeTsvCell(column)).join("\t"),
     ...rows.map((row) =>
-      columns
-        .map(({ index }) => escapeTsvCell(valueToText(row.values[index])))
-        .join("\t"),
+      columns.map(({ index }) => escapeTsvCell(valueToText(row.values[index]))).join("\t"),
     ),
   ].join("\n");
 }
@@ -43,9 +45,7 @@ export function dbxGridRowsToJson(
   rows: DatabaseRow[],
 ): string {
   const objects = rows.map((row) =>
-    Object.fromEntries(
-      columns.map(({ column, index }) => [column, row.values[index] ?? null]),
-    ),
+    Object.fromEntries(columns.map(({ column, index }) => [column, row.values[index] ?? null])),
   );
   return JSON.stringify(objects.length === 1 ? objects[0] : objects, null, 2);
 }
@@ -53,18 +53,10 @@ export function dbxGridRowsToJson(
 /**
  * Check if the target element is a text editing shortcut target
  */
-export function isTextEditingShortcutTarget(
-  target: EventTarget | null,
-): boolean {
-  if (
-    target instanceof HTMLTextAreaElement ||
-    target instanceof HTMLSelectElement
-  )
-    return true;
+export function isTextEditingShortcutTarget(target: EventTarget | null): boolean {
+  if (target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement) return true;
   if (target instanceof HTMLInputElement) {
-    return !["button", "checkbox", "radio", "reset", "submit"].includes(
-      target.type,
-    );
+    return !["button", "checkbox", "radio", "reset", "submit"].includes(target.type);
   }
   return target instanceof HTMLElement && target.isContentEditable;
 }
@@ -106,32 +98,54 @@ export function sqlLiteral(value: unknown): string {
  * Clamp a DBX grid column width to min/max values
  */
 export function clampDbxGridColumnWidth(width: number): number {
-  return Math.min(DBX_GRID_MAX_COLUMN_WIDTH, Math.max(DBX_GRID_MIN_COLUMN_WIDTH, Math.round(width)));
+  return Math.min(
+    DBX_GRID_MAX_COLUMN_WIDTH,
+    Math.max(DBX_GRID_MIN_COLUMN_WIDTH, Math.round(width)),
+  );
 }
 
 /**
  * Estimate a DBX grid column width based on content
  */
-export function estimateDbxGridColumnWidth(column: string, columnIndex: number, rows: DatabaseRow[], columnType = ""): number {
+export function estimateDbxGridColumnWidth(
+  column: string,
+  columnIndex: number,
+  rows: DatabaseRow[],
+  columnType = "",
+): number {
   const headerLength = Math.max(column.length, columnType.trim().length);
   const longestTextLength = rows.reduce((length, row) => {
     const text = valueToText(row.values[columnIndex]);
     return Math.max(length, Math.min(text.length, 60));
   }, headerLength);
-  return clampDbxGridColumnWidth(longestTextLength * DBX_GRID_AUTOFIT_CHAR_WIDTH + DBX_GRID_AUTOFIT_PADDING);
+  return clampDbxGridColumnWidth(
+    longestTextLength * DBX_GRID_AUTOFIT_CHAR_WIDTH + DBX_GRID_AUTOFIT_PADDING,
+  );
 }
 
 /**
  * Initialize DBX grid column widths
  */
-export function initialDbxGridColumnWidths(columns: string[], rows: DatabaseRow[], columnTypes: string[] = []): Record<string, number> {
-  return Object.fromEntries(columns.map((column, index) => [column, estimateDbxGridColumnWidth(column, index, rows, columnTypes[index] ?? "")]));
+export function initialDbxGridColumnWidths(
+  columns: string[],
+  rows: DatabaseRow[],
+  columnTypes: string[] = [],
+): Record<string, number> {
+  return Object.fromEntries(
+    columns.map((column, index) => [
+      column,
+      estimateDbxGridColumnWidth(column, index, rows, columnTypes[index] ?? ""),
+    ]),
+  );
 }
 
 /**
  * Check if a DBX grid column is sortable
  */
-export function dbxGridColumnSortable(result: { columnSortables?: boolean[] } | null, columnIndex: number): boolean {
+export function dbxGridColumnSortable(
+  result: { columnSortables?: boolean[] } | null,
+  columnIndex: number,
+): boolean {
   const sortable = result?.columnSortables?.[columnIndex];
   return sortable === undefined ? true : sortable;
 }
@@ -139,7 +153,10 @@ export function dbxGridColumnSortable(result: { columnSortables?: boolean[] } | 
 /**
  * Get the type of a DBX grid column
  */
-export function dbxGridColumnType(result: { columnTypes?: string[] } | null, columnIndex: number): string | null {
+export function dbxGridColumnType(
+  result: { columnTypes?: string[] } | null,
+  columnIndex: number,
+): string | null {
   const columnType = result?.columnTypes?.[columnIndex];
   return typeof columnType === "string" && columnType.trim() ? columnType.trim() : null;
 }
@@ -158,7 +175,10 @@ export function cellPreviewText(value: unknown): { text: string; json: boolean }
   if (value === null || value === undefined) return { text: "NULL", json: false };
   if (typeof value === "string") {
     const trimmed = value.trim();
-    if ((trimmed.startsWith("{") && trimmed.endsWith("}")) || (trimmed.startsWith("[") && trimmed.endsWith("]"))) {
+    if (
+      (trimmed.startsWith("{") && trimmed.endsWith("}")) ||
+      (trimmed.startsWith("[") && trimmed.endsWith("]"))
+    ) {
       try {
         return { text: JSON.stringify(JSON.parse(trimmed), null, 2), json: true };
       } catch {

@@ -58,12 +58,8 @@ export function FontPanel({
       <div style={s.fontSection}>
         <div style={s.fontSizeRow}>
           <div style={s.fontSizeLabelCol}>
-            <span style={s.fontSettingLabel}>
-              {t("font.terminalFontSize")}
-            </span>
-            <span style={s.fontSettingHint}>
-              {t("font.terminalFontSizeHint")}
-            </span>
+            <span style={s.fontSettingLabel}>{t("font.terminalFontSize")}</span>
+            <span style={s.fontSettingHint}>{t("font.terminalFontSizeHint")}</span>
           </div>
           <div style={s.fontSizeControls}>
             <input
@@ -108,7 +104,7 @@ export function FontPanel({
         label={t("font.uiFontFamily")}
         hint={t("font.uiFontFamilyHint")}
         defaultFont={DEFAULT_UI_FONT}
-        preview={(
+        preview={
           <div style={s.fontInlinePreview}>
             <span style={s.fontPreviewLabel}>{t("font.preview")}</span>
             <span style={{ ...s.fontPreviewText, fontFamily: pendingUiFont }}>
@@ -121,7 +117,7 @@ export function FontPanel({
               0123456789 !@#$%^&*()_+-={"{}"}[]|:;"&#39;&lt;&gt;,.?/
             </span>
           </div>
-        )}
+        }
       />
 
       {/* Monospace Font Family */}
@@ -131,7 +127,7 @@ export function FontPanel({
         label={t("font.monoFontFamily")}
         hint={t("font.monoFontFamilyHint")}
         defaultFont={DEFAULT_MONO_FONT}
-        preview={(
+        preview={
           <div style={s.fontInlinePreview}>
             <div style={s.fontPreviewHeaderRow}>
               <span style={s.fontPreviewLabel}>{t("font.preview")}</span>
@@ -152,15 +148,16 @@ export function FontPanel({
               <span style={s.fontCodeLine}>
                 <span style={s.fontCodeLineNo}>2</span>
                 <span style={s.fontCodeText}>
-                  {"  "}name: <span style={s.fontCodeString}>"Aeroric"</span>,
-                  status: <span style={s.fontCodeString}>"running"</span>,
+                  {"  "}name: <span style={s.fontCodeString}>"Aeroric"</span>, status:{" "}
+                  <span style={s.fontCodeString}>"running"</span>,
                 </span>
               </span>
               <span style={s.fontCodeLine}>
                 <span style={s.fontCodeLineNo}>3</span>
                 <span style={s.fontCodeText}>
-                  {"  "}tokens: <span style={s.fontCodeNumber}>24860</span>,
-                  tools: [<span style={s.fontCodeString}>"read"</span>, <span style={s.fontCodeString}>"edit"</span>],
+                  {"  "}tokens: <span style={s.fontCodeNumber}>24860</span>, tools: [
+                  <span style={s.fontCodeString}>"read"</span>,{" "}
+                  <span style={s.fontCodeString}>"edit"</span>],
                 </span>
               </span>
               <span style={s.fontCodeLine}>
@@ -171,16 +168,12 @@ export function FontPanel({
               </span>
             </div>
           </div>
-        )}
+        }
       />
 
       {/* Save Button */}
       {dirty && (
-        <button
-          type="button"
-          onClick={handleSave}
-          style={s.fontSaveBtn}
-        >
+        <button type="button" onClick={handleSave} style={s.fontSaveBtn}>
           {t("common.apply")}
         </button>
       )}

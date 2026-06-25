@@ -1,4 +1,12 @@
-import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
+import {
+  forwardRef,
+  useCallback,
+  useEffect,
+  useImperativeHandle,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { Terminal as XTerm } from "@xterm/xterm";
@@ -52,19 +60,22 @@ export interface SshTerminalPanelHandle {
   sendCommand: (cmd: string) => void;
 }
 
-export const SshTerminalPanel = forwardRef<SshTerminalPanelHandle, Props>(function SshTerminalPanel({
-  connections,
-  onConnectionsChange,
-  active,
-  width,
-  themeVariant,
-  terminalFontSize,
-  monoFontFamily,
-  initialConnectionId,
-  autoConnect = false,
-  hideConnectionList = false,
-  onReady,
-}, ref) {
+export const SshTerminalPanel = forwardRef<SshTerminalPanelHandle, Props>(function SshTerminalPanel(
+  {
+    connections,
+    onConnectionsChange,
+    active,
+    width,
+    themeVariant,
+    terminalFontSize,
+    monoFontFamily,
+    initialConnectionId,
+    autoConnect = false,
+    hideConnectionList = false,
+    onReady,
+  },
+  ref,
+) {
   const { t } = useI18n();
   const terminalContainerRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<XTerm | null>(null);
@@ -81,13 +92,17 @@ export const SshTerminalPanel = forwardRef<SshTerminalPanelHandle, Props>(functi
   const autoConnectStartedRef = useRef<string | null>(null);
   activeRef.current = active;
 
-  useImperativeHandle(ref, () => ({
-    sendCommand: (cmd: string) => {
-      const session = activeSession;
-      if (!session) return;
-      invoke("send_input", { taskId: session.shellId, data: cmd }).catch(console.error);
-    },
-  }), [activeSession]);
+  useImperativeHandle(
+    ref,
+    () => ({
+      sendCommand: (cmd: string) => {
+        const session = activeSession;
+        if (!session) return;
+        invoke("send_input", { taskId: session.shellId, data: cmd }).catch(console.error);
+      },
+    }),
+    [activeSession],
+  );
 
   const selectedConnection = useMemo(
     () => connections.find((connection) => connection.id === selectedId) ?? connections[0] ?? null,
@@ -162,9 +177,7 @@ export const SshTerminalPanel = forwardRef<SshTerminalPanelHandle, Props>(functi
     }
     const now = Date.now();
     const connection = { ...selectedConnection, lastConnectedAt: now };
-    saveConnections(
-      connections.map((item) => (item.id === connection.id ? connection : item)),
-    );
+    saveConnections(connections.map((item) => (item.id === connection.id ? connection : item)));
     setError(null);
     setActiveSession({
       shellId: createSshShellId(connection.id, now),
@@ -290,7 +303,13 @@ export const SshTerminalPanel = forwardRef<SshTerminalPanelHandle, Props>(functi
   }, [activeSession, monoFontFamily, onReady, terminalFontSize, themeVariant]);
 
   useEffect(() => {
-    if (!active || !terminalRef.current || !fitAddonRef.current || !terminalContainerRef.current || !activeSession) {
+    if (
+      !active ||
+      !terminalRef.current ||
+      !fitAddonRef.current ||
+      !terminalContainerRef.current ||
+      !activeSession
+    ) {
       return;
     }
     window.requestAnimationFrame(() => {
@@ -300,9 +319,11 @@ export const SshTerminalPanel = forwardRef<SshTerminalPanelHandle, Props>(functi
         const last = lastSizeRef.current;
         if (!last || last.cols !== size.cols || last.rows !== size.rows) {
           lastSizeRef.current = size;
-          invoke("resize_pty", { taskId: activeSession.shellId, cols: size.cols, rows: size.rows }).catch(
-            () => {},
-          );
+          invoke("resize_pty", {
+            taskId: activeSession.shellId,
+            cols: size.cols,
+            rows: size.rows,
+          }).catch(() => {});
         }
       }
       terminalRef.current.focus();
@@ -315,7 +336,12 @@ export const SshTerminalPanel = forwardRef<SshTerminalPanelHandle, Props>(functi
   }, [themeVariant]);
 
   useEffect(() => {
-    if (!terminalRef.current || !fitAddonRef.current || !terminalContainerRef.current || !activeSession) {
+    if (
+      !terminalRef.current ||
+      !fitAddonRef.current ||
+      !terminalContainerRef.current ||
+      !activeSession
+    ) {
       return;
     }
     const size = applyTerminalFontSize(
@@ -331,7 +357,12 @@ export const SshTerminalPanel = forwardRef<SshTerminalPanelHandle, Props>(functi
   }, [activeSession, terminalFontSize]);
 
   useEffect(() => {
-    if (!terminalRef.current || !fitAddonRef.current || !terminalContainerRef.current || !activeSession) {
+    if (
+      !terminalRef.current ||
+      !fitAddonRef.current ||
+      !terminalContainerRef.current ||
+      !activeSession
+    ) {
       return;
     }
     const size = applyTerminalFontFamily(

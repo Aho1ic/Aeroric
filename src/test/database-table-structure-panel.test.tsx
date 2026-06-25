@@ -14,7 +14,7 @@ describe("TableStructurePanel", () => {
 
   it("previews DBX table structure SQL for added columns", async () => {
     vi.mocked(invoke).mockResolvedValueOnce({
-      statements: ["ALTER TABLE \"public\".\"users\" ADD COLUMN \"age\" int;"],
+      statements: ['ALTER TABLE "public"."users" ADD COLUMN "age" int;'],
       warnings: [],
     });
 

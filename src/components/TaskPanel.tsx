@@ -9,7 +9,15 @@ import {
   Moon,
   Sun,
 } from "lucide-react";
-import type { Project, Task, ThemeMode, ThemeVariant, TerminalFontSize, TaskDisplayWindow, FontFamily } from "../types";
+import type {
+  Project,
+  Task,
+  ThemeMode,
+  ThemeVariant,
+  TerminalFontSize,
+  TaskDisplayWindow,
+  FontFamily,
+} from "../types";
 import { ProjectAvatar } from "./ProjectAvatar";
 import { SidebarFooterActions } from "./SidebarFooterActions";
 import { BranchBar } from "./task-panel/BranchBar";
@@ -177,7 +185,9 @@ export function TaskPanel({
       </button>
 
       <div style={s.taskActionsRow}>
-        <div style={s.taskActionsMeta}>{tasks.length} {t("task.tasks")}</div>
+        <div style={s.taskActionsMeta}>
+          {tasks.length} {t("task.tasks")}
+        </div>
         <button
           type="button"
           style={{

@@ -3,7 +3,12 @@ import { Play, RefreshCcw } from "lucide-react";
 import { useI18n } from "../../i18n";
 import { databaseApi } from "../../lib/databaseApi";
 import s from "../../styles";
-import type { AeroricDbConnectionConfig, DbxColumnInfo, DbxDatabaseType, DbxObjectInfo } from "../../types";
+import type {
+  AeroricDbConnectionConfig,
+  DbxColumnInfo,
+  DbxDatabaseType,
+  DbxObjectInfo,
+} from "../../types";
 import { DbxButton } from "./DbxButton";
 
 export type DatabaseAdvancedToolMode = "transfer" | "schema-diff" | "data-compare";
@@ -29,7 +34,10 @@ function tableKey(schema: string | null | undefined, tableName: string) {
 }
 
 function tableNamesFromText(value: string) {
-  return value.split(",").map((item) => item.trim()).filter(Boolean);
+  return value
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
 }
 
 function objectToTableInfo(object: DbxObjectInfo) {
@@ -69,9 +77,15 @@ export function DatabaseAdvancedTools({
   sourceDatabaseType,
 }: Props) {
   const { t } = useI18n();
-  const sqlConnections = useMemo(() => availableConnections.filter(isSqlDbxConnection), [availableConnections]);
+  const sqlConnections = useMemo(
+    () => availableConnections.filter(isSqlDbxConnection),
+    [availableConnections],
+  );
   const defaultTargetConnectionId = useMemo(
-    () => sqlConnections.find((connection) => connection.id !== connectionId)?.id ?? sqlConnections.find((connection) => connection.id === connectionId)?.id ?? "",
+    () =>
+      sqlConnections.find((connection) => connection.id !== connectionId)?.id ??
+      sqlConnections.find((connection) => connection.id === connectionId)?.id ??
+      "",
     [connectionId, sqlConnections],
   );
   const [targetConnectionId, setTargetConnectionId] = useState(defaultTargetConnectionId);
@@ -79,7 +93,9 @@ export function DatabaseAdvancedTools({
   const [sourceSchema, setSourceSchema] = useState(schema ?? "");
   const [targetDatabase, setTargetDatabase] = useState(database ?? "");
   const [targetSchema, setTargetSchema] = useState(schema ?? "");
-  const [tablesText, setTablesText] = useState(table ?? sourceObjects.find((object) => object.object_type === "table")?.name ?? "");
+  const [tablesText, setTablesText] = useState(
+    table ?? sourceObjects.find((object) => object.object_type === "table")?.name ?? "",
+  );
   const [resultText, setResultText] = useState("");
   const [loading, setLoading] = useState(false);
 
@@ -99,7 +115,9 @@ export function DatabaseAdvancedTools({
 
   useEffect(() => {
     if (!tablesText.trim()) {
-      setTablesText(table ?? sourceObjects.find((object) => object.object_type === "table")?.name ?? "");
+      setTablesText(
+        table ?? sourceObjects.find((object) => object.object_type === "table")?.name ?? "",
+      );
     }
   }, [sourceObjects, table, tablesText]);
 
@@ -131,7 +149,9 @@ export function DatabaseAdvancedTools({
       const key = tableKey(object.schema ?? sourceSchema, object.name);
       return {
         name: object.name,
-        columns: columnsForDetail(sourceColumnsByTable[key] ?? sourceColumnsByTable[object.name] ?? []),
+        columns: columnsForDetail(
+          sourceColumnsByTable[key] ?? sourceColumnsByTable[object.name] ?? [],
+        ),
         indexes: [],
         foreign_keys: [],
         triggers: [],
@@ -224,7 +244,13 @@ export function DatabaseAdvancedTools({
           <div style={s.databaseWorkspaceTitle}>{title}</div>
           <div style={s.databaseDialogHint}>{t("database.advancedToolsHint")}</div>
         </div>
-        <DbxButton variant="default" size="sm" icon={loading ? RefreshCcw : Play} onClick={() => void run()} disabled={loading || Boolean(missingReason)}>
+        <DbxButton
+          variant="default"
+          size="sm"
+          icon={loading ? RefreshCcw : Play}
+          onClick={() => void run()}
+          disabled={loading || Boolean(missingReason)}
+        >
           {mode === "transfer" ? t("database.startTransfer") : t("database.compare")}
         </DbxButton>
       </div>
@@ -256,19 +282,35 @@ export function DatabaseAdvancedTools({
         </label>
         <label style={s.databaseDialogField}>
           <span style={s.databaseDialogLabel}>{t("database.sourceDatabase")}</span>
-          <input style={s.databaseDialogInput} value={sourceDatabase} onChange={(event) => setSourceDatabase(event.target.value)} />
+          <input
+            style={s.databaseDialogInput}
+            value={sourceDatabase}
+            onChange={(event) => setSourceDatabase(event.target.value)}
+          />
         </label>
         <label style={s.databaseDialogField}>
           <span style={s.databaseDialogLabel}>{t("database.targetDatabase")}</span>
-          <input style={s.databaseDialogInput} value={targetDatabase} onChange={(event) => setTargetDatabase(event.target.value)} />
+          <input
+            style={s.databaseDialogInput}
+            value={targetDatabase}
+            onChange={(event) => setTargetDatabase(event.target.value)}
+          />
         </label>
         <label style={s.databaseDialogField}>
           <span style={s.databaseDialogLabel}>{t("database.sourceSchema")}</span>
-          <input style={s.databaseDialogInput} value={sourceSchema} onChange={(event) => setSourceSchema(event.target.value)} />
+          <input
+            style={s.databaseDialogInput}
+            value={sourceSchema}
+            onChange={(event) => setSourceSchema(event.target.value)}
+          />
         </label>
         <label style={s.databaseDialogField}>
           <span style={s.databaseDialogLabel}>{t("database.targetSchema")}</span>
-          <input style={s.databaseDialogInput} value={targetSchema} onChange={(event) => setTargetSchema(event.target.value)} />
+          <input
+            style={s.databaseDialogInput}
+            value={targetSchema}
+            onChange={(event) => setTargetSchema(event.target.value)}
+          />
         </label>
         <label style={s.databaseDialogField}>
           <span style={s.databaseDialogLabel}>{t("database.tables")}</span>

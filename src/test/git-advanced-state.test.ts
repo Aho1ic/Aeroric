@@ -24,9 +24,33 @@ describe("git advanced state", () => {
   it("summarizes blame authors by line count", () => {
     expect(
       summarizeBlameAuthors([
-        { line: 1, commit: "a", shortCommit: "a", author: "Ada", authorTime: 1, summary: "", content: "" },
-        { line: 2, commit: "b", shortCommit: "b", author: "Grace", authorTime: 1, summary: "", content: "" },
-        { line: 3, commit: "c", shortCommit: "c", author: "Ada", authorTime: 1, summary: "", content: "" },
+        {
+          line: 1,
+          commit: "a",
+          shortCommit: "a",
+          author: "Ada",
+          authorTime: 1,
+          summary: "",
+          content: "",
+        },
+        {
+          line: 2,
+          commit: "b",
+          shortCommit: "b",
+          author: "Grace",
+          authorTime: 1,
+          summary: "",
+          content: "",
+        },
+        {
+          line: 3,
+          commit: "c",
+          shortCommit: "c",
+          author: "Ada",
+          authorTime: 1,
+          summary: "",
+          content: "",
+        },
       ]),
     ).toEqual([
       { author: "Ada", lines: 2 },

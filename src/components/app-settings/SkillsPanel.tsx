@@ -90,12 +90,7 @@ export function SkillsPanel() {
               <span style={s.skillsPanelPathEmpty}>{t("skill.settings.notConfigured")}</span>
             )}
           </div>
-          <button
-            type="button"
-            style={s.skillsPanelPickBtn}
-            onClick={handlePick}
-            disabled={busy}
-          >
+          <button type="button" style={s.skillsPanelPickBtn} onClick={handlePick} disabled={busy}>
             <FolderOpen size={13} strokeWidth={2} />
             {t("skill.settings.choose")}
           </button>

@@ -68,9 +68,7 @@ function ShortcutSelect({
                   aria-label={option.ariaLabel}
                   className="radix-select-item"
                   style={
-                    option.value === value
-                      ? s.settingsSelectOptionSelected
-                      : s.settingsSelectOption
+                    option.value === value ? s.settingsSelectOptionSelected : s.settingsSelectOption
                   }
                 >
                   <Select.ItemText>{renderShortcutKeys(option.keys)}</Select.ItemText>
@@ -212,13 +210,15 @@ export function ShortcutsPanel() {
               aria-label={t("appSettings.terminalNewlineShiftEnter")}
               disabled={saving}
               onClick={handleShiftEnterNewlineToggle}
-              style={saving ? { ...s.shortcutToggle, ...s.shortcutToggleDisabled } : s.shortcutToggle}
+              style={
+                saving ? { ...s.shortcutToggle, ...s.shortcutToggleDisabled } : s.shortcutToggle
+              }
             >
-              <span style={s.shortcutToggleKeys}>{renderShortcutKeys(getShiftEnterNewlineKeys())}</span>
+              <span style={s.shortcutToggleKeys}>
+                {renderShortcutKeys(getShiftEnterNewlineKeys())}
+              </span>
               <span style={shiftEnterEnabled ? s.shortcutSwitchTrackOn : s.shortcutSwitchTrack}>
-                <span
-                  style={shiftEnterEnabled ? s.shortcutSwitchThumbOn : s.shortcutSwitchThumb}
-                />
+                <span style={shiftEnterEnabled ? s.shortcutSwitchThumbOn : s.shortcutSwitchThumb} />
               </span>
             </button>
             <div style={s.shortcutHint}>{terminalNewlineHint}</div>

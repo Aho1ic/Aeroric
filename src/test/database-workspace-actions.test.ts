@@ -55,6 +55,12 @@ describe("database action registry", () => {
   it("disables mutating actions for read-only connections", () => {
     expect(isDatabaseActionEnabled("tableImport", { ...baseContext, readOnly: true })).toBe(false);
     expect(isDatabaseActionEnabled("tableExport", { ...baseContext, readOnly: true })).toBe(true);
-    expect(isDatabaseActionEnabled("redisDeleteKey", { ...baseContext, dbType: "redis", readOnly: true })).toBe(false);
+    expect(
+      isDatabaseActionEnabled("redisDeleteKey", {
+        ...baseContext,
+        dbType: "redis",
+        readOnly: true,
+      }),
+    ).toBe(false);
   });
 });

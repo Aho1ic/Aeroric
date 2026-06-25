@@ -28,7 +28,8 @@ function UsageMetricRow({ label, window }: { label: string; window: UsageWindow 
     <div style={s.usageMetricRow}>
       <span style={s.usageMetricLabel}>{label}</span>
       <span style={{ ...s.usageMetricValue, color }}>
-        {window.remainingPercent}{t("usage.left")}
+        {window.remainingPercent}
+        {t("usage.left")}
       </span>
       {resetLabel && <span style={s.usageMetricMeta}>{resetLabel}</span>}
     </div>

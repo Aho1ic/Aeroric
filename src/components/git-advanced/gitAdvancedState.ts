@@ -17,7 +17,9 @@ export function projectRelativeGitPath(projectPath: string, filePath: string | n
   return normalizedFile;
 }
 
-export function summarizeBlameAuthors(lines: GitBlameLine[]): Array<{ author: string; lines: number }> {
+export function summarizeBlameAuthors(
+  lines: GitBlameLine[],
+): Array<{ author: string; lines: number }> {
   const counts = new Map<string, number>();
   for (const line of lines) {
     const author = line.author.trim() || "Unknown";
@@ -31,9 +33,7 @@ export function summarizeBlameAuthors(lines: GitBlameLine[]): Array<{ author: st
 export function inlineBlameText(line: GitBlameLine): string {
   const author = line.author.trim() || "Unknown";
   const summary = line.summary.trim();
-  return summary
-    ? `${line.shortCommit} ${author} - ${summary}`
-    : `${line.shortCommit} ${author}`;
+  return summary ? `${line.shortCommit} ${author} - ${summary}` : `${line.shortCommit} ${author}`;
 }
 
 export function inlineBlameTitle(line: GitBlameLine): string {

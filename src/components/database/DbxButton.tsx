@@ -214,7 +214,12 @@ export function DbxButtonGroup({ children, style, ...props }: DbxButtonGroupProp
   );
 }
 
-export function DbxSegmentedButton({ active = false, variant = "ghost", size = "sm", ...props }: DbxButtonProps) {
+export function DbxSegmentedButton({
+  active = false,
+  variant = "ghost",
+  size = "sm",
+  ...props
+}: DbxButtonProps) {
   return (
     <DbxButton
       active={active}
@@ -226,7 +231,13 @@ export function DbxSegmentedButton({ active = false, variant = "ghost", size = "
   );
 }
 
-export function DbxMenuItem({ destructive = false, icon, style, children, ...props }: DbxMenuItemProps) {
+export function DbxMenuItem({
+  destructive = false,
+  icon,
+  style,
+  children,
+  ...props
+}: DbxMenuItemProps) {
   return (
     <DbxButton
       role="menuitem"
@@ -247,9 +258,19 @@ export function DbxMenuItem({ destructive = false, icon, style, children, ...pro
   );
 }
 
-export function DbxDialogFooterButton({ variant = "outline", size = "sm", ...props }: DbxButtonProps) {
+export function DbxDialogFooterButton({
+  variant = "outline",
+  size = "sm",
+  ...props
+}: DbxButtonProps) {
   return <DbxButton variant={variant} size={size} {...props} />;
 }
 
 // Export types for external use
-export type { DbxButtonVariant, DbxButtonSize, DbxButtonProps, DbxButtonGroupProps, DbxMenuItemProps };
+export type {
+  DbxButtonVariant,
+  DbxButtonSize,
+  DbxButtonProps,
+  DbxButtonGroupProps,
+  DbxMenuItemProps,
+};

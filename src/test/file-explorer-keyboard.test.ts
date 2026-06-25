@@ -31,9 +31,9 @@ describe("file explorer keyboard helpers", () => {
   });
 
   it("pastes into selected directory or selected file parent", () => {
-    expect(pasteTargetDirectory({ selectedPath: "/repo/src", selectedIsDir: true, rootPath: "/repo" })).toBe(
-      "/repo/src",
-    );
+    expect(
+      pasteTargetDirectory({ selectedPath: "/repo/src", selectedIsDir: true, rootPath: "/repo" }),
+    ).toBe("/repo/src");
     expect(
       pasteTargetDirectory({
         selectedPath: "/repo/src/App.tsx",
@@ -41,9 +41,9 @@ describe("file explorer keyboard helpers", () => {
         rootPath: "/repo",
       }),
     ).toBe("/repo/src");
-    expect(pasteTargetDirectory({ selectedPath: null, selectedIsDir: false, rootPath: "/repo" })).toBe(
-      "/repo",
-    );
+    expect(
+      pasteTargetDirectory({ selectedPath: null, selectedIsDir: false, rootPath: "/repo" }),
+    ).toBe("/repo");
   });
 
   it("selects and toggles a folder on first click", () => {

@@ -88,13 +88,21 @@ export function SftpPreview({
 }) {
   const { t } = useI18n();
   const [content, setContent] = useState<string | null>(null);
-  const [image, setImage] = useState<{ dataUrl: string; mimeType: string; byteLength: number } | null>(null);
+  const [image, setImage] = useState<{
+    dataUrl: string;
+    mimeType: string;
+    byteLength: number;
+  } | null>(null);
   const [directorySummary, setDirectorySummary] = useState<SftpDirectorySummary | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const fileName = filePath ? sftpFileName(filePath) : "";
   const editorTheme =
-    themeVariant === "dark" ? githubDark : themeVariant === "eyecare" ? solarizedLight : githubLight;
+    themeVariant === "dark"
+      ? githubDark
+      : themeVariant === "eyecare"
+        ? solarizedLight
+        : githubLight;
   const [languageExtension, setLanguageExtension] = useState<Extension>([]);
   useEffect(() => {
     let cancelled = false;
@@ -130,12 +138,12 @@ export function SftpPreview({
           if (!cancelled) setDirectorySummary(next);
         })
       : isSftpImageFile(fileName)
-      ? readSftpImagePreview(fileEp, connections).then((next) => {
-          if (!cancelled) setImage(next);
-        })
-      : readSftpTextFile(fileEp, connections).then((next) => {
-          if (!cancelled) setContent(next);
-        });
+        ? readSftpImagePreview(fileEp, connections).then((next) => {
+            if (!cancelled) setImage(next);
+          })
+        : readSftpTextFile(fileEp, connections).then((next) => {
+            if (!cancelled) setContent(next);
+          });
     request
       .catch((err) => {
         if (!cancelled) setError(String(err));
@@ -166,7 +174,12 @@ export function SftpPreview({
       <div className="sftp-preview-titlebar">
         <span className="sftp-preview-title">{fileName}</span>
         {onClose && (
-          <button className="sftp-preview-close" type="button" aria-label="Close preview" onClick={onClose}>
+          <button
+            className="sftp-preview-close"
+            type="button"
+            aria-label="Close preview"
+            onClick={onClose}
+          >
             <X size={15} />
           </button>
         )}
@@ -180,7 +193,12 @@ export function SftpPreview({
           </div>
         )}
         {!loading && !error && image && (
-          <ImagePreviewPane src={image.dataUrl} fileName={fileName} mimeType={image.mimeType} byteLength={image.byteLength} />
+          <ImagePreviewPane
+            src={image.dataUrl}
+            fileName={fileName}
+            mimeType={image.mimeType}
+            byteLength={image.byteLength}
+          />
         )}
         {!loading && !error && directorySummary && (
           <div className="sftp-folder-summary">
@@ -191,7 +209,9 @@ export function SftpPreview({
               <div className="sftp-folder-summary-name" title={fileName}>
                 {fileName}
               </div>
-              <div className="sftp-folder-summary-line">{formatSftpPreviewSize(directorySummary.totalSize)}</div>
+              <div className="sftp-folder-summary-line">
+                {formatSftpPreviewSize(directorySummary.totalSize)}
+              </div>
               <div className="sftp-folder-summary-line">
                 {formatSftpFolderCounts({
                   directoryCount: directorySummary.directoryCount,

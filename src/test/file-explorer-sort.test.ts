@@ -3,9 +3,23 @@ import { fileIconKind, sortFileEntries } from "../components/file-explorer/fileE
 import type { FsEntry } from "../components/file-explorer/types";
 
 const entries: FsEntry[] = [
-  { name: "z.py", path: "/repo/z.py", is_dir: false, extension: "py", is_gitignored: false, modifiedAtMs: 300 },
+  {
+    name: "z.py",
+    path: "/repo/z.py",
+    is_dir: false,
+    extension: "py",
+    is_gitignored: false,
+    modifiedAtMs: 300,
+  },
   { name: "src", path: "/repo/src", is_dir: true, is_gitignored: false, modifiedAtMs: 100 },
-  { name: "README.md", path: "/repo/README.md", is_dir: false, extension: "md", is_gitignored: false, modifiedAtMs: 500 },
+  {
+    name: "README.md",
+    path: "/repo/README.md",
+    is_dir: false,
+    extension: "md",
+    is_gitignored: false,
+    modifiedAtMs: 500,
+  },
   { name: "docs", path: "/repo/docs", is_dir: true, is_gitignored: false, modifiedAtMs: 900 },
 ];
 
