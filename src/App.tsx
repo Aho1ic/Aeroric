@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useCallback, useRef } from "react";
+import { lazy, Suspense, useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { open as openDialog, confirm } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -31,7 +31,6 @@ import type { FontFamily } from "./types";
 import { WelcomePage } from "./components/WelcomePage";
 import type { SshProjectInput } from "./components/ssh/SshProjectDialog";
 import { deriveRemoteProjectName } from "./components/ssh/SshProjectDialog";
-import { ProjectPage } from "./components/ProjectPage";
 import { selectDefaultCondaEnvironment } from "./components/file-viewer/run";
 import { SKILL_HUB_CHANGED_EVENT } from "./components/app-settings/types";
 import { useToast } from "./components/Toast";
@@ -44,6 +43,10 @@ import { useI18n } from "./i18n";
 import { createProjectTaskPersister } from "./taskPersistence";
 import s from "./styles";
 import "./App.css";
+
+const ProjectPage = lazy(() =>
+  import("./components/ProjectPage").then((module) => ({ default: module.ProjectPage })),
+);
 
 function deriveProjectName(path: string): string {
   const trimmed = path.replace(/[\\/]+$/, "");
@@ -1321,80 +1324,82 @@ function App() {
           overflow: "hidden",
         }}
       >
-        {mountedProjects.map((project) => {
-          const view = getProjectView(project.id);
-          const isHubActive = hubMode && project.id === hubProjectId;
-          const railProjectsFiltered = isHubActive
-            ? [project]
-            : railProjects.filter((p) => p.id !== hubProjectId);
-          const otherProjectsFiltered = isHubActive
-            ? []
-            : sortedProjects.filter((p) => p.id !== project.id && p.id !== hubProjectId);
-          return (
-            <ProjectPage
-              key={project.id}
-              project={project}
-              visible={activeProject?.id === project.id}
-              allProjects={railProjectsFiltered}
-              otherProjects={otherProjectsFiltered}
-              hubMode={isHubActive}
-              onExitSkillHub={handleExitSkillHub}
-              tasks={tasks}
-              getTaskRestoreState={tm.getTaskRestoreState}
-              taskRunCounts={taskRunCounts}
-              selectedTaskId={view.selectedTaskId}
-              isNewTask={view.isNewTask}
-              onNewTask={() =>
-                updateProjectView(project.id, { selectedTaskId: null, isNewTask: true })
-              }
-              onSelectTask={(id) =>
-                updateProjectView(project.id, { selectedTaskId: id, isNewTask: false })
-              }
-              onDeleteTask={handleDeleteTask}
-              onDeleteAllTasks={() => handleDeleteAllTasks(project)}
-              onToggleTaskStar={handleToggleTaskStar}
-              onRenameTask={handleRenameTask}
-              onGenerateTaskName={handleGenerateTaskName}
-              onSubmitTask={(taskInput) => handleSubmitTask(project, taskInput)}
-              onRunTodoTask={handleRunTodoTask}
-              onUpdateTodo={handleUpdateTodo}
-              onCancelTask={handleCancelTask}
-              onResumeTask={handleResumeTask}
-              onMergeWorktree={handleMergeWorktree}
-              onDiscardWorktree={handleDiscardWorktree}
-              onReconnectTask={handleReconnectTask}
-              onMarkTaskDone={handleMarkTaskDone}
-              onInput={tm.handleInput}
-              onResize={tm.handleResize}
-              onRegisterTerminal={tm.handleRegisterTerminal}
-              onTerminalReady={handleTerminalReady}
-              onSnapshot={tm.handleSnapshot}
-              onBack={handleBack}
-              onSwitchProject={handleProjectClick}
-              onOpen={handleOpen}
-              themeVariant={themeVariant}
-              themeMode={themeMode}
-              systemPrefersDark={systemPrefersDark}
-              onThemeModeChange={setThemeMode}
-              onToggleTheme={handleToggleTheme}
-              terminalFontSize={terminalFontSize}
-              onTerminalFontSizeChange={setTerminalFontSize}
-              taskDisplayWindow={taskDisplayWindow}
-              onTaskDisplayWindowChange={setTaskDisplayWindow}
-              attentionBadge={attentionBadge}
-              onAttentionBadgeChange={setAttentionBadge}
-              uiFontFamily={uiFontFamily}
-              onUiFontFamilyChange={setUiFontFamily}
-              monoFontFamily={monoFontFamily}
-              onMonoFontFamilyChange={setMonoFontFamily}
-              sshConnections={sshConnections}
-              onSshConnectionsChange={handleSshConnectionsChange}
-              condaEnvironments={condaEnvironments}
-              selectedCondaEnvPath={selectedCondaEnvPath}
-              onSelectedCondaEnvPathChange={setSelectedCondaEnvPath}
-            />
-          );
-        })}
+        <Suspense fallback={null}>
+          {mountedProjects.map((project) => {
+            const view = getProjectView(project.id);
+            const isHubActive = hubMode && project.id === hubProjectId;
+            const railProjectsFiltered = isHubActive
+              ? [project]
+              : railProjects.filter((p) => p.id !== hubProjectId);
+            const otherProjectsFiltered = isHubActive
+              ? []
+              : sortedProjects.filter((p) => p.id !== project.id && p.id !== hubProjectId);
+            return (
+              <ProjectPage
+                key={project.id}
+                project={project}
+                visible={activeProject?.id === project.id}
+                allProjects={railProjectsFiltered}
+                otherProjects={otherProjectsFiltered}
+                hubMode={isHubActive}
+                onExitSkillHub={handleExitSkillHub}
+                tasks={tasks}
+                getTaskRestoreState={tm.getTaskRestoreState}
+                taskRunCounts={taskRunCounts}
+                selectedTaskId={view.selectedTaskId}
+                isNewTask={view.isNewTask}
+                onNewTask={() =>
+                  updateProjectView(project.id, { selectedTaskId: null, isNewTask: true })
+                }
+                onSelectTask={(id) =>
+                  updateProjectView(project.id, { selectedTaskId: id, isNewTask: false })
+                }
+                onDeleteTask={handleDeleteTask}
+                onDeleteAllTasks={() => handleDeleteAllTasks(project)}
+                onToggleTaskStar={handleToggleTaskStar}
+                onRenameTask={handleRenameTask}
+                onGenerateTaskName={handleGenerateTaskName}
+                onSubmitTask={(taskInput) => handleSubmitTask(project, taskInput)}
+                onRunTodoTask={handleRunTodoTask}
+                onUpdateTodo={handleUpdateTodo}
+                onCancelTask={handleCancelTask}
+                onResumeTask={handleResumeTask}
+                onMergeWorktree={handleMergeWorktree}
+                onDiscardWorktree={handleDiscardWorktree}
+                onReconnectTask={handleReconnectTask}
+                onMarkTaskDone={handleMarkTaskDone}
+                onInput={tm.handleInput}
+                onResize={tm.handleResize}
+                onRegisterTerminal={tm.handleRegisterTerminal}
+                onTerminalReady={handleTerminalReady}
+                onSnapshot={tm.handleSnapshot}
+                onBack={handleBack}
+                onSwitchProject={handleProjectClick}
+                onOpen={handleOpen}
+                themeVariant={themeVariant}
+                themeMode={themeMode}
+                systemPrefersDark={systemPrefersDark}
+                onThemeModeChange={setThemeMode}
+                onToggleTheme={handleToggleTheme}
+                terminalFontSize={terminalFontSize}
+                onTerminalFontSizeChange={setTerminalFontSize}
+                taskDisplayWindow={taskDisplayWindow}
+                onTaskDisplayWindowChange={setTaskDisplayWindow}
+                attentionBadge={attentionBadge}
+                onAttentionBadgeChange={setAttentionBadge}
+                uiFontFamily={uiFontFamily}
+                onUiFontFamilyChange={setUiFontFamily}
+                monoFontFamily={monoFontFamily}
+                onMonoFontFamilyChange={setMonoFontFamily}
+                sshConnections={sshConnections}
+                onSshConnectionsChange={handleSshConnectionsChange}
+                condaEnvironments={condaEnvironments}
+                selectedCondaEnvPath={selectedCondaEnvPath}
+                onSelectedCondaEnvPathChange={setSelectedCondaEnvPath}
+              />
+            );
+          })}
+        </Suspense>
       </div>
       {!activeProject && (
         <div

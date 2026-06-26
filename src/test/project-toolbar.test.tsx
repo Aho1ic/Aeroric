@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 import { I18nProvider } from "../i18n";
 import type { Project } from "../types";
 import { ProjectPage } from "../components/ProjectPage";
+import { RightToolbar } from "../components/RightToolbar";
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn().mockResolvedValue({}),
@@ -205,7 +206,7 @@ function projectPageProps(
 }
 
 describe("ProjectPage right toolbar", () => {
-  it("colors only the active toolbar icon while keeping the button background transparent", async () => {
+  it("uses shadcn-like selected icon button styling for the active toolbar item", async () => {
     const user = userEvent.setup();
 
     render(
@@ -218,9 +219,52 @@ describe("ProjectPage right toolbar", () => {
     await user.click(sshButton);
 
     expect(sshButton).toHaveStyle({
-      background: "none",
-      color: "var(--accent)",
+      width: "36px",
+      height: "36px",
+      background: "var(--accent-subtle)",
+      color: "var(--accent-strong)",
     });
+    expect(sshButton.style.border).toBe("1px solid var(--accent-soft)");
+    expect(sshButton).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("renders every right toolbar button with stable shadcn icon sizing", () => {
+    render(
+      <I18nProvider>
+        <RightToolbar
+          activePanel={null}
+          onToggle={vi.fn()}
+          terminalActive={false}
+          onToggleTerminal={vi.fn()}
+          onOpenSettings={vi.fn()}
+        />
+      </I18nProvider>,
+    );
+
+    for (const title of [
+      "File Explorer",
+      "Git Changes",
+      "Git History",
+      "Git Advanced",
+      "Problems",
+      "Test Explorer",
+      "Debug",
+      "Run Configurations",
+      "Web Preview",
+      "SSH",
+      "SFTP",
+      "Database",
+      "Quick Notes",
+      "Docker",
+      "Terminal",
+      "Search",
+      "Settings",
+    ]) {
+      expect(screen.getByTitle(title)).toHaveStyle({
+        width: "36px",
+        height: "36px",
+      });
+    }
   });
 
   it("uses a drawn Docker toolbar icon instead of an emoji glyph", () => {
@@ -247,18 +291,49 @@ describe("ProjectPage right toolbar", () => {
     const dockerIcon = screen.getByTestId("docker-logo-icon");
 
     expect(dockerButton).toHaveStyle({
-      background: "none",
-      color: "var(--text-hint)",
+      background: "transparent",
+      color: "var(--text-muted)",
     });
+    expect(dockerButton.style.border).toBe("1px solid transparent");
     expect(dockerIcon.querySelectorAll('[fill="#2496ED"]')).toHaveLength(0);
 
     await user.click(dockerButton);
 
     expect(dockerButton).toHaveStyle({
-      background: "none",
-      color: "var(--accent)",
+      background: "var(--accent-subtle)",
+      color: "var(--accent-strong)",
     });
-    expect(screen.getByTestId("docker-view")).toBeInTheDocument();
+    expect(dockerButton.style.border).toBe("1px solid var(--accent-soft)");
+    expect(await screen.findByTestId("docker-view")).toBeInTheDocument();
+  });
+
+  it("keeps disabled toolbar buttons in shadcn disabled state", () => {
+    render(
+      <I18nProvider>
+        <RightToolbar
+          activePanel={null}
+          onToggle={vi.fn()}
+          terminalActive={false}
+          onToggleTerminal={vi.fn()}
+          onOpenSettings={vi.fn()}
+          dockerDisabled
+          settingsDisabled
+        />
+      </I18nProvider>,
+    );
+
+    expect(screen.getByTitle("Docker")).toHaveStyle({
+      width: "36px",
+      height: "36px",
+      opacity: "0.5",
+      cursor: "not-allowed",
+    });
+    expect(screen.getByTitle("Settings")).toHaveStyle({
+      width: "36px",
+      height: "36px",
+      opacity: "0.5",
+      cursor: "not-allowed",
+    });
   });
 
   it("hides the SSH workspace when Terminal is opened next", async () => {
@@ -314,7 +389,7 @@ describe("ProjectPage right toolbar", () => {
 
     await user.click(screen.getByTitle("File Explorer"));
     await user.click(screen.getByText("run.py"));
-    await user.click(screen.getByTitle("Run current file"));
+    await user.click(await screen.findByTitle("Run current file"));
 
     expect(screen.getByTestId("ssh-terminal")).toBeInTheDocument();
     expect(screen.queryByTestId("ssh-workspace")).not.toBeInTheDocument();

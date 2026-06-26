@@ -144,6 +144,40 @@ jobs:
           path: release-artifacts
           merge-multiple: true
 
+      - name: Verify release assets and generate checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+          expected=(
+            "Aeroric-${VERSION}-1.x86_64.rpm"
+            "Aeroric_${VERSION}_aarch64.dmg"
+            "Aeroric_${VERSION}_amd64.deb"
+            "Aeroric_${VERSION}_arm64-setup.exe"
+            "Aeroric_${VERSION}_arm64_en-US.msi"
+            "Aeroric_${VERSION}_x64-setup.exe"
+            "Aeroric_${VERSION}_x64.dmg"
+            "Aeroric_${VERSION}_x64_en-US.msi"
+          )
+
+          missing=0
+          for asset in "${expected[@]}"; do
+            if [[ ! -f "release-artifacts/${asset}" ]]; then
+              echo "::error::Missing release asset: ${asset}"
+              missing=1
+            fi
+          done
+          if [[ "${missing}" -ne 0 ]]; then
+            echo "Available release artifacts:"
+            find release-artifacts -maxdepth 1 -type f -printf '%f\n' | sort
+            exit 1
+          fi
+
+          (
+            cd release-artifacts
+            shasum -a 256 "${expected[@]}" > SHA256SUMS.txt
+          )
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v3
         with:

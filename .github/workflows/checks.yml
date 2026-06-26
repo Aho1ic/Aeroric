@@ -12,6 +12,9 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v6
 
+      - name: Checkout dbx dependency
+        run: git clone --depth 1 https://github.com/Aho1ic/dbx.git ../dbx
+
       - name: Setup pnpm
         uses: pnpm/action-setup@v6
         with:
@@ -25,6 +28,8 @@ jobs:
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
 
       - name: Cache Rust dependencies
         uses: swatinem/rust-cache@v2
@@ -37,6 +42,12 @@ jobs:
       - name: Run cargo audit
         working-directory: src-tauri
         run: cargo audit
+
+      - name: Check Rust formatting
+        run: cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
+
+      - name: Run Rust tests
+        run: cargo test --manifest-path src-tauri/Cargo.toml
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile --ignore-scripts

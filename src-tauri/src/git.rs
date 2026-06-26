@@ -2495,8 +2495,8 @@ mod tests {
         repo.configure_identity();
         let repo_path = repo.path_string();
         repo.commit_file("app.txt", "base\n", "initial");
-        let base_branch_output = run_git(&repo_path, &["rev-parse", "--abbrev-ref", "HEAD"])
-            .unwrap();
+        let base_branch_output =
+            run_git(&repo_path, &["rev-parse", "--abbrev-ref", "HEAD"]).unwrap();
         let base_branch = String::from_utf8_lossy(&base_branch_output.stdout)
             .trim()
             .to_string();

@@ -8,7 +8,6 @@ import {
   DEFAULT_SHIFT_ENTER_NEWLINE,
   normalizeSendShortcut,
 } from "../../shortcuts";
-import s from "../../styles";
 import {
   APP_SETTINGS_CHANGED_EVENT,
   type AgentVersions,
@@ -23,6 +22,7 @@ import {
   type CustomAgentProfile,
 } from "../../agents";
 import type { BuiltInAgentType } from "../../types";
+import { Button } from "../ui/Button";
 
 const AUTO_VERSION_DETECT_DELAY_MS = 350;
 
@@ -95,19 +95,6 @@ const hintStyle: React.CSSProperties = {
   fontSize: 11,
   color: "var(--text-hint)",
   marginTop: 3,
-};
-
-const actionButtonStyle: React.CSSProperties = {
-  display: "flex",
-  alignItems: "center",
-  gap: 5,
-  padding: "5px 10px",
-  background: "none",
-  border: "1px solid var(--border-medium)",
-  borderRadius: 6,
-  fontSize: 12,
-  color: "var(--text-secondary)",
-  cursor: "pointer",
 };
 
 export function AgentPathSection({ agentKey }: { agentKey: AgentKey }) {
@@ -329,31 +316,25 @@ export function AgentPathSection({ agentKey }: { agentKey: AgentKey }) {
             <span style={{ color: "var(--text-hint)", fontSize: 12 }}>{t("common.loading")}</span>
           )}
           {pathField && (
-            <button
-              style={{
-                ...actionButtonStyle,
-                cursor: detecting ? "default" : "pointer",
-                opacity: detecting ? 0.6 : 1,
-              }}
+            <Button
+              variant="outline"
+              size="sm"
               onClick={handleDetect}
               disabled={detecting}
             >
               <RefreshCw size={12} className={detecting ? "spin" : undefined} />
               {detecting ? t("appSettings.detecting") : t("appSettings.autoDetect")}
-            </button>
+            </Button>
           )}
-          <button
-            style={{
-              ...actionButtonStyle,
-              cursor: refreshing ? "default" : "pointer",
-              opacity: refreshing ? 0.6 : 1,
-            }}
+          <Button
+            variant="outline"
+            size="sm"
             onClick={() => loadVersions(settings)}
             disabled={refreshing}
           >
             <RefreshCw size={12} className={refreshing ? "spin" : undefined} />
             {refreshing ? t("appSettings.refreshing") : t("appSettings.refreshVersions")}
-          </button>
+          </Button>
         </div>
       </div>
 
@@ -456,19 +437,14 @@ export function AgentPathSection({ agentKey }: { agentKey: AgentKey }) {
             <Check size={12} /> {t("common.saved")}
           </span>
         )}
-        <button
-          style={{
-            ...s.modalSaveBtn,
-            padding: "5px 14px",
-            fontSize: 12,
-            cursor: saving || !isDirty ? "default" : "pointer",
-            opacity: saving || !isDirty ? 0.5 : 1,
-          }}
+        <Button
+          variant="default"
+          size="sm"
           onClick={handleSave}
           disabled={loading || saving || !isDirty}
         >
           {saving ? t("common.saving") : t("common.save")}
-        </button>
+        </Button>
       </div>
     </div>
   );

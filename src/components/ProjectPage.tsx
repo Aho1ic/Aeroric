@@ -1,4 +1,4 @@
-import { useMemo, useState, useCallback, useEffect, useRef } from "react";
+import { lazy, Suspense, useMemo, useState, useCallback, useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type {
   Project,
@@ -24,20 +24,8 @@ import { resolveProjectLocation } from "../types";
 import { NewTaskView, type NewTaskDraft } from "./NewTaskView";
 import { RunningView } from "./RunningView";
 import { FileExplorer } from "./FileExplorer";
-import { FileSearchDialog } from "./file-explorer/SearchPanel";
-import { FileViewer } from "./FileViewer";
 import { CommandPalette, type CommandPaletteCommand } from "./command-palette/CommandPalette";
-import { SearchPanel } from "./search/SearchPanel";
-import { ProblemsPanel } from "./problems/ProblemsPanel";
-import { RunConfigurationsPanel } from "./run/RunConfigurationsPanel";
-import { DebugPanel } from "./debug/DebugPanel";
-import { WebPreviewPanel } from "./preview/WebPreviewPanel";
 import { extractRunPreviewCandidates } from "./preview/portPanelState";
-import { TestExplorerPanel } from "./tests/TestExplorerPanel";
-import { GitChanges } from "./GitChanges";
-import { GitHistory } from "./GitHistory";
-import { GitAdvancedPanel } from "./git-advanced/GitAdvancedPanel";
-import { GitDiffViewer } from "./GitDiffViewer";
 import { ProjectRail } from "./ProjectRail";
 import { SettingsDialog } from "./SettingsDialog";
 import { RightToolbar } from "./RightToolbar";
@@ -48,13 +36,7 @@ import {
   type ShellTerminalPanelHandle,
 } from "./ShellTerminalPanel";
 import { SshTerminalPanel, type SshTerminalPanelHandle } from "./ssh/SshTerminalPanel";
-import { SshWorkspace } from "./ssh/SshWorkspace";
-import { SftpPanel } from "./sftp/SftpPanel";
-import { SftpPreview } from "./sftp/SftpPreview";
 import type { SftpEndpoint } from "./sftp/sftpTypes";
-import { DockerServiceView } from "./docker/DockerServiceView";
-import { DatabaseView } from "./database/DatabaseView";
-import { NotebookPanel } from "./notebook/NotebookPanel";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { useProjectPanels } from "../hooks/useProjectPanels";
 import {
@@ -83,6 +65,73 @@ import {
   toggleLineDebugBreakpoint,
 } from "./debug/debugBreakpointState";
 import s from "../styles";
+
+const FileViewer = lazy(() =>
+  import("./FileViewer").then((module) => ({ default: module.FileViewer })),
+);
+const FileSearchDialog = lazy(() =>
+  import("./file-explorer/SearchPanel").then((module) => ({
+    default: module.FileSearchDialog,
+  })),
+);
+const GitChanges = lazy(() =>
+  import("./GitChanges").then((module) => ({ default: module.GitChanges })),
+);
+const GitHistory = lazy(() =>
+  import("./GitHistory").then((module) => ({ default: module.GitHistory })),
+);
+const GitAdvancedPanel = lazy(() =>
+  import("./git-advanced/GitAdvancedPanel").then((module) => ({
+    default: module.GitAdvancedPanel,
+  })),
+);
+const GitDiffViewer = lazy(() =>
+  import("./GitDiffViewer").then((module) => ({ default: module.GitDiffViewer })),
+);
+const SearchPanel = lazy(() =>
+  import("./search/SearchPanel").then((module) => ({ default: module.SearchPanel })),
+);
+const ProblemsPanel = lazy(() =>
+  import("./problems/ProblemsPanel").then((module) => ({ default: module.ProblemsPanel })),
+);
+const TestExplorerPanel = lazy(() =>
+  import("./tests/TestExplorerPanel").then((module) => ({
+    default: module.TestExplorerPanel,
+  })),
+);
+const RunConfigurationsPanel = lazy(() =>
+  import("./run/RunConfigurationsPanel").then((module) => ({
+    default: module.RunConfigurationsPanel,
+  })),
+);
+const WebPreviewPanel = lazy(() =>
+  import("./preview/WebPreviewPanel").then((module) => ({
+    default: module.WebPreviewPanel,
+  })),
+);
+const DebugPanel = lazy(() =>
+  import("./debug/DebugPanel").then((module) => ({ default: module.DebugPanel })),
+);
+const SshWorkspace = lazy(() =>
+  import("./ssh/SshWorkspace").then((module) => ({ default: module.SshWorkspace })),
+);
+const SftpPanel = lazy(() =>
+  import("./sftp/SftpPanel").then((module) => ({ default: module.SftpPanel })),
+);
+const SftpPreview = lazy(() =>
+  import("./sftp/SftpPreview").then((module) => ({ default: module.SftpPreview })),
+);
+const DockerServiceView = lazy(() =>
+  import("./docker/DockerServiceView").then((module) => ({
+    default: module.DockerServiceView,
+  })),
+);
+const DatabaseView = lazy(() =>
+  import("./database/DatabaseView").then((module) => ({ default: module.DatabaseView })),
+);
+const NotebookPanel = lazy(() =>
+  import("./notebook/NotebookPanel").then((module) => ({ default: module.NotebookPanel })),
+);
 
 function escapeDraftHtml(text: string): string {
   return text.replace(/[&<>"']/g, (char) => {
@@ -980,157 +1029,159 @@ export function ProjectPage({
                 </div>
               )}
             >
-              {isSftpMode ? (
-                <SftpPanel
-                  sshConnections={sshConnections}
-                  localDefaultPath={
-                    projectLocation.kind === "local"
-                      ? project.path
-                      : "/Users/macbook/Downloads/同步空间"
-                  }
-                  active={visible && isSftpMode}
-                  width="100%"
-                  themeVariant={themeVariant}
-                  currentSshConnectionId={
-                    projectLocation.kind === "ssh" ? projectLocation.connectionId : undefined
-                  }
-                />
-              ) : isSshMode ? (
-                <SshWorkspace
-                  connections={sshConnections}
-                  onConnectionsChange={onSshConnectionsChange}
-                  active={visible && isSshMode}
-                  themeVariant={themeVariant}
-                  terminalFontSize={terminalFontSize}
-                  monoFontFamily={monoFontFamily}
-                  remoteConnection={projectLocation.kind === "ssh" ? remoteConnection : undefined}
-                />
-              ) : isDockerMode ? (
-                <DockerServiceView
-                  remote={projectLocation.kind === "ssh" ? remoteConnection : undefined}
-                  sourceLabel={
-                    projectLocation.kind === "ssh" && remoteConnection
-                      ? `${remoteConnection.name} · ${projectLocation.remotePath}`
-                      : project.path
-                  }
-                />
-              ) : isDatabaseMode ? (
-                <DatabaseView
-                  projectRoot={projectLocation.kind === "local" ? project.path : undefined}
-                  initialSqliteFilePath={databaseFilePath ?? undefined}
-                  remoteConnection={projectLocation.kind === "ssh" ? remoteConnection : undefined}
-                  remoteProjectPath={
-                    projectLocation.kind === "ssh" ? projectLocation.remotePath : undefined
-                  }
-                  sshConnections={sshConnections}
-                />
-              ) : isNotesMode ? (
-                <div style={projectNotebookPanelStyle({ containerWidth: projectBodyWidth })}>
-                  <ErrorBoundary label="随手记">
-                    <NotebookPanel width="100%" />
-                  </ErrorBoundary>
-                </div>
-              ) : openDiff ? (
-                openDiff.kind === "file" ? (
-                  <GitDiffViewer
-                    projectPath={gitContextPath}
-                    mode="file"
-                    filePath={openDiff.filePath}
-                    staged={openDiff.staged}
-                    title={openDiff.label}
-                    onClose={() => setOpenDiff(null)}
+              <Suspense fallback={null}>
+                {isSftpMode ? (
+                  <SftpPanel
+                    sshConnections={sshConnections}
+                    localDefaultPath={
+                      projectLocation.kind === "local"
+                        ? project.path
+                        : "/Users/macbook/Downloads/同步空间"
+                    }
+                    active={visible && isSftpMode}
+                    width="100%"
+                    themeVariant={themeVariant}
+                    currentSshConnectionId={
+                      projectLocation.kind === "ssh" ? projectLocation.connectionId : undefined
+                    }
                   />
-                ) : openDiff.kind === "commit-file" ? (
-                  <GitDiffViewer
-                    projectPath={gitContextPath}
-                    mode="commit-file"
-                    commitHash={openDiff.hash}
-                    filePath={openDiff.filePath}
-                    title={openDiff.label}
-                    onClose={() => setOpenDiff(null)}
+                ) : isSshMode ? (
+                  <SshWorkspace
+                    connections={sshConnections}
+                    onConnectionsChange={onSshConnectionsChange}
+                    active={visible && isSshMode}
+                    themeVariant={themeVariant}
+                    terminalFontSize={terminalFontSize}
+                    monoFontFamily={monoFontFamily}
+                    remoteConnection={projectLocation.kind === "ssh" ? remoteConnection : undefined}
                   />
-                ) : (
-                  <GitDiffViewer
-                    projectPath={gitContextPath}
-                    mode="commit"
-                    commitHash={openDiff.hash}
-                    title={openDiff.message}
-                    onClose={() => setOpenDiff(null)}
+                ) : isDockerMode ? (
+                  <DockerServiceView
+                    remote={projectLocation.kind === "ssh" ? remoteConnection : undefined}
+                    sourceLabel={
+                      projectLocation.kind === "ssh" && remoteConnection
+                        ? `${remoteConnection.name} · ${projectLocation.remotePath}`
+                        : project.path
+                    }
                   />
-                )
-              ) : editorGroups.length > 0 ? (
-                <div
-                  style={{
-                    flex: 1,
-                    minWidth: 0,
-                    minHeight: 0,
-                    display: "flex",
-                    overflow: "hidden",
-                    background: "var(--bg-panel)",
-                  }}
-                >
-                  {editorGroups.map((group, index) => (
-                    <div
-                      key={group.id}
-                      onMouseDown={() => handleEditorGroupFocus(group.id)}
-                      style={{
-                        flex: "1 1 0",
-                        minWidth: 0,
-                        minHeight: 0,
-                        display: "flex",
-                        borderLeft: index === 0 ? "none" : "1px solid var(--border-dim)",
-                        boxShadow:
-                          group.id === activeEditorGroupId
-                            ? "inset 0 0 0 1px var(--accent)"
-                            : "none",
-                      }}
-                    >
-                      <FileViewer
-                        tabs={group.tabs}
-                        activeFilePath={group.activePath}
-                        projectPath={fileRootPath}
-                        onSelectTab={(path) => handleFileTabSelect(path, group.id)}
-                        onCloseTab={(path) => handleFileTabClose(path, group.id)}
-                        onCloseOtherTabs={(path) => handleCloseOtherFileTabs(path, group.id)}
-                        onCloseTabsToRight={(path) => handleCloseTabsToRight(path, group.id)}
-                        onCloseAllTabs={() => handleCloseAllFileTabs(group.id)}
-                        themeVariant={themeVariant}
-                        onRunMakeTarget={handleRunMakeTarget}
-                        remote={remoteFileContext}
-                        condaEnvironments={runnableCondaEnvironments}
-                        selectedCondaEnvPath={selectedCondaEnvPath}
-                        onSelectedCondaEnvPathChange={onSelectedCondaEnvPathChange}
-                        onRunPythonFile={handleRunPythonFile}
-                        debugBreakpoints={debugDisabled ? [] : editorDebugBreakpoints}
-                        onToggleDebugBreakpoint={
-                          debugDisabled ? undefined : handleToggleEditorDebugBreakpoint
-                        }
-                        onFocusGroup={() => handleEditorGroupFocus(group.id)}
-                        onSplitRight={
-                          group.id === "main" && group.id === activeEditorGroupId
-                            ? handleSplitEditorGroupRight
-                            : undefined
-                        }
-                      />
-                    </div>
-                  ))}
-                </div>
-              ) : !activeWorkspaceTask ? (
-                <NewTaskView
-                  project={project}
-                  otherProjects={otherProjects}
-                  onSubmit={onSubmitTask}
-                  initialDraft={newTaskDraftRef.current}
-                  onCacheDraft={handleCacheNewTaskDraft}
-                  compactControls={responsiveLayout.compactComposeControls}
-                />
-              ) : activeWorkspaceTask.status === ("todo" as TaskStatus) ? (
-                <TodoTaskView
-                  task={activeWorkspaceTask}
-                  onRunTodo={onRunTodoTask}
-                  onUpdateTodo={onUpdateTodo}
-                />
-              ) : null}
+                ) : isDatabaseMode ? (
+                  <DatabaseView
+                    projectRoot={projectLocation.kind === "local" ? project.path : undefined}
+                    initialSqliteFilePath={databaseFilePath ?? undefined}
+                    remoteConnection={projectLocation.kind === "ssh" ? remoteConnection : undefined}
+                    remoteProjectPath={
+                      projectLocation.kind === "ssh" ? projectLocation.remotePath : undefined
+                    }
+                    sshConnections={sshConnections}
+                  />
+                ) : isNotesMode ? (
+                  <div style={projectNotebookPanelStyle({ containerWidth: projectBodyWidth })}>
+                    <ErrorBoundary label="随手记">
+                      <NotebookPanel width="100%" />
+                    </ErrorBoundary>
+                  </div>
+                ) : openDiff ? (
+                  openDiff.kind === "file" ? (
+                    <GitDiffViewer
+                      projectPath={gitContextPath}
+                      mode="file"
+                      filePath={openDiff.filePath}
+                      staged={openDiff.staged}
+                      title={openDiff.label}
+                      onClose={() => setOpenDiff(null)}
+                    />
+                  ) : openDiff.kind === "commit-file" ? (
+                    <GitDiffViewer
+                      projectPath={gitContextPath}
+                      mode="commit-file"
+                      commitHash={openDiff.hash}
+                      filePath={openDiff.filePath}
+                      title={openDiff.label}
+                      onClose={() => setOpenDiff(null)}
+                    />
+                  ) : (
+                    <GitDiffViewer
+                      projectPath={gitContextPath}
+                      mode="commit"
+                      commitHash={openDiff.hash}
+                      title={openDiff.message}
+                      onClose={() => setOpenDiff(null)}
+                    />
+                  )
+                ) : editorGroups.length > 0 ? (
+                  <div
+                    style={{
+                      flex: 1,
+                      minWidth: 0,
+                      minHeight: 0,
+                      display: "flex",
+                      overflow: "hidden",
+                      background: "var(--bg-panel)",
+                    }}
+                  >
+                    {editorGroups.map((group, index) => (
+                      <div
+                        key={group.id}
+                        onMouseDown={() => handleEditorGroupFocus(group.id)}
+                        style={{
+                          flex: "1 1 0",
+                          minWidth: 0,
+                          minHeight: 0,
+                          display: "flex",
+                          borderLeft: index === 0 ? "none" : "1px solid var(--border-dim)",
+                          boxShadow:
+                            group.id === activeEditorGroupId
+                              ? "inset 0 0 0 1px var(--accent)"
+                              : "none",
+                        }}
+                      >
+                        <FileViewer
+                          tabs={group.tabs}
+                          activeFilePath={group.activePath}
+                          projectPath={fileRootPath}
+                          onSelectTab={(path) => handleFileTabSelect(path, group.id)}
+                          onCloseTab={(path) => handleFileTabClose(path, group.id)}
+                          onCloseOtherTabs={(path) => handleCloseOtherFileTabs(path, group.id)}
+                          onCloseTabsToRight={(path) => handleCloseTabsToRight(path, group.id)}
+                          onCloseAllTabs={() => handleCloseAllFileTabs(group.id)}
+                          themeVariant={themeVariant}
+                          onRunMakeTarget={handleRunMakeTarget}
+                          remote={remoteFileContext}
+                          condaEnvironments={runnableCondaEnvironments}
+                          selectedCondaEnvPath={selectedCondaEnvPath}
+                          onSelectedCondaEnvPathChange={onSelectedCondaEnvPathChange}
+                          onRunPythonFile={handleRunPythonFile}
+                          debugBreakpoints={debugDisabled ? [] : editorDebugBreakpoints}
+                          onToggleDebugBreakpoint={
+                            debugDisabled ? undefined : handleToggleEditorDebugBreakpoint
+                          }
+                          onFocusGroup={() => handleEditorGroupFocus(group.id)}
+                          onSplitRight={
+                            group.id === "main" && group.id === activeEditorGroupId
+                              ? handleSplitEditorGroupRight
+                              : undefined
+                          }
+                        />
+                      </div>
+                    ))}
+                  </div>
+                ) : !activeWorkspaceTask ? (
+                  <NewTaskView
+                    project={project}
+                    otherProjects={otherProjects}
+                    onSubmit={onSubmitTask}
+                    initialDraft={newTaskDraftRef.current}
+                    onCacheDraft={handleCacheNewTaskDraft}
+                    compactControls={responsiveLayout.compactComposeControls}
+                  />
+                ) : activeWorkspaceTask.status === ("todo" as TaskStatus) ? (
+                  <TodoTaskView
+                    task={activeWorkspaceTask}
+                    onRunTodo={onRunTodoTask}
+                    onUpdateTodo={onUpdateTodo}
+                  />
+                ) : null}
+              </Suspense>
             </ErrorBoundary>
           </div>
 
@@ -1206,14 +1257,16 @@ export function ProjectPage({
               <div
                 className={`sftp-preview-dialog${filePreviewTarget.isDirectory ? " compact" : ""}`}
               >
-                <SftpPreview
-                  endpoint={filePreviewTarget.endpoint}
-                  filePath={filePreviewTarget.filePath}
-                  isDirectory={filePreviewTarget.isDirectory}
-                  connections={filePreviewTarget.connections}
-                  themeVariant={themeVariant}
-                  onClose={() => setFilePreviewTarget(null)}
-                />
+                <Suspense fallback={null}>
+                  <SftpPreview
+                    endpoint={filePreviewTarget.endpoint}
+                    filePath={filePreviewTarget.filePath}
+                    isDirectory={filePreviewTarget.isDirectory}
+                    connections={filePreviewTarget.connections}
+                    themeVariant={themeVariant}
+                    onClose={() => setFilePreviewTarget(null)}
+                  />
+                </Suspense>
               </div>
             </div>
           )}
@@ -1289,130 +1342,132 @@ export function ProjectPage({
               zIndex: 10,
             }}
           />
-          {visibleRightPanel === "files" && (
-            <ErrorBoundary label="文件浏览器">
-              <FileExplorer
-                projectPath={fileRootPath}
-                projectName={project.name}
-                onFileSelect={handleFileSelectWithShellMinimize}
-                active={visible}
-                width={effectiveRightPanelWidth}
-                remote={remoteFileContext}
-                themeVariant={themeVariant}
-                onPreviewRequest={setFilePreviewTarget}
-                onOpenDatabaseFile={handleOpenDatabaseFile}
-              />
-            </ErrorBoundary>
-          )}
-          {visibleRightPanel === "git-changes" && (
-            <ErrorBoundary label="Git 变更">
-              <GitChanges
-                projectPath={gitContextPath}
-                currentTaskCreatedAt={currentTaskCreatedAt}
-                onFileSelect={handleDiffFileSelectWithCollapse}
-                width={effectiveRightPanelWidth}
-              />
-            </ErrorBoundary>
-          )}
-          {visibleRightPanel === "git-history" && (
-            <ErrorBoundary label="Git 历史">
-              <GitHistory
-                projectPath={gitContextPath}
-                onCommitSelect={handleCommitSelectWithCollapse}
-                onFileClick={handleCommitFileClickWithCollapse}
-                width={effectiveRightPanelWidth}
-              />
-            </ErrorBoundary>
-          )}
-          {visibleRightPanel === "git-advanced" && (
-            <ErrorBoundary label="Git Advanced">
-              <GitAdvancedPanel
-                projectPath={gitContextPath}
-                activeFilePath={activeFilePath}
-                width={effectiveRightPanelWidth}
-                onOpenFile={handleGitAdvancedFileOpen}
-              />
-            </ErrorBoundary>
-          )}
-          {visibleRightPanel === "search" && (
-            <ErrorBoundary label="搜索">
-              <SearchPanel
-                projectPath={project.path}
-                width={effectiveRightPanelWidth}
-                onOpenMatch={handleTextSearchMatchOpen}
-              />
-            </ErrorBoundary>
-          )}
-          {visibleRightPanel === "problems" && (
-            <ErrorBoundary label="Problems">
-              <ProblemsPanel
-                projectPath={project.path}
-                width={effectiveRightPanelWidth}
-                onOpenDiagnostic={handleDiagnosticOpen}
-                onCreateAgentTask={handleCreateProblemsAgentTask}
-              />
-            </ErrorBoundary>
-          )}
-          {visibleRightPanel === "tests" && (
-            <ErrorBoundary label="Tests">
-              <TestExplorerPanel
-                projectPath={project.path}
-                width={effectiveRightPanelWidth}
-                onOpenFailure={handleTestFailureOpen}
-                onCreateAgentTask={handleCreateProblemsAgentTask}
-              />
-            </ErrorBoundary>
-          )}
-          {visibleRightPanel === "run" && (
-            <ErrorBoundary label="Run">
-              <RunConfigurationsPanel
-                projectPath={project.path}
-                width={effectiveRightPanelWidth}
-                editorBreakpoints={editorDebugBreakpoints}
-                onDebugStarted={handleRunDebugStarted}
-                onRunProcessChanged={handleRunProcessChanged}
-              />
-            </ErrorBoundary>
-          )}
-          {visibleRightPanel === "preview" && (
-            <ErrorBoundary label="Preview">
-              <WebPreviewPanel
-                projectPath={project.path}
-                width={effectiveRightPanelWidth}
-                runProcessTarget={launchedRunProcess}
-              />
-            </ErrorBoundary>
-          )}
-          {visibleRightPanel === "debug" && (
-            <ErrorBoundary label="Debug">
-              <DebugPanel
-                projectPath={project.path}
-                width={effectiveRightPanelWidth}
-                onOpenLocation={handleDebugLocationOpen}
-                launchedSession={launchedDebugSession}
-                editorBreakpoints={editorDebugBreakpoints}
-              />
-            </ErrorBoundary>
-          )}
-          <div
-            style={{
-              display: rightPanel === "ssh" ? "flex" : "none",
-              width: effectiveRightPanelWidth,
-              minHeight: 0,
-            }}
-          >
-            <ErrorBoundary label="SSH">
-              <SshTerminalPanel
-                connections={sshConnections}
-                onConnectionsChange={onSshConnectionsChange}
-                active={visible && rightPanel === "ssh"}
-                width={effectiveRightPanelWidth}
-                themeVariant={themeVariant}
-                terminalFontSize={terminalFontSize}
-                monoFontFamily={monoFontFamily}
-              />
-            </ErrorBoundary>
-          </div>
+          <Suspense fallback={null}>
+            {visibleRightPanel === "files" && (
+              <ErrorBoundary label="文件浏览器">
+                <FileExplorer
+                  projectPath={fileRootPath}
+                  projectName={project.name}
+                  onFileSelect={handleFileSelectWithShellMinimize}
+                  active={visible}
+                  width={effectiveRightPanelWidth}
+                  remote={remoteFileContext}
+                  themeVariant={themeVariant}
+                  onPreviewRequest={setFilePreviewTarget}
+                  onOpenDatabaseFile={handleOpenDatabaseFile}
+                />
+              </ErrorBoundary>
+            )}
+            {visibleRightPanel === "git-changes" && (
+              <ErrorBoundary label="Git 变更">
+                <GitChanges
+                  projectPath={gitContextPath}
+                  currentTaskCreatedAt={currentTaskCreatedAt}
+                  onFileSelect={handleDiffFileSelectWithCollapse}
+                  width={effectiveRightPanelWidth}
+                />
+              </ErrorBoundary>
+            )}
+            {visibleRightPanel === "git-history" && (
+              <ErrorBoundary label="Git 历史">
+                <GitHistory
+                  projectPath={gitContextPath}
+                  onCommitSelect={handleCommitSelectWithCollapse}
+                  onFileClick={handleCommitFileClickWithCollapse}
+                  width={effectiveRightPanelWidth}
+                />
+              </ErrorBoundary>
+            )}
+            {visibleRightPanel === "git-advanced" && (
+              <ErrorBoundary label="Git Advanced">
+                <GitAdvancedPanel
+                  projectPath={gitContextPath}
+                  activeFilePath={activeFilePath}
+                  width={effectiveRightPanelWidth}
+                  onOpenFile={handleGitAdvancedFileOpen}
+                />
+              </ErrorBoundary>
+            )}
+            {visibleRightPanel === "search" && (
+              <ErrorBoundary label="搜索">
+                <SearchPanel
+                  projectPath={project.path}
+                  width={effectiveRightPanelWidth}
+                  onOpenMatch={handleTextSearchMatchOpen}
+                />
+              </ErrorBoundary>
+            )}
+            {visibleRightPanel === "problems" && (
+              <ErrorBoundary label="Problems">
+                <ProblemsPanel
+                  projectPath={project.path}
+                  width={effectiveRightPanelWidth}
+                  onOpenDiagnostic={handleDiagnosticOpen}
+                  onCreateAgentTask={handleCreateProblemsAgentTask}
+                />
+              </ErrorBoundary>
+            )}
+            {visibleRightPanel === "tests" && (
+              <ErrorBoundary label="Tests">
+                <TestExplorerPanel
+                  projectPath={project.path}
+                  width={effectiveRightPanelWidth}
+                  onOpenFailure={handleTestFailureOpen}
+                  onCreateAgentTask={handleCreateProblemsAgentTask}
+                />
+              </ErrorBoundary>
+            )}
+            {visibleRightPanel === "run" && (
+              <ErrorBoundary label="Run">
+                <RunConfigurationsPanel
+                  projectPath={project.path}
+                  width={effectiveRightPanelWidth}
+                  editorBreakpoints={editorDebugBreakpoints}
+                  onDebugStarted={handleRunDebugStarted}
+                  onRunProcessChanged={handleRunProcessChanged}
+                />
+              </ErrorBoundary>
+            )}
+            {visibleRightPanel === "preview" && (
+              <ErrorBoundary label="Preview">
+                <WebPreviewPanel
+                  projectPath={project.path}
+                  width={effectiveRightPanelWidth}
+                  runProcessTarget={launchedRunProcess}
+                />
+              </ErrorBoundary>
+            )}
+            {visibleRightPanel === "debug" && (
+              <ErrorBoundary label="Debug">
+                <DebugPanel
+                  projectPath={project.path}
+                  width={effectiveRightPanelWidth}
+                  onOpenLocation={handleDebugLocationOpen}
+                  launchedSession={launchedDebugSession}
+                  editorBreakpoints={editorDebugBreakpoints}
+                />
+              </ErrorBoundary>
+            )}
+            <div
+              style={{
+                display: rightPanel === "ssh" ? "flex" : "none",
+                width: effectiveRightPanelWidth,
+                minHeight: 0,
+              }}
+            >
+              <ErrorBoundary label="SSH">
+                <SshTerminalPanel
+                  connections={sshConnections}
+                  onConnectionsChange={onSshConnectionsChange}
+                  active={visible && rightPanel === "ssh"}
+                  width={effectiveRightPanelWidth}
+                  themeVariant={themeVariant}
+                  terminalFontSize={terminalFontSize}
+                  monoFontFamily={monoFontFamily}
+                />
+              </ErrorBoundary>
+            </div>
+          </Suspense>
         </div>
       )}
 
@@ -1438,11 +1493,13 @@ export function ProjectPage({
       />
 
       {showFileSearch && !searchDisabled && (
-        <FileSearchDialog
-          projectPath={project.path}
-          onFileSelect={handleSearchFileSelect}
-          onClose={() => setShowFileSearch(false)}
-        />
+        <Suspense fallback={null}>
+          <FileSearchDialog
+            projectPath={project.path}
+            onFileSelect={handleSearchFileSelect}
+            onClose={() => setShowFileSearch(false)}
+          />
+        </Suspense>
       )}
 
       {commandPaletteInitialInput !== null && !searchDisabled && (

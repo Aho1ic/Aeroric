@@ -7,17 +7,42 @@ import { AgentPathSection } from "./AgentPathSection";
 import type { AgentKey } from "./types";
 import type { ThemeVariant } from "../../types";
 import { useTextInputIMEFix } from "../useTextInputIMEFix";
+import { Button } from "../ui/Button";
 
-import type { Highlighter } from "shiki";
-let _highlighterPromise: Promise<Highlighter> | null = null;
-function getHighlighter(): Promise<Highlighter> {
+import type { HighlighterGeneric } from "shiki/core";
+
+type ConfigHighlightLang = "json" | "toml" | "shellscript";
+type ConfigHighlightTheme = "github-dark" | "github-light" | "solarized-light";
+
+let _highlighterPromise: Promise<
+  HighlighterGeneric<ConfigHighlightLang, ConfigHighlightTheme>
+> | null = null;
+function getHighlighter(): Promise<HighlighterGeneric<ConfigHighlightLang, ConfigHighlightTheme>> {
   if (!_highlighterPromise) {
-    _highlighterPromise = import("shiki").then(({ createHighlighter }) =>
-      createHighlighter({
+    _highlighterPromise = Promise.all([
+      import("shiki/core"),
+      import("shiki/engine/javascript"),
+    ]).then(([{ createBundledHighlighter }, { createJavaScriptRegexEngine }]) => {
+      const createHighlighter = createBundledHighlighter<ConfigHighlightLang, ConfigHighlightTheme>(
+        {
+          langs: {
+            json: () => import("shiki/dist/langs/json.mjs"),
+            toml: () => import("shiki/dist/langs/toml.mjs"),
+            shellscript: () => import("shiki/dist/langs/shellscript.mjs"),
+          },
+          themes: {
+            "github-dark": () => import("shiki/dist/themes/github-dark.mjs"),
+            "github-light": () => import("shiki/dist/themes/github-light.mjs"),
+            "solarized-light": () => import("shiki/dist/themes/solarized-light.mjs"),
+          },
+          engine: createJavaScriptRegexEngine,
+        },
+      );
+      return createHighlighter({
         themes: ["github-dark", "github-light", "solarized-light"],
         langs: ["json", "toml", "shellscript"],
-      }),
-    );
+      });
+    });
   }
   return _highlighterPromise!;
 }
@@ -193,9 +218,21 @@ export function AgentConfigPanel({
         </div>
 
         {/* File path + edit button row */}
-        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            marginBottom: 12,
+            minWidth: 0,
+          }}
+        >
           <div
             style={{
+              minWidth: 0,
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
               fontSize: 11.5,
               color: "var(--text-hint)",
               fontFamily: "var(--font-mono)",
@@ -208,24 +245,10 @@ export function AgentConfigPanel({
             {resolvedFilePath || t("skill.settings.notConfigured")}
           </div>
           {fileState.status === "loaded" && !editing && (
-            <button
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: 5,
-                padding: "4px 10px",
-                background: "none",
-                border: "1px solid var(--border-medium)",
-                borderRadius: 6,
-                fontSize: 12,
-                color: "var(--text-secondary)",
-                cursor: "pointer",
-              }}
-              onClick={() => setEditing(true)}
-            >
+            <Button variant="outline" size="sm" onClick={() => setEditing(true)}>
               <Pencil size={12} />
               {t("common.edit")}
-            </button>
+            </Button>
           )}
           {saved && (
             <span
@@ -275,8 +298,11 @@ export function AgentConfigPanel({
               className="file-viewer-code"
               style={{
                 flex: 1,
+                width: "100%",
+                minWidth: 0,
+                maxWidth: "100%",
                 minHeight: 0,
-                overflowY: "auto",
+                overflow: "auto",
                 borderRadius: 8,
                 border: "1px solid var(--border-dim)",
                 fontSize: 12.5,
@@ -287,7 +313,10 @@ export function AgentConfigPanel({
             <pre
               style={{
                 flex: 1,
+                width: "100%",
                 minHeight: 0,
+                minWidth: 0,
+                maxWidth: "100%",
                 margin: 0,
                 overflow: "auto",
                 padding: "14px 16px",
@@ -298,8 +327,8 @@ export function AgentConfigPanel({
                 fontSize: 12.5,
                 fontFamily: "var(--font-mono)",
                 lineHeight: 1.6,
-                whiteSpace: "pre-wrap",
-                wordBreak: "break-word",
+                whiteSpace: "pre",
+                wordBreak: "normal",
               }}
               dangerouslySetInnerHTML={{ __html: escapeHtml(fileState.content) }}
             />
@@ -308,6 +337,7 @@ export function AgentConfigPanel({
         {fileState.status === "loaded" && editing && (
           <textarea
             autoFocus
+            wrap="off"
             style={{
               ...s.modalTextarea,
               flex: 1,
@@ -316,6 +346,10 @@ export function AgentConfigPanel({
               resize: "none",
               boxSizing: "border-box",
               caretColor: "var(--text-primary)",
+              overflow: "auto",
+              whiteSpace: "pre",
+              fontFamily: "var(--font-mono)",
+              lineHeight: 1.55,
             }}
             value={fileState.content}
             onChange={(e) => setFileState({ status: "loaded", content: e.target.value })}
@@ -327,16 +361,12 @@ export function AgentConfigPanel({
 
       {editing && (
         <div style={s.settingsFooter}>
-          <button style={s.modalCancelBtn} onClick={handleCancel}>
+          <Button variant="outline" size="sm" onClick={handleCancel}>
             {t("common.cancel")}
-          </button>
-          <button
-            style={{ ...s.modalSaveBtn, opacity: saving || !isDirty ? 0.5 : 1 }}
-            onClick={handleSave}
-            disabled={saving || !isDirty}
-          >
+          </Button>
+          <Button variant="default" size="sm" onClick={handleSave} disabled={saving || !isDirty}>
             {saving ? t("common.saving") : t("common.save")}
-          </button>
+          </Button>
         </div>
       )}
     </>

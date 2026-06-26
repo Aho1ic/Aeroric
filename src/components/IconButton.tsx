@@ -8,7 +8,7 @@ export function IconButton({
   activeVariant = "filled",
   disabled = false,
   onClick,
-  size = 32,
+  size = 36,
 }: {
   icon: ReactNode;
   title?: string;
@@ -20,11 +20,16 @@ export function IconButton({
 }) {
   const [hovered, setHovered] = useState(false);
   const showHover = hovered && !disabled && !active;
-  const iconOnlyActive = active && activeVariant === "icon";
+  const iconActive = active && activeVariant === "icon";
+  const activeBackground = iconActive ? "var(--accent-subtle)" : "var(--control-selected-bg)";
+  const activeBorder = iconActive ? "var(--accent-soft)" : "var(--border-strong)";
+  const activeColor = iconActive ? "var(--accent-strong)" : "var(--control-selected-fg)";
 
   return (
     <button
+      type="button"
       title={title}
+      aria-pressed={active || undefined}
       disabled={disabled}
       onClick={onClick}
       onMouseEnter={() => setHovered(true)}
@@ -32,27 +37,23 @@ export function IconButton({
       style={{
         width: size,
         height: size,
-        display: "flex",
+        display: "inline-flex",
         alignItems: "center",
         justifyContent: "center",
-        background:
-          active && !iconOnlyActive
-            ? "var(--control-active-bg)"
-            : showHover
-              ? "var(--bg-hover)"
-              : "none",
-        border: "none",
-        borderRadius: 6,
+        padding: 0,
+        background: active ? activeBackground : showHover ? "var(--bg-hover)" : "transparent",
+        border: `1px solid ${active ? activeBorder : showHover ? "var(--border-dim)" : "transparent"}`,
+        borderRadius: "var(--radius-md)",
+        boxSizing: "border-box",
+        boxShadow: iconActive
+          ? "inset 0 0 0 1px color-mix(in srgb, var(--accent-soft) 55%, transparent)"
+          : "none",
         cursor: disabled ? "not-allowed" : "pointer",
-        color: iconOnlyActive
-          ? "var(--accent)"
-          : active
-            ? "var(--control-active-fg)"
-            : showHover
-              ? "var(--text-muted)"
-              : "var(--text-hint)",
-        opacity: disabled ? 0.4 : 1,
-        transition: "background 0.12s, color 0.12s",
+        color: active ? activeColor : showHover ? "var(--text-primary)" : "var(--text-muted)",
+        opacity: disabled ? 0.5 : 1,
+        outline: "none",
+        transition:
+          "background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease, opacity 0.15s ease, box-shadow 0.15s ease",
         flexShrink: 0,
       }}
     >

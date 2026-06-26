@@ -24,6 +24,7 @@ import type {
   DebugVariable,
 } from "../../types";
 import type { OpenFileSelection } from "../../hooks/projectPanelsState";
+import { Button, ButtonGroup } from "../ui/Button";
 import {
   buildDebugConfigDraft,
   defaultDebugConfigDraft,
@@ -341,10 +342,10 @@ export function DebugPanel({
         <span>{t("debug.title")}</span>
       </div>
 
-      <div style={toolbarStyle}>
-        <button
-          type="button"
-          style={iconTextButtonStyle(false)}
+      <ButtonGroup style={toolbarStyle} aria-label={t("debug.title")}>
+        <Button
+          variant="ghost"
+          size="sm"
           onClick={() => {
             setSelectedId(null);
             setDraft(defaultDebugConfigDraft());
@@ -353,21 +354,21 @@ export function DebugPanel({
         >
           <Plus size={13} />
           {t("debug.new")}
-        </button>
-        <button type="button" style={iconTextButtonStyle(false)} onClick={() => void saveDraft()}>
+        </Button>
+        <Button variant="ghost" size="sm" onClick={() => void saveDraft()}>
           <Save size={13} />
           {saving ? t("common.saving") : t("common.save")}
-        </button>
-        <button
-          type="button"
-          style={iconTextButtonStyle(false)}
+        </Button>
+        <Button
+          variant="ghost"
+          size="sm"
           disabled={!selectedConfig || saving}
           onClick={() => void deleteSelected()}
         >
           <Trash2 size={13} />
           {t("common.delete")}
-        </button>
-      </div>
+        </Button>
+      </ButtonGroup>
 
       <div style={contentStyle}>
         <div style={listStyle}>
@@ -402,22 +403,28 @@ export function DebugPanel({
           </label>
           <div style={labelStyle}>
             {t("debug.runtime")}
-            <div style={runtimeSelectorStyle} role="group" aria-label={t("debug.runtime")}>
-              <button
-                type="button"
-                style={runtimeButtonStyle(draft.runtime === "node")}
+            <ButtonGroup style={runtimeSelectorStyle} aria-label={t("debug.runtime")}>
+              <Button
+                variant={draft.runtime === "node" ? "secondary" : "outline"}
+                size="sm"
+                active={draft.runtime === "node"}
+                aria-pressed={draft.runtime === "node"}
+                style={{ width: "100%" }}
                 onClick={() => setDraft((prev) => ({ ...prev, runtime: "node" }))}
               >
                 {t("debug.runtime.node")}
-              </button>
-              <button
-                type="button"
-                style={runtimeButtonStyle(draft.runtime === "python")}
+              </Button>
+              <Button
+                variant={draft.runtime === "python" ? "secondary" : "outline"}
+                size="sm"
+                active={draft.runtime === "python"}
+                aria-pressed={draft.runtime === "python"}
+                style={{ width: "100%" }}
                 onClick={() => setDraft((prev) => ({ ...prev, runtime: "python" }))}
               >
                 {t("debug.runtime.python")}
-              </button>
-            </div>
+              </Button>
+            </ButtonGroup>
           </div>
           <label style={labelStyle}>
             {t("debug.program")}
@@ -472,66 +479,67 @@ export function DebugPanel({
         </div>
       </div>
 
-      <div style={runBarStyle}>
-        <button
-          type="button"
-          style={primaryButtonStyle(sessionActive)}
+      <ButtonGroup style={runBarStyle} aria-label="Debug controls">
+        <Button
+          variant={sessionActive ? "secondary" : "default"}
+          size="default"
+          active={sessionActive}
           disabled={sessionActive ? !controls.canContinue : !canLaunch}
           onClick={() => (sessionActive ? void continueDebug() : void startDebug())}
         >
           {sessionActive ? <Play size={13} /> : <Play size={13} />}
           {sessionActive ? t("debug.continue") : t("debug.start")}
-        </button>
-        <button
-          type="button"
-          style={iconOnlyButtonStyle(false)}
+        </Button>
+        <Button
+          variant="outline"
+          size="icon"
           disabled={!controls.canStep}
           title={t("debug.stepOver")}
           aria-label={t("debug.stepOver")}
           onClick={() => void stepDebug("step_over_debug_config")}
         >
           <StepForward size={13} />
-        </button>
-        <button
-          type="button"
-          style={iconOnlyButtonStyle(false)}
+        </Button>
+        <Button
+          variant="outline"
+          size="icon"
           disabled={!controls.canStep}
           title={t("debug.stepInto")}
           aria-label={t("debug.stepInto")}
           onClick={() => void stepDebug("step_into_debug_config")}
         >
           <CornerDownRight size={13} />
-        </button>
-        <button
-          type="button"
-          style={iconOnlyButtonStyle(false)}
+        </Button>
+        <Button
+          variant="outline"
+          size="icon"
           disabled={!controls.canStep}
           title={t("debug.stepOut")}
           aria-label={t("debug.stepOut")}
           onClick={() => void stepDebug("step_out_debug_config")}
         >
           <CornerDownLeft size={13} />
-        </button>
-        <button
-          type="button"
-          style={iconTextButtonStyle(false)}
+        </Button>
+        <Button
+          variant="outline"
+          size="default"
           disabled={!canLaunch || sessionActive}
           onClick={() => void startDebug()}
         >
           <RotateCcw size={13} />
           {t("debug.restart")}
-        </button>
-        <button
-          type="button"
-          style={iconTextButtonStyle(false)}
+        </Button>
+        <Button
+          variant="outline"
+          size="default"
           disabled={!controls.canStop}
           onClick={() => void stopDebug()}
         >
           <Square size={13} />
           {t("debug.stop")}
-        </button>
+        </Button>
         <span style={statusStyle}>{statusLabel}</span>
-      </div>
+      </ButtonGroup>
 
       {error && <div style={errorStyle}>{t("debug.failed", { error })}</div>}
 
@@ -719,50 +727,10 @@ const configCommandStyle: React.CSSProperties = {
   opacity: 0.82,
 };
 
-function iconTextButtonStyle(active: boolean): React.CSSProperties {
-  return {
-    height: 26,
-    display: "inline-flex",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 5,
-    border: "1px solid var(--border-dim)",
-    borderRadius: 6,
-    background: active ? "var(--control-active-bg)" : "transparent",
-    color: active ? "var(--control-active-fg)" : "var(--text-muted)",
-    fontSize: 11,
-    fontWeight: 650,
-    cursor: "pointer",
-    padding: "0 8px",
-  };
-}
-
-function runtimeButtonStyle(active: boolean): React.CSSProperties {
-  return {
-    ...iconTextButtonStyle(active),
-    width: "100%",
-  };
-}
-
-function iconOnlyButtonStyle(active: boolean): React.CSSProperties {
-  return {
-    ...iconTextButtonStyle(active),
-    width: 28,
-    padding: 0,
-  };
-}
-
-function primaryButtonStyle(active: boolean): React.CSSProperties {
-  return {
-    ...iconTextButtonStyle(true),
-    minWidth: 70,
-    color: active ? "var(--control-active-fg)" : "var(--control-active-fg)",
-  };
-}
-
 const runBarStyle: React.CSSProperties = {
   display: "flex",
   alignItems: "center",
+  flexWrap: "wrap",
   gap: 6,
   padding: "8px 10px",
   borderTop: "1px solid var(--border-dim)",

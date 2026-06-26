@@ -147,16 +147,16 @@ export function RightToolbar({
   return (
     <div
       style={{
-        width: 44,
+        width: 48,
         flexShrink: 0,
         background: "var(--bg-sidebar)",
         borderLeft: "1px solid var(--border-dim)",
         display: "flex",
         flexDirection: "column",
         alignItems: "center",
-        paddingTop: 6,
-        paddingBottom: 8,
-        gap: 2,
+        padding: "8px 6px",
+        gap: 4,
+        boxSizing: "border-box",
         overflow: "hidden",
       }}
     >
@@ -181,7 +181,7 @@ export function RightToolbar({
         onClick={onToggleTerminal}
       />
 
-      <div style={{ width: 20, height: 1, background: "var(--border-dim)", margin: "4px 0" }} />
+      <div style={{ width: 22, height: 1, background: "var(--border-dim)", margin: "4px 0" }} />
 
       {utilityIdeButtons.map((btn) => (
         <IconButton
