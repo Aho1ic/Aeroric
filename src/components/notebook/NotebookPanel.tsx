@@ -49,6 +49,7 @@ type NotebookContextMenuState = {
   x: number;
   y: number;
   format: NotebookFormat;
+  canFormat: boolean;
 };
 
 const STORAGE_KEY = "aeroric:notebook:v1";
@@ -144,12 +145,14 @@ function ToolButton({
   onClick,
   onMouseDown,
   pressed,
+  disabled = false,
 }: {
   label: string;
   children: React.ReactNode;
   onClick: () => void;
   onMouseDown?: (event: React.MouseEvent<HTMLButtonElement>) => void;
   pressed?: boolean;
+  disabled?: boolean;
 }) {
   return (
     <button
@@ -157,6 +160,7 @@ function ToolButton({
       aria-label={label}
       aria-pressed={typeof pressed === "boolean" ? pressed : undefined}
       title={label}
+      disabled={disabled}
       onMouseDown={onMouseDown}
       onClick={onClick}
       style={{
@@ -168,8 +172,13 @@ function ToolButton({
         border: "1px solid var(--border-dim)",
         borderRadius: 5,
         background: pressed ? "var(--control-active-bg)" : "var(--bg-card)",
-        color: pressed ? "var(--control-active-fg)" : "var(--text-secondary)",
-        cursor: "pointer",
+        color: disabled
+          ? "var(--text-muted)"
+          : pressed
+            ? "var(--control-active-fg)"
+            : "var(--text-secondary)",
+        cursor: disabled ? "not-allowed" : "pointer",
+        opacity: disabled ? 0.55 : 1,
         flexShrink: 0,
       }}
     >
@@ -184,12 +193,14 @@ function ColorTool({
   children,
   onMouseDown,
   onChange,
+  disabled = false,
 }: {
   label: string;
   value: string;
   children: React.ReactNode;
   onMouseDown?: (event: React.MouseEvent<HTMLLabelElement>) => void;
   onChange: (value: string) => void;
+  disabled?: boolean;
 }) {
   return (
     <label
@@ -206,8 +217,9 @@ function ColorTool({
         border: "1px solid var(--border-dim)",
         borderRadius: 5,
         background: "var(--bg-card)",
-        color: "var(--text-secondary)",
-        cursor: "pointer",
+        color: disabled ? "var(--text-muted)" : "var(--text-secondary)",
+        cursor: disabled ? "not-allowed" : "pointer",
+        opacity: disabled ? 0.55 : 1,
         flexShrink: 0,
       }}
     >
@@ -226,12 +238,13 @@ function ColorTool({
         type="color"
         aria-label={label}
         value={value}
+        disabled={disabled}
         onChange={(event) => onChange(event.currentTarget.value)}
         style={{
           position: "absolute",
           inset: 0,
           opacity: 0,
-          cursor: "pointer",
+          cursor: disabled ? "not-allowed" : "pointer",
         }}
       />
     </label>
@@ -254,6 +267,8 @@ export function NotebookPanel({ width = "100%" }: { width?: number | string }) {
   const [textColor, setTextColor] = useState("#2563eb");
   const [backgroundColor, setBackgroundColor] = useState("#fef08a");
   const [richTextState, setRichTextState] = useState<RichTextToolbarState>(DEFAULT_RICH_TEXT_STATE);
+  const [hasMarkdownSelection, setHasMarkdownSelection] = useState(false);
+  const [hasRichTextSelection, setHasRichTextSelection] = useState(false);
   const [contextMenu, setContextMenu] = useState<NotebookContextMenuState | null>(null);
   const [tablePickerOpen, setTablePickerOpen] = useState(false);
   const [tableHoverSize, setTableHoverSize] = useState({ rows: 2, cols: 2 });
@@ -261,6 +276,12 @@ export function NotebookPanel({ width = "100%" }: { width?: number | string }) {
   const markdownHtml = useMemo(() => renderMarkdown(activeNote?.body ?? ""), [activeNote?.body]);
   const richTextHtml = useMemo(() => renderRichText(activeNote?.body ?? ""), [activeNote?.body]);
   const activeFormat = activeNote?.format ?? "markdown";
+  const canFormatSelection =
+    mode === "edit" &&
+    Boolean(activeNote) &&
+    (activeFormat === "markdown" ? hasMarkdownSelection : hasRichTextSelection);
+  const richTextPressed = (pressed: boolean) =>
+    activeFormat === "richtext" && canFormatSelection ? pressed : undefined;
   const formatLabel = (format: NotebookFormat) =>
     format === "markdown" ? "Markdown" : t("notebook.formatText");
 
@@ -319,6 +340,12 @@ export function NotebookPanel({ width = "100%" }: { width?: number | string }) {
     document.addEventListener("mousedown", close);
     return () => document.removeEventListener("mousedown", close);
   }, []);
+
+  useEffect(() => {
+    setHasMarkdownSelection(false);
+    setHasRichTextSelection(false);
+    savedRichTextRangeRef.current = null;
+  }, [activeNote?.id, activeFormat, mode]);
 
   const updateActiveNote = (patch: Partial<Pick<NotebookNote, "title" | "body">>) => {
     if (!activeNote) return;
@@ -379,13 +406,32 @@ export function NotebookPanel({ width = "100%" }: { width?: number | string }) {
     });
   };
 
+  const updateMarkdownSelectionState = () => {
+    const textarea = markdownContentRef.current;
+    setHasMarkdownSelection(Boolean(textarea && textarea.selectionStart !== textarea.selectionEnd));
+  };
+
   const saveRichTextSelection = () => {
     const editor = richTextRef.current;
     const selection = document.getSelection();
-    if (!editor || !selection || selection.rangeCount === 0) return;
+    if (!editor || !selection || selection.rangeCount === 0) {
+      setHasRichTextSelection(false);
+      savedRichTextRangeRef.current = null;
+      return;
+    }
     const range = selection.getRangeAt(0);
-    if (!editor.contains(range.commonAncestorContainer)) return;
+    if (!editor.contains(range.commonAncestorContainer)) {
+      setHasRichTextSelection(false);
+      savedRichTextRangeRef.current = null;
+      return;
+    }
+    if (range.collapsed || selection.toString().length === 0) {
+      setHasRichTextSelection(false);
+      savedRichTextRangeRef.current = null;
+      return;
+    }
     savedRichTextRangeRef.current = range.cloneRange();
+    setHasRichTextSelection(true);
   };
 
   const restoreRichTextSelection = () => {
@@ -416,6 +462,7 @@ export function NotebookPanel({ width = "100%" }: { width?: number | string }) {
     const body = activeNote.body;
     const start = textarea?.selectionStart ?? body.length;
     const end = textarea?.selectionEnd ?? body.length;
+    if (start === end) return;
     const selected = body.slice(start, end);
     const replacement = transform(selected);
     const nextBody = `${body.slice(0, start)}${replacement}${body.slice(end)}`;
@@ -479,6 +526,7 @@ export function NotebookPanel({ width = "100%" }: { width?: number | string }) {
   };
 
   const runRichTextCommand = (command: string, value?: string) => {
+    if (!hasRichTextSelection) return;
     restoreRichTextSelection();
     richTextRef.current?.focus();
     if (typeof document.execCommand === "function") {
@@ -564,9 +612,12 @@ export function NotebookPanel({ width = "100%" }: { width?: number | string }) {
   };
 
   const runContextMenuAction = (action: string) => {
-    const menuFormat = contextMenu?.format ?? activeFormat;
+    const menu = contextMenu;
+    const menuFormat = menu?.format ?? activeFormat;
+    const isClipboardAction = action === "cut" || action === "copy" || action === "paste";
+    if (!isClipboardAction && !menu?.canFormat) return;
     setContextMenu(null);
-    if (action === "cut" || action === "copy" || action === "paste") {
+    if (isClipboardAction) {
       if (typeof document.execCommand === "function") document.execCommand(action, false);
       return;
     }
@@ -611,6 +662,16 @@ export function NotebookPanel({ width = "100%" }: { width?: number | string }) {
     ["numbered", t("notebook.numberedList")],
     ["table", t("notebook.table")],
   ];
+  const formatActionState: Record<string, boolean> = {
+    bold: richTextState.bold,
+    italic: richTextState.italic,
+    underline: richTextState.underline,
+    strike: richTextState.strike,
+    bullet: richTextState.bulletList,
+    numbered: richTextState.numberedList,
+  };
+  const isClipboardAction = (action: string) =>
+    action === "cut" || action === "copy" || action === "paste";
 
   return (
     <section
@@ -828,7 +889,8 @@ export function NotebookPanel({ width = "100%" }: { width?: number | string }) {
               >
                 <ToolButton
                   label={t("notebook.bold")}
-                  pressed={activeFormat === "richtext" ? richTextState.bold : undefined}
+                  pressed={richTextPressed(richTextState.bold)}
+                  disabled={!canFormatSelection}
                   onMouseDown={keepRichTextSelectionOnMouseDown}
                   onClick={() => applyInlineWrap("**", "**", "bold")}
                 >
@@ -836,7 +898,8 @@ export function NotebookPanel({ width = "100%" }: { width?: number | string }) {
                 </ToolButton>
                 <ToolButton
                   label={t("notebook.italic")}
-                  pressed={activeFormat === "richtext" ? richTextState.italic : undefined}
+                  pressed={richTextPressed(richTextState.italic)}
+                  disabled={!canFormatSelection}
                   onMouseDown={keepRichTextSelectionOnMouseDown}
                   onClick={() => applyInlineWrap("*", "*", "italic")}
                 >
@@ -844,7 +907,8 @@ export function NotebookPanel({ width = "100%" }: { width?: number | string }) {
                 </ToolButton>
                 <ToolButton
                   label={t("notebook.underline")}
-                  pressed={activeFormat === "richtext" ? richTextState.underline : undefined}
+                  pressed={richTextPressed(richTextState.underline)}
+                  disabled={!canFormatSelection}
                   onMouseDown={keepRichTextSelectionOnMouseDown}
                   onClick={() => applyInlineWrap("<u>", "</u>", "underline")}
                 >
@@ -852,7 +916,8 @@ export function NotebookPanel({ width = "100%" }: { width?: number | string }) {
                 </ToolButton>
                 <ToolButton
                   label={t("notebook.strike")}
-                  pressed={activeFormat === "richtext" ? richTextState.strike : undefined}
+                  pressed={richTextPressed(richTextState.strike)}
+                  disabled={!canFormatSelection}
                   onMouseDown={keepRichTextSelectionOnMouseDown}
                   onClick={() => applyInlineWrap("~~", "~~", "strikeThrough")}
                 >
@@ -860,6 +925,7 @@ export function NotebookPanel({ width = "100%" }: { width?: number | string }) {
                 </ToolButton>
                 <ToolButton
                   label={t("notebook.highlight")}
+                  disabled={!canFormatSelection}
                   onMouseDown={keepRichTextSelectionOnMouseDown}
                   onClick={() =>
                     applyInlineWrap("<mark>", "</mark>", "hiliteColor", backgroundColor)
@@ -870,6 +936,7 @@ export function NotebookPanel({ width = "100%" }: { width?: number | string }) {
                 <ColorTool
                   label={t("notebook.textColor")}
                   value={textColor}
+                  disabled={!canFormatSelection}
                   onMouseDown={saveRichTextSelectionOnMouseDown}
                   onChange={(value) => {
                     setTextColor(value);
@@ -881,6 +948,7 @@ export function NotebookPanel({ width = "100%" }: { width?: number | string }) {
                 <ColorTool
                   label={t("notebook.backgroundColor")}
                   value={backgroundColor}
+                  disabled={!canFormatSelection}
                   onMouseDown={saveRichTextSelectionOnMouseDown}
                   onChange={(value) => {
                     setBackgroundColor(value);
@@ -896,6 +964,7 @@ export function NotebookPanel({ width = "100%" }: { width?: number | string }) {
                 </ColorTool>
                 <ToolButton
                   label={t("notebook.noColor")}
+                  disabled={!canFormatSelection}
                   onMouseDown={keepRichTextSelectionOnMouseDown}
                   onClick={clearBackgroundCommand}
                 >
@@ -903,7 +972,8 @@ export function NotebookPanel({ width = "100%" }: { width?: number | string }) {
                 </ToolButton>
                 <ToolButton
                   label={t("notebook.heading")}
-                  pressed={activeFormat === "richtext" ? richTextState.heading : undefined}
+                  pressed={richTextPressed(richTextState.heading)}
+                  disabled={!canFormatSelection}
                   onMouseDown={keepRichTextSelectionOnMouseDown}
                   onClick={() => applyHeading("# ", "h1")}
                 >
@@ -911,7 +981,8 @@ export function NotebookPanel({ width = "100%" }: { width?: number | string }) {
                 </ToolButton>
                 <ToolButton
                   label={t("notebook.subheading")}
-                  pressed={activeFormat === "richtext" ? richTextState.subheading : undefined}
+                  pressed={richTextPressed(richTextState.subheading)}
+                  disabled={!canFormatSelection}
                   onMouseDown={keepRichTextSelectionOnMouseDown}
                   onClick={() => applyHeading("## ", "h2")}
                 >
@@ -919,6 +990,7 @@ export function NotebookPanel({ width = "100%" }: { width?: number | string }) {
                 </ToolButton>
                 <ToolButton
                   label={t("notebook.bodyText")}
+                  disabled={!canFormatSelection}
                   onMouseDown={keepRichTextSelectionOnMouseDown}
                   onClick={applyBodyCommand}
                 >
@@ -926,7 +998,8 @@ export function NotebookPanel({ width = "100%" }: { width?: number | string }) {
                 </ToolButton>
                 <ToolButton
                   label={t("notebook.bulletList")}
-                  pressed={activeFormat === "richtext" ? richTextState.bulletList : undefined}
+                  pressed={richTextPressed(richTextState.bulletList)}
+                  disabled={!canFormatSelection}
                   onMouseDown={keepRichTextSelectionOnMouseDown}
                   onClick={() => applyListCommand(false)}
                 >
@@ -934,7 +1007,8 @@ export function NotebookPanel({ width = "100%" }: { width?: number | string }) {
                 </ToolButton>
                 <ToolButton
                   label={t("notebook.numberedList")}
-                  pressed={activeFormat === "richtext" ? richTextState.numberedList : undefined}
+                  pressed={richTextPressed(richTextState.numberedList)}
+                  disabled={!canFormatSelection}
                   onMouseDown={keepRichTextSelectionOnMouseDown}
                   onClick={() => applyListCommand(true)}
                 >
@@ -942,6 +1016,7 @@ export function NotebookPanel({ width = "100%" }: { width?: number | string }) {
                 </ToolButton>
                 <ToolButton
                   label={t("notebook.codeBlock")}
+                  disabled={!canFormatSelection}
                   onMouseDown={keepRichTextSelectionOnMouseDown}
                   onClick={applyCodeBlockCommand}
                 >
@@ -950,6 +1025,7 @@ export function NotebookPanel({ width = "100%" }: { width?: number | string }) {
                 <div style={{ position: "relative", flexShrink: 0 }} data-notebook-table-picker>
                   <ToolButton
                     label={t("notebook.table")}
+                    disabled={!canFormatSelection}
                     onMouseDown={keepRichTextSelectionOnMouseDown}
                     onClick={applyTableCommand}
                   >
@@ -1028,9 +1104,19 @@ export function NotebookPanel({ width = "100%" }: { width?: number | string }) {
                 aria-label={t("notebook.memoContent")}
                 value={activeNote.body}
                 onChange={(event) => updateActiveNote({ body: event.currentTarget.value })}
+                onSelect={updateMarkdownSelectionState}
+                onKeyUp={updateMarkdownSelectionState}
+                onMouseUp={updateMarkdownSelectionState}
                 onContextMenu={(event) => {
                   event.preventDefault();
-                  setContextMenu({ x: event.clientX, y: event.clientY, format: "markdown" });
+                  updateMarkdownSelectionState();
+                  const target = event.currentTarget;
+                  setContextMenu({
+                    x: event.clientX,
+                    y: event.clientY,
+                    format: "markdown",
+                    canFormat: target.selectionStart !== target.selectionEnd,
+                  });
                 }}
                 spellCheck={false}
                 style={{
@@ -1073,7 +1159,15 @@ export function NotebookPanel({ width = "100%" }: { width?: number | string }) {
                 onContextMenu={(event) => {
                   event.preventDefault();
                   saveRichTextSelection();
-                  setContextMenu({ x: event.clientX, y: event.clientY, format: "richtext" });
+                  const canFormat = Boolean(
+                    savedRichTextRangeRef.current && !savedRichTextRangeRef.current.collapsed,
+                  );
+                  setContextMenu({
+                    x: event.clientX,
+                    y: event.clientY,
+                    format: "richtext",
+                    canFormat,
+                  });
                   readRichTextCommandState();
                 }}
                 style={{
@@ -1135,34 +1229,50 @@ export function NotebookPanel({ width = "100%" }: { width?: number | string }) {
             boxShadow: "var(--shadow-popover)",
           }}
         >
-          {contextMenuItems.map(([action, label]) => (
-            <button
-              key={action}
-              type="button"
-              role="menuitem"
-              onMouseDown={
-                contextMenu.format === "richtext" ? keepRichTextSelectionOnMouseDown : undefined
-              }
-              onClick={() => runContextMenuAction(action)}
-              style={{
-                width: "calc(100% - 8px)",
-                height: 28,
-                margin: "1px 4px",
-                padding: "0 10px",
-                border: "none",
-                borderRadius: 5,
-                background: "transparent",
-                color: "var(--text-primary)",
-                display: "flex",
-                alignItems: "center",
-                textAlign: "left",
-                cursor: "pointer",
-                fontSize: 13,
-              }}
-            >
-              {label}
-            </button>
-          ))}
+          {contextMenuItems.map(([action, label]) => {
+            const disabled = !isClipboardAction(action) && !contextMenu.canFormat;
+            const checked =
+              contextMenu.format === "richtext" &&
+              contextMenu.canFormat &&
+              action in formatActionState
+                ? formatActionState[action]
+                : undefined;
+            return (
+              <button
+                key={action}
+                type="button"
+                role="menuitem"
+                aria-checked={checked}
+                disabled={disabled}
+                onMouseDown={
+                  contextMenu.format === "richtext" ? keepRichTextSelectionOnMouseDown : undefined
+                }
+                onClick={() => runContextMenuAction(action)}
+                style={{
+                  width: "calc(100% - 8px)",
+                  height: 28,
+                  margin: "1px 4px",
+                  padding: "0 10px",
+                  border: "none",
+                  borderRadius: 5,
+                  background: checked ? "var(--control-active-bg)" : "transparent",
+                  color: disabled
+                    ? "var(--text-muted)"
+                    : checked
+                      ? "var(--control-active-fg)"
+                      : "var(--text-primary)",
+                  display: "flex",
+                  alignItems: "center",
+                  textAlign: "left",
+                  cursor: disabled ? "not-allowed" : "pointer",
+                  opacity: disabled ? 0.55 : 1,
+                  fontSize: 13,
+                }}
+              >
+                {label}
+              </button>
+            );
+          })}
         </div>
       )}
     </section>

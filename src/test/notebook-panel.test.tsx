@@ -12,6 +12,20 @@ function renderNotebook() {
   );
 }
 
+function selectElementContents(element: Element) {
+  const selection = document.getSelection();
+  const range = document.createRange();
+  range.selectNodeContents(element);
+  selection?.removeAllRanges();
+  selection?.addRange(range);
+  fireEvent.mouseUp(element);
+}
+
+function selectTextareaRange(textarea: HTMLTextAreaElement, start: number, end: number) {
+  textarea.setSelectionRange(start, end);
+  fireEvent.select(textarea);
+}
+
 describe("NotebookPanel", () => {
   beforeEach(() => {
     localStorage.clear();
@@ -102,7 +116,7 @@ describe("NotebookPanel", () => {
     await user.type(screen.getByRole("textbox", { name: "Quick note name" }), "Format note");
     const body = screen.getByRole("textbox", { name: "Quick note content" }) as HTMLTextAreaElement;
     await user.type(body, "selected");
-    body.setSelectionRange(0, "selected".length);
+    selectTextareaRange(body, 0, "selected".length);
 
     await user.click(screen.getByRole("button", { name: "Bold" }));
 
@@ -124,6 +138,8 @@ describe("NotebookPanel", () => {
     const body = screen.getByRole("textbox", { name: "Quick note content" });
 
     await user.click(body);
+    await user.type(body, "selected");
+    selectElementContents(body);
     await user.click(screen.getByRole("button", { name: "Bold" }));
     await user.click(screen.getByRole("button", { name: "Numbered list" }));
 
@@ -140,12 +156,12 @@ describe("NotebookPanel", () => {
     await user.type(screen.getByRole("textbox", { name: "Quick note name" }), "Color note");
     const body = screen.getByRole("textbox", { name: "Quick note content" }) as HTMLTextAreaElement;
     await user.type(body, "color");
-    body.setSelectionRange(0, "color".length);
+    selectTextareaRange(body, 0, "color".length);
 
     fireEvent.change(screen.getByLabelText("Text color"), { target: { value: "#ff0000" } });
     expect(body.value).toBe('<span style="color:#ff0000">color</span>');
 
-    body.setSelectionRange(0, body.value.length);
+    selectTextareaRange(body, 0, body.value.length);
     fireEvent.change(screen.getByLabelText("Background color"), {
       target: { value: "#00ff00" },
     });
@@ -163,10 +179,10 @@ describe("NotebookPanel", () => {
     await user.type(screen.getByRole("textbox", { name: "Quick note name" }), "Structure note");
     const body = screen.getByRole("textbox", { name: "Quick note content" }) as HTMLTextAreaElement;
     await user.type(body, "alpha beta");
-    body.setSelectionRange(0, "alpha beta".length);
+    selectTextareaRange(body, 0, "alpha beta".length);
 
     await user.click(screen.getByRole("button", { name: "Code block" }));
-    body.setSelectionRange(0, body.value.length);
+    selectTextareaRange(body, 0, body.value.length);
     await user.click(screen.getByRole("button", { name: "Table" }));
 
     expect(body.value).toContain("```");
@@ -299,12 +315,8 @@ describe("NotebookPanel", () => {
     await user.click(screen.getByRole("menuitem", { name: "Text" }));
     const body = screen.getByRole("textbox", { name: "Quick note content" });
 
-    const selection = document.getSelection();
-    const range = document.createRange();
-    range.selectNodeContents(body);
-    selection?.removeAllRanges();
-    selection?.addRange(range);
-    fireEvent.mouseUp(body);
+    await user.type(body, "selected");
+    selectElementContents(body);
 
     fireEvent.mouseDown(screen.getByLabelText("Background color"));
     fireEvent.change(screen.getByLabelText("Background color"), {
@@ -334,7 +346,9 @@ describe("NotebookPanel", () => {
     await user.click(screen.getByRole("button", { name: "New quick note" }));
     await user.click(screen.getByRole("menuitem", { name: "Text" }));
     await user.type(screen.getByRole("textbox", { name: "Quick note name" }), "State note");
-    fireEvent.mouseUp(screen.getByRole("textbox", { name: "Quick note content" }));
+    const body = screen.getByRole("textbox", { name: "Quick note content" });
+    await user.type(body, "selected");
+    selectElementContents(body);
 
     expect(screen.getByRole("button", { name: "Bold" })).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByRole("button", { name: "Bullet list" })).toHaveAttribute(
@@ -357,6 +371,9 @@ describe("NotebookPanel", () => {
     await user.click(screen.getByRole("button", { name: "New quick note" }));
     await user.click(screen.getByRole("menuitem", { name: "Text" }));
     await user.type(screen.getByRole("textbox", { name: "Quick note name" }), "Table note");
+    const body = screen.getByRole("textbox", { name: "Quick note content" });
+    await user.type(body, "selected");
+    selectElementContents(body);
 
     await user.click(screen.getByRole("button", { name: "Table" }));
     const sizeCell = screen.getByRole("button", { name: "3 x 4" });
@@ -375,5 +392,80 @@ describe("NotebookPanel", () => {
       false,
       expect.stringContaining("<td><br></td>"),
     );
+  });
+
+  it("requires selected text before enabling notebook formatting tools", async () => {
+    const user = userEvent.setup();
+    renderNotebook();
+
+    await user.click(screen.getByRole("button", { name: "New quick note" }));
+    await user.click(screen.getByRole("menuitem", { name: "Markdown" }));
+    await user.type(screen.getByRole("textbox", { name: "Quick note name" }), "Needs selection");
+
+    const body = screen.getByRole("textbox", { name: "Quick note content" }) as HTMLTextAreaElement;
+    await user.type(body, "selected");
+    selectTextareaRange(body, body.value.length, body.value.length);
+
+    expect(screen.getByRole("button", { name: "Bold" })).toBeDisabled();
+    expect(screen.getByLabelText("Text color")).toBeDisabled();
+
+    selectTextareaRange(body, 0, body.value.length);
+
+    expect(screen.getByRole("button", { name: "Bold" })).not.toBeDisabled();
+    expect(screen.getByLabelText("Text color")).not.toBeDisabled();
+  });
+
+  it("requires selected rich text before enabling toolbar and context formatting", async () => {
+    const user = userEvent.setup();
+    const queryCommandState = vi.fn((command: string) => command === "bold");
+    Object.defineProperty(document, "queryCommandState", {
+      configurable: true,
+      value: queryCommandState,
+    });
+    renderNotebook();
+
+    await user.click(screen.getByRole("button", { name: "New quick note" }));
+    await user.click(screen.getByRole("menuitem", { name: "Text" }));
+    const body = screen.getByRole("textbox", { name: "Quick note content" });
+    await user.type(body, "selected");
+
+    expect(screen.getByRole("button", { name: "Bold" })).toBeDisabled();
+
+    selectElementContents(body);
+
+    const boldButton = screen.getByRole("button", { name: "Bold" });
+    expect(boldButton).not.toBeDisabled();
+    expect(boldButton).toHaveAttribute("aria-pressed", "true");
+
+    fireEvent.contextMenu(body);
+    const boldMenuItem = screen.getByRole("menuitem", { name: "Bold" });
+    expect(boldMenuItem).not.toBeDisabled();
+    expect(boldMenuItem).toHaveAttribute("aria-checked", "true");
+  });
+
+  it("keeps rich text toolbar commands as toggles so active formatting can be cleared", async () => {
+    const user = userEvent.setup();
+    const execCommand = vi.fn(() => true);
+    Object.defineProperty(document, "execCommand", {
+      configurable: true,
+      value: execCommand,
+    });
+    Object.defineProperty(document, "queryCommandState", {
+      configurable: true,
+      value: vi.fn((command: string) => command === "bold"),
+    });
+    renderNotebook();
+
+    await user.click(screen.getByRole("button", { name: "New quick note" }));
+    await user.click(screen.getByRole("menuitem", { name: "Text" }));
+    const body = screen.getByRole("textbox", { name: "Quick note content" });
+    await user.type(body, "selected");
+    selectElementContents(body);
+
+    const boldButton = screen.getByRole("button", { name: "Bold" });
+    expect(boldButton).toHaveAttribute("aria-pressed", "true");
+    await user.click(boldButton);
+
+    expect(execCommand).toHaveBeenCalledWith("bold", false);
   });
 });
