@@ -21,11 +21,32 @@ import {
 import { useI18n } from "../i18n";
 import type { RightPanel } from "../hooks/useProjectPanels";
 import {
-  getToolbarIdeTools,
+  getRightRailIdeTools,
   type IdeToolAvailability,
   type IdeToolIcon,
 } from "../plugins/ideToolRegistry";
 import { DockerIcon } from "./DockerIcon";
+
+export function renderIdeToolIcon(icon: IdeToolIcon, size = 17): ReactNode {
+  switch (icon) {
+    case "bug":
+      return <Bug size={size} />;
+    case "circle-alert":
+      return <CircleAlert size={size} />;
+    case "flask":
+      return <FlaskConical size={size} />;
+    case "git-branch":
+      return <GitBranch size={size} />;
+    case "git-graph":
+      return <GitGraph size={size} />;
+    case "globe":
+      return <Globe size={size} />;
+    case "play":
+      return <Play size={size} />;
+    case "search":
+      return <Search size={size} />;
+  }
+}
 
 export function RightToolbar({
   activePanel,
@@ -68,27 +89,7 @@ export function RightToolbar({
     debugDisabled,
     previewDisabled,
   };
-  const ideTools = getToolbarIdeTools(ideToolAvailability);
-  const renderIdeToolIcon = (icon: IdeToolIcon): ReactNode => {
-    switch (icon) {
-      case "bug":
-        return <Bug size={17} />;
-      case "circle-alert":
-        return <CircleAlert size={17} />;
-      case "flask":
-        return <FlaskConical size={17} />;
-      case "git-branch":
-        return <GitBranch size={17} />;
-      case "git-graph":
-        return <GitGraph size={17} />;
-      case "globe":
-        return <Globe size={17} />;
-      case "play":
-        return <Play size={17} />;
-      case "search":
-        return <Search size={17} />;
-    }
-  };
+  const ideTools = getRightRailIdeTools(ideToolAvailability);
   const toToolbarButton = (tool: (typeof ideTools)[number]) => ({
     key: tool.panel,
     icon: renderIdeToolIcon(tool.icon),

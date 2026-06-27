@@ -5,6 +5,7 @@ import type {
   KeyboardEvent as ReactKeyboardEvent,
   MouseEvent as ReactMouseEvent,
   PointerEvent as ReactPointerEvent,
+  ReactNode,
 } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { confirm, open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
@@ -93,6 +94,67 @@ import {
   createConnectionName,
 } from "../../lib/databaseUtils";
 import s from "../../styles";
+
+const SQL_KEYWORDS = new Set([
+  "ADD",
+  "ALTER",
+  "AND",
+  "AS",
+  "CREATE",
+  "DEFAULT",
+  "DELETE",
+  "DROP",
+  "EXISTS",
+  "FOREIGN",
+  "FROM",
+  "IF",
+  "INDEX",
+  "INSERT",
+  "INTO",
+  "KEY",
+  "NOT",
+  "NULL",
+  "ON",
+  "PRIMARY",
+  "REFERENCES",
+  "SELECT",
+  "SET",
+  "TABLE",
+  "UNIQUE",
+  "UPDATE",
+  "VALUES",
+  "WHERE",
+]);
+
+function sqlTokenKind(token: string): "keyword" | "string" | "number" | "comment" | null {
+  if (/^--/.test(token)) return "comment";
+  if (/^'/.test(token) || /^"/.test(token)) return "string";
+  if (/^\d+(?:\.\d+)?$/.test(token)) return "number";
+  if (SQL_KEYWORDS.has(token.toUpperCase())) return "keyword";
+  return null;
+}
+
+function sqlTokenColor(kind: NonNullable<ReturnType<typeof sqlTokenKind>>): string {
+  if (kind === "keyword") return "var(--accent-strong)";
+  if (kind === "string") return "var(--success)";
+  if (kind === "number") return "var(--warning)";
+  return "var(--text-hint)";
+}
+
+function renderSqlTokens(sql: string): ReactNode[] {
+  const tokens =
+    sql.match(/--[^\n]*|'(?:''|[^'])*'|"(?:\\"|[^"])*"|\b\d+(?:\.\d+)?\b|\b[A-Za-z_][\w$]*\b|\s+|./g) ??
+    [];
+  return tokens.map((token, index) => {
+    const kind = sqlTokenKind(token);
+    if (!kind) return token;
+    return (
+      <span key={`${index}:${token}`} data-sql-token={kind} style={{ color: sqlTokenColor(kind) }}>
+        {token}
+      </span>
+    );
+  });
+}
 import { DatabaseAdvancedTools, type DatabaseAdvancedToolMode } from "./DatabaseAdvancedTools";
 import { DatabaseSearchPanel } from "./DatabaseSearchPanel";
 import { DatabaseSidebarTree } from "./DatabaseSidebarTree";
@@ -8459,10 +8521,17 @@ export function DatabaseView({
                       {t("common.refresh")}
                     </DbxButton>
                   </div>
-                  <pre style={{ ...s.databaseSqlPreview, margin: 0, minHeight: 180 }}>
+                  <pre
+                    data-testid={
+                      !tableInfoDdlLoading && tableInfoDdl ? "database-ddl-highlight" : undefined
+                    }
+                    style={{ ...s.databaseSqlPreview, margin: 0, minHeight: 180 }}
+                  >
                     {tableInfoDdlLoading
                       ? t("database.loading")
-                      : tableInfoDdl || t("database.empty")}
+                      : tableInfoDdl
+                        ? renderSqlTokens(tableInfoDdl)
+                        : t("database.empty")}
                   </pre>
                   {tableInfoDdlError && <div style={s.databaseError}>{tableInfoDdlError}</div>}
                 </div>

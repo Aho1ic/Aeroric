@@ -407,7 +407,7 @@ describe("NotebookPanel", () => {
     expect(execCommand).toHaveBeenCalledWith(
       "insertHTML",
       false,
-      expect.stringContaining("<td><br></td>"),
+      expect.stringContaining('style="border:1px solid'),
     );
     expect(execCommand).toHaveBeenCalledTimes(1);
   });
@@ -495,5 +495,128 @@ describe("NotebookPanel", () => {
     await user.click(boldButton);
 
     expect(execCommand).toHaveBeenCalledWith("bold", false);
+  });
+
+  it("shows quick note names in bold in the memo list", async () => {
+    const user = userEvent.setup();
+    renderNotebook();
+
+    await user.click(screen.getByRole("button", { name: "New quick note" }));
+    await user.click(screen.getByRole("menuitem", { name: "Markdown" }));
+    await user.type(screen.getByRole("textbox", { name: "Quick note name" }), "Bold list name");
+
+    expect(screen.getByRole("button", { name: "Bold list name" })).toHaveStyle({
+      fontWeight: "700",
+    });
+  });
+
+  it("inserts selected rich text into a code block instead of replacing it with a placeholder", async () => {
+    const user = userEvent.setup();
+    const execCommand = vi.fn(() => true);
+    Object.defineProperty(document, "execCommand", {
+      configurable: true,
+      value: execCommand,
+    });
+    renderNotebook();
+
+    await user.click(screen.getByRole("button", { name: "New quick note" }));
+    await user.click(screen.getByRole("menuitem", { name: "Text" }));
+    const body = screen.getByRole("textbox", { name: "Quick note content" });
+    await user.type(body, "print(1)");
+    selectElementContents(body);
+
+    await user.click(screen.getByRole("button", { name: "Code block" }));
+
+    expect(execCommand).toHaveBeenCalledWith(
+      "insertHTML",
+      false,
+      expect.stringContaining("print(1)"),
+    );
+    expect(execCommand).toHaveBeenCalledWith(
+      "insertHTML",
+      false,
+      expect.stringContaining("data-notebook-code-language"),
+    );
+    expect(execCommand).not.toHaveBeenCalledWith(
+      "insertHTML",
+      false,
+      expect.stringContaining(">Code<"),
+    );
+  });
+
+  it("renders the rich text table picker as a top layer and inserts tables with visible borders", async () => {
+    const user = userEvent.setup();
+    const execCommand = vi.fn(() => true);
+    Object.defineProperty(document, "execCommand", {
+      configurable: true,
+      value: execCommand,
+    });
+    renderNotebook();
+
+    await user.click(screen.getByRole("button", { name: "New quick note" }));
+    await user.click(screen.getByRole("menuitem", { name: "Text" }));
+    await user.click(screen.getByRole("button", { name: "Table" }));
+
+    expect(screen.getByRole("dialog", { name: "Table size" })).toHaveAttribute(
+      "data-notebook-table-layer",
+      "top",
+    );
+    await user.click(screen.getByRole("button", { name: "2 x 2" }));
+
+    expect(execCommand).toHaveBeenCalledWith(
+      "insertHTML",
+      false,
+      expect.stringContaining("border:1px solid"),
+    );
+  });
+
+  it("keeps list markers inside the rich text body area", async () => {
+    const user = userEvent.setup();
+    renderNotebook();
+
+    await user.click(screen.getByRole("button", { name: "New quick note" }));
+    await user.click(screen.getByRole("menuitem", { name: "Text" }));
+
+    const body = screen.getByRole("textbox", { name: "Quick note content" });
+    expect(body).toHaveStyle({
+      padding: "12px 12px 12px 28px",
+    });
+  });
+
+  it("does not prevent markdown clipboard and undo keyboard shortcuts", async () => {
+    const user = userEvent.setup();
+    renderNotebook();
+
+    await user.click(screen.getByRole("button", { name: "New quick note" }));
+    await user.click(screen.getByRole("menuitem", { name: "Markdown" }));
+    const body = screen.getByRole("textbox", { name: "Quick note content" });
+
+    for (const key of ["c", "v", "x", "z"]) {
+      const cancelled = !fireEvent.keyDown(body, { key, metaKey: true });
+      expect(cancelled).toBe(false);
+    }
+  });
+
+  it("persists manual quick note ordering after drag and drop", async () => {
+    const user = userEvent.setup();
+    renderNotebook();
+
+    await user.click(screen.getByRole("button", { name: "New quick note" }));
+    await user.click(screen.getByRole("menuitem", { name: "Markdown" }));
+    await user.type(screen.getByRole("textbox", { name: "Quick note name" }), "First");
+    await user.click(screen.getByRole("button", { name: "New quick note" }));
+    await user.click(screen.getByRole("menuitem", { name: "Markdown" }));
+    await user.type(screen.getByRole("textbox", { name: "Quick note name" }), "Second");
+
+    const first = screen.getByRole("button", { name: "First" });
+    const second = screen.getByRole("button", { name: "Second" });
+    fireEvent.dragStart(first);
+    fireEvent.dragOver(second);
+    fireEvent.drop(second);
+
+    const stored = JSON.parse(localStorage.getItem("aeroric:notebook:v1") ?? "[]") as Array<{
+      title: string;
+    }>;
+    expect(stored.map((note) => note.title)).toEqual(["First", "Second"]);
   });
 });

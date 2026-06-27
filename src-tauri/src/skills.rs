@@ -545,6 +545,7 @@ pub async fn set_skill_hub_path(path: String) -> Result<SetHubResult, String> {
                     location: None,
                     branch: None,
                     last_opened_at: now_ms(),
+                    order_index: None,
                     hidden_from_rail: false,
                 };
                 projects.push(new_project.clone());

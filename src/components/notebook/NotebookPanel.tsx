@@ -19,6 +19,11 @@ import {
   Underline,
 } from "lucide-react";
 import { useI18n } from "../../i18n";
+import {
+  escapeHtml,
+  highlightCodeInnerHtml,
+  NOTEBOOK_CODE_LANGUAGE_OPTIONS,
+} from "../../syntaxHighlight";
 
 type NotebookFormat = "markdown" | "richtext";
 
@@ -79,23 +84,6 @@ function normalizeFormat(value: unknown): NotebookFormat {
   return value === "richtext" || value === "txt" ? "richtext" : "markdown";
 }
 
-function escapeHtml(text: string): string {
-  return text.replace(/[&<>"']/g, (char) => {
-    switch (char) {
-      case "&":
-        return "&amp;";
-      case "<":
-        return "&lt;";
-      case ">":
-        return "&gt;";
-      case '"':
-        return "&quot;";
-      default:
-        return "&#39;";
-    }
-  });
-}
-
 function plainTextToRichTextHtml(text: string): string {
   const lines = text.split(/\r?\n/);
   return lines.map((line) => `<p>${escapeHtml(line) || "<br>"}</p>`).join("");
@@ -120,8 +108,7 @@ function loadNotes(): NotebookNote[] {
           format: normalizeFormat(item.format),
           updatedAt: typeof item.updatedAt === "number" ? item.updatedAt : 0,
         };
-      })
-      .sort((a, b) => b.updatedAt - a.updatedAt);
+      });
   } catch {
     return [];
   }
@@ -274,6 +261,8 @@ export function NotebookPanel({ width = "100%" }: { width?: number | string }) {
   const [contextMenu, setContextMenu] = useState<NotebookContextMenuState | null>(null);
   const [tablePickerOpen, setTablePickerOpen] = useState(false);
   const [tableHoverSize, setTableHoverSize] = useState({ rows: 2, cols: 2 });
+  const [draggedNoteId, setDraggedNoteId] = useState<string | null>(null);
+  const [dragOverNoteId, setDragOverNoteId] = useState<string | null>(null);
   const activeNote = notes.find((note) => note.id === activeId) ?? notes[0] ?? null;
   const markdownHtml = useMemo(() => renderMarkdown(activeNote?.body ?? ""), [activeNote?.body]);
   const richTextHtml = useMemo(() => renderRichText(activeNote?.body ?? ""), [activeNote?.body]);
@@ -352,9 +341,7 @@ export function NotebookPanel({ width = "100%" }: { width?: number | string }) {
     if (!activeNote) return;
     const updatedAt = Date.now();
     setNotes((current) =>
-      current
-        .map((note) => (note.id === activeNote.id ? { ...note, ...patch, updatedAt } : note))
-        .sort((a, b) => b.updatedAt - a.updatedAt),
+      current.map((note) => (note.id === activeNote.id ? { ...note, ...patch, updatedAt } : note)),
     );
   };
 
@@ -363,9 +350,7 @@ export function NotebookPanel({ width = "100%" }: { width?: number | string }) {
     if (!nextTitle) return;
     const updatedAt = Date.now();
     setNotes((current) =>
-      current
-        .map((note) => (note.id === noteId ? { ...note, title: nextTitle, updatedAt } : note))
-        .sort((a, b) => b.updatedAt - a.updatedAt),
+      current.map((note) => (note.id === noteId ? { ...note, title: nextTitle, updatedAt } : note)),
     );
   };
 
@@ -407,6 +392,20 @@ export function NotebookPanel({ width = "100%" }: { width?: number | string }) {
   const deleteActiveNote = () => {
     if (!activeNote) return;
     setNotes((current) => current.filter((note) => note.id !== activeNote.id));
+  };
+
+  const reorderNote = (draggedId: string, targetId: string) => {
+    if (draggedId === targetId) return;
+    setNotes((current) => {
+      const from = current.findIndex((note) => note.id === draggedId);
+      const to = current.findIndex((note) => note.id === targetId);
+      if (from < 0 || to < 0) return current;
+      const moving = current[from];
+      const next = current.filter((note) => note.id !== draggedId);
+      const targetIndex = next.findIndex((note) => note.id === targetId);
+      next.splice(from < to ? targetIndex + 1 : targetIndex, 0, moving);
+      return next;
+    });
   };
 
   const readRichTextCommandState = () => {
@@ -571,18 +570,42 @@ export function NotebookPanel({ width = "100%" }: { width?: number | string }) {
   };
 
   const applyRichCodeBlock = () => {
-    runRichTextCommand("insertHTML", "<pre><code>Code</code></pre>");
+    if (!hasRichTextSelection) return;
+    const selected = savedRichTextRangeRef.current?.toString() || "";
+    const highlighted = escapeHtml(selected);
+    const options = NOTEBOOK_CODE_LANGUAGE_OPTIONS
+      .map(([value, label]) => `<option value="${value}">${label}</option>`)
+      .join("");
+    const html = `<pre data-notebook-code-block="true" style="position:relative;margin:8px 0;padding:30px 10px 10px;border:1px solid var(--border-dim);border-radius:8px;background:var(--bg-subtle);font-family:var(--font-mono);white-space:pre-wrap"><select data-notebook-code-language="true" contenteditable="false" style="position:absolute;right:6px;top:5px;height:22px;border:1px solid var(--border-medium);border-radius:5px;background:var(--bg-card);color:var(--text-secondary);font-size:11px">${options}</select><code data-language="text">${highlighted}</code></pre>`;
+    runRichTextCommand("insertHTML", html);
+  };
+
+  const updateRichCodeLanguage = async (select: HTMLSelectElement) => {
+    const block = select.closest("[data-notebook-code-block]");
+    const code = block?.querySelector("code[data-language]");
+    if (!(code instanceof HTMLElement)) return;
+    const language = select.value;
+    const source = code.textContent ?? "";
+    code.dataset.language = language;
+    code.innerHTML = await highlightCodeInnerHtml(source, language);
+    updateRichTextFromDom();
   };
 
   const richTableHtml = (rows: number, cols: number) => {
-    const header = Array.from({ length: cols }, (_, index) => `<th>Column ${index + 1}</th>`).join(
-      "",
-    );
+    const cellBorder = "border:1px solid var(--border-medium);padding:4px 6px";
+    const header = Array.from(
+      { length: cols },
+      (_, index) => `<th style="${cellBorder};font-weight:700">Column ${index + 1}</th>`,
+    ).join("");
     const body = Array.from(
       { length: rows },
-      () => `<tr>${Array.from({ length: cols }, () => "<td><br></td>").join("")}</tr>`,
+      () =>
+        `<tr>${Array.from(
+          { length: cols },
+          () => `<td style="${cellBorder}"><br></td>`,
+        ).join("")}</tr>`,
     ).join("");
-    return `<table><thead><tr>${header}</tr></thead><tbody>${body}</tbody></table>`;
+    return `<table style="border-collapse:collapse;width:100%;border:1px solid var(--border-medium)"><thead><tr>${header}</tr></thead><tbody>${body}</tbody></table>`;
   };
 
   const applyRichTable = (rows = 2, cols = 2) => {
@@ -849,13 +872,47 @@ export function NotebookPanel({ width = "100%" }: { width?: number | string }) {
                   type="button"
                   key={note.id}
                   title={note.title}
+                  draggable
+                  onDragStart={(event) => {
+                    setDraggedNoteId(note.id);
+                    if (event.dataTransfer) {
+                      event.dataTransfer.effectAllowed = "move";
+                      event.dataTransfer.setData("text/plain", note.id);
+                    }
+                  }}
+                  onDragOver={(event) => {
+                    if (!draggedNoteId || draggedNoteId === note.id) return;
+                    event.preventDefault();
+                    if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
+                    setDragOverNoteId(note.id);
+                  }}
+                  onDragLeave={() =>
+                    setDragOverNoteId((current) => (current === note.id ? null : current))
+                  }
+                  onDrop={(event) => {
+                    event.preventDefault();
+                    const draggedId =
+                      draggedNoteId || event.dataTransfer?.getData("text/plain") || "";
+                    reorderNote(draggedId, note.id);
+                    setDraggedNoteId(null);
+                    setDragOverNoteId(null);
+                  }}
+                  onDragEnd={() => {
+                    setDraggedNoteId(null);
+                    setDragOverNoteId(null);
+                  }}
                   onClick={() => setActiveId(note.id)}
                   onDoubleClick={() => startRenameNote(note)}
                   style={{
                     minHeight: 30,
                     border: "1px solid transparent",
                     borderRadius: 6,
-                    background: note.id === activeNote?.id ? "var(--bg-selected)" : "transparent",
+                    background:
+                      dragOverNoteId === note.id
+                        ? "var(--bg-hover)"
+                        : note.id === activeNote?.id
+                          ? "var(--bg-selected)"
+                          : "transparent",
                     color: "var(--text-primary)",
                     textAlign: "left",
                     padding: "5px 7px",
@@ -864,6 +921,10 @@ export function NotebookPanel({ width = "100%" }: { width?: number | string }) {
                     textOverflow: "ellipsis",
                     whiteSpace: "nowrap",
                     fontSize: 12,
+                    fontWeight: 700,
+                    opacity: draggedNoteId === note.id ? 0.55 : 1,
+                    transform: dragOverNoteId === note.id ? "translateY(1px)" : "none",
+                    transition: "background 0.14s ease, opacity 0.14s ease, transform 0.14s ease",
                   }}
                 >
                   {note.title || t("notebook.untitled")}
@@ -1099,11 +1160,12 @@ export function NotebookPanel({ width = "100%" }: { width?: number | string }) {
                     <div
                       role="dialog"
                       aria-label={t("notebook.tableSize")}
+                      data-notebook-table-layer="top"
                       style={{
-                        position: "absolute",
-                        top: 30,
-                        right: 0,
-                        zIndex: 20,
+                        position: "fixed",
+                        top: 76,
+                        right: 72,
+                        zIndex: 1000,
                         width: 168,
                         padding: 8,
                         border: "1px solid var(--border-dim)",
@@ -1211,6 +1273,15 @@ export function NotebookPanel({ width = "100%" }: { width?: number | string }) {
                   });
                   readRichTextCommandState();
                 }}
+                onChange={(event) => {
+                  const target = event.target;
+                  if (
+                    target instanceof HTMLSelectElement &&
+                    target.matches("[data-notebook-code-language]")
+                  ) {
+                    updateRichCodeLanguage(target);
+                  }
+                }}
                 onFocus={readRichTextCommandState}
                 onKeyUp={() => {
                   saveRichTextSelection();
@@ -1241,7 +1312,7 @@ export function NotebookPanel({ width = "100%" }: { width?: number | string }) {
                   outline: "none",
                   background: "var(--bg-panel)",
                   color: "var(--text-primary)",
-                  padding: 12,
+                  padding: "12px 12px 12px 28px",
                   fontFamily: "var(--font-ui)",
                   fontSize: 12.5,
                   lineHeight: 1.6,
@@ -1261,6 +1332,7 @@ export function NotebookPanel({ width = "100%" }: { width?: number | string }) {
                   minHeight: 0,
                   overflow: "auto",
                   padding: 14,
+                  paddingLeft: 28,
                   color: "var(--text-primary)",
                   fontFamily: "var(--font-ui)",
                   fontSize: 12.5,

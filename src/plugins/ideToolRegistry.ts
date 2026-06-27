@@ -120,6 +120,8 @@ export const IDE_TOOL_REGISTRY = [
   },
 ] as const satisfies readonly IdeToolMetadata[];
 
+const PROJECT_TOP_RIGHT_TOOL_IDS = new Set(["problems", "tests", "debug", "run", "preview"]);
+
 function sortIdeTools<T extends IdeToolMetadata>(tools: readonly T[]): T[] {
   return [...tools].sort(
     (a, b) => a.order - b.order || a.titleKey.localeCompare(b.titleKey) || a.id.localeCompare(b.id),
@@ -138,6 +140,16 @@ export function getToolbarIdeTools(availability: IdeToolAvailability): IdeToolWi
     ...tool,
     disabled: isIdeToolDisabled(tool, availability),
   }));
+}
+
+export function getRightRailIdeTools(availability: IdeToolAvailability): IdeToolWithAvailability[] {
+  return getToolbarIdeTools(availability).filter((tool) => !PROJECT_TOP_RIGHT_TOOL_IDS.has(tool.id));
+}
+
+export function getProjectTopRightIdeTools(
+  availability: IdeToolAvailability,
+): IdeToolWithAvailability[] {
+  return getToolbarIdeTools(availability).filter((tool) => PROJECT_TOP_RIGHT_TOOL_IDS.has(tool.id));
 }
 
 export function getCommandPaletteIdeTools(availability: IdeToolAvailability): IdeToolMetadata[] {

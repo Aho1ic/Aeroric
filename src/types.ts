@@ -5,6 +5,7 @@ export interface Project {
   location?: ProjectLocation;
   branch?: string;
   lastOpenedAt: number;
+  orderIndex?: number;
   /** 为 true 时不在左侧常驻竖条显示，仅可从首页或「展开全部」抽屉访问。缺省=常驻。 */
   hiddenFromRail?: boolean;
 }

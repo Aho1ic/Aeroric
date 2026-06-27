@@ -28,7 +28,8 @@ import { CommandPalette, type CommandPaletteCommand } from "./command-palette/Co
 import { extractRunPreviewCandidates } from "./preview/portPanelState";
 import { ProjectRail } from "./ProjectRail";
 import { SettingsDialog } from "./SettingsDialog";
-import { RightToolbar } from "./RightToolbar";
+import { renderIdeToolIcon, RightToolbar } from "./RightToolbar";
+import { IconButton } from "./IconButton";
 import { TodoTaskView } from "./TodoTaskView";
 import {
   deriveShellTerminalFontSize,
@@ -59,7 +60,11 @@ import { buildRunnableFileCommand, selectRunnableCondaEnvironment } from "./file
 import { isSqliteDatabaseFileName } from "./file-explorer/fileEntryUtils";
 import { agentDisplayLabel } from "../agents";
 import { useI18n } from "../i18n";
-import { getCommandPaletteIdeTools, type IdeToolAvailability } from "../plugins/ideToolRegistry";
+import {
+  getCommandPaletteIdeTools,
+  getProjectTopRightIdeTools,
+  type IdeToolAvailability,
+} from "../plugins/ideToolRegistry";
 import {
   debugBreakpointFileForProject,
   toggleLineDebugBreakpoint,
@@ -182,6 +187,7 @@ export function ProjectPage({
   onSnapshot,
   onBack,
   onSwitchProject,
+  onReorderProjects,
   onOpen,
   themeVariant,
   onToggleTheme,
@@ -243,6 +249,7 @@ export function ProjectPage({
   onSnapshot: (taskId: string, snapshot: string) => void;
   onBack: () => void;
   onSwitchProject: (project: Project) => void;
+  onReorderProjects: (orderedProjectIds: string[]) => void;
   onOpen: () => void;
   themeVariant: ThemeVariant;
   themeMode: ThemeMode;
@@ -743,6 +750,10 @@ export function ProjectPage({
       })),
     [ideToolAvailability, openRightPanel, t],
   );
+  const topRightIdeTools = useMemo(
+    () => getProjectTopRightIdeTools(ideToolAvailability),
+    [ideToolAvailability],
+  );
 
   const commandPaletteCommands = useMemo<CommandPaletteCommand[]>(
     () => [
@@ -911,6 +922,7 @@ export function ProjectPage({
         themeVariant={themeVariant}
         onToggleTheme={onToggleTheme}
         onSwitch={onSwitchProject}
+        onReorderProjects={onReorderProjects}
         onOpen={onOpen}
         onBack={hubMode ? (onExitSkillHub ?? onBack) : onBack}
         onNewTask={handleNewTask}
@@ -994,6 +1006,39 @@ export function ProjectPage({
             background: "var(--bg-panel)",
           }}
         >
+          {topRightIdeTools.length > 0 && (
+            <div
+              role="toolbar"
+              aria-label="Run and debug tools"
+              style={{
+                position: "absolute",
+                top: 8,
+                right: 10,
+                zIndex: 9,
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 3,
+                padding: 3,
+                border: "1px solid var(--border-dim)",
+                borderRadius: 8,
+                background: "color-mix(in srgb, var(--bg-sidebar) 92%, transparent)",
+                boxShadow: "var(--shadow-sm)",
+              }}
+            >
+              {topRightIdeTools.map((tool) => (
+                <IconButton
+                  key={tool.id}
+                  icon={renderIdeToolIcon(tool.icon, 15)}
+                  title={t(tool.titleKey)}
+                  active={rightPanel === tool.panel}
+                  activeVariant="icon"
+                  disabled={tool.disabled}
+                  size={30}
+                  onClick={() => handleToggleRightPanel(tool.panel)}
+                />
+              ))}
+            </div>
+          )}
           {/* Foreground: SFTP, file viewer, diff, SSH shell, or new-task composer */}
           <div
             style={{

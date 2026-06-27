@@ -2197,7 +2197,10 @@ describe("DatabaseView connection flow", () => {
       table: "users",
     });
     await user.click(ddlTab);
-    expect(await screen.findByText("CREATE TABLE public.users (id integer);")).toBeInTheDocument();
+    const ddlPreview = await screen.findByTestId("database-ddl-highlight");
+    expect(ddlPreview).toHaveTextContent("CREATE TABLE public.users (id integer);");
+    expect(within(ddlPreview).getByText("CREATE")).toHaveAttribute("data-sql-token", "keyword");
+    expect(within(ddlPreview).getByText("TABLE")).toHaveAttribute("data-sql-token", "keyword");
     expect(screen.getByRole("button", { name: "View DDL" })).toBeInTheDocument();
     expect(invoke).toHaveBeenCalledWith("dbx_get_columns", {
       connectionId: "dbx-source",

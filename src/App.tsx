@@ -41,6 +41,7 @@ import { useTerminalManager } from "./hooks/useTerminalManager";
 import { useWorktreeDiffStats } from "./hooks/useWorktreeDiffStats";
 import { useI18n } from "./i18n";
 import { createProjectTaskPersister } from "./taskPersistence";
+import { applyProjectOrder, normalizeProjectOrder, sortProjectsForRail } from "./projectOrder";
 import s from "./styles";
 import "./App.css";
 
@@ -422,7 +423,9 @@ function App() {
       // Load projects from ~/.aeroric/projects.json
       const loadedProjects = await invoke<Project[]>("load_projects");
       const loadedSshConnections = await invoke<SshConnection[]>("load_ssh_connections");
-      const normalizedProjects = normalizeSshProjectNames(loadedProjects, loadedSshConnections);
+      const normalizedProjects = normalizeProjectOrder(
+        normalizeSshProjectNames(loadedProjects, loadedSshConnections),
+      );
       setProjects(normalizedProjects);
       setSshConnections(loadedSshConnections);
       if (normalizedProjects !== loadedProjects) {
@@ -457,7 +460,7 @@ function App() {
         prev.forEach((p) => {
           if (!byId.has(p.id)) byId.set(p.id, p);
         });
-        return Array.from(byId.values());
+        return normalizeProjectOrder(Array.from(byId.values()));
       });
     };
 
@@ -526,9 +529,17 @@ function App() {
     const existing = projects.find((p) => p.path === path);
     const project: Project = existing
       ? { ...existing, lastOpenedAt: Date.now() }
-      : { id: `${Date.now()}`, name: deriveProjectName(path), path, lastOpenedAt: Date.now() };
+      : {
+          id: `${Date.now()}`,
+          name: deriveProjectName(path),
+          path,
+          lastOpenedAt: Date.now(),
+          orderIndex: 0,
+        };
     setProjects((prev) => {
-      const next = [project, ...prev.filter((p) => p.path !== path)];
+      const next = existing
+        ? prev.map((p) => (p.path === path ? project : p))
+        : normalizeProjectOrder([project, ...prev]).map((p, index) => ({ ...p, orderIndex: index }));
       persistProjects(next, showToast, formatSaveProjectsError);
       return next;
     });
@@ -560,10 +571,13 @@ function App() {
           path,
           location: { kind: "ssh", connectionId: input.connectionId, remotePath },
           lastOpenedAt: now,
+          orderIndex: 0,
         };
 
     setProjects((prev) => {
-      const next = [project, ...prev.filter((p) => p.id !== project.id)];
+      const next = existing
+        ? prev.map((p) => (p.id === project.id ? project : p))
+        : normalizeProjectOrder([project, ...prev]).map((p, index) => ({ ...p, orderIndex: index }));
       persistProjects(next, showToast, formatSaveProjectsError);
       return next;
     });
@@ -1276,7 +1290,7 @@ function App() {
     [projects],
   );
   const railProjects = useMemo(
-    () => [...projects].sort((a, b) => Number(a.id) - Number(b.id)),
+    () => sortProjectsForRail(projects),
     [projects],
   );
   const mountedProjects = useMemo(
@@ -1309,6 +1323,17 @@ function App() {
       showToast(t("toast.initProjectConfigFailed", { error: String(e) }), "warning");
     });
   }, [hubProjectId, projects, mountProject, showToast, formatSaveProjectsError, t]);
+
+  const handleReorderProjects = useCallback(
+    (orderedProjectIds: string[]) => {
+      setProjects((prev) => {
+        const next = applyProjectOrder(prev, orderedProjectIds);
+        persistProjects(next, showToast, formatSaveProjectsError);
+        return next;
+      });
+    },
+    [formatSaveProjectsError, showToast],
+  );
 
   const handleExitSkillHub = useCallback(() => {
     setHubMode(false);
@@ -1375,6 +1400,7 @@ function App() {
                 onSnapshot={tm.handleSnapshot}
                 onBack={handleBack}
                 onSwitchProject={handleProjectClick}
+                onReorderProjects={handleReorderProjects}
                 onOpen={handleOpen}
                 themeVariant={themeVariant}
                 themeMode={themeMode}

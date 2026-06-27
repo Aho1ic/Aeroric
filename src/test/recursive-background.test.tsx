@@ -53,6 +53,7 @@ vi.mock("../components/ProjectRail", () => ({
 }));
 
 vi.mock("../components/RightToolbar", () => ({
+  renderIdeToolIcon: () => <span />,
   RightToolbar: () => <aside>toolbar</aside>,
 }));
 
@@ -103,6 +104,7 @@ function projectPageProps(): React.ComponentProps<typeof ProjectPage> {
     onSnapshot: vi.fn(),
     onBack: vi.fn(),
     onSwitchProject: vi.fn(),
+    onReorderProjects: vi.fn(),
     onOpen: vi.fn(),
     themeVariant: "light",
     themeMode: "light",

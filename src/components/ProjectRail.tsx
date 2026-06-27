@@ -366,6 +366,7 @@ export function ProjectRail({
   onDeleteTask,
   onToggleTaskStar,
   onRunTodo,
+  onReorderProjects,
   themeVariant,
   onToggleTheme,
   singleProjectMode = false,
@@ -385,6 +386,7 @@ export function ProjectRail({
   onDeleteTask: (id: string) => void;
   onToggleTaskStar: (id: string) => void;
   onRunTodo: (task: Task) => void;
+  onReorderProjects?: (orderedProjectIds: string[]) => void;
   themeVariant: ThemeVariant;
   onToggleTheme: () => void;
   singleProjectMode?: boolean;
@@ -395,6 +397,8 @@ export function ProjectRail({
   const [homeHov, setHomeHov] = useState(false);
   const [themeHov, setThemeHov] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
+  const [draggedProjectId, setDraggedProjectId] = useState<string | null>(null);
+  const [dragOverProjectId, setDragOverProjectId] = useState<string | null>(null);
   const isDark = themeVariant === "dark";
   const effectiveCollapsed = forceCollapsed || collapsed;
   const [expandedProjectIds, setExpandedProjectIds] = useState<Set<string>>(() =>
@@ -405,6 +409,18 @@ export function ProjectRail({
     () => buildProjectTaskGroups(projects, allTasks),
     [projects, allTasks],
   );
+
+  const reorderProjectIds = (draggedId: string, targetId: string) => {
+    if (draggedId === targetId) return;
+    const ids = projectGroups.map((group) => group.project.id);
+    const from = ids.indexOf(draggedId);
+    const to = ids.indexOf(targetId);
+    if (from < 0 || to < 0) return;
+    const next = ids.filter((id) => id !== draggedId);
+    const targetIndex = next.indexOf(targetId);
+    next.splice(from < to ? targetIndex + 1 : targetIndex, 0, draggedId);
+    onReorderProjects?.(next);
+  };
 
   useEffect(() => {
     setExpandedProjectIds((prev) => {
@@ -653,7 +669,15 @@ export function ProjectRail({
                   minHeight: 38,
                   padding: "4px 4px",
                   borderRadius: 8,
-                  background: isActive ? "var(--accent-subtle)" : "transparent",
+                  background:
+                    dragOverProjectId === project.id
+                      ? "var(--bg-hover)"
+                      : isActive
+                        ? "var(--accent-subtle)"
+                        : "transparent",
+                  opacity: draggedProjectId === project.id ? 0.55 : 1,
+                  transform: dragOverProjectId === project.id ? "translateY(1px)" : "none",
+                  transition: "background 0.14s ease, opacity 0.14s ease, transform 0.14s ease",
                 }}
               >
                 <button
@@ -684,6 +708,37 @@ export function ProjectRail({
                 </button>
                 <button
                   type="button"
+                  aria-label={project.name}
+                  draggable={Boolean(onReorderProjects)}
+                  onDragStart={(event) => {
+                    if (!onReorderProjects) return;
+                    setDraggedProjectId(project.id);
+                    if (event.dataTransfer) {
+                      event.dataTransfer.effectAllowed = "move";
+                      event.dataTransfer.setData("text/plain", project.id);
+                    }
+                  }}
+                  onDragOver={(event) => {
+                    if (!draggedProjectId || draggedProjectId === project.id) return;
+                    event.preventDefault();
+                    if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
+                    setDragOverProjectId(project.id);
+                  }}
+                  onDragLeave={() => {
+                    setDragOverProjectId((current) => (current === project.id ? null : current));
+                  }}
+                  onDrop={(event) => {
+                    event.preventDefault();
+                    const draggedId =
+                      draggedProjectId || event.dataTransfer?.getData("text/plain") || "";
+                    reorderProjectIds(draggedId, project.id);
+                    setDraggedProjectId(null);
+                    setDragOverProjectId(null);
+                  }}
+                  onDragEnd={() => {
+                    setDraggedProjectId(null);
+                    setDragOverProjectId(null);
+                  }}
                   onClick={() => onSwitch(project)}
                   style={{
                     flex: 1,

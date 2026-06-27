@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import React from "react";
 import { describe, expect, it, vi } from "vitest";
@@ -163,6 +163,7 @@ function projectPageProps(
     onSnapshot: vi.fn(),
     onBack: vi.fn(),
     onSwitchProject: vi.fn(),
+    onReorderProjects: vi.fn(),
     onOpen: vi.fn(),
     themeVariant: "light",
     themeMode: "light",
@@ -246,11 +247,6 @@ describe("ProjectPage right toolbar", () => {
       "Git Changes",
       "Git History",
       "Git Advanced",
-      "Problems",
-      "Test Explorer",
-      "Debug",
-      "Run Configurations",
-      "Web Preview",
       "SSH",
       "SFTP",
       "Database",
@@ -263,6 +259,26 @@ describe("ProjectPage right toolbar", () => {
       expect(screen.getByTitle(title)).toHaveStyle({
         width: "36px",
         height: "36px",
+      });
+    }
+
+    for (const title of ["Problems", "Test Explorer", "Debug", "Run Configurations", "Web Preview"]) {
+      expect(screen.queryByTitle(title)).not.toBeInTheDocument();
+    }
+  });
+
+  it("renders run and debug tools in the project top-right toolbar", () => {
+    render(
+      <I18nProvider>
+        <ProjectPage {...projectPageProps()} />
+      </I18nProvider>,
+    );
+
+    const toolbar = screen.getByRole("toolbar", { name: "Run and debug tools" });
+    for (const title of ["Problems", "Test Explorer", "Debug", "Run Configurations", "Web Preview"]) {
+      expect(within(toolbar).getByTitle(title)).toHaveStyle({
+        width: "30px",
+        height: "30px",
       });
     }
   });
