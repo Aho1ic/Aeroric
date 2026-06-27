@@ -645,7 +645,7 @@ export function DatabaseSidebarTree({
   useEffect(() => {
     if (!activeDbxObject) return;
     const objectNodeKey = dbxObjectNodeKey(activeDbxObject);
-    setExpandedObjectNodeKeys((current) => new Set(current).add(objectNodeKey));
+    setExpandedObjectNodeKeys(new Set([objectNodeKey]));
     setCollapsedObjectNodeKeys((current) => {
       if (!current.has(objectNodeKey)) return current;
       const next = new Set(current);
@@ -1196,12 +1196,7 @@ export function DatabaseSidebarTree({
   };
 
   const toggleObjectNode = (objectNodeKey: string, currentlyExpanded: boolean) => {
-    setExpandedObjectNodeKeys((current) => {
-      const next = new Set(current);
-      if (currentlyExpanded) next.delete(objectNodeKey);
-      else next.add(objectNodeKey);
-      return next;
-    });
+    setExpandedObjectNodeKeys(currentlyExpanded ? new Set() : new Set([objectNodeKey]));
     setCollapsedObjectNodeKeys((current) => {
       const next = new Set(current);
       if (currentlyExpanded) next.add(objectNodeKey);
@@ -1264,7 +1259,7 @@ export function DatabaseSidebarTree({
       return;
     }
 
-    setSelectedTreeNodeKeys(new Set([nodeKey]));
+    setSelectedTreeNodeKeys(new Set());
     setSelectionAnchorKey(nodeKey);
     activate();
   };

@@ -286,7 +286,7 @@ describe("DatabaseSidebarTree", () => {
     expect(screen.getByText("users_email_idx").closest("button")).toBeInTheDocument();
   });
 
-  it("keeps previously expanded DBX table child rows visible when another table expands", async () => {
+  it("auto-collapses the previously expanded DBX table when another table expands", async () => {
     renderTree({
       activeDbxObject: null,
       dbxObjects: [usersObject, ordersObject],
@@ -305,12 +305,12 @@ describe("DatabaseSidebarTree", () => {
     expect(screen.queryByText("total")).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Expand orders" }));
-    expect(screen.getByText("email").closest("button")).toBeInTheDocument();
-    expect(screen.getByText("total").closest("button")).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole("button", { name: "Collapse users" }));
     expect(screen.queryByText("email")).not.toBeInTheDocument();
     expect(screen.getByText("total").closest("button")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Collapse orders" }));
+    expect(screen.queryByText("email")).not.toBeInTheDocument();
+    expect(screen.queryByText("total")).not.toBeInTheDocument();
   });
 
   it("fires context menu callbacks for object, column, table child object, schema, database, and group nodes", async () => {
@@ -400,16 +400,16 @@ describe("DatabaseSidebarTree", () => {
     const viewButton = screen.getByRole("button", { name: /^active_users\s+VIEW$/i });
 
     fireEvent.click(usersButton);
-    expect(usersButton).toHaveAttribute("data-selected", "true");
+    expect(usersButton).not.toHaveAttribute("data-selected");
     expect(props.onSelectDbxObject).toHaveBeenCalledWith(usersObject);
 
     fireEvent.click(viewButton, { metaKey: true });
-    expect(usersButton).toHaveAttribute("data-selected", "true");
+    expect(usersButton).not.toHaveAttribute("data-selected");
     expect(viewButton).toHaveAttribute("data-selected", "true");
     expect(props.onSelectDbxObject).not.toHaveBeenCalledWith(activeUsersView);
 
     fireEvent.click(usersButton, { ctrlKey: true });
-    expect(usersButton).not.toHaveAttribute("data-selected");
+    expect(usersButton).toHaveAttribute("data-selected", "true");
     expect(viewButton).toHaveAttribute("data-selected", "true");
   });
 

@@ -53,6 +53,26 @@ describe("NotebookPanel", () => {
     expect(document.querySelector(".notebook-markdown-preview script")).toBeNull();
   });
 
+  it("renames a note in place from the note list on double click", async () => {
+    const user = userEvent.setup();
+    renderNotebook();
+
+    await user.click(screen.getByRole("button", { name: "New quick note" }));
+    await user.click(screen.getByRole("menuitem", { name: "Markdown" }));
+    await user.type(screen.getByRole("textbox", { name: "Quick note name" }), "Draft note");
+
+    await user.dblClick(screen.getByRole("button", { name: "Draft note" }));
+    const listTitleInput = screen.getByRole("textbox", { name: "Rename quick note" });
+    expect(listTitleInput).toHaveValue("Draft note");
+
+    await user.clear(listTitleInput);
+    await user.type(listTitleInput, "Renamed note");
+    fireEvent.keyDown(listTitleInput, { key: "Enter" });
+
+    expect(screen.getByRole("button", { name: "Renamed note" })).toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: "Quick note name" })).toHaveValue("Renamed note");
+  });
+
   it("creates rich text notes from the plus popover with enter", async () => {
     const user = userEvent.setup();
     renderNotebook();
@@ -359,7 +379,7 @@ describe("NotebookPanel", () => {
     expect(screen.getByRole("button", { name: "Italic" })).toHaveAttribute("aria-pressed", "false");
   });
 
-  it("inserts a rich text table from a hoverable size grid", async () => {
+  it("inserts a rich text table from a hoverable size grid without requiring a selection", async () => {
     const user = userEvent.setup();
     const execCommand = vi.fn(() => true);
     Object.defineProperty(document, "execCommand", {
@@ -371,9 +391,6 @@ describe("NotebookPanel", () => {
     await user.click(screen.getByRole("button", { name: "New quick note" }));
     await user.click(screen.getByRole("menuitem", { name: "Text" }));
     await user.type(screen.getByRole("textbox", { name: "Quick note name" }), "Table note");
-    const body = screen.getByRole("textbox", { name: "Quick note content" });
-    await user.type(body, "selected");
-    selectElementContents(body);
 
     await user.click(screen.getByRole("button", { name: "Table" }));
     const sizeCell = screen.getByRole("button", { name: "3 x 4" });
@@ -392,9 +409,10 @@ describe("NotebookPanel", () => {
       false,
       expect.stringContaining("<td><br></td>"),
     );
+    expect(execCommand).toHaveBeenCalledTimes(1);
   });
 
-  it("requires selected text before enabling notebook formatting tools", async () => {
+  it("keeps markdown formatting tools clickable without a selection but leaves content unchanged", async () => {
     const user = userEvent.setup();
     renderNotebook();
 
@@ -406,8 +424,10 @@ describe("NotebookPanel", () => {
     await user.type(body, "selected");
     selectTextareaRange(body, body.value.length, body.value.length);
 
-    expect(screen.getByRole("button", { name: "Bold" })).toBeDisabled();
-    expect(screen.getByLabelText("Text color")).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Bold" })).not.toBeDisabled();
+    expect(screen.getByLabelText("Text color")).not.toBeDisabled();
+    await user.click(screen.getByRole("button", { name: "Bold" }));
+    expect(body.value).toBe("selected");
 
     selectTextareaRange(body, 0, body.value.length);
 
@@ -415,9 +435,14 @@ describe("NotebookPanel", () => {
     expect(screen.getByLabelText("Text color")).not.toBeDisabled();
   });
 
-  it("requires selected rich text before enabling toolbar and context formatting", async () => {
+  it("keeps rich text toolbar clickable without a selection but does not run format commands", async () => {
     const user = userEvent.setup();
+    const execCommand = vi.fn(() => true);
     const queryCommandState = vi.fn((command: string) => command === "bold");
+    Object.defineProperty(document, "execCommand", {
+      configurable: true,
+      value: execCommand,
+    });
     Object.defineProperty(document, "queryCommandState", {
       configurable: true,
       value: queryCommandState,
@@ -429,7 +454,10 @@ describe("NotebookPanel", () => {
     const body = screen.getByRole("textbox", { name: "Quick note content" });
     await user.type(body, "selected");
 
-    expect(screen.getByRole("button", { name: "Bold" })).toBeDisabled();
+    const boldButtonBeforeSelection = screen.getByRole("button", { name: "Bold" });
+    expect(boldButtonBeforeSelection).not.toBeDisabled();
+    await user.click(boldButtonBeforeSelection);
+    expect(execCommand).not.toHaveBeenCalled();
 
     selectElementContents(body);
 

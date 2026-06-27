@@ -17,6 +17,7 @@ export type IdeToolIcon =
   | "circle-alert"
   | "flask"
   | "git-branch"
+  | "git-graph"
   | "globe"
   | "play"
   | "search";
@@ -44,7 +45,7 @@ export const IDE_TOOL_REGISTRY = [
     id: "git-advanced",
     panel: "git-advanced",
     titleKey: "gitAdvanced.title",
-    icon: "git-branch",
+    icon: "git-graph",
     commandId: "git-advanced",
     commandKeywords: ["git", "blame", "stash", "conflict", "merge"],
     toolbarGroup: "primary",

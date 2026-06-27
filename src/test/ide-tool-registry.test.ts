@@ -21,6 +21,13 @@ describe("ide tool registry", () => {
     expect(IDE_TOOL_REGISTRY.every((tool) => typeof tool.commandId === "string")).toBe(true);
   });
 
+  it("uses a distinct icon for Git Advanced instead of the Git Changes branch icon", () => {
+    const gitAdvanced = IDE_TOOL_REGISTRY.find((tool) => tool.id === "git-advanced");
+
+    expect(gitAdvanced?.icon as string | undefined).toBe("git-graph");
+    expect(gitAdvanced?.icon as string | undefined).not.toBe("git-branch");
+  });
+
   it("keeps toolbar tools ordered while preserving disabled entries", () => {
     const tools = getToolbarIdeTools({
       gitDisabled: true,

@@ -4,6 +4,7 @@ import {
   Folder,
   Search,
   GitBranch,
+  GitGraph,
   History,
   Settings,
   Server,
@@ -78,6 +79,8 @@ export function RightToolbar({
         return <FlaskConical size={17} />;
       case "git-branch":
         return <GitBranch size={17} />;
+      case "git-graph":
+        return <GitGraph size={17} />;
       case "globe":
         return <Globe size={17} />;
       case "play":

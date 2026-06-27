@@ -191,6 +191,7 @@ pub async fn dbx_query_table_data(
         database_type: db_type,
         schema: schema.clone(),
         table_name: request.table.clone(),
+        table_type: None,
         primary_keys,
         columns: column_names,
         fallback_order_columns: Vec::new(),

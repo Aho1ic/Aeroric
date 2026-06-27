@@ -677,10 +677,6 @@ export const database = {
   databaseTableInfoTab: {
     height: 36,
     border: 0,
-    borderRight: "1px solid var(--border-medium)",
-    borderBottomWidth: 2,
-    borderBottomStyle: "solid" as const,
-    borderBottomColor: "transparent",
     background: "transparent",
     color: "var(--text-secondary)",
     display: "inline-flex",
@@ -694,9 +690,8 @@ export const database = {
     whiteSpace: "nowrap",
   },
   databaseTableInfoTabActive: {
-    background: "var(--bg-panel)",
-    color: "var(--text-primary)",
-    borderBottomColor: "var(--accent)",
+    background: "var(--control-active-bg)",
+    color: "var(--control-active-fg)",
   },
   databaseTableInfoSearch: {
     flexShrink: 0,

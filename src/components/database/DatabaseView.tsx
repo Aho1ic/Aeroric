@@ -15,9 +15,12 @@ import {
   ChevronLeft,
   ChevronRight,
   CheckSquare,
+  Columns3,
   Database,
   FileCode,
   FilePlus,
+  Hash,
+  KeyRound,
   Plus,
   Play,
   Plug,
@@ -39,6 +42,7 @@ import {
   Search,
   Square,
   UsersRound,
+  Zap,
 } from "lucide-react";
 import type {
   AeroricDbConnectionConfig,
@@ -1937,6 +1941,18 @@ export function DatabaseView({
     columnIndex: number;
     column: string;
   } | null>(null);
+  const [dbxPendingCellEdits, setDbxPendingCellEdits] = useState<
+    Record<
+      string,
+      {
+        rowIndex: number;
+        columnIndex: number;
+        column: string;
+        value: string;
+        original: string;
+      }
+    >
+  >({});
   const [dbxHoveredCell, setDbxHoveredCell] = useState<DbxHoveredCell>(null);
   const [dbxRowPreview, setDbxRowPreview] = useState<{ rowIndex: number; row: DatabaseRow } | null>(
     null,
@@ -2171,24 +2187,40 @@ export function DatabaseView({
     setTableInfoDdl("");
     setTableInfoDdlError("");
   }, [selectedDbxInfoObjectKey]);
+  const loadTableInfoDdlForObject = useCallback(
+    async (
+      connection: AeroricDbConnectionConfig,
+      database: string | null,
+      object: DbxObjectInfo,
+    ) => {
+      setTableInfoDdlLoading(true);
+      setTableInfoDdlError("");
+      try {
+        const ddl = await databaseApi.dbxGetTableDdl(
+          connection.id,
+          object.name,
+          database,
+          object.schema ?? null,
+        );
+        setTableInfoDdl(ddl);
+      } catch (err) {
+        setTableInfoDdlError(String(err));
+      } finally {
+        setTableInfoDdlLoading(false);
+      }
+    },
+    [],
+  );
   const loadTableInfoDdl = useCallback(async () => {
     if (!activeDbxConnection || !selectedDbxInfoObject || tableInfoDdlLoading) return;
-    setTableInfoDdlLoading(true);
-    setTableInfoDdlError("");
-    try {
-      const ddl = await databaseApi.dbxGetTableDdl(
-        activeDbxConnection.id,
-        selectedDbxInfoObject.name,
-        activeDbxDatabase,
-        selectedDbxInfoObject.schema ?? null,
-      );
-      setTableInfoDdl(ddl);
-    } catch (err) {
-      setTableInfoDdlError(String(err));
-    } finally {
-      setTableInfoDdlLoading(false);
-    }
-  }, [activeDbxConnection, activeDbxDatabase, selectedDbxInfoObject, tableInfoDdlLoading]);
+    await loadTableInfoDdlForObject(activeDbxConnection, activeDbxDatabase, selectedDbxInfoObject);
+  }, [
+    activeDbxConnection,
+    activeDbxDatabase,
+    loadTableInfoDdlForObject,
+    selectedDbxInfoObject,
+    tableInfoDdlLoading,
+  ]);
   useEffect(() => {
     if (
       tableInfoActiveTab === "ddl" &&
@@ -2202,6 +2234,7 @@ export function DatabaseView({
   const activeSqlCapable = Boolean(
     activeEndpoint || (activeDbxConnection && dbxHasSqlObjectBrowser),
   );
+  const dbxPendingCellEditCount = Object.keys(dbxPendingCellEdits).length;
   const rawTableRows = useMemo(
     () => queryResult?.rows ?? sqlResult?.rows ?? [],
     [queryResult, sqlResult],
@@ -3739,6 +3772,7 @@ export function DatabaseView({
           primaryKeys,
           hasRowId: false,
         });
+        setDbxPendingCellEdits({});
         setDbxGridSelectedRows(new Set());
         setDbxGridWhereInput(normalizedWhereInput);
         setDbxGridOrderByInput(normalizedOrderBy);
@@ -3827,6 +3861,7 @@ export function DatabaseView({
     setDbxGridColumnSearch("");
     setDbxGridHiddenColumns(new Set());
     setDbxGridColumnWidths({});
+    setDbxPendingCellEdits({});
     if (!activeDbxConnection || !activeDbxObject) return;
     await loadDbxObject(activeDbxObject, 1, activeDbxConnection, activeDbxDatabase, "", "");
   }, [activeDbxConnection, activeDbxDatabase, activeDbxObject, loadDbxObject]);
@@ -5439,6 +5474,7 @@ export function DatabaseView({
         );
         setActiveTabId(tabId);
         await loadDbxColumnsForTables([menu.object], connection, menu.database);
+        await loadTableInfoDdlForObject(connection, menu.database, menu.object);
         return;
       }
       if (
@@ -5653,6 +5689,7 @@ export function DatabaseView({
       loadDbxColumnsForTables,
       loadDbxConnection,
       loadDbxObject,
+      loadTableInfoDdlForObject,
       openDbxObjectStructure,
       openDatabaseExportDialog,
       openQueryHistory,
@@ -6897,6 +6934,112 @@ export function DatabaseView({
       t,
     ],
   );
+
+  const stageDbxCellEdit = useCallback(
+    (rowIndex: number, columnIndex: number, column: string, value: string, original: string) => {
+      const key = `${rowIndex}:${columnIndex}`;
+      setDbxPendingCellEdits((current) => {
+        const next = { ...current };
+        if (value === original) delete next[key];
+        else next[key] = { rowIndex, columnIndex, column, value, original };
+        return next;
+      });
+    },
+    [],
+  );
+
+  const saveDbxPendingCellEdits = useCallback(async () => {
+    if (
+      !activeDbxConnection ||
+      !activeDbxObject ||
+      !queryResult ||
+      !activeObject ||
+      activeDbxConnection.readOnly ||
+      !queryResult.editable
+    )
+      return;
+    const edits = Object.values(dbxPendingCellEdits);
+    if (edits.length === 0) return;
+    const dirtyRowsByIndex = new Map<number, Array<[number, unknown]>>();
+    for (const edit of edits) {
+      const values = dirtyRowsByIndex.get(edit.rowIndex) ?? [];
+      values.push([edit.columnIndex, textToCellValue(edit.value)]);
+      dirtyRowsByIndex.set(edit.rowIndex, values);
+    }
+    const options = buildDbxGridSaveOptions({
+      dirtyRows: Array.from(dirtyRowsByIndex.entries()).map(([rowIndex, values]) => [
+        rowIndex,
+        values,
+      ]),
+    });
+    if (!options) return;
+    setError(null);
+    try {
+      const preview = await databaseApi.dbxUpdateCell({
+        connectionId: activeDbxConnection.id,
+        database: activeDbxDatabase,
+        schema: activeDbxObject.schema ?? null,
+        options,
+        execute: false,
+      });
+      if (preview.validationError) {
+        setError(preview.validationError);
+        return;
+      }
+      if (preview.statements.length === 0) return;
+      setDbxSqlPreviewStatements(preview.statements);
+      setDbxSqlPreviewRollback(preview.rollbackStatements);
+      setDbxSqlPreviewDescription(t("database.updateCell"));
+      const rollback = preview.rollbackStatements.length
+        ? `\n\n${t("database.gridRollbackSql")}\n${preview.rollbackStatements.join("\n")}`
+        : "";
+      const ok = await confirm(
+        `${t("database.updateCell")}\n\n${preview.statements.join("\n")}${rollback}`,
+        {
+          title: t("database.updateCell"),
+          kind: "warning",
+          okLabel: t("database.updateCell"),
+          cancelLabel: t("common.cancel"),
+        },
+      );
+      if (!ok) return;
+      const executed = await databaseApi.dbxUpdateCell({
+        connectionId: activeDbxConnection.id,
+        database: activeDbxDatabase,
+        schema: activeDbxObject.schema ?? null,
+        options,
+        execute: true,
+      });
+      if (executed.validationError) {
+        setError(executed.validationError);
+        return;
+      }
+      setDbxPendingCellEdits({});
+      await loadDbxObject(
+        activeDbxObject,
+        page,
+        activeDbxConnection,
+        activeDbxDatabase,
+        dbxGridWhereInput,
+        dbxGridOrderByInput,
+      );
+    } catch (err) {
+      setError(String(err));
+    }
+  }, [
+    activeDbxConnection,
+    activeDbxDatabase,
+    activeDbxObject,
+    activeObject,
+    buildDbxGridSaveOptions,
+    dbxGridOrderByInput,
+    dbxGridWhereInput,
+    dbxPendingCellEdits,
+    loadDbxObject,
+    page,
+    queryResult,
+    t,
+  ]);
 
   const insertRow = useCallback(async () => {
     if (activeDbxConnection && activeDbxObject && queryResult) {
@@ -8208,12 +8351,20 @@ export function DatabaseView({
         ) : workspaceMode === "table-info" && selectedDbxInfoObject ? (
           <div style={s.databaseTableInfoRoot}>
             <div style={s.databaseTableInfoHeader}>
-              <div>
-                <div style={s.databaseDialogHint}>
-                  {activeDbxDatabase ? `${activeDbxDatabase} / ` : ""}
-                  {dbxObjectKey(selectedDbxInfoObject)}
-                </div>
-              </div>
+              <span style={{ position: "relative", display: "flex", alignItems: "center", flex: 1 }}>
+                <Search
+                  aria-hidden="true"
+                  size={14}
+                  style={{ position: "absolute", left: 9, color: "var(--text-hint)" }}
+                />
+                <input
+                  style={{ ...s.databaseDialogInput, paddingLeft: 30, minWidth: 220 }}
+                  value={tableInfoSearch}
+                  onChange={(event) => setTableInfoSearch(event.target.value)}
+                  placeholder={t("database.searchPlaceholder")}
+                  aria-label="Search table info"
+                />
+              </span>
               <DbxButton
                 variant="outline"
                 size="sm"
@@ -8235,23 +8386,32 @@ export function DatabaseView({
                   key: "columns" as const,
                   label: t("database.columns"),
                   count: selectedDbxInfoColumns.length,
+                  icon: <Columns3 size={14} aria-hidden="true" />,
                 },
                 {
                   key: "indexes" as const,
                   label: t("database.indexes"),
                   count: selectedDbxInfoIndexes.length,
+                  icon: <Hash size={14} aria-hidden="true" />,
                 },
                 {
                   key: "foreignKeys" as const,
                   label: t("database.foreignKeys"),
                   count: selectedDbxInfoForeignKeys.length,
+                  icon: <KeyRound size={14} aria-hidden="true" />,
                 },
                 {
                   key: "triggers" as const,
                   label: t("database.triggers"),
                   count: selectedDbxInfoTriggers.length,
+                  icon: <Zap size={14} aria-hidden="true" />,
                 },
-                { key: "ddl" as const, label: t("database.ddl"), count: tableInfoDdl ? 1 : 0 },
+                {
+                  key: "ddl" as const,
+                  label: t("database.ddl"),
+                  count: tableInfoDdl ? 1 : 0,
+                  icon: <FileCode size={14} aria-hidden="true" />,
+                },
               ].map((tab) => {
                 const active = tableInfoActiveTab === tab.key;
                 return (
@@ -8264,46 +8424,16 @@ export function DatabaseView({
                     style={{
                       ...s.databaseTableInfoTab,
                       ...(active ? s.databaseTableInfoTabActive : null),
+                      border: "none",
                     }}
                     onClick={() => setTableInfoActiveTab(tab.key)}
                   >
+                    {tab.icon}
                     <span>{tab.label}</span>
                     <span>{tab.count}</span>
                   </button>
                 );
               })}
-            </div>
-            <div style={s.databaseTableInfoSearch}>
-              <label style={{ ...s.databaseDialogField, flex: "1 1 260px", maxWidth: 420 }}>
-                <span style={s.databaseDialogLabel}>{t("database.search")}</span>
-                <span style={{ position: "relative", display: "flex", alignItems: "center" }}>
-                  <Search
-                    aria-hidden="true"
-                    size={14}
-                    style={{ position: "absolute", left: 9, color: "var(--text-hint)" }}
-                  />
-                  <input
-                    style={{ ...s.databaseDialogInput, paddingLeft: 30 }}
-                    value={tableInfoSearch}
-                    onChange={(event) => setTableInfoSearch(event.target.value)}
-                    placeholder={t("database.searchPlaceholder")}
-                    aria-label="Search table info"
-                  />
-                </span>
-              </label>
-              <div
-                style={{
-                  display: "flex",
-                  gap: 12,
-                  flexWrap: "wrap",
-                  color: "var(--text-hint)",
-                  fontSize: 12,
-                }}
-              >
-                <span>{selectedDbxInfoObject.name}</span>
-                <span>{selectedDbxInfoObject.object_type}</span>
-                <span>{selectedDbxInfoObject.schema || "-"}</span>
-              </div>
             </div>
             <div style={s.databaseTableInfoContent} role="tabpanel">
               {tableInfoActiveTab === "ddl" ? (
@@ -8522,6 +8652,11 @@ export function DatabaseView({
                         activeDbxConnection,
                         activeDbxDatabase,
                       );
+                      void loadTableInfoDdlForObject(
+                        activeDbxConnection,
+                        activeDbxDatabase,
+                        activeDbxObject,
+                      );
                     }}
                   >
                     {t("database.tableProperties")}
@@ -8735,6 +8870,15 @@ export function DatabaseView({
                     onClick={() => void resetActiveDbxGrid()}
                   >
                     {t("database.gridReset")}
+                  </DbxButton>
+                  <DbxButton
+                    variant="outline"
+                    size="sm"
+                    icon={CheckSquare}
+                    disabled={loading || dbxPendingCellEditCount === 0}
+                    onClick={() => void saveDbxPendingCellEdits()}
+                  >
+                    {t("common.save")}
                   </DbxButton>
                 </>
               )}
@@ -9050,6 +9194,9 @@ export function DatabaseView({
                           )}
                           {visibleTableColumns.map(({ column, index: columnIndex }) => {
                             const original = valueToText(row.values[columnIndex]);
+                            const pendingEdit =
+                              dbxPendingCellEdits[`${dbxRowIndex}:${columnIndex}`] ?? null;
+                            const displayValue = pendingEdit?.value ?? original;
                             const previewable = Boolean(queryResult && activeDbxConnection);
                             const isCellSelected =
                               dbxSelectedCell?.rowIndex === dbxRowIndex &&
@@ -9082,7 +9229,7 @@ export function DatabaseView({
                                   maxWidth:
                                     dbxGridColumnWidths[column] ?? DBX_GRID_DEFAULT_COLUMN_WIDTH,
                                 }}
-                                title={original}
+                                title={displayValue}
                                 onMouseEnter={() =>
                                   setDbxHoveredCell({ rowIndex: dbxRowIndex, columnIndex })
                                 }
@@ -9133,15 +9280,26 @@ export function DatabaseView({
                                         borderColor: "var(--border-focus)",
                                         background: "var(--bg-input)",
                                       }}
-                                      defaultValue={original}
+                                      defaultValue={displayValue}
                                       autoFocus
+                                      onFocus={(event) => event.currentTarget.select()}
                                       onBlur={(event) => {
-                                        updateCell(
-                                          row,
-                                          column,
-                                          event.currentTarget.value,
-                                          original,
-                                        );
+                                        if (activeDbxConnection) {
+                                          stageDbxCellEdit(
+                                            dbxRowIndex,
+                                            columnIndex,
+                                            column,
+                                            event.currentTarget.value,
+                                            original,
+                                          );
+                                        } else {
+                                          updateCell(
+                                            row,
+                                            column,
+                                            event.currentTarget.value,
+                                            original,
+                                          );
+                                        }
                                         setDbxEditingCell(null);
                                       }}
                                       onKeyDown={(event) => {
@@ -9149,7 +9307,7 @@ export function DatabaseView({
                                       }}
                                     />
                                   ) : (
-                                    <span style={s.databaseGridCellValue}>{original}</span>
+                                    <span style={s.databaseGridCellValue}>{displayValue}</span>
                                   )}
                                   {showCellPreview && (
                                     <button

@@ -2158,45 +2158,48 @@ describe("DatabaseView connection flow", () => {
     fireEvent.contextMenu(await screen.findByRole("button", { name: /^users\s+table$/i }));
     await user.click(screen.getByRole("menuitem", { name: "Table info" }));
 
-    expect(await screen.findByText("main / public.users")).toBeInTheDocument();
+    await screen.findByRole("tablist", { name: "Table info sections" });
+    expect(screen.queryByText("main / public.users")).not.toBeInTheDocument();
     expect(screen.queryByText("Table info")).not.toBeInTheDocument();
     const tableInfoTabs = screen.getByRole("tablist", { name: "Table info sections" });
     const columnsTab = within(tableInfoTabs).getByRole("tab", { name: /Columns 2/i });
     const indexesTab = within(tableInfoTabs).getByRole("tab", { name: /Indexes 1/i });
     const foreignKeysTab = within(tableInfoTabs).getByRole("tab", { name: /Foreign keys 1/i });
     const triggersTab = within(tableInfoTabs).getByRole("tab", { name: /Triggers 1/i });
-    const ddlTab = within(tableInfoTabs).getByRole("tab", { name: /DDL/i });
+    const ddlTab = await within(tableInfoTabs).findByRole("tab", { name: /DDL 1/i });
     expect(columnsTab).toHaveAttribute("aria-selected", "true");
     expect(indexesTab).toBeInTheDocument();
     expect(foreignKeysTab).toBeInTheDocument();
     expect(triggersTab).toBeInTheDocument();
     expect(ddlTab).toBeInTheDocument();
-    expect(screen.getByLabelText("Search table info")).toBeInTheDocument();
-    expect(screen.getAllByText("users").length).toBeGreaterThanOrEqual(1);
-    expect(screen.getAllByText("table").length).toBeGreaterThanOrEqual(1);
-    expect(screen.getAllByText("public").length).toBeGreaterThanOrEqual(1);
+    const tableInfoSearch = screen.getByLabelText("Search table info");
+    expect(tableInfoSearch).toBeInTheDocument();
     expect(screen.getAllByText("id").length).toBeGreaterThanOrEqual(1);
     expect(screen.getAllByText(/integer/).length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText("nextval('users_id_seq'::regclass)")).toBeInTheDocument();
     expect(screen.getAllByText("email").length).toBeGreaterThanOrEqual(1);
     expect(screen.getAllByText(/text/).length).toBeGreaterThanOrEqual(1);
     expect(screen.getAllByText("🔑").length).toBeGreaterThanOrEqual(1);
+    await user.type(tableInfoSearch, "email");
+    expect(screen.queryByText("nextval('users_id_seq'::regclass)")).not.toBeInTheDocument();
+    expect(screen.getAllByText("email").length).toBeGreaterThanOrEqual(1);
+    await user.clear(tableInfoSearch);
     await user.click(indexesTab);
     expect(screen.getAllByText("users_email_idx").length).toBeGreaterThanOrEqual(1);
     await user.click(foreignKeysTab);
     expect(screen.getAllByText("users_org_fk").length).toBeGreaterThanOrEqual(1);
     await user.click(triggersTab);
     expect(screen.getAllByText("users_audit_trg").length).toBeGreaterThanOrEqual(1);
-    await user.click(ddlTab);
-    expect(await screen.findByText("CREATE TABLE public.users (id integer);")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "View DDL" })).toBeInTheDocument();
-    expect(invoke).toHaveBeenCalledWith("dbx_get_columns", {
+    expect(invoke).toHaveBeenCalledWith("dbx_get_table_ddl", {
       connectionId: "dbx-source",
       database: "main",
       schema: "public",
       table: "users",
     });
-    expect(invoke).toHaveBeenCalledWith("dbx_get_table_ddl", {
+    await user.click(ddlTab);
+    expect(await screen.findByText("CREATE TABLE public.users (id integer);")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "View DDL" })).toBeInTheDocument();
+    expect(invoke).toHaveBeenCalledWith("dbx_get_columns", {
       connectionId: "dbx-source",
       database: "main",
       schema: "public",
@@ -2249,6 +2252,9 @@ describe("DatabaseView connection flow", () => {
           sql: 'SELECT * FROM "public"."users"',
           countSql: 'SELECT count(*) FROM "public"."users"',
         });
+      }
+      if (command === "dbx_get_table_ddl") {
+        return Promise.resolve('CREATE TABLE "public"."users" (id integer);');
       }
       return Promise.resolve(undefined);
     });
@@ -2423,10 +2429,11 @@ describe("DatabaseView connection flow", () => {
     expect(screen.getByText("pending")).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Table properties" }));
-    expect(await screen.findByText("main / public.users")).toBeInTheDocument();
+    await screen.findByRole("tablist", { name: "Table info sections" });
+    expect(screen.queryByText("main / public.users")).not.toBeInTheDocument();
     expect(screen.queryByText("Table info")).not.toBeInTheDocument();
     const tableInfoTabs = screen.getByRole("tablist", { name: "Table info sections" });
-    const ddlTab = within(tableInfoTabs).getByRole("tab", { name: /DDL/i });
+    const ddlTab = await within(tableInfoTabs).findByRole("tab", { name: /DDL 1/i });
     expect(ddlTab).toBeInTheDocument();
   });
 
@@ -2700,6 +2707,8 @@ describe("DatabaseView connection flow", () => {
           countSql: 'SELECT count(*) FROM "public"."users"',
         });
       }
+      if (command === "dbx_get_table_ddl")
+        return Promise.resolve("CREATE TABLE public.users (id integer);");
       if (command === "dbx_build_data_grid_context_filter_condition") {
         return Promise.resolve('"profile" = \'{"name":"Alice","roles":["admin","editor"]}\'');
       }
@@ -3006,7 +3015,7 @@ describe("DatabaseView connection flow", () => {
     expect(screen.queryByRole("dialog", { name: "Cell value" })).not.toBeInTheDocument();
   });
 
-  it("previews and confirms DBX grid cell updates before executing them", async () => {
+  it("selects DBX grid cell text on double click and saves edits only from the Save button", async () => {
     const user = userEvent.setup();
     vi.mocked(confirm).mockResolvedValue(true);
     vi.mocked(invoke).mockImplementation((command, args) => {
@@ -3066,9 +3075,18 @@ describe("DatabaseView connection flow", () => {
     const emailTd = emailSpan.closest("td") as HTMLTableCellElement;
     await user.dblClick(emailTd);
     const emailInput = emailTd.querySelector("input") as HTMLInputElement;
+    await waitFor(() => {
+      expect(emailInput.selectionStart).toBe(0);
+      expect(emailInput.selectionEnd).toBe("alice@example.com".length);
+    });
     await user.clear(emailInput);
     await user.type(emailInput, "alice@new.test");
     fireEvent.blur(emailInput);
+
+    expect(invoke).not.toHaveBeenCalledWith("dbx_update_cell", expect.anything());
+    expect(confirm).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole("button", { name: "Save" }));
 
     await waitFor(() => {
       expect(invoke).toHaveBeenCalledWith("dbx_update_cell", {
@@ -5071,7 +5089,7 @@ describe("DatabaseView connection flow", () => {
     ).toBeInTheDocument();
   });
 
-  it("adds hover motion class to database tree nodes and keeps expanded table rows open", async () => {
+  it("adds hover motion class to database tree nodes and auto-collapses the previous table rows", async () => {
     const user = userEvent.setup();
     vi.mocked(invoke).mockImplementation((command, args) => {
       if (command === "db_load_connections") return Promise.resolve([]);
@@ -5127,7 +5145,7 @@ describe("DatabaseView connection flow", () => {
 
     await user.click(screen.getByRole("button", { name: /^users\s+TABLE$/i }));
     expect(await screen.findByText("users_id")).toBeInTheDocument();
-    expect(screen.getByText("accounts_id")).toBeInTheDocument();
+    expect(screen.queryByText("accounts_id")).not.toBeInTheDocument();
   });
 
   it("supports DBX tree keyboard shortcuts for copy, refresh, rename, and delete", async () => {

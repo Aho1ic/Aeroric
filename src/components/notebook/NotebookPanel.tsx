@@ -264,6 +264,8 @@ export function NotebookPanel({ width = "100%" }: { width?: number | string }) {
   const [mode, setMode] = useState<"edit" | "read">("edit");
   const [creating, setCreating] = useState(false);
   const [pendingTitleFocusId, setPendingTitleFocusId] = useState<string | null>(null);
+  const [renamingNoteId, setRenamingNoteId] = useState<string | null>(null);
+  const [renamingTitle, setRenamingTitle] = useState("");
   const [textColor, setTextColor] = useState("#2563eb");
   const [backgroundColor, setBackgroundColor] = useState("#fef08a");
   const [richTextState, setRichTextState] = useState<RichTextToolbarState>(DEFAULT_RICH_TEXT_STATE);
@@ -276,10 +278,9 @@ export function NotebookPanel({ width = "100%" }: { width?: number | string }) {
   const markdownHtml = useMemo(() => renderMarkdown(activeNote?.body ?? ""), [activeNote?.body]);
   const richTextHtml = useMemo(() => renderRichText(activeNote?.body ?? ""), [activeNote?.body]);
   const activeFormat = activeNote?.format ?? "markdown";
+  const canUseToolbar = mode === "edit" && Boolean(activeNote);
   const canFormatSelection =
-    mode === "edit" &&
-    Boolean(activeNote) &&
-    (activeFormat === "markdown" ? hasMarkdownSelection : hasRichTextSelection);
+    canUseToolbar && (activeFormat === "markdown" ? hasMarkdownSelection : hasRichTextSelection);
   const richTextPressed = (pressed: boolean) =>
     activeFormat === "richtext" && canFormatSelection ? pressed : undefined;
   const formatLabel = (format: NotebookFormat) =>
@@ -355,6 +356,34 @@ export function NotebookPanel({ width = "100%" }: { width?: number | string }) {
         .map((note) => (note.id === activeNote.id ? { ...note, ...patch, updatedAt } : note))
         .sort((a, b) => b.updatedAt - a.updatedAt),
     );
+  };
+
+  const updateNoteTitle = (noteId: string, title: string) => {
+    const nextTitle = title.trim();
+    if (!nextTitle) return;
+    const updatedAt = Date.now();
+    setNotes((current) =>
+      current
+        .map((note) => (note.id === noteId ? { ...note, title: nextTitle, updatedAt } : note))
+        .sort((a, b) => b.updatedAt - a.updatedAt),
+    );
+  };
+
+  const startRenameNote = (note: NotebookNote) => {
+    setRenamingNoteId(note.id);
+    setRenamingTitle(note.title);
+    setActiveId(note.id);
+  };
+
+  const commitRenameNote = () => {
+    if (renamingNoteId) updateNoteTitle(renamingNoteId, renamingTitle);
+    setRenamingNoteId(null);
+    setRenamingTitle("");
+  };
+
+  const cancelRenameNote = () => {
+    setRenamingNoteId(null);
+    setRenamingTitle("");
   };
 
   const cancelCreate = () => {
@@ -557,7 +586,15 @@ export function NotebookPanel({ width = "100%" }: { width?: number | string }) {
   };
 
   const applyRichTable = (rows = 2, cols = 2) => {
-    runRichTextCommand("insertHTML", richTableHtml(rows, cols));
+    const html = richTableHtml(rows, cols);
+    restoreRichTextSelection();
+    richTextRef.current?.focus();
+    if (typeof document.execCommand === "function") {
+      document.execCommand("insertHTML", false, html);
+    }
+    updateRichTextFromDom();
+    saveRichTextSelection();
+    readRichTextCommandState();
     setTablePickerOpen(false);
   };
 
@@ -782,30 +819,57 @@ export function NotebookPanel({ width = "100%" }: { width?: number | string }) {
               {t("notebook.empty")}
             </div>
           ) : (
-            notes.map((note) => (
-              <button
-                type="button"
-                key={note.id}
-                title={note.title}
-                onClick={() => setActiveId(note.id)}
-                style={{
-                  minHeight: 30,
-                  border: "1px solid transparent",
-                  borderRadius: 6,
-                  background: note.id === activeNote?.id ? "var(--bg-selected)" : "transparent",
-                  color: "var(--text-primary)",
-                  textAlign: "left",
-                  padding: "5px 7px",
-                  cursor: "pointer",
-                  overflow: "hidden",
-                  textOverflow: "ellipsis",
-                  whiteSpace: "nowrap",
-                  fontSize: 12,
-                }}
-              >
-                {note.title || t("notebook.untitled")}
-              </button>
-            ))
+            notes.map((note) =>
+              renamingNoteId === note.id ? (
+                <input
+                  key={note.id}
+                  aria-label={t("notebook.renameMemo")}
+                  value={renamingTitle}
+                  autoFocus
+                  onFocus={(event) => event.currentTarget.select()}
+                  onChange={(event) => setRenamingTitle(event.currentTarget.value)}
+                  onBlur={commitRenameNote}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") commitRenameNote();
+                    if (event.key === "Escape") cancelRenameNote();
+                  }}
+                  style={{
+                    minHeight: 30,
+                    border: "1px solid var(--border-focus)",
+                    borderRadius: 6,
+                    background: "var(--bg-input)",
+                    color: "var(--text-primary)",
+                    padding: "5px 7px",
+                    fontSize: 12,
+                    outline: "none",
+                  }}
+                />
+              ) : (
+                <button
+                  type="button"
+                  key={note.id}
+                  title={note.title}
+                  onClick={() => setActiveId(note.id)}
+                  onDoubleClick={() => startRenameNote(note)}
+                  style={{
+                    minHeight: 30,
+                    border: "1px solid transparent",
+                    borderRadius: 6,
+                    background: note.id === activeNote?.id ? "var(--bg-selected)" : "transparent",
+                    color: "var(--text-primary)",
+                    textAlign: "left",
+                    padding: "5px 7px",
+                    cursor: "pointer",
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                    fontSize: 12,
+                  }}
+                >
+                  {note.title || t("notebook.untitled")}
+                </button>
+              ),
+            )
           )}
         </div>
       </aside>
@@ -890,7 +954,7 @@ export function NotebookPanel({ width = "100%" }: { width?: number | string }) {
                 <ToolButton
                   label={t("notebook.bold")}
                   pressed={richTextPressed(richTextState.bold)}
-                  disabled={!canFormatSelection}
+                  disabled={!canUseToolbar}
                   onMouseDown={keepRichTextSelectionOnMouseDown}
                   onClick={() => applyInlineWrap("**", "**", "bold")}
                 >
@@ -899,7 +963,7 @@ export function NotebookPanel({ width = "100%" }: { width?: number | string }) {
                 <ToolButton
                   label={t("notebook.italic")}
                   pressed={richTextPressed(richTextState.italic)}
-                  disabled={!canFormatSelection}
+                  disabled={!canUseToolbar}
                   onMouseDown={keepRichTextSelectionOnMouseDown}
                   onClick={() => applyInlineWrap("*", "*", "italic")}
                 >
@@ -908,7 +972,7 @@ export function NotebookPanel({ width = "100%" }: { width?: number | string }) {
                 <ToolButton
                   label={t("notebook.underline")}
                   pressed={richTextPressed(richTextState.underline)}
-                  disabled={!canFormatSelection}
+                  disabled={!canUseToolbar}
                   onMouseDown={keepRichTextSelectionOnMouseDown}
                   onClick={() => applyInlineWrap("<u>", "</u>", "underline")}
                 >
@@ -917,7 +981,7 @@ export function NotebookPanel({ width = "100%" }: { width?: number | string }) {
                 <ToolButton
                   label={t("notebook.strike")}
                   pressed={richTextPressed(richTextState.strike)}
-                  disabled={!canFormatSelection}
+                  disabled={!canUseToolbar}
                   onMouseDown={keepRichTextSelectionOnMouseDown}
                   onClick={() => applyInlineWrap("~~", "~~", "strikeThrough")}
                 >
@@ -925,7 +989,7 @@ export function NotebookPanel({ width = "100%" }: { width?: number | string }) {
                 </ToolButton>
                 <ToolButton
                   label={t("notebook.highlight")}
-                  disabled={!canFormatSelection}
+                  disabled={!canUseToolbar}
                   onMouseDown={keepRichTextSelectionOnMouseDown}
                   onClick={() =>
                     applyInlineWrap("<mark>", "</mark>", "hiliteColor", backgroundColor)
@@ -936,7 +1000,7 @@ export function NotebookPanel({ width = "100%" }: { width?: number | string }) {
                 <ColorTool
                   label={t("notebook.textColor")}
                   value={textColor}
-                  disabled={!canFormatSelection}
+                  disabled={!canUseToolbar}
                   onMouseDown={saveRichTextSelectionOnMouseDown}
                   onChange={(value) => {
                     setTextColor(value);
@@ -948,7 +1012,7 @@ export function NotebookPanel({ width = "100%" }: { width?: number | string }) {
                 <ColorTool
                   label={t("notebook.backgroundColor")}
                   value={backgroundColor}
-                  disabled={!canFormatSelection}
+                  disabled={!canUseToolbar}
                   onMouseDown={saveRichTextSelectionOnMouseDown}
                   onChange={(value) => {
                     setBackgroundColor(value);
@@ -964,7 +1028,7 @@ export function NotebookPanel({ width = "100%" }: { width?: number | string }) {
                 </ColorTool>
                 <ToolButton
                   label={t("notebook.noColor")}
-                  disabled={!canFormatSelection}
+                  disabled={!canUseToolbar}
                   onMouseDown={keepRichTextSelectionOnMouseDown}
                   onClick={clearBackgroundCommand}
                 >
@@ -973,7 +1037,7 @@ export function NotebookPanel({ width = "100%" }: { width?: number | string }) {
                 <ToolButton
                   label={t("notebook.heading")}
                   pressed={richTextPressed(richTextState.heading)}
-                  disabled={!canFormatSelection}
+                  disabled={!canUseToolbar}
                   onMouseDown={keepRichTextSelectionOnMouseDown}
                   onClick={() => applyHeading("# ", "h1")}
                 >
@@ -982,7 +1046,7 @@ export function NotebookPanel({ width = "100%" }: { width?: number | string }) {
                 <ToolButton
                   label={t("notebook.subheading")}
                   pressed={richTextPressed(richTextState.subheading)}
-                  disabled={!canFormatSelection}
+                  disabled={!canUseToolbar}
                   onMouseDown={keepRichTextSelectionOnMouseDown}
                   onClick={() => applyHeading("## ", "h2")}
                 >
@@ -990,7 +1054,7 @@ export function NotebookPanel({ width = "100%" }: { width?: number | string }) {
                 </ToolButton>
                 <ToolButton
                   label={t("notebook.bodyText")}
-                  disabled={!canFormatSelection}
+                  disabled={!canUseToolbar}
                   onMouseDown={keepRichTextSelectionOnMouseDown}
                   onClick={applyBodyCommand}
                 >
@@ -999,7 +1063,7 @@ export function NotebookPanel({ width = "100%" }: { width?: number | string }) {
                 <ToolButton
                   label={t("notebook.bulletList")}
                   pressed={richTextPressed(richTextState.bulletList)}
-                  disabled={!canFormatSelection}
+                  disabled={!canUseToolbar}
                   onMouseDown={keepRichTextSelectionOnMouseDown}
                   onClick={() => applyListCommand(false)}
                 >
@@ -1008,7 +1072,7 @@ export function NotebookPanel({ width = "100%" }: { width?: number | string }) {
                 <ToolButton
                   label={t("notebook.numberedList")}
                   pressed={richTextPressed(richTextState.numberedList)}
-                  disabled={!canFormatSelection}
+                  disabled={!canUseToolbar}
                   onMouseDown={keepRichTextSelectionOnMouseDown}
                   onClick={() => applyListCommand(true)}
                 >
@@ -1016,7 +1080,7 @@ export function NotebookPanel({ width = "100%" }: { width?: number | string }) {
                 </ToolButton>
                 <ToolButton
                   label={t("notebook.codeBlock")}
-                  disabled={!canFormatSelection}
+                  disabled={!canUseToolbar}
                   onMouseDown={keepRichTextSelectionOnMouseDown}
                   onClick={applyCodeBlockCommand}
                 >
@@ -1025,7 +1089,7 @@ export function NotebookPanel({ width = "100%" }: { width?: number | string }) {
                 <div style={{ position: "relative", flexShrink: 0 }} data-notebook-table-picker>
                   <ToolButton
                     label={t("notebook.table")}
-                    disabled={!canFormatSelection}
+                    disabled={!canUseToolbar}
                     onMouseDown={keepRichTextSelectionOnMouseDown}
                     onClick={applyTableCommand}
                   >
