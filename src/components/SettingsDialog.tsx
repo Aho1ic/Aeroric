@@ -1,9 +1,14 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import * as RadixSelect from "@radix-ui/react-select";
 import { X, FolderOpen, ChevronDown, Check } from "lucide-react";
-import { permissionModeLabel, type PermissionMode, type AgentType } from "../types";
+import { permissionModeLabel, type PermissionMode, type AgentType, type SshConnection } from "../types";
 import { useAgentOptions } from "../hooks/useAgentOptions";
+import {
+  formatInvokeError,
+  invokeWithTimeout,
+  remoteInvokeOptions,
+} from "../hooks/useCancellableInvoke";
 import { useI18n } from "../i18n";
 import s from "../styles";
 import { useTextInputIMEFix } from "./useTextInputIMEFix";
@@ -81,9 +86,29 @@ function Select({
   );
 }
 
-function ProjectSettings({ projectPath, onClose }: { projectPath: string; onClose: () => void }) {
+type RemoteProjectSettingsContext = {
+  connection: SshConnection;
+  projectPath: string;
+};
+
+function ProjectSettings({
+  projectPath,
+  onClose,
+  remote,
+}: {
+  projectPath: string;
+  onClose: () => void;
+  remote?: RemoteProjectSettingsContext;
+}) {
   const { t } = useI18n();
   const agentOptions = useAgentOptions();
+  const configCommandContext = useMemo(
+    () =>
+      remote
+        ? { connection: remote.connection, remoteProjectPath: remote.projectPath }
+        : { projectPath },
+    [projectPath, remote],
+  );
   const [config, setConfig] = useState<ProjectConfig | null>(null);
   const [agentDefault, setAgentDefault] = useState("claude");
   const [defaultPermissionMode, setDefaultPermissionMode] = useState<PermissionMode>("ask");
@@ -99,7 +124,9 @@ function ProjectSettings({ projectPath, onClose }: { projectPath: string; onClos
   const commitPromptImeFix = useTextInputIMEFix<HTMLTextAreaElement>(setCommitPrompt);
 
   useEffect(() => {
-    invoke<ProjectConfig>("read_project_config", { projectPath })
+    const command = remote ? "remote_read_project_config" : "read_project_config";
+    const configPromise = invoke<ProjectConfig>(command, configCommandContext);
+    (remote ? invokeWithTimeout(configPromise, command, remoteInvokeOptions()) : configPromise)
       .then((c) => {
         setConfig(c);
         setAgentDefault(c.agent.default);
@@ -121,8 +148,8 @@ function ProjectSettings({ projectPath, onClose }: { projectPath: string; onClos
         );
         setFormatOnSave(Boolean(c.editor?.format_on_save));
       })
-      .catch((e) => setError(String(e)));
-  }, [projectPath]);
+      .catch((e) => setError(formatInvokeError(e)));
+  }, [configCommandContext, remote]);
 
   function handleCommitMessageTimeoutChange(e: React.ChangeEvent<HTMLInputElement>) {
     const nextValue = e.target.value.trim();
@@ -166,8 +193,9 @@ function ProjectSettings({ projectPath, onClose }: { projectPath: string; onClos
         return;
       }
 
-      await invoke("write_project_config", {
-        projectPath,
+      const command = remote ? "remote_write_project_config" : "write_project_config";
+      const savePromise = invoke(command, {
+        ...configCommandContext,
         config: {
           ...config,
           agent: {
@@ -187,9 +215,14 @@ function ProjectSettings({ projectPath, onClose }: { projectPath: string; onClos
           },
         },
       });
+      if (remote) {
+        await invokeWithTimeout(savePromise, command, remoteInvokeOptions());
+      } else {
+        await savePromise;
+      }
       onClose();
     } catch (e) {
-      setError(String(e));
+      setError(formatInvokeError(e));
     } finally {
       setSaving(false);
     }
@@ -335,9 +368,11 @@ function ProjectSettings({ projectPath, onClose }: { projectPath: string; onClos
 export function SettingsDialog({
   projectPath,
   onClose,
+  remote,
 }: {
   projectPath: string;
   onClose: () => void;
+  remote?: RemoteProjectSettingsContext;
 }) {
   const { t } = useI18n();
   const [activeNav, setActiveNav] = useState<NavKey>("project");
@@ -382,7 +417,7 @@ export function SettingsDialog({
             </div>
 
             {activeNav === "project" && (
-              <ProjectSettings projectPath={projectPath} onClose={onClose} />
+              <ProjectSettings projectPath={projectPath} onClose={onClose} remote={remote} />
             )}
           </div>
         </div>

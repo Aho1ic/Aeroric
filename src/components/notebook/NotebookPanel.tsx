@@ -57,7 +57,18 @@ type NotebookContextMenuState = {
   canFormat: boolean;
 };
 
+type NotebookPointerDragState = {
+  id: string;
+  pointerId: number;
+  startY: number;
+  active: boolean;
+  pressTimer: number;
+};
+
 const STORAGE_KEY = "aeroric:notebook:v1";
+const POINTER_DRAG_DELAY_MS = 180;
+const POINTER_DRAG_MOVE_TOLERANCE = 5;
+const TABLE_PICKER_WIDTH = 168;
 const DEFAULT_RICH_TEXT_STATE: RichTextToolbarState = {
   bold: false,
   italic: false,
@@ -69,11 +80,79 @@ const DEFAULT_RICH_TEXT_STATE: RichTextToolbarState = {
   subheading: false,
 };
 
+const ENGLISH_PUNCTUATION_MAP: Record<string, string> = {
+  "，": ",",
+  "。": ".",
+  "；": ";",
+  "：": ":",
+  "！": "!",
+  "？": "?",
+  "、": ",",
+  "（": "(",
+  "）": ")",
+  "【": "[",
+  "】": "]",
+  "《": "<",
+  "》": ">",
+  "“": '"',
+  "”": '"',
+  "‘": "'",
+  "’": "'",
+  "「": '"',
+  "」": '"',
+  "『": '"',
+  "』": '"',
+  "—": "-",
+  "…": "...",
+};
+
+function normalizeEnglishPunctuation(value: string): string {
+  return value.replace(/[，。；：！？、（）【】《》“”‘’「」『』—…]/g, (char) => {
+    return ENGLISH_PUNCTUATION_MAP[char] ?? char;
+  });
+}
+
+function normalizeTextNodes(root: ParentNode): boolean {
+  const showText = globalThis.NodeFilter?.SHOW_TEXT ?? 4;
+  const walker = document.createTreeWalker(root, showText);
+  const textNodes: Text[] = [];
+  let node = walker.nextNode();
+  while (node) {
+    textNodes.push(node as Text);
+    node = walker.nextNode();
+  }
+
+  let changed = false;
+  for (const textNode of textNodes) {
+    const normalized = normalizeEnglishPunctuation(textNode.nodeValue ?? "");
+    if (normalized === textNode.nodeValue) continue;
+    textNode.nodeValue = normalized;
+    changed = true;
+  }
+  return changed;
+}
+
+function normalizeRichTextHtml(html: string): string {
+  const template = document.createElement("template");
+  template.innerHTML = html;
+  normalizeTextNodes(template.content);
+  return template.innerHTML;
+}
+
+function normalizeNotebookBody(body: string, format: NotebookFormat): string {
+  return format === "richtext" ? normalizeRichTextHtml(body) : normalizeEnglishPunctuation(body);
+}
+
+function closestElement(node: Node | null): Element | null {
+  if (!node) return null;
+  return node instanceof Element ? node : node.parentElement;
+}
+
 function createNote(title: string, format: NotebookFormat): NotebookNote {
   const now = Date.now();
   return {
     id: `note-${now}-${Math.random().toString(36).slice(2, 8)}`,
-    title: title.trim(),
+    title: normalizeEnglishPunctuation(title).trim(),
     body: "",
     format,
     updatedAt: now,
@@ -85,7 +164,7 @@ function normalizeFormat(value: unknown): NotebookFormat {
 }
 
 function plainTextToRichTextHtml(text: string): string {
-  const lines = text.split(/\r?\n/);
+  const lines = normalizeEnglishPunctuation(text).split(/\r?\n/);
   return lines.map((line) => `<p>${escapeHtml(line) || "<br>"}</p>`).join("");
 }
 
@@ -101,11 +180,15 @@ function loadNotes(): NotebookNote[] {
       )
       .map((item) => {
         const body = typeof item.body === "string" ? item.body : "";
+        const format = normalizeFormat(item.format);
         return {
           id: item.id,
-          title: item.title || "Untitled quick note",
-          body: item.format === "txt" ? plainTextToRichTextHtml(body) : body,
-          format: normalizeFormat(item.format),
+          title: normalizeEnglishPunctuation(item.title || "Untitled quick note"),
+          body:
+            item.format === "txt"
+              ? plainTextToRichTextHtml(body)
+              : normalizeNotebookBody(body, format),
+          format,
           updatedAt: typeof item.updatedAt === "number" ? item.updatedAt : 0,
         };
       });
@@ -243,9 +326,13 @@ export function NotebookPanel({ width = "100%" }: { width?: number | string }) {
   const markdownContentRef = useRef<HTMLTextAreaElement | null>(null);
   const richTextRef = useRef<HTMLDivElement | null>(null);
   const createPanelRef = useRef<HTMLDivElement | null>(null);
+  const tablePickerAnchorRef = useRef<HTMLDivElement | null>(null);
   const titleInputRef = useRef<HTMLInputElement | null>(null);
   const savedRichTextRangeRef = useRef<Range | null>(null);
   const richTextSyncedNoteIdRef = useRef<string | null>(null);
+  const noteItemRefs = useRef<Map<string, HTMLElement>>(new Map());
+  const notePointerDragRef = useRef<NotebookPointerDragState | null>(null);
+  const suppressNextNoteClickRef = useRef(false);
   const [notes, setNotes] = useState<NotebookNote[]>(() => loadNotes());
   const [activeId, setActiveId] = useState<string | null>(() => notes[0]?.id ?? null);
   const [mode, setMode] = useState<"edit" | "read">("edit");
@@ -260,6 +347,7 @@ export function NotebookPanel({ width = "100%" }: { width?: number | string }) {
   const [hasRichTextSelection, setHasRichTextSelection] = useState(false);
   const [contextMenu, setContextMenu] = useState<NotebookContextMenuState | null>(null);
   const [tablePickerOpen, setTablePickerOpen] = useState(false);
+  const [tablePickerPosition, setTablePickerPosition] = useState({ top: 0, left: 0 });
   const [tableHoverSize, setTableHoverSize] = useState({ rows: 2, cols: 2 });
   const [draggedNoteId, setDraggedNoteId] = useState<string | null>(null);
   const [dragOverNoteId, setDragOverNoteId] = useState<string | null>(null);
@@ -332,6 +420,25 @@ export function NotebookPanel({ width = "100%" }: { width?: number | string }) {
   }, []);
 
   useEffect(() => {
+    if (!tablePickerOpen) return;
+    const updatePosition = () => positionTablePicker();
+    updatePosition();
+    window.addEventListener("resize", updatePosition);
+    window.addEventListener("scroll", updatePosition, true);
+    return () => {
+      window.removeEventListener("resize", updatePosition);
+      window.removeEventListener("scroll", updatePosition, true);
+    };
+  }, [tablePickerOpen]);
+
+  useEffect(() => {
+    return () => {
+      const drag = notePointerDragRef.current;
+      if (drag) window.clearTimeout(drag.pressTimer);
+    };
+  }, []);
+
+  useEffect(() => {
     setHasMarkdownSelection(false);
     setHasRichTextSelection(false);
     savedRichTextRangeRef.current = null;
@@ -340,13 +447,22 @@ export function NotebookPanel({ width = "100%" }: { width?: number | string }) {
   const updateActiveNote = (patch: Partial<Pick<NotebookNote, "title" | "body">>) => {
     if (!activeNote) return;
     const updatedAt = Date.now();
+    const normalizedPatch: Partial<Pick<NotebookNote, "title" | "body">> = { ...patch };
+    if (typeof patch.title === "string") {
+      normalizedPatch.title = normalizeEnglishPunctuation(patch.title);
+    }
+    if (typeof patch.body === "string") {
+      normalizedPatch.body = normalizeNotebookBody(patch.body, activeNote.format);
+    }
     setNotes((current) =>
-      current.map((note) => (note.id === activeNote.id ? { ...note, ...patch, updatedAt } : note)),
+      current.map((note) =>
+        note.id === activeNote.id ? { ...note, ...normalizedPatch, updatedAt } : note,
+      ),
     );
   };
 
   const updateNoteTitle = (noteId: string, title: string) => {
-    const nextTitle = title.trim();
+    const nextTitle = normalizeEnglishPunctuation(title).trim();
     if (!nextTitle) return;
     const updatedAt = Date.now();
     setNotes((current) =>
@@ -573,9 +689,9 @@ export function NotebookPanel({ width = "100%" }: { width?: number | string }) {
     if (!hasRichTextSelection) return;
     const selected = savedRichTextRangeRef.current?.toString() || "";
     const highlighted = escapeHtml(selected);
-    const options = NOTEBOOK_CODE_LANGUAGE_OPTIONS
-      .map(([value, label]) => `<option value="${value}">${label}</option>`)
-      .join("");
+    const options = NOTEBOOK_CODE_LANGUAGE_OPTIONS.map(
+      ([value, label]) => `<option value="${value}">${label}</option>`,
+    ).join("");
     const html = `<pre data-notebook-code-block="true" style="position:relative;margin:8px 0;padding:30px 10px 10px;border:1px solid var(--border-dim);border-radius:8px;background:var(--bg-subtle);font-family:var(--font-mono);white-space:pre-wrap"><select data-notebook-code-language="true" contenteditable="false" style="position:absolute;right:6px;top:5px;height:22px;border:1px solid var(--border-medium);border-radius:5px;background:var(--bg-card);color:var(--text-secondary);font-size:11px">${options}</select><code data-language="text">${highlighted}</code></pre>`;
     runRichTextCommand("insertHTML", html);
   };
@@ -591,6 +707,38 @@ export function NotebookPanel({ width = "100%" }: { width?: number | string }) {
     updateRichTextFromDom();
   };
 
+  const insertRichCodeBlockNewline = () => {
+    const editor = richTextRef.current;
+    const selection = document.getSelection();
+    if (!editor || !selection || selection.rangeCount === 0) return false;
+    const range = selection.getRangeAt(0);
+    const startElement = closestElement(range.startContainer);
+    const endElement = closestElement(range.endContainer);
+    const code = startElement?.closest("code[data-language]");
+    const endCode = endElement?.closest("code[data-language]");
+    const block = startElement?.closest("[data-notebook-code-block]");
+    if (!code || endCode !== code || !block || !editor.contains(block)) return false;
+
+    range.deleteContents();
+    const newline = document.createTextNode("\n");
+    range.insertNode(newline);
+    range.setStartAfter(newline);
+    range.setEndAfter(newline);
+    selection.removeAllRanges();
+    selection.addRange(range);
+    updateRichTextFromDom();
+    setHasRichTextSelection(false);
+    savedRichTextRangeRef.current = null;
+    return true;
+  };
+
+  const handleRichTextKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    if (event.key !== "Enter" || event.nativeEvent.isComposing) return;
+    if (!insertRichCodeBlockNewline()) return;
+    event.preventDefault();
+    event.stopPropagation();
+  };
+
   const richTableHtml = (rows: number, cols: number) => {
     const cellBorder = "border:1px solid var(--border-medium);padding:4px 6px";
     const header = Array.from(
@@ -600,10 +748,9 @@ export function NotebookPanel({ width = "100%" }: { width?: number | string }) {
     const body = Array.from(
       { length: rows },
       () =>
-        `<tr>${Array.from(
-          { length: cols },
-          () => `<td style="${cellBorder}"><br></td>`,
-        ).join("")}</tr>`,
+        `<tr>${Array.from({ length: cols }, () => `<td style="${cellBorder}"><br></td>`).join(
+          "",
+        )}</tr>`,
     ).join("");
     return `<table style="border-collapse:collapse;width:100%;border:1px solid var(--border-medium)"><thead><tr>${header}</tr></thead><tbody>${body}</tbody></table>`;
   };
@@ -620,6 +767,17 @@ export function NotebookPanel({ width = "100%" }: { width?: number | string }) {
     readRichTextCommandState();
     setTablePickerOpen(false);
   };
+
+  function positionTablePicker() {
+    const anchor = tablePickerAnchorRef.current;
+    if (!anchor) return;
+    const rect = anchor.getBoundingClientRect();
+    const left = Math.max(8, Math.min(rect.left, window.innerWidth - TABLE_PICKER_WIDTH - 8));
+    setTablePickerPosition({
+      top: Math.round(rect.bottom + 6),
+      left: Math.round(left),
+    });
+  }
 
   const applyInlineWrap = (before: string, after: string, command: string, value?: string) => {
     if (activeFormat === "markdown") {
@@ -668,6 +826,7 @@ export function NotebookPanel({ width = "100%" }: { width?: number | string }) {
       applyTable();
       return;
     }
+    if (!tablePickerOpen) positionTablePicker();
     setTablePickerOpen((open) => !open);
   };
 
@@ -732,6 +891,90 @@ export function NotebookPanel({ width = "100%" }: { width?: number | string }) {
   };
   const isClipboardAction = (action: string) =>
     action === "cut" || action === "copy" || action === "paste";
+
+  const setNoteItemRef = (noteId: string) => (element: HTMLButtonElement | null) => {
+    if (element) {
+      noteItemRefs.current.set(noteId, element);
+    } else {
+      noteItemRefs.current.delete(noteId);
+    }
+  };
+
+  const noteIdAtClientY = (clientY: number) => {
+    let fallback: string | null = null;
+    let fallbackDistance = Number.POSITIVE_INFINITY;
+    for (const [noteId, element] of noteItemRefs.current) {
+      const rect = element.getBoundingClientRect();
+      if (clientY >= rect.top && clientY <= rect.bottom) return noteId;
+      const center = rect.top + rect.height / 2;
+      const distance = Math.abs(clientY - center);
+      if (distance < fallbackDistance) {
+        fallback = noteId;
+        fallbackDistance = distance;
+      }
+    }
+    return fallback;
+  };
+
+  const resetNotePointerDrag = () => {
+    const drag = notePointerDragRef.current;
+    if (drag) window.clearTimeout(drag.pressTimer);
+    notePointerDragRef.current = null;
+    setDraggedNoteId(null);
+    setDragOverNoteId(null);
+  };
+
+  const handleNotePointerDown = (event: React.PointerEvent<HTMLButtonElement>, noteId: string) => {
+    if (event.button !== 0) return;
+    const currentTarget = event.currentTarget;
+    const pressTimer = window.setTimeout(() => {
+      const drag = notePointerDragRef.current;
+      if (!drag || drag.id !== noteId || drag.pointerId !== event.pointerId) return;
+      drag.active = true;
+      setDraggedNoteId(noteId);
+      setDragOverNoteId(noteId);
+    }, POINTER_DRAG_DELAY_MS);
+    notePointerDragRef.current = {
+      id: noteId,
+      pointerId: event.pointerId,
+      startY: event.clientY,
+      active: false,
+      pressTimer,
+    };
+    currentTarget.setPointerCapture?.(event.pointerId);
+  };
+
+  const handleNotePointerMove = (event: React.PointerEvent<HTMLButtonElement>) => {
+    const drag = notePointerDragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    if (!drag.active && Math.abs(event.clientY - drag.startY) > POINTER_DRAG_MOVE_TOLERANCE) {
+      window.clearTimeout(drag.pressTimer);
+      notePointerDragRef.current = null;
+      return;
+    }
+    if (!drag.active) return;
+    event.preventDefault();
+    setDragOverNoteId(noteIdAtClientY(event.clientY));
+  };
+
+  const handleNotePointerUp = (event: React.PointerEvent<HTMLButtonElement>) => {
+    const drag = notePointerDragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    const wasActive = drag.active;
+    const targetId = wasActive ? noteIdAtClientY(event.clientY) : null;
+    event.currentTarget.releasePointerCapture?.(event.pointerId);
+    resetNotePointerDrag();
+    if (!wasActive || !targetId) return;
+    suppressNextNoteClickRef.current = true;
+    event.preventDefault();
+    reorderNote(drag.id, targetId);
+  };
+
+  const handleNotePointerCancel = (event: React.PointerEvent<HTMLButtonElement>) => {
+    const drag = notePointerDragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    resetNotePointerDrag();
+  };
 
   return (
     <section
@@ -850,7 +1093,9 @@ export function NotebookPanel({ width = "100%" }: { width?: number | string }) {
                   value={renamingTitle}
                   autoFocus
                   onFocus={(event) => event.currentTarget.select()}
-                  onChange={(event) => setRenamingTitle(event.currentTarget.value)}
+                  onChange={(event) =>
+                    setRenamingTitle(normalizeEnglishPunctuation(event.currentTarget.value))
+                  }
                   onBlur={commitRenameNote}
                   onKeyDown={(event) => {
                     if (event.key === "Enter") commitRenameNote();
@@ -871,37 +1116,20 @@ export function NotebookPanel({ width = "100%" }: { width?: number | string }) {
                 <button
                   type="button"
                   key={note.id}
+                  ref={setNoteItemRef(note.id)}
                   title={note.title}
-                  draggable
-                  onDragStart={(event) => {
-                    setDraggedNoteId(note.id);
-                    if (event.dataTransfer) {
-                      event.dataTransfer.effectAllowed = "move";
-                      event.dataTransfer.setData("text/plain", note.id);
+                  onPointerDown={(event) => handleNotePointerDown(event, note.id)}
+                  onPointerMove={handleNotePointerMove}
+                  onPointerUp={handleNotePointerUp}
+                  onPointerCancel={handleNotePointerCancel}
+                  onClick={(event) => {
+                    if (suppressNextNoteClickRef.current) {
+                      suppressNextNoteClickRef.current = false;
+                      event.preventDefault();
+                      return;
                     }
+                    setActiveId(note.id);
                   }}
-                  onDragOver={(event) => {
-                    if (!draggedNoteId || draggedNoteId === note.id) return;
-                    event.preventDefault();
-                    if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
-                    setDragOverNoteId(note.id);
-                  }}
-                  onDragLeave={() =>
-                    setDragOverNoteId((current) => (current === note.id ? null : current))
-                  }
-                  onDrop={(event) => {
-                    event.preventDefault();
-                    const draggedId =
-                      draggedNoteId || event.dataTransfer?.getData("text/plain") || "";
-                    reorderNote(draggedId, note.id);
-                    setDraggedNoteId(null);
-                    setDragOverNoteId(null);
-                  }}
-                  onDragEnd={() => {
-                    setDraggedNoteId(null);
-                    setDragOverNoteId(null);
-                  }}
-                  onClick={() => setActiveId(note.id)}
                   onDoubleClick={() => startRenameNote(note)}
                   style={{
                     minHeight: 30,
@@ -916,15 +1144,20 @@ export function NotebookPanel({ width = "100%" }: { width?: number | string }) {
                     color: "var(--text-primary)",
                     textAlign: "left",
                     padding: "5px 7px",
-                    cursor: "pointer",
+                    cursor: draggedNoteId === note.id ? "grabbing" : "grab",
                     overflow: "hidden",
                     textOverflow: "ellipsis",
                     whiteSpace: "nowrap",
                     fontSize: 12,
                     fontWeight: 700,
                     opacity: draggedNoteId === note.id ? 0.55 : 1,
-                    transform: dragOverNoteId === note.id ? "translateY(1px)" : "none",
-                    transition: "background 0.14s ease, opacity 0.14s ease, transform 0.14s ease",
+                    transform: dragOverNoteId === note.id ? "translateY(2px)" : "none",
+                    boxShadow:
+                      dragOverNoteId === note.id ? "inset 0 0 0 1px var(--accent)" : "none",
+                    touchAction: "none",
+                    userSelect: "none",
+                    transition:
+                      "background 0.14s ease, opacity 0.14s ease, transform 0.16s ease, box-shadow 0.16s ease",
                   }}
                 >
                   {note.title || t("notebook.untitled")}
@@ -1147,7 +1380,11 @@ export function NotebookPanel({ width = "100%" }: { width?: number | string }) {
                 >
                   <Code2 size={13} />
                 </ToolButton>
-                <div style={{ position: "relative", flexShrink: 0 }} data-notebook-table-picker>
+                <div
+                  ref={tablePickerAnchorRef}
+                  style={{ position: "relative", flexShrink: 0 }}
+                  data-notebook-table-picker
+                >
                   <ToolButton
                     label={t("notebook.table")}
                     disabled={!canUseToolbar}
@@ -1163,10 +1400,10 @@ export function NotebookPanel({ width = "100%" }: { width?: number | string }) {
                       data-notebook-table-layer="top"
                       style={{
                         position: "fixed",
-                        top: 76,
-                        right: 72,
+                        top: tablePickerPosition.top,
+                        left: tablePickerPosition.left,
                         zIndex: 1000,
-                        width: 168,
+                        width: TABLE_PICKER_WIDTH,
                         padding: 8,
                         border: "1px solid var(--border-dim)",
                         borderRadius: 8,
@@ -1229,7 +1466,9 @@ export function NotebookPanel({ width = "100%" }: { width?: number | string }) {
                 ref={markdownContentRef}
                 aria-label={t("notebook.memoContent")}
                 value={activeNote.body}
-                onChange={(event) => updateActiveNote({ body: event.currentTarget.value })}
+                onChange={(event) =>
+                  updateActiveNote({ body: normalizeEnglishPunctuation(event.currentTarget.value) })
+                }
                 onSelect={updateMarkdownSelectionState}
                 onKeyUp={updateMarkdownSelectionState}
                 onMouseUp={updateMarkdownSelectionState}
@@ -1263,11 +1502,13 @@ export function NotebookPanel({ width = "100%" }: { width?: number | string }) {
             ) : mode === "edit" ? (
               <div
                 ref={richTextRef}
+                className="notebook-rich-text"
                 role="textbox"
                 aria-label={t("notebook.memoContent")}
                 contentEditable
                 suppressContentEditableWarning
                 onInput={(event) => {
+                  normalizeTextNodes(event.currentTarget);
                   updateActiveNote({
                     body: renderRichText(event.currentTarget.innerHTML),
                   });
@@ -1283,6 +1524,7 @@ export function NotebookPanel({ width = "100%" }: { width?: number | string }) {
                   }
                 }}
                 onFocus={readRichTextCommandState}
+                onKeyDown={handleRichTextKeyDown}
                 onKeyUp={() => {
                   saveRichTextSelection();
                   readRichTextCommandState();
@@ -1327,6 +1569,7 @@ export function NotebookPanel({ width = "100%" }: { width?: number | string }) {
               </div>
             ) : (
               <div
+                className="notebook-rich-text"
                 style={{
                   flex: 1,
                   minHeight: 0,

@@ -1,7 +1,14 @@
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
+use std::net::TcpListener;
 use std::path::{Path, PathBuf};
+use std::process::Child;
 use std::process::Command;
+use std::process::Stdio;
+use std::sync::{Mutex, OnceLock};
+use std::time::Duration;
+
+use crate::ssh::SshConnection;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -37,6 +44,26 @@ fn validate_project_root(project_path: &str) -> Result<PathBuf, String> {
     Ok(canonical)
 }
 
+fn remote_path_has_relative_components(path: &str) -> bool {
+    path.split('/')
+        .any(|component| component == "." || component == "..")
+}
+
+fn normalize_remote_preview_root(remote_project_path: &str) -> Result<String, String> {
+    let trimmed = remote_project_path.trim();
+    if !trimmed.starts_with('/') {
+        return Err("Remote project path must be absolute".to_string());
+    }
+    if trimmed.contains('\0') || remote_path_has_relative_components(trimmed) {
+        return Err("Remote project path cannot contain . or .. components".to_string());
+    }
+    Ok(if trimmed == "/" {
+        "/".to_string()
+    } else {
+        trimmed.trim_end_matches('/').to_string()
+    })
+}
+
 fn parse_endpoint(endpoint: &str) -> Option<(String, u16)> {
     let trimmed = endpoint.trim();
     let separator = trimmed.rfind(':')?;
@@ -62,6 +89,58 @@ fn normalize_url_host(address: &str) -> String {
 
 fn make_port_url(address: &str, port: u16) -> String {
     format!("http://{}:{port}", normalize_url_host(address))
+}
+
+fn remote_preview_host_for_forward(address: &str) -> String {
+    match address.trim() {
+        "" | "*" | "localhost" | "0.0.0.0" | "::" | "[::]" | "::1" | "[::1]" => {
+            "127.0.0.1".to_string()
+        }
+        value if value.starts_with('[') && value.ends_with(']') => {
+            value[1..value.len() - 1].to_string()
+        }
+        value => value.to_string(),
+    }
+}
+
+fn validate_remote_preview_host(host: &str) -> Result<String, String> {
+    let normalized = remote_preview_host_for_forward(host);
+    if normalized.is_empty() || normalized.contains('\0') || normalized.starts_with('-') {
+        return Err("Remote preview host is invalid".to_string());
+    }
+    if normalized.contains(':') {
+        return Err("Remote preview IPv6 hosts are not supported yet".to_string());
+    }
+    if !normalized
+        .bytes()
+        .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b'_'))
+    {
+        return Err("Remote preview host contains unsupported characters".to_string());
+    }
+    Ok(normalized)
+}
+
+fn classify_remote_process_cwd(remote_root: &str, cwd: Option<&str>) -> PortProjectContext {
+    let Some(cwd) = cwd.map(str::trim).filter(|value| !value.is_empty()) else {
+        return PortProjectContext::Unknown;
+    };
+    if !cwd.starts_with('/') || remote_path_has_relative_components(cwd) {
+        return PortProjectContext::Unknown;
+    }
+    let root = remote_root.trim_end_matches('/');
+    let cwd = if cwd == "/" {
+        "/".to_string()
+    } else {
+        cwd.trim_end_matches('/').to_string()
+    };
+    if root.is_empty() || root == "/" {
+        return PortProjectContext::Project;
+    }
+    if cwd == root || cwd.starts_with(&format!("{root}/")) {
+        PortProjectContext::Project
+    } else {
+        PortProjectContext::Other
+    }
 }
 
 #[cfg(any(not(windows), test))]
@@ -351,6 +430,150 @@ fn list_ports_sync(project_path: &str) -> Result<Vec<ListeningPort>, String> {
     }
 }
 
+fn build_remote_list_ports_command(remote_root: &str) -> String {
+    format!(
+        "cd -- {} && lsof -nP -iTCP -sTCP:LISTEN -F pcPn",
+        crate::ssh::shell_quote_posix(remote_root)
+    )
+}
+
+fn build_remote_process_cwd_command(pid: u32) -> String {
+    format!(
+        "readlink /proc/{pid}/cwd 2>/dev/null || lsof -nP -a -p {pid} -d cwd -Fn 2>/dev/null | sed -n 's/^n//p' | head -1"
+    )
+}
+
+fn read_remote_process_cwd(connection: &SshConnection, pid: u32) -> Option<String> {
+    let mut command = crate::ssh::std_ssh_command_for_remote_command(
+        connection,
+        build_remote_process_cwd_command(pid),
+    );
+    crate::subprocess::configure_background_command(&mut command);
+    let output = command.output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let cwd = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if cwd.is_empty() {
+        None
+    } else {
+        Some(cwd)
+    }
+}
+
+fn list_remote_ports_sync(
+    connection: &SshConnection,
+    remote_root: &str,
+) -> Result<Vec<ListeningPort>, String> {
+    let mut command = crate::ssh::std_ssh_command_for_remote_command(
+        connection,
+        build_remote_list_ports_command(remote_root),
+    );
+    crate::subprocess::configure_background_command(&mut command);
+    let output = command
+        .output()
+        .map_err(|e| format!("Failed to run remote lsof: {e}"))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(if stderr.is_empty() {
+            "Failed to list remote listening ports".to_string()
+        } else {
+            stderr
+        });
+    }
+    let mut ports = parse_lsof_listen_output(&String::from_utf8_lossy(&output.stdout));
+    let mut contexts = HashMap::new();
+    for pid in ports.iter().map(|port| port.pid).collect::<HashSet<_>>() {
+        let cwd = read_remote_process_cwd(connection, pid);
+        contexts.insert(
+            pid,
+            classify_remote_process_cwd(remote_root, cwd.as_deref()),
+        );
+    }
+    for port in &mut ports {
+        port.project_context = contexts
+            .get(&port.pid)
+            .cloned()
+            .unwrap_or(PortProjectContext::Unknown);
+    }
+    Ok(ports)
+}
+
+struct PreviewTunnel {
+    local_port: u16,
+    child: Child,
+}
+
+static PREVIEW_TUNNELS: OnceLock<Mutex<HashMap<String, PreviewTunnel>>> = OnceLock::new();
+
+fn preview_tunnels() -> &'static Mutex<HashMap<String, PreviewTunnel>> {
+    PREVIEW_TUNNELS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn allocate_preview_loopback_port() -> Result<u16, String> {
+    let listener = TcpListener::bind(("127.0.0.1", 0))
+        .map_err(|err| format!("Failed to allocate local preview tunnel port: {err}"))?;
+    listener
+        .local_addr()
+        .map(|addr| addr.port())
+        .map_err(|err| format!("Failed to read local preview tunnel port: {err}"))
+}
+
+fn preview_tunnel_key(connection: &SshConnection, remote_host: &str, remote_port: u16) -> String {
+    format!(
+        "{}\u{1f}{}\u{1f}{}\u{1f}{}",
+        connection.id, connection.host, remote_host, remote_port
+    )
+}
+
+fn local_preview_url(local_port: u16) -> String {
+    format!("http://127.0.0.1:{local_port}")
+}
+
+fn open_remote_preview_tunnel_sync(
+    connection: &SshConnection,
+    remote_host: &str,
+    remote_port: u16,
+) -> Result<String, String> {
+    if remote_port == 0 {
+        return Err("Remote preview port is invalid".to_string());
+    }
+    let remote_host = validate_remote_preview_host(remote_host)?;
+    let key = preview_tunnel_key(connection, &remote_host, remote_port);
+    let mut tunnels = preview_tunnels()
+        .lock()
+        .map_err(|_| "Remote preview tunnel state is unavailable".to_string())?;
+    if let Some(tunnel) = tunnels.get_mut(&key) {
+        if tunnel
+            .child
+            .try_wait()
+            .map_err(|err| format!("Failed to inspect remote preview tunnel: {err}"))?
+            .is_none()
+        {
+            return Ok(local_preview_url(tunnel.local_port));
+        }
+    }
+
+    let local_port = allocate_preview_loopback_port()?;
+    let mut command =
+        crate::ssh::std_ssh_port_forward_command(connection, local_port, &remote_host, remote_port);
+    crate::subprocess::configure_background_command(&mut command);
+    let mut child = command
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|err| format!("Failed to start SSH preview tunnel: {err}"))?;
+    std::thread::sleep(Duration::from_millis(150));
+    if let Some(status) = child
+        .try_wait()
+        .map_err(|err| format!("Failed to inspect SSH preview tunnel: {err}"))?
+    {
+        return Err(format!("SSH preview tunnel exited with status {status}"));
+    }
+    tunnels.insert(key, PreviewTunnel { local_port, child });
+    Ok(local_preview_url(local_port))
+}
+
 #[tauri::command]
 pub async fn list_listening_ports(project_path: String) -> Result<Vec<ListeningPort>, String> {
     tauri::async_runtime::spawn_blocking(move || list_ports_sync(&project_path))
@@ -358,11 +581,38 @@ pub async fn list_listening_ports(project_path: String) -> Result<Vec<ListeningP
         .map_err(|e| e.to_string())?
 }
 
+#[tauri::command]
+pub async fn remote_list_listening_ports(
+    connection: SshConnection,
+    remote_project_path: String,
+) -> Result<Vec<ListeningPort>, String> {
+    let remote_root = normalize_remote_preview_root(&remote_project_path)?;
+    tauri::async_runtime::spawn_blocking(move || list_remote_ports_sync(&connection, &remote_root))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn remote_open_preview_tunnel(
+    connection: SshConnection,
+    remote_host: String,
+    remote_port: u16,
+) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        open_remote_preview_tunnel_sync(&connection, &remote_host, remote_port)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        annotate_project_context, make_port_url, normalize_url_host, parse_endpoint,
-        parse_lsof_listen_output, parse_netstat_listen_output, parse_tasklist_csv, ListeningPort,
+        annotate_project_context, build_remote_list_ports_command,
+        build_remote_process_cwd_command, classify_remote_process_cwd, make_port_url,
+        normalize_remote_preview_root, normalize_url_host, parse_endpoint,
+        parse_lsof_listen_output, parse_netstat_listen_output, parse_tasklist_csv,
+        remote_preview_host_for_forward, validate_remote_preview_host, ListeningPort,
         PortProjectContext,
     };
     use std::path::{Path, PathBuf};
@@ -507,5 +757,47 @@ TCP    127.0.0.1:9000         127.0.0.1:52300        ESTABLISHED     7777
         assert_eq!(normalize_url_host("[::1]"), "localhost");
         assert_eq!(normalize_url_host("127.0.0.1"), "127.0.0.1");
         assert_eq!(make_port_url("*", 5173), "http://localhost:5173");
+    }
+
+    #[test]
+    fn builds_remote_preview_commands_and_classifies_cwds() {
+        assert_eq!(
+            normalize_remote_preview_root("/srv/app/").unwrap(),
+            "/srv/app"
+        );
+        assert!(normalize_remote_preview_root("srv/app").is_err());
+        assert!(normalize_remote_preview_root("/srv/../app").is_err());
+        assert_eq!(
+            build_remote_list_ports_command("/srv/app repo"),
+            "cd -- '/srv/app repo' && lsof -nP -iTCP -sTCP:LISTEN -F pcPn"
+        );
+        assert_eq!(
+            build_remote_process_cwd_command(42),
+            "readlink /proc/42/cwd 2>/dev/null || lsof -nP -a -p 42 -d cwd -Fn 2>/dev/null | sed -n 's/^n//p' | head -1"
+        );
+        assert_eq!(
+            classify_remote_process_cwd("/srv/app", Some("/srv/app/web")),
+            PortProjectContext::Project
+        );
+        assert_eq!(
+            classify_remote_process_cwd("/srv/app", Some("/opt/service")),
+            PortProjectContext::Other
+        );
+        assert_eq!(
+            classify_remote_process_cwd("/srv/app", Some("../app")),
+            PortProjectContext::Unknown
+        );
+    }
+
+    #[test]
+    fn validates_remote_preview_forward_hosts() {
+        assert_eq!(remote_preview_host_for_forward("localhost"), "127.0.0.1");
+        assert_eq!(remote_preview_host_for_forward("[::1]"), "127.0.0.1");
+        assert_eq!(
+            validate_remote_preview_host("127.0.0.1").unwrap(),
+            "127.0.0.1"
+        );
+        assert!(validate_remote_preview_host("-bad").is_err());
+        assert!(validate_remote_preview_host("bad host").is_err());
     }
 }

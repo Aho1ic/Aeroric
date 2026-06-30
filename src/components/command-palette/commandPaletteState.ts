@@ -5,6 +5,12 @@ export function commandPaletteModeForInput(input: string): CommandPaletteParsedI
   if (trimmed.startsWith(">")) {
     return { mode: "command", query: trimmed.slice(1).trimStart() };
   }
+  if (trimmed.startsWith("@")) {
+    return { mode: "documentSymbol", query: trimmed.slice(1).trimStart() };
+  }
+  if (trimmed.startsWith("#")) {
+    return { mode: "workspaceSymbol", query: trimmed.slice(1).trimStart() };
+  }
   return { mode: "file", query: trimmed };
 }
 

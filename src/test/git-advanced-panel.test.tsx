@@ -1,8 +1,11 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { invoke } from "@tauri-apps/api/core";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { act } from "react";
+import type React from "react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GitAdvancedPanel } from "../components/git-advanced/GitAdvancedPanel";
 import { I18nProvider } from "../i18n";
+import { REMOTE_IDE_COMMAND_TIMEOUT_MS } from "../hooks/useCancellableInvoke";
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(),
@@ -12,14 +15,17 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({
   confirm: vi.fn(),
 }));
 
-function renderPanel() {
+function renderPanel(
+  options: Partial<React.ComponentProps<typeof GitAdvancedPanel>> = {},
+) {
   render(
     <I18nProvider>
       <GitAdvancedPanel
-        projectPath="/tmp/aeroric"
-        activeFilePath={null}
-        width={360}
+        projectPath={options.projectPath ?? "/tmp/aeroric"}
+        activeFilePath={options.activeFilePath ?? null}
+        width={options.width ?? 360}
         onOpenFile={vi.fn()}
+        remote={options.remote}
       />
     </I18nProvider>,
   );
@@ -28,6 +34,10 @@ function renderPanel() {
 describe("GitAdvancedPanel", () => {
   beforeEach(() => {
     vi.mocked(invoke).mockReset();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it("loads a stash diff preview on demand", async () => {
@@ -151,5 +161,106 @@ describe("GitAdvancedPanel", () => {
       projectPath: "/tmp/aeroric",
       limit: 80,
     });
+  });
+
+  it("uses remote git advanced commands for SSH projects", async () => {
+    const connection = {
+      id: "conn-2",
+      name: "Production",
+      host: "prod.example.com",
+      port: 22,
+      username: "deploy",
+      createdAt: 2,
+    };
+    vi.mocked(invoke).mockImplementation((command) => {
+      if (command === "remote_git_branch_graph") {
+        return Promise.resolve({ commits: [], truncated: false });
+      }
+      if (command === "remote_git_stash_list") {
+        return Promise.resolve([
+          {
+            index: 0,
+            name: "stash@{0}",
+            commit: "abcdef123456",
+            date: "2 minutes ago",
+            message: "WIP on main",
+          },
+        ]);
+      }
+      if (command === "remote_git_conflict_files") {
+        return Promise.resolve([{ path: "app.txt" }]);
+      }
+      if (command === "remote_git_stash_diff") {
+        return Promise.resolve({
+          stashRef: "stash@{0}",
+          diff: "remote diff",
+          truncated: false,
+        });
+      }
+      if (command === "remote_git_conflict_preview") {
+        return Promise.resolve({
+          filePath: "app.txt",
+          hunks: [{ index: 1, ours: "remote ours\n", base: "", theirs: "remote theirs\n" }],
+        });
+      }
+      return Promise.reject(new Error(`unexpected command: ${command}`));
+    });
+
+    renderPanel({
+      projectPath: "/srv/app",
+      remote: { connection, projectPath: "/srv/app" },
+    });
+
+    fireEvent.click(await screen.findByRole("button", { name: "Diff" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Preview" }));
+
+    await waitFor(() => {
+      expect(vi.mocked(invoke)).toHaveBeenCalledWith("remote_git_branch_graph", {
+        connection,
+        remoteProjectPath: "/srv/app",
+        limit: 80,
+      });
+      expect(vi.mocked(invoke)).toHaveBeenCalledWith("remote_git_stash_diff", {
+        connection,
+        remoteProjectPath: "/srv/app",
+        stashRef: "stash@{0}",
+      });
+      expect(vi.mocked(invoke)).toHaveBeenCalledWith("remote_git_conflict_preview", {
+        connection,
+        remoteProjectPath: "/srv/app",
+        filePath: "app.txt",
+      });
+    });
+    expect(await screen.findByText("remote diff")).toBeInTheDocument();
+    expect(await screen.findByText("remote ours")).toBeInTheDocument();
+  });
+
+  it("shows a visible timeout when remote branch graph loading hangs", async () => {
+    vi.useFakeTimers();
+    const connection = {
+      id: "conn-2",
+      name: "Production",
+      host: "prod.example.com",
+      port: 22,
+      username: "deploy",
+      createdAt: 2,
+    };
+    vi.mocked(invoke).mockImplementation((command) => {
+      if (command === "remote_git_branch_graph") return new Promise(() => {});
+      if (command === "remote_git_stash_list") return Promise.resolve([]);
+      if (command === "remote_git_conflict_files") return Promise.resolve([]);
+      return Promise.reject(new Error(`unexpected command: ${command}`));
+    });
+
+    renderPanel({
+      projectPath: "/srv/app",
+      remote: { connection, projectPath: "/srv/app" },
+    });
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(REMOTE_IDE_COMMAND_TIMEOUT_MS);
+    });
+
+    expect(screen.getByText(/remote_git_branch_graph.*timed out after 60s/i)).toBeInTheDocument();
   });
 });

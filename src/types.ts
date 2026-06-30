@@ -339,6 +339,36 @@ export interface ReplaceSummary {
   replacementsSkipped: number;
 }
 
+export interface LspPosition {
+  line: number;
+  character: number;
+}
+
+export interface LspRange {
+  start: LspPosition;
+  end: LspPosition;
+}
+
+export interface LspSymbol {
+  name: string;
+  kind: number;
+  detail?: string | null;
+  containerName?: string | null;
+  uri: string;
+  path: string;
+  range: LspRange;
+  selectionRange: LspRange;
+}
+
+export interface LspInlayHint {
+  label: string;
+  position: LspPosition;
+  kind?: number | null;
+  tooltip?: string | null;
+  paddingLeft: boolean;
+  paddingRight: boolean;
+}
+
 export type DiagnosticSeverity = "error" | "warning" | "info";
 
 export interface DiagnosticItem {
@@ -370,6 +400,19 @@ export interface GitBlameLine {
 export interface GitBlameResult {
   filePath: string;
   lines: GitBlameLine[];
+}
+
+export interface LocalHistoryEntry {
+  id: string;
+  filePath: string;
+  relativePath: string;
+  createdAtMs: number;
+  size: number;
+}
+
+export interface LocalHistorySnapshot {
+  entry: LocalHistoryEntry;
+  content: string;
 }
 
 export interface GitBranchGraphCommit {
@@ -430,19 +473,25 @@ export interface ListeningPort {
 }
 
 export type DebugConfigType = "node" | "python";
+export type DebugRequestType = "launch" | "attach";
 
 export interface DebugBreakpoint {
   file: string;
   line: number;
   column: number;
+  condition?: string | null;
+  logMessage?: string | null;
 }
 
 export interface DebugConfig {
   id: string;
   name: string;
   type: DebugConfigType;
+  request?: DebugRequestType;
   program: string;
   cwd: string;
+  attachHost?: string;
+  attachPort?: number | null;
   args: string[];
   env: Record<string, string>;
   breakpoints: DebugBreakpoint[];
@@ -466,6 +515,7 @@ export interface DebugCallFrame {
   file: string;
   line: number;
   column: number;
+  frameId?: string | null;
 }
 
 export interface DebugVariable {
@@ -495,6 +545,14 @@ export interface DebugSessionSnapshot {
   exitCode?: number | null;
   startedAt: number;
   finishedAt?: number | null;
+}
+
+export interface DebugEvaluateResult {
+  expression: string;
+  result: string;
+  typeName?: string | null;
+  objectId?: string | null;
+  hasChildren?: boolean;
 }
 
 export type RunConfigType = "shell" | "debug";
@@ -578,7 +636,36 @@ export interface TestRunResult {
   failed: number;
   tests: TestCase[];
   failures: TestFailure[];
+  coverage?: TestCoverageSummary | null;
   rawOutput: string;
+}
+
+export interface TestCoverageMetric {
+  covered: number;
+  total: number;
+  percent: number;
+}
+
+export interface TestCoverageSummary {
+  lines: TestCoverageMetric;
+  functions: TestCoverageMetric;
+  branches: TestCoverageMetric;
+  files?: TestCoverageFile[];
+}
+
+export interface TestCoverageFile {
+  file: string;
+  lines: TestCoverageLine[];
+}
+
+export interface TestCoverageLine {
+  line: number;
+  hits: number;
+}
+
+export interface TestRunTarget {
+  filePath?: string | null;
+  testName?: string | null;
 }
 
 export interface TestDiscoveryResult {

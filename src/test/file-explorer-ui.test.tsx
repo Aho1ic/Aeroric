@@ -1,10 +1,12 @@
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import React from "react";
-import { describe, expect, it, vi, beforeEach } from "vitest";
+import React, { act } from "react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
 import { I18nProvider } from "../i18n";
 import { FileExplorer } from "../components/FileExplorer";
+import { REMOTE_IDE_COMMAND_TIMEOUT_MS } from "../hooks/useCancellableInvoke";
+import type { SshConnection } from "../types";
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(),
@@ -41,6 +43,15 @@ const entries = [
   },
 ];
 
+const connection: SshConnection = {
+  id: "ssh-1",
+  name: "prod",
+  host: "example.com",
+  port: 22,
+  username: "deploy",
+  createdAt: 1,
+};
+
 function renderExplorer() {
   return render(
     React.createElement(
@@ -63,6 +74,10 @@ describe("FileExplorer UI", () => {
       if (command === "read_dir_entries") return Promise.resolve(entries);
       return Promise.resolve(undefined);
     });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it("keeps file icons separated from names", async () => {
@@ -137,5 +152,35 @@ describe("FileExplorer UI", () => {
 
     expect(onOpenDatabaseFile).toHaveBeenCalledWith("/repo/app.db", "app.db");
     expect(onFileSelect).not.toHaveBeenCalled();
+  });
+
+  it("shows a visible timeout when remote directory reads hang", async () => {
+    vi.useFakeTimers();
+    vi.mocked(invoke).mockImplementation((command) => {
+      if (command === "remote_read_dir_entries") return new Promise(() => {});
+      return Promise.resolve(undefined);
+    });
+
+    render(
+      React.createElement(
+        I18nProvider,
+        null,
+        React.createElement(FileExplorer, {
+          projectPath: "/srv/app",
+          projectName: "app",
+          onFileSelect: vi.fn(),
+          remote: { connection, projectPath: "/srv/app" },
+          themeVariant: "light",
+        }),
+      ),
+    );
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(REMOTE_IDE_COMMAND_TIMEOUT_MS);
+    });
+
+    expect(screen.getByTestId("file-explorer-error")).toHaveTextContent(
+      /remote_read_dir_entries.*timed out after 60s/i,
+    );
   });
 });

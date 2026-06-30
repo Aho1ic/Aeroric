@@ -1,3 +1,5 @@
+import type { SshConnection } from "../types";
+
 export type LspServerCommand = {
   program: string;
   args: string[];
@@ -26,6 +28,27 @@ export type LspDocumentRequest = {
   line: number;
   character: number;
 };
+
+export type LspRemoteContext = {
+  connection: SshConnection;
+  projectPath: string;
+};
+
+export function lspCommandName(command: string, remote?: LspRemoteContext): string {
+  return remote ? `remote_${command}` : command;
+}
+
+export function lspInvokeArgs<T extends Record<string, unknown>>(
+  args: T,
+  remote?: LspRemoteContext,
+): T | (T & { connection: SshConnection; remoteProjectPath: string }) {
+  if (!remote) return args;
+  return {
+    ...args,
+    connection: remote.connection,
+    remoteProjectPath: remote.projectPath,
+  };
+}
 
 const SUPPORTED_EXTENSIONS = new Set(["ts", "tsx", "js", "jsx", "mjs", "cjs"]);
 

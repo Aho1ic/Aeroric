@@ -5,7 +5,7 @@ use serde_json::{json, Value};
 use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
-use std::net::TcpStream;
+use std::net::{TcpListener, TcpStream};
 use std::path::{Component, Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -19,6 +19,8 @@ use tungstenite::{connect, Error as WsError, Message};
 use url::Url;
 use uuid::Uuid;
 
+use crate::ssh::SshConnection;
+
 const DEBUG_CONFIG_VERSION: u32 = 1;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -29,11 +31,30 @@ pub enum DebugConfigType {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum DebugRequestType {
+    Launch,
+    Attach,
+}
+
+fn default_debug_request_type() -> DebugRequestType {
+    DebugRequestType::Launch
+}
+
+fn default_attach_host() -> String {
+    "127.0.0.1".to_string()
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct DebugBreakpoint {
     pub file: String,
     pub line: u32,
     pub column: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub condition: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub log_message: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -43,8 +64,14 @@ pub struct DebugConfig {
     pub name: String,
     #[serde(rename = "type")]
     pub config_type: DebugConfigType,
+    #[serde(default = "default_debug_request_type")]
+    pub request: DebugRequestType,
     pub program: String,
     pub cwd: String,
+    #[serde(default = "default_attach_host")]
+    pub attach_host: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attach_port: Option<u16>,
     #[serde(default)]
     pub args: Vec<String>,
     #[serde(default)]
@@ -89,6 +116,8 @@ pub struct DebugCallFrame {
     pub file: String,
     pub line: u32,
     pub column: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frame_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -132,11 +161,26 @@ pub struct DebugSessionSnapshot {
     pub finished_at: Option<u128>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct DebugEvaluateResult {
+    pub expression: String,
+    pub result: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub type_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub object_id: Option<String>,
+    #[serde(default)]
+    pub has_children: bool,
+}
+
 #[derive(Debug, Clone)]
 struct DebugBreakpointTarget {
     file_url: String,
     line: u32,
     column: u32,
+    condition: Option<String>,
+    log_message: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -144,14 +188,20 @@ struct PythonBreakpointTarget {
     file: PathBuf,
     line: u32,
     column: u32,
+    condition: Option<String>,
+    log_message: Option<String>,
 }
 
 #[derive(Clone)]
 struct DebugSessionHandle {
-    child: Arc<Mutex<Child>>,
+    child: Option<Arc<Mutex<Child>>>,
+    tunnel_child: Option<Arc<Mutex<Child>>>,
+    remote_child: Option<Arc<Mutex<Child>>>,
     snapshot: Arc<Mutex<DebugSessionSnapshot>>,
     command_tx: Sender<SessionCommand>,
     config_type: DebugConfigType,
+    project_root: PathBuf,
+    remote_project_path: Option<String>,
 }
 
 #[derive(Debug)]
@@ -163,6 +213,11 @@ enum SessionCommand {
     ExpandVariable {
         object_id: String,
         result_tx: Sender<Result<Vec<DebugVariable>, String>>,
+    },
+    Evaluate {
+        expression: String,
+        context: String,
+        result_tx: Sender<Result<DebugEvaluateResult, String>>,
     },
     Stop,
 }
@@ -238,12 +293,149 @@ fn candidate_path(root: &Path, value: &str) -> Result<PathBuf, String> {
     })
 }
 
+fn remote_debug_path_has_relative_components(path: &str) -> bool {
+    path.split('/')
+        .any(|component| component == "." || component == "..")
+}
+
+fn normalize_remote_debug_root(remote_project_path: &str) -> Result<String, String> {
+    let trimmed = remote_project_path.trim();
+    if !trimmed.starts_with('/') {
+        return Err("Remote project path must be absolute".to_string());
+    }
+    if trimmed.contains('\0') || remote_debug_path_has_relative_components(trimmed) {
+        return Err("Remote project path cannot contain . or .. components".to_string());
+    }
+    Ok(if trimmed == "/" {
+        "/".to_string()
+    } else {
+        trimmed.trim_end_matches('/').to_string()
+    })
+}
+
+fn remote_debug_path_is_inside_root(root: &str, path: &str) -> bool {
+    root == "/" || path == root || path.starts_with(&format!("{root}/"))
+}
+
+fn join_remote_debug_path(root: &str, value: &str, label: &str) -> Result<String, String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err(format!("{label} cannot be empty"));
+    }
+    if trimmed == "." && label == "Debug cwd" {
+        return Ok(root.to_string());
+    }
+    if trimmed.contains('\0') || remote_debug_path_has_relative_components(trimmed) {
+        return Err(format!("{label} cannot contain . or .. components"));
+    }
+    let path = if trimmed.starts_with('/') {
+        if trimmed == "/" {
+            "/".to_string()
+        } else {
+            trimmed.trim_end_matches('/').to_string()
+        }
+    } else if root == "/" {
+        format!("/{}", trimmed.trim_matches('/'))
+    } else {
+        format!(
+            "{}/{}",
+            root.trim_end_matches('/'),
+            trimmed.trim_matches('/')
+        )
+    };
+    if !remote_debug_path_is_inside_root(root, &path) {
+        return Err(format!("{label} is outside project root"));
+    }
+    Ok(path)
+}
+
+fn remote_debug_config_path(root: &str) -> String {
+    if root == "/" {
+        "/.aeroric/debug-configs.json".to_string()
+    } else {
+        format!("{}/.aeroric/debug-configs.json", root.trim_end_matches('/'))
+    }
+}
+
+fn validate_remote_breakpoint(root: &str, breakpoint: &DebugBreakpoint) -> Result<(), String> {
+    if breakpoint.line == 0 {
+        return Err("Breakpoint line must be at least 1".to_string());
+    }
+    if breakpoint.column == 0 {
+        return Err("Breakpoint column must be at least 1".to_string());
+    }
+    if breakpoint
+        .condition
+        .as_deref()
+        .is_some_and(|condition| condition.trim().is_empty())
+    {
+        return Err("Breakpoint condition cannot be empty".to_string());
+    }
+    if breakpoint
+        .log_message
+        .as_deref()
+        .is_some_and(|message| message.trim().is_empty())
+    {
+        return Err("Breakpoint log message cannot be empty".to_string());
+    }
+    join_remote_debug_path(root, &breakpoint.file, "Breakpoint file").map(|_| ())
+}
+
+fn validate_remote_debug_config(root: &str, config: &DebugConfig) -> Result<(), String> {
+    if config.id.trim().is_empty() {
+        return Err("Debug config id cannot be empty".to_string());
+    }
+    if config.name.trim().is_empty() {
+        return Err("Debug config name cannot be empty".to_string());
+    }
+    join_remote_debug_path(root, &config.cwd, "Debug cwd")?;
+    match config.request {
+        DebugRequestType::Launch => {
+            if config.program.trim().is_empty() {
+                return Err("Debug program cannot be empty".to_string());
+            }
+            join_remote_debug_path(root, &config.program, "Debug program")?;
+        }
+        DebugRequestType::Attach => {
+            validate_attach_endpoint(&config.attach_host, config.attach_port)?;
+            if !config.program.trim().is_empty() {
+                join_remote_debug_path(root, &config.program, "Debug program")?;
+            }
+        }
+    }
+    for breakpoint in &config.breakpoints {
+        validate_remote_breakpoint(root, breakpoint)?;
+    }
+    Ok(())
+}
+
+fn validate_remote_debug_configs(root: &str, document: &DebugConfigDocument) -> Result<(), String> {
+    for config in &document.configs {
+        validate_remote_debug_config(root, config)?;
+    }
+    Ok(())
+}
+
 fn validate_breakpoint(root: &Path, breakpoint: &DebugBreakpoint) -> Result<(), String> {
     if breakpoint.line == 0 {
         return Err("Breakpoint line must be at least 1".to_string());
     }
     if breakpoint.column == 0 {
         return Err("Breakpoint column must be at least 1".to_string());
+    }
+    if breakpoint
+        .condition
+        .as_deref()
+        .is_some_and(|condition| condition.trim().is_empty())
+    {
+        return Err("Breakpoint condition cannot be empty".to_string());
+    }
+    if breakpoint
+        .log_message
+        .as_deref()
+        .is_some_and(|message| message.trim().is_empty())
+    {
+        return Err("Breakpoint log message cannot be empty".to_string());
     }
     let candidate = candidate_path(root, &breakpoint.file)?;
     ensure_path_inside_root(root, &candidate)
@@ -256,17 +448,45 @@ fn validate_debug_config(root: &Path, config: &DebugConfig) -> Result<(), String
     if config.name.trim().is_empty() {
         return Err("Debug config name cannot be empty".to_string());
     }
-    if config.program.trim().is_empty() {
-        return Err("Debug program cannot be empty".to_string());
-    }
-    let program = candidate_path(root, &config.program)?;
     let cwd = candidate_path(root, &config.cwd)?;
-    ensure_path_inside_root(root, &program)?;
     ensure_path_inside_root(root, &cwd)?;
+    match config.request {
+        DebugRequestType::Launch => {
+            if config.program.trim().is_empty() {
+                return Err("Debug program cannot be empty".to_string());
+            }
+            let program = candidate_path(root, &config.program)?;
+            ensure_path_inside_root(root, &program)?;
+        }
+        DebugRequestType::Attach => {
+            validate_attach_endpoint(&config.attach_host, config.attach_port)?;
+            if !config.program.trim().is_empty() {
+                let program = candidate_path(root, &config.program)?;
+                ensure_path_inside_root(root, &program)?;
+            }
+        }
+    }
     for breakpoint in &config.breakpoints {
         validate_breakpoint(root, breakpoint)?;
     }
     Ok(())
+}
+
+fn validate_attach_endpoint(host: &str, port: Option<u16>) -> Result<(), String> {
+    let host = host.trim();
+    if host.is_empty() {
+        return Err("Attach host cannot be empty".to_string());
+    }
+    if host
+        .chars()
+        .any(|character| character.is_whitespace() || matches!(character, '/' | '\\'))
+    {
+        return Err("Attach host cannot contain whitespace or URL separators".to_string());
+    }
+    match port {
+        Some(port) if port > 0 => Ok(()),
+        _ => Err("Attach port must be between 1 and 65535".to_string()),
+    }
 }
 
 fn resolve_debug_cwd(root: &Path, cwd: &str) -> Result<PathBuf, String> {
@@ -334,6 +554,170 @@ fn write_debug_configs_from_root(
     }
     let raw = serde_json::to_string_pretty(&document).map_err(|e| e.to_string())?;
     crate::storage::atomic_write(&path, &raw)?;
+    Ok(document)
+}
+
+fn build_remote_debug_read_configs_command(remote_root: &str) -> String {
+    let config_path = remote_debug_config_path(remote_root);
+    let script = "path=$1; if [ -f \"$path\" ]; then cat -- \"$path\"; fi";
+    format!(
+        "sh -c {} sh {}",
+        crate::ssh::shell_quote_posix(script),
+        crate::ssh::shell_quote_posix(&config_path)
+    )
+}
+
+fn build_remote_debug_write_configs_command(remote_root: &str) -> String {
+    let config_path = remote_debug_config_path(remote_root);
+    let parent = if let Some((parent, _)) = config_path.rsplit_once('/') {
+        if parent.is_empty() {
+            "/"
+        } else {
+            parent
+        }
+    } else {
+        "."
+    };
+    format!(
+        "mkdir -p -- {} && cat > {}",
+        crate::ssh::shell_quote_posix(parent),
+        crate::ssh::shell_quote_posix(&config_path)
+    )
+}
+
+fn build_remote_node_launch_command(
+    cwd: &str,
+    program: &str,
+    args: &[String],
+    env: &BTreeMap<String, String>,
+) -> String {
+    let env_args = env
+        .iter()
+        .map(|(key, value)| crate::ssh::shell_quote_posix(&format!("{key}={value}")))
+        .collect::<Vec<_>>();
+    let mut command_parts = Vec::new();
+    if env_args.is_empty() {
+        command_parts.push("node".to_string());
+    } else {
+        command_parts.push("env".to_string());
+        command_parts.extend(env_args);
+        command_parts.push("node".to_string());
+    }
+    command_parts.push("--inspect-brk=127.0.0.1:0".to_string());
+    command_parts.push(crate::ssh::shell_quote_posix(program));
+    command_parts.extend(args.iter().map(|arg| crate::ssh::shell_quote_posix(arg)));
+    format!(
+        "cd -- {} && {}",
+        crate::ssh::shell_quote_posix(cwd),
+        command_parts.join(" ")
+    )
+}
+
+fn build_remote_python_launch_command(
+    cwd: &str,
+    program: &str,
+    args: &[String],
+    env: &BTreeMap<String, String>,
+) -> String {
+    let env_args = env
+        .iter()
+        .map(|(key, value)| crate::ssh::shell_quote_posix(&format!("{key}={value}")))
+        .collect::<Vec<_>>();
+    let script = concat!(
+        "import debugpy, runpy, sys\n",
+        "program = sys.argv[1]\n",
+        "sys.argv = sys.argv[1:]\n",
+        "host, port = debugpy.listen(('127.0.0.1', 0))\n",
+        "print(f'AERORIC_DEBUGPY_PORT={port}', file=sys.stderr, flush=True)\n",
+        "debugpy.wait_for_client()\n",
+        "runpy.run_path(program, run_name='__main__')\n"
+    );
+    let mut command_parts = Vec::new();
+    if env_args.is_empty() {
+        command_parts.push("python3".to_string());
+    } else {
+        command_parts.push("env".to_string());
+        command_parts.extend(env_args);
+        command_parts.push("python3".to_string());
+    }
+    command_parts.push("-u".to_string());
+    command_parts.push("-c".to_string());
+    command_parts.push(crate::ssh::shell_quote_posix(script));
+    command_parts.push(crate::ssh::shell_quote_posix(program));
+    command_parts.extend(args.iter().map(|arg| crate::ssh::shell_quote_posix(arg)));
+    format!(
+        "cd -- {} && {}",
+        crate::ssh::shell_quote_posix(cwd),
+        command_parts.join(" ")
+    )
+}
+
+fn run_remote_debug_output(
+    connection: &SshConnection,
+    remote_command: String,
+) -> Result<Vec<u8>, String> {
+    let mut cmd = crate::ssh::std_ssh_command_for_remote_command(connection, remote_command);
+    crate::subprocess::configure_background_command(&mut cmd);
+    let output = cmd.output().map_err(|err| err.to_string())?;
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+    }
+    Ok(output.stdout)
+}
+
+fn read_remote_debug_configs_from_root(
+    connection: &SshConnection,
+    remote_root: &str,
+) -> Result<DebugConfigDocument, String> {
+    let stdout = run_remote_debug_output(
+        connection,
+        build_remote_debug_read_configs_command(remote_root),
+    )?;
+    if stdout.is_empty() {
+        return Ok(DebugConfigDocument::default());
+    }
+    let raw = String::from_utf8(stdout).map_err(|err| err.to_string())?;
+    let mut document: DebugConfigDocument =
+        serde_json::from_str(&raw).map_err(|err| err.to_string())?;
+    if document.version == 0 {
+        document.version = DEBUG_CONFIG_VERSION;
+    }
+    validate_remote_debug_configs(remote_root, &document)?;
+    Ok(document)
+}
+
+fn write_remote_debug_configs_from_root(
+    connection: &SshConnection,
+    remote_root: &str,
+    mut document: DebugConfigDocument,
+) -> Result<DebugConfigDocument, String> {
+    document.version = DEBUG_CONFIG_VERSION;
+    validate_remote_debug_configs(remote_root, &document)?;
+    let raw = serde_json::to_string_pretty(&document).map_err(|err| err.to_string())?;
+    let mut cmd = crate::ssh::std_ssh_command_for_remote_command(
+        connection,
+        build_remote_debug_write_configs_command(remote_root),
+    );
+    crate::subprocess::configure_background_command(&mut cmd);
+    let mut child = cmd
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|err| err.to_string())?;
+    {
+        let stdin = child
+            .stdin
+            .as_mut()
+            .ok_or_else(|| "Failed to open ssh stdin".to_string())?;
+        stdin
+            .write_all(raw.as_bytes())
+            .map_err(|err| err.to_string())?;
+    }
+    let output = child.wait_with_output().map_err(|err| err.to_string())?;
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+    }
     Ok(document)
 }
 
@@ -413,10 +797,165 @@ fn spawn_stderr_reader<R>(
     });
 }
 
+fn spawn_debugpy_port_reader<R>(
+    reader: R,
+    snapshot: Arc<Mutex<DebugSessionSnapshot>>,
+    port_tx: Sender<u16>,
+) where
+    R: Read + Send + 'static,
+{
+    thread::spawn(move || {
+        let mut reader = BufReader::new(reader);
+        let port_regex = Regex::new(r"AERORIC_DEBUGPY_PORT=(\d+)").expect("valid port regex");
+        let mut line = String::new();
+        let mut sent_port = false;
+        loop {
+            line.clear();
+            match reader.read_line(&mut line) {
+                Ok(0) => break,
+                Ok(_) => {
+                    append_output(&snapshot, &line);
+                    if !sent_port {
+                        if let Some(port) = port_regex
+                            .captures(&line)
+                            .and_then(|captures| captures.get(1))
+                            .and_then(|value| value.as_str().parse::<u16>().ok())
+                            .filter(|port| *port > 0)
+                        {
+                            sent_port = true;
+                            let _ = port_tx.send(port);
+                        }
+                    }
+                }
+                Err(error) => {
+                    append_output(
+                        &snapshot,
+                        &format!("\n[debug stderr read failed: {error}]\n"),
+                    );
+                    break;
+                }
+            }
+        }
+    });
+}
+
+fn http_response_body(response: &str) -> Result<&str, String> {
+    let (headers, body) = response
+        .split_once("\r\n\r\n")
+        .ok_or_else(|| "Invalid inspector HTTP response".to_string())?;
+    let status = headers
+        .lines()
+        .next()
+        .and_then(|line| line.split_whitespace().nth(1))
+        .and_then(|code| code.parse::<u16>().ok())
+        .ok_or_else(|| "Missing inspector HTTP status".to_string())?;
+    if !(200..300).contains(&status) {
+        return Err(format!("Node inspector returned HTTP {status}"));
+    }
+    Ok(body)
+}
+
+fn parse_node_inspector_websocket_url(raw: &str) -> Result<String, String> {
+    fn url_from_value(value: &Value) -> Option<String> {
+        value
+            .get("webSocketDebuggerUrl")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|url| !url.is_empty())
+            .map(str::to_string)
+    }
+
+    let value: Value = serde_json::from_str(raw)
+        .map_err(|error| format!("Failed to parse Node inspector target list: {error}"))?;
+    let websocket_url = match &value {
+        Value::Array(targets) => targets.iter().find_map(url_from_value),
+        Value::Object(_) => url_from_value(&value),
+        _ => None,
+    }
+    .ok_or_else(|| "Node inspector did not expose a websocket debugger URL".to_string())?;
+    let parsed = Url::parse(&websocket_url)
+        .map_err(|error| format!("Invalid inspector websocket URL: {error}"))?;
+    match parsed.scheme() {
+        "ws" | "wss" => Ok(websocket_url),
+        scheme => Err(format!("Unsupported inspector websocket scheme: {scheme}")),
+    }
+}
+
+fn fetch_node_inspector_json(host: &str, port: u16, path: &str) -> Result<String, String> {
+    let mut stream = TcpStream::connect((host, port))
+        .map_err(|error| format!("Failed to connect to Node inspector: {error}"))?;
+    stream
+        .set_read_timeout(Some(Duration::from_secs(3)))
+        .map_err(|error| format!("Failed to configure Node inspector read timeout: {error}"))?;
+    stream
+        .set_write_timeout(Some(Duration::from_secs(3)))
+        .map_err(|error| format!("Failed to configure Node inspector write timeout: {error}"))?;
+    let request = format!(
+        "GET {path} HTTP/1.1\r\nHost: {host}:{port}\r\nAccept: application/json\r\nConnection: close\r\n\r\n"
+    );
+    stream
+        .write_all(request.as_bytes())
+        .map_err(|error| format!("Failed to request Node inspector targets: {error}"))?;
+    let mut response = String::new();
+    stream
+        .read_to_string(&mut response)
+        .map_err(|error| format!("Failed to read Node inspector targets: {error}"))?;
+    http_response_body(&response).map(str::to_string)
+}
+
+fn fetch_node_inspector_websocket_url(host: &str, port: u16) -> Result<String, String> {
+    match fetch_node_inspector_json(host, port, "/json/list")
+        .and_then(|body| parse_node_inspector_websocket_url(&body))
+    {
+        Ok(url) => Ok(url),
+        Err(list_error) => {
+            let body = fetch_node_inspector_json(host, port, "/json/version")
+                .map_err(|version_error| format!("{list_error}; {version_error}"))?;
+            parse_node_inspector_websocket_url(&body)
+                .map_err(|version_error| format!("{list_error}; {version_error}"))
+        }
+    }
+}
+
 fn node_file_url(path: &Path) -> Result<String, String> {
     Url::from_file_path(path)
         .map(|url| url.to_string())
         .map_err(|_| format!("Cannot convert debug path to file URL: {}", path.display()))
+}
+
+fn remote_node_file_url(path: &str) -> Result<String, String> {
+    if !path.starts_with('/') {
+        return Err(format!("Remote debug path must be absolute: {path}"));
+    }
+    let mut url = Url::parse("file:///").map_err(|error| error.to_string())?;
+    {
+        let mut segments = url
+            .path_segments_mut()
+            .map_err(|_| "Cannot build remote debug file URL".to_string())?;
+        segments.clear();
+        for segment in path.trim_start_matches('/').split('/') {
+            if !segment.is_empty() {
+                segments.push(segment);
+            }
+        }
+    }
+    Ok(url.to_string())
+}
+
+fn inspector_websocket_url_for_endpoint(
+    websocket_url: &str,
+    host: &str,
+    port: u16,
+) -> Result<Url, String> {
+    let mut parsed = Url::parse(websocket_url)
+        .map_err(|error| format!("Invalid inspector websocket URL: {error}"))?;
+    parsed
+        .set_host(Some(host))
+        .map_err(|_| format!("Invalid inspector websocket host: {host}"))?;
+    parsed
+        .set_port(Some(port))
+        .map_err(|_| format!("Invalid inspector websocket port: {port}"))?;
+    Ok(parsed)
 }
 
 fn resolve_debug_breakpoint_targets(
@@ -432,6 +971,16 @@ fn resolve_debug_breakpoint_targets(
                 file_url: node_file_url(&candidate)?,
                 line: breakpoint.line,
                 column: breakpoint.column,
+                condition: breakpoint
+                    .condition
+                    .as_deref()
+                    .map(str::trim)
+                    .map(str::to_string),
+                log_message: breakpoint
+                    .log_message
+                    .as_deref()
+                    .map(str::trim)
+                    .map(str::to_string),
             })
         })
         .collect()
@@ -450,9 +999,138 @@ fn resolve_python_breakpoint_targets(
                 file: candidate,
                 line: breakpoint.line,
                 column: breakpoint.column,
+                condition: breakpoint
+                    .condition
+                    .as_deref()
+                    .map(str::trim)
+                    .map(str::to_string),
+                log_message: breakpoint
+                    .log_message
+                    .as_deref()
+                    .map(str::trim)
+                    .map(str::to_string),
             })
         })
         .collect()
+}
+
+fn resolve_remote_python_breakpoint_targets(
+    root: &str,
+    breakpoints: &[DebugBreakpoint],
+) -> Result<Vec<PythonBreakpointTarget>, String> {
+    breakpoints
+        .iter()
+        .map(|breakpoint| {
+            let file = join_remote_debug_path(root, &breakpoint.file, "Breakpoint file")?;
+            Ok(PythonBreakpointTarget {
+                file: PathBuf::from(file),
+                line: breakpoint.line,
+                column: breakpoint.column,
+                condition: breakpoint
+                    .condition
+                    .as_deref()
+                    .map(str::trim)
+                    .map(str::to_string),
+                log_message: breakpoint
+                    .log_message
+                    .as_deref()
+                    .map(str::trim)
+                    .map(str::to_string),
+            })
+        })
+        .collect()
+}
+
+fn resolve_remote_node_breakpoint_targets(
+    root: &str,
+    breakpoints: &[DebugBreakpoint],
+) -> Result<Vec<DebugBreakpointTarget>, String> {
+    breakpoints
+        .iter()
+        .map(|breakpoint| {
+            let file = join_remote_debug_path(root, &breakpoint.file, "Breakpoint file")?;
+            Ok(DebugBreakpointTarget {
+                file_url: remote_node_file_url(&file)?,
+                line: breakpoint.line,
+                column: breakpoint.column,
+                condition: breakpoint
+                    .condition
+                    .as_deref()
+                    .map(str::trim)
+                    .map(str::to_string),
+                log_message: breakpoint
+                    .log_message
+                    .as_deref()
+                    .map(str::trim)
+                    .map(str::to_string),
+            })
+        })
+        .collect()
+}
+
+fn allocate_loopback_port() -> Result<u16, String> {
+    let listener = TcpListener::bind(("127.0.0.1", 0))
+        .map_err(|err| format!("Failed to allocate local debug tunnel port: {err}"))?;
+    listener
+        .local_addr()
+        .map(|addr| addr.port())
+        .map_err(|err| format!("Failed to read local debug tunnel port: {err}"))
+}
+
+fn start_ssh_debug_tunnel(
+    connection: &SshConnection,
+    remote_host: &str,
+    remote_port: u16,
+    snapshot: &Arc<Mutex<DebugSessionSnapshot>>,
+) -> Result<(u16, Arc<Mutex<Child>>), String> {
+    let local_port = allocate_loopback_port()?;
+    let mut command =
+        crate::ssh::std_ssh_port_forward_command(connection, local_port, remote_host, remote_port);
+    crate::subprocess::configure_background_command(&mut command);
+    let mut child = command
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|err| format!("Failed to start SSH debug tunnel: {err}"))?;
+    if let Some(stderr) = child.stderr.take() {
+        spawn_output_reader(stderr, Arc::clone(snapshot));
+    }
+    thread::sleep(Duration::from_millis(150));
+    if let Some(status) = child
+        .try_wait()
+        .map_err(|err| format!("Failed to inspect SSH debug tunnel: {err}"))?
+    {
+        return Err(format!("SSH debug tunnel exited with status {status}"));
+    }
+    append_output(
+        snapshot,
+        &format!(
+            "[debug remote] Forwarding 127.0.0.1:{local_port} to {remote_host}:{remote_port} over SSH\n"
+        ),
+    );
+    Ok((local_port, Arc::new(Mutex::new(child))))
+}
+
+fn node_breakpoint_condition(breakpoint: &DebugBreakpointTarget) -> Option<String> {
+    let condition = breakpoint
+        .condition
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty());
+    let log_message = breakpoint
+        .log_message
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty());
+    match (condition, log_message) {
+        (Some(condition), Some(log_message)) => Some(format!(
+            "({condition}) && (console.log({}), false)",
+            json!(log_message)
+        )),
+        (Some(condition), None) => Some(condition.to_string()),
+        (None, Some(log_message)) => Some(format!("console.log({}), false", json!(log_message))),
+        (None, None) => None,
+    }
 }
 
 fn write_debug_adapter_message<W: Write>(writer: &mut W, message: &Value) -> Result<(), String> {
@@ -632,6 +1310,7 @@ fn parse_debug_adapter_stack_frames(response: &Value) -> Vec<(DebugCallFrame, i6
                             file,
                             line,
                             column,
+                            frame_id: Some(format!("dap:{id}")),
                         },
                         id,
                     ))
@@ -661,6 +1340,27 @@ fn debug_adapter_response_error(response: &Value) -> String {
         })
         .unwrap_or("Debug adapter request failed")
         .to_string()
+}
+
+fn parse_debug_adapter_evaluate_result(response: &Value, expression: &str) -> DebugEvaluateResult {
+    let body = response.get("body").cloned().unwrap_or_default();
+    let result = body
+        .get("result")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    let type_name = body.get("type").and_then(Value::as_str).map(str::to_string);
+    let reference = body
+        .get("variablesReference")
+        .and_then(Value::as_i64)
+        .unwrap_or(0);
+    DebugEvaluateResult {
+        expression: expression.to_string(),
+        result,
+        type_name,
+        object_id: (reference > 0).then(|| debug_adapter_variable_object_id(reference)),
+        has_children: reference > 0,
+    }
 }
 
 fn python_debug_adapter_program() -> String {
@@ -729,10 +1429,27 @@ fn send_python_debug_breakpoints<W: Write>(
         let points = breakpoints
             .into_iter()
             .map(|breakpoint| {
-                json!({
+                let mut point = json!({
                     "line": breakpoint.line,
                     "column": breakpoint.column,
-                })
+                });
+                if let Some(condition) = breakpoint
+                    .condition
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                {
+                    point["condition"] = json!(condition);
+                }
+                if let Some(log_message) = breakpoint
+                    .log_message
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                {
+                    point["logMessage"] = json!(log_message);
+                }
+                point
             })
             .collect::<Vec<_>>();
         let _ = send_debug_adapter_request(
@@ -752,6 +1469,53 @@ fn send_python_debug_breakpoints<W: Write>(
         json!({ "filters": [] }),
     );
     let _ = send_debug_adapter_request(writer, next_seq, "configurationDone", json!({}));
+}
+
+fn python_debug_adapter_start_request(
+    config: &DebugConfig,
+    program: Option<&Path>,
+    cwd: &Path,
+) -> Result<(&'static str, Value), String> {
+    match config.request {
+        DebugRequestType::Launch => {
+            let program = program.ok_or_else(|| "Debug program cannot be empty".to_string())?;
+            Ok((
+                "launch",
+                json!({
+                    "type": "python",
+                    "request": "launch",
+                    "name": config.name,
+                    "program": program,
+                    "cwd": cwd,
+                    "args": config.args,
+                    "env": config.env,
+                    "console": "internalConsole",
+                    "justMyCode": false,
+                    "stopOnEntry": false,
+                }),
+            ))
+        }
+        DebugRequestType::Attach => {
+            let port = config
+                .attach_port
+                .ok_or_else(|| "Attach port must be between 1 and 65535".to_string())?;
+            Ok((
+                "attach",
+                json!({
+                    "type": "python",
+                    "request": "attach",
+                    "name": config.name,
+                    "connect": {
+                        "host": config.attach_host.trim(),
+                        "port": port,
+                    },
+                    "cwd": cwd,
+                    "env": config.env,
+                    "justMyCode": false,
+                }),
+            ))
+        }
+    }
 }
 
 fn update_debug_adapter_scopes(snapshot: &Arc<Mutex<DebugSessionSnapshot>>, scopes: Vec<Value>) {
@@ -852,6 +1616,45 @@ fn debug_variable_from_property(item: &Value) -> Option<DebugVariable> {
     })
 }
 
+fn debug_evaluate_result_from_remote_object(
+    expression: &str,
+    value: &Value,
+) -> DebugEvaluateResult {
+    let (result, type_name) = property_value_to_string(value);
+    let object_id = value
+        .get("objectId")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    DebugEvaluateResult {
+        expression: expression.to_string(),
+        result,
+        type_name,
+        has_children: object_id.is_some(),
+        object_id,
+    }
+}
+
+fn cdp_error_message(response: &Value) -> Option<String> {
+    response
+        .get("error")
+        .and_then(|error| {
+            error
+                .get("message")
+                .and_then(Value::as_str)
+                .or_else(|| error.get("data").and_then(Value::as_str))
+        })
+        .map(str::to_string)
+}
+
+fn cdp_exception_message(response: &Value) -> Option<String> {
+    let details = response.get("result")?.get("exceptionDetails")?;
+    details
+        .get("exception")
+        .and_then(|exception| exception.get("description").and_then(Value::as_str))
+        .or_else(|| details.get("text").and_then(Value::as_str))
+        .map(str::to_string)
+}
+
 fn parse_debug_variables_from_properties(result: &Value, limit: usize) -> Vec<DebugVariable> {
     result
         .get("result")
@@ -864,6 +1667,70 @@ fn parse_debug_variables_from_properties(result: &Value, limit: usize) -> Vec<De
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default()
+}
+
+fn evaluate_cdp_expression(
+    ws: &mut tungstenite::WebSocket<MaybeTlsStream<TcpStream>>,
+    next_id: &AtomicU64,
+    snapshot: Arc<Mutex<DebugSessionSnapshot>>,
+    expression: &str,
+    context: &str,
+) -> Result<DebugEvaluateResult, String> {
+    let call_frame_id = snapshot
+        .lock()
+        .call_stack
+        .first()
+        .and_then(|frame| frame.frame_id.clone())
+        .ok_or_else(|| "Debug call frame is not available".to_string())?;
+    let request_id = send_request(
+        ws,
+        next_id,
+        "Debugger.evaluateOnCallFrame",
+        json!({
+            "callFrameId": call_frame_id,
+            "expression": expression,
+            "objectGroup": format!("aeroric-{context}"),
+            "returnByValue": false,
+            "generatePreview": false,
+            "silent": false,
+        }),
+    )?;
+
+    loop {
+        let message = match ws.read() {
+            Ok(message) => message,
+            Err(WsError::Io(error)) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                thread::sleep(Duration::from_millis(20));
+                continue;
+            }
+            Err(error) => return Err(error.to_string()),
+        };
+        if message.is_close() {
+            return Err("Debug websocket closed while evaluating expression".to_string());
+        }
+        if !message.is_text() {
+            continue;
+        }
+        let value: Value = serde_json::from_str(message.to_text().map_err(|e| e.to_string())?)
+            .map_err(|e| e.to_string())?;
+        if value.get("method").and_then(Value::as_str).is_some() {
+            handle_debug_event(ws, next_id, snapshot.clone(), &value)?;
+            continue;
+        }
+        if value.get("id").and_then(Value::as_u64) == Some(request_id) {
+            if let Some(error) = cdp_error_message(&value) {
+                return Err(error);
+            }
+            if let Some(error) = cdp_exception_message(&value) {
+                return Err(error);
+            }
+            let result = value
+                .get("result")
+                .and_then(|result| result.get("result"))
+                .ok_or_else(|| "Missing evaluate response".to_string())?;
+            return Ok(debug_evaluate_result_from_remote_object(expression, result));
+        }
+    }
 }
 
 fn fetch_object_properties(
@@ -987,6 +1854,10 @@ fn collect_call_stack(
             file: url,
             line,
             column,
+            frame_id: frame
+                .get("callFrameId")
+                .and_then(Value::as_str)
+                .map(str::to_string),
         });
         if scopes.is_empty() {
             if let Some(scope_chain) = frame.get("scopeChain").and_then(Value::as_array) {
@@ -1076,14 +1947,14 @@ fn debugger_method_for_command(command: SessionCommand) -> Option<&'static str> 
         SessionCommand::StepOver => Some("Debugger.stepOver"),
         SessionCommand::StepInto => Some("Debugger.stepInto"),
         SessionCommand::StepOut => Some("Debugger.stepOut"),
-        SessionCommand::ExpandVariable { .. } => None,
+        SessionCommand::ExpandVariable { .. } | SessionCommand::Evaluate { .. } => None,
         SessionCommand::Stop => None,
     }
 }
 
 fn inspect_session_loop(
     mut ws: tungstenite::WebSocket<MaybeTlsStream<TcpStream>>,
-    child: Arc<Mutex<Child>>,
+    child: Option<Arc<Mutex<Child>>>,
     snapshot: Arc<Mutex<DebugSessionSnapshot>>,
     command_rx: Receiver<SessionCommand>,
     breakpoints: Vec<DebugBreakpointTarget>,
@@ -1096,16 +1967,15 @@ fn inspect_session_loop(
     let _ = send_request(&mut ws, &request_id, "Runtime.enable", json!({}));
     let _ = send_request(&mut ws, &request_id, "Debugger.enable", json!({}));
     for breakpoint in breakpoints {
-        let _ = send_request(
-            &mut ws,
-            &request_id,
-            "Debugger.setBreakpointByUrl",
-            json!({
-                "url": breakpoint.file_url,
-                "lineNumber": breakpoint.line.saturating_sub(1),
-                "columnNumber": breakpoint.column.saturating_sub(1),
-            }),
-        );
+        let mut params = json!({
+            "url": breakpoint.file_url,
+            "lineNumber": breakpoint.line.saturating_sub(1),
+            "columnNumber": breakpoint.column.saturating_sub(1),
+        });
+        if let Some(condition) = node_breakpoint_condition(&breakpoint) {
+            params["condition"] = json!(condition);
+        }
+        let _ = send_request(&mut ws, &request_id, "Debugger.setBreakpointByUrl", params);
     }
     let _ = send_request(
         &mut ws,
@@ -1113,12 +1983,18 @@ fn inspect_session_loop(
         "Runtime.runIfWaitingForDebugger",
         json!({}),
     );
+    {
+        let mut snapshot = snapshot.lock();
+        if snapshot.status == DebugSessionStatus::Starting {
+            snapshot.status = DebugSessionStatus::Running;
+        }
+    }
 
     loop {
         while let Ok(command) = command_rx.try_recv() {
             match command {
                 SessionCommand::Stop => {
-                    {
+                    if let Some(child) = &child {
                         let mut child = child.lock();
                         let _ = child.kill();
                     }
@@ -1137,6 +2013,20 @@ fn inspect_session_loop(
                         snapshot.clone(),
                         &object_id,
                         32,
+                    );
+                    let _ = result_tx.send(result);
+                }
+                SessionCommand::Evaluate {
+                    expression,
+                    context,
+                    result_tx,
+                } => {
+                    let result = evaluate_cdp_expression(
+                        &mut ws,
+                        &request_id,
+                        snapshot.clone(),
+                        &expression,
+                        &context,
                     );
                     let _ = result_tx.send(result);
                 }
@@ -1196,42 +2086,44 @@ fn inspect_session_loop(
             }
         }
 
-        let process_status = {
-            let mut child = child.lock();
-            child.try_wait()
-        };
-        match process_status {
-            Ok(Some(exit_status)) => {
-                let mut snapshot = snapshot.lock();
-                if snapshot.status == DebugSessionStatus::Stopped {
-                    if snapshot.finished_at.is_none() {
+        if let Some(child) = &child {
+            let process_status = {
+                let mut child = child.lock();
+                child.try_wait()
+            };
+            match process_status {
+                Ok(Some(exit_status)) => {
+                    let mut snapshot = snapshot.lock();
+                    if snapshot.status == DebugSessionStatus::Stopped {
+                        if snapshot.finished_at.is_none() {
+                            snapshot.finished_at = Some(now_millis());
+                        }
+                    } else {
+                        snapshot.exit_code = exit_status.code();
+                        snapshot.status = if exit_status.success() {
+                            DebugSessionStatus::Exited
+                        } else {
+                            DebugSessionStatus::Failed
+                        };
                         snapshot.finished_at = Some(now_millis());
                     }
-                } else {
-                    snapshot.exit_code = exit_status.code();
-                    snapshot.status = if exit_status.success() {
-                        DebugSessionStatus::Exited
-                    } else {
-                        DebugSessionStatus::Failed
-                    };
-                    snapshot.finished_at = Some(now_millis());
+                    break;
                 }
-                break;
-            }
-            Ok(None) => {}
-            Err(error) => {
-                append_output(&snapshot, &format!("\n[debug wait failed: {error}]\n"));
-                let mut snapshot = snapshot.lock();
-                snapshot.status = DebugSessionStatus::Failed;
-                snapshot.finished_at = Some(now_millis());
-                break;
+                Ok(None) => {}
+                Err(error) => {
+                    append_output(&snapshot, &format!("\n[debug wait failed: {error}]\n"));
+                    let mut snapshot = snapshot.lock();
+                    snapshot.status = DebugSessionStatus::Failed;
+                    snapshot.finished_at = Some(now_millis());
+                    break;
+                }
             }
         }
     }
 }
 
 fn start_session_actor(
-    child: Arc<Mutex<Child>>,
+    child: Option<Arc<Mutex<Child>>>,
     ws: tungstenite::WebSocket<MaybeTlsStream<TcpStream>>,
     snapshot: Arc<Mutex<DebugSessionSnapshot>>,
     breakpoints: Vec<DebugBreakpointTarget>,
@@ -1305,7 +2197,9 @@ fn send_debug_adapter_execution_command<W: Write>(
                 json!({ "threadId": thread_id }),
             )?;
         }
-        SessionCommand::ExpandVariable { .. } | SessionCommand::Stop => {}
+        SessionCommand::ExpandVariable { .. }
+        | SessionCommand::Evaluate { .. }
+        | SessionCommand::Stop => {}
     }
     Ok(())
 }
@@ -1317,7 +2211,7 @@ fn python_debug_adapter_loop(
     command_rx: Receiver<SessionCommand>,
     message_rx: Receiver<DebugAdapterActorEvent>,
     config: DebugConfig,
-    program: PathBuf,
+    program: Option<PathBuf>,
     cwd: PathBuf,
     breakpoints: Vec<PythonBreakpointTarget>,
 ) {
@@ -1330,6 +2224,10 @@ fn python_debug_adapter_loop(
     let mut pending_scope_variables: HashMap<u64, String> = HashMap::new();
     let mut pending_expansions: HashMap<u64, Sender<Result<Vec<DebugVariable>, String>>> =
         HashMap::new();
+    let mut pending_evaluations: HashMap<
+        u64,
+        (String, Sender<Result<DebugEvaluateResult, String>>),
+    > = HashMap::new();
 
     let _ = send_debug_adapter_request(
         &mut writer,
@@ -1352,11 +2250,12 @@ fn python_debug_adapter_loop(
         while let Ok(command) = command_rx.try_recv() {
             match command {
                 SessionCommand::Stop => {
+                    let terminate_debuggee = config.request == DebugRequestType::Launch;
                     let _ = send_debug_adapter_request(
                         &mut writer,
                         &mut next_seq,
                         "disconnect",
-                        json!({ "terminateDebuggee": true }),
+                        json!({ "terminateDebuggee": terminate_debuggee }),
                     );
                     wait_then_kill_child(&child, Duration::from_secs(1));
                     let mut snapshot = snapshot.lock();
@@ -1391,6 +2290,52 @@ fn python_debug_adapter_loop(
                         let _ = result_tx.send(Err(error));
                     }
                 },
+                SessionCommand::Evaluate {
+                    expression,
+                    context,
+                    result_tx,
+                } => {
+                    let frame_id = {
+                        let snapshot = snapshot.lock();
+                        snapshot
+                            .call_stack
+                            .first()
+                            .and_then(|frame| frame.frame_id.as_deref())
+                            .and_then(|frame_id| {
+                                frame_id
+                                    .strip_prefix("dap:")
+                                    .unwrap_or(frame_id)
+                                    .parse::<i64>()
+                                    .ok()
+                            })
+                    };
+                    match frame_id {
+                        Some(frame_id) => {
+                            let context = if context == "repl" { "repl" } else { "watch" };
+                            match send_debug_adapter_request(
+                                &mut writer,
+                                &mut next_seq,
+                                "evaluate",
+                                json!({
+                                    "expression": expression,
+                                    "frameId": frame_id,
+                                    "context": context,
+                                }),
+                            ) {
+                                Ok(request_id) => {
+                                    pending_evaluations.insert(request_id, (expression, result_tx));
+                                }
+                                Err(error) => {
+                                    let _ = result_tx.send(Err(error));
+                                }
+                            }
+                        }
+                        None => {
+                            let _ = result_tx
+                                .send(Err("Debug call frame is not available".to_string()));
+                        }
+                    }
+                }
                 command => {
                     if let Err(error) = send_debug_adapter_execution_command(
                         &mut writer,
@@ -1441,6 +2386,11 @@ fn python_debug_adapter_loop(
                                 if let Some(result_tx) = pending_expansions.remove(&request_id) {
                                     let _ = result_tx.send(Err(error.clone()));
                                 }
+                                if let Some((_, result_tx)) =
+                                    pending_evaluations.remove(&request_id)
+                                {
+                                    let _ = result_tx.send(Err(error.clone()));
+                                }
                             }
                             append_output(&snapshot, &format!("\n[debug adapter: {error}]\n"));
                             continue;
@@ -1452,23 +2402,30 @@ fn python_debug_adapter_loop(
                         {
                             "initialize" if !launch_sent => {
                                 launch_sent = true;
-                                let _ = send_debug_adapter_request(
-                                    &mut writer,
-                                    &mut next_seq,
-                                    "launch",
-                                    json!({
-                                        "type": "python",
-                                        "request": "launch",
-                                        "name": config.name,
-                                        "program": program,
-                                        "cwd": cwd,
-                                        "args": config.args,
-                                        "env": config.env,
-                                        "console": "internalConsole",
-                                        "justMyCode": false,
-                                        "stopOnEntry": false,
-                                    }),
-                                );
+                                match python_debug_adapter_start_request(
+                                    &config,
+                                    program.as_deref(),
+                                    &cwd,
+                                ) {
+                                    Ok((command, arguments)) => {
+                                        let _ = send_debug_adapter_request(
+                                            &mut writer,
+                                            &mut next_seq,
+                                            command,
+                                            arguments,
+                                        );
+                                    }
+                                    Err(error) => {
+                                        append_output(
+                                            &snapshot,
+                                            &format!("\n[debug adapter: {error}]\n"),
+                                        );
+                                        let mut snapshot = snapshot.lock();
+                                        snapshot.status = DebugSessionStatus::Failed;
+                                        snapshot.finished_at = Some(now_millis());
+                                        return;
+                                    }
+                                }
                             }
                             "stackTrace" => {
                                 if let Some(request_id) = request_id {
@@ -1542,6 +2499,19 @@ fn python_debug_adapter_loop(
                                         update_debug_adapter_scope_variables(
                                             &snapshot, scope_name, variables,
                                         );
+                                    }
+                                }
+                            }
+                            "evaluate" => {
+                                if let Some(request_id) = request_id {
+                                    if let Some((expression, result_tx)) =
+                                        pending_evaluations.remove(&request_id)
+                                    {
+                                        let result = parse_debug_adapter_evaluate_result(
+                                            &message,
+                                            &expression,
+                                        );
+                                        let _ = result_tx.send(Ok(result));
                                     }
                                 }
                             }
@@ -1672,7 +2642,7 @@ fn start_python_session_actor(
     stdout: std::process::ChildStdout,
     snapshot: Arc<Mutex<DebugSessionSnapshot>>,
     config: DebugConfig,
-    program: PathBuf,
+    program: Option<PathBuf>,
     cwd: PathBuf,
     breakpoints: Vec<PythonBreakpointTarget>,
 ) -> Sender<SessionCommand> {
@@ -1697,11 +2667,11 @@ fn start_python_session_actor(
 }
 
 fn fail_start_debug_session(
-    child: &Arc<Mutex<Child>>,
+    child: Option<&Arc<Mutex<Child>>>,
     snapshot: &Arc<Mutex<DebugSessionSnapshot>>,
     error: String,
 ) -> String {
-    {
+    if let Some(child) = child {
         let mut child = child.lock();
         let _ = child.kill();
     }
@@ -1709,6 +2679,19 @@ fn fail_start_debug_session(
     snapshot.status = DebugSessionStatus::Failed;
     snapshot.finished_at = Some(now_millis());
     error
+}
+
+fn fail_start_debug_session_with_tunnel(
+    child: Option<&Arc<Mutex<Child>>>,
+    tunnel_child: Option<&Arc<Mutex<Child>>>,
+    snapshot: &Arc<Mutex<DebugSessionSnapshot>>,
+    error: String,
+) -> String {
+    if let Some(tunnel_child) = tunnel_child {
+        let mut tunnel_child = tunnel_child.lock();
+        let _ = tunnel_child.kill();
+    }
+    fail_start_debug_session(child, snapshot, error)
 }
 
 #[tauri::command]
@@ -1727,6 +2710,33 @@ pub fn write_debug_configs(
 }
 
 #[tauri::command]
+pub async fn remote_read_debug_configs(
+    connection: SshConnection,
+    remote_project_path: String,
+) -> Result<DebugConfigDocument, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let remote_root = normalize_remote_debug_root(&remote_project_path)?;
+        read_remote_debug_configs_from_root(&connection, &remote_root)
+    })
+    .await
+    .map_err(|err| err.to_string())?
+}
+
+#[tauri::command]
+pub async fn remote_write_debug_configs(
+    connection: SshConnection,
+    remote_project_path: String,
+    document: DebugConfigDocument,
+) -> Result<DebugConfigDocument, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let remote_root = normalize_remote_debug_root(&remote_project_path)?;
+        write_remote_debug_configs_from_root(&connection, &remote_root, document)
+    })
+    .await
+    .map_err(|err| err.to_string())?
+}
+
+#[tauri::command]
 pub fn start_debug_config(
     project_path: String,
     config: DebugConfig,
@@ -1735,15 +2745,30 @@ pub fn start_debug_config(
     let root = validate_project_root(&project_path)?;
     validate_debug_config(&root, &config)?;
     let cwd = resolve_debug_cwd(&root, &config.cwd)?;
-    let program = resolve_debug_program(&root, &config.program)?;
+    let program = if config.request == DebugRequestType::Launch {
+        Some(resolve_debug_program(&root, &config.program)?)
+    } else {
+        None
+    };
     let debug_id = format!("debug-{}", Uuid::new_v4());
     let started_at = now_millis();
+    let display_program = match config.request {
+        DebugRequestType::Launch => program
+            .as_ref()
+            .map(|program| program.to_string_lossy().into_owned())
+            .unwrap_or_default(),
+        DebugRequestType::Attach => format!(
+            "{}:{}",
+            config.attach_host.trim(),
+            config.attach_port.unwrap_or_default()
+        ),
+    };
 
     let snapshot = Arc::new(Mutex::new(DebugSessionSnapshot {
         debug_id: debug_id.clone(),
         config_id: config.id.clone(),
         name: config.name.clone(),
-        program: program.to_string_lossy().into_owned(),
+        program: display_program,
         cwd: cwd.to_string_lossy().into_owned(),
         status: DebugSessionStatus::Starting,
         output: String::new(),
@@ -1755,13 +2780,16 @@ pub fn start_debug_config(
         finished_at: None,
     }));
 
-    let (child, command_tx) = match config.config_type.clone() {
-        DebugConfigType::Node => {
+    let (child, command_tx) = match (config.config_type.clone(), config.request.clone()) {
+        (DebugConfigType::Node, DebugRequestType::Launch) => {
+            let program = program
+                .as_ref()
+                .ok_or_else(|| "Debug program cannot be empty".to_string())?;
             let breakpoint_targets = resolve_debug_breakpoint_targets(&root, &config.breakpoints)?;
             let mut command = Command::new("node");
             command
                 .arg("--inspect-brk=127.0.0.1:0")
-                .arg(&program)
+                .arg(program)
                 .args(&config.args)
                 .current_dir(&cwd)
                 .envs(config.env.iter())
@@ -1787,7 +2815,7 @@ pub fn start_debug_config(
                 .recv_timeout(Duration::from_secs(10))
                 .map_err(|_| {
                     fail_start_debug_session(
-                        &child,
+                        Some(&child),
                         &snapshot,
                         "Timed out waiting for the Node inspector websocket URL".to_string(),
                     )
@@ -1795,27 +2823,60 @@ pub fn start_debug_config(
 
             let ws_url = Url::parse(&ws_url).map_err(|e| {
                 fail_start_debug_session(
-                    &child,
+                    Some(&child),
                     &snapshot,
                     format!("Invalid inspector websocket URL: {e}"),
                 )
             })?;
             let (websocket, _) = connect(ws_url.as_str()).map_err(|e| {
                 fail_start_debug_session(
-                    &child,
+                    Some(&child),
                     &snapshot,
                     format!("Failed to connect to debugger: {e}"),
                 )
             })?;
             let command_tx = start_session_actor(
-                Arc::clone(&child),
+                Some(Arc::clone(&child)),
                 websocket,
                 Arc::clone(&snapshot),
                 breakpoint_targets,
             );
-            (child, command_tx)
+            (Some(child), command_tx)
         }
-        DebugConfigType::Python => {
+        (DebugConfigType::Node, DebugRequestType::Attach) => {
+            let breakpoint_targets = resolve_debug_breakpoint_targets(&root, &config.breakpoints)?;
+            let host = config.attach_host.trim().to_string();
+            let port = config
+                .attach_port
+                .ok_or_else(|| "Attach port must be between 1 and 65535".to_string())?;
+            append_output(
+                &snapshot,
+                &format!("[debug attach] Connecting to Node inspector at {host}:{port}\n"),
+            );
+            let ws_url = fetch_node_inspector_websocket_url(&host, port)
+                .map_err(|error| fail_start_debug_session(None, &snapshot, error))?;
+            let ws_url = Url::parse(&ws_url).map_err(|e| {
+                fail_start_debug_session(
+                    None,
+                    &snapshot,
+                    format!("Invalid inspector websocket URL: {e}"),
+                )
+            })?;
+            let (websocket, _) = connect(ws_url.as_str()).map_err(|e| {
+                fail_start_debug_session(
+                    None,
+                    &snapshot,
+                    format!("Failed to connect to debugger: {e}"),
+                )
+            })?;
+            let command_tx =
+                start_session_actor(None, websocket, Arc::clone(&snapshot), breakpoint_targets);
+            (None, command_tx)
+        }
+        (DebugConfigType::Python, DebugRequestType::Launch) => {
+            let program = program
+                .clone()
+                .ok_or_else(|| "Debug program cannot be empty".to_string())?;
             let breakpoint_targets = resolve_python_breakpoint_targets(&root, &config.breakpoints)?;
             ensure_python_debug_adapter_available(&cwd, &config.env)?;
             let mut command = python_debug_adapter_command();
@@ -1852,11 +2913,62 @@ pub fn start_debug_config(
                 stdout,
                 Arc::clone(&snapshot),
                 config.clone(),
-                program.clone(),
+                Some(program),
                 cwd.clone(),
                 breakpoint_targets,
             );
-            (child, command_tx)
+            (Some(child), command_tx)
+        }
+        (DebugConfigType::Python, DebugRequestType::Attach) => {
+            let breakpoint_targets = resolve_python_breakpoint_targets(&root, &config.breakpoints)?;
+            ensure_python_debug_adapter_available(&cwd, &config.env)?;
+            let host = config.attach_host.trim().to_string();
+            let port = config
+                .attach_port
+                .ok_or_else(|| "Attach port must be between 1 and 65535".to_string())?;
+            append_output(
+                &snapshot,
+                &format!("[debug attach] Connecting to debugpy at {host}:{port}\n"),
+            );
+            let mut command = python_debug_adapter_command();
+            crate::subprocess::configure_background_command(&mut command);
+            let mut child = command
+                .current_dir(&cwd)
+                .envs(config.env.iter())
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .map_err(|e| format!("Failed to start debugpy adapter: {e}"))?;
+            let stdin = match child.stdin.take() {
+                Some(stdin) => stdin,
+                None => {
+                    let _ = child.kill();
+                    return Err("Failed to open debugpy adapter stdin".to_string());
+                }
+            };
+            let stdout = match child.stdout.take() {
+                Some(stdout) => stdout,
+                None => {
+                    let _ = child.kill();
+                    return Err("Failed to open debugpy adapter stdout".to_string());
+                }
+            };
+            if let Some(stderr) = child.stderr.take() {
+                spawn_output_reader(stderr, Arc::clone(&snapshot));
+            }
+            let child = Arc::new(Mutex::new(child));
+            let command_tx = start_python_session_actor(
+                Arc::clone(&child),
+                stdin,
+                stdout,
+                Arc::clone(&snapshot),
+                config.clone(),
+                None,
+                cwd.clone(),
+                breakpoint_targets,
+            );
+            (Some(child), command_tx)
         }
     };
 
@@ -1864,9 +2976,428 @@ pub fn start_debug_config(
         debug_id.clone(),
         DebugSessionHandle {
             child,
+            tunnel_child: None,
+            remote_child: None,
             snapshot: Arc::clone(&snapshot),
             command_tx,
             config_type: config.config_type,
+            project_root: root.clone(),
+            remote_project_path: None,
+        },
+    );
+
+    let snapshot = snapshot.lock().clone();
+    Ok(snapshot)
+}
+
+#[tauri::command]
+pub fn remote_start_debug_config(
+    connection: SshConnection,
+    remote_project_path: String,
+    config: DebugConfig,
+    state: State<'_, DebugState>,
+) -> Result<DebugSessionSnapshot, String> {
+    let remote_root = normalize_remote_debug_root(&remote_project_path)?;
+    validate_remote_debug_config(&remote_root, &config)?;
+
+    let cwd = join_remote_debug_path(&remote_root, &config.cwd, "Debug cwd")?;
+    let program = if config.request == DebugRequestType::Launch {
+        Some(join_remote_debug_path(
+            &remote_root,
+            &config.program,
+            "Debug program",
+        )?)
+    } else {
+        None
+    };
+    let config_type = config.config_type.clone();
+    let request = config.request.clone();
+
+    let debug_id = format!("debug-{}", Uuid::new_v4());
+    let started_at = now_millis();
+    let display_program = match request {
+        DebugRequestType::Launch => program.clone().unwrap_or_default(),
+        DebugRequestType::Attach => format!(
+            "{}:{} via {}",
+            config.attach_host.trim(),
+            config.attach_port.unwrap_or_default(),
+            connection.name
+        ),
+    };
+    let snapshot = Arc::new(Mutex::new(DebugSessionSnapshot {
+        debug_id: debug_id.clone(),
+        config_id: config.id.clone(),
+        name: config.name.clone(),
+        program: display_program,
+        cwd: cwd.clone(),
+        status: DebugSessionStatus::Starting,
+        output: String::new(),
+        paused_reason: None,
+        call_stack: Vec::new(),
+        scopes: Vec::new(),
+        exit_code: None,
+        started_at,
+        finished_at: None,
+    }));
+
+    let (child, tunnel_child, remote_child, command_tx) = match (config_type.clone(), request) {
+        (DebugConfigType::Node, DebugRequestType::Launch) => {
+            let breakpoint_targets =
+                resolve_remote_node_breakpoint_targets(&remote_root, &config.breakpoints)
+                    .map_err(|error| fail_start_debug_session(None, &snapshot, error))?;
+            let program = program.ok_or_else(|| "Debug program cannot be empty".to_string())?;
+            let remote_command =
+                build_remote_node_launch_command(&cwd, &program, &config.args, &config.env);
+            append_output(
+                &snapshot,
+                &format!("[debug remote] Launching Node debuggee over SSH in {cwd}\n"),
+            );
+            let mut command =
+                crate::ssh::std_ssh_command_for_remote_command(&connection, remote_command);
+            crate::subprocess::configure_background_command(&mut command);
+            let mut child = command
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .map_err(|error| {
+                    fail_start_debug_session(
+                        None,
+                        &snapshot,
+                        format!("Failed to launch remote Node debuggee: {error}"),
+                    )
+                })?;
+            let stdout = child.stdout.take();
+            let stderr = child.stderr.take();
+            let child = Arc::new(Mutex::new(child));
+            if let Some(stdout) = stdout {
+                spawn_output_reader(stdout, Arc::clone(&snapshot));
+            }
+            let (ws_url_tx, ws_url_rx) = mpsc::channel();
+            if let Some(stderr) = stderr {
+                spawn_stderr_reader(stderr, Arc::clone(&snapshot), ws_url_tx);
+            } else {
+                return Err(fail_start_debug_session(
+                    Some(&child),
+                    &snapshot,
+                    "Failed to open remote Node debuggee stderr".to_string(),
+                ));
+            }
+            let remote_ws_url = ws_url_rx
+                .recv_timeout(Duration::from_secs(10))
+                .map_err(|_| {
+                    fail_start_debug_session(
+                        Some(&child),
+                        &snapshot,
+                        "Timed out waiting for the remote Node inspector websocket URL".to_string(),
+                    )
+                })?;
+            let remote_ws_url = Url::parse(&remote_ws_url).map_err(|error| {
+                fail_start_debug_session(
+                    Some(&child),
+                    &snapshot,
+                    format!("Invalid inspector websocket URL: {error}"),
+                )
+            })?;
+            let inspector_host = remote_ws_url.host_str().unwrap_or("127.0.0.1").to_string();
+            let inspector_port = remote_ws_url.port().ok_or_else(|| {
+                fail_start_debug_session(
+                    Some(&child),
+                    &snapshot,
+                    "Node inspector websocket URL did not include a port".to_string(),
+                )
+            })?;
+            let (local_port, tunnel_child) =
+                start_ssh_debug_tunnel(&connection, &inspector_host, inspector_port, &snapshot)
+                    .map_err(|error| fail_start_debug_session(Some(&child), &snapshot, error))?;
+            let ws_url = inspector_websocket_url_for_endpoint(
+                remote_ws_url.as_str(),
+                "127.0.0.1",
+                local_port,
+            )
+            .map_err(|error| {
+                fail_start_debug_session_with_tunnel(
+                    Some(&child),
+                    Some(&tunnel_child),
+                    &snapshot,
+                    error,
+                )
+            })?;
+            let (websocket, _) = connect(ws_url.as_str()).map_err(|error| {
+                fail_start_debug_session_with_tunnel(
+                    Some(&child),
+                    Some(&tunnel_child),
+                    &snapshot,
+                    format!("Failed to connect to debugger: {error}"),
+                )
+            })?;
+            let command_tx = start_session_actor(
+                Some(Arc::clone(&child)),
+                websocket,
+                Arc::clone(&snapshot),
+                breakpoint_targets,
+            );
+            (Some(child), Some(tunnel_child), None, command_tx)
+        }
+        (DebugConfigType::Node, DebugRequestType::Attach) => {
+            let breakpoint_targets =
+                resolve_remote_node_breakpoint_targets(&remote_root, &config.breakpoints)
+                    .map_err(|error| fail_start_debug_session(None, &snapshot, error))?;
+            let remote_host = config.attach_host.trim().to_string();
+            let remote_port = config
+                .attach_port
+                .ok_or_else(|| "Attach port must be between 1 and 65535".to_string())?;
+            let (local_port, tunnel_child) =
+                start_ssh_debug_tunnel(&connection, &remote_host, remote_port, &snapshot)
+                    .map_err(|error| fail_start_debug_session(None, &snapshot, error))?;
+            append_output(
+                &snapshot,
+                &format!(
+                    "[debug remote] Connecting local Node inspector client to 127.0.0.1:{local_port}\n"
+                ),
+            );
+            let ws_url = fetch_node_inspector_websocket_url("127.0.0.1", local_port)
+                .map_err(|error| fail_start_debug_session(Some(&tunnel_child), &snapshot, error))?;
+            let ws_url = inspector_websocket_url_for_endpoint(&ws_url, "127.0.0.1", local_port)
+                .map_err(|error| fail_start_debug_session(Some(&tunnel_child), &snapshot, error))?;
+            let (websocket, _) = connect(ws_url.as_str()).map_err(|error| {
+                fail_start_debug_session(
+                    Some(&tunnel_child),
+                    &snapshot,
+                    format!("Failed to connect to debugger: {error}"),
+                )
+            })?;
+            let command_tx =
+                start_session_actor(None, websocket, Arc::clone(&snapshot), breakpoint_targets);
+            (None, Some(tunnel_child), None, command_tx)
+        }
+        (DebugConfigType::Python, DebugRequestType::Launch) => {
+            let breakpoint_targets =
+                resolve_remote_python_breakpoint_targets(&remote_root, &config.breakpoints)
+                    .map_err(|error| fail_start_debug_session(None, &snapshot, error))?;
+            let program = program.ok_or_else(|| "Debug program cannot be empty".to_string())?;
+            let remote_command =
+                build_remote_python_launch_command(&cwd, &program, &config.args, &config.env);
+            append_output(
+                &snapshot,
+                &format!("[debug remote] Launching Python debuggee over SSH in {cwd}\n"),
+            );
+            let mut command =
+                crate::ssh::std_ssh_command_for_remote_command(&connection, remote_command);
+            crate::subprocess::configure_background_command(&mut command);
+            let mut remote_child = command
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .map_err(|error| {
+                    fail_start_debug_session(
+                        None,
+                        &snapshot,
+                        format!("Failed to launch remote Python debuggee: {error}"),
+                    )
+                })?;
+            let stdout = remote_child.stdout.take();
+            let stderr = remote_child.stderr.take();
+            let remote_child = Arc::new(Mutex::new(remote_child));
+            if let Some(stdout) = stdout {
+                spawn_output_reader(stdout, Arc::clone(&snapshot));
+            }
+            let (port_tx, port_rx) = mpsc::channel();
+            if let Some(stderr) = stderr {
+                spawn_debugpy_port_reader(stderr, Arc::clone(&snapshot), port_tx);
+            } else {
+                return Err(fail_start_debug_session(
+                    Some(&remote_child),
+                    &snapshot,
+                    "Failed to open remote Python debuggee stderr".to_string(),
+                ));
+            }
+            let remote_port = port_rx.recv_timeout(Duration::from_secs(10)).map_err(|_| {
+                fail_start_debug_session(
+                    Some(&remote_child),
+                    &snapshot,
+                    "Timed out waiting for the remote debugpy port".to_string(),
+                )
+            })?;
+            let (local_port, tunnel_child) =
+                start_ssh_debug_tunnel(&connection, "127.0.0.1", remote_port, &snapshot).map_err(
+                    |error| fail_start_debug_session(Some(&remote_child), &snapshot, error),
+                )?;
+            let adapter_cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+            let adapter_env = BTreeMap::new();
+            ensure_python_debug_adapter_available(&adapter_cwd, &adapter_env).map_err(|error| {
+                fail_start_debug_session_with_tunnel(
+                    Some(&remote_child),
+                    Some(&tunnel_child),
+                    &snapshot,
+                    error,
+                )
+            })?;
+
+            let mut adapter_config = config.clone();
+            adapter_config.request = DebugRequestType::Attach;
+            adapter_config.attach_host = "127.0.0.1".to_string();
+            adapter_config.attach_port = Some(local_port);
+            adapter_config.env.clear();
+
+            append_output(
+                &snapshot,
+                &format!(
+                    "[debug remote] Connecting local debugpy adapter to 127.0.0.1:{local_port}\n"
+                ),
+            );
+            let mut command = python_debug_adapter_command();
+            crate::subprocess::configure_background_command(&mut command);
+            let mut child = command
+                .current_dir(&adapter_cwd)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .map_err(|error| {
+                    fail_start_debug_session_with_tunnel(
+                        Some(&remote_child),
+                        Some(&tunnel_child),
+                        &snapshot,
+                        format!("Failed to start debugpy adapter: {error}"),
+                    )
+                })?;
+            let stdin = match child.stdin.take() {
+                Some(stdin) => stdin,
+                None => {
+                    let _ = child.kill();
+                    return Err(fail_start_debug_session_with_tunnel(
+                        Some(&remote_child),
+                        Some(&tunnel_child),
+                        &snapshot,
+                        "Failed to open debugpy adapter stdin".to_string(),
+                    ));
+                }
+            };
+            let stdout = match child.stdout.take() {
+                Some(stdout) => stdout,
+                None => {
+                    let _ = child.kill();
+                    return Err(fail_start_debug_session_with_tunnel(
+                        Some(&remote_child),
+                        Some(&tunnel_child),
+                        &snapshot,
+                        "Failed to open debugpy adapter stdout".to_string(),
+                    ));
+                }
+            };
+            if let Some(stderr) = child.stderr.take() {
+                spawn_output_reader(stderr, Arc::clone(&snapshot));
+            }
+            let child = Arc::new(Mutex::new(child));
+            let command_tx = start_python_session_actor(
+                Arc::clone(&child),
+                stdin,
+                stdout,
+                Arc::clone(&snapshot),
+                adapter_config,
+                None,
+                PathBuf::from(&cwd),
+                breakpoint_targets,
+            );
+            (
+                Some(child),
+                Some(tunnel_child),
+                Some(remote_child),
+                command_tx,
+            )
+        }
+        (DebugConfigType::Python, DebugRequestType::Attach) => {
+            let breakpoint_targets =
+                resolve_remote_python_breakpoint_targets(&remote_root, &config.breakpoints)
+                    .map_err(|error| fail_start_debug_session(None, &snapshot, error))?;
+            let remote_host = config.attach_host.trim().to_string();
+            let remote_port = config
+                .attach_port
+                .ok_or_else(|| "Attach port must be between 1 and 65535".to_string())?;
+            let (local_port, tunnel_child) =
+                start_ssh_debug_tunnel(&connection, &remote_host, remote_port, &snapshot)
+                    .map_err(|error| fail_start_debug_session(None, &snapshot, error))?;
+            let adapter_cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+            ensure_python_debug_adapter_available(&adapter_cwd, &config.env)
+                .map_err(|error| fail_start_debug_session(Some(&tunnel_child), &snapshot, error))?;
+
+            let mut adapter_config = config.clone();
+            adapter_config.attach_host = "127.0.0.1".to_string();
+            adapter_config.attach_port = Some(local_port);
+
+            append_output(
+                &snapshot,
+                &format!(
+                    "[debug remote] Connecting local debugpy adapter to 127.0.0.1:{local_port}\n"
+                ),
+            );
+            let mut command = python_debug_adapter_command();
+            crate::subprocess::configure_background_command(&mut command);
+            let mut child = command
+                .current_dir(&adapter_cwd)
+                .envs(adapter_config.env.iter())
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .map_err(|error| {
+                    fail_start_debug_session(
+                        Some(&tunnel_child),
+                        &snapshot,
+                        format!("Failed to start debugpy adapter: {error}"),
+                    )
+                })?;
+            let stdin = match child.stdin.take() {
+                Some(stdin) => stdin,
+                None => {
+                    let _ = child.kill();
+                    return Err(fail_start_debug_session(
+                        Some(&tunnel_child),
+                        &snapshot,
+                        "Failed to open debugpy adapter stdin".to_string(),
+                    ));
+                }
+            };
+            let stdout = match child.stdout.take() {
+                Some(stdout) => stdout,
+                None => {
+                    let _ = child.kill();
+                    return Err(fail_start_debug_session(
+                        Some(&tunnel_child),
+                        &snapshot,
+                        "Failed to open debugpy adapter stdout".to_string(),
+                    ));
+                }
+            };
+            if let Some(stderr) = child.stderr.take() {
+                spawn_output_reader(stderr, Arc::clone(&snapshot));
+            }
+            let child = Arc::new(Mutex::new(child));
+            let command_tx = start_python_session_actor(
+                Arc::clone(&child),
+                stdin,
+                stdout,
+                Arc::clone(&snapshot),
+                adapter_config,
+                None,
+                PathBuf::from(&cwd),
+                breakpoint_targets,
+            );
+            (Some(child), Some(tunnel_child), None, command_tx)
+        }
+    };
+
+    state.sessions.lock().insert(
+        debug_id.clone(),
+        DebugSessionHandle {
+            child,
+            tunnel_child,
+            remote_child,
+            snapshot: Arc::clone(&snapshot),
+            command_tx,
+            config_type,
+            project_root: PathBuf::from(&remote_root),
+            remote_project_path: Some(remote_root),
         },
     );
 
@@ -1884,10 +3415,19 @@ fn mark_session_running(snapshot: &Arc<Mutex<DebugSessionSnapshot>>) -> DebugSes
 }
 
 fn validate_session_project(project_path: &str, handle: &DebugSessionHandle) -> Result<(), String> {
+    if let Some(remote_root) = &handle.remote_project_path {
+        let project = normalize_remote_debug_root(project_path)?;
+        if &project == remote_root {
+            return Ok(());
+        }
+        return Err("Debug session belongs to another project".to_string());
+    }
     let root = validate_project_root(project_path)?;
-    let snapshot = handle.snapshot.lock();
-    ensure_path_inside_root(&root, Path::new(&snapshot.cwd))?;
-    ensure_path_inside_root(&root, Path::new(&snapshot.program))
+    if root == handle.project_root {
+        Ok(())
+    } else {
+        Err("Debug session belongs to another project".to_string())
+    }
 }
 
 fn dispatch_debug_execution_command(
@@ -2020,6 +3560,48 @@ pub fn expand_debug_variable(
 }
 
 #[tauri::command]
+pub fn evaluate_debug_expression(
+    project_path: String,
+    debug_id: String,
+    expression: String,
+    context: Option<String>,
+    state: State<'_, DebugState>,
+) -> Result<DebugEvaluateResult, String> {
+    let expression = expression.trim().to_string();
+    if expression.is_empty() {
+        return Err("Debug expression cannot be empty".to_string());
+    }
+    let context = match context.as_deref() {
+        Some("repl") => "repl".to_string(),
+        _ => "watch".to_string(),
+    };
+    let handle = state
+        .sessions
+        .lock()
+        .get(&debug_id)
+        .cloned()
+        .ok_or_else(|| "Debug session not found".to_string())?;
+    validate_session_project(&project_path, &handle)?;
+    let status = handle.snapshot.lock().status.clone();
+    if status != DebugSessionStatus::Paused {
+        return Err("Debug session must be paused to evaluate expressions".to_string());
+    }
+
+    let (result_tx, result_rx) = mpsc::channel();
+    handle
+        .command_tx
+        .send(SessionCommand::Evaluate {
+            expression,
+            context,
+            result_tx,
+        })
+        .map_err(|e| format!("Failed to evaluate debug expression: {e}"))?;
+    result_rx
+        .recv_timeout(Duration::from_secs(5))
+        .map_err(|_| "Timed out evaluating debug expression".to_string())?
+}
+
+#[tauri::command]
 pub fn stop_debug_config(
     debug_id: String,
     state: State<'_, DebugState>,
@@ -2031,9 +3613,19 @@ pub fn stop_debug_config(
         .cloned()
         .ok_or_else(|| "Debug session not found".to_string())?;
     let send_failed = handle.command_tx.send(SessionCommand::Stop).is_err();
-    if send_failed || handle.config_type == DebugConfigType::Node {
-        let mut child = handle.child.lock();
-        let _ = child.kill();
+    if let Some(child) = &handle.child {
+        if send_failed || handle.config_type == DebugConfigType::Node {
+            let mut child = child.lock();
+            let _ = child.kill();
+        }
+    }
+    if let Some(tunnel_child) = &handle.tunnel_child {
+        let mut tunnel_child = tunnel_child.lock();
+        let _ = tunnel_child.kill();
+    }
+    if let Some(remote_child) = &handle.remote_child {
+        let mut remote_child = remote_child.lock();
+        let _ = remote_child.kill();
     }
     let mut snapshot = handle.snapshot.lock();
     snapshot.status = DebugSessionStatus::Stopped;
@@ -2115,7 +3707,10 @@ mod tests {
 
         assert_eq!(document.configs.len(), 1);
         assert_eq!(document.configs[0].config_type, DebugConfigType::Python);
+        assert_eq!(document.configs[0].request, DebugRequestType::Launch);
         assert_eq!(document.configs[0].program, "app/main.py");
+        assert_eq!(document.configs[0].attach_host, "127.0.0.1");
+        assert_eq!(document.configs[0].attach_port, None);
         assert_eq!(document.configs[0].args, vec!["--port", "8000"]);
 
         fs::remove_dir_all(root).unwrap();
@@ -2128,8 +3723,11 @@ mod tests {
             id: "debug".to_string(),
             name: "Debug".to_string(),
             config_type: DebugConfigType::Node,
+            request: DebugRequestType::Launch,
             program: "../outside.js".to_string(),
             cwd: ".".to_string(),
+            attach_host: "127.0.0.1".to_string(),
+            attach_port: None,
             args: vec![],
             env: Default::default(),
             breakpoints: vec![],
@@ -2147,20 +3745,283 @@ mod tests {
             id: "debug".to_string(),
             name: "Debug".to_string(),
             config_type: DebugConfigType::Node,
+            request: DebugRequestType::Launch,
             program: "src/index.js".to_string(),
             cwd: ".".to_string(),
+            attach_host: "127.0.0.1".to_string(),
+            attach_port: None,
             args: vec![],
             env: Default::default(),
             breakpoints: vec![DebugBreakpoint {
                 file: "../outside.js".to_string(),
                 line: 3,
                 column: 1,
+                condition: None,
+                log_message: None,
             }],
         };
 
         let error = validate_debug_config(root, &config).unwrap_err();
 
         assert!(error.contains("outside project root"));
+    }
+
+    #[test]
+    fn validates_node_attach_config_without_program() {
+        let root = Path::new("/repo");
+        let config = DebugConfig {
+            id: "attach".to_string(),
+            name: "Attach".to_string(),
+            config_type: DebugConfigType::Node,
+            request: DebugRequestType::Attach,
+            program: "".to_string(),
+            cwd: ".".to_string(),
+            attach_host: "127.0.0.1".to_string(),
+            attach_port: Some(9229),
+            args: vec![],
+            env: Default::default(),
+            breakpoints: vec![],
+        };
+
+        validate_debug_config(root, &config).unwrap();
+    }
+
+    #[test]
+    fn validates_python_attach_config_without_program() {
+        let root = Path::new("/repo");
+        let config = DebugConfig {
+            id: "attach".to_string(),
+            name: "Attach".to_string(),
+            config_type: DebugConfigType::Python,
+            request: DebugRequestType::Attach,
+            program: "".to_string(),
+            cwd: ".".to_string(),
+            attach_host: "127.0.0.1".to_string(),
+            attach_port: Some(5678),
+            args: vec![],
+            env: Default::default(),
+            breakpoints: vec![],
+        };
+
+        validate_debug_config(root, &config).unwrap();
+    }
+
+    #[test]
+    fn validates_remote_python_attach_config_paths() {
+        let config = DebugConfig {
+            id: "remote-py".to_string(),
+            name: "Remote Python".to_string(),
+            config_type: DebugConfigType::Python,
+            request: DebugRequestType::Attach,
+            program: "".to_string(),
+            cwd: "app".to_string(),
+            attach_host: "127.0.0.1".to_string(),
+            attach_port: Some(5678),
+            args: Vec::new(),
+            env: BTreeMap::new(),
+            breakpoints: vec![DebugBreakpoint {
+                file: "app/main.py".to_string(),
+                line: 12,
+                column: 1,
+                condition: None,
+                log_message: None,
+            }],
+        };
+
+        validate_remote_debug_config("/srv/project", &config).unwrap();
+        assert_eq!(
+            resolve_remote_python_breakpoint_targets("/srv/project", &config.breakpoints).unwrap()
+                [0]
+            .file,
+            PathBuf::from("/srv/project/app/main.py")
+        );
+    }
+
+    #[test]
+    fn validates_remote_node_attach_config_paths() {
+        let config = DebugConfig {
+            id: "remote-node".to_string(),
+            name: "Remote Node".to_string(),
+            config_type: DebugConfigType::Node,
+            request: DebugRequestType::Attach,
+            program: "".to_string(),
+            cwd: "app".to_string(),
+            attach_host: "127.0.0.1".to_string(),
+            attach_port: Some(9229),
+            args: Vec::new(),
+            env: BTreeMap::new(),
+            breakpoints: vec![DebugBreakpoint {
+                file: "app/main.ts".to_string(),
+                line: 12,
+                column: 1,
+                condition: Some("count > 0".to_string()),
+                log_message: None,
+            }],
+        };
+
+        validate_remote_debug_config("/srv/project space", &config).unwrap();
+        let targets =
+            resolve_remote_node_breakpoint_targets("/srv/project space", &config.breakpoints)
+                .unwrap();
+        assert_eq!(
+            targets[0].file_url,
+            "file:///srv/project%20space/app/main.ts"
+        );
+        assert_eq!(targets[0].condition.as_deref(), Some("count > 0"));
+    }
+
+    #[test]
+    fn validates_remote_node_launch_config_and_quotes_command() {
+        let mut env = BTreeMap::new();
+        env.insert("NODE_ENV".to_string(), "test run".to_string());
+        let config = DebugConfig {
+            id: "remote-node-launch".to_string(),
+            name: "Remote Node Launch".to_string(),
+            config_type: DebugConfigType::Node,
+            request: DebugRequestType::Launch,
+            program: "node_modules/vitest/vitest.mjs".to_string(),
+            cwd: ".".to_string(),
+            attach_host: "127.0.0.1".to_string(),
+            attach_port: None,
+            args: vec![
+                "run".to_string(),
+                "src/math test.ts".to_string(),
+                "-t".to_string(),
+                "adds numbers".to_string(),
+            ],
+            env,
+            breakpoints: vec![DebugBreakpoint {
+                file: "src/math test.ts".to_string(),
+                line: 4,
+                column: 1,
+                condition: None,
+                log_message: None,
+            }],
+        };
+
+        validate_remote_debug_config("/srv/app repo", &config).unwrap();
+        let command = build_remote_node_launch_command(
+            "/srv/app repo",
+            "/srv/app repo/node_modules/vitest/vitest.mjs",
+            &config.args,
+            &config.env,
+        );
+
+        assert_eq!(
+            command,
+            "cd -- '/srv/app repo' && env 'NODE_ENV=test run' node --inspect-brk=127.0.0.1:0 '/srv/app repo/node_modules/vitest/vitest.mjs' 'run' 'src/math test.ts' '-t' 'adds numbers'"
+        );
+    }
+
+    #[test]
+    fn validates_remote_python_launch_config_and_builds_command() {
+        let mut env = BTreeMap::new();
+        env.insert("PYTHONPATH".to_string(), "lib path".to_string());
+        let config = DebugConfig {
+            id: "remote-python-launch".to_string(),
+            name: "Remote Python Launch".to_string(),
+            config_type: DebugConfigType::Python,
+            request: DebugRequestType::Launch,
+            program: "app/main.py".to_string(),
+            cwd: ".".to_string(),
+            attach_host: "127.0.0.1".to_string(),
+            attach_port: None,
+            args: vec!["--name".to_string(), "Ada Lovelace".to_string()],
+            env,
+            breakpoints: vec![DebugBreakpoint {
+                file: "app/main.py".to_string(),
+                line: 8,
+                column: 1,
+                condition: None,
+                log_message: None,
+            }],
+        };
+
+        validate_remote_debug_config("/srv/app repo", &config).unwrap();
+        let command = build_remote_python_launch_command(
+            "/srv/app repo",
+            "/srv/app repo/app/main.py",
+            &config.args,
+            &config.env,
+        );
+
+        assert!(command
+            .starts_with("cd -- '/srv/app repo' && env 'PYTHONPATH=lib path' python3 -u -c "));
+        assert!(command.contains("debugpy.listen"));
+        assert!(command.contains("AERORIC_DEBUGPY_PORT"));
+        assert!(command.ends_with("'/srv/app repo/app/main.py' '--name' 'Ada Lovelace'"));
+    }
+
+    #[test]
+    fn rewrites_remote_node_websocket_url_to_tunnel_endpoint() {
+        let url = inspector_websocket_url_for_endpoint(
+            "ws://127.0.0.1:9229/2af8?session=1",
+            "127.0.0.1",
+            43123,
+        )
+        .unwrap();
+
+        assert_eq!(url.as_str(), "ws://127.0.0.1:43123/2af8?session=1");
+    }
+
+    #[test]
+    fn rejects_remote_debug_paths_outside_root() {
+        let mut config = DebugConfig {
+            id: "remote-py".to_string(),
+            name: "Remote Python".to_string(),
+            config_type: DebugConfigType::Python,
+            request: DebugRequestType::Attach,
+            program: "".to_string(),
+            cwd: "/srv/project".to_string(),
+            attach_host: "127.0.0.1".to_string(),
+            attach_port: Some(5678),
+            args: Vec::new(),
+            env: BTreeMap::new(),
+            breakpoints: Vec::new(),
+        };
+
+        config.cwd = "/srv/project2".to_string();
+        assert!(validate_remote_debug_config("/srv/project", &config).is_err());
+        config.cwd = "../project".to_string();
+        assert!(validate_remote_debug_config("/srv/project", &config).is_err());
+    }
+
+    #[test]
+    fn builds_remote_debug_config_commands_with_quoted_paths() {
+        assert_eq!(
+            build_remote_debug_read_configs_command("/srv/app repo"),
+            "sh -c 'path=$1; if [ -f \"$path\" ]; then cat -- \"$path\"; fi' sh '/srv/app repo/.aeroric/debug-configs.json'"
+        );
+        assert_eq!(
+            build_remote_debug_write_configs_command("/srv/app repo"),
+            "mkdir -p -- '/srv/app repo/.aeroric' && cat > '/srv/app repo/.aeroric/debug-configs.json'"
+        );
+    }
+
+    #[test]
+    fn rejects_attach_config_with_missing_port_or_bad_host() {
+        let root = Path::new("/repo");
+        let mut config = DebugConfig {
+            id: "attach".to_string(),
+            name: "Attach".to_string(),
+            config_type: DebugConfigType::Node,
+            request: DebugRequestType::Attach,
+            program: "".to_string(),
+            cwd: ".".to_string(),
+            attach_host: "127.0.0.1".to_string(),
+            attach_port: None,
+            args: vec![],
+            env: Default::default(),
+            breakpoints: vec![],
+        };
+
+        let missing_port = validate_debug_config(root, &config).unwrap_err();
+        assert!(missing_port.contains("Attach port"));
+
+        config.attach_port = Some(9229);
+        config.attach_host = "http://127.0.0.1".to_string();
+        let bad_host = validate_debug_config(root, &config).unwrap_err();
+        assert!(bad_host.contains("Attach host"));
     }
 
     #[test]
@@ -2189,11 +4050,15 @@ mod tests {
                     file: "src/index.js".to_string(),
                     line: 2,
                     column: 1,
+                    condition: Some("count > 0".to_string()),
+                    log_message: None,
                 },
                 DebugBreakpoint {
                     file: "src/lib.js".to_string(),
                     line: 4,
                     column: 3,
+                    condition: None,
+                    log_message: Some("hit lib".to_string()),
                 },
             ],
         )
@@ -2206,12 +4071,14 @@ mod tests {
         );
         assert_eq!(targets[0].line, 2);
         assert_eq!(targets[0].column, 1);
+        assert_eq!(targets[0].condition.as_deref(), Some("count > 0"));
         assert_eq!(
             targets[1].file_url,
             node_file_url(&root.join("src/lib.js")).unwrap()
         );
         assert_eq!(targets[1].line, 4);
         assert_eq!(targets[1].column, 3);
+        assert_eq!(targets[1].log_message.as_deref(), Some("hit lib"));
 
         fs::remove_dir_all(root).unwrap();
     }
@@ -2228,6 +4095,8 @@ mod tests {
                 file: "app/main.py".to_string(),
                 line: 2,
                 column: 1,
+                condition: None,
+                log_message: Some("main reached".to_string()),
             }],
         )
         .unwrap();
@@ -2238,6 +4107,8 @@ mod tests {
                 file: root.join("app/main.py"),
                 line: 2,
                 column: 1,
+                condition: None,
+                log_message: Some("main reached".to_string()),
             }]
         );
 
@@ -2264,6 +4135,156 @@ mod tests {
         assert_eq!(
             message.get("command").and_then(Value::as_str),
             Some("initialize")
+        );
+    }
+
+    #[test]
+    fn parses_node_inspector_websocket_url_from_target_list() {
+        let url = parse_node_inspector_websocket_url(
+            r#"[
+                {
+                  "id": "node",
+                  "title": "app.js",
+                  "webSocketDebuggerUrl": "ws://127.0.0.1:9229/node"
+                }
+              ]"#,
+        )
+        .unwrap();
+
+        assert_eq!(url, "ws://127.0.0.1:9229/node");
+    }
+
+    #[test]
+    fn parses_node_inspector_websocket_url_from_version_object() {
+        let url = parse_node_inspector_websocket_url(
+            r#"{
+              "Browser": "node.js/v22",
+              "webSocketDebuggerUrl": "ws://127.0.0.1:9229/version"
+            }"#,
+        )
+        .unwrap();
+
+        assert_eq!(url, "ws://127.0.0.1:9229/version");
+    }
+
+    #[test]
+    fn extracts_successful_http_response_body() {
+        let body = http_response_body(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n[{\"ok\":true}]",
+        )
+        .unwrap();
+
+        assert_eq!(body, "[{\"ok\":true}]");
+    }
+
+    #[test]
+    fn builds_python_attach_debug_adapter_request() {
+        let config = DebugConfig {
+            id: "py-attach".to_string(),
+            name: "Python Attach".to_string(),
+            config_type: DebugConfigType::Python,
+            request: DebugRequestType::Attach,
+            program: "".to_string(),
+            cwd: ".".to_string(),
+            attach_host: "127.0.0.1".to_string(),
+            attach_port: Some(5678),
+            args: vec![],
+            env: BTreeMap::from([("PYTHONPATH".to_string(), ".".to_string())]),
+            breakpoints: vec![],
+        };
+
+        let (command, arguments) =
+            python_debug_adapter_start_request(&config, None, Path::new("/repo")).unwrap();
+
+        assert_eq!(command, "attach");
+        assert_eq!(
+            arguments.get("request").and_then(Value::as_str),
+            Some("attach")
+        );
+        assert_eq!(
+            arguments
+                .get("connect")
+                .and_then(|connect| connect.get("host"))
+                .and_then(Value::as_str),
+            Some("127.0.0.1")
+        );
+        assert_eq!(
+            arguments
+                .get("connect")
+                .and_then(|connect| connect.get("port"))
+                .and_then(Value::as_u64),
+            Some(5678)
+        );
+        assert_eq!(
+            arguments.get("env").and_then(|env| env.get("PYTHONPATH")),
+            Some(&json!("."))
+        );
+    }
+
+    #[test]
+    fn parses_debug_adapter_evaluate_result() {
+        let response = json!({
+            "type": "response",
+            "command": "evaluate",
+            "success": true,
+            "body": {
+                "result": "{'answer': 42}",
+                "type": "dict",
+                "variablesReference": 7
+            }
+        });
+
+        let result = parse_debug_adapter_evaluate_result(&response, "payload");
+
+        assert_eq!(
+            result,
+            DebugEvaluateResult {
+                expression: "payload".to_string(),
+                result: "{'answer': 42}".to_string(),
+                type_name: Some("dict".to_string()),
+                object_id: Some("dap:7".to_string()),
+                has_children: true,
+            }
+        );
+    }
+
+    #[test]
+    fn parses_cdp_evaluate_remote_object_result() {
+        let result = debug_evaluate_result_from_remote_object(
+            "config",
+            &json!({
+                "type": "object",
+                "description": "Object",
+                "objectId": "node-object-1"
+            }),
+        );
+
+        assert_eq!(
+            result,
+            DebugEvaluateResult {
+                expression: "config".to_string(),
+                result: "Object".to_string(),
+                type_name: Some("object".to_string()),
+                object_id: Some("node-object-1".to_string()),
+                has_children: true,
+            }
+        );
+    }
+
+    #[test]
+    fn builds_node_logpoint_condition_without_pausing() {
+        let condition = node_breakpoint_condition(&DebugBreakpointTarget {
+            file_url: "file:///repo/src/index.js".to_string(),
+            line: 3,
+            column: 1,
+            condition: Some("enabled".to_string()),
+            log_message: Some("hit index".to_string()),
+        })
+        .unwrap();
+
+        assert_eq!(
+            condition,
+            "(enabled) && (console.log(\"hit index\"), false)"
         );
     }
 

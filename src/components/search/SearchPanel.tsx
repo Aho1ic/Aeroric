@@ -3,15 +3,22 @@ import { Check, Eye, Search, X } from "lucide-react";
 import { useMemo, useRef, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
 import { useI18n } from "../../i18n";
+import {
+  formatInvokeError,
+  invokeWithTimeout,
+  remoteInvokeOptions,
+} from "../../hooks/useCancellableInvoke";
 import type {
   ReplacePreview,
   ReplaceSummary,
+  SshConnection,
   TextSearchMatch,
   TextSearchOptions,
 } from "../../types";
 import {
   buildTextSearchOptions,
   canApplyReplacementPreview,
+  countSelectedPreviewMatches,
   flattenReplacePreview,
   groupSearchMatches,
   searchMatchPreview,
@@ -21,10 +28,15 @@ export function SearchPanel({
   projectPath,
   width,
   onOpenMatch,
+  remote,
 }: {
   projectPath: string;
   width: number;
   onOpenMatch: (match: TextSearchMatch) => void;
+  remote?: {
+    connection: SshConnection;
+    projectPath: string;
+  };
 }) {
   const { t } = useI18n();
   const [query, setQuery] = useState("");
@@ -34,11 +46,13 @@ export function SearchPanel({
   const [caseSensitive, setCaseSensitive] = useState(false);
   const [regex, setRegex] = useState(false);
   const [wholeWord, setWholeWord] = useState(false);
+  const [structured, setStructured] = useState(false);
   const [matches, setMatches] = useState<TextSearchMatch[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [preview, setPreview] = useState<ReplacePreview | null>(null);
   const [previewKey, setPreviewKey] = useState<string | null>(null);
+  const [selectedPreviewPaths, setSelectedPreviewPaths] = useState<Set<string>>(new Set());
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewError, setPreviewError] = useState<string | null>(null);
   const [applying, setApplying] = useState(false);
@@ -63,9 +77,14 @@ export function SearchPanel({
     () => createPreviewKey(query, replacement, options),
     [options, query, replacement],
   );
+  const selectedPreviewMatchCount = useMemo(
+    () => countSelectedPreviewMatches(preview, selectedPreviewPaths),
+    [preview, selectedPreviewPaths],
+  );
   const canApplyPreview =
     canApplyReplacementPreview(preview, query, replacement) &&
     previewKey === currentPreviewKey &&
+    selectedPreviewMatchCount > 0 &&
     !previewLoading &&
     !applying;
 
@@ -80,10 +99,20 @@ export function SearchPanel({
     previewRunRef.current += 1;
     setPreview(null);
     setPreviewKey(null);
+    setSelectedPreviewPaths(new Set());
     setPreviewError(null);
     setPreviewLoading(false);
     setApplying(false);
     setSummary(null);
+  };
+
+  const invokeSearchCommand = async <T,>(
+    command: string,
+    args: Record<string, unknown>,
+    timeoutMs?: number,
+  ): Promise<T> => {
+    const promise = invoke<T>(command, args);
+    return remote ? invokeWithTimeout(promise, command, remoteInvokeOptions(timeoutMs)) : promise;
   };
 
   const updateSearchInput = (value: string) => {
@@ -111,17 +140,33 @@ export function SearchPanel({
     setLoading(true);
     setError(null);
     try {
-      const results = await invoke<TextSearchMatch[]>("search_text", {
-        projectPath,
-        query: text,
-        options,
-      });
+      const results = remote
+        ? await invokeSearchCommand<TextSearchMatch[]>(
+            structured ? "remote_search_structured" : "remote_search_text",
+            {
+              connection: remote.connection,
+              remoteProjectPath: remote.projectPath,
+              ...(structured ? { pattern: text } : { query: text }),
+              options,
+            },
+          )
+        : structured
+          ? await invoke<TextSearchMatch[]>("search_structured", {
+              projectPath,
+              pattern: text,
+              options,
+          })
+        : await invoke<TextSearchMatch[]>("search_text", {
+            projectPath,
+            query: text,
+            options,
+          });
       if (runId !== searchRunRef.current) return;
       setMatches(results);
     } catch (err) {
       if (runId !== searchRunRef.current) return;
       setMatches([]);
-      setError(String(err));
+      setError(formatInvokeError(err));
     } finally {
       if (runId === searchRunRef.current) setLoading(false);
     }
@@ -144,20 +189,30 @@ export function SearchPanel({
     setSummary(null);
     const nextPreviewKey = createPreviewKey(text, replacement, options);
     try {
-      const nextPreview = await invoke<ReplacePreview>("replace_text_preview", {
-        projectPath,
-        query: text,
-        replacement,
-        options,
-      });
+      const nextPreview = remote
+        ? await invokeSearchCommand<ReplacePreview>("remote_replace_text_preview", {
+            connection: remote.connection,
+            remoteProjectPath: remote.projectPath,
+            query: text,
+            replacement,
+            options,
+          })
+        : await invoke<ReplacePreview>("replace_text_preview", {
+            projectPath,
+            query: text,
+            replacement,
+            options,
+          });
       if (runId !== previewRunRef.current) return;
       setPreview(nextPreview);
       setPreviewKey(nextPreviewKey);
+      setSelectedPreviewPaths(new Set(nextPreview.files.map((file) => file.path)));
     } catch (err) {
       if (runId !== previewRunRef.current) return;
       setPreview(null);
       setPreviewKey(null);
-      setPreviewError(String(err));
+      setSelectedPreviewPaths(new Set());
+      setPreviewError(formatInvokeError(err));
     } finally {
       if (runId === previewRunRef.current) setPreviewLoading(false);
     }
@@ -165,25 +220,36 @@ export function SearchPanel({
 
   const applyPreview = async () => {
     if (!preview || !canApplyPreview) return;
-    const replacements = flattenReplacePreview(preview);
+    const replacements = flattenReplacePreview(preview, selectedPreviewPaths);
     if (replacements.length === 0) return;
     const runId = previewRunRef.current;
     setApplying(true);
     setPreviewError(null);
     try {
-      const result = await invoke<ReplaceSummary>("apply_text_replacements", {
-        projectPath,
-        replacements,
-      });
+      const result = remote
+        ? await invokeSearchCommand<ReplaceSummary>(
+            "remote_apply_text_replacements",
+            {
+              connection: remote.connection,
+              remoteProjectPath: remote.projectPath,
+              replacements,
+            },
+            300_000,
+          )
+        : await invoke<ReplaceSummary>("apply_text_replacements", {
+            projectPath,
+            replacements,
+          });
       if (runId !== previewRunRef.current) return;
       setSummary(result);
       setPreview(null);
       setPreviewKey(null);
+      setSelectedPreviewPaths(new Set());
       setMatches([]);
       searchRunRef.current += 1;
     } catch (err) {
       if (runId !== previewRunRef.current) return;
-      setPreviewError(String(err));
+      setPreviewError(formatInvokeError(err));
     } finally {
       setApplying(false);
     }
@@ -269,6 +335,16 @@ export function SearchPanel({
             value={wholeWord}
             onChange={(value) => updateSearchOption(setWholeWord, value)}
           />
+          <Toggle
+            label={t("search.structured")}
+            title={t("search.structuredHelp")}
+            value={structured}
+            onChange={(value) => {
+              setStructured(value);
+              invalidateSearch();
+              invalidatePreview();
+            }}
+          />
           <button
             type="button"
             onClick={() => void runSearch()}
@@ -281,8 +357,9 @@ export function SearchPanel({
           <button
             type="button"
             onClick={() => void runPreview()}
-            disabled={previewLoading}
-            style={actionButtonStyle(previewLoading)}
+            disabled={structured || previewLoading}
+            title={structured ? t("search.structuredReplaceDisabled") : undefined}
+            style={actionButtonStyle(structured || previewLoading)}
           >
             <Eye size={12} />
             <span>{previewLoading ? t("common.loading") : t("search.preview")}</span>
@@ -351,6 +428,23 @@ export function SearchPanel({
                   name={file.name}
                   path={file.path}
                   count={file.matches.length}
+                  headerControl={
+                    <input
+                      type="checkbox"
+                      checked={selectedPreviewPaths.has(file.path)}
+                      aria-label={t("search.includeFileInReplacement", { name: file.name })}
+                      onChange={(event) => {
+                        const checked = event.currentTarget.checked;
+                        setSelectedPreviewPaths((current) => {
+                          const next = new Set(current);
+                          if (checked) next.add(file.path);
+                          else next.delete(file.path);
+                          return next;
+                        });
+                      }}
+                      style={previewCheckboxStyle}
+                    />
+                  }
                 >
                   {file.matches.map((match) => (
                     <PreviewMatchButton
@@ -484,17 +578,20 @@ function SearchResultGroup({
   name,
   path,
   count,
+  headerControl,
   children,
 }: {
   name: string;
   path: string;
   count: number;
+  headerControl?: ReactNode;
   children: ReactNode;
 }) {
   return (
     <div style={{ marginBottom: 10 }}>
       <div title={path} style={fileHeaderStyle}>
-        {name}
+        {headerControl}
+        <span style={singleLineTextStyle}>{name}</span>
         <span style={{ marginLeft: 6, color: "var(--text-hint)", fontWeight: 500 }}>{count}</span>
       </div>
       {children}
@@ -636,6 +733,10 @@ const sectionCountStyle: CSSProperties = {
 };
 
 const fileHeaderStyle: CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  minWidth: 0,
+  gap: 6,
   fontSize: 11.5,
   fontWeight: 650,
   color: "var(--text-primary)",
@@ -643,6 +744,13 @@ const fileHeaderStyle: CSSProperties = {
   textOverflow: "ellipsis",
   whiteSpace: "nowrap",
   marginBottom: 4,
+};
+
+const previewCheckboxStyle: CSSProperties = {
+  width: 13,
+  height: 13,
+  margin: 0,
+  flex: "0 0 auto",
 };
 
 const matchButtonStyle: CSSProperties = {

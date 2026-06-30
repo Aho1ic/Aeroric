@@ -13,12 +13,18 @@ import {
 import type React from "react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useI18n } from "../../i18n";
+import {
+  formatInvokeError,
+  invokeWithTimeout,
+  remoteInvokeOptions,
+} from "../../hooks/useCancellableInvoke";
 import type {
   DebugBreakpoint,
   DebugSessionSnapshot,
   RunConfig,
   RunConfigDocument,
   RunProcessSnapshot,
+  SshConnection,
 } from "../../types";
 import {
   buildRunConfigDraft,
@@ -43,12 +49,17 @@ export function RunConfigurationsPanel({
   editorBreakpoints = [],
   onDebugStarted,
   onRunProcessChanged,
+  remote,
 }: {
   projectPath: string;
   width: number;
   editorBreakpoints?: DebugBreakpoint[];
   onDebugStarted?: (snapshot: DebugSessionSnapshot) => void;
   onRunProcessChanged?: (snapshot: RunProcessSnapshot) => void;
+  remote?: {
+    connection: SshConnection;
+    projectPath: string;
+  };
 }) {
   const { t } = useI18n();
   const [document, setDocument] = useState<RunConfigDocument>(emptyDocument);
@@ -66,6 +77,24 @@ export function RunConfigurationsPanel({
     [document.configs, selectedId],
   );
   const processActive = draft.type === "shell" && isRunProcessActive(process);
+  const remoteCommandArgs = useCallback(
+    <T extends Record<string, unknown>>(args: T) =>
+      remote
+        ? {
+            ...args,
+            connection: remote.connection,
+            remoteProjectPath: remote.projectPath,
+          }
+        : args,
+    [remote],
+  );
+  const invokeRunCommand = useCallback(
+    async <T,>(command: string, args: Record<string, unknown>, timeoutMs?: number): Promise<T> => {
+      const promise = invoke<T>(command, args);
+      return remote ? invokeWithTimeout(promise, command, remoteInvokeOptions(timeoutMs)) : promise;
+    },
+    [remote],
+  );
 
   const selectConfig = useCallback((config: RunConfig) => {
     setSelectedId(config.id);
@@ -77,7 +106,10 @@ export function RunConfigurationsPanel({
     let cancelled = false;
     setLoading(true);
     setError(null);
-    invoke<RunConfigDocument>("read_run_configs", { projectPath })
+    invokeRunCommand<RunConfigDocument>(
+      remote ? "remote_read_run_configs" : "read_run_configs",
+      remoteCommandArgs({ projectPath }),
+    )
       .then((next) => {
         if (cancelled) return;
         setDocument(next);
@@ -91,7 +123,7 @@ export function RunConfigurationsPanel({
         }
       })
       .catch((err) => {
-        if (!cancelled) setError(String(err));
+        if (!cancelled) setError(formatInvokeError(err));
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -99,7 +131,7 @@ export function RunConfigurationsPanel({
     return () => {
       cancelled = true;
     };
-  }, [projectPath]);
+  }, [invokeRunCommand, projectPath, remote, remoteCommandArgs]);
 
   useEffect(() => {
     if (!process?.runId || process.status !== "running") return;
@@ -113,7 +145,7 @@ export function RunConfigurationsPanel({
           }
         })
         .catch((err) => {
-          if (!cancelled) setError(String(err));
+          if (!cancelled) setError(formatInvokeError(err));
         });
     }, 700);
     return () => {
@@ -136,7 +168,7 @@ export function RunConfigurationsPanel({
           if (!cancelled) setDebugSession(next);
         })
         .catch((err) => {
-          if (!cancelled) setError(String(err));
+          if (!cancelled) setError(formatInvokeError(err));
         });
     }, 700);
     return () => {
@@ -155,16 +187,19 @@ export function RunConfigurationsPanel({
         return null;
       }
       const nextDocument = upsertRunConfig(document, config);
-      const saved = await invoke<RunConfigDocument>("write_run_configs", {
-        projectPath,
-        document: nextDocument,
-      });
+      const saved = await invokeRunCommand<RunConfigDocument>(
+        remote ? "remote_write_run_configs" : "write_run_configs",
+        remoteCommandArgs({
+          projectPath,
+          document: nextDocument,
+        }),
+      );
       setDocument(saved);
       setSelectedId(config.id);
       setDraft(runConfigToDraft(config));
       return config;
     } catch (err) {
-      setError(String(err));
+      setError(formatInvokeError(err));
       return null;
     } finally {
       setSaving(false);
@@ -177,16 +212,19 @@ export function RunConfigurationsPanel({
     setError(null);
     try {
       const nextDocument = removeRunConfig(document, selectedConfig.id);
-      const saved = await invoke<RunConfigDocument>("write_run_configs", {
-        projectPath,
-        document: nextDocument,
-      });
+      const saved = await invokeRunCommand<RunConfigDocument>(
+        remote ? "remote_write_run_configs" : "write_run_configs",
+        remoteCommandArgs({
+          projectPath,
+          document: nextDocument,
+        }),
+      );
       setDocument(saved);
       const nextSelected = saved.configs[0] ?? null;
       setSelectedId(nextSelected?.id ?? null);
       setDraft(nextSelected ? runConfigToDraft(nextSelected) : defaultRunConfigDraft());
     } catch (err) {
-      setError(String(err));
+      setError(formatInvokeError(err));
     } finally {
       setSaving(false);
     }
@@ -204,23 +242,31 @@ export function RunConfigurationsPanel({
       if (config.type === "debug") {
         const debugConfig = runConfigToDebugConfig(config);
         if (!debugConfig) return;
-        const snapshot = await invoke<DebugSessionSnapshot>("start_debug_config", {
-          projectPath,
-          config: mergeDebugConfigBreakpoints(debugConfig, editorBreakpoints),
-        });
+        const snapshot = await invokeRunCommand<DebugSessionSnapshot>(
+          remote ? "remote_start_debug_config" : "start_debug_config",
+          remoteCommandArgs({
+            projectPath,
+            config: mergeDebugConfigBreakpoints(debugConfig, editorBreakpoints),
+          }),
+          180_000,
+        );
         setProcess(null);
         setDebugSession(snapshot);
         onDebugStarted?.(snapshot);
         return;
       }
-      const snapshot = await invoke<RunProcessSnapshot>("start_run_config", {
-        projectPath,
-        config,
-      });
+      const snapshot = await invokeRunCommand<RunProcessSnapshot>(
+        remote ? "remote_start_run_config" : "start_run_config",
+        remoteCommandArgs({
+          projectPath,
+          config,
+        }),
+        180_000,
+      );
       setProcess(snapshot);
       onRunProcessChanged?.(snapshot);
     } catch (err) {
-      setError(String(err));
+      setError(formatInvokeError(err));
     } finally {
       setRunning(false);
     }
@@ -237,7 +283,7 @@ export function RunConfigurationsPanel({
       setProcess(snapshot);
       onRunProcessChanged?.(snapshot);
     } catch (err) {
-      setError(String(err));
+      setError(formatInvokeError(err));
     } finally {
       setRunning(false);
     }

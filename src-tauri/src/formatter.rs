@@ -84,6 +84,7 @@ pub async fn format_file(
         let root = validate_project_root(&project_path)?;
         let file = validate_file_path(&root, &file_path)?;
         let file_string = file.to_string_lossy().into_owned();
+        crate::local_history::record_snapshot_before_write(&project_path, &file_string, "")?;
         let extension = file
             .extension()
             .and_then(|ext| ext.to_str())

@@ -2,7 +2,12 @@ import { invoke } from "@tauri-apps/api/core";
 import { CircleAlert, CircleX, Sparkles, TriangleAlert } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useI18n } from "../../i18n";
-import type { DiagnosticItem, DiagnosticRunResult } from "../../types";
+import {
+  formatInvokeError,
+  invokeWithTimeout,
+  remoteInvokeOptions,
+} from "../../hooks/useCancellableInvoke";
+import type { DiagnosticItem, DiagnosticRunResult, SshConnection } from "../../types";
 import {
   buildAgentFixPrompt,
   diagnosticProfiles,
@@ -15,11 +20,18 @@ export function ProblemsPanel({
   width,
   onOpenDiagnostic,
   onCreateAgentTask,
+  onDiagnosticsChange,
+  remote,
 }: {
   projectPath: string;
   width: number;
   onOpenDiagnostic: (diagnostic: DiagnosticItem) => void;
   onCreateAgentTask: (prompt: string) => void;
+  onDiagnosticsChange?: (diagnostics: DiagnosticItem[]) => void;
+  remote?: {
+    connection: SshConnection;
+    projectPath: string;
+  };
 }) {
   const { t } = useI18n();
   const [profile, setProfile] = useState<DiagnosticProfileId>("typescript");
@@ -37,7 +49,8 @@ export function ProblemsPanel({
     setResult(null);
     setError(null);
     setLoading(false);
-  }, [projectPath]);
+    onDiagnosticsChange?.([]);
+  }, [onDiagnosticsChange, projectPath]);
 
   const runDiagnostics = async (nextProfile: DiagnosticProfileId = profile) => {
     const runId = runIdRef.current + 1;
@@ -46,16 +59,28 @@ export function ProblemsPanel({
     setLoading(true);
     setError(null);
     try {
-      const next = await invoke<DiagnosticRunResult>("run_diagnostics", {
-        projectPath,
-        profile: nextProfile,
-      });
+      const next = remote
+        ? await invokeWithTimeout(
+            invoke<DiagnosticRunResult>("remote_run_diagnostics", {
+              connection: remote.connection,
+              remoteProjectPath: remote.projectPath,
+              profile: nextProfile,
+            }),
+            "remote_run_diagnostics",
+            remoteInvokeOptions(180_000),
+          )
+        : await invoke<DiagnosticRunResult>("run_diagnostics", {
+            projectPath,
+            profile: nextProfile,
+          });
       if (runId !== runIdRef.current) return;
       setResult(next);
+      onDiagnosticsChange?.(next.diagnostics);
     } catch (err) {
       if (runId !== runIdRef.current) return;
       setResult(null);
-      setError(String(err));
+      onDiagnosticsChange?.([]);
+      setError(formatInvokeError(err));
     } finally {
       if (runId === runIdRef.current) setLoading(false);
     }

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   buildTestFixPrompt,
+  buildTestRunTarget,
   groupTestFailuresByFile,
   isLatestTestRun,
   testProfiles,
@@ -36,7 +37,7 @@ const failures: TestFailure[] = [
 
 describe("test explorer state", () => {
   it("lists supported profiles in a stable order", () => {
-    expect(testProfiles.map((profile) => profile.id)).toEqual(["vitest", "cargo"]);
+    expect(testProfiles.map((profile) => profile.id)).toEqual(["vitest", "cargo", "python"]);
   });
 
   it("groups failures by file after sorting by location", () => {
@@ -64,5 +65,17 @@ describe("test explorer state", () => {
 
     expect(isLatestTestRun(first, second)).toBe(false);
     expect(isLatestTestRun(second, second)).toBe(true);
+  });
+
+  it("builds a trimmed optional test run target", () => {
+    expect(buildTestRunTarget("", "")).toBeNull();
+    expect(buildTestRunTarget(" src/test/math.test.ts ", " adds numbers ")).toEqual({
+      filePath: "src/test/math.test.ts",
+      testName: "adds numbers",
+    });
+    expect(buildTestRunTarget("", "adds numbers")).toEqual({
+      filePath: null,
+      testName: "adds numbers",
+    });
   });
 });

@@ -1,5 +1,9 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
-import { useCancellableInvoke } from "../hooks/useCancellableInvoke";
+import {
+  formatInvokeError,
+  remoteInvokeOptions,
+  useCancellableInvoke,
+} from "../hooks/useCancellableInvoke";
 import {
   Search,
   RefreshCw,
@@ -13,6 +17,7 @@ import {
 } from "lucide-react";
 import { useI18n } from "../i18n";
 import { GitFileBrowser, GitFileViewToggle, useGitFileViewMode } from "./git-view/GitFileBrowser";
+import type { SshConnection } from "../types";
 
 interface GitCommit {
   hash: string;
@@ -57,10 +62,24 @@ interface Props {
   onCommitSelect: (hash: string, message: string) => void;
   onFileClick?: (hash: string, filePath: string, label: string) => void;
   width?: number;
+  remote?: {
+    connection: SshConnection;
+    projectPath: string;
+  };
 }
 
-export function GitHistory({ projectPath, onCommitSelect, onFileClick, width = 280 }: Props) {
+export function GitHistory({
+  projectPath,
+  onCommitSelect,
+  onFileClick,
+  width = 280,
+  remote,
+}: Props) {
   const { t } = useI18n();
+  const isRemote = Boolean(remote);
+  const gitCommandContext = remote
+    ? { connection: remote.connection, remoteProjectPath: remote.projectPath }
+    : { projectPath };
   const [commits, setCommits] = useState<GitCommit[]>([]);
   const [remoteCounts, setRemoteCounts] = useState<GitRemoteCounts>({
     ahead: 0,
@@ -102,7 +121,16 @@ export function GitHistory({ projectPath, onCommitSelect, onFileClick, width = 2
 
   const loadBranches = useCallback(async () => {
     try {
-      const list = await safeInvoke<GitBranchInfo[]>("git_list_branches", { projectPath });
+      const list = remote
+        ? await safeInvoke<GitBranchInfo[]>(
+            "remote_git_list_branches",
+            {
+              connection: remote.connection,
+              remoteProjectPath: remote.projectPath,
+            },
+            remoteInvokeOptions(),
+          )
+        : await safeInvoke<GitBranchInfo[]>("git_list_branches", { projectPath });
       if (list === null) return; // Component unmounted
       setBranches(list);
       // Set initial branch to current if not yet set
@@ -110,10 +138,10 @@ export function GitHistory({ projectPath, onCommitSelect, onFileClick, width = 2
         if (prev) return prev;
         return list.find((b) => b.current)?.name ?? "";
       });
-    } catch {
-      // ignore
+    } catch (e) {
+      if (remote && !isCancelled()) setError(formatInvokeError(e));
     }
-  }, [projectPath, safeInvoke]);
+  }, [projectPath, remote, safeInvoke, isCancelled]);
 
   const refresh = useCallback(
     async (query?: string, branch?: string) => {
@@ -121,28 +149,54 @@ export function GitHistory({ projectPath, onCommitSelect, onFileClick, width = 2
       setError(null);
       const activeBranch = branch ?? selectedBranch;
       try {
-        const [log, remote] = await Promise.all([
-          safeInvoke<GitCommit[]>("git_log", {
-            projectPath,
-            limit: 50,
-            search: query ?? searchQuery,
-            branch: activeBranch || null,
-          }),
-          safeInvoke<GitRemoteCounts>("git_remote_counts", {
-            projectPath,
-            branch: activeBranch || null,
-          }).catch(() => ({ ahead: 0, behind: 0, branch: "" })),
+        const logParams = remote
+          ? {
+              connection: remote.connection,
+              remoteProjectPath: remote.projectPath,
+              limit: 50,
+              search: query ?? searchQuery,
+              branch: activeBranch || null,
+            }
+          : {
+              projectPath,
+              limit: 50,
+              search: query ?? searchQuery,
+              branch: activeBranch || null,
+            };
+        const remoteParams = remote
+          ? {
+              connection: remote.connection,
+              remoteProjectPath: remote.projectPath,
+              branch: activeBranch || null,
+            }
+          : {
+              projectPath,
+              branch: activeBranch || null,
+            };
+        const [log, remoteCountsResult] = await Promise.all([
+          safeInvoke<GitCommit[]>(
+            isRemote ? "remote_git_log" : "git_log",
+            logParams,
+            isRemote ? remoteInvokeOptions() : undefined,
+          ),
+          safeInvoke<GitRemoteCounts>(
+            isRemote ? "remote_git_remote_counts" : "git_remote_counts",
+            remoteParams,
+            isRemote ? remoteInvokeOptions() : undefined,
+          ).catch(() => ({ ahead: 0, behind: 0, branch: "" })),
         ]);
         if (log === null) return; // Component unmounted
         setCommits(log);
-        setRemoteCounts((remote as GitRemoteCounts) ?? { ahead: 0, behind: 0, branch: "" });
+        setRemoteCounts(
+          (remoteCountsResult as GitRemoteCounts) ?? { ahead: 0, behind: 0, branch: "" },
+        );
       } catch (e) {
-        if (!isCancelled()) setError(String(e));
+        if (!isCancelled()) setError(formatInvokeError(e));
       } finally {
         if (!isCancelled()) setLoading(false);
       }
     },
-    [projectPath, searchQuery, selectedBranch, safeInvoke, isCancelled],
+    [projectPath, remote, searchQuery, selectedBranch, safeInvoke, isCancelled, isRemote],
   );
 
   useEffect(() => {
@@ -175,29 +229,45 @@ export function GitHistory({ projectPath, onCommitSelect, onFileClick, width = 2
       onCommitSelect(commit.hash, commit.message);
       setLoadingDetail(true);
       try {
-        const detail = await safeInvoke<GitCommitDetail>("git_commit_detail", {
-          projectPath,
-          commitHash: commit.hash,
-        });
+        const detail = await safeInvoke<GitCommitDetail>(
+          isRemote ? "remote_git_commit_detail" : "git_commit_detail",
+          {
+            ...(remote
+              ? {
+                  connection: remote.connection,
+                  remoteProjectPath: remote.projectPath,
+                }
+              : { projectPath }),
+            commitHash: commit.hash,
+          },
+          isRemote ? remoteInvokeOptions() : undefined,
+        );
         if (detail === null) return; // Component unmounted
         setSelectedDetail(detail);
-      } catch {
-        if (!isCancelled()) setSelectedDetail(null);
+      } catch (e) {
+        if (!isCancelled()) {
+          setSelectedDetail(null);
+          setError(formatInvokeError(e));
+        }
       } finally {
         if (!isCancelled()) setLoadingDetail(false);
       }
     },
-    [projectPath, onCommitSelect, safeInvoke, isCancelled],
+    [projectPath, onCommitSelect, remote, safeInvoke, isCancelled, isRemote],
   );
 
   const handlePull = async () => {
     setPulling(true);
     setError(null);
     try {
-      await safeInvoke("git_pull", { projectPath });
+      await safeInvoke(
+        isRemote ? "remote_git_pull" : "git_pull",
+        gitCommandContext,
+        isRemote ? remoteInvokeOptions() : undefined,
+      );
       if (!isCancelled()) refresh();
     } catch (e) {
-      if (!isCancelled()) setError(String(e));
+      if (!isCancelled()) setError(formatInvokeError(e));
     } finally {
       if (!isCancelled()) setPulling(false);
     }
@@ -207,13 +277,20 @@ export function GitHistory({ projectPath, onCommitSelect, onFileClick, width = 2
     setPushing(true);
     setError(null);
     try {
-      await safeInvoke("git_push", { projectPath, branch: selectedBranch || null });
+      await safeInvoke(
+        isRemote ? "remote_git_push" : "git_push",
+        {
+          ...gitCommandContext,
+          branch: selectedBranch || null,
+        },
+        isRemote ? remoteInvokeOptions() : undefined,
+      );
       if (!isCancelled()) {
         refresh();
         await loadBranches();
       }
     } catch (e) {
-      if (!isCancelled()) setError(String(e));
+      if (!isCancelled()) setError(formatInvokeError(e));
     } finally {
       if (!isCancelled()) setPushing(false);
     }
@@ -297,9 +374,7 @@ export function GitHistory({ projectPath, onCommitSelect, onFileClick, width = 2
                 {t("git.pushing")}
               </>
             ) : (
-              <>
-                {t("git.push")} ↑{remoteCounts.ahead}
-              </>
+              <>{t("git.push")} ↑{remoteCounts.ahead}</>
             )}
           </button>
           <button

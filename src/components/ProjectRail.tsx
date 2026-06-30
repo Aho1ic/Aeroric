@@ -23,6 +23,16 @@ import s from "../styles";
 import claudeWaveGif from "../assets/gif/claude-wave.gif";
 
 type ProjectStatus = "attention" | "running" | null;
+type ProjectPointerDragState = {
+  id: string;
+  pointerId: number;
+  startY: number;
+  active: boolean;
+  pressTimer: number;
+};
+
+const POINTER_DRAG_DELAY_MS = 180;
+const POINTER_DRAG_MOVE_TOLERANCE = 5;
 
 function normalizeProjectSearchText(value: string) {
   return value.normalize("NFKC").toLocaleLowerCase();
@@ -399,6 +409,9 @@ export function ProjectRail({
   const [collapsed, setCollapsed] = useState(false);
   const [draggedProjectId, setDraggedProjectId] = useState<string | null>(null);
   const [dragOverProjectId, setDragOverProjectId] = useState<string | null>(null);
+  const projectItemRefs = useRef<Map<string, HTMLElement>>(new Map());
+  const projectPointerDragRef = useRef<ProjectPointerDragState | null>(null);
+  const suppressNextProjectClickRef = useRef(false);
   const isDark = themeVariant === "dark";
   const effectiveCollapsed = forceCollapsed || collapsed;
   const [expandedProjectIds, setExpandedProjectIds] = useState<Set<string>>(() =>
@@ -422,6 +435,95 @@ export function ProjectRail({
     onReorderProjects?.(next);
   };
 
+  const setProjectItemRef = (projectId: string) => (element: HTMLDivElement | null) => {
+    if (element) {
+      projectItemRefs.current.set(projectId, element);
+    } else {
+      projectItemRefs.current.delete(projectId);
+    }
+  };
+
+  const projectIdAtClientY = (clientY: number) => {
+    let fallback: string | null = null;
+    let fallbackDistance = Number.POSITIVE_INFINITY;
+    for (const [projectId, element] of projectItemRefs.current) {
+      const rect = element.getBoundingClientRect();
+      if (clientY >= rect.top && clientY <= rect.bottom) return projectId;
+      const center = rect.top + rect.height / 2;
+      const distance = Math.abs(clientY - center);
+      if (distance < fallbackDistance) {
+        fallback = projectId;
+        fallbackDistance = distance;
+      }
+    }
+    return fallback;
+  };
+
+  const resetProjectPointerDrag = () => {
+    const drag = projectPointerDragRef.current;
+    if (drag) window.clearTimeout(drag.pressTimer);
+    projectPointerDragRef.current = null;
+    setDraggedProjectId(null);
+    setDragOverProjectId(null);
+  };
+
+  const handleProjectPointerDown = (
+    event: React.PointerEvent<HTMLDivElement>,
+    projectId: string,
+  ) => {
+    if (!onReorderProjects || event.button !== 0) return;
+    const target = event.target;
+    if (target instanceof Element && target.closest("[data-project-rail-no-drag]")) return;
+    const currentTarget = event.currentTarget;
+    const pressTimer = window.setTimeout(() => {
+      const drag = projectPointerDragRef.current;
+      if (!drag || drag.id !== projectId || drag.pointerId !== event.pointerId) return;
+      drag.active = true;
+      setDraggedProjectId(projectId);
+      setDragOverProjectId(projectId);
+    }, POINTER_DRAG_DELAY_MS);
+    projectPointerDragRef.current = {
+      id: projectId,
+      pointerId: event.pointerId,
+      startY: event.clientY,
+      active: false,
+      pressTimer,
+    };
+    currentTarget.setPointerCapture?.(event.pointerId);
+  };
+
+  const handleProjectPointerMove = (event: React.PointerEvent<HTMLDivElement>) => {
+    const drag = projectPointerDragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    if (!drag.active && Math.abs(event.clientY - drag.startY) > POINTER_DRAG_MOVE_TOLERANCE) {
+      window.clearTimeout(drag.pressTimer);
+      projectPointerDragRef.current = null;
+      return;
+    }
+    if (!drag.active) return;
+    event.preventDefault();
+    setDragOverProjectId(projectIdAtClientY(event.clientY));
+  };
+
+  const handleProjectPointerUp = (event: React.PointerEvent<HTMLDivElement>) => {
+    const drag = projectPointerDragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    const wasActive = drag.active;
+    const targetId = wasActive ? projectIdAtClientY(event.clientY) : null;
+    event.currentTarget.releasePointerCapture?.(event.pointerId);
+    resetProjectPointerDrag();
+    if (!wasActive || !targetId) return;
+    suppressNextProjectClickRef.current = true;
+    event.preventDefault();
+    reorderProjectIds(drag.id, targetId);
+  };
+
+  const handleProjectPointerCancel = (event: React.PointerEvent<HTMLDivElement>) => {
+    const drag = projectPointerDragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    resetProjectPointerDrag();
+  };
+
   useEffect(() => {
     setExpandedProjectIds((prev) => {
       if (prev.has(activeProjectId)) return prev;
@@ -430,6 +532,13 @@ export function ProjectRail({
       return next;
     });
   }, [activeProjectId]);
+
+  useEffect(() => {
+    return () => {
+      const drag = projectPointerDragRef.current;
+      if (drag) window.clearTimeout(drag.pressTimer);
+    };
+  }, []);
 
   // 折叠窄条只显示常驻项目；当前激活项目即使被设为非常驻也始终保留，避免失去当前上下文。
   const railProjects = useMemo(
@@ -662,6 +771,11 @@ export function ProjectRail({
           return (
             <div key={project.id} style={{ marginBottom: 6 }}>
               <div
+                ref={setProjectItemRef(project.id)}
+                onPointerDown={(event) => handleProjectPointerDown(event, project.id)}
+                onPointerMove={handleProjectPointerMove}
+                onPointerUp={handleProjectPointerUp}
+                onPointerCancel={handleProjectPointerCancel}
                 style={{
                   display: "flex",
                   alignItems: "center",
@@ -676,12 +790,23 @@ export function ProjectRail({
                         ? "var(--accent-subtle)"
                         : "transparent",
                   opacity: draggedProjectId === project.id ? 0.55 : 1,
-                  transform: dragOverProjectId === project.id ? "translateY(1px)" : "none",
-                  transition: "background 0.14s ease, opacity 0.14s ease, transform 0.14s ease",
+                  transform: dragOverProjectId === project.id ? "translateY(2px)" : "none",
+                  boxShadow:
+                    dragOverProjectId === project.id ? "inset 0 0 0 1px var(--accent)" : "none",
+                  cursor: onReorderProjects
+                    ? draggedProjectId === project.id
+                      ? "grabbing"
+                      : "grab"
+                    : "default",
+                  touchAction: "none",
+                  userSelect: "none",
+                  transition:
+                    "background 0.14s ease, opacity 0.14s ease, transform 0.16s ease, box-shadow 0.16s ease",
                 }}
               >
                 <button
                   type="button"
+                  data-project-rail-no-drag
                   onClick={() =>
                     setExpandedProjectIds((prev) => {
                       const next = new Set(prev);
@@ -709,37 +834,14 @@ export function ProjectRail({
                 <button
                   type="button"
                   aria-label={project.name}
-                  draggable={Boolean(onReorderProjects)}
-                  onDragStart={(event) => {
-                    if (!onReorderProjects) return;
-                    setDraggedProjectId(project.id);
-                    if (event.dataTransfer) {
-                      event.dataTransfer.effectAllowed = "move";
-                      event.dataTransfer.setData("text/plain", project.id);
+                  onClick={(event) => {
+                    if (suppressNextProjectClickRef.current) {
+                      suppressNextProjectClickRef.current = false;
+                      event.preventDefault();
+                      return;
                     }
+                    onSwitch(project);
                   }}
-                  onDragOver={(event) => {
-                    if (!draggedProjectId || draggedProjectId === project.id) return;
-                    event.preventDefault();
-                    if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
-                    setDragOverProjectId(project.id);
-                  }}
-                  onDragLeave={() => {
-                    setDragOverProjectId((current) => (current === project.id ? null : current));
-                  }}
-                  onDrop={(event) => {
-                    event.preventDefault();
-                    const draggedId =
-                      draggedProjectId || event.dataTransfer?.getData("text/plain") || "";
-                    reorderProjectIds(draggedId, project.id);
-                    setDraggedProjectId(null);
-                    setDragOverProjectId(null);
-                  }}
-                  onDragEnd={() => {
-                    setDraggedProjectId(null);
-                    setDragOverProjectId(null);
-                  }}
-                  onClick={() => onSwitch(project)}
                   style={{
                     flex: 1,
                     minWidth: 0,
@@ -749,7 +851,7 @@ export function ProjectRail({
                     border: "none",
                     background: "transparent",
                     color: isActive ? "var(--accent)" : "var(--text-primary)",
-                    cursor: isActive ? "default" : "pointer",
+                    cursor: draggedProjectId === project.id ? "grabbing" : "pointer",
                     textAlign: "left",
                     fontFamily: "var(--font-ui)",
                   }}
@@ -796,6 +898,7 @@ export function ProjectRail({
                 {isActive && (
                   <button
                     type="button"
+                    data-project-rail-no-drag
                     title={t("task.newTask")}
                     aria-label={t("task.newTask")}
                     onClick={onNewTask}

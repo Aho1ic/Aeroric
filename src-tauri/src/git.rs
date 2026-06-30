@@ -4,7 +4,7 @@ use std::process::{Command, Output, Stdio};
 use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncReadExt};
 
-const MAX_STASH_DIFF_CHARS: usize = 200_000;
+pub(crate) const MAX_STASH_DIFF_CHARS: usize = 200_000;
 
 // ── 辅助函数 ─────────────────────────────────────────────────────────────────
 
@@ -277,79 +277,79 @@ fn create_empty_temp_file() -> Result<PathBuf, String> {
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct GitBlameLine {
-    line: u32,
-    commit: String,
-    short_commit: String,
-    author: String,
-    author_time: i64,
-    summary: String,
-    content: String,
+    pub(crate) line: u32,
+    pub(crate) commit: String,
+    pub(crate) short_commit: String,
+    pub(crate) author: String,
+    pub(crate) author_time: i64,
+    pub(crate) summary: String,
+    pub(crate) content: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct GitBlameResult {
-    file_path: String,
-    lines: Vec<GitBlameLine>,
+    pub(crate) file_path: String,
+    pub(crate) lines: Vec<GitBlameLine>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct GitBranchGraphCommit {
-    hash: String,
-    short_hash: String,
-    parents: Vec<String>,
-    refs: Vec<String>,
-    subject: String,
-    author: String,
-    relative_time: String,
+    pub(crate) hash: String,
+    pub(crate) short_hash: String,
+    pub(crate) parents: Vec<String>,
+    pub(crate) refs: Vec<String>,
+    pub(crate) subject: String,
+    pub(crate) author: String,
+    pub(crate) relative_time: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct GitBranchGraphResult {
-    commits: Vec<GitBranchGraphCommit>,
-    truncated: bool,
+    pub(crate) commits: Vec<GitBranchGraphCommit>,
+    pub(crate) truncated: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct GitStashEntry {
-    index: u32,
-    name: String,
-    commit: String,
-    date: String,
-    message: String,
+    pub(crate) index: u32,
+    pub(crate) name: String,
+    pub(crate) commit: String,
+    pub(crate) date: String,
+    pub(crate) message: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct GitStashDiff {
-    stash_ref: String,
-    diff: String,
-    truncated: bool,
+    pub(crate) stash_ref: String,
+    pub(crate) diff: String,
+    pub(crate) truncated: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct GitConflictFile {
-    path: String,
+    pub(crate) path: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct GitConflictHunk {
-    index: u32,
-    ours: String,
-    base: Option<String>,
-    theirs: String,
+    pub(crate) index: u32,
+    pub(crate) ours: String,
+    pub(crate) base: Option<String>,
+    pub(crate) theirs: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct GitConflictPreview {
-    file_path: String,
-    hunks: Vec<GitConflictHunk>,
+    pub(crate) file_path: String,
+    pub(crate) hunks: Vec<GitConflictHunk>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
@@ -368,7 +368,7 @@ fn short_commit_hash(commit: &str) -> String {
         .collect::<String>()
 }
 
-fn parse_blame_porcelain(stdout: &[u8]) -> Vec<GitBlameLine> {
+pub(crate) fn parse_blame_porcelain(stdout: &[u8]) -> Vec<GitBlameLine> {
     let mut lines = Vec::new();
     let mut commit = String::new();
     let mut final_line = 0u32;
@@ -420,7 +420,7 @@ fn parse_blame_porcelain(stdout: &[u8]) -> Vec<GitBlameLine> {
     lines
 }
 
-fn parse_branch_graph_log(stdout: &[u8]) -> Vec<GitBranchGraphCommit> {
+pub(crate) fn parse_branch_graph_log(stdout: &[u8]) -> Vec<GitBranchGraphCommit> {
     String::from_utf8_lossy(stdout)
         .lines()
         .filter_map(|line| {
@@ -460,7 +460,7 @@ fn parse_branch_graph_log(stdout: &[u8]) -> Vec<GitBranchGraphCommit> {
         .collect()
 }
 
-fn parse_stash_list(stdout: &[u8]) -> Vec<GitStashEntry> {
+pub(crate) fn parse_stash_list(stdout: &[u8]) -> Vec<GitStashEntry> {
     String::from_utf8_lossy(stdout)
         .lines()
         .filter_map(|line| {
@@ -488,7 +488,7 @@ fn parse_stash_list(stdout: &[u8]) -> Vec<GitStashEntry> {
         .collect()
 }
 
-fn parse_conflict_paths_z(stdout: &[u8]) -> Vec<GitConflictFile> {
+pub(crate) fn parse_conflict_paths_z(stdout: &[u8]) -> Vec<GitConflictFile> {
     stdout
         .split(|byte| *byte == 0)
         .filter(|entry| !entry.is_empty())
@@ -498,7 +498,7 @@ fn parse_conflict_paths_z(stdout: &[u8]) -> Vec<GitConflictFile> {
         .collect()
 }
 
-fn validate_stash_ref(stash_ref: &str) -> Result<(), String> {
+pub(crate) fn validate_stash_ref(stash_ref: &str) -> Result<(), String> {
     let Some(index) = stash_ref
         .strip_prefix("stash@{")
         .and_then(|value| value.strip_suffix('}'))
@@ -511,7 +511,7 @@ fn validate_stash_ref(stash_ref: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn truncate_text(value: String, max_chars: usize) -> (String, bool) {
+pub(crate) fn truncate_text(value: String, max_chars: usize) -> (String, bool) {
     if value.chars().count() <= max_chars {
         return (value, false);
     }
@@ -523,7 +523,7 @@ fn truncate_text(value: String, max_chars: usize) -> (String, bool) {
     (format!("{}...(truncated)", &value[..cutoff]), true)
 }
 
-fn parse_conflict_hunks(content: &str) -> Result<Vec<GitConflictHunk>, String> {
+pub(crate) fn parse_conflict_hunks(content: &str) -> Result<Vec<GitConflictHunk>, String> {
     enum State {
         Normal,
         Ours,
@@ -580,7 +580,7 @@ fn parse_conflict_hunks(content: &str) -> Result<Vec<GitConflictHunk>, String> {
     Ok(hunks)
 }
 
-fn resolve_conflict_markers_keep_both(content: &str) -> Result<String, String> {
+pub(crate) fn resolve_conflict_markers_keep_both(content: &str) -> Result<String, String> {
     enum State {
         Normal,
         Ours,
@@ -720,7 +720,7 @@ pub(crate) struct GitFileChange {
     staged: bool,
 }
 
-fn parse_porcelain_z_status(stdout: &[u8]) -> Vec<GitFileChange> {
+pub(crate) fn parse_porcelain_z_status(stdout: &[u8]) -> Vec<GitFileChange> {
     let mut changes = Vec::new();
     let mut entries = stdout
         .split(|byte| *byte == 0)
@@ -811,15 +811,7 @@ pub(crate) struct GitBranchInfo {
     remote: Option<String>,
 }
 
-#[tauri::command]
-pub async fn git_list_branches(project_path: String) -> Result<Vec<GitBranchInfo>, String> {
-    let output = run_git_with_timeout(
-        project_path,
-        vec!["branch".to_string(), "-a".to_string()],
-        Duration::from_secs(5),
-    )
-    .await?;
-    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+pub(crate) fn parse_git_branch_list(stdout: &str) -> Vec<GitBranchInfo> {
     let mut branches = Vec::new();
     for line in stdout.lines() {
         if line.len() < 2 {
@@ -848,7 +840,19 @@ pub async fn git_list_branches(project_path: String) -> Result<Vec<GitBranchInfo
             });
         }
     }
-    Ok(branches)
+    branches
+}
+
+#[tauri::command]
+pub async fn git_list_branches(project_path: String) -> Result<Vec<GitBranchInfo>, String> {
+    let output = run_git_with_timeout(
+        project_path,
+        vec!["branch".to_string(), "-a".to_string()],
+        Duration::from_secs(5),
+    )
+    .await?;
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    Ok(parse_git_branch_list(&stdout))
 }
 
 #[tauri::command]
@@ -898,6 +902,19 @@ pub async fn git_log(
     search: Option<String>,
     branch: Option<String>,
 ) -> Result<Vec<GitCommit>, String> {
+    let args = build_git_log_args(limit, search.as_deref(), branch.as_deref());
+
+    let output = run_git_with_timeout(project_path, args, Duration::from_secs(10)).await?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    Ok(parse_git_log_output(&stdout))
+}
+
+pub(crate) fn build_git_log_args(
+    limit: u32,
+    search: Option<&str>,
+    branch: Option<&str>,
+) -> Vec<String> {
     let limit_str = limit.to_string();
     let format = "COMMIT:%H%nSHORT:%h%nAUTHOR:%an%nDATE:%ar%nSUBJECT:%s%nREFS:%D%nEND_RECORD";
     let mut args: Vec<String> = vec![
@@ -906,20 +923,20 @@ pub async fn git_log(
         "-n".into(),
         limit_str,
     ];
-    if let Some(ref s) = search {
+    if let Some(s) = search {
         if !s.is_empty() {
             args.push(format!("--grep={}", s));
         }
     }
-    if let Some(ref b) = branch {
+    if let Some(b) = branch {
         if !b.is_empty() {
-            args.push(b.clone());
+            args.push(b.to_string());
         }
     }
+    args
+}
 
-    let output = run_git_with_timeout(project_path, args, Duration::from_secs(10)).await?;
-
-    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+pub(crate) fn parse_git_log_output(stdout: &str) -> Vec<GitCommit> {
     let mut commits = Vec::new();
     let mut hash = String::new();
     let mut short_hash = String::new();
@@ -962,7 +979,7 @@ pub async fn git_log(
             refs.clear();
         }
     }
-    Ok(commits)
+    commits
 }
 
 #[derive(serde::Serialize)]
@@ -985,28 +1002,17 @@ pub(crate) struct GitCommitDetail {
     total_deletions: i32,
 }
 
-#[tauri::command]
-pub async fn git_commit_detail(
-    project_path: String,
-    commit_hash: String,
-) -> Result<GitCommitDetail, String> {
-    let info_out = run_git(
-        &project_path,
-        &[
-            "show",
-            "--no-patch",
-            "--format=HASH:%H%nSHORT:%h%nAUTHOR:%an%nDATE:%ar%nSUBJECT:%s",
-            &commit_hash,
-        ],
-    )?;
-
-    let info_str = String::from_utf8_lossy(&info_out.stdout).into_owned();
+pub(crate) fn parse_git_commit_detail(
+    info_stdout: &str,
+    name_status_stdout: &str,
+    numstat_stdout: &str,
+) -> GitCommitDetail {
     let mut hash = String::new();
     let mut short_hash = String::new();
     let mut author = String::new();
     let mut date = String::new();
     let mut message = String::new();
-    for line in info_str.lines() {
+    for line in info_stdout.lines() {
         if let Some(v) = line.strip_prefix("HASH:") {
             hash = v.to_string();
         } else if let Some(v) = line.strip_prefix("SHORT:") {
@@ -1020,19 +1026,8 @@ pub async fn git_commit_detail(
         }
     }
 
-    let ns_out = run_git(
-        &project_path,
-        &[
-            "diff-tree",
-            "--no-commit-id",
-            "-r",
-            "--name-status",
-            &commit_hash,
-        ],
-    )?;
-
     let mut file_statuses: HashMap<String, String> = HashMap::new();
-    for line in String::from_utf8_lossy(&ns_out.stdout).lines() {
+    for line in name_status_stdout.lines() {
         let parts: Vec<&str> = line.splitn(3, '\t').collect();
         match parts.as_slice() {
             [st, path] => {
@@ -1059,22 +1054,11 @@ pub async fn git_commit_detail(
         }
     }
 
-    let num_out = run_git(
-        &project_path,
-        &[
-            "diff-tree",
-            "--no-commit-id",
-            "-r",
-            "--numstat",
-            &commit_hash,
-        ],
-    )?;
-
     let mut files = Vec::new();
     let mut total_additions = 0i32;
     let mut total_deletions = 0i32;
 
-    for line in String::from_utf8_lossy(&num_out.stdout).lines() {
+    for line in numstat_stdout.lines() {
         if line.is_empty() {
             continue;
         }
@@ -1098,7 +1082,7 @@ pub async fn git_commit_detail(
         }
     }
 
-    Ok(GitCommitDetail {
+    GitCommitDetail {
         hash,
         short_hash,
         author,
@@ -1107,7 +1091,50 @@ pub async fn git_commit_detail(
         files,
         total_additions,
         total_deletions,
-    })
+    }
+}
+
+#[tauri::command]
+pub async fn git_commit_detail(
+    project_path: String,
+    commit_hash: String,
+) -> Result<GitCommitDetail, String> {
+    let info_out = run_git(
+        &project_path,
+        &[
+            "show",
+            "--no-patch",
+            "--format=HASH:%H%nSHORT:%h%nAUTHOR:%an%nDATE:%ar%nSUBJECT:%s",
+            &commit_hash,
+        ],
+    )?;
+
+    let ns_out = run_git(
+        &project_path,
+        &[
+            "diff-tree",
+            "--no-commit-id",
+            "-r",
+            "--name-status",
+            &commit_hash,
+        ],
+    )?;
+
+    let num_out = run_git(
+        &project_path,
+        &[
+            "diff-tree",
+            "--no-commit-id",
+            "-r",
+            "--numstat",
+            &commit_hash,
+        ],
+    )?;
+
+    let info_str = String::from_utf8_lossy(&info_out.stdout).into_owned();
+    let ns_str = String::from_utf8_lossy(&ns_out.stdout).into_owned();
+    let num_str = String::from_utf8_lossy(&num_out.stdout).into_owned();
+    Ok(parse_git_commit_detail(&info_str, &ns_str, &num_str))
 }
 
 #[tauri::command]
@@ -1620,6 +1647,28 @@ pub(crate) struct GitRemoteCounts {
     branch: String,
 }
 
+pub(crate) fn git_remote_counts_from_rev_list(
+    branch: String,
+    rev_list_stdout: Option<&str>,
+) -> GitRemoteCounts {
+    let (ahead, behind) = rev_list_stdout
+        .and_then(|stdout| {
+            let parts: Vec<&str> = stdout.split_whitespace().collect();
+            if parts.len() == 2 {
+                Some((parts[0].parse().unwrap_or(0), parts[1].parse().unwrap_or(0)))
+            } else {
+                None
+            }
+        })
+        .unwrap_or((0, 0));
+
+    GitRemoteCounts {
+        ahead,
+        behind,
+        branch,
+    }
+}
+
 #[tauri::command]
 pub async fn git_remote_counts(
     project_path: String,
@@ -1640,24 +1689,15 @@ pub async fn git_remote_counts(
         &["rev-list", "--count", "--left-right", &rev_str],
     );
 
-    let (ahead, behind) = match rev_out {
-        Ok(o) if o.status.success() => {
-            let s = String::from_utf8_lossy(&o.stdout).trim().to_string();
-            let parts: Vec<&str> = s.split_whitespace().collect();
-            if parts.len() == 2 {
-                (parts[0].parse().unwrap_or(0), parts[1].parse().unwrap_or(0))
-            } else {
-                (0, 0)
-            }
-        }
-        _ => (0, 0),
+    let rev_stdout = match &rev_out {
+        Ok(o) if o.status.success() => Some(String::from_utf8_lossy(&o.stdout).trim().to_string()),
+        _ => None,
     };
 
-    Ok(GitRemoteCounts {
-        ahead,
-        behind,
+    Ok(git_remote_counts_from_rev_list(
         branch,
-    })
+        rev_stdout.as_deref(),
+    ))
 }
 
 #[tauri::command]

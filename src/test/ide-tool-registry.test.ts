@@ -32,7 +32,8 @@ describe("ide tool registry", () => {
     const tools = getToolbarIdeTools({
       gitDisabled: true,
       problemsDisabled: true,
-      terminalDisabled: true,
+      testsDisabled: true,
+      runDisabled: true,
       searchDisabled: true,
     });
 

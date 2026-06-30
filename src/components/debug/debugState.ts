@@ -4,6 +4,7 @@ import type {
   DebugConfig,
   DebugConfigDocument,
   DebugConfigType,
+  DebugRequestType,
   DebugVariable,
   DebugSessionSnapshot,
 } from "../../types";
@@ -12,8 +13,11 @@ export type DebugConfigDraft = {
   id: string;
   name: string;
   runtime: DebugConfigType;
+  request: DebugRequestType;
   program: string;
   cwd: string;
+  attachHost: string;
+  attachPort: string;
   argsText: string;
   envText: string;
   breakpointsText: string;
@@ -24,8 +28,11 @@ export function defaultDebugConfigDraft(): DebugConfigDraft {
     id: "",
     name: "",
     runtime: "node",
+    request: "launch",
     program: "",
     cwd: ".",
+    attachHost: "127.0.0.1",
+    attachPort: "9229",
     argsText: "",
     envText: "",
     breakpointsText: "",
@@ -62,60 +69,94 @@ function parseEnvText(value: string): Record<string, string> {
   return env;
 }
 
+function parseAttachPort(value: string): number | null {
+  const port = Number(value.trim());
+  return Number.isInteger(port) && port > 0 && port <= 65535 ? port : null;
+}
+
 export function parseBreakpointText(value: string): DebugBreakpoint[] {
   const breakpoints: DebugBreakpoint[] = [];
   for (const line of value.split(/\r?\n/)) {
     const trimmed = line.trim();
     if (!trimmed || trimmed.startsWith("#")) continue;
-    const match = trimmed.match(/^(.+?):(\d+)(?::(\d+))?$/);
+    const match = trimmed.match(/^(.+?):(\d+)(?::(\d+))?(?:\s+(if|log)\s+(.+))?$/);
     if (!match) continue;
     const lineNumber = Number(match[2]);
     const columnNumber = Number(match[3] ?? "1");
     if (!Number.isInteger(lineNumber) || lineNumber <= 0) continue;
     if (!Number.isInteger(columnNumber) || columnNumber <= 0) continue;
-    breakpoints.push({
+    const modifier = match[4];
+    const modifierValue = match[5]?.trim();
+    const breakpoint: DebugBreakpoint = {
       file: match[1].trim(),
       line: lineNumber,
       column: columnNumber,
-    });
+    };
+    if (modifier === "if" && modifierValue) breakpoint.condition = modifierValue;
+    if (modifier === "log" && modifierValue) breakpoint.logMessage = modifierValue;
+    breakpoints.push(breakpoint);
   }
   return breakpoints;
+}
+
+export function formatBreakpointText(breakpoints: DebugBreakpoint[]): string {
+  return breakpoints
+    .map((breakpoint) => {
+      const base =
+        breakpoint.column && breakpoint.column !== 1
+          ? `${breakpoint.file}:${breakpoint.line}:${breakpoint.column}`
+          : `${breakpoint.file}:${breakpoint.line}`;
+      if (breakpoint.condition) return `${base} if ${breakpoint.condition}`;
+      if (breakpoint.logMessage) return `${base} log ${breakpoint.logMessage}`;
+      return base;
+    })
+    .join("\n");
 }
 
 export function buildDebugConfigDraft(draft: DebugConfigDraft): DebugConfig {
   const name = draft.name.trim();
   const id = slugifyId(draft.id || name);
-  return {
+  const config: DebugConfig = {
     id,
     name,
     type: draft.runtime,
+    request: draft.request,
     program: draft.program.trim(),
     cwd: draft.cwd.trim() || ".",
+    attachHost: draft.attachHost.trim() || "127.0.0.1",
     args: parseListText(draft.argsText),
     env: parseEnvText(draft.envText),
     breakpoints: parseBreakpointText(draft.breakpointsText),
   };
+  const attachPort = parseAttachPort(draft.attachPort);
+  if (draft.request === "attach" && attachPort !== null) {
+    config.attachPort = attachPort;
+  }
+  return config;
 }
 
 export function debugConfigToDraft(config: DebugConfig): DebugConfigDraft {
+  const request = config.request ?? "launch";
   return {
     id: config.id,
     name: config.name,
     runtime: config.type,
+    request,
     program: config.program,
     cwd: config.cwd || ".",
+    attachHost: config.attachHost ?? "127.0.0.1",
+    attachPort:
+      typeof config.attachPort === "number"
+        ? String(config.attachPort)
+        : request === "attach"
+          ? ""
+          : "9229",
     argsText: (config.args ?? []).join("\n"),
     envText: Object.entries(config.env ?? {})
       .sort(([a], [b]) => a.localeCompare(b))
       .map(([key, value]) => `${key}=${value}`)
       .join("\n"),
-    breakpointsText: (config.breakpoints ?? [])
-      .map((breakpoint) =>
-        breakpoint.column && breakpoint.column !== 1
-          ? `${breakpoint.file}:${breakpoint.line}:${breakpoint.column}`
-          : `${breakpoint.file}:${breakpoint.line}`,
-      )
-      .join("\n"),
+    breakpointsText: formatBreakpointText(config.breakpoints ?? []),
   };
 }
 
@@ -169,6 +210,13 @@ export function debugSessionControlState(
     canStop: active,
     canStep: paused,
   };
+}
+
+export function canEvaluateDebugSession(
+  snapshot: DebugSessionSnapshot | null,
+  requestInFlight: boolean,
+): boolean {
+  return Boolean(snapshot?.status === "paused" && !requestInFlight);
 }
 
 export function isExpandableDebugVariable(variable: DebugVariable): boolean {

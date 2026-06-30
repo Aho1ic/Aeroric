@@ -1,10 +1,17 @@
-import type { TestFailure } from "../../types";
+import type { TestFailure, TestRunTarget } from "../../types";
 
-export type TestProfileId = "vitest" | "cargo";
+export type TestProfileId = "vitest" | "cargo" | "python";
 
 export type TestProfileOption = {
   id: TestProfileId;
   labelKey: string;
+};
+
+export type TestRunPanelRequest = {
+  id: number;
+  profile?: TestProfileId;
+  target: TestRunTarget;
+  coverage?: boolean;
 };
 
 type TestFailureFileGroup = {
@@ -15,6 +22,7 @@ type TestFailureFileGroup = {
 export const testProfiles: TestProfileOption[] = [
   { id: "vitest", labelKey: "tests.vitest" },
   { id: "cargo", labelKey: "tests.cargo" },
+  { id: "python", labelKey: "tests.python" },
 ];
 
 export function sortTestFailures(failures: TestFailure[]): TestFailure[] {
@@ -70,4 +78,14 @@ export function buildTestFixPrompt(
 
 export function isLatestTestRun(runId: number, currentRunId: number): boolean {
   return runId === currentRunId;
+}
+
+export function buildTestRunTarget(filePath: string, testName: string): TestRunTarget | null {
+  const trimmedFilePath = filePath.trim();
+  const trimmedTestName = testName.trim();
+  if (!trimmedFilePath && !trimmedTestName) return null;
+  return {
+    filePath: trimmedFilePath || null,
+    testName: trimmedTestName || null,
+  };
 }

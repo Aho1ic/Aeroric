@@ -4,7 +4,12 @@ import { Copy, ExternalLink, Globe, Monitor, RefreshCw } from "lucide-react";
 import type React from "react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useI18n } from "../../i18n";
-import type { ListeningPort, RunProcessSnapshot } from "../../types";
+import {
+  formatInvokeError,
+  invokeWithTimeout,
+  remoteInvokeOptions,
+} from "../../hooks/useCancellableInvoke";
+import type { ListeningPort, RunProcessSnapshot, SshConnection } from "../../types";
 import { writeClipboardText } from "../file-explorer/clipboard";
 import {
   effectivePortFilterMode,
@@ -17,14 +22,45 @@ import {
   sortListeningPorts,
 } from "./portPanelState";
 
+type RemotePreviewContext = {
+  connection: SshConnection;
+  projectPath: string;
+};
+
+function listeningPortKey(port: ListeningPort): string {
+  return `${port.pid}:${port.protocol}:${port.address}:${port.port}`;
+}
+
+function remotePreviewHostForPort(port: ListeningPort): string {
+  const address = port.address.trim();
+  if (
+    !address ||
+    address === "localhost" ||
+    address === "*" ||
+    address === "0.0.0.0" ||
+    address === "::" ||
+    address === "[::]" ||
+    address === "::1" ||
+    address === "[::1]"
+  ) {
+    return "127.0.0.1";
+  }
+  if (address.startsWith("[") && address.endsWith("]")) {
+    return address.slice(1, -1);
+  }
+  return address;
+}
+
 export function WebPreviewPanel({
   projectPath,
   width,
   runProcessTarget = null,
+  remote,
 }: {
   projectPath: string;
   width: number;
   runProcessTarget?: RunProcessSnapshot | null;
+  remote?: RemotePreviewContext;
 }) {
   const { t } = useI18n();
   const [ports, setPorts] = useState<ListeningPort[]>([]);
@@ -32,6 +68,7 @@ export function WebPreviewPanel({
   const [error, setError] = useState<string | null>(null);
   const [copiedUrl, setCopiedUrl] = useState<string | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [selectedRemotePortKey, setSelectedRemotePortKey] = useState<string | null>(null);
   const [filterMode, setFilterMode] = useState<PortFilterMode>("project");
   const [observedRunProcess, setObservedRunProcess] = useState<RunProcessSnapshot | null>(
     runProcessTarget,
@@ -52,13 +89,29 @@ export function WebPreviewPanel({
     () => filterListeningPortsByProjectContext(sortedPorts, filterMode),
     [filterMode, sortedPorts],
   );
+  const selectedRemotePort = useMemo(() => {
+    if (!remote || !selectedRemotePortKey) return null;
+    return visiblePorts.find((port) => listeningPortKey(port) === selectedRemotePortKey) ?? null;
+  }, [remote, selectedRemotePortKey, visiblePorts]);
 
   useEffect(() => {
+    if (remote) {
+      setSelectedRemotePortKey((current) => {
+        if (current && visiblePorts.some((port) => listeningPortKey(port) === current)) {
+          return current;
+        }
+        return visiblePorts[0] ? listeningPortKey(visiblePorts[0]) : null;
+      });
+      if (visiblePorts.length === 0) {
+        setPreviewUrl(null);
+      }
+      return;
+    }
     setPreviewUrl((current) => {
       const next = resolvePreviewUrl(visiblePorts, current);
       return next === current ? current : next;
     });
-  }, [visiblePorts]);
+  }, [remote, visiblePorts]);
 
   useEffect(() => {
     setObservedRunProcess(runProcessTarget);
@@ -72,15 +125,22 @@ export function WebPreviewPanel({
       if (!options?.silent) setLoading(true);
       setError(null);
       try {
-        const result = await invoke<ListeningPort[]>("list_listening_ports", { projectPath });
+        const command = remote ? "remote_list_listening_ports" : "list_listening_ports";
+        const args = remote
+          ? { connection: remote.connection, remoteProjectPath: remote.projectPath }
+          : { projectPath };
+        const portsPromise = invoke<ListeningPort[]>(command, args);
+        const result = remote
+          ? await invokeWithTimeout(portsPromise, command, remoteInvokeOptions())
+          : await portsPromise;
         setPorts(result);
       } catch (err) {
-        setError(String(err));
+        setError(formatInvokeError(err));
       } finally {
         if (!options?.silent) setLoading(false);
       }
     },
-    [projectPath],
+    [projectPath, remote],
   );
 
   useEffect(() => {
@@ -123,9 +183,59 @@ export function WebPreviewPanel({
       setFilterMode("all");
       return;
     }
-    setPreviewUrl(runPreviewPort.url);
+    if (remote) {
+      setSelectedRemotePortKey(listeningPortKey(runPreviewPort));
+    } else {
+      setPreviewUrl(runPreviewPort.url);
+    }
     setAutoSelectedRunId(observedRunProcess.runId);
-  }, [autoSelectedRunId, filterMode, observedRunProcess?.runId, runPreviewPort]);
+  }, [autoSelectedRunId, filterMode, observedRunProcess?.runId, remote, runPreviewPort]);
+
+  const resolvePortPreviewUrl = useCallback(
+    async (port: ListeningPort): Promise<string | null> => {
+      if (!remote) return port.url;
+      try {
+        return await invokeWithTimeout(
+          invoke<string>("remote_open_preview_tunnel", {
+            connection: remote.connection,
+            remoteHost: remotePreviewHostForPort(port),
+            remotePort: port.port,
+          }),
+          "remote_open_preview_tunnel",
+          remoteInvokeOptions(),
+        );
+      } catch (err) {
+        setError(formatInvokeError(err));
+        return null;
+      }
+    },
+    [remote],
+  );
+
+  useEffect(() => {
+    if (!remote || !selectedRemotePort) return;
+    let cancelled = false;
+    const updatePreviewUrl = async () => {
+      const nextUrl = await resolvePortPreviewUrl(selectedRemotePort);
+      if (!cancelled && nextUrl) {
+        setPreviewUrl(nextUrl);
+      }
+    };
+    void updatePreviewUrl();
+    return () => {
+      cancelled = true;
+    };
+  }, [remote, resolvePortPreviewUrl, selectedRemotePort]);
+
+  const previewPort = async (port: ListeningPort) => {
+    if (!remote) {
+      setPreviewUrl(port.url);
+      return;
+    }
+    setSelectedRemotePortKey(listeningPortKey(port));
+    const nextUrl = await resolvePortPreviewUrl(port);
+    if (nextUrl) setPreviewUrl(nextUrl);
+  };
 
   const copyUrl = async (url: string) => {
     try {
@@ -133,16 +243,26 @@ export function WebPreviewPanel({
       setCopiedUrl(url);
       window.setTimeout(() => setCopiedUrl((current) => (current === url ? null : current)), 1400);
     } catch (err) {
-      setError(String(err));
+      setError(formatInvokeError(err));
     }
+  };
+
+  const copyPortUrl = async (port: ListeningPort) => {
+    const url = await resolvePortPreviewUrl(port);
+    if (url) await copyUrl(url);
   };
 
   const openPortUrl = async (url: string) => {
     try {
       await openUrl(url);
     } catch (err) {
-      setError(String(err));
+      setError(formatInvokeError(err));
     }
+  };
+
+  const openPortExternally = async (port: ListeningPort) => {
+    const url = await resolvePortPreviewUrl(port);
+    if (url) await openPortUrl(url);
   };
 
   return (
@@ -194,10 +314,11 @@ export function WebPreviewPanel({
           </div>
         ) : (
           visiblePorts.map((port) => {
-            const isPreviewing = previewUrl === port.url;
+            const key = listeningPortKey(port);
+            const isPreviewing = remote ? selectedRemotePortKey === key : previewUrl === port.url;
             return (
               <div
-                key={`${port.pid}:${port.protocol}:${port.address}:${port.port}`}
+                key={key}
                 style={rowStyle(isPreviewing)}
               >
                 <div style={rowMainStyle}>
@@ -213,7 +334,7 @@ export function WebPreviewPanel({
                   <button
                     type="button"
                     style={iconTextButtonStyle}
-                    onClick={() => setPreviewUrl(port.url)}
+                    onClick={() => void previewPort(port)}
                     title={t("preview.showInline")}
                   >
                     <Monitor size={12} />
@@ -222,16 +343,16 @@ export function WebPreviewPanel({
                   <button
                     type="button"
                     style={iconTextButtonStyle}
-                    onClick={() => void copyUrl(port.url)}
+                    onClick={() => void copyPortUrl(port)}
                     title={t("preview.copyUrl")}
                   >
                     <Copy size={12} />
-                    {copiedUrl === port.url ? t("preview.copied") : t("preview.copy")}
+                    {copiedUrl === previewUrl && isPreviewing ? t("preview.copied") : t("preview.copy")}
                   </button>
                   <button
                     type="button"
                     style={iconTextButtonStyle}
-                    onClick={() => void openPortUrl(port.url)}
+                    onClick={() => void openPortExternally(port)}
                     title={t("preview.openExternal")}
                   >
                     <ExternalLink size={12} />

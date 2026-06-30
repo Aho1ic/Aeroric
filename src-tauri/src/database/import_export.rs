@@ -224,6 +224,7 @@ mod tests {
             primary_keys: None,
             where_input: None,
             order_by: None,
+            row_limit: None,
             skip_count: true,
             batch_size: None,
         }

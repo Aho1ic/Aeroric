@@ -4,6 +4,11 @@ import { Check, GitBranch, Loader2, RefreshCw, Search, X } from "lucide-react";
 import type React from "react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useI18n } from "../../i18n";
+import {
+  formatInvokeError,
+  invokeWithTimeout,
+  remoteInvokeOptions,
+} from "../../hooks/useCancellableInvoke";
 import type {
   GitBlameResult,
   GitBranchGraphResult,
@@ -12,6 +17,7 @@ import type {
   GitConflictResolution,
   GitStashDiff,
   GitStashEntry,
+  SshConnection,
 } from "../../types";
 import { branchGraphSummary, projectRelativeGitPath, stashDisplayTitle } from "./gitAdvancedState";
 
@@ -20,13 +26,38 @@ export function GitAdvancedPanel({
   activeFilePath,
   width,
   onOpenFile,
+  remote,
 }: {
   projectPath: string;
   activeFilePath: string | null;
   width: number;
   onOpenFile: (path: string, name: string, selection?: { line: number; column?: number }) => void;
+  remote?: {
+    connection: SshConnection;
+    projectPath: string;
+  };
 }) {
   const { t } = useI18n();
+  const isRemote = Boolean(remote);
+  const gitCommandContext = useMemo(
+    () =>
+      remote
+        ? { connection: remote.connection, remoteProjectPath: remote.projectPath }
+        : { projectPath },
+    [projectPath, remote],
+  );
+  const gitCommandName = useCallback(
+    (command: string) => (isRemote ? `remote_${command}` : command),
+    [isRemote],
+  );
+  const invokeGitCommand = useCallback(
+    async <T,>(command: string, args: Record<string, unknown>): Promise<T> => {
+      const nextCommand = gitCommandName(command);
+      const promise = invoke<T>(nextCommand, args);
+      return isRemote ? invokeWithTimeout(promise, nextCommand, remoteInvokeOptions()) : promise;
+    },
+    [gitCommandName, isRemote],
+  );
   const activeRelativePath = useMemo(
     () => projectRelativeGitPath(projectPath, activeFilePath),
     [activeFilePath, projectPath],
@@ -67,59 +98,68 @@ export function GitAdvancedPanel({
       setLoadingBlame(true);
       setError(null);
       try {
-        const result = await invoke<GitBlameResult>("git_blame_file", { projectPath, filePath });
+        const result = await invokeGitCommand<GitBlameResult>("git_blame_file", {
+          ...gitCommandContext,
+          filePath,
+        });
         setBlame(result);
         setBlamePath(filePath);
       } catch (err) {
-        setError(String(err));
+        setError(formatInvokeError(err));
       } finally {
         setLoadingBlame(false);
       }
     },
-    [blamePath, projectPath],
+    [blamePath, gitCommandContext, invokeGitCommand],
   );
 
   const refreshStashes = useCallback(async () => {
     setLoadingStashes(true);
     setError(null);
     try {
-      setStashes(await invoke<GitStashEntry[]>("git_stash_list", { projectPath }));
+      setStashes(await invokeGitCommand<GitStashEntry[]>("git_stash_list", gitCommandContext));
     } catch (err) {
-      setError(String(err));
+      setError(formatInvokeError(err));
     } finally {
       setLoadingStashes(false);
     }
-  }, [projectPath]);
+  }, [gitCommandContext, invokeGitCommand]);
 
   const refreshBranchGraph = useCallback(async () => {
     setLoadingBranchGraph(true);
     setError(null);
     try {
       setBranchGraph(
-        await invoke<GitBranchGraphResult>("git_branch_graph", { projectPath, limit: 80 }),
+        await invokeGitCommand<GitBranchGraphResult>("git_branch_graph", {
+          ...gitCommandContext,
+          limit: 80,
+        }),
       );
     } catch (err) {
-      setError(String(err));
+      setError(formatInvokeError(err));
     } finally {
       setLoadingBranchGraph(false);
     }
-  }, [projectPath]);
+  }, [gitCommandContext, invokeGitCommand]);
 
   const refreshConflicts = useCallback(async () => {
     setLoadingConflicts(true);
     setError(null);
     try {
-      const nextConflicts = await invoke<GitConflictFile[]>("git_conflict_files", { projectPath });
+      const nextConflicts = await invokeGitCommand<GitConflictFile[]>(
+        "git_conflict_files",
+        gitCommandContext,
+      );
       setConflicts(nextConflicts);
       setConflictPreview((preview) =>
         preview && !nextConflicts.some((file) => file.path === preview.filePath) ? null : preview,
       );
     } catch (err) {
-      setError(String(err));
+      setError(formatInvokeError(err));
     } finally {
       setLoadingConflicts(false);
     }
-  }, [projectPath]);
+  }, [gitCommandContext, invokeGitCommand]);
 
   useEffect(() => {
     void refreshBranchGraph();
@@ -131,15 +171,15 @@ export function GitAdvancedPanel({
     setWorking("stash-push");
     setError(null);
     try {
-      await invoke<string>("git_stash_push", {
-        projectPath,
+      await invokeGitCommand<string>("git_stash_push", {
+        ...gitCommandContext,
         message: stashMessage.trim() || null,
         includeUntracked,
       });
       setStashMessage("");
       await refreshStashes();
     } catch (err) {
-      setError(String(err));
+      setError(formatInvokeError(err));
     } finally {
       setWorking(null);
     }
@@ -155,10 +195,13 @@ export function GitAdvancedPanel({
     setWorking(`apply:${entry.name}`);
     setError(null);
     try {
-      await invoke<string>("git_stash_apply", { projectPath, stashRef: entry.name });
+      await invokeGitCommand<string>("git_stash_apply", {
+        ...gitCommandContext,
+        stashRef: entry.name,
+      });
       await Promise.all([refreshStashes(), refreshConflicts()]);
     } catch (err) {
-      setError(String(err));
+      setError(formatInvokeError(err));
     } finally {
       setWorking(null);
     }
@@ -174,10 +217,13 @@ export function GitAdvancedPanel({
     setWorking(`drop:${entry.name}`);
     setError(null);
     try {
-      await invoke<string>("git_stash_drop", { projectPath, stashRef: entry.name });
+      await invokeGitCommand<string>("git_stash_drop", {
+        ...gitCommandContext,
+        stashRef: entry.name,
+      });
       await refreshStashes();
     } catch (err) {
-      setError(String(err));
+      setError(formatInvokeError(err));
     } finally {
       setWorking(null);
     }
@@ -188,10 +234,13 @@ export function GitAdvancedPanel({
     setError(null);
     try {
       setStashDiff(
-        await invoke<GitStashDiff>("git_stash_diff", { projectPath, stashRef: entry.name }),
+        await invokeGitCommand<GitStashDiff>("git_stash_diff", {
+          ...gitCommandContext,
+          stashRef: entry.name,
+        }),
       );
     } catch (err) {
-      setError(String(err));
+      setError(formatInvokeError(err));
     } finally {
       setLoadingStashDiff(null);
     }
@@ -202,13 +251,13 @@ export function GitAdvancedPanel({
     setError(null);
     try {
       setConflictPreview(
-        await invoke<GitConflictPreview>("git_conflict_preview", {
-          projectPath,
+        await invokeGitCommand<GitConflictPreview>("git_conflict_preview", {
+          ...gitCommandContext,
           filePath: file.path,
         }),
       );
     } catch (err) {
-      setError(String(err));
+      setError(formatInvokeError(err));
     } finally {
       setLoadingConflictPreview(null);
     }
@@ -224,13 +273,17 @@ export function GitAdvancedPanel({
     setWorking(`resolve:${file.path}:${resolution}`);
     setError(null);
     try {
-      await invoke("git_resolve_conflict", { projectPath, filePath: file.path, resolution });
+      await invokeGitCommand("git_resolve_conflict", {
+        ...gitCommandContext,
+        filePath: file.path,
+        resolution,
+      });
       if (conflictPreview?.filePath === file.path) {
         setConflictPreview(null);
       }
       await refreshConflicts();
     } catch (err) {
-      setError(String(err));
+      setError(formatInvokeError(err));
     } finally {
       setWorking(null);
     }

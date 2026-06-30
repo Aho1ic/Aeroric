@@ -52,8 +52,23 @@ vi.mock("@uiw/react-codemirror", async () => {
       scrollIntoView: () => ({}),
     },
     GutterMarker: class {},
+    StateEffect: {
+      define: () => ({
+        of: (value: unknown) => ({ value, is: () => true }),
+      }),
+    },
+    StateField: {
+      define: (config: unknown) => config,
+    },
+    ViewPlugin: {
+      fromClass: () => [],
+    },
     WidgetType: class {},
     gutter: () => [],
+    hoverTooltip: () => [],
+    showTooltip: {
+      from: () => [],
+    },
   };
 });
 

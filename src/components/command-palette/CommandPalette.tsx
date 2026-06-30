@@ -3,6 +3,12 @@ import { Search, TerminalSquare, FileText } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import { useI18n } from "../../i18n";
+import {
+  lspCommandName,
+  lspInvokeArgs,
+  type LspRemoteContext,
+} from "../../hooks/languageServerState";
+import type { LspSymbol } from "../../types";
 import type { ProjectFileSearchResult } from "../file-explorer/types";
 import {
   commandPaletteModeForInput,
@@ -23,24 +29,30 @@ export type CommandPaletteCommand = {
 
 type CommandPaletteResult =
   | (CommandPaletteItem & { command: CommandPaletteCommand })
-  | (CommandPaletteItem & { file: ProjectFileSearchResult });
+  | (CommandPaletteItem & { file: ProjectFileSearchResult })
+  | (CommandPaletteItem & { symbol: LspSymbol });
 
 export function CommandPalette({
   projectPath,
+  activeFilePath,
   initialInput = "",
   commands,
   onOpenFile,
   onClose,
+  remote,
 }: {
   projectPath: string;
+  activeFilePath?: string | null;
   initialInput?: string;
   commands: CommandPaletteCommand[];
-  onOpenFile: (path: string, name: string) => void;
+  onOpenFile: (path: string, name: string, selection?: { line: number; column?: number }) => void;
   onClose: () => void;
+  remote?: LspRemoteContext;
 }) {
   const { t } = useI18n();
   const [input, setInput] = useState(initialInput);
   const [files, setFiles] = useState<ProjectFileSearchResult[]>([]);
+  const [symbols, setSymbols] = useState<LspSymbol[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [activeIndex, setActiveIndex] = useState(0);
@@ -79,6 +91,69 @@ export function CommandPalette({
     return () => window.clearTimeout(timer);
   }, [parsed.mode, parsed.query, projectPath]);
 
+  useEffect(() => {
+    if (parsed.mode !== "documentSymbol" && parsed.mode !== "workspaceSymbol") return;
+    requestIdRef.current += 1;
+    const requestId = requestIdRef.current;
+    setLoading(true);
+    setError(null);
+    const timer = window.setTimeout(() => {
+      const load =
+        parsed.mode === "documentSymbol"
+          ? activeFilePath
+            ? invoke<string>(
+                remote ? "remote_read_file_content" : "read_file_content",
+                remote
+                  ? {
+                      connection: remote.connection,
+                      remotePath: activeFilePath,
+                      remoteProjectPath: remote.projectPath,
+                    }
+                  : { path: activeFilePath, projectPath },
+              ).then((content) =>
+                invoke<LspSymbol[]>(
+                  lspCommandName("lsp_document_symbols", remote),
+                  lspInvokeArgs(
+                    {
+                      request: {
+                        projectPath,
+                        filePath: activeFilePath,
+                        content,
+                        line: 0,
+                        character: 0,
+                      },
+                    },
+                    remote,
+                  ),
+                ),
+              )
+            : Promise.resolve([])
+          : invoke<LspSymbol[]>(
+              lspCommandName("lsp_workspace_symbols", remote),
+              lspInvokeArgs(
+                {
+                  projectPath,
+                  query: parsed.query,
+                },
+                remote,
+              ),
+            );
+      load
+        .then((results) => {
+          if (requestId === requestIdRef.current) setSymbols(results);
+        })
+        .catch((err: unknown) => {
+          if (requestId !== requestIdRef.current) return;
+          setSymbols([]);
+          setError(String(err));
+        })
+        .finally(() => {
+          if (requestId === requestIdRef.current) setLoading(false);
+        });
+    }, 120);
+    return () => window.clearTimeout(timer);
+  }, [activeFilePath, parsed.mode, parsed.query, projectPath, remote]);
+
   const results: CommandPaletteResult[] = useMemo(() => {
     const commandItems: CommandPaletteResult[] = commands.map((command) => ({
       id: command.id,
@@ -95,19 +170,34 @@ export function CommandPalette({
       kind: "file",
       file,
     }));
+    const symbolItems: CommandPaletteResult[] = symbols.map((symbol) => ({
+      id: `${symbol.path}:${symbol.selectionRange.start.line}:${symbol.selectionRange.start.character}:${symbol.name}`,
+      title: symbol.name,
+      subtitle: symbolSubtitle(symbol),
+      kind: parsed.mode === "workspaceSymbol" ? "workspaceSymbol" : "documentSymbol",
+      keywords: [symbol.detail, symbol.containerName].filter((value): value is string =>
+        Boolean(value),
+      ),
+      symbol,
+    }));
     return rankCommandPaletteItems(
-      [...commandItems, ...fileItems],
+      [...commandItems, ...fileItems, ...symbolItems],
       parsed.query,
       parsed.mode,
     ) as CommandPaletteResult[];
-  }, [commands, files, parsed.mode, parsed.query]);
+  }, [commands, files, parsed.mode, parsed.query, symbols]);
 
   const executeResult = (result: CommandPaletteResult | undefined) => {
     if (!result) return;
     if ("command" in result) {
       result.command.run();
-    } else {
+    } else if ("file" in result) {
       onOpenFile(result.file.path, result.file.name);
+    } else {
+      onOpenFile(result.symbol.path, fileNameFromPath(result.symbol.path), {
+        line: result.symbol.selectionRange.start.line + 1,
+        column: result.symbol.selectionRange.start.character + 1,
+      });
     }
     onClose();
   };
@@ -178,6 +268,10 @@ export function CommandPalette({
             placeholder={
               parsed.mode === "command"
                 ? t("commandPalette.commandPlaceholder")
+                : parsed.mode === "documentSymbol"
+                  ? t("commandPalette.documentSymbolPlaceholder")
+                  : parsed.mode === "workspaceSymbol"
+                    ? t("commandPalette.workspaceSymbolPlaceholder")
                 : t("commandPalette.filePlaceholder")
             }
             style={{
@@ -191,11 +285,17 @@ export function CommandPalette({
             }}
           />
           <span style={{ fontSize: 11, color: "var(--text-hint)" }}>
-            {parsed.mode === "command" ? ">" : "⌘P"}
+            {parsed.mode === "command"
+              ? ">"
+              : parsed.mode === "documentSymbol"
+                ? "@"
+                : parsed.mode === "workspaceSymbol"
+                  ? "#"
+                  : "⌘P"}
           </span>
         </div>
         <div style={{ overflowY: "auto", padding: 6 }}>
-          {loading && parsed.mode === "file" ? (
+          {loading && parsed.mode !== "command" ? (
             <div style={emptyStyle}>{t("common.loading")}</div>
           ) : error ? (
             <div style={emptyStyle}>{t("commandPalette.failed", { error })}</div>
@@ -273,3 +373,11 @@ const emptyStyle = {
   textAlign: "center",
   fontSize: 12,
 } satisfies CSSProperties;
+
+function fileNameFromPath(path: string): string {
+  return path.split(/[\\/]/).pop() || path;
+}
+
+function symbolSubtitle(symbol: LspSymbol): string {
+  return [symbol.containerName, symbol.detail, symbol.path].filter(Boolean).join(" · ");
+}

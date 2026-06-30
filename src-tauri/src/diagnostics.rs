@@ -1,7 +1,9 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Output};
+
+use crate::ssh::SshConnection;
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
@@ -203,6 +205,106 @@ fn diagnostic_profile_command(root: &Path, profile: &str) -> Result<(String, Vec
     }
 }
 
+fn normalize_remote_project_path(remote_project_path: &str) -> Result<String, String> {
+    let trimmed = remote_project_path.trim();
+    if !trimmed.starts_with('/') {
+        return Err("Remote project path must be absolute".to_string());
+    }
+    if trimmed
+        .split('/')
+        .any(|component| component == "." || component == "..")
+    {
+        return Err("Remote project path cannot contain . or .. components".to_string());
+    }
+    if trimmed == "/" {
+        Ok("/".to_string())
+    } else {
+        Ok(trimmed.trim_end_matches('/').to_string())
+    }
+}
+
+fn shell_command(program: &str, args: &[String]) -> String {
+    std::iter::once(program.to_string())
+        .chain(args.iter().map(|arg| crate::ssh::shell_word_posix(arg)))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn remote_javascript_tool_command(tool: &str, tool_args: &[&str]) -> String {
+    let pnpm_args = std::iter::once("exec".to_string())
+        .chain(std::iter::once(tool.to_string()))
+        .chain(tool_args.iter().map(|arg| (*arg).to_string()))
+        .collect::<Vec<_>>();
+    let yarn_args = std::iter::once(tool.to_string())
+        .chain(tool_args.iter().map(|arg| (*arg).to_string()))
+        .collect::<Vec<_>>();
+    let npm_args = std::iter::once("exec".to_string())
+        .chain(std::iter::once("--".to_string()))
+        .chain(std::iter::once(tool.to_string()))
+        .chain(tool_args.iter().map(|arg| (*arg).to_string()))
+        .collect::<Vec<_>>();
+
+    format!(
+        "if [ -f pnpm-lock.yaml ]; then exec {}; elif [ -f yarn.lock ]; then exec {}; elif [ -f package-lock.json ]; then exec {}; else echo {}; exit 127; fi",
+        shell_command("pnpm", &pnpm_args),
+        shell_command("yarn", &yarn_args),
+        shell_command("npm", &npm_args),
+        crate::ssh::shell_quote_posix(
+            "No JavaScript package manager lockfile found (pnpm-lock.yaml, yarn.lock, package-lock.json)"
+        )
+    )
+}
+
+fn remote_diagnostic_profile_command(profile: &str) -> String {
+    match profile {
+        "eslint" => remote_javascript_tool_command("eslint", &[".", "--format", "json"]),
+        "cargo" => shell_command(
+            "cargo",
+            &["check".to_string(), "--message-format=json".to_string()],
+        ),
+        "ruff" => shell_command(
+            "ruff",
+            &[
+                "check".to_string(),
+                "--output-format".to_string(),
+                "json".to_string(),
+            ],
+        ),
+        "mypy" => shell_command(
+            "mypy",
+            &[
+                "--show-column-numbers".to_string(),
+                "--no-color-output".to_string(),
+                ".".to_string(),
+            ],
+        ),
+        _ => remote_javascript_tool_command("tsc", &["--noEmit"]),
+    }
+}
+
+fn remote_project_command(remote_project_path: &str, command: &str) -> String {
+    format!(
+        "cd -- {} && {}",
+        crate::ssh::shell_quote_posix(remote_project_path),
+        command
+    )
+}
+
+fn run_remote_project_command(
+    connection: &SshConnection,
+    remote_project_path: &str,
+    command: &str,
+) -> Result<Output, String> {
+    let remote_root = normalize_remote_project_path(remote_project_path)?;
+    let mut cmd = crate::ssh::std_ssh_command_for_remote_command(
+        connection,
+        remote_project_command(&remote_root, command),
+    );
+    crate::subprocess::configure_background_command(&mut cmd);
+    cmd.output()
+        .map_err(|e| format!("Failed to run remote diagnostics: {e}"))
+}
+
 fn severity_from_level(level: &str) -> DiagnosticSeverity {
     match level {
         "error" => DiagnosticSeverity::Error,
@@ -331,6 +433,31 @@ pub fn parse_mypy_output(root: &Path, output: &str) -> Vec<DiagnosticItem> {
         .collect()
 }
 
+fn parse_diagnostic_run_result(
+    root: &Path,
+    profile: &str,
+    stdout: &str,
+    stderr: &str,
+) -> DiagnosticRunResult {
+    let raw_output = if stdout.trim().is_empty() {
+        stderr.to_string()
+    } else {
+        format!("{stdout}{stderr}")
+    };
+    let diagnostics = match profile {
+        "eslint" => parse_eslint_json(root, &stdout),
+        "cargo" => parse_cargo_json(root, &stdout),
+        "ruff" => parse_ruff_json(root, &stdout),
+        "mypy" => parse_mypy_output(root, &raw_output),
+        _ => parse_tsc_output(root, &raw_output),
+    };
+    DiagnosticRunResult {
+        profile: profile.to_string(),
+        diagnostics,
+        raw_output,
+    }
+}
+
 fn run_profile(root: &Path, profile: &str) -> Result<DiagnosticRunResult, String> {
     let (program, args) = diagnostic_profile_command(root, profile)?;
     let mut cmd = Command::new(program);
@@ -342,23 +469,7 @@ fn run_profile(root: &Path, profile: &str) -> Result<DiagnosticRunResult, String
         .map_err(|e| format!("Failed to run diagnostics: {e}"))?;
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-    let raw_output = if stdout.trim().is_empty() {
-        stderr.clone()
-    } else {
-        format!("{stdout}{stderr}")
-    };
-    let diagnostics = match profile {
-        "eslint" => parse_eslint_json(root, &stdout),
-        "cargo" => parse_cargo_json(root, &stdout),
-        "ruff" => parse_ruff_json(root, &stdout),
-        "mypy" => parse_mypy_output(root, &raw_output),
-        _ => parse_tsc_output(root, &raw_output),
-    };
-    Ok(DiagnosticRunResult {
-        profile: profile.to_string(),
-        diagnostics,
-        raw_output,
-    })
+    Ok(parse_diagnostic_run_result(root, profile, &stdout, &stderr))
 }
 
 #[tauri::command]
@@ -376,6 +487,44 @@ pub async fn run_diagnostics(
             _ => "typescript",
         };
         run_profile(&root, profile)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn remote_run_diagnostics(
+    connection: SshConnection,
+    remote_project_path: String,
+    profile: String,
+) -> Result<DiagnosticRunResult, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let remote_root = normalize_remote_project_path(&remote_project_path)?;
+        let profile = match profile.as_str() {
+            "eslint" => "eslint",
+            "cargo" => "cargo",
+            "ruff" => "ruff",
+            "mypy" => "mypy",
+            _ => "typescript",
+        };
+        let output = run_remote_project_command(
+            &connection,
+            &remote_root,
+            &remote_diagnostic_profile_command(profile),
+        )?;
+        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        let result =
+            parse_diagnostic_run_result(Path::new(&remote_root), profile, &stdout, &stderr);
+        if !output.status.success() && result.diagnostics.is_empty() {
+            let message = result.raw_output.trim();
+            return Err(if message.is_empty() {
+                "Remote diagnostics failed".to_string()
+            } else {
+                message.to_string()
+            });
+        }
+        Ok(result)
     })
     .await
     .map_err(|e| e.to_string())?
@@ -443,6 +592,33 @@ mod tests {
         assert_eq!(detect_package_manager(&root), Some("pnpm"));
 
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn builds_remote_typescript_diagnostic_command_with_package_manager_fallback() {
+        let command = remote_project_command(
+            "/srv/app's repo",
+            &remote_diagnostic_profile_command("typescript"),
+        );
+
+        assert!(command.starts_with("cd -- '/srv/app'\\''s repo' && "));
+        assert!(command.contains("pnpm exec tsc --noEmit"));
+        assert!(command.contains("yarn tsc --noEmit"));
+        assert!(command.contains("npm exec -- tsc --noEmit"));
+    }
+
+    #[test]
+    fn parses_remote_diagnostics_against_remote_root() {
+        let result = parse_diagnostic_run_result(
+            Path::new("/srv/app"),
+            "typescript",
+            "",
+            "src/App.tsx(2,3): error TS2322: Type mismatch",
+        );
+
+        assert_eq!(result.diagnostics.len(), 1);
+        assert_eq!(result.diagnostics[0].file, "/srv/app/src/App.tsx");
+        assert_eq!(result.diagnostics[0].line, 2);
     }
 
     #[test]

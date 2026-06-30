@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { I18nProvider } from "../i18n";
@@ -285,6 +285,129 @@ describe("NotebookPanel", () => {
 
     expect(body).toHaveTextContent("1234");
     expect(body).not.toHaveTextContent("4321");
+  });
+
+  it("normalizes notebook title and markdown content to English punctuation", async () => {
+    const user = userEvent.setup();
+    renderNotebook();
+
+    await user.click(screen.getByRole("button", { name: "New quick note" }));
+    await user.click(screen.getByRole("menuitem", { name: "Markdown" }));
+    const title = screen.getByRole("textbox", { name: "Quick note name" });
+    const body = screen.getByRole("textbox", { name: "Quick note content" });
+
+    await user.type(title, "标题，测试？");
+    await user.type(body, "第一行：你好。");
+
+    expect(title).toHaveValue("标题,测试?");
+    expect(body).toHaveValue("第一行:你好.");
+  });
+
+  it("positions the rich text table picker below the table button", async () => {
+    const user = userEvent.setup();
+    renderNotebook();
+
+    await user.click(screen.getByRole("button", { name: "New quick note" }));
+    await user.click(screen.getByRole("menuitem", { name: "Text" }));
+    const tableButton = screen.getByRole("button", { name: "Table" });
+    const anchor = tableButton.parentElement as HTMLElement;
+    anchor.getBoundingClientRect = () =>
+      ({
+        top: 40,
+        bottom: 66,
+        left: 120,
+        right: 146,
+        width: 26,
+        height: 26,
+        x: 120,
+        y: 40,
+        toJSON: () => ({}),
+      }) as DOMRect;
+
+    await user.click(tableButton);
+
+    expect(screen.getByRole("dialog", { name: "Table size" })).toHaveStyle({
+      top: "72px",
+      left: "120px",
+    });
+  });
+
+  it("inserts a newline inside the current rich text code block on Enter", async () => {
+    const user = userEvent.setup();
+    renderNotebook();
+
+    await user.click(screen.getByRole("button", { name: "New quick note" }));
+    await user.click(screen.getByRole("menuitem", { name: "Text" }));
+    const body = screen.getByRole("textbox", { name: "Quick note content" });
+    body.innerHTML =
+      '<pre data-notebook-code-block="true"><code data-language="text">first</code></pre>';
+    const code = body.querySelector("code[data-language]") as HTMLElement;
+    const range = document.createRange();
+    range.setStart(code.firstChild as Text, "first".length);
+    range.collapse(true);
+    document.getSelection()?.removeAllRanges();
+    document.getSelection()?.addRange(range);
+
+    fireEvent.keyDown(body, { key: "Enter" });
+
+    expect(code.textContent).toBe("first\n");
+    expect(body.querySelectorAll("[data-notebook-code-block]")).toHaveLength(1);
+  });
+
+  it("reorders quick notes after a long-press pointer drag", async () => {
+    const user = userEvent.setup();
+    renderNotebook();
+
+    await user.click(screen.getByRole("button", { name: "New quick note" }));
+    await user.click(screen.getByRole("menuitem", { name: "Markdown" }));
+    await user.type(screen.getByRole("textbox", { name: "Quick note name" }), "Alpha");
+    await user.click(screen.getByRole("button", { name: "New quick note" }));
+    await user.click(screen.getByRole("menuitem", { name: "Markdown" }));
+    await user.type(screen.getByRole("textbox", { name: "Quick note name" }), "Beta");
+
+    vi.useFakeTimers();
+    try {
+      const beta = screen.getByRole("button", { name: "Beta" }) as HTMLButtonElement;
+      const alpha = screen.getByRole("button", { name: "Alpha" }) as HTMLButtonElement;
+      beta.setPointerCapture = vi.fn();
+      beta.releasePointerCapture = vi.fn();
+      beta.getBoundingClientRect = () =>
+        ({
+          top: 0,
+          bottom: 30,
+          left: 0,
+          right: 170,
+          width: 170,
+          height: 30,
+          x: 0,
+          y: 0,
+          toJSON: () => ({}),
+        }) as DOMRect;
+      alpha.getBoundingClientRect = () =>
+        ({
+          top: 36,
+          bottom: 66,
+          left: 0,
+          right: 170,
+          width: 170,
+          height: 30,
+          x: 0,
+          y: 36,
+          toJSON: () => ({}),
+        }) as DOMRect;
+
+      fireEvent.pointerDown(beta, { pointerId: 1, button: 0, clientY: 12 });
+      act(() => vi.advanceTimersByTime(200));
+      fireEvent.pointerMove(beta, { pointerId: 1, clientY: 48 });
+      fireEvent.pointerUp(beta, { pointerId: 1, clientY: 48 });
+
+      const stored = JSON.parse(localStorage.getItem("aeroric:notebook:v1") ?? "[]") as Array<{
+        title: string;
+      }>;
+      expect(stored.map((note) => note.title)).toEqual(["Alpha", "Beta"]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("shows Chinese rich text context menu actions", async () => {
@@ -597,7 +720,7 @@ describe("NotebookPanel", () => {
     }
   });
 
-  it("persists manual quick note ordering after drag and drop", async () => {
+  it("persists manual quick note ordering after a long-press pointer drag", async () => {
     const user = userEvent.setup();
     renderNotebook();
 
@@ -608,11 +731,44 @@ describe("NotebookPanel", () => {
     await user.click(screen.getByRole("menuitem", { name: "Markdown" }));
     await user.type(screen.getByRole("textbox", { name: "Quick note name" }), "Second");
 
-    const first = screen.getByRole("button", { name: "First" });
-    const second = screen.getByRole("button", { name: "Second" });
-    fireEvent.dragStart(first);
-    fireEvent.dragOver(second);
-    fireEvent.drop(second);
+    vi.useFakeTimers();
+    try {
+      const first = screen.getByRole("button", { name: "First" }) as HTMLButtonElement;
+      const second = screen.getByRole("button", { name: "Second" }) as HTMLButtonElement;
+      first.setPointerCapture = vi.fn();
+      first.releasePointerCapture = vi.fn();
+      first.getBoundingClientRect = () =>
+        ({
+          top: 36,
+          bottom: 66,
+          left: 0,
+          right: 170,
+          width: 170,
+          height: 30,
+          x: 0,
+          y: 36,
+          toJSON: () => ({}),
+        }) as DOMRect;
+      second.getBoundingClientRect = () =>
+        ({
+          top: 0,
+          bottom: 30,
+          left: 0,
+          right: 170,
+          width: 170,
+          height: 30,
+          x: 0,
+          y: 0,
+          toJSON: () => ({}),
+        }) as DOMRect;
+
+      fireEvent.pointerDown(second, { pointerId: 1, button: 0, clientY: 12 });
+      act(() => vi.advanceTimersByTime(200));
+      fireEvent.pointerMove(second, { pointerId: 1, clientY: 48 });
+      fireEvent.pointerUp(second, { pointerId: 1, clientY: 48 });
+    } finally {
+      vi.useRealTimers();
+    }
 
     const stored = JSON.parse(localStorage.getItem("aeroric:notebook:v1") ?? "[]") as Array<{
       title: string;

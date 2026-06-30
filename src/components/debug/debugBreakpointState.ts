@@ -9,11 +9,20 @@ function trimTrailingSlash(value: string): string {
 }
 
 function normalizeBreakpoint(breakpoint: DebugBreakpoint): DebugBreakpoint {
-  return {
+  const normalized: DebugBreakpoint = {
     file: normalizePath(breakpoint.file.trim()),
     line: Math.max(1, Math.floor(breakpoint.line)),
     column: Math.max(1, Math.floor(breakpoint.column || 1)),
   };
+  const condition = breakpoint.condition?.trim();
+  const logMessage = breakpoint.logMessage?.trim();
+  if (condition) normalized.condition = condition;
+  if (logMessage) normalized.logMessage = logMessage;
+  return normalized;
+}
+
+function hasBreakpointMetadata(breakpoint: DebugBreakpoint): boolean {
+  return Boolean(breakpoint.condition || breakpoint.logMessage);
 }
 
 function lineKey(breakpoint: DebugBreakpoint): string {
@@ -77,7 +86,12 @@ export function mergeDebugConfigBreakpoints(
 ): DebugConfig {
   const merged = new Map<string, DebugBreakpoint>();
   for (const breakpoint of [...config.breakpoints, ...editorBreakpoints].map(normalizeBreakpoint)) {
-    merged.set(locationKey(breakpoint), breakpoint);
+    const key = locationKey(breakpoint);
+    const existing = merged.get(key);
+    if (existing && hasBreakpointMetadata(existing) && !hasBreakpointMetadata(breakpoint)) {
+      continue;
+    }
+    merged.set(key, breakpoint);
   }
   return {
     ...config,

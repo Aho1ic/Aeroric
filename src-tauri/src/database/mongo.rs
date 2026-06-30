@@ -63,7 +63,12 @@ pub async fn dbx_mongo_list_collections(
     connections::ensure_connected(&state, &connection_id).await?;
     dbx_core::mongo_ops::mongo_list_collections_core(&state.app_state, &connection_id, &database)
         .await
-        .map(|collections| collections.into_iter().map(|collection| collection.name).collect())
+        .map(|collections| {
+            collections
+                .into_iter()
+                .map(|collection| collection.name)
+                .collect()
+        })
 }
 
 #[tauri::command]

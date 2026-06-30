@@ -1,15 +1,36 @@
 import { invoke } from "@tauri-apps/api/core";
-import { CircleCheck, CircleX, FlaskConical, Play, Sparkles, TriangleAlert } from "lucide-react";
-import type React from "react";
-import { useEffect, useMemo, useRef, useState } from "react";
-import { useI18n } from "../../i18n";
-import type { TestDiscoveryResult, TestFailure, TestProfile, TestRunResult } from "../../types";
 import {
+  CircleCheck,
+  CircleX,
+  FlaskConical,
+  Gauge,
+  Play,
+  Sparkles,
+  TriangleAlert,
+} from "lucide-react";
+import type React from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useI18n } from "../../i18n";
+import {
+  formatInvokeError,
+  invokeWithTimeout,
+  remoteInvokeOptions,
+} from "../../hooks/useCancellableInvoke";
+import type {
+  SshConnection,
+  TestDiscoveryResult,
+  TestFailure,
+  TestProfile,
+  TestRunResult,
+} from "../../types";
+import {
+  buildTestRunTarget,
   buildTestFixPrompt,
   groupTestFailuresByFile,
   isLatestTestRun,
   testProfiles,
   type TestProfileId,
+  type TestRunPanelRequest,
 } from "./testExplorerState";
 
 export function TestExplorerPanel({
@@ -17,20 +38,32 @@ export function TestExplorerPanel({
   width,
   onOpenFailure,
   onCreateAgentTask,
+  onTestRunResult,
+  runRequest,
+  remote,
 }: {
   projectPath: string;
   width: number;
   onOpenFailure: (failure: TestFailure) => void;
   onCreateAgentTask: (prompt: string) => void;
+  onTestRunResult?: (result: TestRunResult) => void;
+  runRequest?: TestRunPanelRequest | null;
+  remote?: {
+    connection: SshConnection;
+    projectPath: string;
+  };
 }) {
   const { t } = useI18n();
   const [profile, setProfile] = useState<TestProfileId>("vitest");
+  const [targetFile, setTargetFile] = useState("");
+  const [targetName, setTargetName] = useState("");
   const [discoveredProfiles, setDiscoveredProfiles] = useState<TestProfile[]>([]);
   const [result, setResult] = useState<TestRunResult | null>(null);
   const [loadingProfiles, setLoadingProfiles] = useState(false);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const runIdRef = useRef(0);
+  const handledRunRequestIdRef = useRef<number | null>(null);
 
   const availableProfiles = discoveredProfiles.length > 0 ? discoveredProfiles : testProfiles;
   const failureGroups = useMemo(
@@ -43,7 +76,12 @@ export function TestExplorerPanel({
     let cancelled = false;
     setLoadingProfiles(true);
     setError(null);
-    invoke<TestDiscoveryResult>("discover_tests", { projectPath })
+    const command = remote ? "remote_discover_tests" : "discover_tests";
+    const args = remote
+      ? { connection: remote.connection, remoteProjectPath: remote.projectPath }
+      : { projectPath };
+    const discovery = invoke<TestDiscoveryResult>(command, args);
+    (remote ? invokeWithTimeout(discovery, command, remoteInvokeOptions()) : discovery)
       .then((next) => {
         if (cancelled) return;
         setDiscoveredProfiles(next.profiles);
@@ -51,7 +89,7 @@ export function TestExplorerPanel({
         if (first) setProfile(first);
       })
       .catch((err) => {
-        if (!cancelled) setError(String(err));
+        if (!cancelled) setError(formatInvokeError(err));
       })
       .finally(() => {
         if (!cancelled) setLoadingProfiles(false);
@@ -59,29 +97,70 @@ export function TestExplorerPanel({
     return () => {
       cancelled = true;
     };
-  }, [projectPath]);
+  }, [projectPath, remote]);
 
-  const runTests = async () => {
-    const runId = runIdRef.current + 1;
-    runIdRef.current = runId;
-    setRunning(true);
-    setError(null);
-    try {
-      const next = await invoke<TestRunResult>("run_tests", {
-        projectPath,
-        profile,
-      });
-      if (!isLatestTestRun(runId, runIdRef.current)) return;
-      setResult(next);
-    } catch (err) {
-      if (isLatestTestRun(runId, runIdRef.current)) {
-        setResult(null);
-        setError(String(err));
+  const runTests = useCallback(
+    async (
+      coverage = false,
+      override?: {
+        profile?: TestProfileId;
+        target?: ReturnType<typeof buildTestRunTarget>;
+      },
+    ) => {
+      const runId = runIdRef.current + 1;
+      runIdRef.current = runId;
+      const runProfile = override?.profile ?? profile;
+      const runTarget = override
+        ? (override.target ?? null)
+        : buildTestRunTarget(targetFile, targetName);
+      setRunning(true);
+      setError(null);
+      try {
+        const next = remote
+          ? await invokeWithTimeout(
+              invoke<TestRunResult>("remote_run_tests", {
+                connection: remote.connection,
+                remoteProjectPath: remote.projectPath,
+                profile: runProfile,
+                target: runTarget,
+                coverage,
+              }),
+              "remote_run_tests",
+              remoteInvokeOptions(600_000),
+            )
+          : await invoke<TestRunResult>("run_tests", {
+              projectPath,
+              profile: runProfile,
+              target: runTarget,
+              coverage,
+            });
+        if (!isLatestTestRun(runId, runIdRef.current)) return;
+        setResult(next);
+        onTestRunResult?.(next);
+      } catch (err) {
+        if (isLatestTestRun(runId, runIdRef.current)) {
+          setResult(null);
+          setError(formatInvokeError(err));
+        }
+      } finally {
+        if (isLatestTestRun(runId, runIdRef.current)) setRunning(false);
       }
-    } finally {
-      if (isLatestTestRun(runId, runIdRef.current)) setRunning(false);
-    }
-  };
+    },
+    [onTestRunResult, profile, projectPath, remote, targetFile, targetName],
+  );
+
+  useEffect(() => {
+    if (!runRequest || handledRunRequestIdRef.current === runRequest.id) return;
+    handledRunRequestIdRef.current = runRequest.id;
+    const nextProfile = runRequest.profile ?? "vitest";
+    setProfile(nextProfile);
+    setTargetFile(runRequest.target.filePath ?? "");
+    setTargetName(runRequest.target.testName ?? "");
+    void runTests(Boolean(runRequest.coverage), {
+      profile: nextProfile,
+      target: runRequest.target,
+    });
+  }, [runRequest, runTests]);
 
   const createAgentTask = () => {
     if (!result || result.failures.length === 0) return;
@@ -112,12 +191,21 @@ export function TestExplorerPanel({
         </select>
         <button
           type="button"
-          onClick={() => void runTests()}
+          onClick={() => void runTests(false)}
           disabled={running}
           style={buttonStyle}
         >
           <Play size={13} />
           {running ? t("tests.running") : t("tests.run")}
+        </button>
+        <button
+          type="button"
+          onClick={() => void runTests(true)}
+          disabled={running}
+          style={buttonStyle}
+        >
+          <Gauge size={13} />
+          {running ? t("tests.running") : t("tests.coverage")}
         </button>
         <button
           type="button"
@@ -129,6 +217,23 @@ export function TestExplorerPanel({
         >
           <Sparkles size={13} />
         </button>
+      </div>
+
+      <div style={targetToolbarStyle}>
+        <input
+          value={targetFile}
+          onChange={(event) => setTargetFile(event.currentTarget.value)}
+          placeholder={t("tests.targetFile")}
+          aria-label={t("tests.targetFile")}
+          style={targetInputStyle}
+        />
+        <input
+          value={targetName}
+          onChange={(event) => setTargetName(event.currentTarget.value)}
+          placeholder={t("tests.targetName")}
+          aria-label={t("tests.targetName")}
+          style={targetInputStyle}
+        />
       </div>
 
       <div style={summaryStyle}>
@@ -143,6 +248,25 @@ export function TestExplorerPanel({
           </span>
         )}
       </div>
+
+      {result?.coverage && (
+        <div style={coverageStyle}>
+          <span style={coverageTitleStyle}>{t("tests.coverage")}</span>
+          <span style={coverageMetricStyle}>
+            {t("tests.coverageLines", { percent: result.coverage.lines.percent.toFixed(1) })}
+          </span>
+          <span style={coverageMetricStyle}>
+            {t("tests.coverageFunctions", {
+              percent: result.coverage.functions.percent.toFixed(1),
+            })}
+          </span>
+          <span style={coverageMetricStyle}>
+            {t("tests.coverageBranches", {
+              percent: result.coverage.branches.percent.toFixed(1),
+            })}
+          </span>
+        </div>
+      )}
 
       {error && <div style={errorStyle}>{t("tests.failed", { error })}</div>}
 
@@ -233,6 +357,26 @@ const toolbarStyle: React.CSSProperties = {
   borderBottom: "1px solid var(--border-dim)",
 };
 
+const targetToolbarStyle: React.CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)",
+  gap: 6,
+  padding: "0 10px 10px",
+  borderBottom: "1px solid var(--border-dim)",
+};
+
+const targetInputStyle: React.CSSProperties = {
+  minWidth: 0,
+  height: 26,
+  border: "1px solid var(--border-dim)",
+  borderRadius: 6,
+  background: "var(--bg-card)",
+  color: "var(--text-primary)",
+  outline: "none",
+  padding: "0 7px",
+  fontSize: 11,
+};
+
 const selectStyle: React.CSSProperties = {
   minWidth: 0,
   flex: 1,
@@ -307,6 +451,30 @@ const summaryTextStyle: React.CSSProperties = {
   whiteSpace: "nowrap",
   color: "var(--text-muted)",
   fontSize: 11,
+};
+
+const coverageStyle: React.CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 6,
+  flexWrap: "wrap",
+  padding: "8px 10px",
+  borderBottom: "1px solid var(--border-dim)",
+};
+
+const coverageTitleStyle: React.CSSProperties = {
+  color: "var(--text-primary)",
+  fontSize: 11,
+  fontWeight: 650,
+};
+
+const coverageMetricStyle: React.CSSProperties = {
+  border: "1px solid var(--border-dim)",
+  borderRadius: 999,
+  padding: "2px 7px",
+  color: "var(--text-muted)",
+  fontSize: 11,
+  fontWeight: 600,
 };
 
 const contentStyle: React.CSSProperties = {

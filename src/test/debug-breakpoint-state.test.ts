@@ -68,4 +68,22 @@ describe("debug breakpoint state", () => {
       { file: "src/index.js", line: 18, column: 1 },
     ]);
   });
+
+  it("preserves configured conditional breakpoints when merging editor breakpoints", () => {
+    const config: DebugConfig = {
+      id: "app",
+      name: "App",
+      type: "node",
+      program: "src/index.js",
+      cwd: ".",
+      args: [],
+      env: {},
+      breakpoints: [{ file: "src/index.js", line: 12, column: 1, condition: "enabled" }],
+    };
+
+    expect(
+      mergeDebugConfigBreakpoints(config, [{ file: "src/index.js", line: 12, column: 1 }])
+        .breakpoints,
+    ).toEqual([{ file: "src/index.js", line: 12, column: 1, condition: "enabled" }]);
+  });
 });

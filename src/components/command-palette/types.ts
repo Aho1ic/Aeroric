@@ -1,6 +1,6 @@
-export type CommandPaletteMode = "file" | "command";
+export type CommandPaletteMode = "file" | "command" | "documentSymbol" | "workspaceSymbol";
 
-export type CommandPaletteItemKind = "file" | "command";
+export type CommandPaletteItemKind = "file" | "command" | "documentSymbol" | "workspaceSymbol";
 
 export type CommandPaletteItem = {
   id: string;

@@ -4,7 +4,8 @@ export type IdeToolAvailability = {
   filesDisabled?: boolean;
   gitDisabled?: boolean;
   problemsDisabled?: boolean;
-  terminalDisabled?: boolean;
+  testsDisabled?: boolean;
+  runDisabled?: boolean;
   searchDisabled?: boolean;
   debugDisabled?: boolean;
   previewDisabled?: boolean;
@@ -40,6 +41,16 @@ export type IdeToolWithAvailability = IdeToolMetadata & {
   disabled: boolean;
 };
 
+const SSH_UNAVAILABLE_TITLES: Partial<Record<Exclude<RightPanel, null>, string>> = {
+  "git-advanced": "Git Advanced is unavailable for SSH projects without a connection",
+  problems: "Problems require an active SSH connection",
+  tests: "Test Explorer requires an active SSH connection",
+  debug: "Debug requires an active SSH connection",
+  run: "Run Configurations require an active SSH connection",
+  preview: "Web Preview requires an active SSH connection",
+  search: "Search requires an active SSH connection",
+};
+
 export const IDE_TOOL_REGISTRY = [
   {
     id: "git-advanced",
@@ -72,7 +83,7 @@ export const IDE_TOOL_REGISTRY = [
     commandKeywords: ["test", "vitest", "cargo"],
     toolbarGroup: "primary",
     order: 30,
-    disableWhen: ["terminalDisabled"],
+    disableWhen: ["testsDisabled"],
   },
   {
     id: "debug",
@@ -94,7 +105,7 @@ export const IDE_TOOL_REGISTRY = [
     commandKeywords: ["run", "configuration", "task"],
     toolbarGroup: "primary",
     order: 50,
-    disableWhen: ["terminalDisabled"],
+    disableWhen: ["runDisabled"],
   },
   {
     id: "preview",
@@ -143,7 +154,9 @@ export function getToolbarIdeTools(availability: IdeToolAvailability): IdeToolWi
 }
 
 export function getRightRailIdeTools(availability: IdeToolAvailability): IdeToolWithAvailability[] {
-  return getToolbarIdeTools(availability).filter((tool) => !PROJECT_TOP_RIGHT_TOOL_IDS.has(tool.id));
+  return getToolbarIdeTools(availability).filter(
+    (tool) => !PROJECT_TOP_RIGHT_TOOL_IDS.has(tool.id),
+  );
 }
 
 export function getProjectTopRightIdeTools(
@@ -154,4 +167,12 @@ export function getProjectTopRightIdeTools(
 
 export function getCommandPaletteIdeTools(availability: IdeToolAvailability): IdeToolMetadata[] {
   return sortIdeTools(IDE_TOOL_REGISTRY).filter((tool) => !isIdeToolDisabled(tool, availability));
+}
+
+export function getIdeToolTitleWithDisabledReason(
+  tool: IdeToolWithAvailability,
+  title: string,
+): string {
+  if (!tool.disabled) return title;
+  return SSH_UNAVAILABLE_TITLES[tool.panel] ?? `${title} is unavailable`;
 }

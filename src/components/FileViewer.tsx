@@ -1,5 +1,6 @@
-import { useCallback, useState, useEffect, useRef, useMemo } from "react";
+import { useCallback, useState, useEffect, useRef, useMemo, type CSSProperties } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { confirm } from "@tauri-apps/plugin-dialog";
 import { Marked } from "marked";
 import DOMPurify from "dompurify";
 import * as Popover from "@radix-ui/react-popover";
@@ -16,6 +17,9 @@ import {
   WandSparkles,
   Columns2,
   GitBranch,
+  Search,
+  Lightbulb,
+  Copy,
 } from "lucide-react";
 import { getFileColor } from "../utils";
 import ReactCodeMirror, {
@@ -35,10 +39,17 @@ import type { OpenFileTab } from "../hooks/useProjectPanels";
 import type {
   CondaEnvironment,
   DebugBreakpoint,
+  DiagnosticItem,
+  DiagnosticSeverity,
   FormatFileResult,
   GitBlameLine,
   GitBlameResult,
+  LspInlayHint,
+  LspSymbol,
+  LocalHistoryEntry,
+  LocalHistorySnapshot,
   SshConnection,
+  TestCoverageSummary,
   ThemeVariant,
 } from "../types";
 import { useI18n } from "../i18n";
@@ -46,6 +57,67 @@ import { isRunnableScriptFile, selectRunnableCondaEnvironment } from "./file-vie
 import { lineColumnToOffset } from "./file-viewer/position";
 import type { OpenFileSelection } from "../hooks/projectPanelsState";
 import { useLanguageServer } from "../hooks/useLanguageServer";
+import { buildLspDocumentRequest } from "../hooks/languageServerState";
+import { createLspCompletionExtension } from "./file-viewer/lspCompletion";
+import { createLspHoverExtension } from "./file-viewer/lspHover";
+import { createLspNavigationExtension, type LspOpenTarget } from "./file-viewer/lspNavigation";
+import { createLspSignatureHelpExtension } from "./file-viewer/lspSignatureHelp";
+import {
+  findLspReferences,
+  lspReferenceKey,
+  lspReferencePreviewLine,
+  lspReferenceToOpenTarget,
+  type LspReferencePreview,
+  type LspReferenceLocation,
+} from "./file-viewer/lspReferences";
+import {
+  activeSymbolBreadcrumbs,
+  fileBreadcrumbSegments,
+  lspSymbolToSelection,
+  outlineSymbolDepth,
+  outlineSymbolKey,
+  requestLspDocumentOutline,
+} from "./file-viewer/lspOutline";
+import {
+  createLspInlayHintsExtension,
+  requestLspInlayHints,
+} from "./file-viewer/lspInlayHints";
+import {
+  applyLspWorkspaceEdit,
+  requestLspRename,
+  type LspApplyWorkspaceEditSummary,
+  type LspWorkspaceEdit,
+} from "./file-viewer/lspRename";
+import {
+  diagnosticsForLspCodeAction,
+  executeLspCommand,
+  requestLspCodeActions,
+  type LspCodeAction,
+} from "./file-viewer/lspCodeActions";
+import {
+  FILE_VIEWER_COMMAND_EVENT,
+  isFileViewerCommand,
+  type FileViewerCommand,
+} from "./file-viewer/editorCommandEvents";
+import {
+  createDiagnosticsExtension,
+  diagnosticsClipboardText,
+  diagnosticSeverityCounts,
+  diagnosticsForFile,
+  filterDiagnosticsBySeverity,
+  groupDiagnosticsBySource,
+  nextDiagnosticTarget,
+  type DiagnosticSeverityFilter,
+} from "./file-viewer/diagnosticsExtension";
+import {
+  createTestRunGutter,
+  testRunTargetsForContent,
+  type EditorTestRunTarget,
+} from "./file-viewer/testRunGutter";
+import {
+  coverageLinesForFile,
+  createCoverageExtension,
+} from "./file-viewer/coverageExtension";
 import { debugBreakpointLinesForFile } from "./debug/debugBreakpointState";
 import {
   inlineBlameText,
@@ -314,6 +386,199 @@ const editorBaseTheme = EditorView.theme({
   ".cm-line:hover .cm-inline-blame": {
     opacity: 1,
   },
+  ".cm-lsp-hover-tooltip": {
+    maxWidth: "520px",
+    maxHeight: "260px",
+    overflow: "auto",
+    padding: "8px 10px",
+    border: "1px solid var(--border)",
+    borderRadius: "6px",
+    background: "var(--bg-card)",
+    color: "var(--text-primary)",
+    boxShadow: "0 10px 28px color-mix(in srgb, #000 24%, transparent)",
+    fontFamily: "var(--font-mono)",
+    fontSize: "12px",
+    lineHeight: "1.5",
+    whiteSpace: "normal",
+  },
+  ".cm-lsp-hover-tooltip p, .cm-lsp-signature-tooltip p": {
+    margin: "0 0 6px",
+  },
+  ".cm-lsp-hover-tooltip p:last-child, .cm-lsp-signature-tooltip p:last-child": {
+    marginBottom: 0,
+  },
+  ".cm-lsp-hover-tooltip code, .cm-lsp-signature-tooltip code": {
+    padding: "1px 4px",
+    borderRadius: "4px",
+    background: "var(--bg-subtle)",
+  },
+  ".cm-lsp-signature-tooltip": {
+    maxWidth: "540px",
+    maxHeight: "260px",
+    overflow: "auto",
+    padding: "8px 10px",
+    border: "1px solid var(--border)",
+    borderRadius: "6px",
+    background: "var(--bg-card)",
+    color: "var(--text-primary)",
+    boxShadow: "0 10px 28px color-mix(in srgb, #000 24%, transparent)",
+    fontFamily: "var(--font-mono)",
+    fontSize: "12px",
+    lineHeight: "1.5",
+  },
+  ".cm-lsp-signature-label": {
+    fontWeight: 700,
+    whiteSpace: "pre-wrap",
+  },
+  ".cm-lsp-signature-parameter": {
+    marginTop: "6px",
+    color: "var(--text-secondary)",
+    whiteSpace: "normal",
+  },
+  ".cm-lsp-signature-markdown": {
+    display: "inline",
+  },
+  ".cm-lsp-signature-docs": {
+    marginTop: "6px",
+    color: "var(--text-muted)",
+    whiteSpace: "pre-wrap",
+  },
+  ".cm-inlay-hint": {
+    display: "inline-flex",
+    alignItems: "center",
+    maxWidth: "220px",
+    margin: "0 2px",
+    padding: "0 4px",
+    borderRadius: "4px",
+    background: "var(--bg-subtle)",
+    color: "var(--text-hint)",
+    fontFamily: "var(--font-mono)",
+    fontSize: "0.82em",
+    lineHeight: "1.35",
+    whiteSpace: "nowrap",
+    verticalAlign: "baseline",
+    pointerEvents: "auto",
+  },
+  ".cm-inlay-hint[data-padding-left='true']": {
+    marginLeft: "6px",
+  },
+  ".cm-inlay-hint[data-padding-right='true']": {
+    marginRight: "6px",
+  },
+  ".cm-diagnostic-gutter .cm-gutterElement": {
+    width: "16px",
+    padding: "0 3px",
+  },
+  ".cm-diagnostic-marker": {
+    width: "7px",
+    height: "7px",
+    display: "inline-block",
+    borderRadius: "999px",
+    verticalAlign: "middle",
+  },
+  ".cm-diagnostic-marker.error": {
+    background: "var(--danger)",
+  },
+  ".cm-diagnostic-marker.warning": {
+    background: "var(--warning)",
+  },
+  ".cm-diagnostic-marker.info": {
+    background: "var(--accent)",
+  },
+  ".cm-diagnostic-underline": {
+    textDecorationLine: "underline",
+    textDecorationStyle: "wavy",
+    textUnderlineOffset: "2px",
+  },
+  ".cm-diagnostic-underline.error": {
+    textDecorationColor: "var(--danger)",
+  },
+  ".cm-diagnostic-underline.warning": {
+    textDecorationColor: "var(--warning)",
+  },
+  ".cm-diagnostic-underline.info": {
+    textDecorationColor: "var(--accent)",
+  },
+  ".cm-diagnostic-line.error": {
+    background: "color-mix(in srgb, var(--danger) 7%, transparent)",
+  },
+  ".cm-diagnostic-line.warning": {
+    background: "color-mix(in srgb, var(--warning) 7%, transparent)",
+  },
+  ".cm-diagnostic-line.info": {
+    background: "color-mix(in srgb, var(--accent) 7%, transparent)",
+  },
+  ".cm-diagnostic-tooltip": {
+    maxWidth: "460px",
+    maxHeight: "220px",
+    overflow: "auto",
+    padding: "8px 10px",
+    border: "1px solid var(--border)",
+    borderRadius: "6px",
+    background: "var(--bg-card)",
+    color: "var(--text-primary)",
+    boxShadow: "0 10px 28px color-mix(in srgb, #000 24%, transparent)",
+    fontFamily: "var(--font-mono)",
+    fontSize: "12px",
+    lineHeight: "1.45",
+  },
+  ".cm-diagnostic-tooltip-item + .cm-diagnostic-tooltip-item": {
+    marginTop: "6px",
+    paddingTop: "6px",
+    borderTop: "1px solid var(--border-dim)",
+  },
+  ".cm-diagnostic-tooltip-item.error": {
+    color: "var(--danger-fg)",
+  },
+  ".cm-diagnostic-tooltip-item.warning": {
+    color: "var(--warning)",
+  },
+  ".cm-coverage-line.covered": {
+    boxShadow: "inset 3px 0 0 color-mix(in srgb, var(--success) 72%, transparent)",
+  },
+  ".cm-coverage-line.uncovered": {
+    boxShadow: "inset 3px 0 0 color-mix(in srgb, var(--danger) 72%, transparent)",
+  },
+  ".cm-test-run-gutter .cm-gutterElement, .cm-test-debug-gutter .cm-gutterElement": {
+    width: "18px",
+    padding: "0 3px",
+  },
+  ".cm-test-run-gutter, .cm-test-debug-gutter": {
+    minWidth: "18px",
+  },
+  ".cm-test-run-gutter, .cm-test-run-gutter .cm-gutterElement": {
+    background: "var(--bg-panel)",
+  },
+  ".cm-test-debug-gutter, .cm-test-debug-gutter .cm-gutterElement": {
+    background: "var(--bg-panel)",
+  },
+  ".cm-test-run-marker, .cm-test-debug-marker": {
+    width: "14px",
+    height: "14px",
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    border: "1px solid var(--border-dim)",
+    borderRadius: "999px",
+    background: "var(--bg-card)",
+    color: "var(--success)",
+    fontSize: "8px",
+    lineHeight: 1,
+    cursor: "pointer",
+    padding: 0,
+  },
+  ".cm-test-run-marker:hover": {
+    borderColor: "var(--success)",
+    background: "color-mix(in srgb, var(--success) 12%, transparent)",
+  },
+  ".cm-test-debug-marker": {
+    color: "var(--accent)",
+    fontSize: "9px",
+  },
+  ".cm-test-debug-marker:hover": {
+    borderColor: "var(--accent)",
+    background: "color-mix(in srgb, var(--accent) 12%, transparent)",
+  },
 });
 
 class DebugBreakpointGutterMarker extends GutterMarker {
@@ -437,6 +702,222 @@ type CursorPosition = {
   column: number;
 };
 
+type EditorContextMenuState = {
+  x: number;
+  y: number;
+};
+
+const diagnosticFilterOptions: DiagnosticSeverityFilter[] = ["all", "error", "warning", "info"];
+
+function diagnosticSeverityColor(severity: DiagnosticSeverity): string {
+  if (severity === "error") return "var(--danger-fg)";
+  if (severity === "warning") return "var(--warning)";
+  return "var(--accent)";
+}
+
+type ReferencePreviewState =
+  | { status: "loading" }
+  | { status: "ready"; preview: LspReferencePreview }
+  | { status: "error"; error: string };
+
+const outlineMessageStyle: CSSProperties = {
+  padding: "7px 8px",
+  color: "var(--text-hint)",
+  fontSize: 11.5,
+  lineHeight: 1.35,
+};
+
+const outlineErrorStyle: CSSProperties = {
+  ...outlineMessageStyle,
+  color: "var(--warning)",
+};
+
+const breadcrumbStyle: CSSProperties = {
+  minWidth: 0,
+  overflow: "hidden",
+  display: "flex",
+  alignItems: "center",
+  gap: 1,
+  color: "var(--text-muted)",
+  fontFamily: "var(--font-mono)",
+  fontSize: 11,
+  whiteSpace: "nowrap",
+};
+
+const breadcrumbSegmentStyle: CSSProperties = {
+  minWidth: 0,
+  display: "inline-flex",
+  alignItems: "center",
+  overflow: "hidden",
+  flexShrink: 1,
+};
+
+const breadcrumbSymbolButtonStyle: CSSProperties = {
+  ...breadcrumbSegmentStyle,
+  border: "none",
+  background: "transparent",
+  color: "var(--text-secondary)",
+  padding: 0,
+  cursor: "pointer",
+  font: "inherit",
+};
+
+const breadcrumbSeparatorStyle: CSSProperties = {
+  flexShrink: 0,
+  color: "var(--text-hint)",
+};
+
+const breadcrumbTextStyle: CSSProperties = {
+  minWidth: 0,
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+  whiteSpace: "nowrap",
+};
+
+const stickyScrollStyle: CSSProperties = {
+  minHeight: 26,
+  display: "flex",
+  alignItems: "center",
+  gap: 2,
+  padding: "0 8px",
+  borderBottom: "1px solid var(--border-dim)",
+  background: "var(--bg-panel)",
+  color: "var(--text-muted)",
+  fontFamily: "var(--font-mono)",
+  fontSize: 11,
+  whiteSpace: "nowrap",
+  overflow: "hidden",
+  flexShrink: 0,
+};
+
+const stickyScrollButtonStyle: CSSProperties = {
+  minWidth: 0,
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 2,
+  border: "none",
+  background: "transparent",
+  color: "var(--text-secondary)",
+  padding: 0,
+  cursor: "pointer",
+  font: "inherit",
+};
+
+const editorContextMenuStyle: CSSProperties = {
+  position: "fixed",
+  minWidth: 180,
+  padding: 4,
+  border: "1px solid var(--border-dim)",
+  borderRadius: 6,
+  background: "var(--bg-card)",
+  boxShadow: "0 14px 38px color-mix(in srgb, #000 28%, transparent)",
+  zIndex: 30,
+};
+
+const editorContextMenuItemStyle: CSSProperties = {
+  width: "100%",
+  height: 30,
+  display: "flex",
+  alignItems: "center",
+  gap: 8,
+  padding: "0 8px",
+  border: "none",
+  borderRadius: 5,
+  background: "transparent",
+  color: "var(--text-primary)",
+  fontSize: 12,
+  textAlign: "left",
+  cursor: "pointer",
+};
+
+const localHistoryOverlayStyle: CSSProperties = {
+  position: "absolute",
+  inset: 0,
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  padding: 18,
+  background: "color-mix(in srgb, #000 30%, transparent)",
+  zIndex: 20,
+};
+
+const localHistoryDialogStyle: CSSProperties = {
+  width: "min(980px, calc(100vw - 48px))",
+  height: "min(620px, calc(100vh - 96px))",
+  minHeight: 360,
+  display: "flex",
+  flexDirection: "column",
+  border: "1px solid var(--border)",
+  borderRadius: 8,
+  background: "var(--bg-card)",
+  boxShadow: "0 24px 60px color-mix(in srgb, #000 32%, transparent)",
+  overflow: "hidden",
+};
+
+const localHistoryHeaderStyle: CSSProperties = {
+  height: 40,
+  display: "flex",
+  alignItems: "center",
+  gap: 8,
+  padding: "0 12px",
+  borderBottom: "1px solid var(--border-dim)",
+  color: "var(--text-primary)",
+  fontSize: 13,
+  fontWeight: 600,
+  flexShrink: 0,
+};
+
+const localHistoryBodyStyle: CSSProperties = {
+  flex: 1,
+  minHeight: 0,
+  display: "grid",
+  gridTemplateColumns: "240px minmax(0, 1fr)",
+};
+
+const localHistoryListStyle: CSSProperties = {
+  minHeight: 0,
+  overflowY: "auto",
+  borderRight: "1px solid var(--border-dim)",
+  padding: 6,
+};
+
+const localHistoryPaneStyle: CSSProperties = {
+  minWidth: 0,
+  minHeight: 0,
+  display: "flex",
+  flexDirection: "column",
+};
+
+const localHistoryComparisonStyle: CSSProperties = {
+  flex: 1,
+  minHeight: 0,
+  display: "grid",
+  gridTemplateColumns: "1fr 1fr",
+};
+
+const localHistoryTextStyle: CSSProperties = {
+  flex: 1,
+  minHeight: 0,
+  margin: 0,
+  padding: 10,
+  overflow: "auto",
+  border: "none",
+  borderTop: "1px solid var(--border-dim)",
+  background: "var(--bg-panel)",
+  color: "var(--text-secondary)",
+  fontFamily: "var(--font-mono)",
+  fontSize: 12,
+  lineHeight: 1.5,
+  whiteSpace: "pre",
+};
+
+function summarizeWorkspaceEdit(edit: LspWorkspaceEdit): { files: number; edits: number } {
+  return {
+    files: edit.files.length,
+    edits: edit.files.reduce((count, file) => count + file.edits.length, 0),
+  };
+}
+
 function MarkdownToc({
   toc,
   activeId,
@@ -481,6 +962,312 @@ function MarkdownToc({
   );
 }
 
+function CodeOutline({
+  symbols,
+  activeKeys,
+  loading,
+  error,
+  truncated,
+  onJump,
+}: {
+  symbols: LspSymbol[];
+  activeKeys: Set<string>;
+  loading: boolean;
+  error: string | null;
+  truncated: boolean;
+  onJump: (symbol: LspSymbol) => void;
+}) {
+  const { t } = useI18n();
+  const [open, setOpen] = useState(true);
+
+  return (
+    <div className={`md-toc${open ? "" : " md-toc-collapsed"}`}>
+      <button
+        type="button"
+        className="md-toc-toggle"
+        onClick={() => setOpen((prev) => !prev)}
+        title={t("file.outline")}
+      >
+        {open ? <List size={13} /> : <ChevronRight size={13} />}
+        <span>{t("file.outline")}</span>
+      </button>
+      {open && (
+        <nav className="md-toc-list" aria-label={t("file.outline")}>
+          {loading && symbols.length === 0 ? (
+            <div style={outlineMessageStyle}>{t("file.outlineLoading")}</div>
+          ) : error ? (
+            <div style={outlineErrorStyle}>{t("file.outlineFailed", { error })}</div>
+          ) : symbols.length === 0 ? (
+            <div style={outlineMessageStyle}>{t("file.noOutlineSymbols")}</div>
+          ) : (
+            <>
+              {truncated ? (
+                <div style={outlineMessageStyle}>
+                  {t("file.outlineTruncated", { count: String(symbols.length) })}
+                </div>
+              ) : null}
+              {symbols.map((symbol) => {
+                const key = outlineSymbolKey(symbol);
+                return (
+                  <button
+                    key={key}
+                    type="button"
+                    data-depth={Math.min(outlineSymbolDepth(symbol, symbols), 6)}
+                    className={`md-toc-item${activeKeys.has(key) ? " active" : ""}`}
+                    onClick={() => onJump(symbol)}
+                    title={[symbol.containerName, symbol.detail, symbol.name]
+                      .filter(Boolean)
+                      .join(" · ")}
+                  >
+                    {symbol.name}
+                  </button>
+                );
+              })}
+            </>
+          )}
+        </nav>
+      )}
+    </div>
+  );
+}
+
+function FileBreadcrumbs({
+  pathSegments,
+  symbols,
+  label,
+  onJump,
+}: {
+  pathSegments: { label: string; title: string }[];
+  symbols: LspSymbol[];
+  label: string;
+  onJump: (symbol: LspSymbol) => void;
+}) {
+  return (
+    <nav aria-label={label} style={breadcrumbStyle}>
+      {pathSegments.map((segment, index) => (
+        <span key={`${segment.title}:${index}`} style={breadcrumbSegmentStyle} title={segment.title}>
+          {index > 0 ? <ChevronRight size={10} style={breadcrumbSeparatorStyle} /> : null}
+          <span style={breadcrumbTextStyle}>{segment.label}</span>
+        </span>
+      ))}
+      {symbols.map((symbol) => (
+        <button
+          key={outlineSymbolKey(symbol)}
+          type="button"
+          style={breadcrumbSymbolButtonStyle}
+          title={symbol.detail ?? symbol.name}
+          onClick={() => onJump(symbol)}
+        >
+          <ChevronRight size={10} style={breadcrumbSeparatorStyle} />
+          <span style={breadcrumbTextStyle}>{symbol.name}</span>
+        </button>
+      ))}
+    </nav>
+  );
+}
+
+function CodeStickyScroll({
+  symbols,
+  label,
+  onJump,
+}: {
+  symbols: LspSymbol[];
+  label: string;
+  onJump: (symbol: LspSymbol) => void;
+}) {
+  if (symbols.length === 0) return null;
+  return (
+    <nav aria-label={label} style={stickyScrollStyle}>
+      {symbols.map((symbol, index) => (
+        <button
+          key={outlineSymbolKey(symbol)}
+          type="button"
+          style={stickyScrollButtonStyle}
+          title={symbol.detail ?? symbol.name}
+          onClick={() => onJump(symbol)}
+        >
+          {index > 0 ? <ChevronRight size={10} style={breadcrumbSeparatorStyle} /> : null}
+          <span style={breadcrumbTextStyle}>{symbol.name}</span>
+        </button>
+      ))}
+    </nav>
+  );
+}
+
+function formatLocalHistoryDate(createdAtMs: number): string {
+  return new Date(createdAtMs).toLocaleString();
+}
+
+function formatLocalHistorySize(size: number): string {
+  if (size < 1024) return `${size} B`;
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
+  return `${(size / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function changedLineCount(snapshotContent: string, currentContent: string): number {
+  const snapshotLines = snapshotContent.split("\n");
+  const currentLines = currentContent.split("\n");
+  const count = Math.max(snapshotLines.length, currentLines.length);
+  let changed = 0;
+  for (let index = 0; index < count; index += 1) {
+    if ((snapshotLines[index] ?? "") !== (currentLines[index] ?? "")) changed += 1;
+  }
+  return changed;
+}
+
+function LocalHistoryDialog({
+  targetName,
+  entries,
+  selectedEntryId,
+  snapshot,
+  currentContent,
+  loading,
+  snapshotLoading,
+  restoring,
+  error,
+  onSelectEntry,
+  onRestore,
+  onClose,
+}: {
+  targetName: string;
+  entries: LocalHistoryEntry[];
+  selectedEntryId: string | null;
+  snapshot: LocalHistorySnapshot | null;
+  currentContent: string;
+  loading: boolean;
+  snapshotLoading: boolean;
+  restoring: boolean;
+  error: string | null;
+  onSelectEntry: (entryId: string) => void;
+  onRestore: () => void;
+  onClose: () => void;
+}) {
+  const { t } = useI18n();
+  const changedLines = snapshot ? changedLineCount(snapshot.content, currentContent) : 0;
+
+  return (
+    <div style={localHistoryOverlayStyle}>
+      <section role="dialog" aria-modal="true" aria-label={t("file.localHistory")} style={localHistoryDialogStyle}>
+        <div style={localHistoryHeaderStyle}>
+          <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" }}>
+            {t("file.localHistory")} - {targetName}
+          </span>
+          <button
+            type="button"
+            disabled={!snapshot || restoring}
+            onClick={onRestore}
+            style={{
+              marginLeft: "auto",
+              height: 26,
+              padding: "0 10px",
+              border: "1px solid var(--accent)",
+              borderRadius: 5,
+              background: snapshot && !restoring ? "var(--accent)" : "var(--bg-hover)",
+              color: snapshot && !restoring ? "var(--accent-fg)" : "var(--text-hint)",
+              fontSize: 12,
+              cursor: snapshot && !restoring ? "pointer" : "default",
+            }}
+          >
+            {restoring ? t("file.localHistoryRestoring") : t("file.localHistoryRestore")}
+          </button>
+          <button
+            type="button"
+            aria-label={t("common.close")}
+            onClick={onClose}
+            style={{
+              border: "none",
+              background: "transparent",
+              color: "var(--text-hint)",
+              cursor: "pointer",
+              padding: 3,
+              display: "flex",
+            }}
+          >
+            <X size={15} />
+          </button>
+        </div>
+        <div style={localHistoryBodyStyle}>
+          <div style={localHistoryListStyle}>
+            {loading ? (
+              <div style={outlineMessageStyle}>{t("file.localHistoryLoading")}</div>
+            ) : error ? (
+              <div style={outlineErrorStyle}>{t("file.localHistoryFailed", { error })}</div>
+            ) : entries.length === 0 ? (
+              <div style={outlineMessageStyle}>{t("file.localHistoryEmpty")}</div>
+            ) : (
+              entries.map((entry) => {
+                const active = entry.id === selectedEntryId;
+                return (
+                  <button
+                    key={entry.id}
+                    type="button"
+                    onClick={() => onSelectEntry(entry.id)}
+                    className="file-viewer-tab-menu-item"
+                    style={{
+                      width: "100%",
+                      minHeight: 44,
+                      display: "flex",
+                      flexDirection: "column",
+                      alignItems: "flex-start",
+                      justifyContent: "center",
+                      gap: 2,
+                      borderRadius: 5,
+                      background: active ? "var(--bg-hover)" : "transparent",
+                    }}
+                  >
+                    <span style={{ color: "var(--text-secondary)" }}>
+                      {formatLocalHistoryDate(entry.createdAtMs)}
+                    </span>
+                    <span style={{ color: "var(--text-hint)", fontSize: 11 }}>
+                      {formatLocalHistorySize(entry.size)}
+                    </span>
+                  </button>
+                );
+              })
+            )}
+          </div>
+          <div style={localHistoryPaneStyle}>
+            <div
+              style={{
+                minHeight: 32,
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
+                padding: "0 10px",
+                color: "var(--text-muted)",
+                fontSize: 12,
+                borderBottom: "1px solid var(--border-dim)",
+              }}
+            >
+              {snapshotLoading
+                ? t("file.localHistorySnapshotLoading")
+                : snapshot
+                  ? t("file.localHistoryChangedLines", { count: String(changedLines) })
+                  : t("file.localHistoryNoSnapshot")}
+            </div>
+            <div style={localHistoryComparisonStyle}>
+              <div style={{ ...localHistoryPaneStyle, borderRight: "1px solid var(--border-dim)" }}>
+                <div style={{ padding: "7px 10px", fontSize: 12, color: "var(--text-muted)" }}>
+                  {t("file.localHistorySnapshot")}
+                </div>
+                <pre style={localHistoryTextStyle}>
+                  {snapshot?.content ?? ""}
+                </pre>
+              </div>
+              <div style={localHistoryPaneStyle}>
+                <div style={{ padding: "7px 10px", fontSize: 12, color: "var(--text-muted)" }}>
+                  {t("file.localHistoryCurrent")}
+                </div>
+                <pre style={localHistoryTextStyle}>{currentContent}</pre>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+    </div>
+  );
+}
+
 function FilePreviewPane({
   filePath,
   fileName,
@@ -489,8 +1276,13 @@ function FilePreviewPane({
   previewMode,
   selection,
   remote,
+  diagnostics = [],
+  coverage,
   debugBreakpoints = [],
   onToggleDebugBreakpoint,
+  onRunTestTarget,
+  onDebugTestTarget,
+  onOpenDefinition,
   onDirtyChange,
 }: {
   filePath: string;
@@ -500,8 +1292,13 @@ function FilePreviewPane({
   previewMode: boolean;
   selection?: OpenFileSelection;
   remote?: RemoteFileContext;
+  diagnostics?: DiagnosticItem[];
+  coverage?: TestCoverageSummary | null;
   debugBreakpoints?: DebugBreakpoint[];
   onToggleDebugBreakpoint?: (filePath: string, line: number) => void;
+  onRunTestTarget?: (target: EditorTestRunTarget) => void;
+  onDebugTestTarget?: (target: EditorTestRunTarget) => void;
+  onOpenDefinition?: (path: string, name: string, selection?: OpenFileSelection) => void;
   onDirtyChange?: (path: string, dirty: boolean) => void;
 }) {
   const editorTheme =
@@ -518,6 +1315,33 @@ function FilePreviewPane({
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("idle");
   const [formatting, setFormatting] = useState(false);
   const [formatError, setFormatError] = useState<string | null>(null);
+  const [navigationError, setNavigationError] = useState<string | null>(null);
+  const [referencesLoading, setReferencesLoading] = useState(false);
+  const [references, setReferences] = useState<LspReferenceLocation[] | null>(null);
+  const [referencePreviews, setReferencePreviews] = useState<Record<string, ReferencePreviewState>>(
+    {},
+  );
+  const [outlineSymbols, setOutlineSymbols] = useState<LspSymbol[]>([]);
+  const [outlineLoading, setOutlineLoading] = useState(false);
+  const [outlineLoaded, setOutlineLoaded] = useState(false);
+  const [outlineError, setOutlineError] = useState<string | null>(null);
+  const [outlineTruncated, setOutlineTruncated] = useState(false);
+  const [inlayHints, setInlayHints] = useState<LspInlayHint[]>([]);
+  const [inlayHintsLoading, setInlayHintsLoading] = useState(false);
+  const [inlayHintsError, setInlayHintsError] = useState<string | null>(null);
+  const [renameOpen, setRenameOpen] = useState(false);
+  const [renameName, setRenameName] = useState("");
+  const [renameLoading, setRenameLoading] = useState(false);
+  const [renameApplying, setRenameApplying] = useState(false);
+  const [renamePreview, setRenamePreview] = useState<LspWorkspaceEdit | null>(null);
+  const [renameSummary, setRenameSummary] = useState<LspApplyWorkspaceEditSummary | null>(null);
+  const [codeActionsLoading, setCodeActionsLoading] = useState(false);
+  const [codeActions, setCodeActions] = useState<LspCodeAction[] | null>(null);
+  const [codeActionApplying, setCodeActionApplying] = useState(false);
+  const [codeActionSummary, setCodeActionSummary] = useState<LspApplyWorkspaceEditSummary | null>(
+    null,
+  );
+  const [codeActionCommandSummary, setCodeActionCommandSummary] = useState<string | null>(null);
   const [formatOnSave, setFormatOnSave] = useState(false);
   const [inlineBlameVisible, setInlineBlameVisible] = useState(false);
   const [inlineBlameLoading, setInlineBlameLoading] = useState(false);
@@ -532,8 +1356,15 @@ function FilePreviewPane({
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const editorViewRef = useRef<EditorView | null>(null);
   const appliedSelectionKeyRef = useRef<string | null>(null);
+  const referencePreviewRunRef = useRef(0);
   const [activeHeadingId, setActiveHeadingId] = useState<string | null>(null);
   const [cursorPosition, setCursorPosition] = useState<CursorPosition>({ line: 1, column: 1 });
+  const [stickyPosition, setStickyPosition] = useState<CursorPosition>({ line: 1, column: 1 });
+  const [editorContextMenu, setEditorContextMenu] = useState<EditorContextMenuState | null>(null);
+  const [diagnosticSeverityFilter, setDiagnosticSeverityFilter] =
+    useState<DiagnosticSeverityFilter>("all");
+  const [diagnosticCopyCount, setDiagnosticCopyCount] = useState<number | null>(null);
+  const [diagnosticCopyError, setDiagnosticCopyError] = useState<string | null>(null);
   const showMarkdownPreview = isMarkdown && previewMode && content !== null;
   const { html: markdownHtml, toc } = useMemo(
     () => (isMarkdown && content !== null ? renderMarkdownWithToc(content) : { html: "", toc: [] }),
@@ -543,6 +1374,48 @@ function FilePreviewPane({
   const breakpointLines = useMemo(
     () => debugBreakpointLinesForFile(debugBreakpoints, projectPath, filePath),
     [debugBreakpoints, filePath, projectPath],
+  );
+  const currentFileDiagnostics = useMemo(
+    () => diagnosticsForFile(diagnostics, filePath),
+    [diagnostics, filePath],
+  );
+  const diagnosticCounts = useMemo(
+    () => diagnosticSeverityCounts(currentFileDiagnostics),
+    [currentFileDiagnostics],
+  );
+  const filteredFileDiagnostics = useMemo(
+    () => filterDiagnosticsBySeverity(currentFileDiagnostics, diagnosticSeverityFilter),
+    [currentFileDiagnostics, diagnosticSeverityFilter],
+  );
+  const groupedFileDiagnostics = useMemo(
+    () => groupDiagnosticsBySource(filteredFileDiagnostics),
+    [filteredFileDiagnostics],
+  );
+  const handleCopyDiagnostics = useCallback(async () => {
+    if (filteredFileDiagnostics.length === 0) return;
+    setDiagnosticCopyCount(null);
+    setDiagnosticCopyError(null);
+    try {
+      if (typeof navigator === "undefined" || !navigator.clipboard?.writeText) {
+        throw new Error(t("file.diagnosticsCopyUnavailable"));
+      }
+      await navigator.clipboard.writeText(diagnosticsClipboardText(filteredFileDiagnostics));
+      setDiagnosticCopyCount(filteredFileDiagnostics.length);
+    } catch (err) {
+      setDiagnosticCopyError(String(err));
+    }
+  }, [filteredFileDiagnostics, t]);
+  const diagnosticsExtension = useMemo(
+    () => createDiagnosticsExtension(currentFileDiagnostics),
+    [currentFileDiagnostics],
+  );
+  const currentFileCoverageLines = useMemo(
+    () => coverageLinesForFile(coverage, filePath),
+    [coverage, filePath],
+  );
+  const coverageExtension = useMemo(
+    () => createCoverageExtension(currentFileCoverageLines),
+    [currentFileCoverageLines],
   );
   const inlineBlamePath = useMemo(
     () => projectRelativeGitPath(projectPath, filePath),
@@ -561,6 +1434,21 @@ function FilePreviewPane({
       }),
     [breakpointLines, filePath, onToggleDebugBreakpoint, remote, t],
   );
+  const testRunTargets = useMemo(
+    () => (content === null ? [] : testRunTargetsForContent(content, filePath)),
+    [content, filePath],
+  );
+  const testRunGutter = useMemo(
+    () =>
+      createTestRunGutter({
+        targets: testRunTargets,
+        label: t("file.runTest"),
+        debugLabel: t("file.debugTest"),
+        onRunTarget: onRunTestTarget,
+        onDebugTarget: onDebugTestTarget,
+      }),
+    [onDebugTestTarget, onRunTestTarget, t, testRunTargets],
+  );
   const inlineBlameExtension = useMemo(
     () =>
       createInlineBlameExtension({
@@ -575,8 +1463,213 @@ function FilePreviewPane({
     content,
     cursorLine: cursorPosition.line,
     cursorColumn: cursorPosition.column,
-    enabled: !remote,
+    remote,
   });
+  const currentLspRequest = useCallback(() => {
+    if (!languageServer.request || content === null) return null;
+    const view = editorViewRef.current;
+    if (!view) return languageServer.request;
+    const anchor = view.state.selection.main.head;
+    const line = view.state.doc.lineAt(anchor);
+    return buildLspDocumentRequest({
+      projectPath,
+      filePath,
+      content,
+      line: line.number,
+      column: anchor - line.from + 1,
+    });
+  }, [content, filePath, languageServer.request, projectPath]);
+  const breadcrumbSegments = useMemo(
+    () => fileBreadcrumbSegments(projectPath, filePath),
+    [filePath, projectPath],
+  );
+  const activeOutlineSymbols = useMemo(
+    () => activeSymbolBreadcrumbs(outlineSymbols, cursorPosition),
+    [cursorPosition, outlineSymbols],
+  );
+  const activeOutlineKeys = useMemo(
+    () => new Set(activeOutlineSymbols.map(outlineSymbolKey)),
+    [activeOutlineSymbols],
+  );
+  const stickyOutlineSymbols = useMemo(
+    () => activeSymbolBreadcrumbs(outlineSymbols, stickyPosition),
+    [outlineSymbols, stickyPosition],
+  );
+  const showCodeOutline = Boolean(
+    !isMarkdown &&
+      !isPreviewableImage &&
+      content !== null &&
+      languageServer.supported &&
+      (outlineLoading || outlineLoaded || outlineError),
+  );
+  const showStickyScroll = Boolean(
+    !isMarkdown &&
+      !isPreviewableImage &&
+      content !== null &&
+      languageServer.supported &&
+      stickyOutlineSymbols.length > 0,
+  );
+  const jumpToOutlineSymbol = useCallback(
+    (symbol: LspSymbol) => {
+      if (content === null) return;
+      const view = editorViewRef.current;
+      if (!view) return;
+      const selection = lspSymbolToSelection(symbol);
+      const offset = lineColumnToOffset(content, selection);
+      view.dispatch({
+        selection: { anchor: offset },
+        effects: EditorView.scrollIntoView(offset, { y: "center" }),
+      });
+      setCursorPosition({ line: selection.line, column: selection.column ?? 1 });
+      setStickyPosition({ line: selection.line, column: selection.column ?? 1 });
+      setNavigationError(null);
+      view.focus();
+    },
+    [content],
+  );
+  const handleOpenLspTarget = useCallback(
+    (target: LspOpenTarget) => {
+      setNavigationError(null);
+      onOpenDefinition?.(target.path, target.name, target.selection);
+    },
+    [onOpenDefinition],
+  );
+  const lspNavigationExtension = useMemo(
+    () =>
+      createLspNavigationExtension({
+        request: languageServer.request,
+        available: Boolean(languageServer.status?.available),
+        unavailableMessage: languageServer.message,
+        remote,
+        onOpenTarget: handleOpenLspTarget,
+        onError: setNavigationError,
+      }),
+    [
+      handleOpenLspTarget,
+      languageServer.message,
+      languageServer.request,
+      languageServer.status?.available,
+      remote,
+    ],
+  );
+  const lspHoverExtension = useMemo(
+    () =>
+      createLspHoverExtension({
+        request: languageServer.request,
+        available: Boolean(languageServer.status?.available),
+        unavailableMessage: languageServer.message,
+        remote,
+        onError: setNavigationError,
+      }),
+    [languageServer.message, languageServer.request, languageServer.status?.available, remote],
+  );
+  const lspCompletionExtension = useMemo(
+    () =>
+      createLspCompletionExtension({
+        request: languageServer.request,
+        available: Boolean(languageServer.status?.available),
+        unavailableMessage: languageServer.message,
+        remote,
+        onError: setNavigationError,
+      }),
+    [languageServer.message, languageServer.request, languageServer.status?.available, remote],
+  );
+  const lspSignatureHelpExtension = useMemo(
+    () =>
+      createLspSignatureHelpExtension({
+        request: languageServer.request,
+        available: Boolean(languageServer.status?.available),
+        unavailableMessage: languageServer.message,
+        remote,
+        onError: setNavigationError,
+      }),
+    [languageServer.message, languageServer.request, languageServer.status?.available, remote],
+  );
+  const lspInlayHintsExtension = useMemo(
+    () => createLspInlayHintsExtension(inlayHints),
+    [inlayHints],
+  );
+  const loadReferencePreviews = useCallback(
+    async (locations: LspReferenceLocation[], sourceContent: string) => {
+      const runId = referencePreviewRunRef.current + 1;
+      referencePreviewRunRef.current = runId;
+      setReferencePreviews(
+        Object.fromEntries(
+          locations.map((location, index) => [lspReferenceKey(location, index), { status: "loading" }]),
+        ),
+      );
+
+      const entries = await Promise.all(
+        locations.map(async (location, index): Promise<[string, ReferencePreviewState]> => {
+          const key = lspReferenceKey(location, index);
+          try {
+            const targetContent =
+              location.path === filePath
+                ? sourceContent
+                : await invoke<string>(
+                    remote ? "remote_read_file_content" : "read_file_content",
+                    remote
+                      ? {
+                          connection: remote.connection,
+                          remotePath: location.path,
+                          remoteProjectPath: remote.projectPath,
+                        }
+                      : { path: location.path, projectPath },
+                  );
+            return [key, { status: "ready", preview: lspReferencePreviewLine(targetContent, location) }];
+          } catch (err) {
+            return [key, { status: "error", error: String(err) }];
+          }
+        }),
+      );
+
+      if (referencePreviewRunRef.current !== runId) return;
+      setReferencePreviews(Object.fromEntries(entries));
+    },
+    [filePath, projectPath, remote],
+  );
+  const handleFindReferences = useCallback(async () => {
+    const request = currentLspRequest();
+    if (!request) return;
+    setReferences(null);
+    setReferencePreviews({});
+    setNavigationError(null);
+    if (!languageServer.status?.available) {
+      setNavigationError(languageServer.message ?? "Language server is unavailable.");
+      return;
+    }
+    setReferencesLoading(true);
+    try {
+      const nextReferences = await findLspReferences(request, remote);
+      if (nextReferences.length === 0) {
+        setNavigationError(t("file.noReferencesFound"));
+        return;
+      }
+      setReferences(nextReferences);
+      void loadReferencePreviews(nextReferences, request.content);
+    } catch (err) {
+      setNavigationError(String(err));
+    } finally {
+      setReferencesLoading(false);
+    }
+  }, [
+    currentLspRequest,
+    languageServer.message,
+    languageServer.status?.available,
+    loadReferencePreviews,
+    remote,
+    t,
+  ]);
+  const openReference = useCallback(
+    (reference: LspReferenceLocation) => {
+      const target = lspReferenceToOpenTarget(reference);
+      setReferences(null);
+      setReferencePreviews({});
+      referencePreviewRunRef.current += 1;
+      onOpenDefinition?.(target.path, target.name, target.selection);
+    },
+    [onOpenDefinition],
+  );
 
   const jumpToHeading = (id: string) => {
     const target = scrollRef.current?.querySelector<HTMLElement>(`#${CSS.escape(id)}`);
@@ -604,6 +1697,128 @@ function FilePreviewPane({
   }, [showMarkdownPreview, toc]);
 
   useEffect(() => {
+    if (isPreviewableImage || isMarkdown || content === null || !languageServer.supported) {
+      setOutlineSymbols([]);
+      setOutlineLoading(false);
+      setOutlineLoaded(false);
+      setOutlineError(null);
+      setOutlineTruncated(false);
+      return;
+    }
+    if (!languageServer.status) return;
+    if (!languageServer.status.available) {
+      setOutlineSymbols([]);
+      setOutlineLoading(false);
+      setOutlineLoaded(true);
+      setOutlineError(languageServer.message ?? "Language server is unavailable.");
+      setOutlineTruncated(false);
+      return;
+    }
+
+    let cancelled = false;
+    const request = buildLspDocumentRequest({
+      projectPath,
+      filePath,
+      content,
+      line: 1,
+      column: 1,
+    });
+    setOutlineLoading(true);
+    setOutlineError(null);
+    const timer = window.setTimeout(() => {
+      void requestLspDocumentOutline(request, remote)
+        .then((outline) => {
+          if (cancelled) return;
+          setOutlineSymbols(outline.symbols);
+          setOutlineTruncated(outline.truncated);
+          setOutlineLoaded(true);
+        })
+        .catch((err) => {
+          if (cancelled) return;
+          setOutlineSymbols([]);
+          setOutlineTruncated(false);
+          setOutlineLoaded(true);
+          setOutlineError(String(err));
+        })
+        .finally(() => {
+          if (!cancelled) setOutlineLoading(false);
+        });
+    }, 250);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [
+    content,
+    filePath,
+    isMarkdown,
+    isPreviewableImage,
+    languageServer.message,
+    languageServer.status,
+    languageServer.supported,
+    projectPath,
+    remote,
+  ]);
+
+  useEffect(() => {
+    if (isPreviewableImage || isMarkdown || content === null || !languageServer.supported) {
+      setInlayHints([]);
+      setInlayHintsLoading(false);
+      setInlayHintsError(null);
+      return;
+    }
+    if (!languageServer.status) return;
+    if (!languageServer.status.available) {
+      setInlayHints([]);
+      setInlayHintsLoading(false);
+      setInlayHintsError(languageServer.message ?? "Language server is unavailable.");
+      return;
+    }
+
+    let cancelled = false;
+    const request = buildLspDocumentRequest({
+      projectPath,
+      filePath,
+      content,
+      line: 1,
+      column: 1,
+    });
+    setInlayHintsLoading(true);
+    setInlayHintsError(null);
+    const timer = window.setTimeout(() => {
+      void requestLspInlayHints(request, remote)
+        .then((hints) => {
+          if (!cancelled) setInlayHints(hints);
+        })
+        .catch((err) => {
+          if (!cancelled) {
+            setInlayHints([]);
+            setInlayHintsError(String(err));
+          }
+        })
+        .finally(() => {
+          if (!cancelled) setInlayHintsLoading(false);
+        });
+    }, 300);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [
+    content,
+    filePath,
+    isMarkdown,
+    isPreviewableImage,
+    languageServer.message,
+    languageServer.status,
+    languageServer.supported,
+    projectPath,
+    remote,
+  ]);
+
+  useEffect(() => {
     let cancelled = false;
 
     saveRevisionRef.current += 1;
@@ -612,12 +1827,35 @@ function FilePreviewPane({
     setImagePreview(null);
     setError(null);
     setFormatError(null);
+    setNavigationError(null);
+    setReferences(null);
+    setReferencePreviews({});
+    referencePreviewRunRef.current += 1;
+    setOutlineSymbols([]);
+    setOutlineLoading(false);
+    setOutlineLoaded(false);
+    setOutlineError(null);
+    setOutlineTruncated(false);
+    setInlayHints([]);
+    setInlayHintsLoading(false);
+    setInlayHintsError(null);
+    setRenameOpen(false);
+    setRenamePreview(null);
+    setRenameSummary(null);
+    setCodeActions(null);
+    setCodeActionSummary(null);
+    setCodeActionCommandSummary(null);
+    setCodeActionCommandSummary(null);
     setSaveStatus("idle");
     setInlineBlameVisible(false);
     setInlineBlameLoading(false);
     setInlineBlame(null);
     setInlineBlameError(null);
     setCursorPosition({ line: 1, column: 1 });
+    setStickyPosition({ line: 1, column: 1 });
+    setDiagnosticSeverityFilter("all");
+    setDiagnosticCopyCount(null);
+    setDiagnosticCopyError(null);
     editorViewRef.current = null;
     appliedSelectionKeyRef.current = null;
     onDirtyChange?.(filePath, false);
@@ -753,6 +1991,244 @@ function FilePreviewPane({
     [filePath, formatOnSave, onDirtyChange, projectPath, remote],
   );
 
+  const handleOpenRename = useCallback(() => {
+    setReferences(null);
+    setNavigationError(null);
+    setRenameSummary(null);
+    setRenamePreview(null);
+    setRenameName("");
+    setRenameOpen(true);
+  }, []);
+
+  const handlePreviewRename = useCallback(async () => {
+    const request = currentLspRequest();
+    if (!request || content === null) return;
+    const nextName = renameName.trim();
+    if (!nextName) return;
+    setNavigationError(null);
+    setRenameSummary(null);
+    setRenamePreview(null);
+    if (!languageServer.status?.available) {
+      setNavigationError(languageServer.message ?? "Language server is unavailable.");
+      return;
+    }
+    setRenameLoading(true);
+    try {
+      if (saveStatus === "dirty") {
+        const saved = await saveContent(content, { formatAfterSave: false });
+        if (!saved) return;
+      }
+      const edit = await requestLspRename(request, nextName, remote);
+      setRenamePreview(edit);
+    } catch (err) {
+      setNavigationError(String(err));
+    } finally {
+      setRenameLoading(false);
+    }
+  }, [
+    content,
+    currentLspRequest,
+    languageServer.message,
+    languageServer.status?.available,
+    renameName,
+    remote,
+    saveContent,
+    saveStatus,
+  ]);
+
+  const handleApplyRename = useCallback(async () => {
+    if (!renamePreview || renameApplying) return;
+    setNavigationError(null);
+    setRenameApplying(true);
+    try {
+      const summary = await applyLspWorkspaceEdit(projectPath, renamePreview, remote);
+      setRenameSummary(summary);
+      setRenameOpen(false);
+      setRenamePreview(null);
+      const touchesCurrentFile = renamePreview.files.some((file) => file.path === filePath);
+      if (touchesCurrentFile) {
+        const nextContent = await invoke<string>(
+          remote ? "remote_read_file_content" : "read_file_content",
+          remote
+            ? {
+                connection: remote.connection,
+                remotePath: filePath,
+                remoteProjectPath: remote.projectPath,
+              }
+            : {
+                path: filePath,
+                projectPath,
+              },
+        );
+        setContent(nextContent);
+        onDirtyChange?.(filePath, false);
+        setSaveStatus("saved");
+        savedResetRef.current = setTimeout(() => setSaveStatus("idle"), 2000);
+      }
+    } catch (err) {
+      setNavigationError(String(err));
+    } finally {
+      setRenameApplying(false);
+    }
+  }, [filePath, onDirtyChange, projectPath, remote, renameApplying, renamePreview]);
+
+  const handleQuickFix = useCallback(async () => {
+    const request = currentLspRequest();
+    if (!request || content === null) return;
+    setNavigationError(null);
+    setReferences(null);
+    setRenameOpen(false);
+    setCodeActions(null);
+    setCodeActionSummary(null);
+    setCodeActionCommandSummary(null);
+    if (!languageServer.status?.available) {
+      setNavigationError(languageServer.message ?? "Language server is unavailable.");
+      return;
+    }
+    setCodeActionsLoading(true);
+    try {
+      if (saveStatus === "dirty") {
+        const saved = await saveContent(content, { formatAfterSave: false });
+        if (!saved) return;
+      }
+      const actions = await requestLspCodeActions(
+        request,
+        diagnosticsForLspCodeAction(request, currentFileDiagnostics),
+        remote,
+      );
+      if (actions.length === 0) {
+        setNavigationError(t("file.noCodeActionsFound"));
+        return;
+      }
+      setCodeActions(actions);
+    } catch (err) {
+      setNavigationError(String(err));
+    } finally {
+      setCodeActionsLoading(false);
+    }
+  }, [
+    content,
+    currentLspRequest,
+    currentFileDiagnostics,
+    languageServer.message,
+    languageServer.status?.available,
+    remote,
+    saveContent,
+    saveStatus,
+    t,
+  ]);
+
+  const runEditorLspCommand = useCallback(
+    (command: FileViewerCommand) => {
+      if (isPreviewableImage || content === null || !languageServer.supported) return;
+
+      if (command === "findReferences") {
+        void handleFindReferences();
+      } else if (command === "renameSymbol") {
+        handleOpenRename();
+      } else {
+        void handleQuickFix();
+      }
+    },
+    [
+      content,
+      handleFindReferences,
+      handleOpenRename,
+      handleQuickFix,
+      isPreviewableImage,
+      languageServer.supported,
+    ],
+  );
+
+  useEffect(() => {
+    const onEditorCommand = (event: Event) => {
+      const command = (event as CustomEvent<{ command?: unknown }>).detail?.command;
+      if (!isFileViewerCommand(command)) return;
+      runEditorLspCommand(command);
+    };
+
+    window.addEventListener(FILE_VIEWER_COMMAND_EVENT, onEditorCommand);
+    return () => window.removeEventListener(FILE_VIEWER_COMMAND_EVENT, onEditorCommand);
+  }, [runEditorLspCommand]);
+
+  const closeEditorContextMenu = useCallback(() => {
+    setEditorContextMenu(null);
+  }, []);
+
+  const runEditorContextMenuCommand = useCallback(
+    (command: FileViewerCommand) => {
+      closeEditorContextMenu();
+      runEditorLspCommand(command);
+    },
+    [closeEditorContextMenu, runEditorLspCommand],
+  );
+
+  useEffect(() => {
+    if (!editorContextMenu) return;
+    const closeOnWindowClick = () => closeEditorContextMenu();
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") closeEditorContextMenu();
+    };
+    window.addEventListener("click", closeOnWindowClick);
+    window.addEventListener("keydown", closeOnEscape);
+    window.addEventListener("resize", closeEditorContextMenu);
+    return () => {
+      window.removeEventListener("click", closeOnWindowClick);
+      window.removeEventListener("keydown", closeOnEscape);
+      window.removeEventListener("resize", closeEditorContextMenu);
+    };
+  }, [closeEditorContextMenu, editorContextMenu]);
+
+  useEffect(() => {
+    closeEditorContextMenu();
+  }, [closeEditorContextMenu, filePath]);
+
+  const handleApplyCodeAction = useCallback(
+    async (action: LspCodeAction) => {
+      if ((!action.edit && !action.command) || codeActionApplying) return;
+      const request = currentLspRequest();
+      if (action.command && !request) return;
+      setNavigationError(null);
+      setCodeActionApplying(true);
+      try {
+        if (action.edit) {
+          const summary = await applyLspWorkspaceEdit(projectPath, action.edit, remote);
+          setCodeActionSummary(summary);
+          const touchesCurrentFile = action.edit.files.some((file) => file.path === filePath);
+          if (touchesCurrentFile) {
+            const nextContent = await invoke<string>(
+              remote ? "remote_read_file_content" : "read_file_content",
+              remote
+                ? {
+                    connection: remote.connection,
+                    remotePath: filePath,
+                    remoteProjectPath: remote.projectPath,
+                  }
+                : {
+                    path: filePath,
+                    projectPath,
+                  },
+            );
+            setContent(nextContent);
+            onDirtyChange?.(filePath, false);
+            setSaveStatus("saved");
+            savedResetRef.current = setTimeout(() => setSaveStatus("idle"), 2000);
+          }
+        }
+        if (action.command && request) {
+          await executeLspCommand(request, action.command, remote);
+          setCodeActionCommandSummary(action.command.title ?? action.title);
+        }
+        setCodeActions(null);
+      } catch (err) {
+        setNavigationError(String(err));
+      } finally {
+        setCodeActionApplying(false);
+      }
+    },
+    [codeActionApplying, currentLspRequest, filePath, onDirtyChange, projectPath, remote],
+  );
+
   const handleFormatFile = useCallback(async () => {
     if (remote || content === null || isPreviewableImage || formatting) return;
     const formatRun = formatRunRef.current + 1;
@@ -837,6 +2313,11 @@ function FilePreviewPane({
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     if (savedResetRef.current) clearTimeout(savedResetRef.current);
     setFormatError(null);
+    setNavigationError(null);
+    setReferences(null);
+    setRenameSummary(null);
+    setCodeActions(null);
+    setCodeActionSummary(null);
     onDirtyChange?.(filePath, true);
     setSaveStatus("dirty");
     saveTimerRef.current = setTimeout(() => {
@@ -861,8 +2342,33 @@ function FilePreviewPane({
     };
   }, [fileName]);
   const extensions = useMemo(
-    () => [languageExtension, debugBreakpointGutter, inlineBlameExtension, editorBaseTheme],
-    [debugBreakpointGutter, inlineBlameExtension, languageExtension],
+    () => [
+      languageExtension,
+      testRunGutter,
+      debugBreakpointGutter,
+      coverageExtension,
+      diagnosticsExtension,
+      inlineBlameExtension,
+      lspNavigationExtension,
+      lspHoverExtension,
+      lspCompletionExtension,
+      lspSignatureHelpExtension,
+      lspInlayHintsExtension,
+      editorBaseTheme,
+    ],
+    [
+      coverageExtension,
+      debugBreakpointGutter,
+      diagnosticsExtension,
+      inlineBlameExtension,
+      languageExtension,
+      lspCompletionExtension,
+      lspHoverExtension,
+      lspInlayHintsExtension,
+      lspNavigationExtension,
+      lspSignatureHelpExtension,
+      testRunGutter,
+    ],
   );
 
   const applySelection = useCallback(
@@ -875,6 +2381,7 @@ function FilePreviewPane({
       });
       const line = view.state.doc.lineAt(offset);
       setCursorPosition({ line: line.number, column: offset - line.from + 1 });
+      setStickyPosition({ line: line.number, column: 1 });
       appliedSelectionKeyRef.current = selectionKey;
       view.focus();
     },
@@ -885,7 +2392,50 @@ function FilePreviewPane({
     const anchor = update.state.selection.main.head;
     const line = update.state.doc.lineAt(anchor);
     setCursorPosition({ line: line.number, column: anchor - line.from + 1 });
+    const updateView = (update as ViewUpdate & { view?: { viewport?: { from?: number } } }).view;
+    const viewportFrom =
+      typeof updateView?.viewport?.from === "number" ? Math.max(0, updateView.viewport.from) : anchor;
+    const viewportLine = update.state.doc.lineAt(viewportFrom);
+    setStickyPosition({ line: viewportLine.number, column: 1 });
   }, []);
+
+  const jumpToDiagnostic = useCallback(
+    (direction: 1 | -1) => {
+      if (content === null || currentFileDiagnostics.length === 0) return;
+      const target = nextDiagnosticTarget(currentFileDiagnostics, cursorPosition, direction);
+      const view = editorViewRef.current;
+      if (!target || !view) return;
+      const offset = lineColumnToOffset(content, target);
+      view.dispatch({
+        selection: { anchor: offset },
+        effects: EditorView.scrollIntoView(offset, { y: "center" }),
+      });
+      view.focus();
+      setCursorPosition(target);
+      setStickyPosition({ line: target.line, column: 1 });
+      setNavigationError(null);
+    },
+    [content, currentFileDiagnostics, cursorPosition],
+  );
+
+  const openDiagnostic = useCallback(
+    (diagnostic: DiagnosticItem) => {
+      if (content === null) return;
+      const view = editorViewRef.current;
+      if (!view) return;
+      const target = { line: diagnostic.line, column: diagnostic.column };
+      const offset = lineColumnToOffset(content, target);
+      view.dispatch({
+        selection: { anchor: offset },
+        effects: EditorView.scrollIntoView(offset, { y: "center" }),
+      });
+      view.focus();
+      setCursorPosition(target);
+      setStickyPosition({ line: target.line, column: 1 });
+      setNavigationError(null);
+    },
+    [content],
+  );
 
   useEffect(() => {
     if (content === null || isPreviewableImage) return;
@@ -940,6 +2490,21 @@ function FilePreviewPane({
           event.preventDefault();
           event.stopPropagation();
           void saveContent(content);
+        }
+        if (event.key === "F2" && content !== null) {
+          event.preventDefault();
+          event.stopPropagation();
+          jumpToDiagnostic(event.shiftKey ? -1 : 1);
+        }
+        if (
+          (event.metaKey || event.ctrlKey) &&
+          event.key === "." &&
+          content !== null &&
+          languageServer.supported
+        ) {
+          event.preventDefault();
+          event.stopPropagation();
+          void handleQuickFix();
         }
       }}
     >
@@ -1004,29 +2569,552 @@ function FilePreviewPane({
                 </div>
               </div>
             ) : (
-              <ReactCodeMirror
-                value={content}
-                onChange={handleChange}
-                onCreateEditor={(view) => {
-                  editorViewRef.current = view;
-                  applySelection(view, content);
-                }}
-                onUpdate={updateCursorPosition}
-                theme={editorTheme}
-                extensions={extensions}
-                height="100%"
-                style={{ height: "100%" }}
-                basicSetup={{
-                  lineNumbers: true,
-                  foldGutter: true,
-                  highlightActiveLine: true,
-                  highlightSelectionMatches: true,
-                  autocompletion: false,
-                  searchKeymap: true,
-                }}
-              />
+              <div style={{ height: "100%", display: "flex", minWidth: 0, minHeight: 0 }}>
+                {showCodeOutline ? (
+                  <CodeOutline
+                    symbols={outlineSymbols}
+                    activeKeys={activeOutlineKeys}
+                    loading={outlineLoading}
+                    error={outlineError}
+                    truncated={outlineTruncated}
+                    onJump={jumpToOutlineSymbol}
+                  />
+                ) : null}
+                <div
+                  style={{
+                    flex: 1,
+                    minWidth: 0,
+                    minHeight: 0,
+                    display: "flex",
+                    flexDirection: "column",
+                  }}
+                >
+                  {showStickyScroll ? (
+                    <CodeStickyScroll
+                      symbols={stickyOutlineSymbols}
+                      label={t("file.stickyScroll")}
+                      onJump={jumpToOutlineSymbol}
+                    />
+                  ) : null}
+                  <div
+                    style={{ flex: 1, minWidth: 0, minHeight: 0 }}
+                    onContextMenu={(event) => {
+                      if (isPreviewableImage || content === null || !languageServer.supported) {
+                        closeEditorContextMenu();
+                        return;
+                      }
+                      event.preventDefault();
+                      setEditorContextMenu({
+                        x: Math.max(4, Math.min(event.clientX, window.innerWidth - 196)),
+                        y: Math.max(4, Math.min(event.clientY, window.innerHeight - 104)),
+                      });
+                    }}
+                  >
+                    <ReactCodeMirror
+                      value={content}
+                      onChange={handleChange}
+                      onCreateEditor={(view) => {
+                        editorViewRef.current = view;
+                        applySelection(view, content);
+                      }}
+                      onUpdate={updateCursorPosition}
+                      theme={editorTheme}
+                      extensions={extensions}
+                      height="100%"
+                      style={{ height: "100%" }}
+                      basicSetup={{
+                        lineNumbers: true,
+                        foldGutter: true,
+                        highlightActiveLine: true,
+                        highlightSelectionMatches: true,
+                        autocompletion: true,
+                        searchKeymap: true,
+                      }}
+                    />
+                    {editorContextMenu ? (
+                      <div
+                        role="menu"
+                        aria-label={t("file.editorActions")}
+                        style={{
+                          ...editorContextMenuStyle,
+                          left: editorContextMenu.x,
+                          top: editorContextMenu.y,
+                        }}
+                        onClick={(event) => event.stopPropagation()}
+                        onMouseDown={(event) => event.stopPropagation()}
+                      >
+                        <button
+                          type="button"
+                          role="menuitem"
+                          className="file-viewer-tab-menu-item"
+                          style={editorContextMenuItemStyle}
+                          onClick={() => runEditorContextMenuCommand("findReferences")}
+                        >
+                          <Search size={13} />
+                          {t("file.findReferences")}
+                        </button>
+                        <button
+                          type="button"
+                          role="menuitem"
+                          className="file-viewer-tab-menu-item"
+                          style={editorContextMenuItemStyle}
+                          onClick={() => runEditorContextMenuCommand("renameSymbol")}
+                        >
+                          <PencilLine size={13} />
+                          {t("file.renameSymbol")}
+                        </button>
+                        <button
+                          type="button"
+                          role="menuitem"
+                          className="file-viewer-tab-menu-item"
+                          style={editorContextMenuItemStyle}
+                          onClick={() => runEditorContextMenuCommand("quickFix")}
+                        >
+                          <Lightbulb size={13} />
+                          {t("file.quickFix")}
+                        </button>
+                      </div>
+                    ) : null}
+                  </div>
+                </div>
+              </div>
             )
           ) : null)}
+        {references && (
+          <div
+            role="dialog"
+            aria-label={t("file.referencesTitle", { count: String(references.length) })}
+            style={{
+              position: "absolute",
+              right: 12,
+              bottom: 10,
+              width: "min(460px, calc(100% - 24px))",
+              maxHeight: "min(280px, calc(100% - 24px))",
+              display: "flex",
+              flexDirection: "column",
+              border: "1px solid var(--border-dim)",
+              borderRadius: 6,
+              background: "var(--bg-card)",
+              boxShadow: "0 16px 40px color-mix(in srgb, #000 26%, transparent)",
+              overflow: "hidden",
+              zIndex: 8,
+            }}
+          >
+            <div
+              style={{
+                height: 30,
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
+                padding: "0 9px",
+                borderBottom: "1px solid var(--border-dim)",
+                color: "var(--text-primary)",
+                fontSize: 12,
+                fontWeight: 600,
+              }}
+            >
+              <Search size={13} />
+              <span style={{ flex: 1 }}>
+                {t("file.referencesTitle", { count: String(references.length) })}
+              </span>
+              <button
+                type="button"
+                aria-label={t("common.close")}
+                onClick={() => {
+                  setReferences(null);
+                  setReferencePreviews({});
+                  referencePreviewRunRef.current += 1;
+                }}
+                style={{
+                  border: "none",
+                  background: "transparent",
+                  color: "var(--text-hint)",
+                  cursor: "pointer",
+                  padding: 2,
+                  display: "flex",
+                }}
+              >
+                <X size={13} />
+              </button>
+            </div>
+            <div style={{ overflowY: "auto", padding: 4 }}>
+              {references.map((reference, index) => {
+                const line = reference.range.start.line + 1;
+                const column = reference.range.start.character + 1;
+                const label = `${reference.path}:${line}:${column}`;
+                const preview = referencePreviews[lspReferenceKey(reference, index)];
+                return (
+                  <button
+                    key={`${reference.uri}:${line}:${column}:${index}`}
+                    type="button"
+                    aria-label={label}
+                    onClick={() => openReference(reference)}
+                    style={{
+                      width: "100%",
+                      minHeight: 48,
+                      display: "flex",
+                      flexDirection: "column",
+                      alignItems: "stretch",
+                      gap: 8,
+                      padding: "5px 7px",
+                      border: "none",
+                      borderRadius: 4,
+                      background: "transparent",
+                      color: "var(--text-secondary)",
+                      cursor: "pointer",
+                      textAlign: "left",
+                      fontFamily: "var(--font-mono)",
+                      fontSize: 11.5,
+                    }}
+                    onMouseEnter={(event) => {
+                      event.currentTarget.style.background = "var(--bg-hover)";
+                    }}
+                    onMouseLeave={(event) => {
+                      event.currentTarget.style.background = "transparent";
+                    }}
+                  >
+                    <span style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+                      <span
+                        style={{
+                          minWidth: 42,
+                          color: "var(--text-hint)",
+                          fontVariantNumeric: "tabular-nums",
+                        }}
+                      >
+                        {line}:{column}
+                      </span>
+                      <span
+                        style={{
+                          minWidth: 0,
+                          overflow: "hidden",
+                          textOverflow: "ellipsis",
+                          whiteSpace: "nowrap",
+                        }}
+                      >
+                        {reference.path}
+                      </span>
+                    </span>
+                    <span
+                      style={{
+                        minWidth: 0,
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap",
+                        color: preview?.status === "error" ? "var(--warning)" : "var(--text-muted)",
+                        fontSize: 11,
+                      }}
+                    >
+                      {preview?.status === "ready"
+                        ? preview.preview.text || t("file.referencePreviewEmpty")
+                        : preview?.status === "error"
+                          ? t("file.referencePreviewFailed", { error: preview.error })
+                          : t("file.referencePreviewLoading")}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
+        {renameOpen && (
+          <div
+            role="dialog"
+            aria-label={t("file.renameSymbol")}
+            style={{
+              position: "absolute",
+              right: 12,
+              bottom: 10,
+              width: "min(520px, calc(100% - 24px))",
+              maxHeight: "min(360px, calc(100% - 24px))",
+              display: "flex",
+              flexDirection: "column",
+              border: "1px solid var(--border-dim)",
+              borderRadius: 6,
+              background: "var(--bg-card)",
+              boxShadow: "0 16px 40px color-mix(in srgb, #000 26%, transparent)",
+              overflow: "hidden",
+              zIndex: 9,
+            }}
+          >
+            <div
+              style={{
+                height: 32,
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
+                padding: "0 9px",
+                borderBottom: "1px solid var(--border-dim)",
+                color: "var(--text-primary)",
+                fontSize: 12,
+                fontWeight: 600,
+              }}
+            >
+              <PencilLine size={13} />
+              <span style={{ flex: 1 }}>{t("file.renameSymbol")}</span>
+              <button
+                type="button"
+                aria-label={t("common.close")}
+                onClick={() => setRenameOpen(false)}
+                style={{
+                  border: "none",
+                  background: "transparent",
+                  color: "var(--text-hint)",
+                  cursor: "pointer",
+                  padding: 2,
+                  display: "flex",
+                }}
+              >
+                <X size={13} />
+              </button>
+            </div>
+            <div
+              style={{
+                display: "flex",
+                gap: 8,
+                padding: 9,
+                borderBottom: "1px solid var(--border-dim)",
+              }}
+            >
+              <input
+                aria-label={t("file.renameNewName")}
+                value={renameName}
+                onChange={(event) => setRenameName(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") void handlePreviewRename();
+                  if (event.key === "Escape") setRenameOpen(false);
+                }}
+                autoFocus
+                style={{
+                  minWidth: 0,
+                  flex: 1,
+                  height: 28,
+                  border: "1px solid var(--border)",
+                  borderRadius: 5,
+                  background: "var(--bg-panel)",
+                  color: "var(--text-primary)",
+                  padding: "0 8px",
+                  fontSize: 12,
+                  fontFamily: "var(--font-mono)",
+                }}
+              />
+              <button
+                type="button"
+                disabled={renameLoading || !renameName.trim()}
+                onClick={() => void handlePreviewRename()}
+                aria-label={t("file.renamePreview")}
+                style={{
+                  height: 28,
+                  padding: "0 9px",
+                  border: "1px solid var(--border-dim)",
+                  borderRadius: 5,
+                  background: "var(--bg-hover)",
+                  color:
+                    renameLoading || !renameName.trim()
+                      ? "var(--text-hint)"
+                      : "var(--text-primary)",
+                  fontSize: 12,
+                  cursor: renameLoading || !renameName.trim() ? "default" : "pointer",
+                  flexShrink: 0,
+                }}
+              >
+                {renameLoading ? t("file.renamePreviewing") : t("file.renamePreview")}
+              </button>
+            </div>
+            {renamePreview && (
+              <>
+                <div
+                  style={{
+                    padding: "7px 9px",
+                    borderBottom: "1px solid var(--border-dim)",
+                    color: "var(--text-secondary)",
+                    fontSize: 12,
+                    fontWeight: 600,
+                  }}
+                >
+                  {(() => {
+                    const summary = summarizeWorkspaceEdit(renamePreview);
+                    return t("file.renamePreviewTitle", {
+                      files: String(summary.files),
+                      edits: String(summary.edits),
+                    });
+                  })()}
+                </div>
+                <div style={{ overflowY: "auto", padding: 4, flex: 1 }}>
+                  {renamePreview.files.map((file) => (
+                    <div key={file.uri} style={{ padding: "5px 7px" }}>
+                      <div
+                        style={{
+                          color: "var(--text-secondary)",
+                          fontFamily: "var(--font-mono)",
+                          fontSize: 11.5,
+                          overflow: "hidden",
+                          textOverflow: "ellipsis",
+                          whiteSpace: "nowrap",
+                        }}
+                      >
+                        {file.path}
+                      </div>
+                      <div
+                        style={{
+                          marginTop: 3,
+                          color: "var(--text-hint)",
+                          fontSize: 11,
+                          fontFamily: "var(--font-mono)",
+                        }}
+                      >
+                        {t("file.renameFileEdits", { count: String(file.edits.length) })}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                <div
+                  style={{
+                    display: "flex",
+                    justifyContent: "flex-end",
+                    gap: 8,
+                    padding: 9,
+                    borderTop: "1px solid var(--border-dim)",
+                  }}
+                >
+                  <button
+                    type="button"
+                    onClick={() => setRenameOpen(false)}
+                    style={{
+                      height: 28,
+                      padding: "0 9px",
+                      border: "1px solid var(--border-dim)",
+                      borderRadius: 5,
+                      background: "transparent",
+                      color: "var(--text-secondary)",
+                      fontSize: 12,
+                      cursor: "pointer",
+                    }}
+                  >
+                    {t("common.cancel")}
+                  </button>
+                  <button
+                    type="button"
+                    disabled={renameApplying}
+                    onClick={() => void handleApplyRename()}
+                    aria-label={t("file.renameApply")}
+                    style={{
+                      height: 28,
+                      padding: "0 9px",
+                      border: "1px solid var(--accent)",
+                      borderRadius: 5,
+                      background: "var(--accent)",
+                      color: "var(--accent-fg)",
+                      fontSize: 12,
+                      cursor: renameApplying ? "default" : "pointer",
+                    }}
+                  >
+                    {renameApplying ? t("file.renameApplying") : t("file.renameApply")}
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        )}
+        {codeActions && (
+          <div
+            role="dialog"
+            aria-label={t("file.quickFix")}
+            style={{
+              position: "absolute",
+              right: 12,
+              bottom: 10,
+              width: "min(460px, calc(100% - 24px))",
+              maxHeight: "min(300px, calc(100% - 24px))",
+              display: "flex",
+              flexDirection: "column",
+              border: "1px solid var(--border-dim)",
+              borderRadius: 6,
+              background: "var(--bg-card)",
+              boxShadow: "0 16px 40px color-mix(in srgb, #000 26%, transparent)",
+              overflow: "hidden",
+              zIndex: 9,
+            }}
+          >
+            <div
+              style={{
+                height: 30,
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
+                padding: "0 9px",
+                borderBottom: "1px solid var(--border-dim)",
+                color: "var(--text-primary)",
+                fontSize: 12,
+                fontWeight: 600,
+              }}
+            >
+              <Lightbulb size={13} />
+              <span style={{ flex: 1 }}>{t("file.quickFixTitle")}</span>
+              <button
+                type="button"
+                aria-label={t("common.close")}
+                onClick={() => setCodeActions(null)}
+                style={{
+                  border: "none",
+                  background: "transparent",
+                  color: "var(--text-hint)",
+                  cursor: "pointer",
+                  padding: 2,
+                  display: "flex",
+                }}
+              >
+                <X size={13} />
+              </button>
+            </div>
+            <div style={{ overflowY: "auto", padding: 4 }}>
+              {codeActions.map((action, index) => {
+                const canApply = Boolean(action.edit || action.command) && !codeActionApplying;
+                return (
+                  <button
+                    key={`${action.title}:${index}`}
+                    type="button"
+                    aria-label={action.title}
+                    disabled={!canApply}
+                    onClick={() => void handleApplyCodeAction(action)}
+                    style={{
+                      width: "100%",
+                      minHeight: 32,
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 8,
+                      padding: "5px 7px",
+                      border: "none",
+                      borderRadius: 4,
+                      background: "transparent",
+                      color: canApply ? "var(--text-secondary)" : "var(--text-hint)",
+                      cursor: canApply ? "pointer" : "default",
+                      textAlign: "left",
+                      fontSize: 12,
+                    }}
+                    onMouseEnter={(event) => {
+                      if (canApply) event.currentTarget.style.background = "var(--bg-hover)";
+                    }}
+                    onMouseLeave={(event) => {
+                      event.currentTarget.style.background = "transparent";
+                    }}
+                  >
+                    <Lightbulb size={13} />
+                    <span
+                      style={{
+                        minWidth: 0,
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      {action.title}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
       </div>
 
       <div
@@ -1041,19 +3129,12 @@ function FilePreviewPane({
           gap: 8,
         }}
       >
-        <span
-          style={{
-            minWidth: 0,
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-            whiteSpace: "nowrap",
-            fontSize: 11,
-            color: "var(--text-muted)",
-            fontFamily: "var(--font-mono)",
-          }}
-        >
-          {filePath}
-        </span>
+        <FileBreadcrumbs
+          pathSegments={breadcrumbSegments}
+          symbols={activeOutlineSymbols}
+          label={t("file.breadcrumbs")}
+          onJump={jumpToOutlineSymbol}
+        />
         {!isPreviewableImage && content !== null && (
           <span
             style={{
@@ -1069,6 +3150,253 @@ function FilePreviewPane({
               column: String(cursorPosition.column),
             })}
           </span>
+        )}
+        {!isPreviewableImage && content !== null && currentFileDiagnostics.length > 0 && (
+          <Popover.Root>
+            <Popover.Trigger asChild>
+              <button
+                type="button"
+                title={currentFileDiagnostics.map((diagnostic) => diagnostic.message).join("\n")}
+                style={{
+                  height: 18,
+                  display: "inline-flex",
+                  alignItems: "center",
+                  border: "1px solid var(--border-dim)",
+                  borderRadius: 5,
+                  background: "transparent",
+                  color: "var(--warning)",
+                  fontSize: 11,
+                  fontFamily: "var(--font-mono)",
+                  cursor: "pointer",
+                  flexShrink: 0,
+                  padding: "0 6px",
+                }}
+              >
+                {t("file.diagnosticsCount", { count: String(currentFileDiagnostics.length) })}
+              </button>
+            </Popover.Trigger>
+            <Popover.Portal>
+              <Popover.Content
+                align="end"
+                sideOffset={6}
+                style={{
+                  width: 360,
+                  maxHeight: 260,
+                  overflow: "auto",
+                  border: "1px solid var(--border)",
+                  borderRadius: 8,
+                  background: "var(--bg-card)",
+                  boxShadow: "var(--shadow-lg)",
+                  color: "var(--text-primary)",
+                  zIndex: 60,
+                  padding: 8,
+                }}
+              >
+                <div
+                  style={{
+                    fontSize: 12,
+                    fontWeight: 700,
+                    marginBottom: 6,
+                  }}
+                >
+                  {t("file.diagnosticsDetails")}
+                </div>
+                <div
+                  role="group"
+                  aria-label={t("file.diagnosticsSeverityFilter")}
+                  style={{ display: "flex", gap: 4, marginBottom: 8, flexWrap: "wrap" }}
+                >
+                  {diagnosticFilterOptions.map((filter) => {
+                    const count =
+                      filter === "all"
+                        ? currentFileDiagnostics.length
+                        : diagnosticCounts[filter];
+                    const active = diagnosticSeverityFilter === filter;
+                    return (
+                      <button
+                        key={filter}
+                        type="button"
+                        aria-pressed={active}
+                        onClick={() => {
+                          setDiagnosticSeverityFilter(filter);
+                          setDiagnosticCopyCount(null);
+                          setDiagnosticCopyError(null);
+                        }}
+                        style={{
+                          height: 24,
+                          display: "inline-flex",
+                          alignItems: "center",
+                          gap: 5,
+                          border: `1px solid ${active ? "var(--accent)" : "var(--border-dim)"}`,
+                          borderRadius: 5,
+                          background: active ? "var(--bg-hover)" : "transparent",
+                          color: active ? "var(--text-primary)" : "var(--text-muted)",
+                          cursor: "pointer",
+                          fontSize: 11,
+                          fontFamily: "var(--font-mono)",
+                          padding: "0 7px",
+                        }}
+                      >
+                        {t(
+                          filter === "all"
+                            ? "file.diagnosticsFilterAll"
+                            : filter === "error"
+                              ? "file.diagnosticsFilterErrors"
+                              : filter === "warning"
+                                ? "file.diagnosticsFilterWarnings"
+                                : "file.diagnosticsFilterInfo",
+                          { count: String(count) },
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    gap: 8,
+                    marginBottom: 8,
+                  }}
+                >
+                  <button
+                    type="button"
+                    disabled={filteredFileDiagnostics.length === 0}
+                    onClick={() => void handleCopyDiagnostics()}
+                    style={{
+                      height: 26,
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: 6,
+                      border: "1px solid var(--border-dim)",
+                      borderRadius: 5,
+                      background: "transparent",
+                      color:
+                        filteredFileDiagnostics.length === 0
+                          ? "var(--text-hint)"
+                          : "var(--text-secondary)",
+                      cursor: filteredFileDiagnostics.length === 0 ? "default" : "pointer",
+                      fontSize: 11,
+                      padding: "0 8px",
+                    }}
+                  >
+                    <Copy size={12} />
+                    {t("file.diagnosticsCopyVisible")}
+                  </button>
+                  {(diagnosticCopyCount !== null || diagnosticCopyError) && (
+                    <span
+                      role="status"
+                      title={diagnosticCopyError ?? undefined}
+                      style={{
+                        minWidth: 0,
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap",
+                        color: diagnosticCopyError ? "var(--danger-fg)" : "var(--text-muted)",
+                        fontSize: 11,
+                        fontFamily: "var(--font-mono)",
+                      }}
+                    >
+                      {diagnosticCopyError
+                        ? t("file.diagnosticsCopyFailed", { error: diagnosticCopyError })
+                        : t("file.diagnosticsCopied", {
+                            count: String(diagnosticCopyCount ?? 0),
+                          })}
+                    </span>
+                  )}
+                </div>
+                {groupedFileDiagnostics.length === 0 ? (
+                  <div
+                    style={{
+                      borderTop: "1px solid var(--border-dim)",
+                      padding: "9px 6px",
+                      color: "var(--text-muted)",
+                      fontSize: 12,
+                    }}
+                  >
+                    {t("file.diagnosticsNoMatches")}
+                  </div>
+                ) : (
+                  groupedFileDiagnostics.map((group) => (
+                    <section key={group.source}>
+                      <div
+                        style={{
+                          borderTop: "1px solid var(--border-dim)",
+                          padding: "7px 6px 3px",
+                          color: "var(--text-muted)",
+                          fontFamily: "var(--font-mono)",
+                          fontSize: 10.5,
+                          fontWeight: 700,
+                        }}
+                      >
+                        {t("file.diagnosticsSourceGroup", {
+                          source: group.source,
+                          count: String(group.diagnostics.length),
+                        })}
+                      </div>
+                      {group.diagnostics.map((diagnostic) => (
+                        <button
+                          key={`${diagnostic.file}:${diagnostic.line}:${diagnostic.column}:${diagnostic.message}`}
+                          type="button"
+                          onClick={() => openDiagnostic(diagnostic)}
+                          style={{
+                            width: "100%",
+                            display: "grid",
+                            gridTemplateColumns: "auto 1fr",
+                            gap: 8,
+                            alignItems: "start",
+                            padding: "7px 6px",
+                            border: 0,
+                            background: "transparent",
+                            color: "var(--text-primary)",
+                            textAlign: "left",
+                            cursor: "pointer",
+                            font: "inherit",
+                          }}
+                        >
+                          <span
+                            style={{
+                              color: diagnosticSeverityColor(diagnostic.severity),
+                              fontFamily: "var(--font-mono)",
+                              fontSize: 10.5,
+                              fontWeight: 700,
+                              textTransform: "uppercase",
+                            }}
+                          >
+                            {diagnostic.severity}
+                          </span>
+                          <span style={{ minWidth: 0 }}>
+                            <span
+                              style={{
+                                display: "block",
+                                fontSize: 12,
+                                lineHeight: 1.35,
+                              }}
+                            >
+                              {diagnostic.message}
+                            </span>
+                            <span
+                              style={{
+                                display: "block",
+                                marginTop: 3,
+                                color: "var(--text-muted)",
+                                fontFamily: "var(--font-mono)",
+                                fontSize: 10.5,
+                              }}
+                            >
+                              {diagnostic.code ? `(${diagnostic.code}) · ` : ""}
+                              {diagnostic.line}:{diagnostic.column}
+                            </span>
+                          </span>
+                        </button>
+                      ))}
+                    </section>
+                  ))
+                )}
+              </Popover.Content>
+            </Popover.Portal>
+          </Popover.Root>
         )}
         {!remote && !isPreviewableImage && content !== null && (
           <button
@@ -1126,6 +3454,85 @@ function FilePreviewPane({
             {formatting ? t("file.formatting") : t("file.format")}
           </button>
         )}
+        {!isPreviewableImage && content !== null && languageServer.supported && (
+          <button
+            type="button"
+            disabled={referencesLoading}
+            onClick={() => void handleFindReferences()}
+            title={t("file.findReferences")}
+            aria-label={t("file.findReferences")}
+            style={{
+              height: 18,
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 4,
+              padding: "0 6px",
+              border: "1px solid var(--border-dim)",
+              borderRadius: 5,
+              background: references ? "var(--bg-hover)" : "transparent",
+              color: referencesLoading ? "var(--text-hint)" : "var(--text-muted)",
+              fontSize: 10.5,
+              cursor: referencesLoading ? "default" : "pointer",
+              flexShrink: 0,
+            }}
+          >
+            <Search size={11} />
+            {referencesLoading ? t("file.referencesLoading") : t("file.references")}
+          </button>
+        )}
+        {!isPreviewableImage && content !== null && languageServer.supported && (
+          <button
+            type="button"
+            disabled={renameLoading || renameApplying}
+            onClick={handleOpenRename}
+            title={t("file.renameSymbol")}
+            aria-label={t("file.renameSymbol")}
+            style={{
+              height: 18,
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 4,
+              padding: "0 6px",
+              border: "1px solid var(--border-dim)",
+              borderRadius: 5,
+              background: renameOpen ? "var(--bg-hover)" : "transparent",
+              color: renameLoading || renameApplying ? "var(--text-hint)" : "var(--text-muted)",
+              fontSize: 10.5,
+              cursor: renameLoading || renameApplying ? "default" : "pointer",
+              flexShrink: 0,
+            }}
+          >
+            <PencilLine size={11} />
+            {t("file.rename")}
+          </button>
+        )}
+        {!isPreviewableImage && content !== null && languageServer.supported && (
+          <button
+            type="button"
+            disabled={codeActionsLoading || codeActionApplying}
+            onClick={() => void handleQuickFix()}
+            title={t("file.quickFix")}
+            aria-label={t("file.quickFix")}
+            style={{
+              height: 18,
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 4,
+              padding: "0 6px",
+              border: "1px solid var(--border-dim)",
+              borderRadius: 5,
+              background: codeActions ? "var(--bg-hover)" : "transparent",
+              color:
+                codeActionsLoading || codeActionApplying ? "var(--text-hint)" : "var(--text-muted)",
+              fontSize: 10.5,
+              cursor: codeActionsLoading || codeActionApplying ? "default" : "pointer",
+              flexShrink: 0,
+            }}
+          >
+            <Lightbulb size={11} />
+            {codeActionsLoading ? t("file.quickFixLoading") : t("file.quickFixShort")}
+          </button>
+        )}
         {languageServerLabel && (
           <span
             title={languageServer.message ?? undefined}
@@ -1137,6 +3544,34 @@ function FilePreviewPane({
             }}
           >
             {languageServerLabel}
+          </span>
+        )}
+        {inlayHintsLoading && (
+          <span
+            style={{
+              fontSize: 11,
+              color: "var(--text-muted)",
+              fontFamily: "var(--font-mono)",
+              flexShrink: 0,
+            }}
+          >
+            {t("file.inlayHintsLoading")}
+          </span>
+        )}
+        {inlayHintsError && (
+          <span
+            title={inlayHintsError}
+            style={{
+              maxWidth: 220,
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+              fontSize: 11,
+              color: "var(--warning)",
+              fontFamily: "var(--font-mono)",
+            }}
+          >
+            {t("file.inlayHintsFailed", { error: inlayHintsError })}
           </span>
         )}
         {statusLabel && (
@@ -1165,6 +3600,73 @@ function FilePreviewPane({
             }}
           >
             {t("file.formatFailed", { error: formatError })}
+          </span>
+        )}
+        {navigationError && (
+          <span
+            title={navigationError}
+            style={{
+              maxWidth: 220,
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+              fontSize: 11,
+              color: "var(--warning)",
+              fontFamily: "var(--font-mono)",
+            }}
+          >
+            {navigationError}
+          </span>
+        )}
+        {renameSummary && (
+          <span
+            style={{
+              maxWidth: 260,
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+              fontSize: 11,
+              color: "var(--text-muted)",
+              fontFamily: "var(--font-mono)",
+            }}
+          >
+            {t("file.renameApplied", {
+              files: String(renameSummary.filesChanged),
+              edits: String(renameSummary.editsApplied),
+            })}
+          </span>
+        )}
+        {codeActionSummary && (
+          <span
+            style={{
+              maxWidth: 260,
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+              fontSize: 11,
+              color: "var(--text-muted)",
+              fontFamily: "var(--font-mono)",
+            }}
+          >
+            {t("file.quickFixApplied", {
+              files: String(codeActionSummary.filesChanged),
+              edits: String(codeActionSummary.editsApplied),
+            })}
+          </span>
+        )}
+        {codeActionCommandSummary && (
+          <span
+            style={{
+              maxWidth: 260,
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+              fontSize: 11,
+              color: "var(--text-muted)",
+              fontFamily: "var(--font-mono)",
+            }}
+          >
+            {t("file.quickFixCommandExecuted", { command: codeActionCommandSummary })}
           </span>
         )}
         {inlineBlameError && (
@@ -1204,8 +3706,13 @@ export function FileViewer({
   selectedCondaEnvPath,
   onSelectedCondaEnvPathChange,
   onRunPythonFile,
+  onRunTestTarget,
+  onDebugTestTarget,
   debugBreakpoints,
+  diagnostics,
+  coverage,
   onToggleDebugBreakpoint,
+  onOpenDefinition,
   onFocusGroup,
   onSplitRight,
 }: {
@@ -1224,8 +3731,13 @@ export function FileViewer({
   selectedCondaEnvPath?: string | null;
   onSelectedCondaEnvPathChange?: (path: string | null) => void;
   onRunPythonFile?: (path: string) => void;
+  onRunTestTarget?: (target: EditorTestRunTarget) => void;
+  onDebugTestTarget?: (target: EditorTestRunTarget) => void;
   debugBreakpoints?: DebugBreakpoint[];
+  diagnostics?: DiagnosticItem[];
+  coverage?: TestCoverageSummary | null;
   onToggleDebugBreakpoint?: (filePath: string, line: number) => void;
+  onOpenDefinition?: (path: string, name: string, selection?: OpenFileSelection) => void;
   onFocusGroup?: () => void;
   onSplitRight?: () => void;
 }) {
@@ -1233,6 +3745,20 @@ export function FileViewer({
   const [previewModes, setPreviewModes] = useState<Record<string, boolean>>({});
   const [menuOpen, setMenuOpen] = useState(false);
   const [dirtyTabs, setDirtyTabs] = useState<Record<string, boolean>>({});
+  const [localHistoryTarget, setLocalHistoryTarget] = useState<{
+    path: string;
+    name: string;
+  } | null>(null);
+  const [localHistoryEntries, setLocalHistoryEntries] = useState<LocalHistoryEntry[]>([]);
+  const [localHistorySelectedId, setLocalHistorySelectedId] = useState<string | null>(null);
+  const [localHistorySnapshot, setLocalHistorySnapshot] =
+    useState<LocalHistorySnapshot | null>(null);
+  const [localHistoryCurrentContent, setLocalHistoryCurrentContent] = useState("");
+  const [localHistoryLoading, setLocalHistoryLoading] = useState(false);
+  const [localHistorySnapshotLoading, setLocalHistorySnapshotLoading] = useState(false);
+  const [localHistoryRestoring, setLocalHistoryRestoring] = useState(false);
+  const [localHistoryError, setLocalHistoryError] = useState<string | null>(null);
+  const [reloadVersions, setReloadVersions] = useState<Record<string, number>>({});
 
   const handleDirtyChange = useCallback((path: string, dirty: boolean) => {
     setDirtyTabs((prev) => {
@@ -1243,6 +3769,137 @@ export function FileViewer({
       return next;
     });
   }, []);
+
+  const openLocalHistory = useCallback((tab: OpenFileTab) => {
+    setMenuOpen(false);
+    setLocalHistoryTarget({ path: tab.path, name: tab.name });
+    setLocalHistoryEntries([]);
+    setLocalHistorySelectedId(null);
+    setLocalHistorySnapshot(null);
+    setLocalHistoryCurrentContent("");
+    setLocalHistoryError(null);
+  }, []);
+
+  const closeLocalHistory = useCallback(() => {
+    setLocalHistoryTarget(null);
+    setLocalHistoryEntries([]);
+    setLocalHistorySelectedId(null);
+    setLocalHistorySnapshot(null);
+    setLocalHistoryCurrentContent("");
+    setLocalHistoryError(null);
+  }, []);
+
+  useEffect(() => {
+    if (!localHistoryTarget) return;
+    let cancelled = false;
+    setLocalHistoryLoading(true);
+    setLocalHistoryError(null);
+    setLocalHistorySnapshot(null);
+    setLocalHistorySelectedId(null);
+
+    void Promise.all([
+      invoke<LocalHistoryEntry[]>("list_local_history", {
+        projectPath,
+        filePath: localHistoryTarget.path,
+      }),
+      invoke<string>("read_file_content", {
+        projectPath,
+        path: localHistoryTarget.path,
+      }),
+    ])
+      .then(([entries, currentContent]) => {
+        if (cancelled) return;
+        setLocalHistoryEntries(entries);
+        setLocalHistoryCurrentContent(currentContent);
+        setLocalHistorySelectedId(entries[0]?.id ?? null);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setLocalHistoryEntries([]);
+        setLocalHistoryCurrentContent("");
+        setLocalHistoryError(String(err));
+      })
+      .finally(() => {
+        if (!cancelled) setLocalHistoryLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [localHistoryTarget, projectPath]);
+
+  useEffect(() => {
+    if (!localHistoryTarget || !localHistorySelectedId) {
+      setLocalHistorySnapshot(null);
+      return;
+    }
+    let cancelled = false;
+    setLocalHistorySnapshotLoading(true);
+    setLocalHistoryError(null);
+
+    void invoke<LocalHistorySnapshot>("read_local_history_entry", {
+      projectPath,
+      filePath: localHistoryTarget.path,
+      entryId: localHistorySelectedId,
+    })
+      .then((snapshot) => {
+        if (!cancelled) setLocalHistorySnapshot(snapshot);
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          setLocalHistorySnapshot(null);
+          setLocalHistoryError(String(err));
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setLocalHistorySnapshotLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [localHistorySelectedId, localHistoryTarget, projectPath]);
+
+  const restoreLocalHistory = useCallback(async () => {
+    if (!localHistoryTarget || !localHistorySnapshot || localHistoryRestoring) return;
+    const confirmed = await confirm(t("file.localHistoryRestoreConfirm"), {
+      title: t("file.localHistory"),
+      kind: "warning",
+    });
+    if (!confirmed) return;
+    setLocalHistoryRestoring(true);
+    setLocalHistoryError(null);
+    try {
+      const restored = await invoke<LocalHistorySnapshot>("restore_local_history_entry", {
+        projectPath,
+        filePath: localHistoryTarget.path,
+        entryId: localHistorySnapshot.entry.id,
+      });
+      setLocalHistorySnapshot(restored);
+      setLocalHistoryCurrentContent(restored.content);
+      setReloadVersions((prev) => ({
+        ...prev,
+        [localHistoryTarget.path]: (prev[localHistoryTarget.path] ?? 0) + 1,
+      }));
+      handleDirtyChange(localHistoryTarget.path, false);
+      const entries = await invoke<LocalHistoryEntry[]>("list_local_history", {
+        projectPath,
+        filePath: localHistoryTarget.path,
+      });
+      setLocalHistoryEntries(entries);
+    } catch (err) {
+      setLocalHistoryError(String(err));
+    } finally {
+      setLocalHistoryRestoring(false);
+    }
+  }, [
+    handleDirtyChange,
+    localHistoryRestoring,
+    localHistorySnapshot,
+    localHistoryTarget,
+    projectPath,
+    t,
+  ]);
 
   useEffect(() => {
     setPreviewModes((prev) => {
@@ -1281,6 +3938,7 @@ export function FileViewer({
   const canCloseOtherTabs = tabs.length > 1;
   const activeTabIndex = tabs.findIndex((tab) => tab.path === activeTab.path);
   const canCloseTabsToRight = activeTabIndex !== -1 && activeTabIndex < tabs.length - 1;
+  const activeCanShowLocalHistory = !remote && !isPreviewableImageFile(activeTab.name);
 
   return (
     <div
@@ -1293,6 +3951,7 @@ export function FileViewer({
         minWidth: 0,
         minHeight: 0,
         background: "var(--bg-panel)",
+        position: "relative",
       }}
     >
       <div
@@ -1510,6 +4169,19 @@ export function FileViewer({
               >
                 <button
                   type="button"
+                  disabled={!activeCanShowLocalHistory}
+                  title={
+                    activeCanShowLocalHistory
+                      ? t("file.showLocalHistory")
+                      : t("file.localHistoryUnavailable")
+                  }
+                  onClick={() => openLocalHistory(activeTab)}
+                  className="file-viewer-tab-menu-item"
+                >
+                  {t("file.showLocalHistory")}
+                </button>
+                <button
+                  type="button"
                   disabled={!canCloseOtherTabs}
                   onClick={() => {
                     onCloseOtherTabs(activeTab.path);
@@ -1570,6 +4242,7 @@ export function FileViewer({
               }}
             >
               <FilePreviewPane
+                key={`${tab.path}:${reloadVersions[tab.path] ?? 0}`}
                 filePath={tab.path}
                 fileName={tab.name}
                 projectPath={projectPath}
@@ -1578,13 +4251,34 @@ export function FileViewer({
                 selection={tab.selection}
                 remote={remote}
                 debugBreakpoints={debugBreakpoints}
+                diagnostics={diagnostics}
+                coverage={coverage}
                 onToggleDebugBreakpoint={onToggleDebugBreakpoint}
+                onRunTestTarget={onRunTestTarget}
+                onDebugTestTarget={onDebugTestTarget}
+                onOpenDefinition={onOpenDefinition}
                 onDirtyChange={handleDirtyChange}
               />
             </div>
           );
         })}
       </div>
+      {localHistoryTarget ? (
+        <LocalHistoryDialog
+          targetName={localHistoryTarget.name}
+          entries={localHistoryEntries}
+          selectedEntryId={localHistorySelectedId}
+          snapshot={localHistorySnapshot}
+          currentContent={localHistoryCurrentContent}
+          loading={localHistoryLoading}
+          snapshotLoading={localHistorySnapshotLoading}
+          restoring={localHistoryRestoring}
+          error={localHistoryError}
+          onSelectEntry={setLocalHistorySelectedId}
+          onRestore={restoreLocalHistory}
+          onClose={closeLocalHistory}
+        />
+      ) : null}
 
       <div
         style={{

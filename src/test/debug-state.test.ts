@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
   buildDebugConfigDraft,
+  canEvaluateDebugSession,
   debugConfigToDraft,
   debugSessionControlState,
   defaultDebugConfigDraft,
+  formatBreakpointText,
   isExpandableDebugVariable,
   isDebugSessionActive,
   parseBreakpointText,
@@ -19,8 +21,11 @@ describe("debug state", () => {
       id: " app debug ",
       name: " App Debug ",
       runtime: "node",
+      request: "launch",
       program: " src/index.js ",
       cwd: " app ",
+      attachHost: "127.0.0.1",
+      attachPort: "9229",
       argsText: "--port\n5173",
       envText: "NODE_ENV=development\n# ignored\nINVALID",
       breakpointsText: "src/index.js:12\nsrc/lib.ts:8:3\nbad\n",
@@ -30,8 +35,10 @@ describe("debug state", () => {
       id: "app-debug",
       name: "App Debug",
       type: "node",
+      request: "launch",
       program: "src/index.js",
       cwd: "app",
+      attachHost: "127.0.0.1",
       args: ["--port", "5173"],
       env: { NODE_ENV: "development" },
       breakpoints: [
@@ -46,11 +53,44 @@ describe("debug state", () => {
       id: "",
       name: "",
       runtime: "node",
+      request: "launch",
       program: "",
       cwd: ".",
+      attachHost: "127.0.0.1",
+      attachPort: "9229",
       argsText: "",
       envText: "",
       breakpointsText: "",
+    });
+  });
+
+  it("builds a node attach config from a draft", () => {
+    expect(
+      buildDebugConfigDraft({
+        id: " attach app ",
+        name: " Attach App ",
+        runtime: "node",
+        request: "attach",
+        program: "",
+        cwd: ".",
+        attachHost: " 127.0.0.1 ",
+        attachPort: "9229",
+        argsText: "--ignored",
+        envText: "NODE_ENV=ignored",
+        breakpointsText: "src/index.js:12",
+      }),
+    ).toEqual({
+      id: "attach-app",
+      name: "Attach App",
+      type: "node",
+      request: "attach",
+      program: "",
+      cwd: ".",
+      attachHost: "127.0.0.1",
+      attachPort: 9229,
+      args: ["--ignored"],
+      env: { NODE_ENV: "ignored" },
+      breakpoints: [{ file: "src/index.js", line: 12, column: 1 }],
     });
   });
 
@@ -60,24 +100,31 @@ describe("debug state", () => {
         id: "node-app",
         name: "Node App",
         type: "node",
+        request: "launch",
         program: "server.js",
         cwd: ".",
+        attachHost: "127.0.0.1",
         args: ["--watch"],
         env: { NODE_ENV: "test", PORT: "3000" },
         breakpoints: [
           { file: "server.js", line: 4, column: 1 },
           { file: "src/router.js", line: 9, column: 2 },
+          { file: "src/cache.js", line: 11, column: 1, condition: "enabled" },
+          { file: "src/log.js", line: 12, column: 1, logMessage: "hit log" },
         ],
       }),
     ).toEqual({
       id: "node-app",
       name: "Node App",
       runtime: "node",
+      request: "launch",
       program: "server.js",
       cwd: ".",
+      attachHost: "127.0.0.1",
+      attachPort: "9229",
       argsText: "--watch",
       envText: "NODE_ENV=test\nPORT=3000",
-      breakpointsText: "server.js:4\nsrc/router.js:9:2",
+      breakpointsText: "server.js:4\nsrc/router.js:9:2\nsrc/cache.js:11 if enabled\nsrc/log.js:12 log hit log",
     });
   });
 
@@ -86,8 +133,11 @@ describe("debug state", () => {
       id: " py app ",
       name: " Python App ",
       runtime: "python",
+      request: "launch",
       program: " app/main.py ",
       cwd: ".",
+      attachHost: "127.0.0.1",
+      attachPort: "9229",
       argsText: "--port\n8000",
       envText: "PYTHONPATH=.",
       breakpointsText: "app/main.py:10",
@@ -97,8 +147,10 @@ describe("debug state", () => {
       id: "py-app",
       name: "Python App",
       type: "python",
+      request: "launch",
       program: "app/main.py",
       cwd: ".",
+      attachHost: "127.0.0.1",
       args: ["--port", "8000"],
       env: { PYTHONPATH: "." },
       breakpoints: [{ file: "app/main.py", line: 10, column: 1 }],
@@ -106,10 +158,26 @@ describe("debug state", () => {
   });
 
   it("parses only valid breakpoint lines", () => {
-    expect(parseBreakpointText("src/app.js:5\nsrc/app.js:0\nREADME.md\nsrc/app.js:7:2")).toEqual([
+    expect(
+      parseBreakpointText(
+        "src/app.js:5\nsrc/app.js:0\nREADME.md\nsrc/app.js:7:2\nsrc/app.js:9 if count > 1\nsrc/app.js:10 log hit app",
+      ),
+    ).toEqual([
       { file: "src/app.js", line: 5, column: 1 },
       { file: "src/app.js", line: 7, column: 2 },
+      { file: "src/app.js", line: 9, column: 1, condition: "count > 1" },
+      { file: "src/app.js", line: 10, column: 1, logMessage: "hit app" },
     ]);
+  });
+
+  it("formats breakpoint rows with condition and log metadata", () => {
+    expect(
+      formatBreakpointText([
+        { file: "src/app.js", line: 5, column: 1 },
+        { file: "src/app.js", line: 7, column: 2, condition: "count > 1" },
+        { file: "src/app.js", line: 10, column: 1, logMessage: "hit app" },
+      ]),
+    ).toBe("src/app.js:5\nsrc/app.js:7:2 if count > 1\nsrc/app.js:10 log hit app");
   });
 
   it("updates and removes debug configs by id", () => {
@@ -134,8 +202,10 @@ describe("debug state", () => {
         id: "app",
         name: "App Debug",
         type: "node",
+        request: "launch",
         program: "src/app.js",
         cwd: ".",
+        attachHost: "127.0.0.1",
         args: [],
         env: {},
         breakpoints: [],
@@ -174,6 +244,13 @@ describe("debug state", () => {
       canStop: false,
       canStep: false,
     });
+  });
+
+  it("allows expression evaluation only while paused and idle", () => {
+    expect(canEvaluateDebugSession(null, false)).toBe(false);
+    expect(canEvaluateDebugSession({ status: "running" } as never, false)).toBe(false);
+    expect(canEvaluateDebugSession({ status: "paused" } as never, false)).toBe(true);
+    expect(canEvaluateDebugSession({ status: "paused" } as never, true)).toBe(false);
   });
 
   it("treats variables as expandable only when they expose an object id", () => {

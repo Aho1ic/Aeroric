@@ -2,7 +2,7 @@ use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 use std::fs;
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
@@ -10,6 +10,8 @@ use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tauri::State;
 use uuid::Uuid;
+
+use crate::ssh::SshConnection;
 
 const RUN_CONFIG_VERSION: u32 = 1;
 const MAX_OUTPUT_CHARS: usize = 200_000;
@@ -251,6 +253,151 @@ fn validate_run_debug_breakpoint(
     ensure_path_inside_root(root, &file, "Run debug breakpoint")
 }
 
+fn remote_run_path_has_relative_components(path: &str) -> bool {
+    path.split('/')
+        .any(|component| component == "." || component == "..")
+}
+
+fn normalize_remote_run_root(remote_project_path: &str) -> Result<String, String> {
+    let trimmed = remote_project_path.trim();
+    if !trimmed.starts_with('/') {
+        return Err("Remote project path must be absolute".to_string());
+    }
+    if trimmed.contains('\0') || remote_run_path_has_relative_components(trimmed) {
+        return Err("Remote project path cannot contain . or .. components".to_string());
+    }
+    Ok(if trimmed == "/" {
+        "/".to_string()
+    } else {
+        trimmed.trim_end_matches('/').to_string()
+    })
+}
+
+fn remote_run_path_is_inside_root(root: &str, path: &str) -> bool {
+    root == "/" || path == root || path.starts_with(&format!("{root}/"))
+}
+
+fn join_remote_run_path(root: &str, value: &str, label: &str) -> Result<String, String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err(format!("{label} cannot be empty"));
+    }
+    if trimmed == "." && label == "Run config cwd" {
+        return Ok(root.to_string());
+    }
+    if trimmed.contains('\0') || remote_run_path_has_relative_components(trimmed) {
+        return Err(format!("{label} cannot contain . or .. components"));
+    }
+    let path = if trimmed.starts_with('/') {
+        if trimmed == "/" {
+            "/".to_string()
+        } else {
+            trimmed.trim_end_matches('/').to_string()
+        }
+    } else if root == "/" {
+        format!("/{}", trimmed.trim_matches('/'))
+    } else {
+        format!(
+            "{}/{}",
+            root.trim_end_matches('/'),
+            trimmed.trim_matches('/')
+        )
+    };
+    if !remote_run_path_is_inside_root(root, &path) {
+        return Err(format!("{label} is outside project root"));
+    }
+    Ok(path)
+}
+
+fn remote_run_configs_path(root: &str) -> String {
+    if root == "/" {
+        "/.aeroric/run-configs.json".to_string()
+    } else {
+        format!("{}/.aeroric/run-configs.json", root.trim_end_matches('/'))
+    }
+}
+
+fn validate_remote_env(env: &BTreeMap<String, String>) -> Result<(), String> {
+    for (key, value) in env {
+        if key.trim().is_empty() {
+            return Err("Run config environment key cannot be empty".to_string());
+        }
+        if key.contains('=') || key.contains('\0') || value.contains('\0') {
+            return Err(
+                "Run config environment cannot contain = in keys or null bytes".to_string(),
+            );
+        }
+    }
+    Ok(())
+}
+
+fn validate_remote_run_debug_breakpoint(
+    root: &str,
+    breakpoint: &RunDebugBreakpoint,
+) -> Result<(), String> {
+    if breakpoint.line == 0 {
+        return Err("Run debug breakpoint line must be at least 1".to_string());
+    }
+    if breakpoint.column == 0 {
+        return Err("Run debug breakpoint column must be at least 1".to_string());
+    }
+    join_remote_run_path(root, &breakpoint.file, "Run debug breakpoint").map(|_| ())
+}
+
+fn validate_remote_run_config(root: &str, config: &RunConfig) -> Result<(), String> {
+    match config {
+        RunConfig::Shell {
+            id,
+            name,
+            command,
+            cwd,
+            env,
+        } => {
+            validate_run_config_identity(id, name)?;
+            if command.trim().is_empty() {
+                return Err("Run config command cannot be empty".to_string());
+            }
+            if command.contains('\0') {
+                return Err("Run config command cannot contain null bytes".to_string());
+            }
+            validate_remote_env(env)?;
+            join_remote_run_path(root, cwd, "Run config cwd").map(|_| ())
+        }
+        RunConfig::Debug {
+            id,
+            name,
+            program,
+            cwd,
+            args,
+            env,
+            breakpoints,
+            ..
+        } => {
+            validate_run_config_identity(id, name)?;
+            if program.trim().is_empty() {
+                return Err("Run debug program cannot be empty".to_string());
+            }
+            if args.iter().any(|arg| arg.contains('\0')) {
+                return Err("Run debug args cannot contain null bytes".to_string());
+            }
+            validate_remote_env(env)?;
+            join_remote_run_path(root, program, "Run debug program")?;
+            join_remote_run_path(root, cwd, "Run config cwd")?;
+            for breakpoint in breakpoints {
+                validate_remote_run_debug_breakpoint(root, breakpoint)?;
+            }
+            Ok(())
+        }
+    }
+}
+
+fn validate_remote_run_configs(root: &str, document: &RunConfigDocument) -> Result<(), String> {
+    for config in &document.configs {
+        validate_remote_run_config(root, config)?;
+    }
+    Ok(())
+}
+
 fn resolve_run_cwd(root: &Path, cwd: &str) -> Result<PathBuf, String> {
     let root = root
         .canonicalize()
@@ -298,6 +445,103 @@ fn write_run_configs_from_root(
     }
     let raw = serde_json::to_string_pretty(&document).map_err(|e| e.to_string())?;
     crate::storage::atomic_write(&path, &raw)?;
+    Ok(document)
+}
+
+fn build_remote_run_read_configs_command(remote_root: &str) -> String {
+    let config_path = remote_run_configs_path(remote_root);
+    let script = "path=$1; if [ -f \"$path\" ]; then cat -- \"$path\"; fi";
+    format!(
+        "sh -c {} sh {}",
+        crate::ssh::shell_quote_posix(script),
+        crate::ssh::shell_quote_posix(&config_path)
+    )
+}
+
+fn build_remote_run_write_configs_command(remote_root: &str) -> String {
+    let config_path = remote_run_configs_path(remote_root);
+    let parent = if let Some((parent, _)) = config_path.rsplit_once('/') {
+        if parent.is_empty() {
+            "/"
+        } else {
+            parent
+        }
+    } else {
+        "."
+    };
+    format!(
+        "mkdir -p -- {} && cat > {}",
+        crate::ssh::shell_quote_posix(parent),
+        crate::ssh::shell_quote_posix(&config_path)
+    )
+}
+
+fn run_remote_run_output(
+    connection: &SshConnection,
+    remote_command: String,
+) -> Result<Vec<u8>, String> {
+    let mut cmd = crate::ssh::std_ssh_command_for_remote_command(connection, remote_command);
+    crate::subprocess::configure_background_command(&mut cmd);
+    let output = cmd.output().map_err(|err| err.to_string())?;
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+    }
+    Ok(output.stdout)
+}
+
+fn read_remote_run_configs_from_root(
+    connection: &SshConnection,
+    remote_root: &str,
+) -> Result<RunConfigDocument, String> {
+    let stdout = run_remote_run_output(
+        connection,
+        build_remote_run_read_configs_command(remote_root),
+    )?;
+    if stdout.is_empty() {
+        return Ok(RunConfigDocument::default());
+    }
+    let raw = String::from_utf8(stdout).map_err(|err| err.to_string())?;
+    let mut document: RunConfigDocument =
+        serde_json::from_str(&raw).map_err(|err| err.to_string())?;
+    if document.version == 0 {
+        document.version = RUN_CONFIG_VERSION;
+    }
+    validate_remote_run_configs(remote_root, &document)?;
+    Ok(document)
+}
+
+fn write_remote_run_configs_from_root(
+    connection: &SshConnection,
+    remote_root: &str,
+    mut document: RunConfigDocument,
+) -> Result<RunConfigDocument, String> {
+    document.version = RUN_CONFIG_VERSION;
+    validate_remote_run_configs(remote_root, &document)?;
+    let raw = serde_json::to_string_pretty(&document).map_err(|err| err.to_string())?;
+    let mut cmd = crate::ssh::std_ssh_command_for_remote_command(
+        connection,
+        build_remote_run_write_configs_command(remote_root),
+    );
+    crate::subprocess::configure_background_command(&mut cmd);
+    let mut child = cmd
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|err| err.to_string())?;
+    {
+        let stdin = child
+            .stdin
+            .as_mut()
+            .ok_or_else(|| "Failed to open ssh stdin".to_string())?;
+        stdin
+            .write_all(raw.as_bytes())
+            .map_err(|err| err.to_string())?;
+    }
+    let output = child.wait_with_output().map_err(|err| err.to_string())?;
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+    }
     Ok(document)
 }
 
@@ -400,6 +644,30 @@ fn shell_command(command: &str) -> Command {
     }
 }
 
+fn build_remote_shell_run_command(
+    cwd: &str,
+    command: &str,
+    env: &BTreeMap<String, String>,
+) -> String {
+    let env_args = env
+        .iter()
+        .map(|(key, value)| crate::ssh::shell_quote_posix(&format!("{key}={value}")))
+        .collect::<Vec<_>>();
+    let mut command_parts = Vec::new();
+    if !env_args.is_empty() {
+        command_parts.push("env".to_string());
+        command_parts.extend(env_args);
+    }
+    command_parts.push("\"${SHELL:-/bin/sh}\"".to_string());
+    command_parts.push("-lc".to_string());
+    command_parts.push(crate::ssh::shell_quote_posix(command));
+    format!(
+        "cd -- {} && {}",
+        crate::ssh::shell_quote_posix(cwd),
+        command_parts.join(" ")
+    )
+}
+
 #[tauri::command]
 pub fn read_run_configs(project_path: String) -> Result<RunConfigDocument, String> {
     let root = validate_project_root(&project_path)?;
@@ -413,6 +681,33 @@ pub fn write_run_configs(
 ) -> Result<RunConfigDocument, String> {
     let root = validate_project_root(&project_path)?;
     write_run_configs_from_root(&root, document)
+}
+
+#[tauri::command]
+pub async fn remote_read_run_configs(
+    connection: SshConnection,
+    remote_project_path: String,
+) -> Result<RunConfigDocument, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let remote_root = normalize_remote_run_root(&remote_project_path)?;
+        read_remote_run_configs_from_root(&connection, &remote_root)
+    })
+    .await
+    .map_err(|err| err.to_string())?
+}
+
+#[tauri::command]
+pub async fn remote_write_run_configs(
+    connection: SshConnection,
+    remote_project_path: String,
+    document: RunConfigDocument,
+) -> Result<RunConfigDocument, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let remote_root = normalize_remote_run_root(&remote_project_path)?;
+        write_remote_run_configs_from_root(&connection, &remote_root, document)
+    })
+    .await
+    .map_err(|err| err.to_string())?
 }
 
 #[tauri::command]
@@ -452,6 +747,71 @@ pub fn start_run_config(
         name,
         command,
         cwd: cwd.to_string_lossy().into_owned(),
+        status: RunProcessStatus::Running,
+        output: String::new(),
+        exit_code: None,
+        started_at,
+        finished_at: None,
+    }));
+
+    if let Some(stdout) = child.stdout.take() {
+        spawn_output_reader(stdout, Arc::clone(&snapshot));
+    }
+    if let Some(stderr) = child.stderr.take() {
+        spawn_output_reader(stderr, Arc::clone(&snapshot));
+    }
+
+    let child = Arc::new(Mutex::new(child));
+    spawn_exit_watcher(Arc::clone(&child), Arc::clone(&snapshot));
+    state.processes.lock().insert(
+        run_id.clone(),
+        RunProcessHandle {
+            child,
+            snapshot: Arc::clone(&snapshot),
+        },
+    );
+
+    let snapshot = snapshot.lock().clone();
+    Ok(snapshot)
+}
+
+#[tauri::command]
+pub fn remote_start_run_config(
+    connection: SshConnection,
+    remote_project_path: String,
+    config: RunConfig,
+    state: State<'_, RunConfigState>,
+) -> Result<RunProcessSnapshot, String> {
+    let remote_root = normalize_remote_run_root(&remote_project_path)?;
+    validate_remote_run_config(&remote_root, &config)?;
+    let RunConfig::Shell {
+        id,
+        name,
+        command,
+        cwd,
+        env,
+    } = config
+    else {
+        return Err("Debug run configs must be started with the debug launcher".to_string());
+    };
+    let cwd = join_remote_run_path(&remote_root, &cwd, "Run config cwd")?;
+    let run_id = format!("run-{}", Uuid::new_v4());
+    let started_at = now_millis();
+    let remote_command = build_remote_shell_run_command(&cwd, &command, &env);
+    let mut shell = crate::ssh::std_ssh_command_for_remote_command(&connection, remote_command);
+    crate::subprocess::configure_background_command(&mut shell);
+    let mut child = shell
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("Failed to start remote run config: {e}"))?;
+
+    let snapshot = Arc::new(Mutex::new(RunProcessSnapshot {
+        run_id: run_id.clone(),
+        config_id: id,
+        name,
+        command,
+        cwd,
         status: RunProcessStatus::Running,
         output: String::new(),
         exit_code: None,
@@ -529,6 +889,111 @@ mod tests {
             .expect("system clock")
             .as_nanos();
         std::env::temp_dir().join(format!("aeroric-run-config-test-{name}-{suffix}"))
+    }
+
+    #[test]
+    fn builds_remote_run_config_file_commands() {
+        assert_eq!(
+            build_remote_run_read_configs_command("/srv/app"),
+            "sh -c 'path=$1; if [ -f \"$path\" ]; then cat -- \"$path\"; fi' sh '/srv/app/.aeroric/run-configs.json'"
+        );
+        assert_eq!(
+            build_remote_run_write_configs_command("/srv/app"),
+            "mkdir -p -- '/srv/app/.aeroric' && cat > '/srv/app/.aeroric/run-configs.json'"
+        );
+        assert_eq!(
+            build_remote_run_write_configs_command("/"),
+            "mkdir -p -- '/.aeroric' && cat > '/.aeroric/run-configs.json'"
+        );
+    }
+
+    #[test]
+    fn builds_remote_shell_run_command_with_env_and_login_shell() {
+        let mut env = BTreeMap::new();
+        env.insert("PORT".to_string(), "5173".to_string());
+
+        let command =
+            build_remote_shell_run_command("/srv/app", "pnpm dev -- --host 0.0.0.0", &env);
+
+        assert_eq!(
+            command,
+            "cd -- '/srv/app' && env 'PORT=5173' \"${SHELL:-/bin/sh}\" -lc 'pnpm dev -- --host 0.0.0.0'"
+        );
+    }
+
+    #[test]
+    fn normalizes_remote_run_root_and_joins_inside_paths() {
+        let root = normalize_remote_run_root(" /srv/app/ ").unwrap();
+
+        assert_eq!(root, "/srv/app");
+        assert_eq!(
+            join_remote_run_path(&root, ".", "Run config cwd").unwrap(),
+            "/srv/app"
+        );
+        assert_eq!(
+            join_remote_run_path(&root, "scripts/dev", "Run config cwd").unwrap(),
+            "/srv/app/scripts/dev"
+        );
+        assert_eq!(
+            join_remote_run_path(&root, "/srv/app/tools", "Run config cwd").unwrap(),
+            "/srv/app/tools"
+        );
+    }
+
+    #[test]
+    fn rejects_remote_run_paths_outside_project_root() {
+        let root = normalize_remote_run_root("/srv/app").unwrap();
+
+        assert!(normalize_remote_run_root("/srv/../app").is_err());
+        assert!(join_remote_run_path(&root, "../outside", "Run config cwd").is_err());
+        assert!(join_remote_run_path(&root, "/srv/other", "Run config cwd").is_err());
+    }
+
+    #[test]
+    fn validates_remote_run_config_document() {
+        let document = RunConfigDocument {
+            version: 0,
+            configs: vec![
+                RunConfig::Shell {
+                    id: "dev".to_string(),
+                    name: "Dev".to_string(),
+                    command: "pnpm dev".to_string(),
+                    cwd: ".".to_string(),
+                    env: Default::default(),
+                },
+                RunConfig::Debug {
+                    id: "debug".to_string(),
+                    name: "Debug".to_string(),
+                    debug_type: RunDebugConfigType::Node,
+                    program: "src/index.js".to_string(),
+                    cwd: ".".to_string(),
+                    args: Vec::new(),
+                    env: Default::default(),
+                    breakpoints: vec![RunDebugBreakpoint {
+                        file: "src/index.js".to_string(),
+                        line: 12,
+                        column: 1,
+                    }],
+                },
+            ],
+        };
+
+        validate_remote_run_configs("/srv/app", &document).unwrap();
+    }
+
+    #[test]
+    fn rejects_remote_run_config_cwd_outside_project_root() {
+        let config = RunConfig::Shell {
+            id: "bad".to_string(),
+            name: "Bad".to_string(),
+            command: "echo bad".to_string(),
+            cwd: "/tmp".to_string(),
+            env: Default::default(),
+        };
+
+        let error = validate_remote_run_config("/srv/app", &config).unwrap_err();
+
+        assert!(error.contains("outside project root"));
     }
 
     #[test]

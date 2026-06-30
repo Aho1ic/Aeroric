@@ -10,7 +10,12 @@ import {
   ChevronDown,
   Undo2,
 } from "lucide-react";
-import { useCancellableInvoke } from "../hooks/useCancellableInvoke";
+import {
+  formatInvokeError,
+  invokeWithTimeout,
+  remoteInvokeOptions,
+  useCancellableInvoke,
+} from "../hooks/useCancellableInvoke";
 import s from "../styles";
 import { useI18n } from "../i18n";
 import {
@@ -21,6 +26,7 @@ import {
   useGitFileViewMode,
 } from "./git-view/GitFileBrowser";
 import { useTextInputIMEFix } from "./useTextInputIMEFix";
+import type { SshConnection } from "../types";
 
 interface GitFileChange {
   path: string;
@@ -33,6 +39,10 @@ interface Props {
   currentTaskCreatedAt: number | null;
   onFileSelect: (filePath: string, staged: boolean, label: string) => void;
   width?: number;
+  remote?: {
+    connection: SshConnection;
+    projectPath: string;
+  };
 }
 
 function fileName(path: string): string {
@@ -44,8 +54,13 @@ export function GitChanges({
   currentTaskCreatedAt,
   onFileSelect,
   width = 280,
+  remote,
 }: Props) {
   const { t } = useI18n();
+  const isRemote = Boolean(remote);
+  const gitCommandContext = remote
+    ? { connection: remote.connection, remoteProjectPath: remote.projectPath }
+    : { projectPath };
   const [changes, setChanges] = useState<GitFileChange[]>([]);
   const [loading, setLoading] = useState(false);
   const [tab, setTab] = useState<"task" | "all">("all");
@@ -64,6 +79,13 @@ export function GitChanges({
   const [fileListViewportHeight, setFileListViewportHeight] = useState(0);
 
   const { safeInvoke, isCancelled } = useCancellableInvoke();
+  const invokeGitCommand = useCallback(
+    async <T,>(command: string, args?: Record<string, unknown>): Promise<T> => {
+      const promise = invoke<T>(command, args);
+      return isRemote ? invokeWithTimeout(promise, command, remoteInvokeOptions()) : promise;
+    },
+    [isRemote],
+  );
 
   useEffect(() => {
     const el = fileListScrollRef.current;
@@ -87,16 +109,25 @@ export function GitChanges({
       setLoading(true);
       if (options?.clearError !== false) setError(null);
       try {
-        const result = await safeInvoke<GitFileChange[]>("git_status", { projectPath });
+        const result = remote
+          ? await safeInvoke<GitFileChange[]>(
+              "remote_git_changes",
+              {
+                connection: remote.connection,
+                remoteProjectPath: remote.projectPath,
+              },
+              remoteInvokeOptions(),
+            )
+          : await safeInvoke<GitFileChange[]>("git_status", { projectPath });
         if (result === null) return; // Component unmounted
         setChanges(result);
       } catch (e) {
-        if (!isCancelled()) setError(String(e));
+        if (!isCancelled()) setError(formatInvokeError(e));
       } finally {
         if (!isCancelled()) setLoading(false);
       }
     },
-    [projectPath, safeInvoke, isCancelled],
+    [projectPath, remote, safeInvoke, isCancelled],
   );
 
   useEffect(() => {
@@ -154,13 +185,19 @@ export function GitChanges({
     e.stopPropagation();
     try {
       if (c.staged) {
-        await invoke("git_unstage", { projectPath, filePath: c.path });
+        await invokeGitCommand(isRemote ? "remote_git_unstage" : "git_unstage", {
+          ...gitCommandContext,
+          filePath: c.path,
+        });
       } else {
-        await invoke("git_stage", { projectPath, filePath: c.path });
+        await invokeGitCommand(isRemote ? "remote_git_stage" : "git_stage", {
+          ...gitCommandContext,
+          filePath: c.path,
+        });
       }
       refresh();
     } catch (err) {
-      setError(String(err));
+      setError(formatInvokeError(err));
     }
   };
 
@@ -173,33 +210,42 @@ export function GitChanges({
     try {
       setError(null);
       if (directory.staged) {
-        await invoke("git_unstage_files", { projectPath, filePaths: directory.filePaths });
+        await invokeGitCommand(isRemote ? "remote_git_unstage_files" : "git_unstage_files", {
+          ...gitCommandContext,
+          filePaths: directory.filePaths,
+        });
       } else {
-        await invoke("git_stage_files", { projectPath, filePaths: directory.filePaths });
+        await invokeGitCommand(isRemote ? "remote_git_stage_files" : "git_stage_files", {
+          ...gitCommandContext,
+          filePaths: directory.filePaths,
+        });
       }
       refresh();
     } catch (err) {
-      setError(String(err));
+      setError(formatInvokeError(err));
     }
   };
 
   const handleStageAll = async () => {
     try {
       setError(null);
-      await invoke("git_stage_all", { projectPath });
+      await invokeGitCommand(isRemote ? "remote_git_stage_all" : "git_stage_all", gitCommandContext);
       refresh();
     } catch (err) {
-      setError(String(err));
+      setError(formatInvokeError(err));
     }
   };
 
   const handleUnstageAll = async () => {
     try {
       setError(null);
-      await invoke("git_unstage_all", { projectPath });
+      await invokeGitCommand(
+        isRemote ? "remote_git_unstage_all" : "git_unstage_all",
+        gitCommandContext,
+      );
       refresh();
     } catch (err) {
-      setError(String(err));
+      setError(formatInvokeError(err));
     }
   };
 
@@ -219,13 +265,13 @@ export function GitChanges({
     if (!ok) return;
     try {
       setError(null);
-      await invoke("git_discard_file", {
-        projectPath,
+      await invokeGitCommand(isRemote ? "remote_git_discard_file" : "git_discard_file", {
+        ...gitCommandContext,
         filePath: c.path,
         untracked,
       });
     } catch (err) {
-      setError(t("git.discardFailed", { error: String(err) }));
+      setError(t("git.discardFailed", { error: formatInvokeError(err) }));
     } finally {
       await refresh({ clearError: false });
     }
@@ -250,13 +296,13 @@ export function GitChanges({
     if (!ok) return;
     try {
       setError(null);
-      await invoke("git_discard_files", {
-        projectPath,
+      await invokeGitCommand(isRemote ? "remote_git_discard_files" : "git_discard_files", {
+        ...gitCommandContext,
         filePaths: directory.filePaths,
         untracked: directory.untracked,
       });
     } catch (err) {
-      setError(t("git.discardFailed", { error: String(err) }));
+      setError(t("git.discardFailed", { error: formatInvokeError(err) }));
     } finally {
       await refresh({ clearError: false });
     }
@@ -271,15 +317,19 @@ export function GitChanges({
     if (!ok) return;
     try {
       setError(null);
-      await invoke("git_discard_all", { projectPath });
+      await invokeGitCommand(
+        isRemote ? "remote_git_discard_all" : "git_discard_all",
+        gitCommandContext,
+      );
     } catch (err) {
-      setError(t("git.discardFailed", { error: String(err) }));
+      setError(t("git.discardFailed", { error: formatInvokeError(err) }));
     } finally {
       await refresh({ clearError: false });
     }
   };
 
   const handleGenerateMsg = async () => {
+    if (isRemote) return;
     setGeneratingMsg(true);
     setError(null);
     try {
@@ -288,7 +338,7 @@ export function GitChanges({
       setCommitMsg(msg);
       if (commitMsgError) setCommitMsgError(false);
     } catch (err) {
-      if (!isCancelled()) setError(String(err));
+      if (!isCancelled()) setError(formatInvokeError(err));
     } finally {
       if (!isCancelled()) setGeneratingMsg(false);
     }
@@ -303,11 +353,14 @@ export function GitChanges({
     setCommitting(true);
     setError(null);
     try {
-      await invoke("git_commit", { projectPath, message: commitMsg.trim() });
+      await invokeGitCommand(isRemote ? "remote_git_commit" : "git_commit", {
+        ...gitCommandContext,
+        message: commitMsg.trim(),
+      });
       setCommitMsg("");
       refresh();
     } catch (err) {
-      setError(String(err));
+      setError(formatInvokeError(err));
     } finally {
       setCommitting(false);
     }
@@ -574,7 +627,7 @@ export function GitChanges({
             style={{
               width: "100%",
               padding: "8px 10px",
-              paddingRight: 36,
+              paddingRight: isRemote ? 10 : 36,
               background: "var(--bg-card)",
               border: `1px solid ${commitMsgError ? "var(--danger-fg)" : textareaFocused ? "var(--control-active-fg)" : "var(--border-medium)"}`,
               borderRadius: 6,
@@ -590,27 +643,29 @@ export function GitChanges({
               if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) handleCommit();
             }}
           />
-          <button
-            onClick={handleGenerateMsg}
-            disabled={generatingMsg}
-            title={t("git.generateCommitMessage")}
-            style={{
-              position: "absolute",
-              top: 6,
-              right: 6,
-              background: "none",
-              border: "none",
-              cursor: generatingMsg ? "default" : "pointer",
-              padding: 3,
-              borderRadius: 4,
-              color: generatingMsg ? "var(--accent)" : "var(--text-hint)",
-              display: "flex",
-              alignItems: "center",
-              transition: "color 0.15s",
-            }}
-          >
-            <Sparkles size={14} className={generatingMsg ? "spin" : ""} />
-          </button>
+          {!isRemote && (
+            <button
+              onClick={handleGenerateMsg}
+              disabled={generatingMsg}
+              title={t("git.generateCommitMessage")}
+              style={{
+                position: "absolute",
+                top: 6,
+                right: 6,
+                background: "none",
+                border: "none",
+                cursor: generatingMsg ? "default" : "pointer",
+                padding: 3,
+                borderRadius: 4,
+                color: generatingMsg ? "var(--accent)" : "var(--text-hint)",
+                display: "flex",
+                alignItems: "center",
+                transition: "color 0.15s",
+              }}
+            >
+              <Sparkles size={14} className={generatingMsg ? "spin" : ""} />
+            </button>
+          )}
         </div>
         {commitMsgError && (
           <div style={{ fontSize: 11.5, color: "var(--danger-fg)", marginTop: 3, paddingLeft: 2 }}>

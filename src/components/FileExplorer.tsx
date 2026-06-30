@@ -1,5 +1,9 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
-import { useCancellableInvoke } from "../hooks/useCancellableInvoke";
+import {
+  formatInvokeError,
+  remoteInvokeOptions,
+  useCancellableInvoke,
+} from "../hooks/useCancellableInvoke";
 import { invoke } from "@tauri-apps/api/core";
 import { confirm } from "@tauri-apps/plugin-dialog";
 import { ArrowDown, ArrowUp, RotateCcw } from "lucide-react";
@@ -93,6 +97,7 @@ export function FileExplorer({
   const [nodes, setNodes] = useState<TreeNode[]>([]);
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [scrollTop, setScrollTop] = useState(0);
   const [viewportHeight, setViewportHeight] = useState(500);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -176,7 +181,7 @@ export function FileExplorer({
         await invoke("open_in_system_file_manager", { path, projectPath });
       } catch (error) {
         console.error("Failed to open file in system folder", error);
-        showToast(t("file.failedOpenSystemFolder", { error: String(error) }));
+        showToast(t("file.failedOpenSystemFolder", { error: formatInvokeError(error) }));
       }
     },
     [projectPath, showToast, t],
@@ -198,6 +203,7 @@ export function FileExplorer({
   const { safeInvoke, isCancelled } = useCancellableInvoke();
   const nodesRef = useRef<TreeNode[]>([]);
   const refreshIdRef = useRef(0);
+  const refreshInFlightRef = useRef(false);
 
   useEffect(() => {
     nodesRef.current = nodes;
@@ -210,17 +216,23 @@ export function FileExplorer({
   const readEntries = useCallback(
     (path: string) =>
       remote
-        ? safeInvoke<FsEntry[]>("remote_read_dir_entries", {
-            connection: remote.connection,
-            remotePath: path,
-            remoteProjectPath: remote.projectPath,
-          })
+        ? safeInvoke<FsEntry[]>(
+            "remote_read_dir_entries",
+            {
+              connection: remote.connection,
+              remotePath: path,
+              remoteProjectPath: remote.projectPath,
+            },
+            remoteInvokeOptions(),
+          )
         : safeInvoke<FsEntry[]>("read_dir_entries", { path, projectPath }),
     [projectPath, remote, safeInvoke],
   );
 
   const refresh = useCallback(
     async (showLoading = false) => {
+      if (refreshInFlightRef.current) return;
+      refreshInFlightRef.current = true;
       const refreshId = refreshIdRef.current + 1;
       refreshIdRef.current = refreshId;
       if (showLoading) setLoading(true);
@@ -234,11 +246,15 @@ export function FileExplorer({
         if (nextNodes !== nodesRef.current) {
           setNodes(nextNodes);
         }
+        setLoadError(null);
         setLoading(false);
-      } catch {
+      } catch (error) {
         if (!isCancelled() && refreshId === refreshIdRef.current) {
+          setLoadError(formatInvokeError(error));
           setLoading(false);
         }
+      } finally {
+        refreshInFlightRef.current = false;
       }
     },
     [isCancelled, projectPath, readEntries, sortDirection, sortField],
@@ -341,20 +357,25 @@ export function FileExplorer({
       if (!shouldExpand) return;
 
       void (async () => {
-        const currentChildren = findNode(nodesRef.current, dirPath)?.children ?? [];
-        const nextChildren = await loadTreeNodes(dirPath, currentChildren, async (path) => {
-          const entries = await readEntries(path);
-          return entries ? sortFileEntries(entries, sortField, sortDirection) : entries;
-        });
-        if (nextChildren === null) return;
-        setNodes((prev) =>
-          updateNode(prev, dirPath, (node) =>
-            node.children === nextChildren ? node : { ...node, children: nextChildren },
-          ),
-        );
+        try {
+          const currentChildren = findNode(nodesRef.current, dirPath)?.children ?? [];
+          const nextChildren = await loadTreeNodes(dirPath, currentChildren, async (path) => {
+            const entries = await readEntries(path);
+            return entries ? sortFileEntries(entries, sortField, sortDirection) : entries;
+          });
+          if (nextChildren === null) return;
+          setLoadError(null);
+          setNodes((prev) =>
+            updateNode(prev, dirPath, (node) =>
+              node.children === nextChildren ? node : { ...node, children: nextChildren },
+            ),
+          );
+        } catch (error) {
+          if (!isCancelled()) setLoadError(formatInvokeError(error));
+        }
       })();
     },
-    [readEntries, sortDirection, sortField],
+    [isCancelled, readEntries, sortDirection, sortField],
   );
 
   const handleSelect = useCallback(
@@ -461,21 +482,29 @@ export function FileExplorer({
     try {
       if (kind === "file") {
         if (remote) {
-          await safeInvoke("remote_create_file", {
-            connection: remote.connection,
-            remotePath: fullPath,
-            remoteProjectPath: remote.projectPath,
-          });
+          await safeInvoke(
+            "remote_create_file",
+            {
+              connection: remote.connection,
+              remotePath: fullPath,
+              remoteProjectPath: remote.projectPath,
+            },
+            remoteInvokeOptions(),
+          );
         } else {
           await safeInvoke("create_file", { path: fullPath, projectPath });
         }
       } else {
         if (remote) {
-          await safeInvoke("remote_create_directory", {
-            connection: remote.connection,
-            remotePath: fullPath,
-            remoteProjectPath: remote.projectPath,
-          });
+          await safeInvoke(
+            "remote_create_directory",
+            {
+              connection: remote.connection,
+              remotePath: fullPath,
+              remoteProjectPath: remote.projectPath,
+            },
+            remoteInvokeOptions(),
+          );
         } else {
           await safeInvoke("create_directory", { path: fullPath, projectPath });
         }
@@ -494,7 +523,7 @@ export function FileExplorer({
       }
     } catch (error) {
       if (!isCancelled()) {
-        showToast(t("file.createFailed", { error: String(error) }));
+        showToast(t("file.createFailed", { error: formatInvokeError(error) }));
       }
     } finally {
       commitInFlightRef.current = false;
@@ -578,12 +607,16 @@ export function FileExplorer({
     const nextPath = joinPath(parentPath, name);
     try {
       if (remote) {
-        await safeInvoke("remote_rename_path", {
-          connection: remote.connection,
-          remotePath: oldPath,
-          newName: name,
-          remoteProjectPath: remote.projectPath,
-        });
+        await safeInvoke(
+          "remote_rename_path",
+          {
+            connection: remote.connection,
+            remotePath: oldPath,
+            newName: name,
+            remoteProjectPath: remote.projectPath,
+          },
+          remoteInvokeOptions(),
+        );
       } else {
         await safeInvoke("rename_path", { path: oldPath, newName: name, projectPath });
       }
@@ -597,7 +630,7 @@ export function FileExplorer({
       }
     } catch (error) {
       if (!isCancelled()) {
-        showToast(t("file.renameFailed", { error: String(error) }));
+        showToast(t("file.renameFailed", { error: formatInvokeError(error) }));
       }
     } finally {
       renameInFlightRef.current = false;
@@ -632,12 +665,16 @@ export function FileExplorer({
       pasteInFlightRef.current = true;
       try {
         if (remote) {
-          await safeInvoke("remote_upload_local_paths_to_directory", {
-            connection: remote.connection,
-            localSourcePaths: sourcePaths,
-            targetDirectory,
-            remoteProjectPath: remote.projectPath,
-          });
+          await safeInvoke(
+            "remote_upload_local_paths_to_directory",
+            {
+              connection: remote.connection,
+              localSourcePaths: sourcePaths,
+              targetDirectory,
+              remoteProjectPath: remote.projectPath,
+            },
+            remoteInvokeOptions(300_000),
+          );
         } else {
           await safeInvoke("copy_paths_to_directory", {
             sourcePaths,
@@ -650,7 +687,7 @@ export function FileExplorer({
         await refresh();
       } catch (error) {
         if (!isCancelled()) {
-          showToast(t("file.pasteFailed", { error: String(error) }));
+          showToast(t("file.pasteFailed", { error: formatInvokeError(error) }));
         }
       } finally {
         pasteInFlightRef.current = false;
@@ -689,7 +726,7 @@ export function FileExplorer({
       await pasteSourcePaths(sourcePaths);
     } catch (error) {
       if (!isCancelled()) {
-        showToast(t("file.pasteFailed", { error: String(error) }));
+        showToast(t("file.pasteFailed", { error: formatInvokeError(error) }));
       }
     }
   }, [isCancelled, pasteSourcePaths, safeInvoke, showToast, t]);
@@ -713,11 +750,15 @@ export function FileExplorer({
       deleteInFlightRef.current = true;
       try {
         if (remote) {
-          await safeInvoke("remote_delete_path", {
-            connection: remote.connection,
-            remotePath: targetPath,
-            remoteProjectPath: remote.projectPath,
-          });
+          await safeInvoke(
+            "remote_delete_path",
+            {
+              connection: remote.connection,
+              remotePath: targetPath,
+              remoteProjectPath: remote.projectPath,
+            },
+            remoteInvokeOptions(),
+          );
         } else {
           await safeInvoke("delete_path", { path: targetPath, projectPath });
         }
@@ -733,7 +774,7 @@ export function FileExplorer({
         await refresh();
       } catch (error) {
         if (!isCancelled()) {
-          showToast(t("file.deleteFailed", { error: String(error) }));
+          showToast(t("file.deleteFailed", { error: formatInvokeError(error) }));
         }
       } finally {
         deleteInFlightRef.current = false;
@@ -755,7 +796,7 @@ export function FileExplorer({
           .then(() => showToast(t("file.pathCopied")))
           .catch((error) => {
             console.error("Failed to copy file path", error);
-            showToast(t("file.copyPathFailed", { error: String(error) }));
+            showToast(t("file.copyPathFailed", { error: formatInvokeError(error) }));
           });
       } else if (action === "rename") {
         startRenameSelected();
@@ -931,6 +972,24 @@ export function FileExplorer({
         <span style={s.fileExplorerRootIcon} />
         {projectName}
       </div>
+      {loadError && (
+        <div
+          role="alert"
+          data-testid="file-explorer-error"
+          style={{
+            margin: "8px 10px 0",
+            padding: "7px 9px",
+            background: "var(--danger-surface)",
+            border: "1px solid var(--danger-border)",
+            borderRadius: 6,
+            color: "var(--danger-fg)",
+            fontSize: 11.5,
+            lineHeight: 1.35,
+          }}
+        >
+          {loadError}
+        </div>
+      )}
       {/* Tree */}
       <div
         ref={scrollRef}

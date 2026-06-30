@@ -134,6 +134,61 @@ describe("search state", () => {
     ]);
   });
 
+  it("flattens only selected replace preview files when paths are provided", () => {
+    const preview: ReplacePreview = {
+      query: "old",
+      replacement: "new",
+      totalMatches: 2,
+      truncated: false,
+      files: [
+        {
+          path: "/repo/src/App.tsx",
+          name: "App.tsx",
+          matches: [
+            {
+              path: "/repo/src/App.tsx",
+              name: "App.tsx",
+              line: 1,
+              column: 7,
+              lineText: "const old = 1;",
+              matchText: "old",
+              replacementText: "new",
+              start: 6,
+              end: 9,
+            },
+          ],
+        },
+        {
+          path: "/repo/src/utils.ts",
+          name: "utils.ts",
+          matches: [
+            {
+              path: "/repo/src/utils.ts",
+              name: "utils.ts",
+              line: 2,
+              column: 8,
+              lineText: "return old;",
+              matchText: "old",
+              replacementText: "new",
+              start: 22,
+              end: 25,
+            },
+          ],
+        },
+      ],
+    };
+
+    expect(flattenReplacePreview(preview, new Set(["/repo/src/utils.ts"]))).toEqual([
+      {
+        path: "/repo/src/utils.ts",
+        start: 22,
+        end: 25,
+        matchText: "old",
+        replacementText: "new",
+      },
+    ]);
+  });
+
   it("requires a current preview before replacements can be applied", () => {
     const preview: ReplacePreview = {
       query: "old",

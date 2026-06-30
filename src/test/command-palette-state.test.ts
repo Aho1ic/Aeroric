@@ -21,6 +21,17 @@ describe("command palette state", () => {
     });
   });
 
+  it("uses symbol modes for @ and # input prefixes", () => {
+    expect(commandPaletteModeForInput("@ helper")).toEqual({
+      mode: "documentSymbol",
+      query: "helper",
+    });
+    expect(commandPaletteModeForInput("# service")).toEqual({
+      mode: "workspaceSymbol",
+      query: "service",
+    });
+  });
+
   it("ranks exact and prefix matches before fuzzy subtitle matches", () => {
     const ranked = rankCommandPaletteItems(items, "app", "file");
 

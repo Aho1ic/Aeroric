@@ -195,7 +195,13 @@ fn ssh_command_spec(
     if let Some(remote_command) = remote_command {
         ssh_args.push(remote_command);
     }
+    ssh_command_spec_from_args(connection, ssh_args)
+}
 
+fn ssh_command_spec_from_args(
+    connection: &SshConnection,
+    mut ssh_args: Vec<String>,
+) -> SshCommandSpec {
     let password = connection
         .password
         .as_ref()
@@ -226,6 +232,49 @@ fn ssh_command_spec(
             env: Vec::new(),
         }
     }
+}
+
+pub(crate) fn ssh_port_forward_command_spec(
+    connection: &SshConnection,
+    local_port: u16,
+    remote_host: &str,
+    remote_port: u16,
+) -> SshCommandSpec {
+    let mut ssh_args = build_ssh_args(
+        &SshConnection {
+            remote_path: None,
+            ..connection.clone()
+        },
+        false,
+    );
+    let target_index = ssh_args.len().saturating_sub(1);
+    ssh_args.splice(
+        target_index..target_index,
+        [
+            "-N".to_string(),
+            "-o".to_string(),
+            "ExitOnForwardFailure=yes".to_string(),
+            "-L".to_string(),
+            format!("127.0.0.1:{local_port}:{remote_host}:{remote_port}"),
+        ],
+    );
+    ssh_command_spec_from_args(connection, ssh_args)
+}
+
+pub(crate) fn std_ssh_port_forward_command(
+    connection: &SshConnection,
+    local_port: u16,
+    remote_host: &str,
+    remote_port: u16,
+) -> Command {
+    let spec = ssh_port_forward_command_spec(connection, local_port, remote_host, remote_port);
+    let mut cmd = Command::new(spec.program);
+    cmd.args(spec.args);
+    for (key, value) in spec.env {
+        cmd.env(key, value);
+    }
+    cmd.env("PATH", crate::app_settings::get_login_shell_path());
+    cmd
 }
 
 fn command_builder_from_spec(spec: SshCommandSpec) -> CommandBuilder {
@@ -713,6 +762,44 @@ mod tests {
             .args
             .windows(2)
             .any(|pair| pair == ["-o", "PubkeyAuthentication=no"]));
+    }
+
+    #[test]
+    fn ssh_port_forward_spec_places_forward_before_target() {
+        let spec = ssh_port_forward_command_spec(
+            &SshConnection {
+                id: "conn-1".to_string(),
+                name: "prod".to_string(),
+                group: None,
+                host: "prod.example.com".to_string(),
+                port: 2200,
+                username: "deploy".to_string(),
+                identity_file: None,
+                password: None,
+                remote_path: Some("/srv/app".to_string()),
+                created_at: 1,
+                last_connected_at: None,
+            },
+            49152,
+            "127.0.0.1",
+            5678,
+        );
+
+        assert_eq!(spec.program, "ssh");
+        assert_eq!(
+            spec.args,
+            vec![
+                "-T",
+                "-p",
+                "2200",
+                "-N",
+                "-o",
+                "ExitOnForwardFailure=yes",
+                "-L",
+                "127.0.0.1:49152:127.0.0.1:5678",
+                "deploy@prod.example.com"
+            ]
+        );
     }
 
     #[test]

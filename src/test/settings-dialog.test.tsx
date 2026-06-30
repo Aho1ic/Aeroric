@@ -1,18 +1,27 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { invoke } from "@tauri-apps/api/core";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { act } from "react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SettingsDialog } from "../components/SettingsDialog";
 import { I18nProvider } from "../i18n";
+import { REMOTE_IDE_COMMAND_TIMEOUT_MS } from "../hooks/useCancellableInvoke";
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(),
 }));
 
-function renderSettingsDialog(onClose = vi.fn()) {
+function renderSettingsDialog(
+  onClose = vi.fn(),
+  remote?: React.ComponentProps<typeof SettingsDialog>["remote"],
+) {
   render(
     <I18nProvider>
-      <SettingsDialog projectPath="/tmp/aeroric" onClose={onClose} />
+      <SettingsDialog
+        projectPath={remote ? "/srv/app" : "/tmp/aeroric"}
+        onClose={onClose}
+        remote={remote}
+      />
     </I18nProvider>,
   );
 }
@@ -37,6 +46,10 @@ function projectConfig(formatOnSave: boolean) {
 describe("SettingsDialog", () => {
   beforeEach(() => {
     vi.mocked(invoke).mockReset();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it("saves the format-on-save editor setting without dropping project config", async () => {
@@ -76,5 +89,65 @@ describe("SettingsDialog", () => {
         },
       },
     });
+  });
+
+  it("uses remote project config commands for SSH project settings", async () => {
+    const onClose = vi.fn();
+    const connection = {
+      id: "conn-2",
+      name: "Production",
+      host: "prod.example.com",
+      port: 22,
+      username: "deploy",
+      createdAt: 2,
+    };
+    vi.mocked(invoke).mockImplementation((command) => {
+      if (command === "remote_read_project_config") return Promise.resolve(projectConfig(false));
+      if (command === "remote_write_project_config") return Promise.resolve(undefined);
+      return Promise.reject(new Error(`unexpected command: ${command}`));
+    });
+
+    renderSettingsDialog(onClose, { connection, projectPath: "/srv/app" });
+
+    const formatOnSave = await screen.findByRole("checkbox", { name: /Format on save/ });
+    await userEvent.click(formatOnSave);
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    expect(vi.mocked(invoke)).toHaveBeenCalledWith("remote_read_project_config", {
+      connection,
+      remoteProjectPath: "/srv/app",
+    });
+    expect(vi.mocked(invoke)).toHaveBeenCalledWith("remote_write_project_config", {
+      connection,
+      remoteProjectPath: "/srv/app",
+      config: expect.objectContaining({
+        editor: { format_on_save: true },
+      }),
+    });
+  });
+
+  it("shows a visible timeout when remote project settings loading hangs", async () => {
+    vi.useFakeTimers();
+    const connection = {
+      id: "conn-2",
+      name: "Production",
+      host: "prod.example.com",
+      port: 22,
+      username: "deploy",
+      createdAt: 2,
+    };
+    vi.mocked(invoke).mockImplementation((command) => {
+      if (command === "remote_read_project_config") return new Promise(() => {});
+      return Promise.reject(new Error(`unexpected command: ${command}`));
+    });
+
+    renderSettingsDialog(vi.fn(), { connection, projectPath: "/srv/app" });
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(REMOTE_IDE_COMMAND_TIMEOUT_MS);
+    });
+
+    expect(screen.getByText(/remote_read_project_config.*timed out after 60s/i)).toBeInTheDocument();
   });
 });

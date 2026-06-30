@@ -7,7 +7,13 @@ import { parseDiff } from "./git-diff/parse";
 import type { DiffViewMode } from "./git-diff/types";
 import { load, save } from "../utils";
 import { useI18n } from "../i18n";
+import {
+  formatInvokeError,
+  invokeWithTimeout,
+  remoteInvokeOptions,
+} from "../hooks/useCancellableInvoke";
 import s from "../styles";
+import type { SshConnection } from "../types";
 
 const VIEW_MODE_KEY = "aeroric.diffViewMode";
 
@@ -20,6 +26,10 @@ interface Props {
   staged?: boolean;
   title: string;
   onClose: () => void;
+  remote?: {
+    connection: SshConnection;
+    projectPath: string;
+  };
 }
 
 function ViewToggleButton({
@@ -59,6 +69,7 @@ export function GitDiffViewer({
   staged,
   title,
   onClose,
+  remote,
 }: Props) {
   const { t } = useI18n();
   const [diff, setDiff] = useState<string>("");
@@ -80,32 +91,70 @@ export function GitDiffViewer({
       try {
         let result: string;
         if (mode === "commit" && commitHash) {
-          result = await invoke<string>("git_show_diff", { projectPath, commitHash });
+          if (remote) {
+            result = await invokeWithTimeout(
+              invoke<string>("remote_git_show_commit_diff", {
+                connection: remote.connection,
+                remoteProjectPath: remote.projectPath,
+                commitHash,
+              }),
+              "remote_git_show_commit_diff",
+              remoteInvokeOptions(),
+            );
+          } else {
+            result = await invoke<string>("git_show_diff", { projectPath, commitHash });
+          }
         } else if (mode === "commit-file" && commitHash && filePath !== undefined) {
-          result = await invoke<string>("git_show_file_diff", {
-            projectPath,
-            commitHash,
-            filePath,
-          });
+          if (remote) {
+            result = await invokeWithTimeout(
+              invoke<string>("remote_git_show_file_diff", {
+                connection: remote.connection,
+                remoteProjectPath: remote.projectPath,
+                commitHash,
+                filePath,
+              }),
+              "remote_git_show_file_diff",
+              remoteInvokeOptions(),
+            );
+          } else {
+            result = await invoke<string>("git_show_file_diff", {
+              projectPath,
+              commitHash,
+              filePath,
+            });
+          }
         } else if (mode === "file" && filePath !== undefined) {
-          result = await invoke<string>("git_file_diff", {
-            projectPath,
-            filePath,
-            staged: staged ?? false,
-          });
+          if (remote) {
+            result = await invokeWithTimeout(
+              invoke<string>("remote_git_file_diff", {
+                connection: remote.connection,
+                remoteProjectPath: remote.projectPath,
+                filePath,
+                staged: staged ?? false,
+              }),
+              "remote_git_file_diff",
+              remoteInvokeOptions(),
+            );
+          } else {
+            result = await invoke<string>("git_file_diff", {
+              projectPath,
+              filePath,
+              staged: staged ?? false,
+            });
+          }
         } else {
           result = "";
         }
         setDiff(result);
       } catch (e) {
-        setError(String(e));
+        setError(formatInvokeError(e));
       } finally {
         setLoading(false);
       }
     };
 
     loadDiff();
-  }, [projectPath, mode, commitHash, filePath, staged]);
+  }, [projectPath, mode, commitHash, filePath, staged, remote]);
 
   const { parsedFiles, totalAdditions, totalDeletions } = useMemo(() => {
     const files = parseDiff(diff, projectPath);

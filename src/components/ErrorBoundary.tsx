@@ -8,6 +8,7 @@ interface Props {
   label?: string;
   /** 捕获到错误时的自定义回退 UI；不传则使用内置样式 */
   fallback?: (error: Error, reset: () => void) => ReactNode;
+  onError?: (error: Error, info: ErrorInfo) => void;
 }
 
 interface State {
@@ -30,6 +31,7 @@ export class ErrorBoundary extends Component<Props, State> {
       error,
       info.componentStack,
     );
+    this.props.onError?.(error, info);
   }
 
   reset = () => {

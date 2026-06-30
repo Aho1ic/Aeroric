@@ -57,15 +57,31 @@ export function searchMatchPreview(match: TextSearchMatch, contextChars = 28): s
   return `${prefix}${match.lineText.slice(start, end)}${suffix}`;
 }
 
-export function flattenReplacePreview(preview: ReplacePreview): TextReplacement[] {
+export function flattenReplacePreview(
+  preview: ReplacePreview,
+  selectedPaths?: ReadonlySet<string>,
+): TextReplacement[] {
   return preview.files.flatMap((file) =>
-    file.matches.map((match) => ({
-      path: file.path,
-      start: match.start,
-      end: match.end,
-      matchText: match.matchText,
-      replacementText: match.replacementText,
-    })),
+    selectedPaths && !selectedPaths.has(file.path)
+      ? []
+      : file.matches.map((match) => ({
+          path: file.path,
+          start: match.start,
+          end: match.end,
+          matchText: match.matchText,
+          replacementText: match.replacementText,
+        })),
+  );
+}
+
+export function countSelectedPreviewMatches(
+  preview: ReplacePreview | null,
+  selectedPaths: ReadonlySet<string>,
+): number {
+  if (!preview) return 0;
+  return preview.files.reduce(
+    (total, file) => total + (selectedPaths.has(file.path) ? file.matches.length : 0),
+    0,
   );
 }
 

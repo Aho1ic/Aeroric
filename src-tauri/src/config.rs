@@ -1,8 +1,11 @@
 use std::fs;
+use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
+use std::process::Stdio;
 
 use crate::app_settings::{self, AppSettings};
+use crate::ssh::SshConnection;
 use crate::storage::atomic_write;
 
 const DEFAULT_COMMIT_MESSAGE_TIMEOUT_SECS: u64 = 15;
@@ -129,6 +132,144 @@ pub fn write_project_config(project_path: String, config: ProjectConfig) -> Resu
     atomic_write(&config_path, &raw)
 }
 
+fn remote_config_path_has_relative_components(path: &str) -> bool {
+    path.split('/')
+        .any(|component| component == "." || component == "..")
+}
+
+fn normalize_remote_config_root(remote_project_path: &str) -> Result<String, String> {
+    let trimmed = remote_project_path.trim();
+    if !trimmed.starts_with('/') {
+        return Err("Remote project path must be absolute".to_string());
+    }
+    if trimmed.contains('\0') || remote_config_path_has_relative_components(trimmed) {
+        return Err("Remote project path cannot contain . or .. components".to_string());
+    }
+    Ok(if trimmed == "/" {
+        "/".to_string()
+    } else {
+        trimmed.trim_end_matches('/').to_string()
+    })
+}
+
+fn remote_project_config_dir(remote_root: &str) -> String {
+    if remote_root == "/" {
+        "/.aeroric".to_string()
+    } else {
+        format!("{}/.aeroric", remote_root.trim_end_matches('/'))
+    }
+}
+
+fn remote_project_config_path(remote_root: &str) -> String {
+    format!("{}/config.toml", remote_project_config_dir(remote_root))
+}
+
+fn build_remote_read_project_config_command(remote_root: &str) -> String {
+    let config_path = remote_project_config_path(remote_root);
+    let quoted_path = crate::ssh::shell_quote_posix(&config_path);
+    format!("[ ! -f {quoted_path} ] || cat -- {quoted_path}")
+}
+
+fn build_remote_write_project_config_command(remote_root: &str) -> String {
+    let config_dir = remote_project_config_dir(remote_root);
+    let config_path = remote_project_config_path(remote_root);
+    format!(
+        "mkdir -p -- {} && cat > {}",
+        crate::ssh::shell_quote_posix(&config_dir),
+        crate::ssh::shell_quote_posix(&config_path)
+    )
+}
+
+fn read_remote_project_config_from_root(
+    connection: &SshConnection,
+    remote_root: &str,
+) -> Result<ProjectConfig, String> {
+    let mut cmd = crate::ssh::std_ssh_command_for_remote_command(
+        connection,
+        build_remote_read_project_config_command(remote_root),
+    );
+    crate::subprocess::configure_background_command(&mut cmd);
+    let output = cmd.output().map_err(|e| e.to_string())?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(if stderr.is_empty() {
+            "Failed to read remote project config".to_string()
+        } else {
+            stderr
+        });
+    }
+    let raw = String::from_utf8_lossy(&output.stdout);
+    if raw.trim().is_empty() {
+        return Ok(ProjectConfig::default());
+    }
+    Ok(toml::from_str(&raw).unwrap_or_default())
+}
+
+fn write_remote_project_config_from_root(
+    connection: &SshConnection,
+    remote_root: &str,
+    config: ProjectConfig,
+) -> Result<(), String> {
+    let raw = toml::to_string_pretty(&config).map_err(|e| e.to_string())?;
+    let mut cmd = crate::ssh::std_ssh_command_for_remote_command(
+        connection,
+        build_remote_write_project_config_command(remote_root),
+    );
+    crate::subprocess::configure_background_command(&mut cmd);
+    let mut child = cmd
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| e.to_string())?;
+    {
+        let stdin = child
+            .stdin
+            .as_mut()
+            .ok_or_else(|| "Failed to open remote project config writer".to_string())?;
+        stdin
+            .write_all(raw.as_bytes())
+            .map_err(|e| format!("Failed to write remote project config: {}", e))?;
+    }
+    let output = child.wait_with_output().map_err(|e| e.to_string())?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(if stderr.is_empty() {
+            "Failed to write remote project config".to_string()
+        } else {
+            stderr
+        });
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn remote_read_project_config(
+    connection: SshConnection,
+    remote_project_path: String,
+) -> Result<ProjectConfig, String> {
+    let remote_root = normalize_remote_config_root(&remote_project_path)?;
+    tokio::task::spawn_blocking(move || {
+        read_remote_project_config_from_root(&connection, &remote_root)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn remote_write_project_config(
+    connection: SshConnection,
+    remote_project_path: String,
+    config: ProjectConfig,
+) -> Result<(), String> {
+    let remote_root = normalize_remote_config_root(&remote_project_path)?;
+    tokio::task::spawn_blocking(move || {
+        write_remote_project_config_from_root(&connection, &remote_root, config)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 fn configured_path(value: &str) -> Option<PathBuf> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
@@ -243,6 +384,24 @@ commit_message_timeout_secs = 15
         .unwrap();
 
         assert!(!config.editor.format_on_save);
+    }
+
+    #[test]
+    fn remote_project_config_paths_are_normalized_and_quoted() {
+        assert_eq!(
+            normalize_remote_config_root("/srv/app/").unwrap(),
+            "/srv/app"
+        );
+        assert!(normalize_remote_config_root("srv/app").is_err());
+        assert!(normalize_remote_config_root("/srv/../app").is_err());
+        assert_eq!(
+            build_remote_read_project_config_command("/srv/app repo"),
+            "[ ! -f '/srv/app repo/.aeroric/config.toml' ] || cat -- '/srv/app repo/.aeroric/config.toml'"
+        );
+        assert_eq!(
+            build_remote_write_project_config_command("/srv/app repo"),
+            "mkdir -p -- '/srv/app repo/.aeroric' && cat > '/srv/app repo/.aeroric/config.toml'"
+        );
     }
 
     #[test]

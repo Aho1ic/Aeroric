@@ -21,6 +21,7 @@ import {
 import { useI18n } from "../i18n";
 import type { RightPanel } from "../hooks/useProjectPanels";
 import {
+  getIdeToolTitleWithDisabledReason,
   getRightRailIdeTools,
   type IdeToolAvailability,
   type IdeToolIcon,
@@ -56,8 +57,12 @@ export function RightToolbar({
   onOpenSettings,
   filesDisabled = false,
   gitDisabled = false,
+  gitChangesDisabled = gitDisabled,
+  gitHistoryDisabled = gitDisabled,
   problemsDisabled = false,
+  runDisabled = false,
   terminalDisabled = false,
+  terminalTitle,
   searchDisabled = false,
   debugDisabled = false,
   previewDisabled = false,
@@ -71,8 +76,12 @@ export function RightToolbar({
   onOpenSettings: () => void;
   filesDisabled?: boolean;
   gitDisabled?: boolean;
+  gitChangesDisabled?: boolean;
+  gitHistoryDisabled?: boolean;
   problemsDisabled?: boolean;
+  runDisabled?: boolean;
   terminalDisabled?: boolean;
+  terminalTitle?: string;
   searchDisabled?: boolean;
   debugDisabled?: boolean;
   previewDisabled?: boolean;
@@ -84,7 +93,7 @@ export function RightToolbar({
     filesDisabled,
     gitDisabled,
     problemsDisabled,
-    terminalDisabled,
+    runDisabled,
     searchDisabled,
     debugDisabled,
     previewDisabled,
@@ -93,7 +102,7 @@ export function RightToolbar({
   const toToolbarButton = (tool: (typeof ideTools)[number]) => ({
     key: tool.panel,
     icon: renderIdeToolIcon(tool.icon),
-    title: t(tool.titleKey),
+    title: getIdeToolTitleWithDisabledReason(tool, t(tool.titleKey)),
     disabled: tool.disabled,
   });
   const primaryIdeButtons = ideTools
@@ -111,20 +120,20 @@ export function RightToolbar({
     {
       key: "files",
       icon: <Folder size={17} />,
-      title: t("toolbar.fileExplorer"),
+      title: filesDisabled ? t("ssh.connectionRequired.fileExplorer") : t("toolbar.fileExplorer"),
       disabled: filesDisabled,
     },
     {
       key: "git-changes",
       icon: <GitBranch size={17} />,
-      title: t("toolbar.gitChanges"),
-      disabled: gitDisabled,
+      title: gitChangesDisabled ? t("ssh.connectionRequired.gitChanges") : t("toolbar.gitChanges"),
+      disabled: gitChangesDisabled,
     },
     {
       key: "git-history",
       icon: <History size={17} />,
-      title: t("toolbar.gitHistory"),
-      disabled: gitDisabled,
+      title: gitHistoryDisabled ? t("ssh.connectionRequired.gitHistory") : t("toolbar.gitHistory"),
+      disabled: gitHistoryDisabled,
     },
     ...primaryIdeButtons,
     { key: "ssh", icon: <Server size={17} />, title: t("ssh.title") },
@@ -134,7 +143,7 @@ export function RightToolbar({
     {
       key: "docker",
       icon: <DockerIcon size={19} />,
-      title: t("docker.title"),
+      title: dockerDisabled ? t("ssh.connectionRequired.docker") : t("docker.title"),
       disabled: dockerDisabled,
     },
   ];
@@ -142,7 +151,7 @@ export function RightToolbar({
   const footerItems = [
     {
       icon: <Settings size={17} />,
-      title: t("settings.title"),
+      title: settingsDisabled ? t("ssh.connectionRequired.settings") : t("settings.title"),
       disabled: settingsDisabled,
       onClick: onOpenSettings,
     },
@@ -178,7 +187,7 @@ export function RightToolbar({
 
       <IconButton
         icon={<Terminal size={17} />}
-        title={t("terminal.title")}
+        title={terminalTitle ?? t("terminal.title")}
         active={terminalActive}
         activeVariant="icon"
         disabled={terminalDisabled}

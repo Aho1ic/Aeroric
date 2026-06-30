@@ -287,10 +287,15 @@ fn detect_path(binary: &str) -> String {
     crate::platform::detect_path(binary)
 }
 
-fn resolve_input_path(path: &str, _binary: &str) -> String {
+fn resolve_input_path(path: &str, binary: &str) -> String {
     let trimmed = path.trim();
     if trimmed.is_empty() {
-        return String::new();
+        let detected = detect_path(binary);
+        return if detected.is_empty() {
+            binary.to_string()
+        } else {
+            detected
+        };
     }
 
     let detected = detect_path(trimmed);
@@ -735,7 +740,7 @@ fn detect_version(launch: &AgentLaunchSpec) -> Option<String> {
     cmd.arg("--version")
         .env("PATH", get_login_shell_path())
         .stdin(Stdio::null())
-        .stderr(Stdio::null());
+        .stderr(Stdio::piped());
     for (key, value) in &launch.extra_env {
         cmd.env(key, value);
     }
@@ -745,10 +750,53 @@ fn detect_version(launch: &AgentLaunchSpec) -> Option<String> {
         return None;
     }
 
-    let text = String::from_utf8_lossy(&output.stdout);
-    text.split_whitespace()
-        .find(|s| s.chars().next().is_some_and(|c| c.is_ascii_digit()))
-        .map(|s| s.to_string())
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    extract_semver(&stdout).or_else(|| extract_semver(&stderr))
+}
+
+fn extract_semver(text: &str) -> Option<String> {
+    let chars: Vec<(usize, char)> = text.char_indices().collect();
+    let mut index = 0;
+    while index < chars.len() {
+        let (start, ch) = chars[index];
+        if !ch.is_ascii_digit() {
+            index += 1;
+            continue;
+        }
+
+        let mut end = start + ch.len_utf8();
+        let mut dot_count = 0;
+        let mut cursor = index + 1;
+        while cursor < chars.len() {
+            let (char_index, next) = chars[cursor];
+            if next.is_ascii_digit() {
+                end = char_index + next.len_utf8();
+                cursor += 1;
+                continue;
+            }
+            if next == '.' {
+                dot_count += 1;
+                end = char_index + next.len_utf8();
+                cursor += 1;
+                continue;
+            }
+            break;
+        }
+
+        let candidate = text[start..end].trim_matches('.');
+        let parts = candidate.split('.').collect::<Vec<_>>();
+        if dot_count > 0
+            && parts.len() >= 2
+            && parts
+                .iter()
+                .all(|part| !part.is_empty() && part.chars().all(|c| c.is_ascii_digit()))
+        {
+            return Some(candidate.to_string());
+        }
+        index = cursor.max(index + 1);
+    }
+    None
 }
 
 fn detect_versions_for_settings(settings: &AppSettings) -> AgentVersions {
@@ -859,4 +907,31 @@ pub async fn get_system_fonts() -> Vec<String> {
     })
     .await
     .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn extracts_claude_code_semver_from_new_cli_output() {
+        assert_eq!(
+            extract_semver("2.1.195 (Claude Code)"),
+            Some("2.1.195".to_string())
+        );
+    }
+
+    #[test]
+    fn extracts_prefixed_codex_semver() {
+        assert_eq!(
+            extract_semver("OpenAI Codex v0.131.0 (research preview)"),
+            Some("0.131.0".to_string())
+        );
+    }
+
+    #[test]
+    fn resolves_empty_agent_path_to_binary_name_when_path_detection_fails() {
+        let resolved = resolve_input_path("", "__aeroric_missing_agent_binary__");
+        assert_eq!(resolved, "__aeroric_missing_agent_binary__");
+    }
 }

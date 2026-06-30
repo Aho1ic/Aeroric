@@ -1,5 +1,6 @@
 import { lazy, Suspense, useMemo, useState, useCallback, useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import type {
   Project,
   Task,
@@ -16,6 +17,8 @@ import type {
   TextSearchMatch,
   DiagnosticItem,
   TestFailure,
+  TestCoverageSummary,
+  TestRunResult,
   DebugSessionSnapshot,
   DebugBreakpoint,
   RunProcessSnapshot,
@@ -28,6 +31,7 @@ import { CommandPalette, type CommandPaletteCommand } from "./command-palette/Co
 import { extractRunPreviewCandidates } from "./preview/portPanelState";
 import { ProjectRail } from "./ProjectRail";
 import { SettingsDialog } from "./SettingsDialog";
+import { useToast } from "./Toast";
 import { renderIdeToolIcon, RightToolbar } from "./RightToolbar";
 import { IconButton } from "./IconButton";
 import { TodoTaskView } from "./TodoTaskView";
@@ -55,12 +59,25 @@ import {
   shouldShowTaskWorkspace,
   visibleDockPanel,
 } from "./project-page/viewMode";
+import {
+  appendProjectActionLog,
+  finishProjectActionTrace,
+  readProjectActionLog,
+  startProjectActionTrace,
+  summarizeProjectActionLog,
+  writeProjectActionLog,
+  type ActionFeedbackState,
+  type ProjectActionKind,
+  type ProjectActionResult,
+} from "./project-page/actionFeedback";
 import { projectVisibilityStyle } from "./project-page/visibility";
 import { buildRunnableFileCommand, selectRunnableCondaEnvironment } from "./file-viewer/run";
+import { dispatchFileViewerCommand } from "./file-viewer/editorCommandEvents";
 import { isSqliteDatabaseFileName } from "./file-explorer/fileEntryUtils";
 import { agentDisplayLabel } from "../agents";
 import { useI18n } from "../i18n";
 import {
+  getIdeToolTitleWithDisabledReason,
   getCommandPaletteIdeTools,
   getProjectTopRightIdeTools,
   type IdeToolAvailability,
@@ -69,7 +86,12 @@ import {
   debugBreakpointFileForProject,
   toggleLineDebugBreakpoint,
 } from "./debug/debugBreakpointState";
+import type { EditorTestRunTarget } from "./file-viewer/testRunGutter";
+import { buildVitestDebugConfig } from "./tests/testDebugState";
+import type { TestRunPanelRequest } from "./tests/testExplorerState";
 import s from "../styles";
+
+const PROJECT_ACTION_LOG_STORAGE_PREFIX = "aeroric:project-action-log:";
 
 const FileViewer = lazy(() =>
   import("./FileViewer").then((module) => ({ default: module.FileViewer })),
@@ -114,6 +136,44 @@ const WebPreviewPanel = lazy(() =>
     default: module.WebPreviewPanel,
   })),
 );
+
+function projectPanelFeedbackLabel(
+  panel: Exclude<ReturnType<typeof useProjectPanels>["rightPanel"], null>,
+  t: (key: string) => string,
+): string {
+  switch (panel) {
+    case "files":
+      return t("toolbar.fileExplorer");
+    case "git-changes":
+      return t("toolbar.gitChanges");
+    case "git-history":
+      return t("toolbar.gitHistory");
+    case "git-advanced":
+      return t("gitAdvanced.title");
+    case "search":
+      return t("toolbar.search");
+    case "problems":
+      return t("problems.title");
+    case "tests":
+      return t("tests.title");
+    case "run":
+      return t("run.title");
+    case "debug":
+      return t("debug.title");
+    case "preview":
+      return t("preview.title");
+    case "ssh":
+      return t("ssh.title");
+    case "sftp":
+      return t("sftp.title");
+    case "database":
+      return t("database.title");
+    case "docker":
+      return t("docker.title");
+    case "notes":
+      return t("notes.title");
+  }
+}
 const DebugPanel = lazy(() =>
   import("./debug/DebugPanel").then((module) => ({ default: module.DebugPanel })),
 );
@@ -153,6 +213,25 @@ function escapeDraftHtml(text: string): string {
         return "&#39;";
     }
   });
+}
+
+type LspDiagnosticsEvent = {
+  projectPath: string;
+  filePath: string;
+  diagnostics: DiagnosticItem[];
+};
+
+function mergeLspDiagnostics(
+  current: DiagnosticItem[],
+  filePath: string,
+  diagnostics: DiagnosticItem[],
+): DiagnosticItem[] {
+  return [
+    ...current.filter(
+      (diagnostic) => diagnostic.file !== filePath || !diagnostic.source.startsWith("lsp:"),
+    ),
+    ...diagnostics,
+  ];
 }
 
 export function ProjectPage({
@@ -275,6 +354,7 @@ export function ProjectPage({
   onSelectedCondaEnvPathChange: (path: string | null) => void;
 }) {
   const { t } = useI18n();
+  const { showToast } = useToast();
   const {
     rightPanel,
     editorGroups,
@@ -312,6 +392,13 @@ export function ProjectPage({
   );
   const [launchedRunProcess, setLaunchedRunProcess] = useState<RunProcessSnapshot | null>(null);
   const [editorDebugBreakpoints, setEditorDebugBreakpoints] = useState<DebugBreakpoint[]>([]);
+  const [editorDiagnostics, setEditorDiagnostics] = useState<DiagnosticItem[]>([]);
+  const [editorCoverage, setEditorCoverage] = useState<TestCoverageSummary | null>(null);
+  const [testRunRequest, setTestRunRequest] = useState<TestRunPanelRequest | null>(null);
+  const [editorTestDebugError, setEditorTestDebugError] = useState<string | null>(null);
+  const [actionFeedback, setActionFeedback] = useState<ActionFeedbackState | null>(null);
+  const [actionLog, setActionLog] = useState<ProjectActionResult[]>([]);
+  const [showActionLogDetails, setShowActionLogDetails] = useState(false);
   const [responsiveLayout, setResponsiveLayout] = useState({
     autoCollapseRail: false,
     compactComposeControls: false,
@@ -333,10 +420,78 @@ export function ProjectPage({
   const pendingCmdRef = useRef<string | null>(null);
   const pendingRemoteSshCmdRef = useRef<string | null>(null);
   const previewOpenedForRunRef = useRef<string | null>(null);
+  const testRunRequestIdRef = useRef(0);
+  const actionFeedbackIdRef = useRef(0);
   const newTaskDraftRef = useRef<NewTaskDraft | null>(null);
   const handleCacheNewTaskDraft = useCallback((draft: NewTaskDraft | null) => {
     newTaskDraftRef.current = draft;
   }, []);
+  const actionLogStorageKey = `${PROJECT_ACTION_LOG_STORAGE_PREFIX}${project.id}`;
+
+  useEffect(() => {
+    setActionLog(readProjectActionLog(actionLogStorageKey));
+    setShowActionLogDetails(false);
+  }, [actionLogStorageKey]);
+
+  const recordActionFeedback = useCallback(
+    (result: ProjectActionResult) => {
+      setActionFeedback(result);
+      setActionLog((current) => {
+        const next = appendProjectActionLog(current, result);
+        writeProjectActionLog(actionLogStorageKey, next);
+        return next;
+      });
+    },
+    [actionLogStorageKey],
+  );
+
+  const showActionFeedback = useCallback(
+    (message: string, action: ProjectActionKind, target: string) => {
+      actionFeedbackIdRef.current += 1;
+      const trace = startProjectActionTrace({
+        id: actionFeedbackIdRef.current,
+        action,
+        target,
+      });
+      recordActionFeedback(finishProjectActionTrace(trace, { message }));
+    },
+    [recordActionFeedback],
+  );
+
+  const showActionFailure = useCallback(
+    (target: string, label: string, error: unknown) => {
+      actionFeedbackIdRef.current += 1;
+      const message = t("project.actionFeedback.failed", { action: label });
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      const trace = startProjectActionTrace({
+        id: actionFeedbackIdRef.current,
+        action: "open",
+        target,
+      });
+      recordActionFeedback(
+        finishProjectActionTrace(trace, {
+          message,
+          status: "failed",
+          error: errorMessage,
+        }),
+      );
+      showToast(t("toast.projectActionFailed", { action: label, error: errorMessage }), "error");
+    },
+    [recordActionFeedback, showToast, t],
+  );
+
+  useEffect(() => {
+    if (!actionFeedback) return;
+    const timeoutId = window.setTimeout(() => {
+      setActionFeedback((current) => (current?.id === actionFeedback.id ? null : current));
+    }, 1800);
+    return () => window.clearTimeout(timeoutId);
+  }, [actionFeedback]);
+
+  useEffect(() => {
+    setEditorDiagnostics([]);
+    setEditorCoverage(null);
+  }, [project.path]);
 
   const projectTasks = useMemo(
     () => tasks.filter((t) => t.projectId === project.id),
@@ -364,18 +519,53 @@ export function ProjectPage({
         : undefined,
     [projectLocation, remoteConnection],
   );
+  const actionLogSummary = useMemo(() => summarizeProjectActionLog(actionLog), [actionLog]);
+  const lspDiagnosticsProjectRoot =
+    projectLocation.kind === "ssh" ? projectLocation.remotePath : project.path;
+  useEffect(() => {
+    let disposed = false;
+    let unlisten: (() => void) | null = null;
+    void listen<LspDiagnosticsEvent>("lsp://diagnostics", (event) => {
+      if (disposed) return;
+      const payload = event.payload;
+      if (
+        payload.projectPath !== lspDiagnosticsProjectRoot &&
+        !payload.filePath.startsWith(`${lspDiagnosticsProjectRoot}/`)
+      ) {
+        return;
+      }
+      setEditorDiagnostics((current) =>
+        mergeLspDiagnostics(current, payload.filePath, payload.diagnostics),
+      );
+    }).then((nextUnlisten) => {
+      if (disposed) {
+        nextUnlisten();
+      } else {
+        unlisten = nextUnlisten;
+      }
+    });
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, [lspDiagnosticsProjectRoot]);
+  const remoteConnectionMissing = projectLocation.kind === "ssh" && !remoteConnection;
   const [remoteCondaEnvironments, setRemoteCondaEnvironments] = useState<CondaEnvironment[]>([]);
   const runnableCondaEnvironments =
     projectLocation.kind === "ssh" ? remoteCondaEnvironments : condaEnvironments;
   const fileRootPath = projectLocation.kind === "ssh" ? projectLocation.remotePath : project.path;
   const filesDisabled = projectLocation.kind === "ssh" && !remoteFileContext;
-  const gitDisabled = projectLocation.kind === "ssh";
-  const problemsDisabled = projectLocation.kind === "ssh";
-  const terminalDisabled = projectLocation.kind === "ssh";
-  const searchDisabled = projectLocation.kind === "ssh";
-  const debugDisabled = projectLocation.kind === "ssh";
-  const previewDisabled = projectLocation.kind === "ssh";
-  const settingsDisabled = projectLocation.kind === "ssh";
+  const gitChangesDisabled = projectLocation.kind === "ssh" && !remoteFileContext;
+  const gitHistoryDisabled = projectLocation.kind === "ssh" && !remoteFileContext;
+  const gitDisabled = projectLocation.kind === "ssh" && !remoteFileContext;
+  const problemsDisabled = projectLocation.kind === "ssh" && !remoteFileContext;
+  const terminalDisabled = !remoteConnection && projectLocation.kind === "ssh";
+  const runDisabled = projectLocation.kind === "ssh" && !remoteFileContext;
+  const testsDisabled = projectLocation.kind === "ssh" && !remoteFileContext;
+  const searchDisabled = projectLocation.kind === "ssh" && !remoteFileContext;
+  const debugDisabled = projectLocation.kind === "ssh" && !remoteFileContext;
+  const previewDisabled = projectLocation.kind === "ssh" && !remoteFileContext;
+  const settingsDisabled = !remoteFileContext && projectLocation.kind === "ssh";
   const showRemoteSshTerminal = shouldShowRemoteSshTerminal(
     projectLocation,
     Boolean(remoteConnection),
@@ -396,10 +586,12 @@ export function ProjectPage({
   const visibleRightPanel = visibleDockPanel(rightPanel, {
     filesDisabled,
     gitDisabled,
+    gitChangesDisabled,
+    gitHistoryDisabled,
     problemsDisabled,
-    runDisabled: terminalDisabled,
+    runDisabled,
     searchDisabled,
-    testsDisabled: terminalDisabled,
+    testsDisabled,
     debugDisabled,
     previewDisabled,
   });
@@ -427,15 +619,17 @@ export function ProjectPage({
   // GitChanges/GitHistory 的 cwd：worktree 任务用 worktree 路径，否则用主仓。
   // 主仓 git status 看不到 worktree 内未提交修改，必须切到 worktree cwd 才能查看 / 暂存 / 提交。
   const gitContextPath =
-    selectedTask?.worktreePath && !selectedTask.worktreeDiscarded
-      ? selectedTask.worktreePath
-      : project.path;
+    projectLocation.kind === "ssh"
+      ? projectLocation.remotePath
+      : selectedTask?.worktreePath && !selectedTask.worktreeDiscarded
+        ? selectedTask.worktreePath
+        : project.path;
   const remoteProjectPathKey = projectLocation.kind === "ssh" ? projectLocation.remotePath : "";
 
   const handleSearchFileSelect = useCallback(
-    (path: string, name: string) => {
+    (path: string, name: string, selection?: { line: number; column?: number }) => {
       setShowShellTerminal(false);
-      handleFileSelect(path, name);
+      handleFileSelect(path, name, selection);
       openRightPanel("files");
     },
     [handleFileSelect, openRightPanel],
@@ -477,6 +671,15 @@ export function ProjectPage({
   );
 
   const handleDebugLocationOpen = useCallback(
+    (path: string, name: string, selection?: { line: number; column?: number }) => {
+      setShowShellTerminal(false);
+      handleFileSelect(path, name, selection);
+      openRightPanel("files");
+    },
+    [handleFileSelect, openRightPanel],
+  );
+
+  const handleDefinitionOpen = useCallback(
     (path: string, name: string, selection?: { line: number; column?: number }) => {
       setShowShellTerminal(false);
       handleFileSelect(path, name, selection);
@@ -644,14 +847,84 @@ export function ProjectPage({
 
   const handleToggleRightPanel = useCallback(
     (panel: Parameters<typeof handleTogglePanel>[0]) => {
+      const label = projectPanelFeedbackLabel(panel, t);
+      showActionFeedback(
+        rightPanel === panel
+          ? t("project.actionFeedback.closed", { action: label })
+          : t("project.actionFeedback.opened", { action: label }),
+        rightPanel === panel ? "close" : "open",
+        panel,
+      );
       setShowShellTerminal(false);
       if (panel === "ssh" || panel === "database" || panel === "notes") {
         clearFileAndDiff();
       }
       handleTogglePanel(panel);
     },
-    [clearFileAndDiff, handleTogglePanel],
+    [clearFileAndDiff, handleTogglePanel, rightPanel, showActionFeedback, t],
   );
+
+  const handleOpenSshWorkspace = useCallback(() => {
+    showActionFeedback(
+      t("project.actionFeedback.opened", { action: t("ssh.title") }),
+      "open",
+      "ssh",
+    );
+    setShowShellTerminal(false);
+    clearFileAndDiff();
+    openRightPanel("ssh");
+  }, [clearFileAndDiff, openRightPanel, showActionFeedback, t]);
+
+  const handleOpenTerminal = useCallback(() => {
+    showActionFeedback(
+      t("project.actionFeedback.opened", { action: t("terminal.title") }),
+      "open",
+      "terminal",
+    );
+    closeRightPanel();
+    if (projectLocation.kind === "ssh") {
+      if (!remoteConnection) return;
+      clearFileAndDiff();
+      setShowShellTerminal(false);
+      return;
+    }
+    setShellTerminalMounted(true);
+    setShowShellTerminal(true);
+  }, [
+    clearFileAndDiff,
+    closeRightPanel,
+    projectLocation.kind,
+    remoteConnection,
+    showActionFeedback,
+    t,
+  ]);
+
+  const handleToggleTerminal = useCallback(() => {
+    showActionFeedback(
+      projectLocation.kind === "ssh" || !showShellTerminal
+        ? t("project.actionFeedback.opened", { action: t("terminal.title") })
+        : t("project.actionFeedback.closed", { action: t("terminal.title") }),
+      projectLocation.kind === "ssh" || !showShellTerminal ? "open" : "close",
+      "terminal",
+    );
+    closeRightPanel();
+    if (projectLocation.kind === "ssh") {
+      if (!remoteConnection) return;
+      clearFileAndDiff();
+      setShowShellTerminal(false);
+      return;
+    }
+    setShellTerminalMounted(true);
+    setShowShellTerminal((v) => !v);
+  }, [
+    clearFileAndDiff,
+    closeRightPanel,
+    projectLocation.kind,
+    remoteConnection,
+    showActionFeedback,
+    showShellTerminal,
+    t,
+  ]);
 
   const handleFileSelectWithShellMinimize = useCallback(
     (path: string, name: string) => {
@@ -716,12 +989,65 @@ export function ProjectPage({
     [project.path],
   );
 
+  const handleRunEditorTestTarget = useCallback(
+    (target: EditorTestRunTarget) => {
+      testRunRequestIdRef.current += 1;
+      setEditorTestDebugError(null);
+      setShowShellTerminal(false);
+      setTestRunRequest({
+        id: testRunRequestIdRef.current,
+        profile: "vitest",
+        target: {
+          filePath: target.filePath,
+          testName: target.testName,
+        },
+        coverage: false,
+      });
+      openRightPanel("tests");
+    },
+    [openRightPanel],
+  );
+
+  const handleTestRunResult = useCallback((result: TestRunResult) => {
+    setEditorCoverage(result.coverage ?? null);
+  }, []);
+
+  const handleDebugEditorTestTarget = useCallback(
+    async (target: EditorTestRunTarget) => {
+      setEditorTestDebugError(null);
+      setShowShellTerminal(false);
+      try {
+        const commandArgs = remoteFileContext
+          ? {
+              connection: remoteFileContext.connection,
+              remoteProjectPath: remoteFileContext.projectPath,
+              projectPath: fileRootPath,
+              config: buildVitestDebugConfig(fileRootPath, target),
+            }
+          : {
+              projectPath: project.path,
+              config: buildVitestDebugConfig(project.path, target),
+            };
+        const snapshot = await invoke<DebugSessionSnapshot>(
+          remoteFileContext ? "remote_start_debug_config" : "start_debug_config",
+          commandArgs,
+        );
+        handleRunDebugStarted(snapshot);
+      } catch (err) {
+        setEditorTestDebugError(String(err));
+        openRightPanel("debug");
+      }
+    },
+    [fileRootPath, handleRunDebugStarted, openRightPanel, project.path, remoteFileContext],
+  );
+
   const ideToolAvailability = useMemo<IdeToolAvailability>(
     () => ({
       filesDisabled,
       gitDisabled,
       problemsDisabled,
-      terminalDisabled,
+      testsDisabled,
+      runDisabled,
       searchDisabled,
       debugDisabled,
       previewDisabled,
@@ -732,8 +1058,9 @@ export function ProjectPage({
       gitDisabled,
       previewDisabled,
       problemsDisabled,
+      runDisabled,
+      testsDisabled,
       searchDisabled,
-      terminalDisabled,
     ],
   );
 
@@ -744,14 +1071,21 @@ export function ProjectPage({
         title: t(tool.titleKey),
         keywords: [...tool.commandKeywords],
         run: () => {
+          showActionFeedback(
+            t("project.actionFeedback.opened", {
+              action: projectPanelFeedbackLabel(tool.panel, t),
+            }),
+            "open",
+            tool.panel,
+          );
           setShowShellTerminal(false);
           openRightPanel(tool.panel);
         },
       })),
-    [ideToolAvailability, openRightPanel, t],
+    [ideToolAvailability, openRightPanel, showActionFeedback, t],
   );
   const topRightIdeTools = useMemo(
-    () => getProjectTopRightIdeTools(ideToolAvailability),
+    () => getProjectTopRightIdeTools(ideToolAvailability).filter((tool) => !tool.disabled),
     [ideToolAvailability],
   );
 
@@ -773,11 +1107,7 @@ export function ProjectPage({
         id: "terminal",
         title: t("terminal.title"),
         keywords: ["shell"],
-        run: () => {
-          closeRightPanel();
-          setShellTerminalMounted(true);
-          setShowShellTerminal(true);
-        },
+        run: handleOpenTerminal,
       },
       {
         id: "git-changes",
@@ -790,6 +1120,24 @@ export function ProjectPage({
         title: t("toolbar.gitHistory"),
         keywords: ["commits", "log"],
         run: () => handleToggleRightPanel("git-history"),
+      },
+      {
+        id: "find-references",
+        title: t("file.findReferences"),
+        keywords: ["references", "usages", "lsp"],
+        run: () => dispatchFileViewerCommand("findReferences"),
+      },
+      {
+        id: "rename-symbol",
+        title: t("file.renameSymbol"),
+        keywords: ["rename", "refactor", "symbol", "lsp"],
+        run: () => dispatchFileViewerCommand("renameSymbol"),
+      },
+      {
+        id: "quick-fix",
+        title: t("file.quickFix"),
+        keywords: ["quick fix", "code action", "fix", "lsp"],
+        run: () => dispatchFileViewerCommand("quickFix"),
       },
       ...commandPaletteIdeToolCommands,
       {
@@ -806,9 +1154,9 @@ export function ProjectPage({
       },
     ],
     [
-      closeRightPanel,
       commandPaletteIdeToolCommands,
       handleNewTask,
+      handleOpenTerminal,
       handleToggleRightPanel,
       onToggleTheme,
       t,
@@ -857,6 +1205,16 @@ export function ProjectPage({
     hasSessionPath: Boolean(selectedTask?.claudeSessionPath ?? selectedTask?.codexSessionPath),
   });
   const activeWorkspaceTask = taskWorkspaceVisible ? selectedTask : null;
+  const topRightPanelActive = topRightIdeTools.some((tool) => tool.panel === rightPanel);
+  const showTopRightIdeTools =
+    topRightIdeTools.length > 0 &&
+    !remoteConnectionMissing &&
+    !isSftpMode &&
+    !isSshMode &&
+    !isDatabaseMode &&
+    !isDockerMode &&
+    !isNotesMode &&
+    (hasEditorGroups || Boolean(openDiff) || taskWorkspaceVisible || topRightPanelActive);
 
   useEffect(() => {
     if (rightPanel === "ssh") {
@@ -1006,30 +1364,84 @@ export function ProjectPage({
             background: "var(--bg-panel)",
           }}
         >
-          {topRightIdeTools.length > 0 && (
+          {remoteConnectionMissing && (
+            <div
+              data-testid="ssh-connection-missing"
+              aria-live="polite"
+              style={{
+                minHeight: 40,
+                display: "flex",
+                alignItems: "center",
+                gap: 10,
+                padding: "7px 220px 7px 12px",
+                borderBottom: "1px solid var(--border-dim)",
+                background: "color-mix(in srgb, var(--danger) 10%, var(--bg-panel))",
+                color: "var(--text-primary)",
+                fontSize: 12,
+                boxSizing: "border-box",
+                flexShrink: 0,
+              }}
+            >
+              <span style={{ fontWeight: 700 }}>{t("ssh.connectionUnavailableTitle")}</span>
+              <span
+                style={{
+                  minWidth: 0,
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap",
+                  color: "var(--text-muted)",
+                }}
+              >
+                {t("ssh.connectionUnavailableBody", {
+                  path: projectLocation.remotePath,
+                })}
+              </span>
+              <button
+                type="button"
+                onClick={handleOpenSshWorkspace}
+                style={{
+                  height: 26,
+                  marginLeft: "auto",
+                  display: "inline-flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  border: "1px solid var(--border-dim)",
+                  borderRadius: 6,
+                  background: "var(--control-active-bg)",
+                  color: "var(--control-active-fg)",
+                  fontSize: 11,
+                  fontWeight: 650,
+                  cursor: "pointer",
+                  padding: "0 9px",
+                  flexShrink: 0,
+                }}
+              >
+                {t("ssh.reconnect")}
+              </button>
+            </div>
+          )}
+
+          {showTopRightIdeTools && (
             <div
               role="toolbar"
               aria-label="Run and debug tools"
               style={{
-                position: "absolute",
-                top: 8,
-                right: 10,
-                zIndex: 9,
-                display: "inline-flex",
+                minHeight: 40,
+                flexShrink: 0,
+                display: "flex",
                 alignItems: "center",
-                gap: 3,
-                padding: 3,
-                border: "1px solid var(--border-dim)",
-                borderRadius: 8,
+                justifyContent: "flex-end",
+                gap: 4,
+                padding: "5px 10px",
+                borderBottom: "1px solid var(--border-dim)",
                 background: "color-mix(in srgb, var(--bg-sidebar) 92%, transparent)",
-                boxShadow: "var(--shadow-sm)",
               }}
             >
               {topRightIdeTools.map((tool) => (
                 <IconButton
                   key={tool.id}
                   icon={renderIdeToolIcon(tool.icon, 15)}
-                  title={t(tool.titleKey)}
+                  title={getIdeToolTitleWithDisabledReason(tool, t(tool.titleKey))}
                   active={rightPanel === tool.panel}
                   activeVariant="icon"
                   disabled={tool.disabled}
@@ -1037,6 +1449,163 @@ export function ProjectPage({
                   onClick={() => handleToggleRightPanel(tool.panel)}
                 />
               ))}
+            </div>
+          )}
+          {actionFeedback && (
+            <div
+              role="status"
+              aria-live="polite"
+              data-testid="project-action-feedback"
+              data-action-kind={actionFeedback.action}
+              data-action-target={actionFeedback.target}
+              data-action-status={actionFeedback.status}
+              data-action-duration-ms={actionFeedback.durationMs}
+              title={`${actionFeedback.message}${
+                actionFeedback.error ? `: ${actionFeedback.error}` : ""
+              } (${actionFeedback.durationMs}ms)`}
+              style={{
+                position: "absolute",
+                right: 58,
+                bottom: 14,
+                zIndex: 12,
+                maxWidth: 360,
+                padding: "7px 10px",
+                border: "1px solid var(--border-dim)",
+                borderRadius: 8,
+                background: "color-mix(in srgb, var(--bg-sidebar) 94%, transparent)",
+                boxShadow: "var(--shadow-sm)",
+                color: "var(--text-primary)",
+                fontSize: 12,
+                fontWeight: 650,
+                pointerEvents: "none",
+              }}
+            >
+              {actionFeedback.message}
+            </div>
+          )}
+          {actionLogSummary.total > 0 && (
+            <button
+              type="button"
+              data-testid="project-action-log-summary"
+              aria-expanded={showActionLogDetails}
+              onClick={() => setShowActionLogDetails((current) => !current)}
+              title={t("project.actionFeedback.summaryTitle", {
+                total: actionLogSummary.total,
+                failed: actionLogSummary.failed,
+                avg: actionLogSummary.averageDurationMs,
+              })}
+              style={{
+                position: "absolute",
+                right: 58,
+                bottom: actionFeedback ? 52 : 14,
+                zIndex: 11,
+                maxWidth: 360,
+                padding: "5px 8px",
+                border: "1px solid var(--border-dim)",
+                borderRadius: 8,
+                background: "color-mix(in srgb, var(--bg-sidebar) 90%, transparent)",
+                color: "var(--text-muted)",
+                fontSize: 11,
+                fontWeight: 600,
+                cursor: "pointer",
+                boxShadow: "var(--shadow-sm)",
+              }}
+            >
+              {t("project.actionFeedback.summary", {
+                total: actionLogSummary.total,
+                failed: actionLogSummary.failed,
+                avg: actionLogSummary.averageDurationMs,
+              })}
+            </button>
+          )}
+          {showActionLogDetails && actionLogSummary.total > 0 && (
+            <div
+              data-testid="project-action-log-details"
+              style={{
+                position: "absolute",
+                right: 58,
+                bottom: actionFeedback ? 82 : 44,
+                zIndex: 12,
+                width: 360,
+                maxHeight: 260,
+                overflow: "hidden",
+                display: "flex",
+                flexDirection: "column",
+                border: "1px solid var(--border-dim)",
+                borderRadius: 8,
+                background: "var(--bg-panel)",
+                color: "var(--text-primary)",
+                boxShadow: "var(--shadow-lg)",
+              }}
+            >
+              <div
+                style={{
+                  padding: "8px 10px",
+                  borderBottom: "1px solid var(--border-dim)",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  gap: 10,
+                  fontSize: 12,
+                  fontWeight: 700,
+                }}
+              >
+                <span>{t("project.actionFeedback.logTitle")}</span>
+                <span style={{ color: "var(--text-muted)", fontSize: 11, fontWeight: 600 }}>
+                  {t("project.actionFeedback.logCounts", {
+                    open: actionLogSummary.byAction.open,
+                    close: actionLogSummary.byAction.close,
+                    run: actionLogSummary.byAction.run,
+                  })}
+                </span>
+              </div>
+              <div
+                style={{
+                  overflow: "auto",
+                  maxHeight: 210,
+                }}
+              >
+                {actionLog.map((entry) => (
+                  <div
+                    key={`${entry.id}-${entry.finishedAt}`}
+                    data-testid="project-action-log-entry"
+                    style={{
+                      padding: "7px 10px",
+                      borderBottom: "1px solid var(--border-dim)",
+                      display: "grid",
+                      gridTemplateColumns: "auto 1fr auto",
+                      gap: 8,
+                      alignItems: "center",
+                      fontSize: 12,
+                    }}
+                  >
+                    <span
+                      style={{
+                        color: entry.status === "failed" ? "var(--danger)" : "var(--text-muted)",
+                        fontWeight: 700,
+                        textTransform: "uppercase",
+                        fontSize: 10,
+                      }}
+                    >
+                      {entry.status}
+                    </span>
+                    <span
+                      title={entry.error ? `${entry.message}: ${entry.error}` : entry.message}
+                      style={{
+                        minWidth: 0,
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      {entry.message}
+                    </span>
+                    <span style={{ color: "var(--text-muted)", fontSize: 11 }}>
+                      {entry.durationMs}ms
+                    </span>
+                  </div>
+                ))}
+              </div>
             </div>
           )}
           {/* Foreground: SFTP, file viewer, diff, SSH shell, or new-task composer */}
@@ -1134,6 +1703,7 @@ export function ProjectPage({
                       staged={openDiff.staged}
                       title={openDiff.label}
                       onClose={() => setOpenDiff(null)}
+                      remote={remoteFileContext}
                     />
                   ) : openDiff.kind === "commit-file" ? (
                     <GitDiffViewer
@@ -1143,6 +1713,7 @@ export function ProjectPage({
                       filePath={openDiff.filePath}
                       title={openDiff.label}
                       onClose={() => setOpenDiff(null)}
+                      remote={remoteFileContext}
                     />
                   ) : (
                     <GitDiffViewer
@@ -1151,6 +1722,7 @@ export function ProjectPage({
                       commitHash={openDiff.hash}
                       title={openDiff.message}
                       onClose={() => setOpenDiff(null)}
+                      remote={remoteFileContext}
                     />
                   )
                 ) : editorGroups.length > 0 ? (
@@ -1196,10 +1768,19 @@ export function ProjectPage({
                           selectedCondaEnvPath={selectedCondaEnvPath}
                           onSelectedCondaEnvPathChange={onSelectedCondaEnvPathChange}
                           onRunPythonFile={handleRunPythonFile}
-                          debugBreakpoints={debugDisabled ? [] : editorDebugBreakpoints}
+                          onRunTestTarget={handleRunEditorTestTarget}
+                          onDebugTestTarget={
+                            debugDisabled ? undefined : handleDebugEditorTestTarget
+                          }
+                          debugBreakpoints={
+                            debugDisabled || remoteFileContext ? [] : editorDebugBreakpoints
+                          }
+                          diagnostics={editorDiagnostics}
+                          coverage={remoteFileContext ? null : editorCoverage}
                           onToggleDebugBreakpoint={
                             debugDisabled ? undefined : handleToggleEditorDebugBreakpoint
                           }
+                          onOpenDefinition={handleDefinitionOpen}
                           onFocusGroup={() => handleEditorGroupFocus(group.id)}
                           onSplitRight={
                             group.id === "main" && group.id === activeEditorGroupId
@@ -1230,7 +1811,7 @@ export function ProjectPage({
             </ErrorBoundary>
           </div>
 
-          {shellTerminalMounted && !terminalDisabled && (
+          {shellTerminalMounted && projectLocation.kind !== "ssh" && !terminalDisabled && (
             <div style={shellCenterLayerStyle(shellVisibleInCenter)}>
               <div style={shellCenterContentStyle()}>
                 <ErrorBoundary label="终端">
@@ -1389,7 +1970,10 @@ export function ProjectPage({
           />
           <Suspense fallback={null}>
             {visibleRightPanel === "files" && (
-              <ErrorBoundary label="文件浏览器">
+              <ErrorBoundary
+                label="文件浏览器"
+                onError={(error) => showActionFailure("files", t("toolbar.fileExplorer"), error)}
+              >
                 <FileExplorer
                   projectPath={fileRootPath}
                   projectName={project.name}
@@ -1404,92 +1988,138 @@ export function ProjectPage({
               </ErrorBoundary>
             )}
             {visibleRightPanel === "git-changes" && (
-              <ErrorBoundary label="Git 变更">
+              <ErrorBoundary
+                label="Git 变更"
+                onError={(error) =>
+                  showActionFailure("git-changes", t("toolbar.gitChanges"), error)
+                }
+              >
                 <GitChanges
                   projectPath={gitContextPath}
                   currentTaskCreatedAt={currentTaskCreatedAt}
                   onFileSelect={handleDiffFileSelectWithCollapse}
                   width={effectiveRightPanelWidth}
+                  remote={remoteFileContext}
                 />
               </ErrorBoundary>
             )}
             {visibleRightPanel === "git-history" && (
-              <ErrorBoundary label="Git 历史">
+              <ErrorBoundary
+                label="Git 历史"
+                onError={(error) =>
+                  showActionFailure("git-history", t("toolbar.gitHistory"), error)
+                }
+              >
                 <GitHistory
                   projectPath={gitContextPath}
                   onCommitSelect={handleCommitSelectWithCollapse}
                   onFileClick={handleCommitFileClickWithCollapse}
                   width={effectiveRightPanelWidth}
+                  remote={remoteFileContext}
                 />
               </ErrorBoundary>
             )}
             {visibleRightPanel === "git-advanced" && (
-              <ErrorBoundary label="Git Advanced">
+              <ErrorBoundary
+                label="Git Advanced"
+                onError={(error) =>
+                  showActionFailure("git-advanced", t("gitAdvanced.title"), error)
+                }
+              >
                 <GitAdvancedPanel
                   projectPath={gitContextPath}
                   activeFilePath={activeFilePath}
                   width={effectiveRightPanelWidth}
                   onOpenFile={handleGitAdvancedFileOpen}
+                  remote={remoteFileContext}
                 />
               </ErrorBoundary>
             )}
             {visibleRightPanel === "search" && (
-              <ErrorBoundary label="搜索">
+              <ErrorBoundary
+                label="搜索"
+                onError={(error) => showActionFailure("search", t("toolbar.search"), error)}
+              >
                 <SearchPanel
-                  projectPath={project.path}
+                  projectPath={fileRootPath}
                   width={effectiveRightPanelWidth}
                   onOpenMatch={handleTextSearchMatchOpen}
+                  remote={remoteFileContext}
                 />
               </ErrorBoundary>
             )}
             {visibleRightPanel === "problems" && (
-              <ErrorBoundary label="Problems">
+              <ErrorBoundary
+                label="Problems"
+                onError={(error) => showActionFailure("problems", t("problems.title"), error)}
+              >
                 <ProblemsPanel
                   projectPath={project.path}
                   width={effectiveRightPanelWidth}
                   onOpenDiagnostic={handleDiagnosticOpen}
                   onCreateAgentTask={handleCreateProblemsAgentTask}
+                  onDiagnosticsChange={remoteFileContext ? undefined : setEditorDiagnostics}
+                  remote={remoteFileContext}
                 />
               </ErrorBoundary>
             )}
             {visibleRightPanel === "tests" && (
-              <ErrorBoundary label="Tests">
+              <ErrorBoundary
+                label="Tests"
+                onError={(error) => showActionFailure("tests", t("tests.title"), error)}
+              >
                 <TestExplorerPanel
                   projectPath={project.path}
                   width={effectiveRightPanelWidth}
                   onOpenFailure={handleTestFailureOpen}
                   onCreateAgentTask={handleCreateProblemsAgentTask}
+                  onTestRunResult={handleTestRunResult}
+                  runRequest={testRunRequest}
+                  remote={remoteFileContext}
                 />
               </ErrorBoundary>
             )}
             {visibleRightPanel === "run" && (
-              <ErrorBoundary label="Run">
+              <ErrorBoundary
+                label="Run"
+                onError={(error) => showActionFailure("run", t("run.title"), error)}
+              >
                 <RunConfigurationsPanel
-                  projectPath={project.path}
+                  projectPath={fileRootPath}
                   width={effectiveRightPanelWidth}
-                  editorBreakpoints={editorDebugBreakpoints}
+                  editorBreakpoints={remoteFileContext ? [] : editorDebugBreakpoints}
                   onDebugStarted={handleRunDebugStarted}
                   onRunProcessChanged={handleRunProcessChanged}
+                  remote={remoteFileContext}
                 />
               </ErrorBoundary>
             )}
             {visibleRightPanel === "preview" && (
-              <ErrorBoundary label="Preview">
+              <ErrorBoundary
+                label="Preview"
+                onError={(error) => showActionFailure("preview", t("preview.title"), error)}
+              >
                 <WebPreviewPanel
-                  projectPath={project.path}
+                  projectPath={fileRootPath}
                   width={effectiveRightPanelWidth}
                   runProcessTarget={launchedRunProcess}
+                  remote={remoteFileContext}
                 />
               </ErrorBoundary>
             )}
             {visibleRightPanel === "debug" && (
-              <ErrorBoundary label="Debug">
+              <ErrorBoundary
+                label="Debug"
+                onError={(error) => showActionFailure("debug", t("debug.title"), error)}
+              >
                 <DebugPanel
-                  projectPath={project.path}
+                  projectPath={fileRootPath}
                   width={effectiveRightPanelWidth}
                   onOpenLocation={handleDebugLocationOpen}
                   launchedSession={launchedDebugSession}
-                  editorBreakpoints={editorDebugBreakpoints}
+                  editorBreakpoints={remoteFileContext ? [] : editorDebugBreakpoints}
+                  externalError={editorTestDebugError}
+                  remote={remoteFileContext}
                 />
               </ErrorBoundary>
             )}
@@ -1500,7 +2130,10 @@ export function ProjectPage({
                 minHeight: 0,
               }}
             >
-              <ErrorBoundary label="SSH">
+              <ErrorBoundary
+                label="SSH"
+                onError={(error) => showActionFailure("ssh", t("ssh.title"), error)}
+              >
                 <SshTerminalPanel
                   connections={sshConnections}
                   onConnectionsChange={onSshConnectionsChange}
@@ -1519,17 +2152,24 @@ export function ProjectPage({
       <RightToolbar
         activePanel={rightPanel}
         onToggle={handleToggleRightPanel}
-        terminalActive={showShellTerminal}
-        onToggleTerminal={() => {
-          closeRightPanel();
-          setShellTerminalMounted(true);
-          setShowShellTerminal((v) => !v);
+        terminalActive={projectLocation.kind === "ssh" ? remoteSshMainVisible : showShellTerminal}
+        onToggleTerminal={handleToggleTerminal}
+        onOpenSettings={() => {
+          showActionFeedback(
+            t("project.actionFeedback.opened", { action: t("settings.title") }),
+            "open",
+            "settings",
+          );
+          setShowSettings(true);
         }}
-        onOpenSettings={() => setShowSettings(true)}
         filesDisabled={filesDisabled}
         gitDisabled={gitDisabled}
+        gitChangesDisabled={gitChangesDisabled}
+        gitHistoryDisabled={gitHistoryDisabled}
         problemsDisabled={problemsDisabled}
+        runDisabled={runDisabled}
         terminalDisabled={terminalDisabled}
+        terminalTitle={terminalDisabled ? t("ssh.connectionRequired.terminal") : undefined}
         dockerDisabled={projectLocation.kind === "ssh" && !remoteConnection}
         searchDisabled={searchDisabled}
         debugDisabled={debugDisabled}
@@ -1550,15 +2190,21 @@ export function ProjectPage({
       {commandPaletteInitialInput !== null && !searchDisabled && (
         <CommandPalette
           projectPath={project.path}
+          activeFilePath={activeFilePath}
           initialInput={commandPaletteInitialInput}
           commands={commandPaletteCommands}
           onOpenFile={handleSearchFileSelect}
           onClose={() => setCommandPaletteInitialInput(null)}
+          remote={remoteFileContext}
         />
       )}
 
       {showSettings && !settingsDisabled && (
-        <SettingsDialog projectPath={project.path} onClose={() => setShowSettings(false)} />
+        <SettingsDialog
+          projectPath={fileRootPath}
+          onClose={() => setShowSettings(false)}
+          remote={remoteFileContext}
+        />
       )}
     </div>
   );

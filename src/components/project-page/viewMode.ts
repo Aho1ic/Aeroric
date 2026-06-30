@@ -105,6 +105,8 @@ export function visibleDockPanel(
   {
     filesDisabled,
     gitDisabled,
+    gitChangesDisabled = gitDisabled,
+    gitHistoryDisabled = gitDisabled,
     problemsDisabled = false,
     runDisabled = false,
     searchDisabled = false,
@@ -114,6 +116,8 @@ export function visibleDockPanel(
   }: {
     filesDisabled: boolean;
     gitDisabled: boolean;
+    gitChangesDisabled?: boolean;
+    gitHistoryDisabled?: boolean;
     problemsDisabled?: boolean;
     runDisabled?: boolean;
     searchDisabled?: boolean;
@@ -134,14 +138,9 @@ export function visibleDockPanel(
   if (rightPanel === "files" && filesDisabled) return null;
   if (rightPanel === "search" && searchDisabled) return null;
   if (rightPanel === "problems" && problemsDisabled) return null;
-  if (
-    (rightPanel === "git-changes" ||
-      rightPanel === "git-history" ||
-      rightPanel === "git-advanced") &&
-    gitDisabled
-  ) {
-    return null;
-  }
+  if (rightPanel === "git-changes" && gitChangesDisabled) return null;
+  if (rightPanel === "git-history" && gitHistoryDisabled) return null;
+  if (rightPanel === "git-advanced" && gitDisabled) return null;
   if (rightPanel === "run" && runDisabled) return null;
   if (rightPanel === "tests" && testsDisabled) return null;
   if (rightPanel === "debug" && debugDisabled) return null;

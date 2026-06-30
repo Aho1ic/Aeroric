@@ -40,12 +40,28 @@ vi.mock("@uiw/react-codemirror", async () => {
     },
     EditorView: {
       decorations: { compute: () => [] },
+      domEventHandlers: () => [],
       theme: () => [],
       scrollIntoView: () => ({}),
     },
     GutterMarker: class {},
+    StateEffect: {
+      define: () => ({
+        of: (value: unknown) => ({ value, is: () => true }),
+      }),
+    },
+    StateField: {
+      define: (config: unknown) => config,
+    },
+    ViewPlugin: {
+      fromClass: () => [],
+    },
     WidgetType: class {},
     gutter: () => [],
+    hoverTooltip: () => [],
+    showTooltip: {
+      from: () => [],
+    },
   };
 });
 
@@ -122,19 +138,33 @@ describe("FileViewer language server status", () => {
     expect(await screen.findByText("TS LSP")).toBeInTheDocument();
   });
 
-  it("does not check LSP for remote TS files", async () => {
+  it("checks the remote TS language server for remote TS files", async () => {
     vi.mocked(invoke).mockImplementation((command) => {
       if (command === "remote_read_file_content") {
         return Promise.resolve("const remoteValue = 1;\n");
+      }
+      if (command === "remote_lsp_server_status") {
+        return Promise.resolve({
+          supported: true,
+          available: true,
+          languageId: "typescriptreact",
+          command: { program: "typescript-language-server", args: ["--stdio"] },
+          installHint: null,
+        });
       }
       return Promise.reject(new Error(`unexpected command: ${command}`));
     });
 
     renderFileViewer({ remote: true });
 
-    await screen.findByLabelText("editor");
-    expect(vi.mocked(invoke).mock.calls.some(([command]) => command === "lsp_server_status")).toBe(
-      false,
-    );
+    await waitFor(() => {
+      expect(vi.mocked(invoke)).toHaveBeenCalledWith("remote_lsp_server_status", {
+        connection: expect.objectContaining({ id: "ssh-1" }),
+        remoteProjectPath: "/tmp/aeroric",
+        projectPath: "/tmp/aeroric",
+        filePath: "/tmp/aeroric/src/App.tsx",
+      });
+    });
+    expect(await screen.findByText("TS LSP")).toBeInTheDocument();
   });
 });

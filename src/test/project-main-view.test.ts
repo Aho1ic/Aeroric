@@ -212,6 +212,19 @@ describe("project main view mode", () => {
     );
   });
 
+  it("can keep Git changes and history available while Git advanced is unavailable", () => {
+    const options = {
+      filesDisabled: false,
+      gitDisabled: true,
+      gitChangesDisabled: false,
+      gitHistoryDisabled: false,
+    };
+
+    expect(visibleDockPanel("git-changes", options)).toBe("git-changes");
+    expect(visibleDockPanel("git-history", options)).toBe("git-history");
+    expect(visibleDockPanel("git-advanced", options)).toBe(null);
+  });
+
   it("hides local analysis panels when they are unavailable", () => {
     expect(
       visibleDockPanel("search", {
