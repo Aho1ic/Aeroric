@@ -202,13 +202,113 @@ describe("NotebookPanel", () => {
     selectTextareaRange(body, 0, "alpha beta".length);
 
     await user.click(screen.getByRole("button", { name: "Code block" }));
-    selectTextareaRange(body, 0, body.value.length);
-    await user.click(screen.getByRole("button", { name: "Table" }));
+    await waitFor(() => expect(body.value).toContain("```"));
 
     expect(body.value).toContain("```");
     expect(body.value).toContain("alpha beta");
-    expect(body.value).toContain("| Column 1 | Column 2 |");
-    expect(body.value).not.toContain("| Value 1 | Value 2 |");
+
+    await user.click(screen.getByRole("button", { name: "New quick note" }));
+    await user.click(screen.getByRole("menuitem", { name: "Markdown" }));
+    await user.type(screen.getByRole("textbox", { name: "Quick note name" }), "Table note");
+    const tableBody = screen.getByRole("textbox", {
+      name: "Quick note content",
+    }) as HTMLTextAreaElement;
+    await user.type(tableBody, "alpha beta");
+    selectTextareaRange(tableBody, 0, "alpha beta".length);
+    await user.click(screen.getByRole("button", { name: "Table" }));
+
+    expect(tableBody.value).toContain("| Column 1 | Column 2 |");
+    expect(tableBody.value).toContain("alpha beta");
+    expect(tableBody.value).not.toContain("| Value 1 | Value 2 |");
+  });
+
+  it("inserts a blank markdown code block without a selection and places the cursor after it", async () => {
+    const user = userEvent.setup();
+    renderNotebook();
+
+    await user.click(screen.getByRole("button", { name: "New quick note" }));
+    await user.click(screen.getByRole("menuitem", { name: "Markdown" }));
+    await user.type(screen.getByRole("textbox", { name: "Quick note name" }), "Blank code");
+    const body = screen.getByRole("textbox", { name: "Quick note content" }) as HTMLTextAreaElement;
+    body.focus();
+    body.setSelectionRange(0, 0);
+    fireEvent.select(body);
+
+    await user.click(screen.getByRole("button", { name: "Code block" }));
+
+    await waitFor(() => expect(body.value).toBe("```\n\n```\n"));
+    expect(body.selectionStart).toBe(body.value.length);
+    expect(body.selectionEnd).toBe(body.value.length);
+  });
+
+  it("inserts a blank rich text code block with a writable paragraph below it", async () => {
+    const user = userEvent.setup();
+    renderNotebook();
+
+    await user.click(screen.getByRole("button", { name: "New quick note" }));
+    await user.click(screen.getByRole("menuitem", { name: "Text" }));
+    await user.type(screen.getByRole("textbox", { name: "Quick note name" }), "Rich code");
+    const body = screen.getByRole("textbox", { name: "Quick note content" });
+
+    await user.click(body);
+    await user.click(screen.getByRole("button", { name: "Code block" }));
+
+    const codeBlock = body.querySelector("[data-notebook-code-block]");
+    expect(codeBlock).toBeInTheDocument();
+    const afterBlock = codeBlock?.nextElementSibling;
+    expect(afterBlock).toHaveAttribute("data-notebook-after-code-block", "true");
+    const selection = document.getSelection();
+    expect(selection?.anchorNode && afterBlock?.contains(selection.anchorNode)).toBe(true);
+  });
+
+  it("reorders quick notes with an immediate pointer drag", async () => {
+    const user = userEvent.setup();
+    renderNotebook();
+
+    await user.click(screen.getByRole("button", { name: "New quick note" }));
+    await user.click(screen.getByRole("menuitem", { name: "Markdown" }));
+    await user.type(screen.getByRole("textbox", { name: "Quick note name" }), "First");
+    await user.click(screen.getByRole("button", { name: "New quick note" }));
+    await user.click(screen.getByRole("menuitem", { name: "Markdown" }));
+    await user.type(screen.getByRole("textbox", { name: "Quick note name" }), "Second");
+
+    const second = screen.getByRole("button", { name: "Second" });
+    const first = screen.getByRole("button", { name: "First" });
+    second.setPointerCapture = vi.fn();
+    second.releasePointerCapture = vi.fn();
+    second.getBoundingClientRect = () =>
+      ({
+        top: 0,
+        bottom: 30,
+        height: 30,
+        left: 0,
+        right: 170,
+        width: 170,
+        x: 0,
+        y: 0,
+        toJSON: () => ({}),
+      }) as DOMRect;
+    first.getBoundingClientRect = () =>
+      ({
+        top: 36,
+        bottom: 66,
+        height: 30,
+        left: 0,
+        right: 170,
+        width: 170,
+        x: 0,
+        y: 36,
+        toJSON: () => ({}),
+      }) as DOMRect;
+
+    fireEvent.pointerDown(second, { pointerId: 1, button: 0, clientY: 10 });
+    fireEvent.pointerMove(second, { pointerId: 1, clientY: 50 });
+    fireEvent.pointerUp(second, { pointerId: 1, clientY: 50 });
+
+    const noteButtons = screen
+      .getAllByRole("button")
+      .filter((button) => button.textContent === "First" || button.textContent === "Second");
+    expect(noteButtons.map((button) => button.textContent)).toEqual(["First", "Second"]);
   });
 
   it("keeps the memo list visible without collapse controls", () => {
@@ -650,16 +750,12 @@ describe("NotebookPanel", () => {
 
     await user.click(screen.getByRole("button", { name: "Code block" }));
 
-    expect(execCommand).toHaveBeenCalledWith(
-      "insertHTML",
-      false,
-      expect.stringContaining("print(1)"),
-    );
-    expect(execCommand).toHaveBeenCalledWith(
-      "insertHTML",
-      false,
-      expect.stringContaining("data-notebook-code-language"),
-    );
+    const codeBlock = body.querySelector("[data-notebook-code-block]");
+    const code = codeBlock?.querySelector("code[data-language]");
+    expect(codeBlock).toBeInTheDocument();
+    expect(code).toHaveTextContent("print(1)");
+    expect(codeBlock?.querySelector("[data-notebook-code-language]")).toBeInTheDocument();
+    expect(code).not.toHaveTextContent("Code");
     expect(execCommand).not.toHaveBeenCalledWith(
       "insertHTML",
       false,

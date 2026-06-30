@@ -553,6 +553,14 @@ body {
   font-size: 12.5px;
   color: var(--text-secondary);
 }
+html.dark .md-preview pre {
+  background: color-mix(in srgb, var(--bg-panel) 72%, #0d1117 28%);
+  border-color: color-mix(in srgb, var(--border-medium) 76%, var(--accent) 24%);
+  box-shadow: inset 3px 0 0 color-mix(in srgb, var(--accent) 48%, transparent);
+}
+html.dark .md-preview pre code {
+  color: var(--text-primary);
+}
 .md-preview ul,
 .md-preview ol {
   margin: 8px 0 12px 0;
@@ -616,7 +624,61 @@ body {
 }
 
 .notebook-rich-text [data-notebook-code-block] {
+  position: relative !important;
+  margin: 10px 0 12px !important;
+  min-height: 74px;
+  padding: 34px 12px 12px !important;
+  border: 1px solid color-mix(in srgb, var(--border-medium) 82%, var(--accent) 18%) !important;
+  border-radius: 8px !important;
+  background: color-mix(in srgb, var(--bg-subtle) 82%, var(--bg-panel) 18%) !important;
+  box-shadow: inset 3px 0 0 color-mix(in srgb, var(--accent) 42%, transparent);
+  font-family: var(--font-mono) !important;
+  white-space: pre-wrap !important;
   color: var(--text-primary);
+  overflow: auto;
+}
+
+html.dark .notebook-rich-text [data-notebook-code-block] {
+  background: color-mix(in srgb, var(--bg-panel) 70%, #0d1117 30%) !important;
+  border-color: color-mix(in srgb, var(--border-medium) 72%, var(--accent) 28%) !important;
+  box-shadow:
+    inset 3px 0 0 color-mix(in srgb, var(--accent) 54%, transparent),
+    0 8px 22px color-mix(in srgb, #000 16%, transparent);
+}
+
+.notebook-rich-text [data-notebook-code-block] code[data-language] {
+  display: block;
+  min-height: 20px;
+  outline: none;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.55;
+  tab-size: 2;
+}
+
+.notebook-rich-text [data-notebook-code-language] {
+  position: absolute !important;
+  top: 6px !important;
+  right: 7px !important;
+  height: 23px !important;
+  max-width: 132px;
+  border: 1px solid var(--border-medium) !important;
+  border-radius: 5px !important;
+  background: var(--bg-card) !important;
+  color: var(--text-secondary) !important;
+  font-size: 11px !important;
+  font-family: var(--font-ui);
+}
+
+html.dark .notebook-rich-text [data-notebook-code-language] {
+  background: color-mix(in srgb, var(--bg-sidebar) 84%, #000 16%) !important;
+  color: var(--text-primary) !important;
+}
+
+.notebook-rich-text [data-notebook-after-code-block] {
+  min-height: 20px;
+  margin: 6px 0 0;
 }
 
 html.dark .notebook-rich-text [style*="color: black"],

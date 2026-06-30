@@ -61,12 +61,10 @@ type NotebookPointerDragState = {
   id: string;
   pointerId: number;
   startY: number;
-  active: boolean;
-  pressTimer: number;
+  hasMoved: boolean;
 };
 
 const STORAGE_KEY = "aeroric:notebook:v1";
-const POINTER_DRAG_DELAY_MS = 180;
 const POINTER_DRAG_MOVE_TOLERANCE = 5;
 const TABLE_PICKER_WIDTH = 168;
 const DEFAULT_RICH_TEXT_STATE: RichTextToolbarState = {
@@ -432,13 +430,6 @@ export function NotebookPanel({ width = "100%" }: { width?: number | string }) {
   }, [tablePickerOpen]);
 
   useEffect(() => {
-    return () => {
-      const drag = notePointerDragRef.current;
-      if (drag) window.clearTimeout(drag.pressTimer);
-    };
-  }, []);
-
-  useEffect(() => {
     setHasMarkdownSelection(false);
     setHasRichTextSelection(false);
     savedRichTextRangeRef.current = null;
@@ -590,9 +581,42 @@ export function NotebookPanel({ width = "100%" }: { width?: number | string }) {
     return true;
   };
 
+  const getRichTextInsertionRange = () => {
+    const editor = richTextRef.current;
+    const selection = document.getSelection();
+    if (!editor || !selection) return null;
+
+    const savedRange = savedRichTextRangeRef.current;
+    if (savedRange && editor.contains(savedRange.commonAncestorContainer)) {
+      return savedRange.cloneRange();
+    }
+
+    if (selection.rangeCount > 0) {
+      const currentRange = selection.getRangeAt(0);
+      if (editor.contains(currentRange.commonAncestorContainer)) {
+        return currentRange.cloneRange();
+      }
+    }
+
+    const range = document.createRange();
+    range.selectNodeContents(editor);
+    range.collapse(false);
+    return range;
+  };
+
+  const placeCaretInside = (element: HTMLElement) => {
+    const selection = document.getSelection();
+    if (!selection) return;
+    richTextRef.current?.focus();
+    const range = document.createRange();
+    range.selectNodeContents(element);
+    range.collapse(true);
+    selection.removeAllRanges();
+    selection.addRange(range);
+  };
+
   const keepRichTextSelectionOnMouseDown = (event: React.MouseEvent) => {
-    if (activeFormat !== "richtext") return;
-    saveRichTextSelection();
+    if (activeFormat === "richtext") saveRichTextSelection();
     event.preventDefault();
   };
 
@@ -600,13 +624,16 @@ export function NotebookPanel({ width = "100%" }: { width?: number | string }) {
     if (activeFormat === "richtext") saveRichTextSelection();
   };
 
-  const replaceSelection = (transform: (selected: string) => string) => {
+  const replaceSelection = (
+    transform: (selected: string) => string,
+    options: { allowCollapsed?: boolean; placeCursor?: "select" | "after" } = {},
+  ) => {
     if (!activeNote) return;
     const textarea = markdownContentRef.current;
     const body = activeNote.body;
     const start = textarea?.selectionStart ?? body.length;
     const end = textarea?.selectionEnd ?? body.length;
-    if (start === end) return;
+    if (start === end && !options.allowCollapsed) return;
     const selected = body.slice(start, end);
     const replacement = transform(selected);
     const nextBody = `${body.slice(0, start)}${replacement}${body.slice(end)}`;
@@ -615,7 +642,12 @@ export function NotebookPanel({ width = "100%" }: { width?: number | string }) {
       const next = markdownContentRef.current;
       if (!next) return;
       next.focus();
-      next.setSelectionRange(start, start + replacement.length);
+      if (options.placeCursor === "after") {
+        const position = start + replacement.length;
+        next.setSelectionRange(position, position);
+      } else {
+        next.setSelectionRange(start, start + replacement.length);
+      }
     });
   };
 
@@ -646,7 +678,10 @@ export function NotebookPanel({ width = "100%" }: { width?: number | string }) {
     );
   };
   const applyCodeBlock = () => {
-    replaceSelection((selected) => `\`\`\`\n${selected}\n\`\`\``);
+    replaceSelection((selected) => `\`\`\`\n${selected}\n\`\`\`\n`, {
+      allowCollapsed: true,
+      placeCursor: "after",
+    });
   };
   const applyTable = () => {
     replaceSelection((selected) => {
@@ -685,15 +720,32 @@ export function NotebookPanel({ width = "100%" }: { width?: number | string }) {
     readRichTextCommandState();
   };
 
-  const applyRichCodeBlock = () => {
-    if (!hasRichTextSelection) return;
-    const selected = savedRichTextRangeRef.current?.toString() || "";
-    const highlighted = escapeHtml(selected);
+  const notebookCodeTheme = () =>
+    document.documentElement.classList.contains("dark") ? "github-dark" : "github-light";
+
+  const richCodeBlockHtml = (source: string) => {
+    const highlighted = escapeHtml(source) || "<br>";
     const options = NOTEBOOK_CODE_LANGUAGE_OPTIONS.map(
       ([value, label]) => `<option value="${value}">${label}</option>`,
     ).join("");
-    const html = `<pre data-notebook-code-block="true" style="position:relative;margin:8px 0;padding:30px 10px 10px;border:1px solid var(--border-dim);border-radius:8px;background:var(--bg-subtle);font-family:var(--font-mono);white-space:pre-wrap"><select data-notebook-code-language="true" contenteditable="false" style="position:absolute;right:6px;top:5px;height:22px;border:1px solid var(--border-medium);border-radius:5px;background:var(--bg-card);color:var(--text-secondary);font-size:11px">${options}</select><code data-language="text">${highlighted}</code></pre>`;
-    runRichTextCommand("insertHTML", html);
+    return `<pre data-notebook-code-block="true"><select data-notebook-code-language="true" contenteditable="false">${options}</select><code data-language="text" spellcheck="false">${highlighted}</code></pre><p data-notebook-after-code-block="true"><br></p>`;
+  };
+
+  const applyRichCodeBlock = () => {
+    const editor = richTextRef.current;
+    const range = getRichTextInsertionRange();
+    if (!editor || !range) return;
+    const selected = range.toString();
+    const template = document.createElement("template");
+    template.innerHTML = richCodeBlockHtml(selected);
+    const afterBlock = template.content.querySelector("[data-notebook-after-code-block]");
+    range.deleteContents();
+    range.insertNode(template.content);
+    if (afterBlock instanceof HTMLElement) placeCaretInside(afterBlock);
+    updateRichTextFromDom();
+    setHasRichTextSelection(false);
+    savedRichTextRangeRef.current = null;
+    readRichTextCommandState();
   };
 
   const updateRichCodeLanguage = async (select: HTMLSelectElement) => {
@@ -703,7 +755,8 @@ export function NotebookPanel({ width = "100%" }: { width?: number | string }) {
     const language = select.value;
     const source = code.textContent ?? "";
     code.dataset.language = language;
-    code.innerHTML = await highlightCodeInnerHtml(source, language);
+    code.innerHTML =
+      (await highlightCodeInnerHtml(source, language, notebookCodeTheme())) || "<br>";
     updateRichTextFromDom();
   };
 
@@ -917,8 +970,6 @@ export function NotebookPanel({ width = "100%" }: { width?: number | string }) {
   };
 
   const resetNotePointerDrag = () => {
-    const drag = notePointerDragRef.current;
-    if (drag) window.clearTimeout(drag.pressTimer);
     notePointerDragRef.current = null;
     setDraggedNoteId(null);
     setDragOverNoteId(null);
@@ -927,44 +978,34 @@ export function NotebookPanel({ width = "100%" }: { width?: number | string }) {
   const handleNotePointerDown = (event: React.PointerEvent<HTMLButtonElement>, noteId: string) => {
     if (event.button !== 0) return;
     const currentTarget = event.currentTarget;
-    const pressTimer = window.setTimeout(() => {
-      const drag = notePointerDragRef.current;
-      if (!drag || drag.id !== noteId || drag.pointerId !== event.pointerId) return;
-      drag.active = true;
-      setDraggedNoteId(noteId);
-      setDragOverNoteId(noteId);
-    }, POINTER_DRAG_DELAY_MS);
     notePointerDragRef.current = {
       id: noteId,
       pointerId: event.pointerId,
       startY: event.clientY,
-      active: false,
-      pressTimer,
+      hasMoved: false,
     };
+    setDraggedNoteId(noteId);
+    setDragOverNoteId(noteId);
     currentTarget.setPointerCapture?.(event.pointerId);
   };
 
   const handleNotePointerMove = (event: React.PointerEvent<HTMLButtonElement>) => {
     const drag = notePointerDragRef.current;
     if (!drag || drag.pointerId !== event.pointerId) return;
-    if (!drag.active && Math.abs(event.clientY - drag.startY) > POINTER_DRAG_MOVE_TOLERANCE) {
-      window.clearTimeout(drag.pressTimer);
-      notePointerDragRef.current = null;
-      return;
-    }
-    if (!drag.active) return;
     event.preventDefault();
+    if (Math.abs(event.clientY - drag.startY) > POINTER_DRAG_MOVE_TOLERANCE) {
+      drag.hasMoved = true;
+    }
     setDragOverNoteId(noteIdAtClientY(event.clientY));
   };
 
   const handleNotePointerUp = (event: React.PointerEvent<HTMLButtonElement>) => {
     const drag = notePointerDragRef.current;
     if (!drag || drag.pointerId !== event.pointerId) return;
-    const wasActive = drag.active;
-    const targetId = wasActive ? noteIdAtClientY(event.clientY) : null;
+    const targetId = drag.hasMoved ? noteIdAtClientY(event.clientY) : null;
     event.currentTarget.releasePointerCapture?.(event.pointerId);
     resetNotePointerDrag();
-    if (!wasActive || !targetId) return;
+    if (!targetId) return;
     suppressNextNoteClickRef.current = true;
     event.preventDefault();
     reorderNote(drag.id, targetId);
@@ -1151,7 +1192,12 @@ export function NotebookPanel({ width = "100%" }: { width?: number | string }) {
                     fontSize: 12,
                     fontWeight: 700,
                     opacity: draggedNoteId === note.id ? 0.55 : 1,
-                    transform: dragOverNoteId === note.id ? "translateY(2px)" : "none",
+                    transform:
+                      draggedNoteId === note.id
+                        ? "scale(0.985)"
+                        : dragOverNoteId === note.id
+                          ? "translateY(2px)"
+                          : "none",
                     boxShadow:
                       dragOverNoteId === note.id ? "inset 0 0 0 1px var(--accent)" : "none",
                     touchAction: "none",

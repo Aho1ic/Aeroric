@@ -7,6 +7,7 @@ import * as Popover from "@radix-ui/react-popover";
 import {
   X,
   AlertCircle,
+  Database,
   Eye,
   PencilLine,
   MoreHorizontal,
@@ -20,6 +21,7 @@ import {
   Search,
   Lightbulb,
   Copy,
+  Table2,
 } from "lucide-react";
 import { getFileColor } from "../utils";
 import ReactCodeMirror, {
@@ -35,9 +37,14 @@ import { solarizedLight } from "@uiw/codemirror-theme-solarized";
 import { StreamLanguage } from "@codemirror/language";
 import type { Extension } from "@codemirror/state";
 import { ImagePreviewPane } from "./file-viewer/ImagePreviewPane";
+import { databaseApi } from "../lib/databaseApi";
 import type { OpenFileTab } from "../hooks/useProjectPanels";
 import type {
   CondaEnvironment,
+  DbEndpoint,
+  DbObject,
+  DbQueryResult,
+  DbSchema,
   DebugBreakpoint,
   DiagnosticItem,
   DiagnosticSeverity,
@@ -78,10 +85,7 @@ import {
   outlineSymbolKey,
   requestLspDocumentOutline,
 } from "./file-viewer/lspOutline";
-import {
-  createLspInlayHintsExtension,
-  requestLspInlayHints,
-} from "./file-viewer/lspInlayHints";
+import { createLspInlayHintsExtension, requestLspInlayHints } from "./file-viewer/lspInlayHints";
 import {
   applyLspWorkspaceEdit,
   requestLspRename,
@@ -114,10 +118,7 @@ import {
   testRunTargetsForContent,
   type EditorTestRunTarget,
 } from "./file-viewer/testRunGutter";
-import {
-  coverageLinesForFile,
-  createCoverageExtension,
-} from "./file-viewer/coverageExtension";
+import { coverageLinesForFile, createCoverageExtension } from "./file-viewer/coverageExtension";
 import { debugBreakpointLinesForFile } from "./debug/debugBreakpointState";
 import {
   inlineBlameText,
@@ -188,6 +189,11 @@ function isPreviewableImageFile(fileName: string): boolean {
     ext === "bmp" ||
     ext === "svg"
   );
+}
+
+function isSqliteDatabaseFile(fileName: string): boolean {
+  const ext = fileName.split(".").pop()?.toLowerCase();
+  return ext === "db" || ext === "sqlite" || ext === "sqlite3";
 }
 
 async function loadLanguageExtension(fileName: string): Promise<Extension> {
@@ -697,6 +703,14 @@ type ImagePreviewData = {
   byteLength: number;
 };
 
+type SqlitePreviewData = {
+  schema: DbSchema;
+  selectedObjectName: string | null;
+  tableData: DbQueryResult | null;
+  tableLoading: boolean;
+  tableError: string | null;
+};
+
 type CursorPosition = {
   line: number;
   column: number;
@@ -1045,7 +1059,11 @@ function FileBreadcrumbs({
   return (
     <nav aria-label={label} style={breadcrumbStyle}>
       {pathSegments.map((segment, index) => (
-        <span key={`${segment.title}:${index}`} style={breadcrumbSegmentStyle} title={segment.title}>
+        <span
+          key={`${segment.title}:${index}`}
+          style={breadcrumbSegmentStyle}
+          title={segment.title}
+        >
           {index > 0 ? <ChevronRight size={10} style={breadcrumbSeparatorStyle} /> : null}
           <span style={breadcrumbTextStyle}>{segment.label}</span>
         </span>
@@ -1147,7 +1165,12 @@ function LocalHistoryDialog({
 
   return (
     <div style={localHistoryOverlayStyle}>
-      <section role="dialog" aria-modal="true" aria-label={t("file.localHistory")} style={localHistoryDialogStyle}>
+      <section
+        role="dialog"
+        aria-modal="true"
+        aria-label={t("file.localHistory")}
+        style={localHistoryDialogStyle}
+      >
         <div style={localHistoryHeaderStyle}>
           <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" }}>
             {t("file.localHistory")} - {targetName}
@@ -1250,9 +1273,7 @@ function LocalHistoryDialog({
                 <div style={{ padding: "7px 10px", fontSize: 12, color: "var(--text-muted)" }}>
                   {t("file.localHistorySnapshot")}
                 </div>
-                <pre style={localHistoryTextStyle}>
-                  {snapshot?.content ?? ""}
-                </pre>
+                <pre style={localHistoryTextStyle}>{snapshot?.content ?? ""}</pre>
               </div>
               <div style={localHistoryPaneStyle}>
                 <div style={{ padding: "7px 10px", fontSize: 12, color: "var(--text-muted)" }}>
@@ -1264,6 +1285,436 @@ function LocalHistoryDialog({
           </div>
         </div>
       </section>
+    </div>
+  );
+}
+
+function sqliteEndpointForFile(filePath: string, remote?: RemoteFileContext): DbEndpoint {
+  if (remote) {
+    return {
+      kind: "ssh",
+      connection: remote.connection,
+      path: filePath,
+      projectPath: remote.projectPath,
+    };
+  }
+  return { kind: "local", path: filePath };
+}
+
+function sqliteCellText(value: unknown): string {
+  if (value === null || value === undefined) return "NULL";
+  if (typeof value === "object") {
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return String(value);
+    }
+  }
+  return String(value);
+}
+
+function SqliteObjectButton({
+  object,
+  selected,
+  onSelect,
+}: {
+  object: DbObject;
+  selected: boolean;
+  onSelect: () => void;
+}) {
+  const { t } = useI18n();
+  const rowCount =
+    typeof object.rowCount === "number"
+      ? t("file.sqlitePreviewRowCount", { count: String(object.rowCount) })
+      : object.objectType;
+  return (
+    <button
+      type="button"
+      aria-pressed={selected}
+      onClick={onSelect}
+      style={{
+        width: "100%",
+        minHeight: 40,
+        display: "grid",
+        gridTemplateColumns: "16px minmax(0, 1fr)",
+        gap: 7,
+        alignItems: "center",
+        padding: "6px 8px",
+        border: "none",
+        borderRadius: 6,
+        background: selected ? "var(--bg-selected)" : "transparent",
+        color: selected ? "var(--text-primary)" : "var(--text-secondary)",
+        textAlign: "left",
+        cursor: "pointer",
+      }}
+      onMouseEnter={(event) => {
+        if (!selected) event.currentTarget.style.background = "var(--bg-hover)";
+      }}
+      onMouseLeave={(event) => {
+        if (!selected) event.currentTarget.style.background = "transparent";
+      }}
+    >
+      <Table2 size={13} strokeWidth={2} />
+      <span style={{ minWidth: 0 }}>
+        <span
+          style={{
+            display: "block",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+            fontSize: 12,
+            fontWeight: 650,
+          }}
+        >
+          {object.name}
+        </span>
+        <span
+          style={{
+            display: "block",
+            marginTop: 2,
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+            color: "var(--text-muted)",
+            fontSize: 10.5,
+            fontFamily: "var(--font-mono)",
+          }}
+        >
+          {rowCount}
+        </span>
+      </span>
+    </button>
+  );
+}
+
+function SqlitePreviewPane({
+  fileName,
+  preview,
+  onSelectObject,
+}: {
+  fileName: string;
+  preview: SqlitePreviewData;
+  onSelectObject: (name: string) => void;
+}) {
+  const { t } = useI18n();
+  const objects = preview.schema.objects;
+  const selectedObject =
+    objects.find((object) => object.name === preview.selectedObjectName) ?? objects[0] ?? null;
+  const rows = preview.tableData?.rows ?? [];
+  const columns =
+    preview.tableData?.columns ?? selectedObject?.columns.map((column) => column.name) ?? [];
+
+  return (
+    <div
+      style={{
+        height: "100%",
+        display: "grid",
+        gridTemplateColumns: "230px minmax(0, 1fr)",
+        minWidth: 0,
+        minHeight: 0,
+        background: "var(--bg-panel)",
+      }}
+    >
+      <aside
+        style={{
+          minWidth: 0,
+          minHeight: 0,
+          display: "flex",
+          flexDirection: "column",
+          borderRight: "1px solid var(--border-dim)",
+          background: "var(--bg-sidebar)",
+        }}
+      >
+        <div
+          style={{
+            minHeight: 44,
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            padding: "8px 10px",
+            borderBottom: "1px solid var(--border-dim)",
+            color: "var(--text-primary)",
+          }}
+        >
+          <Database size={15} />
+          <span style={{ minWidth: 0 }}>
+            <span
+              style={{
+                display: "block",
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
+                fontSize: 12,
+                fontWeight: 700,
+              }}
+            >
+              {fileName}
+            </span>
+            <span style={{ display: "block", color: "var(--text-muted)", fontSize: 10.5 }}>
+              {t("file.sqlitePreview")}
+            </span>
+          </span>
+        </div>
+        <div
+          style={{
+            padding: "7px 8px 5px",
+            color: "var(--text-muted)",
+            fontSize: 10.5,
+            fontWeight: 700,
+            textTransform: "uppercase",
+          }}
+        >
+          {t("file.sqlitePreviewObjects", { count: String(objects.length) })}
+        </div>
+        <div style={{ minHeight: 0, overflowY: "auto", padding: "0 6px 8px" }}>
+          {objects.length === 0 ? (
+            <div style={{ padding: "8px 4px", color: "var(--text-hint)", fontSize: 12 }}>
+              {t("file.sqlitePreviewNoObjects")}
+            </div>
+          ) : (
+            objects.map((object) => (
+              <SqliteObjectButton
+                key={`${object.objectType}:${object.name}`}
+                object={object}
+                selected={object.name === selectedObject?.name}
+                onSelect={() => onSelectObject(object.name)}
+              />
+            ))
+          )}
+        </div>
+      </aside>
+      <main
+        style={{
+          minWidth: 0,
+          minHeight: 0,
+          display: "flex",
+          flexDirection: "column",
+        }}
+      >
+        <div
+          style={{
+            minHeight: 44,
+            display: "flex",
+            alignItems: "center",
+            gap: 10,
+            padding: "8px 12px",
+            borderBottom: "1px solid var(--border-dim)",
+          }}
+        >
+          <Table2 size={15} color="var(--accent)" />
+          <span style={{ minWidth: 0, flex: 1 }}>
+            <span
+              style={{
+                display: "block",
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
+                color: "var(--text-primary)",
+                fontSize: 13,
+                fontWeight: 700,
+              }}
+            >
+              {selectedObject?.name ?? t("file.sqlitePreviewSelectObject")}
+            </span>
+            {selectedObject ? (
+              <span
+                style={{
+                  display: "block",
+                  marginTop: 2,
+                  color: "var(--text-muted)",
+                  fontFamily: "var(--font-mono)",
+                  fontSize: 10.5,
+                }}
+              >
+                {t("file.sqlitePreviewObjectMeta", {
+                  type: selectedObject.objectType,
+                  columns: String(selectedObject.columns.length),
+                })}
+              </span>
+            ) : null}
+          </span>
+        </div>
+        {selectedObject ? (
+          <div
+            style={{
+              flex: 1,
+              minHeight: 0,
+              display: "grid",
+              gridTemplateRows: "auto minmax(0, 1fr)",
+            }}
+          >
+            <div
+              style={{
+                display: "flex",
+                gap: 6,
+                overflowX: "auto",
+                padding: "8px 10px",
+                borderBottom: "1px solid var(--border-dim)",
+              }}
+            >
+              {selectedObject.columns.length === 0 ? (
+                <span style={{ color: "var(--text-hint)", fontSize: 12 }}>
+                  {t("file.sqlitePreviewNoColumns")}
+                </span>
+              ) : (
+                selectedObject.columns.map((column) => (
+                  <span
+                    key={column.name}
+                    title={`${column.name}${column.dataType ? ` · ${column.dataType}` : ""}`}
+                    style={{
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: 5,
+                      maxWidth: 220,
+                      height: 22,
+                      padding: "0 7px",
+                      border: "1px solid var(--border-dim)",
+                      borderRadius: 5,
+                      background: "var(--bg-subtle)",
+                      color: column.primaryKey ? "var(--accent)" : "var(--text-secondary)",
+                      fontFamily: "var(--font-mono)",
+                      fontSize: 10.5,
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    <span
+                      style={{
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                      }}
+                    >
+                      {column.name}
+                    </span>
+                    {column.dataType ? (
+                      <span style={{ color: "var(--text-hint)" }}>{column.dataType}</span>
+                    ) : null}
+                  </span>
+                ))
+              )}
+            </div>
+            <div style={{ minHeight: 0, overflow: "auto", position: "relative" }}>
+              {preview.tableLoading ? (
+                <div
+                  style={{
+                    height: "100%",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    color: "var(--text-hint)",
+                    fontSize: 12,
+                  }}
+                >
+                  {t("file.sqlitePreviewLoadingRows")}
+                </div>
+              ) : preview.tableError ? (
+                <div
+                  style={{
+                    height: "100%",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    color: "var(--warning)",
+                    fontSize: 12,
+                    padding: 18,
+                    textAlign: "center",
+                  }}
+                >
+                  {t("file.sqlitePreviewFailed", { error: preview.tableError })}
+                </div>
+              ) : rows.length === 0 ? (
+                <div
+                  style={{
+                    height: "100%",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    color: "var(--text-hint)",
+                    fontSize: 12,
+                  }}
+                >
+                  {t("file.sqlitePreviewEmpty")}
+                </div>
+              ) : (
+                <table
+                  style={{
+                    width: "100%",
+                    minWidth: "max-content",
+                    borderCollapse: "collapse",
+                    fontFamily: "var(--font-mono)",
+                    fontSize: 11.5,
+                  }}
+                >
+                  <thead>
+                    <tr>
+                      {columns.map((column) => (
+                        <th
+                          key={column}
+                          style={{
+                            position: "sticky",
+                            top: 0,
+                            zIndex: 1,
+                            maxWidth: 260,
+                            padding: "7px 9px",
+                            borderBottom: "1px solid var(--border)",
+                            borderRight: "1px solid var(--border-dim)",
+                            background: "var(--bg-sidebar)",
+                            color: "var(--text-secondary)",
+                            textAlign: "left",
+                            fontWeight: 700,
+                            whiteSpace: "nowrap",
+                          }}
+                        >
+                          {column}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {rows.map((row, rowIndex) => (
+                      <tr key={row.rowId ?? rowIndex}>
+                        {columns.map((column, columnIndex) => (
+                          <td
+                            key={`${rowIndex}:${column}`}
+                            title={sqliteCellText(row.values[columnIndex])}
+                            style={{
+                              maxWidth: 260,
+                              padding: "6px 9px",
+                              borderBottom: "1px solid var(--border-dim)",
+                              borderRight: "1px solid var(--border-dim)",
+                              color:
+                                row.values[columnIndex] === null
+                                  ? "var(--text-hint)"
+                                  : "var(--text-primary)",
+                              whiteSpace: "nowrap",
+                              overflow: "hidden",
+                              textOverflow: "ellipsis",
+                            }}
+                          >
+                            {sqliteCellText(row.values[columnIndex])}
+                          </td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          </div>
+        ) : (
+          <div
+            style={{
+              flex: 1,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              color: "var(--text-hint)",
+              fontSize: 12,
+            }}
+          >
+            {t("file.sqlitePreviewNoObjects")}
+          </div>
+        )}
+      </main>
     </div>
   );
 }
@@ -1310,6 +1761,7 @@ function FilePreviewPane({
   const { t } = useI18n();
   const [content, setContent] = useState<string | null>(null);
   const [imagePreview, setImagePreview] = useState<ImagePreviewData | null>(null);
+  const [sqlitePreview, setSqlitePreview] = useState<SqlitePreviewData | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("idle");
@@ -1349,6 +1801,11 @@ function FilePreviewPane({
   const [inlineBlameError, setInlineBlameError] = useState<string | null>(null);
   const isMarkdown = isMarkdownFile(fileName);
   const isPreviewableImage = isPreviewableImageFile(fileName);
+  const isSqliteDatabase = isSqliteDatabaseFile(fileName);
+  const sqliteEndpoint = useMemo(
+    () => (isSqliteDatabase ? sqliteEndpointForFile(filePath, remote) : null),
+    [filePath, isSqliteDatabase, remote],
+  );
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const savedResetRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const saveRevisionRef = useRef(0);
@@ -1357,6 +1814,7 @@ function FilePreviewPane({
   const editorViewRef = useRef<EditorView | null>(null);
   const appliedSelectionKeyRef = useRef<string | null>(null);
   const referencePreviewRunRef = useRef(0);
+  const sqlitePreviewRunRef = useRef(0);
   const [activeHeadingId, setActiveHeadingId] = useState<string | null>(null);
   const [cursorPosition, setCursorPosition] = useState<CursorPosition>({ line: 1, column: 1 });
   const [stickyPosition, setStickyPosition] = useState<CursorPosition>({ line: 1, column: 1 });
@@ -1497,17 +1955,17 @@ function FilePreviewPane({
   );
   const showCodeOutline = Boolean(
     !isMarkdown &&
-      !isPreviewableImage &&
-      content !== null &&
-      languageServer.supported &&
-      (outlineLoading || outlineLoaded || outlineError),
+    !isPreviewableImage &&
+    content !== null &&
+    languageServer.supported &&
+    (outlineLoading || outlineLoaded || outlineError),
   );
   const showStickyScroll = Boolean(
     !isMarkdown &&
-      !isPreviewableImage &&
-      content !== null &&
-      languageServer.supported &&
-      stickyOutlineSymbols.length > 0,
+    !isPreviewableImage &&
+    content !== null &&
+    languageServer.supported &&
+    stickyOutlineSymbols.length > 0,
   );
   const jumpToOutlineSymbol = useCallback(
     (symbol: LspSymbol) => {
@@ -1595,7 +2053,10 @@ function FilePreviewPane({
       referencePreviewRunRef.current = runId;
       setReferencePreviews(
         Object.fromEntries(
-          locations.map((location, index) => [lspReferenceKey(location, index), { status: "loading" }]),
+          locations.map((location, index) => [
+            lspReferenceKey(location, index),
+            { status: "loading" },
+          ]),
         ),
       );
 
@@ -1616,7 +2077,10 @@ function FilePreviewPane({
                         }
                       : { path: location.path, projectPath },
                   );
-            return [key, { status: "ready", preview: lspReferencePreviewLine(targetContent, location) }];
+            return [
+              key,
+              { status: "ready", preview: lspReferencePreviewLine(targetContent, location) },
+            ];
           } catch (err) {
             return [key, { status: "error", error: String(err) }];
           }
@@ -1669,6 +2133,53 @@ function FilePreviewPane({
       onOpenDefinition?.(target.path, target.name, target.selection);
     },
     [onOpenDefinition],
+  );
+
+  const selectSqliteObject = useCallback(
+    async (objectName: string) => {
+      if (!sqliteEndpoint) return;
+      const runId = sqlitePreviewRunRef.current + 1;
+      sqlitePreviewRunRef.current = runId;
+      setSqlitePreview((current) =>
+        current
+          ? {
+              ...current,
+              selectedObjectName: objectName,
+              tableData: null,
+              tableLoading: true,
+              tableError: null,
+            }
+          : current,
+      );
+      try {
+        const tableData = await databaseApi.queryTable(
+          sqliteEndpoint,
+          objectName,
+          1,
+          100,
+          projectPath,
+        );
+        if (sqlitePreviewRunRef.current !== runId) return;
+        setSqlitePreview((current) =>
+          current && current.selectedObjectName === objectName
+            ? { ...current, tableData, tableLoading: false, tableError: null }
+            : current,
+        );
+      } catch (err) {
+        if (sqlitePreviewRunRef.current !== runId) return;
+        setSqlitePreview((current) =>
+          current && current.selectedObjectName === objectName
+            ? {
+                ...current,
+                tableData: null,
+                tableLoading: false,
+                tableError: String(err),
+              }
+            : current,
+        );
+      }
+    },
+    [projectPath, sqliteEndpoint],
   );
 
   const jumpToHeading = (id: string) => {
@@ -1825,12 +2336,14 @@ function FilePreviewPane({
     setLoading(true);
     setContent(null);
     setImagePreview(null);
+    setSqlitePreview(null);
     setError(null);
     setFormatError(null);
     setNavigationError(null);
     setReferences(null);
     setReferencePreviews({});
     referencePreviewRunRef.current += 1;
+    sqlitePreviewRunRef.current += 1;
     setOutlineSymbols([]);
     setOutlineLoading(false);
     setOutlineLoaded(false);
@@ -1860,35 +2373,65 @@ function FilePreviewPane({
     appliedSelectionKeyRef.current = null;
     onDirtyChange?.(filePath, false);
 
-    const loadFile = isPreviewableImage
-      ? invoke<ImagePreviewData>(
-          remote ? "remote_read_image_preview" : "read_image_preview",
-          remote
-            ? {
-                connection: remote.connection,
-                remotePath: filePath,
-                remoteProjectPath: remote.projectPath,
+    const loadFile =
+      isSqliteDatabase && sqliteEndpoint
+        ? databaseApi.inspect(sqliteEndpoint, projectPath).then(async (schema) => {
+            if (cancelled) return;
+            const selectedObjectName = schema.objects[0]?.name ?? null;
+            let tableData: DbQueryResult | null = null;
+            let tableError: string | null = null;
+            if (selectedObjectName) {
+              try {
+                tableData = await databaseApi.queryTable(
+                  sqliteEndpoint,
+                  selectedObjectName,
+                  1,
+                  100,
+                  projectPath,
+                );
+              } catch (err) {
+                tableError = String(err);
               }
-            : { path: filePath, projectPath },
-        ).then((preview) => {
-          if (cancelled) return;
-          setImagePreview(preview);
-          setLoading(false);
-        })
-      : invoke<string>(
-          remote ? "remote_read_file_content" : "read_file_content",
-          remote
-            ? {
-                connection: remote.connection,
-                remotePath: filePath,
-                remoteProjectPath: remote.projectPath,
-              }
-            : { path: filePath, projectPath },
-        ).then((nextContent) => {
-          if (cancelled) return;
-          setContent(nextContent);
-          setLoading(false);
-        });
+            }
+            if (cancelled) return;
+            setSqlitePreview({
+              schema,
+              selectedObjectName,
+              tableData,
+              tableLoading: false,
+              tableError,
+            });
+            setLoading(false);
+          })
+        : isPreviewableImage
+          ? invoke<ImagePreviewData>(
+              remote ? "remote_read_image_preview" : "read_image_preview",
+              remote
+                ? {
+                    connection: remote.connection,
+                    remotePath: filePath,
+                    remoteProjectPath: remote.projectPath,
+                  }
+                : { path: filePath, projectPath },
+            ).then((preview) => {
+              if (cancelled) return;
+              setImagePreview(preview);
+              setLoading(false);
+            })
+          : invoke<string>(
+              remote ? "remote_read_file_content" : "read_file_content",
+              remote
+                ? {
+                    connection: remote.connection,
+                    remotePath: filePath,
+                    remoteProjectPath: remote.projectPath,
+                  }
+                : { path: filePath, projectPath },
+            ).then((nextContent) => {
+              if (cancelled) return;
+              setContent(nextContent);
+              setLoading(false);
+            });
 
     loadFile.catch((err) => {
       if (cancelled) return;
@@ -1899,7 +2442,15 @@ function FilePreviewPane({
     return () => {
       cancelled = true;
     };
-  }, [filePath, projectPath, isPreviewableImage, remote, onDirtyChange]);
+  }, [
+    filePath,
+    projectPath,
+    isPreviewableImage,
+    isSqliteDatabase,
+    remote,
+    sqliteEndpoint,
+    onDirtyChange,
+  ]);
 
   useEffect(() => {
     let cancelled = false;
@@ -2394,7 +2945,9 @@ function FilePreviewPane({
     setCursorPosition({ line: line.number, column: anchor - line.from + 1 });
     const updateView = (update as ViewUpdate & { view?: { viewport?: { from?: number } } }).view;
     const viewportFrom =
-      typeof updateView?.viewport?.from === "number" ? Math.max(0, updateView.viewport.from) : anchor;
+      typeof updateView?.viewport?.from === "number"
+        ? Math.max(0, updateView.viewport.from)
+        : anchor;
     const viewportLine = update.state.doc.lineAt(viewportFrom);
     setStickyPosition({ line: viewportLine.number, column: 1 });
   }, []);
@@ -2454,11 +3007,15 @@ function FilePreviewPane({
           : saveStatus === "error"
             ? t("file.saveFailed")
             : null;
-  const statusLabel = isPreviewableImage
-    ? imagePreview
-      ? `${imagePreview.mimeType} · ${t("file.readOnly")}`
-      : t("file.imagePreview")
-    : saveLabel;
+  const statusLabel = isSqliteDatabase
+    ? sqlitePreview
+      ? t("file.sqlitePreviewReadOnly")
+      : t("file.sqlitePreview")
+    : isPreviewableImage
+      ? imagePreview
+        ? `${imagePreview.mimeType} · ${t("file.readOnly")}`
+        : t("file.imagePreview")
+      : saveLabel;
   const languageServerLabel =
     !isPreviewableImage && content !== null && languageServer.supported
       ? languageServer.loading
@@ -2557,6 +3114,12 @@ function FilePreviewPane({
               fileName={fileName}
               mimeType={imagePreview.mimeType}
               byteLength={imagePreview.byteLength}
+            />
+          ) : isSqliteDatabase && sqlitePreview ? (
+            <SqlitePreviewPane
+              fileName={fileName}
+              preview={sqlitePreview}
+              onSelectObject={(name) => void selectSqliteObject(name)}
             />
           ) : content !== null ? (
             isMarkdown && previewMode ? (
@@ -3208,9 +3771,7 @@ function FilePreviewPane({
                 >
                   {diagnosticFilterOptions.map((filter) => {
                     const count =
-                      filter === "all"
-                        ? currentFileDiagnostics.length
-                        : diagnosticCounts[filter];
+                      filter === "all" ? currentFileDiagnostics.length : diagnosticCounts[filter];
                     const active = diagnosticSeverityFilter === filter;
                     return (
                       <button
@@ -3577,7 +4138,7 @@ function FilePreviewPane({
         {statusLabel && (
           <span
             style={{
-              marginLeft: isPreviewableImage || content === null ? "auto" : 0,
+              marginLeft: isPreviewableImage || isSqliteDatabase || content === null ? "auto" : 0,
               fontSize: 11,
               color: saveStatus === "error" ? "var(--danger-fg)" : "var(--text-muted)",
               fontFamily: "var(--font-mono)",
@@ -3751,8 +4312,9 @@ export function FileViewer({
   } | null>(null);
   const [localHistoryEntries, setLocalHistoryEntries] = useState<LocalHistoryEntry[]>([]);
   const [localHistorySelectedId, setLocalHistorySelectedId] = useState<string | null>(null);
-  const [localHistorySnapshot, setLocalHistorySnapshot] =
-    useState<LocalHistorySnapshot | null>(null);
+  const [localHistorySnapshot, setLocalHistorySnapshot] = useState<LocalHistorySnapshot | null>(
+    null,
+  );
   const [localHistoryCurrentContent, setLocalHistoryCurrentContent] = useState("");
   const [localHistoryLoading, setLocalHistoryLoading] = useState(false);
   const [localHistorySnapshotLoading, setLocalHistorySnapshotLoading] = useState(false);
@@ -3938,7 +4500,8 @@ export function FileViewer({
   const canCloseOtherTabs = tabs.length > 1;
   const activeTabIndex = tabs.findIndex((tab) => tab.path === activeTab.path);
   const canCloseTabsToRight = activeTabIndex !== -1 && activeTabIndex < tabs.length - 1;
-  const activeCanShowLocalHistory = !remote && !isPreviewableImageFile(activeTab.name);
+  const activeCanShowLocalHistory =
+    !remote && !isPreviewableImageFile(activeTab.name) && !isSqliteDatabaseFile(activeTab.name);
 
   return (
     <div

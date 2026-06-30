@@ -27,11 +27,9 @@ type ProjectPointerDragState = {
   id: string;
   pointerId: number;
   startY: number;
-  active: boolean;
-  pressTimer: number;
+  hasMoved: boolean;
 };
 
-const POINTER_DRAG_DELAY_MS = 180;
 const POINTER_DRAG_MOVE_TOLERANCE = 5;
 
 function normalizeProjectSearchText(value: string) {
@@ -460,8 +458,6 @@ export function ProjectRail({
   };
 
   const resetProjectPointerDrag = () => {
-    const drag = projectPointerDragRef.current;
-    if (drag) window.clearTimeout(drag.pressTimer);
     projectPointerDragRef.current = null;
     setDraggedProjectId(null);
     setDragOverProjectId(null);
@@ -475,44 +471,34 @@ export function ProjectRail({
     const target = event.target;
     if (target instanceof Element && target.closest("[data-project-rail-no-drag]")) return;
     const currentTarget = event.currentTarget;
-    const pressTimer = window.setTimeout(() => {
-      const drag = projectPointerDragRef.current;
-      if (!drag || drag.id !== projectId || drag.pointerId !== event.pointerId) return;
-      drag.active = true;
-      setDraggedProjectId(projectId);
-      setDragOverProjectId(projectId);
-    }, POINTER_DRAG_DELAY_MS);
     projectPointerDragRef.current = {
       id: projectId,
       pointerId: event.pointerId,
       startY: event.clientY,
-      active: false,
-      pressTimer,
+      hasMoved: false,
     };
+    setDraggedProjectId(projectId);
+    setDragOverProjectId(projectId);
     currentTarget.setPointerCapture?.(event.pointerId);
   };
 
   const handleProjectPointerMove = (event: React.PointerEvent<HTMLDivElement>) => {
     const drag = projectPointerDragRef.current;
     if (!drag || drag.pointerId !== event.pointerId) return;
-    if (!drag.active && Math.abs(event.clientY - drag.startY) > POINTER_DRAG_MOVE_TOLERANCE) {
-      window.clearTimeout(drag.pressTimer);
-      projectPointerDragRef.current = null;
-      return;
-    }
-    if (!drag.active) return;
     event.preventDefault();
+    if (Math.abs(event.clientY - drag.startY) > POINTER_DRAG_MOVE_TOLERANCE) {
+      drag.hasMoved = true;
+    }
     setDragOverProjectId(projectIdAtClientY(event.clientY));
   };
 
   const handleProjectPointerUp = (event: React.PointerEvent<HTMLDivElement>) => {
     const drag = projectPointerDragRef.current;
     if (!drag || drag.pointerId !== event.pointerId) return;
-    const wasActive = drag.active;
-    const targetId = wasActive ? projectIdAtClientY(event.clientY) : null;
+    const targetId = drag.hasMoved ? projectIdAtClientY(event.clientY) : null;
     event.currentTarget.releasePointerCapture?.(event.pointerId);
     resetProjectPointerDrag();
-    if (!wasActive || !targetId) return;
+    if (!targetId) return;
     suppressNextProjectClickRef.current = true;
     event.preventDefault();
     reorderProjectIds(drag.id, targetId);
@@ -532,13 +518,6 @@ export function ProjectRail({
       return next;
     });
   }, [activeProjectId]);
-
-  useEffect(() => {
-    return () => {
-      const drag = projectPointerDragRef.current;
-      if (drag) window.clearTimeout(drag.pressTimer);
-    };
-  }, []);
 
   // 折叠窄条只显示常驻项目；当前激活项目即使被设为非常驻也始终保留，避免失去当前上下文。
   const railProjects = useMemo(
@@ -790,7 +769,12 @@ export function ProjectRail({
                         ? "var(--accent-subtle)"
                         : "transparent",
                   opacity: draggedProjectId === project.id ? 0.55 : 1,
-                  transform: dragOverProjectId === project.id ? "translateY(2px)" : "none",
+                  transform:
+                    draggedProjectId === project.id
+                      ? "scale(0.985)"
+                      : dragOverProjectId === project.id
+                        ? "translateY(2px)"
+                        : "none",
                   boxShadow:
                     dragOverProjectId === project.id ? "inset 0 0 0 1px var(--accent)" : "none",
                   cursor: onReorderProjects
