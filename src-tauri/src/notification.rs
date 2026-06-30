@@ -769,6 +769,9 @@ mod tests {
         let notification = release_to_notification(release, "1.1.4", "aarch64");
 
         assert_eq!(notification.release_tag.as_deref(), Some("v9.9.9"));
-        assert!(notification.update_install_supported);
+        assert_eq!(
+            notification.update_install_supported,
+            cfg!(target_os = "macos")
+        );
     }
 }

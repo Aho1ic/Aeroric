@@ -2126,7 +2126,7 @@ mod tests {
             project_root,
         ));
         assert!(apply_patch_requires_confirmation(
-            "*** Begin Patch\n*** Update File: /tmp/outside.rs\n*** End Patch",
+            "*** Begin Patch\n*** Update File: /var/aeroric-outside.rs\n*** End Patch",
             project_root,
         ));
     }
