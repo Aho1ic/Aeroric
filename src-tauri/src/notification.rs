@@ -6,8 +6,8 @@ use std::sync::OnceLock;
 
 use chrono::Utc;
 use parking_lot::Mutex;
-use sha2::{Digest, Sha256};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use tauri::AppHandle;
 
 use crate::storage::atomic_write;
@@ -324,7 +324,10 @@ fn find_checksum_for_asset(
 ) -> Result<String, String> {
     let expected_name = expected_release_digest_asset_name(&asset.name)
         .ok_or_else(|| "Unsupported installer asset name".to_string())?;
-    if assets.iter().any(|candidate| candidate.name == expected_name) {
+    if assets
+        .iter()
+        .any(|candidate| candidate.name == expected_name)
+    {
         return Ok(expected_name);
     }
     Err(format!(
@@ -345,13 +348,18 @@ fn validate_pending_installer_path(
     let canonical_installer = installer_path
         .canonicalize()
         .map_err(|e| format!("Resolve installer path failed: {e}"))?;
-    let expected_dir = canonical_root.join(sanitize_text(tag_name, 80).chars().map(|ch| {
-        if ch.is_ascii_alphanumeric() || ch == '.' || ch == '_' || ch == '-' {
-            ch
-        } else {
-            '_'
-        }
-    }).collect::<String>());
+    let expected_dir = canonical_root.join(
+        sanitize_text(tag_name, 80)
+            .chars()
+            .map(|ch| {
+                if ch.is_ascii_alphanumeric() || ch == '.' || ch == '_' || ch == '-' {
+                    ch
+                } else {
+                    '_'
+                }
+            })
+            .collect::<String>(),
+    );
 
     if canonical_installer.parent() != Some(expected_dir.as_path()) {
         return Err("Prepared installer is outside the update directory.".to_string());
@@ -1054,33 +1062,23 @@ mod tests {
 
     #[test]
     fn validates_pending_installer_path_inside_expected_update_directory() {
-        let root = std::env::temp_dir().join(format!(
-            "aeroric-update-validate-{}",
-            uuid::Uuid::new_v4()
-        ));
+        let root =
+            std::env::temp_dir().join(format!("aeroric-update-validate-{}", uuid::Uuid::new_v4()));
         let update_dir = root.join("v9.9.9");
         fs::create_dir_all(&update_dir).unwrap();
         let dmg = update_dir.join("Aeroric_9.9.9_aarch64.dmg");
         fs::write(&dmg, "fake dmg").unwrap();
 
-        let valid = validate_pending_installer_path(
-            &root,
-            "v9.9.9",
-            "Aeroric_9.9.9_aarch64.dmg",
-            &dmg,
-        )
-        .unwrap();
+        let valid =
+            validate_pending_installer_path(&root, "v9.9.9", "Aeroric_9.9.9_aarch64.dmg", &dmg)
+                .unwrap();
         assert_eq!(valid, dmg.canonicalize().unwrap());
 
         let outside = root.join("outside.dmg");
         fs::write(&outside, "fake dmg").unwrap();
-        let err = validate_pending_installer_path(
-            &root,
-            "v9.9.9",
-            "Aeroric_9.9.9_aarch64.dmg",
-            &outside,
-        )
-        .unwrap_err();
+        let err =
+            validate_pending_installer_path(&root, "v9.9.9", "Aeroric_9.9.9_aarch64.dmg", &outside)
+                .unwrap_err();
         assert!(err.contains("outside the update directory"));
 
         let _ = fs::remove_dir_all(root);
