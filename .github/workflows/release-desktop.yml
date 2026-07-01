@@ -144,6 +144,19 @@ jobs:
           path: release-artifacts
           merge-multiple: true
 
+      - name: Flatten artifact directories
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd release-artifacts
+          # download-artifact with merge-multiple preserves per-artifact
+          # subdirectories (e.g. macos-arm64/dmg/*.dmg). Move every file up
+          # to the root so the verify step can find it by bare filename.
+          find . -mindepth 2 -type f -exec mv -f {} . \;
+          find . -mindepth 1 -type d -empty -delete
+          echo "Flattened release artifacts:"
+          find . -maxdepth 1 -type f -printf '%f\n' | sort
+
       - name: Verify release assets and generate checksums
         shell: bash
         run: |
