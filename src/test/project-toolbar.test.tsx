@@ -935,7 +935,7 @@ describe("ProjectPage right toolbar", () => {
     expect(screen.queryByRole("toolbar", { name: "Run and debug tools" })).not.toBeInTheDocument();
   });
 
-  it("keeps saved SSH projects with numeric-string ids enabled in IDE toolbars", async () => {
+  it("keeps saved SSH projects with numeric-string ids enabled across IDE toolbars", async () => {
     const user = userEvent.setup();
 
     render(
@@ -973,6 +973,18 @@ describe("ProjectPage right toolbar", () => {
       "/home",
     );
 
+    await user.click(screen.getByTitle("Git History"));
+    expect(await screen.findByTestId("git-history-panel")).toHaveAttribute(
+      "data-remote-project",
+      "/home",
+    );
+
+    await user.click(screen.getByTitle("Git Advanced"));
+    expect(await screen.findByTestId("git-advanced-panel")).toHaveAttribute(
+      "data-remote-project",
+      "/home",
+    );
+
     await user.click(screen.getByTitle("Search"));
     expect(await screen.findByTestId("search-panel")).toHaveAttribute(
       "data-remote-project",
@@ -990,6 +1002,50 @@ describe("ProjectPage right toolbar", () => {
       "data-remote-project",
       "/home",
     );
+
+    await user.click(within(toolbar).getByTitle("Test Explorer"));
+    expect(await screen.findByTestId("tests-panel")).toHaveAttribute(
+      "data-remote-project",
+      "/home",
+    );
+
+    await user.click(within(toolbar).getByTitle("Debug"));
+    expect(await screen.findByTestId("debug-panel")).toHaveAttribute(
+      "data-remote-project",
+      "/home",
+    );
+
+    await user.click(within(toolbar).getByTitle("Run Configurations"));
+    expect(await screen.findByTestId("run-panel")).toHaveAttribute("data-remote-project", "/home");
+
+    await user.click(within(toolbar).getByTitle("Web Preview"));
+    expect(await screen.findByTestId("preview-panel")).toHaveAttribute(
+      "data-remote-project",
+      "/home",
+    );
+
+    await user.click(screen.getByTitle("SSH"));
+    expect(await screen.findByTestId("ssh-workspace")).toHaveAttribute(
+      "data-remote-connection",
+      "1781590902568",
+    );
+
+    await user.click(screen.getByTitle("Docker"));
+    expect(await screen.findByTestId("docker-view")).toHaveAttribute(
+      "data-remote-connection",
+      "1781590902568",
+    );
+
+    await user.click(screen.getByTitle("Database"));
+    expect(await screen.findByTestId("database-view")).toHaveAttribute(
+      "data-remote-connection",
+      "1781590902568",
+    );
+    expect(screen.getByTestId("database-view")).toHaveAttribute("data-remote-project", "/home");
+
+    await user.click(screen.getByTitle("Terminal"));
+    expect(await screen.findByTestId("ssh-terminal")).toBeInTheDocument();
+    expect(screen.queryByTestId("shell-terminal")).not.toBeInTheDocument();
   });
 
   it("shows a reconnect state when an SSH project connection is missing", async () => {

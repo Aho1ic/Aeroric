@@ -106,6 +106,15 @@ describe("FileViewer LSP navigation", () => {
     vi.mocked(invoke).mockReset();
   });
 
+  const remoteConnection = {
+    id: "ssh-1",
+    name: "remote",
+    host: "127.0.0.1",
+    port: 22,
+    username: "dev",
+    createdAt: 1,
+  };
+
   it("opens the definition target on Cmd-click", async () => {
     const onOpenDefinition = vi.fn();
     vi.mocked(invoke).mockImplementation((command) => {
@@ -169,6 +178,81 @@ describe("FileViewer LSP navigation", () => {
       });
     });
     expect(onOpenDefinition).toHaveBeenCalledWith("/tmp/aeroric/src/helper.ts", "helper.ts", {
+      line: 3,
+      column: 5,
+    });
+  });
+
+  it("opens the remote definition target on Cmd-click", async () => {
+    const onOpenDefinition = vi.fn();
+    vi.mocked(invoke).mockImplementation((command) => {
+      if (command === "read_project_config") {
+        return Promise.resolve({ editor: { format_on_save: false } });
+      }
+      if (command === "remote_read_file_content") {
+        return Promise.resolve("const value = helper();\n");
+      }
+      if (command === "remote_lsp_server_status") {
+        return Promise.resolve({
+          supported: true,
+          available: true,
+          languageId: "typescriptreact",
+          command: { program: "typescript-language-server", args: ["--stdio"] },
+          installHint: null,
+        });
+      }
+      if (command === "remote_lsp_definition") {
+        return Promise.resolve([
+          {
+            uri: "file:///srv/app/src/helper.ts",
+            path: "/srv/app/src/helper.ts",
+            range: {
+              start: { line: 2, character: 4 },
+              end: { line: 2, character: 10 },
+            },
+          },
+        ]);
+      }
+      if (command === "remote_lsp_open_document" || command === "remote_lsp_change_document") {
+        return Promise.resolve(undefined);
+      }
+      return Promise.reject(new Error(`unexpected command: ${command}`));
+    });
+
+    render(
+      <I18nProvider>
+        <FileViewer
+          tabs={[{ path: "/srv/app/src/App.tsx", name: "App.tsx" }]}
+          activeFilePath="/srv/app/src/App.tsx"
+          projectPath="/srv/app"
+          onSelectTab={vi.fn()}
+          onCloseTab={vi.fn()}
+          onCloseOtherTabs={vi.fn()}
+          onCloseTabsToRight={vi.fn()}
+          onCloseAllTabs={vi.fn()}
+          themeVariant="light"
+          onOpenDefinition={onOpenDefinition}
+          remote={{ connection: remoteConnection, projectPath: "/srv/app" }}
+        />
+      </I18nProvider>,
+    );
+
+    const editor = await screen.findByLabelText("editor");
+    fireEvent.mouseDown(editor, { button: 0, metaKey: true, clientX: 10, clientY: 10 });
+
+    await waitFor(() => {
+      expect(vi.mocked(invoke)).toHaveBeenCalledWith("remote_lsp_definition", {
+        connection: remoteConnection,
+        remoteProjectPath: "/srv/app",
+        request: expect.objectContaining({
+          projectPath: "/srv/app",
+          filePath: "/srv/app/src/App.tsx",
+          line: 0,
+          character: 6,
+        }),
+      });
+    });
+    expect(onOpenDefinition).toHaveBeenCalledWith("/srv/app/src/helper.ts", "helper.ts", {
       line: 3,
       column: 5,
     });

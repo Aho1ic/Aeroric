@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { invoke } from "@tauri-apps/api/core";
 import { act } from "react";
@@ -149,5 +149,61 @@ describe("SettingsDialog", () => {
     });
 
     expect(screen.getByText(/remote_read_project_config.*timed out after 60s/i)).toBeInTheDocument();
+  });
+
+  it("shows a visible timeout when remote project settings saving hangs", async () => {
+    const connection = {
+      id: "conn-2",
+      name: "Production",
+      host: "prod.example.com",
+      port: 22,
+      username: "deploy",
+      createdAt: 2,
+    };
+    vi.mocked(invoke).mockImplementation((command) => {
+      if (command === "remote_read_project_config") return Promise.resolve(projectConfig(false));
+      if (command === "remote_write_project_config") return new Promise(() => {});
+      return Promise.reject(new Error(`unexpected command: ${command}`));
+    });
+
+    renderSettingsDialog(vi.fn(), { connection, projectPath: "/srv/app" });
+
+    await screen.findByRole("checkbox", { name: /Format on save/ });
+    vi.useFakeTimers();
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(REMOTE_IDE_COMMAND_TIMEOUT_MS);
+    });
+
+    expect(screen.getByText(/remote_write_project_config.*timed out after 60s/i)).toBeInTheDocument();
+  });
+
+  it("shows remote project settings save failures without an Error prefix", async () => {
+    const connection = {
+      id: "conn-2",
+      name: "Production",
+      host: "prod.example.com",
+      port: 22,
+      username: "deploy",
+      createdAt: 2,
+    };
+    vi.mocked(invoke).mockImplementation((command) => {
+      if (command === "remote_read_project_config") return Promise.resolve(projectConfig(false));
+      if (command === "remote_write_project_config") {
+        return Promise.reject(new Error("Permission denied writing /srv/app/.aeroric/config.toml"));
+      }
+      return Promise.reject(new Error(`unexpected command: ${command}`));
+    });
+
+    renderSettingsDialog(vi.fn(), { connection, projectPath: "/srv/app" });
+
+    await screen.findByRole("checkbox", { name: /Format on save/ });
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    expect(
+      await screen.findByText("Permission denied writing /srv/app/.aeroric/config.toml"),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/Error: Permission denied/)).not.toBeInTheDocument();
   });
 });

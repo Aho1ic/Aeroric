@@ -6,6 +6,7 @@ import {
   Bold,
   Code2,
   FileText,
+  GripVertical,
   Highlighter,
   Italic,
   List,
@@ -945,7 +946,7 @@ export function NotebookPanel({ width = "100%" }: { width?: number | string }) {
   const isClipboardAction = (action: string) =>
     action === "cut" || action === "copy" || action === "paste";
 
-  const setNoteItemRef = (noteId: string) => (element: HTMLButtonElement | null) => {
+  const setNoteItemRef = (noteId: string) => (element: HTMLDivElement | null) => {
     if (element) {
       noteItemRefs.current.set(noteId, element);
     } else {
@@ -1154,26 +1155,15 @@ export function NotebookPanel({ width = "100%" }: { width?: number | string }) {
                   }}
                 />
               ) : (
-                <button
-                  type="button"
+                <div
                   key={note.id}
                   ref={setNoteItemRef(note.id)}
-                  title={note.title}
-                  onPointerDown={(event) => handleNotePointerDown(event, note.id)}
-                  onPointerMove={handleNotePointerMove}
-                  onPointerUp={handleNotePointerUp}
-                  onPointerCancel={handleNotePointerCancel}
-                  onClick={(event) => {
-                    if (suppressNextNoteClickRef.current) {
-                      suppressNextNoteClickRef.current = false;
-                      event.preventDefault();
-                      return;
-                    }
-                    setActiveId(note.id);
-                  }}
-                  onDoubleClick={() => startRenameNote(note)}
+                  data-notebook-note-row
                   style={{
                     minHeight: 30,
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 4,
                     border: "1px solid transparent",
                     borderRadius: 6,
                     background:
@@ -1183,12 +1173,7 @@ export function NotebookPanel({ width = "100%" }: { width?: number | string }) {
                           ? "var(--bg-selected)"
                           : "transparent",
                     color: "var(--text-primary)",
-                    textAlign: "left",
-                    padding: "5px 7px",
-                    cursor: draggedNoteId === note.id ? "grabbing" : "grab",
-                    overflow: "hidden",
-                    textOverflow: "ellipsis",
-                    whiteSpace: "nowrap",
+                    padding: "3px 5px",
                     fontSize: 12,
                     fontWeight: 700,
                     opacity: draggedNoteId === note.id ? 0.55 : 1,
@@ -1200,14 +1185,69 @@ export function NotebookPanel({ width = "100%" }: { width?: number | string }) {
                           : "none",
                     boxShadow:
                       dragOverNoteId === note.id ? "inset 0 0 0 1px var(--accent)" : "none",
-                    touchAction: "none",
-                    userSelect: "none",
                     transition:
                       "background 0.14s ease, opacity 0.14s ease, transform 0.16s ease, box-shadow 0.16s ease",
                   }}
                 >
-                  {note.title || t("notebook.untitled")}
-                </button>
+                  <button
+                    type="button"
+                    aria-label={t("notebook.dragMemo", { name: note.title || t("notebook.untitled") })}
+                    title={t("notebook.dragMemo", { name: note.title || t("notebook.untitled") })}
+                    onPointerDown={(event) => handleNotePointerDown(event, note.id)}
+                    onPointerMove={handleNotePointerMove}
+                    onPointerUp={handleNotePointerUp}
+                    onPointerCancel={handleNotePointerCancel}
+                    style={{
+                      width: 20,
+                      height: 22,
+                      border: "none",
+                      borderRadius: 5,
+                      background: "transparent",
+                      color: "var(--text-hint)",
+                      display: "inline-flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      flexShrink: 0,
+                      padding: 0,
+                      cursor: draggedNoteId === note.id ? "grabbing" : "grab",
+                      touchAction: "none",
+                      userSelect: "none",
+                    }}
+                  >
+                    <GripVertical size={14} strokeWidth={2} />
+                  </button>
+                  <button
+                    type="button"
+                    title={note.title}
+                    onClick={(event) => {
+                      if (suppressNextNoteClickRef.current) {
+                        suppressNextNoteClickRef.current = false;
+                        event.preventDefault();
+                        return;
+                      }
+                      setActiveId(note.id);
+                    }}
+                    onDoubleClick={() => startRenameNote(note)}
+                    style={{
+                      flex: 1,
+                      minWidth: 0,
+                      border: "none",
+                      background: "transparent",
+                      color: "var(--text-primary)",
+                      textAlign: "left",
+                      padding: "2px 2px",
+                      cursor: "pointer",
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                      fontSize: 12,
+                      fontWeight: 700,
+                      fontFamily: "var(--font-ui)",
+                    }}
+                  >
+                    {note.title || t("notebook.untitled")}
+                  </button>
+                </div>
               ),
             )
           )}

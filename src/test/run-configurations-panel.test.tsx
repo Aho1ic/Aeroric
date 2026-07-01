@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { invoke } from "@tauri-apps/api/core";
 import { act } from "react";
@@ -199,5 +199,87 @@ describe("RunConfigurationsPanel remote mode", () => {
     });
 
     expect(screen.getByText(/remote_read_run_configs.*timed out after 60s/i)).toBeInTheDocument();
+  });
+
+  it("shows a visible timeout when remote shell run start hangs", async () => {
+    const config: RunConfig = {
+      id: "dev",
+      name: "Dev Server",
+      type: "shell",
+      command: "pnpm dev",
+      cwd: ".",
+      env: {},
+    };
+    vi.mocked(invoke).mockImplementation((command) => {
+      if (command === "remote_read_run_configs") {
+        return Promise.resolve({ version: 1, configs: [config] });
+      }
+      if (command === "remote_start_run_config") return new Promise(() => {});
+      return Promise.reject(new Error(`unexpected command: ${command}`));
+    });
+
+    render(
+      <I18nProvider>
+        <RunConfigurationsPanel
+          projectPath="/srv/app"
+          width={360}
+          remote={{ connection: remoteConnection, projectPath: "/srv/app" }}
+        />
+      </I18nProvider>,
+    );
+
+    await screen.findByText("Dev Server");
+
+    vi.useFakeTimers();
+    fireEvent.click(screen.getByRole("button", { name: "Run" }));
+    act(() => {
+      vi.advanceTimersByTime(180_000);
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(screen.getByText(/remote_start_run_config.*timed out after 180s/i)).toBeInTheDocument();
+  });
+
+  it("shows remote debug run tool failures without an Error prefix", async () => {
+    const config: RunConfig = {
+      id: "debug",
+      name: "Debug App",
+      type: "debug",
+      debugType: "node",
+      program: "src/index.js",
+      cwd: ".",
+      args: [],
+      env: {},
+      breakpoints: [],
+    };
+    vi.mocked(invoke).mockImplementation((command) => {
+      if (command === "remote_read_run_configs") {
+        return Promise.resolve({ version: 1, configs: [config] });
+      }
+      if (command === "remote_start_debug_config") {
+        return Promise.reject(new Error("node: command not found"));
+      }
+      return Promise.reject(new Error(`unexpected command: ${command}`));
+    });
+
+    render(
+      <I18nProvider>
+        <RunConfigurationsPanel
+          projectPath="/srv/app"
+          width={360}
+          remote={{ connection: remoteConnection, projectPath: "/srv/app" }}
+        />
+      </I18nProvider>,
+    );
+
+    await screen.findByText("Debug App");
+    fireEvent.click(screen.getByRole("button", { name: "Run" }));
+
+    expect(
+      await screen.findByText("Run configuration failed: node: command not found"),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/Error: node/)).not.toBeInTheDocument();
   });
 });

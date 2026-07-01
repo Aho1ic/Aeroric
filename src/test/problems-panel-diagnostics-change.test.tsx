@@ -21,6 +21,18 @@ const diagnostics: DiagnosticItem[] = [
   },
 ];
 
+const remoteDiagnostics: DiagnosticItem[] = [
+  {
+    source: "tsc",
+    severity: "error",
+    message: "Remote type mismatch",
+    file: "/srv/app/src/App.tsx",
+    line: 4,
+    column: 7,
+    code: "TS2322",
+  },
+];
+
 const connection = {
   id: "ssh-1",
   name: "prod",
@@ -90,6 +102,32 @@ describe("ProblemsPanel diagnostics change", () => {
         profile: "typescript",
       });
     });
+  });
+
+  it("opens remote diagnostics with the remote file path", async () => {
+    const onOpenDiagnostic = vi.fn();
+    vi.mocked(invoke).mockResolvedValue({
+      profile: "typescript",
+      diagnostics: remoteDiagnostics,
+      rawOutput: "",
+    });
+
+    render(
+      <I18nProvider>
+        <ProblemsPanel
+          projectPath="/srv/app"
+          width={320}
+          onOpenDiagnostic={onOpenDiagnostic}
+          onCreateAgentTask={vi.fn()}
+          remote={{ connection, projectPath: "/srv/app" }}
+        />
+      </I18nProvider>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Run" }));
+    fireEvent.click(await screen.findByText(/Remote type mismatch/));
+
+    expect(onOpenDiagnostic).toHaveBeenCalledWith(remoteDiagnostics[0]);
   });
 
   it("shows remote diagnostic tool failures without hiding the message", async () => {

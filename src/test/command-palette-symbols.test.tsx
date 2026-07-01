@@ -26,6 +26,12 @@ const helperSymbol: LspSymbol = {
   },
 };
 
+const remoteHelperSymbol: LspSymbol = {
+  ...helperSymbol,
+  uri: "file:///srv/app/src/App.tsx",
+  path: "/srv/app/src/App.tsx",
+};
+
 const remoteConnection = {
   id: "ssh-1",
   name: "remote",
@@ -117,7 +123,7 @@ describe("CommandPalette symbols", () => {
     const onOpenFile = vi.fn();
     vi.mocked(invoke).mockImplementation((command) => {
       if (command === "remote_read_file_content") return Promise.resolve("function helper() {}\n");
-      if (command === "remote_lsp_document_symbols") return Promise.resolve([helperSymbol]);
+      if (command === "remote_lsp_document_symbols") return Promise.resolve([remoteHelperSymbol]);
       return Promise.reject(new Error(`unexpected command: ${command}`));
     });
 
@@ -155,12 +161,16 @@ describe("CommandPalette symbols", () => {
       remotePath: "/srv/app/src/App.tsx",
       remoteProjectPath: "/srv/app",
     });
+    expect(onOpenFile).toHaveBeenCalledWith("/srv/app/src/App.tsx", "App.tsx", {
+      line: 3,
+      column: 12,
+    });
   });
 
   it("loads remote workspace symbols for # input", async () => {
     const onOpenFile = vi.fn();
     vi.mocked(invoke).mockImplementation((command) => {
-      if (command === "remote_lsp_workspace_symbols") return Promise.resolve([helperSymbol]);
+      if (command === "remote_lsp_workspace_symbols") return Promise.resolve([remoteHelperSymbol]);
       return Promise.reject(new Error(`unexpected command: ${command}`));
     });
 
@@ -186,6 +196,10 @@ describe("CommandPalette symbols", () => {
         projectPath: "ssh://ssh-1/srv/app",
         query: "helper",
       });
+    });
+    expect(onOpenFile).toHaveBeenCalledWith("/srv/app/src/App.tsx", "App.tsx", {
+      line: 3,
+      column: 12,
     });
   });
 });

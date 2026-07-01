@@ -21,6 +21,10 @@ vi.mock("../hooks/useNotifications", () => ({
 describe("Notification release updater", () => {
   beforeEach(() => {
     vi.mocked(invoke).mockReset();
+    vi.mocked(invoke).mockImplementation((command) => {
+      if (command === "get_pending_release_update") return Promise.resolve(null);
+      return Promise.reject(new Error(`unexpected command: ${command}`));
+    });
     vi.mocked(useNotifications).mockReturnValue({
       result: {
         unreadCount: 1,
@@ -47,13 +51,27 @@ describe("Notification release updater", () => {
     });
   });
 
-  it("installs the selected release from the notification entry", async () => {
+  it("downloads the selected release first, then restarts to install it", async () => {
     const user = userEvent.setup();
-    vi.mocked(invoke).mockResolvedValueOnce({
-      tagName: "v9.9.9",
-      assetName: "Aeroric_9.9.9_aarch64.dmg",
-      installedAppPath: "/Applications/Aeroric.app",
-      restarted: true,
+    vi.mocked(invoke).mockImplementation((command) => {
+      if (command === "get_pending_release_update") return Promise.resolve(null);
+      if (command === "prepare_release_update") {
+        return Promise.resolve({
+          tagName: "v9.9.9",
+          assetName: "Aeroric_9.9.9_aarch64.dmg",
+          installerPath: "/Users/me/.aeroric/updates/v9.9.9/Aeroric_9.9.9_aarch64.dmg",
+          readyToRestart: true,
+        });
+      }
+      if (command === "restart_and_install_release_update") {
+        return Promise.resolve({
+          tagName: "v9.9.9",
+          assetName: "Aeroric_9.9.9_aarch64.dmg",
+          installedAppPath: "/Applications/Aeroric.app",
+          restarted: true,
+        });
+      }
+      return Promise.reject(new Error(`unexpected command: ${command}`));
     });
 
     render(
@@ -63,9 +81,82 @@ describe("Notification release updater", () => {
     );
 
     await user.click(screen.getByTitle("Releases"));
-    await user.click(screen.getByRole("button", { name: "Download and install v9.9.9" }));
+    await user.click(screen.getByRole("button", { name: "Download update v9.9.9" }));
 
-    expect(invoke).toHaveBeenCalledWith("install_release_update", { tagName: "v9.9.9" });
+    expect(invoke).toHaveBeenCalledWith("prepare_release_update", { tagName: "v9.9.9" });
+
+    await user.click(screen.getByRole("button", { name: "Restart and update v9.9.9" }));
+
+    expect(invoke).toHaveBeenCalledWith("restart_and_install_release_update", {
+      tagName: "v9.9.9",
+    });
+  });
+
+  it("shows restart update when the selected release is already downloaded", async () => {
+    const user = userEvent.setup();
+    vi.mocked(invoke).mockReset();
+    vi.mocked(invoke).mockImplementation((command) => {
+      if (command === "get_pending_release_update") {
+        return Promise.resolve({
+          tagName: "v9.9.9",
+          assetName: "Aeroric_9.9.9_aarch64.dmg",
+          installerPath: "/Users/me/.aeroric/updates/v9.9.9/Aeroric_9.9.9_aarch64.dmg",
+          readyToRestart: true,
+        });
+      }
+      if (command === "restart_and_install_release_update") {
+        return Promise.resolve({
+          tagName: "v9.9.9",
+          assetName: "Aeroric_9.9.9_aarch64.dmg",
+          installedAppPath: "/Applications/Aeroric.app",
+          restarted: true,
+        });
+      }
+      return Promise.reject(new Error(`unexpected command: ${command}`));
+    });
+
+    render(
+      <I18nProvider>
+        <NotificationBell />
+      </I18nProvider>,
+    );
+
+    await user.click(screen.getByTitle("Releases"));
+    await screen.findByRole("button", { name: "Restart and update v9.9.9" });
+    expect(screen.queryByRole("button", { name: "Download update v9.9.9" })).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Restart and update v9.9.9" }));
+
+    expect(invoke).not.toHaveBeenCalledWith("prepare_release_update", expect.anything());
+    expect(invoke).toHaveBeenCalledWith("restart_and_install_release_update", {
+      tagName: "v9.9.9",
+    });
+  });
+
+  it("restores the restart state from pending release data when reopening the bell", async () => {
+    const user = userEvent.setup();
+    vi.mocked(invoke).mockReset();
+    vi.mocked(invoke).mockImplementation((command) => {
+      if (command === "get_pending_release_update") {
+        return Promise.resolve({
+          tagName: "v9.9.9",
+          assetName: "Aeroric_9.9.9_aarch64.dmg",
+          installerPath: "/Users/me/.aeroric/updates/v9.9.9/Aeroric_9.9.9_aarch64.dmg",
+          readyToRestart: true,
+        });
+      }
+      return Promise.reject(new Error(`unexpected command: ${command}`));
+    });
+
+    render(
+      <I18nProvider>
+        <NotificationBell />
+      </I18nProvider>,
+    );
+
+    await user.click(screen.getByTitle("Releases"));
+    expect(await screen.findByRole("button", { name: "Restart and update v9.9.9" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Download update v9.9.9" })).not.toBeInTheDocument();
   });
 
   it("does not show install controls for releases without compatible installer assets", async () => {
@@ -104,7 +195,7 @@ describe("Notification release updater", () => {
     await user.click(screen.getByTitle("Releases"));
 
     expect(
-      screen.queryByRole("button", { name: "Download and install v9.9.9" }),
+      screen.queryByRole("button", { name: "Download update v9.9.9" }),
     ).not.toBeInTheDocument();
   });
 });

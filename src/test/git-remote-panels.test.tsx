@@ -207,6 +207,71 @@ describe("remote Git panels", () => {
     expect(screen.getByText(/remote_git_changes.*timed out after 60s/i)).toBeInTheDocument();
   });
 
+  it("shows a visible timeout when a remote stage action hangs", async () => {
+    vi.mocked(invoke).mockImplementation((command) => {
+      if (command === "remote_git_changes") {
+        return Promise.resolve([{ path: "src/App.tsx", status: "M", staged: false }]);
+      }
+      if (command === "remote_git_stage") {
+        return new Promise(() => {});
+      }
+      return Promise.reject(new Error(`unexpected command: ${command}`));
+    });
+
+    render(
+      <I18nProvider>
+        <GitChanges
+          projectPath="/srv/app"
+          currentTaskCreatedAt={null}
+          onFileSelect={vi.fn()}
+          remote={remote}
+        />
+      </I18nProvider>,
+    );
+
+    const appRow = (await screen.findByText("App.tsx")).closest("[role='button']") as HTMLElement;
+    fireEvent.mouseEnter(appRow);
+
+    vi.useFakeTimers();
+    fireEvent.click(within(appRow).getByTitle("Stage"));
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(REMOTE_IDE_COMMAND_TIMEOUT_MS);
+    });
+
+    expect(screen.getByText(/remote_git_stage.*timed out after 60s/i)).toBeInTheDocument();
+  });
+
+  it("shows remote commit failures without an Error prefix", async () => {
+    const user = userEvent.setup();
+    vi.mocked(invoke).mockImplementation((command) => {
+      if (command === "remote_git_changes") {
+        return Promise.resolve([]);
+      }
+      if (command === "remote_git_commit") {
+        return Promise.reject(new Error("pre-commit hook failed"));
+      }
+      return Promise.reject(new Error(`unexpected command: ${command}`));
+    });
+
+    render(
+      <I18nProvider>
+        <GitChanges
+          projectPath="/srv/app"
+          currentTaskCreatedAt={null}
+          onFileSelect={vi.fn()}
+          remote={remote}
+        />
+      </I18nProvider>,
+    );
+
+    await user.type(screen.getByPlaceholderText("Commit message…"), "Ship remote git writes");
+    await user.click(screen.getByRole("button", { name: "Commit" }));
+
+    expect(await screen.findByText("pre-commit hook failed")).toBeInTheDocument();
+    expect(screen.queryByText("Error: pre-commit hook failed")).not.toBeInTheDocument();
+  });
+
   it("shows remote git tool failures instead of a silent empty history", async () => {
     vi.mocked(invoke).mockImplementation((command) => {
       if (command === "remote_git_list_branches") {

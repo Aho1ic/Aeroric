@@ -1,7 +1,7 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { invoke } from "@tauri-apps/api/core";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DebugPanel } from "../components/debug/DebugPanel";
 import { I18nProvider } from "../i18n";
 
@@ -84,6 +84,10 @@ function renderRemoteAttachPanel() {
 describe("DebugPanel attach UI", () => {
   beforeEach(() => {
     vi.mocked(invoke).mockReset();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it("starts a Node attach session with host and port", async () => {
@@ -280,5 +284,107 @@ describe("DebugPanel attach UI", () => {
         }),
       });
     });
+  });
+
+  it("shows a visible timeout when remote debug config loading hangs", async () => {
+    vi.useFakeTimers();
+    vi.mocked(invoke).mockImplementation((command) => {
+      if (command === "remote_read_debug_configs") return new Promise(() => {});
+      return Promise.reject(new Error(`unexpected command: ${command}`));
+    });
+
+    render(
+      <I18nProvider>
+        <DebugPanel
+          projectPath="/srv/app"
+          width={360}
+          onOpenLocation={vi.fn()}
+          remote={{ connection: remoteConnection, projectPath: "/srv/app" }}
+        />
+      </I18nProvider>,
+    );
+
+    act(() => {
+      vi.advanceTimersByTime(60_000);
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(screen.getByText(/remote_read_debug_configs.*timed out after 60s/i)).toBeInTheDocument();
+  });
+
+  it("shows a visible timeout when remote debug start hangs", async () => {
+    vi.mocked(invoke).mockImplementation((command) => {
+      if (command === "remote_read_debug_configs") {
+        return Promise.resolve({ version: 1, configs: [] });
+      }
+      if (command === "remote_start_debug_config") return new Promise(() => {});
+      return Promise.reject(new Error(`unexpected command: ${command}`));
+    });
+
+    render(
+      <I18nProvider>
+        <DebugPanel
+          projectPath="/srv/app"
+          width={360}
+          onOpenLocation={vi.fn()}
+          remote={{ connection: remoteConnection, projectPath: "/srv/app" }}
+        />
+      </I18nProvider>,
+    );
+
+    await screen.findByText("No debug configurations yet.");
+    fireEvent.change(screen.getByLabelText("Name"), {
+      target: { value: "Attach Remote Python" },
+    });
+
+    vi.useFakeTimers();
+    const controls = within(screen.getByRole("group", { name: "Debug controls" }));
+    fireEvent.click(controls.getByRole("button", { name: "Attach" }));
+
+    act(() => {
+      vi.advanceTimersByTime(60_000);
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(screen.getByText(/remote_start_debug_config.*timed out after 60s/i)).toBeInTheDocument();
+  });
+
+  it("shows remote debug tool failures without an Error prefix", async () => {
+    vi.mocked(invoke).mockImplementation((command) => {
+      if (command === "remote_read_debug_configs") {
+        return Promise.resolve({ version: 1, configs: [] });
+      }
+      if (command === "remote_start_debug_config") {
+        return Promise.reject(new Error("debugpy: command not found"));
+      }
+      return Promise.reject(new Error(`unexpected command: ${command}`));
+    });
+
+    render(
+      <I18nProvider>
+        <DebugPanel
+          projectPath="/srv/app"
+          width={360}
+          onOpenLocation={vi.fn()}
+          remote={{ connection: remoteConnection, projectPath: "/srv/app" }}
+        />
+      </I18nProvider>,
+    );
+
+    await screen.findByText("No debug configurations yet.");
+    fireEvent.change(screen.getByLabelText("Name"), {
+      target: { value: "Attach Remote Python" },
+    });
+    const controls = within(screen.getByRole("group", { name: "Debug controls" }));
+    fireEvent.click(controls.getByRole("button", { name: "Attach" }));
+
+    expect(
+      await screen.findByText("Debug session failed: debugpy: command not found"),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/Error: debugpy/)).not.toBeInTheDocument();
   });
 });

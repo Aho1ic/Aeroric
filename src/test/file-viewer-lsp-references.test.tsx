@@ -85,6 +85,15 @@ describe("FileViewer LSP references", () => {
     vi.mocked(invoke).mockReset();
   });
 
+  const remoteConnection = {
+    id: "ssh-1",
+    name: "remote",
+    host: "127.0.0.1",
+    port: 22,
+    username: "dev",
+    createdAt: 1,
+  };
+
   it("shows references and opens the selected reference", async () => {
     const onOpenDefinition = vi.fn();
     vi.mocked(invoke).mockImplementation((command, args) => {
@@ -176,6 +185,116 @@ describe("FileViewer LSP references", () => {
     fireEvent.click(screen.getByRole("button", { name: "/tmp/aeroric/src/helper.ts:3:8" }));
 
     expect(onOpenDefinition).toHaveBeenCalledWith("/tmp/aeroric/src/helper.ts", "helper.ts", {
+      line: 3,
+      column: 8,
+    });
+  });
+
+  it("shows remote references without converting remote paths to local paths", async () => {
+    const onOpenDefinition = vi.fn();
+    vi.mocked(invoke).mockImplementation((command, args) => {
+      if (command === "read_project_config") {
+        return Promise.resolve({ editor: { format_on_save: false } });
+      }
+      if (command === "remote_read_file_content") {
+        if (
+          typeof args === "object" &&
+          args !== null &&
+          "remotePath" in args &&
+          args.remotePath === "/srv/app/src/helper.ts"
+        ) {
+          return Promise.resolve(
+            "export function value() {}\n\nexport function helper() { return 1; }\n",
+          );
+        }
+        return Promise.resolve("const value = helper();\n");
+      }
+      if (command === "remote_lsp_server_status") {
+        return Promise.resolve({
+          supported: true,
+          available: true,
+          languageId: "typescriptreact",
+          command: { program: "typescript-language-server", args: ["--stdio"] },
+          installHint: null,
+        });
+      }
+      if (command === "remote_lsp_references") {
+        return Promise.resolve([
+          {
+            uri: "file:///srv/app/src/App.tsx",
+            path: "/srv/app/src/App.tsx",
+            range: {
+              start: { line: 0, character: 14 },
+              end: { line: 0, character: 20 },
+            },
+          },
+          {
+            uri: "file:///srv/app/src/helper.ts",
+            path: "/srv/app/src/helper.ts",
+            range: {
+              start: { line: 2, character: 7 },
+              end: { line: 2, character: 13 },
+            },
+          },
+        ]);
+      }
+      if (command === "remote_lsp_open_document" || command === "remote_lsp_change_document") {
+        return Promise.resolve(undefined);
+      }
+      return Promise.reject(new Error(`unexpected command: ${command}`));
+    });
+
+    render(
+      <I18nProvider>
+        <FileViewer
+          tabs={[{ path: "/srv/app/src/App.tsx", name: "App.tsx" }]}
+          activeFilePath="/srv/app/src/App.tsx"
+          projectPath="/srv/app"
+          onSelectTab={vi.fn()}
+          onCloseTab={vi.fn()}
+          onCloseOtherTabs={vi.fn()}
+          onCloseTabsToRight={vi.fn()}
+          onCloseAllTabs={vi.fn()}
+          themeVariant="light"
+          onOpenDefinition={onOpenDefinition}
+          remote={{ connection: remoteConnection, projectPath: "/srv/app" }}
+        />
+      </I18nProvider>,
+    );
+
+    await screen.findByText("TS LSP");
+    await screen.findByText("Ln 1, Col 15");
+    fireEvent.click(screen.getByRole("button", { name: "Find References" }));
+
+    await waitFor(() => {
+      expect(vi.mocked(invoke)).toHaveBeenCalledWith("remote_lsp_references", {
+        connection: remoteConnection,
+        remoteProjectPath: "/srv/app",
+        request: expect.objectContaining({
+          projectPath: "/srv/app",
+          filePath: "/srv/app/src/App.tsx",
+          line: 0,
+          character: 14,
+        }),
+      });
+    });
+    await waitFor(() => {
+      expect(vi.mocked(invoke)).toHaveBeenCalledWith("remote_read_file_content", {
+        connection: remoteConnection,
+        remotePath: "/srv/app/src/helper.ts",
+        remoteProjectPath: "/srv/app",
+      });
+    });
+
+    const referencesDialog = await screen.findByRole("dialog", { name: "References (2)" });
+    expect(referencesDialog).toBeInTheDocument();
+    expect(await within(referencesDialog).findByText("const value = helper();")).toBeInTheDocument();
+    expect(
+      await within(referencesDialog).findByText("export function helper() { return 1; }"),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "/srv/app/src/helper.ts:3:8" }));
+
+    expect(onOpenDefinition).toHaveBeenCalledWith("/srv/app/src/helper.ts", "helper.ts", {
       line: 3,
       column: 8,
     });

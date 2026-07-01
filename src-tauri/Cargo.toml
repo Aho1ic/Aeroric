@@ -37,6 +37,7 @@ toml = "0.8"
 libc = "0.2"
 parking_lot = "0.12"
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
+sha2 = "0.10"
 uuid = { version = "1", features = ["v4"] }
 tungstenite = "0.24"
 url = "2"

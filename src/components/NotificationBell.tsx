@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { CSSProperties } from "react";
 import {
   Bell,
@@ -10,10 +10,15 @@ import {
   AlertTriangle,
   AlertCircle,
   Download,
+  RotateCcw,
 } from "lucide-react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { invoke } from "@tauri-apps/api/core";
-import type { NotificationItem, ReleaseInstallResult } from "../types";
+import type {
+  NotificationItem,
+  ReleaseInstallResult,
+  ReleaseUpdatePrepareResult,
+} from "../types";
 import { useNotifications } from "../hooks/useNotifications";
 import { useI18n } from "../i18n";
 import s from "../styles";
@@ -54,11 +59,33 @@ function NotificationEntry({
 }) {
   const { t } = useI18n();
   const [hov, setHov] = useState(false);
-  const [installing, setInstalling] = useState(false);
+  const [preparing, setPreparing] = useState(false);
+  const [restarting, setRestarting] = useState(false);
   const [installError, setInstallError] = useState<string | null>(null);
+  const [prepareResult, setPrepareResult] = useState<ReleaseUpdatePrepareResult | null>(null);
   const [installResult, setInstallResult] = useState<ReleaseInstallResult | null>(null);
   const releaseTag = item.releaseTag ?? null;
   const canInstallUpdate = Boolean(item.updateInstallSupported && releaseTag && !installResult);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!item.updateInstallSupported || !releaseTag) return;
+    invoke<ReleaseUpdatePrepareResult | null>("get_pending_release_update", {
+      tagName: releaseTag,
+    })
+      .then((result) => {
+        if (cancelled) return;
+        if (result) {
+          setPrepareResult(result);
+        } else {
+          setPrepareResult(null);
+        }
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [item.updateInstallSupported, releaseTag]);
 
   const handleClick = async () => {
     if (!item.isRead) onMarkRead(item.id);
@@ -70,18 +97,33 @@ function NotificationEntry({
   const handleInstallClick = async (event: React.MouseEvent<HTMLButtonElement>) => {
     event.preventDefault();
     event.stopPropagation();
-    if (!releaseTag || installing) return;
-    setInstalling(true);
+    if (!releaseTag || preparing || restarting) return;
     setInstallError(null);
+
+    if (!prepareResult) {
+      setPreparing(true);
+      try {
+        const result = await invoke<ReleaseUpdatePrepareResult>("prepare_release_update", {
+          tagName: releaseTag,
+        });
+        setPrepareResult(result);
+      } catch (error) {
+        setInstallError(String(error));
+      } finally {
+        setPreparing(false);
+      }
+      return;
+    }
+
+    setRestarting(true);
     try {
-      const result = await invoke<ReleaseInstallResult>("install_release_update", {
+      const result = await invoke<ReleaseInstallResult>("restart_and_install_release_update", {
         tagName: releaseTag,
       });
       setInstallResult(result);
     } catch (error) {
       setInstallError(String(error));
-    } finally {
-      setInstalling(false);
+      setRestarting(false);
     }
   };
 
@@ -141,9 +183,13 @@ function NotificationEntry({
         {canInstallUpdate && (
           <button
             type="button"
-            disabled={installing || Boolean(installResult)}
+            disabled={preparing || restarting || Boolean(installResult)}
             onClick={handleInstallClick}
-            aria-label={t("notification.installReleaseAria", { tag: releaseTag ?? "" })}
+            aria-label={
+              prepareResult
+                ? t("notification.restartUpdateAria", { tag: releaseTag ?? "" })
+                : t("notification.downloadUpdateAria", { tag: releaseTag ?? "" })
+            }
             style={{
               marginTop: 8,
               height: 24,
@@ -157,15 +203,28 @@ function NotificationEntry({
               color: "var(--control-active-fg)",
               fontSize: 11,
               fontWeight: 650,
-              cursor: installing ? "default" : "pointer",
-              opacity: installing ? 0.72 : 1,
+              cursor: preparing || restarting ? "default" : "pointer",
+              opacity: preparing || restarting ? 0.72 : 1,
             }}
           >
-            <Download size={12} strokeWidth={2.4} />
-            {installing
-              ? t("notification.installingRelease")
-              : t("notification.installRelease", { tag: releaseTag ?? "" })}
+            {prepareResult ? (
+              <RotateCcw size={12} strokeWidth={2.4} />
+            ) : (
+              <Download size={12} strokeWidth={2.4} />
+            )}
+            {restarting
+              ? t("notification.restartingUpdate")
+              : preparing
+                ? t("notification.downloadingUpdate")
+                : prepareResult
+                  ? t("notification.restartUpdate", { tag: releaseTag ?? "" })
+                  : t("notification.downloadUpdate", { tag: releaseTag ?? "" })}
           </button>
+        )}
+        {prepareResult && !installResult && (
+          <div style={{ ...notificationBodyStyle, marginTop: 6, WebkitLineClamp: 2 }}>
+            {t("notification.updateReadyRestart")}
+          </div>
         )}
         {installResult && (
           <div style={{ ...notificationBodyStyle, marginTop: 6, WebkitLineClamp: 2 }}>

@@ -298,6 +298,64 @@ describe("TestExplorerPanel", () => {
     });
   });
 
+  it("opens remote test failures with the remote file path", async () => {
+    const connection = {
+      id: "ssh-1",
+      name: "prod",
+      host: "example.com",
+      port: 22,
+      username: "deploy",
+      createdAt: 1,
+    };
+    const remoteFailure = {
+      profile: "python",
+      name: "test_adds_numbers",
+      file: "/srv/app/tests/test_math.py",
+      line: 12,
+      column: 5,
+      message: "assert 1 == 2",
+    };
+    const onOpenFailure = vi.fn();
+    vi.mocked(invoke).mockImplementation((command) => {
+      if (command === "remote_discover_tests") {
+        return Promise.resolve({
+          profiles: [{ id: "python", label: "Pytest", command: "remote pytest" }],
+        });
+      }
+      if (command === "remote_run_tests") {
+        return Promise.resolve({
+          profile: "python",
+          status: "failed",
+          total: 1,
+          passed: 0,
+          failed: 1,
+          tests: [],
+          failures: [remoteFailure],
+          coverage: null,
+          rawOutput: "assert 1 == 2",
+        });
+      }
+      return Promise.reject(new Error(`unexpected command: ${command}`));
+    });
+
+    render(
+      <I18nProvider>
+        <TestExplorerPanel
+          projectPath="/srv/app"
+          width={320}
+          onOpenFailure={onOpenFailure}
+          onCreateAgentTask={vi.fn()}
+          remote={{ connection, projectPath: "/srv/app" }}
+        />
+      </I18nProvider>,
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: "Run" }));
+    fireEvent.click(await screen.findByText(/test_adds_numbers/));
+
+    expect(onOpenFailure).toHaveBeenCalledWith(remoteFailure);
+  });
+
   it("shows a visible timeout when remote test discovery hangs", async () => {
     vi.useFakeTimers();
     const connection = {
@@ -330,5 +388,88 @@ describe("TestExplorerPanel", () => {
     });
 
     expect(screen.getByText(/remote_discover_tests.*timed out after 60s/i)).toBeInTheDocument();
+  });
+
+  it("shows a visible timeout when a remote test run hangs", async () => {
+    vi.useFakeTimers();
+    const connection = {
+      id: "ssh-1",
+      name: "prod",
+      host: "example.com",
+      port: 22,
+      username: "deploy",
+      createdAt: 1,
+    };
+    vi.mocked(invoke).mockImplementation((command) => {
+      if (command === "remote_discover_tests") {
+        return Promise.resolve({
+          profiles: [{ id: "python", label: "Pytest", command: "remote pytest" }],
+        });
+      }
+      if (command === "remote_run_tests") return new Promise(() => {});
+      return Promise.reject(new Error(`unexpected command: ${command}`));
+    });
+
+    render(
+      <I18nProvider>
+        <TestExplorerPanel
+          projectPath="/srv/app"
+          width={320}
+          onOpenFailure={vi.fn()}
+          onCreateAgentTask={vi.fn()}
+          remote={{ connection, projectPath: "/srv/app" }}
+        />
+      </I18nProvider>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Run" }));
+
+    act(() => {
+      vi.advanceTimersByTime(600_000);
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(screen.getByText(/remote_run_tests.*timed out after 600s/i)).toBeInTheDocument();
+  });
+
+  it("shows remote test tool failures without hiding the message", async () => {
+    const connection = {
+      id: "ssh-1",
+      name: "prod",
+      host: "example.com",
+      port: 22,
+      username: "deploy",
+      createdAt: 1,
+    };
+    vi.mocked(invoke).mockImplementation((command) => {
+      if (command === "remote_discover_tests") {
+        return Promise.resolve({
+          profiles: [{ id: "python", label: "Pytest", command: "remote pytest" }],
+        });
+      }
+      if (command === "remote_run_tests") {
+        return Promise.reject(new Error("pytest: command not found"));
+      }
+      return Promise.reject(new Error(`unexpected command: ${command}`));
+    });
+
+    render(
+      <I18nProvider>
+        <TestExplorerPanel
+          projectPath="/srv/app"
+          width={320}
+          onOpenFailure={vi.fn()}
+          onCreateAgentTask={vi.fn()}
+          remote={{ connection, projectPath: "/srv/app" }}
+        />
+      </I18nProvider>,
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: "Run" }));
+
+    expect(await screen.findByText("Tests failed: pytest: command not found")).toBeInTheDocument();
+    expect(screen.queryByText(/Error: pytest/)).not.toBeInTheDocument();
   });
 });

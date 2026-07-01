@@ -6,6 +6,7 @@ use std::sync::OnceLock;
 
 use chrono::Utc;
 use parking_lot::Mutex;
+use sha2::{Digest, Sha256};
 use serde::{Deserialize, Serialize};
 use tauri::AppHandle;
 
@@ -118,6 +119,38 @@ pub struct ReleaseInstallResult {
     pub restarted: bool,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct ReleaseUpdatePrepareResult {
+    #[serde(rename = "tagName")]
+    pub tag_name: String,
+    #[serde(rename = "assetName")]
+    pub asset_name: String,
+    #[serde(rename = "installerPath")]
+    pub installer_path: String,
+    #[serde(rename = "readyToRestart")]
+    pub ready_to_restart: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PendingReleaseUpdate {
+    #[serde(rename = "tagName")]
+    tag_name: String,
+    #[serde(rename = "assetName")]
+    asset_name: String,
+    #[serde(rename = "installerPath")]
+    installer_path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PendingReleaseUpdatePayload {
+    #[serde(rename = "tagName")]
+    tag_name: String,
+    #[serde(rename = "assetName")]
+    asset_name: String,
+    #[serde(rename = "installerPath")]
+    installer_path: String,
+}
+
 // ── Path helpers ─────────────────────────────────────────────────────────────
 
 fn aeroric_dir() -> Result<PathBuf, String> {
@@ -128,6 +161,14 @@ fn aeroric_dir() -> Result<PathBuf, String> {
 
 fn store_path() -> Result<PathBuf, String> {
     Ok(aeroric_dir()?.join("notifications.json"))
+}
+
+fn updates_dir() -> Result<PathBuf, String> {
+    Ok(aeroric_dir()?.join("updates"))
+}
+
+fn pending_update_path() -> Result<PathBuf, String> {
+    Ok(updates_dir()?.join("pending-release-update.json"))
 }
 
 // ── Storage I/O ──────────────────────────────────────────────────────────────
@@ -269,6 +310,164 @@ fn select_macos_dmg_asset<'a>(
         let name = asset.name.to_ascii_lowercase();
         name.starts_with("aeroric_") && name.ends_with(arch_token)
     })
+}
+
+fn expected_release_digest_asset_name(asset_name: &str) -> Option<String> {
+    asset_name
+        .strip_suffix(".dmg")
+        .map(|_| "SHA256SUMS.txt".to_string())
+}
+
+fn find_checksum_for_asset(
+    asset: &GitHubReleaseAsset,
+    assets: &[GitHubReleaseAsset],
+) -> Result<String, String> {
+    let expected_name = expected_release_digest_asset_name(&asset.name)
+        .ok_or_else(|| "Unsupported installer asset name".to_string())?;
+    if assets.iter().any(|candidate| candidate.name == expected_name) {
+        return Ok(expected_name);
+    }
+    Err(format!(
+        "Missing checksum asset for {}. Expected a {expected_name} release asset.",
+        asset.name
+    ))
+}
+
+fn validate_pending_installer_path(
+    updates_root: &Path,
+    tag_name: &str,
+    asset_name: &str,
+    installer_path: &Path,
+) -> Result<PathBuf, String> {
+    let canonical_root = updates_root
+        .canonicalize()
+        .map_err(|e| format!("Resolve updates directory failed: {e}"))?;
+    let canonical_installer = installer_path
+        .canonicalize()
+        .map_err(|e| format!("Resolve installer path failed: {e}"))?;
+    let expected_dir = canonical_root.join(sanitize_text(tag_name, 80).chars().map(|ch| {
+        if ch.is_ascii_alphanumeric() || ch == '.' || ch == '_' || ch == '-' {
+            ch
+        } else {
+            '_'
+        }
+    }).collect::<String>());
+
+    if canonical_installer.parent() != Some(expected_dir.as_path()) {
+        return Err("Prepared installer is outside the update directory.".to_string());
+    }
+    if canonical_installer.file_name() != Some(std::ffi::OsStr::new(asset_name)) {
+        return Err("Prepared installer does not match the selected release asset.".to_string());
+    }
+    Ok(canonical_installer)
+}
+
+fn verify_downloaded_checksum(
+    asset_path: &Path,
+    expected_file_name: &str,
+    checksum_text: &str,
+) -> Result<(), String> {
+    let expected = checksum_text
+        .lines()
+        .find_map(|line| {
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                return None;
+            }
+            let mut parts = trimmed.split_whitespace();
+            let hash = parts.next()?;
+            let file_name = parts.next()?;
+            if file_name.ends_with(expected_file_name) {
+                Some(hash.trim().to_string())
+            } else {
+                None
+            }
+        })
+        .ok_or_else(|| "Checksum entry for the downloaded installer was not found.".to_string())?;
+    let raw = fs::read(asset_path).map_err(|e| format!("Read installer failed: {e}"))?;
+    let mut hasher = Sha256::new();
+    hasher.update(raw);
+    let actual = format!("{:x}", hasher.finalize());
+    if actual != expected {
+        return Err("Downloaded installer checksum does not match.".to_string());
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn get_pending_release_update(
+    tag_name: Option<String>,
+) -> Result<Option<ReleaseUpdatePrepareResult>, String> {
+    let pending = tokio::task::spawn_blocking(load_pending_update)
+        .await
+        .map_err(|e| e.to_string())??;
+    if let Some(expected_tag) = tag_name {
+        if pending.tag_name != expected_tag {
+            return Ok(None);
+        }
+    }
+
+    let updates_root = updates_dir()?;
+    let installer_path = validate_pending_installer_path(
+        &updates_root,
+        &pending.tag_name,
+        &pending.asset_name,
+        Path::new(&pending.installer_path),
+    )?;
+    if !installer_path.exists() {
+        return Ok(None);
+    }
+
+    Ok(Some(ReleaseUpdatePrepareResult {
+        tag_name: pending.tag_name,
+        asset_name: pending.asset_name,
+        installer_path: installer_path.to_string_lossy().into_owned(),
+        ready_to_restart: true,
+    }))
+}
+
+fn release_update_dir(tag_name: &str) -> Result<PathBuf, String> {
+    let safe_tag = sanitize_text(tag_name, 80)
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '.' || ch == '_' || ch == '-' {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>();
+    Ok(updates_dir()?.join(safe_tag))
+}
+
+fn save_pending_update(pending: &PendingReleaseUpdate) -> Result<(), String> {
+    let path = pending_update_path()?;
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|e| format!("Create updates directory failed: {e}"))?;
+    }
+    let raw = serde_json::to_string_pretty(pending)
+        .map_err(|e| format!("Serialize pending update failed: {e}"))?;
+    atomic_write(&path, &raw)
+}
+
+fn load_pending_update() -> Result<PendingReleaseUpdate, String> {
+    let path = pending_update_path()?;
+    let raw = fs::read_to_string(&path).map_err(|e| format!("Read pending update failed: {e}"))?;
+    let pending: PendingReleaseUpdatePayload =
+        serde_json::from_str(&raw).map_err(|e| format!("Invalid pending update JSON: {e}"))?;
+    Ok(PendingReleaseUpdate {
+        tag_name: pending.tag_name,
+        asset_name: pending.asset_name,
+        installer_path: pending.installer_path,
+    })
+}
+
+fn clear_pending_update() -> Result<(), String> {
+    let path = pending_update_path()?;
+    if path.exists() {
+        fs::remove_file(&path).map_err(|e| format!("Remove pending update failed: {e}"))?;
+    }
+    Ok(())
 }
 
 fn release_to_notification(
@@ -645,10 +844,9 @@ pub async fn mark_all_notifications_read() -> Result<(), String> {
 }
 
 #[tauri::command]
-pub async fn install_release_update(
-    app: AppHandle,
+pub async fn prepare_release_update(
     tag_name: String,
-) -> Result<ReleaseInstallResult, String> {
+) -> Result<ReleaseUpdatePrepareResult, String> {
     let release = fetch_release_by_tag(&tag_name).await?;
     let release_version = release_version(&release.tag_name);
     if compare_versions(&release_version, APP_VERSION) != std::cmp::Ordering::Greater {
@@ -657,23 +855,102 @@ pub async fn install_release_update(
     let asset = select_macos_dmg_asset(&release.assets, current_arch())
         .ok_or_else(|| "No compatible macOS DMG asset found for this release.".to_string())?
         .clone();
-    let temp_dir = std::env::temp_dir().join(format!("aeroric-update-{}", uuid::Uuid::new_v4()));
-    tokio::fs::create_dir_all(&temp_dir)
+    let update_dir = release_update_dir(&release.tag_name)?;
+    let _ = tokio::fs::remove_dir_all(&update_dir).await;
+    tokio::fs::create_dir_all(&update_dir)
         .await
-        .map_err(|e| format!("Create temp directory failed: {e}"))?;
-    let dmg_path = temp_dir.join(&asset.name);
+        .map_err(|e| format!("Create update directory failed: {e}"))?;
+    let dmg_path = update_dir.join(&asset.name);
 
     download_asset(&asset, &dmg_path).await?;
+    let installer_path = dmg_path
+        .to_str()
+        .ok_or_else(|| "Invalid installer path".to_string())?
+        .to_string();
+    let pending = PendingReleaseUpdate {
+        tag_name: release.tag_name.clone(),
+        asset_name: asset.name.clone(),
+        installer_path: installer_path.clone(),
+    };
+    tokio::task::spawn_blocking(move || save_pending_update(&pending))
+        .await
+        .map_err(|e| e.to_string())??;
+
+    Ok(ReleaseUpdatePrepareResult {
+        tag_name: release.tag_name,
+        asset_name: asset.name,
+        installer_path,
+        ready_to_restart: true,
+    })
+}
+
+#[tauri::command]
+pub async fn restart_and_install_release_update(
+    app: AppHandle,
+    tag_name: String,
+) -> Result<ReleaseInstallResult, String> {
+    let pending = tokio::task::spawn_blocking(load_pending_update)
+        .await
+        .map_err(|e| e.to_string())??;
+    if pending.tag_name != tag_name {
+        return Err("Prepared update does not match the selected release.".to_string());
+    }
+
+    let updates_root = updates_dir()?;
+    let dmg_path = validate_pending_installer_path(
+        &updates_root,
+        &pending.tag_name,
+        &pending.asset_name,
+        Path::new(&pending.installer_path),
+    )?;
+    if !dmg_path.exists() {
+        return Err("Prepared installer was not found. Download the update again.".to_string());
+    }
+
+    let release = fetch_release_by_tag(&pending.tag_name).await?;
+    let asset = select_macos_dmg_asset(&release.assets, current_arch())
+        .ok_or_else(|| "No compatible macOS DMG asset found for this release.".to_string())?
+        .clone();
+    if asset.name != pending.asset_name {
+        return Err("Prepared update asset no longer matches the selected release.".to_string());
+    }
+    let checksum_asset_name = find_checksum_for_asset(&asset, &release.assets)?;
+    let checksum_asset = release
+        .assets
+        .iter()
+        .find(|candidate| candidate.name == checksum_asset_name)
+        .ok_or_else(|| "Missing checksum asset for prepared update.".to_string())?
+        .clone();
+    let checksum_path = dmg_path.with_extension("sha256");
+    download_asset(&checksum_asset, &checksum_path).await?;
+    let checksum_text = tokio::fs::read_to_string(&checksum_path)
+        .await
+        .map_err(|e| format!("Read checksum failed: {e}"))?;
+    verify_downloaded_checksum(&dmg_path, &pending.asset_name, &checksum_text)?;
+
     let installed_app_path = install_macos_dmg(&dmg_path).await?;
-    let _ = tokio::fs::remove_dir_all(&temp_dir).await;
+    let update_dir = dmg_path.parent().map(Path::to_path_buf);
+    let _ = tokio::task::spawn_blocking(clear_pending_update).await;
+    if let Some(dir) = update_dir {
+        let _ = tokio::fs::remove_dir_all(dir).await;
+    }
     app.request_restart();
 
     Ok(ReleaseInstallResult {
-        tag_name: release.tag_name,
-        asset_name: asset.name,
+        tag_name: pending.tag_name,
+        asset_name: pending.asset_name,
         installed_app_path,
         restarted: true,
     })
+}
+
+#[tauri::command]
+pub async fn install_release_update(
+    app: AppHandle,
+    tag_name: String,
+) -> Result<ReleaseInstallResult, String> {
+    let prepared = prepare_release_update(tag_name.clone()).await?;
+    restart_and_install_release_update(app, prepared.tag_name).await
 }
 
 #[cfg(test)]
@@ -773,5 +1050,50 @@ mod tests {
             notification.update_install_supported,
             cfg!(target_os = "macos")
         );
+    }
+
+    #[test]
+    fn validates_pending_installer_path_inside_expected_update_directory() {
+        let root = std::env::temp_dir().join(format!(
+            "aeroric-update-validate-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let update_dir = root.join("v9.9.9");
+        fs::create_dir_all(&update_dir).unwrap();
+        let dmg = update_dir.join("Aeroric_9.9.9_aarch64.dmg");
+        fs::write(&dmg, "fake dmg").unwrap();
+
+        let valid = validate_pending_installer_path(
+            &root,
+            "v9.9.9",
+            "Aeroric_9.9.9_aarch64.dmg",
+            &dmg,
+        )
+        .unwrap();
+        assert_eq!(valid, dmg.canonicalize().unwrap());
+
+        let outside = root.join("outside.dmg");
+        fs::write(&outside, "fake dmg").unwrap();
+        let err = validate_pending_installer_path(
+            &root,
+            "v9.9.9",
+            "Aeroric_9.9.9_aarch64.dmg",
+            &outside,
+        )
+        .unwrap_err();
+        assert!(err.contains("outside the update directory"));
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn requires_checksum_for_installable_release_asset() {
+        let dmg = GitHubReleaseAsset {
+            name: "Aeroric_9.9.9_aarch64.dmg".to_string(),
+            browser_download_url: "https://example.invalid/Aeroric_9.9.9_aarch64.dmg".to_string(),
+        };
+        let err = find_checksum_for_asset(&dmg, &[dmg.clone()]).unwrap_err();
+
+        assert!(err.contains("checksum"));
     }
 }

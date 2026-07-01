@@ -309,4 +309,38 @@ describe("WebPreviewPanel", () => {
     ).toBeInTheDocument();
     expect(screen.queryByTitle("Embedded preview")).not.toBeInTheDocument();
   });
+
+  it("shows a visible timeout when opening the remote preview tunnel hangs", async () => {
+    const connection = sshConnection();
+    vi.mocked(invoke).mockImplementation((command) => {
+      if (command === "remote_list_listening_ports") {
+        return Promise.resolve([
+          port({ port: 5173, address: "localhost", url: "http://localhost:5173" }),
+        ]);
+      }
+      if (command === "remote_open_preview_tunnel") return new Promise(() => {});
+      return Promise.reject(new Error(`unexpected command: ${command}`));
+    });
+
+    render(
+      <I18nProvider>
+        <WebPreviewPanel
+          projectPath="/srv/app"
+          width={360}
+          remote={{ connection, projectPath: "/srv/app" }}
+        />
+      </I18nProvider>,
+    );
+
+    await screen.findByText("http://localhost:5173");
+    vi.useFakeTimers();
+    fireEvent.click(screen.getByRole("button", { name: /Preview/ }));
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(REMOTE_IDE_COMMAND_TIMEOUT_MS);
+    });
+
+    expect(screen.getByText(/remote_open_preview_tunnel.*timed out after 60s/i)).toBeInTheDocument();
+    expect(screen.queryByTitle("Embedded preview")).not.toBeInTheDocument();
+  });
 });

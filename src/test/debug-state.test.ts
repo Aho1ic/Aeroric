@@ -299,4 +299,23 @@ describe("debug state", () => {
       selection: { line: 12, column: 4 },
     });
   });
+
+  it("keeps remote call stack locations on the remote project path", () => {
+    expect(
+      resolveDebugFrameLocation(
+        {
+          functionName: "handler",
+          file: "/srv/app/src/server.js",
+          line: 12,
+          column: 4,
+        },
+        "/srv/app",
+      ),
+    ).toEqual({
+      path: "/srv/app/src/server.js",
+      name: "handler",
+      displayPath: "src/server.js",
+      selection: { line: 12, column: 4 },
+    });
+  });
 });

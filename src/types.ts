@@ -281,6 +281,13 @@ export interface ReleaseInstallResult {
   restarted: boolean;
 }
 
+export interface ReleaseUpdatePrepareResult {
+  tagName: string;
+  assetName: string;
+  installerPath: string;
+  readyToRestart: boolean;
+}
+
 export interface TextSearchMatch {
   path: string;
   name: string;

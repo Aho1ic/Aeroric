@@ -464,12 +464,10 @@ export function ProjectRail({
   };
 
   const handleProjectPointerDown = (
-    event: React.PointerEvent<HTMLDivElement>,
+    event: React.PointerEvent<HTMLButtonElement>,
     projectId: string,
   ) => {
     if (!onReorderProjects || event.button !== 0) return;
-    const target = event.target;
-    if (target instanceof Element && target.closest("[data-project-rail-no-drag]")) return;
     const currentTarget = event.currentTarget;
     projectPointerDragRef.current = {
       id: projectId,
@@ -482,7 +480,7 @@ export function ProjectRail({
     currentTarget.setPointerCapture?.(event.pointerId);
   };
 
-  const handleProjectPointerMove = (event: React.PointerEvent<HTMLDivElement>) => {
+  const handleProjectPointerMove = (event: React.PointerEvent<HTMLButtonElement>) => {
     const drag = projectPointerDragRef.current;
     if (!drag || drag.pointerId !== event.pointerId) return;
     event.preventDefault();
@@ -492,7 +490,7 @@ export function ProjectRail({
     setDragOverProjectId(projectIdAtClientY(event.clientY));
   };
 
-  const handleProjectPointerUp = (event: React.PointerEvent<HTMLDivElement>) => {
+  const handleProjectPointerUp = (event: React.PointerEvent<HTMLButtonElement>) => {
     const drag = projectPointerDragRef.current;
     if (!drag || drag.pointerId !== event.pointerId) return;
     const targetId = drag.hasMoved ? projectIdAtClientY(event.clientY) : null;
@@ -504,7 +502,7 @@ export function ProjectRail({
     reorderProjectIds(drag.id, targetId);
   };
 
-  const handleProjectPointerCancel = (event: React.PointerEvent<HTMLDivElement>) => {
+  const handleProjectPointerCancel = (event: React.PointerEvent<HTMLButtonElement>) => {
     const drag = projectPointerDragRef.current;
     if (!drag || drag.pointerId !== event.pointerId) return;
     resetProjectPointerDrag();
@@ -751,10 +749,7 @@ export function ProjectRail({
             <div key={project.id} style={{ marginBottom: 6 }}>
               <div
                 ref={setProjectItemRef(project.id)}
-                onPointerDown={(event) => handleProjectPointerDown(event, project.id)}
-                onPointerMove={handleProjectPointerMove}
-                onPointerUp={handleProjectPointerUp}
-                onPointerCancel={handleProjectPointerCancel}
+                data-project-rail-row
                 style={{
                   display: "flex",
                   alignItems: "center",
@@ -777,13 +772,7 @@ export function ProjectRail({
                         : "none",
                   boxShadow:
                     dragOverProjectId === project.id ? "inset 0 0 0 1px var(--accent)" : "none",
-                  cursor: onReorderProjects
-                    ? draggedProjectId === project.id
-                      ? "grabbing"
-                      : "grab"
-                    : "default",
-                  touchAction: "none",
-                  userSelect: "none",
+                  cursor: "default",
                   transition:
                     "background 0.14s ease, opacity 0.14s ease, transform 0.16s ease, box-shadow 0.16s ease",
                 }}
@@ -817,6 +806,40 @@ export function ProjectRail({
                 </button>
                 <button
                   type="button"
+                  aria-label={t("projectRail.dragProject", { name: project.name })}
+                  title={t("projectRail.dragProject", { name: project.name })}
+                  onPointerDown={(event) => handleProjectPointerDown(event, project.id)}
+                  onPointerMove={handleProjectPointerMove}
+                  onPointerUp={handleProjectPointerUp}
+                  onPointerCancel={handleProjectPointerCancel}
+                  style={{
+                    width: 29,
+                    height: 29,
+                    position: "relative",
+                    flexShrink: 0,
+                    display: "inline-flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    border: "none",
+                    borderRadius: 7,
+                    background: "transparent",
+                    color: "var(--text-primary)",
+                    cursor: draggedProjectId === project.id ? "grabbing" : "grab",
+                    padding: 0,
+                    touchAction: "none",
+                    userSelect: "none",
+                  }}
+                >
+                  <ProjectAvatar name={project.name} size={25} />
+                  <AttentionIndicator
+                    status={status}
+                    count={attentionCount}
+                    showBadge={attentionBadge}
+                    borderColor={isActive ? "var(--accent-subtle)" : "var(--bg-sidebar)"}
+                  />
+                </button>
+                <button
+                  type="button"
                   aria-label={project.name}
                   onClick={(event) => {
                     if (suppressNextProjectClickRef.current) {
@@ -840,15 +863,6 @@ export function ProjectRail({
                     fontFamily: "var(--font-ui)",
                   }}
                 >
-                  <span style={{ position: "relative", flexShrink: 0 }}>
-                    <ProjectAvatar name={project.name} size={25} />
-                    <AttentionIndicator
-                      status={status}
-                      count={attentionCount}
-                      showBadge={attentionBadge}
-                      borderColor={isActive ? "var(--accent-subtle)" : "var(--bg-sidebar)"}
-                    />
-                  </span>
                   <span style={{ flex: 1, minWidth: 0 }}>
                     <span
                       style={{

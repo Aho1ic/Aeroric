@@ -15,7 +15,7 @@ function project(id: string, name: string, orderIndex: number): Project {
 }
 
 describe("ProjectRail project dragging", () => {
-  it("reports a new project order after an immediate pointer drag over another row", () => {
+  it("does not reorder projects when dragging from the project name area", () => {
     const onReorderProjects = vi.fn();
     render(
       <I18nProvider>
@@ -43,8 +43,8 @@ describe("ProjectRail project dragging", () => {
 
     const alpha = screen.getByRole("button", { name: "Alpha" });
     const beta = screen.getByRole("button", { name: "Beta" });
-    const alphaRow = alpha.closest("div") as HTMLDivElement;
-    const betaRow = beta.closest("div") as HTMLDivElement;
+    const alphaRow = alpha.closest("[data-project-rail-row]") as HTMLDivElement;
+    const betaRow = beta.closest("[data-project-rail-row]") as HTMLDivElement;
     alphaRow.setPointerCapture = vi.fn();
     alphaRow.releasePointerCapture = vi.fn();
     alphaRow.getBoundingClientRect = () =>
@@ -76,6 +76,99 @@ describe("ProjectRail project dragging", () => {
     fireEvent.pointerMove(alphaRow, { pointerId: 1, clientY: 58 });
     fireEvent.pointerUp(alphaRow, { pointerId: 1, clientY: 58 });
 
+    expect(onReorderProjects).not.toHaveBeenCalled();
+  });
+
+  it("reports a new project order after dragging from the project icon handle", () => {
+    const onReorderProjects = vi.fn();
+    render(
+      <I18nProvider>
+        <ProjectRail
+          projects={[project("p1", "Alpha", 0), project("p2", "Beta", 1)]}
+          allTasks={[] as Task[]}
+          activeProjectId="p1"
+          selectedTaskId={null}
+          isNewTask={false}
+          onSwitch={vi.fn()}
+          onOpen={vi.fn()}
+          onBack={vi.fn()}
+          onNewTask={vi.fn()}
+          onSelectTask={vi.fn()}
+          onDeleteTask={vi.fn()}
+          onToggleTaskStar={vi.fn()}
+          onRunTodo={vi.fn()}
+          onReorderProjects={onReorderProjects}
+          themeVariant="light"
+          onToggleTheme={vi.fn()}
+          singleProjectMode
+        />
+      </I18nProvider>,
+    );
+
+    const alphaHandle = screen.getByRole("button", { name: "Drag project Alpha" });
+    const beta = screen.getByRole("button", { name: "Beta" });
+    const alphaRow = alphaHandle.closest("[data-project-rail-row]") as HTMLDivElement;
+    const betaRow = beta.closest("[data-project-rail-row]") as HTMLDivElement;
+    alphaHandle.setPointerCapture = vi.fn();
+    alphaHandle.releasePointerCapture = vi.fn();
+    alphaRow.getBoundingClientRect = () =>
+      ({
+        top: 0,
+        bottom: 38,
+        height: 38,
+        left: 0,
+        right: 252,
+        width: 252,
+        x: 0,
+        y: 0,
+        toJSON: () => ({}),
+      }) as DOMRect;
+    betaRow.getBoundingClientRect = () =>
+      ({
+        top: 44,
+        bottom: 82,
+        height: 38,
+        left: 0,
+        right: 252,
+        width: 252,
+        x: 0,
+        y: 44,
+        toJSON: () => ({}),
+      }) as DOMRect;
+
+    fireEvent.pointerDown(alphaHandle, { pointerId: 1, button: 0, clientY: 12 });
+    fireEvent.pointerMove(alphaHandle, { pointerId: 1, clientY: 58 });
+    fireEvent.pointerUp(alphaHandle, { pointerId: 1, clientY: 58 });
+
     expect(onReorderProjects).toHaveBeenCalledWith(["p2", "p1"]);
+  });
+
+  it("uses localized text for the project drag handle", () => {
+    localStorage.setItem("aeroric:language", "zh");
+    render(
+      <I18nProvider>
+        <ProjectRail
+          projects={[project("p1", "Alpha", 0)]}
+          allTasks={[] as Task[]}
+          activeProjectId="p1"
+          selectedTaskId={null}
+          isNewTask={false}
+          onSwitch={vi.fn()}
+          onOpen={vi.fn()}
+          onBack={vi.fn()}
+          onNewTask={vi.fn()}
+          onSelectTask={vi.fn()}
+          onDeleteTask={vi.fn()}
+          onToggleTaskStar={vi.fn()}
+          onRunTodo={vi.fn()}
+          onReorderProjects={vi.fn()}
+          themeVariant="light"
+          onToggleTheme={vi.fn()}
+          singleProjectMode
+        />
+      </I18nProvider>,
+    );
+
+    expect(screen.getByRole("button", { name: "拖动项目 Alpha" })).toBeInTheDocument();
   });
 });

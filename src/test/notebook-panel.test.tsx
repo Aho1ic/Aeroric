@@ -272,11 +272,13 @@ describe("NotebookPanel", () => {
     await user.click(screen.getByRole("menuitem", { name: "Markdown" }));
     await user.type(screen.getByRole("textbox", { name: "Quick note name" }), "Second");
 
-    const second = screen.getByRole("button", { name: "Second" });
+    const secondHandle = screen.getByRole("button", { name: "Drag quick note Second" });
     const first = screen.getByRole("button", { name: "First" });
-    second.setPointerCapture = vi.fn();
-    second.releasePointerCapture = vi.fn();
-    second.getBoundingClientRect = () =>
+    const secondRow = secondHandle.closest("[data-notebook-note-row]") as HTMLDivElement;
+    const firstRow = first.closest("[data-notebook-note-row]") as HTMLDivElement;
+    secondHandle.setPointerCapture = vi.fn();
+    secondHandle.releasePointerCapture = vi.fn();
+    secondRow.getBoundingClientRect = () =>
       ({
         top: 0,
         bottom: 30,
@@ -288,7 +290,7 @@ describe("NotebookPanel", () => {
         y: 0,
         toJSON: () => ({}),
       }) as DOMRect;
-    first.getBoundingClientRect = () =>
+    firstRow.getBoundingClientRect = () =>
       ({
         top: 36,
         bottom: 66,
@@ -301,9 +303,9 @@ describe("NotebookPanel", () => {
         toJSON: () => ({}),
       }) as DOMRect;
 
-    fireEvent.pointerDown(second, { pointerId: 1, button: 0, clientY: 10 });
-    fireEvent.pointerMove(second, { pointerId: 1, clientY: 50 });
-    fireEvent.pointerUp(second, { pointerId: 1, clientY: 50 });
+    fireEvent.pointerDown(secondHandle, { pointerId: 1, button: 0, clientY: 10 });
+    fireEvent.pointerMove(secondHandle, { pointerId: 1, clientY: 50 });
+    fireEvent.pointerUp(secondHandle, { pointerId: 1, clientY: 50 });
 
     const noteButtons = screen
       .getAllByRole("button")
@@ -467,11 +469,13 @@ describe("NotebookPanel", () => {
 
     vi.useFakeTimers();
     try {
-      const beta = screen.getByRole("button", { name: "Beta" }) as HTMLButtonElement;
-      const alpha = screen.getByRole("button", { name: "Alpha" }) as HTMLButtonElement;
-      beta.setPointerCapture = vi.fn();
-      beta.releasePointerCapture = vi.fn();
-      beta.getBoundingClientRect = () =>
+      const betaHandle = screen.getByRole("button", { name: "Drag quick note Beta" });
+      const alpha = screen.getByRole("button", { name: "Alpha" });
+      const betaRow = betaHandle.closest("[data-notebook-note-row]") as HTMLDivElement;
+      const alphaRow = alpha.closest("[data-notebook-note-row]") as HTMLDivElement;
+      betaHandle.setPointerCapture = vi.fn();
+      betaHandle.releasePointerCapture = vi.fn();
+      betaRow.getBoundingClientRect = () =>
         ({
           top: 0,
           bottom: 30,
@@ -483,7 +487,7 @@ describe("NotebookPanel", () => {
           y: 0,
           toJSON: () => ({}),
         }) as DOMRect;
-      alpha.getBoundingClientRect = () =>
+      alphaRow.getBoundingClientRect = () =>
         ({
           top: 36,
           bottom: 66,
@@ -496,10 +500,10 @@ describe("NotebookPanel", () => {
           toJSON: () => ({}),
         }) as DOMRect;
 
-      fireEvent.pointerDown(beta, { pointerId: 1, button: 0, clientY: 12 });
+      fireEvent.pointerDown(betaHandle, { pointerId: 1, button: 0, clientY: 12 });
       act(() => vi.advanceTimersByTime(200));
-      fireEvent.pointerMove(beta, { pointerId: 1, clientY: 48 });
-      fireEvent.pointerUp(beta, { pointerId: 1, clientY: 48 });
+      fireEvent.pointerMove(betaHandle, { pointerId: 1, clientY: 48 });
+      fireEvent.pointerUp(betaHandle, { pointerId: 1, clientY: 48 });
 
       const stored = JSON.parse(localStorage.getItem("aeroric:notebook:v1") ?? "[]") as Array<{
         title: string;
@@ -508,6 +512,18 @@ describe("NotebookPanel", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("uses localized text for the quick note drag handle", async () => {
+    localStorage.setItem("aeroric:language", "zh");
+    const user = userEvent.setup();
+    renderNotebook();
+
+    await user.click(screen.getByRole("button", { name: "新建随手记" }));
+    await user.click(screen.getByRole("menuitem", { name: "Markdown" }));
+    await user.type(screen.getByRole("textbox", { name: "随手记名称" }), "Alpha");
+
+    expect(screen.getByRole("button", { name: "拖动随手记 Alpha" })).toBeInTheDocument();
   });
 
   it("shows Chinese rich text context menu actions", async () => {
@@ -829,11 +845,13 @@ describe("NotebookPanel", () => {
 
     vi.useFakeTimers();
     try {
-      const first = screen.getByRole("button", { name: "First" }) as HTMLButtonElement;
-      const second = screen.getByRole("button", { name: "Second" }) as HTMLButtonElement;
-      first.setPointerCapture = vi.fn();
-      first.releasePointerCapture = vi.fn();
-      first.getBoundingClientRect = () =>
+      const first = screen.getByRole("button", { name: "First" });
+      const secondHandle = screen.getByRole("button", { name: "Drag quick note Second" });
+      const firstRow = first.closest("[data-notebook-note-row]") as HTMLDivElement;
+      const secondRow = secondHandle.closest("[data-notebook-note-row]") as HTMLDivElement;
+      secondHandle.setPointerCapture = vi.fn();
+      secondHandle.releasePointerCapture = vi.fn();
+      firstRow.getBoundingClientRect = () =>
         ({
           top: 36,
           bottom: 66,
@@ -845,7 +863,7 @@ describe("NotebookPanel", () => {
           y: 36,
           toJSON: () => ({}),
         }) as DOMRect;
-      second.getBoundingClientRect = () =>
+      secondRow.getBoundingClientRect = () =>
         ({
           top: 0,
           bottom: 30,
@@ -858,10 +876,10 @@ describe("NotebookPanel", () => {
           toJSON: () => ({}),
         }) as DOMRect;
 
-      fireEvent.pointerDown(second, { pointerId: 1, button: 0, clientY: 12 });
+      fireEvent.pointerDown(secondHandle, { pointerId: 1, button: 0, clientY: 12 });
       act(() => vi.advanceTimersByTime(200));
-      fireEvent.pointerMove(second, { pointerId: 1, clientY: 48 });
-      fireEvent.pointerUp(second, { pointerId: 1, clientY: 48 });
+      fireEvent.pointerMove(secondHandle, { pointerId: 1, clientY: 48 });
+      fireEvent.pointerUp(secondHandle, { pointerId: 1, clientY: 48 });
     } finally {
       vi.useRealTimers();
     }

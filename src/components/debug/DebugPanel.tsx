@@ -16,6 +16,11 @@ import {
 import type React from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useI18n } from "../../i18n";
+import {
+  formatInvokeError,
+  invokeWithTimeout,
+  remoteInvokeOptions,
+} from "../../hooks/useCancellableInvoke";
 import type {
   DebugBreakpoint,
   DebugConfig,
@@ -318,6 +323,13 @@ export function DebugPanel({
         : args,
     [remote],
   );
+  const invokeDebugCommand = useCallback(
+    async <T,>(command: string, args: Record<string, unknown>, timeoutMs?: number): Promise<T> => {
+      const request = invoke<T>(command, args);
+      return remote ? invokeWithTimeout(request, command, remoteInvokeOptions(timeoutMs)) : request;
+    },
+    [remote],
+  );
   const remoteStartUnsupported = Boolean(remote && !isRemoteDebugDraftSupported(draft));
   const pauseKey = useMemo(() => {
     if (!session || session.status !== "paused") return "";
@@ -360,7 +372,7 @@ export function DebugPanel({
     let cancelled = false;
     setLoading(true);
     setError(null);
-    invoke<DebugConfigDocument>(
+    invokeDebugCommand<DebugConfigDocument>(
       remote ? "remote_read_debug_configs" : "read_debug_configs",
       remoteCommandArgs({ projectPath }),
     )
@@ -377,7 +389,7 @@ export function DebugPanel({
         }
       })
       .catch((err) => {
-        if (!cancelled) setError(String(err));
+        if (!cancelled) setError(formatInvokeError(err));
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -385,7 +397,7 @@ export function DebugPanel({
     return () => {
       cancelled = true;
     };
-  }, [projectPath, remote, remoteCommandArgs]);
+  }, [invokeDebugCommand, projectPath, remote, remoteCommandArgs]);
 
   useEffect(() => {
     if (!liveDebugIds) return;
@@ -459,7 +471,7 @@ export function DebugPanel({
         return null;
       }
       const nextDocument = upsertDebugConfig(document, config);
-      const saved = await invoke<DebugConfigDocument>(
+      const saved = await invokeDebugCommand<DebugConfigDocument>(
         remote ? "remote_write_debug_configs" : "write_debug_configs",
         remoteCommandArgs({
           projectPath,
@@ -471,7 +483,7 @@ export function DebugPanel({
       setDraft(debugConfigToDraft(config));
       return config;
     } catch (err) {
-      setError(String(err));
+      setError(formatInvokeError(err));
       return null;
     } finally {
       setSaving(false);
@@ -484,7 +496,7 @@ export function DebugPanel({
     setError(null);
     try {
       const nextDocument = removeDebugConfig(document, selectedConfig.id);
-      const saved = await invoke<DebugConfigDocument>(
+      const saved = await invokeDebugCommand<DebugConfigDocument>(
         remote ? "remote_write_debug_configs" : "write_debug_configs",
         remoteCommandArgs({
           projectPath,
@@ -502,7 +514,7 @@ export function DebugPanel({
             : defaultDebugConfigDraft(),
       );
     } catch (err) {
-      setError(String(err));
+      setError(formatInvokeError(err));
     } finally {
       setSaving(false);
     }
@@ -521,7 +533,7 @@ export function DebugPanel({
         setError(t("debug.remoteSupportedModes"));
         return;
       }
-      const snapshot = await invoke<DebugSessionSnapshot>(
+      const snapshot = await invokeDebugCommand<DebugSessionSnapshot>(
         remote ? "remote_start_debug_config" : "start_debug_config",
         remoteCommandArgs({
           projectPath,
@@ -530,7 +542,7 @@ export function DebugPanel({
       );
       recordSessionSnapshot(snapshot);
     } catch (err) {
-      setError(String(err));
+      setError(formatInvokeError(err));
     } finally {
       setRunning(false);
     }

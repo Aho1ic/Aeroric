@@ -73,18 +73,18 @@ describe("SearchPanel replace", () => {
   });
 
   it("runs text search through the remote search command for SSH projects", async () => {
+    const remoteMatch = {
+      path: "/srv/app/src/App.tsx",
+      name: "App.tsx",
+      line: 2,
+      column: 7,
+      lineText: "const title = 'Aeroric';",
+      matchText: "title",
+    };
+    const onOpenMatch = vi.fn();
     vi.mocked(invoke).mockImplementation((command) => {
       if (command === "remote_search_text") {
-        return Promise.resolve([
-          {
-            path: "/srv/app/src/App.tsx",
-            name: "App.tsx",
-            line: 2,
-            column: 7,
-            lineText: "const title = 'Aeroric';",
-            matchText: "title",
-          },
-        ]);
+        return Promise.resolve([remoteMatch]);
       }
       return Promise.reject(new Error(`unexpected command: ${command}`));
     });
@@ -94,7 +94,7 @@ describe("SearchPanel replace", () => {
         <SearchPanel
           projectPath="/srv/app"
           width={320}
-          onOpenMatch={vi.fn()}
+          onOpenMatch={onOpenMatch}
           remote={{ connection, projectPath: "/srv/app" }}
         />
       </I18nProvider>,
@@ -121,6 +121,8 @@ describe("SearchPanel replace", () => {
       });
     });
     expect(await screen.findByText("App.tsx")).toBeInTheDocument();
+    fireEvent.click(screen.getByText("const title = 'Aeroric';"));
+    expect(onOpenMatch).toHaveBeenCalledWith(remoteMatch);
     expect(screen.getByRole("button", { name: "Preview" })).toBeEnabled();
   });
 
@@ -361,5 +363,92 @@ describe("SearchPanel replace", () => {
         ],
       });
     });
+  });
+
+  it("shows a visible timeout when remote replace preview hangs", async () => {
+    vi.useFakeTimers();
+    vi.mocked(invoke).mockImplementation((command) => {
+      if (command === "remote_replace_text_preview") return new Promise(() => {});
+      return Promise.reject(new Error(`unexpected command: ${command}`));
+    });
+
+    render(
+      <I18nProvider>
+        <SearchPanel
+          projectPath="/srv/app"
+          width={320}
+          onOpenMatch={vi.fn()}
+          remote={{ connection, projectPath: "/srv/app" }}
+        />
+      </I18nProvider>,
+    );
+
+    fireEvent.change(screen.getByPlaceholderText("Search text in project"), {
+      target: { value: "oldName" },
+    });
+    fireEvent.change(screen.getByPlaceholderText("Replace text"), {
+      target: { value: "newName" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Preview" }));
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(REMOTE_IDE_COMMAND_TIMEOUT_MS);
+    });
+
+    expect(
+      screen.getByText(/remote_replace_text_preview.*timed out after 60s/i),
+    ).toBeInTheDocument();
+  });
+
+  it("shows remote replacement apply failures without hiding the message", async () => {
+    const remotePreview: ReplacePreview = {
+      ...preview,
+      files: preview.files.map((file) => ({
+        ...file,
+        path: file.path.replace("/tmp/aeroric", "/srv/app"),
+        matches: file.matches.map((match) => ({
+          ...match,
+          path: match.path.replace("/tmp/aeroric", "/srv/app"),
+        })),
+      })),
+    };
+    vi.mocked(invoke).mockImplementation((command) => {
+      if (command === "remote_replace_text_preview") return Promise.resolve(remotePreview);
+      if (command === "remote_apply_text_replacements") {
+        return Promise.reject(new Error("Remote replacement stale match in /srv/app/src/App.tsx"));
+      }
+      return Promise.reject(new Error(`unexpected command: ${command}`));
+    });
+
+    render(
+      <I18nProvider>
+        <SearchPanel
+          projectPath="/srv/app"
+          width={320}
+          onOpenMatch={vi.fn()}
+          remote={{ connection, projectPath: "/srv/app" }}
+        />
+      </I18nProvider>,
+    );
+
+    fireEvent.change(screen.getByPlaceholderText("Search text in project"), {
+      target: { value: "oldName" },
+    });
+    fireEvent.change(screen.getByPlaceholderText("Replace text"), {
+      target: { value: "newName" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Preview" }));
+
+    await screen.findByRole("checkbox", {
+      name: "Include App.tsx in replacement",
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+
+    expect(
+      await screen.findByText(
+        "Replace failed: Remote replacement stale match in /srv/app/src/App.tsx",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/Error: Remote replacement/)).not.toBeInTheDocument();
   });
 });

@@ -1,5 +1,6 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { invoke } from "@tauri-apps/api/core";
+import { confirm } from "@tauri-apps/plugin-dialog";
 import { act } from "react";
 import type React from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -24,7 +25,7 @@ function renderPanel(
         projectPath={options.projectPath ?? "/tmp/aeroric"}
         activeFilePath={options.activeFilePath ?? null}
         width={options.width ?? 360}
-        onOpenFile={vi.fn()}
+        onOpenFile={options.onOpenFile ?? vi.fn()}
         remote={options.remote}
       />
     </I18nProvider>,
@@ -34,6 +35,8 @@ function renderPanel(
 describe("GitAdvancedPanel", () => {
   beforeEach(() => {
     vi.mocked(invoke).mockReset();
+    vi.mocked(confirm).mockReset();
+    vi.mocked(confirm).mockResolvedValue(true);
   });
 
   afterEach(() => {
@@ -235,6 +238,41 @@ describe("GitAdvancedPanel", () => {
     expect(await screen.findByText("remote ours")).toBeInTheDocument();
   });
 
+  it("opens remote conflict files with the remote project path", async () => {
+    const connection = {
+      id: "conn-2",
+      name: "Production",
+      host: "prod.example.com",
+      port: 22,
+      username: "deploy",
+      createdAt: 2,
+    };
+    const onOpenFile = vi.fn();
+    vi.mocked(invoke).mockImplementation((command) => {
+      if (command === "remote_git_branch_graph") {
+        return Promise.resolve({ commits: [], truncated: false });
+      }
+      if (command === "remote_git_stash_list") return Promise.resolve([]);
+      if (command === "remote_git_conflict_files") {
+        return Promise.resolve([{ path: "src/app.txt" }]);
+      }
+      return Promise.reject(new Error(`unexpected command: ${command}`));
+    });
+
+    renderPanel({
+      projectPath: "/srv/app",
+      onOpenFile,
+      remote: { connection, projectPath: "/srv/app" },
+    });
+
+    fireEvent.click(await screen.findByRole("button", { name: "src/app.txt" }));
+
+    expect(onOpenFile).toHaveBeenCalledWith("/srv/app/src/app.txt", "app.txt", {
+      line: 1,
+      column: 1,
+    });
+  });
+
   it("shows a visible timeout when remote branch graph loading hangs", async () => {
     vi.useFakeTimers();
     const connection = {
@@ -262,5 +300,83 @@ describe("GitAdvancedPanel", () => {
     });
 
     expect(screen.getByText(/remote_git_branch_graph.*timed out after 60s/i)).toBeInTheDocument();
+  });
+
+  it("shows a visible timeout when a remote stash apply hangs", async () => {
+    const connection = {
+      id: "conn-2",
+      name: "Production",
+      host: "prod.example.com",
+      port: 22,
+      username: "deploy",
+      createdAt: 2,
+    };
+    vi.mocked(invoke).mockImplementation((command) => {
+      if (command === "remote_git_branch_graph") {
+        return Promise.resolve({ commits: [], truncated: false });
+      }
+      if (command === "remote_git_stash_list") {
+        return Promise.resolve([
+          {
+            index: 0,
+            name: "stash@{0}",
+            commit: "abcdef123456",
+            date: "2 minutes ago",
+            message: "WIP on main",
+          },
+        ]);
+      }
+      if (command === "remote_git_conflict_files") return Promise.resolve([]);
+      if (command === "remote_git_stash_apply") return new Promise(() => {});
+      return Promise.reject(new Error(`unexpected command: ${command}`));
+    });
+
+    renderPanel({
+      projectPath: "/srv/app",
+      remote: { connection, projectPath: "/srv/app" },
+    });
+
+    await screen.findByText(/WIP on main/);
+    vi.useFakeTimers();
+    fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(REMOTE_IDE_COMMAND_TIMEOUT_MS);
+    });
+
+    expect(screen.getByText(/remote_git_stash_apply.*timed out after 60s/i)).toBeInTheDocument();
+  });
+
+  it("shows remote conflict resolution failures without an Error prefix", async () => {
+    const connection = {
+      id: "conn-2",
+      name: "Production",
+      host: "prod.example.com",
+      port: 22,
+      username: "deploy",
+      createdAt: 2,
+    };
+    vi.mocked(invoke).mockImplementation((command) => {
+      if (command === "remote_git_branch_graph") {
+        return Promise.resolve({ commits: [], truncated: false });
+      }
+      if (command === "remote_git_stash_list") return Promise.resolve([]);
+      if (command === "remote_git_conflict_files") return Promise.resolve([{ path: "app.txt" }]);
+      if (command === "remote_git_resolve_conflict") {
+        return Promise.reject(new Error("Permission denied resolving app.txt"));
+      }
+      return Promise.reject(new Error(`unexpected command: ${command}`));
+    });
+
+    renderPanel({
+      projectPath: "/srv/app",
+      remote: { connection, projectPath: "/srv/app" },
+    });
+
+    await screen.findByText("app.txt");
+    fireEvent.click(screen.getByRole("button", { name: "Ours" }));
+
+    expect(await screen.findByText("Permission denied resolving app.txt")).toBeInTheDocument();
+    expect(screen.queryByText("Error: Permission denied resolving app.txt")).not.toBeInTheDocument();
   });
 });
