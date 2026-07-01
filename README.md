@@ -13,26 +13,41 @@ Run Claude Code, Codex, and custom agents across projects with live terminals, t
 </p>
 
 <p align="center">
+  <strong>Current release:</strong> v1.2.2 · <strong>Stack:</strong> React 19 / Tauri 2 / Rust · <strong>Platforms:</strong> macOS / Windows / Linux
+</p>
+
+<p align="center">
   <img src="./Aeroric_frame/递归动画.gif" alt="Aeroric recursive agent workflow" width="86%" />
 </p>
 
 ## Why Aeroric
 
-Aeroric is built for agent-first development, where multiple AI coding tasks may run at the same time across local repositories, remote machines, and operational environments. Instead of switching between terminal tabs, editors, Git clients, Docker tools, release pages, and session logs, Aeroric keeps the workflow in one desktop workspace: start work, watch terminal output, inspect files, edit Markdown, keep quick notes, run scripts, review changes, and publish releases.
+Aeroric is built for agent-first development, where multiple AI coding tasks may run at the same time across local repositories, remote machines, and operational environments. Instead of switching between terminal tabs, editors, Git clients, Docker tools, database consoles, release pages, and session logs, Aeroric keeps the workflow in one desktop workspace: start work, watch terminal output, inspect files, edit code and Markdown, keep quick notes, run scripts, review changes, and publish releases.
 
-Aeroric does not replace Claude Code or Codex. It calls the native CLIs and adds a desktop control layer around them: multi-project navigation, permission-aware task launch, PTY-backed terminals, automatic session discovery, file browsing, SFTP/SSH operations, Git review, Docker visibility, database utilities, and local task persistence.
+Aeroric does not replace Claude Code or Codex. It calls the native CLIs and adds a desktop control layer around them: multi-project navigation, permission-aware task launch, PTY-backed terminals, automatic session discovery, file browsing, LSP-backed editing, SFTP/SSH operations, Git review, Docker visibility, database utilities, local task persistence, and release coordination.
 
 ## What You Can Do
 
 - **Run recursive agent workflows**: start tasks, inspect output, branch into follow-up actions, and keep the evolving context visible.
 - **Manage project workspaces**: open local or remote projects and organize tasks, files, Git state, and runtime status around each repository.
 - **Run Claude Code, Codex, and custom agents**: create tasks, choose permission modes, stream PTY output, provide interactive input, resume sessions, and cancel work when needed.
-- **Browse, edit, and execute project files**: inspect repository files, modify scripts, run commands, and keep file operations close to the agent conversation.
-- **Read and edit Markdown**: switch between rendered reading mode and source editing mode for README files, plans, specs, and generated reports.
+- **Browse, edit, and execute project files**: inspect repository files, modify scripts, run commands, use language-server features, and keep file operations close to the agent conversation.
+- **Read and edit Markdown**: switch between rendered reading mode and source editing mode for README files, plans, specs, generated reports, and local knowledge notes.
+- **Use IDE-grade project tools**: search and replace, inspect diagnostics, jump through symbols, run tests, debug with DAP, manage run configurations, and preview local web apps.
 - **Keep quick notes**: write Markdown or rich text notes for task clues, command snippets, release checks, and temporary ideas.
-- **Operate development infrastructure**: view Docker containers and images, use SFTP/SSH tools, and inspect database-related resources.
+- **Operate development infrastructure**: view Docker containers and images, manage ports, use SFTP/SSH tools, and inspect SQLite, MySQL, PostgreSQL, Redis, and MongoDB resources through DBX-powered tooling.
 - **Keep skills and release work close**: browse local Skill Hub content, review diffs, stage files, commit, push, and manage release pages.
-- **Track usage and sessions**: discover Claude Code/Codex JSONL sessions and inspect token/tool-call metrics for long-running work.
+- **Track usage, sessions, and notifications**: discover Claude Code/Codex JSONL sessions, inspect token/tool-call metrics, and keep long-running work observable.
+
+## Architecture at a Glance
+
+| Layer | What it does |
+| --- | --- |
+| React 19 + TypeScript + Vite | Main workspace UI, project panels, editor surfaces, task views, and release screens. |
+| Tauri 2 + Rust | Desktop shell, native filesystem/process access, PTY orchestration, storage, Git, SSH/SFTP, Docker, and database commands. |
+| Agent runtime bridge | Launches Claude Code, Codex, and custom commands with permission modes, hook integration, session discovery, resume support, and cancellation. |
+| Project tooling | File explorer, CodeMirror/Shiki editing, LSP diagnostics/navigation, DAP debugging, search, test explorer, web preview, and local history. |
+| Operational tooling | Docker, ports, SSH tunnels, SFTP, DBX-backed database browsing/querying/import-export, notifications, and release asset workflows. |
 
 ## Product Tour
 
@@ -174,13 +189,21 @@ The release workflow helps collect version context, review publish state, and ke
 
 ## Installation
 
-Install Claude Code and/or Codex before using Aeroric. On macOS, if the unsigned app is blocked by Gatekeeper, run:
+Download the installer for your platform from the GitHub Releases page. Each desktop release is expected to publish macOS DMG, Windows NSIS/MSI, Linux DEB/RPM, and `SHA256SUMS.txt` checksum assets.
+
+Install Claude Code and/or Codex before using agent tasks in Aeroric. On macOS, if the unsigned app is blocked by Gatekeeper, run:
 
 ```bash
 xattr -rd com.apple.quarantine /Applications/Aeroric.app
 ```
 
 ## Development
+
+Local builds need Node.js 24, pnpm 9, Rust stable, the Tauri platform dependencies for your OS, and a sibling DBX checkout that satisfies `src-tauri/Cargo.toml`:
+
+```bash
+git clone https://github.com/Aho1ic/dbx.git ../dbx
+```
 
 ```bash
 pnpm dev            # Start Vite dev server on port 1420
@@ -193,6 +216,24 @@ pnpm tauri build    # Build production desktop bundles
 
 The frontend is React 19 + TypeScript + Vite. The desktop shell is Tauri 2 + Rust. Backend commands live in `src-tauri/src/`, and most application state is owned by `src/App.tsx` and persisted through Tauri storage commands.
 
+## Release Checklist
+
+For a tagged release such as `v1.2.2`, keep `package.json`, `src-tauri/tauri.conf.json`, and `src-tauri/Cargo.toml` on the same version before pushing the tag. After the desktop workflow finishes, verify the release contains:
+
+- `Aeroric-X.Y.Z-1.x86_64.rpm`
+- `Aeroric_X.Y.Z_aarch64.dmg`
+- `Aeroric_X.Y.Z_amd64.deb`
+- `Aeroric_X.Y.Z_arm64-setup.exe`
+- `Aeroric_X.Y.Z_arm64_en-US.msi`
+- `Aeroric_X.Y.Z_x64-setup.exe`
+- `Aeroric_X.Y.Z_x64.dmg`
+- `Aeroric_X.Y.Z_x64_en-US.msi`
+- `SHA256SUMS.txt`
+
 ## Acknowledgments
 
 Aeroric builds on excellent open-source projects including [Tauri](https://github.com/tauri-apps/tauri), [React](https://github.com/facebook/react), [xterm.js](https://github.com/xtermjs/xterm.js), [CodeMirror](https://codemirror.net/), and [Shiki](https://shiki.style/).
+
+Special thanks to [hanshuaikang/nezha](https://github.com/hanshuaikang/nezha) and [t8y2/dbx](https://github.com/t8y2/dbx) for open-source work that informs Aeroric's agent workspace and database tooling.
+
+Community recognition: [LINUX DO](https://linux.do).

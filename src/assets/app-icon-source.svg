@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-label="Aeroric app icon">
+  <defs>
+    <linearGradient id="aeroric-icon-bg" x1="18" y1="14" x2="112" y2="115" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#07111f"/>
+      <stop offset="1" stop-color="#082f3a"/>
+    </linearGradient>
+  </defs>
+  <rect x="10" y="10" width="108" height="108" rx="30" fill="url(#aeroric-icon-bg)"/>
+  <path
+    d="M46 47l22 17-22 17"
+    fill="none"
+    stroke="#f8fafc"
+    stroke-width="11"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  />
+  <path
+    d="M71 82h17"
+    fill="none"
+    stroke="#5eead4"
+    stroke-width="9"
+    stroke-linecap="round"
+  />
+</svg>
