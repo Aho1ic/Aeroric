@@ -135,10 +135,10 @@ function isAttachDraftStartable(draft: DebugConfigDraft): boolean {
   const port = Number(draft.attachPort.trim());
   return Boolean(
     draft.name.trim() &&
-      draft.attachHost.trim() &&
-      Number.isInteger(port) &&
-      port > 0 &&
-      port <= 65535,
+    draft.attachHost.trim() &&
+    Number.isInteger(port) &&
+    port > 0 &&
+    port <= 65535,
   );
 }
 
@@ -247,6 +247,7 @@ export function DebugPanel({
   launchedSession,
   editorBreakpoints = [],
   externalError,
+  draftRequest,
   remote,
 }: {
   projectPath: string;
@@ -255,6 +256,7 @@ export function DebugPanel({
   launchedSession?: DebugSessionSnapshot | null;
   editorBreakpoints?: DebugBreakpoint[];
   externalError?: string | null;
+  draftRequest?: { id: number; draft: DebugConfigDraft } | null;
   remote?: RemoteDebugContext;
 }) {
   const { t } = useI18n();
@@ -279,10 +281,10 @@ export function DebugPanel({
   const [consoleInput, setConsoleInput] = useState("");
   const [consoleEntries, setConsoleEntries] = useState<DebugConsoleEntry[]>([]);
   const [consoleRunning, setConsoleRunning] = useState(false);
-  const [newBreakpoint, setNewBreakpoint] = useState<NewBreakpointDraft>(
-    defaultNewBreakpointDraft,
-  );
+  const [newBreakpoint, setNewBreakpoint] = useState<NewBreakpointDraft>(defaultNewBreakpointDraft);
   const consoleEntryIdRef = useRef(0);
+  const handledDraftRequestIdRef = useRef<number | null>(null);
+  const draftRequestRef = useRef(draftRequest);
 
   const selectedConfig = useMemo(
     () => document.configs.find((config) => config.id === selectedId) ?? null,
@@ -291,7 +293,7 @@ export function DebugPanel({
   const session = useMemo(
     () =>
       activeDebugId
-        ? sessions.find((currentSession) => currentSession.debugId === activeDebugId) ?? null
+        ? (sessions.find((currentSession) => currentSession.debugId === activeDebugId) ?? null)
         : null,
     [activeDebugId, sessions],
   );
@@ -330,6 +332,9 @@ export function DebugPanel({
     },
     [remote],
   );
+  useEffect(() => {
+    draftRequestRef.current = draftRequest;
+  }, [draftRequest]);
   const remoteStartUnsupported = Boolean(remote && !isRemoteDebugDraftSupported(draft));
   const pauseKey = useMemo(() => {
     if (!session || session.status !== "paused") return "";
@@ -379,6 +384,14 @@ export function DebugPanel({
       .then((next) => {
         if (cancelled) return;
         setDocument(next);
+        const currentDraftRequest = draftRequestRef.current;
+        if (currentDraftRequest) {
+          handledDraftRequestIdRef.current = currentDraftRequest.id;
+          setSelectedId(null);
+          setDraft(currentDraftRequest.draft);
+          setNewBreakpoint(defaultNewBreakpointDraft);
+          return;
+        }
         const first = next.configs[0] ?? null;
         if (first) {
           setSelectedId(first.id);
@@ -398,6 +411,15 @@ export function DebugPanel({
       cancelled = true;
     };
   }, [invokeDebugCommand, projectPath, remote, remoteCommandArgs]);
+
+  useEffect(() => {
+    if (!draftRequest || handledDraftRequestIdRef.current === draftRequest.id) return;
+    handledDraftRequestIdRef.current = draftRequest.id;
+    setSelectedId(null);
+    setDraft(draftRequest.draft);
+    setNewBreakpoint(defaultNewBreakpointDraft);
+    setError(null);
+  }, [draftRequest]);
 
   useEffect(() => {
     if (!liveDebugIds) return;
@@ -820,7 +842,10 @@ export function DebugPanel({
           size="sm"
           onClick={() => {
             setSelectedId(null);
-            setDraft(remote ? defaultRemoteDebugConfigDraft() : defaultDebugConfigDraft());
+            setDraft(
+              draftRequest?.draft ??
+                (remote ? defaultRemoteDebugConfigDraft() : defaultDebugConfigDraft()),
+            );
             setError(null);
           }}
         >
@@ -949,9 +974,7 @@ export function DebugPanel({
               {t("debug.program")}
               <input
                 value={draft.program}
-                onChange={(event) =>
-                  setDraft((prev) => ({ ...prev, program: event.target.value }))
-                }
+                onChange={(event) => setDraft((prev) => ({ ...prev, program: event.target.value }))}
                 placeholder={draft.runtime === "python" ? "src/main.py" : "src/index.js"}
                 style={inputStyle}
               />
@@ -1184,9 +1207,7 @@ export function DebugPanel({
               {t("debug.env")}
               <textarea
                 value={draft.envText}
-                onChange={(event) =>
-                  setDraft((prev) => ({ ...prev, envText: event.target.value }))
-                }
+                onChange={(event) => setDraft((prev) => ({ ...prev, envText: event.target.value }))}
                 placeholder={t("debug.envPlaceholder")}
                 rows={3}
                 style={textareaStyle}
@@ -1505,6 +1526,7 @@ const headerStyle: React.CSSProperties = {
 
 const toolbarStyle: React.CSSProperties = {
   display: "flex",
+  flexWrap: "wrap",
   gap: 6,
   padding: 10,
   borderBottom: "1px solid var(--border-dim)",
@@ -1513,6 +1535,7 @@ const toolbarStyle: React.CSSProperties = {
 const contentStyle: React.CSSProperties = {
   display: "grid",
   gridTemplateRows: "minmax(90px, 0.38fr) minmax(210px, 1fr)",
+  flex: "1 1 auto",
   minHeight: 0,
   overflow: "hidden",
 };
@@ -1665,6 +1688,10 @@ const runBarStyle: React.CSSProperties = {
 const statusStyle: React.CSSProperties = {
   marginLeft: "auto",
   minWidth: 0,
+  maxWidth: "100%",
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+  whiteSpace: "nowrap",
   color: "var(--text-muted)",
   fontSize: 11,
   fontWeight: 650,

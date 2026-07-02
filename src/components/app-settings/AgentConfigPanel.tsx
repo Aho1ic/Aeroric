@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Check, Pencil } from "lucide-react";
+import { Check } from "lucide-react";
 import { useI18n } from "../../i18n";
 import s from "../../styles";
 import { AgentPathSection } from "./AgentPathSection";
@@ -9,83 +9,26 @@ import type { ThemeVariant } from "../../types";
 import { useTextInputIMEFix } from "../useTextInputIMEFix";
 import { Button } from "../ui/Button";
 
-import type { HighlighterGeneric } from "shiki/core";
-
-type ConfigHighlightLang = "json" | "toml" | "shellscript";
-type ConfigHighlightTheme = "github-dark" | "github-light" | "solarized-light";
-
-let _highlighterPromise: Promise<
-  HighlighterGeneric<ConfigHighlightLang, ConfigHighlightTheme>
-> | null = null;
-function getHighlighter(): Promise<HighlighterGeneric<ConfigHighlightLang, ConfigHighlightTheme>> {
-  if (!_highlighterPromise) {
-    _highlighterPromise = Promise.all([
-      import("shiki/core"),
-      import("shiki/engine/javascript"),
-    ]).then(([{ createBundledHighlighter }, { createJavaScriptRegexEngine }]) => {
-      const createHighlighter = createBundledHighlighter<ConfigHighlightLang, ConfigHighlightTheme>(
-        {
-          langs: {
-            json: () => import("shiki/dist/langs/json.mjs"),
-            toml: () => import("shiki/dist/langs/toml.mjs"),
-            shellscript: () => import("shiki/dist/langs/shellscript.mjs"),
-          },
-          themes: {
-            "github-dark": () => import("shiki/dist/themes/github-dark.mjs"),
-            "github-light": () => import("shiki/dist/themes/github-light.mjs"),
-            "solarized-light": () => import("shiki/dist/themes/solarized-light.mjs"),
-          },
-          engine: createJavaScriptRegexEngine,
-        },
-      );
-      return createHighlighter({
-        themes: ["github-dark", "github-light", "solarized-light"],
-        langs: ["json", "toml", "shellscript"],
-      });
-    });
-  }
-  return _highlighterPromise!;
-}
-
 type FileState =
   | { status: "loading" }
   | { status: "unconfigured" }
-  | { status: "missing" }
   | { status: "loaded"; content: string };
-
-function escapeHtml(value: string): string {
-  return value
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
-}
 
 export function AgentConfigPanel({
   agentKey,
   filePath,
-  lang,
-  themeVariant,
+  lang: _lang,
+  themeVariant: _themeVariant,
 }: {
   agentKey: AgentKey;
   filePath: string;
   lang: string;
   themeVariant: ThemeVariant;
 }) {
-  const shikiTheme =
-    themeVariant === "dark"
-      ? "github-dark"
-      : themeVariant === "eyecare"
-        ? "solarized-light"
-        : "github-light";
   const { t } = useI18n();
   const [resolvedFilePath, setResolvedFilePath] = useState(filePath);
   const [fileState, setFileState] = useState<FileState>({ status: "loading" });
   const [original, setOriginal] = useState("");
-  const [editing, setEditing] = useState(false);
-  const [highlighted, setHighlighted] = useState<string | null>(null);
-  const [highlightError, setHighlightError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
@@ -97,9 +40,6 @@ export function AgentConfigPanel({
     setResolvedFilePath(filePath);
     let cancelled = false;
     setFileState({ status: "loading" });
-    setEditing(false);
-    setHighlighted(null);
-    setHighlightError(null);
     setError(null);
     setSaved(false);
     invoke<string>("get_agent_config_file_path", { agent: agentKey })
@@ -117,7 +57,6 @@ export function AgentConfigPanel({
         if (c === null) {
           setFileState({ status: "loaded", content: "" });
           setOriginal("");
-          setEditing(true);
           return;
         }
         if (c === undefined) return;
@@ -132,33 +71,6 @@ export function AgentConfigPanel({
     };
   }, [agentKey, filePath]);
 
-  // Re-highlight when content or theme changes
-  useEffect(() => {
-    if (fileState.status !== "loaded") return;
-    let cancelled = false;
-    setHighlighted(null);
-    setHighlightError(null);
-    getHighlighter()
-      .then((hl) => {
-        const html = hl.codeToHtml(fileState.content, {
-          lang,
-          theme: shikiTheme,
-        });
-        if (!cancelled) {
-          setHighlighted(html);
-        }
-      })
-      .catch((err) => {
-        if (!cancelled) {
-          setHighlightError(String(err));
-        }
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [fileState, lang, shikiTheme]);
-
   async function handleSave() {
     if (fileState.status !== "loaded") return;
     setSaving(true);
@@ -168,7 +80,6 @@ export function AgentConfigPanel({
       await invoke("write_agent_config_file", { agent: agentKey, content: fileState.content });
       setOriginal(fileState.content);
       setSaved(true);
-      setEditing(false);
       setTimeout(() => setSaved(false), 2000);
     } catch (e) {
       setError(String(e));
@@ -179,7 +90,6 @@ export function AgentConfigPanel({
 
   function handleCancel() {
     setFileState({ status: "loaded", content: original });
-    setEditing(false);
   }
 
   const isDirty = fileState.status === "loaded" && fileState.content !== original;
@@ -217,7 +127,7 @@ export function AgentConfigPanel({
           {t("appSettings.configFile")}
         </div>
 
-        {/* File path + edit button row */}
+        {/* File path row */}
         <div
           style={{
             display: "flex",
@@ -244,12 +154,6 @@ export function AgentConfigPanel({
           >
             {resolvedFilePath || t("skill.settings.notConfigured")}
           </div>
-          {fileState.status === "loaded" && !editing && (
-            <Button variant="outline" size="sm" onClick={() => setEditing(true)}>
-              <Pencil size={12} />
-              {t("common.edit")}
-            </Button>
-          )}
           {saved && (
             <span
               style={{
@@ -269,12 +173,6 @@ export function AgentConfigPanel({
           <div style={{ color: "var(--danger)", fontSize: 12.5, marginBottom: 10 }}>{error}</div>
         )}
 
-        {highlightError && fileState.status === "loaded" && !editing && (
-          <div style={{ color: "var(--text-hint)", fontSize: 12, marginBottom: 10 }}>
-            {t("appSettings.syntaxHighlightUnavailable")}
-          </div>
-        )}
-
         {fileState.status === "loading" && !error && (
           <div style={{ color: "var(--text-hint)", fontSize: 13 }}>{t("common.loading")}</div>
         )}
@@ -285,56 +183,7 @@ export function AgentConfigPanel({
           </div>
         )}
 
-        {fileState.status === "missing" && (
-          <div style={{ color: "var(--text-muted)", fontSize: 13 }}>
-            {t("appSettings.configFileNotFound", { path: resolvedFilePath })}
-          </div>
-        )}
-
-        {fileState.status === "loaded" &&
-          !editing &&
-          (highlighted ? (
-            <div
-              className="file-viewer-code"
-              style={{
-                flex: 1,
-                width: "100%",
-                minWidth: 0,
-                maxWidth: "100%",
-                minHeight: 0,
-                overflow: "auto",
-                borderRadius: 8,
-                border: "1px solid var(--border-dim)",
-                fontSize: 12.5,
-              }}
-              dangerouslySetInnerHTML={{ __html: highlighted }}
-            />
-          ) : (
-            <pre
-              style={{
-                flex: 1,
-                width: "100%",
-                minHeight: 0,
-                minWidth: 0,
-                maxWidth: "100%",
-                margin: 0,
-                overflow: "auto",
-                padding: "14px 16px",
-                borderRadius: 8,
-                border: "1px solid var(--border-dim)",
-                background: "var(--bg-panel)",
-                color: "var(--text-primary)",
-                fontSize: 12.5,
-                fontFamily: "var(--font-mono)",
-                lineHeight: 1.6,
-                whiteSpace: "pre",
-                wordBreak: "normal",
-              }}
-              dangerouslySetInnerHTML={{ __html: escapeHtml(fileState.content) }}
-            />
-          ))}
-
-        {fileState.status === "loaded" && editing && (
+        {fileState.status === "loaded" && (
           <textarea
             autoFocus
             wrap="off"
@@ -359,7 +208,7 @@ export function AgentConfigPanel({
         )}
       </div>
 
-      {editing && (
+      {fileState.status === "loaded" && (
         <div style={s.settingsFooter}>
           <Button variant="outline" size="sm" onClick={handleCancel}>
             {t("common.cancel")}

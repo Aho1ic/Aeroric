@@ -86,61 +86,61 @@ import {
   debugBreakpointFileForProject,
   toggleLineDebugBreakpoint,
 } from "./debug/debugBreakpointState";
+import { debugConfigDraftForFile, type DebugConfigDraft } from "./debug/debugState";
 import type { EditorTestRunTarget } from "./file-viewer/testRunGutter";
+import { runConfigDraftForFile, type RunConfigDraft } from "./run/runConfigState";
 import { buildVitestDebugConfig } from "./tests/testDebugState";
-import type { TestRunPanelRequest } from "./tests/testExplorerState";
+import { inferTestProfileForFile, type TestRunPanelRequest } from "./tests/testExplorerState";
 import s from "../styles";
 
 const PROJECT_ACTION_LOG_STORAGE_PREFIX = "aeroric:project-action-log:";
 
-const FileViewer = lazy(() =>
-  import("./FileViewer").then((module) => ({ default: module.FileViewer })),
-);
-const FileSearchDialog = lazy(() =>
+const loadFileViewer = () =>
+  import("./FileViewer").then((module) => ({ default: module.FileViewer }));
+const loadFileSearchDialog = () =>
   import("./file-explorer/SearchPanel").then((module) => ({
     default: module.FileSearchDialog,
-  })),
-);
-const GitChanges = lazy(() =>
-  import("./GitChanges").then((module) => ({ default: module.GitChanges })),
-);
-const GitHistory = lazy(() =>
-  import("./GitHistory").then((module) => ({ default: module.GitHistory })),
-);
-const GitAdvancedPanel = lazy(() =>
+  }));
+const loadGitChanges = () =>
+  import("./GitChanges").then((module) => ({ default: module.GitChanges }));
+const loadGitHistory = () =>
+  import("./GitHistory").then((module) => ({ default: module.GitHistory }));
+const loadGitAdvancedPanel = () =>
   import("./git-advanced/GitAdvancedPanel").then((module) => ({
     default: module.GitAdvancedPanel,
-  })),
-);
-const GitDiffViewer = lazy(() =>
-  import("./GitDiffViewer").then((module) => ({ default: module.GitDiffViewer })),
-);
-const SearchPanel = lazy(() =>
-  import("./search/SearchPanel").then((module) => ({ default: module.SearchPanel })),
-);
-const ProblemsPanel = lazy(() =>
-  import("./problems/ProblemsPanel").then((module) => ({ default: module.ProblemsPanel })),
-);
-const TestExplorerPanel = lazy(() =>
+  }));
+const loadGitDiffViewer = () =>
+  import("./GitDiffViewer").then((module) => ({ default: module.GitDiffViewer }));
+const loadSearchPanel = () =>
+  import("./search/SearchPanel").then((module) => ({ default: module.SearchPanel }));
+const loadProblemsPanel = () =>
+  import("./problems/ProblemsPanel").then((module) => ({ default: module.ProblemsPanel }));
+const loadTestExplorerPanel = () =>
   import("./tests/TestExplorerPanel").then((module) => ({
     default: module.TestExplorerPanel,
-  })),
-);
-const RunConfigurationsPanel = lazy(() =>
+  }));
+const loadRunConfigurationsPanel = () =>
   import("./run/RunConfigurationsPanel").then((module) => ({
     default: module.RunConfigurationsPanel,
-  })),
-);
-const WebPreviewPanel = lazy(() =>
+  }));
+const loadWebPreviewPanel = () =>
   import("./preview/WebPreviewPanel").then((module) => ({
     default: module.WebPreviewPanel,
-  })),
-);
+  }));
 
-function projectPanelFeedbackLabel(
-  panel: Exclude<ReturnType<typeof useProjectPanels>["rightPanel"], null>,
-  t: (key: string) => string,
-): string {
+const FileViewer = lazy(loadFileViewer);
+const FileSearchDialog = lazy(loadFileSearchDialog);
+const GitChanges = lazy(loadGitChanges);
+const GitHistory = lazy(loadGitHistory);
+const GitAdvancedPanel = lazy(loadGitAdvancedPanel);
+const GitDiffViewer = lazy(loadGitDiffViewer);
+const SearchPanel = lazy(loadSearchPanel);
+const ProblemsPanel = lazy(loadProblemsPanel);
+const TestExplorerPanel = lazy(loadTestExplorerPanel);
+const RunConfigurationsPanel = lazy(loadRunConfigurationsPanel);
+const WebPreviewPanel = lazy(loadWebPreviewPanel);
+
+function projectPanelFeedbackLabel(panel: ProjectPanel, t: (key: string) => string): string {
   switch (panel) {
     case "files":
       return t("toolbar.fileExplorer");
@@ -174,29 +174,140 @@ function projectPanelFeedbackLabel(
       return t("notes.title");
   }
 }
-const DebugPanel = lazy(() =>
-  import("./debug/DebugPanel").then((module) => ({ default: module.DebugPanel })),
-);
-const SshWorkspace = lazy(() =>
-  import("./ssh/SshWorkspace").then((module) => ({ default: module.SshWorkspace })),
-);
-const SftpPanel = lazy(() =>
-  import("./sftp/SftpPanel").then((module) => ({ default: module.SftpPanel })),
-);
-const SftpPreview = lazy(() =>
-  import("./sftp/SftpPreview").then((module) => ({ default: module.SftpPreview })),
-);
-const DockerServiceView = lazy(() =>
+const loadDebugPanel = () =>
+  import("./debug/DebugPanel").then((module) => ({ default: module.DebugPanel }));
+const loadSshWorkspace = () =>
+  import("./ssh/SshWorkspace").then((module) => ({ default: module.SshWorkspace }));
+const loadSftpPanel = () =>
+  import("./sftp/SftpPanel").then((module) => ({ default: module.SftpPanel }));
+const loadSftpPreview = () =>
+  import("./sftp/SftpPreview").then((module) => ({ default: module.SftpPreview }));
+const loadDockerServiceView = () =>
   import("./docker/DockerServiceView").then((module) => ({
     default: module.DockerServiceView,
-  })),
-);
-const DatabaseView = lazy(() =>
-  import("./database/DatabaseView").then((module) => ({ default: module.DatabaseView })),
-);
-const NotebookPanel = lazy(() =>
-  import("./notebook/NotebookPanel").then((module) => ({ default: module.NotebookPanel })),
-);
+  }));
+const loadDatabaseView = () =>
+  import("./database/DatabaseView").then((module) => ({ default: module.DatabaseView }));
+const loadNotebookPanel = () =>
+  import("./notebook/NotebookPanel").then((module) => ({ default: module.NotebookPanel }));
+
+const DebugPanel = lazy(loadDebugPanel);
+const SshWorkspace = lazy(loadSshWorkspace);
+const SftpPanel = lazy(loadSftpPanel);
+const SftpPreview = lazy(loadSftpPreview);
+const DockerServiceView = lazy(loadDockerServiceView);
+const DatabaseView = lazy(loadDatabaseView);
+const NotebookPanel = lazy(loadNotebookPanel);
+
+type ProjectPanel = Exclude<ReturnType<typeof useProjectPanels>["rightPanel"], null>;
+
+function preloadProjectPanel(panel: ProjectPanel): void {
+  if (import.meta.env.MODE === "test") return;
+  switch (panel) {
+    case "files":
+      void loadFileViewer();
+      break;
+    case "git-changes":
+      void loadGitChanges();
+      break;
+    case "git-history":
+      void loadGitHistory();
+      break;
+    case "git-advanced":
+      void loadGitAdvancedPanel();
+      break;
+    case "search":
+      void loadSearchPanel();
+      break;
+    case "problems":
+      void loadProblemsPanel();
+      break;
+    case "tests":
+      void loadTestExplorerPanel();
+      break;
+    case "run":
+      void loadRunConfigurationsPanel();
+      break;
+    case "preview":
+      void loadWebPreviewPanel();
+      break;
+    case "debug":
+      void loadDebugPanel();
+      break;
+    case "ssh":
+      void loadSshWorkspace();
+      break;
+    case "sftp":
+      void loadSftpPanel();
+      break;
+    case "docker":
+      void loadDockerServiceView();
+      break;
+    case "database":
+      void loadDatabaseView();
+      break;
+    case "notes":
+      void loadNotebookPanel();
+      break;
+  }
+}
+
+function preloadCommonProjectPanels(): void {
+  (
+    [
+      "git-changes",
+      "git-history",
+      "git-advanced",
+      "search",
+      "problems",
+      "tests",
+      "run",
+      "preview",
+      "debug",
+      "ssh",
+      "sftp",
+    ] as const
+  ).forEach(preloadProjectPanel);
+}
+
+function CenterSuspenseFallback({ label }: { label: string }) {
+  return (
+    <div
+      style={{
+        flex: 1,
+        minHeight: 0,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        color: "var(--text-muted)",
+        fontSize: 12,
+        background: "var(--bg-panel)",
+      }}
+    >
+      {label}
+    </div>
+  );
+}
+
+function DockSuspenseFallback({ width, label }: { width: number; label: string }) {
+  return (
+    <div
+      style={{
+        width,
+        minHeight: 0,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        borderLeft: "1px solid var(--border-dim)",
+        background: "var(--bg-panel)",
+        color: "var(--text-muted)",
+        fontSize: 12,
+      }}
+    >
+      {label}
+    </div>
+  );
+}
 
 function escapeDraftHtml(text: string): string {
   return text.replace(/[&<>"']/g, (char) => {
@@ -398,6 +509,14 @@ export function ProjectPage({
   const [editorDiagnostics, setEditorDiagnostics] = useState<DiagnosticItem[]>([]);
   const [editorCoverage, setEditorCoverage] = useState<TestCoverageSummary | null>(null);
   const [testRunRequest, setTestRunRequest] = useState<TestRunPanelRequest | null>(null);
+  const [runDraftRequest, setRunDraftRequest] = useState<{
+    id: number;
+    draft: RunConfigDraft;
+  } | null>(null);
+  const [debugDraftRequest, setDebugDraftRequest] = useState<{
+    id: number;
+    draft: DebugConfigDraft;
+  } | null>(null);
   const [editorTestDebugError, setEditorTestDebugError] = useState<string | null>(null);
   const [actionFeedback, setActionFeedback] = useState<ActionFeedbackState | null>(null);
   const [actionLog, setActionLog] = useState<ProjectActionResult[]>([]);
@@ -424,6 +543,8 @@ export function ProjectPage({
   const pendingRemoteSshCmdRef = useRef<string | null>(null);
   const previewOpenedForRunRef = useRef<string | null>(null);
   const testRunRequestIdRef = useRef(0);
+  const runDraftRequestIdRef = useRef(0);
+  const debugDraftRequestIdRef = useRef(0);
   const actionFeedbackIdRef = useRef(0);
   const newTaskDraftRef = useRef<NewTaskDraft | null>(null);
   const handleCacheNewTaskDraft = useCallback((draft: NewTaskDraft | null) => {
@@ -435,6 +556,12 @@ export function ProjectPage({
     setActionLog(readProjectActionLog(actionLogStorageKey));
     setShowActionLogDetails(false);
   }, [actionLogStorageKey]);
+
+  useEffect(() => {
+    if (!visible) return;
+    const timer = window.setTimeout(preloadCommonProjectPanels, 120);
+    return () => window.clearTimeout(timer);
+  }, [visible]);
 
   const recordActionFeedback = useCallback(
     (result: ProjectActionResult) => {
@@ -599,6 +726,22 @@ export function ProjectPage({
     previewDisabled,
   });
   const selectedTask = projectTasks.find((t) => t.id === selectedTaskId) ?? null;
+  const activeRunConfigDraft = useCallback((): RunConfigDraft | null => {
+    if (!activeFilePath) return null;
+    const env = selectRunnableCondaEnvironment(
+      runnableCondaEnvironments,
+      selectedCondaEnvPath,
+      Boolean(remoteFileContext),
+    );
+    const command = buildRunnableFileCommand(activeFilePath, env);
+    return command ? runConfigDraftForFile(activeFilePath, command) : null;
+  }, [activeFilePath, remoteFileContext, runnableCondaEnvironments, selectedCondaEnvPath]);
+
+  const activeDebugConfigDraft = useCallback(
+    (): DebugConfigDraft | null =>
+      activeFilePath ? debugConfigDraftForFile(activeFilePath) : null,
+    [activeFilePath],
+  );
 
   useEffect(() => {
     if (!remoteFileContext) {
@@ -850,6 +993,7 @@ export function ProjectPage({
 
   const handleToggleRightPanel = useCallback(
     (panel: Parameters<typeof handleTogglePanel>[0]) => {
+      preloadProjectPanel(panel);
       const label = projectPanelFeedbackLabel(panel, t);
       showActionFeedback(
         rightPanel === panel
@@ -865,6 +1009,54 @@ export function ProjectPage({
       handleTogglePanel(panel);
     },
     [clearFileAndDiff, handleTogglePanel, rightPanel, showActionFeedback, t],
+  );
+
+  const handleActivateIdeTool = useCallback(
+    (panel: ProjectPanel) => {
+      preloadProjectPanel(panel);
+      const label = projectPanelFeedbackLabel(panel, t);
+      showActionFeedback(t("project.actionFeedback.opened", { action: label }), "open", panel);
+      setShowShellTerminal(false);
+
+      if (panel === "tests" && activeFilePath) {
+        testRunRequestIdRef.current += 1;
+        setTestRunRequest({
+          id: testRunRequestIdRef.current,
+          profile: inferTestProfileForFile(activeFilePath),
+          target: {
+            filePath: activeFilePath,
+            testName: null,
+          },
+          coverage: false,
+        });
+      }
+
+      if (panel === "run") {
+        const draft = activeRunConfigDraft();
+        if (draft) {
+          runDraftRequestIdRef.current += 1;
+          setRunDraftRequest({ id: runDraftRequestIdRef.current, draft });
+        }
+      }
+
+      if (panel === "debug") {
+        const draft = activeDebugConfigDraft();
+        if (draft) {
+          debugDraftRequestIdRef.current += 1;
+          setDebugDraftRequest({ id: debugDraftRequestIdRef.current, draft });
+        }
+      }
+
+      openRightPanel(panel);
+    },
+    [
+      activeDebugConfigDraft,
+      activeFilePath,
+      activeRunConfigDraft,
+      openRightPanel,
+      showActionFeedback,
+      t,
+    ],
   );
 
   const handleOpenSshWorkspace = useCallback(() => {
@@ -1073,19 +1265,9 @@ export function ProjectPage({
         id: tool.commandId,
         title: t(tool.titleKey),
         keywords: [...tool.commandKeywords],
-        run: () => {
-          showActionFeedback(
-            t("project.actionFeedback.opened", {
-              action: projectPanelFeedbackLabel(tool.panel, t),
-            }),
-            "open",
-            tool.panel,
-          );
-          setShowShellTerminal(false);
-          openRightPanel(tool.panel);
-        },
+        run: () => handleActivateIdeTool(tool.panel),
       })),
-    [ideToolAvailability, openRightPanel, showActionFeedback, t],
+    [handleActivateIdeTool, ideToolAvailability, t],
   );
   const topRightIdeTools = useMemo(
     () => getProjectTopRightIdeTools(ideToolAvailability).filter((tool) => !tool.disabled),
@@ -1450,7 +1632,7 @@ export function ProjectPage({
                   activeVariant="icon"
                   disabled={tool.disabled}
                   size={30}
-                  onClick={() => handleToggleRightPanel(tool.panel)}
+                  onClick={() => handleActivateIdeTool(tool.panel)}
                 />
               ))}
             </div>
@@ -1647,14 +1829,12 @@ export function ProjectPage({
                 </div>
               )}
             >
-              <Suspense fallback={null}>
+              <Suspense fallback={<CenterSuspenseFallback label={t("common.loading")} />}>
                 {isSftpMode ? (
                   <SftpPanel
                     sshConnections={sshConnections}
                     localDefaultPath={
-                      projectLocation.kind === "local"
-                        ? project.path
-                        : sftpLocalDefaultPath
+                      projectLocation.kind === "local" ? project.path : sftpLocalDefaultPath
                     }
                     active={visible && isSftpMode}
                     width="100%"
@@ -1887,7 +2067,7 @@ export function ProjectPage({
               <div
                 className={`sftp-preview-dialog${filePreviewTarget.isDirectory ? " compact" : ""}`}
               >
-                <Suspense fallback={null}>
+                <Suspense fallback={<CenterSuspenseFallback label={t("common.loading")} />}>
                   <SftpPreview
                     endpoint={filePreviewTarget.endpoint}
                     filePath={filePreviewTarget.filePath}
@@ -1972,7 +2152,11 @@ export function ProjectPage({
               zIndex: 10,
             }}
           />
-          <Suspense fallback={null}>
+          <Suspense
+            fallback={
+              <DockSuspenseFallback width={effectiveRightPanelWidth} label={t("common.loading")} />
+            }
+          >
             {visibleRightPanel === "files" && (
               <ErrorBoundary
                 label="文件浏览器"
@@ -2094,6 +2278,7 @@ export function ProjectPage({
                   editorBreakpoints={remoteFileContext ? [] : editorDebugBreakpoints}
                   onDebugStarted={handleRunDebugStarted}
                   onRunProcessChanged={handleRunProcessChanged}
+                  draftRequest={runDraftRequest}
                   remote={remoteFileContext}
                 />
               </ErrorBoundary>
@@ -2123,6 +2308,7 @@ export function ProjectPage({
                   launchedSession={launchedDebugSession}
                   editorBreakpoints={remoteFileContext ? [] : editorDebugBreakpoints}
                   externalError={editorTestDebugError}
+                  draftRequest={debugDraftRequest}
                   remote={remoteFileContext}
                 />
               </ErrorBoundary>

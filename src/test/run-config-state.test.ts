@@ -4,6 +4,7 @@ import {
   defaultRunConfigDraft,
   isRunConfigDraftLaunchable,
   removeRunConfig,
+  runConfigDraftForFile,
   runConfigSummary,
   runConfigToDebugConfig,
   runConfigToDraft,
@@ -78,6 +79,23 @@ describe("run config state", () => {
       name: "",
       debugRuntime: "node",
       command: "",
+      program: "",
+      cwd: ".",
+      argsText: "",
+      envText: "",
+      breakpointsText: "",
+    });
+  });
+
+  it("builds an editable shell draft for the current file", () => {
+    expect(
+      runConfigDraftForFile("/repo/scripts/demo.py", "python3 '/repo/scripts/demo.py'\r"),
+    ).toEqual({
+      type: "shell",
+      id: "Run demo.py",
+      name: "Run demo.py",
+      debugRuntime: "node",
+      command: "python3 '/repo/scripts/demo.py'",
       program: "",
       cwd: ".",
       argsText: "",

@@ -11,7 +11,7 @@ import {
   Trash2,
 } from "lucide-react";
 import type React from "react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useI18n } from "../../i18n";
 import {
   formatInvokeError,
@@ -49,6 +49,7 @@ export function RunConfigurationsPanel({
   editorBreakpoints = [],
   onDebugStarted,
   onRunProcessChanged,
+  draftRequest,
   remote,
 }: {
   projectPath: string;
@@ -56,6 +57,7 @@ export function RunConfigurationsPanel({
   editorBreakpoints?: DebugBreakpoint[];
   onDebugStarted?: (snapshot: DebugSessionSnapshot) => void;
   onRunProcessChanged?: (snapshot: RunProcessSnapshot) => void;
+  draftRequest?: { id: number; draft: RunConfigDraft } | null;
   remote?: {
     connection: SshConnection;
     projectPath: string;
@@ -71,6 +73,8 @@ export function RunConfigurationsPanel({
   const [error, setError] = useState<string | null>(null);
   const [process, setProcess] = useState<RunProcessSnapshot | null>(null);
   const [debugSession, setDebugSession] = useState<DebugSessionSnapshot | null>(null);
+  const handledDraftRequestIdRef = useRef<number | null>(null);
+  const draftRequestRef = useRef(draftRequest);
 
   const selectedConfig = useMemo(
     () => document.configs.find((config) => config.id === selectedId) ?? null,
@@ -96,6 +100,10 @@ export function RunConfigurationsPanel({
     [remote],
   );
 
+  useEffect(() => {
+    draftRequestRef.current = draftRequest;
+  }, [draftRequest]);
+
   const selectConfig = useCallback((config: RunConfig) => {
     setSelectedId(config.id);
     setDraft(runConfigToDraft(config));
@@ -113,6 +121,13 @@ export function RunConfigurationsPanel({
       .then((next) => {
         if (cancelled) return;
         setDocument(next);
+        const currentDraftRequest = draftRequestRef.current;
+        if (currentDraftRequest) {
+          handledDraftRequestIdRef.current = currentDraftRequest.id;
+          setSelectedId(null);
+          setDraft(currentDraftRequest.draft);
+          return;
+        }
         const first = next.configs[0] ?? null;
         if (first) {
           setSelectedId(first.id);
@@ -132,6 +147,14 @@ export function RunConfigurationsPanel({
       cancelled = true;
     };
   }, [invokeRunCommand, projectPath, remote, remoteCommandArgs]);
+
+  useEffect(() => {
+    if (!draftRequest || handledDraftRequestIdRef.current === draftRequest.id) return;
+    handledDraftRequestIdRef.current = draftRequest.id;
+    setSelectedId(null);
+    setDraft(draftRequest.draft);
+    setError(null);
+  }, [draftRequest]);
 
   useEffect(() => {
     if (!process?.runId || process.status !== "running") return;
@@ -316,7 +339,7 @@ export function RunConfigurationsPanel({
           style={iconTextButtonStyle(false)}
           onClick={() => {
             setSelectedId(null);
-            setDraft(defaultRunConfigDraft());
+            setDraft(draftRequest?.draft ?? defaultRunConfigDraft());
             setError(null);
           }}
         >
@@ -542,6 +565,7 @@ const headerStyle: React.CSSProperties = {
 
 const toolbarStyle: React.CSSProperties = {
   display: "flex",
+  flexWrap: "wrap",
   gap: 6,
   padding: 10,
   borderBottom: "1px solid var(--border-dim)",
@@ -550,6 +574,7 @@ const toolbarStyle: React.CSSProperties = {
 const contentStyle: React.CSSProperties = {
   display: "grid",
   gridTemplateRows: "minmax(90px, 0.45fr) minmax(210px, 1fr)",
+  flex: "1 1 auto",
   minHeight: 0,
   overflow: "hidden",
 };
@@ -652,6 +677,7 @@ const configCommandStyle: React.CSSProperties = {
 function iconTextButtonStyle(active: boolean): React.CSSProperties {
   return {
     height: 26,
+    minWidth: 0,
     display: "inline-flex",
     alignItems: "center",
     justifyContent: "center",
@@ -664,6 +690,8 @@ function iconTextButtonStyle(active: boolean): React.CSSProperties {
     fontWeight: 650,
     cursor: "pointer",
     padding: "0 8px",
+    whiteSpace: "nowrap",
+    boxSizing: "border-box",
   };
 }
 
@@ -685,6 +713,7 @@ function primaryButtonStyle(stopping: boolean): React.CSSProperties {
 const runBarStyle: React.CSSProperties = {
   display: "flex",
   alignItems: "center",
+  flexWrap: "wrap",
   gap: 6,
   padding: "8px 10px",
   borderTop: "1px solid var(--border-dim)",
@@ -694,6 +723,10 @@ const runBarStyle: React.CSSProperties = {
 const statusStyle: React.CSSProperties = {
   marginLeft: "auto",
   minWidth: 0,
+  maxWidth: "100%",
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+  whiteSpace: "nowrap",
   color: "var(--text-muted)",
   fontSize: 11,
   fontWeight: 650,

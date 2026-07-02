@@ -531,7 +531,7 @@ export function shouldRestartRecursiveHeroLoop({
   return Boolean(
     isFinalLayer &&
       doneAt &&
-      currentTime - doneAt >= 2300 &&
+      currentTime >= doneAt &&
       Math.abs(velocity) < 1e-5
   );
 }

@@ -37,12 +37,27 @@ export function defaultRunConfigDraft(): RunConfigDraft {
   };
 }
 
+function basename(path: string): string {
+  return path.split(/[\\/]/).filter(Boolean).pop() ?? path;
+}
+
 function slugifyId(value: string): string {
   return value
     .trim()
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "");
+}
+
+export function runConfigDraftForFile(filePath: string, command: string): RunConfigDraft {
+  const fileName = basename(filePath);
+  const name = fileName ? `Run ${fileName}` : "Run current file";
+  return {
+    ...defaultRunConfigDraft(),
+    id: name,
+    name,
+    command: command.trim(),
+  };
 }
 
 function parseEnvText(value: string): Record<string, string> {

@@ -1,7 +1,20 @@
-import { useState, type ButtonHTMLAttributes, type CSSProperties, type HTMLAttributes } from "react";
+import {
+  useState,
+  type ButtonHTMLAttributes,
+  type CSSProperties,
+  type HTMLAttributes,
+} from "react";
 
 export type ButtonVariant = "default" | "outline" | "secondary" | "ghost" | "destructive" | "link";
-export type ButtonSize = "default" | "xs" | "sm" | "lg" | "icon" | "icon-xs" | "icon-sm" | "icon-lg";
+export type ButtonSize =
+  | "default"
+  | "xs"
+  | "sm"
+  | "lg"
+  | "icon"
+  | "icon-xs"
+  | "icon-sm"
+  | "icon-lg";
 
 type ButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
   variant?: ButtonVariant;
@@ -23,6 +36,7 @@ const baseButtonStyle: CSSProperties = {
   fontWeight: 600,
   lineHeight: 1,
   flexShrink: 0,
+  boxSizing: "border-box",
   transition:
     "background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease, opacity 0.15s ease, box-shadow 0.15s ease",
 };
@@ -35,14 +49,14 @@ const variantStyle: Record<ButtonVariant, CSSProperties> = {
     boxShadow: "var(--shadow-xs)",
   },
   outline: {
-    background: "var(--bg-card)",
+    background: "var(--bg-input)",
     color: "var(--text-primary)",
     borderColor: "var(--border-medium)",
     boxShadow: "var(--shadow-xs)",
   },
   secondary: {
-    background: "var(--bg-subtle)",
-    color: "var(--text-secondary)",
+    background: "var(--secondary)",
+    color: "var(--secondary-foreground)",
     borderColor: "var(--border-dim)",
   },
   ghost: {
@@ -51,9 +65,10 @@ const variantStyle: Record<ButtonVariant, CSSProperties> = {
     borderColor: "transparent",
   },
   destructive: {
-    background: "var(--danger-surface)",
-    color: "var(--danger)",
-    borderColor: "var(--danger-border)",
+    background: "var(--destructive)",
+    color: "var(--destructive-foreground)",
+    borderColor: "var(--destructive)",
+    boxShadow: "var(--shadow-xs)",
   },
   link: {
     background: "transparent",
@@ -72,6 +87,7 @@ const hoverVariantStyle: Partial<Record<ButtonVariant, CSSProperties>> = {
   outline: {
     background: "var(--bg-hover)",
     color: "var(--text-primary)",
+    borderColor: "var(--border-strong)",
   },
   secondary: {
     background: "var(--bg-hover)",
@@ -83,7 +99,11 @@ const hoverVariantStyle: Partial<Record<ButtonVariant, CSSProperties>> = {
     borderColor: "var(--border-dim)",
   },
   destructive: {
-    background: "color-mix(in srgb, var(--danger-surface) 78%, var(--bg-hover))",
+    background: "color-mix(in srgb, var(--destructive) 88%, black)",
+    borderColor: "color-mix(in srgb, var(--destructive) 88%, black)",
+  },
+  link: {
+    color: "var(--accent-hover)",
   },
 };
 
@@ -91,7 +111,7 @@ const sizeStyle: Record<ButtonSize, CSSProperties> = {
   default: {
     height: 32,
     minWidth: 76,
-    padding: "0 12px",
+    padding: "0 14px",
     borderRadius: "var(--radius-md)",
     fontSize: 12.5,
   },
@@ -103,39 +123,43 @@ const sizeStyle: Record<ButtonSize, CSSProperties> = {
     gap: 4,
   },
   sm: {
-    height: 28,
+    height: 30,
     padding: "0 10px",
     borderRadius: "var(--radius-sm)",
     fontSize: 12,
     gap: 5,
   },
   lg: {
-    height: 36,
+    height: 38,
     minWidth: 84,
-    padding: "0 14px",
+    padding: "0 16px",
     borderRadius: "var(--radius-md)",
     fontSize: 13,
   },
   icon: {
     width: 32,
+    minWidth: 32,
     height: 32,
     padding: 0,
     borderRadius: "var(--radius-md)",
   },
   "icon-xs": {
     width: 24,
+    minWidth: 24,
     height: 24,
     padding: 0,
     borderRadius: "var(--radius-sm)",
   },
   "icon-sm": {
     width: 28,
+    minWidth: 28,
     height: 28,
     padding: 0,
     borderRadius: "var(--radius-sm)",
   },
   "icon-lg": {
     width: 36,
+    minWidth: 36,
     height: 36,
     padding: 0,
     borderRadius: "var(--radius-md)",
@@ -151,10 +175,13 @@ export function Button({
   style,
   onMouseEnter,
   onMouseLeave,
+  onFocus,
+  onBlur,
   children,
   ...props
 }: ButtonProps) {
   const [hovered, setHovered] = useState(false);
+  const [focused, setFocused] = useState(false);
   const showHover = hovered && !disabled;
   const resolvedVariant: ButtonVariant = active ? "secondary" : variant;
   const resolvedStyle: CSSProperties = {
@@ -169,9 +196,15 @@ export function Button({
           borderColor: "var(--border-strong)",
         }
       : null),
+    ...(focused && !disabled
+      ? {
+          borderColor: "var(--ring)",
+          boxShadow: "0 0 0 3px color-mix(in srgb, var(--ring) 18%, transparent)",
+        }
+      : null),
     ...(disabled
       ? {
-          opacity: 0.5,
+          opacity: 0.48,
           cursor: "not-allowed",
           pointerEvents: "none",
         }
@@ -193,6 +226,14 @@ export function Button({
         setHovered(false);
         onMouseLeave?.(event);
       }}
+      onFocus={(event) => {
+        setFocused(true);
+        onFocus?.(event);
+      }}
+      onBlur={(event) => {
+        setFocused(false);
+        onBlur?.(event);
+      }}
       {...props}
     >
       {children}
@@ -200,11 +241,7 @@ export function Button({
   );
 }
 
-export function ButtonGroup({
-  children,
-  style,
-  ...props
-}: HTMLAttributes<HTMLDivElement>) {
+export function ButtonGroup({ children, style, ...props }: HTMLAttributes<HTMLDivElement>) {
   return (
     <div
       role={props.role ?? "group"}

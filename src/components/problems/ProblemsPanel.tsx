@@ -122,6 +122,7 @@ export function ProblemsPanel({
       <div
         style={{
           display: "flex",
+          flexWrap: "wrap",
           gap: 6,
           alignItems: "center",
           padding: 10,
@@ -207,6 +208,10 @@ export function ProblemsPanel({
 function buttonStyle(active: boolean) {
   return {
     height: 26,
+    minWidth: 0,
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
     border: "1px solid var(--border-dim)",
     borderRadius: 6,
     background: active ? "var(--control-active-bg)" : "transparent",
@@ -214,12 +219,15 @@ function buttonStyle(active: boolean) {
     fontSize: 11,
     fontWeight: 650,
     cursor: "pointer",
+    padding: "0 8px",
+    whiteSpace: "nowrap" as const,
+    boxSizing: "border-box" as const,
   };
 }
 
 const selectStyle = {
   minWidth: 0,
-  flex: 1,
+  flex: "1 1 120px",
   height: 26,
   border: "1px solid var(--border-dim)",
   borderRadius: 6,

@@ -39,6 +39,32 @@ export function defaultDebugConfigDraft(): DebugConfigDraft {
   };
 }
 
+function basename(path: string): string {
+  return path.split(/[\\/]/).filter(Boolean).pop() ?? path;
+}
+
+export function debugRuntimeForFile(filePath: string): DebugConfigType | null {
+  const lower = filePath.toLowerCase();
+  if (lower.endsWith(".py")) return "python";
+  if (lower.endsWith(".js") || lower.endsWith(".mjs") || lower.endsWith(".cjs")) return "node";
+  return null;
+}
+
+export function debugConfigDraftForFile(filePath: string): DebugConfigDraft | null {
+  const runtime = debugRuntimeForFile(filePath);
+  if (!runtime) return null;
+  const fileName = basename(filePath);
+  const name = fileName ? `Debug ${fileName}` : "Debug current file";
+  return {
+    ...defaultDebugConfigDraft(),
+    id: name,
+    name,
+    runtime,
+    request: "launch",
+    program: filePath,
+  };
+}
+
 function slugifyId(value: string): string {
   return value
     .trim()

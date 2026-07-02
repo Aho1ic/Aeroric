@@ -70,6 +70,36 @@ function renderAgentConfigPanel(content: string) {
   );
 }
 
+function renderAgentConfigPanelWithMissingFile() {
+  mockInvokeForAgentConfig("");
+  vi.mocked(invoke).mockImplementation((command) => {
+    if (command === "get_agent_config_file_path") {
+      return Promise.resolve("/Users/macbook/.codex/config.toml");
+    }
+    if (command === "read_agent_config_file") return Promise.resolve(null);
+    if (command === "write_agent_config_file") return Promise.resolve(undefined);
+    if (command === "load_app_settings") return Promise.resolve(appSettings);
+    if (command === "detect_agent_versions_for_settings") {
+      return Promise.resolve({
+        claude_version: "",
+        claude_gpt55_version: "",
+        codex_version: "codex 1.0.0",
+      });
+    }
+    return Promise.resolve(undefined);
+  });
+  render(
+    <I18nProvider>
+      <AgentConfigPanel
+        agentKey="codex"
+        filePath="/Users/macbook/.codex/config.toml"
+        lang="toml"
+        themeVariant="light"
+      />
+    </I18nProvider>,
+  );
+}
+
 function renderDebugPanel() {
   vi.mocked(invoke).mockImplementation((command) => {
     if (command === "read_debug_configs") {
@@ -101,45 +131,83 @@ function renderAddAgentPanel() {
   );
 }
 
+async function findConfigEditor(value: string) {
+  return waitFor(() => {
+    const editor = screen
+      .getAllByRole("textbox")
+      .find((node): node is HTMLTextAreaElement => {
+        return node instanceof HTMLTextAreaElement && node.value === value;
+      });
+    if (!editor) {
+      throw new Error(`Config editor with value ${JSON.stringify(value)} was not found`);
+    }
+    return editor;
+  });
+}
+
+function getEnabledSaveButton() {
+  const button = screen
+    .getAllByRole("button", { name: /^Save$/i })
+    .find((item) => !item.hasAttribute("disabled"));
+  if (!(button instanceof HTMLButtonElement)) {
+    throw new Error("Enabled Save button was not found");
+  }
+  return button;
+}
+
 describe("Agent config and debug panel UI", () => {
   beforeEach(() => {
     vi.mocked(invoke).mockReset();
   });
 
-  it("keeps highlighted Codex config previews constrained and horizontally scrollable", async () => {
-    const config = 'status = "ok"\n'.repeat(2) + "┌" + "─".repeat(120) + "┐";
+  it("shows loaded agent config files directly in an editable textarea", async () => {
+    const config = 'status = "ok"\n' + "┌" + "─".repeat(120) + "┐";
     renderAgentConfigPanel(config);
 
-    await screen.findByText((text) => text.includes("status"));
-    const viewer = await waitFor(() => {
-      const node = document.querySelector(".file-viewer-code");
-      expect(node).toBeInstanceOf(HTMLElement);
-      return node as HTMLElement;
-    });
-
-    expect(viewer).toHaveStyle({
-      width: "100%",
-      minWidth: "0px",
-      maxWidth: "100%",
-      overflow: "auto",
-    });
-  });
-
-  it("preserves config editor formatting instead of wrapping terminal frame text", async () => {
-    const user = userEvent.setup();
-    const config = "┌" + "─".repeat(120) + "┐";
-    renderAgentConfigPanel(config);
-
-    await screen.findByText((text) => text.includes("┌"));
-    await user.click(screen.getByRole("button", { name: /Edit/i }));
-
-    const editor = screen.getByDisplayValue(config);
+    const editor = await findConfigEditor(config);
     expect(editor).toHaveAttribute("wrap", "off");
     expect(editor).toHaveStyle({
       whiteSpace: "pre",
       overflow: "auto",
       fontFamily: "var(--font-mono)",
     });
+    expect(screen.queryByRole("button", { name: /Edit/i })).not.toBeInTheDocument();
+  });
+
+  it("saves direct config edits without returning to a read-only preview", async () => {
+    const user = userEvent.setup();
+    const config = 'status = "ok"\n';
+    renderAgentConfigPanel(config);
+
+    const editor = await findConfigEditor(config);
+    await user.clear(editor);
+    await user.type(editor, 'status = "changed"');
+    await user.click(getEnabledSaveButton());
+
+    await waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith("write_agent_config_file", {
+        agent: "codex",
+        content: 'status = "changed"',
+      }),
+    );
+    expect(await findConfigEditor('status = "changed"')).toBeInTheDocument();
+  });
+
+  it("opens a missing configured agent config file as an empty editable file", async () => {
+    const user = userEvent.setup();
+    renderAgentConfigPanelWithMissingFile();
+
+    const editor = await findConfigEditor("");
+    await user.type(editor, 'model = "gpt-5.5"');
+    await user.click(getEnabledSaveButton());
+
+    await waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith("write_agent_config_file", {
+        agent: "codex",
+        content: 'model = "gpt-5.5"',
+      }),
+    );
+    expect(screen.queryByRole("button", { name: /Edit/i })).not.toBeInTheDocument();
   });
 
   it("renders debug controls as stable shadcn-style button groups", async () => {

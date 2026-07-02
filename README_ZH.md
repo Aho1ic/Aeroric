@@ -102,7 +102,6 @@ Aeroric 把文件浏览、源码编辑和命令执行放在同一工作流里，
 <p align="center">
   <img src="./Aeroric_frame/阅读模式查看markdown文件.png" alt="阅读模式查看 Markdown 文件" width="86%" />
 </p>
-
 ### 编辑 Markdown
 
 Markdown 文件也可以直接进入源码编辑模式，文档维护不需要离开当前项目工作台。

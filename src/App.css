@@ -42,10 +42,11 @@ body {
   align-items: center;
   justify-content: space-between;
   width: 100%;
-  padding: 8px 10px;
+  min-height: 34px;
+  padding: 7px 10px;
   background: var(--bg-input);
   border: 1px solid var(--border-medium);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   color: var(--text-primary);
   font-size: 13px;
   font-family: var(--font-ui);
@@ -53,17 +54,20 @@ body {
   outline: none;
   gap: 8px;
   box-sizing: border-box;
-  transition: border-color 0.12s;
+  transition:
+    border-color 0.12s,
+    box-shadow 0.12s,
+    background 0.12s;
 }
 .radix-select-trigger:focus {
   border-color: var(--border-focus);
-  box-shadow: none;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--ring) 18%, transparent);
 }
 .radix-select-content {
   background: var(--bg-card);
   border: 1px solid var(--border-medium);
-  border-radius: 8px;
-  box-shadow: var(--shadow-md);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-popover);
   z-index: 2000;
   min-width: var(--radix-select-trigger-width);
   max-height: 280px;
@@ -85,8 +89,9 @@ body {
   display: flex;
   align-items: center;
   gap: 6px;
+  min-height: 30px;
   padding: 6px 10px 6px 28px;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   font-size: 13px;
   color: var(--text-primary);
   cursor: pointer;
@@ -95,7 +100,8 @@ body {
   user-select: none;
 }
 .radix-select-item[data-highlighted] {
-  background: var(--bg-hover);
+  background: var(--control-active-bg);
+  color: var(--control-active-fg);
 }
 .radix-select-item-indicator {
   position: absolute;
@@ -114,8 +120,8 @@ body {
 .branch-popover-content {
   background: var(--bg-card);
   border: 1px solid var(--border-medium);
-  border-radius: 8px;
-  box-shadow: var(--shadow-md);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-popover);
   z-index: 2000;
   width: var(--radix-popover-trigger-width);
   /* trigger 较窄（如 NewTaskView 的 launch-mode 行）时兜底，避免分支名被截断 */
@@ -127,7 +133,7 @@ body {
   display: flex;
   align-items: center;
   gap: 7px;
-  padding: 8px 10px;
+  padding: 9px 10px;
   border-bottom: 1px solid var(--border-dim);
 }
 .branch-popover-search-input {
@@ -150,7 +156,7 @@ body {
   cursor: pointer;
   padding: 2px;
   color: var(--text-hint);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
 }
 .branch-popover-clear:hover {
   color: var(--text-muted);
@@ -174,10 +180,11 @@ body {
   align-items: center;
   gap: 7px;
   width: 100%;
+  min-height: 30px;
   padding: 6px 10px;
   border: none;
   background: none;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   font-size: 13px;
   color: var(--text-primary);
   font-family: var(--font-ui);
@@ -186,7 +193,8 @@ body {
   outline: none;
 }
 .branch-popover-item:hover {
-  background: var(--bg-hover);
+  background: var(--control-active-bg);
+  color: var(--control-active-fg);
 }
 .branch-popover-item-name {
   flex: 1;

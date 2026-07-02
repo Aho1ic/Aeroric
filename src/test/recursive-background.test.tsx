@@ -176,6 +176,14 @@ describe("recursive dynamic background", () => {
       shouldRestartRecursiveHeroLoop({
         isFinalLayer: true,
         doneAt: 1000,
+        currentTime: 1000,
+        springVelocity: 0,
+      }),
+    ).toBe(true);
+    expect(
+      shouldRestartRecursiveHeroLoop({
+        isFinalLayer: true,
+        doneAt: 1000,
         currentTime: 3400,
         springVelocity: 0,
       }),
@@ -184,7 +192,23 @@ describe("recursive dynamic background", () => {
       shouldRestartRecursiveHeroLoop({
         isFinalLayer: true,
         doneAt: 1000,
-        currentTime: 2000,
+        currentTime: 900,
+        springVelocity: 0,
+      }),
+    ).toBe(false);
+    expect(
+      shouldRestartRecursiveHeroLoop({
+        isFinalLayer: true,
+        doneAt: 1000,
+        currentTime: 1000,
+        springVelocity: 0.01,
+      }),
+    ).toBe(false);
+    expect(
+      shouldRestartRecursiveHeroLoop({
+        isFinalLayer: false,
+        doneAt: 1000,
+        currentTime: 3400,
         springVelocity: 0,
       }),
     ).toBe(false);

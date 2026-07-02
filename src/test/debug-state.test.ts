@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import {
   buildDebugConfigDraft,
   canEvaluateDebugSession,
+  debugConfigDraftForFile,
   debugConfigToDraft,
+  debugRuntimeForFile,
   debugSessionControlState,
   defaultDebugConfigDraft,
   formatBreakpointText,
@@ -61,6 +63,21 @@ describe("debug state", () => {
       argsText: "",
       envText: "",
       breakpointsText: "",
+    });
+  });
+
+  it("builds a launch draft for supported current files", () => {
+    expect(debugRuntimeForFile("/repo/app/main.py")).toBe("python");
+    expect(debugRuntimeForFile("/repo/app/server.mjs")).toBe("node");
+    expect(debugRuntimeForFile("/repo/app/component.tsx")).toBeNull();
+
+    expect(debugConfigDraftForFile("/repo/app/main.py")).toMatchObject({
+      id: "Debug main.py",
+      name: "Debug main.py",
+      runtime: "python",
+      request: "launch",
+      program: "/repo/app/main.py",
+      cwd: ".",
     });
   });
 
@@ -124,7 +141,8 @@ describe("debug state", () => {
       attachPort: "9229",
       argsText: "--watch",
       envText: "NODE_ENV=test\nPORT=3000",
-      breakpointsText: "server.js:4\nsrc/router.js:9:2\nsrc/cache.js:11 if enabled\nsrc/log.js:12 log hit log",
+      breakpointsText:
+        "server.js:4\nsrc/router.js:9:2\nsrc/cache.js:11 if enabled\nsrc/log.js:12 log hit log",
     });
   });
 

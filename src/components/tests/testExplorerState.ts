@@ -25,6 +25,15 @@ export const testProfiles: TestProfileOption[] = [
   { id: "python", labelKey: "tests.python" },
 ];
 
+export function inferTestProfileForFile(filePath: string): TestProfileId {
+  const lower = filePath.toLowerCase();
+  if (lower.endsWith(".py")) return "python";
+  if (lower.endsWith(".rs") || lower.endsWith("/cargo.toml") || lower.endsWith("\\cargo.toml")) {
+    return "cargo";
+  }
+  return "vitest";
+}
+
 export function sortTestFailures(failures: TestFailure[]): TestFailure[] {
   return [...failures].sort(
     (a, b) =>

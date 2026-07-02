@@ -3,6 +3,7 @@ import {
   buildTestFixPrompt,
   buildTestRunTarget,
   groupTestFailuresByFile,
+  inferTestProfileForFile,
   isLatestTestRun,
   testProfiles,
 } from "../components/tests/testExplorerState";
@@ -38,6 +39,13 @@ const failures: TestFailure[] = [
 describe("test explorer state", () => {
   it("lists supported profiles in a stable order", () => {
     expect(testProfiles.map((profile) => profile.id)).toEqual(["vitest", "cargo", "python"]);
+  });
+
+  it("infers a focused test profile from the current file", () => {
+    expect(inferTestProfileForFile("/repo/tests/test_app.py")).toBe("python");
+    expect(inferTestProfileForFile("/repo/src/lib.rs")).toBe("cargo");
+    expect(inferTestProfileForFile("/repo/Cargo.toml")).toBe("cargo");
+    expect(inferTestProfileForFile("/repo/src/app.test.ts")).toBe("vitest");
   });
 
   it("groups failures by file after sorting by location", () => {

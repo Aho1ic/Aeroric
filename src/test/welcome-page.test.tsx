@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 import { I18nProvider } from "../i18n";
 import type { Project, SshConnection } from "../types";
 import { WelcomePage, projectMetaLabel } from "../components/WelcomePage";
+import { layout } from "../styles";
 
 vi.mock("../components/NotificationBell", () => ({
   NotificationBell: () => null,
@@ -105,7 +106,7 @@ describe("WelcomePage project cards", () => {
     expect(screen.getByTestId("docker-logo-icon")).toBeInTheDocument();
   });
 
-  it("shows the recursive animation only on the home project page", async () => {
+  it("keeps the recursive animation mounted when switching home sections", async () => {
     const user = userEvent.setup();
 
     renderWelcome({ themeVariant: "light" });
@@ -114,7 +115,12 @@ describe("WelcomePage project cards", () => {
 
     await user.click(screen.getByRole("button", { name: "Skills" }));
 
-    expect(screen.queryByTestId("welcome-recursive-background")).not.toBeInTheDocument();
+    expect(screen.getByTestId("welcome-recursive-background")).toBeInTheDocument();
+  });
+
+  it("keeps the home project surface translucent so the recursive animation remains visible", () => {
+    expect(layout.welcomePane.background).toContain("transparent");
+    expect(layout.searchRow.background).toContain("transparent");
   });
 
   it("renames a project from the home page edit button", async () => {

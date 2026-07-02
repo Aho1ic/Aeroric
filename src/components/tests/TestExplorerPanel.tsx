@@ -351,6 +351,7 @@ const headerStyle: React.CSSProperties = {
 
 const toolbarStyle: React.CSSProperties = {
   display: "flex",
+  flexWrap: "wrap",
   gap: 6,
   alignItems: "center",
   padding: 10,
@@ -379,7 +380,7 @@ const targetInputStyle: React.CSSProperties = {
 
 const selectStyle: React.CSSProperties = {
   minWidth: 0,
-  flex: 1,
+  flex: "1 1 120px",
   height: 26,
   border: "1px solid var(--border-dim)",
   borderRadius: 6,
@@ -392,8 +393,10 @@ const selectStyle: React.CSSProperties = {
 
 const buttonStyle: React.CSSProperties = {
   height: 26,
+  minWidth: 0,
   display: "inline-flex",
   alignItems: "center",
+  justifyContent: "center",
   gap: 5,
   border: "1px solid var(--border-dim)",
   borderRadius: 6,
@@ -402,6 +405,9 @@ const buttonStyle: React.CSSProperties = {
   fontSize: 11,
   fontWeight: 650,
   cursor: "pointer",
+  padding: "0 8px",
+  whiteSpace: "nowrap",
+  boxSizing: "border-box",
 };
 
 function agentTaskButtonStyle(enabled: boolean): React.CSSProperties {

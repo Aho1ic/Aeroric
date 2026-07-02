@@ -196,7 +196,8 @@ export function WelcomePage({
   >("projects");
   const [openProjectMenu, setOpenProjectMenu] = useState(false);
   const [sftpOpen, setSftpOpen] = useState(false);
-  const showRecursiveBackground = themeVariant === "light" && view === "projects" && !sftpOpen;
+  const keepRecursiveBackgroundMounted = themeVariant === "light";
+  const showRecursiveBackground = view === "projects" && !sftpOpen;
   const sshGroups = useMemo(
     () =>
       Array.from(
@@ -258,8 +259,14 @@ export function WelcomePage({
 
   return (
     <div style={s.welcomeBody}>
-      {showRecursiveBackground && (
-        <div data-testid="welcome-recursive-background" style={s.welcomeRecursiveBackground}>
+      {keepRecursiveBackgroundMounted && (
+        <div
+          data-testid="welcome-recursive-background"
+          style={{
+            ...s.welcomeRecursiveBackground,
+            opacity: showRecursiveBackground ? 1 : 0,
+          }}
+        >
           <RecursiveHeroCanvas className="recursive-hero-effect__canvas--welcome" />
         </div>
       )}
