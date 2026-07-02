@@ -33,4 +33,7 @@ ignore = [
     "RUSTSEC-2025-0098",
     # glib: unsound - upstream tauri dependency
     "RUSTSEC-2024-0429",
+    # quick-xml: upstream calamine/plist dependency chains do not yet allow >=0.41.0
+    "RUSTSEC-2026-0194",
+    "RUSTSEC-2026-0195",
 ]
