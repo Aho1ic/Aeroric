@@ -171,7 +171,7 @@ describe("Agent config and debug panel UI", () => {
     await user.type(screen.getByLabelText("API Key"), "sk-test");
     await user.click(screen.getByRole("button", { name: /Detect Models/i }));
 
-    await screen.findByText("2 models detected");
+    await screen.findByText("2 of 2 models selected");
     await user.click(screen.getByRole("button", { name: /^Add Agent$/i }));
 
     expect(invoke).toHaveBeenCalledWith("detect_agent_models", {
@@ -187,6 +187,32 @@ describe("Agent config and debug panel UI", () => {
         base_url: "https://example.com/v1",
         api_key: "sk-test",
         model: "gpt-5.5",
+        models: ["gpt-5.5", "gpt-5.1"],
+      },
+    });
+  });
+
+  it("hides Agent ID and derives a stable ID from Base URL for Chinese names", async () => {
+    const user = userEvent.setup();
+    renderAddAgentPanel();
+
+    expect(screen.queryByLabelText("Agent ID")).not.toBeInTheDocument();
+
+    await user.type(screen.getByLabelText("Agent Name"), "词元");
+    await user.type(screen.getByLabelText("Base URL"), "https://ai.962831.xyz/v1");
+    await user.type(screen.getByLabelText("API Key"), "sk-test");
+    await user.type(screen.getByLabelText("Model"), "gpt-5.5");
+    await user.click(screen.getByRole("button", { name: /^Add Agent$/i }));
+
+    expect(invoke).toHaveBeenCalledWith("setup_agent_profile", {
+      draft: {
+        id: "ai_962831_xyz_codex",
+        label: "词元",
+        kind: "codex",
+        base_url: "https://ai.962831.xyz/v1",
+        api_key: "sk-test",
+        model: "gpt-5.5",
+        models: ["gpt-5.5"],
       },
     });
   });

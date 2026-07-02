@@ -67,6 +67,8 @@ pub struct AgentSetupDraft {
     pub base_url: String,
     pub api_key: String,
     pub model: String,
+    #[serde(default)]
+    pub models: Vec<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
@@ -538,6 +540,14 @@ fn shell_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\"'\"'"))
 }
 
+fn shell_array(values: &[String]) -> String {
+    values
+        .iter()
+        .map(|value| shell_quote(value))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 fn toml_string(value: &str) -> String {
     toml::Value::String(value.to_string()).to_string()
 }
@@ -584,11 +594,67 @@ fn parse_model_ids(value: serde_json::Value) -> Vec<String> {
     out
 }
 
+fn normalize_setup_models(draft: &AgentSetupDraft) -> Vec<String> {
+    let source = if draft.models.is_empty() {
+        vec![draft.model.clone()]
+    } else {
+        draft.models.clone()
+    };
+    let mut out = Vec::new();
+    for model in source
+        .into_iter()
+        .map(|model| model.trim().to_string())
+        .filter(|model| !model.is_empty())
+    {
+        if !out.contains(&model) {
+            out.push(model);
+        }
+    }
+    out
+}
+
+fn validate_model_name(model: &str) -> bool {
+    !model.is_empty()
+        && !model
+            .chars()
+            .any(|ch| matches!(ch, '\0' | '\n' | '\r' | '"' | '\\'))
+}
+
+fn model_picker_shell(selected_models: &[String]) -> String {
+    let default_model = selected_models.first().cloned().unwrap_or_default();
+    format!(
+        r#"models=({models})
+selected_model="${{AERORIC_AGENT_MODEL:-}}"
+
+if [ -z "$selected_model" ]; then
+  if [ -t 0 ] && [ -t 1 ] && [ "${{#models[@]}}" -gt 1 ]; then
+    echo ""
+    echo -e "\033[1;33m请选择模型：\033[0m"
+    for i in "${{!models[@]}}"; do
+      printf "  %s) %s\n" "$((i + 1))" "${{models[$i]}}"
+    done
+    echo ""
+    read -r -p "输入编号 (1-${{#models[@]}}，默认1): " model_choice || model_choice=""
+  else
+    model_choice="${{AERORIC_AGENT_MODEL_CHOICE:-1}}"
+  fi
+
+  if [[ "$model_choice" =~ ^[0-9]+$ ]] && [ "$model_choice" -ge 1 ] && [ "$model_choice" -le "${{#models[@]}}" ]; then
+    selected_model="${{models[$((model_choice - 1))]}}"
+  else
+    selected_model={default_model}
+  fi
+fi
+"#,
+        models = shell_array(selected_models),
+        default_model = shell_quote(&default_model),
+    )
+}
+
 fn codex_config_for_draft(draft: &AgentSetupDraft) -> String {
     let provider = sanitize_custom_agent_id(&draft.id);
     format!(
-        r#"model = {model}
-model_provider = {provider}
+        r#"model_provider = {provider}
 model_reasoning_effort = "high"
 model_context_window = 258400
 model_auto_compact_token_limit = 219640
@@ -598,8 +664,11 @@ name = {label}
 base_url = {base_url}
 env_key = "ANTHROPIC_API_KEY"
 wire_api = "responses"
+request_max_retries = 3
+stream_max_retries = 3
+stream_idle_timeout_ms = 300000
+supports_websockets = false
 "#,
-        model = toml_string(&draft.model),
         provider = toml_string(&provider),
         provider_key = toml_table_key(&provider),
         label = toml_string(&draft.label),
@@ -609,6 +678,8 @@ wire_api = "responses"
 
 fn build_codex_agent_script(draft: &AgentSetupDraft) -> String {
     let id = sanitize_custom_agent_id(&draft.id);
+    let models = normalize_setup_models(draft);
+    let picker = model_picker_shell(&models);
     let config = codex_config_for_draft(draft);
     let codex_bin = detect_path("codex");
     let codex_bin = if codex_bin.is_empty() {
@@ -625,13 +696,24 @@ mkdir -p "$AGENT_HOME"
 export CODEX_HOME="$AGENT_HOME"
 export ANTHROPIC_API_KEY={api_key}
 
-cat > "$CODEX_HOME/config.toml" <<'AERORIC_CODEX_CONFIG'
+{picker}
+
+{{
+  printf 'model = "%s"\n' "$selected_model"
+  cat <<'AERORIC_CODEX_CONFIG'
 {config}AERORIC_CODEX_CONFIG
+}} > "$CODEX_HOME/config.toml"
+
+if [ -t 0 ] && [ -t 1 ]; then
+  echo -e "\033[1;32m✓ 已选择 $selected_model\033[0m"
+  echo ""
+fi
 
 exec {codex_bin} "$@"
 "#,
         id = id,
         api_key = shell_quote(&draft.api_key),
+        picker = picker,
         config = config,
         codex_bin = shell_quote(&codex_bin),
     )
@@ -639,6 +721,8 @@ exec {codex_bin} "$@"
 
 fn build_claude_code_agent_script(draft: &AgentSetupDraft) -> String {
     let id = sanitize_custom_agent_id(&draft.id);
+    let models = normalize_setup_models(draft);
+    let picker = model_picker_shell(&models);
     format!(
         r#"#!/bin/bash
 set -euo pipefail
@@ -661,7 +745,8 @@ unset ANTHROPIC_DEFAULT_HAIKU_MODEL
 unset ANTHROPIC_MODEL
 unset AGENT_ROUTER_TOKEN
 
-selected_model={model}
+{picker}
+
 export ANTHROPIC_BASE_URL={base_url}
 export ANTHROPIC_AUTH_TOKEN={api_key}
 export ANTHROPIC_API_KEY="$ANTHROPIC_AUTH_TOKEN"
@@ -670,10 +755,15 @@ export ANTHROPIC_DEFAULT_OPUS_MODEL="$selected_model"
 export ANTHROPIC_DEFAULT_SONNET_MODEL="$selected_model"
 export ANTHROPIC_DEFAULT_HAIKU_MODEL="$selected_model"
 
+if [ -t 0 ] && [ -t 1 ]; then
+  echo -e "\033[1;32m✓ 已选择 $selected_model\033[0m"
+  echo ""
+fi
+
 exec claude --model "$selected_model" "$@"
 "#,
         id = id,
-        model = shell_quote(&draft.model),
+        picker = picker,
         base_url = shell_quote(&normalize_base_url(&draft.base_url)),
         api_key = shell_quote(&draft.api_key),
     )
@@ -700,8 +790,12 @@ fn validate_agent_setup_draft(draft: &AgentSetupDraft) -> Result<String, String>
     if draft.api_key.trim().is_empty() {
         return Err("API key is required".to_string());
     }
-    if draft.model.trim().is_empty() {
-        return Err("Model name is required".to_string());
+    let models = normalize_setup_models(draft);
+    if models.is_empty() {
+        return Err("At least one model is required".to_string());
+    }
+    if models.iter().any(|model| !validate_model_name(model)) {
+        return Err("Model names cannot contain quotes, backslashes, or newlines".to_string());
     }
     Ok(id)
 }
@@ -1235,14 +1329,18 @@ mod tests {
             base_url: "https://example.com/v1/".to_string(),
             api_key: "sk-test".to_string(),
             model: "gpt-5.5".to_string(),
+            models: vec!["gpt-5.5".to_string(), "gpt-5.1".to_string()],
         };
 
         let script = build_agent_script(&draft);
 
         assert!(script.contains("CODEX_HOME"));
         assert!(script.contains("base_url = \"https://example.com/v1\""));
-        assert!(script.contains("model = \"gpt-5.5\""));
+        assert!(script.contains("models=('gpt-5.5' 'gpt-5.1')"));
+        assert!(script.contains("printf 'model = \"%s\"\\n' \"$selected_model\""));
         assert!(script.contains("env_key = \"ANTHROPIC_API_KEY\""));
+        assert!(script.contains("stream_max_retries = 3"));
+        assert!(script.contains("supports_websockets = false"));
         assert!(script.contains("export ANTHROPIC_API_KEY='sk-test'"));
     }
 
@@ -1255,6 +1353,7 @@ mod tests {
             base_url: "https://agentrouter.org".to_string(),
             api_key: "sk-test".to_string(),
             model: "claude-opus-4-8".to_string(),
+            models: vec!["claude-opus-4-8".to_string(), "claude-opus-4-6".to_string()],
         };
 
         let script = build_agent_script(&draft);
@@ -1262,7 +1361,7 @@ mod tests {
         assert!(script.contains("CLAUDE_CONFIG_DIR"));
         assert!(script.contains("export ANTHROPIC_BASE_URL='https://agentrouter.org'"));
         assert!(script.contains("export ANTHROPIC_AUTH_TOKEN='sk-test'"));
-        assert!(script.contains("selected_model='claude-opus-4-8'"));
+        assert!(script.contains("models=('claude-opus-4-8' 'claude-opus-4-6')"));
         assert!(script.contains("exec claude --model \"$selected_model\" \"$@\""));
     }
 

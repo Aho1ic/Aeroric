@@ -58,31 +58,59 @@ const kindOptions: { kind: AgentSetupKind; labelKey: string; hintKey: string }[]
   },
 ];
 
+function idFromBaseUrl(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) return "";
+  const parseTarget = /^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
+  try {
+    const host = new URL(parseTarget).hostname.replace(/^www\./, "").replace(/\./g, "_");
+    return sanitizeAgentId(host);
+  } catch {
+    return sanitizeAgentId(trimmed.replace(/[/:]+/g, "_"));
+  }
+}
+
+function deriveAgentId(label: string, baseUrl: string, kind: AgentSetupKind): string {
+  const labelId = sanitizeAgentId(label);
+  if (labelId) return labelId;
+  const urlId = idFromBaseUrl(baseUrl);
+  if (!urlId) return "";
+  return sanitizeAgentId(`${urlId}_${kind === "codex" ? "codex" : "claude"}`);
+}
+
 export function AddAgentPanel({ onSaved }: { onSaved: (agentId: string) => void }) {
   const { t } = useI18n();
   const [label, setLabel] = useState("");
-  const [id, setId] = useState("");
-  const [idTouched, setIdTouched] = useState(false);
   const [kind, setKind] = useState<AgentSetupKind>("codex");
   const [baseUrl, setBaseUrl] = useState("");
   const [apiKey, setApiKey] = useState("");
   const [model, setModel] = useState("");
   const [models, setModels] = useState<string[]>([]);
+  const [selectedModels, setSelectedModels] = useState<string[]>([]);
   const [detectingModels, setDetectingModels] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const sanitizedId = sanitizeAgentId(id);
-  const modelListId = useMemo(() => `agent-models-${sanitizedId || "new"}`, [sanitizedId]);
+  const generatedAgentId = useMemo(
+    () => deriveAgentId(label, baseUrl, kind),
+    [baseUrl, kind, label],
+  );
+  const modelListId = useMemo(
+    () => `agent-models-${generatedAgentId || "new"}`,
+    [generatedAgentId],
+  );
   const nameInputId = "agent-setup-name";
-  const idInputId = "agent-setup-id";
   const baseUrlInputId = "agent-setup-base-url";
   const apiKeyInputId = "agent-setup-api-key";
   const modelInputId = "agent-setup-model";
   const canDetectModels = Boolean(baseUrl.trim() && apiKey.trim());
   const canSave = Boolean(
-    label.trim() && sanitizedId && baseUrl.trim() && apiKey.trim() && model.trim(),
+    label.trim() &&
+    generatedAgentId &&
+    baseUrl.trim() &&
+    apiKey.trim() &&
+    (selectedModels.length > 0 || model.trim()),
   );
 
   async function handleDetectModels() {
@@ -96,6 +124,7 @@ export function AddAgentPanel({ onSaved }: { onSaved: (agentId: string) => void 
         apiKey: apiKey.trim(),
       });
       setModels(detected.models);
+      setSelectedModels(detected.models);
       if (!model.trim() && detected.models.length > 0) {
         setModel(detected.models[0]);
       }
@@ -108,13 +137,15 @@ export function AddAgentPanel({ onSaved }: { onSaved: (agentId: string) => void 
 
   async function handleSave() {
     if (!canSave) return;
+    const setupModels = selectedModels.length > 0 ? selectedModels : [model.trim()];
     const draft: AgentSetupDraft = {
-      id: sanitizedId,
+      id: generatedAgentId,
       label: label.trim(),
       kind,
       base_url: baseUrl.trim(),
       api_key: apiKey.trim(),
-      model: model.trim(),
+      model: setupModels[0] ?? model.trim(),
+      models: setupModels,
     };
     setSaving(true);
     setSaved(false);
@@ -123,12 +154,26 @@ export function AddAgentPanel({ onSaved }: { onSaved: (agentId: string) => void 
       await invoke<AppSettings>("setup_agent_profile", { draft });
       window.dispatchEvent(new Event(APP_SETTINGS_CHANGED_EVENT));
       setSaved(true);
-      onSaved(sanitizedId);
+      onSaved(generatedAgentId);
     } catch (err) {
       setError(String(err));
     } finally {
       setSaving(false);
     }
+  }
+
+  function toggleModel(modelName: string) {
+    setSelectedModels((prev) => {
+      if (prev.includes(modelName)) return prev.filter((item) => item !== modelName);
+      return [...prev, modelName];
+    });
+  }
+
+  function handleAddManualModel() {
+    const next = model.trim();
+    if (!next) return;
+    setModels((prev) => (prev.includes(next) ? prev : [...prev, next]));
+    setSelectedModels((prev) => (prev.includes(next) ? prev : [...prev, next]));
   }
 
   return (
@@ -177,6 +222,7 @@ export function AddAgentPanel({ onSaved }: { onSaved: (agentId: string) => void 
                 onClick={() => {
                   setKind(option.kind);
                   setModels([]);
+                  setSelectedModels([]);
                 }}
               >
                 <div style={{ fontSize: 12.5, fontWeight: 700, marginBottom: 4 }}>
@@ -191,40 +237,22 @@ export function AddAgentPanel({ onSaved }: { onSaved: (agentId: string) => void 
         </div>
       </div>
 
-      <div style={fieldGridStyle}>
-        <div>
-          <label style={labelStyle} htmlFor={nameInputId}>
-            {t("appSettings.agentName")}
-          </label>
-          <input
-            id={nameInputId}
-            style={inputStyle}
-            value={label}
-            onChange={(event) => {
-              const next = event.target.value;
-              setLabel(next);
-              if (!idTouched) setId(sanitizeAgentId(next));
-            }}
-            placeholder={t("appSettings.agentNamePlaceholder")}
-            spellCheck={false}
-          />
-        </div>
-
-        <div>
-          <label style={labelStyle} htmlFor={idInputId}>
-            {t("appSettings.agentId")}
-          </label>
-          <input
-            id={idInputId}
-            style={monoInputStyle}
-            value={id}
-            onChange={(event) => {
-              setIdTouched(true);
-              setId(sanitizeAgentId(event.target.value));
-            }}
-            placeholder="local_agent"
-            spellCheck={false}
-          />
+      <div>
+        <label style={labelStyle} htmlFor={nameInputId}>
+          {t("appSettings.agentName")}
+        </label>
+        <input
+          id={nameInputId}
+          style={inputStyle}
+          value={label}
+          onChange={(event) => setLabel(event.target.value)}
+          placeholder={t("appSettings.agentNamePlaceholder")}
+          spellCheck={false}
+        />
+        <div style={{ marginTop: 5, fontSize: 11, color: "var(--text-hint)" }}>
+          {generatedAgentId
+            ? t("appSettings.generatedAgentId", { id: generatedAgentId })
+            : t("appSettings.generatedAgentIdHint")}
         </div>
       </div>
 
@@ -245,6 +273,7 @@ export function AddAgentPanel({ onSaved }: { onSaved: (agentId: string) => void 
               onChange={(event) => {
                 setBaseUrl(event.target.value);
                 setModels([]);
+                setSelectedModels([]);
               }}
               placeholder={kind === "codex" ? "https://example.com/v1" : "https://agentrouter.org"}
               spellCheck={false}
@@ -269,6 +298,7 @@ export function AddAgentPanel({ onSaved }: { onSaved: (agentId: string) => void 
               onChange={(event) => {
                 setApiKey(event.target.value);
                 setModels([]);
+                setSelectedModels([]);
               }}
               placeholder="sk-..."
               spellCheck={false}
@@ -300,6 +330,15 @@ export function AddAgentPanel({ onSaved }: { onSaved: (agentId: string) => void 
             <RefreshCw size={12} className={detectingModels ? "spin" : undefined} />
             {detectingModels ? t("appSettings.detectingModels") : t("appSettings.detectModels")}
           </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleAddManualModel}
+            disabled={!model.trim()}
+          >
+            <Plus size={12} />
+            {t("appSettings.addModel")}
+          </Button>
         </div>
         <datalist id={modelListId}>
           {models.map((item) => (
@@ -308,10 +347,84 @@ export function AddAgentPanel({ onSaved }: { onSaved: (agentId: string) => void 
         </datalist>
         <div style={{ marginTop: 5, fontSize: 11, color: "var(--text-hint)" }}>
           {models.length > 0
-            ? t("appSettings.detectedModelsCount", { count: models.length })
+            ? t("appSettings.selectedModelsCount", {
+                selected: selectedModels.length,
+                count: models.length,
+              })
             : t("appSettings.agentModelHint")}
         </div>
       </div>
+
+      {models.length > 0 && (
+        <div>
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
+              marginBottom: 8,
+              gap: 8,
+            }}
+          >
+            <label style={{ ...labelStyle, marginBottom: 0 }}>
+              {t("appSettings.availableModels")}
+            </label>
+            <div style={{ display: "flex", gap: 6 }}>
+              <Button variant="outline" size="sm" onClick={() => setSelectedModels(models)}>
+                {t("appSettings.selectAllModels")}
+              </Button>
+              <Button variant="outline" size="sm" onClick={() => setSelectedModels([])}>
+                {t("appSettings.clearModels")}
+              </Button>
+            </div>
+          </div>
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+              gap: 8,
+              maxHeight: 180,
+              overflow: "auto",
+              border: "1px solid var(--border-dim)",
+              borderRadius: 8,
+              padding: 8,
+              background: "var(--bg-subtle)",
+            }}
+          >
+            {models.map((item) => (
+              <label
+                key={item}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 8,
+                  minWidth: 0,
+                  fontSize: 12,
+                  color: "var(--text-secondary)",
+                  cursor: "pointer",
+                }}
+              >
+                <input
+                  type="checkbox"
+                  checked={selectedModels.includes(item)}
+                  onChange={() => toggleModel(item)}
+                />
+                <span
+                  style={{
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                    fontFamily: "var(--font-mono)",
+                  }}
+                  title={item}
+                >
+                  {item}
+                </span>
+              </label>
+            ))}
+          </div>
+        </div>
+      )}
 
       <div style={{ display: "flex", justifyContent: "flex-end", marginTop: "auto" }}>
         <button
