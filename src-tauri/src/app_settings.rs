@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 use std::fs;
+#[cfg(not(windows))]
+use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::OnceLock;
@@ -48,6 +50,28 @@ pub struct CustomAgentProfile {
     pub codex_like: bool,
     #[serde(default = "default_custom_agent_config_lang")]
     pub config_lang: String,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentSetupKind {
+    Codex,
+    ClaudeCode,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct AgentSetupDraft {
+    pub id: String,
+    pub label: String,
+    pub kind: AgentSetupKind,
+    pub base_url: String,
+    pub api_key: String,
+    pub model: String,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+pub struct AgentModels {
+    pub models: Vec<String>,
 }
 
 fn default_custom_agent_codex_like() -> bool {
@@ -279,6 +303,10 @@ fn aeroric_dir() -> Result<PathBuf, String> {
     Ok(home.join(".aeroric"))
 }
 
+fn agent_scripts_dir() -> Result<PathBuf, String> {
+    Ok(aeroric_dir()?.join("agents"))
+}
+
 fn settings_path() -> Result<PathBuf, String> {
     Ok(aeroric_dir()?.join("settings.json"))
 }
@@ -506,6 +534,194 @@ fn get_agent_launch_spec_from_settings(settings: &AppSettings, agent: &str) -> A
     resolve_agent_launch_spec_from_path(agent, &get_agent_configured_path(settings, agent))
 }
 
+fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\"'\"'"))
+}
+
+fn toml_string(value: &str) -> String {
+    toml::Value::String(value.to_string()).to_string()
+}
+
+fn toml_table_key(value: &str) -> String {
+    format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
+}
+
+fn normalize_base_url(value: &str) -> String {
+    value.trim().trim_end_matches('/').to_string()
+}
+
+fn model_endpoint(base_url: &str) -> String {
+    let base = normalize_base_url(base_url);
+    if base.ends_with("/v1") {
+        format!("{}/models", base)
+    } else {
+        format!("{}/v1/models", base)
+    }
+}
+
+fn parse_model_ids(value: serde_json::Value) -> Vec<String> {
+    let data = value
+        .get("data")
+        .and_then(|data| data.as_array())
+        .cloned()
+        .or_else(|| value.as_array().cloned())
+        .unwrap_or_default();
+    let mut out = data
+        .into_iter()
+        .filter_map(|item| {
+            if let Some(id) = item.as_str() {
+                return Some(id.to_string());
+            }
+            item.get("id")
+                .or_else(|| item.get("name"))
+                .and_then(|id| id.as_str())
+                .map(|id| id.to_string())
+        })
+        .filter(|id| !id.trim().is_empty())
+        .collect::<Vec<_>>();
+    out.sort();
+    out.dedup();
+    out
+}
+
+fn codex_config_for_draft(draft: &AgentSetupDraft) -> String {
+    let provider = sanitize_custom_agent_id(&draft.id);
+    format!(
+        r#"model = {model}
+model_provider = {provider}
+model_reasoning_effort = "high"
+model_context_window = 258400
+model_auto_compact_token_limit = 219640
+
+[model_providers.{provider_key}]
+name = {label}
+base_url = {base_url}
+env_key = "ANTHROPIC_API_KEY"
+wire_api = "responses"
+"#,
+        model = toml_string(&draft.model),
+        provider = toml_string(&provider),
+        provider_key = toml_table_key(&provider),
+        label = toml_string(&draft.label),
+        base_url = toml_string(&normalize_base_url(&draft.base_url)),
+    )
+}
+
+fn build_codex_agent_script(draft: &AgentSetupDraft) -> String {
+    let id = sanitize_custom_agent_id(&draft.id);
+    let config = codex_config_for_draft(draft);
+    let codex_bin = detect_path("codex");
+    let codex_bin = if codex_bin.is_empty() {
+        "codex".to_string()
+    } else {
+        codex_bin
+    };
+    format!(
+        r#"#!/bin/bash
+set -euo pipefail
+
+AGENT_HOME="${{AERORIC_AGENT_HOME:-$HOME/.aeroric/agent-homes/{id}}}"
+mkdir -p "$AGENT_HOME"
+export CODEX_HOME="$AGENT_HOME"
+export ANTHROPIC_API_KEY={api_key}
+
+cat > "$CODEX_HOME/config.toml" <<'AERORIC_CODEX_CONFIG'
+{config}AERORIC_CODEX_CONFIG
+
+exec {codex_bin} "$@"
+"#,
+        id = id,
+        api_key = shell_quote(&draft.api_key),
+        config = config,
+        codex_bin = shell_quote(&codex_bin),
+    )
+}
+
+fn build_claude_code_agent_script(draft: &AgentSetupDraft) -> String {
+    let id = sanitize_custom_agent_id(&draft.id);
+    format!(
+        r#"#!/bin/bash
+set -euo pipefail
+
+AGENT_HOME="${{AERORIC_AGENT_HOME:-$HOME/.aeroric/agent-homes/{id}}}"
+mkdir -p "$AGENT_HOME" "$AGENT_HOME/tmp" "$AGENT_HOME/session-env"
+
+export CLAUDE_CONFIG_DIR="$AGENT_HOME"
+export CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC="1"
+export CLAUDE_CODE_ATTRIBUTION_HEADER="0"
+export CLAUDE_CODE_SESSION_ENV_DIR="$AGENT_HOME/session-env"
+export TMPDIR="$AGENT_HOME/tmp"
+
+unset ANTHROPIC_API_KEY
+unset ANTHROPIC_AUTH_TOKEN
+unset ANTHROPIC_BASE_URL
+unset ANTHROPIC_DEFAULT_OPUS_MODEL
+unset ANTHROPIC_DEFAULT_SONNET_MODEL
+unset ANTHROPIC_DEFAULT_HAIKU_MODEL
+unset ANTHROPIC_MODEL
+unset AGENT_ROUTER_TOKEN
+
+selected_model={model}
+export ANTHROPIC_BASE_URL={base_url}
+export ANTHROPIC_AUTH_TOKEN={api_key}
+export ANTHROPIC_API_KEY="$ANTHROPIC_AUTH_TOKEN"
+export AGENT_ROUTER_TOKEN="$ANTHROPIC_AUTH_TOKEN"
+export ANTHROPIC_DEFAULT_OPUS_MODEL="$selected_model"
+export ANTHROPIC_DEFAULT_SONNET_MODEL="$selected_model"
+export ANTHROPIC_DEFAULT_HAIKU_MODEL="$selected_model"
+
+exec claude --model "$selected_model" "$@"
+"#,
+        id = id,
+        model = shell_quote(&draft.model),
+        base_url = shell_quote(&normalize_base_url(&draft.base_url)),
+        api_key = shell_quote(&draft.api_key),
+    )
+}
+
+fn build_agent_script(draft: &AgentSetupDraft) -> String {
+    match draft.kind {
+        AgentSetupKind::Codex => build_codex_agent_script(draft),
+        AgentSetupKind::ClaudeCode => build_claude_code_agent_script(draft),
+    }
+}
+
+fn validate_agent_setup_draft(draft: &AgentSetupDraft) -> Result<String, String> {
+    let id = sanitize_custom_agent_id(&draft.id);
+    if id.is_empty() {
+        return Err("Agent ID is required".to_string());
+    }
+    if draft.label.trim().is_empty() {
+        return Err("Agent name is required".to_string());
+    }
+    if normalize_base_url(&draft.base_url).is_empty() {
+        return Err("Base URL is required".to_string());
+    }
+    if draft.api_key.trim().is_empty() {
+        return Err("API key is required".to_string());
+    }
+    if draft.model.trim().is_empty() {
+        return Err("Model name is required".to_string());
+    }
+    Ok(id)
+}
+
+fn write_agent_script(id: &str, content: &str) -> Result<PathBuf, String> {
+    let dir = agent_scripts_dir()?;
+    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let path = dir.join(format!("{}.sh", id));
+    atomic_write(&path, content)?;
+    #[cfg(not(windows))]
+    {
+        let mut permissions = fs::metadata(&path)
+            .map_err(|e| e.to_string())?
+            .permissions();
+        permissions.set_mode(0o700);
+        fs::set_permissions(&path, permissions).map_err(|e| e.to_string())?;
+    }
+    Ok(path)
+}
+
 fn normalize_settings(settings: AppSettings) -> AppSettings {
     AppSettings {
         claude_path: resolve_agent_launch_spec_from_path("claude", &settings.claude_path).program,
@@ -657,6 +873,81 @@ pub async fn save_custom_agent_profile(profile: CustomAgentProfile) -> Result<Ap
     .map_err(|e| e.to_string())??;
     clear_cached_versions();
     Ok(normalized)
+}
+
+#[tauri::command]
+pub async fn setup_agent_profile(draft: AgentSetupDraft) -> Result<AppSettings, String> {
+    let normalized = tokio::task::spawn_blocking(move || {
+        let _guard = settings_lock().lock();
+        let id = validate_agent_setup_draft(&draft)?;
+        let script = build_agent_script(&draft);
+        let script_path = write_agent_script(&id, &script)?;
+        let profile = CustomAgentProfile {
+            id,
+            label: draft.label.trim().to_string(),
+            path: script_path.to_string_lossy().into_owned(),
+            codex_like: matches!(draft.kind, AgentSetupKind::Codex),
+            config_lang: "shellscript".to_string(),
+        };
+        let profile = normalize_custom_agent_profile(profile)
+            .ok_or_else(|| "Invalid custom agent profile".to_string())?;
+
+        let mut settings = load_settings_unlocked();
+        settings
+            .custom_agents
+            .retain(|existing| existing.id != profile.id);
+        settings.custom_agents.push(profile);
+
+        let dir = aeroric_dir()?;
+        fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        let path = settings_path()?;
+        let normalized = normalize_settings(settings);
+        let raw = serde_json::to_string_pretty(&normalized).map_err(|e| e.to_string())?;
+        atomic_write(&path, &raw)?;
+        Ok::<AppSettings, String>(normalized)
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    clear_cached_versions();
+    Ok(normalized)
+}
+
+#[tauri::command]
+pub async fn detect_agent_models(
+    kind: AgentSetupKind,
+    base_url: String,
+    api_key: String,
+) -> Result<AgentModels, String> {
+    let endpoint = model_endpoint(&base_url);
+    let api_key = api_key.trim().to_string();
+    if normalize_base_url(&base_url).is_empty() {
+        return Err("Base URL is required".to_string());
+    }
+    if api_key.is_empty() {
+        return Err("API key is required".to_string());
+    }
+
+    let client = reqwest::Client::new();
+    let mut request = client.get(endpoint).bearer_auth(&api_key);
+    if matches!(kind, AgentSetupKind::ClaudeCode) {
+        request = request
+            .header("x-api-key", &api_key)
+            .header("anthropic-version", "2023-06-01");
+    }
+    let response = request.send().await.map_err(|e| e.to_string())?;
+    if !response.status().is_success() {
+        return Err(format!(
+            "Model detection failed: HTTP {}",
+            response.status()
+        ));
+    }
+    let value = response
+        .json::<serde_json::Value>()
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(AgentModels {
+        models: parse_model_ids(value),
+    })
 }
 
 #[tauri::command]
@@ -933,5 +1224,58 @@ mod tests {
     fn resolves_empty_agent_path_to_binary_name_when_path_detection_fails() {
         let resolved = resolve_input_path("", "__aeroric_missing_agent_binary__");
         assert_eq!(resolved, "__aeroric_missing_agent_binary__");
+    }
+
+    #[test]
+    fn builds_codex_agent_script_with_isolated_config() {
+        let draft = AgentSetupDraft {
+            id: "gpt55".to_string(),
+            label: "GPT55".to_string(),
+            kind: AgentSetupKind::Codex,
+            base_url: "https://example.com/v1/".to_string(),
+            api_key: "sk-test".to_string(),
+            model: "gpt-5.5".to_string(),
+        };
+
+        let script = build_agent_script(&draft);
+
+        assert!(script.contains("CODEX_HOME"));
+        assert!(script.contains("base_url = \"https://example.com/v1\""));
+        assert!(script.contains("model = \"gpt-5.5\""));
+        assert!(script.contains("env_key = \"ANTHROPIC_API_KEY\""));
+        assert!(script.contains("export ANTHROPIC_API_KEY='sk-test'"));
+    }
+
+    #[test]
+    fn builds_claude_code_agent_script_with_anthropic_env() {
+        let draft = AgentSetupDraft {
+            id: "agentrouter".to_string(),
+            label: "AgentRouter".to_string(),
+            kind: AgentSetupKind::ClaudeCode,
+            base_url: "https://agentrouter.org".to_string(),
+            api_key: "sk-test".to_string(),
+            model: "claude-opus-4-8".to_string(),
+        };
+
+        let script = build_agent_script(&draft);
+
+        assert!(script.contains("CLAUDE_CONFIG_DIR"));
+        assert!(script.contains("export ANTHROPIC_BASE_URL='https://agentrouter.org'"));
+        assert!(script.contains("export ANTHROPIC_AUTH_TOKEN='sk-test'"));
+        assert!(script.contains("selected_model='claude-opus-4-8'"));
+        assert!(script.contains("exec claude --model \"$selected_model\" \"$@\""));
+    }
+
+    #[test]
+    fn parses_openai_style_model_ids() {
+        let value = serde_json::json!({
+            "data": [
+                { "id": "z-model" },
+                { "id": "a-model" },
+                { "id": "a-model" }
+            ]
+        });
+
+        assert_eq!(parse_model_ids(value), vec!["a-model", "z-model"]);
     }
 }

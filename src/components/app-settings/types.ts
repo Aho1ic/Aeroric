@@ -42,6 +42,21 @@ export interface AgentVersions {
   codex_version: string;
 }
 
+export type AgentSetupKind = "codex" | "claude_code";
+
+export interface AgentSetupDraft {
+  id: string;
+  label: string;
+  kind: AgentSetupKind;
+  base_url: string;
+  api_key: string;
+  model: string;
+}
+
+export interface AgentModels {
+  models: string[];
+}
+
 export type AgentKey = AgentType;
 
 export type NavSection = "application" | "agents" | "about";

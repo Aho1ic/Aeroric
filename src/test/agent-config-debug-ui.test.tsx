@@ -2,6 +2,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { invoke } from "@tauri-apps/api/core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { AddAgentPanel } from "../components/app-settings/AddAgentPanel";
 import { AgentConfigPanel } from "../components/app-settings/AgentConfigPanel";
 import { DebugPanel } from "../components/debug/DebugPanel";
 import { I18nProvider } from "../i18n";
@@ -83,6 +84,23 @@ function renderDebugPanel() {
   );
 }
 
+function renderAddAgentPanel() {
+  vi.mocked(invoke).mockImplementation((command) => {
+    if (command === "detect_agent_models") {
+      return Promise.resolve({ models: ["gpt-5.5", "gpt-5.1"] });
+    }
+    if (command === "setup_agent_profile") {
+      return Promise.resolve(appSettings);
+    }
+    return Promise.resolve(undefined);
+  });
+  render(
+    <I18nProvider>
+      <AddAgentPanel onSaved={vi.fn()} />
+    </I18nProvider>,
+  );
+}
+
 describe("Agent config and debug panel UI", () => {
   beforeEach(() => {
     vi.mocked(invoke).mockReset();
@@ -142,5 +160,34 @@ describe("Agent config and debug panel UI", () => {
         flexShrink: "0",
       });
     }
+  });
+
+  it("creates a generated Codex agent from base URL, API key, and detected model", async () => {
+    const user = userEvent.setup();
+    renderAddAgentPanel();
+
+    await user.type(screen.getByLabelText("Agent Name"), "GPT55");
+    await user.type(screen.getByLabelText("Base URL"), "https://example.com/v1");
+    await user.type(screen.getByLabelText("API Key"), "sk-test");
+    await user.click(screen.getByRole("button", { name: /Detect Models/i }));
+
+    await screen.findByText("2 models detected");
+    await user.click(screen.getByRole("button", { name: /^Add Agent$/i }));
+
+    expect(invoke).toHaveBeenCalledWith("detect_agent_models", {
+      kind: "codex",
+      baseUrl: "https://example.com/v1",
+      apiKey: "sk-test",
+    });
+    expect(invoke).toHaveBeenCalledWith("setup_agent_profile", {
+      draft: {
+        id: "gpt55",
+        label: "GPT55",
+        kind: "codex",
+        base_url: "https://example.com/v1",
+        api_key: "sk-test",
+        model: "gpt-5.5",
+      },
+    });
   });
 });
