@@ -1219,6 +1219,7 @@ mod tests {
             identity_file: None,
             password: Some("secret".to_string()),
             remote_path: None,
+            auto_sudo_with_password: false,
             created_at: 1,
             last_connected_at: None,
         };
@@ -1258,6 +1259,7 @@ mod tests {
             identity_file: None,
             password: None,
             remote_path: None,
+            auto_sudo_with_password: false,
             created_at: 1,
             last_connected_at: None,
         };

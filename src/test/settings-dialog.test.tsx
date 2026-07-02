@@ -39,6 +39,8 @@ function projectConfig(formatOnSave: boolean) {
     },
     editor: {
       format_on_save: formatOnSave,
+      file_browser_sort: { field: "modified", direction: "desc" },
+      sftp_sort: { field: "modified", direction: "desc" },
     },
   };
 }
@@ -86,8 +88,38 @@ describe("SettingsDialog", () => {
         },
         editor: {
           format_on_save: true,
+          file_browser_sort: { field: "modified", direction: "desc" },
+          sftp_sort: { field: "modified", direction: "desc" },
         },
       },
+    });
+  });
+
+  it("saves default file browser and SFTP sort preferences", async () => {
+    const onClose = vi.fn();
+    vi.mocked(invoke).mockImplementation((command) => {
+      if (command === "read_project_config") return Promise.resolve(projectConfig(false));
+      if (command === "write_project_config") return Promise.resolve(undefined);
+      return Promise.reject(new Error(`unexpected command: ${command}`));
+    });
+
+    renderSettingsDialog(onClose);
+
+    await screen.findByRole("checkbox", { name: /Format on save/ });
+    await userEvent.selectOptions(screen.getByLabelText("File browser default sort"), "name:asc");
+    await userEvent.selectOptions(screen.getByLabelText("SFTP default sort"), "modified:asc");
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    expect(vi.mocked(invoke)).toHaveBeenCalledWith("write_project_config", {
+      projectPath: "/tmp/aeroric",
+      config: expect.objectContaining({
+        editor: {
+          format_on_save: false,
+          file_browser_sort: { field: "name", direction: "asc" },
+          sftp_sort: { field: "modified", direction: "asc" },
+        },
+      }),
     });
   });
 
@@ -122,7 +154,7 @@ describe("SettingsDialog", () => {
       connection,
       remoteProjectPath: "/srv/app",
       config: expect.objectContaining({
-        editor: { format_on_save: true },
+        editor: expect.objectContaining({ format_on_save: true }),
       }),
     });
   });
@@ -148,7 +180,9 @@ describe("SettingsDialog", () => {
       await vi.advanceTimersByTimeAsync(REMOTE_IDE_COMMAND_TIMEOUT_MS);
     });
 
-    expect(screen.getByText(/remote_read_project_config.*timed out after 60s/i)).toBeInTheDocument();
+    expect(
+      screen.getByText(/remote_read_project_config.*timed out after 60s/i),
+    ).toBeInTheDocument();
   });
 
   it("shows a visible timeout when remote project settings saving hangs", async () => {
@@ -176,7 +210,9 @@ describe("SettingsDialog", () => {
       await vi.advanceTimersByTimeAsync(REMOTE_IDE_COMMAND_TIMEOUT_MS);
     });
 
-    expect(screen.getByText(/remote_write_project_config.*timed out after 60s/i)).toBeInTheDocument();
+    expect(
+      screen.getByText(/remote_write_project_config.*timed out after 60s/i),
+    ).toBeInTheDocument();
   });
 
   it("shows remote project settings save failures without an Error prefix", async () => {

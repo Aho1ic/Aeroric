@@ -37,6 +37,7 @@ export interface SshConnection {
   identityFile?: string;
   password?: string;
   remotePath?: string;
+  autoSudoWithPassword?: boolean;
   createdAt: number;
   lastConnectedAt?: number;
 }

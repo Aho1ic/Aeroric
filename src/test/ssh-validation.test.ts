@@ -34,6 +34,7 @@ describe("validateSshConnectionDraft", () => {
         password: "",
         remotePath: "",
         group: "",
+        autoSudoWithPassword: false,
       }),
     ).toEqual({
       name: "Name is required.",
@@ -57,6 +58,7 @@ describe("normalizeSshConnectionDraft", () => {
           password: " ",
           remotePath: " /srv/app ",
           group: " 生产 ",
+          autoSudoWithPassword: true,
         },
         123,
         456,
@@ -69,6 +71,7 @@ describe("normalizeSshConnectionDraft", () => {
       username: "deploy",
       remotePath: "/srv/app",
       group: "生产",
+      autoSudoWithPassword: true,
       createdAt: 456,
     });
   });
@@ -85,6 +88,7 @@ describe("normalizeSshConnectionDraft", () => {
           password: " secret ",
           remotePath: "",
           group: "",
+          autoSudoWithPassword: false,
         },
         123,
         456,
@@ -102,6 +106,7 @@ describe("normalizeSshConnectionDraft", () => {
           password: " ",
           remotePath: "",
           group: "",
+          autoSudoWithPassword: false,
         },
         123,
         456,
@@ -121,6 +126,7 @@ describe("normalizeSshConnectionDraft", () => {
           password: "",
           remotePath: "",
           group: "",
+          autoSudoWithPassword: false,
         },
         123,
         456,

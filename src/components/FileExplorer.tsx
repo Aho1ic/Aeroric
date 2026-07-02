@@ -6,7 +6,7 @@ import {
 } from "../hooks/useCancellableInvoke";
 import { invoke } from "@tauri-apps/api/core";
 import { confirm } from "@tauri-apps/plugin-dialog";
-import { ArrowDown, ArrowUp, RotateCcw } from "lucide-react";
+import { ArrowDown, ArrowUp, RotateCcw, Search, X } from "lucide-react";
 import s from "../styles";
 import { useToast } from "./Toast";
 import { useI18n } from "../i18n";
@@ -26,6 +26,7 @@ import type { SftpEndpoint } from "./sftp/sftpTypes";
 import {
   type FileSortDirection,
   type FileSortField,
+  normalizeFileSortPreference,
   isSqliteDatabaseFile,
   sortFileEntries,
 } from "./file-explorer/fileEntryUtils";
@@ -72,6 +73,26 @@ function sortTreeNodes(
   });
 }
 
+function filterTreeNodesByName(nodes: TreeNode[], query: string): TreeNode[] {
+  const normalizedQuery = query.trim().toLowerCase();
+  if (!normalizedQuery) return nodes;
+
+  const filterNode = (node: TreeNode): TreeNode | null => {
+    const filteredChildren = node.children?.map(filterNode).filter(Boolean) as
+      | TreeNode[]
+      | undefined;
+    const matches = node.name.toLowerCase().includes(normalizedQuery);
+    if (!matches && (!filteredChildren || filteredChildren.length === 0)) return null;
+    return {
+      ...node,
+      expanded: filteredChildren && filteredChildren.length > 0 ? true : node.expanded,
+      children: filteredChildren ?? node.children,
+    };
+  };
+
+  return nodes.map(filterNode).filter(Boolean) as TreeNode[];
+}
+
 export function FileExplorer({
   projectPath,
   projectName,
@@ -112,6 +133,8 @@ export function FileExplorer({
   const [renamingValue, setRenamingValue] = useState("");
   const [sortField, setSortField] = useState<FileSortField>("modified");
   const [sortDirection, setSortDirection] = useState<FileSortDirection>("desc");
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
   const [previewTarget, setPreviewTarget] = useState<{ path: string; isDir: boolean } | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const renameInputRef = useRef<HTMLInputElement>(null);
@@ -213,6 +236,29 @@ export function FileExplorer({
     setNodes((prev) => sortTreeNodes(prev, sortField, sortDirection));
   }, [sortDirection, sortField]);
 
+  useEffect(() => {
+    let cancelled = false;
+    const command = remote ? "remote_read_project_config" : "read_project_config";
+    const args = remote
+      ? { connection: remote.connection, remoteProjectPath: remote.projectPath }
+      : { projectPath };
+
+    invoke<{ editor?: { file_browser_sort?: unknown } }>(command, args)
+      .then((config) => {
+        if (cancelled) return;
+        const preference = normalizeFileSortPreference(config.editor?.file_browser_sort);
+        setSortField(preference.field);
+        setSortDirection(preference.direction);
+      })
+      .catch((error) => {
+        console.warn("Failed to read file explorer sort preference", error);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [projectPath, remote]);
+
   const readEntries = useCallback(
     (path: string) =>
       remote
@@ -297,9 +343,13 @@ export function FileExplorer({
     return () => ro.disconnect();
   }, []);
 
+  const visibleNodes = useMemo(
+    () => filterTreeNodesByName(nodes, searchQuery),
+    [nodes, searchQuery],
+  );
   const flat = useMemo(
-    () => flattenVisible(nodes, projectPath, creating),
-    [nodes, projectPath, creating],
+    () => flattenVisible(visibleNodes, projectPath, creating),
+    [visibleNodes, projectPath, creating],
   );
   const selectedNode = useMemo(
     () => (selectedPath ? findNode(nodes, selectedPath) : null),
@@ -921,6 +971,30 @@ export function FileExplorer({
       {/* Header */}
       <div style={s.fileExplorerHeader}>
         <span style={s.fileExplorerHeaderTitle}>{t("file.files")}</span>
+        {searchOpen && (
+          <div style={s.fileExplorerSearchOverlay}>
+            <Search size={13} />
+            <input
+              aria-label={t("file.searchFiles")}
+              value={searchQuery}
+              onChange={(event) => setSearchQuery(event.target.value)}
+              placeholder={t("file.searchPlaceholder")}
+              style={s.fileExplorerSearchInput}
+              autoFocus
+            />
+            <button
+              type="button"
+              aria-label={t("common.close")}
+              style={s.fileExplorerSearchCloseBtn}
+              onClick={() => {
+                setSearchQuery("");
+                setSearchOpen(false);
+              }}
+            >
+              <X size={13} />
+            </button>
+          </div>
+        )}
         <div style={s.fileExplorerSortControls}>
           <button
             type="button"
@@ -966,6 +1040,14 @@ export function FileExplorer({
         >
           <RotateCcw size={13} />
         </button>
+        <button
+          onClick={() => setSearchOpen(true)}
+          title={t("file.searchFiles")}
+          aria-label={t("file.searchFiles")}
+          style={s.fileExplorerRefreshBtn}
+        >
+          <Search size={13} />
+        </button>
       </div>
       {/* Project root label */}
       <div style={s.fileExplorerRootLabel}>
@@ -1006,7 +1088,7 @@ export function FileExplorer({
           </div>
         ) : flat.length === 0 ? (
           <div onContextMenu={handleEmptyContextMenu} style={s.fileExplorerEmpty}>
-            {t("file.emptyDirectory")}
+            {searchQuery.trim() ? t("file.searchNoResults") : t("file.emptyDirectory")}
           </div>
         ) : (
           <div

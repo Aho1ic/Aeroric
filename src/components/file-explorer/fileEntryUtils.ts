@@ -2,6 +2,15 @@ import type { FsEntry } from "./types";
 
 export type FileSortField = "name" | "modified";
 export type FileSortDirection = "asc" | "desc";
+export type FileSortPreference = {
+  field: FileSortField;
+  direction: FileSortDirection;
+};
+
+export const DEFAULT_FILE_SORT_PREFERENCE: FileSortPreference = {
+  field: "modified",
+  direction: "desc",
+};
 
 export type FileIconKind =
   | "folder"
@@ -88,4 +97,23 @@ export function sortFileEntries<T extends Pick<FsEntry, "name" | "is_dir" | "mod
     }
     return a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" }) * sign;
   });
+}
+
+export function filterFileEntriesByName<T extends Pick<FsEntry, "name">>(
+  entries: T[],
+  query: string,
+): T[] {
+  const normalizedQuery = query.trim().toLowerCase();
+  if (!normalizedQuery) return entries;
+  return entries.filter((entry) => entry.name.toLowerCase().includes(normalizedQuery));
+}
+
+export function normalizeFileSortPreference(value: unknown): FileSortPreference {
+  if (!value || typeof value !== "object") return DEFAULT_FILE_SORT_PREFERENCE;
+  const candidate = value as Partial<FileSortPreference>;
+  const field = candidate.field === "name" || candidate.field === "modified" ? candidate.field : null;
+  const direction =
+    candidate.direction === "asc" || candidate.direction === "desc" ? candidate.direction : null;
+  if (!field || !direction) return DEFAULT_FILE_SORT_PREFERENCE;
+  return { field, direction };
 }

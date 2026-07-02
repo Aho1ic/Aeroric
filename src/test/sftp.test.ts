@@ -7,6 +7,8 @@ import {
 import {
   defaultSftpPathForEndpoint,
   flattenSftpTreeEntries,
+  filterSftpTreeEntriesByName,
+  normalizeSftpSortPreference,
   pruneExpandedPathsForFolderSelection,
   sftpBreadcrumbSegments,
   sftpClickAction,
@@ -166,6 +168,47 @@ describe("sftp panel helpers", () => {
       "README.md",
       "z.py",
     ]);
+  });
+
+  it("filters SFTP entries and keeps matching descendants visible under folders", () => {
+    const entries: SftpEntry[] = [
+      { name: "src", path: "/repo/src", isDir: true },
+      { name: "README.md", path: "/repo/README.md", isDir: false },
+    ];
+    const children = new Map<string, SftpEntry[]>([
+      [
+        "/repo/src",
+        [
+          { name: "components", path: "/repo/src/components", isDir: true },
+          { name: "main.py", path: "/repo/src/main.py", isDir: false },
+        ],
+      ],
+      [
+        "/repo/src/components",
+        [{ name: "Button.tsx", path: "/repo/src/components/Button.tsx", isDir: false }],
+      ],
+    ]);
+
+    const filtered = filterSftpTreeEntriesByName(entries, children, "button");
+
+    expect(filtered.entries.map((entry) => entry.path)).toEqual(["/repo/src"]);
+    expect(filtered.childrenByPath.get("/repo/src")?.map((entry) => entry.path)).toEqual([
+      "/repo/src/components",
+    ]);
+    expect(filtered.childrenByPath.get("/repo/src/components")?.map((entry) => entry.path)).toEqual(
+      ["/repo/src/components/Button.tsx"],
+    );
+  });
+
+  it("normalizes SFTP sort preferences with modification descending fallback", () => {
+    expect(normalizeSftpSortPreference({ field: "name", direction: "asc" })).toEqual({
+      field: "name",
+      direction: "asc",
+    });
+    expect(normalizeSftpSortPreference({ field: "other", direction: "up" })).toEqual({
+      field: "modified",
+      direction: "desc",
+    });
   });
 
   it("uses specific icon kinds for database, model, video, and wheel files", () => {

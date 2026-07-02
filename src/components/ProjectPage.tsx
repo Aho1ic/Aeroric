@@ -1,4 +1,13 @@
-import { lazy, Suspense, useMemo, useState, useCallback, useEffect, useRef } from "react";
+import {
+  lazy,
+  Suspense,
+  useMemo,
+  useState,
+  useCallback,
+  useEffect,
+  useRef,
+  type ReactNode,
+} from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type {
@@ -81,6 +90,7 @@ import {
   getCommandPaletteIdeTools,
   getProjectTopRightIdeTools,
   type IdeToolAvailability,
+  type IdeToolWithAvailability,
 } from "../plugins/ideToolRegistry";
 import {
   debugBreakpointFileForProject,
@@ -94,6 +104,123 @@ import { inferTestProfileForFile, type TestRunPanelRequest } from "./tests/testE
 import s from "../styles";
 
 const PROJECT_ACTION_LOG_STORAGE_PREFIX = "aeroric:project-action-log:";
+
+function IdePanelShell({
+  tools,
+  activePanel,
+  width,
+  onSelectPanel,
+  t,
+  children,
+}: {
+  tools: IdeToolWithAvailability[];
+  activePanel: string;
+  width: number;
+  onSelectPanel: (panel: IdeToolWithAvailability["panel"]) => void;
+  t: (key: string) => string;
+  children: ReactNode;
+}) {
+  const activeTool = tools.find((tool) => tool.panel === activePanel);
+
+  return (
+    <div
+      style={{
+        width,
+        height: "100%",
+        minHeight: 0,
+        display: "flex",
+        flexDirection: "column",
+        overflow: "hidden",
+        background: "var(--bg-panel)",
+      }}
+    >
+      <div
+        style={{
+          flexShrink: 0,
+          minHeight: 40,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: 8,
+          padding: "0 8px",
+          borderBottom: "1px solid var(--border-dim)",
+          background: "color-mix(in srgb, var(--bg-sidebar) 94%, transparent)",
+        }}
+      >
+        <div
+          role="tablist"
+          aria-label="IDE panels"
+          style={{
+            minWidth: 0,
+            display: "flex",
+            alignItems: "center",
+            gap: 2,
+            overflowX: "auto",
+          }}
+        >
+          {tools.map((tool) => {
+            const active = tool.panel === activePanel;
+            return (
+              <button
+                key={tool.id}
+                type="button"
+                role="tab"
+                aria-selected={active}
+                title={t(tool.titleKey)}
+                onClick={() => onSelectPanel(tool.panel)}
+                style={{
+                  height: 30,
+                  minWidth: 34,
+                  maxWidth: 136,
+                  border: "1px solid transparent",
+                  borderRadius: 6,
+                  background: active ? "var(--bg-selected)" : "transparent",
+                  color: active ? "var(--text-primary)" : "var(--text-muted)",
+                  display: "inline-flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  gap: 6,
+                  padding: "0 8px",
+                  fontSize: 11.5,
+                  fontWeight: active ? 700 : 600,
+                  cursor: "pointer",
+                  whiteSpace: "nowrap",
+                  flexShrink: 0,
+                }}
+              >
+                {renderIdeToolIcon(tool.icon, 14)}
+                <span
+                  style={{
+                    minWidth: 0,
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                  }}
+                >
+                  {t(tool.titleKey)}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+        <div
+          style={{
+            flexShrink: 0,
+            maxWidth: 126,
+            color: "var(--text-hint)",
+            fontSize: 11,
+            fontWeight: 700,
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+          }}
+        >
+          {activeTool ? t(activeTool.titleKey) : ""}
+        </div>
+      </div>
+      <div style={{ flex: 1, minHeight: 0, overflow: "hidden", display: "flex" }}>{children}</div>
+    </div>
+  );
+}
 
 const loadFileViewer = () =>
   import("./FileViewer").then((module) => ({ default: module.FileViewer }));
@@ -648,6 +775,17 @@ export function ProjectPage({
         ? { connection: remoteConnection, projectPath: projectLocation.remotePath }
         : undefined,
     [projectLocation, remoteConnection],
+  );
+  const sftpProjectConfig = useMemo(
+    () =>
+      remoteFileContext
+        ? {
+            kind: "ssh" as const,
+            connection: remoteFileContext.connection,
+            projectPath: remoteFileContext.projectPath,
+          }
+        : { kind: "local" as const, projectPath: project.path },
+    [project.path, remoteFileContext],
   );
   const actionLogSummary = useMemo(() => summarizeProjectActionLog(actionLog), [actionLog]);
   const lspDiagnosticsProjectRoot =
@@ -1401,6 +1539,23 @@ export function ProjectPage({
     !isNotesMode &&
     !taskWorkspaceVisible &&
     (hasEditorGroups || Boolean(openDiff) || topRightPanelActive);
+  const renderTopRightIdePanelShell = (
+    panel: IdeToolWithAvailability["panel"],
+    children: ReactNode,
+  ) => (
+    <IdePanelShell
+      tools={topRightIdeTools}
+      activePanel={panel}
+      width={effectiveRightPanelWidth}
+      t={t}
+      onSelectPanel={(nextPanel) => {
+        setShowShellTerminal(false);
+        openRightPanel(nextPanel);
+      }}
+    >
+      {children}
+    </IdePanelShell>
+  );
 
   useEffect(() => {
     if (rightPanel === "ssh") {
@@ -1842,6 +1997,7 @@ export function ProjectPage({
                     currentSshConnectionId={
                       projectLocation.kind === "ssh" ? projectLocation.connectionId : undefined
                     }
+                    projectConfig={sftpProjectConfig}
                   />
                 ) : isSshMode ? (
                   <SshWorkspace
@@ -2237,81 +2393,106 @@ export function ProjectPage({
               </ErrorBoundary>
             )}
             {visibleRightPanel === "problems" && (
-              <ErrorBoundary
-                label="Problems"
-                onError={(error) => showActionFailure("problems", t("problems.title"), error)}
-              >
-                <ProblemsPanel
-                  projectPath={project.path}
-                  width={effectiveRightPanelWidth}
-                  onOpenDiagnostic={handleDiagnosticOpen}
-                  onCreateAgentTask={handleCreateProblemsAgentTask}
-                  onDiagnosticsChange={remoteFileContext ? undefined : setEditorDiagnostics}
-                  remote={remoteFileContext}
-                />
-              </ErrorBoundary>
+              <>
+                {renderTopRightIdePanelShell(
+                  "problems",
+                  <ErrorBoundary
+                    label="Problems"
+                    onError={(error) => showActionFailure("problems", t("problems.title"), error)}
+                  >
+                    <ProblemsPanel
+                      projectPath={project.path}
+                      width={effectiveRightPanelWidth}
+                      onOpenDiagnostic={handleDiagnosticOpen}
+                      onCreateAgentTask={handleCreateProblemsAgentTask}
+                      onDiagnosticsChange={remoteFileContext ? undefined : setEditorDiagnostics}
+                      remote={remoteFileContext}
+                    />
+                  </ErrorBoundary>,
+                )}
+              </>
             )}
             {visibleRightPanel === "tests" && (
-              <ErrorBoundary
-                label="Tests"
-                onError={(error) => showActionFailure("tests", t("tests.title"), error)}
-              >
-                <TestExplorerPanel
-                  projectPath={project.path}
-                  width={effectiveRightPanelWidth}
-                  onOpenFailure={handleTestFailureOpen}
-                  onCreateAgentTask={handleCreateProblemsAgentTask}
-                  onTestRunResult={handleTestRunResult}
-                  runRequest={testRunRequest}
-                  remote={remoteFileContext}
-                />
-              </ErrorBoundary>
+              <>
+                {renderTopRightIdePanelShell(
+                  "tests",
+                  <ErrorBoundary
+                    label="Tests"
+                    onError={(error) => showActionFailure("tests", t("tests.title"), error)}
+                  >
+                    <TestExplorerPanel
+                      projectPath={project.path}
+                      width={effectiveRightPanelWidth}
+                      onOpenFailure={handleTestFailureOpen}
+                      onCreateAgentTask={handleCreateProblemsAgentTask}
+                      onTestRunResult={handleTestRunResult}
+                      runRequest={testRunRequest}
+                      remote={remoteFileContext}
+                    />
+                  </ErrorBoundary>,
+                )}
+              </>
             )}
             {visibleRightPanel === "run" && (
-              <ErrorBoundary
-                label="Run"
-                onError={(error) => showActionFailure("run", t("run.title"), error)}
-              >
-                <RunConfigurationsPanel
-                  projectPath={fileRootPath}
-                  width={effectiveRightPanelWidth}
-                  editorBreakpoints={remoteFileContext ? [] : editorDebugBreakpoints}
-                  onDebugStarted={handleRunDebugStarted}
-                  onRunProcessChanged={handleRunProcessChanged}
-                  draftRequest={runDraftRequest}
-                  remote={remoteFileContext}
-                />
-              </ErrorBoundary>
+              <>
+                {renderTopRightIdePanelShell(
+                  "run",
+                  <ErrorBoundary
+                    label="Run"
+                    onError={(error) => showActionFailure("run", t("run.title"), error)}
+                  >
+                    <RunConfigurationsPanel
+                      projectPath={fileRootPath}
+                      width={effectiveRightPanelWidth}
+                      editorBreakpoints={remoteFileContext ? [] : editorDebugBreakpoints}
+                      onDebugStarted={handleRunDebugStarted}
+                      onRunProcessChanged={handleRunProcessChanged}
+                      draftRequest={runDraftRequest}
+                      remote={remoteFileContext}
+                    />
+                  </ErrorBoundary>,
+                )}
+              </>
             )}
             {visibleRightPanel === "preview" && (
-              <ErrorBoundary
-                label="Preview"
-                onError={(error) => showActionFailure("preview", t("preview.title"), error)}
-              >
-                <WebPreviewPanel
-                  projectPath={fileRootPath}
-                  width={effectiveRightPanelWidth}
-                  runProcessTarget={launchedRunProcess}
-                  remote={remoteFileContext}
-                />
-              </ErrorBoundary>
+              <>
+                {renderTopRightIdePanelShell(
+                  "preview",
+                  <ErrorBoundary
+                    label="Preview"
+                    onError={(error) => showActionFailure("preview", t("preview.title"), error)}
+                  >
+                    <WebPreviewPanel
+                      projectPath={fileRootPath}
+                      width={effectiveRightPanelWidth}
+                      runProcessTarget={launchedRunProcess}
+                      remote={remoteFileContext}
+                    />
+                  </ErrorBoundary>,
+                )}
+              </>
             )}
             {visibleRightPanel === "debug" && (
-              <ErrorBoundary
-                label="Debug"
-                onError={(error) => showActionFailure("debug", t("debug.title"), error)}
-              >
-                <DebugPanel
-                  projectPath={fileRootPath}
-                  width={effectiveRightPanelWidth}
-                  onOpenLocation={handleDebugLocationOpen}
-                  launchedSession={launchedDebugSession}
-                  editorBreakpoints={remoteFileContext ? [] : editorDebugBreakpoints}
-                  externalError={editorTestDebugError}
-                  draftRequest={debugDraftRequest}
-                  remote={remoteFileContext}
-                />
-              </ErrorBoundary>
+              <>
+                {renderTopRightIdePanelShell(
+                  "debug",
+                  <ErrorBoundary
+                    label="Debug"
+                    onError={(error) => showActionFailure("debug", t("debug.title"), error)}
+                  >
+                    <DebugPanel
+                      projectPath={fileRootPath}
+                      width={effectiveRightPanelWidth}
+                      onOpenLocation={handleDebugLocationOpen}
+                      launchedSession={launchedDebugSession}
+                      editorBreakpoints={remoteFileContext ? [] : editorDebugBreakpoints}
+                      externalError={editorTestDebugError}
+                      draftRequest={debugDraftRequest}
+                      remote={remoteFileContext}
+                    />
+                  </ErrorBoundary>,
+                )}
+              </>
             )}
             <div
               style={{

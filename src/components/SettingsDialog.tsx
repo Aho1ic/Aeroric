@@ -2,13 +2,28 @@ import { useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import * as RadixSelect from "@radix-ui/react-select";
 import { X, FolderOpen, ChevronDown, Check } from "lucide-react";
-import { permissionModeLabel, type PermissionMode, type AgentType, type SshConnection } from "../types";
+import {
+  permissionModeLabel,
+  type PermissionMode,
+  type AgentType,
+  type SshConnection,
+} from "../types";
 import { useAgentOptions } from "../hooks/useAgentOptions";
 import {
   formatInvokeError,
   invokeWithTimeout,
   remoteInvokeOptions,
 } from "../hooks/useCancellableInvoke";
+import {
+  DEFAULT_FILE_SORT_PREFERENCE,
+  normalizeFileSortPreference,
+  type FileSortPreference,
+} from "./file-explorer/fileEntryUtils";
+import {
+  DEFAULT_SFTP_SORT_PREFERENCE,
+  normalizeSftpSortPreference,
+  type SftpSortPreference,
+} from "./sftp/sftpTypes";
 import { useI18n } from "../i18n";
 import s from "../styles";
 import { useTextInputIMEFix } from "./useTextInputIMEFix";
@@ -25,6 +40,8 @@ interface ProjectConfig {
   };
   editor?: {
     format_on_save?: boolean;
+    file_browser_sort?: FileSortPreference;
+    sftp_sort?: SftpSortPreference;
   };
 }
 
@@ -32,6 +49,21 @@ const PERMISSION_MODES: PermissionMode[] = ["ask", "auto_edit", "full_access"];
 const MIN_COMMIT_MESSAGE_TIMEOUT_SECS = 1;
 const MAX_COMMIT_MESSAGE_TIMEOUT_SECS = 120;
 const DEFAULT_COMMIT_MESSAGE_TIMEOUT_SECS = 15;
+const SORT_OPTIONS = [
+  { value: "modified:desc", labelKey: "settings.sort.modifiedDesc" },
+  { value: "modified:asc", labelKey: "settings.sort.modifiedAsc" },
+  { value: "name:asc", labelKey: "settings.sort.nameAsc" },
+  { value: "name:desc", labelKey: "settings.sort.nameDesc" },
+] as const;
+
+function sortPreferenceToValue(preference: FileSortPreference | SftpSortPreference): string {
+  return `${preference.field}:${preference.direction}`;
+}
+
+function sortValueToPreference(value: string): FileSortPreference {
+  const [field, direction] = value.split(":");
+  return normalizeFileSortPreference({ field, direction });
+}
 
 type NavKey = "project";
 
@@ -118,6 +150,10 @@ function ProjectSettings({
     String(DEFAULT_COMMIT_MESSAGE_TIMEOUT_SECS),
   );
   const [formatOnSave, setFormatOnSave] = useState(false);
+  const [fileBrowserSort, setFileBrowserSort] = useState(
+    sortPreferenceToValue(DEFAULT_FILE_SORT_PREFERENCE),
+  );
+  const [sftpSort, setSftpSort] = useState(sortPreferenceToValue(DEFAULT_SFTP_SORT_PREFERENCE));
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const promptPrefixImeFix = useTextInputIMEFix<HTMLTextAreaElement>(setPromptPrefix);
@@ -147,6 +183,10 @@ function ProjectSettings({
           ),
         );
         setFormatOnSave(Boolean(c.editor?.format_on_save));
+        setFileBrowserSort(
+          sortPreferenceToValue(normalizeFileSortPreference(c.editor?.file_browser_sort)),
+        );
+        setSftpSort(sortPreferenceToValue(normalizeSftpSortPreference(c.editor?.sftp_sort)));
       })
       .catch((e) => setError(formatInvokeError(e)));
   }, [configCommandContext, remote]);
@@ -212,6 +252,8 @@ function ProjectSettings({
           editor: {
             ...(config.editor ?? {}),
             format_on_save: formatOnSave,
+            file_browser_sort: sortValueToPreference(fileBrowserSort),
+            sftp_sort: normalizeSftpSortPreference(sortValueToPreference(sftpSort)),
           },
         },
       });
@@ -308,6 +350,42 @@ function ProjectSettings({
                     </span>
                   </span>
                 </label>
+              </div>
+              <div style={s.modalField}>
+                <label style={s.modalLabel}>
+                  {t("settings.fileBrowserSort")}
+                  <span style={s.modalLabelHint}>{t("settings.fileBrowserSortHint")}</span>
+                </label>
+                <select
+                  aria-label="File browser default sort"
+                  value={fileBrowserSort}
+                  onChange={(event) => setFileBrowserSort(event.target.value)}
+                  style={s.modalInput}
+                >
+                  {SORT_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {t(option.labelKey)}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div style={s.modalField}>
+                <label style={s.modalLabel}>
+                  {t("settings.sftpSort")}
+                  <span style={s.modalLabelHint}>{t("settings.sftpSortHint")}</span>
+                </label>
+                <select
+                  aria-label="SFTP default sort"
+                  value={sftpSort}
+                  onChange={(event) => setSftpSort(event.target.value)}
+                  style={s.modalInput}
+                >
+                  {SORT_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {t(option.labelKey)}
+                    </option>
+                  ))}
+                </select>
               </div>
             </div>
 

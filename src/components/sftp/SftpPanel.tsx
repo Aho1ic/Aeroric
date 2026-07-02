@@ -1,4 +1,5 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import * as Select from "@radix-ui/react-select";
 import { confirm } from "@tauri-apps/plugin-dialog";
 import {
@@ -24,6 +25,7 @@ import {
   Pencil,
   Package,
   RefreshCw,
+  Search,
   Server,
   Trash2,
   Video,
@@ -43,7 +45,10 @@ import {
 import { SftpPreview } from "./SftpPreview";
 import {
   defaultSftpPathForEndpoint,
+  DEFAULT_SFTP_SORT_PREFERENCE,
+  filterSftpTreeEntriesByName,
   flattenSftpTreeEntries,
+  normalizeSftpSortPreference,
   pruneExpandedPathsForFolderSelection,
   sftpBreadcrumbSegments,
   sftpClickAction,
@@ -59,6 +64,7 @@ import {
   type SftpOperation,
   type SftpSortDirection,
   type SftpSortField,
+  type SftpSortPreference,
 } from "./sftpTypes";
 import s from "../../styles";
 
@@ -80,6 +86,10 @@ type PaneState = {
   sortField: SftpSortField;
   sortDirection: SftpSortDirection;
 };
+
+type SftpProjectConfigContext =
+  | { kind: "local"; projectPath: string }
+  | { kind: "ssh"; connection: SshConnection; projectPath: string };
 
 type DragPayload = {
   side: PaneSide;
@@ -144,7 +154,10 @@ function endpointFromStorageValue(
   };
 }
 
-function makeInitialPane(endpoint: SftpEndpoint): PaneState {
+function makeInitialPane(
+  endpoint: SftpEndpoint,
+  sortPreference: SftpSortPreference = DEFAULT_SFTP_SORT_PREFERENCE,
+): PaneState {
   return {
     endpoint,
     entries: [],
@@ -158,8 +171,23 @@ function makeInitialPane(endpoint: SftpEndpoint): PaneState {
     childrenByPath: new Map(),
     loadingChildren: new Set(),
     childErrors: new Map(),
-    sortField: "modified",
-    sortDirection: "desc",
+    sortField: sortPreference.field,
+    sortDirection: sortPreference.direction,
+  };
+}
+
+function applyPaneSortPreference(pane: PaneState, preference: SftpSortPreference): PaneState {
+  return {
+    ...pane,
+    sortField: preference.field,
+    sortDirection: preference.direction,
+    entries: sortSftpEntries(pane.entries, preference.field, preference.direction),
+    childrenByPath: new Map(
+      Array.from(pane.childrenByPath.entries()).map(([path, entries]) => [
+        path,
+        sortSftpEntries(entries, preference.field, preference.direction),
+      ]),
+    ),
   };
 }
 
@@ -207,6 +235,7 @@ export function SftpPanel({
   themeVariant,
   currentSshConnectionId,
   onClose,
+  projectConfig,
 }: {
   sshConnections: SshConnection[];
   localDefaultPath: string;
@@ -215,24 +244,30 @@ export function SftpPanel({
   themeVariant: ThemeVariant;
   currentSshConnectionId?: string;
   onClose?: () => void;
+  projectConfig?: SftpProjectConfigContext;
 }) {
   const { t } = useI18n();
   const { showToast } = useToast();
+  const [defaultSort, setDefaultSort] = useState<SftpSortPreference>(DEFAULT_SFTP_SORT_PREFERENCE);
   const [left, setLeft] = useState(() =>
-    makeInitialPane({ kind: "local", path: localDefaultPath }),
+    makeInitialPane({ kind: "local", path: localDefaultPath }, defaultSort),
   );
   const [right, setRight] = useState(() => {
     const first =
       sshConnections.find((connection) => connection.id === currentSshConnectionId) ??
       sshConnections[0];
-    if (!first) return makeInitialPane({ kind: "local", path: localDefaultPath });
-    return makeInitialPane({
-      kind: "ssh",
-      connectionId: first.id,
-      connectionName: first.name,
-      path: defaultSftpPathForEndpoint("ssh", first, localDefaultPath),
-    });
+    if (!first) return makeInitialPane({ kind: "local", path: localDefaultPath }, defaultSort);
+    return makeInitialPane(
+      {
+        kind: "ssh",
+        connectionId: first.id,
+        connectionName: first.name,
+        path: defaultSftpPathForEndpoint("ssh", first, localDefaultPath),
+      },
+      defaultSort,
+    );
   });
+  const [searchQuery, setSearchQuery] = useState("");
   const [dragPayload, setDragPayload] = useState<DragPayload | null>(null);
   const [clipboardPayload, setClipboardPayload] = useState<ClipboardPayload | null>(null);
   const [focusedSide, setFocusedSide] = useState<PaneSide>("left");
@@ -261,6 +296,33 @@ export function SftpPanel({
     if (side === "left") setLeft(updater);
     else setRight(updater);
   }, []);
+
+  useEffect(() => {
+    if (!projectConfig) return;
+    let cancelled = false;
+    const command =
+      projectConfig.kind === "ssh" ? "remote_read_project_config" : "read_project_config";
+    const args =
+      projectConfig.kind === "ssh"
+        ? { connection: projectConfig.connection, remoteProjectPath: projectConfig.projectPath }
+        : { projectPath: projectConfig.projectPath };
+
+    invoke<{ editor?: { sftp_sort?: unknown } }>(command, args)
+      .then((config) => {
+        if (cancelled) return;
+        const preference = normalizeSftpSortPreference(config.editor?.sftp_sort);
+        setDefaultSort(preference);
+        setLeft((pane) => applyPaneSortPreference(pane, preference));
+        setRight((pane) => applyPaneSortPreference(pane, preference));
+      })
+      .catch((error) => {
+        console.warn("Failed to read SFTP sort preference", error);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [projectConfig]);
 
   const refreshPane = useCallback(
     async (side: PaneSide, pane: PaneState) => {
@@ -341,13 +403,13 @@ export function SftpPanel({
 
   const setEndpoint = useCallback(
     (side: PaneSide, endpoint: SftpEndpoint) => {
-      updatePane(side, () => makeInitialPane(endpoint));
+      updatePane(side, () => makeInitialPane(endpoint, defaultSort));
       setTimeout(() => {
-        const nextPane = makeInitialPane(endpoint);
+        const nextPane = makeInitialPane(endpoint, defaultSort);
         void refreshPane(side, nextPane);
       }, 0);
     },
-    [refreshPane, updatePane],
+    [defaultSort, refreshPane, updatePane],
   );
 
   const goToPath = useCallback(
@@ -365,13 +427,13 @@ export function SftpPanel({
       const pane = panes[side];
       const path = pane.pathInput.trim() || "/";
       const endpoint = { ...pane.endpoint, path };
-      updatePane(side, () => ({ ...makeInitialPane(endpoint), configured: true }));
+      updatePane(side, () => ({ ...makeInitialPane(endpoint, defaultSort), configured: true }));
       setTimeout(() => {
-        const nextPane = { ...makeInitialPane(endpoint), configured: true };
+        const nextPane = { ...makeInitialPane(endpoint, defaultSort), configured: true };
         void refreshPane(side, nextPane);
       }, 0);
     },
-    [panes, refreshPane, updatePane],
+    [defaultSort, panes, refreshPane, updatePane],
   );
 
   const selectEntry = useCallback(
@@ -654,10 +716,18 @@ export function SftpPanel({
     const pane = panes[side];
     const opposite: PaneSide = side === "left" ? "right" : "left";
     const selectedName = pane.selectedPath ? sftpFileName(pane.selectedPath) : null;
-    const flattenedEntries = flattenSftpTreeEntries(
+    const filteredTree = filterSftpTreeEntriesByName(
       pane.entries,
-      pane.expandedPaths,
       pane.childrenByPath,
+      searchQuery,
+    );
+    const expandedPaths = searchQuery.trim()
+      ? new Set([...pane.expandedPaths, ...filteredTree.childrenByPath.keys()])
+      : pane.expandedPaths;
+    const flattenedEntries = flattenSftpTreeEntries(
+      filteredTree.entries,
+      expandedPaths,
+      filteredTree.childrenByPath,
       pane.sortField,
       pane.sortDirection,
     );
@@ -927,8 +997,10 @@ export function SftpPanel({
               </div>
               {pane.loading && <div className="sftp-empty">{t("common.loading")}</div>}
               {!pane.loading && pane.error && <div className="sftp-empty error">{pane.error}</div>}
-              {!pane.loading && !pane.error && pane.entries.length === 0 && (
-                <div className="sftp-empty">{t("file.emptyDirectory")}</div>
+              {!pane.loading && !pane.error && flattenedEntries.length === 0 && (
+                <div className="sftp-empty">
+                  {searchQuery.trim() ? t("file.searchNoResults") : t("file.emptyDirectory")}
+                </div>
               )}
               {!pane.loading &&
                 !pane.error &&
@@ -1073,6 +1145,26 @@ export function SftpPanel({
             </button>
           )}
         </div>
+      </div>
+      <div className="sftp-search-bar">
+        <Search size={14} />
+        <input
+          value={searchQuery}
+          onChange={(event) => setSearchQuery(event.target.value)}
+          placeholder={t("sftp.searchPlaceholder")}
+          aria-label={t("sftp.searchPlaceholder")}
+          className="sftp-search-input"
+        />
+        {searchQuery && (
+          <button
+            type="button"
+            className="sftp-search-clear"
+            aria-label={t("common.close")}
+            onClick={() => setSearchQuery("")}
+          >
+            <X size={13} />
+          </button>
+        )}
       </div>
       <div className="sftp-panes">
         {renderPane("left")}

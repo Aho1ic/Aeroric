@@ -29,6 +29,9 @@ commit_message_timeout_secs = 15
 [editor]
 # Format editable local files after saving
 format_on_save = false
+# Default sort order for the file browser and SFTP panels
+file_browser_sort = { field = "modified", direction = "desc" }
+sftp_sort = { field = "modified", direction = "desc" }
 "#;
 
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
@@ -55,10 +58,29 @@ fn default_commit_message_timeout_secs() -> u64 {
     DEFAULT_COMMIT_MESSAGE_TIMEOUT_SECS
 }
 
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
+pub struct SortPreferenceConfig {
+    pub field: String,
+    pub direction: String,
+}
+
+impl Default for SortPreferenceConfig {
+    fn default() -> Self {
+        SortPreferenceConfig {
+            field: "modified".to_string(),
+            direction: "desc".to_string(),
+        }
+    }
+}
+
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone, Default)]
 pub struct EditorConfig {
     #[serde(default)]
     pub format_on_save: bool,
+    #[serde(default)]
+    pub file_browser_sort: SortPreferenceConfig,
+    #[serde(default)]
+    pub sftp_sort: SortPreferenceConfig,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
@@ -340,9 +362,23 @@ mod tests {
     #[test]
     fn default_project_config_disables_format_on_save() {
         assert!(!ProjectConfig::default().editor.format_on_save);
+        assert_eq!(
+            ProjectConfig::default().editor.file_browser_sort.field,
+            "modified"
+        );
+        assert_eq!(
+            ProjectConfig::default().editor.file_browser_sort.direction,
+            "desc"
+        );
+        assert_eq!(ProjectConfig::default().editor.sftp_sort.field, "modified");
+        assert_eq!(ProjectConfig::default().editor.sftp_sort.direction, "desc");
 
         let config: ProjectConfig = toml::from_str(DEFAULT_CONFIG).unwrap();
         assert!(!config.editor.format_on_save);
+        assert_eq!(config.editor.file_browser_sort.field, "modified");
+        assert_eq!(config.editor.file_browser_sort.direction, "desc");
+        assert_eq!(config.editor.sftp_sort.field, "modified");
+        assert_eq!(config.editor.sftp_sort.direction, "desc");
     }
 
     #[test]
@@ -360,11 +396,17 @@ commit_message_timeout_secs = 15
 
 [editor]
 format_on_save = true
+file_browser_sort = { field = "name", direction = "asc" }
+sftp_sort = { field = "modified", direction = "asc" }
 "#,
         )
         .unwrap();
 
         assert!(config.editor.format_on_save);
+        assert_eq!(config.editor.file_browser_sort.field, "name");
+        assert_eq!(config.editor.file_browser_sort.direction, "asc");
+        assert_eq!(config.editor.sftp_sort.field, "modified");
+        assert_eq!(config.editor.sftp_sort.direction, "asc");
     }
 
     #[test]
@@ -384,6 +426,10 @@ commit_message_timeout_secs = 15
         .unwrap();
 
         assert!(!config.editor.format_on_save);
+        assert_eq!(config.editor.file_browser_sort.field, "modified");
+        assert_eq!(config.editor.file_browser_sort.direction, "desc");
+        assert_eq!(config.editor.sftp_sort.field, "modified");
+        assert_eq!(config.editor.sftp_sort.direction, "desc");
     }
 
     #[test]

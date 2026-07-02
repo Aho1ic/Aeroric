@@ -25,10 +25,20 @@ pub struct SshConnection {
     pub password: Option<String>,
     #[serde(rename = "remotePath", skip_serializing_if = "Option::is_none")]
     pub remote_path: Option<String>,
+    #[serde(
+        rename = "autoSudoWithPassword",
+        default,
+        skip_serializing_if = "is_false"
+    )]
+    pub auto_sudo_with_password: bool,
     #[serde(rename = "createdAt")]
     pub created_at: i64,
     #[serde(rename = "lastConnectedAt", skip_serializing_if = "Option::is_none")]
     pub last_connected_at: Option<i64>,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 fn ssh_connections_path() -> Result<PathBuf, String> {
@@ -56,6 +66,23 @@ fn build_remote_start_command(remote_path: &str) -> String {
         "cd -- {} && exec \"${{SHELL:-/bin/sh}}\" -l",
         shell_quote_posix(remote_path)
     )
+}
+
+fn build_remote_start_command_with_sudo(remote_path: &str) -> String {
+    format!(
+        "cd -- {} && printf '%s\\n' \"$AERORIC_SUDO_PASSWORD\" | sudo -S -p '' -v && printf '%s\\n' \"$AERORIC_SUDO_PASSWORD\" | sudo -S -p '' \"${{SHELL:-/bin/sh}}\" -l",
+        shell_quote_posix(remote_path)
+    )
+}
+
+fn connection_can_auto_sudo(connection: &SshConnection) -> bool {
+    connection.auto_sudo_with_password
+        && connection.username.trim() != "root"
+        && connection
+            .password
+            .as_ref()
+            .map(|value| !value.trim().is_empty())
+            .unwrap_or(false)
 }
 
 fn is_remote_codex_like_agent(agent: &str) -> bool {
@@ -165,7 +192,11 @@ fn build_ssh_args(connection: &SshConnection, force_tty: bool) -> Vec<String> {
         .map(|value| value.trim())
         .filter(|value| !value.is_empty())
     {
-        args.push(build_remote_start_command(remote_path));
+        args.push(if connection_can_auto_sudo(connection) {
+            build_remote_start_command_with_sudo(remote_path)
+        } else {
+            build_remote_start_command(remote_path)
+        });
     }
     args
 }
@@ -202,6 +233,9 @@ fn ssh_command_spec_from_args(
     connection: &SshConnection,
     mut ssh_args: Vec<String>,
 ) -> SshCommandSpec {
+    let inject_sudo_password = ssh_args
+        .iter()
+        .any(|arg| arg.contains("AERORIC_SUDO_PASSWORD"));
     let password = connection
         .password
         .as_ref()
@@ -220,10 +254,14 @@ fn ssh_command_spec_from_args(
         );
         let mut args = vec!["-e".to_string(), "ssh".to_string()];
         args.extend(ssh_args);
+        let mut env = vec![("SSHPASS".to_string(), password.to_string())];
+        if inject_sudo_password && connection_can_auto_sudo(connection) {
+            env.push(("AERORIC_SUDO_PASSWORD".to_string(), password.to_string()));
+        }
         SshCommandSpec {
             program: sshpass_program(),
             args,
-            env: vec![("SSHPASS".to_string(), password.to_string())],
+            env,
         }
     } else {
         SshCommandSpec {
@@ -623,6 +661,7 @@ mod tests {
                 identity_file: None,
                 password: None,
                 remote_path: None,
+                auto_sudo_with_password: false,
                 created_at: 1,
                 last_connected_at: None,
             },
@@ -645,6 +684,7 @@ mod tests {
                 identity_file: Some("/Users/me/.ssh/prod key".to_string()),
                 password: None,
                 remote_path: None,
+                auto_sudo_with_password: false,
                 created_at: 1,
                 last_connected_at: None,
             },
@@ -681,6 +721,43 @@ mod tests {
     }
 
     #[test]
+    fn remote_start_command_can_enter_sudo_shell_with_saved_password() {
+        assert_eq!(
+            build_remote_start_command_with_sudo("/srv/aeroric app"),
+            "cd -- '/srv/aeroric app' && printf '%s\\n' \"$AERORIC_SUDO_PASSWORD\" | sudo -S -p '' -v && printf '%s\\n' \"$AERORIC_SUDO_PASSWORD\" | sudo -S -p '' \"${SHELL:-/bin/sh}\" -l"
+        );
+    }
+
+    #[test]
+    fn ssh_command_uses_auto_sudo_only_for_non_root_password_connections() {
+        let connection = SshConnection {
+            id: "conn-1".to_string(),
+            name: "prod".to_string(),
+            group: None,
+            host: "prod.example.com".to_string(),
+            port: 22,
+            username: "deploy".to_string(),
+            identity_file: None,
+            password: Some("secret".to_string()),
+            remote_path: Some("/srv/app".to_string()),
+            auto_sudo_with_password: true,
+            created_at: 1,
+            last_connected_at: None,
+        };
+
+        let spec = ssh_command_spec(&connection, None, true);
+
+        assert!(spec
+            .args
+            .iter()
+            .any(|arg| arg.contains("sudo -S -p '' \"${SHELL:-/bin/sh}\" -l")));
+        assert!(spec
+            .env
+            .iter()
+            .any(|(key, value)| key == "AERORIC_SUDO_PASSWORD" && value == "secret"));
+    }
+
+    #[test]
     fn ssh_args_keep_target_as_single_ssh_argument() {
         let args = build_ssh_args(
             &SshConnection {
@@ -693,6 +770,7 @@ mod tests {
                 identity_file: None,
                 password: None,
                 remote_path: None,
+                auto_sudo_with_password: false,
                 created_at: 1,
                 last_connected_at: None,
             },
@@ -716,6 +794,7 @@ mod tests {
                 identity_file: None,
                 password: Some("secret".to_string()),
                 remote_path: None,
+                auto_sudo_with_password: false,
                 created_at: 1,
                 last_connected_at: None,
             },
@@ -747,6 +826,7 @@ mod tests {
                 identity_file: None,
                 password: Some("secret".to_string()),
                 remote_path: None,
+                auto_sudo_with_password: false,
                 created_at: 1,
                 last_connected_at: None,
             },
@@ -777,6 +857,7 @@ mod tests {
                 identity_file: None,
                 password: None,
                 remote_path: Some("/srv/app".to_string()),
+                auto_sudo_with_password: false,
                 created_at: 1,
                 last_connected_at: None,
             },

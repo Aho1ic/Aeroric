@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { fileIconKind, sortFileEntries } from "../components/file-explorer/fileEntryUtils";
+import {
+  fileIconKind,
+  filterFileEntriesByName,
+  normalizeFileSortPreference,
+  sortFileEntries,
+} from "../components/file-explorer/fileEntryUtils";
 import type { FsEntry } from "../components/file-explorer/types";
 
 const entries: FsEntry[] = [
@@ -52,6 +57,34 @@ describe("file explorer sorting", () => {
       "README.md",
       "z.py",
     ]);
+  });
+
+  it("filters entries by case-insensitive file name query", () => {
+    expect(filterFileEntriesByName(entries, "read").map((entry) => entry.name)).toEqual([
+      "README.md",
+    ]);
+    expect(filterFileEntriesByName(entries, " SRC ").map((entry) => entry.name)).toEqual(["src"]);
+    expect(filterFileEntriesByName(entries, "").map((entry) => entry.name)).toEqual([
+      "z.py",
+      "src",
+      "README.md",
+      "docs",
+    ]);
+  });
+
+  it("normalizes file sort preferences with modification descending fallback", () => {
+    expect(normalizeFileSortPreference({ field: "name", direction: "asc" })).toEqual({
+      field: "name",
+      direction: "asc",
+    });
+    expect(normalizeFileSortPreference({ field: "bad", direction: "sideways" })).toEqual({
+      field: "modified",
+      direction: "desc",
+    });
+    expect(normalizeFileSortPreference(undefined)).toEqual({
+      field: "modified",
+      direction: "desc",
+    });
   });
 
   it("classifies database, model, video, and wheel files", () => {

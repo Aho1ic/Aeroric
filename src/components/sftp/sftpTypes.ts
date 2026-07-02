@@ -43,6 +43,15 @@ export type SftpFileIconKind =
 
 export type SftpSortField = "name" | "modified";
 export type SftpSortDirection = "asc" | "desc";
+export type SftpSortPreference = {
+  field: SftpSortField;
+  direction: SftpSortDirection;
+};
+
+export const DEFAULT_SFTP_SORT_PREFERENCE: SftpSortPreference = {
+  field: "modified",
+  direction: "desc",
+};
 
 export type SftpTauriEndpoint =
   | { kind: "local"; path: string }
@@ -171,6 +180,46 @@ export function sortSftpEntries(
     }
     return a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" }) * sign;
   });
+}
+
+export function normalizeSftpSortPreference(value: unknown): SftpSortPreference {
+  if (!value || typeof value !== "object") return DEFAULT_SFTP_SORT_PREFERENCE;
+  const candidate = value as Partial<SftpSortPreference>;
+  const field = candidate.field === "name" || candidate.field === "modified" ? candidate.field : null;
+  const direction =
+    candidate.direction === "asc" || candidate.direction === "desc" ? candidate.direction : null;
+  if (!field || !direction) return DEFAULT_SFTP_SORT_PREFERENCE;
+  return { field, direction };
+}
+
+export function filterSftpTreeEntriesByName(
+  entries: SftpEntry[],
+  childrenByPath: Map<string, SftpEntry[]>,
+  query: string,
+): { entries: SftpEntry[]; childrenByPath: Map<string, SftpEntry[]> } {
+  const normalizedQuery = query.trim().toLowerCase();
+  if (!normalizedQuery) return { entries, childrenByPath };
+
+  const filteredChildrenByPath = new Map<string, SftpEntry[]>();
+  const filterItems = (items: SftpEntry[]): SftpEntry[] => {
+    const visible: SftpEntry[] = [];
+    for (const entry of items) {
+      const childEntries = childrenByPath.get(entry.path) ?? [];
+      const visibleChildren = entry.isDir ? filterItems(childEntries) : [];
+      if (visibleChildren.length > 0) {
+        filteredChildrenByPath.set(entry.path, visibleChildren);
+      }
+      if (entry.name.toLowerCase().includes(normalizedQuery) || visibleChildren.length > 0) {
+        visible.push(entry);
+      }
+    }
+    return visible;
+  };
+
+  return {
+    entries: filterItems(entries),
+    childrenByPath: filteredChildrenByPath,
+  };
 }
 
 function normalizeTreePath(path: string): string {

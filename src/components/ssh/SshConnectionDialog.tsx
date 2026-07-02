@@ -31,6 +31,10 @@ const FIELD_ORDER: Array<keyof SshConnectionDraft> = [
   "remotePath",
 ];
 
+type SshTextField = Exclude<keyof SshConnectionDraft, "autoSudoWithPassword">;
+
+const TEXT_FIELD_ORDER: SshTextField[] = FIELD_ORDER as SshTextField[];
+
 export function SshConnectionDialog({
   connection,
   groups = [],
@@ -57,7 +61,7 @@ export function SshConnectionDialog({
   const [errors, setErrors] = useState<SshConnectionDraftErrors>({});
   const isEditing = Boolean(connection);
 
-  const labels = useMemo<Record<keyof SshConnectionDraft, string>>(
+  const labels = useMemo<Record<SshTextField, string>>(
     () => ({
       name: t("ssh.field.name"),
       group: t("ssh.field.group"),
@@ -71,7 +75,7 @@ export function SshConnectionDialog({
     [t],
   );
 
-  const placeholders = useMemo<Record<keyof SshConnectionDraft, string>>(
+  const placeholders = useMemo<Record<SshTextField, string>>(
     () => ({
       name: "prod",
       group: t("ssh.defaultGroup"),
@@ -85,7 +89,7 @@ export function SshConnectionDialog({
     [t],
   );
 
-  function updateField(field: keyof SshConnectionDraft, value: string) {
+  function updateField(field: SshTextField, value: string) {
     setDraft((prev) => ({ ...prev, [field]: value }));
     setErrors((prev) => {
       if (!(field in prev)) return prev;
@@ -124,7 +128,7 @@ export function SshConnectionDialog({
         </div>
 
         <div style={s.sshDialogBody}>
-          {FIELD_ORDER.map((field) => (
+          {TEXT_FIELD_ORDER.map((field) => (
             <label key={field} style={s.sshField}>
               <span style={s.sshLabel}>{labels[field]}</span>
               {field === "group" && groupOptions.length > 0 ? (
@@ -157,6 +161,23 @@ export function SshConnectionDialog({
               {errors[field] && <span style={s.sshErrorText}>{errors[field]}</span>}
             </label>
           ))}
+          <label style={{ ...s.sshField, flexDirection: "row", alignItems: "flex-start", gap: 10 }}>
+            <input
+              type="checkbox"
+              checked={draft.autoSudoWithPassword}
+              onChange={(event) =>
+                setDraft((prev) => ({
+                  ...prev,
+                  autoSudoWithPassword: event.target.checked,
+                }))
+              }
+              style={{ marginTop: 2 }}
+            />
+            <span style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+              <span style={s.sshLabel}>{t("ssh.field.autoSudoWithPassword")}</span>
+              <span style={s.sshSecretNote}>{t("ssh.field.autoSudoWithPasswordHint")}</span>
+            </span>
+          </label>
           <div style={s.sshSecretNote}>{t("ssh.passwordStorageHint")}</div>
         </div>
 

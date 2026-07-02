@@ -9,6 +9,7 @@ export interface SshConnectionDraft {
   identityFile: string;
   password: string;
   remotePath: string;
+  autoSudoWithPassword: boolean;
 }
 
 export type SshConnectionDraftErrors = Partial<Record<keyof SshConnectionDraft, string>>;
@@ -23,6 +24,7 @@ export function draftFromConnection(connection?: SshConnection | null): SshConne
     identityFile: connection?.identityFile ?? "",
     password: connection?.password ?? "",
     remotePath: connection?.remotePath ?? "",
+    autoSudoWithPassword: Boolean(connection?.autoSudoWithPassword),
   };
 }
 
@@ -67,6 +69,7 @@ export function normalizeSshConnectionDraft(
     ...(identityFile ? { identityFile } : {}),
     ...(password ? { password } : {}),
     ...(remotePath ? { remotePath } : {}),
+    ...(draft.autoSudoWithPassword ? { autoSudoWithPassword: true } : {}),
     createdAt: existing?.createdAt ?? now,
     ...(existing?.lastConnectedAt ? { lastConnectedAt: existing.lastConnectedAt } : {}),
   };

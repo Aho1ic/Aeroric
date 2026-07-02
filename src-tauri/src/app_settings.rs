@@ -2,12 +2,9 @@ use std::collections::HashMap;
 use std::fs;
 #[cfg(not(windows))]
 use std::os::unix::fs::PermissionsExt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::OnceLock;
-
-#[cfg(windows)]
-use std::path::Path;
 
 use crate::storage::atomic_write;
 
@@ -338,10 +335,34 @@ fn resolve_input_path(path: &str, binary: &str) -> String {
 
 #[cfg(not(windows))]
 fn resolve_agent_launch_spec_from_path(agent: &str, path: &str) -> AgentLaunchSpec {
+    let program = resolve_input_path(path, agent);
+    if Path::new(&program).is_absolute() {
+        let _ = ensure_user_agent_script_executable(Path::new(&program));
+    }
     AgentLaunchSpec {
-        program: resolve_input_path(path, agent),
+        program,
         extra_env: Vec::new(),
     }
+}
+
+#[cfg(not(windows))]
+pub(crate) fn ensure_user_agent_script_executable(path: &Path) -> Result<(), String> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let metadata = match fs::metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error.to_string()),
+    };
+    if !metadata.is_file() {
+        return Ok(());
+    }
+    let mode = metadata.permissions().mode();
+    if mode & 0o100 != 0 {
+        return Ok(());
+    }
+    fs::set_permissions(path, fs::Permissions::from_mode(mode | 0o100))
+        .map_err(|error| error.to_string())
 }
 
 #[cfg(windows)]
@@ -1376,5 +1397,27 @@ mod tests {
         });
 
         assert_eq!(parse_model_ids(value), vec!["a-model", "z-model"]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn makes_user_agent_script_executable_when_possible() {
+        use std::io::Write;
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = std::env::temp_dir().join(format!("aeroric-agent-exec-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let script = dir.join("agent.sh");
+        let mut file = fs::File::create(&script).unwrap();
+        writeln!(file, "#!/bin/sh").unwrap();
+        writeln!(file, "echo ok").unwrap();
+        fs::set_permissions(&script, fs::Permissions::from_mode(0o644)).unwrap();
+
+        ensure_user_agent_script_executable(&script).unwrap();
+
+        let mode = fs::metadata(&script).unwrap().permissions().mode();
+        assert_ne!(mode & 0o100, 0);
+        let _ = fs::remove_dir_all(&dir);
     }
 }
