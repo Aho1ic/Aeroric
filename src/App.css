@@ -677,7 +677,8 @@ html.dark .notebook-rich-text [data-notebook-code-language] {
 }
 
 .notebook-rich-text [data-notebook-after-code-block] {
-  min-height: 20px;
+  display: block;
+  min-height: 28px;
   margin: 6px 0 0;
 }
 

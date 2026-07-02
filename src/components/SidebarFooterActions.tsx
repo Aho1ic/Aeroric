@@ -27,6 +27,8 @@ export function SidebarFooterActions({
   onTaskDisplayWindowChange,
   attentionBadge,
   onAttentionBadgeChange,
+  sftpLocalDefaultPath,
+  onSftpLocalDefaultPathChange,
   uiFontFamily,
   onUiFontFamilyChange,
   monoFontFamily,
@@ -43,6 +45,8 @@ export function SidebarFooterActions({
   onTaskDisplayWindowChange: (window: TaskDisplayWindow) => void;
   attentionBadge: boolean;
   onAttentionBadgeChange: (enabled: boolean) => void;
+  sftpLocalDefaultPath: string;
+  onSftpLocalDefaultPathChange: (path: string) => void;
   uiFontFamily: FontFamily;
   onUiFontFamilyChange: (family: FontFamily) => void;
   monoFontFamily: FontFamily;
@@ -95,6 +99,8 @@ export function SidebarFooterActions({
           onTaskDisplayWindowChange={onTaskDisplayWindowChange}
           attentionBadge={attentionBadge}
           onAttentionBadgeChange={onAttentionBadgeChange}
+          sftpLocalDefaultPath={sftpLocalDefaultPath}
+          onSftpLocalDefaultPathChange={onSftpLocalDefaultPathChange}
           uiFontFamily={uiFontFamily}
           onUiFontFamilyChange={onUiFontFamilyChange}
           monoFontFamily={monoFontFamily}

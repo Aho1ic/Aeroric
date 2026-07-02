@@ -40,6 +40,11 @@ import { agentDisplayLabel, isCodexLikeAgent } from "./agents";
 import { useTerminalManager } from "./hooks/useTerminalManager";
 import { useWorktreeDiffStats } from "./hooks/useWorktreeDiffStats";
 import { useI18n } from "./i18n";
+import {
+  getInitialSftpLocalDefaultPath,
+  normalizeSftpLocalDefaultPath,
+  SFTP_LOCAL_PATH_STORAGE_KEY,
+} from "./settings";
 import { createProjectTaskPersister } from "./taskPersistence";
 import { applyProjectOrder, normalizeProjectOrder, sortProjectsForRail } from "./projectOrder";
 import s from "./styles";
@@ -235,6 +240,9 @@ function App() {
     getInitialTaskDisplayWindow,
   );
   const [attentionBadge, setAttentionBadge] = useState<boolean>(getInitialAttentionBadge);
+  const [sftpLocalDefaultPath, setSftpLocalDefaultPath] = useState<string>(
+    getInitialSftpLocalDefaultPath,
+  );
   const [uiFontFamily, setUiFontFamily] = useState<FontFamily>(() =>
     getInitialFontFamily("aeroric:uiFontFamily", DEFAULT_UI_FONT),
   );
@@ -393,6 +401,13 @@ function App() {
   useEffect(() => {
     localStorage.setItem("aeroric:attentionBadge", attentionBadge ? "1" : "0");
   }, [attentionBadge]);
+
+  useEffect(() => {
+    localStorage.setItem(
+      SFTP_LOCAL_PATH_STORAGE_KEY,
+      normalizeSftpLocalDefaultPath(sftpLocalDefaultPath),
+    );
+  }, [sftpLocalDefaultPath]);
 
   useEffect(() => {
     const value = uiFontFamily.trim() || DEFAULT_UI_FONT;
@@ -1413,6 +1428,8 @@ function App() {
                 onTaskDisplayWindowChange={setTaskDisplayWindow}
                 attentionBadge={attentionBadge}
                 onAttentionBadgeChange={setAttentionBadge}
+                sftpLocalDefaultPath={sftpLocalDefaultPath}
+                onSftpLocalDefaultPathChange={setSftpLocalDefaultPath}
                 uiFontFamily={uiFontFamily}
                 onUiFontFamilyChange={setUiFontFamily}
                 monoFontFamily={monoFontFamily}
@@ -1460,6 +1477,8 @@ function App() {
             onTaskDisplayWindowChange={setTaskDisplayWindow}
             attentionBadge={attentionBadge}
             onAttentionBadgeChange={setAttentionBadge}
+            sftpLocalDefaultPath={sftpLocalDefaultPath}
+            onSftpLocalDefaultPathChange={setSftpLocalDefaultPath}
             uiFontFamily={uiFontFamily}
             onUiFontFamilyChange={setUiFontFamily}
             monoFontFamily={monoFontFamily}

@@ -50,6 +50,9 @@ const translations: Record<AppLanguage, Record<string, string>> = {
       "Controls how far back regular tasks appear in the task list. Starred, todo, and attention-needed tasks are always shown.",
     "appSettings.taskDisplayRecentDays": "Recent {days} days",
     "appSettings.taskDisplayAll": "All tasks",
+    "appSettings.sftpLocalDefaultPath": "SFTP local default path",
+    "appSettings.sftpLocalDefaultPathHint":
+      "Used as the starting local folder when opening SFTP outside a local project.",
     "appSettings.attentionBadge": "Attention Badge",
     "appSettings.attentionBadgeToggle": "Show pending-confirmation count",
     "appSettings.attentionBadgeHint":
@@ -1754,6 +1757,9 @@ const translations: Record<AppLanguage, Record<string, string>> = {
       "控制任务列表中普通任务的展示时间范围。收藏、待办和需要注意的任务始终显示。",
     "appSettings.taskDisplayRecentDays": "最近 {days} 天",
     "appSettings.taskDisplayAll": "所有任务",
+    "appSettings.sftpLocalDefaultPath": "SFTP 本地默认路径",
+    "appSettings.sftpLocalDefaultPathHint":
+      "在非本地项目中打开 SFTP 时，作为本地栏的起始目录。",
     "appSettings.attentionBadge": "待确认角标",
     "appSettings.attentionBadgeToggle": "显示待确认任务数量",
     "appSettings.attentionBadgeHint":

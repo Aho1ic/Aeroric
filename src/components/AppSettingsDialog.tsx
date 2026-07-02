@@ -89,6 +89,8 @@ export function AppSettingsDialog({
   onTaskDisplayWindowChange,
   attentionBadge,
   onAttentionBadgeChange,
+  sftpLocalDefaultPath,
+  onSftpLocalDefaultPathChange,
   uiFontFamily,
   onUiFontFamilyChange,
   monoFontFamily,
@@ -105,6 +107,8 @@ export function AppSettingsDialog({
   onTaskDisplayWindowChange: (window: TaskDisplayWindow) => void;
   attentionBadge: boolean;
   onAttentionBadgeChange: (enabled: boolean) => void;
+  sftpLocalDefaultPath: string;
+  onSftpLocalDefaultPathChange: (path: string) => void;
   uiFontFamily: FontFamily;
   onUiFontFamilyChange: (family: FontFamily) => void;
   monoFontFamily: FontFamily;
@@ -208,6 +212,8 @@ export function AppSettingsDialog({
                 onTaskDisplayWindowChange={onTaskDisplayWindowChange}
                 attentionBadge={attentionBadge}
                 onAttentionBadgeChange={onAttentionBadgeChange}
+                sftpLocalDefaultPath={sftpLocalDefaultPath}
+                onSftpLocalDefaultPathChange={onSftpLocalDefaultPathChange}
               />
             ) : activeNav === "theme" ? (
               <ThemePanel
@@ -251,6 +257,8 @@ export function AppSettingsDialog({
                 onTaskDisplayWindowChange={onTaskDisplayWindowChange}
                 attentionBadge={attentionBadge}
                 onAttentionBadgeChange={onAttentionBadgeChange}
+                sftpLocalDefaultPath={sftpLocalDefaultPath}
+                onSftpLocalDefaultPathChange={onSftpLocalDefaultPathChange}
               />
             )}
           </div>

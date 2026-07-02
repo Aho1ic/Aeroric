@@ -456,6 +456,29 @@ describe("NotebookPanel", () => {
     expect(body.querySelectorAll("[data-notebook-code-block]")).toHaveLength(1);
   });
 
+  it("adds a writable paragraph after a persisted rich text code block at document end", () => {
+    localStorage.setItem(
+      "aeroric:notebook:v1",
+      JSON.stringify([
+        {
+          id: "note-code-end",
+          title: "Code end",
+          format: "richtext",
+          body: '<pre data-notebook-code-block="true"><code data-language="text">first</code></pre>',
+          updatedAt: 1,
+        },
+      ]),
+    );
+
+    renderNotebook();
+
+    const body = screen.getByRole("textbox", { name: "Quick note content" });
+    const codeBlock = body.querySelector("[data-notebook-code-block]");
+    const afterBlock = codeBlock?.nextElementSibling;
+    expect(afterBlock).toHaveAttribute("data-notebook-after-code-block", "true");
+    expect(afterBlock?.textContent).toBe("");
+  });
+
   it("reorders quick notes after a long-press pointer drag", async () => {
     const user = userEvent.setup();
     renderNotebook();

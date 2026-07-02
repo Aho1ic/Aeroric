@@ -7,6 +7,7 @@ import {
   TASK_DISPLAY_WINDOW_VALUES,
   type TaskDisplayWindow,
 } from "../../types";
+import { DEFAULT_SFTP_LOCAL_PATH, normalizeSftpLocalDefaultPath } from "../../settings";
 import s from "../../styles";
 
 export function GeneralPanel({
@@ -14,11 +15,15 @@ export function GeneralPanel({
   onTaskDisplayWindowChange,
   attentionBadge,
   onAttentionBadgeChange,
+  sftpLocalDefaultPath,
+  onSftpLocalDefaultPathChange,
 }: {
   taskDisplayWindow: TaskDisplayWindow;
   onTaskDisplayWindowChange: (window: TaskDisplayWindow) => void;
   attentionBadge: boolean;
   onAttentionBadgeChange: (enabled: boolean) => void;
+  sftpLocalDefaultPath: string;
+  onSftpLocalDefaultPathChange: (path: string) => void;
 }) {
   const { language, setLanguage, t } = useI18n();
 
@@ -45,6 +50,11 @@ export function GeneralPanel({
   const selectTriggerStyle: React.CSSProperties = {
     ...s.settingsSelectTrigger,
     width: 220,
+  };
+  const pathInputStyle: React.CSSProperties = {
+    ...s.settingsSelectTrigger,
+    width: "min(100%, 520px)",
+    cursor: "text",
   };
 
   const languageOptions: Array<{ value: AppLanguage; label: string }> = [
@@ -151,6 +161,22 @@ export function GeneralPanel({
           </Select.Portal>
         </Select.Root>
         <span style={hintStyle}>{t("appSettings.taskDisplayWindowHint")}</span>
+      </div>
+
+      <div style={{ ...fieldStyle, marginTop: 18 }}>
+        <label style={labelStyle}>{t("appSettings.sftpLocalDefaultPath")}</label>
+        <input
+          type="text"
+          value={sftpLocalDefaultPath}
+          placeholder={DEFAULT_SFTP_LOCAL_PATH}
+          onChange={(event) => onSftpLocalDefaultPathChange(event.currentTarget.value)}
+          onBlur={(event) =>
+            onSftpLocalDefaultPathChange(normalizeSftpLocalDefaultPath(event.currentTarget.value))
+          }
+          style={pathInputStyle}
+          spellCheck={false}
+        />
+        <span style={hintStyle}>{t("appSettings.sftpLocalDefaultPathHint")}</span>
       </div>
 
       <div style={{ ...fieldStyle, marginTop: 18 }}>

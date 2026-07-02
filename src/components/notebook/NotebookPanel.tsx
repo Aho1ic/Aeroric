@@ -131,10 +131,36 @@ function normalizeTextNodes(root: ParentNode): boolean {
   return changed;
 }
 
+function isNotebookCodeBlock(element: Element | null): boolean {
+  return Boolean(element?.matches("[data-notebook-code-block]"));
+}
+
+function createAfterCodeBlockParagraph(): HTMLParagraphElement {
+  const paragraph = document.createElement("p");
+  paragraph.dataset.notebookAfterCodeBlock = "true";
+  paragraph.append(document.createElement("br"));
+  return paragraph;
+}
+
+function ensureEditableParagraphsAfterCodeBlocks(root: ParentNode): boolean {
+  const blocks = Array.from(root.querySelectorAll("[data-notebook-code-block]"));
+  let changed = false;
+
+  for (const block of blocks) {
+    const next = block.nextElementSibling;
+    if (next && !isNotebookCodeBlock(next)) continue;
+    block.after(createAfterCodeBlockParagraph());
+    changed = true;
+  }
+
+  return changed;
+}
+
 function normalizeRichTextHtml(html: string): string {
   const template = document.createElement("template");
   template.innerHTML = html;
   normalizeTextNodes(template.content);
+  ensureEditableParagraphsAfterCodeBlocks(template.content);
   return template.innerHTML;
 }
 
@@ -399,6 +425,15 @@ export function NotebookPanel({ width = "100%" }: { width?: number | string }) {
     const noteChanged = richTextSyncedNoteIdRef.current !== activeNote.id;
     if (noteChanged || document.activeElement !== editor) {
       editor.innerHTML = html;
+      if (ensureEditableParagraphsAfterCodeBlocks(editor)) {
+        const nextBody = normalizeNotebookBody(renderRichText(editor.innerHTML), "richtext");
+        const updatedAt = Date.now();
+        setNotes((current) =>
+          current.map((note) =>
+            note.id === activeNote.id ? { ...note, body: nextBody, updatedAt } : note,
+          ),
+        );
+      }
       richTextSyncedNoteIdRef.current = activeNote.id;
     }
   }, [activeNote?.body, activeNote?.format, activeNote?.id, mode]);
@@ -1595,6 +1630,7 @@ export function NotebookPanel({ width = "100%" }: { width?: number | string }) {
                 suppressContentEditableWarning
                 onInput={(event) => {
                   normalizeTextNodes(event.currentTarget);
+                  ensureEditableParagraphsAfterCodeBlocks(event.currentTarget);
                   updateActiveNote({
                     body: renderRichText(event.currentTarget.innerHTML),
                   });

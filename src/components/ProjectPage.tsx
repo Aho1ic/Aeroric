@@ -272,6 +272,7 @@ export function ProjectPage({
   onToggleTheme,
   terminalFontSize,
   attentionBadge,
+  sftpLocalDefaultPath,
   monoFontFamily,
   hubMode = false,
   onExitSkillHub,
@@ -341,6 +342,8 @@ export function ProjectPage({
   onTaskDisplayWindowChange: (window: TaskDisplayWindow) => void;
   attentionBadge: boolean;
   onAttentionBadgeChange: (enabled: boolean) => void;
+  sftpLocalDefaultPath: string;
+  onSftpLocalDefaultPathChange: (path: string) => void;
   uiFontFamily: FontFamily;
   onUiFontFamilyChange: (family: FontFamily) => void;
   monoFontFamily: FontFamily;
@@ -1214,7 +1217,8 @@ export function ProjectPage({
     !isDatabaseMode &&
     !isDockerMode &&
     !isNotesMode &&
-    (hasEditorGroups || Boolean(openDiff) || taskWorkspaceVisible || topRightPanelActive);
+    !taskWorkspaceVisible &&
+    (hasEditorGroups || Boolean(openDiff) || topRightPanelActive);
 
   useEffect(() => {
     if (rightPanel === "ssh") {
@@ -1650,7 +1654,7 @@ export function ProjectPage({
                     localDefaultPath={
                       projectLocation.kind === "local"
                         ? project.path
-                        : "/Users/macbook/Downloads/同步空间"
+                        : sftpLocalDefaultPath
                     }
                     active={visible && isSftpMode}
                     width="100%"

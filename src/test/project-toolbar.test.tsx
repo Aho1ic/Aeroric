@@ -378,6 +378,8 @@ function projectPageProps(
     onTaskDisplayWindowChange: vi.fn(),
     attentionBadge: true,
     onAttentionBadgeChange: vi.fn(),
+    sftpLocalDefaultPath: "/Users/macbook/Downloads/同步空间",
+    onSftpLocalDefaultPathChange: vi.fn(),
     uiFontFamily: "sans-serif",
     onUiFontFamilyChange: vi.fn(),
     monoFontFamily: "monospace",
@@ -541,6 +543,17 @@ describe("ProjectPage right toolbar", () => {
     }
   });
 
+  it("hides top-right IDE tools while the running terminal workspace is visible", () => {
+    render(
+      <I18nProvider>
+        <ProjectPage {...projectPagePropsWithWorkspace()} />
+      </I18nProvider>,
+    );
+
+    expect(screen.queryByRole("toolbar", { name: "Run and debug tools" })).not.toBeInTheDocument();
+    expect(screen.getByText("running task")).toBeInTheDocument();
+  });
+
   it("opens every right toolbar target when clicked", async () => {
     const user = userEvent.setup();
 
@@ -627,12 +640,11 @@ describe("ProjectPage right toolbar", () => {
     expect(closedFeedback).toHaveAttribute("data-action-kind", "close");
     expect(closedFeedback).toHaveAttribute("data-action-target", "git-changes");
 
-    const toolbar = screen.getByRole("toolbar", { name: "Run and debug tools" });
-    await user.click(within(toolbar).getByTitle("Problems"));
+    await user.click(screen.getByTitle("Search"));
     const problemsFeedback = await screen.findByTestId("project-action-feedback");
-    expect(problemsFeedback).toHaveTextContent("Opened Problems");
+    expect(problemsFeedback).toHaveTextContent("Opened Search");
     expect(problemsFeedback).toHaveAttribute("data-action-kind", "open");
-    expect(problemsFeedback).toHaveAttribute("data-action-target", "problems");
+    expect(problemsFeedback).toHaveAttribute("data-action-target", "search");
 
     expect(await screen.findByTestId("project-action-log-summary")).toHaveTextContent(
       "3 actions · 0 failed",
@@ -643,14 +655,14 @@ describe("ProjectPage right toolbar", () => {
     );
     const entries = await screen.findAllByTestId("project-action-log-entry");
     expect(entries).toHaveLength(3);
-    expect(entries[0]).toHaveTextContent("Opened Problems");
+    expect(entries[0]).toHaveTextContent("Opened Search");
     const persisted = JSON.parse(
       window.localStorage.getItem("aeroric:project-action-log:project-1") ?? "[]",
     );
     expect(persisted).toHaveLength(3);
     expect(persisted[0]).toMatchObject({
       action: "open",
-      target: "problems",
+      target: "search",
       status: "completed",
     });
   });
@@ -727,9 +739,12 @@ describe("ProjectPage right toolbar", () => {
 
     render(
       <I18nProvider>
-        <ProjectPage {...projectPagePropsWithWorkspace()} />
+        <ProjectPage {...projectPageProps()} />
       </I18nProvider>,
     );
+
+    await user.click(screen.getByTitle("File Explorer"));
+    await user.click(await screen.findByText("run.py"));
 
     const toolbar = screen.getByRole("toolbar", { name: "Run and debug tools" });
     const expectations = [
@@ -853,9 +868,12 @@ describe("ProjectPage right toolbar", () => {
 
     render(
       <I18nProvider>
-        <ProjectPage {...projectPagePropsWithWorkspace(sshProject())} />
+        <ProjectPage {...projectPageProps(sshProject())} />
       </I18nProvider>,
     );
+
+    await user.click(screen.getByTitle("File Explorer"));
+    await user.click(await screen.findByText("run.py"));
 
     const toolbar = screen.getByRole("toolbar", { name: "Run and debug tools" });
     expect(screen.getByTitle("Run Configurations")).toBeEnabled();
@@ -879,9 +897,12 @@ describe("ProjectPage right toolbar", () => {
 
     render(
       <I18nProvider>
-        <ProjectPage {...projectPagePropsWithWorkspace(sshProject())} />
+        <ProjectPage {...projectPageProps(sshProject())} />
       </I18nProvider>,
     );
+
+    await user.click(screen.getByTitle("File Explorer"));
+    await user.click(await screen.findByText("run.py"));
 
     let toolbar = screen.getByRole("toolbar", { name: "Run and debug tools" });
     const remoteIdeTargets = [
@@ -940,7 +961,7 @@ describe("ProjectPage right toolbar", () => {
 
     render(
       <I18nProvider>
-        <ProjectPage {...projectPagePropsWithWorkspace(savedLianyunProject())} />
+        <ProjectPage {...projectPageProps(savedLianyunProject())} />
       </I18nProvider>,
     );
 
@@ -955,6 +976,9 @@ describe("ProjectPage right toolbar", () => {
     ]) {
       expect(screen.getByTitle(title)).toBeEnabled();
     }
+
+    await user.click(screen.getByTitle("File Explorer"));
+    await user.click(await screen.findByText("run.py"));
 
     const toolbar = screen.getByRole("toolbar", { name: "Run and debug tools" });
     for (const title of [
