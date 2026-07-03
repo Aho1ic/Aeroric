@@ -539,6 +539,7 @@ export function ProjectPage({
   onSubmitTask: (t: {
     prompt: string;
     agent: AgentType;
+    agentModel?: string;
     permissionMode: PermissionMode;
     images: string[];
     texts: string[];

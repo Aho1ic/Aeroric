@@ -382,6 +382,7 @@ pub fn run() {
             app_settings::save_custom_agent_profile,
             app_settings::setup_agent_profile,
             app_settings::detect_agent_models,
+            app_settings::detect_configured_agent_models,
             app_settings::delete_custom_agent_profile,
             app_settings::save_send_shortcut,
             app_settings::save_shift_enter_newline,

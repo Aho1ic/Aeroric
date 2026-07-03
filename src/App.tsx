@@ -554,7 +554,10 @@ function App() {
     setProjects((prev) => {
       const next = existing
         ? prev.map((p) => (p.path === path ? project : p))
-        : normalizeProjectOrder([project, ...prev]).map((p, index) => ({ ...p, orderIndex: index }));
+        : normalizeProjectOrder([project, ...prev]).map((p, index) => ({
+            ...p,
+            orderIndex: index,
+          }));
       persistProjects(next, showToast, formatSaveProjectsError);
       return next;
     });
@@ -592,7 +595,10 @@ function App() {
     setProjects((prev) => {
       const next = existing
         ? prev.map((p) => (p.id === project.id ? project : p))
-        : normalizeProjectOrder([project, ...prev]).map((p, index) => ({ ...p, orderIndex: index }));
+        : normalizeProjectOrder([project, ...prev]).map((p, index) => ({
+            ...p,
+            orderIndex: index,
+          }));
       persistProjects(next, showToast, formatSaveProjectsError);
       return next;
     });
@@ -629,6 +635,7 @@ function App() {
       projectPath,
       prompt: task.prompt,
       agent: task.agent,
+      agentModel: task.agentModel,
       permissionMode: task.permissionMode,
       images,
       texts,
@@ -666,6 +673,7 @@ function App() {
       prompt,
       agent,
       permissionMode,
+      agentModel,
       images,
       texts,
       immediate,
@@ -674,6 +682,7 @@ function App() {
     }: {
       prompt: string;
       agent: AgentType;
+      agentModel?: string;
       permissionMode: PermissionMode;
       images: string[];
       texts: string[];
@@ -717,6 +726,7 @@ function App() {
       prompt,
       name: prompt.trim() ? undefined : agentDisplayLabel(agent),
       agent,
+      agentModel,
       permissionMode,
       status: immediate ? "pending" : "todo",
       createdAt: Date.now(),
@@ -1304,10 +1314,7 @@ function App() {
     () => [...projects].sort((a, b) => b.lastOpenedAt - a.lastOpenedAt),
     [projects],
   );
-  const railProjects = useMemo(
-    () => sortProjectsForRail(projects),
-    [projects],
-  );
+  const railProjects = useMemo(() => sortProjectsForRail(projects), [projects]);
   const mountedProjects = useMemo(
     () =>
       mountedProjectIds

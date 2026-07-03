@@ -18,6 +18,7 @@ import { ImageAttachments } from "./new-task/ImageAttachments";
 import { TextAttachments, type PastedText } from "./new-task/TextAttachments";
 import { AgentPermSelector, type ComposeMenu } from "./new-task/AgentPermSelector";
 import { LaunchModeSelector, type LaunchMode } from "./new-task/LaunchModeSelector";
+import { TerminalModelSelector } from "./new-task/TerminalModelSelector";
 import { buildPromptWithTaskModes, shouldShowInstructionsBanner } from "./new-task/goalMode";
 import { useI18n } from "../i18n";
 import { APP_PLATFORM } from "../platform";
@@ -46,6 +47,7 @@ export interface NewTaskDraft {
   pastedTexts?: PastedText[];
   launchMode?: LaunchMode;
   baseBranch?: string;
+  agentModel?: string;
 }
 
 type CrossProjectFileMap = Map<string, FileEntry[]>;
@@ -85,6 +87,7 @@ export function NewTaskView({
     immediate: boolean;
     launchMode: LaunchMode;
     baseBranch: string;
+    agentModel?: string;
   }) => void;
   onStartTerminal?: () => void;
   initialDraft?: NewTaskDraft | null;
@@ -103,6 +106,7 @@ export function NewTaskView({
     remoteProject ? "local" : (initialDraft?.launchMode ?? "local"),
   );
   const [baseBranch, setBaseBranch] = useState<string>(initialDraft?.baseBranch ?? "");
+  const [agentModel, setAgentModel] = useState<string | undefined>(initialDraft?.agentModel);
   const [composeOpenMenu, setComposeOpenMenu] = useState<ComposeMenu>(null);
 
   const [allFiles, setAllFiles] = useState<FileEntry[]>([]);
@@ -154,6 +158,7 @@ export function NewTaskView({
     pastedTexts,
     launchMode,
     baseBranch,
+    agentModel,
   });
   useEffect(() => {
     draftDataRef.current = {
@@ -165,8 +170,19 @@ export function NewTaskView({
       pastedTexts,
       launchMode,
       baseBranch,
+      agentModel,
     };
-  }, [agent, permMode, planMode, goalMode, pastedImages, pastedTexts, launchMode, baseBranch]);
+  }, [
+    agent,
+    permMode,
+    planMode,
+    goalMode,
+    pastedImages,
+    pastedTexts,
+    launchMode,
+    baseBranch,
+    agentModel,
+  ]);
   useEffect(() => {
     return () => {
       if (!onCacheDraft) return;
@@ -195,10 +211,15 @@ export function NewTaskView({
         pastedTexts: data.pastedTexts,
         launchMode: data.launchMode,
         baseBranch: data.baseBranch,
+        agentModel: data.agentModel,
       });
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    setAgentModel(undefined);
+  }, [agent]);
 
   useEffect(() => {
     if (remoteProject) {
@@ -437,6 +458,7 @@ export function NewTaskView({
       immediate,
       launchMode,
       baseBranch,
+      agentModel: immediate && isEmpty ? agentModel : undefined,
     });
     editorHandle.clear();
     setIsEmpty(true);
@@ -647,6 +669,18 @@ export function NewTaskView({
                     onSetBaseBranch={setBaseBranch}
                   />
                 </div>
+              ) : null
+            }
+            preSendControls={
+              !remoteProject && isEmpty ? (
+                <TerminalModelSelector
+                  agent={agent}
+                  selectedModel={agentModel}
+                  compact={compactControls}
+                  openMenu={composeOpenMenu}
+                  onOpenMenuChange={setComposeOpenMenu}
+                  onSetModel={setAgentModel}
+                />
               ) : null
             }
             onSetAgent={setAgent}

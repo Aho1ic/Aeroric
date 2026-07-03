@@ -56,6 +56,7 @@ describe("agent options", () => {
       "permission",
       "launch",
       "branch",
+      "model",
       "send",
     ]);
   });

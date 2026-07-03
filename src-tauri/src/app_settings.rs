@@ -645,6 +645,18 @@ fi
     )
 }
 
+fn codex_runtime_project_trust_shell() -> &'static str {
+    r#"project_path="$(pwd -P)"
+escaped_project_path="${project_path//\\/\\\\}"
+escaped_project_path="${escaped_project_path//\"/\\\"}"
+printf '\n[projects."%s"]\ntrust_level = "trusted"\n' "$escaped_project_path" >> "$CODEX_HOME/config.toml"
+
+if [ -f "$HOME/.codex/config.toml" ]; then
+  awk '/# >>> aeroric-managed-begin/{flag=1} flag{print} /# <<< aeroric-managed-end/{flag=0}' "$HOME/.codex/config.toml" >> "$CODEX_HOME/config.toml"
+fi
+"#
+}
+
 fn codex_config_for_draft(draft: &AgentSetupDraft) -> String {
     let provider = sanitize_custom_agent_id(&draft.id);
     format!(
@@ -675,6 +687,7 @@ fn build_codex_agent_script(draft: &AgentSetupDraft) -> String {
     let models = normalize_setup_models(draft);
     let picker = model_picker_shell(&models);
     let config = codex_config_for_draft(draft);
+    let runtime_trust = codex_runtime_project_trust_shell();
     let codex_bin = detect_path("codex");
     let codex_bin = if codex_bin.is_empty() {
         "codex".to_string()
@@ -698,12 +711,15 @@ export ANTHROPIC_API_KEY={api_key}
 {config}AERORIC_CODEX_CONFIG
 }} > "$CODEX_HOME/config.toml"
 
-exec {codex_bin} "$@"
+{runtime_trust}
+
+exec {codex_bin} --dangerously-bypass-hook-trust "$@"
 "#,
         id = id,
         api_key = shell_quote(&draft.api_key),
         picker = picker,
         config = config,
+        runtime_trust = runtime_trust,
         codex_bin = shell_quote(&codex_bin),
     )
 }
@@ -996,6 +1012,14 @@ pub async fn detect_agent_models(
     base_url: String,
     api_key: String,
 ) -> Result<AgentModels, String> {
+    fetch_agent_models(kind, base_url, api_key).await
+}
+
+async fn fetch_agent_models(
+    kind: AgentSetupKind,
+    base_url: String,
+    api_key: String,
+) -> Result<AgentModels, String> {
     let endpoint = model_endpoint(&base_url);
     let api_key = api_key.trim().to_string();
     if normalize_base_url(&base_url).is_empty() {
@@ -1026,6 +1050,83 @@ pub async fn detect_agent_models(
     Ok(AgentModels {
         models: parse_model_ids(value),
     })
+}
+
+fn parse_single_quoted_shell_literal(value: &str) -> Option<String> {
+    let mut rest = value.trim();
+    let mut out = String::new();
+    while !rest.is_empty() {
+        if let Some(next) = rest.strip_prefix('\'') {
+            let end = next.find('\'')?;
+            out.push_str(&next[..end]);
+            rest = next[end + 1..].trim_start();
+            continue;
+        }
+        if let Some(next) = rest.strip_prefix("\"'\"") {
+            out.push('\'');
+            rest = next.trim_start();
+            continue;
+        }
+        if out.is_empty() {
+            return Some(rest.trim_matches('"').to_string());
+        }
+        return None;
+    }
+    Some(out)
+}
+
+fn extract_shell_assignment(script: &str, key: &str) -> Option<String> {
+    let export_prefix = format!("export {}=", key);
+    let bare_prefix = format!("{}=", key);
+    script.lines().find_map(|line| {
+        let trimmed = line.trim();
+        let value = trimmed
+            .strip_prefix(&export_prefix)
+            .or_else(|| trimmed.strip_prefix(&bare_prefix))?;
+        parse_single_quoted_shell_literal(value)
+    })
+}
+
+fn extract_toml_string_assignment(script: &str, key: &str) -> Option<String> {
+    let prefix = format!("{} = ", key);
+    script.lines().find_map(|line| {
+        let value = line.trim().strip_prefix(&prefix)?;
+        let parsed = toml::from_str::<toml::Value>(&format!("value = {}", value)).ok()?;
+        parsed.get("value")?.as_str().map(ToString::to_string)
+    })
+}
+
+fn configured_agent_model_source(agent: &str) -> Result<(AgentSetupKind, String, String), String> {
+    let settings = load_settings_internal();
+    let profile = settings
+        .custom_agents
+        .iter()
+        .find(|profile| profile.id == agent)
+        .ok_or_else(|| "Only Aeroric custom agents can auto-detect models".to_string())?;
+    let script = fs::read_to_string(&profile.path).map_err(|e| e.to_string())?;
+    if profile.codex_like {
+        let base_url = extract_toml_string_assignment(&script, "base_url")
+            .ok_or_else(|| "Custom Codex agent script is missing base_url".to_string())?;
+        let api_key = extract_shell_assignment(&script, "ANTHROPIC_API_KEY")
+            .ok_or_else(|| "Custom Codex agent script is missing API key".to_string())?;
+        Ok((AgentSetupKind::Codex, base_url, api_key))
+    } else {
+        let base_url = extract_shell_assignment(&script, "ANTHROPIC_BASE_URL")
+            .ok_or_else(|| "Custom Claude agent script is missing base URL".to_string())?;
+        let api_key = extract_shell_assignment(&script, "ANTHROPIC_AUTH_TOKEN")
+            .ok_or_else(|| "Custom Claude agent script is missing API key".to_string())?;
+        Ok((AgentSetupKind::ClaudeCode, base_url, api_key))
+    }
+}
+
+#[tauri::command]
+pub async fn detect_configured_agent_models(agent: String) -> Result<AgentModels, String> {
+    let (kind, base_url, api_key) = tokio::task::spawn_blocking(move || {
+        configured_agent_model_source(&sanitize_custom_agent_id(&agent))
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    fetch_agent_models(kind, base_url, api_key).await
 }
 
 #[tauri::command]
@@ -1369,6 +1470,35 @@ mod tests {
         assert!(!script.contains("请选择模型"));
         assert!(!script.contains("已选择"));
         assert!(!script.contains("AERORIC_AGENT_MODEL_CHOICE"));
+    }
+
+    #[test]
+    fn codex_custom_agent_script_trusts_runtime_project_and_bypasses_hook_review() {
+        let draft = AgentSetupDraft {
+            id: "gpt55".to_string(),
+            label: "GPT55".to_string(),
+            kind: AgentSetupKind::Codex,
+            base_url: "https://example.com/v1/".to_string(),
+            api_key: "sk-test".to_string(),
+            model: "gpt-5.5".to_string(),
+            models: vec!["gpt-5.5".to_string()],
+        };
+
+        let script = build_agent_script(&draft);
+
+        assert!(script.contains("project_path=\"$(pwd -P)\""));
+        assert!(script.contains("trust_level = \"trusted\""));
+        assert!(script.contains("--dangerously-bypass-hook-trust"));
+    }
+
+    #[test]
+    fn parses_shell_assignments_with_single_quote_escapes() {
+        let script = "export ANTHROPIC_API_KEY='sk'\"'\"'test'\n";
+
+        assert_eq!(
+            extract_shell_assignment(script, "ANTHROPIC_API_KEY"),
+            Some("sk'test".to_string())
+        );
     }
 
     #[test]

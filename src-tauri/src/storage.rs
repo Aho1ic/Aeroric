@@ -50,6 +50,8 @@ pub struct Task {
     pub name: Option<String>,
     pub prompt: String,
     pub agent: String,
+    #[serde(rename = "agentModel", skip_serializing_if = "Option::is_none")]
+    pub agent_model: Option<String>,
     #[serde(rename = "permissionMode")]
     pub permission_mode: String,
     pub status: String,

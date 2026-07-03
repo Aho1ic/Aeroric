@@ -21,7 +21,15 @@ import claudeLogo from "../../assets/claude.svg";
 import chatgptLogo from "../../assets/chatgpt.svg";
 
 const PERMS: PermissionMode[] = ["ask", "auto_edit", "full_access"];
-export type ComposeMenu = "more" | "agent" | "permission" | "launch" | "branch" | "send" | null;
+export type ComposeMenu =
+  | "more"
+  | "agent"
+  | "permission"
+  | "launch"
+  | "branch"
+  | "model"
+  | "send"
+  | null;
 
 function agentIcon(agent: AgentType, options = [] as ReturnType<typeof useAgentOptions>): string {
   return isCodexLikeAgent(agent, options) ? chatgptLogo : claudeLogo;
@@ -55,7 +63,7 @@ export function composePermissionLabel(mode: PermissionMode) {
 }
 
 export function composeControlOrder(): string[] {
-  return ["more", "agent", "permission", "launch", "branch", "send"];
+  return ["more", "agent", "permission", "launch", "branch", "model", "send"];
 }
 
 export function nextComposeMenuState(
@@ -126,6 +134,7 @@ export function AgentPermSelector({
   sendShortcutKeys,
   compact = false,
   launchControls,
+  preSendControls,
   openMenu: controlledOpenMenu,
   onOpenMenuChange,
   onSetAgent,
@@ -144,6 +153,7 @@ export function AgentPermSelector({
   sendShortcutKeys: string[];
   compact?: boolean;
   launchControls?: React.ReactNode;
+  preSendControls?: React.ReactNode;
   openMenu?: ComposeMenu;
   onOpenMenuChange?: (menu: ComposeMenu) => void;
   onSetAgent: (agent: AgentType) => void;
@@ -306,6 +316,8 @@ export function AgentPermSelector({
       </div>
 
       <div style={s.toolbarSpacer} />
+
+      {preSendControls}
 
       <div style={s.sendSplit}>
         <button

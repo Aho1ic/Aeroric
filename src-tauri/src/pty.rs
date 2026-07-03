@@ -479,6 +479,18 @@ fn build_codex_cmd(agent_bin: &str, permission_mode: &str) -> CommandBuilder {
     c
 }
 
+fn normalized_agent_model_env(value: Option<&str>) -> Option<String> {
+    let value = value?.trim();
+    if value.is_empty()
+        || value
+            .chars()
+            .any(|ch| matches!(ch, '\0' | '\n' | '\r' | '"' | '\\'))
+    {
+        return None;
+    }
+    Some(value.to_string())
+}
+
 // ── Tauri 命令 ───────────────────────────────────────────────────────────────
 
 #[tauri::command]
@@ -490,6 +502,7 @@ pub async fn run_task(
     prompt: String,
     agent: String,
     permission_mode: String,
+    agent_model: Option<String>,
     images: Option<Vec<String>>,
     texts: Option<Vec<String>>,
     cols: Option<u16>,
@@ -627,6 +640,9 @@ pub async fn run_task(
     }
     for (key, value) in &launch.extra_env {
         cmd.env(key, value);
+    }
+    if let Some(model) = normalized_agent_model_env(agent_model.as_deref()) {
+        cmd.env("AERORIC_AGENT_MODEL", model);
     }
 
     let child = pair.slave.spawn_command(cmd).map_err(|e| e.to_string())?;
@@ -1022,4 +1038,20 @@ pub async fn kill_shell(
     }
     task_manager.remove_pty_handles(&shell_id);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn agent_model_env_accepts_plain_model_names_only() {
+        assert_eq!(
+            normalized_agent_model_env(Some(" gpt-5.5 ")),
+            Some("gpt-5.5".to_string())
+        );
+        assert_eq!(normalized_agent_model_env(Some("")), None);
+        assert_eq!(normalized_agent_model_env(Some("gpt\n5")), None);
+        assert_eq!(normalized_agent_model_env(Some("bad\"model")), None);
+    }
 }
