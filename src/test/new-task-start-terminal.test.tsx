@@ -72,4 +72,29 @@ describe("NewTaskView start terminal", () => {
       }),
     );
   });
+
+  it("passes a manually entered terminal model that is not in the detected list", async () => {
+    const user = userEvent.setup();
+    const onSubmit = vi.fn();
+
+    render(
+      <I18nProvider>
+        <NewTaskView project={project} onSubmit={onSubmit} />
+      </I18nProvider>,
+    );
+
+    await user.click(await screen.findByRole("button", { name: /Model|gpt-5.5/ }));
+    await user.clear(await screen.findByPlaceholderText("Custom model"));
+    await user.type(screen.getByPlaceholderText("Custom model"), "mimo-v2.5-pro");
+    await user.click(screen.getByRole("button", { name: "Use" }));
+    await user.click(screen.getByRole("button", { name: /Start Terminal/ }));
+
+    expect(onSubmit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        prompt: "",
+        immediate: true,
+        agentModel: "mimo-v2.5-pro",
+      }),
+    );
+  });
 });

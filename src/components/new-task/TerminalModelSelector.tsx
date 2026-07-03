@@ -33,6 +33,7 @@ export function TerminalModelSelector({
 }) {
   const { t } = useI18n();
   const [models, setModels] = useState<string[]>([]);
+  const [manualModel, setManualModel] = useState(selectedModel ?? "");
   const [loading, setLoading] = useState(false);
   const [loadFailed, setLoadFailed] = useState(false);
   const [internalOpenMenu, setInternalOpenMenu] = useState<ComposeMenu>(null);
@@ -53,18 +54,24 @@ export function TerminalModelSelector({
     setLoadFailed(false);
     try {
       const result = await invoke<AgentModels>("detect_configured_agent_models", { agent });
-      const next = Array.from(new Set((result.models ?? []).map((m) => m.trim()).filter(Boolean)));
+      const next = Array.from(
+        new Set(
+          [...(result.models ?? []), selectedModel ?? ""].map((m) => m.trim()).filter(Boolean),
+        ),
+      );
       setModels(next);
-      if (next.length > 0 && (!selectedModel || !next.includes(selectedModel))) {
+      if (selectedModel && !next.includes(selectedModel)) {
+        setManualModel(selectedModel);
+      } else if (next.length > 0 && !selectedModel) {
         onSetModel(next[0]);
       }
-      if (next.length === 0) {
+      if (next.length === 0 && !selectedModel) {
         onSetModel(undefined);
       }
     } catch {
-      setModels([]);
+      setModels(selectedModel ? [selectedModel] : []);
       setLoadFailed(true);
-      onSetModel(undefined);
+      if (!selectedModel) onSetModel(undefined);
     } finally {
       setLoading(false);
     }
@@ -74,14 +81,26 @@ export function TerminalModelSelector({
     void loadModels();
   }, [loadModels]);
 
+  useEffect(() => {
+    setManualModel(selectedModel ?? "");
+  }, [selectedModel]);
+
   const currentModel = useMemo(() => {
     if (selectedModel && models.includes(selectedModel)) return selectedModel;
-    return models[0] ?? "";
+    return selectedModel || models[0] || "";
   }, [models, selectedModel]);
 
   const label = loading
     ? t("newTask.modelLoading")
     : currentModel || (loadFailed ? t("newTask.modelUnavailable") : t("newTask.model"));
+
+  const commitManualModel = () => {
+    const next = manualModel.trim();
+    if (!next) return;
+    setModels((prev) => (prev.includes(next) ? prev : [next, ...prev]));
+    onSetModel(next);
+    setOpenMenu(null);
+  };
 
   return (
     <Popover.Root
@@ -126,6 +145,37 @@ export function TerminalModelSelector({
                 {model}
               </button>
             ))}
+            <div style={{ display: "flex", gap: 6, padding: "6px 8px 4px" }}>
+              <input
+                value={manualModel}
+                onChange={(event) => setManualModel(event.currentTarget.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    event.preventDefault();
+                    commitManualModel();
+                  }
+                }}
+                placeholder={t("newTask.modelManualPlaceholder")}
+                style={{
+                  minWidth: 180,
+                  flex: "1 1 auto",
+                  padding: "6px 8px",
+                  borderRadius: 6,
+                  border: "1px solid var(--border-medium)",
+                  background: "var(--bg-input)",
+                  color: "var(--text-primary)",
+                  fontSize: 12,
+                  fontFamily: "var(--font-mono)",
+                }}
+              />
+              <button
+                type="button"
+                style={{ ...s.toolbarMenuItem, border: "none", background: "var(--bg-card)" }}
+                onClick={commitManualModel}
+              >
+                {t("newTask.modelUseManual")}
+              </button>
+            </div>
             {models.length === 0 && (
               <div
                 style={{

@@ -571,6 +571,7 @@ pub async fn run_task(
     let launch = crate::app_settings::get_agent_launch_spec(&agent);
     let agent_bin = launch.program.clone();
     let is_codex = crate::app_settings::is_codex_like_agent(&agent);
+    let is_custom_agent = crate::app_settings::is_custom_agent(&agent);
 
     // 版本统一走全局探测（带缓存），判断是否支持 --session-id。
     // 缓存未命中时 *_version_gte 会启子进程探测，故放进 spawn_blocking 避免阻塞 async runtime。
@@ -593,10 +594,14 @@ pub async fn run_task(
     // 先于 cmd 构建计算,因为 Codex 的 --dangerously-bypass-hook-trust 必须加在
     // `--`/positional prompt 之前。
     let use_hooks = {
-        let agent = agent.clone();
-        tokio::task::spawn_blocking(move || crate::hooks::usable_for(&agent))
-            .await
-            .unwrap_or(false)
+        if is_custom_agent {
+            false
+        } else {
+            let agent = agent.clone();
+            tokio::task::spawn_blocking(move || crate::hooks::usable_for(&agent))
+                .await
+                .unwrap_or(false)
+        }
     };
 
     let mut cmd = if is_codex {
@@ -658,22 +663,23 @@ pub async fn run_task(
 
     // hook 可信时不创建 session 转发通道,也不拉起轮询 watcher。
     // Codex 空 prompt 进入交互 REPL，不能通过注入 /status 抢占用户输入。
-    let session_tx =
-        if should_start_status_session_watcher(use_hooks, is_codex, final_prompt.is_empty()) {
-            let (session_tx, session_rx) = std::sync::mpsc::channel::<String>();
-            spawn_status_session_watcher(
-                app.clone(),
-                task_id.clone(),
-                project_path.clone(),
-                is_codex,
-                session_rx,
-                pre_session_id,
-                final_prompt.is_empty(),
-            );
-            Some(session_tx)
-        } else {
-            None
-        };
+    let session_tx = if !is_custom_agent
+        && should_start_status_session_watcher(use_hooks, is_codex, final_prompt.is_empty())
+    {
+        let (session_tx, session_rx) = std::sync::mpsc::channel::<String>();
+        spawn_status_session_watcher(
+            app.clone(),
+            task_id.clone(),
+            project_path.clone(),
+            is_codex,
+            session_rx,
+            pre_session_id,
+            final_prompt.is_empty(),
+        );
+        Some(session_tx)
+    } else {
+        None
+    };
     spawn_pty_reader(
         app.clone(),
         task_id.clone(),
@@ -833,15 +839,20 @@ pub async fn resume_task(
 
     let launch = crate::app_settings::get_agent_launch_spec(&agent);
     let agent_bin = launch.program.clone();
+    let is_custom_agent = crate::app_settings::is_custom_agent(&agent);
     // hook 可信时会话发现/状态由 event_watcher 驱动,跳过轮询 watcher;否则回退,
     // 且不注入 AERORIC_* 守卫变量,避免旧版但已安装 hook 的 agent 与轮询路径并行重复
     // 上报。版本统一走全局带缓存的探测。
     // 先于 cmd 构建计算,因 Codex 的 bypass flag 需加在 `resume` 子命令之前。
     let use_hooks = {
-        let agent = agent.clone();
-        tokio::task::spawn_blocking(move || crate::hooks::usable_for(&agent))
-            .await
-            .unwrap_or(false)
+        if is_custom_agent {
+            false
+        } else {
+            let agent = agent.clone();
+            tokio::task::spawn_blocking(move || crate::hooks::usable_for(&agent))
+                .await
+                .unwrap_or(false)
+        }
     };
 
     let is_codex = crate::app_settings::is_codex_like_agent(&agent);
@@ -891,7 +902,7 @@ pub async fn resume_task(
     let is_codex = crate::app_settings::is_codex_like_agent(&agent);
 
     // resume 时 session_id 已知，直接查找文件并开始监视(hook 可信时跳过)
-    if !use_hooks {
+    if !use_hooks && !is_custom_agent {
         spawn_resume_session_watcher(
             app.clone(),
             task_id.clone(),
