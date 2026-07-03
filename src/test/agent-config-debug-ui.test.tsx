@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { invoke } from "@tauri-apps/api/core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -228,16 +228,33 @@ describe("Agent config and debug panel UI", () => {
   it("deletes custom agent configs through the settings panel", async () => {
     const user = userEvent.setup();
     const onDeleted = renderDeletableAgentConfigPanel("#!/bin/sh\n");
-    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
 
     await findConfigEditor("#!/bin/sh\n");
     await user.click(screen.getByRole("button", { name: /Delete Agent/i }));
+
+    expect(invoke).not.toHaveBeenCalledWith("delete_custom_agent_profile", { id: "gpt55" });
+    await user.click(screen.getByRole("button", { name: /Confirm Delete/i }));
 
     await waitFor(() =>
       expect(invoke).toHaveBeenCalledWith("delete_custom_agent_profile", { id: "gpt55" }),
     );
     expect(onDeleted).toHaveBeenCalled();
-    confirmSpy.mockRestore();
+  });
+
+  it("does not delete a custom agent until the confirmation is accepted", async () => {
+    const user = userEvent.setup();
+    const onDeleted = renderDeletableAgentConfigPanel("#!/bin/sh\n");
+
+    await findConfigEditor("#!/bin/sh\n");
+    await user.click(screen.getByRole("button", { name: /Delete Agent/i }));
+    const confirmDialog = screen.getByRole("dialog", { name: /Delete Agent/i });
+    await user.click(within(confirmDialog).getByRole("button", { name: /^Cancel$/i }));
+
+    expect(
+      screen.queryByText("Delete this Agent and permanently remove its local config file?"),
+    ).not.toBeInTheDocument();
+    expect(invoke).not.toHaveBeenCalledWith("delete_custom_agent_profile", { id: "gpt55" });
+    expect(onDeleted).not.toHaveBeenCalled();
   });
 
   it("renders debug controls as stable shadcn-style button groups", async () => {

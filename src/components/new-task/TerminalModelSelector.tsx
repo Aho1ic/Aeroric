@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, type CSSProperties } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { ChevronDown, Cpu } from "lucide-react";
 import * as Popover from "@radix-ui/react-popover";
@@ -14,6 +14,25 @@ interface AgentModels {
 
 function setMenuItemHover(el: HTMLElement, hover: boolean) {
   el.style.background = hover ? "var(--accent-subtle)" : "transparent";
+}
+
+export function terminalModelMenuContentStyle(): CSSProperties {
+  return {
+    ...s.toolbarMenuContent,
+    maxHeight: "min(280px, var(--radix-popover-content-available-height))",
+    overflow: "hidden",
+  };
+}
+
+export function terminalModelMenuScrollStyle(): CSSProperties {
+  return {
+    display: "flex",
+    flexDirection: "column",
+    gap: 2,
+    maxHeight: "min(280px, var(--radix-popover-content-available-height))",
+    overflowY: "auto",
+    overscrollBehavior: "contain",
+  };
 }
 
 export function TerminalModelSelector({
@@ -129,10 +148,10 @@ export function TerminalModelSelector({
           side="bottom"
           align="end"
           sideOffset={6}
-          avoidCollisions={false}
-          style={s.toolbarMenuContent}
+          collisionPadding={8}
+          style={terminalModelMenuContentStyle()}
         >
-          <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+          <div style={terminalModelMenuScrollStyle()}>
             {models.map((model) => (
               <button
                 key={model}

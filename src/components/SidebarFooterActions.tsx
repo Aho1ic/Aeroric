@@ -8,7 +8,11 @@ import type {
   FontFamily,
 } from "../types";
 import { AppSettingsDialog } from "./AppSettingsDialog";
-import { OPEN_APP_SETTINGS_EVENT } from "./app-settings/types";
+import {
+  OPEN_APP_SETTINGS_EVENT,
+  type NavKey,
+  type OpenAppSettingsDetail,
+} from "./app-settings/types";
 import { NotificationBell } from "./NotificationBell";
 import { ENABLE_USAGE_INSIGHTS } from "../platform";
 import { UsagePopover } from "./UsagePopover";
@@ -54,10 +58,16 @@ export function SidebarFooterActions({
 }) {
   const { t } = useI18n();
   const [showAppSettings, setShowAppSettings] = useState(false);
+  const [initialSettingsNav, setInitialSettingsNav] = useState<NavKey>("general");
   const isDark = themeVariant === "dark";
 
   useEffect(() => {
-    const open = () => setShowAppSettings(true);
+    const open = (event: Event) => {
+      const detail =
+        event instanceof CustomEvent ? (event.detail as OpenAppSettingsDetail | undefined) : null;
+      setInitialSettingsNav(detail?.initialNav ?? "general");
+      setShowAppSettings(true);
+    };
     window.addEventListener(OPEN_APP_SETTINGS_EVENT, open);
     return () => window.removeEventListener(OPEN_APP_SETTINGS_EVENT, open);
   }, []);
@@ -69,7 +79,10 @@ export function SidebarFooterActions({
         <button
           style={s.sidebarIconBtn}
           title={t("appSettings.title")}
-          onClick={() => setShowAppSettings(true)}
+          onClick={() => {
+            setInitialSettingsNav("general");
+            setShowAppSettings(true);
+          }}
         >
           <Settings size={14} strokeWidth={1.6} color="var(--text-hint)" />
         </button>
@@ -89,6 +102,7 @@ export function SidebarFooterActions({
 
       {showAppSettings && (
         <AppSettingsDialog
+          initialNav={initialSettingsNav}
           themeVariant={themeVariant}
           themeMode={themeMode}
           systemPrefersDark={systemPrefersDark}

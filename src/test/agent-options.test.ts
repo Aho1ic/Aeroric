@@ -10,6 +10,10 @@ import {
   composePermissionLabel,
   nextComposeMenuState,
 } from "../components/new-task/AgentPermSelector";
+import {
+  terminalModelMenuContentStyle,
+  terminalModelMenuScrollStyle,
+} from "../components/new-task/TerminalModelSelector";
 
 describe("agent options", () => {
   it("exposes only clean release launch profiles in dropdown order", () => {
@@ -66,5 +70,21 @@ describe("agent options", () => {
     expect(nextComposeMenuState("launch", "branch", true)).toBe("branch");
     expect(nextComposeMenuState("branch", "permission", true)).toBe("permission");
     expect(nextComposeMenuState("send", "send", false)).toBe(null);
+  });
+
+  it("constrains the terminal model menu to the viewport and scrolls long model lists", () => {
+    expect(terminalModelMenuContentStyle()).toEqual(
+      expect.objectContaining({
+        maxHeight: "min(280px, var(--radix-popover-content-available-height))",
+        overflow: "hidden",
+      }),
+    );
+    expect(terminalModelMenuScrollStyle()).toEqual(
+      expect.objectContaining({
+        maxHeight: "min(280px, var(--radix-popover-content-available-height))",
+        overflowY: "auto",
+        overscrollBehavior: "contain",
+      }),
+    );
   });
 });

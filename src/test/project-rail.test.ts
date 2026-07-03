@@ -49,6 +49,7 @@ describe("project rail task grouping", () => {
   it("keeps the expanded project footer as icon-only utility actions", () => {
     expect(getProjectRailFooterActions(false)).toEqual([
       "backHome",
+      "agentSettings",
       "openProject",
       "notifications",
       "theme",

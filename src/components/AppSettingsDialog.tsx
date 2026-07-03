@@ -1,4 +1,4 @@
-import { Fragment, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 import {
   X,
   Keyboard,
@@ -95,6 +95,7 @@ function NavItemIcon({
 
 export function AppSettingsDialog({
   onClose,
+  initialNav = "general",
   themeVariant,
   themeMode,
   systemPrefersDark,
@@ -113,6 +114,7 @@ export function AppSettingsDialog({
   onMonoFontFamilyChange,
 }: {
   onClose: () => void;
+  initialNav?: NavKey;
   themeVariant: ThemeVariant;
   themeMode: ThemeMode;
   systemPrefersDark: boolean;
@@ -132,7 +134,11 @@ export function AppSettingsDialog({
 }) {
   const { t } = useI18n();
   const agentOptions = useAgentOptions();
-  const [activeNav, setActiveNav] = useState<NavKey>("general");
+  const [activeNav, setActiveNav] = useState<NavKey>(initialNav);
+
+  useEffect(() => {
+    setActiveNav(initialNav);
+  }, [initialNav]);
 
   function handleOverlayClick(e: React.MouseEvent) {
     if (e.target === e.currentTarget) onClose();

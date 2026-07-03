@@ -35,6 +35,7 @@ export function AgentConfigPanel({
   const [original, setOriginal] = useState("");
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
   const fileContentImeFix = useTextInputIMEFix<HTMLTextAreaElement>((content) =>
@@ -97,10 +98,8 @@ export function AgentConfigPanel({
     setFileState({ status: "loaded", content: original });
   }
 
-  async function handleDelete() {
+  async function confirmDelete() {
     if (!deletable || deleting) return;
-    const confirmed = window.confirm(t("appSettings.confirmDeleteAgentConfig"));
-    if (!confirmed) return;
     setDeleting(true);
     setError(null);
     setSaved(false);
@@ -112,6 +111,7 @@ export function AgentConfigPanel({
       setError(String(e));
     } finally {
       setDeleting(false);
+      setDeleteConfirmOpen(false);
     }
   }
 
@@ -237,7 +237,7 @@ export function AgentConfigPanel({
             <Button
               variant="destructive"
               size="sm"
-              onClick={handleDelete}
+              onClick={() => setDeleteConfirmOpen(true)}
               disabled={deleting || saving}
               style={{ marginRight: "auto" }}
             >
@@ -251,6 +251,77 @@ export function AgentConfigPanel({
           <Button variant="default" size="sm" onClick={handleSave} disabled={saving || !isDirty}>
             {saving ? t("common.saving") : t("common.save")}
           </Button>
+        </div>
+      )}
+
+      {deleteConfirmOpen && (
+        <div
+          role="presentation"
+          style={{
+            position: "fixed",
+            inset: 0,
+            zIndex: 3000,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            background: "rgba(0,0,0,0.36)",
+          }}
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget && !deleting) {
+              setDeleteConfirmOpen(false);
+            }
+          }}
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="agent-delete-confirm-title"
+            style={{
+              width: "min(420px, calc(100vw - 32px))",
+              border: "1px solid var(--border-medium)",
+              borderRadius: 8,
+              background: "var(--bg-card)",
+              boxShadow: "var(--shadow-popover)",
+              padding: 18,
+            }}
+          >
+            <div
+              id="agent-delete-confirm-title"
+              style={{
+                fontSize: 15,
+                fontWeight: 700,
+                color: "var(--text-primary)",
+                marginBottom: 8,
+              }}
+            >
+              {t("appSettings.deleteAgentConfig")}
+            </div>
+            <div style={{ fontSize: 13, lineHeight: 1.55, color: "var(--text-secondary)" }}>
+              {t("appSettings.confirmDeleteAgentConfig")}
+            </div>
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "flex-end",
+                gap: 8,
+                marginTop: 18,
+              }}
+            >
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setDeleteConfirmOpen(false)}
+                disabled={deleting}
+              >
+                {t("common.cancel")}
+              </Button>
+              <Button variant="destructive" size="sm" onClick={confirmDelete} disabled={deleting}>
+                {deleting
+                  ? t("appSettings.deletingAgent")
+                  : t("appSettings.confirmDeleteAgentAction")}
+              </Button>
+            </div>
+          </div>
         </div>
       )}
     </>
