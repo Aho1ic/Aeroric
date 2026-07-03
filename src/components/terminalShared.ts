@@ -86,8 +86,11 @@ export function themeFor(variant: ThemeVariant) {
 
 // ── Watermark flow control ───────────────────────────────────────────────────
 
-const HIGH_WATER = 128 * 1024; // 128 KB：超过时停止写入
-const LOW_WATER = 16 * 1024; //  16 KB：恢复写入
+const HIGH_WATER = 96 * 1024; // 96 KB：超过时停止写入
+const LOW_WATER = 16 * 1024; // 16 KB：恢复写入
+export const TERMINAL_WRITE_CHUNK_SIZE = 16 * 1024;
+export const TERMINAL_FRAME_WRITE_BUDGET = 32 * 1024;
+export const TERMINAL_USER_INPUT_PAUSE_MS = 48;
 const ANSI_FG_RESET = "\x1b[39m";
 const TERMINAL_HIGHLIGHT_PATTERN =
   /\b(error|exception|traceback|failed|fail|warning|warn|success|passed|pass|running|done)\b|\b\d+(?:\.\d+)?(?:%|ms|s|MB|GB|KB)?\b/gi;
@@ -130,6 +133,7 @@ export interface SmartWriter {
   write: (data: string, callback?: () => void) => void;
   drainPending: () => void;
   setSelectionPaused: (paused: boolean) => void;
+  pauseForUserInput: (durationMs?: number) => void;
 }
 
 interface TerminalSelectionGuardOptions {
@@ -271,6 +275,45 @@ export function attachMacWebKitTerminalGuard({
   };
 }
 
+export function splitTerminalWriteChunk(
+  data: string,
+  maxChunkSize = TERMINAL_WRITE_CHUNK_SIZE,
+): string[] {
+  if (data.length <= maxChunkSize) return [data];
+  const chunks: string[] = [];
+  let start = 0;
+  while (start < data.length) {
+    let end = Math.min(start + maxChunkSize, data.length);
+    const prevCode = data.charCodeAt(end - 1);
+    const nextCode = data.charCodeAt(end);
+    if (
+      end < data.length &&
+      prevCode >= 0xd800 &&
+      prevCode <= 0xdbff &&
+      nextCode >= 0xdc00 &&
+      nextCode <= 0xdfff
+    ) {
+      end -= 1;
+    }
+    if (end <= start) end = Math.min(start + maxChunkSize, data.length);
+    chunks.push(data.slice(start, end));
+    start = end;
+  }
+  return chunks;
+}
+
+function nowMs(): number {
+  return typeof performance !== "undefined" ? performance.now() : Date.now();
+}
+
+function scheduleFrame(callback: FrameRequestCallback): void {
+  if (typeof window !== "undefined" && typeof window.requestAnimationFrame === "function") {
+    window.requestAnimationFrame(callback);
+    return;
+  }
+  globalThis.setTimeout(() => callback(nowMs()), 16);
+}
+
 /**
  * 创建基于水位线的流控写入器。
  *
@@ -284,22 +327,45 @@ export function createSmartWriter(term: Terminal): SmartWriter {
     watermark: 0,
     paused: false,
     selectionPaused: false,
+    inputPausedUntil: 0,
+    drainScheduled: false,
   };
 
   function flushOne(data: string, callback?: () => void) {
-    const output = colorizePlainTerminalOutput(data);
-    state.watermark += output.length;
-    term.write(output, () => {
-      state.watermark -= output.length;
+    state.watermark += data.length;
+    term.write(data, () => {
+      state.watermark -= data.length;
       callback?.();
       if (state.paused && state.watermark < LOW_WATER) {
         state.paused = false;
-        drainPending();
+        scheduleDrain();
       }
     });
   }
 
+  function scheduleDrain(delayMs = 0) {
+    if (state.drainScheduled) return;
+    state.drainScheduled = true;
+    const run = () => {
+      state.drainScheduled = false;
+      drainPending();
+    };
+    if (delayMs > 0) {
+      globalThis.setTimeout(run, delayMs);
+      return;
+    }
+    scheduleFrame(run);
+  }
+
   function drainPending() {
+    if (state.selectionPaused) return;
+    const inputPauseRemaining = state.inputPausedUntil - nowMs();
+    if (inputPauseRemaining > 0) {
+      scheduleDrain(inputPauseRemaining);
+      return;
+    }
+
+    let bytesThisFrame = 0;
     while (state.pendingChunks.length > 0 && !state.paused && !state.selectionPaused) {
       const next = state.pendingChunks.shift()!;
       if (state.watermark >= HIGH_WATER) {
@@ -308,24 +374,39 @@ export function createSmartWriter(term: Terminal): SmartWriter {
         break;
       }
       flushOne(next.data, next.callback);
+      bytesThisFrame += next.data.length;
+      if (bytesThisFrame >= TERMINAL_FRAME_WRITE_BUDGET) {
+        break;
+      }
+    }
+    if (state.pendingChunks.length > 0 && !state.paused && !state.selectionPaused) {
+      scheduleDrain();
     }
   }
 
   function write(data: string, callback?: () => void) {
-    if (state.paused || state.selectionPaused || state.watermark >= HIGH_WATER) {
-      if (state.watermark >= HIGH_WATER) state.paused = true;
-      state.pendingChunks.push({ data, callback });
-      return;
+    const chunks = splitTerminalWriteChunk(colorizePlainTerminalOutput(data));
+    for (let index = 0; index < chunks.length; index += 1) {
+      state.pendingChunks.push({
+        data: chunks[index],
+        callback: index === chunks.length - 1 ? callback : undefined,
+      });
     }
-    flushOne(data, callback);
+    if (state.watermark >= HIGH_WATER) state.paused = true;
+    drainPending();
   }
 
   function setSelectionPaused(paused: boolean) {
     state.selectionPaused = paused;
-    if (!paused) drainPending();
+    if (!paused) scheduleDrain();
   }
 
-  return { write, drainPending, setSelectionPaused };
+  function pauseForUserInput(durationMs = TERMINAL_USER_INPUT_PAUSE_MS) {
+    state.inputPausedUntil = Math.max(state.inputPausedUntil, nowMs() + durationMs);
+    if (state.pendingChunks.length > 0) scheduleDrain(durationMs);
+  }
+
+  return { write, drainPending, setSelectionPaused, pauseForUserInput };
 }
 
 // ── xterm initialization ─────────────────────────────────────────────────────

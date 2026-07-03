@@ -103,6 +103,10 @@ export function TerminalView({
 
     const writer = createSmartWriter(term);
     const disposeMacWebKitGuard = attachMacWebKitTerminalGuard({ term, container, writer });
+    const sendInput = (data: string) => {
+      writer.pauseForUserInput();
+      onInputRef.current(data);
+    };
 
     const terminalGeneration = onRegisterRef.current(writer.write);
 
@@ -133,10 +137,10 @@ export function TerminalView({
 
     const disposeSmartCopy = attachSmartCopy(term, {
       matchesNewline: (e) => matchesTerminalNewline(e, shiftEnterNewlineRef.current),
-      onNewline: () => onInputRef.current(TERMINAL_NEWLINE_SEQUENCE),
-      onPaste: (text) => onInputRef.current(text),
+      onNewline: () => sendInput(TERMINAL_NEWLINE_SEQUENCE),
+      onPaste: (text) => sendInput(text),
     });
-    const linuxIME = attachLinuxIMEFix(term, (data) => onInputRef.current(data));
+    const linuxIME = attachLinuxIMEFix(term, sendInput);
     const disposeOnData = { dispose: () => linuxIME.dispose() };
 
     const handlePointerDown = (e: PointerEvent) => {
