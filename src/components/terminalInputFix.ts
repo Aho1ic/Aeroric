@@ -215,6 +215,17 @@ function normalizeRomanizedReplayText(text: string): string {
   return text.replace(/['`\s]/g, "").toLowerCase();
 }
 
+function normalizeRomanizedCompositionCommitText(text: string): string {
+  return normalizeCommittedCompositionText(text).replace(/['`\s]/g, "");
+}
+
+function normalizeCompositionTextForCommit(text: string, preeditText: string): string {
+  if (shouldDeferRomanizedCompositionCommit(text, preeditText)) {
+    return normalizeRomanizedCompositionCommitText(text);
+  }
+  return normalizeCommittedCompositionText(text);
+}
+
 function normalizeTerminalDataAfterIme(
   text: string,
   candidates: ReadonlySet<string> = new Set(),
@@ -234,6 +245,10 @@ function normalizeTerminalDataAfterIme(
     }
   }
   return normalizeCommittedCompositionText(text);
+}
+
+function isImeSourceSwitchKey(event: KeyboardEvent): boolean {
+  return event.key === "CapsLock" || (event.code === "Space" && event.ctrlKey);
 }
 
 export function attachMacWebKitShiftInputFix(term: TerminalWithInput): () => void {
@@ -386,7 +401,7 @@ export function attachLinuxIMEFix(
   };
 
   const commitCompositionText = (text: string, preeditText: string) => {
-    const normalized = normalizeCommittedCompositionText(text);
+    const normalized = normalizeCompositionTextForCommit(text, preeditText);
     ignoredReplayProgress = "";
     ignoredPostCompositionCandidates = buildPostCompositionIgnoredCandidates(text, preeditText);
     ignorePostCompositionUntil = performance.now() + POST_COMPOSITION_REPLAY_IGNORE_MS;
@@ -414,7 +429,7 @@ export function attachLinuxIMEFix(
       return null;
     }
     const text = compositionText;
-    const normalized = normalizeCommittedCompositionText(text);
+    const normalized = normalizeRomanizedCompositionCommitText(text);
     isComposing = false;
     compositionText = "";
     clearPendingCompositionCommit();
@@ -719,6 +734,11 @@ export function attachLinuxIMEFix(
       return;
     }
     suppressNextTextInsertAfterRepeatedKey = null;
+    if (isComposing && isImeSourceSwitchKey(event)) {
+      commitActiveRomanizedComposition();
+      event.stopImmediatePropagation();
+      return;
+    }
     if (!isComposing && event.keyCode === 229) event.stopImmediatePropagation();
   };
 

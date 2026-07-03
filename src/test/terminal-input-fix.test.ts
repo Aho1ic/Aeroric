@@ -859,6 +859,87 @@ describe("terminal input fixes", () => {
     vi.useRealTimers();
   });
 
+  it("commits romanized composition immediately on CapsLock IME switch", async () => {
+    vi.useFakeTimers();
+    vi.resetModules();
+    vi.doMock("../platform", () => ({
+      APP_PLATFORM: "macos",
+      ENABLE_USAGE_INSIGHTS: true,
+      IS_MAC_WEBKIT: true,
+      IS_OTHER_WEBKIT: false,
+      detectAppPlatform: () => "macos",
+      isAppleWebKit: () => true,
+    }));
+    const { attachLinuxIMEFix } = await import("../components/terminalInputFix");
+    const textarea = document.createElement("textarea");
+    const sent: string[] = [];
+    const term = {
+      textarea,
+      onData: (listener: (data: string) => void) => {
+        void listener;
+        return { dispose: vi.fn() };
+      },
+    };
+
+    attachLinuxIMEFix(term as never, (data) => sent.push(data));
+
+    textarea.dispatchEvent(new CompositionEvent("compositionstart", { data: "" }));
+    textarea.dispatchEvent(new CompositionEvent("compositionupdate", { data: "shi'de" }));
+    textarea.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "CapsLock",
+        code: "CapsLock",
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+
+    expect(sent).toEqual(["shide"]);
+    vi.runOnlyPendingTimers();
+    expect(sent).toEqual(["shide"]);
+    vi.useRealTimers();
+  });
+
+  it("commits romanized composition immediately on Control-Space IME switch", async () => {
+    vi.useFakeTimers();
+    vi.resetModules();
+    vi.doMock("../platform", () => ({
+      APP_PLATFORM: "macos",
+      ENABLE_USAGE_INSIGHTS: true,
+      IS_MAC_WEBKIT: true,
+      IS_OTHER_WEBKIT: false,
+      detectAppPlatform: () => "macos",
+      isAppleWebKit: () => true,
+    }));
+    const { attachLinuxIMEFix } = await import("../components/terminalInputFix");
+    const textarea = document.createElement("textarea");
+    const sent: string[] = [];
+    const term = {
+      textarea,
+      onData: (listener: (data: string) => void) => {
+        void listener;
+        return { dispose: vi.fn() };
+      },
+    };
+
+    attachLinuxIMEFix(term as never, (data) => sent.push(data));
+
+    textarea.dispatchEvent(new CompositionEvent("compositionstart", { data: "" }));
+    textarea.dispatchEvent(new CompositionEvent("compositionupdate", { data: "qing`kong" }));
+    textarea.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: " ",
+        code: "Space",
+        ctrlKey: true,
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+
+    expect(sent).toEqual(["qingkong"]);
+    vi.useRealTimers();
+  });
+
   it("commits romanized composition on blur during IME switch", async () => {
     vi.useFakeTimers();
     vi.resetModules();
