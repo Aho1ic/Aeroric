@@ -39,7 +39,12 @@ export function TerminalModelSelector({
   const [internalOpenMenu, setInternalOpenMenu] = useState<ComposeMenu>(null);
   const openMenu = controlledOpenMenu ?? internalOpenMenu;
   const open = openMenu === "model";
-  const controlButtonStyle = compact ? s.toolbarBtnIconOnly : s.toolbarBtn;
+  const controlButtonStyle = {
+    ...(compact ? s.toolbarBtnIconOnly : s.toolbarBtn),
+    minHeight: 24,
+    height: 24,
+    padding: compact ? 0 : "2px 7px",
+  };
 
   const setOpenMenu = (menu: ComposeMenu) => {
     if (onOpenMenuChange) {
@@ -120,7 +125,13 @@ export function TerminalModelSelector({
         </button>
       </Popover.Trigger>
       <Popover.Portal>
-        <Popover.Content side="top" align="end" sideOffset={6} style={s.toolbarMenuContent}>
+        <Popover.Content
+          side="bottom"
+          align="end"
+          sideOffset={6}
+          avoidCollisions={false}
+          style={s.toolbarMenuContent}
+        >
           <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
             {models.map((model) => (
               <button
@@ -159,7 +170,8 @@ export function TerminalModelSelector({
                 style={{
                   minWidth: 180,
                   flex: "1 1 auto",
-                  padding: "6px 8px",
+                  height: 28,
+                  padding: "4px 8px",
                   borderRadius: 6,
                   border: "1px solid var(--border-medium)",
                   background: "var(--bg-input)",

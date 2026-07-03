@@ -589,27 +589,72 @@ fn model_endpoint(base_url: &str) -> String {
     }
 }
 
-fn parse_model_ids(value: serde_json::Value) -> Vec<String> {
-    let data = value
-        .get("data")
-        .and_then(|data| data.as_array())
-        .cloned()
-        .or_else(|| value.as_array().cloned())
-        .unwrap_or_default();
-    let mut out = data
-        .into_iter()
-        .filter_map(|item| {
-            if let Some(id) = item.as_str() {
-                return Some(id.to_string());
+fn looks_like_model_id(value: &str) -> bool {
+    let value = value.trim();
+    !value.is_empty()
+        && value.len() <= 160
+        && value
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '-' | '_' | '/' | ':'))
+}
+
+fn push_detected_model_id(out: &mut Vec<String>, value: &str) {
+    let model = value.trim();
+    if looks_like_model_id(model) && !out.iter().any(|existing| existing == model) {
+        out.push(model.to_string());
+    }
+}
+
+fn collect_model_ids(value: &serde_json::Value, out: &mut Vec<String>) {
+    if let Some(id) = value.as_str() {
+        push_detected_model_id(out, id);
+        return;
+    }
+
+    if let Some(items) = value.as_array() {
+        for item in items {
+            collect_model_ids(item, out);
+        }
+        return;
+    }
+
+    let Some(object) = value.as_object() else {
+        return;
+    };
+
+    if object
+        .get("visibility")
+        .and_then(|visibility| visibility.as_str())
+        .is_some_and(|visibility| visibility.eq_ignore_ascii_case("hidden"))
+    {
+        return;
+    }
+
+    for key in ["id", "name", "slug", "model", "display_name"] {
+        if let Some(id) = object.get(key).and_then(|id| id.as_str()) {
+            push_detected_model_id(out, id);
+        }
+    }
+
+    for key in ["data", "models", "items"] {
+        let Some(nested) = object.get(key) else {
+            continue;
+        };
+        if let Some(map) = nested.as_object() {
+            for (model_key, model_value) in map {
+                push_detected_model_id(out, model_key);
+                collect_model_ids(model_value, out);
             }
-            item.get("id")
-                .or_else(|| item.get("name"))
-                .and_then(|id| id.as_str())
-                .map(|id| id.to_string())
-        })
-        .filter(|id| !id.trim().is_empty())
-        .collect::<Vec<_>>();
-    out.sort();
+        } else {
+            collect_model_ids(nested, out);
+        }
+    }
+}
+
+fn parse_model_ids(value: serde_json::Value) -> Vec<String> {
+    let mut out = Vec::new();
+    collect_model_ids(&value, &mut out);
+    out.sort_by_key(|model| model.to_ascii_lowercase());
     out.dedup();
     out
 }
@@ -817,6 +862,26 @@ fn write_agent_script(id: &str, content: &str) -> Result<PathBuf, String> {
         fs::set_permissions(&path, permissions).map_err(|e| e.to_string())?;
     }
     Ok(path)
+}
+
+fn remove_agent_profile_file(path: &str) -> Result<(), String> {
+    let path = normalize_config_path(path.to_string());
+    if path.trim().is_empty() {
+        return Ok(());
+    }
+    let path = Path::new(&path);
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error.to_string()),
+    };
+    if metadata.is_dir() {
+        return Err(format!(
+            "Refusing to delete directory as agent config: {}",
+            path.display()
+        ));
+    }
+    fs::remove_file(path).map_err(|error| error.to_string())
 }
 
 fn normalize_settings(settings: AppSettings) -> AppSettings {
@@ -1202,6 +1267,14 @@ pub async fn delete_custom_agent_profile(id: String) -> Result<AppSettings, Stri
         let _guard = settings_lock().lock();
         let mut settings = load_settings_unlocked();
         let normalized_id = sanitize_custom_agent_id(&id);
+        let removed_path = settings
+            .custom_agents
+            .iter()
+            .find(|profile| profile.id == normalized_id)
+            .map(|profile| profile.path.clone());
+        if let Some(path) = removed_path.as_deref() {
+            remove_agent_profile_file(path)?;
+        }
         settings
             .custom_agents
             .retain(|profile| profile.id != normalized_id);
@@ -1601,6 +1674,44 @@ export ANTHROPIC_DEFAULT_OPUS_MODEL='claude-opus-4-8'
         });
 
         assert_eq!(parse_model_ids(value), vec!["a-model", "z-model"]);
+    }
+
+    #[test]
+    fn parses_provider_model_names_from_common_catalog_shapes() {
+        let value = serde_json::json!({
+            "models": {
+                "glm": { "name": "GLM" },
+                "mimo": {},
+                "claude-opus-4-6": { "id": "claude-opus-4-6" },
+                "GLM-5.2": { "display_name": "GLM-5.2" }
+            },
+            "items": [
+                { "model": "claude" }
+            ]
+        });
+
+        assert_eq!(
+            parse_model_ids(value),
+            vec!["claude", "claude-opus-4-6", "glm", "GLM", "GLM-5.2", "mimo"]
+        );
+    }
+
+    #[test]
+    fn removes_agent_profile_file_but_refuses_directories() {
+        let dir = std::env::temp_dir().join(format!("aeroric-agent-delete-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let script = dir.join("agent.sh");
+        fs::write(&script, "#!/bin/sh\n").unwrap();
+
+        remove_agent_profile_file(&script.to_string_lossy()).unwrap();
+        assert!(!script.exists());
+
+        let directory_result = remove_agent_profile_file(&dir.to_string_lossy());
+        assert!(directory_result
+            .unwrap_err()
+            .contains("Refusing to delete directory"));
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[cfg(unix)]

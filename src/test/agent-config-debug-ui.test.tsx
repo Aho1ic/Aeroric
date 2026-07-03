@@ -70,6 +70,23 @@ function renderAgentConfigPanel(content: string) {
   );
 }
 
+function renderDeletableAgentConfigPanel(content: string, onDeleted = vi.fn()) {
+  mockInvokeForAgentConfig(content);
+  render(
+    <I18nProvider>
+      <AgentConfigPanel
+        agentKey="gpt55"
+        filePath="/Users/macbook/.aeroric/agents/gpt55.sh"
+        lang="shellscript"
+        themeVariant="light"
+        deletable
+        onDeleted={onDeleted}
+      />
+    </I18nProvider>,
+  );
+  return onDeleted;
+}
+
 function renderAgentConfigPanelWithMissingFile() {
   mockInvokeForAgentConfig("");
   vi.mocked(invoke).mockImplementation((command) => {
@@ -206,6 +223,21 @@ describe("Agent config and debug panel UI", () => {
       }),
     );
     expect(screen.queryByRole("button", { name: /Edit/i })).not.toBeInTheDocument();
+  });
+
+  it("deletes custom agent configs through the settings panel", async () => {
+    const user = userEvent.setup();
+    const onDeleted = renderDeletableAgentConfigPanel("#!/bin/sh\n");
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+
+    await findConfigEditor("#!/bin/sh\n");
+    await user.click(screen.getByRole("button", { name: /Delete Agent/i }));
+
+    await waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith("delete_custom_agent_profile", { id: "gpt55" }),
+    );
+    expect(onDeleted).toHaveBeenCalled();
+    confirmSpy.mockRestore();
   });
 
   it("renders debug controls as stable shadcn-style button groups", async () => {

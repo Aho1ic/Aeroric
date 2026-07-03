@@ -75,6 +75,7 @@ export interface AppSettingsNavItem {
   logo?: string;
   filePath?: string;
   lang?: string;
+  custom?: boolean;
 }
 
 export const APP_SETTINGS_CHANGED_EVENT = "aeroric:app-settings-changed";

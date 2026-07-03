@@ -1,10 +1,10 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Check } from "lucide-react";
+import { Check, Trash2 } from "lucide-react";
 import { useI18n } from "../../i18n";
 import s from "../../styles";
 import { AgentPathSection } from "./AgentPathSection";
-import type { AgentKey } from "./types";
+import { APP_SETTINGS_CHANGED_EVENT, type AgentKey } from "./types";
 import type { ThemeVariant } from "../../types";
 import { useTextInputIMEFix } from "../useTextInputIMEFix";
 import { Button } from "../ui/Button";
@@ -19,17 +19,22 @@ export function AgentConfigPanel({
   filePath,
   lang: _lang,
   themeVariant: _themeVariant,
+  deletable = false,
+  onDeleted,
 }: {
   agentKey: AgentKey;
   filePath: string;
   lang: string;
   themeVariant: ThemeVariant;
+  deletable?: boolean;
+  onDeleted?: () => void;
 }) {
   const { t } = useI18n();
   const [resolvedFilePath, setResolvedFilePath] = useState(filePath);
   const [fileState, setFileState] = useState<FileState>({ status: "loading" });
   const [original, setOriginal] = useState("");
   const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
   const fileContentImeFix = useTextInputIMEFix<HTMLTextAreaElement>((content) =>
@@ -90,6 +95,24 @@ export function AgentConfigPanel({
 
   function handleCancel() {
     setFileState({ status: "loaded", content: original });
+  }
+
+  async function handleDelete() {
+    if (!deletable || deleting) return;
+    const confirmed = window.confirm(t("appSettings.confirmDeleteAgentConfig"));
+    if (!confirmed) return;
+    setDeleting(true);
+    setError(null);
+    setSaved(false);
+    try {
+      await invoke("delete_custom_agent_profile", { id: agentKey });
+      window.dispatchEvent(new Event(APP_SETTINGS_CHANGED_EVENT));
+      onDeleted?.();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setDeleting(false);
+    }
   }
 
   const isDirty = fileState.status === "loaded" && fileState.content !== original;
@@ -210,6 +233,18 @@ export function AgentConfigPanel({
 
       {fileState.status === "loaded" && (
         <div style={s.settingsFooter}>
+          {deletable && (
+            <Button
+              variant="destructive"
+              size="sm"
+              onClick={handleDelete}
+              disabled={deleting || saving}
+              style={{ marginRight: "auto" }}
+            >
+              <Trash2 size={12} />
+              {deleting ? t("appSettings.deletingAgent") : t("appSettings.deleteAgentConfig")}
+            </Button>
+          )}
           <Button variant="outline" size="sm" onClick={handleCancel}>
             {t("common.cancel")}
           </Button>

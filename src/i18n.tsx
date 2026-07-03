@@ -65,6 +65,10 @@ const translations: Record<AppLanguage, Record<string, string>> = {
     "appSettings.configFilePathHint":
       "Leave empty to keep the config editor disabled. Aeroric does not read global agent config files by default.",
     "appSettings.configFileNotConfigured": "Config file path is not configured.",
+    "appSettings.deleteAgentConfig": "Delete Agent",
+    "appSettings.deletingAgent": "Deleting...",
+    "appSettings.confirmDeleteAgentConfig":
+      "Delete this Agent and permanently remove its local config file?",
     "appSettings.displayName": "Display Name",
     "appSettings.displayNameHint":
       "Optional local-only label. This is stored in your app settings and is not part of release defaults.",
@@ -1808,6 +1812,9 @@ const translations: Record<AppLanguage, Record<string, string>> = {
     "appSettings.configFilePathHint":
       "留空时禁用配置文件编辑器。Aeroric 默认不会读取全局智能体配置文件。",
     "appSettings.configFileNotConfigured": "尚未配置配置文件路径。",
+    "appSettings.deleteAgentConfig": "删除 Agent",
+    "appSettings.deletingAgent": "删除中...",
+    "appSettings.confirmDeleteAgentConfig": "删除这个 Agent，并永久移除它的本地配置文件？",
     "appSettings.displayName": "显示名称",
     "appSettings.displayNameHint": "可选的本机显示名，只保存到本机应用设置，不属于发行默认值。",
     "appSettings.autoDetect": "自动检测",

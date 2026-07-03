@@ -37,6 +37,7 @@ export const dialogs = {
     letterSpacing: 0.8,
     textTransform: "uppercase" as const,
     padding: "0 8px 10px",
+    flexShrink: 0,
   },
   settingsNavItem: {
     display: "flex",

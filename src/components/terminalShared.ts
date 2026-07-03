@@ -51,7 +51,7 @@ export const LIGHT_THEME = {
   brightBlue: "#0969da",
   brightMagenta: "#6639ba",
   brightCyan: "#3192aa",
-  brightWhite: "#8c959f",
+  brightWhite: "#57606a",
 };
 
 // Solarized Light–inspired warm palette to match the eyecare CSS tokens.
@@ -75,7 +75,7 @@ export const EYECARE_THEME = {
   brightBlue: "#839496",
   brightMagenta: "#6c71c4",
   brightCyan: "#93a1a1",
-  brightWhite: "#fdf6e3",
+  brightWhite: "#586e75",
 };
 
 export function themeFor(variant: ThemeVariant) {
