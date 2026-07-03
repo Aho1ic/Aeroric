@@ -185,7 +185,8 @@ export function sortSftpEntries(
 export function normalizeSftpSortPreference(value: unknown): SftpSortPreference {
   if (!value || typeof value !== "object") return DEFAULT_SFTP_SORT_PREFERENCE;
   const candidate = value as Partial<SftpSortPreference>;
-  const field = candidate.field === "name" || candidate.field === "modified" ? candidate.field : null;
+  const field =
+    candidate.field === "name" || candidate.field === "modified" ? candidate.field : null;
   const direction =
     candidate.direction === "asc" || candidate.direction === "desc" ? candidate.direction : null;
   if (!field || !direction) return DEFAULT_SFTP_SORT_PREFERENCE;

@@ -111,7 +111,8 @@ export function filterFileEntriesByName<T extends Pick<FsEntry, "name">>(
 export function normalizeFileSortPreference(value: unknown): FileSortPreference {
   if (!value || typeof value !== "object") return DEFAULT_FILE_SORT_PREFERENCE;
   const candidate = value as Partial<FileSortPreference>;
-  const field = candidate.field === "name" || candidate.field === "modified" ? candidate.field : null;
+  const field =
+    candidate.field === "name" || candidate.field === "modified" ? candidate.field : null;
   const direction =
     candidate.direction === "asc" || candidate.direction === "desc" ? candidate.direction : null;
   if (!field || !direction) return DEFAULT_FILE_SORT_PREFERENCE;

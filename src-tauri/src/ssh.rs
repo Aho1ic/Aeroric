@@ -68,10 +68,11 @@ fn build_remote_start_command(remote_path: &str) -> String {
     )
 }
 
-fn build_remote_start_command_with_sudo(remote_path: &str) -> String {
+fn build_remote_start_command_with_sudo(remote_path: &str, password: &str) -> String {
     format!(
-        "cd -- {} && printf '%s\\n' \"$AERORIC_SUDO_PASSWORD\" | sudo -S -p '' -v && printf '%s\\n' \"$AERORIC_SUDO_PASSWORD\" | sudo -S -p '' \"${{SHELL:-/bin/sh}}\" -l",
-        shell_quote_posix(remote_path)
+        "cd -- {} && aeroric_sudo_password={} && printf '%s\\n' \"$aeroric_sudo_password\" | sudo -S -p '' -v && printf '%s\\n' \"$aeroric_sudo_password\" | sudo -S -p '' \"${{SHELL:-/bin/sh}}\" -l",
+        shell_quote_posix(remote_path),
+        shell_quote_posix(password)
     )
 }
 
@@ -193,7 +194,10 @@ fn build_ssh_args(connection: &SshConnection, force_tty: bool) -> Vec<String> {
         .filter(|value| !value.is_empty())
     {
         args.push(if connection_can_auto_sudo(connection) {
-            build_remote_start_command_with_sudo(remote_path)
+            build_remote_start_command_with_sudo(
+                remote_path,
+                connection.password.as_deref().unwrap_or_default().trim(),
+            )
         } else {
             build_remote_start_command(remote_path)
         });
@@ -723,8 +727,8 @@ mod tests {
     #[test]
     fn remote_start_command_can_enter_sudo_shell_with_saved_password() {
         assert_eq!(
-            build_remote_start_command_with_sudo("/srv/aeroric app"),
-            "cd -- '/srv/aeroric app' && printf '%s\\n' \"$AERORIC_SUDO_PASSWORD\" | sudo -S -p '' -v && printf '%s\\n' \"$AERORIC_SUDO_PASSWORD\" | sudo -S -p '' \"${SHELL:-/bin/sh}\" -l"
+            build_remote_start_command_with_sudo("/srv/aeroric app", "sec'ret"),
+            "cd -- '/srv/aeroric app' && aeroric_sudo_password='sec'\\''ret' && printf '%s\\n' \"$aeroric_sudo_password\" | sudo -S -p '' -v && printf '%s\\n' \"$aeroric_sudo_password\" | sudo -S -p '' \"${SHELL:-/bin/sh}\" -l"
         );
     }
 
@@ -752,9 +756,13 @@ mod tests {
             .iter()
             .any(|arg| arg.contains("sudo -S -p '' \"${SHELL:-/bin/sh}\" -l")));
         assert!(spec
-            .env
+            .args
             .iter()
-            .any(|(key, value)| key == "AERORIC_SUDO_PASSWORD" && value == "secret"));
+            .any(|arg| arg.contains("aeroric_sudo_password='secret'")));
+        assert_eq!(
+            spec.env,
+            vec![("SSHPASS".to_string(), "secret".to_string())]
+        );
     }
 
     #[test]
