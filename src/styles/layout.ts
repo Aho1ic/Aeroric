@@ -129,7 +129,7 @@ export const layout = {
     display: "flex",
     flexDirection: "column",
     overflow: "hidden",
-    background: "color-mix(in srgb, var(--bg-panel) 82%, var(--bg-shell))",
+    background: "color-mix(in srgb, var(--bg-panel) 64%, transparent)",
   },
   searchRow: {
     display: "flex",
@@ -137,7 +137,7 @@ export const layout = {
     gap: 14,
     padding: "18px 22px 12px",
     borderBottom: "1px solid var(--border-dim)",
-    background: "color-mix(in srgb, var(--bg-panel) 88%, var(--bg-shell))",
+    background: "color-mix(in srgb, var(--bg-panel) 78%, transparent)",
     flexShrink: 0,
   },
   searchBox: {
