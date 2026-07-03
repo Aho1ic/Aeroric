@@ -277,7 +277,9 @@ describe("WebPreviewPanel", () => {
       await vi.advanceTimersByTimeAsync(REMOTE_IDE_COMMAND_TIMEOUT_MS);
     });
 
-    expect(screen.getByText(/remote_list_listening_ports.*timed out after 60s/i)).toBeInTheDocument();
+    expect(
+      screen.getByText(/remote_list_listening_ports.*timed out after 60s/i),
+    ).toBeInTheDocument();
   });
 
   it("shows a visible error when opening the remote preview tunnel fails", async () => {
@@ -340,7 +342,9 @@ describe("WebPreviewPanel", () => {
       await vi.advanceTimersByTimeAsync(REMOTE_IDE_COMMAND_TIMEOUT_MS);
     });
 
-    expect(screen.getByText(/remote_open_preview_tunnel.*timed out after 60s/i)).toBeInTheDocument();
+    expect(
+      screen.getByText(/remote_open_preview_tunnel.*timed out after 60s/i),
+    ).toBeInTheDocument();
     expect(screen.queryByTitle("Embedded preview")).not.toBeInTheDocument();
   });
 });

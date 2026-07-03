@@ -133,11 +133,9 @@ function renderAddAgentPanel() {
 
 async function findConfigEditor(value: string) {
   return waitFor(() => {
-    const editor = screen
-      .getAllByRole("textbox")
-      .find((node): node is HTMLTextAreaElement => {
-        return node instanceof HTMLTextAreaElement && node.value === value;
-      });
+    const editor = screen.getAllByRole("textbox").find((node): node is HTMLTextAreaElement => {
+      return node instanceof HTMLTextAreaElement && node.value === value;
+    });
     if (!editor) {
       throw new Error(`Config editor with value ${JSON.stringify(value)} was not found`);
     }

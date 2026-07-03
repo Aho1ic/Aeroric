@@ -82,9 +82,7 @@ export function diagnosticsClipboardText(diagnostics: DiagnosticItem[]): string 
     .join("\n");
 }
 
-export function diagnosticSeverityCounts(
-  diagnostics: DiagnosticItem[],
-): DiagnosticSeverityCounts {
+export function diagnosticSeverityCounts(diagnostics: DiagnosticItem[]): DiagnosticSeverityCounts {
   return diagnostics.reduce<DiagnosticSeverityCounts>(
     (counts, diagnostic) => ({
       ...counts,
@@ -102,9 +100,7 @@ export function filterDiagnosticsBySeverity(
   return diagnostics.filter((diagnostic) => diagnostic.severity === severity);
 }
 
-export function groupDiagnosticsBySource(
-  diagnostics: DiagnosticItem[],
-): DiagnosticSourceGroup[] {
+export function groupDiagnosticsBySource(diagnostics: DiagnosticItem[]): DiagnosticSourceGroup[] {
   const groups = new Map<string, DiagnosticItem[]>();
   for (const diagnostic of diagnostics) {
     groups.set(diagnostic.source, [...(groups.get(diagnostic.source) ?? []), diagnostic]);

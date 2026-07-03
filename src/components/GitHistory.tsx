@@ -374,7 +374,9 @@ export function GitHistory({
                 {t("git.pushing")}
               </>
             ) : (
-              <>{t("git.push")} ↑{remoteCounts.ahead}</>
+              <>
+                {t("git.push")} ↑{remoteCounts.ahead}
+              </>
             )}
           </button>
           <button

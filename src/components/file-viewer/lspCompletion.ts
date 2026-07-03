@@ -92,7 +92,9 @@ export function createLspCompletionSource({
   unavailableMessage,
   remote,
   onError,
-}: CreateLspCompletionSourceOptions): (context: LspCompletionContext) => Promise<LspCompletionResult | null> {
+}: CreateLspCompletionSourceOptions): (
+  context: LspCompletionContext,
+) => Promise<LspCompletionResult | null> {
   return async (context) => {
     const word = context.matchBefore(/\w*/);
     if (!shouldRequestCompletion(context, word?.from ?? null)) return null;

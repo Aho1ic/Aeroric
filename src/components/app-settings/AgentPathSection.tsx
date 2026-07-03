@@ -316,12 +316,7 @@ export function AgentPathSection({ agentKey }: { agentKey: AgentKey }) {
             <span style={{ color: "var(--text-hint)", fontSize: 12 }}>{t("common.loading")}</span>
           )}
           {pathField && (
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={handleDetect}
-              disabled={detecting}
-            >
+            <Button variant="outline" size="sm" onClick={handleDetect} disabled={detecting}>
               <RefreshCw size={12} className={detecting ? "spin" : undefined} />
               {detecting ? t("appSettings.detecting") : t("appSettings.autoDetect")}
             </Button>

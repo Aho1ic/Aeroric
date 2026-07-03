@@ -317,10 +317,7 @@ export function WebPreviewPanel({
             const key = listeningPortKey(port);
             const isPreviewing = remote ? selectedRemotePortKey === key : previewUrl === port.url;
             return (
-              <div
-                key={key}
-                style={rowStyle(isPreviewing)}
-              >
+              <div key={key} style={rowStyle(isPreviewing)}>
                 <div style={rowMainStyle}>
                   <div style={urlStyle}>{port.url}</div>
                   <div style={metaStyle}>
@@ -347,7 +344,9 @@ export function WebPreviewPanel({
                     title={t("preview.copyUrl")}
                   >
                     <Copy size={12} />
-                    {copiedUrl === previewUrl && isPreviewing ? t("preview.copied") : t("preview.copy")}
+                    {copiedUrl === previewUrl && isPreviewing
+                      ? t("preview.copied")
+                      : t("preview.copy")}
                   </button>
                   <button
                     type="button"

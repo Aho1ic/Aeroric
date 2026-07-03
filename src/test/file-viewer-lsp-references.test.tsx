@@ -178,7 +178,9 @@ describe("FileViewer LSP references", () => {
 
     const referencesDialog = await screen.findByRole("dialog", { name: "References (2)" });
     expect(referencesDialog).toBeInTheDocument();
-    expect(await within(referencesDialog).findByText("const value = helper();")).toBeInTheDocument();
+    expect(
+      await within(referencesDialog).findByText("const value = helper();"),
+    ).toBeInTheDocument();
     expect(
       await within(referencesDialog).findByText("export function helper() { return 1; }"),
     ).toBeInTheDocument();
@@ -288,7 +290,9 @@ describe("FileViewer LSP references", () => {
 
     const referencesDialog = await screen.findByRole("dialog", { name: "References (2)" });
     expect(referencesDialog).toBeInTheDocument();
-    expect(await within(referencesDialog).findByText("const value = helper();")).toBeInTheDocument();
+    expect(
+      await within(referencesDialog).findByText("const value = helper();"),
+    ).toBeInTheDocument();
     expect(
       await within(referencesDialog).findByText("export function helper() { return 1; }"),
     ).toBeInTheDocument();

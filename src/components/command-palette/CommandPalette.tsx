@@ -272,7 +272,7 @@ export function CommandPalette({
                   ? t("commandPalette.documentSymbolPlaceholder")
                   : parsed.mode === "workspaceSymbol"
                     ? t("commandPalette.workspaceSymbolPlaceholder")
-                : t("commandPalette.filePlaceholder")
+                    : t("commandPalette.filePlaceholder")
             }
             style={{
               flex: 1,

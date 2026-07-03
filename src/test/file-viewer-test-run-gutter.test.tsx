@@ -62,18 +62,16 @@ vi.mock("@uiw/react-codemirror", async () => {
 
     const gutterButtons = flatten(extensions)
       .filter(
-        (extension): extension is {
+        (
+          extension,
+        ): extension is {
           __testGutter: {
             lineMarker: (
               view: unknown,
               line: { from: number },
             ) => { toDOM: () => HTMLElement } | null;
             domEventHandlers?: {
-              mousedown?: (
-                view: unknown,
-                line: { from: number },
-                event: MouseEvent,
-              ) => boolean;
+              mousedown?: (view: unknown, line: { from: number }, event: MouseEvent) => boolean;
             };
           };
         } => Boolean((extension as { __testGutter?: unknown }).__testGutter),

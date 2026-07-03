@@ -229,7 +229,10 @@ export function GitChanges({
   const handleStageAll = async () => {
     try {
       setError(null);
-      await invokeGitCommand(isRemote ? "remote_git_stage_all" : "git_stage_all", gitCommandContext);
+      await invokeGitCommand(
+        isRemote ? "remote_git_stage_all" : "git_stage_all",
+        gitCommandContext,
+      );
       refresh();
     } catch (err) {
       setError(formatInvokeError(err));

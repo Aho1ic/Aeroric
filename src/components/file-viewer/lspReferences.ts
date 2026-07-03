@@ -44,9 +44,7 @@ export async function findLspReferences(
   );
 }
 
-export function lspReferenceToOpenTarget(
-  location: LspReferenceLocation,
-): LspReferenceOpenTarget {
+export function lspReferenceToOpenTarget(location: LspReferenceLocation): LspReferenceOpenTarget {
   return {
     path: location.path,
     name: location.path.split(/[\\/]/).pop() ?? location.path,

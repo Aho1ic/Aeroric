@@ -1226,7 +1226,9 @@ export function NotebookPanel({ width = "100%" }: { width?: number | string }) {
                 >
                   <button
                     type="button"
-                    aria-label={t("notebook.dragMemo", { name: note.title || t("notebook.untitled") })}
+                    aria-label={t("notebook.dragMemo", {
+                      name: note.title || t("notebook.untitled"),
+                    })}
                     title={t("notebook.dragMemo", { name: note.title || t("notebook.untitled") })}
                     onPointerDown={(event) => handleNotePointerDown(event, note.id)}
                     onPointerMove={handleNotePointerMove}

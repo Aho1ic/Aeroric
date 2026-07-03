@@ -16,10 +16,7 @@ export function isTestFilePath(filePath: string): boolean {
   return TEST_FILE_PATTERN.test(filePath) || TESTS_DIRECTORY_PATTERN.test(filePath);
 }
 
-export function testRunTargetsForContent(
-  content: string,
-  filePath: string,
-): EditorTestRunTarget[] {
+export function testRunTargetsForContent(content: string, filePath: string): EditorTestRunTarget[] {
   if (!isTestFilePath(filePath)) return [];
   const targets: EditorTestRunTarget[] = [];
   content.split(/\r?\n/).forEach((lineText, index) => {

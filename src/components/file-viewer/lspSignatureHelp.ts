@@ -124,7 +124,9 @@ function createSignatureTooltip(pos: number, help: LspSignatureHelp): LspSignatu
         const parameterDom = document.createElement("div");
         parameterDom.className = "cm-lsp-signature-parameter";
         const parameterLabel = document.createElement("span");
-        parameterLabel.textContent = parameter.documentation ? `${parameter.label}: ` : parameter.label;
+        parameterLabel.textContent = parameter.documentation
+          ? `${parameter.label}: `
+          : parameter.label;
         parameterDom.appendChild(parameterLabel);
         if (parameter.documentation) {
           const parameterDocs = document.createElement("span");
