@@ -1400,6 +1400,18 @@ fn should_send_status_command(
     }
 }
 
+pub(crate) fn should_start_status_session_watcher(
+    use_hooks: bool,
+    is_codex: bool,
+    prompt_empty: bool,
+) -> bool {
+    if use_hooks {
+        return false;
+    }
+
+    !(is_codex && prompt_empty)
+}
+
 fn send_status_command(app: &AppHandle, task_id: &str, is_codex: bool) {
     fn write_to_pty(app: &AppHandle, task_id: &str, bytes: &[u8]) {
         let writer = {
@@ -1585,7 +1597,7 @@ pub(crate) fn spawn_status_session_watcher(
     });
 }
 
-/// 旧的 /status 轮询流程：Codex 始终走此路径，Claude < 2.1.87 也走此路径。
+/// 旧的 /status 轮询流程：Codex 非空 prompt 任务与 Claude < 2.1.87 走此路径。
 fn run_status_session_watcher(
     app: AppHandle,
     task_id: String,
@@ -2075,6 +2087,14 @@ mod tests {
             Duration::from_millis(1500),
             None,
         ));
+    }
+
+    #[test]
+    fn empty_codex_repl_does_not_need_status_watcher_without_hooks() {
+        assert!(!should_start_status_session_watcher(false, true, true));
+        assert!(should_start_status_session_watcher(false, true, false));
+        assert!(should_start_status_session_watcher(false, false, true));
+        assert!(!should_start_status_session_watcher(true, false, false));
     }
 
     #[test]

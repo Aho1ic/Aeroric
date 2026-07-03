@@ -561,14 +561,6 @@ fn shell_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\"'\"'"))
 }
 
-fn shell_array(values: &[String]) -> String {
-    values
-        .iter()
-        .map(|value| shell_quote(value))
-        .collect::<Vec<_>>()
-        .join(" ")
-}
-
 fn toml_string(value: &str) -> String {
     toml::Value::String(value.to_string()).to_string()
 }
@@ -644,30 +636,11 @@ fn validate_model_name(model: &str) -> bool {
 fn model_picker_shell(selected_models: &[String]) -> String {
     let default_model = selected_models.first().cloned().unwrap_or_default();
     format!(
-        r#"models=({models})
-selected_model="${{AERORIC_AGENT_MODEL:-}}"
-
+        r#"selected_model="${{AERORIC_AGENT_MODEL:-}}"
 if [ -z "$selected_model" ]; then
-  if [ -t 0 ] && [ -t 1 ] && [ "${{#models[@]}}" -gt 1 ]; then
-    echo ""
-    echo -e "\033[1;33m请选择模型：\033[0m"
-    for i in "${{!models[@]}}"; do
-      printf "  %s) %s\n" "$((i + 1))" "${{models[$i]}}"
-    done
-    echo ""
-    read -r -p "输入编号 (1-${{#models[@]}}，默认1): " model_choice || model_choice=""
-  else
-    model_choice="${{AERORIC_AGENT_MODEL_CHOICE:-1}}"
-  fi
-
-  if [[ "$model_choice" =~ ^[0-9]+$ ]] && [ "$model_choice" -ge 1 ] && [ "$model_choice" -le "${{#models[@]}}" ]; then
-    selected_model="${{models[$((model_choice - 1))]}}"
-  else
-    selected_model={default_model}
-  fi
+  selected_model={default_model}
 fi
 "#,
-        models = shell_array(selected_models),
         default_model = shell_quote(&default_model),
     )
 }
@@ -725,11 +698,6 @@ export ANTHROPIC_API_KEY={api_key}
 {config}AERORIC_CODEX_CONFIG
 }} > "$CODEX_HOME/config.toml"
 
-if [ -t 0 ] && [ -t 1 ]; then
-  echo -e "\033[1;32m✓ 已选择 $selected_model\033[0m"
-  echo ""
-fi
-
 exec {codex_bin} "$@"
 "#,
         id = id,
@@ -775,11 +743,6 @@ export AGENT_ROUTER_TOKEN="$ANTHROPIC_AUTH_TOKEN"
 export ANTHROPIC_DEFAULT_OPUS_MODEL="$selected_model"
 export ANTHROPIC_DEFAULT_SONNET_MODEL="$selected_model"
 export ANTHROPIC_DEFAULT_HAIKU_MODEL="$selected_model"
-
-if [ -t 0 ] && [ -t 1 ]; then
-  echo -e "\033[1;32m✓ 已选择 $selected_model\033[0m"
-  echo ""
-fi
 
 exec claude --model "$selected_model" "$@"
 "#,
@@ -1357,7 +1320,7 @@ mod tests {
 
         assert!(script.contains("CODEX_HOME"));
         assert!(script.contains("base_url = \"https://example.com/v1\""));
-        assert!(script.contains("models=('gpt-5.5' 'gpt-5.1')"));
+        assert!(script.contains("selected_model='gpt-5.5'"));
         assert!(script.contains("printf 'model = \"%s\"\\n' \"$selected_model\""));
         assert!(script.contains("env_key = \"ANTHROPIC_API_KEY\""));
         assert!(script.contains("stream_max_retries = 3"));
@@ -1382,8 +1345,30 @@ mod tests {
         assert!(script.contains("CLAUDE_CONFIG_DIR"));
         assert!(script.contains("export ANTHROPIC_BASE_URL='https://agentrouter.org'"));
         assert!(script.contains("export ANTHROPIC_AUTH_TOKEN='sk-test'"));
-        assert!(script.contains("models=('claude-opus-4-8' 'claude-opus-4-6')"));
+        assert!(script.contains("selected_model='claude-opus-4-8'"));
         assert!(script.contains("exec claude --model \"$selected_model\" \"$@\""));
+    }
+
+    #[test]
+    fn custom_agent_script_model_selection_is_non_interactive() {
+        let draft = AgentSetupDraft {
+            id: "gpt55".to_string(),
+            label: "GPT55".to_string(),
+            kind: AgentSetupKind::Codex,
+            base_url: "https://example.com/v1/".to_string(),
+            api_key: "sk-test".to_string(),
+            model: "gpt-5.5".to_string(),
+            models: vec!["gpt-5.5".to_string(), "gpt-5.1".to_string()],
+        };
+
+        let script = build_agent_script(&draft);
+
+        assert!(script.contains("selected_model=\"${AERORIC_AGENT_MODEL:-}\""));
+        assert!(script.contains("selected_model='gpt-5.5'"));
+        assert!(!script.contains("read -r -p"));
+        assert!(!script.contains("请选择模型"));
+        assert!(!script.contains("已选择"));
+        assert!(!script.contains("AERORIC_AGENT_MODEL_CHOICE"));
     }
 
     #[test]

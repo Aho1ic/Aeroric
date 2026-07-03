@@ -7,7 +7,9 @@ use std::time::{Duration, Instant};
 use tauri::ipc::Channel;
 use tauri::{AppHandle, Emitter, Manager, State};
 
-use crate::session::{spawn_resume_session_watcher, spawn_status_session_watcher};
+use crate::session::{
+    should_start_status_session_watcher, spawn_resume_session_watcher, spawn_status_session_watcher,
+};
 use crate::TaskManager;
 
 const SESSION_WAIT_POLL: Duration = Duration::from_millis(50);
@@ -639,21 +641,23 @@ pub async fn run_task(
     );
 
     // hook 可信时不创建 session 转发通道,也不拉起轮询 watcher。
-    let session_tx = if use_hooks {
-        None
-    } else {
-        let (session_tx, session_rx) = std::sync::mpsc::channel::<String>();
-        spawn_status_session_watcher(
-            app.clone(),
-            task_id.clone(),
-            project_path.clone(),
-            is_codex,
-            session_rx,
-            pre_session_id,
-            final_prompt.is_empty(),
-        );
-        Some(session_tx)
-    };
+    // Codex 空 prompt 进入交互 REPL，不能通过注入 /status 抢占用户输入。
+    let session_tx =
+        if should_start_status_session_watcher(use_hooks, is_codex, final_prompt.is_empty()) {
+            let (session_tx, session_rx) = std::sync::mpsc::channel::<String>();
+            spawn_status_session_watcher(
+                app.clone(),
+                task_id.clone(),
+                project_path.clone(),
+                is_codex,
+                session_rx,
+                pre_session_id,
+                final_prompt.is_empty(),
+            );
+            Some(session_tx)
+        } else {
+            None
+        };
     spawn_pty_reader(
         app.clone(),
         task_id.clone(),
