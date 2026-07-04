@@ -8,6 +8,7 @@ import { APP_SETTINGS_CHANGED_EVENT, type AgentKey } from "./types";
 import type { ThemeVariant } from "../../types";
 import { useTextInputIMEFix } from "../useTextInputIMEFix";
 import { Button } from "../ui/Button";
+import { ConfirmDialog } from "../ui/ConfirmDialog";
 
 type FileState =
   | { status: "loading" }
@@ -255,74 +256,17 @@ export function AgentConfigPanel({
       )}
 
       {deleteConfirmOpen && (
-        <div
-          role="presentation"
-          style={{
-            position: "fixed",
-            inset: 0,
-            zIndex: 3000,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            background: "rgba(0,0,0,0.36)",
-          }}
-          onMouseDown={(event) => {
-            if (event.target === event.currentTarget && !deleting) {
-              setDeleteConfirmOpen(false);
-            }
-          }}
-        >
-          <div
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="agent-delete-confirm-title"
-            style={{
-              width: "min(420px, calc(100vw - 32px))",
-              border: "1px solid var(--border-medium)",
-              borderRadius: 8,
-              background: "var(--bg-card)",
-              boxShadow: "var(--shadow-popover)",
-              padding: 18,
-            }}
-          >
-            <div
-              id="agent-delete-confirm-title"
-              style={{
-                fontSize: 15,
-                fontWeight: 700,
-                color: "var(--text-primary)",
-                marginBottom: 8,
-              }}
-            >
-              {t("appSettings.deleteAgentConfig")}
-            </div>
-            <div style={{ fontSize: 13, lineHeight: 1.55, color: "var(--text-secondary)" }}>
-              {t("appSettings.confirmDeleteAgentConfig")}
-            </div>
-            <div
-              style={{
-                display: "flex",
-                justifyContent: "flex-end",
-                gap: 8,
-                marginTop: 18,
-              }}
-            >
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setDeleteConfirmOpen(false)}
-                disabled={deleting}
-              >
-                {t("common.cancel")}
-              </Button>
-              <Button variant="destructive" size="sm" onClick={confirmDelete} disabled={deleting}>
-                {deleting
-                  ? t("appSettings.deletingAgent")
-                  : t("appSettings.confirmDeleteAgentAction")}
-              </Button>
-            </div>
-          </div>
-        </div>
+        <ConfirmDialog
+          title={t("appSettings.deleteAgentConfig")}
+          message={t("appSettings.confirmDeleteAgentConfig")}
+          cancelLabel={t("common.cancel")}
+          confirmLabel={t("appSettings.confirmDeleteAgentAction")}
+          confirmingLabel={t("appSettings.deletingAgent")}
+          confirming={deleting}
+          destructive
+          onCancel={() => setDeleteConfirmOpen(false)}
+          onConfirm={confirmDelete}
+        />
       )}
     </>
   );

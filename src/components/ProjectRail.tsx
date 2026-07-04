@@ -1,28 +1,29 @@
-import { useState, useEffect, useMemo, useRef, type ReactNode } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import {
-  Bot,
   ChevronDown,
   ChevronRight,
-  Home,
-  Moon,
   PanelLeftClose,
   PanelLeftOpen,
   PinOff,
   Play,
   Plus,
   Star,
-  Sun,
   Trash2,
 } from "lucide-react";
 import type { Project, Task, ThemeVariant } from "../types";
 import { ProjectAvatar } from "./ProjectAvatar";
 import { StatusIcon } from "./StatusIcon";
-import { NotificationBell } from "./NotificationBell";
 import { useI18n } from "../i18n";
-import { OPEN_APP_SETTINGS_EVENT } from "./app-settings/types";
+import { openAppSettings } from "./app-settings/types";
+import {
+  getProjectRailFooterActions,
+  ProjectRailFooterActions,
+} from "./project-rail/ProjectRailFooterActions";
 import { PROJECT_RAIL_EXPANDED_WIDTH } from "./project-page/viewMode";
 import s from "../styles";
 import claudeWaveGif from "../assets/gif/claude-wave.gif";
+
+export { getProjectRailFooterActions };
 
 type ProjectStatus = "attention" | "running" | null;
 type ProjectPointerDragState = {
@@ -81,19 +82,6 @@ export function getDefaultExpandedProjectIds(
   return new Set(
     projects.some((project) => project.id === activeProjectId) ? [activeProjectId] : [],
   );
-}
-
-export type ProjectRailFooterAction =
-  | "backHome"
-  | "agentSettings"
-  | "openProject"
-  | "notifications"
-  | "theme";
-
-export function getProjectRailFooterActions(singleProjectMode: boolean): ProjectRailFooterAction[] {
-  return singleProjectMode
-    ? []
-    : ["backHome", "agentSettings", "openProject", "notifications", "theme"];
 }
 
 export function projectTaskCountLabel(_count: number, _taskLabel: string): string | null {
@@ -410,17 +398,12 @@ export function ProjectRail({
   forceCollapsed?: boolean;
 }) {
   const { t } = useI18n();
-  const [addHov, setAddHov] = useState(false);
-  const [homeHov, setHomeHov] = useState(false);
-  const [agentSettingsHov, setAgentSettingsHov] = useState(false);
-  const [themeHov, setThemeHov] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
   const [draggedProjectId, setDraggedProjectId] = useState<string | null>(null);
   const [dragOverProjectId, setDragOverProjectId] = useState<string | null>(null);
   const projectItemRefs = useRef<Map<string, HTMLElement>>(new Map());
   const projectPointerDragRef = useRef<ProjectPointerDragState | null>(null);
   const suppressNextProjectClickRef = useRef(false);
-  const isDark = themeVariant === "dark";
   const effectiveCollapsed = forceCollapsed || collapsed;
   const [expandedProjectIds, setExpandedProjectIds] = useState<Set<string>>(() =>
     getDefaultExpandedProjectIds(projects, activeProjectId),
@@ -556,48 +539,7 @@ export function ProjectRail({
     });
   }, [allTasks, railProjects]);
 
-  const footerIconButton = (
-    title: string,
-    icon: ReactNode,
-    onClick: () => void,
-    hovered: boolean,
-    setHovered: (value: boolean) => void,
-    active = false,
-  ) => (
-    <button
-      type="button"
-      title={title}
-      aria-label={title}
-      onClick={onClick}
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
-      style={{
-        width: 32,
-        height: 32,
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        background: active
-          ? "var(--accent-subtle)"
-          : hovered
-            ? "var(--bg-hover)"
-            : "var(--bg-card)",
-        border: "1px solid var(--border-dim)",
-        borderRadius: 8,
-        cursor: "pointer",
-        color: active ? "var(--accent)" : hovered ? "var(--text-primary)" : "var(--text-muted)",
-        transition: "background 0.12s, color 0.12s, border-color 0.12s",
-      }}
-    >
-      {icon}
-    </button>
-  );
-
-  const openAgentSettings = () => {
-    window.dispatchEvent(
-      new CustomEvent(OPEN_APP_SETTINGS_EVENT, { detail: { initialNav: "codex" } }),
-    );
-  };
+  const openAgentSettings = () => openAppSettings("codex");
 
   if (effectiveCollapsed) {
     return (
@@ -653,55 +595,15 @@ export function ProjectRail({
 
         <div style={{ flex: 1 }} />
 
-        {!singleProjectMode &&
-          footerIconButton(
-            t("project.backHome"),
-            <Home size={14} strokeWidth={2.2} />,
-            onBack,
-            homeHov,
-            setHomeHov,
-          )}
-
-        {!singleProjectMode &&
-          footerIconButton(
-            t("appSettings.agentSettings"),
-            <Bot size={14} strokeWidth={2.1} />,
-            openAgentSettings,
-            agentSettingsHov,
-            setAgentSettingsHov,
-          )}
-
-        {!singleProjectMode &&
-          footerIconButton(
-            t("welcome.openProject"),
-            <Plus size={14} strokeWidth={2.5} />,
-            onOpen,
-            addHov,
-            setAddHov,
-          )}
-
-        {!singleProjectMode && (
-          <NotificationBell
-            buttonStyle={{
-              width: 32,
-              height: 32,
-              justifyContent: "center",
-              border: "1px solid var(--border-dim)",
-              background: "var(--bg-card)",
-              opacity: 1,
-            }}
-            iconSize={14}
-          />
-        )}
-
-        {!singleProjectMode &&
-          footerIconButton(
-            isDark ? t("theme.switchToLight") : t("theme.switchToDark"),
-            isDark ? <Sun size={14} strokeWidth={2} /> : <Moon size={14} strokeWidth={2} />,
-            onToggleTheme,
-            themeHov,
-            setThemeHov,
-          )}
+        <ProjectRailFooterActions
+          collapsed
+          singleProjectMode={singleProjectMode}
+          themeVariant={themeVariant}
+          onBack={onBack}
+          onOpen={onOpen}
+          onOpenAgentSettings={openAgentSettings}
+          onToggleTheme={onToggleTheme}
+        />
       </div>
     );
   }
@@ -988,66 +890,14 @@ export function ProjectRail({
         })}
       </div>
 
-      <div
-        style={{
-          flexShrink: 0,
-          display: "flex",
-          flexDirection: "row",
-          alignItems: "center",
-          justifyContent: "center",
-          gap: 6,
-          padding: "8px 10px 10px",
-          borderTop: "1px solid var(--border-dim)",
-        }}
-      >
-        {getProjectRailFooterActions(singleProjectMode).includes("backHome") ? (
-          <>
-            {footerIconButton(
-              t("project.backHome"),
-              <Home size={14} strokeWidth={2.2} />,
-              onBack,
-              homeHov,
-              setHomeHov,
-            )}
-
-            {footerIconButton(
-              t("appSettings.agentSettings"),
-              <Bot size={14} strokeWidth={2.1} />,
-              openAgentSettings,
-              agentSettingsHov,
-              setAgentSettingsHov,
-            )}
-
-            {footerIconButton(
-              t("welcome.openProject"),
-              <Plus size={14} strokeWidth={2.5} />,
-              onOpen,
-              addHov,
-              setAddHov,
-            )}
-
-            <NotificationBell
-              buttonStyle={{
-                width: 32,
-                height: 32,
-                justifyContent: "center",
-                border: "1px solid var(--border-dim)",
-                background: "var(--bg-card)",
-                opacity: 1,
-              }}
-              iconSize={14}
-            />
-
-            {footerIconButton(
-              isDark ? t("theme.switchToLight") : t("theme.switchToDark"),
-              isDark ? <Sun size={14} strokeWidth={2} /> : <Moon size={14} strokeWidth={2} />,
-              onToggleTheme,
-              themeHov,
-              setThemeHov,
-            )}
-          </>
-        ) : null}
-      </div>
+      <ProjectRailFooterActions
+        singleProjectMode={singleProjectMode}
+        themeVariant={themeVariant}
+        onBack={onBack}
+        onOpen={onOpen}
+        onOpenAgentSettings={openAgentSettings}
+        onToggleTheme={onToggleTheme}
+      />
     </div>
   );
 }

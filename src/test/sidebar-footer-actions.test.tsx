@@ -2,7 +2,7 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import { act } from "react";
 import { describe, expect, it, vi } from "vitest";
 import { SidebarFooterActions } from "../components/SidebarFooterActions";
-import { OPEN_APP_SETTINGS_EVENT } from "../components/app-settings/types";
+import { openAppSettings } from "../components/app-settings/types";
 import { I18nProvider } from "../i18n";
 
 vi.mock("../components/AppSettingsDialog", () => ({
@@ -52,9 +52,7 @@ describe("SidebarFooterActions", () => {
     renderFooterActions();
 
     act(() => {
-      window.dispatchEvent(
-        new CustomEvent(OPEN_APP_SETTINGS_EVENT, { detail: { initialNav: "codex" } }),
-      );
+      openAppSettings("codex");
     });
     expect(screen.getByRole("dialog")).toHaveAttribute("data-initial-nav", "codex");
 

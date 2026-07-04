@@ -33,7 +33,7 @@ import { isRemoteProject, resolveProjectLocation } from "../types";
 import { getAvatarGradient, shortenPath } from "../utils";
 import { ProjectAvatar } from "./ProjectAvatar";
 import { SidebarFooterActions } from "./SidebarFooterActions";
-import { OPEN_APP_SETTINGS_EVENT } from "./app-settings/types";
+import { openAppSettings } from "./app-settings/types";
 import { TimelineView } from "./TimelineView";
 import { SkillHubView } from "./skill-hub/SkillHubView";
 import { SshProjectPage, type SshProjectInput } from "./ssh/SshProjectDialog";
@@ -383,7 +383,7 @@ export function WelcomePage({
             config={skillHubConfig}
             allProjects={projects}
             onEnterSkillHub={onEnterSkillHub}
-            onOpenAppSettings={() => window.dispatchEvent(new CustomEvent(OPEN_APP_SETTINGS_EVENT))}
+            onOpenAppSettings={() => openAppSettings()}
           />
         ) : view === "docker" ? (
           <DockerServiceView />
