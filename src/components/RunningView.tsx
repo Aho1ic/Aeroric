@@ -11,6 +11,7 @@ import { shortenPath, getUsageColor } from "../utils";
 import { useUsageSnapshot } from "../hooks/useUsageSnapshot";
 import { ENABLE_USAGE_INSIGHTS } from "../platform";
 import { agentDisplayLabel, isCodexLikeAgent } from "../agents";
+import { useAgentOptions } from "../hooks/useAgentOptions";
 import { useI18n } from "../i18n";
 import s from "../styles";
 import {
@@ -139,12 +140,14 @@ export function RunningView({
 }) {
   const { t } = useI18n();
   const { showToast } = useToast();
+  const agentOptions = useAgentOptions();
   const isActive =
     task.status === "pending" || task.status === "running" || task.status === "input_required";
   const isDetached = task.status === "detached";
   const isInterrupted = task.status === "interrupted";
   const sessionPath = task.claudeSessionPath ?? task.codexSessionPath;
-  const codexLike = isCodexLikeAgent(task.agent);
+  const agentLabel = agentDisplayLabel(task.agent, agentOptions);
+  const codexLike = isCodexLikeAgent(task.agent, agentOptions);
   const resumeSessionId = codexLike ? task.codexSessionId : task.claudeSessionId;
   const restoreState = getRestoreState?.() ?? {};
 
@@ -288,6 +291,12 @@ export function RunningView({
         zIndex: visible ? 1 : 0,
       }}
     >
+      <div style={s.runAgentConfigBar}>
+        <div aria-label={t("running.agentConfiguration")} style={s.runAgentConfigPill}>
+          <span aria-hidden="true">{task.agent === "claude" ? "✦" : "⬡"}</span>
+          <span style={s.runAgentConfigLabel}>{agentLabel}</span>
+        </div>
+      </div>
       {/* Header */}
       <div
         style={s.runHeader}
@@ -500,7 +509,7 @@ export function RunningView({
           }}
         >
           <span>
-            {task.agent === "claude" ? "✦" : "⬡"} {agentDisplayLabel(task.agent)} ·{" "}
+            {task.agent === "claude" ? "✦" : "⬡"} {agentLabel} ·{" "}
             {permissionModeLabel(task.permissionMode, task.agent)}
           </span>
           {ENABLE_USAGE_INSIGHTS &&
@@ -649,7 +658,7 @@ export function RunningView({
             <SessionView
               sessionPath={sessionPath}
               projectPath={projectPath}
-              isCodex={isCodexLikeAgent(task.agent)}
+              isCodex={isCodexLikeAgent(task.agent, agentOptions)}
             />
           ) : (
             <NoSessionRecordPane task={task} />
@@ -678,7 +687,7 @@ export function RunningView({
         <SessionView
           sessionPath={sessionPath}
           projectPath={projectPath}
-          isCodex={isCodexLikeAgent(task.agent)}
+          isCodex={isCodexLikeAgent(task.agent, agentOptions)}
         />
       )}
     </div>

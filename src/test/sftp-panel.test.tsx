@@ -94,6 +94,7 @@ describe("SftpPanel", () => {
     const triggers = screen.getAllByLabelText("Location");
     expect(triggers[0]).toHaveTextContent("Local");
     expect(triggers[1]).toHaveTextContent("Production");
+    expect(triggers[1]).not.toHaveTextContent("deploy@prod.example.com:22");
     expect(screen.getByDisplayValue("/srv/app")).toBeInTheDocument();
   });
 

@@ -291,10 +291,14 @@ export function AgentPathSection({ agentKey }: { agentKey: AgentKey }) {
     builtInAgent && originalSettings.agent_label_overrides?.[builtInAgent]
       ? originalSettings.agent_label_overrides[builtInAgent]
       : "";
+  const currentCustomLabel = !builtInAgent ? (currentCustomAgent?.label ?? "") : "";
+  const originalCustomLabel = !builtInAgent ? (originalCustomAgent?.label ?? "") : "";
+  const currentDisplayName = builtInAgent ? currentLabelOverride : currentCustomLabel;
+  const originalDisplayName = builtInAgent ? originalLabelOverride : originalCustomLabel;
   const isDirty =
     currentPath !== originalPath ||
     currentConfigPath !== originalConfigPath ||
-    currentLabelOverride !== originalLabelOverride;
+    currentDisplayName !== originalDisplayName;
   const versionValue = versionField ? versions[versionField] : customVersion;
 
   return (
@@ -337,19 +341,27 @@ export function AgentPathSection({ agentKey }: { agentKey: AgentKey }) {
         <label style={labelStyle}>{t("appSettings.displayName")}</label>
         <input
           style={inputStyle}
-          value={currentLabelOverride}
+          value={currentDisplayName}
           onChange={(e) => {
             const nextLabel = e.target.value;
             setSettings((prev) => ({
               ...prev,
-              agent_label_overrides: {
-                ...(prev.agent_label_overrides ?? {}),
-                ...(builtInAgent ? { [builtInAgent]: nextLabel } : {}),
-              },
+              ...(builtInAgent
+                ? {
+                    agent_label_overrides: {
+                      ...(prev.agent_label_overrides ?? {}),
+                      [builtInAgent]: nextLabel,
+                    },
+                  }
+                : {
+                    custom_agents: (prev.custom_agents ?? []).map((profile) =>
+                      profile.id === agentKey ? { ...profile, label: nextLabel } : profile,
+                    ),
+                  }),
             }));
           }}
           placeholder={builtInAgent ? agentDisplayLabel(builtInAgent) : agentDisplayLabel(agentKey)}
-          disabled={loading || !builtInAgent}
+          disabled={loading}
           spellCheck={false}
         />
         <span style={hintStyle}>{t("appSettings.displayNameHint")}</span>

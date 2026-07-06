@@ -87,6 +87,48 @@ function renderDeletableAgentConfigPanel(content: string, onDeleted = vi.fn()) {
   return onDeleted;
 }
 
+function renderCustomAgentConfigPanel(content: string) {
+  const customSettings = {
+    ...appSettings,
+    custom_agents: [
+      {
+        id: "gpt55",
+        label: "GPT55",
+        path: "/Users/macbook/.aeroric/agents/gpt55.sh",
+        codex_like: true,
+        config_lang: "shellscript",
+      },
+    ],
+  };
+  vi.mocked(invoke).mockImplementation((command, args) => {
+    if (command === "get_agent_config_file_path") {
+      return Promise.resolve("/Users/macbook/.aeroric/agents/gpt55.sh");
+    }
+    if (command === "read_agent_config_file") return Promise.resolve(content);
+    if (command === "load_app_settings") return Promise.resolve(customSettings);
+    if (command === "detect_agent_version") return Promise.resolve("codex 1.0.0");
+    if (command === "save_custom_agent_profile") {
+      const profile = (args as { profile: unknown }).profile;
+      return Promise.resolve({
+        ...customSettings,
+        custom_agents: [profile],
+      });
+    }
+    return Promise.resolve(undefined);
+  });
+  render(
+    <I18nProvider>
+      <AgentConfigPanel
+        agentKey="gpt55"
+        filePath="/Users/macbook/.aeroric/agents/gpt55.sh"
+        lang="shellscript"
+        themeVariant="light"
+        deletable
+      />
+    </I18nProvider>,
+  );
+}
+
 function renderAgentConfigPanelWithMissingFile() {
   mockInvokeForAgentConfig("");
   vi.mocked(invoke).mockImplementation((command) => {
@@ -168,6 +210,21 @@ function getEnabledSaveButton() {
     throw new Error("Enabled Save button was not found");
   }
   return button;
+}
+
+function getTextboxWithValue(value: string) {
+  const input = screen
+    .getAllByRole("textbox")
+    .find((node): node is HTMLInputElement | HTMLTextAreaElement => {
+      return (
+        (node instanceof HTMLInputElement || node instanceof HTMLTextAreaElement) &&
+        node.value === value
+      );
+    });
+  if (!input) {
+    throw new Error(`Textbox with value ${JSON.stringify(value)} was not found`);
+  }
+  return input;
 }
 
 describe("Agent config and debug panel UI", () => {
@@ -257,6 +314,29 @@ describe("Agent config and debug panel UI", () => {
     expect(onDeleted).not.toHaveBeenCalled();
   });
 
+  it("renames an existing custom agent profile from the settings panel", async () => {
+    const user = userEvent.setup();
+    renderCustomAgentConfigPanel("#!/bin/sh\n");
+
+    await findConfigEditor("#!/bin/sh\n");
+    const displayName = getTextboxWithValue("GPT55");
+    await user.clear(displayName);
+    await user.type(displayName, "New Agent");
+    await user.click(getEnabledSaveButton());
+
+    await waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith("save_custom_agent_profile", {
+        profile: {
+          id: "gpt55",
+          label: "New Agent",
+          path: "/Users/macbook/.aeroric/agents/gpt55.sh",
+          codex_like: true,
+          config_lang: "shellscript",
+        },
+      }),
+    );
+  });
+
   it("renders debug controls as stable shadcn-style button groups", async () => {
     renderDebugPanel();
 
@@ -305,6 +385,22 @@ describe("Agent config and debug panel UI", () => {
         models: ["gpt-5.5", "gpt-5.1"],
       },
     });
+  });
+
+  it("filters detected setup models with the model field instead of opening a suggestion menu", async () => {
+    const user = userEvent.setup();
+    renderAddAgentPanel();
+
+    await user.type(screen.getByLabelText("Agent Name"), "GPT55");
+    await user.type(screen.getByLabelText("Base URL"), "https://example.com/v1");
+    await user.type(screen.getByLabelText("API Key"), "sk-test");
+    await user.click(screen.getByRole("button", { name: /Detect Models/i }));
+
+    await screen.findByText("2 of 2 models selected");
+    await user.type(screen.getByLabelText("Model"), "5.1");
+
+    expect(screen.getByText("gpt-5.1")).toBeInTheDocument();
+    expect(screen.queryByText("gpt-5.5")).not.toBeInTheDocument();
   });
 
   it("hides Agent ID and derives a stable ID from Base URL for Chinese names", async () => {

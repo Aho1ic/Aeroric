@@ -143,32 +143,40 @@ body {
   min-width: max(260px, var(--radix-select-trigger-width));
 }
 .sftp-endpoint-group-label {
-  display: flex;
+  display: inline-flex;
+  width: fit-content;
   align-items: center;
-  gap: 8px;
-  padding: 9px 10px 5px;
+  gap: 7px;
+  margin: 7px 8px 4px;
+  padding: 3px 8px;
+  border: 1px solid color-mix(in srgb, var(--border-medium) 52%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--bg-card) 58%, transparent);
+  -webkit-backdrop-filter: blur(12px) saturate(1.2);
+  backdrop-filter: blur(12px) saturate(1.2);
   color: var(--accent);
   font-size: 10.5px;
   font-weight: 800;
   letter-spacing: 0.2px;
+  box-shadow: inset 0 1px 0 color-mix(in srgb, #fff 16%, transparent);
   user-select: none;
 }
 .sftp-endpoint-group-label > span {
   display: inline-flex;
-  min-width: 17px;
-  height: 17px;
+  min-width: 16px;
+  height: 16px;
   align-items: center;
   justify-content: center;
   border-radius: 999px;
-  background: color-mix(in srgb, var(--accent) 13%, transparent);
+  background: color-mix(in srgb, var(--accent) 11%, transparent);
   color: var(--accent);
-  font-size: 9.5px;
+  font-size: 9px;
   font-weight: 800;
 }
 .sftp-endpoint-option {
   position: relative;
   display: flex;
-  min-height: 34px;
+  min-height: 28px;
   align-items: center;
   border-radius: var(--radius-sm);
   color: var(--text-primary);
@@ -178,12 +186,12 @@ body {
 }
 .sftp-endpoint-option.local {
   margin: 2px 0 5px;
-  padding: 7px 34px 7px 10px;
+  padding: 5px 32px 5px 10px;
   background: color-mix(in srgb, var(--bg-input) 78%, transparent);
 }
 .sftp-endpoint-option.ssh {
   margin: 1px 0 1px 12px;
-  padding: 7px 34px 7px 14px;
+  padding: 4px 32px 4px 12px;
 }
 .sftp-endpoint-option.ssh::before {
   content: "";
@@ -203,18 +211,18 @@ body {
   display: inline-flex;
   min-width: 0;
   align-items: center;
-  gap: 8px;
+  gap: 7px;
 }
 .sftp-endpoint-option-text {
   display: inline-flex;
   min-width: 0;
   flex-direction: column;
-  line-height: 1.2;
+  line-height: 1.15;
 }
 .sftp-endpoint-option-text > span:first-child {
   max-width: 190px;
   overflow: hidden;
-  font-size: 12.5px;
+  font-size: 12px;
   font-weight: 650;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -223,7 +231,7 @@ body {
   max-width: 190px;
   overflow: hidden;
   color: var(--text-hint);
-  font-size: 10.5px;
+  font-size: 9.5px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }

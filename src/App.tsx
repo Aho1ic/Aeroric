@@ -1099,6 +1099,21 @@ function App() {
     deleteTasks([taskId]);
   }
 
+  async function handleDeleteTasks(taskIds: string[]) {
+    const ids = taskIds.filter((taskId) => tasks.some((item) => item.id === taskId));
+    if (ids.length === 0) return;
+    if (ids.length === 1) {
+      await handleDeleteTask(ids[0]);
+      return;
+    }
+    const ok = await confirm(t("task.deleteManyPrompt", { count: ids.length }), {
+      title: t("task.deleteManyTitle"),
+      kind: "warning",
+    });
+    if (!ok) return;
+    deleteTasks(ids);
+  }
+
   async function handleDeleteAllTasks(project: Project) {
     const projectTaskIds = tasks
       .filter((task) => task.projectId === project.id)
@@ -1421,6 +1436,7 @@ function App() {
                   updateProjectView(project.id, { selectedTaskId: id, isNewTask: false })
                 }
                 onDeleteTask={handleDeleteTask}
+                onDeleteTasks={handleDeleteTasks}
                 onDeleteAllTasks={() => handleDeleteAllTasks(project)}
                 onToggleTaskStar={handleToggleTaskStar}
                 onRenameTask={handleRenameTask}

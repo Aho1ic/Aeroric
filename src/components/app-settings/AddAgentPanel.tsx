@@ -88,7 +88,6 @@ export function AddAgentPanel({ onSaved }: { onSaved: (agentId: string) => void 
   const [model, setModel] = useState("");
   const [models, setModels] = useState<string[]>([]);
   const [selectedModels, setSelectedModels] = useState<string[]>([]);
-  const [modelMenuOpen, setModelMenuOpen] = useState(false);
   const [detectingModels, setDetectingModels] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -108,11 +107,11 @@ export function AddAgentPanel({ onSaved }: { onSaved: (agentId: string) => void 
     generatedAgentId &&
     baseUrl.trim() &&
     apiKey.trim() &&
-    (selectedModels.length > 0 || model.trim()),
+    (selectedModels.length > 0 || (models.length === 0 && model.trim())),
   );
-  const modelSuggestions = useMemo(() => {
+  const filteredModels = useMemo(() => {
     const needle = model.trim().toLowerCase();
-    return models.filter((item) => !needle || item.toLowerCase().includes(needle)).slice(0, 8);
+    return models.filter((item) => !needle || item.toLowerCase().includes(needle));
   }, [model, models]);
 
   async function handleDetectModels() {
@@ -127,10 +126,6 @@ export function AddAgentPanel({ onSaved }: { onSaved: (agentId: string) => void 
       });
       setModels(detected.models);
       setSelectedModels(detected.models);
-      setModelMenuOpen(detected.models.length > 0);
-      if (!model.trim() && detected.models.length > 0) {
-        setModel(detected.models[0]);
-      }
     } catch (err) {
       setError(String(err));
     } finally {
@@ -177,12 +172,6 @@ export function AddAgentPanel({ onSaved }: { onSaved: (agentId: string) => void 
     if (!next) return;
     setModels((prev) => (prev.includes(next) ? prev : [...prev, next]));
     setSelectedModels((prev) => (prev.includes(next) ? prev : [...prev, next]));
-  }
-
-  function selectModelSuggestion(next: string) {
-    setModel(next);
-    setSelectedModels((prev) => (prev.includes(next) ? prev : [...prev, next]));
-    setModelMenuOpen(false);
   }
 
   return (
@@ -326,69 +315,18 @@ export function AddAgentPanel({ onSaved }: { onSaved: (agentId: string) => void 
               id={modelInputId}
               style={monoInputStyle}
               value={model}
-              onFocus={() => setModelMenuOpen(models.length > 0)}
-              onBlur={() => window.setTimeout(() => setModelMenuOpen(false), 120)}
               onChange={(event) => {
                 setModel(event.target.value);
-                setModelMenuOpen(models.length > 0);
               }}
-              placeholder={kind === "codex" ? "gpt-5.5" : "claude-opus-4-8"}
+              placeholder={
+                models.length > 0
+                  ? t("appSettings.searchModels")
+                  : kind === "codex"
+                    ? "gpt-5.5"
+                    : "claude-opus-4-8"
+              }
               spellCheck={false}
             />
-            {modelMenuOpen && modelSuggestions.length > 0 && (
-              <div
-                style={{
-                  position: "absolute",
-                  left: 0,
-                  right: 0,
-                  top: "calc(100% + 6px)",
-                  zIndex: 2100,
-                  maxHeight: 184,
-                  overflowY: "auto",
-                  background: "var(--bg-card)",
-                  border: "1px solid var(--border-medium)",
-                  borderRadius: 8,
-                  boxShadow: "var(--shadow-popover)",
-                  padding: 4,
-                }}
-              >
-                {modelSuggestions.map((item) => (
-                  <button
-                    key={item}
-                    type="button"
-                    style={{
-                      width: "100%",
-                      minHeight: 28,
-                      display: "flex",
-                      alignItems: "center",
-                      padding: "5px 8px",
-                      border: "none",
-                      borderRadius: 6,
-                      background: item === model ? "var(--control-active-bg)" : "transparent",
-                      color: item === model ? "var(--control-active-fg)" : "var(--text-primary)",
-                      cursor: "pointer",
-                      fontFamily: "var(--font-mono)",
-                      fontSize: 12,
-                      textAlign: "left",
-                    }}
-                    onMouseDown={(event) => event.preventDefault()}
-                    onClick={() => selectModelSuggestion(item)}
-                    title={item}
-                  >
-                    <span
-                      style={{
-                        minWidth: 0,
-                        overflow: "hidden",
-                        textOverflow: "ellipsis",
-                        whiteSpace: "nowrap",
-                      }}
-                    >
-                      {item}
-                    </span>
-                  </button>
-                ))}
-              </div>
-            )}
           </div>
           <Button
             variant="outline"
@@ -399,15 +337,17 @@ export function AddAgentPanel({ onSaved }: { onSaved: (agentId: string) => void 
             <RefreshCw size={12} className={detectingModels ? "spin" : undefined} />
             {detectingModels ? t("appSettings.detectingModels") : t("appSettings.detectModels")}
           </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={handleAddManualModel}
-            disabled={!model.trim()}
-          >
-            <Plus size={12} />
-            {t("appSettings.addModel")}
-          </Button>
+          {models.length === 0 && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleAddManualModel}
+              disabled={!model.trim()}
+            >
+              <Plus size={12} />
+              {t("appSettings.addModel")}
+            </Button>
+          )}
         </div>
         <div style={{ marginTop: 5, fontSize: 11, color: "var(--text-hint)" }}>
           {models.length > 0
@@ -455,37 +395,50 @@ export function AddAgentPanel({ onSaved }: { onSaved: (agentId: string) => void 
               background: "var(--bg-subtle)",
             }}
           >
-            {models.map((item) => (
-              <label
-                key={item}
+            {filteredModels.length === 0 ? (
+              <div
                 style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 8,
-                  minWidth: 0,
+                  gridColumn: "1 / -1",
+                  color: "var(--text-hint)",
                   fontSize: 12,
-                  color: "var(--text-secondary)",
-                  cursor: "pointer",
+                  padding: "4px 2px",
                 }}
               >
-                <input
-                  type="checkbox"
-                  checked={selectedModels.includes(item)}
-                  onChange={() => toggleModel(item)}
-                />
-                <span
+                {t("appSettings.noModelResults")}
+              </div>
+            ) : (
+              filteredModels.map((item) => (
+                <label
+                  key={item}
                   style={{
-                    overflow: "hidden",
-                    textOverflow: "ellipsis",
-                    whiteSpace: "nowrap",
-                    fontFamily: "var(--font-mono)",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 8,
+                    minWidth: 0,
+                    fontSize: 12,
+                    color: "var(--text-secondary)",
+                    cursor: "pointer",
                   }}
-                  title={item}
                 >
-                  {item}
-                </span>
-              </label>
-            ))}
+                  <input
+                    type="checkbox"
+                    checked={selectedModels.includes(item)}
+                    onChange={() => toggleModel(item)}
+                  />
+                  <span
+                    style={{
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                      fontFamily: "var(--font-mono)",
+                    }}
+                    title={item}
+                  >
+                    {item}
+                  </span>
+                </label>
+              ))
+            )}
           </div>
         </div>
       )}

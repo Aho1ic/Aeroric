@@ -52,7 +52,7 @@ export function TerminalModelSelector({
 }) {
   const { t } = useI18n();
   const [models, setModels] = useState<string[]>([]);
-  const [manualModel, setManualModel] = useState(selectedModel ?? "");
+  const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(false);
   const [loadFailed, setLoadFailed] = useState(false);
   const [internalOpenMenu, setInternalOpenMenu] = useState<ComposeMenu>(null);
@@ -84,9 +84,7 @@ export function TerminalModelSelector({
         ),
       );
       setModels(next);
-      if (selectedModel && !next.includes(selectedModel)) {
-        setManualModel(selectedModel);
-      } else if (next.length > 0 && !selectedModel) {
+      if (next.length > 0 && !selectedModel) {
         onSetModel(next[0]);
       }
       if (next.length === 0 && !selectedModel) {
@@ -106,25 +104,22 @@ export function TerminalModelSelector({
   }, [loadModels]);
 
   useEffect(() => {
-    setManualModel(selectedModel ?? "");
-  }, [selectedModel]);
+    setQuery("");
+  }, [agent]);
 
   const currentModel = useMemo(() => {
     if (selectedModel && models.includes(selectedModel)) return selectedModel;
     return selectedModel || models[0] || "";
   }, [models, selectedModel]);
 
+  const filteredModels = useMemo(() => {
+    const needle = query.trim().toLowerCase();
+    return models.filter((model) => !needle || model.toLowerCase().includes(needle));
+  }, [models, query]);
+
   const label = loading
     ? t("newTask.modelLoading")
     : currentModel || (loadFailed ? t("newTask.modelUnavailable") : t("newTask.model"));
-
-  const commitManualModel = () => {
-    const next = manualModel.trim();
-    if (!next) return;
-    setModels((prev) => (prev.includes(next) ? prev : [next, ...prev]));
-    onSetModel(next);
-    setOpenMenu(null);
-  };
 
   return (
     <Popover.Root
@@ -152,7 +147,29 @@ export function TerminalModelSelector({
           style={terminalModelMenuContentStyle()}
         >
           <div style={terminalModelMenuScrollStyle()}>
-            {models.map((model) => (
+            <div style={{ padding: "6px 8px 7px" }}>
+              <input
+                value={query}
+                onChange={(event) => setQuery(event.currentTarget.value)}
+                placeholder={t("newTask.modelSearchPlaceholder")}
+                style={{
+                  minWidth: 190,
+                  width: "100%",
+                  height: 28,
+                  padding: "4px 8px",
+                  borderRadius: 6,
+                  border: "1px solid var(--border-medium)",
+                  background: "var(--bg-input)",
+                  color: "var(--text-primary)",
+                  fontSize: 12,
+                  fontFamily: "var(--font-mono)",
+                  boxSizing: "border-box",
+                  outline: "none",
+                }}
+                autoFocus
+              />
+            </div>
+            {filteredModels.map((model) => (
               <button
                 key={model}
                 type="button"
@@ -175,39 +192,7 @@ export function TerminalModelSelector({
                 {model}
               </button>
             ))}
-            <div style={{ display: "flex", gap: 6, padding: "6px 8px 4px" }}>
-              <input
-                value={manualModel}
-                onChange={(event) => setManualModel(event.currentTarget.value)}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter") {
-                    event.preventDefault();
-                    commitManualModel();
-                  }
-                }}
-                placeholder={t("newTask.modelManualPlaceholder")}
-                style={{
-                  minWidth: 180,
-                  flex: "1 1 auto",
-                  height: 28,
-                  padding: "4px 8px",
-                  borderRadius: 6,
-                  border: "1px solid var(--border-medium)",
-                  background: "var(--bg-input)",
-                  color: "var(--text-primary)",
-                  fontSize: 12,
-                  fontFamily: "var(--font-mono)",
-                }}
-              />
-              <button
-                type="button"
-                style={{ ...s.toolbarMenuItem, border: "none", background: "var(--bg-card)" }}
-                onClick={commitManualModel}
-              >
-                {t("newTask.modelUseManual")}
-              </button>
-            </div>
-            {models.length === 0 && (
+            {models.length === 0 || filteredModels.length === 0 ? (
               <div
                 style={{
                   padding: "8px 10px",
@@ -216,9 +201,13 @@ export function TerminalModelSelector({
                   whiteSpace: "nowrap",
                 }}
               >
-                {loading ? t("newTask.modelLoading") : t("newTask.modelUnavailable")}
+                {loading
+                  ? t("newTask.modelLoading")
+                  : filteredModels.length === 0 && models.length > 0
+                    ? t("newTask.modelNoResults")
+                    : t("newTask.modelUnavailable")}
               </div>
-            )}
+            ) : null}
           </div>
         </Popover.Content>
       </Popover.Portal>

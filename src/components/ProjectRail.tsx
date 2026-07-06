@@ -100,7 +100,7 @@ function RailTaskItem({
   task: Task;
   selected: boolean;
   isNewTask: boolean;
-  onSelect: () => void;
+  onSelect: (event: React.MouseEvent<HTMLButtonElement>) => void;
   onDelete: () => void;
   onToggleStar: () => void;
   onRunTodo: () => void;
@@ -114,6 +114,7 @@ function RailTaskItem({
     <button
       type="button"
       onClick={onSelect}
+      aria-selected={selected && !isNewTask}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
       style={{
@@ -369,6 +370,7 @@ export function ProjectRail({
   onNewTask,
   onSelectTask,
   onDeleteTask,
+  onDeleteTasks,
   onToggleTaskStar,
   onRunTodo,
   onReorderProjects,
@@ -389,6 +391,7 @@ export function ProjectRail({
   onNewTask: () => void;
   onSelectTask: (id: string) => void;
   onDeleteTask: (id: string) => void;
+  onDeleteTasks?: (ids: string[]) => void;
   onToggleTaskStar: (id: string) => void;
   onRunTodo: (task: Task) => void;
   onReorderProjects?: (orderedProjectIds: string[]) => void;
@@ -401,6 +404,8 @@ export function ProjectRail({
   const [collapsed, setCollapsed] = useState(false);
   const [draggedProjectId, setDraggedProjectId] = useState<string | null>(null);
   const [dragOverProjectId, setDragOverProjectId] = useState<string | null>(null);
+  const [multiSelectedTaskIds, setMultiSelectedTaskIds] = useState<Set<string>>(() => new Set());
+  const [lastSelectedTaskId, setLastSelectedTaskId] = useState<string | null>(null);
   const projectItemRefs = useRef<Map<string, HTMLElement>>(new Map());
   const projectPointerDragRef = useRef<ProjectPointerDragState | null>(null);
   const suppressNextProjectClickRef = useRef(false);
@@ -413,6 +418,89 @@ export function ProjectRail({
     () => buildProjectTaskGroups(projects, allTasks),
     [projects, allTasks],
   );
+
+  const taskIdsByProject = useMemo(() => {
+    const next = new Map<string, string[]>();
+    for (const group of projectGroups) {
+      next.set(
+        group.project.id,
+        group.tasks.map((task) => task.id),
+      );
+    }
+    return next;
+  }, [projectGroups]);
+
+  const orderedTaskIds = useMemo(
+    () => projectGroups.flatMap((group) => group.tasks.map((task) => task.id)),
+    [projectGroups],
+  );
+
+  const orderedSelectedTaskIds = (ids: Set<string>) =>
+    orderedTaskIds.filter((taskId) => ids.has(taskId));
+
+  const handleTaskSelect = (
+    event: React.MouseEvent<HTMLButtonElement>,
+    project: Project,
+    task: Task,
+  ) => {
+    if (project.id !== activeProjectId) onSwitch(project);
+
+    const projectTaskIds = taskIdsByProject.get(project.id) ?? [];
+    const anchor =
+      (lastSelectedTaskId && projectTaskIds.includes(lastSelectedTaskId)
+        ? lastSelectedTaskId
+        : selectedTaskId && projectTaskIds.includes(selectedTaskId)
+          ? selectedTaskId
+          : task.id) ?? task.id;
+
+    if (event.shiftKey) {
+      const anchorIndex = projectTaskIds.indexOf(anchor);
+      const clickedIndex = projectTaskIds.indexOf(task.id);
+      if (anchorIndex >= 0 && clickedIndex >= 0) {
+        const [start, end] =
+          anchorIndex < clickedIndex ? [anchorIndex, clickedIndex] : [clickedIndex, anchorIndex];
+        setMultiSelectedTaskIds(new Set(projectTaskIds.slice(start, end + 1)));
+      }
+      setLastSelectedTaskId(task.id);
+      onSelectTask(task.id);
+      return;
+    }
+
+    if (event.altKey || event.metaKey) {
+      setMultiSelectedTaskIds((prev) => {
+        const next = new Set(prev);
+        if (next.has(task.id)) next.delete(task.id);
+        else next.add(task.id);
+        return next;
+      });
+      setLastSelectedTaskId(task.id);
+      onSelectTask(task.id);
+      return;
+    }
+
+    setMultiSelectedTaskIds(new Set());
+    setLastSelectedTaskId(task.id);
+    onSelectTask(task.id);
+  };
+
+  const handleTaskDelete = (taskId: string) => {
+    if (multiSelectedTaskIds.has(taskId) && multiSelectedTaskIds.size > 1) {
+      const ids = orderedSelectedTaskIds(multiSelectedTaskIds);
+      setMultiSelectedTaskIds(new Set());
+      if (ids.length > 0) {
+        if (onDeleteTasks) onDeleteTasks(ids);
+        else ids.forEach(onDeleteTask);
+        return;
+      }
+    }
+    setMultiSelectedTaskIds((prev) => {
+      if (!prev.has(taskId)) return prev;
+      const next = new Set(prev);
+      next.delete(taskId);
+      return next;
+    });
+    onDeleteTask(taskId);
+  };
 
   const reorderProjectIds = (draggedId: string, targetId: string) => {
     if (draggedId === targetId) return;
@@ -509,6 +597,17 @@ export function ProjectRail({
       return next;
     });
   }, [activeProjectId]);
+
+  useEffect(() => {
+    const existing = new Set(allTasks.map((task) => task.id));
+    setMultiSelectedTaskIds((prev) => {
+      const next = new Set([...prev].filter((taskId) => existing.has(taskId)));
+      return next.size === prev.size ? prev : next;
+    });
+    if (lastSelectedTaskId && !existing.has(lastSelectedTaskId)) {
+      setLastSelectedTaskId(null);
+    }
+  }, [allTasks, lastSelectedTaskId]);
 
   // 折叠窄条只显示常驻项目；当前激活项目即使被设为非常驻也始终保留，避免失去当前上下文。
   const railProjects = useMemo(
@@ -871,13 +970,10 @@ export function ProjectRail({
                       <RailTaskItem
                         key={task.id}
                         task={task}
-                        selected={selectedTaskId === task.id}
+                        selected={selectedTaskId === task.id || multiSelectedTaskIds.has(task.id)}
                         isNewTask={isNewTask}
-                        onSelect={() => {
-                          if (project.id !== activeProjectId) onSwitch(project);
-                          onSelectTask(task.id);
-                        }}
-                        onDelete={() => onDeleteTask(task.id)}
+                        onSelect={(event) => handleTaskSelect(event, project, task)}
+                        onDelete={() => handleTaskDelete(task.id)}
                         onToggleStar={() => onToggleTaskStar(task.id)}
                         onRunTodo={() => onRunTodo(task)}
                       />

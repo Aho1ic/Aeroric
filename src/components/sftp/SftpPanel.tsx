@@ -806,7 +806,8 @@ export function SftpPanel({
       pane.sortDirection,
     );
     const sshConnectionGroups = groupSftpSshConnections(sshConnections, t("ssh.defaultGroup"));
-    const selectedSubLabel = endpointSubLabel(pane.endpoint, sshConnections);
+    const selectedSubLabel =
+      pane.endpoint.kind === "local" ? endpointSubLabel(pane.endpoint, sshConnections) : null;
     return (
       <div className={`sftp-pane${focusedSide === side ? " focused" : ""}`}>
         <div className="sftp-pane-status">

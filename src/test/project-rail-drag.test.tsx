@@ -1,5 +1,5 @@
 import { fireEvent, render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { I18nProvider } from "../i18n";
 import type { Project, Task } from "../types";
 import { ProjectRail } from "../components/ProjectRail";
@@ -18,7 +18,23 @@ function project(id: string, name: string, orderIndex: number): Project {
   };
 }
 
+function task(id: string, projectId: string, prompt: string, createdAt: number): Task {
+  return {
+    id,
+    projectId,
+    prompt,
+    agent: "codex",
+    permissionMode: "ask",
+    status: "done",
+    createdAt,
+  };
+}
+
 describe("ProjectRail project dragging", () => {
+  afterEach(() => {
+    localStorage.removeItem("aeroric:language");
+  });
+
   it("opens the agent settings section from the project rail footer", () => {
     const listener = vi.fn();
     window.addEventListener("aeroric:open-app-settings", listener);
@@ -211,5 +227,49 @@ describe("ProjectRail project dragging", () => {
     );
 
     expect(screen.getByRole("button", { name: "拖动项目 Alpha" })).toBeInTheDocument();
+  });
+
+  it("supports shift range selection and deleting selected history tasks together", () => {
+    const onSelectTask = vi.fn();
+    const onDeleteTasks = vi.fn();
+    const tasks = [
+      task("t3", "p1", "Third history task", 3),
+      task("t2", "p1", "Second history task", 2),
+      task("t1", "p1", "First history task", 1),
+    ];
+
+    render(
+      <I18nProvider>
+        <ProjectRail
+          projects={[project("p1", "Alpha", 0)]}
+          allTasks={tasks}
+          activeProjectId="p1"
+          selectedTaskId={null}
+          isNewTask={false}
+          onSwitch={vi.fn()}
+          onOpen={vi.fn()}
+          onBack={vi.fn()}
+          onNewTask={vi.fn()}
+          onSelectTask={onSelectTask}
+          onDeleteTask={vi.fn()}
+          onDeleteTasks={onDeleteTasks}
+          onToggleTaskStar={vi.fn()}
+          onRunTodo={vi.fn()}
+          onReorderProjects={vi.fn()}
+          themeVariant="light"
+          onToggleTheme={vi.fn()}
+          singleProjectMode
+        />
+      </I18nProvider>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /Third history task/i }));
+    fireEvent.click(screen.getByRole("button", { name: /First history task/i }), {
+      shiftKey: true,
+    });
+    fireEvent.click(screen.getAllByRole("button", { name: "Delete task" })[1]);
+
+    expect(onSelectTask).toHaveBeenLastCalledWith("t1");
+    expect(onDeleteTasks).toHaveBeenCalledWith(["t3", "t2", "t1"]);
   });
 });
