@@ -9,12 +9,7 @@ import {
   Moon,
   Sun,
 } from "lucide-react";
-import type {
-  Project,
-  Task,
-  ThemeVariant,
-  TaskDisplayWindow,
-} from "../types";
+import type { Project, Task, ThemeVariant, TaskDisplayWindow } from "../types";
 import { ProjectAvatar } from "./ProjectAvatar";
 import { SidebarFooterActions } from "./SidebarFooterActions";
 import { BranchBar } from "./task-panel/BranchBar";
@@ -191,10 +186,7 @@ export function TaskPanel({
         onRunTodo={onRunTodo}
       />
       <div style={s.taskPanelFooter}>
-        <SidebarFooterActions
-          themeVariant={themeVariant}
-          onToggleTheme={onToggleTheme}
-        />
+        <SidebarFooterActions themeVariant={themeVariant} onToggleTheme={onToggleTheme} />
       </div>
     </div>
   );

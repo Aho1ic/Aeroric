@@ -195,7 +195,8 @@ export function shouldShowTaskWorkspace({
   hasSessionPath: boolean;
 }): boolean {
   if (isNewTask || !hasSelectedTask) return false;
-  if (taskStatus === "cancelled" && !hasSessionPath) return false;
+  void taskStatus;
+  void hasSessionPath;
   return true;
 }
 
@@ -278,7 +279,7 @@ export function shouldShowRunningTaskInCenter({
   taskStatus: TaskStatus;
   hasSessionPath?: boolean;
 }): boolean {
-  if (taskStatus === "cancelled" && !hasSessionPath) return false;
+  void hasSessionPath;
   return (
     !hasOpenFiles &&
     !hasOpenDiff &&

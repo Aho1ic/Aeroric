@@ -114,13 +114,13 @@ describe("sftp panel helpers", () => {
       "Default",
     );
 
-    expect(grouped.map((group) => [group.label, group.connections.map((item) => item.name)])).toEqual(
-      [
-        ["Production", ["Prod App", "Prod Worker"]],
-        ["Default", ["Scratch"]],
-        ["Staging", ["Staging App"]],
-      ],
-    );
+    expect(
+      grouped.map((group) => [group.label, group.connections.map((item) => item.name)]),
+    ).toEqual([
+      ["Production", ["Prod App", "Prod Worker"]],
+      ["Default", ["Scratch"]],
+      ["Staging", ["Staging App"]],
+    ]);
   });
 
   it("formats transfer percentages and ring progress for known totals", () => {

@@ -20,6 +20,7 @@ import {
   attachMacWebKitTerminalGuard,
   applyTerminalFontSize,
   applyTerminalFontFamily,
+  terminalFontFamilyCss,
 } from "./terminalShared";
 import { attachLinuxIMEFix, attachMacWebKitShiftInputFix } from "./terminalInputFix";
 import "@xterm/xterm/css/xterm.css";
@@ -263,6 +264,7 @@ export function TerminalView({
         height: "100%",
         overflow: "hidden",
         cursor: "text",
+        fontFamily: terminalFontFamilyCss(monoFontFamily),
       }}
     />
   );

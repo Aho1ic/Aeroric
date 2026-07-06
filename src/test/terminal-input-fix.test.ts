@@ -575,7 +575,7 @@ describe("terminal input fixes", () => {
     vi.useRealTimers();
   });
 
-  it("temporarily resets the WebKit textarea input client after committed Chinese input", async () => {
+  it("keeps the WebKit textarea enabled after committed Chinese input", async () => {
     vi.useFakeTimers();
     vi.resetModules();
     vi.doMock("../platform", () => ({
@@ -612,12 +612,13 @@ describe("terminal input fixes", () => {
     );
 
     expect(sent).toEqual(["是的"]);
-    expect(textarea.disabled).toBe(true);
+    expect(textarea.disabled).toBe(false);
 
     vi.advanceTimersByTime(40);
 
     expect(textarea.disabled).toBe(false);
-    expect(focus).toHaveBeenCalledWith({ preventScroll: true });
+    expect(focus).not.toHaveBeenCalled();
+    expect(textarea.value).toBe("");
     vi.useRealTimers();
   });
 

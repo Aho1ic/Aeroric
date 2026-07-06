@@ -112,9 +112,7 @@ export function AddAgentPanel({ onSaved }: { onSaved: (agentId: string) => void 
   );
   const modelSuggestions = useMemo(() => {
     const needle = model.trim().toLowerCase();
-    return models
-      .filter((item) => !needle || item.toLowerCase().includes(needle))
-      .slice(0, 8);
+    return models.filter((item) => !needle || item.toLowerCase().includes(needle)).slice(0, 8);
   }, [model, models]);
 
   async function handleDetectModels() {

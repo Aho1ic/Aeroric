@@ -57,6 +57,39 @@ function InlineWindow({ label, window }: { label: string; window: UsageWindow })
   );
 }
 
+function NoSessionRecordPane({ task }: { task: Task }) {
+  const { t } = useI18n();
+  const prompt = task.prompt.trim();
+  const statusText =
+    task.status === "done"
+      ? t("task.completed")
+      : task.status === "failed"
+        ? (task.failureReason ?? t("task.failed"))
+        : task.status === "cancelled"
+          ? t("task.cancelled")
+          : task.status === "detached"
+            ? t("running.detachedNoSession")
+            : task.status === "interrupted"
+              ? t("running.interruptedNoSession")
+              : t("running.noSessionFallbackStatus");
+
+  return (
+    <div style={s.noSessionRecordPane}>
+      <div style={s.noSessionRecordCard}>
+        <div style={s.noSessionRecordHeader}>
+          <StatusIcon status={task.status} />
+          <div style={s.noSessionRecordTitleBlock}>
+            <div style={s.noSessionRecordTitle}>{t("running.noSessionRecordTitle")}</div>
+            <div style={s.noSessionRecordStatus}>{statusText}</div>
+          </div>
+        </div>
+        <div style={s.noSessionRecordPromptLabel}>{t("running.submittedPrompt")}</div>
+        <pre style={s.noSessionRecordPrompt}>{prompt || t("running.emptyPromptSubmitted")}</pre>
+      </div>
+    </div>
+  );
+}
+
 export function RunningView({
   task,
   projectPath,
@@ -619,12 +652,10 @@ export function RunningView({
               isCodex={isCodexLikeAgent(task.agent)}
             />
           ) : (
-            <div style={s.interruptedNoSessionPane}>
-              {t(isDetached ? "running.detachedNoSession" : "running.interruptedNoSession")}
-            </div>
+            <NoSessionRecordPane task={task} />
           )}
         </div>
-      ) : isActive || !sessionPath ? (
+      ) : isActive ? (
         <div style={s.terminalContainer}>
           <TerminalView
             key={`${task.id}-${runCount}`}
@@ -641,35 +672,14 @@ export function RunningView({
             initialSnapshot={restoreState.initialSnapshot}
           />
         </div>
+      ) : !sessionPath ? (
+        <NoSessionRecordPane task={task} />
       ) : (
         <SessionView
           sessionPath={sessionPath}
           projectPath={projectPath}
           isCodex={isCodexLikeAgent(task.agent)}
         />
-      )}
-
-      {/* Status bar when task is done and no session path (terminal fallback) */}
-      {!isActive && !isDetached && !isInterrupted && !sessionPath && (
-        <div
-          style={{
-            padding: "10px 20px",
-            borderTop: "1px solid var(--border-dim)",
-            flexShrink: 0,
-            display: "flex",
-            alignItems: "center",
-            gap: 8,
-          }}
-        >
-          <StatusIcon status={task.status} />
-          <span style={{ fontSize: 12, color: "var(--text-muted)" }}>
-            {task.status === "done"
-              ? t("task.completed")
-              : task.status === "failed"
-                ? (task.failureReason ?? t("task.failed"))
-                : t("task.cancelled")}
-          </span>
-        </div>
       )}
     </div>
   );

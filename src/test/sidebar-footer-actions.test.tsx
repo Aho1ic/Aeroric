@@ -61,4 +61,19 @@ describe("SidebarFooterActions", () => {
 
     expect(screen.getByRole("dialog")).toHaveAttribute("data-initial-nav", "general");
   });
+
+  it("responds to repeated app settings events while the dialog is already open", () => {
+    renderFooterActions();
+
+    act(() => {
+      openAppSettings("general");
+    });
+    expect(screen.getByRole("dialog")).toHaveAttribute("data-initial-nav", "general");
+
+    act(() => {
+      openAppSettings("codex");
+    });
+
+    expect(screen.getByRole("dialog")).toHaveAttribute("data-initial-nav", "codex");
+  });
 });

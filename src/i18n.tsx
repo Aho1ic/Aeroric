@@ -1639,6 +1639,10 @@ const translations: Record<AppLanguage, Record<string, string>> = {
     "running.interruptedTitle": "This task exited unexpectedly",
     "running.interruptedNoSession":
       "No session ID was saved for this task, so resume is unavailable. You can still cancel it or mark it completed.",
+    "running.noSessionRecordTitle": "Terminal record",
+    "running.noSessionFallbackStatus": "No agent session file was saved.",
+    "running.submittedPrompt": "Submitted prompt",
+    "running.emptyPromptSubmitted": "(Started as an empty terminal)",
     "running.sessionFile": "Session file: {path}",
     "running.worktreeBranchInfo": "Worktree: {branch} → {base}",
     "running.worktreeBranchTitle": "Task is on branch {branch}, will merge into {base}",
@@ -3345,6 +3349,10 @@ const translations: Record<AppLanguage, Record<string, string>> = {
     "running.interruptedTitle": "检测到当前任务被异常退出",
     "running.interruptedNoSession":
       "这个任务没有保存会话 ID，因此暂时无法恢复；你仍然可以取消任务或标记已完成。",
+    "running.noSessionRecordTitle": "终端记录",
+    "running.noSessionFallbackStatus": "没有保存 agent 会话文件。",
+    "running.submittedPrompt": "启动时输入的内容",
+    "running.emptyPromptSubmitted": "（以空终端方式启动）",
     "running.sessionFile": "会话文件：{path}",
     "running.worktreeBranchInfo": "工作树：{branch} → {base}",
     "running.worktreeBranchTitle": "任务位于分支 {branch}，将合并回 {base}",

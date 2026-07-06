@@ -18,13 +18,7 @@ import {
   NotebookTabs,
 } from "lucide-react";
 import * as Popover from "@radix-ui/react-popover";
-import type {
-  Project,
-  Task,
-  ThemeVariant,
-  SkillHubConfig,
-  SshConnection,
-} from "../types";
+import type { Project, Task, ThemeVariant, SkillHubConfig, SshConnection } from "../types";
 import { isRemoteProject, resolveProjectLocation } from "../types";
 import { getAvatarGradient, shortenPath } from "../utils";
 import { ProjectAvatar } from "./ProjectAvatar";
@@ -302,10 +296,7 @@ export function WelcomePage({
           </nav>
 
           <div style={s.sidebarFooter}>
-            <SidebarFooterActions
-              themeVariant={themeVariant}
-              onToggleTheme={onToggleTheme}
-            />
+            <SidebarFooterActions themeVariant={themeVariant} onToggleTheme={onToggleTheme} />
           </div>
         </div>
 

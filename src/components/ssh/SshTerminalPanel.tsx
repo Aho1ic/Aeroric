@@ -25,6 +25,7 @@ import {
   initTerminal,
   loadWebglAddon,
   safeFit,
+  terminalFontFamilyCss,
   themeFor,
 } from "../terminalShared";
 import { SshConnectionDialog } from "./SshConnectionDialog";
@@ -430,7 +431,11 @@ export const SshTerminalPanel = forwardRef<SshTerminalPanelHandle, Props>(functi
         {activeSession ? (
           <div
             ref={terminalContainerRef}
-            style={{ ...s.sshTerminalCanvas, background: terminalTheme.background }}
+            style={{
+              ...s.sshTerminalCanvas,
+              background: terminalTheme.background,
+              fontFamily: terminalFontFamilyCss(monoFontFamily),
+            }}
           />
         ) : (
           <div style={s.sshTerminalPlaceholder}>{t("ssh.selectAndConnect")}</div>

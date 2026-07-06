@@ -6,7 +6,7 @@ type TerminalWithInput = Pick<Terminal, "input" | "textarea">;
 export const POST_COMPOSITION_REPLAY_IGNORE_MS = 3000;
 const ROMANIZED_COMPOSITION_COMMIT_DELAY_MS = 90;
 const POST_COMPOSITION_TEXTAREA_CLEAR_DELAYS_MS = [0, 16, 40, 80, 160, 320, 640];
-const TEXTAREA_INPUT_CLIENT_RESET_MS = 24;
+const TEXTAREA_POST_CJK_COMMIT_SETTLE_MS = 24;
 
 export function applyTerminalTextareaInputAttributes(term: {
   textarea?: HTMLTextAreaElement | null;
@@ -310,7 +310,7 @@ export function attachLinuxIMEFix(
   let ignorePostCompositionUntil = 0;
   let textareaClearGeneration = 0;
   let textareaClearTimers: Array<ReturnType<typeof globalThis.setTimeout>> = [];
-  let textareaInputClientResetTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
+  let textareaPostCjkCommitTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
   let isReleasingXtermComposition = false;
   let suppressNextTextInsertAfterRepeatedKey: string | true | null = null;
   let pendingCompositionCommit: {
@@ -353,26 +353,21 @@ export function attachLinuxIMEFix(
     textareaClearTimers = [];
   };
 
-  const clearTextareaInputClientReset = () => {
-    if (!textareaInputClientResetTimer) return;
-    globalThis.clearTimeout(textareaInputClientResetTimer);
-    textareaInputClientResetTimer = null;
+  const clearTextareaPostCjkCommitTimer = () => {
+    if (!textareaPostCjkCommitTimer) return;
+    globalThis.clearTimeout(textareaPostCjkCommitTimer);
+    textareaPostCjkCommitTimer = null;
   };
 
-  const resetTextareaInputClientAfterCjkCommit = () => {
-    clearTextareaInputClientReset();
-    const wasDisabled = textarea.disabled;
-    textarea.disabled = true;
-    textareaInputClientResetTimer = globalThis.setTimeout(() => {
-      textareaInputClientResetTimer = null;
-      if (!wasDisabled) {
-        textarea.disabled = false;
-      }
+  const settleTextareaAfterCjkCommit = () => {
+    clearTextareaPostCjkCommitTimer();
+    textareaPostCjkCommitTimer = globalThis.setTimeout(() => {
+      textareaPostCjkCommitTimer = null;
       clearTextarea();
-      if (!textarea.disabled) {
+      if (!textarea.disabled && document.activeElement === textarea) {
         textarea.focus({ preventScroll: true });
       }
-    }, TEXTAREA_INPUT_CLIENT_RESET_MS);
+    }, TEXTAREA_POST_CJK_COMMIT_SETTLE_MS);
   };
 
   const clearTextareaAfterWebKitReplay = () => {
@@ -407,7 +402,7 @@ export function attachLinuxIMEFix(
     ignorePostCompositionUntil = performance.now() + POST_COMPOSITION_REPLAY_IGNORE_MS;
     clearTextareaAfterWebKitReplay();
     if (containsCommittedCjkText(normalized)) {
-      resetTextareaInputClientAfterCjkCommit();
+      settleTextareaAfterCjkCommit();
     }
     sendText(normalized);
   };
@@ -608,7 +603,7 @@ export function attachLinuxIMEFix(
         isComposing = false;
         compositionText = "";
         clearTextareaAfterWebKitReplay();
-        resetTextareaInputClientAfterCjkCommit();
+        settleTextareaAfterCjkCommit();
         event.preventDefault();
         event.stopImmediatePropagation();
         sendText(normalizedTerminalInput);
@@ -668,7 +663,7 @@ export function attachLinuxIMEFix(
       );
       ignorePostCompositionUntil = performance.now() + POST_COMPOSITION_REPLAY_IGNORE_MS;
       clearTextareaAfterWebKitReplay();
-      resetTextareaInputClientAfterCjkCommit();
+      settleTextareaAfterCjkCommit();
       event.preventDefault();
       event.stopImmediatePropagation();
       sendText(event.data);
@@ -832,7 +827,7 @@ export function attachLinuxIMEFix(
       clearPendingCompositionCommit();
       textareaClearGeneration += 1;
       clearScheduledTextareaClears();
-      clearTextareaInputClientReset();
+      clearTextareaPostCjkCommitTimer();
       disposable.dispose();
     },
   };

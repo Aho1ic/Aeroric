@@ -135,6 +135,13 @@ function endpointLabel(endpoint: SftpEndpoint): string {
   return endpoint.kind === "local" ? "Local" : endpoint.connectionName;
 }
 
+function endpointSubLabel(endpoint: SftpEndpoint, connections: SshConnection[]): string | null {
+  if (endpoint.kind === "local") return null;
+  const connection = connections.find((item) => item.id === endpoint.connectionId);
+  if (!connection) return null;
+  return `${connection.username}@${connection.host}:${connection.port}`;
+}
+
 function endpointStorageValue(endpoint: SftpEndpoint): string {
   return endpoint.kind === "local" ? "local" : `ssh:${endpoint.connectionId}`;
 }
@@ -799,6 +806,7 @@ export function SftpPanel({
       pane.sortDirection,
     );
     const sshConnectionGroups = groupSftpSshConnections(sshConnections, t("ssh.defaultGroup"));
+    const selectedSubLabel = endpointSubLabel(pane.endpoint, sshConnections);
     return (
       <div className={`sftp-pane${focusedSide === side ? " focused" : ""}`}>
         <div className="sftp-pane-status">
@@ -822,31 +830,59 @@ export function SftpPanel({
             }}
           >
             <Select.Trigger aria-label={t("sftp.location")} className="sftp-select-trigger">
-              <Select.Value>{endpointLabel(pane.endpoint)}</Select.Value>
+              <Select.Value>
+                <span className="sftp-select-value">
+                  <span>{endpointLabel(pane.endpoint)}</span>
+                  {selectedSubLabel && <span aria-hidden="true">{selectedSubLabel}</span>}
+                </span>
+              </Select.Value>
               <Select.Icon asChild>
                 <ChevronDown size={13} />
               </Select.Icon>
             </Select.Trigger>
             <Select.Portal>
-              <Select.Content position="popper" sideOffset={4} style={s.settingsSelectContent}>
+              <Select.Content
+                position="popper"
+                sideOffset={4}
+                className="sftp-endpoint-select-content"
+                style={s.settingsSelectContent}
+              >
                 <Select.Viewport style={s.settingsSelectViewport}>
-                  <Select.Item value="local" style={s.fileSearchTypeItem}>
-                    <Select.ItemText>{t("sftp.local")}</Select.ItemText>
-                    <Select.ItemIndicator style={s.settingsSelectIndicator}>
+                  <Select.Item value="local" className="sftp-endpoint-option local">
+                    <Select.ItemText>
+                      <span className="sftp-endpoint-option-main">
+                        <HardDrive size={13} strokeWidth={1.9} />
+                        <span>{t("sftp.local")}</span>
+                      </span>
+                    </Select.ItemText>
+                    <Select.ItemIndicator className="sftp-endpoint-option-check">
                       <Check size={13} />
                     </Select.ItemIndicator>
                   </Select.Item>
                   {sshConnectionGroups.map((group) => (
                     <Select.Group key={group.label}>
-                      <Select.Label style={s.fileSearchTypeItem}>{group.label}</Select.Label>
+                      <Select.Label className="sftp-endpoint-group-label">
+                        {group.label}
+                        <span aria-hidden="true">{group.connections.length}</span>
+                      </Select.Label>
                       {group.connections.map((connection) => (
                         <Select.Item
                           key={connection.id}
                           value={`ssh:${connection.id}`}
-                          style={s.fileSearchTypeItem}
+                          className="sftp-endpoint-option ssh"
                         >
-                          <Select.ItemText>{connection.name}</Select.ItemText>
-                          <Select.ItemIndicator style={s.settingsSelectIndicator}>
+                          <Select.ItemText>
+                            <span className="sftp-endpoint-option-main">
+                              <Server size={13} strokeWidth={1.9} />
+                              <span className="sftp-endpoint-option-text">
+                                <span>{connection.name}</span>
+                                <span aria-hidden="true">
+                                  {connection.username}@{connection.host}:{connection.port}
+                                </span>
+                              </span>
+                            </span>
+                          </Select.ItemText>
+                          <Select.ItemIndicator className="sftp-endpoint-option-check">
                             <Check size={13} />
                           </Select.ItemIndicator>
                         </Select.Item>
@@ -1154,7 +1190,7 @@ export function SftpPanel({
       ? 100
       : progressState === "failed"
         ? (lastTransfer?.progress ?? 0)
-        : transferTasks.find((task) => task.status === "running")?.progress ?? 0;
+        : (transferTasks.find((task) => task.status === "running")?.progress ?? 0);
   const transferProgressLabel =
     progressState === "running"
       ? t("sftp.transferProgressRunning", { count: runningTransferCount })

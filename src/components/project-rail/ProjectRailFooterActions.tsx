@@ -124,9 +124,7 @@ export function ProjectRailFooterActions({
           <FooterIconButton
             key={action}
             title={isDark ? t("theme.switchToLight") : t("theme.switchToDark")}
-            icon={
-              isDark ? <Sun size={14} strokeWidth={2} /> : <Moon size={14} strokeWidth={2} />
-            }
+            icon={isDark ? <Sun size={14} strokeWidth={2} /> : <Moon size={14} strokeWidth={2} />}
             onClick={onToggleTheme}
           />
         );

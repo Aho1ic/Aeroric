@@ -2,7 +2,7 @@ import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { Unicode11Addon } from "@xterm/addon-unicode11";
 import { WebglAddon } from "@xterm/addon-webgl";
-import { IS_MAC_WEBKIT } from "../platform";
+import { APP_PLATFORM, IS_MAC_WEBKIT } from "../platform";
 import { applyTerminalTextareaInputAttributes } from "./terminalInputFix";
 import type { ThemeVariant } from "../types";
 
@@ -416,6 +416,35 @@ export interface InitTerminalResult {
   fitAddon: FitAddon;
 }
 
+const WINDOWS_TERMINAL_FONT_FALLBACK =
+  '"Cascadia Mono", "Cascadia Code", Consolas, "Courier New", monospace';
+
+function quoteFontFamilyName(name: string): string {
+  const trimmed = name.trim();
+  if (!trimmed) return "monospace";
+  if (
+    trimmed.startsWith('"') ||
+    trimmed.startsWith("'") ||
+    trimmed.includes(",") ||
+    /^(monospace|ui-monospace|serif|sans-serif|cursive|fantasy|system-ui)$/i.test(trimmed)
+  ) {
+    return trimmed;
+  }
+  return /[\s()]/.test(trimmed) ? JSON.stringify(trimmed) : trimmed;
+}
+
+export function normalizeTerminalFontFamily(fontFamily: string): string {
+  const value = fontFamily.trim() || "monospace";
+  if (value.includes(",")) return value;
+  const primary = quoteFontFamilyName(value);
+  if (APP_PLATFORM === "windows") return `${primary}, ${WINDOWS_TERMINAL_FONT_FALLBACK}`;
+  return `${primary}, ui-monospace, monospace`;
+}
+
+export function terminalFontFamilyCss(fontFamily: string): string {
+  return normalizeTerminalFontFamily(fontFamily);
+}
+
 /**
  * 创建 xterm Terminal 实例并加载通用 addon（FitAddon, Unicode11, WebGL）。
  * 调用方负责 term.open(container)。
@@ -426,11 +455,12 @@ export function initTerminal(
   fontSize = 12,
   fontFamily = "monospace",
 ): InitTerminalResult {
+  const normalizedFontFamily = normalizeTerminalFontFamily(fontFamily);
   const term = new Terminal({
     convertEol: false,
     scrollback,
     cursorBlink: true,
-    fontFamily,
+    fontFamily: normalizedFontFamily,
     fontSize,
     theme: themeFor(variant),
     allowProposedApi: true,
@@ -532,7 +562,8 @@ export function applyTerminalFontFamily(
   fontFamily: string,
   container?: HTMLElement,
 ): { cols: number; rows: number } | null {
-  if (term.options.fontFamily === fontFamily) return null;
-  term.options.fontFamily = fontFamily;
+  const normalizedFontFamily = normalizeTerminalFontFamily(fontFamily);
+  if (term.options.fontFamily === normalizedFontFamily) return null;
+  term.options.fontFamily = normalizedFontFamily;
   return safeFit(fitAddon, term, container);
 }

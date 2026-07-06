@@ -116,6 +116,125 @@ body {
   margin: 3px 4px;
 }
 
+/* ── SFTP endpoint select ─────────────────────────────────────── */
+.sftp-select-value {
+  display: inline-flex;
+  min-width: 0;
+  flex-direction: column;
+  align-items: flex-start;
+  line-height: 1.15;
+}
+.sftp-select-value > span:first-child {
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sftp-select-value > span:last-child {
+  max-width: 160px;
+  overflow: hidden;
+  color: var(--text-hint);
+  font-size: 10px;
+  font-weight: 520;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sftp-endpoint-select-content {
+  min-width: max(260px, var(--radix-select-trigger-width));
+}
+.sftp-endpoint-group-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 10px 5px;
+  color: var(--accent);
+  font-size: 10.5px;
+  font-weight: 800;
+  letter-spacing: 0.2px;
+  user-select: none;
+}
+.sftp-endpoint-group-label > span {
+  display: inline-flex;
+  min-width: 17px;
+  height: 17px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 13%, transparent);
+  color: var(--accent);
+  font-size: 9.5px;
+  font-weight: 800;
+}
+.sftp-endpoint-option {
+  position: relative;
+  display: flex;
+  min-height: 34px;
+  align-items: center;
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  cursor: pointer;
+  outline: none;
+  user-select: none;
+}
+.sftp-endpoint-option.local {
+  margin: 2px 0 5px;
+  padding: 7px 34px 7px 10px;
+  background: color-mix(in srgb, var(--bg-input) 78%, transparent);
+}
+.sftp-endpoint-option.ssh {
+  margin: 1px 0 1px 12px;
+  padding: 7px 34px 7px 14px;
+}
+.sftp-endpoint-option.ssh::before {
+  content: "";
+  position: absolute;
+  left: -5px;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 24%, transparent);
+}
+.sftp-endpoint-option[data-highlighted] {
+  background: var(--control-active-bg);
+  color: var(--control-active-fg);
+}
+.sftp-endpoint-option-main {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+}
+.sftp-endpoint-option-text {
+  display: inline-flex;
+  min-width: 0;
+  flex-direction: column;
+  line-height: 1.2;
+}
+.sftp-endpoint-option-text > span:first-child {
+  max-width: 190px;
+  overflow: hidden;
+  font-size: 12.5px;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sftp-endpoint-option-text > span:last-child {
+  max-width: 190px;
+  overflow: hidden;
+  color: var(--text-hint);
+  font-size: 10.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sftp-endpoint-option-check {
+  position: absolute;
+  right: 10px;
+  display: inline-flex;
+  align-items: center;
+  color: var(--accent);
+}
+
 /* ── Branch Popover (searchable select) ─────────────────────────── */
 .branch-popover-content {
   background: var(--bg-card);

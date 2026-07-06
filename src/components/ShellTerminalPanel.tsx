@@ -15,6 +15,7 @@ import {
   attachMacWebKitTerminalGuard,
   applyTerminalFontSize,
   applyTerminalFontFamily,
+  terminalFontFamilyCss,
 } from "./terminalShared";
 import { attachLinuxIMEFix, attachMacWebKitShiftInputFix } from "./terminalInputFix";
 import { Minus, Plus, Terminal as TerminalIcon, Trash2, X } from "lucide-react";
@@ -300,6 +301,7 @@ const ShellTerminalInstance = forwardRef<
         overflow: "hidden",
         padding: "4px 6px",
         cursor: "text",
+        fontFamily: terminalFontFamilyCss(monoFontFamily),
         visibility: isActive ? "visible" : "hidden",
         pointerEvents: isActive ? "auto" : "none",
       }}

@@ -70,6 +70,11 @@ describe("SftpPanel", () => {
     expect(screen.getAllByText("Production").length).toBeGreaterThan(0);
     expect(screen.getAllByText("Staging").length).toBeGreaterThan(0);
     expect(screen.getByText("Default")).toBeInTheDocument();
+    expect(screen.getByText("Default")).toHaveClass("sftp-endpoint-group-label");
+    expect(screen.getByRole("option", { name: "Scratch" })).toHaveClass(
+      "sftp-endpoint-option",
+      "ssh",
+    );
     expect(screen.getByRole("option", { name: "Scratch" })).toBeInTheDocument();
   });
 

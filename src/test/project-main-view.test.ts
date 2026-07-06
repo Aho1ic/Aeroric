@@ -107,7 +107,7 @@ describe("project main view mode", () => {
     ).toBe(false);
   });
 
-  it("returns to the compose workspace for a cancelled task with no saved session path", () => {
+  it("keeps the task workspace visible for a cancelled task with no saved session path", () => {
     expect(
       shouldShowTaskWorkspace({
         isNewTask: false,
@@ -115,17 +115,17 @@ describe("project main view mode", () => {
         taskStatus: "cancelled",
         hasSessionPath: false,
       }),
-    ).toBe(false);
+    ).toBe(true);
   });
 
-  it("keeps a cancelled no-session task terminal hidden in the center workspace", () => {
+  it("keeps a cancelled no-session task record visible in the center workspace", () => {
     expect(
       shouldShowRunningTaskInCenter({
         hasOpenFiles: false,
         hasOpenDiff: false,
         isShellMode: false,
         isSftpMode: false,
-        isSshMode: true,
+        isSshMode: false,
         isDockerMode: false,
         isNewTask: false,
         hasSelectedTask: true,
@@ -134,7 +134,7 @@ describe("project main view mode", () => {
         taskStatus: "cancelled",
         hasSessionPath: false,
       }),
-    ).toBe(false);
+    ).toBe(true);
   });
 
   it("renders the local shell terminal in the center workspace when active", () => {

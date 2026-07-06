@@ -50,12 +50,14 @@ export function AppSettingsEventHost({
 }) {
   const [showAppSettings, setShowAppSettings] = useState(false);
   const [initialSettingsNav, setInitialSettingsNav] = useState<NavKey>("general");
+  const [openNonce, setOpenNonce] = useState(0);
 
   useEffect(() => {
     const open = (event: Event) => {
       const detail =
         event instanceof CustomEvent ? (event.detail as OpenAppSettingsDetail | undefined) : null;
       setInitialSettingsNav(detail?.initialNav ?? "general");
+      setOpenNonce((nonce) => nonce + 1);
       setShowAppSettings(true);
     };
     window.addEventListener(OPEN_APP_SETTINGS_EVENT, open);
@@ -66,6 +68,7 @@ export function AppSettingsEventHost({
 
   return (
     <AppSettingsDialog
+      key={openNonce}
       initialNav={initialSettingsNav}
       themeVariant={themeVariant}
       themeMode={themeMode}
