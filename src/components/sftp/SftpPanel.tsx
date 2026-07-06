@@ -48,6 +48,8 @@ import {
   DEFAULT_SFTP_SORT_PREFERENCE,
   filterSftpTreeEntriesByName,
   flattenSftpTreeEntries,
+  formatSftpTransferPercent,
+  groupSftpSshConnections,
   normalizeSftpSortPreference,
   pruneExpandedPathsForFolderSelection,
   sftpBreadcrumbSegments,
@@ -56,6 +58,7 @@ import {
   sftpFileName,
   sftpKeyAction,
   sftpParentPath,
+  sftpProgressRingBackground,
   shouldPromptForUnknownSftpConflict,
   sortSftpEntries,
   type SftpConflictStrategy,
@@ -122,6 +125,9 @@ type TransferTask = {
   id: string;
   operation: SftpOperation;
   names: string[];
+  completed: number;
+  total: number;
+  progress: number;
   status: "running" | "completed" | "failed";
 };
 
@@ -280,6 +286,9 @@ export function SftpPanel({
       id: `sftp-transfer-${Date.now()}-${Math.random().toString(36).slice(2)}`,
       operation,
       names: paths.map(sftpFileName),
+      completed: 0,
+      total: paths.length,
+      progress: formatSftpTransferPercent(0, paths.length),
       status: "running",
     };
     setTransferTasks((current) => [task, ...current].slice(0, 8));
@@ -288,9 +297,59 @@ export function SftpPanel({
 
   const finishTransferTask = useCallback((id: string, status: TransferTask["status"]) => {
     setTransferTasks((current) =>
-      current.map((task) => (task.id === id ? { ...task, status } : task)),
+      current.map((task) =>
+        task.id === id
+          ? {
+              ...task,
+              completed: status === "completed" ? task.total : task.completed,
+              progress:
+                status === "completed"
+                  ? formatSftpTransferPercent(task.total, task.total)
+                  : task.progress,
+              status,
+            }
+          : task,
+      ),
     );
   }, []);
+
+  const advanceTransferTask = useCallback((id: string, completed: number) => {
+    setTransferTasks((current) =>
+      current.map((task) =>
+        task.id === id
+          ? {
+              ...task,
+              completed,
+              progress: formatSftpTransferPercent(completed, task.total),
+            }
+          : task,
+      ),
+    );
+  }, []);
+
+  const transferPathsWithProgress = useCallback(
+    async (
+      taskId: string,
+      operation: SftpOperation,
+      sourceEndpoint: SftpEndpoint,
+      paths: string[],
+      targetEndpoint: SftpEndpoint,
+      conflictStrategy: SftpConflictStrategy,
+    ) => {
+      for (const [index, path] of paths.entries()) {
+        await transferSftpPaths(
+          operation,
+          sourceEndpoint,
+          [path],
+          targetEndpoint,
+          sshConnections,
+          conflictStrategy,
+        );
+        advanceTransferTask(taskId, index + 1);
+      }
+    },
+    [advanceTransferTask, sshConnections],
+  );
 
   const updatePane = useCallback((side: PaneSide, updater: (pane: PaneState) => PaneState) => {
     if (side === "left") setLeft(updater);
@@ -544,12 +603,12 @@ export function SftpPanel({
       }
       const taskId = beginTransferTask(operation, selectedPaths);
       try {
-        await transferSftpPaths(
+        await transferPathsWithProgress(
+          taskId,
           operation,
           sourceEndpoint,
           selectedPaths,
           targetEndpoint,
-          sshConnections,
           conflictStrategy,
         );
         finishTransferTask(taskId, "completed");
@@ -561,7 +620,15 @@ export function SftpPanel({
         showToast(t("sftp.operationFailed", { error: String(error) }));
       }
     },
-    [beginTransferTask, finishTransferTask, panes, refreshPane, showToast, sshConnections, t],
+    [
+      beginTransferTask,
+      finishTransferTask,
+      panes,
+      refreshPane,
+      showToast,
+      t,
+      transferPathsWithProgress,
+    ],
   );
 
   const resolveTransferConflict = useCallback(
@@ -632,12 +699,12 @@ export function SftpPanel({
       }
       const taskId = beginTransferTask("copy", clipboardPayload.paths);
       try {
-        await transferSftpPaths(
+        await transferPathsWithProgress(
+          taskId,
           "copy",
           clipboardPayload.endpoint,
           clipboardPayload.paths,
           targetEndpoint,
-          sshConnections,
           "fail",
         );
         finishTransferTask(taskId, "completed");
@@ -656,8 +723,8 @@ export function SftpPanel({
       refreshPane,
       selectedDirectoryEndpoint,
       showToast,
-      sshConnections,
       t,
+      transferPathsWithProgress,
     ],
   );
 
@@ -731,6 +798,7 @@ export function SftpPanel({
       pane.sortField,
       pane.sortDirection,
     );
+    const sshConnectionGroups = groupSftpSshConnections(sshConnections, t("ssh.defaultGroup"));
     return (
       <div className={`sftp-pane${focusedSide === side ? " focused" : ""}`}>
         <div className="sftp-pane-status">
@@ -768,17 +836,22 @@ export function SftpPanel({
                       <Check size={13} />
                     </Select.ItemIndicator>
                   </Select.Item>
-                  {sshConnections.map((connection) => (
-                    <Select.Item
-                      key={connection.id}
-                      value={`ssh:${connection.id}`}
-                      style={s.fileSearchTypeItem}
-                    >
-                      <Select.ItemText>{connection.name}</Select.ItemText>
-                      <Select.ItemIndicator style={s.settingsSelectIndicator}>
-                        <Check size={13} />
-                      </Select.ItemIndicator>
-                    </Select.Item>
+                  {sshConnectionGroups.map((group) => (
+                    <Select.Group key={group.label}>
+                      <Select.Label style={s.fileSearchTypeItem}>{group.label}</Select.Label>
+                      {group.connections.map((connection) => (
+                        <Select.Item
+                          key={connection.id}
+                          value={`ssh:${connection.id}`}
+                          style={s.fileSearchTypeItem}
+                        >
+                          <Select.ItemText>{connection.name}</Select.ItemText>
+                          <Select.ItemIndicator style={s.settingsSelectIndicator}>
+                            <Check size={13} />
+                          </Select.ItemIndicator>
+                        </Select.Item>
+                      ))}
+                    </Select.Group>
                   ))}
                 </Select.Viewport>
               </Select.Content>
@@ -1076,6 +1149,12 @@ export function SftpPanel({
   const runningTransferCount = transferTasks.filter((task) => task.status === "running").length;
   const lastTransfer = transferTasks[0] ?? null;
   const progressState = runningTransferCount > 0 ? "running" : (lastTransfer?.status ?? "idle");
+  const activeProgressPercent =
+    progressState === "completed"
+      ? 100
+      : progressState === "failed"
+        ? (lastTransfer?.progress ?? 0)
+        : transferTasks.find((task) => task.status === "running")?.progress ?? 0;
   const transferProgressLabel =
     progressState === "running"
       ? t("sftp.transferProgressRunning", { count: runningTransferCount })
@@ -1116,15 +1195,25 @@ export function SftpPanel({
                 aria-busy={runningTransferCount > 0}
                 title={transferProgressLabel}
               >
-                <span className="sftp-progress-ring" aria-hidden="true" />
-                <span className="sftp-progress-count">{transferTasks.length}</span>
+                <span
+                  className="sftp-progress-ring"
+                  style={{
+                    background: sftpProgressRingBackground(
+                      activeProgressPercent,
+                      progressState === "failed" ? "var(--danger)" : "var(--accent)",
+                    ),
+                  }}
+                  aria-hidden="true"
+                />
+                <span className="sftp-progress-count">{activeProgressPercent}%</span>
               </button>
               <div className="sftp-transfer-popover" role="status">
                 <div className="sftp-transfer-popover-title">{t("sftp.transferTasks")}</div>
                 {transferTasks.map((task) => (
                   <div key={task.id} className={`sftp-transfer-task ${task.status}`}>
                     <span className="sftp-transfer-task-dot" aria-hidden="true" />
-                    <span>{transferTaskLine(task)}</span>
+                    <span className="sftp-transfer-task-label">{transferTaskLine(task)}</span>
+                    <span className="sftp-transfer-task-percent">{task.progress}%</span>
                   </div>
                 ))}
               </div>

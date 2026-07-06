@@ -1,18 +1,6 @@
-import { useEffect, useState } from "react";
 import { Settings, Moon, Sun } from "lucide-react";
-import type {
-  ThemeMode,
-  ThemeVariant,
-  TerminalFontSize,
-  TaskDisplayWindow,
-  FontFamily,
-} from "../types";
-import { AppSettingsDialog } from "./AppSettingsDialog";
-import {
-  OPEN_APP_SETTINGS_EVENT,
-  type NavKey,
-  type OpenAppSettingsDetail,
-} from "./app-settings/types";
+import type { ThemeVariant } from "../types";
+import { openAppSettings } from "./app-settings/types";
 import { NotificationBell } from "./NotificationBell";
 import { ENABLE_USAGE_INSIGHTS } from "../platform";
 import { UsagePopover } from "./UsagePopover";
@@ -21,107 +9,36 @@ import s from "../styles";
 
 export function SidebarFooterActions({
   themeVariant,
-  themeMode,
-  systemPrefersDark,
-  onThemeModeChange,
   onToggleTheme,
-  terminalFontSize,
-  onTerminalFontSizeChange,
-  taskDisplayWindow,
-  onTaskDisplayWindowChange,
-  attentionBadge,
-  onAttentionBadgeChange,
-  sftpLocalDefaultPath,
-  onSftpLocalDefaultPathChange,
-  uiFontFamily,
-  onUiFontFamilyChange,
-  monoFontFamily,
-  onMonoFontFamilyChange,
 }: {
   themeVariant: ThemeVariant;
-  themeMode: ThemeMode;
-  systemPrefersDark: boolean;
-  onThemeModeChange: (mode: ThemeMode) => void;
   onToggleTheme: () => void;
-  terminalFontSize: TerminalFontSize;
-  onTerminalFontSizeChange: (size: TerminalFontSize) => void;
-  taskDisplayWindow: TaskDisplayWindow;
-  onTaskDisplayWindowChange: (window: TaskDisplayWindow) => void;
-  attentionBadge: boolean;
-  onAttentionBadgeChange: (enabled: boolean) => void;
-  sftpLocalDefaultPath: string;
-  onSftpLocalDefaultPathChange: (path: string) => void;
-  uiFontFamily: FontFamily;
-  onUiFontFamilyChange: (family: FontFamily) => void;
-  monoFontFamily: FontFamily;
-  onMonoFontFamilyChange: (family: FontFamily) => void;
 }) {
   const { t } = useI18n();
-  const [showAppSettings, setShowAppSettings] = useState(false);
-  const [initialSettingsNav, setInitialSettingsNav] = useState<NavKey>("general");
   const isDark = themeVariant === "dark";
 
-  useEffect(() => {
-    const open = (event: Event) => {
-      const detail =
-        event instanceof CustomEvent ? (event.detail as OpenAppSettingsDetail | undefined) : null;
-      setInitialSettingsNav(detail?.initialNav ?? "general");
-      setShowAppSettings(true);
-    };
-    window.addEventListener(OPEN_APP_SETTINGS_EVENT, open);
-    return () => window.removeEventListener(OPEN_APP_SETTINGS_EVENT, open);
-  }, []);
-
   return (
-    <>
-      <div style={s.sidebarFooterActions}>
-        <NotificationBell />
-        <button
-          style={s.sidebarIconBtn}
-          title={t("appSettings.title")}
-          onClick={() => {
-            setInitialSettingsNav("general");
-            setShowAppSettings(true);
-          }}
-        >
-          <Settings size={14} strokeWidth={1.6} color="var(--text-hint)" />
-        </button>
-        <button
-          style={s.sidebarIconBtn}
-          title={isDark ? t("theme.switchToLight") : t("theme.switchToDark")}
-          onClick={onToggleTheme}
-        >
-          {isDark ? (
-            <Sun size={14} strokeWidth={1.8} color="var(--text-hint)" />
-          ) : (
-            <Moon size={14} strokeWidth={1.8} color="var(--text-hint)" />
-          )}
-        </button>
-        {ENABLE_USAGE_INSIGHTS ? <UsagePopover /> : null}
-      </div>
-
-      {showAppSettings && (
-        <AppSettingsDialog
-          initialNav={initialSettingsNav}
-          themeVariant={themeVariant}
-          themeMode={themeMode}
-          systemPrefersDark={systemPrefersDark}
-          onThemeModeChange={onThemeModeChange}
-          terminalFontSize={terminalFontSize}
-          onTerminalFontSizeChange={onTerminalFontSizeChange}
-          taskDisplayWindow={taskDisplayWindow}
-          onTaskDisplayWindowChange={onTaskDisplayWindowChange}
-          attentionBadge={attentionBadge}
-          onAttentionBadgeChange={onAttentionBadgeChange}
-          sftpLocalDefaultPath={sftpLocalDefaultPath}
-          onSftpLocalDefaultPathChange={onSftpLocalDefaultPathChange}
-          uiFontFamily={uiFontFamily}
-          onUiFontFamilyChange={onUiFontFamilyChange}
-          monoFontFamily={monoFontFamily}
-          onMonoFontFamilyChange={onMonoFontFamilyChange}
-          onClose={() => setShowAppSettings(false)}
-        />
-      )}
-    </>
+    <div style={s.sidebarFooterActions}>
+      <NotificationBell />
+      <button
+        style={s.sidebarIconBtn}
+        title={t("appSettings.title")}
+        onClick={() => openAppSettings("general")}
+      >
+        <Settings size={14} strokeWidth={1.6} color="var(--text-hint)" />
+      </button>
+      <button
+        style={s.sidebarIconBtn}
+        title={isDark ? t("theme.switchToLight") : t("theme.switchToDark")}
+        onClick={onToggleTheme}
+      >
+        {isDark ? (
+          <Sun size={14} strokeWidth={1.8} color="var(--text-hint)" />
+        ) : (
+          <Moon size={14} strokeWidth={1.8} color="var(--text-hint)" />
+        )}
+      </button>
+      {ENABLE_USAGE_INSIGHTS ? <UsagePopover /> : null}
+    </div>
   );
 }

@@ -1,6 +1,7 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { act } from "react";
 import { describe, expect, it, vi } from "vitest";
+import { AppSettingsEventHost } from "../components/AppSettingsEventHost";
 import { SidebarFooterActions } from "../components/SidebarFooterActions";
 import { openAppSettings } from "../components/app-settings/types";
 import { I18nProvider } from "../i18n";
@@ -24,12 +25,12 @@ vi.mock("../components/UsagePopover", () => ({
 function renderFooterActions() {
   return render(
     <I18nProvider>
-      <SidebarFooterActions
+      <SidebarFooterActions themeVariant="light" onToggleTheme={vi.fn()} />
+      <AppSettingsEventHost
         themeVariant="light"
         themeMode="light"
         systemPrefersDark={false}
         onThemeModeChange={vi.fn()}
-        onToggleTheme={vi.fn()}
         terminalFontSize={11}
         onTerminalFontSizeChange={vi.fn()}
         taskDisplayWindow={3}

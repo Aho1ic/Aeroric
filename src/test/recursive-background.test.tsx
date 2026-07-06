@@ -145,22 +145,8 @@ function welcomePageProps(
     onRenameProject: vi.fn(),
     onToggleProjectHidden: vi.fn(),
     themeVariant: "light",
-    themeMode: "light",
-    systemPrefersDark: false,
-    onThemeModeChange: vi.fn(),
     onToggleTheme: vi.fn(),
-    terminalFontSize: 11,
-    onTerminalFontSizeChange: vi.fn(),
-    taskDisplayWindow: 3,
-    onTaskDisplayWindowChange: vi.fn(),
-    attentionBadge: true,
-    onAttentionBadgeChange: vi.fn(),
     sftpLocalDefaultPath: "/Users/macbook/Downloads/同步空间",
-    onSftpLocalDefaultPathChange: vi.fn(),
-    uiFontFamily: "sans-serif",
-    onUiFontFamilyChange: vi.fn(),
-    monoFontFamily: "monospace",
-    onMonoFontFamilyChange: vi.fn(),
     skillHubConfig: null,
     onEnterSkillHub: vi.fn(),
     sshConnections: [],
@@ -228,7 +214,6 @@ describe("recursive dynamic background", () => {
       <WelcomePage
         {...welcomePageProps({
           themeVariant: "dark",
-          themeMode: "dark",
         })}
       />,
     );

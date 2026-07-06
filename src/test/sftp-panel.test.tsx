@@ -18,6 +18,7 @@ const connections: SshConnection[] = [
   {
     id: "conn-1",
     name: "Staging",
+    group: "Staging",
     host: "staging.example.com",
     port: 22,
     username: "deploy",
@@ -27,6 +28,7 @@ const connections: SshConnection[] = [
   {
     id: "conn-2",
     name: "Production",
+    group: "Production",
     host: "prod.example.com",
     port: 22,
     username: "deploy",
@@ -36,6 +38,41 @@ const connections: SshConnection[] = [
 ];
 
 describe("SftpPanel", () => {
+  it("groups SSH connection options by SSH group in the location selector", async () => {
+    const user = userEvent.setup();
+    render(
+      <I18nProvider>
+        <SftpPanel
+          sshConnections={[
+            ...connections,
+            {
+              id: "conn-3",
+              name: "Scratch",
+              group: "",
+              host: "scratch.example.com",
+              port: 22,
+              username: "me",
+              remotePath: "/tmp",
+              createdAt: 3,
+            },
+          ]}
+          localDefaultPath="/Users/me"
+          active
+          themeVariant="light"
+          currentSshConnectionId="conn-2"
+        />
+      </I18nProvider>,
+    );
+
+    await user.click(screen.getAllByLabelText("Location")[1]);
+
+    await screen.findByRole("option", { name: "Scratch" });
+    expect(screen.getAllByText("Production").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Staging").length).toBeGreaterThan(0);
+    expect(screen.getByText("Default")).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "Scratch" })).toBeInTheDocument();
+  });
+
   it("defaults to Local on the left and the current SSH project connection on the right", () => {
     render(
       <I18nProvider>
@@ -55,7 +92,7 @@ describe("SftpPanel", () => {
     expect(screen.getByDisplayValue("/srv/app")).toBeInTheDocument();
   });
 
-  it("shows transfer progress and task details while copying files", async () => {
+  it("shows percentage transfer progress and task details while copying files", async () => {
     const user = userEvent.setup();
     const transferControl: { finish?: () => void } = {};
     vi.mocked(invoke).mockImplementation((command, args) => {
@@ -103,14 +140,18 @@ describe("SftpPanel", () => {
 
     const progressButton = await screen.findByRole("button", { name: /Transfer progress/i });
     expect(progressButton).toHaveAttribute("aria-busy", "true");
+    expect(progressButton).toHaveTextContent("0%");
 
     await user.hover(progressButton);
     expect(screen.getByText(/Copying README.md/i)).toBeInTheDocument();
+    expect(screen.getAllByText("0%").length).toBeGreaterThan(0);
 
     transferControl.finish?.();
     await waitFor(() => expect(progressButton).toHaveAttribute("aria-busy", "false"));
+    expect(progressButton).toHaveTextContent("100%");
     await user.hover(progressButton);
     expect(screen.getByText(/Copied README.md/i)).toBeInTheDocument();
+    expect(screen.getAllByText("100%").length).toBeGreaterThan(0);
   });
 
   it("defaults panes to modification time descending sort", async () => {

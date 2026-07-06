@@ -29,6 +29,7 @@ import {
 import { DEFAULT_UI_FONT, DEFAULT_MONO_FONT } from "./types";
 import type { FontFamily } from "./types";
 import { WelcomePage } from "./components/WelcomePage";
+import { AppSettingsEventHost } from "./components/AppSettingsEventHost";
 import type { SshProjectInput } from "./components/ssh/SshProjectDialog";
 import { deriveRemoteProjectName } from "./components/ssh/SshProjectDialog";
 import { selectDefaultCondaEnvironment } from "./components/file-viewer/run";
@@ -1364,6 +1365,24 @@ function App() {
 
   return (
     <div style={{ ...s.root, position: "relative" }}>
+      <AppSettingsEventHost
+        themeVariant={themeVariant}
+        themeMode={themeMode}
+        systemPrefersDark={systemPrefersDark}
+        onThemeModeChange={setThemeMode}
+        terminalFontSize={terminalFontSize}
+        onTerminalFontSizeChange={setTerminalFontSize}
+        taskDisplayWindow={taskDisplayWindow}
+        onTaskDisplayWindowChange={setTaskDisplayWindow}
+        attentionBadge={attentionBadge}
+        onAttentionBadgeChange={setAttentionBadge}
+        sftpLocalDefaultPath={sftpLocalDefaultPath}
+        onSftpLocalDefaultPathChange={setSftpLocalDefaultPath}
+        uiFontFamily={uiFontFamily}
+        onUiFontFamilyChange={setUiFontFamily}
+        monoFontFamily={monoFontFamily}
+        onMonoFontFamilyChange={setMonoFontFamily}
+      />
       <div
         style={{
           position: "absolute",
@@ -1474,22 +1493,8 @@ function App() {
             sshConnections={sshConnections}
             onSshConnectionsChange={handleSshConnectionsChange}
             themeVariant={themeVariant}
-            themeMode={themeMode}
-            systemPrefersDark={systemPrefersDark}
-            onThemeModeChange={setThemeMode}
             onToggleTheme={handleToggleTheme}
-            terminalFontSize={terminalFontSize}
-            onTerminalFontSizeChange={setTerminalFontSize}
-            taskDisplayWindow={taskDisplayWindow}
-            onTaskDisplayWindowChange={setTaskDisplayWindow}
-            attentionBadge={attentionBadge}
-            onAttentionBadgeChange={setAttentionBadge}
             sftpLocalDefaultPath={sftpLocalDefaultPath}
-            onSftpLocalDefaultPathChange={setSftpLocalDefaultPath}
-            uiFontFamily={uiFontFamily}
-            onUiFontFamilyChange={setUiFontFamily}
-            monoFontFamily={monoFontFamily}
-            onMonoFontFamilyChange={setMonoFontFamily}
           />
         </div>
       )}

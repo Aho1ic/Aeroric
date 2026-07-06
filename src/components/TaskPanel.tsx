@@ -12,11 +12,8 @@ import {
 import type {
   Project,
   Task,
-  ThemeMode,
   ThemeVariant,
-  TerminalFontSize,
   TaskDisplayWindow,
-  FontFamily,
 } from "../types";
 import { ProjectAvatar } from "./ProjectAvatar";
 import { SidebarFooterActions } from "./SidebarFooterActions";
@@ -39,22 +36,8 @@ export function TaskPanel({
   onBack,
   backTitle,
   themeVariant,
-  themeMode,
-  systemPrefersDark,
-  onThemeModeChange,
   onToggleTheme,
-  terminalFontSize,
-  onTerminalFontSizeChange,
   taskDisplayWindow,
-  onTaskDisplayWindowChange,
-  attentionBadge,
-  onAttentionBadgeChange,
-  sftpLocalDefaultPath,
-  onSftpLocalDefaultPathChange,
-  uiFontFamily,
-  onUiFontFamilyChange,
-  monoFontFamily,
-  onMonoFontFamilyChange,
   active = true,
   collapsed = false,
   onToggleCollapsed,
@@ -72,22 +55,8 @@ export function TaskPanel({
   onBack: () => void;
   backTitle?: string;
   themeVariant: ThemeVariant;
-  themeMode: ThemeMode;
-  systemPrefersDark: boolean;
-  onThemeModeChange: (mode: ThemeMode) => void;
   onToggleTheme: () => void;
-  terminalFontSize: TerminalFontSize;
-  onTerminalFontSizeChange: (size: TerminalFontSize) => void;
   taskDisplayWindow: TaskDisplayWindow;
-  onTaskDisplayWindowChange: (window: TaskDisplayWindow) => void;
-  attentionBadge: boolean;
-  onAttentionBadgeChange: (enabled: boolean) => void;
-  sftpLocalDefaultPath: string;
-  onSftpLocalDefaultPathChange: (path: string) => void;
-  uiFontFamily: FontFamily;
-  onUiFontFamilyChange: (family: FontFamily) => void;
-  monoFontFamily: FontFamily;
-  onMonoFontFamilyChange: (family: FontFamily) => void;
   active?: boolean;
   collapsed?: boolean;
   onToggleCollapsed?: () => void;
@@ -224,22 +193,7 @@ export function TaskPanel({
       <div style={s.taskPanelFooter}>
         <SidebarFooterActions
           themeVariant={themeVariant}
-          themeMode={themeMode}
-          systemPrefersDark={systemPrefersDark}
-          onThemeModeChange={onThemeModeChange}
           onToggleTheme={onToggleTheme}
-          terminalFontSize={terminalFontSize}
-          onTerminalFontSizeChange={onTerminalFontSizeChange}
-          taskDisplayWindow={taskDisplayWindow}
-          onTaskDisplayWindowChange={onTaskDisplayWindowChange}
-          attentionBadge={attentionBadge}
-          onAttentionBadgeChange={onAttentionBadgeChange}
-          sftpLocalDefaultPath={sftpLocalDefaultPath}
-          onSftpLocalDefaultPathChange={onSftpLocalDefaultPathChange}
-          uiFontFamily={uiFontFamily}
-          onUiFontFamilyChange={onUiFontFamilyChange}
-          monoFontFamily={monoFontFamily}
-          onMonoFontFamilyChange={onMonoFontFamilyChange}
         />
       </div>
     </div>

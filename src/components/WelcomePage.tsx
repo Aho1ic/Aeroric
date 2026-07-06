@@ -21,11 +21,7 @@ import * as Popover from "@radix-ui/react-popover";
 import type {
   Project,
   Task,
-  ThemeMode,
   ThemeVariant,
-  TerminalFontSize,
-  TaskDisplayWindow,
-  FontFamily,
   SkillHubConfig,
   SshConnection,
 } from "../types";
@@ -129,22 +125,8 @@ export function WelcomePage({
   onRenameProject,
   onToggleProjectHidden,
   themeVariant,
-  themeMode,
-  systemPrefersDark,
-  onThemeModeChange,
   onToggleTheme,
-  terminalFontSize,
-  onTerminalFontSizeChange,
-  taskDisplayWindow,
-  onTaskDisplayWindowChange,
-  attentionBadge,
-  onAttentionBadgeChange,
   sftpLocalDefaultPath,
-  onSftpLocalDefaultPathChange,
-  uiFontFamily,
-  onUiFontFamilyChange,
-  monoFontFamily,
-  onMonoFontFamilyChange,
   skillHubConfig,
   onEnterSkillHub,
   sshConnections,
@@ -160,22 +142,8 @@ export function WelcomePage({
   onRenameProject: (projectId: string, name: string) => void;
   onToggleProjectHidden: (projectId: string) => void;
   themeVariant: ThemeVariant;
-  themeMode: ThemeMode;
-  systemPrefersDark: boolean;
-  onThemeModeChange: (mode: ThemeMode) => void;
   onToggleTheme: () => void;
-  terminalFontSize: TerminalFontSize;
-  onTerminalFontSizeChange: (size: TerminalFontSize) => void;
-  taskDisplayWindow: TaskDisplayWindow;
-  onTaskDisplayWindowChange: (window: TaskDisplayWindow) => void;
-  attentionBadge: boolean;
-  onAttentionBadgeChange: (enabled: boolean) => void;
   sftpLocalDefaultPath: string;
-  onSftpLocalDefaultPathChange: (path: string) => void;
-  uiFontFamily: FontFamily;
-  onUiFontFamilyChange: (family: FontFamily) => void;
-  monoFontFamily: FontFamily;
-  onMonoFontFamilyChange: (family: FontFamily) => void;
   skillHubConfig: SkillHubConfig | null;
   onEnterSkillHub: () => void;
   sshConnections: SshConnection[];
@@ -336,22 +304,7 @@ export function WelcomePage({
           <div style={s.sidebarFooter}>
             <SidebarFooterActions
               themeVariant={themeVariant}
-              themeMode={themeMode}
-              systemPrefersDark={systemPrefersDark}
-              onThemeModeChange={onThemeModeChange}
               onToggleTheme={onToggleTheme}
-              terminalFontSize={terminalFontSize}
-              onTerminalFontSizeChange={onTerminalFontSizeChange}
-              taskDisplayWindow={taskDisplayWindow}
-              onTaskDisplayWindowChange={onTaskDisplayWindowChange}
-              attentionBadge={attentionBadge}
-              onAttentionBadgeChange={onAttentionBadgeChange}
-              sftpLocalDefaultPath={sftpLocalDefaultPath}
-              onSftpLocalDefaultPathChange={onSftpLocalDefaultPathChange}
-              uiFontFamily={uiFontFamily}
-              onUiFontFamilyChange={onUiFontFamilyChange}
-              monoFontFamily={monoFontFamily}
-              onMonoFontFamilyChange={onMonoFontFamilyChange}
             />
           </div>
         </div>
