@@ -946,23 +946,50 @@ function App() {
     });
   }
 
-  function handleResumeTask(taskId: string) {
+  async function handleResumeTask(taskId: string) {
     const task = tasks.find((t) => t.id === taskId);
-    const sessionId =
-      task && isCodexLikeAgent(task.agent) ? task.codexSessionId : task?.claudeSessionId;
     if (!task) return;
+    const project = projects.find((p) => p.id === task.projectId);
+    if (!project) return;
+
+    const codexLike = isCodexLikeAgent(task.agent);
+    const sessionPath = codexLike ? task.codexSessionPath : task.claudeSessionPath;
+    let sessionId = codexLike ? task.codexSessionId : task.claudeSessionId;
+    if (!sessionId && sessionPath && resolveProjectLocation(project).kind === "local") {
+      try {
+        sessionId =
+          (await invoke<string | null>("read_session_id", {
+            sessionPath,
+            projectPath: task.worktreePath ?? project.path,
+            isCodex: codexLike,
+          })) ?? undefined;
+      } catch (err) {
+        console.error("read_session_id failed", err);
+      }
+    }
+
     if (!sessionId) {
       showToast(t("running.resumeUnavailable"), "warning");
       return;
     }
-    const project = projects.find((p) => p.id === task.projectId);
-    if (!project) return;
+
+    const restoredSessionFields: Partial<Task> = sessionPath
+      ? codexLike
+        ? { codexSessionId: sessionId, codexSessionPath: sessionPath }
+        : { claudeSessionId: sessionId, claudeSessionPath: sessionPath }
+      : {};
+    const taskWithSession: Task = { ...task, ...restoredSessionFields };
 
     // Reset task status, clear buffer, and bump run counter to remount the terminal
     setTasks((prev) => {
       const next = prev.map((t) =>
         t.id === taskId
-          ? { ...t, status: "pending" as TaskStatus, attentionRequestedAt: undefined }
+          ? {
+              ...t,
+              ...restoredSessionFields,
+              status: "pending" as TaskStatus,
+              attentionRequestedAt: undefined,
+            }
           : t,
       );
       persistProjectTasks(task.projectId, next, showToast, formatSaveTasksError);
@@ -972,15 +999,17 @@ function App() {
     setTaskRunCounts((prev) => ({ ...prev, [taskId]: (prev[taskId] ?? 0) + 1 }));
 
     pendingResumeStartsRef.current[taskId] = () => {
-      invokeResumeTask(task, project, sessionId);
+      invokeResumeTask(taskWithSession, project, sessionId);
     };
   }
 
   async function handleReconnectTask(taskId: string) {
     const task = tasks.find((t) => t.id === taskId);
     if (!task) return;
-    const sessionId = isCodexLikeAgent(task.agent) ? task.codexSessionId : task.claudeSessionId;
-    if (!sessionId) {
+    const codexLike = isCodexLikeAgent(task.agent);
+    const sessionId = codexLike ? task.codexSessionId : task.claudeSessionId;
+    const sessionPath = codexLike ? task.codexSessionPath : task.claudeSessionPath;
+    if (!sessionId && !sessionPath) {
       showToast(t("running.resumeUnavailable"), "warning");
       return;
     }

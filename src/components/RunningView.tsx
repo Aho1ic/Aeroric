@@ -113,6 +113,7 @@ export function RunningView({
   const sessionPath = task.claudeSessionPath ?? task.codexSessionPath;
   const codexLike = isCodexLikeAgent(task.agent);
   const resumeSessionId = codexLike ? task.codexSessionId : task.claudeSessionId;
+  const resumeAvailable = Boolean(resumeSessionId || sessionPath);
   const restoreState = getRestoreState?.() ?? {};
   const currentAgentLabel = agentDisplayLabel(task.agent);
   const currentAgentBadge = task.selectedModel
@@ -387,7 +388,7 @@ export function RunningView({
           !isDetached &&
           !isInterrupted &&
           onResume &&
-          resumeSessionId &&
+          resumeAvailable &&
           !task.worktreeDiscarded && (
             <button style={s.resumeBtn} onClick={onResume}>
               <RotateCcw size={12} strokeWidth={2.5} />
@@ -586,13 +587,13 @@ export function RunningView({
             <div style={s.interruptedBannerActions}>
               <button
                 type="button"
-                title={!resumeSessionId ? t("running.resumeUnavailable") : undefined}
+                title={!resumeAvailable ? t("running.resumeUnavailable") : undefined}
                 style={{
                   ...s.interruptedPrimaryBtn,
-                  opacity: resumeSessionId ? 1 : 0.45,
-                  cursor: resumeSessionId ? "pointer" : "not-allowed",
+                  opacity: resumeAvailable ? 1 : 0.45,
+                  cursor: resumeAvailable ? "pointer" : "not-allowed",
                 }}
-                disabled={!resumeSessionId}
+                disabled={!resumeAvailable}
                 onClick={isDetached ? onReconnect : onResume}
               >
                 <RotateCcw size={12} strokeWidth={2.1} />

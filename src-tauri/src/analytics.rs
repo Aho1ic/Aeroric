@@ -46,13 +46,15 @@ fn duration_from(first: Option<f64>, last: Option<f64>) -> f64 {
     }
 }
 
-/// 探测格式：与 `session.rs::is_codex_format` 保持一致——前 10 行内出现
+/// 探测格式：与 `session.rs::is_codex_format` 保持一致——探测窗口内出现
 /// `type=session_meta` 或 `type=event_msg` 即视为 Codex。
 /// Why: Codex 各版本 `payload.originator` 取值漂移（codex_cli_rs / codex-tui / ...），
 /// 仅靠 originator 前缀判定会让部分可正常回放的 Codex session 被错走 Claude 解析，
 /// token/tool_calls 全部归零；判定标准必须与会话查看器保持一致。
+const SESSION_FORMAT_DETECTION_LINES: usize = 200;
+
 fn is_codex_session(content: &str) -> bool {
-    for line in content.lines().take(10) {
+    for line in content.lines().take(SESSION_FORMAT_DETECTION_LINES) {
         let Ok(v) = serde_json::from_str::<Value>(line) else {
             continue;
         };

@@ -648,42 +648,40 @@ pub async fn read_session_messages(
         let canonical = validate_session_path(&session_path, &project_path, is_codex)?;
         let file = File::open(&canonical).map_err(|e| e.to_string())?;
         let reader = BufReader::new(file);
-        let mut messages = Vec::new();
-        let mut first_lines = Vec::new();
-        let mut detected_codex: Option<bool> = None;
+        let lines: Vec<String> = reader
+            .lines()
+            .map(|line| line.map_err(|e| e.to_string()))
+            .filter_map(|line| match line {
+                Ok(line) if !line.trim().is_empty() => Some(Ok(line)),
+                Ok(_) => None,
+                Err(err) => Some(Err(err)),
+            })
+            .collect::<Result<_, _>>()?;
 
-        for line in reader.lines() {
-            let line = line.map_err(|e| e.to_string())?;
-            if line.trim().is_empty() {
-                continue;
-            }
-            if detected_codex.is_none() {
-                first_lines.push(line);
-                if first_lines.len() < 10 {
-                    continue;
-                }
-                detected_codex = Some(is_codex_format(&first_lines));
-                parse_session_lines(&first_lines, detected_codex.unwrap(), &mut messages);
-                first_lines.clear();
-                continue;
-            }
-
-            parse_session_line(&line, detected_codex.unwrap(), &mut messages);
-        }
-
-        if detected_codex.is_none() {
-            let codex_format = is_codex_format(&first_lines);
-            parse_session_lines(&first_lines, codex_format, &mut messages);
-        }
-
-        Ok(messages)
+        Ok(parse_session_messages(&lines, is_codex))
     })
     .await
     .map_err(|e| e.to_string())?
 }
 
+#[tauri::command]
+pub async fn read_session_id(
+    session_path: String,
+    project_path: String,
+    is_codex: bool,
+) -> Result<Option<String>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let canonical = validate_session_path(&session_path, &project_path, is_codex)?;
+        Ok(resolve_session_id_from_file(&canonical, is_codex))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+const SESSION_FORMAT_DETECTION_LINES: usize = 200;
+
 fn is_codex_format<S: AsRef<str>>(lines: &[S]) -> bool {
-    for line in lines.iter().take(10) {
+    for line in lines.iter().take(SESSION_FORMAT_DETECTION_LINES) {
         if let Ok(val) = serde_json::from_str::<serde_json::Value>(line.as_ref()) {
             match val.get("type").and_then(|v| v.as_str()) {
                 Some("session_meta") | Some("event_msg") => return true,
@@ -692,6 +690,72 @@ fn is_codex_format<S: AsRef<str>>(lines: &[S]) -> bool {
         }
     }
     false
+}
+
+fn parse_session_messages(lines: &[String], prefer_codex: bool) -> Vec<SessionMessage> {
+    let detected_codex = is_codex_format(lines);
+    let primary_is_codex = detected_codex || prefer_codex;
+    let mut messages = Vec::new();
+    parse_session_lines(lines, primary_is_codex, &mut messages);
+
+    if messages.is_empty() && primary_is_codex != detected_codex {
+        parse_session_lines(lines, detected_codex, &mut messages);
+    }
+
+    messages
+}
+
+fn resolve_session_id_from_file(path: &Path, is_codex: bool) -> Option<String> {
+    let file = File::open(path).ok()?;
+    for line in BufReader::new(file)
+        .lines()
+        .map_while(Result::ok)
+        .take(SESSION_FORMAT_DETECTION_LINES)
+    {
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(&line) else {
+            continue;
+        };
+        if is_codex {
+            let event_type = value.get("type").and_then(|v| v.as_str());
+            if event_type == Some("session_meta") {
+                if let Some(id) = value
+                    .get("payload")
+                    .and_then(|p| p.get("id"))
+                    .and_then(|v| v.as_str())
+                    .filter(|id| !id.trim().is_empty())
+                {
+                    return Some(id.to_string());
+                }
+            }
+        } else if let Some(id) = value
+            .get("sessionId")
+            .or_else(|| value.get("session_id"))
+            .and_then(|v| v.as_str())
+            .filter(|id| !id.trim().is_empty())
+        {
+            return Some(id.to_string());
+        }
+    }
+
+    let stem = path.file_stem().and_then(|name| name.to_str())?;
+    if !is_codex && is_uuid_like(stem) {
+        return Some(stem.to_string());
+    }
+
+    if is_codex {
+        if let Some(rest) = stem.strip_prefix("rollout-") {
+            if let Some(candidate) = rest.get(20..) {
+                if is_uuid_like(candidate) {
+                    return Some(candidate.to_string());
+                }
+            }
+        }
+        if is_uuid_like(stem) {
+            return Some(stem.to_string());
+        }
+    }
+
+    None
 }
 
 fn parse_session_lines(lines: &[String], is_codex: bool, messages: &mut Vec<SessionMessage>) {
@@ -1974,6 +2038,160 @@ fn format_timestamp_ms(ms: i64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn codex_user_line(text: &str) -> String {
+        serde_json::json!({
+            "type": "event_msg",
+            "payload": {
+                "type": "user_message",
+                "message": text
+            }
+        })
+        .to_string()
+    }
+
+    fn codex_assistant_line(text: &str) -> String {
+        serde_json::json!({
+            "type": "response_item",
+            "payload": {
+                "type": "message",
+                "role": "assistant",
+                "content": [
+                    { "type": "output_text", "text": text }
+                ]
+            }
+        })
+        .to_string()
+    }
+
+    fn ignored_codex_like_line(idx: usize) -> String {
+        serde_json::json!({
+            "type": "turn_context",
+            "payload": {
+                "cwd": format!("/tmp/project-{idx}")
+            }
+        })
+        .to_string()
+    }
+
+    #[test]
+    fn parse_session_messages_detects_codex_after_initial_noise() {
+        let mut lines: Vec<String> = (0..12).map(ignored_codex_like_line).collect();
+        lines.push(codex_user_line("first visible user message"));
+        lines.push(codex_assistant_line("assistant reply"));
+
+        let messages = parse_session_messages(&lines, false);
+
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[0].role, "user");
+        assert!(matches!(
+            &messages[0].content[0],
+            SessionContent::Text { text } if text == "first visible user message"
+        ));
+        assert_eq!(messages[1].role, "assistant");
+        assert!(matches!(
+            &messages[1].content[0],
+            SessionContent::Text { text } if text == "assistant reply"
+        ));
+    }
+
+    #[test]
+    fn parse_session_messages_prefers_known_codex_agent_when_marker_is_absent() {
+        let lines = vec![codex_assistant_line("assistant-only restored output")];
+
+        let messages = parse_session_messages(&lines, true);
+
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].role, "assistant");
+        assert!(matches!(
+            &messages[0].content[0],
+            SessionContent::Text { text } if text == "assistant-only restored output"
+        ));
+    }
+
+    #[test]
+    fn parse_session_messages_keeps_full_long_history() {
+        let lines: Vec<String> = (0..260)
+            .flat_map(|idx| {
+                [
+                    codex_user_line(&format!("user line {idx}")),
+                    codex_assistant_line(&format!("assistant line {idx}")),
+                ]
+            })
+            .collect();
+
+        let messages = parse_session_messages(&lines, true);
+
+        assert_eq!(messages.len(), 520);
+        assert!(matches!(
+            &messages.first().unwrap().content[0],
+            SessionContent::Text { text } if text == "user line 0"
+        ));
+        assert!(matches!(
+            &messages.last().unwrap().content[0],
+            SessionContent::Text { text } if text == "assistant line 259"
+        ));
+    }
+
+    #[test]
+    fn resolve_session_id_reads_codex_meta_and_filename_fallback() {
+        let dir = std::env::temp_dir();
+        let meta_path =
+            dir.join("rollout-2026-07-07T12-00-00-019f39d7-aaaa-7bbb-8ccc-9ddddddddddd.jsonl");
+        fs::write(
+            &meta_path,
+            serde_json::json!({
+                "type": "session_meta",
+                "payload": { "id": "019f39d7-1111-2222-3333-444444444444" }
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            resolve_session_id_from_file(&meta_path, true),
+            Some("019f39d7-1111-2222-3333-444444444444".to_string())
+        );
+        let _ = fs::remove_file(&meta_path);
+
+        let fallback_path =
+            dir.join("rollout-2026-07-07T12-00-00-019f39d7-aaaa-7bbb-8ccc-9ddddddddddd.jsonl");
+        fs::write(&fallback_path, "{}\n").unwrap();
+        assert_eq!(
+            resolve_session_id_from_file(&fallback_path, true),
+            Some("019f39d7-aaaa-7bbb-8ccc-9ddddddddddd".to_string())
+        );
+        let _ = fs::remove_file(&fallback_path);
+    }
+
+    #[test]
+    fn resolve_session_id_reads_claude_session_id_and_filename_fallback() {
+        let dir = std::env::temp_dir();
+        let meta_path = dir.join("claude-session-with-title.jsonl");
+        fs::write(
+            &meta_path,
+            serde_json::json!({
+                "type": "user",
+                "sessionId": "1aee0948-e0f2-4ad1-b710-ba236fab378a",
+                "message": { "content": "hello" }
+            })
+            .to_string(),
+        )
+        .unwrap();
+        assert_eq!(
+            resolve_session_id_from_file(&meta_path, false),
+            Some("1aee0948-e0f2-4ad1-b710-ba236fab378a".to_string())
+        );
+        let _ = fs::remove_file(&meta_path);
+
+        let fallback_path = dir.join("1aee0948-e0f2-4ad1-b710-ba236fab378a.jsonl");
+        fs::write(&fallback_path, "{}\n").unwrap();
+        assert_eq!(
+            resolve_session_id_from_file(&fallback_path, false),
+            Some("1aee0948-e0f2-4ad1-b710-ba236fab378a".to_string())
+        );
+        let _ = fs::remove_file(&fallback_path);
+    }
 
     #[test]
     fn extract_claude_status_session_id_from_status_output() {
