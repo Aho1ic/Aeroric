@@ -137,7 +137,7 @@ const ShellTerminalInstance = forwardRef<
     term.open(container);
     const disposeInputFix = attachMacWebKitShiftInputFix(term);
     loadWebglAddon(term);
-    const writer = createSmartWriter(term);
+    const writer = createSmartWriter(term, () => themeVariantRef.current);
     const disposeMacWebKitGuard = attachMacWebKitTerminalGuard({ term, container, writer });
 
     const fit = () => {

@@ -4,6 +4,7 @@ import { vi } from "vitest";
 import {
   colorizePlainTerminalOutput,
   createSmartWriter,
+  remapLightAnsiForeground,
   splitTerminalWriteChunk,
   TERMINAL_WRITE_CHUNK_SIZE,
 } from "../components/terminalShared";
@@ -21,6 +22,14 @@ describe("terminal output highlighting", () => {
     const raw = "\x1b[31merror\x1b[0m 42";
 
     expect(colorizePlainTerminalOutput(raw)).toBe(raw);
+  });
+
+  it("remaps explicit white ANSI foregrounds in light themes", () => {
+    const raw = "\x1b[1;97mbold white\x1b[0m \x1b[38;2;255;255;255mtruecolor\x1b[0m";
+
+    expect(remapLightAnsiForeground(raw, "light")).toContain("\x1b[1;39m");
+    expect(remapLightAnsiForeground(raw, "light")).toContain("\x1b[39mtruecolor");
+    expect(remapLightAnsiForeground(raw, "dark")).toBe(raw);
   });
 
   it("splits large writes without breaking surrogate pairs", () => {

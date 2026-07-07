@@ -282,6 +282,13 @@ describe("Agent config and debug panel UI", () => {
     expect(screen.queryByRole("button", { name: /Edit/i })).not.toBeInTheDocument();
   });
 
+  it("does not render the footer cancel button in the agent config editor", async () => {
+    renderAgentConfigPanel('status = "ok"\n');
+
+    await findConfigEditor('status = "ok"\n');
+    expect(screen.queryByRole("button", { name: /^Cancel$/i })).not.toBeInTheDocument();
+  });
+
   it("deletes custom agent configs through the settings panel", async () => {
     const user = userEvent.setup();
     const onDeleted = renderDeletableAgentConfigPanel("#!/bin/sh\n");
@@ -401,6 +408,39 @@ describe("Agent config and debug panel UI", () => {
 
     expect(screen.getByText("gpt-5.1")).toBeInTheDocument();
     expect(screen.queryByText("gpt-5.5")).not.toBeInTheDocument();
+  });
+
+  it("keeps the manual model input ready for adding more models", async () => {
+    const user = userEvent.setup();
+    renderAddAgentPanel();
+
+    await user.type(screen.getByLabelText("Agent Name"), "Manual");
+    await user.type(screen.getByLabelText("Base URL"), "https://example.com/v1");
+    await user.type(screen.getByLabelText("API Key"), "sk-test");
+
+    const modelInput = screen.getByLabelText("Model");
+    await user.type(modelInput, "gpt-5.5");
+    await user.click(screen.getByRole("button", { name: /^Add Model$/i }));
+    expect(modelInput).toHaveValue("");
+    await waitFor(() => expect(modelInput).toHaveFocus());
+
+    await user.type(modelInput, "gpt-5.1");
+    await user.keyboard("{Enter}");
+    expect(modelInput).toHaveValue("");
+    expect(screen.getByText("2 of 2 models selected")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /^Add Agent$/i }));
+    expect(invoke).toHaveBeenCalledWith("setup_agent_profile", {
+      draft: {
+        id: "manual",
+        label: "Manual",
+        kind: "codex",
+        base_url: "https://example.com/v1",
+        api_key: "sk-test",
+        model: "gpt-5.5",
+        models: ["gpt-5.5", "gpt-5.1"],
+      },
+    });
   });
 
   it("hides Agent ID and derives a stable ID from Base URL for Chinese names", async () => {

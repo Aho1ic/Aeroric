@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import type React from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Check, KeyRound, Plus, RefreshCw, Server } from "lucide-react";
@@ -92,6 +92,7 @@ export function AddAgentPanel({ onSaved }: { onSaved: (agentId: string) => void 
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const modelInputRef = useRef<HTMLInputElement>(null);
 
   const generatedAgentId = useMemo(
     () => deriveAgentId(label, baseUrl, kind),
@@ -172,6 +173,8 @@ export function AddAgentPanel({ onSaved }: { onSaved: (agentId: string) => void 
     if (!next) return;
     setModels((prev) => (prev.includes(next) ? prev : [...prev, next]));
     setSelectedModels((prev) => (prev.includes(next) ? prev : [...prev, next]));
+    setModel("");
+    window.requestAnimationFrame(() => modelInputRef.current?.focus());
   }
 
   return (
@@ -312,11 +315,17 @@ export function AddAgentPanel({ onSaved }: { onSaved: (agentId: string) => void 
         <div style={{ display: "flex", gap: 8, minWidth: 0 }}>
           <div style={{ position: "relative", flex: "1 1 auto", minWidth: 0 }}>
             <input
+              ref={modelInputRef}
               id={modelInputId}
               style={monoInputStyle}
               value={model}
               onChange={(event) => {
                 setModel(event.target.value);
+              }}
+              onKeyDown={(event) => {
+                if (event.key !== "Enter") return;
+                event.preventDefault();
+                handleAddManualModel();
               }}
               placeholder={
                 models.length > 0
@@ -337,17 +346,15 @@ export function AddAgentPanel({ onSaved }: { onSaved: (agentId: string) => void 
             <RefreshCw size={12} className={detectingModels ? "spin" : undefined} />
             {detectingModels ? t("appSettings.detectingModels") : t("appSettings.detectModels")}
           </Button>
-          {models.length === 0 && (
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={handleAddManualModel}
-              disabled={!model.trim()}
-            >
-              <Plus size={12} />
-              {t("appSettings.addModel")}
-            </Button>
-          )}
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleAddManualModel}
+            disabled={!model.trim()}
+          >
+            <Plus size={12} />
+            {t("appSettings.addModel")}
+          </Button>
         </div>
         <div style={{ marginTop: 5, fontSize: 11, color: "var(--text-hint)" }}>
           {models.length > 0

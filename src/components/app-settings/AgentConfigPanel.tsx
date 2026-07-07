@@ -95,10 +95,6 @@ export function AgentConfigPanel({
     }
   }
 
-  function handleCancel() {
-    setFileState({ status: "loaded", content: original });
-  }
-
   async function confirmDelete() {
     if (!deletable || deleting) return;
     setDeleting(true);
@@ -246,9 +242,6 @@ export function AgentConfigPanel({
               {deleting ? t("appSettings.deletingAgent") : t("appSettings.deleteAgentConfig")}
             </Button>
           )}
-          <Button variant="outline" size="sm" onClick={handleCancel}>
-            {t("common.cancel")}
-          </Button>
           <Button variant="default" size="sm" onClick={handleSave} disabled={saving || !isDirty}>
             {saving ? t("common.saving") : t("common.save")}
           </Button>

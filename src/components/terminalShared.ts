@@ -43,7 +43,7 @@ export const LIGHT_THEME = {
   blue: "#0550ae",
   magenta: "#8250df",
   cyan: "#1b7c83",
-  white: "#6e7781",
+  white: "#3f3f46",
   brightBlack: "#57606a",
   brightRed: "#a40e26",
   brightGreen: "#1a7f37",
@@ -51,7 +51,7 @@ export const LIGHT_THEME = {
   brightBlue: "#0969da",
   brightMagenta: "#6639ba",
   brightCyan: "#3192aa",
-  brightWhite: "#57606a",
+  brightWhite: "#24292f",
 };
 
 // Solarized Light–inspired warm palette to match the eyecare CSS tokens.
@@ -67,7 +67,7 @@ export const EYECARE_THEME = {
   blue: "#268bd2",
   magenta: "#d33682",
   cyan: "#2aa198",
-  white: "#93a1a1",
+  white: "#657b83",
   brightBlack: "#657b83",
   brightRed: "#cb4b16",
   brightGreen: "#586e75",
@@ -75,7 +75,7 @@ export const EYECARE_THEME = {
   brightBlue: "#839496",
   brightMagenta: "#6c71c4",
   brightCyan: "#93a1a1",
-  brightWhite: "#586e75",
+  brightWhite: "#3f3724",
 };
 
 export function themeFor(variant: ThemeVariant) {
@@ -91,7 +91,9 @@ const LOW_WATER = 16 * 1024; // 16 KB：恢复写入
 export const TERMINAL_WRITE_CHUNK_SIZE = 16 * 1024;
 export const TERMINAL_FRAME_WRITE_BUDGET = 32 * 1024;
 export const TERMINAL_USER_INPUT_PAUSE_MS = 48;
-const ANSI_FG_RESET = "\x1b[39m";
+const ANSI_ESCAPE = String.fromCharCode(0x1b);
+const ANSI_FG_RESET = `${ANSI_ESCAPE}[39m`;
+const ANSI_SGR_PATTERN = new RegExp(`${ANSI_ESCAPE}\\[([0-9;]*)m`, "g");
 const TERMINAL_HIGHLIGHT_PATTERN =
   /\b(error|exception|traceback|failed|fail|warning|warn|success|passed|pass|running|done)\b|\b\d+(?:\.\d+)?(?:%|ms|s|MB|GB|KB)?\b/gi;
 
@@ -114,18 +116,62 @@ export function colorizePlainTerminalOutput(data: string): string {
       lower === "failed" ||
       lower === "fail"
     ) {
-      return `\x1b[31m${match}${ANSI_FG_RESET}`;
+      return `${ANSI_ESCAPE}[31m${match}${ANSI_FG_RESET}`;
     }
     if (lower === "warning" || lower === "warn") {
-      return `\x1b[33m${match}${ANSI_FG_RESET}`;
+      return `${ANSI_ESCAPE}[33m${match}${ANSI_FG_RESET}`;
     }
     if (lower === "success" || lower === "passed" || lower === "pass" || lower === "done") {
-      return `\x1b[32m${match}${ANSI_FG_RESET}`;
+      return `${ANSI_ESCAPE}[32m${match}${ANSI_FG_RESET}`;
     }
     if (lower === "running") {
-      return `\x1b[35m${match}${ANSI_FG_RESET}`;
+      return `${ANSI_ESCAPE}[35m${match}${ANSI_FG_RESET}`;
     }
-    return `\x1b[36m${match}${ANSI_FG_RESET}`;
+    return `${ANSI_ESCAPE}[36m${match}${ANSI_FG_RESET}`;
+  });
+}
+
+export function remapLightAnsiForeground(data: string, variant: ThemeVariant): string {
+  if (!data || variant === "dark" || !data.includes(`${ANSI_ESCAPE}[`)) return data;
+  return data.replace(ANSI_SGR_PATTERN, (sequence, body: string) => {
+    const parts = body ? body.split(";") : [];
+    const next: string[] = [];
+    let changed = false;
+
+    for (let index = 0; index < parts.length; index += 1) {
+      const code = parts[index];
+      if (code === "37" || code === "97") {
+        next.push("39");
+        changed = true;
+        continue;
+      }
+
+      if (code === "38" && parts[index + 1] === "2") {
+        const red = Number(parts[index + 2]);
+        const green = Number(parts[index + 3]);
+        const blue = Number(parts[index + 4]);
+        if (red >= 235 && green >= 235 && blue >= 235) {
+          next.push("39");
+          index += 4;
+          changed = true;
+          continue;
+        }
+      }
+
+      if (code === "38" && parts[index + 1] === "5") {
+        const color = Number(parts[index + 2]);
+        if (color === 15 || color >= 231) {
+          next.push("39");
+          index += 2;
+          changed = true;
+          continue;
+        }
+      }
+
+      next.push(code);
+    }
+
+    return changed ? `${ANSI_ESCAPE}[${next.join(";")}m` : sequence;
   });
 }
 
@@ -321,7 +367,10 @@ function scheduleFrame(callback: FrameRequestCallback): void {
  * - 低于 LOW_WATER 时恢复
  * - selectionPaused 在鼠标选择期间暂停写入（可选使用）
  */
-export function createSmartWriter(term: Terminal): SmartWriter {
+export function createSmartWriter(
+  term: Terminal,
+  getThemeVariant: () => ThemeVariant = () => "dark",
+): SmartWriter {
   const state = {
     pendingChunks: [] as Array<{ data: string; callback?: () => void }>,
     watermark: 0,
@@ -385,7 +434,9 @@ export function createSmartWriter(term: Terminal): SmartWriter {
   }
 
   function write(data: string, callback?: () => void) {
-    const chunks = splitTerminalWriteChunk(colorizePlainTerminalOutput(data));
+    const chunks = splitTerminalWriteChunk(
+      remapLightAnsiForeground(colorizePlainTerminalOutput(data), getThemeVariant()),
+    );
     for (let index = 0; index < chunks.length; index += 1) {
       state.pendingChunks.push({
         data: chunks[index],

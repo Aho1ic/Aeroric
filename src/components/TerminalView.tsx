@@ -62,8 +62,10 @@ export function TerminalView({
   const onSnapshotRef = useRef(onSnapshot);
   const lastSizeRef = useRef<{ cols: number; rows: number } | null>(null);
   const shiftEnterNewlineRef = useRef<boolean>(DEFAULT_SHIFT_ENTER_NEWLINE);
+  const themeVariantRef = useRef(themeVariant);
   onReadyRef.current = onReady;
   onSnapshotRef.current = onSnapshot;
+  themeVariantRef.current = themeVariant;
 
   // Keep refs current on every render
   onInputRef.current = onInput;
@@ -102,7 +104,7 @@ export function TerminalView({
       });
     };
 
-    const writer = createSmartWriter(term);
+    const writer = createSmartWriter(term, () => themeVariantRef.current);
     const disposeMacWebKitGuard = attachMacWebKitTerminalGuard({ term, container, writer });
     const sendInput = (data: string) => {
       writer.pauseForUserInput();

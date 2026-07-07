@@ -82,6 +82,7 @@ export const SshTerminalPanel = forwardRef<SshTerminalPanelHandle, Props>(functi
   const terminalRef = useRef<XTerm | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
   const lastSizeRef = useRef<{ cols: number; rows: number } | null>(null);
+  const themeVariantRef = useRef(themeVariant);
   const activeRef = useRef(active);
   const [selectedId, setSelectedId] = useState<string | null>(
     () => initialConnectionId ?? connections[0]?.id ?? null,
@@ -91,6 +92,7 @@ export const SshTerminalPanel = forwardRef<SshTerminalPanelHandle, Props>(functi
   const [activeSession, setActiveSession] = useState<ActiveSshSession | null>(null);
   const [error, setError] = useState<string | null>(null);
   const autoConnectStartedRef = useRef<string | null>(null);
+  themeVariantRef.current = themeVariant;
   activeRef.current = active;
 
   useImperativeHandle(
@@ -226,7 +228,7 @@ export const SshTerminalPanel = forwardRef<SshTerminalPanelHandle, Props>(functi
     term.open(container);
     const disposeInputFix = attachMacWebKitShiftInputFix(term);
     loadWebglAddon(term);
-    const writer = createSmartWriter(term);
+    const writer = createSmartWriter(term, () => themeVariantRef.current);
     const disposeMacWebKitGuard = attachMacWebKitTerminalGuard({ term, container, writer });
     const disposeSmartCopy = attachSmartCopy(term, {
       onPaste: (text) => {

@@ -593,6 +593,18 @@ body {
   font-weight: 600;
 }
 
+.terminal-record-pane,
+.terminal-record-pane :where(p, span, div, pre, code, li, blockquote, td, th) {
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+.terminal-record-pane button,
+.terminal-record-pane button * {
+  -webkit-user-select: none;
+  user-select: none;
+}
+
 /* ── Markdown file preview ──────────────────────────────────────── */
 .md-preview-layout {
   height: 100%;
@@ -694,6 +706,10 @@ html.dark .md-preview pre {
   box-shadow: inset 3px 0 0 color-mix(in srgb, var(--accent) 48%, transparent);
 }
 html.dark .md-preview pre code {
+  color: var(--text-primary);
+}
+html:not(.dark) .md-preview pre code,
+html:not(.dark) .session-prose pre code {
   color: var(--text-primary);
 }
 .md-preview ul,
@@ -2114,3 +2130,8 @@ html.dark .notebook-rich-text font[color="#000000"] {
  * 24 天前 memory: lag_investigation_2026_04.md 已记录过同类回归，
  * 请勿"为了优化"再次加回。
  */
+html:not(.dark) .xterm,
+html:not(.dark) .xterm-rows,
+html:not(.dark) .xterm-helper-textarea {
+  color: var(--text-primary) !important;
+}
