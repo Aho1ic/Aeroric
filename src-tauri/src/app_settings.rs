@@ -73,6 +73,16 @@ pub struct AgentModels {
     pub models: Vec<String>,
 }
 
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+pub struct AgentProxyConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub url: String,
+    #[serde(default)]
+    pub no_proxy: String,
+}
+
 fn default_custom_agent_codex_like() -> bool {
     true
 }
@@ -98,6 +108,8 @@ pub struct AppSettings {
     #[serde(default)]
     pub agent_label_overrides: HashMap<String, String>,
     #[serde(default)]
+    pub agent_proxy_overrides: HashMap<String, AgentProxyConfig>,
+    #[serde(default)]
     pub custom_agents: Vec<CustomAgentProfile>,
     #[serde(default = "default_send_shortcut")]
     pub send_shortcut: String,
@@ -115,6 +127,7 @@ impl Default for AppSettings {
             claude_gpt55_config_path: String::new(),
             codex_config_path: String::new(),
             agent_label_overrides: HashMap::new(),
+            agent_proxy_overrides: HashMap::new(),
             custom_agents: Vec::new(),
             send_shortcut: default_send_shortcut(),
             terminal_shift_enter_newline: default_shift_enter_newline(),
@@ -262,6 +275,71 @@ fn normalize_agent_label_overrides(overrides: HashMap<String, String>) -> HashMa
             }
         })
         .collect()
+}
+
+fn normalize_proxy_url(value: &str) -> String {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    if trimmed.contains("://") {
+        trimmed.to_string()
+    } else {
+        format!("http://{}", trimmed)
+    }
+}
+
+fn normalize_agent_proxy_overrides(
+    overrides: HashMap<String, AgentProxyConfig>,
+) -> HashMap<String, AgentProxyConfig> {
+    overrides
+        .into_iter()
+        .filter_map(|(agent, config)| {
+            let key = normalize_agent_label_key(&agent);
+            if key.is_empty() {
+                return None;
+            }
+            let url = normalize_proxy_url(&config.url);
+            let no_proxy = config.no_proxy.trim().to_string();
+            if !config.enabled && url.is_empty() && no_proxy.is_empty() {
+                None
+            } else {
+                Some((
+                    key,
+                    AgentProxyConfig {
+                        enabled: config.enabled,
+                        url,
+                        no_proxy,
+                    },
+                ))
+            }
+        })
+        .collect()
+}
+
+fn append_agent_proxy_env(extra_env: &mut Vec<(String, String)>, proxy: Option<&AgentProxyConfig>) {
+    let Some(proxy) = proxy else {
+        return;
+    };
+    if !proxy.enabled || proxy.url.trim().is_empty() {
+        return;
+    }
+    let proxy_url = normalize_proxy_url(&proxy.url);
+    for key in [
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "ALL_PROXY",
+        "http_proxy",
+        "https_proxy",
+        "all_proxy",
+    ] {
+        extra_env.push((key.to_string(), proxy_url.clone()));
+    }
+    let no_proxy = proxy.no_proxy.trim();
+    if !no_proxy.is_empty() {
+        extra_env.push(("NO_PROXY".to_string(), no_proxy.to_string()));
+        extra_env.push(("no_proxy".to_string(), no_proxy.to_string()));
+    }
 }
 
 fn get_agent_configured_path(settings: &AppSettings, agent: &str) -> String {
@@ -554,7 +632,14 @@ fn resolve_agent_launch_spec_from_path(agent: &str, path: &str) -> AgentLaunchSp
 }
 
 fn get_agent_launch_spec_from_settings(settings: &AppSettings, agent: &str) -> AgentLaunchSpec {
-    resolve_agent_launch_spec_from_path(agent, &get_agent_configured_path(settings, agent))
+    let mut spec =
+        resolve_agent_launch_spec_from_path(agent, &get_agent_configured_path(settings, agent));
+    let key = normalize_agent_label_key(agent);
+    append_agent_proxy_env(
+        &mut spec.extra_env,
+        settings.agent_proxy_overrides.get(&key),
+    );
+    spec
 }
 
 fn shell_quote(value: &str) -> String {
@@ -883,6 +968,7 @@ fn normalize_settings(settings: AppSettings) -> AppSettings {
         claude_gpt55_config_path: normalize_config_path(settings.claude_gpt55_config_path),
         codex_config_path: normalize_config_path(settings.codex_config_path),
         agent_label_overrides: normalize_agent_label_overrides(settings.agent_label_overrides),
+        agent_proxy_overrides: normalize_agent_proxy_overrides(settings.agent_proxy_overrides),
         custom_agents: normalize_custom_agents(settings.custom_agents),
         send_shortcut: normalize_send_shortcut(settings.send_shortcut),
         terminal_shift_enter_newline: settings.terminal_shift_enter_newline,
@@ -904,6 +990,7 @@ fn load_settings_unlocked() -> AppSettings {
             claude_gpt55_config_path: String::new(),
             codex_config_path: String::new(),
             agent_label_overrides: HashMap::new(),
+            agent_proxy_overrides: HashMap::new(),
             custom_agents: Vec::new(),
             send_shortcut: default_send_shortcut(),
             terminal_shift_enter_newline: default_shift_enter_newline(),
@@ -1169,10 +1256,7 @@ pub async fn delete_custom_agent_profile(id: String) -> Result<AppSettings, Stri
 }
 
 #[tauri::command]
-pub async fn rename_custom_agent_profile(
-    id: String,
-    label: String,
-) -> Result<AppSettings, String> {
+pub async fn rename_custom_agent_profile(id: String, label: String) -> Result<AppSettings, String> {
     tokio::task::spawn_blocking(move || {
         let _guard = settings_lock().lock();
         let mut settings = load_settings_unlocked();
@@ -1520,6 +1604,41 @@ mod tests {
         assert!(!script.contains("请选择模型"));
         assert!(!script.contains("已选择"));
         assert!(!script.contains("AERORIC_AGENT_MODEL_CHOICE"));
+    }
+
+    #[test]
+    fn custom_agent_proxy_override_is_added_to_launch_env() {
+        let mut proxy_overrides = HashMap::new();
+        proxy_overrides.insert(
+            "joverna".to_string(),
+            AgentProxyConfig {
+                enabled: true,
+                url: "127.0.0.1:7890".to_string(),
+                no_proxy: "localhost,127.0.0.1".to_string(),
+            },
+        );
+        let settings = AppSettings {
+            custom_agents: vec![CustomAgentProfile {
+                id: "joverna".to_string(),
+                label: "Joverna".to_string(),
+                path: "/Users/macbook/.claude/start-joverna.sh".to_string(),
+                codex_like: false,
+                config_lang: "shellscript".to_string(),
+            }],
+            agent_proxy_overrides: proxy_overrides,
+            ..AppSettings::default()
+        };
+
+        let launch = get_agent_launch_spec_from_settings(&settings, "joverna");
+
+        assert_eq!(launch.program, "/Users/macbook/.claude/start-joverna.sh");
+        assert!(launch.extra_env.contains(&(
+            "HTTPS_PROXY".to_string(),
+            "http://127.0.0.1:7890".to_string()
+        )));
+        assert!(launch
+            .extra_env
+            .contains(&("NO_PROXY".to_string(), "localhost,127.0.0.1".to_string())));
     }
 
     #[test]

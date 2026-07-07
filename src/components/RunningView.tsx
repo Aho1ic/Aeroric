@@ -115,7 +115,9 @@ export function RunningView({
   const resumeSessionId = codexLike ? task.codexSessionId : task.claudeSessionId;
   const resumeAvailable = Boolean(resumeSessionId || sessionPath);
   const restoreState = getRestoreState?.() ?? {};
-  const hasRestoreState = Boolean(restoreState.initialData || restoreState.initialSnapshot);
+  const [terminalHistory, setTerminalHistory] = useState("");
+  const [terminalHistoryVersion, setTerminalHistoryVersion] = useState(0);
+  const shouldLoadTerminalHistory = !isActive && !isDetached && !isInterrupted;
   const currentAgentLabel = agentDisplayLabel(task.agent);
   const currentAgentBadge = task.selectedModel
     ? `${currentAgentLabel} · ${task.selectedModel}`
@@ -133,6 +135,34 @@ export function RunningView({
   const [bannerCompact, setBannerCompact] = useState(false);
   const titleInputRef = useRef<HTMLInputElement>(null);
   const interruptedBannerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!shouldLoadTerminalHistory) {
+      setTerminalHistory("");
+      setTerminalHistoryVersion((version) => version + 1);
+      return;
+    }
+
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      invoke<string>("read_task_terminal_history", { taskId: task.id })
+        .then((history) => {
+          if (cancelled) return;
+          setTerminalHistory(history);
+          setTerminalHistoryVersion((version) => version + 1);
+        })
+        .catch(() => {
+          if (cancelled) return;
+          setTerminalHistory("");
+          setTerminalHistoryVersion((version) => version + 1);
+        });
+    }, 80);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [shouldLoadTerminalHistory, task.id, runCount]);
 
   const generateTooltip = generatingName
     ? t("task.generatingName")
@@ -248,10 +278,20 @@ export function RunningView({
     };
   }, [sessionPath, isActive, projectActive]);
 
-  const terminalHistoryFallback = hasRestoreState ? (
+  const terminalInitialData = shouldLoadTerminalHistory
+    ? terminalHistory || restoreState.initialData || ""
+    : restoreState.initialData || terminalHistory;
+  const terminalInitialSnapshot = terminalHistory ? undefined : restoreState.initialSnapshot;
+  const hasTerminalRestoreState = Boolean(terminalInitialData || terminalInitialSnapshot);
+  const terminalViewKey =
+    shouldLoadTerminalHistory && hasTerminalRestoreState
+      ? `${task.id}-${runCount}-${terminalHistoryVersion}`
+      : `${task.id}-${runCount}`;
+
+  const terminalHistoryFallback = hasTerminalRestoreState ? (
     <div style={s.terminalContainer}>
       <TerminalView
-        key={`${task.id}-${runCount}-history`}
+        key={`${terminalViewKey}-history`}
         onInput={() => {}}
         onResize={() => {}}
         onRegisterTerminal={() => 0}
@@ -260,8 +300,8 @@ export function RunningView({
         terminalFontSize={terminalFontSize}
         monoFontFamily={monoFontFamily}
         isActive={false}
-        initialData={restoreState.initialData}
-        initialSnapshot={restoreState.initialSnapshot}
+        initialData={terminalInitialData}
+        initialSnapshot={terminalInitialSnapshot}
       />
     </div>
   ) : undefined;
@@ -654,7 +694,7 @@ export function RunningView({
       ) : isActive || !sessionPath ? (
         <div style={s.terminalContainer}>
           <TerminalView
-            key={`${task.id}-${runCount}`}
+            key={terminalViewKey}
             onInput={onInput}
             onResize={onResize}
             onRegisterTerminal={onRegisterTerminal}
@@ -664,8 +704,8 @@ export function RunningView({
             terminalFontSize={terminalFontSize}
             monoFontFamily={monoFontFamily}
             isActive={visible}
-            initialData={restoreState.initialData}
-            initialSnapshot={restoreState.initialSnapshot}
+            initialData={terminalInitialData}
+            initialSnapshot={terminalInitialSnapshot}
           />
         </div>
       ) : (

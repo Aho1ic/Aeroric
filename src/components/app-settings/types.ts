@@ -31,9 +31,16 @@ export interface AppSettings {
   claude_gpt55_config_path: string;
   codex_config_path: string;
   agent_label_overrides?: Record<string, string>;
+  agent_proxy_overrides?: Record<string, AgentProxyConfig>;
   custom_agents?: CustomAgentProfile[];
   send_shortcut: SendShortcut;
   terminal_shift_enter_newline: boolean;
+}
+
+export interface AgentProxyConfig {
+  enabled: boolean;
+  url: string;
+  no_proxy: string;
 }
 
 export interface AgentVersions {

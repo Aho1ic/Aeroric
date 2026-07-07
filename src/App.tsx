@@ -1096,6 +1096,9 @@ function App() {
     });
 
     tm.removeTaskBuffers(taskIds);
+    invoke("delete_task_terminal_histories", { taskIds }).catch((e: unknown) => {
+      showToast(t("toast.deleteTaskHistoryFailed", { error: String(e) }), "warning");
+    });
     setProjectViews((prev) => {
       const toDelete = new Set(taskIds);
       let changed = false;

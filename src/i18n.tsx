@@ -114,6 +114,16 @@ const translations: Record<AppLanguage, Record<string, string>> = {
       "Stored only in local app settings. Use an executable wrapper script path.",
     "appSettings.codexCompatible": "Codex-compatible arguments and sessions",
     "appSettings.configSyntax": "Config Syntax",
+    "appSettings.agentProxy": "Proxy",
+    "appSettings.agentProxyEnabled": "Use proxy for this agent",
+    "appSettings.agentProxyHint":
+      "Applies only when Aeroric launches this agent. Other terminal sessions are unaffected.",
+    "appSettings.agentProxyUrl": "Proxy URL",
+    "appSettings.agentProxyUrlHint":
+      "Use your local proxy address, for example http://127.0.0.1:7890. Missing schemes default to http://.",
+    "appSettings.agentProxyNoProxy": "NO_PROXY",
+    "appSettings.agentProxyNoProxyHint":
+      "Optional comma-separated hosts that should bypass the proxy.",
     "appSettings.installedVersions": "Installed Versions",
     "appSettings.versionsHint":
       "Versions are detected from the configured executable path or the system PATH.",
@@ -1747,6 +1757,7 @@ const translations: Record<AppLanguage, Record<string, string>> = {
     "toast.projectActionFailed": "{action} failed: {error}",
     "toast.cancelTaskFailed": "Failed to cancel task: {error}",
     "toast.completeTaskFailed": "Failed to mark task completed: {error}",
+    "toast.deleteTaskHistoryFailed": "Failed to delete task terminal history: {error}",
     "toast.worktreeBaseRequired": "Please choose a base branch for the worktree",
     "toast.remoteProjectMissingConnection": "SSH connection for this remote project was not found.",
     "toast.remoteProjectNoWorktree": "Remote projects do not support worktree launch mode yet.",
@@ -1860,6 +1871,14 @@ const translations: Record<AppLanguage, Record<string, string>> = {
     "appSettings.customAgentPathHint": "仅保存到本机应用设置。请输入可执行 wrapper 脚本路径。",
     "appSettings.codexCompatible": "使用 Codex 兼容参数和会话",
     "appSettings.configSyntax": "配置语法",
+    "appSettings.agentProxy": "代理",
+    "appSettings.agentProxyEnabled": "为这个 Agent 使用代理",
+    "appSettings.agentProxyHint": "仅在 Aeroric 启动这个 Agent 时生效，不影响其他本地终端会话。",
+    "appSettings.agentProxyUrl": "代理地址",
+    "appSettings.agentProxyUrlHint":
+      "填写本机代理地址，例如 http://127.0.0.1:7890。未填写协议时默认按 http:// 处理。",
+    "appSettings.agentProxyNoProxy": "NO_PROXY",
+    "appSettings.agentProxyNoProxyHint": "可选，逗号分隔不走代理的主机名或地址。",
     "appSettings.installedVersions": "已安装版本",
     "appSettings.versionsHint": "版本会从配置的可执行文件路径或系统 PATH 中检测。",
     "appSettings.description": "轻量级跨平台 AI IDE",
@@ -3453,6 +3472,7 @@ const translations: Record<AppLanguage, Record<string, string>> = {
     "toast.projectActionFailed": "{action} 失败：{error}",
     "toast.cancelTaskFailed": "取消任务失败：{error}",
     "toast.completeTaskFailed": "标记任务完成失败：{error}",
+    "toast.deleteTaskHistoryFailed": "删除任务终端历史失败：{error}",
     "toast.worktreeBaseRequired": "请选择工作树的基础分支",
     "toast.remoteProjectMissingConnection": "找不到此远程项目对应的 SSH 连接。",
     "toast.remoteProjectNoWorktree": "远程项目暂不支持以工作树模式启动。",

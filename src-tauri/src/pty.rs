@@ -316,6 +316,7 @@ pub(crate) fn spawn_pty_reader(
     sink: OutputSink,
     emit_mode: PtyEmitMode,
     reader: Box<dyn Read + Send>,
+    persist_terminal_history: bool,
     session_tx: Option<std::sync::mpsc::Sender<String>>,
     on_finish: Option<Box<dyn FnOnce() + Send>>,
 ) {
@@ -374,6 +375,9 @@ pub(crate) fn spawn_pty_reader(
                         let data = unsafe {
                             std::str::from_utf8_unchecked(&combined[..valid_len]).to_owned()
                         };
+                        if persist_terminal_history {
+                            let _ = crate::storage::append_task_terminal_history(&id, &data);
+                        }
                         // session_tx 需要独立副本；data 本身留给 emit 路径 move，避免多余堆分配
                         if let Some(ref tx) = session_tx {
                             let _ = tx.send(data.clone());
@@ -533,6 +537,7 @@ pub async fn run_task(
         .manually_completed_tasks
         .lock()
         .remove(&task_id);
+    let _ = crate::storage::truncate_task_terminal_history(&task_id);
 
     let pair = native_pty_system()
         .openpty(PtySize {
@@ -706,6 +711,7 @@ pub async fn run_task(
             max_batch_bytes: PTY_EMIT_MAX_BATCH_BYTES,
         },
         reader,
+        true,
         session_tx,
         None,
     );
@@ -940,6 +946,7 @@ pub async fn resume_task(
             max_batch_bytes: PTY_EMIT_MAX_BATCH_BYTES,
         },
         reader,
+        true,
         None,
         None,
     );
@@ -1051,6 +1058,7 @@ pub async fn open_shell(
         },
         PtyEmitMode::Immediate,
         reader,
+        false,
         None,
         Some(on_finish),
     );

@@ -370,6 +370,8 @@ pub fn run() {
             storage::save_projects,
             storage::load_project_tasks,
             storage::save_project_tasks,
+            storage::read_task_terminal_history,
+            storage::delete_task_terminal_histories,
             ssh::load_ssh_connections,
             ssh::save_ssh_connections,
             ssh::open_ssh_shell,

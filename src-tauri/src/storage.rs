@@ -1,4 +1,5 @@
-use std::fs;
+use std::fs::{self, OpenOptions};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
@@ -106,12 +107,38 @@ fn project_dir(project_id: &str) -> Result<PathBuf, String> {
     Ok(aeroric_dir()?.join("projects").join(project_id))
 }
 
+fn terminal_history_dir() -> Result<PathBuf, String> {
+    Ok(aeroric_dir()?.join("terminal-history"))
+}
+
+fn safe_task_history_name(task_id: &str) -> Result<String, String> {
+    let trimmed = task_id.trim();
+    if trimmed.is_empty() {
+        return Err("Task id cannot be empty".to_string());
+    }
+    if !trimmed
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_'))
+    {
+        return Err("Invalid task id".to_string());
+    }
+    Ok(format!("{trimmed}.log"))
+}
+
+pub(crate) fn terminal_history_path(task_id: &str) -> Result<PathBuf, String> {
+    Ok(terminal_history_dir()?.join(safe_task_history_name(task_id)?))
+}
+
 pub(crate) fn ensure_aeroric_dirs() -> Result<(), String> {
     fs::create_dir_all(aeroric_dir()?).map_err(|e| e.to_string())
 }
 
 fn ensure_project_dir(project_id: &str) -> Result<(), String> {
     fs::create_dir_all(project_dir(project_id)?).map_err(|e| e.to_string())
+}
+
+fn ensure_terminal_history_dir() -> Result<(), String> {
+    fs::create_dir_all(terminal_history_dir()?).map_err(|e| e.to_string())
 }
 
 // ── Tauri commands ────────────────────────────────────────────────────────────
@@ -156,6 +183,52 @@ pub fn save_project_tasks(project_id: String, tasks: Vec<Task>) -> Result<(), St
     }
     let raw = serde_json::to_string_pretty(&tasks).map_err(|e| e.to_string())?;
     atomic_write(&path, &raw)
+}
+
+pub(crate) fn append_task_terminal_history(task_id: &str, data: &str) -> Result<(), String> {
+    if data.is_empty() {
+        return Ok(());
+    }
+    ensure_terminal_history_dir()?;
+    let path = terminal_history_path(task_id)?;
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .map_err(|e| e.to_string())?;
+    file.write_all(data.as_bytes()).map_err(|e| e.to_string())
+}
+
+pub(crate) fn truncate_task_terminal_history(task_id: &str) -> Result<(), String> {
+    ensure_terminal_history_dir()?;
+    let path = terminal_history_path(task_id)?;
+    OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open(path)
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn read_task_terminal_history(task_id: String) -> Result<String, String> {
+    let path = terminal_history_path(&task_id)?;
+    if !path.exists() {
+        return Ok(String::new());
+    }
+    fs::read_to_string(path).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn delete_task_terminal_histories(task_ids: Vec<String>) -> Result<(), String> {
+    for task_id in task_ids {
+        let path = terminal_history_path(&task_id)?;
+        if path.exists() {
+            fs::remove_file(path).map_err(|e| e.to_string())?;
+        }
+    }
+    Ok(())
 }
 
 // ── Atomic write (write to tmp then rename) ───────────────────────────────────

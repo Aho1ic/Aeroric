@@ -13,12 +13,12 @@ import {
   type AgentVersions,
   type AppSettings,
   type AgentKey,
+  type AgentProxyConfig,
 } from "./types";
 import { getAgentExecutablePlaceholder } from "./shared";
 import {
   agentDisplayLabel,
   isBuiltInAgent,
-  normalizeAgentConfigLang,
   type CustomAgentProfile,
 } from "../../agents";
 import type { BuiltInAgentType } from "../../types";
@@ -62,6 +62,18 @@ const pathHintKeyByAgent: Record<BuiltInAgentType, string> = {
 
 function findCustomAgent(settings: AppSettings, agentKey: AgentKey): CustomAgentProfile | null {
   return settings.custom_agents?.find((profile) => profile.id === agentKey) ?? null;
+}
+
+function emptyProxyConfig(): AgentProxyConfig {
+  return { enabled: false, url: "", no_proxy: "" };
+}
+
+function getAgentProxyConfig(settings: AppSettings, agentKey: AgentKey): AgentProxyConfig {
+  return settings.agent_proxy_overrides?.[agentKey] ?? emptyProxyConfig();
+}
+
+function proxyConfigsEqual(a: AgentProxyConfig, b: AgentProxyConfig): boolean {
+  return a.enabled === b.enabled && a.url === b.url && a.no_proxy === b.no_proxy;
 }
 
 const inputStyle: React.CSSProperties = {
@@ -118,6 +130,7 @@ export function AgentPathSection({ agentKey }: { agentKey: AgentKey }) {
     claude_gpt55_config_path: "",
     codex_config_path: "",
     agent_label_overrides: {},
+    agent_proxy_overrides: {},
     custom_agents: [],
     send_shortcut: DEFAULT_SEND_SHORTCUT,
     terminal_shift_enter_newline: DEFAULT_SHIFT_ENTER_NEWLINE,
@@ -248,21 +261,9 @@ export function AgentPathSection({ agentKey }: { agentKey: AgentKey }) {
     setError(null);
     setSaved(false);
     try {
-      const next = pathField
-        ? await invoke("save_app_settings", { settings }).then(() =>
-            invoke<AppSettings>("load_app_settings"),
-          )
-        : await invoke<AppSettings>("save_custom_agent_profile", {
-            profile: {
-              id: agentKey,
-              label: findCustomAgent(settings, agentKey)?.label ?? agentDisplayLabel(agentKey),
-              path: findCustomAgent(settings, agentKey)?.path ?? "",
-              codex_like: findCustomAgent(settings, agentKey)?.codex_like ?? true,
-              config_lang: normalizeAgentConfigLang(
-                findCustomAgent(settings, agentKey)?.config_lang,
-              ),
-            },
-          });
+      const next = await invoke("save_app_settings", { settings }).then(() =>
+        invoke<AppSettings>("load_app_settings"),
+      );
       setSettings(next);
       setOriginalSettings(next);
       skipNextChangeEventRef.current = true;
@@ -291,10 +292,13 @@ export function AgentPathSection({ agentKey }: { agentKey: AgentKey }) {
     builtInAgent && originalSettings.agent_label_overrides?.[builtInAgent]
       ? originalSettings.agent_label_overrides[builtInAgent]
       : "";
+  const currentProxy = getAgentProxyConfig(settings, agentKey);
+  const originalProxy = getAgentProxyConfig(originalSettings, agentKey);
   const isDirty =
     currentPath !== originalPath ||
     currentConfigPath !== originalConfigPath ||
-    currentLabelOverride !== originalLabelOverride;
+    currentLabelOverride !== originalLabelOverride ||
+    !proxyConfigsEqual(currentProxy, originalProxy);
   const versionValue = versionField ? versions[versionField] : customVersion;
 
   return (
@@ -405,6 +409,97 @@ export function AgentPathSection({ agentKey }: { agentKey: AgentKey }) {
           <span style={hintStyle}>{t("appSettings.configFilePathHint")}</span>
         </div>
       )}
+
+      <div style={fieldStyle}>
+        <span style={labelStyle}>{t("appSettings.agentProxy")}</span>
+        <label
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            color: "var(--text-secondary)",
+            fontSize: 12.5,
+            lineHeight: 1.35,
+          }}
+        >
+          <input
+            type="checkbox"
+            checked={currentProxy.enabled}
+            onChange={(e) => {
+              const enabled = e.target.checked;
+              setSettings((prev) => ({
+                ...prev,
+                agent_proxy_overrides: {
+                  ...(prev.agent_proxy_overrides ?? {}),
+                  [agentKey]: {
+                    ...getAgentProxyConfig(prev, agentKey),
+                    enabled,
+                  },
+                },
+              }));
+            }}
+            disabled={loading}
+          />
+          {t("appSettings.agentProxyEnabled")}
+        </label>
+        <span style={hintStyle}>{t("appSettings.agentProxyHint")}</span>
+      </div>
+
+      <div style={fieldStyle}>
+        <label style={labelStyle} htmlFor={`agent-proxy-url-${agentKey}`}>
+          {t("appSettings.agentProxyUrl")}
+        </label>
+        <input
+          id={`agent-proxy-url-${agentKey}`}
+          style={inputStyle}
+          value={currentProxy.url}
+          onChange={(e) => {
+            const url = e.target.value;
+            setSettings((prev) => ({
+              ...prev,
+              agent_proxy_overrides: {
+                ...(prev.agent_proxy_overrides ?? {}),
+                [agentKey]: {
+                  ...getAgentProxyConfig(prev, agentKey),
+                  url,
+                },
+              },
+            }));
+          }}
+          placeholder="http://127.0.0.1:7890"
+          disabled={loading}
+          spellCheck={false}
+        />
+        <span style={hintStyle}>{t("appSettings.agentProxyUrlHint")}</span>
+      </div>
+
+      <div style={fieldStyle}>
+        <label style={labelStyle} htmlFor={`agent-proxy-no-proxy-${agentKey}`}>
+          {t("appSettings.agentProxyNoProxy")}
+        </label>
+        <input
+          id={`agent-proxy-no-proxy-${agentKey}`}
+          style={inputStyle}
+          value={currentProxy.no_proxy}
+          onChange={(e) => {
+            const no_proxy = e.target.value;
+            setSettings((prev) => ({
+              ...prev,
+              agent_proxy_overrides: {
+                ...(prev.agent_proxy_overrides ?? {}),
+                [agentKey]: {
+                  ...getAgentProxyConfig(prev, agentKey),
+                  no_proxy,
+                },
+              },
+            }));
+          }}
+          placeholder="localhost,127.0.0.1"
+          disabled={loading}
+          spellCheck={false}
+        />
+        <span style={hintStyle}>{t("appSettings.agentProxyNoProxyHint")}</span>
+      </div>
 
       <div style={fieldStyle}>
         <label style={labelStyle}>{t("appSettings.installedVersions")}</label>

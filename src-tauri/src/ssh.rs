@@ -449,6 +449,7 @@ fn spawn_remote_task_pty(
             max_batch_bytes: crate::pty::PTY_EMIT_MAX_BATCH_BYTES,
         },
         reader,
+        true,
         None,
         None,
     );
@@ -535,6 +536,7 @@ pub async fn open_ssh_shell(
             max_batch_bytes: crate::pty::PTY_EMIT_MAX_BATCH_BYTES,
         },
         reader,
+        false,
         None,
         Some(on_finish),
     );
@@ -576,6 +578,7 @@ pub async fn run_remote_task(
         .manually_completed_tasks
         .lock()
         .remove(&task_id);
+    let _ = crate::storage::truncate_task_terminal_history(&task_id);
     let remote_command = build_remote_task_command(
         &agent,
         &permission_mode,

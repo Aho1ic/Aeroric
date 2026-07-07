@@ -33,6 +33,7 @@ const appSettings = {
   claude_gpt55_config_path: "",
   codex_config_path: "/Users/macbook/.codex/config.toml",
   agent_label_overrides: {},
+  agent_proxy_overrides: {},
   custom_agents: [],
   send_shortcut: "enter",
   terminal_shift_enter_newline: false,
@@ -86,6 +87,46 @@ function renderDeletableAgentConfigPanel(content: string, onDeleted = vi.fn()) {
     </I18nProvider>,
   );
   return onDeleted;
+}
+
+function renderJovernaAgentConfigPanel() {
+  const jovernaSettings = {
+    ...appSettings,
+    codex_config_path: "",
+    custom_agents: [
+      {
+        id: "joverna",
+        label: "Joverna",
+        path: "/Users/macbook/.claude/start-joverna.sh",
+        codex_like: false,
+        config_lang: "shellscript",
+      },
+    ],
+    agent_proxy_overrides: {},
+  };
+  vi.mocked(invoke).mockImplementation((command) => {
+    if (command === "get_agent_config_file_path") {
+      return Promise.resolve("/Users/macbook/.claude/start-joverna.sh");
+    }
+    if (command === "read_agent_config_file") return Promise.resolve("#!/bin/sh\n");
+    if (command === "load_app_settings") return Promise.resolve(jovernaSettings);
+    if (command === "detect_agent_version") return Promise.resolve("claude 1.0.0");
+    if (command === "save_app_settings") return Promise.resolve(undefined);
+    return Promise.resolve(undefined);
+  });
+  render(
+    <I18nProvider>
+      <AgentConfigPanel
+        agentKey="joverna"
+        agentLabel="Joverna"
+        filePath="/Users/macbook/.claude/start-joverna.sh"
+        lang="shellscript"
+        themeVariant="light"
+        deletable
+        onDeleted={vi.fn()}
+      />
+    </I18nProvider>,
+  );
 }
 
 function renderAgentConfigPanelWithMissingFile() {
@@ -265,6 +306,31 @@ describe("Agent config and debug panel UI", () => {
       expect(invoke).toHaveBeenCalledWith("delete_custom_agent_profile", { id: "gpt55" }),
     );
     expect(onDeleted).toHaveBeenCalled();
+  });
+
+  it("saves proxy settings for a custom Joverna agent", async () => {
+    const user = userEvent.setup();
+    renderJovernaAgentConfigPanel();
+
+    await findConfigEditor("#!/bin/sh\n");
+    await user.click(screen.getByLabelText("Use proxy for this agent"));
+    await user.type(screen.getByLabelText("Proxy URL"), "127.0.0.1:7890");
+    await user.type(screen.getByLabelText("NO_PROXY"), "localhost,127.0.0.1");
+    await user.click(getEnabledSaveButton());
+
+    await waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith("save_app_settings", {
+        settings: expect.objectContaining({
+          agent_proxy_overrides: {
+            joverna: {
+              enabled: true,
+              url: "127.0.0.1:7890",
+              no_proxy: "localhost,127.0.0.1",
+            },
+          },
+        }),
+      }),
+    );
   });
 
   it("does not delete a custom agent until the confirmation is accepted", async () => {

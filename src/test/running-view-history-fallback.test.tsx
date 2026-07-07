@@ -70,6 +70,7 @@ describe("RunningView completed history fallback", () => {
   beforeEach(() => {
     vi.mocked(invoke).mockReset();
     vi.mocked(invoke).mockImplementation((command) => {
+      if (command === "read_task_terminal_history") return Promise.resolve("");
       if (command === "read_session_messages") return Promise.resolve([]);
       if (command === "read_session_metrics") {
         return Promise.resolve({
@@ -89,6 +90,32 @@ describe("RunningView completed history fallback", () => {
     await waitFor(() => {
       expect(screen.getByTestId("terminal-history")).toHaveTextContent(
         "terminal transcript from completed task",
+      );
+    });
+  });
+
+  it("uses persisted terminal history when available after reload", async () => {
+    vi.mocked(invoke).mockImplementation((command) => {
+      if (command === "read_task_terminal_history") {
+        return Promise.resolve("terminal transcript from disk");
+      }
+      if (command === "read_session_messages") return Promise.resolve([]);
+      if (command === "read_session_metrics") {
+        return Promise.resolve({
+          duration_secs: 0,
+          total_tokens: 0,
+          context_tokens: 0,
+          context_window: 0,
+        });
+      }
+      return Promise.resolve(null);
+    });
+
+    renderRunningView();
+
+    await waitFor(() => {
+      expect(screen.getByTestId("terminal-history")).toHaveTextContent(
+        "terminal transcript from disk",
       );
     });
   });
