@@ -1466,14 +1466,14 @@ fn should_send_status_command(
 
 pub(crate) fn should_start_status_session_watcher(
     use_hooks: bool,
-    is_codex: bool,
+    _is_codex: bool,
     prompt_empty: bool,
 ) -> bool {
     if use_hooks {
         return false;
     }
 
-    !(is_codex && prompt_empty)
+    !prompt_empty
 }
 
 fn send_status_command(app: &AppHandle, task_id: &str, is_codex: bool) {
@@ -1598,6 +1598,7 @@ fn spawn_claude_lazy_session_attach(
 }
 
 /// 监听 PTY 输出流，通过 `/status` 响应获取 Session ID。
+/// 仅非空 prompt 的任务会启动该 watcher；交互式 REPL 启动不自动输入任何命令。
 /// Claude 启动后 1.5 秒发送 `/status`；Codex 则在收到首个输出后再等待 1 秒，
 /// 避免 session 尚未创建时过早查询。
 ///
@@ -1661,7 +1662,7 @@ pub(crate) fn spawn_status_session_watcher(
     });
 }
 
-/// 旧的 /status 轮询流程：Codex 非空 prompt 任务与 Claude < 2.1.87 走此路径。
+/// 旧的 /status 轮询流程：非空 prompt 且无法使用 hook/预置 session 的任务走此路径。
 fn run_status_session_watcher(
     app: AppHandle,
     task_id: String,
@@ -2308,10 +2309,11 @@ mod tests {
     }
 
     #[test]
-    fn empty_codex_repl_does_not_need_status_watcher_without_hooks() {
+    fn empty_agent_repl_does_not_need_status_watcher_without_hooks() {
         assert!(!should_start_status_session_watcher(false, true, true));
+        assert!(!should_start_status_session_watcher(false, false, true));
         assert!(should_start_status_session_watcher(false, true, false));
-        assert!(should_start_status_session_watcher(false, false, true));
+        assert!(should_start_status_session_watcher(false, false, false));
         assert!(!should_start_status_session_watcher(true, false, false));
     }
 

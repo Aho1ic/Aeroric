@@ -104,6 +104,8 @@ export function ShortcutsPanel() {
     claude_gpt55_config_path: "",
     codex_config_path: "",
     agent_label_overrides: {},
+    proxy_settings: { url: "", no_proxy: "" },
+    agent_proxy_enabled: {},
     custom_agents: [],
     send_shortcut: DEFAULT_SEND_SHORTCUT,
     terminal_shift_enter_newline: DEFAULT_SHIFT_ENTER_NEWLINE,

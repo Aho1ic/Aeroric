@@ -4,6 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AddAgentPanel } from "../components/app-settings/AddAgentPanel";
 import { AgentConfigPanel } from "../components/app-settings/AgentConfigPanel";
+import { ProxyPanel } from "../components/app-settings/ProxyPanel";
 import { DebugPanel } from "../components/debug/DebugPanel";
 import { I18nProvider } from "../i18n";
 
@@ -33,7 +34,8 @@ const appSettings = {
   claude_gpt55_config_path: "",
   codex_config_path: "/Users/macbook/.codex/config.toml",
   agent_label_overrides: {},
-  agent_proxy_overrides: {},
+  proxy_settings: { url: "", no_proxy: "" },
+  agent_proxy_enabled: {},
   custom_agents: [],
   send_shortcut: "enter",
   terminal_shift_enter_newline: false,
@@ -102,7 +104,8 @@ function renderJovernaAgentConfigPanel() {
         config_lang: "shellscript",
       },
     ],
-    agent_proxy_overrides: {},
+    proxy_settings: { url: "", no_proxy: "" },
+    agent_proxy_enabled: {},
   };
   vi.mocked(invoke).mockImplementation((command) => {
     if (command === "get_agent_config_file_path") {
@@ -186,6 +189,24 @@ function renderAddAgentPanel() {
   render(
     <I18nProvider>
       <AddAgentPanel onSaved={vi.fn()} />
+    </I18nProvider>,
+  );
+}
+
+function renderProxyPanel() {
+  const settings = {
+    ...appSettings,
+    proxy_settings: { url: "", no_proxy: "" },
+    agent_proxy_enabled: { joverna: true },
+  };
+  vi.mocked(invoke).mockImplementation((command) => {
+    if (command === "load_app_settings") return Promise.resolve(settings);
+    if (command === "save_app_settings") return Promise.resolve(undefined);
+    return Promise.resolve(undefined);
+  });
+  render(
+    <I18nProvider>
+      <ProxyPanel />
     </I18nProvider>,
   );
 }
@@ -308,25 +329,44 @@ describe("Agent config and debug panel UI", () => {
     expect(onDeleted).toHaveBeenCalled();
   });
 
-  it("saves proxy settings for a custom Joverna agent", async () => {
+  it("saves only the proxy enabled checkbox for a custom Joverna agent", async () => {
     const user = userEvent.setup();
     renderJovernaAgentConfigPanel();
 
     await findConfigEditor("#!/bin/sh\n");
     await user.click(screen.getByLabelText("Use proxy for this agent"));
-    await user.type(screen.getByLabelText("Proxy URL"), "127.0.0.1:7890");
-    await user.type(screen.getByLabelText("NO_PROXY"), "localhost,127.0.0.1");
+    expect(screen.queryByLabelText("Proxy URL")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("NO_PROXY")).not.toBeInTheDocument();
     await user.click(getEnabledSaveButton());
 
     await waitFor(() =>
       expect(invoke).toHaveBeenCalledWith("save_app_settings", {
         settings: expect.objectContaining({
-          agent_proxy_overrides: {
-            joverna: {
-              enabled: true,
-              url: "127.0.0.1:7890",
-              no_proxy: "localhost,127.0.0.1",
-            },
+          agent_proxy_enabled: {
+            joverna: true,
+          },
+        }),
+      }),
+    );
+  });
+
+  it("saves shared proxy URL and NO_PROXY from the application proxy page", async () => {
+    const user = userEvent.setup();
+    renderProxyPanel();
+
+    await user.type(await screen.findByLabelText("Proxy URL"), "127.0.0.1:7890");
+    await user.type(screen.getByLabelText("NO_PROXY"), "localhost,127.0.0.1");
+    await user.click(screen.getByRole("button", { name: /^Save$/i }));
+
+    await waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith("save_app_settings", {
+        settings: expect.objectContaining({
+          proxy_settings: {
+            url: "127.0.0.1:7890",
+            no_proxy: "localhost,127.0.0.1",
+          },
+          agent_proxy_enabled: {
+            joverna: true,
           },
         }),
       }),

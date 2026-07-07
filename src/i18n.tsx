@@ -21,6 +21,7 @@ const translations: Record<AppLanguage, Record<string, string>> = {
     "appSettings.general": "General",
     "appSettings.theme": "Appearance",
     "appSettings.shortcuts": "Shortcuts",
+    "appSettings.proxy": "Proxy",
     "appSettings.about": "About",
     "appSettings.fonts": "Fonts",
     "appSettings.hooks": "Hook Integration",
@@ -117,7 +118,7 @@ const translations: Record<AppLanguage, Record<string, string>> = {
     "appSettings.agentProxy": "Proxy",
     "appSettings.agentProxyEnabled": "Use proxy for this agent",
     "appSettings.agentProxyHint":
-      "Applies only when Aeroric launches this agent. Other terminal sessions are unaffected.",
+      "Uses the global proxy configured in Application > Proxy. Other terminal sessions are unaffected.",
     "appSettings.agentProxyUrl": "Proxy URL",
     "appSettings.agentProxyUrlHint":
       "Use your local proxy address, for example http://127.0.0.1:7890. Missing schemes default to http://.",
@@ -1782,6 +1783,7 @@ const translations: Record<AppLanguage, Record<string, string>> = {
     "appSettings.general": "通用",
     "appSettings.theme": "外观",
     "appSettings.shortcuts": "快捷键",
+    "appSettings.proxy": "代理",
     "appSettings.about": "关于",
     "appSettings.fonts": "字体",
     "appSettings.hooks": "Hook 集成",
@@ -1873,7 +1875,7 @@ const translations: Record<AppLanguage, Record<string, string>> = {
     "appSettings.configSyntax": "配置语法",
     "appSettings.agentProxy": "代理",
     "appSettings.agentProxyEnabled": "为这个 Agent 使用代理",
-    "appSettings.agentProxyHint": "仅在 Aeroric 启动这个 Agent 时生效，不影响其他本地终端会话。",
+    "appSettings.agentProxyHint": "使用“应用 > 代理”中的全局代理配置，不影响其他本地终端会话。",
     "appSettings.agentProxyUrl": "代理地址",
     "appSettings.agentProxyUrlHint":
       "填写本机代理地址，例如 http://127.0.0.1:7890。未填写协议时默认按 http:// 处理。",

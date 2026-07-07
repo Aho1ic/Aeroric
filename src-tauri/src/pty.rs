@@ -685,7 +685,7 @@ pub async fn run_task(
     );
 
     // hook 可信时不创建 session 转发通道,也不拉起轮询 watcher。
-    // Codex 空 prompt 进入交互 REPL，不能通过注入 /status 抢占用户输入。
+    // 空 prompt 进入交互 REPL，不能通过注入 /status 抢占用户输入。
     let session_tx =
         if should_start_status_session_watcher(use_hooks, is_codex, final_prompt.is_empty()) {
             let (session_tx, session_rx) = std::sync::mpsc::channel::<String>();

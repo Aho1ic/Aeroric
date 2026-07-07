@@ -74,7 +74,15 @@ pub struct AgentModels {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
-pub struct AgentProxyConfig {
+pub struct ProxySettings {
+    #[serde(default)]
+    pub url: String,
+    #[serde(default)]
+    pub no_proxy: String,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+pub struct LegacyAgentProxyConfig {
     #[serde(default)]
     pub enabled: bool,
     #[serde(default)]
@@ -108,7 +116,11 @@ pub struct AppSettings {
     #[serde(default)]
     pub agent_label_overrides: HashMap<String, String>,
     #[serde(default)]
-    pub agent_proxy_overrides: HashMap<String, AgentProxyConfig>,
+    pub proxy_settings: ProxySettings,
+    #[serde(default)]
+    pub agent_proxy_enabled: HashMap<String, bool>,
+    #[serde(default, skip_serializing)]
+    pub agent_proxy_overrides: HashMap<String, LegacyAgentProxyConfig>,
     #[serde(default)]
     pub custom_agents: Vec<CustomAgentProfile>,
     #[serde(default = "default_send_shortcut")]
@@ -127,6 +139,8 @@ impl Default for AppSettings {
             claude_gpt55_config_path: String::new(),
             codex_config_path: String::new(),
             agent_label_overrides: HashMap::new(),
+            proxy_settings: ProxySettings::default(),
+            agent_proxy_enabled: HashMap::new(),
             agent_proxy_overrides: HashMap::new(),
             custom_agents: Vec::new(),
             send_shortcut: default_send_shortcut(),
@@ -289,42 +303,80 @@ fn normalize_proxy_url(value: &str) -> String {
     }
 }
 
-fn normalize_agent_proxy_overrides(
-    overrides: HashMap<String, AgentProxyConfig>,
-) -> HashMap<String, AgentProxyConfig> {
+fn normalize_no_proxy(value: &str) -> String {
+    value
+        .split(',')
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+fn normalize_proxy_settings(settings: ProxySettings) -> ProxySettings {
+    ProxySettings {
+        url: normalize_proxy_url(&settings.url),
+        no_proxy: normalize_no_proxy(&settings.no_proxy),
+    }
+}
+
+fn normalize_agent_proxy_enabled(overrides: HashMap<String, bool>) -> HashMap<String, bool> {
     overrides
         .into_iter()
-        .filter_map(|(agent, config)| {
+        .filter_map(|(agent, enabled)| {
             let key = normalize_agent_label_key(&agent);
-            if key.is_empty() {
-                return None;
-            }
-            let url = normalize_proxy_url(&config.url);
-            let no_proxy = config.no_proxy.trim().to_string();
-            if !config.enabled && url.is_empty() && no_proxy.is_empty() {
-                None
-            } else {
-                Some((
-                    key,
-                    AgentProxyConfig {
-                        enabled: config.enabled,
-                        url,
-                        no_proxy,
-                    },
-                ))
-            }
+            (!key.is_empty() && enabled).then_some((key, true))
         })
         .collect()
 }
 
-fn append_agent_proxy_env(extra_env: &mut Vec<(String, String)>, proxy: Option<&AgentProxyConfig>) {
-    let Some(proxy) = proxy else {
-        return;
-    };
-    if !proxy.enabled || proxy.url.trim().is_empty() {
+fn migrate_legacy_proxy_settings(settings: &AppSettings) -> ProxySettings {
+    if !settings.proxy_settings.url.trim().is_empty()
+        || !settings.proxy_settings.no_proxy.trim().is_empty()
+    {
+        return normalize_proxy_settings(settings.proxy_settings.clone());
+    }
+    settings
+        .agent_proxy_overrides
+        .values()
+        .find(|config| !config.url.trim().is_empty() || !config.no_proxy.trim().is_empty())
+        .map(|config| {
+            normalize_proxy_settings(ProxySettings {
+                url: config.url.clone(),
+                no_proxy: config.no_proxy.clone(),
+            })
+        })
+        .unwrap_or_default()
+}
+
+fn migrate_agent_proxy_enabled(settings: &AppSettings) -> HashMap<String, bool> {
+    let mut enabled = normalize_agent_proxy_enabled(settings.agent_proxy_enabled.clone());
+    for (agent, config) in &settings.agent_proxy_overrides {
+        let key = normalize_agent_label_key(agent);
+        if !key.is_empty() && config.enabled {
+            enabled.insert(key, true);
+        }
+    }
+    enabled
+}
+
+fn append_agent_proxy_env(
+    settings: &AppSettings,
+    agent: &str,
+    extra_env: &mut Vec<(String, String)>,
+) {
+    let key = normalize_agent_label_key(agent);
+    if !settings
+        .agent_proxy_enabled
+        .get(&key)
+        .copied()
+        .unwrap_or(false)
+    {
         return;
     }
-    let proxy_url = normalize_proxy_url(&proxy.url);
+    let proxy = normalize_proxy_settings(settings.proxy_settings.clone());
+    if proxy.url.trim().is_empty() {
+        return;
+    }
     for key in [
         "HTTP_PROXY",
         "HTTPS_PROXY",
@@ -333,12 +385,11 @@ fn append_agent_proxy_env(extra_env: &mut Vec<(String, String)>, proxy: Option<&
         "https_proxy",
         "all_proxy",
     ] {
-        extra_env.push((key.to_string(), proxy_url.clone()));
+        extra_env.push((key.to_string(), proxy.url.clone()));
     }
-    let no_proxy = proxy.no_proxy.trim();
-    if !no_proxy.is_empty() {
-        extra_env.push(("NO_PROXY".to_string(), no_proxy.to_string()));
-        extra_env.push(("no_proxy".to_string(), no_proxy.to_string()));
+    if !proxy.no_proxy.is_empty() {
+        extra_env.push(("NO_PROXY".to_string(), proxy.no_proxy.clone()));
+        extra_env.push(("no_proxy".to_string(), proxy.no_proxy));
     }
 }
 
@@ -634,11 +685,7 @@ fn resolve_agent_launch_spec_from_path(agent: &str, path: &str) -> AgentLaunchSp
 fn get_agent_launch_spec_from_settings(settings: &AppSettings, agent: &str) -> AgentLaunchSpec {
     let mut spec =
         resolve_agent_launch_spec_from_path(agent, &get_agent_configured_path(settings, agent));
-    let key = normalize_agent_label_key(agent);
-    append_agent_proxy_env(
-        &mut spec.extra_env,
-        settings.agent_proxy_overrides.get(&key),
-    );
+    append_agent_proxy_env(settings, agent, &mut spec.extra_env);
     spec
 }
 
@@ -956,6 +1003,8 @@ fn remove_agent_profile_file(path: &str) -> Result<(), String> {
 }
 
 fn normalize_settings(settings: AppSettings) -> AppSettings {
+    let proxy_settings = migrate_legacy_proxy_settings(&settings);
+    let agent_proxy_enabled = migrate_agent_proxy_enabled(&settings);
     AppSettings {
         claude_path: resolve_agent_launch_spec_from_path("claude", &settings.claude_path).program,
         claude_gpt55_path: if settings.claude_gpt55_path.is_empty() {
@@ -968,7 +1017,9 @@ fn normalize_settings(settings: AppSettings) -> AppSettings {
         claude_gpt55_config_path: normalize_config_path(settings.claude_gpt55_config_path),
         codex_config_path: normalize_config_path(settings.codex_config_path),
         agent_label_overrides: normalize_agent_label_overrides(settings.agent_label_overrides),
-        agent_proxy_overrides: normalize_agent_proxy_overrides(settings.agent_proxy_overrides),
+        proxy_settings,
+        agent_proxy_enabled,
+        agent_proxy_overrides: HashMap::new(),
         custom_agents: normalize_custom_agents(settings.custom_agents),
         send_shortcut: normalize_send_shortcut(settings.send_shortcut),
         terminal_shift_enter_newline: settings.terminal_shift_enter_newline,
@@ -990,6 +1041,8 @@ fn load_settings_unlocked() -> AppSettings {
             claude_gpt55_config_path: String::new(),
             codex_config_path: String::new(),
             agent_label_overrides: HashMap::new(),
+            proxy_settings: ProxySettings::default(),
+            agent_proxy_enabled: HashMap::new(),
             agent_proxy_overrides: HashMap::new(),
             custom_agents: Vec::new(),
             send_shortcut: default_send_shortcut(),
@@ -1607,16 +1660,9 @@ mod tests {
     }
 
     #[test]
-    fn custom_agent_proxy_override_is_added_to_launch_env() {
-        let mut proxy_overrides = HashMap::new();
-        proxy_overrides.insert(
-            "joverna".to_string(),
-            AgentProxyConfig {
-                enabled: true,
-                url: "127.0.0.1:7890".to_string(),
-                no_proxy: "localhost,127.0.0.1".to_string(),
-            },
-        );
+    fn global_proxy_settings_are_added_to_enabled_agent_launch_env() {
+        let mut proxy_enabled = HashMap::new();
+        proxy_enabled.insert("joverna".to_string(), true);
         let settings = AppSettings {
             custom_agents: vec![CustomAgentProfile {
                 id: "joverna".to_string(),
@@ -1625,7 +1671,11 @@ mod tests {
                 codex_like: false,
                 config_lang: "shellscript".to_string(),
             }],
-            agent_proxy_overrides: proxy_overrides,
+            proxy_settings: ProxySettings {
+                url: "127.0.0.1:7890".to_string(),
+                no_proxy: " localhost, 127.0.0.1 ".to_string(),
+            },
+            agent_proxy_enabled: proxy_enabled,
             ..AppSettings::default()
         };
 
@@ -1639,6 +1689,33 @@ mod tests {
         assert!(launch
             .extra_env
             .contains(&("NO_PROXY".to_string(), "localhost,127.0.0.1".to_string())));
+    }
+
+    #[test]
+    fn legacy_agent_proxy_settings_migrate_to_global_proxy_and_enabled_flags() {
+        let mut proxy_overrides = HashMap::new();
+        proxy_overrides.insert(
+            "Joverna".to_string(),
+            LegacyAgentProxyConfig {
+                enabled: true,
+                url: "127.0.0.1:7890".to_string(),
+                no_proxy: " localhost, 127.0.0.1 ".to_string(),
+            },
+        );
+        let normalized = normalize_settings(AppSettings {
+            agent_proxy_overrides: proxy_overrides,
+            ..AppSettings::default()
+        });
+
+        assert_eq!(
+            normalized.proxy_settings,
+            ProxySettings {
+                url: "http://127.0.0.1:7890".to_string(),
+                no_proxy: "localhost,127.0.0.1".to_string(),
+            }
+        );
+        assert_eq!(normalized.agent_proxy_enabled.get("joverna"), Some(&true));
+        assert!(normalized.agent_proxy_overrides.is_empty());
     }
 
     #[test]
