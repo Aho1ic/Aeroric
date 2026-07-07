@@ -128,5 +128,7 @@ function comparePositions(a: LspPosition, b: LspPosition): number {
 }
 
 function rangeSize(range: LspRange): number {
-  return (range.end.line - range.start.line) * 100_000 + range.end.character - range.start.character;
+  return (
+    (range.end.line - range.start.line) * 100_000 + range.end.character - range.start.character
+  );
 }

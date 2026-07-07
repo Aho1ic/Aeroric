@@ -1,4 +1,3 @@
-import { useEffect, useState } from "react";
 import { Settings, Moon, Sun } from "lucide-react";
 import type {
   ThemeMode,
@@ -7,7 +6,6 @@ import type {
   TaskDisplayWindow,
   FontFamily,
 } from "../types";
-import { AppSettingsDialog } from "./AppSettingsDialog";
 import { OPEN_APP_SETTINGS_EVENT } from "./app-settings/types";
 import { NotificationBell } from "./NotificationBell";
 import { ENABLE_USAGE_INSIGHTS } from "../platform";
@@ -17,22 +15,7 @@ import s from "../styles";
 
 export function SidebarFooterActions({
   themeVariant,
-  themeMode,
-  systemPrefersDark,
-  onThemeModeChange,
   onToggleTheme,
-  terminalFontSize,
-  onTerminalFontSizeChange,
-  taskDisplayWindow,
-  onTaskDisplayWindowChange,
-  attentionBadge,
-  onAttentionBadgeChange,
-  sftpLocalDefaultPath,
-  onSftpLocalDefaultPathChange,
-  uiFontFamily,
-  onUiFontFamilyChange,
-  monoFontFamily,
-  onMonoFontFamilyChange,
 }: {
   themeVariant: ThemeVariant;
   themeMode: ThemeMode;
@@ -53,14 +36,7 @@ export function SidebarFooterActions({
   onMonoFontFamilyChange: (family: FontFamily) => void;
 }) {
   const { t } = useI18n();
-  const [showAppSettings, setShowAppSettings] = useState(false);
   const isDark = themeVariant === "dark";
-
-  useEffect(() => {
-    const open = () => setShowAppSettings(true);
-    window.addEventListener(OPEN_APP_SETTINGS_EVENT, open);
-    return () => window.removeEventListener(OPEN_APP_SETTINGS_EVENT, open);
-  }, []);
 
   return (
     <>
@@ -69,7 +45,11 @@ export function SidebarFooterActions({
         <button
           style={s.sidebarIconBtn}
           title={t("appSettings.title")}
-          onClick={() => setShowAppSettings(true)}
+          onClick={() => {
+            window.dispatchEvent(
+              new CustomEvent(OPEN_APP_SETTINGS_EVENT, { detail: { initialNav: "general" } }),
+            );
+          }}
         >
           <Settings size={14} strokeWidth={1.6} color="var(--text-hint)" />
         </button>
@@ -86,28 +66,6 @@ export function SidebarFooterActions({
         </button>
         {ENABLE_USAGE_INSIGHTS ? <UsagePopover /> : null}
       </div>
-
-      {showAppSettings && (
-        <AppSettingsDialog
-          themeVariant={themeVariant}
-          themeMode={themeMode}
-          systemPrefersDark={systemPrefersDark}
-          onThemeModeChange={onThemeModeChange}
-          terminalFontSize={terminalFontSize}
-          onTerminalFontSizeChange={onTerminalFontSizeChange}
-          taskDisplayWindow={taskDisplayWindow}
-          onTaskDisplayWindowChange={onTaskDisplayWindowChange}
-          attentionBadge={attentionBadge}
-          onAttentionBadgeChange={onAttentionBadgeChange}
-          sftpLocalDefaultPath={sftpLocalDefaultPath}
-          onSftpLocalDefaultPathChange={onSftpLocalDefaultPathChange}
-          uiFontFamily={uiFontFamily}
-          onUiFontFamilyChange={onUiFontFamilyChange}
-          monoFontFamily={monoFontFamily}
-          onMonoFontFamilyChange={onMonoFontFamilyChange}
-          onClose={() => setShowAppSettings(false)}
-        />
-      )}
     </>
   );
 }

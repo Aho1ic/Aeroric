@@ -42,14 +42,17 @@ describe("LSP signature help source", () => {
       onError: vi.fn(),
     });
 
-    const tooltip = await source({
-      state: {
-        doc: {
-          lineAt: (_offset: number) => ({ number: 1, from: 0 }),
-          sliceString: (_from: number, _to: number) => "(",
+    const tooltip = await source(
+      {
+        state: {
+          doc: {
+            lineAt: (_offset: number) => ({ number: 1, from: 0 }),
+            sliceString: (_from: number, _to: number) => "(",
+          },
         },
       },
-    }, 7);
+      7,
+    );
 
     expect(vi.mocked(invoke)).toHaveBeenCalledWith("lsp_signature_help", {
       request: expect.objectContaining({
@@ -75,14 +78,17 @@ describe("LSP signature help source", () => {
       onError: vi.fn(),
     });
 
-    const tooltip = await source({
-      state: {
-        doc: {
-          lineAt: (_offset: number) => ({ number: 1, from: 0 }),
-          sliceString: (_from: number, _to: number) => "r",
+    const tooltip = await source(
+      {
+        state: {
+          doc: {
+            lineAt: (_offset: number) => ({ number: 1, from: 0 }),
+            sliceString: (_from: number, _to: number) => "r",
+          },
         },
       },
-    }, 7);
+      7,
+    );
 
     expect(tooltip).toBeNull();
     expect(invoke).not.toHaveBeenCalled();

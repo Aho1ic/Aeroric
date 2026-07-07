@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { invoke } from "@tauri-apps/api/core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -70,6 +70,24 @@ function renderAgentConfigPanel(content: string) {
   );
 }
 
+function renderDeletableAgentConfigPanel(content: string, onDeleted = vi.fn()) {
+  mockInvokeForAgentConfig(content);
+  render(
+    <I18nProvider>
+      <AgentConfigPanel
+        agentKey="gpt55"
+        agentLabel="GPT55"
+        filePath="/Users/macbook/.aeroric/agents/gpt55.sh"
+        lang="shellscript"
+        themeVariant="light"
+        deletable
+        onDeleted={onDeleted}
+      />
+    </I18nProvider>,
+  );
+  return onDeleted;
+}
+
 function renderAgentConfigPanelWithMissingFile() {
   mockInvokeForAgentConfig("");
   vi.mocked(invoke).mockImplementation((command) => {
@@ -133,11 +151,9 @@ function renderAddAgentPanel() {
 
 async function findConfigEditor(value: string) {
   return waitFor(() => {
-    const editor = screen
-      .getAllByRole("textbox")
-      .find((node): node is HTMLTextAreaElement => {
-        return node instanceof HTMLTextAreaElement && node.value === value;
-      });
+    const editor = screen.getAllByRole("textbox").find((node): node is HTMLTextAreaElement => {
+      return node instanceof HTMLTextAreaElement && node.value === value;
+    });
     if (!editor) {
       throw new Error(`Config editor with value ${JSON.stringify(value)} was not found`);
     }
@@ -208,6 +224,63 @@ describe("Agent config and debug panel UI", () => {
       }),
     );
     expect(screen.queryByRole("button", { name: /Edit/i })).not.toBeInTheDocument();
+  });
+
+  it("does not render the footer cancel button in the agent config editor", async () => {
+    renderAgentConfigPanel('status = "ok"\n');
+
+    await findConfigEditor('status = "ok"\n');
+    expect(screen.queryByRole("button", { name: /^Cancel$/i })).not.toBeInTheDocument();
+  });
+
+  it("renames custom agent configs from the settings panel", async () => {
+    const user = userEvent.setup();
+    renderDeletableAgentConfigPanel("#!/bin/sh\n");
+
+    await findConfigEditor("#!/bin/sh\n");
+    const nameInput = screen.getByLabelText("Agent Name");
+    await user.clear(nameInput);
+    await user.type(nameInput, "GPT 5.5");
+    await user.click(screen.getByRole("button", { name: /Save Name/i }));
+
+    await waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith("rename_custom_agent_profile", {
+        id: "gpt55",
+        label: "GPT 5.5",
+      }),
+    );
+  });
+
+  it("deletes custom agent configs through the settings panel", async () => {
+    const user = userEvent.setup();
+    const onDeleted = renderDeletableAgentConfigPanel("#!/bin/sh\n");
+
+    await findConfigEditor("#!/bin/sh\n");
+    await user.click(screen.getByRole("button", { name: /Delete Agent/i }));
+
+    expect(invoke).not.toHaveBeenCalledWith("delete_custom_agent_profile", { id: "gpt55" });
+    await user.click(screen.getByRole("button", { name: /Confirm Delete/i }));
+
+    await waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith("delete_custom_agent_profile", { id: "gpt55" }),
+    );
+    expect(onDeleted).toHaveBeenCalled();
+  });
+
+  it("does not delete a custom agent until the confirmation is accepted", async () => {
+    const user = userEvent.setup();
+    const onDeleted = renderDeletableAgentConfigPanel("#!/bin/sh\n");
+
+    await findConfigEditor("#!/bin/sh\n");
+    await user.click(screen.getByRole("button", { name: /Delete Agent/i }));
+    const confirmDialog = screen.getByRole("dialog", { name: /Delete Agent/i });
+    await user.click(within(confirmDialog).getByRole("button", { name: /^Cancel$/i }));
+
+    expect(
+      screen.queryByText("Delete this Agent and permanently remove its local config file?"),
+    ).not.toBeInTheDocument();
+    expect(invoke).not.toHaveBeenCalledWith("delete_custom_agent_profile", { id: "gpt55" });
+    expect(onDeleted).not.toHaveBeenCalled();
   });
 
   it("renders debug controls as stable shadcn-style button groups", async () => {
@@ -281,6 +354,39 @@ describe("Agent config and debug panel UI", () => {
         api_key: "sk-test",
         model: "gpt-5.5",
         models: ["gpt-5.5"],
+      },
+    });
+  });
+
+  it("keeps the manual model input ready for adding more models", async () => {
+    const user = userEvent.setup();
+    renderAddAgentPanel();
+
+    await user.type(screen.getByLabelText("Agent Name"), "Manual");
+    await user.type(screen.getByLabelText("Base URL"), "https://example.com/v1");
+    await user.type(screen.getByLabelText("API Key"), "sk-test");
+
+    const modelInput = screen.getByLabelText("Model");
+    await user.type(modelInput, "gpt-5.5");
+    await user.click(screen.getByRole("button", { name: /^Add Model$/i }));
+    expect(modelInput).toHaveValue("");
+    await waitFor(() => expect(modelInput).toHaveFocus());
+
+    await user.type(modelInput, "gpt-5.1");
+    await user.keyboard("{Enter}");
+    expect(modelInput).toHaveValue("");
+    expect(screen.getByText("2 of 2 models selected")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /^Add Agent$/i }));
+    expect(invoke).toHaveBeenCalledWith("setup_agent_profile", {
+      draft: {
+        id: "manual",
+        label: "Manual",
+        kind: "codex",
+        base_url: "https://example.com/v1",
+        api_key: "sk-test",
+        model: "gpt-5.5",
+        models: ["gpt-5.5", "gpt-5.1"],
       },
     });
   });

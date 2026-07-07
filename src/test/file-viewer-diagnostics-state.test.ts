@@ -64,9 +64,7 @@ describe("FileViewer diagnostics state", () => {
   });
 
   it("formats diagnostic tooltip summaries with source, code, location and message", () => {
-    expect(diagnosticSummary(diagnostics[1])).toBe(
-      "eslint (no-undef) 2:8 First problem",
-    );
+    expect(diagnosticSummary(diagnostics[1])).toBe("eslint (no-undef) 2:8 First problem");
   });
 
   it("formats diagnostics for batch copy", () => {
@@ -88,9 +86,9 @@ describe("FileViewer diagnostics state", () => {
       warning: 1,
       info: 0,
     });
-    expect(filterDiagnosticsBySeverity(fileDiagnostics, "warning").map((item) => item.message)).toEqual([
-      "First problem",
-    ]);
+    expect(
+      filterDiagnosticsBySeverity(fileDiagnostics, "warning").map((item) => item.message),
+    ).toEqual(["First problem"]);
     expect(filterDiagnosticsBySeverity(fileDiagnostics, "all")).toHaveLength(2);
   });
 

@@ -43,7 +43,7 @@ export const LIGHT_THEME = {
   blue: "#0550ae",
   magenta: "#8250df",
   cyan: "#1b7c83",
-  white: "#6e7781",
+  white: "#3f3f46",
   brightBlack: "#57606a",
   brightRed: "#a40e26",
   brightGreen: "#1a7f37",
@@ -51,7 +51,7 @@ export const LIGHT_THEME = {
   brightBlue: "#0969da",
   brightMagenta: "#6639ba",
   brightCyan: "#3192aa",
-  brightWhite: "#8c959f",
+  brightWhite: "#24292f",
 };
 
 // Solarized Light–inspired warm palette to match the eyecare CSS tokens.
@@ -67,7 +67,7 @@ export const EYECARE_THEME = {
   blue: "#268bd2",
   magenta: "#d33682",
   cyan: "#2aa198",
-  white: "#93a1a1",
+  white: "#657b83",
   brightBlack: "#657b83",
   brightRed: "#cb4b16",
   brightGreen: "#586e75",
@@ -75,7 +75,7 @@ export const EYECARE_THEME = {
   brightBlue: "#839496",
   brightMagenta: "#6c71c4",
   brightCyan: "#93a1a1",
-  brightWhite: "#fdf6e3",
+  brightWhite: "#3f3724",
 };
 
 export function themeFor(variant: ThemeVariant) {
@@ -86,8 +86,11 @@ export function themeFor(variant: ThemeVariant) {
 
 // ── Watermark flow control ───────────────────────────────────────────────────
 
-const HIGH_WATER = 128 * 1024; // 128 KB：超过时停止写入
-const LOW_WATER = 16 * 1024; //  16 KB：恢复写入
+const HIGH_WATER = 96 * 1024; // 96 KB：超过时停止写入
+const LOW_WATER = 16 * 1024; // 16 KB：恢复写入
+export const TERMINAL_WRITE_CHUNK_SIZE = 16 * 1024;
+export const TERMINAL_FRAME_WRITE_BUDGET = 32 * 1024;
+export const TERMINAL_USER_INPUT_PAUSE_MS = 48;
 const ANSI_FG_RESET = "\x1b[39m";
 const TERMINAL_HIGHLIGHT_PATTERN =
   /\b(error|exception|traceback|failed|fail|warning|warn|success|passed|pass|running|done)\b|\b\d+(?:\.\d+)?(?:%|ms|s|MB|GB|KB)?\b/gi;
@@ -126,10 +129,86 @@ export function colorizePlainTerminalOutput(data: string): string {
   });
 }
 
+function isSgrBody(body: string): boolean {
+  for (let index = 0; index < body.length; index += 1) {
+    const code = body.charCodeAt(index);
+    if (code !== 0x3b && (code < 0x30 || code > 0x39)) return false;
+  }
+  return true;
+}
+
+function remapLightSgrBody(body: string): string | null {
+  const parts = body ? body.split(";") : [];
+  const next: string[] = [];
+  let changed = false;
+
+  for (let index = 0; index < parts.length; index += 1) {
+    const code = parts[index];
+    if (code === "37" || code === "97") {
+      next.push("39");
+      changed = true;
+      continue;
+    }
+
+    if (code === "38" && parts[index + 1] === "2") {
+      const red = Number(parts[index + 2]);
+      const green = Number(parts[index + 3]);
+      const blue = Number(parts[index + 4]);
+      if (red >= 235 && green >= 235 && blue >= 235) {
+        next.push("39");
+        index += 4;
+        changed = true;
+        continue;
+      }
+    }
+
+    if (code === "38" && parts[index + 1] === "5") {
+      const color = Number(parts[index + 2]);
+      if (color === 15 || color >= 231) {
+        next.push("39");
+        index += 2;
+        changed = true;
+        continue;
+      }
+    }
+
+    next.push(code);
+  }
+
+  return changed ? next.join(";") : null;
+}
+
+export function remapLightAnsiForeground(data: string, variant: ThemeVariant): string {
+  if (!data || variant === "dark" || !data.includes("\x1b[")) return data;
+  let result = "";
+  let last = 0;
+
+  for (let index = 0; index < data.length; index += 1) {
+    if (data.charCodeAt(index) !== 0x1b || data[index + 1] !== "[") continue;
+    let end = index + 2;
+    while (end < data.length && data[end] !== "m") end += 1;
+    if (end >= data.length) break;
+
+    const body = data.slice(index + 2, end);
+    if (!isSgrBody(body)) continue;
+
+    const remapped = remapLightSgrBody(body);
+    if (remapped === null) continue;
+
+    result += data.slice(last, index);
+    result += `\x1b[${remapped}m`;
+    last = end + 1;
+    index = end;
+  }
+
+  return last === 0 ? data : result + data.slice(last);
+}
+
 export interface SmartWriter {
   write: (data: string, callback?: () => void) => void;
   drainPending: () => void;
   setSelectionPaused: (paused: boolean) => void;
+  pauseForUserInput: (durationMs?: number) => void;
 }
 
 interface TerminalSelectionGuardOptions {
@@ -271,6 +350,171 @@ export function attachMacWebKitTerminalGuard({
   };
 }
 
+type TerminalSequenceState = "ground" | "esc" | "csi" | "string" | "stringEsc";
+
+function isCsiFinal(code: number): boolean {
+  return code >= 0x40 && code <= 0x7e;
+}
+
+function isTerminalStringTerminator(code: number): boolean {
+  return code === 0x07 || code === 0x9c;
+}
+
+function avoidTrailingHighSurrogate(data: string, start: number, end: number): number {
+  if (end <= start || end >= data.length) return end;
+  const prevCode = data.charCodeAt(end - 1);
+  const nextCode = data.charCodeAt(end);
+  if (
+    prevCode >= 0xd800 &&
+    prevCode <= 0xdbff &&
+    nextCode >= 0xdc00 &&
+    nextCode <= 0xdfff
+  ) {
+    return end - 1;
+  }
+  return end;
+}
+
+function findSafeTerminalChunkEnd(data: string, start: number, preferredEnd: number): number {
+  let state: TerminalSequenceState = "ground";
+  let sequenceStart = -1;
+
+  const scanUntil = (limit: number): boolean => {
+    for (let index = start; index < limit; index += 1) {
+      const code = data.charCodeAt(index);
+      const char = data[index];
+
+      if (state === "ground") {
+        if (code === 0x1b) {
+          state = "esc";
+          sequenceStart = index;
+          continue;
+        }
+        if (code === 0x9b) {
+          state = "csi";
+          sequenceStart = index;
+          continue;
+        }
+        if (code === 0x9d || code === 0x90 || code === 0x9e || code === 0x9f) {
+          state = "string";
+          sequenceStart = index;
+          continue;
+        }
+        continue;
+      }
+
+      if (state === "esc") {
+        if (char === "[") {
+          state = "csi";
+          continue;
+        }
+        if (char === "]" || char === "P" || char === "^" || char === "_") {
+          state = "string";
+          continue;
+        }
+        state = "ground";
+        sequenceStart = -1;
+        continue;
+      }
+
+      if (state === "csi") {
+        if (isCsiFinal(code)) {
+          state = "ground";
+          sequenceStart = -1;
+        }
+        continue;
+      }
+
+      if (state === "string") {
+        if (isTerminalStringTerminator(code)) {
+          state = "ground";
+          sequenceStart = -1;
+          continue;
+        }
+        if (code === 0x1b) {
+          state = "stringEsc";
+        }
+        continue;
+      }
+
+      if (state === "stringEsc") {
+        if (char === "\\") {
+          state = "ground";
+          sequenceStart = -1;
+          continue;
+        }
+        state = "string";
+      }
+    }
+    return state === "ground";
+  };
+
+  if (scanUntil(preferredEnd)) {
+    return avoidTrailingHighSurrogate(data, start, preferredEnd);
+  }
+
+  if (sequenceStart > start) {
+    return avoidTrailingHighSurrogate(data, start, sequenceStart);
+  }
+
+  let extendState = state as TerminalSequenceState;
+  for (let index = preferredEnd; index < data.length; index += 1) {
+    const code = data.charCodeAt(index);
+    const char = data[index];
+    if (extendState === "esc") {
+      if (char === "[") extendState = "csi";
+      else if (char === "]" || char === "P" || char === "^" || char === "_")
+        extendState = "string";
+      else return index + 1;
+      continue;
+    }
+    if (extendState === "csi") {
+      if (isCsiFinal(code)) return index + 1;
+      continue;
+    }
+    if (extendState === "string") {
+      if (isTerminalStringTerminator(code)) return index + 1;
+      if (code === 0x1b) extendState = "stringEsc";
+      continue;
+    }
+    if (extendState === "stringEsc") {
+      if (char === "\\") return index + 1;
+      extendState = "string";
+    }
+  }
+
+  return data.length;
+}
+
+export function splitTerminalWriteChunk(
+  data: string,
+  maxChunkSize = TERMINAL_WRITE_CHUNK_SIZE,
+): string[] {
+  if (data.length <= maxChunkSize) return [data];
+  const chunks: string[] = [];
+  let start = 0;
+  while (start < data.length) {
+    const preferredEnd = Math.min(start + maxChunkSize, data.length);
+    let end = findSafeTerminalChunkEnd(data, start, preferredEnd);
+    if (end <= start) end = preferredEnd;
+    chunks.push(data.slice(start, end));
+    start = end;
+  }
+  return chunks;
+}
+
+function nowMs(): number {
+  return typeof performance !== "undefined" ? performance.now() : Date.now();
+}
+
+function scheduleFrame(callback: FrameRequestCallback): void {
+  if (typeof window !== "undefined" && typeof window.requestAnimationFrame === "function") {
+    window.requestAnimationFrame(callback);
+    return;
+  }
+  globalThis.setTimeout(() => callback(nowMs()), 16);
+}
+
 /**
  * 创建基于水位线的流控写入器。
  *
@@ -278,28 +522,54 @@ export function attachMacWebKitTerminalGuard({
  * - 低于 LOW_WATER 时恢复
  * - selectionPaused 在鼠标选择期间暂停写入（可选使用）
  */
-export function createSmartWriter(term: Terminal): SmartWriter {
+export function createSmartWriter(
+  term: Terminal,
+  getThemeVariant: () => ThemeVariant = () => "dark",
+): SmartWriter {
   const state = {
     pendingChunks: [] as Array<{ data: string; callback?: () => void }>,
     watermark: 0,
     paused: false,
     selectionPaused: false,
+    inputPausedUntil: 0,
+    drainScheduled: false,
   };
 
   function flushOne(data: string, callback?: () => void) {
-    const output = colorizePlainTerminalOutput(data);
-    state.watermark += output.length;
-    term.write(output, () => {
-      state.watermark -= output.length;
+    state.watermark += data.length;
+    term.write(data, () => {
+      state.watermark -= data.length;
       callback?.();
       if (state.paused && state.watermark < LOW_WATER) {
         state.paused = false;
-        drainPending();
+        scheduleDrain();
       }
     });
   }
 
+  function scheduleDrain(delayMs = 0) {
+    if (state.drainScheduled) return;
+    state.drainScheduled = true;
+    const run = () => {
+      state.drainScheduled = false;
+      drainPending();
+    };
+    if (delayMs > 0) {
+      globalThis.setTimeout(run, delayMs);
+      return;
+    }
+    scheduleFrame(run);
+  }
+
   function drainPending() {
+    if (state.selectionPaused) return;
+    const inputPauseRemaining = state.inputPausedUntil - nowMs();
+    if (inputPauseRemaining > 0) {
+      scheduleDrain(inputPauseRemaining);
+      return;
+    }
+
+    let bytesThisFrame = 0;
     while (state.pendingChunks.length > 0 && !state.paused && !state.selectionPaused) {
       const next = state.pendingChunks.shift()!;
       if (state.watermark >= HIGH_WATER) {
@@ -308,24 +578,40 @@ export function createSmartWriter(term: Terminal): SmartWriter {
         break;
       }
       flushOne(next.data, next.callback);
+      bytesThisFrame += next.data.length;
+      if (bytesThisFrame >= TERMINAL_FRAME_WRITE_BUDGET) {
+        break;
+      }
+    }
+    if (state.pendingChunks.length > 0 && !state.paused && !state.selectionPaused) {
+      scheduleDrain();
     }
   }
 
   function write(data: string, callback?: () => void) {
-    if (state.paused || state.selectionPaused || state.watermark >= HIGH_WATER) {
-      if (state.watermark >= HIGH_WATER) state.paused = true;
-      state.pendingChunks.push({ data, callback });
-      return;
+    const output = remapLightAnsiForeground(colorizePlainTerminalOutput(data), getThemeVariant());
+    const chunks = splitTerminalWriteChunk(output);
+    for (let index = 0; index < chunks.length; index += 1) {
+      state.pendingChunks.push({
+        data: chunks[index],
+        callback: index === chunks.length - 1 ? callback : undefined,
+      });
     }
-    flushOne(data, callback);
+    if (state.watermark >= HIGH_WATER) state.paused = true;
+    drainPending();
   }
 
   function setSelectionPaused(paused: boolean) {
     state.selectionPaused = paused;
-    if (!paused) drainPending();
+    if (!paused) scheduleDrain();
   }
 
-  return { write, drainPending, setSelectionPaused };
+  function pauseForUserInput(durationMs = TERMINAL_USER_INPUT_PAUSE_MS) {
+    state.inputPausedUntil = Math.max(state.inputPausedUntil, nowMs() + durationMs);
+    if (state.pendingChunks.length > 0) scheduleDrain(durationMs);
+  }
+
+  return { write, drainPending, setSelectionPaused, pauseForUserInput };
 }
 
 // ── xterm initialization ─────────────────────────────────────────────────────

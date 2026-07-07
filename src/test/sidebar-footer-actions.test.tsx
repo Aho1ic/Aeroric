@@ -1,0 +1,98 @@
+import { fireEvent, render, screen } from "@testing-library/react";
+import { act } from "react";
+import { describe, expect, it, vi } from "vitest";
+import { SidebarFooterActions } from "../components/SidebarFooterActions";
+import { AppSettingsEventHost } from "../components/AppSettingsEventHost";
+import { OPEN_APP_SETTINGS_EVENT } from "../components/app-settings/types";
+import { I18nProvider } from "../i18n";
+
+vi.mock("../components/AppSettingsDialog", () => ({
+  AppSettingsDialog: ({ initialNav }: { initialNav?: string }) => (
+    <div role="dialog" data-initial-nav={initialNav}>
+      settings dialog
+    </div>
+  ),
+}));
+
+vi.mock("../components/NotificationBell", () => ({
+  NotificationBell: () => null,
+}));
+
+vi.mock("../components/UsagePopover", () => ({
+  UsagePopover: () => null,
+}));
+
+function renderSettingsFixture() {
+  return render(
+    <I18nProvider>
+      <>
+        <SidebarFooterActions
+          themeVariant="light"
+          themeMode="light"
+          systemPrefersDark={false}
+          onThemeModeChange={vi.fn()}
+          onToggleTheme={vi.fn()}
+          terminalFontSize={11}
+          onTerminalFontSizeChange={vi.fn()}
+          taskDisplayWindow={3}
+          onTaskDisplayWindowChange={vi.fn()}
+          attentionBadge
+          onAttentionBadgeChange={vi.fn()}
+          sftpLocalDefaultPath="/tmp"
+          onSftpLocalDefaultPathChange={vi.fn()}
+          uiFontFamily="sans-serif"
+          onUiFontFamilyChange={vi.fn()}
+          monoFontFamily="monospace"
+          onMonoFontFamilyChange={vi.fn()}
+        />
+        <AppSettingsEventHost
+          themeVariant="light"
+          themeMode="light"
+          systemPrefersDark={false}
+          onThemeModeChange={vi.fn()}
+          terminalFontSize={11}
+          onTerminalFontSizeChange={vi.fn()}
+          taskDisplayWindow={3}
+          onTaskDisplayWindowChange={vi.fn()}
+          attentionBadge
+          onAttentionBadgeChange={vi.fn()}
+          sftpLocalDefaultPath="/tmp"
+          onSftpLocalDefaultPathChange={vi.fn()}
+          uiFontFamily="sans-serif"
+          onUiFontFamilyChange={vi.fn()}
+          monoFontFamily="monospace"
+          onMonoFontFamilyChange={vi.fn()}
+        />
+      </>
+    </I18nProvider>,
+  );
+}
+
+describe("SidebarFooterActions", () => {
+  it("resets to the general settings page when opened from the sidebar button", () => {
+    renderSettingsFixture();
+
+    act(() => {
+      window.dispatchEvent(
+        new CustomEvent(OPEN_APP_SETTINGS_EVENT, { detail: { initialNav: "codex" } }),
+      );
+    });
+    expect(screen.getByRole("dialog")).toHaveAttribute("data-initial-nav", "codex");
+
+    fireEvent.click(screen.getByTitle("App Settings"));
+
+    expect(screen.getByRole("dialog")).toHaveAttribute("data-initial-nav", "general");
+  });
+
+  it("opens the requested agent settings page from the global settings event host", () => {
+    renderSettingsFixture();
+
+    act(() => {
+      window.dispatchEvent(
+        new CustomEvent(OPEN_APP_SETTINGS_EVENT, { detail: { initialNav: "codex" } }),
+      );
+    });
+
+    expect(screen.getByRole("dialog")).toHaveAttribute("data-initial-nav", "codex");
+  });
+});

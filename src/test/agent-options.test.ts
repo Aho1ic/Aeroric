@@ -7,6 +7,8 @@ import {
 } from "../agents";
 import {
   composeControlOrder,
+  composeModelMenuContentStyle,
+  composeModelMenuViewportStyle,
   composePermissionLabel,
   nextComposeMenuState,
 } from "../components/new-task/AgentPermSelector";
@@ -56,6 +58,7 @@ describe("agent options", () => {
       "permission",
       "launch",
       "branch",
+      "model",
       "send",
     ]);
   });
@@ -65,5 +68,22 @@ describe("agent options", () => {
     expect(nextComposeMenuState("launch", "branch", true)).toBe("branch");
     expect(nextComposeMenuState("branch", "permission", true)).toBe("permission");
     expect(nextComposeMenuState("send", "send", false)).toBe(null);
+  });
+
+  it("constrains the model menu to the viewport and scrolls long model lists", () => {
+    expect(composeModelMenuContentStyle()).toEqual(
+      expect.objectContaining({
+        minWidth: "var(--radix-select-trigger-width)",
+        maxHeight: "min(280px, var(--radix-select-content-available-height))",
+        overflow: "hidden",
+      }),
+    );
+    expect(composeModelMenuViewportStyle()).toEqual(
+      expect.objectContaining({
+        maxHeight: "min(280px, var(--radix-select-content-available-height))",
+        overflowY: "auto",
+        overscrollBehavior: "contain",
+      }),
+    );
   });
 });

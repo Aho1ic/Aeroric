@@ -1,8 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  isTestFilePath,
-  testRunTargetsForContent,
-} from "../components/file-viewer/testRunGutter";
+import { isTestFilePath, testRunTargetsForContent } from "../components/file-viewer/testRunGutter";
 
 describe("test run gutter state", () => {
   it("recognizes common JavaScript and TypeScript test files", () => {

@@ -123,7 +123,9 @@ describe("Notification release updater", () => {
 
     await user.click(screen.getByTitle("Releases"));
     await screen.findByRole("button", { name: "Restart and update v9.9.9" });
-    expect(screen.queryByRole("button", { name: "Download update v9.9.9" })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Download update v9.9.9" }),
+    ).not.toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Restart and update v9.9.9" }));
 
@@ -155,8 +157,12 @@ describe("Notification release updater", () => {
     );
 
     await user.click(screen.getByTitle("Releases"));
-    expect(await screen.findByRole("button", { name: "Restart and update v9.9.9" })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Download update v9.9.9" })).not.toBeInTheDocument();
+    expect(
+      await screen.findByRole("button", { name: "Restart and update v9.9.9" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Download update v9.9.9" }),
+    ).not.toBeInTheDocument();
   });
 
   it("does not show install controls for releases without compatible installer assets", async () => {

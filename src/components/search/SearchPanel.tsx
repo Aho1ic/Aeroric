@@ -155,12 +155,12 @@ export function SearchPanel({
               projectPath,
               pattern: text,
               options,
-          })
-        : await invoke<TextSearchMatch[]>("search_text", {
-            projectPath,
-            query: text,
-            options,
-          });
+            })
+          : await invoke<TextSearchMatch[]>("search_text", {
+              projectPath,
+              query: text,
+              options,
+            });
       if (runId !== searchRunRef.current) return;
       setMatches(results);
     } catch (err) {

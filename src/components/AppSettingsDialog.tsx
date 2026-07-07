@@ -1,4 +1,4 @@
-import { Fragment, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 import {
   X,
   Keyboard,
@@ -54,12 +54,28 @@ const SECTION_LABEL_KEY: Record<NavSection, string> = {
   about: "appSettings.section.about",
 };
 
-function NavItemIcon({ item, size }: { item: AppSettingsNavItem; size: number }) {
+function NavItemIcon({
+  item,
+  size,
+  themeVariant,
+}: {
+  item: AppSettingsNavItem;
+  size: number;
+  themeVariant: ThemeVariant;
+}) {
   if (item.logo) {
     return (
       <img
         src={item.logo}
-        style={{ width: size, height: size, opacity: item.key === "claude" ? 1 : 0.7 }}
+        style={{
+          width: size,
+          height: size,
+          opacity: item.key === "claude" ? 1 : 0.82,
+          filter:
+            themeVariant === "dark" && item.logo === chatgptLogo
+              ? "invert(1) brightness(1.35)"
+              : "none",
+        }}
       />
     );
   }
@@ -79,6 +95,7 @@ function NavItemIcon({ item, size }: { item: AppSettingsNavItem; size: number })
 
 export function AppSettingsDialog({
   onClose,
+  initialNav = "general",
   themeVariant,
   themeMode,
   systemPrefersDark,
@@ -97,6 +114,7 @@ export function AppSettingsDialog({
   onMonoFontFamilyChange,
 }: {
   onClose: () => void;
+  initialNav?: NavKey;
   themeVariant: ThemeVariant;
   themeMode: ThemeMode;
   systemPrefersDark: boolean;
@@ -116,7 +134,11 @@ export function AppSettingsDialog({
 }) {
   const { t } = useI18n();
   const agentOptions = useAgentOptions();
-  const [activeNav, setActiveNav] = useState<NavKey>("general");
+  const [activeNav, setActiveNav] = useState<NavKey>(initialNav);
+
+  useEffect(() => {
+    setActiveNav(initialNav);
+  }, [initialNav]);
 
   function handleOverlayClick(e: React.MouseEvent) {
     if (e.target === e.currentTarget) onClose();
@@ -130,6 +152,7 @@ export function AppSettingsDialog({
       logo: option.codexLike ? chatgptLogo : claudeLogo,
       filePath: option.configFile,
       lang: option.configLang,
+      custom: option.custom,
     })),
     {
       key: ADD_AGENT_NAV_KEY,
@@ -162,42 +185,50 @@ export function AppSettingsDialog({
         <div style={{ position: "relative", zIndex: 1, display: "flex", flex: 1, minWidth: 0 }}>
           <div style={s.settingsNav}>
             <div style={s.settingsNavTitle}>{t("appSettings.title")}</div>
-            {sectionGroups.map((group, groupIndex) => (
-              <Fragment key={group.section}>
-                <div
-                  style={{
-                    ...s.settingsNavSectionLabel,
-                    ...(groupIndex === 0 ? s.settingsNavSectionLabelFirst : null),
-                  }}
-                >
-                  {t(SECTION_LABEL_KEY[group.section])}
-                </div>
-                {group.items.map((item) => (
-                  <button
-                    key={item.key}
+            <div
+              style={{
+                minHeight: 0,
+                overflowY: "auto",
+                paddingRight: 2,
+              }}
+            >
+              {sectionGroups.map((group, groupIndex) => (
+                <Fragment key={group.section}>
+                  <div
                     style={{
-                      ...s.settingsNavItem,
-                      background: activeNav === item.key ? "var(--bg-hover)" : "none",
-                      color:
-                        activeNav === item.key ? "var(--text-primary)" : "var(--text-secondary)",
-                      fontWeight: activeNav === item.key ? 600 : 500,
-                    }}
-                    onClick={() => {
-                      setActiveNav(item.key);
+                      ...s.settingsNavSectionLabel,
+                      ...(groupIndex === 0 ? s.settingsNavSectionLabelFirst : null),
                     }}
                   >
-                    <NavItemIcon item={item} size={14} />
-                    {item.label ?? t(item.labelKey ?? item.key)}
-                  </button>
-                ))}
-              </Fragment>
-            ))}
+                    {t(SECTION_LABEL_KEY[group.section])}
+                  </div>
+                  {group.items.map((item) => (
+                    <button
+                      key={item.key}
+                      style={{
+                        ...s.settingsNavItem,
+                        background: activeNav === item.key ? "var(--bg-hover)" : "none",
+                        color:
+                          activeNav === item.key ? "var(--text-primary)" : "var(--text-secondary)",
+                        fontWeight: activeNav === item.key ? 600 : 500,
+                      }}
+                      onClick={() => {
+                        setActiveNav(item.key);
+                      }}
+                    >
+                      <NavItemIcon item={item} size={14} themeVariant={themeVariant} />
+                      {item.label ?? t(item.labelKey ?? item.key)}
+                    </button>
+                  ))}
+                </Fragment>
+              ))}
+            </div>
           </div>
 
           <div style={s.settingsContent}>
             <div style={s.settingsContentHeader}>
               <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <NavItemIcon item={activeItem} size={16} />
+                <NavItemIcon item={activeItem} size={16} themeVariant={themeVariant} />
                 <span style={s.settingsContentTitle}>{activeLabel}</span>
               </div>
               <button style={s.modalCloseBtn} onClick={onClose} title={t("common.close")}>
@@ -246,9 +277,12 @@ export function AppSettingsDialog({
               <AgentConfigPanel
                 key={activeNav}
                 agentKey={activeNav as AgentKey}
+                agentLabel={activeAgentItem.label ?? activeLabel}
                 filePath={activeAgentItem.filePath!}
                 lang={activeAgentItem.lang!}
                 themeVariant={themeVariant}
+                deletable={activeAgentItem.custom === true}
+                onDeleted={() => setActiveNav("general")}
               />
             ) : (
               <GeneralPanel

@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo, useRef, type ReactNode } from "react";
 import {
   ChevronDown,
   ChevronRight,
+  Bot,
   Home,
   Moon,
   PanelLeftClose,
@@ -18,6 +19,7 @@ import { ProjectAvatar } from "./ProjectAvatar";
 import { StatusIcon } from "./StatusIcon";
 import { NotificationBell } from "./NotificationBell";
 import { useI18n } from "../i18n";
+import { OPEN_APP_SETTINGS_EVENT } from "./app-settings/types";
 import { PROJECT_RAIL_EXPANDED_WIDTH } from "./project-page/viewMode";
 import s from "../styles";
 import claudeWaveGif from "../assets/gif/claude-wave.gif";
@@ -81,10 +83,17 @@ export function getDefaultExpandedProjectIds(
   );
 }
 
-export type ProjectRailFooterAction = "backHome" | "openProject" | "notifications" | "theme";
+export type ProjectRailFooterAction =
+  | "backHome"
+  | "agentSettings"
+  | "openProject"
+  | "notifications"
+  | "theme";
 
 export function getProjectRailFooterActions(singleProjectMode: boolean): ProjectRailFooterAction[] {
-  return singleProjectMode ? [] : ["backHome", "openProject", "notifications", "theme"];
+  return singleProjectMode
+    ? []
+    : ["backHome", "agentSettings", "openProject", "notifications", "theme"];
 }
 
 export function projectTaskCountLabel(_count: number, _taskLabel: string): string | null {
@@ -403,6 +412,7 @@ export function ProjectRail({
   const { t } = useI18n();
   const [addHov, setAddHov] = useState(false);
   const [homeHov, setHomeHov] = useState(false);
+  const [agentSettingsHov, setAgentSettingsHov] = useState(false);
   const [themeHov, setThemeHov] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
   const [draggedProjectId, setDraggedProjectId] = useState<string | null>(null);
@@ -583,6 +593,12 @@ export function ProjectRail({
     </button>
   );
 
+  const openAgentSettings = () => {
+    window.dispatchEvent(
+      new CustomEvent(OPEN_APP_SETTINGS_EVENT, { detail: { initialNav: "codex" } }),
+    );
+  };
+
   if (effectiveCollapsed) {
     return (
       <div
@@ -644,6 +660,15 @@ export function ProjectRail({
             onBack,
             homeHov,
             setHomeHov,
+          )}
+
+        {!singleProjectMode &&
+          footerIconButton(
+            t("appSettings.agentSettings"),
+            <Bot size={14} strokeWidth={2.1} />,
+            openAgentSettings,
+            agentSettingsHov,
+            setAgentSettingsHov,
           )}
 
         {!singleProjectMode &&
@@ -983,6 +1008,14 @@ export function ProjectRail({
               onBack,
               homeHov,
               setHomeHov,
+            )}
+
+            {footerIconButton(
+              t("appSettings.agentSettings"),
+              <Bot size={14} strokeWidth={2.1} />,
+              openAgentSettings,
+              agentSettingsHov,
+              setAgentSettingsHov,
             )}
 
             {footerIconButton(

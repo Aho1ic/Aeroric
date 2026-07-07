@@ -147,7 +147,9 @@ describe("ProblemsPanel diagnostics change", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Run" }));
 
-    expect(await screen.findByText("Diagnostics failed: ruff: command not found")).toBeInTheDocument();
+    expect(
+      await screen.findByText("Diagnostics failed: ruff: command not found"),
+    ).toBeInTheDocument();
     expect(screen.queryByText(/Error: ruff/)).not.toBeInTheDocument();
   });
 });

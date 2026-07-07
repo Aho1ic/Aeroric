@@ -124,7 +124,9 @@ describe("DebugPanel sessions", () => {
 
     await screen.findByText("/repo/server.js");
     const debugControls = within(screen.getByRole("group", { name: "Debug controls" }));
-    expect(within(screen.getByRole("group", { name: "Sessions" })).getByText("No debug sessions yet.")).toBeInTheDocument();
+    expect(
+      within(screen.getByRole("group", { name: "Sessions" })).getByText("No debug sessions yet."),
+    ).toBeInTheDocument();
 
     await user.click(debugControls.getByRole("button", { name: "Start" }));
     expect(await screen.findByText("node output")).toBeInTheDocument();

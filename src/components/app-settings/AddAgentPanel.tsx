@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import type React from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Check, KeyRound, Plus, RefreshCw, Server } from "lucide-react";
@@ -16,10 +16,11 @@ import { Button } from "../ui/Button";
 
 const inputStyle: React.CSSProperties = {
   width: "100%",
-  padding: "8px 10px",
+  height: 30,
+  padding: "5px 10px",
   background: "var(--bg-input)",
   border: "1px solid var(--border-medium)",
-  borderRadius: 7,
+  borderRadius: 6,
   color: "var(--text-primary)",
   fontSize: 12.5,
   boxSizing: "border-box",
@@ -87,18 +88,16 @@ export function AddAgentPanel({ onSaved }: { onSaved: (agentId: string) => void 
   const [model, setModel] = useState("");
   const [models, setModels] = useState<string[]>([]);
   const [selectedModels, setSelectedModels] = useState<string[]>([]);
+  const [modelMenuOpen, setModelMenuOpen] = useState(false);
   const [detectingModels, setDetectingModels] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const modelInputRef = useRef<HTMLInputElement>(null);
 
   const generatedAgentId = useMemo(
     () => deriveAgentId(label, baseUrl, kind),
     [baseUrl, kind, label],
-  );
-  const modelListId = useMemo(
-    () => `agent-models-${generatedAgentId || "new"}`,
-    [generatedAgentId],
   );
   const nameInputId = "agent-setup-name";
   const baseUrlInputId = "agent-setup-base-url";
@@ -112,6 +111,10 @@ export function AddAgentPanel({ onSaved }: { onSaved: (agentId: string) => void 
     apiKey.trim() &&
     (selectedModels.length > 0 || model.trim()),
   );
+  const modelSuggestions = useMemo(() => {
+    const needle = model.trim().toLowerCase();
+    return models.filter((item) => !needle || item.toLowerCase().includes(needle)).slice(0, 8);
+  }, [model, models]);
 
   async function handleDetectModels() {
     if (!canDetectModels) return;
@@ -125,6 +128,7 @@ export function AddAgentPanel({ onSaved }: { onSaved: (agentId: string) => void 
       });
       setModels(detected.models);
       setSelectedModels(detected.models);
+      setModelMenuOpen(detected.models.length > 0);
       if (!model.trim() && detected.models.length > 0) {
         setModel(detected.models[0]);
       }
@@ -174,6 +178,15 @@ export function AddAgentPanel({ onSaved }: { onSaved: (agentId: string) => void 
     if (!next) return;
     setModels((prev) => (prev.includes(next) ? prev : [...prev, next]));
     setSelectedModels((prev) => (prev.includes(next) ? prev : [...prev, next]));
+    setModel("");
+    setModelMenuOpen(false);
+    window.requestAnimationFrame(() => modelInputRef.current?.focus());
+  }
+
+  function selectModelSuggestion(next: string) {
+    setModel(next);
+    setSelectedModels((prev) => (prev.includes(next) ? prev : [...prev, next]));
+    setModelMenuOpen(false);
   }
 
   return (
@@ -264,7 +277,7 @@ export function AddAgentPanel({ onSaved }: { onSaved: (agentId: string) => void 
           <div style={{ position: "relative" }}>
             <Server
               size={13}
-              style={{ position: "absolute", left: 10, top: 10, color: "var(--text-hint)" }}
+              style={{ position: "absolute", left: 10, top: 8.5, color: "var(--text-hint)" }}
             />
             <input
               id={baseUrlInputId}
@@ -288,7 +301,7 @@ export function AddAgentPanel({ onSaved }: { onSaved: (agentId: string) => void 
           <div style={{ position: "relative" }}>
             <KeyRound
               size={13}
-              style={{ position: "absolute", left: 10, top: 10, color: "var(--text-hint)" }}
+              style={{ position: "absolute", left: 10, top: 8.5, color: "var(--text-hint)" }}
             />
             <input
               id={apiKeyInputId}
@@ -312,15 +325,81 @@ export function AddAgentPanel({ onSaved }: { onSaved: (agentId: string) => void 
           {t("appSettings.agentModel")}
         </label>
         <div style={{ display: "flex", gap: 8, minWidth: 0 }}>
-          <input
-            id={modelInputId}
-            style={monoInputStyle}
-            value={model}
-            list={modelListId}
-            onChange={(event) => setModel(event.target.value)}
-            placeholder={kind === "codex" ? "gpt-5.5" : "claude-opus-4-8"}
-            spellCheck={false}
-          />
+          <div style={{ position: "relative", flex: "1 1 auto", minWidth: 0 }}>
+            <input
+              ref={modelInputRef}
+              id={modelInputId}
+              style={monoInputStyle}
+              value={model}
+              onFocus={() => setModelMenuOpen(models.length > 0)}
+              onBlur={() => window.setTimeout(() => setModelMenuOpen(false), 120)}
+              onChange={(event) => {
+                setModel(event.target.value);
+                setModelMenuOpen(models.length > 0);
+              }}
+              onKeyDown={(event) => {
+                if (event.key !== "Enter") return;
+                event.preventDefault();
+                handleAddManualModel();
+              }}
+              placeholder={kind === "codex" ? "gpt-5.5" : "claude-opus-4-8"}
+              spellCheck={false}
+            />
+            {modelMenuOpen && modelSuggestions.length > 0 && (
+              <div
+                style={{
+                  position: "absolute",
+                  left: 0,
+                  right: 0,
+                  top: "calc(100% + 6px)",
+                  zIndex: 2100,
+                  maxHeight: 184,
+                  overflowY: "auto",
+                  background: "var(--bg-card)",
+                  border: "1px solid var(--border-medium)",
+                  borderRadius: 8,
+                  boxShadow: "var(--shadow-popover)",
+                  padding: 4,
+                }}
+              >
+                {modelSuggestions.map((item) => (
+                  <button
+                    key={item}
+                    type="button"
+                    style={{
+                      width: "100%",
+                      minHeight: 28,
+                      display: "flex",
+                      alignItems: "center",
+                      padding: "5px 8px",
+                      border: "none",
+                      borderRadius: 6,
+                      background: item === model ? "var(--control-active-bg)" : "transparent",
+                      color: item === model ? "var(--control-active-fg)" : "var(--text-primary)",
+                      cursor: "pointer",
+                      fontFamily: "var(--font-mono)",
+                      fontSize: 12,
+                      textAlign: "left",
+                    }}
+                    onMouseDown={(event) => event.preventDefault()}
+                    onClick={() => selectModelSuggestion(item)}
+                    title={item}
+                  >
+                    <span
+                      style={{
+                        minWidth: 0,
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      {item}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
           <Button
             variant="outline"
             size="sm"
@@ -340,11 +419,6 @@ export function AddAgentPanel({ onSaved }: { onSaved: (agentId: string) => void 
             {t("appSettings.addModel")}
           </Button>
         </div>
-        <datalist id={modelListId}>
-          {models.map((item) => (
-            <option key={item} value={item} />
-          ))}
-        </datalist>
         <div style={{ marginTop: 5, fontSize: 11, color: "var(--text-hint)" }}>
           {models.length > 0
             ? t("appSettings.selectedModelsCount", {

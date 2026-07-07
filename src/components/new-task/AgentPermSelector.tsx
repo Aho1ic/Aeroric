@@ -1,4 +1,5 @@
 import type React from "react";
+import type { CSSProperties } from "react";
 import { useState } from "react";
 import {
   BookmarkPlus,
@@ -21,7 +22,15 @@ import claudeLogo from "../../assets/claude.svg";
 import chatgptLogo from "../../assets/chatgpt.svg";
 
 const PERMS: PermissionMode[] = ["ask", "auto_edit", "full_access"];
-export type ComposeMenu = "more" | "agent" | "permission" | "launch" | "branch" | "send" | null;
+export type ComposeMenu =
+  | "more"
+  | "agent"
+  | "permission"
+  | "launch"
+  | "branch"
+  | "model"
+  | "send"
+  | null;
 
 function agentIcon(agent: AgentType, options = [] as ReturnType<typeof useAgentOptions>): string {
   return isCodexLikeAgent(agent, options) ? chatgptLogo : claudeLogo;
@@ -55,7 +64,7 @@ export function composePermissionLabel(mode: PermissionMode) {
 }
 
 export function composeControlOrder(): string[] {
-  return ["more", "agent", "permission", "launch", "branch", "send"];
+  return ["more", "agent", "permission", "launch", "branch", "model", "send"];
 }
 
 export function nextComposeMenuState(
@@ -64,6 +73,23 @@ export function nextComposeMenuState(
   open: boolean,
 ): ComposeMenu {
   return open ? target : null;
+}
+
+export function composeModelMenuContentStyle(): CSSProperties {
+  return {
+    ...s.toolbarMenuContent,
+    minWidth: "var(--radix-select-trigger-width)",
+    maxHeight: "min(280px, var(--radix-select-content-available-height))",
+    overflow: "hidden",
+  };
+}
+
+export function composeModelMenuViewportStyle(): CSSProperties {
+  return {
+    maxHeight: "min(280px, var(--radix-select-content-available-height))",
+    overflowY: "auto",
+    overscrollBehavior: "contain",
+  };
 }
 
 function ModeMenuItem({
@@ -126,6 +152,7 @@ export function AgentPermSelector({
   sendShortcutKeys,
   compact = false,
   launchControls,
+  modelControls,
   openMenu: controlledOpenMenu,
   onOpenMenuChange,
   onSetAgent,
@@ -144,6 +171,7 @@ export function AgentPermSelector({
   sendShortcutKeys: string[];
   compact?: boolean;
   launchControls?: React.ReactNode;
+  modelControls?: React.ReactNode;
   openMenu?: ComposeMenu;
   onOpenMenuChange?: (menu: ComposeMenu) => void;
   onSetAgent: (agent: AgentType) => void;
@@ -306,6 +334,8 @@ export function AgentPermSelector({
       </div>
 
       <div style={s.toolbarSpacer} />
+
+      {modelControls}
 
       <div style={s.sendSplit}>
         <button

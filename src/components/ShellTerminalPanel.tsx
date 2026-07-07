@@ -136,7 +136,7 @@ const ShellTerminalInstance = forwardRef<
     term.open(container);
     const disposeInputFix = attachMacWebKitShiftInputFix(term);
     loadWebglAddon(term);
-    const writer = createSmartWriter(term);
+    const writer = createSmartWriter(term, () => themeVariantRef.current);
     const disposeMacWebKitGuard = attachMacWebKitTerminalGuard({ term, container, writer });
 
     const fit = () => {
@@ -172,10 +172,12 @@ const ShellTerminalInstance = forwardRef<
 
     const disposeSmartCopy = attachSmartCopy(term, {
       onPaste: (text) => {
+        writer.pauseForUserInput();
         invoke("send_input", { taskId: shellId, data: text }).catch(() => {});
       },
     });
     const linuxIME = attachLinuxIMEFix(term, (data) => {
+      writer.pauseForUserInput();
       invoke("send_input", { taskId: shellId, data }).catch(() => {});
     });
     const disposeOnData = { dispose: () => linuxIME.dispose() };

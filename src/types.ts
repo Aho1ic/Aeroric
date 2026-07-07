@@ -195,6 +195,7 @@ export interface Task {
   name?: string;
   prompt: string;
   agent: AgentType;
+  selectedModel?: string;
   permissionMode: PermissionMode;
   status: TaskStatus;
   createdAt: number;

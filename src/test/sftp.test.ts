@@ -6,10 +6,13 @@ import {
 } from "../components/sftp/SftpPreview";
 import {
   defaultSftpPathForEndpoint,
+  formatSftpTransferPercent,
   flattenSftpTreeEntries,
   filterSftpTreeEntriesByName,
+  groupSftpSshConnections,
   normalizeSftpSortPreference,
   pruneExpandedPathsForFolderSelection,
+  sftpProgressRingBackground,
   sftpBreadcrumbSegments,
   sftpClickAction,
   sftpDropOperation,
@@ -66,6 +69,70 @@ describe("sftp panel helpers", () => {
         "/repo",
       ),
     ).toBe("/srv/app");
+  });
+
+  it("groups SFTP SSH choices by saved SSH connection group", () => {
+    const groups = groupSftpSshConnections(
+      [
+        {
+          id: "prod-a",
+          name: "Prod A",
+          group: "Production",
+          host: "prod-a.example.com",
+          port: 22,
+          username: "root",
+          createdAt: 1,
+        },
+        {
+          id: "dev-a",
+          name: "Dev A",
+          group: "Development",
+          host: "dev-a.example.com",
+          port: 22,
+          username: "dev",
+          createdAt: 2,
+        },
+        {
+          id: "ungrouped",
+          name: "Ungrouped",
+          host: "box.example.com",
+          port: 22,
+          username: "me",
+          createdAt: 3,
+        },
+        {
+          id: "prod-b",
+          name: "Prod B",
+          group: "Production",
+          host: "prod-b.example.com",
+          port: 22,
+          username: "root",
+          createdAt: 4,
+        },
+      ],
+      "Default group",
+    );
+
+    expect(groups.map((group) => group.label)).toEqual([
+      "Production",
+      "Development",
+      "Default group",
+    ]);
+    expect(groups[0].connections.map((connection) => connection.name)).toEqual([
+      "Prod A",
+      "Prod B",
+    ]);
+    expect(groups[2].connections.map((connection) => connection.name)).toEqual(["Ungrouped"]);
+  });
+
+  it("formats SFTP transfer percentages and ring backgrounds from completed work", () => {
+    expect(formatSftpTransferPercent(0, 4)).toBe(0);
+    expect(formatSftpTransferPercent(1, 4)).toBe(25);
+    expect(formatSftpTransferPercent(9, 4)).toBe(100);
+    expect(formatSftpTransferPercent(1, 0)).toBe(0);
+    expect(sftpProgressRingBackground(25)).toContain("25%");
+    expect(sftpProgressRingBackground(25)).toContain("var(--accent)");
+    expect(sftpProgressRingBackground(25, "var(--danger)")).toContain("var(--danger)");
   });
 
   it("selects folders on first click and toggles them on the second selected click", () => {

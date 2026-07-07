@@ -75,11 +75,16 @@ export interface AppSettingsNavItem {
   logo?: string;
   filePath?: string;
   lang?: string;
+  custom?: boolean;
 }
 
 export const APP_SETTINGS_CHANGED_EVENT = "aeroric:app-settings-changed";
 export const SKILL_HUB_CHANGED_EVENT = "aeroric:skill-hub-changed";
 export const OPEN_APP_SETTINGS_EVENT = "aeroric:open-app-settings";
+
+export interface OpenAppSettingsDetail {
+  initialNav?: NavKey;
+}
 
 /**
  * `SKILL_HUB_CHANGED_EVENT` 可携带 `detail.projects`（来自后端 `set_skill_hub_path` 的完整列表），

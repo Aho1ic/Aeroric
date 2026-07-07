@@ -29,6 +29,7 @@ import {
 import { DEFAULT_UI_FONT, DEFAULT_MONO_FONT } from "./types";
 import type { FontFamily } from "./types";
 import { WelcomePage } from "./components/WelcomePage";
+import { AppSettingsEventHost } from "./components/AppSettingsEventHost";
 import type { SshProjectInput } from "./components/ssh/SshProjectDialog";
 import { deriveRemoteProjectName } from "./components/ssh/SshProjectDialog";
 import { selectDefaultCondaEnvironment } from "./components/file-viewer/run";
@@ -554,7 +555,10 @@ function App() {
     setProjects((prev) => {
       const next = existing
         ? prev.map((p) => (p.path === path ? project : p))
-        : normalizeProjectOrder([project, ...prev]).map((p, index) => ({ ...p, orderIndex: index }));
+        : normalizeProjectOrder([project, ...prev]).map((p, index) => ({
+            ...p,
+            orderIndex: index,
+          }));
       persistProjects(next, showToast, formatSaveProjectsError);
       return next;
     });
@@ -592,7 +596,10 @@ function App() {
     setProjects((prev) => {
       const next = existing
         ? prev.map((p) => (p.id === project.id ? project : p))
-        : normalizeProjectOrder([project, ...prev]).map((p, index) => ({ ...p, orderIndex: index }));
+        : normalizeProjectOrder([project, ...prev]).map((p, index) => ({
+            ...p,
+            orderIndex: index,
+          }));
       persistProjects(next, showToast, formatSaveProjectsError);
       return next;
     });
@@ -629,6 +636,7 @@ function App() {
       projectPath,
       prompt: task.prompt,
       agent: task.agent,
+      selectedModel: task.selectedModel,
       permissionMode: task.permissionMode,
       images,
       texts,
@@ -671,12 +679,14 @@ function App() {
       immediate,
       launchMode,
       baseBranch,
+      selectedModel,
     }: {
       prompt: string;
       agent: AgentType;
-      permissionMode: PermissionMode;
       images: string[];
       texts: string[];
+      permissionMode: PermissionMode;
+      selectedModel?: string;
       immediate: boolean;
       launchMode: "local" | "worktree";
       baseBranch: string;
@@ -717,6 +727,7 @@ function App() {
       prompt,
       name: prompt.trim() ? undefined : agentDisplayLabel(agent),
       agent,
+      selectedModel,
       permissionMode,
       status: immediate ? "pending" : "todo",
       createdAt: Date.now(),
@@ -924,6 +935,7 @@ function App() {
       sessionId,
       prompt: task.prompt,
       permissionMode: task.permissionMode,
+      selectedModel: task.selectedModel,
       cols: tm.terminalSizeRef.current.cols,
       rows: tm.terminalSizeRef.current.rows,
       onOutput: tm.createOutputChannel(task.id),
@@ -1304,10 +1316,7 @@ function App() {
     () => [...projects].sort((a, b) => b.lastOpenedAt - a.lastOpenedAt),
     [projects],
   );
-  const railProjects = useMemo(
-    () => sortProjectsForRail(projects),
-    [projects],
-  );
+  const railProjects = useMemo(() => sortProjectsForRail(projects), [projects]);
   const mountedProjects = useMemo(
     () =>
       mountedProjectIds
@@ -1486,6 +1495,24 @@ function App() {
           />
         </div>
       )}
+      <AppSettingsEventHost
+        themeVariant={themeVariant}
+        themeMode={themeMode}
+        systemPrefersDark={systemPrefersDark}
+        onThemeModeChange={setThemeMode}
+        terminalFontSize={terminalFontSize}
+        onTerminalFontSizeChange={setTerminalFontSize}
+        taskDisplayWindow={taskDisplayWindow}
+        onTaskDisplayWindowChange={setTaskDisplayWindow}
+        attentionBadge={attentionBadge}
+        onAttentionBadgeChange={setAttentionBadge}
+        sftpLocalDefaultPath={sftpLocalDefaultPath}
+        onSftpLocalDefaultPathChange={setSftpLocalDefaultPath}
+        uiFontFamily={uiFontFamily}
+        onUiFontFamilyChange={setUiFontFamily}
+        monoFontFamily={monoFontFamily}
+        onMonoFontFamilyChange={setMonoFontFamily}
+      />
     </div>
   );
 }

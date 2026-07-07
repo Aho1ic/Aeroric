@@ -5,10 +5,7 @@ export const FILE_VIEWER_COMMANDS = ["findReferences", "renameSymbol", "quickFix
 export type FileViewerCommand = (typeof FILE_VIEWER_COMMANDS)[number];
 
 export function isFileViewerCommand(value: unknown): value is FileViewerCommand {
-  return (
-    typeof value === "string" &&
-    FILE_VIEWER_COMMANDS.includes(value as FileViewerCommand)
-  );
+  return typeof value === "string" && FILE_VIEWER_COMMANDS.includes(value as FileViewerCommand);
 }
 
 export function dispatchFileViewerCommand(command: FileViewerCommand): void {

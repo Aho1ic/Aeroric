@@ -4,6 +4,10 @@ import { I18nProvider } from "../i18n";
 import type { Project, Task } from "../types";
 import { ProjectRail } from "../components/ProjectRail";
 
+vi.mock("../components/NotificationBell", () => ({
+  NotificationBell: () => null,
+}));
+
 function project(id: string, name: string, orderIndex: number): Project {
   return {
     id,
@@ -15,6 +19,43 @@ function project(id: string, name: string, orderIndex: number): Project {
 }
 
 describe("ProjectRail project dragging", () => {
+  it("opens the agent settings section from the project rail footer", () => {
+    const listener = vi.fn();
+    window.addEventListener("aeroric:open-app-settings", listener);
+
+    render(
+      <I18nProvider>
+        <ProjectRail
+          projects={[project("p1", "Alpha", 0)]}
+          allTasks={[] as Task[]}
+          activeProjectId="p1"
+          selectedTaskId={null}
+          isNewTask={false}
+          onSwitch={vi.fn()}
+          onOpen={vi.fn()}
+          onBack={vi.fn()}
+          onNewTask={vi.fn()}
+          onSelectTask={vi.fn()}
+          onDeleteTask={vi.fn()}
+          onToggleTaskStar={vi.fn()}
+          onRunTodo={vi.fn()}
+          onReorderProjects={vi.fn()}
+          themeVariant="light"
+          onToggleTheme={vi.fn()}
+        />
+      </I18nProvider>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Agent settings" }));
+
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(listener.mock.calls[0][0]).toMatchObject({
+      detail: { initialNav: "codex" },
+    });
+
+    window.removeEventListener("aeroric:open-app-settings", listener);
+  });
+
   it("does not reorder projects when dragging from the project name area", () => {
     const onReorderProjects = vi.fn();
     render(

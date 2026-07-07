@@ -114,6 +114,10 @@ export function RunningView({
   const codexLike = isCodexLikeAgent(task.agent);
   const resumeSessionId = codexLike ? task.codexSessionId : task.claudeSessionId;
   const restoreState = getRestoreState?.() ?? {};
+  const currentAgentLabel = agentDisplayLabel(task.agent);
+  const currentAgentBadge = task.selectedModel
+    ? `${currentAgentLabel} · ${task.selectedModel}`
+    : currentAgentLabel;
 
   const { snapshot: usageSnapshot } = useUsageSnapshot(visible && ENABLE_USAGE_INSIGHTS);
 
@@ -457,19 +461,21 @@ export function RunningView({
           flexShrink: 0,
         }}
       >
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: 6,
-            fontSize: 11,
-            color: "var(--text-muted)",
-          }}
-        >
-          <span>
-            {task.agent === "claude" ? "✦" : "⬡"} {agentDisplayLabel(task.agent)} ·{" "}
-            {permissionModeLabel(task.permissionMode, task.agent)}
+        <div style={s.runMetaRow}>
+          <span style={s.runAgentBadge} title={currentAgentBadge}>
+            <span>{task.agent === "claude" ? "✦" : "⬡"}</span>
+            <span
+              style={{
+                minWidth: 0,
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
+              }}
+            >
+              {currentAgentBadge}
+            </span>
           </span>
+          <span style={s.runMetaText}>{permissionModeLabel(task.permissionMode, task.agent)}</span>
           {ENABLE_USAGE_INSIGHTS &&
             usageSnapshot &&
             (task.agent === "claude"

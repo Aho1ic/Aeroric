@@ -143,8 +143,9 @@ function sqlTokenColor(kind: NonNullable<ReturnType<typeof sqlTokenKind>>): stri
 
 function renderSqlTokens(sql: string): ReactNode[] {
   const tokens =
-    sql.match(/--[^\n]*|'(?:''|[^'])*'|"(?:\\"|[^"])*"|\b\d+(?:\.\d+)?\b|\b[A-Za-z_][\w$]*\b|\s+|./g) ??
-    [];
+    sql.match(
+      /--[^\n]*|'(?:''|[^'])*'|"(?:\\"|[^"])*"|\b\d+(?:\.\d+)?\b|\b[A-Za-z_][\w$]*\b|\s+|./g,
+    ) ?? [];
   return tokens.map((token, index) => {
     const kind = sqlTokenKind(token);
     if (!kind) return token;
@@ -8413,7 +8414,9 @@ export function DatabaseView({
         ) : workspaceMode === "table-info" && selectedDbxInfoObject ? (
           <div style={s.databaseTableInfoRoot}>
             <div style={s.databaseTableInfoHeader}>
-              <span style={{ position: "relative", display: "flex", alignItems: "center", flex: 1 }}>
+              <span
+                style={{ position: "relative", display: "flex", alignItems: "center", flex: 1 }}
+              >
                 <Search
                   aria-hidden="true"
                   size={14}

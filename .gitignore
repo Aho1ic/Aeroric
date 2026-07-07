@@ -55,3 +55,6 @@ bump-version.sh
 vite.config.js
 vite.config.d.ts
 .codex
+
+# Claude Code skills lock (local tooling artifact)
+skills-lock.json

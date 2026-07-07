@@ -479,6 +479,37 @@ fn build_codex_cmd(agent_bin: &str, permission_mode: &str) -> CommandBuilder {
     c
 }
 
+fn toml_table_key(value: &str) -> String {
+    format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
+}
+
+fn codex_project_trust_override(project_path: &str) -> String {
+    format!(
+        "projects.{}.trust_level=\"trusted\"",
+        toml_table_key(project_path)
+    )
+}
+
+fn normalized_selected_model(selected_model: Option<&str>) -> Option<String> {
+    selected_model
+        .map(str::trim)
+        .filter(|model| !model.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn add_codex_launch_args(
+    cmd: &mut CommandBuilder,
+    project_path: &str,
+    selected_model: Option<&str>,
+) {
+    cmd.arg("-c");
+    cmd.arg(codex_project_trust_override(project_path));
+    if let Some(model) = normalized_selected_model(selected_model) {
+        cmd.arg("-m");
+        cmd.arg(model);
+    }
+}
+
 // ── Tauri 命令 ───────────────────────────────────────────────────────────────
 
 #[tauri::command]
@@ -492,6 +523,7 @@ pub async fn run_task(
     permission_mode: String,
     images: Option<Vec<String>>,
     texts: Option<Vec<String>>,
+    selected_model: Option<String>,
     cols: Option<u16>,
     rows: Option<u16>,
     on_output: Channel<String>,
@@ -558,6 +590,7 @@ pub async fn run_task(
     let launch = crate::app_settings::get_agent_launch_spec(&agent);
     let agent_bin = launch.program.clone();
     let is_codex = crate::app_settings::is_codex_like_agent(&agent);
+    let selected_model = normalized_selected_model(selected_model.as_deref());
 
     // 版本统一走全局探测（带缓存），判断是否支持 --session-id。
     // 缓存未命中时 *_version_gte 会启子进程探测，故放进 spawn_blocking 避免阻塞 async runtime。
@@ -588,6 +621,7 @@ pub async fn run_task(
 
     let mut cmd = if is_codex {
         let mut c = build_codex_cmd(&agent_bin, &permission_mode);
+        add_codex_launch_args(&mut c, &project_path, selected_model.as_deref());
         // Codex 对非 managed 的 command hook 默认要求 trust,Aeroric 注入的是新 hash 会被
         // skip;由 Aeroric 注入、来源可信,这里免 trust 直接运行。必须在 `--`/prompt 之前。
         if use_hooks {
@@ -622,6 +656,11 @@ pub async fn run_task(
     };
     cmd.cwd(&project_path);
     setup_env(&mut cmd);
+    if is_codex {
+        if let Some(model) = selected_model.as_deref() {
+            cmd.env("AERORIC_AGENT_MODEL", model);
+        }
+    }
     if use_hooks {
         setup_aeroric_env(&mut cmd, &task_id, &agent);
     }
@@ -796,6 +835,7 @@ pub async fn resume_task(
     session_id: String,
     _prompt: String,
     permission_mode: String,
+    selected_model: Option<String>,
     cols: Option<u16>,
     rows: Option<u16>,
     on_output: Channel<String>,
@@ -817,6 +857,7 @@ pub async fn resume_task(
 
     let launch = crate::app_settings::get_agent_launch_spec(&agent);
     let agent_bin = launch.program.clone();
+    let selected_model = normalized_selected_model(selected_model.as_deref());
     // hook 可信时会话发现/状态由 event_watcher 驱动,跳过轮询 watcher;否则回退,
     // 且不注入 AERORIC_* 守卫变量,避免旧版但已安装 hook 的 agent 与轮询路径并行重复
     // 上报。版本统一走全局带缓存的探测。
@@ -831,6 +872,7 @@ pub async fn resume_task(
     let is_codex = crate::app_settings::is_codex_like_agent(&agent);
     let mut cmd = if is_codex {
         let mut c = build_codex_cmd(&agent_bin, &permission_mode);
+        add_codex_launch_args(&mut c, &project_path, selected_model.as_deref());
         // Aeroric 注入的 hook 默认未信任会被 Codex skip;来源可信,免 trust 直接运行。
         if use_hooks {
             c.arg("--dangerously-bypass-hook-trust");
@@ -854,6 +896,11 @@ pub async fn resume_task(
     };
     cmd.cwd(&project_path);
     setup_env(&mut cmd);
+    if is_codex {
+        if let Some(model) = selected_model.as_deref() {
+            cmd.env("AERORIC_AGENT_MODEL", model);
+        }
+    }
     if use_hooks {
         setup_aeroric_env(&mut cmd, &task_id, &agent);
     }
@@ -1022,4 +1069,27 @@ pub async fn kill_shell(
     }
     task_manager.remove_pty_handles(&shell_id);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn codex_project_trust_override_quotes_project_path() {
+        assert_eq!(
+            codex_project_trust_override("/tmp/has space/quote\"path"),
+            "projects.\"/tmp/has space/quote\\\"path\".trust_level=\"trusted\""
+        );
+    }
+
+    #[test]
+    fn selected_model_is_trimmed_and_optional() {
+        assert_eq!(
+            normalized_selected_model(Some("  gpt-5.5  ")),
+            Some("gpt-5.5".to_string())
+        );
+        assert_eq!(normalized_selected_model(Some("  ")), None);
+        assert_eq!(normalized_selected_model(None), None);
+    }
 }

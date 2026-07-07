@@ -14,11 +14,7 @@ import {
 } from "lucide-react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { invoke } from "@tauri-apps/api/core";
-import type {
-  NotificationItem,
-  ReleaseInstallResult,
-  ReleaseUpdatePrepareResult,
-} from "../types";
+import type { NotificationItem, ReleaseInstallResult, ReleaseUpdatePrepareResult } from "../types";
 import { useNotifications } from "../hooks/useNotifications";
 import { useI18n } from "../i18n";
 import s from "../styles";

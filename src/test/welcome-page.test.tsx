@@ -62,8 +62,7 @@ function renderWelcome(overrides: Partial<React.ComponentProps<typeof WelcomePag
     onTaskDisplayWindowChange: overrides.onTaskDisplayWindowChange ?? vi.fn(),
     attentionBadge: overrides.attentionBadge ?? true,
     onAttentionBadgeChange: overrides.onAttentionBadgeChange ?? vi.fn(),
-    sftpLocalDefaultPath:
-      overrides.sftpLocalDefaultPath ?? "/Users/macbook/Downloads/同步空间",
+    sftpLocalDefaultPath: overrides.sftpLocalDefaultPath ?? "/Users/macbook/Downloads/同步空间",
     onSftpLocalDefaultPathChange: overrides.onSftpLocalDefaultPathChange ?? vi.fn(),
     uiFontFamily: overrides.uiFontFamily ?? "sans-serif",
     onUiFontFamilyChange: overrides.onUiFontFamilyChange ?? vi.fn(),

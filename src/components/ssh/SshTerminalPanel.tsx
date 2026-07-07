@@ -225,14 +225,16 @@ export const SshTerminalPanel = forwardRef<SshTerminalPanelHandle, Props>(functi
     term.open(container);
     const disposeInputFix = attachMacWebKitShiftInputFix(term);
     loadWebglAddon(term);
-    const writer = createSmartWriter(term);
+    const writer = createSmartWriter(term, () => themeVariant);
     const disposeMacWebKitGuard = attachMacWebKitTerminalGuard({ term, container, writer });
     const disposeSmartCopy = attachSmartCopy(term, {
       onPaste: (text) => {
+        writer.pauseForUserInput();
         invoke("send_input", { taskId: activeSession.shellId, data: text }).catch(console.error);
       },
     });
     const input = attachLinuxIMEFix(term, (data) => {
+      writer.pauseForUserInput();
       invoke("send_input", { taskId: activeSession.shellId, data }).catch(console.error);
     });
 

@@ -49,8 +49,9 @@ describe("lsp outline state", () => {
       selectionRange: { start: { line: 2, character: 11 }, end: { line: 2, character: 17 } },
     });
 
-    expect(activeSymbolBreadcrumbs([render, app], { line: 4, column: 8 }).map((item) => item.name))
-      .toEqual(["App", "render"]);
+    expect(
+      activeSymbolBreadcrumbs([render, app], { line: 4, column: 8 }).map((item) => item.name),
+    ).toEqual(["App", "render"]);
     expect(outlineSymbolDepth(render, [app, render])).toBe(2);
   });
 

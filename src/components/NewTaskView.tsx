@@ -1,6 +1,7 @@
-import { useState, useRef, useEffect, useMemo } from "react";
+import { useState, useRef, useEffect, useMemo, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { TriangleAlert, Sparkles } from "lucide-react";
+import * as Select from "@radix-ui/react-select";
+import { ChevronDown, Cpu, Sparkles, TriangleAlert } from "lucide-react";
 import type { Project, AgentType, PermissionMode } from "../types";
 import { isRemoteProject } from "../types";
 import { agentDisplayLabel, isCodexLikeAgent } from "../agents";
@@ -16,7 +17,12 @@ import {
 import { PromptEditor, usePromptEditor, type PromptEditorContent } from "./new-task/PromptEditor";
 import { ImageAttachments } from "./new-task/ImageAttachments";
 import { TextAttachments, type PastedText } from "./new-task/TextAttachments";
-import { AgentPermSelector, type ComposeMenu } from "./new-task/AgentPermSelector";
+import {
+  AgentPermSelector,
+  composeModelMenuContentStyle,
+  composeModelMenuViewportStyle,
+  type ComposeMenu,
+} from "./new-task/AgentPermSelector";
 import { LaunchModeSelector, type LaunchMode } from "./new-task/LaunchModeSelector";
 import { buildPromptWithTaskModes, shouldShowInstructionsBanner } from "./new-task/goalMode";
 import { useI18n } from "../i18n";
@@ -46,9 +52,14 @@ export interface NewTaskDraft {
   pastedTexts?: PastedText[];
   launchMode?: LaunchMode;
   baseBranch?: string;
+  selectedModel?: string;
 }
 
 type CrossProjectFileMap = Map<string, FileEntry[]>;
+
+interface AgentModels {
+  models: string[];
+}
 
 function parseFileEntry(f: string): FileEntry {
   const parts = f.split("/");
@@ -85,6 +96,7 @@ export function NewTaskView({
     immediate: boolean;
     launchMode: LaunchMode;
     baseBranch: string;
+    selectedModel?: string;
   }) => void;
   onStartTerminal?: () => void;
   initialDraft?: NewTaskDraft | null;
@@ -104,6 +116,11 @@ export function NewTaskView({
   );
   const [baseBranch, setBaseBranch] = useState<string>(initialDraft?.baseBranch ?? "");
   const [composeOpenMenu, setComposeOpenMenu] = useState<ComposeMenu>(null);
+  const [availableModels, setAvailableModels] = useState<string[]>([]);
+  const [selectedModel, setSelectedModel] = useState<string>(initialDraft?.selectedModel ?? "");
+  const [modelsLoading, setModelsLoading] = useState(false);
+  const [modelsError, setModelsError] = useState<string | null>(null);
+  const modelRequestIdRef = useRef(0);
 
   const [allFiles, setAllFiles] = useState<FileEntry[]>([]);
   const [filesLoading, setFilesLoading] = useState(false);
@@ -154,6 +171,7 @@ export function NewTaskView({
     pastedTexts,
     launchMode,
     baseBranch,
+    selectedModel,
   });
   useEffect(() => {
     draftDataRef.current = {
@@ -165,8 +183,19 @@ export function NewTaskView({
       pastedTexts,
       launchMode,
       baseBranch,
+      selectedModel,
     };
-  }, [agent, permMode, planMode, goalMode, pastedImages, pastedTexts, launchMode, baseBranch]);
+  }, [
+    agent,
+    permMode,
+    planMode,
+    goalMode,
+    pastedImages,
+    pastedTexts,
+    launchMode,
+    baseBranch,
+    selectedModel,
+  ]);
   useEffect(() => {
     return () => {
       if (!onCacheDraft) return;
@@ -195,6 +224,7 @@ export function NewTaskView({
         pastedTexts: data.pastedTexts,
         launchMode: data.launchMode,
         baseBranch: data.baseBranch,
+        selectedModel: data.selectedModel,
       });
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -217,6 +247,47 @@ export function NewTaskView({
     window.addEventListener("aeroric:app-settings-changed", loadSendShortcut);
     return () => window.removeEventListener("aeroric:app-settings-changed", loadSendShortcut);
   }, []);
+
+  const loadAgentModels = useCallback(
+    (targetAgent: AgentType) => {
+      if (!isCodexLikeAgent(targetAgent, agentOptions)) {
+        setAvailableModels([]);
+        setSelectedModel("");
+        setModelsError(null);
+        setModelsLoading(false);
+        return;
+      }
+      const requestId = modelRequestIdRef.current + 1;
+      modelRequestIdRef.current = requestId;
+      setModelsLoading(true);
+      setModelsError(null);
+      invoke<AgentModels>("list_agent_models", { agent: targetAgent })
+        .then((result) => {
+          if (modelRequestIdRef.current !== requestId) return;
+          setAvailableModels(result.models);
+          setSelectedModel((current) => {
+            if (current && result.models.includes(current)) return current;
+            return result.models[0] ?? "";
+          });
+        })
+        .catch((error: unknown) => {
+          if (modelRequestIdRef.current !== requestId) return;
+          setAvailableModels([]);
+          setSelectedModel("");
+          setModelsError(error instanceof Error ? error.message : String(error));
+        })
+        .finally(() => {
+          if (modelRequestIdRef.current === requestId) {
+            setModelsLoading(false);
+          }
+        });
+    },
+    [agentOptions],
+  );
+
+  useEffect(() => {
+    loadAgentModels(agent);
+  }, [agent, loadAgentModels]);
 
   // Load default agent and permission mode from project config when project changes
   useEffect(() => {
@@ -416,6 +487,7 @@ export function NewTaskView({
       immediate: true,
       launchMode: "local",
       baseBranch: "",
+      selectedModel: isCodexLikeAgent(agent, agentOptions) ? selectedModel || undefined : undefined,
     });
   }
 
@@ -437,6 +509,7 @@ export function NewTaskView({
       immediate,
       launchMode,
       baseBranch,
+      selectedModel: isCodexLikeAgent(agent, agentOptions) ? selectedModel || undefined : undefined,
     });
     editorHandle.clear();
     setIsEmpty(true);
@@ -647,6 +720,107 @@ export function NewTaskView({
                     onSetBaseBranch={setBaseBranch}
                   />
                 </div>
+              ) : null
+            }
+            modelControls={
+              isCodexLikeAgent(agent, agentOptions) ? (
+                <Select.Root
+                  value={selectedModel || "__none__"}
+                  open={composeOpenMenu === "model"}
+                  onOpenChange={(open) => {
+                    setComposeOpenMenu(open ? "model" : null);
+                    if (open) loadAgentModels(agent);
+                  }}
+                  onValueChange={(value) => {
+                    if (!value.startsWith("__")) {
+                      setSelectedModel(value);
+                    }
+                    setComposeOpenMenu(null);
+                  }}
+                >
+                  <Select.Trigger
+                    style={{
+                      ...(compactControls ? s.toolbarBtnIconOnly : s.toolbarBtn),
+                      maxWidth: compactControls ? undefined : 180,
+                      minHeight: compactControls ? 24 : 24,
+                      height: 24,
+                      padding: compactControls ? 0 : "2px 7px",
+                    }}
+                    aria-label={t("newTask.model")}
+                    title={modelsError || selectedModel || t("newTask.model")}
+                    disabled={modelsLoading && availableModels.length === 0}
+                  >
+                    <Cpu size={14} strokeWidth={2} color="var(--usage-codex)" />
+                    {!compactControls && (
+                      <span
+                        style={{
+                          overflow: "hidden",
+                          textOverflow: "ellipsis",
+                          whiteSpace: "nowrap",
+                          minWidth: 0,
+                        }}
+                      >
+                        {modelsLoading && !selectedModel
+                          ? t("newTask.modelsLoading")
+                          : selectedModel || t("newTask.modelAuto")}
+                      </span>
+                    )}
+                    {!compactControls && (
+                      <Select.Icon>
+                        <ChevronDown size={12} strokeWidth={2.5} style={{ opacity: 0.58 }} />
+                      </Select.Icon>
+                    )}
+                  </Select.Trigger>
+                  <Select.Portal>
+                    <Select.Content
+                      position="popper"
+                      side="bottom"
+                      align="end"
+                      sideOffset={6}
+                      collisionPadding={8}
+                      style={composeModelMenuContentStyle()}
+                    >
+                      <Select.Viewport style={composeModelMenuViewportStyle()}>
+                        {modelsLoading && availableModels.length === 0 ? (
+                          <Select.Item value="__loading__" disabled style={s.toolbarMenuItem}>
+                            <Select.ItemText>{t("newTask.modelsLoading")}</Select.ItemText>
+                          </Select.Item>
+                        ) : modelsError ? (
+                          <Select.Item value="__error__" disabled style={s.toolbarMenuItem}>
+                            <Select.ItemText>{t("newTask.modelsUnavailable")}</Select.ItemText>
+                          </Select.Item>
+                        ) : availableModels.length === 0 ? (
+                          <Select.Item value="__empty__" disabled style={s.toolbarMenuItem}>
+                            <Select.ItemText>{t("newTask.modelsUnavailable")}</Select.ItemText>
+                          </Select.Item>
+                        ) : (
+                          availableModels.map((model) => (
+                            <Select.Item
+                              key={model}
+                              value={model}
+                              style={s.toolbarMenuItem}
+                              onFocus={(e) => {
+                                e.currentTarget.style.background = "var(--accent-subtle)";
+                              }}
+                              onBlur={(e) => {
+                                e.currentTarget.style.background = "transparent";
+                              }}
+                              onMouseEnter={(e) => {
+                                e.currentTarget.style.background = "var(--accent-subtle)";
+                              }}
+                              onMouseLeave={(e) => {
+                                e.currentTarget.style.background = "transparent";
+                              }}
+                            >
+                              <Cpu size={13} strokeWidth={2} color="var(--text-muted)" />
+                              <Select.ItemText>{model}</Select.ItemText>
+                            </Select.Item>
+                          ))
+                        )}
+                      </Select.Viewport>
+                    </Select.Content>
+                  </Select.Portal>
+                </Select.Root>
               ) : null
             }
             onSetAgent={setAgent}

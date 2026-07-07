@@ -508,6 +508,14 @@ describe("terminal input fixes", () => {
 
     textarea.dispatchEvent(new CompositionEvent("compositionstart", { data: "" }));
     textarea.dispatchEvent(new CompositionEvent("compositionupdate", { data: "shi'de" }));
+    textarea.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: " ",
+        code: "Space",
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
     textarea.dispatchEvent(new CompositionEvent("compositionend", { data: "shi'de" }));
     vi.advanceTimersByTime(80);
     const beforeInput = new InputEvent("beforeinput", {
@@ -551,6 +559,14 @@ describe("terminal input fixes", () => {
 
     textarea.dispatchEvent(new CompositionEvent("compositionstart", { data: "" }));
     textarea.dispatchEvent(new CompositionEvent("compositionupdate", { data: "shi'de" }));
+    textarea.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: " ",
+        code: "Space",
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
     textarea.dispatchEvent(new CompositionEvent("compositionend", { data: "shi'de" }));
     vi.advanceTimersByTime(80);
     textarea.dispatchEvent(
@@ -654,6 +670,14 @@ describe("terminal input fixes", () => {
 
     textarea.dispatchEvent(new CompositionEvent("compositionstart", { data: "" }));
     textarea.dispatchEvent(new CompositionEvent("compositionupdate", { data: "shi'de" }));
+    textarea.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: " ",
+        code: "Space",
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
     textarea.dispatchEvent(new CompositionEvent("compositionend", { data: "shi'de" }));
     textarea.dispatchEvent(
       new InputEvent("beforeinput", {
@@ -740,13 +764,12 @@ describe("terminal input fixes", () => {
     textarea.dispatchEvent(new CompositionEvent("compositionstart", { data: "" }));
     textarea.dispatchEvent(new CompositionEvent("compositionupdate", { data: "ye's" }));
     textarea.dispatchEvent(new CompositionEvent("compositionend", { data: "ye's" }));
-    vi.advanceTimersByTime(150);
 
     expect(sent).toEqual(["yes"]);
     vi.useRealTimers();
   });
 
-  it("commits romanized text within 100ms when switching IME to English", async () => {
+  it("commits normalized pinyin immediately when switching IME to English", async () => {
     vi.useFakeTimers();
     vi.resetModules();
     vi.doMock("../platform", () => ({
@@ -771,15 +794,130 @@ describe("terminal input fixes", () => {
     attachLinuxIMEFix(term as never, (data) => sent.push(data));
 
     textarea.dispatchEvent(new CompositionEvent("compositionstart", { data: "" }));
-    textarea.dispatchEvent(new CompositionEvent("compositionupdate", { data: "sdh" }));
-    textarea.dispatchEvent(new CompositionEvent("compositionend", { data: "sdh" }));
-    vi.advanceTimersByTime(100);
+    textarea.dispatchEvent(new CompositionEvent("compositionupdate", { data: "ce'shi" }));
+    textarea.dispatchEvent(new CompositionEvent("compositionend", { data: "ce'shi" }));
 
-    expect(sent).toEqual(["sdh"]);
+    expect(sent).toEqual(["ceshi"]);
     vi.useRealTimers();
   });
 
-  it("flushes pending romanized text before the next English keystroke", async () => {
+  it("promptly commits separator-less pinyin when switching IME without a candidate key", async () => {
+    vi.useFakeTimers();
+    vi.resetModules();
+    vi.doMock("../platform", () => ({
+      APP_PLATFORM: "macos",
+      ENABLE_USAGE_INSIGHTS: true,
+      IS_MAC_WEBKIT: true,
+      IS_OTHER_WEBKIT: false,
+      detectAppPlatform: () => "macos",
+      isAppleWebKit: () => true,
+    }));
+    const { attachLinuxIMEFix } = await import("../components/terminalInputFix");
+    const textarea = document.createElement("textarea");
+    const sent: string[] = [];
+    const term = {
+      textarea,
+      onData: (listener: (data: string) => void) => {
+        void listener;
+        return { dispose: vi.fn() };
+      },
+    };
+
+    attachLinuxIMEFix(term as never, (data) => sent.push(data));
+
+    textarea.dispatchEvent(new CompositionEvent("compositionstart", { data: "" }));
+    textarea.dispatchEvent(new CompositionEvent("compositionupdate", { data: "ceshi" }));
+    textarea.dispatchEvent(new CompositionEvent("compositionend", { data: "ceshi" }));
+
+    // 切换瞬间尚未 flush（0ms 定时器在下一个宏任务）
+    expect(sent).toEqual([]);
+    vi.runOnlyPendingTimers();
+    expect(sent).toEqual(["ceshi"]);
+    vi.useRealTimers();
+  });
+
+  it("suppresses the first English space and flushes a pending non-candidate romanized commit", async () => {
+    vi.useFakeTimers();
+    vi.resetModules();
+    vi.doMock("../platform", () => ({
+      APP_PLATFORM: "macos",
+      ENABLE_USAGE_INSIGHTS: true,
+      IS_MAC_WEBKIT: true,
+      IS_OTHER_WEBKIT: false,
+      detectAppPlatform: () => "macos",
+      isAppleWebKit: () => true,
+    }));
+    const { attachLinuxIMEFix } = await import("../components/terminalInputFix");
+    const textarea = document.createElement("textarea");
+    const sent: string[] = [];
+    const downstreamKeydown = vi.fn();
+    const term = {
+      textarea,
+      onData: (listener: (data: string) => void) => {
+        void listener;
+        return { dispose: vi.fn() };
+      },
+    };
+
+    attachLinuxIMEFix(term as never, (data) => sent.push(data));
+    textarea.addEventListener("keydown", downstreamKeydown);
+
+    textarea.dispatchEvent(new CompositionEvent("compositionstart", { data: "" }));
+    textarea.dispatchEvent(new CompositionEvent("compositionupdate", { data: "ceshi" }));
+    textarea.dispatchEvent(new CompositionEvent("compositionend", { data: "ceshi" }));
+
+    // 0ms 定时器尚未触发时按下空格：应立即 flush ceshi 并抑制空格
+    const space = new KeyboardEvent("keydown", {
+      key: " ",
+      code: "Space",
+      bubbles: true,
+      cancelable: true,
+    });
+    Object.defineProperty(space, "keyCode", { value: 32 });
+    textarea.dispatchEvent(space);
+
+    expect(space.defaultPrevented).toBe(true);
+    expect(downstreamKeydown).not.toHaveBeenCalled();
+    expect(sent).toEqual(["ceshi"]);
+    vi.runOnlyPendingTimers();
+    expect(sent).toEqual(["ceshi"]);
+    vi.useRealTimers();
+  });
+
+  it("commits romanized text left in textarea when IME switch ends composition without event data", async () => {
+    vi.useFakeTimers();
+    vi.resetModules();
+    vi.doMock("../platform", () => ({
+      APP_PLATFORM: "macos",
+      ENABLE_USAGE_INSIGHTS: true,
+      IS_MAC_WEBKIT: true,
+      IS_OTHER_WEBKIT: false,
+      detectAppPlatform: () => "macos",
+      isAppleWebKit: () => true,
+    }));
+    const { attachLinuxIMEFix } = await import("../components/terminalInputFix");
+    const textarea = document.createElement("textarea");
+    const sent: string[] = [];
+    const term = {
+      textarea,
+      onData: (listener: (data: string) => void) => {
+        void listener;
+        return { dispose: vi.fn() };
+      },
+    };
+
+    attachLinuxIMEFix(term as never, (data) => sent.push(data));
+
+    textarea.dispatchEvent(new CompositionEvent("compositionstart", { data: "" }));
+    textarea.value = "ce'shi";
+    textarea.dispatchEvent(new CompositionEvent("compositionend", { data: "" }));
+
+    expect(sent).toEqual(["ceshi"]);
+    expect(textarea.value).toBe("");
+    vi.useRealTimers();
+  });
+
+  it("lets the next English keystroke pass after immediate romanized IME switch", async () => {
     vi.useFakeTimers();
     vi.resetModules();
     vi.doMock("../platform", () => ({
@@ -806,7 +944,6 @@ describe("terminal input fixes", () => {
     textarea.dispatchEvent(new CompositionEvent("compositionstart", { data: "" }));
     textarea.dispatchEvent(new CompositionEvent("compositionupdate", { data: "ye's" }));
     textarea.dispatchEvent(new CompositionEvent("compositionend", { data: "ye's" }));
-    vi.advanceTimersByTime(40);
     const nextInput = new InputEvent("beforeinput", {
       inputType: "insertText",
       data: "a",
@@ -815,8 +952,92 @@ describe("terminal input fixes", () => {
     });
     textarea.dispatchEvent(nextInput);
 
-    expect(nextInput.defaultPrevented).toBe(true);
-    expect(sent).toEqual(["yes", "a"]);
+    expect(nextInput.defaultPrevented).toBe(false);
+    expect(sent).toEqual(["yes"]);
+    vi.useRealTimers();
+  });
+
+  it("commits stale romanized composition and suppresses the first English space after IME switch", async () => {
+    vi.useFakeTimers();
+    vi.resetModules();
+    vi.doMock("../platform", () => ({
+      APP_PLATFORM: "macos",
+      ENABLE_USAGE_INSIGHTS: true,
+      IS_MAC_WEBKIT: true,
+      IS_OTHER_WEBKIT: false,
+      detectAppPlatform: () => "macos",
+      isAppleWebKit: () => true,
+    }));
+    const { attachLinuxIMEFix } = await import("../components/terminalInputFix");
+    const textarea = document.createElement("textarea");
+    const sent: string[] = [];
+    const downstreamKeydown = vi.fn();
+    const term = {
+      textarea,
+      onData: (listener: (data: string) => void) => {
+        void listener;
+        return { dispose: vi.fn() };
+      },
+    };
+
+    attachLinuxIMEFix(term as never, (data) => sent.push(data));
+    textarea.addEventListener("keydown", downstreamKeydown);
+
+    textarea.dispatchEvent(new CompositionEvent("compositionstart", { data: "" }));
+    textarea.dispatchEvent(new CompositionEvent("compositionupdate", { data: "ce'shi" }));
+
+    const space = new KeyboardEvent("keydown", {
+      key: " ",
+      code: "Space",
+      bubbles: true,
+      cancelable: true,
+    });
+    Object.defineProperty(space, "keyCode", { value: 32 });
+    textarea.dispatchEvent(space);
+
+    expect(space.defaultPrevented).toBe(true);
+    expect(downstreamKeydown).not.toHaveBeenCalled();
+    expect(sent).toEqual(["ceshi"]);
+    vi.useRealTimers();
+  });
+
+  it("commits romanized text from a non-composing input event during IME switch", async () => {
+    vi.useFakeTimers();
+    vi.resetModules();
+    vi.doMock("../platform", () => ({
+      APP_PLATFORM: "macos",
+      ENABLE_USAGE_INSIGHTS: true,
+      IS_MAC_WEBKIT: true,
+      IS_OTHER_WEBKIT: false,
+      detectAppPlatform: () => "macos",
+      isAppleWebKit: () => true,
+    }));
+    const { attachLinuxIMEFix } = await import("../components/terminalInputFix");
+    const textarea = document.createElement("textarea");
+    const sent: string[] = [];
+    const term = {
+      textarea,
+      onData: (listener: (data: string) => void) => {
+        void listener;
+        return { dispose: vi.fn() };
+      },
+    };
+
+    attachLinuxIMEFix(term as never, (data) => sent.push(data));
+
+    textarea.dispatchEvent(new CompositionEvent("compositionstart", { data: "" }));
+    textarea.dispatchEvent(new CompositionEvent("compositionupdate", { data: "ce'shi" }));
+    textarea.value = "ce'shi";
+    textarea.dispatchEvent(
+      new InputEvent("input", {
+        inputType: "insertText",
+        data: "ce'shi",
+        bubbles: true,
+      }),
+    );
+
+    expect(sent).toEqual(["ceshi"]);
+    expect(textarea.value).toBe("");
     vi.useRealTimers();
   });
 
@@ -888,6 +1109,39 @@ describe("terminal input fixes", () => {
     textarea.dispatchEvent(new FocusEvent("blur"));
 
     expect(sent).toEqual(["shide"]);
+    vi.useRealTimers();
+  });
+
+  it("commits romanized composition on window blur when clicking input source switcher", async () => {
+    vi.useFakeTimers();
+    vi.resetModules();
+    vi.doMock("../platform", () => ({
+      APP_PLATFORM: "macos",
+      ENABLE_USAGE_INSIGHTS: true,
+      IS_MAC_WEBKIT: true,
+      IS_OTHER_WEBKIT: false,
+      detectAppPlatform: () => "macos",
+      isAppleWebKit: () => true,
+    }));
+    const { attachLinuxIMEFix } = await import("../components/terminalInputFix");
+    const textarea = document.createElement("textarea");
+    const sent: string[] = [];
+    const term = {
+      textarea,
+      onData: (listener: (data: string) => void) => {
+        void listener;
+        return { dispose: vi.fn() };
+      },
+    };
+
+    const disposable = attachLinuxIMEFix(term as never, (data) => sent.push(data));
+
+    textarea.dispatchEvent(new CompositionEvent("compositionstart", { data: "" }));
+    textarea.dispatchEvent(new CompositionEvent("compositionupdate", { data: "ce'shi" }));
+    window.dispatchEvent(new FocusEvent("blur"));
+
+    expect(sent).toEqual(["ceshi"]);
+    disposable.dispose();
     vi.useRealTimers();
   });
 

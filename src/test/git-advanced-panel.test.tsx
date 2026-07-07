@@ -16,9 +16,7 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({
   confirm: vi.fn(),
 }));
 
-function renderPanel(
-  options: Partial<React.ComponentProps<typeof GitAdvancedPanel>> = {},
-) {
+function renderPanel(options: Partial<React.ComponentProps<typeof GitAdvancedPanel>> = {}) {
   render(
     <I18nProvider>
       <GitAdvancedPanel
@@ -377,6 +375,8 @@ describe("GitAdvancedPanel", () => {
     fireEvent.click(screen.getByRole("button", { name: "Ours" }));
 
     expect(await screen.findByText("Permission denied resolving app.txt")).toBeInTheDocument();
-    expect(screen.queryByText("Error: Permission denied resolving app.txt")).not.toBeInTheDocument();
+    expect(
+      screen.queryByText("Error: Permission denied resolving app.txt"),
+    ).not.toBeInTheDocument();
   });
 });

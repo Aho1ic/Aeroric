@@ -1,10 +1,10 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type CSSProperties } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Check } from "lucide-react";
+import { Check, Trash2 } from "lucide-react";
 import { useI18n } from "../../i18n";
 import s from "../../styles";
 import { AgentPathSection } from "./AgentPathSection";
-import type { AgentKey } from "./types";
+import { APP_SETTINGS_CHANGED_EVENT, type AgentKey } from "./types";
 import type { ThemeVariant } from "../../types";
 import { useTextInputIMEFix } from "../useTextInputIMEFix";
 import { Button } from "../ui/Button";
@@ -14,27 +14,65 @@ type FileState =
   | { status: "unconfigured" }
   | { status: "loaded"; content: string };
 
+const labelStyle: CSSProperties = {
+  display: "block",
+  fontSize: 12,
+  fontWeight: 650,
+  color: "var(--text-secondary)",
+  marginBottom: 6,
+};
+
+const nameInputStyle: CSSProperties = {
+  width: "100%",
+  height: 30,
+  padding: "5px 10px",
+  background: "var(--bg-input)",
+  border: "1px solid var(--border-medium)",
+  borderRadius: 6,
+  color: "var(--text-primary)",
+  fontSize: 12.5,
+  boxSizing: "border-box",
+  outline: "none",
+};
+
 export function AgentConfigPanel({
   agentKey,
+  agentLabel,
   filePath,
   lang: _lang,
   themeVariant: _themeVariant,
+  deletable = false,
+  onDeleted,
 }: {
   agentKey: AgentKey;
+  agentLabel?: string;
   filePath: string;
   lang: string;
   themeVariant: ThemeVariant;
+  deletable?: boolean;
+  onDeleted?: () => void;
 }) {
   const { t } = useI18n();
   const [resolvedFilePath, setResolvedFilePath] = useState(filePath);
   const [fileState, setFileState] = useState<FileState>({ status: "loading" });
   const [original, setOriginal] = useState("");
+  const [agentName, setAgentName] = useState(agentLabel ?? String(agentKey));
+  const [originalAgentName, setOriginalAgentName] = useState(agentLabel ?? String(agentKey));
   const [saving, setSaving] = useState(false);
+  const [savingName, setSavingName] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
   const fileContentImeFix = useTextInputIMEFix<HTMLTextAreaElement>((content) =>
     setFileState({ status: "loaded", content }),
   );
+
+  useEffect(() => {
+    const next = agentLabel ?? String(agentKey);
+    setAgentName(next);
+    setOriginalAgentName(next);
+  }, [agentKey, agentLabel]);
 
   useEffect(() => {
     setResolvedFilePath(filePath);
@@ -88,11 +126,48 @@ export function AgentConfigPanel({
     }
   }
 
-  function handleCancel() {
-    setFileState({ status: "loaded", content: original });
+  async function handleSaveName() {
+    if (!deletable || savingName) return;
+    const next = agentName.trim();
+    if (!next || next === originalAgentName) return;
+    setSavingName(true);
+    setError(null);
+    setSaved(false);
+    try {
+      await invoke("rename_custom_agent_profile", { id: agentKey, label: next });
+      setAgentName(next);
+      setOriginalAgentName(next);
+      window.dispatchEvent(new Event(APP_SETTINGS_CHANGED_EVENT));
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setSavingName(false);
+    }
+  }
+
+  async function confirmDelete() {
+    if (!deletable || deleting) return;
+    setDeleting(true);
+    setError(null);
+    setSaved(false);
+    try {
+      await invoke("delete_custom_agent_profile", { id: agentKey });
+      window.dispatchEvent(new Event(APP_SETTINGS_CHANGED_EVENT));
+      onDeleted?.();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setDeleting(false);
+      setDeleteConfirmOpen(false);
+    }
   }
 
   const isDirty = fileState.status === "loaded" && fileState.content !== original;
+  const isNameDirty = deletable && agentName.trim() !== originalAgentName;
+  const canSaveName = isNameDirty && Boolean(agentName.trim()) && !savingName;
+  const agentNameInputId = `agent-config-name-${agentKey}`;
 
   return (
     <>
@@ -105,6 +180,35 @@ export function AgentConfigPanel({
           padding: "18px 20px 14px",
         }}
       >
+        {deletable && (
+          <div style={{ marginBottom: 16 }}>
+            <label style={labelStyle} htmlFor={agentNameInputId}>
+              {t("appSettings.agentName")}
+            </label>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+              <input
+                id={agentNameInputId}
+                style={nameInputStyle}
+                value={agentName}
+                onChange={(event) => setAgentName(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    event.preventDefault();
+                    void handleSaveName();
+                  }
+                  if (event.key === "Escape") {
+                    setAgentName(originalAgentName);
+                  }
+                }}
+                spellCheck={false}
+              />
+              <Button variant="outline" size="sm" onClick={handleSaveName} disabled={!canSaveName}>
+                {savingName ? t("common.saving") : t("appSettings.saveAgentName")}
+              </Button>
+            </div>
+          </div>
+        )}
+
         <AgentPathSection agentKey={agentKey} />
 
         <div
@@ -210,12 +314,92 @@ export function AgentConfigPanel({
 
       {fileState.status === "loaded" && (
         <div style={s.settingsFooter}>
-          <Button variant="outline" size="sm" onClick={handleCancel}>
-            {t("common.cancel")}
-          </Button>
+          {deletable && (
+            <Button
+              variant="destructive"
+              size="sm"
+              onClick={() => setDeleteConfirmOpen(true)}
+              disabled={deleting || saving}
+              style={{ marginRight: "auto" }}
+            >
+              <Trash2 size={12} />
+              {deleting ? t("appSettings.deletingAgent") : t("appSettings.deleteAgentConfig")}
+            </Button>
+          )}
           <Button variant="default" size="sm" onClick={handleSave} disabled={saving || !isDirty}>
             {saving ? t("common.saving") : t("common.save")}
           </Button>
+        </div>
+      )}
+
+      {deleteConfirmOpen && (
+        <div
+          role="presentation"
+          style={{
+            position: "fixed",
+            inset: 0,
+            zIndex: 3000,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            background: "rgba(0,0,0,0.36)",
+          }}
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget && !deleting) {
+              setDeleteConfirmOpen(false);
+            }
+          }}
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="agent-delete-confirm-title"
+            style={{
+              width: "min(420px, calc(100vw - 32px))",
+              border: "1px solid var(--border-medium)",
+              borderRadius: 8,
+              background: "var(--bg-card)",
+              boxShadow: "var(--shadow-popover)",
+              padding: 18,
+            }}
+          >
+            <div
+              id="agent-delete-confirm-title"
+              style={{
+                fontSize: 15,
+                fontWeight: 700,
+                color: "var(--text-primary)",
+                marginBottom: 8,
+              }}
+            >
+              {t("appSettings.deleteAgentConfig")}
+            </div>
+            <div style={{ fontSize: 13, lineHeight: 1.55, color: "var(--text-secondary)" }}>
+              {t("appSettings.confirmDeleteAgentConfig")}
+            </div>
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "flex-end",
+                gap: 8,
+                marginTop: 18,
+              }}
+            >
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setDeleteConfirmOpen(false)}
+                disabled={deleting}
+              >
+                {t("common.cancel")}
+              </Button>
+              <Button variant="destructive" size="sm" onClick={confirmDelete} disabled={deleting}>
+                {deleting
+                  ? t("appSettings.deletingAgent")
+                  : t("appSettings.confirmDeleteAgentAction")}
+              </Button>
+            </div>
+          </div>
         </div>
       )}
     </>

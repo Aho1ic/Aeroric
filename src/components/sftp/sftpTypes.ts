@@ -48,6 +48,11 @@ export type SftpSortPreference = {
   direction: SftpSortDirection;
 };
 
+export type SftpConnectionGroup = {
+  label: string;
+  connections: SshConnection[];
+};
+
 export const DEFAULT_SFTP_SORT_PREFERENCE: SftpSortPreference = {
   field: "modified",
   direction: "desc",
@@ -191,6 +196,39 @@ export function normalizeSftpSortPreference(value: unknown): SftpSortPreference 
     candidate.direction === "asc" || candidate.direction === "desc" ? candidate.direction : null;
   if (!field || !direction) return DEFAULT_SFTP_SORT_PREFERENCE;
   return { field, direction };
+}
+
+export function groupSftpSshConnections(
+  connections: SshConnection[],
+  defaultGroupLabel: string,
+): SftpConnectionGroup[] {
+  const groups: SftpConnectionGroup[] = [];
+  const byLabel = new Map<string, SftpConnectionGroup>();
+  for (const connection of connections) {
+    const label = connection.group?.trim() || defaultGroupLabel;
+    const existing = byLabel.get(label);
+    if (existing) {
+      existing.connections.push(connection);
+      continue;
+    }
+    const group = { label, connections: [connection] };
+    byLabel.set(label, group);
+    groups.push(group);
+  }
+  return groups;
+}
+
+export function formatSftpTransferPercent(completed: number, total: number): number {
+  if (!Number.isFinite(completed) || !Number.isFinite(total) || total <= 0) return 0;
+  return Math.max(0, Math.min(100, Math.round((completed / total) * 100)));
+}
+
+export function sftpProgressRingBackground(
+  percent: number,
+  color: string = "var(--accent)",
+): string {
+  const value = Math.max(0, Math.min(100, Math.round(percent)));
+  return `conic-gradient(${color} ${value}%, var(--border-dim) 0)`;
 }
 
 export function filterSftpTreeEntriesByName(

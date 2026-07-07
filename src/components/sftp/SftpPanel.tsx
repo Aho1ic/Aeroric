@@ -47,7 +47,9 @@ import {
   defaultSftpPathForEndpoint,
   DEFAULT_SFTP_SORT_PREFERENCE,
   filterSftpTreeEntriesByName,
+  formatSftpTransferPercent,
   flattenSftpTreeEntries,
+  groupSftpSshConnections,
   normalizeSftpSortPreference,
   pruneExpandedPathsForFolderSelection,
   sftpBreadcrumbSegments,
@@ -56,6 +58,7 @@ import {
   sftpFileName,
   sftpKeyAction,
   sftpParentPath,
+  sftpProgressRingBackground,
   shouldPromptForUnknownSftpConflict,
   sortSftpEntries,
   type SftpConflictStrategy,
@@ -123,6 +126,9 @@ type TransferTask = {
   operation: SftpOperation;
   names: string[];
   status: "running" | "completed" | "failed";
+  completed: number;
+  total: number;
+  progress: number;
 };
 
 function endpointLabel(endpoint: SftpEndpoint): string {
@@ -274,13 +280,21 @@ export function SftpPanel({
   const [previewTarget, setPreviewTarget] = useState<PreviewTarget>(null);
   const [transferConflict, setTransferConflict] = useState<TransferConflict>(null);
   const [transferTasks, setTransferTasks] = useState<TransferTask[]>([]);
+  const sshConnectionGroups = useMemo(
+    () => groupSftpSshConnections(sshConnections, t("ssh.defaultGroup")),
+    [sshConnections, t],
+  );
 
   const beginTransferTask = useCallback((operation: SftpOperation, paths: string[]) => {
+    const total = Math.max(paths.length, 1);
     const task: TransferTask = {
       id: `sftp-transfer-${Date.now()}-${Math.random().toString(36).slice(2)}`,
       operation,
       names: paths.map(sftpFileName),
       status: "running",
+      completed: 0,
+      total,
+      progress: 0,
     };
     setTransferTasks((current) => [task, ...current].slice(0, 8));
     return task.id;
@@ -288,9 +302,56 @@ export function SftpPanel({
 
   const finishTransferTask = useCallback((id: string, status: TransferTask["status"]) => {
     setTransferTasks((current) =>
-      current.map((task) => (task.id === id ? { ...task, status } : task)),
+      current.map((task) =>
+        task.id === id
+          ? {
+              ...task,
+              status,
+              completed: status === "completed" ? task.total : task.completed,
+              progress: status === "completed" ? 100 : task.progress,
+            }
+          : task,
+      ),
     );
   }, []);
+
+  const advanceTransferTask = useCallback((id: string, completed: number) => {
+    setTransferTasks((current) =>
+      current.map((task) =>
+        task.id === id
+          ? {
+              ...task,
+              completed: Math.max(0, Math.min(task.total, completed)),
+              progress: formatSftpTransferPercent(completed, task.total),
+            }
+          : task,
+      ),
+    );
+  }, []);
+
+  const transferPathsWithProgress = useCallback(
+    async (
+      taskId: string,
+      operation: SftpOperation,
+      sourceEndpoint: SftpEndpoint,
+      selectedPaths: string[],
+      targetEndpoint: SftpEndpoint,
+      conflictStrategy: SftpConflictStrategy,
+    ) => {
+      for (let index = 0; index < selectedPaths.length; index += 1) {
+        await transferSftpPaths(
+          operation,
+          sourceEndpoint,
+          [selectedPaths[index]],
+          targetEndpoint,
+          sshConnections,
+          conflictStrategy,
+        );
+        advanceTransferTask(taskId, index + 1);
+      }
+    },
+    [advanceTransferTask, sshConnections],
+  );
 
   const updatePane = useCallback((side: PaneSide, updater: (pane: PaneState) => PaneState) => {
     if (side === "left") setLeft(updater);
@@ -544,12 +605,12 @@ export function SftpPanel({
       }
       const taskId = beginTransferTask(operation, selectedPaths);
       try {
-        await transferSftpPaths(
+        await transferPathsWithProgress(
+          taskId,
           operation,
           sourceEndpoint,
           selectedPaths,
           targetEndpoint,
-          sshConnections,
           conflictStrategy,
         );
         finishTransferTask(taskId, "completed");
@@ -561,7 +622,16 @@ export function SftpPanel({
         showToast(t("sftp.operationFailed", { error: String(error) }));
       }
     },
-    [beginTransferTask, finishTransferTask, panes, refreshPane, showToast, sshConnections, t],
+    [
+      beginTransferTask,
+      finishTransferTask,
+      panes,
+      refreshPane,
+      showToast,
+      sshConnections,
+      t,
+      transferPathsWithProgress,
+    ],
   );
 
   const resolveTransferConflict = useCallback(
@@ -632,12 +702,12 @@ export function SftpPanel({
       }
       const taskId = beginTransferTask("copy", clipboardPayload.paths);
       try {
-        await transferSftpPaths(
+        await transferPathsWithProgress(
+          taskId,
           "copy",
           clipboardPayload.endpoint,
           clipboardPayload.paths,
           targetEndpoint,
-          sshConnections,
           "fail",
         );
         finishTransferTask(taskId, "completed");
@@ -658,6 +728,7 @@ export function SftpPanel({
       showToast,
       sshConnections,
       t,
+      transferPathsWithProgress,
     ],
   );
 
@@ -768,17 +839,22 @@ export function SftpPanel({
                       <Check size={13} />
                     </Select.ItemIndicator>
                   </Select.Item>
-                  {sshConnections.map((connection) => (
-                    <Select.Item
-                      key={connection.id}
-                      value={`ssh:${connection.id}`}
-                      style={s.fileSearchTypeItem}
-                    >
-                      <Select.ItemText>{connection.name}</Select.ItemText>
-                      <Select.ItemIndicator style={s.settingsSelectIndicator}>
-                        <Check size={13} />
-                      </Select.ItemIndicator>
-                    </Select.Item>
+                  {sshConnectionGroups.map((group) => (
+                    <Select.Group key={group.label}>
+                      <Select.Label className="radix-select-label">{group.label}</Select.Label>
+                      {group.connections.map((connection) => (
+                        <Select.Item
+                          key={connection.id}
+                          value={`ssh:${connection.id}`}
+                          style={s.fileSearchTypeItem}
+                        >
+                          <Select.ItemText>{connection.name}</Select.ItemText>
+                          <Select.ItemIndicator style={s.settingsSelectIndicator}>
+                            <Check size={13} />
+                          </Select.ItemIndicator>
+                        </Select.Item>
+                      ))}
+                    </Select.Group>
                   ))}
                 </Select.Viewport>
               </Select.Content>
@@ -1076,6 +1152,17 @@ export function SftpPanel({
   const runningTransferCount = transferTasks.filter((task) => task.status === "running").length;
   const lastTransfer = transferTasks[0] ?? null;
   const progressState = runningTransferCount > 0 ? "running" : (lastTransfer?.status ?? "idle");
+  const activeProgressPercent =
+    progressState === "running"
+      ? Math.max(
+          0,
+          ...transferTasks
+            .filter((task) => task.status === "running")
+            .map((task) => task.progress),
+        )
+      : lastTransfer
+        ? lastTransfer.progress
+        : 0;
   const transferProgressLabel =
     progressState === "running"
       ? t("sftp.transferProgressRunning", { count: runningTransferCount })
@@ -1086,17 +1173,18 @@ export function SftpPanel({
           : t("sftp.transferProgress");
   const transferTaskLine = (task: TransferTask) => {
     const name = task.names.join(", ");
+    const percent = `${formatSftpTransferPercent(task.completed, task.total)}%`;
     if (task.status === "running") {
-      return t(task.operation === "copy" ? "sftp.transferCopying" : "sftp.transferMoving", {
+      return `${t(task.operation === "copy" ? "sftp.transferCopying" : "sftp.transferMoving", {
         name,
-      });
+      })} - ${percent}`;
     }
     if (task.status === "completed") {
-      return t(task.operation === "copy" ? "sftp.transferCopied" : "sftp.transferMoved", {
+      return `${t(task.operation === "copy" ? "sftp.transferCopied" : "sftp.transferMoved", {
         name,
-      });
+      })} - ${percent}`;
     }
-    return t("sftp.transferFailed", { name });
+    return `${t("sftp.transferFailed", { name })} - ${percent}`;
   };
 
   return (
@@ -1116,8 +1204,17 @@ export function SftpPanel({
                 aria-busy={runningTransferCount > 0}
                 title={transferProgressLabel}
               >
-                <span className="sftp-progress-ring" aria-hidden="true" />
-                <span className="sftp-progress-count">{transferTasks.length}</span>
+                <span
+                  className="sftp-progress-ring"
+                  style={{
+                    background: sftpProgressRingBackground(
+                      activeProgressPercent,
+                      progressState === "failed" ? "var(--danger)" : "var(--accent)",
+                    ),
+                  }}
+                  aria-hidden="true"
+                />
+                <span className="sftp-progress-count">{activeProgressPercent}%</span>
               </button>
               <div className="sftp-transfer-popover" role="status">
                 <div className="sftp-transfer-popover-title">{t("sftp.transferTasks")}</div>

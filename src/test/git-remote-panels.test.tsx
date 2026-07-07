@@ -91,9 +91,7 @@ describe("remote Git panels", () => {
       });
     });
 
-    const appRowAfterStage = screen
-      .getByText("App.tsx")
-      .closest("[role='button']") as HTMLElement;
+    const appRowAfterStage = screen.getByText("App.tsx").closest("[role='button']") as HTMLElement;
     fireEvent.mouseEnter(appRowAfterStage);
     await user.click(within(appRowAfterStage).getByTitle("Discard Changes"));
     await waitFor(() => {

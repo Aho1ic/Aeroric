@@ -80,9 +80,7 @@ export function appendProjectActionLog(
   return [result, ...current].slice(0, Math.max(1, limit));
 }
 
-export function summarizeProjectActionLog(
-  entries: ProjectActionResult[],
-): ProjectActionLogSummary {
+export function summarizeProjectActionLog(entries: ProjectActionResult[]): ProjectActionLogSummary {
   if (entries.length === 0) {
     return {
       total: 0,
@@ -125,7 +123,10 @@ export function readProjectActionLog(storageKey: string): ProjectActionResult[] 
 export function writeProjectActionLog(storageKey: string, entries: ProjectActionResult[]): void {
   if (typeof window === "undefined") return;
   try {
-    window.localStorage.setItem(storageKey, JSON.stringify(entries.slice(0, PROJECT_ACTION_LOG_LIMIT)));
+    window.localStorage.setItem(
+      storageKey,
+      JSON.stringify(entries.slice(0, PROJECT_ACTION_LOG_LIMIT)),
+    );
   } catch {
     // Best-effort telemetry for UI feedback; never block IDE actions on storage failures.
   }
