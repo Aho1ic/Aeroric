@@ -18,6 +18,18 @@ function project(id: string, name: string, orderIndex: number): Project {
   };
 }
 
+function task(id: string, projectId: string, createdAt: number): Task {
+  return {
+    id,
+    projectId,
+    prompt: `Task ${id}`,
+    agent: "claude",
+    permissionMode: "ask",
+    status: "done",
+    createdAt,
+  };
+}
+
 describe("ProjectRail project dragging", () => {
   it("opens the agent settings section from the project rail footer", () => {
     const listener = vi.fn();
@@ -211,5 +223,40 @@ describe("ProjectRail project dragging", () => {
     );
 
     expect(screen.getByRole("button", { name: "拖动项目 Alpha" })).toBeInTheDocument();
+  });
+
+  it("selects the latest task when clicking a different project once", () => {
+    const beta = project("p2", "Beta", 1);
+    const onSwitch = vi.fn();
+    const onSelectTask = vi.fn();
+
+    render(
+      <I18nProvider>
+        <ProjectRail
+          projects={[project("p1", "Alpha", 0), beta]}
+          allTasks={[task("old-beta-task", "p2", 100), task("new-beta-task", "p2", 200)]}
+          activeProjectId="p1"
+          selectedTaskId={null}
+          isNewTask={true}
+          onSwitch={onSwitch}
+          onOpen={vi.fn()}
+          onBack={vi.fn()}
+          onNewTask={vi.fn()}
+          onSelectTask={onSelectTask}
+          onDeleteTask={vi.fn()}
+          onToggleTaskStar={vi.fn()}
+          onRunTodo={vi.fn()}
+          onReorderProjects={vi.fn()}
+          themeVariant="light"
+          onToggleTheme={vi.fn()}
+          singleProjectMode
+        />
+      </I18nProvider>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Beta" }));
+
+    expect(onSwitch).toHaveBeenCalledWith(beta);
+    expect(onSelectTask).toHaveBeenCalledWith("new-beta-task");
   });
 });

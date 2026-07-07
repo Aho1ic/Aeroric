@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { ChevronDown, ChevronRight, Wrench, Copy, Check } from "lucide-react";
 import { marked } from "marked";
@@ -236,10 +236,12 @@ export function SessionView({
   sessionPath,
   projectPath,
   isCodex,
+  fallback,
 }: {
   sessionPath: string;
   projectPath: string;
   isCodex: boolean;
+  fallback?: ReactNode;
 }) {
   const { t } = useI18n();
   const [messages, setMessages] = useState<SessionMessage[]>([]);
@@ -260,6 +262,10 @@ export function SessionView({
         setLoading(false);
       });
   }, [sessionPath, projectPath, isCodex]);
+
+  if (!loading && fallback && (error || messages.length === 0)) {
+    return <>{fallback}</>;
+  }
 
   return (
     <div

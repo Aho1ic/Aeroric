@@ -74,6 +74,16 @@ export function buildProjectTaskGroups(projects: Project[], tasks: Task[]): Proj
   }));
 }
 
+export function getProjectClickTargetTaskId(
+  tasks: Task[],
+  selectedTaskId: string | null,
+): string | null {
+  if (selectedTaskId && tasks.some((task) => task.id === selectedTaskId)) {
+    return selectedTaskId;
+  }
+  return tasks[0]?.id ?? null;
+}
+
 export function getDefaultExpandedProjectIds(
   projects: Project[],
   activeProjectId: string,
@@ -599,6 +609,13 @@ export function ProjectRail({
     );
   };
 
+  const handleProjectClick = (project: Project, tasks: Task[]) => {
+    const isActive = project.id === activeProjectId;
+    const targetTaskId = getProjectClickTargetTaskId(tasks, selectedTaskId);
+    onSwitch(project);
+    if (!isActive && targetTaskId) onSelectTask(targetTaskId);
+  };
+
   if (effectiveCollapsed) {
     return (
       <div
@@ -638,18 +655,21 @@ export function ProjectRail({
           <PanelLeftOpen size={15} strokeWidth={2} />
         </button>
 
-        {railProjects.map((project) => (
-          <RailItem
-            key={project.id}
-            project={project}
-            isActive={project.id === activeProjectId}
-            status={getProjectStatus(allTasks, project.id)}
-            attentionCount={getAttentionCount(allTasks, project.id)}
-            showBadge={attentionBadge}
-            waveNonce={waveNonces.get(project.id) ?? 0}
-            onSwitch={onSwitch}
-          />
-        ))}
+        {railProjects.map((project) => {
+          const tasks = projectGroups.find((group) => group.project.id === project.id)?.tasks ?? [];
+          return (
+            <RailItem
+              key={project.id}
+              project={project}
+              isActive={project.id === activeProjectId}
+              status={getProjectStatus(allTasks, project.id)}
+              attentionCount={getAttentionCount(allTasks, project.id)}
+              showBadge={attentionBadge}
+              waveNonce={waveNonces.get(project.id) ?? 0}
+              onSwitch={() => handleProjectClick(project, tasks)}
+            />
+          );
+        })}
 
         <div style={{ flex: 1 }} />
 
@@ -872,7 +892,7 @@ export function ProjectRail({
                       event.preventDefault();
                       return;
                     }
-                    onSwitch(project);
+                    handleProjectClick(project, tasks);
                   }}
                   style={{
                     flex: 1,

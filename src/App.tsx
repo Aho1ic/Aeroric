@@ -518,9 +518,6 @@ function App() {
       (e) => {
         const { task_id, status, failure_reason } = e.payload;
         updateTaskStatus(task_id, status, undefined, failure_reason);
-        if (!isActiveTaskStatus(status)) {
-          tm.removeTaskBuffers([task_id]);
-        }
         if (status === "done") scheduleForDoneTask(task_id);
       },
     );
@@ -1033,7 +1030,6 @@ function App() {
       const projectPath = task.worktreePath ?? project?.path ?? "";
       invoke("complete_task", { taskId, projectPath })
         .then(() => {
-          tm.removeTaskBuffers([taskId]);
           scheduleForDoneTask(taskId);
         })
         .catch((e: unknown) => {
@@ -1043,7 +1039,6 @@ function App() {
     }
 
     updateTaskStatus(taskId, "done");
-    tm.removeTaskBuffers([taskId]);
     scheduleForDoneTask(taskId);
   }
 

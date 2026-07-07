@@ -115,6 +115,7 @@ export function RunningView({
   const resumeSessionId = codexLike ? task.codexSessionId : task.claudeSessionId;
   const resumeAvailable = Boolean(resumeSessionId || sessionPath);
   const restoreState = getRestoreState?.() ?? {};
+  const hasRestoreState = Boolean(restoreState.initialData || restoreState.initialSnapshot);
   const currentAgentLabel = agentDisplayLabel(task.agent);
   const currentAgentBadge = task.selectedModel
     ? `${currentAgentLabel} · ${task.selectedModel}`
@@ -246,6 +247,24 @@ export function RunningView({
       }
     };
   }, [sessionPath, isActive, projectActive]);
+
+  const terminalHistoryFallback = hasRestoreState ? (
+    <div style={s.terminalContainer}>
+      <TerminalView
+        key={`${task.id}-${runCount}-history`}
+        onInput={() => {}}
+        onResize={() => {}}
+        onRegisterTerminal={() => 0}
+        onReady={() => {}}
+        themeVariant={themeVariant}
+        terminalFontSize={terminalFontSize}
+        monoFontFamily={monoFontFamily}
+        isActive={false}
+        initialData={restoreState.initialData}
+        initialSnapshot={restoreState.initialSnapshot}
+      />
+    </div>
+  ) : undefined;
 
   return (
     <div
@@ -624,6 +643,7 @@ export function RunningView({
               sessionPath={sessionPath}
               projectPath={projectPath}
               isCodex={isCodexLikeAgent(task.agent)}
+              fallback={terminalHistoryFallback}
             />
           ) : (
             <div style={s.interruptedNoSessionPane}>
@@ -653,6 +673,7 @@ export function RunningView({
           sessionPath={sessionPath}
           projectPath={projectPath}
           isCodex={isCodexLikeAgent(task.agent)}
+          fallback={terminalHistoryFallback}
         />
       )}
 

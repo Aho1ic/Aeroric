@@ -628,7 +628,6 @@ export function SftpPanel({
       panes,
       refreshPane,
       showToast,
-      sshConnections,
       t,
       transferPathsWithProgress,
     ],
@@ -726,7 +725,6 @@ export function SftpPanel({
       refreshPane,
       selectedDirectoryEndpoint,
       showToast,
-      sshConnections,
       t,
       transferPathsWithProgress,
     ],
@@ -1156,9 +1154,7 @@ export function SftpPanel({
     progressState === "running"
       ? Math.max(
           0,
-          ...transferTasks
-            .filter((task) => task.status === "running")
-            .map((task) => task.progress),
+          ...transferTasks.filter((task) => task.status === "running").map((task) => task.progress),
         )
       : lastTransfer
         ? lastTransfer.progress
