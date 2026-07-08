@@ -531,7 +531,7 @@ export function ProjectPage({
   selectedTaskId: string | null;
   isNewTask: boolean;
   onNewTask: () => void;
-  onSelectTask: (id: string) => void;
+  onSelectTask: (id: string, projectId?: string) => void;
   onDeleteTask: (id: string) => void;
   onDeleteAllTasks: () => void;
   onToggleTaskStar: (id: string) => void;
@@ -1004,9 +1004,9 @@ export function ProjectPage({
   }, [project.id, projectLocation.kind, remoteConnection?.id, remoteProjectPathKey]);
 
   const handleSelectTask = useCallback(
-    (id: string) => {
+    (id: string, targetProjectId?: string) => {
       clearFileAndDiff();
-      onSelectTask(id);
+      onSelectTask(id, targetProjectId);
     },
     [onSelectTask, clearFileAndDiff],
   );

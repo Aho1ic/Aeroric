@@ -1427,8 +1427,8 @@ function App() {
                 onNewTask={() =>
                   updateProjectView(project.id, { selectedTaskId: null, isNewTask: true })
                 }
-                onSelectTask={(id) =>
-                  updateProjectView(project.id, { selectedTaskId: id, isNewTask: false })
+                onSelectTask={(id, targetProjectId = project.id) =>
+                  updateProjectView(targetProjectId, { selectedTaskId: id, isNewTask: false })
                 }
                 onDeleteTask={handleDeleteTask}
                 onDeleteAllTasks={() => handleDeleteAllTasks(project)}

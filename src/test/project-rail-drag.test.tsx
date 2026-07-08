@@ -257,6 +257,6 @@ describe("ProjectRail project dragging", () => {
     fireEvent.click(screen.getByRole("button", { name: "Beta" }));
 
     expect(onSwitch).toHaveBeenCalledWith(beta);
-    expect(onSelectTask).toHaveBeenCalledWith("new-beta-task");
+    expect(onSelectTask).toHaveBeenCalledWith("p2", "new-beta-task");
   });
 });

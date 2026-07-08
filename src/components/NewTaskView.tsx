@@ -477,11 +477,15 @@ export function NewTaskView({
   function handleInitializeMd() {
     const filename = isCodexLikeAgent(agent, agentOptions) ? "AGENTS.md" : "CLAUDE.md";
     const prompt = t("newTask.initializePrompt", { file: filename });
-    // 初始化 md 文件不涉及代码改动，强制走本地，避免无谓的 worktree 开销
+    // 初始化 md 文件不涉及代码改动，强制走本地，避免无谓的 worktree 开销。
+    // Claude 的 full_access 会触发 `--dangerously-skip-permissions` 交互确认，
+    // 这里降级为 acceptEdits，保证“一键初始化”可无人值守完成。
+    const initializePermissionMode =
+      agent === "claude" && permMode === "full_access" ? "auto_edit" : permMode;
     onSubmit({
       prompt,
       agent,
-      permissionMode: permMode,
+      permissionMode: initializePermissionMode,
       images: [],
       texts: [],
       immediate: true,

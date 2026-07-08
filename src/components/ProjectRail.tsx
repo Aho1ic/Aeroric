@@ -454,7 +454,7 @@ export function ProjectRail({
   onOpen: () => void;
   onBack: () => void;
   onNewTask: () => void;
-  onSelectTask: (id: string) => void;
+  onSelectTask: (projectId: string, id: string) => void;
   onDeleteTask: (id: string) => void;
   onToggleTaskStar: (id: string) => void;
   onRunTodo: (task: Task) => void;
@@ -659,7 +659,7 @@ export function ProjectRail({
     const isActive = project.id === activeProjectId;
     const targetTaskId = getProjectClickTargetTaskId(tasks, selectedTaskId);
     onSwitch(project);
-    if (!isActive && targetTaskId) onSelectTask(targetTaskId);
+    if (!isActive && targetTaskId) onSelectTask(project.id, targetTaskId);
   };
 
   if (effectiveCollapsed) {
@@ -1039,7 +1039,7 @@ export function ProjectRail({
                         isNewTask={isNewTask}
                         onSelect={() => {
                           if (project.id !== activeProjectId) onSwitch(project);
-                          onSelectTask(task.id);
+                          onSelectTask(project.id, task.id);
                         }}
                         onDelete={() => onDeleteTask(task.id)}
                         onToggleStar={() => onToggleTaskStar(task.id)}
