@@ -26,7 +26,7 @@ import {
   resolveProjectLocation,
   sshProjectPath,
 } from "./types";
-import { DEFAULT_UI_FONT, DEFAULT_MONO_FONT } from "./types";
+import { DEFAULT_UI_FONT, DEFAULT_MONO_FONT, LEGACY_DEFAULT_MONO_FONTS } from "./types";
 import type { FontFamily } from "./types";
 import { WelcomePage } from "./components/WelcomePage";
 import { AppSettingsEventHost } from "./components/AppSettingsEventHost";
@@ -201,9 +201,17 @@ function getInitialAttentionBadge(): boolean {
   return localStorage.getItem("aeroric:attentionBadge") !== "0";
 }
 
-function getInitialFontFamily(key: string, fallback: FontFamily): FontFamily {
+function getInitialFontFamily(
+  key: string,
+  fallback: FontFamily,
+  legacyDefaults: readonly FontFamily[] = [],
+): FontFamily {
   const stored = localStorage.getItem(key);
-  return stored || fallback;
+  if (!stored) return fallback;
+  // 老用户 localStorage 里可能存着历史默认字体链（缺 CJK 字形）。若命中旧默认值，
+  // 说明用户从未主动改过字体，自动迁移到当前默认值以修复终端中文乱码/错位。
+  if (legacyDefaults.includes(stored.trim())) return fallback;
+  return stored;
 }
 
 function disableTextInputAutoFeatures(target: EventTarget | null): void {
@@ -248,7 +256,7 @@ function App() {
     getInitialFontFamily("aeroric:uiFontFamily", DEFAULT_UI_FONT),
   );
   const [monoFontFamily, setMonoFontFamily] = useState<FontFamily>(() =>
-    getInitialFontFamily("aeroric:monoFontFamily", DEFAULT_MONO_FONT),
+    getInitialFontFamily("aeroric:monoFontFamily", DEFAULT_MONO_FONT, LEGACY_DEFAULT_MONO_FONTS),
   );
   const [projects, setProjects] = useState<Project[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
@@ -1427,7 +1435,7 @@ function App() {
                 onNewTask={() =>
                   updateProjectView(project.id, { selectedTaskId: null, isNewTask: true })
                 }
-                onSelectTask={(id, targetProjectId = project.id) =>
+                onSelectTask={(targetProjectId, id) =>
                   updateProjectView(targetProjectId, { selectedTaskId: id, isNewTask: false })
                 }
                 onDeleteTask={handleDeleteTask}

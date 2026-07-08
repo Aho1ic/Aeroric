@@ -175,8 +175,15 @@ export function clampTerminalFontSize(value: number): TerminalFontSize {
 export type FontFamily = string;
 export const DEFAULT_UI_FONT: FontFamily =
   '"SF Pro Display", "IBM Plex Sans", "PingFang SC", "Noto Sans SC", sans-serif';
+// 旧默认值（缺 CJK 字形，会导致终端中文乱码/错位）。用于把老用户 localStorage 里
+// 存下的旧值自动迁移到新的含 CJK fallback 的字体链，见 App.tsx 的迁移逻辑。
+export const LEGACY_DEFAULT_MONO_FONTS: readonly FontFamily[] = [
+  '"JetBrains Mono", "Fira Code", ui-monospace, monospace',
+];
+// 西文等宽字体在前用于测量 cell 宽度，末尾补 CJK 等宽/全角字体，确保 Claude
+// 输出的中文有字形可回退，避免 WebGL renderer 下的乱码与宽度错位。
 export const DEFAULT_MONO_FONT: FontFamily =
-  '"JetBrains Mono", "Fira Code", ui-monospace, monospace';
+  '"JetBrains Mono", "Fira Code", "Sarasa Mono SC", "Maple Mono NF CN", ui-monospace, "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", "Noto Sans SC", monospace';
 
 export type TaskStatus =
   | "todo"

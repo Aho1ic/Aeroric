@@ -531,7 +531,7 @@ export function ProjectPage({
   selectedTaskId: string | null;
   isNewTask: boolean;
   onNewTask: () => void;
-  onSelectTask: (id: string, projectId?: string) => void;
+  onSelectTask: (projectId: string, id: string) => void;
   onDeleteTask: (id: string) => void;
   onDeleteAllTasks: () => void;
   onToggleTaskStar: (id: string) => void;
@@ -1004,9 +1004,9 @@ export function ProjectPage({
   }, [project.id, projectLocation.kind, remoteConnection?.id, remoteProjectPathKey]);
 
   const handleSelectTask = useCallback(
-    (id: string, targetProjectId?: string) => {
+    (targetProjectId: string, id: string) => {
       clearFileAndDiff();
-      onSelectTask(id, targetProjectId);
+      onSelectTask(targetProjectId, id);
     },
     [onSelectTask, clearFileAndDiff],
   );
@@ -1661,7 +1661,7 @@ export function ProjectPage({
                   key={task.id}
                   type="button"
                   title={title}
-                  onClick={() => handleSelectTask(task.id)}
+                  onClick={() => handleSelectTask(project.id, task.id)}
                   style={{
                     height: 24,
                     maxWidth: 240,
