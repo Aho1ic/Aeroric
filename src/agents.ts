@@ -8,6 +8,9 @@ export interface CustomAgentProfile {
   path: string;
   codex_like: boolean;
   config_lang: AgentConfigLang;
+  base_url?: string;
+  api_key?: string;
+  models?: string[];
   username?: string;
   password?: string;
 }

@@ -91,6 +91,55 @@ function renderDeletableAgentConfigPanel(content: string, onDeleted = vi.fn()) {
   return onDeleted;
 }
 
+function renderModelManagedAgentConfigPanel() {
+  let configContent = "#!/bin/sh\n";
+  const baseProfile = {
+    id: "gpt55",
+    label: "GPT55",
+    path: "/Users/macbook/.aeroric/agents/gpt55.sh",
+    codex_like: true,
+    config_lang: "shellscript",
+    base_url: "https://example.com/v1",
+    api_key: "sk-test",
+    models: ["gpt-5.5"],
+  };
+  vi.mocked(invoke).mockImplementation((command, args) => {
+    if (command === "get_agent_config_file_path") {
+      return Promise.resolve("/Users/macbook/.aeroric/agents/gpt55.sh");
+    }
+    if (command === "read_agent_config_file") return Promise.resolve(configContent);
+    if (command === "load_app_settings") {
+      return Promise.resolve({ ...appSettings, custom_agents: [baseProfile] });
+    }
+    if (command === "detect_agent_version") return Promise.resolve("codex 1.0.0");
+    if (command === "detect_agent_models") {
+      return Promise.resolve({ models: ["gpt-5.5", "gpt-5.1"] });
+    }
+    if (command === "update_custom_agent_models") {
+      configContent = "#!/bin/sh\n# updated\n";
+      const models = (args as { models: string[] }).models;
+      return Promise.resolve({
+        ...appSettings,
+        custom_agents: [{ ...baseProfile, models }],
+      });
+    }
+    return Promise.resolve(undefined);
+  });
+  render(
+    <I18nProvider>
+      <AgentConfigPanel
+        agentKey="gpt55"
+        agentLabel="GPT55"
+        filePath="/Users/macbook/.aeroric/agents/gpt55.sh"
+        lang="shellscript"
+        themeVariant="light"
+        deletable
+        onDeleted={vi.fn()}
+      />
+    </I18nProvider>,
+  );
+}
+
 function renderJovernaAgentConfigPanel() {
   const jovernaSettings = {
     ...appSettings,
@@ -327,6 +376,26 @@ describe("Agent config and debug panel UI", () => {
       expect(invoke).toHaveBeenCalledWith("delete_custom_agent_profile", { id: "gpt55" }),
     );
     expect(onDeleted).toHaveBeenCalled();
+  });
+
+  it("redetects and saves selected custom agent models from the settings panel", async () => {
+    const user = userEvent.setup();
+    renderModelManagedAgentConfigPanel();
+
+    await findConfigEditor("#!/bin/sh\n");
+    expect(screen.getByLabelText("gpt-5.5")).toBeChecked();
+    await user.click(screen.getByRole("button", { name: /Detect Models/i }));
+    await screen.findByLabelText("gpt-5.1");
+    await user.click(screen.getByLabelText("gpt-5.1"));
+    await user.click(getEnabledSaveButton());
+
+    await waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith("update_custom_agent_models", {
+        id: "gpt55",
+        models: ["gpt-5.5", "gpt-5.1"],
+      }),
+    );
+    expect(await findConfigEditor("#!/bin/sh\n# updated\n")).toBeInTheDocument();
   });
 
   it("saves only the proxy enabled checkbox for a custom Joverna agent", async () => {

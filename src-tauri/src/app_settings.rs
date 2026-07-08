@@ -48,6 +48,12 @@ pub struct CustomAgentProfile {
     #[serde(default = "default_custom_agent_config_lang")]
     pub config_lang: String,
     #[serde(default)]
+    pub base_url: String,
+    #[serde(default)]
+    pub api_key: String,
+    #[serde(default)]
+    pub models: Vec<String>,
+    #[serde(default)]
     pub username: String,
     #[serde(default)]
     pub password: String,
@@ -230,6 +236,9 @@ fn normalize_custom_agent_profile(profile: CustomAgentProfile) -> Option<CustomA
         path: resolve_agent_launch_spec_from_path(&profile.id, &path).program,
         codex_like: profile.codex_like,
         config_lang: normalize_config_lang(profile.config_lang),
+        base_url: normalize_base_url(&profile.base_url),
+        api_key: profile.api_key.trim().to_string(),
+        models: normalize_model_list(profile.models),
         username: profile.username.trim().to_string(),
         password: profile.password.trim().to_string(),
     })
@@ -820,14 +829,9 @@ fn parse_codex_model_catalog(value: &str) -> Result<Vec<String>, String> {
     Ok(parse_model_ids(value))
 }
 
-fn normalize_setup_models(draft: &AgentSetupDraft) -> Vec<String> {
-    let source = if draft.models.is_empty() {
-        vec![draft.model.clone()]
-    } else {
-        draft.models.clone()
-    };
+fn normalize_model_list(models: Vec<String>) -> Vec<String> {
     let mut out = Vec::new();
-    for model in source
+    for model in models
         .into_iter()
         .map(|model| model.trim().to_string())
         .filter(|model| !model.is_empty())
@@ -837,6 +841,15 @@ fn normalize_setup_models(draft: &AgentSetupDraft) -> Vec<String> {
         }
     }
     out
+}
+
+fn normalize_setup_models(draft: &AgentSetupDraft) -> Vec<String> {
+    let source = if draft.models.is_empty() {
+        vec![draft.model.clone()]
+    } else {
+        draft.models.clone()
+    };
+    normalize_model_list(source)
 }
 
 fn validate_model_name(model: &str) -> bool {
@@ -997,11 +1010,11 @@ fn validate_agent_setup_draft(draft: &AgentSetupDraft) -> Result<String, String>
     Ok(id)
 }
 
-fn write_agent_script(id: &str, content: &str) -> Result<PathBuf, String> {
-    let dir = agent_scripts_dir()?;
-    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    let path = dir.join(format!("{}.sh", id));
-    atomic_write(&path, content)?;
+fn write_agent_script_at_path(path: &Path, content: &str) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    atomic_write(path, content)?;
     #[cfg(not(windows))]
     {
         let mut permissions = fs::metadata(&path)
@@ -1010,6 +1023,14 @@ fn write_agent_script(id: &str, content: &str) -> Result<PathBuf, String> {
         permissions.set_mode(0o700);
         fs::set_permissions(&path, permissions).map_err(|e| e.to_string())?;
     }
+    Ok(())
+}
+
+fn write_agent_script(id: &str, content: &str) -> Result<PathBuf, String> {
+    let dir = agent_scripts_dir()?;
+    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let path = dir.join(format!("{}.sh", id));
+    write_agent_script_at_path(&path, content)?;
     Ok(path)
 }
 
@@ -1207,6 +1228,9 @@ pub async fn setup_agent_profile(draft: AgentSetupDraft) -> Result<AppSettings, 
             path: script_path.to_string_lossy().into_owned(),
             codex_like: matches!(draft.kind, AgentSetupKind::Codex),
             config_lang: "shellscript".to_string(),
+            base_url: normalize_base_url(&draft.base_url),
+            api_key: draft.api_key.trim().to_string(),
+            models: normalize_setup_models(&draft),
             username: String::new(),
             password: String::new(),
         };
@@ -1278,6 +1302,18 @@ pub async fn list_agent_models(agent: String) -> Result<AgentModels, String> {
             return Ok(AgentModels { models: Vec::new() });
         }
 
+        let settings = load_settings_internal();
+        if let Some(profile) = settings
+            .custom_agents
+            .iter()
+            .find(|profile| profile.id == agent)
+        {
+            let models = normalize_model_list(profile.models.clone());
+            if !models.is_empty() {
+                return Ok(AgentModels { models });
+            }
+        }
+
         let launch = get_agent_launch_spec(&agent);
         let mut cmd = Command::new(&launch.program);
         crate::subprocess::configure_background_command(&mut cmd);
@@ -1307,6 +1343,73 @@ pub async fn list_agent_models(agent: String) -> Result<AgentModels, String> {
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn update_custom_agent_models(
+    id: String,
+    models: Vec<String>,
+) -> Result<AppSettings, String> {
+    let normalized = tokio::task::spawn_blocking(move || {
+        let _guard = settings_lock().lock();
+        let mut settings = load_settings_unlocked();
+        let normalized_id = sanitize_custom_agent_id(&id);
+        let models = normalize_model_list(models);
+        if models.is_empty() {
+            return Err("At least one model is required".to_string());
+        }
+        if models.iter().any(|model| !validate_model_name(model)) {
+            return Err("Model names cannot contain quotes, backslashes, or newlines".to_string());
+        }
+
+        let Some(profile) = settings
+            .custom_agents
+            .iter_mut()
+            .find(|profile| profile.id == normalized_id)
+        else {
+            return Err("Custom agent not found".to_string());
+        };
+        if profile.base_url.trim().is_empty() || profile.api_key.trim().is_empty() {
+            return Err("This agent does not have saved model detection settings".to_string());
+        }
+
+        let draft = AgentSetupDraft {
+            id: profile.id.clone(),
+            label: profile.label.clone(),
+            kind: if profile.codex_like {
+                AgentSetupKind::Codex
+            } else {
+                AgentSetupKind::ClaudeCode
+            },
+            base_url: profile.base_url.clone(),
+            api_key: profile.api_key.clone(),
+            model: models[0].clone(),
+            models: models.clone(),
+        };
+        validate_agent_setup_draft(&draft)?;
+        let script = build_agent_script(&draft);
+        let script_path = normalize_config_path(profile.path.clone());
+        if script_path.trim().is_empty() {
+            let path = write_agent_script(&profile.id, &script)?;
+            profile.path = path.to_string_lossy().into_owned();
+        } else {
+            write_agent_script_at_path(Path::new(&script_path), &script)?;
+            profile.path = script_path;
+        }
+        profile.models = models;
+
+        let dir = aeroric_dir()?;
+        fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        let path = settings_path()?;
+        let normalized = normalize_settings(settings);
+        let raw = serde_json::to_string_pretty(&normalized).map_err(|e| e.to_string())?;
+        atomic_write(&path, &raw)?;
+        Ok::<AppSettings, String>(normalized)
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    clear_cached_versions();
+    Ok(normalized)
 }
 
 #[tauri::command]
@@ -1703,6 +1806,9 @@ mod tests {
                 path: "/Users/macbook/.claude/start-joverna.sh".to_string(),
                 codex_like: false,
                 config_lang: "shellscript".to_string(),
+                base_url: String::new(),
+                api_key: String::new(),
+                models: Vec::new(),
                 username: "alice".to_string(),
                 password: "secret".to_string(),
             }],
@@ -1735,6 +1841,9 @@ mod tests {
                 path: "/Users/macbook/.claude/start-joverna.sh".to_string(),
                 codex_like: false,
                 config_lang: "shellscript".to_string(),
+                base_url: String::new(),
+                api_key: String::new(),
+                models: Vec::new(),
                 username: "alice".to_string(),
                 password: "secret".to_string(),
             }],
@@ -1760,6 +1869,9 @@ mod tests {
                 path: "/Users/macbook/.claude/start-joverna.sh".to_string(),
                 codex_like: false,
                 config_lang: "shellscript".to_string(),
+                base_url: String::new(),
+                api_key: String::new(),
+                models: Vec::new(),
                 username: " ".to_string(),
                 password: "".to_string(),
             }],

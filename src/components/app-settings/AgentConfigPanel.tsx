@@ -1,13 +1,19 @@
 import { useEffect, useState, type CSSProperties } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Check, Trash2 } from "lucide-react";
+import { Check, RefreshCw, Trash2 } from "lucide-react";
 import { useI18n } from "../../i18n";
 import s from "../../styles";
 import { AgentPathSection } from "./AgentPathSection";
-import { APP_SETTINGS_CHANGED_EVENT, type AgentKey } from "./types";
+import {
+  APP_SETTINGS_CHANGED_EVENT,
+  type AgentKey,
+  type AgentModels,
+  type AppSettings,
+} from "./types";
 import type { ThemeVariant } from "../../types";
 import { useTextInputIMEFix } from "../useTextInputIMEFix";
 import { Button } from "../ui/Button";
+import type { CustomAgentProfile } from "../../agents";
 
 type FileState =
   | { status: "loading" }
@@ -34,6 +40,18 @@ const nameInputStyle: CSSProperties = {
   boxSizing: "border-box",
   outline: "none",
 };
+
+function normalizeModels(models: string[] = []): string[] {
+  const out: string[] = [];
+  for (const model of models.map((item) => item.trim()).filter(Boolean)) {
+    if (!out.includes(model)) out.push(model);
+  }
+  return out;
+}
+
+function sameModels(a: string[], b: string[]): boolean {
+  return a.length === b.length && a.every((item, index) => item === b[index]);
+}
 
 export function AgentConfigPanel({
   agentKey,
@@ -64,6 +82,12 @@ export function AgentConfigPanel({
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
+  const [customProfile, setCustomProfile] = useState<CustomAgentProfile | null>(null);
+  const [detectedModels, setDetectedModels] = useState<string[]>([]);
+  const [selectedModels, setSelectedModels] = useState<string[]>([]);
+  const [originalSelectedModels, setOriginalSelectedModels] = useState<string[]>([]);
+  const [detectingModels, setDetectingModels] = useState(false);
+  const [savingModels, setSavingModels] = useState(false);
   const fileContentImeFix = useTextInputIMEFix<HTMLTextAreaElement>((content) =>
     setFileState({ status: "loaded", content }),
   );
@@ -108,6 +132,34 @@ export function AgentConfigPanel({
       cancelled = true;
     };
   }, [agentKey, filePath]);
+
+  useEffect(() => {
+    if (!deletable) {
+      setCustomProfile(null);
+      setDetectedModels([]);
+      setSelectedModels([]);
+      setOriginalSelectedModels([]);
+      return;
+    }
+    let cancelled = false;
+    invoke<AppSettings>("load_app_settings")
+      .then((settings) => {
+        if (cancelled) return;
+        const profile =
+          settings.custom_agents?.find((item) => item.id === String(agentKey)) ?? null;
+        const savedModels = normalizeModels(profile?.models ?? []);
+        setCustomProfile(profile);
+        setDetectedModels(savedModels);
+        setSelectedModels(savedModels);
+        setOriginalSelectedModels(savedModels);
+      })
+      .catch((e) => {
+        if (!cancelled) setError(String(e));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [agentKey, deletable]);
 
   async function handleSave() {
     if (fileState.status !== "loaded") return;
@@ -164,10 +216,78 @@ export function AgentConfigPanel({
     }
   }
 
+  async function handleDetectModels() {
+    if (!customProfile?.base_url || !customProfile.api_key) return;
+    setDetectingModels(true);
+    setError(null);
+    setSaved(false);
+    try {
+      const detected = await invoke<AgentModels>("detect_agent_models", {
+        kind: customProfile.codex_like ? "codex" : "claude_code",
+        baseUrl: customProfile.base_url,
+        apiKey: customProfile.api_key,
+      });
+      const nextModels = normalizeModels(detected.models);
+      const selected = new Set(selectedModels.length > 0 ? selectedModels : originalSelectedModels);
+      const retained = nextModels.filter((model) => selected.has(model));
+      setDetectedModels(nextModels);
+      setSelectedModels(retained.length > 0 ? retained : nextModels);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setDetectingModels(false);
+    }
+  }
+
+  async function handleSaveModels() {
+    const models = normalizeModels(selectedModels);
+    if (models.length === 0 || sameModels(models, originalSelectedModels)) return;
+    setSavingModels(true);
+    setError(null);
+    setSaved(false);
+    try {
+      const next = await invoke<AppSettings>("update_custom_agent_models", {
+        id: agentKey,
+        models,
+      });
+      const profile = next.custom_agents?.find((item) => item.id === String(agentKey)) ?? null;
+      const savedModels = normalizeModels(profile?.models ?? models);
+      setCustomProfile(profile);
+      setDetectedModels((prev) => normalizeModels([...savedModels, ...prev]));
+      setSelectedModels(savedModels);
+      setOriginalSelectedModels(savedModels);
+      const content = await invoke<string | null>("read_agent_config_file", { agent: agentKey });
+      if (content !== null) {
+        setFileState({ status: "loaded", content });
+        setOriginal(content);
+      }
+      window.dispatchEvent(new Event(APP_SETTINGS_CHANGED_EVENT));
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setSavingModels(false);
+    }
+  }
+
+  function toggleModel(modelName: string) {
+    setSelectedModels((prev) => {
+      if (prev.includes(modelName)) return prev.filter((item) => item !== modelName);
+      return [...prev, modelName];
+    });
+  }
+
   const isDirty = fileState.status === "loaded" && fileState.content !== original;
   const isNameDirty = deletable && agentName.trim() !== originalAgentName;
   const canSaveName = isNameDirty && Boolean(agentName.trim()) && !savingName;
   const agentNameInputId = `agent-config-name-${agentKey}`;
+  const canDetectModels = Boolean(
+    customProfile?.base_url?.trim() && customProfile?.api_key?.trim(),
+  );
+  const canSaveModels =
+    selectedModels.length > 0 &&
+    !sameModels(normalizeModels(selectedModels), originalSelectedModels);
 
   return (
     <>
@@ -210,6 +330,119 @@ export function AgentConfigPanel({
         )}
 
         <AgentPathSection agentKey={agentKey} />
+
+        {deletable && customProfile && (
+          <div style={{ marginBottom: 18 }}>
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: 8,
+                marginBottom: 8,
+              }}
+            >
+              <div>
+                <div style={{ fontSize: 13, fontWeight: 600, color: "var(--text-primary)" }}>
+                  {t("appSettings.agentModel")}
+                </div>
+                <div style={{ marginTop: 3, fontSize: 11, color: "var(--text-hint)" }}>
+                  {detectedModels.length > 0
+                    ? t("appSettings.selectedModelsCount", {
+                        selected: selectedModels.length,
+                        count: detectedModels.length,
+                      })
+                    : t("appSettings.agentModelHint")}
+                </div>
+              </div>
+              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleDetectModels}
+                  disabled={detectingModels || !canDetectModels}
+                >
+                  <RefreshCw size={12} className={detectingModels ? "spin" : undefined} />
+                  {detectingModels
+                    ? t("appSettings.detectingModels")
+                    : t("appSettings.detectModels")}
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setSelectedModels(detectedModels)}
+                  disabled={detectedModels.length === 0}
+                >
+                  {t("appSettings.selectAllModels")}
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setSelectedModels([])}
+                  disabled={detectedModels.length === 0}
+                >
+                  {t("appSettings.clearModels")}
+                </Button>
+                <Button
+                  variant="default"
+                  size="sm"
+                  onClick={handleSaveModels}
+                  disabled={savingModels || !canSaveModels}
+                >
+                  {savingModels ? t("common.saving") : t("common.save")}
+                </Button>
+              </div>
+            </div>
+
+            {detectedModels.length > 0 && (
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+                  gap: 8,
+                  maxHeight: 180,
+                  overflow: "auto",
+                  border: "1px solid var(--border-dim)",
+                  borderRadius: 8,
+                  padding: 8,
+                  background: "var(--bg-subtle)",
+                }}
+              >
+                {detectedModels.map((item) => (
+                  <label
+                    key={item}
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 8,
+                      minWidth: 0,
+                      fontSize: 12,
+                      color: "var(--text-secondary)",
+                      cursor: "pointer",
+                    }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={selectedModels.includes(item)}
+                      onChange={() => toggleModel(item)}
+                    />
+                    <span
+                      style={{
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap",
+                        fontFamily: "var(--font-mono)",
+                      }}
+                      title={item}
+                    >
+                      {item}
+                    </span>
+                  </label>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
 
         <div
           style={{
