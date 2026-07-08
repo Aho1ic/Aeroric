@@ -10,7 +10,7 @@ import { useToast } from "./Toast";
 import { shortenPath, getUsageColor } from "../utils";
 import { useUsageSnapshot } from "../hooks/useUsageSnapshot";
 import { ENABLE_USAGE_INSIGHTS } from "../platform";
-import { agentDisplayLabel, isCodexLikeAgent } from "../agents";
+import { agentDisplayLabel, isCodexLikeAgent, type AgentOption } from "../agents";
 import { useI18n } from "../i18n";
 import s from "../styles";
 import {
@@ -80,6 +80,7 @@ export function RunningView({
   themeVariant,
   terminalFontSize,
   monoFontFamily,
+  agentOptions,
 }: {
   task: Task;
   projectPath: string;
@@ -103,6 +104,7 @@ export function RunningView({
   themeVariant: ThemeVariant;
   terminalFontSize: TerminalFontSize;
   monoFontFamily: FontFamily;
+  agentOptions?: AgentOption[];
 }) {
   const { t } = useI18n();
   const { showToast } = useToast();
@@ -118,7 +120,7 @@ export function RunningView({
   const [terminalHistory, setTerminalHistory] = useState("");
   const [terminalHistoryVersion, setTerminalHistoryVersion] = useState(0);
   const shouldLoadTerminalHistory = !isActive && !isDetached && !isInterrupted;
-  const currentAgentLabel = agentDisplayLabel(task.agent);
+  const currentAgentLabel = agentDisplayLabel(task.agent, agentOptions);
   const currentAgentBadge = task.selectedModel
     ? `${currentAgentLabel} · ${task.selectedModel}`
     : currentAgentLabel;
@@ -523,7 +525,6 @@ export function RunningView({
       >
         <div style={s.runMetaRow}>
           <span style={s.runAgentBadge} title={currentAgentBadge}>
-            <span>{task.agent === "claude" ? "✦" : "⬡"}</span>
             <span
               style={{
                 minWidth: 0,

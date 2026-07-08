@@ -1,5 +1,5 @@
 import { useState, memo } from "react";
-import { Trash2, Star, Play, GitBranch } from "lucide-react";
+import { Trash2, Star, Play, GitBranch, RotateCcw } from "lucide-react";
 import type { Task } from "../../types";
 import { StatusIcon } from "../StatusIcon";
 import { useI18n } from "../../i18n";
@@ -39,6 +39,7 @@ export const TaskListItem = memo(
     onDelete,
     onToggleStar,
     onRunTodo,
+    onResumeTask,
   }: {
     task: Task;
     selected: boolean;
@@ -46,6 +47,7 @@ export const TaskListItem = memo(
     onDelete: () => void;
     onToggleStar: () => void;
     onRunTodo?: () => void;
+    onResumeTask?: () => void;
   }) {
     const { t } = useI18n();
     const [hov, setHov] = useState(false);
@@ -138,6 +140,20 @@ export const TaskListItem = memo(
             <Play size={11} strokeWidth={2} fill="currentColor" />
           </button>
         )}
+        {onResumeTask && (
+          <button
+            type="button"
+            aria-label={t("task.continue")}
+            title={t("task.continue")}
+            style={{ ...s.taskPlayBtn, opacity: hov ? 1 : 0.5 }}
+            onClick={(e) => {
+              e.stopPropagation();
+              onResumeTask();
+            }}
+          >
+            <RotateCcw size={11} strokeWidth={2.2} />
+          </button>
+        )}
         <button
           type="button"
           aria-label={t("task.deleteTask")}
@@ -160,5 +176,6 @@ export const TaskListItem = memo(
   (prev, next) =>
     prev.task === next.task &&
     prev.selected === next.selected &&
-    (prev.onRunTodo !== undefined) === (next.onRunTodo !== undefined),
+    (prev.onRunTodo !== undefined) === (next.onRunTodo !== undefined) &&
+    (prev.onResumeTask !== undefined) === (next.onResumeTask !== undefined),
 );

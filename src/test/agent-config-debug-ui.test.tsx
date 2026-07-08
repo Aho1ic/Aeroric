@@ -350,6 +350,30 @@ describe("Agent config and debug panel UI", () => {
     );
   });
 
+  it("saves optional username and password for custom agents", async () => {
+    const user = userEvent.setup();
+    renderJovernaAgentConfigPanel();
+
+    await findConfigEditor("#!/bin/sh\n");
+    await user.type(screen.getByLabelText("Username"), "alice");
+    await user.type(screen.getByLabelText("Password"), "secret");
+    await user.click(getEnabledSaveButton());
+
+    await waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith("save_app_settings", {
+        settings: expect.objectContaining({
+          custom_agents: [
+            expect.objectContaining({
+              id: "joverna",
+              username: "alice",
+              password: "secret",
+            }),
+          ],
+        }),
+      }),
+    );
+  });
+
   it("saves shared proxy URL and NO_PROXY from the application proxy page", async () => {
     const user = userEvent.setup();
     renderProxyPanel();

@@ -1,5 +1,6 @@
 import { useCallback, useLayoutEffect, useMemo, useRef, useState, type UIEvent } from "react";
 import type { Task, TaskDisplayWindow } from "../../types";
+import { isActiveTaskStatus } from "../../types";
 import { TaskListItem } from "./TaskListItem";
 import { useI18n } from "../../i18n";
 import s from "../../styles";
@@ -10,7 +11,14 @@ const OVERSCAN_ROWS = 8;
 
 type VirtualRow =
   | { type: "group"; key: string; label: string; height: number }
-  | { type: "task"; key: string; task: Task; showRunTodo: boolean; height: number };
+  | {
+      type: "task";
+      key: string;
+      task: Task;
+      showRunTodo: boolean;
+      showResumeTask: boolean;
+      height: number;
+    };
 
 function findRowIndex(offsets: number[], value: number) {
   if (offsets.length <= 1) return 0;
@@ -40,6 +48,7 @@ export function TaskList({
   onDeleteTask,
   onToggleTaskStar,
   onRunTodo,
+  onResumeTask,
 }: {
   tasks: Task[];
   taskDisplayWindow: TaskDisplayWindow;
@@ -50,6 +59,7 @@ export function TaskList({
   onDeleteTask: (id: string) => void;
   onToggleTaskStar: (id: string) => void;
   onRunTodo: (task: Task) => void;
+  onResumeTask?: (taskId: string) => void;
 }) {
   const { t } = useI18n();
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -138,6 +148,16 @@ export function TaskList({
     }
 
     const nextRows: VirtualRow[] = [];
+    const canResumeTask = (task: Task) => {
+      if (!onResumeTask || task.status === "todo" || isActiveTaskStatus(task.status)) return false;
+      if (task.worktreeDiscarded) return false;
+      return Boolean(
+        task.codexSessionId ||
+        task.codexSessionPath ||
+        task.claudeSessionId ||
+        task.claudeSessionPath,
+      );
+    };
     const appendGroup = (key: string, label: string, groupTasks: Task[], showRunTodo = false) => {
       if (groupTasks.length === 0) return;
       nextRows.push({ type: "group", key, label, height: GROUP_ROW_HEIGHT });
@@ -147,6 +167,7 @@ export function TaskList({
           key: task.id,
           task,
           showRunTodo: showRunTodo || task.status === "todo",
+          showResumeTask: canResumeTask(task),
           height: TASK_ROW_HEIGHT,
         });
       });
@@ -160,7 +181,7 @@ export function TaskList({
     appendGroup("earlier", t("task.earlier"), earlierTasks);
 
     return nextRows;
-  }, [cutoffTs, sorted, t, todayTs]);
+  }, [cutoffTs, onResumeTask, sorted, t, todayTs]);
 
   const offsets = useMemo(() => {
     const nextOffsets = [0];
@@ -208,6 +229,9 @@ export function TaskList({
                   onDelete={() => onDeleteTask(row.task.id)}
                   onToggleStar={() => onToggleTaskStar(row.task.id)}
                   onRunTodo={row.showRunTodo ? () => onRunTodo(row.task) : undefined}
+                  onResumeTask={
+                    row.showResumeTask && onResumeTask ? () => onResumeTask(row.task.id) : undefined
+                  }
                 />
               )}
             </div>

@@ -36,6 +36,7 @@ export function TaskPanel({
   onDeleteAllTasks,
   onToggleTaskStar,
   onRunTodo,
+  onResumeTask,
   onBack,
   backTitle,
   themeVariant,
@@ -69,6 +70,7 @@ export function TaskPanel({
   onDeleteAllTasks: () => void;
   onToggleTaskStar: (id: string) => void;
   onRunTodo: (task: Task) => void;
+  onResumeTask: (taskId: string) => void;
   onBack: () => void;
   backTitle?: string;
   themeVariant: ThemeVariant;
@@ -220,6 +222,7 @@ export function TaskPanel({
         onDeleteTask={onDeleteTask}
         onToggleTaskStar={onToggleTaskStar}
         onRunTodo={onRunTodo}
+        onResumeTask={onResumeTask}
       />
       <div style={s.taskPanelFooter}>
         <SidebarFooterActions

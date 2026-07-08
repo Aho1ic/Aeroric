@@ -10,11 +10,13 @@ import {
   PinOff,
   Play,
   Plus,
+  RotateCcw,
   Star,
   Sun,
   Trash2,
 } from "lucide-react";
 import type { Project, Task, ThemeVariant } from "../types";
+import { isActiveTaskStatus } from "../types";
 import { ProjectAvatar } from "./ProjectAvatar";
 import { StatusIcon } from "./StatusIcon";
 import { NotificationBell } from "./NotificationBell";
@@ -118,6 +120,7 @@ function RailTaskItem({
   onDelete,
   onToggleStar,
   onRunTodo,
+  onResumeTask,
 }: {
   task: Task;
   selected: boolean;
@@ -126,11 +129,23 @@ function RailTaskItem({
   onDelete: () => void;
   onToggleStar: () => void;
   onRunTodo: () => void;
+  onResumeTask?: () => void;
 }) {
   const { t } = useI18n();
   const [hovered, setHovered] = useState(false);
   const displayTitle = task.name ?? task.prompt;
   const canRunTodo = task.status === "todo";
+  const canResumeTask =
+    Boolean(onResumeTask) &&
+    task.status !== "todo" &&
+    !isActiveTaskStatus(task.status) &&
+    !task.worktreeDiscarded &&
+    Boolean(
+      task.codexSessionId ||
+      task.codexSessionPath ||
+      task.claudeSessionId ||
+      task.claudeSessionPath,
+    );
 
   return (
     <button
@@ -231,6 +246,35 @@ function RailTaskItem({
             }}
           >
             <Play size={10} strokeWidth={2} fill="currentColor" />
+          </span>
+        )}
+        {canResumeTask && (
+          <span
+            role="button"
+            tabIndex={0}
+            aria-label={t("task.continue")}
+            title={t("task.continue")}
+            onClick={(event) => {
+              event.stopPropagation();
+              onResumeTask?.();
+            }}
+            onKeyDown={(event) => {
+              if (event.key !== "Enter" && event.key !== " ") return;
+              event.preventDefault();
+              event.stopPropagation();
+              onResumeTask?.();
+            }}
+            style={{
+              width: 18,
+              height: 18,
+              display: "inline-flex",
+              alignItems: "center",
+              justifyContent: "center",
+              borderRadius: 5,
+              color: "var(--accent)",
+            }}
+          >
+            <RotateCcw size={10} strokeWidth={2.2} />
           </span>
         )}
         <span
@@ -393,6 +437,7 @@ export function ProjectRail({
   onDeleteTask,
   onToggleTaskStar,
   onRunTodo,
+  onResumeTask,
   onReorderProjects,
   themeVariant,
   onToggleTheme,
@@ -413,6 +458,7 @@ export function ProjectRail({
   onDeleteTask: (id: string) => void;
   onToggleTaskStar: (id: string) => void;
   onRunTodo: (task: Task) => void;
+  onResumeTask?: (taskId: string) => void;
   onReorderProjects?: (orderedProjectIds: string[]) => void;
   themeVariant: ThemeVariant;
   onToggleTheme: () => void;
@@ -998,6 +1044,7 @@ export function ProjectRail({
                         onDelete={() => onDeleteTask(task.id)}
                         onToggleStar={() => onToggleTaskStar(task.id)}
                         onRunTodo={() => onRunTodo(task)}
+                        onResumeTask={onResumeTask ? () => onResumeTask(task.id) : undefined}
                       />
                     ))
                   )}

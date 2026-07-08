@@ -84,6 +84,7 @@ import { buildRunnableFileCommand, selectRunnableCondaEnvironment } from "./file
 import { dispatchFileViewerCommand } from "./file-viewer/editorCommandEvents";
 import { isSqliteDatabaseFileName } from "./file-explorer/fileEntryUtils";
 import { agentDisplayLabel } from "../agents";
+import { useAgentOptions } from "../hooks/useAgentOptions";
 import { useI18n } from "../i18n";
 import {
   getIdeToolTitleWithDisabledReason,
@@ -596,6 +597,7 @@ export function ProjectPage({
 }) {
   const { t } = useI18n();
   const { showToast } = useToast();
+  const agentOptions = useAgentOptions();
   const {
     rightPanel,
     editorGroups,
@@ -1629,6 +1631,7 @@ export function ProjectPage({
         onDeleteTask={onDeleteTask}
         onToggleTaskStar={onToggleTaskStar}
         onRunTodo={onRunTodoTask}
+        onResumeTask={onResumeTask}
         singleProjectMode={hubMode}
         forceCollapsed={responsiveLayout.autoCollapseRail || isDatabaseMode}
       />
@@ -1651,7 +1654,8 @@ export function ProjectPage({
             {projectTasks.map((task) => {
               const selected = task.id === selectedTaskId && !isNewTask;
               const title =
-                (task.name ?? task.prompt).trim() || `${agentDisplayLabel(task.agent)} Terminal`;
+                (task.name ?? task.prompt).trim() ||
+                `${agentDisplayLabel(task.agent, agentOptions)} Terminal`;
               return (
                 <button
                   key={task.id}
@@ -1675,7 +1679,7 @@ export function ProjectPage({
                     fontWeight: selected ? 650 : 560,
                   }}
                 >
-                  <span>{agentDisplayLabel(task.agent)}</span>
+                  <span>{agentDisplayLabel(task.agent, agentOptions)}</span>
                   <span
                     style={{
                       minWidth: 0,
@@ -2282,6 +2286,7 @@ export function ProjectPage({
                   themeVariant={themeVariant}
                   terminalFontSize={terminalFontSize}
                   monoFontFamily={monoFontFamily}
+                  agentOptions={agentOptions}
                 />
               );
             })}

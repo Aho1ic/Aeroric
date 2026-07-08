@@ -1,7 +1,7 @@
 use std::path::Path;
 use std::process::{Output, Stdio};
 use std::time::Duration;
-use tokio::io::{AsyncRead, AsyncReadExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 
 const NAMING_PROMPT_TEMPLATE: &str = r#"You are a task title generator. Given the original task prompt below and (when available) the session execution summary, produce a single short title for this task.
 
@@ -72,10 +72,11 @@ async fn run_naming_agent_with_timeout(
 ) -> Result<Output, String> {
     let launch = crate::app_settings::get_agent_launch_spec(agent);
     let login_env: Vec<(String, String)> = crate::app_settings::get_login_shell_env().to_vec();
+    let use_stdin_prompt = crate::app_settings::is_codex_like_agent(agent);
 
     let mut cmd = tokio::process::Command::new(&launch.program);
     crate::subprocess::configure_background_tokio_command(&mut cmd);
-    if crate::app_settings::is_codex_like_agent(agent) {
+    if use_stdin_prompt {
         cmd.args([
             "exec",
             "--sandbox",
@@ -83,7 +84,6 @@ async fn run_naming_agent_with_timeout(
             "--ephemeral",
             "-c",
             "approval_policy=\"never\"",
-            prompt,
         ]);
     } else {
         cmd.args([
@@ -99,7 +99,11 @@ async fn run_naming_agent_with_timeout(
         ]);
     }
     cmd.current_dir(project_path);
-    cmd.stdin(Stdio::null());
+    cmd.stdin(if use_stdin_prompt {
+        Stdio::piped()
+    } else {
+        Stdio::null()
+    });
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
     cmd.kill_on_drop(true);
@@ -114,6 +118,21 @@ async fn run_naming_agent_with_timeout(
     let mut child = cmd
         .spawn()
         .map_err(|e| format!("Failed to spawn {agent}: {e}"))?;
+
+    if use_stdin_prompt {
+        let mut stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| "Failed to open agent stdin".to_string())?;
+        stdin
+            .write_all(prompt.as_bytes())
+            .await
+            .map_err(|e| format!("Failed to write agent stdin: {}", e))?;
+        stdin
+            .shutdown()
+            .await
+            .map_err(|e| format!("Failed to close agent stdin: {}", e))?;
+    }
 
     let stdout = child
         .stdout
@@ -267,11 +286,131 @@ fn sanitize_title(raw: &str) -> String {
         .to_string()
 }
 
-fn truncate_prompt(prompt: String) -> String {
+fn truncate_prompt(prompt: &str) -> String {
     if prompt.chars().count() <= MAX_PROMPT_CHARS {
-        prompt
+        prompt.to_string()
     } else {
         prompt.chars().take(MAX_PROMPT_CHARS).collect::<String>() + "…"
+    }
+}
+
+fn is_chinese_text(text: &str) -> bool {
+    let chinese_chars = text
+        .chars()
+        .filter(|c| matches!(*c as u32, 0x4E00..=0x9FFF | 0x3400..=0x4DBF))
+        .count();
+    let ascii_letters = text.chars().filter(|c| c.is_ascii_alphabetic()).count();
+    chinese_chars > 0 && chinese_chars >= ascii_letters / 2
+}
+
+fn first_title_fragment(prompt: &str, max_chars: usize) -> String {
+    let mut fragment = prompt
+        .split(|c: char| {
+            matches!(
+                c,
+                '\n' | '\r'
+                    | ','
+                    | '，'
+                    | '.'
+                    | '。'
+                    | ';'
+                    | '；'
+                    | ':'
+                    | '：'
+                    | '!'
+                    | '！'
+                    | '?'
+                    | '？'
+            )
+        })
+        .find_map(|part| {
+            let trimmed = part.trim();
+            (!trimmed.is_empty()).then_some(trimmed)
+        })
+        .unwrap_or(prompt.trim())
+        .to_string();
+
+    fragment = fragment
+        .chars()
+        .take(max_chars)
+        .collect::<String>()
+        .trim()
+        .to_string();
+    fragment.trim_matches(['"', '\'', '`']).trim().to_string()
+}
+
+fn create_local_fallback_title(original_prompt: &str) -> String {
+    let fragment = first_title_fragment(original_prompt, 48);
+    if fragment.is_empty() {
+        return "命名任务".to_string();
+    }
+
+    if is_chinese_text(original_prompt) {
+        if original_prompt.contains("已完成") && original_prompt.contains("继续") {
+            return "继续已完成的任务".to_string();
+        }
+        if fragment.starts_with("修复")
+            || fragment.starts_with("添加")
+            || fragment.starts_with("实现")
+            || fragment.starts_with("继续")
+            || fragment.starts_with("优化")
+            || fragment.starts_with("更新")
+            || fragment.starts_with("删除")
+            || fragment.starts_with("调整")
+            || fragment.starts_with("重构")
+        {
+            sanitize_title(&fragment)
+        } else {
+            sanitize_title(&format!("处理{}", fragment))
+        }
+    } else {
+        let lower = fragment.to_ascii_lowercase();
+        let starts_with_verb = [
+            "fix ",
+            "add ",
+            "implement ",
+            "continue ",
+            "update ",
+            "remove ",
+            "delete ",
+            "refactor ",
+            "improve ",
+            "build ",
+            "create ",
+        ]
+        .iter()
+        .any(|prefix| lower.starts_with(prefix));
+        if starts_with_verb {
+            sanitize_title(&fragment)
+        } else {
+            sanitize_title(&format!("Handle {}", fragment))
+        }
+    }
+}
+
+fn format_naming_agent_failure(stderr: &str, stdout: &str) -> String {
+    let combined = stderr.lines().chain(stdout.lines());
+    let filtered = combined
+        .filter_map(|line| {
+            let trimmed = line.trim();
+            if trimmed.is_empty()
+                || trimmed == "Reading additional input from stdin..."
+                || trimmed.contains("codex_core_skills")
+                || trimmed.contains("failed to install system skills")
+                || trimmed.contains("remove existing system skills dir")
+            {
+                None
+            } else {
+                Some(trimmed)
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    if filtered.is_empty() {
+        "Agent failed".to_string()
+    } else {
+        format!("Agent failed: {}", filtered)
     }
 }
 
@@ -295,7 +434,7 @@ pub async fn generate_task_name(
     let naming_agent = if crate::app_settings::codex_available() {
         "codex"
     } else {
-        return Err("codex 未安装，无法生成任务名称。请安装 codex 后重试。".to_string());
+        return Ok(create_local_fallback_title(&original_prompt));
     };
     let naming_is_codex = naming_agent == "codex";
 
@@ -326,18 +465,33 @@ pub async fn generate_task_name(
     };
 
     // 3. 拼装命名 prompt
-    let truncated_prompt = truncate_prompt(original_prompt);
+    let truncated_prompt = truncate_prompt(&original_prompt);
     let full_prompt = build_naming_prompt(&truncated_prompt, summary.as_deref());
 
     // 4. 调用 agent 子进程（kill-on-timeout）
-    let output =
-        run_naming_agent_with_timeout(naming_agent, &project_path, &full_prompt, NAMING_TIMEOUT)
-            .await?;
+    let output = match run_naming_agent_with_timeout(
+        naming_agent,
+        &project_path,
+        &full_prompt,
+        NAMING_TIMEOUT,
+    )
+    .await
+    {
+        Ok(output) => output,
+        Err(e) => {
+            eprintln!("[generate_task_name] {}", e);
+            return Ok(create_local_fallback_title(&original_prompt));
+        }
+    };
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         let stdout = String::from_utf8_lossy(&output.stdout);
-        return Err(format!("Agent failed: {}{}", stderr, stdout));
+        eprintln!(
+            "[generate_task_name] {}",
+            format_naming_agent_failure(&stderr, &stdout)
+        );
+        return Ok(create_local_fallback_title(&original_prompt));
     }
 
     let raw = String::from_utf8_lossy(&output.stdout).into_owned();
@@ -351,7 +505,7 @@ pub async fn generate_task_name(
 
     let sanitized = sanitize_title(&answer);
     if sanitized.is_empty() {
-        return Err("Agent returned empty response.".to_string());
+        return Ok(create_local_fallback_title(&original_prompt));
     }
     Ok(sanitized)
 }
@@ -446,6 +600,28 @@ mod tests {
     fn sanitize_truncates_to_120_chars() {
         let long = "a".repeat(200);
         assert_eq!(sanitize_title(&long).chars().count(), MAX_TITLE_CHARS);
+    }
+
+    #[test]
+    fn local_fallback_title_starts_with_chinese_verb() {
+        assert_eq!(
+            create_local_fallback_title("允许对于已完成的任务进行继续任务，类似于 codex resume"),
+            "继续已完成的任务"
+        );
+    }
+
+    #[test]
+    fn naming_agent_failure_filters_codex_system_skill_noise() {
+        let stderr = "Reading additional input from stdin...\n2026-07-08T01:54:01Z ERROR codex_core_skills::service: failed to install system skills: io error while remove existing system skills dir: Permission denied (os error 13)\n";
+        let formatted =
+            format_naming_agent_failure(stderr, "ERROR: Your workspace is out of credits.");
+
+        assert_eq!(
+            formatted,
+            "Agent failed: ERROR: Your workspace is out of credits."
+        );
+        assert!(!formatted.contains("codex_core_skills"));
+        assert!(!formatted.contains("Permission denied"));
     }
 
     #[test]

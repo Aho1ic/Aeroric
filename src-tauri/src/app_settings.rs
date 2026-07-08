@@ -47,6 +47,10 @@ pub struct CustomAgentProfile {
     pub codex_like: bool,
     #[serde(default = "default_custom_agent_config_lang")]
     pub config_lang: String,
+    #[serde(default)]
+    pub username: String,
+    #[serde(default)]
+    pub password: String,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
@@ -226,6 +230,8 @@ fn normalize_custom_agent_profile(profile: CustomAgentProfile) -> Option<CustomA
         path: resolve_agent_launch_spec_from_path(&profile.id, &path).program,
         codex_like: profile.codex_like,
         config_lang: normalize_config_lang(profile.config_lang),
+        username: profile.username.trim().to_string(),
+        password: profile.password.trim().to_string(),
     })
 }
 
@@ -390,6 +396,30 @@ fn append_agent_proxy_env(
     if !proxy.no_proxy.is_empty() {
         extra_env.push(("NO_PROXY".to_string(), proxy.no_proxy.clone()));
         extra_env.push(("no_proxy".to_string(), proxy.no_proxy));
+    }
+}
+
+fn append_agent_credential_env(
+    settings: &AppSettings,
+    agent: &str,
+    extra_env: &mut Vec<(String, String)>,
+) {
+    let Some(profile) = settings
+        .custom_agents
+        .iter()
+        .find(|profile| profile.id == agent)
+    else {
+        return;
+    };
+
+    let username = profile.username.trim();
+    if !username.is_empty() {
+        extra_env.push(("AERORIC_AGENT_USERNAME".to_string(), username.to_string()));
+    }
+
+    let password = profile.password.trim();
+    if !password.is_empty() {
+        extra_env.push(("AERORIC_AGENT_PASSWORD".to_string(), password.to_string()));
     }
 }
 
@@ -685,6 +715,7 @@ fn resolve_agent_launch_spec_from_path(agent: &str, path: &str) -> AgentLaunchSp
 fn get_agent_launch_spec_from_settings(settings: &AppSettings, agent: &str) -> AgentLaunchSpec {
     let mut spec =
         resolve_agent_launch_spec_from_path(agent, &get_agent_configured_path(settings, agent));
+    append_agent_credential_env(settings, agent, &mut spec.extra_env);
     append_agent_proxy_env(settings, agent, &mut spec.extra_env);
     spec
 }
@@ -1176,6 +1207,8 @@ pub async fn setup_agent_profile(draft: AgentSetupDraft) -> Result<AppSettings, 
             path: script_path.to_string_lossy().into_owned(),
             codex_like: matches!(draft.kind, AgentSetupKind::Codex),
             config_lang: "shellscript".to_string(),
+            username: String::new(),
+            password: String::new(),
         };
         let profile = normalize_custom_agent_profile(profile)
             .ok_or_else(|| "Invalid custom agent profile".to_string())?;
@@ -1670,6 +1703,8 @@ mod tests {
                 path: "/Users/macbook/.claude/start-joverna.sh".to_string(),
                 codex_like: false,
                 config_lang: "shellscript".to_string(),
+                username: "alice".to_string(),
+                password: "secret".to_string(),
             }],
             proxy_settings: ProxySettings {
                 url: "127.0.0.1:7890".to_string(),
@@ -1689,6 +1724,58 @@ mod tests {
         assert!(launch
             .extra_env
             .contains(&("NO_PROXY".to_string(), "localhost,127.0.0.1".to_string())));
+    }
+
+    #[test]
+    fn custom_agent_credentials_are_injected_as_optional_env() {
+        let settings = AppSettings {
+            custom_agents: vec![CustomAgentProfile {
+                id: "joverna".to_string(),
+                label: "Joverna".to_string(),
+                path: "/Users/macbook/.claude/start-joverna.sh".to_string(),
+                codex_like: false,
+                config_lang: "shellscript".to_string(),
+                username: "alice".to_string(),
+                password: "secret".to_string(),
+            }],
+            ..AppSettings::default()
+        };
+
+        let launch = get_agent_launch_spec_from_settings(&settings, "joverna");
+
+        assert!(launch
+            .extra_env
+            .contains(&("AERORIC_AGENT_USERNAME".to_string(), "alice".to_string())));
+        assert!(launch
+            .extra_env
+            .contains(&("AERORIC_AGENT_PASSWORD".to_string(), "secret".to_string())));
+    }
+
+    #[test]
+    fn custom_agent_credentials_are_omitted_when_empty() {
+        let settings = AppSettings {
+            custom_agents: vec![CustomAgentProfile {
+                id: "joverna".to_string(),
+                label: "Joverna".to_string(),
+                path: "/Users/macbook/.claude/start-joverna.sh".to_string(),
+                codex_like: false,
+                config_lang: "shellscript".to_string(),
+                username: " ".to_string(),
+                password: "".to_string(),
+            }],
+            ..AppSettings::default()
+        };
+
+        let launch = get_agent_launch_spec_from_settings(&settings, "joverna");
+
+        assert!(!launch
+            .extra_env
+            .iter()
+            .any(|(key, _)| key == "AERORIC_AGENT_USERNAME"));
+        assert!(!launch
+            .extra_env
+            .iter()
+            .any(|(key, _)| key == "AERORIC_AGENT_PASSWORD"));
     }
 
     #[test]
