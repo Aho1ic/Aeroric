@@ -41,6 +41,8 @@ export interface AppSettings {
 export interface ProxySettings {
   url: string;
   no_proxy: string;
+  username?: string;
+  password?: string;
 }
 
 export interface AgentVersions {

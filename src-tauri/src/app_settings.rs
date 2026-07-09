@@ -53,9 +53,9 @@ pub struct CustomAgentProfile {
     pub api_key: String,
     #[serde(default)]
     pub models: Vec<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub username: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub password: String,
 }
 
@@ -89,6 +89,10 @@ pub struct ProxySettings {
     pub url: String,
     #[serde(default)]
     pub no_proxy: String,
+    #[serde(default)]
+    pub username: String,
+    #[serde(default)]
+    pub password: String,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
@@ -239,8 +243,8 @@ fn normalize_custom_agent_profile(profile: CustomAgentProfile) -> Option<CustomA
         base_url: normalize_base_url(&profile.base_url),
         api_key: profile.api_key.trim().to_string(),
         models: normalize_model_list(profile.models),
-        username: profile.username.trim().to_string(),
-        password: profile.password.trim().to_string(),
+        username: String::new(),
+        password: String::new(),
     })
 }
 
@@ -331,6 +335,8 @@ fn normalize_proxy_settings(settings: ProxySettings) -> ProxySettings {
     ProxySettings {
         url: normalize_proxy_url(&settings.url),
         no_proxy: normalize_no_proxy(&settings.no_proxy),
+        username: settings.username.trim().to_string(),
+        password: settings.password.trim().to_string(),
     }
 }
 
@@ -345,22 +351,38 @@ fn normalize_agent_proxy_enabled(overrides: HashMap<String, bool>) -> HashMap<St
 }
 
 fn migrate_legacy_proxy_settings(settings: &AppSettings) -> ProxySettings {
-    if !settings.proxy_settings.url.trim().is_empty()
+    let mut proxy = if !settings.proxy_settings.url.trim().is_empty()
         || !settings.proxy_settings.no_proxy.trim().is_empty()
+        || !settings.proxy_settings.username.trim().is_empty()
+        || !settings.proxy_settings.password.trim().is_empty()
     {
-        return normalize_proxy_settings(settings.proxy_settings.clone());
-    }
-    settings
-        .agent_proxy_overrides
-        .values()
-        .find(|config| !config.url.trim().is_empty() || !config.no_proxy.trim().is_empty())
-        .map(|config| {
-            normalize_proxy_settings(ProxySettings {
-                url: config.url.clone(),
-                no_proxy: config.no_proxy.clone(),
+        normalize_proxy_settings(settings.proxy_settings.clone())
+    } else {
+        settings
+            .agent_proxy_overrides
+            .values()
+            .find(|config| !config.url.trim().is_empty() || !config.no_proxy.trim().is_empty())
+            .map(|config| {
+                normalize_proxy_settings(ProxySettings {
+                    url: config.url.clone(),
+                    no_proxy: config.no_proxy.clone(),
+                    username: String::new(),
+                    password: String::new(),
+                })
             })
-        })
-        .unwrap_or_default()
+            .unwrap_or_default()
+    };
+
+    if proxy.username.is_empty() && proxy.password.is_empty() {
+        if let Some(profile) = settings.custom_agents.iter().find(|profile| {
+            !profile.username.trim().is_empty() || !profile.password.trim().is_empty()
+        }) {
+            proxy.username = profile.username.trim().to_string();
+            proxy.password = profile.password.trim().to_string();
+        }
+    }
+
+    proxy
 }
 
 fn migrate_agent_proxy_enabled(settings: &AppSettings) -> HashMap<String, bool> {
@@ -413,20 +435,27 @@ fn append_agent_credential_env(
     agent: &str,
     extra_env: &mut Vec<(String, String)>,
 ) {
-    let Some(profile) = settings
-        .custom_agents
-        .iter()
-        .find(|profile| profile.id == agent)
-    else {
+    let key = normalize_agent_label_key(agent);
+    if !settings
+        .agent_proxy_enabled
+        .get(&key)
+        .copied()
+        .unwrap_or(false)
+    {
         return;
-    };
+    }
 
-    let username = profile.username.trim();
+    let proxy = normalize_proxy_settings(settings.proxy_settings.clone());
+    if proxy.url.trim().is_empty() {
+        return;
+    }
+
+    let username = proxy.username.trim();
     if !username.is_empty() {
         extra_env.push(("AERORIC_AGENT_USERNAME".to_string(), username.to_string()));
     }
 
-    let password = profile.password.trim();
+    let password = proxy.password.trim();
     if !password.is_empty() {
         extra_env.push(("AERORIC_AGENT_PASSWORD".to_string(), password.to_string()));
     }
@@ -1831,6 +1860,8 @@ mod tests {
             proxy_settings: ProxySettings {
                 url: "127.0.0.1:7890".to_string(),
                 no_proxy: " localhost, 127.0.0.1 ".to_string(),
+                username: "alice".to_string(),
+                password: "secret".to_string(),
             },
             agent_proxy_enabled: proxy_enabled,
             ..AppSettings::default()
@@ -1846,10 +1877,16 @@ mod tests {
         assert!(launch
             .extra_env
             .contains(&("NO_PROXY".to_string(), "localhost,127.0.0.1".to_string())));
+        assert!(launch
+            .extra_env
+            .contains(&("AERORIC_AGENT_USERNAME".to_string(), "alice".to_string())));
+        assert!(launch
+            .extra_env
+            .contains(&("AERORIC_AGENT_PASSWORD".to_string(), "secret".to_string())));
     }
 
     #[test]
-    fn custom_agent_credentials_are_injected_as_optional_env() {
+    fn legacy_custom_agent_credentials_migrate_to_global_proxy_settings() {
         let settings = AppSettings {
             custom_agents: vec![CustomAgentProfile {
                 id: "joverna".to_string(),
@@ -1866,31 +1903,48 @@ mod tests {
             ..AppSettings::default()
         };
 
-        let launch = get_agent_launch_spec_from_settings(&settings, "joverna");
+        let normalized = normalize_settings(settings);
 
-        assert!(launch
-            .extra_env
-            .contains(&("AERORIC_AGENT_USERNAME".to_string(), "alice".to_string())));
-        assert!(launch
-            .extra_env
-            .contains(&("AERORIC_AGENT_PASSWORD".to_string(), "secret".to_string())));
+        assert_eq!(normalized.proxy_settings.username, "alice");
+        assert_eq!(normalized.proxy_settings.password, "secret");
+        assert_eq!(normalized.custom_agents[0].username, "");
+        assert_eq!(normalized.custom_agents[0].password, "");
     }
 
     #[test]
-    fn custom_agent_credentials_are_omitted_when_empty() {
+    fn global_proxy_credentials_are_omitted_when_agent_proxy_is_disabled() {
         let settings = AppSettings {
-            custom_agents: vec![CustomAgentProfile {
-                id: "joverna".to_string(),
-                label: "Joverna".to_string(),
-                path: "/Users/macbook/.claude/start-joverna.sh".to_string(),
-                codex_like: false,
-                config_lang: "shellscript".to_string(),
-                base_url: String::new(),
-                api_key: String::new(),
-                models: Vec::new(),
-                username: " ".to_string(),
-                password: "".to_string(),
-            }],
+            proxy_settings: ProxySettings {
+                username: "alice".to_string(),
+                password: "secret".to_string(),
+                ..ProxySettings::default()
+            },
+            ..AppSettings::default()
+        };
+
+        let launch = get_agent_launch_spec_from_settings(&settings, "joverna");
+
+        assert!(!launch
+            .extra_env
+            .iter()
+            .any(|(key, _)| key == "AERORIC_AGENT_USERNAME"));
+        assert!(!launch
+            .extra_env
+            .iter()
+            .any(|(key, _)| key == "AERORIC_AGENT_PASSWORD"));
+    }
+
+    #[test]
+    fn global_proxy_credentials_are_omitted_without_proxy_url() {
+        let mut proxy_enabled = HashMap::new();
+        proxy_enabled.insert("joverna".to_string(), true);
+        let settings = AppSettings {
+            proxy_settings: ProxySettings {
+                username: "alice".to_string(),
+                password: "secret".to_string(),
+                ..ProxySettings::default()
+            },
+            agent_proxy_enabled: proxy_enabled,
             ..AppSettings::default()
         };
 
@@ -1927,6 +1981,8 @@ mod tests {
             ProxySettings {
                 url: "http://127.0.0.1:7890".to_string(),
                 no_proxy: "localhost,127.0.0.1".to_string(),
+                username: String::new(),
+                password: String::new(),
             }
         );
         assert_eq!(normalized.agent_proxy_enabled.get("joverna"), Some(&true));

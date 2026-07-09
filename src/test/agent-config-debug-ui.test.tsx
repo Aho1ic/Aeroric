@@ -419,36 +419,22 @@ describe("Agent config and debug panel UI", () => {
     );
   });
 
-  it("saves optional username and password for custom agents", async () => {
-    const user = userEvent.setup();
+  it("does not render proxy credentials in custom agent configuration", async () => {
     renderJovernaAgentConfigPanel();
 
     await findConfigEditor("#!/bin/sh\n");
-    await user.type(screen.getByLabelText("Username"), "alice");
-    await user.type(screen.getByLabelText("Password"), "secret");
-    await user.click(getEnabledSaveButton());
-
-    await waitFor(() =>
-      expect(invoke).toHaveBeenCalledWith("save_app_settings", {
-        settings: expect.objectContaining({
-          custom_agents: [
-            expect.objectContaining({
-              id: "joverna",
-              username: "alice",
-              password: "secret",
-            }),
-          ],
-        }),
-      }),
-    );
+    expect(screen.queryByLabelText("Username")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Password")).not.toBeInTheDocument();
   });
 
-  it("saves shared proxy URL and NO_PROXY from the application proxy page", async () => {
+  it("saves shared proxy URL, NO_PROXY, and credentials from the application proxy page", async () => {
     const user = userEvent.setup();
     renderProxyPanel();
 
     await user.type(await screen.findByLabelText("Proxy URL"), "127.0.0.1:7890");
     await user.type(screen.getByLabelText("NO_PROXY"), "localhost,127.0.0.1");
+    await user.type(screen.getByLabelText("Username"), "alice");
+    await user.type(screen.getByLabelText("Password"), "secret");
     await user.click(screen.getByRole("button", { name: /^Save$/i }));
 
     await waitFor(() =>
@@ -457,6 +443,8 @@ describe("Agent config and debug panel UI", () => {
           proxy_settings: {
             url: "127.0.0.1:7890",
             no_proxy: "localhost,127.0.0.1",
+            username: "alice",
+            password: "secret",
           },
           agent_proxy_enabled: {
             joverna: true,

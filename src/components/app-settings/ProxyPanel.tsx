@@ -35,7 +35,7 @@ const hintStyle: React.CSSProperties = {
   marginTop: 3,
 };
 
-const emptyProxySettings: ProxySettings = { url: "", no_proxy: "" };
+const emptyProxySettings: ProxySettings = { url: "", no_proxy: "", username: "", password: "" };
 
 const emptySettings: AppSettings = {
   claude_path: "",
@@ -55,13 +55,18 @@ const emptySettings: AppSettings = {
 function settingsWithProxy(settings: AppSettings): AppSettings {
   return {
     ...settings,
-    proxy_settings: settings.proxy_settings ?? emptyProxySettings,
+    proxy_settings: { ...emptyProxySettings, ...(settings.proxy_settings ?? {}) },
     agent_proxy_enabled: settings.agent_proxy_enabled ?? {},
   };
 }
 
 function proxyEqual(a: ProxySettings, b: ProxySettings): boolean {
-  return a.url === b.url && a.no_proxy === b.no_proxy;
+  return (
+    a.url === b.url &&
+    a.no_proxy === b.no_proxy &&
+    (a.username ?? "") === (b.username ?? "") &&
+    (a.password ?? "") === (b.password ?? "")
+  );
 }
 
 export function ProxyPanel() {
@@ -182,6 +187,68 @@ export function ProxyPanel() {
             spellCheck={false}
           />
           <div style={hintStyle}>{t("appSettings.agentProxyNoProxyHint")}</div>
+        </div>
+
+        <div>
+          <label style={labelStyle} htmlFor="app-proxy-username">
+            {t("appSettings.proxyUsername")}
+          </label>
+          <input
+            id="app-proxy-username"
+            style={{
+              ...inputStyle,
+              opacity: loading ? 0.65 : 1,
+              cursor: loading ? "wait" : "text",
+            }}
+            value={proxy.username ?? ""}
+            onChange={(e) => {
+              const username = e.target.value;
+              setSettings((prev) => ({
+                ...prev,
+                proxy_settings: {
+                  ...emptyProxySettings,
+                  ...(prev.proxy_settings ?? {}),
+                  username,
+                },
+              }));
+            }}
+            placeholder={t("appSettings.proxyCredentialOptional")}
+            disabled={loading}
+            autoComplete="off"
+            spellCheck={false}
+          />
+          <div style={hintStyle}>{t("appSettings.proxyCredentialHint")}</div>
+        </div>
+
+        <div>
+          <label style={labelStyle} htmlFor="app-proxy-password">
+            {t("appSettings.proxyPassword")}
+          </label>
+          <input
+            id="app-proxy-password"
+            type="password"
+            style={{
+              ...inputStyle,
+              opacity: loading ? 0.65 : 1,
+              cursor: loading ? "wait" : "text",
+            }}
+            value={proxy.password ?? ""}
+            onChange={(e) => {
+              const password = e.target.value;
+              setSettings((prev) => ({
+                ...prev,
+                proxy_settings: {
+                  ...emptyProxySettings,
+                  ...(prev.proxy_settings ?? {}),
+                  password,
+                },
+              }));
+            }}
+            placeholder={t("appSettings.proxyCredentialOptional")}
+            disabled={loading}
+            autoComplete="new-password"
+            spellCheck={false}
+          />
         </div>
       </div>
 

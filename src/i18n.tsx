@@ -131,6 +131,11 @@ const translations: Record<AppLanguage, Record<string, string>> = {
     "appSettings.agentProxyNoProxy": "NO_PROXY",
     "appSettings.agentProxyNoProxyHint":
       "Optional comma-separated hosts that should bypass the proxy.",
+    "appSettings.proxyUsername": "Username",
+    "appSettings.proxyPassword": "Password",
+    "appSettings.proxyCredentialOptional": "Optional",
+    "appSettings.proxyCredentialHint":
+      "Optional credentials. Aeroric passes them through environment variables when launching agents that use the proxy.",
     "appSettings.installedVersions": "Installed Versions",
     "appSettings.versionsHint":
       "Versions are detected from the configured executable path or the system PATH.",
@@ -1893,6 +1898,10 @@ const translations: Record<AppLanguage, Record<string, string>> = {
       "填写本机代理地址，例如 http://127.0.0.1:7890。未填写协议时默认按 http:// 处理。",
     "appSettings.agentProxyNoProxy": "NO_PROXY",
     "appSettings.agentProxyNoProxyHint": "可选，逗号分隔不走代理的主机名或地址。",
+    "appSettings.proxyUsername": "用户名",
+    "appSettings.proxyPassword": "密码",
+    "appSettings.proxyCredentialOptional": "可不填",
+    "appSettings.proxyCredentialHint": "可选凭据。Aeroric 启动该代理时会通过环境变量传入。",
     "appSettings.installedVersions": "已安装版本",
     "appSettings.versionsHint": "版本会从配置的可执行文件路径或系统 PATH 中检测。",
     "appSettings.description": "轻量级跨平台 AI IDE",

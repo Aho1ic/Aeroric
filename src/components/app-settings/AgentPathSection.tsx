@@ -268,10 +268,6 @@ export function AgentPathSection({ agentKey }: { agentKey: AgentKey }) {
 
   const currentCustomAgent = findCustomAgent(settings, agentKey);
   const originalCustomAgent = findCustomAgent(originalSettings, agentKey);
-  const currentUsername = currentCustomAgent?.username ?? "";
-  const originalUsername = originalCustomAgent?.username ?? "";
-  const currentPassword = currentCustomAgent?.password ?? "";
-  const originalPassword = originalCustomAgent?.password ?? "";
   const currentPath = pathField ? settings[pathField] : (currentCustomAgent?.path ?? "");
   const originalPath = pathField ? originalSettings[pathField] : (originalCustomAgent?.path ?? "");
   const currentConfigPath = configPathField ? settings[configPathField] : "";
@@ -290,12 +286,8 @@ export function AgentPathSection({ agentKey }: { agentKey: AgentKey }) {
     currentPath !== originalPath ||
     currentConfigPath !== originalConfigPath ||
     currentLabelOverride !== originalLabelOverride ||
-    currentProxyEnabled !== originalProxyEnabled ||
-    currentUsername !== originalUsername ||
-    currentPassword !== originalPassword;
+    currentProxyEnabled !== originalProxyEnabled;
   const versionValue = versionField ? versions[versionField] : customVersion;
-  const usernameInputId = `agent-credential-username-${agentKey}`;
-  const passwordInputId = `agent-credential-password-${agentKey}`;
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12, marginBottom: 18 }}>
@@ -404,60 +396,6 @@ export function AgentPathSection({ agentKey }: { agentKey: AgentKey }) {
           />
           <span style={hintStyle}>{t("appSettings.configFilePathHint")}</span>
         </div>
-      )}
-
-      {!builtInAgent && (
-        <>
-          <div style={fieldStyle}>
-            <label style={labelStyle} htmlFor={usernameInputId}>
-              {t("appSettings.agentUsername")}
-            </label>
-            <input
-              id={usernameInputId}
-              style={inputStyle}
-              value={currentUsername}
-              onChange={(e) => {
-                const username = e.target.value;
-                setSettings((prev) => ({
-                  ...prev,
-                  custom_agents: (prev.custom_agents ?? []).map((profile) =>
-                    profile.id === agentKey ? { ...profile, username } : profile,
-                  ),
-                }));
-              }}
-              placeholder={t("appSettings.agentUsernamePlaceholder")}
-              disabled={loading}
-              autoComplete="off"
-              spellCheck={false}
-            />
-            <span style={hintStyle}>{t("appSettings.agentCredentialHint")}</span>
-          </div>
-
-          <div style={fieldStyle}>
-            <label style={labelStyle} htmlFor={passwordInputId}>
-              {t("appSettings.agentPassword")}
-            </label>
-            <input
-              id={passwordInputId}
-              type="password"
-              style={inputStyle}
-              value={currentPassword}
-              onChange={(e) => {
-                const password = e.target.value;
-                setSettings((prev) => ({
-                  ...prev,
-                  custom_agents: (prev.custom_agents ?? []).map((profile) =>
-                    profile.id === agentKey ? { ...profile, password } : profile,
-                  ),
-                }));
-              }}
-              placeholder={t("appSettings.agentPasswordPlaceholder")}
-              disabled={loading}
-              autoComplete="new-password"
-              spellCheck={false}
-            />
-          </div>
-        </>
       )}
 
       <div style={fieldStyle}>
