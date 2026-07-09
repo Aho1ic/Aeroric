@@ -38,6 +38,7 @@ import { useToast } from "./components/Toast";
 import { isHideWindowShortcut } from "./shortcuts";
 import { APP_PLATFORM } from "./platform";
 import { agentDisplayLabel, isCodexLikeAgent } from "./agents";
+import { useAgentOptions } from "./hooks/useAgentOptions";
 import { useTerminalManager } from "./hooks/useTerminalManager";
 import { useWorktreeDiffStats } from "./hooks/useWorktreeDiffStats";
 import { useI18n } from "./i18n";
@@ -238,6 +239,7 @@ const SELECTED_CONDA_ENV_KEY = "aeroric:selectedCondaEnvPath";
 function App() {
   const { showToast } = useToast();
   const { t } = useI18n();
+  const agentOptions = useAgentOptions();
 
   const [themeMode, setThemeMode] = useState<ThemeMode>(getInitialThemeMode);
   const [systemPrefersDark, setSystemPrefersDark] = useState(getSystemPrefersDark);
@@ -730,7 +732,7 @@ function App() {
       id: taskId,
       projectId: project.id,
       prompt,
-      name: prompt.trim() ? undefined : agentDisplayLabel(agent),
+      name: prompt.trim() ? undefined : agentDisplayLabel(agent, agentOptions),
       agent,
       selectedModel,
       permissionMode,
@@ -957,7 +959,7 @@ function App() {
     const project = projects.find((p) => p.id === task.projectId);
     if (!project) return;
 
-    const codexLike = isCodexLikeAgent(task.agent);
+    const codexLike = isCodexLikeAgent(task.agent, agentOptions);
     const sessionPath = codexLike ? task.codexSessionPath : task.claudeSessionPath;
     let sessionId = codexLike ? task.codexSessionId : task.claudeSessionId;
     if (!sessionId && sessionPath && resolveProjectLocation(project).kind === "local") {
@@ -1011,7 +1013,7 @@ function App() {
   async function handleReconnectTask(taskId: string) {
     const task = tasks.find((t) => t.id === taskId);
     if (!task) return;
-    const codexLike = isCodexLikeAgent(task.agent);
+    const codexLike = isCodexLikeAgent(task.agent, agentOptions);
     const sessionId = codexLike ? task.codexSessionId : task.claudeSessionId;
     const sessionPath = codexLike ? task.codexSessionPath : task.claudeSessionPath;
     if (!sessionId && !sessionPath) {
@@ -1177,7 +1179,7 @@ function App() {
     const project = projects.find((p) => p.id === task.projectId);
     if (!project) return;
     // 按 agent 选择对应字段，避免历史数据两个字段都有时取错
-    const sessionPath = isCodexLikeAgent(task.agent)
+    const sessionPath = isCodexLikeAgent(task.agent, agentOptions)
       ? (task.codexSessionPath ?? null)
       : (task.claudeSessionPath ?? null);
     // 点击瞬间的快照，用于 await 完成后的并发校验（防止用户期间 rerun/resume/手改名）
@@ -1203,7 +1205,7 @@ function App() {
         if ((current.name ?? "") !== expectedPriorName) return prev;
         if (current.prompt !== expectedPrompt) return prev;
         if (current.status !== expectedStatus) return prev;
-        const currentSessionPath = isCodexLikeAgent(current.agent)
+        const currentSessionPath = isCodexLikeAgent(current.agent, agentOptions)
           ? (current.codexSessionPath ?? null)
           : (current.claudeSessionPath ?? null);
         if (currentSessionPath !== expectedSessionPath) return prev;

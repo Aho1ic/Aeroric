@@ -501,6 +501,14 @@ fn normalized_selected_model(selected_model: Option<&str>) -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
+fn prompt_with_project_prefix(prompt: &str, prompt_prefix: &str) -> String {
+    if prompt.is_empty() || prompt_prefix.is_empty() {
+        prompt.to_string()
+    } else {
+        format!("{}\n{}", prompt_prefix, prompt)
+    }
+}
+
 fn add_codex_launch_args(
     cmd: &mut CommandBuilder,
     project_path: &str,
@@ -562,13 +570,11 @@ pub async fn run_task(
             .map_err(|e| e.to_string())??
     };
 
-    // 若配置了项目级 prompt_prefix，则拼接到提示词前
+    // 若配置了项目级 prompt_prefix，则拼接到提示词前。
+    // 空 prompt 表示“启动交互式 Agent 终端”，不能注入前缀，否则会被误判为
+    // 非交互任务并触发 /status watcher。
     let config = crate::config::read_project_config(project_path.clone()).unwrap_or_default();
-    let base_prompt = if config.agent.prompt_prefix.is_empty() {
-        prompt.clone()
-    } else {
-        format!("{}\n{}", config.agent.prompt_prefix, prompt)
-    };
+    let base_prompt = prompt_with_project_prefix(&prompt, &config.agent.prompt_prefix);
 
     // 将图片路径追加到提示词，供 Claude Code 通过文件工具读取
     let prompt_with_images = if image_paths.is_empty() {
@@ -599,10 +605,13 @@ pub async fn run_task(
 
     // 版本统一走全局探测（带缓存），判断是否支持 --session-id。
     // 缓存未命中时 *_version_gte 会启子进程探测，故放进 spawn_blocking 避免阻塞 async runtime。
-    let use_explicit_session = agent == "claude"
-        && tokio::task::spawn_blocking(|| crate::app_settings::claude_version_gte("2.1.87"))
-            .await
-            .unwrap_or(false);
+    let version_agent = agent.clone();
+    let use_explicit_session = !is_codex
+        && tokio::task::spawn_blocking(move || {
+            crate::app_settings::agent_version_gte(&version_agent, "2.1.87")
+        })
+        .await
+        .unwrap_or(false);
 
     // 预生成 session id（仅 Claude >= 2.1.87 使用）
     let pre_session_id = if use_explicit_session {
@@ -1099,5 +1108,18 @@ mod tests {
         );
         assert_eq!(normalized_selected_model(Some("  ")), None);
         assert_eq!(normalized_selected_model(None), None);
+    }
+
+    #[test]
+    fn project_prompt_prefix_is_not_applied_to_interactive_terminal_start() {
+        assert_eq!(prompt_with_project_prefix("", "prefix"), "");
+    }
+
+    #[test]
+    fn project_prompt_prefix_is_applied_to_non_empty_tasks() {
+        assert_eq!(
+            prompt_with_project_prefix("do the work", "prefix"),
+            "prefix\ndo the work"
+        );
     }
 }

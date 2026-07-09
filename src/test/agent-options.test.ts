@@ -45,6 +45,28 @@ describe("agent options", () => {
     expect(isCodexLikeAgent("codex")).toBe(true);
   });
 
+  it("uses the custom profile codex-like flag when options are available", () => {
+    const options = agentOptionsFromProfiles([
+      {
+        id: "local_claude",
+        label: "Local Claude",
+        path: "/tmp/claude-wrapper.sh",
+        codex_like: false,
+        config_lang: "shellscript",
+      },
+      {
+        id: "local_codex",
+        label: "Local Codex",
+        path: "/tmp/codex-wrapper.sh",
+        codex_like: true,
+        config_lang: "shellscript",
+      },
+    ]);
+
+    expect(isCodexLikeAgent("local_claude", options)).toBe(false);
+    expect(isCodexLikeAgent("local_codex", options)).toBe(true);
+  });
+
   it("uses concise permission labels in the compose toolbar", () => {
     expect(composePermissionLabel("ask")).toBe("请求确认");
     expect(composePermissionLabel("auto_edit")).toBe("替我审批");

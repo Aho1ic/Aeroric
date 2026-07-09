@@ -344,6 +344,7 @@ export function NewTaskView({
     };
   }, []);
 
+  const codexLikeAgent = isCodexLikeAgent(agent, agentOptions);
   const agentReadiness = hookReadiness?.find((r) => r.agent === agent) ?? null;
   const hookBanner = (() => {
     if (!agentReadiness || agentReadiness.usable) return null;
@@ -475,7 +476,7 @@ export function NewTaskView({
   }
 
   function handleInitializeMd() {
-    const filename = isCodexLikeAgent(agent, agentOptions) ? "AGENTS.md" : "CLAUDE.md";
+    const filename = codexLikeAgent ? "AGENTS.md" : "CLAUDE.md";
     const prompt = t("newTask.initializePrompt", { file: filename });
     // 初始化 md 文件不涉及代码改动，强制走本地，避免无谓的 worktree 开销。
     // Claude 的 full_access 会触发 `--dangerously-skip-permissions` 交互确认，
@@ -491,7 +492,7 @@ export function NewTaskView({
       immediate: true,
       launchMode: "local",
       baseBranch: "",
-      selectedModel: isCodexLikeAgent(agent, agentOptions) ? selectedModel || undefined : undefined,
+      selectedModel: codexLikeAgent ? selectedModel || undefined : undefined,
     });
   }
 
@@ -513,7 +514,7 @@ export function NewTaskView({
       immediate,
       launchMode,
       baseBranch,
-      selectedModel: isCodexLikeAgent(agent, agentOptions) ? selectedModel || undefined : undefined,
+      selectedModel: codexLikeAgent ? selectedModel || undefined : undefined,
     });
     editorHandle.clear();
     setIsEmpty(true);
@@ -547,7 +548,7 @@ export function NewTaskView({
     <div style={s.newTaskOuter}>
       {/* Header */}
       <div style={s.newTaskHeader}>
-        <img src={agent === "claude" ? claudeGif : codexGif} alt="" style={s.newTaskClaudeGif} />
+        <img src={codexLikeAgent ? codexGif : claudeGif} alt="" style={s.newTaskClaudeGif} />
         <span style={s.newTaskTitle}>{t("newTask.title")}</span>
       </div>
 
@@ -563,8 +564,8 @@ export function NewTaskView({
               <span style={{ fontWeight: 650, color: "var(--text-primary)" }}>
                 {
                   t("newTask.instructionsMissing", {
-                    file: isCodexLikeAgent(agent, agentOptions) ? "AGENTS.md" : "CLAUDE.md",
-                  }).split(isCodexLikeAgent(agent, agentOptions) ? "AGENTS.md" : "CLAUDE.md")[0]
+                    file: codexLikeAgent ? "AGENTS.md" : "CLAUDE.md",
+                  }).split(codexLikeAgent ? "AGENTS.md" : "CLAUDE.md")[0]
                 }
                 <code
                   style={{
@@ -575,16 +576,16 @@ export function NewTaskView({
                     borderRadius: 3,
                   }}
                 >
-                  {isCodexLikeAgent(agent, agentOptions) ? "AGENTS.md" : "CLAUDE.md"}
+                  {codexLikeAgent ? "AGENTS.md" : "CLAUDE.md"}
                 </code>{" "}
                 {
                   t("newTask.instructionsMissing", {
-                    file: isCodexLikeAgent(agent, agentOptions) ? "AGENTS.md" : "CLAUDE.md",
-                  }).split(isCodexLikeAgent(agent, agentOptions) ? "AGENTS.md" : "CLAUDE.md")[1]
+                    file: codexLikeAgent ? "AGENTS.md" : "CLAUDE.md",
+                  }).split(codexLikeAgent ? "AGENTS.md" : "CLAUDE.md")[1]
                 }
               </span>{" "}
               {t("newTask.addInstructions", {
-                file: isCodexLikeAgent(agent, agentOptions) ? "AGENTS.md" : "CLAUDE.md",
+                file: codexLikeAgent ? "AGENTS.md" : "CLAUDE.md",
                 agent: agentDisplayLabel(agent, agentOptions),
               })}
             </div>
@@ -727,7 +728,7 @@ export function NewTaskView({
               ) : null
             }
             modelControls={
-              isCodexLikeAgent(agent, agentOptions) ? (
+              codexLikeAgent ? (
                 <Select.Root
                   value={selectedModel || "__none__"}
                   open={composeOpenMenu === "model"}

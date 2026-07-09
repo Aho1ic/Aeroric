@@ -14,7 +14,6 @@ import type { TerminalFontSize, FontFamily, ThemeVariant } from "../types";
 import {
   themeFor,
   initTerminal,
-  loadWebglAddon,
   safeFit,
   createSmartWriter,
   attachMacWebKitTerminalGuard,
@@ -92,7 +91,9 @@ export function TerminalView({
     term.loadAddon(serializeAddon);
     term.open(container);
     const disposeInputFix = attachMacWebKitShiftInputFix(term);
-    loadWebglAddon(term);
+    // Agent TUIs frequently mix ASCII, CJK, emoji, and box drawing glyphs.
+    // The DOM renderer handles font fallback more reliably in WKWebView; WebGL can
+    // drop glyphs from fallback fonts and make terminal text appear missing.
 
     const size = safeFit(fitAddon, term, container);
     if (size) notifyResize(size.cols, size.rows);

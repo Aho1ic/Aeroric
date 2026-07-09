@@ -113,7 +113,7 @@ export function RunningView({
   const isDetached = task.status === "detached";
   const isInterrupted = task.status === "interrupted";
   const sessionPath = task.claudeSessionPath ?? task.codexSessionPath;
-  const codexLike = isCodexLikeAgent(task.agent);
+  const codexLike = isCodexLikeAgent(task.agent, agentOptions);
   const resumeSessionId = codexLike ? task.codexSessionId : task.claudeSessionId;
   const resumeAvailable = Boolean(resumeSessionId || sessionPath);
   const restoreState = getRestoreState?.() ?? {};
@@ -683,7 +683,7 @@ export function RunningView({
             <SessionView
               sessionPath={sessionPath}
               projectPath={projectPath}
-              isCodex={isCodexLikeAgent(task.agent)}
+              isCodex={codexLike}
               fallback={terminalHistoryFallback}
             />
           ) : (
@@ -713,7 +713,7 @@ export function RunningView({
         <SessionView
           sessionPath={sessionPath}
           projectPath={projectPath}
-          isCodex={isCodexLikeAgent(task.agent)}
+          isCodex={codexLike}
           fallback={terminalHistoryFallback}
         />
       )}

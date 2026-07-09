@@ -1647,6 +1647,22 @@ pub fn claude_version_gte(min_version: &str) -> bool {
     }
 }
 
+/// Checks the configured launch command for the requested agent.
+/// Built-in Claude/Codex keep the global cached version checks; custom agents
+/// need their own launch spec so Claude-compatible wrappers can use features
+/// such as `--session-id`.
+pub fn agent_version_gte(agent: &str, min_version: &str) -> bool {
+    let detected = match agent {
+        "claude" => detect_claude_version(),
+        "codex" => detect_codex_version(),
+        _ => detect_version(&get_agent_launch_spec(agent)),
+    };
+    match detected {
+        Some(v) => parse_semver(&v) >= parse_semver(min_version),
+        None => false,
+    }
+}
+
 /// 版本号统一走全局带缓存的探测；探测失败视为不满足。
 pub fn codex_version_gte(min_version: &str) -> bool {
     match detect_codex_version() {
