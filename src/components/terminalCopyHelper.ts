@@ -177,33 +177,38 @@ export async function handleTerminalContextMenu(
   if (!terminal.hasSelection() && !keyOptions?.onPaste) return;
 
   e.preventDefault();
+  if (terminal.textarea?.disabled) {
+    terminal.textarea.disabled = false;
+  }
   terminal.focus();
+  terminal.textarea?.focus({ preventScroll: true });
+
+  if (keyOptions?.onPaste) {
+    if (state.pasteInProgress) return;
+    state.pasteInProgress = true;
+    try {
+      const text = await navigator.clipboard.readText();
+      if (text) keyOptions.onPaste(text);
+    } catch {
+      /* ignore clipboard read failures */
+    } finally {
+      state.pasteInProgress = false;
+    }
+    return;
+  }
 
   if (terminal.hasSelection()) {
     if (state.copyInProgress) return;
     state.copyInProgress = true;
     try {
       const text = await readSelectedText(terminal);
-      if (text && keyOptions?.onPaste) {
-        keyOptions.onPaste(text);
-      } else if (text) {
+      if (text) {
         await smartCopy(terminal);
       }
     } finally {
       state.copyInProgress = false;
     }
     return;
-  }
-
-  if (!keyOptions?.onPaste || state.pasteInProgress) return;
-  state.pasteInProgress = true;
-  try {
-    const text = await navigator.clipboard.readText();
-    if (text) keyOptions.onPaste(text);
-  } catch {
-    /* ignore clipboard read failures */
-  } finally {
-    state.pasteInProgress = false;
   }
 }
 

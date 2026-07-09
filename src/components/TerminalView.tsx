@@ -100,7 +100,11 @@ export function TerminalView({
 
     const focusTerminal = () => {
       window.requestAnimationFrame(() => {
+        if (term.textarea?.disabled) {
+          term.textarea.disabled = false;
+        }
         term.focus();
+        term.textarea?.focus({ preventScroll: true });
       });
     };
 
@@ -266,6 +270,7 @@ export function TerminalView({
         height: "100%",
         overflow: "hidden",
         cursor: "text",
+        background: themeFor(themeVariant).background,
       }}
     />
   );

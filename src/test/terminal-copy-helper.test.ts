@@ -38,7 +38,7 @@ describe("terminal context menu", () => {
     dispose();
   });
 
-  it("pastes selected terminal text into the input line on right click", async () => {
+  it("pastes clipboard text on right click even when terminal text is selected", async () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
     const readText = vi.fn().mockResolvedValue("pasted");
     Object.defineProperty(navigator, "clipboard", {
@@ -56,8 +56,8 @@ describe("terminal context menu", () => {
 
     expect(preventDefault).toHaveBeenCalled();
     expect(writeText).not.toHaveBeenCalled();
-    expect(readText).not.toHaveBeenCalled();
-    expect(onPaste).toHaveBeenCalledWith("selected text");
+    expect(readText).toHaveBeenCalled();
+    expect(onPaste).toHaveBeenCalledWith("pasted");
   });
 
   it("keeps right-click copy behavior when no paste handler is configured", async () => {

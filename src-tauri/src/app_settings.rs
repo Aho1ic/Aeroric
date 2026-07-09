@@ -1327,10 +1327,6 @@ pub async fn detect_agent_models(
 #[tauri::command]
 pub async fn list_agent_models(agent: String) -> Result<AgentModels, String> {
     tokio::task::spawn_blocking(move || {
-        if !is_codex_like_agent(&agent) {
-            return Ok(AgentModels { models: Vec::new() });
-        }
-
         let settings = load_settings_internal();
         if let Some(profile) = settings
             .custom_agents
@@ -1341,6 +1337,10 @@ pub async fn list_agent_models(agent: String) -> Result<AgentModels, String> {
             if !models.is_empty() {
                 return Ok(AgentModels { models });
             }
+        }
+
+        if !is_codex_like_agent(&agent) {
+            return Ok(AgentModels { models: Vec::new() });
         }
 
         let launch = get_agent_launch_spec(&agent);

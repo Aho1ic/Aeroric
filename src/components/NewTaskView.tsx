@@ -250,7 +250,9 @@ export function NewTaskView({
 
   const loadAgentModels = useCallback(
     (targetAgent: AgentType) => {
-      if (!isCodexLikeAgent(targetAgent, agentOptions)) {
+      const option = agentOptions.find((item) => item.value === targetAgent);
+      if (!isCodexLikeAgent(targetAgent, agentOptions) && !option?.custom) {
+        modelRequestIdRef.current += 1;
         setAvailableModels([]);
         setSelectedModel("");
         setModelsError(null);
@@ -264,10 +266,11 @@ export function NewTaskView({
       invoke<AgentModels>("list_agent_models", { agent: targetAgent })
         .then((result) => {
           if (modelRequestIdRef.current !== requestId) return;
-          setAvailableModels(result.models);
+          const models = Array.isArray(result.models) ? result.models : [];
+          setAvailableModels(models);
           setSelectedModel((current) => {
-            if (current && result.models.includes(current)) return current;
-            return result.models[0] ?? "";
+            if (current && models.includes(current)) return current;
+            return models[0] ?? "";
           });
         })
         .catch((error: unknown) => {
@@ -345,6 +348,11 @@ export function NewTaskView({
   }, []);
 
   const codexLikeAgent = isCodexLikeAgent(agent, agentOptions);
+  const customAgent = agentOptions.some((option) => option.value === agent && option.custom);
+  const agentSupportsModelSelection = codexLikeAgent || customAgent;
+  const modelSelectable =
+    agentSupportsModelSelection &&
+    (modelsLoading || availableModels.length > 0 || Boolean(modelsError) || Boolean(selectedModel));
   const agentReadiness = hookReadiness?.find((r) => r.agent === agent) ?? null;
   const hookBanner = (() => {
     if (!agentReadiness || agentReadiness.usable) return null;
@@ -492,7 +500,7 @@ export function NewTaskView({
       immediate: true,
       launchMode: "local",
       baseBranch: "",
-      selectedModel: codexLikeAgent ? selectedModel || undefined : undefined,
+      selectedModel: modelSelectable ? selectedModel || undefined : undefined,
     });
   }
 
@@ -514,7 +522,7 @@ export function NewTaskView({
       immediate,
       launchMode,
       baseBranch,
-      selectedModel: codexLikeAgent ? selectedModel || undefined : undefined,
+      selectedModel: modelSelectable ? selectedModel || undefined : undefined,
     });
     editorHandle.clear();
     setIsEmpty(true);
@@ -728,7 +736,7 @@ export function NewTaskView({
               ) : null
             }
             modelControls={
-              codexLikeAgent ? (
+              modelSelectable ? (
                 <Select.Root
                   value={selectedModel || "__none__"}
                   open={composeOpenMenu === "model"}

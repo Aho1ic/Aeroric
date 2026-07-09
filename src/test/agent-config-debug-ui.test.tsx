@@ -499,7 +499,8 @@ describe("Agent config and debug panel UI", () => {
     await user.type(screen.getByLabelText("API Key"), "sk-test");
     await user.click(screen.getByRole("button", { name: /Detect Models/i }));
 
-    await screen.findByText("2 of 2 models selected");
+    await screen.findByText("0 of 2 models selected");
+    await user.click(screen.getByLabelText("gpt-5.5"));
     await user.click(screen.getByRole("button", { name: /^Add Agent$/i }));
 
     expect(invoke).toHaveBeenCalledWith("detect_agent_models", {
@@ -515,7 +516,7 @@ describe("Agent config and debug panel UI", () => {
         base_url: "https://example.com/v1",
         api_key: "sk-test",
         model: "gpt-5.5",
-        models: ["gpt-5.5", "gpt-5.1"],
+        models: ["gpt-5.5"],
       },
     });
   });

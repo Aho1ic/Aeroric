@@ -509,6 +509,17 @@ fn prompt_with_project_prefix(prompt: &str, prompt_prefix: &str) -> String {
     }
 }
 
+fn initial_prompt_input_sequence(prompt: &str) -> Option<Vec<u8>> {
+    if prompt.is_empty() {
+        return None;
+    }
+    let mut input = Vec::with_capacity(prompt.len() + 16);
+    input.extend_from_slice(b"\x1b[200~");
+    input.extend_from_slice(prompt.as_bytes());
+    input.extend_from_slice(b"\x1b[201~\r");
+    Some(input)
+}
+
 fn add_codex_launch_args(
     cmd: &mut CommandBuilder,
     project_path: &str,
@@ -637,14 +648,9 @@ pub async fn run_task(
         let mut c = build_codex_cmd(&agent_bin, &permission_mode);
         add_codex_launch_args(&mut c, &project_path, selected_model.as_deref());
         // Codex 对非 managed 的 command hook 默认要求 trust,Aeroric 注入的是新 hash 会被
-        // skip;由 Aeroric 注入、来源可信,这里免 trust 直接运行。必须在 `--`/prompt 之前。
+        // skip;由 Aeroric 注入、来源可信,这里免 trust 直接运行。
         if use_hooks {
             c.arg("--dangerously-bypass-hook-trust");
-        }
-        // 空 prompt 时不传 positional arg，让 CLI 进入交互式 REPL
-        if !final_prompt.is_empty() {
-            c.arg("--");
-            c.arg(&final_prompt);
         }
         c
     } else {
@@ -662,18 +668,12 @@ pub async fn run_task(
                 c.arg(p.to_string_lossy().as_ref());
             }
         }
-        // 空 prompt 时不传 positional arg，让 Claude 进入交互式 REPL
-        if !final_prompt.is_empty() {
-            c.arg(&final_prompt);
-        }
         c
     };
     cmd.cwd(&project_path);
     setup_env(&mut cmd);
-    if is_codex {
-        if let Some(model) = selected_model.as_deref() {
-            cmd.env("AERORIC_AGENT_MODEL", model);
-        }
+    if let Some(model) = selected_model.as_deref() {
+        cmd.env("AERORIC_AGENT_MODEL", model);
     }
     if use_hooks {
         setup_aeroric_env(&mut cmd, &task_id, &agent);
@@ -693,24 +693,38 @@ pub async fn run_task(
         serde_json::json!({ "task_id": task_id, "status": "running" }),
     );
 
-    // hook 可信时不创建 session 转发通道,也不拉起轮询 watcher。
-    // 空 prompt 进入交互 REPL，不能通过注入 /status 抢占用户输入。
-    let session_tx =
-        if should_start_status_session_watcher(use_hooks, is_codex, final_prompt.is_empty()) {
-            let (session_tx, session_rx) = std::sync::mpsc::channel::<String>();
+    // 带 prompt 的任务也以交互 REPL 启动，再通过 PTY 注入首条消息。
+    // 因此这里不能启动 /status watcher，避免抢占用户输入或污染浅色终端背景。
+    let prompt_injected_via_pty = !final_prompt.is_empty();
+    let session_tx = if prompt_injected_via_pty {
+        if !use_hooks && !is_codex && pre_session_id.is_some() {
+            let (_session_tx, session_rx) = std::sync::mpsc::channel::<String>();
             spawn_status_session_watcher(
                 app.clone(),
                 task_id.clone(),
                 project_path.clone(),
                 is_codex,
                 session_rx,
-                pre_session_id,
-                final_prompt.is_empty(),
+                pre_session_id.clone(),
+                true,
             );
-            Some(session_tx)
-        } else {
-            None
-        };
+        }
+        None
+    } else if should_start_status_session_watcher(use_hooks, is_codex, true) {
+        let (session_tx, session_rx) = std::sync::mpsc::channel::<String>();
+        spawn_status_session_watcher(
+            app.clone(),
+            task_id.clone(),
+            project_path.clone(),
+            is_codex,
+            session_rx,
+            pre_session_id,
+            true,
+        );
+        Some(session_tx)
+    } else {
+        None
+    };
     spawn_pty_reader(
         app.clone(),
         task_id.clone(),
@@ -724,6 +738,14 @@ pub async fn run_task(
         session_tx,
         None,
     );
+    if let Some(input) = initial_prompt_input_sequence(&final_prompt) {
+        let writer = task_manager.pty_writers.lock().get(&task_id).cloned();
+        if let Some(writer) = writer {
+            let mut writer = writer.lock();
+            writer.write_all(&input).map_err(|e| e.to_string())?;
+            writer.flush().map_err(|e| e.to_string())?;
+        }
+    }
     spawn_exit_monitor(app, task_id, project_path, is_codex);
 
     Ok(())
@@ -911,10 +933,8 @@ pub async fn resume_task(
     };
     cmd.cwd(&project_path);
     setup_env(&mut cmd);
-    if is_codex {
-        if let Some(model) = selected_model.as_deref() {
-            cmd.env("AERORIC_AGENT_MODEL", model);
-        }
+    if let Some(model) = selected_model.as_deref() {
+        cmd.env("AERORIC_AGENT_MODEL", model);
     }
     if use_hooks {
         setup_aeroric_env(&mut cmd, &task_id, &agent);
@@ -1108,6 +1128,15 @@ mod tests {
         );
         assert_eq!(normalized_selected_model(Some("  ")), None);
         assert_eq!(normalized_selected_model(None), None);
+    }
+
+    #[test]
+    fn initial_prompt_input_uses_bracketed_paste_and_submit() {
+        assert_eq!(initial_prompt_input_sequence(""), None);
+        assert_eq!(
+            initial_prompt_input_sequence("hello\nworld").unwrap(),
+            b"\x1b[200~hello\nworld\x1b[201~\r".to_vec()
+        );
     }
 
     #[test]

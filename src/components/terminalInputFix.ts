@@ -470,7 +470,11 @@ export function attachLinuxIMEFix(
   const commitActiveRomanizedComposition = (): string | null => {
     const text = getActiveCompositionText();
     const defer = shouldDeferRomanizedCompositionCommit(text, text);
-    imeDbg("commitActiveRomanizedComposition", { text, internalIsComposing: isComposing, shouldDefer: defer });
+    imeDbg("commitActiveRomanizedComposition", {
+      text,
+      internalIsComposing: isComposing,
+      shouldDefer: defer,
+    });
     if (!isComposing || !defer) {
       return null;
     }
@@ -550,7 +554,14 @@ export function attachLinuxIMEFix(
   };
 
   const handleCompositionEndCapture = (event: CompositionEvent) => {
-    imeDbg("compositionend", { data: event.data, internalIsComposing: isComposing, compositionText, textareaValue: textarea.value, ignoreUntil: ignorePostCompositionUntil, now: performance.now() });
+    imeDbg("compositionend", {
+      data: event.data,
+      internalIsComposing: isComposing,
+      compositionText,
+      textareaValue: textarea.value,
+      ignoreUntil: ignorePostCompositionUntil,
+      now: performance.now(),
+    });
     if (isReleasingXtermComposition) return;
     const preeditText = getActiveCompositionText();
     const text = event.data || preeditText;
@@ -570,7 +581,11 @@ export function attachLinuxIMEFix(
     compositionText = "";
     void event;
     if (shouldDeferRomanizedCompositionCommit(text, preeditText)) {
-      imeDbg("compositionend -> defer/commit romanized", { text, preeditText, deferNext: deferNextRomanizedCompositionCommit });
+      imeDbg("compositionend -> defer/commit romanized", {
+        text,
+        preeditText,
+        deferNext: deferNextRomanizedCompositionCommit,
+      });
       commitOrDeferRomanizedComposition(text, preeditText);
       deferNextRomanizedCompositionCommit = false;
       return;
@@ -812,7 +827,12 @@ export function attachLinuxIMEFix(
   };
 
   const handleKeyDownCapture = (event: KeyboardEvent) => {
-    imeDbg("keydown", { ...keySummary(event), internalIsComposing: isComposing, compositionText, pending: !!pendingCompositionCommit });
+    imeDbg("keydown", {
+      ...keySummary(event),
+      internalIsComposing: isComposing,
+      compositionText,
+      pending: !!pendingCompositionCommit,
+    });
 
     // 检测 IME 切换快捷键（composition 期间按下）：CapsLock，或带 Ctrl/Meta/Alt 修饰的空格/数字。
     // 这些不是普通候选选择键，而是切换输入法——立即提交罗马化拼音。

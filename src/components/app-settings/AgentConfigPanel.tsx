@@ -231,7 +231,7 @@ export function AgentConfigPanel({
       const selected = new Set(selectedModels.length > 0 ? selectedModels : originalSelectedModels);
       const retained = nextModels.filter((model) => selected.has(model));
       setDetectedModels(nextModels);
-      setSelectedModels(retained.length > 0 ? retained : nextModels);
+      setSelectedModels(retained);
     } catch (e) {
       setError(String(e));
     } finally {

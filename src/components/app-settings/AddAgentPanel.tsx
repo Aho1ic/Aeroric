@@ -109,7 +109,7 @@ export function AddAgentPanel({ onSaved }: { onSaved: (agentId: string) => void 
     generatedAgentId &&
     baseUrl.trim() &&
     apiKey.trim() &&
-    (selectedModels.length > 0 || model.trim()),
+    (models.length > 0 ? selectedModels.length > 0 : model.trim()),
   );
   const modelSuggestions = useMemo(() => {
     const needle = model.trim().toLowerCase();
@@ -127,11 +127,8 @@ export function AddAgentPanel({ onSaved }: { onSaved: (agentId: string) => void 
         apiKey: apiKey.trim(),
       });
       setModels(detected.models);
-      setSelectedModels(detected.models);
+      setSelectedModels([]);
       setModelMenuOpen(detected.models.length > 0);
-      if (!model.trim() && detected.models.length > 0) {
-        setModel(detected.models[0]);
-      }
     } catch (err) {
       setError(String(err));
     } finally {
@@ -141,7 +138,7 @@ export function AddAgentPanel({ onSaved }: { onSaved: (agentId: string) => void 
 
   async function handleSave() {
     if (!canSave) return;
-    const setupModels = selectedModels.length > 0 ? selectedModels : [model.trim()];
+    const setupModels = models.length > 0 ? selectedModels : [model.trim()];
     const draft: AgentSetupDraft = {
       id: generatedAgentId,
       label: label.trim(),

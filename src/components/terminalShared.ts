@@ -364,12 +364,7 @@ function avoidTrailingHighSurrogate(data: string, start: number, end: number): n
   if (end <= start || end >= data.length) return end;
   const prevCode = data.charCodeAt(end - 1);
   const nextCode = data.charCodeAt(end);
-  if (
-    prevCode >= 0xd800 &&
-    prevCode <= 0xdbff &&
-    nextCode >= 0xdc00 &&
-    nextCode <= 0xdfff
-  ) {
+  if (prevCode >= 0xd800 && prevCode <= 0xdbff && nextCode >= 0xdc00 && nextCode <= 0xdfff) {
     return end - 1;
   }
   return end;
@@ -463,8 +458,7 @@ function findSafeTerminalChunkEnd(data: string, start: number, preferredEnd: num
     const char = data[index];
     if (extendState === "esc") {
       if (char === "[") extendState = "csi";
-      else if (char === "]" || char === "P" || char === "^" || char === "_")
-        extendState = "string";
+      else if (char === "]" || char === "P" || char === "^" || char === "_") extendState = "string";
       else return index + 1;
       continue;
     }
@@ -513,6 +507,15 @@ function scheduleFrame(callback: FrameRequestCallback): void {
     return;
   }
   globalThis.setTimeout(() => callback(nowMs()), 16);
+}
+
+function refreshTerminalCursorLine(term: Terminal): void {
+  try {
+    const cursorY = term.buffer.active.cursorY;
+    term.refresh(cursorY, cursorY);
+  } catch {
+    /* xterm refresh is a best-effort repaint hint. */
+  }
 }
 
 /**
@@ -608,6 +611,8 @@ export function createSmartWriter(
 
   function pauseForUserInput(durationMs = TERMINAL_USER_INPUT_PAUSE_MS) {
     state.inputPausedUntil = Math.max(state.inputPausedUntil, nowMs() + durationMs);
+    refreshTerminalCursorLine(term);
+    scheduleFrame(() => refreshTerminalCursorLine(term));
     if (state.pendingChunks.length > 0) scheduleDrain(durationMs);
   }
 
@@ -635,6 +640,8 @@ export function initTerminal(
     convertEol: false,
     scrollback,
     cursorBlink: true,
+    cursorStyle: "bar",
+    cursorWidth: 2,
     fontFamily,
     fontSize,
     theme: themeFor(variant),
