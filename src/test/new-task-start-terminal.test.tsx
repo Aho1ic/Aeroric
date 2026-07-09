@@ -16,7 +16,12 @@ vi.mock("@tauri-apps/api/core", () => ({
     if (command === "list_agent_models") {
       const agent = (args as { agent?: string } | undefined)?.agent;
       return Promise.resolve({
-        models: agent === "local_claude" ? ["claude-opus-4-8", "claude-sonnet-4-8"] : [],
+        models:
+          agent === "claude"
+            ? ["opus", "sonnet"]
+            : agent === "local_claude"
+              ? ["claude-opus-4-8", "claude-sonnet-4-8"]
+              : [],
       });
     }
     if (command === "load_app_settings") {
@@ -106,6 +111,33 @@ describe("NewTaskView start terminal", () => {
       expect.objectContaining({
         agent: "local_claude",
         selectedModel: "claude-sonnet-4-8",
+      }),
+    );
+  });
+
+  it("passes the selected model for the built-in Claude agent", async () => {
+    const user = userEvent.setup();
+    const onSubmit = vi.fn();
+
+    render(
+      <I18nProvider>
+        <NewTaskView project={project} onSubmit={onSubmit} />
+      </I18nProvider>,
+    );
+
+    await waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith("list_agent_models", { agent: "claude" }),
+    );
+    await screen.findByText("opus");
+
+    await user.click(screen.getByRole("combobox", { name: "Model" }));
+    await user.click(await screen.findByText("sonnet"));
+    await user.click(screen.getByRole("button", { name: /Start Terminal/ }));
+
+    expect(onSubmit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agent: "claude",
+        selectedModel: "sonnet",
       }),
     );
   });

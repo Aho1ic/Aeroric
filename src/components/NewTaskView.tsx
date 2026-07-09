@@ -251,7 +251,11 @@ export function NewTaskView({
   const loadAgentModels = useCallback(
     (targetAgent: AgentType) => {
       const option = agentOptions.find((item) => item.value === targetAgent);
-      if (!isCodexLikeAgent(targetAgent, agentOptions) && !option?.custom) {
+      if (
+        targetAgent !== "claude" &&
+        !isCodexLikeAgent(targetAgent, agentOptions) &&
+        !option?.custom
+      ) {
         modelRequestIdRef.current += 1;
         setAvailableModels([]);
         setSelectedModel("");
@@ -349,7 +353,7 @@ export function NewTaskView({
 
   const codexLikeAgent = isCodexLikeAgent(agent, agentOptions);
   const customAgent = agentOptions.some((option) => option.value === agent && option.custom);
-  const agentSupportsModelSelection = codexLikeAgent || customAgent;
+  const agentSupportsModelSelection = agent === "claude" || codexLikeAgent || customAgent;
   const modelSelectable =
     agentSupportsModelSelection &&
     (modelsLoading || availableModels.length > 0 || Boolean(modelsError) || Boolean(selectedModel));

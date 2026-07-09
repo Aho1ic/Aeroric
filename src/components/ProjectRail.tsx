@@ -95,6 +95,27 @@ export function getDefaultExpandedProjectIds(
   );
 }
 
+export function updateExpandedProjectIds(
+  current: ReadonlySet<string>,
+  projectId: string,
+  expand: boolean,
+  maxExpanded = 3,
+): Set<string> {
+  const next = new Set(current);
+  if (!expand) {
+    next.delete(projectId);
+    return next;
+  }
+  if (next.has(projectId)) return next;
+  next.add(projectId);
+  while (next.size > maxExpanded) {
+    const oldest = next.values().next().value;
+    if (!oldest) break;
+    next.delete(oldest);
+  }
+  return next;
+}
+
 export type ProjectRailFooterAction =
   | "backHome"
   | "agentSettings"
@@ -577,9 +598,7 @@ export function ProjectRail({
   useEffect(() => {
     setExpandedProjectIds((prev) => {
       if (prev.has(activeProjectId)) return prev;
-      const next = new Set(prev);
-      next.add(activeProjectId);
-      return next;
+      return updateExpandedProjectIds(prev, activeProjectId, true);
     });
   }, [activeProjectId]);
 
@@ -873,10 +892,7 @@ export function ProjectRail({
                   data-project-rail-no-drag
                   onClick={() =>
                     setExpandedProjectIds((prev) => {
-                      const next = new Set(prev);
-                      if (next.has(project.id)) next.delete(project.id);
-                      else next.add(project.id);
-                      return next;
+                      return updateExpandedProjectIds(prev, project.id, !prev.has(project.id));
                     })
                   }
                   title={expanded ? t("task.hideTasks") : t("task.showTasks")}

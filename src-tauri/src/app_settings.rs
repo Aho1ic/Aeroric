@@ -29,6 +29,7 @@ fn default_shift_enter_newline() -> bool {
 static CACHED_CLAUDE_VERSION: OnceLock<Mutex<Option<Option<String>>>> = OnceLock::new();
 static CACHED_CODEX_VERSION: OnceLock<Mutex<Option<Option<String>>>> = OnceLock::new();
 static SETTINGS_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+const CLAUDE_BUILTIN_MODEL_ALIASES: &[&str] = &["fable", "opus", "sonnet"];
 
 pub fn get_login_shell_env() -> &'static [(String, String)] {
     crate::platform::login_shell_env()
@@ -858,6 +859,17 @@ fn parse_codex_model_catalog(value: &str) -> Result<Vec<String>, String> {
     Ok(parse_model_ids(value))
 }
 
+fn claude_builtin_model_aliases() -> Vec<String> {
+    CLAUDE_BUILTIN_MODEL_ALIASES
+        .iter()
+        .map(|model| (*model).to_string())
+        .collect()
+}
+
+fn list_builtin_claude_models() -> Vec<String> {
+    claude_builtin_model_aliases()
+}
+
 fn normalize_model_list(models: Vec<String>) -> Vec<String> {
     let mut out = Vec::new();
     for model in models
@@ -1337,6 +1349,12 @@ pub async fn list_agent_models(agent: String) -> Result<AgentModels, String> {
             if !models.is_empty() {
                 return Ok(AgentModels { models });
             }
+        }
+
+        if agent == "claude" {
+            return Ok(AgentModels {
+                models: list_builtin_claude_models(),
+            });
         }
 
         if !is_codex_like_agent(&agent) {
@@ -2037,6 +2055,14 @@ mod tests {
         assert_eq!(
             parse_codex_model_catalog(&value).unwrap(),
             vec!["gpt-5.1", "gpt-5.5"]
+        );
+    }
+
+    #[test]
+    fn builtin_claude_model_aliases_are_available_for_model_dropdowns() {
+        assert_eq!(
+            claude_builtin_model_aliases(),
+            vec!["fable", "opus", "sonnet"]
         );
     }
 
