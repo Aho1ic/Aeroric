@@ -535,6 +535,9 @@ export function NewTaskView({
     setPastedTexts([]);
   }
 
+  const hasAttachments = pastedImages.length > 0 || pastedTexts.length > 0;
+  const hasComposerContent = !isEmpty || hasAttachments;
+
   // Handle image paste at this level (PromptEditor delegates image items up)
   function handleEditorPaste(e: React.ClipboardEvent<HTMLDivElement>) {
     const items = Array.from(e.clipboardData.items);
@@ -716,8 +719,8 @@ export function NewTaskView({
             permMode={permMode}
             planMode={planMode}
             goalMode={goalMode}
-            isEmpty={isEmpty}
-            hasImages={pastedImages.length > 0 || pastedTexts.length > 0}
+            hasContent={hasComposerContent}
+            hasAttachments={hasAttachments}
             saveAsTodoDisabledReason={
               launchMode === "worktree" ? t("newTask.worktreeMustSend") : undefined
             }

@@ -6,6 +6,8 @@ import {
   isCodexLikeAgent,
 } from "../agents";
 import {
+  composeAgentMenuContentStyle,
+  composeAgentMenuViewportStyle,
   composeControlOrder,
   composeModelMenuContentStyle,
   composeModelMenuViewportStyle,
@@ -101,6 +103,23 @@ describe("agent options", () => {
       }),
     );
     expect(composeModelMenuViewportStyle()).toEqual(
+      expect.objectContaining({
+        maxHeight: "min(280px, var(--radix-select-content-available-height))",
+        overflowY: "auto",
+        overscrollBehavior: "contain",
+      }),
+    );
+  });
+
+  it("constrains the agent menu to the viewport and scrolls long config lists", () => {
+    expect(composeAgentMenuContentStyle()).toEqual(
+      expect.objectContaining({
+        minWidth: "var(--radix-select-trigger-width)",
+        maxHeight: "min(280px, var(--radix-select-content-available-height))",
+        overflow: "hidden",
+      }),
+    );
+    expect(composeAgentMenuViewportStyle()).toEqual(
       expect.objectContaining({
         maxHeight: "min(280px, var(--radix-select-content-available-height))",
         overflowY: "auto",

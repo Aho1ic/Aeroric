@@ -1,4 +1,5 @@
 import { fireEvent, render, screen } from "@testing-library/react";
+import { useState } from "react";
 import { describe, expect, it, vi } from "vitest";
 import { I18nProvider } from "../i18n";
 import type { Project, Task } from "../types";
@@ -31,6 +32,60 @@ function task(id: string, projectId: string, createdAt: number): Task {
 }
 
 describe("ProjectRail project dragging", () => {
+  it("keeps three project task lists open and closes the oldest on the fourth", () => {
+    const projects = [
+      project("p1", "Alpha", 0),
+      project("p2", "Beta", 1),
+      project("p3", "Gamma", 2),
+      project("p4", "Delta", 3),
+    ];
+    const tasks = [
+      task("alpha-task", "p1", 1),
+      task("beta-task", "p2", 2),
+      task("gamma-task", "p3", 3),
+      task("delta-task", "p4", 4),
+    ];
+
+    function Harness() {
+      const [activeProjectId, setActiveProjectId] = useState("p1");
+      return (
+        <I18nProvider>
+          <ProjectRail
+            projects={projects}
+            allTasks={tasks}
+            activeProjectId={activeProjectId}
+            selectedTaskId={null}
+            isNewTask={false}
+            onSwitch={(nextProject) => setActiveProjectId(nextProject.id)}
+            onOpen={vi.fn()}
+            onBack={vi.fn()}
+            onNewTask={vi.fn()}
+            onSelectTask={vi.fn()}
+            onDeleteTask={vi.fn()}
+            onToggleTaskStar={vi.fn()}
+            onRunTodo={vi.fn()}
+            themeVariant="light"
+            onToggleTheme={vi.fn()}
+          />
+        </I18nProvider>
+      );
+    }
+
+    render(<Harness />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Beta" }));
+    fireEvent.click(screen.getByRole("button", { name: "Gamma" }));
+    expect(screen.getByText("Task alpha-task")).toBeInTheDocument();
+    expect(screen.getByText("Task beta-task")).toBeInTheDocument();
+    expect(screen.getByText("Task gamma-task")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Delta" }));
+    expect(screen.queryByText("Task alpha-task")).not.toBeInTheDocument();
+    expect(screen.getByText("Task beta-task")).toBeInTheDocument();
+    expect(screen.getByText("Task gamma-task")).toBeInTheDocument();
+    expect(screen.getByText("Task delta-task")).toBeInTheDocument();
+  });
+
   it("opens the agent settings section from the project rail footer", () => {
     const listener = vi.fn();
     window.addEventListener("aeroric:open-app-settings", listener);

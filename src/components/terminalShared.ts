@@ -592,6 +592,11 @@ export function createSmartWriter(
   }
 
   function write(data: string, callback?: () => void) {
+    const hasInteractiveControl =
+      data.includes("\u001b") || data.includes("\r") || data.includes("\b");
+    if (state.inputPausedUntil > nowMs() && hasInteractiveControl) {
+      state.inputPausedUntil = 0;
+    }
     const output = remapLightAnsiForeground(colorizePlainTerminalOutput(data), getThemeVariant());
     const chunks = splitTerminalWriteChunk(output);
     for (let index = 0; index < chunks.length; index += 1) {

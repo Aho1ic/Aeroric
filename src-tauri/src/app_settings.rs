@@ -937,6 +937,100 @@ supports_websockets = false
     )
 }
 
+fn fallback_codex_model(model: &str, priority: usize) -> serde_json::Value {
+    serde_json::json!({
+        "slug": model,
+        "display_name": model,
+        "description": "Custom model configured in Aeroric.",
+        "default_reasoning_level": "high",
+        "supported_reasoning_levels": [{
+            "effort": "high",
+            "description": "Greater reasoning depth for complex problems"
+        }],
+        "shell_type": "shell_command",
+        "visibility": "list",
+        "supported_in_api": true,
+        "priority": priority,
+        "upgrade": null,
+        "base_instructions": "",
+        "supports_reasoning_summaries": true,
+        "default_reasoning_summary": "none",
+        "support_verbosity": true,
+        "default_verbosity": "low",
+        "apply_patch_tool_type": "freeform",
+        "web_search_tool_type": "text_and_image",
+        "truncation_policy": { "mode": "tokens", "limit": 10000 },
+        "supports_parallel_tool_calls": true,
+        "context_window": 258400,
+        "experimental_supported_tools": [],
+        "input_modalities": ["text", "image"],
+        "supports_search_tool": true
+    })
+}
+
+fn build_codex_model_catalog(selected_models: &[String], bundled: Option<&str>) -> String {
+    let bundled_models = bundled
+        .and_then(|raw| serde_json::from_str::<serde_json::Value>(raw).ok())
+        .and_then(|value| {
+            value
+                .get("models")
+                .and_then(|models| models.as_array())
+                .cloned()
+        })
+        .unwrap_or_default();
+    let template = selected_models
+        .iter()
+        .find_map(|selected| {
+            bundled_models.iter().find(|model| {
+                model.get("slug").and_then(|slug| slug.as_str()) == Some(selected.as_str())
+            })
+        })
+        .or_else(|| bundled_models.first())
+        .cloned();
+
+    let models = selected_models
+        .iter()
+        .enumerate()
+        .map(|(priority, selected)| {
+            let mut model = bundled_models
+                .iter()
+                .find(|model| {
+                    model.get("slug").and_then(|slug| slug.as_str()) == Some(selected.as_str())
+                })
+                .cloned()
+                .or_else(|| template.clone())
+                .unwrap_or_else(|| fallback_codex_model(selected, priority));
+            if let Some(object) = model.as_object_mut() {
+                object.insert("slug".to_string(), selected.clone().into());
+                object.insert("display_name".to_string(), selected.clone().into());
+                object.insert(
+                    "description".to_string(),
+                    "Custom model configured in Aeroric.".into(),
+                );
+                object.insert("visibility".to_string(), "list".into());
+                object.insert("priority".to_string(), priority.into());
+                object.insert("availability_nux".to_string(), serde_json::Value::Null);
+                object.insert("upgrade".to_string(), serde_json::Value::Null);
+            }
+            model
+        })
+        .collect::<Vec<_>>();
+
+    serde_json::to_string_pretty(&serde_json::json!({ "models": models }))
+        .unwrap_or_else(|_| "{\"models\":[]}".to_string())
+}
+
+fn load_bundled_codex_catalog(codex_bin: &str) -> Option<String> {
+    let output = Command::new(codex_bin)
+        .args(["debug", "models", "--bundled"])
+        .output()
+        .ok()?;
+    output
+        .status
+        .success()
+        .then(|| String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
 fn build_codex_agent_script(draft: &AgentSetupDraft) -> String {
     let id = sanitize_custom_agent_id(&draft.id);
     let models = normalize_setup_models(draft);
@@ -948,6 +1042,8 @@ fn build_codex_agent_script(draft: &AgentSetupDraft) -> String {
     } else {
         codex_bin
     };
+    let bundled_catalog = load_bundled_codex_catalog(&codex_bin);
+    let model_catalog = build_codex_model_catalog(&models, bundled_catalog.as_deref());
     format!(
         r#"#!/bin/bash
 set -euo pipefail
@@ -959,8 +1055,13 @@ export ANTHROPIC_API_KEY={api_key}
 
 {picker}
 
+cat <<'AERORIC_CODEX_MODELS' > "$CODEX_HOME/model-catalog.json"
+{model_catalog}
+AERORIC_CODEX_MODELS
+
 {{
   printf 'model = "%s"\n' "$selected_model"
+  printf 'model_catalog_json = "model-catalog.json"\n'
   cat <<'AERORIC_CODEX_CONFIG'
 {config}AERORIC_CODEX_CONFIG
 }} > "$CODEX_HOME/config.toml"
@@ -970,6 +1071,7 @@ exec {codex_bin} "$@"
         id = id,
         api_key = shell_quote(&draft.api_key),
         picker = picker,
+        model_catalog = model_catalog,
         config = config,
         codex_bin = shell_quote(&codex_bin),
     )
@@ -1173,6 +1275,45 @@ fn recover_custom_agent_settings(settings: &mut AppSettings) {
     }
 }
 
+fn refresh_stale_codex_agent_scripts(settings: &mut AppSettings) {
+    for profile in &mut settings.custom_agents {
+        if !profile.codex_like
+            || profile.models.is_empty()
+            || profile.base_url.trim().is_empty()
+            || profile.api_key.trim().is_empty()
+        {
+            continue;
+        }
+        let script_path = normalize_config_path(profile.path.clone());
+        let is_current = fs::read_to_string(&script_path)
+            .map(|content| content.contains("model_catalog_json = \"model-catalog.json\""))
+            .unwrap_or(false);
+        if is_current {
+            continue;
+        }
+        let draft = AgentSetupDraft {
+            id: profile.id.clone(),
+            label: profile.label.clone(),
+            kind: AgentSetupKind::Codex,
+            base_url: profile.base_url.clone(),
+            api_key: profile.api_key.clone(),
+            model: profile.models[0].clone(),
+            models: profile.models.clone(),
+        };
+        if validate_agent_setup_draft(&draft).is_err() {
+            continue;
+        }
+        let script = build_codex_agent_script(&draft);
+        if script_path.trim().is_empty() {
+            if let Ok(path) = write_agent_script(&profile.id, &script) {
+                profile.path = path.to_string_lossy().into_owned();
+            }
+        } else if write_agent_script_at_path(Path::new(&script_path), &script).is_ok() {
+            profile.path = script_path;
+        }
+    }
+}
+
 fn normalize_settings(settings: AppSettings) -> AppSettings {
     let proxy_settings = migrate_legacy_proxy_settings(&settings);
     let agent_proxy_enabled = migrate_agent_proxy_enabled(&settings);
@@ -1235,6 +1376,7 @@ fn load_settings_unlocked() -> AppSettings {
     let settings: AppSettings = serde_json::from_str(&raw).unwrap_or_default();
     let mut normalized = normalize_settings(settings.clone());
     recover_custom_agent_settings(&mut normalized);
+    refresh_stale_codex_agent_scripts(&mut normalized);
     if normalized != settings {
         if let Ok(raw) = serde_json::to_string_pretty(&normalized) {
             let _ = atomic_write(&path, &raw);
@@ -1887,10 +2029,63 @@ mod tests {
         assert!(script.contains("base_url = \"https://example.com/v1\""));
         assert!(script.contains("selected_model='gpt-5.6'"));
         assert!(script.contains("printf 'model = \"%s\"\\n' \"$selected_model\""));
+        assert!(script.contains("model_catalog_json = \"model-catalog.json\""));
+        assert!(script.contains("\"slug\": \"gpt-5.6\""));
+        assert!(script.contains("\"slug\": \"gpt-5.6-sol\""));
         assert!(script.contains("env_key = \"ANTHROPIC_API_KEY\""));
         assert!(script.contains("stream_max_retries = 3"));
         assert!(script.contains("supports_websockets = false"));
         assert!(script.contains("export ANTHROPIC_API_KEY='sk-test'"));
+    }
+
+    #[test]
+    fn codex_model_catalog_contains_only_selected_models() {
+        let bundled = serde_json::json!({
+            "models": [
+                {
+                    "slug": "gpt-5.5",
+                    "display_name": "GPT-5.5",
+                    "description": "Bundled model",
+                    "default_reasoning_level": "medium",
+                    "supported_reasoning_levels": [],
+                    "shell_type": "shell_command",
+                    "visibility": "list",
+                    "supported_in_api": true,
+                    "priority": 0,
+                    "upgrade": null,
+                    "base_instructions": "bundled instructions",
+                    "supports_reasoning_summaries": true,
+                    "default_reasoning_summary": "none",
+                    "support_verbosity": true,
+                    "default_verbosity": "low",
+                    "apply_patch_tool_type": "freeform",
+                    "web_search_tool_type": "text_and_image",
+                    "truncation_policy": { "mode": "tokens", "limit": 10000 },
+                    "supports_parallel_tool_calls": true,
+                    "context_window": 272000,
+                    "experimental_supported_tools": [],
+                    "input_modalities": ["text", "image"],
+                    "supports_search_tool": true
+                },
+                {
+                    "slug": "gpt-5.3",
+                    "display_name": "GPT-5.3",
+                    "description": "Unselected model"
+                }
+            ]
+        })
+        .to_string();
+        let selected = vec!["gpt-5.6-sol".to_string(), "gpt-5.5".to_string()];
+
+        let catalog = build_codex_model_catalog(&selected, Some(&bundled));
+        let value: serde_json::Value = serde_json::from_str(&catalog).unwrap();
+        let models = value["models"].as_array().unwrap();
+
+        assert_eq!(models.len(), 2);
+        assert_eq!(models[0]["slug"], "gpt-5.6-sol");
+        assert_eq!(models[1]["slug"], "gpt-5.5");
+        assert_eq!(models[0]["base_instructions"], "bundled instructions");
+        assert!(!catalog.contains("gpt-5.3"));
     }
 
     #[test]

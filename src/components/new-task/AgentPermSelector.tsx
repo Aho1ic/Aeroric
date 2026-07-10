@@ -92,6 +92,23 @@ export function composeModelMenuViewportStyle(): CSSProperties {
   };
 }
 
+export function composeAgentMenuContentStyle(): CSSProperties {
+  return {
+    ...s.toolbarMenuContent,
+    minWidth: "var(--radix-select-trigger-width)",
+    maxHeight: "min(280px, var(--radix-select-content-available-height))",
+    overflow: "hidden",
+  };
+}
+
+export function composeAgentMenuViewportStyle(): CSSProperties {
+  return {
+    maxHeight: "min(280px, var(--radix-select-content-available-height))",
+    overflowY: "auto",
+    overscrollBehavior: "contain",
+  };
+}
+
 function ModeMenuItem({
   enabled,
   icon,
@@ -146,8 +163,8 @@ export function AgentPermSelector({
   permMode,
   planMode,
   goalMode,
-  isEmpty,
-  hasImages,
+  hasContent,
+  hasAttachments,
   saveAsTodoDisabledReason,
   sendShortcutKeys,
   compact = false,
@@ -165,8 +182,8 @@ export function AgentPermSelector({
   permMode: PermissionMode;
   planMode: boolean;
   goalMode: boolean;
-  isEmpty: boolean;
-  hasImages: boolean;
+  hasContent: boolean;
+  hasAttachments: boolean;
   saveAsTodoDisabledReason?: string;
   sendShortcutKeys: string[];
   compact?: boolean;
@@ -192,10 +209,10 @@ export function AgentPermSelector({
     }
   };
   const sendShortcutLabel = sendShortcutKeys.join("");
-  const sendLabel = isEmpty && !hasImages ? t("newTask.startTerminal") : t("newTask.send");
+  const sendLabel = hasContent ? t("newTask.send") : t("newTask.startTerminal");
   const controlButtonStyle = compact ? s.toolbarBtnIconOnly : s.toolbarBtn;
-  const saveAsTodoDisabled = hasImages || !!saveAsTodoDisabledReason;
-  const saveAsTodoTitle = hasImages ? t("newTask.imagesMustSend") : saveAsTodoDisabledReason;
+  const saveAsTodoDisabled = hasAttachments || !!saveAsTodoDisabledReason;
+  const saveAsTodoTitle = hasAttachments ? t("newTask.imagesMustSend") : saveAsTodoDisabledReason;
 
   return (
     <div style={s.toolbar}>
@@ -261,8 +278,15 @@ export function AgentPermSelector({
             )}
           </Select.Trigger>
           <Select.Portal>
-            <Select.Content position="popper" sideOffset={6} style={s.toolbarMenuContent}>
-              <Select.Viewport>
+            <Select.Content
+              position="popper"
+              side="bottom"
+              align="start"
+              sideOffset={6}
+              avoidCollisions={false}
+              style={composeAgentMenuContentStyle()}
+            >
+              <Select.Viewport style={composeAgentMenuViewportStyle()}>
                 {agentOptions.map(({ value: item }) => (
                   <Select.Item
                     key={item}
@@ -389,7 +413,7 @@ export function AgentPermSelector({
                   title={saveAsTodoTitle}
                   onClick={() => {
                     if (saveAsTodoDisabled) return;
-                    if (!isEmpty) onSubmit(false);
+                    if (hasContent) onSubmit(false);
                   }}
                 >
                   <BookmarkPlus size={13} strokeWidth={2} color="var(--text-muted)" />

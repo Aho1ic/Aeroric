@@ -39,7 +39,7 @@ export const terminal = {
     gap: 8,
     minWidth: 0,
     fontSize: 12.5,
-    color: "var(--text-secondary)",
+    color: "var(--text-primary)",
   },
   runAgentBadge: {
     minWidth: 0,
@@ -58,7 +58,7 @@ export const terminal = {
   },
   runMetaText: {
     minWidth: 0,
-    color: "var(--text-muted)",
+    color: "var(--text-secondary)",
     fontWeight: 600,
     whiteSpace: "nowrap" as const,
   },

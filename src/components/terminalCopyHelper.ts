@@ -220,6 +220,7 @@ export async function handleTerminalContextMenu(
  */
 export function attachSmartCopy(terminal: Terminal, keyOptions?: TerminalKeyOptions): () => void {
   let copyInProgress = false;
+  let pasteInProgress = false;
   const contextMenuState = {
     copyInProgress: false,
     pasteInProgress: false,
@@ -236,7 +237,31 @@ export function attachSmartCopy(terminal: Terminal, keyOptions?: TerminalKeyOpti
       return false;
     }
 
-    const isCopy = (e.metaKey || e.ctrlKey) && e.key === "c" && e.type === "keydown";
+    const shortcutKey = e.key.toLowerCase();
+    const isCopy = (e.metaKey || e.ctrlKey) && shortcutKey === "c" && e.type === "keydown";
+    const isPaste =
+      Boolean(keyOptions?.onPaste) &&
+      (e.metaKey || e.ctrlKey) &&
+      shortcutKey === "v" &&
+      e.type === "keydown";
+
+    if (isPaste) {
+      e.preventDefault();
+      if (pasteInProgress) return false;
+      pasteInProgress = true;
+      navigator.clipboard
+        .readText()
+        .then((text) => {
+          if (text) keyOptions?.onPaste?.(text);
+        })
+        .catch(() => {
+          /* ignore clipboard read failures */
+        })
+        .finally(() => {
+          pasteInProgress = false;
+        });
+      return false;
+    }
 
     if (!isCopy) return true; // Let xterm handle other keys
     if (!terminal.hasSelection()) return true; // No selection → send SIGINT as normal

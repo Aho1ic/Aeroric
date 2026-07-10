@@ -87,6 +87,59 @@ describe("NewTaskView start terminal", () => {
     );
   });
 
+  it("starts reasoning with the current editor text", async () => {
+    const user = userEvent.setup();
+    const onSubmit = vi.fn();
+
+    render(
+      <I18nProvider>
+        <NewTaskView project={project} onSubmit={onSubmit} />
+      </I18nProvider>,
+    );
+
+    const editor = screen.getByRole("textbox");
+    await user.type(editor, "inspect the current files");
+    await user.click(screen.getByRole("button", { name: /Send/ }));
+
+    expect(onSubmit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        prompt: "inspect the current files",
+        immediate: true,
+      }),
+    );
+  });
+
+  it("restores a draft as sendable content on the first render", async () => {
+    const user = userEvent.setup();
+    const onSubmit = vi.fn();
+
+    render(
+      <I18nProvider>
+        <NewTaskView
+          project={project}
+          onSubmit={onSubmit}
+          initialDraft={{
+            promptHtml: "continue the saved task",
+            agent: "claude",
+            permMode: "ask",
+            planMode: false,
+            pastedImages: [],
+            pastedTexts: [],
+          }}
+        />
+      </I18nProvider>,
+    );
+
+    await user.click(screen.getByRole("button", { name: /Send/ }));
+
+    expect(onSubmit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        prompt: "continue the saved task",
+        immediate: true,
+      }),
+    );
+  });
+
   it("passes the selected saved model for a custom Claude-like agent", async () => {
     const user = userEvent.setup();
     const onSubmit = vi.fn();

@@ -23,6 +23,13 @@ describe("terminal output highlighting", () => {
     expect(colorizePlainTerminalOutput(raw)).toBe(raw);
   });
 
+  it("preserves distinct ANSI foreground colors", () => {
+    const raw = "\x1b[31mred\x1b[0m \x1b[32mgreen\x1b[0m \x1b[34mblue\x1b[0m";
+
+    expect(remapLightAnsiForeground(raw, "light")).toBe(raw);
+    expect(remapLightAnsiForeground(raw, "dark")).toBe(raw);
+  });
+
   it("remaps explicit white ANSI foregrounds in light themes", () => {
     const raw = "\x1b[1;97mbold white\x1b[0m \x1b[38;2;255;255;255mtruecolor\x1b[0m";
 
@@ -77,6 +84,21 @@ describe("terminal output highlighting", () => {
     vi.advanceTimersByTime(1);
 
     expect(write).toHaveBeenCalledWith(expect.stringContaining("running"), expect.any(Function));
+    vi.useRealTimers();
+  });
+
+  it("immediately applies interactive redraws after user input", () => {
+    vi.useFakeTimers();
+    const write = vi.fn((_data: string, callback?: () => void) => callback?.());
+    const writer = createSmartWriter({ write } as unknown as Terminal);
+
+    writer.pauseForUserInput(50);
+    writer.write("\x1b[2K\r12");
+
+    expect(write).toHaveBeenCalledWith(
+      expect.stringContaining("\x1b[2K\r12"),
+      expect.any(Function),
+    );
     vi.useRealTimers();
   });
 });

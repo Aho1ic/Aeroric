@@ -942,7 +942,7 @@ export function SftpPanel({
                         <Select.Item
                           key={connection.id}
                           value={`ssh:${connection.id}`}
-                          style={s.fileSearchTypeItem}
+                          style={s.sftpGroupedConnectionItem}
                         >
                           <Select.ItemText>{connection.name}</Select.ItemText>
                           <Select.ItemIndicator style={s.settingsSelectIndicator}>

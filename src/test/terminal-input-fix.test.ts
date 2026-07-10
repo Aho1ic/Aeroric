@@ -697,6 +697,52 @@ describe("terminal input fixes", () => {
     vi.useRealTimers();
   });
 
+  it("clears the xterm composition view when preedit text is deleted to empty", async () => {
+    vi.useFakeTimers();
+    vi.resetModules();
+    vi.doMock("../platform", () => ({
+      APP_PLATFORM: "macos",
+      ENABLE_USAGE_INSIGHTS: true,
+      IS_MAC_WEBKIT: true,
+      IS_OTHER_WEBKIT: false,
+      detectAppPlatform: () => "macos",
+      isAppleWebKit: () => true,
+    }));
+    const { attachLinuxIMEFix } = await import("../components/terminalInputFix");
+    const terminalElement = document.createElement("div");
+    terminalElement.className = "xterm";
+    const textarea = document.createElement("textarea");
+    const compositionView = document.createElement("div");
+    compositionView.className = "composition-view active";
+    terminalElement.append(textarea, compositionView);
+    document.body.appendChild(terminalElement);
+    const term = {
+      textarea,
+      onData: () => ({ dispose: vi.fn() }),
+    };
+    const disposable = attachLinuxIMEFix(term as never, vi.fn());
+
+    textarea.dispatchEvent(new CompositionEvent("compositionstart", { data: "" }));
+    compositionView.textContent = "c";
+    textarea.value = "c";
+    textarea.dispatchEvent(new CompositionEvent("compositionupdate", { data: "c" }));
+    textarea.dispatchEvent(new CompositionEvent("compositionupdate", { data: "" }));
+    compositionView.classList.add("active");
+    compositionView.textContent = "c";
+    textarea.value = "c";
+
+    await Promise.resolve();
+    vi.runOnlyPendingTimers();
+
+    expect(compositionView.classList.contains("active")).toBe(false);
+    expect(compositionView.textContent).toBe("");
+    expect(textarea.value).toBe("");
+
+    disposable.dispose();
+    terminalElement.remove();
+    vi.useRealTimers();
+  });
+
   it("commits normalized romanized text when switching IME to English mid-composition", async () => {
     vi.useFakeTimers();
     vi.resetModules();
