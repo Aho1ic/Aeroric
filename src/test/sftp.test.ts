@@ -151,6 +151,12 @@ describe("sftp panel helpers", () => {
     expect(sftpKeyAction({ metaKey: false, key: "Backspace", code: "Backspace" })).toBe(null);
   });
 
+  it("formats the light terminal background as a readable light surface", async () => {
+    const { LIGHT_THEME } = await import("../components/terminalShared");
+    expect(LIGHT_THEME.background).toBe("#f6f8fa");
+    expect(LIGHT_THEME.foreground).toBe("#24292f");
+  });
+
   it("detects existing destination names before copy and move operations", () => {
     const entries: SftpEntry[] = [
       { name: "same.txt", path: "/target/same.txt", isDir: false },

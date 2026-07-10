@@ -3,7 +3,6 @@ import { invoke } from "@tauri-apps/api/core";
 import * as Select from "@radix-ui/react-select";
 import { confirm } from "@tauri-apps/plugin-dialog";
 import {
-  ArrowLeftRight,
   ArrowRight,
   ArrowUp,
   Archive,
@@ -51,7 +50,6 @@ import {
   flattenSftpTreeEntries,
   groupSftpSshConnections,
   normalizeSftpSortPreference,
-  pruneExpandedPathsForFolderSelection,
   sftpBreadcrumbSegments,
   sftpClickAction,
   sftpFileIconKind,
@@ -79,6 +77,8 @@ type PaneState = {
   loading: boolean;
   error: string | null;
   selectedPath: string | null;
+  selectedPaths: Set<string>;
+  selectionAnchorPath: string | null;
   pathInput: string;
   editingPath: boolean;
   configured: boolean;
@@ -107,6 +107,7 @@ type ClipboardPayload = {
 };
 
 type PreviewTarget = {
+  side: PaneSide;
   endpoint: SftpEndpoint;
   path: string;
   isDir: boolean;
@@ -170,6 +171,8 @@ function makeInitialPane(
     loading: false,
     error: null,
     selectedPath: null,
+    selectedPaths: new Set(),
+    selectionAnchorPath: null,
     pathInput: endpoint.path,
     editingPath: false,
     configured: false,
@@ -389,21 +392,54 @@ export function SftpPanel({
     async (side: PaneSide, pane: PaneState) => {
       updatePane(side, (prev) => ({ ...prev, loading: true, error: null }));
       try {
-        const entries = await readSftpDir(pane.endpoint, sshConnections);
-        updatePane(side, (prev) => ({
-          ...prev,
-          entries: sortSftpEntries(entries, prev.sortField, prev.sortDirection),
-          loading: false,
-          error: null,
-          selectedPath: entries.some((entry) => entry.path === prev.selectedPath)
-            ? prev.selectedPath
-            : null,
-          configured: true,
-          expandedPaths: new Set(),
-          childrenByPath: new Map(),
-          loadingChildren: new Set(),
-          childErrors: new Map(),
-        }));
+        const [entries, expandedResults] = await Promise.all([
+          readSftpDir(pane.endpoint, sshConnections),
+          Promise.all(
+            Array.from(pane.expandedPaths).map(async (path) => {
+              try {
+                const children = await readSftpDir({ ...pane.endpoint, path }, sshConnections);
+                return { path, children };
+              } catch {
+                return null;
+              }
+            }),
+          ),
+        ]);
+        updatePane(side, (prev) => {
+          const availablePaths = new Set(entries.map((entry) => entry.path));
+          for (const result of expandedResults) {
+            for (const child of result?.children ?? []) availablePaths.add(child.path);
+          }
+          const selectedPaths = new Set(
+            Array.from(prev.selectedPaths).filter((path) => availablePaths.has(path)),
+          );
+          const selectedPath =
+            prev.selectedPath && availablePaths.has(prev.selectedPath)
+              ? prev.selectedPath
+              : (Array.from(selectedPaths)[selectedPaths.size - 1] ?? null);
+          return {
+            ...prev,
+            entries: sortSftpEntries(entries, prev.sortField, prev.sortDirection),
+            loading: false,
+            error: null,
+            selectedPath,
+            selectedPaths,
+            configured: true,
+            expandedPaths: new Set(
+              expandedResults.filter((result) => result !== null).map((result) => result.path),
+            ),
+            childrenByPath: new Map(
+              expandedResults
+                .filter((result) => result !== null)
+                .map((result) => [
+                  result.path,
+                  sortSftpEntries(result.children, prev.sortField, prev.sortDirection),
+                ]),
+            ),
+            loadingChildren: new Set(),
+            childErrors: new Map(),
+          };
+        });
       } catch (error) {
         updatePane(side, (prev) => ({ ...prev, loading: false, error: String(error) }));
       }
@@ -498,14 +534,45 @@ export function SftpPanel({
   );
 
   const selectEntry = useCallback(
-    (side: PaneSide, entry: SftpEntry) => {
-      updatePane(side, (pane) => ({
-        ...pane,
-        selectedPath: entry.path,
-        expandedPaths: entry.isDir
-          ? pruneExpandedPathsForFolderSelection(pane.expandedPaths, entry.path)
-          : pane.expandedPaths,
-      }));
+    (side: PaneSide, entry: SftpEntry, options?: { toggle?: boolean; range?: boolean }) => {
+      updatePane(side, (pane) => {
+        const visiblePaths = flattenSftpTreeEntries(
+          pane.entries,
+          pane.expandedPaths,
+          pane.childrenByPath,
+          pane.sortField,
+          pane.sortDirection,
+        ).map((row) => row.entry.path);
+        let selectedPaths: Set<string>;
+        if (options?.range && pane.selectionAnchorPath) {
+          const anchorIndex = visiblePaths.indexOf(pane.selectionAnchorPath);
+          const entryIndex = visiblePaths.indexOf(entry.path);
+          if (anchorIndex >= 0 && entryIndex >= 0) {
+            const [start, end] = [anchorIndex, entryIndex].sort((a, b) => a - b);
+            selectedPaths = new Set(visiblePaths.slice(start, end + 1));
+          } else {
+            selectedPaths = new Set([entry.path]);
+          }
+        } else if (options?.toggle) {
+          selectedPaths = cloneSet(pane.selectedPaths);
+          if (selectedPaths.has(entry.path)) selectedPaths.delete(entry.path);
+          else selectedPaths.add(entry.path);
+        } else {
+          selectedPaths = new Set([entry.path]);
+        }
+        return {
+          ...pane,
+          selectedPath: selectedPaths.has(entry.path)
+            ? entry.path
+            : (Array.from(selectedPaths)[selectedPaths.size - 1] ?? null),
+          selectedPaths,
+          selectionAnchorPath: options?.range
+            ? pane.selectionAnchorPath
+            : options?.toggle && pane.selectionAnchorPath
+              ? pane.selectionAnchorPath
+              : entry.path,
+        };
+      });
     },
     [updatePane],
   );
@@ -532,8 +599,19 @@ export function SftpPanel({
   );
 
   const handleEntryClick = useCallback(
-    (side: PaneSide, entry: SftpEntry) => {
+    (
+      side: PaneSide,
+      entry: SftpEntry,
+      event?: { metaKey: boolean; ctrlKey: boolean; shiftKey: boolean },
+    ) => {
       const pane = panes[side];
+      if (event?.metaKey || event?.ctrlKey || event?.shiftKey) {
+        selectEntry(side, entry, {
+          toggle: event.metaKey || event.ctrlKey,
+          range: event.shiftKey,
+        });
+        return;
+      }
       const action = sftpClickAction({
         isDir: entry.isDir,
         isSelected: pane.selectedPath === entry.path,
@@ -564,7 +642,12 @@ export function SftpPanel({
       if (!pane.selectedPath) return;
       const selected = findEntryInPane(pane, pane.selectedPath);
       if (!selected) return;
-      setPreviewTarget({ endpoint: pane.endpoint, path: selected.path, isDir: selected.isDir });
+      setPreviewTarget({
+        side,
+        endpoint: pane.endpoint,
+        path: selected.path,
+        isDir: selected.isDir,
+      });
     },
     [findEntryInPane, panes],
   );
@@ -581,7 +664,13 @@ export function SftpPanel({
     ) => {
       const source = panes[sourceSide];
       const target = panes[targetSide];
-      const selectedPaths = paths ?? (source.selectedPath ? [source.selectedPath] : []);
+      const selectedPaths =
+        paths ??
+        (source.selectedPaths.size > 0
+          ? Array.from(source.selectedPaths)
+          : source.selectedPath
+            ? [source.selectedPath]
+            : []);
       if (selectedPaths.length === 0) return;
       const sourceEndpoint = sourceOverride ?? source.endpoint;
       const targetEndpoint = targetOverride ?? target.endpoint;
@@ -654,10 +743,10 @@ export function SftpPanel({
   const copySelected = useCallback(
     (side: PaneSide) => {
       const pane = panes[side];
-      if (!pane.selectedPath) return;
+      if (pane.selectedPaths.size === 0 && !pane.selectedPath) return;
       setClipboardPayload({
         endpoint: pane.endpoint,
-        paths: [pane.selectedPath],
+        paths: pane.selectedPaths.size > 0 ? Array.from(pane.selectedPaths) : [pane.selectedPath!],
         sourceSide: side,
       });
       showToast(t("sftp.copiedToClipboard"));
@@ -733,14 +822,23 @@ export function SftpPanel({
   const deleteSelected = useCallback(
     async (side: PaneSide) => {
       const pane = panes[side];
-      if (!pane.selectedPath) return;
-      const ok = await confirm(t("sftp.confirmDelete", { name: sftpFileName(pane.selectedPath) }), {
-        title: t("sftp.delete"),
-        kind: "warning",
-      });
+      const selectedPaths =
+        pane.selectedPaths.size > 0
+          ? Array.from(pane.selectedPaths)
+          : pane.selectedPath
+            ? [pane.selectedPath]
+            : [];
+      if (selectedPaths.length === 0) return;
+      const ok = await confirm(
+        t("sftp.confirmDelete", { name: selectedPaths.map(sftpFileName).join(", ") }),
+        {
+          title: t("sftp.delete"),
+          kind: "warning",
+        },
+      );
       if (!ok) return;
       try {
-        await deleteSftpPaths(pane.endpoint, sshConnections, [pane.selectedPath]);
+        await deleteSftpPaths(pane.endpoint, sshConnections, selectedPaths);
         showToast(t("sftp.deleteDone"));
         await refreshPane(side, pane);
       } catch (error) {
@@ -839,7 +937,7 @@ export function SftpPanel({
                   </Select.Item>
                   {sshConnectionGroups.map((group) => (
                     <Select.Group key={group.label}>
-                      <Select.Label className="radix-select-label">{group.label}</Select.Label>
+                      <Select.Label className="sftp-select-group-label">{group.label}</Select.Label>
                       {group.connections.map((connection) => (
                         <Select.Item
                           key={connection.id}
@@ -1081,15 +1179,21 @@ export function SftpPanel({
                 flattenedEntries.map(({ entry, depth }) => (
                   <div
                     key={entry.path}
-                    className={`sftp-row${pane.selectedPath === entry.path ? " selected" : ""}`}
+                    className={`sftp-row${pane.selectedPaths.has(entry.path) ? " selected" : ""}`}
                     draggable
                     onClick={(event) => {
                       if (event.detail > 1) return;
-                      handleEntryClick(side, entry);
+                      handleEntryClick(side, entry, event);
                     }}
                     onDoubleClick={() => openEntry(side, entry)}
                     onDragStart={() =>
-                      setDragPayload({ side, endpoint: pane.endpoint, paths: [entry.path] })
+                      setDragPayload({
+                        side,
+                        endpoint: pane.endpoint,
+                        paths: pane.selectedPaths.has(entry.path)
+                          ? Array.from(pane.selectedPaths)
+                          : [entry.path],
+                      })
                     }
                     onDragEnd={() => setDragPayload(null)}
                     onDragOver={(event) => {
@@ -1210,7 +1314,7 @@ export function SftpPanel({
                   }}
                   aria-hidden="true"
                 />
-                <span className="sftp-progress-count">{activeProgressPercent}%</span>
+                <span className="sftp-progress-count">{activeProgressPercent}</span>
               </button>
               <div className="sftp-transfer-popover" role="status">
                 <div className="sftp-transfer-popover-title">{t("sftp.transferTasks")}</div>
@@ -1223,10 +1327,6 @@ export function SftpPanel({
               </div>
             </div>
           )}
-          <div className="sftp-transfer-hint">
-            <ArrowLeftRight size={13} />
-            {focusedSide === "left" ? t("sftp.leftActive") : t("sftp.rightActive")}
-          </div>
           {onClose && (
             <button
               className="sftp-icon-btn"
@@ -1280,6 +1380,26 @@ export function SftpPanel({
               isDirectory={previewTarget.isDir}
               connections={sshConnections}
               themeVariant={themeVariant}
+              onNavigate={(direction) => {
+                const pane = panes[previewTarget.side];
+                const rows = flattenSftpTreeEntries(
+                  pane.entries,
+                  pane.expandedPaths,
+                  pane.childrenByPath,
+                  pane.sortField,
+                  pane.sortDirection,
+                );
+                const currentIndex = rows.findIndex((row) => row.entry.path === previewTarget.path);
+                const next = rows[currentIndex + direction]?.entry;
+                if (!next) return;
+                selectEntry(previewTarget.side, next);
+                setPreviewTarget({
+                  side: previewTarget.side,
+                  endpoint: pane.endpoint,
+                  path: next.path,
+                  isDir: next.isDir,
+                });
+              }}
               onClose={() => setPreviewTarget(null)}
             />
           </div>

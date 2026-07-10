@@ -77,6 +77,7 @@ export function SftpPreview({
   isDirectory = false,
   connections,
   themeVariant,
+  onNavigate,
   onClose,
 }: {
   endpoint: SftpEndpoint;
@@ -84,6 +85,7 @@ export function SftpPreview({
   isDirectory?: boolean;
   connections: SshConnection[];
   themeVariant: ThemeVariant;
+  onNavigate?: (direction: -1 | 1) => void;
   onClose?: () => void;
 }) {
   const { t } = useI18n();
@@ -157,13 +159,21 @@ export function SftpPreview({
   }, [connections, endpoint, fileName, filePath, isDirectory]);
 
   useEffect(() => {
-    if (!onClose) return;
+    if (!onClose && !onNavigate) return;
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
+      if (event.key === "Escape") onClose?.();
+      if (event.key === "ArrowUp" && onNavigate) {
+        event.preventDefault();
+        onNavigate(-1);
+      }
+      if (event.key === "ArrowDown" && onNavigate) {
+        event.preventDefault();
+        onNavigate(1);
+      }
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [onClose]);
+  }, [onClose, onNavigate]);
 
   if (!filePath) {
     return null;

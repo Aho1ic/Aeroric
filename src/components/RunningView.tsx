@@ -445,17 +445,19 @@ export function RunningView({
             <span>{t("running.exportMarkdown")}</span>
           </button>
         )}
-        {!isActive &&
-          !isDetached &&
-          !isInterrupted &&
-          onResume &&
-          resumeAvailable &&
-          !task.worktreeDiscarded && (
-            <button style={s.resumeBtn} onClick={onResume}>
-              <RotateCcw size={12} strokeWidth={2.5} />
-              <span>{t("running.resume")}</span>
-            </button>
-          )}
+        {!isActive && !isDetached && !isInterrupted && onResume && !task.worktreeDiscarded && (
+          <button
+            style={{
+              ...s.resumeBtn,
+              opacity: resumeAvailable ? 1 : 0.55,
+            }}
+            title={!resumeAvailable ? t("running.resumeUnavailable") : undefined}
+            onClick={onResume}
+          >
+            <RotateCcw size={12} strokeWidth={2.5} />
+            <span>{t("running.resume")}</span>
+          </button>
+        )}
         {!isActive &&
           task.status === "done" &&
           task.worktreePath &&

@@ -85,6 +85,21 @@ body {
   text-transform: uppercase;
   user-select: none;
 }
+
+.sftp-select-group-label {
+  display: block;
+  margin: 4px 6px 3px;
+  padding: 2px 9px;
+  border: 1px solid color-mix(in srgb, var(--accent) 42%, var(--border-dim));
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 12%, var(--bg-input));
+  color: var(--accent);
+  font-size: 10.5px;
+  font-weight: 750;
+  line-height: 1.2;
+  letter-spacing: 0.25px;
+  user-select: none;
+}
 .radix-select-item {
   display: flex;
   align-items: center;
@@ -1145,8 +1160,8 @@ html.dark .notebook-rich-text font[color="#000000"] {
 
 .sftp-transfer-progress-btn {
   position: relative;
-  width: 30px;
-  height: 30px;
+  width: 34px;
+  height: 34px;
   border: 1px solid var(--border-medium);
   border-radius: 999px;
   background: var(--bg-input);
@@ -1160,7 +1175,7 @@ html.dark .notebook-rich-text font[color="#000000"] {
 
 .sftp-progress-ring {
   position: absolute;
-  inset: 4px;
+  inset: 3px;
   border-radius: 999px;
   background: conic-gradient(var(--accent) 0%, var(--border-dim) 0);
   mask: radial-gradient(circle, transparent 52%, #000 54%);
@@ -1998,4 +2013,6 @@ html:not(.dark) .xterm,
 html:not(.dark) .xterm-rows,
 html:not(.dark) .xterm-helper-textarea {
   color: var(--text-primary) !important;
+  background: var(--bg-input) !important;
+  caret-color: var(--text-primary) !important;
 }

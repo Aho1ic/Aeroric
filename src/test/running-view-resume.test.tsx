@@ -74,9 +74,12 @@ describe("RunningView resume affordance", () => {
     expect(screen.getByRole("button", { name: "Resume" })).toBeInTheDocument();
   });
 
-  it("does not show resume for a completed task with no session id or path", () => {
+  it("shows a disabled-looking resume affordance for a completed task with no session metadata", () => {
     renderRunningView(completedTask);
 
-    expect(screen.queryByRole("button", { name: "Resume" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Resume" })).toHaveAttribute(
+      "title",
+      "This task has no session ID, so it cannot be resumed.",
+    );
   });
 });

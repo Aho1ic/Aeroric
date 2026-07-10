@@ -32,7 +32,7 @@ export const DARK_THEME = {
 };
 
 export const LIGHT_THEME = {
-  background: "#ffffff",
+  background: "#f6f8fa",
   foreground: "#24292f",
   cursor: "#24292f",
   selectionBackground: "#b3d7ff",

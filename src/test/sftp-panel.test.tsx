@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { I18nProvider } from "../i18n";
 import { SftpPanel } from "../components/sftp/SftpPanel";
 import type { SshConnection } from "../types";
@@ -36,6 +36,11 @@ const connections: SshConnection[] = [
 ];
 
 describe("SftpPanel", () => {
+  beforeEach(() => {
+    vi.mocked(invoke).mockReset();
+    vi.mocked(invoke).mockResolvedValue([]);
+  });
+
   it("defaults to Local on the left and the current SSH project connection on the right", () => {
     render(
       <I18nProvider>
@@ -114,8 +119,10 @@ describe("SftpPanel", () => {
   });
 
   it("defaults panes to modification time descending sort", async () => {
-    vi.mocked(invoke).mockImplementation((command) => {
+    vi.mocked(invoke).mockImplementation((command, args) => {
       if (command === "sftp_read_dir") {
+        const endpoint = (args as { endpoint: { kind: string } }).endpoint;
+        if (endpoint.kind !== "local") return Promise.resolve([]);
         return Promise.resolve([
           {
             name: "old.txt",
@@ -156,5 +163,92 @@ describe("SftpPanel", () => {
     expect(rows.map((row) => row.textContent)).toEqual(["new.txt", "old.txt"]);
     expect(screen.getAllByRole("button", { name: "Modified" })[0]).toHaveClass("active");
     expect(screen.getAllByRole("button", { name: "Desc" })[0]).toBeInTheDocument();
+  });
+
+  it("copies every cmd-selected file in one transfer", async () => {
+    const user = userEvent.setup();
+    vi.mocked(invoke).mockImplementation((command, args) => {
+      if (command === "sftp_read_dir") {
+        const endpoint = (args as { endpoint: { kind: string } }).endpoint;
+        if (endpoint.kind !== "local") return Promise.resolve([]);
+        return Promise.resolve([
+          { name: "a.txt", path: "/Users/me/a.txt", isDir: false, modifiedAtMs: 2 },
+          { name: "b.txt", path: "/Users/me/b.txt", isDir: false, modifiedAtMs: 1 },
+        ]);
+      }
+      return Promise.resolve(undefined);
+    });
+
+    render(
+      <I18nProvider>
+        <SftpPanel
+          sshConnections={connections}
+          localDefaultPath="/Users/me"
+          active
+          themeVariant="light"
+          currentSshConnectionId="conn-2"
+        />
+      </I18nProvider>,
+    );
+
+    await user.click(screen.getAllByRole("button", { name: "Open pane" })[0]);
+    await user.click(screen.getByText("a.txt"));
+    fireEvent.click(screen.getByText("b.txt"), { metaKey: true });
+    await user.click(screen.getAllByRole("button", { name: "Copy" })[0]);
+
+    await waitFor(() => {
+      const transfers = vi
+        .mocked(invoke)
+        .mock.calls.filter(([command]) => command === "sftp_copy_paths");
+      expect(transfers).toHaveLength(2);
+      expect(transfers.map(([, args]) => (args as { paths: string[] }).paths[0]).sort()).toEqual([
+        "/Users/me/a.txt",
+        "/Users/me/b.txt",
+      ]);
+    });
+  });
+
+  it("keeps expanded folders open after a copy refresh", async () => {
+    const user = userEvent.setup();
+    vi.mocked(invoke).mockImplementation((command, args) => {
+      if (command !== "sftp_read_dir") return Promise.resolve(undefined);
+      const endpoint = (args as { endpoint: { kind: string; path: string } }).endpoint;
+      if (endpoint.kind !== "local") return Promise.resolve([]);
+      const path = endpoint.path;
+      if (path === "/Users/me") {
+        return Promise.resolve([
+          { name: "src", path: "/Users/me/src", isDir: true, modifiedAtMs: 2 },
+          { name: "README.md", path: "/Users/me/README.md", isDir: false, modifiedAtMs: 1 },
+        ]);
+      }
+      if (path === "/Users/me/src") {
+        return Promise.resolve([
+          { name: "main.ts", path: "/Users/me/src/main.ts", isDir: false, modifiedAtMs: 1 },
+        ]);
+      }
+      return Promise.resolve([]);
+    });
+
+    render(
+      <I18nProvider>
+        <SftpPanel
+          sshConnections={connections}
+          localDefaultPath="/Users/me"
+          active
+          themeVariant="light"
+          currentSshConnectionId="conn-2"
+        />
+      </I18nProvider>,
+    );
+
+    await user.click(screen.getAllByRole("button", { name: "Open pane" })[0]);
+    const srcRow = screen.getByText("src").closest(".sftp-row");
+    expect(srcRow).not.toBeNull();
+    await user.click(srcRow!);
+    await user.click(srcRow!);
+    expect(await screen.findByText("main.ts")).toBeInTheDocument();
+    await user.click(screen.getByText("README.md"));
+    await user.click(screen.getAllByRole("button", { name: "Copy" })[0]);
+    expect(await screen.findByText("main.ts")).toBeInTheDocument();
   });
 });
