@@ -2266,6 +2266,7 @@ export function ProjectPage({
                   key={task.id}
                   task={task}
                   projectPath={project.path}
+                  canRecoverSession={projectLocation.kind === "local"}
                   runCount={taskRunCounts[task.id] ?? 0}
                   visible={visible && isVisible}
                   projectActive={visible}

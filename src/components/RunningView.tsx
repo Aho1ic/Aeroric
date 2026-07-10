@@ -60,6 +60,7 @@ function InlineWindow({ label, window }: { label: string; window: UsageWindow })
 export function RunningView({
   task,
   projectPath,
+  canRecoverSession = false,
   runCount = 0,
   visible = true,
   projectActive = true,
@@ -84,6 +85,7 @@ export function RunningView({
 }: {
   task: Task;
   projectPath: string;
+  canRecoverSession?: boolean;
   runCount?: number;
   visible?: boolean;
   projectActive?: boolean;
@@ -115,7 +117,9 @@ export function RunningView({
   const sessionPath = task.claudeSessionPath ?? task.codexSessionPath;
   const codexLike = isCodexLikeAgent(task.agent, agentOptions);
   const resumeSessionId = codexLike ? task.codexSessionId : task.claudeSessionId;
-  const resumeAvailable = Boolean(resumeSessionId || sessionPath);
+  const resumeAvailable = Boolean(
+    resumeSessionId || sessionPath || (canRecoverSession && !task.worktreeDiscarded),
+  );
   const restoreState = getRestoreState?.() ?? {};
   const [terminalHistory, setTerminalHistory] = useState("");
   const [terminalHistoryVersion, setTerminalHistoryVersion] = useState(0);

@@ -962,6 +962,7 @@ function App() {
     const codexLike = isCodexLikeAgent(task.agent, agentOptions);
     const sessionPath = codexLike ? task.codexSessionPath : task.claudeSessionPath;
     let sessionId = codexLike ? task.codexSessionId : task.claudeSessionId;
+    let recoveredSessionPath = sessionPath;
     if (!sessionId && sessionPath && resolveProjectLocation(project).kind === "local") {
       try {
         sessionId =
@@ -975,15 +976,35 @@ function App() {
       }
     }
 
+    if (!sessionId && resolveProjectLocation(project).kind === "local") {
+      try {
+        const recovered = await invoke<{ sessionId: string; sessionPath: string } | null>(
+          "recover_task_session",
+          {
+            projectPath: task.worktreePath ?? project.path,
+            prompt: task.prompt,
+            createdAt: task.createdAt,
+            isCodex: codexLike,
+          },
+        );
+        if (recovered) {
+          sessionId = recovered.sessionId;
+          recoveredSessionPath = recovered.sessionPath;
+        }
+      } catch (err) {
+        console.error("recover_task_session failed", err);
+      }
+    }
+
     if (!sessionId) {
       showToast(t("running.resumeUnavailable"), "warning");
       return;
     }
 
-    const restoredSessionFields: Partial<Task> = sessionPath
+    const restoredSessionFields: Partial<Task> = recoveredSessionPath
       ? codexLike
-        ? { codexSessionId: sessionId, codexSessionPath: sessionPath }
-        : { claudeSessionId: sessionId, claudeSessionPath: sessionPath }
+        ? { codexSessionId: sessionId, codexSessionPath: recoveredSessionPath }
+        : { claudeSessionId: sessionId, claudeSessionPath: recoveredSessionPath }
       : {};
     const taskWithSession: Task = { ...task, ...restoredSessionFields };
 

@@ -11,6 +11,7 @@
   --bg-selected: rgba(124, 58, 237, 0.12);
   --bg-subtle: #f4f4f7;
   --bg-input: #ffffff;
+  --terminal-bg: #f6f8fa;
   --bg: var(--bg-root);
 
   --border-dim: rgba(39, 39, 42, 0.09);
@@ -169,6 +170,7 @@ html.eyecare {
   --bg-selected: rgba(101, 84, 51, 0.12);
   --bg-subtle: #f2e7d0;
   --bg-input: #fffaf0;
+  --terminal-bg: #fdf6e3;
 
   --border-dim: rgba(101, 84, 51, 0.12);
   --border-medium: rgba(101, 84, 51, 0.2);
@@ -228,6 +230,7 @@ html.dark {
   --bg-selected: rgba(192, 132, 252, 0.2);
   --bg-subtle: #16161b;
   --bg-input: #111116;
+  --terminal-bg: #050506;
 
   --border-dim: rgba(244, 244, 245, 0.08);
   --border-medium: rgba(244, 244, 245, 0.14);

@@ -35,12 +35,13 @@ const completedTask: Task = {
   createdAt: 1,
 };
 
-function renderRunningView(task: Task) {
+function renderRunningView(task: Task, canRecoverSession = false) {
   return render(
     <I18nProvider>
       <RunningView
         task={task}
         projectPath="/tmp/project"
+        canRecoverSession={canRecoverSession}
         onCancel={vi.fn()}
         onResume={vi.fn()}
         onReconnect={vi.fn()}
@@ -78,6 +79,15 @@ describe("RunningView resume affordance", () => {
     renderRunningView(completedTask);
 
     expect(screen.getByRole("button", { name: "Resume" })).toHaveAttribute(
+      "title",
+      "This task has no session ID, so it cannot be resumed.",
+    );
+  });
+
+  it("allows local completed tasks to recover missing session metadata", () => {
+    renderRunningView(completedTask, true);
+
+    expect(screen.getByRole("button", { name: "Resume" })).not.toHaveAttribute(
       "title",
       "This task has no session ID, so it cannot be resumed.",
     );

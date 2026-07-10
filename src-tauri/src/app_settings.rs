@@ -30,7 +30,6 @@ static CACHED_CLAUDE_VERSION: OnceLock<Mutex<Option<Option<String>>>> = OnceLock
 static CACHED_CODEX_VERSION: OnceLock<Mutex<Option<Option<String>>>> = OnceLock::new();
 static SETTINGS_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 const CLAUDE_BUILTIN_MODEL_ALIASES: &[&str] = &["fable", "opus", "sonnet"];
-const GPT56_MODEL_FAMILY: &[&str] = &["gpt-5.6", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"];
 
 pub fn get_login_shell_env() -> &'static [(String, String)] {
     crate::platform::login_shell_env()
@@ -860,16 +859,6 @@ fn parse_codex_model_catalog(value: &str) -> Result<Vec<String>, String> {
     Ok(parse_model_ids(value))
 }
 
-fn prepend_gpt56_model_family(models: Vec<String>) -> Vec<String> {
-    normalize_model_list(
-        GPT56_MODEL_FAMILY
-            .iter()
-            .map(|model| (*model).to_string())
-            .chain(models)
-            .collect(),
-    )
-}
-
 fn claude_builtin_model_aliases() -> Vec<String> {
     CLAUDE_BUILTIN_MODEL_ALIASES
         .iter()
@@ -1106,6 +1095,84 @@ fn remove_agent_profile_file(path: &str) -> Result<(), String> {
     fs::remove_file(path).map_err(|error| error.to_string())
 }
 
+fn parse_generated_shell_value(content: &str, key: &str) -> Option<String> {
+    for line in content.lines() {
+        let line = line.trim().strip_prefix("export ").unwrap_or(line.trim());
+        let Some(value) = line
+            .strip_prefix(key)
+            .and_then(|value| value.strip_prefix('='))
+            .map(str::trim)
+        else {
+            continue;
+        };
+        if value.starts_with('$') || value.contains("${") {
+            continue;
+        }
+        if let Some(single_quoted) = value.strip_prefix('\'').and_then(|v| v.strip_suffix('\'')) {
+            return Some(single_quoted.replace("'\"'\"'", "'"));
+        }
+        if let Some(double_quoted) = value.strip_prefix('"').and_then(|v| v.strip_suffix('"')) {
+            if !double_quoted.contains('$') {
+                return Some(double_quoted.to_string());
+            }
+            continue;
+        }
+        if !value.is_empty() && !value.chars().any(char::is_whitespace) {
+            return Some(value.to_string());
+        }
+    }
+    None
+}
+
+fn parse_generated_toml_string(content: &str, key: &str) -> Option<String> {
+    content.lines().find_map(|line| {
+        let line = line.trim();
+        if !line.starts_with(key) {
+            return None;
+        }
+        let table = toml::from_str::<toml::Table>(line).ok()?;
+        table.get(key)?.as_str().map(str::to_string)
+    })
+}
+
+fn recover_custom_agent_credentials(profile: &mut CustomAgentProfile) {
+    if !profile.base_url.is_empty() && !profile.api_key.is_empty() {
+        return;
+    }
+    let Ok(content) = fs::read_to_string(&profile.path) else {
+        return;
+    };
+    if profile.base_url.is_empty() {
+        let recovered = if profile.codex_like {
+            parse_generated_toml_string(&content, "base_url")
+        } else {
+            parse_generated_shell_value(&content, "ANTHROPIC_BASE_URL")
+        };
+        if let Some(base_url) = recovered {
+            profile.base_url = normalize_base_url(&base_url);
+        }
+    }
+    if profile.api_key.is_empty() {
+        let keys: &[&str] = if profile.codex_like {
+            &["ANTHROPIC_API_KEY"]
+        } else {
+            &["ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY"]
+        };
+        if let Some(api_key) = keys
+            .iter()
+            .find_map(|key| parse_generated_shell_value(&content, key))
+        {
+            profile.api_key = api_key.trim().to_string();
+        }
+    }
+}
+
+fn recover_custom_agent_settings(settings: &mut AppSettings) {
+    for profile in &mut settings.custom_agents {
+        recover_custom_agent_credentials(profile);
+    }
+}
+
 fn normalize_settings(settings: AppSettings) -> AppSettings {
     let proxy_settings = migrate_legacy_proxy_settings(&settings);
     let agent_proxy_enabled = migrate_agent_proxy_enabled(&settings);
@@ -1166,7 +1233,8 @@ fn load_settings_unlocked() -> AppSettings {
         Err(_) => return AppSettings::default(),
     };
     let settings: AppSettings = serde_json::from_str(&raw).unwrap_or_default();
-    let normalized = normalize_settings(settings.clone());
+    let mut normalized = normalize_settings(settings.clone());
+    recover_custom_agent_settings(&mut normalized);
     if normalized != settings {
         if let Ok(raw) = serde_json::to_string_pretty(&normalized) {
             let _ = atomic_write(&path, &raw);
@@ -1343,13 +1411,7 @@ pub async fn detect_agent_models(
         .await
         .map_err(|e| e.to_string())?;
     let models = parse_model_ids(value);
-    Ok(AgentModels {
-        models: if matches!(kind, AgentSetupKind::Codex) {
-            prepend_gpt56_model_family(models)
-        } else {
-            models
-        },
-    })
+    Ok(AgentModels { models })
 }
 
 #[tauri::command]
@@ -1401,7 +1463,7 @@ pub async fn list_agent_models(agent: String) -> Result<AgentModels, String> {
 
         let stdout = String::from_utf8_lossy(&output.stdout);
         Ok(AgentModels {
-            models: prepend_gpt56_model_family(parse_codex_model_catalog(&stdout)?),
+            models: parse_codex_model_catalog(&stdout)?,
         })
     })
     .await
@@ -2076,17 +2138,50 @@ mod tests {
     }
 
     #[test]
-    fn prepends_gpt56_family_to_codex_model_dropdowns() {
-        assert_eq!(
-            prepend_gpt56_model_family(vec!["gpt-5.6-sol".to_string(), "gpt-5.5".to_string()]),
-            vec![
-                "gpt-5.6",
-                "gpt-5.6-sol",
-                "gpt-5.6-terra",
-                "gpt-5.6-luna",
-                "gpt-5.5"
+    fn codex_model_dropdowns_only_use_reported_models() {
+        let value = serde_json::json!({
+            "models": [
+                { "slug": "gpt-5.5", "visibility": "list" },
+                { "slug": "gpt-5.4", "visibility": "list" }
             ]
+        })
+        .to_string();
+
+        assert_eq!(
+            parse_codex_model_catalog(&value).unwrap(),
+            vec!["gpt-5.4", "gpt-5.5"]
         );
+    }
+
+    #[test]
+    fn recovers_generated_agent_credentials_from_scripts() {
+        let dir =
+            std::env::temp_dir().join(format!("aeroric-agent-recover-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&dir).unwrap();
+        let codex_path = dir.join("codex.sh");
+        fs::write(
+            &codex_path,
+            "export ANTHROPIC_API_KEY='sk-test'\nbase_url = \"https://example.com/v1\"\n",
+        )
+        .unwrap();
+        let mut profile = CustomAgentProfile {
+            id: "custom".to_string(),
+            label: "Custom".to_string(),
+            path: codex_path.to_string_lossy().into_owned(),
+            codex_like: true,
+            config_lang: "shellscript".to_string(),
+            base_url: String::new(),
+            api_key: String::new(),
+            models: Vec::new(),
+            username: String::new(),
+            password: String::new(),
+        };
+
+        recover_custom_agent_credentials(&mut profile);
+
+        assert_eq!(profile.base_url, "https://example.com/v1");
+        assert_eq!(profile.api_key, "sk-test");
+        let _ = fs::remove_dir_all(dir);
     }
 
     #[test]

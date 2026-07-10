@@ -357,6 +357,7 @@ pub fn run() {
             analytics::read_session_metrics,
             session::read_session_messages,
             session::read_session_id,
+            session::recover_task_session,
             session::export_session_markdown,
             config::init_project_config,
             config::read_project_config,

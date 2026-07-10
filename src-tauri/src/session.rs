@@ -24,6 +24,13 @@ pub(crate) struct ClaudeSessionInfo {
     pub(crate) is_placeholder: bool,
 }
 
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecoveredSession {
+    session_id: String,
+    session_path: String,
+}
+
 // ── 公共辅助函数 ──────────────────────────────────────────────────────────────
 
 pub(crate) fn emit_task_status(app: &AppHandle, task_id: &str, status: &str) {
@@ -127,8 +134,36 @@ fn codex_sessions_roots(project_path: &str) -> Vec<PathBuf> {
         if !roots.iter().any(|root| root == &home_root) {
             roots.push(home_root);
         }
+        append_custom_agent_session_roots(&mut roots, &home, project_path, true);
     }
     roots
+}
+
+fn append_custom_agent_session_roots(
+    roots: &mut Vec<PathBuf>,
+    home: &Path,
+    project_path: &str,
+    is_codex: bool,
+) {
+    let agent_homes = home.join(".aeroric").join("agent-homes");
+    let Ok(entries) = fs::read_dir(agent_homes) else {
+        return;
+    };
+    let encoded_project = encode_claude_project_path(project_path);
+    for entry in entries.flatten() {
+        let agent_home = entry.path();
+        if !agent_home.is_dir() {
+            continue;
+        }
+        let root = if is_codex {
+            agent_home.join("sessions")
+        } else {
+            agent_home.join("projects").join(&encoded_project)
+        };
+        if !roots.iter().any(|existing| existing == &root) {
+            roots.push(root);
+        }
+    }
 }
 
 fn collect_session_files_from_roots(roots: &[PathBuf]) -> Vec<PathBuf> {
@@ -158,6 +193,20 @@ fn collect_session_files(dir: &Path, out: &mut Vec<PathBuf>) {
             .unwrap_or(false);
 
         if is_rollout_jsonl {
+            out.push(path);
+        }
+    }
+}
+
+fn collect_jsonl_files(dir: &Path, out: &mut Vec<PathBuf>) {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_jsonl_files(&path, out);
+        } else if path.extension().and_then(|extension| extension.to_str()) == Some("jsonl") {
             out.push(path);
         }
     }
@@ -521,9 +570,8 @@ fn assistant_message_requests_user_input(payload: Option<&serde_json::Value>) ->
 
 // ── Claude Code 会话监视器 ────────────────────────────────────────────────────
 
-fn claude_sessions_dir_for_project(project_path: &str) -> Option<PathBuf> {
-    let home = crate::platform::home_dir()?;
-    let encoded: String = project_path
+fn encode_claude_project_path(project_path: &str) -> String {
+    project_path
         .chars()
         .map(|c| {
             if c.is_ascii_alphanumeric() || c == '-' {
@@ -532,8 +580,25 @@ fn claude_sessions_dir_for_project(project_path: &str) -> Option<PathBuf> {
                 '-'
             }
         })
-        .collect();
-    Some(home.join(".claude").join("projects").join(encoded))
+        .collect()
+}
+
+fn claude_sessions_dirs_for_project(project_path: &str) -> Vec<PathBuf> {
+    let Some(home) = crate::platform::home_dir() else {
+        return Vec::new();
+    };
+    let mut roots = vec![home
+        .join(".claude")
+        .join("projects")
+        .join(encode_claude_project_path(project_path))];
+    append_custom_agent_session_roots(&mut roots, &home, project_path, false);
+    roots
+}
+
+fn claude_sessions_dir_for_project(project_path: &str) -> Option<PathBuf> {
+    claude_sessions_dirs_for_project(project_path)
+        .into_iter()
+        .next()
 }
 
 fn watch_claude_session(app: AppHandle, task_id: String, session_path: PathBuf) {
@@ -678,6 +743,25 @@ pub async fn read_session_id(
     .map_err(|e| e.to_string())?
 }
 
+#[tauri::command]
+pub async fn recover_task_session(
+    project_path: String,
+    prompt: String,
+    created_at: i64,
+    is_codex: bool,
+) -> Result<Option<RecoveredSession>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        Ok(recover_session(
+            &project_path,
+            &prompt,
+            created_at,
+            is_codex,
+        ))
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
 const SESSION_FORMAT_DETECTION_LINES: usize = 200;
 
 fn is_codex_format<S: AsRef<str>>(lines: &[S]) -> bool {
@@ -756,6 +840,132 @@ fn resolve_session_id_from_file(path: &Path, is_codex: bool) -> Option<String> {
     }
 
     None
+}
+
+fn session_started_at_ms(path: &Path) -> Option<i64> {
+    let file = File::open(path).ok()?;
+    for line in BufReader::new(file)
+        .lines()
+        .map_while(Result::ok)
+        .take(SESSION_FORMAT_DETECTION_LINES)
+    {
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(&line) else {
+            continue;
+        };
+        let timestamp = value
+            .get("timestamp")
+            .or_else(|| {
+                value
+                    .get("payload")
+                    .and_then(|payload| payload.get("timestamp"))
+            })
+            .and_then(serde_json::Value::as_str);
+        if let Some(timestamp) = timestamp {
+            if let Ok(parsed) = chrono::DateTime::parse_from_rfc3339(timestamp) {
+                return Some(parsed.timestamp_millis());
+            }
+        }
+    }
+
+    fs::metadata(path)
+        .ok()
+        .and_then(|metadata| metadata.created().or_else(|_| metadata.modified()).ok())
+        .and_then(|time| time.duration_since(SystemTime::UNIX_EPOCH).ok())
+        .map(|duration| duration.as_millis() as i64)
+}
+
+fn session_matches_project(path: &Path, project_path: &str, is_codex: bool) -> bool {
+    if !is_codex {
+        return true;
+    }
+    let expected = Path::new(project_path)
+        .canonicalize()
+        .unwrap_or_else(|_| PathBuf::from(project_path));
+    let Ok(file) = File::open(path) else {
+        return false;
+    };
+    BufReader::new(file)
+        .lines()
+        .map_while(Result::ok)
+        .take(SESSION_FORMAT_DETECTION_LINES)
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(&line).ok())
+        .filter_map(|value| {
+            value
+                .get("payload")
+                .and_then(|payload| payload.get("cwd"))
+                .and_then(serde_json::Value::as_str)
+                .map(PathBuf::from)
+        })
+        .any(|cwd| cwd.canonicalize().unwrap_or(cwd) == expected)
+}
+
+fn first_user_message(path: &Path, is_codex: bool) -> Option<String> {
+    let lines = BufReader::new(File::open(path).ok()?)
+        .lines()
+        .map_while(Result::ok)
+        .take(2_000)
+        .collect::<Vec<_>>();
+    parse_session_messages(&lines, is_codex)
+        .into_iter()
+        .find(|message| message.role == "user")
+        .and_then(|message| {
+            message
+                .content
+                .into_iter()
+                .find_map(|content| match content {
+                    SessionContent::Text { text } if !text.trim().is_empty() => Some(text),
+                    _ => None,
+                })
+        })
+}
+
+fn recover_session(
+    project_path: &str,
+    prompt: &str,
+    created_at: i64,
+    is_codex: bool,
+) -> Option<RecoveredSession> {
+    let mut files = if is_codex {
+        collect_session_files_from_roots(&codex_sessions_roots(project_path))
+    } else {
+        let mut files = Vec::new();
+        for root in claude_sessions_dirs_for_project(project_path) {
+            collect_jsonl_files(&root, &mut files);
+        }
+        files
+    };
+    let normalized_prompt = prompt.trim();
+    files.retain(|path| session_matches_project(path, project_path, is_codex));
+
+    files
+        .into_iter()
+        .filter_map(|path| {
+            let started_at = session_started_at_ms(&path)?;
+            let delta = started_at.abs_diff(created_at);
+            if delta > 15 * 60 * 1_000 {
+                return None;
+            }
+            let prompt_match = if normalized_prompt.is_empty() {
+                true
+            } else {
+                first_user_message(&path, is_codex)
+                    .map(|message| message.trim().contains(normalized_prompt))
+                    .unwrap_or(false)
+            };
+            if !prompt_match {
+                return None;
+            }
+            let session_id = resolve_session_id_from_file(&path, is_codex)?;
+            Some((
+                delta,
+                RecoveredSession {
+                    session_id,
+                    session_path: path.to_string_lossy().into_owned(),
+                },
+            ))
+        })
+        .min_by_key(|(delta, _)| *delta)
+        .map(|(_, recovered)| recovered)
 }
 
 fn parse_session_lines(lines: &[String], is_codex: bool, messages: &mut Vec<SessionMessage>) {
@@ -1050,9 +1260,9 @@ pub(crate) fn validate_session_path(
             .filter_map(|p| p.canonicalize().ok())
             .collect()
     } else {
-        claude_sessions_dir_for_project(project_path)
-            .and_then(|p| p.canonicalize().ok())
+        claude_sessions_dirs_for_project(project_path)
             .into_iter()
+            .filter_map(|p| p.canonicalize().ok())
             .collect()
     };
 
@@ -1253,24 +1463,25 @@ fn is_uuid_like(s: &str) -> bool {
 }
 
 fn find_claude_session_file(session_id: &str, project_path: &str) -> Option<PathBuf> {
-    let sessions_dir = claude_sessions_dir_for_project(project_path)?;
-
-    // Fast path: UUID session IDs map directly to filenames.
-    if is_uuid_like(session_id) {
-        let file = sessions_dir.join(format!("{}.jsonl", session_id));
-        return if file.exists() { Some(file) } else { None };
-    }
-
-    // Slow path: human-readable slug — scan file contents for a matching
-    // `custom-title` or `agent-name` record written by the model.
-    let entries = std::fs::read_dir(&sessions_dir).ok()?;
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
-            continue;
+    for sessions_dir in claude_sessions_dirs_for_project(project_path) {
+        if is_uuid_like(session_id) {
+            let file = sessions_dir.join(format!("{}.jsonl", session_id));
+            if file.exists() {
+                return Some(file);
+            }
         }
-        if slug_matches_session_file(&path, session_id) {
-            return Some(path);
+
+        let Ok(entries) = std::fs::read_dir(&sessions_dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
+                continue;
+            }
+            if slug_matches_session_file(&path, session_id) {
+                return Some(path);
+            }
         }
     }
     None
@@ -2163,6 +2374,102 @@ mod tests {
             Some("019f39d7-aaaa-7bbb-8ccc-9ddddddddddd".to_string())
         );
         let _ = fs::remove_file(&fallback_path);
+    }
+
+    #[test]
+    fn recover_session_matches_project_prompt_and_creation_time() {
+        let root = std::env::temp_dir().join(format!("aeroric-recover-{}", uuid::Uuid::new_v4()));
+        let sessions = root.join(".codex/sessions/2026/07/10");
+        fs::create_dir_all(&sessions).unwrap();
+        let session_id = "019f39d7-1111-2222-3333-444444444444";
+        let path = sessions.join(format!("rollout-2026-07-10T06-00-00-{session_id}.jsonl"));
+        let lines = [
+            serde_json::json!({
+                "timestamp": "2026-07-10T06:00:00Z",
+                "type": "session_meta",
+                "payload": { "id": session_id, "cwd": root }
+            })
+            .to_string(),
+            codex_user_line("inspect the current files"),
+        ];
+        fs::write(&path, lines.join("\n")).unwrap();
+        let created_at = chrono::DateTime::parse_from_rfc3339("2026-07-10T06:02:00Z")
+            .unwrap()
+            .timestamp_millis();
+
+        let recovered = recover_session(
+            root.to_string_lossy().as_ref(),
+            "inspect the current files",
+            created_at,
+            true,
+        )
+        .unwrap();
+
+        assert_eq!(recovered.session_id, session_id);
+        assert_eq!(recovered.session_path, path.to_string_lossy());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn recover_session_rejects_different_project_and_stale_session() {
+        let root = std::env::temp_dir().join(format!("aeroric-recover-{}", uuid::Uuid::new_v4()));
+        let other = std::env::temp_dir().join(format!("aeroric-other-{}", uuid::Uuid::new_v4()));
+        let sessions = root.join(".codex/sessions/2026/07/10");
+        fs::create_dir_all(&sessions).unwrap();
+        fs::create_dir_all(&other).unwrap();
+        let path =
+            sessions.join("rollout-2026-07-10T06-00-00-019f39d7-1111-2222-3333-444444444444.jsonl");
+        let lines = [
+            serde_json::json!({
+                "timestamp": "2026-07-10T06:00:00Z",
+                "type": "session_meta",
+                "payload": {
+                    "id": "019f39d7-1111-2222-3333-444444444444",
+                    "cwd": other
+                }
+            })
+            .to_string(),
+            codex_user_line("inspect the current files"),
+        ];
+        fs::write(path, lines.join("\n")).unwrap();
+        let stale_created_at = chrono::DateTime::parse_from_rfc3339("2026-07-10T07:00:00Z")
+            .unwrap()
+            .timestamp_millis();
+
+        assert!(recover_session(
+            root.to_string_lossy().as_ref(),
+            "inspect the current files",
+            stale_created_at,
+            true,
+        )
+        .is_none());
+
+        let _ = fs::remove_dir_all(&root);
+        let _ = fs::remove_dir_all(&other);
+    }
+
+    #[test]
+    fn includes_custom_agent_session_roots_for_both_agent_types() {
+        let home =
+            std::env::temp_dir().join(format!("aeroric-agent-roots-{}", uuid::Uuid::new_v4()));
+        let agent_home = home.join(".aeroric/agent-homes/custom");
+        fs::create_dir_all(&agent_home).unwrap();
+        let project_path = "/tmp/example project";
+
+        let mut codex_roots = Vec::new();
+        append_custom_agent_session_roots(&mut codex_roots, &home, project_path, true);
+        assert_eq!(codex_roots, vec![agent_home.join("sessions")]);
+
+        let mut claude_roots = Vec::new();
+        append_custom_agent_session_roots(&mut claude_roots, &home, project_path, false);
+        assert_eq!(
+            claude_roots,
+            vec![agent_home
+                .join("projects")
+                .join(encode_claude_project_path(project_path))]
+        );
+
+        let _ = fs::remove_dir_all(home);
     }
 
     #[test]
