@@ -39,7 +39,7 @@ describe("agent options", () => {
     expect(agentDisplayLabel("codex")).toBe("Codex");
   });
 
-  it("treats the GPT55 script as codex-compatible because it execs codex", () => {
+  it("treats the legacy GPT launcher as codex-compatible because it execs codex", () => {
     expect(isCodexLikeAgent("claude")).toBe(false);
     expect(isCodexLikeAgent("claude_gpt55")).toBe(true);
     expect(isCodexLikeAgent("codex")).toBe(true);

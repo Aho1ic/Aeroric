@@ -101,7 +101,7 @@ function renderModelManagedAgentConfigPanel() {
     config_lang: "shellscript",
     base_url: "https://example.com/v1",
     api_key: "sk-test",
-    models: ["gpt-5.5"],
+    models: ["gpt-5.6"],
   };
   vi.mocked(invoke).mockImplementation((command, args) => {
     if (command === "get_agent_config_file_path") {
@@ -113,7 +113,9 @@ function renderModelManagedAgentConfigPanel() {
     }
     if (command === "detect_agent_version") return Promise.resolve("codex 1.0.0");
     if (command === "detect_agent_models") {
-      return Promise.resolve({ models: ["gpt-5.5", "gpt-5.1"] });
+      return Promise.resolve({
+        models: ["gpt-5.6", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"],
+      });
     }
     if (command === "update_custom_agent_models") {
       configContent = "#!/bin/sh\n# updated\n";
@@ -228,7 +230,9 @@ function renderDebugPanel() {
 function renderAddAgentPanel() {
   vi.mocked(invoke).mockImplementation((command) => {
     if (command === "detect_agent_models") {
-      return Promise.resolve({ models: ["gpt-5.5", "gpt-5.1"] });
+      return Promise.resolve({
+        models: ["gpt-5.6", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"],
+      });
     }
     if (command === "setup_agent_profile") {
       return Promise.resolve(appSettings);
@@ -325,13 +329,13 @@ describe("Agent config and debug panel UI", () => {
     renderAgentConfigPanelWithMissingFile();
 
     const editor = await findConfigEditor("");
-    await user.type(editor, 'model = "gpt-5.5"');
+    await user.type(editor, 'model = "gpt-5.6"');
     await user.click(getEnabledSaveButton());
 
     await waitFor(() =>
       expect(invoke).toHaveBeenCalledWith("write_agent_config_file", {
         agent: "codex",
-        content: 'model = "gpt-5.5"',
+        content: 'model = "gpt-5.6"',
       }),
     );
     expect(screen.queryByRole("button", { name: /Edit/i })).not.toBeInTheDocument();
@@ -351,13 +355,13 @@ describe("Agent config and debug panel UI", () => {
     await findConfigEditor("#!/bin/sh\n");
     const nameInput = screen.getByLabelText("Agent Name");
     await user.clear(nameInput);
-    await user.type(nameInput, "GPT 5.5");
+    await user.type(nameInput, "GPT 5.6");
     await user.click(screen.getByRole("button", { name: /Save Name/i }));
 
     await waitFor(() =>
       expect(invoke).toHaveBeenCalledWith("rename_custom_agent_profile", {
         id: "gpt55",
-        label: "GPT 5.5",
+        label: "GPT 5.6",
       }),
     );
   });
@@ -383,16 +387,16 @@ describe("Agent config and debug panel UI", () => {
     renderModelManagedAgentConfigPanel();
 
     await findConfigEditor("#!/bin/sh\n");
-    expect(screen.getByLabelText("gpt-5.5")).toBeChecked();
+    expect(screen.getByLabelText("gpt-5.6")).toBeChecked();
     await user.click(screen.getByRole("button", { name: /Detect Models/i }));
-    await screen.findByLabelText("gpt-5.1");
-    await user.click(screen.getByLabelText("gpt-5.1"));
+    await screen.findByLabelText("gpt-5.6-terra");
+    await user.click(screen.getByLabelText("gpt-5.6-terra"));
     await user.click(getEnabledSaveButton());
 
     await waitFor(() =>
       expect(invoke).toHaveBeenCalledWith("update_custom_agent_models", {
         id: "gpt55",
-        models: ["gpt-5.5", "gpt-5.1"],
+        models: ["gpt-5.6", "gpt-5.6-terra"],
       }),
     );
     expect(await findConfigEditor("#!/bin/sh\n# updated\n")).toBeInTheDocument();
@@ -499,8 +503,8 @@ describe("Agent config and debug panel UI", () => {
     await user.type(screen.getByLabelText("API Key"), "sk-test");
     await user.click(screen.getByRole("button", { name: /Detect Models/i }));
 
-    await screen.findByText("0 of 2 models selected");
-    await user.click(screen.getByLabelText("gpt-5.5"));
+    await screen.findByText("0 of 4 models selected");
+    await user.click(screen.getByLabelText("gpt-5.6-sol"));
     await user.click(screen.getByRole("button", { name: /^Add Agent$/i }));
 
     expect(invoke).toHaveBeenCalledWith("detect_agent_models", {
@@ -515,8 +519,8 @@ describe("Agent config and debug panel UI", () => {
         kind: "codex",
         base_url: "https://example.com/v1",
         api_key: "sk-test",
-        model: "gpt-5.5",
-        models: ["gpt-5.5"],
+        model: "gpt-5.6-sol",
+        models: ["gpt-5.6-sol"],
       },
     });
   });
@@ -530,7 +534,7 @@ describe("Agent config and debug panel UI", () => {
     await user.type(screen.getByLabelText("Agent Name"), "词元");
     await user.type(screen.getByLabelText("Base URL"), "https://ai.962831.xyz/v1");
     await user.type(screen.getByLabelText("API Key"), "sk-test");
-    await user.type(screen.getByLabelText("Model"), "gpt-5.5");
+    await user.type(screen.getByLabelText("Model"), "gpt-5.6");
     await user.click(screen.getByRole("button", { name: /^Add Agent$/i }));
 
     expect(invoke).toHaveBeenCalledWith("setup_agent_profile", {
@@ -540,8 +544,8 @@ describe("Agent config and debug panel UI", () => {
         kind: "codex",
         base_url: "https://ai.962831.xyz/v1",
         api_key: "sk-test",
-        model: "gpt-5.5",
-        models: ["gpt-5.5"],
+        model: "gpt-5.6",
+        models: ["gpt-5.6"],
       },
     });
   });
@@ -555,12 +559,12 @@ describe("Agent config and debug panel UI", () => {
     await user.type(screen.getByLabelText("API Key"), "sk-test");
 
     const modelInput = screen.getByLabelText("Model");
-    await user.type(modelInput, "gpt-5.5");
+    await user.type(modelInput, "gpt-5.6");
     await user.click(screen.getByRole("button", { name: /^Add Model$/i }));
     expect(modelInput).toHaveValue("");
     await waitFor(() => expect(modelInput).toHaveFocus());
 
-    await user.type(modelInput, "gpt-5.1");
+    await user.type(modelInput, "gpt-5.6-luna");
     await user.keyboard("{Enter}");
     expect(modelInput).toHaveValue("");
     expect(screen.getByText("2 of 2 models selected")).toBeInTheDocument();
@@ -573,8 +577,8 @@ describe("Agent config and debug panel UI", () => {
         kind: "codex",
         base_url: "https://example.com/v1",
         api_key: "sk-test",
-        model: "gpt-5.5",
-        models: ["gpt-5.5", "gpt-5.1"],
+        model: "gpt-5.6",
+        models: ["gpt-5.6", "gpt-5.6-luna"],
       },
     });
   });

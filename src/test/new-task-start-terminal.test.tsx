@@ -21,7 +21,9 @@ vi.mock("@tauri-apps/api/core", () => ({
             ? ["opus", "sonnet"]
             : agent === "local_claude"
               ? ["claude-opus-4-8", "claude-sonnet-4-8"]
-              : [],
+              : agent === "codex"
+                ? ["gpt-5.6", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]
+                : [],
       });
     }
     if (command === "load_app_settings") {
@@ -138,6 +140,36 @@ describe("NewTaskView start terminal", () => {
       expect.objectContaining({
         agent: "claude",
         selectedModel: "sonnet",
+      }),
+    );
+  });
+
+  it("passes the selected GPT-5.6 model for the built-in Codex agent", async () => {
+    const user = userEvent.setup();
+    const onSubmit = vi.fn();
+
+    render(
+      <I18nProvider>
+        <NewTaskView project={project} onSubmit={onSubmit} />
+      </I18nProvider>,
+    );
+
+    await user.click(screen.getByRole("combobox", { name: "Agent" }));
+    await user.click(await screen.findByText("Codex"));
+
+    await waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith("list_agent_models", { agent: "codex" }),
+    );
+    await screen.findByText("gpt-5.6");
+
+    await user.click(screen.getByRole("combobox", { name: "Model" }));
+    await user.click(await screen.findByText("gpt-5.6-terra"));
+    await user.click(screen.getByRole("button", { name: /Start Terminal/ }));
+
+    expect(onSubmit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agent: "codex",
+        selectedModel: "gpt-5.6-terra",
       }),
     );
   });

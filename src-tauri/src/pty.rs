@@ -1135,8 +1135,8 @@ mod tests {
     #[test]
     fn selected_model_is_trimmed_and_optional() {
         assert_eq!(
-            normalized_selected_model(Some("  gpt-5.5  ")),
-            Some("gpt-5.5".to_string())
+            normalized_selected_model(Some("  gpt-5.6-terra  ")),
+            Some("gpt-5.6-terra".to_string())
         );
         assert_eq!(normalized_selected_model(Some("  ")), None);
         assert_eq!(normalized_selected_model(None), None);

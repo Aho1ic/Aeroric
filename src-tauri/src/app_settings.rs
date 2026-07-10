@@ -30,6 +30,7 @@ static CACHED_CLAUDE_VERSION: OnceLock<Mutex<Option<Option<String>>>> = OnceLock
 static CACHED_CODEX_VERSION: OnceLock<Mutex<Option<Option<String>>>> = OnceLock::new();
 static SETTINGS_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 const CLAUDE_BUILTIN_MODEL_ALIASES: &[&str] = &["fable", "opus", "sonnet"];
+const GPT56_MODEL_FAMILY: &[&str] = &["gpt-5.6", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"];
 
 pub fn get_login_shell_env() -> &'static [(String, String)] {
     crate::platform::login_shell_env()
@@ -859,6 +860,16 @@ fn parse_codex_model_catalog(value: &str) -> Result<Vec<String>, String> {
     Ok(parse_model_ids(value))
 }
 
+fn prepend_gpt56_model_family(models: Vec<String>) -> Vec<String> {
+    normalize_model_list(
+        GPT56_MODEL_FAMILY
+            .iter()
+            .map(|model| (*model).to_string())
+            .chain(models)
+            .collect(),
+    )
+}
+
 fn claude_builtin_model_aliases() -> Vec<String> {
     CLAUDE_BUILTIN_MODEL_ALIASES
         .iter()
@@ -1331,8 +1342,13 @@ pub async fn detect_agent_models(
         .json::<serde_json::Value>()
         .await
         .map_err(|e| e.to_string())?;
+    let models = parse_model_ids(value);
     Ok(AgentModels {
-        models: parse_model_ids(value),
+        models: if matches!(kind, AgentSetupKind::Codex) {
+            prepend_gpt56_model_family(models)
+        } else {
+            models
+        },
     })
 }
 
@@ -1385,7 +1401,7 @@ pub async fn list_agent_models(agent: String) -> Result<AgentModels, String> {
 
         let stdout = String::from_utf8_lossy(&output.stdout);
         Ok(AgentModels {
-            models: parse_codex_model_catalog(&stdout)?,
+            models: prepend_gpt56_model_family(parse_codex_model_catalog(&stdout)?),
         })
     })
     .await
@@ -1799,15 +1815,15 @@ mod tests {
             kind: AgentSetupKind::Codex,
             base_url: "https://example.com/v1/".to_string(),
             api_key: "sk-test".to_string(),
-            model: "gpt-5.5".to_string(),
-            models: vec!["gpt-5.5".to_string(), "gpt-5.1".to_string()],
+            model: "gpt-5.6".to_string(),
+            models: vec!["gpt-5.6".to_string(), "gpt-5.6-sol".to_string()],
         };
 
         let script = build_agent_script(&draft);
 
         assert!(script.contains("CODEX_HOME"));
         assert!(script.contains("base_url = \"https://example.com/v1\""));
-        assert!(script.contains("selected_model='gpt-5.5'"));
+        assert!(script.contains("selected_model='gpt-5.6'"));
         assert!(script.contains("printf 'model = \"%s\"\\n' \"$selected_model\""));
         assert!(script.contains("env_key = \"ANTHROPIC_API_KEY\""));
         assert!(script.contains("stream_max_retries = 3"));
@@ -1844,14 +1860,14 @@ mod tests {
             kind: AgentSetupKind::Codex,
             base_url: "https://example.com/v1/".to_string(),
             api_key: "sk-test".to_string(),
-            model: "gpt-5.5".to_string(),
-            models: vec!["gpt-5.5".to_string(), "gpt-5.1".to_string()],
+            model: "gpt-5.6".to_string(),
+            models: vec!["gpt-5.6".to_string(), "gpt-5.6-sol".to_string()],
         };
 
         let script = build_agent_script(&draft);
 
         assert!(script.contains("selected_model=\"${AERORIC_AGENT_MODEL:-}\""));
-        assert!(script.contains("selected_model='gpt-5.5'"));
+        assert!(script.contains("selected_model='gpt-5.6'"));
         assert!(!script.contains("read -r -p"));
         assert!(!script.contains("请选择模型"));
         assert!(!script.contains("已选择"));
@@ -2044,17 +2060,32 @@ mod tests {
     fn parses_codex_model_catalog_slugs() {
         let value = serde_json::json!({
             "models": [
-                { "slug": "gpt-5.5", "visibility": "list" },
+                { "slug": "gpt-5.6-sol", "visibility": "list" },
                 { "slug": "hidden-model", "visibility": "hidden" },
-                { "slug": "gpt-5.5", "visibility": "list" },
-                { "slug": "gpt-5.1", "visibility": "list" }
+                { "slug": "gpt-5.6-sol", "visibility": "list" },
+                { "slug": "gpt-5.6-terra", "visibility": "list" },
+                { "slug": "gpt-5.6-luna", "visibility": "list" }
             ]
         })
         .to_string();
 
         assert_eq!(
             parse_codex_model_catalog(&value).unwrap(),
-            vec!["gpt-5.1", "gpt-5.5"]
+            vec!["gpt-5.6-luna", "gpt-5.6-sol", "gpt-5.6-terra"]
+        );
+    }
+
+    #[test]
+    fn prepends_gpt56_family_to_codex_model_dropdowns() {
+        assert_eq!(
+            prepend_gpt56_model_family(vec!["gpt-5.6-sol".to_string(), "gpt-5.5".to_string()]),
+            vec![
+                "gpt-5.6",
+                "gpt-5.6-sol",
+                "gpt-5.6-terra",
+                "gpt-5.6-luna",
+                "gpt-5.5"
+            ]
         );
     }
 

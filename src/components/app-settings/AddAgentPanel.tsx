@@ -339,7 +339,7 @@ export function AddAgentPanel({ onSaved }: { onSaved: (agentId: string) => void 
                 event.preventDefault();
                 handleAddManualModel();
               }}
-              placeholder={kind === "codex" ? "gpt-5.5" : "claude-opus-4-8"}
+              placeholder={kind === "codex" ? "gpt-5.6" : "claude-opus-4-8"}
               spellCheck={false}
             />
             {modelMenuOpen && modelSuggestions.length > 0 && (
