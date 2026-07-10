@@ -96,10 +96,10 @@
 
 共享 mock 和 fixture 已迁入 `src/test/databaseViewTestUtils.ts`。后续若各文件继续增长，可再按 query/data-grid 或 connection/user-management 二级行为域拆分。
 
-### P1：Rust 协议模块体量较大
+### P1：Rust 协议模块体量较大（已完成第一阶段内部协议拆分）
 
-- `src-tauri/src/dap.rs`：4,405 行。
-- `src-tauri/src/lsp.rs`：3,866 行。
+- `src-tauri/src/dap.rs`：4,405 行，第一阶段后 4,142 行。
+- `src-tauri/src/lsp.rs`：3,866 行，第一阶段后 3,730 行。
 - `src-tauri/src/session.rs`：2,836 行。
 - `src-tauri/src/git.rs`：2,685 行。
 
@@ -113,6 +113,13 @@
 - Git status/diff/history/worktree 子域。
 
 现有模块内已有测试标记，后续拆分前应先把关键私有解析函数变为可独立测试的内部模块。
+
+本轮已保持所有 Tauri command 在原入口模块中，仅迁出：
+
+- DAP Content-Length framing、adapter response/stack/variable/evaluate 解析和 CDP remote object 解析。
+- LSP file URI、hover、location、range、position、completion 与 Markdown 文本解析。
+
+Transport、session actor、进程生命周期与 workspace edit 写入仍保留原位，避免一次性扩大异步和并发重构范围。
 
 ### P2：其他超长前端文件
 
@@ -265,6 +272,15 @@ dbx-core = { path = "../../dbx/crates/dbx-core", default-features = false }
 
 API 调用、确认流程、连接切换重置、编辑保存和 command safety 编排仍保留在 `RedisBrowser`，组件间仅通过显式 props/callbacks 协作。
 
+### 5.11 DAP/LSP 内部协议解析模块
+
+新增：
+
+- `src-tauri/src/dap/protocol.rs`：DAP framing、adapter response/variable/stack/evaluate 和 CDP value parser。
+- `src-tauri/src/lsp/protocol.rs`：file URI 编解码以及 hover/location/range/completion parser。
+
+`dap.rs` 与 `lsp.rs` 通过私有 `mod protocol` 使用这些实现；Tauri command 名称、参数、返回类型、状态持有和前端调用契约均未改变。已有模块测试继续从父模块覆盖迁出的内部函数。
+
 ## 6. 文件行数变化
 
 | 文件 | 修改前 | 修改后 | 变化 |
@@ -274,7 +290,9 @@ API 调用、确认流程、连接切换重置、编辑保存和 command safety 
 | `src/components/database/DatabaseView.tsx` | 12,760 | 9,933 | -2,827 |
 | `src/components/database/DatabaseSidebarTree.tsx` | 2,899 | 2,192 | -707 |
 | `src/components/database/RedisBrowser.tsx` | 2,896 | 2,163 | -733 |
-| **合计** | **26,061** | **19,756** | **-6,305** |
+| `src-tauri/src/dap.rs` | 4,405 | 4,142 | -263 |
+| `src-tauri/src/lsp.rs` | 3,866 | 3,730 | -136 |
+| **合计** | **34,332** | **27,628** | **-6,704** |
 
 新增生产模块行数：
 
@@ -301,6 +319,8 @@ API 调用、确认流程、连接切换重置、编辑保存和 command safety 
 | `RedisKeyTreePane.tsx` | 289 |
 | `RedisJsonTree.tsx` | 102 |
 | `RedisCommandSessionView.tsx` | 127 |
+| `src-tauri/src/dap/protocol.rs` | 288 |
+| `src-tauri/src/lsp/protocol.rs` | 147 |
 
 数据库主测试拆分后行数：
 
@@ -329,7 +349,11 @@ API 调用、确认流程、连接切换重置、编辑保存和 command safety 
 - 连接对话框定向 Vitest：2 个文件、40 个测试通过
 - 数据库侧边树与 Redis 浏览器定向 Vitest：4 个文件、61 个测试通过
 - `pnpm test`：114 个测试文件、836 个测试通过
+- `cargo fmt --check`：通过
+- DAP 模块定向测试：28 个测试通过
+- LSP 模块定向测试：26 个测试通过
 - `cargo check`：通过
+- `cargo test`：339 个测试通过
 
 新增测试文件：
 
@@ -361,13 +385,13 @@ API 调用、确认流程、连接切换重置、编辑保存和 command safety 
 3. ~~将 `FileViewer` 的 LSP 请求、保存前同步和 workspace edit 刷新编排收敛到 controller hook。~~ 已完成。
 4. ~~拆分 `DatabaseSidebarTree` 与 `RedisBrowser` 的展示和状态派生逻辑。~~ 已完成。
 5. 若数据库测试继续增长，按 query/data-grid 和 connection/user-management 做二级拆分；本轮复核后未继续增长，暂不做无收益拆分。
-6. 按协议内部边界渐进拆分 Rust DAP/LSP，不改变 Tauri command。
+6. ~~按协议内部边界渐进拆分 Rust DAP/LSP，不改变 Tauri command。~~ 已完成第一阶段协议 parser 拆分。
 7. ~~在 CI 中加入 `pnpm format:check`，并清理 Vitest 环境警告。~~ 已完成。
 
 ## 9. 本轮未执行的事项
 
 - 未升级 npm、Cargo 或 Tauri 依赖。
 - 未修改视觉设计、交互文案或国际化资源。
-- 未修改 Rust 实现和数据库持久化。
-- 未执行 `cargo test`、`cargo audit` 或桌面安装包构建；这些仍由 CI/release workflow 覆盖。
-- 未创建分支、提交或推送代码。
+- 未修改 Tauri command 契约和数据库持久化。
+- 未执行 `cargo audit` 或桌面安装包构建；这些仍由 CI/release workflow 覆盖。
+- 未创建分支；所有提交均位于 `main`。
