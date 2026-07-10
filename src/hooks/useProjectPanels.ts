@@ -12,7 +12,7 @@ import {
   type OpenFilesState,
 } from "./projectPanelsState";
 
-type RightPanel =
+export type RightPanel =
   | "files"
   | "git-changes"
   | "git-history"
@@ -297,4 +297,4 @@ export function useProjectPanels() {
   };
 }
 
-export type { RightPanel, OpenDiff, OpenFileTab, OpenFileSelection, EditorGroup, EditorGroupId };
+export type { OpenDiff, OpenFileTab, OpenFileSelection, EditorGroup, EditorGroupId };

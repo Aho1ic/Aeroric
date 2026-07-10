@@ -3,9 +3,7 @@ import type {
   CSSProperties,
   DragEvent,
   KeyboardEvent as ReactKeyboardEvent,
-  MouseEvent as ReactMouseEvent,
   PointerEvent as ReactPointerEvent,
-  ReactNode,
 } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { confirm, open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
@@ -24,11 +22,8 @@ import {
   KeyRound,
   Plus,
   Play,
-  Plug,
-  Shield,
   SlidersHorizontal,
   RefreshCcw,
-  Server,
   Trash2,
   Wrench,
   GitCompare,
@@ -39,7 +34,6 @@ import {
   Copy,
   Eraser,
   Eye,
-  EyeOff,
   Search,
   Square,
   UsersRound,
@@ -76,16 +70,14 @@ import type {
 } from "../../types";
 import { useI18n } from "../../i18n";
 import { databaseApi } from "../../lib/databaseApi";
-import { DbxButton, DbxButtonGroup, DbxDialogFooterButton, DbxSegmentedButton } from "./DbxButton";
+import { DbxButton, DbxDialogFooterButton } from "./DbxButton";
+import { ConnectionDialog } from "./ConnectionDialog";
 import {
   dbxGridRowsToTsv,
   dbxGridRowsToJson,
   isTextEditingShortcutTarget,
   valueToText,
   quoteSqlName,
-  clampDbxGridColumnWidth,
-  estimateDbxGridColumnWidth,
-  initialDbxGridColumnWidths,
   dbxGridColumnSortable,
   dbxGridColumnType,
   textToCellValue,
@@ -94,68 +86,6 @@ import {
   createConnectionName,
 } from "../../lib/databaseUtils";
 import s from "../../styles";
-
-const SQL_KEYWORDS = new Set([
-  "ADD",
-  "ALTER",
-  "AND",
-  "AS",
-  "CREATE",
-  "DEFAULT",
-  "DELETE",
-  "DROP",
-  "EXISTS",
-  "FOREIGN",
-  "FROM",
-  "IF",
-  "INDEX",
-  "INSERT",
-  "INTO",
-  "KEY",
-  "NOT",
-  "NULL",
-  "ON",
-  "PRIMARY",
-  "REFERENCES",
-  "SELECT",
-  "SET",
-  "TABLE",
-  "UNIQUE",
-  "UPDATE",
-  "VALUES",
-  "WHERE",
-]);
-
-function sqlTokenKind(token: string): "keyword" | "string" | "number" | "comment" | null {
-  if (/^--/.test(token)) return "comment";
-  if (/^'/.test(token) || /^"/.test(token)) return "string";
-  if (/^\d+(?:\.\d+)?$/.test(token)) return "number";
-  if (SQL_KEYWORDS.has(token.toUpperCase())) return "keyword";
-  return null;
-}
-
-function sqlTokenColor(kind: NonNullable<ReturnType<typeof sqlTokenKind>>): string {
-  if (kind === "keyword") return "var(--accent-strong)";
-  if (kind === "string") return "var(--success)";
-  if (kind === "number") return "var(--warning)";
-  return "var(--text-hint)";
-}
-
-function renderSqlTokens(sql: string): ReactNode[] {
-  const tokens =
-    sql.match(
-      /--[^\n]*|'(?:''|[^'])*'|"(?:\\"|[^"])*"|\b\d+(?:\.\d+)?\b|\b[A-Za-z_][\w$]*\b|\s+|./g,
-    ) ?? [];
-  return tokens.map((token, index) => {
-    const kind = sqlTokenKind(token);
-    if (!kind) return token;
-    return (
-      <span key={`${index}:${token}`} data-sql-token={kind} style={{ color: sqlTokenColor(kind) }}>
-        {token}
-      </span>
-    );
-  });
-}
 import { DatabaseAdvancedTools, type DatabaseAdvancedToolMode } from "./DatabaseAdvancedTools";
 import { DatabaseSearchPanel } from "./DatabaseSearchPanel";
 import { DatabaseSidebarTree } from "./DatabaseSidebarTree";
@@ -164,49 +94,24 @@ import { MongoBrowser } from "./MongoBrowser";
 import { RedisBrowser } from "./RedisBrowser";
 import { TableStructurePanel } from "./TableStructurePanel";
 import { DatabaseUserAdminPanel, supportsDbxUserAdmin } from "./DatabaseUserAdminPanel";
-
-function PasswordInput({
-  value,
-  onChange,
-  show,
-  onToggle,
-  style,
-}: {
-  value: string;
-  onChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
-  show: boolean;
-  onToggle: () => void;
-  style?: React.CSSProperties;
-}) {
-  return (
-    <div style={{ position: "relative", display: "flex", alignItems: "center" }}>
-      <input
-        style={{ ...style, paddingRight: 36 }}
-        type={show ? "text" : "password"}
-        value={value}
-        onChange={onChange}
-      />
-      <button
-        type="button"
-        onClick={onToggle}
-        style={{
-          position: "absolute",
-          right: 8,
-          background: "transparent",
-          border: "none",
-          cursor: "pointer",
-          color: "var(--text-hint)",
-          padding: 2,
-          display: "flex",
-          alignItems: "center",
-        }}
-        aria-label={show ? "Hide password" : "Show password"}
-      >
-        {show ? <EyeOff size={14} /> : <Eye size={14} />}
-      </button>
-    </div>
-  );
-}
+import { GuidancePanel, renderSqlTokens } from "./DatabaseViewPrimitives";
+import { dbxConfigRecord, dbxString } from "./databaseConnectionDraft";
+import { DataGridView } from "./DataGridView";
+import {
+  combineDbxGridWhereCondition,
+  dbxFilterModeForCellAction,
+  dbxGridContextRowIndexes,
+  dbxOrderByForColumn,
+  dbxPendingCellEditsToDirtyRows,
+  nextDbxOrderByForColumn,
+  type DatabaseRow,
+  type DbxGridCellContextMenuAction,
+  type DbxGridCellContextMenuState,
+  type DbxGridHeaderContextMenuAction,
+  type DbxGridHeaderContextMenuState,
+  type TableExportFormat,
+} from "./databaseGridState";
+import { DBX_GRID_PAGE_SIZE_OPTIONS, useDbxDataGrid } from "./useDbxDataGrid";
 
 interface Props {
   projectRoot?: string;
@@ -218,22 +123,13 @@ interface Props {
 
 const PAGE_SIZE = 100;
 const MONGO_SIDEBAR_DOCUMENT_PREVIEW_LIMIT = 20;
-const DBX_GRID_PAGE_SIZE_OPTIONS = [50, 100, 200, 500, 1000] as const;
-const DBX_GRID_DEFAULT_COLUMN_WIDTH = 180;
 const DATABASE_SIDEBAR_DEFAULT_WIDTH = 284;
 const DATABASE_SIDEBAR_MIN_WIDTH = 220;
 const DATABASE_SIDEBAR_MAX_WIDTH = 520;
 const EMPTY_DBX_COLUMNS: DbxColumnInfo[] = [];
-type DatabaseRow = {
-  rowId?: number | null;
-  keyValues: Array<{ column: string; value: unknown }>;
-  values: unknown[];
-};
 type RedisSidebarScanState = { cursor: number; totalKeys: number };
 type MongoSidebarDocumentQuery = { filter: string; sort: string };
 type DbxObjectGroupKey = "tables" | "views" | "procedures" | "functions" | "sequences" | "packages";
-type DbWizardStep = "type" | "config";
-type DbConfigTab = "connection" | "tls" | "transport" | "advanced";
 type DbWorkspaceMode =
   | "table"
   | "query"
@@ -252,7 +148,6 @@ type DbWorkspaceMode =
   | "table-info"
   | "object-browser"
   | "field-lineage";
-type DbxHoveredCell = { rowIndex: number; columnIndex: number } | null;
 type DatabaseContextMenuState =
   | {
       x: number;
@@ -363,24 +258,8 @@ type DatabaseContextMenuState =
       document: unknown;
       kind: "mongo-document";
     }
-  | {
-      x: number;
-      y: number;
-      connectionId: string;
-      columnIndex: number;
-      column: string;
-      kind: "dbx-grid-header";
-    }
-  | {
-      x: number;
-      y: number;
-      connectionId: string;
-      rowIndex: number;
-      columnIndex: number;
-      column: string;
-      value: unknown;
-      kind: "dbx-grid-cell";
-    }
+  | DbxGridHeaderContextMenuState
+  | DbxGridCellContextMenuState
   | {
       x: number;
       y: number;
@@ -389,36 +268,6 @@ type DatabaseContextMenuState =
     }
   | null;
 type DbxContextMenuItem<Action extends string> = [action: Action, labelKey: string];
-type DbxGridCellContextMenuAction =
-  | "copyValue"
-  | "copyColumnName"
-  | "previewValue"
-  | "previewRow"
-  | "previewColumn"
-  | "sortAscending"
-  | "sortDescending"
-  | "clearSort"
-  | "filterEquals"
-  | "filterNotEquals"
-  | "filterLike"
-  | "filterNotLike"
-  | "filterLessThan"
-  | "filterGreaterThan"
-  | "filterIsNull"
-  | "filterIsNotNull"
-  | "clearFilter"
-  | "copyRowJson"
-  | "copyRowInsert"
-  | "copyRowInsertWithoutPrimaryKeys"
-  | "copyRowUpdate"
-  | "copyAllTsv";
-type DbxGridHeaderContextMenuAction =
-  | "copyColumnName"
-  | "previewColumn"
-  | "copyAlterColumnSql"
-  | "sortAscending"
-  | "sortDescending"
-  | "clearSort";
 type WorkspaceTabContextMenuAction =
   | "toggleShortTitle"
   | "pinTab"
@@ -475,14 +324,6 @@ type NoSqlContextMenuAction =
 type NoSqlDatabaseContextMenuState = Extract<
   NonNullable<DatabaseContextMenuState>,
   { kind: "redis-database" | "mongo-database" }
->;
-type DbxGridCellContextMenuState = Extract<
-  NonNullable<DatabaseContextMenuState>,
-  { kind: "dbx-grid-cell" }
->;
-type DbxGridHeaderContextMenuState = Extract<
-  NonNullable<DatabaseContextMenuState>,
-  { kind: "dbx-grid-header" }
 >;
 type TableInfoTab = "columns" | "indexes" | "foreignKeys" | "triggers" | "ddl";
 type DbxObjectContextMenuAction =
@@ -589,17 +430,6 @@ function contextMenuConnectionId(menu: DatabaseContextMenuState): string | null 
   return menu && "connectionId" in menu ? menu.connectionId : null;
 }
 
-type DbProfileKey =
-  | "sqlite"
-  | "mysql"
-  | "postgres"
-  | "redis"
-  | "mongodb"
-  | "sqlserver"
-  | "oracle"
-  | "duckdb"
-  | "clickhouse";
-type DbProfileViewMode = "icon" | "list";
 type QueryHistoryEntry = {
   id: string;
   sql: string;
@@ -610,65 +440,6 @@ type QueryHistoryEntry = {
   rowsAffected?: number | null;
   executionTimeMs?: number | null;
 };
-
-interface DbProfile {
-  key: DbProfileKey;
-  label: string;
-  accent: string;
-  port: number;
-  user: string;
-  localFile?: boolean;
-  iconText: string;
-}
-
-const DB_PROFILES: DbProfile[] = [
-  {
-    key: "sqlite",
-    label: "SQLite",
-    accent: "#3f8fce",
-    port: 0,
-    user: "",
-    localFile: true,
-    iconText: "S",
-  },
-  { key: "mysql", label: "MySQL", accent: "#2f6f9f", port: 3306, user: "root", iconText: "My" },
-  {
-    key: "postgres",
-    label: "PostgreSQL",
-    accent: "#336791",
-    port: 5432,
-    user: "postgres",
-    iconText: "Pg",
-  },
-  { key: "redis", label: "Redis", accent: "#d82c20", port: 6379, user: "", iconText: "R" },
-  { key: "mongodb", label: "MongoDB", accent: "#13aa52", port: 27017, user: "", iconText: "M" },
-  {
-    key: "sqlserver",
-    label: "SQL Server",
-    accent: "#cc2927",
-    port: 1433,
-    user: "sa",
-    iconText: "MS",
-  },
-  { key: "oracle", label: "Oracle", accent: "#f80000", port: 1521, user: "system", iconText: "O" },
-  {
-    key: "duckdb",
-    label: "DuckDB",
-    accent: "#b68b00",
-    port: 0,
-    user: "",
-    localFile: true,
-    iconText: "D",
-  },
-  {
-    key: "clickhouse",
-    label: "ClickHouse",
-    accent: "#d6a700",
-    port: 8123,
-    user: "default",
-    iconText: "C",
-  },
-];
 
 const MYSQL_COMPATIBLE_CREATE_DATABASE_PROFILES = new Set([
   "mysql",
@@ -732,7 +503,6 @@ const SYSTEM_DATABASE_NAMES: Partial<Record<DbxDatabaseType, ReadonlySet<string>
   sqlserver: new Set(["master", "model", "msdb", "tempdb"]),
   mongodb: new Set(["admin", "config", "local"]),
 };
-type TableExportFormat = "csv" | "json" | "markdown" | "insertSql" | "updateSql" | "xlsx";
 const DATA_TOOL_EXPORT_FORMATS: Array<{
   format: TableExportFormat;
   labelKey: string;
@@ -743,68 +513,6 @@ const DATA_TOOL_EXPORT_FORMATS: Array<{
   { format: "insertSql", labelKey: "database.exportInsertSql", label: "SQL INSERT" },
   { format: "xlsx", labelKey: "database.exportXlsx", label: "XLSX" },
 ];
-type ParsedConnectionUrl = {
-  host?: string;
-  port?: string;
-  user?: string;
-  password?: string;
-  database?: string;
-  urlParams?: string;
-};
-type RedisConnectionMode = "standalone" | "sentinel" | "cluster";
-type TransportLayerDraft = {
-  id: string;
-  type: "ssh" | "proxy";
-  enabled: boolean;
-  name: string;
-  host: string;
-  port: string;
-  user: string;
-  username: string;
-  password: string;
-  keyPath: string;
-  keyPassphrase: string;
-  connectTimeoutSecs: string;
-  exposeLan: boolean;
-  useSshAgent: boolean;
-  proxyType: "socks5" | "http";
-};
-
-const CONNECTION_COLOR_OPTIONS = [
-  { value: "", labelKey: "database.colorNone" },
-  { value: "#22c55e", labelKey: "database.colorGreen" },
-  { value: "#eab308", labelKey: "database.colorYellow" },
-  { value: "#f97316", labelKey: "database.colorOrange" },
-  { value: "#ef4444", labelKey: "database.colorRed" },
-  { value: "#3b82f6", labelKey: "database.colorBlue" },
-  { value: "#a855f7", labelKey: "database.colorPurple" },
-] as const;
-
-function DatabaseProfileIcon({ profile, size = 23 }: { profile: DbProfile; size?: number }) {
-  return (
-    <span
-      aria-hidden="true"
-      style={{
-        width: size,
-        height: size,
-        borderRadius: profile.key === "redis" ? 5 : profile.key === "mongodb" ? 999 : 7,
-        display: "inline-flex",
-        alignItems: "center",
-        justifyContent: "center",
-        background: `${profile.accent}22`,
-        border: `1px solid ${profile.accent}66`,
-        color: profile.accent,
-        fontSize: Math.max(9, size * 0.42),
-        fontWeight: 800,
-        fontFamily: "var(--font-ui)",
-        lineHeight: 1,
-      }}
-    >
-      {profile.iconText}
-    </span>
-  );
-}
-
 function endpointLabel(endpoint: DbEndpoint): string {
   if (endpoint.kind === "local") return endpoint.path;
   return `${endpoint.connection.name}: ${endpoint.path}`;
@@ -978,107 +686,6 @@ function autoMapImportColumns(
   );
 }
 
-function normalizeRedisNodeList(value: string): string {
-  return value
-    .split(/[\n,]+/)
-    .map((node) => node.trim())
-    .filter(Boolean)
-    .join("\n");
-}
-
-function firstRedisEndpoint(
-  nodes: string,
-  defaultPort: number,
-): { host: string; port: number } | null {
-  const first = normalizeRedisNodeList(nodes).split("\n")[0]?.trim();
-  if (!first) return null;
-  const match = first.match(/^\[([^\]]+)\](?::(\d+))?$/) ?? first.match(/^([^:]+)(?::(\d+))?$/);
-  if (!match) return null;
-  const host = match[1]?.trim();
-  if (!host) return null;
-  const port = Number.parseInt(match[2] ?? "", 10);
-  return { host, port: Number.isFinite(port) && port > 0 ? port : defaultPort };
-}
-
-function createTransportLayerDraft(type: "ssh" | "proxy", index: number): TransportLayerDraft {
-  return {
-    id: `transport:${Date.now()}:${Math.random().toString(36).slice(2)}`,
-    type,
-    enabled: true,
-    name: type === "ssh" ? `SSH ${index}` : `Proxy ${index}`,
-    host: "",
-    port: type === "ssh" ? "22" : "1080",
-    user: "",
-    username: "",
-    password: "",
-    keyPath: "",
-    keyPassphrase: "",
-    connectTimeoutSecs: "5",
-    exposeLan: false,
-    useSshAgent: false,
-    proxyType: "socks5",
-  };
-}
-
-function transportLayerPayload(layer: TransportLayerDraft): Record<string, unknown> {
-  const port = Number.parseInt(layer.port, 10);
-  const connectTimeoutSecs = Number.parseInt(layer.connectTimeoutSecs, 10);
-  if (layer.type === "proxy") {
-    return {
-      id: layer.id,
-      type: "proxy",
-      enabled: layer.enabled,
-      name: layer.name.trim(),
-      proxy_type: layer.proxyType,
-      host: layer.host.trim(),
-      port: Number.isFinite(port) && port > 0 ? port : 1080,
-      username: layer.username.trim(),
-      password: layer.password,
-    };
-  }
-  return {
-    id: layer.id,
-    type: "ssh",
-    enabled: layer.enabled,
-    name: layer.name.trim(),
-    host: layer.host.trim(),
-    port: Number.isFinite(port) && port > 0 ? port : 22,
-    user: layer.user.trim(),
-    password: layer.password,
-    key_path: layer.keyPath.trim(),
-    key_passphrase: layer.keyPassphrase,
-    connect_timeout_secs:
-      Number.isFinite(connectTimeoutSecs) && connectTimeoutSecs > 0 ? connectTimeoutSecs : 5,
-    expose_lan: layer.exposeLan,
-    use_ssh_agent: layer.useSshAgent,
-  };
-}
-
-function dbxConfigRecord(
-  connection: AeroricDbConnectionConfig | null | undefined,
-): Record<string, unknown> {
-  return connection?.dbx && typeof connection.dbx === "object"
-    ? (connection.dbx as Record<string, unknown>)
-    : {};
-}
-
-function dbxString(config: Record<string, unknown>, key: string, fallback = ""): string {
-  const value = config[key];
-  return typeof value === "string" ? value : fallback;
-}
-
-function dbxNumberString(config: Record<string, unknown>, key: string, fallback: string): string {
-  const value = config[key];
-  if (typeof value === "number" && Number.isFinite(value)) return String(value);
-  if (typeof value === "string" && value.trim()) return value;
-  return fallback;
-}
-
-function dbxBoolean(config: Record<string, unknown>, key: string, fallback = false): boolean {
-  const value = config[key];
-  return typeof value === "boolean" ? value : fallback;
-}
-
 function hasEnabledDbxTransportLayers(
   connection: AeroricDbConnectionConfig | null | undefined,
 ): boolean {
@@ -1156,147 +763,6 @@ function createSqliteFileConnection(endpoint: DbEndpoint): DbConnectionConfig {
     createdAt: now,
     lastOpenedAt: now,
   };
-}
-
-function profileForDbxConnection(connection: AeroricDbConnectionConfig): DbProfile {
-  const config = dbxConfigRecord(connection);
-  const driverProfile = dbxString(config, "driver_profile");
-  return (
-    DB_PROFILES.find((profile) => profile.key === driverProfile) ??
-    DB_PROFILES.find((profile) => profile.key === connection.dbType) ??
-    DB_PROFILES[0]
-  );
-}
-
-function transportLayerDraftFromPayload(value: unknown, index: number): TransportLayerDraft {
-  const layer = value && typeof value === "object" ? (value as Record<string, unknown>) : {};
-  const type = layer.type === "proxy" ? "proxy" : "ssh";
-  return {
-    id: dbxString(layer, "id", `transport:existing:${index}`),
-    type,
-    enabled: dbxBoolean(layer, "enabled", true),
-    name: dbxString(layer, "name", type === "ssh" ? `SSH ${index}` : `Proxy ${index}`),
-    host: dbxString(layer, "host"),
-    port: dbxNumberString(layer, "port", type === "ssh" ? "22" : "1080"),
-    user: dbxString(layer, "user"),
-    username: dbxString(layer, "username"),
-    password: dbxString(layer, "password"),
-    keyPath: dbxString(layer, "key_path"),
-    keyPassphrase: dbxString(layer, "key_passphrase"),
-    connectTimeoutSecs: dbxNumberString(layer, "connect_timeout_secs", "5"),
-    exposeLan: dbxBoolean(layer, "expose_lan"),
-    useSshAgent: dbxBoolean(layer, "use_ssh_agent"),
-    proxyType: layer.proxy_type === "http" ? "http" : "socks5",
-  };
-}
-
-function normalizeConnectionUrl(raw: string, dbType: DbxDatabaseType): string {
-  const value = raw.trim();
-  if (!value) return "";
-  if (value.startsWith("jdbc:")) {
-    if (dbType === "postgres" && value.startsWith("jdbc:postgresql:"))
-      return value.slice("jdbc:".length);
-    if (dbType === "mysql" && value.startsWith("jdbc:mysql:")) return value.slice("jdbc:".length);
-    if (dbType === "clickhouse" && value.startsWith("jdbc:clickhouse:"))
-      return value.slice("jdbc:".length);
-    if (dbType === "sqlserver" && value.startsWith("jdbc:sqlserver:"))
-      return value.slice("jdbc:".length);
-    if (dbType === "oracle" && value.startsWith("jdbc:oracle:")) return value;
-  }
-  return value;
-}
-
-function parseSqlServerConnectionUrl(raw: string): ParsedConnectionUrl | null {
-  const normalized = normalizeConnectionUrl(raw, "sqlserver");
-  const match = normalized.match(/^sqlserver:\/\/([^;/?]+)(.*)$/i);
-  if (!match) return null;
-  const hostPort = match[1] ?? "";
-  const rest = match[2] ?? "";
-  const [host, port] = hostPort.split(":");
-  const params = Object.fromEntries(
-    rest
-      .split(";")
-      .map((part) => part.trim())
-      .filter(Boolean)
-      .map((part) => {
-        const separatorIndex = part.indexOf("=");
-        return separatorIndex >= 0
-          ? [part.slice(0, separatorIndex), part.slice(separatorIndex + 1)]
-          : [part, ""];
-      }),
-  );
-  const database = params.databaseName || params.database || params.initialCatalog;
-  const user = params.user || params.username;
-  const password = params.password;
-  const urlParams = Object.entries(params)
-    .filter(
-      ([key]) =>
-        !["databaseName", "database", "initialCatalog", "user", "username", "password"].includes(
-          key,
-        ),
-    )
-    .map(([key, value]) => `${key}=${value}`)
-    .join(";");
-  return {
-    host: host ? decodeURIComponent(host) : undefined,
-    port,
-    database,
-    user,
-    password,
-    urlParams,
-  };
-}
-
-function parseOracleConnectionUrl(raw: string): ParsedConnectionUrl | null {
-  const value = raw.trim();
-  const serviceMatch = value.match(
-    /^jdbc:oracle:thin:@\/\/([^:/?#]+)(?::(\d+))?\/([^?#]+)(?:\?(.+))?$/i,
-  );
-  if (serviceMatch) {
-    return {
-      host: decodeURIComponent(serviceMatch[1] ?? ""),
-      port: serviceMatch[2],
-      database: serviceMatch[3] ? decodeURIComponent(serviceMatch[3]) : undefined,
-      urlParams: serviceMatch[4],
-    };
-  }
-  const sidMatch = value.match(/^jdbc:oracle:thin:@([^:/?#]+)(?::(\d+))?:([^?#]+)(?:\?(.+))?$/i);
-  if (!sidMatch) return null;
-  return {
-    host: decodeURIComponent(sidMatch[1] ?? ""),
-    port: sidMatch[2],
-    database: sidMatch[3] ? decodeURIComponent(sidMatch[3]) : undefined,
-    urlParams: sidMatch[4],
-  };
-}
-
-function parseStandardConnectionUrl(
-  raw: string,
-  dbType: DbxDatabaseType,
-): ParsedConnectionUrl | null {
-  const normalized = normalizeConnectionUrl(raw, dbType);
-  const parsed = new URL(normalized);
-  const database = parsed.pathname.replace(/^\/+/, "");
-  return {
-    host: parsed.hostname ? decodeURIComponent(parsed.hostname) : undefined,
-    port: parsed.port,
-    user: parsed.username ? decodeURIComponent(parsed.username) : undefined,
-    password: parsed.password ? decodeURIComponent(parsed.password) : undefined,
-    database: database ? decodeURIComponent(database) : undefined,
-    urlParams: parsed.searchParams.toString(),
-  };
-}
-
-function parseConnectionUrl(raw: string, dbType: DbxDatabaseType): ParsedConnectionUrl | null {
-  const value = raw.trim();
-  if (!value) return null;
-  try {
-    if (dbType === "sqlserver") return parseSqlServerConnectionUrl(value);
-    if (dbType === "oracle") return parseOracleConnectionUrl(value);
-    return parseStandardConnectionUrl(value, dbType);
-  } catch {
-    return null;
-  }
 }
 
 function dbxDriverProfile(connection: AeroricDbConnectionConfig | null | undefined): string | null {
@@ -1742,49 +1208,6 @@ function dbxQualifiedSqlName(object: DbxObjectInfo): string {
     : quoteSqlName(object.name);
 }
 
-function nextDbxOrderByForColumn(currentOrderBy: string, column: string): string {
-  const asc = `${quoteSqlName(column)} ASC`;
-  const desc = `${quoteSqlName(column)} DESC`;
-  const normalized = currentOrderBy.trim().toLowerCase();
-  if (normalized === asc.toLowerCase()) return desc;
-  if (normalized === desc.toLowerCase()) return "";
-  return asc;
-}
-
-function dbxOrderByForColumn(column: string, direction: "ASC" | "DESC" | null): string {
-  return direction ? `${quoteSqlName(column)} ${direction}` : "";
-}
-
-function dbxFilterModeForCellAction(
-  action: DbxGridCellContextMenuAction,
-): DataGridContextFilterMode | null {
-  if (action === "filterEquals") return "equals";
-  if (action === "filterNotEquals") return "not-equals";
-  if (action === "filterLike") return "like";
-  if (action === "filterNotLike") return "not-like";
-  if (action === "filterLessThan") return "less-than";
-  if (action === "filterGreaterThan") return "greater-than";
-  if (action === "filterIsNull") return "is-null";
-  if (action === "filterIsNotNull") return "is-not-null";
-  return null;
-}
-
-function combineDbxGridWhereCondition(currentWhere: string, condition: string): string {
-  const current = currentWhere.trim();
-  return current ? `(${current}) AND (${condition})` : condition;
-}
-
-function GuidancePanel({ title, message }: { title: string; message: string }) {
-  return (
-    <div style={s.databaseWorkspacePanel}>
-      <div>
-        <div style={s.databaseWorkspaceTitle}>{title}</div>
-        <div style={s.databaseDialogHint}>{message}</div>
-      </div>
-    </div>
-  );
-}
-
 export function DatabaseView({
   projectRoot,
   initialSqliteFilePath,
@@ -1872,59 +1295,9 @@ export function DatabaseView({
   );
 
   const [connectionDialogOpen, setConnectionDialogOpen] = useState(false);
-  const [connectionTestResult, setConnectionTestResult] = useState<{
-    success: boolean;
-    message: string;
-  } | null>(null);
   const [editingDbxConnectionId, setEditingDbxConnectionId] = useState<string | null>(null);
+  const [newConnectionGroup, setNewConnectionGroup] = useState<string | null>(null);
   const [driverManifest, setDriverManifest] = useState<DatabaseDriverManifest | null>(null);
-  const [wizardStep, setWizardStep] = useState<DbWizardStep>("type");
-  const [selectedProfileKey, setSelectedProfileKey] = useState<DbProfileKey>("sqlite");
-  const [profileViewMode, setProfileViewMode] = useState<DbProfileViewMode>("icon");
-  const [profileSearch, setProfileSearch] = useState("");
-  const [configTab, setConfigTab] = useState<DbConfigTab>("connection");
-  const [draftName, setDraftName] = useState("SQLite");
-  const [draftConnectionGroup, setDraftConnectionGroup] = useState("");
-  const [draftColor, setDraftColor] = useState("");
-  const [draftHost, setDraftHost] = useState("127.0.0.1");
-  const [draftPort, setDraftPort] = useState("0");
-  const [draftUser, setDraftUser] = useState("");
-  const [draftDatabase, setDraftDatabase] = useState("");
-  const [draftPassword, setDraftPassword] = useState("");
-  const [showPassword, setShowPassword] = useState(false);
-  const [showSentinelPassword, setShowSentinelPassword] = useState(false);
-  const [showTransportPassword, setShowTransportPassword] = useState(false);
-  const [showTransportPassphrase, setShowTransportPassphrase] = useState(false);
-  const [draftFilePath, setDraftFilePath] = useState("");
-  const [draftReadOnly, setDraftReadOnly] = useState(false);
-  const [draftUrlParams, setDraftUrlParams] = useState("");
-  const [draftConnectionString, setDraftConnectionString] = useState("");
-  const [draftConnectTimeoutSecs, setDraftConnectTimeoutSecs] = useState("5");
-  const [draftQueryTimeoutSecs, setDraftQueryTimeoutSecs] = useState("30");
-  const [draftIdleTimeoutSecs, setDraftIdleTimeoutSecs] = useState("60");
-  const [draftKeepaliveIntervalSecs, setDraftKeepaliveIntervalSecs] = useState("0");
-  const [draftCaCertPath, setDraftCaCertPath] = useState("");
-  const [draftClientCertPath, setDraftClientCertPath] = useState("");
-  const [draftClientKeyPath, setDraftClientKeyPath] = useState("");
-  const [draftRedisConnectionMode, setDraftRedisConnectionMode] =
-    useState<RedisConnectionMode>("standalone");
-  const [draftRedisSentinelMaster, setDraftRedisSentinelMaster] = useState("");
-  const [draftRedisSentinelNodes, setDraftRedisSentinelNodes] = useState("");
-  const [draftRedisSentinelUsername, setDraftRedisSentinelUsername] = useState("");
-  const [draftRedisSentinelPassword, setDraftRedisSentinelPassword] = useState("");
-  const [draftRedisSentinelTls, setDraftRedisSentinelTls] = useState(false);
-  const [draftRedisClusterNodes, setDraftRedisClusterNodes] = useState("");
-  const [draftRedisKeySeparator, setDraftRedisKeySeparator] = useState(":");
-  const [draftMongoUseUrl, setDraftMongoUseUrl] = useState(false);
-  const [tlsEnabled, setTlsEnabled] = useState(false);
-  const [draftTlsMode, setDraftTlsMode] = useState("");
-  const [draftOracleConnectionType, setDraftOracleConnectionType] = useState<
-    "service_name" | "sid"
-  >("service_name");
-  const [draftOracleSysdba, setDraftOracleSysdba] = useState(false);
-  const [transportEnabled, setTransportEnabled] = useState(false);
-  const [draftTransportLayers, setDraftTransportLayers] = useState<TransportLayerDraft[]>([]);
-  const [selectedTransportLayerId, setSelectedTransportLayerId] = useState<string | null>(null);
   const [createDatabaseConnectionId, setCreateDatabaseConnectionId] = useState<string | null>(null);
   const [createDatabaseName, setCreateDatabaseName] = useState("");
   const [createDatabaseCharset, setCreateDatabaseCharset] = useState("utf8mb4");
@@ -1966,66 +1339,10 @@ export function DatabaseView({
   const [activeMongoWorkspaceDatabase, setActiveMongoWorkspaceDatabase] = useState<string | null>(
     null,
   );
-  const [dbxGridWhereInput, setDbxGridWhereInput] = useState("");
-  const [dbxGridOrderByInput, setDbxGridOrderByInput] = useState("");
-  const [dbxGridSearch, setDbxGridSearch] = useState("");
-  const [dbxGridColumnSearch, setDbxGridColumnSearch] = useState("");
-  const [dbxGridHiddenColumns, setDbxGridHiddenColumns] = useState<Set<string>>(new Set());
-  const [dbxDataToolsOpen, setDbxDataToolsOpen] = useState(false);
-  const [dbxDataToolsMode, setDbxDataToolsMode] = useState<"root" | "export">("root");
-  const [dbxFieldFilterOpen, setDbxFieldFilterOpen] = useState(false);
-  const [dbxGridColumnWidths, setDbxGridColumnWidths] = useState<Record<string, number>>({});
-  const [resizingDbxGridColumn, setResizingDbxGridColumn] = useState<string | null>(null);
-  const [dbxGridPageSize, setDbxGridPageSize] = useState(PAGE_SIZE);
-  const [dbxGridSelectedRows, setDbxGridSelectedRows] = useState<Set<number>>(new Set());
-  const [dbxGridSelectionAnchor, setDbxGridSelectionAnchor] = useState<number | null>(null);
-  const [dbxGridExportFormat, setDbxGridExportFormat] = useState<TableExportFormat>("csv");
   const [dbxSqlPreviewOpen, setDbxSqlPreviewOpen] = useState(false);
   const [dbxSqlPreviewStatements, setDbxSqlPreviewStatements] = useState<string[]>([]);
   const [dbxSqlPreviewRollback, setDbxSqlPreviewRollback] = useState<string[]>([]);
   const [dbxSqlPreviewDescription, setDbxSqlPreviewDescription] = useState("");
-  const [dbxCellPreview, setDbxCellPreview] = useState<{ column: string; value: unknown } | null>(
-    null,
-  );
-  const [dbxCellDetail, setDbxCellDetail] = useState<{
-    column: string;
-    columnIndex: number;
-    rowIndex: number;
-    value: unknown;
-    columnInfo?: DbxColumnInfo;
-  } | null>(null);
-  const [dbxSelectedCell, setDbxSelectedCell] = useState<{
-    rowIndex: number;
-    columnIndex: number;
-    column: string;
-  } | null>(null);
-  const [dbxEditingCell, setDbxEditingCell] = useState<{
-    rowIndex: number;
-    columnIndex: number;
-    column: string;
-  } | null>(null);
-  const [dbxPendingCellEdits, setDbxPendingCellEdits] = useState<
-    Record<
-      string,
-      {
-        rowIndex: number;
-        columnIndex: number;
-        column: string;
-        value: string;
-        original: string;
-      }
-    >
-  >({});
-  const [dbxHoveredCell, setDbxHoveredCell] = useState<DbxHoveredCell>(null);
-  const [dbxRowPreview, setDbxRowPreview] = useState<{ rowIndex: number; row: DatabaseRow } | null>(
-    null,
-  );
-  const [dbxRowPreviewSearch, setDbxRowPreviewSearch] = useState("");
-  const [dbxColumnPreview, setDbxColumnPreview] = useState<{
-    column: string;
-    columnIndex: number;
-  } | null>(null);
-  const [dbxColumnPreviewSearch, setDbxColumnPreviewSearch] = useState("");
   const [visibleDatabaseConnectionId, setVisibleDatabaseConnectionId] = useState<string | null>(
     null,
   );
@@ -2106,11 +1423,6 @@ export function DatabaseView({
   const [tableInfoDdl, setTableInfoDdl] = useState("");
   const [tableInfoDdlLoading, setTableInfoDdlLoading] = useState(false);
   const [tableInfoDdlError, setTableInfoDdlError] = useState("");
-  const dbxGridColumnResizeStartRef = useRef({
-    column: "",
-    x: 0,
-    width: DBX_GRID_DEFAULT_COLUMN_WIDTH,
-  });
   const databaseSidebarResizeStartRef = useRef({ x: 0, width: DATABASE_SIDEBAR_DEFAULT_WIDTH });
   const openedInitialSqliteFilePathRef = useRef<string | null>(null);
   const [databaseSidebarWidth, setDatabaseSidebarWidth] = useState(DATABASE_SIDEBAR_DEFAULT_WIDTH);
@@ -2148,15 +1460,6 @@ export function DatabaseView({
   );
 
   const activeEndpoint = activeConnection?.endpoint ?? null;
-  const selectedProfile =
-    DB_PROFILES.find((profile) => profile.key === selectedProfileKey) ?? DB_PROFILES[0];
-  const filteredProfiles = useMemo(() => {
-    const query = profileSearch.trim().toLowerCase();
-    if (!query) return DB_PROFILES;
-    return DB_PROFILES.filter(
-      (profile) => profile.label.toLowerCase().includes(query) || profile.key.includes(query),
-    );
-  }, [profileSearch]);
   const dbxHasSqlObjectBrowser = isSqlDbxConnection(activeDbxConnection);
   const sqlDbxConnections = useMemo(
     () => dbxConnections.filter((connection) => isSqlDbxConnection(connection)),
@@ -2297,7 +1600,6 @@ export function DatabaseView({
   const activeSqlCapable = Boolean(
     activeEndpoint || (activeDbxConnection && dbxHasSqlObjectBrowser),
   );
-  const dbxPendingCellEditCount = Object.keys(dbxPendingCellEdits).length;
   const rawTableRows = useMemo(
     () => queryResult?.rows ?? sqlResult?.rows ?? [],
     [queryResult, sqlResult],
@@ -2307,90 +1609,75 @@ export function DatabaseView({
     [queryResult, sqlResult],
   );
   const showRowIdColumn = Boolean(queryResult && !activeDbxConnection && queryResult.hasRowId);
-  const visibleTableColumns = useMemo(
-    () =>
-      tableColumns
-        .map((column, index) => ({ column, index }))
-        .filter(({ column }) => !dbxGridHiddenColumns.has(column)),
-    [dbxGridHiddenColumns, tableColumns],
-  );
-  const visibleDbxGridDataColumnsWidth = useMemo(
-    () =>
-      visibleTableColumns.reduce(
-        (sum, { column }) => sum + (dbxGridColumnWidths[column] ?? DBX_GRID_DEFAULT_COLUMN_WIDTH),
-        0,
-      ),
-    [dbxGridColumnWidths, visibleTableColumns],
-  );
-  const dbxGridTableMinWidth = useMemo(() => {
-    if (!queryResult || !activeDbxConnection) return undefined;
-    return 42 + 74 + (showRowIdColumn ? 86 : 0) + visibleDbxGridDataColumnsWidth;
-  }, [activeDbxConnection, queryResult, showRowIdColumn, visibleDbxGridDataColumnsWidth]);
   const activeDbxGridColumns = useMemo(() => {
     if (!activeDbxObject) return EMPTY_DBX_COLUMNS;
     return dbxColumnsByTable[dbxObjectKey(activeDbxObject)] ?? EMPTY_DBX_COLUMNS;
   }, [activeDbxObject, dbxColumnsByTable]);
-  const activeDbxGridColumnsByName = useMemo(
-    () => new Map(activeDbxGridColumns.map((column) => [column.name.toLowerCase(), column])),
-    [activeDbxGridColumns],
-  );
-  const filteredDbxGridColumnOptions = useMemo(() => {
-    const query = dbxGridColumnSearch.trim().toLowerCase();
-    if (!query) return tableColumns;
-    return tableColumns.filter((column) => column.toLowerCase().includes(query));
-  }, [dbxGridColumnSearch, tableColumns]);
-  const tableRows = useMemo(() => {
-    const query = dbxGridSearch.trim().toLowerCase();
-    if (!query) return rawTableRows;
-    return rawTableRows.filter((row) =>
-      row.values.some((value) => valueToText(value).toLowerCase().includes(query)),
-    );
-  }, [dbxGridSearch, rawTableRows]);
-  const formattedDbxCellPreview = useMemo(
-    () => (dbxCellPreview ? cellPreviewText(dbxCellPreview.value) : null),
-    [dbxCellPreview],
-  );
-  const dbxRowPreviewFields = useMemo(
-    () =>
-      dbxRowPreview
-        ? visibleTableColumns.map(({ column, index }) => ({
-            column,
-            type: dbxGridColumnType(queryResult, index),
-            value: dbxRowPreview.row.values[index] ?? null,
-            preview: cellPreviewText(dbxRowPreview.row.values[index] ?? null).text,
-          }))
-        : [],
-    [dbxRowPreview, queryResult, visibleTableColumns],
-  );
-  const filteredDbxRowPreviewFields = useMemo(() => {
-    const query = dbxRowPreviewSearch.trim().toLowerCase();
-    if (!query) return dbxRowPreviewFields;
-    return dbxRowPreviewFields.filter((field) =>
-      [field.column, field.type ?? "", field.preview].some((value) =>
-        value.toLowerCase().includes(query),
-      ),
-    );
-  }, [dbxRowPreviewFields, dbxRowPreviewSearch]);
-  const dbxColumnPreviewFields = useMemo(() => {
-    if (!dbxColumnPreview || !queryResult || !activeDbxConnection) return [];
-    return tableRows.map((row) => {
-      const rowIndex = queryResult.rows.indexOf(row);
-      const value = row.values[dbxColumnPreview.columnIndex] ?? null;
-      return {
-        rowNumber: rowIndex >= 0 ? rowIndex + 1 : 0,
-        value,
-        preview: cellPreviewText(value).text,
-      };
-    });
-  }, [activeDbxConnection, dbxColumnPreview, queryResult, tableRows]);
-  const filteredDbxColumnPreviewFields = useMemo(() => {
-    const query = dbxColumnPreviewSearch.trim().toLowerCase();
-    if (!query) return dbxColumnPreviewFields;
-    return dbxColumnPreviewFields.filter(
-      (field) =>
-        field.preview.toLowerCase().includes(query) || String(field.rowNumber).includes(query),
-    );
-  }, [dbxColumnPreviewFields, dbxColumnPreviewSearch]);
+  const dbxGrid = useDbxDataGrid({
+    initialPageSize: PAGE_SIZE,
+    tableColumns,
+    rawTableRows,
+    queryResult,
+    activeDbxConnection,
+    activeDbxGridColumns,
+    activeObject,
+    showRowIdColumn,
+  });
+  const {
+    dbxGridWhereInput,
+    setDbxGridWhereInput,
+    dbxGridOrderByInput,
+    setDbxGridOrderByInput,
+    dbxGridSearch,
+    setDbxGridSearch,
+    dbxGridColumnSearch,
+    setDbxGridColumnSearch,
+    dbxGridHiddenColumns,
+    dbxDataToolsOpen,
+    setDbxDataToolsOpen,
+    dbxDataToolsMode,
+    setDbxDataToolsMode,
+    dbxFieldFilterOpen,
+    setDbxFieldFilterOpen,
+    dbxGridPageSize,
+    setDbxGridPageSize,
+    dbxGridSelectedRows,
+    setDbxGridSelectedRows,
+    dbxGridExportFormat,
+    setDbxGridExportFormat,
+    dbxCellPreview,
+    setDbxCellPreview,
+    dbxCellDetail,
+    setDbxCellDetail,
+    dbxSelectedCell,
+    dbxPendingCellEdits,
+    setDbxPendingCellEdits,
+    dbxRowPreview,
+    setDbxRowPreview,
+    dbxRowPreviewSearch,
+    setDbxRowPreviewSearch,
+    dbxColumnPreview,
+    setDbxColumnPreview,
+    dbxColumnPreviewSearch,
+    setDbxColumnPreviewSearch,
+  } = dbxGrid.state;
+  const {
+    visibleTableColumns,
+    filteredDbxGridColumnOptions,
+    formattedDbxCellPreview,
+    dbxRowPreviewFields,
+    filteredDbxRowPreviewFields,
+    dbxColumnPreviewFields,
+    filteredDbxColumnPreviewFields,
+    dbxPendingCellEditCount,
+  } = dbxGrid.derived;
+  const {
+    initializeLoadedGrid,
+    resetGridPresentation,
+    toggleDbxGridColumnVisibility,
+    showAllDbxGridColumns,
+    invertDbxGridColumnVisibility,
+  } = dbxGrid.actions;
   const dbxGridCellContextRowCount = useMemo(() => {
     if (!queryResult || contextMenu?.kind !== "dbx-grid-cell") return 0;
     if (dbxGridSelectedRows.has(contextMenu.rowIndex) && dbxGridSelectedRows.size > 0) {
@@ -2509,13 +1796,6 @@ export function DatabaseView({
     tableImportPreview &&
     tableImportMappedColumns.length > 0,
   );
-  const selectedTransportLayer = useMemo(
-    () =>
-      draftTransportLayers.find((layer) => layer.id === selectedTransportLayerId) ??
-      draftTransportLayers[0] ??
-      null,
-    [draftTransportLayers, selectedTransportLayerId],
-  );
 
   const saveConnections = useCallback((next: DbConnectionConfig[]) => {
     setConnections(next);
@@ -2621,51 +1901,6 @@ export function DatabaseView({
   }, [createInitialSqliteEndpoint, inspect]);
 
   useEffect(() => {
-    setDbxGridHiddenColumns((current) => {
-      if (current.size === 0) return current;
-      const available = new Set(tableColumns);
-      const next = new Set([...current].filter((column) => available.has(column)));
-      if (tableColumns.length > 0 && next.size >= tableColumns.length) next.delete(tableColumns[0]);
-      return next.size === current.size ? current : next;
-    });
-  }, [tableColumns]);
-
-  useEffect(() => {
-    setDbxGridColumnWidths((current) => {
-      const available = new Set(tableColumns);
-      const entries = Object.entries(current).filter(([column]) => available.has(column));
-      if (entries.length === Object.keys(current).length) return current;
-      return Object.fromEntries(entries);
-    });
-  }, [tableColumns]);
-
-  useEffect(() => {
-    if (!resizingDbxGridColumn) return undefined;
-    const originalCursor = document.body.style.cursor;
-    const originalUserSelect = document.body.style.userSelect;
-    document.body.style.cursor = "col-resize";
-    document.body.style.userSelect = "none";
-    const handlePointerMove = (event: PointerEvent) => {
-      const { column, width, x } = dbxGridColumnResizeStartRef.current;
-      const nextWidth = clampDbxGridColumnWidth(width + event.clientX - x);
-      setDbxGridColumnWidths((current) =>
-        current[column] === nextWidth ? current : { ...current, [column]: nextWidth },
-      );
-    };
-    const handlePointerUp = () => {
-      setResizingDbxGridColumn(null);
-    };
-    window.addEventListener("pointermove", handlePointerMove);
-    window.addEventListener("pointerup", handlePointerUp);
-    return () => {
-      document.body.style.cursor = originalCursor;
-      document.body.style.userSelect = originalUserSelect;
-      window.removeEventListener("pointermove", handlePointerMove);
-      window.removeEventListener("pointerup", handlePointerUp);
-    };
-  }, [resizingDbxGridColumn]);
-
-  useEffect(() => {
     if (!resizingDatabaseSidebar) return undefined;
     const originalCursor = document.body.style.cursor;
     const originalUserSelect = document.body.style.userSelect;
@@ -2724,161 +1959,15 @@ export function DatabaseView({
     [connections, inspect, saveConnections],
   );
 
-  const chooseLocalDbFile = useCallback(async () => {
-    const selected = await openDialog({
-      multiple: false,
-      directory: false,
-      filters: [{ name: "SQLite", extensions: ["db", "sqlite", "sqlite3"] }],
-      defaultPath: projectRoot,
-    });
-    if (typeof selected === "string") setDraftFilePath(selected);
-  }, [projectRoot]);
-
-  const chooseTlsCertificatePath = useCallback(
-    async (setter: (path: string) => void) => {
-      const selected = await openDialog({
-        multiple: false,
-        directory: false,
-        filters: [
-          { name: "Certificates", extensions: ["pem", "crt", "cer", "key", "p12", "pfx"] },
-          { name: "All files", extensions: ["*"] },
-        ],
-        defaultPath: projectRoot,
-      });
-      if (typeof selected === "string") setter(selected);
-    },
-    [projectRoot],
-  );
-
-  const resetConnectionDraft = useCallback(
-    (profile: DbProfile = selectedProfile) => {
-      setWizardStep("type");
-      setConfigTab("connection");
-      setDraftName(profile.label);
-      setDraftConnectionGroup("");
-      setDraftColor("");
-      setDraftHost(profile.localFile ? "" : "127.0.0.1");
-      setDraftPort(String(profile.port));
-      setDraftUser(profile.user);
-      setDraftDatabase("");
-      setDraftPassword("");
-      setShowPassword(false);
-      setShowSentinelPassword(false);
-      setShowTransportPassword(false);
-      setShowTransportPassphrase(false);
-      setDraftFilePath("");
-      setDraftReadOnly(false);
-      setDraftUrlParams("");
-      setDraftConnectionString("");
-      setDraftConnectTimeoutSecs("5");
-      setDraftQueryTimeoutSecs("30");
-      setDraftIdleTimeoutSecs("60");
-      setDraftKeepaliveIntervalSecs("0");
-      setDraftCaCertPath("");
-      setDraftClientCertPath("");
-      setDraftClientKeyPath("");
-      setDraftRedisConnectionMode("standalone");
-      setDraftRedisSentinelMaster("");
-      setDraftRedisSentinelNodes("");
-      setDraftRedisSentinelUsername("");
-      setDraftRedisSentinelPassword("");
-      setDraftRedisSentinelTls(false);
-      setDraftRedisClusterNodes("");
-      setDraftRedisKeySeparator(":");
-      setDraftMongoUseUrl(false);
-      setTlsEnabled(false);
-      setTransportEnabled(false);
-      setDraftTransportLayers([]);
-      setSelectedTransportLayerId(null);
-    },
-    [selectedProfile],
-  );
-
-  const openNewConnectionDialog = useCallback(
-    (connectionGroup: unknown = null) => {
-      setEditingDbxConnectionId(null);
-      resetConnectionDraft(selectedProfile);
-      setDraftConnectionGroup(typeof connectionGroup === "string" ? connectionGroup.trim() : "");
-      setProfileSearch("");
-      setProfileViewMode("icon");
-      setError(null);
-      setConnectionDialogOpen(true);
-    },
-    [resetConnectionDraft, selectedProfile],
-  );
+  const openNewConnectionDialog = useCallback((connectionGroup: unknown = null) => {
+    setEditingDbxConnectionId(null);
+    setNewConnectionGroup(typeof connectionGroup === "string" ? connectionGroup.trim() : null);
+    setError(null);
+    setConnectionDialogOpen(true);
+  }, []);
 
   const openEditDbxConnectionDialog = useCallback((connection: AeroricDbConnectionConfig) => {
-    const profile = profileForDbxConnection(connection);
-    const config = dbxConfigRecord(connection);
-    const transportLayers = Array.isArray(config.transport_layers)
-      ? config.transport_layers.map((layer, index) =>
-          transportLayerDraftFromPayload(layer, index + 1),
-        )
-      : [];
     setEditingDbxConnectionId(connection.id);
-    setSelectedProfileKey(profile.key);
-    setWizardStep("config");
-    setConfigTab("connection");
-    setDraftName(dbxString(config, "name", connection.name));
-    setDraftConnectionGroup(connection.connectionGroup ?? "");
-    setDraftColor(dbxString(config, "color"));
-    setDraftHost(profile.localFile ? "" : dbxString(config, "host", "127.0.0.1"));
-    setDraftPort(dbxNumberString(config, "port", String(profile.port)));
-    setDraftUser(dbxString(config, "username"));
-    setDraftDatabase(dbxString(config, "database"));
-    setDraftPassword(dbxString(config, "password"));
-    setDraftFilePath(profile.localFile ? dbxString(config, "host") : "");
-    setDraftReadOnly(dbxBoolean(config, "read_only", connection.readOnly));
-    setDraftUrlParams(dbxString(config, "url_params"));
-    setDraftConnectionString(dbxString(config, "connection_string"));
-    setDraftConnectTimeoutSecs(dbxNumberString(config, "connect_timeout_secs", "5"));
-    setDraftQueryTimeoutSecs(dbxNumberString(config, "query_timeout_secs", "30"));
-    setDraftIdleTimeoutSecs(dbxNumberString(config, "idle_timeout_secs", "60"));
-    setDraftKeepaliveIntervalSecs(dbxNumberString(config, "keepalive_interval_secs", "0"));
-    setDraftCaCertPath(dbxString(config, "ca_cert_path"));
-    setDraftClientCertPath(dbxString(config, "client_cert_path"));
-    setDraftClientKeyPath(dbxString(config, "client_key_path"));
-    setDraftRedisConnectionMode(
-      config.redis_connection_mode === "sentinel" || config.redis_connection_mode === "cluster"
-        ? config.redis_connection_mode
-        : "standalone",
-    );
-    setDraftRedisSentinelMaster(dbxString(config, "redis_sentinel_master"));
-    setDraftRedisSentinelNodes(dbxString(config, "redis_sentinel_nodes"));
-    setDraftRedisSentinelUsername(dbxString(config, "redis_sentinel_username"));
-    setDraftRedisSentinelPassword(dbxString(config, "redis_sentinel_password"));
-    setDraftRedisSentinelTls(dbxBoolean(config, "redis_sentinel_tls"));
-    setDraftRedisClusterNodes(dbxString(config, "redis_cluster_nodes"));
-    setDraftRedisKeySeparator(dbxString(config, "redis_key_separator", ":"));
-    setDraftMongoUseUrl(
-      connection.dbType === "mongodb" && Boolean(dbxString(config, "connection_string")),
-    );
-    setTlsEnabled(dbxBoolean(config, "ssl"));
-    const urlParamsStr = dbxString(config, "url_params");
-    if (connection.dbType === "postgres") {
-      const params = new URLSearchParams(urlParamsStr);
-      setDraftTlsMode(params.get("sslmode") || "");
-    } else if (connection.dbType === "mysql") {
-      const params = new URLSearchParams(urlParamsStr);
-      setDraftTlsMode(params.get("ssl-mode") || "");
-    } else {
-      setDraftTlsMode("");
-    }
-    if (connection.dbType === "oracle") {
-      const oracleConfig = config as { oracle_connection_type?: string; oracle_sysdba?: boolean };
-      setDraftOracleConnectionType(
-        oracleConfig.oracle_connection_type === "sid" ? "sid" : "service_name",
-      );
-      setDraftOracleSysdba(Boolean(oracleConfig.oracle_sysdba));
-    } else {
-      setDraftOracleConnectionType("service_name");
-      setDraftOracleSysdba(false);
-    }
-    setTransportEnabled(transportLayers.length > 0);
-    setDraftTransportLayers(transportLayers);
-    setSelectedTransportLayerId(transportLayers[0]?.id ?? null);
-    setProfileSearch("");
-    setProfileViewMode("icon");
     setError(null);
     setConnectionDialogOpen(true);
   }, []);
@@ -2901,285 +1990,6 @@ export function DatabaseView({
       setLoading(false);
     }
   }, []);
-
-  const handleProfileSelect = useCallback(
-    (key: DbProfileKey) => {
-      const profile = DB_PROFILES.find((item) => item.key === key) ?? DB_PROFILES[0];
-      setSelectedProfileKey(key);
-      resetConnectionDraft(profile);
-    },
-    [resetConnectionDraft],
-  );
-
-  const handleProfileDoubleClick = useCallback(
-    (key: DbProfileKey) => {
-      handleProfileSelect(key);
-      setWizardStep("config");
-    },
-    [handleProfileSelect],
-  );
-
-  const applyConnectionUrl = useCallback(() => {
-    const parsed = parseConnectionUrl(
-      draftConnectionString,
-      selectedProfile.key as DbxDatabaseType,
-    );
-    if (!parsed || !parsed.host) {
-      setError(t("database.connectionUrlParseFailed"));
-      return;
-    }
-    setDraftHost(parsed.host);
-    if (parsed.port) setDraftPort(parsed.port);
-    if (parsed.user !== undefined) setDraftUser(parsed.user);
-    if (parsed.password !== undefined) setDraftPassword(parsed.password);
-    if (parsed.database !== undefined) setDraftDatabase(parsed.database);
-    if (parsed.urlParams !== undefined) setDraftUrlParams(parsed.urlParams);
-    if (selectedProfile.key === "mongodb") setDraftMongoUseUrl(true);
-    setError(null);
-  }, [draftConnectionString, selectedProfile.key, t]);
-
-  const addTransportLayer = useCallback((type: "ssh" | "proxy") => {
-    setTransportEnabled(true);
-    setDraftTransportLayers((current) => {
-      const nextLayer = createTransportLayerDraft(type, current.length + 1);
-      setSelectedTransportLayerId(nextLayer.id);
-      return [...current, nextLayer];
-    });
-  }, []);
-
-  const updateTransportLayer = useCallback((id: string, patch: Partial<TransportLayerDraft>) => {
-    setDraftTransportLayers((current) =>
-      current.map((layer) => (layer.id === id ? { ...layer, ...patch } : layer)),
-    );
-  }, []);
-
-  const copyTransportLayer = useCallback((id: string) => {
-    setTransportEnabled(true);
-    setDraftTransportLayers((current) => {
-      const index = current.findIndex((layer) => layer.id === id);
-      if (index < 0) return current;
-      const source = current[index];
-      const copy = {
-        ...source,
-        id: `transport:${Date.now()}:${Math.random().toString(36).slice(2)}`,
-      };
-      setSelectedTransportLayerId(copy.id);
-      return [...current.slice(0, index + 1), copy, ...current.slice(index + 1)];
-    });
-  }, []);
-
-  const moveTransportLayer = useCallback((id: string, direction: -1 | 1) => {
-    setDraftTransportLayers((current) => {
-      const index = current.findIndex((layer) => layer.id === id);
-      const targetIndex = index + direction;
-      if (index < 0 || targetIndex < 0 || targetIndex >= current.length) return current;
-      const next = [...current];
-      [next[index], next[targetIndex]] = [next[targetIndex], next[index]];
-      setSelectedTransportLayerId(id);
-      return next;
-    });
-  }, []);
-
-  const removeTransportLayer = useCallback((id: string) => {
-    setDraftTransportLayers((current) => {
-      const next = current.filter((layer) => layer.id !== id);
-      setSelectedTransportLayerId(next[0]?.id ?? null);
-      if (next.length === 0) setTransportEnabled(false);
-      return next;
-    });
-  }, []);
-
-  const buildDbxConnectionDraft = useCallback((): AeroricDbConnectionConfig => {
-    const now = Date.now();
-    const id = editingDbxConnection?.id ?? `dbx:${now}:${Math.random().toString(36).slice(2)}`;
-    const existingDbx = editingDbxConnection ? dbxConfigRecord(editingDbxConnection) : {};
-    const port = Number.parseInt(draftPort, 10);
-    const connectTimeoutSecs = Number.parseInt(draftConnectTimeoutSecs, 10);
-    const queryTimeoutSecs = Number.parseInt(draftQueryTimeoutSecs, 10);
-    const idleTimeoutSecs = Number.parseInt(draftIdleTimeoutSecs, 10);
-    const keepaliveIntervalSecs = Number.parseInt(draftKeepaliveIntervalSecs, 10);
-    let normalizedPort = Number.isFinite(port) && port >= 0 ? port : selectedProfile.port;
-    const rawConnectionString = draftConnectionString.trim();
-    const parsedMongoUrl =
-      selectedProfile.key === "mongodb" && draftMongoUseUrl && rawConnectionString
-        ? parseConnectionUrl(rawConnectionString, "mongodb")
-        : null;
-    let database = draftDatabase.trim();
-    const redisSentinelNodes = normalizeRedisNodeList(draftRedisSentinelNodes);
-    const redisClusterNodes = normalizeRedisNodeList(draftRedisClusterNodes);
-    let host = selectedProfile.localFile ? draftFilePath.trim() : draftHost.trim();
-    let username = draftUser.trim();
-    let password = draftPassword;
-    let urlParams = draftUrlParams.trim();
-    if (selectedProfile.key === "postgres" && draftTlsMode) {
-      const params = new URLSearchParams(urlParams);
-      params.set("sslmode", draftTlsMode);
-      urlParams = params.toString();
-    } else if (selectedProfile.key === "mysql" && draftTlsMode) {
-      const params = new URLSearchParams(urlParams);
-      params.set("ssl-mode", draftTlsMode);
-      urlParams = params.toString();
-    }
-    if (parsedMongoUrl) {
-      host = parsedMongoUrl.host ?? host;
-      const parsedMongoPort = Number.parseInt(parsedMongoUrl.port ?? "", 10);
-      if (Number.isFinite(parsedMongoPort) && parsedMongoPort > 0) normalizedPort = parsedMongoPort;
-      username = parsedMongoUrl.user ?? username;
-      password = parsedMongoUrl.password ?? password;
-      database = parsedMongoUrl.database ?? database;
-      urlParams = parsedMongoUrl.urlParams ?? urlParams;
-    }
-    if (selectedProfile.key === "redis" && draftRedisConnectionMode === "sentinel") {
-      const firstNode = firstRedisEndpoint(redisSentinelNodes, 26379);
-      if (firstNode) {
-        host = firstNode.host;
-        normalizedPort = firstNode.port;
-      }
-    } else if (selectedProfile.key === "redis" && draftRedisConnectionMode === "cluster") {
-      const firstNode = firstRedisEndpoint(redisClusterNodes, 6379);
-      if (firstNode) {
-        host = firstNode.host;
-        normalizedPort = firstNode.port;
-      }
-    }
-    if (!host) {
-      throw new Error(
-        selectedProfile.localFile ? t("database.filePathRequired") : t("database.hostRequired"),
-      );
-    }
-    const name = draftName.trim() || selectedProfile.label;
-    const dbType = selectedProfile.key as DbxDatabaseType;
-    const dbx = {
-      ...existingDbx,
-      id,
-      name,
-      db_type: dbType,
-      driver_profile: selectedProfile.key,
-      driver_label: selectedProfile.label,
-      color: draftColor,
-      url_params: urlParams || null,
-      host,
-      port: normalizedPort,
-      username,
-      password,
-      database: database || null,
-      connection_string:
-        dbType === "mongodb"
-          ? draftMongoUseUrl
-            ? rawConnectionString || null
-            : null
-          : rawConnectionString || null,
-      connect_timeout_secs:
-        Number.isFinite(connectTimeoutSecs) && connectTimeoutSecs > 0 ? connectTimeoutSecs : 5,
-      query_timeout_secs:
-        Number.isFinite(queryTimeoutSecs) && queryTimeoutSecs >= 0 ? queryTimeoutSecs : 30,
-      idle_timeout_secs:
-        Number.isFinite(idleTimeoutSecs) && idleTimeoutSecs >= 0 ? idleTimeoutSecs : 60,
-      keepalive_interval_secs:
-        Number.isFinite(keepaliveIntervalSecs) && keepaliveIntervalSecs >= 0
-          ? keepaliveIntervalSecs
-          : 0,
-      ssl: tlsEnabled,
-      ca_cert_path: draftCaCertPath.trim(),
-      client_cert_path: draftClientCertPath.trim(),
-      client_key_path: draftClientKeyPath.trim(),
-      read_only: draftReadOnly,
-      transport_layers: transportEnabled ? draftTransportLayers.map(transportLayerPayload) : [],
-      ...(dbType === "redis"
-        ? {
-            redis_connection_mode: draftRedisConnectionMode,
-            redis_sentinel_master:
-              draftRedisConnectionMode === "sentinel" ? draftRedisSentinelMaster.trim() : undefined,
-            redis_sentinel_nodes:
-              draftRedisConnectionMode === "sentinel" ? redisSentinelNodes : undefined,
-            redis_sentinel_username:
-              draftRedisConnectionMode === "sentinel"
-                ? draftRedisSentinelUsername.trim()
-                : undefined,
-            redis_sentinel_password:
-              draftRedisConnectionMode === "sentinel" ? draftRedisSentinelPassword : undefined,
-            redis_sentinel_tls:
-              draftRedisConnectionMode === "sentinel" ? draftRedisSentinelTls : undefined,
-            redis_cluster_nodes:
-              draftRedisConnectionMode === "cluster" ? redisClusterNodes : undefined,
-            redis_key_separator: draftRedisKeySeparator.trim() || ":",
-          }
-        : {}),
-      ...(dbType === "oracle"
-        ? {
-            oracle_connection_type: draftOracleConnectionType,
-            oracle_sysdba: draftOracleSysdba,
-          }
-        : {}),
-    };
-
-    return {
-      id,
-      name,
-      dbType,
-      readOnly: draftReadOnly,
-      projectScope: editingDbxConnection
-        ? (editingDbxConnection.projectScope ?? null)
-        : projectRoot
-          ? {
-              kind: "local",
-              projectRoot,
-              remoteProjectPath: null,
-              sshConnectionId: null,
-            }
-          : null,
-      migratedFromLegacy: editingDbxConnection?.migratedFromLegacy,
-      connectionGroup: editingDbxConnection
-        ? (editingDbxConnection.connectionGroup ?? null)
-        : draftConnectionGroup.trim() || null,
-      pinned: editingDbxConnection?.pinned,
-      dbx,
-      createdAt: editingDbxConnection?.createdAt ?? now,
-      lastOpenedAt: now,
-    };
-  }, [
-    editingDbxConnection,
-    draftConnectionGroup,
-    draftDatabase,
-    draftCaCertPath,
-    draftClientCertPath,
-    draftClientKeyPath,
-    draftColor,
-    draftConnectTimeoutSecs,
-    draftConnectionString,
-    draftFilePath,
-    draftHost,
-    draftIdleTimeoutSecs,
-    draftKeepaliveIntervalSecs,
-    draftName,
-    draftPassword,
-    draftPort,
-    draftQueryTimeoutSecs,
-    draftReadOnly,
-    draftTransportLayers,
-    draftMongoUseUrl,
-    draftRedisClusterNodes,
-    draftRedisConnectionMode,
-    draftRedisKeySeparator,
-    draftRedisSentinelMaster,
-    draftRedisSentinelNodes,
-    draftRedisSentinelPassword,
-    draftRedisSentinelTls,
-    draftRedisSentinelUsername,
-    draftTlsMode,
-    draftOracleConnectionType,
-    draftOracleSysdba,
-    draftUrlParams,
-    draftUser,
-    projectRoot,
-    selectedProfile.key,
-    selectedProfile.label,
-    selectedProfile.localFile,
-    selectedProfile.port,
-    t,
-    tlsEnabled,
-    transportEnabled,
-  ]);
 
   const handleNewQuery = useCallback(() => {
     if (!activeSqlCapable) return;
@@ -3835,24 +2645,14 @@ export function DatabaseView({
           primaryKeys,
           hasRowId: false,
         });
-        setDbxPendingCellEdits({});
-        setDbxGridSelectedRows(new Set());
-        setDbxGridWhereInput(normalizedWhereInput);
-        setDbxGridOrderByInput(normalizedOrderBy);
-        if (!sameDbxObject) {
-          setDbxGridSearch("");
-          setDbxGridColumnSearch("");
-          setDbxGridHiddenColumns(new Set());
-          setDbxGridColumnWidths(
-            initialDbxGridColumnWidths(result.result.columns, resultRows, headerColumnTypes),
-          );
-        } else {
-          setDbxGridColumnWidths((current) =>
-            Object.keys(current).length === 0
-              ? initialDbxGridColumnWidths(result.result.columns, resultRows, headerColumnTypes)
-              : current,
-          );
-        }
+        initializeLoadedGrid({
+          sameDbxObject,
+          columns: result.result.columns,
+          rows: resultRows,
+          columnTypes: headerColumnTypes,
+          whereInput: normalizedWhereInput,
+          orderByInput: normalizedOrderBy,
+        });
         setSql(result.sql);
       } catch (err) {
         setError(String(err));
@@ -3860,40 +2660,23 @@ export function DatabaseView({
         setLoading(false);
       }
     },
-    [activeDbxConnection, activeDbxDatabase, activeDbxObject, dbxGridPageSize],
+    [
+      activeDbxConnection,
+      activeDbxDatabase,
+      activeDbxObject,
+      dbxGridPageSize,
+      initializeLoadedGrid,
+    ],
   );
 
-  const submitConnection = useCallback(async () => {
-    if (editingDbxConnectionId || selectedProfile.key !== "sqlite") {
-      setLoading(true);
-      setError(null);
-      try {
-        const connection = buildDbxConnectionDraft();
-        await databaseApi.dbxSaveConnection(connection);
-        const next = await databaseApi.dbxListConnections();
-        setDbxConnections(next);
-        setConnectionDialogOpen(false);
-        setEditingDbxConnectionId(null);
-        await loadDbxConnection(connection);
-      } catch (err) {
-        setError(String(err));
-      } finally {
-        setLoading(false);
-      }
-      return;
-    }
-    const path = draftFilePath.trim();
-    if (!path) return;
-    addConnection({ kind: "local", path });
-    setConnectionDialogOpen(false);
-  }, [
-    addConnection,
-    buildDbxConnectionDraft,
-    draftFilePath,
-    editingDbxConnectionId,
-    loadDbxConnection,
-    selectedProfile.key,
-  ]);
+  const handleConnectionSaved = useCallback(
+    (next: AeroricDbConnectionConfig[], connection: AeroricDbConnectionConfig) => {
+      setDbxConnections(next);
+      setEditingDbxConnectionId(null);
+      return loadDbxConnection(connection);
+    },
+    [loadDbxConnection],
+  );
 
   const reloadActiveDbxGrid = useCallback(
     async (whereInput = dbxGridWhereInput, orderBy = dbxGridOrderByInput) => {
@@ -3918,16 +2701,16 @@ export function DatabaseView({
   );
 
   const resetActiveDbxGrid = useCallback(async () => {
-    setDbxGridWhereInput("");
-    setDbxGridOrderByInput("");
-    setDbxGridSearch("");
-    setDbxGridColumnSearch("");
-    setDbxGridHiddenColumns(new Set());
-    setDbxGridColumnWidths({});
-    setDbxPendingCellEdits({});
+    resetGridPresentation();
     if (!activeDbxConnection || !activeDbxObject) return;
     await loadDbxObject(activeDbxObject, 1, activeDbxConnection, activeDbxDatabase, "", "");
-  }, [activeDbxConnection, activeDbxDatabase, activeDbxObject, loadDbxObject]);
+  }, [
+    activeDbxConnection,
+    activeDbxDatabase,
+    activeDbxObject,
+    loadDbxObject,
+    resetGridPresentation,
+  ]);
 
   const toggleDbxGridColumnSort = useCallback(
     async (column: string) => {
@@ -3953,6 +2736,7 @@ export function DatabaseView({
       dbxGridWhereInput,
       loadDbxObject,
       queryResult,
+      setDbxGridOrderByInput,
     ],
   );
 
@@ -3978,120 +2762,9 @@ export function DatabaseView({
       dbxGridWhereInput,
       loadDbxObject,
       queryResult,
+      setDbxGridPageSize,
     ],
   );
-
-  const toggleDbxGridColumnVisibility = useCallback(
-    (column: string) => {
-      setDbxGridHiddenColumns((current) => {
-        const next = new Set(current);
-        if (next.has(column)) {
-          next.delete(column);
-        } else {
-          const visibleCount = tableColumns.filter((item) => !next.has(item)).length;
-          if (visibleCount <= 1) return current;
-          next.add(column);
-        }
-        return next;
-      });
-    },
-    [tableColumns],
-  );
-
-  const showAllDbxGridColumns = useCallback(() => {
-    setDbxGridHiddenColumns(new Set());
-  }, []);
-
-  const invertDbxGridColumnVisibility = useCallback(() => {
-    setDbxGridHiddenColumns((current) => {
-      if (tableColumns.length <= 1) return new Set();
-      const next = new Set<string>();
-      tableColumns.forEach((column) => {
-        if (!current.has(column)) next.add(column);
-      });
-      if (next.size >= tableColumns.length) next.delete(tableColumns[0]);
-      return next;
-    });
-  }, [tableColumns]);
-
-  const startDbxGridColumnResize = useCallback(
-    (column: string, event: ReactPointerEvent<HTMLButtonElement>) => {
-      event.preventDefault();
-      event.stopPropagation();
-      dbxGridColumnResizeStartRef.current = {
-        column,
-        x: event.clientX,
-        width: dbxGridColumnWidths[column] ?? DBX_GRID_DEFAULT_COLUMN_WIDTH,
-      };
-      setResizingDbxGridColumn(column);
-    },
-    [dbxGridColumnWidths],
-  );
-
-  const autoFitDbxGridColumn = useCallback(
-    (column: string) => {
-      const columnIndex = tableColumns.indexOf(column);
-      if (columnIndex < 0) return;
-      const dbxColumnInfo = activeDbxGridColumnsByName.get(column.toLowerCase());
-      const legacyColumnInfo = activeObject?.columns.find(
-        (item) => item.name.toLowerCase() === column.toLowerCase(),
-      );
-      const columnType =
-        dbxColumnInfo?.data_type ??
-        dbxGridColumnType(queryResult, columnIndex) ??
-        legacyColumnInfo?.dataType ??
-        "";
-      const nextWidth = estimateDbxGridColumnWidth(column, columnIndex, rawTableRows, columnType);
-      setDbxGridColumnWidths((current) =>
-        current[column] === nextWidth ? current : { ...current, [column]: nextWidth },
-      );
-      setResizingDbxGridColumn(null);
-    },
-    [activeDbxGridColumnsByName, activeObject, queryResult, rawTableRows, tableColumns],
-  );
-
-  const toggleDbxGridRowSelection = useCallback(
-    (rowIndex: number, event?: ReactMouseEvent) => {
-      if (rowIndex < 0) return;
-      setDbxSelectedCell(null);
-      if (event?.shiftKey && dbxGridSelectionAnchor !== null) {
-        const rowCount = queryResult?.rows.length ?? 0;
-        const maxRowIndex = Math.max(0, rowCount - 1);
-        const anchor = Math.max(0, Math.min(dbxGridSelectionAnchor, maxRowIndex));
-        const target = Math.max(0, Math.min(rowIndex, maxRowIndex));
-        const [start, end] = anchor < target ? [anchor, target] : [target, anchor];
-        setDbxGridSelectedRows(
-          new Set(Array.from({ length: end - start + 1 }, (_, offset) => start + offset)),
-        );
-        setDbxGridSelectionAnchor(rowIndex);
-        return;
-      }
-      setDbxGridSelectedRows((current) => {
-        const next = new Set(current);
-        if (next.has(rowIndex)) {
-          next.delete(rowIndex);
-        } else {
-          next.add(rowIndex);
-        }
-        return next;
-      });
-      setDbxGridSelectionAnchor(rowIndex);
-    },
-    [dbxGridSelectionAnchor, queryResult?.rows.length],
-  );
-
-  const testDbxConnectionDraft = useCallback(async () => {
-    setLoading(true);
-    setConnectionTestResult(null);
-    try {
-      await databaseApi.dbxTestConnection(buildDbxConnectionDraft());
-      setConnectionTestResult({ success: true, message: t("database.connectionTestOk") });
-    } catch (err) {
-      setConnectionTestResult({ success: false, message: String(err) });
-    } finally {
-      setLoading(false);
-    }
-  }, [buildDbxConnectionDraft, t]);
 
   const handleSelectConnection = useCallback(
     (connection: DbConnectionConfig) => {
@@ -6805,11 +5478,7 @@ export function DatabaseView({
   const dbxGridContextRows = useCallback(
     (menu: DbxGridCellContextMenuState): DatabaseRow[] => {
       if (!queryResult) return [];
-      const rowIndexes =
-        dbxGridSelectedRows.has(menu.rowIndex) && dbxGridSelectedRows.size > 0
-          ? Array.from(dbxGridSelectedRows).sort((left, right) => left - right)
-          : [menu.rowIndex];
-      return rowIndexes
+      return dbxGridContextRowIndexes(dbxGridSelectedRows, menu.rowIndex)
         .map((rowIndex) => queryResult.rows[rowIndex])
         .filter((row): row is DatabaseRow => Boolean(row));
     },
@@ -6998,19 +5667,6 @@ export function DatabaseView({
     ],
   );
 
-  const stageDbxCellEdit = useCallback(
-    (rowIndex: number, columnIndex: number, column: string, value: string, original: string) => {
-      const key = `${rowIndex}:${columnIndex}`;
-      setDbxPendingCellEdits((current) => {
-        const next = { ...current };
-        if (value === original) delete next[key];
-        else next[key] = { rowIndex, columnIndex, column, value, original };
-        return next;
-      });
-    },
-    [],
-  );
-
   const saveDbxPendingCellEdits = useCallback(async () => {
     if (
       !activeDbxConnection ||
@@ -7021,19 +5677,9 @@ export function DatabaseView({
       !queryResult.editable
     )
       return;
-    const edits = Object.values(dbxPendingCellEdits);
-    if (edits.length === 0) return;
-    const dirtyRowsByIndex = new Map<number, Array<[number, unknown]>>();
-    for (const edit of edits) {
-      const values = dirtyRowsByIndex.get(edit.rowIndex) ?? [];
-      values.push([edit.columnIndex, textToCellValue(edit.value)]);
-      dirtyRowsByIndex.set(edit.rowIndex, values);
-    }
+    if (Object.keys(dbxPendingCellEdits).length === 0) return;
     const options = buildDbxGridSaveOptions({
-      dirtyRows: Array.from(dirtyRowsByIndex.entries()).map(([rowIndex, values]) => [
-        rowIndex,
-        values,
-      ]),
+      dirtyRows: dbxPendingCellEditsToDirtyRows(dbxPendingCellEdits, textToCellValue),
     });
     if (!options) return;
     setError(null);
@@ -7101,6 +5747,7 @@ export function DatabaseView({
     loadDbxObject,
     page,
     queryResult,
+    setDbxPendingCellEdits,
     t,
   ]);
 
@@ -7298,6 +5945,7 @@ export function DatabaseView({
       loadDbxObject,
       page,
       queryResult,
+      setDbxGridSelectedRows,
       t,
     ],
   );
@@ -7404,6 +6052,9 @@ export function DatabaseView({
       dbxGridWhereInput,
       loadDbxObject,
       queryResult,
+      setDbxColumnPreview,
+      setDbxColumnPreviewSearch,
+      setDbxGridOrderByInput,
     ],
   );
 
@@ -7555,6 +6206,13 @@ export function DatabaseView({
       dbxGridWhereInput,
       loadDbxObject,
       queryResult,
+      setDbxCellPreview,
+      setDbxColumnPreview,
+      setDbxColumnPreviewSearch,
+      setDbxGridOrderByInput,
+      setDbxGridWhereInput,
+      setDbxRowPreview,
+      setDbxRowPreviewSearch,
       visibleTableColumns,
     ],
   );
@@ -7583,9 +6241,6 @@ export function DatabaseView({
     ? pinnedTreeNodeIds.has(currentContextMenuPinnedNodeId)
     : false;
   const activeDbxGridPrimaryKeys = activeObject?.primaryKeys ?? queryResult?.primaryKeys ?? [];
-  const connectionDialogTitle = editingDbxConnectionId
-    ? t("database.editConnection")
-    : t("database.newConnection");
   const hasActiveDatabaseWorkspace =
     Boolean(activeObject || activeDbxObject || queryResult || sqlResult) ||
     (workspaceMode !== "table" && workspaceMode !== "query");
@@ -9014,407 +7669,21 @@ export function DatabaseView({
               </div>
             )}
 
-            {tableColumns.length === 0 ? (
-              <div style={s.databaseEmpty}>{t("database.empty")}</div>
-            ) : (
-              <div
-                style={s.databaseTableWrap}
-                role={queryResult && activeDbxConnection ? "grid" : undefined}
-                tabIndex={queryResult && activeDbxConnection ? 0 : undefined}
-                aria-label={queryResult && activeDbxConnection ? t("database.gridData") : undefined}
-                onKeyDown={queryResult && activeDbxConnection ? handleDbxGridKeyDown : undefined}
-              >
-                <table style={{ ...s.databaseTable, minWidth: dbxGridTableMinWidth }}>
-                  <thead>
-                    <tr>
-                      {queryResult && activeDbxConnection && (
-                        <th style={{ ...s.databaseTh, ...s.databaseGridControlTh, width: 42 }}>
-                          #
-                        </th>
-                      )}
-                      {showRowIdColumn && <th style={{ ...s.databaseTh, width: 86 }}>rowid</th>}
-                      {visibleTableColumns.map(({ column }) => {
-                        const columnWidth =
-                          dbxGridColumnWidths[column] ?? DBX_GRID_DEFAULT_COLUMN_WIDTH;
-                        const columnIndex = tableColumns.indexOf(column);
-                        const sortable = dbxGridColumnSortable(queryResult, columnIndex);
-                        const dbxColumnInfo = activeDbxGridColumnsByName.get(column.toLowerCase());
-                        const legacyColumnInfo = activeObject?.columns.find(
-                          (item) => item.name.toLowerCase() === column.toLowerCase(),
-                        );
-                        const columnType =
-                          dbxColumnInfo?.data_type ??
-                          dbxGridColumnType(queryResult, columnIndex) ??
-                          legacyColumnInfo?.dataType ??
-                          "";
-                        const columnTypeStyle = columnType
-                          ? dbxDataTypeStyle(columnType)
-                          : s.databaseTypeDefault;
-                        const columnComment = dbxColumnInfo?.comment?.trim() ?? "";
-                        const nullableText = dbxColumnInfo
-                          ? dbxColumnInfo.is_nullable
-                            ? t("database.yes")
-                            : t("database.no")
-                          : legacyColumnInfo
-                            ? legacyColumnInfo.nullable
-                              ? t("database.yes")
-                              : t("database.no")
-                            : "-";
-                        const primaryKeyText = dbxColumnInfo
-                          ? dbxColumnInfo.is_primary_key
-                            ? t("database.yes")
-                            : t("database.no")
-                          : legacyColumnInfo
-                            ? legacyColumnInfo.primaryKey
-                              ? t("database.yes")
-                              : t("database.no")
-                            : "-";
-                        const defaultValue =
-                          dbxColumnInfo?.column_default ?? legacyColumnInfo?.defaultValue ?? "-";
-                        const columnDetailsTitle = t("database.gridColumnDetails", {
-                          name: column,
-                          type: columnType || "-",
-                          comment: columnComment || "-",
-                          nullable: nullableText,
-                          primaryKey: primaryKeyText,
-                          defaultValue: defaultValue || "-",
-                        });
-                        const columnHeaderContent = (
-                          <span style={s.databaseGridHeaderStack}>
-                            <span style={s.databaseGridHeaderName}>{column}</span>
-                            <span
-                              style={{ ...s.databaseGridHeaderTypeLine, ...columnTypeStyle }}
-                              title={
-                                columnType
-                                  ? t("database.gridColumnType", { type: columnType })
-                                  : undefined
-                              }
-                            >
-                              {columnType || "-"}
-                            </span>
-                            <span
-                              style={s.databaseGridHeaderCommentLine}
-                              title={columnComment || undefined}
-                            >
-                              {columnComment || "-"}
-                            </span>
-                          </span>
-                        );
-                        return (
-                          <th
-                            key={column}
-                            aria-label={column}
-                            style={{
-                              ...s.databaseTh,
-                              width: columnWidth,
-                              minWidth: columnWidth,
-                              maxWidth: columnWidth,
-                              paddingRight: queryResult && activeDbxConnection ? 12 : 8,
-                            }}
-                            title={columnDetailsTitle}
-                            onContextMenu={
-                              queryResult && activeDbxConnection
-                                ? (event) => {
-                                    event.preventDefault();
-                                    setContextMenu({
-                                      x: event.clientX,
-                                      y: event.clientY,
-                                      connectionId: activeDbxConnection.id,
-                                      columnIndex,
-                                      column,
-                                      kind: "dbx-grid-header",
-                                    });
-                                  }
-                                : undefined
-                            }
-                          >
-                            {queryResult && activeDbxConnection ? (
-                              <>
-                                {sortable ? (
-                                  <button
-                                    type="button"
-                                    style={{
-                                      ...s.databaseGridHeaderButton,
-                                      cursor: loading ? "default" : "pointer",
-                                    }}
-                                    aria-label={column}
-                                    disabled={loading}
-                                    onClick={() => void toggleDbxGridColumnSort(column)}
-                                  >
-                                    {columnHeaderContent}
-                                    <span style={s.databaseGridHeaderSortIcon}>
-                                      {dbxGridOrderByInput.toLowerCase() ===
-                                      `${quoteSqlName(column)} asc`.toLowerCase() ? (
-                                        <ArrowUp
-                                          size={14}
-                                          aria-label={t("database.sortAscending")}
-                                        />
-                                      ) : dbxGridOrderByInput.toLowerCase() ===
-                                        `${quoteSqlName(column)} desc`.toLowerCase() ? (
-                                        <ArrowDown
-                                          size={14}
-                                          aria-label={t("database.sortDescending")}
-                                        />
-                                      ) : (
-                                        <ArrowUpDown
-                                          size={14}
-                                          aria-hidden="true"
-                                          style={{ color: "var(--text-hint)" }}
-                                        />
-                                      )}
-                                    </span>
-                                  </button>
-                                ) : (
-                                  <span
-                                    style={{
-                                      display: "inline-flex",
-                                      alignItems: "center",
-                                      width: "100%",
-                                      minHeight: 50,
-                                      minWidth: 0,
-                                      paddingRight: 8,
-                                    }}
-                                  >
-                                    {columnHeaderContent}
-                                  </span>
-                                )}
-                                <button
-                                  type="button"
-                                  aria-label={t("database.gridResizeColumn", { column })}
-                                  title={t("database.gridResizeColumn", { column })}
-                                  onPointerDown={(event) => startDbxGridColumnResize(column, event)}
-                                  onDoubleClick={(event) => {
-                                    event.preventDefault();
-                                    event.stopPropagation();
-                                    autoFitDbxGridColumn(column);
-                                  }}
-                                  style={{
-                                    position: "absolute",
-                                    top: 0,
-                                    right: 0,
-                                    bottom: 0,
-                                    width: 8,
-                                    padding: 0,
-                                    border: "none",
-                                    borderRight:
-                                      resizingDbxGridColumn === column
-                                        ? "1px solid var(--accent)"
-                                        : "1px solid transparent",
-                                    background:
-                                      resizingDbxGridColumn === column
-                                        ? "var(--bg-hover)"
-                                        : "transparent",
-                                    cursor: "col-resize",
-                                  }}
-                                />
-                              </>
-                            ) : (
-                              column
-                            )}
-                          </th>
-                        );
-                      })}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {tableRows.map((row, rowIndex) => {
-                      const dbxRowIndex =
-                        queryResult && activeDbxConnection ? queryResult.rows.indexOf(row) : -1;
-                      const rowSelected = dbxRowIndex >= 0 && dbxGridSelectedRows.has(dbxRowIndex);
-                      return (
-                        <tr
-                          key={`${row.rowId ?? "sql"}:${rowIndex}`}
-                          style={rowSelected ? s.databaseGridRowSelected : undefined}
-                        >
-                          {queryResult && activeDbxConnection && (
-                            <td
-                              style={{
-                                ...s.databaseTd,
-                                ...s.databaseGridControlTd,
-                                ...(rowSelected ? s.databaseGridRowSelected : undefined),
-                              }}
-                            >
-                              <button
-                                type="button"
-                                aria-label={t("database.selectRow", { row: rowIndex + 1 })}
-                                disabled={dbxRowIndex < 0 || loading}
-                                style={{
-                                  ...s.databaseGridRowNumberButton,
-                                  ...(rowSelected
-                                    ? s.databaseGridRowNumberButtonSelected
-                                    : undefined),
-                                }}
-                                onClick={(event) => {
-                                  if (dbxRowIndex >= 0)
-                                    toggleDbxGridRowSelection(dbxRowIndex, event);
-                                }}
-                              >
-                                {dbxRowIndex >= 0 ? dbxRowIndex + 1 : rowIndex + 1}
-                              </button>
-                            </td>
-                          )}
-                          {showRowIdColumn && (
-                            <td
-                              style={{
-                                ...s.databaseTd,
-                                color: "var(--text-hint)",
-                                ...(rowSelected ? s.databaseGridRowSelected : undefined),
-                              }}
-                            >
-                              {row.rowId ?? "-"}
-                            </td>
-                          )}
-                          {visibleTableColumns.map(({ column, index: columnIndex }) => {
-                            const original = valueToText(row.values[columnIndex]);
-                            const pendingEdit =
-                              dbxPendingCellEdits[`${dbxRowIndex}:${columnIndex}`] ?? null;
-                            const displayValue = pendingEdit?.value ?? original;
-                            const previewable = Boolean(queryResult && activeDbxConnection);
-                            const isCellSelected =
-                              dbxSelectedCell?.rowIndex === dbxRowIndex &&
-                              dbxSelectedCell?.columnIndex === columnIndex;
-                            const isCellEditing =
-                              dbxEditingCell?.rowIndex === dbxRowIndex &&
-                              dbxEditingCell?.columnIndex === columnIndex;
-                            const showCellPreview =
-                              previewable &&
-                              dbxHoveredCell?.rowIndex === dbxRowIndex &&
-                              dbxHoveredCell?.columnIndex === columnIndex;
-                            const editable = Boolean(
-                              queryResult &&
-                              activeObject?.objectType === "table" &&
-                              queryResult.editable &&
-                              !activeConnection?.readOnly &&
-                              !activeDbxConnection?.readOnly,
-                            );
-                            return (
-                              <td
-                                key={`${column}:${columnIndex}`}
-                                style={{
-                                  ...s.databaseTd,
-                                  ...(rowSelected ? s.databaseGridRowSelected : undefined),
-                                  ...(isCellSelected ? s.databaseCellSelected : undefined),
-                                  width:
-                                    dbxGridColumnWidths[column] ?? DBX_GRID_DEFAULT_COLUMN_WIDTH,
-                                  minWidth:
-                                    dbxGridColumnWidths[column] ?? DBX_GRID_DEFAULT_COLUMN_WIDTH,
-                                  maxWidth:
-                                    dbxGridColumnWidths[column] ?? DBX_GRID_DEFAULT_COLUMN_WIDTH,
-                                }}
-                                title={displayValue}
-                                onMouseEnter={() =>
-                                  setDbxHoveredCell({ rowIndex: dbxRowIndex, columnIndex })
-                                }
-                                onMouseLeave={() =>
-                                  setDbxHoveredCell((current) =>
-                                    current?.rowIndex === dbxRowIndex &&
-                                    current.columnIndex === columnIndex
-                                      ? null
-                                      : current,
-                                  )
-                                }
-                                onClick={() =>
-                                  setDbxSelectedCell({ rowIndex: dbxRowIndex, columnIndex, column })
-                                }
-                                onDoubleClick={() => {
-                                  if (editable)
-                                    setDbxEditingCell({
-                                      rowIndex: dbxRowIndex,
-                                      columnIndex,
-                                      column,
-                                    });
-                                }}
-                                onContextMenu={
-                                  queryResult && activeDbxConnection
-                                    ? (event) => {
-                                        event.preventDefault();
-                                        setContextMenu({
-                                          x: event.clientX,
-                                          y: event.clientY,
-                                          connectionId: activeDbxConnection.id,
-                                          rowIndex: dbxRowIndex,
-                                          columnIndex,
-                                          column,
-                                          value: row.values[columnIndex],
-                                          kind: "dbx-grid-cell",
-                                        });
-                                      }
-                                    : undefined
-                                }
-                              >
-                                <div style={s.databaseGridCellContent}>
-                                  {isCellEditing && editable ? (
-                                    <input
-                                      style={{
-                                        ...s.databaseCellInput,
-                                        minWidth: 0,
-                                        flex: "1 1 auto",
-                                        borderColor: "var(--border-focus)",
-                                        background: "var(--bg-input)",
-                                      }}
-                                      defaultValue={displayValue}
-                                      autoFocus
-                                      onFocus={(event) => event.currentTarget.select()}
-                                      onBlur={(event) => {
-                                        if (activeDbxConnection) {
-                                          stageDbxCellEdit(
-                                            dbxRowIndex,
-                                            columnIndex,
-                                            column,
-                                            event.currentTarget.value,
-                                            original,
-                                          );
-                                        } else {
-                                          updateCell(
-                                            row,
-                                            column,
-                                            event.currentTarget.value,
-                                            original,
-                                          );
-                                        }
-                                        setDbxEditingCell(null);
-                                      }}
-                                      onKeyDown={(event) => {
-                                        if (event.key === "Escape") setDbxEditingCell(null);
-                                      }}
-                                    />
-                                  ) : (
-                                    <span style={s.databaseGridCellValue}>{displayValue}</span>
-                                  )}
-                                  {showCellPreview && (
-                                    <button
-                                      type="button"
-                                      aria-label={t("database.previewCellValue", { column })}
-                                      title={t("database.previewCellValue", { column })}
-                                      onClick={(e) => {
-                                        e.stopPropagation();
-                                        const colInfo = activeDbxGridColumnsByName.get(
-                                          column.toLowerCase(),
-                                        );
-                                        setDbxCellDetail({
-                                          column,
-                                          columnIndex,
-                                          rowIndex: dbxRowIndex,
-                                          value: row.values[columnIndex],
-                                          columnInfo: colInfo,
-                                        });
-                                      }}
-                                      style={s.databaseGridCellPreviewButton}
-                                    >
-                                      i
-                                    </button>
-                                  )}
-                                </div>
-                              </td>
-                            );
-                          })}
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            )}
+            <DataGridView
+              variant={workspaceMode === "query" ? "query" : "table"}
+              queryResult={queryResult}
+              activeDbxConnection={activeDbxConnection}
+              activeConnectionReadOnly={Boolean(activeConnection?.readOnly)}
+              activeObject={activeObject}
+              tableColumns={tableColumns}
+              showRowIdColumn={showRowIdColumn}
+              loading={loading}
+              grid={dbxGrid}
+              onKeyDown={handleDbxGridKeyDown}
+              onSortColumn={toggleDbxGridColumnSort}
+              onOpenContextMenu={setContextMenu}
+              onUpdateCell={updateCell}
+            />
             {queryResult && (
               <div style={s.databaseGridFooter}>
                 <div
@@ -10192,1111 +8461,15 @@ export function DatabaseView({
           </section>
         </div>
       )}
-      {connectionDialogOpen && (
-        <div
-          style={s.databaseDialogOverlay}
-          onMouseDown={(event) => {
-            if (event.target === event.currentTarget) closeConnectionDialog();
-          }}
-        >
-          <form
-            role="dialog"
-            aria-modal="true"
-            aria-label={connectionDialogTitle}
-            style={s.databaseConnectionDialog}
-            onSubmit={(event) => {
-              event.preventDefault();
-              if (wizardStep === "type") {
-                setWizardStep("config");
-              } else {
-                submitConnection();
-              }
-            }}
-          >
-            <div style={s.databaseDialogHeader}>{connectionDialogTitle}</div>
-            <div style={s.databaseDialogBody}>
-              {wizardStep === "type" ? (
-                <>
-                  <div style={s.databaseTypeChooserHeader}>
-                    <div style={s.databaseDialogIntro}>{t("database.chooseDatabaseType")}</div>
-                    <DbxButtonGroup
-                      style={s.databaseTypeViewToggle}
-                      aria-label={t("database.typeViewMode")}
-                    >
-                      {(["icon", "list"] as const).map((mode) => (
-                        <DbxSegmentedButton
-                          key={mode}
-                          active={profileViewMode === mode}
-                          onClick={() => setProfileViewMode(mode)}
-                        >
-                          {t(mode === "icon" ? "database.typeIconView" : "database.typeListView")}
-                        </DbxSegmentedButton>
-                      ))}
-                    </DbxButtonGroup>
-                  </div>
-                  <label style={s.databaseSearchBox}>
-                    <Search size={13} />
-                    <input
-                      aria-label={t("database.typeSearch")}
-                      style={s.databaseSearchInput}
-                      value={profileSearch}
-                      placeholder={t("database.typeSearch")}
-                      onChange={(event) => setProfileSearch(event.target.value)}
-                    />
-                  </label>
-                  {profileViewMode === "icon" ? (
-                    <div style={s.databaseTypeGrid}>
-                      {filteredProfiles.map((profile) => (
-                        <button
-                          key={profile.key}
-                          type="button"
-                          style={{
-                            ...s.databaseTypeCard,
-                            ...(selectedProfileKey === profile.key
-                              ? s.databaseTypeCardSelected
-                              : {}),
-                          }}
-                          onClick={() => handleProfileSelect(profile.key)}
-                          onDoubleClick={() => handleProfileDoubleClick(profile.key)}
-                        >
-                          <span
-                            style={{
-                              ...s.databaseTypeIcon,
-                              background: `${profile.accent}1f`,
-                              color: profile.accent,
-                            }}
-                          >
-                            <DatabaseProfileIcon profile={profile} size={25} />
-                          </span>
-                          <span style={s.databaseTypeLabel}>{profile.label}</span>
-                        </button>
-                      ))}
-                    </div>
-                  ) : (
-                    <div style={s.databaseTypeList}>
-                      {filteredProfiles.map((profile) => (
-                        <button
-                          key={profile.key}
-                          type="button"
-                          style={{
-                            ...s.databaseTypeListItem,
-                            ...(selectedProfileKey === profile.key
-                              ? s.databaseTypeCardSelected
-                              : {}),
-                          }}
-                          onClick={() => handleProfileSelect(profile.key)}
-                          onDoubleClick={() => handleProfileDoubleClick(profile.key)}
-                        >
-                          <span
-                            style={{
-                              ...s.databaseTypeIconSmall,
-                              background: `${profile.accent}1f`,
-                              color: profile.accent,
-                            }}
-                          >
-                            <DatabaseProfileIcon profile={profile} size={16} />
-                          </span>
-                          <span style={s.databaseTypeLabel}>{profile.label}</span>
-                          <span style={s.databaseTypeMeta}>
-                            {profile.localFile
-                              ? t("database.filePath")
-                              : `${t("database.port")} ${profile.port}`}
-                          </span>
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                  {filteredProfiles.length === 0 && (
-                    <div style={s.databaseEmpty}>{t("database.typeSearchEmpty")}</div>
-                  )}
-                </>
-              ) : (
-                <>
-                  <div style={s.databaseConfigHeader}>
-                    <button
-                      type="button"
-                      style={s.databaseTypeMiniCard}
-                      onClick={() => setWizardStep("type")}
-                    >
-                      <span
-                        style={{
-                          ...s.databaseTypeIconSmall,
-                          background: `${selectedProfile.accent}1f`,
-                          color: selectedProfile.accent,
-                        }}
-                      >
-                        <DatabaseProfileIcon profile={selectedProfile} size={16} />
-                      </span>
-                      <span>{selectedProfile.label}</span>
-                    </button>
-                  </div>
-                  <div style={s.databaseConfigTabs}>
-                    {[
-                      ["connection", t("database.connectionInfo"), Database],
-                      ["tls", t("database.tlsSsl"), Shield],
-                      ["transport", t("database.sshTunnelProxy"), Server],
-                      ["advanced", t("database.advanced"), SlidersHorizontal],
-                    ].map(([key, label, Icon]) => (
-                      <button
-                        key={key as string}
-                        type="button"
-                        style={{
-                          ...s.databaseConfigTab,
-                          ...(configTab === key ? s.databaseConfigTabActive : {}),
-                        }}
-                        onClick={() => setConfigTab(key as DbConfigTab)}
-                      >
-                        <Icon size={13} />
-                        <span>{label as string}</span>
-                      </button>
-                    ))}
-                  </div>
-                  {configTab === "connection" ? (
-                    <div style={s.databaseDialogFormGrid}>
-                      <label style={s.databaseDialogField}>
-                        <span style={s.databaseDialogLabel}>{t("database.connectionName")}</span>
-                        <input
-                          style={s.databaseDialogInput}
-                          value={draftName}
-                          onChange={(event) => setDraftName(event.target.value)}
-                          autoFocus
-                        />
-                      </label>
-                      <div style={s.databaseDialogField}>
-                        <span style={s.databaseDialogLabel}>{t("database.connectionColor")}</span>
-                        <div style={s.databaseColorPickerRow}>
-                          {CONNECTION_COLOR_OPTIONS.map((color) => {
-                            const selected = draftColor === color.value;
-                            return (
-                              <button
-                                key={color.value || "none"}
-                                type="button"
-                                aria-label={t(color.labelKey)}
-                                title={t(color.labelKey)}
-                                style={{
-                                  ...s.databaseColorSwatch,
-                                  ...(color.value
-                                    ? { background: color.value }
-                                    : s.databaseColorSwatchEmpty),
-                                  ...(selected ? s.databaseColorSwatchSelected : {}),
-                                }}
-                                onClick={() => setDraftColor(color.value)}
-                              />
-                            );
-                          })}
-                          <label style={s.databaseColorCustom}>
-                            <span>{t("database.colorCustom")}</span>
-                            <input
-                              aria-label={t("database.colorCustom")}
-                              type="color"
-                              value={draftColor || "#3b82f6"}
-                              onChange={(event) => setDraftColor(event.target.value)}
-                            />
-                          </label>
-                        </div>
-                      </div>
-                      {selectedProfile.localFile ? (
-                        <label style={s.databaseDialogField}>
-                          <span style={s.databaseDialogLabel}>{t("database.filePath")}</span>
-                          <div style={s.databaseInputButtonRow}>
-                            <input
-                              style={s.databaseDialogInput}
-                              value={draftFilePath}
-                              onChange={(event) => setDraftFilePath(event.target.value)}
-                              placeholder="/path/to/database.db"
-                            />
-                            <DbxButton
-                              variant="ghost"
-                              size="icon-sm"
-                              icon={FilePlus}
-                              onClick={chooseLocalDbFile}
-                            />
-                          </div>
-                        </label>
-                      ) : (
-                        <>
-                          {selectedProfile.key === "mongodb" && (
-                            <div style={s.databaseDialogField}>
-                              <span style={s.databaseDialogLabel}>
-                                {t("database.mongoConnectionMode")}
-                              </span>
-                              <DbxButtonGroup
-                                style={s.databaseTypeViewToggle}
-                                aria-label={t("database.mongoConnectionMode")}
-                              >
-                                {(
-                                  [
-                                    [false, t("database.mongoModeForm")],
-                                    [true, "URL"],
-                                  ] as const
-                                ).map(([useUrl, label]) => (
-                                  <DbxSegmentedButton
-                                    key={String(useUrl)}
-                                    active={draftMongoUseUrl === useUrl}
-                                    onClick={() => setDraftMongoUseUrl(useUrl)}
-                                  >
-                                    {label}
-                                  </DbxSegmentedButton>
-                                ))}
-                              </DbxButtonGroup>
-                            </div>
-                          )}
-                          {!(selectedProfile.key === "mongodb" && draftMongoUseUrl) && (
-                            <>
-                              <label style={s.databaseDialogField}>
-                                <span style={s.databaseDialogLabel}>{t("database.host")}</span>
-                                <input
-                                  style={s.databaseDialogInput}
-                                  value={draftHost}
-                                  onChange={(event) => setDraftHost(event.target.value)}
-                                />
-                              </label>
-                              <label style={s.databaseDialogField}>
-                                <span style={s.databaseDialogLabel}>{t("database.port")}</span>
-                                <input
-                                  style={s.databaseDialogInput}
-                                  value={draftPort}
-                                  onChange={(event) => setDraftPort(event.target.value)}
-                                />
-                              </label>
-                              <label style={s.databaseDialogField}>
-                                <span style={s.databaseDialogLabel}>{t("database.user")}</span>
-                                <input
-                                  style={s.databaseDialogInput}
-                                  value={draftUser}
-                                  onChange={(event) => setDraftUser(event.target.value)}
-                                />
-                              </label>
-                              <label style={s.databaseDialogField}>
-                                <span style={s.databaseDialogLabel}>{t("database.password")}</span>
-                                <PasswordInput
-                                  style={s.databaseDialogInput}
-                                  value={draftPassword}
-                                  onChange={(event) => setDraftPassword(event.target.value)}
-                                  show={showPassword}
-                                  onToggle={() => setShowPassword((v) => !v)}
-                                />
-                              </label>
-                              <label style={s.databaseDialogField}>
-                                <span style={s.databaseDialogLabel}>
-                                  {t("database.databaseName")}
-                                </span>
-                                <input
-                                  style={s.databaseDialogInput}
-                                  value={draftDatabase}
-                                  onChange={(event) => setDraftDatabase(event.target.value)}
-                                />
-                              </label>
-                              {selectedProfile.key === "oracle" && (
-                                <>
-                                  <div style={s.databaseDialogField}>
-                                    <span style={s.databaseDialogLabel}>
-                                      {t("database.oracleConnectionType")}
-                                    </span>
-                                    <DbxButtonGroup
-                                      style={s.databaseTypeViewToggle}
-                                      aria-label={t("database.oracleConnectionType")}
-                                    >
-                                      {(["service_name", "sid"] as const).map((type) => (
-                                        <DbxSegmentedButton
-                                          key={type}
-                                          active={draftOracleConnectionType === type}
-                                          onClick={() => setDraftOracleConnectionType(type)}
-                                        >
-                                          {t(`database.oracleConnectionType.${type}`)}
-                                        </DbxSegmentedButton>
-                                      ))}
-                                    </DbxButtonGroup>
-                                  </div>
-                                  <label style={s.databaseSwitchRow}>
-                                    <input
-                                      type="checkbox"
-                                      checked={draftOracleSysdba}
-                                      onChange={(event) =>
-                                        setDraftOracleSysdba(event.target.checked)
-                                      }
-                                    />
-                                    <span>{t("database.oracleSysdba")}</span>
-                                  </label>
-                                </>
-                              )}
-                            </>
-                          )}
-                          {(selectedProfile.key !== "mongodb" || draftMongoUseUrl) && (
-                            <label style={s.databaseDialogField}>
-                              <span style={s.databaseDialogLabel}>
-                                {selectedProfile.key === "mongodb"
-                                  ? "URL"
-                                  : t("database.connectionString")}
-                              </span>
-                              <div style={s.databaseInputButtonRow}>
-                                <input
-                                  style={s.databaseDialogInput}
-                                  value={draftConnectionString}
-                                  onChange={(event) => setDraftConnectionString(event.target.value)}
-                                  placeholder={
-                                    selectedProfile.key === "mongodb"
-                                      ? "mongodb+srv://user:pass@cluster.mongodb.net/mydb"
-                                      : "jdbc:postgresql://localhost:5432/postgres"
-                                  }
-                                />
-                                <DbxButton variant="outline" size="sm" onClick={applyConnectionUrl}>
-                                  {t("database.parseConnectionUrl")}
-                                </DbxButton>
-                              </div>
-                            </label>
-                          )}
-                          <label style={s.databaseDialogField}>
-                            <span style={s.databaseDialogLabel}>{t("database.urlParams")}</span>
-                            <input
-                              style={s.databaseDialogInput}
-                              value={draftUrlParams}
-                              onChange={(event) => setDraftUrlParams(event.target.value)}
-                              placeholder="sslmode=require&connectTimeout=15"
-                            />
-                          </label>
-                          {selectedProfile.key === "redis" && (
-                            <>
-                              <div style={s.databaseDialogField}>
-                                <span style={s.databaseDialogLabel}>
-                                  {t("database.redisConnectionMode")}
-                                </span>
-                                <DbxButtonGroup
-                                  style={s.databaseTypeViewToggle}
-                                  aria-label={t("database.redisConnectionMode")}
-                                >
-                                  {(["standalone", "sentinel", "cluster"] as const).map((mode) => (
-                                    <DbxSegmentedButton
-                                      key={mode}
-                                      active={draftRedisConnectionMode === mode}
-                                      onClick={() => setDraftRedisConnectionMode(mode)}
-                                    >
-                                      {t(`database.redisMode.${mode}`)}
-                                    </DbxSegmentedButton>
-                                  ))}
-                                </DbxButtonGroup>
-                              </div>
-                              {draftRedisConnectionMode === "sentinel" && (
-                                <>
-                                  <label style={s.databaseDialogField}>
-                                    <span style={s.databaseDialogLabel}>
-                                      {t("database.redisSentinelNodes")}
-                                    </span>
-                                    <textarea
-                                      style={{
-                                        ...s.databaseDialogInput,
-                                        minHeight: 64,
-                                        resize: "vertical",
-                                      }}
-                                      value={draftRedisSentinelNodes}
-                                      onChange={(event) =>
-                                        setDraftRedisSentinelNodes(event.target.value)
-                                      }
-                                      placeholder={"sentinel-1:26379\nsentinel-2:26379"}
-                                    />
-                                  </label>
-                                  <label style={s.databaseDialogField}>
-                                    <span style={s.databaseDialogLabel}>
-                                      {t("database.redisSentinelMaster")}
-                                    </span>
-                                    <input
-                                      style={s.databaseDialogInput}
-                                      value={draftRedisSentinelMaster}
-                                      onChange={(event) =>
-                                        setDraftRedisSentinelMaster(event.target.value)
-                                      }
-                                      placeholder="mymaster"
-                                    />
-                                  </label>
-                                  <label style={s.databaseDialogField}>
-                                    <span style={s.databaseDialogLabel}>
-                                      {t("database.redisSentinelUser")}
-                                    </span>
-                                    <input
-                                      style={s.databaseDialogInput}
-                                      value={draftRedisSentinelUsername}
-                                      onChange={(event) =>
-                                        setDraftRedisSentinelUsername(event.target.value)
-                                      }
-                                    />
-                                  </label>
-                                  <label style={s.databaseDialogField}>
-                                    <span style={s.databaseDialogLabel}>
-                                      {t("database.redisSentinelPassword")}
-                                    </span>
-                                    <PasswordInput
-                                      style={s.databaseDialogInput}
-                                      value={draftRedisSentinelPassword}
-                                      onChange={(event) =>
-                                        setDraftRedisSentinelPassword(event.target.value)
-                                      }
-                                      show={showSentinelPassword}
-                                      onToggle={() => setShowSentinelPassword((v) => !v)}
-                                    />
-                                  </label>
-                                  <label style={s.databaseSwitchRow}>
-                                    <input
-                                      type="checkbox"
-                                      checked={draftRedisSentinelTls}
-                                      onChange={(event) =>
-                                        setDraftRedisSentinelTls(event.target.checked)
-                                      }
-                                    />
-                                    <span>{t("database.redisSentinelTls")}</span>
-                                  </label>
-                                </>
-                              )}
-                              {draftRedisConnectionMode === "cluster" && (
-                                <label style={s.databaseDialogField}>
-                                  <span style={s.databaseDialogLabel}>
-                                    {t("database.redisClusterNodes")}
-                                  </span>
-                                  <textarea
-                                    style={{
-                                      ...s.databaseDialogInput,
-                                      minHeight: 64,
-                                      resize: "vertical",
-                                    }}
-                                    value={draftRedisClusterNodes}
-                                    onChange={(event) =>
-                                      setDraftRedisClusterNodes(event.target.value)
-                                    }
-                                    placeholder={"redis-1:6379\nredis-2:6379"}
-                                  />
-                                </label>
-                              )}
-                              <label style={s.databaseDialogField}>
-                                <span style={s.databaseDialogLabel}>
-                                  {t("database.redisKeySeparator")}
-                                </span>
-                                <input
-                                  style={s.databaseDialogInput}
-                                  value={draftRedisKeySeparator}
-                                  onChange={(event) =>
-                                    setDraftRedisKeySeparator(event.target.value)
-                                  }
-                                  placeholder=":"
-                                />
-                              </label>
-                            </>
-                          )}
-                        </>
-                      )}
-                    </div>
-                  ) : configTab === "tls" ? (
-                    <div style={s.databaseDialogPanel}>
-                      <label style={s.databaseSwitchRow}>
-                        <input
-                          type="checkbox"
-                          checked={tlsEnabled}
-                          onChange={(event) => setTlsEnabled(event.target.checked)}
-                        />
-                        <span>{t("database.enableTls")}</span>
-                      </label>
-                      {selectedProfile.key === "postgres" && (
-                        <label style={s.databaseDialogField}>
-                          <span style={s.databaseDialogLabel}>
-                            {t("connection.postgresSslMode")}
-                          </span>
-                          <select
-                            style={{ ...s.databaseDialogInput, height: 32 }}
-                            value={draftTlsMode || "prefer"}
-                            onChange={(event) => setDraftTlsMode(event.target.value)}
-                          >
-                            <option value="disable">
-                              {t("connection.postgresSslModeDisable")}
-                            </option>
-                            <option value="prefer">{t("connection.postgresSslModePrefer")}</option>
-                            <option value="require">
-                              {t("connection.postgresSslModeRequire")}
-                            </option>
-                            <option value="verify-ca">
-                              {t("connection.postgresSslModeVerifyCa")}
-                            </option>
-                            <option value="verify-full">
-                              {t("connection.postgresSslModeVerifyFull")}
-                            </option>
-                          </select>
-                        </label>
-                      )}
-                      {selectedProfile.key === "mysql" && (
-                        <label style={s.databaseDialogField}>
-                          <span style={s.databaseDialogLabel}>{t("connection.mysqlTlsMode")}</span>
-                          <select
-                            style={{ ...s.databaseDialogInput, height: 32 }}
-                            value={draftTlsMode || "preferred"}
-                            onChange={(event) => setDraftTlsMode(event.target.value)}
-                          >
-                            <option value="preferred">
-                              {t("connection.mysqlTlsModePreferred")}
-                            </option>
-                            <option value="disabled">{t("connection.mysqlTlsModeDisabled")}</option>
-                            <option value="required">{t("connection.mysqlTlsModeRequired")}</option>
-                            <option value="verify_ca">
-                              {t("connection.mysqlTlsModeVerifyCa")}
-                            </option>
-                            <option value="verify_identity">
-                              {t("connection.mysqlTlsModeVerifyIdentity")}
-                            </option>
-                          </select>
-                        </label>
-                      )}
-                      <label style={s.databaseDialogField}>
-                        <span style={s.databaseDialogLabel}>{t("database.caCertPath")}</span>
-                        <div style={s.databaseInputButtonRow}>
-                          <input
-                            style={s.databaseDialogInput}
-                            value={draftCaCertPath}
-                            onChange={(event) => setDraftCaCertPath(event.target.value)}
-                          />
-                          <DbxButton
-                            variant="ghost"
-                            size="icon-sm"
-                            icon={FilePlus}
-                            aria-label={t("database.chooseCaCertPath")}
-                            title={t("database.chooseCaCertPath")}
-                            onClick={() => {
-                              void chooseTlsCertificatePath(setDraftCaCertPath);
-                            }}
-                          />
-                        </div>
-                      </label>
-                      <label style={s.databaseDialogField}>
-                        <span style={s.databaseDialogLabel}>{t("database.clientCertPath")}</span>
-                        <div style={s.databaseInputButtonRow}>
-                          <input
-                            style={s.databaseDialogInput}
-                            value={draftClientCertPath}
-                            onChange={(event) => setDraftClientCertPath(event.target.value)}
-                          />
-                          <DbxButton
-                            variant="ghost"
-                            size="icon-sm"
-                            icon={FilePlus}
-                            aria-label={t("database.chooseClientCertPath")}
-                            title={t("database.chooseClientCertPath")}
-                            onClick={() => {
-                              void chooseTlsCertificatePath(setDraftClientCertPath);
-                            }}
-                          />
-                        </div>
-                      </label>
-                      <label style={s.databaseDialogField}>
-                        <span style={s.databaseDialogLabel}>{t("database.clientKeyPath")}</span>
-                        <div style={s.databaseInputButtonRow}>
-                          <input
-                            style={s.databaseDialogInput}
-                            value={draftClientKeyPath}
-                            onChange={(event) => setDraftClientKeyPath(event.target.value)}
-                          />
-                          <DbxButton
-                            variant="ghost"
-                            size="icon-sm"
-                            icon={FilePlus}
-                            aria-label={t("database.chooseClientKeyPath")}
-                            title={t("database.chooseClientKeyPath")}
-                            onClick={() => {
-                              void chooseTlsCertificatePath(setDraftClientKeyPath);
-                            }}
-                          />
-                        </div>
-                      </label>
-                      <div style={s.databaseDialogHint}>{t("database.tlsHint")}</div>
-                    </div>
-                  ) : configTab === "transport" ? (
-                    <div style={s.databaseDialogPanel}>
-                      <label style={s.databaseSwitchRow}>
-                        <input
-                          type="checkbox"
-                          checked={transportEnabled}
-                          onChange={(event) => setTransportEnabled(event.target.checked)}
-                        />
-                        <span>{t("database.enableTransport")}</span>
-                      </label>
-                      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                        <DbxButton
-                          variant="outline"
-                          size="sm"
-                          icon={Plus}
-                          onClick={() => addTransportLayer("ssh")}
-                        >
-                          {t("database.addSshHop")}
-                        </DbxButton>
-                        <DbxButton
-                          variant="outline"
-                          size="sm"
-                          icon={Plus}
-                          onClick={() => addTransportLayer("proxy")}
-                        >
-                          {t("database.addProxyLayer")}
-                        </DbxButton>
-                      </div>
-                      {draftTransportLayers.length > 0 && (
-                        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                          {draftTransportLayers.map((layer, index) => (
-                            <button
-                              key={layer.id}
-                              type="button"
-                              style={{
-                                ...s.databaseListButton,
-                                ...(selectedTransportLayer?.id === layer.id
-                                  ? s.databaseListButtonActive
-                                  : {}),
-                              }}
-                              onClick={() => setSelectedTransportLayerId(layer.id)}
-                            >
-                              <input
-                                type="checkbox"
-                                checked={layer.enabled}
-                                onClick={(event) => event.stopPropagation()}
-                                onChange={(event) =>
-                                  updateTransportLayer(layer.id, { enabled: event.target.checked })
-                                }
-                              />
-                              <span style={{ color: "var(--text-hint)", width: 18 }}>
-                                {index + 1}
-                              </span>
-                              <span
-                                style={{
-                                  flex: 1,
-                                  minWidth: 0,
-                                  overflow: "hidden",
-                                  textOverflow: "ellipsis",
-                                  whiteSpace: "nowrap",
-                                }}
-                              >
-                                {layer.name ||
-                                  layer.host ||
-                                  (layer.type === "ssh"
-                                    ? t("database.addSshHop")
-                                    : t("database.addProxyLayer"))}
-                              </span>
-                              <span
-                                style={{
-                                  color: "var(--text-hint)",
-                                  fontSize: 10,
-                                  textTransform: "uppercase",
-                                }}
-                              >
-                                {layer.type}
-                              </span>
-                              <DbxButton
-                                variant="ghost"
-                                size="icon-xs"
-                                icon={Copy}
-                                aria-label={t("database.copyTransportLayer")}
-                                onClick={(event) => {
-                                  event.stopPropagation();
-                                  copyTransportLayer(layer.id);
-                                }}
-                              />
-                              {index > 0 && (
-                                <DbxButton
-                                  variant="ghost"
-                                  size="icon-xs"
-                                  icon={ArrowUp}
-                                  aria-label={t("database.moveTransportLayerUp")}
-                                  onClick={(event) => {
-                                    event.stopPropagation();
-                                    moveTransportLayer(layer.id, -1);
-                                  }}
-                                />
-                              )}
-                              {index < draftTransportLayers.length - 1 && (
-                                <DbxButton
-                                  variant="ghost"
-                                  size="icon-xs"
-                                  icon={ArrowDown}
-                                  aria-label={t("database.moveTransportLayerDown")}
-                                  onClick={(event) => {
-                                    event.stopPropagation();
-                                    moveTransportLayer(layer.id, 1);
-                                  }}
-                                />
-                              )}
-                              <DbxButton
-                                variant="ghost"
-                                size="icon-xs"
-                                icon={Trash2}
-                                onClick={(event) => {
-                                  event.stopPropagation();
-                                  removeTransportLayer(layer.id);
-                                }}
-                              />
-                            </button>
-                          ))}
-                        </div>
-                      )}
-                      {selectedTransportLayer ? (
-                        <div style={s.databaseDialogFormGrid}>
-                          <label style={s.databaseDialogField}>
-                            <span style={s.databaseDialogLabel}>
-                              {t("database.transportLayerName")}
-                            </span>
-                            <input
-                              style={s.databaseDialogInput}
-                              value={selectedTransportLayer.name}
-                              onChange={(event) =>
-                                updateTransportLayer(selectedTransportLayer.id, {
-                                  name: event.target.value,
-                                })
-                              }
-                            />
-                          </label>
-                          <div style={s.databaseDialogField}>
-                            <span style={s.databaseDialogLabel}>
-                              {t("database.transportLayerType")}
-                            </span>
-                            <DbxButtonGroup
-                              style={s.databaseTypeViewToggle}
-                              aria-label={t("database.transportLayerType")}
-                            >
-                              {(["ssh", "proxy"] as const).map((type) => (
-                                <DbxSegmentedButton
-                                  key={type}
-                                  active={selectedTransportLayer.type === type}
-                                  onClick={() =>
-                                    updateTransportLayer(selectedTransportLayer.id, {
-                                      type,
-                                      port: type === "ssh" ? "22" : "1080",
-                                    })
-                                  }
-                                >
-                                  {type === "ssh" ? "SSH" : "Proxy"}
-                                </DbxSegmentedButton>
-                              ))}
-                            </DbxButtonGroup>
-                          </div>
-                          <label style={s.databaseDialogField}>
-                            <span style={s.databaseDialogLabel}>
-                              {selectedTransportLayer.type === "ssh"
-                                ? t("database.sshHost")
-                                : t("database.proxyHost")}
-                            </span>
-                            <input
-                              style={s.databaseDialogInput}
-                              value={selectedTransportLayer.host}
-                              onChange={(event) =>
-                                updateTransportLayer(selectedTransportLayer.id, {
-                                  host: event.target.value,
-                                })
-                              }
-                              placeholder={
-                                selectedTransportLayer.type === "ssh"
-                                  ? "ssh.example.com"
-                                  : "proxy.example.com"
-                              }
-                            />
-                          </label>
-                          <label style={s.databaseDialogField}>
-                            <span style={s.databaseDialogLabel}>{t("database.port")}</span>
-                            <input
-                              style={s.databaseDialogInput}
-                              value={selectedTransportLayer.port}
-                              onChange={(event) =>
-                                updateTransportLayer(selectedTransportLayer.id, {
-                                  port: event.target.value,
-                                })
-                              }
-                            />
-                          </label>
-                          {selectedTransportLayer.type === "ssh" ? (
-                            <>
-                              <label style={s.databaseDialogField}>
-                                <span style={s.databaseDialogLabel}>{t("database.sshUser")}</span>
-                                <input
-                                  style={s.databaseDialogInput}
-                                  value={selectedTransportLayer.user}
-                                  onChange={(event) =>
-                                    updateTransportLayer(selectedTransportLayer.id, {
-                                      user: event.target.value,
-                                    })
-                                  }
-                                />
-                              </label>
-                              <label style={s.databaseDialogField}>
-                                <span style={s.databaseDialogLabel}>
-                                  {t("database.sshPassword")}
-                                </span>
-                                <PasswordInput
-                                  style={s.databaseDialogInput}
-                                  value={selectedTransportLayer.password}
-                                  onChange={(event) =>
-                                    updateTransportLayer(selectedTransportLayer.id, {
-                                      password: event.target.value,
-                                    })
-                                  }
-                                  show={showTransportPassword}
-                                  onToggle={() => setShowTransportPassword((v) => !v)}
-                                />
-                              </label>
-                              <label style={s.databaseDialogField}>
-                                <span style={s.databaseDialogLabel}>
-                                  {t("database.sshKeyPath")}
-                                </span>
-                                <input
-                                  style={s.databaseDialogInput}
-                                  value={selectedTransportLayer.keyPath}
-                                  onChange={(event) =>
-                                    updateTransportLayer(selectedTransportLayer.id, {
-                                      keyPath: event.target.value,
-                                    })
-                                  }
-                                />
-                              </label>
-                              <label style={s.databaseDialogField}>
-                                <span style={s.databaseDialogLabel}>
-                                  {t("database.sshKeyPassphrase")}
-                                </span>
-                                <PasswordInput
-                                  style={s.databaseDialogInput}
-                                  value={selectedTransportLayer.keyPassphrase}
-                                  onChange={(event) =>
-                                    updateTransportLayer(selectedTransportLayer.id, {
-                                      keyPassphrase: event.target.value,
-                                    })
-                                  }
-                                  show={showTransportPassphrase}
-                                  onToggle={() => setShowTransportPassphrase((v) => !v)}
-                                />
-                              </label>
-                              <label style={s.databaseDialogField}>
-                                <span style={s.databaseDialogLabel}>
-                                  {t("database.connectTimeoutSecs")}
-                                </span>
-                                <input
-                                  style={s.databaseDialogInput}
-                                  value={selectedTransportLayer.connectTimeoutSecs}
-                                  onChange={(event) =>
-                                    updateTransportLayer(selectedTransportLayer.id, {
-                                      connectTimeoutSecs: event.target.value,
-                                    })
-                                  }
-                                />
-                              </label>
-                              <label style={s.databaseSwitchRow}>
-                                <input
-                                  type="checkbox"
-                                  checked={selectedTransportLayer.useSshAgent}
-                                  onChange={(event) =>
-                                    updateTransportLayer(selectedTransportLayer.id, {
-                                      useSshAgent: event.target.checked,
-                                    })
-                                  }
-                                />
-                                <span>{t("database.sshUseAgent")}</span>
-                              </label>
-                              <label style={s.databaseSwitchRow}>
-                                <input
-                                  type="checkbox"
-                                  checked={selectedTransportLayer.exposeLan}
-                                  onChange={(event) =>
-                                    updateTransportLayer(selectedTransportLayer.id, {
-                                      exposeLan: event.target.checked,
-                                    })
-                                  }
-                                />
-                                <span>{t("database.sshExposeLan")}</span>
-                              </label>
-                            </>
-                          ) : (
-                            <>
-                              <div style={s.databaseDialogField}>
-                                <span style={s.databaseDialogLabel}>{t("database.proxyType")}</span>
-                                <DbxButtonGroup
-                                  style={s.databaseTypeViewToggle}
-                                  aria-label={t("database.proxyType")}
-                                >
-                                  {(["socks5", "http"] as const).map((proxyType) => (
-                                    <DbxSegmentedButton
-                                      key={proxyType}
-                                      active={selectedTransportLayer.proxyType === proxyType}
-                                      onClick={() =>
-                                        updateTransportLayer(selectedTransportLayer.id, {
-                                          proxyType,
-                                        })
-                                      }
-                                    >
-                                      {proxyType.toUpperCase()}
-                                    </DbxSegmentedButton>
-                                  ))}
-                                </DbxButtonGroup>
-                              </div>
-                              <label style={s.databaseDialogField}>
-                                <span style={s.databaseDialogLabel}>
-                                  {t("database.proxyUsername")}
-                                </span>
-                                <input
-                                  style={s.databaseDialogInput}
-                                  value={selectedTransportLayer.username}
-                                  onChange={(event) =>
-                                    updateTransportLayer(selectedTransportLayer.id, {
-                                      username: event.target.value,
-                                    })
-                                  }
-                                />
-                              </label>
-                              <label style={s.databaseDialogField}>
-                                <span style={s.databaseDialogLabel}>
-                                  {t("database.proxyPassword")}
-                                </span>
-                                <PasswordInput
-                                  style={s.databaseDialogInput}
-                                  value={selectedTransportLayer.password}
-                                  onChange={(event) =>
-                                    updateTransportLayer(selectedTransportLayer.id, {
-                                      password: event.target.value,
-                                    })
-                                  }
-                                  show={showTransportPassword}
-                                  onToggle={() => setShowTransportPassword((v) => !v)}
-                                />
-                              </label>
-                            </>
-                          )}
-                        </div>
-                      ) : (
-                        <div style={s.databaseDialogHint}>{t("database.transportHint")}</div>
-                      )}
-                    </div>
-                  ) : (
-                    <div style={s.databaseDialogPanel}>
-                      <label style={s.databaseSwitchRow}>
-                        <input
-                          type="checkbox"
-                          checked={draftReadOnly}
-                          onChange={(event) => setDraftReadOnly(event.target.checked)}
-                        />
-                        <span>{t("database.openReadOnly")}</span>
-                      </label>
-                      <label style={s.databaseDialogField}>
-                        <span style={s.databaseDialogLabel}>
-                          {t("database.connectTimeoutSecs")}
-                        </span>
-                        <input
-                          style={s.databaseDialogInput}
-                          type="number"
-                          min={1}
-                          max={300}
-                          value={draftConnectTimeoutSecs}
-                          onChange={(event) => setDraftConnectTimeoutSecs(event.target.value)}
-                        />
-                      </label>
-                      <label style={s.databaseDialogField}>
-                        <span style={s.databaseDialogLabel}>{t("database.queryTimeoutSecs")}</span>
-                        <input
-                          style={s.databaseDialogInput}
-                          type="number"
-                          min={0}
-                          max={300}
-                          value={draftQueryTimeoutSecs}
-                          onChange={(event) => setDraftQueryTimeoutSecs(event.target.value)}
-                        />
-                      </label>
-                      <label style={s.databaseDialogField}>
-                        <span style={s.databaseDialogLabel}>{t("database.idleTimeoutSecs")}</span>
-                        <input
-                          style={s.databaseDialogInput}
-                          type="number"
-                          min={0}
-                          max={600}
-                          value={draftIdleTimeoutSecs}
-                          onChange={(event) => setDraftIdleTimeoutSecs(event.target.value)}
-                        />
-                      </label>
-                      <label style={s.databaseSwitchRow}>
-                        <input
-                          type="checkbox"
-                          checked={Number.parseInt(draftKeepaliveIntervalSecs, 10) > 0}
-                          onChange={(event) =>
-                            setDraftKeepaliveIntervalSecs(event.target.checked ? "30" : "0")
-                          }
-                        />
-                        <span>{t("database.enableKeepalive")}</span>
-                      </label>
-                      <label style={s.databaseDialogField}>
-                        <span style={s.databaseDialogLabel}>
-                          {t("database.keepaliveIntervalSecs")}
-                        </span>
-                        <input
-                          style={s.databaseDialogInput}
-                          type="number"
-                          min={1}
-                          max={3600}
-                          value={draftKeepaliveIntervalSecs}
-                          disabled={Number.parseInt(draftKeepaliveIntervalSecs, 10) <= 0}
-                          onChange={(event) => setDraftKeepaliveIntervalSecs(event.target.value)}
-                        />
-                      </label>
-                      <div style={s.databaseDialogHint}>{t("database.advancedHint")}</div>
-                    </div>
-                  )}
-                </>
-              )}
-            </div>
-            <div style={s.databaseDialogFooter}>
-              {connectionTestResult && (
-                <span
-                  style={{
-                    fontSize: 12,
-                    color: connectionTestResult.success ? "var(--success)" : "var(--danger)",
-                    flex: 1,
-                    minWidth: 0,
-                    overflow: "hidden",
-                    textOverflow: "ellipsis",
-                    whiteSpace: "nowrap",
-                  }}
-                >
-                  {connectionTestResult.message}
-                  <DbxButton
-                    variant="ghost"
-                    size="icon-xs"
-                    icon={Copy}
-                    aria-label={t("database.copyTestResult")}
-                    onClick={() => {
-                      void navigator.clipboard.writeText(connectionTestResult.message);
-                    }}
-                  />
-                </span>
-              )}
-              <DbxButton variant="outline" size="sm" onClick={closeConnectionDialog}>
-                {t("common.cancel")}
-              </DbxButton>
-              {wizardStep === "config" && selectedProfile.key !== "sqlite" && (
-                <DbxButton
-                  variant="outline"
-                  size="sm"
-                  icon={Plug}
-                  onClick={testDbxConnectionDraft}
-                  disabled={
-                    loading ||
-                    (selectedProfile.localFile ? !draftFilePath.trim() : !draftHost.trim())
-                  }
-                >
-                  {t("database.testConnection")}
-                </DbxButton>
-              )}
-              <DbxButton
-                variant="default"
-                size="sm"
-                icon={wizardStep === "type" ? ChevronRight : Plus}
-                type="submit"
-                disabled={
-                  loading ||
-                  (wizardStep === "config" &&
-                    (selectedProfile.localFile ? !draftFilePath.trim() : !draftHost.trim()))
-                }
-              >
-                {wizardStep === "type"
-                  ? t("database.next")
-                  : editingDbxConnectionId
-                    ? t("common.save")
-                    : t("database.addConnection")}
-              </DbxButton>
-            </div>
-          </form>
-        </div>
-      )}
+      <ConnectionDialog
+        open={connectionDialogOpen}
+        editingConnection={editingDbxConnection}
+        initialConnectionGroup={newConnectionGroup}
+        projectRoot={projectRoot}
+        onAddLocalConnection={(endpoint) => addConnection(endpoint)}
+        onSaved={handleConnectionSaved}
+        onClose={closeConnectionDialog}
+      />
       {createDatabaseConnection && (
         <div
           style={s.databaseDialogOverlay}
