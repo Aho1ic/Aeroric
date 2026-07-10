@@ -1,9 +1,7 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import type { DragEvent, KeyboardEvent, MouseEvent } from "react";
 import {
   Braces,
-  ChevronDown,
-  ChevronRight,
   Crosshair,
   Database,
   Eye,
@@ -25,7 +23,6 @@ import type {
   AeroricDbConnectionConfig,
   DbConnectionConfig,
   DbxColumnInfo,
-  TableChildObjectType,
   DbObject,
   DbxDatabaseInfo,
   DbxObjectInfo,
@@ -36,15 +33,44 @@ import { useI18n } from "../../i18n";
 import s from "../../styles";
 import { supportsDbxUserAdmin } from "./DatabaseUserAdminPanel";
 import { DbxButton } from "./DbxButton";
+import { ConnectionNameBadge, ExpansionGlyph } from "./DatabaseTreePrimitives";
+import { useDatabaseSidebarTreeDerived } from "./useDatabaseSidebarTreeDerived";
+import {
+  canDragDbxObjectReference,
+  dbxChildObjectSearchText,
+  dbxColumnNodeKey,
+  dbxConnectionGroupNodeKey,
+  dbxConnectionNodeKey,
+  dbxDatabaseNodeKey,
+  dbxObjectDisplayName,
+  dbxObjectGroupNodeKey,
+  dbxObjectKey,
+  dbxObjectLabel,
+  dbxObjectNodeKey,
+  dbxSchemaNodeKey,
+  dbxTableChildObjectNodeKey,
+  dbxTableChildObjectType,
+  dbxUserAdminNodeKey,
+  getDefaultDatabase,
+  groupDbxObjects,
+  legacyConnectionNodeKey,
+  legacyObjectNodeKey,
+  matchesSearch,
+  mongoCollectionNodeKey,
+  mongoDatabaseNodeKey,
+  mongoDocumentId,
+  mongoDocumentLoadMoreNodeKey,
+  mongoDocumentNodeKey,
+  mongoDocumentPreview,
+  normalizeDbxObjectType,
+  orderPinnedFirst,
+  redisDatabaseNodeKey,
+  redisKeyNodeKey,
+  type DbxObjectGroupKey,
+  type RedisSidebarScanState,
+  type SearchScope,
+} from "./databaseSidebarTreeState";
 
-type SearchScope = "all" | "connections" | "databases" | "objects";
-type DbxObjectGroupKey = "tables" | "views" | "procedures" | "functions" | "sequences" | "packages";
-type RedisSidebarScanState = { cursor: number; totalKeys: number };
-
-const databaseObjectNameCollator = new Intl.Collator(undefined, {
-  numeric: true,
-  sensitivity: "base",
-});
 const EMPTY_PINNED_TREE_NODE_IDS = new Set<string>();
 
 interface DatabaseSidebarTreeProps {
@@ -218,309 +244,6 @@ interface DatabaseSidebarTreeProps {
   ) => void;
 }
 
-const CONNECTION_BADGE_COLORS = [
-  "#2563eb",
-  "#0f766e",
-  "#7c3aed",
-  "#ca8a04",
-  "#dc2626",
-  "#0284c7",
-  "#16a34a",
-  "#c2410c",
-] as const;
-
-function stableNameHash(value: string) {
-  let hash = 0;
-  for (const char of value) hash = (hash * 31 + char.charCodeAt(0)) >>> 0;
-  return hash;
-}
-
-function connectionConfigColor(connection: DbConnectionConfig | AeroricDbConnectionConfig) {
-  const directColor = (connection as { color?: unknown }).color;
-  if (typeof directColor === "string" && directColor.trim()) return directColor.trim();
-  const dbx = (connection as AeroricDbConnectionConfig).dbx;
-  if (dbx && typeof dbx === "object") {
-    const color = (dbx as { color?: unknown }).color;
-    if (typeof color === "string" && color.trim()) return color.trim();
-  }
-  return null;
-}
-
-function connectionBadgeColor(connection: DbConnectionConfig | AeroricDbConnectionConfig) {
-  return (
-    connectionConfigColor(connection) ??
-    CONNECTION_BADGE_COLORS[stableNameHash(connection.name) % CONNECTION_BADGE_COLORS.length]
-  );
-}
-
-function connectionBadgeText(name: string) {
-  const trimmed = name.trim();
-  if (!trimmed) return "DB";
-  if (/^(localhost|127(?:\.\d{1,3}){3}|::1|\d{1,3}(?:\.\d{1,3}){3})$/i.test(trimmed)) return "IP";
-
-  const hanText = Array.from(trimmed.match(/\p{Script=Han}/gu)?.join("") ?? "")
-    .slice(0, 2)
-    .join("");
-  if (hanText) return hanText;
-
-  const words = trimmed.match(/[A-Za-z0-9]+/g) ?? [];
-  if (words.length >= 2)
-    return words
-      .slice(0, 2)
-      .map((word) => word[0])
-      .join("")
-      .toUpperCase();
-  if (words.length === 1) return words[0].slice(0, 2).toUpperCase();
-  return Array.from(trimmed).slice(0, 2).join("").toUpperCase();
-}
-
-function ConnectionNameBadge({
-  connection,
-  size = 22,
-}: {
-  connection: DbConnectionConfig | AeroricDbConnectionConfig;
-  size?: number;
-}) {
-  const text = connectionBadgeText(connection.name);
-  const color = connectionBadgeColor(connection);
-  return (
-    <span
-      aria-hidden="true"
-      style={{
-        ...s.databaseConnectionNameBadge,
-        width: size,
-        height: size,
-        background: `${color}22`,
-        border: `1px solid ${color}77`,
-        color,
-        fontSize: Math.max(9, size * (text.length > 2 ? 0.34 : 0.42)),
-      }}
-    >
-      {text}
-    </span>
-  );
-}
-
-function dbxObjectLabel(object: DbxObjectInfo) {
-  return object.schema ? `${object.schema}.${object.name}` : object.name;
-}
-
-function dbxObjectDisplayName(object: DbxObjectInfo) {
-  return object.name;
-}
-
-function dbxObjectKey(object: DbxObjectInfo) {
-  return object.schema ? `${object.schema}.${object.name}` : object.name;
-}
-
-function legacyConnectionNodeKey(connection: DbConnectionConfig) {
-  return `legacy-connection:${connection.id}`;
-}
-
-function legacyObjectNodeKey(object: DbObject) {
-  return `legacy-object:${object.objectType}:${object.name}`;
-}
-
-function dbxConnectionGroupNodeKey(groupName: string) {
-  return `dbx-group:${groupName}`;
-}
-
-function dbxUserAdminNodeKey(connectionId: string) {
-  return `dbx-user-admin:${connectionId}`;
-}
-
-function dbxConnectionNodeKey(connection: AeroricDbConnectionConfig) {
-  return `dbx-connection:${connection.id}`;
-}
-
-function dbxDatabaseNodeKey(databaseName: string) {
-  return `dbx-database:${databaseName}`;
-}
-
-function dbxSchemaNodeKey(databaseName: string, schemaName: string) {
-  return `dbx-schema:${databaseName}:${schemaName}`;
-}
-
-function dbxObjectGroupNodeKey(scopeKey: string, groupKey: DbxObjectGroupKey) {
-  return `dbx-object-group:${scopeKey}:${groupKey}`;
-}
-
-function dbxObjectNodeKey(object: DbxObjectInfo) {
-  return `dbx-object:${normalizeDbxObjectType(object.object_type)}:${object.schema ?? ""}:${object.name}`;
-}
-
-function dbxColumnNodeKey(object: DbxObjectInfo, column: DbxColumnInfo) {
-  return `dbx-column:${dbxObjectKey(object)}:${column.name}`;
-}
-
-function dbxTableChildObjectNodeKey(object: DbxObjectInfo, childObject: DbxObjectInfo) {
-  return `dbx-table-child:${dbxObjectKey(object)}:${normalizeDbxObjectType(childObject.object_type)}:${childObject.name}`;
-}
-
-function redisDatabaseNodeKey(connectionId: string, database: number) {
-  return `redis-database:${connectionId}:${database}`;
-}
-
-function redisKeyNodeKey(connectionId: string, database: number, keyRaw: string) {
-  return `redis-key:${connectionId}:${database}:${keyRaw}`;
-}
-
-function mongoDatabaseNodeKey(connectionId: string, database: string) {
-  return `mongo-database:${connectionId}:${database}`;
-}
-
-function mongoCollectionNodeKey(connectionId: string, database: string, collection: string) {
-  return `mongo-collection:${connectionId}:${database}:${collection}`;
-}
-
-function mongoDocumentId(document: unknown, fallback: number) {
-  if (document && typeof document === "object" && "_id" in document)
-    return String((document as { _id: unknown })._id);
-  return `#${fallback + 1}`;
-}
-
-function mongoDocumentNodeKey(
-  connectionId: string,
-  database: string,
-  collection: string,
-  document: unknown,
-  index: number,
-) {
-  return `mongo-document:${connectionId}:${database}:${collection}:${mongoDocumentId(document, index)}`;
-}
-
-function mongoDocumentLoadMoreNodeKey(connectionId: string, database: string, collection: string) {
-  return `mongo-document-load-more:${connectionId}:${database}:${collection}`;
-}
-
-function mongoDocumentPreview(document: unknown, index: number) {
-  if (!document || typeof document !== "object") return String(document ?? `Document ${index + 1}`);
-  const record = document as Record<string, unknown>;
-  const id = mongoDocumentId(document, index);
-  const previewFields = Object.entries(record)
-    .filter(([key]) => key !== "_id")
-    .slice(0, 2)
-    .map(
-      ([key, value]) =>
-        `${key}: ${typeof value === "object" ? JSON.stringify(value) : String(value)}`,
-    );
-  return previewFields.length > 0 ? `${id} ${previewFields.join(", ")}` : id;
-}
-
-function normalizeDbxObjectType(objectType: string) {
-  return objectType.toUpperCase().replace(/[\s-]+/g, "_");
-}
-
-function dbxTableChildObjectType(
-  object: DbxObjectInfo,
-): Exclude<TableChildObjectType, "COLUMN"> | null {
-  const objectType = normalizeDbxObjectType(object.object_type);
-  if (objectType.includes("FOREIGN_KEY")) return "FOREIGN_KEY";
-  if (objectType.includes("TRIGGER")) return "TRIGGER";
-  if (objectType.includes("INDEX")) return "INDEX";
-  return null;
-}
-
-function isDbxTableChildObject(object: DbxObjectInfo) {
-  return Boolean(dbxTableChildObjectType(object));
-}
-
-function sameDatabaseName(left: string | null | undefined, right: string | null | undefined) {
-  return (left ?? "").trim().toLowerCase() === (right ?? "").trim().toLowerCase();
-}
-
-function dbxChildObjectBelongsToTable(childObject: DbxObjectInfo, tableObject: DbxObjectInfo) {
-  if (!childObject.parent_name || !sameDatabaseName(childObject.parent_name, tableObject.name))
-    return false;
-  if (!tableObject.schema) return true;
-  return (
-    !childObject.parent_schema || sameDatabaseName(childObject.parent_schema, tableObject.schema)
-  );
-}
-
-function dbxChildObjectSearchText(childObject: DbxObjectInfo, parentObject: DbxObjectInfo) {
-  return `${normalizeDbxObjectType(childObject.object_type)} ${dbxObjectLabel(parentObject)} ${childObject.name}`;
-}
-
-function canDragDbxObjectReference(object: DbxObjectInfo) {
-  const objectType = normalizeDbxObjectType(object.object_type);
-  return objectType === "TABLE" || objectType === "VIEW";
-}
-
-const DBX_OBJECT_GROUPS: Array<{
-  key: DbxObjectGroupKey;
-  labelKey: string;
-  objectTypes: string[];
-}> = [
-  { key: "tables", labelKey: "database.tables", objectTypes: ["TABLE"] },
-  { key: "views", labelKey: "database.views", objectTypes: ["VIEW"] },
-  { key: "procedures", labelKey: "database.procedures", objectTypes: ["PROCEDURE"] },
-  { key: "functions", labelKey: "database.functions", objectTypes: ["FUNCTION"] },
-  { key: "sequences", labelKey: "database.sequences", objectTypes: ["SEQUENCE"] },
-  { key: "packages", labelKey: "database.packages", objectTypes: ["PACKAGE", "PACKAGE_BODY"] },
-];
-
-function groupDbxObjects(objects: DbxObjectInfo[]) {
-  const seen = new Set<string>();
-  const uniqueObjects = objects.filter((object) => {
-    const objectType = normalizeDbxObjectType(object.object_type);
-    const key = `${objectType}\0${(object.schema ?? "").toLowerCase()}\0${object.name.toLowerCase()}`;
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
-
-  return DBX_OBJECT_GROUPS.map((group) => {
-    const supportedTypes = new Set(group.objectTypes);
-    return {
-      ...group,
-      objects: uniqueObjects
-        .filter((object) => supportedTypes.has(normalizeDbxObjectType(object.object_type)))
-        .sort((left, right) =>
-          databaseObjectNameCollator.compare(dbxObjectLabel(left), dbxObjectLabel(right)),
-        ),
-    };
-  }).filter((group) => group.objects.length > 0);
-}
-
-function getDefaultDatabase(connection: AeroricDbConnectionConfig): string | null {
-  const config = connection.dbx ?? connection;
-  const value = (config as { database?: unknown }).database;
-  return typeof value === "string" && value.trim() ? value.trim() : null;
-}
-
-function matchesSearch(value: string, query: string) {
-  return !query || value.toLowerCase().includes(query);
-}
-
-function scopeAllows(scope: SearchScope, kind: Exclude<SearchScope, "all">) {
-  return scope === "all" || scope === kind;
-}
-
-function connectionGroupName(connection: AeroricDbConnectionConfig): string {
-  return connection.connectionGroup?.trim() ?? "";
-}
-
-function sortDbxConnections(left: AeroricDbConnectionConfig, right: AeroricDbConnectionConfig) {
-  if (Boolean(left.pinned) !== Boolean(right.pinned)) return left.pinned ? -1 : 1;
-  return databaseObjectNameCollator.compare(left.name, right.name);
-}
-
-function orderPinnedFirst<T>(items: T[], isPinned: (item: T) => boolean) {
-  const pinned: T[] = [];
-  const unpinned: T[] = [];
-  for (const item of items) {
-    if (isPinned(item)) pinned.push(item);
-    else unpinned.push(item);
-  }
-  return [...pinned, ...unpinned];
-}
-
-function ExpansionGlyph({ expanded }: { expanded: boolean }) {
-  const Icon = expanded ? ChevronDown : ChevronRight;
-  return <Icon aria-hidden="true" size={11} style={s.databaseTreeChevron} />;
-}
-
 export function DatabaseSidebarTree({
   connections,
   dbxConnections,
@@ -654,481 +377,51 @@ export function DatabaseSidebarTree({
     });
   }, [activeDbxObject]);
 
-  const dbxRootObjects = useMemo(
-    () => dbxObjects.filter((object) => !isDbxTableChildObject(object)),
-    [dbxObjects],
-  );
-  const dbxTableChildObjects = useMemo(
-    () => dbxObjects.filter(isDbxTableChildObject),
-    [dbxObjects],
-  );
-
-  const dbxTableChildObjectsFor = useCallback(
-    (object: DbxObjectInfo) =>
-      dbxTableChildObjects.filter((childObject) =>
-        dbxChildObjectBelongsToTable(childObject, object),
-      ),
-    [dbxTableChildObjects],
-  );
-
-  const dbxObjectsForSchema = useCallback(
-    (schema: string) => dbxRootObjects.filter((object) => (object.schema ?? "") === schema),
-    [dbxRootObjects],
-  );
-
-  const filteredLegacyConnections = useMemo(
-    () =>
-      connections.filter((connection) => {
-        const matchesConnection =
-          scopeAllows(searchScope, "connections") && matchesSearch(connection.name, searchQuery);
-        const matchesActiveObject =
-          connection.id === activeConnectionId &&
-          scopeAllows(searchScope, "objects") &&
-          legacyObjects.some((object) =>
-            matchesSearch(`${object.objectType} ${object.name}`, searchQuery),
-          );
-        return matchesConnection || matchesActiveObject;
-      }),
-    [activeConnectionId, connections, legacyObjects, searchQuery, searchScope],
-  );
-
-  const filteredDbxConnections = useMemo(
-    () =>
-      dbxConnections.filter((connection) => {
-        const matchesConnection =
-          scopeAllows(searchScope, "connections") &&
-          matchesSearch(`${connection.name} ${connection.dbType}`, searchQuery);
-        const matchesActiveDatabase =
-          connection.id === activeDbxConnectionId &&
-          scopeAllows(searchScope, "databases") &&
-          visibleDbxDatabases.some((database) => matchesSearch(database.name, searchQuery));
-        const matchesActiveObject =
-          connection.id === activeDbxConnectionId &&
-          scopeAllows(searchScope, "objects") &&
-          (connection.dbType === "redis"
-            ? (redisDatabasesByConnection[connection.id] ?? []).some(
-                (database) =>
-                  matchesSearch(`redis db${database.db} ${database.keys}`, searchQuery) ||
-                  (redisKeysByDatabase[`${connection.id}:${database.db}`] ?? []).some((key) =>
-                    matchesSearch(
-                      `redis key db${database.db} ${key.key_display} ${key.key_raw} ${key.key_type}`,
-                      searchQuery,
-                    ),
-                  ),
-              )
-            : connection.dbType === "mongodb"
-              ? (mongoDatabasesByConnection[connection.id] ?? []).some((database) => {
-                  const matchesDatabase = matchesSearch(
-                    `mongodb database ${database}`,
-                    searchQuery,
-                  );
-                  const matchesCollection = (
-                    mongoCollectionsByDatabase[`${connection.id}:${database}`] ?? []
-                  ).some(
-                    (collection) =>
-                      matchesSearch(`mongodb collection ${database} ${collection}`, searchQuery) ||
-                      (
-                        mongoDocumentsByCollection[`${connection.id}:${database}:${collection}`] ??
-                        []
-                      ).some((document, index) =>
-                        matchesSearch(
-                          `mongodb document ${database} ${collection} ${mongoDocumentPreview(document, index)}`,
-                          searchQuery,
-                        ),
-                      ),
-                  );
-                  return matchesDatabase || matchesCollection;
-                })
-              : (supportsDbxUserAdmin(connection.dbType) &&
-                  matchesSearch(`${t("database.userAdmin")} users privileges`, searchQuery)) ||
-                dbxSchemas.some((schema) => matchesSearch(`schema ${schema}`, searchQuery)) ||
-                dbxRootObjects.some((object) => {
-                  const matchesObject = matchesSearch(
-                    `${object.object_type} ${dbxObjectLabel(object)}`,
-                    searchQuery,
-                  );
-                  const matchesColumn = (dbxColumnsByTable[dbxObjectKey(object)] ?? []).some(
-                    (column) =>
-                      matchesSearch(
-                        `column ${dbxObjectLabel(object)} ${column.name} ${column.data_type}`,
-                        searchQuery,
-                      ),
-                  );
-                  const matchesChildObject = dbxTableChildObjectsFor(object).some((childObject) =>
-                    matchesSearch(dbxChildObjectSearchText(childObject, object), searchQuery),
-                  );
-                  return matchesObject || matchesColumn || matchesChildObject;
-                }));
-        return matchesConnection || matchesActiveDatabase || matchesActiveObject;
-      }),
-    [
-      activeDbxConnectionId,
-      dbxColumnsByTable,
-      dbxConnections,
-      dbxRootObjects,
-      dbxSchemas,
-      dbxTableChildObjectsFor,
-      mongoCollectionsByDatabase,
-      mongoDatabasesByConnection,
-      mongoDocumentsByCollection,
-      redisDatabasesByConnection,
-      redisKeysByDatabase,
-      searchQuery,
-      searchScope,
-      t,
-      visibleDbxDatabases,
-    ],
-  );
-
-  const filteredDbxConnectionGroups = useMemo(() => {
-    const groups = new Map<string, AeroricDbConnectionConfig[]>();
-    const ungrouped: AeroricDbConnectionConfig[] = [];
-    const extraGroupNames = Array.from(
-      new Set(extraDbxConnectionGroups.map((group) => group.trim()).filter(Boolean)),
-    );
-    for (const connection of filteredDbxConnections) {
-      const groupName = connectionGroupName(connection);
-      if (!groupName) {
-        ungrouped.push(connection);
-        continue;
-      }
-      groups.set(groupName, [...(groups.get(groupName) ?? []), connection]);
-    }
-    for (const groupName of extraGroupNames) {
-      if (searchQuery && !matchesSearch(groupName, searchQuery)) continue;
-      if (!scopeAllows(searchScope, "connections")) continue;
-      groups.set(groupName, groups.get(groupName) ?? []);
-    }
-    return [
-      ...Array.from(groups.entries())
-        .sort(([left], [right]) => databaseObjectNameCollator.compare(left, right))
-        .map(([groupName, items]) => ({
-          key: `group:${groupName}`,
-          groupName,
-          label: groupName,
-          connections: items.sort(sortDbxConnections),
-        })),
-      {
-        key: "group:ungrouped",
-        groupName: "",
-        label: "",
-        connections: ungrouped.sort(sortDbxConnections),
-      },
-    ].filter((group) => Boolean(group.groupName) || group.connections.length > 0);
-  }, [extraDbxConnectionGroups, filteredDbxConnections, searchQuery, searchScope]);
-
-  const filteredDatabases = useMemo(
-    () =>
-      orderPinnedFirst(
-        visibleDbxDatabases.filter((database) => {
-          const matchesDatabase =
-            scopeAllows(searchScope, "databases") && matchesSearch(database.name, searchQuery);
-          const matchesActiveObject =
-            database.name === activeDbxDatabase &&
-            scopeAllows(searchScope, "objects") &&
-            (dbxSchemas.some((schema) => matchesSearch(`schema ${schema}`, searchQuery)) ||
-              dbxRootObjects.some((object) => {
-                const matchesObject = matchesSearch(
-                  `${object.object_type} ${dbxObjectLabel(object)}`,
-                  searchQuery,
-                );
-                const matchesColumn = (dbxColumnsByTable[dbxObjectKey(object)] ?? []).some(
-                  (column) =>
-                    matchesSearch(
-                      `column ${dbxObjectLabel(object)} ${column.name} ${column.data_type}`,
-                      searchQuery,
-                    ),
-                );
-                const matchesChildObject = dbxTableChildObjectsFor(object).some((childObject) =>
-                  matchesSearch(dbxChildObjectSearchText(childObject, object), searchQuery),
-                );
-                return matchesObject || matchesColumn || matchesChildObject;
-              }));
-          return matchesDatabase || matchesActiveObject;
-        }),
-        (database) => pinnedTreeNodeIds.has(dbxDatabaseNodeKey(database.name)),
-      ),
-    [
-      activeDbxDatabase,
-      dbxColumnsByTable,
-      dbxRootObjects,
-      dbxSchemas,
-      dbxTableChildObjectsFor,
-      pinnedTreeNodeIds,
-      searchQuery,
-      searchScope,
-      visibleDbxDatabases,
-    ],
-  );
-
-  const filteredDbxSchemas = useMemo(
-    () =>
-      scopeAllows(searchScope, "objects")
-        ? orderPinnedFirst(
-            dbxSchemas.filter((schema) => {
-              const matchesSchema = matchesSearch(`schema ${schema}`, searchQuery);
-              const matchesObject = dbxObjectsForSchema(schema).some((object) => {
-                const matchesObjectName = matchesSearch(
-                  `${object.object_type} ${dbxObjectLabel(object)}`,
-                  searchQuery,
-                );
-                const matchesColumn = (dbxColumnsByTable[dbxObjectKey(object)] ?? []).some(
-                  (column) =>
-                    matchesSearch(
-                      `column ${dbxObjectLabel(object)} ${column.name} ${column.data_type}`,
-                      searchQuery,
-                    ),
-                );
-                const matchesChildObject = dbxTableChildObjectsFor(object).some((childObject) =>
-                  matchesSearch(dbxChildObjectSearchText(childObject, object), searchQuery),
-                );
-                return matchesObjectName || matchesColumn || matchesChildObject;
-              });
-              return matchesSchema || matchesObject;
-            }),
-            (schema) =>
-              Boolean(
-                activeDbxDatabase &&
-                pinnedTreeNodeIds.has(dbxSchemaNodeKey(activeDbxDatabase, schema)),
-              ),
-          )
-        : [],
-    [
-      activeDbxDatabase,
-      dbxColumnsByTable,
-      dbxObjectsForSchema,
-      dbxSchemas,
-      dbxTableChildObjectsFor,
-      pinnedTreeNodeIds,
-      searchQuery,
-      searchScope,
-    ],
-  );
-
-  const filteredLegacyObjects = useMemo(
-    () =>
-      scopeAllows(searchScope, "objects")
-        ? legacyObjects.filter((object) =>
-            matchesSearch(`${object.objectType} ${object.name}`, searchQuery),
-          )
-        : [],
-    [legacyObjects, searchQuery, searchScope],
-  );
-
-  const filteredDbxObjects = useMemo(
-    () =>
-      scopeAllows(searchScope, "objects")
-        ? dbxRootObjects.filter((object) => {
-            const matchesObject = matchesSearch(
-              `${object.object_type} ${dbxObjectLabel(object)}`,
-              searchQuery,
-            );
-            const matchesColumn = (dbxColumnsByTable[dbxObjectKey(object)] ?? []).some((column) =>
-              matchesSearch(
-                `column ${dbxObjectLabel(object)} ${column.name} ${column.data_type}`,
-                searchQuery,
-              ),
-            );
-            const matchesChildObject = dbxTableChildObjectsFor(object).some((childObject) =>
-              matchesSearch(dbxChildObjectSearchText(childObject, object), searchQuery),
-            );
-            return matchesObject || matchesColumn || matchesChildObject;
-          })
-        : [],
-    [dbxColumnsByTable, dbxRootObjects, dbxTableChildObjectsFor, searchQuery, searchScope],
-  );
-
-  const orderDbxObjectsForTree = useCallback(
-    (objects: DbxObjectInfo[]) =>
-      orderPinnedFirst(objects, (object) => pinnedTreeNodeIds.has(dbxObjectNodeKey(object))),
-    [pinnedTreeNodeIds],
-  );
-
-  const visibleDbxObjectNodeKeys = useCallback(
-    (objects: DbxObjectInfo[], scopeKey: string) => {
-      const keys: string[] = [];
-      for (const group of groupDbxObjects(objects)) {
-        const groupStateKey = `${scopeKey}:${group.key}`;
-        keys.push(dbxObjectGroupNodeKey(scopeKey, group.key));
-        const expanded = Boolean(searchQuery) || !collapsedObjectGroupKeys.has(groupStateKey);
-        if (!expanded) continue;
-        for (const object of orderDbxObjectsForTree(group.objects)) {
-          keys.push(dbxObjectNodeKey(object));
-          const objectColumns = dbxColumnsByTable[dbxObjectKey(object)] ?? [];
-          const objectChildObjects = dbxTableChildObjectsFor(object);
-          const visibleColumns = searchQuery
-            ? objectColumns.filter((column) =>
-                matchesSearch(
-                  `column ${dbxObjectLabel(object)} ${column.name} ${column.data_type}`,
-                  searchQuery,
-                ),
-              )
-            : objectColumns;
-          const visibleChildObjects = searchQuery
-            ? objectChildObjects.filter((childObject) =>
-                matchesSearch(dbxChildObjectSearchText(childObject, object), searchQuery),
-              )
-            : objectChildObjects;
-          const isActiveObject =
-            object.name === activeDbxObject?.name && object.schema === activeDbxObject?.schema;
-          const objectNodeKey = dbxObjectNodeKey(object);
-          const objectExpanded =
-            Boolean(searchQuery) ||
-            (!collapsedObjectNodeKeys.has(objectNodeKey) &&
-              (isActiveObject || expandedObjectNodeKeys.has(objectNodeKey)));
-          if (!objectExpanded) continue;
-          for (const column of visibleColumns) keys.push(dbxColumnNodeKey(object, column));
-          for (const childObject of visibleChildObjects)
-            keys.push(dbxTableChildObjectNodeKey(object, childObject));
-        }
-      }
-      return keys;
-    },
-    [
-      activeDbxObject,
-      collapsedObjectGroupKeys,
-      collapsedObjectNodeKeys,
-      dbxColumnsByTable,
-      dbxTableChildObjectsFor,
-      expandedObjectNodeKeys,
-      orderDbxObjectsForTree,
-      searchQuery,
-    ],
-  );
-
-  const visibleTreeNodeKeys = useMemo(() => {
-    const keys: string[] = [];
-    for (const connection of filteredLegacyConnections) {
-      keys.push(legacyConnectionNodeKey(connection));
-      const expanded = expandedConnectionIds.has(connection.id) || Boolean(searchQuery);
-      if (expanded && connection.id === activeConnectionId) {
-        for (const object of filteredLegacyObjects) keys.push(legacyObjectNodeKey(object));
-      }
-    }
-
-    for (const connectionGroup of filteredDbxConnectionGroups) {
-      const groupCollapsed =
-        Boolean(connectionGroup.groupName) &&
-        collapsedConnectionGroups.has(connectionGroup.groupName) &&
-        !searchQuery;
-      if (connectionGroup.groupName)
-        keys.push(dbxConnectionGroupNodeKey(connectionGroup.groupName));
-      if (groupCollapsed) continue;
-      for (const connection of connectionGroup.connections) {
-        keys.push(dbxConnectionNodeKey(connection));
-        const expanded = expandedConnectionIds.has(connection.id) || Boolean(searchQuery);
-        const isActive = connection.id === activeDbxConnectionId;
-        if (!expanded || !isActive || !activeDbxConnection) continue;
-        if (!dbxHasSqlObjectBrowser) {
-          if (connection.dbType === "redis") {
-            for (const database of redisDatabasesByConnection[connection.id] ?? []) {
-              keys.push(redisDatabaseNodeKey(connection.id, database.db));
-              const databaseExpanded =
-                expandedDatabaseNames.has(`redis:${connection.id}:${database.db}`) ||
-                Boolean(searchQuery);
-              if (!databaseExpanded) continue;
-              for (const key of redisKeysByDatabase[`${connection.id}:${database.db}`] ?? []) {
-                keys.push(redisKeyNodeKey(connection.id, database.db, key.key_raw));
-              }
-            }
-          } else if (connection.dbType === "mongodb") {
-            for (const database of mongoDatabasesByConnection[connection.id] ?? []) {
-              keys.push(mongoDatabaseNodeKey(connection.id, database));
-              const databaseExpanded = expandedDatabaseNames.has(database) || Boolean(searchQuery);
-              if (!databaseExpanded) continue;
-              for (const collection of mongoCollectionsByDatabase[`${connection.id}:${database}`] ??
-                []) {
-                keys.push(mongoCollectionNodeKey(connection.id, database, collection));
-                const collectionExpansionKey = `mongo:${connection.id}:${database}:${collection}`;
-                const collectionExpanded =
-                  expandedSchemaKeys.has(collectionExpansionKey) || Boolean(searchQuery);
-                if (!collectionExpanded) continue;
-                const collectionKey = `${connection.id}:${database}:${collection}`;
-                const loadedDocuments = mongoDocumentsByCollection[collectionKey] ?? [];
-                for (const [index, document] of loadedDocuments.entries()) {
-                  keys.push(
-                    mongoDocumentNodeKey(connection.id, database, collection, document, index),
-                  );
-                }
-                if (
-                  loadedDocuments.length < (mongoDocumentTotalsByCollection[collectionKey] ?? 0)
-                ) {
-                  keys.push(mongoDocumentLoadMoreNodeKey(connection.id, database, collection));
-                }
-              }
-            }
-          }
-          if (supportsDbxUserAdmin(connection.dbType))
-            keys.push(dbxUserAdminNodeKey(connection.id));
-          continue;
-        }
-        for (const database of filteredDatabases) {
-          keys.push(dbxDatabaseNodeKey(database.name));
-          const databaseExpanded = expandedDatabaseNames.has(database.name) || Boolean(searchQuery);
-          if (!databaseExpanded || database.name !== activeDbxDatabase) continue;
-          if (
-            dbxSchemas.length === 1 &&
-            filteredDbxSchemas.length === 1 &&
-            filteredDbxSchemas[0] === database.name
-          ) {
-            keys.push(
-              ...visibleDbxObjectNodeKeys(
-                filteredDbxObjects.filter((object) => (object.schema ?? "") === database.name),
-                database.name,
-              ),
-            );
-          } else if (dbxSchemas.length > 0) {
-            for (const schemaName of filteredDbxSchemas) {
-              keys.push(dbxSchemaNodeKey(database.name, schemaName));
-              const schemaKey = `${database.name}:${schemaName}`;
-              const schemaExpanded =
-                expandedSchemaKeys.has(schemaKey) ||
-                Boolean(searchQuery) ||
-                schemaName === activeDbxSchema ||
-                filteredDbxSchemas.length === 1;
-              if (!schemaExpanded) continue;
-              keys.push(
-                ...visibleDbxObjectNodeKeys(
-                  filteredDbxObjects.filter((object) => (object.schema ?? "") === schemaName),
-                  schemaKey,
-                ),
-              );
-            }
-          } else {
-            keys.push(...visibleDbxObjectNodeKeys(filteredDbxObjects, database.name));
-          }
-        }
-        if (supportsDbxUserAdmin(connection.dbType)) keys.push(dbxUserAdminNodeKey(connection.id));
-      }
-    }
-    return keys;
-  }, [
+  const {
+    dbxTableChildObjectsFor,
+    filteredLegacyConnections,
+    filteredDbxConnections,
+    filteredDbxConnectionGroups,
+    filteredDatabases,
+    filteredDbxSchemas,
+    filteredLegacyObjects,
+    filteredDbxObjects,
+    orderDbxObjectsForTree,
+    visibleTreeNodeKeys,
+  } = useDatabaseSidebarTreeDerived({
+    connections,
+    dbxConnections,
+    extraDbxConnectionGroups,
     activeConnectionId,
-    activeDbxConnection,
     activeDbxConnectionId,
+    activeDbxConnection,
     activeDbxDatabase,
     activeDbxSchema,
-    collapsedConnectionGroups,
+    activeDbxObject,
     dbxHasSqlObjectBrowser,
-    dbxSchemas.length,
+    visibleDbxDatabases,
+    dbxSchemas,
+    legacyObjects,
+    dbxObjects,
+    dbxColumnsByTable,
+    redisDatabasesByConnection,
+    redisKeysByDatabase,
+    mongoDatabasesByConnection,
+    mongoCollectionsByDatabase,
+    mongoDocumentsByCollection,
+    mongoDocumentTotalsByCollection,
+    pinnedTreeNodeIds,
+    searchQuery,
+    searchScope,
+    userAdminLabel: t("database.userAdmin"),
     expandedConnectionIds,
     expandedDatabaseNames,
     expandedSchemaKeys,
-    filteredDatabases,
-    filteredDbxConnectionGroups,
-    filteredDbxObjects,
-    filteredDbxSchemas,
-    filteredLegacyConnections,
-    filteredLegacyObjects,
-    mongoCollectionsByDatabase,
-    mongoDatabasesByConnection,
-    mongoDocumentsByCollection,
-    mongoDocumentTotalsByCollection,
-    redisDatabasesByConnection,
-    redisKeysByDatabase,
-    searchQuery,
-    visibleDbxObjectNodeKeys,
-  ]);
+    expandedObjectNodeKeys,
+    collapsedConnectionGroups,
+    collapsedObjectGroupKeys,
+    collapsedObjectNodeKeys,
+  });
 
   useEffect(() => {
     setSelectedTreeNodeKeys((current) => {

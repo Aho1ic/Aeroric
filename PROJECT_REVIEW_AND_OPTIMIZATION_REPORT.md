@@ -117,8 +117,8 @@
 ### P2：其他超长前端文件
 
 - `src/i18n.tsx`：3,573 行。建议按 locale 和业务域拆分资源，再由入口聚合。
-- `src/components/database/DatabaseSidebarTree.tsx`：2,899 行。建议拆树节点展示、节点操作菜单、过滤/排序派生逻辑。
-- `src/components/database/RedisBrowser.tsx`：2,896 行。建议拆 key tree、value viewer、编辑器和命令会话。
+- ~~`src/components/database/DatabaseSidebarTree.tsx`：2,899 行。建议拆树节点展示、节点操作菜单、过滤/排序派生逻辑。~~ 已迁出状态派生、树基础展示和纯逻辑，入口降至 2,192 行。
+- ~~`src/components/database/RedisBrowser.tsx`：2,896 行。建议拆 key tree、value viewer、编辑器和命令会话。~~ 已迁出 key tree、JSON viewer、命令会话和纯状态派生，入口降至 2,163 行。
 - `src/components/debug/DebugPanel.tsx`：2,052 行。建议按 sessions、breakpoints、variables、console 拆分。
 - `src/components/notebook/NotebookPanel.tsx`：1,783 行。建议拆 cell renderer、toolbar 和持久化协调层。
 
@@ -248,6 +248,23 @@ dbx-core = { path = "../../dbx/crates/dbx-core", default-features = false }
 
 `FileViewer` 继续持有编辑器内容、保存计时和 CodeMirror 实例，只通过明确回调向 controller 提供保存与当前文件刷新能力。
 
+### 5.10 数据库侧边树与 Redis 浏览器边界
+
+`DatabaseSidebarTree` 新增：
+
+- `databaseSidebarTreeState.ts`：节点 key、对象分组/去重/排序、badge、搜索和 Mongo preview 等纯逻辑。
+- `useDatabaseSidebarTreeDerived.ts`：集中管理连接、数据库、schema、对象过滤以及可见节点序列派生。
+- `DatabaseTreePrimitives.tsx`：连接 badge 与展开 glyph。
+
+`RedisBrowser` 新增：
+
+- `redisBrowserState.ts`：JSON、member row、stream 分组、列宽和插入语句派生。
+- `RedisKeyTreePane.tsx`：数据库切换、key 搜索、树导航、多选与分页加载展示。
+- `RedisJsonTree.tsx`：可折叠 JSON viewer。
+- `RedisCommandSessionView.tsx`：受控命令历史与输入会话。
+
+API 调用、确认流程、连接切换重置、编辑保存和 command safety 编排仍保留在 `RedisBrowser`，组件间仅通过显式 props/callbacks 协作。
+
 ## 6. 文件行数变化
 
 | 文件 | 修改前 | 修改后 | 变化 |
@@ -255,7 +272,9 @@ dbx-core = { path = "../../dbx/crates/dbx-core", default-features = false }
 | `src/components/FileViewer.tsx` | 4,918 | 3,193 | -1,725 |
 | `src/components/ProjectPage.tsx` | 2,588 | 2,275 | -313 |
 | `src/components/database/DatabaseView.tsx` | 12,760 | 9,933 | -2,827 |
-| **合计** | **20,266** | **15,401** | **-4,865** |
+| `src/components/database/DatabaseSidebarTree.tsx` | 2,899 | 2,192 | -707 |
+| `src/components/database/RedisBrowser.tsx` | 2,896 | 2,163 | -733 |
+| **合计** | **26,061** | **19,756** | **-6,305** |
 
 新增生产模块行数：
 
@@ -275,6 +294,13 @@ dbx-core = { path = "../../dbx/crates/dbx-core", default-features = false }
 | `useDbxDataGrid.ts` | 426 |
 | `DataGridView.tsx` | 478 |
 | `useFileViewerLspActions.ts` | 406 |
+| `databaseSidebarTreeState.ts` | 307 |
+| `useDatabaseSidebarTreeDerived.ts` | 604 |
+| `DatabaseTreePrimitives.tsx` | 36 |
+| `redisBrowserState.ts` | 403 |
+| `RedisKeyTreePane.tsx` | 289 |
+| `RedisJsonTree.tsx` | 102 |
+| `RedisCommandSessionView.tsx` | 127 |
 
 数据库主测试拆分后行数：
 
@@ -301,7 +327,8 @@ dbx-core = { path = "../../dbx/crates/dbx-core", default-features = false }
 - FileViewer LSP controller 扩展定向 Vitest：9 个文件、22 个测试通过
 - DataGrid 定向 Vitest：2 个文件、26 个测试通过
 - 连接对话框定向 Vitest：2 个文件、40 个测试通过
-- `pnpm test`：112 个测试文件、828 个测试通过
+- 数据库侧边树与 Redis 浏览器定向 Vitest：4 个文件、61 个测试通过
+- `pnpm test`：114 个测试文件、836 个测试通过
 - `cargo check`：通过
 
 新增测试文件：
@@ -314,6 +341,8 @@ dbx-core = { path = "../../dbx/crates/dbx-core", default-features = false }
 - `src/test/database-view-object-actions.test.tsx`
 - `src/test/database-view-tree-actions.test.tsx`
 - `src/test/database-view-nosql.test.tsx`
+- `src/test/database-sidebar-tree-state.test.ts`
+- `src/test/redis-browser-state.test.ts`
 
 覆盖：
 
@@ -330,8 +359,8 @@ dbx-core = { path = "../../dbx/crates/dbx-core", default-features = false }
 1. ~~从 `DatabaseView` 迁出连接对话框及其草稿状态，保持 `databaseApi` 调用不变。~~ 已完成。
 2. ~~迁出 DataGrid 展示和交互状态，并保留现有保存/回滚请求结构。~~ 已完成。
 3. ~~将 `FileViewer` 的 LSP 请求、保存前同步和 workspace edit 刷新编排收敛到 controller hook。~~ 已完成。
-4. 拆分 `DatabaseSidebarTree` 与 `RedisBrowser` 的展示和状态派生逻辑。
-5. 若数据库测试继续增长，按 query/data-grid 和 connection/user-management 做二级拆分。
+4. ~~拆分 `DatabaseSidebarTree` 与 `RedisBrowser` 的展示和状态派生逻辑。~~ 已完成。
+5. 若数据库测试继续增长，按 query/data-grid 和 connection/user-management 做二级拆分；本轮复核后未继续增长，暂不做无收益拆分。
 6. 按协议内部边界渐进拆分 Rust DAP/LSP，不改变 Tauri command。
 7. ~~在 CI 中加入 `pnpm format:check`，并清理 Vitest 环境警告。~~ 已完成。
 

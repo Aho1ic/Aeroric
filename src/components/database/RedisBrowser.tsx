@@ -1,22 +1,16 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { MouseEvent, PointerEvent as ReactPointerEvent, ReactNode } from "react";
+import type { MouseEvent, PointerEvent as ReactPointerEvent } from "react";
 import { confirm } from "@tauri-apps/plugin-dialog";
 import {
-  Asterisk,
   Braces,
-  ChevronDown,
-  ChevronRight,
   Copy,
   Eraser,
   Eye,
-  Folder,
-  KeyRound,
   Minimize2,
   Pencil,
   Plus,
   RefreshCcw,
   Save,
-  Search,
   Terminal,
   Trash2,
   WrapText,
@@ -36,13 +30,32 @@ import { redisKeySearchPattern } from "../../lib/redisKeyPattern";
 import {
   buildRedisKeyTree,
   collectRedisGroupIds,
-  collectRedisGroupKeyRaws,
-  countRedisTreeLeaves,
   flattenVisibleRedisKeyTree,
 } from "../../lib/redisKeyTree";
 import s from "../../styles";
-import type { RedisValue } from "../../types/database";
 import { DbxButton, DbxMenuItem } from "./DbxButton";
+import { RedisCommandSessionView, type RedisCommandHistoryEntry } from "./RedisCommandSessionView";
+import { RedisJsonTree } from "./RedisJsonTree";
+import { RedisKeyTreePane } from "./RedisKeyTreePane";
+import {
+  clampRedisHashFieldWidth,
+  clampRedisMemberDetailWidth,
+  clampRedisZsetScoreWidth,
+  formatRedisCommandResult,
+  loadRedisJsonWordWrap,
+  redisInsertStatement,
+  redisJsonText,
+  redisJsonValue,
+  redisKeySizeLabel,
+  redisMemberColumnKeys,
+  redisMemberRows,
+  redisStreamEntryCount,
+  redisStreamMemberGroups,
+  redisValueMemberKind,
+  redisValueText,
+  saveRedisJsonWordWrap,
+  type RedisMemberRow,
+} from "./redisBrowserState";
 
 interface Props {
   connectionId: string;
@@ -52,497 +65,7 @@ interface Props {
   keySeparator?: string;
 }
 
-interface RedisCommandHistoryEntry {
-  id: number;
-  prompt: string;
-  command: string;
-  output: string;
-  error: boolean;
-}
-
 type RedisCommandHistoryDraft = Omit<RedisCommandHistoryEntry, "id">;
-type RedisMemberKind = "list" | "set" | "hash" | "zset" | "stream";
-const REDIS_JSON_WRAP_STORAGE_KEY = "dbx-redis-json-word-wrap";
-type RedisMemberDeleteAction =
-  | { kind: "list"; index: number }
-  | { kind: "set"; member: string }
-  | { kind: "hash"; field: string }
-  | { kind: "zset"; member: string };
-type RedisMemberEditAction =
-  | { kind: "list"; index: number }
-  | { kind: "set"; member: string }
-  | { kind: "hash"; field: string }
-  | { kind: "zset"; member: string; score: number };
-
-interface RedisMemberRow {
-  id: string;
-  kind: RedisMemberKind;
-  title: string;
-  cells: string[];
-  copyText: string;
-  detailText: string;
-  format: "json" | "text";
-  deleteAction?: RedisMemberDeleteAction;
-  editAction?: RedisMemberEditAction;
-}
-
-interface RedisStreamMemberGroup {
-  id: string;
-  entryId: string;
-  rows: RedisMemberRow[];
-}
-
-function redisValueText(value: unknown): string {
-  if (value === null || value === undefined) return "NULL";
-  if (typeof value === "string") return value;
-  return JSON.stringify(value, null, 2);
-}
-
-function formatRedisCommandResult(value: unknown): string {
-  if (value === undefined) return "";
-  if (typeof value === "string") return value;
-  return JSON.stringify(value, null, 2);
-}
-
-function escapeRedisArg(value: string): string {
-  return `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
-}
-
-function redisArrayValue(value: unknown): unknown[] {
-  return Array.isArray(value) ? value : [];
-}
-
-function redisMemberValueText(value: unknown): string {
-  if (typeof value === "string") return value;
-  if (value === null || value === undefined) return "";
-  return JSON.stringify(value, null, 2);
-}
-
-function redisMemberFormat(value: unknown): "json" | "text" {
-  if (typeof value !== "string") return value && typeof value === "object" ? "json" : "text";
-  try {
-    JSON.parse(value);
-    return "json";
-  } catch {
-    return "text";
-  }
-}
-
-function redisJsonText(value: string, pretty: boolean): string | null {
-  try {
-    const parsed = JSON.parse(value);
-    return JSON.stringify(parsed, null, pretty ? 2 : 0);
-  } catch {
-    return null;
-  }
-}
-
-function redisJsonValue(value: string): { value: unknown } | null {
-  try {
-    return { value: JSON.parse(value) };
-  } catch {
-    return null;
-  }
-}
-
-function loadRedisJsonWordWrap(): boolean {
-  try {
-    if (typeof window === "undefined") return true;
-    return window.localStorage.getItem(REDIS_JSON_WRAP_STORAGE_KEY) !== "false";
-  } catch {
-    return true;
-  }
-}
-
-function clampRedisMemberDetailWidth(width: number): number {
-  const min = 320;
-  const max = typeof window === "undefined" ? 720 : Math.max(min, window.innerWidth - 24);
-  return Math.min(Math.max(width, min), max);
-}
-
-function clampRedisHashFieldWidth(width: number): number {
-  return Math.min(Math.max(width, 120), 420);
-}
-
-function clampRedisZsetScoreWidth(width: number): number {
-  return Math.min(Math.max(width, 80), 260);
-}
-
-function redisHashPairs(value: unknown): Array<[string, unknown]> {
-  if (Array.isArray(value)) {
-    return value.flatMap((item): Array<[string, unknown]> => {
-      if (item && typeof item === "object" && "field" in item) {
-        return [[String((item as { field: unknown }).field), (item as { value?: unknown }).value]];
-      }
-      return [];
-    });
-  }
-  if (value && typeof value === "object") return Object.entries(value as Record<string, unknown>);
-  return [];
-}
-
-function redisZsetPairs(value: unknown): Array<{ score: unknown; member: unknown }> {
-  return redisArrayValue(value).flatMap((item): Array<{ score: unknown; member: unknown }> => {
-    if (item && typeof item === "object" && "member" in item) {
-      const row = item as { member: unknown; score?: unknown };
-      return [{ member: row.member, score: row.score ?? 0 }];
-    }
-    return [{ member: item, score: 0 }];
-  });
-}
-
-function redisStreamEntries(value: unknown): Array<Record<string, unknown>> {
-  return redisArrayValue(value).flatMap((item): Array<Record<string, unknown>> => {
-    if (!item || typeof item !== "object") return [];
-    const row = item as { fields?: unknown };
-    if (row.fields && typeof row.fields === "object")
-      return [row.fields as Record<string, unknown>];
-    return [item as Record<string, unknown>];
-  });
-}
-
-interface RedisJsonNode {
-  key: string;
-  label: string;
-  value: unknown;
-  path: string;
-  depth: number;
-  parentKind: "object" | "array" | "root";
-}
-
-function redisJsonIsContainer(value: unknown): value is Record<string, unknown> | unknown[] {
-  return value !== null && typeof value === "object";
-}
-
-function redisJsonChildNodes(node: RedisJsonNode): RedisJsonNode[] {
-  if (!redisJsonIsContainer(node.value)) return [];
-  if (Array.isArray(node.value)) {
-    return node.value.map((value, index) => ({
-      key: String(index),
-      label: String(index),
-      value,
-      path: `${node.path}[${index}]`,
-      depth: node.depth + 1,
-      parentKind: "array",
-    }));
-  }
-  return Object.entries(node.value).map(([key, value]) => ({
-    key,
-    label: key,
-    value,
-    path: `${node.path}.${key}`,
-    depth: node.depth + 1,
-    parentKind: "object",
-  }));
-}
-
-function redisJsonNodeSummary(value: unknown): string {
-  if (Array.isArray(value)) return `Array(${value.length})`;
-  if (redisJsonIsContainer(value)) return `Object(${Object.keys(value).length})`;
-  return "";
-}
-
-function redisJsonScalarText(value: unknown): string {
-  if (typeof value === "string") return JSON.stringify(value);
-  if (value === null) return "null";
-  return String(value);
-}
-
-function redisJsonScalarColor(value: unknown): string {
-  if (typeof value === "string") return "#15803d";
-  if (typeof value === "number") return "#b45309";
-  if (typeof value === "boolean") return "#7c3aed";
-  if (value === null) return "#64748b";
-  return "#15803d";
-}
-
-function RedisJsonTree({ value, wordWrap }: { value: unknown; wordWrap: boolean }) {
-  const [collapsedPaths, setCollapsedPaths] = useState<Set<string>>(new Set());
-  const togglePath = (path: string) => {
-    setCollapsedPaths((current) => {
-      const next = new Set(current);
-      if (next.has(path)) next.delete(path);
-      else next.add(path);
-      return next;
-    });
-  };
-  const renderNode = (node: RedisJsonNode): ReactNode => {
-    const children = redisJsonChildNodes(node);
-    const container = redisJsonIsContainer(node.value);
-    const collapsed = collapsedPaths.has(node.path);
-    const bracketOpen = Array.isArray(node.value) ? "[" : "{";
-    const bracketClose = Array.isArray(node.value) ? "]" : "}";
-    return (
-      <div key={node.path}>
-        <div
-          style={{
-            minHeight: 24,
-            display: "flex",
-            alignItems: "flex-start",
-            gap: 4,
-            paddingLeft: node.depth * 16,
-          }}
-        >
-          {container ? (
-            <DbxButton
-              variant="ghost"
-              size="icon-xs"
-              icon={collapsed ? ChevronRight : ChevronDown}
-              onClick={() => togglePath(node.path)}
-              aria-label={collapsed ? `Expand JSON ${node.path}` : `Collapse JSON ${node.path}`}
-              style={{
-                width: 18,
-                height: 18,
-                marginTop: 1,
-                flex: "0 0 auto",
-                color: "var(--text-muted)",
-              }}
-            />
-          ) : (
-            <span style={{ width: 18, flex: "0 0 auto" }} />
-          )}
-          {node.parentKind !== "root" && (
-            <>
-              <span
-                style={{ color: node.parentKind === "array" ? "var(--text-muted)" : "#1d4ed8" }}
-              >
-                {node.parentKind === "array" ? `[${node.label}]` : JSON.stringify(node.label)}
-              </span>
-              <span style={{ color: "var(--text-muted)" }}>:</span>
-            </>
-          )}
-          {container ? (
-            <>
-              <span style={{ fontWeight: 650, color: "var(--text-primary)" }}>{bracketOpen}</span>
-              <span style={{ color: "var(--text-muted)" }}>{redisJsonNodeSummary(node.value)}</span>
-              <span style={{ fontWeight: 650, color: "var(--text-primary)" }}>{bracketClose}</span>
-            </>
-          ) : (
-            <span
-              style={{
-                color: redisJsonScalarColor(node.value),
-                fontStyle: node.value === null ? "italic" : undefined,
-              }}
-            >
-              {redisJsonScalarText(node.value)}
-            </span>
-          )}
-        </div>
-        {container && !collapsed && children.length > 0 && <div>{children.map(renderNode)}</div>}
-      </div>
-    );
-  };
-  return (
-    <div
-      role="tree"
-      aria-label="Redis JSON tree"
-      style={{
-        whiteSpace: wordWrap ? "pre-wrap" : "pre",
-        overflowWrap: wordWrap ? "anywhere" : "normal",
-        color: "var(--text-primary)",
-      }}
-    >
-      {renderNode({ key: "$", label: "$", value, path: "$", depth: 0, parentKind: "root" })}
-    </div>
-  );
-}
-
-function redisMemberRows(value: RedisValue | null | undefined): RedisMemberRow[] {
-  if (!value || value.value_is_binary) return [];
-  const type = value.key_type.toLowerCase();
-
-  if (type === "list") {
-    return redisArrayValue(value.value).map((item, index) => {
-      const text = redisMemberValueText(item);
-      return {
-        id: `list:${index}`,
-        kind: "list",
-        title: `#${index}`,
-        cells: [`#${index}`, text],
-        copyText: text,
-        detailText: text,
-        format: redisMemberFormat(item),
-        deleteAction: { kind: "list", index },
-        editAction: { kind: "list", index },
-      };
-    });
-  }
-
-  if (type === "set") {
-    return redisArrayValue(value.value).map((item, index) => {
-      const text = redisMemberValueText(item);
-      return {
-        id: `set:${index}:${text}`,
-        kind: "set",
-        title: text,
-        cells: [text],
-        copyText: text,
-        detailText: text,
-        format: redisMemberFormat(item),
-        deleteAction: { kind: "set", member: text },
-        editAction: { kind: "set", member: text },
-      };
-    });
-  }
-
-  if (type === "hash") {
-    return redisHashPairs(value.value).map(([field, fieldValue], index) => {
-      const text = redisMemberValueText(fieldValue);
-      return {
-        id: `hash:${index}:${field}`,
-        kind: "hash",
-        title: field,
-        cells: [field, text],
-        copyText: text,
-        detailText: text,
-        format: redisMemberFormat(fieldValue),
-        deleteAction: { kind: "hash", field },
-        editAction: { kind: "hash", field },
-      };
-    });
-  }
-
-  if (type === "zset") {
-    return redisZsetPairs(value.value).map((item, index) => {
-      const memberText = redisMemberValueText(item.member);
-      const score = Number(item.score ?? 0);
-      return {
-        id: `zset:${index}:${memberText}`,
-        kind: "zset",
-        title: memberText,
-        cells: [String(item.score ?? 0), memberText],
-        copyText: memberText,
-        detailText: memberText,
-        format: redisMemberFormat(item.member),
-        deleteAction: { kind: "zset", member: memberText },
-        editAction: { kind: "zset", member: memberText, score: Number.isFinite(score) ? score : 0 },
-      };
-    });
-  }
-
-  if (type === "stream") {
-    return redisArrayValue(value.value).flatMap((item, entryIndex): RedisMemberRow[] => {
-      if (!item || typeof item !== "object") return [];
-      const entry = item as { id?: unknown; fields?: unknown };
-      const entryId = String(entry.id ?? entryIndex);
-      const fields =
-        entry.fields && typeof entry.fields === "object"
-          ? Object.entries(entry.fields as Record<string, unknown>)
-          : Object.entries(item as Record<string, unknown>).filter(([field]) => field !== "id");
-      return fields.map(([field, fieldValue], fieldIndex) => {
-        const text = redisMemberValueText(fieldValue);
-        return {
-          id: `stream:${entryIndex}:${fieldIndex}:${entryId}:${field}`,
-          kind: "stream",
-          title: `${entryId} · ${field}`,
-          cells: [entryId, field, text],
-          copyText: text,
-          detailText: text,
-          format: redisMemberFormat(fieldValue),
-        };
-      });
-    });
-  }
-
-  return [];
-}
-
-function redisStreamMemberGroups(rows: RedisMemberRow[]): RedisStreamMemberGroup[] {
-  const groups: RedisStreamMemberGroup[] = [];
-  const indexes = new Map<string, number>();
-
-  rows.forEach((row) => {
-    if (row.kind !== "stream") return;
-    const entryId = row.cells[0] ?? "";
-    const existingIndex = indexes.get(entryId);
-    if (existingIndex == null) {
-      indexes.set(entryId, groups.length);
-      groups.push({ id: `stream-entry:${groups.length}:${entryId}`, entryId, rows: [row] });
-    } else {
-      groups[existingIndex].rows.push(row);
-    }
-  });
-
-  return groups;
-}
-
-function redisMemberColumnKeys(kind: RedisMemberKind | null): string[] {
-  if (kind === "list") return ["database.redisColumnIndex", "database.redisColumnValue"];
-  if (kind === "set") return ["database.redisColumnMember"];
-  if (kind === "hash") return ["database.redisColumnField", "database.redisColumnValue"];
-  if (kind === "zset") return ["database.redisColumnScore", "database.redisColumnMember"];
-  if (kind === "stream")
-    return [
-      "database.redisColumnEntryId",
-      "database.redisColumnField",
-      "database.redisColumnValue",
-    ];
-  return [];
-}
-
-function redisValueMemberKind(value: RedisValue | null | undefined): RedisMemberKind | null {
-  if (!value || value.value_is_binary) return null;
-  const type = value.key_type.toLowerCase();
-  if (type === "list" || type === "set" || type === "hash" || type === "zset" || type === "stream")
-    return type;
-  return null;
-}
-
-function redisStreamEntryCount(value: RedisValue | null | undefined): number {
-  if (!value || value.key_type.toLowerCase() !== "stream") return 0;
-  return redisArrayValue(value.value).length;
-}
-
-function redisKeySizeLabel(keyType: string, size: number): string {
-  if (size <= 0) return "";
-  if (keyType.toLowerCase() === "string") {
-    if (size >= 1024) return `${(size / 1024).toFixed(1)} KB`;
-    return `${size} B`;
-  }
-  return String(size);
-}
-
-function redisInsertStatement(value: RedisValue): string | null {
-  if (value.value_is_binary) return null;
-  const key = escapeRedisArg(value.key_raw || value.key_display);
-  const commands: string[] = [];
-  const type = value.key_type.toLowerCase();
-
-  if (type === "string") {
-    commands.push(`SET ${key} ${escapeRedisArg(String(value.value ?? ""))}`);
-  } else if (type === "list") {
-    const items = redisArrayValue(value.value).map((item) => escapeRedisArg(String(item)));
-    if (items.length > 0) commands.push(`RPUSH ${key} ${items.join(" ")}`);
-  } else if (type === "set") {
-    const members = redisArrayValue(value.value).map((item) => escapeRedisArg(String(item)));
-    if (members.length > 0) commands.push(`SADD ${key} ${members.join(" ")}`);
-  } else if (type === "zset") {
-    const pairs = redisZsetPairs(value.value).map(
-      (item) => `${String(item.score ?? 0)} ${escapeRedisArg(String(item.member))}`,
-    );
-    if (pairs.length > 0) commands.push(`ZADD ${key} ${pairs.join(" ")}`);
-  } else if (type === "hash") {
-    const pairs = redisHashPairs(value.value).map(
-      ([field, fieldValue]) =>
-        `${escapeRedisArg(field)} ${escapeRedisArg(String(fieldValue ?? ""))}`,
-    );
-    if (pairs.length > 0) commands.push(`HSET ${key} ${pairs.join(" ")}`);
-  } else if (type === "stream") {
-    for (const entry of redisStreamEntries(value.value)) {
-      const fields = Object.entries(entry).map(
-        ([field, fieldValue]) =>
-          `${escapeRedisArg(field)} ${escapeRedisArg(String(fieldValue ?? ""))}`,
-      );
-      if (fields.length > 0) commands.push(`XADD ${key} * ${fields.join(" ")}`);
-    }
-  } else if (type === "json" || type === "rejson-rl") {
-    commands.push(`JSON.SET ${key} $ ${escapeRedisArg(JSON.stringify(value.value))}`);
-  }
-
-  if (value.ttl > 0) commands.push(`EXPIRE ${key} ${value.ttl}`);
-  return commands.length > 0 ? commands.join("\n") : null;
-}
-
 export function RedisBrowser({
   connectionId,
   readOnly,
@@ -1019,11 +542,7 @@ export function RedisBrowser({
   };
   const updateMemberJsonWordWrap = (enabled: boolean) => {
     setMemberJsonWordWrap(enabled);
-    try {
-      window.localStorage.setItem(REDIS_JSON_WRAP_STORAGE_KEY, enabled ? "true" : "false");
-    } catch {
-      // Keep the in-memory preference even when storage is unavailable.
-    }
+    saveRedisJsonWordWrap(enabled);
   };
   const addMember = async () => {
     if (!redis.selectedValue || readOnly || !canAddMember) return;
@@ -1397,6 +916,33 @@ export function RedisBrowser({
     }
   };
 
+  const selectDatabase = (database: number) => {
+    setActiveDb(database);
+    setCommandDb(database);
+    setExpandedKeyGroups(new Set());
+    setSelectedKeyRaws(new Set());
+    setSelectedMemberId(null);
+    setLoadingMoreMembers(false);
+    setEditingMemberId(null);
+    setMemberDetailView("json");
+    setMemberEditValue("");
+    setSavingMember(false);
+    setNewMemberField("");
+    setNewMemberValue("");
+    setNewMemberScore("0");
+    setAddingMember(false);
+    setMemberActionError("");
+    setValueDraft("");
+    setValueFormatError("");
+    setTtlDraft("");
+    setEditingTtl(false);
+    setTtlError("");
+    setKeyContextMenu(null);
+    setGroupContextMenu(null);
+    redis.clearKeyspaceState();
+    void redis.scanKeys({ db: database, pattern: effectivePattern(), count: 100 });
+  };
+
   const renderMemberRowActions = (row: RedisMemberRow) => (
     <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
       <DbxButton
@@ -1454,229 +1000,39 @@ export function RedisBrowser({
 
   return (
     <div style={s.databaseBrowserRoot}>
-      <div style={s.databaseBrowserSidebar}>
-        <div style={s.databaseWorkspaceHeader}>
-          <div>
-            <div style={s.databaseWorkspaceTitle}>Redis</div>
-            <div style={s.databaseDialogHint}>{t("database.redisBrowserHint")}</div>
-          </div>
-          <DbxButton
-            variant="ghost"
-            size="icon-sm"
-            icon={RefreshCcw}
-            onClick={() => void refreshKeys()}
-            aria-label={t("database.refresh")}
-          />
-        </div>
-        <div style={s.databaseButtonRow}>
-          {redis.databases.map((database) => (
-            <DbxButton
-              key={database.db}
-              variant={activeDb === database.db ? "default" : "outline"}
-              size="xs"
-              onClick={() => {
-                setActiveDb(database.db);
-                setCommandDb(database.db);
-                setExpandedKeyGroups(new Set());
-                setSelectedKeyRaws(new Set());
-                setSelectedMemberId(null);
-                setLoadingMoreMembers(false);
-                setEditingMemberId(null);
-                setMemberDetailView("json");
-                setMemberEditValue("");
-                setSavingMember(false);
-                setNewMemberField("");
-                setNewMemberValue("");
-                setNewMemberScore("0");
-                setAddingMember(false);
-                setMemberActionError("");
-                setValueDraft("");
-                setValueFormatError("");
-                setTtlDraft("");
-                setEditingTtl(false);
-                setTtlError("");
-                setKeyContextMenu(null);
-                setGroupContextMenu(null);
-                redis.clearKeyspaceState();
-                void redis.scanKeys({ db: database.db, pattern: effectivePattern(), count: 100 });
-              }}
-            >
-              db{database.db}
-            </DbxButton>
-          ))}
-        </div>
-        <label style={s.databaseSearchBox}>
-          <Search size={14} />
-          <input
-            aria-label={t("database.redisKeyPattern")}
-            style={s.databaseSearchInput}
-            value={pattern}
-            onChange={(event) => setPattern(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === "Enter") void refreshKeys(event.currentTarget.value);
-            }}
-            placeholder="*"
-          />
-          <DbxButton
-            variant={fuzzyKeySearch ? "default" : "outline"}
-            size="xs"
-            icon={Asterisk}
-            aria-pressed={fuzzyKeySearch}
-            title={t("database.redisFuzzyMatchTitle")}
-            onClick={() => setFuzzyKeySearch((value) => !value)}
-          >
-            {t("database.redisFuzzyMatch")}
-          </DbxButton>
-        </label>
-        {selectedKeyRaws.size > 0 && (
-          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <span style={s.databaseDialogHint}>
-              {t("database.redisSelectedKeys", { count: selectedKeyRaws.size })}
-            </span>
-            <DbxButton
-              variant="destructive"
-              size="sm"
-              icon={Trash2}
-              disabled={readOnly}
-              onClick={() => void deleteSelectedKeys()}
-            >
-              <span>
-                {t("database.redisDeleteSelectedKeys")} ({selectedKeyRaws.size})
-              </span>
-            </DbxButton>
-          </div>
-        )}
-        <div style={s.databaseScroll}>
-          {redisKeyRows.map(({ node, depth }) => {
-            const paddingLeft = 8 + depth * 16;
-            if (node.kind === "group") {
-              const expanded = expandedKeyGroups.has(node.id);
-              return (
-                <button
-                  key={node.id}
-                  type="button"
-                  style={{ ...s.databaseListButton, paddingLeft }}
-                  onClick={() => toggleKeyGroup(node.id)}
-                  onContextMenu={(event) =>
-                    openGroupContextMenu(
-                      event,
-                      node.pathSegments.join(keySeparator || ":"),
-                      collectRedisGroupKeyRaws(node),
-                    )
-                  }
-                  aria-expanded={expanded}
-                >
-                  {expanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
-                  <Folder size={13} />
-                  <span
-                    style={{
-                      flex: 1,
-                      minWidth: 0,
-                      overflow: "hidden",
-                      textOverflow: "ellipsis",
-                      whiteSpace: "nowrap",
-                      textAlign: "left",
-                    }}
-                  >
-                    {node.label}
-                  </span>
-                  <span style={s.databasePill}>{countRedisTreeLeaves(node)}</span>
-                </button>
-              );
-            }
-            const active = redis.selectedValue?.key_raw === node.keyRaw;
-            const selected = selectedKeyRaws.has(node.keyRaw);
-            return (
-              <button
-                key={node.id}
-                type="button"
-                style={{
-                  ...s.databaseListButton,
-                  ...(active ? s.databaseListButtonActive : {}),
-                  paddingLeft,
-                }}
-                onClick={() => void redis.loadValue(activeDb, node.keyRaw)}
-                onContextMenu={(event) => openKeyContextMenu(event, node.keyRaw)}
-                aria-label={`${node.fullKeyDisplay} ${node.keyType}`}
-                title={node.fullKeyDisplay}
-              >
-                <input
-                  type="checkbox"
-                  aria-label={`${t("database.redisDeleteSelectedKeys")}: ${node.fullKeyDisplay}`}
-                  checked={selected}
-                  disabled={readOnly}
-                  onChange={() => undefined}
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    toggleSelectedKey(node.keyRaw);
-                  }}
-                  style={{ width: 14, height: 14, flexShrink: 0 }}
-                />
-                <KeyRound size={13} />
-                <span
-                  style={{
-                    flex: 1,
-                    minWidth: 0,
-                    overflow: "hidden",
-                    textOverflow: "ellipsis",
-                    whiteSpace: "nowrap",
-                    textAlign: "left",
-                  }}
-                >
-                  {node.label}
-                </span>
-                <span style={s.databasePill}>{node.keyType}</span>
-              </button>
-            );
-          })}
-          {redis.keys.length === 0 && (
-            <div style={s.databaseEmptyCompact}>
-              {redis.loading ? t("database.loading") : t("database.empty")}
-            </div>
-          )}
-          {redis.keys.length > 0 &&
-            redis.cursor !== 0 &&
-            (fetchingAllKeys ? (
-              <div style={{ display: "grid", gap: 6 }}>
-                <div style={{ ...s.databaseDialogHint, textAlign: "center" }}>
-                  {fetchAllTotalKeys > 0
-                    ? t("database.redisFetchAllProgress", {
-                        loaded: fetchAllLoadedKeys,
-                        total: fetchAllTotalKeys,
-                      })
-                    : t("database.redisFetchAllProgressUnknown", { loaded: fetchAllLoadedKeys })}
-                </div>
-                <button
-                  type="button"
-                  style={{ ...s.databaseListButton, color: "var(--danger)" }}
-                  onClick={stopFetchAllKeys}
-                >
-                  {t("database.redisStopFetchAll")}
-                </button>
-              </div>
-            ) : (
-              <div style={{ display: "flex", gap: 6 }}>
-                <button
-                  type="button"
-                  style={{ ...s.databaseListButton, flex: 1 }}
-                  onClick={loadMoreKeys}
-                  disabled={redis.loading}
-                >
-                  {t("database.loadMore")} ({redis.keys.length}/
-                  {redis.totalKeys || redis.keys.length})
-                </button>
-                <button
-                  type="button"
-                  style={{ ...s.databaseListButton, flex: 1 }}
-                  onClick={() => void fetchAllKeys()}
-                  disabled={redis.loading}
-                >
-                  {t("database.redisFetchAllKeys")}
-                </button>
-              </div>
-            ))}
-        </div>
-      </div>
+      <RedisKeyTreePane
+        databases={redis.databases}
+        activeDb={activeDb}
+        pattern={pattern}
+        fuzzyKeySearch={fuzzyKeySearch}
+        keyRows={redisKeyRows}
+        expandedKeyGroups={expandedKeyGroups}
+        selectedKeyRaws={selectedKeyRaws}
+        activeKeyRaw={redis.selectedValue?.key_raw ?? null}
+        keySeparator={keySeparator || ":"}
+        keyCount={redis.keys.length}
+        totalKeys={redis.totalKeys}
+        cursor={redis.cursor}
+        loading={redis.loading}
+        readOnly={readOnly}
+        fetchingAllKeys={fetchingAllKeys}
+        fetchAllLoadedKeys={fetchAllLoadedKeys}
+        fetchAllTotalKeys={fetchAllTotalKeys}
+        onRefresh={refreshKeys}
+        onSelectDatabase={selectDatabase}
+        onPatternChange={setPattern}
+        onSearch={refreshKeys}
+        onToggleFuzzySearch={() => setFuzzyKeySearch((value) => !value)}
+        onDeleteSelectedKeys={deleteSelectedKeys}
+        onToggleKeyGroup={toggleKeyGroup}
+        onOpenGroupContextMenu={openGroupContextMenu}
+        onLoadKey={(keyRaw) => redis.loadValue(activeDb, keyRaw)}
+        onOpenKeyContextMenu={openKeyContextMenu}
+        onToggleSelectedKey={toggleSelectedKey}
+        onLoadMoreKeys={loadMoreKeys}
+        onFetchAllKeys={fetchAllKeys}
+        onStopFetchAllKeys={stopFetchAllKeys}
+      />
       <div style={s.databaseBrowserMain}>
         <div style={s.databaseWorkspaceHeader}>
           <div>
@@ -2637,103 +1993,14 @@ export function RedisBrowser({
             {t("database.redisBinaryStringReadonlyHint")}
           </div>
         )}
-        <div
-          style={{
-            minHeight: 200,
-            maxHeight: 280,
-            display: "flex",
-            flexDirection: "column",
-            border: "1px solid var(--border-dim)",
-            borderRadius: 8,
-            overflow: "hidden",
-            background: "#171b21",
-            color: "#d8dee9",
-            fontFamily: "var(--font-mono)",
-            fontSize: 12,
-            lineHeight: 1.5,
-          }}
-          onClick={() => document.getElementById("redis-command-input")?.focus()}
-        >
-          <div style={{ flex: 1, minHeight: 0, overflow: "auto", padding: 12 }}>
-            <div style={{ marginBottom: 8, color: "#94a3b8" }}>
-              {t("database.redisCommandWelcome")}
-            </div>
-            {commandHistory.map((entry) => (
-              <div key={entry.id} style={{ marginBottom: 8 }}>
-                <div
-                  style={{
-                    display: "flex",
-                    alignItems: "flex-start",
-                    gap: 8,
-                    whiteSpace: "pre-wrap",
-                    wordBreak: "break-word",
-                  }}
-                >
-                  <span style={{ flexShrink: 0, color: "#d7ba7d" }}>{entry.prompt}</span>
-                  <span style={{ minWidth: 0, color: "#e5e7eb" }}>{entry.command}</span>
-                </div>
-                {entry.output && (
-                  <pre
-                    style={{
-                      margin: 0,
-                      color: entry.error ? "#ff6b6b" : "#cbd5e1",
-                      fontFamily: "var(--font-mono)",
-                      fontSize: 12,
-                      whiteSpace: "pre-wrap",
-                      wordBreak: "break-word",
-                    }}
-                  >
-                    {entry.output}
-                  </pre>
-                )}
-              </div>
-            ))}
-          </div>
-          <form
-            style={{
-              minHeight: 36,
-              display: "flex",
-              alignItems: "center",
-              gap: 8,
-              borderTop: "1px solid rgba(255, 255, 255, 0.1)",
-              padding: "0 12px",
-            }}
-            onSubmit={(event) => {
-              event.preventDefault();
-              void runCommand();
-            }}
-          >
-            <span style={{ flexShrink: 0, color: "#d7ba7d" }}>db{commandDb}&gt;</span>
-            <input
-              id="redis-command-input"
-              aria-label={t("database.redisCommand")}
-              style={{
-                flex: 1,
-                minWidth: 0,
-                border: "none",
-                outline: "none",
-                background: "transparent",
-                color: "#e5e7eb",
-                fontFamily: "var(--font-mono)",
-                fontSize: 12,
-              }}
-              value={commandText}
-              onChange={(event) => setCommandText(event.target.value)}
-              disabled={commandRunning}
-              autoComplete="off"
-              spellCheck={false}
-              placeholder="GET user:1"
-            />
-            <DbxButton
-              type="submit"
-              variant="default"
-              size="sm"
-              disabled={!commandText.trim() || commandRunning}
-            >
-              {t("database.redisRunCommand")}
-            </DbxButton>
-          </form>
-        </div>
+        <RedisCommandSessionView
+          commandDb={commandDb}
+          commandText={commandText}
+          commandHistory={commandHistory}
+          commandRunning={commandRunning}
+          onCommandTextChange={setCommandText}
+          onRunCommand={runCommand}
+        />
         <div style={s.databaseToolbar}>
           {showValueDraftEditor && (
             <>
