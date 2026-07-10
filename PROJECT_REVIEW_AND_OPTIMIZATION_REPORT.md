@@ -23,7 +23,7 @@
 - 将 DataGrid 纯状态计算、展示/交互 hook 和共享网格组件迁出 `DatabaseView`。
 - 在 CI 中加入 `format:check`，并清理 jsdom canvas 与 Node 25 Web Storage 测试警告。
 
-三个主要父文件共减少 4,696 行。迁出的代码保留在职责明确的生产模块中，目标是减少单文件认知负担和冲突面，而不是人为减少项目总代码量。
+三个主要父文件共减少 4,865 行。迁出的代码保留在职责明确的生产模块中，目标是减少单文件认知负担和冲突面，而不是人为减少项目总代码量。
 
 ## 2. 审查范围与基线
 
@@ -237,14 +237,25 @@ dbx-core = { path = "../../dbx/crates/dbx-core", default-features = false }
 - `src/test/setup.ts` 增加 canvas 2D context stub。
 - `vitest.config.ts` 禁用 Node worker 的实验性 Web Storage，消除无路径 `--localstorage-file` 警告。
 
+### 5.9 `FileViewer` LSP action controller
+
+新增 `src/components/file-viewer/useFileViewerLspActions.ts`，集中管理：
+
+- references 请求、异步预览和打开目标。
+- rename 预览、保存前同步、workspace edit 应用和当前文件刷新。
+- quick-fix 请求、workspace edit/command 执行和结果状态。
+- 编辑器命令事件监听以及切换文件/内容变化时的 action 状态清理。
+
+`FileViewer` 继续持有编辑器内容、保存计时和 CodeMirror 实例，只通过明确回调向 controller 提供保存与当前文件刷新能力。
+
 ## 6. 文件行数变化
 
 | 文件 | 修改前 | 修改后 | 变化 |
 | --- | ---: | ---: | ---: |
-| `src/components/FileViewer.tsx` | 4,918 | 3,473 | -1,445 |
+| `src/components/FileViewer.tsx` | 4,918 | 3,193 | -1,725 |
 | `src/components/ProjectPage.tsx` | 2,588 | 2,275 | -313 |
 | `src/components/database/DatabaseView.tsx` | 12,760 | 9,933 | -2,827 |
-| **合计** | **20,266** | **15,570** | **-4,696** |
+| **合计** | **20,266** | **15,401** | **-4,865** |
 
 新增生产模块行数：
 
@@ -263,6 +274,7 @@ dbx-core = { path = "../../dbx/crates/dbx-core", default-features = false }
 | `databaseGridState.ts` | 237 |
 | `useDbxDataGrid.ts` | 426 |
 | `DataGridView.tsx` | 478 |
+| `useFileViewerLspActions.ts` | 406 |
 
 数据库主测试拆分后行数：
 
@@ -286,6 +298,7 @@ dbx-core = { path = "../../dbx/crates/dbx-core", default-features = false }
 - 第一阶段定向 Vitest：6 个文件、122 个测试通过
 - 数据库拆分定向 Vitest：5 个文件、85 个测试通过
 - FileViewer LSP 定向 Vitest：5 个文件、15 个测试通过
+- FileViewer LSP controller 扩展定向 Vitest：9 个文件、22 个测试通过
 - DataGrid 定向 Vitest：2 个文件、26 个测试通过
 - 连接对话框定向 Vitest：2 个文件、40 个测试通过
 - `pnpm test`：112 个测试文件、828 个测试通过
@@ -316,7 +329,7 @@ dbx-core = { path = "../../dbx/crates/dbx-core", default-features = false }
 
 1. ~~从 `DatabaseView` 迁出连接对话框及其草稿状态，保持 `databaseApi` 调用不变。~~ 已完成。
 2. ~~迁出 DataGrid 展示和交互状态，并保留现有保存/回滚请求结构。~~ 已完成。
-3. 将 `FileViewer` 的 LSP 请求、保存前同步和 workspace edit 刷新编排收敛到 controller hook。
+3. ~~将 `FileViewer` 的 LSP 请求、保存前同步和 workspace edit 刷新编排收敛到 controller hook。~~ 已完成。
 4. 拆分 `DatabaseSidebarTree` 与 `RedisBrowser` 的展示和状态派生逻辑。
 5. 若数据库测试继续增长，按 query/data-grid 和 connection/user-management 做二级拆分。
 6. 按协议内部边界渐进拆分 Rust DAP/LSP，不改变 Tauri command。

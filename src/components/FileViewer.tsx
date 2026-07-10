@@ -62,13 +62,6 @@ import { createLspHoverExtension } from "./file-viewer/lspHover";
 import { createLspNavigationExtension, type LspOpenTarget } from "./file-viewer/lspNavigation";
 import { createLspSignatureHelpExtension } from "./file-viewer/lspSignatureHelp";
 import {
-  findLspReferences,
-  lspReferenceKey,
-  lspReferencePreviewLine,
-  lspReferenceToOpenTarget,
-  type LspReferenceLocation,
-} from "./file-viewer/lspReferences";
-import {
   activeSymbolBreadcrumbs,
   fileBreadcrumbSegments,
   lspSymbolToSelection,
@@ -85,28 +78,9 @@ import { renderMarkdownWithToc } from "./file-viewer/markdownPreview";
 import { LocalHistoryDialog } from "./file-viewer/LocalHistoryDialog";
 import { SqlitePreviewPane, type SqlitePreviewData } from "./file-viewer/SqlitePreviewPane";
 import { createLspInlayHintsExtension, requestLspInlayHints } from "./file-viewer/lspInlayHints";
-import {
-  applyLspWorkspaceEdit,
-  requestLspRename,
-  type LspApplyWorkspaceEditSummary,
-  type LspWorkspaceEdit,
-} from "./file-viewer/lspRename";
-import {
-  diagnosticsForLspCodeAction,
-  executeLspCommand,
-  requestLspCodeActions,
-  type LspCodeAction,
-} from "./file-viewer/lspCodeActions";
-import {
-  LspActionDialogs,
-  LspActionStatusMessages,
-  type ReferencePreviewState,
-} from "./file-viewer/LspActionDialogs";
-import {
-  FILE_VIEWER_COMMAND_EVENT,
-  isFileViewerCommand,
-  type FileViewerCommand,
-} from "./file-viewer/editorCommandEvents";
+import { LspActionDialogs, LspActionStatusMessages } from "./file-viewer/LspActionDialogs";
+import { type FileViewerCommand } from "./file-viewer/editorCommandEvents";
+import { useFileViewerLspActions } from "./file-viewer/useFileViewerLspActions";
 import {
   createDiagnosticsExtension,
   diagnosticsClipboardText,
@@ -780,12 +754,6 @@ function FilePreviewPane({
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("idle");
   const [formatting, setFormatting] = useState(false);
   const [formatError, setFormatError] = useState<string | null>(null);
-  const [navigationError, setNavigationError] = useState<string | null>(null);
-  const [referencesLoading, setReferencesLoading] = useState(false);
-  const [references, setReferences] = useState<LspReferenceLocation[] | null>(null);
-  const [referencePreviews, setReferencePreviews] = useState<Record<string, ReferencePreviewState>>(
-    {},
-  );
   const [outlineSymbols, setOutlineSymbols] = useState<LspSymbol[]>([]);
   const [outlineLoading, setOutlineLoading] = useState(false);
   const [outlineLoaded, setOutlineLoaded] = useState(false);
@@ -794,19 +762,6 @@ function FilePreviewPane({
   const [inlayHints, setInlayHints] = useState<LspInlayHint[]>([]);
   const [inlayHintsLoading, setInlayHintsLoading] = useState(false);
   const [inlayHintsError, setInlayHintsError] = useState<string | null>(null);
-  const [renameOpen, setRenameOpen] = useState(false);
-  const [renameName, setRenameName] = useState("");
-  const [renameLoading, setRenameLoading] = useState(false);
-  const [renameApplying, setRenameApplying] = useState(false);
-  const [renamePreview, setRenamePreview] = useState<LspWorkspaceEdit | null>(null);
-  const [renameSummary, setRenameSummary] = useState<LspApplyWorkspaceEditSummary | null>(null);
-  const [codeActionsLoading, setCodeActionsLoading] = useState(false);
-  const [codeActions, setCodeActions] = useState<LspCodeAction[] | null>(null);
-  const [codeActionApplying, setCodeActionApplying] = useState(false);
-  const [codeActionSummary, setCodeActionSummary] = useState<LspApplyWorkspaceEditSummary | null>(
-    null,
-  );
-  const [codeActionCommandSummary, setCodeActionCommandSummary] = useState<string | null>(null);
   const [formatOnSave, setFormatOnSave] = useState(false);
   const [inlineBlameVisible, setInlineBlameVisible] = useState(false);
   const [inlineBlameLoading, setInlineBlameLoading] = useState(false);
@@ -826,7 +781,6 @@ function FilePreviewPane({
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const editorViewRef = useRef<EditorView | null>(null);
   const appliedSelectionKeyRef = useRef<string | null>(null);
-  const referencePreviewRunRef = useRef(0);
   const sqlitePreviewRunRef = useRef(0);
   const [activeHeadingId, setActiveHeadingId] = useState<string | null>(null);
   const [cursorPosition, setCursorPosition] = useState<CursorPosition>({ line: 1, column: 1 });
@@ -928,6 +882,64 @@ function FilePreviewPane({
       }),
     [inlineBlame, inlineBlamePath, inlineBlameVisible],
   );
+  const saveContent = useCallback(
+    async (value: string, options: SaveContentOptions = {}) => {
+      if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+      if (savedResetRef.current) clearTimeout(savedResetRef.current);
+      const revision = saveRevisionRef.current + 1;
+      saveRevisionRef.current = revision;
+      setSaveStatus("saving");
+      setFormatError(null);
+      try {
+        if (remote) {
+          await invoke("remote_write_file_content", {
+            connection: remote.connection,
+            remotePath: filePath,
+            remoteProjectPath: remote.projectPath,
+            content: value,
+          });
+        } else {
+          await invoke("write_file_content", { path: filePath, content: value, projectPath });
+        }
+        if (saveRevisionRef.current !== revision) return false;
+        onDirtyChange?.(filePath, false);
+
+        const shouldFormatAfterSave = !remote && (options.formatAfterSave ?? formatOnSave);
+        if (shouldFormatAfterSave) {
+          const formatRun = formatRunRef.current + 1;
+          formatRunRef.current = formatRun;
+          setFormatting(true);
+          try {
+            await invoke<FormatFileResult>("format_file", { projectPath, filePath });
+            if (saveRevisionRef.current !== revision) return false;
+            const nextContent = await invoke<string>("read_file_content", {
+              path: filePath,
+              projectPath,
+            });
+            if (saveRevisionRef.current !== revision) return false;
+            setContent(nextContent);
+          } catch (err) {
+            if (saveRevisionRef.current !== revision) return false;
+            setSaveStatus("error");
+            setFormatError(String(err));
+            return false;
+          } finally {
+            if (formatRunRef.current === formatRun) setFormatting(false);
+          }
+        }
+
+        if (saveRevisionRef.current !== revision) return false;
+        setSaveStatus("saved");
+        savedResetRef.current = setTimeout(() => setSaveStatus("idle"), 2000);
+        return true;
+      } catch {
+        if (saveRevisionRef.current !== revision) return false;
+        setSaveStatus("error");
+        return false;
+      }
+    },
+    [filePath, formatOnSave, onDirtyChange, projectPath, remote],
+  );
   const languageServer = useLanguageServer({
     projectPath,
     filePath,
@@ -950,6 +962,64 @@ function FilePreviewPane({
       column: anchor - line.from + 1,
     });
   }, [content, filePath, languageServer.request, projectPath]);
+  const handleCurrentFileRefreshed = useCallback(
+    (nextContent: string) => {
+      setContent(nextContent);
+      onDirtyChange?.(filePath, false);
+      setSaveStatus("saved");
+      if (savedResetRef.current) clearTimeout(savedResetRef.current);
+      savedResetRef.current = setTimeout(() => setSaveStatus("idle"), 2000);
+    },
+    [filePath, onDirtyChange],
+  );
+  const lspActions = useFileViewerLspActions({
+    projectPath,
+    filePath,
+    content,
+    remote,
+    currentFileDiagnostics,
+    isPreviewableImage,
+    languageServer,
+    currentRequest: currentLspRequest,
+    saveStatus,
+    saveContent,
+    onOpenDefinition,
+    onCurrentFileRefreshed: handleCurrentFileRefreshed,
+  });
+  const {
+    navigationError,
+    referencesLoading,
+    references,
+    referencePreviews,
+    renameOpen,
+    renameName,
+    renameLoading,
+    renameApplying,
+    renamePreview,
+    renameSummary,
+    codeActionsLoading,
+    codeActions,
+    codeActionApplying,
+    codeActionSummary,
+    codeActionCommandSummary,
+  } = lspActions.state;
+  const {
+    setNavigationError,
+    setRenameName,
+    setRenameOpen,
+    setCodeActions,
+    closeReferences,
+    reset: resetLspActions,
+    clearForContentChange: clearLspActionsForContentChange,
+    findReferences: handleFindReferences,
+    openReference,
+    openRename: handleOpenRename,
+    previewRename: handlePreviewRename,
+    applyRename: handleApplyRename,
+    quickFix: handleQuickFix,
+    applyCodeAction: handleApplyCodeAction,
+    runEditorCommand: runEditorLspCommand,
+  } = lspActions.actions;
   const breadcrumbSegments = useMemo(
     () => fileBreadcrumbSegments(projectPath, filePath),
     [filePath, projectPath],
@@ -996,14 +1066,14 @@ function FilePreviewPane({
       setNavigationError(null);
       view.focus();
     },
-    [content],
+    [content, setNavigationError],
   );
   const handleOpenLspTarget = useCallback(
     (target: LspOpenTarget) => {
       setNavigationError(null);
       onOpenDefinition?.(target.path, target.name, target.selection);
     },
-    [onOpenDefinition],
+    [onOpenDefinition, setNavigationError],
   );
   const lspNavigationExtension = useMemo(
     () =>
@@ -1021,6 +1091,7 @@ function FilePreviewPane({
       languageServer.request,
       languageServer.status?.available,
       remote,
+      setNavigationError,
     ],
   );
   const lspHoverExtension = useMemo(
@@ -1032,7 +1103,13 @@ function FilePreviewPane({
         remote,
         onError: setNavigationError,
       }),
-    [languageServer.message, languageServer.request, languageServer.status?.available, remote],
+    [
+      languageServer.message,
+      languageServer.request,
+      languageServer.status?.available,
+      remote,
+      setNavigationError,
+    ],
   );
   const lspCompletionExtension = useMemo(
     () =>
@@ -1043,7 +1120,13 @@ function FilePreviewPane({
         remote,
         onError: setNavigationError,
       }),
-    [languageServer.message, languageServer.request, languageServer.status?.available, remote],
+    [
+      languageServer.message,
+      languageServer.request,
+      languageServer.status?.available,
+      remote,
+      setNavigationError,
+    ],
   );
   const lspSignatureHelpExtension = useMemo(
     () =>
@@ -1054,98 +1137,17 @@ function FilePreviewPane({
         remote,
         onError: setNavigationError,
       }),
-    [languageServer.message, languageServer.request, languageServer.status?.available, remote],
+    [
+      languageServer.message,
+      languageServer.request,
+      languageServer.status?.available,
+      remote,
+      setNavigationError,
+    ],
   );
   const lspInlayHintsExtension = useMemo(
     () => createLspInlayHintsExtension(inlayHints),
     [inlayHints],
-  );
-  const loadReferencePreviews = useCallback(
-    async (locations: LspReferenceLocation[], sourceContent: string) => {
-      const runId = referencePreviewRunRef.current + 1;
-      referencePreviewRunRef.current = runId;
-      setReferencePreviews(
-        Object.fromEntries(
-          locations.map((location, index) => [
-            lspReferenceKey(location, index),
-            { status: "loading" },
-          ]),
-        ),
-      );
-
-      const entries = await Promise.all(
-        locations.map(async (location, index): Promise<[string, ReferencePreviewState]> => {
-          const key = lspReferenceKey(location, index);
-          try {
-            const targetContent =
-              location.path === filePath
-                ? sourceContent
-                : await invoke<string>(
-                    remote ? "remote_read_file_content" : "read_file_content",
-                    remote
-                      ? {
-                          connection: remote.connection,
-                          remotePath: location.path,
-                          remoteProjectPath: remote.projectPath,
-                        }
-                      : { path: location.path, projectPath },
-                  );
-            return [
-              key,
-              { status: "ready", preview: lspReferencePreviewLine(targetContent, location) },
-            ];
-          } catch (err) {
-            return [key, { status: "error", error: String(err) }];
-          }
-        }),
-      );
-
-      if (referencePreviewRunRef.current !== runId) return;
-      setReferencePreviews(Object.fromEntries(entries));
-    },
-    [filePath, projectPath, remote],
-  );
-  const handleFindReferences = useCallback(async () => {
-    const request = currentLspRequest();
-    if (!request) return;
-    setReferences(null);
-    setReferencePreviews({});
-    setNavigationError(null);
-    if (!languageServer.status?.available) {
-      setNavigationError(languageServer.message ?? "Language server is unavailable.");
-      return;
-    }
-    setReferencesLoading(true);
-    try {
-      const nextReferences = await findLspReferences(request, remote);
-      if (nextReferences.length === 0) {
-        setNavigationError(t("file.noReferencesFound"));
-        return;
-      }
-      setReferences(nextReferences);
-      void loadReferencePreviews(nextReferences, request.content);
-    } catch (err) {
-      setNavigationError(String(err));
-    } finally {
-      setReferencesLoading(false);
-    }
-  }, [
-    currentLspRequest,
-    languageServer.message,
-    languageServer.status?.available,
-    loadReferencePreviews,
-    remote,
-    t,
-  ]);
-  const openReference = useCallback(
-    (reference: LspReferenceLocation) => {
-      const target = lspReferenceToOpenTarget(reference);
-      setReferences(null);
-      setReferencePreviews({});
-      referencePreviewRunRef.current += 1;
-      onOpenDefinition?.(target.path, target.name, target.selection);
-    },
-    [onOpenDefinition],
   );
 
   const selectSqliteObject = useCallback(
@@ -1352,10 +1354,7 @@ function FilePreviewPane({
     setSqlitePreview(null);
     setError(null);
     setFormatError(null);
-    setNavigationError(null);
-    setReferences(null);
-    setReferencePreviews({});
-    referencePreviewRunRef.current += 1;
+    resetLspActions();
     sqlitePreviewRunRef.current += 1;
     setOutlineSymbols([]);
     setOutlineLoading(false);
@@ -1365,13 +1364,6 @@ function FilePreviewPane({
     setInlayHints([]);
     setInlayHintsLoading(false);
     setInlayHintsError(null);
-    setRenameOpen(false);
-    setRenamePreview(null);
-    setRenameSummary(null);
-    setCodeActions(null);
-    setCodeActionSummary(null);
-    setCodeActionCommandSummary(null);
-    setCodeActionCommandSummary(null);
     setSaveStatus("idle");
     setInlineBlameVisible(false);
     setInlineBlameLoading(false);
@@ -1463,6 +1455,7 @@ function FilePreviewPane({
     remote,
     sqliteEndpoint,
     onDirtyChange,
+    resetLspActions,
   ]);
 
   useEffect(() => {
@@ -1496,225 +1489,6 @@ function FilePreviewPane({
     [],
   );
 
-  const saveContent = useCallback(
-    async (value: string, options: SaveContentOptions = {}) => {
-      if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
-      if (savedResetRef.current) clearTimeout(savedResetRef.current);
-      const revision = saveRevisionRef.current + 1;
-      saveRevisionRef.current = revision;
-      setSaveStatus("saving");
-      setFormatError(null);
-      try {
-        if (remote) {
-          await invoke("remote_write_file_content", {
-            connection: remote.connection,
-            remotePath: filePath,
-            remoteProjectPath: remote.projectPath,
-            content: value,
-          });
-        } else {
-          await invoke("write_file_content", { path: filePath, content: value, projectPath });
-        }
-        if (saveRevisionRef.current !== revision) return false;
-        onDirtyChange?.(filePath, false);
-
-        const shouldFormatAfterSave = !remote && (options.formatAfterSave ?? formatOnSave);
-        if (shouldFormatAfterSave) {
-          const formatRun = formatRunRef.current + 1;
-          formatRunRef.current = formatRun;
-          setFormatting(true);
-          try {
-            await invoke<FormatFileResult>("format_file", { projectPath, filePath });
-            if (saveRevisionRef.current !== revision) return false;
-            const nextContent = await invoke<string>("read_file_content", {
-              path: filePath,
-              projectPath,
-            });
-            if (saveRevisionRef.current !== revision) return false;
-            setContent(nextContent);
-          } catch (err) {
-            if (saveRevisionRef.current !== revision) return false;
-            setSaveStatus("error");
-            setFormatError(String(err));
-            return false;
-          } finally {
-            if (formatRunRef.current === formatRun) setFormatting(false);
-          }
-        }
-
-        if (saveRevisionRef.current !== revision) return false;
-        setSaveStatus("saved");
-        savedResetRef.current = setTimeout(() => setSaveStatus("idle"), 2000);
-        return true;
-      } catch {
-        if (saveRevisionRef.current !== revision) return false;
-        setSaveStatus("error");
-        return false;
-      }
-    },
-    [filePath, formatOnSave, onDirtyChange, projectPath, remote],
-  );
-
-  const handleOpenRename = useCallback(() => {
-    setReferences(null);
-    setNavigationError(null);
-    setRenameSummary(null);
-    setRenamePreview(null);
-    setRenameName("");
-    setRenameOpen(true);
-  }, []);
-
-  const handlePreviewRename = useCallback(async () => {
-    const request = currentLspRequest();
-    if (!request || content === null) return;
-    const nextName = renameName.trim();
-    if (!nextName) return;
-    setNavigationError(null);
-    setRenameSummary(null);
-    setRenamePreview(null);
-    if (!languageServer.status?.available) {
-      setNavigationError(languageServer.message ?? "Language server is unavailable.");
-      return;
-    }
-    setRenameLoading(true);
-    try {
-      if (saveStatus === "dirty") {
-        const saved = await saveContent(content, { formatAfterSave: false });
-        if (!saved) return;
-      }
-      const edit = await requestLspRename(request, nextName, remote);
-      setRenamePreview(edit);
-    } catch (err) {
-      setNavigationError(String(err));
-    } finally {
-      setRenameLoading(false);
-    }
-  }, [
-    content,
-    currentLspRequest,
-    languageServer.message,
-    languageServer.status?.available,
-    renameName,
-    remote,
-    saveContent,
-    saveStatus,
-  ]);
-
-  const handleApplyRename = useCallback(async () => {
-    if (!renamePreview || renameApplying) return;
-    setNavigationError(null);
-    setRenameApplying(true);
-    try {
-      const summary = await applyLspWorkspaceEdit(projectPath, renamePreview, remote);
-      setRenameSummary(summary);
-      setRenameOpen(false);
-      setRenamePreview(null);
-      const touchesCurrentFile = renamePreview.files.some((file) => file.path === filePath);
-      if (touchesCurrentFile) {
-        const nextContent = await invoke<string>(
-          remote ? "remote_read_file_content" : "read_file_content",
-          remote
-            ? {
-                connection: remote.connection,
-                remotePath: filePath,
-                remoteProjectPath: remote.projectPath,
-              }
-            : {
-                path: filePath,
-                projectPath,
-              },
-        );
-        setContent(nextContent);
-        onDirtyChange?.(filePath, false);
-        setSaveStatus("saved");
-        savedResetRef.current = setTimeout(() => setSaveStatus("idle"), 2000);
-      }
-    } catch (err) {
-      setNavigationError(String(err));
-    } finally {
-      setRenameApplying(false);
-    }
-  }, [filePath, onDirtyChange, projectPath, remote, renameApplying, renamePreview]);
-
-  const handleQuickFix = useCallback(async () => {
-    const request = currentLspRequest();
-    if (!request || content === null) return;
-    setNavigationError(null);
-    setReferences(null);
-    setRenameOpen(false);
-    setCodeActions(null);
-    setCodeActionSummary(null);
-    setCodeActionCommandSummary(null);
-    if (!languageServer.status?.available) {
-      setNavigationError(languageServer.message ?? "Language server is unavailable.");
-      return;
-    }
-    setCodeActionsLoading(true);
-    try {
-      if (saveStatus === "dirty") {
-        const saved = await saveContent(content, { formatAfterSave: false });
-        if (!saved) return;
-      }
-      const actions = await requestLspCodeActions(
-        request,
-        diagnosticsForLspCodeAction(request, currentFileDiagnostics),
-        remote,
-      );
-      if (actions.length === 0) {
-        setNavigationError(t("file.noCodeActionsFound"));
-        return;
-      }
-      setCodeActions(actions);
-    } catch (err) {
-      setNavigationError(String(err));
-    } finally {
-      setCodeActionsLoading(false);
-    }
-  }, [
-    content,
-    currentLspRequest,
-    currentFileDiagnostics,
-    languageServer.message,
-    languageServer.status?.available,
-    remote,
-    saveContent,
-    saveStatus,
-    t,
-  ]);
-
-  const runEditorLspCommand = useCallback(
-    (command: FileViewerCommand) => {
-      if (isPreviewableImage || content === null || !languageServer.supported) return;
-
-      if (command === "findReferences") {
-        void handleFindReferences();
-      } else if (command === "renameSymbol") {
-        handleOpenRename();
-      } else {
-        void handleQuickFix();
-      }
-    },
-    [
-      content,
-      handleFindReferences,
-      handleOpenRename,
-      handleQuickFix,
-      isPreviewableImage,
-      languageServer.supported,
-    ],
-  );
-
-  useEffect(() => {
-    const onEditorCommand = (event: Event) => {
-      const command = (event as CustomEvent<{ command?: unknown }>).detail?.command;
-      if (!isFileViewerCommand(command)) return;
-      runEditorLspCommand(command);
-    };
-
-    window.addEventListener(FILE_VIEWER_COMMAND_EVENT, onEditorCommand);
-    return () => window.removeEventListener(FILE_VIEWER_COMMAND_EVENT, onEditorCommand);
-  }, [runEditorLspCommand]);
-
   const closeEditorContextMenu = useCallback(() => {
     setEditorContextMenu(null);
   }, []);
@@ -1746,52 +1520,6 @@ function FilePreviewPane({
   useEffect(() => {
     closeEditorContextMenu();
   }, [closeEditorContextMenu, filePath]);
-
-  const handleApplyCodeAction = useCallback(
-    async (action: LspCodeAction) => {
-      if ((!action.edit && !action.command) || codeActionApplying) return;
-      const request = currentLspRequest();
-      if (action.command && !request) return;
-      setNavigationError(null);
-      setCodeActionApplying(true);
-      try {
-        if (action.edit) {
-          const summary = await applyLspWorkspaceEdit(projectPath, action.edit, remote);
-          setCodeActionSummary(summary);
-          const touchesCurrentFile = action.edit.files.some((file) => file.path === filePath);
-          if (touchesCurrentFile) {
-            const nextContent = await invoke<string>(
-              remote ? "remote_read_file_content" : "read_file_content",
-              remote
-                ? {
-                    connection: remote.connection,
-                    remotePath: filePath,
-                    remoteProjectPath: remote.projectPath,
-                  }
-                : {
-                    path: filePath,
-                    projectPath,
-                  },
-            );
-            setContent(nextContent);
-            onDirtyChange?.(filePath, false);
-            setSaveStatus("saved");
-            savedResetRef.current = setTimeout(() => setSaveStatus("idle"), 2000);
-          }
-        }
-        if (action.command && request) {
-          await executeLspCommand(request, action.command, remote);
-          setCodeActionCommandSummary(action.command.title ?? action.title);
-        }
-        setCodeActions(null);
-      } catch (err) {
-        setNavigationError(String(err));
-      } finally {
-        setCodeActionApplying(false);
-      }
-    },
-    [codeActionApplying, currentLspRequest, filePath, onDirtyChange, projectPath, remote],
-  );
 
   const handleFormatFile = useCallback(async () => {
     if (remote || content === null || isPreviewableImage || formatting) return;
@@ -1877,11 +1605,7 @@ function FilePreviewPane({
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     if (savedResetRef.current) clearTimeout(savedResetRef.current);
     setFormatError(null);
-    setNavigationError(null);
-    setReferences(null);
-    setRenameSummary(null);
-    setCodeActions(null);
-    setCodeActionSummary(null);
+    clearLspActionsForContentChange();
     onDirtyChange?.(filePath, true);
     setSaveStatus("dirty");
     saveTimerRef.current = setTimeout(() => {
@@ -1981,7 +1705,7 @@ function FilePreviewPane({
       setStickyPosition({ line: target.line, column: 1 });
       setNavigationError(null);
     },
-    [content, currentFileDiagnostics, cursorPosition],
+    [content, currentFileDiagnostics, cursorPosition, setNavigationError],
   );
 
   const openDiagnostic = useCallback(
@@ -2000,7 +1724,7 @@ function FilePreviewPane({
       setStickyPosition({ line: target.line, column: 1 });
       setNavigationError(null);
     },
-    [content],
+    [content, setNavigationError],
   );
 
   useEffect(() => {
@@ -2267,11 +1991,7 @@ function FilePreviewPane({
           codeActions={codeActions}
           codeActionApplying={codeActionApplying}
           onOpenReference={openReference}
-          onCloseReferences={() => {
-            setReferences(null);
-            setReferencePreviews({});
-            referencePreviewRunRef.current += 1;
-          }}
+          onCloseReferences={closeReferences}
           onRenameNameChange={setRenameName}
           onPreviewRename={() => void handlePreviewRename()}
           onApplyRename={() => void handleApplyRename()}
