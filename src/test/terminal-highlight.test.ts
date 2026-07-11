@@ -38,17 +38,28 @@ describe("terminal output highlighting", () => {
     expect(remapLightAnsiForeground(raw, "dark")).toBe(raw);
   });
 
-  it("lightens agent input and diff backgrounds while darkening pale code text", () => {
+  it("uses the default background for agent input while preserving diff backgrounds", () => {
     const raw =
       "\x1b[40;38;2;190;190;190minput\x1b[0m " +
       "\x1b[48;2;60;20;20;38;2;180;180;180mremoved\x1b[0m " +
       "\x1b[48;5;22;97madded\x1b[0m";
     const light = remapLightAnsiForeground(raw, "light");
 
-    expect(light).toContain("\x1b[48;2;234;238;242;39minput");
+    expect(light).toContain("\x1b[49;39minput");
     expect(light).toContain("\x1b[48;2;255;235;233;39mremoved");
     expect(light).toContain("\x1b[48;2;218;251;225;39madded");
     expect(remapLightAnsiForeground(raw, "dark")).toBe(raw);
+  });
+
+  it("normalizes neutral backgrounds before terminal erase commands in light themes", () => {
+    const truecolor = "\x1b[48;2;236;238;240m\x1b[K";
+    const darkNeutral = "\x1b[48;2;35;36;38mcomposer";
+    const indexed = "\x1b[48;5;245mhistory";
+
+    expect(remapLightAnsiForeground(truecolor, "light")).toBe("\x1b[49m\x1b[K");
+    expect(remapLightAnsiForeground(darkNeutral, "eyecare")).toBe("\x1b[49mcomposer");
+    expect(remapLightAnsiForeground(indexed, "light")).toBe("\x1b[49mhistory");
+    expect(remapLightAnsiForeground(truecolor, "dark")).toBe(truecolor);
   });
 
   it("splits large writes without breaking surrogate pairs", () => {

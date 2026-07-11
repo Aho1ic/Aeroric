@@ -145,7 +145,7 @@ function remapLightSgrBody(body: string): string | null {
   for (let index = 0; index < parts.length; index += 1) {
     const code = parts[index];
     if (code === "40" || code === "100") {
-      next.push("48", "2", "234", "238", "242");
+      next.push("49");
       changed = true;
       continue;
     }
@@ -197,13 +197,24 @@ function remapLightSgrBody(body: string): string | null {
       const green = Number(parts[index + 3]);
       const blue = Number(parts[index + 4]);
       const max = Math.max(red, green, blue);
+      const min = Math.min(red, green, blue);
+      if (max - min <= 18) {
+        next.push("49");
+        index += 4;
+        changed = true;
+        continue;
+      }
       if (max <= 110) {
         const color =
           red > green * 1.18 && red > blue * 1.18
             ? ["255", "235", "233"]
             : green > red * 1.18 && green > blue * 1.08
               ? ["218", "251", "225"]
-              : ["234", "238", "242"];
+              : null;
+        if (!color) {
+          next.push(code);
+          continue;
+        }
         next.push("48", "2", ...color);
         index += 4;
         changed = true;
@@ -217,11 +228,15 @@ function remapLightSgrBody(body: string): string | null {
         ? ["255", "235", "233"]
         : [2, 10, 22, 28, 34].includes(color)
           ? ["218", "251", "225"]
-          : [0, 8, 16].includes(color)
-            ? ["234", "238", "242"]
-            : null;
+          : null;
       if (replacement) {
         next.push("48", "2", ...replacement);
+        index += 2;
+        changed = true;
+        continue;
+      }
+      if ([0, 7, 8, 15, 16].includes(color) || color >= 231) {
+        next.push("49");
         index += 2;
         changed = true;
         continue;
