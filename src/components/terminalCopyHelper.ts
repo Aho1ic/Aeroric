@@ -226,6 +226,23 @@ export function attachSmartCopy(terminal: Terminal, keyOptions?: TerminalKeyOpti
     pasteInProgress: false,
   };
 
+  const pasteClipboardText = (eventText?: string) => {
+    if (!keyOptions?.onPaste || pasteInProgress) return;
+    pasteInProgress = true;
+    const textPromise =
+      eventText ? Promise.resolve(eventText) : navigator.clipboard.readText();
+    textPromise
+      .then((text) => {
+        if (text) keyOptions.onPaste?.(text);
+      })
+      .catch(() => {
+        /* ignore clipboard read failures */
+      })
+      .finally(() => {
+        pasteInProgress = false;
+      });
+  };
+
   const handleCustomKeyEvent = (e: KeyboardEvent) => {
     if (shouldSuppressPrintableKeyRepeat(e)) return false;
 
@@ -247,19 +264,7 @@ export function attachSmartCopy(terminal: Terminal, keyOptions?: TerminalKeyOpti
 
     if (isPaste) {
       e.preventDefault();
-      if (pasteInProgress) return false;
-      pasteInProgress = true;
-      navigator.clipboard
-        .readText()
-        .then((text) => {
-          if (text) keyOptions?.onPaste?.(text);
-        })
-        .catch(() => {
-          /* ignore clipboard read failures */
-        })
-        .finally(() => {
-          pasteInProgress = false;
-        });
+      pasteClipboardText();
       return false;
     }
 
@@ -288,6 +293,20 @@ export function attachSmartCopy(terminal: Terminal, keyOptions?: TerminalKeyOpti
     void handleTerminalContextMenu(terminal, keyOptions, e, contextMenuState);
   };
 
+  const handlePaste = (e: ClipboardEvent) => {
+    if (!keyOptions?.onPaste) return;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    pasteClipboardText(e.clipboardData?.getData("text/plain"));
+  };
+
+  const handleBeforeInput = (e: InputEvent) => {
+    if (!keyOptions?.onPaste || e.inputType !== "insertFromPaste") return;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    pasteClipboardText(e.data ?? undefined);
+  };
+
   const preserveSelectionOnRightClick = (e: PointerEvent | MouseEvent) => {
     if (e.button !== 2) return;
     e.preventDefault();
@@ -297,11 +316,15 @@ export function attachSmartCopy(terminal: Terminal, keyOptions?: TerminalKeyOpti
   terminal.element?.addEventListener("pointerdown", preserveSelectionOnRightClick, true);
   terminal.element?.addEventListener("mousedown", preserveSelectionOnRightClick, true);
   terminal.element?.addEventListener("contextmenu", handleContextMenu);
+  terminal.element?.addEventListener("paste", handlePaste, true);
+  terminal.textarea?.addEventListener("beforeinput", handleBeforeInput, true);
 
   return () => {
     terminal.element?.removeEventListener("pointerdown", preserveSelectionOnRightClick, true);
     terminal.element?.removeEventListener("mousedown", preserveSelectionOnRightClick, true);
     terminal.element?.removeEventListener("contextmenu", handleContextMenu);
+    terminal.element?.removeEventListener("paste", handlePaste, true);
+    terminal.textarea?.removeEventListener("beforeinput", handleBeforeInput, true);
     terminal.attachCustomKeyEventHandler(() => true);
   };
 }

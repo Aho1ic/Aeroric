@@ -70,11 +70,72 @@ describe("terminal input fixes", () => {
     expect(shouldIgnorePostCompositionCandidate("shuo", candidates)).toBe(false);
   });
 
-  it("suppresses WebKit live IME composition preview in terminal textarea", () => {
+  it("keeps WebKit live IME composition input out of the PTY until commit", () => {
     expect(shouldSuppressBrowserCompositionPreview("insertCompositionText", true)).toBe(true);
     expect(shouldSuppressBrowserCompositionPreview("insertText", true)).toBe(false);
     expect(shouldSuppressBrowserCompositionPreview("insertCompositionText", false)).toBe(false);
     expect(shouldSuppressBrowserCompositionPreview("insertText", false)).toBe(false);
+  });
+
+  it("shows pinyin preedit text within the remaining terminal width", async () => {
+    vi.resetModules();
+    vi.doMock("../platform", () => ({
+      APP_PLATFORM: "macos",
+      ENABLE_USAGE_INSIGHTS: true,
+      IS_MAC_WEBKIT: true,
+      IS_OTHER_WEBKIT: false,
+      detectAppPlatform: () => "macos",
+      isAppleWebKit: () => true,
+    }));
+    const { attachLinuxIMEFix } = await import("../components/terminalInputFix");
+    const terminalElement = document.createElement("div");
+    terminalElement.className = "xterm";
+    const screen = document.createElement("div");
+    screen.className = "xterm-screen";
+    const textarea = document.createElement("textarea");
+    const compositionView = document.createElement("div");
+    compositionView.className = "composition-view";
+    terminalElement.append(screen, textarea, compositionView);
+    document.body.appendChild(terminalElement);
+    vi.spyOn(screen, "getBoundingClientRect").mockReturnValue({
+      x: 0,
+      y: 0,
+      width: 120,
+      height: 100,
+      top: 0,
+      right: 120,
+      bottom: 100,
+      left: 0,
+      toJSON: () => ({}),
+    });
+    textarea.addEventListener("compositionupdate", (event) => {
+      const compositionEvent = event as CompositionEvent;
+      compositionView.textContent = compositionEvent.data;
+      compositionView.style.left = "80px";
+      compositionView.classList.toggle("active", Boolean(compositionEvent.data));
+    });
+    const term = {
+      textarea,
+      onData: () => ({ dispose: vi.fn() }),
+    };
+
+    const disposable = attachLinuxIMEFix(term as never, vi.fn());
+    textarea.dispatchEvent(new CompositionEvent("compositionstart", { data: "" }));
+    textarea.dispatchEvent(new CompositionEvent("compositionupdate", { data: "ceshi" }));
+    await Promise.resolve();
+
+    expect(compositionView.classList.contains("active")).toBe(true);
+    expect(compositionView.textContent).toBe("ceshi");
+    expect(compositionView.style.getPropertyValue("--aeroric-composition-max-width")).toBe("40px");
+
+    textarea.dispatchEvent(new CompositionEvent("compositionupdate", { data: "" }));
+    await Promise.resolve();
+
+    expect(compositionView.classList.contains("active")).toBe(false);
+    expect(compositionView.textContent).toBe("");
+
+    disposable.dispose();
+    terminalElement.remove();
   });
 
   it("defers romanized composition commits that may be followed by committed Chinese text", () => {

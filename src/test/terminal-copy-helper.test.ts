@@ -122,6 +122,71 @@ describe("terminal context menu", () => {
     dispose();
   });
 
+  it("intercepts native WebKit paste events and sends clipboard text directly", async () => {
+    const element = document.createElement("div");
+    const textarea = document.createElement("textarea");
+    element.appendChild(textarea);
+    const terminal = {
+      attachCustomKeyEventHandler: vi.fn(),
+      hasSelection: vi.fn(() => false),
+      element,
+      textarea,
+    } as unknown as Terminal;
+    const onPaste = vi.fn();
+    const dispose = attachSmartCopy(terminal, { onPaste });
+    const clipboardData = {
+      getData: vi.fn(() => "direct paste"),
+    };
+    const pasteEvent = new Event("paste", {
+      bubbles: true,
+      cancelable: true,
+    }) as ClipboardEvent;
+    Object.defineProperty(pasteEvent, "clipboardData", { value: clipboardData });
+
+    textarea.dispatchEvent(pasteEvent);
+
+    expect(pasteEvent.defaultPrevented).toBe(true);
+    await vi.waitFor(() => {
+      expect(onPaste).toHaveBeenCalledWith("direct paste");
+    });
+
+    dispose();
+  });
+
+  it("intercepts insertFromPaste before xterm can render a paste confirmation", async () => {
+    const readText = vi.fn().mockResolvedValue("clipboard fallback");
+    Object.defineProperty(navigator, "clipboard", {
+      value: { writeText: vi.fn(), readText },
+      configurable: true,
+    });
+    const element = document.createElement("div");
+    const textarea = document.createElement("textarea");
+    element.appendChild(textarea);
+    const terminal = {
+      attachCustomKeyEventHandler: vi.fn(),
+      hasSelection: vi.fn(() => false),
+      element,
+      textarea,
+    } as unknown as Terminal;
+    const onPaste = vi.fn();
+    const dispose = attachSmartCopy(terminal, { onPaste });
+    const beforeInput = new InputEvent("beforeinput", {
+      inputType: "insertFromPaste",
+      bubbles: true,
+      cancelable: true,
+    });
+
+    textarea.dispatchEvent(beforeInput);
+
+    expect(beforeInput.defaultPrevented).toBe(true);
+    await vi.waitFor(() => {
+      expect(readText).toHaveBeenCalled();
+      expect(onPaste).toHaveBeenCalledWith("clipboard fallback");
+    });
+
+    dispose();
+  });
+
   it("leaves Ctrl+C to xterm when there is no selection", () => {
     let handler: ((event: KeyboardEvent) => boolean) | undefined;
     const terminal = {

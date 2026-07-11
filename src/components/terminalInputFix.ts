@@ -387,9 +387,28 @@ export function attachLinuxIMEFix(
 
   const terminalElement = textarea.closest<HTMLElement>(".xterm");
   const compositionView = terminalElement?.querySelector<HTMLElement>(".composition-view") ?? null;
+  const syncCompositionViewLayout = () => {
+    if (!compositionView || !compositionText) return;
+    queueMicrotask(() => {
+      if (!compositionText) return;
+      const screen = terminalElement?.querySelector<HTMLElement>(".xterm-screen");
+      const screenWidth =
+        screen?.getBoundingClientRect().width ??
+        terminalElement?.getBoundingClientRect().width ??
+        0;
+      const cursorLeft = Number.parseFloat(compositionView.style.left) || 0;
+      const remainingWidth = screenWidth - cursorLeft;
+      if (remainingWidth > 0) {
+        compositionView.style.setProperty("--aeroric-composition-max-width", `${remainingWidth}px`);
+      }
+    });
+  };
   const compositionObserver = compositionView
     ? new MutationObserver(() => {
-        if (compositionText) return;
+        if (compositionText) {
+          syncCompositionViewLayout();
+          return;
+        }
         if (compositionView.classList.contains("active")) {
           compositionView.classList.remove("active");
         }
@@ -591,7 +610,9 @@ export function attachLinuxIMEFix(
     compositionText = event.data ?? "";
     imeDbg("compositionupdate", { data: event.data, compositionText });
     clearTextareaNowAndNextFrame();
-    if (!compositionText) {
+    if (compositionText) {
+      syncCompositionViewLayout();
+    } else {
       hideEmptyXtermCompositionViewAfterEvent();
     }
   };

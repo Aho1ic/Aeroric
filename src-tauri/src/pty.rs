@@ -250,10 +250,21 @@ pub(crate) fn register_pty_handles(
     writer: Box<dyn Write + Send>,
     child: Box<dyn portable_pty::Child + Send + Sync>,
 ) -> Result<(), String> {
-    task_manager
-        .pty_masters
-        .lock()
-        .insert(id.to_string(), Arc::new(parking_lot::Mutex::new(master)));
+    let mut masters = task_manager.pty_masters.lock();
+    let mut pending_sizes = task_manager.pending_pty_sizes.lock();
+    if let Some((cols, rows)) = pending_sizes.remove(id) {
+        master
+            .resize(PtySize {
+                rows,
+                cols,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .map_err(|e| e.to_string())?;
+    }
+    masters.insert(id.to_string(), Arc::new(parking_lot::Mutex::new(master)));
+    drop(pending_sizes);
+    drop(masters);
     task_manager
         .pty_writers
         .lock()
@@ -1035,7 +1046,8 @@ pub async fn resize_pty(
     if cols < 2 || rows < 2 || cols > 10_000 || rows > 10_000 {
         return Ok(());
     }
-    let master = task_manager.pty_masters.lock().get(&task_id).cloned();
+    let masters = task_manager.pty_masters.lock();
+    let master = masters.get(&task_id).cloned();
     if let Some(master) = master {
         let master = master.lock();
         master
@@ -1046,6 +1058,11 @@ pub async fn resize_pty(
                 pixel_height: 0,
             })
             .map_err(|e| e.to_string())?;
+    } else {
+        task_manager
+            .pending_pty_sizes
+            .lock()
+            .insert(task_id, (cols, rows));
     }
     Ok(())
 }

@@ -47,6 +47,7 @@ pub struct TaskManager {
     pub(crate) pty_writers: Mutex<HashMap<String, Arc<Mutex<Box<dyn Write + Send>>>>>,
     pub(crate) child_handles:
         Mutex<HashMap<String, Arc<std::sync::Mutex<Box<dyn portable_pty::Child + Send + Sync>>>>>,
+    pub(crate) pending_pty_sizes: Mutex<HashMap<String, (u16, u16)>>,
     pub(crate) cancelled_tasks: Mutex<HashSet<String>>,
     pub(crate) manually_completed_tasks: Mutex<HashSet<String>>,
     pub(crate) codex_sessions: Mutex<HashMap<String, CodexSessionInfo>>,
@@ -61,9 +62,11 @@ impl TaskManager {
     /// Locks are acquired in a fixed order to prevent deadlocks.
     pub(crate) fn remove_pty_handles(&self, id: &str) {
         let mut masters = self.pty_masters.lock();
+        let mut pending_sizes = self.pending_pty_sizes.lock();
         let mut writers = self.pty_writers.lock();
         let mut children = self.child_handles.lock();
         masters.remove(id);
+        pending_sizes.remove(id);
         writers.remove(id);
         children.remove(id);
     }
@@ -140,6 +143,7 @@ pub fn run() {
             pty_masters: Mutex::new(HashMap::new()),
             pty_writers: Mutex::new(HashMap::new()),
             child_handles: Mutex::new(HashMap::new()),
+            pending_pty_sizes: Mutex::new(HashMap::new()),
             cancelled_tasks: Mutex::new(HashSet::new()),
             manually_completed_tasks: Mutex::new(HashSet::new()),
             codex_sessions: Mutex::new(HashMap::new()),

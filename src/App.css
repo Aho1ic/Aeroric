@@ -2025,8 +2025,16 @@ html:not(.dark) .xterm-helper-textarea {
  * the active pinyin visible without making a deleted final character look alive. */
 .xterm .composition-view {
   background: transparent !important;
-  color: inherit !important;
+  color: var(--text-primary) !important;
   border-bottom: 2px solid color-mix(in srgb, var(--accent) 70%, transparent);
+  box-sizing: border-box;
+  max-width: var(--aeroric-composition-max-width, none);
+  height: auto !important;
+  min-height: 1em;
+  white-space: pre-wrap !important;
+  overflow-wrap: anywhere;
+  word-break: break-all;
+  font-weight: 400;
 }
 
 .xterm .composition-view:not(.active),
