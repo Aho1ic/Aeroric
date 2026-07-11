@@ -188,9 +188,9 @@ export async function handleTerminalContextMenu(
     if (state.pasteInProgress) return;
     state.pasteInProgress = true;
     try {
-      // Use Tauri's native clipboard API. WebKit's navigator.clipboard.readText()
-      // displays a system "Paste" confirmation affordance before resolving.
-      const text = await readClipboardText();
+      const text = terminal.hasSelection()
+        ? await readSelectedText(terminal)
+        : await readClipboardText();
       if (text) keyOptions.onPaste(text);
     } catch {
       /* ignore clipboard read failures */
@@ -232,7 +232,11 @@ export function attachSmartCopy(terminal: Terminal, keyOptions?: TerminalKeyOpti
   const pasteClipboardText = (eventText?: string) => {
     if (!keyOptions?.onPaste || pasteInProgress) return;
     pasteInProgress = true;
-    const textPromise = eventText ? Promise.resolve(eventText) : readClipboardText();
+    const textPromise = terminal.hasSelection()
+      ? readSelectedText(terminal)
+      : eventText
+        ? Promise.resolve(eventText)
+        : readClipboardText();
     textPromise
       .then((text) => {
         if (text) keyOptions.onPaste?.(text);

@@ -324,6 +324,7 @@ fn flush_pty_batch(app: &AppHandle, id: &str, sink: &OutputSink, batch: &mut Str
 ///
 /// - `sink`：agent 任务传 `OutputSink::Channel`（直投单订阅者），shell 传 `OutputSink::Event`
 /// - `session_tx`：可选 channel，用于将原始文本转发给 session watcher
+/// - `startup_tx`：首批有效输出出现时通知等待注入初始输入的任务
 /// - `on_finish`：PTY 关闭后执行的可选清理回调
 pub(crate) fn spawn_pty_reader(
     app: AppHandle,
@@ -333,6 +334,7 @@ pub(crate) fn spawn_pty_reader(
     reader: Box<dyn Read + Send>,
     persist_terminal_history: bool,
     session_tx: Option<std::sync::mpsc::Sender<String>>,
+    startup_tx: Option<std::sync::mpsc::Sender<()>>,
     on_finish: Option<Box<dyn FnOnce() + Send>>,
 ) {
     tokio::task::spawn_blocking(move || {
@@ -386,6 +388,9 @@ pub(crate) fn spawn_pty_reader(
                     };
 
                     if valid_len > 0 {
+                        if let Some(ref tx) = startup_tx {
+                            let _ = tx.send(());
+                        }
                         // SAFETY：已确认 valid_len 之前的字节为有效 UTF-8
                         let data = unsafe {
                             std::str::from_utf8_unchecked(&combined[..valid_len]).to_owned()
@@ -534,6 +539,17 @@ fn prompt_with_project_prefix(prompt: &str, prompt_prefix: &str) -> String {
     }
 }
 
+fn initial_prompt_args(prompt: &str, is_codex: bool) -> Vec<String> {
+    if prompt.is_empty() {
+        return Vec::new();
+    }
+    if is_codex {
+        vec!["--".to_string(), prompt.to_string()]
+    } else {
+        vec![prompt.to_string()]
+    }
+}
+
 fn initial_prompt_input_sequence(prompt: &str) -> Option<Vec<u8>> {
     if prompt.is_empty() {
         return None;
@@ -543,6 +559,31 @@ fn initial_prompt_input_sequence(prompt: &str) -> Option<Vec<u8>> {
     input.extend_from_slice(prompt.as_bytes());
     input.extend_from_slice(b"\x1b[201~\r");
     Some(input)
+}
+
+fn uses_native_initial_prompt(agent: &str) -> bool {
+    matches!(agent, "claude" | "codex")
+}
+
+fn spawn_initial_prompt_injection(
+    writer: Arc<parking_lot::Mutex<Box<dyn Write + Send>>>,
+    input: Vec<u8>,
+    startup_rx: std::sync::mpsc::Receiver<()>,
+) {
+    tokio::task::spawn_blocking(move || {
+        let startup_deadline = Instant::now() + Duration::from_secs(3);
+        if startup_rx.recv_timeout(Duration::from_secs(2)).is_ok() {
+            while Instant::now() < startup_deadline {
+                match startup_rx.recv_timeout(Duration::from_millis(300)) {
+                    Ok(()) => continue,
+                    Err(_) => break,
+                }
+            }
+        }
+        let mut writer = writer.lock();
+        let _ = writer.write_all(&input);
+        let _ = writer.flush();
+    });
 }
 
 fn add_codex_launch_args(
@@ -638,6 +679,7 @@ pub async fn run_task(
     let launch = crate::app_settings::get_agent_launch_spec(&agent);
     let agent_bin = launch.program.clone();
     let is_codex = crate::app_settings::is_codex_like_agent(&agent);
+    let use_native_initial_prompt = uses_native_initial_prompt(&agent);
     let selected_model = normalized_selected_model(selected_model.as_deref());
 
     // 版本统一走全局探测（带缓存），判断是否支持 --session-id。
@@ -678,6 +720,11 @@ pub async fn run_task(
         if use_hooks {
             c.arg("--dangerously-bypass-hook-trust");
         }
+        if use_native_initial_prompt {
+            for arg in initial_prompt_args(&final_prompt, true) {
+                c.arg(arg);
+            }
+        }
         c
     } else {
         let mut c = build_claude_cmd(&agent_bin, &permission_mode);
@@ -693,6 +740,11 @@ pub async fn run_task(
             if let Ok(p) = crate::hooks::aeroric_claude_settings_path() {
                 c.arg("--settings");
                 c.arg(p.to_string_lossy().as_ref());
+            }
+        }
+        if use_native_initial_prompt {
+            for arg in initial_prompt_args(&final_prompt, false) {
+                c.arg(arg);
             }
         }
         c
@@ -720,9 +772,9 @@ pub async fn run_task(
         serde_json::json!({ "task_id": task_id, "status": "running" }),
     );
 
-    // 带 prompt 的任务统一以交互 REPL 启动，再通过 PTY bracketed-paste 注入并提交。
-    // 自定义 Agent 包装脚本不一定支持 Claude/Codex 的 positional prompt 参数，
-    // PTY 输入可确保所有 Agent 都自动执行新建任务页中的首条消息。
+    // 内置 Agent 使用原生命令行参数执行首条消息，避免 PTY 启动阶段清空过早注入的输入。
+    // 自定义 Agent 包装脚本不一定兼容 positional prompt，因此等待首批终端输出后再注入，
+    // 并为没有启动输出的脚本保留超时兜底。
     // 因此这里不能启动 /status watcher，避免抢占用户输入或污染浅色终端背景。
     let starts_with_prompt = !final_prompt.is_empty();
     let session_tx = if starts_with_prompt {
@@ -754,6 +806,7 @@ pub async fn run_task(
     } else {
         None
     };
+    let (startup_tx, startup_rx) = std::sync::mpsc::channel();
     spawn_pty_reader(
         app.clone(),
         task_id.clone(),
@@ -765,14 +818,19 @@ pub async fn run_task(
         reader,
         true,
         session_tx,
+        if starts_with_prompt && !use_native_initial_prompt {
+            Some(startup_tx)
+        } else {
+            None
+        },
         None,
     );
-    if let Some(input) = initial_prompt_input_sequence(&final_prompt) {
-        let writer = task_manager.pty_writers.lock().get(&task_id).cloned();
-        if let Some(writer) = writer {
-            let mut writer = writer.lock();
-            writer.write_all(&input).map_err(|e| e.to_string())?;
-            writer.flush().map_err(|e| e.to_string())?;
+    if !use_native_initial_prompt {
+        if let Some(input) = initial_prompt_input_sequence(&final_prompt) {
+            let writer = task_manager.pty_writers.lock().get(&task_id).cloned();
+            if let Some(writer) = writer {
+                spawn_initial_prompt_injection(writer, input, startup_rx);
+            }
         }
     }
     spawn_exit_monitor(app, task_id, project_path, is_codex);
@@ -1010,6 +1068,7 @@ pub async fn resume_task(
         true,
         None,
         None,
+        None,
     );
     spawn_exit_monitor(app, task_id, project_path, is_codex);
 
@@ -1127,6 +1186,7 @@ pub async fn open_shell(
         reader,
         false,
         None,
+        None,
         Some(on_finish),
     );
 
@@ -1169,7 +1229,19 @@ mod tests {
     }
 
     #[test]
-    fn initial_prompt_is_pasted_and_submitted_to_the_agent_terminal() {
+    fn initial_prompt_delivery_supports_native_and_custom_agents() {
+        assert!(uses_native_initial_prompt("claude"));
+        assert!(uses_native_initial_prompt("codex"));
+        assert!(!uses_native_initial_prompt("local_claude"));
+        assert!(initial_prompt_args("", true).is_empty());
+        assert_eq!(
+            initial_prompt_args("hello\nworld", true),
+            vec!["--", "hello\nworld"]
+        );
+        assert_eq!(
+            initial_prompt_args("hello\nworld", false),
+            vec!["hello\nworld"]
+        );
         assert_eq!(initial_prompt_input_sequence(""), None);
         assert_eq!(
             initial_prompt_input_sequence("hello\nworld").unwrap(),

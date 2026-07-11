@@ -39,6 +39,15 @@ describe("SftpPanel", () => {
   beforeEach(() => {
     vi.mocked(invoke).mockReset();
     vi.mocked(invoke).mockResolvedValue([]);
+    if (!Element.prototype.hasPointerCapture) {
+      Element.prototype.hasPointerCapture = () => false;
+    }
+    if (!Element.prototype.releasePointerCapture) {
+      Element.prototype.releasePointerCapture = () => {};
+    }
+    if (!Element.prototype.scrollIntoView) {
+      Element.prototype.scrollIntoView = () => {};
+    }
   });
 
   it("defaults to Local on the left and the current SSH project connection on the right", () => {
@@ -58,6 +67,27 @@ describe("SftpPanel", () => {
     expect(triggers[0]).toHaveTextContent("Local");
     expect(triggers[1]).toHaveTextContent("Production");
     expect(screen.getByDisplayValue("/srv/app")).toBeInTheDocument();
+  });
+
+  it("shows machine identity details in the remote endpoint selector", async () => {
+    const user = userEvent.setup();
+    render(
+      <I18nProvider>
+        <SftpPanel
+          sshConnections={connections}
+          localDefaultPath="/Users/me"
+          active
+          themeVariant="light"
+          currentSshConnectionId="conn-2"
+        />
+      </I18nProvider>,
+    );
+
+    await user.click(screen.getAllByLabelText("Location")[0]);
+
+    expect(await screen.findByText("deploy@staging.example.com:22")).toBeInTheDocument();
+    expect(screen.getByText("deploy@prod.example.com:22")).toBeInTheDocument();
+    expect(screen.getByText("/Users/me")).toBeInTheDocument();
   });
 
   it("shows transfer progress and task details while copying files", async () => {

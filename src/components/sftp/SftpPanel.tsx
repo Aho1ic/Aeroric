@@ -921,33 +921,59 @@ export function SftpPanel({
             }}
           >
             <Select.Trigger aria-label={t("sftp.location")} className="sftp-select-trigger">
-              <Select.Value>{endpointLabel(pane.endpoint)}</Select.Value>
+              <Select.Value>
+                <span className="sftp-select-value">
+                  {pane.endpoint.kind === "local" ? <HardDrive /> : <Server />}
+                  <span>{endpointLabel(pane.endpoint)}</span>
+                </span>
+              </Select.Value>
               <Select.Icon asChild>
-                <ChevronDown size={13} />
+                <ChevronDown />
               </Select.Icon>
             </Select.Trigger>
             <Select.Portal>
-              <Select.Content position="popper" sideOffset={4} style={s.settingsSelectContent}>
-                <Select.Viewport style={s.settingsSelectViewport}>
-                  <Select.Item value="local" style={s.fileSearchTypeItem}>
-                    <Select.ItemText>{t("sftp.local")}</Select.ItemText>
+              <Select.Content
+                position="popper"
+                sideOffset={5}
+                className="sftp-select-content"
+                style={s.settingsSelectContent}
+              >
+                <Select.Viewport className="sftp-select-viewport">
+                  <Select.Item value="local" className="sftp-machine-item">
+                    <HardDrive />
+                    <Select.ItemText>
+                      <span className="sftp-machine-copy">
+                        <span className="sftp-machine-name">{t("sftp.local")}</span>
+                        <span className="sftp-machine-meta">{localDefaultPath}</span>
+                      </span>
+                    </Select.ItemText>
                     <Select.ItemIndicator style={s.settingsSelectIndicator}>
-                      <Check size={13} />
+                      <Check />
                     </Select.ItemIndicator>
                   </Select.Item>
                   {sshConnectionGroups.map((group) => (
                     <Select.Group key={group.label}>
-                      <Select.Label className="sftp-select-group-label">{group.label}</Select.Label>
+                      <Select.Label className="sftp-select-group-label">
+                        <span>{group.label}</span>
+                        <span>{group.connections.length}</span>
+                      </Select.Label>
                       {group.connections.map((connection) => (
                         <Select.Item
                           key={connection.id}
                           value={`ssh:${connection.id}`}
-                          className="sftp-remote-machine-item"
-                          style={s.sftpGroupedConnectionItem}
+                          className="sftp-machine-item sftp-remote-machine-item"
                         >
-                          <Select.ItemText>{connection.name}</Select.ItemText>
+                          <Server />
+                          <Select.ItemText>
+                            <span className="sftp-machine-copy">
+                              <span className="sftp-machine-name">{connection.name}</span>
+                              <span className="sftp-machine-meta">
+                                {connection.username}@{connection.host}:{connection.port}
+                              </span>
+                            </span>
+                          </Select.ItemText>
                           <Select.ItemIndicator style={s.settingsSelectIndicator}>
-                            <Check size={13} />
+                            <Check />
                           </Select.ItemIndicator>
                         </Select.Item>
                       ))}

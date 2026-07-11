@@ -43,7 +43,7 @@ describe("terminal context menu", () => {
     dispose();
   });
 
-  it("pastes clipboard text on right click even when terminal text is selected", async () => {
+  it("pastes selected terminal text on right click without reading the clipboard", async () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
     vi.mocked(readClipboardText).mockResolvedValue("pasted");
     Object.defineProperty(navigator, "clipboard", {
@@ -61,9 +61,9 @@ describe("terminal context menu", () => {
 
     expect(preventDefault).toHaveBeenCalled();
     expect(writeText).not.toHaveBeenCalled();
-    expect(readClipboardText).toHaveBeenCalled();
+    expect(readClipboardText).not.toHaveBeenCalled();
     expect(navigator.clipboard.readText).not.toHaveBeenCalled();
-    expect(onPaste).toHaveBeenCalledWith("pasted");
+    expect(onPaste).toHaveBeenCalledWith("selected text");
   });
 
   it("preserves the existing terminal selection when right click starts", () => {
@@ -89,7 +89,7 @@ describe("terminal context menu", () => {
     dispose();
   });
 
-  it("copies a selection with Cmd/Ctrl+C and pastes with Cmd/Ctrl+V", async () => {
+  it("copies and pastes the active selection with Cmd/Ctrl shortcuts", async () => {
     let handler: ((event: KeyboardEvent) => boolean) | undefined;
     const writeText = vi.fn().mockResolvedValue(undefined);
     vi.mocked(readClipboardText).mockResolvedValue("clipboard input");
@@ -122,8 +122,9 @@ describe("terminal context menu", () => {
     expect(handler?.(pasteEvent)).toBe(false);
     await vi.waitFor(() => {
       expect(writeText).toHaveBeenCalledWith("selected text");
-      expect(onPaste).toHaveBeenCalledWith("clipboard input");
+      expect(onPaste).toHaveBeenCalledWith("selected text");
     });
+    expect(readClipboardText).not.toHaveBeenCalled();
 
     dispose();
   });
@@ -156,6 +157,33 @@ describe("terminal context menu", () => {
       expect(onPaste).toHaveBeenCalledWith("direct paste");
     });
 
+    dispose();
+  });
+
+  it("uses selected terminal text for a native paste event", async () => {
+    const element = document.createElement("div");
+    const textarea = document.createElement("textarea");
+    element.appendChild(textarea);
+    const terminal = {
+      ...selectedTerminal("selected paste"),
+      attachCustomKeyEventHandler: vi.fn(),
+      element,
+      textarea,
+    } as unknown as Terminal;
+    const onPaste = vi.fn();
+    const dispose = attachSmartCopy(terminal, { onPaste });
+    const pasteEvent = new Event("paste", {
+      bubbles: true,
+      cancelable: true,
+    }) as ClipboardEvent;
+    Object.defineProperty(pasteEvent, "clipboardData", {
+      value: { getData: vi.fn(() => "clipboard text") },
+    });
+
+    textarea.dispatchEvent(pasteEvent);
+
+    await vi.waitFor(() => expect(onPaste).toHaveBeenCalledWith("selected paste"));
+    expect(readClipboardText).not.toHaveBeenCalled();
     dispose();
   });
 

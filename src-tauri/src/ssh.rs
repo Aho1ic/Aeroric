@@ -452,6 +452,7 @@ fn spawn_remote_task_pty(
         true,
         None,
         None,
+        None,
     );
     spawn_remote_task_exit_monitor(app, task_id.to_string());
     Ok(())
@@ -537,6 +538,7 @@ pub async fn open_ssh_shell(
         },
         reader,
         false,
+        None,
         None,
         Some(on_finish),
     );
