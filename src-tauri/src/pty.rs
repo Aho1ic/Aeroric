@@ -523,15 +523,15 @@ fn prompt_with_project_prefix(prompt: &str, prompt_prefix: &str) -> String {
     }
 }
 
-fn initial_prompt_args(prompt: &str, is_codex: bool) -> Vec<String> {
+fn initial_prompt_input_sequence(prompt: &str) -> Option<Vec<u8>> {
     if prompt.is_empty() {
-        return Vec::new();
+        return None;
     }
-    if is_codex {
-        vec!["--".to_string(), prompt.to_string()]
-    } else {
-        vec![prompt.to_string()]
-    }
+    let mut input = Vec::with_capacity(prompt.len() + 16);
+    input.extend_from_slice(b"\x1b[200~");
+    input.extend_from_slice(prompt.as_bytes());
+    input.extend_from_slice(b"\x1b[201~\r");
+    Some(input)
 }
 
 fn add_codex_launch_args(
@@ -667,9 +667,6 @@ pub async fn run_task(
         if use_hooks {
             c.arg("--dangerously-bypass-hook-trust");
         }
-        for arg in initial_prompt_args(&final_prompt, true) {
-            c.arg(arg);
-        }
         c
     } else {
         let mut c = build_claude_cmd(&agent_bin, &permission_mode);
@@ -686,9 +683,6 @@ pub async fn run_task(
                 c.arg("--settings");
                 c.arg(p.to_string_lossy().as_ref());
             }
-        }
-        for arg in initial_prompt_args(&final_prompt, false) {
-            c.arg(arg);
         }
         c
     };
@@ -715,7 +709,9 @@ pub async fn run_task(
         serde_json::json!({ "task_id": task_id, "status": "running" }),
     );
 
-    // 带 prompt 的任务由 Agent CLI 原生启动并立即执行首条消息。
+    // 带 prompt 的任务统一以交互 REPL 启动，再通过 PTY bracketed-paste 注入并提交。
+    // 自定义 Agent 包装脚本不一定支持 Claude/Codex 的 positional prompt 参数，
+    // PTY 输入可确保所有 Agent 都自动执行新建任务页中的首条消息。
     // 因此这里不能启动 /status watcher，避免抢占用户输入或污染浅色终端背景。
     let starts_with_prompt = !final_prompt.is_empty();
     let session_tx = if starts_with_prompt {
@@ -760,6 +756,14 @@ pub async fn run_task(
         session_tx,
         None,
     );
+    if let Some(input) = initial_prompt_input_sequence(&final_prompt) {
+        let writer = task_manager.pty_writers.lock().get(&task_id).cloned();
+        if let Some(writer) = writer {
+            let mut writer = writer.lock();
+            writer.write_all(&input).map_err(|e| e.to_string())?;
+            writer.flush().map_err(|e| e.to_string())?;
+        }
+    }
     spawn_exit_monitor(app, task_id, project_path, is_codex);
 
     Ok(())
@@ -1148,16 +1152,11 @@ mod tests {
     }
 
     #[test]
-    fn initial_prompt_uses_native_cli_arguments() {
-        assert!(initial_prompt_args("", true).is_empty());
-        assert!(initial_prompt_args("", false).is_empty());
+    fn initial_prompt_is_pasted_and_submitted_to_the_agent_terminal() {
+        assert_eq!(initial_prompt_input_sequence(""), None);
         assert_eq!(
-            initial_prompt_args("hello\nworld", true),
-            vec!["--", "hello\nworld"]
-        );
-        assert_eq!(
-            initial_prompt_args("hello\nworld", false),
-            vec!["hello\nworld"]
+            initial_prompt_input_sequence("hello\nworld").unwrap(),
+            b"\x1b[200~hello\nworld\x1b[201~\r".to_vec()
         );
     }
 

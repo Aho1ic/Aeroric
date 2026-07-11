@@ -38,6 +38,19 @@ describe("terminal output highlighting", () => {
     expect(remapLightAnsiForeground(raw, "dark")).toBe(raw);
   });
 
+  it("lightens agent input and diff backgrounds while darkening pale code text", () => {
+    const raw =
+      "\x1b[40;38;2;190;190;190minput\x1b[0m " +
+      "\x1b[48;2;60;20;20;38;2;180;180;180mremoved\x1b[0m " +
+      "\x1b[48;5;22;97madded\x1b[0m";
+    const light = remapLightAnsiForeground(raw, "light");
+
+    expect(light).toContain("\x1b[48;2;234;238;242;39minput");
+    expect(light).toContain("\x1b[48;2;255;235;233;39mremoved");
+    expect(light).toContain("\x1b[48;2;218;251;225;39madded");
+    expect(remapLightAnsiForeground(raw, "dark")).toBe(raw);
+  });
+
   it("splits large writes without breaking surrogate pairs", () => {
     const emoji = "😀";
     const data = `${"x".repeat(TERMINAL_WRITE_CHUNK_SIZE - 1)}${emoji}tail`;

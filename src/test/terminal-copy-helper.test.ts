@@ -60,6 +60,29 @@ describe("terminal context menu", () => {
     expect(onPaste).toHaveBeenCalledWith("pasted");
   });
 
+  it("preserves the existing terminal selection when right click starts", () => {
+    const element = document.createElement("div");
+    const clearSelection = vi.fn();
+    element.addEventListener("mousedown", clearSelection);
+    const terminal = {
+      ...selectedTerminal("selected text"),
+      element,
+      attachCustomKeyEventHandler: vi.fn(),
+    } as unknown as Terminal;
+
+    const dispose = attachSmartCopy(terminal, { onPaste: vi.fn() });
+    const rightDown = new MouseEvent("mousedown", {
+      button: 2,
+      bubbles: true,
+      cancelable: true,
+    });
+    element.dispatchEvent(rightDown);
+
+    expect(rightDown.defaultPrevented).toBe(true);
+    expect(clearSelection).not.toHaveBeenCalled();
+    dispose();
+  });
+
   it("copies a selection with Cmd/Ctrl+C and pastes with Cmd/Ctrl+V", async () => {
     let handler: ((event: KeyboardEvent) => boolean) | undefined;
     const writeText = vi.fn().mockResolvedValue(undefined);

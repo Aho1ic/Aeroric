@@ -144,6 +144,22 @@ function remapLightSgrBody(body: string): string | null {
 
   for (let index = 0; index < parts.length; index += 1) {
     const code = parts[index];
+    if (code === "40" || code === "100") {
+      next.push("48", "2", "234", "238", "242");
+      changed = true;
+      continue;
+    }
+    if (code === "41" || code === "101") {
+      next.push("48", "2", "255", "235", "233");
+      changed = true;
+      continue;
+    }
+    if (code === "42" || code === "102") {
+      next.push("48", "2", "218", "251", "225");
+      changed = true;
+      continue;
+    }
+
     if (code === "37" || code === "97") {
       next.push("39");
       changed = true;
@@ -154,7 +170,11 @@ function remapLightSgrBody(body: string): string | null {
       const red = Number(parts[index + 2]);
       const green = Number(parts[index + 3]);
       const blue = Number(parts[index + 4]);
-      if (red >= 235 && green >= 235 && blue >= 235) {
+      const neutral = Math.max(red, green, blue) - Math.min(red, green, blue) <= 18;
+      if (
+        (red >= 235 && green >= 235 && blue >= 235) ||
+        (neutral && red >= 150 && green >= 150 && blue >= 150)
+      ) {
         next.push("39");
         index += 4;
         changed = true;
@@ -166,6 +186,42 @@ function remapLightSgrBody(body: string): string | null {
       const color = Number(parts[index + 2]);
       if (color === 15 || color >= 231) {
         next.push("39");
+        index += 2;
+        changed = true;
+        continue;
+      }
+    }
+
+    if (code === "48" && parts[index + 1] === "2") {
+      const red = Number(parts[index + 2]);
+      const green = Number(parts[index + 3]);
+      const blue = Number(parts[index + 4]);
+      const max = Math.max(red, green, blue);
+      if (max <= 110) {
+        const color =
+          red > green * 1.18 && red > blue * 1.18
+            ? ["255", "235", "233"]
+            : green > red * 1.18 && green > blue * 1.08
+              ? ["218", "251", "225"]
+              : ["234", "238", "242"];
+        next.push("48", "2", ...color);
+        index += 4;
+        changed = true;
+        continue;
+      }
+    }
+
+    if (code === "48" && parts[index + 1] === "5") {
+      const color = Number(parts[index + 2]);
+      const replacement = [1, 9, 52, 88, 124].includes(color)
+        ? ["255", "235", "233"]
+        : [2, 10, 22, 28, 34].includes(color)
+          ? ["218", "251", "225"]
+          : [0, 8, 16].includes(color)
+            ? ["234", "238", "242"]
+            : null;
+      if (replacement) {
+        next.push("48", "2", ...replacement);
         index += 2;
         changed = true;
         continue;

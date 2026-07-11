@@ -288,9 +288,19 @@ export function attachSmartCopy(terminal: Terminal, keyOptions?: TerminalKeyOpti
     void handleTerminalContextMenu(terminal, keyOptions, e, contextMenuState);
   };
 
+  const preserveSelectionOnRightClick = (e: PointerEvent | MouseEvent) => {
+    if (e.button !== 2) return;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+  };
+
+  terminal.element?.addEventListener("pointerdown", preserveSelectionOnRightClick, true);
+  terminal.element?.addEventListener("mousedown", preserveSelectionOnRightClick, true);
   terminal.element?.addEventListener("contextmenu", handleContextMenu);
 
   return () => {
+    terminal.element?.removeEventListener("pointerdown", preserveSelectionOnRightClick, true);
+    terminal.element?.removeEventListener("mousedown", preserveSelectionOnRightClick, true);
     terminal.element?.removeEventListener("contextmenu", handleContextMenu);
     terminal.attachCustomKeyEventHandler(() => true);
   };

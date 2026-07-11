@@ -385,6 +385,28 @@ export function attachLinuxIMEFix(
     compositionView.textContent = "";
   };
 
+  const terminalElement = textarea.closest<HTMLElement>(".xterm");
+  const compositionView = terminalElement?.querySelector<HTMLElement>(".composition-view") ?? null;
+  const compositionObserver = compositionView
+    ? new MutationObserver(() => {
+        if (compositionText) return;
+        if (compositionView.classList.contains("active")) {
+          compositionView.classList.remove("active");
+        }
+        if (compositionView.textContent) {
+          compositionView.textContent = "";
+        }
+        clearTextarea();
+      })
+    : null;
+  compositionObserver?.observe(compositionView!, {
+    attributes: true,
+    attributeFilter: ["class"],
+    childList: true,
+    characterData: true,
+    subtree: true,
+  });
+
   const hideEmptyXtermCompositionViewAfterEvent = () => {
     queueMicrotask(() => {
       if (compositionText) return;
@@ -1001,6 +1023,7 @@ export function attachLinuxIMEFix(
       textareaClearGeneration += 1;
       clearScheduledTextareaClears();
       clearTextareaInputClientReset();
+      compositionObserver?.disconnect();
       disposable.dispose();
     },
   };

@@ -90,22 +90,17 @@ body {
   display: flex;
   align-items: center;
   box-sizing: border-box;
-  height: 26px;
-  margin: 4px 6px 3px;
-  padding: 0 10px;
-  border: 1px solid color-mix(in srgb, var(--accent) 34%, var(--border-dim));
-  border-radius: var(--radius-sm);
-  background: linear-gradient(
-    90deg,
-    color-mix(in srgb, var(--accent) 14%, var(--bg-input)),
-    color-mix(in srgb, var(--accent) 7%, var(--bg-input))
-  );
+  height: 20px;
+  margin: 3px 6px 2px;
+  padding: 0 9px;
+  border: 1px solid color-mix(in srgb, var(--accent) 38%, var(--border-medium));
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 9%, var(--bg-input));
   color: color-mix(in srgb, var(--accent) 88%, var(--text-primary));
-  font-size: 11px;
-  font-weight: 750;
+  font-size: 10.5px;
+  font-weight: 800;
   line-height: 1;
-  letter-spacing: 0.3px;
-  box-shadow: inset 3px 0 0 color-mix(in srgb, var(--accent) 70%, transparent);
+  letter-spacing: 0.2px;
   user-select: none;
 }
 .radix-select-item {
@@ -2024,4 +2019,17 @@ html:not(.dark) .xterm {
 html:not(.dark) .xterm-helper-textarea {
   background: var(--terminal-bg) !important;
   caret-color: var(--text-primary) !important;
+}
+
+/* xterm defaults IME preedit text to a black block. A transparent underline keeps
+ * the active pinyin visible without making a deleted final character look alive. */
+.xterm .composition-view {
+  background: transparent !important;
+  color: inherit !important;
+  border-bottom: 2px solid color-mix(in srgb, var(--accent) 70%, transparent);
+}
+
+.xterm .composition-view:not(.active),
+.xterm .composition-view:empty {
+  display: none !important;
 }
