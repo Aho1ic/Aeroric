@@ -86,6 +86,7 @@ pub fn events_root() -> Result<PathBuf, String> {
 }
 
 pub fn events_dir_for(task_id: &str) -> Result<PathBuf, String> {
+    crate::storage::validate_storage_id(task_id, "task")?;
     Ok(events_root()?.join(task_id))
 }
 

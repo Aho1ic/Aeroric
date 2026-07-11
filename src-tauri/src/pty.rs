@@ -28,6 +28,10 @@ fn task_attachments_dir(project_path: &str, task_id: &str) -> std::path::PathBuf
         .join(task_id)
 }
 
+fn validate_task_id(task_id: &str) -> Result<(), String> {
+    crate::storage::validate_storage_id(task_id, "task")
+}
+
 fn has_task_session(app: &AppHandle, task_id: &str, is_codex: bool) -> bool {
     let tm = app.state::<TaskManager>();
     if is_codex {
@@ -561,6 +565,7 @@ pub async fn run_task(
     rows: Option<u16>,
     on_output: Channel<String>,
 ) -> Result<(), String> {
+    validate_task_id(&task_id)?;
     task_manager.cancelled_tasks.lock().remove(&task_id);
     task_manager
         .manually_completed_tasks
@@ -767,6 +772,7 @@ pub async fn cancel_task(
     task_id: String,
     project_path: String,
 ) -> Result<(), String> {
+    validate_task_id(&task_id)?;
     task_manager.cancelled_tasks.lock().insert(task_id.clone());
     task_manager
         .manually_completed_tasks
@@ -804,6 +810,7 @@ pub async fn complete_task(
     task_id: String,
     project_path: String,
 ) -> Result<(), String> {
+    validate_task_id(&task_id)?;
     task_manager
         .manually_completed_tasks
         .lock()

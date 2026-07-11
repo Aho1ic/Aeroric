@@ -2012,9 +2012,7 @@ pub async fn create_task_worktree(
     base_branch: String,
 ) -> Result<WorktreeCreated, String> {
     validate_project_path(&project_path)?;
-    if task_id.trim().is_empty() {
-        return Err("Task id is required".to_string());
-    }
+    crate::storage::validate_storage_id(&task_id, "task")?;
     if base_branch.trim().is_empty() {
         return Err("Base branch is required".to_string());
     }

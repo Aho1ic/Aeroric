@@ -15,6 +15,7 @@ import {
   type MentionItem,
 } from "./new-task/MentionPopover";
 import { PromptEditor, usePromptEditor, type PromptEditorContent } from "./new-task/PromptEditor";
+import { sanitizePromptHtml } from "./new-task/promptHtml";
 import { ImageAttachments } from "./new-task/ImageAttachments";
 import { TextAttachments, type PastedText } from "./new-task/TextAttachments";
 import {
@@ -140,16 +141,17 @@ export function NewTaskView({
   const [sendShortcut, setSendShortcut] = useState<SendShortcut>(DEFAULT_SEND_SHORTCUT);
 
   const { editorRef, isComposingRef, handle: editorHandle } = usePromptEditor();
+  const initialPromptHtml = sanitizePromptHtml(initialDraft?.promptHtml ?? "");
   const editorContentRef = useRef<PromptEditorContent>({
-    html: initialDraft?.promptHtml ?? "",
-    text: (initialDraft?.promptHtml ?? "").replace(/<[^>]+>/g, ""),
-    hasChips: !!initialDraft?.promptHtml?.includes("data-file-path"),
+    html: initialPromptHtml,
+    text: initialPromptHtml.replace(/<[^>]+>/g, ""),
+    hasChips: initialPromptHtml.includes("data-file-path"),
   });
 
   // Restore prompt HTML from draft on mount (DOM-level state outside React).
   useEffect(() => {
-    if (initialDraft?.promptHtml && editorRef.current) {
-      editorRef.current.innerHTML = initialDraft.promptHtml;
+    if (initialPromptHtml && editorRef.current) {
+      editorRef.current.innerHTML = initialPromptHtml;
       editorContentRef.current = {
         html: editorRef.current.innerHTML,
         text: editorRef.current.textContent || "",

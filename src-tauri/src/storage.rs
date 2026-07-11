@@ -103,7 +103,20 @@ fn tasks_path(project_id: &str) -> Result<PathBuf, String> {
     Ok(project_dir(project_id)?.join("tasks.json"))
 }
 
+pub(crate) fn validate_storage_id(id: &str, label: &str) -> Result<(), String> {
+    let trimmed = id.trim();
+    if trimmed.is_empty()
+        || !trimmed
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_'))
+    {
+        return Err(format!("Invalid {label} id"));
+    }
+    Ok(())
+}
+
 fn project_dir(project_id: &str) -> Result<PathBuf, String> {
+    validate_storage_id(project_id, "project")?;
     Ok(aeroric_dir()?.join("projects").join(project_id))
 }
 
@@ -112,16 +125,8 @@ fn terminal_history_dir() -> Result<PathBuf, String> {
 }
 
 fn safe_task_history_name(task_id: &str) -> Result<String, String> {
+    validate_storage_id(task_id, "task")?;
     let trimmed = task_id.trim();
-    if trimmed.is_empty() {
-        return Err("Task id cannot be empty".to_string());
-    }
-    if !trimmed
-        .chars()
-        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_'))
-    {
-        return Err("Invalid task id".to_string());
-    }
     Ok(format!("{trimmed}.log"))
 }
 
@@ -253,6 +258,15 @@ pub fn atomic_write(path: &Path, content: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn storage_ids_reject_path_traversal() {
+        assert!(validate_storage_id("1783647251756", "project").is_ok());
+        assert!(validate_storage_id("task_1-safe", "task").is_ok());
+        for invalid in ["", " ", "../escape", "a/b", r"a\b", "."] {
+            assert!(validate_storage_id(invalid, "test").is_err(), "{invalid}");
+        }
+    }
 
     #[test]
     fn legacy_project_without_location_deserializes() {

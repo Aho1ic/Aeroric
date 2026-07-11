@@ -7,7 +7,8 @@
     "core:default",
     "core:window:allow-set-theme",
     "core:window:allow-hide",
-    "opener:default",
+    "opener:allow-open-url",
+    "opener:allow-default-urls",
     "dialog:default"
   ]
 }
