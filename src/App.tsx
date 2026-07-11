@@ -1085,6 +1085,7 @@ function App() {
   }
 
   function deleteTasks(taskIds: string[]) {
+    taskIds = taskIds.filter((id) => !tasks.find((task) => task.id === id)?.starred);
     if (taskIds.length === 0) return;
 
     setTasks((prev) => {
@@ -1148,7 +1149,7 @@ function App() {
 
   async function handleDeleteTask(taskId: string) {
     const task = tasks.find((item) => item.id === taskId);
-    if (!task) return;
+    if (!task || task.starred) return;
     const promptPreview = `${task.prompt.slice(0, 100)}${task.prompt.length > 100 ? "..." : ""}`;
     const ok = await confirm(t("task.deletePrompt", { prompt: promptPreview }), {
       title: t("task.deleteTitle"),
@@ -1160,7 +1161,7 @@ function App() {
 
   async function handleDeleteAllTasks(project: Project) {
     const projectTaskIds = tasks
-      .filter((task) => task.projectId === project.id)
+      .filter((task) => task.projectId === project.id && !task.starred)
       .map((task) => task.id);
     if (projectTaskIds.length === 0) return;
     const ok = await confirm(

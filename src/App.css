@@ -87,11 +87,11 @@ body {
 }
 
 .sftp-select-group-label {
-  display: flex;
+  display: inline-flex;
   align-items: center;
   box-sizing: border-box;
   height: 20px;
-  margin: 3px 6px 2px;
+  margin: 3px 6px 2px 22px;
   padding: 0 9px;
   border: 1px solid color-mix(in srgb, var(--accent) 38%, var(--border-medium));
   border-radius: 999px;
@@ -102,6 +102,59 @@ body {
   line-height: 1;
   letter-spacing: 0.2px;
   user-select: none;
+}
+
+.task-multi-actions {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin: 4px 6px;
+  padding: 5px 7px;
+  border: 1px solid var(--border-medium);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--bg-card) 92%, transparent);
+  box-shadow: var(--shadow-popover);
+  backdrop-filter: blur(12px);
+}
+.task-multi-actions strong {
+  margin-right: auto;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+.task-multi-actions button {
+  display: inline-grid;
+  place-items: center;
+  width: 25px;
+  height: 25px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.task-multi-actions button:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+  transform: translateY(-1px);
+}
+.task-multi-actions button:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.sftp-remote-machine-item {
+  transition:
+    transform 150ms ease,
+    background 150ms ease,
+    box-shadow 150ms ease;
+}
+.sftp-remote-machine-item[data-highlighted] {
+  transform: translateX(3px);
+  box-shadow: inset 2px 0 0 var(--accent);
 }
 .radix-select-item {
   display: flex;

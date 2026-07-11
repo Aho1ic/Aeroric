@@ -602,14 +602,15 @@ export function attachLinuxIMEFix(
     isComposing = true;
     compositionText = "";
     ignoredReplayProgress = "";
-    clearTextareaNowAndNextFrame();
     void event;
   };
 
   const handleCompositionUpdateCapture = (event: CompositionEvent) => {
     compositionText = event.data ?? "";
     imeDbg("compositionupdate", { data: event.data, compositionText });
-    clearTextareaNowAndNextFrame();
+    // Do not clear xterm's helper textarea while WebKit is composing. xterm
+    // reads that value after this capture listener to paint `.composition-view`;
+    // clearing it here made WeChat IME show candidates but hide the pinyin.
     if (compositionText) {
       syncCompositionViewLayout();
     } else {

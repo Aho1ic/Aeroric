@@ -229,8 +229,7 @@ export function attachSmartCopy(terminal: Terminal, keyOptions?: TerminalKeyOpti
   const pasteClipboardText = (eventText?: string) => {
     if (!keyOptions?.onPaste || pasteInProgress) return;
     pasteInProgress = true;
-    const textPromise =
-      eventText ? Promise.resolve(eventText) : navigator.clipboard.readText();
+    const textPromise = eventText ? Promise.resolve(eventText) : navigator.clipboard.readText();
     textPromise
       .then((text) => {
         if (text) keyOptions.onPaste?.(text);

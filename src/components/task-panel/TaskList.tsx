@@ -1,4 +1,14 @@
-import { useCallback, useLayoutEffect, useMemo, useRef, useState, type UIEvent } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type MouseEvent,
+  type UIEvent,
+} from "react";
+import { Play, Star, Trash2, X } from "lucide-react";
 import type { Task, TaskDisplayWindow } from "../../types";
 import { isActiveTaskStatus } from "../../types";
 import { TaskListItem } from "./TaskListItem";
@@ -65,6 +75,13 @@ export function TaskList({
   const scrollRef = useRef<HTMLDivElement>(null);
   const [viewportHeight, setViewportHeight] = useState(0);
   const [scrollTop, setScrollTop] = useState(0);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const selectionAnchorRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    const available = new Set(tasks.map((task) => task.id));
+    setSelectedIds((current) => new Set([...current].filter((id) => available.has(id))));
+  }, [tasks]);
 
   useLayoutEffect(() => {
     const el = scrollRef.current;
@@ -95,6 +112,7 @@ export function TaskList({
 
   const sorted = useMemo(() => {
     return [...filtered].sort((a, b) => {
+      if (a.starred !== b.starred) return a.starred ? -1 : 1;
       const aNeedsAttention =
         a.status === "input_required" || a.status === "detached" || a.status === "interrupted";
       const bNeedsAttention =
@@ -183,6 +201,49 @@ export function TaskList({
     return nextRows;
   }, [cutoffTs, onResumeTask, sorted, t, todayTs]);
 
+  const selectableTasks = useMemo(
+    () =>
+      rows
+        .filter((row): row is Extract<VirtualRow, { type: "task" }> => row.type === "task")
+        .map((row) => row.task),
+    [rows],
+  );
+
+  const handleTaskClick = useCallback(
+    (task: Task, event: MouseEvent) => {
+      const additive = event.metaKey || event.ctrlKey;
+      if (event.shiftKey && selectionAnchorRef.current) {
+        const anchorIndex = selectableTasks.findIndex(
+          (item) => item.id === selectionAnchorRef.current,
+        );
+        const targetIndex = selectableTasks.findIndex((item) => item.id === task.id);
+        if (anchorIndex >= 0 && targetIndex >= 0) {
+          const [start, end] =
+            anchorIndex < targetIndex ? [anchorIndex, targetIndex] : [targetIndex, anchorIndex];
+          const range = selectableTasks.slice(start, end + 1).map((item) => item.id);
+          setSelectedIds((current) => new Set(additive ? [...current, ...range] : range));
+          return;
+        }
+      }
+      if (additive) {
+        setSelectedIds((current) => {
+          const next = new Set(current);
+          if (next.has(task.id)) next.delete(task.id);
+          else next.add(task.id);
+          return next;
+        });
+        selectionAnchorRef.current = task.id;
+        return;
+      }
+      setSelectedIds(new Set());
+      selectionAnchorRef.current = task.id;
+      onSelectTask(task.id);
+    },
+    [onSelectTask, selectableTasks],
+  );
+
+  const selectedTasks = selectableTasks.filter((task) => selectedIds.has(task.id));
+
   const offsets = useMemo(() => {
     const nextOffsets = [0];
     for (const row of rows) {
@@ -201,6 +262,39 @@ export function TaskList({
 
   return (
     <div ref={scrollRef} style={s.taskListScroll} onScroll={handleScroll}>
+      {selectedTasks.length > 0 && (
+        <div className="task-multi-actions">
+          <strong>{selectedTasks.length}</strong>
+          <button
+            title={t("task.star")}
+            onClick={() =>
+              selectedTasks
+                .filter((task) => !task.starred)
+                .forEach((task) => onToggleTaskStar(task.id))
+            }
+          >
+            <Star size={13} />
+          </button>
+          <button
+            title={t("task.continue")}
+            onClick={() => selectedTasks.forEach((task) => onResumeTask?.(task.id))}
+          >
+            <Play size={13} />
+          </button>
+          <button
+            disabled={selectedTasks.every((task) => task.starred)}
+            title={t("task.deleteTask")}
+            onClick={() =>
+              selectedTasks.filter((task) => !task.starred).forEach((task) => onDeleteTask(task.id))
+            }
+          >
+            <Trash2 size={13} />
+          </button>
+          <button title="Clear selection" onClick={() => setSelectedIds(new Set())}>
+            <X size={13} />
+          </button>
+        </div>
+      )}
       {tasks.length === 0 && <div style={s.taskListEmpty}>{t("task.noTasksYet")}</div>}
       <div style={{ height: totalHeight, position: "relative" }}>
         {visibleRows.map((row, visibleIndex) => {
@@ -224,8 +318,11 @@ export function TaskList({
               ) : (
                 <TaskListItem
                   task={row.task}
-                  selected={selectedId === row.task.id && !isNewTask}
-                  onClick={() => onSelectTask(row.task.id)}
+                  selected={
+                    (selectedId === row.task.id && !isNewTask) || selectedIds.has(row.task.id)
+                  }
+                  multiSelected={selectedIds.has(row.task.id)}
+                  onClick={(event) => handleTaskClick(row.task, event)}
                   onDelete={() => onDeleteTask(row.task.id)}
                   onToggleStar={() => onToggleTaskStar(row.task.id)}
                   onRunTodo={row.showRunTodo ? () => onRunTodo(row.task) : undefined}

@@ -1,4 +1,4 @@
-import { useState, memo } from "react";
+import { useState, memo, type MouseEvent } from "react";
 import { Trash2, Star, Play, GitBranch, RotateCcw } from "lucide-react";
 import type { Task } from "../../types";
 import { StatusIcon } from "../StatusIcon";
@@ -35,6 +35,7 @@ export const TaskListItem = memo(
   function TaskListItem({
     task,
     selected,
+    multiSelected,
     onClick,
     onDelete,
     onToggleStar,
@@ -43,7 +44,8 @@ export const TaskListItem = memo(
   }: {
     task: Task;
     selected: boolean;
-    onClick: () => void;
+    multiSelected: boolean;
+    onClick: (event: MouseEvent) => void;
     onDelete: () => void;
     onToggleStar: () => void;
     onRunTodo?: () => void;
@@ -63,6 +65,7 @@ export const TaskListItem = memo(
         onMouseEnter={() => setHov(true)}
         onMouseLeave={() => setHov(false)}
         onClick={onClick}
+        aria-selected={multiSelected}
       >
         <div style={{ flexShrink: 0, marginTop: 1 }}>
           <StatusIcon status={task.status} />
@@ -109,23 +112,25 @@ export const TaskListItem = memo(
             <GitBranch size={11} strokeWidth={2.2} />
           </span>
         )}
-        <button
-          type="button"
-          aria-label={task.starred ? t("task.unstar") : t("task.star")}
-          title={task.starred ? t("task.unstar") : t("task.star")}
-          style={{
-            ...s.taskStarBtn,
-            opacity: task.starred ? 1 : hov ? 0.7 : 0,
-            pointerEvents: task.starred || hov ? "auto" : "none",
-            color: task.starred ? "var(--star-fg)" : "var(--text-hint)",
-          }}
-          onClick={(e) => {
-            e.stopPropagation();
-            onToggleStar();
-          }}
-        >
-          <Star size={12} strokeWidth={2.2} fill={task.starred ? "currentColor" : "none"} />
-        </button>
+        {!task.starred && (
+          <button
+            type="button"
+            aria-label={task.starred ? t("task.unstar") : t("task.star")}
+            title={task.starred ? t("task.unstar") : t("task.star")}
+            style={{
+              ...s.taskStarBtn,
+              opacity: task.starred ? 1 : hov ? 0.7 : 0,
+              pointerEvents: task.starred || hov ? "auto" : "none",
+              color: task.starred ? "var(--star-fg)" : "var(--text-hint)",
+            }}
+            onClick={(e) => {
+              e.stopPropagation();
+              onToggleStar();
+            }}
+          >
+            <Star size={12} strokeWidth={2.2} fill={task.starred ? "currentColor" : "none"} />
+          </button>
+        )}
         {onRunTodo && (
           <button
             type="button"
@@ -176,6 +181,7 @@ export const TaskListItem = memo(
   (prev, next) =>
     prev.task === next.task &&
     prev.selected === next.selected &&
+    prev.multiSelected === next.multiSelected &&
     (prev.onRunTodo !== undefined) === (next.onRunTodo !== undefined) &&
     (prev.onResumeTask !== undefined) === (next.onResumeTask !== undefined),
 );

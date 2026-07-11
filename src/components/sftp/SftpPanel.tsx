@@ -942,6 +942,7 @@ export function SftpPanel({
                         <Select.Item
                           key={connection.id}
                           value={`ssh:${connection.id}`}
+                          className="sftp-remote-machine-item"
                           style={s.sftpGroupedConnectionItem}
                         >
                           <Select.ItemText>{connection.name}</Select.ItemText>
