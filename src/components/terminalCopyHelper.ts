@@ -1,4 +1,5 @@
 import type { Terminal } from "@xterm/xterm";
+import { readText as readClipboardText } from "@tauri-apps/plugin-clipboard-manager";
 import { shouldSuppressPrintableKeyRepeat } from "./terminalInputFix";
 
 /** Threshold below which we use the fast synchronous path. */
@@ -187,7 +188,9 @@ export async function handleTerminalContextMenu(
     if (state.pasteInProgress) return;
     state.pasteInProgress = true;
     try {
-      const text = await navigator.clipboard.readText();
+      // Use Tauri's native clipboard API. WebKit's navigator.clipboard.readText()
+      // displays a system "Paste" confirmation affordance before resolving.
+      const text = await readClipboardText();
       if (text) keyOptions.onPaste(text);
     } catch {
       /* ignore clipboard read failures */
@@ -229,7 +232,7 @@ export function attachSmartCopy(terminal: Terminal, keyOptions?: TerminalKeyOpti
   const pasteClipboardText = (eventText?: string) => {
     if (!keyOptions?.onPaste || pasteInProgress) return;
     pasteInProgress = true;
-    const textPromise = eventText ? Promise.resolve(eventText) : navigator.clipboard.readText();
+    const textPromise = eventText ? Promise.resolve(eventText) : readClipboardText();
     textPromise
       .then((text) => {
         if (text) keyOptions.onPaste?.(text);
@@ -314,14 +317,15 @@ export function attachSmartCopy(terminal: Terminal, keyOptions?: TerminalKeyOpti
 
   terminal.element?.addEventListener("pointerdown", preserveSelectionOnRightClick, true);
   terminal.element?.addEventListener("mousedown", preserveSelectionOnRightClick, true);
-  terminal.element?.addEventListener("contextmenu", handleContextMenu);
+  // Capture before xterm's textarea or selection handlers can consume the event.
+  terminal.element?.addEventListener("contextmenu", handleContextMenu, true);
   terminal.element?.addEventListener("paste", handlePaste, true);
   terminal.textarea?.addEventListener("beforeinput", handleBeforeInput, true);
 
   return () => {
     terminal.element?.removeEventListener("pointerdown", preserveSelectionOnRightClick, true);
     terminal.element?.removeEventListener("mousedown", preserveSelectionOnRightClick, true);
-    terminal.element?.removeEventListener("contextmenu", handleContextMenu);
+    terminal.element?.removeEventListener("contextmenu", handleContextMenu, true);
     terminal.element?.removeEventListener("paste", handlePaste, true);
     terminal.textarea?.removeEventListener("beforeinput", handleBeforeInput, true);
     terminal.attachCustomKeyEventHandler(() => true);

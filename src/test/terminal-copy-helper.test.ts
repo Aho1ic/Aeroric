@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import type { Terminal } from "@xterm/xterm";
+import { readText as readClipboardText } from "@tauri-apps/plugin-clipboard-manager";
 import { attachSmartCopy, handleTerminalContextMenu } from "../components/terminalCopyHelper";
+
+vi.mock("@tauri-apps/plugin-clipboard-manager", () => ({
+  readText: vi.fn(),
+}));
 
 function selectedTerminal(text: string): Terminal {
   return {
@@ -40,9 +45,9 @@ describe("terminal context menu", () => {
 
   it("pastes clipboard text on right click even when terminal text is selected", async () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
-    const readText = vi.fn().mockResolvedValue("pasted");
+    vi.mocked(readClipboardText).mockResolvedValue("pasted");
     Object.defineProperty(navigator, "clipboard", {
-      value: { writeText, readText },
+      value: { writeText, readText: vi.fn() },
       configurable: true,
     });
     const event = new MouseEvent("contextmenu");
@@ -56,7 +61,8 @@ describe("terminal context menu", () => {
 
     expect(preventDefault).toHaveBeenCalled();
     expect(writeText).not.toHaveBeenCalled();
-    expect(readText).toHaveBeenCalled();
+    expect(readClipboardText).toHaveBeenCalled();
+    expect(navigator.clipboard.readText).not.toHaveBeenCalled();
     expect(onPaste).toHaveBeenCalledWith("pasted");
   });
 
@@ -86,9 +92,9 @@ describe("terminal context menu", () => {
   it("copies a selection with Cmd/Ctrl+C and pastes with Cmd/Ctrl+V", async () => {
     let handler: ((event: KeyboardEvent) => boolean) | undefined;
     const writeText = vi.fn().mockResolvedValue(undefined);
-    const readText = vi.fn().mockResolvedValue("clipboard input");
+    vi.mocked(readClipboardText).mockResolvedValue("clipboard input");
     Object.defineProperty(navigator, "clipboard", {
-      value: { writeText, readText },
+      value: { writeText, readText: vi.fn() },
       configurable: true,
     });
     const terminal = {
@@ -154,9 +160,9 @@ describe("terminal context menu", () => {
   });
 
   it("intercepts insertFromPaste before xterm can render a paste confirmation", async () => {
-    const readText = vi.fn().mockResolvedValue("clipboard fallback");
+    vi.mocked(readClipboardText).mockResolvedValue("clipboard fallback");
     Object.defineProperty(navigator, "clipboard", {
-      value: { writeText: vi.fn(), readText },
+      value: { writeText: vi.fn(), readText: vi.fn() },
       configurable: true,
     });
     const element = document.createElement("div");
@@ -180,10 +186,38 @@ describe("terminal context menu", () => {
 
     expect(beforeInput.defaultPrevented).toBe(true);
     await vi.waitFor(() => {
-      expect(readText).toHaveBeenCalled();
+      expect(readClipboardText).toHaveBeenCalled();
+      expect(navigator.clipboard.readText).not.toHaveBeenCalled();
       expect(onPaste).toHaveBeenCalledWith("clipboard fallback");
     });
 
+    dispose();
+  });
+
+  it("captures a descendant context menu before xterm can show WebKit's native Paste UI", async () => {
+    vi.mocked(readClipboardText).mockResolvedValue("native clipboard");
+    const element = document.createElement("div");
+    const textarea = document.createElement("textarea");
+    element.appendChild(textarea);
+    textarea.addEventListener("contextmenu", (event) => event.stopImmediatePropagation());
+    const terminal = {
+      attachCustomKeyEventHandler: vi.fn(),
+      hasSelection: vi.fn(() => false),
+      focus: vi.fn(),
+      element,
+      textarea,
+    } as unknown as Terminal;
+    const onPaste = vi.fn();
+    const dispose = attachSmartCopy(terminal, { onPaste });
+    const event = new MouseEvent("contextmenu", {
+      bubbles: true,
+      cancelable: true,
+    });
+
+    textarea.dispatchEvent(event);
+
+    expect(event.defaultPrevented).toBe(true);
+    await vi.waitFor(() => expect(onPaste).toHaveBeenCalledWith("native clipboard"));
     dispose();
   });
 

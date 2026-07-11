@@ -9,6 +9,7 @@
     "core:window:allow-hide",
     "opener:allow-open-url",
     "opener:allow-default-urls",
-    "dialog:default"
+    "dialog:default",
+    "clipboard-manager:allow-read-text"
   ]
 }

@@ -45,6 +45,7 @@ trash = "=5.2.6"
 font-kit = "=0.14.3"
 rusqlite = { version = "0.32", features = ["bundled", "backup"] }
 dbx-core = { path = "../../dbx/crates/dbx-core", default-features = false }
+tauri-plugin-clipboard-manager = "2"
 
 [profile.dev]
 debug = 0

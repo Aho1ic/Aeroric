@@ -233,7 +233,7 @@ export function shouldIgnorePostCompositionInsert(
   );
 }
 
-export function shouldSuppressBrowserCompositionPreview(
+export function shouldPreserveBrowserCompositionPreview(
   inputType: string,
   isComposing: boolean,
 ): boolean {
@@ -685,9 +685,9 @@ export function attachLinuxIMEFix(
       shouldDeferRomanizedCompositionCommit(event.data, compositionText)
     ) {
       compositionText = event.data;
-      clearTextareaNowAndNextFrame();
-      event.preventDefault();
-      event.stopImmediatePropagation();
+      // Let WebKit and xterm keep the hidden textarea/composition view in sync.
+      // handleTerminalData already keeps this live pinyin out of the PTY.
+      syncCompositionViewLayout();
       return;
     }
 
@@ -844,11 +844,11 @@ export function attachLinuxIMEFix(
       return;
     }
 
-    if (shouldSuppressBrowserCompositionPreview(event.inputType, isComposing)) {
+    if (shouldPreserveBrowserCompositionPreview(event.inputType, isComposing)) {
       compositionText = event.data ?? compositionText;
-      clearTextareaNowAndNextFrame();
-      event.preventDefault();
-      event.stopImmediatePropagation();
+      // Do not clear or cancel live composition input: xterm needs the native
+      // textarea value to render pinyin such as `ce'shi` above the candidates.
+      syncCompositionViewLayout();
       return;
     }
 
@@ -870,6 +870,15 @@ export function attachLinuxIMEFix(
 
   const handleInputCapture = (event: Event) => {
     if (isComposing && typeof InputEvent !== "undefined" && event instanceof InputEvent) {
+      if (
+        event.isComposing &&
+        isTextInsertInputType(event.inputType) &&
+        !containsCommittedCjkText(event.data)
+      ) {
+        compositionText = event.data ?? compositionText;
+        syncCompositionViewLayout();
+        return;
+      }
       const text = getActiveCompositionText();
       if (
         !event.isComposing &&

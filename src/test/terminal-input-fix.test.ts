@@ -8,7 +8,7 @@ import {
   shouldIgnorePostCompositionCandidate,
   shouldIgnorePostCompositionInsert,
   shouldDeferRomanizedCompositionCommit,
-  shouldSuppressBrowserCompositionPreview,
+  shouldPreserveBrowserCompositionPreview,
 } from "../components/terminalInputFix";
 import { normalizeEditorCompositionText } from "../components/new-task/PromptEditor";
 
@@ -70,11 +70,11 @@ describe("terminal input fixes", () => {
     expect(shouldIgnorePostCompositionCandidate("shuo", candidates)).toBe(false);
   });
 
-  it("keeps WebKit live IME composition input out of the PTY until commit", () => {
-    expect(shouldSuppressBrowserCompositionPreview("insertCompositionText", true)).toBe(true);
-    expect(shouldSuppressBrowserCompositionPreview("insertText", true)).toBe(false);
-    expect(shouldSuppressBrowserCompositionPreview("insertCompositionText", false)).toBe(false);
-    expect(shouldSuppressBrowserCompositionPreview("insertText", false)).toBe(false);
+  it("preserves WebKit live IME composition input for xterm's preview", () => {
+    expect(shouldPreserveBrowserCompositionPreview("insertCompositionText", true)).toBe(true);
+    expect(shouldPreserveBrowserCompositionPreview("insertText", true)).toBe(false);
+    expect(shouldPreserveBrowserCompositionPreview("insertCompositionText", false)).toBe(false);
+    expect(shouldPreserveBrowserCompositionPreview("insertText", false)).toBe(false);
   });
 
   it("shows pinyin preedit text within the remaining terminal width", async () => {
@@ -121,11 +121,32 @@ describe("terminal input fixes", () => {
 
     const disposable = attachLinuxIMEFix(term as never, vi.fn());
     textarea.dispatchEvent(new CompositionEvent("compositionstart", { data: "" }));
-    textarea.dispatchEvent(new CompositionEvent("compositionupdate", { data: "ceshi" }));
+    textarea.dispatchEvent(new CompositionEvent("compositionupdate", { data: "ce'shi" }));
+    textarea.value = "ce'shi";
+    const beforeInput = new InputEvent("beforeinput", {
+      inputType: "insertCompositionText",
+      data: "ce'shi",
+      isComposing: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    textarea.dispatchEvent(beforeInput);
+    textarea.value = "ce'shi";
+    const input = new InputEvent("input", {
+      inputType: "insertCompositionText",
+      data: "ce'shi",
+      isComposing: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    textarea.dispatchEvent(input);
     await Promise.resolve();
 
+    expect(beforeInput.defaultPrevented).toBe(false);
+    expect(input.defaultPrevented).toBe(false);
+    expect(textarea.value).toBe("ce'shi");
     expect(compositionView.classList.contains("active")).toBe(true);
-    expect(compositionView.textContent).toBe("ceshi");
+    expect(compositionView.textContent).toBe("ce'shi");
     expect(compositionView.style.getPropertyValue("--aeroric-composition-max-width")).toBe("40px");
 
     textarea.dispatchEvent(new CompositionEvent("compositionupdate", { data: "" }));
@@ -297,9 +318,9 @@ describe("terminal input fixes", () => {
     textarea.dispatchEvent(committedChinese);
     vi.runOnlyPendingTimers();
 
-    expect(firstPreedit.defaultPrevented).toBe(true);
-    expect(secondPreedit.defaultPrevented).toBe(true);
-    expect(thirdPreedit.defaultPrevented).toBe(true);
+    expect(firstPreedit.defaultPrevented).toBe(false);
+    expect(secondPreedit.defaultPrevented).toBe(false);
+    expect(thirdPreedit.defaultPrevented).toBe(false);
     expect(committedChinese.defaultPrevented).toBe(true);
     expect(sent).toEqual(["是的啊"]);
     vi.useRealTimers();
