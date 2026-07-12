@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::OnceLock;
 
@@ -81,6 +82,7 @@ fn read_shell_env(shell: &str, interactive: bool) -> Option<Vec<(String, String)
 
     let output = Command::new(shell)
         .args(args)
+        .current_dir(shell_env_probe_cwd())
         .stdin(Stdio::null())
         .stderr(Stdio::null())
         .output()
@@ -91,6 +93,13 @@ fn read_shell_env(shell: &str, interactive: bool) -> Option<Vec<(String, String)
     }
 
     parse_shell_env_output(&output.stdout)
+}
+
+fn shell_env_probe_cwd() -> PathBuf {
+    home_dir()
+        .filter(|path| path.is_dir())
+        .or_else(|| std::env::temp_dir().canonicalize().ok())
+        .unwrap_or_else(|| PathBuf::from("/"))
 }
 
 fn parse_shell_env_output(stdout: &[u8]) -> Option<Vec<(String, String)>> {
@@ -165,4 +174,16 @@ fn build_fallback_env() -> Vec<(String, String)> {
     }
 
     env
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shell_env_probe_uses_stable_cwd() {
+        let cwd = shell_env_probe_cwd();
+        assert!(cwd.is_absolute());
+        assert!(cwd.is_dir());
+    }
 }

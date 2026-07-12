@@ -1,7 +1,7 @@
 use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 use std::fs;
 use std::io::{Read, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tauri::ipc::Channel;
@@ -565,6 +565,20 @@ fn uses_native_initial_prompt(agent: &str) -> bool {
     matches!(agent, "claude" | "codex")
 }
 
+fn stable_agent_spawn_cwd() -> PathBuf {
+    crate::platform::home_dir()
+        .filter(|path| path.is_dir())
+        .unwrap_or_else(std::env::temp_dir)
+}
+
+fn agent_process_cwd(project_path: &str, is_codex: bool) -> PathBuf {
+    if is_codex {
+        stable_agent_spawn_cwd()
+    } else {
+        PathBuf::from(project_path)
+    }
+}
+
 fn spawn_initial_prompt_injection(
     writer: Arc<parking_lot::Mutex<Box<dyn Write + Send>>>,
     input: Vec<u8>,
@@ -591,6 +605,8 @@ fn add_codex_launch_args(
     project_path: &str,
     selected_model: Option<&str>,
 ) {
+    cmd.arg("-C");
+    cmd.arg(project_path);
     cmd.arg("-c");
     cmd.arg(codex_project_trust_override(project_path));
     if let Some(model) = normalized_selected_model(selected_model) {
@@ -749,7 +765,7 @@ pub async fn run_task(
         }
         c
     };
-    cmd.cwd(&project_path);
+    cmd.cwd(agent_process_cwd(&project_path, is_codex));
     setup_env(&mut cmd);
     if let Some(model) = selected_model.as_deref() {
         cmd.env("AERORIC_AGENT_MODEL", model);
@@ -1021,7 +1037,7 @@ pub async fn resume_task(
         }
         c
     };
-    cmd.cwd(&project_path);
+    cmd.cwd(agent_process_cwd(&project_path, is_codex));
     setup_env(&mut cmd);
     if let Some(model) = selected_model.as_deref() {
         cmd.env("AERORIC_AGENT_MODEL", model);
@@ -1260,5 +1276,26 @@ mod tests {
             prompt_with_project_prefix("do the work", "prefix"),
             "prefix\ndo the work"
         );
+    }
+
+    #[test]
+    fn codex_launch_uses_cd_argument_for_project_root() {
+        let mut cmd = build_codex_cmd("codex", "ask");
+        add_codex_launch_args(&mut cmd, "/tmp/example-project", None);
+
+        let argv: Vec<_> = cmd
+            .get_argv()
+            .iter()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+        assert!(argv
+            .windows(2)
+            .any(|pair| pair == ["-C", "/tmp/example-project"]));
+    }
+
+    #[test]
+    fn codex_process_cwd_avoids_project_root() {
+        let cwd = agent_process_cwd("/tmp/example-project", true);
+        assert_ne!(cwd, std::path::PathBuf::from("/tmp/example-project"));
     }
 }
