@@ -606,7 +606,11 @@ export function attachLinuxIMEFix(
   };
 
   const handleCompositionUpdateCapture = (event: CompositionEvent) => {
-    compositionText = event.data ?? "";
+    const eventText = event.data ?? "";
+    const textareaText = textarea.value;
+    compositionText =
+      eventText ||
+      (textareaText && (!compositionText || textareaText !== compositionText) ? textareaText : "");
     imeDbg("compositionupdate", { data: event.data, compositionText });
     // Do not clear xterm's helper textarea while WebKit is composing. xterm
     // reads that value after this capture listener to paint `.composition-view`;

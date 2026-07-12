@@ -159,6 +159,49 @@ describe("terminal input fixes", () => {
     terminalElement.remove();
   });
 
+  it("keeps WeChat IME pinyin visible when compositionupdate data is empty", async () => {
+    vi.resetModules();
+    vi.doMock("../platform", () => ({
+      APP_PLATFORM: "macos",
+      ENABLE_USAGE_INSIGHTS: true,
+      IS_MAC_WEBKIT: true,
+      IS_OTHER_WEBKIT: false,
+      detectAppPlatform: () => "macos",
+      isAppleWebKit: () => true,
+    }));
+    const { attachLinuxIMEFix } = await import("../components/terminalInputFix");
+    const terminalElement = document.createElement("div");
+    terminalElement.className = "xterm";
+    const textarea = document.createElement("textarea");
+    const compositionView = document.createElement("div");
+    compositionView.className = "composition-view";
+    terminalElement.append(textarea, compositionView);
+    document.body.appendChild(terminalElement);
+    textarea.addEventListener("compositionupdate", (event) => {
+      const compositionEvent = event as CompositionEvent;
+      const preview = compositionEvent.data || textarea.value;
+      compositionView.textContent = preview;
+      compositionView.classList.toggle("active", Boolean(preview));
+    });
+    const term = {
+      textarea,
+      onData: () => ({ dispose: vi.fn() }),
+    };
+
+    const disposable = attachLinuxIMEFix(term as never, vi.fn());
+    textarea.dispatchEvent(new CompositionEvent("compositionstart", { data: "" }));
+    textarea.value = "ceshi";
+    textarea.dispatchEvent(new CompositionEvent("compositionupdate", { data: "" }));
+    await Promise.resolve();
+
+    expect(compositionView.classList.contains("active")).toBe(true);
+    expect(compositionView.textContent).toBe("ceshi");
+    expect(textarea.value).toBe("ceshi");
+
+    disposable.dispose();
+    terminalElement.remove();
+  });
+
   it("defers romanized composition commits that may be followed by committed Chinese text", () => {
     expect(shouldDeferRomanizedCompositionCommit("ceshi", "ceshi")).toBe(true);
     expect(shouldDeferRomanizedCompositionCommit("ce'shi", "ce'shi")).toBe(true);

@@ -102,6 +102,16 @@ body {
   user-select: none;
 }
 
+.sftp-select-group-label-highlight {
+  border-bottom-color: color-mix(in srgb, #16a34a 45%, var(--border-dim));
+  color: #15803d;
+}
+
+.dark .sftp-select-group-label-highlight {
+  border-bottom-color: color-mix(in srgb, #22c55e 50%, var(--border-dim));
+  color: #86efac;
+}
+
 .task-multi-actions {
   position: sticky;
   top: 0;

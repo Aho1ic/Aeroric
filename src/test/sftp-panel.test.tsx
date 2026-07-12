@@ -90,6 +90,32 @@ describe("SftpPanel", () => {
     expect(screen.getByText("/Users/me")).toBeInTheDocument();
   });
 
+  it("highlights remote machine group names in the endpoint selector", async () => {
+    const user = userEvent.setup();
+    render(
+      <I18nProvider>
+        <SftpPanel
+          sshConnections={[
+            { ...connections[0], group: "Production" },
+            { ...connections[1], group: "Production" },
+          ]}
+          localDefaultPath="/Users/me"
+          active
+          themeVariant="light"
+          currentSshConnectionId="conn-2"
+        />
+      </I18nProvider>,
+    );
+
+    await user.click(screen.getAllByLabelText("Location")[0]);
+
+    const groupLabels = await screen.findAllByText("Production");
+    const groupLabel = groupLabels.find((label) => label.closest(".sftp-select-group-label"));
+    expect(groupLabel?.closest(".sftp-select-group-label")).toHaveClass(
+      "sftp-select-group-label-highlight",
+    );
+  });
+
   it("shows transfer progress and task details while copying files", async () => {
     const user = userEvent.setup();
     const transferControl: { finish?: () => void } = {};

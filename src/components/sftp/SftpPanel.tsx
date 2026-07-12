@@ -953,7 +953,7 @@ export function SftpPanel({
                   </Select.Item>
                   {sshConnectionGroups.map((group) => (
                     <Select.Group key={group.label}>
-                      <Select.Label className="sftp-select-group-label">
+                      <Select.Label className="sftp-select-group-label sftp-select-group-label-highlight">
                         <span>{group.label}</span>
                         <span>{group.connections.length}</span>
                       </Select.Label>

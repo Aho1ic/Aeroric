@@ -561,8 +561,8 @@ fn initial_prompt_input_sequence(prompt: &str) -> Option<Vec<u8>> {
     Some(input)
 }
 
-fn uses_native_initial_prompt(agent: &str) -> bool {
-    matches!(agent, "claude" | "codex")
+fn uses_native_initial_prompt(agent: &str, is_codex: bool) -> bool {
+    matches!(agent, "claude") || is_codex
 }
 
 fn stable_agent_spawn_cwd() -> PathBuf {
@@ -695,7 +695,7 @@ pub async fn run_task(
     let launch = crate::app_settings::get_agent_launch_spec(&agent);
     let agent_bin = launch.program.clone();
     let is_codex = crate::app_settings::is_codex_like_agent(&agent);
-    let use_native_initial_prompt = uses_native_initial_prompt(&agent);
+    let use_native_initial_prompt = uses_native_initial_prompt(&agent, is_codex);
     let selected_model = normalized_selected_model(selected_model.as_deref());
 
     // 版本统一走全局探测（带缓存），判断是否支持 --session-id。
@@ -1246,9 +1246,10 @@ mod tests {
 
     #[test]
     fn initial_prompt_delivery_supports_native_and_custom_agents() {
-        assert!(uses_native_initial_prompt("claude"));
-        assert!(uses_native_initial_prompt("codex"));
-        assert!(!uses_native_initial_prompt("local_claude"));
+        assert!(uses_native_initial_prompt("claude", false));
+        assert!(uses_native_initial_prompt("codex", true));
+        assert!(uses_native_initial_prompt("local_codex", true));
+        assert!(!uses_native_initial_prompt("local_tool", false));
         assert!(initial_prompt_args("", true).is_empty());
         assert_eq!(
             initial_prompt_args("hello\nworld", true),
