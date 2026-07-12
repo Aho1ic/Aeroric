@@ -403,6 +403,15 @@ export function attachLinuxIMEFix(
       }
     });
   };
+  const restoreCompositionPreviewAfterEvent = () => {
+    if (!compositionView || !compositionText) return;
+    queueMicrotask(() => {
+      if (!compositionText) return;
+      compositionView.textContent = compositionText;
+      compositionView.classList.add("active");
+      syncCompositionViewLayout();
+    });
+  };
   const compositionObserver = compositionView
     ? new MutationObserver(() => {
         if (compositionText) {
@@ -616,7 +625,11 @@ export function attachLinuxIMEFix(
     // reads that value after this capture listener to paint `.composition-view`;
     // clearing it here made WeChat IME show candidates but hide the pinyin.
     if (compositionText) {
-      syncCompositionViewLayout();
+      // WeChat can emit an empty `compositionupdate.data` while keeping the
+      // current pinyin in the helper textarea. xterm processes the empty event
+      // after this capture listener and clears its preview, so restore it once
+      // the event has finished propagating.
+      restoreCompositionPreviewAfterEvent();
     } else {
       hideEmptyXtermCompositionViewAfterEvent();
     }

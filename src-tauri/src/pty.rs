@@ -550,19 +550,19 @@ fn initial_prompt_args(prompt: &str, is_codex: bool) -> Vec<String> {
     }
 }
 
-fn initial_prompt_input_sequence(prompt: &str) -> Option<Vec<u8>> {
+fn initial_prompt_input_chunks(prompt: &str) -> Option<(Vec<u8>, Vec<u8>)> {
     if prompt.is_empty() {
         return None;
     }
-    let mut input = Vec::with_capacity(prompt.len() + 16);
-    input.extend_from_slice(b"\x1b[200~");
-    input.extend_from_slice(prompt.as_bytes());
-    input.extend_from_slice(b"\x1b[201~\r");
-    Some(input)
+    let mut paste = Vec::with_capacity(prompt.len() + 16);
+    paste.extend_from_slice(b"\x1b[200~");
+    paste.extend_from_slice(prompt.as_bytes());
+    paste.extend_from_slice(b"\x1b[201~");
+    Some((paste, b"\r".to_vec()))
 }
 
 fn uses_native_initial_prompt(agent: &str, is_codex: bool) -> bool {
-    matches!(agent, "claude") || is_codex
+    matches!((agent, is_codex), ("claude", false) | ("codex", true))
 }
 
 fn stable_agent_spawn_cwd() -> PathBuf {
@@ -581,7 +581,8 @@ fn agent_process_cwd(project_path: &str, is_codex: bool) -> PathBuf {
 
 fn spawn_initial_prompt_injection(
     writer: Arc<parking_lot::Mutex<Box<dyn Write + Send>>>,
-    input: Vec<u8>,
+    paste: Vec<u8>,
+    submit: Vec<u8>,
     startup_rx: std::sync::mpsc::Receiver<()>,
 ) {
     tokio::task::spawn_blocking(move || {
@@ -594,8 +595,17 @@ fn spawn_initial_prompt_injection(
                 }
             }
         }
+        {
+            let mut writer = writer.lock();
+            let _ = writer.write_all(&paste);
+            let _ = writer.flush();
+        }
+        // Agent TUIs may intentionally ignore an Enter delivered in the same
+        // PTY write as a bracketed paste. Submit in a later input turn so the
+        // initial prompt is executed instead of remaining in the composer.
+        std::thread::sleep(Duration::from_millis(80));
         let mut writer = writer.lock();
-        let _ = writer.write_all(&input);
+        let _ = writer.write_all(&submit);
         let _ = writer.flush();
     });
 }
@@ -842,10 +852,10 @@ pub async fn run_task(
         None,
     );
     if !use_native_initial_prompt {
-        if let Some(input) = initial_prompt_input_sequence(&final_prompt) {
+        if let Some((paste, submit)) = initial_prompt_input_chunks(&final_prompt) {
             let writer = task_manager.pty_writers.lock().get(&task_id).cloned();
             if let Some(writer) = writer {
-                spawn_initial_prompt_injection(writer, input, startup_rx);
+                spawn_initial_prompt_injection(writer, paste, submit, startup_rx);
             }
         }
     }
@@ -1248,7 +1258,7 @@ mod tests {
     fn initial_prompt_delivery_supports_native_and_custom_agents() {
         assert!(uses_native_initial_prompt("claude", false));
         assert!(uses_native_initial_prompt("codex", true));
-        assert!(uses_native_initial_prompt("local_codex", true));
+        assert!(!uses_native_initial_prompt("local_codex", true));
         assert!(!uses_native_initial_prompt("local_tool", false));
         assert!(initial_prompt_args("", true).is_empty());
         assert_eq!(
@@ -1259,10 +1269,10 @@ mod tests {
             initial_prompt_args("hello\nworld", false),
             vec!["hello\nworld"]
         );
-        assert_eq!(initial_prompt_input_sequence(""), None);
+        assert_eq!(initial_prompt_input_chunks(""), None);
         assert_eq!(
-            initial_prompt_input_sequence("hello\nworld").unwrap(),
-            b"\x1b[200~hello\nworld\x1b[201~\r".to_vec()
+            initial_prompt_input_chunks("hello\nworld").unwrap(),
+            (b"\x1b[200~hello\nworld\x1b[201~".to_vec(), b"\r".to_vec())
         );
     }
 

@@ -159,7 +159,7 @@ describe("terminal input fixes", () => {
     terminalElement.remove();
   });
 
-  it("keeps WeChat IME pinyin visible when compositionupdate data is empty", async () => {
+  it("restores WeChat IME pinyin after xterm clears an empty composition update", async () => {
     vi.resetModules();
     vi.doMock("../platform", () => ({
       APP_PLATFORM: "macos",
@@ -179,9 +179,8 @@ describe("terminal input fixes", () => {
     document.body.appendChild(terminalElement);
     textarea.addEventListener("compositionupdate", (event) => {
       const compositionEvent = event as CompositionEvent;
-      const preview = compositionEvent.data || textarea.value;
-      compositionView.textContent = preview;
-      compositionView.classList.toggle("active", Boolean(preview));
+      compositionView.textContent = compositionEvent.data;
+      compositionView.classList.toggle("active", Boolean(compositionEvent.data));
     });
     const term = {
       textarea,
