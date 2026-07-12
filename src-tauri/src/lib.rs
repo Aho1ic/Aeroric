@@ -400,6 +400,7 @@ pub fn run() {
             app_settings::detect_agent_paths,
             app_settings::detect_agent_versions_for_settings,
             app_settings::detect_agent_version,
+            app_settings::upgrade_agent_versions,
             app_settings::get_system_fonts,
             conda::detect_conda_environments,
             conda::detect_remote_conda_environments,

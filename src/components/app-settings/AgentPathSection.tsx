@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type React from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Check, RefreshCw } from "lucide-react";
+import { Check, RefreshCw, TriangleAlert } from "lucide-react";
 import { useI18n } from "../../i18n";
 import {
   DEFAULT_SEND_SHORTCUT,
@@ -10,6 +10,7 @@ import {
 } from "../../shortcuts";
 import {
   APP_SETTINGS_CHANGED_EVENT,
+  type AgentUpgradeResult,
   type AgentVersions,
   type AppSettings,
   type AgentKey,
@@ -135,6 +136,8 @@ export function AgentPathSection({ agentKey }: { agentKey: AgentKey }) {
   const [detecting, setDetecting] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [upgrading, setUpgrading] = useState(false);
+  const [upgradeResult, setUpgradeResult] = useState<AgentUpgradeResult | null>(null);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const didAutoLoadRef = useRef(false);
@@ -266,6 +269,24 @@ export function AgentPathSection({ agentKey }: { agentKey: AgentKey }) {
     }
   }
 
+  async function handleUpgrade() {
+    setUpgrading(true);
+    setError(null);
+    setUpgradeResult(null);
+    try {
+      const [result] = await invoke<AgentUpgradeResult[]>("upgrade_agent_versions", {
+        agents: [agentKey],
+      });
+      setUpgradeResult(result ?? null);
+      await loadVersions(settings);
+      window.dispatchEvent(new Event(APP_SETTINGS_CHANGED_EVENT));
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setUpgrading(false);
+    }
+  }
+
   const currentCustomAgent = findCustomAgent(settings, agentKey);
   const originalCustomAgent = findCustomAgent(originalSettings, agentKey);
   const currentPath = pathField ? settings[pathField] : (currentCustomAgent?.path ?? "");
@@ -317,13 +338,40 @@ export function AgentPathSection({ agentKey }: { agentKey: AgentKey }) {
             variant="outline"
             size="sm"
             onClick={() => loadVersions(settings)}
-            disabled={refreshing}
+            disabled={refreshing || upgrading}
           >
             <RefreshCw size={12} className={refreshing ? "spin" : undefined} />
             {refreshing ? t("appSettings.refreshing") : t("appSettings.refreshVersions")}
           </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => void handleUpgrade()}
+            disabled={upgrading || refreshing || loading}
+          >
+            <RefreshCw size={12} className={upgrading ? "spin" : undefined} />
+            {upgrading ? t("appSettings.upgrading") : t("appSettings.upgradeToLatest")}
+          </Button>
         </div>
       </div>
+
+      {upgradeResult && (
+        <div
+          title={upgradeResult.message}
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 5,
+            fontSize: 11.5,
+            color: upgradeResult.success ? "var(--success)" : "var(--danger)",
+          }}
+        >
+          {upgradeResult.success ? <Check size={12} /> : <TriangleAlert size={12} />}
+          {upgradeResult.success
+            ? t("appSettings.upgradeComplete")
+            : t("appSettings.upgradeFailed")}
+        </div>
+      )}
 
       <div style={fieldStyle}>
         <label style={labelStyle}>{t("appSettings.displayName")}</label>

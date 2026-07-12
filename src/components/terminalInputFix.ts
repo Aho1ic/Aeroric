@@ -38,6 +38,8 @@ const ROMANIZED_COMPOSITION_COMMIT_DELAY_MS = 90;
 const ROMANIZED_COMPOSITION_PROMPT_COMMIT_DELAY_MS = 0;
 const POST_COMPOSITION_TEXTAREA_CLEAR_DELAYS_MS = [0, 16, 40, 80, 160, 320, 640];
 const TEXTAREA_INPUT_CLIENT_RESET_MS = 24;
+const IME_PROCESS_KEY_GUARD_MS = 180;
+const CLEARED_COMPOSITION_REPLAY_GUARD_MS = 800;
 
 export function applyTerminalTextareaInputAttributes(term: {
   textarea?: HTMLTextAreaElement | null;
@@ -350,6 +352,7 @@ export function attachLinuxIMEFix(
   let textareaInputClientResetTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
   let isReleasingXtermComposition = false;
   let suppressNextTextInsertAfterRepeatedKey: string | true | null = null;
+  let imeProcessKeyGuardUntil = 0;
   let deferNextRomanizedCompositionCommit = false;
   let pendingCompositionCommit: {
     text: string;
@@ -595,6 +598,7 @@ export function attachLinuxIMEFix(
   };
 
   const handleCompositionUpdateCapture = (event: CompositionEvent) => {
+    const previousCompositionText = compositionText;
     const eventText = event.data ?? "";
     const textareaText = textarea.value;
     compositionText =
@@ -611,6 +615,14 @@ export function attachLinuxIMEFix(
       // the event has finished propagating.
       restoreCompositionPreviewAfterEvent();
     } else {
+      if (previousCompositionText) {
+        ignoredReplayProgress = "";
+        ignoredPostCompositionCandidates = buildPostCompositionIgnoredCandidates(
+          previousCompositionText,
+          previousCompositionText,
+        );
+        ignorePostCompositionUntil = performance.now() + CLEARED_COMPOSITION_REPLAY_GUARD_MS;
+      }
       hideEmptyXtermCompositionViewAfterEvent();
     }
   };
@@ -642,6 +654,12 @@ export function attachLinuxIMEFix(
     isComposing = false;
     compositionText = "";
     void event;
+    if (!text) {
+      deferNextRomanizedCompositionCommit = false;
+      hideXtermCompositionView();
+      clearTextareaNowAndNextFrame();
+      return;
+    }
     if (shouldDeferRomanizedCompositionCommit(text, preeditText)) {
       imeDbg("compositionend -> defer/commit romanized", {
         text,
@@ -901,6 +919,11 @@ export function attachLinuxIMEFix(
       compositionText,
       pending: !!pendingCompositionCommit,
     });
+    if (event.keyCode === 229) {
+      imeProcessKeyGuardUntil = performance.now() + IME_PROCESS_KEY_GUARD_MS;
+    } else if (!event.isComposing && isPrintableKey(event.key)) {
+      imeProcessKeyGuardUntil = 0;
+    }
 
     // 检测 IME 切换快捷键（composition 期间按下）：CapsLock，或带 Ctrl/Meta/Alt 修饰的空格/数字。
     // 这些不是普通候选选择键，而是切换输入法——立即提交罗马化拼音。
@@ -961,6 +984,11 @@ export function attachLinuxIMEFix(
 
   const handleTerminalData = (data: string) => {
     if (isComposing && /^[\p{L}\p{N}'`]+$/u.test(data)) {
+      return;
+    }
+    if (performance.now() <= imeProcessKeyGuardUntil && /^[A-Za-z0-9]$/u.test(data)) {
+      imeProcessKeyGuardUntil = 0;
+      clearTextareaNowAndNextFrame();
       return;
     }
     if (

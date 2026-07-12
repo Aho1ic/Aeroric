@@ -10,6 +10,7 @@ import {
   Blocks,
   Plus,
   Network,
+  PackageOpen,
 } from "lucide-react";
 import type {
   ThemeMode,
@@ -33,6 +34,7 @@ import { FontPanel } from "./app-settings/FontPanel";
 import { HooksPanel } from "./app-settings/HooksPanel";
 import { SkillsPanel } from "./app-settings/SkillsPanel";
 import { ProxyPanel } from "./app-settings/ProxyPanel";
+import { AgentUpdatesPanel } from "./app-settings/AgentUpdatesPanel";
 import type { AgentKey, AppSettingsNavItem, NavKey, NavSection } from "./app-settings/types";
 import { useAgentOptions } from "../hooks/useAgentOptions";
 
@@ -44,6 +46,12 @@ const BASE_NAV_ITEMS: AppSettingsNavItem[] = [
   { key: "fonts", labelKey: "appSettings.fonts", section: "application", icon: Type },
   { key: "shortcuts", labelKey: "appSettings.shortcuts", section: "application", icon: Keyboard },
   { key: "proxy", labelKey: "appSettings.proxy", section: "application", icon: Network },
+  {
+    key: "agent-updates",
+    labelKey: "appSettings.agentUpdates",
+    section: "application",
+    icon: PackageOpen,
+  },
   { key: "hooks", labelKey: "appSettings.hooks", section: "application", icon: Zap },
   { key: "skills", labelKey: "skill.settings.navLabel", section: "application", icon: Blocks },
   { key: "about", labelKey: "appSettings.about", section: "about", icon: Info },
@@ -270,6 +278,8 @@ export function AppSettingsDialog({
               <ShortcutsPanel key="shortcuts" />
             ) : activeNav === "proxy" ? (
               <ProxyPanel key="proxy" />
+            ) : activeNav === "agent-updates" ? (
+              <AgentUpdatesPanel key="agent-updates" />
             ) : activeNav === "hooks" ? (
               <HooksPanel key="hooks" />
             ) : activeNav === "skills" ? (

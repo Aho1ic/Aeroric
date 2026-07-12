@@ -856,6 +856,77 @@ describe("terminal input fixes", () => {
     vi.useRealTimers();
   });
 
+  it("does not leak deleted WeChat pinyin into the terminal after composition ends empty", async () => {
+    vi.useFakeTimers();
+    vi.resetModules();
+    vi.doMock("../platform", () => ({
+      APP_PLATFORM: "macos",
+      ENABLE_USAGE_INSIGHTS: true,
+      IS_MAC_WEBKIT: true,
+      IS_OTHER_WEBKIT: false,
+      detectAppPlatform: () => "macos",
+      isAppleWebKit: () => true,
+    }));
+    const { attachLinuxIMEFix } = await import("../components/terminalInputFix");
+    const textarea = document.createElement("textarea");
+    const sent: string[] = [];
+    const dataHandlers: Array<(data: string) => void> = [];
+    const term = {
+      textarea,
+      onData: (callback: (data: string) => void) => {
+        dataHandlers.push(callback);
+        return { dispose: vi.fn() };
+      },
+    };
+
+    attachLinuxIMEFix(term as never, (data) => sent.push(data));
+    textarea.dispatchEvent(new CompositionEvent("compositionstart", { data: "" }));
+    textarea.value = "c";
+    textarea.dispatchEvent(new CompositionEvent("compositionupdate", { data: "c" }));
+    textarea.value = "";
+    textarea.dispatchEvent(new CompositionEvent("compositionupdate", { data: "" }));
+    textarea.dispatchEvent(new CompositionEvent("compositionend", { data: "" }));
+    dataHandlers[0]?.("c");
+
+    expect(sent).toEqual([]);
+    vi.useRealTimers();
+  });
+
+  it("blocks a first-letter xterm emission while WebKit is handing a key to the IME", async () => {
+    vi.resetModules();
+    vi.doMock("../platform", () => ({
+      APP_PLATFORM: "macos",
+      ENABLE_USAGE_INSIGHTS: true,
+      IS_MAC_WEBKIT: true,
+      IS_OTHER_WEBKIT: false,
+      detectAppPlatform: () => "macos",
+      isAppleWebKit: () => true,
+    }));
+    const { attachLinuxIMEFix } = await import("../components/terminalInputFix");
+    const textarea = document.createElement("textarea");
+    const sent: string[] = [];
+    const dataHandlers: Array<(data: string) => void> = [];
+    const term = {
+      textarea,
+      onData: (callback: (data: string) => void) => {
+        dataHandlers.push(callback);
+        return { dispose: vi.fn() };
+      },
+    };
+
+    attachLinuxIMEFix(term as never, (data) => sent.push(data));
+    const processKey = new KeyboardEvent("keydown", {
+      key: "Process",
+      bubbles: true,
+      cancelable: true,
+    });
+    Object.defineProperty(processKey, "keyCode", { value: 229 });
+    textarea.dispatchEvent(processKey);
+    dataHandlers[0]?.("n");
+
+    expect(sent).toEqual([]);
+  });
+
   it("commits normalized romanized text when switching IME to English mid-composition", async () => {
     vi.useFakeTimers();
     vi.resetModules();

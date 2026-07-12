@@ -1963,6 +1963,218 @@ pub struct AgentVersions {
     pub codex_version: String,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum AgentUpgradeKind {
+    Claude,
+    Codex,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct AgentUpgradeCommand {
+    program: String,
+    args: Vec<String>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+pub struct AgentUpgradeResult {
+    pub agent: String,
+    pub success: bool,
+    pub previous_version: String,
+    pub current_version: String,
+    pub message: String,
+}
+
+fn canonical_program_path(program: &str) -> String {
+    fs::canonicalize(program)
+        .unwrap_or_else(|_| PathBuf::from(program))
+        .to_string_lossy()
+        .into_owned()
+}
+
+fn detected_upgrade_manager(program: &str) -> &'static str {
+    let normalized = canonical_program_path(program)
+        .replace('\\', "/")
+        .to_ascii_lowercase();
+    if normalized.contains("/node_modules/") {
+        "npm"
+    } else if normalized.contains("/cellar/") || normalized.contains("/caskroom/") {
+        "homebrew"
+    } else {
+        "standalone"
+    }
+}
+
+fn required_program(binary: &str) -> Result<String, String> {
+    let detected = detect_path(binary);
+    if detected.is_empty() {
+        Err(format!("{} was not found in PATH", binary))
+    } else {
+        Ok(detected)
+    }
+}
+
+fn build_agent_upgrade_command(
+    kind: AgentUpgradeKind,
+    launch_program: &str,
+) -> Result<AgentUpgradeCommand, String> {
+    let manager = detected_upgrade_manager(launch_program);
+    match (kind, manager) {
+        (AgentUpgradeKind::Claude, "homebrew") => Ok(AgentUpgradeCommand {
+            program: required_program("brew")?,
+            args: vec![
+                "upgrade".to_string(),
+                "--cask".to_string(),
+                "claude-code".to_string(),
+            ],
+        }),
+        (AgentUpgradeKind::Claude, "npm") => Ok(AgentUpgradeCommand {
+            program: required_program("npm")?,
+            args: vec![
+                "install".to_string(),
+                "-g".to_string(),
+                "@anthropic-ai/claude-code@latest".to_string(),
+            ],
+        }),
+        (AgentUpgradeKind::Claude, _) => Ok(AgentUpgradeCommand {
+            program: launch_program.to_string(),
+            args: vec!["update".to_string()],
+        }),
+        (AgentUpgradeKind::Codex, "homebrew") => Ok(AgentUpgradeCommand {
+            program: required_program("brew")?,
+            args: vec![
+                "upgrade".to_string(),
+                "--cask".to_string(),
+                "codex".to_string(),
+            ],
+        }),
+        (AgentUpgradeKind::Codex, _) => Ok(AgentUpgradeCommand {
+            program: required_program("npm")?,
+            args: vec![
+                "install".to_string(),
+                "-g".to_string(),
+                "@openai/codex@latest".to_string(),
+            ],
+        }),
+    }
+}
+
+fn run_agent_upgrade(command: &AgentUpgradeCommand) -> Result<String, String> {
+    let mut process = Command::new(&command.program);
+    process
+        .args(&command.args)
+        .envs(get_login_shell_env().iter().cloned())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let output = process.output().map_err(|error| error.to_string())?;
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    let detail = [stdout.as_str(), stderr.as_str()]
+        .into_iter()
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let detail = if detail.chars().count() > 4000 {
+        format!("{}...", detail.chars().take(4000).collect::<String>())
+    } else {
+        detail
+    };
+    if output.status.success() {
+        Ok(detail)
+    } else {
+        Err(if detail.is_empty() {
+            format!("Upgrade command exited with {}", output.status)
+        } else {
+            detail
+        })
+    }
+}
+
+fn upgrade_kind_for_agent(settings: &AppSettings, agent: &str) -> Option<AgentUpgradeKind> {
+    match agent {
+        "claude" => Some(AgentUpgradeKind::Claude),
+        "codex" | "claude_gpt55" => Some(AgentUpgradeKind::Codex),
+        other => settings
+            .custom_agents
+            .iter()
+            .find(|profile| profile.id == other)
+            .map(|profile| {
+                if profile.codex_like {
+                    AgentUpgradeKind::Codex
+                } else {
+                    AgentUpgradeKind::Claude
+                }
+            }),
+    }
+}
+
+fn upgrade_binary_agent(kind: AgentUpgradeKind) -> &'static str {
+    match kind {
+        AgentUpgradeKind::Claude => "claude",
+        AgentUpgradeKind::Codex => "codex",
+    }
+}
+
+#[tauri::command]
+pub async fn upgrade_agent_versions(
+    agents: Vec<String>,
+) -> Result<Vec<AgentUpgradeResult>, String> {
+    tokio::task::spawn_blocking(move || {
+        let settings = load_settings_internal();
+        let mut requested = Vec::new();
+        for agent in agents {
+            if requested.contains(&agent) {
+                continue;
+            }
+            if upgrade_kind_for_agent(&settings, &agent).is_none() {
+                return Err(format!("Unknown agent: {}", agent));
+            }
+            requested.push(agent);
+        }
+        if requested.is_empty() {
+            return Err("Select at least one agent to upgrade".to_string());
+        }
+
+        let mut outcomes: HashMap<AgentUpgradeKind, (String, String, Result<String, String>)> =
+            HashMap::new();
+        for agent in &requested {
+            let kind = upgrade_kind_for_agent(&settings, agent)
+                .ok_or_else(|| format!("Unknown agent: {}", agent))?;
+            if outcomes.contains_key(&kind) {
+                continue;
+            }
+            let binary_agent = upgrade_binary_agent(kind);
+            let launch = get_agent_launch_spec_from_settings(&settings, binary_agent);
+            let previous_version = detect_version(&launch).unwrap_or_default();
+            let outcome = build_agent_upgrade_command(kind, &launch.program)
+                .and_then(|command| run_agent_upgrade(&command));
+            clear_cached_versions();
+            let current_version = detect_version(&launch).unwrap_or_default();
+            outcomes.insert(kind, (previous_version, current_version, outcome));
+        }
+
+        clear_cached_versions();
+        Ok(requested
+            .into_iter()
+            .map(|agent| {
+                let kind = upgrade_kind_for_agent(&settings, &agent)
+                    .expect("validated agent must keep its upgrade kind");
+                let (previous_version, current_version, outcome) = outcomes
+                    .get(&kind)
+                    .expect("requested upgrade kind must have an outcome");
+                AgentUpgradeResult {
+                    agent,
+                    success: outcome.is_ok(),
+                    previous_version: previous_version.clone(),
+                    current_version: current_version.clone(),
+                    message: outcome.clone().unwrap_or_else(|error| error),
+                }
+            })
+            .collect())
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
 static SYSTEM_FONTS: OnceLock<Vec<String>> = OnceLock::new();
 
 #[tauri::command]
@@ -2009,6 +2221,68 @@ mod tests {
     fn resolves_empty_agent_path_to_binary_name_when_path_detection_fails() {
         let resolved = resolve_input_path("", "__aeroric_missing_agent_binary__");
         assert_eq!(resolved, "__aeroric_missing_agent_binary__");
+    }
+
+    #[test]
+    fn detects_npm_agent_install_inside_homebrew_prefix() {
+        assert_eq!(
+            detected_upgrade_manager("/opt/homebrew/lib/node_modules/@openai/codex/bin/codex.js"),
+            "npm"
+        );
+    }
+
+    #[test]
+    fn detects_homebrew_cask_and_standalone_agent_installs() {
+        assert_eq!(
+            detected_upgrade_manager("/opt/homebrew/Caskroom/codex/1.0.0/codex"),
+            "homebrew"
+        );
+        assert_eq!(
+            detected_upgrade_manager("/Users/test/.local/bin/claude"),
+            "standalone"
+        );
+    }
+
+    #[test]
+    fn maps_custom_agent_profiles_to_their_shared_cli_runtime() {
+        let settings = AppSettings {
+            custom_agents: vec![
+                CustomAgentProfile {
+                    id: "custom_codex".to_string(),
+                    label: "Custom Codex".to_string(),
+                    path: "/tmp/custom-codex.sh".to_string(),
+                    codex_like: true,
+                    config_lang: "shellscript".to_string(),
+                    base_url: String::new(),
+                    api_key: String::new(),
+                    models: Vec::new(),
+                    username: String::new(),
+                    password: String::new(),
+                },
+                CustomAgentProfile {
+                    id: "custom_claude".to_string(),
+                    label: "Custom Claude".to_string(),
+                    path: "/tmp/custom-claude.sh".to_string(),
+                    codex_like: false,
+                    config_lang: "shellscript".to_string(),
+                    base_url: String::new(),
+                    api_key: String::new(),
+                    models: Vec::new(),
+                    username: String::new(),
+                    password: String::new(),
+                },
+            ],
+            ..AppSettings::default()
+        };
+
+        assert_eq!(
+            upgrade_kind_for_agent(&settings, "custom_codex"),
+            Some(AgentUpgradeKind::Codex)
+        );
+        assert_eq!(
+            upgrade_kind_for_agent(&settings, "custom_claude"),
+            Some(AgentUpgradeKind::Claude)
+        );
     }
 
     #[test]

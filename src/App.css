@@ -2196,9 +2196,12 @@ html:not(.dark) .xterm {
   background: var(--terminal-bg) !important;
 }
 
+.xterm-helper-textarea {
+  caret-color: transparent !important;
+}
+
 html:not(.dark) .xterm-helper-textarea {
   background: var(--terminal-bg) !important;
-  caret-color: var(--text-primary) !important;
 }
 
 /* xterm defaults IME preedit text to a black block. A transparent underline keeps

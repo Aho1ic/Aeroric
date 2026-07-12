@@ -51,6 +51,14 @@ export interface AgentVersions {
   codex_version: string;
 }
 
+export interface AgentUpgradeResult {
+  agent: string;
+  success: boolean;
+  previous_version: string;
+  current_version: string;
+  message: string;
+}
+
 export type AgentSetupKind = "codex" | "claude_code";
 
 export interface AgentSetupDraft {
