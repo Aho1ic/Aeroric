@@ -2,7 +2,6 @@ import { useRef, useCallback } from "react";
 import type { Project } from "../../types";
 import { CODE_EXTS } from "../../utils";
 import type { FileEntry, CrossProjectRef, MentionItem } from "./MentionPopover";
-import { useI18n } from "../../i18n";
 import { APP_PLATFORM } from "../../platform";
 import {
   shouldInsertPromptNewlineKey,
@@ -266,7 +265,6 @@ export function usePromptEditor() {
 export function PromptEditor({
   editorRef,
   isComposingRef,
-  isEmpty,
   mentionItems,
   mentionIndex,
   onSetIsEmpty,
@@ -281,7 +279,6 @@ export function PromptEditor({
 }: {
   editorRef: React.RefObject<HTMLDivElement | null>;
   isComposingRef: React.MutableRefObject<boolean>;
-  isEmpty: boolean;
   mentionItems: MentionItem[];
   mentionIndex: number;
   onSetIsEmpty: (empty: boolean) => void;
@@ -294,7 +291,6 @@ export function PromptEditor({
   onContentChange?: (content: PromptEditorContent) => void;
   onPasteLargeText?: (text: string) => void;
 }) {
-  const { t } = useI18n();
   const compositionTextRef = useRef("");
   const ignoredPostCompositionCandidatesRef = useRef<Set<string>>(new Set());
   const ignorePostCompositionUntilRef = useRef(0);
@@ -516,25 +512,6 @@ export function PromptEditor({
 
   return (
     <div style={{ position: "relative" }}>
-      {isEmpty && (
-        <div
-          style={{
-            position: "absolute",
-            top: 0,
-            left: 0,
-            right: 0,
-            padding: "22px 24px 12px",
-            color: "var(--text-hint)",
-            fontSize: 14,
-            lineHeight: 1.65,
-            pointerEvents: "none",
-            userSelect: "none",
-            fontFamily: "var(--font-ui)",
-          }}
-        >
-          {t("newTask.promptPlaceholder")}
-        </div>
-      )}
       <div
         ref={editorRef}
         contentEditable

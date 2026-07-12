@@ -1619,4 +1619,98 @@ describe("terminal input fixes", () => {
     expect(repeatedInput.defaultPrevented).toBe(true);
     expect(sent).toEqual([]);
   });
+
+  it("guards the first WeChat IME process key before xterm can emit an English letter", async () => {
+    vi.resetModules();
+    vi.doMock("../platform", () => ({
+      APP_PLATFORM: "macos",
+      ENABLE_USAGE_INSIGHTS: true,
+      IS_MAC_WEBKIT: true,
+      IS_OTHER_WEBKIT: false,
+      detectAppPlatform: () => "macos",
+      isAppleWebKit: () => true,
+    }));
+    const { attachLinuxIMEFix } = await import("../components/terminalInputFix");
+    const terminalElement = document.createElement("div");
+    terminalElement.className = "xterm";
+    const textarea = document.createElement("textarea");
+    terminalElement.appendChild(textarea);
+    document.body.appendChild(terminalElement);
+    const sent: string[] = [];
+    const dataListeners: Array<(data: string) => void> = [];
+    const term = {
+      textarea,
+      onData: (listener: (data: string) => void) => {
+        dataListeners.push(listener);
+        return { dispose: vi.fn() };
+      },
+    };
+
+    textarea.addEventListener(
+      "keydown",
+      () => {
+        dataListeners[0]?.("c");
+      },
+      true,
+    );
+    const disposable = attachLinuxIMEFix(term as never, (data) => sent.push(data));
+    const processKey = new KeyboardEvent("keydown", {
+      key: "Process",
+      bubbles: true,
+      cancelable: true,
+    });
+    Object.defineProperty(processKey, "keyCode", { value: 229 });
+    textarea.dispatchEvent(processKey);
+
+    expect(sent).toEqual([]);
+    disposable.dispose();
+    terminalElement.remove();
+  });
+
+  it("lets WeChat IME delete the final pinyin character without committing it as English", async () => {
+    vi.resetModules();
+    vi.doMock("../platform", () => ({
+      APP_PLATFORM: "macos",
+      ENABLE_USAGE_INSIGHTS: true,
+      IS_MAC_WEBKIT: true,
+      IS_OTHER_WEBKIT: false,
+      detectAppPlatform: () => "macos",
+      isAppleWebKit: () => true,
+    }));
+    const { attachLinuxIMEFix } = await import("../components/terminalInputFix");
+    const textarea = document.createElement("textarea");
+    const sent: string[] = [];
+    const term = {
+      textarea,
+      onData: () => ({ dispose: vi.fn() }),
+    };
+
+    attachLinuxIMEFix(term as never, (data) => sent.push(data));
+    textarea.dispatchEvent(new CompositionEvent("compositionstart", { data: "" }));
+    textarea.value = "ce'shi";
+    textarea.dispatchEvent(new CompositionEvent("compositionupdate", { data: "ce'shi" }));
+
+    for (const nextValue of ["ce'sh", "ce's", "ce'", "ce", "c", ""]) {
+      const beforeInput = new InputEvent("beforeinput", {
+        inputType: "deleteCompositionText",
+        bubbles: true,
+        cancelable: true,
+      });
+      textarea.dispatchEvent(beforeInput);
+      expect(beforeInput.defaultPrevented).toBe(false);
+      textarea.value = nextValue;
+      textarea.dispatchEvent(
+        new InputEvent("input", {
+          inputType: "deleteCompositionText",
+          bubbles: true,
+        }),
+      );
+      textarea.dispatchEvent(new CompositionEvent("compositionupdate", { data: nextValue }));
+    }
+
+    textarea.dispatchEvent(new CompositionEvent("compositionend", { data: "c" }));
+
+    expect(sent).toEqual([]);
+    expect(textarea.value).toBe("");
+  });
 });

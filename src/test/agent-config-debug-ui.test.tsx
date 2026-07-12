@@ -287,6 +287,26 @@ function getEnabledSaveButton() {
 }
 
 describe("Agent config and debug panel UI", () => {
+  it("saves a selected Codex reasoning effort to the local config", async () => {
+    const user = userEvent.setup();
+    renderAgentConfigPanel(
+      '# keep this comment\nmodel = "gpt-5"\nmodel_reasoning_effort = "medium"\n',
+    );
+
+    const group = await screen.findByRole("group", { name: "Reasoning effort" });
+    await user.click(within(group).getByRole("button", { name: "High" }));
+    const section = group.parentElement;
+    expect(section).not.toBeNull();
+    await user.click(within(section!).getByRole("button", { name: "Save" }));
+
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith("write_agent_config_file", {
+        agent: "codex",
+        content: '# keep this comment\nmodel = "gpt-5"\nmodel_reasoning_effort = "high"\n',
+      });
+    });
+  });
+
   beforeEach(() => {
     vi.mocked(invoke).mockReset();
   });

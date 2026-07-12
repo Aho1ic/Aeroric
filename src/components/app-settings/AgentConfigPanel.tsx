@@ -14,6 +14,12 @@ import type { ThemeVariant } from "../../types";
 import { useTextInputIMEFix } from "../useTextInputIMEFix";
 import { Button } from "../ui/Button";
 import type { CustomAgentProfile } from "../../agents";
+import {
+  MODEL_REASONING_EFFORTS,
+  readModelReasoningEffort,
+  setModelReasoningEffort,
+  type ModelReasoningEffort,
+} from "./reasoningEffort";
 
 type FileState =
   | { status: "loading" }
@@ -88,9 +94,20 @@ export function AgentConfigPanel({
   const [originalSelectedModels, setOriginalSelectedModels] = useState<string[]>([]);
   const [detectingModels, setDetectingModels] = useState(false);
   const [savingModels, setSavingModels] = useState(false);
+  const [reasoningEffort, setReasoningEffort] = useState<ModelReasoningEffort | null>(null);
+  const [originalReasoningEffort, setOriginalReasoningEffort] =
+    useState<ModelReasoningEffort | null>(null);
+  const [savingReasoningEffort, setSavingReasoningEffort] = useState(false);
   const fileContentImeFix = useTextInputIMEFix<HTMLTextAreaElement>((content) =>
-    setFileState({ status: "loaded", content }),
+    handleFileContentChange(content),
   );
+
+  function handleFileContentChange(content: string) {
+    setFileState({ status: "loaded", content });
+    if (agentKey === "codex") {
+      setReasoningEffort(readModelReasoningEffort(content));
+    }
+  }
 
   useEffect(() => {
     const next = agentLabel ?? String(agentKey);
@@ -119,11 +136,16 @@ export function AgentConfigPanel({
         if (c === null) {
           setFileState({ status: "loaded", content: "" });
           setOriginal("");
+          setReasoningEffort(null);
+          setOriginalReasoningEffort(null);
           return;
         }
         if (c === undefined) return;
         setFileState({ status: "loaded", content: c });
         setOriginal(c);
+        const effort = agentKey === "codex" ? readModelReasoningEffort(c) : null;
+        setReasoningEffort(effort);
+        setOriginalReasoningEffort(effort);
       })
       .catch((e) => {
         if (!cancelled) setError(String(e));
@@ -169,6 +191,9 @@ export function AgentConfigPanel({
     try {
       await invoke("write_agent_config_file", { agent: agentKey, content: fileState.content });
       setOriginal(fileState.content);
+      const effort = agentKey === "codex" ? readModelReasoningEffort(fileState.content) : null;
+      setReasoningEffort(effort);
+      setOriginalReasoningEffort(effort);
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
     } catch (e) {
@@ -271,6 +296,26 @@ export function AgentConfigPanel({
     }
   }
 
+  async function handleSaveReasoningEffort() {
+    if (agentKey !== "codex" || fileState.status !== "loaded") return;
+    const content = setModelReasoningEffort(fileState.content, reasoningEffort);
+    setSavingReasoningEffort(true);
+    setError(null);
+    setSaved(false);
+    try {
+      await invoke("write_agent_config_file", { agent: agentKey, content });
+      setFileState({ status: "loaded", content });
+      setOriginal(content);
+      setOriginalReasoningEffort(reasoningEffort);
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setSavingReasoningEffort(false);
+    }
+  }
+
   function toggleModel(modelName: string) {
     setSelectedModels((prev) => {
       if (prev.includes(modelName)) return prev.filter((item) => item !== modelName);
@@ -288,6 +333,10 @@ export function AgentConfigPanel({
   const canSaveModels =
     selectedModels.length > 0 &&
     !sameModels(normalizeModels(selectedModels), originalSelectedModels);
+  const canSaveReasoningEffort =
+    agentKey === "codex" &&
+    fileState.status === "loaded" &&
+    reasoningEffort !== originalReasoningEffort;
 
   return (
     <>
@@ -444,6 +493,62 @@ export function AgentConfigPanel({
           </div>
         )}
 
+        {agentKey === "codex" && fileState.status === "loaded" && (
+          <div style={{ marginBottom: 18 }}>
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: 8,
+                marginBottom: 8,
+              }}
+            >
+              <div>
+                <div style={{ fontSize: 13, fontWeight: 600, color: "var(--text-primary)" }}>
+                  {t("appSettings.reasoningEffort")}
+                </div>
+                <div style={{ marginTop: 3, fontSize: 11, color: "var(--text-hint)" }}>
+                  {t("appSettings.reasoningEffortHint")}
+                </div>
+              </div>
+              <Button
+                variant="default"
+                size="sm"
+                onClick={handleSaveReasoningEffort}
+                disabled={savingReasoningEffort || !canSaveReasoningEffort}
+              >
+                {savingReasoningEffort ? t("common.saving") : t("common.save")}
+              </Button>
+            </div>
+            <div
+              role="group"
+              aria-label={t("appSettings.reasoningEffort")}
+              style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}
+            >
+              <Button
+                variant="outline"
+                size="sm"
+                active={reasoningEffort === null}
+                onClick={() => setReasoningEffort(null)}
+              >
+                {t("appSettings.reasoningEffortDefault")}
+              </Button>
+              {MODEL_REASONING_EFFORTS.map((effort) => (
+                <Button
+                  key={effort}
+                  variant="outline"
+                  size="sm"
+                  active={reasoningEffort === effort}
+                  onClick={() => setReasoningEffort(effort)}
+                >
+                  {t(`appSettings.reasoningEffort.${effort}`)}
+                </Button>
+              ))}
+            </div>
+          </div>
+        )}
+
         <div
           style={{
             height: 1,
@@ -538,7 +643,7 @@ export function AgentConfigPanel({
               lineHeight: 1.55,
             }}
             value={fileState.content}
-            onChange={(e) => setFileState({ status: "loaded", content: e.target.value })}
+            onChange={(e) => handleFileContentChange(e.target.value)}
             {...fileContentImeFix}
             spellCheck={false}
           />

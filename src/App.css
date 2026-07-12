@@ -2204,10 +2204,10 @@ html:not(.dark) .xterm-helper-textarea {
   background: var(--terminal-bg) !important;
 }
 
-/* xterm defaults IME preedit text to a black block. A transparent underline keeps
- * the active pinyin visible without making a deleted final character look alive. */
+/* Cover xterm's canvas cursor while composing and render one caret after the
+ * native preedit text. This keeps the insertion point attached to the pinyin. */
 .xterm .composition-view {
-  background: transparent !important;
+  background: var(--terminal-bg) !important;
   color: var(--text-primary) !important;
   border-bottom: 2px solid color-mix(in srgb, var(--accent) 70%, transparent);
   box-sizing: border-box;
@@ -2220,6 +2220,29 @@ html:not(.dark) .xterm-helper-textarea {
   word-break: normal;
   writing-mode: horizontal-tb;
   font-weight: 400;
+}
+
+.xterm .composition-view.active:not(:empty)::after {
+  content: "";
+  display: inline-block;
+  width: 1px;
+  height: 1em;
+  margin-left: 1px;
+  vertical-align: -0.12em;
+  background: currentColor;
+  animation: aeroric-ime-caret-blink 1s steps(1, end) infinite;
+}
+
+@keyframes aeroric-ime-caret-blink {
+  0%,
+  48% {
+    opacity: 1;
+  }
+
+  49%,
+  100% {
+    opacity: 0;
+  }
 }
 
 .xterm .composition-view:not(.active),

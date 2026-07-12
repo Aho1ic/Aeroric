@@ -67,6 +67,14 @@ function isTextInsertInputType(inputType: string): boolean {
   return inputType === "insertText" || inputType === "insertCompositionText";
 }
 
+function isCompositionDeletionInputType(inputType: string): boolean {
+  return (
+    inputType === "deleteCompositionText" ||
+    inputType === "deleteContentBackward" ||
+    inputType === "deleteContentForward"
+  );
+}
+
 function isRepeatableEditingKey(key: string): boolean {
   return (
     key === "Backspace" ||
@@ -354,6 +362,7 @@ export function attachLinuxIMEFix(
   let suppressNextTextInsertAfterRepeatedKey: string | true | null = null;
   let imeProcessKeyGuardUntil = 0;
   let deferNextRomanizedCompositionCommit = false;
+  let compositionDeletionInProgress = false;
   let pendingCompositionCommit: {
     text: string;
     preeditText: string;
@@ -397,6 +406,19 @@ export function attachLinuxIMEFix(
       compositionView.textContent = compositionText;
       compositionView.classList.add("active");
     });
+  };
+
+  const updateCompositionText = (nextText: string) => {
+    const previousText = compositionText;
+    compositionText = nextText;
+    if (previousText && !nextText) {
+      ignoredReplayProgress = "";
+      ignoredPostCompositionCandidates = buildPostCompositionIgnoredCandidates(
+        previousText,
+        previousText,
+      );
+      ignorePostCompositionUntil = performance.now() + CLEARED_COMPOSITION_REPLAY_GUARD_MS;
+    }
   };
   const compositionObserver = compositionView
     ? new MutationObserver(() => {
@@ -591,6 +613,7 @@ export function attachLinuxIMEFix(
     clearPendingCompositionCommit();
     suppressNextTextInsertAfterRepeatedKey = null;
     deferNextRomanizedCompositionCommit = false;
+    compositionDeletionInProgress = false;
     isComposing = true;
     compositionText = "";
     ignoredReplayProgress = "";
@@ -598,12 +621,16 @@ export function attachLinuxIMEFix(
   };
 
   const handleCompositionUpdateCapture = (event: CompositionEvent) => {
-    const previousCompositionText = compositionText;
     const eventText = event.data ?? "";
     const textareaText = textarea.value;
-    compositionText =
-      eventText ||
-      (textareaText && (!compositionText || textareaText !== compositionText) ? textareaText : "");
+    updateCompositionText(
+      compositionDeletionInProgress
+        ? eventText
+        : eventText ||
+            (textareaText && (!compositionText || textareaText !== compositionText)
+              ? textareaText
+              : ""),
+    );
     imeDbg("compositionupdate", { data: event.data, compositionText });
     // Do not clear xterm's helper textarea while WebKit is composing. xterm
     // reads that value after this capture listener to paint `.composition-view`;
@@ -615,14 +642,6 @@ export function attachLinuxIMEFix(
       // the event has finished propagating.
       restoreCompositionPreviewAfterEvent();
     } else {
-      if (previousCompositionText) {
-        ignoredReplayProgress = "";
-        ignoredPostCompositionCandidates = buildPostCompositionIgnoredCandidates(
-          previousCompositionText,
-          previousCompositionText,
-        );
-        ignorePostCompositionUntil = performance.now() + CLEARED_COMPOSITION_REPLAY_GUARD_MS;
-      }
       hideEmptyXtermCompositionViewAfterEvent();
     }
   };
@@ -637,6 +656,7 @@ export function attachLinuxIMEFix(
       now: performance.now(),
     });
     if (isReleasingXtermComposition) return;
+    compositionDeletionInProgress = false;
     const preeditText = getActiveCompositionText();
     const text = event.data || preeditText;
     if (
@@ -689,6 +709,11 @@ export function attachLinuxIMEFix(
         event.stopImmediatePropagation();
         return;
       }
+    }
+
+    if (isComposing && isCompositionDeletionInputType(event.inputType)) {
+      compositionDeletionInProgress = true;
+      return;
     }
 
     if (
@@ -883,6 +908,16 @@ export function attachLinuxIMEFix(
 
   const handleInputCapture = (event: Event) => {
     if (isComposing && typeof InputEvent !== "undefined" && event instanceof InputEvent) {
+      if (isCompositionDeletionInputType(event.inputType)) {
+        updateCompositionText(textarea.value);
+        compositionDeletionInProgress = false;
+        if (compositionText) {
+          restoreCompositionPreviewAfterEvent();
+        } else {
+          hideEmptyXtermCompositionViewAfterEvent();
+        }
+        return;
+      }
       if (
         event.isComposing &&
         isTextInsertInputType(event.inputType) &&
@@ -983,7 +1018,7 @@ export function attachLinuxIMEFix(
   };
 
   const handleTerminalData = (data: string) => {
-    if (isComposing && /^[\p{L}\p{N}'`]+$/u.test(data)) {
+    if (isComposing) {
       return;
     }
     if (performance.now() <= imeProcessKeyGuardUntil && /^[A-Za-z0-9]$/u.test(data)) {
@@ -1058,7 +1093,8 @@ export function attachLinuxIMEFix(
   textarea.addEventListener("compositionend", handleCompositionEndCapture, true);
   textarea.addEventListener("beforeinput", handleBeforeInputCapture, true);
   textarea.addEventListener("input", handleInputCapture, true);
-  textarea.addEventListener("keydown", handleKeyDownCapture, true);
+  const keydownTarget = terminalElement ?? textarea;
+  keydownTarget.addEventListener("keydown", handleKeyDownCapture, true);
   textarea.addEventListener("blur", handleBlurCapture, true);
   window.addEventListener("blur", handleWindowBlur);
 
@@ -1069,7 +1105,7 @@ export function attachLinuxIMEFix(
       textarea.removeEventListener("compositionend", handleCompositionEndCapture, true);
       textarea.removeEventListener("beforeinput", handleBeforeInputCapture, true);
       textarea.removeEventListener("input", handleInputCapture, true);
-      textarea.removeEventListener("keydown", handleKeyDownCapture, true);
+      keydownTarget.removeEventListener("keydown", handleKeyDownCapture, true);
       textarea.removeEventListener("blur", handleBlurCapture, true);
       window.removeEventListener("blur", handleWindowBlur);
       clearPendingCompositionCommit();

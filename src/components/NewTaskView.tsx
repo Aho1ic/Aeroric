@@ -657,7 +657,6 @@ export function NewTaskView({
         <PromptEditor
           editorRef={editorRef}
           isComposingRef={isComposingRef}
-          isEmpty={isEmpty}
           mentionItems={mentionSearch !== null ? mentionItems : []}
           mentionIndex={mentionIndex}
           onSetIsEmpty={setIsEmpty}
