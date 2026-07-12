@@ -2208,12 +2208,14 @@ html:not(.dark) .xterm-helper-textarea {
   color: var(--text-primary) !important;
   border-bottom: 2px solid color-mix(in srgb, var(--accent) 70%, transparent);
   box-sizing: border-box;
-  max-width: var(--aeroric-composition-max-width, none);
+  width: max-content;
+  max-width: none;
   height: auto !important;
   min-height: 1em;
-  white-space: pre-wrap !important;
-  overflow-wrap: anywhere;
-  word-break: break-all;
+  white-space: nowrap !important;
+  overflow-wrap: normal;
+  word-break: normal;
+  writing-mode: horizontal-tb;
   font-weight: 400;
 }
 

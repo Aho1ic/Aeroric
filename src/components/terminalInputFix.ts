@@ -387,37 +387,17 @@ export function attachLinuxIMEFix(
 
   const terminalElement = textarea.closest<HTMLElement>(".xterm");
   const compositionView = terminalElement?.querySelector<HTMLElement>(".composition-view") ?? null;
-  const syncCompositionViewLayout = () => {
-    if (!compositionView || !compositionText) return;
-    queueMicrotask(() => {
-      if (!compositionText) return;
-      const screen = terminalElement?.querySelector<HTMLElement>(".xterm-screen");
-      const screenWidth =
-        screen?.getBoundingClientRect().width ??
-        terminalElement?.getBoundingClientRect().width ??
-        0;
-      const cursorLeft = Number.parseFloat(compositionView.style.left) || 0;
-      const remainingWidth = screenWidth - cursorLeft;
-      if (remainingWidth > 0) {
-        compositionView.style.setProperty("--aeroric-composition-max-width", `${remainingWidth}px`);
-      }
-    });
-  };
   const restoreCompositionPreviewAfterEvent = () => {
     if (!compositionView || !compositionText) return;
     queueMicrotask(() => {
       if (!compositionText) return;
       compositionView.textContent = compositionText;
       compositionView.classList.add("active");
-      syncCompositionViewLayout();
     });
   };
   const compositionObserver = compositionView
     ? new MutationObserver(() => {
-        if (compositionText) {
-          syncCompositionViewLayout();
-          return;
-        }
+        if (compositionText) return;
         if (compositionView.classList.contains("active")) {
           compositionView.classList.remove("active");
         }
@@ -704,7 +684,6 @@ export function attachLinuxIMEFix(
       compositionText = event.data;
       // Let WebKit and xterm keep the hidden textarea/composition view in sync.
       // handleTerminalData already keeps this live pinyin out of the PTY.
-      syncCompositionViewLayout();
       return;
     }
 
@@ -865,7 +844,6 @@ export function attachLinuxIMEFix(
       compositionText = event.data ?? compositionText;
       // Do not clear or cancel live composition input: xterm needs the native
       // textarea value to render pinyin such as `ce'shi` above the candidates.
-      syncCompositionViewLayout();
       return;
     }
 
@@ -893,7 +871,6 @@ export function attachLinuxIMEFix(
         !containsCommittedCjkText(event.data)
       ) {
         compositionText = event.data ?? compositionText;
-        syncCompositionViewLayout();
         return;
       }
       const text = getActiveCompositionText();

@@ -77,7 +77,7 @@ describe("terminal input fixes", () => {
     expect(shouldPreserveBrowserCompositionPreview("insertText", false)).toBe(false);
   });
 
-  it("shows pinyin preedit text within the remaining terminal width", async () => {
+  it("shows pinyin preedit text without constraining it to the remaining terminal width", async () => {
     vi.resetModules();
     vi.doMock("../platform", () => ({
       APP_PLATFORM: "macos",
@@ -97,17 +97,6 @@ describe("terminal input fixes", () => {
     compositionView.className = "composition-view";
     terminalElement.append(screen, textarea, compositionView);
     document.body.appendChild(terminalElement);
-    vi.spyOn(screen, "getBoundingClientRect").mockReturnValue({
-      x: 0,
-      y: 0,
-      width: 120,
-      height: 100,
-      top: 0,
-      right: 120,
-      bottom: 100,
-      left: 0,
-      toJSON: () => ({}),
-    });
     textarea.addEventListener("compositionupdate", (event) => {
       const compositionEvent = event as CompositionEvent;
       compositionView.textContent = compositionEvent.data;
@@ -147,7 +136,7 @@ describe("terminal input fixes", () => {
     expect(textarea.value).toBe("ce'shi");
     expect(compositionView.classList.contains("active")).toBe(true);
     expect(compositionView.textContent).toBe("ce'shi");
-    expect(compositionView.style.getPropertyValue("--aeroric-composition-max-width")).toBe("40px");
+    expect(compositionView.style.getPropertyValue("--aeroric-composition-max-width")).toBe("");
 
     textarea.dispatchEvent(new CompositionEvent("compositionupdate", { data: "" }));
     await Promise.resolve();
