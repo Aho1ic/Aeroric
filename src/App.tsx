@@ -637,7 +637,13 @@ function App() {
     setHubMode(false);
   }
 
-  function invokeRunTask(task: Task, projectPath: string, images: string[], texts: string[] = []) {
+  function invokeRunTask(
+    task: Task,
+    projectPath: string,
+    images: string[],
+    texts: string[] = [],
+    injectPromptIntoTerminal = false,
+  ) {
     invoke("run_task", {
       taskId: task.id,
       projectPath,
@@ -647,6 +653,7 @@ function App() {
       permissionMode: task.permissionMode,
       images,
       texts,
+      forcePromptInjection: injectPromptIntoTerminal,
       cols: tm.terminalSizeRef.current.cols,
       rows: tm.terminalSizeRef.current.rows,
       onOutput: tm.createOutputChannel(task.id),
@@ -687,6 +694,7 @@ function App() {
       launchMode,
       baseBranch,
       selectedModel,
+      injectPromptIntoTerminal,
     }: {
       prompt: string;
       agent: AgentType;
@@ -697,6 +705,7 @@ function App() {
       immediate: boolean;
       launchMode: "local" | "worktree";
       baseBranch: string;
+      injectPromptIntoTerminal?: boolean;
     },
   ) {
     const taskId = `${Date.now()}`;
@@ -805,6 +814,7 @@ function App() {
       worktreePath ?? project.path,
       images,
       texts,
+      injectPromptIntoTerminal,
     );
   }
 

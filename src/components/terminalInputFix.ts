@@ -32,6 +32,7 @@ function keySummary(event: KeyboardEvent): Record<string, unknown> {
 
 export const POST_COMPOSITION_REPLAY_IGNORE_MS = 3000;
 const ROMANIZED_COMPOSITION_COMMIT_DELAY_MS = 90;
+const ROMANIZED_COMPOSITION_KEY_FALLBACK_MS = 180;
 // 非候选键触发的罗马化提交（IME 切换 / 回车提交原始拼音）无需等待中文候选，
 // 用 0ms（下一个宏任务）提交即可。同步到达的中文 beforeinput 仍能在定时器触发前
 // cancel 掉这次提交（见测试 "sends committed Chinese from WebKit beforeinput ..."）。
@@ -95,6 +96,8 @@ function isCandidateCommitKey(event: KeyboardEvent): boolean {
     event.key === " " ||
     event.key === "Spacebar" ||
     event.code === "Space" ||
+    event.key === "Enter" ||
+    event.code === "Enter" ||
     /^[1-9]$/.test(event.key)
   );
 }
@@ -363,6 +366,7 @@ export function attachLinuxIMEFix(
   let imeProcessKeyGuardUntil = 0;
   let deferNextRomanizedCompositionCommit = false;
   let compositionDeletionInProgress = false;
+  let candidateKeyCommitTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
   let pendingCompositionCommit: {
     text: string;
     preeditText: string;
@@ -514,6 +518,12 @@ export function attachLinuxIMEFix(
     pendingCompositionCommit = null;
   };
 
+  const clearCandidateKeyCommit = () => {
+    if (!candidateKeyCommitTimer) return;
+    globalThis.clearTimeout(candidateKeyCommitTimer);
+    candidateKeyCommitTimer = null;
+  };
+
   const commitCompositionText = (text: string, preeditText: string) => {
     const normalized = normalizeCommittedCompositionText(text);
     ignoredReplayProgress = "";
@@ -554,6 +564,7 @@ export function attachLinuxIMEFix(
     const normalized = normalizeCommittedCompositionText(text);
     isComposing = false;
     compositionText = "";
+    clearCandidateKeyCommit();
     clearPendingCompositionCommit();
     commitCompositionText(text, text);
     releaseXtermCompositionState();
@@ -610,6 +621,7 @@ export function attachLinuxIMEFix(
     imeDbg("compositionstart", { data: event.data });
     textareaClearGeneration += 1;
     clearScheduledTextareaClears();
+    clearCandidateKeyCommit();
     clearPendingCompositionCommit();
     suppressNextTextInsertAfterRepeatedKey = null;
     deferNextRomanizedCompositionCommit = false;
@@ -656,6 +668,7 @@ export function attachLinuxIMEFix(
       now: performance.now(),
     });
     if (isReleasingXtermComposition) return;
+    clearCandidateKeyCommit();
     compositionDeletionInProgress = false;
     const preeditText = getActiveCompositionText();
     const text = event.data || preeditText;
@@ -995,6 +1008,11 @@ export function attachLinuxIMEFix(
     }
     if (isComposing && isCandidateCommitKey(event)) {
       deferNextRomanizedCompositionCommit = true;
+      clearCandidateKeyCommit();
+      candidateKeyCommitTimer = globalThis.setTimeout(() => {
+        candidateKeyCommitTimer = null;
+        commitActiveRomanizedComposition();
+      }, ROMANIZED_COMPOSITION_KEY_FALLBACK_MS);
     }
     if (shouldSuppressPrintableKeyRepeat(event)) {
       suppressNextTextInsertAfterRepeatedKey =
@@ -1109,6 +1127,7 @@ export function attachLinuxIMEFix(
       textarea.removeEventListener("blur", handleBlurCapture, true);
       window.removeEventListener("blur", handleWindowBlur);
       clearPendingCompositionCommit();
+      clearCandidateKeyCommit();
       textareaClearGeneration += 1;
       clearScheduledTextareaClears();
       clearTextareaInputClientReset();

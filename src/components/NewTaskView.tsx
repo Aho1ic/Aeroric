@@ -98,6 +98,7 @@ export function NewTaskView({
     launchMode: LaunchMode;
     baseBranch: string;
     selectedModel?: string;
+    injectPromptIntoTerminal?: boolean;
   }) => void;
   onStartTerminal?: () => void;
   initialDraft?: NewTaskDraft | null;
@@ -507,6 +508,7 @@ export function NewTaskView({
       launchMode: "local",
       baseBranch: "",
       selectedModel: modelSelectable ? selectedModel || undefined : undefined,
+      injectPromptIntoTerminal: agent === "claude",
     });
   }
 

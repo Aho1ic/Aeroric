@@ -565,6 +565,14 @@ fn uses_native_initial_prompt(agent: &str, is_codex: bool) -> bool {
     matches!((agent, is_codex), ("claude", false) | ("codex", true))
 }
 
+fn should_use_native_initial_prompt(
+    agent: &str,
+    is_codex: bool,
+    force_prompt_injection: bool,
+) -> bool {
+    !force_prompt_injection && uses_native_initial_prompt(agent, is_codex)
+}
+
 fn stable_agent_spawn_cwd() -> PathBuf {
     crate::platform::home_dir()
         .filter(|path| path.is_dir())
@@ -639,6 +647,7 @@ pub async fn run_task(
     images: Option<Vec<String>>,
     texts: Option<Vec<String>>,
     selected_model: Option<String>,
+    force_prompt_injection: Option<bool>,
     cols: Option<u16>,
     rows: Option<u16>,
     on_output: Channel<String>,
@@ -705,7 +714,8 @@ pub async fn run_task(
     let launch = crate::app_settings::get_agent_launch_spec(&agent);
     let agent_bin = launch.program.clone();
     let is_codex = crate::app_settings::is_codex_like_agent(&agent);
-    let use_native_initial_prompt = uses_native_initial_prompt(&agent, is_codex);
+    let use_native_initial_prompt =
+        should_use_native_initial_prompt(&agent, is_codex, force_prompt_injection.unwrap_or(false));
     let selected_model = normalized_selected_model(selected_model.as_deref());
 
     // 版本统一走全局探测（带缓存），判断是否支持 --session-id。
@@ -798,9 +808,9 @@ pub async fn run_task(
         serde_json::json!({ "task_id": task_id, "status": "running" }),
     );
 
-    // 内置 Agent 使用原生命令行参数执行首条消息，避免 PTY 启动阶段清空过早注入的输入。
-    // 自定义 Agent 包装脚本不一定兼容 positional prompt，因此等待首批终端输出后再注入，
-    // 并为没有启动输出的脚本保留超时兜底。
+    // 内置 Agent 默认使用原生命令行参数执行首条消息，避免 PTY 启动阶段清空过早注入的
+    // 输入。一键初始化可强制改走终端注入；自定义 Agent 包装脚本也不一定兼容 positional
+    // prompt，因此等待首批终端输出后再注入，并为没有启动输出的脚本保留超时兜底。
     // 因此这里不能启动 /status watcher，避免抢占用户输入或污染浅色终端背景。
     let starts_with_prompt = !final_prompt.is_empty();
     let session_tx = if starts_with_prompt {
@@ -1260,6 +1270,9 @@ mod tests {
         assert!(uses_native_initial_prompt("codex", true));
         assert!(!uses_native_initial_prompt("local_codex", true));
         assert!(!uses_native_initial_prompt("local_tool", false));
+        assert!(should_use_native_initial_prompt("claude", false, false));
+        assert!(!should_use_native_initial_prompt("claude", false, true));
+        assert!(should_use_native_initial_prompt("codex", true, false));
         assert!(initial_prompt_args("", true).is_empty());
         assert_eq!(
             initial_prompt_args("hello\nworld", true),

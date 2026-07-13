@@ -31,9 +31,8 @@ export function buildPromptWithGoalMode(prompt: string, goalMode: boolean): stri
 }
 
 export function shouldShowInstructionsBanner(
-  agent: AgentType,
+  _agent: AgentType,
   hasInstructionsFile: boolean | null,
 ): boolean {
-  if (agent === "claude") return false;
   return hasInstructionsFile === false;
 }

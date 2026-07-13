@@ -5,8 +5,8 @@ import {
 } from "../components/new-task/goalMode";
 
 describe("new task goal mode", () => {
-  it("hides the missing CLAUDE.md banner for Claude Code projects", () => {
-    expect(shouldShowInstructionsBanner("claude", false)).toBe(false);
+  it("shows the missing CLAUDE.md banner for Claude Code projects", () => {
+    expect(shouldShowInstructionsBanner("claude", false)).toBe(true);
   });
 
   it("keeps the missing AGENTS.md banner for codex-compatible agents", () => {

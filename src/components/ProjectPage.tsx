@@ -64,7 +64,6 @@ import {
   finishProjectActionTrace,
   readProjectActionLog,
   startProjectActionTrace,
-  summarizeProjectActionLog,
   writeProjectActionLog,
   type ActionFeedbackState,
   type ProjectActionKind,
@@ -233,6 +232,8 @@ export function ProjectPage({
     immediate: boolean;
     launchMode: "local" | "worktree";
     baseBranch: string;
+    selectedModel?: string;
+    injectPromptIntoTerminal?: boolean;
   }) => void;
   onRunTodoTask: (task: Task) => void;
   onUpdateTodo: (
@@ -335,8 +336,7 @@ export function ProjectPage({
   } | null>(null);
   const [editorTestDebugError, setEditorTestDebugError] = useState<string | null>(null);
   const [actionFeedback, setActionFeedback] = useState<ActionFeedbackState | null>(null);
-  const [actionLog, setActionLog] = useState<ProjectActionResult[]>([]);
-  const [showActionLogDetails, setShowActionLogDetails] = useState(false);
+  const [, setActionLog] = useState<ProjectActionResult[]>([]);
   const [responsiveLayout, setResponsiveLayout] = useState({
     autoCollapseRail: false,
     compactComposeControls: false,
@@ -370,7 +370,6 @@ export function ProjectPage({
 
   useEffect(() => {
     setActionLog(readProjectActionLog(actionLogStorageKey));
-    setShowActionLogDetails(false);
   }, [actionLogStorageKey]);
 
   useEffect(() => {
@@ -476,7 +475,6 @@ export function ProjectPage({
         : { kind: "local" as const, projectPath: project.path },
     [project.path, remoteFileContext],
   );
-  const actionLogSummary = useMemo(() => summarizeProjectActionLog(actionLog), [actionLog]);
   const lspDiagnosticsProjectRoot =
     projectLocation.kind === "ssh" ? projectLocation.remotePath : project.path;
   useEffect(() => {
@@ -1513,131 +1511,6 @@ export function ProjectPage({
               }}
             >
               {actionFeedback.message}
-            </div>
-          )}
-          {actionLogSummary.total > 0 && (
-            <button
-              type="button"
-              data-testid="project-action-log-summary"
-              aria-expanded={showActionLogDetails}
-              onClick={() => setShowActionLogDetails((current) => !current)}
-              title={t("project.actionFeedback.summaryTitle", {
-                total: actionLogSummary.total,
-                failed: actionLogSummary.failed,
-                avg: actionLogSummary.averageDurationMs,
-              })}
-              style={{
-                position: "absolute",
-                right: 58,
-                bottom: actionFeedback ? 52 : 14,
-                zIndex: 11,
-                maxWidth: 360,
-                padding: "5px 8px",
-                border: "1px solid var(--border-dim)",
-                borderRadius: 8,
-                background: "color-mix(in srgb, var(--bg-sidebar) 90%, transparent)",
-                color: "var(--text-muted)",
-                fontSize: 11,
-                fontWeight: 600,
-                cursor: "pointer",
-                boxShadow: "var(--shadow-sm)",
-              }}
-            >
-              {t("project.actionFeedback.summary", {
-                total: actionLogSummary.total,
-                failed: actionLogSummary.failed,
-                avg: actionLogSummary.averageDurationMs,
-              })}
-            </button>
-          )}
-          {showActionLogDetails && actionLogSummary.total > 0 && (
-            <div
-              data-testid="project-action-log-details"
-              style={{
-                position: "absolute",
-                right: 58,
-                bottom: actionFeedback ? 82 : 44,
-                zIndex: 12,
-                width: 360,
-                maxHeight: 260,
-                overflow: "hidden",
-                display: "flex",
-                flexDirection: "column",
-                border: "1px solid var(--border-dim)",
-                borderRadius: 8,
-                background: "var(--bg-panel)",
-                color: "var(--text-primary)",
-                boxShadow: "var(--shadow-lg)",
-              }}
-            >
-              <div
-                style={{
-                  padding: "8px 10px",
-                  borderBottom: "1px solid var(--border-dim)",
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "space-between",
-                  gap: 10,
-                  fontSize: 12,
-                  fontWeight: 700,
-                }}
-              >
-                <span>{t("project.actionFeedback.logTitle")}</span>
-                <span style={{ color: "var(--text-muted)", fontSize: 11, fontWeight: 600 }}>
-                  {t("project.actionFeedback.logCounts", {
-                    open: actionLogSummary.byAction.open,
-                    close: actionLogSummary.byAction.close,
-                    run: actionLogSummary.byAction.run,
-                  })}
-                </span>
-              </div>
-              <div
-                style={{
-                  overflow: "auto",
-                  maxHeight: 210,
-                }}
-              >
-                {actionLog.map((entry) => (
-                  <div
-                    key={`${entry.id}-${entry.finishedAt}`}
-                    data-testid="project-action-log-entry"
-                    style={{
-                      padding: "7px 10px",
-                      borderBottom: "1px solid var(--border-dim)",
-                      display: "grid",
-                      gridTemplateColumns: "auto 1fr auto",
-                      gap: 8,
-                      alignItems: "center",
-                      fontSize: 12,
-                    }}
-                  >
-                    <span
-                      style={{
-                        color: entry.status === "failed" ? "var(--danger)" : "var(--text-muted)",
-                        fontWeight: 700,
-                        textTransform: "uppercase",
-                        fontSize: 10,
-                      }}
-                    >
-                      {entry.status}
-                    </span>
-                    <span
-                      title={entry.error ? `${entry.message}: ${entry.error}` : entry.message}
-                      style={{
-                        minWidth: 0,
-                        overflow: "hidden",
-                        textOverflow: "ellipsis",
-                        whiteSpace: "nowrap",
-                      }}
-                    >
-                      {entry.message}
-                    </span>
-                    <span style={{ color: "var(--text-muted)", fontSize: 11 }}>
-                      {entry.durationMs}ms
-                    </span>
-                  </div>
-                ))}
-              </div>
             </div>
           )}
           {/* Foreground: SFTP, file viewer, diff, SSH shell, or new-task composer */}

@@ -646,16 +646,8 @@ describe("ProjectPage right toolbar", () => {
     expect(problemsFeedback).toHaveAttribute("data-action-kind", "open");
     expect(problemsFeedback).toHaveAttribute("data-action-target", "search");
 
-    expect(await screen.findByTestId("project-action-log-summary")).toHaveTextContent(
-      "3 actions · 0 failed",
-    );
-    await user.click(screen.getByTestId("project-action-log-summary"));
-    expect(await screen.findByTestId("project-action-log-details")).toHaveTextContent(
-      "open 2 · close 1 · run 0",
-    );
-    const entries = await screen.findAllByTestId("project-action-log-entry");
-    expect(entries).toHaveLength(3);
-    expect(entries[0]).toHaveTextContent("Opened Search");
+    expect(screen.queryByTestId("project-action-log-summary")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("project-action-log-details")).not.toBeInTheDocument();
     const persisted = JSON.parse(
       window.localStorage.getItem("aeroric:project-action-log:project-1") ?? "[]",
     );
@@ -667,7 +659,7 @@ describe("ProjectPage right toolbar", () => {
     });
   });
 
-  it("restores persisted project action log summaries", async () => {
+  it("does not render persisted project action log statistics", () => {
     window.localStorage.setItem(
       "aeroric:project-action-log:project-1",
       JSON.stringify([
@@ -701,9 +693,8 @@ describe("ProjectPage right toolbar", () => {
       </I18nProvider>,
     );
 
-    expect(await screen.findByTestId("project-action-log-summary")).toHaveTextContent(
-      "2 actions · 1 failed · avg 32ms",
-    );
+    expect(screen.queryByTestId("project-action-log-summary")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("project-action-log-details")).not.toBeInTheDocument();
   });
 
   it("aggregates panel render failures into action feedback and toast", async () => {

@@ -1327,7 +1327,7 @@ describe("DatabaseView workspace and data grid", () => {
     expect(screen.queryByRole("dialog", { name: "Cell value" })).not.toBeInTheDocument();
   });
 
-  it("selects DBX grid cell text on double click and saves edits only from the Save button", async () => {
+  it("selects numeric DBX grid values on double click and accepts text input", async () => {
     const user = userEvent.setup();
     vi.mocked(confirm).mockResolvedValue(true);
     vi.mocked(invoke).mockImplementation((command, args) => {
@@ -1360,10 +1360,8 @@ describe("DatabaseView workspace and data grid", () => {
       if (command === "dbx_update_cell") {
         const execute = (args as { request: { execute?: boolean } }).request.execute;
         return Promise.resolve({
-          statements: ['UPDATE "public"."users" SET "email" = \'alice@new.test\' WHERE "id" = 1;'],
-          rollbackStatements: [
-            'UPDATE "public"."users" SET "email" = \'alice@example.com\' WHERE "id" = 1;',
-          ],
+          statements: ['UPDATE "public"."users" SET "id" = 42 WHERE "id" = 1;'],
+          rollbackStatements: ['UPDATE "public"."users" SET "id" = 1 WHERE "id" = 42;'],
           validationError: null,
           executionSchema: "public",
           executed: Boolean(execute),
@@ -1383,17 +1381,23 @@ describe("DatabaseView workspace and data grid", () => {
 
     await user.click(await screen.findByRole("button", { name: /DBX Source/i }));
     await user.click(await screen.findByRole("button", { name: /^users\s+table$/i }));
-    const emailSpan = await screen.findByText("alice@example.com");
-    const emailTd = emailSpan.closest("td") as HTMLTableCellElement;
-    await user.dblClick(emailTd);
-    const emailInput = emailTd.querySelector("input") as HTMLInputElement;
+    const grid = await screen.findByRole("grid", { name: "Data grid" });
+    const idTd = grid.querySelector("tbody tr td:nth-child(2)") as HTMLTableCellElement;
+    expect(idTd).toHaveTextContent("1");
+    await user.dblClick(idTd);
+    const idInput = idTd.querySelector("input") as HTMLInputElement;
     await waitFor(() => {
-      expect(emailInput.selectionStart).toBe(0);
-      expect(emailInput.selectionEnd).toBe("alice@example.com".length);
+      expect(idInput).toHaveAttribute("type", "text");
+      expect(idInput.selectionStart).toBe(0);
+      expect(idInput.selectionEnd).toBe(1);
     });
-    await user.clear(emailInput);
-    await user.type(emailInput, "alice@new.test");
-    fireEvent.blur(emailInput);
+    await user.copy();
+    await user.clear(idInput);
+    await user.paste();
+    expect(idInput).toHaveValue("1");
+    await user.clear(idInput);
+    await user.type(idInput, "42");
+    fireEvent.blur(idInput);
 
     expect(invoke).not.toHaveBeenCalledWith("dbx_update_cell", expect.anything());
     expect(confirm).not.toHaveBeenCalled();
@@ -1416,13 +1420,13 @@ describe("DatabaseView workspace and data grid", () => {
             }),
             columns: ["id", "email"],
             rows: [[1, "alice@example.com"]],
-            dirtyRows: [[0, [[1, "alice@new.test"]]]],
+            dirtyRows: [[0, [[0, "42"]]]],
           }),
         }),
       });
     });
     expect(confirm).toHaveBeenCalledWith(
-      expect.stringContaining('UPDATE "public"."users" SET "email"'),
+      expect.stringContaining('UPDATE "public"."users" SET "id"'),
       {
         title: "Update cell",
         kind: "warning",
@@ -1434,7 +1438,7 @@ describe("DatabaseView workspace and data grid", () => {
       request: expect.objectContaining({
         execute: true,
         options: expect.objectContaining({
-          dirtyRows: [[0, [[1, "alice@new.test"]]]],
+          dirtyRows: [[0, [[0, "42"]]]],
         }),
       }),
     });

@@ -10,6 +10,7 @@ vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn().mockImplementation((command: string, args?: unknown) => {
     if (command === "list_project_files") return Promise.resolve([]);
     if (command === "get_project_git_branches") return Promise.resolve([]);
+    if (command === "read_file_content") return Promise.reject(new Error("File not found"));
     if (command === "get_hook_readiness") {
       return Promise.resolve([{ agent: "claude", usable: true }]);
     }
@@ -105,6 +106,29 @@ describe("NewTaskView start terminal", () => {
       expect.objectContaining({
         prompt: "inspect the current files",
         immediate: true,
+      }),
+    );
+  });
+
+  it("injects and submits the Claude initialization prompt through the terminal", async () => {
+    const user = userEvent.setup();
+    const onSubmit = vi.fn();
+
+    render(
+      <I18nProvider>
+        <NewTaskView project={project} onSubmit={onSubmit} />
+      </I18nProvider>,
+    );
+
+    await user.click(await screen.findByRole("button", { name: "Initialize" }));
+
+    expect(onSubmit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        prompt:
+          "Please initialize a standard, best-practice CLAUDE.md based on the current project.",
+        agent: "claude",
+        immediate: true,
+        injectPromptIntoTerminal: true,
       }),
     );
   });

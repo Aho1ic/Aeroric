@@ -1,4 +1,4 @@
-import type { CSSProperties, KeyboardEventHandler } from "react";
+import { useLayoutEffect, useRef, type CSSProperties, type KeyboardEventHandler } from "react";
 import { ArrowDown, ArrowUp, ArrowUpDown } from "lucide-react";
 import type { AeroricDbConnectionConfig, DbObject, DbQueryResult } from "../../types";
 import {
@@ -32,6 +32,42 @@ type Props = {
     original: string,
   ) => void | Promise<void>;
 };
+
+type CellEditorProps = {
+  value: string;
+  onCancel: () => void;
+  onCommit: (value: string) => void;
+};
+
+function CellEditor({ value, onCancel, onCommit }: CellEditorProps) {
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useLayoutEffect(() => {
+    inputRef.current?.focus();
+    inputRef.current?.select();
+  }, []);
+
+  return (
+    <input
+      ref={inputRef}
+      type="text"
+      style={{
+        ...s.databaseCellInput,
+        minWidth: 0,
+        flex: "1 1 auto",
+        borderColor: "var(--border-focus)",
+        background: "var(--bg-input)",
+      }}
+      defaultValue={value}
+      onBlur={(event) => onCommit(event.currentTarget.value)}
+      onKeyDown={(event) => {
+        if (event.key !== "Escape") return;
+        event.preventDefault();
+        onCancel();
+      }}
+    />
+  );
+}
 
 function dbxDataTypeStyle(dataType: string): CSSProperties {
   const normalized = dataType.toLowerCase().trim();
@@ -409,33 +445,16 @@ export function DataGridView({
                     >
                       <div style={s.databaseGridCellContent}>
                         {isCellEditing && editable ? (
-                          <input
-                            style={{
-                              ...s.databaseCellInput,
-                              minWidth: 0,
-                              flex: "1 1 auto",
-                              borderColor: "var(--border-focus)",
-                              background: "var(--bg-input)",
-                            }}
-                            defaultValue={displayValue}
-                            autoFocus
-                            onFocus={(event) => event.currentTarget.select()}
-                            onBlur={(event) => {
+                          <CellEditor
+                            value={displayValue}
+                            onCancel={() => setDbxEditingCell(null)}
+                            onCommit={(value) => {
                               if (activeDbxConnection) {
-                                stageDbxCellEdit(
-                                  dbxRowIndex,
-                                  columnIndex,
-                                  column,
-                                  event.currentTarget.value,
-                                  original,
-                                );
+                                stageDbxCellEdit(dbxRowIndex, columnIndex, column, value, original);
                               } else {
-                                void onUpdateCell(row, column, event.currentTarget.value, original);
+                                void onUpdateCell(row, column, value, original);
                               }
                               setDbxEditingCell(null);
-                            }}
-                            onKeyDown={(event) => {
-                              if (event.key === "Escape") setDbxEditingCell(null);
                             }}
                           />
                         ) : (
