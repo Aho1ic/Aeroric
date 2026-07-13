@@ -1213,6 +1213,119 @@ describe("terminal input fixes", () => {
     },
   );
 
+  it.each([
+    ["space", "Process", "Space"],
+    ["Enter", "Process", "Enter"],
+    ["number", "Process", "Digit1"],
+    ["numpad number", "Process", "Numpad1"],
+  ])(
+    "reconstructs a WeChat English candidate from process keys for %s",
+    async (_label, key, code) => {
+      vi.useFakeTimers();
+      vi.resetModules();
+      vi.doMock("../platform", () => ({
+        APP_PLATFORM: "macos",
+        ENABLE_USAGE_INSIGHTS: true,
+        IS_MAC_WEBKIT: true,
+        IS_OTHER_WEBKIT: false,
+        detectAppPlatform: () => "macos",
+        isAppleWebKit: () => true,
+      }));
+      const { attachLinuxIMEFix } = await import("../components/terminalInputFix");
+      const textarea = document.createElement("textarea");
+      const sent: string[] = [];
+      const term = {
+        textarea,
+        onData: () => ({ dispose: vi.fn() }),
+      };
+      const dispatchProcessKey = (processCode: string, composing: boolean) => {
+        const processKey = new KeyboardEvent("keydown", {
+          key: "Process",
+          code: processCode,
+          bubbles: true,
+          cancelable: true,
+        });
+        Object.defineProperty(processKey, "keyCode", { value: 229 });
+        Object.defineProperty(processKey, "isComposing", { value: composing });
+        textarea.dispatchEvent(processKey);
+      };
+
+      attachLinuxIMEFix(term as never, (data) => sent.push(data));
+      dispatchProcessKey("KeyP", false);
+      textarea.dispatchEvent(new CompositionEvent("compositionstart", { data: "" }));
+      dispatchProcessKey("KeyL", true);
+      dispatchProcessKey("KeyA", true);
+      dispatchProcessKey("KeyN", true);
+
+      const commitKey = new KeyboardEvent("keydown", {
+        key,
+        code,
+        bubbles: true,
+        cancelable: true,
+      });
+      Object.defineProperty(commitKey, "keyCode", { value: 229 });
+      Object.defineProperty(commitKey, "isComposing", { value: true });
+      textarea.dispatchEvent(commitKey);
+      textarea.dispatchEvent(new CompositionEvent("compositionend", { data: "" }));
+
+      vi.advanceTimersByTime(100);
+      expect(sent).toEqual(["plan"]);
+      vi.useRealTimers();
+    },
+  );
+
+  it("keeps a Chinese candidate ahead of a reconstructed process-key fallback", async () => {
+    vi.useFakeTimers();
+    vi.resetModules();
+    vi.doMock("../platform", () => ({
+      APP_PLATFORM: "macos",
+      ENABLE_USAGE_INSIGHTS: true,
+      IS_MAC_WEBKIT: true,
+      IS_OTHER_WEBKIT: false,
+      detectAppPlatform: () => "macos",
+      isAppleWebKit: () => true,
+    }));
+    const { attachLinuxIMEFix } = await import("../components/terminalInputFix");
+    const textarea = document.createElement("textarea");
+    const sent: string[] = [];
+    const term = {
+      textarea,
+      onData: () => ({ dispose: vi.fn() }),
+    };
+    const dispatchProcessKey = (processCode: string, composing: boolean) => {
+      const processKey = new KeyboardEvent("keydown", {
+        key: "Process",
+        code: processCode,
+        bubbles: true,
+        cancelable: true,
+      });
+      Object.defineProperty(processKey, "keyCode", { value: 229 });
+      Object.defineProperty(processKey, "isComposing", { value: composing });
+      textarea.dispatchEvent(processKey);
+    };
+
+    attachLinuxIMEFix(term as never, (data) => sent.push(data));
+    dispatchProcessKey("KeyJ", false);
+    textarea.dispatchEvent(new CompositionEvent("compositionstart", { data: "" }));
+    for (const code of ["KeyI", "KeyH", "KeyU", "KeyA"]) {
+      dispatchProcessKey(code, true);
+    }
+    dispatchProcessKey("Space", true);
+    textarea.dispatchEvent(
+      new InputEvent("beforeinput", {
+        inputType: "insertText",
+        data: "计划",
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    textarea.dispatchEvent(new CompositionEvent("compositionend", { data: "" }));
+    vi.runOnlyPendingTimers();
+
+    expect(sent).toEqual(["计划"]);
+    vi.useRealTimers();
+  });
+
   it("commits the visible WeChat English candidate when WebKit clears its textarea", async () => {
     vi.useFakeTimers();
     vi.resetModules();

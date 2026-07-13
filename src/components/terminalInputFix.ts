@@ -103,6 +103,25 @@ function isCandidateCommitKey(event: KeyboardEvent): boolean {
   );
 }
 
+function getRomanizedImeProcessKey(event: KeyboardEvent): string | null {
+  if (
+    event.keyCode !== 229 ||
+    event.repeat ||
+    event.ctrlKey ||
+    event.metaKey ||
+    event.altKey ||
+    event.shiftKey
+  ) {
+    return null;
+  }
+  if (/^[A-Za-z]$/.test(event.key)) return event.key.toLowerCase();
+  const letterCode = event.code.match(/^Key([A-Z])$/);
+  if (letterCode) return letterCode[1].toLowerCase();
+  if (event.code === "Quote") return "'";
+  if (event.code === "Backquote") return "`";
+  return null;
+}
+
 function isPlainSpaceKey(event: KeyboardEvent): boolean {
   return (
     !event.isComposing &&
@@ -370,6 +389,7 @@ export function attachLinuxIMEFix(
   let candidateKeyCommitTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
   let candidateCommitText = "";
   let preservedRomanizedCompositionText = "";
+  let pendingRomanizedProcessText = "";
   let pendingCompositionCommit: {
     text: string;
     preeditText: string;
@@ -536,6 +556,7 @@ export function attachLinuxIMEFix(
     const normalized = normalizeCommittedCompositionText(text);
     candidateCommitText = "";
     preservedRomanizedCompositionText = "";
+    pendingRomanizedProcessText = "";
     ignoredReplayProgress = "";
     ignoredPostCompositionCandidates = buildPostCompositionIgnoredCandidates(text, preeditText);
     ignorePostCompositionUntil = performance.now() + POST_COMPOSITION_REPLAY_IGNORE_MS;
@@ -588,6 +609,7 @@ export function attachLinuxIMEFix(
     compositionText = "";
     candidateCommitText = "";
     preservedRomanizedCompositionText = "";
+    pendingRomanizedProcessText = "";
     clearCandidateKeyCommit();
     clearPendingCompositionCommit();
     commitCompositionText(text, text);
@@ -653,7 +675,14 @@ export function attachLinuxIMEFix(
     isComposing = true;
     compositionText = "";
     candidateCommitText = "";
-    preservedRomanizedCompositionText = "";
+    const initialRomanizedText = event.data || pendingRomanizedProcessText;
+    preservedRomanizedCompositionText = shouldDeferRomanizedCompositionCommit(
+      initialRomanizedText,
+      initialRomanizedText,
+    )
+      ? initialRomanizedText.trim()
+      : "";
+    pendingRomanizedProcessText = "";
     ignoredReplayProgress = "";
     void event;
   };
@@ -695,6 +724,7 @@ export function attachLinuxIMEFix(
     });
     if (isReleasingXtermComposition) return;
     clearCandidateKeyCommit();
+    pendingRomanizedProcessText = "";
     compositionDeletionInProgress = false;
     const preeditText = getActiveCompositionText();
     const text = event.data || preeditText;
@@ -830,7 +860,7 @@ export function attachLinuxIMEFix(
       if (normalizedTerminalInput !== event.data) {
         const pending = pendingCompositionCommit;
         clearPendingCompositionCommit();
-        const preeditText = pending?.preeditText || compositionText;
+        const preeditText = pending?.preeditText || getActiveCompositionText();
         const nextCandidates = buildPostCompositionIgnoredCandidates(event.data, preeditText);
         for (const candidate of ignoredPostCompositionCandidates) {
           nextCandidates.add(candidate);
@@ -891,7 +921,7 @@ export function attachLinuxIMEFix(
     }
 
     if (isComposing && event.inputType === "insertText" && containsCommittedCjkText(event.data)) {
-      const preeditText = compositionText;
+      const preeditText = getActiveCompositionText();
       isComposing = false;
       compositionText = "";
       clearPendingCompositionCommit();
@@ -1006,6 +1036,23 @@ export function attachLinuxIMEFix(
       imeProcessKeyGuardUntil = performance.now() + IME_PROCESS_KEY_GUARD_MS;
     } else if (!event.isComposing && isPrintableKey(event.key)) {
       imeProcessKeyGuardUntil = 0;
+    }
+
+    const romanizedProcessKey = getRomanizedImeProcessKey(event);
+    if (romanizedProcessKey !== null) {
+      if (isComposing) {
+        preservedRomanizedCompositionText += romanizedProcessKey;
+      } else {
+        pendingRomanizedProcessText += romanizedProcessKey;
+      }
+    } else if (
+      isComposing &&
+      !event.repeat &&
+      (event.key === "Backspace" || event.code === "Backspace")
+    ) {
+      preservedRomanizedCompositionText = preservedRomanizedCompositionText.slice(0, -1);
+    } else if (!isComposing && event.keyCode !== 229) {
+      pendingRomanizedProcessText = "";
     }
 
     // 检测 IME 切换快捷键（composition 期间按下）：CapsLock，或带 Ctrl/Meta/Alt 修饰的空格/数字。
