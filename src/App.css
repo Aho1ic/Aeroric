@@ -2208,7 +2208,7 @@ html:not(.dark) .xterm-helper-textarea {
  * native preedit text. This keeps the insertion point attached to the pinyin. */
 .xterm .composition-view {
   background: var(--terminal-bg) !important;
-  color: var(--text-primary) !important;
+  color: var(--text-hint) !important;
   border-bottom: 2px solid color-mix(in srgb, var(--accent) 70%, transparent);
   box-sizing: border-box;
   width: max-content;

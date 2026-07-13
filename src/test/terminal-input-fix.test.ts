@@ -1117,6 +1117,8 @@ describe("terminal input fixes", () => {
   it.each([
     ["space", " ", "Space"],
     ["Enter", "Enter", "Enter"],
+    ["number", "Process", "Digit1"],
+    ["numpad number", "Process", "Numpad1"],
   ])(
     "commits an English word with WeChat IME %s when no composition event follows",
     async (_label, key, code) => {
@@ -1159,6 +1161,59 @@ describe("terminal input fixes", () => {
       vi.useRealTimers();
     },
   );
+
+  it("commits the visible WeChat English candidate when WebKit clears its textarea", async () => {
+    vi.useFakeTimers();
+    vi.resetModules();
+    vi.doMock("../platform", () => ({
+      APP_PLATFORM: "macos",
+      ENABLE_USAGE_INSIGHTS: true,
+      IS_MAC_WEBKIT: true,
+      IS_OTHER_WEBKIT: false,
+      detectAppPlatform: () => "macos",
+      isAppleWebKit: () => true,
+    }));
+    const { attachLinuxIMEFix } = await import("../components/terminalInputFix");
+    const terminalElement = document.createElement("div");
+    terminalElement.className = "xterm";
+    const textarea = document.createElement("textarea");
+    const compositionView = document.createElement("div");
+    compositionView.className = "composition-view active";
+    compositionView.textContent = "plan";
+    terminalElement.append(textarea, compositionView);
+    document.body.appendChild(terminalElement);
+    const sent: string[] = [];
+    const term = {
+      textarea,
+      onData: () => ({ dispose: vi.fn() }),
+    };
+
+    const disposable = attachLinuxIMEFix(term as never, (data) => sent.push(data));
+    textarea.dispatchEvent(new CompositionEvent("compositionstart", { data: "" }));
+    compositionView.classList.add("active");
+    compositionView.textContent = "plan";
+
+    const commitKey = new KeyboardEvent("keydown", {
+      key: "Process",
+      code: "Space",
+      bubbles: true,
+      cancelable: true,
+    });
+    Object.defineProperty(commitKey, "keyCode", { value: 229 });
+    Object.defineProperty(commitKey, "isComposing", { value: true });
+    textarea.dispatchEvent(commitKey);
+
+    compositionView.classList.remove("active");
+    compositionView.textContent = "";
+    textarea.value = "";
+    textarea.dispatchEvent(new CompositionEvent("compositionend", { data: "" }));
+    vi.advanceTimersByTime(100);
+
+    expect(sent).toEqual(["plan"]);
+    disposable.dispose();
+    terminalElement.remove();
+    vi.useRealTimers();
+  });
 
   it("keeps a delayed Chinese candidate ahead of the English key fallback", async () => {
     vi.useFakeTimers();

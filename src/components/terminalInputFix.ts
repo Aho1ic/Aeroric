@@ -98,7 +98,8 @@ function isCandidateCommitKey(event: KeyboardEvent): boolean {
     event.code === "Space" ||
     event.key === "Enter" ||
     event.code === "Enter" ||
-    /^[1-9]$/.test(event.key)
+    /^[1-9]$/.test(event.key) ||
+    /^(?:Digit|Numpad)[1-9]$/.test(event.code)
   );
 }
 
@@ -367,6 +368,7 @@ export function attachLinuxIMEFix(
   let deferNextRomanizedCompositionCommit = false;
   let compositionDeletionInProgress = false;
   let candidateKeyCommitTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
+  let candidateCommitText = "";
   let pendingCompositionCommit: {
     text: string;
     preeditText: string;
@@ -526,6 +528,7 @@ export function attachLinuxIMEFix(
 
   const commitCompositionText = (text: string, preeditText: string) => {
     const normalized = normalizeCommittedCompositionText(text);
+    candidateCommitText = "";
     ignoredReplayProgress = "";
     ignoredPostCompositionCandidates = buildPostCompositionIgnoredCandidates(text, preeditText);
     ignorePostCompositionUntil = performance.now() + POST_COMPOSITION_REPLAY_IGNORE_MS;
@@ -548,7 +551,13 @@ export function attachLinuxIMEFix(
     }
   };
 
-  const getActiveCompositionText = () => compositionText || textarea.value;
+  const getActiveCompositionText = () => {
+    const visibleCompositionText =
+      compositionView?.classList.contains("active") && compositionView.textContent
+        ? compositionView.textContent
+        : "";
+    return compositionText || textarea.value || visibleCompositionText || candidateCommitText;
+  };
 
   const commitActiveRomanizedComposition = (): string | null => {
     const text = getActiveCompositionText();
@@ -564,6 +573,7 @@ export function attachLinuxIMEFix(
     const normalized = normalizeCommittedCompositionText(text);
     isComposing = false;
     compositionText = "";
+    candidateCommitText = "";
     clearCandidateKeyCommit();
     clearPendingCompositionCommit();
     commitCompositionText(text, text);
@@ -628,6 +638,7 @@ export function attachLinuxIMEFix(
     compositionDeletionInProgress = false;
     isComposing = true;
     compositionText = "";
+    candidateCommitText = "";
     ignoredReplayProgress = "";
     void event;
   };
@@ -1008,6 +1019,12 @@ export function attachLinuxIMEFix(
     }
     if (isComposing && isCandidateCommitKey(event)) {
       deferNextRomanizedCompositionCommit = true;
+      const activeText = getActiveCompositionText();
+      // WebKit may clear both the helper textarea and composition state before
+      // the fallback runs, so preserve the visible English candidate now.
+      if (shouldDeferRomanizedCompositionCommit(activeText, activeText)) {
+        candidateCommitText = activeText;
+      }
       clearCandidateKeyCommit();
       candidateKeyCommitTimer = globalThis.setTimeout(() => {
         candidateKeyCommitTimer = null;
