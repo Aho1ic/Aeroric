@@ -369,6 +369,7 @@ export function attachLinuxIMEFix(
   let compositionDeletionInProgress = false;
   let candidateKeyCommitTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
   let candidateCommitText = "";
+  let preservedRomanizedCompositionText = "";
   let pendingCompositionCommit: {
     text: string;
     preeditText: string;
@@ -417,6 +418,11 @@ export function attachLinuxIMEFix(
   const updateCompositionText = (nextText: string) => {
     const previousText = compositionText;
     compositionText = nextText;
+    if (shouldDeferRomanizedCompositionCommit(nextText, nextText)) {
+      preservedRomanizedCompositionText = nextText.trim();
+    } else if (!nextText && compositionDeletionInProgress) {
+      preservedRomanizedCompositionText = "";
+    }
     if (previousText && !nextText) {
       ignoredReplayProgress = "";
       ignoredPostCompositionCandidates = buildPostCompositionIgnoredCandidates(
@@ -529,6 +535,7 @@ export function attachLinuxIMEFix(
   const commitCompositionText = (text: string, preeditText: string) => {
     const normalized = normalizeCommittedCompositionText(text);
     candidateCommitText = "";
+    preservedRomanizedCompositionText = "";
     ignoredReplayProgress = "";
     ignoredPostCompositionCandidates = buildPostCompositionIgnoredCandidates(text, preeditText);
     ignorePostCompositionUntil = performance.now() + POST_COMPOSITION_REPLAY_IGNORE_MS;
@@ -556,7 +563,13 @@ export function attachLinuxIMEFix(
       compositionView?.classList.contains("active") && compositionView.textContent
         ? compositionView.textContent
         : "";
-    return compositionText || textarea.value || visibleCompositionText || candidateCommitText;
+    return (
+      compositionText ||
+      textarea.value ||
+      visibleCompositionText ||
+      candidateCommitText ||
+      preservedRomanizedCompositionText
+    );
   };
 
   const commitActiveRomanizedComposition = (): string | null => {
@@ -574,6 +587,7 @@ export function attachLinuxIMEFix(
     isComposing = false;
     compositionText = "";
     candidateCommitText = "";
+    preservedRomanizedCompositionText = "";
     clearCandidateKeyCommit();
     clearPendingCompositionCommit();
     commitCompositionText(text, text);
@@ -639,6 +653,7 @@ export function attachLinuxIMEFix(
     isComposing = true;
     compositionText = "";
     candidateCommitText = "";
+    preservedRomanizedCompositionText = "";
     ignoredReplayProgress = "";
     void event;
   };
@@ -691,6 +706,7 @@ export function attachLinuxIMEFix(
       imeDbg("compositionend ignored as replay", { text });
       isComposing = false;
       compositionText = "";
+      preservedRomanizedCompositionText = "";
       hideXtermCompositionView();
       clearTextareaNowAndNextFrame();
       return;
@@ -700,6 +716,7 @@ export function attachLinuxIMEFix(
     void event;
     if (!text) {
       deferNextRomanizedCompositionCommit = false;
+      preservedRomanizedCompositionText = "";
       hideXtermCompositionView();
       clearTextareaNowAndNextFrame();
       return;
@@ -749,6 +766,7 @@ export function attachLinuxIMEFix(
       shouldDeferRomanizedCompositionCommit(event.data, compositionText)
     ) {
       compositionText = event.data;
+      preservedRomanizedCompositionText = event.data.trim();
       // Let WebKit and xterm keep the hidden textarea/composition view in sync.
       // handleTerminalData already keeps this live pinyin out of the PTY.
       return;
@@ -909,6 +927,9 @@ export function attachLinuxIMEFix(
 
     if (shouldPreserveBrowserCompositionPreview(event.inputType, isComposing)) {
       compositionText = event.data ?? compositionText;
+      if (shouldDeferRomanizedCompositionCommit(compositionText, compositionText)) {
+        preservedRomanizedCompositionText = compositionText.trim();
+      }
       // Do not clear or cancel live composition input: xterm needs the native
       // textarea value to render pinyin such as `ce'shi` above the candidates.
       return;
@@ -948,6 +969,9 @@ export function attachLinuxIMEFix(
         !containsCommittedCjkText(event.data)
       ) {
         compositionText = event.data ?? compositionText;
+        if (shouldDeferRomanizedCompositionCommit(compositionText, compositionText)) {
+          preservedRomanizedCompositionText = compositionText.trim();
+        }
         return;
       }
       const text = getActiveCompositionText();
@@ -1024,6 +1048,11 @@ export function attachLinuxIMEFix(
       // the fallback runs, so preserve the visible English candidate now.
       if (shouldDeferRomanizedCompositionCommit(activeText, activeText)) {
         candidateCommitText = activeText;
+        // The empty update may have marked this same word as a replay. A
+        // candidate key proves it is being selected rather than merely deleted.
+        ignoredReplayProgress = "";
+        ignoredPostCompositionCandidates = new Set();
+        ignorePostCompositionUntil = 0;
       }
       clearCandidateKeyCommit();
       candidateKeyCommitTimer = globalThis.setTimeout(() => {
