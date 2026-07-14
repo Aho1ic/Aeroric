@@ -1051,8 +1051,31 @@ export function attachLinuxIMEFix(
       (event.key === "Backspace" || event.code === "Backspace")
     ) {
       preservedRomanizedCompositionText = preservedRomanizedCompositionText.slice(0, -1);
-    } else if (!isComposing && event.keyCode !== 229) {
+    } else if (!isComposing && event.keyCode !== 229 && !isCandidateCommitKey(event)) {
       pendingRomanizedProcessText = "";
+    }
+
+    let recoveredProcessCandidate = false;
+    if (
+      !isComposing &&
+      isCandidateCommitKey(event) &&
+      shouldDeferRomanizedCompositionCommit(
+        pendingRomanizedProcessText,
+        pendingRomanizedProcessText,
+      )
+    ) {
+      const recoveredText = pendingRomanizedProcessText.trim();
+      isComposing = true;
+      compositionText = recoveredText;
+      preservedRomanizedCompositionText = recoveredText;
+      candidateCommitText = recoveredText;
+      pendingRomanizedProcessText = "";
+      recoveredProcessCandidate = true;
+      imeDbg("keydown candidate recovered without compositionstart", {
+        text: recoveredText,
+        key: event.key,
+        code: event.code,
+      });
     }
 
     // 检测 IME 切换快捷键（composition 期间按下）：CapsLock，或带 Ctrl/Meta/Alt 修饰的空格/数字。
@@ -1069,7 +1092,12 @@ export function attachLinuxIMEFix(
       return;
     }
 
-    if (isComposing && isPlainSpaceKey(event) && commitActiveRomanizedComposition() !== null) {
+    if (
+      !recoveredProcessCandidate &&
+      isComposing &&
+      isPlainSpaceKey(event) &&
+      commitActiveRomanizedComposition() !== null
+    ) {
       imeDbg("keydown plain-space during composition -> committed");
       event.preventDefault();
       event.stopImmediatePropagation();

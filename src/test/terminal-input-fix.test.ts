@@ -1274,6 +1274,115 @@ describe("terminal input fixes", () => {
     },
   );
 
+  it.each([
+    ["space", " ", "Space", 32],
+    ["process space", "Process", "Space", 229],
+    ["Enter", "Enter", "Enter", 13],
+    ["process Enter", "Process", "Enter", 229],
+    ["number", "1", "Digit1", 49],
+    ["process number", "Process", "Digit1", 229],
+    ["numpad number", "1", "Numpad1", 97],
+    ["process numpad number", "Process", "Numpad1", 229],
+  ])(
+    "commits a process-key English candidate with %s when compositionstart is missing",
+    async (_label, key, code, keyCode) => {
+      vi.useFakeTimers();
+      vi.resetModules();
+      vi.doMock("../platform", () => ({
+        APP_PLATFORM: "macos",
+        ENABLE_USAGE_INSIGHTS: true,
+        IS_MAC_WEBKIT: true,
+        IS_OTHER_WEBKIT: false,
+        detectAppPlatform: () => "macos",
+        isAppleWebKit: () => true,
+      }));
+      const { attachLinuxIMEFix } = await import("../components/terminalInputFix");
+      const textarea = document.createElement("textarea");
+      const sent: string[] = [];
+      const term = {
+        textarea,
+        onData: () => ({ dispose: vi.fn() }),
+      };
+      const dispatchProcessKey = (processCode: string) => {
+        const processKey = new KeyboardEvent("keydown", {
+          key: "Process",
+          code: processCode,
+          bubbles: true,
+          cancelable: true,
+        });
+        Object.defineProperty(processKey, "keyCode", { value: 229 });
+        textarea.dispatchEvent(processKey);
+      };
+
+      attachLinuxIMEFix(term as never, (data) => sent.push(data));
+      for (const processCode of ["KeyP", "KeyL", "KeyA", "KeyN"]) {
+        dispatchProcessKey(processCode);
+      }
+
+      const commitKey = new KeyboardEvent("keydown", {
+        key,
+        code,
+        bubbles: true,
+        cancelable: true,
+      });
+      Object.defineProperty(commitKey, "keyCode", { value: keyCode });
+      textarea.dispatchEvent(commitKey);
+
+      expect(sent).toEqual([]);
+      vi.advanceTimersByTime(200);
+      expect(sent).toEqual(["plan"]);
+      vi.useRealTimers();
+    },
+  );
+
+  it("keeps a Chinese candidate ahead of a process-key fallback without compositionstart", async () => {
+    vi.useFakeTimers();
+    vi.resetModules();
+    vi.doMock("../platform", () => ({
+      APP_PLATFORM: "macos",
+      ENABLE_USAGE_INSIGHTS: true,
+      IS_MAC_WEBKIT: true,
+      IS_OTHER_WEBKIT: false,
+      detectAppPlatform: () => "macos",
+      isAppleWebKit: () => true,
+    }));
+    const { attachLinuxIMEFix } = await import("../components/terminalInputFix");
+    const textarea = document.createElement("textarea");
+    const sent: string[] = [];
+    const term = {
+      textarea,
+      onData: () => ({ dispose: vi.fn() }),
+    };
+    const dispatchProcessKey = (processCode: string) => {
+      const processKey = new KeyboardEvent("keydown", {
+        key: "Process",
+        code: processCode,
+        bubbles: true,
+        cancelable: true,
+      });
+      Object.defineProperty(processKey, "keyCode", { value: 229 });
+      textarea.dispatchEvent(processKey);
+    };
+
+    attachLinuxIMEFix(term as never, (data) => sent.push(data));
+    for (const processCode of ["KeyJ", "KeyI", "KeyH", "KeyU", "KeyA"]) {
+      dispatchProcessKey(processCode);
+    }
+    dispatchProcessKey("Space");
+    textarea.dispatchEvent(
+      new InputEvent("beforeinput", {
+        inputType: "insertText",
+        data: "计划",
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    vi.runOnlyPendingTimers();
+
+    expect(sent).toEqual(["计划"]);
+    vi.useRealTimers();
+  });
+
   it("keeps a Chinese candidate ahead of a reconstructed process-key fallback", async () => {
     vi.useFakeTimers();
     vi.resetModules();
