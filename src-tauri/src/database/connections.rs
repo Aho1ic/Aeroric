@@ -101,6 +101,7 @@ fn default_connection_config(
         driver_profile: None,
         driver_label: None,
         url_params: None,
+        agent_java_options: Vec::new(),
         host,
         port,
         username: String::new(),
@@ -109,6 +110,7 @@ fn default_connection_config(
         visible_databases: None,
         visible_schemas: None,
         attached_databases: Vec::new(),
+        init_script: None,
         color: None,
         transport_layers: Vec::new(),
         connect_timeout_secs: default_connect_timeout_secs(),
@@ -139,6 +141,8 @@ fn default_connection_config(
         jdbc_driver_paths: Vec::new(),
         one_time: false,
         read_only,
+        is_production: false,
+        production_databases: Vec::new(),
     }
 }
 
@@ -226,8 +230,16 @@ fn sanitized(connection: &AeroricDbConnectionConfig) -> AeroricDbConnectionConfi
 pub(crate) fn parse_core_config(
     connection: &AeroricDbConnectionConfig,
 ) -> Result<ConnectionConfig, String> {
-    let mut config: ConnectionConfig =
-        serde_json::from_value(connection.dbx.clone()).map_err(|e| e.to_string())?;
+    let mut dbx = connection.dbx.clone();
+    if let Value::Object(config) = &mut dbx {
+        let legacy_sysdba = config.remove("oracle_sysdba");
+        if !config.contains_key("sysdba") {
+            if let Some(Value::Bool(sysdba)) = legacy_sysdba {
+                config.insert("sysdba".to_string(), Value::Bool(sysdba));
+            }
+        }
+    }
+    let mut config: ConnectionConfig = serde_json::from_value(dbx).map_err(|e| e.to_string())?;
     config.id = connection.id.clone();
     config.name = connection.name.clone();
     config.db_type = dbx_type_to_core(connection.db_type);
@@ -615,6 +627,58 @@ mod tests {
         assert_eq!(core.db_type, DatabaseType::Sqlite);
         assert_eq!(core.host, "/tmp/a.db");
         assert!(core.read_only);
+    }
+
+    #[test]
+    fn default_connection_config_round_trips_new_dbx_fields() {
+        let config = default_connection_config(
+            "mysql-1",
+            "mysql",
+            DbxDatabaseType::Mysql,
+            "127.0.0.1".to_string(),
+            3306,
+            Some("app".to_string()),
+            true,
+        );
+        let mut connection = mysql_connection_with_dbx(serde_json::to_value(config).unwrap());
+        connection.read_only = true;
+
+        let parsed = parse_core_config(&connection).unwrap();
+
+        assert!(parsed.agent_java_options.is_empty());
+        assert_eq!(parsed.init_script, None);
+        assert!(!parsed.is_production);
+        assert!(parsed.production_databases.is_empty());
+        assert!(parsed.read_only);
+    }
+
+    #[test]
+    fn oracle_sysdba_uses_canonical_key_and_accepts_legacy_alias() {
+        let canonical_dbx = json!({
+            "id": "oracle-1",
+            "name": "oracle",
+            "db_type": "oracle",
+            "host": "127.0.0.1",
+            "port": 1521,
+            "username": "sys",
+            "password": "",
+            "database": "ORCL",
+            "sysdba": true,
+        });
+        let mut canonical = mysql_connection_with_dbx(canonical_dbx);
+        canonical.id = "oracle-1".to_string();
+        canonical.name = "oracle".to_string();
+        canonical.db_type = DbxDatabaseType::Oracle;
+        assert!(parse_core_config(&canonical).unwrap().sysdba);
+
+        let mut legacy = canonical.clone();
+        legacy.dbx.as_object_mut().unwrap().remove("sysdba");
+        legacy.dbx["oracle_sysdba"] = Value::Bool(true);
+        assert!(parse_core_config(&legacy).unwrap().sysdba);
+
+        let normalized = normalize_incoming(legacy).unwrap();
+        assert_eq!(normalized.dbx["sysdba"], true);
+        assert!(normalized.dbx.get("oracle_sysdba").is_none());
     }
 
     #[test]

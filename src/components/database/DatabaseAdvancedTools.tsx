@@ -8,8 +8,10 @@ import type {
   DbxColumnInfo,
   DbxDatabaseType,
   DbxObjectInfo,
+  DbxTransferProgress,
 } from "../../types";
 import { DbxButton } from "./DbxButton";
+import { confirmDbxProductionOperation } from "./databaseProductionSafety";
 
 export type DatabaseAdvancedToolMode = "transfer" | "schema-diff" | "data-compare";
 
@@ -65,6 +67,18 @@ function columnsForDetail(columns: DbxColumnInfo[]) {
   }));
 }
 
+function transferProgressText(progress: DbxTransferProgress, t: ReturnType<typeof useI18n>["t"]) {
+  if (progress.status === "done") return t("database.transferCompleted");
+  if (progress.status === "cancelled") return t("database.transferCancelled");
+  if (progress.status === "error") {
+    return t("database.transferFailed", { error: progress.error ?? "Unknown error" });
+  }
+  return t("database.transferProgress", {
+    table: progress.table,
+    rows: progress.rowsTransferred,
+  });
+}
+
 export function DatabaseAdvancedTools({
   connectionId,
   mode,
@@ -98,6 +112,10 @@ export function DatabaseAdvancedTools({
   );
   const [resultText, setResultText] = useState("");
   const [loading, setLoading] = useState(false);
+  const targetConnection = useMemo(
+    () => sqlConnections.find((connection) => connection.id === targetConnectionId) ?? null,
+    [sqlConnections, targetConnectionId],
+  );
 
   useEffect(() => {
     setTargetConnectionId((current) => current || defaultTargetConnectionId);
@@ -138,7 +156,7 @@ export function DatabaseAdvancedTools({
 
   const missingReason = !connectionId
     ? t("database.selectDbxSqlConnection")
-    : !targetConnectionId.trim()
+    : !targetConnection
       ? t("database.selectTargetConnection")
       : selectedTables.length === 0
         ? t("database.selectDbxTable")
@@ -169,6 +187,18 @@ export function DatabaseAdvancedTools({
     setResultText("");
     try {
       if (mode === "transfer") {
+        if (!targetConnection) return;
+        const approved = await confirmDbxProductionOperation({
+          connection: targetConnection,
+          database: targetDatabase,
+          operation: t("database.productionTransferOperation", {
+            count: selectedTables.length,
+            database: targetDatabase.trim() || t("database.defaultDatabase"),
+          }),
+          okLabel: t("database.startTransfer"),
+          t,
+        });
+        if (!approved) return;
         const request = {
           transferId: `transfer:${Date.now()}`,
           sourceConnectionId: connectionId,
@@ -179,11 +209,14 @@ export function DatabaseAdvancedTools({
           targetSchema,
           tables: selectedTables,
           createTable: true,
-          mode: "append",
+          mode: "append" as const,
           batchSize: 500,
         };
-        await databaseApi.dbxStartTransfer(request);
         setResultText(t("database.transferStarted"));
+        const terminalProgress = await databaseApi.dbxStartTransfer(request, (progress) => {
+          setResultText(transferProgressText(progress, t));
+        });
+        if (terminalProgress) setResultText(transferProgressText(terminalProgress, t));
       } else if (mode === "schema-diff") {
         const tableInfos = selectedSourceObjects.map(objectToTableInfo);
         const details = sourceDetails();

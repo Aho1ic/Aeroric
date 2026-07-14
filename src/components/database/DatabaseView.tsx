@@ -48,6 +48,7 @@ import type {
   DbxColumnInfo,
   DbxDatabaseType,
   DbxDatabaseInfo,
+  DbxListObjectsOptions,
   DbxObjectInfo,
   DbxObjectSourceKind,
   DbxQueryResult,
@@ -96,6 +97,7 @@ import { TableStructurePanel } from "./TableStructurePanel";
 import { DatabaseUserAdminPanel, supportsDbxUserAdmin } from "./DatabaseUserAdminPanel";
 import { GuidancePanel, renderSqlTokens } from "./DatabaseViewPrimitives";
 import { dbxConfigRecord, dbxString } from "./databaseConnectionDraft";
+import { confirmDbxProductionOperation, hasProductionProtection } from "./databaseProductionSafety";
 import { DataGridView } from "./DataGridView";
 import {
   combineDbxGridWhereCondition,
@@ -127,8 +129,11 @@ const DATABASE_SIDEBAR_DEFAULT_WIDTH = 284;
 const DATABASE_SIDEBAR_MIN_WIDTH = 220;
 const DATABASE_SIDEBAR_MAX_WIDTH = 520;
 const EMPTY_DBX_COLUMNS: DbxColumnInfo[] = [];
+const DBX_OBJECT_PAGE_SIZE = 200;
+const PRODUCTION_SQL_PREVIEW_LIMIT = 2000;
+const DBX_TABLE_LIKE_OBJECT_TYPES = ["TABLE", "VIEW", "MATERIALIZED_VIEW"];
 type RedisSidebarScanState = { cursor: number; totalKeys: number };
-type MongoSidebarDocumentQuery = { filter: string; sort: string };
+type MongoSidebarDocumentQuery = { filter: string; sort: string; projection: string };
 type DbxObjectGroupKey = "tables" | "views" | "procedures" | "functions" | "sequences" | "packages";
 type DbWorkspaceMode =
   | "table"
@@ -148,6 +153,38 @@ type DbWorkspaceMode =
   | "table-info"
   | "object-browser"
   | "field-lineage";
+
+function productionSqlPreview(sql: string): string {
+  const trimmed = sql.trim();
+  if (trimmed.length <= PRODUCTION_SQL_PREVIEW_LIMIT) return trimmed;
+  return `${trimmed.slice(0, PRODUCTION_SQL_PREVIEW_LIMIT)}\n...`;
+}
+
+async function listAllDbxObjects(
+  connectionId: string,
+  database: string | null,
+  schema: string | null,
+  options: DbxListObjectsOptions = {},
+): Promise<DbxObjectInfo[]> {
+  if (options.filter) {
+    return databaseApi.dbxListObjects(connectionId, database, schema, options);
+  }
+
+  const objects: DbxObjectInfo[] = [];
+  let offset = 0;
+  while (true) {
+    const page = await databaseApi.dbxListObjects(connectionId, database, schema, {
+      ...options,
+      limit: DBX_OBJECT_PAGE_SIZE + 1,
+      offset,
+    });
+    const hasMore = page.length > DBX_OBJECT_PAGE_SIZE;
+    const visiblePage = hasMore ? page.slice(0, DBX_OBJECT_PAGE_SIZE) : page;
+    objects.push(...visiblePage);
+    if (!hasMore || visiblePage.length === 0) return objects;
+    offset += visiblePage.length;
+  }
+}
 type DatabaseContextMenuState =
   | {
       x: number;
@@ -2116,7 +2153,7 @@ export function DatabaseView({
     let objects = dbxObjects;
     if (objects.length === 0) {
       try {
-        objects = await databaseApi.dbxListObjects(activeDbxConnection.id, activeDbxDatabase, null);
+        objects = await listAllDbxObjects(activeDbxConnection.id, activeDbxDatabase, null);
         setDbxObjects(objects);
       } catch (err) {
         setError(String(err));
@@ -2141,9 +2178,7 @@ export function DatabaseView({
     if (!activeDbxConnection || !dbxHasSqlObjectBrowser || !activeDbxDatabase) return;
     if (dbxObjects.length === 0) {
       try {
-        setDbxObjects(
-          await databaseApi.dbxListObjects(activeDbxConnection.id, activeDbxDatabase, null),
-        );
+        setDbxObjects(await listAllDbxObjects(activeDbxConnection.id, activeDbxDatabase, null));
       } catch (err) {
         setError(String(err));
       }
@@ -2194,12 +2229,53 @@ export function DatabaseView({
     [loadDbxColumnsForTables],
   );
 
+  const confirmDbxProductionSql = useCallback(
+    async (
+      connection: AeroricDbConnectionConfig,
+      database: string | null,
+      sqlText: string,
+    ): Promise<boolean> => {
+      if (!hasProductionProtection(connection)) return true;
+      const assessment = await databaseApi.dbxAssessProductionSql({
+        connectionId: connection.id,
+        database,
+        sql: sqlText,
+      });
+      if (!assessment.requiresConfirmation) return true;
+      const productionScope =
+        assessment.productionDatabases.length > 0
+          ? assessment.productionDatabases.join(", ")
+          : t("database.productionEntireConnection");
+      return confirm(
+        t("database.productionSqlWarning", {
+          connection: connection.name,
+          databases: productionScope,
+          sql: productionSqlPreview(sqlText),
+        }),
+        {
+          title: t("database.productionWarningTitle"),
+          kind: "warning",
+          okLabel: t("database.execute"),
+          cancelLabel: t("common.cancel"),
+        },
+      );
+    },
+    [t],
+  );
+
   const executeSqlFileFromPanel = useCallback(async () => {
     if (!sqlFilePath.trim()) return;
     setLoading(true);
     setError(null);
     try {
       if (activeDbxConnection && dbxHasSqlObjectBrowser) {
+        const fileSql = await databaseApi.readSqlFile(sqlFilePath.trim());
+        const approved = await confirmDbxProductionSql(
+          activeDbxConnection,
+          activeDbxDatabase,
+          fileSql,
+        );
+        if (!approved) return;
         const timeoutSecs = Number.parseInt(sqlFileTimeoutSecs, 10);
         const results = await databaseApi.dbxExecuteSqlFile({
           connectionId: activeDbxConnection.id,
@@ -2235,6 +2311,7 @@ export function DatabaseView({
     activeDbxDatabase,
     activeDbxSchema,
     activeEndpoint,
+    confirmDbxProductionSql,
     dbxHasSqlObjectBrowser,
     projectRoot,
     sqlFilePath,
@@ -2247,7 +2324,7 @@ export function DatabaseView({
       setError(null);
       try {
         const [objects, schemas] = await Promise.all([
-          databaseApi.dbxListObjects(connection.id, database, null),
+          listAllDbxObjects(connection.id, database, null),
           databaseApi
             .dbxListSchemas(connection.id, database)
             .then((value) => (Array.isArray(value) ? value : []))
@@ -2275,7 +2352,7 @@ export function DatabaseView({
       setLoading(true);
       setError(null);
       try {
-        const objects = await databaseApi.dbxListObjects(connection.id, database, schemaName);
+        const objects = await listAllDbxObjects(connection.id, database, schemaName);
         setActiveDbxDatabase(database);
         setActiveDbxSchema(schemaName);
         setDbxSchemas((current) =>
@@ -2377,13 +2454,18 @@ export function DatabaseView({
       const key = `${connection.id}:${database}:${collection}`;
       try {
         const query = queryOverride ??
-          mongoDocumentQueriesByCollection[key] ?? { filter: "{}", sort: "{}" };
+          mongoDocumentQueriesByCollection[key] ?? {
+            filter: "{}",
+            sort: "{}",
+            projection: "{}",
+          };
         const skip = append ? (mongoDocumentsByCollection[key]?.length ?? 0) : 0;
         const result = await databaseApi.dbxMongoFindDocuments({
           connectionId: connection.id,
           database,
           collection,
           filter: query.filter,
+          projection: query.projection,
           sort: query.sort,
           skip,
           limit: MONGO_SIDEBAR_DOCUMENT_PREVIEW_LIMIT,
@@ -2460,7 +2542,7 @@ export function DatabaseView({
         setActiveDbxDatabase(database);
         setActiveDbxSchema(null);
         const [objects, schemas] = await Promise.all([
-          databaseApi.dbxListObjects(connection.id, database, null),
+          listAllDbxObjects(connection.id, database, null),
           databaseApi
             .dbxListSchemas(connection.id, database)
             .then((value) => (Array.isArray(value) ? value : []))
@@ -3105,7 +3187,9 @@ export function DatabaseView({
       setDatabaseExportError("");
       try {
         await databaseApi.dbxConnect(connection.id);
-        const objects = await databaseApi.dbxListObjects(connection.id, database, schema);
+        const objects = await listAllDbxObjects(connection.id, database, schema, {
+          objectTypes: DBX_TABLE_LIKE_OBJECT_TYPES,
+        });
         const tableNames = Array.from(
           new Set(
             objects
@@ -3284,6 +3368,23 @@ export function DatabaseView({
     setError(null);
     setTableImportError("");
     try {
+      const tableName = tableImportTarget.object.schema
+        ? `${tableImportTarget.object.schema}.${tableImportTarget.object.name}`
+        : tableImportTarget.object.name;
+      const approved = await confirmDbxProductionOperation({
+        connection: tableImportConnection,
+        database: tableImportTarget.database,
+        operation: t("database.productionTableImportOperation", {
+          table: tableName,
+          mode:
+            tableImportMode === "truncate"
+              ? t("database.tableImportTruncate")
+              : t("database.tableImportAppend"),
+        }),
+        okLabel: t("database.tableImport"),
+        t,
+      });
+      if (!approved) return;
       await databaseApi.dbxImportTableFile({
         importId: `import:${Date.now()}:${Math.random().toString(36).slice(2)}`,
         connectionId: tableImportConnection.id,
@@ -3315,6 +3416,7 @@ export function DatabaseView({
     tableImportMode,
     tableImportPreview,
     tableImportTarget,
+    t,
   ]);
 
   const renameLegacyConnection = useCallback(
@@ -3705,6 +3807,7 @@ export function DatabaseView({
           schema,
           object.name,
           objectType,
+          object.signature ?? null,
         );
         setSql(source.source);
         setSqlResult(
@@ -4677,7 +4780,7 @@ export function DatabaseView({
         setActiveDbxSchema(null);
         setWorkspaceMode(action === "openErDiagram" ? "er-diagram" : "database-search");
         try {
-          const objects = await databaseApi.dbxListObjects(connection.id, menu.database, null);
+          const objects = await listAllDbxObjects(connection.id, menu.database, null);
           setDbxObjects(objects);
           if (action === "openErDiagram") {
             await loadDbxColumnsForTables(objects, connection, menu.database);
@@ -4812,11 +4915,7 @@ export function DatabaseView({
         setActiveDbxSchema(menu.schema);
         setWorkspaceMode(action === "openErDiagram" ? "er-diagram" : "database-search");
         try {
-          const objects = await databaseApi.dbxListObjects(
-            connection.id,
-            menu.database,
-            menu.schema,
-          );
+          const objects = await listAllDbxObjects(connection.id, menu.database, menu.schema);
           setDbxObjects(objects);
           if (action === "openErDiagram") {
             await loadDbxColumnsForTables(objects, connection, menu.database);
@@ -5356,6 +5455,8 @@ export function DatabaseView({
     try {
       setWorkspaceMode("query");
       if (activeDbxConnection && dbxHasSqlObjectBrowser) {
+        const approved = await confirmDbxProductionSql(activeDbxConnection, activeDbxDatabase, sql);
+        if (!approved) return;
         const result = await databaseApi.dbxExecuteQuery({
           connectionId: activeDbxConnection.id,
           database: activeDbxDatabase,
@@ -5409,6 +5510,7 @@ export function DatabaseView({
     activeDbxSchema,
     activeEndpoint,
     addQueryHistoryEntry,
+    confirmDbxProductionSql,
     dbxHasSqlObjectBrowser,
     projectRoot,
     sql,
@@ -6937,6 +7039,7 @@ export function DatabaseView({
         ) : workspaceMode === "redis" && activeDbxConnection ? (
           <RedisBrowser
             connectionId={activeDbxConnection.id}
+            connection={activeDbxConnection}
             readOnly={activeDbxConnection.readOnly}
             initialDb={
               activeDbxDatabase?.startsWith("db") ? Number(activeDbxDatabase.slice(2)) : undefined
@@ -6951,6 +7054,7 @@ export function DatabaseView({
         ) : workspaceMode === "mongo" && activeDbxConnection ? (
           <MongoBrowser
             connectionId={activeDbxConnection.id}
+            connection={activeDbxConnection}
             readOnly={activeDbxConnection.readOnly}
             initialDatabase={activeMongoWorkspaceDatabase ?? undefined}
             initialCollection={
@@ -6959,8 +7063,8 @@ export function DatabaseView({
             initialDocumentId={
               activeMongoWorkspaceDatabase ? (activeMongoDocumentId ?? undefined) : undefined
             }
-            onDocumentsQueryApplied={(database, collection, filter, sort) => {
-              const query = { filter, sort };
+            onDocumentsQueryApplied={(database, collection, filter, sort, projection) => {
+              const query = { filter, sort, projection };
               const key = `${activeDbxConnection.id}:${database}:${collection}`;
               setMongoDocumentQueriesByCollection((current) => ({ ...current, [key]: query }));
               void loadMongoSidebarDocuments(

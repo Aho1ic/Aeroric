@@ -320,13 +320,28 @@ describe("DatabaseView tree actions", () => {
   it("exports a DBX database from the database node context menu", async () => {
     const user = userEvent.setup();
     vi.mocked(save).mockResolvedValue("/tmp/main.sql");
-    vi.mocked(invoke).mockImplementation((command) => {
+    vi.mocked(invoke).mockImplementation((command, args) => {
       if (command === "db_load_connections") return Promise.resolve([]);
       if (command === "dbx_list_connections") return Promise.resolve([dbxConnection]);
       if (command === "dbx_connect") return Promise.resolve(undefined);
       if (command === "dbx_list_databases") return Promise.resolve([{ name: "main" }]);
       if (command === "dbx_list_schemas") return Promise.resolve([]);
       if (command === "dbx_list_objects") {
+        const request = args as { objectTypes?: string[] | null; offset?: number | null };
+        if (request.objectTypes) {
+          if (request.offset === 200) {
+            return Promise.resolve([{ name: "orders", object_type: "table", schema: "public" }]);
+          }
+          return Promise.resolve([
+            { name: "users", object_type: "table", schema: "public" },
+            ...Array.from({ length: 199 }, (_, index) => ({
+              name: `procedure_${String(index + 1).padStart(3, "0")}`,
+              object_type: "PROCEDURE",
+              schema: "public",
+            })),
+            { name: "orders", object_type: "table", schema: "public" },
+          ]);
+        }
         return Promise.resolve([
           { name: "users", object_type: "table", schema: "public" },
           { name: "orders", object_type: "table", schema: "public" },
@@ -350,6 +365,24 @@ describe("DatabaseView tree actions", () => {
 
     const dialog = await screen.findByRole("dialog", { name: "Export database" });
     expect(within(dialog).getByRole("button", { name: "users" })).toBeInTheDocument();
+    expect(invoke).toHaveBeenCalledWith("dbx_list_objects", {
+      connectionId: "dbx-source",
+      database: "main",
+      schema: null,
+      filter: null,
+      limit: 201,
+      offset: 0,
+      objectTypes: ["TABLE", "VIEW", "MATERIALIZED_VIEW"],
+    });
+    expect(invoke).toHaveBeenCalledWith("dbx_list_objects", {
+      connectionId: "dbx-source",
+      database: "main",
+      schema: null,
+      filter: null,
+      limit: 201,
+      offset: 200,
+      objectTypes: ["TABLE", "VIEW", "MATERIALIZED_VIEW"],
+    });
     await user.click(within(dialog).getByRole("button", { name: "orders" }));
     await user.click(within(dialog).getByRole("button", { name: "Export database" }));
 
@@ -618,6 +651,65 @@ describe("DatabaseView tree actions", () => {
         }),
       });
     });
+  });
+
+  it("does not execute a production SQL file when the confirmation is rejected", async () => {
+    const user = userEvent.setup();
+    const productionConnection = {
+      ...dbxConnection,
+      dbx: {
+        db_type: "postgres",
+        is_production: true,
+        production_databases: [],
+      },
+    };
+    vi.mocked(open).mockResolvedValue("/tmp/production.sql");
+    vi.mocked(confirm).mockResolvedValue(false);
+    vi.mocked(invoke).mockImplementation((command) => {
+      if (command === "db_load_connections") return Promise.resolve([]);
+      if (command === "dbx_list_connections") return Promise.resolve([productionConnection]);
+      if (command === "dbx_connect") return Promise.resolve(undefined);
+      if (command === "dbx_list_databases") return Promise.resolve([{ name: "main" }]);
+      if (command === "dbx_list_schemas") return Promise.resolve([]);
+      if (command === "dbx_list_objects") return Promise.resolve([]);
+      if (command === "db_read_sql_file") {
+        return Promise.resolve("DELETE FROM users WHERE id = 1;");
+      }
+      if (command === "dbx_assess_production_sql") {
+        return Promise.resolve({
+          requiresConfirmation: true,
+          isMutation: true,
+          productionDatabases: [],
+        });
+      }
+      return Promise.resolve(undefined);
+    });
+
+    render(
+      React.createElement(
+        I18nProvider,
+        null,
+        React.createElement(DatabaseView, { sshConnections: [connection()] }),
+      ),
+    );
+
+    await user.click(await screen.findByRole("button", { name: /DBX Source/i }));
+    await user.click(screen.getByRole("button", { name: "Execute SQL file" }));
+    await user.click(screen.getByRole("button", { name: "Choose SQL file" }));
+    await user.click(
+      within(screen.getByRole("main")).getByRole("button", { name: "Execute SQL file" }),
+    );
+
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith("dbx_assess_production_sql", {
+        request: {
+          connectionId: "dbx-source",
+          database: "main",
+          sql: "DELETE FROM users WHERE id = 1;",
+        },
+      });
+    });
+    expect(invoke).not.toHaveBeenCalledWith("dbx_execute_sql_file", expect.anything());
   });
 
   it("groups DBX schema objects by type and keeps matching groups visible during search", async () => {
@@ -972,6 +1064,10 @@ describe("DatabaseView tree actions", () => {
       connectionId: "dbx-source",
       database: "target_db",
       schema: null,
+      filter: null,
+      limit: 201,
+      offset: 0,
+      objectTypes: null,
     });
   });
 

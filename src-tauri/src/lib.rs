@@ -426,6 +426,8 @@ pub fn run() {
             database::schema::dbx_get_columns,
             database::schema::dbx_get_table_ddl,
             database::schema::dbx_get_object_source,
+            database::query::dbx_assess_production_sql,
+            database::query::dbx_assess_production_target,
             database::query::dbx_execute_query,
             database::query::dbx_execute_multi,
             database::query::dbx_cancel_query,

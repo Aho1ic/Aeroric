@@ -388,6 +388,7 @@ export function DatabaseUserAdminPanel({ connection, database, schema }: Props) 
   );
   const [privilegeRole, setPrivilegeRole] = useState("");
   const [grantOption, setGrantOption] = useState(false);
+  const [useTransaction, setUseTransaction] = useState(false);
   const availablePrivileges = useMemo(
     () => privilegesForScope(dialect, privilegeScope),
     [dialect, privilegeScope],
@@ -530,6 +531,7 @@ export function DatabaseUserAdminPanel({ connection, database, schema }: Props) 
       sql,
       maxRows: 1000,
       pageSize: 1000,
+      useTransaction,
     });
     setStatus(t("database.userAdminSqlExecuted"));
     await loadUsers();
@@ -614,15 +616,33 @@ export function DatabaseUserAdminPanel({ connection, database, schema }: Props) 
           <div style={s.databaseWorkspaceTitle}>{t("database.userAdmin")}</div>
           <div style={s.databaseDialogHint}>{t("database.userAdminHint")}</div>
         </div>
-        <DbxButton
-          variant="outline"
-          size="sm"
-          icon={RefreshCcw}
-          onClick={() => void loadUsers()}
-          disabled={loadingUsers}
-        >
-          {t("database.refresh")}
-        </DbxButton>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <label
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 6,
+              color: "var(--text-muted)",
+              fontSize: 12,
+            }}
+          >
+            <input
+              type="checkbox"
+              checked={useTransaction}
+              onChange={(event) => setUseTransaction(event.target.checked)}
+            />
+            <span>{t("database.multiQueryTransaction")}</span>
+          </label>
+          <DbxButton
+            variant="outline"
+            size="sm"
+            icon={RefreshCcw}
+            onClick={() => void loadUsers()}
+            disabled={loadingUsers}
+          >
+            {t("database.refresh")}
+          </DbxButton>
+        </div>
       </div>
       <div
         style={{

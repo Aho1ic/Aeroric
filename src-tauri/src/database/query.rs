@@ -1,6 +1,7 @@
 use dbx_core::db;
 use dbx_core::query::QueryExecutionOptions;
-use serde::Deserialize;
+use dbx_core::sql_risk::SqlRisk;
+use serde::{Deserialize, Serialize};
 use tauri::State;
 
 use super::connections;
@@ -54,6 +55,40 @@ pub(crate) struct ExecuteMultiRequest {
     timeout_secs: Option<u64>,
     #[serde(default)]
     execution_id: Option<String>,
+    #[serde(default)]
+    use_transaction: Option<bool>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct AssessProductionSqlRequest {
+    connection_id: String,
+    #[serde(default)]
+    database: Option<String>,
+    sql: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct AssessProductionTargetRequest {
+    connection_id: String,
+    #[serde(default)]
+    database: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProductionSqlAssessment {
+    requires_confirmation: bool,
+    is_mutation: bool,
+    production_databases: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProductionTargetAssessment {
+    requires_confirmation: bool,
+    production_databases: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -83,6 +118,7 @@ fn options_from_request(request: &ExecuteQueryRequest) -> QueryExecutionOptions 
         client_session_id: non_empty(request.client_session_id.clone()),
         timeout_secs: request.timeout_secs,
         execution_id: non_empty(request.execution_id.clone()),
+        use_transaction: None,
     }
 }
 
@@ -95,7 +131,103 @@ fn options_from_multi_request(request: &ExecuteMultiRequest) -> QueryExecutionOp
         client_session_id: non_empty(request.client_session_id.clone()),
         timeout_secs: request.timeout_secs,
         execution_id: non_empty(request.execution_id.clone()),
+        use_transaction: request.use_transaction,
     }
+}
+
+fn assess_production_sql(
+    config: &dbx_core::models::connection::ConnectionConfig,
+    database: Option<String>,
+    sql: &str,
+) -> Result<ProductionSqlAssessment, String> {
+    let risk = dbx_core::sql_risk::classify_sql_risk_for_database(sql, config.db_type)?;
+    let is_mutation = risk != SqlRisk::ReadOnly;
+    let active_database = non_empty(database)
+        .or_else(|| config.database.clone())
+        .unwrap_or_default();
+    let requires_confirmation = is_mutation
+        && dbx_core::production_safety::targets_production_database(config, &active_database, sql);
+    let production_databases = if !requires_confirmation || config.is_production {
+        Vec::new()
+    } else if dbx_core::production_safety::is_production_database(config, &active_database) {
+        vec![active_database]
+    } else {
+        config.production_databases.clone()
+    };
+
+    Ok(ProductionSqlAssessment {
+        requires_confirmation,
+        is_mutation,
+        production_databases,
+    })
+}
+
+fn assess_production_target(
+    config: &dbx_core::models::connection::ConnectionConfig,
+    database: Option<String>,
+) -> ProductionTargetAssessment {
+    let active_database = non_empty(database).or_else(|| config.database.clone());
+    let requires_confirmation = config.is_production
+        || active_database
+            .as_deref()
+            .map(|database| dbx_core::production_safety::is_production_database(config, database))
+            .unwrap_or_else(|| !config.production_databases.is_empty());
+    let production_databases = if !requires_confirmation || config.is_production {
+        Vec::new()
+    } else if let Some(database) = active_database {
+        vec![database]
+    } else {
+        config.production_databases.clone()
+    };
+
+    ProductionTargetAssessment {
+        requires_confirmation,
+        production_databases,
+    }
+}
+
+async fn production_connection_config(
+    state: &DbxState,
+    connection_id: &str,
+) -> Result<dbx_core::models::connection::ConnectionConfig, String> {
+    if let Some(config) = state
+        .app_state
+        .configs
+        .read()
+        .await
+        .get(connection_id)
+        .cloned()
+    {
+        return Ok(config);
+    }
+
+    connections::ensure_loaded(state).await?;
+    let connection = state
+        .connections
+        .read()
+        .await
+        .get(connection_id)
+        .cloned()
+        .ok_or_else(|| "Connection config not found".to_string())?;
+    connections::parse_core_config(&connection)
+}
+
+#[tauri::command]
+pub async fn dbx_assess_production_sql(
+    state: State<'_, DbxState>,
+    request: AssessProductionSqlRequest,
+) -> Result<ProductionSqlAssessment, String> {
+    let config = production_connection_config(&state, &request.connection_id).await?;
+    assess_production_sql(&config, request.database, &request.sql)
+}
+
+#[tauri::command]
+pub async fn dbx_assess_production_target(
+    state: State<'_, DbxState>,
+    request: AssessProductionTargetRequest,
+) -> Result<ProductionTargetAssessment, String> {
+    let config = production_connection_config(&state, &request.connection_id).await?;
+    Ok(assess_production_target(&config, request.database))
 }
 
 #[tauri::command]
@@ -193,7 +325,7 @@ pub fn dbx_build_single_column_alter_sql(
 pub fn dbx_build_create_database_sql(
     options: dbx_core::db_admin_sql::CreateDatabaseSqlOptions,
 ) -> Result<String, String> {
-    Ok(dbx_core::db_admin_sql::build_create_database_sql(options))
+    dbx_core::db_admin_sql::build_create_database_sql(options)
 }
 
 fn quote_duckdb_identifier(name: &str) -> String {
@@ -233,7 +365,7 @@ pub fn dbx_build_drop_database_sql(
 pub fn dbx_build_create_schema_sql(
     options: dbx_core::db_admin_sql::SchemaNameSqlOptions,
 ) -> Result<String, String> {
-    Ok(dbx_core::db_admin_sql::build_create_schema_sql(options))
+    dbx_core::db_admin_sql::build_create_schema_sql(options)
 }
 
 #[tauri::command]
@@ -308,6 +440,24 @@ pub fn dbx_build_search_result_where(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use dbx_core::models::connection::ConnectionConfig;
+    use serde_json::json;
+
+    fn production_config(is_production: bool, production_databases: &[&str]) -> ConnectionConfig {
+        serde_json::from_value(json!({
+            "id": "c",
+            "name": "Production",
+            "db_type": "mysql",
+            "host": "localhost",
+            "port": 3306,
+            "username": "root",
+            "password": "",
+            "database": "staging",
+            "is_production": is_production,
+            "production_databases": production_databases,
+        }))
+        .unwrap()
+    }
 
     #[test]
     fn blank_execution_id_is_ignored_in_options() {
@@ -330,6 +480,113 @@ mod tests {
         assert_eq!(options.max_rows, Some(10));
         assert_eq!(options.timeout_secs, Some(3));
         assert_eq!(options.execution_id, None);
+        assert_eq!(options.use_transaction, None);
+    }
+
+    #[test]
+    fn multi_query_transaction_option_is_forwarded() {
+        let request = ExecuteMultiRequest {
+            connection_id: "c".to_string(),
+            database: Some("main".to_string()),
+            sql: "insert into audit values (1); insert into audit values (2);".to_string(),
+            schema: None,
+            max_rows: None,
+            fetch_size: None,
+            page_size: None,
+            result_session_id: None,
+            client_session_id: None,
+            timeout_secs: None,
+            execution_id: None,
+            use_transaction: Some(true),
+        };
+
+        assert_eq!(
+            options_from_multi_request(&request).use_transaction,
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn production_assessment_allows_read_only_sql() {
+        let assessment = assess_production_sql(
+            &production_config(true, &[]),
+            Some("main".to_string()),
+            "select * from users",
+        )
+        .unwrap();
+
+        assert_eq!(
+            assessment,
+            ProductionSqlAssessment {
+                requires_confirmation: false,
+                is_mutation: false,
+                production_databases: vec![],
+            }
+        );
+    }
+
+    #[test]
+    fn production_assessment_blocks_connection_wide_mutations() {
+        let assessment = assess_production_sql(
+            &production_config(true, &[]),
+            Some("main".to_string()),
+            "delete from users where id = 1",
+        )
+        .unwrap();
+
+        assert!(assessment.requires_confirmation);
+        assert!(assessment.is_mutation);
+        assert!(assessment.production_databases.is_empty());
+    }
+
+    #[test]
+    fn production_assessment_detects_active_and_qualified_databases() {
+        let config = production_config(false, &["prod_app"]);
+        let active = assess_production_sql(
+            &config,
+            Some("prod_app".to_string()),
+            "update users set active = 0",
+        )
+        .unwrap();
+        let qualified = assess_production_sql(
+            &config,
+            Some("staging".to_string()),
+            "delete from prod_app.users where id = 1",
+        )
+        .unwrap();
+
+        assert_eq!(active.production_databases, vec!["prod_app"]);
+        assert!(active.requires_confirmation);
+        assert_eq!(qualified.production_databases, vec!["prod_app"]);
+        assert!(qualified.requires_confirmation);
+    }
+
+    #[test]
+    fn production_target_assessment_uses_explicit_and_default_databases() {
+        let config = production_config(false, &["prod_app"]);
+        let explicit = assess_production_target(&config, Some("prod_app".to_string()));
+        assert!(explicit.requires_confirmation);
+        assert_eq!(explicit.production_databases, vec!["prod_app"]);
+
+        let mut default_config = config;
+        default_config.database = Some("prod_app".to_string());
+        let defaulted = assess_production_target(&default_config, Some(" ".to_string()));
+        assert!(defaulted.requires_confirmation);
+        assert_eq!(defaulted.production_databases, vec!["prod_app"]);
+    }
+
+    #[test]
+    fn production_target_assessment_is_conservative_without_a_database() {
+        let mut config = production_config(false, &["prod_app", "prod_analytics"]);
+        config.database = None;
+
+        let assessment = assess_production_target(&config, None);
+
+        assert!(assessment.requires_confirmation);
+        assert_eq!(
+            assessment.production_databases,
+            vec!["prod_app", "prod_analytics"]
+        );
     }
 
     #[test]
@@ -337,6 +594,8 @@ mod tests {
         let sql = dbx_build_create_database_sql(dbx_core::db_admin_sql::CreateDatabaseSqlOptions {
             database_type: Some(dbx_core::models::connection::DatabaseType::Mysql),
             driver_profile: Some("mysql".to_string()),
+            target: None,
+            parent: None,
             name: "app".to_string(),
             charset: Some("utf8mb4".to_string()),
             collation: Some("utf8mb4_unicode_ci".to_string()),

@@ -138,6 +138,7 @@ export interface DbxObjectInfo {
   name: string;
   object_type: string;
   schema?: string | null;
+  signature?: string | null;
   comment?: string | null;
   created_at?: string | null;
   updated_at?: string | null;
@@ -227,8 +228,63 @@ export interface ExecuteQueryRequest {
   executionId?: string | null;
 }
 
+export interface ExecuteMultiRequest extends ExecuteQueryRequest {
+  useTransaction?: boolean | null;
+}
+
+export interface AssessProductionSqlRequest {
+  connectionId: string;
+  database?: string | null;
+  sql: string;
+}
+
+export interface AssessProductionTargetRequest {
+  connectionId: string;
+  database?: string | null;
+}
+
+export interface ProductionSqlAssessment {
+  requiresConfirmation: boolean;
+  isMutation: boolean;
+  productionDatabases: string[];
+}
+
+export interface ProductionTargetAssessment {
+  requiresConfirmation: boolean;
+  productionDatabases: string[];
+}
+
+export interface DbxTransferRequest {
+  transferId: string;
+  sourceConnectionId: string;
+  sourceDatabase: string;
+  sourceSchema: string;
+  targetConnectionId: string;
+  targetDatabase: string;
+  targetSchema: string;
+  tables: string[];
+  createTable: boolean;
+  mode?: "append" | "overwrite" | "upsert";
+  targetTableNameCase?: "preserve" | "lower" | "upper";
+  ownershipPolicy?: "preserve" | "skip" | "reassignMissing";
+  batchSize: number;
+}
+
+export interface DbxTransferProgress {
+  transferId: string;
+  table: string;
+  tableIndex: number;
+  totalTables: number;
+  rowsTransferred: number;
+  totalRows?: number | null;
+  status: "running" | "tableDone" | "done" | "error" | "cancelled";
+  error?: string | null;
+  terminal: boolean;
+}
+
 export interface TableDataRequest {
   connectionId: string;
+  catalog?: string | null;
   database?: string | null;
   schema?: string | null;
   table: string;
@@ -444,7 +500,14 @@ export interface RedisLoadMoreRequest {
   keyType: string;
   cursor: number;
   count?: number | null;
+  filter?: string | null;
 }
+
+export type RedisCollectionPage =
+  | { kind: "list"; items: unknown[]; scan_cursor?: number | null }
+  | { kind: "set"; items: unknown[]; scan_cursor?: number | null }
+  | { kind: "hash"; items: unknown[]; scan_cursor?: number | null }
+  | { kind: "zset"; items: unknown[]; scan_cursor?: number | null };
 
 export interface RedisHashFieldRequest {
   connectionId: string;
@@ -546,6 +609,7 @@ export interface MongoFindDocumentsRequest {
   skip?: number;
   limit?: number;
   filter?: string | null;
+  projection?: string | null;
   sort?: string | null;
   executionId?: string | null;
 }
@@ -559,6 +623,14 @@ export interface MongoInsertDocumentRequest {
 
 export interface MongoUpdateDocumentRequest extends MongoInsertDocumentRequest {
   id: string;
+  routing?: string | null;
+}
+
+export interface DbxListObjectsOptions {
+  filter?: string | null;
+  limit?: number | null;
+  offset?: number | null;
+  objectTypes?: string[] | null;
 }
 
 export interface MongoDeleteDocumentsRequest {

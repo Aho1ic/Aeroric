@@ -1,6 +1,6 @@
 import { useCallback, useState } from "react";
 import { databaseApi } from "../lib/databaseApi";
-import type { DbxQueryResult, ExecuteQueryRequest } from "../types/database";
+import type { DbxQueryResult, ExecuteMultiRequest, ExecuteQueryRequest } from "../types/database";
 
 export function useDatabaseQuery() {
   const [running, setRunning] = useState(false);
@@ -22,7 +22,7 @@ export function useDatabaseQuery() {
     }
   }, []);
 
-  const executeMulti = useCallback(async (request: ExecuteQueryRequest) => {
+  const executeMulti = useCallback(async (request: ExecuteMultiRequest) => {
     setRunning(true);
     setError(null);
     try {

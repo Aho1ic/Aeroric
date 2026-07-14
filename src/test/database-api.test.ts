@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { describe, expect, it, vi } from "vitest";
-import { databaseApi } from "../lib/databaseApi";
+import { databaseApi, isTerminalDbxTransferProgress } from "../lib/databaseApi";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 
@@ -53,6 +54,31 @@ describe("databaseApi", () => {
       connectionId: "conn",
       database: "main",
       schema: "public",
+      filter: null,
+      limit: null,
+      offset: null,
+      objectTypes: null,
+    });
+  });
+
+  it("wraps dbx_list_objects with filter, pagination, and type constraints", async () => {
+    vi.mocked(invoke).mockResolvedValueOnce([]);
+
+    await databaseApi.dbxListObjects("conn", "main", "public", {
+      filter: "user",
+      limit: 50,
+      offset: 100,
+      objectTypes: ["TABLE", "VIEW"],
+    });
+
+    expect(invoke).toHaveBeenCalledWith("dbx_list_objects", {
+      connectionId: "conn",
+      database: "main",
+      schema: "public",
+      filter: "user",
+      limit: 50,
+      offset: 100,
+      objectTypes: ["TABLE", "VIEW"],
     });
   });
 
@@ -63,7 +89,14 @@ describe("databaseApi", () => {
       source: "CREATE PROCEDURE ...",
     });
 
-    await databaseApi.dbxGetObjectSource("conn", "main", "public", "refresh_stats", "PROCEDURE");
+    await databaseApi.dbxGetObjectSource(
+      "conn",
+      "main",
+      "public",
+      "refresh_stats",
+      "PROCEDURE",
+      "integer, text",
+    );
 
     expect(invoke).toHaveBeenCalledWith("dbx_get_object_source", {
       connectionId: "conn",
@@ -71,6 +104,7 @@ describe("databaseApi", () => {
       schema: "public",
       name: "refresh_stats",
       objectType: "PROCEDURE",
+      signature: "integer, text",
     });
   });
 
@@ -88,6 +122,38 @@ describe("databaseApi", () => {
     expect(invoke).toHaveBeenCalledWith("dbx_execute_query", { request });
   });
 
+  it("wraps dbx_assess_production_sql with a request object", async () => {
+    vi.mocked(invoke).mockResolvedValueOnce({
+      requiresConfirmation: true,
+      isMutation: true,
+      productionDatabases: ["prod_app"],
+    });
+    const request = {
+      connectionId: "conn",
+      database: "staging",
+      sql: "delete from prod_app.users where id = 1",
+    };
+
+    await databaseApi.dbxAssessProductionSql(request);
+
+    expect(invoke).toHaveBeenCalledWith("dbx_assess_production_sql", { request });
+  });
+
+  it("wraps dbx_assess_production_target with a request object", async () => {
+    vi.mocked(invoke).mockResolvedValueOnce({
+      requiresConfirmation: true,
+      productionDatabases: ["prod_app"],
+    });
+    const request = {
+      connectionId: "conn",
+      database: "prod_app",
+    };
+
+    await databaseApi.dbxAssessProductionTarget(request);
+
+    expect(invoke).toHaveBeenCalledWith("dbx_assess_production_target", { request });
+  });
+
   it("wraps dbx_query_table_data with grid request options", async () => {
     vi.mocked(invoke).mockResolvedValueOnce({
       result: { columns: [], rows: [] },
@@ -96,6 +162,7 @@ describe("databaseApi", () => {
     });
     const request = {
       connectionId: "conn",
+      catalog: "hive",
       database: "main",
       schema: "public",
       table: "users",
@@ -107,6 +174,20 @@ describe("databaseApi", () => {
     await databaseApi.dbxQueryTableData(request);
 
     expect(invoke).toHaveBeenCalledWith("dbx_query_table_data", { request });
+  });
+
+  it("passes the multi-query transaction option through the request object", async () => {
+    vi.mocked(invoke).mockResolvedValueOnce([]);
+    const request = {
+      connectionId: "conn",
+      database: "main",
+      sql: "insert into audit values (1); insert into audit values (2);",
+      useTransaction: true,
+    };
+
+    await databaseApi.dbxExecuteMulti(request);
+
+    expect(invoke).toHaveBeenCalledWith("dbx_execute_multi", { request });
   });
 
   it("wraps DBX grid save commands with request payloads", async () => {
@@ -244,13 +325,8 @@ describe("databaseApi", () => {
 
   it("wraps dbx_redis_load_more with collection pagination payload", async () => {
     vi.mocked(invoke).mockResolvedValueOnce({
-      key_display: "profile:1",
-      key_raw: "profile:1",
-      key_type: "hash",
-      ttl: -1,
-      value_is_binary: false,
-      value: [],
-      total: null,
+      kind: "hash",
+      items: [],
       scan_cursor: null,
     });
 
@@ -269,6 +345,45 @@ describe("databaseApi", () => {
       keyType: "hash",
       cursor: 12,
       count: 200,
+      filter: null,
+    });
+  });
+
+  it("wraps Mongo projection and routing parameters", async () => {
+    vi.mocked(invoke).mockResolvedValue(undefined);
+
+    await databaseApi.dbxMongoFindDocuments({
+      connectionId: "mongo",
+      database: "app",
+      collection: "users",
+      filter: "{}",
+      projection: '{"email":1}',
+      sort: "{}",
+    });
+    await databaseApi.dbxMongoUpdateDocument({
+      connectionId: "mongo",
+      database: "app",
+      collection: "users",
+      id: "1",
+      docJson: '{"email":"new@example.com"}',
+      routing: "tenant-1",
+    });
+
+    expect(invoke).toHaveBeenCalledWith("dbx_mongo_find_documents", {
+      connectionId: "mongo",
+      database: "app",
+      collection: "users",
+      filter: "{}",
+      projection: '{"email":1}',
+      sort: "{}",
+    });
+    expect(invoke).toHaveBeenCalledWith("dbx_mongo_update_document", {
+      connectionId: "mongo",
+      database: "app",
+      collection: "users",
+      id: "1",
+      docJson: '{"email":"new@example.com"}',
+      routing: "tenant-1",
     });
   });
 
@@ -770,7 +885,7 @@ describe("databaseApi", () => {
       targetSchema: "public",
       tables: ["users"],
       createTable: true,
-      mode: "append",
+      mode: "append" as const,
       batchSize: 500,
     };
     await databaseApi.dbxStartTransfer(transfer);
@@ -788,5 +903,50 @@ describe("databaseApi", () => {
     const compareOptions = { tableName: "users", columns: ["id"], keyColumns: ["id"] };
     await databaseApi.dbxPrepareDataCompare(compareOptions);
     expect(invoke).toHaveBeenCalledWith("dbx_prepare_data_compare", { options: compareOptions });
+  });
+
+  it("tracks transfer progress until the terminal event", async () => {
+    vi.mocked(invoke).mockResolvedValueOnce(undefined);
+    const unlisten: () => void = vi.fn();
+    let emitProgress: ((event: { payload: unknown }) => void) | undefined;
+    vi.mocked(listen).mockImplementationOnce(async (_event, handler) => {
+      emitProgress = handler as typeof emitProgress;
+      return unlisten;
+    });
+    const transfer = {
+      transferId: "transfer-progress-1",
+      sourceConnectionId: "source",
+      sourceDatabase: "main",
+      sourceSchema: "public",
+      targetConnectionId: "target",
+      targetDatabase: "main",
+      targetSchema: "public",
+      tables: ["users"],
+      createTable: true,
+      mode: "append" as const,
+      batchSize: 500,
+    };
+    const onProgress = vi.fn();
+
+    const resultPromise = databaseApi.dbxStartTransfer(transfer, onProgress);
+    await vi.waitFor(() => expect(emitProgress).toBeDefined());
+
+    const progress = {
+      transferId: transfer.transferId,
+      table: "",
+      tableIndex: 1,
+      totalTables: 1,
+      rowsTransferred: 0,
+      totalRows: null,
+      status: "error" as const,
+      error: "target rejected row",
+      terminal: true,
+    };
+    emitProgress?.({ payload: progress });
+
+    await expect(resultPromise).resolves.toEqual(progress);
+    expect(onProgress).toHaveBeenCalledWith(progress);
+    expect(unlisten).toHaveBeenCalledOnce();
+    expect(isTerminalDbxTransferProgress(progress)).toBe(true);
   });
 });

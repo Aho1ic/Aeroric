@@ -104,6 +104,28 @@ export function normalizeRedisNodeList(value: string): string {
     .join("\n");
 }
 
+function uniqueTrimmedValues(values: string[], caseInsensitive: boolean): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const value of values) {
+    const trimmed = value.trim();
+    if (!trimmed) continue;
+    const key = caseInsensitive ? trimmed.toLowerCase() : trimmed;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push(trimmed);
+  }
+  return result;
+}
+
+export function normalizeDelimitedList(value: string): string[] {
+  return uniqueTrimmedValues(value.split(/[\n,]+/), true);
+}
+
+export function normalizeLineList(value: string): string[] {
+  return uniqueTrimmedValues(value.split(/\r?\n/), false);
+}
+
 export function firstRedisEndpoint(
   nodes: string,
   defaultPort: number,
@@ -208,6 +230,12 @@ export function dbxBoolean(
   return typeof value === "boolean" ? value : fallback;
 }
 
+export function dbxStringList(config: Record<string, unknown>, key: string): string[] {
+  const value = config[key];
+  if (!Array.isArray(value)) return [];
+  return value.filter((item): item is string => typeof item === "string");
+}
+
 export function profileForDbxConnection(connection: AeroricDbConnectionConfig): DbProfile {
   const config = dbxConfigRecord(connection);
   const driverProfile = dbxString(config, "driver_profile");
@@ -252,6 +280,10 @@ export interface ConnectionDraft {
   password: string;
   filePath: string;
   readOnly: boolean;
+  initScript: string;
+  agentJavaOptions: string;
+  isProduction: boolean;
+  productionDatabases: string;
   urlParams: string;
   connectionString: string;
   connectTimeoutSecs: string;
@@ -292,7 +324,8 @@ export function buildDbxConnectionConfig(
   const selectedProfile = draft.profile;
   const now = Date.now();
   const id = editingConnection?.id ?? `dbx:${now}:${Math.random().toString(36).slice(2)}`;
-  const existingDbx = editingConnection ? dbxConfigRecord(editingConnection) : {};
+  const existingDbx = editingConnection ? { ...dbxConfigRecord(editingConnection) } : {};
+  delete existingDbx.oracle_sysdba;
   const port = Number.parseInt(draft.port, 10);
   const connectTimeoutSecs = Number.parseInt(draft.connectTimeoutSecs, 10);
   const queryTimeoutSecs = Number.parseInt(draft.queryTimeoutSecs, 10);
@@ -349,6 +382,9 @@ export function buildDbxConnectionConfig(
   }
   const name = draft.name.trim() || selectedProfile.label;
   const dbType = selectedProfile.key as DbxDatabaseType;
+  const productionDatabases = normalizeDelimitedList(draft.productionDatabases);
+  const isProduction =
+    draft.isProduction || (Boolean(selectedProfile.localFile) && productionDatabases.length > 0);
   const dbx = {
     ...existingDbx,
     id,
@@ -383,7 +419,13 @@ export function buildDbxConnectionConfig(
     ca_cert_path: draft.caCertPath.trim(),
     client_cert_path: draft.clientCertPath.trim(),
     client_key_path: draft.clientKeyPath.trim(),
+    sysdba: dbType === "oracle" && draft.oracleSysdba,
+    oracle_connection_type: dbType === "oracle" ? draft.oracleConnectionType : null,
     read_only: draft.readOnly,
+    init_script: draft.initScript.trim() || null,
+    agent_java_options: normalizeLineList(draft.agentJavaOptions),
+    is_production: isProduction,
+    production_databases: isProduction ? [] : productionDatabases,
     transport_layers: draft.transportEnabled
       ? draft.transportLayers.map(transportLayerPayload)
       : [],
@@ -405,12 +447,6 @@ export function buildDbxConnectionConfig(
           redis_cluster_nodes:
             draft.redisConnectionMode === "cluster" ? redisClusterNodes : undefined,
           redis_key_separator: draft.redisKeySeparator.trim() || ":",
-        }
-      : {}),
-    ...(dbType === "oracle"
-      ? {
-          oracle_connection_type: draft.oracleConnectionType,
-          oracle_sysdba: draft.oracleSysdba,
         }
       : {}),
   };

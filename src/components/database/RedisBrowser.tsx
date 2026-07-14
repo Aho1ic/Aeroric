@@ -11,6 +11,7 @@ import {
   Plus,
   RefreshCcw,
   Save,
+  Search,
   Terminal,
   Trash2,
   WrapText,
@@ -33,7 +34,9 @@ import {
   flattenVisibleRedisKeyTree,
 } from "../../lib/redisKeyTree";
 import s from "../../styles";
+import type { AeroricDbConnectionConfig } from "../../types";
 import { DbxButton, DbxMenuItem } from "./DbxButton";
+import { confirmDbxProductionOperation, hasProductionProtection } from "./databaseProductionSafety";
 import { RedisCommandSessionView, type RedisCommandHistoryEntry } from "./RedisCommandSessionView";
 import { RedisJsonTree } from "./RedisJsonTree";
 import { RedisKeyTreePane } from "./RedisKeyTreePane";
@@ -59,6 +62,7 @@ import {
 
 interface Props {
   connectionId: string;
+  connection?: AeroricDbConnectionConfig | null;
   readOnly: boolean;
   initialDb?: number;
   initialKey?: string;
@@ -68,6 +72,7 @@ interface Props {
 type RedisCommandHistoryDraft = Omit<RedisCommandHistoryEntry, "id">;
 export function RedisBrowser({
   connectionId,
+  connection,
   readOnly,
   initialDb,
   initialKey,
@@ -75,6 +80,7 @@ export function RedisBrowser({
 }: Props) {
   const { t } = useI18n();
   const redis = useRedisBrowser(connectionId);
+  const productionProtected = Boolean(connection && hasProductionProtection(connection));
   const [activeDb, setActiveDb] = useState(0);
   const [commandDb, setCommandDb] = useState(0);
   const [pattern, setPattern] = useState("");
@@ -87,6 +93,11 @@ export function RedisBrowser({
   const [selectedKeyRaws, setSelectedKeyRaws] = useState<Set<string>>(new Set());
   const [selectedMemberId, setSelectedMemberId] = useState<string | null>(null);
   const [loadingMoreMembers, setLoadingMoreMembers] = useState(false);
+  const [hashSearchQuery, setHashSearchQuery] = useState("");
+  const [activeHashSearchQuery, setActiveHashSearchQuery] = useState("");
+  const [searchingHashMembers, setSearchingHashMembers] = useState(false);
+  const hashSearchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const hashSearchRequestIdRef = useRef(0);
   const [editingMemberId, setEditingMemberId] = useState<string | null>(null);
   const [memberDetailView, setMemberDetailView] = useState<"json" | "raw">("json");
   const [memberJsonWordWrap, setMemberJsonWordWrap] = useState(loadRedisJsonWordWrap);
@@ -149,6 +160,12 @@ export function RedisBrowser({
     setSelectedKeyRaws(new Set());
     setSelectedMemberId(null);
     setLoadingMoreMembers(false);
+    setHashSearchQuery("");
+    setActiveHashSearchQuery("");
+    setSearchingHashMembers(false);
+    if (hashSearchTimerRef.current) clearTimeout(hashSearchTimerRef.current);
+    hashSearchTimerRef.current = null;
+    hashSearchRequestIdRef.current += 1;
     setEditingMemberId(null);
     setMemberDetailView("json");
     setResizingMemberDetail(false);
@@ -206,6 +223,23 @@ export function RedisBrowser({
     const persisted = loadRedisCommandHistory(connectionId);
     setCommandHistory(persisted.map((entry, index) => ({ ...entry, id: index + 1 })));
   }, [connectionId]);
+
+  useEffect(() => {
+    if (hashSearchTimerRef.current) clearTimeout(hashSearchTimerRef.current);
+    hashSearchTimerRef.current = null;
+    hashSearchRequestIdRef.current += 1;
+    setHashSearchQuery("");
+    setActiveHashSearchQuery("");
+    setSearchingHashMembers(false);
+  }, [redis.selectedValue?.key_raw, redis.selectedValue?.key_type]);
+
+  useEffect(
+    () => () => {
+      if (hashSearchTimerRef.current) clearTimeout(hashSearchTimerRef.current);
+      hashSearchRequestIdRef.current += 1;
+    },
+    [],
+  );
 
   useEffect(() => {
     if (!resizingMemberDetail) return undefined;
@@ -299,6 +333,18 @@ export function RedisBrowser({
   }, [redis.keys]);
 
   const effectivePattern = (value = pattern) => redisKeySearchPattern(value, fuzzyKeySearch);
+  const resetHashMemberSearch = () => {
+    if (hashSearchTimerRef.current) clearTimeout(hashSearchTimerRef.current);
+    hashSearchTimerRef.current = null;
+    hashSearchRequestIdRef.current += 1;
+    setHashSearchQuery("");
+    setActiveHashSearchQuery("");
+    setSearchingHashMembers(false);
+  };
+  const loadRedisValue = (db: number, keyRaw: string) => {
+    resetHashMemberSearch();
+    return redis.loadValue(db, keyRaw);
+  };
   const refreshKeys = (value = pattern) =>
     redis.scanKeys({ db: activeDb, pattern: effectivePattern(value), count: 100 });
   const appendCommandHistory = (entry: RedisCommandHistoryDraft, persist = false) => {
@@ -433,7 +479,8 @@ export function RedisBrowser({
   const memberCountLabel = useMemo(() => {
     if (!redis.selectedValue || !memberKind) return "";
     const loaded = memberRows.length;
-    const total = redis.selectedValue.total ?? null;
+    const total =
+      memberKind === "hash" && activeHashSearchQuery ? null : (redis.selectedValue.total ?? null);
     if (memberKind === "hash") {
       return total != null && total > loaded
         ? t("database.redisLoadedFields", { loaded, total })
@@ -449,7 +496,7 @@ export function RedisBrowser({
     return total != null && total > loaded
       ? t("database.redisLoadedItems", { loaded, total })
       : t("database.redisItems", { count: loaded });
-  }, [memberKind, memberRows.length, redis.selectedValue, t]);
+  }, [activeHashSearchQuery, memberKind, memberRows.length, redis.selectedValue, t]);
   useEffect(() => {
     setMemberDetailView(selectedMember?.format === "json" ? "json" : "raw");
   }, [selectedMember?.format, selectedMember?.id]);
@@ -490,6 +537,22 @@ export function RedisBrowser({
     if (!redis.selectedValue || readOnly || !selectedMember?.editAction) return;
     const keyRaw = redis.selectedValue.key_raw;
     const action = selectedMember.editAction;
+    if (
+      productionProtected &&
+      connection &&
+      !(await confirmDbxProductionOperation({
+        connection,
+        database: `db${activeDb}`,
+        operation: t("database.productionRedisKeyOperation", {
+          action: t("database.redisSaveMember"),
+          key: keyRaw,
+          database: `db${activeDb}`,
+        }),
+        okLabel: t("database.redisSaveMember"),
+        t,
+      }))
+    )
+      return;
     setSavingMember(true);
     try {
       if (action.kind === "hash") {
@@ -521,7 +584,7 @@ export function RedisBrowser({
       setEditingMemberId(null);
       setMemberEditValue("");
       setSelectedMemberId(null);
-      await redis.loadValue(activeDb, keyRaw);
+      await loadRedisValue(activeDb, keyRaw);
       await refreshKeys();
     } finally {
       setSavingMember(false);
@@ -561,6 +624,22 @@ export function RedisBrowser({
       setMemberActionError(t("database.redisMemberScoreInvalid"));
       return;
     }
+    if (
+      productionProtected &&
+      connection &&
+      !(await confirmDbxProductionOperation({
+        connection,
+        database: `db${activeDb}`,
+        operation: t("database.productionRedisKeyOperation", {
+          action: t("database.redisAddMember"),
+          key: keyRaw,
+          database: `db${activeDb}`,
+        }),
+        okLabel: t("database.redisAddMember"),
+        t,
+      }))
+    )
+      return;
 
     setAddingMember(true);
     setMemberActionError("");
@@ -578,7 +657,7 @@ export function RedisBrowser({
       setNewMemberValue("");
       setNewMemberScore("0");
       setSelectedMemberId(null);
-      await redis.loadValue(activeDb, keyRaw);
+      await loadRedisValue(activeDb, keyRaw);
       await refreshKeys();
     } finally {
       setAddingMember(false);
@@ -596,12 +675,21 @@ export function RedisBrowser({
               key: keyRaw,
               member: row.deleteAction.member,
             });
-    const ok = await confirm(message, {
-      title: t("database.redisDeleteMember"),
-      kind: "warning",
-      okLabel: t("database.redisDeleteMember"),
-      cancelLabel: t("common.cancel"),
-    });
+    const ok =
+      productionProtected && connection
+        ? await confirmDbxProductionOperation({
+            connection,
+            database: `db${activeDb}`,
+            operation: message,
+            okLabel: t("database.redisDeleteMember"),
+            t,
+          })
+        : await confirm(message, {
+            title: t("database.redisDeleteMember"),
+            kind: "warning",
+            okLabel: t("database.redisDeleteMember"),
+            cancelLabel: t("common.cancel"),
+          });
     if (!ok) return;
 
     if (row.deleteAction.kind === "hash") {
@@ -615,11 +703,11 @@ export function RedisBrowser({
     }
 
     setSelectedMemberId(null);
-    await redis.loadValue(activeDb, keyRaw);
+    await loadRedisValue(activeDb, keyRaw);
     await refreshKeys();
   };
   const loadMoreMembers = async () => {
-    if (!redis.selectedValue || !canLoadMoreMembers) return;
+    if (!redis.selectedValue || !canLoadMoreMembers || searchingHashMembers) return;
     const cursor = redis.selectedValue.scan_cursor ?? 0;
     setLoadingMoreMembers(true);
     try {
@@ -629,10 +717,46 @@ export function RedisBrowser({
         keyType: redis.selectedValue.key_type.toLowerCase(),
         cursor,
         count: 200,
+        filter: memberKind === "hash" ? activeHashSearchQuery || undefined : undefined,
       });
     } finally {
       setLoadingMoreMembers(false);
     }
+  };
+  const searchHashMembers = async (nextQuery = hashSearchQuery) => {
+    if (!redis.selectedValue || memberKind !== "hash") return;
+    const query = nextQuery.trim();
+    const requestId = ++hashSearchRequestIdRef.current;
+    setSearchingHashMembers(true);
+    try {
+      const page = await redis.loadMoreValue(
+        {
+          db: activeDb,
+          keyRaw: redis.selectedValue.key_raw,
+          keyType: "hash",
+          cursor: 0,
+          count: 200,
+          filter: query || undefined,
+        },
+        { replace: true },
+      );
+      if (requestId !== hashSearchRequestIdRef.current || page.kind !== "hash") return;
+      setActiveHashSearchQuery(query);
+      setSelectedMemberId(null);
+      setEditingMemberId(null);
+    } catch {
+      // The Redis browser hook exposes the request failure in its shared error state.
+    } finally {
+      if (requestId === hashSearchRequestIdRef.current) setSearchingHashMembers(false);
+    }
+  };
+  const scheduleHashMemberSearch = (query: string) => {
+    setHashSearchQuery(query);
+    if (hashSearchTimerRef.current) clearTimeout(hashSearchTimerRef.current);
+    hashSearchTimerRef.current = setTimeout(() => {
+      hashSearchTimerRef.current = null;
+      void searchHashMembers(query);
+    }, 400);
   };
   const copyInsertStatement = () => {
     if (!redis.selectedValue) return;
@@ -661,7 +785,7 @@ export function RedisBrowser({
     setValueFormatError("");
   };
   const refreshKey = async (keyRaw: string) => {
-    await redis.loadValue(activeDb, keyRaw);
+    await loadRedisValue(activeDb, keyRaw);
     await refreshKeys();
   };
   const startEditTtl = () => {
@@ -678,6 +802,22 @@ export function RedisBrowser({
       setTtlError(t("database.redisTtlInvalid"));
       return;
     }
+    if (
+      productionProtected &&
+      connection &&
+      !(await confirmDbxProductionOperation({
+        connection,
+        database: `db${activeDb}`,
+        operation: t("database.productionRedisKeyOperation", {
+          action: t("database.redisSaveTtl"),
+          key: redis.selectedValue.key_raw,
+          database: `db${activeDb}`,
+        }),
+        okLabel: t("database.redisSaveTtl"),
+        t,
+      }))
+    )
+      return;
     await redis.setTtl({
       db: activeDb,
       keyRaw: redis.selectedValue.key_raw,
@@ -685,7 +825,7 @@ export function RedisBrowser({
     });
     setEditingTtl(false);
     setTtlError("");
-    await redis.loadValue(activeDb, redis.selectedValue.key_raw);
+    await loadRedisValue(activeDb, redis.selectedValue.key_raw);
     await refreshKeys();
   };
   const saveValue = async () => {
@@ -698,6 +838,22 @@ export function RedisBrowser({
       setTtlError(t("database.redisTtlInvalid"));
       return;
     }
+    if (
+      productionProtected &&
+      connection &&
+      !(await confirmDbxProductionOperation({
+        connection,
+        database: `db${activeDb}`,
+        operation: t("database.productionRedisKeyOperation", {
+          action: t("database.saveValue"),
+          key: keyRaw,
+          database: `db${activeDb}`,
+        }),
+        okLabel: t("database.saveValue"),
+        t,
+      }))
+    )
+      return;
     await redis.setValue({
       db: activeDb,
       keyRaw,
@@ -705,28 +861,48 @@ export function RedisBrowser({
       ttl,
     });
     setTtlError("");
-    await redis.loadValue(activeDb, keyRaw);
+    await loadRedisValue(activeDb, keyRaw);
     await refreshKeys();
   };
   const deleteKey = async (keyRaw: string) => {
-    const ok = await confirm(t("database.confirmDeleteRedisKey", { name: keyRaw }), {
-      title: t("database.redisDeleteKey"),
-      kind: "warning",
-      okLabel: t("database.redisDeleteKey"),
-      cancelLabel: t("common.cancel"),
-    });
+    const operation = t("database.confirmDeleteRedisKey", { name: keyRaw });
+    const ok =
+      productionProtected && connection
+        ? await confirmDbxProductionOperation({
+            connection,
+            database: `db${activeDb}`,
+            operation,
+            okLabel: t("database.redisDeleteKey"),
+            t,
+          })
+        : await confirm(operation, {
+            title: t("database.redisDeleteKey"),
+            kind: "warning",
+            okLabel: t("database.redisDeleteKey"),
+            cancelLabel: t("common.cancel"),
+          });
     if (!ok) return;
     await redis.deleteKey(activeDb, keyRaw);
   };
   const deleteSelectedKeys = async () => {
     const keyRaws = [...selectedKeyRaws];
     if (keyRaws.length === 0) return;
-    const ok = await confirm(t("database.confirmDeleteRedisKeys", { count: keyRaws.length }), {
-      title: t("database.redisDeleteSelectedKeys"),
-      kind: "warning",
-      okLabel: t("database.redisDeleteSelectedKeys"),
-      cancelLabel: t("common.cancel"),
-    });
+    const operation = t("database.confirmDeleteRedisKeys", { count: keyRaws.length });
+    const ok =
+      productionProtected && connection
+        ? await confirmDbxProductionOperation({
+            connection,
+            database: `db${activeDb}`,
+            operation,
+            okLabel: t("database.redisDeleteSelectedKeys"),
+            t,
+          })
+        : await confirm(operation, {
+            title: t("database.redisDeleteSelectedKeys"),
+            kind: "warning",
+            okLabel: t("database.redisDeleteSelectedKeys"),
+            cancelLabel: t("common.cancel"),
+          });
     if (!ok) return;
     for (const keyRaw of keyRaws) {
       await redis.deleteKey(activeDb, keyRaw);
@@ -735,27 +911,47 @@ export function RedisBrowser({
   };
   const deleteKeyGroup = async (groupName: string, keyRaws: string[]) => {
     if (keyRaws.length === 0) return;
-    const ok = await confirm(
-      t("database.confirmDeleteRedisKeyGroup", { name: groupName, count: keyRaws.length }),
-      {
-        title: t("database.redisDeleteKeyGroup"),
-        kind: "warning",
-        okLabel: t("database.redisDeleteKeyGroup"),
-        cancelLabel: t("common.cancel"),
-      },
-    );
+    const operation = t("database.confirmDeleteRedisKeyGroup", {
+      name: groupName,
+      count: keyRaws.length,
+    });
+    const ok =
+      productionProtected && connection
+        ? await confirmDbxProductionOperation({
+            connection,
+            database: `db${activeDb}`,
+            operation,
+            okLabel: t("database.redisDeleteKeyGroup"),
+            t,
+          })
+        : await confirm(operation, {
+            title: t("database.redisDeleteKeyGroup"),
+            kind: "warning",
+            okLabel: t("database.redisDeleteKeyGroup"),
+            cancelLabel: t("common.cancel"),
+          });
     if (!ok) return;
     for (const keyRaw of keyRaws) {
       await redis.deleteKey(activeDb, keyRaw);
     }
   };
   const flushCurrentDb = async () => {
-    const ok = await confirm(t("database.confirmFlushRedisDb", { db: activeDb }), {
-      title: t("database.redisFlushDb"),
-      kind: "warning",
-      okLabel: t("database.redisFlushDbConfirm"),
-      cancelLabel: t("common.cancel"),
-    });
+    const operation = t("database.confirmFlushRedisDb", { db: activeDb });
+    const ok =
+      productionProtected && connection
+        ? await confirmDbxProductionOperation({
+            connection,
+            database: `db${activeDb}`,
+            operation,
+            okLabel: t("database.redisFlushDbConfirm"),
+            t,
+          })
+        : await confirm(operation, {
+            title: t("database.redisFlushDb"),
+            kind: "warning",
+            okLabel: t("database.redisFlushDbConfirm"),
+            cancelLabel: t("common.cancel"),
+          });
     if (!ok) return;
     await redis.executeCommand({
       db: activeDb,
@@ -826,6 +1022,22 @@ export function RedisBrowser({
   };
   const createKey = async () => {
     if (!createKeyName.trim()) return;
+    if (
+      productionProtected &&
+      connection &&
+      !(await confirmDbxProductionOperation({
+        connection,
+        database: `db${activeDb}`,
+        operation: t("database.productionRedisKeyOperation", {
+          action: t("database.redisCreateKey"),
+          key: createKeyName.trim(),
+          database: `db${activeDb}`,
+        }),
+        okLabel: t("database.saveKey"),
+        t,
+      }))
+    )
+      return;
     await redis.createKey({
       db: activeDb,
       keyRaw: createKeyName.trim(),
@@ -872,12 +1084,22 @@ export function RedisBrowser({
       return;
     }
     if (safety === "confirm") {
-      const ok = await confirm(t("database.confirmRedisCommand", { command }), {
-        title: t("database.redisCommandRequiresConfirmation"),
-        kind: "warning",
-        okLabel: t("database.redisRunCommand"),
-        cancelLabel: t("common.cancel"),
-      });
+      const operation = t("database.confirmRedisCommand", { command });
+      const ok =
+        productionProtected && connection
+          ? await confirmDbxProductionOperation({
+              connection,
+              database: `db${commandDb}`,
+              operation,
+              okLabel: t("database.redisRunCommand"),
+              t,
+            })
+          : await confirm(operation, {
+              title: t("database.redisCommandRequiresConfirmation"),
+              kind: "warning",
+              okLabel: t("database.redisRunCommand"),
+              cancelLabel: t("common.cancel"),
+            });
       if (!ok) return;
     }
     setCommandText("");
@@ -1026,7 +1248,7 @@ export function RedisBrowser({
         onDeleteSelectedKeys={deleteSelectedKeys}
         onToggleKeyGroup={toggleKeyGroup}
         onOpenGroupContextMenu={openGroupContextMenu}
-        onLoadKey={(keyRaw) => redis.loadValue(activeDb, keyRaw)}
+        onLoadKey={(keyRaw) => loadRedisValue(activeDb, keyRaw)}
         onOpenKeyContextMenu={openKeyContextMenu}
         onToggleSelectedKey={toggleSelectedKey}
         onLoadMoreKeys={loadMoreKeys}
@@ -1263,6 +1485,53 @@ export function RedisBrowser({
               }}
             >
               <span style={{ ...s.databaseDialogHint, flex: "1 1 140px" }}>{memberCountLabel}</span>
+              {memberKind === "hash" && (
+                <label
+                  style={{
+                    position: "relative",
+                    display: "inline-flex",
+                    alignItems: "center",
+                    width: 180,
+                  }}
+                >
+                  <Search
+                    size={13}
+                    aria-hidden="true"
+                    style={{
+                      position: "absolute",
+                      left: 7,
+                      color: "var(--text-muted)",
+                      pointerEvents: "none",
+                    }}
+                  />
+                  <input
+                    aria-label={t("database.redisSearchFields")}
+                    style={{
+                      ...s.databaseDialogInput,
+                      width: "100%",
+                      height: 26,
+                      padding: "3px 8px 3px 25px",
+                    }}
+                    value={hashSearchQuery}
+                    disabled={searchingHashMembers}
+                    onChange={(event) => scheduleHashMemberSearch(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") {
+                        event.preventDefault();
+                        if (hashSearchTimerRef.current) clearTimeout(hashSearchTimerRef.current);
+                        hashSearchTimerRef.current = null;
+                        void searchHashMembers(hashSearchQuery);
+                      } else if (event.key === "Escape") {
+                        if (hashSearchTimerRef.current) clearTimeout(hashSearchTimerRef.current);
+                        hashSearchTimerRef.current = null;
+                        setHashSearchQuery("");
+                        void searchHashMembers("");
+                      }
+                    }}
+                    placeholder={t("database.redisSearchFields")}
+                  />
+                </label>
+              )}
               {canAddMember && (
                 <form
                   style={{ display: "inline-flex", alignItems: "center", flexWrap: "wrap", gap: 6 }}
@@ -1572,11 +1841,16 @@ export function RedisBrowser({
                 <button
                   type="button"
                   style={{ ...s.databaseListButton, justifyContent: "center" }}
-                  disabled={loadingMoreMembers}
+                  disabled={loadingMoreMembers || searchingHashMembers}
                   onClick={() => void loadMoreMembers()}
                 >
-                  {t("database.loadMore")} ({memberRows.length}/
-                  {redis.selectedValue?.total ?? memberRows.length})
+                  {t("database.loadMore")}
+                  {!activeHashSearchQuery && (
+                    <>
+                      {" "}
+                      ({memberRows.length}/{redis.selectedValue?.total ?? memberRows.length})
+                    </>
+                  )}
                 </button>
               </div>
             )}

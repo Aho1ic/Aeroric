@@ -34,11 +34,25 @@ pub async fn dbx_list_objects(
     connection_id: String,
     database: Option<String>,
     schema: Option<String>,
+    filter: Option<String>,
+    limit: Option<usize>,
+    offset: Option<usize>,
+    object_types: Option<Vec<String>>,
 ) -> Result<Vec<db::ObjectInfo>, String> {
     connections::ensure_connected(&state, &connection_id).await?;
     let database = required(database, "");
     let schema = required(schema, "");
-    dbx_core::schema::list_objects_core(&state.app_state, &connection_id, &database, &schema).await
+    dbx_core::schema::list_objects_core(
+        &state.app_state,
+        &connection_id,
+        &database,
+        &schema,
+        filter.as_deref(),
+        limit,
+        offset,
+        object_types.as_deref(),
+    )
+    .await
 }
 
 #[tauri::command]
@@ -86,6 +100,7 @@ pub async fn dbx_get_object_source(
     schema: Option<String>,
     name: String,
     object_type: db::ObjectSourceKind,
+    signature: Option<String>,
 ) -> Result<db::ObjectSource, String> {
     connections::ensure_connected(&state, &connection_id).await?;
     let database = required(database, "");
@@ -97,6 +112,7 @@ pub async fn dbx_get_object_source(
         &schema,
         &name,
         object_type,
+        signature.as_deref(),
     )
     .await
 }

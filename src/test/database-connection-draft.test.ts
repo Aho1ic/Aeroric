@@ -3,6 +3,8 @@ import type { AeroricDbConnectionConfig } from "../types";
 import {
   DB_PROFILES,
   buildDbxConnectionConfig,
+  normalizeDelimitedList,
+  normalizeLineList,
   type ConnectionDraft,
   type DbProfileKey,
 } from "../components/database/databaseConnectionDraft";
@@ -25,6 +27,10 @@ function baseDraft(key: DbProfileKey, overrides: Partial<ConnectionDraft> = {}):
     password: "",
     filePath: "",
     readOnly: false,
+    initScript: "",
+    agentJavaOptions: "",
+    isProduction: false,
+    productionDatabases: "",
     urlParams: "",
     connectionString: "",
     connectTimeoutSecs: "5",
@@ -64,6 +70,46 @@ function dbx(config: AeroricDbConnectionConfig): Record<string, unknown> {
 }
 
 describe("buildDbxConnectionConfig", () => {
+  it("normalizes production database and Java option lists", () => {
+    expect(normalizeDelimitedList(" prod_app,prod_analytics\nPROD_APP ")).toEqual([
+      "prod_app",
+      "prod_analytics",
+    ]);
+    expect(normalizeLineList(" -Xms256m\n-Xmx1g\n-Xms256m ")).toEqual(["-Xms256m", "-Xmx1g"]);
+  });
+
+  it("serializes production safety, init script, and Java agent options", () => {
+    const result = buildDbxConnectionConfig(
+      baseDraft("oracle", {
+        isProduction: false,
+        productionDatabases: " prod_app, prod_analytics\nPROD_APP ",
+        initScript: "  SET threads = 4;  ",
+        agentJavaOptions: " -Xms256m\n-Xmx1g\n-Xms256m ",
+      }),
+      ctx,
+    );
+    const config = dbx(result);
+
+    expect(config.is_production).toBe(false);
+    expect(config.production_databases).toEqual(["prod_app", "prod_analytics"]);
+    expect(config.init_script).toBe("SET threads = 4;");
+    expect(config.agent_java_options).toEqual(["-Xms256m", "-Xmx1g"]);
+  });
+
+  it("uses connection-wide production protection for local database profiles", () => {
+    const result = buildDbxConnectionConfig(
+      baseDraft("duckdb", {
+        filePath: "/tmp/app.duckdb",
+        productionDatabases: "main",
+      }),
+      ctx,
+    );
+    const config = dbx(result);
+
+    expect(config.is_production).toBe(true);
+    expect(config.production_databases).toEqual([]);
+  });
+
   it("writes postgres sslmode into url_params", () => {
     const result = buildDbxConnectionConfig(
       baseDraft("postgres", { host: "db.example.com", tlsMode: "require" }),
@@ -144,7 +190,34 @@ describe("buildDbxConnectionConfig", () => {
     );
     const config = dbx(result);
     expect(config.oracle_connection_type).toBe("sid");
-    expect(config.oracle_sysdba).toBe(true);
+    expect(config.sysdba).toBe(true);
+    expect(config.oracle_sysdba).toBeUndefined();
+  });
+
+  it("normalizes the legacy oracle sysdba key when editing", () => {
+    const editing: AeroricDbConnectionConfig = {
+      id: "oracle-existing",
+      name: "Oracle",
+      dbType: "oracle",
+      readOnly: false,
+      createdAt: 1,
+      dbx: {
+        id: "oracle-existing",
+        db_type: "oracle",
+        oracle_sysdba: true,
+      },
+    };
+    const result = buildDbxConnectionConfig(
+      baseDraft("oracle", {
+        host: "ora.example.com",
+        oracleSysdba: true,
+      }),
+      { editingConnection: editing, projectRoot: null, t: (key) => key },
+    );
+    const config = dbx(result);
+
+    expect(config.sysdba).toBe(true);
+    expect(config.oracle_sysdba).toBeUndefined();
   });
 
   it("serializes transport layers only when enabled", () => {

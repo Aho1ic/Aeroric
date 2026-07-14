@@ -19,10 +19,13 @@ import {
 import { useI18n } from "../../i18n";
 import { useMongoBrowser } from "../../hooks/useMongoBrowser";
 import s from "../../styles";
+import type { AeroricDbConnectionConfig } from "../../types";
 import { DbxButton, DbxMenuItem } from "./DbxButton";
+import { confirmDbxProductionOperation, hasProductionProtection } from "./databaseProductionSafety";
 
 interface Props {
   connectionId: string;
+  connection?: AeroricDbConnectionConfig | null;
   readOnly: boolean;
   initialDatabase?: string;
   initialCollection?: string;
@@ -32,6 +35,7 @@ interface Props {
     collection: string,
     filter: string,
     sort: string,
+    projection: string,
   ) => void;
 }
 
@@ -237,6 +241,7 @@ function mongoFilterJson(
 
 export function MongoBrowser({
   connectionId,
+  connection,
   readOnly,
   initialDatabase,
   initialCollection,
@@ -245,6 +250,7 @@ export function MongoBrowser({
 }: Props) {
   const { t } = useI18n();
   const mongo = useMongoBrowser(connectionId);
+  const productionProtected = Boolean(connection && hasProductionProtection(connection));
   const [activeDatabase, setActiveDatabase] = useState("");
   const [activeCollection, setActiveCollection] = useState("");
   const [filter, setFilter] = useState("{}");
@@ -255,6 +261,7 @@ export function MongoBrowser({
     unknown
   > | null>(null);
   const [sort, setSort] = useState("{}");
+  const [projection, setProjection] = useState("{}");
   const [page, setPage] = useState(0);
   const [pageSize, setPageSize] = useState<number>(MONGO_WORKSPACE_DEFAULT_PAGE_SIZE);
   const [viewMode, setViewMode] = useState<MongoViewMode>(loadMongoViewMode);
@@ -324,6 +331,7 @@ export function MongoBrowser({
     setFilterRules([]);
     setAppliedStructuredFilter(null);
     setSort("{}");
+    setProjection("{}");
     setPage(0);
     setSelectedIndex(null);
     setDocumentDraft(EMPTY_DOCUMENT_DRAFT);
@@ -346,6 +354,7 @@ export function MongoBrowser({
           database: initialDatabase,
           collection: initialCollection,
           filter: "{}",
+          projection: "{}",
           sort: "{}",
           skip: 0,
           limit: MONGO_WORKSPACE_DEFAULT_PAGE_SIZE,
@@ -396,6 +405,7 @@ export function MongoBrowser({
     nextSort = sort,
     nextPageSize = pageSize,
     nextStructuredFilter = appliedStructuredFilter,
+    nextProjection = projection,
   ) => {
     if (!database || !collection) return;
     const queryFilter = mongoFilterJson(nextFilter, nextStructuredFilter);
@@ -406,21 +416,32 @@ export function MongoBrowser({
       database,
       collection,
       filter: queryFilter,
+      projection: nextProjection,
       sort: nextSort,
       skip: 0,
       limit: nextPageSize,
     });
-    onDocumentsQueryApplied?.(database, collection, queryFilter, nextSort);
+    onDocumentsQueryApplied?.(database, collection, queryFilter, nextSort, nextProjection);
   };
   const clearDocumentFilters = () => {
     const nextFilter = "{}";
     const nextSort = "{}";
+    const nextProjection = "{}";
     setFilter(nextFilter);
     setStructuredFilterOpen(false);
     setAppliedStructuredFilter(null);
     setFilterRules(tableColumns.length > 0 ? [createMongoFilterRule(tableColumns[0])] : []);
     setSort(nextSort);
-    loadDocuments(activeDatabase, activeCollection, nextFilter, nextSort, pageSize, null);
+    setProjection(nextProjection);
+    loadDocuments(
+      activeDatabase,
+      activeCollection,
+      nextFilter,
+      nextSort,
+      pageSize,
+      null,
+      nextProjection,
+    );
   };
   const loadMoreDocuments = () => {
     const loadedThroughCurrentPage = page * pageSize + mongo.documents.length;
@@ -429,6 +450,7 @@ export function MongoBrowser({
       database: activeDatabase,
       collection: activeCollection,
       filter: effectiveFilter,
+      projection,
       sort,
       skip: loadedThroughCurrentPage,
       limit: pageSize,
@@ -444,6 +466,7 @@ export function MongoBrowser({
       database: activeDatabase,
       collection: activeCollection,
       filter: effectiveFilter,
+      projection,
       sort,
       skip: nextPage * pageSize,
       limit: pageSize,
@@ -592,6 +615,7 @@ export function MongoBrowser({
       database,
       collection,
       filter: queryFilter,
+      projection,
       sort,
       skip: pageIndex * pageSize,
       limit: pageSize,
@@ -602,10 +626,22 @@ export function MongoBrowser({
     } else {
       clearSelectedDocument();
     }
-    onDocumentsQueryApplied?.(database, collection, queryFilter, sort);
+    onDocumentsQueryApplied?.(database, collection, queryFilter, sort, projection);
   };
   const insertDocument = async (collection = activeCollection) => {
     if (!activeDatabase || !collection) return;
+    if (
+      productionProtected &&
+      connection &&
+      !(await confirmDbxProductionOperation({
+        connection,
+        database: activeDatabase,
+        operation: t("database.productionMongoInsertOperation", { collection }),
+        okLabel: t("database.mongoInsertDocument"),
+        t,
+      }))
+    )
+      return;
     setActiveCollection(collection);
     const insertedId = await mongo.insertDocument({
       database: activeDatabase,
@@ -618,15 +654,25 @@ export function MongoBrowser({
   const deleteMatchingDocuments = async (collection = activeCollection) => {
     if (!activeDatabase || !collection) return;
     const queryFilter = mongoFilterJson(filter, appliedStructuredFilter);
-    const ok = await confirm(
-      t("database.confirmDeleteMongoDocuments", { collection, filter: queryFilter }),
-      {
-        title: t("database.mongoDeleteMatchingDocuments"),
-        kind: "warning",
-        okLabel: t("database.mongoDeleteMatchingDocuments"),
-        cancelLabel: t("common.cancel"),
-      },
-    );
+    const operation = t("database.confirmDeleteMongoDocuments", {
+      collection,
+      filter: queryFilter,
+    });
+    const ok =
+      productionProtected && connection
+        ? await confirmDbxProductionOperation({
+            connection,
+            database: activeDatabase,
+            operation,
+            okLabel: t("database.mongoDeleteMatchingDocuments"),
+            t,
+          })
+        : await confirm(operation, {
+            title: t("database.mongoDeleteMatchingDocuments"),
+            kind: "warning",
+            okLabel: t("database.mongoDeleteMatchingDocuments"),
+            cancelLabel: t("common.cancel"),
+          });
     if (!ok) return;
     setActiveCollection(collection);
     await mongo.deleteDocuments({
@@ -642,15 +688,25 @@ export function MongoBrowser({
     const rawId = mongoDocumentRawId(document);
     const id = mongoDocumentId(document);
     if (rawId == null || !id) return;
-    const ok = await confirm(
-      t("database.confirmDeleteMongoDocument", { collection: activeCollection, id }),
-      {
-        title: t("database.mongoDeleteDocument"),
-        kind: "warning",
-        okLabel: t("database.mongoDeleteDocument"),
-        cancelLabel: t("common.cancel"),
-      },
-    );
+    const operation = t("database.confirmDeleteMongoDocument", {
+      collection: activeCollection,
+      id,
+    });
+    const ok =
+      productionProtected && connection
+        ? await confirmDbxProductionOperation({
+            connection,
+            database: activeDatabase,
+            operation,
+            okLabel: t("database.mongoDeleteDocument"),
+            t,
+          })
+        : await confirm(operation, {
+            title: t("database.mongoDeleteDocument"),
+            kind: "warning",
+            okLabel: t("database.mongoDeleteDocument"),
+            cancelLabel: t("common.cancel"),
+          });
     if (!ok) return;
     await mongo.deleteDocuments({
       database: activeDatabase,
@@ -694,6 +750,21 @@ export function MongoBrowser({
     const selected = mongo.documents[selectedIndex];
     const id = mongoDocumentId(selected);
     if (!id) return;
+    if (
+      productionProtected &&
+      connection &&
+      !(await confirmDbxProductionOperation({
+        connection,
+        database: activeDatabase,
+        operation: t("database.productionMongoUpdateOperation", {
+          collection: activeCollection,
+          id,
+        }),
+        okLabel: t("database.saveDocument"),
+        t,
+      }))
+    )
+      return;
     await mongo.updateDocument({
       database: activeDatabase,
       collection: activeCollection,
@@ -1081,6 +1152,17 @@ export function MongoBrowser({
               style={s.databaseDialogInput}
               value={sort}
               onChange={(event) => setSort(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") loadDocuments();
+              }}
+            />
+          </label>
+          <label style={s.databaseDialogField}>
+            <span style={s.databaseDialogLabel}>{t("database.projectionJson")}</span>
+            <input
+              style={s.databaseDialogInput}
+              value={projection}
+              onChange={(event) => setProjection(event.target.value)}
               onKeyDown={(event) => {
                 if (event.key === "Enter") loadDocuments();
               }}

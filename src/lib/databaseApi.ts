@@ -1,6 +1,9 @@
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import type {
   AeroricDbConnectionConfig,
+  AssessProductionSqlRequest,
+  AssessProductionTargetRequest,
   DbConnectionConfig,
   DbEndpoint,
   DbExecuteResult,
@@ -12,6 +15,10 @@ import type {
   DbxObjectSource,
   DbxObjectSourceKind,
   DbxQueryResult,
+  DbxListObjectsOptions,
+  DbxTransferProgress,
+  DbxTransferRequest,
+  ExecuteMultiRequest,
   ExecuteQueryRequest,
   DataGridContextFilterConditionOptions,
   DataGridCopyInsertStatementOptions,
@@ -26,6 +33,8 @@ import type {
   MongoFindDocumentsRequest,
   MongoInsertDocumentRequest,
   MongoUpdateDocumentRequest,
+  ProductionSqlAssessment,
+  ProductionTargetAssessment,
   RedisDatabaseInfo,
   RedisCommandRequest,
   RedisCommandResult,
@@ -37,6 +46,7 @@ import type {
   RedisListPushRequest,
   RedisListSetRequest,
   RedisLoadMoreRequest,
+  RedisCollectionPage,
   RedisScanKeysRequest,
   RedisScanResult,
   RedisSetAddRequest,
@@ -68,6 +78,44 @@ import type {
   TableStructureSqlOptions,
   TableStructureSqlResult,
 } from "../types/database";
+
+export function isTerminalDbxTransferProgress(progress: DbxTransferProgress): boolean {
+  return (
+    progress.terminal === true ||
+    progress.status === "done" ||
+    progress.status === "error" ||
+    progress.status === "cancelled"
+  );
+}
+
+async function startDbxTransferWithProgress(
+  request: DbxTransferRequest,
+  onProgress: (progress: DbxTransferProgress) => void,
+): Promise<DbxTransferProgress> {
+  return new Promise((resolve, reject) => {
+    let unlisten: (() => void) | null = null;
+    void (async () => {
+      try {
+        unlisten = await listen<DbxTransferProgress>("dbx-transfer-progress", (event) => {
+          if (event.payload.transferId !== request.transferId) return;
+          const terminal = isTerminalDbxTransferProgress(event.payload);
+          try {
+            onProgress(event.payload);
+          } finally {
+            if (terminal) {
+              unlisten?.();
+              resolve(event.payload);
+            }
+          }
+        });
+        await invoke<void>("dbx_start_transfer", { request });
+      } catch (error) {
+        unlisten?.();
+        reject(error);
+      }
+    })();
+  });
+}
 
 export const databaseApi = {
   loadConnections: () => invoke<DbConnectionConfig[]>("db_load_connections"),
@@ -136,8 +184,21 @@ export const databaseApi = {
     invoke<DbxDatabaseInfo[]>("dbx_list_databases", { connectionId }),
   dbxListSchemas: (connectionId: string, database?: string | null) =>
     invoke<string[]>("dbx_list_schemas", { connectionId, database }),
-  dbxListObjects: (connectionId: string, database?: string | null, schema?: string | null) =>
-    invoke<DbxObjectInfo[]>("dbx_list_objects", { connectionId, database, schema }),
+  dbxListObjects: (
+    connectionId: string,
+    database?: string | null,
+    schema?: string | null,
+    options: DbxListObjectsOptions = {},
+  ) =>
+    invoke<DbxObjectInfo[]>("dbx_list_objects", {
+      connectionId,
+      database,
+      schema,
+      filter: options.filter ?? null,
+      limit: options.limit ?? null,
+      offset: options.offset ?? null,
+      objectTypes: options.objectTypes ?? null,
+    }),
   dbxGetColumns: (
     connectionId: string,
     table: string,
@@ -156,6 +217,7 @@ export const databaseApi = {
     schema: string | null | undefined,
     name: string,
     objectType: DbxObjectSourceKind,
+    signature?: string | null,
   ) =>
     invoke<DbxObjectSource>("dbx_get_object_source", {
       connectionId,
@@ -163,10 +225,15 @@ export const databaseApi = {
       schema,
       name,
       objectType,
+      signature: signature ?? null,
     }),
+  dbxAssessProductionSql: (request: AssessProductionSqlRequest) =>
+    invoke<ProductionSqlAssessment>("dbx_assess_production_sql", { request }),
+  dbxAssessProductionTarget: (request: AssessProductionTargetRequest) =>
+    invoke<ProductionTargetAssessment>("dbx_assess_production_target", { request }),
   dbxExecuteQuery: (request: ExecuteQueryRequest) =>
     invoke<DbxQueryResult>("dbx_execute_query", { request }),
-  dbxExecuteMulti: (request: ExecuteQueryRequest) =>
+  dbxExecuteMulti: (request: ExecuteMultiRequest) =>
     invoke<DbxQueryResult[]>("dbx_execute_multi", { request }),
   dbxCancelQuery: (executionId: string) => invoke<void>("dbx_cancel_query", { executionId }),
   dbxCloseResultSession: (params: {
@@ -224,13 +291,14 @@ export const databaseApi = {
   dbxRedisGetValue: (request: RedisKeyRequest) =>
     invoke<RedisValue>("dbx_redis_get_value", { ...request }),
   dbxRedisLoadMore: (request: RedisLoadMoreRequest) =>
-    invoke<RedisValue>("dbx_redis_load_more", {
+    invoke<RedisCollectionPage>("dbx_redis_load_more", {
       connectionId: request.connectionId,
       db: request.db,
       keyRaw: request.keyRaw,
       keyType: request.keyType,
       cursor: request.cursor,
       count: request.count ?? 200,
+      filter: request.filter ?? null,
     }),
   dbxRedisSetValue: (request: RedisSetValueRequest) =>
     invoke<void>("dbx_redis_set_value", { ...request }),
@@ -277,7 +345,13 @@ export const databaseApi = {
   dbxMongoDeleteDocuments: (request: MongoDeleteDocumentsRequest) =>
     invoke<number>("dbx_mongo_delete_documents", { ...request }),
   dbxDriverManifest: () => invoke<DatabaseDriverManifest>("dbx_driver_manifest"),
-  dbxStartTransfer: (request: unknown) => invoke<void>("dbx_start_transfer", { request }),
+  dbxStartTransfer: (
+    request: DbxTransferRequest,
+    onProgress?: (progress: DbxTransferProgress) => void,
+  ): Promise<void | DbxTransferProgress> =>
+    onProgress
+      ? startDbxTransferWithProgress(request, onProgress)
+      : invoke<void>("dbx_start_transfer", { request }),
   dbxCancelTransfer: (transferId: string) => invoke<void>("dbx_cancel_transfer", { transferId }),
   dbxPrepareSchemaDiff: (options: unknown) =>
     invoke<unknown>("dbx_prepare_schema_diff", { options }),

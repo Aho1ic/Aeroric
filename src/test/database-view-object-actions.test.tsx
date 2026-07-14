@@ -212,6 +212,7 @@ describe("DatabaseView object actions", () => {
       schema: "public",
       name: "active_users",
       objectType: "VIEW",
+      signature: null,
     });
 
     fireEvent.contextMenu(viewNode);
@@ -357,6 +358,7 @@ describe("DatabaseView object actions", () => {
       schema: "public",
       name: "refresh_stats",
       objectType: "PROCEDURE",
+      signature: null,
     });
 
     fireEvent.contextMenu(procedureNode);
@@ -464,6 +466,7 @@ describe("DatabaseView object actions", () => {
       schema: "public",
       name: "order_seq",
       objectType: "SEQUENCE",
+      signature: null,
     });
   });
 
@@ -538,9 +541,15 @@ describe("DatabaseView object actions", () => {
   it("imports data into a DBX table from the object context menu", async () => {
     const user = userEvent.setup();
     vi.mocked(open).mockResolvedValue("/tmp/users.csv");
+    vi.mocked(confirm).mockResolvedValue(true);
+    const productionConnection = {
+      ...dbxConnection,
+      name: "Production DB",
+      dbx: { is_production: true },
+    };
     vi.mocked(invoke).mockImplementation((command) => {
       if (command === "db_load_connections") return Promise.resolve([]);
-      if (command === "dbx_list_connections") return Promise.resolve([dbxConnection]);
+      if (command === "dbx_list_connections") return Promise.resolve([productionConnection]);
       if (command === "dbx_connect") return Promise.resolve(undefined);
       if (command === "dbx_list_databases") return Promise.resolve([{ name: "main" }]);
       if (command === "dbx_list_objects")
@@ -564,6 +573,9 @@ describe("DatabaseView object actions", () => {
       }
       if (command === "dbx_import_table_file") {
         return Promise.resolve({ importId: "import-1", rowsImported: 1, totalRows: 1 });
+      }
+      if (command === "dbx_assess_production_target") {
+        return Promise.resolve({ requiresConfirmation: true, productionDatabases: [] });
       }
       if (command === "dbx_query_table_data") {
         return Promise.resolve({
@@ -592,7 +604,7 @@ describe("DatabaseView object actions", () => {
       ),
     );
 
-    await user.click(await screen.findByRole("button", { name: /DBX Source/i }));
+    await user.click(await screen.findByRole("button", { name: /Production DB/i }));
     fireEvent.contextMenu(await screen.findByRole("button", { name: /^users\s+table$/i }));
     await user.click(screen.getByRole("menuitem", { name: "Import table" }));
 
@@ -611,6 +623,15 @@ describe("DatabaseView object actions", () => {
     expect(await within(dialog).findByText("users.csv")).toBeInTheDocument();
     await user.click(within(dialog).getByRole("button", { name: "Import table" }));
 
+    await waitFor(() => {
+      expect(confirm).toHaveBeenCalledWith(
+        expect.stringContaining('Import file data into "public.users" using Append mode.'),
+        expect.objectContaining({
+          title: "Confirm production operation",
+          okLabel: "Import table",
+        }),
+      );
+    });
     await waitFor(() => {
       expect(invoke).toHaveBeenCalledWith("dbx_import_table_file", {
         request: expect.objectContaining({

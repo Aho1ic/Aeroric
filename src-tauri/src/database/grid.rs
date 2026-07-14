@@ -18,6 +18,8 @@ use super::dbx_state::DbxState;
 pub(crate) struct TableDataRequest {
     connection_id: String,
     #[serde(default)]
+    catalog: Option<String>,
+    #[serde(default)]
     database: Option<String>,
     #[serde(default)]
     schema: Option<String>,
@@ -164,6 +166,11 @@ pub async fn dbx_query_table_data(
 ) -> Result<TableDataResponse, String> {
     connections::ensure_connected(&state, &request.connection_id).await?;
     let database = request.database.clone().unwrap_or_default();
+    let qualified_database = (!database.is_empty()).then_some(database.clone());
+    let identifier_quote = state
+        .app_state
+        .connection_identifier_quote(&request.connection_id, qualified_database.as_deref())
+        .await?;
     let schema = request.schema.clone();
     let page_size = normalize_page_size(request.page_size);
     let page = request.page.max(1);
@@ -189,8 +196,11 @@ pub async fn dbx_query_table_data(
     let db_type = database_type(&state, &request.connection_id).await;
     let sql = build_table_data_select_sql(TableDataSelectSqlOptions {
         database_type: db_type,
+        identifier_quote: identifier_quote.clone(),
         schema: schema.clone(),
         table_name: request.table.clone(),
+        catalog: request.catalog.clone(),
+        database: qualified_database.clone(),
         table_type: None,
         primary_keys,
         columns: column_names,
@@ -204,6 +214,9 @@ pub async fn dbx_query_table_data(
     let count_sql =
         data_grid_sql::build_data_grid_count_sql(data_grid_sql::DataGridCountSqlOptions {
             database_type: db_type,
+            identifier_quote,
+            catalog: request.catalog,
+            database: qualified_database,
             schema,
             table_name: request.table,
             where_input: request.where_input,
@@ -330,6 +343,8 @@ mod tests {
 
     fn test_table_meta() -> DataGridTableMeta {
         DataGridTableMeta {
+            catalog: None,
+            database: None,
             schema: Some("public".to_string()),
             table_name: "users".to_string(),
             primary_keys: vec!["id".to_string()],
@@ -370,9 +385,11 @@ mod tests {
             database_type: Some(DatabaseType::Postgres),
             table_meta: Some(test_table_meta()),
             columns: vec!["id".to_string(), "email".to_string()],
+            column_types: None,
             source_columns: Some(vec![Some("id".to_string()), Some("email".to_string())]),
             rows: vec![vec![json!(1), json!("alice@example.com")]],
             exclude_primary_keys: false,
+            insert_mode: Default::default(),
         });
 
         assert_eq!(
@@ -408,6 +425,8 @@ mod tests {
             column_name: "email".to_string(),
             mode: DataGridContextFilterMode::Like,
             value: json!("alice@example.com"),
+            values: Vec::new(),
+            end_value: None,
             column_info: Some(test_column("email", "text", false)),
         });
 

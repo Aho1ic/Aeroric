@@ -27,6 +27,71 @@ import {
 
 describe("DatabaseView workspace and data grid", () => {
   beforeEach(resetDatabaseViewMocks);
+  it("does not execute production SQL when the confirmation is rejected", async () => {
+    const user = userEvent.setup();
+    const productionConnection = {
+      ...dbxConnection,
+      dbx: {
+        db_type: "postgres",
+        is_production: true,
+        production_databases: [],
+      },
+    };
+    vi.mocked(confirm).mockResolvedValue(false);
+    vi.mocked(invoke).mockImplementation((command) => {
+      if (command === "db_load_connections") return Promise.resolve([]);
+      if (command === "dbx_list_connections") return Promise.resolve([productionConnection]);
+      if (command === "dbx_connect") return Promise.resolve(undefined);
+      if (command === "dbx_list_databases") return Promise.resolve([{ name: "main" }]);
+      if (command === "dbx_list_schemas") return Promise.resolve([]);
+      if (command === "dbx_list_objects") return Promise.resolve([]);
+      if (command === "dbx_assess_production_sql") {
+        return Promise.resolve({
+          requiresConfirmation: true,
+          isMutation: true,
+          productionDatabases: [],
+        });
+      }
+      return Promise.resolve(undefined);
+    });
+
+    render(
+      React.createElement(
+        I18nProvider,
+        null,
+        React.createElement(DatabaseView, { sshConnections: [connection()] }),
+      ),
+    );
+
+    await user.click(await screen.findByRole("button", { name: /DBX Source/i }));
+    await user.click(screen.getByRole("button", { name: /New query/i }));
+    await user.type(
+      screen.getByPlaceholderText("Run SQL against the active database connection"),
+      "delete from users where id = 1",
+    );
+    await user.click(screen.getByRole("button", { name: "Run" }));
+
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith("dbx_assess_production_sql", {
+        request: {
+          connectionId: "dbx-source",
+          database: "main",
+          sql: "delete from users where id = 1",
+        },
+      });
+    });
+    expect(confirm).toHaveBeenCalledWith(
+      expect.stringContaining('This SQL can modify production data on "DBX Source"'),
+      {
+        title: "Confirm production SQL",
+        kind: "warning",
+        okLabel: "Execute",
+        cancelLabel: "Cancel",
+      },
+    );
+    expect(invoke).not.toHaveBeenCalledWith("dbx_execute_query", expect.anything());
+  });
+
   it("records executed SQL and restores it from query history", async () => {
     const user = userEvent.setup();
     vi.mocked(invoke).mockImplementation((command) => {

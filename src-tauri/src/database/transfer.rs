@@ -61,6 +61,7 @@ pub async fn dbx_start_transfer(
                         total_rows: None,
                         status: dbx_core::transfer::TransferStatus::Cancelled,
                         error: None,
+                        terminal: true,
                     },
                 );
                 dbx_core::transfer::clear_cancelled(&transfer_id).await;
@@ -98,6 +99,7 @@ pub async fn dbx_start_transfer(
                         total_rows: last_total_rows.or(Some(rows)),
                         status: dbx_core::transfer::TransferStatus::TableDone,
                         error: None,
+                        terminal: false,
                     },
                 ),
                 Err(error) => {
@@ -117,6 +119,7 @@ pub async fn dbx_start_transfer(
                             total_rows: last_total_rows,
                             status,
                             error: (error != "Cancelled").then_some(error),
+                            terminal: true,
                         },
                     );
                     dbx_core::transfer::clear_cancelled(&transfer_id).await;
@@ -136,6 +139,7 @@ pub async fn dbx_start_transfer(
                 total_rows: None,
                 status: dbx_core::transfer::TransferStatus::Done,
                 error: None,
+                terminal: true,
             },
         );
         dbx_core::transfer::clear_cancelled(&transfer_id).await;

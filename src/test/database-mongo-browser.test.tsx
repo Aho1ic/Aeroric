@@ -285,6 +285,7 @@ describe("MongoBrowser", () => {
       database: "app",
       collection: "users",
       filter: "{}",
+      projection: "{}",
       sort: "{}",
       skip: 0,
       limit: 100,
@@ -322,6 +323,57 @@ describe("MongoBrowser", () => {
       id: "1",
       docJson: JSON.stringify({ _id: "1", name: "Grace" }),
     });
+  });
+
+  it("does not update a production Mongo document when confirmation is cancelled", async () => {
+    vi.mocked(confirm).mockResolvedValue(false);
+    vi.mocked(invoke).mockImplementation((command) => {
+      if (command === "dbx_mongo_list_databases") return Promise.resolve(["app"]);
+      if (command === "dbx_mongo_list_collections") return Promise.resolve(["users"]);
+      if (command === "dbx_mongo_find_documents") {
+        return Promise.resolve({ documents: [{ _id: "1", name: "Ada" }], total: 1 });
+      }
+      if (command === "dbx_assess_production_target") {
+        return Promise.resolve({ requiresConfirmation: true, productionDatabases: ["app"] });
+      }
+      return Promise.resolve(undefined);
+    });
+
+    render(
+      <I18nProvider>
+        <MongoBrowser
+          connectionId="mongo"
+          connection={{
+            id: "mongo",
+            name: "Production Mongo",
+            dbType: "mongodb",
+            readOnly: false,
+            createdAt: 1,
+            dbx: { production_databases: ["app"] },
+          }}
+          readOnly={false}
+        />
+      </I18nProvider>,
+    );
+
+    await userEvent.click(await screen.findByText("app"));
+    await userEvent.click(await screen.findByText("users"));
+    await userEvent.click(await screen.findByText(/Ada/));
+    const editor = screen.getByLabelText(/文档 JSON|Document JSON/);
+    fireEvent.change(editor, { target: { value: JSON.stringify({ _id: "1", name: "Grace" }) } });
+    await userEvent.click(screen.getByRole("button", { name: /保存文档|Save document/ }));
+
+    expect(invoke).toHaveBeenCalledWith("dbx_assess_production_target", {
+      request: { connectionId: "mongo", database: "app" },
+    });
+    expect(confirm).toHaveBeenCalledWith(
+      expect.stringContaining('Update document "1" in collection "users".'),
+      expect.objectContaining({
+        title: "Confirm production operation",
+        okLabel: "Save document",
+      }),
+    );
+    expect(invoke).not.toHaveBeenCalledWith("dbx_mongo_update_document", expect.anything());
   });
 
   it("refreshes and selects the inserted Mongo document", async () => {
@@ -400,6 +452,7 @@ describe("MongoBrowser", () => {
       database: "app",
       collection: "users",
       filter: "{}",
+      projection: "{}",
       sort: "{}",
       skip: 0,
       limit: 100,
@@ -654,6 +707,7 @@ describe("MongoBrowser", () => {
       database: "app",
       collection: "users",
       filter: "{}",
+      projection: "{}",
       sort: '{"name":1}',
       skip: 0,
       limit: 100,
@@ -668,6 +722,7 @@ describe("MongoBrowser", () => {
       database: "app",
       collection: "users",
       filter: "{}",
+      projection: "{}",
       sort: '{"name":-1}',
       skip: 0,
       limit: 100,
@@ -708,6 +763,7 @@ describe("MongoBrowser", () => {
       database: "app",
       collection: "users",
       filter: "{}",
+      projection: "{}",
       sort: "{}",
       skip: 1,
       limit: 100,
@@ -749,6 +805,7 @@ describe("MongoBrowser", () => {
       database: "app",
       collection: "users",
       filter: "{}",
+      projection: "{}",
       sort: "{}",
       skip: 100,
       limit: 100,
@@ -796,6 +853,7 @@ describe("MongoBrowser", () => {
       database: "app",
       collection: "users",
       filter: "{}",
+      projection: "{}",
       sort: "{}",
       skip: 0,
       limit: 50,
@@ -809,6 +867,7 @@ describe("MongoBrowser", () => {
       database: "app",
       collection: "users",
       filter: "{}",
+      projection: "{}",
       sort: "{}",
       skip: 50,
       limit: 50,
@@ -841,6 +900,41 @@ describe("MongoBrowser", () => {
       database: "app",
       collection: "users",
       filter: '{"active":true}',
+      projection: "{}",
+      sort: "{}",
+      skip: 0,
+      limit: 100,
+    });
+  });
+
+  it("applies Mongo document projection with Enter", async () => {
+    vi.mocked(invoke).mockImplementation((command) => {
+      if (command === "dbx_mongo_list_databases") return Promise.resolve(["app"]);
+      if (command === "dbx_mongo_list_collections") return Promise.resolve(["users"]);
+      if (command === "dbx_mongo_find_documents") {
+        return Promise.resolve({ documents: [{ _id: "1", name: "Ada" }], total: 1 });
+      }
+      return Promise.resolve(undefined);
+    });
+
+    render(
+      <I18nProvider>
+        <MongoBrowser connectionId="mongo" readOnly={false} />
+      </I18nProvider>,
+    );
+
+    await userEvent.click(await screen.findByText("app"));
+    await userEvent.click(await screen.findByText("users"));
+    const projectionInput = screen.getByLabelText(/Projection JSON|投影 JSON/);
+    fireEvent.change(projectionInput, { target: { value: '{"name":1}' } });
+    fireEvent.keyDown(projectionInput, { key: "Enter", code: "Enter" });
+
+    expect(invoke).toHaveBeenCalledWith("dbx_mongo_find_documents", {
+      connectionId: "mongo",
+      database: "app",
+      collection: "users",
+      filter: "{}",
+      projection: '{"name":1}',
       sort: "{}",
       skip: 0,
       limit: 100,
@@ -889,6 +983,7 @@ describe("MongoBrowser", () => {
       database: "app",
       collection: "users",
       filter: '{"$and":[{"active":true},{"name":{"$regex":"ada","$options":"i"}}]}',
+      projection: "{}",
       sort: "{}",
       skip: 0,
       limit: 100,
@@ -925,6 +1020,7 @@ describe("MongoBrowser", () => {
       database: "app",
       collection: "users",
       filter: "{}",
+      projection: "{}",
       sort: "{}",
       skip: 0,
       limit: 100,

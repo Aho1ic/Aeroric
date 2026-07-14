@@ -766,6 +766,7 @@ checksum = "b1a9acfeb1555aa8def91fe8ff208aadaea850c109968ec35ac965edbe7d210b"
 dependencies = [
  "atoi_simd",
  "byteorder",
+ "chrono",
  "codepage",
  "encoding_rs",
  "fast-float2",
@@ -1498,6 +1499,7 @@ dependencies = [
  "pageant",
  "percent-encoding",
  "portpicker",
+ "quick-xml 0.37.5",
  "rayon",
  "redis",
  "regex",

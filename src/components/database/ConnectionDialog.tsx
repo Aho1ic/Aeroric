@@ -30,6 +30,7 @@ import {
   dbxConfigRecord,
   dbxNumberString,
   dbxString,
+  dbxStringList,
   profileForDbxConnection,
   transportLayerDraftFromPayload,
   type ConnectionDraft,
@@ -126,6 +127,13 @@ export function ConnectionDialog({
   const [showTransportPassphrase, setShowTransportPassphrase] = useState(false);
   const [draftFilePath, setDraftFilePath] = useState("");
   const [draftReadOnly, setDraftReadOnly] = useState(false);
+  const [draftInitScript, setDraftInitScript] = useState("");
+  const [draftAgentJavaOptions, setDraftAgentJavaOptions] = useState("");
+  const [draftProductionProtectionEnabled, setDraftProductionProtectionEnabled] = useState(false);
+  const [draftProductionScope, setDraftProductionScope] = useState<"connection" | "databases">(
+    "connection",
+  );
+  const [draftProductionDatabases, setDraftProductionDatabases] = useState("");
   const [draftUrlParams, setDraftUrlParams] = useState("");
   const [draftConnectionString, setDraftConnectionString] = useState("");
   const [draftConnectTimeoutSecs, setDraftConnectTimeoutSecs] = useState("5");
@@ -216,6 +224,11 @@ export function ConnectionDialog({
       setShowTransportPassphrase(false);
       setDraftFilePath("");
       setDraftReadOnly(false);
+      setDraftInitScript("");
+      setDraftAgentJavaOptions("");
+      setDraftProductionProtectionEnabled(false);
+      setDraftProductionScope("connection");
+      setDraftProductionDatabases("");
       setDraftUrlParams("");
       setDraftConnectionString("");
       setDraftConnectTimeoutSecs("5");
@@ -250,6 +263,8 @@ export function ConnectionDialog({
           transportLayerDraftFromPayload(layer, index + 1),
         )
       : [];
+    const productionDatabases = dbxStringList(config, "production_databases");
+    const isProduction = dbxBoolean(config, "is_production");
     setSelectedProfileKey(profile.key);
     setWizardStep("config");
     setConfigTab("connection");
@@ -263,6 +278,15 @@ export function ConnectionDialog({
     setDraftPassword(dbxString(config, "password"));
     setDraftFilePath(profile.localFile ? dbxString(config, "host") : "");
     setDraftReadOnly(dbxBoolean(config, "read_only", connection.readOnly));
+    setDraftInitScript(dbxString(config, "init_script"));
+    setDraftAgentJavaOptions(dbxStringList(config, "agent_java_options").join("\n"));
+    setDraftProductionProtectionEnabled(isProduction || productionDatabases.length > 0);
+    setDraftProductionScope(
+      isProduction || profile.localFile || productionDatabases.length === 0
+        ? "connection"
+        : "databases",
+    );
+    setDraftProductionDatabases(productionDatabases.join("\n"));
     setDraftUrlParams(dbxString(config, "url_params"));
     setDraftConnectionString(dbxString(config, "connection_string"));
     setDraftConnectTimeoutSecs(dbxNumberString(config, "connect_timeout_secs", "5"));
@@ -299,11 +323,19 @@ export function ConnectionDialog({
       setDraftTlsMode("");
     }
     if (connection.dbType === "oracle") {
-      const oracleConfig = config as { oracle_connection_type?: string; oracle_sysdba?: boolean };
+      const oracleConfig = config as {
+        oracle_connection_type?: string;
+        sysdba?: boolean;
+        oracle_sysdba?: boolean;
+      };
       setDraftOracleConnectionType(
         oracleConfig.oracle_connection_type === "sid" ? "sid" : "service_name",
       );
-      setDraftOracleSysdba(Boolean(oracleConfig.oracle_sysdba));
+      setDraftOracleSysdba(
+        typeof oracleConfig.sysdba === "boolean"
+          ? oracleConfig.sysdba
+          : Boolean(oracleConfig.oracle_sysdba),
+      );
     } else {
       setDraftOracleConnectionType("service_name");
       setDraftOracleSysdba(false);
@@ -435,6 +467,17 @@ export function ConnectionDialog({
       password: draftPassword,
       filePath: draftFilePath,
       readOnly: draftReadOnly,
+      initScript: draftInitScript,
+      agentJavaOptions: draftAgentJavaOptions,
+      isProduction:
+        draftProductionProtectionEnabled &&
+        (draftProductionScope === "connection" || Boolean(selectedProfile.localFile)),
+      productionDatabases:
+        draftProductionProtectionEnabled &&
+        draftProductionScope === "databases" &&
+        !selectedProfile.localFile
+          ? draftProductionDatabases
+          : "",
       urlParams: draftUrlParams,
       connectionString: draftConnectionString,
       connectTimeoutSecs: draftConnectTimeoutSecs,
@@ -478,10 +521,15 @@ export function ConnectionDialog({
     draftFilePath,
     draftHost,
     draftIdleTimeoutSecs,
+    draftInitScript,
     draftKeepaliveIntervalSecs,
     draftName,
+    draftAgentJavaOptions,
     draftPassword,
     draftPort,
+    draftProductionDatabases,
+    draftProductionProtectionEnabled,
+    draftProductionScope,
     draftQueryTimeoutSecs,
     draftReadOnly,
     draftTransportLayers,
@@ -1499,6 +1547,89 @@ export function ConnectionDialog({
                     />
                     <span>{t("database.openReadOnly")}</span>
                   </label>
+                  <div
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "space-between",
+                      gap: 12,
+                      paddingTop: 10,
+                      borderTop: "1px solid var(--border-dim)",
+                    }}
+                  >
+                    <span style={{ ...s.databaseDialogLabel, color: "var(--danger)" }}>
+                      {t("database.productionProtection")}
+                    </span>
+                    <label style={s.databaseSwitchRow}>
+                      <input
+                        type="checkbox"
+                        checked={draftProductionProtectionEnabled}
+                        onChange={(event) => {
+                          const enabled = event.target.checked;
+                          setDraftProductionProtectionEnabled(enabled);
+                          if (enabled && selectedProfile.localFile) {
+                            setDraftProductionScope("connection");
+                          }
+                        }}
+                      />
+                      <span>{t("database.productionProtectionEnable")}</span>
+                    </label>
+                  </div>
+                  {draftProductionProtectionEnabled && (
+                    <>
+                      <div style={s.databaseDialogField}>
+                        <span style={s.databaseDialogLabel}>{t("database.productionScope")}</span>
+                        <DbxButtonGroup
+                          style={{ ...s.databaseTypeViewToggle, alignSelf: "flex-start" }}
+                          aria-label={t("database.productionScope")}
+                        >
+                          <DbxSegmentedButton
+                            active={draftProductionScope === "connection"}
+                            onClick={() => setDraftProductionScope("connection")}
+                          >
+                            {t("database.productionScopeConnection")}
+                          </DbxSegmentedButton>
+                          <DbxSegmentedButton
+                            active={draftProductionScope === "databases"}
+                            disabled={Boolean(selectedProfile.localFile)}
+                            title={
+                              selectedProfile.localFile
+                                ? t("database.productionSingleDatabaseHint")
+                                : undefined
+                            }
+                            onClick={() => setDraftProductionScope("databases")}
+                          >
+                            {t("database.productionScopeDatabases")}
+                          </DbxSegmentedButton>
+                        </DbxButtonGroup>
+                        <span style={s.databaseDialogHint}>
+                          {draftProductionScope === "connection"
+                            ? t("database.productionConnectionHint")
+                            : t("database.productionDatabasesHint")}
+                        </span>
+                      </div>
+                      {draftProductionScope === "databases" && !selectedProfile.localFile && (
+                        <label style={s.databaseDialogField}>
+                          <span style={s.databaseDialogLabel}>
+                            {t("database.productionDatabases")}
+                          </span>
+                          <textarea
+                            style={{
+                              ...s.databaseDialogInput,
+                              minHeight: 72,
+                              height: "auto",
+                              padding: 8,
+                              lineHeight: 1.45,
+                              resize: "vertical",
+                            }}
+                            value={draftProductionDatabases}
+                            onChange={(event) => setDraftProductionDatabases(event.target.value)}
+                            placeholder={t("database.productionDatabasesPlaceholder")}
+                          />
+                        </label>
+                      )}
+                    </>
+                  )}
                   <label style={s.databaseDialogField}>
                     <span style={s.databaseDialogLabel}>{t("database.connectTimeoutSecs")}</span>
                     <input
@@ -1554,6 +1685,48 @@ export function ConnectionDialog({
                       onChange={(event) => setDraftKeepaliveIntervalSecs(event.target.value)}
                     />
                   </label>
+                  {selectedProfile.key === "duckdb" && (
+                    <label style={s.databaseDialogField}>
+                      <span style={s.databaseDialogLabel}>{t("database.initScript")}</span>
+                      <textarea
+                        style={{
+                          ...s.databaseDialogInput,
+                          minHeight: 84,
+                          height: "auto",
+                          padding: 8,
+                          lineHeight: 1.45,
+                          resize: "vertical",
+                          fontFamily: "var(--font-mono)",
+                        }}
+                        value={draftInitScript}
+                        onChange={(event) => setDraftInitScript(event.target.value)}
+                        placeholder={t("database.initScriptPlaceholder")}
+                        spellCheck={false}
+                      />
+                      <span style={s.databaseDialogHint}>{t("database.initScriptHint")}</span>
+                    </label>
+                  )}
+                  {selectedProfile.key === "oracle" && (
+                    <label style={s.databaseDialogField}>
+                      <span style={s.databaseDialogLabel}>{t("database.agentJavaOptions")}</span>
+                      <textarea
+                        style={{
+                          ...s.databaseDialogInput,
+                          minHeight: 72,
+                          height: "auto",
+                          padding: 8,
+                          lineHeight: 1.45,
+                          resize: "vertical",
+                          fontFamily: "var(--font-mono)",
+                        }}
+                        value={draftAgentJavaOptions}
+                        onChange={(event) => setDraftAgentJavaOptions(event.target.value)}
+                        placeholder={t("database.agentJavaOptionsPlaceholder")}
+                        spellCheck={false}
+                      />
+                      <span style={s.databaseDialogHint}>{t("database.agentJavaOptionsHint")}</span>
+                    </label>
+                  )}
                   <div style={s.databaseDialogHint}>{t("database.advancedHint")}</div>
                 </div>
               )}

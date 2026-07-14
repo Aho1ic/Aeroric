@@ -234,6 +234,55 @@ describe("RedisBrowser", () => {
     expect(await screen.findByText(/Ada/)).toBeInTheDocument();
   });
 
+  it("does not create a Redis key when production confirmation is cancelled", async () => {
+    vi.mocked(confirm).mockResolvedValue(false);
+    vi.mocked(invoke).mockImplementation((command) => {
+      if (command === "dbx_redis_list_databases") return Promise.resolve([{ db: 0, keys: 0 }]);
+      if (command === "dbx_redis_scan_keys") {
+        return Promise.resolve({ cursor: 0, total_keys: 0, keys: [] });
+      }
+      if (command === "dbx_assess_production_target") {
+        return Promise.resolve({ requiresConfirmation: true, productionDatabases: ["db0"] });
+      }
+      return Promise.resolve(undefined);
+    });
+
+    render(
+      <I18nProvider>
+        <RedisBrowser
+          connectionId="redis"
+          connection={{
+            id: "redis",
+            name: "Production Redis",
+            dbType: "redis",
+            readOnly: false,
+            createdAt: 1,
+            dbx: { production_databases: ["db0"] },
+          }}
+          readOnly={false}
+        />
+      </I18nProvider>,
+    );
+
+    await screen.findByText("db0");
+    await userEvent.click(screen.getByRole("button", { name: /新建键|Create key/ }));
+    await userEvent.type(screen.getByLabelText(/Redis key name/i), "user:1");
+    await userEvent.type(screen.getByLabelText(/Redis create value/i), "Ada");
+    await userEvent.click(screen.getByRole("button", { name: /保存键|Save key/ }));
+
+    expect(invoke).toHaveBeenCalledWith("dbx_assess_production_target", {
+      request: { connectionId: "redis", database: "db0" },
+    });
+    expect(confirm).toHaveBeenCalledWith(
+      expect.stringContaining('Create key for Redis key "user:1" in db0.'),
+      expect.objectContaining({
+        title: "Confirm production operation",
+        okLabel: "Save key",
+      }),
+    );
+    expect(invoke).not.toHaveBeenCalledWith("dbx_redis_create_key", expect.anything());
+  });
+
   it("blocks unsafe Redis commands before invoking Tauri", async () => {
     vi.mocked(invoke).mockImplementation((command) => {
       if (command === "dbx_redis_list_databases") return Promise.resolve([{ db: 0, keys: 0 }]);
@@ -1702,16 +1751,12 @@ describe("RedisBrowser", () => {
           keyType: "hash",
           cursor: 12,
           count: 200,
+          filter: null,
         });
         return Promise.resolve({
-          key_display: "profile:1",
-          key_raw: "profile:1",
-          key_type: "hash",
-          ttl: -1,
-          value_is_binary: false,
-          total: null,
+          kind: "hash",
           scan_cursor: null,
-          value: [
+          items: [
             { field: "role", value: "admin" },
             { field: "city", value: "Paris" },
           ],
@@ -1741,6 +1786,83 @@ describe("RedisBrowser", () => {
     expect(screen.getByText("admin")).toBeInTheDocument();
     expect(screen.getByText("city")).toBeInTheDocument();
     expect(screen.getByText("Paris")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Load more|加载更多/ })).not.toBeInTheDocument();
+  });
+
+  it("searches and paginates Redis hash fields with the DBX member filter", async () => {
+    let filteredPage = 0;
+    vi.mocked(invoke).mockImplementation((command, args) => {
+      if (command === "dbx_redis_list_databases") return Promise.resolve([{ db: 0, keys: 1 }]);
+      if (command === "dbx_redis_scan_keys") {
+        return Promise.resolve({
+          cursor: 0,
+          total_keys: 1,
+          keys: [
+            {
+              key_display: "profile:1",
+              key_raw: "profile:1",
+              key_type: "hash",
+              ttl: -1,
+              size: 3,
+              value_preview: "name=Ada",
+            },
+          ],
+        });
+      }
+      if (command === "dbx_redis_get_value") {
+        return Promise.resolve({
+          key_display: "profile:1",
+          key_raw: "profile:1",
+          key_type: "hash",
+          ttl: -1,
+          value_is_binary: false,
+          total: 3,
+          scan_cursor: 12,
+          value: [{ field: "name", value: "Ada" }],
+        });
+      }
+      if (command === "dbx_redis_load_more") {
+        const request = args as { cursor?: number; filter?: string | null };
+        expect(request.filter).toBe("role");
+        if (request.cursor === 0) {
+          filteredPage += 1;
+          return Promise.resolve({
+            kind: "hash",
+            scan_cursor: 24,
+            items: [{ field: "role", value: "admin" }],
+          });
+        }
+        expect(request.cursor).toBe(24);
+        return Promise.resolve({
+          kind: "hash",
+          scan_cursor: null,
+          items: [{ field: "role_backup", value: "reader" }],
+        });
+      }
+      return Promise.resolve(undefined);
+    });
+
+    render(
+      <I18nProvider>
+        <RedisBrowser connectionId="redis" readOnly={false} />
+      </I18nProvider>,
+    );
+
+    await userEvent.click(await screen.findByRole("button", { name: /^profile/i }));
+    await userEvent.click(screen.getByRole("button", { name: /profile:1 hash/i }));
+
+    const searchInput = screen.getByLabelText(/Search hash fields|搜索 Hash 字段/);
+    await userEvent.type(searchInput, "role");
+    fireEvent.keyDown(searchInput, { key: "Enter", code: "Enter" });
+
+    expect(await screen.findByText("admin")).toBeInTheDocument();
+    expect(screen.queryByText("name")).not.toBeInTheDocument();
+    expect(filteredPage).toBe(1);
+
+    await userEvent.click(screen.getByRole("button", { name: /^Load more$|^加载更多$/ }));
+
+    expect(await screen.findByText("role_backup")).toBeInTheDocument();
+    expect(screen.getByText("reader")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Load more|加载更多/ })).not.toBeInTheDocument();
   });
 

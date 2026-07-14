@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { RedisValue } from "../types";
+import { mergeRedisValuePage } from "../hooks/useRedisBrowser";
 import {
   clampRedisHashFieldWidth,
   clampRedisZsetScoreWidth,
@@ -27,6 +28,29 @@ function value(keyType: string, data: unknown, overrides: Partial<RedisValue> = 
 }
 
 describe("redisBrowserState", () => {
+  it("merges typed collection pages without replacing first-page metadata", () => {
+    const current = value("hash", [{ field: "name", value: "Ada" }], {
+      ttl: 60,
+      total: 2,
+      scan_cursor: 12,
+    });
+
+    expect(
+      mergeRedisValuePage(current, {
+        kind: "hash",
+        items: [{ field: "role", value: "admin" }],
+        scan_cursor: null,
+      }),
+    ).toEqual({
+      ...current,
+      value: [
+        { field: "name", value: "Ada" },
+        { field: "role", value: "admin" },
+      ],
+      scan_cursor: null,
+    });
+  });
+
   it("formats, parses, and expands JSON values", () => {
     expect(redisJsonText('{"enabled":true}', true)).toBe('{\n  "enabled": true\n}');
     expect(redisJsonText("{bad", true)).toBeNull();

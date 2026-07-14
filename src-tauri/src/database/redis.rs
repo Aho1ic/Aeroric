@@ -1,7 +1,10 @@
+use base64::Engine as _;
 use dbx_core::db::redis_driver::{
-    RedisCommandResult, RedisCommandSafety, RedisDatabaseInfo, RedisScanResult, RedisValue,
+    RedisBlob, RedisBlobEncoding, RedisCollectionPage, RedisCommandResult, RedisCommandSafety,
+    RedisDatabaseInfo, RedisScanResult, RedisValue, RedisValueData,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
 use tauri::State;
 
 use super::connections;
@@ -57,6 +60,216 @@ fn non_empty(value: Option<String>) -> Option<String> {
     })
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct AeroricRedisValue {
+    key_display: String,
+    key_raw: String,
+    key_type: String,
+    ttl: i64,
+    value_is_binary: bool,
+    value: Value,
+    total: Option<u64>,
+    scan_cursor: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub(crate) enum AeroricRedisCollectionPage {
+    List {
+        items: Vec<Value>,
+        scan_cursor: Option<u64>,
+    },
+    Set {
+        items: Vec<Value>,
+        scan_cursor: Option<u64>,
+    },
+    Hash {
+        items: Vec<Value>,
+        scan_cursor: Option<u64>,
+    },
+    Zset {
+        items: Vec<Value>,
+        scan_cursor: Option<u64>,
+    },
+}
+
+fn redis_blob_bytes(blob: &RedisBlob) -> Vec<u8> {
+    base64::engine::general_purpose::STANDARD
+        .decode(&blob.raw_base64)
+        .unwrap_or_default()
+}
+
+fn redis_blob_display(blob: &RedisBlob) -> String {
+    let bytes = redis_blob_bytes(blob);
+    if let Ok(text) = std::str::from_utf8(&bytes) {
+        return text.replace('\\', "\\\\");
+    }
+    let mut output = String::new();
+    for byte in bytes {
+        match byte {
+            b'\\' => output.push_str("\\\\"),
+            0x20..=0x7e => output.push(byte as char),
+            _ => output.push_str(&format!("\\x{byte:02x}")),
+        }
+    }
+    output
+}
+
+fn redis_blob_value(blob: &RedisBlob) -> Value {
+    Value::String(redis_blob_display(blob))
+}
+
+fn redis_blob_is_binary(blob: &RedisBlob) -> bool {
+    matches!(blob.encoding, RedisBlobEncoding::Binary)
+}
+
+fn redis_list_items(items: Vec<dbx_core::db::redis_driver::RedisListItem>) -> Vec<Value> {
+    items
+        .into_iter()
+        .map(|item| redis_blob_value(&item.value))
+        .collect()
+}
+
+fn redis_set_items(items: Vec<dbx_core::db::redis_driver::RedisSetItem>) -> Vec<Value> {
+    items
+        .into_iter()
+        .map(|item| redis_blob_value(&item.member))
+        .collect()
+}
+
+fn redis_hash_items(items: Vec<dbx_core::db::redis_driver::RedisHashItem>) -> Vec<Value> {
+    items
+        .into_iter()
+        .map(|item| {
+            json!({
+                "field": redis_blob_display(&item.field),
+                "value": redis_blob_display(&item.value),
+            })
+        })
+        .collect()
+}
+
+fn redis_zset_items(items: Vec<dbx_core::db::redis_driver::RedisZsetItem>) -> Vec<Value> {
+    items
+        .into_iter()
+        .map(|item| {
+            json!({
+                "score": item.score,
+                "member": redis_blob_display(&item.member),
+            })
+        })
+        .collect()
+}
+
+fn adapt_redis_value(value: RedisValue) -> AeroricRedisValue {
+    let RedisValue {
+        key_display,
+        key_raw,
+        ttl,
+        redis_type,
+        data,
+    } = value;
+    let (value, value_is_binary, total, scan_cursor) = match data {
+        RedisValueData::String { content } => (
+            redis_blob_value(&content),
+            redis_blob_is_binary(&content),
+            None,
+            None,
+        ),
+        RedisValueData::Json { value } => (value, false, None, None),
+        RedisValueData::List {
+            items,
+            total,
+            scan_cursor,
+        } => (
+            Value::Array(redis_list_items(items)),
+            false,
+            Some(total),
+            scan_cursor,
+        ),
+        RedisValueData::Set {
+            items,
+            total,
+            scan_cursor,
+        } => (
+            Value::Array(redis_set_items(items)),
+            false,
+            Some(total),
+            scan_cursor,
+        ),
+        RedisValueData::Hash {
+            items,
+            total,
+            scan_cursor,
+        } => (
+            Value::Array(redis_hash_items(items)),
+            false,
+            Some(total),
+            scan_cursor,
+        ),
+        RedisValueData::Zset {
+            items,
+            total,
+            scan_cursor,
+        } => (
+            Value::Array(redis_zset_items(items)),
+            false,
+            Some(total),
+            scan_cursor,
+        ),
+        RedisValueData::Stream { entries } => (
+            Value::Array(
+                entries
+                    .into_iter()
+                    .map(|entry| {
+                        let fields = entry
+                            .fields
+                            .into_iter()
+                            .map(|field| (field.field, Value::String(field.value)))
+                            .collect::<serde_json::Map<_, _>>();
+                        json!({ "id": entry.id, "fields": fields })
+                    })
+                    .collect(),
+            ),
+            false,
+            None,
+            None,
+        ),
+        RedisValueData::Unknown => (Value::Null, false, None, None),
+    };
+    AeroricRedisValue {
+        key_display,
+        key_raw,
+        key_type: redis_type,
+        ttl,
+        value_is_binary,
+        value,
+        total,
+        scan_cursor,
+    }
+}
+
+fn adapt_redis_collection_page(page: RedisCollectionPage) -> AeroricRedisCollectionPage {
+    match page {
+        RedisCollectionPage::List { items, scan_cursor } => AeroricRedisCollectionPage::List {
+            items: redis_list_items(items),
+            scan_cursor,
+        },
+        RedisCollectionPage::Set { items, scan_cursor } => AeroricRedisCollectionPage::Set {
+            items: redis_set_items(items),
+            scan_cursor,
+        },
+        RedisCollectionPage::Hash { items, scan_cursor } => AeroricRedisCollectionPage::Hash {
+            items: redis_hash_items(items),
+            scan_cursor,
+        },
+        RedisCollectionPage::Zset { items, scan_cursor } => AeroricRedisCollectionPage::Zset {
+            items: redis_zset_items(items),
+            scan_cursor,
+        },
+    }
+}
+
 #[tauri::command]
 pub async fn dbx_redis_list_databases(
     state: State<'_, DbxState>,
@@ -94,10 +307,11 @@ pub async fn dbx_redis_get_value(
     connection_id: String,
     db: u32,
     key_raw: String,
-) -> Result<RedisValue, String> {
+) -> Result<AeroricRedisValue, String> {
     connections::ensure_connected(&state, &connection_id).await?;
     dbx_core::redis_ops::redis_get_value_in_db_core(&state.app_state, &connection_id, db, &key_raw)
         .await
+        .map(adapt_redis_value)
 }
 
 #[tauri::command]
@@ -109,7 +323,8 @@ pub async fn dbx_redis_load_more(
     key_type: String,
     cursor: u64,
     count: Option<usize>,
-) -> Result<RedisValue, String> {
+    filter: Option<String>,
+) -> Result<AeroricRedisCollectionPage, String> {
     connections::ensure_connected(&state, &connection_id).await?;
     dbx_core::redis_ops::redis_load_more_in_db_core(
         &state.app_state,
@@ -119,8 +334,10 @@ pub async fn dbx_redis_load_more(
         &key_type,
         cursor,
         normalize_count(count),
+        filter.as_deref(),
     )
     .await
+    .map(adapt_redis_collection_page)
 }
 
 #[tauri::command]
@@ -494,7 +711,23 @@ pub async fn dbx_redis_execute_command(
 
 #[cfg(test)]
 mod tests {
-    use super::{non_empty, normalize_count, normalize_key_type, normalize_pattern};
+    use super::{
+        adapt_redis_collection_page, adapt_redis_value, non_empty, normalize_count,
+        normalize_key_type, normalize_pattern, AeroricRedisCollectionPage,
+    };
+    use base64::Engine as _;
+    use dbx_core::db::redis_driver::{
+        RedisBlob, RedisBlobEncoding, RedisCollectionPage, RedisHashItem, RedisValue,
+        RedisValueData,
+    };
+    use serde_json::json;
+
+    fn blob(bytes: &[u8], encoding: RedisBlobEncoding) -> RedisBlob {
+        RedisBlob {
+            raw_base64: base64::engine::general_purpose::STANDARD.encode(bytes),
+            encoding,
+        }
+    }
 
     #[test]
     fn redis_scan_defaults_are_bounded() {
@@ -522,5 +755,60 @@ mod tests {
         );
         assert_eq!(non_empty(Some("   ".to_string())), None);
         assert_eq!(non_empty(None), None);
+    }
+
+    #[test]
+    fn adapts_new_redis_value_shape_to_the_existing_frontend_contract() {
+        let value = adapt_redis_value(RedisValue {
+            key_display: "path".to_string(),
+            key_raw: "cGF0aA==".to_string(),
+            ttl: 60,
+            redis_type: "string".to_string(),
+            data: RedisValueData::String {
+                content: blob(br"C:\tmp", RedisBlobEncoding::Utf8),
+            },
+        });
+
+        assert_eq!(value.key_type, "string");
+        assert_eq!(value.ttl, 60);
+        assert!(!value.value_is_binary);
+        assert_eq!(value.value, json!(r"C:\\tmp"));
+        assert_eq!(value.total, None);
+        assert_eq!(value.scan_cursor, None);
+    }
+
+    #[test]
+    fn marks_binary_string_values_and_escapes_non_utf8_bytes() {
+        let value = adapt_redis_value(RedisValue {
+            key_display: "binary".to_string(),
+            key_raw: "YmluYXJ5".to_string(),
+            ttl: -1,
+            redis_type: "string".to_string(),
+            data: RedisValueData::String {
+                content: blob(&[0xff, b'\\'], RedisBlobEncoding::Binary),
+            },
+        });
+
+        assert!(value.value_is_binary);
+        assert_eq!(value.value, json!("\\xff\\\\"));
+    }
+
+    #[test]
+    fn adapts_typed_hash_pages_without_fabricating_key_metadata() {
+        let page = adapt_redis_collection_page(RedisCollectionPage::Hash {
+            items: vec![RedisHashItem {
+                field: blob(b"role", RedisBlobEncoding::Utf8),
+                value: blob(b"admin", RedisBlobEncoding::Utf8),
+            }],
+            scan_cursor: Some(42),
+        });
+
+        match page {
+            AeroricRedisCollectionPage::Hash { items, scan_cursor } => {
+                assert_eq!(items, vec![json!({ "field": "role", "value": "admin" })]);
+                assert_eq!(scan_cursor, Some(42));
+            }
+            other => panic!("expected hash page, got {other:?}"),
+        }
     }
 }

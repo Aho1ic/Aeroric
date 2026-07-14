@@ -4,6 +4,7 @@ import type {
   RedisDatabaseInfo,
   RedisCommandRequest,
   RedisCreateKeyRequest,
+  RedisCollectionPage,
   RedisHashFieldRequest,
   RedisHashSetRequest,
   RedisKeyInfo,
@@ -21,15 +22,20 @@ import type {
   RedisZaddRequest,
 } from "../types/database";
 
-function mergeRedisValuePage(current: RedisValue, page: RedisValue): RedisValue {
+export function mergeRedisValuePage(current: RedisValue, page: RedisCollectionPage): RedisValue {
   const currentItems = Array.isArray(current.value) ? current.value : [];
-  const pageItems = Array.isArray(page.value) ? page.value : [];
   return {
     ...current,
-    value: [...currentItems, ...pageItems],
-    total: current.total ?? page.total ?? null,
+    value: [...currentItems, ...page.items],
     scan_cursor: page.scan_cursor ?? null,
-    value_is_binary: current.value_is_binary || page.value_is_binary,
+  };
+}
+
+export function replaceRedisValuePage(current: RedisValue, page: RedisCollectionPage): RedisValue {
+  return {
+    ...current,
+    value: page.items,
+    scan_cursor: page.scan_cursor ?? null,
   };
 }
 
@@ -43,10 +49,12 @@ export function useRedisBrowser(connectionId: string | null) {
   const [error, setError] = useState<string | null>(null);
   const requestGeneration = useRef(0);
   const scanGeneration = useRef(0);
+  const valuePageGeneration = useRef(0);
 
   const resetBrowserState = useCallback(() => {
     requestGeneration.current += 1;
     scanGeneration.current += 1;
+    valuePageGeneration.current += 1;
     setDatabases([]);
     setKeys([]);
     setCursor(0);
@@ -118,6 +126,7 @@ export function useRedisBrowser(connectionId: string | null) {
   const loadValue = useCallback(
     async (db: number, keyRaw: string) => {
       const generation = requestGeneration.current;
+      const pageGeneration = ++valuePageGeneration.current;
       setLoading(true);
       setError(null);
       try {
@@ -126,21 +135,37 @@ export function useRedisBrowser(connectionId: string | null) {
           db,
           keyRaw,
         });
-        if (requestGeneration.current === generation) setSelectedValue(value);
+        if (
+          requestGeneration.current === generation &&
+          valuePageGeneration.current === pageGeneration
+        )
+          setSelectedValue(value);
         return value;
       } catch (err) {
-        if (requestGeneration.current === generation) setError(String(err));
+        if (
+          requestGeneration.current === generation &&
+          valuePageGeneration.current === pageGeneration
+        )
+          setError(String(err));
         throw err;
       } finally {
-        if (requestGeneration.current === generation) setLoading(false);
+        if (
+          requestGeneration.current === generation &&
+          valuePageGeneration.current === pageGeneration
+        )
+          setLoading(false);
       }
     },
     [requireConnection],
   );
 
   const loadMoreValue = useCallback(
-    async (request: Omit<RedisLoadMoreRequest, "connectionId">) => {
+    async (
+      request: Omit<RedisLoadMoreRequest, "connectionId">,
+      options: { replace?: boolean } = {},
+    ) => {
       const generation = requestGeneration.current;
+      const pageGeneration = ++valuePageGeneration.current;
       setLoading(true);
       setError(null);
       try {
@@ -148,18 +173,31 @@ export function useRedisBrowser(connectionId: string | null) {
           ...request,
           connectionId: requireConnection(),
         });
-        if (requestGeneration.current === generation) {
+        if (
+          requestGeneration.current === generation &&
+          valuePageGeneration.current === pageGeneration
+        ) {
           setSelectedValue((current) => {
             if (!current || current.key_raw !== request.keyRaw) return current;
-            return mergeRedisValuePage(current, value);
+            return options.replace
+              ? replaceRedisValuePage(current, value)
+              : mergeRedisValuePage(current, value);
           });
         }
         return value;
       } catch (err) {
-        if (requestGeneration.current === generation) setError(String(err));
+        if (
+          requestGeneration.current === generation &&
+          valuePageGeneration.current === pageGeneration
+        )
+          setError(String(err));
         throw err;
       } finally {
-        if (requestGeneration.current === generation) setLoading(false);
+        if (
+          requestGeneration.current === generation &&
+          valuePageGeneration.current === pageGeneration
+        )
+          setLoading(false);
       }
     },
     [requireConnection],

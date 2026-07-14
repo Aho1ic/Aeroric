@@ -81,6 +81,7 @@ pub async fn dbx_mongo_find_documents(
     skip: Option<u64>,
     limit: Option<i64>,
     filter: Option<String>,
+    projection: Option<String>,
     sort: Option<String>,
     execution_id: Option<String>,
 ) -> Result<MongoDocumentResult, String> {
@@ -97,6 +98,7 @@ pub async fn dbx_mongo_find_documents(
             skip.unwrap_or(0),
             normalize_limit(limit),
             filter.as_deref(),
+            projection.as_deref(),
             sort.as_deref(),
         ),
     )
@@ -131,6 +133,7 @@ pub async fn dbx_mongo_update_document(
     collection: String,
     id: String,
     doc_json: String,
+    routing: Option<String>,
 ) -> Result<u64, String> {
     connections::ensure_connected(&state, &connection_id).await?;
     connections::ensure_writable(&state, &connection_id, "Update").await?;
@@ -141,6 +144,7 @@ pub async fn dbx_mongo_update_document(
         &collection,
         &id,
         &doc_json,
+        routing.as_deref(),
     )
     .await
 }

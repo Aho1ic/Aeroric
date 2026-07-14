@@ -136,6 +136,12 @@ describe("DatabaseView connection management", () => {
     await user.type(screen.getByLabelText("Query timeout seconds"), "45");
     await user.clear(screen.getByLabelText("Idle timeout seconds"));
     await user.type(screen.getByLabelText("Idle timeout seconds"), "120");
+    await user.click(screen.getByLabelText("Enable"));
+    await user.click(screen.getByRole("button", { name: "Selected databases" }));
+    await user.type(
+      screen.getByLabelText("Production databases"),
+      "prod_cache, analytics\nPROD_CACHE",
+    );
     await user.click(screen.getByLabelText("Use keepalive"));
     await user.clear(screen.getByLabelText("Keepalive interval seconds"));
     await user.type(screen.getByLabelText("Keepalive interval seconds"), "45");
@@ -156,6 +162,8 @@ describe("DatabaseView connection management", () => {
             query_timeout_secs: 45,
             idle_timeout_secs: 120,
             keepalive_interval_secs: 45,
+            is_production: false,
+            production_databases: ["prod_cache", "analytics"],
           }),
         }),
       });
@@ -782,6 +790,11 @@ describe("DatabaseView connection management", () => {
     await user.type(screen.getByLabelText("User name"), "reporter");
     await user.clear(screen.getByLabelText("Password"));
     await user.type(screen.getByLabelText("Password"), "secret");
+    await user.click(
+      screen.getByRole("checkbox", {
+        name: "Run multi-statement SQL in a transaction",
+      }),
+    );
     await user.click(screen.getByRole("button", { name: "Create user" }));
 
     await waitFor(() => {
@@ -797,6 +810,7 @@ describe("DatabaseView connection management", () => {
       request: expect.objectContaining({
         connectionId: "dbx-mysql",
         sql: "CREATE USER 'reporter'@'%' IDENTIFIED BY 'secret';",
+        useTransaction: true,
       }),
     });
   });
@@ -1438,6 +1452,10 @@ describe("DatabaseView connection management", () => {
         ssl: true,
         ca_cert_path: "/old/ca.pem",
         visible_databases: ["old_db"],
+        is_production: false,
+        production_databases: ["old_db", "analytics"],
+        init_script: "SET threads = 4;",
+        agent_java_options: ["-Xmx1g"],
       },
     };
     let savedConnection = editableConnection;
@@ -1471,6 +1489,14 @@ describe("DatabaseView connection management", () => {
     expect(within(dialog).getByLabelText("Host")).toHaveValue("db.old.example.com");
     expect(within(dialog).getByLabelText("User")).toHaveValue("old_user");
     expect(within(dialog).getByLabelText("Database")).toHaveValue("old_db");
+    await user.click(within(dialog).getByRole("button", { name: "Advanced" }));
+    expect(within(dialog).getByLabelText("Enable")).toBeChecked();
+    expect(within(dialog).getByRole("button", { name: "Selected databases" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    expect(within(dialog).getByLabelText("Production databases")).toHaveValue("old_db\nanalytics");
+    await user.click(within(dialog).getByRole("button", { name: "Connection info" }));
 
     await user.clear(within(dialog).getByLabelText("Connection name"));
     await user.type(within(dialog).getByLabelText("Connection name"), "Prod PG Updated");
@@ -1497,9 +1523,71 @@ describe("DatabaseView connection management", () => {
             username: "new_user",
             database: "new_db",
             visible_databases: ["old_db"],
+            is_production: false,
+            production_databases: ["old_db", "analytics"],
+            init_script: "SET threads = 4;",
+            agent_java_options: ["-Xmx1g"],
           }),
         }),
       });
+    });
+  });
+
+  it("loads legacy Oracle SYSDBA settings and saves the canonical key", async () => {
+    const user = userEvent.setup();
+    const legacyOracleConnection = {
+      ...dbxConnection,
+      id: "oracle-source",
+      name: "Oracle SYS",
+      dbType: "oracle" as const,
+      dbx: {
+        id: "oracle-source",
+        name: "Oracle SYS",
+        db_type: "oracle",
+        driver_profile: "oracle",
+        driver_label: "Oracle",
+        host: "ora.example.com",
+        port: 1521,
+        username: "sys",
+        password: "",
+        database: "ORCL",
+        oracle_connection_type: "sid",
+        oracle_sysdba: true,
+      },
+    };
+    vi.mocked(invoke).mockImplementation((command) => {
+      if (command === "db_load_connections") return Promise.resolve([]);
+      if (command === "dbx_list_connections") return Promise.resolve([legacyOracleConnection]);
+      if (command === "dbx_save_connection") return Promise.resolve(undefined);
+      return Promise.resolve(undefined);
+    });
+
+    render(
+      React.createElement(
+        I18nProvider,
+        null,
+        React.createElement(DatabaseView, { sshConnections: [connection()] }),
+      ),
+    );
+
+    fireEvent.contextMenu(await screen.findByRole("button", { name: /Oracle SYS/i }));
+    await user.click(screen.getByRole("menuitem", { name: "Edit connection" }));
+
+    const dialog = await screen.findByRole("dialog", { name: "Edit connection" });
+    expect(within(dialog).getByRole("checkbox", { name: "Connect as SYSDBA" })).toBeChecked();
+    await user.click(within(dialog).getByRole("button", { name: "Save" }));
+
+    await waitFor(() => {
+      const saveCall = vi
+        .mocked(invoke)
+        .mock.calls.find(([command]) => command === "dbx_save_connection");
+      const saved = (
+        saveCall?.[1] as {
+          connection?: { dbx?: Record<string, unknown> };
+        }
+      )?.connection?.dbx;
+      expect(saved?.sysdba).toBe(true);
+      expect(saved?.oracle_sysdba).toBeUndefined();
     });
   });
 
