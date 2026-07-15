@@ -2200,6 +2200,21 @@ html:not(.dark) .xterm {
   caret-color: transparent !important;
 }
 
+/* Codex 等 agent 终端的当前光标行浅灰底高亮（类似编辑器的 current-line）。
+ * 覆盖层由 attachCursorLineHighlight 挂到 .xterm-screen 内并跟随光标 Y。
+ * DOM renderer 的文本行是静态定位，本覆盖层 z-index:0 会叠在其上，但 8% 透明度
+ * 不影响可读性；低于 xterm 选区层（z-index:1），也不拦鼠标（pointer-events:none）。 */
+.xterm-screen .aeroric-cursor-line {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 100%;
+  z-index: 0;
+  pointer-events: none;
+  background: color-mix(in srgb, var(--text-primary) 8%, transparent);
+  transition: transform 0.06s linear;
+}
+
 html:not(.dark) .xterm-helper-textarea {
   background: var(--terminal-bg) !important;
 }

@@ -445,11 +445,21 @@ export function attachLinuxIMEFix(
     }
     if (previousText && !nextText) {
       ignoredReplayProgress = "";
-      ignoredPostCompositionCandidates = buildPostCompositionIgnoredCandidates(
-        previousText,
-        previousText,
-      );
-      ignorePostCompositionUntil = performance.now() + CLEARED_COMPOSITION_REPLAY_GUARD_MS;
+      // 候选键正在提交英文候选时，微信输入法会先发一个空的 compositionupdate 清空预编辑，
+      // 再用 compositionend 带回英文单词（例如 plan）。这种“清空”是提交流程的一部分，
+      // 不能把即将回来的英文单词当成 replay 抑制掉——否则按空格/回车/数字选英文候选时
+      // 会什么都打不出来（显示空白）。仅在没有候选键提交进行中时才布防 replay 守卫。
+      const candidateCommitInFlight =
+        deferNextRomanizedCompositionCommit ||
+        candidateKeyCommitTimer !== null ||
+        candidateCommitText !== "";
+      if (!candidateCommitInFlight) {
+        ignoredPostCompositionCandidates = buildPostCompositionIgnoredCandidates(
+          previousText,
+          previousText,
+        );
+        ignorePostCompositionUntil = performance.now() + CLEARED_COMPOSITION_REPLAY_GUARD_MS;
+      }
     }
   };
   const compositionObserver = compositionView
