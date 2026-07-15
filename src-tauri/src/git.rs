@@ -252,7 +252,7 @@ fn run_agent_commit_message_command(
     let launch = crate::app_settings::get_agent_launch_spec(agent);
     let mut cmd = Command::new(&launch.program);
     crate::subprocess::configure_background_command(&mut cmd);
-    if crate::app_settings::is_codex_like_agent(agent) {
+    if launch.codex_like {
         cmd.args(["exec", prompt]);
     } else {
         cmd.args(["-p", prompt, "--output-format", "text"]);

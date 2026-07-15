@@ -72,7 +72,7 @@ async fn run_naming_agent_with_timeout(
 ) -> Result<Output, String> {
     let launch = crate::app_settings::get_agent_launch_spec(agent);
     let login_env: Vec<(String, String)> = crate::app_settings::get_login_shell_env().to_vec();
-    let use_stdin_prompt = crate::app_settings::is_codex_like_agent(agent);
+    let use_stdin_prompt = launch.codex_like;
 
     let mut cmd = tokio::process::Command::new(&launch.program);
     crate::subprocess::configure_background_tokio_command(&mut cmd);

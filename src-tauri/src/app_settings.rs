@@ -168,19 +168,24 @@ impl Default for AppSettings {
 pub struct AgentLaunchSpec {
     pub program: String,
     pub extra_env: Vec<(String, String)>,
+    pub codex_like: bool,
 }
 
-pub fn is_codex_like_agent(agent: &str) -> bool {
+fn configured_agent_is_codex_like(settings: &AppSettings, agent: &str) -> bool {
     match agent {
         "claude" => false,
         "codex" | "claude_gpt55" => true,
-        other => load_settings_internal()
+        other => settings
             .custom_agents
             .iter()
             .find(|profile| profile.id == other)
             .map(|profile| profile.codex_like)
             .unwrap_or(true),
     }
+}
+
+pub fn is_codex_like_agent(agent: &str) -> bool {
+    configured_agent_is_codex_like(&load_settings_internal(), agent)
 }
 
 pub fn is_known_agent(agent: &str) -> bool {
@@ -540,6 +545,7 @@ fn resolve_agent_launch_spec_from_path(agent: &str, path: &str) -> AgentLaunchSp
     AgentLaunchSpec {
         program,
         extra_env: Vec::new(),
+        codex_like: false,
     }
 }
 
@@ -723,6 +729,7 @@ fn resolve_agent_launch_spec_from_path(agent: &str, path: &str) -> AgentLaunchSp
             AgentLaunchSpec {
                 program,
                 extra_env: Vec::new(),
+                codex_like: false,
             }
         }
         "codex" => {
@@ -736,24 +743,57 @@ fn resolve_agent_launch_spec_from_path(agent: &str, path: &str) -> AgentLaunchSp
                 AgentLaunchSpec {
                     program: program.to_string_lossy().into_owned(),
                     extra_env,
+                    codex_like: false,
                 }
             } else {
                 AgentLaunchSpec {
                     program: resolved,
                     extra_env: Vec::new(),
+                    codex_like: false,
                 }
             }
         }
         _ => AgentLaunchSpec {
             program: resolved,
             extra_env: Vec::new(),
+            codex_like: false,
         },
     }
+}
+
+fn inferred_agent_codex_like(program: &str) -> Option<bool> {
+    let file_name = Path::new(program)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .map(str::to_ascii_lowercase);
+    match file_name.as_deref() {
+        Some("codex" | "codex.exe" | "codex.cmd" | "codex.js") => return Some(true),
+        Some("claude" | "claude.exe" | "claude.cmd") => return Some(false),
+        _ => {}
+    }
+
+    if fs::metadata(program).ok()?.len() > 256 * 1024 {
+        return None;
+    }
+    let content = fs::read_to_string(program).ok()?;
+    if content.contains("export CODEX_HOME=")
+        && content.contains("model_catalog_json = \"model-catalog.json\"")
+    {
+        return Some(true);
+    }
+    if content.contains("export CLAUDE_CONFIG_DIR=")
+        && content.contains("CLAUDE_CODE_SESSION_ENV_DIR")
+    {
+        return Some(false);
+    }
+    None
 }
 
 fn get_agent_launch_spec_from_settings(settings: &AppSettings, agent: &str) -> AgentLaunchSpec {
     let mut spec =
         resolve_agent_launch_spec_from_path(agent, &get_agent_configured_path(settings, agent));
+    spec.codex_like = inferred_agent_codex_like(&spec.program)
+        .unwrap_or_else(|| configured_agent_is_codex_like(settings, agent));
     append_agent_credential_env(settings, agent, &mut spec.extra_env);
     append_agent_proxy_env(settings, agent, &mut spec.extra_env);
     spec
@@ -2221,6 +2261,57 @@ mod tests {
     fn resolves_empty_agent_path_to_binary_name_when_path_detection_fails() {
         let resolved = resolve_input_path("", "__aeroric_missing_agent_binary__");
         assert_eq!(resolved, "__aeroric_missing_agent_binary__");
+    }
+
+    #[test]
+    fn launch_spec_prefers_the_executable_cli_family_over_a_stale_agent_type() {
+        let claude_pointing_to_codex = AppSettings {
+            claude_path: "/tmp/codex".to_string(),
+            ..AppSettings::default()
+        };
+        let codex_pointing_to_claude = AppSettings {
+            codex_path: "/tmp/claude".to_string(),
+            ..AppSettings::default()
+        };
+
+        assert!(
+            get_agent_launch_spec_from_settings(&claude_pointing_to_codex, "claude").codex_like
+        );
+        assert!(
+            !get_agent_launch_spec_from_settings(&codex_pointing_to_claude, "codex").codex_like
+        );
+    }
+
+    #[test]
+    fn launch_spec_recognizes_aeroric_generated_wrapper_families() {
+        let codex_path =
+            std::env::temp_dir().join(format!("aeroric-codex-wrapper-{}.sh", uuid::Uuid::new_v4()));
+        let claude_path = std::env::temp_dir().join(format!(
+            "aeroric-claude-wrapper-{}.sh",
+            uuid::Uuid::new_v4()
+        ));
+        fs::write(
+            &codex_path,
+            "#!/bin/sh\nexport CODEX_HOME=/tmp/codex\nmodel_catalog_json = \"model-catalog.json\"\n",
+        )
+        .unwrap();
+        fs::write(
+            &claude_path,
+            "#!/bin/sh\nexport CLAUDE_CONFIG_DIR=/tmp/claude\nexport CLAUDE_CODE_SESSION_ENV_DIR=/tmp/sessions\n",
+        )
+        .unwrap();
+
+        assert_eq!(
+            inferred_agent_codex_like(codex_path.to_string_lossy().as_ref()),
+            Some(true)
+        );
+        assert_eq!(
+            inferred_agent_codex_like(claude_path.to_string_lossy().as_ref()),
+            Some(false)
+        );
+
+        let _ = fs::remove_file(codex_path);
+        let _ = fs::remove_file(claude_path);
     }
 
     #[test]

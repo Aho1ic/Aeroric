@@ -713,7 +713,7 @@ pub async fn run_task(
 
     let launch = crate::app_settings::get_agent_launch_spec(&agent);
     let agent_bin = launch.program.clone();
-    let is_codex = crate::app_settings::is_codex_like_agent(&agent);
+    let is_codex = launch.codex_like;
     let use_native_initial_prompt =
         should_use_native_initial_prompt(&agent, is_codex, force_prompt_injection.unwrap_or(false));
     let selected_model = normalized_selected_model(selected_model.as_deref());
@@ -1031,7 +1031,7 @@ pub async fn resume_task(
             .unwrap_or(false)
     };
 
-    let is_codex = crate::app_settings::is_codex_like_agent(&agent);
+    let is_codex = launch.codex_like;
     let mut cmd = if is_codex {
         let mut c = build_codex_cmd(&agent_bin, &permission_mode);
         add_codex_launch_args(&mut c, &project_path, selected_model.as_deref());
@@ -1079,8 +1079,6 @@ pub async fn resume_task(
         "task-status",
         serde_json::json!({ "task_id": task_id, "status": "running" }),
     );
-
-    let is_codex = crate::app_settings::is_codex_like_agent(&agent);
 
     // resume 时 session_id 已知，直接查找文件并开始监视(hook 可信时跳过)
     if !use_hooks {
@@ -1262,6 +1260,25 @@ mod tests {
         );
         assert_eq!(normalized_selected_model(Some("  ")), None);
         assert_eq!(normalized_selected_model(None), None);
+    }
+
+    #[test]
+    fn permission_flags_stay_with_their_cli_family() {
+        let claude_argv: Vec<_> = build_claude_cmd("claude", "ask")
+            .get_argv()
+            .iter()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+        let codex_argv: Vec<_> = build_codex_cmd("codex", "ask")
+            .get_argv()
+            .iter()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+
+        assert!(claude_argv
+            .windows(2)
+            .any(|args| args == ["--permission-mode", "default"]));
+        assert!(!codex_argv.iter().any(|arg| arg == "--permission-mode"));
     }
 
     #[test]
