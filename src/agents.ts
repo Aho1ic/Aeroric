@@ -11,6 +11,7 @@ export interface CustomAgentProfile {
   base_url?: string;
   api_key?: string;
   models?: string[];
+  enable_1m_context?: boolean;
   username?: string;
   password?: string;
 }

@@ -88,6 +88,7 @@ export function AddAgentPanel({ onSaved }: { onSaved: (agentId: string) => void 
   const [model, setModel] = useState("");
   const [models, setModels] = useState<string[]>([]);
   const [selectedModels, setSelectedModels] = useState<string[]>([]);
+  const [enable1mContext, setEnable1mContext] = useState(false);
   const [modelMenuOpen, setModelMenuOpen] = useState(false);
   const [detectingModels, setDetectingModels] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -147,6 +148,7 @@ export function AddAgentPanel({ onSaved }: { onSaved: (agentId: string) => void 
       api_key: apiKey.trim(),
       model: setupModels[0] ?? model.trim(),
       models: setupModels,
+      enable_1m_context: kind === "claude_code" && enable1mContext,
     };
     setSaving(true);
     setSaved(false);
@@ -233,6 +235,7 @@ export function AddAgentPanel({ onSaved }: { onSaved: (agentId: string) => void 
                   setKind(option.kind);
                   setModels([]);
                   setSelectedModels([]);
+                  if (option.kind !== "claude_code") setEnable1mContext(false);
                 }}
               >
                 <div style={{ fontSize: 12.5, fontWeight: 700, marginBottom: 4 }}>
@@ -246,6 +249,35 @@ export function AddAgentPanel({ onSaved }: { onSaved: (agentId: string) => void 
           })}
         </div>
       </div>
+
+      {kind === "claude_code" && (
+        <label
+          style={{
+            display: "flex",
+            alignItems: "flex-start",
+            gap: 8,
+            color: "var(--text-secondary)",
+            cursor: "pointer",
+          }}
+        >
+          <input
+            type="checkbox"
+            aria-label={t("appSettings.enable1mContext")}
+            checked={enable1mContext}
+            onChange={(event) => setEnable1mContext(event.target.checked)}
+          />
+          <span>
+            <span style={{ display: "block", fontSize: 12.5, fontWeight: 650 }}>
+              {t("appSettings.enable1mContext")}
+            </span>
+            <span
+              style={{ display: "block", marginTop: 3, fontSize: 11, color: "var(--text-hint)" }}
+            >
+              {t("appSettings.enable1mContextHint")}
+            </span>
+          </span>
+        </label>
+      )}
 
       <div>
         <label style={labelStyle} htmlFor={nameInputId}>

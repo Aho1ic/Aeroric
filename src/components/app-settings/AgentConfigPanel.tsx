@@ -94,6 +94,9 @@ export function AgentConfigPanel({
   const [originalSelectedModels, setOriginalSelectedModels] = useState<string[]>([]);
   const [detectingModels, setDetectingModels] = useState(false);
   const [savingModels, setSavingModels] = useState(false);
+  const [enable1mContext, setEnable1mContext] = useState(false);
+  const [originalEnable1mContext, setOriginalEnable1mContext] = useState(false);
+  const [saving1mContext, setSaving1mContext] = useState(false);
   const [reasoningEffort, setReasoningEffort] = useState<ModelReasoningEffort | null>(null);
   const [originalReasoningEffort, setOriginalReasoningEffort] =
     useState<ModelReasoningEffort | null>(null);
@@ -161,6 +164,8 @@ export function AgentConfigPanel({
       setDetectedModels([]);
       setSelectedModels([]);
       setOriginalSelectedModels([]);
+      setEnable1mContext(false);
+      setOriginalEnable1mContext(false);
       return;
     }
     let cancelled = false;
@@ -174,6 +179,9 @@ export function AgentConfigPanel({
         setDetectedModels(savedModels);
         setSelectedModels(savedModels);
         setOriginalSelectedModels(savedModels);
+        const contextEnabled = Boolean(profile?.enable_1m_context);
+        setEnable1mContext(contextEnabled);
+        setOriginalEnable1mContext(contextEnabled);
       })
       .catch((e) => {
         if (!cancelled) setError(String(e));
@@ -316,6 +324,36 @@ export function AgentConfigPanel({
     }
   }
 
+  async function handleSave1mContext() {
+    if (!customProfile || customProfile.codex_like || saving1mContext) return;
+    setSaving1mContext(true);
+    setError(null);
+    setSaved(false);
+    try {
+      const next = await invoke<AppSettings>("update_custom_agent_context", {
+        id: agentKey,
+        enable1mContext,
+      });
+      const profile = next.custom_agents?.find((item) => item.id === String(agentKey)) ?? null;
+      setCustomProfile(profile);
+      const contextEnabled = Boolean(profile?.enable_1m_context);
+      setEnable1mContext(contextEnabled);
+      setOriginalEnable1mContext(contextEnabled);
+      const content = await invoke<string | null>("read_agent_config_file", { agent: agentKey });
+      if (content !== null) {
+        setFileState({ status: "loaded", content });
+        setOriginal(content);
+      }
+      window.dispatchEvent(new Event(APP_SETTINGS_CHANGED_EVENT));
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setSaving1mContext(false);
+    }
+  }
+
   function toggleModel(modelName: string) {
     setSelectedModels((prev) => {
       if (prev.includes(modelName)) return prev.filter((item) => item !== modelName);
@@ -337,6 +375,9 @@ export function AgentConfigPanel({
     agentKey === "codex" &&
     fileState.status === "loaded" &&
     reasoningEffort !== originalReasoningEffort;
+  const canSave1mContext =
+    Boolean(customProfile && !customProfile.codex_like) &&
+    enable1mContext !== originalEnable1mContext;
 
   return (
     <>
@@ -490,6 +531,59 @@ export function AgentConfigPanel({
                 ))}
               </div>
             )}
+          </div>
+        )}
+
+        {deletable && customProfile && !customProfile.codex_like && (
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: 12,
+              marginBottom: 18,
+            }}
+          >
+            <label
+              style={{
+                display: "flex",
+                alignItems: "flex-start",
+                gap: 8,
+                minWidth: 0,
+                color: "var(--text-secondary)",
+                cursor: "pointer",
+              }}
+            >
+              <input
+                type="checkbox"
+                aria-label={t("appSettings.enable1mContext")}
+                checked={enable1mContext}
+                onChange={(event) => setEnable1mContext(event.target.checked)}
+              />
+              <span>
+                <span style={{ display: "block", fontSize: 13, fontWeight: 600 }}>
+                  {t("appSettings.enable1mContext")}
+                </span>
+                <span
+                  style={{
+                    display: "block",
+                    marginTop: 3,
+                    fontSize: 11,
+                    color: "var(--text-hint)",
+                  }}
+                >
+                  {t("appSettings.enable1mContextHint")}
+                </span>
+              </span>
+            </label>
+            <Button
+              variant="default"
+              size="sm"
+              onClick={handleSave1mContext}
+              disabled={saving1mContext || !canSave1mContext}
+            >
+              {saving1mContext ? t("common.saving") : t("common.save")}
+            </Button>
           </div>
         )}
 

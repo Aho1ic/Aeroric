@@ -142,6 +142,50 @@ function renderModelManagedAgentConfigPanel() {
   );
 }
 
+function renderClaudeAgentConfigPanel() {
+  let configContent = "#!/bin/bash\n# AERORIC_CLAUDE_WRAPPER_VERSION=2\n";
+  const baseProfile = {
+    id: "agentrouter",
+    label: "AgentRouter",
+    path: "/Users/macbook/.aeroric/agents/agentrouter.sh",
+    codex_like: false,
+    config_lang: "shellscript",
+    base_url: "https://agentrouter.org",
+    api_key: "sk-test",
+    models: ["claude-opus-4-6"],
+    enable_1m_context: false,
+  };
+  vi.mocked(invoke).mockImplementation((command) => {
+    if (command === "get_agent_config_file_path") return Promise.resolve(baseProfile.path);
+    if (command === "read_agent_config_file") return Promise.resolve(configContent);
+    if (command === "load_app_settings") {
+      return Promise.resolve({ ...appSettings, custom_agents: [baseProfile] });
+    }
+    if (command === "detect_agent_version") return Promise.resolve("claude 2.1.0");
+    if (command === "update_custom_agent_context") {
+      configContent += "# 1m enabled\n";
+      return Promise.resolve({
+        ...appSettings,
+        custom_agents: [{ ...baseProfile, enable_1m_context: true }],
+      });
+    }
+    return Promise.resolve(undefined);
+  });
+  render(
+    <I18nProvider>
+      <AgentConfigPanel
+        agentKey="agentrouter"
+        agentLabel="AgentRouter"
+        filePath={baseProfile.path}
+        lang="shellscript"
+        themeVariant="light"
+        deletable
+        onDeleted={vi.fn()}
+      />
+    </I18nProvider>,
+  );
+}
+
 function renderJovernaAgentConfigPanel() {
   const jovernaSettings = {
     ...appSettings,
@@ -422,6 +466,32 @@ describe("Agent config and debug panel UI", () => {
     expect(await findConfigEditor("#!/bin/sh\n# updated\n")).toBeInTheDocument();
   });
 
+  it("enables 1M context for an existing Claude agent", async () => {
+    const user = userEvent.setup();
+    renderClaudeAgentConfigPanel();
+
+    await findConfigEditor("#!/bin/bash\n# AERORIC_CLAUDE_WRAPPER_VERSION=2\n");
+    await user.click(screen.getByLabelText("Enable 1M context"));
+    await user.click(getEnabledSaveButton());
+
+    await waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith("update_custom_agent_context", {
+        id: "agentrouter",
+        enable1mContext: true,
+      }),
+    );
+    expect(
+      await findConfigEditor("#!/bin/bash\n# AERORIC_CLAUDE_WRAPPER_VERSION=2\n# 1m enabled\n"),
+    ).toBeInTheDocument();
+  });
+
+  it("does not show the 1M context control for Codex agents", async () => {
+    renderModelManagedAgentConfigPanel();
+
+    await findConfigEditor("#!/bin/sh\n");
+    expect(screen.queryByLabelText("Enable 1M context")).not.toBeInTheDocument();
+  });
+
   it("saves only the proxy enabled checkbox for a custom Joverna agent", async () => {
     const user = userEvent.setup();
     renderJovernaAgentConfigPanel();
@@ -541,6 +611,7 @@ describe("Agent config and debug panel UI", () => {
         api_key: "sk-test",
         model: "gpt-5.6-sol",
         models: ["gpt-5.6-sol"],
+        enable_1m_context: false,
       },
     });
   });
@@ -566,6 +637,7 @@ describe("Agent config and debug panel UI", () => {
         api_key: "sk-test",
         model: "gpt-5.6",
         models: ["gpt-5.6"],
+        enable_1m_context: false,
       },
     });
   });
@@ -599,6 +671,33 @@ describe("Agent config and debug panel UI", () => {
         api_key: "sk-test",
         model: "gpt-5.6",
         models: ["gpt-5.6", "gpt-5.6-luna"],
+        enable_1m_context: false,
+      },
+    });
+  });
+
+  it("creates a Claude agent with 1M context enabled", async () => {
+    const user = userEvent.setup();
+    renderAddAgentPanel();
+
+    await user.click(screen.getByRole("button", { name: /Claude Code/i }));
+    await user.type(screen.getByLabelText("Agent Name"), "AgentRouter");
+    await user.type(screen.getByLabelText("Base URL"), "https://agentrouter.org");
+    await user.type(screen.getByLabelText("API Key"), "sk-test");
+    await user.type(screen.getByLabelText("Model"), "claude-opus-4-6");
+    await user.click(screen.getByLabelText("Enable 1M context"));
+    await user.click(screen.getByRole("button", { name: /^Add Agent$/i }));
+
+    expect(invoke).toHaveBeenCalledWith("setup_agent_profile", {
+      draft: {
+        id: "agentrouter",
+        label: "AgentRouter",
+        kind: "claude_code",
+        base_url: "https://agentrouter.org",
+        api_key: "sk-test",
+        model: "claude-opus-4-6",
+        models: ["claude-opus-4-6"],
+        enable_1m_context: true,
       },
     });
   });

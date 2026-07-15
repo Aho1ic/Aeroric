@@ -69,6 +69,7 @@ export interface AgentSetupDraft {
   api_key: string;
   model: string;
   models: string[];
+  enable_1m_context: boolean;
 }
 
 export interface AgentModels {

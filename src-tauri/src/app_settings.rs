@@ -30,6 +30,7 @@ static CACHED_CLAUDE_VERSION: OnceLock<Mutex<Option<Option<String>>>> = OnceLock
 static CACHED_CODEX_VERSION: OnceLock<Mutex<Option<Option<String>>>> = OnceLock::new();
 static SETTINGS_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 const CLAUDE_BUILTIN_MODEL_ALIASES: &[&str] = &["fable", "opus", "sonnet"];
+const CLAUDE_AGENT_SCRIPT_MARKER: &str = "# AERORIC_CLAUDE_WRAPPER_VERSION=2";
 
 pub fn get_login_shell_env() -> &'static [(String, String)] {
     crate::platform::login_shell_env()
@@ -54,6 +55,8 @@ pub struct CustomAgentProfile {
     pub api_key: String,
     #[serde(default)]
     pub models: Vec<String>,
+    #[serde(default)]
+    pub enable_1m_context: bool,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub username: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -77,6 +80,8 @@ pub struct AgentSetupDraft {
     pub model: String,
     #[serde(default)]
     pub models: Vec<String>,
+    #[serde(default)]
+    pub enable_1m_context: bool,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
@@ -249,6 +254,7 @@ fn normalize_custom_agent_profile(profile: CustomAgentProfile) -> Option<CustomA
         base_url: normalize_base_url(&profile.base_url),
         api_key: profile.api_key.trim().to_string(),
         models: normalize_model_list(profile.models),
+        enable_1m_context: profile.enable_1m_context,
         username: String::new(),
         password: String::new(),
     })
@@ -1121,9 +1127,19 @@ fn build_claude_code_agent_script(draft: &AgentSetupDraft) -> String {
     let id = sanitize_custom_agent_id(&draft.id);
     let models = normalize_setup_models(draft);
     let picker = model_picker_shell(&models);
+    let context_setup = if draft.enable_1m_context {
+        r#"
+if [[ "$selected_model" != *"[1m]" ]]; then
+  selected_model="${selected_model}[1m]"
+fi
+"#
+    } else {
+        ""
+    };
     format!(
         r#"#!/bin/bash
 set -euo pipefail
+{script_marker}
 
 AGENT_HOME="${{AERORIC_AGENT_HOME:-$HOME/.aeroric/agent-homes/{id}}}"
 mkdir -p "$AGENT_HOME" "$AGENT_HOME/tmp" "$AGENT_HOME/session-env"
@@ -1144,10 +1160,10 @@ unset ANTHROPIC_MODEL
 unset AGENT_ROUTER_TOKEN
 
 {picker}
+{context_setup}
 
 export ANTHROPIC_BASE_URL={base_url}
 export ANTHROPIC_AUTH_TOKEN={api_key}
-export ANTHROPIC_API_KEY="$ANTHROPIC_AUTH_TOKEN"
 export AGENT_ROUTER_TOKEN="$ANTHROPIC_AUTH_TOKEN"
 export ANTHROPIC_DEFAULT_OPUS_MODEL="$selected_model"
 export ANTHROPIC_DEFAULT_SONNET_MODEL="$selected_model"
@@ -1156,7 +1172,9 @@ export ANTHROPIC_DEFAULT_HAIKU_MODEL="$selected_model"
 exec claude --model "$selected_model" "$@"
 "#,
         id = id,
+        script_marker = CLAUDE_AGENT_SCRIPT_MARKER,
         picker = picker,
+        context_setup = context_setup,
         base_url = shell_quote(&normalize_base_url(&draft.base_url)),
         api_key = shell_quote(&draft.api_key),
     )
@@ -1339,11 +1357,52 @@ fn refresh_stale_codex_agent_scripts(settings: &mut AppSettings) {
             api_key: profile.api_key.clone(),
             model: profile.models[0].clone(),
             models: profile.models.clone(),
+            enable_1m_context: profile.enable_1m_context,
         };
         if validate_agent_setup_draft(&draft).is_err() {
             continue;
         }
         let script = build_codex_agent_script(&draft);
+        if script_path.trim().is_empty() {
+            if let Ok(path) = write_agent_script(&profile.id, &script) {
+                profile.path = path.to_string_lossy().into_owned();
+            }
+        } else if write_agent_script_at_path(Path::new(&script_path), &script).is_ok() {
+            profile.path = script_path;
+        }
+    }
+}
+
+fn refresh_stale_claude_agent_scripts(settings: &mut AppSettings) {
+    for profile in &mut settings.custom_agents {
+        if profile.codex_like
+            || profile.models.is_empty()
+            || profile.base_url.trim().is_empty()
+            || profile.api_key.trim().is_empty()
+        {
+            continue;
+        }
+        let script_path = normalize_config_path(profile.path.clone());
+        let is_current = fs::read_to_string(&script_path)
+            .map(|content| content.contains(CLAUDE_AGENT_SCRIPT_MARKER))
+            .unwrap_or(false);
+        if is_current {
+            continue;
+        }
+        let draft = AgentSetupDraft {
+            id: profile.id.clone(),
+            label: profile.label.clone(),
+            kind: AgentSetupKind::ClaudeCode,
+            base_url: profile.base_url.clone(),
+            api_key: profile.api_key.clone(),
+            model: profile.models[0].clone(),
+            models: profile.models.clone(),
+            enable_1m_context: profile.enable_1m_context,
+        };
+        if validate_agent_setup_draft(&draft).is_err() {
+            continue;
+        }
+        let script = build_claude_code_agent_script(&draft);
         if script_path.trim().is_empty() {
             if let Ok(path) = write_agent_script(&profile.id, &script) {
                 profile.path = path.to_string_lossy().into_owned();
@@ -1417,6 +1476,7 @@ fn load_settings_unlocked() -> AppSettings {
     let mut normalized = normalize_settings(settings.clone());
     recover_custom_agent_settings(&mut normalized);
     refresh_stale_codex_agent_scripts(&mut normalized);
+    refresh_stale_claude_agent_scripts(&mut normalized);
     if normalized != settings {
         if let Ok(raw) = serde_json::to_string_pretty(&normalized) {
             let _ = atomic_write(&path, &raw);
@@ -1533,6 +1593,7 @@ pub async fn setup_agent_profile(draft: AgentSetupDraft) -> Result<AppSettings, 
             base_url: normalize_base_url(&draft.base_url),
             api_key: draft.api_key.trim().to_string(),
             models: normalize_setup_models(&draft),
+            enable_1m_context: draft.enable_1m_context,
             username: String::new(),
             password: String::new(),
         };
@@ -1692,6 +1753,7 @@ pub async fn update_custom_agent_models(
             api_key: profile.api_key.clone(),
             model: models[0].clone(),
             models: models.clone(),
+            enable_1m_context: profile.enable_1m_context,
         };
         validate_agent_setup_draft(&draft)?;
         let script = build_agent_script(&draft);
@@ -1704,6 +1766,69 @@ pub async fn update_custom_agent_models(
             profile.path = script_path;
         }
         profile.models = models;
+
+        let dir = aeroric_dir()?;
+        fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        let path = settings_path()?;
+        let normalized = normalize_settings(settings);
+        let raw = serde_json::to_string_pretty(&normalized).map_err(|e| e.to_string())?;
+        atomic_write(&path, &raw)?;
+        Ok::<AppSettings, String>(normalized)
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    clear_cached_versions();
+    Ok(normalized)
+}
+
+#[tauri::command]
+pub async fn update_custom_agent_context(
+    id: String,
+    enable_1m_context: bool,
+) -> Result<AppSettings, String> {
+    let normalized = tokio::task::spawn_blocking(move || {
+        let _guard = settings_lock().lock();
+        let mut settings = load_settings_unlocked();
+        let normalized_id = sanitize_custom_agent_id(&id);
+
+        let Some(profile) = settings
+            .custom_agents
+            .iter_mut()
+            .find(|profile| profile.id == normalized_id)
+        else {
+            return Err("Custom agent not found".to_string());
+        };
+        if profile.codex_like {
+            return Err("1M context is only available for Claude Code agents".to_string());
+        }
+        if profile.models.is_empty()
+            || profile.base_url.trim().is_empty()
+            || profile.api_key.trim().is_empty()
+        {
+            return Err("This agent does not have saved Claude setup settings".to_string());
+        }
+
+        let draft = AgentSetupDraft {
+            id: profile.id.clone(),
+            label: profile.label.clone(),
+            kind: AgentSetupKind::ClaudeCode,
+            base_url: profile.base_url.clone(),
+            api_key: profile.api_key.clone(),
+            model: profile.models[0].clone(),
+            models: profile.models.clone(),
+            enable_1m_context,
+        };
+        validate_agent_setup_draft(&draft)?;
+        let script = build_claude_code_agent_script(&draft);
+        let script_path = normalize_config_path(profile.path.clone());
+        if script_path.trim().is_empty() {
+            let path = write_agent_script(&profile.id, &script)?;
+            profile.path = path.to_string_lossy().into_owned();
+        } else {
+            write_agent_script_at_path(Path::new(&script_path), &script)?;
+            profile.path = script_path;
+        }
+        profile.enable_1m_context = enable_1m_context;
 
         let dir = aeroric_dir()?;
         fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
@@ -2347,6 +2472,7 @@ mod tests {
                     base_url: String::new(),
                     api_key: String::new(),
                     models: Vec::new(),
+                    enable_1m_context: false,
                     username: String::new(),
                     password: String::new(),
                 },
@@ -2359,6 +2485,7 @@ mod tests {
                     base_url: String::new(),
                     api_key: String::new(),
                     models: Vec::new(),
+                    enable_1m_context: false,
                     username: String::new(),
                     password: String::new(),
                 },
@@ -2386,6 +2513,7 @@ mod tests {
             api_key: "sk-test".to_string(),
             model: "gpt-5.6".to_string(),
             models: vec!["gpt-5.6".to_string(), "gpt-5.6-sol".to_string()],
+            enable_1m_context: false,
         };
 
         let script = build_agent_script(&draft);
@@ -2463,6 +2591,7 @@ mod tests {
             api_key: "sk-test".to_string(),
             model: "claude-opus-4-8".to_string(),
             models: vec!["claude-opus-4-8".to_string(), "claude-opus-4-6".to_string()],
+            enable_1m_context: true,
         };
 
         let script = build_agent_script(&draft);
@@ -2470,8 +2599,29 @@ mod tests {
         assert!(script.contains("CLAUDE_CONFIG_DIR"));
         assert!(script.contains("export ANTHROPIC_BASE_URL='https://agentrouter.org'"));
         assert!(script.contains("export ANTHROPIC_AUTH_TOKEN='sk-test'"));
+        assert!(!script.contains("export ANTHROPIC_API_KEY"));
         assert!(script.contains("selected_model='claude-opus-4-8'"));
+        assert!(script.contains("selected_model=\"${selected_model}[1m]\""));
         assert!(script.contains("exec claude --model \"$selected_model\" \"$@\""));
+    }
+
+    #[test]
+    fn builds_claude_code_agent_script_without_1m_suffix_when_disabled() {
+        let draft = AgentSetupDraft {
+            id: "agentrouter".to_string(),
+            label: "AgentRouter".to_string(),
+            kind: AgentSetupKind::ClaudeCode,
+            base_url: "https://agentrouter.org".to_string(),
+            api_key: "sk-test".to_string(),
+            model: "claude-opus-4-6".to_string(),
+            models: vec!["claude-opus-4-6".to_string()],
+            enable_1m_context: false,
+        };
+
+        let script = build_agent_script(&draft);
+
+        assert!(script.contains(CLAUDE_AGENT_SCRIPT_MARKER));
+        assert!(!script.contains("selected_model=\"${selected_model}[1m]\""));
     }
 
     #[test]
@@ -2484,6 +2634,7 @@ mod tests {
             api_key: "sk-test".to_string(),
             model: "gpt-5.6".to_string(),
             models: vec!["gpt-5.6".to_string(), "gpt-5.6-sol".to_string()],
+            enable_1m_context: false,
         };
 
         let script = build_agent_script(&draft);
@@ -2510,6 +2661,7 @@ mod tests {
                 base_url: String::new(),
                 api_key: String::new(),
                 models: Vec::new(),
+                enable_1m_context: false,
                 username: "alice".to_string(),
                 password: "secret".to_string(),
             }],
@@ -2553,6 +2705,7 @@ mod tests {
                 base_url: String::new(),
                 api_key: String::new(),
                 models: Vec::new(),
+                enable_1m_context: false,
                 username: "alice".to_string(),
                 password: "secret".to_string(),
             }],
@@ -2733,6 +2886,7 @@ mod tests {
             base_url: String::new(),
             api_key: String::new(),
             models: Vec::new(),
+            enable_1m_context: false,
             username: String::new(),
             password: String::new(),
         };
@@ -2741,6 +2895,43 @@ mod tests {
 
         assert_eq!(profile.base_url, "https://example.com/v1");
         assert_eq!(profile.api_key, "sk-test");
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn refreshes_stale_claude_agent_scripts() {
+        let dir =
+            std::env::temp_dir().join(format!("aeroric-claude-refresh-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&dir).unwrap();
+        let script_path = dir.join("agentrouter.sh");
+        fs::write(
+            &script_path,
+            "#!/bin/bash\nexport ANTHROPIC_AUTH_TOKEN='sk-test'\nexport ANTHROPIC_API_KEY=\"$ANTHROPIC_AUTH_TOKEN\"\n",
+        )
+        .unwrap();
+        let mut settings = AppSettings {
+            custom_agents: vec![CustomAgentProfile {
+                id: "agentrouter".to_string(),
+                label: "AgentRouter".to_string(),
+                path: script_path.to_string_lossy().into_owned(),
+                codex_like: false,
+                config_lang: "shellscript".to_string(),
+                base_url: "https://agentrouter.org".to_string(),
+                api_key: "sk-test".to_string(),
+                models: vec!["claude-opus-4-6".to_string()],
+                enable_1m_context: true,
+                username: String::new(),
+                password: String::new(),
+            }],
+            ..AppSettings::default()
+        };
+
+        refresh_stale_claude_agent_scripts(&mut settings);
+
+        let script = fs::read_to_string(&script_path).unwrap();
+        assert!(script.contains(CLAUDE_AGENT_SCRIPT_MARKER));
+        assert!(script.contains("selected_model=\"${selected_model}[1m]\""));
+        assert!(!script.contains("export ANTHROPIC_API_KEY"));
         let _ = fs::remove_dir_all(dir);
     }
 

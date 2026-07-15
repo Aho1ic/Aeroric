@@ -114,6 +114,9 @@ const translations: Record<AppLanguage, Record<string, string>> = {
     "appSettings.agentApiKey": "API Key",
     "appSettings.agentModel": "Model",
     "appSettings.agentModelHint": "Enter a model name manually, or detect available models.",
+    "appSettings.enable1mContext": "Enable 1M context",
+    "appSettings.enable1mContextHint":
+      "Launch Claude with the selected model's 1M context variant.",
     "appSettings.availableModels": "Available Models",
     "appSettings.addModel": "Add Model",
     "appSettings.selectAllModels": "Select All",
@@ -1946,6 +1949,8 @@ const translations: Record<AppLanguage, Record<string, string>> = {
     "appSettings.agentApiKey": "API Key",
     "appSettings.agentModel": "模型",
     "appSettings.agentModelHint": "可手动填写模型名，也可以自动检测可用模型。",
+    "appSettings.enable1mContext": "开启 1M 上下文",
+    "appSettings.enable1mContextHint": "启动 Claude 时使用所选模型的 1M 上下文版本。",
     "appSettings.availableModels": "可用模型",
     "appSettings.addModel": "添加模型",
     "appSettings.selectAllModels": "全选",
