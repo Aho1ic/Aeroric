@@ -421,6 +421,85 @@ export function attachMacWebKitTerminalGuard({
   };
 }
 
+// Codex 之类的 agent TUI 会把光标停在自己的输入框行。给这一行铺一层浅灰半透明
+// 覆盖层，让用户一眼看到"输入框位置"。覆盖层挂在 .xterm-screen 内，跟随 xterm 的
+// 光标 Y 移动；透明度很低，即便叠在文本之上也不影响可读性（类似编辑器的当前行高亮）。
+export function attachCursorLineHighlight(term: Terminal, container: HTMLElement): () => void {
+  let overlay: HTMLDivElement | null = null;
+  let rafId: ReturnType<typeof globalThis.setTimeout> | number | null = null;
+
+  const getScreen = () => container.querySelector<HTMLElement>(".xterm-screen");
+
+  const ensureOverlay = (): HTMLDivElement | null => {
+    if (overlay && overlay.isConnected) return overlay;
+    const screen = getScreen();
+    if (!screen) return null;
+    overlay = document.createElement("div");
+    overlay.className = "aeroric-cursor-line";
+    // 作为 screen 的第一个子节点插入。CSS 里给了 z-index:0，定位后会绘制在
+    // 静态定位的 .xterm-rows 文本行之上，但透明度仅 8%，不影响文字可读性；
+    // 仍低于 z-index:1 的 selection 层，框选高亮照常盖过它。
+    screen.insertBefore(overlay, screen.firstChild);
+    return overlay;
+  };
+
+  const render = () => {
+    const el = ensureOverlay();
+    const screen = getScreen();
+    if (!el || !screen) return;
+    const rows = Math.max(1, term.rows);
+    const rowHeight = screen.clientHeight / rows;
+    if (!(rowHeight > 0)) {
+      el.style.display = "none";
+      return;
+    }
+    const cursorY = Math.max(0, Math.min(rows - 1, term.buffer.active.cursorY));
+    el.style.display = "block";
+    el.style.height = `${rowHeight}px`;
+    el.style.transform = `translateY(${cursorY * rowHeight}px)`;
+  };
+
+  const cancelScheduledRender = () => {
+    if (rafId === null) return;
+    if (typeof window !== "undefined" && typeof window.cancelAnimationFrame === "function") {
+      window.cancelAnimationFrame(rafId as number);
+    } else {
+      globalThis.clearTimeout(rafId as ReturnType<typeof globalThis.setTimeout>);
+    }
+    rafId = null;
+  };
+
+  // onRender 频率高，用 rAF 合并；光标移动 / 尺寸变化频率低，直接渲染，保证响应。
+  const scheduleRender = () => {
+    if (rafId !== null) return;
+    if (typeof window !== "undefined" && typeof window.requestAnimationFrame === "function") {
+      rafId = window.requestAnimationFrame(() => {
+        rafId = null;
+        render();
+      });
+    } else {
+      rafId = globalThis.setTimeout(() => {
+        rafId = null;
+        render();
+      }, 16);
+    }
+  };
+
+  const cursorDisposable = term.onCursorMove(render);
+  const renderDisposable = term.onRender(scheduleRender);
+  const resizeDisposable = term.onResize(render);
+  render();
+
+  return () => {
+    cancelScheduledRender();
+    cursorDisposable.dispose();
+    renderDisposable.dispose();
+    resizeDisposable.dispose();
+    overlay?.remove();
+    overlay = null;
+  };
+}
+
 type TerminalSequenceState = "ground" | "esc" | "csi" | "string" | "stringEsc";
 
 function isCsiFinal(code: number): boolean {

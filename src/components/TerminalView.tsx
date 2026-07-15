@@ -17,6 +17,7 @@ import {
   safeFit,
   createSmartWriter,
   attachMacWebKitTerminalGuard,
+  attachCursorLineHighlight,
   applyTerminalFontSize,
   applyTerminalFontFamily,
 } from "./terminalShared";
@@ -35,6 +36,7 @@ interface TerminalViewProps {
   initialData?: string;
   initialSnapshot?: string;
   onSnapshot?: (snapshot: string) => void;
+  highlightCursorLine?: boolean;
 }
 
 export function TerminalView({
@@ -49,6 +51,7 @@ export function TerminalView({
   initialData,
   initialSnapshot,
   onSnapshot,
+  highlightCursorLine = false,
 }: TerminalViewProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<Terminal | null>(null);
@@ -61,6 +64,8 @@ export function TerminalView({
   const lastSizeRef = useRef<{ cols: number; rows: number } | null>(null);
   const shiftEnterNewlineRef = useRef<boolean>(DEFAULT_SHIFT_ENTER_NEWLINE);
   const themeVariantRef = useRef(themeVariant);
+  const highlightCursorLineRef = useRef(highlightCursorLine);
+  highlightCursorLineRef.current = highlightCursorLine;
   onReadyRef.current = onReady;
   onSnapshotRef.current = onSnapshot;
   themeVariantRef.current = themeVariant;
@@ -110,6 +115,9 @@ export function TerminalView({
 
     const writer = createSmartWriter(term, () => themeVariantRef.current);
     const disposeMacWebKitGuard = attachMacWebKitTerminalGuard({ term, container, writer });
+    const disposeCursorLineHighlight = highlightCursorLineRef.current
+      ? attachCursorLineHighlight(term, container)
+      : () => {};
     const sendInput = (data: string) => {
       writer.pauseForUserInput();
       onInputRef.current(data);
@@ -187,6 +195,7 @@ export function TerminalView({
       onRegisterRef.current(null);
       fitAddonRef.current = null;
       disposeMacWebKitGuard();
+      disposeCursorLineHighlight();
       disposeInputFix();
       disposeSmartCopy();
       disposeOnData.dispose();

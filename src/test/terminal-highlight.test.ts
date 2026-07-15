@@ -1,6 +1,7 @@
 import type { Terminal } from "@xterm/xterm";
 import { describe, expect, it, vi } from "vitest";
 import {
+  attachCursorLineHighlight,
   colorizePlainTerminalOutput,
   createSmartWriter,
   remapLightAnsiForeground,
@@ -126,3 +127,132 @@ describe("terminal output highlighting", () => {
     vi.useRealTimers();
   });
 });
+
+describe("cursor line highlight overlay", () => {
+  type Listener = () => void;
+
+  function createFakeTerm() {
+    const cursorMove: Listener[] = [];
+    const render: Listener[] = [];
+    const resize: Listener[] = [];
+    const state = { rows: 24, cursorY: 0 };
+    const term = {
+      get rows() {
+        return state.rows;
+      },
+      buffer: {
+        active: {
+          get cursorY() {
+            return state.cursorY;
+          },
+        },
+      },
+      onCursorMove: (fn: Listener) => {
+        cursorMove.push(fn);
+        return { dispose: () => {} };
+      },
+      onRender: (fn: Listener) => {
+        render.push(fn);
+        return { dispose: () => {} };
+      },
+      onResize: (fn: Listener) => {
+        resize.push(fn);
+        return { dispose: () => {} };
+      },
+    } as unknown as Terminal;
+    const fire = (list: Listener[]) => list.forEach((fn) => fn());
+    return {
+      term,
+      state,
+      fireCursorMove: () => fire(cursorMove),
+      fireResize: () => fire(resize),
+    };
+  }
+
+  function createScreenContainer(clientHeight = 480) {
+    const container = document.createElement("div");
+    const screen = document.createElement("div");
+    screen.className = "xterm-screen";
+    Object.defineProperty(screen, "clientHeight", { value: clientHeight, configurable: true });
+    container.appendChild(screen);
+    document.body.appendChild(container);
+    return { container, screen };
+  }
+
+  it("inserts a cursor-line overlay into the xterm screen and follows the cursor", () => {
+    const { term, state, fireCursorMove } = createFakeTerm();
+    const { container, screen } = createScreenContainer(480); // 24 rows -> 20px each
+
+    const dispose = attachCursorLineHighlight(term, container);
+
+    const overlay = screen.querySelector<HTMLElement>(".aeroric-cursor-line");
+    expect(overlay).not.toBeNull();
+    expect(overlay!.style.height).toBe("20px");
+    expect(overlay!.style.transform).toBe("translateY(0px)");
+
+    state.cursorY = 5;
+    fireCursorMove();
+    expect(overlay!.style.transform).toBe("translateY(100px)");
+
+    dispose();
+    container.remove();
+  });
+
+  it("clamps the cursor row inside the visible range", () => {
+    const { term, state, fireCursorMove } = createFakeTerm();
+    const { container, screen } = createScreenContainer(480);
+
+    const dispose = attachCursorLineHighlight(term, container);
+    const overlay = screen.querySelector<HTMLElement>(".aeroric-cursor-line")!;
+
+    state.cursorY = 999;
+    fireCursorMove();
+    // 24 rows, last row index 23 -> 23 * 20px
+    expect(overlay.style.transform).toBe("translateY(460px)");
+
+    dispose();
+    container.remove();
+  });
+
+  it("recomputes row height on resize", () => {
+    const { term, state, fireResize } = createFakeTerm();
+    const { container, screen } = createScreenContainer(480);
+
+    const dispose = attachCursorLineHighlight(term, container);
+    const overlay = screen.querySelector<HTMLElement>(".aeroric-cursor-line")!;
+
+    state.rows = 12; // 480 / 12 = 40px
+    state.cursorY = 2;
+    fireResize();
+    expect(overlay.style.height).toBe("40px");
+    expect(overlay.style.transform).toBe("translateY(80px)");
+
+    dispose();
+    container.remove();
+  });
+
+  it("removes the overlay on dispose", () => {
+    const { term } = createFakeTerm();
+    const { container, screen } = createScreenContainer();
+
+    const dispose = attachCursorLineHighlight(term, container);
+    expect(screen.querySelector(".aeroric-cursor-line")).not.toBeNull();
+
+    dispose();
+    expect(screen.querySelector(".aeroric-cursor-line")).toBeNull();
+    container.remove();
+  });
+
+  it("hides the overlay when the screen has no measurable height", () => {
+    const { term } = createFakeTerm();
+    const { container, screen } = createScreenContainer(0);
+
+    const dispose = attachCursorLineHighlight(term, container);
+    const overlay = screen.querySelector<HTMLElement>(".aeroric-cursor-line")!;
+    expect(overlay.style.display).toBe("none");
+
+    dispose();
+    container.remove();
+  });
+});
+

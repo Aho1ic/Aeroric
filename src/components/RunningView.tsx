@@ -713,6 +713,7 @@ export function RunningView({
             isActive={visible}
             initialData={terminalInitialData}
             initialSnapshot={terminalInitialSnapshot}
+            highlightCursorLine={codexLike}
           />
         </div>
       ) : (
