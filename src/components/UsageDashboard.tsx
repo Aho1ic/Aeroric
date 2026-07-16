@@ -26,10 +26,11 @@ import { Button } from "./ui/Button";
 const RANGE_OPTIONS: UsageStatisticsRange[] = [1, 7, 14, 30];
 const AGENT_OPTIONS: UsageStatisticsAgent[] = ["all", "codex", "claude"];
 
-function formatTokens(value: number): string {
+function formatInteger(value: number): string {
   return new Intl.NumberFormat(undefined, {
-    notation: value >= 1_000 ? "compact" : "standard",
-    maximumFractionDigits: value >= 1_000 ? 1 : 0,
+    notation: "standard",
+    maximumFractionDigits: 0,
+    useGrouping: true,
   }).format(value);
 }
 
@@ -49,6 +50,14 @@ function formatDate(value: string, includeYear = false): string {
     day: "numeric",
     year: includeYear ? "numeric" : undefined,
   }).format(date);
+}
+
+function formatUpdatedTime(value: number): string {
+  return new Intl.DateTimeFormat(undefined, {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  }).format(new Date(value));
 }
 
 function Segment<T extends string | number>({
@@ -88,14 +97,21 @@ function MetricCard({
   value,
   icon,
   color,
+  index,
 }: {
   label: string;
   value: string;
   icon: React.ReactNode;
   color: string;
+  index: number;
 }) {
+  const valueFontSize =
+    value.length > 18 ? 14 : value.length > 14 ? 16 : value.length > 10 ? 18 : 21;
   return (
-    <section style={s.usageMetricCard}>
+    <section
+      className="usage-metric-card"
+      style={{ ...s.usageMetricCard, animationDelay: `${index * 35}ms` }}
+    >
       <div style={s.usageMetricHead}>
         <span style={s.usageMetricLabel}>{label}</span>
         <span
@@ -108,7 +124,7 @@ function MetricCard({
           {icon}
         </span>
       </div>
-      <div style={s.usageMetricValue} title={value}>
+      <div style={{ ...s.usageMetricValue, fontSize: valueFontSize }} title={value}>
         {value}
       </div>
     </section>
@@ -142,12 +158,12 @@ function UsageChart({
 
   return (
     <div style={s.usageChartViewport}>
-      <div style={{ ...s.usageChart, minWidth: minPlotWidth + 54 }}>
+      <div style={{ ...s.usageChart, minWidth: minPlotWidth + 96 }}>
         <div style={s.usageChartAxis} aria-hidden="true">
-          <span>{formatTokens(max)}</span>
-          <span>{formatTokens(max * 0.75)}</span>
-          <span>{formatTokens(max * 0.5)}</span>
-          <span>{formatTokens(max * 0.25)}</span>
+          <span>{formatInteger(max)}</span>
+          <span>{formatInteger(Math.round(max * 0.75))}</span>
+          <span>{formatInteger(Math.round(max * 0.5))}</span>
+          <span>{formatInteger(Math.round(max * 0.25))}</span>
           <span>0</span>
         </div>
         <div style={{ ...s.usageChartPlot, minWidth: minPlotWidth }}>
@@ -155,10 +171,10 @@ function UsageChart({
             const height = day.totalTokens === 0 ? 0 : Math.max(2, (day.totalTokens / max) * 192);
             const title = [
               formatDate(day.date, true),
-              `${labels.input}: ${formatTokens(day.inputTokens)}`,
-              `${labels.output}: ${formatTokens(day.outputTokens)}`,
-              `${labels.cacheCreation}: ${formatTokens(day.cacheCreationTokens)}`,
-              `${labels.cacheRead}: ${formatTokens(day.cacheReadTokens)}`,
+              `${labels.input}: ${formatInteger(day.inputTokens)}`,
+              `${labels.output}: ${formatInteger(day.outputTokens)}`,
+              `${labels.cacheCreation}: ${formatInteger(day.cacheCreationTokens)}`,
+              `${labels.cacheRead}: ${formatInteger(day.cacheReadTokens)}`,
             ].join("\n");
             const segment = (value: number, color: string): CSSProperties => ({
               height: day.totalTokens === 0 ? 0 : `${(value / day.totalTokens) * 100}%`,
@@ -168,7 +184,7 @@ function UsageChart({
 
             return (
               <div key={day.date} style={s.usageChartColumn} title={title}>
-                <div style={{ ...s.usageChartBar, height }}>
+                <div className="usage-chart-bar" style={{ ...s.usageChartBar, height }}>
                   <span style={segment(day.inputTokens, "var(--accent)")} />
                   <span style={segment(day.outputTokens, "var(--success)")} />
                   <span style={segment(day.cacheCreationTokens, "var(--warning)")} />
@@ -193,39 +209,45 @@ function SourceSummary({
   claude,
   tokenLabel,
   requestLabel,
+  title,
 }: {
   codex: UsageStatisticsTotals;
   claude: UsageStatisticsTotals;
   tokenLabel: string;
   requestLabel: string;
+  title: string;
 }) {
   const max = Math.max(1, codex.totalTokens, claude.totalTokens);
   return (
-    <div style={s.usageSourceSummary}>
-      {[
-        { name: "Codex", totals: codex, color: "var(--accent)" },
-        { name: "Claude", totals: claude, color: "var(--success)" },
-      ].map((item) => (
-        <div key={item.name} style={s.usageSourceRow}>
-          <strong>{item.name}</strong>
-          <div style={s.usageSourceTrack}>
-            <div
-              style={{
-                ...s.usageSourceFill,
-                width: `${(item.totals.totalTokens / max) * 100}%`,
-                background: item.color,
-              }}
-            />
+    <section className="usage-panel" style={s.usageSourceSummary}>
+      <div style={s.usageSectionTitle}>{title}</div>
+      <div style={s.usageSourceList}>
+        {[
+          { name: "Codex", totals: codex, color: "var(--accent)" },
+          { name: "Claude", totals: claude, color: "var(--success)" },
+        ].map((item) => (
+          <div key={item.name} style={s.usageSourceRow}>
+            <strong>{item.name}</strong>
+            <div style={s.usageSourceTrack}>
+              <div
+                className="usage-source-fill"
+                style={{
+                  ...s.usageSourceFill,
+                  width: `${(item.totals.totalTokens / max) * 100}%`,
+                  background: item.color,
+                }}
+              />
+            </div>
+            <span style={s.usageSourceValue}>
+              {formatInteger(item.totals.totalTokens)} {tokenLabel}
+            </span>
+            <span style={s.usageSourceValue}>
+              {formatInteger(item.totals.requestCount)} {requestLabel}
+            </span>
           </div>
-          <span style={s.usageSourceValue}>
-            {formatTokens(item.totals.totalTokens)} {tokenLabel}
-          </span>
-          <span style={s.usageSourceValue}>
-            {formatTokens(item.totals.requestCount)} {requestLabel}
-          </span>
-        </div>
-      ))}
-    </div>
+        ))}
+      </div>
+    </section>
   );
 }
 
@@ -235,7 +257,7 @@ export function UsageDashboard({ embedded = false }: { embedded?: boolean }) {
   const [agent, setAgent] = useState<UsageStatisticsAgent>("all");
   const rootRef = useRef<HTMLDivElement | null>(null);
   const [width, setWidth] = useState(900);
-  const { statistics, loading, error, refetch } = useUsageStatistics(rangeDays, agent);
+  const { statistics, loading, refreshing, error, refetch } = useUsageStatistics(rangeDays, agent);
 
   useEffect(() => {
     const root = rootRef.current;
@@ -253,31 +275,31 @@ export function UsageDashboard({ embedded = false }: { embedded?: boolean }) {
     return [
       {
         label: t("usageStats.totalTokens"),
-        value: formatTokens(totals?.totalTokens ?? 0),
+        value: formatInteger(totals?.totalTokens ?? 0),
         icon: <Sigma size={14} />,
         color: "var(--accent)",
       },
       {
         label: t("usageStats.inputTokens"),
-        value: formatTokens(totals?.inputTokens ?? 0),
+        value: formatInteger(totals?.inputTokens ?? 0),
         icon: <ArrowDownToLine size={14} />,
         color: "var(--icon-file-ts)",
       },
       {
         label: t("usageStats.outputTokens"),
-        value: formatTokens(totals?.outputTokens ?? 0),
+        value: formatInteger(totals?.outputTokens ?? 0),
         icon: <ArrowUpFromLine size={14} />,
         color: "var(--success)",
       },
       {
         label: t("usageStats.cacheCreation"),
-        value: formatTokens(totals?.cacheCreationTokens ?? 0),
+        value: formatInteger(totals?.cacheCreationTokens ?? 0),
         icon: <DatabaseZap size={14} />,
         color: "var(--warning)",
       },
       {
         label: t("usageStats.cacheRead"),
-        value: formatTokens(totals?.cacheReadTokens ?? 0),
+        value: formatInteger(totals?.cacheReadTokens ?? 0),
         icon: <Layers3 size={14} />,
         color: "var(--usage-codex)",
       },
@@ -289,7 +311,7 @@ export function UsageDashboard({ embedded = false }: { embedded?: boolean }) {
       },
       {
         label: t("usageStats.requests"),
-        value: formatTokens(totals?.requestCount ?? 0),
+        value: formatInteger(totals?.requestCount ?? 0),
         icon: <Sparkles size={14} />,
         color: "var(--accent)",
       },
@@ -305,6 +327,10 @@ export function UsageDashboard({ embedded = false }: { embedded?: boolean }) {
   const dateRange = statistics
     ? `${formatDate(statistics.from, true)} – ${formatDate(statistics.to, true)}`
     : t("usageStats.rangePending");
+  const updateLabel =
+    statistics?.updatedAt && statistics.updatedAt > 0
+      ? t("usageStats.updatedAt", { time: formatUpdatedTime(statistics.updatedAt) })
+      : t("usageStats.indexing");
 
   return (
     <div ref={rootRef} style={s.usageDashboard}>
@@ -323,38 +349,47 @@ export function UsageDashboard({ embedded = false }: { embedded?: boolean }) {
             <div style={s.usageDashboardRange}>{dateRange}</div>
           </div>
         )}
-        <div
-          style={{
-            ...s.usageDashboardControls,
-            justifyContent: width < 700 ? "flex-start" : "flex-end",
-          }}
-        >
-          <Segment
-            ariaLabel={t("usageStats.rangeFilter")}
-            value={rangeDays}
-            options={RANGE_OPTIONS}
-            label={(option) =>
-              option === 1 ? t("usageStats.today") : t("usageStats.days", { days: option })
-            }
-            onChange={setRangeDays}
-          />
-          <Segment
-            ariaLabel={t("usageStats.agentFilter")}
-            value={agent}
-            options={AGENT_OPTIONS}
-            label={(option) => t(`usageStats.agent.${option}`)}
-            onChange={setAgent}
-          />
-          <Button
-            size="icon-sm"
-            variant="outline"
-            aria-label={t("common.refresh")}
-            title={t("common.refresh")}
-            disabled={loading}
-            onClick={() => void refetch()}
+        <div style={s.usageHeaderRight}>
+          <div style={s.usageLiveStatus}>
+            <span className="usage-live-dot" />
+            <span style={s.usageLiveText}>
+              <strong>{t("usageStats.live")}</strong>
+              <span>{updateLabel}</span>
+            </span>
+          </div>
+          <div
+            style={{
+              ...s.usageDashboardControls,
+              justifyContent: width < 700 ? "flex-start" : "flex-end",
+            }}
           >
-            <RefreshCw size={13} />
-          </Button>
+            <Segment
+              ariaLabel={t("usageStats.rangeFilter")}
+              value={rangeDays}
+              options={RANGE_OPTIONS}
+              label={(option) =>
+                option === 1 ? t("usageStats.today") : t("usageStats.days", { days: option })
+              }
+              onChange={setRangeDays}
+            />
+            <Segment
+              ariaLabel={t("usageStats.agentFilter")}
+              value={agent}
+              options={AGENT_OPTIONS}
+              label={(option) => t(`usageStats.agent.${option}`)}
+              onChange={setAgent}
+            />
+            <Button
+              size="icon-sm"
+              variant="outline"
+              aria-label={t("common.refresh")}
+              title={t("common.refresh")}
+              disabled={refreshing}
+              onClick={() => void refetch()}
+            >
+              <RefreshCw className={refreshing ? "spin" : undefined} size={13} />
+            </Button>
+          </div>
         </div>
       </header>
 
@@ -381,12 +416,12 @@ export function UsageDashboard({ embedded = false }: { embedded?: boolean }) {
                 opacity: loading ? 0.72 : 1,
               }}
             >
-              {metrics.map((metric) => (
-                <MetricCard key={metric.label} {...metric} />
+              {metrics.map((metric, index) => (
+                <MetricCard key={metric.label} {...metric} index={index} />
               ))}
             </div>
 
-            <section style={s.usageChartSection}>
+            <section className="usage-panel" style={s.usageChartSection}>
               <div
                 style={{
                   ...s.usageSectionHead,
@@ -427,6 +462,7 @@ export function UsageDashboard({ embedded = false }: { embedded?: boolean }) {
                 claude={statistics.breakdown.claude}
                 tokenLabel={t("usageStats.tokensShort")}
                 requestLabel={t("usageStats.requestsShort")}
+                title={t("usageStats.sourceBreakdown")}
               />
             )}
 

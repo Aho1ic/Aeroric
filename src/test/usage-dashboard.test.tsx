@@ -37,6 +37,7 @@ function result(rangeDays: UsageStatisticsRange, agent: UsageStatisticsAgent): U
     from: "2026-07-10",
     to: "2026-07-16",
     agent,
+    updatedAt: Date.UTC(2026, 6, 16, 12, 0, 0),
     totals,
     series: Array.from({ length: rangeDays }, (_, index) => ({
       date: `2026-07-${String(16 - (rangeDays - index - 1)).padStart(2, "0")}`,
@@ -58,6 +59,7 @@ describe("UsageDashboard", () => {
         command: string,
         args: { rangeDays: UsageStatisticsRange; agent: UsageStatisticsAgent },
       ) => {
+        if (command === "refresh_usage_statistics_index") return false;
         expect(command).toBe("read_usage_statistics");
         return result(args.rangeDays, args.agent);
       },
@@ -73,6 +75,8 @@ describe("UsageDashboard", () => {
     );
 
     expect(await screen.findByRole("heading", { name: "Usage statistics" })).toBeInTheDocument();
+    expect(screen.getAllByText("1,500").length).toBeGreaterThan(0);
+    expect(screen.queryByText("1.5K")).not.toBeInTheDocument();
     expect(screen.getByText("41.7%")).toBeInTheDocument();
     expect(screen.getByText("$0.1234")).toBeInTheDocument();
     expect(screen.getByText("Daily usage")).toBeInTheDocument();

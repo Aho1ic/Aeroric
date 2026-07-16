@@ -54,7 +54,7 @@ fn duration_from(first: Option<f64>, last: Option<f64>) -> f64 {
 /// token/tool_calls 全部归零；判定标准必须与会话查看器保持一致。
 const SESSION_FORMAT_DETECTION_LINES: usize = 200;
 
-fn is_codex_session(content: &str) -> bool {
+pub(crate) fn is_codex_session(content: &str) -> bool {
     for line in content.lines().take(SESSION_FORMAT_DETECTION_LINES) {
         let Ok(v) = serde_json::from_str::<Value>(line) else {
             continue;
@@ -257,21 +257,21 @@ pub async fn read_session_metrics(session_path: String) -> Result<SessionMetrics
 // ── Local usage statistics ──────────────────────────────────────────────────
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum UsageAgent {
+pub(crate) enum UsageAgent {
     Codex,
     Claude,
 }
 
 #[derive(Clone, Debug)]
-struct UsageRequest {
-    timestamp: f64,
-    date: chrono::NaiveDate,
-    agent: UsageAgent,
-    model: String,
-    input_tokens: u64,
-    output_tokens: u64,
-    cache_creation_tokens: u64,
-    cache_read_tokens: u64,
+pub(crate) struct UsageRequest {
+    pub(crate) timestamp: f64,
+    pub(crate) date: chrono::NaiveDate,
+    pub(crate) agent: UsageAgent,
+    pub(crate) model: String,
+    pub(crate) input_tokens: u64,
+    pub(crate) output_tokens: u64,
+    pub(crate) cache_creation_tokens: u64,
+    pub(crate) cache_read_tokens: u64,
 }
 
 #[derive(serde::Serialize, Clone, Default, Debug)]
@@ -310,6 +310,7 @@ pub(crate) struct UsageStatistics {
     pub(crate) from: String,
     pub(crate) to: String,
     pub(crate) agent: String,
+    pub(crate) updated_at: i64,
     pub(crate) totals: UsageStatisticsTotals,
     pub(crate) series: Vec<UsageStatisticsDay>,
     pub(crate) breakdown: UsageStatisticsBreakdown,
@@ -333,7 +334,7 @@ fn request_date(val: &Value) -> Option<(f64, chrono::NaiveDate)> {
     ))
 }
 
-fn parse_claude_usage_requests(content: &str, source_key: &str) -> Vec<UsageRequest> {
+pub(crate) fn parse_claude_usage_requests(content: &str, source_key: &str) -> Vec<UsageRequest> {
     let mut requests = HashMap::<String, UsageRequest>::new();
 
     for (line_index, line) in content.lines().enumerate() {
@@ -398,7 +399,7 @@ fn parse_claude_usage_requests(content: &str, source_key: &str) -> Vec<UsageRequ
     requests.into_values().collect()
 }
 
-fn parse_codex_usage_requests(content: &str) -> Vec<UsageRequest> {
+pub(crate) fn parse_codex_usage_requests(content: &str) -> Vec<UsageRequest> {
     let mut requests = Vec::new();
     let mut model = String::new();
 
@@ -622,7 +623,7 @@ fn aggregate_requests(
     (totals, series)
 }
 
-fn collect_jsonl_files(root: &Path, files: &mut HashSet<PathBuf>) {
+pub(crate) fn collect_jsonl_files(root: &Path, files: &mut HashSet<PathBuf>) {
     let Ok(entries) = std::fs::read_dir(root) else {
         return;
     };
@@ -641,7 +642,7 @@ fn collect_jsonl_files(root: &Path, files: &mut HashSet<PathBuf>) {
     }
 }
 
-fn usage_roots() -> Vec<PathBuf> {
+pub(crate) fn usage_roots() -> Vec<PathBuf> {
     let Some(home) = std::env::var_os("HOME")
         .or_else(|| std::env::var_os("USERPROFILE"))
         .map(PathBuf::from)
@@ -687,23 +688,7 @@ fn read_usage_statistics_sync(range_days: u32, agent: String) -> Result<UsageSta
 
     let to = chrono::Local::now().date_naive();
     let from = to - chrono::Duration::days(i64::from(range_days - 1));
-    let mut files = HashSet::new();
-    for root in usage_roots() {
-        collect_jsonl_files(&root, &mut files);
-    }
-
-    let mut requests = Vec::new();
-    for path in files {
-        let Ok(content) = std::fs::read_to_string(&path) else {
-            continue;
-        };
-        if is_codex_session(&content) {
-            requests.extend(parse_codex_usage_requests(&content));
-        } else {
-            let source_key = path.to_string_lossy();
-            requests.extend(parse_claude_usage_requests(&content, &source_key));
-        }
-    }
+    let requests = crate::usage_index::load_requests(from, to)?;
 
     let (totals, series) = aggregate_requests(&requests, from, to, selected_agent);
     let (codex, _) = aggregate_requests(&requests, from, to, Some(UsageAgent::Codex));
@@ -714,6 +699,7 @@ fn read_usage_statistics_sync(range_days: u32, agent: String) -> Result<UsageSta
         from: from.to_string(),
         to: to.to_string(),
         agent,
+        updated_at: crate::usage_index::latest_updated_at()?,
         totals,
         series,
         breakdown: UsageStatisticsBreakdown { codex, claude },

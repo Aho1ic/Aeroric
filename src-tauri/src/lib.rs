@@ -38,6 +38,7 @@ mod storage;
 mod subprocess;
 mod tests;
 mod usage;
+mod usage_index;
 
 use session::{ClaudeSessionInfo, CodexSessionInfo};
 
@@ -137,6 +138,7 @@ pub fn run() {
             });
             // 启动 hook 事件文件 watcher
             crate::event_watcher::start(app.handle().clone());
+            crate::usage_index::start(app.handle().clone());
             Ok(())
         })
         .manage(TaskManager {
@@ -361,6 +363,7 @@ pub fn run() {
             diagnostics::remote_run_diagnostics,
             analytics::read_session_metrics,
             analytics::read_usage_statistics,
+            usage_index::refresh_usage_statistics_index,
             session::read_session_messages,
             session::read_session_id,
             session::recover_task_session,

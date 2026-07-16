@@ -751,6 +751,7 @@ export interface UsageStatistics {
   from: string;
   to: string;
   agent: UsageStatisticsAgent;
+  updatedAt: number;
   totals: UsageStatisticsTotals;
   series: UsageStatisticsDay[];
   breakdown: {

@@ -126,6 +126,20 @@ describe("terminal output highlighting", () => {
     );
     vi.useRealTimers();
   });
+
+  it("immediately applies plain shell echo when interactive output is enabled", () => {
+    vi.useFakeTimers();
+    const write = vi.fn((_data: string, callback?: () => void) => callback?.());
+    const writer = createSmartWriter({ write } as unknown as Terminal, undefined, {
+      resumeOnAnyOutput: true,
+    });
+
+    writer.pauseForUserInput(50);
+    writer.write("a");
+
+    expect(write).toHaveBeenCalledWith("a", expect.any(Function));
+    vi.useRealTimers();
+  });
 });
 
 describe("cursor line highlight overlay", () => {
@@ -255,4 +269,3 @@ describe("cursor line highlight overlay", () => {
     container.remove();
   });
 });
-

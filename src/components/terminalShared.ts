@@ -282,6 +282,10 @@ export interface SmartWriter {
   pauseForUserInput: (durationMs?: number) => void;
 }
 
+interface SmartWriterOptions {
+  resumeOnAnyOutput?: boolean;
+}
+
 interface TerminalSelectionGuardOptions {
   term: Terminal;
   container: HTMLElement;
@@ -678,6 +682,7 @@ function refreshTerminalCursorLine(term: Terminal): void {
 export function createSmartWriter(
   term: Terminal,
   getThemeVariant: () => ThemeVariant = () => "dark",
+  options: SmartWriterOptions = {},
 ): SmartWriter {
   const state = {
     pendingChunks: [] as Array<{ data: string; callback?: () => void }>,
@@ -744,7 +749,7 @@ export function createSmartWriter(
   function write(data: string, callback?: () => void) {
     const hasInteractiveControl =
       data.includes("\u001b") || data.includes("\r") || data.includes("\b");
-    if (state.inputPausedUntil > nowMs() && hasInteractiveControl) {
+    if (state.inputPausedUntil > nowMs() && (hasInteractiveControl || options.resumeOnAnyOutput)) {
       state.inputPausedUntil = 0;
     }
     const output = remapLightAnsiForeground(colorizePlainTerminalOutput(data), getThemeVariant());

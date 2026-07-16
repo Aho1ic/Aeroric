@@ -225,7 +225,9 @@ export const SshTerminalPanel = forwardRef<SshTerminalPanelHandle, Props>(functi
     term.open(container);
     const disposeInputFix = attachMacWebKitShiftInputFix(term);
     loadWebglAddon(term);
-    const writer = createSmartWriter(term, () => themeVariant);
+    const writer = createSmartWriter(term, () => themeVariant, {
+      resumeOnAnyOutput: true,
+    });
     const disposeMacWebKitGuard = attachMacWebKitTerminalGuard({ term, container, writer });
     const disposeSmartCopy = attachSmartCopy(term, {
       onPaste: (text) => {

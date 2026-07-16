@@ -532,10 +532,7 @@ pub async fn open_ssh_shell(
             event_name: "shell-output",
             id_key: "shell_id",
         },
-        crate::pty::PtyEmitMode::Batched {
-            flush_interval: crate::pty::PTY_EMIT_FLUSH_INTERVAL,
-            max_batch_bytes: crate::pty::PTY_EMIT_MAX_BATCH_BYTES,
-        },
+        crate::pty::PtyEmitMode::Immediate,
         reader,
         false,
         None,
