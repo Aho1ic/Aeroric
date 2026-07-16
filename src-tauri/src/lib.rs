@@ -360,6 +360,7 @@ pub fn run() {
             diagnostics::run_diagnostics,
             diagnostics::remote_run_diagnostics,
             analytics::read_session_metrics,
+            analytics::read_usage_statistics,
             session::read_session_messages,
             session::read_session_id,
             session::recover_task_session,

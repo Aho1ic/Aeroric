@@ -16,6 +16,7 @@ import {
   Pencil,
   Database,
   NotebookTabs,
+  ChartNoAxesCombined,
 } from "lucide-react";
 import * as Popover from "@radix-ui/react-popover";
 import type {
@@ -43,6 +44,7 @@ import { DatabaseView } from "./database/DatabaseView";
 import { NotebookPanel } from "./notebook/NotebookPanel";
 import { DockerIcon } from "./DockerIcon";
 import RecursiveHeroCanvas from "./recursive-hero-effect/RecursiveHeroCanvas";
+import { UsageDashboard } from "./UsageDashboard";
 import { useI18n, pluralKey } from "../i18n";
 import s from "../styles";
 
@@ -192,7 +194,7 @@ export function WelcomePage({
   const editingProjectInputRef = useRef<HTMLInputElement | null>(null);
   const suppressProjectClickRef = useRef<string | null>(null);
   const [view, setView] = useState<
-    "projects" | "timeline" | "skills" | "docker" | "ssh" | "database" | "notes"
+    "projects" | "timeline" | "usage" | "skills" | "docker" | "ssh" | "database" | "notes"
   >("projects");
   const [openProjectMenu, setOpenProjectMenu] = useState(false);
   const [sftpOpen, setSftpOpen] = useState(false);
@@ -296,6 +298,12 @@ export function WelcomePage({
               onClick={() => switchWelcomeView("timeline")}
             />
             <SidebarItem
+              icon={<ChartNoAxesCombined size={15} />}
+              label={t("usageStats.nav")}
+              active={view === "usage"}
+              onClick={() => switchWelcomeView("usage")}
+            />
+            <SidebarItem
               icon={<Blocks size={15} />}
               label={t("welcome.skillHub")}
               active={view === "skills"}
@@ -378,6 +386,8 @@ export function WelcomePage({
               if (project) onProjectClick(project);
             }}
           />
+        ) : view === "usage" ? (
+          <UsageDashboard />
         ) : view === "skills" ? (
           <SkillHubView
             config={skillHubConfig}

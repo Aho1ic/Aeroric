@@ -726,6 +726,39 @@ export interface UsageSnapshot {
   fetchedAt: number;
 }
 
+export type UsageStatisticsAgent = "all" | "codex" | "claude";
+export type UsageStatisticsRange = 1 | 7 | 14 | 30;
+
+export interface UsageStatisticsTotals {
+  totalTokens: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheCreationTokens: number;
+  cacheReadTokens: number;
+  cacheHitRate: number;
+  requestCount: number;
+  totalCost: number;
+  pricedRequestCount: number;
+  unpricedRequestCount: number;
+}
+
+export interface UsageStatisticsDay extends UsageStatisticsTotals {
+  date: string;
+}
+
+export interface UsageStatistics {
+  rangeDays: UsageStatisticsRange;
+  from: string;
+  to: string;
+  agent: UsageStatisticsAgent;
+  totals: UsageStatisticsTotals;
+  series: UsageStatisticsDay[];
+  breakdown: {
+    codex: UsageStatisticsTotals;
+    claude: UsageStatisticsTotals;
+  };
+}
+
 // ── Skill Hub ────────────────────────────────────────────────────────────────
 
 export interface SkillHubConfig {

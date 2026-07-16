@@ -11,6 +11,7 @@ import { skillHub } from "./skill-hub";
 import { task } from "./task";
 import { terminal } from "./terminal";
 import { timeline } from "./timeline";
+import { usage } from "./usage";
 
 const s = {
   ...layout,
@@ -24,6 +25,7 @@ const s = {
   ...font,
   ...timeline,
   ...skillHub,
+  ...usage,
 } satisfies Record<string, React.CSSProperties>;
 
 export default s;
@@ -40,4 +42,5 @@ export {
   task,
   terminal,
   timeline,
+  usage,
 };

@@ -7,6 +7,7 @@ import {
 } from "../agents";
 import {
   composeAgentMenuContentStyle,
+  composeAgentMenuScrollButtonStyle,
   composeAgentMenuViewportStyle,
   composeControlOrder,
   composeModelMenuContentStyle,
@@ -116,14 +117,26 @@ describe("agent options", () => {
       expect.objectContaining({
         minWidth: "var(--radix-select-trigger-width)",
         maxHeight: "min(280px, var(--radix-select-content-available-height))",
+        display: "flex",
+        flexDirection: "column",
         overflow: "hidden",
       }),
     );
     expect(composeAgentMenuViewportStyle()).toEqual(
       expect.objectContaining({
-        maxHeight: "min(280px, var(--radix-select-content-available-height))",
+        maxHeight: "min(232px, calc(var(--radix-select-content-available-height) - 48px))",
         overflowY: "auto",
         overscrollBehavior: "contain",
+        scrollbarGutter: "stable",
+      }),
+    );
+    expect(composeAgentMenuScrollButtonStyle()).toEqual(
+      expect.objectContaining({
+        height: 24,
+        flexShrink: 0,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
       }),
     );
   });
