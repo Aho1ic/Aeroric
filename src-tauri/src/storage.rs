@@ -53,6 +53,25 @@ pub struct Task {
     pub agent: String,
     #[serde(rename = "permissionMode")]
     pub permission_mode: String,
+    // Per-task agent 行为旋钮。历史上仅存在于前端 Task 里，写盘时被 serde 忽略；
+    // 这里补齐以支持重启/resume 后的持久化，也是 reasoning/speed 的搭档字段。
+    #[serde(
+        rename = "selectedModel",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub selected_model: Option<String>,
+    // Codex：minimal/low/medium/high/xhigh；Claude：low/medium/high/xhigh/max/ultracode。
+    // 值集合不同，前端各用各的原生值，不做统一映射。
+    #[serde(
+        rename = "reasoningEffort",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub reasoning_effort: Option<String>,
+    // 目前仅 Claude 支持 fast/normal；Codex 无独立 fast 概念。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub speed: Option<String>,
     pub status: String,
     #[serde(rename = "createdAt")]
     pub created_at: i64,

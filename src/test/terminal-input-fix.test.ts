@@ -927,6 +927,113 @@ describe("terminal input fixes", () => {
     expect(sent).toEqual([]);
   });
 
+  it("drops a normal-key first-letter xterm emission when composition starts immediately after it", async () => {
+    vi.useFakeTimers();
+    vi.resetModules();
+    vi.doMock("../platform", () => ({
+      APP_PLATFORM: "macos",
+      ENABLE_USAGE_INSIGHTS: true,
+      IS_MAC_WEBKIT: true,
+      IS_OTHER_WEBKIT: false,
+      detectAppPlatform: () => "macos",
+      isAppleWebKit: () => true,
+    }));
+    const { attachLinuxIMEFix } = await import("../components/terminalInputFix");
+    const terminalElement = document.createElement("div");
+    terminalElement.className = "xterm";
+    const textarea = document.createElement("textarea");
+    terminalElement.appendChild(textarea);
+    document.body.appendChild(terminalElement);
+    const sent: string[] = [];
+    const dataListeners: Array<(data: string) => void> = [];
+    const term = {
+      textarea,
+      onData: (listener: (data: string) => void) => {
+        dataListeners.push(listener);
+        return { dispose: vi.fn() };
+      },
+    };
+
+    textarea.addEventListener(
+      "keydown",
+      () => {
+        dataListeners[0]?.("t");
+      },
+      true,
+    );
+    const disposable = attachLinuxIMEFix(term as never, (data) => sent.push(data));
+    vi.advanceTimersByTime(1);
+    const firstKey = new KeyboardEvent("keydown", {
+      key: "t",
+      code: "KeyT",
+      bubbles: true,
+      cancelable: true,
+    });
+    Object.defineProperty(firstKey, "keyCode", { value: 84 });
+    textarea.dispatchEvent(firstKey);
+
+    expect(sent).toEqual([]);
+
+    textarea.dispatchEvent(new CompositionEvent("compositionstart", { data: "" }));
+    textarea.value = "team";
+    textarea.dispatchEvent(new CompositionEvent("compositionupdate", { data: "team" }));
+    textarea.dispatchEvent(
+      new InputEvent("beforeinput", {
+        inputType: "insertText",
+        data: "团队",
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    vi.runOnlyPendingTimers();
+
+    expect(sent).toEqual(["团队"]);
+    disposable.dispose();
+    terminalElement.remove();
+    vi.useRealTimers();
+  });
+
+  it("forwards a normal English first letter when no composition starts", async () => {
+    vi.useFakeTimers();
+    vi.resetModules();
+    vi.doMock("../platform", () => ({
+      APP_PLATFORM: "macos",
+      ENABLE_USAGE_INSIGHTS: true,
+      IS_MAC_WEBKIT: true,
+      IS_OTHER_WEBKIT: false,
+      detectAppPlatform: () => "macos",
+      isAppleWebKit: () => true,
+    }));
+    const { attachLinuxIMEFix } = await import("../components/terminalInputFix");
+    const textarea = document.createElement("textarea");
+    const sent: string[] = [];
+    const dataListeners: Array<(data: string) => void> = [];
+    const term = {
+      textarea,
+      onData: (listener: (data: string) => void) => {
+        dataListeners.push(listener);
+        return { dispose: vi.fn() };
+      },
+    };
+
+    attachLinuxIMEFix(term as never, (data) => sent.push(data));
+    vi.advanceTimersByTime(1);
+    const firstKey = new KeyboardEvent("keydown", {
+      key: "t",
+      code: "KeyT",
+      bubbles: true,
+      cancelable: true,
+    });
+    Object.defineProperty(firstKey, "keyCode", { value: 84 });
+    textarea.dispatchEvent(firstKey);
+    dataListeners[0]?.("t");
+
+    expect(sent).toEqual([]);
+    vi.advanceTimersByTime(20);
+    expect(sent).toEqual(["t"]);
+    vi.useRealTimers();
+  });
+
   it("commits normalized romanized text when switching IME to English mid-composition", async () => {
     vi.useFakeTimers();
     vi.resetModules();
@@ -1161,6 +1268,211 @@ describe("terminal input fixes", () => {
       vi.useRealTimers();
     },
   );
+
+  it.each([
+    ["space", 32],
+    ["Enter", 13],
+    ["number", 49],
+    ["numpad number", 97],
+  ])(
+    "commits a WeChat English candidate when %s is exposed only through legacy keyCode",
+    async (_label, keyCode) => {
+      vi.useFakeTimers();
+      vi.resetModules();
+      vi.doMock("../platform", () => ({
+        APP_PLATFORM: "macos",
+        ENABLE_USAGE_INSIGHTS: true,
+        IS_MAC_WEBKIT: true,
+        IS_OTHER_WEBKIT: false,
+        detectAppPlatform: () => "macos",
+        isAppleWebKit: () => true,
+      }));
+      const { attachLinuxIMEFix } = await import("../components/terminalInputFix");
+      const textarea = document.createElement("textarea");
+      const sent: string[] = [];
+      const term = {
+        textarea,
+        onData: () => ({ dispose: vi.fn() }),
+      };
+
+      attachLinuxIMEFix(term as never, (data) => sent.push(data));
+      textarea.dispatchEvent(new CompositionEvent("compositionstart", { data: "" }));
+      textarea.value = "team";
+      textarea.dispatchEvent(new CompositionEvent("compositionupdate", { data: "team" }));
+
+      const commitKey = new KeyboardEvent("keydown", {
+        key: "Process",
+        code: "",
+        bubbles: true,
+        cancelable: true,
+      });
+      Object.defineProperty(commitKey, "keyCode", { value: keyCode });
+      Object.defineProperty(commitKey, "isComposing", { value: true });
+      textarea.dispatchEvent(commitKey);
+
+      vi.advanceTimersByTime(200);
+      expect(sent).toEqual(["team"]);
+      vi.useRealTimers();
+    },
+  );
+
+  it.each([
+    ["space", " ", "Space", 32],
+    ["Enter", "Enter", "Enter", 13],
+    ["number", "1", "Digit1", 49],
+    ["numpad number", "1", "Numpad1", 97],
+  ])(
+    "recovers a cleared WeChat English candidate when %s arrives after compositionend",
+    async (_label, key, code, keyCode) => {
+      vi.useFakeTimers();
+      vi.resetModules();
+      vi.doMock("../platform", () => ({
+        APP_PLATFORM: "macos",
+        ENABLE_USAGE_INSIGHTS: true,
+        IS_MAC_WEBKIT: true,
+        IS_OTHER_WEBKIT: false,
+        detectAppPlatform: () => "macos",
+        isAppleWebKit: () => true,
+      }));
+      const { attachLinuxIMEFix } = await import("../components/terminalInputFix");
+      const textarea = document.createElement("textarea");
+      const sent: string[] = [];
+      const downstreamKeydown = vi.fn();
+      const term = {
+        textarea,
+        onData: () => ({ dispose: vi.fn() }),
+      };
+
+      attachLinuxIMEFix(term as never, (data) => sent.push(data));
+      textarea.addEventListener("keydown", downstreamKeydown);
+      textarea.dispatchEvent(new CompositionEvent("compositionstart", { data: "" }));
+      textarea.value = "team";
+      textarea.dispatchEvent(new CompositionEvent("compositionupdate", { data: "team" }));
+      textarea.value = "";
+      textarea.dispatchEvent(new CompositionEvent("compositionupdate", { data: "" }));
+      textarea.dispatchEvent(new CompositionEvent("compositionend", { data: "" }));
+
+      const commitKey = new KeyboardEvent("keydown", {
+        key,
+        code,
+        bubbles: true,
+        cancelable: true,
+      });
+      Object.defineProperty(commitKey, "keyCode", { value: keyCode });
+      textarea.dispatchEvent(commitKey);
+
+      vi.advanceTimersByTime(200);
+      expect(commitKey.defaultPrevented).toBe(true);
+      expect(downstreamKeydown).not.toHaveBeenCalled();
+      expect(sent).toEqual(["team"]);
+      vi.useRealTimers();
+    },
+  );
+
+  it("recovers a cleared WeChat English candidate from keyup when keydown is opaque", async () => {
+    vi.useFakeTimers();
+    vi.resetModules();
+    vi.doMock("../platform", () => ({
+      APP_PLATFORM: "macos",
+      ENABLE_USAGE_INSIGHTS: true,
+      IS_MAC_WEBKIT: true,
+      IS_OTHER_WEBKIT: false,
+      detectAppPlatform: () => "macos",
+      isAppleWebKit: () => true,
+    }));
+    const { attachLinuxIMEFix } = await import("../components/terminalInputFix");
+    const textarea = document.createElement("textarea");
+    const sent: string[] = [];
+    const term = {
+      textarea,
+      onData: () => ({ dispose: vi.fn() }),
+    };
+
+    attachLinuxIMEFix(term as never, (data) => sent.push(data));
+    textarea.dispatchEvent(new CompositionEvent("compositionstart", { data: "" }));
+    textarea.value = "team";
+    textarea.dispatchEvent(new CompositionEvent("compositionupdate", { data: "team" }));
+    textarea.value = "";
+    textarea.dispatchEvent(new CompositionEvent("compositionupdate", { data: "" }));
+    textarea.dispatchEvent(new CompositionEvent("compositionend", { data: "" }));
+
+    const opaqueKeydown = new KeyboardEvent("keydown", {
+      key: "Process",
+      code: "",
+      bubbles: true,
+      cancelable: true,
+    });
+    Object.defineProperty(opaqueKeydown, "keyCode", { value: 229 });
+    textarea.dispatchEvent(opaqueKeydown);
+
+    const spaceKeyup = new KeyboardEvent("keyup", {
+      key: " ",
+      code: "Space",
+      bubbles: true,
+      cancelable: true,
+    });
+    Object.defineProperty(spaceKeyup, "keyCode", { value: 32 });
+    textarea.dispatchEvent(spaceKeyup);
+
+    vi.advanceTimersByTime(200);
+    expect(spaceKeyup.defaultPrevented).toBe(true);
+    expect(sent).toEqual(["team"]);
+    vi.useRealTimers();
+  });
+
+  it("does not recover a romanized word that the user deleted with Backspace", async () => {
+    vi.useFakeTimers();
+    vi.resetModules();
+    vi.doMock("../platform", () => ({
+      APP_PLATFORM: "macos",
+      ENABLE_USAGE_INSIGHTS: true,
+      IS_MAC_WEBKIT: true,
+      IS_OTHER_WEBKIT: false,
+      detectAppPlatform: () => "macos",
+      isAppleWebKit: () => true,
+    }));
+    const { attachLinuxIMEFix } = await import("../components/terminalInputFix");
+    const textarea = document.createElement("textarea");
+    const sent: string[] = [];
+    const term = {
+      textarea,
+      onData: () => ({ dispose: vi.fn() }),
+    };
+
+    attachLinuxIMEFix(term as never, (data) => sent.push(data));
+    textarea.dispatchEvent(new CompositionEvent("compositionstart", { data: "" }));
+    textarea.value = "team";
+    textarea.dispatchEvent(new CompositionEvent("compositionupdate", { data: "team" }));
+    textarea.dispatchEvent(
+      new InputEvent("beforeinput", {
+        inputType: "deleteContentBackward",
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    textarea.value = "";
+    textarea.dispatchEvent(
+      new InputEvent("input", {
+        inputType: "deleteContentBackward",
+        bubbles: true,
+      }),
+    );
+    textarea.dispatchEvent(new CompositionEvent("compositionupdate", { data: "" }));
+    textarea.dispatchEvent(new CompositionEvent("compositionend", { data: "" }));
+
+    const space = new KeyboardEvent("keydown", {
+      key: " ",
+      code: "Space",
+      bubbles: true,
+      cancelable: true,
+    });
+    Object.defineProperty(space, "keyCode", { value: 32 });
+    textarea.dispatchEvent(space);
+
+    vi.advanceTimersByTime(200);
+    expect(sent).toEqual([]);
+    vi.useRealTimers();
+  });
 
   it.each([
     ["space", "Process", "Space"],

@@ -40,6 +40,9 @@ const ROMANIZED_COMPOSITION_PROMPT_COMMIT_DELAY_MS = 0;
 const POST_COMPOSITION_TEXTAREA_CLEAR_DELAYS_MS = [0, 16, 40, 80, 160, 320, 640];
 const TEXTAREA_INPUT_CLIENT_RESET_MS = 24;
 const IME_PROCESS_KEY_GUARD_MS = 180;
+// WebKit can expose the first IME letter as a normal key before compositionstart.
+// Hold matching xterm data for one frame so that composition can claim it.
+const IME_FIRST_KEY_HANDOFF_DELAY_MS = 16;
 const CLEARED_COMPOSITION_REPLAY_GUARD_MS = 800;
 
 export function applyTerminalTextareaInputAttributes(term: {
@@ -76,6 +79,10 @@ function isCompositionDeletionInputType(inputType: string): boolean {
   );
 }
 
+function isUserCompositionDeletionInputType(inputType: string): boolean {
+  return inputType === "deleteContentBackward" || inputType === "deleteContentForward";
+}
+
 function isRepeatableEditingKey(key: string): boolean {
   return (
     key === "Backspace" ||
@@ -91,7 +98,23 @@ function isPrintableKey(key: string): boolean {
   return key.length === 1;
 }
 
+function getPotentialRomanizedImeHandoffKey(event: KeyboardEvent): string | null {
+  if (
+    event.isComposing ||
+    event.repeat ||
+    event.ctrlKey ||
+    event.metaKey ||
+    event.altKey ||
+    event.shiftKey ||
+    !/^[A-Za-z]$/.test(event.key)
+  ) {
+    return null;
+  }
+  return event.key;
+}
+
 function isCandidateCommitKey(event: KeyboardEvent): boolean {
+  const legacyKeyCode = event.keyCode;
   return (
     event.key === " " ||
     event.key === "Spacebar" ||
@@ -99,7 +122,11 @@ function isCandidateCommitKey(event: KeyboardEvent): boolean {
     event.key === "Enter" ||
     event.code === "Enter" ||
     /^[1-9]$/.test(event.key) ||
-    /^(?:Digit|Numpad)[1-9]$/.test(event.code)
+    /^(?:Digit|Numpad)[1-9]$/.test(event.code) ||
+    legacyKeyCode === 13 ||
+    legacyKeyCode === 32 ||
+    (legacyKeyCode >= 49 && legacyKeyCode <= 57) ||
+    (legacyKeyCode >= 97 && legacyKeyCode <= 105)
   );
 }
 
@@ -390,6 +417,14 @@ export function attachLinuxIMEFix(
   let candidateCommitText = "";
   let preservedRomanizedCompositionText = "";
   let pendingRomanizedProcessText = "";
+  let potentialRomanizedImeHandoffKey = "";
+  let potentialRomanizedImeHandoffUntil = 0;
+  let pendingRomanizedImeHandoffData: {
+    data: string;
+    timer: ReturnType<typeof globalThis.setTimeout>;
+  } | null = null;
+  let recentlyClearedRomanizedText = "";
+  let recentlyClearedRomanizedUntil = 0;
   let pendingCompositionCommit: {
     text: string;
     preeditText: string;
@@ -435,6 +470,24 @@ export function attachLinuxIMEFix(
     });
   };
 
+  const clearRecentlyClearedRomanizedText = () => {
+    recentlyClearedRomanizedText = "";
+    recentlyClearedRomanizedUntil = 0;
+  };
+
+  const rememberRecentlyClearedRomanizedText = (text: string) => {
+    if (!shouldDeferRomanizedCompositionCommit(text, text)) return;
+    recentlyClearedRomanizedText = text.trim();
+    recentlyClearedRomanizedUntil = performance.now() + CLEARED_COMPOSITION_REPLAY_GUARD_MS;
+  };
+
+  const getRecentlyClearedRomanizedText = () => {
+    if (performance.now() > recentlyClearedRomanizedUntil) {
+      clearRecentlyClearedRomanizedText();
+    }
+    return recentlyClearedRomanizedText;
+  };
+
   const updateCompositionText = (nextText: string) => {
     const previousText = compositionText;
     compositionText = nextText;
@@ -445,6 +498,11 @@ export function attachLinuxIMEFix(
     }
     if (previousText && !nextText) {
       ignoredReplayProgress = "";
+      if (compositionDeletionInProgress) {
+        clearRecentlyClearedRomanizedText();
+      } else {
+        rememberRecentlyClearedRomanizedText(previousText);
+      }
       // 候选键正在提交英文候选时，微信输入法会先发一个空的 compositionupdate 清空预编辑，
       // 再用 compositionend 带回英文单词（例如 plan）。这种“清空”是提交流程的一部分，
       // 不能把即将回来的英文单词当成 replay 抑制掉——否则按空格/回车/数字选英文候选时
@@ -562,11 +620,42 @@ export function attachLinuxIMEFix(
     candidateKeyCommitTimer = null;
   };
 
+  const clearPotentialRomanizedImeHandoff = () => {
+    potentialRomanizedImeHandoffKey = "";
+    potentialRomanizedImeHandoffUntil = 0;
+  };
+
+  const cancelPendingRomanizedImeHandoff = (): string => {
+    const pendingData = pendingRomanizedImeHandoffData?.data ?? "";
+    if (pendingRomanizedImeHandoffData) {
+      globalThis.clearTimeout(pendingRomanizedImeHandoffData.timer);
+      pendingRomanizedImeHandoffData = null;
+    }
+    const potentialKey =
+      performance.now() <= potentialRomanizedImeHandoffUntil ? potentialRomanizedImeHandoffKey : "";
+    clearPotentialRomanizedImeHandoff();
+    return pendingData || potentialKey;
+  };
+
+  const flushPendingRomanizedImeHandoff = () => {
+    if (!pendingRomanizedImeHandoffData) {
+      clearPotentialRomanizedImeHandoff();
+      return;
+    }
+    const pending = pendingRomanizedImeHandoffData;
+    pendingRomanizedImeHandoffData = null;
+    globalThis.clearTimeout(pending.timer);
+    clearPotentialRomanizedImeHandoff();
+    onDataCallback(pending.data);
+  };
+
   const commitCompositionText = (text: string, preeditText: string) => {
     const normalized = normalizeCommittedCompositionText(text);
     candidateCommitText = "";
     preservedRomanizedCompositionText = "";
     pendingRomanizedProcessText = "";
+    cancelPendingRomanizedImeHandoff();
+    clearRecentlyClearedRomanizedText();
     ignoredReplayProgress = "";
     ignoredPostCompositionCandidates = buildPostCompositionIgnoredCandidates(text, preeditText);
     ignorePostCompositionUntil = performance.now() + POST_COMPOSITION_REPLAY_IGNORE_MS;
@@ -627,6 +716,17 @@ export function attachLinuxIMEFix(
     return normalized;
   };
 
+  const recoverRecentlyClearedRomanizedComposition = (): boolean => {
+    const text = getRecentlyClearedRomanizedText();
+    if (!shouldDeferRomanizedCompositionCommit(text, text)) return false;
+    isComposing = true;
+    compositionText = text;
+    candidateCommitText = text;
+    preservedRomanizedCompositionText = text;
+    pendingRomanizedProcessText = "";
+    return true;
+  };
+
   const flushPendingCompositionCommit = (): boolean => {
     const pending = pendingCompositionCommit;
     if (!pending) return false;
@@ -675,6 +775,7 @@ export function attachLinuxIMEFix(
 
   const handleCompositionStartCapture = (event: CompositionEvent) => {
     imeDbg("compositionstart", { data: event.data });
+    const handoffText = cancelPendingRomanizedImeHandoff();
     textareaClearGeneration += 1;
     clearScheduledTextareaClears();
     clearCandidateKeyCommit();
@@ -685,7 +786,8 @@ export function attachLinuxIMEFix(
     isComposing = true;
     compositionText = "";
     candidateCommitText = "";
-    const initialRomanizedText = event.data || pendingRomanizedProcessText;
+    clearRecentlyClearedRomanizedText();
+    const initialRomanizedText = event.data || pendingRomanizedProcessText || handoffText;
     preservedRomanizedCompositionText = shouldDeferRomanizedCompositionCommit(
       initialRomanizedText,
       initialRomanizedText,
@@ -792,8 +894,28 @@ export function attachLinuxIMEFix(
       }
     }
 
+    const recentlyClearedText = getRecentlyClearedRomanizedText();
+    if (
+      !isComposing &&
+      event.data &&
+      isTextInsertInputType(event.inputType) &&
+      recentlyClearedText &&
+      normalizeRomanizedReplayText(event.data) === normalizeRomanizedReplayText(recentlyClearedText)
+    ) {
+      ignoredReplayProgress = "";
+      ignoredPostCompositionCandidates = new Set();
+      ignorePostCompositionUntil = 0;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      commitCompositionText(event.data, recentlyClearedText);
+      return;
+    }
+
     if (isComposing && isCompositionDeletionInputType(event.inputType)) {
-      compositionDeletionInProgress = true;
+      compositionDeletionInProgress = isUserCompositionDeletionInputType(event.inputType);
+      if (compositionDeletionInProgress) {
+        clearRecentlyClearedRomanizedText();
+      }
       return;
     }
 
@@ -1042,6 +1164,13 @@ export function attachLinuxIMEFix(
       compositionText,
       pending: !!pendingCompositionCommit,
     });
+    const potentialHandoffKey = getPotentialRomanizedImeHandoffKey(event);
+    if (potentialHandoffKey !== null) {
+      potentialRomanizedImeHandoffKey = potentialHandoffKey;
+      potentialRomanizedImeHandoffUntil = performance.now() + IME_FIRST_KEY_HANDOFF_DELAY_MS;
+    } else if (!event.isComposing && event.keyCode !== 229) {
+      flushPendingRomanizedImeHandoff();
+    }
     if (event.keyCode === 229) {
       imeProcessKeyGuardUntil = performance.now() + IME_PROCESS_KEY_GUARD_MS;
     } else if (!event.isComposing && isPrintableKey(event.key)) {
@@ -1086,6 +1215,21 @@ export function attachLinuxIMEFix(
         key: event.key,
         code: event.code,
       });
+    }
+
+    let recoveredClearedCandidate = false;
+    if (!isComposing && isCandidateCommitKey(event)) {
+      recoveredClearedCandidate = recoverRecentlyClearedRomanizedComposition();
+      if (recoveredClearedCandidate) {
+        ignoredReplayProgress = "";
+        ignoredPostCompositionCandidates = new Set();
+        ignorePostCompositionUntil = 0;
+        imeDbg("keydown recovered cleared English candidate", {
+          text: candidateCommitText,
+          key: event.key,
+          code: event.code,
+        });
+      }
     }
 
     // 检测 IME 切换快捷键（composition 期间按下）：CapsLock，或带 Ctrl/Meta/Alt 修饰的空格/数字。
@@ -1144,6 +1288,11 @@ export function attachLinuxIMEFix(
         candidateKeyCommitTimer = null;
         commitActiveRomanizedComposition();
       }, ROMANIZED_COMPOSITION_KEY_FALLBACK_MS);
+      if (recoveredClearedCandidate) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        return;
+      }
     }
     if (shouldSuppressPrintableKeyRepeat(event)) {
       suppressNextTextInsertAfterRepeatedKey =
@@ -1154,6 +1303,29 @@ export function attachLinuxIMEFix(
     }
     suppressNextTextInsertAfterRepeatedKey = null;
     if (!isComposing && event.keyCode === 229) event.stopImmediatePropagation();
+  };
+
+  const handleKeyUpCapture = (event: KeyboardEvent) => {
+    if (!isCandidateCommitKey(event) || candidateKeyCommitTimer !== null) return;
+    const recoveredClearedCandidate = !isComposing && recoverRecentlyClearedRomanizedComposition();
+    const activeText = getActiveCompositionText();
+    if (!shouldDeferRomanizedCompositionCommit(activeText, activeText)) return;
+
+    deferNextRomanizedCompositionCommit = true;
+    candidateCommitText = activeText;
+    ignoredReplayProgress = "";
+    ignoredPostCompositionCandidates = new Set();
+    ignorePostCompositionUntil = 0;
+    clearCandidateKeyCommit();
+    candidateKeyCommitTimer = globalThis.setTimeout(() => {
+      candidateKeyCommitTimer = null;
+      commitActiveRomanizedComposition();
+    }, ROMANIZED_COMPOSITION_KEY_FALLBACK_MS);
+
+    if (recoveredClearedCandidate || event.keyCode === 229 || event.isComposing) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+    }
   };
 
   const handleBlurCapture = () => {
@@ -1168,6 +1340,7 @@ export function attachLinuxIMEFix(
 
   const handleTerminalData = (data: string) => {
     if (isComposing) {
+      cancelPendingRomanizedImeHandoff();
       return;
     }
     if (performance.now() <= imeProcessKeyGuardUntil && /^[A-Za-z0-9]$/u.test(data)) {
@@ -1175,6 +1348,29 @@ export function attachLinuxIMEFix(
       clearTextareaNowAndNextFrame();
       return;
     }
+    if (
+      !pendingCompositionCommit &&
+      performance.now() > ignorePostCompositionUntil &&
+      performance.now() <= potentialRomanizedImeHandoffUntil &&
+      data.length === 1 &&
+      data.toLowerCase() === potentialRomanizedImeHandoffKey.toLowerCase()
+    ) {
+      if (pendingRomanizedImeHandoffData) {
+        pendingRomanizedImeHandoffData.data += data;
+        return;
+      }
+      pendingRomanizedImeHandoffData = {
+        data,
+        timer: globalThis.setTimeout(() => {
+          const pending = pendingRomanizedImeHandoffData;
+          pendingRomanizedImeHandoffData = null;
+          clearPotentialRomanizedImeHandoff();
+          if (pending) onDataCallback(pending.data);
+        }, IME_FIRST_KEY_HANDOFF_DELAY_MS),
+      };
+      return;
+    }
+    flushPendingRomanizedImeHandoff();
     if (
       pendingCompositionCommit &&
       (shouldIgnorePostCompositionCandidate(
@@ -1244,6 +1440,7 @@ export function attachLinuxIMEFix(
   textarea.addEventListener("input", handleInputCapture, true);
   const keydownTarget = terminalElement ?? textarea;
   keydownTarget.addEventListener("keydown", handleKeyDownCapture, true);
+  keydownTarget.addEventListener("keyup", handleKeyUpCapture, true);
   textarea.addEventListener("blur", handleBlurCapture, true);
   window.addEventListener("blur", handleWindowBlur);
 
@@ -1255,10 +1452,12 @@ export function attachLinuxIMEFix(
       textarea.removeEventListener("beforeinput", handleBeforeInputCapture, true);
       textarea.removeEventListener("input", handleInputCapture, true);
       keydownTarget.removeEventListener("keydown", handleKeyDownCapture, true);
+      keydownTarget.removeEventListener("keyup", handleKeyUpCapture, true);
       textarea.removeEventListener("blur", handleBlurCapture, true);
       window.removeEventListener("blur", handleWindowBlur);
       clearPendingCompositionCommit();
       clearCandidateKeyCommit();
+      cancelPendingRomanizedImeHandoff();
       textareaClearGeneration += 1;
       clearScheduledTextareaClears();
       clearTextareaInputClientReset();
