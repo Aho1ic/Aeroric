@@ -229,7 +229,7 @@ function SourceSummary({
   );
 }
 
-export function UsageDashboard() {
+export function UsageDashboard({ embedded = false }: { embedded?: boolean }) {
   const { t } = useI18n();
   const [rangeDays, setRangeDays] = useState<UsageStatisticsRange>(7);
   const [agent, setAgent] = useState<UsageStatisticsAgent>("all");
@@ -308,11 +308,21 @@ export function UsageDashboard() {
 
   return (
     <div ref={rootRef} style={s.usageDashboard}>
-      <header style={{ ...s.usageDashboardHeader, flexDirection: width < 700 ? "column" : "row" }}>
-        <div>
-          <h1 style={s.usageDashboardTitle}>{t("usageStats.title")}</h1>
+      <header
+        style={{
+          ...s.usageDashboardHeader,
+          flexDirection: width < 700 ? "column" : "row",
+          padding: embedded ? "14px 20px" : s.usageDashboardHeader.padding,
+        }}
+      >
+        {embedded ? (
           <div style={s.usageDashboardRange}>{dateRange}</div>
-        </div>
+        ) : (
+          <div>
+            <h1 style={s.usageDashboardTitle}>{t("usageStats.title")}</h1>
+            <div style={s.usageDashboardRange}>{dateRange}</div>
+          </div>
+        )}
         <div
           style={{
             ...s.usageDashboardControls,

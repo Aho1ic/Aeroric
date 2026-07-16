@@ -11,6 +11,7 @@ import {
   Plus,
   Network,
   PackageOpen,
+  ChartNoAxesCombined,
 } from "lucide-react";
 import type {
   ThemeMode,
@@ -35,6 +36,7 @@ import { HooksPanel } from "./app-settings/HooksPanel";
 import { SkillsPanel } from "./app-settings/SkillsPanel";
 import { ProxyPanel } from "./app-settings/ProxyPanel";
 import { AgentUpdatesPanel } from "./app-settings/AgentUpdatesPanel";
+import { UsageDashboard } from "./UsageDashboard";
 import type { AgentKey, AppSettingsNavItem, NavKey, NavSection } from "./app-settings/types";
 import { useAgentOptions } from "../hooks/useAgentOptions";
 
@@ -46,6 +48,12 @@ const BASE_NAV_ITEMS: AppSettingsNavItem[] = [
   { key: "fonts", labelKey: "appSettings.fonts", section: "application", icon: Type },
   { key: "shortcuts", labelKey: "appSettings.shortcuts", section: "application", icon: Keyboard },
   { key: "proxy", labelKey: "appSettings.proxy", section: "application", icon: Network },
+  {
+    key: "usage",
+    labelKey: "usageStats.nav",
+    section: "application",
+    icon: ChartNoAxesCombined,
+  },
   {
     key: "agent-updates",
     labelKey: "appSettings.agentUpdates",
@@ -278,6 +286,8 @@ export function AppSettingsDialog({
               <ShortcutsPanel key="shortcuts" />
             ) : activeNav === "proxy" ? (
               <ProxyPanel key="proxy" />
+            ) : activeNav === "usage" ? (
+              <UsageDashboard key="usage" embedded />
             ) : activeNav === "agent-updates" ? (
               <AgentUpdatesPanel key="agent-updates" />
             ) : activeNav === "hooks" ? (

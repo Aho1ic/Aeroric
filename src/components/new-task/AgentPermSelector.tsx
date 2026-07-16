@@ -4,7 +4,6 @@ import { useState } from "react";
 import {
   BookmarkPlus,
   ChevronDown,
-  ChevronUp,
   Command,
   CornerDownLeft,
   Hand,
@@ -98,31 +97,15 @@ export function composeAgentMenuContentStyle(): CSSProperties {
     ...s.toolbarMenuContent,
     minWidth: "var(--radix-select-trigger-width)",
     maxHeight: "min(280px, var(--radix-select-content-available-height))",
-    display: "flex",
-    flexDirection: "column",
     overflow: "hidden",
   };
 }
 
 export function composeAgentMenuViewportStyle(): CSSProperties {
   return {
-    maxHeight: "min(232px, calc(var(--radix-select-content-available-height) - 48px))",
+    maxHeight: "min(280px, var(--radix-select-content-available-height))",
     overflowY: "auto",
     overscrollBehavior: "contain",
-    scrollbarGutter: "stable",
-  };
-}
-
-export function composeAgentMenuScrollButtonStyle(): CSSProperties {
-  return {
-    height: 24,
-    flexShrink: 0,
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    color: "var(--text-muted)",
-    background: "var(--bg-card)",
-    cursor: "default",
   };
 }
 
@@ -303,9 +286,6 @@ export function AgentPermSelector({
               avoidCollisions={false}
               style={composeAgentMenuContentStyle()}
             >
-              <Select.ScrollUpButton style={composeAgentMenuScrollButtonStyle()}>
-                <ChevronUp size={14} strokeWidth={2.2} />
-              </Select.ScrollUpButton>
               <Select.Viewport style={composeAgentMenuViewportStyle()}>
                 {agentOptions.map(({ value: item }) => (
                   <Select.Item
@@ -328,9 +308,6 @@ export function AgentPermSelector({
                   </Select.Item>
                 ))}
               </Select.Viewport>
-              <Select.ScrollDownButton style={composeAgentMenuScrollButtonStyle()}>
-                <ChevronDown size={14} strokeWidth={2.2} />
-              </Select.ScrollDownButton>
             </Select.Content>
           </Select.Portal>
         </Select.Root>
