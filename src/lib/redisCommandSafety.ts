@@ -14,6 +14,16 @@ const BLOCKED_COMMANDS = new Set([
   "SCRIPT",
   "EVAL",
   "EVALSHA",
+  // Destructive/destabilizing administrative commands. Kept in sync with the
+  // backend supplemental deny-list in src-tauri/src/database/redis.rs.
+  "SWAPDB",
+  "DEBUG",
+  "RESET",
+  "FAILOVER",
+  "BGREWRITEAOF",
+  "MONITOR",
+  "PSYNC",
+  "SYNC",
 ]);
 
 const CONFIRM_COMMANDS = new Set([

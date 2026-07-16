@@ -498,6 +498,18 @@ pub(crate) fn parse_conflict_paths_z(stdout: &[u8]) -> Vec<GitConflictFile> {
         .collect()
 }
 
+fn validate_git_branch_name(branch_name: &str) -> Result<(), String> {
+    if branch_name.is_empty() {
+        return Err("Branch name must not be empty".to_string());
+    }
+    // Reject leading '-' so the value can never be parsed by git as an option
+    // (option injection), even before the "--" separator is applied.
+    if branch_name.starts_with('-') {
+        return Err("Branch name must not start with '-'".to_string());
+    }
+    Ok(())
+}
+
 pub(crate) fn validate_stash_ref(stash_ref: &str) -> Result<(), String> {
     let Some(index) = stash_ref
         .strip_prefix("stash@{")
@@ -861,6 +873,7 @@ pub async fn git_checkout_branch(
     branch_name: String,
     is_remote: bool,
 ) -> Result<(), String> {
+    validate_git_branch_name(&branch_name)?;
     let args: Vec<String> = if is_remote {
         // "origin/main" -> local name "main", track remote
         let local_name = branch_name
@@ -887,6 +900,8 @@ pub async fn git_create_branch(
     from_branch: String,
     checkout: bool,
 ) -> Result<(), String> {
+    validate_git_branch_name(&branch_name)?;
+    validate_git_branch_name(&from_branch)?;
     let args: &[&str] = if checkout {
         &["checkout", "-b", &branch_name, &from_branch]
     } else {

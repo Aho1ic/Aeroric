@@ -10,6 +10,31 @@ use tauri::State;
 use super::connections;
 use super::dbx_state::DbxState;
 
+/// Administrative Redis commands that the shared core classifier currently
+/// leaves as `Allowed` but which can disrupt the server, exfiltrate data, or
+/// reconfigure security. They are never issued by the frontend UI, so this
+/// entry point rejects them outright for defense-in-depth. Names are compared
+/// case-insensitively against the parsed command token.
+// Only commands that are destructive or destabilizing with no meaningful
+// read-only form are listed here. Administrative commands with important
+// read subcommands (CLUSTER INFO, CLIENT LIST, ACL WHOAMI, LATENCY, ...) are
+// intentionally left to the core classifier so diagnostic reads keep working.
+const SUPPLEMENTAL_BLOCKED_COMMANDS: &[&str] = &[
+    "SWAPDB",
+    "DEBUG",
+    "RESET",
+    "FAILOVER",
+    "BGREWRITEAOF",
+    "MONITOR",
+    "PSYNC",
+    "SYNC",
+];
+
+fn is_supplemental_blocked_command(command_name: &str) -> bool {
+    let upper = command_name.to_ascii_uppercase();
+    SUPPLEMENTAL_BLOCKED_COMMANDS.contains(&upper.as_str())
+}
+
 fn normalize_pattern(pattern: Option<String>) -> String {
     pattern
         .and_then(|value| {
@@ -694,10 +719,30 @@ pub async fn dbx_redis_execute_command(
     skip_safety_check: Option<bool>,
 ) -> Result<RedisCommandResult, String> {
     connections::ensure_connected(&state, &connection_id).await?;
-    let command_name = command.split_whitespace().next().unwrap_or("");
-    let safety = dbx_core::db::redis_driver::classify_command(command_name);
+    // Resolve the command name with the same quote-aware parser the core uses,
+    // so classification cannot be bypassed by quoting (e.g. `"FLUSHALL"`), which
+    // split_whitespace would otherwise treat as an unrecognized (Allowed) token.
+    let command_name = dbx_core::db::redis_driver::parse_command_argv(&command)
+        .ok()
+        .and_then(|argv| argv.into_iter().next())
+        .unwrap_or_default();
+    // Supplemental deny-list for dangerous administrative commands that the core
+    // classifier currently leaves as Allowed (e.g. SWAPDB, DEBUG, ACL, CLIENT).
+    // These are never legitimately issued by the frontend, so blocking them here
+    // provides defense-in-depth without touching the shared core crate.
+    if is_supplemental_blocked_command(&command_name) {
+        return Err(format!("Redis command is blocked for safety: {command_name}"));
+    }
+    let safety = dbx_core::db::redis_driver::classify_command(&command_name);
+    // Blocked commands are never permitted from this entry point, regardless of
+    // the caller-supplied skip flag. The frontend only sets skip for confirmed
+    // Write/Confirm commands, never for Blocked ones, so enforcing here closes a
+    // caller-controlled guardrail bypass without affecting legitimate flows.
+    if safety == RedisCommandSafety::Blocked {
+        return Err(format!("Redis command is blocked for safety: {command_name}"));
+    }
     if safety != RedisCommandSafety::Allowed {
-        connections::ensure_writable(&state, &connection_id, command_name).await?;
+        connections::ensure_writable(&state, &connection_id, &command_name).await?;
     }
     dbx_core::redis_ops::redis_execute_command_core(
         &state.app_state,
@@ -712,8 +757,8 @@ pub async fn dbx_redis_execute_command(
 #[cfg(test)]
 mod tests {
     use super::{
-        adapt_redis_collection_page, adapt_redis_value, non_empty, normalize_count,
-        normalize_key_type, normalize_pattern, AeroricRedisCollectionPage,
+        adapt_redis_collection_page, adapt_redis_value, is_supplemental_blocked_command, non_empty,
+        normalize_count, normalize_key_type, normalize_pattern, AeroricRedisCollectionPage,
     };
     use base64::Engine as _;
     use dbx_core::db::redis_driver::{
@@ -810,5 +855,24 @@ mod tests {
             }
             other => panic!("expected hash page, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn supplemental_block_list_matches_case_insensitively() {
+        assert!(is_supplemental_blocked_command("SWAPDB"));
+        assert!(is_supplemental_blocked_command("swapdb"));
+        assert!(is_supplemental_blocked_command("Debug"));
+        assert!(is_supplemental_blocked_command("MONITOR"));
+    }
+
+    #[test]
+    fn supplemental_block_list_leaves_admin_reads_and_normal_commands_alone() {
+        // Administrative commands with legitimate read subcommands must not be
+        // blocked wholesale, and ordinary data commands stay allowed.
+        assert!(!is_supplemental_blocked_command("CLUSTER"));
+        assert!(!is_supplemental_blocked_command("CLIENT"));
+        assert!(!is_supplemental_blocked_command("ACL"));
+        assert!(!is_supplemental_blocked_command("GET"));
+        assert!(!is_supplemental_blocked_command("SET"));
     }
 }

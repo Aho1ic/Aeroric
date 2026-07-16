@@ -408,6 +408,8 @@ export function attachLinuxIMEFix(
   let textareaClearGeneration = 0;
   let textareaClearTimers: Array<ReturnType<typeof globalThis.setTimeout>> = [];
   let textareaInputClientResetTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
+  let textareaDisabledByCjkReset = false;
+  let textareaDisabledBeforeCjkReset = false;
   let isReleasingXtermComposition = false;
   let suppressNextTextInsertAfterRepeatedKey: string | true | null = null;
   let imeProcessKeyGuardUntil = 0;
@@ -571,15 +573,26 @@ export function attachLinuxIMEFix(
     textareaInputClientResetTimer = null;
   };
 
+  const restoreTextareaAfterCjkReset = () => {
+    if (textareaDisabledByCjkReset && !textareaDisabledBeforeCjkReset) {
+      textarea.disabled = false;
+    }
+    textareaDisabledByCjkReset = false;
+  };
   const resetTextareaInputClientAfterCjkCommit = () => {
     clearTextareaInputClientReset();
-    const wasDisabled = textarea.disabled;
+    // Capture the pre-reset disabled state only once per reset sequence.
+    // Back-to-back calls within the timeout window must not observe the
+    // disabled flag we ourselves just set, otherwise the textarea would
+    // stay permanently disabled and block further input.
+    if (!textareaDisabledByCjkReset) {
+      textareaDisabledBeforeCjkReset = textarea.disabled;
+      textareaDisabledByCjkReset = true;
+    }
     textarea.disabled = true;
     textareaInputClientResetTimer = globalThis.setTimeout(() => {
       textareaInputClientResetTimer = null;
-      if (!wasDisabled) {
-        textarea.disabled = false;
-      }
+      restoreTextareaAfterCjkReset();
       clearTextarea();
       if (!textarea.disabled) {
         textarea.focus({ preventScroll: true });
@@ -1461,6 +1474,7 @@ export function attachLinuxIMEFix(
       textareaClearGeneration += 1;
       clearScheduledTextareaClears();
       clearTextareaInputClientReset();
+      restoreTextareaAfterCjkReset();
       compositionObserver?.disconnect();
       disposable.dispose();
     },
