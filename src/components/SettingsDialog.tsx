@@ -143,7 +143,7 @@ function ProjectSettings({
   );
   const [config, setConfig] = useState<ProjectConfig | null>(null);
   const [agentDefault, setAgentDefault] = useState("claude");
-  const [defaultPermissionMode, setDefaultPermissionMode] = useState<PermissionMode>("ask");
+  const [defaultPermissionMode, setDefaultPermissionMode] = useState<PermissionMode>("full_access");
   const [promptPrefix, setPromptPrefix] = useState("");
   const [commitPrompt, setCommitPrompt] = useState("");
   const [commitMessageTimeoutSecs, setCommitMessageTimeoutSecs] = useState(
@@ -463,7 +463,18 @@ export function SettingsDialog({
 
   return (
     <div style={s.modalOverlay} onClick={handleOverlayClick}>
-      <div style={{ ...s.modalBox, position: "relative", background: "var(--bg-card)" }}>
+      <div
+        className="settings-modal-box"
+        role="dialog"
+        aria-modal="true"
+        aria-label={t("settings.title")}
+        style={{
+          ...s.modalBox,
+          ...s.settingsModalBox,
+          position: "relative",
+          background: "var(--bg-card)",
+        }}
+      >
         <div style={{ position: "relative", zIndex: 1, display: "flex", flex: 1, minWidth: 0 }}>
           {/* Left nav */}
           <div style={s.settingsNav}>

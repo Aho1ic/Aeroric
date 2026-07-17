@@ -76,7 +76,7 @@ describe("UsageDashboard", () => {
 
     expect(await screen.findByRole("heading", { name: "Usage statistics" })).toBeInTheDocument();
     expect(screen.getAllByText("1,500").length).toBeGreaterThan(0);
-    expect(screen.queryByText("1.5K")).not.toBeInTheDocument();
+    expect(screen.getByText("1.5K")).toBeInTheDocument();
     expect(screen.getByText("41.7%")).toBeInTheDocument();
     expect(screen.getByText("$0.1234")).toBeInTheDocument();
     expect(screen.getByText("Daily usage")).toBeInTheDocument();
@@ -135,6 +135,9 @@ describe("UsageDashboard", () => {
     const bars = Array.from(container.querySelectorAll<HTMLElement>(".usage-chart-bar"));
     expect(bars).toHaveLength(7);
     expect(bars.every((bar) => bar.style.maxWidth === "28px")).toBe(true);
+    expect(container.querySelectorAll(".usage-chart-axis-tick")).toHaveLength(5);
+    expect(container.querySelectorAll(".usage-chart-grid > span")).toHaveLength(5);
+    expect(container.querySelector(".usage-metric-card")).toHaveStyle({ borderRadius: "18px" });
 
     await user.click(screen.getByRole("button", { name: "当天" }));
     await waitFor(() => {

@@ -11,7 +11,7 @@ export const dialogs = {
     justifyContent: "center",
   },
   modalBox: {
-    width: "min(920px, calc(100vw - 48px), calc((100vh - 96px) * 4 / 3))",
+    width: "min(920px, calc(100vw - 48px), calc(133.333vh - 128px))",
     aspectRatio: "4 / 3",
     background: "var(--bg-card)",
     border: "1px solid var(--border-medium)",
@@ -20,6 +20,9 @@ export const dialogs = {
     display: "flex",
     flexDirection: "row" as const,
     overflow: "hidden",
+  },
+  settingsModalBox: {
+    width: "min(max(920px, 86vw), calc(100vw - 40px), calc(133.333vh - 74.667px))",
   },
   settingsNav: {
     width: 180,

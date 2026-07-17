@@ -89,6 +89,49 @@ pub struct AgentModels {
     pub models: Vec<String>,
 }
 
+const AGENT_CONFIG_BUNDLE_FORMAT: &str = "aeroric.agent-config";
+const AGENT_CONFIG_BUNDLE_VERSION: u32 = 1;
+const MAX_AGENT_CONFIG_BUNDLE_BYTES: u64 = 4 * 1024 * 1024;
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentConfigBundleKind {
+    BuiltIn,
+    Custom,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct AgentConfigBundleAgent {
+    pub id: String,
+    pub label: String,
+    pub kind: AgentConfigBundleKind,
+    pub codex_like: bool,
+    pub config_lang: String,
+    pub config_content: String,
+    #[serde(default)]
+    pub base_url: String,
+    #[serde(default)]
+    pub api_key: String,
+    #[serde(default)]
+    pub models: Vec<String>,
+    #[serde(default)]
+    pub enable_1m_context: bool,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct AgentConfigBundle {
+    pub format: String,
+    pub version: u32,
+    pub exported_at: String,
+    pub agent: AgentConfigBundleAgent,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct AgentConfigImportResult {
+    pub agent_id: String,
+    pub config_path: String,
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
 pub struct ProxySettings {
     #[serde(default)]
@@ -1352,6 +1395,7 @@ fn recover_custom_agent_settings(settings: &mut AppSettings) {
 fn refresh_stale_codex_agent_scripts(settings: &mut AppSettings) {
     for profile in &mut settings.custom_agents {
         if !profile.codex_like
+            || profile.config_lang != "shellscript"
             || profile.models.is_empty()
             || profile.base_url.trim().is_empty()
             || profile.api_key.trim().is_empty()
@@ -1392,6 +1436,7 @@ fn refresh_stale_codex_agent_scripts(settings: &mut AppSettings) {
 fn refresh_stale_claude_agent_scripts(settings: &mut AppSettings) {
     for profile in &mut settings.custom_agents {
         if profile.codex_like
+            || profile.config_lang != "shellscript"
             || profile.models.is_empty()
             || profile.base_url.trim().is_empty()
             || profile.api_key.trim().is_empty()
@@ -1539,6 +1584,270 @@ pub fn save_app_settings(settings: AppSettings) -> Result<(), String> {
     }
     clear_cached_versions();
     Ok(())
+}
+
+fn validate_agent_config_bundle_path(path: &str, must_exist: bool) -> Result<PathBuf, String> {
+    let candidate = PathBuf::from(path.trim());
+    if !candidate.is_absolute() {
+        return Err("Agent configuration bundle path must be absolute".to_string());
+    }
+    let file_name = candidate
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default();
+    if !file_name.ends_with(".aeroric-agent.json") {
+        return Err("Agent configuration bundle must end with .aeroric-agent.json".to_string());
+    }
+    if must_exist {
+        if !candidate.is_file() {
+            return Err("Agent configuration bundle does not exist".to_string());
+        }
+    } else {
+        let parent = candidate
+            .parent()
+            .ok_or_else(|| "Agent configuration bundle has no parent directory".to_string())?;
+        if !parent.is_dir() {
+            return Err("Agent configuration bundle parent directory does not exist".to_string());
+        }
+    }
+    Ok(candidate)
+}
+
+fn default_builtin_agent_config_path(agent: &str) -> Result<PathBuf, String> {
+    let home =
+        crate::platform::home_dir().ok_or_else(|| "Cannot find home directory".to_string())?;
+    match agent {
+        "claude" => Ok(home.join(".claude").join("settings.json")),
+        "claude_gpt55" => Ok(home.join(".claude").join("start-gpt55.sh")),
+        "codex" => Ok(home.join(".codex").join("config.toml")),
+        _ => Err(format!("Unknown built-in agent: {agent}")),
+    }
+}
+
+fn builtin_agent_details(agent: &str) -> Option<(&'static str, &'static str, bool)> {
+    match agent {
+        "claude" => Some(("Claude Code", "json", false)),
+        "claude_gpt55" => Some(("Claude GPT-5.5", "shellscript", false)),
+        "codex" => Some(("Codex", "toml", true)),
+        _ => None,
+    }
+}
+
+fn parse_agent_config_bundle(raw: &str) -> Result<AgentConfigBundle, String> {
+    let bundle: AgentConfigBundle = serde_json::from_str(raw)
+        .map_err(|error| format!("Invalid agent configuration: {error}"))?;
+    if bundle.format != AGENT_CONFIG_BUNDLE_FORMAT {
+        return Err("Unsupported agent configuration format".to_string());
+    }
+    if bundle.version != AGENT_CONFIG_BUNDLE_VERSION {
+        return Err(format!(
+            "Unsupported agent configuration version: {}",
+            bundle.version
+        ));
+    }
+    if bundle.agent.id.trim().is_empty() || bundle.agent.label.trim().is_empty() {
+        return Err("Agent configuration is missing an ID or name".to_string());
+    }
+    if !matches!(
+        bundle.agent.config_lang.as_str(),
+        "json" | "toml" | "shellscript"
+    ) {
+        return Err("Unsupported agent configuration language".to_string());
+    }
+    Ok(bundle)
+}
+
+#[tauri::command]
+pub async fn export_agent_config_bundle(
+    agent: String,
+    output_path: String,
+    config_content: Option<String>,
+) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || {
+        let output_path = validate_agent_config_bundle_path(&output_path, false)?;
+        let settings = load_settings_internal();
+        let bundle_agent =
+            if let Some((default_label, config_lang, codex_like)) = builtin_agent_details(&agent) {
+                let configured_path = match agent.as_str() {
+                    "claude" => settings.claude_config_path.clone(),
+                    "claude_gpt55" => settings.claude_gpt55_config_path.clone(),
+                    "codex" => settings.codex_config_path.clone(),
+                    _ => String::new(),
+                };
+                let path = if configured_path.trim().is_empty() {
+                    default_builtin_agent_config_path(&agent)?
+                } else {
+                    PathBuf::from(normalize_config_path(configured_path))
+                };
+                let config_content = match config_content.clone() {
+                    Some(content) => content,
+                    None if path.is_file() => {
+                        fs::read_to_string(&path).map_err(|error| error.to_string())?
+                    }
+                    None => String::new(),
+                };
+                AgentConfigBundleAgent {
+                    id: agent.clone(),
+                    label: settings
+                        .agent_label_overrides
+                        .get(&agent)
+                        .cloned()
+                        .unwrap_or_else(|| default_label.to_string()),
+                    kind: AgentConfigBundleKind::BuiltIn,
+                    codex_like,
+                    config_lang: config_lang.to_string(),
+                    config_content,
+                    base_url: String::new(),
+                    api_key: String::new(),
+                    models: Vec::new(),
+                    enable_1m_context: false,
+                }
+            } else {
+                let profile = settings
+                    .custom_agents
+                    .iter()
+                    .find(|profile| profile.id == agent)
+                    .ok_or_else(|| format!("Unknown agent: {agent}"))?;
+                let path = PathBuf::from(normalize_config_path(profile.path.clone()));
+                let config_content = match config_content {
+                    Some(content) => content,
+                    None if path.is_file() => {
+                        fs::read_to_string(&path).map_err(|error| error.to_string())?
+                    }
+                    None => String::new(),
+                };
+                AgentConfigBundleAgent {
+                    id: profile.id.clone(),
+                    label: profile.label.clone(),
+                    kind: AgentConfigBundleKind::Custom,
+                    codex_like: profile.codex_like,
+                    config_lang: profile.config_lang.clone(),
+                    config_content,
+                    base_url: profile.base_url.clone(),
+                    api_key: profile.api_key.clone(),
+                    models: profile.models.clone(),
+                    enable_1m_context: profile.enable_1m_context,
+                }
+            };
+        let bundle = AgentConfigBundle {
+            format: AGENT_CONFIG_BUNDLE_FORMAT.to_string(),
+            version: AGENT_CONFIG_BUNDLE_VERSION,
+            exported_at: chrono::Utc::now().to_rfc3339(),
+            agent: bundle_agent,
+        };
+        let raw = serde_json::to_string_pretty(&bundle).map_err(|error| error.to_string())?;
+        if raw.len() as u64 > MAX_AGENT_CONFIG_BUNDLE_BYTES {
+            return Err("Agent configuration bundle is too large".to_string());
+        }
+        atomic_write_private(&output_path, &raw)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+pub async fn import_agent_config_bundle(
+    input_path: String,
+) -> Result<AgentConfigImportResult, String> {
+    tokio::task::spawn_blocking(move || {
+        let input_path = validate_agent_config_bundle_path(&input_path, true)?;
+        let metadata = fs::metadata(&input_path).map_err(|error| error.to_string())?;
+        if metadata.len() > MAX_AGENT_CONFIG_BUNDLE_BYTES {
+            return Err("Agent configuration bundle is too large".to_string());
+        }
+        let raw = fs::read_to_string(&input_path).map_err(|error| error.to_string())?;
+        let bundle = parse_agent_config_bundle(&raw)?;
+        let _guard = settings_lock().lock();
+        let mut settings = load_settings_unlocked();
+        let agent = bundle.agent;
+        let mut imported_agent_id = agent.id.clone();
+
+        let config_path = match agent.kind {
+            AgentConfigBundleKind::BuiltIn => {
+                let Some((_, expected_lang, _)) = builtin_agent_details(&agent.id) else {
+                    return Err("Unknown built-in agent in configuration bundle".to_string());
+                };
+                if agent.config_lang != expected_lang {
+                    return Err("Built-in agent configuration language does not match".to_string());
+                }
+                let configured_path = match agent.id.as_str() {
+                    "claude" => &mut settings.claude_config_path,
+                    "claude_gpt55" => &mut settings.claude_gpt55_config_path,
+                    "codex" => &mut settings.codex_config_path,
+                    _ => unreachable!(),
+                };
+                if configured_path.trim().is_empty() {
+                    *configured_path = default_builtin_agent_config_path(&agent.id)?
+                        .to_string_lossy()
+                        .into_owned();
+                }
+                let path = PathBuf::from(normalize_config_path(configured_path.clone()));
+                if let Some(parent) = path.parent() {
+                    fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+                }
+                if agent.config_lang == "shellscript" {
+                    write_agent_script_at_path(&path, &agent.config_content)?;
+                } else {
+                    atomic_write_private(&path, &agent.config_content)?;
+                }
+                settings
+                    .agent_label_overrides
+                    .insert(agent.id.clone(), agent.label.trim().to_string());
+                path
+            }
+            AgentConfigBundleKind::Custom => {
+                let id = sanitize_custom_agent_id(&agent.id);
+                if id.is_empty() {
+                    return Err("Invalid custom agent ID".to_string());
+                }
+                imported_agent_id = id.clone();
+                let extension = match agent.config_lang.as_str() {
+                    "json" => "json",
+                    "toml" => "toml",
+                    _ => "sh",
+                };
+                let path = agent_scripts_dir()?.join(format!("{id}.{extension}"));
+                fs::create_dir_all(agent_scripts_dir()?).map_err(|error| error.to_string())?;
+                if agent.config_lang == "shellscript" {
+                    write_agent_script_at_path(&path, &agent.config_content)?;
+                } else {
+                    atomic_write_private(&path, &agent.config_content)?;
+                }
+                let profile = normalize_custom_agent_profile(CustomAgentProfile {
+                    id: id.clone(),
+                    label: agent.label,
+                    path: path.to_string_lossy().into_owned(),
+                    codex_like: agent.codex_like,
+                    config_lang: agent.config_lang,
+                    base_url: agent.base_url,
+                    api_key: agent.api_key,
+                    models: agent.models,
+                    enable_1m_context: agent.enable_1m_context,
+                    username: String::new(),
+                    password: String::new(),
+                })
+                .ok_or_else(|| "Invalid custom agent configuration".to_string())?;
+                settings
+                    .custom_agents
+                    .retain(|existing| existing.id != profile.id);
+                settings.custom_agents.push(profile);
+                path
+            }
+        };
+
+        let dir = aeroric_dir()?;
+        fs::create_dir_all(&dir).map_err(|error| error.to_string())?;
+        let normalized = normalize_settings(settings);
+        let raw = serde_json::to_string_pretty(&normalized).map_err(|error| error.to_string())?;
+        atomic_write_private(&settings_path()?, &raw)?;
+        clear_cached_versions();
+        Ok(AgentConfigImportResult {
+            agent_id: imported_agent_id,
+            config_path: config_path.to_string_lossy().into_owned(),
+        })
+    })
+    .await
+    .map_err(|error| error.to_string())?
 }
 
 #[tauri::command]
@@ -2382,6 +2691,48 @@ pub async fn get_system_fonts() -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parses_versioned_agent_configuration_bundle() {
+        let raw = serde_json::json!({
+            "format": AGENT_CONFIG_BUNDLE_FORMAT,
+            "version": AGENT_CONFIG_BUNDLE_VERSION,
+            "exported_at": "2026-07-17T00:00:00Z",
+            "agent": {
+                "id": "codex",
+                "label": "Codex",
+                "kind": "built_in",
+                "codex_like": true,
+                "config_lang": "toml",
+                "config_content": "model = \"gpt-5\""
+            }
+        })
+        .to_string();
+
+        let bundle = parse_agent_config_bundle(&raw).unwrap();
+        assert_eq!(bundle.agent.id, "codex");
+        assert_eq!(bundle.agent.config_lang, "toml");
+    }
+
+    #[test]
+    fn rejects_unknown_agent_configuration_bundle_versions() {
+        let raw = serde_json::json!({
+            "format": AGENT_CONFIG_BUNDLE_FORMAT,
+            "version": 99,
+            "exported_at": "2026-07-17T00:00:00Z",
+            "agent": {
+                "id": "codex",
+                "label": "Codex",
+                "kind": "built_in",
+                "codex_like": true,
+                "config_lang": "toml",
+                "config_content": ""
+            }
+        })
+        .to_string();
+
+        assert!(parse_agent_config_bundle(&raw).is_err());
+    }
 
     #[test]
     fn extracts_claude_code_semver_from_new_cli_output() {

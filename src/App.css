@@ -358,9 +358,11 @@ body {
 }
 
 .usage-metric-card:hover {
-  transform: translateY(-2px);
-  border-color: var(--border-medium) !important;
-  box-shadow: var(--shadow-md) !important;
+  transform: translateY(-3px);
+  border-color: color-mix(in srgb, var(--accent) 34%, var(--border-medium)) !important;
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, white 8%, transparent),
+    0 14px 34px color-mix(in srgb, var(--accent) 10%, transparent) !important;
 }
 
 .usage-panel {
@@ -373,15 +375,93 @@ body {
   transition:
     filter 140ms ease,
     opacity 140ms ease,
-    box-shadow 140ms ease;
+    box-shadow 140ms ease,
+    transform 140ms ease;
+}
+
+.usage-chart-segment {
+  position: relative;
+  transition:
+    filter 140ms ease,
+    opacity 140ms ease;
+}
+
+.usage-chart-segment + .usage-chart-segment {
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, white 20%, transparent),
+    0 -1px 0 color-mix(in srgb, var(--bg-card) 18%, transparent);
 }
 
 .usage-chart-column:hover .usage-chart-bar,
 .usage-chart-column:focus-visible .usage-chart-bar {
-  filter: saturate(1.12) brightness(1.05);
+  filter: saturate(1.2) brightness(1.08);
+  transform: scaleX(1.08);
   box-shadow:
-    inset 0 0 0 1px color-mix(in srgb, var(--border-strong) 75%, transparent),
-    0 4px 14px color-mix(in srgb, var(--text-primary) 10%, transparent) !important;
+    inset 0 0 0 1px color-mix(in srgb, white 22%, transparent),
+    0 0 12px color-mix(in srgb, var(--accent) 18%, transparent),
+    0 8px 24px color-mix(in srgb, var(--text-primary) 12%, transparent) !important;
+}
+
+.usage-chart-column[data-active] {
+  z-index: 3 !important;
+}
+
+.usage-chart-column[data-active] .usage-chart-label > span:first-child {
+  background: var(--accent);
+  box-shadow: 0 0 9px color-mix(in srgb, var(--accent) 70%, transparent);
+}
+
+.usage-chart-label > span:first-child {
+  width: 4px;
+  height: 4px;
+  flex: 0 0 auto;
+  margin-top: 1px;
+  border-radius: 50%;
+  background: var(--border-medium);
+}
+
+.usage-chart-label > strong {
+  font-size: inherit;
+  font-weight: 650;
+}
+
+.usage-chart-column:focus-visible {
+  border-radius: 8px;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 30%, transparent);
+}
+
+.usage-chart-column:hover .usage-chart-segment,
+.usage-chart-column:focus-visible .usage-chart-segment {
+  filter: saturate(1.16) brightness(1.06);
+}
+
+.usage-chart-bar-value {
+  animation: usage-card-enter 140ms ease both;
+}
+
+.usage-chart-label {
+  transition: color 140ms ease;
+}
+
+.usage-chart-grid > span {
+  width: 100%;
+  border-top: 1px dashed color-mix(in srgb, var(--border-medium) 56%, transparent);
+}
+
+.usage-chart-grid > span:first-child {
+  border-top-style: solid;
+  border-top-color: color-mix(in srgb, var(--accent) 18%, var(--border-dim));
+}
+
+.usage-chart-axis-tick > i {
+  display: block;
+  width: 5px;
+  height: 5px;
+  flex: 0 0 auto;
+  border: 1px solid color-mix(in srgb, var(--accent) 46%, var(--border-medium));
+  border-radius: 50%;
+  background: var(--bg-card);
+  box-shadow: 0 0 7px color-mix(in srgb, var(--accent) 15%, transparent);
 }
 
 .usage-source-fill {

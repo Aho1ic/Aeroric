@@ -314,4 +314,64 @@ describe("ProjectRail project dragging", () => {
     expect(onSwitch).toHaveBeenCalledWith(beta);
     expect(onSelectTask).toHaveBeenCalledWith("p2", "new-beta-task");
   });
+
+  it("selects a task range with Shift and deletes it in one batch", () => {
+    localStorage.setItem("aeroric:language", "en");
+    const onDeleteTask = vi.fn();
+    const onDeleteTasks = vi.fn();
+    const onSelectTask = vi.fn();
+    const tasks = [
+      task("oldest", "p1", 100),
+      task("third", "p1", 200),
+      task("second", "p1", 300),
+      task("newest", "p1", 400),
+    ];
+
+    render(
+      <I18nProvider>
+        <ProjectRail
+          projects={[project("p1", "Alpha", 0)]}
+          allTasks={tasks}
+          activeProjectId="p1"
+          selectedTaskId={null}
+          isNewTask={false}
+          onSwitch={vi.fn()}
+          onOpen={vi.fn()}
+          onBack={vi.fn()}
+          onNewTask={vi.fn()}
+          onSelectTask={onSelectTask}
+          onDeleteTask={onDeleteTask}
+          onDeleteTasks={onDeleteTasks}
+          onToggleTaskStar={vi.fn()}
+          onRunTodo={vi.fn()}
+          themeVariant="light"
+          onToggleTheme={vi.fn()}
+          singleProjectMode
+        />
+      </I18nProvider>,
+    );
+
+    const secondTask = screen.getByText("Task second").closest("button");
+    const oldestTask = screen.getByText("Task oldest").closest("button");
+    expect(secondTask).not.toBeNull();
+    expect(oldestTask).not.toBeNull();
+
+    fireEvent.click(secondTask!);
+    fireEvent.click(oldestTask!, { shiftKey: true });
+
+    expect(onSelectTask).toHaveBeenCalledTimes(1);
+    expect(secondTask).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByText("Task third").closest("button")).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    expect(oldestTask).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByText("3 selected")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Delete selected" }));
+
+    expect(onDeleteTasks).toHaveBeenCalledTimes(1);
+    expect(onDeleteTasks).toHaveBeenCalledWith(["second", "third", "oldest"]);
+    expect(onDeleteTask).not.toHaveBeenCalled();
+  });
 });

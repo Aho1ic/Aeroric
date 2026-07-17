@@ -84,6 +84,7 @@ function projectPageProps(): React.ComponentProps<typeof ProjectPage> {
     onNewTask: vi.fn(),
     onSelectTask: vi.fn(),
     onDeleteTask: vi.fn(),
+    onDeleteTasks: vi.fn(),
     onDeleteAllTasks: vi.fn(),
     onToggleTaskStar: vi.fn(),
     onRenameTask: vi.fn(),

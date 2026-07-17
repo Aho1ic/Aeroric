@@ -391,6 +391,8 @@ pub fn run() {
             ssh::cancel_remote_task,
             app_settings::load_app_settings,
             app_settings::save_app_settings,
+            app_settings::export_agent_config_bundle,
+            app_settings::import_agent_config_bundle,
             app_settings::save_agent_paths,
             app_settings::save_custom_agent_profile,
             app_settings::setup_agent_profile,

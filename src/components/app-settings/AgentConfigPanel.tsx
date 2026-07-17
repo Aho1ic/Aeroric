@@ -1,6 +1,7 @@
 import { useEffect, useState, type CSSProperties } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Check, RefreshCw, Trash2 } from "lucide-react";
+import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
+import { Check, Download, RefreshCw, Trash2, Upload } from "lucide-react";
 import { useI18n } from "../../i18n";
 import s from "../../styles";
 import { AgentPathSection } from "./AgentPathSection";
@@ -20,6 +21,7 @@ import {
   setModelReasoningEffort,
   type ModelReasoningEffort,
 } from "./reasoningEffort";
+import { ModelSelectionList } from "./ModelSelectionList";
 
 type FileState =
   | { status: "loading" }
@@ -67,6 +69,7 @@ export function AgentConfigPanel({
   themeVariant: _themeVariant,
   deletable = false,
   onDeleted,
+  onImported,
 }: {
   agentKey: AgentKey;
   agentLabel?: string;
@@ -75,6 +78,7 @@ export function AgentConfigPanel({
   themeVariant: ThemeVariant;
   deletable?: boolean;
   onDeleted?: () => void;
+  onImported?: (agentId: string) => void;
 }) {
   const { t } = useI18n();
   const [resolvedFilePath, setResolvedFilePath] = useState(filePath);
@@ -101,6 +105,9 @@ export function AgentConfigPanel({
   const [originalReasoningEffort, setOriginalReasoningEffort] =
     useState<ModelReasoningEffort | null>(null);
   const [savingReasoningEffort, setSavingReasoningEffort] = useState(false);
+  const [exporting, setExporting] = useState(false);
+  const [importing, setImporting] = useState(false);
+  const [transferMessage, setTransferMessage] = useState<string | null>(null);
   const fileContentImeFix = useTextInputIMEFix<HTMLTextAreaElement>((content) =>
     handleFileContentChange(content),
   );
@@ -208,6 +215,86 @@ export function AgentConfigPanel({
       setError(String(e));
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function handleExportConfig() {
+    if (exporting || importing) return;
+    const safeName = String(agentKey).replace(/[^a-zA-Z0-9._-]+/g, "_");
+    const outputPath = await saveDialog({
+      title: t("appSettings.exportAgentConfig"),
+      defaultPath: `${safeName}.aeroric-agent.json`,
+      filters: [{ name: t("appSettings.agentConfigBundle"), extensions: ["json"] }],
+    });
+    if (!outputPath) return;
+    setExporting(true);
+    setError(null);
+    setTransferMessage(null);
+    try {
+      await invoke("export_agent_config_bundle", {
+        agent: agentKey,
+        outputPath,
+        configContent: fileState.status === "loaded" ? fileState.content : null,
+      });
+      setTransferMessage(t("appSettings.agentConfigExported"));
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setExporting(false);
+    }
+  }
+
+  async function handleImportConfig() {
+    if (exporting || importing) return;
+    const inputPath = await openDialog({
+      title: t("appSettings.importAgentConfig"),
+      multiple: false,
+      directory: false,
+      filters: [{ name: t("appSettings.agentConfigBundle"), extensions: ["json"] }],
+    });
+    if (!inputPath || Array.isArray(inputPath)) return;
+    setImporting(true);
+    setError(null);
+    setTransferMessage(null);
+    try {
+      const result = await invoke<{ agent_id: string; config_path: string }>(
+        "import_agent_config_bundle",
+        { inputPath },
+      );
+      window.dispatchEvent(new Event(APP_SETTINGS_CHANGED_EVENT));
+      if (result.agent_id === String(agentKey)) {
+        const content = await invoke<string | null>("read_agent_config_file", {
+          agent: result.agent_id,
+        });
+        const nextContent = content ?? "";
+        setResolvedFilePath(result.config_path);
+        setFileState({ status: "loaded", content: nextContent });
+        setOriginal(nextContent);
+        if (agentKey === "codex") {
+          const effort = readModelReasoningEffort(nextContent);
+          setReasoningEffort(effort);
+          setOriginalReasoningEffort(effort);
+        }
+        if (deletable) {
+          const settings = await invoke<AppSettings>("load_app_settings");
+          const profile =
+            settings.custom_agents?.find((item) => item.id === String(agentKey)) ?? null;
+          const models = normalizeModels(profile?.models ?? []);
+          setCustomProfile(profile);
+          setDetectedModels(models);
+          setSelectedModels(models);
+          setOriginalSelectedModels(models);
+          const contextEnabled = Boolean(profile?.enable_1m_context);
+          setEnable1mContext(contextEnabled);
+          setOriginalEnable1mContext(contextEnabled);
+        }
+      }
+      setTransferMessage(t("appSettings.agentConfigImported"));
+      onImported?.(result.agent_id);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setImporting(false);
     }
   }
 
@@ -421,6 +508,53 @@ export function AgentConfigPanel({
 
         <AgentPathSection agentKey={agentKey} />
 
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: 12,
+            marginBottom: 18,
+            padding: 10,
+            border: "1px solid var(--border-dim)",
+            borderRadius: 8,
+            background: "var(--bg-subtle)",
+          }}
+        >
+          <div style={{ minWidth: 0 }}>
+            <div style={{ fontSize: 13, fontWeight: 600, color: "var(--text-primary)" }}>
+              {t("appSettings.agentConfigTransfer")}
+            </div>
+            <div style={{ marginTop: 3, fontSize: 11, color: "var(--text-hint)" }}>
+              {t("appSettings.agentConfigTransferHint")}
+            </div>
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleImportConfig}
+              disabled={importing || exporting}
+            >
+              <Upload size={12} />
+              {importing
+                ? t("appSettings.importingAgentConfig")
+                : t("appSettings.importAgentConfig")}
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleExportConfig}
+              disabled={exporting || importing}
+            >
+              <Download size={12} />
+              {exporting
+                ? t("appSettings.exportingAgentConfig")
+                : t("appSettings.exportAgentConfig")}
+            </Button>
+          </div>
+        </div>
+
         {deletable && customProfile && (
           <div style={{ marginBottom: 18 }}>
             <div
@@ -485,51 +619,11 @@ export function AgentConfigPanel({
             </div>
 
             {detectedModels.length > 0 && (
-              <div
-                style={{
-                  display: "grid",
-                  gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
-                  gap: 8,
-                  maxHeight: 180,
-                  overflow: "auto",
-                  border: "1px solid var(--border-dim)",
-                  borderRadius: 8,
-                  padding: 8,
-                  background: "var(--bg-subtle)",
-                }}
-              >
-                {detectedModels.map((item) => (
-                  <label
-                    key={item}
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      gap: 8,
-                      minWidth: 0,
-                      fontSize: 12,
-                      color: "var(--text-secondary)",
-                      cursor: "pointer",
-                    }}
-                  >
-                    <input
-                      type="checkbox"
-                      checked={selectedModels.includes(item)}
-                      onChange={() => toggleModel(item)}
-                    />
-                    <span
-                      style={{
-                        overflow: "hidden",
-                        textOverflow: "ellipsis",
-                        whiteSpace: "nowrap",
-                        fontFamily: "var(--font-mono)",
-                      }}
-                      title={item}
-                    >
-                      {item}
-                    </span>
-                  </label>
-                ))}
-              </div>
+              <ModelSelectionList
+                models={detectedModels}
+                selectedModels={selectedModels}
+                onToggle={toggleModel}
+              />
             )}
           </div>
         )}
@@ -707,6 +801,11 @@ export function AgentConfigPanel({
 
         {error && (
           <div style={{ color: "var(--danger)", fontSize: 12.5, marginBottom: 10 }}>{error}</div>
+        )}
+        {transferMessage && (
+          <div style={{ color: "var(--success)", fontSize: 12.5, marginBottom: 10 }}>
+            {transferMessage}
+          </div>
         )}
 
         {fileState.status === "loading" && !error && (

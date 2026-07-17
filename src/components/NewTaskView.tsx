@@ -110,7 +110,7 @@ export function NewTaskView({
   const agentOptions = useAgentOptions();
   const remoteProject = isRemoteProject(project);
   const [agent, setAgent] = useState<AgentType>(initialDraft?.agent ?? "claude");
-  const [permMode, setPermMode] = useState<PermissionMode>(initialDraft?.permMode ?? "ask");
+  const [permMode, setPermMode] = useState<PermissionMode>(initialDraft?.permMode ?? "full_access");
   const [planMode, setPlanMode] = useState(initialDraft?.planMode ?? false);
   const [goalMode, setGoalMode] = useState(initialDraft?.goalMode ?? false);
   const [launchMode, setLaunchMode] = useState<LaunchMode>(

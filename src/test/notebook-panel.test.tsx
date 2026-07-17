@@ -855,6 +855,83 @@ describe("NotebookPanel", () => {
     }
   });
 
+  it("finds and replaces markdown text with Command shortcuts", async () => {
+    const user = userEvent.setup();
+    renderNotebook();
+
+    await user.click(screen.getByRole("button", { name: "New quick note" }));
+    await user.click(screen.getByRole("menuitem", { name: "Markdown" }));
+    const body = screen.getByRole("textbox", { name: "Quick note content" }) as HTMLTextAreaElement;
+    await user.type(body, "alpha beta alpha");
+
+    fireEvent.keyDown(body, { key: "f", metaKey: true });
+    fireEvent.change(screen.getByRole("textbox", { name: "Find" }), {
+      target: { value: "alpha" },
+    });
+    expect(body.selectionStart).toBe(0);
+    expect(body.selectionEnd).toBe(5);
+
+    fireEvent.keyDown(body, { key: "h", metaKey: true });
+    fireEvent.change(screen.getByRole("textbox", { name: "Replace" }), {
+      target: { value: "omega" },
+    });
+    await user.click(screen.getByRole("button", { name: "Replace all" }));
+
+    expect(body).toHaveValue("omega beta omega");
+  });
+
+  it("finds and replaces rich text without flattening its markup", async () => {
+    const user = userEvent.setup();
+    renderNotebook();
+
+    await user.click(screen.getByRole("button", { name: "New quick note" }));
+    await user.click(screen.getByRole("menuitem", { name: "Text" }));
+    const body = screen.getByRole("textbox", { name: "Quick note content" });
+    body.innerHTML = "<p><strong>alpha</strong> beta alpha</p>";
+    fireEvent.input(body);
+
+    fireEvent.keyDown(body, { key: "h", metaKey: true });
+    fireEvent.change(screen.getByRole("textbox", { name: "Find" }), {
+      target: { value: "alpha" },
+    });
+    fireEvent.change(screen.getByRole("textbox", { name: "Replace" }), {
+      target: { value: "omega" },
+    });
+    await user.click(screen.getByRole("button", { name: "Replace all" }));
+
+    expect(body.textContent).toBe("omega beta omega");
+    expect(body.querySelector("strong")).toHaveTextContent("omega");
+  });
+
+  it("preserves the markdown scroll context when switching read and edit modes", async () => {
+    const user = userEvent.setup();
+    const scrollHeight = vi
+      .spyOn(HTMLElement.prototype, "scrollHeight", "get")
+      .mockReturnValue(1000);
+    const clientHeight = vi
+      .spyOn(HTMLElement.prototype, "clientHeight", "get")
+      .mockReturnValue(100);
+    renderNotebook();
+
+    await user.click(screen.getByRole("button", { name: "New quick note" }));
+    await user.click(screen.getByRole("menuitem", { name: "Markdown" }));
+    const body = screen.getByRole("textbox", { name: "Quick note content" }) as HTMLTextAreaElement;
+    await user.type(body, "# Heading\n\ncontext\n\nend");
+    body.scrollTop = 450;
+
+    await user.click(screen.getByRole("button", { name: "Read" }));
+    const readScroller = document.querySelector(".notebook-markdown-preview")?.parentElement;
+    expect(readScroller?.scrollTop).toBe(450);
+
+    await user.click(screen.getByRole("button", { name: "Edit" }));
+    expect(screen.getByRole("textbox", { name: "Quick note content" })).toHaveProperty(
+      "scrollTop",
+      450,
+    );
+    scrollHeight.mockRestore();
+    clientHeight.mockRestore();
+  });
+
   it("persists manual quick note ordering after a long-press pointer drag", async () => {
     const user = userEvent.setup();
     renderNotebook();

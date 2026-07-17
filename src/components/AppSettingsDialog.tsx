@@ -200,7 +200,18 @@ export function AppSettingsDialog({
 
   return (
     <div style={s.modalOverlay} onClick={handleOverlayClick}>
-      <div style={{ ...s.modalBox, position: "relative", background: "var(--bg-card)" }}>
+      <div
+        className="settings-modal-box"
+        role="dialog"
+        aria-modal="true"
+        aria-label={t("appSettings.title")}
+        style={{
+          ...s.modalBox,
+          ...s.settingsModalBox,
+          position: "relative",
+          background: "var(--bg-card)",
+        }}
+      >
         <div style={{ position: "relative", zIndex: 1, display: "flex", flex: 1, minWidth: 0 }}>
           <div style={s.settingsNav}>
             <div style={s.settingsNavTitle}>{t("appSettings.title")}</div>
@@ -308,6 +319,7 @@ export function AppSettingsDialog({
                 themeVariant={themeVariant}
                 deletable={activeAgentItem.custom === true}
                 onDeleted={() => setActiveNav("general")}
+                onImported={(agentId) => setActiveNav(agentId)}
               />
             ) : (
               <GeneralPanel

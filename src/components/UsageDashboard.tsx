@@ -41,6 +41,13 @@ function formatInteger(locale: string, value: number): string {
   }).format(value);
 }
 
+function formatAxisValue(locale: string, value: number): string {
+  return new Intl.NumberFormat(locale, {
+    notation: "compact",
+    maximumFractionDigits: value >= 1000 ? 1 : 0,
+  }).format(value);
+}
+
 function formatCost(locale: string, value: number): string {
   return new Intl.NumberFormat(locale, {
     style: "currency",
@@ -141,7 +148,7 @@ function MetricCard({
 function ChartLegend({ label, color }: { label: string; color: string }) {
   return (
     <span style={s.usageLegendItem}>
-      <span style={{ ...s.usageLegendSwatch, background: color }} />
+      <span style={{ ...s.usageLegendSwatch, background: color, color }} />
       {label}
     </span>
   );
@@ -170,16 +177,23 @@ function UsageChart({
   const columnWidth = series.length === 1 ? 72 : compactBars ? 52 : undefined;
   const minPlotWidth = compactBars ? 260 : Math.max(360, series.length * 25);
   const activeDay = activeIndex === null ? null : series[activeIndex];
+  const axisTicks = [max, max * 0.75, max * 0.5, max * 0.25, 0];
 
   return (
     <div style={s.usageChartViewport}>
       <div style={{ ...s.usageChart, minWidth: minPlotWidth + 96 }}>
         <div style={s.usageChartAxis} aria-hidden="true">
-          <span>{formatInteger(locale, max)}</span>
-          <span>{formatInteger(locale, Math.round(max * 0.75))}</span>
-          <span>{formatInteger(locale, Math.round(max * 0.5))}</span>
-          <span>{formatInteger(locale, Math.round(max * 0.25))}</span>
-          <span>0</span>
+          {axisTicks.map((tick, index) => (
+            <span
+              key={index}
+              className="usage-chart-axis-tick"
+              style={s.usageChartAxisTick}
+              title={formatInteger(locale, tick)}
+            >
+              <span>{formatAxisValue(locale, Math.round(tick))}</span>
+              <i />
+            </span>
+          ))}
         </div>
         <div
           style={{
@@ -188,8 +202,13 @@ function UsageChart({
             justifyContent: compactBars ? "center" : "stretch",
           }}
         >
+          <div className="usage-chart-grid" style={s.usageChartGrid} aria-hidden="true">
+            {axisTicks.map((_, index) => (
+              <span key={index} />
+            ))}
+          </div>
           {series.map((day, index) => {
-            const height = day.totalTokens === 0 ? 0 : Math.max(2, (day.totalTokens / max) * 192);
+            const height = day.totalTokens === 0 ? 0 : Math.max(3, (day.totalTokens / max) * 216);
             const title = [
               formatDate(locale, day.date, true),
               `${labels.input}: ${formatInteger(locale, day.inputTokens)}`,
@@ -200,8 +219,10 @@ function UsageChart({
             const segment = (value: number, color: string): CSSProperties => ({
               height: day.totalTokens === 0 ? 0 : `${(value / day.totalTokens) * 100}%`,
               minHeight: value > 0 ? 1 : 0,
-              background: color,
+              background: `linear-gradient(180deg, color-mix(in srgb, ${color} 76%, white 24%), ${color})`,
+              boxShadow: `inset 0 1px 0 color-mix(in srgb, white 24%, transparent)`,
             });
+            const active = activeIndex === index;
 
             return (
               <div
@@ -212,6 +233,7 @@ function UsageChart({
                   flex: columnWidth ? `0 0 ${columnWidth}px` : "1 1 0",
                   maxWidth: columnWidth,
                 }}
+                data-active={active || undefined}
                 tabIndex={0}
                 aria-label={title.split("\n").join(", ")}
                 onMouseEnter={() => setActiveIndex(index)}
@@ -228,15 +250,42 @@ function UsageChart({
                     height,
                   }}
                 >
-                  <span style={segment(day.inputTokens, "var(--accent)")} />
-                  <span style={segment(day.outputTokens, "var(--success)")} />
-                  <span style={segment(day.cacheCreationTokens, "var(--warning)")} />
-                  <span style={segment(day.cacheReadTokens, "var(--icon-file-ts)")} />
+                  <span
+                    className="usage-chart-segment"
+                    style={segment(day.inputTokens, "var(--accent)")}
+                  />
+                  <span
+                    className="usage-chart-segment"
+                    style={segment(day.outputTokens, "var(--success)")}
+                  />
+                  <span
+                    className="usage-chart-segment"
+                    style={segment(day.cacheCreationTokens, "var(--warning)")}
+                  />
+                  <span
+                    className="usage-chart-segment"
+                    style={segment(day.cacheReadTokens, "var(--icon-file-ts)")}
+                  />
                 </div>
-                <div style={s.usageChartLabel}>
-                  {index % labelEvery === 0 || index === series.length - 1
-                    ? formatDate(locale, day.date)
-                    : ""}
+                {active && (
+                  <span
+                    className="usage-chart-bar-value"
+                    style={{ ...s.usageChartBarValue, bottom: Math.min(236, height + 34) }}
+                  >
+                    {formatAxisValue(locale, day.totalTokens)}
+                  </span>
+                )}
+                <div
+                  className="usage-chart-label"
+                  style={{
+                    ...s.usageChartLabel,
+                    ...(active ? s.usageChartLabelActive : null),
+                  }}
+                >
+                  <span aria-hidden="true" />
+                  {index % labelEvery === 0 || index === series.length - 1 ? (
+                    <strong>{formatDate(locale, day.date)}</strong>
+                  ) : null}
                 </div>
               </div>
             );
@@ -264,7 +313,7 @@ function UsageChart({
             },
           ].map((item) => (
             <div key={item.label} style={s.usageChartTooltipRow}>
-              <span style={{ ...s.usageLegendSwatch, background: item.color }} />
+              <span style={{ ...s.usageLegendSwatch, background: item.color, color: item.color }} />
               <span>{item.label}</span>
               <strong>{formatInteger(locale, item.value)}</strong>
             </div>

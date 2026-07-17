@@ -1,6 +1,7 @@
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { invoke } from "@tauri-apps/api/core";
+import { open, save } from "@tauri-apps/plugin-dialog";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AddAgentPanel } from "../components/app-settings/AddAgentPanel";
 import { AgentConfigPanel } from "../components/app-settings/AgentConfigPanel";
@@ -10,6 +11,11 @@ import { I18nProvider } from "../i18n";
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(),
+}));
+
+vi.mock("@tauri-apps/plugin-dialog", () => ({
+  open: vi.fn(),
+  save: vi.fn(),
 }));
 
 vi.mock("shiki/core", () => ({
@@ -353,6 +359,8 @@ describe("Agent config and debug panel UI", () => {
 
   beforeEach(() => {
     vi.mocked(invoke).mockReset();
+    vi.mocked(open).mockReset();
+    vi.mocked(save).mockReset();
   });
 
   it("shows loaded agent config files directly in an editable textarea", async () => {
@@ -410,6 +418,54 @@ describe("Agent config and debug panel UI", () => {
 
     await findConfigEditor('status = "ok"\n');
     expect(screen.queryByRole("button", { name: /^Cancel$/i })).not.toBeInTheDocument();
+  });
+
+  it("imports and exports portable Agent configuration bundles", async () => {
+    const user = userEvent.setup();
+    mockInvokeForAgentConfig('model = "gpt-5"\n');
+    vi.mocked(save).mockResolvedValue("/tmp/codex.aeroric-agent.json");
+    vi.mocked(open).mockResolvedValue("/tmp/imported.aeroric-agent.json");
+    vi.mocked(invoke).mockImplementation((command) => {
+      if (command === "get_agent_config_file_path") {
+        return Promise.resolve("/Users/macbook/.codex/config.toml");
+      }
+      if (command === "read_agent_config_file") return Promise.resolve('model = "gpt-5"\n');
+      if (command === "load_app_settings") return Promise.resolve(appSettings);
+      if (command === "import_agent_config_bundle") {
+        return Promise.resolve({
+          agent_id: "codex",
+          config_path: "/Users/macbook/.codex/config.toml",
+        });
+      }
+      return Promise.resolve(undefined);
+    });
+    render(
+      <I18nProvider>
+        <AgentConfigPanel
+          agentKey="codex"
+          filePath="/Users/macbook/.codex/config.toml"
+          lang="toml"
+          themeVariant="light"
+        />
+      </I18nProvider>,
+    );
+
+    await findConfigEditor('model = "gpt-5"\n');
+    await user.click(screen.getByRole("button", { name: "Export configuration" }));
+    await waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith("export_agent_config_bundle", {
+        agent: "codex",
+        outputPath: "/tmp/codex.aeroric-agent.json",
+        configContent: 'model = "gpt-5"\n',
+      }),
+    );
+
+    await user.click(screen.getByRole("button", { name: "Import configuration" }));
+    await waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith("import_agent_config_bundle", {
+        inputPath: "/tmp/imported.aeroric-agent.json",
+      }),
+    );
   });
 
   it("renames custom agent configs from the settings panel", async () => {
@@ -594,6 +650,12 @@ describe("Agent config and debug panel UI", () => {
     await user.click(screen.getByRole("button", { name: /Detect Models/i }));
 
     await screen.findByText("0 of 4 models selected");
+    expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
+    const modelSearch = screen.getByRole("searchbox", { name: "Search models" });
+    expect(modelSearch).toHaveStyle({ borderRadius: "999px" });
+    await user.type(modelSearch, "g56sl");
+    expect(screen.getByLabelText("gpt-5.6-sol")).toBeInTheDocument();
+    expect(screen.queryByLabelText("gpt-5.6-terra")).not.toBeInTheDocument();
     await user.click(screen.getByLabelText("gpt-5.6-sol"));
     await user.click(screen.getByRole("button", { name: /^Add Agent$/i }));
 

@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useRef, type ReactNode } from "react";
+import { useState, useEffect, useMemo, useRef, type MouseEvent, type ReactNode } from "react";
 import {
   ChevronDown,
   ChevronRight,
@@ -14,6 +14,7 @@ import {
   Star,
   Sun,
   Trash2,
+  X,
 } from "lucide-react";
 import type { Project, Task, ThemeVariant } from "../types";
 import { isActiveTaskStatus } from "../types";
@@ -136,6 +137,7 @@ export function projectTaskCountLabel(_count: number, _taskLabel: string): strin
 function RailTaskItem({
   task,
   selected,
+  multiSelected,
   isNewTask,
   onSelect,
   onDelete,
@@ -145,8 +147,9 @@ function RailTaskItem({
 }: {
   task: Task;
   selected: boolean;
+  multiSelected: boolean;
   isNewTask: boolean;
-  onSelect: () => void;
+  onSelect: (event: MouseEvent<HTMLButtonElement>) => void;
   onDelete: () => void;
   onToggleStar: () => void;
   onRunTodo: () => void;
@@ -172,6 +175,7 @@ function RailTaskItem({
     <button
       type="button"
       onClick={onSelect}
+      aria-selected={multiSelected}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
       style={{
@@ -184,7 +188,7 @@ function RailTaskItem({
         border: "none",
         borderRadius: 5,
         background:
-          selected && !isNewTask
+          multiSelected || (selected && !isNewTask)
             ? "var(--bg-selected)"
             : hovered
               ? "var(--bg-hover)"
@@ -456,6 +460,7 @@ export function ProjectRail({
   onNewTask,
   onSelectTask,
   onDeleteTask,
+  onDeleteTasks,
   onToggleTaskStar,
   onRunTodo,
   onResumeTask,
@@ -477,6 +482,7 @@ export function ProjectRail({
   onNewTask: () => void;
   onSelectTask: (projectId: string, id: string) => void;
   onDeleteTask: (id: string) => void;
+  onDeleteTasks?: (ids: string[]) => void;
   onToggleTaskStar: (id: string) => void;
   onRunTodo: (task: Task) => void;
   onResumeTask?: (taskId: string) => void;
@@ -502,11 +508,24 @@ export function ProjectRail({
   const [expandedProjectIds, setExpandedProjectIds] = useState<Set<string>>(() =>
     getDefaultExpandedProjectIds(projects, activeProjectId),
   );
+  const [selectedTaskIds, setSelectedTaskIds] = useState<Set<string>>(new Set());
+  const taskSelectionAnchorRef = useRef<{ projectId: string; taskId: string } | null>(null);
 
   const projectGroups = useMemo(
     () => buildProjectTaskGroups(projects, allTasks),
     [projects, allTasks],
   );
+
+  useEffect(() => {
+    const availableTaskIds = new Set(allTasks.map((task) => task.id));
+    setSelectedTaskIds(
+      (current) => new Set([...current].filter((taskId) => availableTaskIds.has(taskId))),
+    );
+    const anchor = taskSelectionAnchorRef.current;
+    if (anchor && !availableTaskIds.has(anchor.taskId)) {
+      taskSelectionAnchorRef.current = null;
+    }
+  }, [allTasks]);
 
   const reorderProjectIds = (draggedId: string, targetId: string) => {
     if (draggedId === targetId) return;
@@ -675,10 +694,59 @@ export function ProjectRail({
   };
 
   const handleProjectClick = (project: Project, tasks: Task[]) => {
+    setSelectedTaskIds(new Set());
+    taskSelectionAnchorRef.current = null;
     const isActive = project.id === activeProjectId;
     const targetTaskId = getProjectClickTargetTaskId(tasks, selectedTaskId);
     onSwitch(project);
     if (!isActive && targetTaskId) onSelectTask(project.id, targetTaskId);
+  };
+
+  const handleTaskClick = (
+    event: MouseEvent<HTMLButtonElement>,
+    project: Project,
+    tasks: Task[],
+    task: Task,
+  ) => {
+    const anchor = taskSelectionAnchorRef.current;
+    const additive = event.metaKey || event.ctrlKey;
+
+    if (event.shiftKey && anchor?.projectId === project.id) {
+      const anchorIndex = tasks.findIndex((item) => item.id === anchor.taskId);
+      const targetIndex = tasks.findIndex((item) => item.id === task.id);
+      if (anchorIndex >= 0 && targetIndex >= 0) {
+        const start = Math.min(anchorIndex, targetIndex);
+        const end = Math.max(anchorIndex, targetIndex);
+        const rangeIds = tasks.slice(start, end + 1).map((item) => item.id);
+        const projectTaskIds = new Set(tasks.map((item) => item.id));
+        setSelectedTaskIds(
+          (current) =>
+            new Set(
+              additive
+                ? [...current].filter((taskId) => projectTaskIds.has(taskId)).concat(rangeIds)
+                : rangeIds,
+            ),
+        );
+        return;
+      }
+    }
+
+    if (additive) {
+      setSelectedTaskIds((current) => {
+        const projectTaskIds = new Set(tasks.map((item) => item.id));
+        const next = new Set([...current].filter((taskId) => projectTaskIds.has(taskId)));
+        if (next.has(task.id)) next.delete(task.id);
+        else next.add(task.id);
+        return next;
+      });
+      taskSelectionAnchorRef.current = { projectId: project.id, taskId: task.id };
+      return;
+    }
+
+    setSelectedTaskIds(new Set());
+    taskSelectionAnchorRef.current = { projectId: project.id, taskId: task.id };
+    if (project.id !== activeProjectId) onSwitch(project);
+    onSelectTask(project.id, task.id);
   };
 
   if (effectiveCollapsed) {
@@ -855,6 +923,10 @@ export function ProjectRail({
           const status = getProjectStatus(allTasks, project.id);
           const attentionCount = getAttentionCount(allTasks, project.id);
           const taskCountLabel = projectTaskCountLabel(tasks.length, t("task.tasks"));
+          const selectedProjectTasks = tasks.filter((task) => selectedTaskIds.has(task.id));
+          const deletableSelectedTaskIds = selectedProjectTasks
+            .filter((task) => !task.starred)
+            .map((task) => task.id);
           return (
             <div key={project.id} style={{ marginBottom: 6 }}>
               <div
@@ -1036,6 +1108,91 @@ export function ProjectRail({
                     gap: 1,
                   }}
                 >
+                  {selectedProjectTasks.length > 0 && (
+                    <div
+                      role="toolbar"
+                      aria-label={t("task.selectedActions")}
+                      style={{
+                        minHeight: 30,
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 4,
+                        margin: "2px 0 3px",
+                        padding: "3px 4px 3px 8px",
+                        border: "1px solid var(--border-medium)",
+                        borderRadius: 6,
+                        background: "var(--bg-card)",
+                      }}
+                    >
+                      <span
+                        style={{
+                          flex: 1,
+                          minWidth: 0,
+                          fontSize: 10.8,
+                          fontWeight: 650,
+                          color: "var(--text-secondary)",
+                        }}
+                      >
+                        {t("task.selectedCount", { count: selectedProjectTasks.length })}
+                      </span>
+                      <button
+                        type="button"
+                        aria-label={t("task.deleteSelected")}
+                        title={t("task.deleteSelected")}
+                        disabled={deletableSelectedTaskIds.length === 0 || !onDeleteTasks}
+                        onClick={() => onDeleteTasks?.(deletableSelectedTaskIds)}
+                        style={{
+                          minWidth: 24,
+                          height: 24,
+                          display: "inline-flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          gap: 4,
+                          padding: "0 6px",
+                          border: "none",
+                          borderRadius: 5,
+                          background: "transparent",
+                          color:
+                            deletableSelectedTaskIds.length > 0
+                              ? "var(--danger)"
+                              : "var(--text-hint)",
+                          cursor:
+                            deletableSelectedTaskIds.length > 0 && onDeleteTasks
+                              ? "pointer"
+                              : "default",
+                          opacity: deletableSelectedTaskIds.length > 0 && onDeleteTasks ? 1 : 0.45,
+                          fontFamily: "var(--font-ui)",
+                          fontSize: 10.8,
+                        }}
+                      >
+                        <Trash2 size={11} strokeWidth={2.2} />
+                        <span>{t("common.delete")}</span>
+                      </button>
+                      <button
+                        type="button"
+                        aria-label={t("task.clearSelection")}
+                        title={t("task.clearSelection")}
+                        onClick={() => {
+                          setSelectedTaskIds(new Set());
+                          taskSelectionAnchorRef.current = null;
+                        }}
+                        style={{
+                          width: 24,
+                          height: 24,
+                          display: "inline-flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          border: "none",
+                          borderRadius: 5,
+                          background: "transparent",
+                          color: "var(--text-muted)",
+                          cursor: "pointer",
+                        }}
+                      >
+                        <X size={11} strokeWidth={2.2} />
+                      </button>
+                    </div>
+                  )}
                   {tasks.length === 0 ? (
                     <div
                       style={{
@@ -1052,11 +1209,9 @@ export function ProjectRail({
                         key={task.id}
                         task={task}
                         selected={selectedTaskId === task.id}
+                        multiSelected={selectedTaskIds.has(task.id)}
                         isNewTask={isNewTask}
-                        onSelect={() => {
-                          if (project.id !== activeProjectId) onSwitch(project);
-                          onSelectTask(project.id, task.id);
-                        }}
+                        onSelect={(event) => handleTaskClick(event, project, tasks, task)}
                         onDelete={() => onDeleteTask(task.id)}
                         onToggleStar={() => onToggleTaskStar(task.id)}
                         onRunTodo={() => onRunTodo(task)}

@@ -16,7 +16,7 @@ const DEFAULT_CONFIG: &str = r#"# Aeroric project configuration
 # Default agent to use for new tasks: "claude", "claude_gpt55", or "codex"
 default = "claude"
 # Default permission mode for new tasks: "ask", "auto_edit", or "full_access"
-default_permission_mode = "ask"
+default_permission_mode = "full_access"
 # Text automatically prepended (followed by a newline) to every task prompt
 prompt_prefix = ""
 
@@ -44,7 +44,7 @@ pub struct AgentConfig {
 }
 
 fn default_permission_mode() -> String {
-    "ask".to_string()
+    "full_access".to_string()
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
@@ -96,7 +96,7 @@ impl Default for ProjectConfig {
         ProjectConfig {
             agent: AgentConfig {
                 default: "claude".to_string(),
-                default_permission_mode: "ask".to_string(),
+                default_permission_mode: "full_access".to_string(),
                 prompt_prefix: String::new(),
             },
             git: GitConfig {
@@ -361,6 +361,10 @@ mod tests {
 
     #[test]
     fn default_project_config_disables_format_on_save() {
+        assert_eq!(
+            ProjectConfig::default().agent.default_permission_mode,
+            "full_access"
+        );
         assert!(!ProjectConfig::default().editor.format_on_save);
         assert_eq!(
             ProjectConfig::default().editor.file_browser_sort.field,
@@ -374,6 +378,7 @@ mod tests {
         assert_eq!(ProjectConfig::default().editor.sftp_sort.direction, "desc");
 
         let config: ProjectConfig = toml::from_str(DEFAULT_CONFIG).unwrap();
+        assert_eq!(config.agent.default_permission_mode, "full_access");
         assert!(!config.editor.format_on_save);
         assert_eq!(config.editor.file_browser_sort.field, "modified");
         assert_eq!(config.editor.file_browser_sort.direction, "desc");

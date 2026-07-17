@@ -1187,6 +1187,24 @@ function App() {
     deleteTasks([taskId]);
   }
 
+  async function handleDeleteTasks(taskIds: string[]) {
+    const deletableTaskIds = [
+      ...new Set(
+        taskIds.filter((taskId) => {
+          const task = tasks.find((item) => item.id === taskId);
+          return task && !task.starred;
+        }),
+      ),
+    ];
+    if (deletableTaskIds.length === 0) return;
+    const ok = await confirm(t("task.deleteSelectedPrompt", { count: deletableTaskIds.length }), {
+      title: t("task.deleteSelectedTitle"),
+      kind: "warning",
+    });
+    if (!ok) return;
+    deleteTasks(deletableTaskIds);
+  }
+
   async function handleDeleteAllTasks(project: Project) {
     const projectTaskIds = tasks
       .filter((task) => task.projectId === project.id && !task.starred)
@@ -1491,6 +1509,7 @@ function App() {
                   updateProjectView(targetProjectId, { selectedTaskId: id, isNewTask: false })
                 }
                 onDeleteTask={handleDeleteTask}
+                onDeleteTasks={handleDeleteTasks}
                 onDeleteAllTasks={() => handleDeleteAllTasks(project)}
                 onToggleTaskStar={handleToggleTaskStar}
                 onRenameTask={handleRenameTask}

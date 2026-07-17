@@ -44,5 +44,9 @@ describe("AppSettingsDialog usage statistics", () => {
 
     expect(screen.getByRole("button", { name: "Statistics" })).toBeInTheDocument();
     expect(screen.getByTestId("usage-dashboard")).toHaveAttribute("data-embedded", "true");
+    expect(screen.getByRole("dialog", { name: "App Settings" })).toHaveClass("settings-modal-box");
+    expect(screen.getByRole("dialog", { name: "App Settings" })).toHaveStyle({
+      aspectRatio: "4 / 3",
+    });
   });
 });

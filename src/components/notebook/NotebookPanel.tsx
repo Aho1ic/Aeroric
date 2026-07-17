@@ -4,6 +4,8 @@ import DOMPurify from "dompurify";
 import { marked } from "marked";
 import {
   Bold,
+  ChevronDown,
+  ChevronUp,
   Code2,
   FileText,
   GripVertical,
@@ -14,10 +16,13 @@ import {
   PaintBucket,
   Palette,
   Plus,
+  Replace,
+  Search,
   Strikethrough,
   Table2,
   Trash2,
   Underline,
+  X,
 } from "lucide-react";
 import { useI18n } from "../../i18n";
 import {
@@ -65,6 +70,11 @@ type NotebookPointerDragState = {
   hasMoved: boolean;
 };
 
+type TextMatch = {
+  start: number;
+  end: number;
+};
+
 const STORAGE_KEY = "aeroric:notebook:v1";
 const POINTER_DRAG_MOVE_TOLERANCE = 5;
 const TABLE_PICKER_WIDTH = 168;
@@ -78,6 +88,57 @@ const DEFAULT_RICH_TEXT_STATE: RichTextToolbarState = {
   heading: false,
   subheading: false,
 };
+
+export function findNotebookTextMatches(text: string, query: string): TextMatch[] {
+  const needle = query.toLocaleLowerCase();
+  if (!needle) return [];
+  const haystack = text.toLocaleLowerCase();
+  const matches: TextMatch[] = [];
+  let offset = 0;
+  while (offset <= haystack.length - needle.length) {
+    const start = haystack.indexOf(needle, offset);
+    if (start < 0) break;
+    matches.push({ start, end: start + needle.length });
+    offset = start + Math.max(1, needle.length);
+  }
+  return matches;
+}
+
+function richTextPlainText(html: string): string {
+  const template = document.createElement("template");
+  template.innerHTML = html;
+  return template.content.textContent ?? "";
+}
+
+function textRangeForOffsets(root: HTMLElement, start: number, end: number): Range | null {
+  const walker = document.createTreeWalker(root, globalThis.NodeFilter?.SHOW_TEXT ?? 4);
+  let currentOffset = 0;
+  let startNode: Text | null = null;
+  let endNode: Text | null = null;
+  let startOffset = 0;
+  let endOffset = 0;
+  let node = walker.nextNode();
+  while (node) {
+    const textNode = node as Text;
+    const nextOffset = currentOffset + (textNode.nodeValue?.length ?? 0);
+    if (!startNode && start >= currentOffset && start <= nextOffset) {
+      startNode = textNode;
+      startOffset = start - currentOffset;
+    }
+    if (end >= currentOffset && end <= nextOffset) {
+      endNode = textNode;
+      endOffset = end - currentOffset;
+      break;
+    }
+    currentOffset = nextOffset;
+    node = walker.nextNode();
+  }
+  if (!startNode || !endNode) return null;
+  const range = document.createRange();
+  range.setStart(startNode, startOffset);
+  range.setEnd(endNode, endOffset);
+  return range;
+}
 
 const ENGLISH_PUNCTUATION_MAP: Record<string, string> = {
   "，": ",",
@@ -356,6 +417,9 @@ export function NotebookPanel({ width = "100%" }: { width?: number | string }) {
   const { t } = useI18n();
   const markdownContentRef = useRef<HTMLTextAreaElement | null>(null);
   const richTextRef = useRef<HTMLDivElement | null>(null);
+  const readContentRef = useRef<HTMLDivElement | null>(null);
+  const searchInputRef = useRef<HTMLInputElement | null>(null);
+  const pendingScrollRestoreRef = useRef<{ noteId: string; ratio: number } | null>(null);
   const createPanelRef = useRef<HTMLDivElement | null>(null);
   const tablePickerAnchorRef = useRef<HTMLDivElement | null>(null);
   const titleInputRef = useRef<HTMLInputElement | null>(null);
@@ -382,10 +446,26 @@ export function NotebookPanel({ width = "100%" }: { width?: number | string }) {
   const [tableHoverSize, setTableHoverSize] = useState({ rows: 2, cols: 2 });
   const [draggedNoteId, setDraggedNoteId] = useState<string | null>(null);
   const [dragOverNoteId, setDragOverNoteId] = useState<string | null>(null);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [replaceOpen, setReplaceOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [replacementText, setReplacementText] = useState("");
+  const [activeMatchIndex, setActiveMatchIndex] = useState(0);
   const activeNote = notes.find((note) => note.id === activeId) ?? notes[0] ?? null;
   const markdownHtml = useMemo(() => renderMarkdown(activeNote?.body ?? ""), [activeNote?.body]);
   const richTextHtml = useMemo(() => renderRichText(activeNote?.body ?? ""), [activeNote?.body]);
   const activeFormat = activeNote?.format ?? "markdown";
+  const searchableText = useMemo(
+    () =>
+      activeFormat === "richtext"
+        ? richTextPlainText(activeNote?.body ?? "")
+        : (activeNote?.body ?? ""),
+    [activeFormat, activeNote?.body],
+  );
+  const searchMatches = useMemo(
+    () => findNotebookTextMatches(searchableText, searchQuery),
+    [searchQuery, searchableText],
+  );
   const canUseToolbar = mode === "edit" && Boolean(activeNote);
   const canFormatSelection =
     canUseToolbar && (activeFormat === "markdown" ? hasMarkdownSelection : hasRichTextSelection);
@@ -477,6 +557,58 @@ export function NotebookPanel({ width = "100%" }: { width?: number | string }) {
     savedRichTextRangeRef.current = null;
   }, [activeNote?.id, activeFormat, mode]);
 
+  useLayoutEffect(() => {
+    const pending = pendingScrollRestoreRef.current;
+    if (!pending || pending.noteId !== activeNote?.id) return;
+    const target =
+      mode === "read"
+        ? readContentRef.current
+        : activeFormat === "markdown"
+          ? markdownContentRef.current
+          : richTextRef.current;
+    if (!target) return;
+    const maxScroll = Math.max(0, target.scrollHeight - target.clientHeight);
+    target.scrollTop = pending.ratio * maxScroll;
+    pendingScrollRestoreRef.current = null;
+  }, [activeFormat, activeNote?.id, mode]);
+
+  useLayoutEffect(() => {
+    if (!searchOpen || !activeNote || searchMatches.length === 0) return;
+    const match = searchMatches[Math.min(activeMatchIndex, searchMatches.length - 1)];
+    if (!match) return;
+    if (activeFormat === "markdown") {
+      const textarea = markdownContentRef.current;
+      if (!textarea) return;
+      textarea.focus();
+      textarea.setSelectionRange(match.start, match.end);
+      const lineCount = Math.max(1, textarea.value.split("\n").length);
+      const matchLine = textarea.value.slice(0, match.start).split("\n").length - 1;
+      const maxScroll = Math.max(0, textarea.scrollHeight - textarea.clientHeight);
+      textarea.scrollTop = (matchLine / lineCount) * maxScroll;
+      return;
+    }
+    const editor = richTextRef.current;
+    const selection = document.getSelection();
+    const range = editor ? textRangeForOffsets(editor, match.start, match.end) : null;
+    if (!editor || !selection || !range) return;
+    editor.focus();
+    selection.removeAllRanges();
+    selection.addRange(range);
+    closestElement(range.startContainer)?.scrollIntoView?.({ block: "center" });
+  }, [activeFormat, activeMatchIndex, activeNote, searchMatches, searchOpen]);
+
+  useEffect(() => {
+    if (!searchOpen) return;
+    searchInputRef.current?.focus();
+    searchInputRef.current?.select();
+  }, [replaceOpen, searchOpen]);
+
+  useEffect(() => {
+    setActiveMatchIndex((current) =>
+      searchMatches.length === 0 ? 0 : Math.min(current, searchMatches.length - 1),
+    );
+  }, [searchMatches.length]);
+
   const updateActiveNote = (patch: Partial<Pick<NotebookNote, "title" | "body">>) => {
     if (!activeNote) return;
     const updatedAt = Date.now();
@@ -492,6 +624,99 @@ export function NotebookPanel({ width = "100%" }: { width?: number | string }) {
         note.id === activeNote.id ? { ...note, ...normalizedPatch, updatedAt } : note,
       ),
     );
+  };
+
+  const captureCurrentScroll = () => {
+    if (!activeNote) return;
+    const source =
+      mode === "read"
+        ? readContentRef.current
+        : activeFormat === "markdown"
+          ? markdownContentRef.current
+          : richTextRef.current;
+    if (!source) return;
+    const maxScroll = Math.max(0, source.scrollHeight - source.clientHeight);
+    pendingScrollRestoreRef.current = {
+      noteId: activeNote.id,
+      ratio: maxScroll > 0 ? source.scrollTop / maxScroll : 0,
+    };
+  };
+
+  const toggleNotebookMode = () => {
+    captureCurrentScroll();
+    setMode((current) => (current === "edit" ? "read" : "edit"));
+  };
+
+  const openNotebookSearch = (withReplace: boolean) => {
+    if (!activeNote) return;
+    if (mode === "read") {
+      captureCurrentScroll();
+      setMode("edit");
+    }
+    setSearchOpen(true);
+    setReplaceOpen(withReplace);
+  };
+
+  const closeNotebookSearch = () => {
+    setSearchOpen(false);
+    setReplaceOpen(false);
+    if (activeFormat === "markdown") markdownContentRef.current?.focus();
+    else richTextRef.current?.focus();
+  };
+
+  const moveNotebookMatch = (direction: 1 | -1) => {
+    if (searchMatches.length === 0) return;
+    setActiveMatchIndex(
+      (current) => (current + direction + searchMatches.length) % searchMatches.length,
+    );
+  };
+
+  const replaceCurrentNotebookMatch = () => {
+    if (!activeNote || searchMatches.length === 0) return;
+    const match = searchMatches[Math.min(activeMatchIndex, searchMatches.length - 1)];
+    if (!match) return;
+    if (activeFormat === "markdown") {
+      updateActiveNote({
+        body: `${activeNote.body.slice(0, match.start)}${replacementText}${activeNote.body.slice(match.end)}`,
+      });
+      return;
+    }
+    const editor = richTextRef.current;
+    const range = editor ? textRangeForOffsets(editor, match.start, match.end) : null;
+    if (!editor || !range) return;
+    range.deleteContents();
+    range.insertNode(document.createTextNode(replacementText));
+    updateActiveNote({ body: renderRichText(editor.innerHTML) });
+  };
+
+  const replaceAllNotebookMatches = () => {
+    if (!activeNote || searchMatches.length === 0) return;
+    if (activeFormat === "markdown") {
+      let nextBody = activeNote.body;
+      for (const match of [...searchMatches].reverse()) {
+        nextBody = `${nextBody.slice(0, match.start)}${replacementText}${nextBody.slice(match.end)}`;
+      }
+      updateActiveNote({ body: nextBody });
+      return;
+    }
+    const editor = richTextRef.current;
+    if (!editor) return;
+    for (const match of [...searchMatches].reverse()) {
+      const range = textRangeForOffsets(editor, match.start, match.end);
+      if (!range) continue;
+      range.deleteContents();
+      range.insertNode(document.createTextNode(replacementText));
+    }
+    updateActiveNote({ body: renderRichText(editor.innerHTML) });
+  };
+
+  const handleNotebookShortcut = (event: React.KeyboardEvent<HTMLElement>) => {
+    if (!(event.metaKey || event.ctrlKey) || event.altKey) return;
+    const key = event.key.toLocaleLowerCase();
+    if (key !== "f" && key !== "h") return;
+    event.preventDefault();
+    event.stopPropagation();
+    openNotebookSearch(key === "h");
   };
 
   const updateNoteTitle = (noteId: string, title: string) => {
@@ -1062,6 +1287,7 @@ export function NotebookPanel({ width = "100%" }: { width?: number | string }) {
   return (
     <section
       aria-label={t("notebook.title")}
+      onKeyDownCapture={handleNotebookShortcut}
       style={{
         width,
         minWidth: 0,
@@ -1330,7 +1556,7 @@ export function NotebookPanel({ width = "100%" }: { width?: number | string }) {
               </span>
               <button
                 type="button"
-                onClick={() => setMode((current) => (current === "edit" ? "read" : "edit"))}
+                onClick={toggleNotebookMode}
                 style={{
                   height: 26,
                   border: "1px solid var(--border-medium)",
@@ -1360,6 +1586,202 @@ export function NotebookPanel({ width = "100%" }: { width?: number | string }) {
                 <Trash2 size={14} />
               </button>
             </div>
+            {searchOpen && (
+              <div
+                role="search"
+                aria-label={t("notebook.findReplace")}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 6,
+                  padding: "5px 8px",
+                  borderBottom: "1px solid var(--border-dim)",
+                  background: "var(--bg-sidebar)",
+                  flexWrap: "wrap",
+                }}
+              >
+                <Search size={13} color="var(--text-muted)" />
+                <input
+                  ref={searchInputRef}
+                  aria-label={t("notebook.find")}
+                  value={searchQuery}
+                  onChange={(event) => {
+                    setSearchQuery(event.currentTarget.value);
+                    setActiveMatchIndex(0);
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key === "Escape") {
+                      event.preventDefault();
+                      closeNotebookSearch();
+                    } else if (event.key === "Enter") {
+                      event.preventDefault();
+                      moveNotebookMatch(event.shiftKey ? -1 : 1);
+                    }
+                  }}
+                  placeholder={t("notebook.findPlaceholder")}
+                  style={{
+                    width: 180,
+                    height: 26,
+                    border: "1px solid var(--border-medium)",
+                    borderRadius: 6,
+                    background: "var(--bg-input)",
+                    color: "var(--text-primary)",
+                    padding: "0 8px",
+                    fontSize: 12,
+                    outline: "none",
+                  }}
+                />
+                {replaceOpen && (
+                  <>
+                    <Replace size={13} color="var(--text-muted)" />
+                    <input
+                      aria-label={t("notebook.replace")}
+                      value={replacementText}
+                      onChange={(event) => setReplacementText(event.currentTarget.value)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Escape") {
+                          event.preventDefault();
+                          closeNotebookSearch();
+                        } else if (event.key === "Enter") {
+                          event.preventDefault();
+                          replaceCurrentNotebookMatch();
+                        }
+                      }}
+                      placeholder={t("notebook.replacePlaceholder")}
+                      style={{
+                        width: 150,
+                        height: 26,
+                        border: "1px solid var(--border-medium)",
+                        borderRadius: 6,
+                        background: "var(--bg-input)",
+                        color: "var(--text-primary)",
+                        padding: "0 8px",
+                        fontSize: 12,
+                        outline: "none",
+                      }}
+                    />
+                  </>
+                )}
+                <span
+                  aria-live="polite"
+                  style={{ minWidth: 54, fontSize: 11, color: "var(--text-muted)" }}
+                >
+                  {searchMatches.length > 0
+                    ? `${Math.min(activeMatchIndex + 1, searchMatches.length)}/${searchMatches.length}`
+                    : t("notebook.noMatches")}
+                </span>
+                <button
+                  type="button"
+                  aria-label={t("notebook.previousMatch")}
+                  title={t("notebook.previousMatch")}
+                  disabled={searchMatches.length === 0}
+                  onClick={() => moveNotebookMatch(-1)}
+                  style={{
+                    width: 24,
+                    height: 24,
+                    border: "none",
+                    borderRadius: 5,
+                    background: "transparent",
+                    color: "var(--text-muted)",
+                    cursor: searchMatches.length > 0 ? "pointer" : "default",
+                  }}
+                >
+                  <ChevronUp size={13} />
+                </button>
+                <button
+                  type="button"
+                  aria-label={t("notebook.nextMatch")}
+                  title={t("notebook.nextMatch")}
+                  disabled={searchMatches.length === 0}
+                  onClick={() => moveNotebookMatch(1)}
+                  style={{
+                    width: 24,
+                    height: 24,
+                    border: "none",
+                    borderRadius: 5,
+                    background: "transparent",
+                    color: "var(--text-muted)",
+                    cursor: searchMatches.length > 0 ? "pointer" : "default",
+                  }}
+                >
+                  <ChevronDown size={13} />
+                </button>
+                {replaceOpen && (
+                  <>
+                    <button
+                      type="button"
+                      disabled={searchMatches.length === 0}
+                      onClick={replaceCurrentNotebookMatch}
+                      style={{
+                        height: 24,
+                        border: "1px solid var(--border-medium)",
+                        borderRadius: 5,
+                        background: "var(--bg-card)",
+                        color: "var(--text-secondary)",
+                        padding: "0 7px",
+                        cursor: searchMatches.length > 0 ? "pointer" : "default",
+                        fontSize: 11,
+                      }}
+                    >
+                      {t("notebook.replace")}
+                    </button>
+                    <button
+                      type="button"
+                      disabled={searchMatches.length === 0}
+                      onClick={replaceAllNotebookMatches}
+                      style={{
+                        height: 24,
+                        border: "1px solid var(--border-medium)",
+                        borderRadius: 5,
+                        background: "var(--bg-card)",
+                        color: "var(--text-secondary)",
+                        padding: "0 7px",
+                        cursor: searchMatches.length > 0 ? "pointer" : "default",
+                        fontSize: 11,
+                      }}
+                    >
+                      {t("notebook.replaceAll")}
+                    </button>
+                  </>
+                )}
+                {!replaceOpen && (
+                  <button
+                    type="button"
+                    title={t("notebook.showReplace")}
+                    onClick={() => setReplaceOpen(true)}
+                    style={{
+                      height: 24,
+                      border: "1px solid var(--border-medium)",
+                      borderRadius: 5,
+                      background: "var(--bg-card)",
+                      color: "var(--text-secondary)",
+                      padding: "0 7px",
+                      cursor: "pointer",
+                      fontSize: 11,
+                    }}
+                  >
+                    {t("notebook.replace")}
+                  </button>
+                )}
+                <button
+                  type="button"
+                  aria-label={t("common.close")}
+                  title={t("common.close")}
+                  onClick={closeNotebookSearch}
+                  style={{
+                    width: 24,
+                    height: 24,
+                    border: "none",
+                    borderRadius: 5,
+                    background: "transparent",
+                    color: "var(--text-muted)",
+                    cursor: "pointer",
+                  }}
+                >
+                  <X size={13} />
+                </button>
+              </div>
+            )}
             {activeNote && (
               <div
                 aria-label={t("notebook.markdownToolbar")}
@@ -1691,7 +2113,10 @@ export function NotebookPanel({ width = "100%" }: { width?: number | string }) {
                 }}
               />
             ) : activeNote.format === "markdown" ? (
-              <div style={{ flex: 1, minHeight: 0, overflow: "auto", padding: 14 }}>
+              <div
+                ref={readContentRef}
+                style={{ flex: 1, minHeight: 0, overflow: "auto", padding: 14 }}
+              >
                 <div
                   className="md-preview notebook-markdown-preview"
                   dangerouslySetInnerHTML={{ __html: markdownHtml }}
@@ -1699,6 +2124,7 @@ export function NotebookPanel({ width = "100%" }: { width?: number | string }) {
               </div>
             ) : (
               <div
+                ref={readContentRef}
                 className="notebook-rich-text"
                 style={{
                   flex: 1,

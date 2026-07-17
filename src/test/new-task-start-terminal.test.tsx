@@ -82,7 +82,7 @@ describe("NewTaskView start terminal", () => {
       expect.objectContaining({
         prompt: "",
         agent: "claude",
-        permissionMode: "ask",
+        permissionMode: "full_access",
         immediate: true,
       }),
     );
