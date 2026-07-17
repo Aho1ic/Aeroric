@@ -1142,6 +1142,90 @@ describe("terminal input fixes", () => {
     vi.useRealTimers();
   });
 
+  it("keeps a first IME letter pending during the post-composition replay guard", async () => {
+    vi.useFakeTimers();
+    vi.resetModules();
+    vi.doMock("../platform", () => ({
+      APP_PLATFORM: "macos",
+      ENABLE_USAGE_INSIGHTS: true,
+      IS_MAC_WEBKIT: true,
+      IS_OTHER_WEBKIT: false,
+      detectAppPlatform: () => "macos",
+      isAppleWebKit: () => true,
+    }));
+    const { attachLinuxIMEFix } = await import("../components/terminalInputFix");
+    const terminalElement = document.createElement("div");
+    terminalElement.className = "xterm";
+    const textarea = document.createElement("textarea");
+    terminalElement.appendChild(textarea);
+    document.body.appendChild(terminalElement);
+    const sent: string[] = [];
+    const dataListeners: Array<(data: string) => void> = [];
+    const term = {
+      textarea,
+      onData: (listener: (data: string) => void) => {
+        dataListeners.push(listener);
+        return { dispose: vi.fn() };
+      },
+    };
+
+    const disposable = attachLinuxIMEFix(term as never, (data) => sent.push(data));
+    vi.advanceTimersByTime(1);
+    textarea.dispatchEvent(new CompositionEvent("compositionstart", { data: "" }));
+    textarea.dispatchEvent(new CompositionEvent("compositionupdate", { data: "ni" }));
+    textarea.dispatchEvent(
+      new InputEvent("beforeinput", {
+        inputType: "insertText",
+        data: "你",
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    expect(sent).toEqual(["你"]);
+    sent.length = 0;
+    vi.advanceTimersByTime(40);
+
+    textarea.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "Backspace",
+        code: "Backspace",
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    const firstKey = new KeyboardEvent("keydown", {
+      key: "s",
+      code: "KeyS",
+      bubbles: true,
+      cancelable: true,
+    });
+    Object.defineProperty(firstKey, "keyCode", { value: 83 });
+    textarea.dispatchEvent(firstKey);
+    dataListeners[0]?.("s");
+
+    // The 3-second stale-pinyin replay guard is still active here. It must not
+    // bypass the shorter first-key handoff and leak the new pinyin's `s`.
+    vi.advanceTimersByTime(70);
+    expect(sent).toEqual([]);
+
+    textarea.dispatchEvent(new CompositionEvent("compositionstart", { data: "" }));
+    textarea.dispatchEvent(new CompositionEvent("compositionupdate", { data: "shanchu" }));
+    textarea.dispatchEvent(
+      new InputEvent("beforeinput", {
+        inputType: "insertText",
+        data: "删除",
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    vi.runOnlyPendingTimers();
+
+    expect(sent).toEqual(["删除"]);
+    disposable.dispose();
+    terminalElement.remove();
+    vi.useRealTimers();
+  });
+
   it("commits normalized romanized text when switching IME to English mid-composition", async () => {
     vi.useFakeTimers();
     vi.resetModules();

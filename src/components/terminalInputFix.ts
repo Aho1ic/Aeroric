@@ -1403,11 +1403,14 @@ export function attachLinuxIMEFix(
     }
     if (
       !pendingCompositionCommit &&
-      performance.now() > ignorePostCompositionUntil &&
       performance.now() <= potentialRomanizedImeHandoffUntil &&
       data.length === 1 &&
       data.toLowerCase() === potentialRomanizedImeHandoffKey.toLowerCase()
     ) {
+      // A new keydown is stronger evidence than the stale-pinyin replay window.
+      // Keeping the `ignorePostCompositionUntil` exclusion here made every new
+      // first letter typed within three seconds of a Chinese commit bypass the
+      // handoff completely and leak straight to the PTY.
       if (pendingRomanizedImeHandoffData) {
         pendingRomanizedImeHandoffData.data += data;
         return;
