@@ -74,9 +74,17 @@ jobs:
 
       - name: Checkout dbx dependency
         shell: bash
+        env:
+          # Pin the dbx path-dependency to a known-good commit so a release tag
+          # always builds against the same dbx source. Cargo.lock does not
+          # constrain a `path` dependency's contents. Keep in sync with
+          # checks.yml and bump deliberately.
+          DBX_REF: 3f6e885ee0c5fdfde2d91d461b03f518068e8a4e
         run: |
           set -euo pipefail
-          git clone --depth 1 https://github.com/Aho1ic/dbx.git ../dbx
+          git init ../dbx
+          git -C ../dbx fetch --depth 1 https://github.com/Aho1ic/dbx.git "$DBX_REF"
+          git -C ../dbx checkout --detach "$DBX_REF"
 
       - name: Install Linux system dependencies
         if: runner.os == 'Linux'
@@ -116,7 +124,7 @@ jobs:
         run: pnpm install --frozen-lockfile --ignore-scripts
 
       - name: Build ${{ matrix.name }}
-        run: pnpm tauri build --target ${{ matrix.target }} ${{ matrix.bundle_args }}
+        run: pnpm tauri build --target ${{ matrix.target }} ${{ matrix.bundle_args }} -- --locked
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v7

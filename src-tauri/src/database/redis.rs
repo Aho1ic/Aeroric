@@ -731,7 +731,9 @@ pub async fn dbx_redis_execute_command(
     // These are never legitimately issued by the frontend, so blocking them here
     // provides defense-in-depth without touching the shared core crate.
     if is_supplemental_blocked_command(&command_name) {
-        return Err(format!("Redis command is blocked for safety: {command_name}"));
+        return Err(format!(
+            "Redis command is blocked for safety: {command_name}"
+        ));
     }
     let safety = dbx_core::db::redis_driver::classify_command(&command_name);
     // Blocked commands are never permitted from this entry point, regardless of
@@ -739,7 +741,9 @@ pub async fn dbx_redis_execute_command(
     // Write/Confirm commands, never for Blocked ones, so enforcing here closes a
     // caller-controlled guardrail bypass without affecting legitimate flows.
     if safety == RedisCommandSafety::Blocked {
-        return Err(format!("Redis command is blocked for safety: {command_name}"));
+        return Err(format!(
+            "Redis command is blocked for safety: {command_name}"
+        ));
     }
     if safety != RedisCommandSafety::Allowed {
         connections::ensure_writable(&state, &connection_id, &command_name).await?;

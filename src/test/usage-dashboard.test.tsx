@@ -104,4 +104,19 @@ describe("UsageDashboard", () => {
       });
     });
   });
+
+  it("formats currency against the selected UI language, not the OS locale", async () => {
+    localStorage.setItem("aeroric:language", "zh");
+    render(
+      <I18nProvider>
+        <UsageDashboard />
+      </I18nProvider>,
+    );
+
+    // zh-CN renders USD as "US$0.1234"; en-US renders "$0.1234". Asserting the
+    // zh form guards against formatters falling back to the host OS locale
+    // (the previous bug rendered "US$" even when the UI was English).
+    expect(await screen.findByText("US$0.1234")).toBeInTheDocument();
+    expect(screen.queryByText("$0.1234")).not.toBeInTheDocument();
+  });
 });

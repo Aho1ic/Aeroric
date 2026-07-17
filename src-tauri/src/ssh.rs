@@ -477,7 +477,7 @@ pub async fn save_ssh_connections(connections: Vec<SshConnection>) -> Result<(),
     tokio::task::spawn_blocking(move || {
         crate::storage::ensure_aeroric_dirs()?;
         let raw = serde_json::to_string_pretty(&connections).map_err(|e| e.to_string())?;
-        crate::storage::atomic_write(&ssh_connections_path()?, &raw)
+        crate::storage::atomic_write_private(&ssh_connections_path()?, &raw)
     })
     .await
     .map_err(|e| e.to_string())?

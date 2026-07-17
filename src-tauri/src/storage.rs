@@ -274,9 +274,67 @@ pub fn atomic_write(path: &Path, content: &str) -> Result<(), String> {
     fs::rename(&tmp, path).map_err(|e| e.to_string())
 }
 
+/// 原子写入,但把结果文件限制为仅所有者可读写 (0o600)。
+/// 用于承载明文凭据的文件(数据库/SSH 密码、API key),避免同机其它用户读取。
+/// 临时文件一开始就以 0o600 创建,消除 rename 前的 644 窗口。
+pub fn atomic_write_private(path: &Path, content: &str) -> Result<(), String> {
+    let uid = format!(
+        "{}-{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    );
+    let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("file");
+    let tmp = path.with_file_name(format!(".{file_name}.{uid}.tmp"));
+
+    {
+        let mut options = OpenOptions::new();
+        options.write(true).create(true).truncate(true);
+        #[cfg(not(windows))]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut file = options.open(&tmp).map_err(|e| e.to_string())?;
+        file.write_all(content.as_bytes())
+            .map_err(|e| e.to_string())?;
+    }
+
+    // On existing targets rename inherits the tmp file's 0o600; set it again
+    // defensively in case the file already existed with looser bits.
+    #[cfg(not(windows))]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = fs::set_permissions(&tmp, fs::Permissions::from_mode(0o600));
+    }
+
+    fs::rename(&tmp, path).map_err(|e| e.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(not(windows))]
+    #[test]
+    fn atomic_write_private_creates_owner_only_file() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("aeroric-priv-{}", std::process::id()));
+        let _ = fs::create_dir_all(&dir);
+        let path = dir.join("secret.json");
+        // Pre-create with loose perms to prove the writer tightens them.
+        fs::write(&path, "{}").unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+
+        atomic_write_private(&path, "{\"password\":\"x\"}").unwrap();
+
+        let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "credential file should be owner-only");
+        assert_eq!(fs::read_to_string(&path).unwrap(), "{\"password\":\"x\"}");
+        let _ = fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn storage_ids_reject_path_traversal() {

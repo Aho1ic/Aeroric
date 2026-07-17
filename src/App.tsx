@@ -303,6 +303,18 @@ function App() {
     [t],
   );
 
+  // The startup init effect must run exactly once on mount. Reading these
+  // callbacks through refs keeps it from re-running when they change (e.g.
+  // formatSaveProjectsError depends on `t`, which changes on language switch);
+  // re-running would reload projects/tasks from disk and re-mark live tasks as
+  // "detached". The refs are kept current by the effect below.
+  const showToastRef = useRef(showToast);
+  const formatSaveProjectsErrorRef = useRef(formatSaveProjectsError);
+  useEffect(() => {
+    showToastRef.current = showToast;
+    formatSaveProjectsErrorRef.current = formatSaveProjectsError;
+  }, [showToast, formatSaveProjectsError]);
+
   const persistTasksForHook = useCallback(
     (projectId: string, allTasks: Task[]) => {
       persistProjectTasks(projectId, allTasks, showToast, formatSaveTasksError);
@@ -455,7 +467,11 @@ function App() {
       setProjects(normalizedProjects);
       setSshConnections(loadedSshConnections);
       if (normalizedProjects !== loadedProjects) {
-        persistProjects(normalizedProjects, showToast, formatSaveProjectsError);
+        persistProjects(
+          normalizedProjects,
+          showToastRef.current,
+          formatSaveProjectsErrorRef.current,
+        );
       }
 
       // Load tasks for all known projects
@@ -474,7 +490,9 @@ function App() {
     }
 
     init().catch(console.error);
-  }, [formatSaveProjectsError, showToast]);
+    // Mount-only: callbacks are read through refs so a language switch never
+    // re-runs startup normalization. See the ref sync effect above.
+  }, []);
 
   useEffect(() => {
     // 用 backend 列表作为权威，merge 进前端 state：

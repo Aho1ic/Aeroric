@@ -21,7 +21,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = ["devtools"] }
+tauri = { version = "2", features = [] }
 tauri-plugin-opener = "2"
 tauri-plugin-dialog = "2"
 serde = { version = "1", features = ["derive"] }
@@ -46,6 +46,12 @@ font-kit = "=0.14.3"
 rusqlite = { version = "0.32", features = ["bundled", "backup"] }
 dbx-core = { path = "../../dbx/crates/dbx-core", default-features = false }
 tauri-plugin-clipboard-manager = "2"
+
+[features]
+# DevTools (right-click → Inspect, remote webview debugging) is opt-in so it
+# never ships in release builds, where it would let anyone open the console and
+# drive IPC directly. `tauri dev` turns it on via tauri.conf.json > build.features.
+devtools = ["tauri/devtools"]
 
 [profile.dev]
 debug = 0

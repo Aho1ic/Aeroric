@@ -286,7 +286,8 @@ async fn load_connections_from_disk() -> Result<Vec<AeroricDbConnectionConfig>, 
 async fn save_connections_to_disk(connections: &[AeroricDbConnectionConfig]) -> Result<(), String> {
     crate::storage::ensure_aeroric_dirs()?;
     let data = connections_disk_json(connections)?;
-    fs::write(v2_connections_path()?, format!("{data}\n")).map_err(|e| e.to_string())
+    // Connection configs hold plaintext DB passwords; keep the file owner-only.
+    crate::storage::atomic_write_private(&v2_connections_path()?, &format!("{data}\n"))
 }
 
 fn connections_disk_json(connections: &[AeroricDbConnectionConfig]) -> Result<String, String> {

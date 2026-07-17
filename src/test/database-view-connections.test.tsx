@@ -1324,7 +1324,7 @@ describe("DatabaseView connection management", () => {
 
     await waitFor(() => {
       expect(confirm).toHaveBeenCalledWith(
-        expect.stringContaining("CREATE ROLE \"batch_role\" NOLOGIN PASSWORD 'secret';"),
+        expect.stringContaining("CREATE ROLE \"batch_role\" NOLOGIN PASSWORD E'secret';"),
         expect.anything(),
       );
     });

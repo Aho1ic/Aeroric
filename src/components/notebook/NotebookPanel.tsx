@@ -223,7 +223,13 @@ function loadNotes(): NotebookNote[] {
 }
 
 function saveNotes(notes: NotebookNote[]) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(notes));
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(notes));
+  } catch (error) {
+    // Quota exceeded or storage unavailable (private mode): keep editing in
+    // memory rather than letting the write effect throw and break the panel.
+    console.warn("Failed to persist quick notes", error);
+  }
 }
 
 function renderMarkdown(body: string): string {

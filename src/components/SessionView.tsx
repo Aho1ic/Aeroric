@@ -250,17 +250,23 @@ export function SessionView({
   const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
+    let cancelled = false;
     setLoading(true);
     setError(null);
     invoke<SessionMessage[]>("read_session_messages", { sessionPath, projectPath, isCodex })
       .then((msgs) => {
+        if (cancelled) return;
         setMessages(msgs);
         setLoading(false);
       })
       .catch((err) => {
+        if (cancelled) return;
         setError(String(err));
         setLoading(false);
       });
+    return () => {
+      cancelled = true;
+    };
   }, [sessionPath, projectPath, isCodex]);
 
   if (!loading && fallback && (error || messages.length === 0)) {

@@ -375,6 +375,9 @@ pub async fn remote_git_log(
     branch: Option<String>,
 ) -> Result<Vec<crate::git::GitCommit>, String> {
     tokio::task::spawn_blocking(move || {
+        if let Some(branch) = branch.as_deref().filter(|value| !value.is_empty()) {
+            validate_remote_git_revision(branch)?;
+        }
         let args = crate::git::build_git_log_args(limit, search.as_deref(), branch.as_deref());
         let stdout = run_remote_git(&connection, &remote_project_path, &args)?;
         Ok(crate::git::parse_git_log_output(&stdout))

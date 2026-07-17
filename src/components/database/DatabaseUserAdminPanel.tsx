@@ -60,8 +60,12 @@ function userAdminDialect(dbType: DbxDatabaseType): UserAdminDialect {
   return dbType === "postgres" ? "postgres" : "mysql";
 }
 
+// Use PostgreSQL's explicit escape-string syntax (E'...') and escape both the
+// backslash and single quote. This is well-defined regardless of the server's
+// standard_conforming_strings setting; a plain '...' literal would let a
+// backslash-quote sequence escape the string when that setting is off.
 function quoteSqlString(value: string): string {
-  return `'${value.replace(/'/g, "''")}'`;
+  return `E'${value.replace(/\\/g, "\\\\").replace(/'/g, "''")}'`;
 }
 
 function quoteMySqlString(value: string): string {

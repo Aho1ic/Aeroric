@@ -13,7 +13,7 @@ import {
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { useUsageStatistics } from "../hooks/useUsageStatistics";
-import { useI18n } from "../i18n";
+import { useI18n, type AppLanguage } from "../i18n";
 import s from "../styles";
 import type {
   UsageStatisticsAgent,
@@ -26,16 +26,23 @@ import { Button } from "./ui/Button";
 const RANGE_OPTIONS: UsageStatisticsRange[] = [1, 7, 14, 30];
 const AGENT_OPTIONS: UsageStatisticsAgent[] = ["all", "codex", "claude"];
 
-function formatInteger(value: number): string {
-  return new Intl.NumberFormat(undefined, {
+// Format numbers/currency/dates against the user's chosen UI language rather
+// than the OS locale, so an English UI never renders "US$0.12" / localized
+// dates just because the host machine is set to another region.
+function localeForLanguage(language: AppLanguage): string {
+  return language === "zh" ? "zh-CN" : "en-US";
+}
+
+function formatInteger(locale: string, value: number): string {
+  return new Intl.NumberFormat(locale, {
     notation: "standard",
     maximumFractionDigits: 0,
     useGrouping: true,
   }).format(value);
 }
 
-function formatCost(value: number): string {
-  return new Intl.NumberFormat(undefined, {
+function formatCost(locale: string, value: number): string {
+  return new Intl.NumberFormat(locale, {
     style: "currency",
     currency: "USD",
     minimumFractionDigits: value > 0 && value < 1 ? 3 : 2,
@@ -43,17 +50,17 @@ function formatCost(value: number): string {
   }).format(value);
 }
 
-function formatDate(value: string, includeYear = false): string {
+function formatDate(locale: string, value: string, includeYear = false): string {
   const date = new Date(`${value}T00:00:00`);
-  return new Intl.DateTimeFormat(undefined, {
+  return new Intl.DateTimeFormat(locale, {
     month: "short",
     day: "numeric",
     year: includeYear ? "numeric" : undefined,
   }).format(date);
 }
 
-function formatUpdatedTime(value: number): string {
-  return new Intl.DateTimeFormat(undefined, {
+function formatUpdatedTime(locale: string, value: number): string {
+  return new Intl.DateTimeFormat(locale, {
     hour: "2-digit",
     minute: "2-digit",
     second: "2-digit",
@@ -143,6 +150,7 @@ function ChartLegend({ label, color }: { label: string; color: string }) {
 function UsageChart({
   series,
   labels,
+  locale,
 }: {
   series: UsageStatisticsDay[];
   labels: {
@@ -151,6 +159,7 @@ function UsageChart({
     cacheCreation: string;
     cacheRead: string;
   };
+  locale: string;
 }) {
   const max = Math.max(1, ...series.map((day) => day.totalTokens));
   const labelEvery = series.length <= 7 ? 1 : series.length <= 14 ? 2 : 5;
@@ -160,21 +169,21 @@ function UsageChart({
     <div style={s.usageChartViewport}>
       <div style={{ ...s.usageChart, minWidth: minPlotWidth + 96 }}>
         <div style={s.usageChartAxis} aria-hidden="true">
-          <span>{formatInteger(max)}</span>
-          <span>{formatInteger(Math.round(max * 0.75))}</span>
-          <span>{formatInteger(Math.round(max * 0.5))}</span>
-          <span>{formatInteger(Math.round(max * 0.25))}</span>
+          <span>{formatInteger(locale, max)}</span>
+          <span>{formatInteger(locale, Math.round(max * 0.75))}</span>
+          <span>{formatInteger(locale, Math.round(max * 0.5))}</span>
+          <span>{formatInteger(locale, Math.round(max * 0.25))}</span>
           <span>0</span>
         </div>
         <div style={{ ...s.usageChartPlot, minWidth: minPlotWidth }}>
           {series.map((day, index) => {
             const height = day.totalTokens === 0 ? 0 : Math.max(2, (day.totalTokens / max) * 192);
             const title = [
-              formatDate(day.date, true),
-              `${labels.input}: ${formatInteger(day.inputTokens)}`,
-              `${labels.output}: ${formatInteger(day.outputTokens)}`,
-              `${labels.cacheCreation}: ${formatInteger(day.cacheCreationTokens)}`,
-              `${labels.cacheRead}: ${formatInteger(day.cacheReadTokens)}`,
+              formatDate(locale, day.date, true),
+              `${labels.input}: ${formatInteger(locale, day.inputTokens)}`,
+              `${labels.output}: ${formatInteger(locale, day.outputTokens)}`,
+              `${labels.cacheCreation}: ${formatInteger(locale, day.cacheCreationTokens)}`,
+              `${labels.cacheRead}: ${formatInteger(locale, day.cacheReadTokens)}`,
             ].join("\n");
             const segment = (value: number, color: string): CSSProperties => ({
               height: day.totalTokens === 0 ? 0 : `${(value / day.totalTokens) * 100}%`,
@@ -192,7 +201,7 @@ function UsageChart({
                 </div>
                 <div style={s.usageChartLabel}>
                   {index % labelEvery === 0 || index === series.length - 1
-                    ? formatDate(day.date)
+                    ? formatDate(locale, day.date)
                     : ""}
                 </div>
               </div>
@@ -210,12 +219,14 @@ function SourceSummary({
   tokenLabel,
   requestLabel,
   title,
+  locale,
 }: {
   codex: UsageStatisticsTotals;
   claude: UsageStatisticsTotals;
   tokenLabel: string;
   requestLabel: string;
   title: string;
+  locale: string;
 }) {
   const max = Math.max(1, codex.totalTokens, claude.totalTokens);
   return (
@@ -239,10 +250,10 @@ function SourceSummary({
               />
             </div>
             <span style={s.usageSourceValue}>
-              {formatInteger(item.totals.totalTokens)} {tokenLabel}
+              {formatInteger(locale, item.totals.totalTokens)} {tokenLabel}
             </span>
             <span style={s.usageSourceValue}>
-              {formatInteger(item.totals.requestCount)} {requestLabel}
+              {formatInteger(locale, item.totals.requestCount)} {requestLabel}
             </span>
           </div>
         ))}
@@ -252,7 +263,8 @@ function SourceSummary({
 }
 
 export function UsageDashboard({ embedded = false }: { embedded?: boolean }) {
-  const { t } = useI18n();
+  const { t, language } = useI18n();
+  const locale = localeForLanguage(language);
   const [rangeDays, setRangeDays] = useState<UsageStatisticsRange>(7);
   const [agent, setAgent] = useState<UsageStatisticsAgent>("all");
   const rootRef = useRef<HTMLDivElement | null>(null);
@@ -275,31 +287,31 @@ export function UsageDashboard({ embedded = false }: { embedded?: boolean }) {
     return [
       {
         label: t("usageStats.totalTokens"),
-        value: formatInteger(totals?.totalTokens ?? 0),
+        value: formatInteger(locale, totals?.totalTokens ?? 0),
         icon: <Sigma size={14} />,
         color: "var(--accent)",
       },
       {
         label: t("usageStats.inputTokens"),
-        value: formatInteger(totals?.inputTokens ?? 0),
+        value: formatInteger(locale, totals?.inputTokens ?? 0),
         icon: <ArrowDownToLine size={14} />,
         color: "var(--icon-file-ts)",
       },
       {
         label: t("usageStats.outputTokens"),
-        value: formatInteger(totals?.outputTokens ?? 0),
+        value: formatInteger(locale, totals?.outputTokens ?? 0),
         icon: <ArrowUpFromLine size={14} />,
         color: "var(--success)",
       },
       {
         label: t("usageStats.cacheCreation"),
-        value: formatInteger(totals?.cacheCreationTokens ?? 0),
+        value: formatInteger(locale, totals?.cacheCreationTokens ?? 0),
         icon: <DatabaseZap size={14} />,
         color: "var(--warning)",
       },
       {
         label: t("usageStats.cacheRead"),
-        value: formatInteger(totals?.cacheReadTokens ?? 0),
+        value: formatInteger(locale, totals?.cacheReadTokens ?? 0),
         icon: <Layers3 size={14} />,
         color: "var(--usage-codex)",
       },
@@ -311,25 +323,25 @@ export function UsageDashboard({ embedded = false }: { embedded?: boolean }) {
       },
       {
         label: t("usageStats.requests"),
-        value: formatInteger(totals?.requestCount ?? 0),
+        value: formatInteger(locale, totals?.requestCount ?? 0),
         icon: <Sparkles size={14} />,
         color: "var(--accent)",
       },
       {
         label: t("usageStats.estimatedCost"),
-        value: formatCost(totals?.totalCost ?? 0),
+        value: formatCost(locale, totals?.totalCost ?? 0),
         icon: <Coins size={14} />,
         color: "var(--warning)",
       },
     ];
-  }, [statistics?.totals, t]);
+  }, [statistics?.totals, t, locale]);
 
   const dateRange = statistics
-    ? `${formatDate(statistics.from, true)} – ${formatDate(statistics.to, true)}`
+    ? `${formatDate(locale, statistics.from, true)} – ${formatDate(locale, statistics.to, true)}`
     : t("usageStats.rangePending");
   const updateLabel =
     statistics?.updatedAt && statistics.updatedAt > 0
-      ? t("usageStats.updatedAt", { time: formatUpdatedTime(statistics.updatedAt) })
+      ? t("usageStats.updatedAt", { time: formatUpdatedTime(locale, statistics.updatedAt) })
       : t("usageStats.indexing");
 
   return (
@@ -452,6 +464,7 @@ export function UsageDashboard({ embedded = false }: { embedded?: boolean }) {
                     cacheCreation: t("usageStats.cacheCreation"),
                     cacheRead: t("usageStats.cacheRead"),
                   }}
+                  locale={locale}
                 />
               )}
             </section>
@@ -463,6 +476,7 @@ export function UsageDashboard({ embedded = false }: { embedded?: boolean }) {
                 tokenLabel={t("usageStats.tokensShort")}
                 requestLabel={t("usageStats.requestsShort")}
                 title={t("usageStats.sourceBreakdown")}
+                locale={locale}
               />
             )}
 

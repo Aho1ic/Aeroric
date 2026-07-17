@@ -510,6 +510,24 @@ fn validate_git_branch_name(branch_name: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Reject a user-supplied revision / commit hash that git could parse as an
+/// option. A malicious repository can carry a ref such as
+/// `refs/heads/--output=/path` (creatable via `git update-ref`), which then
+/// shows up in the branch list and flows back here as `branch`/`commit_hash`.
+/// Without this guard, `git show`/`git log` would treat it as `--output=` and
+/// write attacker-controlled content to an arbitrary path (option injection,
+/// CWE-88). Callers should additionally pass `--end-of-options` where the local
+/// git version supports it.
+pub(crate) fn validate_git_revision(revision: &str) -> Result<(), String> {
+    if revision.is_empty() {
+        return Err("Git revision must not be empty".to_string());
+    }
+    if revision.starts_with('-') || revision.contains('\0') {
+        return Err("Invalid git revision".to_string());
+    }
+    Ok(())
+}
+
 pub(crate) fn validate_stash_ref(stash_ref: &str) -> Result<(), String> {
     let Some(index) = stash_ref
         .strip_prefix("stash@{")
@@ -890,7 +908,9 @@ pub async fn git_checkout_branch(
     } else {
         vec!["checkout".into(), branch_name.clone()]
     };
-    run_git_check(&project_path, &args)
+    tauri::async_runtime::spawn_blocking(move || run_git_check(&project_path, &args))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -902,12 +922,16 @@ pub async fn git_create_branch(
 ) -> Result<(), String> {
     validate_git_branch_name(&branch_name)?;
     validate_git_branch_name(&from_branch)?;
-    let args: &[&str] = if checkout {
-        &["checkout", "-b", &branch_name, &from_branch]
-    } else {
-        &["branch", &branch_name, &from_branch]
-    };
-    run_git_check(&project_path, args)
+    tauri::async_runtime::spawn_blocking(move || {
+        let args: Vec<&str> = if checkout {
+            vec!["checkout", "-b", &branch_name, &from_branch]
+        } else {
+            vec!["branch", &branch_name, &from_branch]
+        };
+        run_git_check(&project_path, &args)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -917,6 +941,9 @@ pub async fn git_log(
     search: Option<String>,
     branch: Option<String>,
 ) -> Result<Vec<GitCommit>, String> {
+    if let Some(branch) = branch.as_deref().filter(|value| !value.is_empty()) {
+        validate_git_revision(branch)?;
+    }
     let args = build_git_log_args(limit, search.as_deref(), branch.as_deref());
 
     let output = run_git_with_timeout(project_path, args, Duration::from_secs(10)).await?;
@@ -1114,47 +1141,61 @@ pub async fn git_commit_detail(
     project_path: String,
     commit_hash: String,
 ) -> Result<GitCommitDetail, String> {
-    let info_out = run_git(
-        &project_path,
-        &[
-            "show",
-            "--no-patch",
-            "--format=HASH:%H%nSHORT:%h%nAUTHOR:%an%nDATE:%ar%nSUBJECT:%s",
-            &commit_hash,
-        ],
-    )?;
+    validate_git_revision(&commit_hash)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let info_out = run_git(
+            &project_path,
+            &[
+                "show",
+                "--no-patch",
+                "--format=HASH:%H%nSHORT:%h%nAUTHOR:%an%nDATE:%ar%nSUBJECT:%s",
+                "--end-of-options",
+                &commit_hash,
+            ],
+        )?;
 
-    let ns_out = run_git(
-        &project_path,
-        &[
-            "diff-tree",
-            "--no-commit-id",
-            "-r",
-            "--name-status",
-            &commit_hash,
-        ],
-    )?;
+        let ns_out = run_git(
+            &project_path,
+            &[
+                "diff-tree",
+                "--no-commit-id",
+                "-r",
+                "--name-status",
+                "--end-of-options",
+                &commit_hash,
+            ],
+        )?;
 
-    let num_out = run_git(
-        &project_path,
-        &[
-            "diff-tree",
-            "--no-commit-id",
-            "-r",
-            "--numstat",
-            &commit_hash,
-        ],
-    )?;
+        let num_out = run_git(
+            &project_path,
+            &[
+                "diff-tree",
+                "--no-commit-id",
+                "-r",
+                "--numstat",
+                "--end-of-options",
+                &commit_hash,
+            ],
+        )?;
 
-    let info_str = String::from_utf8_lossy(&info_out.stdout).into_owned();
-    let ns_str = String::from_utf8_lossy(&ns_out.stdout).into_owned();
-    let num_str = String::from_utf8_lossy(&num_out.stdout).into_owned();
-    Ok(parse_git_commit_detail(&info_str, &ns_str, &num_str))
+        let info_str = String::from_utf8_lossy(&info_out.stdout).into_owned();
+        let ns_str = String::from_utf8_lossy(&ns_out.stdout).into_owned();
+        let num_str = String::from_utf8_lossy(&num_out.stdout).into_owned();
+        Ok(parse_git_commit_detail(&info_str, &ns_str, &num_str))
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
 pub async fn git_show_diff(project_path: String, commit_hash: String) -> Result<String, String> {
-    let args = vec!["show".to_string(), "--format=".to_string(), commit_hash];
+    validate_git_revision(&commit_hash)?;
+    let args = vec![
+        "show".to_string(),
+        "--format=".to_string(),
+        "--end-of-options".to_string(),
+        commit_hash,
+    ];
     let output = run_git_with_timeout(project_path, args, Duration::from_secs(10)).await?;
     if !output.status.success() {
         return Err(String::from_utf8_lossy(&output.stderr).into_owned());
@@ -1221,17 +1262,25 @@ pub async fn git_file_diff(
 
 #[tauri::command]
 pub async fn git_stage(project_path: String, file_path: String) -> Result<(), String> {
-    run_git_check(&project_path, &["add", "--", &file_path])
+    tauri::async_runtime::spawn_blocking(move || {
+        run_git_check(&project_path, &["add", "--", &file_path])
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
 pub async fn git_unstage(project_path: String, file_path: String) -> Result<(), String> {
-    if git_has_head(&project_path)? {
-        run_git_check(&project_path, &["restore", "--staged", "--", &file_path])
-    } else {
-        // 首次提交前无 HEAD，改用 `git reset` 将暂存项退回。
-        run_git_check(&project_path, &["reset", "--", &file_path])
-    }
+    tauri::async_runtime::spawn_blocking(move || {
+        if git_has_head(&project_path)? {
+            run_git_check(&project_path, &["restore", "--staged", "--", &file_path])
+        } else {
+            // 首次提交前无 HEAD，改用 `git reset` 将暂存项退回。
+            run_git_check(&project_path, &["reset", "--", &file_path])
+        }
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -1285,17 +1334,27 @@ pub async fn git_unstage_files(
 
 #[tauri::command]
 pub async fn git_stage_all(project_path: String) -> Result<(), String> {
-    run_git_check(&project_path, &["add", "-A"])
+    tauri::async_runtime::spawn_blocking(move || run_git_check(&project_path, &["add", "-A"]))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
 pub async fn git_unstage_all(project_path: String) -> Result<(), String> {
-    run_git_check(&project_path, &["restore", "--staged", "."])
+    tauri::async_runtime::spawn_blocking(move || {
+        run_git_check(&project_path, &["restore", "--staged", "."])
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
 pub async fn git_commit(project_path: String, message: String) -> Result<(), String> {
-    run_git_check(&project_path, &["commit", "-m", &message])
+    tauri::async_runtime::spawn_blocking(move || {
+        run_git_check(&project_path, &["commit", "-m", &message])
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 fn untracked_files_under_directory<'a>(
@@ -1597,21 +1656,33 @@ pub async fn git_show_file_diff(
     commit_hash: String,
     file_path: String,
 ) -> Result<String, String> {
-    let output = run_git(
-        &project_path,
-        &["show", "--format=", &commit_hash, "--", &file_path],
-    )?;
-    if !output.status.success() {
-        return Err(String::from_utf8_lossy(&output.stderr).into_owned());
-    }
-    let raw = output.stdout;
-    let limit = 500 * 1024;
-    Ok(String::from_utf8_lossy(if raw.len() > limit {
-        &raw[..limit]
-    } else {
-        &raw
+    validate_git_revision(&commit_hash)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let output = run_git(
+            &project_path,
+            &[
+                "show",
+                "--format=",
+                "--end-of-options",
+                &commit_hash,
+                "--",
+                &file_path,
+            ],
+        )?;
+        if !output.status.success() {
+            return Err(String::from_utf8_lossy(&output.stderr).into_owned());
+        }
+        let raw = output.stdout;
+        let limit = 500 * 1024;
+        Ok(String::from_utf8_lossy(if raw.len() > limit {
+            &raw[..limit]
+        } else {
+            &raw
+        })
+        .into_owned())
     })
-    .into_owned())
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -1689,30 +1760,45 @@ pub async fn git_remote_counts(
     project_path: String,
     branch: Option<String>,
 ) -> Result<GitRemoteCounts, String> {
-    let branch = if let Some(b) = branch.filter(|s| !s.is_empty()) {
-        b
-    } else {
-        let branch_out = run_git(&project_path, &["rev-parse", "--abbrev-ref", "HEAD"])?;
-        String::from_utf8_lossy(&branch_out.stdout)
-            .trim()
-            .to_string()
-    };
+    if let Some(branch) = branch.as_deref().filter(|value| !value.is_empty()) {
+        validate_git_revision(branch)?;
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        let branch = if let Some(b) = branch.filter(|s| !s.is_empty()) {
+            b
+        } else {
+            let branch_out = run_git(&project_path, &["rev-parse", "--abbrev-ref", "HEAD"])?;
+            String::from_utf8_lossy(&branch_out.stdout)
+                .trim()
+                .to_string()
+        };
 
-    let rev_str = format!("{}...@{{u}}", branch);
-    let rev_out = run_git(
-        &project_path,
-        &["rev-list", "--count", "--left-right", &rev_str],
-    );
+        let rev_str = format!("{}...@{{u}}", branch);
+        let rev_out = run_git(
+            &project_path,
+            &[
+                "rev-list",
+                "--count",
+                "--left-right",
+                "--end-of-options",
+                &rev_str,
+            ],
+        );
 
-    let rev_stdout = match &rev_out {
-        Ok(o) if o.status.success() => Some(String::from_utf8_lossy(&o.stdout).trim().to_string()),
-        _ => None,
-    };
+        let rev_stdout = match &rev_out {
+            Ok(o) if o.status.success() => {
+                Some(String::from_utf8_lossy(&o.stdout).trim().to_string())
+            }
+            _ => None,
+        };
 
-    Ok(git_remote_counts_from_rev_list(
-        branch,
-        rev_stdout.as_deref(),
-    ))
+        Ok(git_remote_counts_from_rev_list(
+            branch,
+            rev_stdout.as_deref(),
+        ))
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -2256,14 +2342,15 @@ fn accumulate_numstat(stdout: &[u8], additions: &mut i32, deletions: &mut i32) {
 #[cfg(test)]
 mod tests {
     use super::{
-        git_blame_file, git_branch_graph, git_conflict_files, git_conflict_preview, git_has_head,
-        git_resolve_conflict, git_stash_diff, git_stash_list, git_stash_push, git_worktree_root,
+        git_blame_file, git_branch_graph, git_commit_detail, git_conflict_files,
+        git_conflict_preview, git_has_head, git_log, git_resolve_conflict, git_show_diff,
+        git_stash_diff, git_stash_list, git_stash_push, git_worktree_root,
         is_protected_project_relative_path, list_untracked_files, parse_blame_porcelain,
         parse_branch_graph_log, parse_conflict_hunks, parse_conflict_paths_z,
         parse_porcelain_z_status, parse_stash_list, path_to_string,
         resolve_conflict_markers_keep_both, run_git, run_git_check,
-        untracked_files_under_directory, validate_stash_ref, GitBlameLine, GitBranchGraphCommit,
-        GitConflictFile, GitConflictResolution, GitFileChange, GitStashEntry,
+        untracked_files_under_directory, validate_git_revision, validate_stash_ref, GitBlameLine,
+        GitBranchGraphCommit, GitConflictFile, GitConflictResolution, GitFileChange, GitStashEntry,
     };
     use std::{fs, path::PathBuf, process::Command};
 
@@ -2694,5 +2781,65 @@ mod tests {
             list_untracked_files(&repo_path).unwrap(),
             vec!["new-file.txt".to_string()]
         );
+    }
+
+    #[test]
+    fn validate_git_revision_rejects_option_like_values() {
+        assert!(validate_git_revision("HEAD").is_ok());
+        assert!(validate_git_revision("HEAD~3").is_ok());
+        assert!(validate_git_revision("origin/main").is_ok());
+        assert!(validate_git_revision("@{-1}").is_ok());
+        assert!(validate_git_revision("").is_err());
+        assert!(validate_git_revision("--output=/tmp/evil").is_err());
+        assert!(validate_git_revision("-n").is_err());
+        assert!(validate_git_revision("bad\0ref").is_err());
+    }
+
+    // Regression: a malicious repository can carry a ref like
+    // `refs/heads/--output=<path>` (creatable with `git update-ref`) that shows
+    // up in the branch list and flows back as `branch`/`commit_hash`. Without
+    // the option-injection guard, git would treat it as `--output=` and write
+    // attacker-controlled content to an arbitrary path. These commands must
+    // refuse the value instead of writing the file.
+    #[tokio::test]
+    async fn git_history_commands_reject_option_injection_revisions() {
+        let repo = TempRepo::new();
+        repo.configure_identity();
+        repo.commit_file("app.js", "one\n", "initial");
+        let repo_path = repo.path_string();
+        let sentinel = repo.path.join("PWNED.txt");
+        let payload = format!("--output={}", sentinel.to_string_lossy());
+
+        // Confirm git itself would honor the option if it reached the CLI, so
+        // this test fails loudly if the guard is ever removed.
+        run_git_check(&repo_path, &["update-ref", "refs/heads/injected", "HEAD"]).unwrap();
+
+        assert!(git_show_diff(repo_path.clone(), payload.clone())
+            .await
+            .is_err());
+        assert!(git_commit_detail(repo_path.clone(), payload.clone())
+            .await
+            .is_err());
+        assert!(super::git_show_file_diff(
+            repo_path.clone(),
+            payload.clone(),
+            "app.js".to_string()
+        )
+        .await
+        .is_err());
+        assert!(git_log(repo_path.clone(), 50, None, Some(payload.clone()))
+            .await
+            .is_err());
+
+        assert!(
+            !sentinel.exists(),
+            "option injection wrote a file to {}",
+            sentinel.to_string_lossy()
+        );
+
+        // A legitimate revision still works.
+        assert!(git_log(repo_path, 50, None, Some("injected".to_string()))
+            .await
+            .is_ok());
     }
 }

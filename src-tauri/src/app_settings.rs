@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::OnceLock;
 
-use crate::storage::atomic_write;
+use crate::storage::{atomic_write, atomic_write_private};
 
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
@@ -568,10 +568,26 @@ pub(crate) fn ensure_user_agent_script_executable(path: &Path) -> Result<(), Str
         return Ok(());
     }
     let mode = metadata.permissions().mode();
-    if mode & 0o100 != 0 {
+    // Scripts we generate under ~/.aeroric/agents embed the provider API key
+    // (export ANTHROPIC_API_KEY=...), so force owner-only 0o700 to keep other
+    // local users from reading the secret. For an arbitrary user-provided
+    // program path we only add the execute bit and leave its other bits alone,
+    // so we never silently tighten permissions on the user's own binaries.
+    let is_managed_agent_script = agent_scripts_dir()
+        .ok()
+        .and_then(|dir| dir.canonicalize().ok())
+        .zip(path.canonicalize().ok())
+        .map(|(dir, resolved)| resolved.starts_with(&dir))
+        .unwrap_or(false);
+    let target_mode = if is_managed_agent_script {
+        0o700
+    } else {
+        mode | 0o100
+    };
+    if mode == target_mode {
         return Ok(());
     }
-    fs::set_permissions(path, fs::Permissions::from_mode(mode | 0o100))
+    fs::set_permissions(path, fs::Permissions::from_mode(target_mode))
         .map_err(|error| error.to_string())
 }
 
@@ -1463,7 +1479,7 @@ fn load_settings_unlocked() -> AppSettings {
             let _ = fs::create_dir_all(&dir);
         }
         if let Ok(raw) = serde_json::to_string_pretty(&settings) {
-            let _ = atomic_write(&path, &raw);
+            let _ = atomic_write_private(&path, &raw);
         }
         return settings;
     }
@@ -1479,7 +1495,7 @@ fn load_settings_unlocked() -> AppSettings {
     refresh_stale_claude_agent_scripts(&mut normalized);
     if normalized != settings {
         if let Ok(raw) = serde_json::to_string_pretty(&normalized) {
-            let _ = atomic_write(&path, &raw);
+            let _ = atomic_write_private(&path, &raw);
         }
     }
     normalized
@@ -1518,7 +1534,8 @@ pub fn save_app_settings(settings: AppSettings) -> Result<(), String> {
         let path = settings_path()?;
         let normalized = normalize_settings(settings);
         let raw = serde_json::to_string_pretty(&normalized).map_err(|e| e.to_string())?;
-        atomic_write(&path, &raw)?;
+        // settings.json holds custom-agent API keys and proxy passwords.
+        atomic_write_private(&path, &raw)?;
     }
     clear_cached_versions();
     Ok(())
@@ -1542,7 +1559,7 @@ pub async fn save_agent_paths(
         let path = settings_path()?;
         let normalized = normalize_settings(settings);
         let raw = serde_json::to_string_pretty(&normalized).map_err(|e| e.to_string())?;
-        atomic_write(&path, &raw)?;
+        atomic_write_private(&path, &raw)?;
         Ok::<AppSettings, String>(normalized)
     })
     .await
@@ -1568,7 +1585,7 @@ pub async fn save_custom_agent_profile(profile: CustomAgentProfile) -> Result<Ap
         let path = settings_path()?;
         let normalized = normalize_settings(settings);
         let raw = serde_json::to_string_pretty(&normalized).map_err(|e| e.to_string())?;
-        atomic_write(&path, &raw)?;
+        atomic_write_private(&path, &raw)?;
         Ok::<AppSettings, String>(normalized)
     })
     .await
@@ -1611,7 +1628,7 @@ pub async fn setup_agent_profile(draft: AgentSetupDraft) -> Result<AppSettings, 
         let path = settings_path()?;
         let normalized = normalize_settings(settings);
         let raw = serde_json::to_string_pretty(&normalized).map_err(|e| e.to_string())?;
-        atomic_write(&path, &raw)?;
+        atomic_write_private(&path, &raw)?;
         Ok::<AppSettings, String>(normalized)
     })
     .await
@@ -1772,7 +1789,7 @@ pub async fn update_custom_agent_models(
         let path = settings_path()?;
         let normalized = normalize_settings(settings);
         let raw = serde_json::to_string_pretty(&normalized).map_err(|e| e.to_string())?;
-        atomic_write(&path, &raw)?;
+        atomic_write_private(&path, &raw)?;
         Ok::<AppSettings, String>(normalized)
     })
     .await
@@ -1835,7 +1852,7 @@ pub async fn update_custom_agent_context(
         let path = settings_path()?;
         let normalized = normalize_settings(settings);
         let raw = serde_json::to_string_pretty(&normalized).map_err(|e| e.to_string())?;
-        atomic_write(&path, &raw)?;
+        atomic_write_private(&path, &raw)?;
         Ok::<AppSettings, String>(normalized)
     })
     .await
@@ -1867,7 +1884,7 @@ pub async fn delete_custom_agent_profile(id: String) -> Result<AppSettings, Stri
         let path = settings_path()?;
         let normalized = normalize_settings(settings);
         let raw = serde_json::to_string_pretty(&normalized).map_err(|e| e.to_string())?;
-        atomic_write(&path, &raw)?;
+        atomic_write_private(&path, &raw)?;
         Ok::<AppSettings, String>(normalized)
     })
     .await
@@ -1901,7 +1918,7 @@ pub async fn rename_custom_agent_profile(id: String, label: String) -> Result<Ap
         let path = settings_path()?;
         let normalized = normalize_settings(settings);
         let raw = serde_json::to_string_pretty(&normalized).map_err(|e| e.to_string())?;
-        atomic_write(&path, &raw)?;
+        atomic_write_private(&path, &raw)?;
         Ok::<AppSettings, String>(normalized)
     })
     .await
@@ -1920,7 +1937,7 @@ pub async fn save_send_shortcut(send_shortcut: String) -> Result<AppSettings, St
         let path = settings_path()?;
         let normalized = normalize_settings(settings);
         let raw = serde_json::to_string_pretty(&normalized).map_err(|e| e.to_string())?;
-        atomic_write(&path, &raw)?;
+        atomic_write_private(&path, &raw)?;
         Ok::<AppSettings, String>(normalized)
     })
     .await
@@ -1939,7 +1956,7 @@ pub async fn save_shift_enter_newline(enabled: bool) -> Result<AppSettings, Stri
         let path = settings_path()?;
         let normalized = normalize_settings(settings);
         let raw = serde_json::to_string_pretty(&normalized).map_err(|e| e.to_string())?;
-        atomic_write(&path, &raw)?;
+        atomic_write_private(&path, &raw)?;
         Ok::<AppSettings, String>(normalized)
     })
     .await

@@ -13,7 +13,17 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Checkout dbx dependency
-        run: git clone --depth 1 https://github.com/Aho1ic/dbx.git ../dbx
+        env:
+          # Pin the dbx path-dependency to a known-good commit for reproducible
+          # builds. `Cargo.toml` uses a `path = "../dbx/..."` dependency whose
+          # source is NOT constrained by Cargo.lock, so without this pin every
+          # run would silently pull dbx's moving main HEAD. Bump deliberately.
+          DBX_REF: 3f6e885ee0c5fdfde2d91d461b03f518068e8a4e
+        run: |
+          set -euo pipefail
+          git init ../dbx
+          git -C ../dbx fetch --depth 1 https://github.com/Aho1ic/dbx.git "$DBX_REF"
+          git -C ../dbx checkout --detach "$DBX_REF"
 
       - name: Install Linux system dependencies
         if: runner.os == 'Linux'
@@ -59,7 +69,7 @@ jobs:
         run: cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
 
       - name: Run Rust tests
-        run: cargo test --manifest-path src-tauri/Cargo.toml
+        run: cargo test --manifest-path src-tauri/Cargo.toml --locked
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile --ignore-scripts

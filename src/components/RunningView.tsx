@@ -687,6 +687,7 @@ export function RunningView({
           </div>
           {sessionPath ? (
             <SessionView
+              key={sessionPath}
               sessionPath={sessionPath}
               projectPath={projectPath}
               isCodex={codexLike}
@@ -718,6 +719,7 @@ export function RunningView({
         </div>
       ) : (
         <SessionView
+          key={sessionPath}
           sessionPath={sessionPath}
           projectPath={projectPath}
           isCodex={codexLike}
