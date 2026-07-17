@@ -369,6 +369,102 @@ body {
   animation: usage-card-enter 260ms ease both;
 }
 
+.usage-chart-section-home {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  background:
+    radial-gradient(
+      ellipse at 18% -10%,
+      color-mix(in srgb, var(--accent) 14%, transparent),
+      transparent 42%
+    ),
+    radial-gradient(
+      ellipse at 88% 8%,
+      color-mix(in srgb, var(--icon-file-ts) 11%, transparent),
+      transparent 38%
+    ),
+    linear-gradient(
+      145deg,
+      color-mix(in srgb, var(--bg-card) 96%, var(--accent) 4%),
+      var(--bg-card) 58%,
+      color-mix(in srgb, var(--bg-card) 96%, var(--icon-file-ts) 4%)
+    ) !important;
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, white 9%, transparent),
+    inset 0 0 80px color-mix(in srgb, var(--accent) 3%, transparent),
+    0 22px 60px color-mix(in srgb, var(--text-primary) 8%, transparent) !important;
+}
+
+.usage-chart-section-home::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background-image:
+    linear-gradient(color-mix(in srgb, var(--accent) 3%, transparent) 1px, transparent 1px),
+    linear-gradient(90deg, color-mix(in srgb, var(--accent) 3%, transparent) 1px, transparent 1px);
+  background-size: 32px 32px;
+  mask-image: linear-gradient(to bottom, black, transparent 78%);
+}
+
+.usage-chart-section-home::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 10%;
+  right: 10%;
+  height: 1px;
+  pointer-events: none;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    color-mix(in srgb, var(--accent) 72%, white 28%),
+    color-mix(in srgb, var(--icon-file-ts) 68%, white 32%),
+    transparent
+  );
+  box-shadow: 0 0 24px color-mix(in srgb, var(--accent) 42%, transparent);
+}
+
+.usage-chart-viewport-home {
+  padding: 10px 4px 4px !important;
+  scrollbar-color: color-mix(in srgb, var(--accent) 35%, var(--border-medium)) transparent;
+}
+
+.usage-chart-home .usage-chart-grid > span {
+  border-top-style: solid;
+  border-top-color: color-mix(in srgb, var(--accent) 11%, var(--border-dim));
+}
+
+.usage-chart-home .usage-chart-column::before {
+  content: "";
+  position: absolute;
+  inset: 10px 8% 38px;
+  z-index: -1;
+  border-radius: 14px 14px 0 0;
+  opacity: 0;
+  background: linear-gradient(
+    to top,
+    color-mix(in srgb, var(--accent) 8%, transparent),
+    transparent 74%
+  );
+  transition: opacity 180ms ease;
+}
+
+.usage-chart-home .usage-chart-column:hover::before,
+.usage-chart-home .usage-chart-column:focus-visible::before {
+  opacity: 1;
+}
+
+.usage-chart-bar[data-immersive] {
+  box-shadow:
+    inset 0 0 0 1px color-mix(in srgb, white 14%, transparent),
+    inset 0 1px 0 color-mix(in srgb, white 24%, transparent),
+    0 0 24px color-mix(in srgb, var(--accent) 13%, transparent),
+    0 12px 34px color-mix(in srgb, var(--text-primary) 12%, transparent) !important;
+}
+
 .usage-chart-bar {
   transform-origin: bottom;
   animation: usage-bar-rise 420ms cubic-bezier(0.2, 0.8, 0.2, 1) both;

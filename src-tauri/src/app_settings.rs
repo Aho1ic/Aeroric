@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
@@ -92,6 +92,9 @@ pub struct AgentModels {
 const AGENT_CONFIG_BUNDLE_FORMAT: &str = "aeroric.agent-config";
 const AGENT_CONFIG_BUNDLE_VERSION: u32 = 1;
 const MAX_AGENT_CONFIG_BUNDLE_BYTES: u64 = 4 * 1024 * 1024;
+const ALL_AGENT_CONFIG_BUNDLE_FORMAT: &str = "aeroric.all-agent-configs";
+const ALL_AGENT_CONFIG_BUNDLE_VERSION: u32 = 1;
+const MAX_ALL_AGENT_CONFIG_BUNDLE_BYTES: u64 = 32 * 1024 * 1024;
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -108,6 +111,8 @@ pub struct AgentConfigBundleAgent {
     pub codex_like: bool,
     pub config_lang: String,
     pub config_content: String,
+    #[serde(default = "default_config_present")]
+    pub config_present: bool,
     #[serde(default)]
     pub base_url: String,
     #[serde(default)]
@@ -116,6 +121,10 @@ pub struct AgentConfigBundleAgent {
     pub models: Vec<String>,
     #[serde(default)]
     pub enable_1m_context: bool,
+}
+
+fn default_config_present() -> bool {
+    true
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
@@ -127,9 +136,27 @@ pub struct AgentConfigBundle {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct AllAgentConfigBundle {
+    pub format: String,
+    pub version: u32,
+    pub exported_at: String,
+    pub agents: Vec<AgentConfigBundleAgent>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct AgentConfigImportResult {
     pub agent_id: String,
     pub config_path: String,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct AllAgentConfigImportResult {
+    pub imported_agent_ids: Vec<String>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct AllAgentConfigExportResult {
+    pub exported_agent_ids: Vec<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
@@ -1613,6 +1640,37 @@ fn validate_agent_config_bundle_path(path: &str, must_exist: bool) -> Result<Pat
     Ok(candidate)
 }
 
+fn validate_all_agent_config_bundle_path(path: &str, must_exist: bool) -> Result<PathBuf, String> {
+    let candidate = PathBuf::from(path.trim());
+    if !candidate.is_absolute() {
+        return Err("All-Agent configuration bundle path must be absolute".to_string());
+    }
+    let file_name = candidate
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default();
+    if !file_name.ends_with(".aeroric-agents.json") {
+        return Err(
+            "All-Agent configuration bundle must end with .aeroric-agents.json".to_string(),
+        );
+    }
+    if must_exist {
+        if !candidate.is_file() {
+            return Err("All-Agent configuration bundle does not exist".to_string());
+        }
+    } else {
+        let parent = candidate
+            .parent()
+            .ok_or_else(|| "All-Agent configuration bundle has no parent directory".to_string())?;
+        if !parent.is_dir() {
+            return Err(
+                "All-Agent configuration bundle parent directory does not exist".to_string(),
+            );
+        }
+    }
+    Ok(candidate)
+}
+
 fn default_builtin_agent_config_path(agent: &str) -> Result<PathBuf, String> {
     let home =
         crate::platform::home_dir().ok_or_else(|| "Cannot find home directory".to_string())?;
@@ -1633,6 +1691,32 @@ fn builtin_agent_details(agent: &str) -> Option<(&'static str, &'static str, boo
     }
 }
 
+fn validate_agent_config_bundle_agent(agent: &AgentConfigBundleAgent) -> Result<(), String> {
+    if agent.id.trim().is_empty() || agent.label.trim().is_empty() {
+        return Err("Agent configuration is missing an ID or name".to_string());
+    }
+    if !matches!(agent.config_lang.as_str(), "json" | "toml" | "shellscript") {
+        return Err("Unsupported agent configuration language".to_string());
+    }
+    match agent.kind {
+        AgentConfigBundleKind::BuiltIn => {
+            let Some((_, expected_lang, expected_codex_like)) = builtin_agent_details(&agent.id)
+            else {
+                return Err("Unknown built-in agent in configuration bundle".to_string());
+            };
+            if agent.config_lang != expected_lang || agent.codex_like != expected_codex_like {
+                return Err("Built-in agent configuration metadata does not match".to_string());
+            }
+        }
+        AgentConfigBundleKind::Custom => {
+            if sanitize_custom_agent_id(&agent.id).is_empty() {
+                return Err("Invalid custom agent ID".to_string());
+            }
+        }
+    }
+    Ok(())
+}
+
 fn parse_agent_config_bundle(raw: &str) -> Result<AgentConfigBundle, String> {
     let bundle: AgentConfigBundle = serde_json::from_str(raw)
         .map_err(|error| format!("Invalid agent configuration: {error}"))?;
@@ -1645,16 +1729,189 @@ fn parse_agent_config_bundle(raw: &str) -> Result<AgentConfigBundle, String> {
             bundle.version
         ));
     }
-    if bundle.agent.id.trim().is_empty() || bundle.agent.label.trim().is_empty() {
-        return Err("Agent configuration is missing an ID or name".to_string());
+    validate_agent_config_bundle_agent(&bundle.agent)?;
+    Ok(bundle)
+}
+
+fn parse_all_agent_config_bundle(raw: &str) -> Result<AllAgentConfigBundle, String> {
+    let bundle: AllAgentConfigBundle = serde_json::from_str(raw)
+        .map_err(|error| format!("Invalid All-Agent configuration: {error}"))?;
+    if bundle.format != ALL_AGENT_CONFIG_BUNDLE_FORMAT {
+        return Err("Unsupported All-Agent configuration format".to_string());
     }
-    if !matches!(
-        bundle.agent.config_lang.as_str(),
-        "json" | "toml" | "shellscript"
-    ) {
-        return Err("Unsupported agent configuration language".to_string());
+    if bundle.version != ALL_AGENT_CONFIG_BUNDLE_VERSION {
+        return Err(format!(
+            "Unsupported All-Agent configuration version: {}",
+            bundle.version
+        ));
+    }
+    if bundle.agents.is_empty() {
+        return Err("All-Agent configuration bundle is empty".to_string());
+    }
+    let mut ids = HashSet::new();
+    for agent in &bundle.agents {
+        validate_agent_config_bundle_agent(agent)?;
+        let normalized_id = match agent.kind {
+            AgentConfigBundleKind::BuiltIn => agent.id.clone(),
+            AgentConfigBundleKind::Custom => sanitize_custom_agent_id(&agent.id),
+        };
+        if !ids.insert(normalized_id.clone()) {
+            return Err(format!(
+                "All-Agent configuration contains a duplicate Agent ID: {normalized_id}"
+            ));
+        }
     }
     Ok(bundle)
+}
+
+fn collect_agent_config_bundle_agent(
+    settings: &AppSettings,
+    agent: &str,
+    config_content: Option<String>,
+) -> Result<AgentConfigBundleAgent, String> {
+    if let Some((default_label, config_lang, codex_like)) = builtin_agent_details(agent) {
+        let configured_path = match agent {
+            "claude" => settings.claude_config_path.clone(),
+            "claude_gpt55" => settings.claude_gpt55_config_path.clone(),
+            "codex" => settings.codex_config_path.clone(),
+            _ => String::new(),
+        };
+        let path = if configured_path.trim().is_empty() {
+            default_builtin_agent_config_path(agent)?
+        } else {
+            PathBuf::from(normalize_config_path(configured_path))
+        };
+        let config_present = config_content.is_some() || path.is_file();
+        let config_content = match config_content {
+            Some(content) => content,
+            None if path.is_file() => {
+                fs::read_to_string(&path).map_err(|error| error.to_string())?
+            }
+            None => String::new(),
+        };
+        return Ok(AgentConfigBundleAgent {
+            id: agent.to_string(),
+            label: settings
+                .agent_label_overrides
+                .get(agent)
+                .cloned()
+                .unwrap_or_else(|| default_label.to_string()),
+            kind: AgentConfigBundleKind::BuiltIn,
+            codex_like,
+            config_lang: config_lang.to_string(),
+            config_content,
+            config_present,
+            base_url: String::new(),
+            api_key: String::new(),
+            models: Vec::new(),
+            enable_1m_context: false,
+        });
+    }
+
+    let profile = settings
+        .custom_agents
+        .iter()
+        .find(|profile| profile.id == agent)
+        .ok_or_else(|| format!("Unknown agent: {agent}"))?;
+    let path = PathBuf::from(normalize_config_path(profile.path.clone()));
+    let config_present = config_content.is_some() || path.is_file();
+    let config_content = match config_content {
+        Some(content) => content,
+        None if path.is_file() => fs::read_to_string(&path).map_err(|error| error.to_string())?,
+        None => String::new(),
+    };
+    Ok(AgentConfigBundleAgent {
+        id: profile.id.clone(),
+        label: profile.label.clone(),
+        kind: AgentConfigBundleKind::Custom,
+        codex_like: profile.codex_like,
+        config_lang: profile.config_lang.clone(),
+        config_content,
+        config_present,
+        base_url: profile.base_url.clone(),
+        api_key: profile.api_key.clone(),
+        models: profile.models.clone(),
+        enable_1m_context: profile.enable_1m_context,
+    })
+}
+
+fn import_agent_config_entry(
+    settings: &mut AppSettings,
+    agent: AgentConfigBundleAgent,
+) -> Result<AgentConfigImportResult, String> {
+    validate_agent_config_bundle_agent(&agent)?;
+    let mut imported_agent_id = agent.id.clone();
+    let config_path = match agent.kind {
+        AgentConfigBundleKind::BuiltIn => {
+            let configured_path = match agent.id.as_str() {
+                "claude" => &mut settings.claude_config_path,
+                "claude_gpt55" => &mut settings.claude_gpt55_config_path,
+                "codex" => &mut settings.codex_config_path,
+                _ => unreachable!(),
+            };
+            if configured_path.trim().is_empty() {
+                *configured_path = default_builtin_agent_config_path(&agent.id)?
+                    .to_string_lossy()
+                    .into_owned();
+            }
+            let path = PathBuf::from(normalize_config_path(configured_path.clone()));
+            if let Some(parent) = path.parent() {
+                fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+            }
+            if agent.config_present {
+                if agent.config_lang == "shellscript" {
+                    write_agent_script_at_path(&path, &agent.config_content)?;
+                } else {
+                    atomic_write_private(&path, &agent.config_content)?;
+                }
+            }
+            settings
+                .agent_label_overrides
+                .insert(agent.id.clone(), agent.label.trim().to_string());
+            path
+        }
+        AgentConfigBundleKind::Custom => {
+            let id = sanitize_custom_agent_id(&agent.id);
+            imported_agent_id = id.clone();
+            let extension = match agent.config_lang.as_str() {
+                "json" => "json",
+                "toml" => "toml",
+                _ => "sh",
+            };
+            let path = agent_scripts_dir()?.join(format!("{id}.{extension}"));
+            fs::create_dir_all(agent_scripts_dir()?).map_err(|error| error.to_string())?;
+            if agent.config_present {
+                if agent.config_lang == "shellscript" {
+                    write_agent_script_at_path(&path, &agent.config_content)?;
+                } else {
+                    atomic_write_private(&path, &agent.config_content)?;
+                }
+            }
+            let profile = normalize_custom_agent_profile(CustomAgentProfile {
+                id: id.clone(),
+                label: agent.label,
+                path: path.to_string_lossy().into_owned(),
+                codex_like: agent.codex_like,
+                config_lang: agent.config_lang,
+                base_url: agent.base_url,
+                api_key: agent.api_key,
+                models: agent.models,
+                enable_1m_context: agent.enable_1m_context,
+                username: String::new(),
+                password: String::new(),
+            })
+            .ok_or_else(|| "Invalid custom agent configuration".to_string())?;
+            settings
+                .custom_agents
+                .retain(|existing| existing.id != profile.id);
+            settings.custom_agents.push(profile);
+            path
+        }
+    };
+    Ok(AgentConfigImportResult {
+        agent_id: imported_agent_id,
+        config_path: config_path.to_string_lossy().into_owned(),
+    })
 }
 
 #[tauri::command]
@@ -1666,69 +1923,7 @@ pub async fn export_agent_config_bundle(
     tokio::task::spawn_blocking(move || {
         let output_path = validate_agent_config_bundle_path(&output_path, false)?;
         let settings = load_settings_internal();
-        let bundle_agent =
-            if let Some((default_label, config_lang, codex_like)) = builtin_agent_details(&agent) {
-                let configured_path = match agent.as_str() {
-                    "claude" => settings.claude_config_path.clone(),
-                    "claude_gpt55" => settings.claude_gpt55_config_path.clone(),
-                    "codex" => settings.codex_config_path.clone(),
-                    _ => String::new(),
-                };
-                let path = if configured_path.trim().is_empty() {
-                    default_builtin_agent_config_path(&agent)?
-                } else {
-                    PathBuf::from(normalize_config_path(configured_path))
-                };
-                let config_content = match config_content.clone() {
-                    Some(content) => content,
-                    None if path.is_file() => {
-                        fs::read_to_string(&path).map_err(|error| error.to_string())?
-                    }
-                    None => String::new(),
-                };
-                AgentConfigBundleAgent {
-                    id: agent.clone(),
-                    label: settings
-                        .agent_label_overrides
-                        .get(&agent)
-                        .cloned()
-                        .unwrap_or_else(|| default_label.to_string()),
-                    kind: AgentConfigBundleKind::BuiltIn,
-                    codex_like,
-                    config_lang: config_lang.to_string(),
-                    config_content,
-                    base_url: String::new(),
-                    api_key: String::new(),
-                    models: Vec::new(),
-                    enable_1m_context: false,
-                }
-            } else {
-                let profile = settings
-                    .custom_agents
-                    .iter()
-                    .find(|profile| profile.id == agent)
-                    .ok_or_else(|| format!("Unknown agent: {agent}"))?;
-                let path = PathBuf::from(normalize_config_path(profile.path.clone()));
-                let config_content = match config_content {
-                    Some(content) => content,
-                    None if path.is_file() => {
-                        fs::read_to_string(&path).map_err(|error| error.to_string())?
-                    }
-                    None => String::new(),
-                };
-                AgentConfigBundleAgent {
-                    id: profile.id.clone(),
-                    label: profile.label.clone(),
-                    kind: AgentConfigBundleKind::Custom,
-                    codex_like: profile.codex_like,
-                    config_lang: profile.config_lang.clone(),
-                    config_content,
-                    base_url: profile.base_url.clone(),
-                    api_key: profile.api_key.clone(),
-                    models: profile.models.clone(),
-                    enable_1m_context: profile.enable_1m_context,
-                }
-            };
+        let bundle_agent = collect_agent_config_bundle_agent(&settings, &agent, config_content)?;
         let bundle = AgentConfigBundle {
             format: AGENT_CONFIG_BUNDLE_FORMAT.to_string(),
             version: AGENT_CONFIG_BUNDLE_VERSION,
@@ -1740,6 +1935,52 @@ pub async fn export_agent_config_bundle(
             return Err("Agent configuration bundle is too large".to_string());
         }
         atomic_write_private(&output_path, &raw)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+pub async fn export_all_agent_config_bundle(
+    output_path: String,
+) -> Result<AllAgentConfigExportResult, String> {
+    tokio::task::spawn_blocking(move || {
+        let output_path = validate_all_agent_config_bundle_path(&output_path, false)?;
+        let settings = load_settings_internal();
+        let mut agent_ids = vec![
+            "claude".to_string(),
+            "claude_gpt55".to_string(),
+            "codex".to_string(),
+        ];
+        agent_ids.extend(
+            settings
+                .custom_agents
+                .iter()
+                .map(|profile| profile.id.clone()),
+        );
+        let agents = agent_ids
+            .iter()
+            .map(|agent| collect_agent_config_bundle_agent(&settings, agent, None))
+            .collect::<Result<Vec<_>, _>>()?
+            .into_iter()
+            .filter(|agent| agent.config_present)
+            .collect::<Vec<_>>();
+        if agents.is_empty() {
+            return Err("No Agent configuration files were found to export".to_string());
+        }
+        let exported_agent_ids = agents.iter().map(|agent| agent.id.clone()).collect();
+        let bundle = AllAgentConfigBundle {
+            format: ALL_AGENT_CONFIG_BUNDLE_FORMAT.to_string(),
+            version: ALL_AGENT_CONFIG_BUNDLE_VERSION,
+            exported_at: chrono::Utc::now().to_rfc3339(),
+            agents,
+        };
+        let raw = serde_json::to_string_pretty(&bundle).map_err(|error| error.to_string())?;
+        if raw.len() as u64 > MAX_ALL_AGENT_CONFIG_BUNDLE_BYTES {
+            return Err("All-Agent configuration bundle is too large".to_string());
+        }
+        atomic_write_private(&output_path, &raw)?;
+        Ok(AllAgentConfigExportResult { exported_agent_ids })
     })
     .await
     .map_err(|error| error.to_string())?
@@ -1759,81 +2000,7 @@ pub async fn import_agent_config_bundle(
         let bundle = parse_agent_config_bundle(&raw)?;
         let _guard = settings_lock().lock();
         let mut settings = load_settings_unlocked();
-        let agent = bundle.agent;
-        let mut imported_agent_id = agent.id.clone();
-
-        let config_path = match agent.kind {
-            AgentConfigBundleKind::BuiltIn => {
-                let Some((_, expected_lang, _)) = builtin_agent_details(&agent.id) else {
-                    return Err("Unknown built-in agent in configuration bundle".to_string());
-                };
-                if agent.config_lang != expected_lang {
-                    return Err("Built-in agent configuration language does not match".to_string());
-                }
-                let configured_path = match agent.id.as_str() {
-                    "claude" => &mut settings.claude_config_path,
-                    "claude_gpt55" => &mut settings.claude_gpt55_config_path,
-                    "codex" => &mut settings.codex_config_path,
-                    _ => unreachable!(),
-                };
-                if configured_path.trim().is_empty() {
-                    *configured_path = default_builtin_agent_config_path(&agent.id)?
-                        .to_string_lossy()
-                        .into_owned();
-                }
-                let path = PathBuf::from(normalize_config_path(configured_path.clone()));
-                if let Some(parent) = path.parent() {
-                    fs::create_dir_all(parent).map_err(|error| error.to_string())?;
-                }
-                if agent.config_lang == "shellscript" {
-                    write_agent_script_at_path(&path, &agent.config_content)?;
-                } else {
-                    atomic_write_private(&path, &agent.config_content)?;
-                }
-                settings
-                    .agent_label_overrides
-                    .insert(agent.id.clone(), agent.label.trim().to_string());
-                path
-            }
-            AgentConfigBundleKind::Custom => {
-                let id = sanitize_custom_agent_id(&agent.id);
-                if id.is_empty() {
-                    return Err("Invalid custom agent ID".to_string());
-                }
-                imported_agent_id = id.clone();
-                let extension = match agent.config_lang.as_str() {
-                    "json" => "json",
-                    "toml" => "toml",
-                    _ => "sh",
-                };
-                let path = agent_scripts_dir()?.join(format!("{id}.{extension}"));
-                fs::create_dir_all(agent_scripts_dir()?).map_err(|error| error.to_string())?;
-                if agent.config_lang == "shellscript" {
-                    write_agent_script_at_path(&path, &agent.config_content)?;
-                } else {
-                    atomic_write_private(&path, &agent.config_content)?;
-                }
-                let profile = normalize_custom_agent_profile(CustomAgentProfile {
-                    id: id.clone(),
-                    label: agent.label,
-                    path: path.to_string_lossy().into_owned(),
-                    codex_like: agent.codex_like,
-                    config_lang: agent.config_lang,
-                    base_url: agent.base_url,
-                    api_key: agent.api_key,
-                    models: agent.models,
-                    enable_1m_context: agent.enable_1m_context,
-                    username: String::new(),
-                    password: String::new(),
-                })
-                .ok_or_else(|| "Invalid custom agent configuration".to_string())?;
-                settings
-                    .custom_agents
-                    .retain(|existing| existing.id != profile.id);
-                settings.custom_agents.push(profile);
-                path
-            }
-        };
+        let result = import_agent_config_entry(&mut settings, bundle.agent)?;
 
         let dir = aeroric_dir()?;
         fs::create_dir_all(&dir).map_err(|error| error.to_string())?;
@@ -1841,10 +2008,38 @@ pub async fn import_agent_config_bundle(
         let raw = serde_json::to_string_pretty(&normalized).map_err(|error| error.to_string())?;
         atomic_write_private(&settings_path()?, &raw)?;
         clear_cached_versions();
-        Ok(AgentConfigImportResult {
-            agent_id: imported_agent_id,
-            config_path: config_path.to_string_lossy().into_owned(),
-        })
+        Ok(result)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+pub async fn import_all_agent_config_bundle(
+    input_path: String,
+) -> Result<AllAgentConfigImportResult, String> {
+    tokio::task::spawn_blocking(move || {
+        let input_path = validate_all_agent_config_bundle_path(&input_path, true)?;
+        let metadata = fs::metadata(&input_path).map_err(|error| error.to_string())?;
+        if metadata.len() > MAX_ALL_AGENT_CONFIG_BUNDLE_BYTES {
+            return Err("All-Agent configuration bundle is too large".to_string());
+        }
+        let raw = fs::read_to_string(&input_path).map_err(|error| error.to_string())?;
+        let bundle = parse_all_agent_config_bundle(&raw)?;
+        let _guard = settings_lock().lock();
+        let mut settings = load_settings_unlocked();
+        let mut imported_agent_ids = Vec::with_capacity(bundle.agents.len());
+        for agent in bundle.agents {
+            let result = import_agent_config_entry(&mut settings, agent)?;
+            imported_agent_ids.push(result.agent_id);
+        }
+        let dir = aeroric_dir()?;
+        fs::create_dir_all(&dir).map_err(|error| error.to_string())?;
+        let normalized = normalize_settings(settings);
+        let raw = serde_json::to_string_pretty(&normalized).map_err(|error| error.to_string())?;
+        atomic_write_private(&settings_path()?, &raw)?;
+        clear_cached_versions();
+        Ok(AllAgentConfigImportResult { imported_agent_ids })
     })
     .await
     .map_err(|error| error.to_string())?
@@ -2462,6 +2657,7 @@ enum AgentUpgradeKind {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct AgentUpgradeCommand {
+    channel: String,
     program: String,
     args: Vec<String>,
 }
@@ -2495,57 +2691,144 @@ fn detected_upgrade_manager(program: &str) -> &'static str {
     }
 }
 
-fn required_program(binary: &str) -> Result<String, String> {
+fn optional_program(binary: &str) -> Option<String> {
     let detected = detect_path(binary);
     if detected.is_empty() {
-        Err(format!("{} was not found in PATH", binary))
+        None
     } else {
-        Ok(detected)
+        Some(detected)
     }
 }
 
-fn build_agent_upgrade_command(
+fn package_manager_has_install(program: &str, args: &[&str]) -> bool {
+    let mut command = Command::new(program);
+    crate::subprocess::configure_background_command(&mut command);
+    command
+        .args(args)
+        .envs(get_login_shell_env().iter().cloned())
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    command.status().is_ok_and(|status| status.success())
+}
+
+fn build_agent_upgrade_commands_from_detection(
     kind: AgentUpgradeKind,
     launch_program: &str,
-) -> Result<AgentUpgradeCommand, String> {
-    let manager = detected_upgrade_manager(launch_program);
-    match (kind, manager) {
-        (AgentUpgradeKind::Claude, "homebrew") => Ok(AgentUpgradeCommand {
-            program: required_program("brew")?,
-            args: vec![
-                "upgrade".to_string(),
-                "--cask".to_string(),
-                "claude-code".to_string(),
-            ],
-        }),
-        (AgentUpgradeKind::Claude, "npm") => Ok(AgentUpgradeCommand {
-            program: required_program("npm")?,
-            args: vec![
-                "install".to_string(),
-                "-g".to_string(),
-                "@anthropic-ai/claude-code@latest".to_string(),
-            ],
-        }),
-        (AgentUpgradeKind::Claude, _) => Ok(AgentUpgradeCommand {
+    native_program: Option<String>,
+    npm_program: Option<String>,
+    npm_installed: bool,
+    brew_program: Option<String>,
+    brew_installed: bool,
+) -> Vec<AgentUpgradeCommand> {
+    let configured_manager = detected_upgrade_manager(launch_program);
+    let mut commands = Vec::new();
+    let mut push_unique = |command: AgentUpgradeCommand| {
+        if !commands.iter().any(|existing: &AgentUpgradeCommand| {
+            existing.program == command.program && existing.args == command.args
+        }) {
+            commands.push(command);
+        }
+    };
+
+    if kind == AgentUpgradeKind::Claude && configured_manager == "standalone" {
+        push_unique(AgentUpgradeCommand {
+            channel: "native".to_string(),
             program: launch_program.to_string(),
             args: vec!["update".to_string()],
-        }),
-        (AgentUpgradeKind::Codex, "homebrew") => Ok(AgentUpgradeCommand {
-            program: required_program("brew")?,
+        });
+    }
+    if kind == AgentUpgradeKind::Claude {
+        if let Some(program) = native_program {
+            push_unique(AgentUpgradeCommand {
+                channel: "native".to_string(),
+                program,
+                args: vec!["update".to_string()],
+            });
+        }
+    }
+    if (npm_installed || configured_manager == "npm") && npm_program.is_some() {
+        let package = match kind {
+            AgentUpgradeKind::Claude => "@anthropic-ai/claude-code@latest",
+            AgentUpgradeKind::Codex => "@openai/codex@latest",
+        };
+        push_unique(AgentUpgradeCommand {
+            channel: "npm".to_string(),
+            program: npm_program.expect("checked npm program"),
+            args: vec!["install".to_string(), "-g".to_string(), package.to_string()],
+        });
+    }
+    if (brew_installed || configured_manager == "homebrew") && brew_program.is_some() {
+        let cask = match kind {
+            AgentUpgradeKind::Claude => "claude-code",
+            AgentUpgradeKind::Codex => "codex",
+        };
+        push_unique(AgentUpgradeCommand {
+            channel: "homebrew".to_string(),
+            program: brew_program.expect("checked brew program"),
             args: vec![
                 "upgrade".to_string(),
                 "--cask".to_string(),
-                "codex".to_string(),
+                cask.to_string(),
             ],
-        }),
-        (AgentUpgradeKind::Codex, _) => Ok(AgentUpgradeCommand {
-            program: required_program("npm")?,
-            args: vec![
-                "install".to_string(),
-                "-g".to_string(),
-                "@openai/codex@latest".to_string(),
-            ],
-        }),
+        });
+    }
+    commands
+}
+
+fn build_agent_upgrade_commands(
+    kind: AgentUpgradeKind,
+    launch_program: &str,
+) -> Result<Vec<AgentUpgradeCommand>, String> {
+    let native_program = if kind == AgentUpgradeKind::Claude {
+        crate::platform::home_dir().and_then(|home| {
+            let path = if cfg!(windows) {
+                home.join(".local").join("bin").join("claude.exe")
+            } else {
+                home.join(".local").join("bin").join("claude")
+            };
+            path.is_file().then(|| path.to_string_lossy().into_owned())
+        })
+    } else {
+        None
+    };
+    let npm_program = optional_program("npm");
+    let brew_program = optional_program("brew");
+    let npm_package = match kind {
+        AgentUpgradeKind::Claude => "@anthropic-ai/claude-code",
+        AgentUpgradeKind::Codex => "@openai/codex",
+    };
+    let brew_cask = match kind {
+        AgentUpgradeKind::Claude => "claude-code",
+        AgentUpgradeKind::Codex => "codex",
+    };
+    let npm_installed = npm_program.as_deref().is_some_and(|program| {
+        package_manager_has_install(program, &["list", "-g", "--depth=0", npm_package])
+    });
+    let brew_installed = brew_program.as_deref().is_some_and(|program| {
+        package_manager_has_install(program, &["list", "--versions", "--cask", brew_cask])
+    });
+    let commands = build_agent_upgrade_commands_from_detection(
+        kind,
+        launch_program,
+        native_program,
+        npm_program,
+        npm_installed,
+        brew_program,
+        brew_installed,
+    );
+    if commands.is_empty() {
+        Err(match kind {
+            AgentUpgradeKind::Claude => {
+                "No supported Claude Code installation was detected (native, npm, or Homebrew)"
+                    .to_string()
+            }
+            AgentUpgradeKind::Codex => {
+                "No supported Codex installation was detected (npm or Homebrew)".to_string()
+            }
+        })
+    } else {
+        Ok(commands)
     }
 }
 
@@ -2577,6 +2860,29 @@ fn run_agent_upgrade(command: &AgentUpgradeCommand) -> Result<String, String> {
         } else {
             detail
         })
+    }
+}
+
+fn run_agent_upgrades(commands: &[AgentUpgradeCommand]) -> Result<String, String> {
+    let mut messages = Vec::new();
+    let mut errors = Vec::new();
+    for command in commands {
+        match run_agent_upgrade(command) {
+            Ok(detail) => messages.push(if detail.is_empty() {
+                format!("{}: upgraded", command.channel)
+            } else {
+                format!("{}:\n{}", command.channel, detail)
+            }),
+            Err(error) => errors.push(format!("{}:\n{}", command.channel, error)),
+        }
+    }
+    if errors.is_empty() {
+        Ok(messages.join("\n\n"))
+    } else {
+        if !messages.is_empty() {
+            errors.insert(0, messages.join("\n\n"));
+        }
+        Err(errors.join("\n\n"))
     }
 }
 
@@ -2636,8 +2942,8 @@ pub async fn upgrade_agent_versions(
             let binary_agent = upgrade_binary_agent(kind);
             let launch = get_agent_launch_spec_from_settings(&settings, binary_agent);
             let previous_version = detect_version(&launch).unwrap_or_default();
-            let outcome = build_agent_upgrade_command(kind, &launch.program)
-                .and_then(|command| run_agent_upgrade(&command));
+            let outcome = build_agent_upgrade_commands(kind, &launch.program)
+                .and_then(|commands| run_agent_upgrades(&commands));
             clear_cached_versions();
             let current_version = detect_version(&launch).unwrap_or_default();
             outcomes.insert(kind, (previous_version, current_version, outcome));
@@ -2735,6 +3041,69 @@ mod tests {
     }
 
     #[test]
+    fn parses_all_agent_configuration_bundle_without_history_payloads() {
+        let raw = serde_json::json!({
+            "format": ALL_AGENT_CONFIG_BUNDLE_FORMAT,
+            "version": ALL_AGENT_CONFIG_BUNDLE_VERSION,
+            "exported_at": "2026-07-17T00:00:00Z",
+            "agents": [
+                {
+                    "id": "claude",
+                    "label": "Claude Code",
+                    "kind": "built_in",
+                    "codex_like": false,
+                    "config_lang": "json",
+                    "config_content": "{}"
+                },
+                {
+                    "id": "codex",
+                    "label": "Codex",
+                    "kind": "built_in",
+                    "codex_like": true,
+                    "config_lang": "toml",
+                    "config_content": ""
+                }
+            ]
+        })
+        .to_string();
+
+        let bundle = parse_all_agent_config_bundle(&raw).unwrap();
+        assert_eq!(bundle.agents.len(), 2);
+        assert!(!raw.contains("conversation"));
+        assert!(!raw.contains("terminal_history"));
+    }
+
+    #[test]
+    fn rejects_duplicate_ids_in_all_agent_configuration_bundle() {
+        let raw = serde_json::json!({
+            "format": ALL_AGENT_CONFIG_BUNDLE_FORMAT,
+            "version": ALL_AGENT_CONFIG_BUNDLE_VERSION,
+            "exported_at": "2026-07-17T00:00:00Z",
+            "agents": [
+                {
+                    "id": "custom agent",
+                    "label": "Custom Agent",
+                    "kind": "custom",
+                    "codex_like": true,
+                    "config_lang": "shellscript",
+                    "config_content": ""
+                },
+                {
+                    "id": "custom_agent",
+                    "label": "Duplicate",
+                    "kind": "custom",
+                    "codex_like": true,
+                    "config_lang": "shellscript",
+                    "config_content": ""
+                }
+            ]
+        })
+        .to_string();
+
+        assert!(parse_all_agent_config_bundle(&raw).is_err());
+    }
+
+    #[test]
     fn extracts_claude_code_semver_from_new_cli_output() {
         assert_eq!(
             extract_semver("2.1.195 (Claude Code)"),
@@ -2825,6 +3194,41 @@ mod tests {
             detected_upgrade_manager("/Users/test/.local/bin/claude"),
             "standalone"
         );
+    }
+
+    #[test]
+    fn builds_upgrade_commands_for_npm_and_homebrew_installations_together() {
+        let commands = build_agent_upgrade_commands_from_detection(
+            AgentUpgradeKind::Codex,
+            "/opt/homebrew/bin/codex",
+            None,
+            Some("/usr/local/bin/npm".to_string()),
+            true,
+            Some("/opt/homebrew/bin/brew".to_string()),
+            true,
+        );
+
+        assert_eq!(commands.len(), 2);
+        assert!(commands.iter().any(|command| command.channel == "npm"));
+        assert!(commands.iter().any(|command| command.channel == "homebrew"));
+    }
+
+    #[test]
+    fn builds_native_npm_and_homebrew_claude_upgrade_commands_together() {
+        let commands = build_agent_upgrade_commands_from_detection(
+            AgentUpgradeKind::Claude,
+            "/opt/homebrew/bin/claude",
+            Some("/Users/test/.local/bin/claude".to_string()),
+            Some("/usr/local/bin/npm".to_string()),
+            true,
+            Some("/opt/homebrew/bin/brew".to_string()),
+            true,
+        );
+
+        assert_eq!(commands.len(), 3);
+        assert!(commands.iter().any(|command| command.channel == "native"));
+        assert!(commands.iter().any(|command| command.channel == "npm"));
+        assert!(commands.iter().any(|command| command.channel == "homebrew"));
     }
 
     #[test]

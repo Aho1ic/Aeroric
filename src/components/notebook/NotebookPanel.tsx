@@ -579,7 +579,6 @@ export function NotebookPanel({ width = "100%" }: { width?: number | string }) {
     if (activeFormat === "markdown") {
       const textarea = markdownContentRef.current;
       if (!textarea) return;
-      textarea.focus();
       textarea.setSelectionRange(match.start, match.end);
       const lineCount = Math.max(1, textarea.value.split("\n").length);
       const matchLine = textarea.value.slice(0, match.start).split("\n").length - 1;
@@ -591,7 +590,6 @@ export function NotebookPanel({ width = "100%" }: { width?: number | string }) {
     const selection = document.getSelection();
     const range = editor ? textRangeForOffsets(editor, match.start, match.end) : null;
     if (!editor || !selection || !range) return;
-    editor.focus();
     selection.removeAllRanges();
     selection.addRange(range);
     closestElement(range.startContainer)?.scrollIntoView?.({ block: "center" });

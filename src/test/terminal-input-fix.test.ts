@@ -954,13 +954,11 @@ describe("terminal input fixes", () => {
       },
     };
 
-    textarea.addEventListener(
-      "keydown",
-      () => {
-        dataListeners[0]?.("t");
-      },
-      true,
-    );
+    const xtermKeydown = vi.fn((event: KeyboardEvent) => {
+      dataListeners[0]?.("t");
+      event.preventDefault();
+    });
+    textarea.addEventListener("keydown", xtermKeydown, true);
     const disposable = attachLinuxIMEFix(term as never, (data) => sent.push(data));
     vi.advanceTimersByTime(1);
     const firstKey = new KeyboardEvent("keydown", {
@@ -972,6 +970,8 @@ describe("terminal input fixes", () => {
     Object.defineProperty(firstKey, "keyCode", { value: 84 });
     textarea.dispatchEvent(firstKey);
 
+    expect(xtermKeydown).not.toHaveBeenCalled();
+    expect(firstKey.defaultPrevented).toBe(false);
     expect(sent).toEqual([]);
 
     textarea.dispatchEvent(new CompositionEvent("compositionstart", { data: "" }));
@@ -1005,7 +1005,11 @@ describe("terminal input fixes", () => {
       isAppleWebKit: () => true,
     }));
     const { attachLinuxIMEFix } = await import("../components/terminalInputFix");
+    const terminalElement = document.createElement("div");
+    terminalElement.className = "xterm";
     const textarea = document.createElement("textarea");
+    terminalElement.appendChild(textarea);
+    document.body.appendChild(terminalElement);
     const sent: string[] = [];
     const dataListeners: Array<(data: string) => void> = [];
     const term = {
@@ -1016,7 +1020,23 @@ describe("terminal input fixes", () => {
       },
     };
 
-    attachLinuxIMEFix(term as never, (data) => sent.push(data));
+    const xtermKeydown = vi.fn((event: KeyboardEvent) => {
+      dataListeners[0]?.(event.key);
+      event.preventDefault();
+    });
+    const xtermKeypress = vi.fn((event: KeyboardEvent) => {
+      dataListeners[0]?.(event.key);
+      event.preventDefault();
+    });
+    textarea.addEventListener("keydown", xtermKeydown, true);
+    textarea.addEventListener("keypress", xtermKeypress, true);
+    textarea.addEventListener(
+      "input",
+      (event) => dataListeners[0]?.((event as InputEvent).data ?? ""),
+      true,
+    );
+
+    const disposable = attachLinuxIMEFix(term as never, (data) => sent.push(data));
     vi.advanceTimersByTime(1);
     const firstKey = new KeyboardEvent("keydown", {
       key: "t",
@@ -1026,11 +1046,99 @@ describe("terminal input fixes", () => {
     });
     Object.defineProperty(firstKey, "keyCode", { value: 84 });
     textarea.dispatchEvent(firstKey);
-    dataListeners[0]?.("t");
+    textarea.dispatchEvent(
+      new KeyboardEvent("keypress", {
+        key: "t",
+        code: "KeyT",
+        charCode: 116,
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    textarea.value = "t";
+    textarea.dispatchEvent(
+      new InputEvent("input", {
+        inputType: "insertText",
+        data: "t",
+        bubbles: true,
+      }),
+    );
 
+    expect(xtermKeydown).not.toHaveBeenCalled();
+    expect(xtermKeypress).not.toHaveBeenCalled();
+    expect(firstKey.defaultPrevented).toBe(false);
     expect(sent).toEqual([]);
-    vi.advanceTimersByTime(20);
+    vi.advanceTimersByTime(40);
     expect(sent).toEqual(["t"]);
+    disposable.dispose();
+    terminalElement.remove();
+    vi.useRealTimers();
+  });
+
+  it("keeps a first IME letter pending when composition starts late after Backspace", async () => {
+    vi.useFakeTimers();
+    vi.resetModules();
+    vi.doMock("../platform", () => ({
+      APP_PLATFORM: "macos",
+      ENABLE_USAGE_INSIGHTS: true,
+      IS_MAC_WEBKIT: true,
+      IS_OTHER_WEBKIT: false,
+      detectAppPlatform: () => "macos",
+      isAppleWebKit: () => true,
+    }));
+    const { attachLinuxIMEFix } = await import("../components/terminalInputFix");
+    const terminalElement = document.createElement("div");
+    terminalElement.className = "xterm";
+    const textarea = document.createElement("textarea");
+    terminalElement.appendChild(textarea);
+    document.body.appendChild(terminalElement);
+    const sent: string[] = [];
+    const dataListeners: Array<(data: string) => void> = [];
+    const term = {
+      textarea,
+      onData: (listener: (data: string) => void) => {
+        dataListeners.push(listener);
+        return { dispose: vi.fn() };
+      },
+    };
+
+    const disposable = attachLinuxIMEFix(term as never, (data) => sent.push(data));
+    textarea.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "Backspace",
+        code: "Backspace",
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    const firstKey = new KeyboardEvent("keydown", {
+      key: "d",
+      code: "KeyD",
+      bubbles: true,
+      cancelable: true,
+    });
+    Object.defineProperty(firstKey, "keyCode", { value: 68 });
+    textarea.dispatchEvent(firstKey);
+    dataListeners[0]?.("d");
+
+    vi.advanceTimersByTime(70);
+    expect(sent).toEqual([]);
+
+    textarea.dispatchEvent(new CompositionEvent("compositionstart", { data: "" }));
+    textarea.dispatchEvent(new CompositionEvent("compositionupdate", { data: "dakai" }));
+    textarea.dispatchEvent(
+      new InputEvent("beforeinput", {
+        inputType: "insertText",
+        data: "打开",
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    vi.runOnlyPendingTimers();
+
+    expect(sent).toEqual(["打开"]);
+    disposable.dispose();
+    terminalElement.remove();
     vi.useRealTimers();
   });
 

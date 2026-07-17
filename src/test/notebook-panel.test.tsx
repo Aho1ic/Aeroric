@@ -865,16 +865,20 @@ describe("NotebookPanel", () => {
     await user.type(body, "alpha beta alpha");
 
     fireEvent.keyDown(body, { key: "f", metaKey: true });
-    fireEvent.change(screen.getByRole("textbox", { name: "Find" }), {
+    const findInput = screen.getByRole("textbox", { name: "Find" });
+    fireEvent.change(findInput, {
       target: { value: "alpha" },
     });
+    expect(findInput).toHaveFocus();
     expect(body.selectionStart).toBe(0);
     expect(body.selectionEnd).toBe(5);
 
     fireEvent.keyDown(body, { key: "h", metaKey: true });
-    fireEvent.change(screen.getByRole("textbox", { name: "Replace" }), {
-      target: { value: "omega" },
-    });
+    const replaceInput = screen.getByRole("textbox", { name: "Replace" });
+    await user.click(replaceInput);
+    await user.type(replaceInput, "omega");
+    await user.keyboard("{Enter}");
+    expect(replaceInput).toHaveFocus();
     await user.click(screen.getByRole("button", { name: "Replace all" }));
 
     expect(body).toHaveValue("omega beta omega");
@@ -891,12 +895,16 @@ describe("NotebookPanel", () => {
     fireEvent.input(body);
 
     fireEvent.keyDown(body, { key: "h", metaKey: true });
-    fireEvent.change(screen.getByRole("textbox", { name: "Find" }), {
+    const findInput = screen.getByRole("textbox", { name: "Find" });
+    fireEvent.change(findInput, {
       target: { value: "alpha" },
     });
-    fireEvent.change(screen.getByRole("textbox", { name: "Replace" }), {
-      target: { value: "omega" },
-    });
+    expect(findInput).toHaveFocus();
+    const replaceInput = screen.getByRole("textbox", { name: "Replace" });
+    await user.click(replaceInput);
+    await user.type(replaceInput, "omega");
+    await user.keyboard("{Enter}");
+    expect(replaceInput).toHaveFocus();
     await user.click(screen.getByRole("button", { name: "Replace all" }));
 
     expect(body.textContent).toBe("omega beta omega");

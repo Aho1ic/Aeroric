@@ -780,7 +780,7 @@ export function ProjectPage({
       newTaskDraftRef.current = {
         promptHtml: escapeDraftHtml(prompt),
         agent: existing?.agent ?? "claude",
-        permMode: existing?.permMode ?? "ask",
+        permMode: existing?.permMode ?? "full_access",
         planMode: existing?.planMode ?? false,
         goalMode: existing?.goalMode ?? false,
         pastedImages: [],

@@ -63,7 +63,20 @@ const translations: Record<AppLanguage, Record<string, string>> = {
     "appSettings.agentUpdates": "Agent Updates",
     "appSettings.agentUpdatesTitle": "Upgrade Agent CLIs",
     "appSettings.agentUpdatesHint":
-      "Upgrade selected configurations to the latest Claude Code or Codex CLI. Configurations of the same runtime share one CLI installation, so Aeroric upgrades each runtime only once.",
+      "Upgrade selected configurations to the latest Claude Code or Codex CLI. Aeroric upgrades every detected native, npm, and Homebrew installation for the selected runtime.",
+    "appSettings.allAgentConfigs": "All Agent Configs",
+    "appSettings.allAgentConfigsTitle": "One-click Agent configuration transfer",
+    "appSettings.allAgentConfigsHint":
+      "Export or import all {count} Agent configuration files in one bundle. Conversation and terminal history are never included.",
+    "appSettings.allAgentConfigsSecurityHint":
+      "The bundle can contain API keys and access tokens from custom Agent configurations. Store it securely.",
+    "appSettings.importAllAgentConfigs": "Import all",
+    "appSettings.exportAllAgentConfigs": "Export all",
+    "appSettings.importingAllAgentConfigs": "Importing...",
+    "appSettings.exportingAllAgentConfigs": "Exporting...",
+    "appSettings.allAgentConfigBundle": "Aeroric All-Agent Configuration",
+    "appSettings.allAgentConfigsImported": "Imported {count} Agent configurations.",
+    "appSettings.allAgentConfigsExported": "Exported {count} Agent configurations.",
     "appSettings.agentConfiguration": "Agent Configuration",
     "appSettings.selectAllAgents": "Select all Agent configurations",
     "appSettings.selectedAgentsCount": "{count} configurations selected",
@@ -1963,7 +1976,20 @@ const translations: Record<AppLanguage, Record<string, string>> = {
     "appSettings.agentUpdates": "Agent 升级",
     "appSettings.agentUpdatesTitle": "升级 Agent CLI",
     "appSettings.agentUpdatesHint":
-      "将选中的配置升级到最新版 Claude Code 或 Codex CLI。同一运行方式的配置共享一套 CLI，Aeroric 会自动去重，每种 CLI 只升级一次。",
+      "将选中的配置升级到最新版 Claude Code 或 Codex CLI。Aeroric 会同时升级检测到的原生、npm 普通安装和 Homebrew 安装。",
+    "appSettings.allAgentConfigs": "所有 Agent 配置",
+    "appSettings.allAgentConfigsTitle": "一键迁移所有 Agent 配置",
+    "appSettings.allAgentConfigsHint":
+      "将全部 {count} 个 Agent 配置文件导出为一个配置包，或从配置包一键导入。不会包含历史对话和终端历史。",
+    "appSettings.allAgentConfigsSecurityHint":
+      "配置包可能包含自定义 Agent 的 API Key 和访问令牌，请妥善保管。",
+    "appSettings.importAllAgentConfigs": "一键导入",
+    "appSettings.exportAllAgentConfigs": "一键导出",
+    "appSettings.importingAllAgentConfigs": "导入中...",
+    "appSettings.exportingAllAgentConfigs": "导出中...",
+    "appSettings.allAgentConfigBundle": "Aeroric 全部 Agent 配置",
+    "appSettings.allAgentConfigsImported": "已导入 {count} 个 Agent 配置。",
+    "appSettings.allAgentConfigsExported": "已导出 {count} 个 Agent 配置。",
     "appSettings.agentConfiguration": "Agent 配置",
     "appSettings.selectAllAgents": "全选所有 Agent 配置",
     "appSettings.selectedAgentsCount": "已选择 {count} 个配置",

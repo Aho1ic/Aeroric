@@ -12,6 +12,7 @@ import {
   Network,
   PackageOpen,
   ChartNoAxesCombined,
+  Archive,
 } from "lucide-react";
 import type {
   ThemeMode,
@@ -36,11 +37,13 @@ import { HooksPanel } from "./app-settings/HooksPanel";
 import { SkillsPanel } from "./app-settings/SkillsPanel";
 import { ProxyPanel } from "./app-settings/ProxyPanel";
 import { AgentUpdatesPanel } from "./app-settings/AgentUpdatesPanel";
+import { AllAgentConfigsPanel } from "./app-settings/AllAgentConfigsPanel";
 import { UsageDashboard } from "./UsageDashboard";
 import type { AgentKey, AppSettingsNavItem, NavKey, NavSection } from "./app-settings/types";
 import { useAgentOptions } from "../hooks/useAgentOptions";
 
 const ADD_AGENT_NAV_KEY = "__add_agent__";
+const ALL_AGENT_CONFIGS_NAV_KEY = "__all_agent_configs__";
 
 const BASE_NAV_ITEMS: AppSettingsNavItem[] = [
   { key: "general", labelKey: "appSettings.general", section: "application", icon: SettingsIcon },
@@ -164,6 +167,12 @@ export function AppSettingsDialog({
   }
 
   const agentNavItems: AppSettingsNavItem[] = [
+    {
+      key: ALL_AGENT_CONFIGS_NAV_KEY,
+      labelKey: "appSettings.allAgentConfigs",
+      section: "agents" as const,
+      icon: Archive,
+    },
     ...agentOptions.map((option) => ({
       key: option.value,
       label: option.label,
@@ -188,7 +197,7 @@ export function AppSettingsDialog({
 
   const activeItem = navItems.find((n) => n.key === activeNav) ?? navItems[0];
   const activeAgentItem =
-    activeNav === ADD_AGENT_NAV_KEY
+    activeNav === ADD_AGENT_NAV_KEY || activeNav === ALL_AGENT_CONFIGS_NAV_KEY
       ? null
       : (agentNavItems.find((item) => item.key === activeNav) ?? null);
   const activeLabel = activeItem.label ?? t(activeItem.labelKey ?? activeItem.key);
@@ -301,6 +310,8 @@ export function AppSettingsDialog({
               <UsageDashboard key="usage" embedded />
             ) : activeNav === "agent-updates" ? (
               <AgentUpdatesPanel key="agent-updates" />
+            ) : activeNav === ALL_AGENT_CONFIGS_NAV_KEY ? (
+              <AllAgentConfigsPanel key="all-agent-configs" />
             ) : activeNav === "hooks" ? (
               <HooksPanel key="hooks" />
             ) : activeNav === "skills" ? (

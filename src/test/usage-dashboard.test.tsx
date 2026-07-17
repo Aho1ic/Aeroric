@@ -120,7 +120,7 @@ describe("UsageDashboard", () => {
     expect(screen.queryByText("$0.1234")).not.toBeInTheDocument();
   });
 
-  it("keeps the date range on one line and limits bars for short ranges", async () => {
+  it("keeps the date range on one line and gives the home chart a larger immersive plot", async () => {
     localStorage.setItem("aeroric:language", "zh");
     const user = userEvent.setup();
     const { container } = render(
@@ -134,16 +134,32 @@ describe("UsageDashboard", () => {
 
     const bars = Array.from(container.querySelectorAll<HTMLElement>(".usage-chart-bar"));
     expect(bars).toHaveLength(7);
-    expect(bars.every((bar) => bar.style.maxWidth === "28px")).toBe(true);
-    expect(container.querySelectorAll(".usage-chart-axis-tick")).toHaveLength(5);
-    expect(container.querySelectorAll(".usage-chart-grid > span")).toHaveLength(5);
+    expect(bars.every((bar) => bar.style.maxWidth === "48px")).toBe(true);
+    expect(container.querySelector(".usage-chart-section-home")).toBeInTheDocument();
+    expect(container.querySelector(".usage-chart-home")).toHaveStyle({ height: "354px" });
+    expect(container.querySelectorAll(".usage-chart-axis-tick")).toHaveLength(6);
+    expect(container.querySelectorAll(".usage-chart-grid > span")).toHaveLength(6);
     expect(container.querySelector(".usage-metric-card")).toHaveStyle({ borderRadius: "18px" });
 
     await user.click(screen.getByRole("button", { name: "当天" }));
     await waitFor(() => {
       const todayBars = Array.from(container.querySelectorAll<HTMLElement>(".usage-chart-bar"));
       expect(todayBars).toHaveLength(1);
-      expect(todayBars[0]).toHaveStyle({ maxWidth: "32px" });
+      expect(todayBars[0]).toHaveStyle({ maxWidth: "72px" });
     });
+  });
+
+  it("keeps the compact settings chart dimensions unchanged", async () => {
+    const { container } = render(
+      <I18nProvider>
+        <UsageDashboard embedded />
+      </I18nProvider>,
+    );
+
+    await screen.findByText("Daily usage");
+    const bars = Array.from(container.querySelectorAll<HTMLElement>(".usage-chart-bar"));
+    expect(bars.every((bar) => bar.style.maxWidth === "28px")).toBe(true);
+    expect(container.querySelector(".usage-chart-section-home")).not.toBeInTheDocument();
+    expect(container.querySelectorAll(".usage-chart-axis-tick")).toHaveLength(5);
   });
 });

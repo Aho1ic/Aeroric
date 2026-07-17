@@ -76,6 +76,9 @@ describe("NewTaskView start terminal", () => {
       </I18nProvider>,
     );
 
+    expect(screen.getByRole("combobox", { name: "Default Permission Mode" })).toHaveTextContent(
+      "完全访问",
+    );
     await user.click(screen.getByRole("button", { name: /Start Terminal/ }));
 
     expect(onSubmit).toHaveBeenCalledWith(

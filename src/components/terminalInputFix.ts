@@ -42,7 +42,9 @@ const TEXTAREA_INPUT_CLIENT_RESET_MS = 24;
 const IME_PROCESS_KEY_GUARD_MS = 180;
 // WebKit can expose the first IME letter as a normal key before compositionstart.
 // Hold matching xterm data for one frame so that composition can claim it.
-const IME_FIRST_KEY_HANDOFF_DELAY_MS = 16;
+const IME_FIRST_KEY_HANDOFF_DELAY_MS = 32;
+const IME_FIRST_KEY_AFTER_EDIT_HANDOFF_DELAY_MS = 120;
+const IME_RECENT_EDIT_GUARD_MS = 260;
 const CLEARED_COMPOSITION_REPLAY_GUARD_MS = 800;
 
 export function applyTerminalTextareaInputAttributes(term: {
@@ -421,6 +423,7 @@ export function attachLinuxIMEFix(
   let pendingRomanizedProcessText = "";
   let potentialRomanizedImeHandoffKey = "";
   let potentialRomanizedImeHandoffUntil = 0;
+  let extendedRomanizedImeHandoffUntil = 0;
   let pendingRomanizedImeHandoffData: {
     data: string;
     timer: ReturnType<typeof globalThis.setTimeout>;
@@ -928,6 +931,7 @@ export function attachLinuxIMEFix(
       compositionDeletionInProgress = isUserCompositionDeletionInputType(event.inputType);
       if (compositionDeletionInProgress) {
         clearRecentlyClearedRomanizedText();
+        extendedRomanizedImeHandoffUntil = performance.now() + IME_RECENT_EDIT_GUARD_MS;
       }
       return;
     }
@@ -1177,10 +1181,34 @@ export function attachLinuxIMEFix(
       compositionText,
       pending: !!pendingCompositionCommit,
     });
+    const now = performance.now();
+    if (
+      !event.isComposing &&
+      !event.repeat &&
+      (event.key === "Backspace" ||
+        event.code === "Backspace" ||
+        event.key === "Delete" ||
+        event.code === "Delete")
+    ) {
+      // 微信输入法在删除后立即开始下一段拼音时，WKWebView 的 compositionstart
+      // 往往比普通输入慢一到数帧。给下一枚可打印键更长的交接窗口，避免 xterm
+      // 先把 d/y/s 等首字母当作英文写入 PTY；普通英文输入仍走较短窗口。
+      extendedRomanizedImeHandoffUntil = now + IME_RECENT_EDIT_GUARD_MS;
+    }
     const potentialHandoffKey = getPotentialRomanizedImeHandoffKey(event);
     if (potentialHandoffKey !== null) {
+      const handoffDelay =
+        now <= extendedRomanizedImeHandoffUntil
+          ? IME_FIRST_KEY_AFTER_EDIT_HANDOFF_DELAY_MS
+          : IME_FIRST_KEY_HANDOFF_DELAY_MS;
       potentialRomanizedImeHandoffKey = potentialHandoffKey;
-      potentialRomanizedImeHandoffUntil = performance.now() + IME_FIRST_KEY_HANDOFF_DELAY_MS;
+      potentialRomanizedImeHandoffUntil = now + handoffDelay;
+      // 必须在 xterm 的 textarea keydown 处理器之前截住这一键，但不要
+      // preventDefault。否则 xterm 会把首字母立即写入 PTY 并取消浏览器默认
+      // 输入，后续即使 compositionstart 到达，也已经无法把该字母交还给 IME。
+      // 保留默认行为后，普通英文会通过 textarea input 事件进入 xterm；
+      // 中文输入法则可以正常启动 composition。
+      event.stopImmediatePropagation();
     } else if (!event.isComposing && event.keyCode !== 229) {
       flushPendingRomanizedImeHandoff();
     }
@@ -1318,6 +1346,18 @@ export function attachLinuxIMEFix(
     if (!isComposing && event.keyCode === 229) event.stopImmediatePropagation();
   };
 
+  const handleKeyPressCapture = (event: KeyboardEvent) => {
+    const matchesPendingHandoff =
+      performance.now() <= potentialRomanizedImeHandoffUntil &&
+      event.key.length === 1 &&
+      event.key.toLowerCase() === potentialRomanizedImeHandoffKey.toLowerCase();
+    if (!isComposing && !matchesPendingHandoff) return;
+    // keydown 已交给浏览器默认输入后，WebKit 仍可能继续发 keypress。
+    // 阻止 xterm 在 keypress 阶段再次直接发送字符，最终统一由 input /
+    // composition 事件决定这是英文输入还是 IME 预编辑。
+    event.stopImmediatePropagation();
+  };
+
   const handleKeyUpCapture = (event: KeyboardEvent) => {
     if (!isCandidateCommitKey(event) || candidateKeyCommitTimer !== null) return;
     const recoveredClearedCandidate = !isComposing && recoverRecentlyClearedRomanizedComposition();
@@ -1374,12 +1414,18 @@ export function attachLinuxIMEFix(
       }
       pendingRomanizedImeHandoffData = {
         data,
-        timer: globalThis.setTimeout(() => {
-          const pending = pendingRomanizedImeHandoffData;
-          pendingRomanizedImeHandoffData = null;
-          clearPotentialRomanizedImeHandoff();
-          if (pending) onDataCallback(pending.data);
-        }, IME_FIRST_KEY_HANDOFF_DELAY_MS),
+        timer: globalThis.setTimeout(
+          () => {
+            const pending = pendingRomanizedImeHandoffData;
+            pendingRomanizedImeHandoffData = null;
+            clearPotentialRomanizedImeHandoff();
+            if (pending) onDataCallback(pending.data);
+          },
+          Math.max(
+            IME_FIRST_KEY_HANDOFF_DELAY_MS,
+            potentialRomanizedImeHandoffUntil - performance.now(),
+          ),
+        ),
       };
       return;
     }
@@ -1453,6 +1499,7 @@ export function attachLinuxIMEFix(
   textarea.addEventListener("input", handleInputCapture, true);
   const keydownTarget = terminalElement ?? textarea;
   keydownTarget.addEventListener("keydown", handleKeyDownCapture, true);
+  keydownTarget.addEventListener("keypress", handleKeyPressCapture, true);
   keydownTarget.addEventListener("keyup", handleKeyUpCapture, true);
   textarea.addEventListener("blur", handleBlurCapture, true);
   window.addEventListener("blur", handleWindowBlur);
@@ -1465,6 +1512,7 @@ export function attachLinuxIMEFix(
       textarea.removeEventListener("beforeinput", handleBeforeInputCapture, true);
       textarea.removeEventListener("input", handleInputCapture, true);
       keydownTarget.removeEventListener("keydown", handleKeyDownCapture, true);
+      keydownTarget.removeEventListener("keypress", handleKeyPressCapture, true);
       keydownTarget.removeEventListener("keyup", handleKeyUpCapture, true);
       textarea.removeEventListener("blur", handleBlurCapture, true);
       window.removeEventListener("blur", handleWindowBlur);

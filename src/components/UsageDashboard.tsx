@@ -158,6 +158,7 @@ function UsageChart({
   series,
   labels,
   locale,
+  immersive = false,
 }: {
   series: UsageStatisticsDay[];
   labels: {
@@ -168,21 +169,71 @@ function UsageChart({
     cacheRead: string;
   };
   locale: string;
+  immersive?: boolean;
 }) {
   const [activeIndex, setActiveIndex] = useState<number | null>(null);
   const max = Math.max(1, ...series.map((day) => day.totalTokens));
   const labelEvery = series.length <= 7 ? 1 : series.length <= 14 ? 2 : 5;
   const compactBars = series.length <= 7;
-  const barMaxWidth = series.length === 1 ? 32 : compactBars ? 28 : 24;
-  const columnWidth = series.length === 1 ? 72 : compactBars ? 52 : undefined;
-  const minPlotWidth = compactBars ? 260 : Math.max(360, series.length * 25);
+  const barMaxWidth = immersive
+    ? series.length === 1
+      ? 72
+      : compactBars
+        ? 48
+        : 32
+    : series.length === 1
+      ? 32
+      : compactBars
+        ? 28
+        : 24;
+  const columnWidth = immersive
+    ? series.length === 1
+      ? 148
+      : compactBars
+        ? 92
+        : undefined
+    : series.length === 1
+      ? 72
+      : compactBars
+        ? 52
+        : undefined;
+  const minPlotWidth = immersive
+    ? compactBars
+      ? 560
+      : Math.max(720, series.length * 42)
+    : compactBars
+      ? 260
+      : Math.max(360, series.length * 25);
+  const plotHeight = immersive ? 300 : 216;
+  const labelHeight = immersive ? 38 : 30;
   const activeDay = activeIndex === null ? null : series[activeIndex];
-  const axisTicks = [max, max * 0.75, max * 0.5, max * 0.25, 0];
+  const axisTicks = immersive
+    ? [max, max * 0.8, max * 0.6, max * 0.4, max * 0.2, 0]
+    : [max, max * 0.75, max * 0.5, max * 0.25, 0];
 
   return (
-    <div style={s.usageChartViewport}>
-      <div style={{ ...s.usageChart, minWidth: minPlotWidth + 96 }}>
-        <div style={s.usageChartAxis} aria-hidden="true">
+    <div
+      className={immersive ? "usage-chart-viewport-home" : undefined}
+      style={s.usageChartViewport}
+    >
+      <div
+        className={immersive ? "usage-chart-home" : undefined}
+        style={{
+          ...s.usageChart,
+          minWidth: minPlotWidth + (immersive ? 112 : 96),
+          height: immersive ? 354 : s.usageChart.height,
+          gap: immersive ? 16 : s.usageChart.gap,
+        }}
+      >
+        <div
+          style={{
+            ...s.usageChartAxis,
+            width: immersive ? 78 : s.usageChartAxis.width,
+            padding: immersive ? "1px 0 38px" : s.usageChartAxis.padding,
+            fontSize: immersive ? 10 : s.usageChartAxis.fontSize,
+          }}
+          aria-hidden="true"
+        >
           {axisTicks.map((tick, index) => (
             <span
               key={index}
@@ -200,15 +251,23 @@ function UsageChart({
             ...s.usageChartPlot,
             minWidth: minPlotWidth,
             justifyContent: compactBars ? "center" : "stretch",
+            gap: immersive ? 18 : s.usageChartPlot.gap,
+            padding: immersive ? "0 22px" : s.usageChartPlot.padding,
+            borderRadius: immersive ? "20px 20px 0 0" : s.usageChartPlot.borderRadius,
           }}
         >
-          <div className="usage-chart-grid" style={s.usageChartGrid} aria-hidden="true">
+          <div
+            className="usage-chart-grid"
+            style={{ ...s.usageChartGrid, inset: immersive ? "0 0 38px" : s.usageChartGrid.inset }}
+            aria-hidden="true"
+          >
             {axisTicks.map((_, index) => (
               <span key={index} />
             ))}
           </div>
           {series.map((day, index) => {
-            const height = day.totalTokens === 0 ? 0 : Math.max(3, (day.totalTokens / max) * 216);
+            const height =
+              day.totalTokens === 0 ? 0 : Math.max(3, (day.totalTokens / max) * plotHeight);
             const title = [
               formatDate(locale, day.date, true),
               `${labels.input}: ${formatInteger(locale, day.inputTokens)}`,
@@ -243,11 +302,13 @@ function UsageChart({
               >
                 <div
                   className="usage-chart-bar"
+                  data-immersive={immersive || undefined}
                   style={{
                     ...s.usageChartBar,
                     width: "100%",
                     maxWidth: barMaxWidth,
                     height,
+                    borderRadius: immersive ? "16px 16px 5px 5px" : s.usageChartBar.borderRadius,
                   }}
                 >
                   <span
@@ -270,7 +331,10 @@ function UsageChart({
                 {active && (
                   <span
                     className="usage-chart-bar-value"
-                    style={{ ...s.usageChartBarValue, bottom: Math.min(236, height + 34) }}
+                    style={{
+                      ...s.usageChartBarValue,
+                      bottom: Math.min(immersive ? 326 : 236, height + (immersive ? 42 : 34)),
+                    }}
                   >
                     {formatAxisValue(locale, day.totalTokens)}
                   </span>
@@ -279,6 +343,9 @@ function UsageChart({
                   className="usage-chart-label"
                   style={{
                     ...s.usageChartLabel,
+                    height: labelHeight,
+                    paddingTop: immersive ? 10 : s.usageChartLabel.paddingTop,
+                    fontSize: immersive ? 10 : s.usageChartLabel.fontSize,
                     ...(active ? s.usageChartLabelActive : null),
                   }}
                 >
@@ -548,7 +615,20 @@ export function UsageDashboard({ embedded = false }: { embedded?: boolean }) {
               ))}
             </div>
 
-            <section className="usage-panel" style={s.usageChartSection}>
+            <section
+              className={`usage-panel${embedded ? "" : " usage-chart-section-home"}`}
+              style={{
+                ...s.usageChartSection,
+                ...(!embedded
+                  ? {
+                      marginTop: 18,
+                      padding: "24px 24px 20px",
+                      borderRadius: 24,
+                      minHeight: 450,
+                    }
+                  : null),
+              }}
+            >
               <div
                 style={{
                   ...s.usageSectionHead,
@@ -581,6 +661,7 @@ export function UsageDashboard({ embedded = false }: { embedded?: boolean }) {
                     cacheRead: t("usageStats.cacheRead"),
                   }}
                   locale={locale}
+                  immersive={!embedded}
                 />
               )}
             </section>
