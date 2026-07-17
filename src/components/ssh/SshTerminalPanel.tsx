@@ -7,8 +7,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
+import { Channel, invoke } from "@tauri-apps/api/core";
 import { Terminal as XTerm } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { Plug, Power, Server } from "lucide-react";
@@ -31,11 +30,6 @@ import { SshConnectionDialog } from "./SshConnectionDialog";
 import { SshConnectionList } from "./SshConnectionList";
 import { createSshShellId, shouldAttemptSshAutoConnect } from "./session";
 import "@xterm/xterm/css/xterm.css";
-
-interface ShellOutputEvent {
-  shell_id: string;
-  data: string;
-}
 
 interface ActiveSshSession {
   shellId: string;
@@ -216,7 +210,6 @@ export const SshTerminalPanel = forwardRef<SshTerminalPanelHandle, Props>(functi
     if (!activeSession || !terminalContainerRef.current) return;
     const container = terminalContainerRef.current;
     let cleaned = false;
-    let unlisten: (() => void) | null = null;
     let initTimeoutId: number | null = null;
 
     const { term, fitAddon } = initTerminal(themeVariant, 5000, terminalFontSize, monoFontFamily);
@@ -239,6 +232,10 @@ export const SshTerminalPanel = forwardRef<SshTerminalPanelHandle, Props>(functi
       writer.pauseForUserInput();
       invoke("send_input", { taskId: activeSession.shellId, data }).catch(console.error);
     });
+    const outputChannel = new Channel<string>();
+    outputChannel.onmessage = (data) => {
+      if (!cleaned) writer.write(data);
+    };
 
     const fit = () => {
       if (cleaned) return;
@@ -262,6 +259,7 @@ export const SshTerminalPanel = forwardRef<SshTerminalPanelHandle, Props>(functi
         connection: activeSession.connection,
         cols: term.cols,
         rows: term.rows,
+        onOutput: outputChannel,
       })
         .then(() => {
           onReady?.();
@@ -281,19 +279,9 @@ export const SshTerminalPanel = forwardRef<SshTerminalPanelHandle, Props>(functi
     });
     resizeObserver.observe(container);
 
-    listen<ShellOutputEvent>("shell-output", (event) => {
-      if (event.payload.shell_id === activeSession.shellId) {
-        writer.write(event.payload.data);
-      }
-    }).then((fn) => {
-      if (cleaned) fn();
-      else unlisten = fn;
-    });
-
     return () => {
       cleaned = true;
       if (initTimeoutId !== null) window.clearTimeout(initTimeoutId);
-      unlisten?.();
       resizeObserver.disconnect();
       disposeSmartCopy();
       input.dispose();

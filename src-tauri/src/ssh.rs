@@ -172,11 +172,11 @@ fn build_remote_resume_command(
 }
 
 fn build_ssh_args(connection: &SshConnection, force_tty: bool) -> Vec<String> {
-    let mut args = vec![
-        if force_tty { "-tt" } else { "-T" }.to_string(),
-        "-p".to_string(),
-        connection.port.to_string(),
-    ];
+    let mut args = vec![if force_tty { "-tt" } else { "-T" }.to_string()];
+    if force_tty {
+        args.extend(["-o".to_string(), "IPQoS=none".to_string()]);
+    }
+    args.extend(["-p".to_string(), connection.port.to_string()]);
     if let Some(identity_file) = connection
         .identity_file
         .as_ref()
@@ -491,6 +491,7 @@ pub async fn open_ssh_shell(
     connection: SshConnection,
     cols: Option<u16>,
     rows: Option<u16>,
+    on_output: Channel<String>,
 ) -> Result<(), String> {
     let child_arc = task_manager.child_handles.lock().get(&shell_id).cloned();
     if let Some(arc) = child_arc {
@@ -528,10 +529,7 @@ pub async fn open_ssh_shell(
     crate::pty::spawn_pty_reader(
         app,
         shell_id,
-        crate::pty::OutputSink::Event {
-            event_name: "shell-output",
-            id_key: "shell_id",
-        },
+        crate::pty::OutputSink::Channel(on_output),
         crate::pty::PtyEmitMode::Immediate,
         reader,
         false,
@@ -674,7 +672,17 @@ mod tests {
             true,
         );
 
-        assert_eq!(args, vec!["-tt", "-p", "22", "deploy@prod.example.com"]);
+        assert_eq!(
+            args,
+            vec![
+                "-tt",
+                "-o",
+                "IPQoS=none",
+                "-p",
+                "22",
+                "deploy@prod.example.com"
+            ]
+        );
     }
 
     #[test]
@@ -701,6 +709,8 @@ mod tests {
             args,
             vec![
                 "-tt",
+                "-o",
+                "IPQoS=none",
                 "-p",
                 "2200",
                 "-i",
@@ -787,8 +797,8 @@ mod tests {
             true,
         );
 
-        assert_eq!(args[3], "deploy && whoami@prod.example.com; touch /tmp/bad");
-        assert_eq!(args.len(), 4);
+        assert_eq!(args[5], "deploy && whoami@prod.example.com; touch /tmp/bad");
+        assert_eq!(args.len(), 6);
     }
 
     #[test]

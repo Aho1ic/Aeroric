@@ -34,13 +34,13 @@ const totals: UsageStatisticsTotals = {
 function result(rangeDays: UsageStatisticsRange, agent: UsageStatisticsAgent): UsageStatistics {
   return {
     rangeDays,
-    from: "2026-07-10",
-    to: "2026-07-16",
+    from: "2026-07-11",
+    to: "2026-07-17",
     agent,
-    updatedAt: Date.UTC(2026, 6, 16, 12, 0, 0),
+    updatedAt: Date.UTC(2026, 6, 17, 12, 0, 0),
     totals,
     series: Array.from({ length: rangeDays }, (_, index) => ({
-      date: `2026-07-${String(16 - (rangeDays - index - 1)).padStart(2, "0")}`,
+      date: `2026-07-${String(17 - (rangeDays - index - 1)).padStart(2, "0")}`,
       ...totals,
     })),
     breakdown: {
@@ -118,5 +118,29 @@ describe("UsageDashboard", () => {
     // (the previous bug rendered "US$" even when the UI was English).
     expect(await screen.findByText("US$0.1234")).toBeInTheDocument();
     expect(screen.queryByText("$0.1234")).not.toBeInTheDocument();
+  });
+
+  it("keeps the date range on one line and limits bars for short ranges", async () => {
+    localStorage.setItem("aeroric:language", "zh");
+    const user = userEvent.setup();
+    const { container } = render(
+      <I18nProvider>
+        <UsageDashboard />
+      </I18nProvider>,
+    );
+
+    const dateRange = await screen.findByText("2026年7月11日 – 2026年7月17日");
+    expect(dateRange).toHaveStyle({ whiteSpace: "nowrap" });
+
+    const bars = Array.from(container.querySelectorAll<HTMLElement>(".usage-chart-bar"));
+    expect(bars).toHaveLength(7);
+    expect(bars.every((bar) => bar.style.maxWidth === "28px")).toBe(true);
+
+    await user.click(screen.getByRole("button", { name: "当天" }));
+    await waitFor(() => {
+      const todayBars = Array.from(container.querySelectorAll<HTMLElement>(".usage-chart-bar"));
+      expect(todayBars).toHaveLength(1);
+      expect(todayBars[0]).toHaveStyle({ maxWidth: "32px" });
+    });
   });
 });

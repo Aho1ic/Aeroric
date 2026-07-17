@@ -285,8 +285,8 @@ pub(crate) enum PtyEmitMode {
     },
 }
 
-/// 输出归宿：agent 任务用 Channel 直投单一前端订阅者，跳过事件总线的全局广播 + JSON
-/// 事件 payload；shell 终端仍走 emit 事件，多面板挂载时由前端按 shell_id 筛选。
+/// 输出归宿：agent / SSH 任务用 Channel 直投单一前端订阅者，跳过事件总线的全局广播
+/// 与 JSON payload；本地 shell 仍走 emit，多面板挂载时由前端按 shell_id 筛选。
 #[derive(Clone)]
 pub(crate) enum OutputSink {
     Event {
@@ -322,7 +322,7 @@ fn flush_pty_batch(app: &AppHandle, id: &str, sink: &OutputSink, batch: &mut Str
 
 /// 在后台线程中读取 PTY 输出，按 sink 把数据投递给前端。
 ///
-/// - `sink`：agent 任务传 `OutputSink::Channel`（直投单订阅者），shell 传 `OutputSink::Event`
+/// - `sink`：agent / SSH 传 `OutputSink::Channel`，本地 shell 传 `OutputSink::Event`
 /// - `session_tx`：可选 channel，用于将原始文本转发给 session watcher
 /// - `startup_tx`：首批有效输出出现时通知等待注入初始输入的任务
 /// - `on_finish`：PTY 关闭后执行的可选清理回调

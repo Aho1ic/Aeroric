@@ -154,6 +154,7 @@ function UsageChart({
 }: {
   series: UsageStatisticsDay[];
   labels: {
+    total: string;
     input: string;
     output: string;
     cacheCreation: string;
@@ -161,9 +162,14 @@ function UsageChart({
   };
   locale: string;
 }) {
+  const [activeIndex, setActiveIndex] = useState<number | null>(null);
   const max = Math.max(1, ...series.map((day) => day.totalTokens));
   const labelEvery = series.length <= 7 ? 1 : series.length <= 14 ? 2 : 5;
-  const minPlotWidth = Math.max(360, series.length * 25);
+  const compactBars = series.length <= 7;
+  const barMaxWidth = series.length === 1 ? 32 : compactBars ? 28 : 24;
+  const columnWidth = series.length === 1 ? 72 : compactBars ? 52 : undefined;
+  const minPlotWidth = compactBars ? 260 : Math.max(360, series.length * 25);
+  const activeDay = activeIndex === null ? null : series[activeIndex];
 
   return (
     <div style={s.usageChartViewport}>
@@ -175,7 +181,13 @@ function UsageChart({
           <span>{formatInteger(locale, Math.round(max * 0.25))}</span>
           <span>0</span>
         </div>
-        <div style={{ ...s.usageChartPlot, minWidth: minPlotWidth }}>
+        <div
+          style={{
+            ...s.usageChartPlot,
+            minWidth: minPlotWidth,
+            justifyContent: compactBars ? "center" : "stretch",
+          }}
+        >
           {series.map((day, index) => {
             const height = day.totalTokens === 0 ? 0 : Math.max(2, (day.totalTokens / max) * 192);
             const title = [
@@ -192,8 +204,30 @@ function UsageChart({
             });
 
             return (
-              <div key={day.date} style={s.usageChartColumn} title={title}>
-                <div className="usage-chart-bar" style={{ ...s.usageChartBar, height }}>
+              <div
+                key={day.date}
+                className="usage-chart-column"
+                style={{
+                  ...s.usageChartColumn,
+                  flex: columnWidth ? `0 0 ${columnWidth}px` : "1 1 0",
+                  maxWidth: columnWidth,
+                }}
+                tabIndex={0}
+                aria-label={title.split("\n").join(", ")}
+                onMouseEnter={() => setActiveIndex(index)}
+                onMouseLeave={() => setActiveIndex(null)}
+                onFocus={() => setActiveIndex(index)}
+                onBlur={() => setActiveIndex(null)}
+              >
+                <div
+                  className="usage-chart-bar"
+                  style={{
+                    ...s.usageChartBar,
+                    width: "100%",
+                    maxWidth: barMaxWidth,
+                    height,
+                  }}
+                >
                   <span style={segment(day.inputTokens, "var(--accent)")} />
                   <span style={segment(day.outputTokens, "var(--success)")} />
                   <span style={segment(day.cacheCreationTokens, "var(--warning)")} />
@@ -209,6 +243,38 @@ function UsageChart({
           })}
         </div>
       </div>
+      {activeDay && (
+        <div style={s.usageChartTooltip} role="status">
+          <div style={s.usageChartTooltipHead}>
+            <strong>{formatDate(locale, activeDay.date, true)}</strong>
+            <span>{formatInteger(locale, activeDay.totalTokens)}</span>
+          </div>
+          {[
+            { label: labels.input, value: activeDay.inputTokens, color: "var(--accent)" },
+            { label: labels.output, value: activeDay.outputTokens, color: "var(--success)" },
+            {
+              label: labels.cacheCreation,
+              value: activeDay.cacheCreationTokens,
+              color: "var(--warning)",
+            },
+            {
+              label: labels.cacheRead,
+              value: activeDay.cacheReadTokens,
+              color: "var(--icon-file-ts)",
+            },
+          ].map((item) => (
+            <div key={item.label} style={s.usageChartTooltipRow}>
+              <span style={{ ...s.usageLegendSwatch, background: item.color }} />
+              <span>{item.label}</span>
+              <strong>{formatInteger(locale, item.value)}</strong>
+            </div>
+          ))}
+          <div style={s.usageChartTooltipTotal}>
+            <span>{labels.total}</span>
+            <strong>{formatInteger(locale, activeDay.totalTokens)}</strong>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -459,6 +525,7 @@ export function UsageDashboard({ embedded = false }: { embedded?: boolean }) {
                 <UsageChart
                   series={statistics.series}
                   labels={{
+                    total: t("usageStats.totalTokens"),
                     input: t("usageStats.inputTokens"),
                     output: t("usageStats.outputTokens"),
                     cacheCreation: t("usageStats.cacheCreation"),
