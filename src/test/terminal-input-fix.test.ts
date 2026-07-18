@@ -750,6 +750,79 @@ describe("terminal input fixes", () => {
     vi.useRealTimers();
   });
 
+  it("does not suppress a new Chinese preedit as stale post-composition replay", async () => {
+    vi.useFakeTimers();
+    vi.resetModules();
+    vi.doMock("../platform", () => ({
+      APP_PLATFORM: "macos",
+      ENABLE_USAGE_INSIGHTS: true,
+      IS_MAC_WEBKIT: true,
+      IS_OTHER_WEBKIT: false,
+      detectAppPlatform: () => "macos",
+      isAppleWebKit: () => true,
+    }));
+    const { attachLinuxIMEFix } = await import("../components/terminalInputFix");
+    const terminalElement = document.createElement("div");
+    terminalElement.className = "xterm";
+    const textarea = document.createElement("textarea");
+    terminalElement.appendChild(textarea);
+    document.body.appendChild(terminalElement);
+    const sent: string[] = [];
+    const term = {
+      textarea,
+      onData: (listener: (data: string) => void) => {
+        void listener;
+        return { dispose: vi.fn() };
+      },
+    };
+
+    const disposable = attachLinuxIMEFix(term as never, (data) => sent.push(data));
+    textarea.focus();
+
+    textarea.dispatchEvent(new CompositionEvent("compositionstart", { data: "" }));
+    textarea.dispatchEvent(new CompositionEvent("compositionupdate", { data: "dangqian" }));
+    textarea.dispatchEvent(
+      new InputEvent("beforeinput", {
+        inputType: "insertText",
+        data: "当前",
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    vi.advanceTimersByTime(40);
+
+    textarea.dispatchEvent(new CompositionEvent("compositionstart", { data: "" }));
+    textarea.dispatchEvent(new CompositionEvent("compositionupdate", { data: "d" }));
+    const firstPreedit = new InputEvent("beforeinput", {
+      inputType: "insertCompositionText",
+      data: "d",
+      isComposing: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    textarea.dispatchEvent(firstPreedit);
+
+    expect(firstPreedit.defaultPrevented).toBe(false);
+    expect(sent).toEqual(["当前"]);
+
+    textarea.dispatchEvent(new CompositionEvent("compositionupdate", { data: "de" }));
+    textarea.dispatchEvent(
+      new InputEvent("beforeinput", {
+        inputType: "insertText",
+        data: "的",
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    vi.runOnlyPendingTimers();
+
+    expect(sent).toEqual(["当前", "的"]);
+    expect(document.activeElement).toBe(textarea);
+    disposable.dispose();
+    terminalElement.remove();
+    vi.useRealTimers();
+  });
+
   it("hides xterm composition view when suppressing compositionend replay", async () => {
     vi.useFakeTimers();
     vi.resetModules();

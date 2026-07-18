@@ -970,6 +970,8 @@ export function attachLinuxIMEFix(
     }
 
     if (
+      !isComposing &&
+      !event.isComposing &&
       event.data &&
       isTextInsertInputType(event.inputType) &&
       performance.now() <= ignorePostCompositionUntil &&
@@ -1052,6 +1054,8 @@ export function attachLinuxIMEFix(
     }
 
     if (
+      !isComposing &&
+      !event.isComposing &&
       isTextInsertInputType(event.inputType) &&
       event.data &&
       performance.now() <= ignorePostCompositionUntil &&
