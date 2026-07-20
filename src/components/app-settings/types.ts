@@ -74,6 +74,19 @@ export interface AgentSetupDraft {
 
 export interface AgentModels {
   models: string[];
+  balance?: AgentBalance | null;
+}
+
+export interface AgentBalance {
+  used: number;
+  total: number;
+}
+
+export function formatAgentBalance(balance: AgentBalance, language: "en" | "zh"): string {
+  const formatter = new Intl.NumberFormat(language === "zh" ? "zh-CN" : "en-US", {
+    maximumFractionDigits: 6,
+  });
+  return `${formatter.format(balance.used)} / ${formatter.format(balance.total)}`;
 }
 
 export type AgentKey = AgentType;

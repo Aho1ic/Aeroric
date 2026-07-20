@@ -7,7 +7,9 @@ import s from "../../styles";
 import { AgentPathSection } from "./AgentPathSection";
 import {
   APP_SETTINGS_CHANGED_EVENT,
+  formatAgentBalance,
   type AgentKey,
+  type AgentBalance,
   type AgentModels,
   type AppSettings,
 } from "./types";
@@ -80,7 +82,7 @@ export function AgentConfigPanel({
   onDeleted?: () => void;
   onImported?: (agentId: string) => void;
 }) {
-  const { t } = useI18n();
+  const { language, t } = useI18n();
   const [resolvedFilePath, setResolvedFilePath] = useState(filePath);
   const [fileState, setFileState] = useState<FileState>({ status: "loading" });
   const [original, setOriginal] = useState("");
@@ -94,6 +96,7 @@ export function AgentConfigPanel({
   const [saved, setSaved] = useState(false);
   const [customProfile, setCustomProfile] = useState<CustomAgentProfile | null>(null);
   const [detectedModels, setDetectedModels] = useState<string[]>([]);
+  const [detectedBalance, setDetectedBalance] = useState<AgentBalance | null>(null);
   const [selectedModels, setSelectedModels] = useState<string[]>([]);
   const [originalSelectedModels, setOriginalSelectedModels] = useState<string[]>([]);
   const [detectingModels, setDetectingModels] = useState(false);
@@ -169,12 +172,14 @@ export function AgentConfigPanel({
     if (!deletable) {
       setCustomProfile(null);
       setDetectedModels([]);
+      setDetectedBalance(null);
       setSelectedModels([]);
       setOriginalSelectedModels([]);
       setEnable1mContext(false);
       setOriginalEnable1mContext(false);
       return;
     }
+    setDetectedBalance(null);
     let cancelled = false;
     invoke<AppSettings>("load_app_settings")
       .then((settings) => {
@@ -184,6 +189,7 @@ export function AgentConfigPanel({
         const savedModels = normalizeModels(profile?.models ?? []);
         setCustomProfile(profile);
         setDetectedModels(savedModels);
+        setDetectedBalance(null);
         setSelectedModels(savedModels);
         setOriginalSelectedModels(savedModels);
         const contextEnabled = Boolean(profile?.enable_1m_context);
@@ -341,6 +347,7 @@ export function AgentConfigPanel({
     setDetectingModels(true);
     setError(null);
     setSaved(false);
+    setDetectedBalance(null);
     try {
       const detected = await invoke<AgentModels>("detect_agent_models", {
         kind: customProfile.codex_like ? "codex" : "claude_code",
@@ -351,6 +358,7 @@ export function AgentConfigPanel({
       const selected = new Set(selectedModels.length > 0 ? selectedModels : originalSelectedModels);
       const retained = nextModels.filter((model) => selected.has(model));
       setDetectedModels(nextModels);
+      setDetectedBalance(detected.balance ?? null);
       setSelectedModels(retained);
     } catch (e) {
       setError(String(e));
@@ -591,6 +599,29 @@ export function AgentConfigPanel({
                     ? t("appSettings.detectingModels")
                     : t("appSettings.detectModels")}
                 </Button>
+                {detectedBalance && (
+                  <span
+                    role="status"
+                    style={{
+                      display: "inline-flex",
+                      alignItems: "center",
+                      minHeight: 30,
+                      padding: "0 8px",
+                      border:
+                        "1px solid color-mix(in srgb, var(--success) 30%, var(--border-medium))",
+                      borderRadius: "var(--radius-sm)",
+                      color: "var(--success)",
+                      background: "color-mix(in srgb, var(--success) 8%, transparent)",
+                      fontSize: 11.5,
+                      fontVariantNumeric: "tabular-nums",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    {t("appSettings.keyBalanceAvailable", {
+                      amount: formatAgentBalance(detectedBalance, language),
+                    })}
+                  </span>
+                )}
                 <Button
                   variant="outline"
                   size="sm"

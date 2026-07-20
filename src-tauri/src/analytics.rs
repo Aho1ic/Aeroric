@@ -1,5 +1,6 @@
 // ── Session metrics ───────────────────────────────────────────────────────────
 
+use chrono::Timelike;
 use once_cell::sync::Lazy;
 use parking_lot::Mutex;
 use serde_json::Value;
@@ -293,6 +294,8 @@ pub(crate) struct UsageStatisticsTotals {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct UsageStatisticsDay {
     pub(crate) date: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) hour: Option<u32>,
     #[serde(flatten)]
     pub(crate) totals: UsageStatisticsTotals,
 }
@@ -587,8 +590,48 @@ fn aggregate_requests(
     from: chrono::NaiveDate,
     to: chrono::NaiveDate,
     agent: Option<UsageAgent>,
+    hourly: bool,
 ) -> (UsageStatisticsTotals, Vec<UsageStatisticsDay>) {
     let mut totals = UsageStatisticsTotals::default();
+
+    if hourly {
+        let current_hour = chrono::Local::now().hour();
+        let mut hours = BTreeMap::<u32, UsageStatisticsTotals>::new();
+        for hour in 0..=current_hour {
+            hours.insert(hour, UsageStatisticsTotals::default());
+        }
+
+        for request in requests {
+            if request.date != from || request.date > to {
+                continue;
+            }
+            if agent.is_some_and(|selected| selected != request.agent) {
+                continue;
+            }
+            add_request(&mut totals, request);
+            let hour = chrono::DateTime::from_timestamp(request.timestamp.trunc() as i64, 0)
+                .map(|timestamp| timestamp.with_timezone(&chrono::Local).hour())
+                .unwrap_or_default();
+            if let Some(bucket) = hours.get_mut(&hour) {
+                add_request(bucket, request);
+            }
+        }
+
+        finalize_totals(&mut totals);
+        let series = hours
+            .into_iter()
+            .map(|(hour, mut bucket)| {
+                finalize_totals(&mut bucket);
+                UsageStatisticsDay {
+                    date: from.to_string(),
+                    hour: Some(hour),
+                    totals: bucket,
+                }
+            })
+            .collect();
+        return (totals, series);
+    }
+
     let mut days = BTreeMap::<chrono::NaiveDate, UsageStatisticsTotals>::new();
     let mut date = from;
     while date <= to {
@@ -616,6 +659,7 @@ fn aggregate_requests(
             finalize_totals(&mut day);
             UsageStatisticsDay {
                 date: date.to_string(),
+                hour: None,
                 totals: day,
             }
         })
@@ -690,9 +734,9 @@ fn read_usage_statistics_sync(range_days: u32, agent: String) -> Result<UsageSta
     let from = to - chrono::Duration::days(i64::from(range_days - 1));
     let requests = crate::usage_index::load_requests(from, to)?;
 
-    let (totals, series) = aggregate_requests(&requests, from, to, selected_agent);
-    let (codex, _) = aggregate_requests(&requests, from, to, Some(UsageAgent::Codex));
-    let (claude, _) = aggregate_requests(&requests, from, to, Some(UsageAgent::Claude));
+    let (totals, series) = aggregate_requests(&requests, from, to, selected_agent, range_days == 1);
+    let (codex, _) = aggregate_requests(&requests, from, to, Some(UsageAgent::Codex), false);
+    let (claude, _) = aggregate_requests(&requests, from, to, Some(UsageAgent::Claude), false);
 
     Ok(UsageStatistics {
         range_days,
@@ -776,13 +820,42 @@ mod usage_statistics_tests {
         ];
 
         let (totals, series) =
-            aggregate_requests(&requests, date(2026, 7, 14), date(2026, 7, 15), None);
+            aggregate_requests(&requests, date(2026, 7, 14), date(2026, 7, 15), None, false);
 
         assert_eq!(totals.request_count, 1);
         assert_eq!(totals.total_tokens, 110);
         assert_eq!(totals.cache_hit_rate, 0.5);
         assert_eq!(series.len(), 2);
         assert_eq!(series[1].totals.request_count, 0);
+    }
+
+    #[test]
+    fn hourly_aggregation_ends_with_the_current_local_hour() {
+        let now = chrono::Local::now();
+        let today = now.date_naive();
+        let requests = vec![UsageRequest {
+            timestamp: now.timestamp() as f64,
+            date: today,
+            agent: UsageAgent::Codex,
+            model: "gpt-5.5".to_owned(),
+            input_tokens: 50,
+            output_tokens: 10,
+            cache_creation_tokens: 0,
+            cache_read_tokens: 20,
+        }];
+
+        let (totals, series) = aggregate_requests(&requests, today, today, None, true);
+
+        assert_eq!(totals.request_count, 1);
+        assert_eq!(series.len(), now.hour() as usize + 1);
+        assert_eq!(
+            series.last().and_then(|bucket| bucket.hour),
+            Some(now.hour())
+        );
+        assert_eq!(
+            series.last().map(|bucket| bucket.totals.request_count),
+            Some(1)
+        );
     }
 
     #[test]
@@ -798,7 +871,8 @@ mod usage_statistics_tests {
             cache_read_tokens: 0,
         }];
 
-        let (totals, _) = aggregate_requests(&requests, date(2026, 7, 15), date(2026, 7, 15), None);
+        let (totals, _) =
+            aggregate_requests(&requests, date(2026, 7, 15), date(2026, 7, 15), None, false);
 
         assert_eq!(totals.priced_request_count, 0);
         assert_eq!(totals.unpriced_request_count, 1);

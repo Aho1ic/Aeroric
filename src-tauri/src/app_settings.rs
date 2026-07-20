@@ -5,6 +5,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::OnceLock;
+use std::time::Duration;
 
 use crate::storage::{atomic_write, atomic_write_private};
 
@@ -87,6 +88,14 @@ pub struct AgentSetupDraft {
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 pub struct AgentModels {
     pub models: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub balance: Option<AgentBalance>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct AgentBalance {
+    pub used: f64,
+    pub total: f64,
 }
 
 const AGENT_CONFIG_BUNDLE_FORMAT: &str = "aeroric.agent-config";
@@ -914,6 +923,53 @@ fn model_endpoint(base_url: &str) -> String {
     } else {
         format!("{}/v1/models", base)
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum AgentBalanceProvider {
+    OpenRouter,
+}
+
+fn balance_provider(base_url: &str) -> Option<AgentBalanceProvider> {
+    let url = url::Url::parse(base_url.trim()).ok()?;
+    let host = url.host_str()?.to_ascii_lowercase();
+    if host == "openrouter.ai" {
+        return Some(AgentBalanceProvider::OpenRouter);
+    }
+    None
+}
+
+fn balance_endpoint(base_url: &str, provider: AgentBalanceProvider) -> Option<String> {
+    let mut url = url::Url::parse(base_url.trim()).ok()?;
+    url.set_query(None);
+    url.set_fragment(None);
+    url.set_path(match provider {
+        AgentBalanceProvider::OpenRouter => "/api/v1/key",
+    });
+    Some(url.to_string())
+}
+
+fn parse_balance_number(value: &serde_json::Value) -> Option<f64> {
+    let number = value
+        .as_f64()
+        .or_else(|| value.as_str()?.trim().parse::<f64>().ok())?;
+    number.is_finite().then_some(number)
+}
+
+fn parse_agent_balance(
+    provider: AgentBalanceProvider,
+    value: &serde_json::Value,
+) -> Option<AgentBalance> {
+    let (used, total) = match provider {
+        AgentBalanceProvider::OpenRouter => {
+            let total = parse_balance_number(value.pointer("/data/limit")?)?;
+            let remaining = parse_balance_number(value.pointer("/data/limit_remaining")?)?;
+            (total - remaining, total)
+        }
+    };
+
+    (used.is_finite() && total.is_finite() && used >= 0.0 && total >= 0.0)
+        .then_some(AgentBalance { used, total })
 }
 
 fn looks_like_model_id(value: &str) -> bool {
@@ -2175,7 +2231,28 @@ pub async fn detect_agent_models(
         .await
         .map_err(|e| e.to_string())?;
     let models = parse_model_ids(value);
-    Ok(AgentModels { models })
+    let balance = balance_provider(&base_url).and_then(|provider| {
+        balance_endpoint(&base_url, provider).map(|endpoint| (provider, endpoint))
+    });
+    let balance = if let Some((provider, endpoint)) = balance {
+        let response = client
+            .get(endpoint)
+            .bearer_auth(&api_key)
+            .timeout(Duration::from_secs(5))
+            .send()
+            .await;
+        match response {
+            Ok(response) if response.status().is_success() => response
+                .json::<serde_json::Value>()
+                .await
+                .ok()
+                .and_then(|value| parse_agent_balance(provider, &value)),
+            _ => None,
+        }
+    } else {
+        None
+    };
+    Ok(AgentModels { models, balance })
 }
 
 #[tauri::command]
@@ -2189,18 +2266,25 @@ pub async fn list_agent_models(agent: String) -> Result<AgentModels, String> {
         {
             let models = normalize_model_list(profile.models.clone());
             if !models.is_empty() {
-                return Ok(AgentModels { models });
+                return Ok(AgentModels {
+                    models,
+                    balance: None,
+                });
             }
         }
 
         if agent == "claude" {
             return Ok(AgentModels {
                 models: list_builtin_claude_models(),
+                balance: None,
             });
         }
 
         if !is_codex_like_agent(&agent) {
-            return Ok(AgentModels { models: Vec::new() });
+            return Ok(AgentModels {
+                models: Vec::new(),
+                balance: None,
+            });
         }
 
         let launch = get_agent_launch_spec(&agent);
@@ -2228,6 +2312,7 @@ pub async fn list_agent_models(agent: String) -> Result<AgentModels, String> {
         let stdout = String::from_utf8_lossy(&output.stdout);
         Ok(AgentModels {
             models: parse_codex_model_catalog(&stdout)?,
+            balance: None,
         })
     })
     .await
@@ -3581,6 +3666,47 @@ mod tests {
         });
 
         assert_eq!(parse_model_ids(value), vec!["a-model", "z-model"]);
+    }
+
+    #[test]
+    fn detects_supported_balance_providers_and_endpoints() {
+        let openrouter = "https://openrouter.ai/api/v1";
+
+        assert_eq!(
+            balance_provider(openrouter),
+            Some(AgentBalanceProvider::OpenRouter)
+        );
+        assert_eq!(
+            balance_endpoint(openrouter, AgentBalanceProvider::OpenRouter).as_deref(),
+            Some("https://openrouter.ai/api/v1/key")
+        );
+        assert_eq!(balance_provider("https://example.com/v1"), None);
+    }
+
+    #[test]
+    fn parses_openrouter_key_balance() {
+        let value = serde_json::json!({
+            "data": {
+                "limit": 100,
+                "limit_remaining": 42.75,
+                "usage": 57.25
+            }
+        });
+
+        assert_eq!(
+            parse_agent_balance(AgentBalanceProvider::OpenRouter, &value),
+            Some(AgentBalance {
+                used: 57.25,
+                total: 100.0,
+            })
+        );
+        assert_eq!(
+            parse_agent_balance(
+                AgentBalanceProvider::OpenRouter,
+                &serde_json::json!({ "data": { "limit_remaining": null } })
+            ),
+            None
+        );
     }
 
     #[test]

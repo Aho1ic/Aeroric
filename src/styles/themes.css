@@ -98,6 +98,10 @@
   --usage-warn: #f59e0b;
   --usage-danger: #ef4444;
   --usage-codex: #a78bfa;
+  --usage-chart-input: #7894b5;
+  --usage-chart-output: #7da894;
+  --usage-chart-cache-creation: #c3a36f;
+  --usage-chart-cache-read: #a18aae;
 
   --warning-surface: rgba(234, 179, 8, 0.1);
   --warning-subtle: var(--warning-surface);
@@ -289,6 +293,10 @@ html.dark {
   --usage-warn: #fbbf24;
   --usage-danger: #f87171;
   --usage-codex: #c4b5fd;
+  --usage-chart-input: #86a8cf;
+  --usage-chart-output: #8fbea3;
+  --usage-chart-cache-creation: #d5b77d;
+  --usage-chart-cache-read: #bda4c9;
 
   --danger-fg: #f85149;
   --diff-add-fg: #3fb950;

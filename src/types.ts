@@ -744,6 +744,7 @@ export interface UsageStatisticsTotals {
 
 export interface UsageStatisticsDay extends UsageStatisticsTotals {
   date: string;
+  hour?: number;
 }
 
 export interface UsageStatistics {

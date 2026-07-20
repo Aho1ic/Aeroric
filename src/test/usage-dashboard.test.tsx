@@ -32,6 +32,18 @@ const totals: UsageStatisticsTotals = {
 };
 
 function result(rangeDays: UsageStatisticsRange, agent: UsageStatisticsAgent): UsageStatistics {
+  const series =
+    rangeDays === 1
+      ? Array.from({ length: 6 }, (_, hour) => ({
+          date: "2026-07-17",
+          hour,
+          ...totals,
+        }))
+      : Array.from({ length: rangeDays }, (_, index) => ({
+          date: `2026-07-${String(17 - (rangeDays - index - 1)).padStart(2, "0")}`,
+          ...totals,
+        }));
+
   return {
     rangeDays,
     from: "2026-07-11",
@@ -39,10 +51,7 @@ function result(rangeDays: UsageStatisticsRange, agent: UsageStatisticsAgent): U
     agent,
     updatedAt: Date.UTC(2026, 6, 17, 12, 0, 0),
     totals,
-    series: Array.from({ length: rangeDays }, (_, index) => ({
-      date: `2026-07-${String(17 - (rangeDays - index - 1)).padStart(2, "0")}`,
-      ...totals,
-    })),
+    series,
     breakdown: {
       codex: { ...totals, totalTokens: 1000, requestCount: 8 },
       claude: { ...totals, totalTokens: 500, requestCount: 4 },
@@ -120,7 +129,7 @@ describe("UsageDashboard", () => {
     expect(screen.queryByText("$0.1234")).not.toBeInTheDocument();
   });
 
-  it("keeps the date range on one line and gives the home chart a larger immersive plot", async () => {
+  it("keeps the date range on one line and renders today as an hourly immersive plot", async () => {
     localStorage.setItem("aeroric:language", "zh");
     const user = userEvent.setup();
     const { container } = render(
@@ -139,14 +148,17 @@ describe("UsageDashboard", () => {
     expect(container.querySelector(".usage-chart-home")).toHaveStyle({ height: "354px" });
     expect(container.querySelectorAll(".usage-chart-axis-tick")).toHaveLength(6);
     expect(container.querySelectorAll(".usage-chart-grid > span")).toHaveLength(6);
-    expect(container.querySelector(".usage-metric-card")).toHaveStyle({ borderRadius: "18px" });
+    expect(container.querySelector(".usage-metric-card")).toHaveStyle({ borderRadius: "8px" });
 
     await user.click(screen.getByRole("button", { name: "当天" }));
     await waitFor(() => {
       const todayBars = Array.from(container.querySelectorAll<HTMLElement>(".usage-chart-bar"));
-      expect(todayBars).toHaveLength(1);
-      expect(todayBars[0]).toHaveStyle({ maxWidth: "72px" });
+      expect(todayBars).toHaveLength(6);
+      expect(todayBars.every((bar) => bar.style.maxWidth === "26px")).toBe(true);
     });
+    expect(screen.getByText("每小时用量")).toBeInTheDocument();
+    const hourColumns = container.querySelectorAll<HTMLElement>(".usage-chart-column");
+    expect(hourColumns[hourColumns.length - 1]?.getAttribute("aria-label")).toContain("05:00");
   });
 
   it("keeps the compact settings chart dimensions unchanged", async () => {

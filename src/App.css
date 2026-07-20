@@ -373,27 +373,15 @@ body {
   position: relative;
   isolation: isolate;
   overflow: hidden;
-  background:
-    radial-gradient(
-      ellipse at 18% -10%,
-      color-mix(in srgb, var(--accent) 14%, transparent),
-      transparent 42%
-    ),
-    radial-gradient(
-      ellipse at 88% 8%,
-      color-mix(in srgb, var(--icon-file-ts) 11%, transparent),
-      transparent 38%
-    ),
-    linear-gradient(
-      145deg,
-      color-mix(in srgb, var(--bg-card) 96%, var(--accent) 4%),
-      var(--bg-card) 58%,
-      color-mix(in srgb, var(--bg-card) 96%, var(--icon-file-ts) 4%)
-    ) !important;
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--bg-card) 97%, var(--usage-chart-input) 3%),
+    var(--bg-card) 58%,
+    color-mix(in srgb, var(--bg-card) 98%, var(--usage-chart-cache-read) 2%)
+  ) !important;
   box-shadow:
-    inset 0 1px 0 color-mix(in srgb, white 9%, transparent),
-    inset 0 0 80px color-mix(in srgb, var(--accent) 3%, transparent),
-    0 22px 60px color-mix(in srgb, var(--text-primary) 8%, transparent) !important;
+    inset 0 1px 0 color-mix(in srgb, white 8%, transparent),
+    0 12px 30px color-mix(in srgb, var(--text-primary) 7%, transparent) !important;
 }
 
 .usage-chart-section-home::before {
@@ -403,9 +391,16 @@ body {
   z-index: -1;
   pointer-events: none;
   background-image:
-    linear-gradient(color-mix(in srgb, var(--accent) 3%, transparent) 1px, transparent 1px),
-    linear-gradient(90deg, color-mix(in srgb, var(--accent) 3%, transparent) 1px, transparent 1px);
-  background-size: 32px 32px;
+    linear-gradient(
+      color-mix(in srgb, var(--usage-chart-input) 5%, transparent) 1px,
+      transparent 1px
+    ),
+    linear-gradient(
+      90deg,
+      color-mix(in srgb, var(--usage-chart-input) 5%, transparent) 1px,
+      transparent 1px
+    );
+  background-size: 28px 28px;
   mask-image: linear-gradient(to bottom, black, transparent 78%);
 }
 
@@ -420,21 +415,23 @@ body {
   background: linear-gradient(
     90deg,
     transparent,
-    color-mix(in srgb, var(--accent) 72%, white 28%),
-    color-mix(in srgb, var(--icon-file-ts) 68%, white 32%),
+    color-mix(in srgb, var(--usage-chart-input) 68%, white 32%),
+    color-mix(in srgb, var(--usage-chart-output) 68%, white 32%),
+    color-mix(in srgb, var(--usage-chart-cache-creation) 64%, white 36%),
     transparent
   );
-  box-shadow: 0 0 24px color-mix(in srgb, var(--accent) 42%, transparent);
+  box-shadow: 0 0 18px color-mix(in srgb, var(--usage-chart-input) 32%, transparent);
 }
 
 .usage-chart-viewport-home {
   padding: 10px 4px 4px !important;
-  scrollbar-color: color-mix(in srgb, var(--accent) 35%, var(--border-medium)) transparent;
+  scrollbar-color: color-mix(in srgb, var(--usage-chart-input) 42%, var(--border-medium))
+    transparent;
 }
 
 .usage-chart-home .usage-chart-grid > span {
   border-top-style: solid;
-  border-top-color: color-mix(in srgb, var(--accent) 11%, var(--border-dim));
+  border-top-color: color-mix(in srgb, var(--usage-chart-input) 14%, var(--border-dim));
 }
 
 .usage-chart-home .usage-chart-column::before {
@@ -442,11 +439,11 @@ body {
   position: absolute;
   inset: 10px 8% 38px;
   z-index: -1;
-  border-radius: 14px 14px 0 0;
+  border-radius: 7px 7px 0 0;
   opacity: 0;
   background: linear-gradient(
     to top,
-    color-mix(in srgb, var(--accent) 8%, transparent),
+    color-mix(in srgb, var(--usage-chart-input) 8%, transparent),
     transparent 74%
   );
   transition: opacity 180ms ease;
@@ -459,10 +456,9 @@ body {
 
 .usage-chart-bar[data-immersive] {
   box-shadow:
-    inset 0 0 0 1px color-mix(in srgb, white 14%, transparent),
-    inset 0 1px 0 color-mix(in srgb, white 24%, transparent),
-    0 0 24px color-mix(in srgb, var(--accent) 13%, transparent),
-    0 12px 34px color-mix(in srgb, var(--text-primary) 12%, transparent) !important;
+    inset 0 0 0 1px color-mix(in srgb, white 13%, transparent),
+    inset 0 1px 0 color-mix(in srgb, white 21%, transparent),
+    0 8px 20px color-mix(in srgb, var(--text-primary) 10%, transparent) !important;
 }
 
 .usage-chart-bar {
@@ -490,11 +486,11 @@ body {
 
 .usage-chart-column:hover .usage-chart-bar,
 .usage-chart-column:focus-visible .usage-chart-bar {
-  filter: saturate(1.2) brightness(1.08);
+  filter: saturate(1.06) brightness(1.06);
   transform: scaleX(1.08);
   box-shadow:
     inset 0 0 0 1px color-mix(in srgb, white 22%, transparent),
-    0 0 12px color-mix(in srgb, var(--accent) 18%, transparent),
+    0 0 12px color-mix(in srgb, var(--usage-chart-input) 20%, transparent),
     0 8px 24px color-mix(in srgb, var(--text-primary) 12%, transparent) !important;
 }
 
@@ -503,8 +499,8 @@ body {
 }
 
 .usage-chart-column[data-active] .usage-chart-label > span:first-child {
-  background: var(--accent);
-  box-shadow: 0 0 9px color-mix(in srgb, var(--accent) 70%, transparent);
+  background: var(--usage-chart-input);
+  box-shadow: 0 0 9px color-mix(in srgb, var(--usage-chart-input) 62%, transparent);
 }
 
 .usage-chart-label > span:first-child {
@@ -523,12 +519,12 @@ body {
 
 .usage-chart-column:focus-visible {
   border-radius: 8px;
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 30%, transparent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--usage-chart-input) 32%, transparent);
 }
 
 .usage-chart-column:hover .usage-chart-segment,
 .usage-chart-column:focus-visible .usage-chart-segment {
-  filter: saturate(1.16) brightness(1.06);
+  filter: saturate(1.05) brightness(1.05);
 }
 
 .usage-chart-bar-value {
@@ -546,7 +542,7 @@ body {
 
 .usage-chart-grid > span:first-child {
   border-top-style: solid;
-  border-top-color: color-mix(in srgb, var(--accent) 18%, var(--border-dim));
+  border-top-color: color-mix(in srgb, var(--usage-chart-input) 22%, var(--border-dim));
 }
 
 .usage-chart-axis-tick > i {
@@ -554,10 +550,10 @@ body {
   width: 5px;
   height: 5px;
   flex: 0 0 auto;
-  border: 1px solid color-mix(in srgb, var(--accent) 46%, var(--border-medium));
+  border: 1px solid color-mix(in srgb, var(--usage-chart-input) 52%, var(--border-medium));
   border-radius: 50%;
   background: var(--bg-card);
-  box-shadow: 0 0 7px color-mix(in srgb, var(--accent) 15%, transparent);
+  box-shadow: 0 0 7px color-mix(in srgb, var(--usage-chart-input) 18%, transparent);
 }
 
 .usage-source-fill {

@@ -121,6 +121,7 @@ function renderModelManagedAgentConfigPanel() {
     if (command === "detect_agent_models") {
       return Promise.resolve({
         models: ["gpt-5.6", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"],
+        balance: { used: 57.25, total: 100 },
       });
     }
     if (command === "update_custom_agent_models") {
@@ -282,6 +283,7 @@ function renderAddAgentPanel() {
     if (command === "detect_agent_models") {
       return Promise.resolve({
         models: ["gpt-5.6", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"],
+        balance: { used: 57.25, total: 100 },
       });
     }
     if (command === "setup_agent_profile") {
@@ -510,6 +512,7 @@ describe("Agent config and debug panel UI", () => {
     expect(screen.getByLabelText("gpt-5.6")).toBeChecked();
     await user.click(screen.getByRole("button", { name: /Detect Models/i }));
     await screen.findByLabelText("gpt-5.6-terra");
+    expect(screen.getByRole("status")).toHaveTextContent("Used / Total: 57.25 / 100");
     await user.click(screen.getByLabelText("gpt-5.6-terra"));
     await user.click(getEnabledSaveButton());
 
@@ -650,6 +653,7 @@ describe("Agent config and debug panel UI", () => {
     await user.click(screen.getByRole("button", { name: /Detect Models/i }));
 
     await screen.findByText("0 of 4 models selected");
+    expect(screen.getByRole("status")).toHaveTextContent("Used / Total: 57.25 / 100");
     expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
     const modelSearch = screen.getByRole("searchbox", { name: "Search models" });
     expect(modelSearch).toHaveStyle({ borderRadius: "999px" });

@@ -66,6 +66,17 @@ function formatDate(locale: string, value: string, includeYear = false): string 
   }).format(date);
 }
 
+function formatHour(locale: string, value: string, hour: number, includeDate = false): string {
+  const date = new Date(`${value}T00:00:00`);
+  const hourDate = new Date(date.getTime() + hour * 60 * 60 * 1000);
+  const hourLabel = new Intl.DateTimeFormat(locale, {
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).format(hourDate);
+  return includeDate ? `${formatDate(locale, value, true)} ${hourLabel}` : hourLabel;
+}
+
 function formatUpdatedTime(locale: string, value: number): string {
   return new Intl.DateTimeFormat(locale, {
     hour: "2-digit",
@@ -159,6 +170,7 @@ function UsageChart({
   labels,
   locale,
   immersive = false,
+  layoutWidth,
 }: {
   series: UsageStatisticsDay[];
   labels: {
@@ -170,40 +182,63 @@ function UsageChart({
   };
   locale: string;
   immersive?: boolean;
+  layoutWidth: number;
 }) {
   const [activeIndex, setActiveIndex] = useState<number | null>(null);
+  const viewportRef = useRef<HTMLDivElement | null>(null);
+  const hourly = series.some((bucket) => bucket.hour !== undefined);
   const max = Math.max(1, ...series.map((day) => day.totalTokens));
-  const labelEvery = series.length <= 7 ? 1 : series.length <= 14 ? 2 : 5;
-  const compactBars = series.length <= 7;
+  const labelEvery = hourly
+    ? series.length <= 12
+      ? 1
+      : 3
+    : series.length <= 7
+      ? 1
+      : series.length <= 14
+        ? 2
+        : 5;
+  const compactBars = hourly || series.length <= 7;
   const barMaxWidth = immersive
-    ? series.length === 1
-      ? 72
-      : compactBars
-        ? 48
-        : 32
+    ? hourly
+      ? 26
+      : series.length === 1
+        ? 72
+        : compactBars
+          ? 48
+          : 32
     : series.length === 1
       ? 32
       : compactBars
-        ? 28
+        ? hourly
+          ? 20
+          : 28
         : 24;
   const columnWidth = immersive
-    ? series.length === 1
-      ? 148
-      : compactBars
-        ? 92
-        : undefined
+    ? hourly
+      ? 32
+      : series.length === 1
+        ? 148
+        : compactBars
+          ? 92
+          : undefined
     : series.length === 1
       ? 72
       : compactBars
-        ? 52
+        ? hourly
+          ? 26
+          : 52
         : undefined;
   const minPlotWidth = immersive
-    ? compactBars
-      ? 560
-      : Math.max(720, series.length * 42)
-    : compactBars
-      ? 260
-      : Math.max(360, series.length * 25);
+    ? hourly
+      ? Math.max(720, series.length * 32)
+      : compactBars
+        ? 560
+        : Math.max(720, series.length * 42)
+    : hourly
+      ? Math.max(620, series.length * 26)
+      : compactBars
+        ? 260
+        : Math.max(360, series.length * 25);
   const plotHeight = immersive ? 300 : 216;
   const labelHeight = immersive ? 38 : 30;
   const activeDay = activeIndex === null ? null : series[activeIndex];
@@ -211,8 +246,16 @@ function UsageChart({
     ? [max, max * 0.8, max * 0.6, max * 0.4, max * 0.2, 0]
     : [max, max * 0.75, max * 0.5, max * 0.25, 0];
 
+  useEffect(() => {
+    const viewport = viewportRef.current;
+    if (hourly && viewport) {
+      viewport.scrollLeft = viewport.scrollWidth;
+    }
+  }, [hourly, immersive, layoutWidth, series.length]);
+
   return (
     <div
+      ref={viewportRef}
       className={immersive ? "usage-chart-viewport-home" : undefined}
       style={s.usageChartViewport}
     >
@@ -253,7 +296,7 @@ function UsageChart({
             justifyContent: compactBars ? "center" : "stretch",
             gap: immersive ? 18 : s.usageChartPlot.gap,
             padding: immersive ? "0 22px" : s.usageChartPlot.padding,
-            borderRadius: immersive ? "20px 20px 0 0" : s.usageChartPlot.borderRadius,
+            borderRadius: immersive ? "8px 8px 0 0" : s.usageChartPlot.borderRadius,
           }}
         >
           <div
@@ -268,8 +311,12 @@ function UsageChart({
           {series.map((day, index) => {
             const height =
               day.totalTokens === 0 ? 0 : Math.max(3, (day.totalTokens / max) * plotHeight);
+            const bucketLabel =
+              hourly && day.hour !== undefined
+                ? formatHour(locale, day.date, day.hour, true)
+                : formatDate(locale, day.date, true);
             const title = [
-              formatDate(locale, day.date, true),
+              bucketLabel,
               `${labels.input}: ${formatInteger(locale, day.inputTokens)}`,
               `${labels.output}: ${formatInteger(locale, day.outputTokens)}`,
               `${labels.cacheCreation}: ${formatInteger(locale, day.cacheCreationTokens)}`,
@@ -308,24 +355,24 @@ function UsageChart({
                     width: "100%",
                     maxWidth: barMaxWidth,
                     height,
-                    borderRadius: immersive ? "16px 16px 5px 5px" : s.usageChartBar.borderRadius,
+                    borderRadius: immersive ? "7px 7px 3px 3px" : s.usageChartBar.borderRadius,
                   }}
                 >
                   <span
                     className="usage-chart-segment"
-                    style={segment(day.inputTokens, "var(--accent)")}
+                    style={segment(day.inputTokens, "var(--usage-chart-input)")}
                   />
                   <span
                     className="usage-chart-segment"
-                    style={segment(day.outputTokens, "var(--success)")}
+                    style={segment(day.outputTokens, "var(--usage-chart-output)")}
                   />
                   <span
                     className="usage-chart-segment"
-                    style={segment(day.cacheCreationTokens, "var(--warning)")}
+                    style={segment(day.cacheCreationTokens, "var(--usage-chart-cache-creation)")}
                   />
                   <span
                     className="usage-chart-segment"
-                    style={segment(day.cacheReadTokens, "var(--icon-file-ts)")}
+                    style={segment(day.cacheReadTokens, "var(--usage-chart-cache-read)")}
                   />
                 </div>
                 {active && (
@@ -351,7 +398,11 @@ function UsageChart({
                 >
                   <span aria-hidden="true" />
                   {index % labelEvery === 0 || index === series.length - 1 ? (
-                    <strong>{formatDate(locale, day.date)}</strong>
+                    <strong>
+                      {hourly && day.hour !== undefined
+                        ? formatHour(locale, day.date, day.hour)
+                        : formatDate(locale, day.date)}
+                    </strong>
                   ) : null}
                 </div>
               </div>
@@ -362,21 +413,33 @@ function UsageChart({
       {activeDay && (
         <div style={s.usageChartTooltip} role="status">
           <div style={s.usageChartTooltipHead}>
-            <strong>{formatDate(locale, activeDay.date, true)}</strong>
+            <strong>
+              {hourly && activeDay.hour !== undefined
+                ? formatHour(locale, activeDay.date, activeDay.hour, true)
+                : formatDate(locale, activeDay.date, true)}
+            </strong>
             <span>{formatInteger(locale, activeDay.totalTokens)}</span>
           </div>
           {[
-            { label: labels.input, value: activeDay.inputTokens, color: "var(--accent)" },
-            { label: labels.output, value: activeDay.outputTokens, color: "var(--success)" },
+            {
+              label: labels.input,
+              value: activeDay.inputTokens,
+              color: "var(--usage-chart-input)",
+            },
+            {
+              label: labels.output,
+              value: activeDay.outputTokens,
+              color: "var(--usage-chart-output)",
+            },
             {
               label: labels.cacheCreation,
               value: activeDay.cacheCreationTokens,
-              color: "var(--warning)",
+              color: "var(--usage-chart-cache-creation)",
             },
             {
               label: labels.cacheRead,
               value: activeDay.cacheReadTokens,
-              color: "var(--icon-file-ts)",
+              color: "var(--usage-chart-cache-read)",
             },
           ].map((item) => (
             <div key={item.label} style={s.usageChartTooltipRow}>
@@ -623,7 +686,7 @@ export function UsageDashboard({ embedded = false }: { embedded?: boolean }) {
                   ? {
                       marginTop: 18,
                       padding: "24px 24px 20px",
-                      borderRadius: 24,
+                      borderRadius: 8,
                       minHeight: 450,
                     }
                   : null),
@@ -636,12 +699,26 @@ export function UsageDashboard({ embedded = false }: { embedded?: boolean }) {
                   flexDirection: width < 600 ? "column" : "row",
                 }}
               >
-                <div style={s.usageSectionTitle}>{t("usageStats.dailyUsage")}</div>
+                <div style={s.usageSectionTitle}>
+                  {rangeDays === 1 ? t("usageStats.hourlyUsage") : t("usageStats.dailyUsage")}
+                </div>
                 <div style={s.usageLegend}>
-                  <ChartLegend label={t("usageStats.inputTokens")} color="var(--accent)" />
-                  <ChartLegend label={t("usageStats.outputTokens")} color="var(--success)" />
-                  <ChartLegend label={t("usageStats.cacheCreation")} color="var(--warning)" />
-                  <ChartLegend label={t("usageStats.cacheRead")} color="var(--icon-file-ts)" />
+                  <ChartLegend
+                    label={t("usageStats.inputTokens")}
+                    color="var(--usage-chart-input)"
+                  />
+                  <ChartLegend
+                    label={t("usageStats.outputTokens")}
+                    color="var(--usage-chart-output)"
+                  />
+                  <ChartLegend
+                    label={t("usageStats.cacheCreation")}
+                    color="var(--usage-chart-cache-creation)"
+                  />
+                  <ChartLegend
+                    label={t("usageStats.cacheRead")}
+                    color="var(--usage-chart-cache-read)"
+                  />
                 </div>
               </div>
 
@@ -662,6 +739,7 @@ export function UsageDashboard({ embedded = false }: { embedded?: boolean }) {
                   }}
                   locale={locale}
                   immersive={!embedded}
+                  layoutWidth={width}
                 />
               )}
             </section>

@@ -14,7 +14,7 @@ export const usage = {
     alignItems: "flex-start",
     justifyContent: "space-between",
     gap: 18,
-    padding: "18px 22px 14px",
+    padding: "16px 20px 13px",
     borderBottom: "1px solid var(--border-dim)",
     flexShrink: 0,
   },
@@ -55,8 +55,9 @@ export const usage = {
     minHeight: 28,
     padding: "4px 9px",
     border: "1px solid var(--border-dim)",
-    borderRadius: "var(--radius-md)",
-    background: "var(--bg-subtle)",
+    borderRadius: 8,
+    background: "color-mix(in srgb, var(--bg-card) 82%, var(--bg-subtle))",
+    boxShadow: "inset 0 1px 0 color-mix(in srgb, white 5%, transparent)",
   },
   usageLiveText: {
     display: "flex",
@@ -73,14 +74,15 @@ export const usage = {
     gap: 3,
     padding: 3,
     border: "1px solid var(--border-dim)",
-    borderRadius: "var(--radius-md)",
-    background: "var(--bg-subtle)",
+    borderRadius: 8,
+    background: "color-mix(in srgb, var(--bg-card) 78%, var(--bg-subtle))",
+    boxShadow: "inset 0 1px 0 color-mix(in srgb, white 5%, transparent)",
   },
   usageDashboardScroll: {
     flex: 1,
     minHeight: 0,
     overflow: "auto",
-    padding: "20px 24px 30px",
+    padding: "18px 22px 28px",
   },
   usageMetricGrid: {
     display: "grid",
@@ -92,13 +94,13 @@ export const usage = {
     display: "flex",
     flexDirection: "column",
     justifyContent: "space-between",
-    padding: "15px 16px",
-    border: "1px solid color-mix(in srgb, var(--border-medium) 78%, transparent)",
-    borderRadius: 18,
+    padding: "14px 15px",
+    border: "1px solid color-mix(in srgb, var(--border-medium) 86%, transparent)",
+    borderRadius: 8,
     background:
-      "linear-gradient(145deg, color-mix(in srgb, var(--bg-card) 96%, var(--accent) 4%), var(--bg-card) 58%, color-mix(in srgb, var(--bg-subtle) 94%, var(--icon-file-ts) 6%))",
+      "linear-gradient(180deg, color-mix(in srgb, var(--bg-card) 98%, white 2%), color-mix(in srgb, var(--bg-card) 92%, var(--bg-subtle) 8%))",
     boxShadow:
-      "inset 0 1px 0 color-mix(in srgb, white 6%, transparent), 0 8px 24px color-mix(in srgb, var(--text-primary) 5%, transparent)",
+      "inset 0 1px 0 color-mix(in srgb, white 7%, transparent), 0 4px 12px color-mix(in srgb, var(--text-primary) 4%, transparent)",
   },
   usageMetricHead: {
     display: "flex",
@@ -120,7 +122,7 @@ export const usage = {
     alignItems: "center",
     justifyContent: "center",
     flexShrink: 0,
-    borderRadius: 10,
+    borderRadius: 6,
     background: "var(--bg-subtle)",
     color: "var(--text-muted)",
     boxShadow: "inset 0 0 0 1px color-mix(in srgb, currentColor 10%, transparent)",
@@ -135,13 +137,13 @@ export const usage = {
   },
   usageChartSection: {
     marginTop: 14,
-    padding: "18px 18px 16px",
-    border: "1px solid color-mix(in srgb, var(--border-medium) 78%, transparent)",
-    borderRadius: 18,
+    padding: "17px 18px 16px",
+    border: "1px solid color-mix(in srgb, var(--border-medium) 90%, transparent)",
+    borderRadius: 8,
     background:
-      "linear-gradient(155deg, color-mix(in srgb, var(--bg-card) 97%, var(--accent) 3%), var(--bg-card))",
+      "linear-gradient(180deg, color-mix(in srgb, var(--bg-card) 98%, white 2%), var(--bg-card))",
     boxShadow:
-      "inset 0 1px 0 color-mix(in srgb, white 6%, transparent), 0 10px 28px color-mix(in srgb, var(--text-primary) 5%, transparent)",
+      "inset 0 1px 0 color-mix(in srgb, white 7%, transparent), 0 6px 18px color-mix(in srgb, var(--text-primary) 5%, transparent)",
   },
   usageSectionHead: {
     display: "flex",
@@ -152,6 +154,7 @@ export const usage = {
   },
   usageSectionTitle: {
     color: "var(--text-primary)",
+    fontFamily: "var(--font-mono)",
     fontSize: 13,
     fontWeight: 700,
   },
@@ -172,9 +175,9 @@ export const usage = {
   usageLegendSwatch: {
     width: 8,
     height: 8,
-    borderRadius: 999,
+    borderRadius: 2,
     flexShrink: 0,
-    boxShadow: "0 0 8px currentColor",
+    boxShadow: "0 0 7px color-mix(in srgb, currentColor 45%, transparent)",
   },
   usageChartViewport: {
     position: "relative",
@@ -219,9 +222,9 @@ export const usage = {
     padding: "0 14px",
     borderBottom: "1px solid color-mix(in srgb, var(--accent) 32%, var(--border-medium))",
     borderLeft: "1px solid color-mix(in srgb, var(--accent) 18%, var(--border-dim))",
-    borderRadius: "12px 12px 0 0",
+    borderRadius: "8px 8px 0 0",
     background:
-      "linear-gradient(180deg, color-mix(in srgb, var(--accent) 3%, transparent), transparent 42%), radial-gradient(circle at 50% 0%, color-mix(in srgb, var(--icon-file-ts) 5%, transparent), transparent 58%)",
+      "linear-gradient(180deg, color-mix(in srgb, var(--usage-chart-input) 4%, transparent), transparent 42%)",
   },
   usageChartGrid: {
     position: "absolute",
@@ -249,19 +252,18 @@ export const usage = {
     display: "flex",
     flexDirection: "column-reverse",
     overflow: "hidden",
-    borderRadius: "9px 9px 3px 3px",
+    borderRadius: "5px 5px 2px 2px",
     background:
       "linear-gradient(180deg, color-mix(in srgb, var(--bg-subtle) 86%, var(--accent) 14%), var(--bg-subtle))",
     boxShadow:
-      "inset 0 0 0 1px color-mix(in srgb, var(--border-medium) 68%, transparent), 0 0 18px color-mix(in srgb, var(--accent) 7%, transparent)",
-    backdropFilter: "blur(8px)",
+      "inset 0 0 0 1px color-mix(in srgb, var(--border-medium) 76%, transparent), 0 6px 16px color-mix(in srgb, var(--text-primary) 7%, transparent)",
   },
   usageChartBarValue: {
     position: "absolute",
     bottom: 238,
     padding: "3px 6px",
     border: "1px solid color-mix(in srgb, var(--accent) 28%, var(--border-dim))",
-    borderRadius: 999,
+    borderRadius: 6,
     background: "color-mix(in srgb, var(--bg-card) 90%, transparent)",
     color: "var(--text-primary)",
     fontFamily: "var(--font-mono)",
@@ -297,7 +299,7 @@ export const usage = {
     gap: 7,
     padding: "10px 11px",
     border: "1px solid var(--border-medium)",
-    borderRadius: 14,
+    borderRadius: 8,
     background: "color-mix(in srgb, var(--bg-card) 90%, transparent)",
     boxShadow:
       "0 18px 44px color-mix(in srgb, var(--text-primary) 14%, transparent), inset 0 1px 0 color-mix(in srgb, white 8%, transparent)",
@@ -360,11 +362,11 @@ export const usage = {
     gap: 14,
     padding: 16,
     border: "1px solid color-mix(in srgb, var(--border-medium) 78%, transparent)",
-    borderRadius: 18,
+    borderRadius: 8,
     background:
-      "linear-gradient(145deg, color-mix(in srgb, var(--bg-card) 97%, var(--success) 3%), var(--bg-card))",
+      "linear-gradient(180deg, color-mix(in srgb, var(--bg-card) 98%, white 2%), var(--bg-card))",
     boxShadow:
-      "inset 0 1px 0 color-mix(in srgb, white 6%, transparent), 0 8px 24px color-mix(in srgb, var(--text-primary) 5%, transparent)",
+      "inset 0 1px 0 color-mix(in srgb, white 7%, transparent), 0 4px 12px color-mix(in srgb, var(--text-primary) 4%, transparent)",
   },
   usageSourceList: {
     display: "grid",
@@ -382,13 +384,13 @@ export const usage = {
   usageSourceTrack: {
     height: 8,
     overflow: "hidden",
-    borderRadius: 4,
+    borderRadius: 3,
     background: "var(--bg-subtle)",
   },
   usageSourceFill: {
     height: "100%",
     minWidth: 2,
-    borderRadius: 4,
+    borderRadius: 3,
   },
   usageSourceValue: {
     color: "var(--text-muted)",

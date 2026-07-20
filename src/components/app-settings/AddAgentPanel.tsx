@@ -7,6 +7,8 @@ import { useI18n } from "../../i18n";
 import s from "../../styles";
 import {
   APP_SETTINGS_CHANGED_EVENT,
+  formatAgentBalance,
+  type AgentBalance,
   type AgentModels,
   type AgentSetupDraft,
   type AgentSetupKind,
@@ -81,13 +83,14 @@ function deriveAgentId(label: string, baseUrl: string, kind: AgentSetupKind): st
 }
 
 export function AddAgentPanel({ onSaved }: { onSaved: (agentId: string) => void }) {
-  const { t } = useI18n();
+  const { language, t } = useI18n();
   const [label, setLabel] = useState("");
   const [kind, setKind] = useState<AgentSetupKind>("codex");
   const [baseUrl, setBaseUrl] = useState("");
   const [apiKey, setApiKey] = useState("");
   const [model, setModel] = useState("");
   const [models, setModels] = useState<string[]>([]);
+  const [detectedBalance, setDetectedBalance] = useState<AgentBalance | null>(null);
   const [selectedModels, setSelectedModels] = useState<string[]>([]);
   const [enable1mContext, setEnable1mContext] = useState(false);
   const [detectingModels, setDetectingModels] = useState(false);
@@ -116,6 +119,7 @@ export function AddAgentPanel({ onSaved }: { onSaved: (agentId: string) => void 
     if (!canDetectModels) return;
     setDetectingModels(true);
     setError(null);
+    setDetectedBalance(null);
     try {
       const detected = await invoke<AgentModels>("detect_agent_models", {
         kind,
@@ -123,6 +127,7 @@ export function AddAgentPanel({ onSaved }: { onSaved: (agentId: string) => void 
         apiKey: apiKey.trim(),
       });
       setModels(detected.models);
+      setDetectedBalance(detected.balance ?? null);
       setSelectedModels([]);
     } catch (err) {
       setError(String(err));
@@ -221,6 +226,7 @@ export function AddAgentPanel({ onSaved }: { onSaved: (agentId: string) => void 
                 onClick={() => {
                   setKind(option.kind);
                   setModels([]);
+                  setDetectedBalance(null);
                   setSelectedModels([]);
                   if (option.kind !== "claude_code") setEnable1mContext(false);
                 }}
@@ -302,6 +308,7 @@ export function AddAgentPanel({ onSaved }: { onSaved: (agentId: string) => void 
               onChange={(event) => {
                 setBaseUrl(event.target.value);
                 setModels([]);
+                setDetectedBalance(null);
                 setSelectedModels([]);
               }}
               placeholder={kind === "codex" ? "https://example.com/v1" : "https://agentrouter.org"}
@@ -327,6 +334,7 @@ export function AddAgentPanel({ onSaved }: { onSaved: (agentId: string) => void 
               onChange={(event) => {
                 setApiKey(event.target.value);
                 setModels([]);
+                setDetectedBalance(null);
                 setSelectedModels([]);
               }}
               placeholder="sk-..."
@@ -384,6 +392,28 @@ export function AddAgentPanel({ onSaved }: { onSaved: (agentId: string) => void 
               })
             : t("appSettings.agentModelHint")}
         </div>
+        {detectedBalance && (
+          <div
+            role="status"
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              minHeight: 24,
+              marginTop: 7,
+              padding: "0 8px",
+              border: "1px solid color-mix(in srgb, var(--success) 30%, var(--border-medium))",
+              borderRadius: "var(--radius-sm)",
+              color: "var(--success)",
+              background: "color-mix(in srgb, var(--success) 8%, transparent)",
+              fontSize: 11.5,
+              fontVariantNumeric: "tabular-nums",
+            }}
+          >
+            {t("appSettings.keyBalanceAvailable", {
+              amount: formatAgentBalance(detectedBalance, language),
+            })}
+          </div>
+        )}
       </div>
 
       {models.length > 0 && (
