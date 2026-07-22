@@ -1,9 +1,13 @@
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 use std::time::SystemTime;
 
+use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
+
+static PROJECTS_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
 // ── Data types (mirror TypeScript interfaces) ────────────────────────────────
 
@@ -118,6 +122,10 @@ fn projects_path() -> Result<PathBuf, String> {
     Ok(aeroric_dir()?.join("projects.json"))
 }
 
+fn projects_lock() -> &'static Mutex<()> {
+    PROJECTS_LOCK.get_or_init(|| Mutex::new(()))
+}
+
 fn tasks_path(project_id: &str) -> Result<PathBuf, String> {
     Ok(project_dir(project_id)?.join("tasks.json"))
 }
@@ -169,6 +177,11 @@ fn ensure_terminal_history_dir() -> Result<(), String> {
 
 #[tauri::command]
 pub fn load_projects() -> Result<Vec<Project>, String> {
+    let _guard = projects_lock().lock();
+    load_projects_unlocked()
+}
+
+fn load_projects_unlocked() -> Result<Vec<Project>, String> {
     let path = projects_path()?;
     if !path.exists() {
         return Ok(vec![]);
@@ -179,9 +192,24 @@ pub fn load_projects() -> Result<Vec<Project>, String> {
 
 #[tauri::command]
 pub fn save_projects(projects: Vec<Project>) -> Result<(), String> {
+    let _guard = projects_lock().lock();
+    save_projects_unlocked(&projects)
+}
+
+fn save_projects_unlocked(projects: &[Project]) -> Result<(), String> {
     ensure_aeroric_dirs()?;
     let raw = serde_json::to_string_pretty(&projects).map_err(|e| e.to_string())?;
     atomic_write(&projects_path()?, &raw)
+}
+
+pub(crate) fn update_projects<R>(
+    update: impl FnOnce(&mut Vec<Project>) -> Result<R, String>,
+) -> Result<(R, Vec<Project>), String> {
+    let _guard = projects_lock().lock();
+    let mut projects = load_projects_unlocked()?;
+    let result = update(&mut projects)?;
+    save_projects_unlocked(&projects)?;
+    Ok((result, projects))
 }
 
 #[tauri::command]

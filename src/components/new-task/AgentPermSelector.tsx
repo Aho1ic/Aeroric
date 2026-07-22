@@ -14,7 +14,7 @@ import {
 import * as Popover from "@radix-ui/react-popover";
 import * as Select from "@radix-ui/react-select";
 import type { AgentType, PermissionMode } from "../../types";
-import { agentDisplayLabel, isCodexLikeAgent } from "../../agents";
+import { agentDisplayLabel, isCodexLikeAgent, type AgentOption } from "../../agents";
 import { useAgentOptions } from "../../hooks/useAgentOptions";
 import { useI18n } from "../../i18n";
 import s from "../../styles";
@@ -95,17 +95,54 @@ export function composeModelMenuViewportStyle(): CSSProperties {
 export function composeAgentMenuContentStyle(): CSSProperties {
   return {
     ...s.toolbarMenuContent,
-    minWidth: "var(--radix-select-trigger-width)",
-    maxHeight: "min(280px, var(--radix-select-content-available-height))",
+    width: "min(520px, calc(100vw - 16px))",
+    minWidth: "min(420px, calc(100vw - 16px))",
+    maxHeight: "min(320px, var(--radix-select-content-available-height))",
     overflow: "hidden",
   };
 }
 
 export function composeAgentMenuViewportStyle(): CSSProperties {
   return {
-    maxHeight: "min(280px, var(--radix-select-content-available-height))",
+    display: "grid",
+    gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+    gap: 8,
+    maxHeight: "min(320px, var(--radix-select-content-available-height))",
+    overflow: "hidden",
+    padding: 8,
+  };
+}
+
+export function composeAgentMenuColumnStyle(): CSSProperties {
+  return {
+    display: "flex",
+    flexDirection: "column",
+    minWidth: 0,
+    minHeight: 0,
+    border: "1px solid var(--border-dim)",
+    borderRadius: 7,
+    background: "color-mix(in srgb, var(--bg-input) 45%, transparent)",
+    overflow: "hidden",
+  };
+}
+
+export function composeAgentMenuColumnViewportStyle(): CSSProperties {
+  return {
+    minHeight: 0,
+    maxHeight: "min(250px, calc(var(--radix-select-content-available-height) - 58px))",
     overflowY: "auto",
     overscrollBehavior: "contain",
+    padding: 4,
+  };
+}
+
+export function groupAgentOptions(options: AgentOption[]): {
+  claude: AgentOption[];
+  codex: AgentOption[];
+} {
+  return {
+    claude: options.filter((option) => !option.codexLike),
+    codex: options.filter((option) => option.codexLike),
   };
 }
 
@@ -213,6 +250,84 @@ export function AgentPermSelector({
   const controlButtonStyle = compact ? s.toolbarBtnIconOnly : s.toolbarBtn;
   const saveAsTodoDisabled = hasAttachments || !!saveAsTodoDisabledReason;
   const saveAsTodoTitle = hasAttachments ? t("newTask.imagesMustSend") : saveAsTodoDisabledReason;
+  const groupedAgents = groupAgentOptions(agentOptions);
+
+  function renderAgentItem(item: AgentType) {
+    return (
+      <Select.Item
+        key={item}
+        value={item}
+        style={{
+          ...s.toolbarMenuItem,
+          boxSizing: "border-box",
+          width: "100%",
+          minWidth: 0,
+          whiteSpace: "normal",
+        }}
+        onFocus={(e) => setMenuItemHover(e.currentTarget, true)}
+        onBlur={(e) => setMenuItemHover(e.currentTarget, false)}
+        onMouseEnter={(e) => setMenuItemHover(e.currentTarget, true)}
+        onMouseLeave={(e) => setMenuItemHover(e.currentTarget, false)}
+      >
+        <img
+          src={agentIcon(item, agentOptions)}
+          style={{
+            ...s.toolbarMenuItemIcon,
+            opacity: isCodexLikeAgent(item, agentOptions) ? 0.72 : 1,
+          }}
+        />
+        <Select.ItemText>
+          <span style={{ minWidth: 0, overflowWrap: "anywhere" }}>
+            {agentDisplayLabel(item, agentOptions)}
+          </span>
+        </Select.ItemText>
+      </Select.Item>
+    );
+  }
+
+  function renderAgentColumn(
+    family: "claude" | "codex",
+    label: string,
+    options: typeof agentOptions,
+  ) {
+    return (
+      <div
+        role="group"
+        aria-label={label}
+        data-agent-family={family}
+        style={composeAgentMenuColumnStyle()}
+      >
+        <div
+          style={{
+            flexShrink: 0,
+            padding: "7px 9px 6px",
+            color: "var(--text-secondary)",
+            borderBottom: "1px solid var(--border-dim)",
+            fontSize: 11,
+            fontWeight: 700,
+            letterSpacing: "0.02em",
+          }}
+        >
+          {label}
+        </div>
+        <div style={composeAgentMenuColumnViewportStyle()}>
+          {options.length > 0 ? (
+            options.map(({ value: item }) => renderAgentItem(item))
+          ) : (
+            <div
+              style={{
+                padding: "12px 9px",
+                color: "var(--text-hint)",
+                fontSize: 11,
+              }}
+            >
+              {t("newTask.noAgentConfigurations")}
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div style={s.toolbar}>
@@ -287,26 +402,8 @@ export function AgentPermSelector({
               style={composeAgentMenuContentStyle()}
             >
               <Select.Viewport style={composeAgentMenuViewportStyle()}>
-                {agentOptions.map(({ value: item }) => (
-                  <Select.Item
-                    key={item}
-                    value={item}
-                    style={s.toolbarMenuItem}
-                    onFocus={(e) => setMenuItemHover(e.currentTarget, true)}
-                    onBlur={(e) => setMenuItemHover(e.currentTarget, false)}
-                    onMouseEnter={(e) => setMenuItemHover(e.currentTarget, true)}
-                    onMouseLeave={(e) => setMenuItemHover(e.currentTarget, false)}
-                  >
-                    <img
-                      src={agentIcon(item, agentOptions)}
-                      style={{
-                        ...s.toolbarMenuItemIcon,
-                        opacity: isCodexLikeAgent(item, agentOptions) ? 0.72 : 1,
-                      }}
-                    />
-                    <Select.ItemText>{agentDisplayLabel(item, agentOptions)}</Select.ItemText>
-                  </Select.Item>
-                ))}
+                {renderAgentColumn("claude", t("newTask.claudeAgents"), groupedAgents.claude)}
+                {renderAgentColumn("codex", t("newTask.codexAgents"), groupedAgents.codex)}
               </Select.Viewport>
             </Select.Content>
           </Select.Portal>

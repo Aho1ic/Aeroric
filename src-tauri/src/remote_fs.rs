@@ -224,9 +224,100 @@ fn ensure_remote_path_allowed(
         }
         return Err("Cannot modify the remote project root".to_string());
     }
-    let root_prefix = format!("{}/", root.trim_end_matches('/'));
+    let root_prefix = if root == "/" {
+        "/".to_string()
+    } else {
+        format!("{root}/")
+    };
     if !path.starts_with(&root_prefix) {
         return Err("Remote path is outside the project root".to_string());
+    }
+    if let Some(first) = path[root_prefix.len()..].split('/').next() {
+        if first == ".git" || first == ".aeroric" {
+            return Err(format!(
+                "Cannot modify protected remote directory: {}",
+                first
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn build_remote_resolve_path_command(remote_path: &str, remote_project_path: &str) -> String {
+    let script = r#"resolve_path() {
+  path=$1
+  hops=0
+  while [ -L "$path" ]; do
+    hops=$((hops + 1))
+    [ "$hops" -le 40 ] || exit 72
+    link=$(readlink "$path") || exit 72
+    case "$link" in
+      /*) path=$link ;;
+      *)
+        parent=${path%/*}
+        [ -n "$parent" ] || parent=/
+        path=$parent/$link
+        ;;
+    esac
+  done
+  if [ "$path" = "/" ]; then
+    printf /
+    return
+  fi
+  parent=${path%/*}
+  name=${path##*/}
+  [ -n "$parent" ] || parent=/
+  physical_parent=$(cd -P "$parent" && pwd -P) || exit 72
+  if [ "$physical_parent" = "/" ]; then
+    printf '/%s' "$name"
+  else
+    printf '%s/%s' "$physical_parent" "$name"
+  fi
+}
+root=$(resolve_path "$1") || exit 72
+if [ -e "$2" ] || [ -L "$2" ]; then
+  target=$(resolve_path "$2") || exit 72
+else
+  parent=${2%/*}
+  name=${2##*/}
+  [ -n "$parent" ] || parent=/
+  resolved_parent=$(resolve_path "$parent") || exit 72
+  if [ "$resolved_parent" = "/" ]; then
+    target=/$name
+  else
+    target=$resolved_parent/$name
+  fi
+fi
+printf '%s\0%s\0' "$root" "$target""#;
+    format!(
+        "sh -c {} sh {} {}",
+        crate::ssh::shell_quote_posix(script),
+        crate::ssh::shell_quote_posix(remote_project_path),
+        crate::ssh::shell_quote_posix(remote_path)
+    )
+}
+
+fn ensure_resolved_remote_path_allowed(
+    resolved_path: &str,
+    resolved_root: &str,
+    allow_project_root: bool,
+) -> Result<(), String> {
+    let path = normalize_remote_path(resolved_path);
+    let root = normalize_remote_path(resolved_root);
+    if path == root {
+        return if allow_project_root {
+            Ok(())
+        } else {
+            Err("Cannot modify the remote project root".to_string())
+        };
+    }
+    let root_prefix = if root == "/" {
+        "/".to_string()
+    } else {
+        format!("{root}/")
+    };
+    if !path.starts_with(&root_prefix) {
+        return Err("Remote path resolves outside the project root".to_string());
     }
     if let Some(first) = path[root_prefix.len()..].split('/').next() {
         if first == ".git" || first == ".aeroric" {
@@ -247,6 +338,35 @@ fn run_ssh_output(connection: &SshConnection, remote_command: String) -> Result<
         return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
     }
     Ok(output.stdout)
+}
+
+fn resolve_remote_path_allowed(
+    connection: &SshConnection,
+    remote_path: &str,
+    remote_project_path: Option<&str>,
+    allow_project_root: bool,
+) -> Result<String, String> {
+    ensure_remote_path_allowed(remote_path, remote_project_path, allow_project_root)?;
+    let Some(remote_project_path) = remote_project_path else {
+        return Ok(normalize_remote_path(remote_path));
+    };
+    let output = run_ssh_output(
+        connection,
+        build_remote_resolve_path_command(remote_path, remote_project_path),
+    )?;
+    let mut fields = output.split(|byte| *byte == 0);
+    let resolved_root = fields
+        .next()
+        .and_then(|value| std::str::from_utf8(value).ok())
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "Failed to resolve remote project root".to_string())?;
+    let resolved_path = fields
+        .next()
+        .and_then(|value| std::str::from_utf8(value).ok())
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "Failed to resolve remote path".to_string())?;
+    ensure_resolved_remote_path_allowed(resolved_path, resolved_root, allow_project_root)?;
+    Ok(resolved_path.to_string())
 }
 
 fn std_scp_upload_command(
@@ -337,8 +457,13 @@ pub async fn remote_read_dir_entries(
     remote_project_path: Option<String>,
 ) -> Result<Vec<RemoteFsEntry>, String> {
     tokio::task::spawn_blocking(move || {
-        ensure_remote_path_allowed(&remote_path, remote_project_path.as_deref(), true)?;
-        let stdout = run_ssh_output(&connection, build_remote_read_dir_command(&remote_path))?;
+        let resolved_path = resolve_remote_path_allowed(
+            &connection,
+            &remote_path,
+            remote_project_path.as_deref(),
+            true,
+        )?;
+        let stdout = run_ssh_output(&connection, build_remote_read_dir_command(&resolved_path))?;
         let raw = String::from_utf8_lossy(&stdout);
         Ok(parse_remote_dir_entries(&remote_path, &raw))
     })
@@ -353,8 +478,13 @@ pub async fn remote_read_file_content(
     remote_project_path: Option<String>,
 ) -> Result<String, String> {
     tokio::task::spawn_blocking(move || {
-        ensure_remote_path_allowed(&remote_path, remote_project_path.as_deref(), true)?;
-        let stdout = run_ssh_output(&connection, build_remote_read_file_command(&remote_path))?;
+        let resolved_path = resolve_remote_path_allowed(
+            &connection,
+            &remote_path,
+            remote_project_path.as_deref(),
+            true,
+        )?;
+        let stdout = run_ssh_output(&connection, build_remote_read_file_command(&resolved_path))?;
         String::from_utf8(stdout).map_err(|e| e.to_string())
     })
     .await
@@ -369,10 +499,15 @@ pub async fn remote_write_file_content(
     content: String,
 ) -> Result<(), String> {
     tokio::task::spawn_blocking(move || {
-        ensure_remote_path_allowed(&remote_path, remote_project_path.as_deref(), false)?;
+        let resolved_path = resolve_remote_path_allowed(
+            &connection,
+            &remote_path,
+            remote_project_path.as_deref(),
+            false,
+        )?;
         let mut cmd = crate::ssh::std_ssh_command_for_remote_command(
             &connection,
-            build_remote_write_file_command(&remote_path),
+            build_remote_write_file_command(&resolved_path),
         );
         crate::subprocess::configure_background_command(&mut cmd);
         let mut child = cmd
@@ -407,12 +542,17 @@ pub async fn remote_read_image_preview(
     remote_project_path: Option<String>,
 ) -> Result<RemoteImagePreviewData, String> {
     tokio::task::spawn_blocking(move || {
-        ensure_remote_path_allowed(&remote_path, remote_project_path.as_deref(), true)?;
+        let resolved_path = resolve_remote_path_allowed(
+            &connection,
+            &remote_path,
+            remote_project_path.as_deref(),
+            true,
+        )?;
         let mime_type = remote_image_mime_type(&remote_path)
             .ok_or_else(|| "Unsupported image format".to_string())?;
         let stdout = run_ssh_output(
             &connection,
-            build_remote_image_preview_command(&remote_path),
+            build_remote_image_preview_command(&resolved_path),
         )?;
         let encoded = String::from_utf8_lossy(&stdout)
             .chars()
@@ -442,8 +582,17 @@ pub async fn remote_create_file(
     remote_project_path: Option<String>,
 ) -> Result<(), String> {
     tokio::task::spawn_blocking(move || {
-        ensure_remote_path_allowed(&remote_path, remote_project_path.as_deref(), false)?;
-        run_ssh_output(&connection, build_remote_create_file_command(&remote_path)).map(|_| ())
+        let resolved_path = resolve_remote_path_allowed(
+            &connection,
+            &remote_path,
+            remote_project_path.as_deref(),
+            false,
+        )?;
+        run_ssh_output(
+            &connection,
+            build_remote_create_file_command(&resolved_path),
+        )
+        .map(|_| ())
     })
     .await
     .map_err(|e| e.to_string())?
@@ -456,10 +605,15 @@ pub async fn remote_create_directory(
     remote_project_path: Option<String>,
 ) -> Result<(), String> {
     tokio::task::spawn_blocking(move || {
-        ensure_remote_path_allowed(&remote_path, remote_project_path.as_deref(), false)?;
+        let resolved_path = resolve_remote_path_allowed(
+            &connection,
+            &remote_path,
+            remote_project_path.as_deref(),
+            false,
+        )?;
         run_ssh_output(
             &connection,
-            build_remote_create_directory_command(&remote_path),
+            build_remote_create_directory_command(&resolved_path),
         )
         .map(|_| ())
     })
@@ -474,8 +628,17 @@ pub async fn remote_delete_path(
     remote_project_path: Option<String>,
 ) -> Result<(), String> {
     tokio::task::spawn_blocking(move || {
-        ensure_remote_path_allowed(&remote_path, remote_project_path.as_deref(), false)?;
-        run_ssh_output(&connection, build_remote_delete_path_command(&remote_path)).map(|_| ())
+        let resolved_path = resolve_remote_path_allowed(
+            &connection,
+            &remote_path,
+            remote_project_path.as_deref(),
+            false,
+        )?;
+        run_ssh_output(
+            &connection,
+            build_remote_delete_path_command(&resolved_path),
+        )
+        .map(|_| ())
     })
     .await
     .map_err(|e| e.to_string())?
@@ -489,8 +652,13 @@ pub async fn remote_rename_path(
     remote_project_path: Option<String>,
 ) -> Result<(), String> {
     tokio::task::spawn_blocking(move || {
-        ensure_remote_path_allowed(&remote_path, remote_project_path.as_deref(), false)?;
-        let command = build_remote_rename_path_command(&remote_path, new_name.trim())?;
+        let resolved_path = resolve_remote_path_allowed(
+            &connection,
+            &remote_path,
+            remote_project_path.as_deref(),
+            false,
+        )?;
+        let command = build_remote_rename_path_command(&resolved_path, new_name.trim())?;
         run_ssh_output(&connection, command).map(|_| ())
     })
     .await
@@ -505,11 +673,24 @@ pub async fn remote_copy_paths_to_directory(
     remote_project_path: Option<String>,
 ) -> Result<(), String> {
     tokio::task::spawn_blocking(move || {
-        ensure_remote_path_allowed(&target_directory, remote_project_path.as_deref(), true)?;
-        for source in &source_paths {
-            ensure_remote_path_allowed(source, remote_project_path.as_deref(), false)?;
-        }
-        let command = build_remote_copy_paths_command(&source_paths, &target_directory)?;
+        let resolved_target = resolve_remote_path_allowed(
+            &connection,
+            &target_directory,
+            remote_project_path.as_deref(),
+            true,
+        )?;
+        let resolved_sources = source_paths
+            .iter()
+            .map(|source| {
+                resolve_remote_path_allowed(
+                    &connection,
+                    source,
+                    remote_project_path.as_deref(),
+                    false,
+                )
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let command = build_remote_copy_paths_command(&resolved_sources, &resolved_target)?;
         run_ssh_output(&connection, command).map(|_| ())
     })
     .await
@@ -524,7 +705,12 @@ pub async fn remote_upload_local_paths_to_directory(
     remote_project_path: Option<String>,
 ) -> Result<(), String> {
     tokio::task::spawn_blocking(move || {
-        ensure_remote_path_allowed(&target_directory, remote_project_path.as_deref(), true)?;
+        let resolved_target = resolve_remote_path_allowed(
+            &connection,
+            &target_directory,
+            remote_project_path.as_deref(),
+            true,
+        )?;
         if local_source_paths.is_empty() {
             return Ok(());
         }
@@ -546,9 +732,9 @@ pub async fn remote_upload_local_paths_to_directory(
         }
         run_ssh_output(
             &connection,
-            build_remote_upload_conflict_check_command(&validated_sources, &target_directory)?,
+            build_remote_upload_conflict_check_command(&validated_sources, &resolved_target)?,
         )?;
-        let output = std_scp_upload_command(&connection, &validated_sources, &target_directory)
+        let output = std_scp_upload_command(&connection, &validated_sources, &resolved_target)
             .output()
             .map_err(|e| e.to_string())?;
         if !output.status.success() {
@@ -610,6 +796,57 @@ mod tests {
         assert!(
             ensure_remote_path_allowed("/srv/app/./file.txt", Some("/srv/app"), false).is_err()
         );
+    }
+
+    #[test]
+    fn rejects_resolved_paths_outside_project_root() {
+        assert!(
+            ensure_resolved_remote_path_allowed("/etc/aeroric.conf", "/srv/app", false).is_err()
+        );
+        assert!(
+            ensure_resolved_remote_path_allowed("/srv/app/src/main.rs", "/srv/app", false).is_ok()
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn remote_path_resolver_exposes_symlink_escape_for_boundary_check() {
+        use std::os::unix::fs::symlink;
+
+        let root =
+            std::env::temp_dir().join(format!("aeroric-remote-path-{}", uuid::Uuid::new_v4()));
+        let project = root.join("project");
+        let outside = root.join("outside");
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        symlink(&outside, project.join("link")).unwrap();
+
+        let command = build_remote_resolve_path_command(
+            &project.join("link/file.txt").to_string_lossy(),
+            &project.to_string_lossy(),
+        );
+        assert!(!command.contains("readlink --"));
+        assert!(!command.contains("cd -P --"));
+        let output = Command::new("sh").arg("-c").arg(command).output().unwrap();
+        assert!(output.status.success());
+        let mut fields = output.stdout.split(|byte| *byte == 0);
+        let resolved_root = std::str::from_utf8(fields.next().unwrap()).unwrap();
+        let resolved_path = std::str::from_utf8(fields.next().unwrap()).unwrap();
+        assert_eq!(
+            resolved_root,
+            project.canonicalize().unwrap().to_string_lossy()
+        );
+        assert_eq!(
+            resolved_path,
+            outside
+                .canonicalize()
+                .unwrap()
+                .join("file.txt")
+                .to_string_lossy()
+        );
+        assert!(ensure_resolved_remote_path_allowed(resolved_path, resolved_root, false).is_err());
+
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

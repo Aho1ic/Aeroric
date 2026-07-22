@@ -58,7 +58,7 @@ describe("AllAgentConfigsPanel", () => {
       </I18nProvider>,
     );
 
-    expect(screen.getByText(/Conversation and terminal history are never included/)).toBeVisible();
+    expect(screen.getByText(/Local paths, conversations, and terminal history/)).toBeVisible();
     await user.click(screen.getByRole("button", { name: "Export all" }));
     await waitFor(() =>
       expect(invokeMock).toHaveBeenCalledWith("export_all_agent_config_bundle", {

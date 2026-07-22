@@ -1,5 +1,6 @@
+use std::io::Write;
 use std::path::PathBuf;
-use std::process::{Command, Output};
+use std::process::{Command, Output, Stdio};
 
 use serde::{Deserialize, Serialize};
 
@@ -164,17 +165,29 @@ fn build_remote_docker_sudo_no_password_command(args: &[String]) -> String {
     )
 }
 
-fn build_remote_docker_sudo_password_command(args: &[String], password: &str) -> String {
+fn build_remote_docker_sudo_password_command(args: &[String]) -> String {
     let docker_command = std::iter::once("docker".to_string())
         .chain(args.iter().cloned())
         .map(|arg| crate::ssh::shell_word_posix(&arg))
         .collect::<Vec<_>>()
         .join(" ");
     format!(
-        "printf '%s\\n' {} | sudo -S -p '' sh -lc {}",
-        crate::ssh::shell_word_posix(password),
+        "sudo -S -p '' sh -lc {}",
         crate::ssh::shell_word_posix(&docker_command)
     )
+}
+
+fn run_command_with_stdin(mut command: Command, input: &str) -> Result<Output, String> {
+    let mut child = command
+        .stdin(Stdio::piped())
+        .spawn()
+        .map_err(|err| err.to_string())?;
+    if let Some(stdin) = child.stdin.as_mut() {
+        stdin
+            .write_all(input.as_bytes())
+            .map_err(|err| err.to_string())?;
+    }
+    child.wait_with_output().map_err(|err| err.to_string())
 }
 
 fn should_retry_remote_docker_with_sudo(stderr: &str) -> bool {
@@ -213,12 +226,12 @@ fn run_remote_docker_args(
             .map(|value| value.trim())
             .filter(|value| !value.is_empty());
         if let Some(password) = password {
-            let sudo_password_output = crate::ssh::std_ssh_command_for_remote_command(
+            let sudo_password_command = crate::ssh::std_ssh_command_for_remote_command(
                 &connection,
-                build_remote_docker_sudo_password_command(args, password),
-            )
-            .output()
-            .map_err(|err| err.to_string())?;
+                build_remote_docker_sudo_password_command(args),
+            );
+            let sudo_password_output =
+                run_command_with_stdin(sudo_password_command, &format!("{password}\n"))?;
             if sudo_password_output.status.success() {
                 return String::from_utf8(sudo_password_output.stdout)
                     .map_err(|err| err.to_string());
@@ -501,28 +514,22 @@ mod tests {
 
     #[test]
     fn builds_remote_docker_sudo_password_command_with_shell_quoting() {
-        let command = build_remote_docker_sudo_password_command(
-            &["ps".to_string(), "--all".to_string()],
-            "pass word",
-        );
+        let command =
+            build_remote_docker_sudo_password_command(&["ps".to_string(), "--all".to_string()]);
 
         assert!(command.contains("sudo -S -p ''"));
-        assert!(command.contains("printf '%s\\n' 'pass word'"));
         assert!(command.contains("docker ps"));
+        assert!(!command.contains("pass word"));
     }
 
     #[test]
     fn builds_remote_docker_sudo_password_command_for_image_delete() {
-        let command = build_remote_docker_sudo_password_command(
-            &[
-                "image".to_string(),
-                "rm".to_string(),
-                "repo/app:latest".to_string(),
-            ],
-            "pa'ss word",
-        );
+        let command = build_remote_docker_sudo_password_command(&[
+            "image".to_string(),
+            "rm".to_string(),
+            "repo/app:latest".to_string(),
+        ]);
 
-        assert!(command.contains("printf '%s\\n' 'pa'\\''ss word'"));
         assert!(command.contains("sudo -S -p ''"));
         assert!(command.contains("docker image rm repo/app:latest"));
     }

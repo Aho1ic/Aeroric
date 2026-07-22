@@ -31,11 +31,19 @@ export interface AppSettings {
   claude_gpt55_config_path: string;
   codex_config_path: string;
   agent_label_overrides?: Record<string, string>;
+  builtin_agent_credentials?: Record<string, BuiltInAgentCredentials>;
   proxy_settings?: ProxySettings;
   agent_proxy_enabled?: Record<string, boolean>;
   custom_agents?: CustomAgentProfile[];
   send_shortcut: SendShortcut;
   terminal_shift_enter_newline: boolean;
+}
+
+export interface BuiltInAgentCredentials {
+  base_url: string;
+  api_key: string;
+  models: string[];
+  enable_1m_context: boolean;
 }
 
 export interface ProxySettings {
@@ -79,14 +87,20 @@ export interface AgentModels {
 
 export interface AgentBalance {
   used: number;
-  total: number;
+  total: number | null;
 }
 
 export function formatAgentBalance(balance: AgentBalance, language: "en" | "zh"): string {
   const formatter = new Intl.NumberFormat(language === "zh" ? "zh-CN" : "en-US", {
     maximumFractionDigits: 6,
   });
-  return `${formatter.format(balance.used)} / ${formatter.format(balance.total)}`;
+  const total =
+    balance.total === null
+      ? language === "zh"
+        ? "无限制"
+        : "Unlimited"
+      : formatter.format(balance.total);
+  return `${formatter.format(balance.used)} / ${total}`;
 }
 
 export type AgentKey = AgentType;
@@ -118,8 +132,8 @@ export interface OpenAppSettingsDetail {
 }
 
 /**
- * `SKILL_HUB_CHANGED_EVENT` 可携带 `detail.projects`（来自后端 `set_skill_hub_path` 的完整列表），
- * App.tsx 收到后会把它作为权威列表替换前端 state，避免竞态覆盖 hub project。
+ * `SKILL_HUB_CHANGED_EVENT` 可携带 `detail.projects`（来自后端 `set_skill_hub_path` 的完整列表）。
+ * App.tsx 会保留当前前端条目并合入后端新增的 Hub project。
  */
 export interface SkillHubChangedDetail {
   projects?: unknown;

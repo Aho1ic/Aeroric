@@ -7,11 +7,14 @@ import {
 } from "../agents";
 import {
   composeAgentMenuContentStyle,
+  composeAgentMenuColumnStyle,
+  composeAgentMenuColumnViewportStyle,
   composeAgentMenuViewportStyle,
   composeControlOrder,
   composeModelMenuContentStyle,
   composeModelMenuViewportStyle,
   composePermissionLabel,
+  groupAgentOptions,
   nextComposeMenuState,
 } from "../components/new-task/AgentPermSelector";
 
@@ -69,6 +72,30 @@ describe("agent options", () => {
     expect(isCodexLikeAgent("local_codex", options)).toBe(true);
   });
 
+  it("groups Claude and Codex configurations into separate columns", () => {
+    const grouped = groupAgentOptions(
+      agentOptionsFromProfiles([
+        {
+          id: "local_claude",
+          label: "Local Claude",
+          path: "/tmp/claude-wrapper.sh",
+          codex_like: false,
+          config_lang: "shellscript",
+        },
+        {
+          id: "local_codex",
+          label: "Local Codex",
+          path: "/tmp/codex-wrapper.sh",
+          codex_like: true,
+          config_lang: "shellscript",
+        },
+      ]),
+    );
+
+    expect(grouped.claude.map((option) => option.value)).toEqual(["claude", "local_claude"]);
+    expect(grouped.codex.map((option) => option.value)).toEqual(["codex", "local_codex"]);
+  });
+
   it("uses concise permission labels in the compose toolbar", () => {
     expect(composePermissionLabel("ask")).toBe("请求确认");
     expect(composePermissionLabel("auto_edit")).toBe("替我审批");
@@ -114,14 +141,27 @@ describe("agent options", () => {
   it("constrains the agent menu to the viewport and scrolls long config lists", () => {
     expect(composeAgentMenuContentStyle()).toEqual(
       expect.objectContaining({
-        minWidth: "var(--radix-select-trigger-width)",
-        maxHeight: "min(280px, var(--radix-select-content-available-height))",
+        minWidth: "min(420px, calc(100vw - 16px))",
+        maxHeight: "min(320px, var(--radix-select-content-available-height))",
         overflow: "hidden",
       }),
     );
     expect(composeAgentMenuViewportStyle()).toEqual(
       expect.objectContaining({
-        maxHeight: "min(280px, var(--radix-select-content-available-height))",
+        display: "grid",
+        gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+        overflow: "hidden",
+      }),
+    );
+    expect(composeAgentMenuColumnStyle()).toEqual(
+      expect.objectContaining({
+        minHeight: 0,
+        overflow: "hidden",
+      }),
+    );
+    expect(composeAgentMenuColumnViewportStyle()).toEqual(
+      expect.objectContaining({
+        maxHeight: "min(250px, calc(var(--radix-select-content-available-height) - 58px))",
         overflowY: "auto",
         overscrollBehavior: "contain",
       }),

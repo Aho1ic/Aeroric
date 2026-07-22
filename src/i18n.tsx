@@ -67,7 +67,7 @@ const translations: Record<AppLanguage, Record<string, string>> = {
     "appSettings.allAgentConfigs": "All Agent Configs",
     "appSettings.allAgentConfigsTitle": "One-click Agent configuration transfer",
     "appSettings.allAgentConfigsHint":
-      "Export or import all {count} Agent configuration files in one bundle. Conversation and terminal history are never included.",
+      "Export or import names, Base URLs, API keys, models, and runtime settings for all {count} Agent configurations. Local paths, conversations, and terminal history are never included.",
     "appSettings.allAgentConfigsSecurityHint":
       "The bundle can contain API keys and access tokens from custom Agent configurations. Store it securely.",
     "appSettings.importAllAgentConfigs": "Import all",
@@ -1372,6 +1372,9 @@ const translations: Record<AppLanguage, Record<string, string>> = {
     "newTask.goalMode": "Goal mode",
     "newTask.send": "Send",
     "newTask.startTerminal": "Start Terminal",
+    "newTask.claudeAgents": "Claude configurations",
+    "newTask.codexAgents": "Codex configurations",
+    "newTask.noAgentConfigurations": "No configurations",
     "newTask.model": "Model",
     "newTask.modelAuto": "Auto model",
     "newTask.modelsLoading": "Loading models...",
@@ -1982,7 +1985,7 @@ const translations: Record<AppLanguage, Record<string, string>> = {
     "appSettings.allAgentConfigs": "所有 Agent 配置",
     "appSettings.allAgentConfigsTitle": "一键迁移所有 Agent 配置",
     "appSettings.allAgentConfigsHint":
-      "将全部 {count} 个 Agent 配置文件导出为一个配置包，或从配置包一键导入。不会包含历史对话和终端历史。",
+      "一键导出或导入全部 {count} 个 Agent 的名称、Base URL、API Key、模型和运行设置。本机路径、历史对话和终端历史不会写入配置包。",
     "appSettings.allAgentConfigsSecurityHint":
       "配置包可能包含自定义 Agent 的 API Key 和访问令牌，请妥善保管。",
     "appSettings.importAllAgentConfigs": "一键导入",
@@ -3244,6 +3247,9 @@ const translations: Record<AppLanguage, Record<string, string>> = {
     "newTask.goalMode": "追求目标",
     "newTask.send": "发送",
     "newTask.startTerminal": "启动终端",
+    "newTask.claudeAgents": "Claude 配置",
+    "newTask.codexAgents": "Codex 配置",
+    "newTask.noAgentConfigurations": "暂无配置",
     "newTask.model": "模型",
     "newTask.modelAuto": "自动模型",
     "newTask.modelsLoading": "正在获取模型...",

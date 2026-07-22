@@ -95,7 +95,7 @@ pub struct AgentModels {
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct AgentBalance {
     pub used: f64,
-    pub total: f64,
+    pub total: Option<f64>,
 }
 
 const AGENT_CONFIG_BUNDLE_FORMAT: &str = "aeroric.agent-config";
@@ -190,6 +190,18 @@ pub struct LegacyAgentProxyConfig {
     pub no_proxy: String,
 }
 
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+pub struct BuiltInAgentCredentials {
+    #[serde(default)]
+    pub base_url: String,
+    #[serde(default)]
+    pub api_key: String,
+    #[serde(default)]
+    pub models: Vec<String>,
+    #[serde(default)]
+    pub enable_1m_context: bool,
+}
+
 fn default_custom_agent_codex_like() -> bool {
     true
 }
@@ -215,6 +227,8 @@ pub struct AppSettings {
     #[serde(default)]
     pub agent_label_overrides: HashMap<String, String>,
     #[serde(default)]
+    pub builtin_agent_credentials: HashMap<String, BuiltInAgentCredentials>,
+    #[serde(default)]
     pub proxy_settings: ProxySettings,
     #[serde(default)]
     pub agent_proxy_enabled: HashMap<String, bool>,
@@ -238,6 +252,7 @@ impl Default for AppSettings {
             claude_gpt55_config_path: String::new(),
             codex_config_path: String::new(),
             agent_label_overrides: HashMap::new(),
+            builtin_agent_credentials: HashMap::new(),
             proxy_settings: ProxySettings::default(),
             agent_proxy_enabled: HashMap::new(),
             agent_proxy_overrides: HashMap::new(),
@@ -401,6 +416,27 @@ fn normalize_agent_label_overrides(overrides: HashMap<String, String>) -> HashMa
         .collect()
 }
 
+fn normalize_builtin_agent_credentials(
+    credentials: HashMap<String, BuiltInAgentCredentials>,
+) -> HashMap<String, BuiltInAgentCredentials> {
+    credentials
+        .into_iter()
+        .filter_map(|(agent, credentials)| {
+            builtin_agent_details(&agent)?;
+            let normalized = BuiltInAgentCredentials {
+                base_url: normalize_base_url(&credentials.base_url),
+                api_key: credentials.api_key.trim().to_string(),
+                models: normalize_model_list(credentials.models),
+                enable_1m_context: credentials.enable_1m_context,
+            };
+            (!normalized.base_url.is_empty()
+                || !normalized.api_key.is_empty()
+                || !normalized.models.is_empty())
+            .then_some((agent, normalized))
+        })
+        .collect()
+}
+
 fn normalize_proxy_url(value: &str) -> String {
     let trimmed = value.trim();
     if trimmed.is_empty() {
@@ -549,6 +585,56 @@ fn append_agent_credential_env(
     let password = proxy.password.trim();
     if !password.is_empty() {
         extra_env.push(("AERORIC_AGENT_PASSWORD".to_string(), password.to_string()));
+    }
+}
+
+fn append_builtin_agent_api_env(
+    settings: &AppSettings,
+    agent: &str,
+    extra_env: &mut Vec<(String, String)>,
+) {
+    let Some(credentials) = settings.builtin_agent_credentials.get(agent) else {
+        return;
+    };
+    if !credentials.base_url.is_empty() {
+        if agent == "codex" {
+            extra_env.push(("OPENAI_BASE_URL".to_string(), credentials.base_url.clone()));
+        } else {
+            extra_env.push((
+                "ANTHROPIC_BASE_URL".to_string(),
+                credentials.base_url.clone(),
+            ));
+        }
+    }
+    if !credentials.api_key.is_empty() {
+        if agent == "codex" {
+            for key in ["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "CODEX_API_KEY"] {
+                extra_env.push((key.to_string(), credentials.api_key.clone()));
+            }
+        } else {
+            extra_env.push((
+                "ANTHROPIC_AUTH_TOKEN".to_string(),
+                credentials.api_key.clone(),
+            ));
+            extra_env.push(("ANTHROPIC_API_KEY".to_string(), credentials.api_key.clone()));
+        }
+    }
+    if agent != "codex" {
+        if let Some(model) = credentials.models.first() {
+            let model = if credentials.enable_1m_context && !model.ends_with("[1m]") {
+                format!("{model}[1m]")
+            } else {
+                model.clone()
+            };
+            for key in [
+                "ANTHROPIC_MODEL",
+                "ANTHROPIC_DEFAULT_OPUS_MODEL",
+                "ANTHROPIC_DEFAULT_SONNET_MODEL",
+                "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+            ] {
+                extra_env.push((key.to_string(), model.clone()));
+            }
+        }
     }
 }
 
@@ -896,6 +982,7 @@ fn get_agent_launch_spec_from_settings(settings: &AppSettings, agent: &str) -> A
     spec.codex_like = inferred_agent_codex_like(&spec.program)
         .unwrap_or_else(|| configured_agent_is_codex_like(settings, agent));
     append_agent_credential_env(settings, agent, &mut spec.extra_env);
+    append_builtin_agent_api_env(settings, agent, &mut spec.extra_env);
     append_agent_proxy_env(settings, agent, &mut spec.extra_env);
     spec
 }
@@ -949,6 +1036,20 @@ fn balance_endpoint(base_url: &str, provider: AgentBalanceProvider) -> Option<St
     Some(url.to_string())
 }
 
+fn api_root_endpoint(base_url: &str, suffix: &str) -> Option<String> {
+    let mut url = url::Url::parse(base_url.trim()).ok()?;
+    let mut root = url.path().trim_end_matches('/').to_string();
+    if root == "/v1" {
+        root.clear();
+    } else if root.ends_with("/v1") {
+        root.truncate(root.len() - 3);
+    }
+    url.set_query(None);
+    url.set_fragment(None);
+    url.set_path(&format!("{}{}", root.trim_end_matches('/'), suffix));
+    Some(url.to_string())
+}
+
 fn parse_balance_number(value: &serde_json::Value) -> Option<f64> {
     let number = value
         .as_f64()
@@ -962,14 +1063,105 @@ fn parse_agent_balance(
 ) -> Option<AgentBalance> {
     let (used, total) = match provider {
         AgentBalanceProvider::OpenRouter => {
-            let total = parse_balance_number(value.pointer("/data/limit")?)?;
-            let remaining = parse_balance_number(value.pointer("/data/limit_remaining")?)?;
-            (total - remaining, total)
+            let usage = value.pointer("/data/usage").and_then(parse_balance_number);
+            let total = value.pointer("/data/limit").and_then(parse_balance_number);
+            let remaining = value
+                .pointer("/data/limit_remaining")
+                .and_then(parse_balance_number);
+            let used = usage.or_else(|| {
+                total
+                    .zip(remaining)
+                    .map(|(total, remaining)| total - remaining)
+            })?;
+            (used, total)
         }
     };
 
-    (used.is_finite() && total.is_finite() && used >= 0.0 && total >= 0.0)
+    (used.is_finite() && total.is_none_or(|total| total.is_finite() && total >= 0.0) && used >= 0.0)
         .then_some(AgentBalance { used, total })
+}
+
+fn parse_new_api_token_balance(value: &serde_json::Value) -> Option<AgentBalance> {
+    let data = value.get("data")?;
+    let used = parse_balance_number(data.get("total_used")?)?;
+    let unlimited = data
+        .get("unlimited_quota")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    let total = if unlimited {
+        None
+    } else {
+        Some(parse_balance_number(data.get("total_granted")?)?)
+    };
+
+    (used >= 0.0 && total.is_none_or(|total| total >= 0.0)).then_some(AgentBalance { used, total })
+}
+
+fn parse_dashboard_balance(
+    subscription: &serde_json::Value,
+    usage: &serde_json::Value,
+) -> Option<AgentBalance> {
+    let used = parse_balance_number(usage.get("total_usage")?)? / 100.0;
+    let total = parse_balance_number(
+        subscription
+            .get("hard_limit_usd")
+            .or_else(|| subscription.get("system_hard_limit_usd"))
+            .or_else(|| subscription.get("soft_limit_usd"))?,
+    )?;
+    let total = (total < 100_000_000.0).then_some(total);
+
+    (used.is_finite() && used >= 0.0 && total.is_none_or(|total| total >= 0.0))
+        .then_some(AgentBalance { used, total })
+}
+
+async fn get_balance_json(
+    client: &reqwest::Client,
+    endpoint: String,
+    api_key: &str,
+) -> Option<serde_json::Value> {
+    let response = client
+        .get(endpoint)
+        .bearer_auth(api_key)
+        .timeout(Duration::from_secs(5))
+        .send()
+        .await
+        .ok()?;
+    if !response.status().is_success() {
+        return None;
+    }
+    response.json::<serde_json::Value>().await.ok()
+}
+
+async fn fetch_agent_balance(
+    client: &reqwest::Client,
+    base_url: &str,
+    api_key: &str,
+) -> Option<AgentBalance> {
+    if let Some(provider) = balance_provider(base_url) {
+        let endpoint = balance_endpoint(base_url, provider)?;
+        let value = get_balance_json(client, endpoint, api_key).await?;
+        return parse_agent_balance(provider, &value);
+    }
+
+    let token_endpoint = api_root_endpoint(base_url, "/api/usage/token/");
+    if let Some(endpoint) = token_endpoint {
+        if let Some(value) = get_balance_json(client, endpoint, api_key).await {
+            if let Some(balance) = parse_new_api_token_balance(&value) {
+                return Some(balance);
+            }
+        }
+    }
+
+    let subscription_endpoint = api_root_endpoint(base_url, "/dashboard/billing/subscription");
+    let usage_endpoint = api_root_endpoint(base_url, "/dashboard/billing/usage");
+    let (subscription, usage) = match (subscription_endpoint, usage_endpoint) {
+        (Some(subscription), Some(usage)) => tokio::join!(
+            get_balance_json(client, subscription, api_key),
+            get_balance_json(client, usage, api_key)
+        ),
+        _ => return None,
+    };
+    parse_dashboard_balance(&subscription?, &usage?)
 }
 
 fn looks_like_model_id(value: &str) -> bool {
@@ -1437,6 +1629,215 @@ fn parse_generated_toml_string(content: &str, key: &str) -> Option<String> {
     })
 }
 
+fn push_builtin_model(credentials: &mut BuiltInAgentCredentials, value: &str) {
+    let value = value.trim();
+    if value.is_empty() {
+        return;
+    }
+    let (model, uses_1m_context) = value
+        .strip_suffix("[1m]")
+        .map(|model| (model.trim(), true))
+        .unwrap_or((value, false));
+    if model.is_empty() {
+        return;
+    }
+    credentials.enable_1m_context |= uses_1m_context;
+    if !credentials.models.iter().any(|existing| existing == model) {
+        credentials.models.push(model.to_string());
+    }
+}
+
+fn parse_claude_builtin_credentials(content: &str) -> BuiltInAgentCredentials {
+    let mut credentials = BuiltInAgentCredentials::default();
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(content) else {
+        return credentials;
+    };
+    let env = value.get("env").and_then(serde_json::Value::as_object);
+    let env_value = |key: &str| {
+        env.and_then(|values| values.get(key))
+            .and_then(serde_json::Value::as_str)
+    };
+
+    credentials.base_url = env_value("ANTHROPIC_BASE_URL")
+        .map(normalize_base_url)
+        .unwrap_or_default();
+    credentials.api_key = ["ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY"]
+        .into_iter()
+        .find_map(env_value)
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    if let Some(model) = value.get("model").and_then(serde_json::Value::as_str) {
+        push_builtin_model(&mut credentials, model);
+    }
+    for key in [
+        "ANTHROPIC_MODEL",
+        "ANTHROPIC_DEFAULT_OPUS_MODEL",
+        "ANTHROPIC_DEFAULT_SONNET_MODEL",
+        "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+    ] {
+        if let Some(model) = env_value(key) {
+            push_builtin_model(&mut credentials, model);
+        }
+    }
+    credentials
+}
+
+fn parse_shell_builtin_credentials(content: &str) -> BuiltInAgentCredentials {
+    let mut credentials = BuiltInAgentCredentials::default();
+    credentials.base_url = ["ANTHROPIC_BASE_URL", "OPENAI_BASE_URL"]
+        .into_iter()
+        .find_map(|key| parse_generated_shell_value(content, key))
+        .map(|value| normalize_base_url(&value))
+        .unwrap_or_default();
+    credentials.api_key = [
+        "ANTHROPIC_AUTH_TOKEN",
+        "ANTHROPIC_API_KEY",
+        "OPENAI_API_KEY",
+        "CODEX_API_KEY",
+    ]
+    .into_iter()
+    .find_map(|key| parse_generated_shell_value(content, key))
+    .unwrap_or_default()
+    .trim()
+    .to_string();
+    for key in [
+        "selected_model",
+        "ANTHROPIC_MODEL",
+        "ANTHROPIC_DEFAULT_OPUS_MODEL",
+        "ANTHROPIC_DEFAULT_SONNET_MODEL",
+        "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+    ] {
+        if let Some(model) = parse_generated_shell_value(content, key) {
+            push_builtin_model(&mut credentials, &model);
+        }
+    }
+    credentials
+}
+
+fn parse_codex_builtin_credentials(content: &str) -> BuiltInAgentCredentials {
+    let mut credentials = BuiltInAgentCredentials::default();
+    let Ok(table) = toml::from_str::<toml::Table>(content) else {
+        return credentials;
+    };
+    if let Some(model) = table.get("model").and_then(toml::Value::as_str) {
+        push_builtin_model(&mut credentials, model);
+    }
+
+    let provider = table.get("model_provider").and_then(toml::Value::as_str);
+    let provider_table = provider.and_then(|provider| {
+        table
+            .get("model_providers")
+            .and_then(toml::Value::as_table)
+            .and_then(|providers| providers.get(provider))
+            .and_then(toml::Value::as_table)
+    });
+    credentials.base_url = provider_table
+        .and_then(|provider| provider.get("base_url"))
+        .or_else(|| table.get("base_url"))
+        .and_then(toml::Value::as_str)
+        .map(normalize_base_url)
+        .unwrap_or_default();
+    credentials.api_key = provider_table
+        .and_then(|provider| provider.get("api_key"))
+        .or_else(|| table.get("api_key"))
+        .and_then(toml::Value::as_str)
+        .map(str::to_string)
+        .or_else(|| {
+            provider_table
+                .and_then(|provider| provider.get("env_key"))
+                .and_then(toml::Value::as_str)
+                .and_then(|key| std::env::var(key).ok())
+        })
+        .or_else(|| {
+            ["OPENAI_API_KEY", "CODEX_API_KEY", "ANTHROPIC_API_KEY"]
+                .into_iter()
+                .find_map(|key| std::env::var(key).ok())
+        })
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    credentials
+}
+
+fn codex_auth_path(config_path: &Path) -> Option<PathBuf> {
+    config_path.parent().map(|parent| parent.join("auth.json"))
+}
+
+fn read_codex_auth_api_key(config_path: &Path) -> Option<String> {
+    let content = fs::read_to_string(codex_auth_path(config_path)?).ok()?;
+    let value = serde_json::from_str::<serde_json::Value>(&content).ok()?;
+    ["OPENAI_API_KEY", "CODEX_API_KEY", "ANTHROPIC_API_KEY"]
+        .into_iter()
+        .find_map(|key| value.get(key).and_then(serde_json::Value::as_str))
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+fn write_codex_auth_api_key(config_path: &Path, api_key: &str) -> Result<(), String> {
+    let Some(auth_path) = codex_auth_path(config_path) else {
+        return Err("Codex configuration path has no parent directory".to_string());
+    };
+    if let Some(parent) = auth_path.parent() {
+        fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    }
+    let mut value = fs::read_to_string(&auth_path)
+        .ok()
+        .and_then(|content| serde_json::from_str::<serde_json::Value>(&content).ok())
+        .filter(serde_json::Value::is_object)
+        .unwrap_or_else(|| serde_json::json!({}));
+    let object = value
+        .as_object_mut()
+        .ok_or_else(|| "Invalid Codex authentication file".to_string())?;
+    object.insert(
+        "auth_mode".to_string(),
+        serde_json::Value::String("apikey".to_string()),
+    );
+    object.insert(
+        "OPENAI_API_KEY".to_string(),
+        serde_json::Value::String(api_key.trim().to_string()),
+    );
+    let content = serde_json::to_string_pretty(&value).map_err(|error| error.to_string())?;
+    atomic_write_private(&auth_path, &content)
+}
+
+fn parse_builtin_agent_credentials(agent: &str, content: &str) -> BuiltInAgentCredentials {
+    match agent {
+        "claude" => parse_claude_builtin_credentials(content),
+        "claude_gpt55" => parse_shell_builtin_credentials(content),
+        "codex" => parse_codex_builtin_credentials(content),
+        _ => BuiltInAgentCredentials::default(),
+    }
+}
+
+fn merged_builtin_agent_credentials(
+    settings: &AppSettings,
+    agent: &str,
+    config_content: &str,
+) -> BuiltInAgentCredentials {
+    let mut credentials = settings
+        .builtin_agent_credentials
+        .get(agent)
+        .cloned()
+        .unwrap_or_default();
+    let recovered = parse_builtin_agent_credentials(agent, config_content);
+    if credentials.base_url.is_empty() {
+        credentials.base_url = recovered.base_url;
+    }
+    if credentials.api_key.is_empty() {
+        credentials.api_key = recovered.api_key;
+    }
+    if credentials.models.is_empty() {
+        credentials.models = recovered.models;
+    }
+    credentials.enable_1m_context |= recovered.enable_1m_context;
+    credentials.base_url = normalize_base_url(&credentials.base_url);
+    credentials.api_key = credentials.api_key.trim().to_string();
+    credentials.models = normalize_model_list(credentials.models);
+    credentials
+}
+
 fn recover_custom_agent_credentials(profile: &mut CustomAgentProfile) {
     if !profile.base_url.is_empty() && !profile.api_key.is_empty() {
         return;
@@ -1469,9 +1870,26 @@ fn recover_custom_agent_credentials(profile: &mut CustomAgentProfile) {
     }
 }
 
+fn recover_custom_agent_models(profile: &mut CustomAgentProfile) {
+    if !profile.models.is_empty() {
+        return;
+    }
+    let Ok(content) = fs::read_to_string(&profile.path) else {
+        return;
+    };
+    let Some(model) = parse_generated_shell_value(&content, "selected_model") else {
+        return;
+    };
+    let model = model.trim();
+    if !model.is_empty() {
+        profile.models.push(model.to_string());
+    }
+}
+
 fn recover_custom_agent_settings(settings: &mut AppSettings) {
     for profile in &mut settings.custom_agents {
         recover_custom_agent_credentials(profile);
+        recover_custom_agent_models(profile);
     }
 }
 
@@ -1572,6 +1990,9 @@ fn normalize_settings(settings: AppSettings) -> AppSettings {
         claude_gpt55_config_path: normalize_config_path(settings.claude_gpt55_config_path),
         codex_config_path: normalize_config_path(settings.codex_config_path),
         agent_label_overrides: normalize_agent_label_overrides(settings.agent_label_overrides),
+        builtin_agent_credentials: normalize_builtin_agent_credentials(
+            settings.builtin_agent_credentials,
+        ),
         proxy_settings,
         agent_proxy_enabled,
         agent_proxy_overrides: HashMap::new(),
@@ -1596,6 +2017,7 @@ fn load_settings_unlocked() -> AppSettings {
             claude_gpt55_config_path: String::new(),
             codex_config_path: String::new(),
             agent_label_overrides: HashMap::new(),
+            builtin_agent_credentials: HashMap::new(),
             proxy_settings: ProxySettings::default(),
             agent_proxy_enabled: HashMap::new(),
             agent_proxy_overrides: HashMap::new(),
@@ -1845,6 +2267,10 @@ fn collect_agent_config_bundle_agent(
             }
             None => String::new(),
         };
+        let mut credentials = merged_builtin_agent_credentials(settings, agent, &config_content);
+        if agent == "codex" && credentials.api_key.is_empty() {
+            credentials.api_key = read_codex_auth_api_key(&path).unwrap_or_default();
+        }
         return Ok(AgentConfigBundleAgent {
             id: agent.to_string(),
             label: settings
@@ -1857,10 +2283,10 @@ fn collect_agent_config_bundle_agent(
             config_lang: config_lang.to_string(),
             config_content,
             config_present,
-            base_url: String::new(),
-            api_key: String::new(),
-            models: Vec::new(),
-            enable_1m_context: false,
+            base_url: credentials.base_url,
+            api_key: credentials.api_key,
+            models: credentials.models,
+            enable_1m_context: credentials.enable_1m_context,
         });
     }
 
@@ -1891,6 +2317,52 @@ fn collect_agent_config_bundle_agent(
     })
 }
 
+fn collect_portable_agent_config_bundle_agent(
+    settings: &AppSettings,
+    agent: &str,
+) -> Result<AgentConfigBundleAgent, String> {
+    let mut bundle_agent = collect_agent_config_bundle_agent(settings, agent, None)?;
+    if matches!(bundle_agent.kind, AgentConfigBundleKind::Custom) {
+        bundle_agent.config_content.clear();
+        bundle_agent.config_present = false;
+        if bundle_agent.base_url.trim().is_empty()
+            || bundle_agent.api_key.trim().is_empty()
+            || normalize_model_list(bundle_agent.models.clone()).is_empty()
+        {
+            return Err(format!(
+                "Custom Agent {} is missing Base URL, API Key, or model settings",
+                bundle_agent.id
+            ));
+        }
+        bundle_agent.models = normalize_model_list(bundle_agent.models);
+        bundle_agent.config_present = true;
+    }
+    Ok(bundle_agent)
+}
+
+fn custom_agent_setup_draft(agent: &AgentConfigBundleAgent) -> Option<AgentSetupDraft> {
+    if agent.base_url.trim().is_empty()
+        || agent.api_key.trim().is_empty()
+        || agent.models.is_empty()
+    {
+        return None;
+    }
+    Some(AgentSetupDraft {
+        id: agent.id.clone(),
+        label: agent.label.clone(),
+        kind: if agent.codex_like {
+            AgentSetupKind::Codex
+        } else {
+            AgentSetupKind::ClaudeCode
+        },
+        base_url: agent.base_url.clone(),
+        api_key: agent.api_key.clone(),
+        model: agent.models[0].clone(),
+        models: agent.models.clone(),
+        enable_1m_context: agent.enable_1m_context,
+    })
+}
+
 fn import_agent_config_entry(
     settings: &mut AppSettings,
     agent: AgentConfigBundleAgent,
@@ -1905,16 +2377,19 @@ fn import_agent_config_entry(
                 "codex" => &mut settings.codex_config_path,
                 _ => unreachable!(),
             };
-            if configured_path.trim().is_empty() {
-                *configured_path = default_builtin_agent_config_path(&agent.id)?
-                    .to_string_lossy()
-                    .into_owned();
-            }
-            let path = PathBuf::from(normalize_config_path(configured_path.clone()));
-            if let Some(parent) = path.parent() {
-                fs::create_dir_all(parent).map_err(|error| error.to_string())?;
-            }
+            let path = if configured_path.trim().is_empty() {
+                let default_path = default_builtin_agent_config_path(&agent.id)?;
+                if agent.config_present {
+                    *configured_path = default_path.to_string_lossy().into_owned();
+                }
+                default_path
+            } else {
+                PathBuf::from(normalize_config_path(configured_path.clone()))
+            };
             if agent.config_present {
+                if let Some(parent) = path.parent() {
+                    fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+                }
                 if agent.config_lang == "shellscript" {
                     write_agent_script_at_path(&path, &agent.config_content)?;
                 } else {
@@ -1924,31 +2399,61 @@ fn import_agent_config_entry(
             settings
                 .agent_label_overrides
                 .insert(agent.id.clone(), agent.label.trim().to_string());
+            let mut imported_credentials =
+                parse_builtin_agent_credentials(&agent.id, &agent.config_content);
+            if !agent.base_url.trim().is_empty() {
+                imported_credentials.base_url = normalize_base_url(&agent.base_url);
+            }
+            if !agent.api_key.trim().is_empty() {
+                imported_credentials.api_key = agent.api_key.trim().to_string();
+            }
+            if !agent.models.is_empty() {
+                imported_credentials.models = normalize_model_list(agent.models.clone());
+            }
+            imported_credentials.enable_1m_context |= agent.enable_1m_context;
+            if agent.id == "codex" && !imported_credentials.api_key.is_empty() {
+                write_codex_auth_api_key(&path, &imported_credentials.api_key)?;
+            }
+            if !imported_credentials.base_url.is_empty()
+                || !imported_credentials.api_key.is_empty()
+                || !imported_credentials.models.is_empty()
+            {
+                settings
+                    .builtin_agent_credentials
+                    .insert(agent.id.clone(), imported_credentials);
+            }
             path
         }
         AgentConfigBundleKind::Custom => {
             let id = sanitize_custom_agent_id(&agent.id);
             imported_agent_id = id.clone();
-            let extension = match agent.config_lang.as_str() {
-                "json" => "json",
-                "toml" => "toml",
-                _ => "sh",
-            };
-            let path = agent_scripts_dir()?.join(format!("{id}.{extension}"));
-            fs::create_dir_all(agent_scripts_dir()?).map_err(|error| error.to_string())?;
-            if agent.config_present {
-                if agent.config_lang == "shellscript" {
-                    write_agent_script_at_path(&path, &agent.config_content)?;
-                } else {
-                    atomic_write_private(&path, &agent.config_content)?;
+            let (path, config_lang) = if let Some(draft) = custom_agent_setup_draft(&agent) {
+                let id = validate_agent_setup_draft(&draft)?;
+                let script = build_agent_script(&draft);
+                (write_agent_script(&id, &script)?, "shellscript".to_string())
+            } else {
+                let extension = match agent.config_lang.as_str() {
+                    "json" => "json",
+                    "toml" => "toml",
+                    _ => "sh",
+                };
+                let path = agent_scripts_dir()?.join(format!("{id}.{extension}"));
+                fs::create_dir_all(agent_scripts_dir()?).map_err(|error| error.to_string())?;
+                if agent.config_present {
+                    if agent.config_lang == "shellscript" {
+                        write_agent_script_at_path(&path, &agent.config_content)?;
+                    } else {
+                        atomic_write_private(&path, &agent.config_content)?;
+                    }
                 }
-            }
+                (path, agent.config_lang.clone())
+            };
             let profile = normalize_custom_agent_profile(CustomAgentProfile {
                 id: id.clone(),
                 label: agent.label,
                 path: path.to_string_lossy().into_owned(),
                 codex_like: agent.codex_like,
-                config_lang: agent.config_lang,
+                config_lang,
                 base_url: agent.base_url,
                 api_key: agent.api_key,
                 models: agent.models,
@@ -2016,14 +2521,8 @@ pub async fn export_all_agent_config_bundle(
         );
         let agents = agent_ids
             .iter()
-            .map(|agent| collect_agent_config_bundle_agent(&settings, agent, None))
-            .collect::<Result<Vec<_>, _>>()?
-            .into_iter()
-            .filter(|agent| agent.config_present)
-            .collect::<Vec<_>>();
-        if agents.is_empty() {
-            return Err("No Agent configuration files were found to export".to_string());
-        }
+            .map(|agent| collect_portable_agent_config_bundle_agent(&settings, agent))
+            .collect::<Result<Vec<_>, _>>()?;
         let exported_agent_ids = agents.iter().map(|agent| agent.id.clone()).collect();
         let bundle = AllAgentConfigBundle {
             format: ALL_AGENT_CONFIG_BUNDLE_FORMAT.to_string(),
@@ -2231,27 +2730,7 @@ pub async fn detect_agent_models(
         .await
         .map_err(|e| e.to_string())?;
     let models = parse_model_ids(value);
-    let balance = balance_provider(&base_url).and_then(|provider| {
-        balance_endpoint(&base_url, provider).map(|endpoint| (provider, endpoint))
-    });
-    let balance = if let Some((provider, endpoint)) = balance {
-        let response = client
-            .get(endpoint)
-            .bearer_auth(&api_key)
-            .timeout(Duration::from_secs(5))
-            .send()
-            .await;
-        match response {
-            Ok(response) if response.status().is_success() => response
-                .json::<serde_json::Value>()
-                .await
-                .ok()
-                .and_then(|value| parse_agent_balance(provider, &value)),
-            _ => None,
-        }
-    } else {
-        None
-    };
+    let balance = fetch_agent_balance(&client, &base_url, &api_key).await;
     Ok(AgentModels { models, balance })
 }
 
@@ -3159,6 +3638,175 @@ mod tests {
     }
 
     #[test]
+    fn portable_agent_bundle_keeps_credentials_and_drops_source_paths() {
+        let mut settings = AppSettings::default();
+        settings.custom_agents.push(CustomAgentProfile {
+            id: "portable".to_string(),
+            label: "Portable Agent".to_string(),
+            path: "/Users/source/.aeroric/agents/portable.sh".to_string(),
+            codex_like: false,
+            config_lang: "shellscript".to_string(),
+            base_url: "https://example.com/v1".to_string(),
+            api_key: "sk-test".to_string(),
+            models: vec!["claude-sonnet".to_string()],
+            enable_1m_context: true,
+            username: String::new(),
+            password: String::new(),
+        });
+
+        let bundle = collect_portable_agent_config_bundle_agent(&settings, "portable").unwrap();
+        assert_eq!(bundle.label, "Portable Agent");
+        assert_eq!(bundle.base_url, "https://example.com/v1");
+        assert_eq!(bundle.api_key, "sk-test");
+        assert_eq!(bundle.models, vec!["claude-sonnet"]);
+        assert!(bundle.config_content.is_empty());
+        assert!(bundle.config_present);
+
+        let draft = custom_agent_setup_draft(&bundle).unwrap();
+        let script = build_agent_script(&draft);
+        assert!(script.contains("$HOME/.aeroric/agent-homes/portable"));
+        assert!(!script.contains("/Users/source/.aeroric"));
+    }
+
+    #[test]
+    fn portable_builtin_bundle_keeps_config_and_credentials_without_source_path() {
+        let root = std::env::temp_dir().join(format!(
+            "aeroric-builtin-agent-export-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let config_path = root.join("settings.json");
+        let config_content = r#"{
+  "env": {
+    "ANTHROPIC_BASE_URL": "https://api.example.com/v1/",
+    "ANTHROPIC_AUTH_TOKEN": "sk-builtin",
+    "ANTHROPIC_MODEL": "claude-sonnet[1m]"
+  }
+}"#;
+        std::fs::write(&config_path, config_content).unwrap();
+
+        let mut settings = AppSettings::default();
+        settings.claude_config_path = config_path.to_string_lossy().into_owned();
+        settings
+            .agent_label_overrides
+            .insert("claude".to_string(), "Work Claude".to_string());
+
+        let bundle = collect_portable_agent_config_bundle_agent(&settings, "claude").unwrap();
+        assert_eq!(bundle.label, "Work Claude");
+        assert_eq!(bundle.config_content, config_content);
+        assert!(bundle.config_present);
+        assert_eq!(bundle.base_url, "https://api.example.com/v1");
+        assert_eq!(bundle.api_key, "sk-builtin");
+        assert_eq!(bundle.models, vec!["claude-sonnet"]);
+        assert!(bundle.enable_1m_context);
+        assert!(!serde_json::to_string(&bundle)
+            .unwrap()
+            .contains(&config_path.to_string_lossy().to_string()));
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn parses_codex_builtin_provider_credentials() {
+        let credentials = parse_codex_builtin_credentials(
+            r#"
+model = "gpt-5.5-codex"
+model_provider = "work"
+
+[model_providers.work]
+base_url = "https://codex.example.com/v1/"
+api_key = "sk-codex"
+"#,
+        );
+
+        assert_eq!(credentials.base_url, "https://codex.example.com/v1");
+        assert_eq!(credentials.api_key, "sk-codex");
+        assert_eq!(credentials.models, vec!["gpt-5.5-codex"]);
+    }
+
+    #[test]
+    fn reads_and_writes_codex_api_key_next_to_target_config() {
+        let root =
+            std::env::temp_dir().join(format!("aeroric-codex-auth-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let config_path = root.join("config.toml");
+        std::fs::write(
+            root.join("auth.json"),
+            r#"{"auth_mode":"chatgpt","tokens":{"access_token":"keep"}}"#,
+        )
+        .unwrap();
+
+        assert_eq!(read_codex_auth_api_key(&config_path), None);
+        write_codex_auth_api_key(&config_path, "sk-target").unwrap();
+        assert_eq!(
+            read_codex_auth_api_key(&config_path),
+            Some("sk-target".to_string())
+        );
+        let auth: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(root.join("auth.json")).unwrap())
+                .unwrap();
+        assert_eq!(
+            auth.pointer("/tokens/access_token")
+                .and_then(|v| v.as_str()),
+            Some("keep")
+        );
+        assert_eq!(
+            auth.get("auth_mode").and_then(|v| v.as_str()),
+            Some("apikey")
+        );
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn imported_builtin_credentials_are_applied_to_launch_environment() {
+        let root = std::env::temp_dir().join(format!(
+            "aeroric-builtin-agent-import-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let config_path = root.join("settings.json");
+        let mut settings = AppSettings {
+            claude_config_path: config_path.to_string_lossy().into_owned(),
+            ..AppSettings::default()
+        };
+        let result = import_agent_config_entry(
+            &mut settings,
+            AgentConfigBundleAgent {
+                id: "claude".to_string(),
+                label: "Imported Claude".to_string(),
+                kind: AgentConfigBundleKind::BuiltIn,
+                codex_like: false,
+                config_lang: "json".to_string(),
+                config_content: "{}".to_string(),
+                config_present: true,
+                base_url: "https://api.example.com/v1/".to_string(),
+                api_key: "sk-imported".to_string(),
+                models: vec!["claude-opus".to_string()],
+                enable_1m_context: true,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(result.config_path, config_path.to_string_lossy());
+        assert_eq!(std::fs::read_to_string(&config_path).unwrap(), "{}");
+        let launch = get_agent_launch_spec_from_settings(&settings, "claude");
+        assert!(launch.extra_env.contains(&(
+            "ANTHROPIC_BASE_URL".to_string(),
+            "https://api.example.com/v1".to_string()
+        )));
+        assert!(launch.extra_env.contains(&(
+            "ANTHROPIC_AUTH_TOKEN".to_string(),
+            "sk-imported".to_string()
+        )));
+        assert!(launch
+            .extra_env
+            .contains(&("ANTHROPIC_MODEL".to_string(), "claude-opus[1m]".to_string())));
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn rejects_duplicate_ids_in_all_agent_configuration_bundle() {
         let raw = serde_json::json!({
             "format": ALL_AGENT_CONFIG_BUNDLE_FORMAT,
@@ -3680,6 +4328,14 @@ mod tests {
             balance_endpoint(openrouter, AgentBalanceProvider::OpenRouter).as_deref(),
             Some("https://openrouter.ai/api/v1/key")
         );
+        assert_eq!(
+            api_root_endpoint("https://example.com/v1", "/api/usage/token/").as_deref(),
+            Some("https://example.com/api/usage/token/")
+        );
+        assert_eq!(
+            api_root_endpoint("https://example.com/codex/v1", "/api/usage/token/").as_deref(),
+            Some("https://example.com/codex/api/usage/token/")
+        );
         assert_eq!(balance_provider("https://example.com/v1"), None);
     }
 
@@ -3697,7 +4353,23 @@ mod tests {
             parse_agent_balance(AgentBalanceProvider::OpenRouter, &value),
             Some(AgentBalance {
                 used: 57.25,
-                total: 100.0,
+                total: Some(100.0),
+            })
+        );
+        assert_eq!(
+            parse_agent_balance(
+                AgentBalanceProvider::OpenRouter,
+                &serde_json::json!({
+                    "data": {
+                        "limit": null,
+                        "limit_remaining": null,
+                        "usage": 57.25
+                    }
+                })
+            ),
+            Some(AgentBalance {
+                used: 57.25,
+                total: None,
             })
         );
         assert_eq!(
@@ -3706,6 +4378,52 @@ mod tests {
                 &serde_json::json!({ "data": { "limit_remaining": null } })
             ),
             None
+        );
+    }
+
+    #[test]
+    fn parses_new_api_token_balance() {
+        assert_eq!(
+            parse_new_api_token_balance(&serde_json::json!({
+                "code": true,
+                "data": {
+                    "total_granted": 100,
+                    "total_used": 57.25,
+                    "total_available": 42.75,
+                    "unlimited_quota": false
+                }
+            })),
+            Some(AgentBalance {
+                used: 57.25,
+                total: Some(100.0),
+            })
+        );
+        assert_eq!(
+            parse_new_api_token_balance(&serde_json::json!({
+                "data": {
+                    "total_granted": 0,
+                    "total_used": 57.25,
+                    "unlimited_quota": true
+                }
+            })),
+            Some(AgentBalance {
+                used: 57.25,
+                total: None,
+            })
+        );
+    }
+
+    #[test]
+    fn parses_one_api_dashboard_balance() {
+        assert_eq!(
+            parse_dashboard_balance(
+                &serde_json::json!({ "hard_limit_usd": 100 }),
+                &serde_json::json!({ "total_usage": 5725 })
+            ),
+            Some(AgentBalance {
+                used: 57.25,
+                total: Some(100.0),
+            })
         );
     }
 
@@ -3793,6 +4511,43 @@ mod tests {
 
         assert_eq!(profile.base_url, "https://example.com/v1");
         assert_eq!(profile.api_key, "sk-test");
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn recovers_generated_agent_model_from_script_default() {
+        let dir = std::env::temp_dir().join(format!(
+            "aeroric-agent-model-recover-{}",
+            uuid::Uuid::new_v4()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let script_path = dir.join("agent.sh");
+        fs::write(
+            &script_path,
+            r#"selected_model="${AERORIC_AGENT_MODEL:-}"
+if [ -z "$selected_model" ]; then
+  selected_model='GLM-5.2'
+fi
+"#,
+        )
+        .unwrap();
+        let mut profile = CustomAgentProfile {
+            id: "custom".to_string(),
+            label: "Custom".to_string(),
+            path: script_path.to_string_lossy().into_owned(),
+            codex_like: false,
+            config_lang: "shellscript".to_string(),
+            base_url: String::new(),
+            api_key: String::new(),
+            models: Vec::new(),
+            enable_1m_context: false,
+            username: String::new(),
+            password: String::new(),
+        };
+
+        recover_custom_agent_models(&mut profile);
+
+        assert_eq!(profile.models, vec!["GLM-5.2"]);
         let _ = fs::remove_dir_all(dir);
     }
 

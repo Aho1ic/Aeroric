@@ -296,6 +296,8 @@ pub(crate) enum OutputSink {
     Channel(Channel<String>),
 }
 
+pub(crate) type PtyOutputFilter = Box<dyn FnMut(String) -> Option<String> + Send>;
+
 fn send_pty_chunk(app: &AppHandle, id: &str, sink: &OutputSink, data: String) {
     match sink {
         OutputSink::Event { event_name, id_key } => {
@@ -325,6 +327,7 @@ fn flush_pty_batch(app: &AppHandle, id: &str, sink: &OutputSink, batch: &mut Str
 /// - `sink`：agent / SSH 传 `OutputSink::Channel`，本地 shell 传 `OutputSink::Event`
 /// - `session_tx`：可选 channel，用于将原始文本转发给 session watcher
 /// - `startup_tx`：首批有效输出出现时通知等待注入初始输入的任务
+/// - `output_filter`：可选输出过滤器，可在发送到前端前消费或改写数据
 /// - `on_finish`：PTY 关闭后执行的可选清理回调
 pub(crate) fn spawn_pty_reader(
     app: AppHandle,
@@ -335,10 +338,12 @@ pub(crate) fn spawn_pty_reader(
     persist_terminal_history: bool,
     session_tx: Option<std::sync::mpsc::Sender<String>>,
     startup_tx: Option<std::sync::mpsc::Sender<()>>,
+    output_filter: Option<PtyOutputFilter>,
     on_finish: Option<Box<dyn FnOnce() + Send>>,
 ) {
     tokio::task::spawn_blocking(move || {
         let mut reader = reader;
+        let mut output_filter = output_filter;
         let mut buf = [0u8; PTY_READ_BUFFER_SIZE];
         // 保存上次读取中不完整的 UTF-8 字节序列
         let mut leftover: Vec<u8> = Vec::new();
@@ -394,6 +399,18 @@ pub(crate) fn spawn_pty_reader(
                         // SAFETY：已确认 valid_len 之前的字节为有效 UTF-8
                         let data = unsafe {
                             std::str::from_utf8_unchecked(&combined[..valid_len]).to_owned()
+                        };
+                        let data = match output_filter.as_mut() {
+                            Some(filter) => match filter(data) {
+                                Some(data) if !data.is_empty() => data,
+                                _ => {
+                                    if valid_len < combined.len() {
+                                        leftover = combined[valid_len..].to_vec();
+                                    }
+                                    continue;
+                                }
+                            },
+                            None => data,
                         };
                         if persist_terminal_history {
                             let _ = crate::storage::append_task_terminal_history(&id, &data);
@@ -860,6 +877,7 @@ pub async fn run_task(
             None
         },
         None,
+        None,
     );
     if !use_native_initial_prompt {
         if let Some((paste, submit)) = initial_prompt_input_chunks(&final_prompt) {
@@ -1103,6 +1121,7 @@ pub async fn resume_task(
         None,
         None,
         None,
+        None,
     );
     spawn_exit_monitor(app, task_id, project_path, is_codex);
 
@@ -1219,6 +1238,7 @@ pub async fn open_shell(
         PtyEmitMode::Immediate,
         reader,
         false,
+        None,
         None,
         None,
         Some(on_finish),

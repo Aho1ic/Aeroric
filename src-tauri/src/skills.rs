@@ -6,7 +6,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
 
 use crate::storage::{
-    aeroric_dir, atomic_write, ensure_aeroric_dirs, load_projects, save_projects, Project,
+    aeroric_dir, atomic_write, ensure_aeroric_dirs, load_projects, update_projects, Project,
 };
 
 // ── Data types ───────────────────────────────────────────────────────────────
@@ -522,37 +522,37 @@ pub async fn set_skill_hub_path(path: String) -> Result<SetHubResult, String> {
         }
         let hub_path_str = canonical.to_string_lossy().into_owned();
 
-        let mut projects = load_projects()?;
-        let existing = projects
-            .iter()
-            .find(|p| {
-                Path::new(&p.path).canonicalize().ok().as_deref() == Some(canonical.as_path())
-            })
-            .cloned();
+        let ((project, created_new_project), projects) = update_projects(|projects| {
+            let existing = projects
+                .iter()
+                .find(|p| {
+                    Path::new(&p.path).canonicalize().ok().as_deref() == Some(canonical.as_path())
+                })
+                .cloned();
 
-        let (project, created_new_project) = match existing {
-            Some(p) => (p, false),
-            None => {
-                let name = canonical
-                    .file_name()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or("skills_hub")
-                    .to_string();
-                let new_project = Project {
-                    id: now_ms().to_string(),
-                    name,
-                    path: hub_path_str.clone(),
-                    location: None,
-                    branch: None,
-                    last_opened_at: now_ms(),
-                    order_index: None,
-                    hidden_from_rail: false,
-                };
-                projects.push(new_project.clone());
-                save_projects(projects.clone())?;
-                (new_project, true)
-            }
-        };
+            Ok(match existing {
+                Some(project) => (project, false),
+                None => {
+                    let name = canonical
+                        .file_name()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or("skills_hub")
+                        .to_string();
+                    let project = Project {
+                        id: now_ms().to_string(),
+                        name,
+                        path: hub_path_str.clone(),
+                        location: None,
+                        branch: None,
+                        last_opened_at: now_ms(),
+                        order_index: None,
+                        hidden_from_rail: false,
+                    };
+                    projects.push(project.clone());
+                    (project, true)
+                }
+            })
+        })?;
 
         let config = SkillHubConfig {
             hub_project_id: Some(project.id.clone()),

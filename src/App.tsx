@@ -47,6 +47,7 @@ import {
   normalizeSftpLocalDefaultPath,
   SFTP_LOCAL_PATH_STORAGE_KEY,
 } from "./settings";
+import { createProjectPersister } from "./projectPersistence";
 import { createProjectTaskPersister } from "./taskPersistence";
 import { applyProjectOrder, normalizeProjectOrder, sortProjectsForRail } from "./projectOrder";
 import s from "./styles";
@@ -87,15 +88,16 @@ function normalizeSshProjectNames(projects: Project[], connections: SshConnectio
   return changed ? normalized : projects;
 }
 
+const queuedProjectPersist = createProjectPersister((projects) =>
+  invoke("save_projects", { projects }),
+);
+
 function persistProjects(
   projects: Project[],
   onError: (msg: string) => void,
   formatError: (error: string) => string,
 ) {
-  invoke("save_projects", { projects }).catch((e: unknown) => {
-    console.error(e);
-    onError(formatError(String(e)));
-  });
+  queuedProjectPersist(projects, { onError, formatError });
 }
 
 const queuedProjectTaskPersist = createProjectTaskPersister((projectId, tasks) =>
@@ -495,16 +497,17 @@ function App() {
   }, []);
 
   useEffect(() => {
-    // 用 backend 列表作为权威，merge 进前端 state：
-    // 后端写入的版本覆盖共有项；前端独有但 backend 还未持久化的条目保留下来。
-    const mergeProjects = (authoritative: Project[]) => {
+    // Backend events may carry a snapshot captured before a recent frontend edit.
+    // Keep current entries for shared IDs and only add backend-only projects.
+    const mergeProjects = (incoming: Project[], persistMerged = false) => {
       setProjects((prev) => {
-        const byId = new Map<string, Project>();
-        authoritative.forEach((p) => byId.set(p.id, p));
-        prev.forEach((p) => {
-          if (!byId.has(p.id)) byId.set(p.id, p);
-        });
-        return normalizeProjectOrder(Array.from(byId.values()));
+        const byId = new Map(incoming.map((project) => [project.id, project]));
+        prev.forEach((project) => byId.set(project.id, project));
+        const next = normalizeProjectOrder(Array.from(byId.values()));
+        if (persistMerged) {
+          persistProjects(next, showToastRef.current, formatSaveProjectsErrorRef.current);
+        }
+        return next;
       });
     };
 
@@ -523,11 +526,10 @@ function App() {
     const handleSkillHubChanged = (e: Event) => {
       const detail = (e as CustomEvent<{ projects?: Project[] }>).detail;
       if (detail?.projects && Array.isArray(detail.projects)) {
-        // 同步路径：set_skill_hub_path 已返回完整列表，直接 merge，避免竞态
         invoke<SkillHubConfig>("get_skill_hub_config")
           .then((cfg) => setSkillHubConfig(cfg ?? null))
           .catch(console.error);
-        mergeProjects(detail.projects);
+        mergeProjects(detail.projects, true);
         return;
       }
       // clear_skill_hub 等场景没有 projects payload，退回到全量 reload

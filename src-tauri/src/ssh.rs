@@ -2,6 +2,7 @@ use std::fs;
 use std::io::Write;
 use std::path::PathBuf;
 use std::process::Command;
+use std::sync::Arc;
 use std::time::Duration;
 
 use portable_pty::{native_pty_system, CommandBuilder, PtySize};
@@ -68,11 +69,13 @@ fn build_remote_start_command(remote_path: &str) -> String {
     )
 }
 
-fn build_remote_start_command_with_sudo(remote_path: &str, password: &str) -> String {
+const SUDO_PASSWORD_READY_MARKER: &str = "__AERORIC_SUDO_PASSWORD_READY__";
+
+fn build_remote_start_command_with_sudo(remote_path: &str) -> String {
     format!(
-        "cd -- {} && aeroric_sudo_password={} && printf '%s\\n' \"$aeroric_sudo_password\" | sudo -S -p '' -v && printf '%s\\n' \"$aeroric_sudo_password\" | sudo -S -p '' \"${{SHELL:-/bin/sh}}\" -l",
+        "cd -- {} && trap 'stty echo' EXIT HUP INT TERM && stty -echo && printf '%s\\n' {} && IFS= read -r aeroric_sudo_password && stty echo && trap - EXIT HUP INT TERM && printf '\\n' && printf '%s\\n' \"$aeroric_sudo_password\" | sudo -S -p '' -v && unset aeroric_sudo_password && exec sudo -n \"${{SHELL:-/bin/sh}}\" -l",
         shell_quote_posix(remote_path),
-        shell_quote_posix(password)
+        shell_quote_posix(SUDO_PASSWORD_READY_MARKER)
     )
 }
 
@@ -90,11 +93,32 @@ fn is_remote_codex_like_agent(agent: &str) -> bool {
     matches!(agent, "codex" | "claude_gpt55")
 }
 
-fn remote_agent_program(agent: &str) -> &str {
-    match agent {
-        "claude_gpt55" => "~/.claude/start-gpt55.sh",
-        _ => agent,
+fn validate_remote_agent_id(agent: &str) -> Result<&str, String> {
+    let trimmed = agent.trim();
+    let edge_is_separator = trimmed
+        .as_bytes()
+        .first()
+        .into_iter()
+        .chain(trimmed.as_bytes().last())
+        .any(|byte| matches!(byte, b'.' | b'_' | b'-'));
+    if trimmed.is_empty()
+        || trimmed != agent
+        || edge_is_separator
+        || !trimmed
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+    {
+        return Err("Invalid remote Agent ID".to_string());
     }
+    Ok(trimmed)
+}
+
+fn remote_agent_program_word(agent: &str) -> Result<String, String> {
+    let agent = validate_remote_agent_id(agent)?;
+    Ok(match agent {
+        "claude_gpt55" => "\"$HOME/.claude/start-gpt55.sh\"".to_string(),
+        _ => shell_quote_posix(agent),
+    })
 }
 
 fn remote_agent_args(agent: &str, permission_mode: &str) -> Vec<String> {
@@ -123,8 +147,8 @@ fn remote_agent_args(agent: &str, permission_mode: &str) -> Vec<String> {
     }
 }
 
-fn build_remote_command(program: &str, args: &[String]) -> String {
-    std::iter::once(program.to_string())
+fn build_remote_command(program_word: String, args: &[String]) -> String {
+    std::iter::once(program_word)
         .chain(args.iter().map(|arg| shell_word_posix(arg)))
         .collect::<Vec<_>>()
         .join(" ")
@@ -135,7 +159,8 @@ fn build_remote_task_command(
     permission_mode: &str,
     remote_project_path: &str,
     prompt: Option<&str>,
-) -> String {
+) -> Result<String, String> {
+    let program_word = remote_agent_program_word(agent)?;
     let mut args = remote_agent_args(agent, permission_mode);
     if let Some(prompt) = prompt.map(str::trim).filter(|value| !value.is_empty()) {
         if is_remote_codex_like_agent(agent) {
@@ -143,11 +168,11 @@ fn build_remote_task_command(
         }
         args.push(prompt.to_string());
     }
-    format!(
+    Ok(format!(
         "cd -- {} && {}",
         shell_quote_posix(remote_project_path),
-        build_remote_command(remote_agent_program(agent), &args)
-    )
+        build_remote_command(program_word, &args)
+    ))
 }
 
 fn build_remote_resume_command(
@@ -155,7 +180,8 @@ fn build_remote_resume_command(
     permission_mode: &str,
     remote_project_path: &str,
     session_id: &str,
-) -> String {
+) -> Result<String, String> {
+    let program_word = remote_agent_program_word(agent)?;
     let mut args = remote_agent_args(agent, permission_mode);
     if is_remote_codex_like_agent(agent) {
         args.push("resume".to_string());
@@ -164,11 +190,11 @@ fn build_remote_resume_command(
         args.push("--resume".to_string());
         args.push(session_id.to_string());
     }
-    format!(
+    Ok(format!(
         "cd -- {} && {}",
         shell_quote_posix(remote_project_path),
-        build_remote_command(remote_agent_program(agent), &args)
-    )
+        build_remote_command(program_word, &args)
+    ))
 }
 
 fn build_ssh_args(connection: &SshConnection, force_tty: bool) -> Vec<String> {
@@ -194,10 +220,7 @@ fn build_ssh_args(connection: &SshConnection, force_tty: bool) -> Vec<String> {
         .filter(|value| !value.is_empty())
     {
         args.push(if connection_can_auto_sudo(connection) {
-            build_remote_start_command_with_sudo(
-                remote_path,
-                connection.password.as_deref().unwrap_or_default().trim(),
-            )
+            build_remote_start_command_with_sudo(remote_path)
         } else {
             build_remote_start_command(remote_path)
         });
@@ -237,9 +260,6 @@ fn ssh_command_spec_from_args(
     connection: &SshConnection,
     mut ssh_args: Vec<String>,
 ) -> SshCommandSpec {
-    let inject_sudo_password = ssh_args
-        .iter()
-        .any(|arg| arg.contains("AERORIC_SUDO_PASSWORD"));
     let password = connection
         .password
         .as_ref()
@@ -258,14 +278,10 @@ fn ssh_command_spec_from_args(
         );
         let mut args = vec!["-e".to_string(), "ssh".to_string()];
         args.extend(ssh_args);
-        let mut env = vec![("SSHPASS".to_string(), password.to_string())];
-        if inject_sudo_password && connection_can_auto_sudo(connection) {
-            env.push(("AERORIC_SUDO_PASSWORD".to_string(), password.to_string()));
-        }
         SshCommandSpec {
             program: sshpass_program(),
             args,
-            env,
+            env: vec![("SSHPASS".to_string(), password.to_string())],
         }
     } else {
         SshCommandSpec {
@@ -374,6 +390,49 @@ pub(crate) fn std_ssh_command_for_remote_command(
     cmd
 }
 
+fn marker_overlap_len(value: &str, marker: &str) -> usize {
+    (1..=value.len().min(marker.len()))
+        .rev()
+        .find(|length| value.ends_with(&marker[..*length]))
+        .unwrap_or(0)
+}
+
+fn sudo_password_output_filter(
+    writer: Arc<parking_lot::Mutex<Box<dyn Write + Send>>>,
+    password: String,
+) -> crate::pty::PtyOutputFilter {
+    let mut pending = String::new();
+    let mut password_sent = false;
+    Box::new(move |data| {
+        if password_sent {
+            return Some(data);
+        }
+        pending.push_str(&data);
+        if let Some(marker_start) = pending.find(SUDO_PASSWORD_READY_MARKER) {
+            let marker_end = marker_start + SUDO_PASSWORD_READY_MARKER.len();
+            let mut visible = String::with_capacity(pending.len());
+            visible.push_str(&pending[..marker_start]);
+            visible.push_str(&pending[marker_end..]);
+            pending.clear();
+            {
+                let mut writer = writer.lock();
+                let _ = writer.write_all(password.as_bytes());
+                let _ = writer.write_all(b"\n");
+                let _ = writer.flush();
+            }
+            password_sent = true;
+            return Some(visible);
+        }
+
+        let overlap = marker_overlap_len(&pending, SUDO_PASSWORD_READY_MARKER);
+        let emit_len = pending.len().saturating_sub(overlap);
+        if emit_len == 0 {
+            return None;
+        }
+        Some(pending.drain(..emit_len).collect())
+    })
+}
+
 fn spawn_remote_task_exit_monitor(app: AppHandle, task_id: String) {
     tokio::task::spawn_blocking(move || loop {
         let exit_status = {
@@ -388,11 +447,15 @@ fn spawn_remote_task_exit_monitor(app: AppHandle, task_id: String) {
 
         if let Some(status) = exit_status {
             let ok = status.success();
+            let tm = app.state::<crate::TaskManager>();
+            let mut cancelled_tasks = tm.cancelled_tasks.lock();
+            let was_cancelled = cancelled_tasks.remove(&task_id);
+            let was_manually_completed = tm.manually_completed_tasks.lock().remove(&task_id);
             {
-                let tm = app.state::<crate::TaskManager>();
                 tm.remove_pty_handles(&task_id);
-                tm.cancelled_tasks.lock().remove(&task_id);
-                tm.manually_completed_tasks.lock().remove(&task_id);
+            }
+            if was_cancelled || was_manually_completed {
+                return;
             }
             let payload = if ok {
                 serde_json::json!({ "task_id": task_id, "status": "done" })
@@ -450,6 +513,7 @@ fn spawn_remote_task_pty(
         },
         reader,
         true,
+        None,
         None,
         None,
         None,
@@ -518,6 +582,24 @@ pub async fn open_ssh_shell(
     let reader = pair.master.try_clone_reader().map_err(|e| e.to_string())?;
     let writer: Box<dyn Write + Send> = pair.master.take_writer().map_err(|e| e.to_string())?;
     crate::pty::register_pty_handles(&task_manager, &shell_id, pair.master, writer, child)?;
+    let output_filter = if connection_can_auto_sudo(&connection) {
+        let writer = task_manager
+            .pty_writers
+            .lock()
+            .get(&shell_id)
+            .cloned()
+            .ok_or_else(|| "Failed to initialize SSH sudo input".to_string())?;
+        Some(sudo_password_output_filter(
+            writer,
+            connection
+                .password
+                .as_deref()
+                .unwrap_or_default()
+                .to_string(),
+        ))
+    } else {
+        None
+    };
 
     let app_cleanup = app.clone();
     let sid_cleanup = shell_id.clone();
@@ -535,6 +617,7 @@ pub async fn open_ssh_shell(
         false,
         None,
         None,
+        output_filter,
         Some(on_finish),
     );
 
@@ -581,7 +664,7 @@ pub async fn run_remote_task(
         &permission_mode,
         &remote_project_path,
         Some(&prompt),
-    );
+    )?;
     let cmd = build_ssh_remote_command(&connection, remote_command);
     spawn_remote_task_pty(app, &task_manager, &task_id, cmd, cols, rows, on_output)
 }
@@ -606,7 +689,7 @@ pub async fn resume_remote_task(
         .lock()
         .remove(&task_id);
     let remote_command =
-        build_remote_resume_command(&agent, &permission_mode, &remote_project_path, &session_id);
+        build_remote_resume_command(&agent, &permission_mode, &remote_project_path, &session_id)?;
     let cmd = build_ssh_remote_command(&connection, remote_command);
     spawn_remote_task_pty(app, &task_manager, &task_id, cmd, cols, rows, on_output)
 }
@@ -617,12 +700,15 @@ pub async fn cancel_remote_task(
     task_manager: State<'_, crate::TaskManager>,
     task_id: String,
 ) -> Result<(), String> {
-    task_manager.cancelled_tasks.lock().insert(task_id.clone());
+    let mut cancelled_tasks = task_manager.cancelled_tasks.lock();
+    cancelled_tasks.insert(task_id.clone());
     let child_arc = task_manager.child_handles.lock().get(&task_id).cloned();
     if let Some(arc) = child_arc {
         let _ = arc.lock().unwrap().kill();
+    } else {
+        cancelled_tasks.remove(&task_id);
+        task_manager.remove_pty_handles(&task_id);
     }
-    task_manager.remove_pty_handles(&task_id);
     let _ = app.emit(
         "task-status",
         serde_json::json!({ "task_id": task_id, "status": "cancelled" }),
@@ -739,8 +825,8 @@ mod tests {
     #[test]
     fn remote_start_command_can_enter_sudo_shell_with_saved_password() {
         assert_eq!(
-            build_remote_start_command_with_sudo("/srv/aeroric app", "sec'ret"),
-            "cd -- '/srv/aeroric app' && aeroric_sudo_password='sec'\\''ret' && printf '%s\\n' \"$aeroric_sudo_password\" | sudo -S -p '' -v && printf '%s\\n' \"$aeroric_sudo_password\" | sudo -S -p '' \"${SHELL:-/bin/sh}\" -l"
+            build_remote_start_command_with_sudo("/srv/aeroric app"),
+            "cd -- '/srv/aeroric app' && trap 'stty echo' EXIT HUP INT TERM && stty -echo && printf '%s\\n' '__AERORIC_SUDO_PASSWORD_READY__' && IFS= read -r aeroric_sudo_password && stty echo && trap - EXIT HUP INT TERM && printf '\\n' && printf '%s\\n' \"$aeroric_sudo_password\" | sudo -S -p '' -v && unset aeroric_sudo_password && exec sudo -n \"${SHELL:-/bin/sh}\" -l"
         );
     }
 
@@ -766,11 +852,12 @@ mod tests {
         assert!(spec
             .args
             .iter()
-            .any(|arg| arg.contains("sudo -S -p '' \"${SHELL:-/bin/sh}\" -l")));
+            .any(|arg| arg.contains("exec sudo -n \"${SHELL:-/bin/sh}\" -l")));
         assert!(spec
             .args
             .iter()
-            .any(|arg| arg.contains("aeroric_sudo_password='secret'")));
+            .any(|arg| arg.contains("__AERORIC_SUDO_PASSWORD_READY__")));
+        assert!(!spec.args.iter().any(|arg| arg.contains("secret")));
         assert_eq!(
             spec.env,
             vec![("SSHPASS".to_string(), "secret".to_string())]
@@ -911,16 +998,18 @@ mod tests {
                 "auto_edit",
                 "/srv/app's repo",
                 Some("fix Bob's bug"),
-            ),
-            "cd -- '/srv/app'\\''s repo' && claude --permission-mode acceptEdits 'fix Bob'\\''s bug'"
+            )
+            .unwrap(),
+            "cd -- '/srv/app'\\''s repo' && 'claude' --permission-mode acceptEdits 'fix Bob'\\''s bug'"
         );
     }
 
     #[test]
     fn remote_codex_task_command_uses_sandbox_flags_and_separator() {
         assert_eq!(
-            build_remote_task_command("codex", "auto_edit", "/srv/app", Some("inspect status")),
-            "cd -- '/srv/app' && codex --sandbox workspace-write -a on-request -- 'inspect status'"
+            build_remote_task_command("codex", "auto_edit", "/srv/app", Some("inspect status"))
+                .unwrap(),
+            "cd -- '/srv/app' && 'codex' --sandbox workspace-write -a on-request -- 'inspect status'"
         );
     }
 
@@ -932,20 +1021,64 @@ mod tests {
                 "full_access",
                 "/srv/app",
                 Some("inspect status"),
-            ),
-            "cd -- '/srv/app' && ~/.claude/start-gpt55.sh --dangerously-bypass-approvals-and-sandbox -- 'inspect status'"
+            )
+            .unwrap(),
+            "cd -- '/srv/app' && \"$HOME/.claude/start-gpt55.sh\" --dangerously-bypass-approvals-and-sandbox -- 'inspect status'"
         );
     }
 
     #[test]
     fn remote_resume_command_uses_agent_specific_session_flags() {
         assert_eq!(
-            build_remote_resume_command("claude", "ask", "/srv/app", "claude-session"),
-            "cd -- '/srv/app' && claude --permission-mode default --resume claude-session"
+            build_remote_resume_command("claude", "ask", "/srv/app", "claude-session").unwrap(),
+            "cd -- '/srv/app' && 'claude' --permission-mode default --resume claude-session"
         );
         assert_eq!(
-            build_remote_resume_command("codex", "full_access", "/srv/app", "codex-session"),
-            "cd -- '/srv/app' && codex --dangerously-bypass-approvals-and-sandbox resume codex-session"
+            build_remote_resume_command("codex", "full_access", "/srv/app", "codex-session")
+                .unwrap(),
+            "cd -- '/srv/app' && 'codex' --dangerously-bypass-approvals-and-sandbox resume codex-session"
+        );
+    }
+
+    #[test]
+    fn remote_agent_id_rejects_shell_metacharacters() {
+        assert!(validate_remote_agent_id("claude; touch /tmp/pwn").is_err());
+        assert!(build_remote_task_command("custom_agent", "ask", "/srv/app", None).is_ok());
+    }
+
+    #[test]
+    fn sudo_password_filter_sends_secret_only_after_ready_marker() {
+        struct SharedWriter(Arc<parking_lot::Mutex<Vec<u8>>>);
+
+        impl Write for SharedWriter {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().extend_from_slice(bytes);
+                Ok(bytes.len())
+            }
+
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+
+        let captured = Arc::new(parking_lot::Mutex::new(Vec::new()));
+        let writer: Arc<parking_lot::Mutex<Box<dyn Write + Send>>> = Arc::new(
+            parking_lot::Mutex::new(Box::new(SharedWriter(captured.clone()))),
+        );
+        let mut filter = sudo_password_output_filter(writer, "sec'ret".to_string());
+
+        assert_eq!(
+            filter("banner __AERORIC_SUDO_".to_string()),
+            Some("banner ".to_string())
+        );
+        assert_eq!(
+            filter("PASSWORD_READY__\r\n".to_string()),
+            Some("\r\n".to_string())
+        );
+        assert_eq!(captured.lock().as_slice(), b"sec'ret\n");
+        assert_eq!(
+            filter("shell ready\n".to_string()),
+            Some("shell ready\n".to_string())
         );
     }
 }
