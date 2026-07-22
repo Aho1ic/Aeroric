@@ -239,7 +239,7 @@ function formatSize(size?: number | null): string {
 export function SftpPanel({
   sshConnections,
   localDefaultPath,
-  active: _active,
+  active,
   width,
   themeVariant,
   currentSshConnectionId,
@@ -1315,7 +1315,11 @@ export function SftpPanel({
   };
 
   return (
-    <div className="sftp-panel" style={{ width }}>
+    <div
+      className="sftp-panel"
+      aria-hidden={!active}
+      style={{ width, display: active ? undefined : "none" }}
+    >
       <div className="sftp-header">
         <div className="sftp-title">
           <Server size={15} />

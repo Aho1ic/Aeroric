@@ -319,6 +319,7 @@ export function ProjectPage({
   const [rightSshMounted, setRightSshMounted] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [showFileSearch, setShowFileSearch] = useState(false);
+  const [sftpMounted, setSftpMounted] = useState(false);
   const [commandPaletteInitialInput, setCommandPaletteInitialInput] = useState<string | null>(null);
   const [launchedDebugSession, setLaunchedDebugSession] = useState<DebugSessionSnapshot | null>(
     null,
@@ -821,6 +822,9 @@ export function ProjectPage({
   const handleToggleRightPanel = useCallback(
     (panel: Parameters<typeof handleTogglePanel>[0]) => {
       preloadProjectPanel(panel);
+      if (panel === "sftp") {
+        setSftpMounted(true);
+      }
       const label = projectPanelFeedbackLabel(panel, t);
       showActionFeedback(
         rightPanel === panel
@@ -1552,7 +1556,7 @@ export function ProjectPage({
               )}
             >
               <Suspense fallback={<CenterSuspenseFallback label={t("common.loading")} />}>
-                {isSftpMode ? (
+                {sftpMounted && (
                   <SftpPanel
                     sshConnections={sshConnections}
                     localDefaultPath={
@@ -1566,154 +1570,160 @@ export function ProjectPage({
                     }
                     projectConfig={sftpProjectConfig}
                   />
-                ) : isSshMode ? (
-                  <SshWorkspace
-                    connections={sshConnections}
-                    onConnectionsChange={onSshConnectionsChange}
-                    active={visible && isSshMode}
-                    themeVariant={themeVariant}
-                    terminalFontSize={terminalFontSize}
-                    monoFontFamily={monoFontFamily}
-                    remoteConnection={projectLocation.kind === "ssh" ? remoteConnection : undefined}
-                  />
-                ) : isDockerMode ? (
-                  <DockerServiceView
-                    remote={projectLocation.kind === "ssh" ? remoteConnection : undefined}
-                    sourceLabel={
-                      projectLocation.kind === "ssh" && remoteConnection
-                        ? `${remoteConnection.name} · ${projectLocation.remotePath}`
-                        : project.path
-                    }
-                  />
-                ) : isDatabaseMode ? (
-                  <DatabaseView
-                    projectRoot={projectLocation.kind === "local" ? project.path : undefined}
-                    initialSqliteFilePath={databaseFilePath ?? undefined}
-                    remoteConnection={projectLocation.kind === "ssh" ? remoteConnection : undefined}
-                    remoteProjectPath={
-                      projectLocation.kind === "ssh" ? projectLocation.remotePath : undefined
-                    }
-                    sshConnections={sshConnections}
-                  />
-                ) : isNotesMode ? (
-                  <div style={projectNotebookPanelStyle({ containerWidth: projectBodyWidth })}>
-                    <ErrorBoundary label="随手记">
-                      <NotebookPanel width="100%" />
-                    </ErrorBoundary>
-                  </div>
-                ) : openDiff ? (
-                  openDiff.kind === "file" ? (
-                    <GitDiffViewer
-                      projectPath={gitContextPath}
-                      mode="file"
-                      filePath={openDiff.filePath}
-                      staged={openDiff.staged}
-                      title={openDiff.label}
-                      onClose={() => setOpenDiff(null)}
-                      remote={remoteFileContext}
+                )}
+                {!isSftpMode &&
+                  (isSshMode ? (
+                    <SshWorkspace
+                      connections={sshConnections}
+                      onConnectionsChange={onSshConnectionsChange}
+                      active={visible && isSshMode}
+                      themeVariant={themeVariant}
+                      terminalFontSize={terminalFontSize}
+                      monoFontFamily={monoFontFamily}
+                      remoteConnection={
+                        projectLocation.kind === "ssh" ? remoteConnection : undefined
+                      }
                     />
-                  ) : openDiff.kind === "commit-file" ? (
-                    <GitDiffViewer
-                      projectPath={gitContextPath}
-                      mode="commit-file"
-                      commitHash={openDiff.hash}
-                      filePath={openDiff.filePath}
-                      title={openDiff.label}
-                      onClose={() => setOpenDiff(null)}
-                      remote={remoteFileContext}
+                  ) : isDockerMode ? (
+                    <DockerServiceView
+                      remote={projectLocation.kind === "ssh" ? remoteConnection : undefined}
+                      sourceLabel={
+                        projectLocation.kind === "ssh" && remoteConnection
+                          ? `${remoteConnection.name} · ${projectLocation.remotePath}`
+                          : project.path
+                      }
                     />
-                  ) : (
-                    <GitDiffViewer
-                      projectPath={gitContextPath}
-                      mode="commit"
-                      commitHash={openDiff.hash}
-                      title={openDiff.message}
-                      onClose={() => setOpenDiff(null)}
-                      remote={remoteFileContext}
+                  ) : isDatabaseMode ? (
+                    <DatabaseView
+                      projectRoot={projectLocation.kind === "local" ? project.path : undefined}
+                      initialSqliteFilePath={databaseFilePath ?? undefined}
+                      remoteConnection={
+                        projectLocation.kind === "ssh" ? remoteConnection : undefined
+                      }
+                      remoteProjectPath={
+                        projectLocation.kind === "ssh" ? projectLocation.remotePath : undefined
+                      }
+                      sshConnections={sshConnections}
                     />
-                  )
-                ) : editorGroups.length > 0 ? (
-                  <div
-                    style={{
-                      flex: 1,
-                      minWidth: 0,
-                      minHeight: 0,
-                      display: "flex",
-                      overflow: "hidden",
-                      background: "var(--bg-panel)",
-                    }}
-                  >
-                    {editorGroups.map((group, index) => (
-                      <div
-                        key={group.id}
-                        onMouseDown={() => handleEditorGroupFocus(group.id)}
-                        style={{
-                          flex: "1 1 0",
-                          minWidth: 0,
-                          minHeight: 0,
-                          display: "flex",
-                          borderLeft: index === 0 ? "none" : "1px solid var(--border-dim)",
-                          boxShadow:
-                            group.id === activeEditorGroupId
-                              ? "inset 0 0 0 1px var(--accent)"
-                              : "none",
-                        }}
-                      >
-                        <FileViewer
-                          tabs={group.tabs}
-                          activeFilePath={group.activePath}
-                          projectPath={fileRootPath}
-                          onSelectTab={(path) => handleFileTabSelect(path, group.id)}
-                          onCloseTab={(path) => handleFileTabClose(path, group.id)}
-                          onCloseOtherTabs={(path) => handleCloseOtherFileTabs(path, group.id)}
-                          onCloseTabsToRight={(path) => handleCloseTabsToRight(path, group.id)}
-                          onCloseAllTabs={() => handleCloseAllFileTabs(group.id)}
-                          themeVariant={themeVariant}
-                          onRunMakeTarget={handleRunMakeTarget}
-                          remote={remoteFileContext}
-                          condaEnvironments={runnableCondaEnvironments}
-                          selectedCondaEnvPath={selectedCondaEnvPath}
-                          onSelectedCondaEnvPathChange={onSelectedCondaEnvPathChange}
-                          onRunPythonFile={handleRunPythonFile}
-                          onRunTestTarget={handleRunEditorTestTarget}
-                          onDebugTestTarget={
-                            debugDisabled ? undefined : handleDebugEditorTestTarget
-                          }
-                          debugBreakpoints={
-                            debugDisabled || remoteFileContext ? [] : editorDebugBreakpoints
-                          }
-                          diagnostics={editorDiagnostics}
-                          coverage={remoteFileContext ? null : editorCoverage}
-                          onToggleDebugBreakpoint={
-                            debugDisabled ? undefined : handleToggleEditorDebugBreakpoint
-                          }
-                          onOpenDefinition={handleDefinitionOpen}
-                          onFocusGroup={() => handleEditorGroupFocus(group.id)}
-                          onSplitRight={
-                            group.id === "main" && group.id === activeEditorGroupId
-                              ? handleSplitEditorGroupRight
-                              : undefined
-                          }
-                        />
-                      </div>
-                    ))}
-                  </div>
-                ) : !activeWorkspaceTask ? (
-                  <NewTaskView
-                    project={project}
-                    otherProjects={otherProjects}
-                    onSubmit={onSubmitTask}
-                    initialDraft={newTaskDraftRef.current}
-                    onCacheDraft={handleCacheNewTaskDraft}
-                    compactControls={responsiveLayout.compactComposeControls}
-                  />
-                ) : activeWorkspaceTask.status === ("todo" as TaskStatus) ? (
-                  <TodoTaskView
-                    task={activeWorkspaceTask}
-                    onRunTodo={onRunTodoTask}
-                    onUpdateTodo={onUpdateTodo}
-                  />
-                ) : null}
+                  ) : isNotesMode ? (
+                    <div style={projectNotebookPanelStyle({ containerWidth: projectBodyWidth })}>
+                      <ErrorBoundary label="随手记">
+                        <NotebookPanel width="100%" />
+                      </ErrorBoundary>
+                    </div>
+                  ) : openDiff ? (
+                    openDiff.kind === "file" ? (
+                      <GitDiffViewer
+                        projectPath={gitContextPath}
+                        mode="file"
+                        filePath={openDiff.filePath}
+                        staged={openDiff.staged}
+                        title={openDiff.label}
+                        onClose={() => setOpenDiff(null)}
+                        remote={remoteFileContext}
+                      />
+                    ) : openDiff.kind === "commit-file" ? (
+                      <GitDiffViewer
+                        projectPath={gitContextPath}
+                        mode="commit-file"
+                        commitHash={openDiff.hash}
+                        filePath={openDiff.filePath}
+                        title={openDiff.label}
+                        onClose={() => setOpenDiff(null)}
+                        remote={remoteFileContext}
+                      />
+                    ) : (
+                      <GitDiffViewer
+                        projectPath={gitContextPath}
+                        mode="commit"
+                        commitHash={openDiff.hash}
+                        title={openDiff.message}
+                        onClose={() => setOpenDiff(null)}
+                        remote={remoteFileContext}
+                      />
+                    )
+                  ) : editorGroups.length > 0 ? (
+                    <div
+                      style={{
+                        flex: 1,
+                        minWidth: 0,
+                        minHeight: 0,
+                        display: "flex",
+                        overflow: "hidden",
+                        background: "var(--bg-panel)",
+                      }}
+                    >
+                      {editorGroups.map((group, index) => (
+                        <div
+                          key={group.id}
+                          onMouseDown={() => handleEditorGroupFocus(group.id)}
+                          style={{
+                            flex: "1 1 0",
+                            minWidth: 0,
+                            minHeight: 0,
+                            display: "flex",
+                            borderLeft: index === 0 ? "none" : "1px solid var(--border-dim)",
+                            boxShadow:
+                              group.id === activeEditorGroupId
+                                ? "inset 0 0 0 1px var(--accent)"
+                                : "none",
+                          }}
+                        >
+                          <FileViewer
+                            tabs={group.tabs}
+                            activeFilePath={group.activePath}
+                            projectPath={fileRootPath}
+                            onSelectTab={(path) => handleFileTabSelect(path, group.id)}
+                            onCloseTab={(path) => handleFileTabClose(path, group.id)}
+                            onCloseOtherTabs={(path) => handleCloseOtherFileTabs(path, group.id)}
+                            onCloseTabsToRight={(path) => handleCloseTabsToRight(path, group.id)}
+                            onCloseAllTabs={() => handleCloseAllFileTabs(group.id)}
+                            themeVariant={themeVariant}
+                            onRunMakeTarget={handleRunMakeTarget}
+                            remote={remoteFileContext}
+                            condaEnvironments={runnableCondaEnvironments}
+                            selectedCondaEnvPath={selectedCondaEnvPath}
+                            onSelectedCondaEnvPathChange={onSelectedCondaEnvPathChange}
+                            onRunPythonFile={handleRunPythonFile}
+                            onRunTestTarget={handleRunEditorTestTarget}
+                            onDebugTestTarget={
+                              debugDisabled ? undefined : handleDebugEditorTestTarget
+                            }
+                            debugBreakpoints={
+                              debugDisabled || remoteFileContext ? [] : editorDebugBreakpoints
+                            }
+                            diagnostics={editorDiagnostics}
+                            coverage={remoteFileContext ? null : editorCoverage}
+                            onToggleDebugBreakpoint={
+                              debugDisabled ? undefined : handleToggleEditorDebugBreakpoint
+                            }
+                            onOpenDefinition={handleDefinitionOpen}
+                            onFocusGroup={() => handleEditorGroupFocus(group.id)}
+                            onSplitRight={
+                              group.id === "main" && group.id === activeEditorGroupId
+                                ? handleSplitEditorGroupRight
+                                : undefined
+                            }
+                          />
+                        </div>
+                      ))}
+                    </div>
+                  ) : !activeWorkspaceTask ? (
+                    <NewTaskView
+                      project={project}
+                      otherProjects={otherProjects}
+                      onSubmit={onSubmitTask}
+                      initialDraft={newTaskDraftRef.current}
+                      onCacheDraft={handleCacheNewTaskDraft}
+                      compactControls={responsiveLayout.compactComposeControls}
+                    />
+                  ) : activeWorkspaceTask.status === ("todo" as TaskStatus) ? (
+                    <TodoTaskView
+                      task={activeWorkspaceTask}
+                      onRunTodo={onRunTodoTask}
+                      onUpdateTodo={onUpdateTodo}
+                    />
+                  ) : null)}
               </Suspense>
             </ErrorBoundary>
           </div>

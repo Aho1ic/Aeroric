@@ -250,9 +250,25 @@ vi.mock("../components/preview/WebPreviewPanel", () => ({
   ),
 }));
 
-vi.mock("../components/sftp/SftpPanel", () => ({
-  SftpPanel: () => <div data-testid="sftp-panel">sftp</div>,
-}));
+vi.mock("../components/sftp/SftpPanel", async () => {
+  const ReactModule = await import("react");
+  return {
+    SftpPanel: ({ active }: { active: boolean }) => {
+      const [operationCount, setOperationCount] = ReactModule.useState(0);
+      return (
+        <div
+          data-testid="sftp-panel"
+          aria-hidden={!active}
+          style={{ display: active ? "block" : "none" }}
+        >
+          <button onClick={() => setOperationCount((count) => count + 1)}>
+            sftp state {operationCount}
+          </button>
+        </div>
+      );
+    },
+  };
+});
 
 vi.mock("../components/database/DatabaseView", () => ({
   DatabaseView: ({ remoteConnection, remoteProjectPath }: RemoteConnectionMockProps) => (
@@ -587,6 +603,32 @@ describe("ProjectPage right toolbar", () => {
         expect(await screen.findByTestId(visibleTarget)).toBeInTheDocument();
       }
     }
+  });
+
+  it("hides SFTP without unmounting it and restores the existing session state", async () => {
+    const user = userEvent.setup();
+
+    render(
+      <I18nProvider>
+        <ProjectPage {...projectPagePropsWithWorkspace()} />
+      </I18nProvider>,
+    );
+
+    const sftpButton = screen.getByTitle("SFTP");
+    await user.click(sftpButton);
+    await user.click(await screen.findByRole("button", { name: "sftp state 0" }));
+
+    const panel = screen.getByTestId("sftp-panel");
+    expect(panel).toBeVisible();
+    expect(screen.getByRole("button", { name: "sftp state 1" })).toBeInTheDocument();
+
+    await user.click(sftpButton);
+    expect(panel).toBeInTheDocument();
+    expect(panel).not.toBeVisible();
+
+    await user.click(sftpButton);
+    expect(panel).toBeVisible();
+    expect(screen.getByRole("button", { name: "sftp state 1" })).toBeInTheDocument();
   });
 
   it("dispatches editor LSP actions from the command palette", async () => {
