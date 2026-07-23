@@ -317,6 +317,17 @@ describe("project main view mode", () => {
     ).toBeGreaterThan(252);
 
     expect(
+      projectRailWidthForProjects([
+        {
+          id: "very-long",
+          name: "x".repeat(200),
+          path: "/tmp/very-long",
+          lastOpenedAt: 1,
+        },
+      ]),
+    ).toBeGreaterThan(720);
+
+    expect(
       projectResponsiveLayout({
         width: 1300,
         rightPanelWidth: 280,

@@ -5,7 +5,6 @@ import type React from "react";
 export const PROJECT_RAIL_EXPANDED_WIDTH = 252;
 export const PROJECT_RAIL_COLLAPSED_WIDTH = 52;
 export const PROJECT_RAIL_MIN_WIDTH = 220;
-export const PROJECT_RAIL_MAX_WIDTH = 720;
 export const RIGHT_TOOLBAR_WIDTH = 44;
 const COMPOSE_COMFORT_WIDTH = 760;
 const COMPOSE_ICON_ONLY_WIDTH = 680;
@@ -23,15 +22,12 @@ export function projectRailWidthForProjects(projects: Project[]): number {
     0,
   );
   const structuralWidth = 160;
-  return Math.min(
-    PROJECT_RAIL_MAX_WIDTH,
-    Math.max(PROJECT_RAIL_EXPANDED_WIDTH, Math.ceil(projectNameWidth + structuralWidth)),
-  );
+  return Math.max(PROJECT_RAIL_EXPANDED_WIDTH, Math.ceil(projectNameWidth + structuralWidth));
 }
 
 export function normalizeProjectRailWidth(value: number): number {
   if (!Number.isFinite(value)) return PROJECT_RAIL_EXPANDED_WIDTH;
-  return Math.min(PROJECT_RAIL_MAX_WIDTH, Math.max(PROJECT_RAIL_MIN_WIDTH, Math.round(value)));
+  return Math.max(PROJECT_RAIL_MIN_WIDTH, Math.round(value));
 }
 
 export function shouldShowRemoteSshTerminal(

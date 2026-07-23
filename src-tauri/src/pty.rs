@@ -28,8 +28,34 @@ fn task_attachments_dir(project_path: &str, task_id: &str) -> std::path::PathBuf
         .join(task_id)
 }
 
-fn validate_task_id(task_id: &str) -> Result<(), String> {
+pub(crate) fn validate_task_id(task_id: &str) -> Result<(), String> {
     crate::storage::validate_storage_id(task_id, "task")
+}
+
+fn validate_shell_id(shell_id: &str) -> Result<(), String> {
+    validate_namespaced_shell_id(shell_id, "shell:", "local shell")
+}
+
+pub(crate) fn validate_ssh_shell_id(shell_id: &str) -> Result<(), String> {
+    validate_namespaced_shell_id(shell_id, "ssh:", "SSH shell")
+}
+
+fn validate_namespaced_shell_id(
+    shell_id: &str,
+    expected_prefix: &str,
+    label: &str,
+) -> Result<(), String> {
+    let suffix = shell_id
+        .strip_prefix(expected_prefix)
+        .ok_or_else(|| format!("Invalid {label} id"))?;
+    if suffix.is_empty()
+        || !suffix
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, ':' | '-' | '_' | '.'))
+    {
+        return Err(format!("Invalid {label} id"));
+    }
+    Ok(())
 }
 
 fn has_task_session(app: &AppHandle, task_id: &str, is_codex: bool) -> bool {
@@ -976,7 +1002,13 @@ pub async fn complete_task(
 pub async fn get_active_task_ids(
     task_manager: State<'_, TaskManager>,
 ) -> Result<Vec<String>, String> {
-    Ok(task_manager.child_handles.lock().keys().cloned().collect())
+    Ok(task_manager
+        .child_handles
+        .lock()
+        .keys()
+        .filter(|id| validate_task_id(id).is_ok())
+        .cloned()
+        .collect())
 }
 
 #[tauri::command]
@@ -984,6 +1016,7 @@ pub async fn reset_task_process(
     task_manager: State<'_, TaskManager>,
     task_id: String,
 ) -> Result<(), String> {
+    validate_task_id(&task_id)?;
     task_manager.cancelled_tasks.lock().remove(&task_id);
     task_manager
         .manually_completed_tasks
@@ -1020,6 +1053,7 @@ pub async fn resume_task(
     rows: Option<u16>,
     on_output: Channel<String>,
 ) -> Result<(), String> {
+    validate_task_id(&task_id)?;
     task_manager.cancelled_tasks.lock().remove(&task_id);
     task_manager
         .manually_completed_tasks
@@ -1188,6 +1222,7 @@ pub async fn open_shell(
     cols: Option<u16>,
     rows: Option<u16>,
 ) -> Result<(), String> {
+    validate_shell_id(&shell_id)?;
     // 先终止已存在的同 ID Shell
     {
         let child_arc = task_manager.child_handles.lock().get(&shell_id).cloned();
@@ -1252,6 +1287,7 @@ pub async fn kill_shell(
     task_manager: State<'_, TaskManager>,
     shell_id: String,
 ) -> Result<(), String> {
+    validate_shell_id(&shell_id)?;
     let child_arc = task_manager.child_handles.lock().get(&shell_id).cloned();
     if let Some(arc) = child_arc {
         let _ = arc.lock().unwrap().kill();
@@ -1280,6 +1316,16 @@ mod tests {
         );
         assert_eq!(normalized_selected_model(Some("  ")), None);
         assert_eq!(normalized_selected_model(None), None);
+    }
+
+    #[test]
+    fn task_and_shell_ids_use_disjoint_namespaces() {
+        assert!(validate_task_id("1700000000000").is_ok());
+        assert!(validate_task_id("shell:project:1").is_err());
+        assert!(validate_shell_id("shell:project:1:1700000000000").is_ok());
+        assert!(validate_shell_id("1700000000000").is_err());
+        assert!(validate_ssh_shell_id("ssh:prod:1700000000000").is_ok());
+        assert!(validate_ssh_shell_id("shell:prod:1700000000000").is_err());
     }
 
     #[test]

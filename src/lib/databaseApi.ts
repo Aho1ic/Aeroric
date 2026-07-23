@@ -143,6 +143,7 @@ export const databaseApi = {
     page: number;
     pageSize: number;
     readOnly: boolean;
+    connectionId?: string;
     projectRoot?: string;
   }) => invoke<DbExecuteResult>("db_execute_sql", params),
   updateCell: (params: {
@@ -152,6 +153,7 @@ export const databaseApi = {
     column: string;
     value: string | null;
     readOnly: boolean;
+    connectionId?: string;
     projectRoot?: string;
   }) => invoke<void>("db_update_cell", params),
   insertRow: (params: {
@@ -159,6 +161,7 @@ export const databaseApi = {
     table: string;
     values: Array<{ column: string; value: string | null }>;
     readOnly: boolean;
+    connectionId?: string;
     projectRoot?: string;
   }) => invoke<void>("db_insert_row", params),
   deleteRow: (params: {
@@ -166,6 +169,7 @@ export const databaseApi = {
     table: string;
     rowKey: { rowId?: number | null; keyValues: Array<{ column: string; value: unknown }> };
     readOnly: boolean;
+    connectionId?: string;
     projectRoot?: string;
   }) => invoke<void>("db_delete_row", params),
   readSqlFile: (path: string) => invoke<string>("db_read_sql_file", { path }),

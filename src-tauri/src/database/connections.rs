@@ -268,6 +268,7 @@ fn normalize_incoming(
 async fn load_connections_from_disk() -> Result<Vec<AeroricDbConnectionConfig>, String> {
     let v2_path = v2_connections_path()?;
     if v2_path.exists() {
+        crate::storage::ensure_private_file_permissions(&v2_path)?;
         let data = fs::read_to_string(v2_path).map_err(|e| e.to_string())?;
         return serde_json::from_str(&data).map_err(|e| e.to_string());
     }
@@ -276,6 +277,7 @@ async fn load_connections_from_disk() -> Result<Vec<AeroricDbConnectionConfig>, 
     if !legacy_path.exists() {
         return Ok(Vec::new());
     }
+    crate::storage::ensure_private_file_permissions(&legacy_path)?;
     let data = fs::read_to_string(legacy_path).map_err(|e| e.to_string())?;
     let legacy: Vec<LegacyConnection> = serde_json::from_str(&data).map_err(|e| e.to_string())?;
     let migrated: Vec<_> = legacy.into_iter().map(legacy_to_aeroric).collect();

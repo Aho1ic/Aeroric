@@ -156,6 +156,79 @@ fn database_connections_path() -> Result<PathBuf, String> {
     Ok(crate::storage::aeroric_dir()?.join("database-connections.json"))
 }
 
+fn endpoints_match(left: &DbEndpoint, right: &DbEndpoint) -> bool {
+    match (left, right) {
+        (DbEndpoint::Local { path: left }, DbEndpoint::Local { path: right }) => {
+            let left = fs::canonicalize(left).unwrap_or_else(|_| PathBuf::from(left));
+            let right = fs::canonicalize(right).unwrap_or_else(|_| PathBuf::from(right));
+            left == right
+        }
+        (
+            DbEndpoint::Ssh {
+                connection: left_connection,
+                path: left_path,
+                ..
+            },
+            DbEndpoint::Ssh {
+                connection: right_connection,
+                path: right_path,
+                ..
+            },
+        ) => {
+            left_connection.host == right_connection.host
+                && left_connection.port == right_connection.port
+                && left_connection.username == right_connection.username
+                && left_path.trim_end_matches('/') == right_path.trim_end_matches('/')
+        }
+        _ => false,
+    }
+}
+
+fn resolve_connection_read_only(
+    connections: &[DbConnectionConfig],
+    endpoint: &DbEndpoint,
+    connection_id: Option<&str>,
+    requested_read_only: bool,
+) -> Result<bool, String> {
+    if let Some(connection_id) = connection_id.filter(|value| !value.trim().is_empty()) {
+        if let Some(connection) = connections
+            .iter()
+            .find(|connection| connection.id == connection_id)
+        {
+            if !endpoints_match(&connection.endpoint, endpoint) {
+                return Err("Connection endpoint does not match saved configuration".to_string());
+            }
+            return Ok(connection.read_only);
+        }
+    }
+
+    let matching = connections
+        .iter()
+        .filter(|connection| endpoints_match(&connection.endpoint, endpoint))
+        .collect::<Vec<_>>();
+    if matching.is_empty() {
+        Ok(requested_read_only)
+    } else {
+        Ok(matching.iter().any(|connection| connection.read_only))
+    }
+}
+
+fn authoritative_read_only(
+    endpoint: &DbEndpoint,
+    connection_id: Option<&str>,
+    requested_read_only: bool,
+) -> Result<bool, String> {
+    let path = database_connections_path()?;
+    if !path.exists() {
+        return Ok(requested_read_only);
+    }
+    crate::storage::ensure_private_file_permissions(&path)?;
+    let content = fs::read_to_string(path).map_err(|e| e.to_string())?;
+    let connections: Vec<DbConnectionConfig> =
+        serde_json::from_str(&content).map_err(|e| e.to_string())?;
+    resolve_connection_read_only(&connections, endpoint, connection_id, requested_read_only)
+}
+
 fn normalize_page_size(page_size: Option<i64>) -> i64 {
     page_size
         .unwrap_or(DEFAULT_PAGE_SIZE)
@@ -895,6 +968,7 @@ pub async fn db_load_connections() -> Result<Vec<DbConnectionConfig>, String> {
         if !path.exists() {
             return Ok(Vec::new());
         }
+        crate::storage::ensure_private_file_permissions(&path)?;
         let content = fs::read_to_string(path).map_err(|e| e.to_string())?;
         serde_json::from_str(&content).map_err(|e| e.to_string())
     })
@@ -910,7 +984,7 @@ pub async fn db_save_connections(connections: Vec<DbConnectionConfig>) -> Result
             fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         }
         let content = serde_json::to_string_pretty(&connections).map_err(|e| e.to_string())?;
-        fs::write(path, format!("{content}\n")).map_err(|e| e.to_string())
+        crate::storage::atomic_write_private(&path, &format!("{content}\n"))
     })
     .await
     .map_err(|e| e.to_string())?
@@ -967,18 +1041,17 @@ pub async fn db_update_cell(
     column: String,
     value: Option<String>,
     read_only: Option<bool>,
+    connection_id: Option<String>,
     project_root: Option<String>,
 ) -> Result<(), String> {
     tokio::task::spawn_blocking(move || {
+        let read_only = authoritative_read_only(
+            &endpoint,
+            connection_id.as_deref(),
+            read_only.unwrap_or(false),
+        )?;
         with_sqlite(endpoint, project_root, true, |path| {
-            update_cell(
-                path,
-                &table,
-                row_key,
-                &column,
-                value,
-                read_only.unwrap_or(false),
-            )
+            update_cell(path, &table, row_key, &column, value, read_only)
         })
     })
     .await
@@ -991,11 +1064,17 @@ pub async fn db_insert_row(
     table: String,
     values: Vec<DbCellValue>,
     read_only: Option<bool>,
+    connection_id: Option<String>,
     project_root: Option<String>,
 ) -> Result<(), String> {
     tokio::task::spawn_blocking(move || {
+        let read_only = authoritative_read_only(
+            &endpoint,
+            connection_id.as_deref(),
+            read_only.unwrap_or(false),
+        )?;
         with_sqlite(endpoint, project_root, true, |path| {
-            insert_row(path, &table, values, read_only.unwrap_or(false))
+            insert_row(path, &table, values, read_only)
         })
     })
     .await
@@ -1008,11 +1087,17 @@ pub async fn db_delete_row(
     table: String,
     row_key: DbRowKey,
     read_only: Option<bool>,
+    connection_id: Option<String>,
     project_root: Option<String>,
 ) -> Result<(), String> {
     tokio::task::spawn_blocking(move || {
+        let read_only = authoritative_read_only(
+            &endpoint,
+            connection_id.as_deref(),
+            read_only.unwrap_or(false),
+        )?;
         with_sqlite(endpoint, project_root, true, |path| {
-            delete_row(path, &table, row_key, read_only.unwrap_or(false))
+            delete_row(path, &table, row_key, read_only)
         })
     })
     .await
@@ -1026,20 +1111,20 @@ pub async fn db_execute_sql(
     page: Option<i64>,
     page_size: Option<i64>,
     read_only: Option<bool>,
+    connection_id: Option<String>,
     project_root: Option<String>,
 ) -> Result<DbExecuteResult, String> {
     let is_write = split_sql_statements(&sql)
         .iter()
         .any(|statement| !is_query_statement(statement));
     tokio::task::spawn_blocking(move || {
+        let read_only = authoritative_read_only(
+            &endpoint,
+            connection_id.as_deref(),
+            read_only.unwrap_or(false),
+        )?;
         with_sqlite(endpoint, project_root, is_write, |path| {
-            execute_sql(
-                path,
-                &sql,
-                page.unwrap_or(1),
-                page_size,
-                read_only.unwrap_or(false),
-            )
+            execute_sql(path, &sql, page.unwrap_or(1), page_size, read_only)
         })
     })
     .await
@@ -1206,6 +1291,52 @@ mod tests {
         .is_err());
 
         let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn saved_read_only_connection_overrides_renderer_flag() {
+        let endpoint = DbEndpoint::Local {
+            path: "/tmp/aeroric-read-only.db".to_string(),
+        };
+        let connections = vec![DbConnectionConfig {
+            id: "saved".to_string(),
+            name: "saved".to_string(),
+            endpoint: endpoint.clone(),
+            read_only: true,
+            created_at: 1,
+            last_opened_at: None,
+        }];
+
+        assert!(
+            resolve_connection_read_only(&connections, &endpoint, Some("saved"), false).unwrap()
+        );
+        assert!(resolve_connection_read_only(&connections, &endpoint, None, false).unwrap());
+    }
+
+    #[test]
+    fn connection_id_cannot_be_reused_with_another_endpoint() {
+        let saved_endpoint = DbEndpoint::Local {
+            path: "/tmp/aeroric-saved.db".to_string(),
+        };
+        let requested_endpoint = DbEndpoint::Local {
+            path: "/tmp/aeroric-other.db".to_string(),
+        };
+        let connections = vec![DbConnectionConfig {
+            id: "saved".to_string(),
+            name: "saved".to_string(),
+            endpoint: saved_endpoint,
+            read_only: true,
+            created_at: 1,
+            last_opened_at: None,
+        }];
+
+        assert!(resolve_connection_read_only(
+            &connections,
+            &requested_endpoint,
+            Some("saved"),
+            false,
+        )
+        .is_err());
     }
 
     #[test]

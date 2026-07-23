@@ -468,9 +468,14 @@ pub async fn write_file_content(
     project_path: String,
 ) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {
-        crate::local_history::record_snapshot_before_write(&project_path, &path, &content)?;
-        validate_path_within(&path, &project_path, false)?;
-        std::fs::write(&path, content).map_err(|e| e.to_string())
+        let validated_path = validate_path_within(&path, &project_path, false)?;
+        let validated_path_text = validated_path.to_string_lossy();
+        crate::local_history::record_snapshot_before_write(
+            &project_path,
+            &validated_path_text,
+            &content,
+        )?;
+        std::fs::write(validated_path, content).map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| e.to_string())?

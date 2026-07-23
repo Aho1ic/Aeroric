@@ -1210,7 +1210,7 @@ export function ProjectRail({
                                 fontSize: 12.8,
                                 fontWeight: isActive ? 700 : 620,
                                 overflow: "hidden",
-                                textOverflow: "ellipsis",
+                                textOverflow: "clip",
                                 whiteSpace: "nowrap",
                               }}
                             >

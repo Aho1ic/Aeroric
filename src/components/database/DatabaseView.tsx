@@ -2302,6 +2302,7 @@ export function DatabaseView({
           page: 1,
           pageSize: PAGE_SIZE,
           readOnly: activeConnection?.readOnly ?? false,
+          connectionId: activeConnection?.id,
           projectRoot,
         });
         setSql(fileSql);
@@ -2314,6 +2315,7 @@ export function DatabaseView({
       setLoading(false);
     }
   }, [
+    activeConnection?.id,
     activeConnection?.readOnly,
     activeDbxConnection,
     activeDbxDatabase,
@@ -5492,6 +5494,7 @@ export function DatabaseView({
           page: 1,
           pageSize: PAGE_SIZE,
           readOnly: activeConnection?.readOnly ?? false,
+          connectionId: activeConnection?.id,
           projectRoot,
         });
         setSqlResult(result);
@@ -5754,6 +5757,7 @@ export function DatabaseView({
           column,
           value: textToCellValue(value),
           readOnly: activeConnection?.readOnly ?? false,
+          connectionId: activeConnection?.id,
           projectRoot,
         });
         await loadTable(activeObject, page);
@@ -5762,6 +5766,7 @@ export function DatabaseView({
       }
     },
     [
+      activeConnection?.id,
       activeConnection?.readOnly,
       activeDbxConnection,
       activeDbxDatabase,
@@ -5959,6 +5964,7 @@ export function DatabaseView({
         table: activeObject.name,
         values,
         readOnly: activeConnection?.readOnly ?? false,
+        connectionId: activeConnection?.id,
         projectRoot,
       });
       await loadTable(activeObject, page);
@@ -5966,6 +5972,7 @@ export function DatabaseView({
       setError(String(err));
     }
   }, [
+    activeConnection?.id,
     activeConnection?.readOnly,
     activeDbxConnection,
     activeDbxDatabase,

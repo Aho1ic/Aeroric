@@ -557,6 +557,7 @@ pub async fn open_ssh_shell(
     rows: Option<u16>,
     on_output: Channel<String>,
 ) -> Result<(), String> {
+    crate::pty::validate_ssh_shell_id(&shell_id)?;
     let child_arc = task_manager.child_handles.lock().get(&shell_id).cloned();
     if let Some(arc) = child_arc {
         if let Ok(mut child) = arc.lock() {
@@ -629,6 +630,7 @@ pub async fn kill_ssh_shell(
     task_manager: State<'_, crate::TaskManager>,
     shell_id: String,
 ) -> Result<(), String> {
+    crate::pty::validate_ssh_shell_id(&shell_id)?;
     let child_arc = task_manager.child_handles.lock().get(&shell_id).cloned();
     if let Some(arc) = child_arc {
         if let Ok(mut child) = arc.lock() {
@@ -653,6 +655,7 @@ pub async fn run_remote_task(
     rows: Option<u16>,
     on_output: Channel<String>,
 ) -> Result<(), String> {
+    crate::pty::validate_task_id(&task_id)?;
     task_manager.cancelled_tasks.lock().remove(&task_id);
     task_manager
         .manually_completed_tasks
@@ -683,6 +686,7 @@ pub async fn resume_remote_task(
     rows: Option<u16>,
     on_output: Channel<String>,
 ) -> Result<(), String> {
+    crate::pty::validate_task_id(&task_id)?;
     task_manager.cancelled_tasks.lock().remove(&task_id);
     task_manager
         .manually_completed_tasks
@@ -700,6 +704,7 @@ pub async fn cancel_remote_task(
     task_manager: State<'_, crate::TaskManager>,
     task_id: String,
 ) -> Result<(), String> {
+    crate::pty::validate_task_id(&task_id)?;
     let mut cancelled_tasks = task_manager.cancelled_tasks.lock();
     cancelled_tasks.insert(task_id.clone());
     let child_arc = task_manager.child_handles.lock().get(&task_id).cloned();
