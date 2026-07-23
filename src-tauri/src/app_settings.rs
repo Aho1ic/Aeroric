@@ -1013,6 +1013,77 @@ fn model_endpoint(base_url: &str) -> String {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum AgentModelAuth {
+    Bearer,
+    BearerAndApiKey,
+    ApiKey,
+}
+
+fn model_auth_attempts(kind: &AgentSetupKind) -> [AgentModelAuth; 3] {
+    match kind {
+        AgentSetupKind::Codex => [
+            AgentModelAuth::Bearer,
+            AgentModelAuth::BearerAndApiKey,
+            AgentModelAuth::ApiKey,
+        ],
+        AgentSetupKind::ClaudeCode => [
+            AgentModelAuth::BearerAndApiKey,
+            AgentModelAuth::ApiKey,
+            AgentModelAuth::Bearer,
+        ],
+    }
+}
+
+fn apply_model_auth(
+    request: reqwest::RequestBuilder,
+    api_key: &str,
+    auth: AgentModelAuth,
+) -> reqwest::RequestBuilder {
+    match auth {
+        AgentModelAuth::Bearer => request.bearer_auth(api_key),
+        AgentModelAuth::BearerAndApiKey => request
+            .bearer_auth(api_key)
+            .header("x-api-key", api_key)
+            .header("anthropic-version", "2023-06-01"),
+        AgentModelAuth::ApiKey => request
+            .header("x-api-key", api_key)
+            .header("anthropic-version", "2023-06-01"),
+    }
+}
+
+async fn fetch_agent_model_json(
+    client: &reqwest::Client,
+    endpoint: &str,
+    kind: &AgentSetupKind,
+    api_key: &str,
+) -> Result<serde_json::Value, String> {
+    let attempts = model_auth_attempts(kind);
+    for (index, auth) in attempts.into_iter().enumerate() {
+        let response = apply_model_auth(client.get(endpoint), api_key, auth)
+            .send()
+            .await
+            .map_err(|e| e.to_string())?;
+        let status = response.status();
+        if status.is_success() {
+            return response
+                .json::<serde_json::Value>()
+                .await
+                .map_err(|e| e.to_string());
+        }
+
+        let can_retry_auth = matches!(
+            status,
+            reqwest::StatusCode::UNAUTHORIZED | reqwest::StatusCode::FORBIDDEN
+        ) && index + 1 < attempts.len();
+        if !can_retry_auth {
+            return Err(format!("Model detection failed: HTTP {}", status));
+        }
+    }
+
+    Err("Model detection failed".to_string())
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum AgentBalanceProvider {
     OpenRouter,
 }
@@ -2712,23 +2783,7 @@ pub async fn detect_agent_models(
     }
 
     let client = reqwest::Client::new();
-    let mut request = client.get(endpoint).bearer_auth(&api_key);
-    if matches!(kind, AgentSetupKind::ClaudeCode) {
-        request = request
-            .header("x-api-key", &api_key)
-            .header("anthropic-version", "2023-06-01");
-    }
-    let response = request.send().await.map_err(|e| e.to_string())?;
-    if !response.status().is_success() {
-        return Err(format!(
-            "Model detection failed: HTTP {}",
-            response.status()
-        ));
-    }
-    let value = response
-        .json::<serde_json::Value>()
-        .await
-        .map_err(|e| e.to_string())?;
+    let value = fetch_agent_model_json(&client, &endpoint, &kind, &api_key).await?;
     let models = parse_model_ids(value);
     let balance = fetch_agent_balance(&client, &base_url, &api_key).await;
     Ok(AgentModels { models, balance })
@@ -4314,6 +4369,84 @@ api_key = "sk-codex"
         });
 
         assert_eq!(parse_model_ids(value), vec!["a-model", "z-model"]);
+    }
+
+    #[test]
+    fn retries_model_detection_with_compatible_auth_headers() {
+        assert_eq!(
+            model_auth_attempts(&AgentSetupKind::Codex),
+            [
+                AgentModelAuth::Bearer,
+                AgentModelAuth::BearerAndApiKey,
+                AgentModelAuth::ApiKey,
+            ]
+        );
+        assert_eq!(
+            model_auth_attempts(&AgentSetupKind::ClaudeCode),
+            [
+                AgentModelAuth::BearerAndApiKey,
+                AgentModelAuth::ApiKey,
+                AgentModelAuth::Bearer,
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn retries_unauthorized_model_requests_with_api_key_headers() {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+        use std::thread;
+
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let endpoint = format!("http://{}/v1/models", listener.local_addr().unwrap());
+        let server = thread::spawn(move || {
+            for attempt in 0..2 {
+                let (mut stream, _) = listener.accept().unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(5)))
+                    .unwrap();
+                let mut request = Vec::new();
+                let mut chunk = [0_u8; 2048];
+                while !request.windows(4).any(|window| window == b"\r\n\r\n") {
+                    let count = stream.read(&mut chunk).unwrap();
+                    if count == 0 {
+                        break;
+                    }
+                    request.extend_from_slice(&chunk[..count]);
+                }
+                let request = String::from_utf8_lossy(&request).to_ascii_lowercase();
+
+                if attempt == 0 {
+                    assert!(request.contains("authorization: bearer sk-test"));
+                    assert!(!request.contains("x-api-key:"));
+                    stream
+                        .write_all(
+                            b"HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                        )
+                        .unwrap();
+                } else {
+                    assert!(request.contains("authorization: bearer sk-test"));
+                    assert!(request.contains("x-api-key: sk-test"));
+                    assert!(request.contains("anthropic-version: 2023-06-01"));
+                    let body = br#"{"data":[{"id":"fallback-model"}]}"#;
+                    write!(
+                        stream,
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        body.len()
+                    )
+                    .unwrap();
+                    stream.write_all(body).unwrap();
+                }
+            }
+        });
+
+        let client = reqwest::Client::builder().no_proxy().build().unwrap();
+        let value = fetch_agent_model_json(&client, &endpoint, &AgentSetupKind::Codex, "sk-test")
+            .await
+            .unwrap();
+
+        assert_eq!(parse_model_ids(value), vec!["fallback-model"]);
+        server.join().unwrap();
     }
 
     #[test]

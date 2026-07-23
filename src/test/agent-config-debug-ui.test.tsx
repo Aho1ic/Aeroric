@@ -278,12 +278,17 @@ function renderDebugPanel() {
   );
 }
 
-function renderAddAgentPanel() {
+function renderAddAgentPanel(
+  balance: { used: number; total: number | null } | null = {
+    used: 57.25,
+    total: 100,
+  },
+) {
   vi.mocked(invoke).mockImplementation((command) => {
     if (command === "detect_agent_models") {
       return Promise.resolve({
         models: ["gpt-5.6", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"],
-        balance: { used: 57.25, total: 100 },
+        balance,
       });
     }
     if (command === "setup_agent_profile") {
@@ -680,6 +685,19 @@ describe("Agent config and debug panel UI", () => {
         enable_1m_context: false,
       },
     });
+  });
+
+  it("keeps detected models selectable when the API does not expose quota data", async () => {
+    const user = userEvent.setup();
+    renderAddAgentPanel(null);
+
+    await user.type(screen.getByLabelText("Base URL"), "https://example.com/v1");
+    await user.type(screen.getByLabelText("API Key"), "sk-test");
+    await user.click(screen.getByRole("button", { name: /Detect Models/i }));
+
+    expect(await screen.findByLabelText("gpt-5.6-sol")).toBeInTheDocument();
+    expect(screen.getByText("0 of 4 models selected")).toBeInTheDocument();
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
   });
 
   it("hides Agent ID and derives a stable ID from Base URL for Chinese names", async () => {
