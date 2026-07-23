@@ -17,6 +17,7 @@ import {
   Database,
   NotebookTabs,
   ChartNoAxesCombined,
+  FolderTree,
 } from "lucide-react";
 import * as Popover from "@radix-ui/react-popover";
 import type {
@@ -45,6 +46,7 @@ import { NotebookPanel } from "./notebook/NotebookPanel";
 import { DockerIcon } from "./DockerIcon";
 import RecursiveHeroCanvas from "./recursive-hero-effect/RecursiveHeroCanvas";
 import { UsageDashboard } from "./UsageDashboard";
+import { ProjectGroupDialog } from "./ProjectGroupDialog";
 import { useI18n, pluralKey } from "../i18n";
 import s from "../styles";
 
@@ -130,6 +132,11 @@ export function WelcomePage({
   onDeleteProject,
   onRenameProject,
   onToggleProjectHidden,
+  projectGroups = [],
+  onAssignProjectGroup = () => {},
+  onCreateProjectGroup = () => {},
+  onRenameProjectGroup = () => {},
+  onDeleteProjectGroup = () => {},
   themeVariant,
   themeMode,
   systemPrefersDark,
@@ -161,6 +168,11 @@ export function WelcomePage({
   onDeleteProject: (projectId: string) => void;
   onRenameProject: (projectId: string, name: string) => void;
   onToggleProjectHidden: (projectId: string) => void;
+  projectGroups?: string[];
+  onAssignProjectGroup?: (projectId: string, groupName: string | null) => void;
+  onCreateProjectGroup?: (groupName: string) => void;
+  onRenameProjectGroup?: (oldName: string, nextName: string) => void;
+  onDeleteProjectGroup?: (groupName: string) => void;
   themeVariant: ThemeVariant;
   themeMode: ThemeMode;
   systemPrefersDark: boolean;
@@ -197,6 +209,7 @@ export function WelcomePage({
     "projects" | "timeline" | "usage" | "skills" | "docker" | "ssh" | "database" | "notes"
   >("projects");
   const [openProjectMenu, setOpenProjectMenu] = useState(false);
+  const [showProjectGroupDialog, setShowProjectGroupDialog] = useState(false);
   const [sftpOpen, setSftpOpen] = useState(false);
   const keepRecursiveBackgroundMounted = themeVariant === "light";
   const showRecursiveBackground = view === "projects" && !sftpOpen;
@@ -440,6 +453,14 @@ export function WelcomePage({
               </div>
 
               <div style={s.actionRow}>
+                <button
+                  type="button"
+                  style={s.secondaryActionBtn}
+                  onClick={() => setShowProjectGroupDialog(true)}
+                >
+                  <FolderTree size={14} strokeWidth={2.1} />
+                  <span>{t("welcome.manageProjectGroups")}</span>
+                </button>
                 <Popover.Root open={openProjectMenu} onOpenChange={setOpenProjectMenu}>
                   <Popover.Trigger asChild>
                     <button style={s.primaryActionBtn}>
@@ -713,6 +734,17 @@ export function WelcomePage({
           </div>
         )}
       </div>
+      {showProjectGroupDialog && (
+        <ProjectGroupDialog
+          projects={projects}
+          groupNames={projectGroups}
+          onAssignProjectGroup={onAssignProjectGroup}
+          onCreateGroup={onCreateProjectGroup}
+          onRenameGroup={onRenameProjectGroup}
+          onDeleteGroup={onDeleteProjectGroup}
+          onClose={() => setShowProjectGroupDialog(false)}
+        />
+      )}
     </div>
   );
 }

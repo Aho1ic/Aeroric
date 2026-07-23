@@ -6,6 +6,8 @@ export interface Project {
   branch?: string;
   lastOpenedAt: number;
   orderIndex?: number;
+  /** Optional project group name. Projects without a group stay in the ungrouped section. */
+  group?: string;
   /** 为 true 时不在左侧常驻竖条显示，仅可从首页或「展开全部」抽屉访问。缺省=常驻。 */
   hiddenFromRail?: boolean;
 }

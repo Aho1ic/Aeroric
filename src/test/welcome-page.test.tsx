@@ -51,6 +51,11 @@ function renderWelcome(overrides: Partial<React.ComponentProps<typeof WelcomePag
     onDeleteProject: overrides.onDeleteProject ?? vi.fn(),
     onRenameProject: overrides.onRenameProject ?? vi.fn(),
     onToggleProjectHidden: overrides.onToggleProjectHidden ?? vi.fn(),
+    projectGroups: overrides.projectGroups ?? [],
+    onAssignProjectGroup: overrides.onAssignProjectGroup ?? vi.fn(),
+    onCreateProjectGroup: overrides.onCreateProjectGroup ?? vi.fn(),
+    onRenameProjectGroup: overrides.onRenameProjectGroup ?? vi.fn(),
+    onDeleteProjectGroup: overrides.onDeleteProjectGroup ?? vi.fn(),
     themeVariant: overrides.themeVariant ?? "light",
     themeMode: overrides.themeMode ?? "light",
     systemPrefersDark: overrides.systemPrefersDark ?? false,
@@ -96,6 +101,23 @@ describe("WelcomePage project cards", () => {
     await user.click(screen.getByRole("button", { name: "SSH" }));
 
     expect(screen.getAllByText("Open SSH project").length).toBeGreaterThan(0);
+  });
+
+  it("opens project group management and assigns a project to a group", async () => {
+    localStorage.setItem("aeroric:language", "en");
+    const user = userEvent.setup();
+    const onAssignProjectGroup = vi.fn();
+
+    renderWelcome({
+      projectGroups: ["Work"],
+      onAssignProjectGroup,
+    });
+
+    await user.click(screen.getByRole("button", { name: "Manage project groups" }));
+
+    expect(screen.getByRole("dialog", { name: "Manage project groups" })).toBeInTheDocument();
+    await user.selectOptions(screen.getByLabelText("Assign Prod to a group"), "Work");
+    expect(onAssignProjectGroup).toHaveBeenCalledWith("p1", "Work");
   });
 
   it("uses the Docker logo icon in the home sidebar", () => {

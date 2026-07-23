@@ -23,6 +23,8 @@ pub struct Project {
     pub last_opened_at: i64,
     #[serde(rename = "orderIndex", skip_serializing_if = "Option::is_none")]
     pub order_index: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub group: Option<String>,
     // 缺省=常驻；旧数据无此字段时默认 false，序列化时省略 false 以保持文件简洁。
     #[serde(
         rename = "hiddenFromRail",

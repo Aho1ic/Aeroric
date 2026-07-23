@@ -298,11 +298,26 @@ vi.mock("../components/ShellTerminalPanel", async () => {
   const ReactModule = await import("react");
   return {
     deriveShellTerminalFontSize: (size: number) => size,
+    SHELL_TERMINAL_MAX_SESSIONS: 10,
     ShellTerminalPanel: ReactModule.forwardRef(function MockShellTerminalPanel(
-      props: { visible: boolean },
+      props: {
+        visible: boolean;
+        onSessionsChange?: (
+          sessions: { id: string; title: string }[],
+          activeShellId: string | null,
+        ) => void;
+      },
       ref,
     ) {
-      ReactModule.useImperativeHandle(ref, () => ({ sendCommand: () => {} }));
+      ReactModule.useEffect(() => {
+        props.onSessionsChange?.([{ id: "mock-shell", title: "Terminal 1" }], "mock-shell");
+      }, [props.onSessionsChange]);
+      ReactModule.useImperativeHandle(ref, () => ({
+        sendCommand: () => {},
+        activateShell: () => {},
+        addShell: () => {},
+        closeShell: () => {},
+      }));
       return props.visible ? <div data-testid="shell-terminal">terminal</div> : null;
     }),
   };
@@ -603,6 +618,41 @@ describe("ProjectPage right toolbar", () => {
         expect(await screen.findByTestId(visibleTarget)).toBeInTheDocument();
       }
     }
+  });
+
+  it("merges file and terminal tabs and hides the bar when both workspaces are closed", async () => {
+    const user = userEvent.setup();
+
+    render(
+      <I18nProvider>
+        <ProjectPage {...projectPageProps()} />
+      </I18nProvider>,
+    );
+
+    await user.click(screen.getByTitle("File Explorer"));
+    await user.click(await screen.findByText("run.py"));
+
+    const workspaceTabs = screen.getByTestId("workspace-tabs");
+    expect(within(workspaceTabs).getByRole("tab", { name: "run.py" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+
+    await user.click(screen.getByTitle("Terminal"));
+    expect(await screen.findByTestId("shell-terminal")).toBeInTheDocument();
+    expect(
+      within(screen.getByTestId("workspace-tabs")).getByRole("tab", { name: "zsh 1" }),
+    ).toHaveAttribute("aria-selected", "true");
+
+    await user.click(
+      within(screen.getByTestId("workspace-tabs")).getByRole("tab", { name: "run.py" }),
+    );
+    expect(screen.queryByTestId("shell-terminal")).not.toBeInTheDocument();
+    expect(screen.getByTestId("file-explorer-panel")).toBeInTheDocument();
+
+    await user.click(screen.getByTitle("Terminal"));
+    await user.click(screen.getByTitle("Terminal"));
+    expect(screen.queryByTestId("workspace-tabs")).not.toBeInTheDocument();
   });
 
   it("hides SFTP without unmounting it and restores the existing session state", async () => {

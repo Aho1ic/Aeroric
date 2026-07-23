@@ -2551,6 +2551,7 @@ export function FileViewer({
   onOpenDefinition,
   onFocusGroup,
   onSplitRight,
+  showTabStrip = true,
 }: {
   tabs: OpenFileTab[];
   activeFilePath: string | null;
@@ -2576,6 +2577,7 @@ export function FileViewer({
   onOpenDefinition?: (path: string, name: string, selection?: OpenFileSelection) => void;
   onFocusGroup?: () => void;
   onSplitRight?: () => void;
+  showTabStrip?: boolean;
 }) {
   const { t } = useI18n();
   const [previewModes, setPreviewModes] = useState<Record<string, boolean>>({});
@@ -2803,97 +2805,99 @@ export function FileViewer({
           minWidth: 0,
         }}
       >
-        <div
-          className="file-viewer-tab-strip"
-          style={{
-            flex: 1,
-            minWidth: 0,
-            height: "100%",
-            display: "flex",
-            alignItems: "stretch",
-            overflowX: "auto",
-            overflowY: "hidden",
-            paddingLeft: 4,
-          }}
-        >
-          {tabs.map((tab) => {
-            const isActive = tab.path === activeTab.path;
-            const fileColor = getFileColor(tab.name);
-            const isDirty = Boolean(dirtyTabs[tab.path]);
-            return (
-              <button
-                key={tab.path}
-                onClick={() => onSelectTab(tab.path)}
-                title={tab.path}
-                style={{
-                  height: "100%",
-                  minWidth: 0,
-                  maxWidth: 220,
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 6,
-                  padding: "0 10px 0 12px",
-                  border: "none",
-                  borderRight: "1px solid var(--border-dim)",
-                  borderTop: isActive ? "2px solid var(--accent)" : "2px solid transparent",
-                  background: isActive ? "var(--bg-panel)" : "transparent",
-                  fontSize: 12.5,
-                  fontWeight: isActive ? 500 : 400,
-                  color: isActive ? "var(--text-primary)" : "var(--text-secondary)",
-                  cursor: "pointer",
-                  flexShrink: 0,
-                }}
-              >
-                <span
+        {showTabStrip && (
+          <div
+            className="file-viewer-tab-strip"
+            style={{
+              flex: 1,
+              minWidth: 0,
+              height: "100%",
+              display: "flex",
+              alignItems: "stretch",
+              overflowX: "auto",
+              overflowY: "hidden",
+              paddingLeft: 4,
+            }}
+          >
+            {tabs.map((tab) => {
+              const isActive = tab.path === activeTab.path;
+              const fileColor = getFileColor(tab.name);
+              const isDirty = Boolean(dirtyTabs[tab.path]);
+              return (
+                <button
+                  key={tab.path}
+                  onClick={() => onSelectTab(tab.path)}
+                  title={tab.path}
                   style={{
-                    width: isDirty ? 8 : 5,
-                    height: isDirty ? 8 : 14,
-                    borderRadius: isDirty ? 999 : 2,
-                    background: isDirty ? "var(--warning)" : fileColor,
-                    boxShadow: isDirty
-                      ? "0 0 0 2px color-mix(in srgb, var(--warning) 20%, transparent)"
-                      : undefined,
-                    flexShrink: 0,
-                    display: "inline-block",
-                  }}
-                />
-                <span
-                  style={{
-                    overflow: "hidden",
-                    textOverflow: "ellipsis",
-                    whiteSpace: "nowrap",
-                  }}
-                >
-                  {tab.name}
-                </span>
-                <span
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    onCloseTab(tab.path);
-                  }}
-                  style={{
-                    background: "none",
-                    border: "none",
-                    cursor: "pointer",
-                    padding: "2px",
-                    borderRadius: 3,
+                    height: "100%",
+                    minWidth: 0,
+                    maxWidth: 220,
                     display: "flex",
                     alignItems: "center",
-                    color: "var(--text-hint)",
-                    marginLeft: 2,
+                    gap: 6,
+                    padding: "0 10px 0 12px",
+                    border: "none",
+                    borderRight: "1px solid var(--border-dim)",
+                    borderTop: isActive ? "2px solid var(--accent)" : "2px solid transparent",
+                    background: isActive ? "var(--bg-panel)" : "transparent",
+                    fontSize: 12.5,
+                    fontWeight: isActive ? 500 : 400,
+                    color: isActive ? "var(--text-primary)" : "var(--text-secondary)",
+                    cursor: "pointer",
+                    flexShrink: 0,
                   }}
-                  role="button"
-                  aria-label={t("file.closeTab", { name: tab.name })}
                 >
-                  <X size={12} />
-                </span>
-              </button>
-            );
-          })}
-        </div>
+                  <span
+                    style={{
+                      width: isDirty ? 8 : 5,
+                      height: isDirty ? 8 : 14,
+                      borderRadius: isDirty ? 999 : 2,
+                      background: isDirty ? "var(--warning)" : fileColor,
+                      boxShadow: isDirty
+                        ? "0 0 0 2px color-mix(in srgb, var(--warning) 20%, transparent)"
+                        : undefined,
+                      flexShrink: 0,
+                      display: "inline-block",
+                    }}
+                  />
+                  <span
+                    style={{
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    {tab.name}
+                  </span>
+                  <span
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      onCloseTab(tab.path);
+                    }}
+                    style={{
+                      background: "none",
+                      border: "none",
+                      cursor: "pointer",
+                      padding: "2px",
+                      borderRadius: 3,
+                      display: "flex",
+                      alignItems: "center",
+                      color: "var(--text-hint)",
+                      marginLeft: 2,
+                    }}
+                    role="button"
+                    aria-label={t("file.closeTab", { name: tab.name })}
+                  >
+                    <X size={12} />
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        )}
         <div
           style={{
-            marginLeft: 8,
+            marginLeft: showTabStrip ? 8 : "auto",
             marginRight: 8,
             display: "flex",
             alignItems: "center",

@@ -29,13 +29,16 @@ interface ShellOutputEvent {
 
 export interface ShellTerminalPanelHandle {
   sendCommand: (cmd: string) => void;
+  activateShell: (shellId: string) => void;
+  addShell: () => void;
+  closeShell: (shellId: string) => void;
 }
 
 interface ShellTerminalInstanceHandle {
   sendCommand: (cmd: string) => void;
 }
 
-interface ShellSession {
+export interface ShellSession {
   id: string;
   title: string;
 }
@@ -53,6 +56,8 @@ interface Props {
   height?: number | string;
   visible?: boolean;
   onResizeStart?: (e: React.MouseEvent) => void;
+  showSessionTabs?: boolean;
+  onSessionsChange?: (sessions: ShellSession[], activeShellId: string | null) => void;
 }
 
 export const SHELL_TERMINAL_MAX_SESSIONS = 10;
@@ -326,6 +331,8 @@ export const ShellTerminalPanel = forwardRef<ShellTerminalPanelHandle, Props>(
       height = 240,
       visible = true,
       onResizeStart,
+      showSessionTabs = true,
+      onSessionsChange,
     },
     ref,
   ) {
@@ -343,18 +350,6 @@ export const ShellTerminalPanel = forwardRef<ShellTerminalPanelHandle, Props>(
     );
     const activeShellIdRef = useRef(activeShellId);
     activeShellIdRef.current = activeShellId;
-
-    useImperativeHandle(
-      ref,
-      () => ({
-        sendCommand: (cmd: string) => {
-          const currentShellId = activeShellIdRef.current;
-          if (!currentShellId) return;
-          shellRefs.current[currentShellId]?.sendCommand(cmd);
-        },
-      }),
-      [],
-    );
 
     const handleAddShell = useCallback(() => {
       if (shells.length >= SHELL_TERMINAL_MAX_SESSIONS) return;
@@ -389,6 +384,27 @@ export const ShellTerminalPanel = forwardRef<ShellTerminalPanelHandle, Props>(
       },
       [activeShellId, onClose, shells],
     );
+
+    useImperativeHandle(
+      ref,
+      () => ({
+        sendCommand: (cmd: string) => {
+          const currentShellId = activeShellIdRef.current;
+          if (!currentShellId) return;
+          shellRefs.current[currentShellId]?.sendCommand(cmd);
+        },
+        activateShell: (shellId: string) => {
+          if (shells.some((shell) => shell.id === shellId)) setActiveShellId(shellId);
+        },
+        addShell: handleAddShell,
+        closeShell: handleCloseShell,
+      }),
+      [handleAddShell, handleCloseShell, shells],
+    );
+
+    useEffect(() => {
+      onSessionsChange?.(shells, activeShellId);
+    }, [activeShellId, onSessionsChange, shells]);
 
     const handleCloseAll = useCallback(() => {
       for (const shell of shells) {
@@ -477,115 +493,117 @@ export const ShellTerminalPanel = forwardRef<ShellTerminalPanelHandle, Props>(
             <X size={14} />
           </button>
         </div>
-        <div
-          style={{
-            minHeight: 30,
-            flexShrink: 0,
-            display: "flex",
-            alignItems: "center",
-            gap: 5,
-            padding: "4px 8px",
-            borderBottom: "1px solid var(--border-dim)",
-            background: "color-mix(in srgb, var(--bg-root) 72%, var(--bg-sidebar))",
-            overflowX: "auto",
-          }}
-        >
-          {shells.map((shell, index) => {
-            const selected = activeShellId === shell.id;
-            return (
-              <button
-                key={shell.id}
-                type="button"
-                onClick={() => setActiveShellId(shell.id)}
-                title={shell.title}
-                style={{
-                  height: 22,
-                  minWidth: 0,
-                  maxWidth: 106,
-                  display: "inline-flex",
-                  alignItems: "center",
-                  gap: 5,
-                  padding: "0 5px 0 7px",
-                  border: `1px solid ${selected ? "var(--border-strong)" : "var(--border-dim)"}`,
-                  borderRadius: 999,
-                  background: selected ? "var(--control-active-bg)" : "transparent",
-                  color: selected ? "var(--control-active-fg)" : "var(--text-muted)",
-                  cursor: "pointer",
-                  flexShrink: 0,
-                  fontSize: 11,
-                  fontWeight: selected ? 650 : 560,
-                }}
-              >
-                <TerminalIcon size={11.5} />
-                <span
-                  style={{
-                    minWidth: 0,
-                    overflow: "hidden",
-                    textOverflow: "ellipsis",
-                    whiteSpace: "nowrap",
-                  }}
-                >
-                  zsh {index + 1}
-                </span>
-                <span
-                  role="button"
-                  tabIndex={0}
-                  title={t("terminal.closeShell", { title: shell.title })}
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    handleCloseShell(shell.id);
-                  }}
-                  onKeyDown={(event) => {
-                    if (event.key !== "Enter" && event.key !== " ") return;
-                    event.preventDefault();
-                    event.stopPropagation();
-                    handleCloseShell(shell.id);
-                  }}
-                  style={{
-                    width: 14,
-                    height: 14,
-                    display: "inline-flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    borderRadius: 999,
-                    color: "var(--text-hint)",
-                    flexShrink: 0,
-                  }}
-                >
-                  <Trash2 size={9.5} />
-                </span>
-              </button>
-            );
-          })}
-          <button
-            onClick={handleAddShell}
-            disabled={shells.length >= SHELL_TERMINAL_MAX_SESSIONS}
-            title={
-              shells.length >= SHELL_TERMINAL_MAX_SESSIONS
-                ? t("terminal.limitReached")
-                : t("terminal.newTerminal")
-            }
+        {showSessionTabs && (
+          <div
             style={{
-              width: 22,
-              height: 22,
-              borderRadius: 999,
-              border: "1px solid var(--border-dim)",
-              background:
-                shells.length >= SHELL_TERMINAL_MAX_SESSIONS ? "transparent" : "var(--bg-hover)",
-              color:
-                shells.length >= SHELL_TERMINAL_MAX_SESSIONS
-                  ? "var(--text-hint)"
-                  : "var(--text-secondary)",
-              cursor: shells.length >= SHELL_TERMINAL_MAX_SESSIONS ? "not-allowed" : "pointer",
-              display: "inline-flex",
-              alignItems: "center",
-              justifyContent: "center",
+              minHeight: 30,
               flexShrink: 0,
+              display: "flex",
+              alignItems: "center",
+              gap: 5,
+              padding: "4px 8px",
+              borderBottom: "1px solid var(--border-dim)",
+              background: "color-mix(in srgb, var(--bg-root) 72%, var(--bg-sidebar))",
+              overflowX: "auto",
             }}
           >
-            <Plus size={12} />
-          </button>
-        </div>
+            {shells.map((shell, index) => {
+              const selected = activeShellId === shell.id;
+              return (
+                <button
+                  key={shell.id}
+                  type="button"
+                  onClick={() => setActiveShellId(shell.id)}
+                  title={shell.title}
+                  style={{
+                    height: 22,
+                    minWidth: 0,
+                    maxWidth: 106,
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: 5,
+                    padding: "0 5px 0 7px",
+                    border: `1px solid ${selected ? "var(--border-strong)" : "var(--border-dim)"}`,
+                    borderRadius: 999,
+                    background: selected ? "var(--control-active-bg)" : "transparent",
+                    color: selected ? "var(--control-active-fg)" : "var(--text-muted)",
+                    cursor: "pointer",
+                    flexShrink: 0,
+                    fontSize: 11,
+                    fontWeight: selected ? 650 : 560,
+                  }}
+                >
+                  <TerminalIcon size={11.5} />
+                  <span
+                    style={{
+                      minWidth: 0,
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    zsh {index + 1}
+                  </span>
+                  <span
+                    role="button"
+                    tabIndex={0}
+                    title={t("terminal.closeShell", { title: shell.title })}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      handleCloseShell(shell.id);
+                    }}
+                    onKeyDown={(event) => {
+                      if (event.key !== "Enter" && event.key !== " ") return;
+                      event.preventDefault();
+                      event.stopPropagation();
+                      handleCloseShell(shell.id);
+                    }}
+                    style={{
+                      width: 14,
+                      height: 14,
+                      display: "inline-flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      borderRadius: 999,
+                      color: "var(--text-hint)",
+                      flexShrink: 0,
+                    }}
+                  >
+                    <Trash2 size={9.5} />
+                  </span>
+                </button>
+              );
+            })}
+            <button
+              onClick={handleAddShell}
+              disabled={shells.length >= SHELL_TERMINAL_MAX_SESSIONS}
+              title={
+                shells.length >= SHELL_TERMINAL_MAX_SESSIONS
+                  ? t("terminal.limitReached")
+                  : t("terminal.newTerminal")
+              }
+              style={{
+                width: 22,
+                height: 22,
+                borderRadius: 999,
+                border: "1px solid var(--border-dim)",
+                background:
+                  shells.length >= SHELL_TERMINAL_MAX_SESSIONS ? "transparent" : "var(--bg-hover)",
+                color:
+                  shells.length >= SHELL_TERMINAL_MAX_SESSIONS
+                    ? "var(--text-hint)"
+                    : "var(--text-secondary)",
+                cursor: shells.length >= SHELL_TERMINAL_MAX_SESSIONS ? "not-allowed" : "pointer",
+                display: "inline-flex",
+                alignItems: "center",
+                justifyContent: "center",
+                flexShrink: 0,
+              }}
+            >
+              <Plus size={12} />
+            </button>
+          </div>
+        )}
         <div style={{ flex: 1, minWidth: 0, minHeight: 0, position: "relative" }}>
           {shells.map((shell) => (
             <ShellTerminalInstance

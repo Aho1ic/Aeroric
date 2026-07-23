@@ -50,12 +50,30 @@ import {
 import { createProjectPersister } from "./projectPersistence";
 import { createProjectTaskPersister } from "./taskPersistence";
 import { applyProjectOrder, normalizeProjectOrder, sortProjectsForRail } from "./projectOrder";
+import {
+  loadProjectGroupNames,
+  mergeProjectGroupNames,
+  normalizeProjectGroupName,
+  saveProjectGroupNames,
+} from "./projectGroups";
+import {
+  normalizeProjectRailWidth,
+  PROJECT_RAIL_EXPANDED_WIDTH,
+  projectRailWidthForProjects,
+} from "./components/project-page/viewMode";
 import s from "./styles";
 import "./App.css";
 
 const ProjectPage = lazy(() =>
   import("./components/ProjectPage").then((module) => ({ default: module.ProjectPage })),
 );
+
+const PROJECT_RAIL_WIDTH_STORAGE_KEY = "aeroric:projectRailWidth";
+
+function loadProjectRailWidth(): number | null {
+  const value = Number(localStorage.getItem(PROJECT_RAIL_WIDTH_STORAGE_KEY));
+  return Number.isFinite(value) && value > 0 ? normalizeProjectRailWidth(value) : null;
+}
 
 function deriveProjectName(path: string): string {
   const trimmed = path.replace(/[\\/]+$/, "");
@@ -263,6 +281,11 @@ function App() {
     getInitialFontFamily("aeroric:monoFontFamily", DEFAULT_MONO_FONT, LEGACY_DEFAULT_MONO_FONTS),
   );
   const [projects, setProjects] = useState<Project[]>([]);
+  const [projectGroups, setProjectGroups] = useState<string[]>(loadProjectGroupNames);
+  const [projectRailWidth, setProjectRailWidth] = useState(
+    () => loadProjectRailWidth() ?? PROJECT_RAIL_EXPANDED_WIDTH,
+  );
+  const projectRailWidthCustomizedRef = useRef(loadProjectRailWidth() !== null);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [activeProject, setActiveProject] = useState<Project | null>(null);
   const [projectViews, setProjectViews] = useState<Record<string, ProjectViewState>>({});
@@ -433,6 +456,22 @@ function App() {
       normalizeSftpLocalDefaultPath(sftpLocalDefaultPath),
     );
   }, [sftpLocalDefaultPath]);
+
+  useEffect(() => {
+    saveProjectGroupNames(projectGroups);
+  }, [projectGroups]);
+
+  useEffect(() => {
+    setProjectGroups((current) => {
+      const next = mergeProjectGroupNames(projects, current);
+      return next.length === current.length && next.every((name, index) => name === current[index])
+        ? current
+        : next;
+    });
+    if (!projectRailWidthCustomizedRef.current) {
+      setProjectRailWidth(projectRailWidthForProjects(projects));
+    }
+  }, [projects]);
 
   useEffect(() => {
     const value = uiFontFamily.trim() || DEFAULT_UI_FONT;
@@ -1352,6 +1391,56 @@ function App() {
     });
   }
 
+  function handleAssignProjectGroup(projectId: string, groupName: string | null) {
+    const normalized = normalizeProjectGroupName(groupName);
+    setProjects((prev) => {
+      const next = prev.map((project) =>
+        project.id === projectId ? { ...project, group: normalized ?? undefined } : project,
+      );
+      persistProjects(next, showToast, formatSaveProjectsError);
+      return next;
+    });
+  }
+
+  function handleCreateProjectGroup(groupName: string) {
+    const normalized = normalizeProjectGroupName(groupName);
+    if (!normalized) return;
+    setProjectGroups((current) =>
+      current.includes(normalized) ? current : [...current, normalized],
+    );
+  }
+
+  function handleRenameProjectGroup(oldName: string, nextName: string) {
+    const normalized = normalizeProjectGroupName(nextName);
+    if (!normalized || normalized === oldName) return;
+    setProjectGroups((current) => current.map((name) => (name === oldName ? normalized : name)));
+    setProjects((prev) => {
+      const next = prev.map((project) =>
+        project.group === oldName ? { ...project, group: normalized } : project,
+      );
+      persistProjects(next, showToast, formatSaveProjectsError);
+      return next;
+    });
+  }
+
+  function handleDeleteProjectGroup(groupName: string) {
+    setProjectGroups((current) => current.filter((name) => name !== groupName));
+    setProjects((prev) => {
+      const next = prev.map((project) =>
+        project.group === groupName ? { ...project, group: undefined } : project,
+      );
+      persistProjects(next, showToast, formatSaveProjectsError);
+      return next;
+    });
+  }
+
+  const handleProjectRailWidthChange = useCallback((width: number) => {
+    const normalized = normalizeProjectRailWidth(width);
+    projectRailWidthCustomizedRef.current = true;
+    setProjectRailWidth(normalized);
+    localStorage.setItem(PROJECT_RAIL_WIDTH_STORAGE_KEY, String(normalized));
+  }, []);
+
   function updateTaskStatus(
     taskId: string,
     status: TaskStatus,
@@ -1533,6 +1622,9 @@ function App() {
                 onBack={handleBack}
                 onSwitchProject={handleProjectClick}
                 onReorderProjects={handleReorderProjects}
+                projectGroups={projectGroups}
+                projectRailWidth={projectRailWidth}
+                onProjectRailWidthChange={handleProjectRailWidthChange}
                 onOpen={handleOpen}
                 themeVariant={themeVariant}
                 themeMode={themeMode}
@@ -1579,6 +1671,11 @@ function App() {
             onDeleteProject={handleDeleteProject}
             onRenameProject={handleRenameProject}
             onToggleProjectHidden={handleToggleProjectHidden}
+            projectGroups={projectGroups}
+            onAssignProjectGroup={handleAssignProjectGroup}
+            onCreateProjectGroup={handleCreateProjectGroup}
+            onRenameProjectGroup={handleRenameProjectGroup}
+            onDeleteProjectGroup={handleDeleteProjectGroup}
             skillHubConfig={skillHubConfig}
             onEnterSkillHub={handleEnterSkillHub}
             sshConnections={sshConnections}

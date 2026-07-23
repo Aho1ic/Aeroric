@@ -1,12 +1,38 @@
-import type { ProjectLocation, TaskStatus } from "../../types";
+import type { Project, ProjectLocation, TaskStatus } from "../../types";
 import type { RightPanel } from "../../hooks/useProjectPanels";
 import type React from "react";
 
 export const PROJECT_RAIL_EXPANDED_WIDTH = 252;
 export const PROJECT_RAIL_COLLAPSED_WIDTH = 52;
+export const PROJECT_RAIL_MIN_WIDTH = 220;
+export const PROJECT_RAIL_MAX_WIDTH = 720;
 export const RIGHT_TOOLBAR_WIDTH = 44;
 const COMPOSE_COMFORT_WIDTH = 760;
 const COMPOSE_ICON_ONLY_WIDTH = 680;
+
+function estimatedTextWidth(value: string): number {
+  return Array.from(value).reduce((width, character) => {
+    const codePoint = character.codePointAt(0) ?? 0;
+    return width + (codePoint > 0xff ? 13.5 : 7.2);
+  }, 0);
+}
+
+export function projectRailWidthForProjects(projects: Project[]): number {
+  const projectNameWidth = projects.reduce(
+    (width, project) => Math.max(width, estimatedTextWidth(project.name)),
+    0,
+  );
+  const structuralWidth = 160;
+  return Math.min(
+    PROJECT_RAIL_MAX_WIDTH,
+    Math.max(PROJECT_RAIL_EXPANDED_WIDTH, Math.ceil(projectNameWidth + structuralWidth)),
+  );
+}
+
+export function normalizeProjectRailWidth(value: number): number {
+  if (!Number.isFinite(value)) return PROJECT_RAIL_EXPANDED_WIDTH;
+  return Math.min(PROJECT_RAIL_MAX_WIDTH, Math.max(PROJECT_RAIL_MIN_WIDTH, Math.round(value)));
+}
 
 export function shouldShowRemoteSshTerminal(
   projectLocation: ProjectLocation,
@@ -26,6 +52,7 @@ export function shouldShowRemoteSshTerminalLayer({
   isSshMode = false,
   isDatabaseMode = false,
   isNotesMode = false,
+  terminalSelected = false,
 }: {
   showRemoteSshTerminal: boolean;
   hasRemoteConnection: boolean;
@@ -37,12 +64,12 @@ export function shouldShowRemoteSshTerminalLayer({
   isSshMode?: boolean;
   isDatabaseMode?: boolean;
   isNotesMode?: boolean;
+  terminalSelected?: boolean;
 }): boolean {
   return (
     showRemoteSshTerminal &&
     hasRemoteConnection &&
-    !hasOpenDiff &&
-    !hasOpenFiles &&
+    (terminalSelected || (!hasOpenDiff && !hasOpenFiles)) &&
     !isSftpMode &&
     !isShellMode &&
     !isDockerMode &&
@@ -68,12 +95,16 @@ export function centerWorkspaceMode(
 export function projectSshRightPanelWidth({
   containerWidth,
   railCollapsed,
+  railExpandedWidth = PROJECT_RAIL_EXPANDED_WIDTH,
 }: {
   containerWidth: number;
   railCollapsed: boolean;
+  railExpandedWidth?: number;
 }): number {
   if (!Number.isFinite(containerWidth) || containerWidth <= 0) return 420;
-  const railWidth = railCollapsed ? PROJECT_RAIL_COLLAPSED_WIDTH : PROJECT_RAIL_EXPANDED_WIDTH;
+  const railWidth = railCollapsed
+    ? PROJECT_RAIL_COLLAPSED_WIDTH
+    : normalizeProjectRailWidth(railExpandedWidth);
   const available = Math.max(360, containerWidth - railWidth - RIGHT_TOOLBAR_WIDTH);
   return Math.floor(available / 2);
 }
@@ -152,19 +183,22 @@ export function projectResponsiveLayout({
   width,
   rightPanelWidth,
   rightPanelVisible,
+  railExpandedWidth = PROJECT_RAIL_EXPANDED_WIDTH,
 }: {
   width: number;
   rightPanelWidth: number;
   rightPanelVisible: boolean;
+  railExpandedWidth?: number;
 }): { autoCollapseRail: boolean; compactComposeControls: boolean } {
   if (!Number.isFinite(width) || width <= 0) {
     return { autoCollapseRail: false, compactComposeControls: false };
   }
 
   const dockWidth = rightPanelVisible ? rightPanelWidth : 0;
-  const expandedCenterWidth = width - RIGHT_TOOLBAR_WIDTH - dockWidth - PROJECT_RAIL_EXPANDED_WIDTH;
+  const expandedRailWidth = normalizeProjectRailWidth(railExpandedWidth);
+  const expandedCenterWidth = width - RIGHT_TOOLBAR_WIDTH - dockWidth - expandedRailWidth;
   const autoCollapseRail = rightPanelVisible && expandedCenterWidth < COMPOSE_COMFORT_WIDTH;
-  const railWidth = autoCollapseRail ? PROJECT_RAIL_COLLAPSED_WIDTH : PROJECT_RAIL_EXPANDED_WIDTH;
+  const railWidth = autoCollapseRail ? PROJECT_RAIL_COLLAPSED_WIDTH : expandedRailWidth;
   const centerWidth = width - RIGHT_TOOLBAR_WIDTH - dockWidth - railWidth;
 
   return {

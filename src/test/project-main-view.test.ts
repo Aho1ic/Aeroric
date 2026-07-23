@@ -2,8 +2,9 @@ import { describe, expect, it } from "vitest";
 import type { ProjectLocation } from "../types";
 import {
   centerWorkspaceMode,
-  projectResponsiveLayout,
   projectNotebookPanelStyle,
+  projectRailWidthForProjects,
+  projectResponsiveLayout,
   shouldShowAgentTaskTabs,
   projectSshRightPanelWidth,
   shellCenterContentStyle,
@@ -88,6 +89,21 @@ describe("project main view mode", () => {
         isSshMode: true,
       }),
     ).toBe(false);
+  });
+
+  it("shows a selected SSH terminal without discarding open file tabs", () => {
+    expect(
+      shouldShowRemoteSshTerminalLayer({
+        showRemoteSshTerminal: true,
+        hasRemoteConnection: true,
+        hasOpenFiles: true,
+        hasOpenDiff: false,
+        isSftpMode: false,
+        isShellMode: false,
+        isDockerMode: false,
+        terminalSelected: true,
+      }),
+    ).toBe(true);
   });
 
   it("keeps running task terminals hidden while SFTP owns the center workspace", () => {
@@ -285,6 +301,29 @@ describe("project main view mode", () => {
   it("sizes the SSH right panel to half of the available workspace", () => {
     expect(projectSshRightPanelWidth({ containerWidth: 1100, railCollapsed: false })).toBe(402);
     expect(projectSshRightPanelWidth({ containerWidth: 1100, railCollapsed: true })).toBe(502);
+  });
+
+  it("grows the project rail for long names and includes custom width in layout decisions", () => {
+    expect(
+      projectRailWidthForProjects([
+        { id: "short", name: "App", path: "/tmp/app", lastOpenedAt: 1 },
+        {
+          id: "long",
+          name: "very-long-project-name-that-needs-space",
+          path: "/tmp/long",
+          lastOpenedAt: 1,
+        },
+      ]),
+    ).toBeGreaterThan(252);
+
+    expect(
+      projectResponsiveLayout({
+        width: 1300,
+        rightPanelWidth: 280,
+        rightPanelVisible: true,
+        railExpandedWidth: 520,
+      }).autoCollapseRail,
+    ).toBe(true);
   });
 
   it("renders project notes as a center workspace panel", () => {

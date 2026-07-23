@@ -37,13 +37,16 @@ import { IconButton } from "./IconButton";
 import { TodoTaskView } from "./TodoTaskView";
 import {
   deriveShellTerminalFontSize,
+  SHELL_TERMINAL_MAX_SESSIONS,
   ShellTerminalPanel,
   type ShellTerminalPanelHandle,
+  type ShellSession,
 } from "./ShellTerminalPanel";
+import { FileText, Plus, Terminal as TerminalIcon, X } from "lucide-react";
 import { SshTerminalPanel, type SshTerminalPanelHandle } from "./ssh/SshTerminalPanel";
 import type { SftpEndpoint } from "./sftp/sftpTypes";
 import { ErrorBoundary } from "./ErrorBoundary";
-import { useProjectPanels } from "../hooks/useProjectPanels";
+import { useProjectPanels, type EditorGroupId } from "../hooks/useProjectPanels";
 import {
   centerWorkspaceMode,
   projectNotebookPanelStyle,
@@ -193,6 +196,9 @@ export function ProjectPage({
   onBack,
   onSwitchProject,
   onReorderProjects,
+  projectGroups = [],
+  projectRailWidth,
+  onProjectRailWidthChange,
   onOpen,
   themeVariant,
   onToggleTheme,
@@ -259,6 +265,9 @@ export function ProjectPage({
   onBack: () => void;
   onSwitchProject: (project: Project) => void;
   onReorderProjects: (orderedProjectIds: string[]) => void;
+  projectGroups?: string[];
+  projectRailWidth?: number;
+  onProjectRailWidthChange?: (width: number) => void;
   onOpen: () => void;
   themeVariant: ThemeVariant;
   themeMode: ThemeMode;
@@ -316,6 +325,9 @@ export function ProjectPage({
 
   const [showShellTerminal, setShowShellTerminal] = useState(false);
   const [shellTerminalMounted, setShellTerminalMounted] = useState(false);
+  const [shellSessions, setShellSessions] = useState<ShellSession[]>([]);
+  const [activeShellId, setActiveShellId] = useState<string | null>(null);
+  const [showRemoteProjectTerminal, setShowRemoteProjectTerminal] = useState(true);
   const [rightSshMounted, setRightSshMounted] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [showFileSearch, setShowFileSearch] = useState(false);
@@ -446,6 +458,9 @@ export function ProjectPage({
     [tasks, project.id],
   );
   const projectLocation = resolveProjectLocation(project);
+  useEffect(() => {
+    setShowRemoteProjectTerminal(true);
+  }, [project.id]);
   useEffect(() => {
     setLaunchedDebugSession(null);
     setLaunchedRunProcess(null);
@@ -603,6 +618,7 @@ export function ProjectPage({
   const handleSearchFileSelect = useCallback(
     (path: string, name: string, selection?: { line: number; column?: number }) => {
       setShowShellTerminal(false);
+      setShowRemoteProjectTerminal(false);
       handleFileSelect(path, name, selection);
       openRightPanel("files");
     },
@@ -612,6 +628,7 @@ export function ProjectPage({
   const handleTextSearchMatchOpen = useCallback(
     (match: TextSearchMatch) => {
       setShowShellTerminal(false);
+      setShowRemoteProjectTerminal(false);
       handleFileSelect(match.path, match.name, { line: match.line, column: match.column });
       openRightPanel("files");
     },
@@ -622,6 +639,7 @@ export function ProjectPage({
     (diagnostic: DiagnosticItem) => {
       const name = diagnostic.file.split(/[\\/]/).pop() ?? diagnostic.file;
       setShowShellTerminal(false);
+      setShowRemoteProjectTerminal(false);
       handleFileSelect(diagnostic.file, name, {
         line: diagnostic.line,
         column: diagnostic.column,
@@ -635,6 +653,7 @@ export function ProjectPage({
     (failure: TestFailure) => {
       const name = failure.file.split(/[\\/]/).pop() ?? failure.file;
       setShowShellTerminal(false);
+      setShowRemoteProjectTerminal(false);
       handleFileSelect(failure.file, name, {
         line: failure.line,
         column: failure.column,
@@ -647,6 +666,7 @@ export function ProjectPage({
   const handleDebugLocationOpen = useCallback(
     (path: string, name: string, selection?: { line: number; column?: number }) => {
       setShowShellTerminal(false);
+      setShowRemoteProjectTerminal(false);
       handleFileSelect(path, name, selection);
       openRightPanel("files");
     },
@@ -656,6 +676,7 @@ export function ProjectPage({
   const handleDefinitionOpen = useCallback(
     (path: string, name: string, selection?: { line: number; column?: number }) => {
       setShowShellTerminal(false);
+      setShowRemoteProjectTerminal(false);
       handleFileSelect(path, name, selection);
       openRightPanel("files");
     },
@@ -665,6 +686,7 @@ export function ProjectPage({
   const handleGitAdvancedFileOpen = useCallback(
     (path: string, name: string, selection?: { line: number; column?: number }) => {
       setShowShellTerminal(false);
+      setShowRemoteProjectTerminal(false);
       handleFileSelect(path, name, selection);
       openRightPanel("files");
     },
@@ -702,8 +724,8 @@ export function ProjectPage({
   const sendOrQueueShellCommand = useCallback(
     (cmd: string) => {
       if (projectLocation.kind === "ssh") {
-        clearFileAndDiff();
         setShowShellTerminal(false);
+        setShowRemoteProjectTerminal(true);
         if (remoteSshReadyRef.current && remoteSshRef.current) {
           remoteSshRef.current.sendCommand(cmd);
         } else {
@@ -719,7 +741,7 @@ export function ProjectPage({
       }
       pendingCmdRef.current = cmd;
     },
-    [clearFileAndDiff, projectLocation.kind],
+    [projectLocation.kind],
   );
 
   const handleRunMakeTarget = useCallback(
@@ -798,6 +820,7 @@ export function ProjectPage({
   const handleDiffFileSelectWithCollapse = useCallback(
     (filePath: string, staged: boolean, label: string) => {
       setShowShellTerminal(false);
+      setShowRemoteProjectTerminal(false);
       handleDiffFileSelect(filePath, staged, label);
     },
     [handleDiffFileSelect],
@@ -806,6 +829,7 @@ export function ProjectPage({
   const handleCommitSelectWithCollapse = useCallback(
     (hash: string, message: string) => {
       setShowShellTerminal(false);
+      setShowRemoteProjectTerminal(false);
       handleCommitSelect(hash, message);
     },
     [handleCommitSelect],
@@ -814,6 +838,7 @@ export function ProjectPage({
   const handleCommitFileClickWithCollapse = useCallback(
     (hash: string, filePath: string, label: string) => {
       setShowShellTerminal(false);
+      setShowRemoteProjectTerminal(false);
       handleCommitFileClick(hash, filePath, label);
     },
     [handleCommitFileClick],
@@ -834,6 +859,7 @@ export function ProjectPage({
         panel,
       );
       setShowShellTerminal(false);
+      setShowRemoteProjectTerminal(false);
       if (panel === "ssh" || panel === "database" || panel === "notes") {
         clearFileAndDiff();
       }
@@ -848,6 +874,7 @@ export function ProjectPage({
       const label = projectPanelFeedbackLabel(panel, t);
       showActionFeedback(t("project.actionFeedback.opened", { action: label }), "open", panel);
       setShowShellTerminal(false);
+      setShowRemoteProjectTerminal(false);
 
       if (panel === "tests" && activeFilePath) {
         testRunRequestIdRef.current += 1;
@@ -897,6 +924,7 @@ export function ProjectPage({
       "ssh",
     );
     setShowShellTerminal(false);
+    setShowRemoteProjectTerminal(false);
     clearFileAndDiff();
     openRightPanel("ssh");
   }, [clearFileAndDiff, openRightPanel, showActionFeedback, t]);
@@ -910,44 +938,39 @@ export function ProjectPage({
     closeRightPanel();
     if (projectLocation.kind === "ssh") {
       if (!remoteConnection) return;
-      clearFileAndDiff();
       setShowShellTerminal(false);
+      setShowRemoteProjectTerminal(true);
       return;
     }
     setShellTerminalMounted(true);
     setShowShellTerminal(true);
-  }, [
-    clearFileAndDiff,
-    closeRightPanel,
-    projectLocation.kind,
-    remoteConnection,
-    showActionFeedback,
-    t,
-  ]);
+  }, [closeRightPanel, projectLocation.kind, remoteConnection, showActionFeedback, t]);
 
   const handleToggleTerminal = useCallback(() => {
+    const terminalOpen =
+      projectLocation.kind === "ssh" ? showRemoteProjectTerminal : showShellTerminal;
     showActionFeedback(
-      projectLocation.kind === "ssh" || !showShellTerminal
+      !terminalOpen
         ? t("project.actionFeedback.opened", { action: t("terminal.title") })
         : t("project.actionFeedback.closed", { action: t("terminal.title") }),
-      projectLocation.kind === "ssh" || !showShellTerminal ? "open" : "close",
+      !terminalOpen ? "open" : "close",
       "terminal",
     );
     closeRightPanel();
     if (projectLocation.kind === "ssh") {
       if (!remoteConnection) return;
-      clearFileAndDiff();
       setShowShellTerminal(false);
+      setShowRemoteProjectTerminal((current) => !current);
       return;
     }
     setShellTerminalMounted(true);
     setShowShellTerminal((v) => !v);
   }, [
-    clearFileAndDiff,
     closeRightPanel,
     projectLocation.kind,
     remoteConnection,
     showActionFeedback,
+    showRemoteProjectTerminal,
     showShellTerminal,
     t,
   ]);
@@ -955,6 +978,7 @@ export function ProjectPage({
   const handleFileSelectWithShellMinimize = useCallback(
     (path: string, name: string) => {
       setShowShellTerminal(false);
+      setShowRemoteProjectTerminal(false);
       if (isSqliteDatabaseFileName(name)) {
         setDatabaseFilePath(path);
         clearFileAndDiff();
@@ -970,6 +994,7 @@ export function ProjectPage({
     (path: string, name: string) => {
       if (!isSqliteDatabaseFileName(name)) return;
       setShowShellTerminal(false);
+      setShowRemoteProjectTerminal(false);
       setDatabaseFilePath(path);
       clearFileAndDiff();
       openRightPanel("database");
@@ -1209,6 +1234,7 @@ export function ProjectPage({
     isSshMode,
     isDatabaseMode,
     isNotesMode,
+    terminalSelected: showRemoteProjectTerminal,
   });
   const shellTerminalFontSize = useMemo(
     () => deriveShellTerminalFontSize(terminalFontSize),
@@ -1265,6 +1291,7 @@ export function ProjectPage({
         width: element.getBoundingClientRect().width,
         rightPanelWidth,
         rightPanelVisible: Boolean(visibleRightPanel),
+        railExpandedWidth: projectRailWidth,
       });
       setProjectBodyWidth(element.getBoundingClientRect().width);
       setResponsiveLayout((prev) =>
@@ -1283,16 +1310,89 @@ export function ProjectPage({
     const observer = new ResizeObserver(updateLayout);
     observer.observe(element);
     return () => observer.disconnect();
-  }, [rightPanelWidth, visibleRightPanel]);
+  }, [projectRailWidth, rightPanelWidth, visibleRightPanel]);
 
   const effectiveRightPanelWidth =
     rightPanel === "ssh"
       ? projectSshRightPanelWidth({
           containerWidth: projectBodyWidth,
           railCollapsed: responsiveLayout.autoCollapseRail || isDatabaseMode,
+          railExpandedWidth: projectRailWidth,
         })
       : rightPanelWidth;
   const showAgentTabs = shouldShowAgentTaskTabs({ taskCount: projectTasks.length });
+  const workspaceFileTabs = useMemo(
+    () =>
+      editorGroups.flatMap((group) =>
+        group.tabs.map((tab) => ({
+          ...tab,
+          groupId: group.id,
+        })),
+      ),
+    [editorGroups],
+  );
+  const workspaceTerminalTabs =
+    projectLocation.kind === "ssh" && remoteConnection
+      ? [
+          {
+            id: "remote-terminal",
+            title: `SSH ${t("terminal.title")}`,
+            label: "SSH",
+            remote: true as const,
+          },
+        ]
+      : shellSessions.map((shell, index) => ({
+          ...shell,
+          label: `zsh ${index + 1}`,
+          remote: false as const,
+        }));
+  const workspaceTerminalVisible =
+    projectLocation.kind === "ssh" ? remoteSshMainVisible : showShellTerminal;
+  const showWorkspaceTabs =
+    (visibleRightPanel === "files" || workspaceTerminalVisible) &&
+    (workspaceFileTabs.length > 0 || workspaceTerminalTabs.length > 0);
+
+  const handleShellSessionsChange = useCallback(
+    (sessions: ShellSession[], nextActiveShellId: string | null) => {
+      setShellSessions(sessions);
+      setActiveShellId(nextActiveShellId);
+    },
+    [],
+  );
+
+  const handleWorkspaceFileTabSelect = useCallback(
+    (groupId: EditorGroupId, path: string) => {
+      setShowShellTerminal(false);
+      setShowRemoteProjectTerminal(false);
+      openRightPanel("files");
+      handleEditorGroupFocus(groupId);
+      handleFileTabSelect(path, groupId);
+    },
+    [handleEditorGroupFocus, handleFileTabSelect, openRightPanel],
+  );
+
+  const handleWorkspaceTerminalTabSelect = useCallback(
+    (terminalId: string) => {
+      closeRightPanel();
+      if (projectLocation.kind === "ssh") {
+        setShowShellTerminal(false);
+        setShowRemoteProjectTerminal(true);
+        return;
+      }
+      setShellTerminalMounted(true);
+      setShowShellTerminal(true);
+      shellRef.current?.activateShell(terminalId);
+    },
+    [closeRightPanel, projectLocation.kind],
+  );
+
+  const handleWorkspaceTerminalTabClose = useCallback(
+    (terminalId: string) => {
+      if (projectLocation.kind === "ssh") return;
+      shellRef.current?.closeShell(terminalId);
+    },
+    [projectLocation.kind],
+  );
 
   return (
     <div
@@ -1315,6 +1415,9 @@ export function ProjectPage({
         onToggleTheme={onToggleTheme}
         onSwitch={onSwitchProject}
         onReorderProjects={onReorderProjects}
+        projectGroups={projectGroups}
+        projectRailWidth={projectRailWidth}
+        onProjectRailWidthChange={onProjectRailWidthChange}
         onOpen={onOpen}
         onBack={hubMode ? (onExitSkillHub ?? onBack) : onBack}
         onNewTask={handleNewTask}
@@ -1328,6 +1431,197 @@ export function ProjectPage({
         forceCollapsed={responsiveLayout.autoCollapseRail || isDatabaseMode}
       />
       <div style={{ ...s.mainContent, flexDirection: "column" }}>
+        {showWorkspaceTabs && (
+          <div
+            role="tablist"
+            aria-label="Workspace tabs"
+            data-testid="workspace-tabs"
+            style={{
+              minHeight: 34,
+              height: 34,
+              flexShrink: 0,
+              display: "flex",
+              alignItems: "center",
+              gap: 5,
+              padding: "4px 8px",
+              borderBottom: "1px solid var(--border-dim)",
+              background: "color-mix(in srgb, var(--bg-root) 72%, var(--bg-sidebar))",
+              overflowX: "auto",
+            }}
+          >
+            {workspaceFileTabs.map((tab) => {
+              const selected =
+                !workspaceTerminalVisible &&
+                tab.groupId === activeEditorGroupId &&
+                tab.path === activeFilePath;
+              return (
+                <div
+                  key={`file:${tab.groupId}:${tab.path}`}
+                  style={{
+                    height: 24,
+                    maxWidth: 220,
+                    display: "inline-flex",
+                    alignItems: "center",
+                    border: `1px solid ${selected ? "var(--border-strong)" : "var(--border-dim)"}`,
+                    borderRadius: 6,
+                    background: selected ? "var(--control-active-bg)" : "transparent",
+                    flexShrink: 0,
+                  }}
+                >
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={selected}
+                    title={tab.path}
+                    onClick={() => handleWorkspaceFileTabSelect(tab.groupId, tab.path)}
+                    style={{
+                      minWidth: 0,
+                      height: "100%",
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: 6,
+                      padding: "0 7px 0 8px",
+                      border: "none",
+                      background: "transparent",
+                      color: selected ? "var(--control-active-fg)" : "var(--text-muted)",
+                      cursor: "pointer",
+                      fontSize: 11,
+                      fontWeight: selected ? 650 : 560,
+                    }}
+                  >
+                    <FileText size={12} />
+                    <span
+                      style={{
+                        minWidth: 0,
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      {tab.name}
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    aria-label={t("file.closeTab", { name: tab.name })}
+                    title={t("file.closeTab", { name: tab.name })}
+                    onClick={() => handleFileTabClose(tab.path, tab.groupId)}
+                    style={{
+                      width: 20,
+                      height: 20,
+                      display: "inline-flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      padding: 0,
+                      border: "none",
+                      background: "transparent",
+                      color: "var(--text-hint)",
+                      cursor: "pointer",
+                    }}
+                  >
+                    <X size={11} />
+                  </button>
+                </div>
+              );
+            })}
+            {workspaceTerminalTabs.map((terminal) => {
+              const selected =
+                workspaceTerminalVisible && (terminal.remote || terminal.id === activeShellId);
+              return (
+                <div
+                  key={`terminal:${terminal.id}`}
+                  style={{
+                    height: 24,
+                    maxWidth: 150,
+                    display: "inline-flex",
+                    alignItems: "center",
+                    border: `1px solid ${selected ? "var(--border-strong)" : "var(--border-dim)"}`,
+                    borderRadius: 6,
+                    background: selected ? "var(--control-active-bg)" : "transparent",
+                    flexShrink: 0,
+                  }}
+                >
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={selected}
+                    title={terminal.title}
+                    onClick={() => handleWorkspaceTerminalTabSelect(terminal.id)}
+                    style={{
+                      minWidth: 0,
+                      height: "100%",
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: 6,
+                      padding: "0 7px 0 8px",
+                      border: "none",
+                      background: "transparent",
+                      color: selected ? "var(--control-active-fg)" : "var(--text-muted)",
+                      cursor: "pointer",
+                      fontSize: 11,
+                      fontWeight: selected ? 650 : 560,
+                    }}
+                  >
+                    <TerminalIcon size={12} />
+                    <span>{terminal.label}</span>
+                  </button>
+                  {!terminal.remote && (
+                    <button
+                      type="button"
+                      aria-label={t("terminal.closeShell", { title: terminal.title })}
+                      title={t("terminal.closeShell", { title: terminal.title })}
+                      onClick={() => handleWorkspaceTerminalTabClose(terminal.id)}
+                      style={{
+                        width: 20,
+                        height: 20,
+                        display: "inline-flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        padding: 0,
+                        border: "none",
+                        background: "transparent",
+                        color: "var(--text-hint)",
+                        cursor: "pointer",
+                      }}
+                    >
+                      <X size={11} />
+                    </button>
+                  )}
+                </div>
+              );
+            })}
+            {projectLocation.kind !== "ssh" && shellSessions.length > 0 && (
+              <button
+                type="button"
+                aria-label={t("terminal.newTerminal")}
+                title={
+                  shellSessions.length >= SHELL_TERMINAL_MAX_SESSIONS
+                    ? t("terminal.limitReached")
+                    : t("terminal.newTerminal")
+                }
+                disabled={shellSessions.length >= SHELL_TERMINAL_MAX_SESSIONS}
+                onClick={() => shellRef.current?.addShell()}
+                style={{
+                  width: 24,
+                  height: 24,
+                  display: "inline-flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  padding: 0,
+                  border: "1px solid var(--border-dim)",
+                  borderRadius: 6,
+                  background: "transparent",
+                  color: "var(--text-secondary)",
+                  cursor:
+                    shellSessions.length >= SHELL_TERMINAL_MAX_SESSIONS ? "not-allowed" : "pointer",
+                  flexShrink: 0,
+                }}
+              >
+                <Plus size={12} />
+              </button>
+            )}
+          </div>
+        )}
         {showAgentTabs && (
           <div
             aria-label="Agent terminal tabs"
@@ -1699,6 +1993,7 @@ export function ProjectPage({
                             }
                             onOpenDefinition={handleDefinitionOpen}
                             onFocusGroup={() => handleEditorGroupFocus(group.id)}
+                            showTabStrip={false}
                             onSplitRight={
                               group.id === "main" && group.id === activeEditorGroupId
                                 ? handleSplitEditorGroupRight
@@ -1742,6 +2037,8 @@ export function ProjectPage({
                     onClose={() => {
                       setShowShellTerminal(false);
                       setShellTerminalMounted(false);
+                      setShellSessions([]);
+                      setActiveShellId(null);
                       shellReadyRef.current = false;
                       pendingCmdRef.current = null;
                     }}
@@ -1749,6 +2046,8 @@ export function ProjectPage({
                     terminalFontSize={shellTerminalFontSize}
                     monoFontFamily={monoFontFamily}
                     onReady={handleShellReady}
+                    showSessionTabs={false}
+                    onSessionsChange={handleShellSessionsChange}
                     height="100%"
                   />
                 </ErrorBoundary>

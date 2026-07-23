@@ -32,6 +32,78 @@ function task(id: string, projectId: string, createdAt: number): Task {
 }
 
 describe("ProjectRail project dragging", () => {
+  it("collapses and expands project groups independently from project task lists", () => {
+    localStorage.setItem("aeroric:language", "en");
+    render(
+      <I18nProvider>
+        <ProjectRail
+          projects={[
+            { ...project("p1", "Alpha", 0), group: "Work" },
+            { ...project("p2", "Beta", 1), group: "Work" },
+          ]}
+          projectGroups={["Work"]}
+          allTasks={[]}
+          activeProjectId="p1"
+          selectedTaskId={null}
+          isNewTask={false}
+          onSwitch={vi.fn()}
+          onOpen={vi.fn()}
+          onBack={vi.fn()}
+          onNewTask={vi.fn()}
+          onSelectTask={vi.fn()}
+          onDeleteTask={vi.fn()}
+          onToggleTaskStar={vi.fn()}
+          onRunTodo={vi.fn()}
+          themeVariant="light"
+          onToggleTheme={vi.fn()}
+          singleProjectMode
+        />
+      </I18nProvider>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Collapse project group Work" }));
+
+    expect(screen.queryByRole("button", { name: "Alpha" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Expand project group Work" }));
+    expect(screen.getByRole("button", { name: "Beta" })).toBeInTheDocument();
+  });
+
+  it("reports project rail width changes from the resize separator", () => {
+    localStorage.setItem("aeroric:language", "en");
+    const onProjectRailWidthChange = vi.fn();
+    render(
+      <I18nProvider>
+        <ProjectRail
+          projects={[project("p1", "Alpha", 0)]}
+          allTasks={[]}
+          activeProjectId="p1"
+          selectedTaskId={null}
+          isNewTask={false}
+          onSwitch={vi.fn()}
+          onOpen={vi.fn()}
+          onBack={vi.fn()}
+          onNewTask={vi.fn()}
+          onSelectTask={vi.fn()}
+          onDeleteTask={vi.fn()}
+          onToggleTaskStar={vi.fn()}
+          onRunTodo={vi.fn()}
+          projectRailWidth={252}
+          onProjectRailWidthChange={onProjectRailWidthChange}
+          themeVariant="light"
+          onToggleTheme={vi.fn()}
+          singleProjectMode
+        />
+      </I18nProvider>,
+    );
+
+    const separator = screen.getByRole("separator", { name: "Resize project sidebar" });
+    fireEvent.pointerDown(separator, { pointerId: 1, button: 0, clientX: 252 });
+    fireEvent.pointerMove(separator, { pointerId: 1, clientX: 332 });
+    fireEvent.pointerUp(separator, { pointerId: 1, clientX: 332 });
+
+    expect(onProjectRailWidthChange).toHaveBeenLastCalledWith(332);
+  });
+
   it("keeps three project task lists open and closes the oldest on the fourth", () => {
     const projects = [
       project("p1", "Alpha", 0),
