@@ -131,7 +131,7 @@ describe("SSH project opening", () => {
 
     expect(
       screen.getByText(
-        "Passwords are stored locally in Aeroric connection settings and passed to system SSH via sshpass environment variables.",
+        "Passwords are stored as plaintext in a local owner-only file under Aeroric app data (Unix mode 0600), not in the OS keychain. They are passed to system SSH via sshpass environment variables. Prefer SSH keys when possible; leave the password blank to use interactive prompts instead.",
       ),
     ).toHaveStyle({ borderStyle: "none" });
   });

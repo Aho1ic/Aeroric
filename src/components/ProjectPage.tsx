@@ -60,6 +60,7 @@ import {
   shouldShowRunningTaskInCenter,
   shouldShowShellInCenter,
   shouldShowTaskWorkspace,
+  shouldShowWorkspaceTabs,
   visibleDockPanel,
 } from "./project-page/viewMode";
 import {
@@ -956,17 +957,30 @@ export function ProjectPage({
       !terminalOpen ? "open" : "close",
       "terminal",
     );
-    closeRightPanel();
     if (projectLocation.kind === "ssh") {
       if (!remoteConnection) return;
       setShowShellTerminal(false);
-      setShowRemoteProjectTerminal((current) => !current);
+      if (terminalOpen) {
+        setShowRemoteProjectTerminal(false);
+        if (hasEditorGroups) openRightPanel("files");
+      } else {
+        closeRightPanel();
+        setShowRemoteProjectTerminal(true);
+      }
       return;
     }
+    if (terminalOpen) {
+      setShowShellTerminal(false);
+      if (hasEditorGroups) openRightPanel("files");
+      return;
+    }
+    closeRightPanel();
     setShellTerminalMounted(true);
-    setShowShellTerminal((v) => !v);
+    setShowShellTerminal(true);
   }, [
     closeRightPanel,
+    hasEditorGroups,
+    openRightPanel,
     projectLocation.kind,
     remoteConnection,
     showActionFeedback,
@@ -1348,9 +1362,16 @@ export function ProjectPage({
         }));
   const workspaceTerminalVisible =
     projectLocation.kind === "ssh" ? remoteSshMainVisible : showShellTerminal;
-  const showWorkspaceTabs =
-    (visibleRightPanel === "files" || workspaceTerminalVisible) &&
-    (workspaceFileTabs.length > 0 || workspaceTerminalTabs.length > 0);
+  const showWorkspaceTabs = shouldShowWorkspaceTabs({
+    fileTabCount: workspaceFileTabs.length,
+    terminalTabCount: workspaceTerminalTabs.length,
+    terminalVisible: workspaceTerminalVisible,
+    isSftpMode,
+    isDockerMode,
+    isSshMode,
+    isDatabaseMode,
+    isNotesMode,
+  });
 
   const handleShellSessionsChange = useCallback(
     (sessions: ShellSession[], nextActiveShellId: string | null) => {
@@ -2033,7 +2054,10 @@ export function ProjectPage({
                     projectId={project.id}
                     isActive={visible && shellVisibleInCenter && showShellTerminal}
                     visible={shellVisibleInCenter && showShellTerminal}
-                    onMinimize={() => setShowShellTerminal(false)}
+                    onMinimize={() => {
+                      setShowShellTerminal(false);
+                      if (hasEditorGroups) openRightPanel("files");
+                    }}
                     onClose={() => {
                       setShowShellTerminal(false);
                       setShellTerminalMounted(false);
@@ -2041,6 +2065,7 @@ export function ProjectPage({
                       setActiveShellId(null);
                       shellReadyRef.current = false;
                       pendingCmdRef.current = null;
+                      if (hasEditorGroups) openRightPanel("files");
                     }}
                     themeVariant={themeVariant}
                     terminalFontSize={shellTerminalFontSize}

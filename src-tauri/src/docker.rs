@@ -66,11 +66,11 @@ struct RawDockerContainer {
 }
 
 fn docker_candidates() -> Vec<PathBuf> {
-    let mut candidates = Vec::new();
-    candidates.push(PathBuf::from("/opt/homebrew/bin/docker"));
-    candidates.push(PathBuf::from("/usr/local/bin/docker"));
-    candidates.push(PathBuf::from("docker"));
-    candidates
+    vec![
+        PathBuf::from("/opt/homebrew/bin/docker"),
+        PathBuf::from("/usr/local/bin/docker"),
+        PathBuf::from("docker"),
+    ]
 }
 
 fn command_error(label: &str, output: &Output) -> String {

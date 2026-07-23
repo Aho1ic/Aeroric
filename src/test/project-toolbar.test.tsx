@@ -620,7 +620,7 @@ describe("ProjectPage right toolbar", () => {
     }
   });
 
-  it("merges file and terminal tabs and hides the bar when both workspaces are closed", async () => {
+  it("merges file and terminal tabs and keeps file tabs after the terminal closes", async () => {
     const user = userEvent.setup();
 
     render(
@@ -651,7 +651,19 @@ describe("ProjectPage right toolbar", () => {
     expect(screen.getByTestId("file-explorer-panel")).toBeInTheDocument();
 
     await user.click(screen.getByTitle("Terminal"));
+    expect(await screen.findByTestId("shell-terminal")).toBeInTheDocument();
     await user.click(screen.getByTitle("Terminal"));
+    // Closing the terminal must keep open file tabs visible (not a black empty bar).
+    expect(screen.queryByTestId("shell-terminal")).not.toBeInTheDocument();
+    expect(
+      within(screen.getByTestId("workspace-tabs")).getByRole("tab", { name: "run.py" }),
+    ).toHaveAttribute("aria-selected", "true");
+
+    await user.click(
+      within(screen.getByTestId("workspace-tabs")).getByRole("button", {
+        name: "Close run.py",
+      }),
+    );
     expect(screen.queryByTestId("workspace-tabs")).not.toBeInTheDocument();
   });
 

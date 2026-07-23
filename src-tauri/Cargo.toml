@@ -55,3 +55,12 @@ devtools = ["tauri/devtools"]
 
 [profile.dev]
 debug = 0
+
+[lints.clippy]
+# Large IPC/command surfaces legitimately need more params; refactoring signatures
+# is tracked separately and must not block CI on pre-existing code.
+too_many_arguments = "allow"
+# Protocol/state enums hold large payloads by design (legacy sqlite, sftp paths).
+large_enum_variant = "allow"
+# Tauri State/Mutex type stacks are inherently nested.
+type_complexity = "allow"

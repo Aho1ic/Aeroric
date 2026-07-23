@@ -8,10 +8,11 @@ type TerminalWithInput = Pick<Terminal, "input" | "textarea">;
 // 正式使用置为 false 以避免控制台噪声。详见 docs/terminal-ime-switch-fix.md。
 const IME_DEBUG = false;
 function imeDbg(label: string, extra: Record<string, unknown> = {}): void {
-  if (!IME_DEBUG) return;
+  // Only emit when explicitly enabled AND running a Vite dev build — never ship
+  // console noise into production bundles by accident.
+  if (!IME_DEBUG || !import.meta.env.DEV) return;
   try {
-    // eslint-disable-next-line no-console
-    console.log(`[IME] ${label}`, { ...extra });
+    console.warn(`[IME] ${label}`, { ...extra });
   } catch {
     // 忽略 console 不可用
   }

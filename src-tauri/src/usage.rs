@@ -51,7 +51,7 @@ impl CodexRpcClient {
         let mut cmd = Command::new(&launch.program);
         crate::subprocess::configure_background_command(&mut cmd);
         cmd.arg("app-server")
-            .env("PATH", &shell_path)
+            .env("PATH", shell_path)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
@@ -473,8 +473,7 @@ fn wait_for_result(
 
         let matches_id = message
             .get("id")
-            .and_then(Value::as_i64)
-            .map_or(false, |id| id == expected_id);
+            .and_then(Value::as_i64) == Some(expected_id);
         if !matches_id {
             continue;
         }

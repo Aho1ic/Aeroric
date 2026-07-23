@@ -24,17 +24,14 @@ pub(crate) enum SftpEndpoint {
 
 #[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+#[derive(Default)]
 pub(crate) enum SftpConflictStrategy {
+    #[default]
     Fail,
     Merge,
     Replace,
 }
 
-impl Default for SftpConflictStrategy {
-    fn default() -> Self {
-        Self::Fail
-    }
-}
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]

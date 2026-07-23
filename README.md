@@ -13,7 +13,7 @@ Run Claude Code, Codex, and custom agents across projects with live terminals, t
 </p>
 
 <p align="center">
-  <strong>Current release:</strong> v1.2.2 · <strong>Stack:</strong> React 19 / Tauri 2 / Rust · <strong>Platforms:</strong> macOS / Windows / Linux
+  <strong>Current release:</strong> v1.3.7 · <strong>Stack:</strong> React 19 / Tauri 2 / Rust · <strong>Platforms:</strong> macOS / Windows / Linux
 </p>
 
 <p align="center">
@@ -218,7 +218,7 @@ The frontend is React 19 + TypeScript + Vite. The desktop shell is Tauri 2 + Rus
 
 ## Release Checklist
 
-For a tagged release such as `v1.2.2`, keep `package.json`, `src-tauri/tauri.conf.json`, and `src-tauri/Cargo.toml` on the same version before pushing the tag. After the desktop workflow finishes, verify the release contains:
+For a tagged release such as `v1.3.7`, keep `package.json`, `src-tauri/tauri.conf.json`, and `src-tauri/Cargo.toml` on the same version before pushing the tag. After the desktop workflow finishes, verify the release contains:
 
 - `Aeroric-X.Y.Z-1.x86_64.rpm`
 - `Aeroric_X.Y.Z_aarch64.dmg`

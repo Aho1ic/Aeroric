@@ -809,8 +809,7 @@ fn insert_row(
         .iter()
         .map(|value| quote_identifier(&value.column))
         .collect::<Result<Vec<_>, _>>()?;
-    let placeholders = std::iter::repeat("?")
-        .take(values.len())
+    let placeholders = std::iter::repeat_n("?", values.len())
         .collect::<Vec<_>>()
         .join(", ");
     let sql_values = values
@@ -881,8 +880,7 @@ fn split_sql_statements(sql: &str) -> Vec<String> {
 }
 
 fn first_sql_word(sql: &str) -> String {
-    sql.trim()
-        .split_whitespace()
+    sql.split_whitespace()
         .next()
         .unwrap_or("")
         .to_ascii_lowercase()

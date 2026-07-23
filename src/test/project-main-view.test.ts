@@ -16,6 +16,7 @@ import {
   shouldShowRunningTaskInCenter,
   shouldShowShellInCenter,
   shouldShowTaskWorkspace,
+  shouldShowWorkspaceTabs,
 } from "../components/project-page/viewMode";
 import { projectVisibilityStyle } from "../components/project-page/visibility";
 
@@ -149,6 +150,38 @@ describe("project main view mode", () => {
         selectedTaskId: "task-1",
         taskStatus: "cancelled",
         hasSessionPath: false,
+      }),
+    ).toBe(false);
+  });
+
+  it("keeps workspace file tabs after the terminal is closed", () => {
+    expect(
+      shouldShowWorkspaceTabs({
+        fileTabCount: 1,
+        terminalTabCount: 1,
+        terminalVisible: false,
+      }),
+    ).toBe(true);
+    expect(
+      shouldShowWorkspaceTabs({
+        fileTabCount: 0,
+        terminalTabCount: 1,
+        terminalVisible: false,
+      }),
+    ).toBe(false);
+    expect(
+      shouldShowWorkspaceTabs({
+        fileTabCount: 0,
+        terminalTabCount: 1,
+        terminalVisible: true,
+      }),
+    ).toBe(true);
+    expect(
+      shouldShowWorkspaceTabs({
+        fileTabCount: 1,
+        terminalTabCount: 0,
+        terminalVisible: false,
+        isDockerMode: true,
       }),
     ).toBe(false);
   });

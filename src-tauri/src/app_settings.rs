@@ -1623,11 +1623,11 @@ fn write_agent_script_at_path(path: &Path, content: &str) -> Result<(), String> 
     atomic_write(path, content)?;
     #[cfg(not(windows))]
     {
-        let mut permissions = fs::metadata(&path)
+        let mut permissions = fs::metadata(path)
             .map_err(|e| e.to_string())?
             .permissions();
         permissions.set_mode(0o700);
-        fs::set_permissions(&path, permissions).map_err(|e| e.to_string())?;
+        fs::set_permissions(path, permissions).map_err(|e| e.to_string())?;
     }
     Ok(())
 }
@@ -1755,23 +1755,25 @@ fn parse_claude_builtin_credentials(content: &str) -> BuiltInAgentCredentials {
 }
 
 fn parse_shell_builtin_credentials(content: &str) -> BuiltInAgentCredentials {
-    let mut credentials = BuiltInAgentCredentials::default();
-    credentials.base_url = ["ANTHROPIC_BASE_URL", "OPENAI_BASE_URL"]
+    let mut credentials = BuiltInAgentCredentials {
+        base_url: ["ANTHROPIC_BASE_URL", "OPENAI_BASE_URL"]
+            .into_iter()
+            .find_map(|key| parse_generated_shell_value(content, key))
+            .map(|value| normalize_base_url(&value))
+            .unwrap_or_default(),
+        api_key: [
+            "ANTHROPIC_AUTH_TOKEN",
+            "ANTHROPIC_API_KEY",
+            "OPENAI_API_KEY",
+            "CODEX_API_KEY",
+        ]
         .into_iter()
         .find_map(|key| parse_generated_shell_value(content, key))
-        .map(|value| normalize_base_url(&value))
-        .unwrap_or_default();
-    credentials.api_key = [
-        "ANTHROPIC_AUTH_TOKEN",
-        "ANTHROPIC_API_KEY",
-        "OPENAI_API_KEY",
-        "CODEX_API_KEY",
-    ]
-    .into_iter()
-    .find_map(|key| parse_generated_shell_value(content, key))
-    .unwrap_or_default()
-    .trim()
-    .to_string();
+        .unwrap_or_default()
+        .trim()
+        .to_string(),
+        ..Default::default()
+    };
     for key in [
         "selected_model",
         "ANTHROPIC_MODEL",
@@ -3366,31 +3368,35 @@ fn build_agent_upgrade_commands_from_detection(
             });
         }
     }
-    if (npm_installed || configured_manager == "npm") && npm_program.is_some() {
-        let package = match kind {
-            AgentUpgradeKind::Claude => "@anthropic-ai/claude-code@latest",
-            AgentUpgradeKind::Codex => "@openai/codex@latest",
-        };
-        push_unique(AgentUpgradeCommand {
-            channel: "npm".to_string(),
-            program: npm_program.expect("checked npm program"),
-            args: vec!["install".to_string(), "-g".to_string(), package.to_string()],
-        });
+    if npm_installed || configured_manager == "npm" {
+        if let Some(program) = npm_program {
+            let package = match kind {
+                AgentUpgradeKind::Claude => "@anthropic-ai/claude-code@latest",
+                AgentUpgradeKind::Codex => "@openai/codex@latest",
+            };
+            push_unique(AgentUpgradeCommand {
+                channel: "npm".to_string(),
+                program,
+                args: vec!["install".to_string(), "-g".to_string(), package.to_string()],
+            });
+        }
     }
-    if (brew_installed || configured_manager == "homebrew") && brew_program.is_some() {
-        let cask = match kind {
-            AgentUpgradeKind::Claude => "claude-code",
-            AgentUpgradeKind::Codex => "codex",
-        };
-        push_unique(AgentUpgradeCommand {
-            channel: "homebrew".to_string(),
-            program: brew_program.expect("checked brew program"),
-            args: vec![
-                "upgrade".to_string(),
-                "--cask".to_string(),
-                cask.to_string(),
-            ],
-        });
+    if brew_installed || configured_manager == "homebrew" {
+        if let Some(program) = brew_program {
+            let cask = match kind {
+                AgentUpgradeKind::Claude => "claude-code",
+                AgentUpgradeKind::Codex => "codex",
+            };
+            push_unique(AgentUpgradeCommand {
+                channel: "homebrew".to_string(),
+                program,
+                args: vec![
+                    "upgrade".to_string(),
+                    "--cask".to_string(),
+                    cask.to_string(),
+                ],
+            });
+        }
     }
     commands
 }

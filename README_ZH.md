@@ -13,7 +13,7 @@
 </p>
 
 <p align="center">
-  <strong>当前版本：</strong> v1.2.2 · <strong>技术栈：</strong> React 19 / Tauri 2 / Rust · <strong>平台：</strong> macOS / Windows / Linux
+  <strong>当前版本：</strong> v1.3.7 · <strong>技术栈：</strong> React 19 / Tauri 2 / Rust · <strong>平台：</strong> macOS / Windows / Linux
 </p>
 
 <p align="center">
@@ -217,7 +217,7 @@ pnpm tauri build    # 构建生产桌面包
 
 ## 发布检查
 
-发布 `v1.2.2` 这类 tag 前，需要确保 `package.json`、`src-tauri/tauri.conf.json` 和 `src-tauri/Cargo.toml` 版本一致。桌面构建工作流完成后，确认 Release 中包含：
+发布 `v1.3.7` 这类 tag 前，需要确保 `package.json`、`src-tauri/tauri.conf.json` 和 `src-tauri/Cargo.toml` 版本一致。桌面构建工作流完成后，确认 Release 中包含：
 
 - `Aeroric-X.Y.Z-1.x86_64.rpm`
 - `Aeroric_X.Y.Z_aarch64.dmg`

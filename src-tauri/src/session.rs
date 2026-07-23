@@ -95,7 +95,7 @@ fn read_session_lines_since(
 
     let mut chunk = String::new();
     file.read_to_string(&mut chunk)?;
-    *offset += chunk.as_bytes().len() as u64;
+    *offset += chunk.len() as u64;
 
     if chunk.is_empty() {
         return Ok(Vec::new());
@@ -461,7 +461,7 @@ fn looks_like_read_only_command(cmd: &str) -> bool {
     }
 
     trimmed
-        .split(|c| matches!(c, ';' | '|' | '&' | '\n'))
+        .split([';', '|', '&', '\n'])
         .map(str::trim)
         .filter(|segment| !segment.is_empty())
         .all(is_read_only_segment)
@@ -489,7 +489,7 @@ fn is_read_only_segment(segment: &str) -> bool {
         | "Get-Date" | "Get-Command" | "Test-Path" | "Resolve-Path" | "Where-Object"
         | "Measure-Object" | "Sort-Object" | "Select-Object" => true,
         "sed" => {
-            tokens.iter().any(|token| *token == "-n")
+            tokens.contains(&"-n")
                 && !tokens.iter().any(|token| token.starts_with("-i"))
         }
         "find" => !tokens
@@ -1235,7 +1235,7 @@ const MAX_SESSION_LINES_FOR_SUMMARY: usize = 20_000;
 /// - 必须绝对路径且文件存在
 /// - canonicalize 后必须位于该 agent 允许的 session 根目录之内
 ///   （Claude: `~/.claude/projects/<encoded-project>/`；
-///    Codex: `<project_path>/.codex/sessions/` 或 `~/.codex/sessions/`）
+///   Codex: `<project_path>/.codex/sessions/` 或 `~/.codex/sessions/`）
 ///
 /// 这一关把死路径遍历——任意 `*.jsonl` 文件都不能被读取。
 pub(crate) fn validate_session_path(
@@ -1377,7 +1377,7 @@ pub(crate) fn extract_session_summary_text(
 
 /// 仅保留 user / assistant 的纯文本块。tool_use 和 thinking 都丢弃：
 /// - tool_use：长任务里能凑出几十上百次 Read/Bash，很容易把预算挤爆，
-///             把真正有信号的对话文本挤到尾部裁剪窗口外。
+///   把真正有信号的对话文本挤到尾部裁剪窗口外。
 /// - thinking：不属于"实际成果"，模型自言自语对命名无价值。
 /// - tool_result：上游 parse_codex_session / parse_claude_session 已不会输出。
 fn format_message_for_summary(msg: &SessionMessage) -> Option<String> {

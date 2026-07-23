@@ -12,6 +12,13 @@
 |------|------|------|
 | [终端渲染与选区卡顿排查](./xterm/rendering-and-selection-lag.md) | WKWebView 下 `.xterm` 合成层长帧的真因与定论，含 CSS containment 禁用、WebGL 保留的实测权衡，面向后续动渲染链路前的必读校准 | `xterm`, `wkwebview`, `composite`, `webgl`, `selection`, `regression-guard` |
 
+
+### 安全与凭据
+
+| 文档 | 描述 | 标签 |
+|------|------|------|
+| [凭据存储威胁模型](./references/credential-storage.md) | SSH/DB 密码落盘位置、权限、运行时暴露与非目标，面向安全审查与后续钥匙串改造 | `security`, `credentials`, `ssh`, `database`, `threat-model` |
+
 ### 外部参考
 
 | 文档 | 描述 | 标签 |

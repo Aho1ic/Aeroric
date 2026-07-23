@@ -17,21 +17,12 @@ import type {
   SshConnection,
   CondaEnvironment,
 } from "./types";
-import {
-  isActiveTaskStatus,
-  DEFAULT_TERMINAL_FONT_SIZE,
-  clampTerminalFontSize,
-  DEFAULT_TASK_DISPLAY_WINDOW,
-  normalizeTaskDisplayWindow,
-  resolveProjectLocation,
-  sshProjectPath,
-} from "./types";
+import { isActiveTaskStatus, resolveProjectLocation, sshProjectPath } from "./types";
 import { DEFAULT_UI_FONT, DEFAULT_MONO_FONT, LEGACY_DEFAULT_MONO_FONTS } from "./types";
 import type { FontFamily } from "./types";
 import { WelcomePage } from "./components/WelcomePage";
 import { AppSettingsEventHost } from "./components/AppSettingsEventHost";
 import type { SshProjectInput } from "./components/ssh/SshProjectDialog";
-import { deriveRemoteProjectName } from "./components/ssh/SshProjectDialog";
 import { selectDefaultCondaEnvironment } from "./components/file-viewer/run";
 import { SKILL_HUB_CHANGED_EVENT } from "./components/app-settings/types";
 import { useToast } from "./components/Toast";
@@ -47,8 +38,6 @@ import {
   normalizeSftpLocalDefaultPath,
   SFTP_LOCAL_PATH_STORAGE_KEY,
 } from "./settings";
-import { createProjectPersister } from "./projectPersistence";
-import { createProjectTaskPersister } from "./taskPersistence";
 import { applyProjectOrder, normalizeProjectOrder, sortProjectsForRail } from "./projectOrder";
 import {
   loadProjectGroupNames,
@@ -64,198 +53,36 @@ import {
 import s from "./styles";
 import "./App.css";
 
+import {
+  createDefaultProjectViewState,
+  deriveProjectName,
+  isLiveTerminalTaskStatus,
+  loadProjectRailWidth,
+  normalizeInterruptedTasksOnStartup,
+  normalizeRemotePath,
+  normalizeSshProjectNames,
+  persistProjects,
+  persistProjectTasks,
+  persistProjectTasksQuietly,
+  PROJECT_RAIL_WIDTH_STORAGE_KEY,
+  SELECTED_CONDA_ENV_KEY,
+  shouldIgnoreTaskStatusTransition,
+  type ProjectViewState,
+} from "./appProjectState";
+import {
+  disableTextInputAutoFeatures,
+  getInitialAttentionBadge,
+  getInitialFontFamily,
+  getInitialTaskDisplayWindow,
+  getInitialTerminalFontSize,
+  getInitialThemeMode,
+  getSystemPrefersDark,
+  resolveThemeVariant,
+} from "./appThemeState";
+
 const ProjectPage = lazy(() =>
   import("./components/ProjectPage").then((module) => ({ default: module.ProjectPage })),
 );
-
-const PROJECT_RAIL_WIDTH_STORAGE_KEY = "aeroric:projectRailWidth";
-
-function loadProjectRailWidth(): number | null {
-  const value = Number(localStorage.getItem(PROJECT_RAIL_WIDTH_STORAGE_KEY));
-  return Number.isFinite(value) && value > 0 ? normalizeProjectRailWidth(value) : null;
-}
-
-function deriveProjectName(path: string): string {
-  const trimmed = path.replace(/[\\/]+$/, "");
-  if (!trimmed) return path;
-
-  const parts = trimmed.split(/[\\/]/);
-  return parts[parts.length - 1] || path;
-}
-
-function normalizeRemotePath(path: string): string {
-  const trimmed = path.trim();
-  return trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
-}
-
-function normalizeSshProjectNames(projects: Project[], connections: SshConnection[]): Project[] {
-  const connectionById = new Map(connections.map((connection) => [connection.id, connection]));
-  let changed = false;
-  const normalized = projects.map((project) => {
-    const location = resolveProjectLocation(project);
-    if (location.kind !== "ssh") return project;
-    const connection = connectionById.get(location.connectionId);
-    const connectionName = connection?.name.trim();
-    if (!connectionName) return project;
-    const legacyName = deriveRemoteProjectName(location.remotePath, connectionName);
-    if (project.name && project.name !== legacyName) return project;
-    if (project.name === connectionName) return project;
-    changed = true;
-    return { ...project, name: connectionName };
-  });
-  return changed ? normalized : projects;
-}
-
-const queuedProjectPersist = createProjectPersister((projects) =>
-  invoke("save_projects", { projects }),
-);
-
-function persistProjects(
-  projects: Project[],
-  onError: (msg: string) => void,
-  formatError: (error: string) => string,
-) {
-  queuedProjectPersist(projects, { onError, formatError });
-}
-
-const queuedProjectTaskPersist = createProjectTaskPersister((projectId, tasks) =>
-  invoke("save_project_tasks", { projectId, tasks }),
-);
-
-function persistProjectTasks(
-  projectId: string,
-  allTasks: Task[],
-  onError: (msg: string) => void,
-  formatError: (error: string, projectId: string) => string,
-) {
-  queuedProjectTaskPersist(projectId, allTasks, { onError, formatError });
-}
-
-function persistProjectTasksQuietly(projectId: string, allTasks: Task[]) {
-  queuedProjectTaskPersist(projectId, allTasks);
-}
-
-interface ProjectViewState {
-  selectedTaskId: string | null;
-  isNewTask: boolean;
-}
-
-function createDefaultProjectViewState(): ProjectViewState {
-  return { selectedTaskId: null, isNewTask: true };
-}
-
-function normalizeInterruptedTasksOnStartup(
-  tasks: Task[],
-  activeTaskIds: Set<string>,
-): {
-  tasks: Task[];
-  changedProjectIds: Set<string>;
-} {
-  const interruptedAt = Date.now();
-  const changedProjectIds = new Set<string>();
-  const normalized = tasks.map((task) => {
-    const hasLiveChild = activeTaskIds.has(task.id);
-    if (!isActiveTaskStatus(task.status) && !(task.status === "interrupted" && hasLiveChild)) {
-      return task;
-    }
-
-    if (hasLiveChild) {
-      if (task.status === "detached") return task;
-      changedProjectIds.add(task.projectId);
-      return {
-        ...task,
-        status: "detached" as TaskStatus,
-        attentionRequestedAt: task.attentionRequestedAt ?? interruptedAt,
-      };
-    }
-
-    if (task.status === "interrupted") return task;
-    changedProjectIds.add(task.projectId);
-    return {
-      ...task,
-      status: "interrupted" as TaskStatus,
-      attentionRequestedAt: task.attentionRequestedAt ?? interruptedAt,
-    };
-  });
-
-  return { tasks: normalized, changedProjectIds };
-}
-
-function shouldIgnoreTaskStatusTransition(current: TaskStatus, next: TaskStatus): boolean {
-  return current === "detached" && (next === "running" || next === "input_required");
-}
-
-function isLiveTerminalTaskStatus(status: TaskStatus): boolean {
-  return status === "pending" || status === "running" || status === "input_required";
-}
-
-function getSystemPrefersDark() {
-  return window.matchMedia("(prefers-color-scheme: dark)").matches;
-}
-
-function getInitialThemeMode(): ThemeMode {
-  const stored = localStorage.getItem("aeroric:theme");
-  return stored === "dark" || stored === "light" || stored === "system" || stored === "eyecare"
-    ? stored
-    : "light";
-}
-
-function resolveThemeVariant(mode: ThemeMode, systemPrefersDark: boolean): ThemeVariant {
-  if (mode === "system") return systemPrefersDark ? "dark" : "light";
-  return mode;
-}
-
-function getInitialTerminalFontSize(): TerminalFontSize {
-  const stored = localStorage.getItem("aeroric:terminalFontSize");
-  if (stored == null) return DEFAULT_TERMINAL_FONT_SIZE;
-  const parsed = Number(stored);
-  return Number.isFinite(parsed) ? clampTerminalFontSize(parsed) : DEFAULT_TERMINAL_FONT_SIZE;
-}
-
-function getInitialTaskDisplayWindow(): TaskDisplayWindow {
-  const stored = localStorage.getItem("aeroric:taskDisplayWindow");
-  return stored == null ? DEFAULT_TASK_DISPLAY_WINDOW : normalizeTaskDisplayWindow(stored);
-}
-
-function getInitialAttentionBadge(): boolean {
-  // 默认开启:项目栏显示待确认任务数量角标;关闭后回退为黄色小圆点
-  return localStorage.getItem("aeroric:attentionBadge") !== "0";
-}
-
-function getInitialFontFamily(
-  key: string,
-  fallback: FontFamily,
-  legacyDefaults: readonly FontFamily[] = [],
-): FontFamily {
-  const stored = localStorage.getItem(key);
-  if (!stored) return fallback;
-  // 老用户 localStorage 里可能存着历史默认字体链（缺 CJK 字形）。若命中旧默认值，
-  // 说明用户从未主动改过字体，自动迁移到当前默认值以修复终端中文乱码/错位。
-  if (legacyDefaults.includes(stored.trim())) return fallback;
-  return stored;
-}
-
-function disableTextInputAutoFeatures(target: EventTarget | null): void {
-  if (!(target instanceof HTMLElement)) return;
-  const input =
-    target instanceof HTMLTextAreaElement
-      ? target
-      : target instanceof HTMLInputElement
-        ? target
-        : null;
-  if (!input) return;
-  if (input instanceof HTMLInputElement) {
-    const type = input.type.toLowerCase();
-    if (!["", "text", "search", "password", "email", "url", "tel"].includes(type)) return;
-  }
-  input.setAttribute("autocomplete", "off");
-  input.setAttribute("autocorrect", "off");
-  input.setAttribute("autocapitalize", "off");
-  input.setAttribute("spellcheck", "false");
-}
-
-const SELECTED_CONDA_ENV_KEY = "aeroric:selectedCondaEnvPath";
-
 function App() {
   const { showToast } = useToast();
   const { t } = useI18n();

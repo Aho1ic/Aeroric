@@ -213,6 +213,38 @@ export function shouldShowShellInCenter({
   return shellMode;
 }
 
+/**
+ * Unified workspace tab strip (open files + terminal sessions).
+ * Keep file tabs visible after the terminal is closed/minimized so the
+ * editor content and its tab bar stay in sync. Hide the strip only when
+ * a full-center mode owns the workspace, or when there is nothing to show.
+ */
+export function shouldShowWorkspaceTabs({
+  fileTabCount,
+  terminalTabCount,
+  terminalVisible,
+  isSftpMode = false,
+  isDockerMode = false,
+  isSshMode = false,
+  isDatabaseMode = false,
+  isNotesMode = false,
+}: {
+  fileTabCount: number;
+  terminalTabCount: number;
+  terminalVisible: boolean;
+  isSftpMode?: boolean;
+  isDockerMode?: boolean;
+  isSshMode?: boolean;
+  isDatabaseMode?: boolean;
+  isNotesMode?: boolean;
+}): boolean {
+  if (isSftpMode || isDockerMode || isSshMode || isDatabaseMode || isNotesMode) {
+    return false;
+  }
+  if (fileTabCount > 0) return true;
+  return terminalVisible && terminalTabCount > 0;
+}
+
 export function shouldShowTaskWorkspace({
   isNewTask,
   hasSelectedTask,

@@ -445,9 +445,9 @@ fn parse_diagnostic_run_result(
         format!("{stdout}{stderr}")
     };
     let diagnostics = match profile {
-        "eslint" => parse_eslint_json(root, &stdout),
-        "cargo" => parse_cargo_json(root, &stdout),
-        "ruff" => parse_ruff_json(root, &stdout),
+        "eslint" => parse_eslint_json(root, stdout),
+        "cargo" => parse_cargo_json(root, stdout),
+        "ruff" => parse_ruff_json(root, stdout),
         "mypy" => parse_mypy_output(root, &raw_output),
         _ => parse_tsc_output(root, &raw_output),
     };

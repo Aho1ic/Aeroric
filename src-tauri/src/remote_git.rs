@@ -397,34 +397,28 @@ pub async fn remote_git_commit_detail(
         let info_out = run_remote_git(
             &connection,
             &remote_project_path,
-            &vec![
-                "show".to_string(),
+            &["show".to_string(),
                 "--no-patch".to_string(),
                 "--format=HASH:%H%nSHORT:%h%nAUTHOR:%an%nDATE:%ar%nSUBJECT:%s".to_string(),
-                commit_hash.clone(),
-            ],
+                commit_hash.clone()],
         )?;
         let name_status_out = run_remote_git(
             &connection,
             &remote_project_path,
-            &vec![
-                "diff-tree".to_string(),
+            &["diff-tree".to_string(),
                 "--no-commit-id".to_string(),
                 "-r".to_string(),
                 "--name-status".to_string(),
-                commit_hash.clone(),
-            ],
+                commit_hash.clone()],
         )?;
         let numstat_out = run_remote_git(
             &connection,
             &remote_project_path,
-            &vec![
-                "diff-tree".to_string(),
+            &["diff-tree".to_string(),
                 "--no-commit-id".to_string(),
                 "-r".to_string(),
                 "--numstat".to_string(),
-                commit_hash,
-            ],
+                commit_hash],
         )?;
         Ok(crate::git::parse_git_commit_detail(
             &info_out,
@@ -509,7 +503,7 @@ pub async fn remote_git_show_commit_diff(
         let output = run_remote_git_output(
             &connection,
             &remote_project_path,
-            &vec!["show".to_string(), "--format=".to_string(), commit_hash],
+            &["show".to_string(), "--format=".to_string(), commit_hash],
         )?;
         if !output.status.success() {
             return Err(output_error(&output, "Failed to get remote commit diff"));
@@ -533,13 +527,11 @@ pub async fn remote_git_show_file_diff(
         let output = run_remote_git_output(
             &connection,
             &remote_project_path,
-            &vec![
-                "show".to_string(),
+            &["show".to_string(),
                 "--format=".to_string(),
                 commit_hash,
                 "--".to_string(),
-                file_path,
-            ],
+                file_path],
         )?;
         if !output.status.success() {
             return Err(output_error(&output, "Failed to get remote file diff"));
@@ -577,13 +569,11 @@ pub async fn remote_git_file_diff(
         let fallback = run_remote_git_output(
             &connection,
             &remote_project_path,
-            &vec![
-                "diff".to_string(),
+            &["diff".to_string(),
                 "--no-index".to_string(),
                 "--".to_string(),
                 "/dev/null".to_string(),
-                file_path,
-            ],
+                file_path],
         )?;
         if !fallback.status.success() && fallback.status.code() != Some(1) {
             return Err(output_error(
@@ -608,7 +598,7 @@ pub async fn remote_git_stage(
         run_remote_git(
             &connection,
             &remote_project_path,
-            &vec!["add".to_string(), "--".to_string(), file_path],
+            &["add".to_string(), "--".to_string(), file_path],
         )?;
         Ok(())
     })
@@ -718,7 +708,7 @@ pub async fn remote_git_commit(
         run_remote_git(
             &connection,
             &remote_project_path,
-            &vec!["commit".to_string(), "-m".to_string(), message],
+            &["commit".to_string(), "-m".to_string(), message],
         )?;
         Ok(())
     })
@@ -843,14 +833,12 @@ pub async fn remote_git_blame_file(
         let output = run_remote_git_output(
             &connection,
             &remote_project_path,
-            &vec![
-                "-c".to_string(),
+            &["-c".to_string(),
                 "core.quotePath=false".to_string(),
                 "blame".to_string(),
                 "--line-porcelain".to_string(),
                 "--".to_string(),
-                file_path.clone(),
-            ],
+                file_path.clone()],
         )?;
         if !output.status.success() {
             return Err(output_error(&output, "Failed to load remote git blame"));
@@ -882,15 +870,13 @@ pub async fn remote_git_branch_graph(
         let output = run_remote_git_output(
             &connection,
             &remote_project_path,
-            &vec![
-                "log".to_string(),
+            &["log".to_string(),
                 "--all".to_string(),
                 "--decorate=short".to_string(),
                 "--date=relative".to_string(),
                 "--pretty=format:%H%x1f%P%x1f%D%x1f%an%x1f%cr%x1f%s".to_string(),
                 "-n".to_string(),
-                fetch_limit.to_string(),
-            ],
+                fetch_limit.to_string()],
         )?;
         if !output.status.success() {
             return Err(output_error(
@@ -940,16 +926,14 @@ pub async fn remote_git_stash_diff(
         let output = run_remote_git_output(
             &connection,
             &remote_project_path,
-            &vec![
-                "stash".to_string(),
+            &["stash".to_string(),
                 "show".to_string(),
                 "--patch".to_string(),
                 "--stat".to_string(),
                 "--include-untracked".to_string(),
                 "--no-ext-diff".to_string(),
                 "--no-color".to_string(),
-                stash_ref.clone(),
-            ],
+                stash_ref.clone()],
         )?;
         if !output.status.success() {
             return Err(output_error(
@@ -1014,7 +998,7 @@ pub async fn remote_git_stash_apply(
         let output = run_remote_git_output(
             &connection,
             &remote_project_path,
-            &vec!["stash".to_string(), "apply".to_string(), stash_ref],
+            &["stash".to_string(), "apply".to_string(), stash_ref],
         )?;
         let combined = combined_output(&output).trim().to_string();
         if !output.status.success() {
@@ -1041,7 +1025,7 @@ pub async fn remote_git_stash_drop(
         let output = run_remote_git_output(
             &connection,
             &remote_project_path,
-            &vec!["stash".to_string(), "drop".to_string(), stash_ref],
+            &["stash".to_string(), "drop".to_string(), stash_ref],
         )?;
         let combined = combined_output(&output).trim().to_string();
         if !output.status.success() {
@@ -1114,24 +1098,20 @@ pub async fn remote_git_resolve_conflict(
                 run_remote_git(
                     &connection,
                     &remote_project_path,
-                    &vec![
-                        "checkout".to_string(),
+                    &["checkout".to_string(),
                         "--ours".to_string(),
                         "--".to_string(),
-                        file_path.clone(),
-                    ],
+                        file_path.clone()],
                 )?;
             }
             crate::git::GitConflictResolution::Theirs => {
                 run_remote_git(
                     &connection,
                     &remote_project_path,
-                    &vec![
-                        "checkout".to_string(),
+                    &["checkout".to_string(),
                         "--theirs".to_string(),
                         "--".to_string(),
-                        file_path.clone(),
-                    ],
+                        file_path.clone()],
                 )?;
             }
             crate::git::GitConflictResolution::Both => {
@@ -1149,7 +1129,7 @@ pub async fn remote_git_resolve_conflict(
         run_remote_git(
             &connection,
             &remote_project_path,
-            &vec!["add".to_string(), "--".to_string(), file_path],
+            &["add".to_string(), "--".to_string(), file_path],
         )?;
         Ok(())
     })

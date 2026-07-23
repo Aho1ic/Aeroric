@@ -276,7 +276,7 @@ fn sanitize_title(raw: &str) -> String {
         )
     });
     let stripped = stripped
-        .trim_end_matches(|c: char| matches!(c, '.' | '。' | '!' | '！' | '?' | '？'))
+        .trim_end_matches(['.', '。', '!', '！', '?', '？'])
         .trim();
     stripped
         .chars()
