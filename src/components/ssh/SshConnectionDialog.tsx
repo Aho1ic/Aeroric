@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { createPortal } from "react-dom";
-import { Save, X } from "lucide-react";
+import { Eye, EyeOff, Save, X } from "lucide-react";
 import type { SshConnection } from "../../types";
 import { useI18n } from "../../i18n";
 import s from "../../styles";
@@ -59,6 +59,7 @@ export function SshConnectionDialog({
     group: connection?.group ?? initialGroup,
   }));
   const [errors, setErrors] = useState<SshConnectionDraftErrors>({});
+  const [showPassword, setShowPassword] = useState(false);
   const isEditing = Boolean(connection);
 
   const labels = useMemo<Record<SshTextField, string>>(
@@ -145,13 +146,47 @@ export function SshConnectionDialog({
                     </option>
                   ))}
                 </select>
+              ) : field === "password" ? (
+                <div style={{ position: "relative", display: "flex", alignItems: "center" }}>
+                  <input
+                    value={draft[field]}
+                    onChange={(event) => updateField(field, event.target.value)}
+                    placeholder={placeholders[field]}
+                    style={{
+                      ...(errors[field] ? s.sshInputInvalid : s.sshInput),
+                      paddingRight: 36,
+                    }}
+                    type={showPassword ? "text" : "password"}
+                    autoCapitalize="none"
+                    autoCorrect="off"
+                    spellCheck={false}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword((value) => !value)}
+                    style={{
+                      position: "absolute",
+                      right: 8,
+                      display: "flex",
+                      alignItems: "center",
+                      padding: 2,
+                      border: "none",
+                      background: "transparent",
+                      color: "var(--text-hint)",
+                      cursor: "pointer",
+                    }}
+                    aria-label={showPassword ? t("ssh.hidePassword") : t("ssh.showPassword")}
+                  >
+                    {showPassword ? <EyeOff size={14} /> : <Eye size={14} />}
+                  </button>
+                </div>
               ) : (
                 <input
                   value={draft[field]}
                   onChange={(event) => updateField(field, event.target.value)}
                   placeholder={placeholders[field]}
                   style={errors[field] ? s.sshInputInvalid : s.sshInput}
-                  type={field === "password" ? "password" : "text"}
+                  type="text"
                   autoFocus={field === "name"}
                   autoCapitalize="none"
                   autoCorrect="off"

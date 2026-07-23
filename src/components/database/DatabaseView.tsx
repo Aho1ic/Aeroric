@@ -132,6 +132,14 @@ const EMPTY_DBX_COLUMNS: DbxColumnInfo[] = [];
 const DBX_OBJECT_PAGE_SIZE = 200;
 const PRODUCTION_SQL_PREVIEW_LIMIT = 2000;
 const DBX_TABLE_LIKE_OBJECT_TYPES = ["TABLE", "VIEW", "MATERIALIZED_VIEW"];
+const DBX_KEYLESS_GRID_EDIT_DB_TYPES = new Set<DbxDatabaseType>([
+  "sqlite",
+  "mysql",
+  "postgres",
+  "duckdb",
+  "sqlserver",
+  "oracle",
+]);
 type RedisSidebarScanState = { cursor: number; totalKeys: number };
 type MongoSidebarDocumentQuery = { filter: string; sort: string; projection: string };
 type DbxObjectGroupKey = "tables" | "views" | "procedures" | "functions" | "sequences" | "packages";
@@ -2685,7 +2693,10 @@ export function DatabaseView({
         const primaryKeys = objectColumns
           .filter((column) => column.is_primary_key)
           .map((column) => column.name);
-        const editable = isDbxTableObject(object) && primaryKeys.length > 0 && !connection.readOnly;
+        const editable =
+          isDbxTableObject(object) &&
+          !connection.readOnly &&
+          (primaryKeys.length > 0 || DBX_KEYLESS_GRID_EDIT_DB_TYPES.has(connection.dbType));
         const resultRows = dbxRowsToDatabaseRows(result.result.rows);
         const headerColumnTypes = result.result.columns.map((column, index) => {
           const metadataColumn = objectColumns.find(
@@ -5855,7 +5866,8 @@ export function DatabaseView({
 
   const insertRow = useCallback(async () => {
     if (activeDbxConnection && activeDbxObject && queryResult) {
-      if (!activeObject || activeDbxConnection.readOnly || !queryResult.editable) return;
+      if (!activeObject || !isDbxTableObject(activeDbxObject) || activeDbxConnection.readOnly)
+        return;
       const metadataColumns = dbxColumnsByTable[dbxObjectKey(activeDbxObject)] ?? [];
       const metadataByName = new Map(
         metadataColumns.map((column) => [column.name.toLowerCase(), column]),
@@ -6343,6 +6355,17 @@ export function DatabaseView({
     ? pinnedTreeNodeIds.has(currentContextMenuPinnedNodeId)
     : false;
   const activeDbxGridPrimaryKeys = activeObject?.primaryKeys ?? queryResult?.primaryKeys ?? [];
+  const canInsertActiveTable =
+    workspaceMode === "table" &&
+    Boolean(queryResult) &&
+    (activeDbxConnection
+      ? Boolean(
+          activeDbxObject &&
+          isDbxTableObject(activeDbxObject) &&
+          activeObject &&
+          !activeDbxConnection.readOnly,
+        )
+      : Boolean(activeObject?.objectType === "table" && !activeConnection?.readOnly));
   const hasActiveDatabaseWorkspace =
     Boolean(activeObject || activeDbxObject || queryResult || sqlResult) ||
     (workspaceMode !== "table" && workspaceMode !== "query");
@@ -7432,13 +7455,7 @@ export function DatabaseView({
                 variant="outline"
                 size="sm"
                 icon={Plus}
-                disabled={
-                  !activeObject ||
-                  !queryResult?.editable ||
-                  activeConnection?.readOnly ||
-                  activeDbxConnection?.readOnly ||
-                  loading
-                }
+                disabled={!canInsertActiveTable || loading}
                 onClick={insertRow}
               >
                 {t("database.insert")}
@@ -7518,9 +7535,7 @@ export function DatabaseView({
                               type="button"
                               role="menuitem"
                               style={s.databaseToolbarMenuButton}
-                              disabled={
-                                !queryResult?.editable || activeDbxConnection.readOnly || loading
-                              }
+                              disabled={!canInsertActiveTable || loading}
                               onClick={() => {
                                 setDbxDataToolsOpen(false);
                                 insertRow();

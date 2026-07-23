@@ -1509,6 +1509,87 @@ describe("DatabaseView workspace and data grid", () => {
     });
   });
 
+  it("edits keyless PostgreSQL rows using the original row values", async () => {
+    const user = userEvent.setup();
+    vi.mocked(confirm).mockResolvedValue(true);
+    vi.mocked(invoke).mockImplementation((command, args) => {
+      if (command === "db_load_connections") return Promise.resolve([]);
+      if (command === "dbx_list_connections") return Promise.resolve([dbxConnection]);
+      if (command === "dbx_connect") return Promise.resolve(undefined);
+      if (command === "dbx_list_databases") return Promise.resolve([{ name: "main" }]);
+      if (command === "dbx_list_schemas") return Promise.resolve(["public"]);
+      if (command === "dbx_list_objects")
+        return Promise.resolve([{ name: "users", object_type: "table", schema: "public" }]);
+      if (command === "dbx_get_columns") {
+        return Promise.resolve([
+          { name: "id", data_type: "integer", is_nullable: false, is_primary_key: false },
+          { name: "email", data_type: "text", is_nullable: true, is_primary_key: false },
+        ]);
+      }
+      if (command === "dbx_query_table_data") {
+        return Promise.resolve({
+          result: {
+            columns: ["id", "email"],
+            column_types: ["integer", "text"],
+            column_sortables: [true, true],
+            rows: [[1, "alice@example.com"]],
+          },
+          totalRows: 1,
+          sql: 'SELECT * FROM "public"."users"',
+          countSql: 'SELECT count(*) FROM "public"."users"',
+        });
+      }
+      if (command === "dbx_update_cell") {
+        const execute = (args as { request: { execute?: boolean } }).request.execute;
+        return Promise.resolve({
+          statements: [
+            'UPDATE "public"."users" SET "email" = \'new@example.com\' WHERE "id" = 1 AND "email" = \'alice@example.com\';',
+          ],
+          rollbackStatements: [],
+          validationError: null,
+          executionSchema: "public",
+          executed: Boolean(execute),
+          rowsAffected: execute ? 1 : 0,
+        });
+      }
+      return Promise.resolve(undefined);
+    });
+
+    render(
+      React.createElement(
+        I18nProvider,
+        null,
+        React.createElement(DatabaseView, { sshConnections: [connection()] }),
+      ),
+    );
+
+    await user.click(await screen.findByRole("button", { name: /DBX Source/i }));
+    await user.click(await screen.findByRole("button", { name: /^users\s+table$/i }));
+    const grid = await screen.findByRole("grid", { name: "Data grid" });
+    const emailTd = grid.querySelector("tbody tr td:nth-child(3)") as HTMLTableCellElement;
+
+    await user.dblClick(emailTd);
+    const emailInput = emailTd.querySelector("input") as HTMLInputElement;
+    expect(emailInput).toHaveValue("alice@example.com");
+
+    await user.clear(emailInput);
+    await user.type(emailInput, "new@example.com");
+    fireEvent.blur(emailInput);
+    await user.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith("dbx_update_cell", {
+        request: expect.objectContaining({
+          execute: false,
+          options: expect.objectContaining({
+            tableMeta: expect.objectContaining({ primaryKeys: [] }),
+            dirtyRows: [[0, [[1, "new@example.com"]]]],
+          }),
+        }),
+      });
+    });
+  });
+
   it("previews and confirms DBX grid row inserts before executing them", async () => {
     const user = userEvent.setup();
     const promptSpy = vi.spyOn(window, "prompt").mockReturnValueOnce('{"email":"new@example.com"}');
@@ -1608,6 +1689,89 @@ describe("DatabaseView workspace and data grid", () => {
           newRows: [[null, "new@example.com"]],
         }),
       }),
+    });
+    promptSpy.mockRestore();
+  });
+
+  it("allows inserts into keyless DBX tables that do not support keyless row edits", async () => {
+    const user = userEvent.setup();
+    const clickHouseConnection = {
+      ...dbxConnection,
+      id: "dbx-clickhouse",
+      name: "ClickHouse Source",
+      dbType: "clickhouse" as const,
+    };
+    const promptSpy = vi.spyOn(window, "prompt").mockReturnValueOnce('{"name":"new row"}');
+    vi.mocked(confirm).mockResolvedValue(true);
+    vi.mocked(invoke).mockImplementation((command, args) => {
+      if (command === "db_load_connections") return Promise.resolve([]);
+      if (command === "dbx_list_connections") return Promise.resolve([clickHouseConnection]);
+      if (command === "dbx_connect") return Promise.resolve(undefined);
+      if (command === "dbx_list_databases") return Promise.resolve([{ name: "main" }]);
+      if (command === "dbx_list_schemas") return Promise.resolve(["default"]);
+      if (command === "dbx_list_objects")
+        return Promise.resolve([{ name: "events", object_type: "table", schema: "default" }]);
+      if (command === "dbx_get_columns") {
+        return Promise.resolve([
+          { name: "id", data_type: "UInt64", is_nullable: false, is_primary_key: false },
+          { name: "name", data_type: "String", is_nullable: false, is_primary_key: false },
+        ]);
+      }
+      if (command === "dbx_query_table_data") {
+        return Promise.resolve({
+          result: {
+            columns: ["id", "name"],
+            column_types: ["UInt64", "String"],
+            column_sortables: [true, true],
+            rows: [[1, "existing"]],
+          },
+          totalRows: 1,
+          sql: "SELECT * FROM `default`.`events`",
+          countSql: "SELECT count(*) FROM `default`.`events`",
+        });
+      }
+      if (command === "dbx_insert_row") {
+        const execute = (args as { request: { execute?: boolean } }).request.execute;
+        return Promise.resolve({
+          statements: ["INSERT INTO `default`.`events` (`name`) VALUES ('new row')"],
+          rollbackStatements: [],
+          validationError: null,
+          executionSchema: "default",
+          executed: Boolean(execute),
+          rowsAffected: execute ? 1 : 0,
+        });
+      }
+      return Promise.resolve(undefined);
+    });
+
+    render(
+      React.createElement(
+        I18nProvider,
+        null,
+        React.createElement(DatabaseView, { sshConnections: [connection()] }),
+      ),
+    );
+
+    await user.click(await screen.findByRole("button", { name: /ClickHouse Source/i }));
+    await user.click(await screen.findByRole("button", { name: /^events\s+table$/i }));
+    await screen.findByText("existing");
+
+    const insertButton = screen.getByRole("button", { name: "Insert" });
+    expect(insertButton).toBeEnabled();
+    await user.click(insertButton);
+
+    expect(promptSpy).toHaveBeenCalledWith("Insert row as JSON object", '{"id":null,"name":null}');
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith("dbx_insert_row", {
+        request: expect.objectContaining({
+          connectionId: "dbx-clickhouse",
+          execute: false,
+          options: expect.objectContaining({
+            tableMeta: expect.objectContaining({ primaryKeys: [] }),
+            newRows: [[null, "new row"]],
+          }),
+        }),
+      });
     });
     promptSpy.mockRestore();
   });
