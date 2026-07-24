@@ -3,8 +3,6 @@ import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
 import {
   Archive,
-  ChevronLeft,
-  ChevronRight,
   Download,
   LayoutGrid,
   LayoutList,
@@ -17,7 +15,9 @@ import { useI18n } from "../../i18n";
 import { Button } from "../ui/Button";
 import { APP_SETTINGS_CHANGED_EVENT, type AppSettings } from "./types";
 import { AgentCardItem } from "./AgentCardItem";
-import { AddAgentPanel } from "./AddAgentPanel";
+import { AddAgentModal } from "./AddAgentModal";
+import { AgentDetailModal } from "./AgentDetailModal";
+import type { AgentOption } from "../../agents";
 import type { ThemeVariant } from "../../types";
 import claudeLogo from "../../assets/claude.svg";
 import chatgptLogo from "../../assets/chatgpt.svg";
@@ -25,7 +25,6 @@ import chatgptLogo from "../../assets/chatgpt.svg";
 type ProviderTab = "anthropic" | "openai";
 type ViewMode = "card" | "bar";
 
-const PAGE_SIZE = 8;
 const VIEW_MODE_KEY = "aeroric-agent-view-mode";
 
 function loadViewMode(): ViewMode {
@@ -43,8 +42,8 @@ export function AllAgentConfigsPanel({ themeVariant }: { themeVariant: ThemeVari
 
   const [tab, setTab] = useState<ProviderTab>("anthropic");
   const [viewMode, setViewMode] = useState<ViewMode>(loadViewMode);
-  const [page, setPage] = useState(1);
-  const [showAddAgent, setShowAddAgent] = useState(false);
+  const [showAddAgentModal, setShowAddAgentModal] = useState(false);
+  const [editingAgent, setEditingAgent] = useState<AgentOption | null>(null);
   const [settings, setSettings] = useState<AppSettings | null>(null);
 
   useEffect(() => {
@@ -71,10 +70,6 @@ export function AllAgentConfigsPanel({ themeVariant }: { themeVariant: ThemeVari
       ),
     [agentOptions, tab],
   );
-
-  const totalPages = Math.max(1, Math.ceil(filteredAgents.length / PAGE_SIZE));
-  const safePage = Math.min(page, totalPages);
-  const pagedAgents = filteredAgents.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE);
 
   function getAgentMeta(agentKey: string) {
     if (!settings) return {};
@@ -149,7 +144,7 @@ export function AllAgentConfigsPanel({ themeVariant }: { themeVariant: ThemeVari
   }
 
   function handleAgentSaved(agentId: string) {
-    setShowAddAgent(false);
+    setShowAddAgentModal(false);
     window.dispatchEvent(new Event(APP_SETTINGS_CHANGED_EVENT));
     const isCodexLike = agentOptions.find((o) => o.value === agentId)?.codexLike;
     if (isCodexLike === true) setTab("openai");
@@ -157,6 +152,7 @@ export function AllAgentConfigsPanel({ themeVariant }: { themeVariant: ThemeVari
   }
 
   function handleAgentDeleted() {
+    setEditingAgent(null);
     window.dispatchEvent(new Event(APP_SETTINGS_CHANGED_EVENT));
   }
 
@@ -172,7 +168,6 @@ export function AllAgentConfigsPanel({ themeVariant }: { themeVariant: ThemeVari
       {/* Bulk migration section */}
       <section
         style={{
-          maxWidth: 720,
           padding: 20,
           border: "1px solid var(--border-dim)",
           borderRadius: 12,
@@ -272,10 +267,9 @@ export function AllAgentConfigsPanel({ themeVariant }: { themeVariant: ThemeVari
         )}
       </section>
 
-      {/* Provider tabs + view toggle */}
+      {/* Provider tabs + Add Agent + view toggle */}
       <div
         style={{
-          maxWidth: 720,
           marginTop: 24,
           display: "flex",
           alignItems: "center",
@@ -284,10 +278,7 @@ export function AllAgentConfigsPanel({ themeVariant }: { themeVariant: ThemeVari
       >
         <button
           type="button"
-          onClick={() => {
-            setTab("anthropic");
-            setPage(1);
-          }}
+          onClick={() => setTab("anthropic")}
           style={{
             display: "inline-flex",
             alignItems: "center",
@@ -311,10 +302,7 @@ export function AllAgentConfigsPanel({ themeVariant }: { themeVariant: ThemeVari
         </button>
         <button
           type="button"
-          onClick={() => {
-            setTab("openai");
-            setPage(1);
-          }}
+          onClick={() => setTab("openai")}
           style={{
             display: "inline-flex",
             alignItems: "center",
@@ -342,6 +330,15 @@ export function AllAgentConfigsPanel({ themeVariant }: { themeVariant: ThemeVari
           />
           {t("appSettings.providerOpenAI")}
         </button>
+
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => setShowAddAgentModal(true)}
+        >
+          <Plus size={13} />
+          {t("appSettings.addAgentInline")}
+        </Button>
 
         <div style={{ flex: 1 }} />
 
@@ -388,14 +385,13 @@ export function AllAgentConfigsPanel({ themeVariant }: { themeVariant: ThemeVari
       {/* Agent list */}
       <div
         style={{
-          maxWidth: 720,
           marginTop: 14,
           display: "flex",
           flexDirection: "column",
           gap: viewMode === "card" ? 10 : 6,
         }}
       >
-        {pagedAgents.length === 0 && !showAddAgent && (
+        {filteredAgents.length === 0 && (
           <div
             style={{
               padding: "28px 0",
@@ -408,7 +404,7 @@ export function AllAgentConfigsPanel({ themeVariant }: { themeVariant: ThemeVari
           </div>
         )}
 
-        {pagedAgents.map((option) => {
+        {filteredAgents.map((option) => {
           const meta = getAgentMeta(option.value);
           return (
             <AgentCardItem
@@ -419,93 +415,29 @@ export function AllAgentConfigsPanel({ themeVariant }: { themeVariant: ThemeVari
               logo={option.codexLike ? chatgptLogo : claudeLogo}
               baseUrl={meta.baseUrl}
               apiKey={meta.apiKey}
-              onDeleted={handleAgentDeleted}
+              onClick={() => setEditingAgent(option)}
             />
           );
         })}
       </div>
 
-      {/* Add Agent */}
-      <div style={{ maxWidth: 720, marginTop: 14 }}>
-        {showAddAgent ? (
-          <div
-            style={{
-              border: "1px solid var(--border-dim)",
-              borderRadius: 10,
-              background: "var(--bg-subtle)",
-              overflow: "hidden",
-            }}
-          >
-            <AddAgentPanel onSaved={handleAgentSaved} />
-          </div>
-        ) : (
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => setShowAddAgent(true)}
-          >
-            <Plus size={13} />
-            {t("appSettings.addAgentInline")}
-          </Button>
-        )}
-      </div>
+      {/* Add Agent Modal */}
+      {showAddAgentModal && (
+        <AddAgentModal
+          onClose={() => setShowAddAgentModal(false)}
+          onSaved={handleAgentSaved}
+        />
+      )}
 
-      {/* Pagination */}
-      {totalPages > 1 && (
-        <div
-          style={{
-            maxWidth: 720,
-            marginTop: 16,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            gap: 8,
-          }}
-        >
-          <button
-            type="button"
-            disabled={safePage <= 1}
-            onClick={() => setPage((p) => Math.max(1, p - 1))}
-            style={{
-              width: 28,
-              height: 28,
-              display: "inline-flex",
-              alignItems: "center",
-              justifyContent: "center",
-              border: "1px solid var(--border-medium)",
-              borderRadius: 6,
-              background: "transparent",
-              color: safePage <= 1 ? "var(--text-disabled)" : "var(--text-secondary)",
-              cursor: safePage <= 1 ? "default" : "pointer",
-              opacity: safePage <= 1 ? 0.4 : 1,
-            }}
-          >
-            <ChevronLeft size={14} />
-          </button>
-          <span style={{ fontSize: 12, color: "var(--text-secondary)" }}>
-            {safePage} / {totalPages}
-          </span>
-          <button
-            type="button"
-            disabled={safePage >= totalPages}
-            onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-            style={{
-              width: 28,
-              height: 28,
-              display: "inline-flex",
-              alignItems: "center",
-              justifyContent: "center",
-              border: "1px solid var(--border-medium)",
-              borderRadius: 6,
-              background: "transparent",
-              color: safePage >= totalPages ? "var(--text-disabled)" : "var(--text-secondary)",
-              cursor: safePage >= totalPages ? "default" : "pointer",
-              opacity: safePage >= totalPages ? 0.4 : 1,
-            }}
-          >
-            <ChevronRight size={14} />
-          </button>
-        </div>
+      {/* Agent Detail Modal */}
+      {editingAgent && (
+        <AgentDetailModal
+          option={editingAgent}
+          themeVariant={themeVariant}
+          logo={editingAgent.codexLike ? chatgptLogo : claudeLogo}
+          onClose={() => setEditingAgent(null)}
+          onDeleted={handleAgentDeleted}
+        />
       )}
     </div>
   );

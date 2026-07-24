@@ -1,16 +1,15 @@
 import { useState } from "react";
 import type { CSSProperties } from "react";
-import { ChevronDown, ChevronRight } from "lucide-react";
+import { ChevronRight } from "lucide-react";
 import type { AgentOption } from "../../agents";
 import { isBuiltInAgent } from "../../agents";
 import { useI18n } from "../../i18n";
-import { AgentConfigPanel } from "./AgentConfigPanel";
 import type { ThemeVariant } from "../../types";
 
 type ViewMode = "card" | "bar";
 
 const cardStyle: CSSProperties = {
-  border: "1px solid var(--border-dim)",
+  border: "1px solid transparent",
   borderRadius: 10,
   background: "var(--bg-subtle)",
   overflow: "hidden",
@@ -18,7 +17,7 @@ const cardStyle: CSSProperties = {
 };
 
 const barStyle: CSSProperties = {
-  border: "1px solid var(--border-dim)",
+  border: "1px solid transparent",
   borderRadius: 6,
   background: "var(--bg-subtle)",
   overflow: "hidden",
@@ -58,8 +57,7 @@ export function AgentCardItem({
   baseUrl,
   apiKey,
   version,
-  defaultExpanded = false,
-  onDeleted,
+  onClick,
 }: {
   option: AgentOption;
   viewMode: ViewMode;
@@ -68,13 +66,10 @@ export function AgentCardItem({
   baseUrl?: string;
   apiKey?: string;
   version?: string;
-  defaultExpanded?: boolean;
-  onDeleted?: () => void;
+  onClick?: () => void;
 }) {
   const { t } = useI18n();
-  const [expanded, setExpanded] = useState(defaultExpanded);
   const [hovered, setHovered] = useState(false);
-  const isCustom = option.custom === true;
   const isBuiltIn = isBuiltInAgent(option.value);
 
   const containerStyle = viewMode === "card" ? cardStyle : barStyle;
@@ -84,12 +79,12 @@ export function AgentCardItem({
     <div
       style={{
         ...containerStyle,
-        borderColor: hovered || expanded ? "var(--border-medium)" : undefined,
+        borderColor: hovered ? "var(--border-medium)" : undefined,
       }}
     >
       <div
         style={{ ...summaryBaseStyle, padding: summaryPadding }}
-        onClick={() => setExpanded((v) => !v)}
+        onClick={onClick}
         onMouseEnter={() => setHovered(true)}
         onMouseLeave={() => setHovered(false)}
       >
@@ -172,23 +167,9 @@ export function AgentCardItem({
           </div>
         )}
         <span style={{ flexShrink: 0, color: "var(--text-hint)" }}>
-          {expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+          <ChevronRight size={14} />
         </span>
       </div>
-
-      {expanded && (
-        <div style={{ borderTop: "1px solid var(--border-dim)" }}>
-          <AgentConfigPanel
-            agentKey={option.value}
-            agentLabel={option.label}
-            filePath={option.configFile}
-            lang={option.configLang}
-            themeVariant={themeVariant}
-            deletable={isCustom}
-            onDeleted={onDeleted}
-          />
-        </div>
-      )}
     </div>
   );
 }
