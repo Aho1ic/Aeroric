@@ -1,7 +1,17 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { confirm } from "@tauri-apps/plugin-dialog";
-import { Settings as SettingsIcon, Blocks, ExternalLink, AlertCircle, Trash2 } from "lucide-react";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import {
+  Settings as SettingsIcon,
+  Blocks,
+  ExternalLink,
+  AlertCircle,
+  Trash2,
+  Search,
+  FolderInput,
+  ShoppingBag,
+} from "lucide-react";
 import type {
   Project,
   Skill,
@@ -30,6 +40,9 @@ export function SkillHubView({ config, allProjects, onEnterSkillHub, onOpenAppSe
   const [error, setError] = useState<string | null>(null);
   const [managedSkill, setManagedSkill] = useState<Skill | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
+  const [activeTab, setActiveTab] = useState<"installed" | "shop" | "local">("installed");
+  const [skillSearch, setSkillSearch] = useState("");
+  const [importMessage, setImportMessage] = useState<string | null>(null);
 
   const loadSkills = useCallback(() => {
     if (!config?.hubPath) {
@@ -70,6 +83,36 @@ export function SkillHubView({ config, allProjects, onEnterSkillHub, onOpenAppSe
     grouped.forEach((projectIds, skillName) => counts.set(skillName, projectIds.size));
     return counts;
   }, [installations]);
+
+  const filteredSkills = useMemo(() => {
+    if (!skillSearch.trim()) return skills;
+    const q = skillSearch.trim().toLowerCase();
+    return skills.filter(
+      (sk) =>
+        sk.name.toLowerCase().includes(q) ||
+        (sk.displayName && sk.displayName.toLowerCase().includes(q)),
+    );
+  }, [skills, skillSearch]);
+
+  const handleImportLocal = useCallback(async () => {
+    const selected = await openDialog({
+      title: t("skill.tab.importFromLocal"),
+      multiple: false,
+      directory: true,
+    });
+    if (!selected || Array.isArray(selected)) return;
+    setError(null);
+    setImportMessage(null);
+    try {
+      const name = await invoke<string>("import_local_skill", { sourcePath: selected });
+      setImportMessage(t("skill.tab.importSuccess", { name }));
+      setRefreshKey((k) => k + 1);
+      window.dispatchEvent(new CustomEvent(SKILL_HUB_CHANGED_EVENT));
+      setActiveTab("installed");
+    } catch (e) {
+      setError(String(e));
+    }
+  }, [t]);
 
   const handleDeleteSkill = useCallback(
     async (skill: Skill) => {
@@ -135,8 +178,71 @@ export function SkillHubView({ config, allProjects, onEnterSkillHub, onOpenAppSe
         ) : null}
       </div>
 
-      <div style={s.skillHubMeta}>
-        {loading ? t("skill.list.loading") : t("skill.list.count", { count: skills.length })}
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 8,
+          marginTop: 2,
+          marginBottom: 10,
+        }}
+      >
+        {(["installed", "shop", "local"] as const).map((tab) => (
+          <button
+            key={tab}
+            type="button"
+            onClick={() => setActiveTab(tab)}
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 6,
+              padding: "7px 14px",
+              border: `1.5px solid ${activeTab === tab ? "var(--accent)" : "var(--border-medium)"}`,
+              borderRadius: 8,
+              background: activeTab === tab ? "var(--control-active-bg)" : "var(--bg-card)",
+              color: activeTab === tab ? "var(--control-active-fg)" : "var(--text-secondary)",
+              fontSize: 12.5,
+              fontWeight: 600,
+              cursor: "pointer",
+            }}
+          >
+            {t(`skill.tab.${tab === "local" ? "localImport" : tab}`)}
+          </button>
+        ))}
+
+        <div style={{ flex: 1 }} />
+
+        {activeTab === "installed" && (
+          <div style={{ position: "relative", display: "flex", alignItems: "center" }}>
+            <Search
+              size={13}
+              style={{
+                position: "absolute",
+                left: 8,
+                color: "var(--text-hint)",
+                pointerEvents: "none",
+              }}
+            />
+            <input
+              type="text"
+              value={skillSearch}
+              onChange={(e) => setSkillSearch(e.target.value)}
+              placeholder={t("skill.search")}
+              style={{
+                width: 170,
+                height: 28,
+                paddingLeft: 28,
+                paddingRight: 8,
+                border: "1px solid var(--border-medium)",
+                borderRadius: 6,
+                background: "var(--bg-input)",
+                color: "var(--text-primary)",
+                fontSize: 12,
+                outline: "none",
+              }}
+            />
+          </div>
+        )}
       </div>
 
       {error ? (
@@ -146,21 +252,62 @@ export function SkillHubView({ config, allProjects, onEnterSkillHub, onOpenAppSe
         </div>
       ) : null}
 
-      <div style={s.skillHubList}>
-        {skills.length === 0 && !loading ? (
-          <div style={s.skillHubEmptyList}>{t("skill.list.empty")}</div>
-        ) : (
-          skills.map((skill) => (
-            <SkillRow
-              key={skill.path}
-              skill={skill}
-              installedProjectCount={installedProjectCounts.get(skill.name) ?? 0}
-              onManage={() => setManagedSkill(skill)}
-              onDelete={() => handleDeleteSkill(skill)}
-            />
-          ))
-        )}
-      </div>
+      {importMessage ? (
+        <div
+          style={{
+            padding: "8px 12px",
+            marginBottom: 10,
+            color: "var(--success)",
+            fontSize: 12,
+          }}
+        >
+          {importMessage}
+        </div>
+      ) : null}
+
+      {activeTab === "installed" && (
+        <>
+          <div style={s.skillHubMeta}>
+            {loading
+              ? t("skill.list.loading")
+              : t("skill.list.count", { count: filteredSkills.length })}
+          </div>
+          <div style={s.skillHubList}>
+            {filteredSkills.length === 0 && !loading ? (
+              <div style={s.skillHubEmptyList}>{t("skill.list.empty")}</div>
+            ) : (
+              filteredSkills.map((skill) => (
+                <SkillRow
+                  key={skill.path}
+                  skill={skill}
+                  installedProjectCount={installedProjectCounts.get(skill.name) ?? 0}
+                  onManage={() => setManagedSkill(skill)}
+                  onDelete={() => handleDeleteSkill(skill)}
+                />
+              ))
+            )}
+          </div>
+        </>
+      )}
+
+      {activeTab === "shop" && (
+        <div style={s.skillHubEmpty}>
+          <ShoppingBag size={36} strokeWidth={1.2} color="var(--text-hint)" />
+          <div style={s.skillHubEmptyTitle}>{t("skill.tab.shopComingSoon")}</div>
+          <div style={s.skillHubEmptyHint}>{t("skill.tab.shopHint")}</div>
+        </div>
+      )}
+
+      {activeTab === "local" && (
+        <div style={s.skillHubEmpty}>
+          <FolderInput size={36} strokeWidth={1.2} color="var(--text-hint)" />
+          <div style={s.skillHubEmptyTitle}>{t("skill.tab.importHint")}</div>
+          <button type="button" style={s.skillHubEmptyBtn} onClick={() => void handleImportLocal()}>
+            <FolderInput size={13} strokeWidth={2} />
+            {t("skill.tab.importFromLocal")}
+          </button>
+        </div>
+      )}
 
       {managedSkill ? (
         <SkillManageDialog

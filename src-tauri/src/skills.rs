@@ -989,6 +989,60 @@ fn upsert_installation(
     Ok(installation)
 }
 
+#[tauri::command]
+pub async fn import_local_skill(source_path: String) -> Result<String, String> {
+    tokio::task::spawn_blocking(move || {
+        let source = Path::new(&source_path);
+        if !source.is_dir() {
+            return Err(format!("Source path is not a directory: {}", source_path));
+        }
+        if !source.join("SKILL.md").is_file() {
+            return Err("Selected folder does not contain a SKILL.md file".to_string());
+        }
+        let skill_name = source
+            .file_name()
+            .and_then(|s| s.to_str())
+            .ok_or_else(|| "Cannot determine skill name from folder".to_string())?
+            .to_string();
+        validate_skill_name(&skill_name)?;
+
+        let cfg = load_hub_config_internal();
+        let hub_path = cfg
+            .hub_path
+            .as_deref()
+            .ok_or_else(|| "Skill Hub is not configured".to_string())?;
+        let dest = Path::new(hub_path).join(&skill_name);
+        if dest.exists() {
+            return Err(format!(
+                "Skill '{}' already exists in the hub",
+                skill_name
+            ));
+        }
+        copy_dir_recursive(source, &dest).map_err(|e| {
+            let _ = fs::remove_dir_all(&dest);
+            format!("Failed to copy skill: {}", e)
+        })?;
+        Ok(skill_name)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
+    fs::create_dir_all(dst)?;
+    for entry in fs::read_dir(src)? {
+        let entry = entry?;
+        let src_path = entry.path();
+        let dst_path = dst.join(entry.file_name());
+        if src_path.is_dir() {
+            copy_dir_recursive(&src_path, &dst_path)?;
+        } else {
+            fs::copy(&src_path, &dst_path)?;
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

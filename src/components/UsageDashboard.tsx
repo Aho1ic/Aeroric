@@ -531,6 +531,12 @@ export function UsageDashboard({ embedded = false }: { embedded?: boolean }) {
   const [width, setWidth] = useState(900);
   const { statistics, loading, refreshing, error, refetch } = useUsageStatistics(rangeDays, agent);
 
+  const chartSeries = useMemo(() => {
+    const raw = statistics?.series ?? [];
+    if (rangeDays !== 1) return raw;
+    return raw.filter((bucket) => bucket.totalTokens > 0);
+  }, [statistics?.series, rangeDays]);
+
   useEffect(() => {
     const root = rootRef.current;
     if (!root || typeof ResizeObserver === "undefined") return;
@@ -744,7 +750,7 @@ export function UsageDashboard({ embedded = false }: { embedded?: boolean }) {
                 </div>
               ) : (
                 <UsageChart
-                  series={statistics.series}
+                  series={chartSeries}
                   labels={{
                     total: t("usageStats.totalTokens"),
                     input: t("usageStats.inputTokens"),

@@ -8,6 +8,7 @@ import {
   LayoutGrid,
   LayoutList,
   Plus,
+  Search,
   ShieldAlert,
   Upload,
 } from "lucide-react";
@@ -47,6 +48,7 @@ export function AllAgentConfigsPanel({ themeVariant }: { themeVariant: ThemeVari
   const [editingAgent, setEditingAgent] = useState<AgentOption | null>(null);
   const [settings, setSettings] = useState<AppSettings | null>(null);
   const [showImportMenu, setShowImportMenu] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
   const importMenuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -66,13 +68,14 @@ export function AllAgentConfigsPanel({ themeVariant }: { themeVariant: ThemeVari
     };
   }, []);
 
-  const filteredAgents = useMemo(
-    () =>
-      agentOptions.filter((o) =>
-        tab === "anthropic" ? !o.codexLike : o.codexLike,
-      ),
-    [agentOptions, tab],
-  );
+  const filteredAgents = useMemo(() => {
+    const byTab = agentOptions.filter((o) =>
+      tab === "anthropic" ? !o.codexLike : o.codexLike,
+    );
+    if (!searchQuery.trim()) return byTab;
+    const q = searchQuery.trim().toLowerCase();
+    return byTab.filter((o) => o.label.toLowerCase().includes(q));
+  }, [agentOptions, tab, searchQuery]);
 
   function getAgentMeta(agentKey: string) {
     if (!settings) return {};
@@ -453,6 +456,31 @@ export function AllAgentConfigsPanel({ themeVariant }: { themeVariant: ThemeVari
         </Button>
 
         <div style={{ flex: 1 }} />
+
+        <div style={{ position: "relative", display: "flex", alignItems: "center" }}>
+          <Search
+            size={13}
+            style={{ position: "absolute", left: 8, color: "var(--text-hint)", pointerEvents: "none" }}
+          />
+          <input
+            type="text"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder={t("appSettings.searchAgents")}
+            style={{
+              width: 170,
+              height: 28,
+              paddingLeft: 28,
+              paddingRight: 8,
+              border: "1px solid var(--border-medium)",
+              borderRadius: 6,
+              background: "var(--bg-input)",
+              color: "var(--text-primary)",
+              fontSize: 12,
+              outline: "none",
+            }}
+          />
+        </div>
 
         <button
           type="button"
