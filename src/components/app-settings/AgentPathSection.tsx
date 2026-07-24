@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from "react";
 import type React from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Check, RefreshCw, TriangleAlert } from "lucide-react";
@@ -97,7 +97,19 @@ const hintStyle: React.CSSProperties = {
   marginTop: 3,
 };
 
-export function AgentPathSection({ agentKey }: { agentKey: AgentKey }) {
+export interface AgentPathSectionHandle {
+  isDirty: boolean;
+  save: () => Promise<void>;
+}
+
+export const AgentPathSection = forwardRef<
+  AgentPathSectionHandle,
+  {
+    agentKey: AgentKey;
+    hideSaveButton?: boolean;
+    onDirtyChange?: (dirty: boolean) => void;
+  }
+>(function AgentPathSection({ agentKey, hideSaveButton, onDirtyChange }, ref) {
   const { t } = useI18n();
   const builtInAgent = isBuiltInAgent(agentKey) ? agentKey : null;
   const pathField = builtInAgent ? pathFieldByAgent[builtInAgent] : null;
@@ -247,7 +259,7 @@ export function AgentPathSection({ agentKey }: { agentKey: AgentKey }) {
     }
   }
 
-  async function handleSave() {
+  const handleSave = useCallback(async () => {
     setSaving(true);
     setError(null);
     setSaved(false);
@@ -267,7 +279,7 @@ export function AgentPathSection({ agentKey }: { agentKey: AgentKey }) {
     } finally {
       setSaving(false);
     }
-  }
+  }, [settings, loadVersions]);
 
   async function handleUpgrade() {
     setUpgrading(true);
@@ -293,22 +305,19 @@ export function AgentPathSection({ agentKey }: { agentKey: AgentKey }) {
   const originalPath = pathField ? originalSettings[pathField] : (originalCustomAgent?.path ?? "");
   const currentConfigPath = configPathField ? settings[configPathField] : "";
   const originalConfigPath = configPathField ? originalSettings[configPathField] : "";
-  const currentLabelOverride =
-    builtInAgent && settings.agent_label_overrides?.[builtInAgent]
-      ? settings.agent_label_overrides[builtInAgent]
-      : "";
-  const originalLabelOverride =
-    builtInAgent && originalSettings.agent_label_overrides?.[builtInAgent]
-      ? originalSettings.agent_label_overrides[builtInAgent]
-      : "";
   const currentProxyEnabled = getAgentProxyEnabled(settings, agentKey);
   const originalProxyEnabled = getAgentProxyEnabled(originalSettings, agentKey);
   const isDirty =
     currentPath !== originalPath ||
     currentConfigPath !== originalConfigPath ||
-    currentLabelOverride !== originalLabelOverride ||
     currentProxyEnabled !== originalProxyEnabled;
   const versionValue = versionField ? versions[versionField] : customVersion;
+
+  useImperativeHandle(ref, () => ({ isDirty, save: handleSave }), [isDirty, handleSave]);
+
+  useEffect(() => {
+    onDirtyChange?.(isDirty);
+  }, [isDirty, onDirtyChange]);
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12, marginBottom: 18 }}>
@@ -374,28 +383,6 @@ export function AgentPathSection({ agentKey }: { agentKey: AgentKey }) {
       )}
 
       <div style={fieldStyle}>
-        <label style={labelStyle}>{t("appSettings.displayName")}</label>
-        <input
-          style={inputStyle}
-          value={currentLabelOverride}
-          onChange={(e) => {
-            const nextLabel = e.target.value;
-            setSettings((prev) => ({
-              ...prev,
-              agent_label_overrides: {
-                ...(prev.agent_label_overrides ?? {}),
-                ...(builtInAgent ? { [builtInAgent]: nextLabel } : {}),
-              },
-            }));
-          }}
-          placeholder={builtInAgent ? agentDisplayLabel(builtInAgent) : agentDisplayLabel(agentKey)}
-          disabled={loading || !builtInAgent}
-          spellCheck={false}
-        />
-        <span style={hintStyle}>{t("appSettings.displayNameHint")}</span>
-      </div>
-
-      <div style={fieldStyle}>
         <label style={labelStyle}>{pathLabel}</label>
         <input
           style={{
@@ -446,37 +433,33 @@ export function AgentPathSection({ agentKey }: { agentKey: AgentKey }) {
         </div>
       )}
 
-      <div style={fieldStyle}>
-        <span style={labelStyle}>{t("appSettings.agentProxy")}</span>
-        <label
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: 8,
-            color: "var(--text-secondary)",
-            fontSize: 12.5,
-            lineHeight: 1.35,
+      <label
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 8,
+          color: "var(--text-secondary)",
+          fontSize: 12.5,
+          lineHeight: 1.35,
+        }}
+      >
+        <input
+          type="checkbox"
+          checked={currentProxyEnabled}
+          onChange={(e) => {
+            const enabled = e.target.checked;
+            setSettings((prev) => ({
+              ...prev,
+              agent_proxy_enabled: {
+                ...(prev.agent_proxy_enabled ?? {}),
+                [agentKey]: enabled,
+              },
+            }));
           }}
-        >
-          <input
-            type="checkbox"
-            checked={currentProxyEnabled}
-            onChange={(e) => {
-              const enabled = e.target.checked;
-              setSettings((prev) => ({
-                ...prev,
-                agent_proxy_enabled: {
-                  ...(prev.agent_proxy_enabled ?? {}),
-                  [agentKey]: enabled,
-                },
-              }));
-            }}
-            disabled={loading}
-          />
-          {t("appSettings.agentProxyEnabled")}
-        </label>
-        <span style={hintStyle}>{t("appSettings.agentProxyHint")}</span>
-      </div>
+          disabled={loading}
+        />
+        {t("appSettings.enableProxy")}
+      </label>
 
       <div style={fieldStyle}>
         <label style={labelStyle}>{t("appSettings.installedVersions")}</label>
@@ -490,29 +473,33 @@ export function AgentPathSection({ agentKey }: { agentKey: AgentKey }) {
         <span style={hintStyle}>{t("appSettings.versionsHint")}</span>
       </div>
 
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 10 }}>
-        {saved && (
-          <span
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: 4,
-              fontSize: 12,
-              color: "var(--success)",
-            }}
-          >
-            <Check size={12} /> {t("common.saved")}
-          </span>
-        )}
-        <Button
-          variant="default"
-          size="sm"
-          onClick={handleSave}
-          disabled={loading || saving || !isDirty}
+      {!hideSaveButton && (
+        <div
+          style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 10 }}
         >
-          {saving ? t("common.saving") : t("common.save")}
-        </Button>
-      </div>
+          {saved && (
+            <span
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 4,
+                fontSize: 12,
+                color: "var(--success)",
+              }}
+            >
+              <Check size={12} /> {t("common.saved")}
+            </span>
+          )}
+          <Button
+            variant="default"
+            size="sm"
+            onClick={handleSave}
+            disabled={loading || saving || !isDirty}
+          >
+            {saving ? t("common.saving") : t("common.save")}
+          </Button>
+        </div>
+      )}
     </div>
   );
-}
+});

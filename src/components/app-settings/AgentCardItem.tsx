@@ -11,17 +11,19 @@ type ViewMode = "card" | "bar";
 const cardStyle: CSSProperties = {
   border: "1px solid transparent",
   borderRadius: 10,
-  background: "var(--bg-subtle)",
+  background: "transparent",
   overflow: "hidden",
-  transition: "border-color 0.12s",
+  transition: "border-color 0.12s, background 0.12s",
+  cursor: "pointer",
 };
 
 const barStyle: CSSProperties = {
   border: "1px solid transparent",
   borderRadius: 6,
-  background: "var(--bg-subtle)",
+  background: "transparent",
   overflow: "hidden",
-  transition: "border-color 0.12s",
+  transition: "border-color 0.12s, background 0.12s",
+  cursor: "pointer",
 };
 
 const summaryBaseStyle: CSSProperties = {
@@ -80,13 +82,14 @@ export function AgentCardItem({
       style={{
         ...containerStyle,
         borderColor: hovered ? "var(--border-medium)" : undefined,
+        background: hovered ? "var(--bg-subtle)" : undefined,
       }}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
     >
       <div
         style={{ ...summaryBaseStyle, padding: summaryPadding }}
         onClick={onClick}
-        onMouseEnter={() => setHovered(true)}
-        onMouseLeave={() => setHovered(false)}
       >
         <img
           src={logo}

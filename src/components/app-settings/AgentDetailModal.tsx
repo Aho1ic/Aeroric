@@ -1,10 +1,10 @@
-import { useEffect, useState, type CSSProperties } from "react";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { Check, Download, RefreshCw, Trash2, Upload, X } from "lucide-react";
 import { useI18n } from "../../i18n";
 import s from "../../styles";
-import { AgentPathSection } from "./AgentPathSection";
+import { AgentPathSection, type AgentPathSectionHandle } from "./AgentPathSection";
 import {
   APP_SETTINGS_CHANGED_EVENT,
   formatAgentBalance,
@@ -110,6 +110,12 @@ export function AgentDetailModal({
   const [exporting, setExporting] = useState(false);
   const [importing, setImporting] = useState(false);
   const [transferMessage, setTransferMessage] = useState<string | null>(null);
+  const [baseUrl, setBaseUrl] = useState("");
+  const [originalBaseUrl, setOriginalBaseUrl] = useState("");
+  const [apiKey, setApiKey] = useState("");
+  const [originalApiKey, setOriginalApiKey] = useState("");
+  const [pathDirty, setPathDirty] = useState(false);
+  const pathSectionRef = useRef<AgentPathSectionHandle>(null);
   const fileContentImeFix = useTextInputIMEFix<HTMLTextAreaElement>((content) =>
     handleFileContentChange(content),
   );
@@ -170,6 +176,10 @@ export function AgentDetailModal({
       setOriginalSelectedModels([]);
       setEnable1mContext(false);
       setOriginalEnable1mContext(false);
+      setBaseUrl("");
+      setOriginalBaseUrl("");
+      setApiKey("");
+      setOriginalApiKey("");
       return;
     }
     setDetectedBalance(null);
@@ -188,10 +198,32 @@ export function AgentDetailModal({
         const contextEnabled = Boolean(profile?.enable_1m_context);
         setEnable1mContext(contextEnabled);
         setOriginalEnable1mContext(contextEnabled);
+        setBaseUrl(profile?.base_url ?? "");
+        setOriginalBaseUrl(profile?.base_url ?? "");
+        setApiKey(profile?.api_key ?? "");
+        setOriginalApiKey(profile?.api_key ?? "");
       })
       .catch((e) => {
         if (!cancelled) setError(String(e));
       });
+    return () => {
+      cancelled = true;
+    };
+  }, [agentKey, deletable]);
+
+  useEffect(() => {
+    if (deletable) return;
+    let cancelled = false;
+    invoke<AppSettings>("load_app_settings")
+      .then((loadedSettings) => {
+        if (cancelled) return;
+        const creds = loadedSettings.builtin_agent_credentials?.[agentKey];
+        setBaseUrl(creds?.base_url ?? "");
+        setOriginalBaseUrl(creds?.base_url ?? "");
+        setApiKey(creds?.api_key ?? "");
+        setOriginalApiKey(creds?.api_key ?? "");
+      })
+      .catch(() => {});
     return () => {
       cancelled = true;
     };
@@ -337,8 +369,15 @@ export function AgentDetailModal({
   const canDetectModels = Boolean(
     customProfile?.base_url?.trim() && customProfile?.api_key?.trim(),
   );
+  const isCredsDirty = baseUrl !== originalBaseUrl || apiKey !== originalApiKey;
   const hasAnyChanges =
-    isDirty || isNameDirty || canSaveModels || canSave1mContext || canSaveReasoningEffort;
+    isDirty ||
+    isNameDirty ||
+    canSaveModels ||
+    canSave1mContext ||
+    canSaveReasoningEffort ||
+    pathDirty ||
+    isCredsDirty;
 
   async function handleSaveAll() {
     if (!hasAnyChanges || saving) return;
@@ -346,6 +385,41 @@ export function AgentDetailModal({
     setError(null);
     setSaved(false);
     try {
+      if (pathSectionRef.current?.isDirty) {
+        await pathSectionRef.current.save();
+      }
+
+      if (isCredsDirty) {
+        if (deletable && customProfile) {
+          await invoke("save_custom_agent_profile", {
+            profile: { ...customProfile, base_url: baseUrl.trim(), api_key: apiKey.trim() },
+          });
+          setOriginalBaseUrl(baseUrl.trim());
+          setOriginalApiKey(apiKey.trim());
+          setCustomProfile((prev) =>
+            prev ? { ...prev, base_url: baseUrl.trim(), api_key: apiKey.trim() } : prev,
+          );
+        } else {
+          const loadedSettings = await invoke<AppSettings>("load_app_settings");
+          const existing = loadedSettings.builtin_agent_credentials?.[agentKey];
+          const nextSettings: AppSettings = {
+            ...loadedSettings,
+            builtin_agent_credentials: {
+              ...(loadedSettings.builtin_agent_credentials ?? {}),
+              [agentKey]: {
+                base_url: baseUrl.trim(),
+                api_key: apiKey.trim(),
+                models: existing?.models ?? [],
+                enable_1m_context: existing?.enable_1m_context ?? false,
+              },
+            },
+          };
+          await invoke("save_app_settings", { settings: nextSettings });
+          setOriginalBaseUrl(baseUrl.trim());
+          setOriginalApiKey(apiKey.trim());
+        }
+      }
+
       if (isNameDirty) {
         const next = agentName.trim();
         if (next) {
@@ -466,9 +540,11 @@ export function AgentDetailModal({
             height: "min(580px, calc(100vh - 80px))",
             display: "flex",
             flexDirection: "column",
-            border: "1px solid var(--border-medium)",
-            borderRadius: 10,
-            background: "var(--bg-card)",
+            border: "1px solid color-mix(in srgb, var(--border-medium) 72%, #ffffff 28%)",
+            borderRadius: 22,
+            background: "color-mix(in srgb, var(--bg-card) 72%, transparent)",
+            backdropFilter: "blur(28px) saturate(1.32)",
+            WebkitBackdropFilter: "blur(28px) saturate(1.32)",
             boxShadow: "var(--shadow-popover)",
             overflow: "hidden",
           }}
@@ -618,58 +694,37 @@ export function AgentDetailModal({
                       </div>
                     )}
 
-                    {/* Agent path section */}
-                    <AgentPathSection agentKey={agentKey} />
-
-                    {/* Import/Export */}
-                    <div
-                      style={{
-                        display: "flex",
-                        alignItems: "center",
-                        justifyContent: "space-between",
-                        gap: 12,
-                        marginBottom: 18,
-                        padding: 10,
-                        border: "1px solid var(--border-dim)",
-                        borderRadius: 8,
-                        background: "var(--bg-subtle)",
-                      }}
-                    >
-                      <div style={{ minWidth: 0 }}>
-                        <div
-                          style={{ fontSize: 13, fontWeight: 600, color: "var(--text-primary)" }}
-                        >
-                          {t("appSettings.agentConfigTransfer")}
-                        </div>
-                        <div style={{ marginTop: 3, fontSize: 11, color: "var(--text-hint)" }}>
-                          {t("appSettings.agentConfigTransferHint")}
-                        </div>
-                      </div>
-                      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={handleImportConfig}
-                          disabled={importing || exporting}
-                        >
-                          <Upload size={12} />
-                          {importing
-                            ? t("appSettings.importingAgentConfig")
-                            : t("appSettings.importAgentConfig")}
-                        </Button>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={handleExportConfig}
-                          disabled={exporting || importing}
-                        >
-                          <Download size={12} />
-                          {exporting
-                            ? t("appSettings.exportingAgentConfig")
-                            : t("appSettings.exportAgentConfig")}
-                        </Button>
-                      </div>
+                    {/* Base URL */}
+                    <div style={{ marginBottom: 12 }}>
+                      <label style={labelStyle}>{t("appSettings.agentBaseUrl")}</label>
+                      <input
+                        style={nameInputStyle}
+                        value={baseUrl}
+                        onChange={(event) => setBaseUrl(event.target.value)}
+                        placeholder="https://api.example.com"
+                        spellCheck={false}
+                      />
                     </div>
+
+                    {/* API Key */}
+                    <div style={{ marginBottom: 16 }}>
+                      <label style={labelStyle}>{t("appSettings.agentApiKey")}</label>
+                      <input
+                        style={nameInputStyle}
+                        value={apiKey}
+                        onChange={(event) => setApiKey(event.target.value)}
+                        placeholder="sk-..."
+                        spellCheck={false}
+                      />
+                    </div>
+
+                    {/* Agent path section */}
+                    <AgentPathSection
+                      ref={pathSectionRef}
+                      agentKey={agentKey}
+                      hideSaveButton
+                      onDirtyChange={setPathDirty}
+                    />
 
                     {/* Model detection + selection */}
                     {deletable && customProfile && (
@@ -878,14 +933,6 @@ export function AgentDetailModal({
                         </div>
                       </div>
                     )}
-
-                    {transferMessage && (
-                      <div
-                        style={{ color: "var(--success)", fontSize: 12.5, marginBottom: 10 }}
-                      >
-                        {transferMessage}
-                      </div>
-                    )}
                   </div>
                 ) : (
                   /* Config File tab */
@@ -992,6 +1039,64 @@ export function AgentDetailModal({
                         spellCheck={false}
                       />
                     )}
+
+                    {/* Import/Export */}
+                    <div
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "space-between",
+                        gap: 12,
+                        marginTop: 14,
+                        padding: 10,
+                        border: "1px solid var(--border-dim)",
+                        borderRadius: 8,
+                        background: "var(--bg-subtle)",
+                      }}
+                    >
+                      <div style={{ minWidth: 0 }}>
+                        <div
+                          style={{ fontSize: 13, fontWeight: 600, color: "var(--text-primary)" }}
+                        >
+                          {t("appSettings.agentConfigTransfer")}
+                        </div>
+                        <div style={{ marginTop: 3, fontSize: 11, color: "var(--text-hint)" }}>
+                          {t("appSettings.agentConfigTransferHint")}
+                        </div>
+                      </div>
+                      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={handleImportConfig}
+                          disabled={importing || exporting}
+                        >
+                          <Upload size={12} />
+                          {importing
+                            ? t("appSettings.importingAgentConfig")
+                            : t("appSettings.importAgentConfig")}
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={handleExportConfig}
+                          disabled={exporting || importing}
+                        >
+                          <Download size={12} />
+                          {exporting
+                            ? t("appSettings.exportingAgentConfig")
+                            : t("appSettings.exportAgentConfig")}
+                        </Button>
+                      </div>
+                    </div>
+
+                    {transferMessage && (
+                      <div
+                        style={{ color: "var(--success)", fontSize: 12.5, marginTop: 10 }}
+                      >
+                        {transferMessage}
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
@@ -1080,9 +1185,11 @@ export function AgentDetailModal({
             aria-labelledby="agent-delete-confirm-title"
             style={{
               width: "min(420px, calc(100vw - 32px))",
-              border: "1px solid var(--border-medium)",
-              borderRadius: 8,
-              background: "var(--bg-card)",
+              border: "1px solid color-mix(in srgb, var(--border-medium) 72%, #ffffff 28%)",
+              borderRadius: 16,
+              background: "color-mix(in srgb, var(--bg-card) 72%, transparent)",
+              backdropFilter: "blur(28px) saturate(1.32)",
+              WebkitBackdropFilter: "blur(28px) saturate(1.32)",
               boxShadow: "var(--shadow-popover)",
               padding: 18,
             }}

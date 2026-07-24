@@ -192,7 +192,6 @@ export function AppSettingsDialog({
           ...s.modalBox,
           ...s.settingsModalBox,
           position: "relative",
-          background: "var(--bg-card)",
         }}
       >
         <div style={{ position: "relative", zIndex: 1, display: "flex", flex: 1, minWidth: 0 }}>

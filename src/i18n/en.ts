@@ -173,6 +173,7 @@ export const en: Record<string, string> = {
   "appSettings.configSyntax": "Config Syntax",
   "appSettings.agentProxy": "Proxy",
   "appSettings.agentProxyEnabled": "Use proxy for this agent",
+  "appSettings.enableProxy": "Enable Proxy",
   "appSettings.agentProxyHint":
     "Uses the global proxy configured in Application > Proxy. Other terminal sessions are unaffected.",
   "appSettings.agentProxyUrl": "Proxy URL",

@@ -561,7 +561,7 @@ describe("Agent config and debug panel UI", () => {
     renderJovernaAgentConfigPanel();
 
     await findConfigEditor("#!/bin/sh\n");
-    await user.click(screen.getByLabelText("Use proxy for this agent"));
+    await user.click(screen.getByLabelText("Enable Proxy"));
     expect(screen.queryByLabelText("Proxy URL")).not.toBeInTheDocument();
     expect(screen.queryByLabelText("NO_PROXY")).not.toBeInTheDocument();
     await user.click(getEnabledSaveButton());

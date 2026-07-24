@@ -166,6 +166,7 @@ export const zh: Record<string, string> = {
   "appSettings.configSyntax": "配置语法",
   "appSettings.agentProxy": "代理",
   "appSettings.agentProxyEnabled": "为这个 Agent 使用代理",
+  "appSettings.enableProxy": "开启代理",
   "appSettings.agentProxyHint": "使用“应用 > 代理”中的全局代理配置，不影响其他本地终端会话。",
   "appSettings.agentProxyUrl": "代理地址",
   "appSettings.agentProxyUrlHint":
