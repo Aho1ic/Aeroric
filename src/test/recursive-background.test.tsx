@@ -24,6 +24,7 @@ vi.mock("@tauri-apps/api/core", () => ({
 
 vi.mock("../components/NotificationBell", () => ({
   NotificationBell: () => null,
+  UpdateBanner: () => null,
 }));
 
 vi.mock("../components/recursive-hero-effect/recursive-hero-effect", async (importOriginal) => {

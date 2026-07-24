@@ -37,6 +37,7 @@ struct RemoteNotification {
     min_app_version: Option<String>,
     max_app_version: Option<String>,
     release_tag: Option<String>,
+    newer_than_current: bool,
     update_install_supported: bool,
 }
 
@@ -97,6 +98,8 @@ pub struct NotificationItem {
     pub is_read: bool,
     #[serde(rename = "releaseTag")]
     pub release_tag: Option<String>,
+    #[serde(rename = "newerThanCurrent")]
+    pub newer_than_current: bool,
     #[serde(rename = "updateInstallSupported")]
     pub update_install_supported: bool,
 }
@@ -521,6 +524,7 @@ fn release_to_notification(
         min_app_version: None,
         max_app_version: None,
         release_tag: Some(release.tag_name),
+        newer_than_current,
         update_install_supported,
     }
 }
@@ -806,6 +810,7 @@ pub async fn get_notifications(force: Option<bool>) -> Result<NotificationResult
             created_at: sanitize_text(&n.created_at, 20),
             is_read: read_set.contains(n.id.as_str()),
             release_tag: n.release_tag.as_ref().map(|tag| sanitize_text(tag, 80)),
+            newer_than_current: n.newer_than_current,
             update_install_supported: n.update_install_supported,
         })
         .collect();
@@ -978,6 +983,7 @@ mod tests {
             min_app_version: None,
             max_app_version: None,
             release_tag: None,
+            newer_than_current: false,
             update_install_supported: false,
         }
     }

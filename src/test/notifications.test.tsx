@@ -15,7 +15,7 @@ describe("NotificationsProvider", () => {
     vi.mocked(invoke).mockResolvedValue({ notifications: [], unreadCount: 0 });
   });
 
-  it("forces a remote release check on startup and periodic polling", async () => {
+  it("forces a remote release check on startup and periodic polling respects backend cache", async () => {
     vi.useFakeTimers();
 
     render(
@@ -34,7 +34,7 @@ describe("NotificationsProvider", () => {
     vi.mocked(invoke).mockClear();
     await vi.advanceTimersByTimeAsync(60_000);
 
-    expect(invoke).toHaveBeenCalledWith("get_notifications", { force: true });
+    expect(invoke).toHaveBeenCalledWith("get_notifications", { force: false });
     vi.useRealTimers();
   });
 });

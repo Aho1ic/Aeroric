@@ -8,7 +8,6 @@ import {
   Type,
   Zap,
   Blocks,
-  Plus,
   Network,
   PackageOpen,
   ChartNoAxesCombined,
@@ -23,12 +22,9 @@ import type {
 } from "../types";
 import { useI18n } from "../i18n";
 import s from "../styles";
-import claudeLogo from "../assets/claude.svg";
 import chatgptLogo from "../assets/chatgpt.svg";
 
 import { AboutPanel } from "./app-settings/AboutPanel";
-import { AddAgentPanel } from "./app-settings/AddAgentPanel";
-import { AgentConfigPanel } from "./app-settings/AgentConfigPanel";
 import { GeneralPanel } from "./app-settings/GeneralPanel";
 import { ShortcutsPanel } from "./app-settings/ShortcutsPanel";
 import { ThemePanel } from "./app-settings/ThemePanel";
@@ -39,10 +35,8 @@ import { ProxyPanel } from "./app-settings/ProxyPanel";
 import { AgentUpdatesPanel } from "./app-settings/AgentUpdatesPanel";
 import { AllAgentConfigsPanel } from "./app-settings/AllAgentConfigsPanel";
 import { UsageDashboard } from "./UsageDashboard";
-import type { AgentKey, AppSettingsNavItem, NavKey, NavSection } from "./app-settings/types";
-import { useAgentOptions } from "../hooks/useAgentOptions";
+import type { AppSettingsNavItem, NavKey, NavSection } from "./app-settings/types";
 
-const ADD_AGENT_NAV_KEY = "__add_agent__";
 const ALL_AGENT_CONFIGS_NAV_KEY = "__all_agent_configs__";
 
 const BASE_NAV_ITEMS: AppSettingsNavItem[] = [
@@ -155,7 +149,6 @@ export function AppSettingsDialog({
   onMonoFontFamilyChange: (family: FontFamily) => void;
 }) {
   const { t } = useI18n();
-  const agentOptions = useAgentOptions();
   const [activeNav, setActiveNav] = useState<NavKey>(initialNav);
 
   useEffect(() => {
@@ -173,21 +166,6 @@ export function AppSettingsDialog({
       section: "agents" as const,
       icon: Archive,
     },
-    ...agentOptions.map((option) => ({
-      key: option.value,
-      label: option.label,
-      section: "agents" as const,
-      logo: option.codexLike ? chatgptLogo : claudeLogo,
-      filePath: option.configFile,
-      lang: option.configLang,
-      custom: option.custom,
-    })),
-    {
-      key: ADD_AGENT_NAV_KEY,
-      labelKey: "appSettings.addAgent",
-      section: "agents" as const,
-      icon: Plus,
-    },
   ];
   const navItems = [
     ...BASE_NAV_ITEMS.filter((item) => item.section !== "about"),
@@ -196,10 +174,6 @@ export function AppSettingsDialog({
   ];
 
   const activeItem = navItems.find((n) => n.key === activeNav) ?? navItems[0];
-  const activeAgentItem =
-    activeNav === ADD_AGENT_NAV_KEY || activeNav === ALL_AGENT_CONFIGS_NAV_KEY
-      ? null
-      : (agentNavItems.find((item) => item.key === activeNav) ?? null);
   const activeLabel = activeItem.label ?? t(activeItem.labelKey ?? activeItem.key);
 
   const sectionGroups = SECTION_ORDER.map((section) => ({
@@ -311,27 +285,13 @@ export function AppSettingsDialog({
             ) : activeNav === "agent-updates" ? (
               <AgentUpdatesPanel key="agent-updates" />
             ) : activeNav === ALL_AGENT_CONFIGS_NAV_KEY ? (
-              <AllAgentConfigsPanel key="all-agent-configs" />
+              <AllAgentConfigsPanel key="all-agent-configs" themeVariant={themeVariant} />
             ) : activeNav === "hooks" ? (
               <HooksPanel key="hooks" />
             ) : activeNav === "skills" ? (
               <SkillsPanel key="skills" />
             ) : activeNav === "about" ? (
               <AboutPanel key="about" />
-            ) : activeNav === ADD_AGENT_NAV_KEY ? (
-              <AddAgentPanel key="add-agent" onSaved={(agentId) => setActiveNav(agentId)} />
-            ) : activeAgentItem ? (
-              <AgentConfigPanel
-                key={activeNav}
-                agentKey={activeNav as AgentKey}
-                agentLabel={activeAgentItem.label ?? activeLabel}
-                filePath={activeAgentItem.filePath!}
-                lang={activeAgentItem.lang!}
-                themeVariant={themeVariant}
-                deletable={activeAgentItem.custom === true}
-                onDeleted={() => setActiveNav("general")}
-                onImported={(agentId) => setActiveNav(agentId)}
-              />
             ) : (
               <GeneralPanel
                 key="general-fallback"

@@ -1,12 +1,13 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import type { NotificationResult } from "../types";
+import type { NotificationItem, NotificationResult } from "../types";
 import { useI18n } from "../i18n";
 
 interface NotificationsContextValue {
   result: NotificationResult | null;
   loading: boolean;
   error: string | null;
+  latestUpdate: NotificationItem | null;
   fetchNotifications: (force?: boolean) => Promise<void>;
   markRead: (id: string) => Promise<void>;
   markAllRead: () => Promise<void>;
@@ -46,12 +47,12 @@ export function NotificationsProvider({ children }: { children: React.ReactNode 
   useEffect(() => {
     fetchNotifications(true);
     const POLL_INTERVAL_MS = 60 * 1000;
-    const interval = setInterval(() => fetchNotifications(true), POLL_INTERVAL_MS);
+    const interval = setInterval(() => fetchNotifications(false), POLL_INTERVAL_MS);
     const handleVisibilityChange = () => {
-      if (document.visibilityState === "visible") void fetchNotifications(true);
+      if (document.visibilityState === "visible") void fetchNotifications(false);
     };
     const handleFocus = () => {
-      void fetchNotifications(true);
+      void fetchNotifications(false);
     };
     document.addEventListener("visibilitychange", handleVisibilityChange);
     window.addEventListener("focus", handleFocus);
@@ -91,16 +92,22 @@ export function NotificationsProvider({ children }: { children: React.ReactNode 
     }
   }, []);
 
+  const latestUpdate = useMemo(() => {
+    if (!result) return null;
+    return result.notifications.find((n) => n.newerThanCurrent && n.releaseTag) ?? null;
+  }, [result]);
+
   const value = useMemo(
     () => ({
       result,
       loading,
       error,
+      latestUpdate,
       fetchNotifications,
       markRead,
       markAllRead,
     }),
-    [error, fetchNotifications, loading, markAllRead, markRead, result],
+    [error, fetchNotifications, latestUpdate, loading, markAllRead, markRead, result],
   );
 
   return <NotificationsContext.Provider value={value}>{children}</NotificationsContext.Provider>;

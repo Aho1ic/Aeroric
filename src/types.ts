@@ -282,6 +282,7 @@ export interface NotificationItem {
   createdAt: string;
   isRead: boolean;
   releaseTag?: string | null;
+  newerThanCurrent?: boolean;
   updateInstallSupported?: boolean;
 }
 

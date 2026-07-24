@@ -7,7 +7,7 @@ import type {
   FontFamily,
 } from "../types";
 import { OPEN_APP_SETTINGS_EVENT } from "./app-settings/types";
-import { NotificationBell } from "./NotificationBell";
+import { NotificationBell, UpdateBanner } from "./NotificationBell";
 import { ENABLE_USAGE_INSIGHTS } from "../platform";
 import { UsagePopover } from "./UsagePopover";
 import { useI18n } from "../i18n";
@@ -40,6 +40,7 @@ export function SidebarFooterActions({
 
   return (
     <>
+      <UpdateBanner />
       <div style={s.sidebarFooterActions}>
         <NotificationBell />
         <button

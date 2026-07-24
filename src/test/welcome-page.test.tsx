@@ -9,6 +9,7 @@ import { layout } from "../styles";
 
 vi.mock("../components/NotificationBell", () => ({
   NotificationBell: () => null,
+  UpdateBanner: () => null,
 }));
 
 vi.mock("../components/recursive-hero-effect/recursive-hero-effect", () => ({

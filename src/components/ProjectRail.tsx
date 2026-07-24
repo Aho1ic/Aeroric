@@ -769,7 +769,7 @@ export function ProjectRail({
 
   const openAgentSettings = () => {
     window.dispatchEvent(
-      new CustomEvent(OPEN_APP_SETTINGS_EVENT, { detail: { initialNav: "codex" } }),
+      new CustomEvent(OPEN_APP_SETTINGS_EVENT, { detail: { initialNav: "__all_agent_configs__" } }),
     );
   };
 

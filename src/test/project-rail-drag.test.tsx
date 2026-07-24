@@ -7,6 +7,7 @@ import { ProjectRail } from "../components/ProjectRail";
 
 vi.mock("../components/NotificationBell", () => ({
   NotificationBell: () => null,
+  UpdateBanner: () => null,
 }));
 
 function project(id: string, name: string, orderIndex: number): Project {
@@ -189,7 +190,7 @@ describe("ProjectRail project dragging", () => {
 
     expect(listener).toHaveBeenCalledTimes(1);
     expect(listener.mock.calls[0][0]).toMatchObject({
-      detail: { initialNav: "codex" },
+      detail: { initialNav: "__all_agent_configs__" },
     });
 
     window.removeEventListener("aeroric:open-app-settings", listener);

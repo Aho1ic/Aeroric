@@ -11,6 +11,7 @@ import {
   AlertCircle,
   Download,
   RotateCcw,
+  ArrowUpCircle,
 } from "lucide-react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { invoke } from "@tauri-apps/api/core";
@@ -462,5 +463,63 @@ export function NotificationBell({
         </div>
       )}
     </>
+  );
+}
+
+export function UpdateBanner() {
+  const { t } = useI18n();
+  const { latestUpdate } = useNotifications();
+  const [dismissed, setDismissed] = useState<string | null>(null);
+
+  if (!latestUpdate || !latestUpdate.releaseTag || latestUpdate.releaseTag === dismissed)
+    return null;
+
+  return (
+    <div
+      style={{
+        margin: "0 6px 6px",
+        padding: "6px 10px",
+        borderRadius: 8,
+        background: "var(--accent-subtle)",
+        border: "1px solid var(--accent)",
+        display: "flex",
+        alignItems: "center",
+        gap: 6,
+        cursor: "default",
+      }}
+    >
+      <ArrowUpCircle size={14} strokeWidth={2} color="var(--accent)" style={{ flexShrink: 0 }} />
+      <span
+        style={{
+          fontSize: 11,
+          fontWeight: 600,
+          color: "var(--accent)",
+          flex: 1,
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+          whiteSpace: "nowrap",
+        }}
+      >
+        {t("notification.updateAvailable", { tag: latestUpdate.releaseTag })}
+      </span>
+      <button
+        type="button"
+        onClick={() => setDismissed(latestUpdate.releaseTag ?? null)}
+        style={{
+          background: "none",
+          border: "none",
+          cursor: "pointer",
+          padding: 1,
+          borderRadius: 4,
+          display: "flex",
+          alignItems: "center",
+          color: "var(--text-hint)",
+          flexShrink: 0,
+        }}
+        title={t("common.close")}
+      >
+        <X size={12} strokeWidth={2} />
+      </button>
+    </div>
   );
 }

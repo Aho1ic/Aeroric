@@ -16,6 +16,7 @@ vi.mock("../components/AppSettingsDialog", () => ({
 
 vi.mock("../components/NotificationBell", () => ({
   NotificationBell: () => null,
+  UpdateBanner: () => null,
 }));
 
 vi.mock("../components/UsagePopover", () => ({

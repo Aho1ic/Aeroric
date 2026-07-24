@@ -54,7 +54,7 @@ describe("AllAgentConfigsPanel", () => {
 
     render(
       <I18nProvider>
-        <AllAgentConfigsPanel />
+        <AllAgentConfigsPanel themeVariant="light" />
       </I18nProvider>,
     );
 
