@@ -395,6 +395,7 @@ pub fn run() {
             app_settings::export_all_agent_config_bundle,
             app_settings::import_agent_config_bundle,
             app_settings::import_all_agent_config_bundle,
+            app_settings::import_cc_switch_config,
             app_settings::save_agent_paths,
             app_settings::save_custom_agent_profile,
             app_settings::setup_agent_profile,

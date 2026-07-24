@@ -1,4 +1,3 @@
-import { useState } from "react";
 import type { CSSProperties } from "react";
 import { ChevronRight } from "lucide-react";
 import type { AgentOption } from "../../agents";
@@ -13,7 +12,6 @@ const cardStyle: CSSProperties = {
   borderRadius: 10,
   background: "transparent",
   overflow: "hidden",
-  transition: "transform 160ms ease, border-color 160ms ease, background 160ms ease, box-shadow 160ms ease",
   cursor: "pointer",
 };
 
@@ -22,7 +20,6 @@ const barStyle: CSSProperties = {
   borderRadius: "var(--radius-md)",
   background: "color-mix(in srgb, var(--bg-card) 78%, var(--bg-hover))",
   overflow: "hidden",
-  transition: "transform 160ms ease, border-color 160ms ease, background 160ms ease, box-shadow 160ms ease",
   cursor: "pointer",
   minHeight: 58,
 };
@@ -72,7 +69,6 @@ export function AgentCardItem({
   onClick?: () => void;
 }) {
   const { t } = useI18n();
-  const [hovered, setHovered] = useState(false);
   const isBuiltIn = isBuiltInAgent(option.value);
 
   const containerStyle = viewMode === "card" ? cardStyle : barStyle;
@@ -80,19 +76,8 @@ export function AgentCardItem({
 
   return (
     <div
-      style={{
-        ...containerStyle,
-        borderColor: hovered
-          ? "color-mix(in srgb, var(--accent) 34%, var(--border-medium))"
-          : undefined,
-        background: hovered ? "var(--bg-subtle)" : undefined,
-        transform: hovered ? "translateY(-3px)" : undefined,
-        boxShadow: hovered
-          ? "inset 0 1px 0 color-mix(in srgb, white 8%, transparent), 0 14px 34px color-mix(in srgb, var(--accent) 10%, transparent)"
-          : undefined,
-      }}
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
+      className="agent-card-item"
+      style={containerStyle}
     >
       <div
         style={{ ...summaryBaseStyle, padding: summaryPadding }}

@@ -148,7 +148,7 @@ describe("UsageDashboard", () => {
     expect(container.querySelector(".usage-chart-home")).toHaveStyle({ height: "354px" });
     expect(container.querySelectorAll(".usage-chart-axis-tick")).toHaveLength(6);
     expect(container.querySelectorAll(".usage-chart-grid > span")).toHaveLength(6);
-    expect(container.querySelector(".usage-metric-card")).toHaveStyle({ borderRadius: "8px" });
+    expect(container.querySelector(".usage-metric-card")).toHaveStyle({ borderRadius: "var(--radius-md)" });
 
     await user.click(screen.getByRole("button", { name: "当天" }));
     await waitFor(() => {

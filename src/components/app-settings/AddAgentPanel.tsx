@@ -1,7 +1,8 @@
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type React from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Check, KeyRound, Plus, RefreshCw, Server } from "lucide-react";
+import { readText } from "@tauri-apps/plugin-clipboard-manager";
+import { Check, Clipboard, KeyRound, Plus, RefreshCw, Server, X } from "lucide-react";
 import { sanitizeAgentId } from "../../agents";
 import { useI18n } from "../../i18n";
 import s from "../../styles";
@@ -97,7 +98,24 @@ export function AddAgentPanel({ onSaved }: { onSaved: (agentId: string) => void 
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [clipboardData, setClipboardData] = useState<{ url: string; key: string } | null>(null);
   const modelInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    readText()
+      .then((text) => {
+        if (!text) return;
+        try {
+          const obj = JSON.parse(text.trim());
+          if (typeof obj === "object" && obj !== null && typeof obj.url === "string" && typeof obj.key === "string") {
+            setClipboardData({ url: obj.url, key: obj.key });
+          }
+        } catch {
+          // not valid JSON, ignore
+        }
+      })
+      .catch(() => {});
+  }, []);
 
   const generatedAgentId = useMemo(
     () => deriveAgentId(label, baseUrl, kind),
@@ -202,6 +220,81 @@ export function AddAgentPanel({ onSaved }: { onSaved: (agentId: string) => void 
           }}
         >
           <Check size={13} /> {t("common.saved")}
+        </div>
+      )}
+
+      {clipboardData && (
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 10,
+            padding: "9px 12px",
+            border: "1px solid color-mix(in srgb, var(--accent) 30%, var(--border-medium))",
+            borderRadius: "var(--radius-md)",
+            background: "color-mix(in srgb, var(--accent) 6%, var(--bg-card))",
+            fontSize: 12,
+          }}
+        >
+          <Clipboard size={13} style={{ flexShrink: 0, color: "var(--accent)" }} />
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontWeight: 600, fontSize: 11.5, color: "var(--text-secondary)", marginBottom: 3 }}>
+              {t("appSettings.clipboardDetected")}
+            </div>
+            <div
+              style={{
+                fontSize: 11,
+                color: "var(--text-hint)",
+                fontFamily: "var(--font-mono)",
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
+              }}
+            >
+              {clipboardData.url} · Key: {clipboardData.key.slice(0, 4)}••••
+              {clipboardData.key.length > 8 ? clipboardData.key.slice(-4) : ""}
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              setBaseUrl(clipboardData.url);
+              setApiKey(clipboardData.key);
+              setClipboardData(null);
+            }}
+            style={{
+              padding: "4px 10px",
+              border: "1px solid var(--accent)",
+              borderRadius: 6,
+              background: "color-mix(in srgb, var(--accent) 12%, transparent)",
+              color: "var(--accent)",
+              fontSize: 11.5,
+              fontWeight: 600,
+              cursor: "pointer",
+              whiteSpace: "nowrap",
+            }}
+          >
+            {t("appSettings.clipboardApply")}
+          </button>
+          <button
+            type="button"
+            onClick={() => setClipboardData(null)}
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              justifyContent: "center",
+              width: 20,
+              height: 20,
+              border: "none",
+              borderRadius: 4,
+              background: "transparent",
+              color: "var(--text-hint)",
+              cursor: "pointer",
+              flexShrink: 0,
+            }}
+          >
+            <X size={12} />
+          </button>
         </div>
       )}
 

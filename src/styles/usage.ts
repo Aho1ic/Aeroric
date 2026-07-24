@@ -96,9 +96,10 @@ export const usage = {
     justifyContent: "space-between",
     padding: "14px 15px",
     border: "1px solid color-mix(in srgb, var(--border-medium) 86%, transparent)",
-    borderRadius: 8,
-    background:
-      "linear-gradient(180deg, color-mix(in srgb, var(--bg-card) 98%, white 2%), color-mix(in srgb, var(--bg-card) 92%, var(--bg-subtle) 8%))",
+    borderRadius: "var(--radius-md)",
+    background: "color-mix(in srgb, var(--bg-card) 72%, transparent)",
+    backdropFilter: "blur(12px) saturate(1.15)",
+    WebkitBackdropFilter: "blur(12px) saturate(1.15)",
     boxShadow:
       "inset 0 1px 0 color-mix(in srgb, white 7%, transparent), 0 4px 12px color-mix(in srgb, var(--text-primary) 4%, transparent)",
   },
@@ -139,9 +140,10 @@ export const usage = {
     marginTop: 14,
     padding: "17px 18px 16px",
     border: "1px solid color-mix(in srgb, var(--border-medium) 90%, transparent)",
-    borderRadius: 8,
-    background:
-      "linear-gradient(180deg, color-mix(in srgb, var(--bg-card) 98%, white 2%), var(--bg-card))",
+    borderRadius: "var(--radius-md)",
+    background: "color-mix(in srgb, var(--bg-card) 72%, transparent)",
+    backdropFilter: "blur(12px) saturate(1.15)",
+    WebkitBackdropFilter: "blur(12px) saturate(1.15)",
     boxShadow:
       "inset 0 1px 0 color-mix(in srgb, white 7%, transparent), 0 6px 18px color-mix(in srgb, var(--text-primary) 5%, transparent)",
   },
@@ -362,9 +364,10 @@ export const usage = {
     gap: 14,
     padding: 16,
     border: "1px solid color-mix(in srgb, var(--border-medium) 78%, transparent)",
-    borderRadius: 8,
-    background:
-      "linear-gradient(180deg, color-mix(in srgb, var(--bg-card) 98%, white 2%), var(--bg-card))",
+    borderRadius: "var(--radius-md)",
+    background: "color-mix(in srgb, var(--bg-card) 72%, transparent)",
+    backdropFilter: "blur(12px) saturate(1.15)",
+    WebkitBackdropFilter: "blur(12px) saturate(1.15)",
     boxShadow:
       "inset 0 1px 0 color-mix(in srgb, white 7%, transparent), 0 4px 12px color-mix(in srgb, var(--text-primary) 4%, transparent)",
   },

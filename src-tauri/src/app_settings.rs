@@ -2674,6 +2674,244 @@ pub async fn import_all_agent_config_bundle(
 }
 
 #[tauri::command]
+pub async fn import_cc_switch_config(
+    input_path: String,
+) -> Result<AllAgentConfigImportResult, String> {
+    tokio::task::spawn_blocking(move || {
+        let raw = fs::read_to_string(&input_path).map_err(|e| e.to_string())?;
+        if !raw.contains("-- CC Switch") && !raw.contains("providers") {
+            return Err("Not a valid CC Switch export file".to_string());
+        }
+        let agents = parse_cc_switch_providers(&raw)?;
+        if agents.is_empty() {
+            return Err("No provider configurations found in CC Switch export".to_string());
+        }
+        let _guard = settings_lock().lock();
+        let mut settings = load_settings_unlocked();
+        let mut imported_agent_ids = Vec::with_capacity(agents.len());
+        for agent in agents {
+            let result = import_agent_config_entry(&mut settings, agent)?;
+            imported_agent_ids.push(result.agent_id);
+        }
+        let dir = aeroric_dir()?;
+        fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        let normalized = normalize_settings(settings);
+        let raw = serde_json::to_string_pretty(&normalized).map_err(|e| e.to_string())?;
+        atomic_write_private(&settings_path()?, &raw)?;
+        clear_cached_versions();
+        Ok(AllAgentConfigImportResult { imported_agent_ids })
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+fn parse_cc_switch_providers(sql: &str) -> Result<Vec<AgentConfigBundleAgent>, String> {
+    let mut agents = Vec::new();
+    for line in sql.lines() {
+        let trimmed = line.trim();
+        if !trimmed.starts_with("INSERT INTO \"providers\"") && !trimmed.starts_with("INSERT INTO providers") {
+            continue;
+        }
+        // Extract column names from INSERT INTO "providers" ("col1", "col2", ...) VALUES (...)
+        let cols_start = match trimmed.find('(') {
+            Some(pos) => pos + 1,
+            None => continue,
+        };
+        let cols_end = match trimmed[cols_start..].find(')') {
+            Some(pos) => cols_start + pos,
+            None => continue,
+        };
+        let cols_str = &trimmed[cols_start..cols_end];
+        let columns: Vec<&str> = cols_str
+            .split(',')
+            .map(|c| c.trim().trim_matches('"').trim_matches('\''))
+            .collect();
+
+        // Find VALUES (...) part
+        let values_marker = match trimmed[cols_end..].find("VALUES") {
+            Some(pos) => cols_end + pos + 6,
+            None => match trimmed[cols_end..].find("values") {
+                Some(pos) => cols_end + pos + 6,
+                None => continue,
+            },
+        };
+        let values_str = trimmed[values_marker..].trim();
+        let values_str = values_str.trim_start_matches('(').trim_end_matches(';').trim_end_matches(')');
+        let values = split_sql_values(values_str);
+
+        if values.len() != columns.len() {
+            continue;
+        }
+
+        let get_col = |name: &str| -> String {
+            columns
+                .iter()
+                .position(|c| *c == name)
+                .and_then(|idx| values.get(idx))
+                .map(|v| unescape_sql_string(v))
+                .unwrap_or_default()
+        };
+
+        let app_type = get_col("app_type");
+        let name = get_col("name");
+        let settings_config = get_col("settings_config");
+        let meta_str = get_col("meta");
+
+        if name.is_empty() || settings_config.is_empty() {
+            continue;
+        }
+
+        let is_codex = app_type == "codex";
+        let is_claude = app_type == "claude";
+        if !is_codex && !is_claude {
+            continue;
+        }
+
+        let config: serde_json::Value = match serde_json::from_str(&settings_config) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+
+        let meta: serde_json::Value = serde_json::from_str(&meta_str).unwrap_or_default();
+
+        let (base_url, api_key, models) = if is_claude {
+            let env = config.get("env").and_then(|v| v.as_object());
+            let base_url = env
+                .and_then(|e| e.get("ANTHROPIC_BASE_URL"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let api_key_field = meta
+                .get("apiKeyField")
+                .and_then(|v| v.as_str())
+                .unwrap_or("ANTHROPIC_AUTH_TOKEN");
+            let api_key = env
+                .and_then(|e| e.get(api_key_field).or_else(|| e.get("ANTHROPIC_AUTH_TOKEN")).or_else(|| e.get("ANTHROPIC_API_KEY")))
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let mut model_list = Vec::new();
+            for key in &["ANTHROPIC_MODEL", "ANTHROPIC_DEFAULT_HAIKU_MODEL", "ANTHROPIC_DEFAULT_SONNET_MODEL", "ANTHROPIC_DEFAULT_OPUS_MODEL"] {
+                if let Some(m) = env.and_then(|e| e.get(*key)).and_then(|v| v.as_str()) {
+                    let m = m.to_string();
+                    if !m.is_empty() && !model_list.contains(&m) {
+                        model_list.push(m);
+                    }
+                }
+            }
+            (base_url, api_key, model_list)
+        } else {
+            // codex
+            let api_key = config
+                .get("auth")
+                .and_then(|a| a.get("OPENAI_API_KEY"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let base_url = config
+                .get("env")
+                .and_then(|e| e.as_object())
+                .and_then(|e| e.get("OPENAI_BASE_URL").or_else(|| e.get("OPENAI_API_BASE")))
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let config_toml = config
+                .get("config")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let mut model_list = Vec::new();
+            for toml_line in config_toml.lines() {
+                let toml_line = toml_line.trim();
+                if toml_line.starts_with("model") && toml_line.contains('=') {
+                    let val = toml_line.splitn(2, '=').nth(1).unwrap_or("").trim().trim_matches('"');
+                    if !val.is_empty() && !model_list.contains(&val.to_string()) {
+                        model_list.push(val.to_string());
+                    }
+                }
+            }
+            (base_url, api_key, model_list)
+        };
+
+        if api_key.is_empty() && base_url.is_empty() {
+            continue;
+        }
+
+        let agent_id = sanitize_custom_agent_id(&format!(
+            "ccswitch_{}_{}",
+            name.chars()
+                .filter(|c| c.is_alphanumeric() || *c == '_' || *c == '-')
+                .take(30)
+                .collect::<String>(),
+            if is_codex { "codex" } else { "claude" }
+        ));
+
+        agents.push(AgentConfigBundleAgent {
+            id: agent_id,
+            label: name,
+            kind: AgentConfigBundleKind::Custom,
+            codex_like: is_codex,
+            config_lang: "shellscript".to_string(),
+            config_content: String::new(),
+            config_present: true,
+            base_url,
+            api_key,
+            models,
+            enable_1m_context: false,
+        });
+    }
+    Ok(agents)
+}
+
+fn split_sql_values(input: &str) -> Vec<String> {
+    let mut values = Vec::new();
+    let mut current = String::new();
+    let mut in_string = false;
+    let chars: Vec<char> = input.chars().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        let ch = chars[i];
+        if in_string {
+            if ch == '\'' {
+                if i + 1 < chars.len() && chars[i + 1] == '\'' {
+                    current.push('\'');
+                    i += 2;
+                    continue;
+                }
+                in_string = false;
+            } else {
+                current.push(ch);
+            }
+        } else {
+            match ch {
+                '\'' => {
+                    in_string = true;
+                }
+                ',' => {
+                    values.push(current.trim().to_string());
+                    current = String::new();
+                    i += 1;
+                    continue;
+                }
+                _ => {
+                    current.push(ch);
+                }
+            }
+        }
+        i += 1;
+    }
+    values.push(current.trim().to_string());
+    values
+}
+
+fn unescape_sql_string(value: &str) -> String {
+    let trimmed = value.trim();
+    if trimmed == "NULL" || trimmed.is_empty() {
+        return String::new();
+    }
+    trimmed.replace("''", "'")
+}
+
+#[tauri::command]
 pub async fn save_agent_paths(
     claude_path: String,
     claude_gpt55_path: String,

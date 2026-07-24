@@ -349,6 +349,23 @@ body {
   }
 }
 
+.agent-card-item {
+  transition:
+    transform 160ms ease,
+    border-color 160ms ease,
+    background 160ms ease,
+    box-shadow 160ms ease;
+}
+
+.agent-card-item:hover {
+  border-color: color-mix(in srgb, var(--accent) 34%, var(--border-medium)) !important;
+  background: var(--bg-subtle) !important;
+  transform: translateY(-3px);
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, white 8%, transparent),
+    0 14px 34px color-mix(in srgb, var(--accent) 10%, transparent) !important;
+}
+
 .usage-metric-card {
   animation: usage-card-enter 220ms ease both;
   transition:

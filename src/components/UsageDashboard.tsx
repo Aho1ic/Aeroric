@@ -375,17 +375,24 @@ function UsageChart({
                     style={segment(day.cacheReadTokens, "var(--usage-chart-cache-read)")}
                   />
                 </div>
-                {active && (
-                  <span
-                    className="usage-chart-bar-value"
-                    style={{
-                      ...s.usageChartBarValue,
-                      bottom: Math.min(immersive ? 326 : 236, height + (immersive ? 42 : 34)),
-                    }}
-                  >
-                    {formatAxisValue(locale, day.totalTokens)}
-                  </span>
-                )}
+                {active && (() => {
+                  const maxBottom = immersive ? 326 : 236;
+                  const naturalBottom = height + (immersive ? 42 : 34);
+                  const nearTop = naturalBottom > maxBottom - 10;
+                  return (
+                    <span
+                      className="usage-chart-bar-value"
+                      style={{
+                        ...s.usageChartBarValue,
+                        ...(nearTop
+                          ? { bottom: "auto", top: immersive ? 12 : 8 }
+                          : { bottom: Math.min(maxBottom, naturalBottom) }),
+                      }}
+                    >
+                      {formatAxisValue(locale, day.totalTokens)}
+                    </span>
+                  );
+                })()}
                 <div
                   className="usage-chart-label"
                   style={{
@@ -411,7 +418,15 @@ function UsageChart({
         </div>
       </div>
       {activeDay && (
-        <div style={s.usageChartTooltip} role="status">
+        <div
+          style={{
+            ...s.usageChartTooltip,
+            ...(activeIndex !== null && activeIndex > series.length / 2
+              ? { left: 10, right: "auto" }
+              : { right: 10, left: "auto" }),
+          }}
+          role="status"
+        >
           <div style={s.usageChartTooltipHead}>
             <strong>
               {hourly && activeDay.hour !== undefined

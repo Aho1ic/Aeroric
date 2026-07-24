@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
 import {
   Archive,
+  ChevronDown,
   Download,
   LayoutGrid,
   LayoutList,
@@ -45,6 +46,8 @@ export function AllAgentConfigsPanel({ themeVariant }: { themeVariant: ThemeVari
   const [showAddAgentModal, setShowAddAgentModal] = useState(false);
   const [editingAgent, setEditingAgent] = useState<AgentOption | null>(null);
   const [settings, setSettings] = useState<AppSettings | null>(null);
+  const [showImportMenu, setShowImportMenu] = useState(false);
+  const importMenuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -115,6 +118,7 @@ export function AllAgentConfigsPanel({ themeVariant }: { themeVariant: ThemeVari
 
   async function handleImport() {
     if (exporting || importing) return;
+    setShowImportMenu(false);
     const inputPath = await openDialog({
       title: t("appSettings.importAllAgentConfigs"),
       multiple: false,
@@ -142,6 +146,48 @@ export function AllAgentConfigsPanel({ themeVariant }: { themeVariant: ThemeVari
       setImporting(false);
     }
   }
+
+  async function handleImportCcSwitch() {
+    if (exporting || importing) return;
+    setShowImportMenu(false);
+    const inputPath = await openDialog({
+      title: t("appSettings.importFromCcSwitch"),
+      multiple: false,
+      directory: false,
+      filters: [{ name: t("appSettings.ccSwitchConfigBundle"), extensions: ["sql"] }],
+    });
+    if (!inputPath || Array.isArray(inputPath)) return;
+    setImporting(true);
+    setMessage(null);
+    setError(null);
+    try {
+      const result = await invoke<{ imported_agent_ids: string[] }>(
+        "import_cc_switch_config",
+        { inputPath },
+      );
+      window.dispatchEvent(new Event(APP_SETTINGS_CHANGED_EVENT));
+      setMessage(
+        t("appSettings.allAgentConfigsImported", {
+          count: result.imported_agent_ids.length,
+        }),
+      );
+    } catch (reason) {
+      setError(String(reason));
+    } finally {
+      setImporting(false);
+    }
+  }
+
+  useEffect(() => {
+    if (!showImportMenu) return;
+    function handleClickOutside(e: MouseEvent) {
+      if (importMenuRef.current && !importMenuRef.current.contains(e.target as Node)) {
+        setShowImportMenu(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, [showImportMenu]);
 
   function handleAgentSaved(agentId: string) {
     setShowAddAgentModal(false);
@@ -227,17 +273,91 @@ export function AllAgentConfigsPanel({ themeVariant }: { themeVariant: ThemeVari
             marginTop: 18,
           }}
         >
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => void handleImport()}
-            disabled={importing || exporting}
-          >
-            <Upload size={13} />
-            {importing
-              ? t("appSettings.importingAllAgentConfigs")
-              : t("appSettings.importAllAgentConfigs")}
-          </Button>
+          <div ref={importMenuRef} style={{ position: "relative" }}>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setShowImportMenu((prev) => !prev)}
+              disabled={importing || exporting}
+            >
+              <Upload size={13} />
+              {importing
+                ? t("appSettings.importingAllAgentConfigs")
+                : t("appSettings.importAllAgentConfigs")}
+              <ChevronDown size={11} />
+            </Button>
+            {showImportMenu && (
+              <div
+                style={{
+                  position: "absolute",
+                  top: "calc(100% + 4px)",
+                  right: 0,
+                  minWidth: 180,
+                  padding: 4,
+                  border: "1px solid var(--border-medium)",
+                  borderRadius: "var(--radius-md)",
+                  background: "color-mix(in srgb, var(--bg-card) 92%, transparent)",
+                  backdropFilter: "blur(18px) saturate(1.3)",
+                  WebkitBackdropFilter: "blur(18px) saturate(1.3)",
+                  boxShadow: "var(--shadow-popover)",
+                  zIndex: 10,
+                }}
+              >
+                <button
+                  type="button"
+                  onClick={() => void handleImport()}
+                  style={{
+                    width: "100%",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 8,
+                    padding: "7px 10px",
+                    border: "none",
+                    borderRadius: 6,
+                    background: "transparent",
+                    color: "var(--text-primary)",
+                    fontSize: 12.5,
+                    cursor: "pointer",
+                    textAlign: "left",
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.background = "var(--bg-hover)";
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.background = "transparent";
+                  }}
+                >
+                  {t("appSettings.importFromAeroric")}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void handleImportCcSwitch()}
+                  style={{
+                    width: "100%",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 8,
+                    padding: "7px 10px",
+                    border: "none",
+                    borderRadius: 6,
+                    background: "transparent",
+                    color: "var(--text-primary)",
+                    fontSize: 12.5,
+                    cursor: "pointer",
+                    textAlign: "left",
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.background = "var(--bg-hover)";
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.background = "transparent";
+                  }}
+                >
+                  {t("appSettings.importFromCcSwitch")}
+                </button>
+              </div>
+            )}
+          </div>
           <Button
             variant="default"
             size="sm"

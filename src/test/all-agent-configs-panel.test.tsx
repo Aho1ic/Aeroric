@@ -66,7 +66,8 @@ describe("AllAgentConfigsPanel", () => {
       }),
     );
 
-    await user.click(screen.getByRole("button", { name: "Import all" }));
+    await user.click(screen.getByRole("button", { name: /Import all/ }));
+    await user.click(screen.getByText("From Aeroric"));
     await waitFor(() =>
       expect(invokeMock).toHaveBeenCalledWith("import_all_agent_config_bundle", {
         inputPath: "/tmp/import.aeroric-agents.json",
