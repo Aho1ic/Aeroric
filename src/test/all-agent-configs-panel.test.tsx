@@ -58,7 +58,7 @@ describe("AllAgentConfigsPanel", () => {
       </I18nProvider>,
     );
 
-    expect(screen.getByText(/API keys and access tokens/)).toBeVisible();
+    expect(screen.queryByText(/API keys and access tokens/)).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Export all" }));
     await waitFor(() =>
       expect(invokeMock).toHaveBeenCalledWith("export_all_agent_config_bundle", {

@@ -129,7 +129,7 @@ describe("UsageDashboard", () => {
     expect(screen.queryByText("$0.1234")).not.toBeInTheDocument();
   });
 
-  it("keeps the date range on one line and renders today as an hourly immersive plot", async () => {
+  it("keeps the date range on one line and renders past 24h as an hourly immersive plot", async () => {
     localStorage.setItem("aeroric:language", "zh");
     const user = userEvent.setup();
     const { container } = render(
@@ -152,7 +152,7 @@ describe("UsageDashboard", () => {
       borderRadius: "var(--radius-lg)",
     });
 
-    await user.click(screen.getByRole("button", { name: "当天" }));
+    await user.click(screen.getByRole("button", { name: "过去24H" }));
     await waitFor(() => {
       const todayBars = Array.from(container.querySelectorAll<HTMLElement>(".usage-chart-bar"));
       expect(todayBars).toHaveLength(6);

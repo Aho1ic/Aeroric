@@ -591,42 +591,49 @@ fn aggregate_requests(
     to: chrono::NaiveDate,
     agent: Option<UsageAgent>,
     hourly: bool,
+    min_timestamp: Option<f64>,
 ) -> (UsageStatisticsTotals, Vec<UsageStatisticsDay>) {
     let mut totals = UsageStatisticsTotals::default();
 
     if hourly {
-        let current_hour = chrono::Local::now().hour();
-        let mut hours = BTreeMap::<u32, UsageStatisticsTotals>::new();
-        for hour in 0..=current_hour {
-            hours.insert(hour, UsageStatisticsTotals::default());
-        }
-
+        // 过去 24 小时滚动窗口:按 (日期, 小时) 聚合,零消耗小时不占位。
+        let mut hours = BTreeMap::<(chrono::NaiveDate, u32), UsageStatisticsTotals>::new();
         for request in requests {
-            if request.date != from || request.date > to {
+            if let Some(min_ts) = min_timestamp {
+                if request.timestamp < min_ts {
+                    continue;
+                }
+            }
+            if request.date < from || request.date > to {
                 continue;
             }
             if agent.is_some_and(|selected| selected != request.agent) {
                 continue;
             }
             add_request(&mut totals, request);
-            let hour = chrono::DateTime::from_timestamp(request.timestamp.trunc() as i64, 0)
-                .map(|timestamp| timestamp.with_timezone(&chrono::Local).hour())
-                .unwrap_or_default();
-            if let Some(bucket) = hours.get_mut(&hour) {
-                add_request(bucket, request);
+            if let Some(local) =
+                chrono::DateTime::from_timestamp(request.timestamp.trunc() as i64, 0)
+                    .map(|timestamp| timestamp.with_timezone(&chrono::Local))
+            {
+                let key = (local.date_naive(), local.hour());
+                add_request(hours.entry(key).or_default(), request);
             }
         }
 
         finalize_totals(&mut totals);
         let series = hours
             .into_iter()
-            .map(|(hour, mut bucket)| {
+            .filter_map(|((date, hour), mut bucket)| {
                 finalize_totals(&mut bucket);
-                UsageStatisticsDay {
-                    date: from.to_string(),
+                // 跳过消耗为 0 的小时,图表只展示有用量的时段。
+                if bucket.total_tokens == 0 {
+                    return None;
+                }
+                Some(UsageStatisticsDay {
+                    date: date.to_string(),
                     hour: Some(hour),
                     totals: bucket,
-                }
+                })
             })
             .collect();
         return (totals, series);
@@ -640,6 +647,11 @@ fn aggregate_requests(
     }
 
     for request in requests {
+        if let Some(min_ts) = min_timestamp {
+            if request.timestamp < min_ts {
+                continue;
+            }
+        }
         if request.date < from || request.date > to {
             continue;
         }
@@ -730,13 +742,31 @@ fn read_usage_statistics_sync(range_days: u32, agent: String) -> Result<UsageSta
         _ => return Err("agent must be all, codex, or claude".to_owned()),
     };
 
-    let to = chrono::Local::now().date_naive();
-    let from = to - chrono::Duration::days(i64::from(range_days - 1));
+    let now = chrono::Local::now();
+    let to = now.date_naive();
+    // range_days == 1 表示滚动过去 24 小时,而不是自然日"当天"。
+    let (from, min_timestamp, hourly) = if range_days == 1 {
+        let window_start = now - chrono::Duration::hours(24);
+        (
+            window_start.date_naive(),
+            Some(window_start.timestamp() as f64),
+            true,
+        )
+    } else {
+        (
+            to - chrono::Duration::days(i64::from(range_days - 1)),
+            None,
+            false,
+        )
+    };
     let requests = crate::usage_index::load_requests(from, to)?;
 
-    let (totals, series) = aggregate_requests(&requests, from, to, selected_agent, range_days == 1);
-    let (codex, _) = aggregate_requests(&requests, from, to, Some(UsageAgent::Codex), false);
-    let (claude, _) = aggregate_requests(&requests, from, to, Some(UsageAgent::Claude), false);
+    let (totals, series) =
+        aggregate_requests(&requests, from, to, selected_agent, hourly, min_timestamp);
+    let (codex, _) =
+        aggregate_requests(&requests, from, to, Some(UsageAgent::Codex), false, min_timestamp);
+    let (claude, _) =
+        aggregate_requests(&requests, from, to, Some(UsageAgent::Claude), false, min_timestamp);
 
     Ok(UsageStatistics {
         range_days,
@@ -819,8 +849,14 @@ mod usage_statistics_tests {
             },
         ];
 
-        let (totals, series) =
-            aggregate_requests(&requests, date(2026, 7, 14), date(2026, 7, 15), None, false);
+        let (totals, series) = aggregate_requests(
+            &requests,
+            date(2026, 7, 14),
+            date(2026, 7, 15),
+            None,
+            false,
+            None,
+        );
 
         assert_eq!(totals.request_count, 1);
         assert_eq!(totals.total_tokens, 110);
@@ -844,10 +880,18 @@ mod usage_statistics_tests {
             cache_read_tokens: 20,
         }];
 
-        let (totals, series) = aggregate_requests(&requests, today, today, None, true);
+        let window_start = now - chrono::Duration::hours(24);
+        let (totals, series) = aggregate_requests(
+            &requests,
+            window_start.date_naive(),
+            today,
+            None,
+            true,
+            Some(window_start.timestamp() as f64),
+        );
 
         assert_eq!(totals.request_count, 1);
-        assert_eq!(series.len(), now.hour() as usize + 1);
+        assert_eq!(series.len(), 1);
         assert_eq!(
             series.last().and_then(|bucket| bucket.hour),
             Some(now.hour())
@@ -856,6 +900,76 @@ mod usage_statistics_tests {
             series.last().map(|bucket| bucket.totals.request_count),
             Some(1)
         );
+        assert_eq!(
+            series.last().map(|bucket| bucket.date.clone()),
+            Some(today.to_string())
+        );
+    }
+
+    #[test]
+    fn hourly_aggregation_uses_rolling_24h_window_and_skips_empty_hours() {
+        let now = chrono::Local::now();
+        let today = now.date_naive();
+        let yesterday = today - chrono::Duration::days(1);
+        let window_start = now - chrono::Duration::hours(24);
+        let in_window_old = (now - chrono::Duration::hours(20)).timestamp() as f64;
+        let out_of_window = (now - chrono::Duration::hours(30)).timestamp() as f64;
+        let current = now.timestamp() as f64;
+        let old_local = chrono::DateTime::from_timestamp(in_window_old.trunc() as i64, 0)
+            .unwrap()
+            .with_timezone(&chrono::Local);
+
+        let requests = vec![
+            UsageRequest {
+                timestamp: out_of_window,
+                date: yesterday,
+                agent: UsageAgent::Codex,
+                model: "gpt-5.5".to_owned(),
+                input_tokens: 999,
+                output_tokens: 999,
+                cache_creation_tokens: 0,
+                cache_read_tokens: 0,
+            },
+            UsageRequest {
+                timestamp: in_window_old,
+                date: old_local.date_naive(),
+                agent: UsageAgent::Codex,
+                model: "gpt-5.5".to_owned(),
+                input_tokens: 40,
+                output_tokens: 10,
+                cache_creation_tokens: 0,
+                cache_read_tokens: 0,
+            },
+            UsageRequest {
+                timestamp: current,
+                date: today,
+                agent: UsageAgent::Claude,
+                model: "claude-sonnet-4".to_owned(),
+                input_tokens: 20,
+                output_tokens: 5,
+                cache_creation_tokens: 0,
+                cache_read_tokens: 0,
+            },
+        ];
+
+        let (totals, series) = aggregate_requests(
+            &requests,
+            window_start.date_naive(),
+            today,
+            None,
+            true,
+            Some(window_start.timestamp() as f64),
+        );
+
+        assert_eq!(totals.request_count, 2);
+        assert_eq!(totals.input_tokens, 60);
+        assert!(series.len() >= 1);
+        assert!(series.iter().all(|bucket| bucket.totals.total_tokens > 0));
+        assert!(series.iter().any(|bucket| {
+            bucket.date == today.to_string() && bucket.hour == Some(now.hour())
+        }));
+        // 零消耗小时不会出现在 series 中。
+        assert!(series.iter().all(|bucket| bucket.totals.request_count > 0));
     }
 
     #[test]
@@ -871,8 +985,14 @@ mod usage_statistics_tests {
             cache_read_tokens: 0,
         }];
 
-        let (totals, _) =
-            aggregate_requests(&requests, date(2026, 7, 15), date(2026, 7, 15), None, false);
+        let (totals, _) = aggregate_requests(
+            &requests,
+            date(2026, 7, 15),
+            date(2026, 7, 15),
+            None,
+            false,
+            None,
+        );
 
         assert_eq!(totals.priced_request_count, 0);
         assert_eq!(totals.unpriced_request_count, 1);

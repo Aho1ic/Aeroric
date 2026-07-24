@@ -51,8 +51,6 @@ export const zh: Record<string, string> = {
     "将选中的配置升级到最新版 Claude Code 或 Codex CLI。Aeroric 会同时升级检测到的原生、npm 普通安装和 Homebrew 安装。",
   "appSettings.allAgentConfigs": "Agent 配置",
   "appSettings.allAgentConfigsTitle": "一键迁移所有 Agent 配置",
-  "appSettings.allAgentConfigsSecurityHint":
-    "配置包可能包含自定义 Agent 的 API Key 和访问令牌，请妥善保管。",
   "appSettings.importAllAgentConfigs": "一键导入",
   "appSettings.exportAllAgentConfigs": "一键导出",
   "appSettings.importingAllAgentConfigs": "导入中...",
@@ -226,7 +224,7 @@ export const zh: Record<string, string> = {
   "skill.settings.navLabel": "技能库",
   "skill.settings.hubPath": "技能库路径",
   "skill.settings.hubPathHint":
-    "选一个目录，里面每个子目录是一个 skill（包含 SKILL.md）。Aeroric 会把它登记为一个特殊项目，方便在任务视图里编辑 skill。",
+    "选择存放 skills 的根目录（每个子目录是一个 skill，内含 SKILL.md）。推荐使用 ~/.aeroric/skills_hub；也可选你自己维护的 skills 仓库目录。",
   "skill.settings.choose": "选择目录...",
   "skill.settings.reset": "重置技能库",
   "skill.settings.notConfigured": "未配置",
@@ -1760,7 +1758,7 @@ export const zh: Record<string, string> = {
   "usageStats.title": "使用统计",
   "usageStats.rangeFilter": "统计周期",
   "usageStats.agentFilter": "Agent 类型",
-  "usageStats.today": "当天",
+  "usageStats.today": "过去24H",
   "usageStats.days": "{days}d",
   "usageStats.agent.all": "全部",
   "usageStats.agent.codex": "Codex",

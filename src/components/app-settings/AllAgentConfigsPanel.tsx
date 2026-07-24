@@ -9,7 +9,6 @@ import {
   LayoutList,
   Plus,
   Search,
-  ShieldAlert,
   Upload,
 } from "lucide-react";
 import { useAgentOptions } from "../../hooks/useAgentOptions";
@@ -211,15 +210,13 @@ export function AllAgentConfigsPanel({ themeVariant }: { themeVariant: ThemeVari
         padding: "22px 24px",
       }}
     >
-      {/* Bulk migration section */}
-      {/* backdrop-filter 会创建独立 stacking context,把导入下拉菜单的 z-index 困在
-          section 内;抬高整个 section 的层级,避免下方搜索框(position: relative)
-          按 DOM 顺序绘制在下拉菜单之上 */}
+      {/* Bulk migration section
+          标题与导入/导出同一行,下拉菜单向上展开,避免盖住下方 Agent 搜索框。 */}
       <section
         style={{
           position: "relative",
-          zIndex: 20,
-          padding: 20,
+          zIndex: 30,
+          padding: "16px 18px",
           border: "1px solid var(--border-dim)",
           borderRadius: "var(--radius-lg)",
           background: "color-mix(in srgb, var(--bg-subtle) 72%, transparent)",
@@ -227,160 +224,149 @@ export function AllAgentConfigsPanel({ themeVariant }: { themeVariant: ThemeVari
           WebkitBackdropFilter: "blur(12px) saturate(1.15)",
         }}
       >
-        <div style={{ display: "flex", alignItems: "flex-start", gap: 14 }}>
-          <span
-            style={{
-              width: 38,
-              height: 38,
-              display: "inline-flex",
-              alignItems: "center",
-              justifyContent: "center",
-              flexShrink: 0,
-              borderRadius: 12,
-              color: "var(--accent)",
-              background: "color-mix(in srgb, var(--accent) 10%, transparent)",
-            }}
-          >
-            <Archive size={19} />
-          </span>
-          <div style={{ minWidth: 0, flex: 1 }}>
-            <div style={{ color: "var(--text-primary)", fontSize: 14, fontWeight: 700 }}>
-              {t("appSettings.allAgentConfigsTitle")}
-            </div>
-          </div>
-        </div>
-
-        <div
-          style={{
-            marginTop: 18,
-            display: "flex",
-            alignItems: "flex-start",
-            gap: 8,
-            padding: "10px 12px",
-            border: "1px solid var(--border-dim)",
-            borderRadius: "var(--radius-md)",
-            color: "var(--text-hint)",
-            background: "var(--bg-input)",
-            fontSize: 11.5,
-            lineHeight: 1.5,
-          }}
-        >
-          <ShieldAlert size={14} style={{ flexShrink: 0, marginTop: 1 }} />
-          <span>{t("appSettings.allAgentConfigsSecurityHint")}</span>
-        </div>
-
         <div
           style={{
             display: "flex",
             alignItems: "center",
-            justifyContent: "flex-end",
-            gap: 8,
-            marginTop: 18,
+            gap: 12,
+            flexWrap: "wrap",
           }}
         >
-          <div ref={importMenuRef} style={{ position: "relative" }}>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => setShowImportMenu((prev) => !prev)}
-              disabled={importing || exporting}
-            >
-              <Upload size={13} />
-              {importing
-                ? t("appSettings.importingAllAgentConfigs")
-                : t("appSettings.importAllAgentConfigs")}
-              <ChevronDown size={11} />
-            </Button>
-            {showImportMenu && (
-              <div
-                style={{
-                  position: "absolute",
-                  top: "calc(100% + 4px)",
-                  right: 0,
-                  minWidth: 180,
-                  padding: 4,
-                  border: "1px solid var(--border-medium)",
-                  borderRadius: "var(--radius-md)",
-                  background: "color-mix(in srgb, var(--bg-card) 92%, transparent)",
-                  backdropFilter: "blur(18px) saturate(1.3)",
-                  WebkitBackdropFilter: "blur(18px) saturate(1.3)",
-                  boxShadow: "var(--shadow-popover)",
-                  zIndex: 10,
-                }}
-              >
-                <button
-                  type="button"
-                  onClick={() => void handleImport()}
-                  style={{
-                    width: "100%",
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 8,
-                    padding: "7px 10px",
-                    border: "none",
-                    borderRadius: 6,
-                    background: "transparent",
-                    color: "var(--text-primary)",
-                    fontSize: 12.5,
-                    cursor: "pointer",
-                    textAlign: "left",
-                  }}
-                  onMouseEnter={(e) => {
-                    e.currentTarget.style.background = "var(--bg-hover)";
-                  }}
-                  onMouseLeave={(e) => {
-                    e.currentTarget.style.background = "transparent";
-                  }}
-                >
-                  {t("appSettings.importFromAeroric")}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => void handleImportCcSwitch()}
-                  style={{
-                    width: "100%",
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 8,
-                    padding: "7px 10px",
-                    border: "none",
-                    borderRadius: 6,
-                    background: "transparent",
-                    color: "var(--text-primary)",
-                    fontSize: 12.5,
-                    cursor: "pointer",
-                    textAlign: "left",
-                  }}
-                  onMouseEnter={(e) => {
-                    e.currentTarget.style.background = "var(--bg-hover)";
-                  }}
-                  onMouseLeave={(e) => {
-                    e.currentTarget.style.background = "transparent";
-                  }}
-                >
-                  {t("appSettings.importFromCcSwitch")}
-                </button>
-              </div>
-            )}
-          </div>
-          <Button
-            variant="default"
-            size="sm"
-            onClick={() => void handleExport()}
-            disabled={exporting || importing}
+          <span
+            style={{
+              width: 36,
+              height: 36,
+              display: "inline-flex",
+              alignItems: "center",
+              justifyContent: "center",
+              flexShrink: 0,
+              borderRadius: 11,
+              color: "var(--accent)",
+              background: "color-mix(in srgb, var(--accent) 10%, transparent)",
+            }}
           >
-            <Download size={13} />
-            {exporting
-              ? t("appSettings.exportingAllAgentConfigs")
-              : t("appSettings.exportAllAgentConfigs")}
-          </Button>
+            <Archive size={18} />
+          </span>
+          <div style={{ minWidth: 0, flex: "1 1 160px" }}>
+            <div style={{ color: "var(--text-primary)", fontSize: 14, fontWeight: 700 }}>
+              {t("appSettings.allAgentConfigsTitle")}
+            </div>
+          </div>
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "flex-end",
+              gap: 8,
+              marginLeft: "auto",
+              flex: "0 0 auto",
+            }}
+          >
+            <div ref={importMenuRef} style={{ position: "relative" }}>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setShowImportMenu((prev) => !prev)}
+                disabled={importing || exporting}
+              >
+                <Upload size={13} />
+                {importing
+                  ? t("appSettings.importingAllAgentConfigs")
+                  : t("appSettings.importAllAgentConfigs")}
+                <ChevronDown size={11} />
+              </Button>
+              {showImportMenu && (
+                <div
+                  style={{
+                    position: "absolute",
+                    // 向上展开,不与下方搜索/列表区域重叠
+                    bottom: "calc(100% + 6px)",
+                    right: 0,
+                    minWidth: 180,
+                    padding: 4,
+                    border: "1px solid var(--border-medium)",
+                    borderRadius: "var(--radius-md)",
+                    background: "color-mix(in srgb, var(--bg-card) 96%, transparent)",
+                    backdropFilter: "blur(18px) saturate(1.3)",
+                    WebkitBackdropFilter: "blur(18px) saturate(1.3)",
+                    boxShadow: "var(--shadow-popover)",
+                    zIndex: 40,
+                  }}
+                >
+                  <button
+                    type="button"
+                    onClick={() => void handleImport()}
+                    style={{
+                      width: "100%",
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 8,
+                      padding: "7px 10px",
+                      border: "none",
+                      borderRadius: 6,
+                      background: "transparent",
+                      color: "var(--text-primary)",
+                      fontSize: 12.5,
+                      cursor: "pointer",
+                      textAlign: "left",
+                    }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.background = "var(--bg-hover)";
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.background = "transparent";
+                    }}
+                  >
+                    {t("appSettings.importFromAeroric")}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void handleImportCcSwitch()}
+                    style={{
+                      width: "100%",
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 8,
+                      padding: "7px 10px",
+                      border: "none",
+                      borderRadius: 6,
+                      background: "transparent",
+                      color: "var(--text-primary)",
+                      fontSize: 12.5,
+                      cursor: "pointer",
+                      textAlign: "left",
+                    }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.background = "var(--bg-hover)";
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.background = "transparent";
+                    }}
+                  >
+                    {t("appSettings.importFromCcSwitch")}
+                  </button>
+                </div>
+              )}
+            </div>
+            <Button
+              variant="default"
+              size="sm"
+              onClick={() => void handleExport()}
+              disabled={exporting || importing}
+            >
+              <Download size={13} />
+              {exporting
+                ? t("appSettings.exportingAllAgentConfigs")
+                : t("appSettings.exportAllAgentConfigs")}
+            </Button>
+          </div>
         </div>
 
         {message && (
-          <div style={{ marginTop: 14, color: "var(--success)", fontSize: 12 }}>{message}</div>
+          <div style={{ marginTop: 12, color: "var(--success)", fontSize: 12 }}>{message}</div>
         )}
         {error && (
-          <div style={{ marginTop: 14, color: "var(--danger)", fontSize: 12 }}>{error}</div>
+          <div style={{ marginTop: 12, color: "var(--danger)", fontSize: 12 }}>{error}</div>
         )}
       </section>
 

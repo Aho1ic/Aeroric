@@ -52,8 +52,6 @@ export const en: Record<string, string> = {
     "Upgrade selected configurations to the latest Claude Code or Codex CLI. Aeroric upgrades every detected native, npm, and Homebrew installation for the selected runtime.",
   "appSettings.allAgentConfigs": "Agent Configs",
   "appSettings.allAgentConfigsTitle": "One-click Agent configuration transfer",
-  "appSettings.allAgentConfigsSecurityHint":
-    "The bundle can contain API keys and access tokens from custom Agent configurations. Store it securely.",
   "appSettings.importAllAgentConfigs": "Import all",
   "appSettings.exportAllAgentConfigs": "Export all",
   "appSettings.importingAllAgentConfigs": "Importing...",
@@ -240,7 +238,7 @@ export const en: Record<string, string> = {
   "skill.settings.navLabel": "Skills",
   "skill.settings.hubPath": "Skills Path",
   "skill.settings.hubPathHint":
-    "Pick a folder containing your skill subfolders (each with a SKILL.md). Aeroric registers it as a special project so you can edit skills in the task view.",
+    "Pick the root folder of your skills (each subfolder is one skill with a SKILL.md). Recommended: ~/.aeroric/skills_hub, or any skills repo you maintain.",
   "skill.settings.choose": "Choose...",
   "skill.settings.reset": "Reset Skills",
   "skill.settings.notConfigured": "Not configured",
@@ -1810,7 +1808,7 @@ export const en: Record<string, string> = {
   "usageStats.title": "Usage statistics",
   "usageStats.rangeFilter": "Time range",
   "usageStats.agentFilter": "Agent",
-  "usageStats.today": "Today",
+  "usageStats.today": "24h",
   "usageStats.days": "{days}d",
   "usageStats.agent.all": "All",
   "usageStats.agent.codex": "Codex",

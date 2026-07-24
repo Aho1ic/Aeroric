@@ -187,6 +187,9 @@ function UsageChart({
   const [activeIndex, setActiveIndex] = useState<number | null>(null);
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const hourly = series.some((bucket) => bucket.hour !== undefined);
+  // 跨自然日的 24h 窗口需要在横轴显示日期,避免 14:00 歧义。
+  const multiDay =
+    hourly && new Set(series.map((bucket) => bucket.date)).size > 1;
   const max = Math.max(1, ...series.map((day) => day.totalTokens));
   const labelEvery = hourly
     ? series.length <= 14
@@ -334,7 +337,7 @@ function UsageChart({
 
             return (
               <div
-                key={day.date}
+                key={hourly && day.hour !== undefined ? `${day.date}-${day.hour}` : day.date}
                 className="usage-chart-column"
                 style={{
                   ...s.usageChartColumn,
@@ -410,7 +413,7 @@ function UsageChart({
                   {index % labelEvery === 0 || index === series.length - 1 ? (
                     <strong>
                       {hourly && day.hour !== undefined
-                        ? formatHour(locale, day.date, day.hour)
+                        ? formatHour(locale, day.date, day.hour, multiDay)
                         : formatDate(locale, day.date)}
                     </strong>
                   ) : null}
@@ -525,8 +528,8 @@ function SourceSummary({
   );
 }
 
-// 当天视图只保留最近十几个有用量的小时,零用量小时不占位,图表随之收窄。
-const HOURLY_BUCKET_LIMIT = 14;
+// 过去 24 小时视图最多展示 24 个有用量小时;后端已跳过零用量小时。
+const HOURLY_BUCKET_LIMIT = 24;
 
 export function UsageDashboard({ embedded = false }: { embedded?: boolean }) {
   const { t, language } = useI18n();
