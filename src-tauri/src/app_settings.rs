@@ -3550,6 +3550,24 @@ fn detected_upgrade_manager(program: &str) -> &'static str {
     }
 }
 
+/// Homebrew 有 formula(Cellar,如 `brew install codex`)与 cask(Caskroom,
+/// 如 `brew install --cask claude-code`)两种安装方式,升级命令不同,
+/// 通过已配置二进制的真实路径区分。
+fn detected_homebrew_flavor(program: &str) -> Option<&'static str> {
+    let normalized = canonical_program_path(program)
+        .replace('\\', "/")
+        .to_ascii_lowercase();
+    if normalized.contains("/node_modules/") {
+        None
+    } else if normalized.contains("/caskroom/") {
+        Some("cask")
+    } else if normalized.contains("/cellar/") {
+        Some("formula")
+    } else {
+        None
+    }
+}
+
 fn optional_program(binary: &str) -> Option<String> {
     let detected = detect_path(binary);
     if detected.is_empty() {
@@ -3571,6 +3589,7 @@ fn package_manager_has_install(program: &str, args: &[&str]) -> bool {
     command.status().is_ok_and(|status| status.success())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_agent_upgrade_commands_from_detection(
     kind: AgentUpgradeKind,
     launch_program: &str,
@@ -3578,9 +3597,11 @@ fn build_agent_upgrade_commands_from_detection(
     npm_program: Option<String>,
     npm_installed: bool,
     brew_program: Option<String>,
-    brew_installed: bool,
+    brew_formula_installed: bool,
+    brew_cask_installed: bool,
 ) -> Vec<AgentUpgradeCommand> {
     let configured_manager = detected_upgrade_manager(launch_program);
+    let brew_flavor = detected_homebrew_flavor(launch_program);
     let mut commands = Vec::new();
     let mut push_unique = |command: AgentUpgradeCommand| {
         if !commands.iter().any(|existing: &AgentUpgradeCommand| {
@@ -3619,19 +3640,32 @@ fn build_agent_upgrade_commands_from_detection(
             });
         }
     }
-    if brew_installed || configured_manager == "homebrew" {
+    let brew_name = match kind {
+        AgentUpgradeKind::Claude => "claude-code",
+        AgentUpgradeKind::Codex => "codex",
+    };
+    if brew_formula_installed || brew_flavor == Some("formula") {
+        if let Some(program) = brew_program.clone() {
+            push_unique(AgentUpgradeCommand {
+                channel: "homebrew".to_string(),
+                program,
+                args: vec![
+                    "upgrade".to_string(),
+                    "--formula".to_string(),
+                    brew_name.to_string(),
+                ],
+            });
+        }
+    }
+    if brew_cask_installed || brew_flavor == Some("cask") {
         if let Some(program) = brew_program {
-            let cask = match kind {
-                AgentUpgradeKind::Claude => "claude-code",
-                AgentUpgradeKind::Codex => "codex",
-            };
             push_unique(AgentUpgradeCommand {
                 channel: "homebrew".to_string(),
                 program,
                 args: vec![
                     "upgrade".to_string(),
                     "--cask".to_string(),
-                    cask.to_string(),
+                    brew_name.to_string(),
                 ],
             });
         }
@@ -3661,15 +3695,20 @@ fn build_agent_upgrade_commands(
         AgentUpgradeKind::Claude => "@anthropic-ai/claude-code",
         AgentUpgradeKind::Codex => "@openai/codex",
     };
-    let brew_cask = match kind {
+    // Homebrew 名称:Claude Code 官方走 cask(claude-code),Codex 官方走
+    // formula(codex);两种渠道都探测,哪种装了就升级哪种。
+    let brew_name = match kind {
         AgentUpgradeKind::Claude => "claude-code",
         AgentUpgradeKind::Codex => "codex",
     };
     let npm_installed = npm_program.as_deref().is_some_and(|program| {
         package_manager_has_install(program, &["list", "-g", "--depth=0", npm_package])
     });
-    let brew_installed = brew_program.as_deref().is_some_and(|program| {
-        package_manager_has_install(program, &["list", "--versions", "--cask", brew_cask])
+    let brew_formula_installed = brew_program.as_deref().is_some_and(|program| {
+        package_manager_has_install(program, &["list", "--versions", "--formula", brew_name])
+    });
+    let brew_cask_installed = brew_program.as_deref().is_some_and(|program| {
+        package_manager_has_install(program, &["list", "--versions", "--cask", brew_name])
     });
     let commands = build_agent_upgrade_commands_from_detection(
         kind,
@@ -3678,7 +3717,8 @@ fn build_agent_upgrade_commands(
         npm_program,
         npm_installed,
         brew_program,
-        brew_installed,
+        brew_formula_installed,
+        brew_cask_installed,
     );
     if commands.is_empty() {
         Err(match kind {
@@ -4226,20 +4266,84 @@ api_key = "sk-codex"
     }
 
     #[test]
+    fn detects_homebrew_formula_and_cask_flavors_from_install_paths() {
+        assert_eq!(
+            detected_homebrew_flavor("/opt/homebrew/Cellar/codex/0.46.0/bin/codex"),
+            Some("formula")
+        );
+        assert_eq!(
+            detected_homebrew_flavor("/opt/homebrew/Caskroom/claude-code/2.0.14/claude"),
+            Some("cask")
+        );
+        assert_eq!(
+            detected_homebrew_flavor("/opt/homebrew/lib/node_modules/@openai/codex/bin/codex.js"),
+            None
+        );
+        assert_eq!(
+            detected_homebrew_flavor("/aeroric-test/.local/bin/claude"),
+            None
+        );
+    }
+
+    #[test]
+    fn builds_formula_upgrade_for_cellar_installed_codex_without_explicit_detection() {
+        let commands = build_agent_upgrade_commands_from_detection(
+            AgentUpgradeKind::Codex,
+            "/opt/homebrew/Cellar/codex/0.46.0/bin/codex",
+            None,
+            None,
+            false,
+            Some("/opt/homebrew/bin/brew".to_string()),
+            false,
+            false,
+        );
+
+        assert_eq!(commands.len(), 1);
+        assert_eq!(commands[0].channel, "homebrew");
+        assert!(commands[0].args.contains(&"--formula".to_string()));
+        assert!(commands[0].args.contains(&"codex".to_string()));
+    }
+
+    #[test]
+    fn builds_both_homebrew_channels_when_formula_and_cask_are_installed() {
+        let commands = build_agent_upgrade_commands_from_detection(
+            AgentUpgradeKind::Codex,
+            "/aeroric-test/usr/local/bin/codex",
+            None,
+            None,
+            false,
+            Some("/opt/homebrew/bin/brew".to_string()),
+            true,
+            true,
+        );
+
+        assert_eq!(commands.len(), 2);
+        assert!(commands
+            .iter()
+            .any(|command| command.args.contains(&"--formula".to_string())));
+        assert!(commands
+            .iter()
+            .any(|command| command.args.contains(&"--cask".to_string())));
+    }
+
+    #[test]
     fn builds_upgrade_commands_for_npm_and_homebrew_installations_together() {
         let commands = build_agent_upgrade_commands_from_detection(
             AgentUpgradeKind::Codex,
-            "/opt/homebrew/bin/codex",
+            "/aeroric-test/opt/homebrew/bin/codex",
             None,
             Some("/usr/local/bin/npm".to_string()),
             true,
             Some("/opt/homebrew/bin/brew".to_string()),
             true,
+            false,
         );
 
         assert_eq!(commands.len(), 2);
         assert!(commands.iter().any(|command| command.channel == "npm"));
-        assert!(commands.iter().any(|command| command.channel == "homebrew"));
+        assert!(commands.iter().any(|command| {
+            command.channel == "homebrew" && command.args.contains(&"--formula".to_string())
+        }));
     }
 
     #[test]
@@ -4251,13 +4355,15 @@ api_key = "sk-codex"
             Some("/usr/local/bin/npm".to_string()),
             true,
             Some("/opt/homebrew/bin/brew".to_string()),
+            false,
             true,
         );
 
-        assert_eq!(commands.len(), 3);
         assert!(commands.iter().any(|command| command.channel == "native"));
         assert!(commands.iter().any(|command| command.channel == "npm"));
-        assert!(commands.iter().any(|command| command.channel == "homebrew"));
+        assert!(commands.iter().any(|command| {
+            command.channel == "homebrew" && command.args.contains(&"--cask".to_string())
+        }));
     }
 
     #[test]

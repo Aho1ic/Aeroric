@@ -69,9 +69,7 @@ export function AllAgentConfigsPanel({ themeVariant }: { themeVariant: ThemeVari
   }, []);
 
   const filteredAgents = useMemo(() => {
-    const byTab = agentOptions.filter((o) =>
-      tab === "anthropic" ? !o.codexLike : o.codexLike,
-    );
+    const byTab = agentOptions.filter((o) => (tab === "anthropic" ? !o.codexLike : o.codexLike));
     if (!searchQuery.trim()) return byTab;
     const q = searchQuery.trim().toLowerCase();
     return byTab.filter((o) => o.label.toLowerCase().includes(q));
@@ -164,10 +162,9 @@ export function AllAgentConfigsPanel({ themeVariant }: { themeVariant: ThemeVari
     setMessage(null);
     setError(null);
     try {
-      const result = await invoke<{ imported_agent_ids: string[] }>(
-        "import_cc_switch_config",
-        { inputPath },
-      );
+      const result = await invoke<{ imported_agent_ids: string[] }>("import_cc_switch_config", {
+        inputPath,
+      });
       window.dispatchEvent(new Event(APP_SETTINGS_CHANGED_EVENT));
       setMessage(
         t("appSettings.allAgentConfigsImported", {
@@ -215,8 +212,13 @@ export function AllAgentConfigsPanel({ themeVariant }: { themeVariant: ThemeVari
       }}
     >
       {/* Bulk migration section */}
+      {/* backdrop-filter 会创建独立 stacking context,把导入下拉菜单的 z-index 困在
+          section 内;抬高整个 section 的层级,避免下方搜索框(position: relative)
+          按 DOM 顺序绘制在下拉菜单之上 */}
       <section
         style={{
+          position: "relative",
+          zIndex: 20,
           padding: 20,
           border: "1px solid var(--border-dim)",
           borderRadius: "var(--radius-lg)",
@@ -408,11 +410,7 @@ export function AllAgentConfigsPanel({ themeVariant }: { themeVariant: ThemeVari
             cursor: "pointer",
           }}
         >
-          <img
-            src={claudeLogo}
-            alt=""
-            style={{ width: 16, height: 16, borderRadius: 3 }}
-          />
+          <img src={claudeLogo} alt="" style={{ width: 16, height: 16, borderRadius: 3 }} />
           {t("appSettings.providerAnthropic")}
         </button>
         <button
@@ -439,18 +437,13 @@ export function AllAgentConfigsPanel({ themeVariant }: { themeVariant: ThemeVari
               width: 16,
               height: 16,
               borderRadius: 3,
-              filter:
-                themeVariant === "dark" ? "invert(1) brightness(1.35)" : undefined,
+              filter: themeVariant === "dark" ? "invert(1) brightness(1.35)" : undefined,
             }}
           />
           {t("appSettings.providerOpenAI")}
         </button>
 
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => setShowAddAgentModal(true)}
-        >
+        <Button variant="outline" size="sm" onClick={() => setShowAddAgentModal(true)}>
           <Plus size={13} />
           {t("appSettings.addAgentInline")}
         </Button>
@@ -460,7 +453,12 @@ export function AllAgentConfigsPanel({ themeVariant }: { themeVariant: ThemeVari
         <div style={{ position: "relative", display: "flex", alignItems: "center" }}>
           <Search
             size={13}
-            style={{ position: "absolute", left: 8, color: "var(--text-hint)", pointerEvents: "none" }}
+            style={{
+              position: "absolute",
+              left: 8,
+              color: "var(--text-hint)",
+              pointerEvents: "none",
+            }}
           />
           <input
             type="text"
@@ -572,10 +570,7 @@ export function AllAgentConfigsPanel({ themeVariant }: { themeVariant: ThemeVari
 
       {/* Add Agent Modal */}
       {showAddAgentModal && (
-        <AddAgentModal
-          onClose={() => setShowAddAgentModal(false)}
-          onSaved={handleAgentSaved}
-        />
+        <AddAgentModal onClose={() => setShowAddAgentModal(false)} onSaved={handleAgentSaved} />
       )}
 
       {/* Agent Detail Modal */}

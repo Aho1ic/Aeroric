@@ -189,7 +189,7 @@ function UsageChart({
   const hourly = series.some((bucket) => bucket.hour !== undefined);
   const max = Math.max(1, ...series.map((day) => day.totalTokens));
   const labelEvery = hourly
-    ? series.length <= 12
+    ? series.length <= 14
       ? 1
       : 3
     : series.length <= 7
@@ -228,14 +228,16 @@ function UsageChart({
           ? 26
           : 52
         : undefined;
+  // 小时视图按实际柱数计算宽度(列宽 + 列间距),不再强制 620/720 的下限:
+  // 桶数被过滤和截断后图表收窄,纵轴与网格始终覆盖全部柱子,无需横向滚动。
   const minPlotWidth = immersive
     ? hourly
-      ? Math.max(720, series.length * 32)
+      ? series.length * 50
       : compactBars
         ? 560
         : Math.max(720, series.length * 42)
     : hourly
-      ? Math.max(620, series.length * 26)
+      ? series.length * 36
       : compactBars
         ? 260
         : Math.max(360, series.length * 25);
@@ -375,24 +377,25 @@ function UsageChart({
                     style={segment(day.cacheReadTokens, "var(--usage-chart-cache-read)")}
                   />
                 </div>
-                {active && (() => {
-                  const maxBottom = immersive ? 326 : 236;
-                  const naturalBottom = height + (immersive ? 42 : 34);
-                  const nearTop = naturalBottom > maxBottom - 10;
-                  return (
-                    <span
-                      className="usage-chart-bar-value"
-                      style={{
-                        ...s.usageChartBarValue,
-                        ...(nearTop
-                          ? { bottom: "auto", top: immersive ? 12 : 8 }
-                          : { bottom: Math.min(maxBottom, naturalBottom) }),
-                      }}
-                    >
-                      {formatAxisValue(locale, day.totalTokens)}
-                    </span>
-                  );
-                })()}
+                {active &&
+                  (() => {
+                    const maxBottom = immersive ? 326 : 236;
+                    const naturalBottom = height + (immersive ? 42 : 34);
+                    const nearTop = naturalBottom > maxBottom - 10;
+                    return (
+                      <span
+                        className="usage-chart-bar-value"
+                        style={{
+                          ...s.usageChartBarValue,
+                          ...(nearTop
+                            ? { bottom: "auto", top: immersive ? 12 : 8 }
+                            : { bottom: Math.min(maxBottom, naturalBottom) }),
+                        }}
+                      >
+                        {formatAxisValue(locale, day.totalTokens)}
+                      </span>
+                    );
+                  })()}
                 <div
                   className="usage-chart-label"
                   style={{
@@ -522,6 +525,9 @@ function SourceSummary({
   );
 }
 
+// 当天视图只保留最近十几个有用量的小时,零用量小时不占位,图表随之收窄。
+const HOURLY_BUCKET_LIMIT = 14;
+
 export function UsageDashboard({ embedded = false }: { embedded?: boolean }) {
   const { t, language } = useI18n();
   const locale = localeForLanguage(language);
@@ -534,7 +540,7 @@ export function UsageDashboard({ embedded = false }: { embedded?: boolean }) {
   const chartSeries = useMemo(() => {
     const raw = statistics?.series ?? [];
     if (rangeDays !== 1) return raw;
-    return raw.filter((bucket) => bucket.totalTokens > 0);
+    return raw.filter((bucket) => bucket.totalTokens > 0).slice(-HOURLY_BUCKET_LIMIT);
   }, [statistics?.series, rangeDays]);
 
   useEffect(() => {
@@ -707,7 +713,7 @@ export function UsageDashboard({ embedded = false }: { embedded?: boolean }) {
                   ? {
                       marginTop: 18,
                       padding: "24px 24px 20px",
-                      borderRadius: 8,
+                      borderRadius: "var(--radius-lg)",
                       minHeight: 450,
                     }
                   : null),
