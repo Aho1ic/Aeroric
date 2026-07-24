@@ -13,17 +13,18 @@ const cardStyle: CSSProperties = {
   borderRadius: 10,
   background: "transparent",
   overflow: "hidden",
-  transition: "border-color 0.12s, background 0.12s",
+  transition: "transform 160ms ease, border-color 160ms ease, background 160ms ease, box-shadow 160ms ease",
   cursor: "pointer",
 };
 
 const barStyle: CSSProperties = {
-  border: "1px solid transparent",
-  borderRadius: 6,
-  background: "transparent",
+  border: "1px solid var(--border-dim)",
+  borderRadius: "var(--radius-md)",
+  background: "color-mix(in srgb, var(--bg-card) 78%, var(--bg-hover))",
   overflow: "hidden",
-  transition: "border-color 0.12s, background 0.12s",
+  transition: "transform 160ms ease, border-color 160ms ease, background 160ms ease, box-shadow 160ms ease",
   cursor: "pointer",
+  minHeight: 58,
 };
 
 const summaryBaseStyle: CSSProperties = {
@@ -75,14 +76,20 @@ export function AgentCardItem({
   const isBuiltIn = isBuiltInAgent(option.value);
 
   const containerStyle = viewMode === "card" ? cardStyle : barStyle;
-  const summaryPadding = viewMode === "card" ? "12px 14px" : "8px 12px";
+  const summaryPadding = viewMode === "card" ? "12px 14px" : "10px 12px";
 
   return (
     <div
       style={{
         ...containerStyle,
-        borderColor: hovered ? "var(--border-medium)" : undefined,
+        borderColor: hovered
+          ? "color-mix(in srgb, var(--accent) 34%, var(--border-medium))"
+          : undefined,
         background: hovered ? "var(--bg-subtle)" : undefined,
+        transform: hovered ? "translateY(-3px)" : undefined,
+        boxShadow: hovered
+          ? "inset 0 1px 0 color-mix(in srgb, white 8%, transparent), 0 14px 34px color-mix(in srgb, var(--accent) 10%, transparent)"
+          : undefined,
       }}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
@@ -95,8 +102,8 @@ export function AgentCardItem({
           src={logo}
           alt=""
           style={{
-            width: viewMode === "card" ? 22 : 16,
-            height: viewMode === "card" ? 22 : 16,
+            width: viewMode === "card" ? 22 : 20,
+            height: viewMode === "card" ? 22 : 20,
             borderRadius: 4,
             flexShrink: 0,
             filter:
@@ -109,7 +116,7 @@ export function AgentCardItem({
           <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
             <span
               style={{
-                fontSize: viewMode === "card" ? 13 : 12,
+                fontSize: viewMode === "card" ? 13 : 12.5,
                 fontWeight: 600,
                 color: "var(--text-primary)",
                 overflow: "hidden",
@@ -154,21 +161,24 @@ export function AgentCardItem({
               {version && <span>{version}</span>}
             </div>
           )}
+          {viewMode === "bar" && (baseUrl || apiKey || version) && (
+            <div
+              style={{
+                fontSize: 11,
+                color: "var(--text-hint)",
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
+              }}
+            >
+              {baseUrl && <span>{maskBaseUrl(baseUrl)}</span>}
+              {baseUrl && (apiKey || version) && <span style={{ margin: "0 4px" }}>·</span>}
+              {apiKey && <span>Key: {maskApiKey(apiKey)}</span>}
+              {apiKey && version && <span style={{ margin: "0 4px" }}>·</span>}
+              {version && <span>{version}</span>}
+            </div>
+          )}
         </div>
-        {viewMode === "bar" && (
-          <div
-            style={{
-              fontSize: 11,
-              color: "var(--text-hint)",
-              display: "flex",
-              gap: 10,
-              flexShrink: 0,
-            }}
-          >
-            {baseUrl && <span>{maskBaseUrl(baseUrl)}</span>}
-            {version && <span>{version}</span>}
-          </div>
-        )}
         <span style={{ flexShrink: 0, color: "var(--text-hint)" }}>
           <ChevronRight size={14} />
         </span>

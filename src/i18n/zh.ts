@@ -51,8 +51,6 @@ export const zh: Record<string, string> = {
     "将选中的配置升级到最新版 Claude Code 或 Codex CLI。Aeroric 会同时升级检测到的原生、npm 普通安装和 Homebrew 安装。",
   "appSettings.allAgentConfigs": "Agent 配置",
   "appSettings.allAgentConfigsTitle": "一键迁移所有 Agent 配置",
-  "appSettings.allAgentConfigsHint":
-    "一键导出或导入全部 {count} 个 Agent 的名称、Base URL、API Key、模型和运行设置。本机路径、历史对话和终端历史不会写入配置包。",
   "appSettings.allAgentConfigsSecurityHint":
     "配置包可能包含自定义 Agent 的 API Key 和访问令牌，请妥善保管。",
   "appSettings.importAllAgentConfigs": "一键导入",
@@ -64,8 +62,8 @@ export const zh: Record<string, string> = {
   "appSettings.allAgentConfigsExported": "已导出 {count} 个 Agent 配置。",
   "appSettings.providerAnthropic": "Anthropic",
   "appSettings.providerOpenAI": "OpenAI",
-  "appSettings.viewCards": "卡片视图",
-  "appSettings.viewBars": "横条视图",
+  "appSettings.viewCards": "条形视图",
+  "appSettings.viewBars": "卡片视图",
   "appSettings.expandAgent": "展开详情",
   "appSettings.collapseAgent": "收起详情",
   "appSettings.noAgentsInProvider": "暂无此类 Agent",

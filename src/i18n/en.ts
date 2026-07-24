@@ -52,8 +52,6 @@ export const en: Record<string, string> = {
     "Upgrade selected configurations to the latest Claude Code or Codex CLI. Aeroric upgrades every detected native, npm, and Homebrew installation for the selected runtime.",
   "appSettings.allAgentConfigs": "Agent Configs",
   "appSettings.allAgentConfigsTitle": "One-click Agent configuration transfer",
-  "appSettings.allAgentConfigsHint":
-    "Export or import names, Base URLs, API keys, models, and runtime settings for all {count} Agent configurations. Local paths, conversations, and terminal history are never included.",
   "appSettings.allAgentConfigsSecurityHint":
     "The bundle can contain API keys and access tokens from custom Agent configurations. Store it securely.",
   "appSettings.importAllAgentConfigs": "Import all",
@@ -65,8 +63,8 @@ export const en: Record<string, string> = {
   "appSettings.allAgentConfigsExported": "Exported {count} Agent configurations.",
   "appSettings.providerAnthropic": "Anthropic",
   "appSettings.providerOpenAI": "OpenAI",
-  "appSettings.viewCards": "Card view",
-  "appSettings.viewBars": "Bar view",
+  "appSettings.viewCards": "Bar view",
+  "appSettings.viewBars": "Card view",
   "appSettings.expandAgent": "Expand",
   "appSettings.collapseAgent": "Collapse",
   "appSettings.noAgentsInProvider": "No agents in this category",

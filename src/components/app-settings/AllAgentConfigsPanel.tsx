@@ -170,8 +170,10 @@ export function AllAgentConfigsPanel({ themeVariant }: { themeVariant: ThemeVari
         style={{
           padding: 20,
           border: "1px solid var(--border-dim)",
-          borderRadius: 12,
-          background: "var(--bg-subtle)",
+          borderRadius: "var(--radius-lg)",
+          background: "color-mix(in srgb, var(--bg-subtle) 72%, transparent)",
+          backdropFilter: "blur(12px) saturate(1.15)",
+          WebkitBackdropFilter: "blur(12px) saturate(1.15)",
         }}
       >
         <div style={{ display: "flex", alignItems: "flex-start", gap: 14 }}>
@@ -194,16 +196,6 @@ export function AllAgentConfigsPanel({ themeVariant }: { themeVariant: ThemeVari
             <div style={{ color: "var(--text-primary)", fontSize: 14, fontWeight: 700 }}>
               {t("appSettings.allAgentConfigsTitle")}
             </div>
-            <div
-              style={{
-                marginTop: 5,
-                color: "var(--text-muted)",
-                fontSize: 12,
-                lineHeight: 1.6,
-              }}
-            >
-              {t("appSettings.allAgentConfigsHint", { count: agentOptions.length })}
-            </div>
           </div>
         </div>
 
@@ -215,7 +207,7 @@ export function AllAgentConfigsPanel({ themeVariant }: { themeVariant: ThemeVari
             gap: 8,
             padding: "10px 12px",
             border: "1px solid var(--border-dim)",
-            borderRadius: 8,
+            borderRadius: "var(--radius-md)",
             color: "var(--text-hint)",
             background: "var(--bg-input)",
             fontSize: 11.5,
@@ -359,7 +351,7 @@ export function AllAgentConfigsPanel({ themeVariant }: { themeVariant: ThemeVari
             cursor: "pointer",
           }}
         >
-          <LayoutGrid size={14} />
+          <LayoutList size={14} />
         </button>
         <button
           type="button"
@@ -378,18 +370,27 @@ export function AllAgentConfigsPanel({ themeVariant }: { themeVariant: ThemeVari
             cursor: "pointer",
           }}
         >
-          <LayoutList size={14} />
+          <LayoutGrid size={14} />
         </button>
       </div>
 
       {/* Agent list */}
       <div
-        style={{
-          marginTop: 14,
-          display: "flex",
-          flexDirection: "column",
-          gap: viewMode === "card" ? 10 : 6,
-        }}
+        style={
+          viewMode === "bar"
+            ? {
+                marginTop: 14,
+                display: "grid",
+                gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))",
+                gap: 10,
+              }
+            : {
+                marginTop: 14,
+                display: "flex",
+                flexDirection: "column",
+                gap: 10,
+              }
+        }
       >
         {filteredAgents.length === 0 && (
           <div
