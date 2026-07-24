@@ -47,7 +47,7 @@ pub struct TaskManager {
         Mutex<HashMap<String, Arc<Mutex<Box<dyn portable_pty::MasterPty + Send>>>>>,
     pub(crate) pty_writers: Mutex<HashMap<String, Arc<Mutex<Box<dyn Write + Send>>>>>,
     pub(crate) child_handles:
-        Mutex<HashMap<String, Arc<std::sync::Mutex<Box<dyn portable_pty::Child + Send + Sync>>>>>,
+        Mutex<HashMap<String, Arc<Mutex<Box<dyn portable_pty::Child + Send + Sync>>>>>,
     pub(crate) pending_pty_sizes: Mutex<HashMap<String, (u16, u16)>>,
     pub(crate) cancelled_tasks: Mutex<HashSet<String>>,
     pub(crate) manually_completed_tasks: Mutex<HashSet<String>>,

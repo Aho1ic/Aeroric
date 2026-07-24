@@ -1926,4 +1926,7 @@ export const en: Record<string, string> = {
     "Failed to load project file list, @ references unavailable: {error}",
   "toast.saveProjectsFailed": "Failed to save project list: {error}",
   "toast.saveTasksFailed": "Failed to save tasks for project {projectId}: {error}",
+  "errorBoundary.panelRenderError": "{label} failed to render",
+  "errorBoundary.unknownError": "Unknown error",
+  "errorBoundary.somethingWentWrong": "Something went wrong",
 };

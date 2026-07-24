@@ -298,7 +298,7 @@ pub(crate) fn register_pty_handles(
     task_manager
         .child_handles
         .lock()
-        .insert(id.to_string(), Arc::new(std::sync::Mutex::new(child)));
+        .insert(id.to_string(), Arc::new(parking_lot::Mutex::new(child)));
     Ok(())
 }
 
@@ -422,10 +422,8 @@ pub(crate) fn spawn_pty_reader(
                         if let Some(ref tx) = startup_tx {
                             let _ = tx.send(());
                         }
-                        // SAFETY：已确认 valid_len 之前的字节为有效 UTF-8
-                        let data = unsafe {
-                            std::str::from_utf8_unchecked(&combined[..valid_len]).to_owned()
-                        };
+                        let data =
+                            std::str::from_utf8(&combined[..valid_len]).unwrap().to_owned();
                         let data = match output_filter.as_mut() {
                             Some(filter) => match filter(data) {
                                 Some(data) if !data.is_empty() => data,
@@ -479,7 +477,7 @@ fn spawn_exit_monitor(app: AppHandle, task_id: String, project_path: String, is_
             let tm = app.state::<TaskManager>();
             let child_arc = tm.child_handles.lock().get(&task_id).cloned();
             if let Some(arc) = child_arc {
-                arc.lock().unwrap().try_wait().ok().flatten()
+                arc.lock().try_wait().ok().flatten()
             } else {
                 return;
             }
@@ -729,7 +727,14 @@ pub async fn run_task(
     // 若配置了项目级 prompt_prefix，则拼接到提示词前。
     // 空 prompt 表示“启动交互式 Agent 终端”，不能注入前缀，否则会被误判为
     // 非交互任务并触发 /status watcher。
-    let config = crate::config::read_project_config(project_path.clone()).unwrap_or_default();
+    let config = {
+        let config_project_path = project_path.clone();
+        tokio::task::spawn_blocking(move || {
+            crate::config::read_project_config(config_project_path).unwrap_or_default()
+        })
+        .await
+        .unwrap_or_default()
+    };
     let base_prompt = prompt_with_project_prefix(&prompt, &config.agent.prompt_prefix);
 
     // 将图片路径追加到提示词，供 Claude Code 通过文件工具读取
@@ -934,7 +939,9 @@ pub async fn cancel_task(
 
     let child_arc = task_manager.child_handles.lock().get(&task_id).cloned();
     if let Some(arc) = child_arc {
-        let _ = arc.lock().unwrap().kill();
+        let mut child = arc.lock();
+        let _ = child.kill();
+        let _ = child.wait();
     } else {
         // Orphaned/interrupted tasks have no live child in this app process.
         // Avoid leaving a stale cancellation marker that would affect a later manual resume.
@@ -972,9 +979,9 @@ pub async fn complete_task(
 
     let child_arc = task_manager.child_handles.lock().get(&task_id).cloned();
     if let Some(arc) = child_arc {
-        if let Ok(mut child) = arc.lock() {
-            let _ = child.kill();
-        }
+        let mut child = arc.lock();
+        let _ = child.kill();
+        let _ = child.wait();
     } else {
         // No live child means no exit monitor will consume this marker.
         task_manager
@@ -1032,7 +1039,9 @@ pub async fn reset_task_process(
     };
 
     if let Some(arc) = child_arc {
-        let _ = arc.lock().unwrap().kill();
+        let mut child = arc.lock();
+        let _ = child.kill();
+        let _ = child.wait();
     }
 
     Ok(())
@@ -1227,7 +1236,9 @@ pub async fn open_shell(
     {
         let child_arc = task_manager.child_handles.lock().get(&shell_id).cloned();
         if let Some(arc) = child_arc {
-            let _ = arc.lock().unwrap().kill();
+            let mut child = arc.lock();
+            let _ = child.kill();
+            let _ = child.wait();
         }
         task_manager.remove_pty_handles(&shell_id);
     }
@@ -1290,7 +1301,9 @@ pub async fn kill_shell(
     validate_shell_id(&shell_id)?;
     let child_arc = task_manager.child_handles.lock().get(&shell_id).cloned();
     if let Some(arc) = child_arc {
-        let _ = arc.lock().unwrap().kill();
+        let mut child = arc.lock();
+        let _ = child.kill();
+        let _ = child.wait();
     }
     task_manager.remove_pty_handles(&shell_id);
     Ok(())

@@ -1,7 +1,7 @@
 // ── Session metrics ───────────────────────────────────────────────────────────
 
 use chrono::Timelike;
-use once_cell::sync::Lazy;
+use std::sync::LazyLock;
 use parking_lot::Mutex;
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -21,8 +21,8 @@ pub(crate) struct SessionMetrics {
 }
 
 /// 缓存：session_path → (file_modified_time, SessionMetrics)
-static METRICS_CACHE: Lazy<Mutex<HashMap<String, (SystemTime, SessionMetrics)>>> =
-    Lazy::new(|| Mutex::new(HashMap::new()));
+static METRICS_CACHE: LazyLock<Mutex<HashMap<String, (SystemTime, SessionMetrics)>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
 
 fn parse_rfc3339_secs(ts: &str) -> Option<f64> {
     chrono::DateTime::parse_from_rfc3339(ts)

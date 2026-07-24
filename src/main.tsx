@@ -3,7 +3,7 @@ import ReactDOM from "react-dom/client";
 import App from "./App";
 import { ToastProvider } from "./components/Toast";
 import { NotificationsProvider } from "./hooks/useNotifications";
-import { I18nProvider } from "./i18n";
+import { I18nProvider, staticT } from "./i18n";
 
 class ErrorBoundary extends React.Component<
   { children: React.ReactNode },
@@ -33,7 +33,9 @@ class ErrorBoundary extends React.Component<
             color: "#666",
           }}
         >
-          <div style={{ fontSize: 16, fontWeight: 600, marginBottom: 8 }}>Something went wrong</div>
+          <div style={{ fontSize: 16, fontWeight: 600, marginBottom: 8 }}>
+            {staticT("errorBoundary.somethingWentWrong")}
+          </div>
           <pre
             style={{
               fontSize: 12,
@@ -49,7 +51,7 @@ class ErrorBoundary extends React.Component<
             onClick={() => this.setState({ error: null })}
             style={{ marginTop: 16, padding: "8px 16px", cursor: "pointer" }}
           >
-            Retry
+            {staticT("common.retry")}
           </button>
         </div>
       );

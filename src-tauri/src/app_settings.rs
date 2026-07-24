@@ -3577,19 +3577,16 @@ pub async fn upgrade_agent_versions(
         clear_cached_versions();
         Ok(requested
             .into_iter()
-            .map(|agent| {
-                let kind = upgrade_kind_for_agent(&settings, &agent)
-                    .expect("validated agent must keep its upgrade kind");
-                let (previous_version, current_version, outcome) = outcomes
-                    .get(&kind)
-                    .expect("requested upgrade kind must have an outcome");
-                AgentUpgradeResult {
+            .filter_map(|agent| {
+                let kind = upgrade_kind_for_agent(&settings, &agent)?;
+                let (previous_version, current_version, outcome) = outcomes.get(&kind)?;
+                Some(AgentUpgradeResult {
                     agent,
                     success: outcome.is_ok(),
                     previous_version: previous_version.clone(),
                     current_version: current_version.clone(),
                     message: outcome.clone().unwrap_or_else(|error| error),
-                }
+                })
             })
             .collect())
     })

@@ -1874,4 +1874,7 @@ export const zh: Record<string, string> = {
   "toast.loadProjectFilesFailed": "加载项目文件列表失败，@ 引用不可用：{error}",
   "toast.saveProjectsFailed": "保存项目列表失败：{error}",
   "toast.saveTasksFailed": "保存任务失败（项目 {projectId}）：{error}",
+  "errorBoundary.panelRenderError": "{label}渲染出错",
+  "errorBoundary.unknownError": "未知错误",
+  "errorBoundary.somethingWentWrong": "出现错误",
 };

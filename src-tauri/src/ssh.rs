@@ -439,7 +439,7 @@ fn spawn_remote_task_exit_monitor(app: AppHandle, task_id: String) {
             let tm = app.state::<crate::TaskManager>();
             let child_arc = tm.child_handles.lock().get(&task_id).cloned();
             if let Some(arc) = child_arc {
-                arc.lock().unwrap().try_wait().ok().flatten()
+                arc.lock().try_wait().ok().flatten()
             } else {
                 return;
             }
@@ -447,11 +447,15 @@ fn spawn_remote_task_exit_monitor(app: AppHandle, task_id: String) {
 
         if let Some(status) = exit_status {
             let ok = status.success();
-            let tm = app.state::<crate::TaskManager>();
-            let mut cancelled_tasks = tm.cancelled_tasks.lock();
-            let was_cancelled = cancelled_tasks.remove(&task_id);
-            let was_manually_completed = tm.manually_completed_tasks.lock().remove(&task_id);
+            let (was_cancelled, was_manually_completed) = {
+                let tm = app.state::<crate::TaskManager>();
+                let mut cancelled_tasks = tm.cancelled_tasks.lock();
+                let was_cancelled = cancelled_tasks.remove(&task_id);
+                let was_manually_completed = tm.manually_completed_tasks.lock().remove(&task_id);
+                (was_cancelled, was_manually_completed)
+            };
             {
+                let tm = app.state::<crate::TaskManager>();
                 tm.remove_pty_handles(&task_id);
             }
             if was_cancelled || was_manually_completed {
@@ -560,9 +564,9 @@ pub async fn open_ssh_shell(
     crate::pty::validate_ssh_shell_id(&shell_id)?;
     let child_arc = task_manager.child_handles.lock().get(&shell_id).cloned();
     if let Some(arc) = child_arc {
-        if let Ok(mut child) = arc.lock() {
-            let _ = child.kill();
-        }
+        let mut child = arc.lock();
+        let _ = child.kill();
+        let _ = child.wait();
     }
     task_manager.remove_pty_handles(&shell_id);
 
@@ -633,9 +637,9 @@ pub async fn kill_ssh_shell(
     crate::pty::validate_ssh_shell_id(&shell_id)?;
     let child_arc = task_manager.child_handles.lock().get(&shell_id).cloned();
     if let Some(arc) = child_arc {
-        if let Ok(mut child) = arc.lock() {
-            let _ = child.kill();
-        }
+        let mut child = arc.lock();
+        let _ = child.kill();
+        let _ = child.wait();
     }
     task_manager.remove_pty_handles(&shell_id);
     Ok(())
@@ -705,13 +709,17 @@ pub async fn cancel_remote_task(
     task_id: String,
 ) -> Result<(), String> {
     crate::pty::validate_task_id(&task_id)?;
-    let mut cancelled_tasks = task_manager.cancelled_tasks.lock();
-    cancelled_tasks.insert(task_id.clone());
-    let child_arc = task_manager.child_handles.lock().get(&task_id).cloned();
+    let child_arc = {
+        let mut cancelled_tasks = task_manager.cancelled_tasks.lock();
+        cancelled_tasks.insert(task_id.clone());
+        task_manager.child_handles.lock().get(&task_id).cloned()
+    };
     if let Some(arc) = child_arc {
-        let _ = arc.lock().unwrap().kill();
+        let mut child = arc.lock();
+        let _ = child.kill();
+        let _ = child.wait();
     } else {
-        cancelled_tasks.remove(&task_id);
+        task_manager.cancelled_tasks.lock().remove(&task_id);
         task_manager.remove_pty_handles(&task_id);
     }
     let _ = app.emit(

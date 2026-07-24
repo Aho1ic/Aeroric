@@ -162,10 +162,12 @@ function App() {
   // "detached". The refs are kept current by the effect below.
   const showToastRef = useRef(showToast);
   const formatSaveProjectsErrorRef = useRef(formatSaveProjectsError);
+  const formatSaveTasksErrorRef = useRef(formatSaveTasksError);
   useEffect(() => {
     showToastRef.current = showToast;
     formatSaveProjectsErrorRef.current = formatSaveProjectsError;
-  }, [showToast, formatSaveProjectsError]);
+    formatSaveTasksErrorRef.current = formatSaveTasksError;
+  }, [showToast, formatSaveProjectsError, formatSaveTasksError]);
 
   const persistTasksForHook = useCallback(
     (projectId: string, allTasks: Task[]) => {
@@ -357,7 +359,10 @@ function App() {
       });
     }
 
-    init().catch(console.error);
+    init().catch((e: unknown) => {
+      console.error(e);
+      showToastRef.current(String(e), "error");
+    });
     // Mount-only: callbacks are read through refs so a language switch never
     // re-runs startup normalization. See the ref sync effect above.
   }, []);
@@ -1295,7 +1300,7 @@ function App() {
 
       if (changed) {
         const task = next.find((t) => t.id === taskId);
-        if (task) persistProjectTasks(task.projectId, next, showToast, formatSaveTasksError);
+        if (task) persistProjectTasks(task.projectId, next, showToastRef.current, formatSaveTasksErrorRef.current);
       }
       return changed ? next : prev;
     });
@@ -1321,7 +1326,7 @@ function App() {
 
       if (changed) {
         const task = next.find((t) => t.id === taskId);
-        if (task) persistProjectTasks(task.projectId, next, showToast, formatSaveTasksError);
+        if (task) persistProjectTasks(task.projectId, next, showToastRef.current, formatSaveTasksErrorRef.current);
       }
       return changed ? next : prev;
     });

@@ -76,3 +76,9 @@ export function useI18n() {
 export function pluralKey(singularKey: string, pluralKeyValue: string, count: number): string {
   return count === 1 ? singularKey : pluralKeyValue;
 }
+
+export function staticT(key: string, params?: TranslationParams): string {
+  const lang: AppLanguage = navigator.language.toLowerCase().startsWith("zh") ? "zh" : "en";
+  const template = translations[lang][key] ?? translations.en[key] ?? key;
+  return interpolate(template, params);
+}

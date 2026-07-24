@@ -4,7 +4,7 @@ use std::sync::{mpsc, Arc};
 use std::time::{Duration, Instant};
 
 use chrono::DateTime;
-use once_cell::sync::Lazy;
+use std::sync::LazyLock;
 use parking_lot::Mutex;
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -17,7 +17,7 @@ const CLAUDE_TIMEOUT_SECS: u64 = 12;
 const CODEX_ATTEMPT_TIMEOUT_SECS: u64 = 10;
 const CLAUDE_429_BACKOFF_SECS: u64 = 300; // 5 分钟
 
-static HTTP_CLIENT: Lazy<reqwest::Client> = Lazy::new(|| {
+static HTTP_CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
     reqwest::Client::builder()
         .timeout(Duration::from_secs(CLAUDE_TIMEOUT_SECS))
         .build()
@@ -25,7 +25,7 @@ static HTTP_CLIENT: Lazy<reqwest::Client> = Lazy::new(|| {
 });
 
 /// 上次收到 Claude 用量 API 429 的时刻；5 分钟内跳过重试。
-static CLAUDE_429_UNTIL: Lazy<Mutex<Option<Instant>>> = Lazy::new(|| Mutex::new(None));
+static CLAUDE_429_UNTIL: LazyLock<Mutex<Option<Instant>>> = LazyLock::new(|| Mutex::new(None));
 
 // ---------------------------------------------------------------------------
 // Persistent Codex app-server RPC client

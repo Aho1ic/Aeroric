@@ -73,6 +73,23 @@ fn validate_sftp_local_path(path: &str) -> Result<PathBuf, String> {
     if !path.is_absolute() {
         return Err("Path must be absolute".to_string());
     }
+    let normalized = path
+        .components()
+        .collect::<PathBuf>();
+    let s = normalized.to_string_lossy();
+    let sensitive = [
+        "/.ssh", "/etc/", "/usr/bin/", "/usr/sbin/", "/sbin/",
+        "/bin/", "/System/", "/Library/LaunchDaemons/",
+        "/Library/LaunchAgents/",
+    ];
+    for prefix in &sensitive {
+        if s.contains(prefix) {
+            return Err(format!(
+                "SFTP operations are not allowed in sensitive path: {}",
+                prefix
+            ));
+        }
+    }
     Ok(path)
 }
 

@@ -38,7 +38,6 @@ dependencies = [
  "font-kit",
  "libc",
  "notify",
- "once_cell",
  "parking_lot",
  "portable-pty",
  "regex",

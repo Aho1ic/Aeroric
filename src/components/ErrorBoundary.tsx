@@ -1,5 +1,6 @@
 import { Component } from "react";
 import type { ErrorInfo, ReactNode } from "react";
+import { staticT } from "../i18n";
 import s from "../styles";
 
 interface Props {
@@ -46,15 +47,17 @@ export class ErrorBoundary extends Component<Props, State> {
       return this.props.fallback(error, this.reset);
     }
 
-    const label = this.props.label ?? "该面板";
+    const label = this.props.label ?? staticT("errorBoundary.unknownError");
 
     return (
       <div style={s.errorBoundaryWrap}>
         <div style={s.errorBoundaryIcon}>⚠</div>
-        <div style={s.errorBoundaryTitle}>{label}渲染出错</div>
-        <div style={s.errorBoundaryMessage}>{error.message || "未知错误"}</div>
+        <div style={s.errorBoundaryTitle}>
+          {staticT("errorBoundary.panelRenderError", { label })}
+        </div>
+        <div style={s.errorBoundaryMessage}>{error.message || staticT("errorBoundary.unknownError")}</div>
         <button onClick={this.reset} style={s.errorBoundaryBtn}>
-          重试
+          {staticT("common.retry")}
         </button>
       </div>
     );
