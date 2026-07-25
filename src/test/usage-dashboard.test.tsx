@@ -34,8 +34,8 @@ const totals: UsageStatisticsTotals = {
 function result(rangeDays: UsageStatisticsRange, agent: UsageStatisticsAgent): UsageStatistics {
   const series =
     rangeDays === 1
-      ? Array.from({ length: 6 }, (_, hour) => ({
-          date: "2026-07-17",
+      ? [22, 23, 0, 1, 2, 3].map((hour, index) => ({
+          date: index < 2 ? "2026-07-16" : "2026-07-17",
           hour,
           ...totals,
         }))
@@ -152,7 +152,7 @@ describe("UsageDashboard", () => {
       borderRadius: "var(--radius-lg)",
     });
 
-    await user.click(screen.getByRole("button", { name: "过去24H" }));
+    await user.click(screen.getByRole("button", { name: "24H" }));
     await waitFor(() => {
       const todayBars = Array.from(container.querySelectorAll<HTMLElement>(".usage-chart-bar"));
       expect(todayBars).toHaveLength(6);
@@ -160,7 +160,12 @@ describe("UsageDashboard", () => {
     });
     expect(screen.getByText("每小时用量")).toBeInTheDocument();
     const hourColumns = container.querySelectorAll<HTMLElement>(".usage-chart-column");
-    expect(hourColumns[hourColumns.length - 1]?.getAttribute("aria-label")).toContain("05:00");
+    expect(hourColumns[0]?.getAttribute("aria-label")).toContain("2026");
+    expect(hourColumns[hourColumns.length - 1]?.getAttribute("aria-label")).toContain("03:00");
+    const axisLabels = Array.from(container.querySelectorAll(".usage-chart-label strong")).map(
+      (node) => node.textContent,
+    );
+    expect(axisLabels.every((label) => /^\d{2}:\d{2}$/.test(label ?? ""))).toBe(true);
   });
 
   it("keeps the compact settings chart dimensions unchanged", async () => {

@@ -20,6 +20,7 @@ import { attachLinuxIMEFix, attachMacWebKitShiftInputFix } from "./terminalInput
 import { Minus, Plus, Terminal as TerminalIcon, Trash2, X } from "lucide-react";
 import { useI18n } from "../i18n";
 import { shellTerminalPanelRootStyle } from "./project-page/viewMode";
+import { AnimatedSelectionTrack } from "./ui/AnimatedSelection";
 import "@xterm/xterm/css/xterm.css";
 
 interface ShellOutputEvent {
@@ -494,7 +495,10 @@ export const ShellTerminalPanel = forwardRef<ShellTerminalPanelHandle, Props>(
           </button>
         </div>
         {showSessionTabs && (
-          <div
+          <AnimatedSelectionTrack
+            value={activeShellId ?? ""}
+            ariaLabel={t("terminal.title")}
+            role="tablist"
             style={{
               minHeight: 30,
               flexShrink: 0,
@@ -510,54 +514,62 @@ export const ShellTerminalPanel = forwardRef<ShellTerminalPanelHandle, Props>(
             {shells.map((shell, index) => {
               const selected = activeShellId === shell.id;
               return (
-                <button
+                <div
                   key={shell.id}
-                  type="button"
-                  onClick={() => setActiveShellId(shell.id)}
-                  title={shell.title}
+                  data-animated-selection-item
+                  data-selection-value={shell.id}
                   style={{
                     height: 22,
                     minWidth: 0,
                     maxWidth: 106,
                     display: "inline-flex",
                     alignItems: "center",
-                    gap: 5,
-                    padding: "0 5px 0 7px",
-                    border: `1px solid ${selected ? "var(--border-strong)" : "var(--border-dim)"}`,
+                    padding: "0 3px 0 0",
+                    border: "1px solid var(--border-dim)",
                     borderRadius: 999,
-                    background: selected ? "var(--control-active-bg)" : "transparent",
-                    color: selected ? "var(--control-active-fg)" : "var(--text-muted)",
-                    cursor: "pointer",
+                    background: "transparent",
                     flexShrink: 0,
-                    fontSize: 11,
-                    fontWeight: selected ? 650 : 560,
                   }}
                 >
-                  <TerminalIcon size={11.5} />
-                  <span
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={selected}
+                    tabIndex={selected ? 0 : -1}
+                    onClick={() => setActiveShellId(shell.id)}
+                    title={shell.title}
                     style={{
                       minWidth: 0,
-                      overflow: "hidden",
-                      textOverflow: "ellipsis",
-                      whiteSpace: "nowrap",
+                      height: "100%",
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: 5,
+                      padding: "0 3px 0 7px",
+                      border: 0,
+                      background: "transparent",
+                      color: selected ? "var(--control-active-fg)" : "var(--text-muted)",
+                      cursor: "pointer",
+                      fontSize: 11,
+                      fontWeight: selected ? 650 : 560,
                     }}
                   >
-                    zsh {index + 1}
-                  </span>
-                  <span
-                    role="button"
-                    tabIndex={0}
+                    <TerminalIcon size={11.5} />
+                    <span
+                      style={{
+                        minWidth: 0,
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      zsh {index + 1}
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    aria-label={t("terminal.closeShell", { title: shell.title })}
                     title={t("terminal.closeShell", { title: shell.title })}
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      handleCloseShell(shell.id);
-                    }}
-                    onKeyDown={(event) => {
-                      if (event.key !== "Enter" && event.key !== " ") return;
-                      event.preventDefault();
-                      event.stopPropagation();
-                      handleCloseShell(shell.id);
-                    }}
+                    onClick={() => handleCloseShell(shell.id)}
                     style={{
                       width: 14,
                       height: 14,
@@ -565,13 +577,17 @@ export const ShellTerminalPanel = forwardRef<ShellTerminalPanelHandle, Props>(
                       alignItems: "center",
                       justifyContent: "center",
                       borderRadius: 999,
+                      border: 0,
+                      padding: 0,
+                      background: "transparent",
                       color: "var(--text-hint)",
+                      cursor: "pointer",
                       flexShrink: 0,
                     }}
                   >
                     <Trash2 size={9.5} />
-                  </span>
-                </button>
+                  </button>
+                </div>
               );
             })}
             <button
@@ -602,7 +618,7 @@ export const ShellTerminalPanel = forwardRef<ShellTerminalPanelHandle, Props>(
             >
               <Plus size={12} />
             </button>
-          </div>
+          </AnimatedSelectionTrack>
         )}
         <div style={{ flex: 1, minWidth: 0, minHeight: 0, position: "relative" }}>
           {shells.map((shell) => (

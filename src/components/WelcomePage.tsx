@@ -47,6 +47,7 @@ import { DockerIcon } from "./DockerIcon";
 import RecursiveHeroCanvas from "./recursive-hero-effect/RecursiveHeroCanvas";
 import { UsageDashboard } from "./UsageDashboard";
 import { ProjectGroupDialog } from "./ProjectGroupDialog";
+import { AnimatedSelectionTrack } from "./ui/AnimatedSelection";
 import { useI18n, pluralKey } from "../i18n";
 import s from "../styles";
 
@@ -56,19 +57,23 @@ function SidebarItem({
   active,
   meta,
   onClick,
+  selectionValue,
 }: {
   icon: React.ReactNode;
   label: string;
   active?: boolean;
   meta?: string;
   onClick?: () => void;
+  selectionValue: string;
 }) {
   return (
     <button
       type="button"
       style={{
         ...s.sidebarItem,
-        background: active ? "var(--bg-selected)" : "transparent",
+        position: "relative",
+        zIndex: 1,
+        background: "transparent",
         color: active ? "var(--text-primary)" : "var(--text-muted)",
         width: "100%",
         border: "1px solid transparent",
@@ -78,6 +83,10 @@ function SidebarItem({
       onClick={onClick}
       title={label}
       aria-label={label}
+      aria-pressed={active}
+      tabIndex={active ? 0 : -1}
+      data-animated-selection-item
+      data-selection-value={selectionValue}
     >
       <span style={{ display: "flex", alignItems: "center" }}>{icon}</span>
       <span style={{ marginLeft: 6, fontSize: 12, fontWeight: active ? 650 : 540 }}>{label}</span>
@@ -297,61 +306,84 @@ export function WelcomePage({
           </div>
 
           <nav style={s.sidebarNav}>
-            <div style={s.sidebarSectionTitle}>{t("welcome.workspace")}</div>
-            <SidebarItem
-              icon={<Layers size={15} />}
-              label={t("welcome.projects")}
-              active={view === "projects"}
-              onClick={() => switchWelcomeView("projects")}
-            />
-            <SidebarItem
-              icon={<Clock size={15} />}
-              label={t("welcome.timeline")}
-              active={view === "timeline"}
-              onClick={() => switchWelcomeView("timeline")}
-            />
-            <SidebarItem
-              icon={<ChartNoAxesCombined size={15} />}
-              label={t("usageStats.nav")}
-              active={view === "usage"}
-              onClick={() => switchWelcomeView("usage")}
-            />
-            <SidebarItem
-              icon={<Blocks size={15} />}
-              label={t("welcome.skillHub")}
-              active={view === "skills"}
-              onClick={() => switchWelcomeView("skills")}
-            />
-            <SidebarItem
-              icon={<DockerIcon size={15} />}
-              label={t("docker.title")}
-              active={view === "docker"}
-              onClick={() => switchWelcomeView("docker")}
-            />
-            <SidebarItem
-              icon={<ArrowLeftRight size={15} />}
-              label={t("sftp.title")}
-              active={sftpOpen}
-              onClick={() => setSftpOpen(true)}
-            />
-            <SidebarItem
-              icon={<Server size={15} />}
-              label={t("ssh.title")}
-              active={view === "ssh" && !sftpOpen}
-              onClick={() => switchWelcomeView("ssh")}
-            />
-            <SidebarItem
-              icon={<Database size={15} />}
-              label={t("database.title")}
-              active={view === "database" && !sftpOpen}
-              onClick={() => switchWelcomeView("database")}
-            />
-            <SidebarItem
-              icon={<NotebookTabs size={15} />}
-              label={t("notebook.title")}
-              active={view === "notes" && !sftpOpen}
-              onClick={() => switchWelcomeView("notes")}
-            />
+            <AnimatedSelectionTrack
+              value={sftpOpen ? "sftp" : view}
+              ariaLabel={t("welcome.workspace")}
+              orientation="vertical"
+              style={{
+                width: "100%",
+                alignItems: "stretch",
+                padding: 0,
+                border: "none",
+                background: "transparent",
+                boxShadow: "none",
+              }}
+            >
+              <div style={s.sidebarSectionTitle}>{t("welcome.workspace")}</div>
+              <SidebarItem
+                icon={<Layers size={15} />}
+                label={t("welcome.projects")}
+                selectionValue="projects"
+                active={view === "projects"}
+                onClick={() => switchWelcomeView("projects")}
+              />
+              <SidebarItem
+                icon={<Clock size={15} />}
+                label={t("welcome.timeline")}
+                selectionValue="timeline"
+                active={view === "timeline"}
+                onClick={() => switchWelcomeView("timeline")}
+              />
+              <SidebarItem
+                icon={<ChartNoAxesCombined size={15} />}
+                label={t("usageStats.nav")}
+                selectionValue="usage"
+                active={view === "usage"}
+                onClick={() => switchWelcomeView("usage")}
+              />
+              <SidebarItem
+                icon={<Blocks size={15} />}
+                label={t("welcome.skillHub")}
+                selectionValue="skills"
+                active={view === "skills"}
+                onClick={() => switchWelcomeView("skills")}
+              />
+              <SidebarItem
+                icon={<DockerIcon size={15} />}
+                label={t("docker.title")}
+                selectionValue="docker"
+                active={view === "docker"}
+                onClick={() => switchWelcomeView("docker")}
+              />
+              <SidebarItem
+                icon={<ArrowLeftRight size={15} />}
+                label={t("sftp.title")}
+                selectionValue="sftp"
+                active={sftpOpen}
+                onClick={() => setSftpOpen(true)}
+              />
+              <SidebarItem
+                icon={<Server size={15} />}
+                label={t("ssh.title")}
+                selectionValue="ssh"
+                active={view === "ssh" && !sftpOpen}
+                onClick={() => switchWelcomeView("ssh")}
+              />
+              <SidebarItem
+                icon={<Database size={15} />}
+                label={t("database.title")}
+                selectionValue="database"
+                active={view === "database" && !sftpOpen}
+                onClick={() => switchWelcomeView("database")}
+              />
+              <SidebarItem
+                icon={<NotebookTabs size={15} />}
+                label={t("notebook.title")}
+                selectionValue="notes"
+                active={view === "notes" && !sftpOpen}
+                onClick={() => switchWelcomeView("notes")}
+              />
+            </AnimatedSelectionTrack>
           </nav>
 
           <div style={s.sidebarFooter}>
@@ -405,7 +437,6 @@ export function WelcomePage({
           <SkillHubView
             config={skillHubConfig}
             allProjects={projects}
-            onEnterSkillHub={onEnterSkillHub}
             onOpenAppSettings={() => window.dispatchEvent(new CustomEvent(OPEN_APP_SETTINGS_EVENT))}
           />
         ) : view === "docker" ? (

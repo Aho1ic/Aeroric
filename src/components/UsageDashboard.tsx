@@ -21,6 +21,7 @@ import type {
   UsageStatisticsRange,
   UsageStatisticsTotals,
 } from "../types";
+import { AnimatedSelectionGroup } from "./ui/AnimatedSelection";
 import { Button } from "./ui/Button";
 
 const RANGE_OPTIONS: UsageStatisticsRange[] = [1, 7, 14, 30];
@@ -99,21 +100,17 @@ function Segment<T extends string | number>({
   onChange: (option: T) => void;
 }) {
   return (
-    <div role="group" aria-label={ariaLabel} style={s.usageSegment}>
-      {options.map((option) => (
-        <Button
-          key={option}
-          size="xs"
-          variant="ghost"
-          active={option === value}
-          aria-pressed={option === value}
-          onClick={() => onChange(option)}
-          style={{ minWidth: option === "claude" ? 58 : 42 }}
-        >
-          {label(option)}
-        </Button>
-      ))}
-    </div>
+    <AnimatedSelectionGroup
+      value={value}
+      onChange={onChange}
+      ariaLabel={ariaLabel}
+      options={options.map((option) => ({
+        value: option,
+        label: label(option),
+        style: { minWidth: option === "claude" ? 58 : 42 },
+      }))}
+      itemStyle={{ minHeight: 24, padding: "0 8px", fontSize: 11 }}
+    />
   );
 }
 
@@ -187,9 +184,6 @@ function UsageChart({
   const [activeIndex, setActiveIndex] = useState<number | null>(null);
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const hourly = series.some((bucket) => bucket.hour !== undefined);
-  // 跨自然日的 24h 窗口需要在横轴显示日期,避免 14:00 歧义。
-  const multiDay =
-    hourly && new Set(series.map((bucket) => bucket.date)).size > 1;
   const max = Math.max(1, ...series.map((day) => day.totalTokens));
   const labelEvery = hourly
     ? series.length <= 14
@@ -413,7 +407,7 @@ function UsageChart({
                   {index % labelEvery === 0 || index === series.length - 1 ? (
                     <strong>
                       {hourly && day.hour !== undefined
-                        ? formatHour(locale, day.date, day.hour, multiDay)
+                        ? formatHour(locale, day.date, day.hour)
                         : formatDate(locale, day.date)}
                     </strong>
                   ) : null}

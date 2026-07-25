@@ -2822,8 +2822,11 @@ fn parse_cc_switch_providers(sql: &str) -> Result<Vec<AgentConfigBundleAgent>, S
             let mut model_list = Vec::new();
             for toml_line in config_toml.lines() {
                 let toml_line = toml_line.trim();
-                if toml_line.starts_with("model") && toml_line.contains('=') {
-                    let val = toml_line.splitn(2, '=').nth(1).unwrap_or("").trim().trim_matches('"');
+                if !toml_line.starts_with("model") {
+                    continue;
+                }
+                if let Some((_, raw_value)) = toml_line.split_once('=') {
+                    let val = raw_value.trim().trim_matches('"');
                     if !val.is_empty() && !model_list.contains(&val.to_string()) {
                         model_list.push(val.to_string());
                     }

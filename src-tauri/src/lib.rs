@@ -535,6 +535,9 @@ pub fn run() {
             skills::cleanup_installations_for_project,
             skills::delete_skill,
             skills::import_local_skill,
+            skills::search_marketplace_skills,
+            skills::get_marketplace_skill_details,
+            skills::install_marketplace_skill,
         ])
         .build(tauri::generate_context!())
         .expect("error while running tauri application")

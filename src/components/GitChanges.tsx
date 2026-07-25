@@ -27,6 +27,7 @@ import {
 } from "./git-view/GitFileBrowser";
 import { useTextInputIMEFix } from "./useTextInputIMEFix";
 import type { SshConnection } from "../types";
+import { AnimatedSelectionGroup } from "./ui/AnimatedSelection";
 
 interface GitFileChange {
   path: string;
@@ -454,36 +455,17 @@ export function GitChanges({
           flexShrink: 0,
         }}
       >
-        <button
-          onClick={() => setTab("task")}
-          style={{
-            padding: "3px 10px",
-            borderRadius: 5,
-            fontSize: 12,
-            fontWeight: tab === "task" ? 600 : 500,
-            border: "none",
-            cursor: "pointer",
-            background: tab === "task" ? "var(--control-selected-bg)" : "none",
-            color: tab === "task" ? "var(--control-selected-fg)" : "var(--text-muted)",
-          }}
-        >
-          {t("git.currentTask")} {taskCount}
-        </button>
-        <button
-          onClick={() => setTab("all")}
-          style={{
-            padding: "3px 10px",
-            borderRadius: 5,
-            fontSize: 12,
-            fontWeight: tab === "all" ? 600 : 500,
-            border: "none",
-            cursor: "pointer",
-            background: tab === "all" ? "var(--control-selected-bg)" : "none",
-            color: tab === "all" ? "var(--control-selected-fg)" : "var(--text-muted)",
-          }}
-        >
-          {t("git.all")} {allCount}
-        </button>
+        <AnimatedSelectionGroup
+          value={tab}
+          onChange={setTab}
+          ariaLabel={t("git.changes")}
+          role="tablist"
+          options={[
+            { value: "task", label: `${t("git.currentTask")} ${taskCount}` },
+            { value: "all", label: `${t("git.all")} ${allCount}` },
+          ]}
+          itemStyle={{ minHeight: 24, padding: "3px 10px", fontSize: 12 }}
+        />
         <div style={{ marginLeft: "auto" }}>
           <GitFileViewToggle mode={fileViewMode} onChange={setFileViewMode} />
         </div>

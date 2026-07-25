@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
+import * as Popover from "@radix-ui/react-popover";
 import {
   Archive,
   ChevronDown,
@@ -22,6 +23,7 @@ import type { AgentOption } from "../../agents";
 import type { ThemeVariant } from "../../types";
 import claudeLogo from "../../assets/claude.svg";
 import chatgptLogo from "../../assets/chatgpt.svg";
+import { AnimatedSelectionGroup } from "../ui/AnimatedSelection";
 
 type ProviderTab = "anthropic" | "openai";
 type ViewMode = "card" | "bar";
@@ -48,7 +50,6 @@ export function AllAgentConfigsPanel({ themeVariant }: { themeVariant: ThemeVari
   const [settings, setSettings] = useState<AppSettings | null>(null);
   const [showImportMenu, setShowImportMenu] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
-  const importMenuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -177,17 +178,6 @@ export function AllAgentConfigsPanel({ themeVariant }: { themeVariant: ThemeVari
     }
   }
 
-  useEffect(() => {
-    if (!showImportMenu) return;
-    function handleClickOutside(e: MouseEvent) {
-      if (importMenuRef.current && !importMenuRef.current.contains(e.target as Node)) {
-        setShowImportMenu(false);
-      }
-    }
-    document.addEventListener("mousedown", handleClickOutside);
-    return () => document.removeEventListener("mousedown", handleClickOutside);
-  }, [showImportMenu]);
-
   function handleAgentSaved(agentId: string) {
     setShowAddAgentModal(false);
     window.dispatchEvent(new Event(APP_SETTINGS_CHANGED_EVENT));
@@ -262,27 +252,29 @@ export function AllAgentConfigsPanel({ themeVariant }: { themeVariant: ThemeVari
               flex: "0 0 auto",
             }}
           >
-            <div ref={importMenuRef} style={{ position: "relative" }}>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setShowImportMenu((prev) => !prev)}
-                disabled={importing || exporting}
-              >
-                <Upload size={13} />
-                {importing
-                  ? t("appSettings.importingAllAgentConfigs")
-                  : t("appSettings.importAllAgentConfigs")}
-                <ChevronDown size={11} />
-              </Button>
-              {showImportMenu && (
-                <div
+            <Popover.Root open={showImportMenu} onOpenChange={setShowImportMenu}>
+              <Popover.Trigger asChild>
+                <Button variant="outline" size="sm" disabled={importing || exporting}>
+                  <Upload size={13} />
+                  {importing
+                    ? t("appSettings.importingAllAgentConfigs")
+                    : t("appSettings.importAllAgentConfigs")}
+                  <ChevronDown size={11} />
+                </Button>
+              </Popover.Trigger>
+              <Popover.Portal>
+                <Popover.Content
+                  side="bottom"
+                  align="end"
+                  sideOffset={6}
+                  collisionPadding={12}
+                  avoidCollisions
+                  sticky="always"
                   style={{
-                    position: "absolute",
-                    // 向上展开,不与下方搜索/列表区域重叠
-                    bottom: "calc(100% + 6px)",
-                    right: 0,
                     minWidth: 180,
+                    maxWidth: "min(280px, calc(100vw - 24px))",
+                    maxHeight: "min(320px, var(--radix-popover-content-available-height))",
+                    overflowY: "auto",
                     padding: 4,
                     border: "1px solid var(--border-medium)",
                     borderRadius: "var(--radius-md)",
@@ -290,7 +282,6 @@ export function AllAgentConfigsPanel({ themeVariant }: { themeVariant: ThemeVari
                     backdropFilter: "blur(18px) saturate(1.3)",
                     WebkitBackdropFilter: "blur(18px) saturate(1.3)",
                     boxShadow: "var(--shadow-popover)",
-                    zIndex: 40,
                   }}
                 >
                   <button
@@ -345,9 +336,9 @@ export function AllAgentConfigsPanel({ themeVariant }: { themeVariant: ThemeVari
                   >
                     {t("appSettings.importFromCcSwitch")}
                   </button>
-                </div>
-              )}
-            </div>
+                </Popover.Content>
+              </Popover.Portal>
+            </Popover.Root>
             <Button
               variant="default"
               size="sm"
@@ -379,55 +370,41 @@ export function AllAgentConfigsPanel({ themeVariant }: { themeVariant: ThemeVari
           gap: 8,
         }}
       >
-        <button
-          type="button"
-          onClick={() => setTab("anthropic")}
-          style={{
-            display: "inline-flex",
-            alignItems: "center",
-            gap: 6,
-            padding: "7px 14px",
-            border: `1.5px solid ${tab === "anthropic" ? "var(--accent)" : "var(--border-medium)"}`,
-            borderRadius: 8,
-            background: tab === "anthropic" ? "var(--control-active-bg)" : "var(--bg-card)",
-            color: tab === "anthropic" ? "var(--control-active-fg)" : "var(--text-secondary)",
-            fontSize: 12.5,
-            fontWeight: 600,
-            cursor: "pointer",
-          }}
-        >
-          <img src={claudeLogo} alt="" style={{ width: 16, height: 16, borderRadius: 3 }} />
-          {t("appSettings.providerAnthropic")}
-        </button>
-        <button
-          type="button"
-          onClick={() => setTab("openai")}
-          style={{
-            display: "inline-flex",
-            alignItems: "center",
-            gap: 6,
-            padding: "7px 14px",
-            border: `1.5px solid ${tab === "openai" ? "var(--accent)" : "var(--border-medium)"}`,
-            borderRadius: 8,
-            background: tab === "openai" ? "var(--control-active-bg)" : "var(--bg-card)",
-            color: tab === "openai" ? "var(--control-active-fg)" : "var(--text-secondary)",
-            fontSize: 12.5,
-            fontWeight: 600,
-            cursor: "pointer",
-          }}
-        >
-          <img
-            src={chatgptLogo}
-            alt=""
-            style={{
-              width: 16,
-              height: 16,
-              borderRadius: 3,
-              filter: themeVariant === "dark" ? "invert(1) brightness(1.35)" : undefined,
-            }}
-          />
-          {t("appSettings.providerOpenAI")}
-        </button>
+        <AnimatedSelectionGroup
+          value={tab}
+          onChange={setTab}
+          ariaLabel={t("appSettings.provider")}
+          options={[
+            {
+              value: "anthropic",
+              label: (
+                <>
+                  <img src={claudeLogo} alt="" style={{ width: 16, height: 16, borderRadius: 3 }} />
+                  {t("appSettings.providerAnthropic")}
+                </>
+              ),
+            },
+            {
+              value: "openai",
+              label: (
+                <>
+                  <img
+                    src={chatgptLogo}
+                    alt=""
+                    style={{
+                      width: 16,
+                      height: 16,
+                      borderRadius: 3,
+                      filter: themeVariant === "dark" ? "invert(1) brightness(1.35)" : undefined,
+                    }}
+                  />
+                  {t("appSettings.providerOpenAI")}
+                </>
+              ),
+            },
+          ]}
+          itemStyle={{ minHeight: 30, padding: "6px 12px", fontSize: 12.5 }}
+        />
 
         <Button variant="outline" size="sm" onClick={() => setShowAddAgentModal(true)}>
           <Plus size={13} />
@@ -466,44 +443,26 @@ export function AllAgentConfigsPanel({ themeVariant }: { themeVariant: ThemeVari
           />
         </div>
 
-        <button
-          type="button"
-          title={t("appSettings.viewCards")}
-          onClick={() => handleViewModeChange("card")}
-          style={{
-            width: 28,
-            height: 28,
-            display: "inline-flex",
-            alignItems: "center",
-            justifyContent: "center",
-            border: "1px solid var(--border-medium)",
-            borderRadius: 6,
-            background: viewMode === "card" ? "var(--bg-hover)" : "transparent",
-            color: viewMode === "card" ? "var(--text-primary)" : "var(--text-hint)",
-            cursor: "pointer",
-          }}
-        >
-          <LayoutList size={14} />
-        </button>
-        <button
-          type="button"
-          title={t("appSettings.viewBars")}
-          onClick={() => handleViewModeChange("bar")}
-          style={{
-            width: 28,
-            height: 28,
-            display: "inline-flex",
-            alignItems: "center",
-            justifyContent: "center",
-            border: "1px solid var(--border-medium)",
-            borderRadius: 6,
-            background: viewMode === "bar" ? "var(--bg-hover)" : "transparent",
-            color: viewMode === "bar" ? "var(--text-primary)" : "var(--text-hint)",
-            cursor: "pointer",
-          }}
-        >
-          <LayoutGrid size={14} />
-        </button>
+        <AnimatedSelectionGroup
+          value={viewMode}
+          onChange={handleViewModeChange}
+          ariaLabel={t("appSettings.viewMode")}
+          options={[
+            {
+              value: "card",
+              label: <LayoutList size={14} />,
+              ariaLabel: t("appSettings.viewCards"),
+              title: t("appSettings.viewCards"),
+            },
+            {
+              value: "bar",
+              label: <LayoutGrid size={14} />,
+              ariaLabel: t("appSettings.viewBars"),
+              title: t("appSettings.viewBars"),
+            },
+          ]}
+          itemStyle={{ width: 26, minHeight: 24, padding: 0 }}
+        />
       </div>
 
       {/* Agent list */}

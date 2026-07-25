@@ -21,6 +21,7 @@ import { useMongoBrowser } from "../../hooks/useMongoBrowser";
 import s from "../../styles";
 import type { AeroricDbConnectionConfig } from "../../types";
 import { DbxButton, DbxMenuItem } from "./DbxButton";
+import { AnimatedSelectionGroup } from "../ui/AnimatedSelection";
 import { confirmDbxProductionOperation, hasProductionProtection } from "./databaseProductionSafety";
 
 interface Props {
@@ -849,29 +850,24 @@ export function MongoBrowser({
             </div>
           </div>
           <div style={s.databaseButtonRow}>
-            <DbxButton
-              variant={viewMode === "document" ? "default" : "outline"}
-              size="sm"
-              onClick={() => {
-                setViewMode("document");
-                setColumnVisibilityOpen(false);
-                setColumnVisibilityQuery("");
-                setTableOptionsOpen(false);
-                saveMongoViewMode("document");
+            <AnimatedSelectionGroup
+              value={viewMode}
+              onChange={(mode) => {
+                setViewMode(mode);
+                saveMongoViewMode(mode);
+                if (mode === "document") {
+                  setColumnVisibilityOpen(false);
+                  setColumnVisibilityQuery("");
+                  setTableOptionsOpen(false);
+                }
               }}
-            >
-              {t("database.documentMode")}
-            </DbxButton>
-            <DbxButton
-              variant={viewMode === "table" ? "default" : "outline"}
-              size="sm"
-              onClick={() => {
-                setViewMode("table");
-                saveMongoViewMode("table");
-              }}
-            >
-              {t("database.tableMode")}
-            </DbxButton>
+              ariaLabel={t("database.mongoViewMode")}
+              options={[
+                { value: "document", label: t("database.documentMode") },
+                { value: "table", label: t("database.tableMode") },
+              ]}
+              itemStyle={{ minHeight: 28, padding: "5px 10px" }}
+            />
             {viewMode === "table" && tableColumns.length > 0 && (
               <span style={{ position: "relative", display: "inline-flex" }}>
                 <DbxButton

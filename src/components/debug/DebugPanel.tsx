@@ -32,6 +32,7 @@ import type {
 } from "../../types";
 import type { OpenFileSelection } from "../../hooks/projectPanelsState";
 import { Button, ButtonGroup } from "../ui/Button";
+import { AnimatedSelectionGroup } from "../ui/AnimatedSelection";
 import {
   buildDebugConfigDraft,
   canEvaluateDebugSession,
@@ -774,21 +775,18 @@ export function DebugPanel({
     onChange: (mode: BreakpointMode) => void,
     ariaLabel: string,
   ): React.ReactNode => (
-    <ButtonGroup style={breakpointModeSelectorStyle} aria-label={ariaLabel}>
-      {(["line", "condition", "log"] as const).map((mode) => (
-        <Button
-          key={mode}
-          variant={activeMode === mode ? "secondary" : "outline"}
-          size="sm"
-          active={activeMode === mode}
-          aria-pressed={activeMode === mode}
-          style={{ width: "100%" }}
-          onClick={() => onChange(mode)}
-        >
-          {t(`debug.breakpointMode.${mode}`)}
-        </Button>
-      ))}
-    </ButtonGroup>
+    <AnimatedSelectionGroup
+      value={activeMode}
+      onChange={onChange}
+      ariaLabel={ariaLabel}
+      style={breakpointModeSelectorStyle}
+      equalWidth
+      options={(["line", "condition", "log"] as const).map((mode) => ({
+        value: mode,
+        label: t(`debug.breakpointMode.${mode}`),
+      }))}
+      itemStyle={{ width: "100%", minHeight: 28 }}
+    />
   );
 
   const renderVariable = (variable: DebugVariable, depth = 0): React.ReactNode => {
@@ -903,71 +901,46 @@ export function DebugPanel({
           </label>
           <div style={labelStyle}>
             {t("debug.runtime")}
-            <ButtonGroup style={runtimeSelectorStyle} aria-label={t("debug.runtime")}>
-              <Button
-                variant={draft.runtime === "node" ? "secondary" : "outline"}
-                size="sm"
-                active={draft.runtime === "node"}
-                aria-pressed={draft.runtime === "node"}
-                style={{ width: "100%" }}
-                onClick={() =>
-                  setDraft((prev) => ({
-                    ...prev,
-                    runtime: "node",
-                    attachPort:
-                      remote && prev.request === "attach" && prev.attachPort === "5678"
+            <AnimatedSelectionGroup
+              value={draft.runtime}
+              ariaLabel={t("debug.runtime")}
+              style={runtimeSelectorStyle}
+              equalWidth
+              options={[
+                { value: "node", label: t("debug.runtime.node") },
+                { value: "python", label: t("debug.runtime.python") },
+              ]}
+              itemStyle={{ width: "100%", minHeight: 28 }}
+              onChange={(runtime) =>
+                setDraft((prev) => ({
+                  ...prev,
+                  runtime,
+                  attachPort:
+                    remote && prev.request === "attach"
+                      ? runtime === "node" && prev.attachPort === "5678"
                         ? "9229"
-                        : prev.attachPort,
-                  }))
-                }
-              >
-                {t("debug.runtime.node")}
-              </Button>
-              <Button
-                variant={draft.runtime === "python" ? "secondary" : "outline"}
-                size="sm"
-                active={draft.runtime === "python"}
-                aria-pressed={draft.runtime === "python"}
-                style={{ width: "100%" }}
-                onClick={() =>
-                  setDraft((prev) => ({
-                    ...prev,
-                    runtime: "python",
-                    attachPort:
-                      remote && prev.request === "attach" && prev.attachPort === "9229"
-                        ? "5678"
-                        : prev.attachPort,
-                  }))
-                }
-              >
-                {t("debug.runtime.python")}
-              </Button>
-            </ButtonGroup>
+                        : runtime === "python" && prev.attachPort === "9229"
+                          ? "5678"
+                          : prev.attachPort
+                      : prev.attachPort,
+                }))
+              }
+            />
           </div>
           <div style={labelStyle}>
             {t("debug.request")}
-            <ButtonGroup style={runtimeSelectorStyle} aria-label={t("debug.request")}>
-              <Button
-                variant={draft.request === "launch" ? "secondary" : "outline"}
-                size="sm"
-                active={draft.request === "launch"}
-                aria-pressed={draft.request === "launch"}
-                style={{ width: "100%" }}
-                onClick={() => setDraft((prev) => ({ ...prev, request: "launch" }))}
-              >
-                {t("debug.request.launch")}
-              </Button>
-              <Button
-                variant={draft.request === "attach" ? "secondary" : "outline"}
-                size="sm"
-                active={draft.request === "attach"}
-                aria-pressed={draft.request === "attach"}
-                style={{ width: "100%" }}
-                onClick={() => setDraft((prev) => ({ ...prev, request: "attach" }))}
-              >
-                {t("debug.request.attach")}
-              </Button>
-            </ButtonGroup>
+            <AnimatedSelectionGroup
+              value={draft.request}
+              onChange={(request) => setDraft((prev) => ({ ...prev, request }))}
+              ariaLabel={t("debug.request")}
+              style={runtimeSelectorStyle}
+              equalWidth
+              options={[
+                { value: "launch", label: t("debug.request.launch") },
+                { value: "attach", label: t("debug.request.attach") },
+              ]}
+              itemStyle={{ width: "100%", minHeight: 28 }}
+            />
           </div>
           {draft.request === "launch" ? (
             <label style={labelStyle}>

@@ -35,6 +35,7 @@ import {
 } from "../../lib/redisKeyTree";
 import s from "../../styles";
 import type { AeroricDbConnectionConfig } from "../../types";
+import { AnimatedSelectionGroup } from "../ui/AnimatedSelection";
 import { DbxButton, DbxMenuItem } from "./DbxButton";
 import { confirmDbxProductionOperation, hasProductionProtection } from "./databaseProductionSafety";
 import { RedisCommandSessionView, type RedisCommandHistoryEntry } from "./RedisCommandSessionView";
@@ -2017,26 +2018,32 @@ export function RedisBrowser({
                       borderBottom: "1px solid var(--border-dim)",
                     }}
                   >
-                    <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
-                      <DbxButton
-                        variant={memberDetailView === "json" ? "default" : "outline"}
-                        size="xs"
-                        icon={Braces}
-                        aria-pressed={memberDetailView === "json"}
-                        onClick={() => setMemberDetailView("json")}
-                      >
-                        {t("database.redisJsonView")}
-                      </DbxButton>
-                      <DbxButton
-                        variant={memberDetailView === "raw" ? "default" : "outline"}
-                        size="xs"
-                        icon={Terminal}
-                        aria-pressed={memberDetailView === "raw"}
-                        onClick={() => setMemberDetailView("raw")}
-                      >
-                        {t("database.redisRawContent")}
-                      </DbxButton>
-                    </span>
+                    <AnimatedSelectionGroup
+                      value={memberDetailView}
+                      onChange={setMemberDetailView}
+                      ariaLabel={t("database.redisValueViewMode")}
+                      options={[
+                        {
+                          value: "json",
+                          label: (
+                            <>
+                              <Braces size={12} aria-hidden="true" />
+                              {t("database.redisJsonView")}
+                            </>
+                          ),
+                        },
+                        {
+                          value: "raw",
+                          label: (
+                            <>
+                              <Terminal size={12} aria-hidden="true" />
+                              {t("database.redisRawContent")}
+                            </>
+                          ),
+                        },
+                      ]}
+                      itemStyle={{ minHeight: 22, height: 22, padding: "0 7px", fontSize: 11 }}
+                    />
                     <span style={{ flex: 1 }} />
                     {memberDetailView === "raw" && selectedMember.editAction && !readOnly && (
                       <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
@@ -2171,26 +2178,32 @@ export function RedisBrowser({
               background: "var(--bg-panel)",
             }}
           >
-            <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
-              <DbxButton
-                variant={valueDetailView === "json" ? "default" : "outline"}
-                size="xs"
-                icon={Braces}
-                aria-pressed={valueDetailView === "json"}
-                onClick={() => setValueDetailView("json")}
-              >
-                {t("database.redisJsonView")}
-              </DbxButton>
-              <DbxButton
-                variant={valueDetailView === "raw" ? "default" : "outline"}
-                size="xs"
-                icon={Terminal}
-                aria-pressed={valueDetailView === "raw"}
-                onClick={() => setValueDetailView("raw")}
-              >
-                {t("database.redisRawContent")}
-              </DbxButton>
-            </span>
+            <AnimatedSelectionGroup
+              value={valueDetailView}
+              onChange={setValueDetailView}
+              ariaLabel={t("database.redisValueViewMode")}
+              options={[
+                {
+                  value: "json",
+                  label: (
+                    <>
+                      <Braces size={12} aria-hidden="true" />
+                      {t("database.redisJsonView")}
+                    </>
+                  ),
+                },
+                {
+                  value: "raw",
+                  label: (
+                    <>
+                      <Terminal size={12} aria-hidden="true" />
+                      {t("database.redisRawContent")}
+                    </>
+                  ),
+                },
+              ]}
+              itemStyle={{ minHeight: 22, height: 22, padding: "0 7px", fontSize: 11 }}
+            />
             <span style={{ flex: 1 }} />
             {valueDetailView === "raw" && (
               <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>

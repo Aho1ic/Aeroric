@@ -2,6 +2,7 @@ import { lazy, type ReactNode } from "react";
 import type { IdeToolWithAvailability } from "../../plugins/ideToolRegistry";
 import type { RightPanel } from "../../hooks/useProjectPanels";
 import { renderIdeToolIcon } from "../RightToolbar";
+import { AnimatedSelectionTrack } from "../ui/AnimatedSelection";
 
 export type ProjectPanel = Exclude<RightPanel, null>;
 
@@ -47,9 +48,11 @@ export function IdePanelShell({
           background: "color-mix(in srgb, var(--bg-sidebar) 94%, transparent)",
         }}
       >
-        <div
+        <AnimatedSelectionTrack
+          value={activePanel}
+          ariaLabel="IDE panels"
           role="tablist"
-          aria-label="IDE panels"
+          variant="underline"
           style={{
             minWidth: 0,
             display: "flex",
@@ -66,6 +69,9 @@ export function IdePanelShell({
                 type="button"
                 role="tab"
                 aria-selected={active}
+                tabIndex={active ? 0 : -1}
+                data-animated-selection-item
+                data-selection-value={tool.panel}
                 title={t(tool.titleKey)}
                 onClick={() => onSelectPanel(tool.panel)}
                 style={{
@@ -74,7 +80,7 @@ export function IdePanelShell({
                   maxWidth: 136,
                   border: "1px solid transparent",
                   borderRadius: 6,
-                  background: active ? "var(--bg-selected)" : "transparent",
+                  background: "transparent",
                   color: active ? "var(--text-primary)" : "var(--text-muted)",
                   display: "inline-flex",
                   alignItems: "center",
@@ -101,7 +107,7 @@ export function IdePanelShell({
               </button>
             );
           })}
-        </div>
+        </AnimatedSelectionTrack>
         <div
           style={{
             flexShrink: 0,

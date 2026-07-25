@@ -22,6 +22,7 @@ import type {
   SshConnection,
 } from "../../types";
 import { useI18n } from "../../i18n";
+import { AnimatedSelectionGroup } from "../ui/AnimatedSelection";
 
 type DockerTab = "images" | "containers";
 type ContainerAction = "start" | "restart" | "stop" | "delete";
@@ -93,24 +94,6 @@ const tabRowStyle: React.CSSProperties = {
   alignItems: "center",
   gap: 6,
 };
-
-function tabStyle(active: boolean): React.CSSProperties {
-  return {
-    height: 30,
-    display: "inline-flex",
-    alignItems: "center",
-    gap: 6,
-    padding: "0 10px",
-    border: `1px solid ${active ? "var(--border-focus)" : "var(--border-dim)"}`,
-    borderRadius: 7,
-    background: active ? "var(--control-active-bg)" : "var(--bg-card)",
-    color: active ? "var(--control-active-fg)" : "var(--text-secondary)",
-    fontSize: 12,
-    fontWeight: 650,
-    cursor: "pointer",
-    whiteSpace: "nowrap",
-  };
-}
 
 const refreshButtonStyle: React.CSSProperties = {
   height: 30,
@@ -752,20 +735,34 @@ export function DockerServiceView({
               {t("common.back")}
             </button>
           )}
-          <button
-            type="button"
-            style={tabStyle(tab === "containers")}
-            onClick={() => setTab("containers")}
-          >
-            <Container size={14} />
-            {t("docker.containers")}
-            {resources ? ` ${resources.containers.length}` : ""}
-          </button>
-          <button type="button" style={tabStyle(tab === "images")} onClick={() => setTab("images")}>
-            <Box size={14} />
-            {t("docker.images")}
-            {resources ? ` ${resources.images.length}` : ""}
-          </button>
+          <AnimatedSelectionGroup
+            value={tab}
+            onChange={setTab}
+            ariaLabel={t("docker.title")}
+            options={[
+              {
+                value: "containers",
+                label: (
+                  <>
+                    <Container size={14} />
+                    {t("docker.containers")}
+                    {resources ? ` ${resources.containers.length}` : ""}
+                  </>
+                ),
+              },
+              {
+                value: "images",
+                label: (
+                  <>
+                    <Box size={14} />
+                    {t("docker.images")}
+                    {resources ? ` ${resources.images.length}` : ""}
+                  </>
+                ),
+              },
+            ]}
+            itemStyle={{ minHeight: 28, padding: "0 10px", fontSize: 12 }}
+          />
           <button
             type="button"
             style={refreshButtonStyle}

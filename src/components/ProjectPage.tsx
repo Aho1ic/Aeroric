@@ -80,6 +80,7 @@ import { isSqliteDatabaseFileName } from "./file-explorer/fileEntryUtils";
 import { agentDisplayLabel } from "../agents";
 import { useAgentOptions } from "../hooks/useAgentOptions";
 import { useI18n } from "../i18n";
+import { AnimatedSelectionTrack } from "./ui/AnimatedSelection";
 import {
   getIdeToolTitleWithDisabledReason,
   getCommandPaletteIdeTools,
@@ -1414,6 +1415,16 @@ export function ProjectPage({
     },
     [projectLocation.kind],
   );
+  const activeWorkspaceTerminal = workspaceTerminalTabs.find(
+    (terminal) => workspaceTerminalVisible && (terminal.remote || terminal.id === activeShellId),
+  );
+  const activeWorkspaceTabValue = workspaceTerminalVisible
+    ? activeWorkspaceTerminal
+      ? `terminal:${activeWorkspaceTerminal.id}`
+      : ""
+    : activeFilePath
+      ? `file:${activeEditorGroupId}:${activeFilePath}`
+      : "";
 
   return (
     <div
@@ -1453,10 +1464,12 @@ export function ProjectPage({
       />
       <div style={{ ...s.mainContent, flexDirection: "column" }}>
         {showWorkspaceTabs && (
-          <div
+          <AnimatedSelectionTrack
+            value={activeWorkspaceTabValue}
+            ariaLabel="Workspace tabs"
             role="tablist"
-            aria-label="Workspace tabs"
-            data-testid="workspace-tabs"
+            variant="underline"
+            dataTestId="workspace-tabs"
             style={{
               minHeight: 34,
               height: 34,
@@ -1478,14 +1491,16 @@ export function ProjectPage({
               return (
                 <div
                   key={`file:${tab.groupId}:${tab.path}`}
+                  data-animated-selection-item
+                  data-selection-value={`file:${tab.groupId}:${tab.path}`}
                   style={{
                     height: 24,
                     maxWidth: 220,
                     display: "inline-flex",
                     alignItems: "center",
-                    border: `1px solid ${selected ? "var(--border-strong)" : "var(--border-dim)"}`,
+                    border: "1px solid var(--border-dim)",
                     borderRadius: 6,
-                    background: selected ? "var(--control-active-bg)" : "transparent",
+                    background: "transparent",
                     flexShrink: 0,
                   }}
                 >
@@ -1493,6 +1508,7 @@ export function ProjectPage({
                     type="button"
                     role="tab"
                     aria-selected={selected}
+                    tabIndex={selected ? 0 : -1}
                     title={tab.path}
                     onClick={() => handleWorkspaceFileTabSelect(tab.groupId, tab.path)}
                     style={{
@@ -1551,14 +1567,16 @@ export function ProjectPage({
               return (
                 <div
                   key={`terminal:${terminal.id}`}
+                  data-animated-selection-item
+                  data-selection-value={`terminal:${terminal.id}`}
                   style={{
                     height: 24,
                     maxWidth: 150,
                     display: "inline-flex",
                     alignItems: "center",
-                    border: `1px solid ${selected ? "var(--border-strong)" : "var(--border-dim)"}`,
+                    border: "1px solid var(--border-dim)",
                     borderRadius: 6,
-                    background: selected ? "var(--control-active-bg)" : "transparent",
+                    background: "transparent",
                     flexShrink: 0,
                   }}
                 >
@@ -1566,6 +1584,7 @@ export function ProjectPage({
                     type="button"
                     role="tab"
                     aria-selected={selected}
+                    tabIndex={selected ? 0 : -1}
                     title={terminal.title}
                     onClick={() => handleWorkspaceTerminalTabSelect(terminal.id)}
                     style={{
@@ -1641,11 +1660,14 @@ export function ProjectPage({
                 <Plus size={12} />
               </button>
             )}
-          </div>
+          </AnimatedSelectionTrack>
         )}
         {showAgentTabs && (
-          <div
-            aria-label="Agent terminal tabs"
+          <AnimatedSelectionTrack
+            value={isNewTask ? "__new__" : selectedTaskId ?? ""}
+            ariaLabel="Agent terminal tabs"
+            role="tablist"
+            variant="underline"
             style={{
               height: 34,
               flexShrink: 0,
@@ -1667,6 +1689,11 @@ export function ProjectPage({
                 <button
                   key={task.id}
                   type="button"
+                  role="tab"
+                  aria-selected={selected}
+                  tabIndex={selected ? 0 : -1}
+                  data-animated-selection-item
+                  data-selection-value={task.id}
                   title={title}
                   onClick={() => handleSelectTask(project.id, task.id)}
                   style={{
@@ -1676,9 +1703,9 @@ export function ProjectPage({
                     alignItems: "center",
                     gap: 6,
                     padding: "0 9px",
-                    border: `1px solid ${selected ? "var(--border-strong)" : "var(--border-dim)"}`,
+                    border: "1px solid var(--border-dim)",
                     borderRadius: 6,
-                    background: selected ? "var(--control-active-bg)" : "transparent",
+                    background: "transparent",
                     color: selected ? "var(--control-active-fg)" : "var(--text-muted)",
                     cursor: "pointer",
                     flexShrink: 0,
@@ -1703,7 +1730,7 @@ export function ProjectPage({
                 </button>
               );
             })}
-          </div>
+          </AnimatedSelectionTrack>
         )}
         <div
           style={{

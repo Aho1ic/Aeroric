@@ -11,6 +11,7 @@ import {
 } from "../../hooks/useCancellableInvoke";
 import type { ListeningPort, RunProcessSnapshot, SshConnection } from "../../types";
 import { writeClipboardText } from "../file-explorer/clipboard";
+import { AnimatedSelectionGroup } from "../ui/AnimatedSelection";
 import {
   effectivePortFilterMode,
   findRunPreviewPort,
@@ -283,25 +284,22 @@ export function WebPreviewPanel({
       {error && <div style={errorStyle}>{error}</div>}
 
       <div style={filterBarStyle}>
-        <div style={segmentedControlStyle}>
-          <button
-            type="button"
-            style={segmentButtonStyle(effectiveFilterMode === "project")}
-            disabled={!knownProjectContext}
-            onClick={() => setFilterMode("project")}
-            title={t("preview.filterProject")}
-          >
-            {t("preview.project")}
-          </button>
-          <button
-            type="button"
-            style={segmentButtonStyle(effectiveFilterMode === "all")}
-            onClick={() => setFilterMode("all")}
-            title={t("preview.filterAll")}
-          >
-            {t("preview.all")}
-          </button>
-        </div>
+        <AnimatedSelectionGroup
+          value={effectiveFilterMode}
+          onChange={setFilterMode}
+          ariaLabel={t("preview.filterMode")}
+          style={segmentedControlStyle}
+          options={[
+            {
+              value: "project",
+              label: t("preview.project"),
+              disabled: !knownProjectContext,
+              title: t("preview.filterProject"),
+            },
+            { value: "all", label: t("preview.all"), title: t("preview.filterAll") },
+          ]}
+          itemStyle={{ minWidth: 58, minHeight: 22, padding: "0 8px", fontSize: 10.5 }}
+        />
         <span style={filterCountStyle}>
           {visiblePorts.length}/{sortedPorts.length}
         </span>
@@ -450,21 +448,6 @@ const segmentedControlStyle: React.CSSProperties = {
   borderRadius: 6,
   overflow: "hidden",
 };
-
-function segmentButtonStyle(active: boolean): React.CSSProperties {
-  return {
-    height: "100%",
-    minWidth: 58,
-    border: "none",
-    borderRight: "1px solid var(--border-dim)",
-    background: active ? "var(--accent)" : "transparent",
-    color: active ? "var(--fg-on-accent)" : "var(--text-muted)",
-    fontSize: 10.5,
-    fontWeight: 650,
-    cursor: "pointer",
-    padding: "0 8px",
-  };
-}
 
 const filterCountStyle: React.CSSProperties = {
   color: "var(--text-muted)",

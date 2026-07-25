@@ -1,13 +1,38 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::LazyLock;
+use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use flate2::read::GzDecoder;
+use reqwest::header::{ACCEPT, USER_AGENT};
 use serde::{Deserialize, Serialize};
+use tar::Archive;
+use uuid::Uuid;
 
 use crate::storage::{
     aeroric_dir, atomic_write, ensure_aeroric_dirs, load_projects, update_projects, Project,
 };
+
+const SKILLS_SH_ORIGIN: &str = "https://skills.sh";
+const GITHUB_API_ORIGIN: &str = "https://api.github.com";
+const MARKETPLACE_PAGE_SIZE: usize = 12;
+const MARKETPLACE_CACHE_MAX_AGE_MS: i64 = 30 * 60 * 1000;
+const SKILLS_SH_PAGE_SIZE: usize = 200;
+const MARKETPLACE_MAX_ARCHIVE_FILES: usize = 5_000;
+const MARKETPLACE_MAX_ARCHIVE_BYTES: u64 = 50 * 1024 * 1024;
+const MARKETPLACE_MAX_FILE_BYTES: u64 = 10 * 1024 * 1024;
+const MARKETPLACE_MAX_SKILL_FILES: usize = 1_000;
+const MARKETPLACE_MAX_SKILL_BYTES: u64 = 20 * 1024 * 1024;
+
+static MARKETPLACE_HTTP_CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
+    reqwest::Client::builder()
+        .timeout(Duration::from_secs(24))
+        .redirect(reqwest::redirect::Policy::limited(5))
+        .build()
+        .unwrap_or_else(|_| reqwest::Client::new())
+});
 
 // ── Data types ───────────────────────────────────────────────────────────────
 
@@ -105,6 +130,249 @@ pub struct DeleteResult {
     pub removed_links: usize,
 }
 
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum MarketplaceSort {
+    Downloads,
+    Stars,
+    #[default]
+    Installs,
+    Updated,
+    Published,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum MarketplaceCategory {
+    #[default]
+    All,
+    Agents,
+    Integrations,
+    Automation,
+    Operations,
+    Security,
+    Research,
+    Development,
+    Finance,
+    Lifestyle,
+    Productivity,
+    Other,
+    Communication,
+    Creative,
+    Knowledge,
+}
+
+impl MarketplaceCategory {
+    fn as_str(&self) -> &'static str {
+        match self {
+            Self::All => "all",
+            Self::Agents => "agents",
+            Self::Integrations => "integrations",
+            Self::Automation => "automation",
+            Self::Operations => "operations",
+            Self::Security => "security",
+            Self::Research => "research",
+            Self::Development => "development",
+            Self::Finance => "finance",
+            Self::Lifestyle => "lifestyle",
+            Self::Productivity => "productivity",
+            Self::Other => "other",
+            Self::Communication => "communication",
+            Self::Creative => "creative",
+            Self::Knowledge => "knowledge",
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct MarketplaceSkill {
+    pub id: String,
+    pub source: String,
+    pub skill_id: String,
+    pub name: String,
+    pub publisher: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub publisher_avatar: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repository_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skill_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    pub latest_version: String,
+    pub latest_ref: String,
+    #[serde(default)]
+    pub categories: Vec<String>,
+    #[serde(default)]
+    pub downloads_7d: u64,
+    #[serde(default)]
+    pub total_installs: u64,
+    #[serde(default)]
+    pub stars: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub published_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub updated_at: Option<String>,
+    #[serde(default)]
+    pub install_status: String,
+    #[serde(default)]
+    pub is_official: bool,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct MarketplacePage {
+    pub items: Vec<MarketplaceSkill>,
+    pub total: usize,
+    pub page: usize,
+    pub page_size: usize,
+    pub has_more: bool,
+    #[serde(default)]
+    pub stale: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub warning: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct MarketplaceInstallRecord {
+    pub source: String,
+    pub skill_id: String,
+    pub skill_name: String,
+    pub version: String,
+    pub git_ref: String,
+    pub installed_at: i64,
+    pub target_path: String,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+struct MarketplaceInstallationsFile {
+    #[serde(default)]
+    version: u32,
+    #[serde(default)]
+    installations: Vec<MarketplaceInstallRecord>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+#[serde(rename_all = "camelCase")]
+struct SkillsShSkill {
+    source: String,
+    skill_id: String,
+    name: String,
+    #[serde(default)]
+    installs: u64,
+    #[serde(default)]
+    weekly_installs: Vec<u64>,
+    #[serde(default)]
+    is_official: bool,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct SkillsShResponse {
+    #[serde(default)]
+    skills: Vec<SkillsShSkill>,
+    #[serde(default)]
+    total: usize,
+    #[serde(default)]
+    has_more: bool,
+    #[serde(default)]
+    count: usize,
+}
+
+struct FetchedSkillsSh {
+    skills: Vec<SkillsShSkill>,
+    total: usize,
+    has_more: bool,
+}
+
+#[derive(Deserialize, Clone, Debug, Default)]
+struct GithubOwner {
+    #[serde(default)]
+    login: String,
+    avatar_url: Option<String>,
+}
+
+#[derive(Deserialize, Clone, Debug, Default)]
+struct GithubRepository {
+    #[serde(default)]
+    html_url: String,
+    description: Option<String>,
+    #[serde(default)]
+    stargazers_count: u64,
+    #[serde(default)]
+    default_branch: String,
+    #[serde(default)]
+    created_at: String,
+    #[serde(default)]
+    pushed_at: String,
+    #[serde(default)]
+    topics: Vec<String>,
+    #[serde(default)]
+    owner: GithubOwner,
+}
+
+#[derive(Deserialize, Clone, Debug, Default)]
+struct GithubTreeEntry {
+    path: String,
+    #[serde(rename = "type")]
+    kind: String,
+}
+
+#[derive(Deserialize, Clone, Debug, Default)]
+struct GithubTree {
+    #[serde(default)]
+    tree: Vec<GithubTreeEntry>,
+}
+
+#[derive(Deserialize, Clone, Debug, Default)]
+struct GithubRelease {
+    #[serde(default)]
+    tag_name: String,
+}
+
+#[derive(Deserialize, Clone, Debug, Default)]
+struct GithubTag {
+    #[serde(default)]
+    name: String,
+}
+
+#[derive(Deserialize, Clone, Debug, Default)]
+struct GithubCommitAuthor {
+    #[serde(default)]
+    date: String,
+}
+
+#[derive(Deserialize, Clone, Debug, Default)]
+struct GithubCommitDetails {
+    #[serde(default)]
+    committer: GithubCommitAuthor,
+}
+
+#[derive(Deserialize, Clone, Debug, Default)]
+struct GithubCommit {
+    #[serde(default)]
+    sha: String,
+    #[serde(default)]
+    commit: GithubCommitDetails,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+struct MarketplaceCacheEntry {
+    key: String,
+    fetched_at: i64,
+    page: MarketplacePage,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+struct MarketplaceCacheFile {
+    #[serde(default)]
+    version: u32,
+    #[serde(default)]
+    entries: Vec<MarketplaceCacheEntry>,
+}
+
 // ── Path helpers ─────────────────────────────────────────────────────────────
 
 fn skill_hub_path() -> Result<PathBuf, String> {
@@ -113,6 +381,14 @@ fn skill_hub_path() -> Result<PathBuf, String> {
 
 fn installations_path() -> Result<PathBuf, String> {
     Ok(aeroric_dir()?.join("skill_installations.json"))
+}
+
+fn marketplace_installations_path() -> Result<PathBuf, String> {
+    Ok(aeroric_dir()?.join("marketplace_skill_installations.json"))
+}
+
+fn marketplace_cache_path() -> Result<PathBuf, String> {
+    Ok(aeroric_dir()?.join("marketplace_cache.json"))
 }
 
 fn now_ms() -> i64 {
@@ -194,6 +470,61 @@ fn save_installations_internal(file: &InstallationsFile) -> Result<(), String> {
     ensure_aeroric_dirs()?;
     let raw = serde_json::to_string_pretty(file).map_err(|e| e.to_string())?;
     atomic_write(&installations_path()?, &raw)
+}
+
+fn load_marketplace_installations_internal() -> MarketplaceInstallationsFile {
+    let Ok(path) = marketplace_installations_path() else {
+        return MarketplaceInstallationsFile::default();
+    };
+    fs::read_to_string(path)
+        .ok()
+        .and_then(|raw| serde_json::from_str(&raw).ok())
+        .unwrap_or_default()
+}
+
+fn save_marketplace_installations_internal(
+    file: &MarketplaceInstallationsFile,
+) -> Result<(), String> {
+    ensure_aeroric_dirs()?;
+    let raw = serde_json::to_string_pretty(file).map_err(|e| e.to_string())?;
+    atomic_write(&marketplace_installations_path()?, &raw)
+}
+
+fn load_marketplace_cache_internal() -> MarketplaceCacheFile {
+    let Ok(path) = marketplace_cache_path() else {
+        return MarketplaceCacheFile::default();
+    };
+    fs::read_to_string(path)
+        .ok()
+        .and_then(|raw| serde_json::from_str(&raw).ok())
+        .unwrap_or_default()
+}
+
+fn save_marketplace_cache_page(key: &str, page: &MarketplacePage) -> Result<(), String> {
+    ensure_aeroric_dirs()?;
+    let mut cache = load_marketplace_cache_internal();
+    cache.version = 1;
+    cache.entries.retain(|entry| entry.key != key);
+    cache.entries.push(MarketplaceCacheEntry {
+        key: key.to_string(),
+        fetched_at: now_ms(),
+        page: page.clone(),
+    });
+    cache
+        .entries
+        .sort_by(|a, b| b.fetched_at.cmp(&a.fetched_at));
+    cache.entries.truncate(24);
+    let raw = serde_json::to_string_pretty(&cache).map_err(|e| e.to_string())?;
+    atomic_write(&marketplace_cache_path()?, &raw)
+}
+
+fn cached_marketplace_page(key: &str, allow_expired: bool) -> Option<MarketplacePage> {
+    let cache = load_marketplace_cache_internal();
+    let entry = cache.entries.into_iter().find(|entry| entry.key == key)?;
+    if !allow_expired && now_ms().saturating_sub(entry.fetched_at) > MARKETPLACE_CACHE_MAX_AGE_MS {
+        return None;
+    }
+    Some(entry.page)
 }
 
 // ── SKILL.md frontmatter parsing ─────────────────────────────────────────────
@@ -287,6 +618,7 @@ fn fold_lines(lines: &[String]) -> String {
 struct ParsedFrontmatter {
     name: Option<String>,
     description: Option<String>,
+    version: Option<String>,
 }
 
 fn parse_frontmatter(content: &str) -> ParsedFrontmatter {
@@ -335,6 +667,7 @@ fn parse_frontmatter(content: &str) -> ParsedFrontmatter {
             match key {
                 "name" => parsed.name = Some(value),
                 "description" => parsed.description = Some(value),
+                "version" => parsed.version = Some(value),
                 _ => {}
             }
             i += 1 + consumed;
@@ -343,6 +676,7 @@ fn parse_frontmatter(content: &str) -> ParsedFrontmatter {
             match key {
                 "name" => parsed.name = Some(value),
                 "description" => parsed.description = Some(value),
+                "version" => parsed.version = Some(value),
                 _ => {}
             }
             i += 1;
@@ -1013,10 +1347,7 @@ pub async fn import_local_skill(source_path: String) -> Result<String, String> {
             .ok_or_else(|| "Skill Hub is not configured".to_string())?;
         let dest = Path::new(hub_path).join(&skill_name);
         if dest.exists() {
-            return Err(format!(
-                "Skill '{}' already exists in the hub",
-                skill_name
-            ));
+            return Err(format!("Skill '{}' already exists in the hub", skill_name));
         }
         copy_dir_recursive(source, &dest).map_err(|e| {
             let _ = fs::remove_dir_all(&dest);
@@ -1041,6 +1372,1107 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
         }
     }
     Ok(())
+}
+
+fn marketplace_cache_key(
+    query: &str,
+    sort: MarketplaceSort,
+    category: &MarketplaceCategory,
+    page: usize,
+    page_size: usize,
+) -> String {
+    format!(
+        "{}|{:?}|{}|{}|{}",
+        query.trim().to_lowercase(),
+        sort,
+        category.as_str(),
+        page,
+        page_size
+    )
+}
+
+fn github_repo_parts(source: &str) -> Option<(&str, &str)> {
+    let mut parts = source.split('/');
+    let owner = parts.next()?;
+    let repo = parts.next()?;
+    if parts.next().is_some()
+        || owner.is_empty()
+        || repo.is_empty()
+        || owner.contains('.')
+        || !owner
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_'))
+        || !repo
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.'))
+    {
+        return None;
+    }
+    Some((owner, repo))
+}
+
+fn normalize_marketplace_token(value: &str) -> String {
+    value
+        .chars()
+        .filter(|ch| ch.is_ascii_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect()
+}
+
+fn classify_marketplace_skill(text: &str) -> Vec<String> {
+    const RULES: &[(&str, &[&str])] = &[
+        (
+            "agents",
+            &["agent", "assistant", "multi-agent", "copilot", "prompt"],
+        ),
+        (
+            "integrations",
+            &[
+                "integration",
+                "api",
+                "slack",
+                "discord",
+                "github",
+                "notion",
+                "jira",
+                "lark",
+                "feishu",
+            ],
+        ),
+        (
+            "automation",
+            &[
+                "automation",
+                "workflow",
+                "browser",
+                "scrape",
+                "schedule",
+                "bot",
+            ],
+        ),
+        (
+            "operations",
+            &[
+                "devops",
+                "deploy",
+                "docker",
+                "kubernetes",
+                "azure",
+                "aws",
+                "cloud",
+                "infra",
+                "monitor",
+            ],
+        ),
+        (
+            "security",
+            &[
+                "security",
+                "audit",
+                "auth",
+                "vulnerability",
+                "compliance",
+                "rbac",
+            ],
+        ),
+        (
+            "research",
+            &[
+                "research",
+                "paper",
+                "academic",
+                "analysis",
+                "explore",
+                "experiment",
+            ],
+        ),
+        (
+            "development",
+            &[
+                "code",
+                "react",
+                "typescript",
+                "python",
+                "rust",
+                "java",
+                "database",
+                "frontend",
+                "backend",
+                "test",
+                "debug",
+            ],
+        ),
+        (
+            "finance",
+            &[
+                "finance",
+                "stock",
+                "trading",
+                "accounting",
+                "invoice",
+                "budget",
+                "cost",
+            ],
+        ),
+        (
+            "lifestyle",
+            &[
+                "health",
+                "fitness",
+                "travel",
+                "recipe",
+                "food",
+                "home",
+                "lifestyle",
+            ],
+        ),
+        (
+            "productivity",
+            &[
+                "productivity",
+                "task",
+                "todo",
+                "calendar",
+                "meeting",
+                "notes",
+                "planning",
+            ],
+        ),
+        (
+            "communication",
+            &[
+                "communication",
+                "email",
+                "message",
+                "chat",
+                "social",
+                "twitter",
+                "reddit",
+            ],
+        ),
+        (
+            "creative",
+            &[
+                "design",
+                "image",
+                "video",
+                "music",
+                "creative",
+                "animation",
+                "brand",
+                "ui",
+                "ux",
+            ],
+        ),
+        (
+            "knowledge",
+            &[
+                "knowledge",
+                "docs",
+                "documentation",
+                "wiki",
+                "learn",
+                "teach",
+                "education",
+            ],
+        ),
+    ];
+    let lower = text.to_lowercase();
+    let mut categories: Vec<String> = RULES
+        .iter()
+        .filter(|(_, needles)| needles.iter().any(|needle| lower.contains(needle)))
+        .map(|(category, _)| (*category).to_string())
+        .collect();
+    categories.sort();
+    categories.dedup();
+    if categories.is_empty() {
+        categories.push("other".to_string());
+    }
+    categories
+}
+
+async fn marketplace_get_json<T: for<'de> Deserialize<'de>>(url: &str) -> Result<T, String> {
+    let response = MARKETPLACE_HTTP_CLIENT
+        .get(url)
+        .header(USER_AGENT, "Aeroric/1.3.7")
+        .header(ACCEPT, "application/vnd.github+json, application/json")
+        .send()
+        .await
+        .map_err(|error| format!("Network request failed: {error}"))?;
+    if response.status() == reqwest::StatusCode::TOO_MANY_REQUESTS
+        || response.status() == reqwest::StatusCode::FORBIDDEN
+    {
+        return Err("Marketplace API rate limit reached".to_string());
+    }
+    response
+        .error_for_status()
+        .map_err(|error| format!("Marketplace request failed: {error}"))?
+        .json::<T>()
+        .await
+        .map_err(|error| format!("Invalid marketplace response: {error}"))
+}
+
+async fn fetch_skills_sh_entries(
+    query: &str,
+    max_directory_page: usize,
+) -> Result<FetchedSkillsSh, String> {
+    let query = query.trim();
+    if query.len() >= 2 {
+        let mut url = url::Url::parse(&format!("{SKILLS_SH_ORIGIN}/api/search"))
+            .map_err(|error| error.to_string())?;
+        url.query_pairs_mut()
+            .append_pair("q", query)
+            .append_pair("limit", "100");
+        let mut response: SkillsShResponse = marketplace_get_json(url.as_str()).await?;
+        let all_time: SkillsShResponse =
+            marketplace_get_json(&format!("{SKILLS_SH_ORIGIN}/api/skills/all-time/0"))
+                .await
+                .unwrap_or_default();
+        let trends: HashMap<(String, String), SkillsShSkill> = all_time
+            .skills
+            .into_iter()
+            .map(|skill| ((skill.source.clone(), skill.skill_id.clone()), skill))
+            .collect();
+        for skill in &mut response.skills {
+            if let Some(trend) = trends.get(&(skill.source.clone(), skill.skill_id.clone())) {
+                skill.weekly_installs = trend.weekly_installs.clone();
+                skill.is_official = trend.is_official;
+                skill.installs = skill.installs.max(trend.installs);
+            }
+        }
+        let total = response.count.max(response.skills.len());
+        Ok(FetchedSkillsSh {
+            skills: response.skills,
+            total,
+            has_more: false,
+        })
+    } else {
+        let mut skills = Vec::new();
+        let mut total = 0;
+        let mut has_more = false;
+        for directory_page in 0..=max_directory_page {
+            let response: SkillsShResponse = marketplace_get_json(&format!(
+                "{SKILLS_SH_ORIGIN}/api/skills/all-time/{directory_page}"
+            ))
+            .await?;
+            total = response.total.max(total);
+            has_more = response.has_more;
+            skills.extend(response.skills);
+            if !has_more {
+                break;
+            }
+        }
+        Ok(FetchedSkillsSh {
+            total: total.max(skills.len()),
+            skills,
+            has_more,
+        })
+    }
+}
+
+fn marketplace_from_skills_sh(skill: SkillsShSkill) -> MarketplaceSkill {
+    let publisher = skill
+        .source
+        .split('/')
+        .next()
+        .unwrap_or(&skill.source)
+        .to_string();
+    let categories = classify_marketplace_skill(&format!(
+        "{} {} {}",
+        skill.name, skill.skill_id, skill.source
+    ));
+    MarketplaceSkill {
+        id: format!("{}/{}", skill.source, skill.skill_id),
+        repository_url: github_repo_parts(&skill.source)
+            .map(|_| format!("https://github.com/{}", skill.source)),
+        source: skill.source,
+        skill_id: skill.skill_id,
+        name: skill.name,
+        publisher,
+        latest_version: "latest".to_string(),
+        latest_ref: "HEAD".to_string(),
+        categories,
+        downloads_7d: skill.weekly_installs.last().copied().unwrap_or(0),
+        total_installs: skill.installs,
+        is_official: skill.is_official,
+        install_status: "available".to_string(),
+        ..Default::default()
+    }
+}
+
+async fn verify_marketplace_skill_source(
+    requested: &MarketplaceSkill,
+) -> Result<MarketplaceSkill, String> {
+    if github_repo_parts(&requested.source).is_none() {
+        return Err("Marketplace source is not a GitHub repository".to_string());
+    }
+    let lookup = if requested.skill_id.trim().len() >= 2 {
+        requested.skill_id.trim()
+    } else {
+        requested.name.trim()
+    };
+    let verified = fetch_skills_sh_entries(lookup, 0)
+        .await?
+        .skills
+        .into_iter()
+        .find(|skill| skill.source == requested.source && skill.skill_id == requested.skill_id)
+        .ok_or_else(|| {
+            "Marketplace skill source could not be verified with Skills.sh".to_string()
+        })?;
+    Ok(marketplace_from_skills_sh(verified))
+}
+
+fn find_skill_markdown_path(tree: &GithubTree, skill: &MarketplaceSkill) -> Option<String> {
+    let wanted = normalize_marketplace_token(&skill.skill_id);
+    let name = normalize_marketplace_token(&skill.name);
+    let candidates: Vec<&GithubTreeEntry> = tree
+        .tree
+        .iter()
+        .filter(|entry| {
+            entry.kind == "blob" && (entry.path == "SKILL.md" || entry.path.ends_with("/SKILL.md"))
+        })
+        .collect();
+    candidates
+        .iter()
+        .find(|entry| {
+            Path::new(&entry.path)
+                .parent()
+                .and_then(Path::file_name)
+                .and_then(|value| value.to_str())
+                .map(normalize_marketplace_token)
+                .is_some_and(|candidate| candidate == wanted || candidate == name)
+        })
+        .or_else(|| {
+            candidates.iter().find(|entry| {
+                let normalized = normalize_marketplace_token(&entry.path);
+                normalized.contains(&wanted) || normalized.contains(&name)
+            })
+        })
+        .or_else(|| (candidates.len() == 1).then(|| &candidates[0]))
+        .map(|entry| entry.path.clone())
+}
+
+async fn fetch_raw_github_file(
+    owner: &str,
+    repo: &str,
+    git_ref: &str,
+    path: &str,
+) -> Result<String, String> {
+    let mut url =
+        url::Url::parse("https://raw.githubusercontent.com").map_err(|error| error.to_string())?;
+    {
+        let mut segments = url
+            .path_segments_mut()
+            .map_err(|_| "Cannot build GitHub raw URL".to_string())?;
+        segments.push(owner).push(repo).push(git_ref);
+        for component in Path::new(path).components() {
+            if let std::path::Component::Normal(value) = component {
+                segments.push(&value.to_string_lossy());
+            }
+        }
+    }
+    let response = MARKETPLACE_HTTP_CLIENT
+        .get(url)
+        .header(USER_AGENT, "Aeroric/1.3.7")
+        .send()
+        .await
+        .map_err(|error| format!("Failed to download SKILL.md: {error}"))?
+        .error_for_status()
+        .map_err(|error| format!("Failed to download SKILL.md: {error}"))?;
+    response
+        .text()
+        .await
+        .map_err(|error| format!("Failed to read SKILL.md: {error}"))
+}
+
+async fn fetch_latest_skill_commit(
+    owner: &str,
+    repo: &str,
+    branch: &str,
+    skill_markdown_path: &str,
+) -> Option<GithubCommit> {
+    let mut url =
+        url::Url::parse(&format!("{GITHUB_API_ORIGIN}/repos/{owner}/{repo}/commits")).ok()?;
+    url.query_pairs_mut()
+        .append_pair("sha", branch)
+        .append_pair("path", skill_markdown_path)
+        .append_pair("per_page", "1");
+    marketplace_get_json::<Vec<GithubCommit>>(url.as_str())
+        .await
+        .ok()?
+        .into_iter()
+        .next()
+}
+
+async fn fetch_latest_repository_version(owner: &str, repo: &str) -> Option<String> {
+    if let Ok(release) = marketplace_get_json::<GithubRelease>(&format!(
+        "{GITHUB_API_ORIGIN}/repos/{owner}/{repo}/releases/latest"
+    ))
+    .await
+    {
+        if !release.tag_name.trim().is_empty() {
+            return Some(release.tag_name);
+        }
+    }
+    marketplace_get_json::<Vec<GithubTag>>(&format!(
+        "{GITHUB_API_ORIGIN}/repos/{owner}/{repo}/tags?per_page=1"
+    ))
+    .await
+    .ok()?
+    .into_iter()
+    .find_map(|tag| (!tag.name.trim().is_empty()).then_some(tag.name))
+}
+
+fn apply_repository_metadata(
+    skill: &mut MarketplaceSkill,
+    owner: &str,
+    repo: &str,
+    repository: &GithubRepository,
+) {
+    skill.publisher = if repository.owner.login.is_empty() {
+        owner.to_string()
+    } else {
+        repository.owner.login.clone()
+    };
+    skill.publisher_avatar = repository.owner.avatar_url.clone();
+    skill.repository_url = Some(if repository.html_url.is_empty() {
+        format!("https://github.com/{owner}/{repo}")
+    } else {
+        repository.html_url.clone()
+    });
+    if skill.description.is_none() {
+        skill.description = repository.description.clone();
+    }
+    skill.stars = repository.stargazers_count;
+    skill.published_at =
+        (!repository.created_at.is_empty()).then_some(repository.created_at.clone());
+    skill.updated_at = (!repository.pushed_at.is_empty()).then_some(repository.pushed_at.clone());
+    let topic_text = repository.topics.join(" ");
+    skill.categories = classify_marketplace_skill(&format!(
+        "{} {} {} {} {}",
+        skill.name,
+        skill.skill_id,
+        skill.source,
+        skill.description.as_deref().unwrap_or_default(),
+        topic_text
+    ));
+}
+
+async fn enrich_marketplace_skill_with_repository(
+    mut skill: MarketplaceSkill,
+    owner: &str,
+    repo: &str,
+    repository: GithubRepository,
+) -> Result<MarketplaceSkill, String> {
+    let branch = if repository.default_branch.is_empty() {
+        "main".to_string()
+    } else {
+        repository.default_branch.clone()
+    };
+    let tree: GithubTree = marketplace_get_json(&format!(
+        "{GITHUB_API_ORIGIN}/repos/{owner}/{repo}/git/trees/{branch}?recursive=1"
+    ))
+    .await?;
+    let skill_md_path = find_skill_markdown_path(&tree, &skill);
+    let latest_commit = match skill_md_path.as_deref() {
+        Some(path) => fetch_latest_skill_commit(owner, repo, &branch, path).await,
+        None => None,
+    };
+    let content_ref = latest_commit
+        .as_ref()
+        .map(|commit| commit.sha.clone())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| branch.clone());
+    let mut parsed = ParsedFrontmatter::default();
+    if let Some(path) = skill_md_path.as_deref() {
+        if let Ok(content) = fetch_raw_github_file(owner, repo, &content_ref, path).await {
+            parsed = parse_frontmatter(&content);
+        }
+    }
+    let repository_version = if parsed.version.is_none() {
+        fetch_latest_repository_version(owner, repo).await
+    } else {
+        None
+    };
+
+    apply_repository_metadata(&mut skill, owner, repo, &repository);
+    skill.skill_path = skill_md_path.and_then(|path| {
+        Path::new(&path)
+            .parent()
+            .map(|parent| parent.to_string_lossy().into_owned())
+    });
+    skill.description = parsed.description.or(skill.description);
+    skill.latest_ref = content_ref.clone();
+    skill.latest_version = parsed.version.or(repository_version).unwrap_or_else(|| {
+        if content_ref == branch {
+            branch.to_string()
+        } else {
+            content_ref.chars().take(8).collect()
+        }
+    });
+    skill.updated_at = latest_commit
+        .and_then(|commit| {
+            (!commit.commit.committer.date.is_empty()).then_some(commit.commit.committer.date)
+        })
+        .or(skill.updated_at);
+    let topic_text = repository.topics.join(" ");
+    skill.categories = classify_marketplace_skill(&format!(
+        "{} {} {} {} {}",
+        skill.name,
+        skill.skill_id,
+        skill.source,
+        skill.description.as_deref().unwrap_or_default(),
+        topic_text
+    ));
+    Ok(skill)
+}
+
+async fn enrich_marketplace_skill(skill: MarketplaceSkill) -> Result<MarketplaceSkill, String> {
+    let source = skill.source.clone();
+    let (owner, repo) = github_repo_parts(&source)
+        .ok_or_else(|| "Marketplace source is not a GitHub repository".to_string())?;
+    let repository: GithubRepository =
+        marketplace_get_json(&format!("{GITHUB_API_ORIGIN}/repos/{owner}/{repo}")).await?;
+    enrich_marketplace_skill_with_repository(skill, owner, repo, repository).await
+}
+
+fn refresh_marketplace_install_status(skill: &mut MarketplaceSkill) {
+    let file = load_marketplace_installations_internal();
+    if let Some(record) = file
+        .installations
+        .iter()
+        .find(|record| record.source == skill.source && record.skill_id == skill.skill_id)
+    {
+        skill.install_status = if record.git_ref == skill.latest_ref {
+            "installed".to_string()
+        } else {
+            "update".to_string()
+        };
+        return;
+    }
+
+    let config = load_hub_config_internal();
+    if let Some(hub_path) = config.hub_path {
+        if Path::new(&hub_path).join(&skill.name).exists() {
+            skill.install_status = "conflict".to_string();
+        } else {
+            skill.install_status = "available".to_string();
+        }
+    }
+}
+
+async fn enrich_marketplace_repository_metadata(
+    items: &mut [MarketplaceSkill],
+    repository_cache: &mut HashMap<String, GithubRepository>,
+) -> Option<String> {
+    let mut warning = None;
+    for skill in items {
+        let source = skill.source.clone();
+        let Some((owner, repo)) = github_repo_parts(&source) else {
+            continue;
+        };
+        let repository = if let Some(repository) = repository_cache.get(&source) {
+            Ok(repository.clone())
+        } else {
+            marketplace_get_json::<GithubRepository>(&format!(
+                "{GITHUB_API_ORIGIN}/repos/{owner}/{repo}"
+            ))
+            .await
+            .inspect(|repository| {
+                repository_cache.insert(source.clone(), repository.clone());
+            })
+        };
+        match repository {
+            Ok(repository) => {
+                apply_repository_metadata(skill, owner, repo, &repository);
+            }
+            Err(error) => {
+                warning.get_or_insert(error);
+            }
+        }
+    }
+    warning
+}
+
+fn sort_marketplace_skills(items: &mut [MarketplaceSkill], sort: MarketplaceSort) {
+    items.sort_by(|left, right| match sort {
+        MarketplaceSort::Downloads => right
+            .downloads_7d
+            .cmp(&left.downloads_7d)
+            .then_with(|| right.total_installs.cmp(&left.total_installs)),
+        MarketplaceSort::Stars => right
+            .stars
+            .cmp(&left.stars)
+            .then_with(|| right.total_installs.cmp(&left.total_installs)),
+        MarketplaceSort::Installs => right
+            .total_installs
+            .cmp(&left.total_installs)
+            .then_with(|| right.downloads_7d.cmp(&left.downloads_7d)),
+        MarketplaceSort::Updated => right
+            .updated_at
+            .cmp(&left.updated_at)
+            .then_with(|| right.total_installs.cmp(&left.total_installs)),
+        MarketplaceSort::Published => right
+            .published_at
+            .cmp(&left.published_at)
+            .then_with(|| right.total_installs.cmp(&left.total_installs)),
+    });
+}
+
+#[tauri::command]
+pub async fn search_marketplace_skills(
+    query: String,
+    sort: MarketplaceSort,
+    category: MarketplaceCategory,
+    page: Option<usize>,
+    page_size: Option<usize>,
+) -> Result<MarketplacePage, String> {
+    let page = page.unwrap_or(0);
+    let page_size = page_size
+        .unwrap_or(MARKETPLACE_PAGE_SIZE)
+        .clamp(1, MARKETPLACE_PAGE_SIZE);
+    let cache_key = marketplace_cache_key(&query, sort, &category, page, page_size);
+    if let Some(mut cached) = cached_marketplace_page(&cache_key, false) {
+        cached
+            .items
+            .iter_mut()
+            .for_each(refresh_marketplace_install_status);
+        return Ok(cached);
+    }
+
+    let result = async {
+        let requested_end = page.saturating_add(1).saturating_mul(page_size);
+        let directory_page = requested_end
+            .saturating_sub(1)
+            .checked_div(SKILLS_SH_PAGE_SIZE)
+            .unwrap_or(0);
+        let fetched = fetch_skills_sh_entries(&query, directory_page).await?;
+        let source_total = fetched.total;
+        let source_has_more = fetched.has_more;
+        let mut items: Vec<MarketplaceSkill> = fetched
+            .skills
+            .into_iter()
+            .filter(|skill| github_repo_parts(&skill.source).is_some())
+            .map(marketplace_from_skills_sh)
+            .collect();
+        let mut warning = None;
+        let mut repository_cache: HashMap<String, GithubRepository> = HashMap::new();
+        if category != MarketplaceCategory::All
+            || matches!(
+                sort,
+                MarketplaceSort::Stars | MarketplaceSort::Updated | MarketplaceSort::Published
+            )
+        {
+            warning =
+                enrich_marketplace_repository_metadata(&mut items, &mut repository_cache).await;
+        }
+        items.retain(|skill| {
+            category == MarketplaceCategory::All
+                || skill
+                    .categories
+                    .iter()
+                    .any(|value| value == category.as_str())
+        });
+
+        sort_marketplace_skills(&mut items, sort);
+        let loaded_total = items.len();
+        let total = if category == MarketplaceCategory::All {
+            source_total.max(loaded_total)
+        } else {
+            loaded_total
+        };
+        let start = page.saturating_mul(page_size);
+        let end = (start + page_size).min(loaded_total);
+        let selected = if start < loaded_total {
+            items[start..end].to_vec()
+        } else {
+            Vec::new()
+        };
+
+        let mut enriched = Vec::with_capacity(selected.len());
+        for item in selected {
+            let source = item.source.clone();
+            let Some((owner, repo)) = github_repo_parts(&source) else {
+                enriched.push(item);
+                continue;
+            };
+            let repository = if let Some(repository) = repository_cache.get(&source) {
+                Ok(repository.clone())
+            } else {
+                marketplace_get_json::<GithubRepository>(&format!(
+                    "{GITHUB_API_ORIGIN}/repos/{owner}/{repo}"
+                ))
+                .await
+                .inspect(|repository| {
+                    repository_cache.insert(source.clone(), repository.clone());
+                })
+            };
+            let detailed = match repository {
+                Ok(repository) => {
+                    enrich_marketplace_skill_with_repository(item.clone(), owner, repo, repository)
+                        .await
+                }
+                Err(error) => Err(error),
+            };
+            match detailed {
+                Ok(value) => enriched.push(value),
+                Err(error) => {
+                    warning.get_or_insert(error);
+                    enriched.push(item);
+                }
+            }
+        }
+        sort_marketplace_skills(&mut enriched, sort);
+        enriched
+            .iter_mut()
+            .for_each(refresh_marketplace_install_status);
+
+        Ok::<MarketplacePage, String>(MarketplacePage {
+            items: enriched,
+            total,
+            page,
+            page_size,
+            has_more: end < loaded_total || source_has_more,
+            stale: false,
+            warning,
+        })
+    }
+    .await;
+
+    match result {
+        Ok(page) => {
+            let _ = save_marketplace_cache_page(&cache_key, &page);
+            Ok(page)
+        }
+        Err(error) => {
+            if let Some(mut cached) = cached_marketplace_page(&cache_key, true) {
+                cached.stale = true;
+                cached.warning = Some(error);
+                cached
+                    .items
+                    .iter_mut()
+                    .for_each(refresh_marketplace_install_status);
+                Ok(cached)
+            } else {
+                Err(error)
+            }
+        }
+    }
+}
+
+#[tauri::command]
+pub async fn get_marketplace_skill_details(
+    skill: MarketplaceSkill,
+) -> Result<MarketplaceSkill, String> {
+    let mut detailed = enrich_marketplace_skill(skill).await?;
+    refresh_marketplace_install_status(&mut detailed);
+    Ok(detailed)
+}
+
+fn safe_archive_relative_path(path: &Path) -> Result<PathBuf, String> {
+    let mut components = path.components();
+    let archive_root = components
+        .next()
+        .ok_or_else(|| "Archive entry has no path".to_string())?;
+    if !matches!(archive_root, std::path::Component::Normal(_)) {
+        return Err("Archive contains an unsafe path".to_string());
+    }
+    let mut output = PathBuf::new();
+    for component in components {
+        match component {
+            std::path::Component::Normal(value) => output.push(value),
+            _ => return Err("Archive contains an unsafe path".to_string()),
+        }
+    }
+    Ok(output)
+}
+
+fn extract_marketplace_archive(bytes: &[u8], target: &Path) -> Result<(), String> {
+    fs::create_dir_all(target).map_err(|error| error.to_string())?;
+    let decoder = GzDecoder::new(bytes);
+    let mut archive = Archive::new(decoder);
+    let mut file_count = 0usize;
+    let mut total_bytes = 0u64;
+    let entries = archive
+        .entries()
+        .map_err(|error| format!("Cannot read GitHub archive: {error}"))?;
+    for entry in entries {
+        let mut entry = entry.map_err(|error| format!("Cannot read archive entry: {error}"))?;
+        file_count += 1;
+        if file_count > MARKETPLACE_MAX_ARCHIVE_FILES {
+            return Err("Marketplace skill archive contains too many entries".to_string());
+        }
+        let header = entry.header();
+        let entry_type = header.entry_type();
+        if entry_type.is_symlink() || entry_type.is_hard_link() {
+            return Err("Marketplace archive contains a symbolic link".to_string());
+        }
+        if !entry_type.is_dir() && !entry_type.is_file() {
+            continue;
+        }
+        let relative = safe_archive_relative_path(
+            &entry
+                .path()
+                .map_err(|error| format!("Invalid archive path: {error}"))?,
+        )?;
+        if relative.as_os_str().is_empty() {
+            continue;
+        }
+        let destination = target.join(&relative);
+        if !destination.starts_with(target) {
+            return Err("Archive path escapes the temporary directory".to_string());
+        }
+        if entry_type.is_dir() {
+            fs::create_dir_all(&destination).map_err(|error| error.to_string())?;
+            continue;
+        }
+        let size = header.size().map_err(|error| error.to_string())?;
+        if size > MARKETPLACE_MAX_FILE_BYTES {
+            return Err("Marketplace skill archive contains an oversized file".to_string());
+        }
+        total_bytes = total_bytes.saturating_add(size);
+        if total_bytes > MARKETPLACE_MAX_ARCHIVE_BYTES {
+            return Err("Marketplace skill archive is too large".to_string());
+        }
+        if let Some(parent) = destination.parent() {
+            fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+        }
+        let mut output = fs::File::create(&destination).map_err(|error| error.to_string())?;
+        std::io::copy(&mut entry, &mut output).map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+
+fn locate_extracted_skill(root: &Path, skill: &MarketplaceSkill) -> Result<PathBuf, String> {
+    if let Some(path) = skill.skill_path.as_deref() {
+        let candidate = root.join(path);
+        if candidate.join("SKILL.md").is_file() {
+            return Ok(candidate);
+        }
+    }
+    let wanted = normalize_marketplace_token(&skill.skill_id);
+    let name = normalize_marketplace_token(&skill.name);
+    let mut stack = vec![(root.to_path_buf(), 0usize)];
+    let mut fallbacks = Vec::new();
+    if root.join("SKILL.md").is_file() {
+        fallbacks.push(root.to_path_buf());
+    }
+    while let Some((directory, depth)) = stack.pop() {
+        if depth > MAX_SCAN_DEPTH + 2 {
+            continue;
+        }
+        let entries = fs::read_dir(&directory).map_err(|error| error.to_string())?;
+        for entry in entries {
+            let entry = entry.map_err(|error| error.to_string())?;
+            let path = entry.path();
+            let metadata = fs::symlink_metadata(&path).map_err(|error| error.to_string())?;
+            if metadata.file_type().is_symlink() {
+                return Err("Extracted skill contains a symbolic link".to_string());
+            }
+            if !metadata.is_dir() {
+                continue;
+            }
+            if path.join("SKILL.md").is_file() {
+                let normalized = path
+                    .file_name()
+                    .and_then(|value| value.to_str())
+                    .map(normalize_marketplace_token)
+                    .unwrap_or_default();
+                if normalized == wanted || normalized == name {
+                    return Ok(path);
+                }
+                fallbacks.push(path);
+            } else {
+                stack.push((path, depth + 1));
+            }
+        }
+    }
+    match fallbacks.len() {
+        1 => Ok(fallbacks.remove(0)),
+        0 => Err("Downloaded repository does not contain a matching SKILL.md".to_string()),
+        _ => Err(
+            "Downloaded repository contains multiple skills but none match the requested skill"
+                .to_string(),
+        ),
+    }
+}
+
+fn copy_marketplace_skill_dir(src: &Path, dst: &Path) -> Result<(), String> {
+    fn copy_checked(
+        src: &Path,
+        dst: &Path,
+        file_count: &mut usize,
+        total_bytes: &mut u64,
+    ) -> Result<(), String> {
+        fs::create_dir_all(dst).map_err(|error| error.to_string())?;
+        for entry in fs::read_dir(src).map_err(|error| error.to_string())? {
+            let entry = entry.map_err(|error| error.to_string())?;
+            let src_path = entry.path();
+            let dst_path = dst.join(entry.file_name());
+            let metadata = fs::symlink_metadata(&src_path).map_err(|error| error.to_string())?;
+            if metadata.file_type().is_symlink() {
+                return Err("Marketplace skill contains a symbolic link".to_string());
+            }
+            if metadata.is_dir() {
+                copy_checked(&src_path, &dst_path, file_count, total_bytes)?;
+                continue;
+            }
+            if !metadata.is_file() {
+                return Err("Marketplace skill contains an unsupported file type".to_string());
+            }
+            *file_count += 1;
+            if *file_count > MARKETPLACE_MAX_SKILL_FILES {
+                return Err("Marketplace skill contains too many files".to_string());
+            }
+            if metadata.len() > MARKETPLACE_MAX_FILE_BYTES {
+                return Err("Marketplace skill contains an oversized file".to_string());
+            }
+            *total_bytes = total_bytes.saturating_add(metadata.len());
+            if *total_bytes > MARKETPLACE_MAX_SKILL_BYTES {
+                return Err("Marketplace skill is too large".to_string());
+            }
+            fs::copy(&src_path, &dst_path).map_err(|error| error.to_string())?;
+        }
+        Ok(())
+    }
+
+    if !src.join("SKILL.md").is_file() {
+        return Err("Marketplace skill has no SKILL.md".to_string());
+    }
+    let mut file_count = 0;
+    let mut total_bytes = 0;
+    copy_checked(src, dst, &mut file_count, &mut total_bytes)
+}
+
+fn install_extracted_marketplace_skill(
+    extracted: &Path,
+    skill: &MarketplaceSkill,
+    overwrite_conflict: bool,
+) -> Result<MarketplaceInstallRecord, String> {
+    validate_skill_name(&skill.name)?;
+    let config = load_hub_config_internal();
+    let hub_path = config
+        .hub_path
+        .ok_or_else(|| "Skill Hub is not configured".to_string())?;
+    let hub = Path::new(&hub_path)
+        .canonicalize()
+        .map_err(|error| format!("Cannot resolve Skill Hub: {error}"))?;
+    let destination = hub.join(&skill.name);
+    let mut records = load_marketplace_installations_internal();
+    let previous = records
+        .installations
+        .iter()
+        .find(|record| record.source == skill.source && record.skill_id == skill.skill_id)
+        .cloned();
+    if let Some(record) = previous.as_ref() {
+        if record.git_ref == skill.latest_ref
+            && fs::symlink_metadata(&destination)
+                .map(|metadata| metadata.is_dir() && !metadata.file_type().is_symlink())
+                .unwrap_or(false)
+        {
+            return Ok(record.clone());
+        }
+    }
+    let destination_exists = fs::symlink_metadata(&destination).is_ok();
+    if destination_exists && previous.is_none() && !overwrite_conflict {
+        return Err(format!("MARKETPLACE_NAME_CONFLICT:{}", skill.name));
+    }
+
+    let staging = hub.join(format!(".{}.marketplace-{}", skill.name, Uuid::new_v4()));
+    copy_marketplace_skill_dir(extracted, &staging).map_err(|error| {
+        let _ = fs::remove_dir_all(&staging);
+        format!("Failed to stage marketplace skill: {error}")
+    })?;
+    let backup = hub.join(format!(".{}.backup-{}", skill.name, Uuid::new_v4()));
+    if destination_exists {
+        fs::rename(&destination, &backup)
+            .map_err(|error| format!("Failed to prepare skill update: {error}"))?;
+    }
+    if let Err(error) = fs::rename(&staging, &destination) {
+        let _ = fs::remove_dir_all(&staging);
+        if fs::symlink_metadata(&backup).is_ok() {
+            let _ = fs::rename(&backup, &destination);
+        }
+        return Err(format!("Failed to install marketplace skill: {error}"));
+    }
+
+    let record = MarketplaceInstallRecord {
+        source: skill.source.clone(),
+        skill_id: skill.skill_id.clone(),
+        skill_name: skill.name.clone(),
+        version: skill.latest_version.clone(),
+        git_ref: skill.latest_ref.clone(),
+        installed_at: now_ms(),
+        target_path: destination.to_string_lossy().into_owned(),
+    };
+    records.version = 1;
+    records.installations.retain(|existing| {
+        !(existing.source == record.source && existing.skill_id == record.skill_id)
+    });
+    records.installations.push(record.clone());
+    if let Err(error) = save_marketplace_installations_internal(&records) {
+        let _ = remove_existing(&destination);
+        if fs::symlink_metadata(&backup).is_ok() {
+            let _ = fs::rename(&backup, &destination);
+        }
+        return Err(error);
+    }
+    if fs::symlink_metadata(&backup).is_ok() {
+        let _ = remove_existing(&backup);
+    }
+    Ok(record)
+}
+
+#[tauri::command]
+pub async fn install_marketplace_skill(
+    skill: MarketplaceSkill,
+    overwrite_conflict: Option<bool>,
+) -> Result<MarketplaceInstallRecord, String> {
+    let verified = verify_marketplace_skill_source(&skill).await?;
+    let detailed = enrich_marketplace_skill(verified).await?;
+    let (owner, repo) = github_repo_parts(&detailed.source)
+        .ok_or_else(|| "Marketplace source is not a GitHub repository".to_string())?;
+    if detailed.latest_ref.is_empty() || detailed.latest_ref == "HEAD" {
+        return Err("Marketplace skill has no installable Git ref".to_string());
+    }
+    let archive_url = format!(
+        "{GITHUB_API_ORIGIN}/repos/{owner}/{repo}/tarball/{}",
+        detailed.latest_ref
+    );
+    let response = MARKETPLACE_HTTP_CLIENT
+        .get(archive_url)
+        .header(USER_AGENT, "Aeroric/1.3.7")
+        .header(ACCEPT, "application/vnd.github+json")
+        .send()
+        .await
+        .map_err(|error| format!("Failed to download marketplace skill: {error}"))?
+        .error_for_status()
+        .map_err(|error| format!("Failed to download marketplace skill: {error}"))?;
+    let bytes = response
+        .bytes()
+        .await
+        .map_err(|error| format!("Failed to read marketplace archive: {error}"))?;
+    if bytes.len() as u64 > MARKETPLACE_MAX_ARCHIVE_BYTES * 2 {
+        return Err("Marketplace repository archive is too large".to_string());
+    }
+
+    tokio::task::spawn_blocking(move || {
+        let temp_root =
+            std::env::temp_dir().join(format!("aeroric-marketplace-{}", Uuid::new_v4()));
+        let result = (|| {
+            extract_marketplace_archive(&bytes, &temp_root)?;
+            let extracted = locate_extracted_skill(&temp_root, &detailed)?;
+            install_extracted_marketplace_skill(
+                &extracted,
+                &detailed,
+                overwrite_conflict.unwrap_or(false),
+            )
+        })();
+        let _ = fs::remove_dir_all(&temp_root);
+        result
+    })
+    .await
+    .map_err(|error| error.to_string())?
 }
 
 #[cfg(test)]
@@ -1089,5 +2521,135 @@ mod tests {
         let p = parse_frontmatter(md);
         assert_eq!(p.name.as_deref(), Some("foo"));
         assert_eq!(p.description.as_deref(), Some("bar"));
+    }
+
+    #[test]
+    fn parse_marketplace_frontmatter_version() {
+        let md = "---\nname: foo\nversion: \"1.4.2\"\ndescription: bar\n---\n";
+        let parsed = parse_frontmatter(md);
+        assert_eq!(parsed.version.as_deref(), Some("1.4.2"));
+    }
+
+    #[test]
+    fn marketplace_categories_are_deterministic_and_fall_back_to_other() {
+        assert_eq!(
+            classify_marketplace_skill("React security audit automation"),
+            vec![
+                "automation".to_string(),
+                "development".to_string(),
+                "security".to_string()
+            ]
+        );
+        assert_eq!(
+            classify_marketplace_skill("unclassifiable-token"),
+            vec!["other".to_string()]
+        );
+    }
+
+    #[test]
+    fn marketplace_sort_uses_requested_metric() {
+        let mut skills = vec![
+            MarketplaceSkill {
+                id: "a".to_string(),
+                stars: 2,
+                total_installs: 100,
+                downloads_7d: 50,
+                ..Default::default()
+            },
+            MarketplaceSkill {
+                id: "b".to_string(),
+                stars: 20,
+                total_installs: 10,
+                downloads_7d: 5,
+                ..Default::default()
+            },
+        ];
+        sort_marketplace_skills(&mut skills, MarketplaceSort::Stars);
+        assert_eq!(skills[0].id, "b");
+        sort_marketplace_skills(&mut skills, MarketplaceSort::Installs);
+        assert_eq!(skills[0].id, "a");
+    }
+
+    #[test]
+    fn marketplace_rejects_non_github_sources_and_unsafe_archive_paths() {
+        assert!(github_repo_parts("open.feishu.cn").is_none());
+        assert_eq!(
+            github_repo_parts("vercel-labs/agent-skills"),
+            Some(("vercel-labs", "agent-skills"))
+        );
+        assert!(safe_archive_relative_path(Path::new("root/../escape")).is_err());
+        assert!(safe_archive_relative_path(Path::new("../escape")).is_err());
+        assert!(safe_archive_relative_path(Path::new("/root/escape")).is_err());
+        assert_eq!(
+            safe_archive_relative_path(Path::new("root/skills/demo")).unwrap(),
+            PathBuf::from("skills/demo")
+        );
+    }
+
+    #[test]
+    fn marketplace_finds_matching_skill_directory_in_git_tree() {
+        let tree = GithubTree {
+            tree: vec![
+                GithubTreeEntry {
+                    path: "other/SKILL.md".to_string(),
+                    kind: "blob".to_string(),
+                },
+                GithubTreeEntry {
+                    path: "skills/review-code/SKILL.md".to_string(),
+                    kind: "blob".to_string(),
+                },
+            ],
+        };
+        let skill = MarketplaceSkill {
+            name: "review-code".to_string(),
+            skill_id: "review-code".to_string(),
+            ..Default::default()
+        };
+        assert_eq!(
+            find_skill_markdown_path(&tree, &skill).as_deref(),
+            Some("skills/review-code/SKILL.md")
+        );
+    }
+
+    #[test]
+    fn marketplace_supports_a_repository_root_skill() {
+        let tree = GithubTree {
+            tree: vec![GithubTreeEntry {
+                path: "SKILL.md".to_string(),
+                kind: "blob".to_string(),
+            }],
+        };
+        let skill = MarketplaceSkill {
+            name: "root-skill".to_string(),
+            skill_id: "root-skill".to_string(),
+            ..Default::default()
+        };
+        assert_eq!(
+            find_skill_markdown_path(&tree, &skill).as_deref(),
+            Some("SKILL.md")
+        );
+
+        let root = std::env::temp_dir().join(format!("aeroric-root-skill-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("SKILL.md"), "---\nname: root-skill\n---\n").unwrap();
+        assert_eq!(locate_extracted_skill(&root, &skill).unwrap(), root);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn marketplace_does_not_choose_an_ambiguous_skill_directory() {
+        let root = std::env::temp_dir().join(format!("aeroric-skill-locate-{}", Uuid::new_v4()));
+        fs::create_dir_all(root.join("alpha")).unwrap();
+        fs::create_dir_all(root.join("beta")).unwrap();
+        fs::write(root.join("alpha/SKILL.md"), "---\nname: alpha\n---\n").unwrap();
+        fs::write(root.join("beta/SKILL.md"), "---\nname: beta\n---\n").unwrap();
+        let skill = MarketplaceSkill {
+            name: "missing".to_string(),
+            skill_id: "missing".to_string(),
+            ..Default::default()
+        };
+        let result = locate_extracted_skill(&root, &skill);
+        let _ = fs::remove_dir_all(&root);
+        assert!(result.is_err());
     }
 }

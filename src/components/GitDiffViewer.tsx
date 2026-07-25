@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useState } from "react";
-import type { ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Columns2, FileCode, Rows3, X } from "lucide-react";
 import { DiffFileBlock } from "./git-diff/DiffFileBlock";
@@ -14,6 +13,7 @@ import {
 } from "../hooks/useCancellableInvoke";
 import s from "../styles";
 import type { SshConnection } from "../types";
+import { AnimatedSelectionGroup } from "./ui/AnimatedSelection";
 
 const VIEW_MODE_KEY = "aeroric.diffViewMode";
 
@@ -30,35 +30,6 @@ interface Props {
     connection: SshConnection;
     projectPath: string;
   };
-}
-
-function ViewToggleButton({
-  active,
-  title,
-  onClick,
-  children,
-}: {
-  active: boolean;
-  title: string;
-  onClick: () => void;
-  children: ReactNode;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      title={title}
-      aria-label={title}
-      aria-pressed={active}
-      style={{
-        ...s.diffToggleBtn,
-        background: active ? "var(--control-active-bg)" : "transparent",
-        color: active ? "var(--control-active-fg)" : "var(--text-hint)",
-      }}
-    >
-      {children}
-    </button>
-  );
 }
 
 export function GitDiffViewer({
@@ -184,22 +155,27 @@ export function GitDiffViewer({
           </div>
         </div>
 
-        <div style={s.diffViewToggle} role="group" aria-label={t("git.diffViewMode")}>
-          <ViewToggleButton
-            active={viewMode === "unified"}
-            title={t("git.singleColumnDiff")}
-            onClick={() => setViewMode("unified")}
-          >
-            <Rows3 size={15} />
-          </ViewToggleButton>
-          <ViewToggleButton
-            active={viewMode === "split"}
-            title={t("git.twoColumnDiff")}
-            onClick={() => setViewMode("split")}
-          >
-            <Columns2 size={15} />
-          </ViewToggleButton>
-        </div>
+        <AnimatedSelectionGroup
+          value={viewMode}
+          onChange={setViewMode}
+          ariaLabel={t("git.diffViewMode")}
+          options={[
+            {
+              value: "unified",
+              label: <Rows3 size={15} />,
+              title: t("git.singleColumnDiff"),
+              ariaLabel: t("git.singleColumnDiff"),
+            },
+            {
+              value: "split",
+              label: <Columns2 size={15} />,
+              title: t("git.twoColumnDiff"),
+              ariaLabel: t("git.twoColumnDiff"),
+            },
+          ]}
+          style={s.diffViewToggle}
+          itemStyle={{ width: 28, minHeight: 24, padding: 0 }}
+        />
 
         <button
           type="button"

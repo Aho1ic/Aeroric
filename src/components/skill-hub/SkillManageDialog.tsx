@@ -7,6 +7,7 @@ import type { Project, Skill, SkillInstallation, AgentType } from "../../types";
 import { useI18n } from "../../i18n";
 import s from "../../styles";
 import { SkillInstallDialog } from "./SkillInstallDialog";
+import { AnimatedSelectionGroup } from "../ui/AnimatedSelection";
 
 interface Props {
   skill: Skill;
@@ -110,23 +111,24 @@ export function SkillManageDialog({ skill, allProjects, onClose, onChanged }: Pr
           </button>
         </div>
 
-        <div style={s.skillDialogTabs}>
-          {(["claude", "codex"] as const).map((agentKey) => {
-            const active = activeAgent === agentKey;
-            return (
-              <button
-                key={agentKey}
-                type="button"
-                style={active ? s.skillDialogTabActive : s.skillDialogTab}
-                onClick={() => setActiveAgent(agentKey)}
-              >
+        <AnimatedSelectionGroup
+          value={activeAgent}
+          onChange={setActiveAgent}
+          ariaLabel={t("skill.install.agent")}
+          role="tablist"
+          style={s.skillDialogTabs}
+          options={(["claude", "codex"] as const).map((agentKey) => ({
+            value: agentKey,
+            label: (
+              <>
                 <img src={AGENT_LOGO[agentKey]} style={s.skillInstallAgentLogo} alt="" />
                 <span>{AGENT_LABEL[agentKey]}</span>
                 <span style={s.skillDialogTabCount}>{agentCounts[agentKey]}</span>
-              </button>
-            );
-          })}
-        </div>
+              </>
+            ),
+          }))}
+          itemStyle={{ minHeight: 30, padding: "6px 12px" }}
+        />
 
         <div style={s.skillDialogList}>
           {loading ? (

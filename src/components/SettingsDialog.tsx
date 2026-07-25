@@ -27,6 +27,7 @@ import {
 import { useI18n } from "../i18n";
 import s from "../styles";
 import { useTextInputIMEFix } from "./useTextInputIMEFix";
+import { AnimatedSelectionTrack } from "./ui/AnimatedSelection";
 
 interface ProjectConfig {
   agent: {
@@ -479,21 +480,42 @@ export function SettingsDialog({
           {/* Left nav */}
           <div style={s.settingsNav}>
             <div style={s.settingsNavTitle}>{t("settings.title")}</div>
-            {NAV_ITEMS.map((item) => (
-              <button
-                key={item.key}
-                style={{
-                  ...s.settingsNavItem,
-                  background: activeNav === item.key ? "var(--bg-hover)" : "none",
-                  color: activeNav === item.key ? "var(--text-primary)" : "var(--text-secondary)",
-                  fontWeight: activeNav === item.key ? 600 : 500,
-                }}
-                onClick={() => setActiveNav(item.key)}
-              >
-                <FolderOpen size={14} />
-                {t(item.label)}
-              </button>
-            ))}
+            <AnimatedSelectionTrack
+              value={activeNav}
+              ariaLabel={t("settings.title")}
+              orientation="vertical"
+              style={{
+                alignItems: "stretch",
+                padding: 0,
+                border: "none",
+                borderRadius: 0,
+                background: "transparent",
+                boxShadow: "none",
+              }}
+            >
+              {NAV_ITEMS.map((item) => (
+                <button
+                  key={item.key}
+                  type="button"
+                  data-animated-selection-item
+                  data-selection-value={item.key}
+                  aria-pressed={activeNav === item.key}
+                  tabIndex={activeNav === item.key ? 0 : -1}
+                  style={{
+                    ...s.settingsNavItem,
+                    position: "relative",
+                    zIndex: 1,
+                    background: "none",
+                    color: activeNav === item.key ? "var(--text-primary)" : "var(--text-secondary)",
+                    fontWeight: activeNav === item.key ? 600 : 500,
+                  }}
+                  onClick={() => setActiveNav(item.key)}
+                >
+                  <FolderOpen size={14} />
+                  {t(item.label)}
+                </button>
+              ))}
+            </AnimatedSelectionTrack>
           </div>
 
           {/* Right content */}

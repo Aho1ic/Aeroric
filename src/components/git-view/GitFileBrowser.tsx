@@ -25,6 +25,7 @@ import {
   gitFileVirtualRowStyle,
 } from "../../styles/git-diff";
 import { getFileColor, getGitStatusColor, getGitStatusLabel, load, save } from "../../utils";
+import { AnimatedSelectionGroup } from "../ui/AnimatedSelection";
 
 export type GitFileViewMode = "tree" | "list";
 
@@ -126,47 +127,27 @@ export function GitFileViewToggle({
   const { t } = useI18n();
 
   return (
-    <div style={s.gitFileViewToggle} role="group" aria-label={t("git.fileViewMode")}>
-      <GitFileViewToggleButton
-        active={mode === "tree"}
-        title={t("git.viewAsTree")}
-        onClick={() => onChange("tree")}
-      >
-        <ListTree size={13} />
-      </GitFileViewToggleButton>
-      <GitFileViewToggleButton
-        active={mode === "list"}
-        title={t("git.viewAsList")}
-        onClick={() => onChange("list")}
-      >
-        <List size={13} />
-      </GitFileViewToggleButton>
-    </div>
-  );
-}
-
-function GitFileViewToggleButton({
-  active,
-  title,
-  onClick,
-  children,
-}: {
-  active: boolean;
-  title: string;
-  onClick: () => void;
-  children: React.ReactNode;
-}) {
-  return (
-    <button
-      type="button"
-      title={title}
-      aria-label={title}
-      aria-pressed={active}
-      onClick={onClick}
-      style={active ? s.gitFileViewToggleBtnActive : s.gitFileViewToggleBtnInactive}
-    >
-      {children}
-    </button>
+    <AnimatedSelectionGroup
+      value={mode}
+      onChange={onChange}
+      ariaLabel={t("git.fileViewMode")}
+      options={[
+        {
+          value: "tree",
+          label: <ListTree size={13} />,
+          title: t("git.viewAsTree"),
+          ariaLabel: t("git.viewAsTree"),
+        },
+        {
+          value: "list",
+          label: <List size={13} />,
+          title: t("git.viewAsList"),
+          ariaLabel: t("git.viewAsList"),
+        },
+      ]}
+      style={s.gitFileViewToggle}
+      itemStyle={{ width: 24, minHeight: 22, padding: 0 }}
+    />
   );
 }
 

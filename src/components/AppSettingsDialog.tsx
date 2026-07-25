@@ -35,6 +35,7 @@ import { ProxyPanel } from "./app-settings/ProxyPanel";
 import { AgentUpdatesPanel } from "./app-settings/AgentUpdatesPanel";
 import { AllAgentConfigsPanel } from "./app-settings/AllAgentConfigsPanel";
 import { UsageDashboard } from "./UsageDashboard";
+import { AnimatedSelectionTrack } from "./ui/AnimatedSelection";
 import type { AppSettingsNavItem, NavKey, NavSection } from "./app-settings/types";
 
 const ALL_AGENT_CONFIGS_NAV_KEY = "__all_agent_configs__";
@@ -197,11 +198,18 @@ export function AppSettingsDialog({
         <div style={{ position: "relative", zIndex: 1, display: "flex", flex: 1, minWidth: 0 }}>
           <div style={s.settingsNav}>
             <div style={s.settingsNavTitle}>{t("appSettings.title")}</div>
-            <div
+            <AnimatedSelectionTrack
+              value={activeNav}
+              ariaLabel={t("appSettings.title")}
+              orientation="vertical"
               style={{
                 minHeight: 0,
                 overflowY: "auto",
-                paddingRight: 2,
+                padding: "0 2px 0 0",
+                border: "none",
+                background: "transparent",
+                boxShadow: "none",
+                borderRadius: 0,
               }}
             >
               {sectionGroups.map((group, groupIndex) => (
@@ -217,9 +225,16 @@ export function AppSettingsDialog({
                   {group.items.map((item) => (
                     <button
                       key={item.key}
+                      type="button"
+                      data-animated-selection-item
+                      data-selection-value={item.key}
+                      aria-pressed={activeNav === item.key}
+                      tabIndex={activeNav === item.key ? 0 : -1}
                       style={{
                         ...s.settingsNavItem,
-                        background: activeNav === item.key ? "var(--bg-hover)" : "none",
+                        position: "relative",
+                        zIndex: 1,
+                        background: "none",
                         color:
                           activeNav === item.key ? "var(--text-primary)" : "var(--text-secondary)",
                         fontWeight: activeNav === item.key ? 600 : 500,
@@ -234,7 +249,7 @@ export function AppSettingsDialog({
                   ))}
                 </Fragment>
               ))}
-            </div>
+            </AnimatedSelectionTrack>
           </div>
 
           <div style={s.settingsContent}>

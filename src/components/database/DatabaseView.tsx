@@ -81,6 +81,7 @@ import {
   createConnectionName,
 } from "../../lib/databaseUtils";
 import s from "../../styles";
+import { AnimatedSelectionGroup, AnimatedSelectionTrack } from "../ui/AnimatedSelection";
 import { DatabaseAdvancedTools, type DatabaseAdvancedToolMode } from "./DatabaseAdvancedTools";
 import { DatabaseSearchPanel } from "./DatabaseSearchPanel";
 import { DatabaseSidebarTree } from "./DatabaseSidebarTree";
@@ -5762,20 +5763,21 @@ export function DatabaseView({
 
       <main style={s.databaseMain}>
         {workspaceTabs.length > 0 && (
-          <div style={s.databaseTabBar}>
+          <AnimatedSelectionTrack
+            value={activeTabId}
+            ariaLabel={t("database.workspaceTabs")}
+            role="tablist"
+            variant="underline"
+            style={s.databaseTabBar}
+          >
             {workspaceTabs.map((tab) => (
-              <button
+              <div
                 key={tab.id}
-                role="tab"
-                aria-selected={activeTabId === tab.id}
-                type="button"
+                data-animated-selection-item
+                data-selection-value={tab.id}
                 style={{
                   ...s.databaseTab,
                   ...(activeTabId === tab.id ? s.databaseTabActive : undefined),
-                }}
-                title={tab.label}
-                onClick={() => {
-                  activateWorkspaceTab(tab);
                 }}
                 onContextMenu={(event) => {
                   event.preventDefault();
@@ -5787,20 +5789,41 @@ export function DatabaseView({
                   });
                 }}
               >
-                <span
+                <button
+                  role="tab"
+                  aria-selected={activeTabId === tab.id}
+                  tabIndex={activeTabId === tab.id ? 0 : -1}
+                  type="button"
+                  title={tab.label}
+                  onClick={() => {
+                    activateWorkspaceTab(tab);
+                  }}
                   style={{
-                    maxWidth: shortWorkspaceTabIds.has(tab.id) ? 72 : 160,
-                    overflow: "hidden",
-                    textOverflow: "ellipsis",
-                    whiteSpace: "nowrap",
+                    minWidth: 0,
+                    height: "100%",
+                    display: "inline-flex",
+                    alignItems: "center",
+                    border: 0,
+                    background: "transparent",
+                    color: "inherit",
+                    cursor: "pointer",
                   }}
                 >
-                  {tab.label}
-                </span>
-                {tab.closable && (
                   <span
-                    role="button"
-                    tabIndex={-1}
+                    style={{
+                      maxWidth: shortWorkspaceTabIds.has(tab.id) ? 72 : 160,
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    {tab.label}
+                  </span>
+                </button>
+                {tab.closable && (
+                  <button
+                    type="button"
+                    aria-label={t("database.closeWorkspaceTab", { name: tab.label })}
                     style={s.databaseTabClose}
                     onClick={(e) => {
                       e.stopPropagation();
@@ -5808,11 +5831,11 @@ export function DatabaseView({
                     }}
                   >
                     ×
-                  </span>
+                  </button>
                 )}
-              </button>
+              </div>
             ))}
-          </div>
+          </AnimatedSelectionTrack>
         )}
 
         {workspaceTabs.length === 0 && !hideDatabaseWorkspaceTopbar && (
@@ -6183,8 +6206,14 @@ export function DatabaseView({
                 {t("database.viewDdl")}
               </DbxButton>
             </div>
-            <div role="tablist" aria-label="Table info sections" style={s.databaseTableInfoTabs}>
-              {[
+            <AnimatedSelectionGroup
+              value={tableInfoActiveTab}
+              onChange={setTableInfoActiveTab}
+              ariaLabel={t("database.tableInfoSections")}
+              role="tablist"
+              variant="underline"
+              style={s.databaseTableInfoTabs}
+              options={[
                 {
                   key: "columns" as const,
                   label: t("database.columns"),
@@ -6215,29 +6244,19 @@ export function DatabaseView({
                   count: tableInfoDdl ? 1 : 0,
                   icon: <FileCode size={14} aria-hidden="true" />,
                 },
-              ].map((tab) => {
-                const active = tableInfoActiveTab === tab.key;
-                return (
-                  <button
-                    key={tab.key}
-                    type="button"
-                    role="tab"
-                    aria-label={`${tab.label} ${tab.count}`}
-                    aria-selected={active}
-                    style={{
-                      ...s.databaseTableInfoTab,
-                      ...(active ? s.databaseTableInfoTabActive : null),
-                      border: "none",
-                    }}
-                    onClick={() => setTableInfoActiveTab(tab.key)}
-                  >
+              ].map((tab) => ({
+                value: tab.key,
+                ariaLabel: `${tab.label} ${tab.count}`,
+                label: (
+                  <>
                     {tab.icon}
                     <span>{tab.label}</span>
                     <span>{tab.count}</span>
-                  </button>
-                );
-              })}
-            </div>
+                  </>
+                ),
+              }))}
+              itemStyle={{ ...s.databaseTableInfoTab, border: "none" }}
+            />
             <div style={s.databaseTableInfoContent} role="tabpanel">
               {tableInfoActiveTab === "ddl" ? (
                 <div style={{ display: "flex", flexDirection: "column", gap: 8, padding: 12 }}>

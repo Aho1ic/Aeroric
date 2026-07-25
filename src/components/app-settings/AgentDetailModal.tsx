@@ -25,6 +25,7 @@ import {
   type ModelReasoningEffort,
 } from "./reasoningEffort";
 import { ModelSelectionList } from "./ModelSelectionList";
+import { AnimatedSelectionGroup } from "../ui/AnimatedSelection";
 
 type FileState =
   | { status: "loading" }
@@ -627,41 +628,36 @@ export function AgentDetailModal({
           {/* Body: sidebar + content */}
           <div style={{ flex: 1, display: "flex", minHeight: 0 }}>
             {/* Left sidebar */}
-            <div
+            <AnimatedSelectionGroup
+              value={activeTab}
+              onChange={setActiveTab}
+              ariaLabel={option.label}
+              orientation="vertical"
+              role="tablist"
+              options={tabItems.map((tab) => ({
+                value: tab.key,
+                label: t(tab.labelKey),
+              }))}
+              itemStyle={{
+                width: "100%",
+                minHeight: 34,
+                justifyContent: "flex-start",
+                padding: "8px 10px",
+                fontSize: 12.5,
+              }}
               style={{
                 width: 130,
                 flexShrink: 0,
                 borderRight: "1px solid var(--border-dim)",
                 padding: "12px 8px",
-                display: "flex",
-                flexDirection: "column",
-                gap: 2,
+                borderTop: "none",
+                borderBottom: "none",
+                borderLeft: "none",
+                borderRadius: 0,
+                background: "transparent",
+                boxShadow: "none",
               }}
-            >
-              {tabItems.map((tab) => (
-                <button
-                  key={tab.key}
-                  type="button"
-                  onClick={() => setActiveTab(tab.key)}
-                  style={{
-                    display: "block",
-                    width: "100%",
-                    padding: "8px 10px",
-                    border: "none",
-                    borderRadius: 6,
-                    background: activeTab === tab.key ? "var(--bg-hover)" : "transparent",
-                    color:
-                      activeTab === tab.key ? "var(--text-primary)" : "var(--text-secondary)",
-                    fontWeight: activeTab === tab.key ? 600 : 500,
-                    fontSize: 12.5,
-                    textAlign: "left",
-                    cursor: "pointer",
-                  }}
-                >
-                  {t(tab.labelKey)}
-                </button>
-              ))}
-            </div>
+            />
 
             {/* Right content */}
             <div

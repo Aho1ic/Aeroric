@@ -826,3 +826,71 @@ export interface SetSkillHubResult {
   /** 后端写入后的权威 projects 列表 */
   projects: Project[];
 }
+
+export type MarketplaceSort = "downloads" | "stars" | "installs" | "updated" | "published";
+
+export type MarketplaceCategory =
+  | "all"
+  | "agents"
+  | "integrations"
+  | "automation"
+  | "operations"
+  | "security"
+  | "research"
+  | "development"
+  | "finance"
+  | "lifestyle"
+  | "productivity"
+  | "other"
+  | "communication"
+  | "creative"
+  | "knowledge";
+
+export type MarketplaceInstallStatus =
+  | "available"
+  | "installing"
+  | "installed"
+  | "update"
+  | "conflict";
+
+export interface MarketplaceSkill {
+  id: string;
+  source: string;
+  skillId: string;
+  name: string;
+  publisher: string;
+  publisherAvatar?: string;
+  repositoryUrl?: string;
+  skillPath?: string;
+  description?: string;
+  latestVersion: string;
+  latestRef: string;
+  categories: MarketplaceCategory[];
+  downloads7d: number;
+  totalInstalls: number;
+  stars: number;
+  publishedAt?: string;
+  updatedAt?: string;
+  installStatus: MarketplaceInstallStatus;
+  isOfficial: boolean;
+}
+
+export interface MarketplacePage {
+  items: MarketplaceSkill[];
+  total: number;
+  page: number;
+  pageSize: number;
+  hasMore: boolean;
+  stale: boolean;
+  warning?: string;
+}
+
+export interface MarketplaceInstallRecord {
+  source: string;
+  skillId: string;
+  skillName: string;
+  version: string;
+  gitRef: string;
+  installedAt: number;
+  targetPath: string;
+}

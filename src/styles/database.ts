@@ -950,7 +950,6 @@ export const database = {
     flexShrink: 0,
   },
   databaseTabActive: {
-    borderBottomColor: "var(--accent)",
     color: "var(--text-primary)",
     fontWeight: 600,
   },

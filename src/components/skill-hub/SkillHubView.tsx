@@ -5,12 +5,10 @@ import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import {
   Settings as SettingsIcon,
   Blocks,
-  ExternalLink,
   AlertCircle,
   Trash2,
   Search,
   FolderInput,
-  ShoppingBag,
 } from "lucide-react";
 import type {
   Project,
@@ -23,16 +21,17 @@ import { useI18n } from "../../i18n";
 import { SKILL_HUB_CHANGED_EVENT } from "../app-settings/types";
 import { shortenPath } from "../../utils";
 import { SkillManageDialog } from "./SkillManageDialog";
+import { SkillsShop } from "./SkillsShop";
+import { AnimatedSelectionGroup } from "../ui/AnimatedSelection";
 import s from "../../styles";
 
 interface Props {
   config: SkillHubConfig | null;
   allProjects: Project[];
-  onEnterSkillHub: () => void;
   onOpenAppSettings: () => void;
 }
 
-export function SkillHubView({ config, allProjects, onEnterSkillHub, onOpenAppSettings }: Props) {
+export function SkillHubView({ config, allProjects, onOpenAppSettings }: Props) {
   const { t } = useI18n();
   const [skills, setSkills] = useState<Skill[]>([]);
   const [installations, setInstallations] = useState<SkillInstallation[]>([]);
@@ -165,17 +164,6 @@ export function SkillHubView({ config, allProjects, onEnterSkillHub, onOpenAppSe
             {shortenPath(config.hubPath)}
           </div>
         </div>
-        {config.hubProjectId ? (
-          <button
-            type="button"
-            style={s.skillHubHeaderBtn}
-            onClick={onEnterSkillHub}
-            title={t("skill.header.openInTaskView")}
-          >
-            <ExternalLink size={13} strokeWidth={2} />
-            <span>{t("skill.header.openInTaskView")}</span>
-          </button>
-        ) : null}
       </div>
 
       <div
@@ -187,28 +175,17 @@ export function SkillHubView({ config, allProjects, onEnterSkillHub, onOpenAppSe
           marginBottom: 10,
         }}
       >
-        {(["installed", "shop", "local"] as const).map((tab) => (
-          <button
-            key={tab}
-            type="button"
-            onClick={() => setActiveTab(tab)}
-            style={{
-              display: "inline-flex",
-              alignItems: "center",
-              gap: 6,
-              padding: "7px 14px",
-              border: `1.5px solid ${activeTab === tab ? "var(--accent)" : "var(--border-medium)"}`,
-              borderRadius: 8,
-              background: activeTab === tab ? "var(--control-active-bg)" : "var(--bg-card)",
-              color: activeTab === tab ? "var(--control-active-fg)" : "var(--text-secondary)",
-              fontSize: 12.5,
-              fontWeight: 600,
-              cursor: "pointer",
-            }}
-          >
-            {t(`skill.tab.${tab === "local" ? "localImport" : tab}`)}
-          </button>
-        ))}
+        <AnimatedSelectionGroup
+          value={activeTab}
+          onChange={setActiveTab}
+          ariaLabel={t("skill.header.title")}
+          role="tablist"
+          options={(["installed", "shop", "local"] as const).map((tab) => ({
+            value: tab,
+            label: t(`skill.tab.${tab === "local" ? "localImport" : tab}`),
+          }))}
+          itemStyle={{ minHeight: 30, padding: "6px 13px", fontSize: 12.5 }}
+        />
 
         <div style={{ flex: 1 }} />
 
@@ -290,13 +267,7 @@ export function SkillHubView({ config, allProjects, onEnterSkillHub, onOpenAppSe
         </>
       )}
 
-      {activeTab === "shop" && (
-        <div style={s.skillHubEmpty}>
-          <ShoppingBag size={36} strokeWidth={1.2} color="var(--text-hint)" />
-          <div style={s.skillHubEmptyTitle}>{t("skill.tab.shopComingSoon")}</div>
-          <div style={s.skillHubEmptyHint}>{t("skill.tab.shopHint")}</div>
-        </div>
-      )}
+      {activeTab === "shop" && <SkillsShop />}
 
       {activeTab === "local" && (
         <div style={s.skillHubEmpty}>

@@ -18,6 +18,7 @@ import {
   Copy,
 } from "lucide-react";
 import { getFileColor } from "../utils";
+import { AnimatedSelectionGroup, AnimatedSelectionTrack } from "./ui/AnimatedSelection";
 import ReactCodeMirror, {
   Decoration,
   EditorView,
@@ -2085,54 +2086,40 @@ function FilePreviewPane({
                 >
                   {t("file.diagnosticsDetails")}
                 </div>
-                <div
-                  role="group"
-                  aria-label={t("file.diagnosticsSeverityFilter")}
-                  style={{ display: "flex", gap: 4, marginBottom: 8, flexWrap: "wrap" }}
-                >
-                  {diagnosticFilterOptions.map((filter) => {
+                <AnimatedSelectionGroup
+                  value={diagnosticSeverityFilter}
+                  onChange={(filter) => {
+                    setDiagnosticSeverityFilter(filter);
+                    setDiagnosticCopyCount(null);
+                    setDiagnosticCopyError(null);
+                  }}
+                  ariaLabel={t("file.diagnosticsSeverityFilter")}
+                  style={{ marginBottom: 8, maxWidth: "100%" }}
+                  options={diagnosticFilterOptions.map((filter) => {
                     const count =
                       filter === "all" ? currentFileDiagnostics.length : diagnosticCounts[filter];
-                    const active = diagnosticSeverityFilter === filter;
-                    return (
-                      <button
-                        key={filter}
-                        type="button"
-                        aria-pressed={active}
-                        onClick={() => {
-                          setDiagnosticSeverityFilter(filter);
-                          setDiagnosticCopyCount(null);
-                          setDiagnosticCopyError(null);
-                        }}
-                        style={{
-                          height: 24,
-                          display: "inline-flex",
-                          alignItems: "center",
-                          gap: 5,
-                          border: `1px solid ${active ? "var(--accent)" : "var(--border-dim)"}`,
-                          borderRadius: 5,
-                          background: active ? "var(--bg-hover)" : "transparent",
-                          color: active ? "var(--text-primary)" : "var(--text-muted)",
-                          cursor: "pointer",
-                          fontSize: 11,
-                          fontFamily: "var(--font-mono)",
-                          padding: "0 7px",
-                        }}
-                      >
-                        {t(
-                          filter === "all"
-                            ? "file.diagnosticsFilterAll"
-                            : filter === "error"
-                              ? "file.diagnosticsFilterErrors"
-                              : filter === "warning"
-                                ? "file.diagnosticsFilterWarnings"
-                                : "file.diagnosticsFilterInfo",
-                          { count: String(count) },
-                        )}
-                      </button>
-                    );
+                    return {
+                      value: filter,
+                      label: t(
+                        filter === "all"
+                          ? "file.diagnosticsFilterAll"
+                          : filter === "error"
+                            ? "file.diagnosticsFilterErrors"
+                            : filter === "warning"
+                              ? "file.diagnosticsFilterWarnings"
+                              : "file.diagnosticsFilterInfo",
+                        { count: String(count) },
+                      ),
+                    };
                   })}
-                </div>
+                  itemStyle={{
+                    minHeight: 22,
+                    height: 22,
+                    padding: "0 7px",
+                    fontFamily: "var(--font-mono)",
+                    fontSize: 11,
+                  }}
+                />
                 <div
                   style={{
                     display: "flex",
@@ -2806,7 +2793,11 @@ export function FileViewer({
         }}
       >
         {showTabStrip && (
-          <div
+          <AnimatedSelectionTrack
+            value={activeTab.path}
+            ariaLabel={t("file.openTabs")}
+            role="tablist"
+            variant="underline"
             className="file-viewer-tab-strip"
             style={{
               flex: 1,
@@ -2817,6 +2808,7 @@ export function FileViewer({
               overflowX: "auto",
               overflowY: "hidden",
               paddingLeft: 4,
+              borderBottom: "none",
             }}
           >
             {tabs.map((tab) => {
@@ -2824,10 +2816,10 @@ export function FileViewer({
               const fileColor = getFileColor(tab.name);
               const isDirty = Boolean(dirtyTabs[tab.path]);
               return (
-                <button
+                <div
                   key={tab.path}
-                  onClick={() => onSelectTab(tab.path)}
-                  title={tab.path}
+                  data-animated-selection-item
+                  data-selection-value={tab.path}
                   style={{
                     height: "100%",
                     minWidth: 0,
@@ -2838,62 +2830,76 @@ export function FileViewer({
                     padding: "0 10px 0 12px",
                     border: "none",
                     borderRight: "1px solid var(--border-dim)",
-                    borderTop: isActive ? "2px solid var(--accent)" : "2px solid transparent",
-                    background: isActive ? "var(--bg-panel)" : "transparent",
-                    fontSize: 12.5,
-                    fontWeight: isActive ? 500 : 400,
-                    color: isActive ? "var(--text-primary)" : "var(--text-secondary)",
-                    cursor: "pointer",
+                    background: "transparent",
                     flexShrink: 0,
                   }}
                 >
-                  <span
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={isActive}
+                    tabIndex={isActive ? 0 : -1}
+                    onClick={() => onSelectTab(tab.path)}
+                    title={tab.path}
                     style={{
-                      width: isDirty ? 8 : 5,
-                      height: isDirty ? 8 : 14,
-                      borderRadius: isDirty ? 999 : 2,
-                      background: isDirty ? "var(--warning)" : fileColor,
-                      boxShadow: isDirty
-                        ? "0 0 0 2px color-mix(in srgb, var(--warning) 20%, transparent)"
-                        : undefined,
-                      flexShrink: 0,
-                      display: "inline-block",
-                    }}
-                  />
-                  <span
-                    style={{
-                      overflow: "hidden",
-                      textOverflow: "ellipsis",
-                      whiteSpace: "nowrap",
+                      height: "100%",
+                      minWidth: 0,
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 6,
+                      border: 0,
+                      background: "transparent",
+                      color: isActive ? "var(--text-primary)" : "var(--text-secondary)",
+                      fontSize: 12.5,
+                      fontWeight: isActive ? 500 : 400,
+                      cursor: "pointer",
                     }}
                   >
-                    {tab.name}
-                  </span>
-                  <span
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      onCloseTab(tab.path);
-                    }}
+                    <span
+                      style={{
+                        width: isDirty ? 8 : 5,
+                        height: isDirty ? 8 : 14,
+                        borderRadius: isDirty ? 999 : 2,
+                        background: isDirty ? "var(--warning)" : fileColor,
+                        boxShadow: isDirty
+                          ? "0 0 0 2px color-mix(in srgb, var(--warning) 20%, transparent)"
+                          : undefined,
+                        flexShrink: 0,
+                        display: "inline-block",
+                      }}
+                    />
+                    <span
+                      style={{
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      {tab.name}
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onCloseTab(tab.path)}
                     style={{
                       background: "none",
                       border: "none",
                       cursor: "pointer",
-                      padding: "2px",
+                      padding: 2,
                       borderRadius: 3,
                       display: "flex",
                       alignItems: "center",
                       color: "var(--text-hint)",
                       marginLeft: 2,
                     }}
-                    role="button"
                     aria-label={t("file.closeTab", { name: tab.name })}
                   >
                     <X size={12} />
-                  </span>
-                </button>
+                  </button>
+                </div>
               );
             })}
-          </div>
+          </AnimatedSelectionTrack>
         )}
         <div
           style={{

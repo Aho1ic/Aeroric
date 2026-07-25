@@ -3,8 +3,17 @@
  * Matches dbx button visual specifications
  */
 
-import type { ReactNode, ButtonHTMLAttributes, HTMLAttributes } from "react";
+import {
+  Children,
+  createContext,
+  isValidElement,
+  useContext,
+  type ReactNode,
+  type ButtonHTMLAttributes,
+  type HTMLAttributes,
+} from "react";
 import type { LucideIcon } from "lucide-react";
+import { AnimatedSelectionTrack } from "../ui/AnimatedSelection";
 
 // Button variants matching dbx
 type DbxButtonVariant = "default" | "outline" | "secondary" | "ghost" | "destructive" | "link";
@@ -28,6 +37,8 @@ interface DbxButtonGroupProps extends HTMLAttributes<HTMLDivElement> {
 interface DbxMenuItemProps extends Omit<DbxButtonProps, "variant" | "size" | "role"> {
   destructive?: boolean;
 }
+
+const DbxButtonGroupContext = createContext(false);
 
 // Base styles matching dbx buttonVariants
 const baseStyles: React.CSSProperties = {
@@ -192,25 +203,40 @@ export function DbxIconButton(props: Omit<DbxButtonProps, "children">) {
   return <DbxButton variant="ghost" size="icon" {...props} />;
 }
 
-export function DbxButtonGroup({ children, style, ...props }: DbxButtonGroupProps) {
+export function DbxButtonGroup({
+  children,
+  style,
+  className,
+  role,
+  "aria-label": ariaLabel,
+}: DbxButtonGroupProps) {
+  const items = Children.toArray(children);
+  const activeIndex = items.findIndex(
+    (child) => isValidElement<DbxButtonProps>(child) && child.props.active,
+  );
+
   return (
-    <div
-      data-slot="button-group"
-      role={props.role ?? "group"}
+    <AnimatedSelectionTrack
+      value={activeIndex}
+      ariaLabel={typeof ariaLabel === "string" ? ariaLabel : ""}
+      role={role === "tablist" ? "tablist" : "group"}
+      className={className}
+      dataSlot="button-group"
       style={{
-        display: "inline-flex",
-        alignItems: "center",
-        gap: 4,
-        padding: 2,
-        borderRadius: 12,
-        border: "1px solid var(--border-subtle)",
-        background: "var(--bg-subtle)",
         ...style,
       }}
-      {...props}
     >
-      {children}
-    </div>
+      {items.map((child, index) => (
+        <span
+          key={isValidElement(child) && child.key != null ? child.key : index}
+          data-animated-selection-item
+          data-selection-value={String(index)}
+          style={{ position: "relative", zIndex: 1, display: "inline-flex" }}
+        >
+          <DbxButtonGroupContext.Provider value>{child}</DbxButtonGroupContext.Provider>
+        </span>
+      ))}
+    </AnimatedSelectionTrack>
   );
 }
 
@@ -220,13 +246,19 @@ export function DbxSegmentedButton({
   size = "sm",
   ...props
 }: DbxButtonProps) {
+  const grouped = useContext(DbxButtonGroupContext);
   return (
     <DbxButton
-      active={active}
+      active={grouped ? false : active}
       aria-pressed={active}
-      variant={active ? "secondary" : variant}
+      variant={grouped ? "ghost" : active ? "secondary" : variant}
       size={size}
       {...props}
+      style={{
+        background: grouped ? "transparent" : undefined,
+        color: grouped ? (active ? "var(--control-active-fg)" : "var(--text-muted)") : undefined,
+        ...props.style,
+      }}
     />
   );
 }
