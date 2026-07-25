@@ -1,6 +1,26 @@
-export const MODEL_REASONING_EFFORTS = ["minimal", "low", "medium", "high", "xhigh"] as const;
+export const CODEX_REASONING_EFFORTS = [
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+] as const;
+
+export const CLAUDE_REASONING_EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;
+
+export const MODEL_REASONING_EFFORTS = [
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+] as const;
 
 export type ModelReasoningEffort = (typeof MODEL_REASONING_EFFORTS)[number];
+export type CodexReasoningEffort = (typeof CODEX_REASONING_EFFORTS)[number];
+export type ClaudeReasoningEffort = (typeof CLAUDE_REASONING_EFFORTS)[number];
 
 const MODEL_REASONING_EFFORT_LINE =
   /^([ \t]*)model_reasoning_effort[ \t]*=[ \t]*"([^"\r\n]*)"([^\r\n]*)$/m;

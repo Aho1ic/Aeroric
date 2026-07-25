@@ -271,6 +271,7 @@ export function AllAgentConfigsPanel({ themeVariant }: { themeVariant: ThemeVari
                   avoidCollisions
                   sticky="always"
                   style={{
+                    zIndex: 9999,
                     minWidth: 180,
                     maxWidth: "min(280px, calc(100vw - 24px))",
                     maxHeight: "min(320px, var(--radix-popover-content-available-height))",

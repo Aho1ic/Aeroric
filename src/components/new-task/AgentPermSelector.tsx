@@ -10,6 +10,7 @@ import {
   ListChecks,
   Plus,
   Target,
+  Zap,
 } from "lucide-react";
 import * as Popover from "@radix-ui/react-popover";
 import * as Select from "@radix-ui/react-select";
@@ -200,6 +201,8 @@ export function AgentPermSelector({
   permMode,
   planMode,
   goalMode,
+  fastMode = false,
+  isClaudeAgent = false,
   hasContent,
   hasAttachments,
   saveAsTodoDisabledReason,
@@ -213,12 +216,15 @@ export function AgentPermSelector({
   onSetPermMode,
   onTogglePlanMode,
   onToggleGoalMode,
+  onToggleFastMode,
   onSubmit,
 }: {
   agent: AgentType;
   permMode: PermissionMode;
   planMode: boolean;
   goalMode: boolean;
+  fastMode?: boolean;
+  isClaudeAgent?: boolean;
   hasContent: boolean;
   hasAttachments: boolean;
   saveAsTodoDisabledReason?: string;
@@ -232,6 +238,7 @@ export function AgentPermSelector({
   onSetPermMode: (mode: PermissionMode) => void;
   onTogglePlanMode: () => void;
   onToggleGoalMode: () => void;
+  onToggleFastMode?: () => void;
   onSubmit: (immediate: boolean) => void;
 }) {
   const { t } = useI18n();
@@ -360,6 +367,14 @@ export function AgentPermSelector({
                 label={t("newTask.goalMode")}
                 onToggle={onToggleGoalMode}
               />
+              {isClaudeAgent && onToggleFastMode && (
+                <ModeMenuItem
+                  enabled={fastMode}
+                  icon={<Zap size={15} strokeWidth={2} color="var(--text-muted)" />}
+                  label={t("newTask.fastMode")}
+                  onToggle={onToggleFastMode}
+                />
+              )}
             </Popover.Content>
           </Popover.Portal>
         </Popover.Root>

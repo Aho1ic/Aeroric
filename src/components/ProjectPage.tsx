@@ -243,6 +243,7 @@ export function ProjectPage({
     launchMode: "local" | "worktree";
     baseBranch: string;
     selectedModel?: string;
+    speed?: string;
     injectPromptIntoTerminal?: boolean;
   }) => void;
   onRunTodoTask: (task: Task) => void;

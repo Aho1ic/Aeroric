@@ -562,13 +562,16 @@ fn normalized_selected_model(selected_model: Option<&str>) -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
-fn add_claude_launch_args(cmd: &mut CommandBuilder, agent: &str, selected_model: Option<&str>) {
+fn add_claude_launch_args(cmd: &mut CommandBuilder, agent: &str, selected_model: Option<&str>, speed: Option<&str>) {
     if agent != "claude" {
         return;
     }
     if let Some(model) = normalized_selected_model(selected_model) {
         cmd.arg("--model");
         cmd.arg(model);
+    }
+    if speed == Some("fast") {
+        cmd.arg("--fast");
     }
 }
 
@@ -688,6 +691,7 @@ pub async fn run_task(
     images: Option<Vec<String>>,
     texts: Option<Vec<String>>,
     selected_model: Option<String>,
+    speed: Option<String>,
     force_prompt_injection: Option<bool>,
     cols: Option<u16>,
     rows: Option<u16>,
@@ -812,7 +816,7 @@ pub async fn run_task(
         c
     } else {
         let mut c = build_claude_cmd(&agent_bin, &permission_mode);
-        add_claude_launch_args(&mut c, &agent, selected_model.as_deref());
+        add_claude_launch_args(&mut c, &agent, selected_model.as_deref(), speed.as_deref());
         // Claude >= 2.1.87：通过 --session-id 指定会话，跳过 /status 发现
         if let Some(ref sid) = pre_session_id {
             c.arg("--session-id");
@@ -1058,6 +1062,7 @@ pub async fn resume_task(
     _prompt: String,
     permission_mode: String,
     selected_model: Option<String>,
+    speed: Option<String>,
     cols: Option<u16>,
     rows: Option<u16>,
     on_output: Channel<String>,
@@ -1106,7 +1111,7 @@ pub async fn resume_task(
     } else {
         // resume 时 session_id 已知，使用 --resume 标志
         let mut c = build_claude_cmd(&agent_bin, &permission_mode);
-        add_claude_launch_args(&mut c, &agent, selected_model.as_deref());
+        add_claude_launch_args(&mut c, &agent, selected_model.as_deref(), speed.as_deref());
         c.arg("--resume");
         c.arg(&session_id);
         // Claude:命令行 `--settings` 传入 Aeroric 自有 hooks 文件,不改用户配置。

@@ -163,6 +163,7 @@ export const en: Record<string, string> = {
   "appSettings.reasoningEffort.medium": "Medium",
   "appSettings.reasoningEffort.high": "High",
   "appSettings.reasoningEffort.xhigh": "Extra high",
+  "appSettings.reasoningEffort.max": "Max",
   "appSettings.customAgentPath": "{agent} Script",
   "appSettings.customAgentPathShort": "Script Path",
   "appSettings.customAgentPathHint":
@@ -286,6 +287,8 @@ export const en: Record<string, string> = {
   "skill.shop.category.knowledge": "Knowledge",
   "skill.shop.stale": "Showing the latest cached marketplace data; it may be out of date.",
   "skill.shop.partial": "Some repository metadata could not be loaded.",
+  "skill.shop.rateLimitHint":
+    "Tip: set the GITHUB_TOKEN environment variable to raise the GitHub API rate limit from 60 to 5 000 requests per hour.",
   "skill.shop.loadFailed": "Could not load Skills Shop",
   "skill.shop.empty": "No matching skills",
   "skill.shop.emptyHint": "Try another search term, category, or sort order.",
@@ -1445,6 +1448,7 @@ export const en: Record<string, string> = {
   "newTask.images": "Images",
   "newTask.planMode": "Plan mode",
   "newTask.goalMode": "Goal mode",
+  "newTask.fastMode": "Fast mode",
   "newTask.send": "Send",
   "newTask.startTerminal": "Start Terminal",
   "newTask.claudeAgents": "Claude configurations",

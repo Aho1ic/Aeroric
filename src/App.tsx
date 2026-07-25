@@ -541,6 +541,7 @@ function App() {
       prompt: task.prompt,
       agent: task.agent,
       selectedModel: task.selectedModel,
+      speed: task.speed,
       permissionMode: task.permissionMode,
       images,
       texts,
@@ -585,6 +586,7 @@ function App() {
       launchMode,
       baseBranch,
       selectedModel,
+      speed,
       injectPromptIntoTerminal,
     }: {
       prompt: string;
@@ -593,6 +595,7 @@ function App() {
       texts: string[];
       permissionMode: PermissionMode;
       selectedModel?: string;
+      speed?: string;
       immediate: boolean;
       launchMode: "local" | "worktree";
       baseBranch: string;
@@ -635,6 +638,7 @@ function App() {
       name: prompt.trim() ? undefined : agentDisplayLabel(agent, agentOptions),
       agent,
       selectedModel,
+      speed,
       permissionMode,
       status: immediate ? "pending" : "todo",
       createdAt: Date.now(),
@@ -844,6 +848,7 @@ function App() {
       prompt: task.prompt,
       permissionMode: task.permissionMode,
       selectedModel: task.selectedModel,
+      speed: task.speed,
       cols: tm.terminalSizeRef.current.cols,
       rows: tm.terminalSizeRef.current.rows,
       onOutput: tm.createOutputChannel(task.id),

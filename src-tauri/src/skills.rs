@@ -34,6 +34,14 @@ static MARKETPLACE_HTTP_CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
         .unwrap_or_else(|_| reqwest::Client::new())
 });
 
+/// Read a GitHub personal access token from `GITHUB_TOKEN` env var.
+/// Returns `None` when the variable is absent or empty.
+fn github_auth_token() -> Option<String> {
+    std::env::var("GITHUB_TOKEN")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+}
+
 // ── Data types ───────────────────────────────────────────────────────────────
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
@@ -1592,17 +1600,28 @@ fn classify_marketplace_skill(text: &str) -> Vec<String> {
 }
 
 async fn marketplace_get_json<T: for<'de> Deserialize<'de>>(url: &str) -> Result<T, String> {
-    let response = MARKETPLACE_HTTP_CLIENT
+    let mut request = MARKETPLACE_HTTP_CLIENT
         .get(url)
         .header(USER_AGENT, "Aeroric/1.3.7")
-        .header(ACCEPT, "application/vnd.github+json, application/json")
+        .header(ACCEPT, "application/vnd.github+json, application/json");
+    if url.starts_with(GITHUB_API_ORIGIN) {
+        if let Some(token) = github_auth_token() {
+            request = request.header(reqwest::header::AUTHORIZATION, format!("token {token}"));
+        }
+    }
+    let response = request
         .send()
         .await
         .map_err(|error| format!("Network request failed: {error}"))?;
     if response.status() == reqwest::StatusCode::TOO_MANY_REQUESTS
         || response.status() == reqwest::StatusCode::FORBIDDEN
     {
-        return Err("Marketplace API rate limit reached".to_string());
+        let hint = if github_auth_token().is_none() {
+            " (unauthenticated: 60 requests/hour; set GITHUB_TOKEN for 5000/hour)"
+        } else {
+            ""
+        };
+        return Err(format!("GitHub API rate limit reached{hint}"));
     }
     response
         .error_for_status()
@@ -2439,10 +2458,15 @@ pub async fn install_marketplace_skill(
         "{GITHUB_API_ORIGIN}/repos/{owner}/{repo}/tarball/{}",
         detailed.latest_ref
     );
-    let response = MARKETPLACE_HTTP_CLIENT
+    let mut archive_request = MARKETPLACE_HTTP_CLIENT
         .get(archive_url)
         .header(USER_AGENT, "Aeroric/1.3.7")
-        .header(ACCEPT, "application/vnd.github+json")
+        .header(ACCEPT, "application/vnd.github+json");
+    if let Some(token) = github_auth_token() {
+        archive_request =
+            archive_request.header(reqwest::header::AUTHORIZATION, format!("token {token}"));
+    }
+    let response = archive_request
         .send()
         .await
         .map_err(|error| format!("Failed to download marketplace skill: {error}"))?

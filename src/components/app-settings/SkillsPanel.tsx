@@ -5,38 +5,37 @@ import { FolderOpen, RotateCcw } from "lucide-react";
 import { useI18n } from "../../i18n";
 import type { Project, SkillHubConfig, SetSkillHubResult } from "../../types";
 import { SKILL_HUB_CHANGED_EVENT } from "./types";
+import { SkillHubView } from "../skill-hub/SkillHubView";
 import s from "../../styles";
 
 export function SkillsPanel() {
   const { t } = useI18n();
   const [config, setConfig] = useState<SkillHubConfig | null>(null);
-  const [hubProjectName, setHubProjectName] = useState<string | null>(null);
+  const [allProjects, setAllProjects] = useState<Project[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    invoke<SkillHubConfig>("get_skill_hub_config")
-      .then((cfg) => setConfig(cfg ?? null))
+  const loadData = useCallback(() => {
+    Promise.all([
+      invoke<SkillHubConfig>("get_skill_hub_config"),
+      invoke<Project[]>("load_projects"),
+    ])
+      .then(([cfg, projects]) => {
+        setConfig(cfg ?? null);
+        setAllProjects(projects);
+      })
       .catch(() => {});
   }, []);
 
   useEffect(() => {
-    let cancelled = false;
-    if (!config?.hubProjectId) {
-      setHubProjectName(null);
-      return;
-    }
-    invoke<Project[]>("load_projects")
-      .then((projects) => {
-        if (cancelled) return;
-        const hub = projects.find((p) => p.id === config.hubProjectId);
-        setHubProjectName(hub?.name ?? null);
-      })
-      .catch(() => {});
-    return () => {
-      cancelled = true;
-    };
-  }, [config?.hubProjectId]);
+    loadData();
+  }, [loadData]);
+
+  useEffect(() => {
+    const refresh = () => loadData();
+    window.addEventListener(SKILL_HUB_CHANGED_EVENT, refresh);
+    return () => window.removeEventListener(SKILL_HUB_CHANGED_EVENT, refresh);
+  }, [loadData]);
 
   const handlePick = useCallback(async () => {
     setError(null);
@@ -48,7 +47,7 @@ export function SkillsPanel() {
         path: selected as string,
       });
       setConfig(result.config);
-      setHubProjectName(result.project.name);
+      setAllProjects(result.projects as Project[]);
       window.dispatchEvent(
         new CustomEvent(SKILL_HUB_CHANGED_EVENT, {
           detail: { projects: result.projects },
@@ -67,7 +66,6 @@ export function SkillsPanel() {
     try {
       await invoke("clear_skill_hub");
       setConfig(null);
-      setHubProjectName(null);
       window.dispatchEvent(new CustomEvent(SKILL_HUB_CHANGED_EVENT));
     } catch (e) {
       setError(String(e));
@@ -79,44 +77,47 @@ export function SkillsPanel() {
   const hubPath = config?.hubPath ?? "";
 
   return (
-    <div style={s.skillsPanelBody}>
-      <div style={s.skillsPanelField}>
-        <label style={s.skillsPanelLabel}>{t("skill.settings.hubPath")}</label>
-        <div style={s.skillsPanelPathRow}>
-          <div style={s.skillsPanelPathBox}>
-            {hubPath ? (
-              <span style={s.skillsPanelPathText}>{hubPath}</span>
-            ) : (
-              <span style={s.skillsPanelPathEmpty}>{t("skill.settings.notConfigured")}</span>
-            )}
-          </div>
-          <button type="button" style={s.skillsPanelPickBtn} onClick={handlePick} disabled={busy}>
-            <FolderOpen size={13} strokeWidth={2} />
-            {t("skill.settings.choose")}
-          </button>
-          {hubPath ? (
-            <button
-              type="button"
-              style={s.skillsPanelClearBtn}
-              onClick={handleClear}
-              disabled={busy}
-              title={t("skill.settings.reset")}
-            >
-              <RotateCcw size={13} strokeWidth={2} />
+    <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column", overflow: "hidden" }}>
+      <div style={s.skillsPanelBody}>
+        <div style={s.skillsPanelField}>
+          <label style={s.skillsPanelLabel}>{t("skill.settings.hubPath")}</label>
+          <div style={s.skillsPanelPathRow}>
+            <div style={s.skillsPanelPathBox}>
+              {hubPath ? (
+                <span style={s.skillsPanelPathText}>{hubPath}</span>
+              ) : (
+                <span style={s.skillsPanelPathEmpty}>{t("skill.settings.notConfigured")}</span>
+              )}
+            </div>
+            <button type="button" style={s.skillsPanelPickBtn} onClick={handlePick} disabled={busy}>
+              <FolderOpen size={13} strokeWidth={2} />
+              {t("skill.settings.choose")}
             </button>
-          ) : null}
+            {hubPath ? (
+              <button
+                type="button"
+                style={s.skillsPanelClearBtn}
+                onClick={handleClear}
+                disabled={busy}
+                title={t("skill.settings.reset")}
+              >
+                <RotateCcw size={13} strokeWidth={2} />
+              </button>
+            ) : null}
+          </div>
+          <span style={s.skillsPanelHint}>{t("skill.settings.hubPathHint")}</span>
         </div>
-        <span style={s.skillsPanelHint}>{t("skill.settings.hubPathHint")}</span>
+        {error ? <div style={s.skillsPanelError}>{error}</div> : null}
       </div>
 
-      {hubProjectName ? (
-        <div style={s.skillsPanelMetaRow}>
-          <span style={s.skillsPanelMetaLabel}>{t("skill.settings.hubProject")}</span>
-          <span style={s.skillsPanelMetaValue}>{hubProjectName}</span>
-        </div>
-      ) : null}
-
-      {error ? <div style={s.skillsPanelError}>{error}</div> : null}
+      <div style={{ flex: 1, minHeight: 0, overflow: "auto", padding: "0 20px 18px" }}>
+        <SkillHubView
+          config={config}
+          allProjects={allProjects}
+          onOpenAppSettings={() => {}}
+          embedded
+        />
+      </div>
     </div>
   );
 }

@@ -19,7 +19,8 @@ import { Button } from "../ui/Button";
 import type { AgentOption, CustomAgentProfile } from "../../agents";
 import { isBuiltInAgent } from "../../agents";
 import {
-  MODEL_REASONING_EFFORTS,
+  CODEX_REASONING_EFFORTS,
+  CLAUDE_REASONING_EFFORTS,
   readModelReasoningEffort,
   setModelReasoningEffort,
   type ModelReasoningEffort,
@@ -123,9 +124,7 @@ export function AgentDetailModal({
 
   function handleFileContentChange(content: string) {
     setFileState({ status: "loaded", content });
-    if (isCodex) {
-      setReasoningEffort(readModelReasoningEffort(content));
-    }
+    setReasoningEffort(readModelReasoningEffort(content));
   }
 
   useEffect(() => {
@@ -156,7 +155,7 @@ export function AgentDetailModal({
         if (c === undefined) return;
         setFileState({ status: "loaded", content: c });
         setOriginal(c);
-        const effort = isCodex ? readModelReasoningEffort(c) : null;
+        const effort = readModelReasoningEffort(c);
         setReasoningEffort(effort);
         setOriginalReasoningEffort(effort);
       })
@@ -166,7 +165,7 @@ export function AgentDetailModal({
     return () => {
       cancelled = true;
     };
-  }, [agentKey, option.configFile, isCodex]);
+  }, [agentKey, option.configFile]);
 
   useEffect(() => {
     if (!deletable) {
@@ -282,11 +281,9 @@ export function AgentDetailModal({
         setResolvedFilePath(result.config_path);
         setFileState({ status: "loaded", content: nextContent });
         setOriginal(nextContent);
-        if (isCodex) {
-          const effort = readModelReasoningEffort(nextContent);
-          setReasoningEffort(effort);
-          setOriginalReasoningEffort(effort);
-        }
+        const effort = readModelReasoningEffort(nextContent);
+        setReasoningEffort(effort);
+        setOriginalReasoningEffort(effort);
         if (deletable) {
           const settings = await invoke<AppSettings>("load_app_settings");
           const profile =
@@ -363,7 +360,7 @@ export function AgentDetailModal({
     selectedModels.length > 0 &&
     !sameModels(normalizeModels(selectedModels), originalSelectedModels);
   const canSaveReasoningEffort =
-    isCodex && fileState.status === "loaded" && reasoningEffort !== originalReasoningEffort;
+    fileState.status === "loaded" && reasoningEffort !== originalReasoningEffort;
   const canSave1mContext =
     Boolean(customProfile && !customProfile.codex_like) &&
     enable1mContext !== originalEnable1mContext;
@@ -463,11 +460,9 @@ export function AgentDetailModal({
         if (content !== null) {
           setFileState({ status: "loaded", content });
           setOriginal(content);
-          if (isCodex) {
-            const effort = readModelReasoningEffort(content);
-            setReasoningEffort(effort);
-            setOriginalReasoningEffort(effort);
-          }
+          const effort = readModelReasoningEffort(content);
+          setReasoningEffort(effort);
+          setOriginalReasoningEffort(effort);
         }
       }
 
@@ -491,11 +486,9 @@ export function AgentDetailModal({
         await invoke("write_agent_config_file", { agent: agentKey, content: contentToSave });
         setFileState({ status: "loaded", content: contentToSave });
         setOriginal(contentToSave);
-        if (isCodex) {
-          const effort = readModelReasoningEffort(contentToSave);
-          setReasoningEffort(effort);
-          setOriginalReasoningEffort(effort);
-        }
+        const effort = readModelReasoningEffort(contentToSave);
+        setReasoningEffort(effort);
+        setOriginalReasoningEffort(effort);
       }
 
       window.dispatchEvent(new Event(APP_SETTINGS_CHANGED_EVENT));
@@ -869,7 +862,7 @@ export function AgentDetailModal({
                     )}
 
                     {/* Reasoning effort */}
-                    {isCodex && fileState.status === "loaded" && (
+                    {fileState.status === "loaded" && (
                       <div style={{ marginBottom: 18 }}>
                         <div
                           style={{
@@ -915,7 +908,7 @@ export function AgentDetailModal({
                           >
                             {t("appSettings.reasoningEffortDefault")}
                           </Button>
-                          {MODEL_REASONING_EFFORTS.map((effort) => (
+                          {(isCodex ? CODEX_REASONING_EFFORTS : CLAUDE_REASONING_EFFORTS).map((effort) => (
                             <Button
                               key={effort}
                               variant="outline"

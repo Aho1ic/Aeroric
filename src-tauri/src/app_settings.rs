@@ -3525,12 +3525,20 @@ struct AgentUpgradeCommand {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
+pub struct AgentUpgradeChannel {
+    pub channel: String,
+    pub success: bool,
+    pub message: String,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
 pub struct AgentUpgradeResult {
     pub agent: String,
     pub success: bool,
     pub previous_version: String,
     pub current_version: String,
     pub message: String,
+    pub channels: Vec<AgentUpgradeChannel>,
 }
 
 fn canonical_program_path(program: &str) -> String {
@@ -3769,27 +3777,26 @@ fn run_agent_upgrade(command: &AgentUpgradeCommand) -> Result<String, String> {
     }
 }
 
-fn run_agent_upgrades(commands: &[AgentUpgradeCommand]) -> Result<String, String> {
-    let mut messages = Vec::new();
-    let mut errors = Vec::new();
-    for command in commands {
-        match run_agent_upgrade(command) {
-            Ok(detail) => messages.push(if detail.is_empty() {
-                format!("{}: upgraded", command.channel)
-            } else {
-                format!("{}:\n{}", command.channel, detail)
-            }),
-            Err(error) => errors.push(format!("{}:\n{}", command.channel, error)),
-        }
-    }
-    if errors.is_empty() {
-        Ok(messages.join("\n\n"))
-    } else {
-        if !messages.is_empty() {
-            errors.insert(0, messages.join("\n\n"));
-        }
-        Err(errors.join("\n\n"))
-    }
+fn run_agent_upgrades(commands: &[AgentUpgradeCommand]) -> Vec<AgentUpgradeChannel> {
+    commands
+        .iter()
+        .map(|command| match run_agent_upgrade(command) {
+            Ok(detail) => AgentUpgradeChannel {
+                channel: command.channel.clone(),
+                success: true,
+                message: if detail.is_empty() {
+                    "upgraded".to_string()
+                } else {
+                    detail
+                },
+            },
+            Err(error) => AgentUpgradeChannel {
+                channel: command.channel.clone(),
+                success: false,
+                message: error,
+            },
+        })
+        .collect()
 }
 
 fn upgrade_kind_for_agent(settings: &AppSettings, agent: &str) -> Option<AgentUpgradeKind> {
@@ -3837,7 +3844,7 @@ pub async fn upgrade_agent_versions(
             return Err("Select at least one agent to upgrade".to_string());
         }
 
-        let mut outcomes: HashMap<AgentUpgradeKind, (String, String, Result<String, String>)> =
+        let mut outcomes: HashMap<AgentUpgradeKind, (String, String, Vec<AgentUpgradeChannel>)> =
             HashMap::new();
         for agent in &requested {
             let kind = upgrade_kind_for_agent(&settings, agent)
@@ -3848,11 +3855,17 @@ pub async fn upgrade_agent_versions(
             let binary_agent = upgrade_binary_agent(kind);
             let launch = get_agent_launch_spec_from_settings(&settings, binary_agent);
             let previous_version = detect_version(&launch).unwrap_or_default();
-            let outcome = build_agent_upgrade_commands(kind, &launch.program)
-                .and_then(|commands| run_agent_upgrades(&commands));
+            let channels = match build_agent_upgrade_commands(kind, &launch.program) {
+                Ok(commands) => run_agent_upgrades(&commands),
+                Err(error) => vec![AgentUpgradeChannel {
+                    channel: "detection".to_string(),
+                    success: false,
+                    message: error,
+                }],
+            };
             clear_cached_versions();
             let current_version = detect_version(&launch).unwrap_or_default();
-            outcomes.insert(kind, (previous_version, current_version, outcome));
+            outcomes.insert(kind, (previous_version, current_version, channels));
         }
 
         clear_cached_versions();
@@ -3860,13 +3873,26 @@ pub async fn upgrade_agent_versions(
             .into_iter()
             .filter_map(|agent| {
                 let kind = upgrade_kind_for_agent(&settings, &agent)?;
-                let (previous_version, current_version, outcome) = outcomes.get(&kind)?;
+                let (previous_version, current_version, channels) = outcomes.get(&kind)?;
+                let success = channels.iter().all(|ch| ch.success);
+                let message = channels
+                    .iter()
+                    .map(|ch| {
+                        if ch.success {
+                            format!("{}: upgraded", ch.channel)
+                        } else {
+                            format!("{}: {}", ch.channel, ch.message)
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n");
                 Some(AgentUpgradeResult {
                     agent,
-                    success: outcome.is_ok(),
+                    success,
                     previous_version: previous_version.clone(),
                     current_version: current_version.clone(),
-                    message: outcome.clone().unwrap_or_else(|error| error),
+                    message,
+                    channels: channels.clone(),
                 })
             })
             .collect())

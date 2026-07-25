@@ -49,17 +49,17 @@ const BASE_NAV_ITEMS: AppSettingsNavItem[] = [
   {
     key: "usage",
     labelKey: "usageStats.nav",
-    section: "application",
+    section: "agents",
     icon: ChartNoAxesCombined,
   },
   {
     key: "agent-updates",
     labelKey: "appSettings.agentUpdates",
-    section: "application",
+    section: "agents",
     icon: PackageOpen,
   },
-  { key: "hooks", labelKey: "appSettings.hooks", section: "application", icon: Zap },
-  { key: "skills", labelKey: "skill.settings.navLabel", section: "application", icon: Blocks },
+  { key: "hooks", labelKey: "appSettings.hooks", section: "agents", icon: Zap },
+  { key: "skills", labelKey: "skill.settings.navLabel", section: "agents", icon: Blocks },
   { key: "about", labelKey: "appSettings.about", section: "about", icon: Info },
 ];
 

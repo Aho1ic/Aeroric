@@ -59,12 +59,19 @@ export interface AgentVersions {
   codex_version: string;
 }
 
+export interface AgentUpgradeChannel {
+  channel: string;
+  success: boolean;
+  message: string;
+}
+
 export interface AgentUpgradeResult {
   agent: string;
   success: boolean;
   previous_version: string;
   current_version: string;
   message: string;
+  channels?: AgentUpgradeChannel[];
 }
 
 export type AgentSetupKind = "codex" | "claude_code";

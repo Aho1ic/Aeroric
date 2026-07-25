@@ -210,6 +210,8 @@ export interface Task {
   prompt: string;
   agent: AgentType;
   selectedModel?: string;
+  reasoningEffort?: string;
+  speed?: string;
   permissionMode: PermissionMode;
   status: TaskStatus;
   createdAt: number;

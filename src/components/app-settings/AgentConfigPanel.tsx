@@ -18,7 +18,8 @@ import { useTextInputIMEFix } from "../useTextInputIMEFix";
 import { Button } from "../ui/Button";
 import type { CustomAgentProfile } from "../../agents";
 import {
-  MODEL_REASONING_EFFORTS,
+  CODEX_REASONING_EFFORTS,
+  CLAUDE_REASONING_EFFORTS,
   readModelReasoningEffort,
   setModelReasoningEffort,
   type ModelReasoningEffort,
@@ -117,9 +118,7 @@ export function AgentConfigPanel({
 
   function handleFileContentChange(content: string) {
     setFileState({ status: "loaded", content });
-    if (agentKey === "codex") {
-      setReasoningEffort(readModelReasoningEffort(content));
-    }
+    setReasoningEffort(readModelReasoningEffort(content));
   }
 
   useEffect(() => {
@@ -156,7 +155,7 @@ export function AgentConfigPanel({
         if (c === undefined) return;
         setFileState({ status: "loaded", content: c });
         setOriginal(c);
-        const effort = agentKey === "codex" ? readModelReasoningEffort(c) : null;
+        const effort = readModelReasoningEffort(c);
         setReasoningEffort(effort);
         setOriginalReasoningEffort(effort);
       })
@@ -400,7 +399,7 @@ export function AgentConfigPanel({
   }
 
   async function handleSaveReasoningEffort() {
-    if (agentKey !== "codex" || fileState.status !== "loaded") return;
+    if (fileState.status !== "loaded") return;
     const content = setModelReasoningEffort(fileState.content, reasoningEffort);
     setSavingReasoningEffort(true);
     setError(null);
@@ -463,12 +462,17 @@ export function AgentConfigPanel({
   const canDetectModels = Boolean(
     customProfile?.base_url?.trim() && customProfile?.api_key?.trim(),
   );
+  const isCodexLike =
+    agentKey === "codex" || agentKey === "claude_gpt55" || customProfile?.codex_like === true;
+  const supportsReasoningEffort = fileState.status === "loaded";
+  const reasoningEfforts = isCodexLike
+    ? (CODEX_REASONING_EFFORTS as readonly string[])
+    : (CLAUDE_REASONING_EFFORTS as readonly string[]);
   const canSaveModels =
     selectedModels.length > 0 &&
     !sameModels(normalizeModels(selectedModels), originalSelectedModels);
   const canSaveReasoningEffort =
-    agentKey === "codex" &&
-    fileState.status === "loaded" &&
+    supportsReasoningEffort &&
     reasoningEffort !== originalReasoningEffort;
   const canSave1mContext =
     Boolean(customProfile && !customProfile.codex_like) &&
@@ -712,7 +716,7 @@ export function AgentConfigPanel({
           </div>
         )}
 
-        {agentKey === "codex" && fileState.status === "loaded" && (
+        {fileState.status === "loaded" && (
           <div style={{ marginBottom: 18 }}>
             <div
               style={{
@@ -753,13 +757,13 @@ export function AgentConfigPanel({
               >
                 {t("appSettings.reasoningEffortDefault")}
               </Button>
-              {MODEL_REASONING_EFFORTS.map((effort) => (
+              {reasoningEfforts.map((effort) => (
                 <Button
                   key={effort}
                   variant="outline"
                   size="sm"
                   active={reasoningEffort === effort}
-                  onClick={() => setReasoningEffort(effort)}
+                  onClick={() => setReasoningEffort(effort as ModelReasoningEffort)}
                 >
                   {t(`appSettings.reasoningEffort.${effort}`)}
                 </Button>

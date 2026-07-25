@@ -290,6 +290,9 @@ export function SkillsShop() {
             {stale ? t("skill.shop.stale") : t("skill.shop.partial")}
             {warning ? ` ${warning}` : ""}
           </span>
+          {warning && warning.toLowerCase().includes("rate limit") ? (
+            <span className="marketplace-notice__hint">{t("skill.shop.rateLimitHint")}</span>
+          ) : null}
         </div>
       ) : null}
 

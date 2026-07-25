@@ -49,6 +49,7 @@ export interface NewTaskDraft {
   permMode: PermissionMode;
   planMode: boolean;
   goalMode?: boolean;
+  fastMode?: boolean;
   pastedImages: PastedImage[];
   pastedTexts?: PastedText[];
   launchMode?: LaunchMode;
@@ -98,6 +99,7 @@ export function NewTaskView({
     launchMode: LaunchMode;
     baseBranch: string;
     selectedModel?: string;
+    speed?: string;
     injectPromptIntoTerminal?: boolean;
   }) => void;
   onStartTerminal?: () => void;
@@ -113,6 +115,7 @@ export function NewTaskView({
   const [permMode, setPermMode] = useState<PermissionMode>(initialDraft?.permMode ?? "full_access");
   const [planMode, setPlanMode] = useState(initialDraft?.planMode ?? false);
   const [goalMode, setGoalMode] = useState(initialDraft?.goalMode ?? false);
+  const [fastMode, setFastMode] = useState(initialDraft?.fastMode ?? false);
   const [launchMode, setLaunchMode] = useState<LaunchMode>(
     remoteProject ? "local" : (initialDraft?.launchMode ?? "local"),
   );
@@ -170,6 +173,7 @@ export function NewTaskView({
     permMode,
     planMode,
     goalMode,
+    fastMode,
     pastedImages,
     pastedTexts,
     launchMode,
@@ -182,6 +186,7 @@ export function NewTaskView({
       permMode,
       planMode,
       goalMode,
+      fastMode,
       pastedImages,
       pastedTexts,
       launchMode,
@@ -193,6 +198,7 @@ export function NewTaskView({
     permMode,
     planMode,
     goalMode,
+    fastMode,
     pastedImages,
     pastedTexts,
     launchMode,
@@ -223,6 +229,7 @@ export function NewTaskView({
         permMode: data.permMode,
         planMode: data.planMode,
         goalMode: data.goalMode,
+        fastMode: data.fastMode,
         pastedImages: data.pastedImages,
         pastedTexts: data.pastedTexts,
         launchMode: data.launchMode,
@@ -531,6 +538,7 @@ export function NewTaskView({
       launchMode,
       baseBranch,
       selectedModel: modelSelectable ? selectedModel || undefined : undefined,
+      speed: fastMode && agent === "claude" ? "fast" : undefined,
     });
     editorHandle.clear();
     setIsEmpty(true);
@@ -852,6 +860,9 @@ export function NewTaskView({
             onOpenMenuChange={setComposeOpenMenu}
             onTogglePlanMode={() => setPlanMode((v) => !v)}
             onToggleGoalMode={() => setGoalMode((v) => !v)}
+            onToggleFastMode={() => setFastMode((v) => !v)}
+            fastMode={fastMode}
+            isClaudeAgent={agent === "claude"}
             onSubmit={handleSubmit}
           />
         </div>

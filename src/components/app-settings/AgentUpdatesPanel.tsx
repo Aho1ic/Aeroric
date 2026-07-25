@@ -218,22 +218,38 @@ export function AgentUpdatesPanel() {
                   {versions[agent] || t("common.notDetected")}
                 </div>
                 {result && (
-                  <div
-                    title={result.message}
-                    style={{
-                      marginTop: 2,
-                      display: "flex",
-                      alignItems: "center",
-                      gap: 4,
-                      fontSize: 10.5,
-                      color: result.success ? "var(--success)" : "var(--danger)",
-                    }}
-                  >
-                    {result.success ? <Check size={11} /> : <TriangleAlert size={11} />}
-                    {result.success
-                      ? t("appSettings.upgradeComplete")
-                      : t("appSettings.upgradeFailed")}
-                  </div>
+                  <>
+                    <div
+                      title={result.message}
+                      style={{
+                        marginTop: 2,
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 4,
+                        fontSize: 10.5,
+                        color: result.success ? "var(--success)" : "var(--danger)",
+                      }}
+                    >
+                      {result.success ? <Check size={11} /> : <TriangleAlert size={11} />}
+                      {result.success
+                        ? t("appSettings.upgradeComplete")
+                        : t("appSettings.upgradeFailed")}
+                    </div>
+                    {result.channels && result.channels.length > 0 && (
+                      <div
+                        style={{
+                          marginTop: 2,
+                          fontSize: 10,
+                          color: "var(--text-hint)",
+                          lineHeight: 1.4,
+                        }}
+                      >
+                        {result.channels
+                          .map((ch) => `${ch.channel}: ${ch.success ? "✓" : "✗"}`)
+                          .join(" | ")}
+                      </div>
+                    )}
+                  </>
                 )}
               </div>
               <Button

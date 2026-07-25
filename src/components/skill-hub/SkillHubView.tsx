@@ -29,9 +29,10 @@ interface Props {
   config: SkillHubConfig | null;
   allProjects: Project[];
   onOpenAppSettings: () => void;
+  embedded?: boolean;
 }
 
-export function SkillHubView({ config, allProjects, onOpenAppSettings }: Props) {
+export function SkillHubView({ config, allProjects, onOpenAppSettings, embedded }: Props) {
   const { t } = useI18n();
   const [skills, setSkills] = useState<Skill[]>([]);
   const [installations, setInstallations] = useState<SkillInstallation[]>([]);
@@ -140,6 +141,7 @@ export function SkillHubView({ config, allProjects, onOpenAppSettings }: Props) 
   );
 
   if (!config?.hubPath) {
+    if (embedded) return null;
     return (
       <div style={s.skillHubBody}>
         <div style={s.skillHubEmpty}>
@@ -157,14 +159,16 @@ export function SkillHubView({ config, allProjects, onOpenAppSettings }: Props) 
 
   return (
     <div style={s.skillHubBody}>
-      <div style={s.skillHubHeader}>
-        <div style={s.skillHubHeaderMain}>
-          <div style={s.skillHubHeaderTitle}>{t("skill.header.title")}</div>
-          <div style={s.skillHubHeaderPath} title={config.hubPath}>
-            {shortenPath(config.hubPath)}
+      {!embedded && (
+        <div style={s.skillHubHeader}>
+          <div style={s.skillHubHeaderMain}>
+            <div style={s.skillHubHeaderTitle}>{t("skill.header.title")}</div>
+            <div style={s.skillHubHeaderPath} title={config.hubPath}>
+              {shortenPath(config.hubPath)}
+            </div>
           </div>
         </div>
-      </div>
+      )}
 
       <div
         style={{
