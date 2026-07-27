@@ -1,10 +1,9 @@
 use std::io::{BufRead, BufReader, Read, Write};
 use std::process::{ChildStdin, Command, Stdio};
-use std::sync::{mpsc, Arc};
+use std::sync::{mpsc, Arc, LazyLock};
 use std::time::{Duration, Instant};
 
 use chrono::DateTime;
-use std::sync::LazyLock;
 use parking_lot::Mutex;
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -41,6 +40,42 @@ pub(crate) struct CodexRpcClient {
     next_id: i64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CodexRpcErrorKind {
+    Transport,
+    Rpc { code: Option<i64> },
+}
+
+#[derive(Debug)]
+struct CodexRpcError {
+    kind: CodexRpcErrorKind,
+    message: String,
+}
+
+impl CodexRpcError {
+    fn transport(message: impl Into<String>) -> Self {
+        Self {
+            kind: CodexRpcErrorKind::Transport,
+            message: message.into(),
+        }
+    }
+
+    fn rpc(code: Option<i64>, message: impl Into<String>) -> Self {
+        Self {
+            kind: CodexRpcErrorKind::Rpc { code },
+            message: message.into(),
+        }
+    }
+
+    fn invalidates_client(&self) -> bool {
+        matches!(self.kind, CodexRpcErrorKind::Transport)
+    }
+
+    fn should_retry_with_empty_params(&self) -> bool {
+        matches!(self.kind, CodexRpcErrorKind::Rpc { code: Some(-32602) })
+    }
+}
+
 impl CodexRpcClient {
     /// Spawn a fresh `codex app-server` and complete the JSON-RPC handshake
     /// (`initialize` / `initialized`).
@@ -58,6 +93,9 @@ impl CodexRpcClient {
         for (key, value) in &launch.extra_env {
             cmd.env(key, value);
         }
+        // This is a silent background helper, not a troubleshooting session.
+        // Avoid filling Codex's local diagnostics database with TRACE/DEBUG output.
+        cmd.env("RUST_LOG", "error");
         let mut child = cmd
             .spawn()
             .map_err(|e| format!("Failed to start Codex app-server: {e}"))?;
@@ -124,7 +162,7 @@ impl CodexRpcClient {
                     }
                 }),
             )?;
-            wait_for_result(&rx, 1, deadline)?;
+            wait_for_result(&rx, 1, deadline).map_err(|error| error.message)?;
             write_json_line(
                 &mut stdin,
                 &json!({ "jsonrpc": "2.0", "method": "initialized" }),
@@ -159,12 +197,12 @@ impl CodexRpcClient {
     }
 
     /// Send a JSON-RPC request and return the `result` field of the response.
-    pub(crate) fn call(
+    fn call(
         &mut self,
         method: &str,
         params: Value,
         deadline: Instant,
-    ) -> Result<Value, String> {
+    ) -> Result<Value, CodexRpcError> {
         let id = self.alloc_id();
         write_json_line(
             &mut self.stdin,
@@ -174,7 +212,8 @@ impl CodexRpcClient {
                 "method": method,
                 "params": params
             }),
-        )?;
+        )
+        .map_err(CodexRpcError::transport)?;
         wait_for_result(&self.rx, id, deadline)
     }
 }
@@ -296,25 +335,30 @@ fn read_codex_usage_with_client(
     match attempt_codex_usage_calls(client) {
         Ok(data) => UsageSource::Available { data },
         Err(e) => {
-            // Kill the broken client so the next call spawns a fresh one.
-            *guard = None;
-            unavailable(e)
+            // JSON-RPC application errors (for example expired auth) do not
+            // invalidate the healthy app-server transport.
+            if e.invalidates_client() {
+                *guard = None;
+            }
+            unavailable(e.message)
         }
     }
 }
 
-fn attempt_codex_usage_calls(client: &mut CodexRpcClient) -> Result<CodexUsageData, String> {
+fn attempt_codex_usage_calls(client: &mut CodexRpcClient) -> Result<CodexUsageData, CodexRpcError> {
     let deadline = Instant::now() + Duration::from_secs(CODEX_ATTEMPT_TIMEOUT_SECS);
 
     let account = client.call("account/read", json!({}), deadline)?;
 
     // Some Codex versions expect `null` params, others an empty object — try both.
-    let rate_limits = client
-        .call("account/rateLimits/read", Value::Null, deadline)
-        .or_else(|_| {
+    let rate_limits = match client.call("account/rateLimits/read", Value::Null, deadline) {
+        Ok(value) => Ok(value),
+        Err(error) if error.should_retry_with_empty_params() => {
             let d = Instant::now() + Duration::from_secs(CODEX_ATTEMPT_TIMEOUT_SECS);
             client.call("account/rateLimits/read", json!({}), d)
-        })?;
+        }
+        Err(error) => Err(error),
+    }?;
 
     Ok(parse_codex_usage(account, rate_limits))
 }
@@ -457,23 +501,26 @@ fn wait_for_result(
     rx: &mpsc::Receiver<Result<Value, String>>,
     expected_id: i64,
     deadline: Instant,
-) -> Result<Value, String> {
+) -> Result<Value, CodexRpcError> {
     loop {
         let now = Instant::now();
         if now >= deadline {
-            return Err(format!(
+            return Err(CodexRpcError::transport(format!(
                 "Timed out waiting for Codex response {expected_id}."
-            ));
+            )));
         }
 
         let remaining = deadline.saturating_duration_since(now);
         let message = rx
             .recv_timeout(remaining)
-            .map_err(|_| format!("Codex app-server closed before response {expected_id}."))??;
+            .map_err(|_| {
+                CodexRpcError::transport(format!(
+                    "Codex app-server closed before response {expected_id}."
+                ))
+            })?
+            .map_err(CodexRpcError::transport)?;
 
-        let matches_id = message
-            .get("id")
-            .and_then(Value::as_i64) == Some(expected_id);
+        let matches_id = message.get("id").and_then(Value::as_i64) == Some(expected_id);
         if !matches_id {
             continue;
         }
@@ -487,12 +534,41 @@ fn wait_for_result(
                 .get("message")
                 .and_then(Value::as_str)
                 .unwrap_or("Unknown Codex app-server error");
-            return Err(msg.to_string());
+            let code = error.get("code").and_then(Value::as_i64);
+            return Err(CodexRpcError::rpc(code, msg));
         }
 
-        return Err(format!(
+        return Err(CodexRpcError::transport(format!(
             "Codex response {expected_id} did not include result or error."
-        ));
+        )));
+    }
+}
+
+#[cfg(test)]
+mod codex_rpc_tests {
+    use super::{CodexRpcError, CodexRpcErrorKind};
+
+    #[test]
+    fn rpc_errors_keep_the_app_server_alive() {
+        let error = CodexRpcError::rpc(Some(401), "Unauthorized");
+
+        assert_eq!(error.kind, CodexRpcErrorKind::Rpc { code: Some(401) });
+        assert!(!error.invalidates_client());
+        assert!(!error.should_retry_with_empty_params());
+    }
+
+    #[test]
+    fn transport_errors_restart_the_app_server() {
+        let error = CodexRpcError::transport("connection closed");
+
+        assert!(error.invalidates_client());
+    }
+
+    #[test]
+    fn invalid_params_errors_retry_with_legacy_params_shape() {
+        let error = CodexRpcError::rpc(Some(-32602), "Invalid params");
+
+        assert!(error.should_retry_with_empty_params());
     }
 }
 
