@@ -330,8 +330,11 @@ export function AgentDetailModal({
       });
       const nextModels = normalizeModels(detected.models);
       const selected = new Set(selectedModels.length > 0 ? selectedModels : originalSelectedModels);
-      const retained = nextModels.filter((model) => selected.has(model));
-      setDetectedModels(nextModels);
+      const retained = normalizeModels([
+        ...nextModels.filter((model) => selected.has(model)),
+        ...Array.from(selected).filter((model) => !nextModels.includes(model)),
+      ]);
+      setDetectedModels(normalizeModels([...nextModels, ...retained]));
       setDetectedBalance(detected.balance ?? null);
       setSelectedModels(retained);
     } catch (e) {
@@ -363,6 +366,13 @@ export function AgentDetailModal({
       if (prev.includes(modelName)) return prev.filter((item) => item !== modelName);
       return [...prev, modelName];
     });
+  }
+
+  function addManualModel(modelName: string) {
+    const next = modelName.trim();
+    if (!next) return;
+    setDetectedModels((prev) => normalizeModels([...prev, next]));
+    setSelectedModels((prev) => normalizeModels([...prev, next]));
   }
 
   const isDirty = fileState.status === "loaded" && fileState.content !== original;
@@ -850,13 +860,12 @@ export function AgentDetailModal({
                           </div>
                         </div>
 
-                        {detectedModels.length > 0 && (
-                          <ModelSelectionList
-                            models={detectedModels}
-                            selectedModels={selectedModels}
-                            onToggle={toggleModel}
-                          />
-                        )}
+                        <ModelSelectionList
+                          models={detectedModels}
+                          selectedModels={selectedModels}
+                          onToggle={toggleModel}
+                          onAddModel={addManualModel}
+                        />
                       </div>
                     )}
 

@@ -335,6 +335,7 @@ export function ProjectPage({
   const [showSettings, setShowSettings] = useState(false);
   const [showFileSearch, setShowFileSearch] = useState(false);
   const [sftpMounted, setSftpMounted] = useState(false);
+  const [databaseMounted, setDatabaseMounted] = useState(false);
   const [commandPaletteInitialInput, setCommandPaletteInitialInput] = useState<string | null>(null);
   const [launchedDebugSession, setLaunchedDebugSession] = useState<DebugSessionSnapshot | null>(
     null,
@@ -853,6 +854,9 @@ export function ProjectPage({
       if (panel === "sftp") {
         setSftpMounted(true);
       }
+      if (panel === "database") {
+        setDatabaseMounted(true);
+      }
       const label = projectPanelFeedbackLabel(panel, t);
       showActionFeedback(
         rightPanel === panel
@@ -863,7 +867,7 @@ export function ProjectPage({
       );
       setShowShellTerminal(false);
       setShowRemoteProjectTerminal(false);
-      if (panel === "ssh" || panel === "database" || panel === "notes") {
+      if (panel === "ssh" || panel === "notes") {
         clearFileAndDiff();
       }
       handleTogglePanel(panel);
@@ -997,6 +1001,7 @@ export function ProjectPage({
       setShowRemoteProjectTerminal(false);
       if (isSqliteDatabaseFileName(name)) {
         setDatabaseFilePath(path);
+        setDatabaseMounted(true);
         clearFileAndDiff();
         openRightPanel("database");
         return;
@@ -1012,6 +1017,7 @@ export function ProjectPage({
       setShowShellTerminal(false);
       setShowRemoteProjectTerminal(false);
       setDatabaseFilePath(path);
+      setDatabaseMounted(true);
       clearFileAndDiff();
       openRightPanel("database");
     },
@@ -1914,7 +1920,32 @@ export function ProjectPage({
                     projectConfig={sftpProjectConfig}
                   />
                 )}
+                {databaseMounted && (
+                  <div
+                    aria-hidden={!isDatabaseMode}
+                    style={{
+                      display: isDatabaseMode ? "flex" : "none",
+                      flex: "1 1 auto",
+                      width: "100%",
+                      minWidth: 0,
+                      minHeight: 0,
+                    }}
+                  >
+                    <DatabaseView
+                      projectRoot={projectLocation.kind === "local" ? project.path : undefined}
+                      initialSqliteFilePath={databaseFilePath ?? undefined}
+                      remoteConnection={
+                        projectLocation.kind === "ssh" ? remoteConnection : undefined
+                      }
+                      remoteProjectPath={
+                        projectLocation.kind === "ssh" ? projectLocation.remotePath : undefined
+                      }
+                      sshConnections={sshConnections}
+                    />
+                  </div>
+                )}
                 {!isSftpMode &&
+                  !isDatabaseMode &&
                   (isSshMode ? (
                     <SshWorkspace
                       connections={sshConnections}
@@ -1935,18 +1966,6 @@ export function ProjectPage({
                           ? `${remoteConnection.name} · ${projectLocation.remotePath}`
                           : project.path
                       }
-                    />
-                  ) : isDatabaseMode ? (
-                    <DatabaseView
-                      projectRoot={projectLocation.kind === "local" ? project.path : undefined}
-                      initialSqliteFilePath={databaseFilePath ?? undefined}
-                      remoteConnection={
-                        projectLocation.kind === "ssh" ? remoteConnection : undefined
-                      }
-                      remoteProjectPath={
-                        projectLocation.kind === "ssh" ? projectLocation.remotePath : undefined
-                      }
-                      sshConnections={sshConnections}
                     />
                   ) : isNotesMode ? (
                     <div style={projectNotebookPanelStyle({ containerWidth: projectBodyWidth })}>

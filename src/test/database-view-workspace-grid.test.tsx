@@ -1467,7 +1467,7 @@ describe("DatabaseView workspace and data grid", () => {
     expect(invoke).not.toHaveBeenCalledWith("dbx_update_cell", expect.anything());
     expect(confirm).not.toHaveBeenCalled();
 
-    await user.click(screen.getByRole("button", { name: "Save" }));
+    await user.click(screen.getByRole("button", { name: "Save changes" }));
 
     await waitFor(() => {
       expect(invoke).toHaveBeenCalledWith("dbx_update_cell", {
@@ -1493,9 +1493,9 @@ describe("DatabaseView workspace and data grid", () => {
     expect(confirm).toHaveBeenCalledWith(
       expect.stringContaining('UPDATE "public"."users" SET "id"'),
       {
-        title: "Update cell",
+        title: "Save changes",
         kind: "warning",
-        okLabel: "Update cell",
+        okLabel: "Save",
         cancelLabel: "Cancel",
       },
     );
@@ -1575,7 +1575,7 @@ describe("DatabaseView workspace and data grid", () => {
     await user.clear(emailInput);
     await user.type(emailInput, "new@example.com");
     fireEvent.blur(emailInput);
-    await user.click(screen.getByRole("button", { name: "Save" }));
+    await user.click(screen.getByRole("button", { name: "Save changes" }));
 
     await waitFor(() => {
       expect(invoke).toHaveBeenCalledWith("dbx_update_cell", {
@@ -1650,14 +1650,21 @@ describe("DatabaseView workspace and data grid", () => {
 
     await user.click(await screen.findByRole("button", { name: /DBX Source/i }));
     await user.click(await screen.findByRole("button", { name: /^users\s+table$/i }));
-    await screen.findByText("alice@example.com");
+    const grid = await screen.findByRole("grid", { name: "Data grid" });
+    expect(grid.querySelectorAll("tbody tr")).toHaveLength(1);
     await user.click(screen.getByRole("button", { name: "Insert" }));
 
-    const insertDialog = await screen.findByRole("dialog", { name: "Insert row" });
-    const insertJson = within(insertDialog).getByLabelText("Insert row as JSON object");
-    expect(insertJson).toHaveValue('{\n  "email": null\n}');
-    fireEvent.change(insertJson, { target: { value: '{"email":"new@example.com"}' } });
-    await user.click(within(insertDialog).getByRole("button", { name: "Insert" }));
+    expect(screen.queryByRole("dialog", { name: "Insert row" })).not.toBeInTheDocument();
+    expect(grid.querySelectorAll("tbody tr")).toHaveLength(2);
+    const emailCell = grid.querySelector(
+      "tbody tr:last-child td:nth-child(3)",
+    ) as HTMLTableCellElement;
+    await user.dblClick(emailCell);
+    const emailInput = emailCell.querySelector("input") as HTMLInputElement;
+    expect(emailInput).toHaveValue("");
+    await user.type(emailInput, "new@example.com");
+    fireEvent.blur(emailInput);
+    await user.click(screen.getByRole("button", { name: "Save changes" }));
 
     await waitFor(() => {
       expect(invoke).toHaveBeenCalledWith("dbx_insert_row", {
@@ -1681,9 +1688,9 @@ describe("DatabaseView workspace and data grid", () => {
       });
     });
     expect(confirm).toHaveBeenCalledWith(expect.stringContaining('INSERT INTO "public"."users"'), {
-      title: "Insert row",
+      title: "Save changes",
       kind: "warning",
-      okLabel: "Insert",
+      okLabel: "Save",
       cancelLabel: "Cancel",
     });
     expect(invoke).toHaveBeenCalledWith("dbx_insert_row", {
@@ -1770,12 +1777,23 @@ describe("DatabaseView workspace and data grid", () => {
     const weightCell = grid.querySelector("tbody tr td:nth-child(3)") as HTMLTableCellElement;
     await user.dblClick(weightCell);
     expect(weightCell.querySelector("input")).toHaveValue("0.7500");
+    fireEvent.blur(weightCell.querySelector("input") as HTMLInputElement);
 
     await user.click(screen.getByRole("button", { name: "Insert" }));
-    const insertDialog = await screen.findByRole("dialog", { name: "Insert row" });
-    const insertJson = within(insertDialog).getByLabelText("Insert row as JSON object");
-    fireEvent.change(insertJson, { target: { value: '{"id":2,"weight":"0.9000"}' } });
-    await user.click(within(insertDialog).getByRole("button", { name: "Insert" }));
+    expect(screen.queryByRole("dialog", { name: "Insert row" })).not.toBeInTheDocument();
+    expect(grid.querySelectorAll("tbody tr")).toHaveLength(2);
+    const insertedRow = grid.querySelector("tbody tr:last-child") as HTMLTableRowElement;
+    const idCell = insertedRow.querySelector("td:nth-child(2)") as HTMLTableCellElement;
+    const insertedWeightCell = insertedRow.querySelector("td:nth-child(3)") as HTMLTableCellElement;
+    await user.dblClick(idCell);
+    const idInput = idCell.querySelector("input") as HTMLInputElement;
+    await user.type(idInput, "2");
+    fireEvent.blur(idInput);
+    await user.dblClick(insertedWeightCell);
+    const insertedWeightInput = insertedWeightCell.querySelector("input") as HTMLInputElement;
+    await user.type(insertedWeightInput, "0.9000");
+    fireEvent.blur(insertedWeightInput);
+    await user.click(screen.getByRole("button", { name: "Save changes" }));
 
     await waitFor(() => {
       expect(invoke).toHaveBeenCalledWith("dbx_insert_row", {
@@ -1790,7 +1808,7 @@ describe("DatabaseView workspace and data grid", () => {
               tableName: "trained_weights",
               primaryKeys: [],
             }),
-            newRows: [[2, "0.9000"]],
+            newRows: [["2", "0.9000"]],
           }),
         }),
       });
@@ -1863,11 +1881,18 @@ describe("DatabaseView workspace and data grid", () => {
     expect(insertButton).toBeEnabled();
     await user.click(insertButton);
 
-    const insertDialog = await screen.findByRole("dialog", { name: "Insert row" });
-    const insertJson = within(insertDialog).getByLabelText("Insert row as JSON object");
-    expect(insertJson).toHaveValue('{\n  "id": null,\n  "name": null\n}');
-    fireEvent.change(insertJson, { target: { value: '{"name":"new row"}' } });
-    await user.click(within(insertDialog).getByRole("button", { name: "Insert" }));
+    expect(screen.queryByRole("dialog", { name: "Insert row" })).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("grid", { name: "Data grid" }).querySelectorAll("tbody tr"),
+    ).toHaveLength(2);
+    const nameCell = screen
+      .getByRole("grid", { name: "Data grid" })
+      .querySelector("tbody tr:last-child td:nth-child(3)") as HTMLTableCellElement;
+    await user.dblClick(nameCell);
+    const nameInput = nameCell.querySelector("input") as HTMLInputElement;
+    await user.type(nameInput, "new row");
+    fireEvent.blur(nameInput);
+    await user.click(screen.getByRole("button", { name: "Save changes" }));
 
     await waitFor(() => {
       expect(invoke).toHaveBeenCalledWith("dbx_insert_row", {

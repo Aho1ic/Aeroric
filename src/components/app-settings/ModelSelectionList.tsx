@@ -1,6 +1,7 @@
-import { Search, X } from "lucide-react";
+import { Plus, Search, X } from "lucide-react";
 import { useMemo, useState } from "react";
 import { useI18n } from "../../i18n";
+import { Button } from "../ui/Button";
 
 function fuzzyTokenMatches(value: string, token: string): boolean {
   if (value.includes(token)) return true;
@@ -25,76 +26,104 @@ export function ModelSelectionList({
   models,
   selectedModels,
   onToggle,
+  onAddModel,
 }: {
   models: string[];
   selectedModels: string[];
   onToggle: (model: string) => void;
+  onAddModel?: (model: string) => void;
 }) {
   const { t } = useI18n();
   const [query, setQuery] = useState("");
   const filteredModels = useMemo(() => filterAgentModels(models, query), [models, query]);
+  const manualModel = query.trim();
+
+  function addManualModel() {
+    if (!onAddModel || !manualModel) return;
+    onAddModel(manualModel);
+    setQuery("");
+  }
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-      <div style={{ position: "relative" }}>
-        <Search
-          size={13}
-          aria-hidden="true"
-          style={{
-            position: "absolute",
-            left: 11,
-            top: "50%",
-            transform: "translateY(-50%)",
-            color: "var(--text-hint)",
-            pointerEvents: "none",
-          }}
-        />
-        <input
-          type="search"
-          aria-label={t("appSettings.searchModels")}
-          value={query}
-          onChange={(event) => setQuery(event.currentTarget.value)}
-          placeholder={t("appSettings.searchModelsPlaceholder")}
-          spellCheck={false}
-          style={{
-            width: "100%",
-            height: 32,
-            padding: "5px 36px 5px 32px",
-            border: "1px solid var(--border-medium)",
-            borderRadius: 999,
-            outline: "none",
-            background: "var(--bg-input)",
-            color: "var(--text-primary)",
-            fontFamily: "var(--font-mono)",
-            fontSize: 12,
-            boxSizing: "border-box",
-          }}
-        />
-        {query && (
-          <button
-            type="button"
-            aria-label={t("common.clear")}
-            title={t("common.clear")}
-            onClick={() => setQuery("")}
+      <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+        <div style={{ position: "relative", flex: "1 1 auto", minWidth: 0 }}>
+          <Search
+            size={13}
+            aria-hidden="true"
             style={{
               position: "absolute",
-              right: 7,
+              left: 11,
               top: "50%",
               transform: "translateY(-50%)",
-              width: 22,
-              height: 22,
-              display: "inline-flex",
-              alignItems: "center",
-              justifyContent: "center",
-              border: "none",
-              borderRadius: "50%",
-              background: "transparent",
               color: "var(--text-hint)",
-              cursor: "pointer",
+              pointerEvents: "none",
             }}
+          />
+          <input
+            type="search"
+            aria-label={t("appSettings.searchModels")}
+            value={query}
+            onChange={(event) => setQuery(event.currentTarget.value)}
+            onKeyDown={(event) => {
+              if (event.key !== "Enter" || !onAddModel) return;
+              event.preventDefault();
+              addManualModel();
+            }}
+            placeholder={t("appSettings.searchModelsPlaceholder")}
+            spellCheck={false}
+            style={{
+              width: "100%",
+              height: 32,
+              padding: "5px 36px 5px 32px",
+              border: "1px solid var(--border-medium)",
+              borderRadius: 999,
+              outline: "none",
+              background: "var(--bg-input)",
+              color: "var(--text-primary)",
+              fontFamily: "var(--font-mono)",
+              fontSize: 12,
+              boxSizing: "border-box",
+            }}
+          />
+          {query && (
+            <button
+              type="button"
+              aria-label={t("common.clear")}
+              title={t("common.clear")}
+              onClick={() => setQuery("")}
+              style={{
+                position: "absolute",
+                right: 7,
+                top: "50%",
+                transform: "translateY(-50%)",
+                width: 22,
+                height: 22,
+                display: "inline-flex",
+                alignItems: "center",
+                justifyContent: "center",
+                border: "none",
+                borderRadius: "50%",
+                background: "transparent",
+                color: "var(--text-hint)",
+                cursor: "pointer",
+              }}
+            >
+              <X size={12} />
+            </button>
+          )}
+        </div>
+        {onAddModel && (
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={!manualModel}
+            onClick={addManualModel}
           >
-            <X size={12} />
-          </button>
+            <Plus size={13} />
+            {t("appSettings.addModel")}
+          </Button>
         )}
       </div>
 
@@ -108,7 +137,7 @@ export function ModelSelectionList({
           maxHeight: 220,
           overflow: "auto",
           border: "1px solid var(--border-dim)",
-          borderRadius: 14,
+          borderRadius: 8,
           padding: 9,
           background:
             "linear-gradient(145deg, color-mix(in srgb, var(--bg-subtle) 96%, var(--accent) 4%), var(--bg-subtle))",

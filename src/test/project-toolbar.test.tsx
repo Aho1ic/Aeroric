@@ -270,17 +270,23 @@ vi.mock("../components/sftp/SftpPanel", async () => {
   };
 });
 
-vi.mock("../components/database/DatabaseView", () => ({
-  DatabaseView: ({ remoteConnection, remoteProjectPath }: RemoteConnectionMockProps) => (
-    <div
-      data-testid="database-view"
-      data-remote-connection={remoteConnection?.id ?? ""}
-      data-remote-project={remoteProjectPath ?? ""}
-    >
-      database
-    </div>
-  ),
-}));
+vi.mock("../components/database/DatabaseView", async () => {
+  const ReactModule = await import("react");
+  return {
+    DatabaseView: ({ remoteConnection, remoteProjectPath }: RemoteConnectionMockProps) => {
+      const [page, setPage] = ReactModule.useState(1);
+      return (
+        <div
+          data-testid="database-view"
+          data-remote-connection={remoteConnection?.id ?? ""}
+          data-remote-project={remoteProjectPath ?? ""}
+        >
+          <button onClick={() => setPage((current) => current + 1)}>database page {page}</button>
+        </div>
+      );
+    },
+  };
+});
 
 vi.mock("../components/notebook/NotebookPanel", () => ({
   NotebookPanel: () => <div data-testid="notes-panel">notes</div>,
@@ -618,6 +624,29 @@ describe("ProjectPage right toolbar", () => {
         expect(await screen.findByTestId(visibleTarget)).toBeInTheDocument();
       }
     }
+  });
+
+  it("hides the database workspace without losing its current state", async () => {
+    const user = userEvent.setup();
+
+    render(
+      <I18nProvider>
+        <ProjectPage {...projectPagePropsWithWorkspace()} />
+      </I18nProvider>,
+    );
+
+    const databaseButton = screen.getByTitle("Database");
+    await user.click(databaseButton);
+    const databaseView = await screen.findByTestId("database-view");
+    await user.click(screen.getByRole("button", { name: "database page 1" }));
+    expect(screen.getByRole("button", { name: "database page 2" })).toBeVisible();
+
+    await user.click(databaseButton);
+    expect(databaseView).toBeInTheDocument();
+    expect(databaseView).not.toBeVisible();
+
+    await user.click(databaseButton);
+    expect(screen.getByRole("button", { name: "database page 2" })).toBeVisible();
   });
 
   it("merges file and terminal tabs and keeps file tabs after the terminal closes", async () => {

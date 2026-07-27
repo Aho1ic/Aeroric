@@ -94,6 +94,7 @@ export function useDbxDataGrid({
   const [dbxSelectedCell, setDbxSelectedCell] = useState<DbxGridCellCoord | null>(null);
   const [dbxEditingCell, setDbxEditingCell] = useState<DbxGridCellCoord | null>(null);
   const [dbxPendingCellEdits, setDbxPendingCellEdits] = useState<DbxPendingCellEdits>({});
+  const [dbxNewRows, setDbxNewRows] = useState<unknown[][]>([]);
   const [dbxHoveredCell, setDbxHoveredCell] = useState<Omit<DbxGridCellCoord, "column"> | null>(
     null,
   );
@@ -137,10 +138,17 @@ export function useDbxDataGrid({
     () => filterDbxGridColumnOptions(tableColumns, dbxGridColumnSearch),
     [dbxGridColumnSearch, tableColumns],
   );
-  const tableRows = useMemo(
-    () => filterDbxGridRows(rawTableRows, dbxGridSearch),
-    [dbxGridSearch, rawTableRows],
-  );
+  const tableRows = useMemo(() => {
+    const loadedRows = filterDbxGridRows(rawTableRows, dbxGridSearch);
+    return [
+      ...loadedRows,
+      ...dbxNewRows.map((values) => ({
+        rowId: null,
+        keyValues: [],
+        values,
+      })),
+    ];
+  }, [dbxGridSearch, dbxNewRows, rawTableRows]);
   const formattedDbxCellPreview = useMemo(
     () => (dbxCellPreview ? cellPreviewText(dbxCellPreview.value) : null),
     [dbxCellPreview],
@@ -187,6 +195,7 @@ export function useDbxDataGrid({
     );
   }, [dbxColumnPreviewFields, dbxColumnPreviewSearch]);
   const dbxPendingCellEditCount = Object.keys(dbxPendingCellEdits).length;
+  const dbxPendingChangeCount = dbxPendingCellEditCount + dbxNewRows.length;
 
   useEffect(() => {
     setDbxGridHiddenColumns((current) => pruneDbxGridHiddenColumns(current, tableColumns));
@@ -232,6 +241,7 @@ export function useDbxDataGrid({
       orderByInput,
     }: InitializeLoadedGridOptions) => {
       setDbxPendingCellEdits({});
+      setDbxNewRows([]);
       setDbxGridSelectedRows(new Set());
       setDbxGridWhereInput(whereInput);
       setDbxGridOrderByInput(orderByInput);
@@ -259,6 +269,7 @@ export function useDbxDataGrid({
     setDbxGridHiddenColumns(new Set());
     setDbxGridColumnWidths({});
     setDbxPendingCellEdits({});
+    setDbxNewRows([]);
   }, []);
 
   const toggleDbxGridColumnVisibility = useCallback(
@@ -346,6 +357,39 @@ export function useDbxDataGrid({
     [],
   );
 
+  const appendDbxNewRow = useCallback(() => {
+    if (tableColumns.length === 0) return;
+    const draftIndex = dbxNewRows.length;
+    const rowIndex = (queryResult?.rows.length ?? rawTableRows.length) + draftIndex;
+    const firstColumn = visibleTableColumns[0] ?? { column: tableColumns[0], index: 0 };
+    setDbxNewRows((current) => [...current, Array.from({ length: tableColumns.length })]);
+    setDbxSelectedCell({
+      rowIndex,
+      columnIndex: firstColumn.index,
+      column: firstColumn.column,
+    });
+  }, [
+    dbxNewRows.length,
+    queryResult?.rows.length,
+    rawTableRows.length,
+    tableColumns,
+    visibleTableColumns,
+  ]);
+
+  const stageDbxNewRowCellEdit = useCallback(
+    (rowIndex: number, columnIndex: number, value: string) => {
+      setDbxNewRows((current) =>
+        current.map((row, index) => {
+          if (index !== rowIndex) return row;
+          const next = [...row];
+          next[columnIndex] = value;
+          return next;
+        }),
+      );
+    },
+    [],
+  );
+
   return {
     state: {
       dbxGridWhereInput,
@@ -384,6 +428,8 @@ export function useDbxDataGrid({
       setDbxEditingCell,
       dbxPendingCellEdits,
       setDbxPendingCellEdits,
+      dbxNewRows,
+      setDbxNewRows,
       dbxHoveredCell,
       setDbxHoveredCell,
       dbxRowPreview,
@@ -408,6 +454,7 @@ export function useDbxDataGrid({
       dbxColumnPreviewFields,
       filteredDbxColumnPreviewFields,
       dbxPendingCellEditCount,
+      dbxPendingChangeCount,
     },
     actions: {
       initializeLoadedGrid,
@@ -419,6 +466,8 @@ export function useDbxDataGrid({
       autoFitDbxGridColumn,
       toggleDbxGridRowSelection,
       stageDbxCellEdit,
+      appendDbxNewRow,
+      stageDbxNewRowCellEdit,
     },
   };
 }

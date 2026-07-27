@@ -411,8 +411,19 @@
 }
 .marketplace-load-more {
   display: flex;
+  min-height: 32px;
+  align-items: center;
   justify-content: center;
   padding: 18px 0 0;
+}
+.marketplace-load-more__status {
+  min-height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  color: var(--text-muted);
+  font-size: 12px;
 }
 .marketplace-card--skeleton {
   position: relative;

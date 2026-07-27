@@ -338,8 +338,6 @@ export function DatabaseView({
   const [dbxSqlPreviewStatements, setDbxSqlPreviewStatements] = useState<string[]>([]);
   const [dbxSqlPreviewRollback, setDbxSqlPreviewRollback] = useState<string[]>([]);
   const [dbxSqlPreviewDescription, setDbxSqlPreviewDescription] = useState("");
-  const [insertRowDraft, setInsertRowDraft] = useState<string | null>(null);
-  const [insertRowError, setInsertRowError] = useState("");
   const [visibleDatabaseConnectionId, setVisibleDatabaseConnectionId] = useState<string | null>(
     null,
   );
@@ -649,6 +647,8 @@ export function DatabaseView({
     dbxSelectedCell,
     dbxPendingCellEdits,
     setDbxPendingCellEdits,
+    dbxNewRows,
+    setDbxNewRows,
     dbxRowPreview,
     setDbxRowPreview,
     dbxRowPreviewSearch,
@@ -666,7 +666,7 @@ export function DatabaseView({
     filteredDbxRowPreviewFields,
     dbxColumnPreviewFields,
     filteredDbxColumnPreviewFields,
-    dbxPendingCellEditCount,
+    dbxPendingChangeCount,
   } = dbxGrid.derived;
   const {
     initializeLoadedGrid,
@@ -674,6 +674,7 @@ export function DatabaseView({
     toggleDbxGridColumnVisibility,
     showAllDbxGridColumns,
     invertDbxGridColumnVisibility,
+    appendDbxNewRow,
   } = dbxGrid.actions;
   const dbxGridCellContextRowCount = useMemo(() => {
     if (!queryResult || contextMenu?.kind !== "dbx-grid-cell") return 0;
@@ -4737,159 +4738,27 @@ export function DatabaseView({
     ],
   );
 
-  const saveDbxPendingCellEdits = useCallback(async () => {
-    if (
-      !activeDbxConnection ||
-      !activeDbxObject ||
-      !queryResult ||
-      !activeObject ||
-      activeDbxConnection.readOnly ||
-      !queryResult.editable
-    )
-      return;
-    if (Object.keys(dbxPendingCellEdits).length === 0) return;
-    const options = buildDbxGridSaveOptions({
-      dirtyRows: dbxPendingCellEditsToDirtyRows(dbxPendingCellEdits, textToCellValue),
-    });
-    if (!options) return;
-    setError(null);
-    try {
-      const preview = await databaseApi.dbxUpdateCell({
-        connectionId: activeDbxConnection.id,
-        database: activeDbxDatabase,
-        schema: activeDbxObject.schema ?? null,
-        options,
-        execute: false,
-      });
-      if (preview.validationError) {
-        setError(preview.validationError);
-        return;
-      }
-      if (preview.statements.length === 0) return;
-      setDbxSqlPreviewStatements(preview.statements);
-      setDbxSqlPreviewRollback(preview.rollbackStatements);
-      setDbxSqlPreviewDescription(t("database.updateCell"));
-      const rollback = preview.rollbackStatements.length
-        ? `\n\n${t("database.gridRollbackSql")}\n${preview.rollbackStatements.join("\n")}`
-        : "";
-      const ok = await confirm(
-        `${t("database.updateCell")}\n\n${preview.statements.join("\n")}${rollback}`,
-        {
-          title: t("database.updateCell"),
-          kind: "warning",
-          okLabel: t("database.updateCell"),
-          cancelLabel: t("common.cancel"),
-        },
-      );
-      if (!ok) return;
-      const executed = await databaseApi.dbxUpdateCell({
-        connectionId: activeDbxConnection.id,
-        database: activeDbxDatabase,
-        schema: activeDbxObject.schema ?? null,
-        options,
-        execute: true,
-      });
-      if (executed.validationError) {
-        setError(executed.validationError);
-        return;
-      }
-      setDbxPendingCellEdits({});
-      await loadDbxObject(
-        activeDbxObject,
-        page,
-        activeDbxConnection,
-        activeDbxDatabase,
-        dbxGridWhereInput,
-        dbxGridOrderByInput,
-      );
-    } catch (err) {
-      setError(String(err));
-    }
-  }, [
-    activeDbxConnection,
-    activeDbxDatabase,
-    activeDbxObject,
-    activeObject,
-    buildDbxGridSaveOptions,
-    dbxGridOrderByInput,
-    dbxGridWhereInput,
-    dbxPendingCellEdits,
-    loadDbxObject,
-    page,
-    queryResult,
-    setDbxPendingCellEdits,
-    t,
-  ]);
-
-  const insertRow = useCallback(() => {
-    if (activeDbxConnection && activeDbxObject && queryResult) {
-      if (!activeObject || !isDbxTableObject(activeDbxObject) || activeDbxConnection.readOnly)
-        return;
-      const metadataColumns = dbxColumnsByTable[dbxObjectKey(activeDbxObject)] ?? [];
-      const metadataByName = new Map(
-        metadataColumns.map((column) => [column.name.toLowerCase(), column]),
-      );
-      const sample = Object.fromEntries(
-        queryResult.columns
-          .filter((column) => !metadataByName.get(column.toLowerCase())?.column_default)
-          .map((column) => [column, null]),
-      );
-      setInsertRowError("");
-      setInsertRowDraft(JSON.stringify(sample, null, 2));
-      return;
-    }
-    if (!activeEndpoint || !activeObject || activeConnection?.readOnly) return;
-    const sample = Object.fromEntries(
-      activeObject.columns
-        .filter((column) => !column.primaryKey && !column.defaultValue)
-        .map((column) => [column.name, null]),
+  const savePendingGridChanges = useCallback(async () => {
+    const dirtyRows = dbxPendingCellEditsToDirtyRows(dbxPendingCellEdits, textToCellValue);
+    const newRows = dbxNewRows.map((row) =>
+      row.map((value) => (typeof value === "string" ? textToCellValue(value) : (value ?? null))),
     );
-    setInsertRowError("");
-    setInsertRowDraft(JSON.stringify(sample, null, 2));
-  }, [
-    activeConnection?.readOnly,
-    activeDbxConnection,
-    activeDbxObject,
-    activeEndpoint,
-    activeObject,
-    dbxColumnsByTable,
-    queryResult,
-  ]);
-
-  const closeInsertRowDialog = useCallback(() => {
-    setInsertRowDraft(null);
-    setInsertRowError("");
-  }, []);
-
-  const submitInsertRow = useCallback(async () => {
-    if (insertRowDraft === null) return;
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(insertRowDraft);
-    } catch {
-      setInsertRowError(t("database.insertJsonObjectError"));
-      return;
-    }
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-      setInsertRowError(t("database.insertJsonObjectError"));
-      return;
-    }
-    const valuesByColumn = parsed as Record<string, unknown>;
+    if (dirtyRows.length === 0 && newRows.length === 0) return;
 
     if (activeDbxConnection && activeDbxObject && queryResult) {
-      if (!activeObject || !isDbxTableObject(activeDbxObject) || activeDbxConnection.readOnly)
+      if (
+        !activeObject ||
+        activeDbxConnection.readOnly ||
+        (dirtyRows.length > 0 && !queryResult.editable)
+      )
         return;
+      const options = buildDbxGridSaveOptions({ dirtyRows, newRows });
+      if (!options) return;
+      const saveRequest =
+        dirtyRows.length > 0 ? databaseApi.dbxUpdateCell : databaseApi.dbxInsertRow;
+      setError(null);
       try {
-        const newRow = queryResult.columns.map((column) =>
-          Object.prototype.hasOwnProperty.call(valuesByColumn, column)
-            ? (valuesByColumn[column] ?? null)
-            : null,
-        );
-        const options = buildDbxGridSaveOptions({ newRows: [newRow] });
-        if (!options) return;
-        setError(null);
-        setInsertRowError("");
-        const preview = await databaseApi.dbxInsertRow({
+        const preview = await saveRequest({
           connectionId: activeDbxConnection.id,
           database: activeDbxDatabase,
           schema: activeDbxObject.schema ?? null,
@@ -4898,27 +4767,26 @@ export function DatabaseView({
         });
         if (preview.validationError) {
           setError(preview.validationError);
-          setInsertRowError(preview.validationError);
           return;
         }
         if (preview.statements.length === 0) return;
         setDbxSqlPreviewStatements(preview.statements);
         setDbxSqlPreviewRollback(preview.rollbackStatements);
-        setDbxSqlPreviewDescription(t("database.confirmInsertRow"));
+        setDbxSqlPreviewDescription(t("database.saveGridChanges"));
         const rollback = preview.rollbackStatements.length
           ? `\n\n${t("database.gridRollbackSql")}\n${preview.rollbackStatements.join("\n")}`
           : "";
         const ok = await confirm(
-          `${t("database.confirmInsertRow")}\n\n${preview.statements.join("\n")}${rollback}`,
+          `${t("database.confirmSaveGridChanges")}\n\n${preview.statements.join("\n")}${rollback}`,
           {
-            title: t("database.insertRow"),
+            title: t("database.saveGridChanges"),
             kind: "warning",
-            okLabel: t("database.insert"),
+            okLabel: t("common.save"),
             cancelLabel: t("common.cancel"),
           },
         );
         if (!ok) return;
-        const executed = await databaseApi.dbxInsertRow({
+        const executed = await saveRequest({
           connectionId: activeDbxConnection.id,
           database: activeDbxDatabase,
           schema: activeDbxObject.schema ?? null,
@@ -4927,10 +4795,10 @@ export function DatabaseView({
         });
         if (executed.validationError) {
           setError(executed.validationError);
-          setInsertRowError(executed.validationError);
           return;
         }
-        closeInsertRowDialog();
+        setDbxPendingCellEdits({});
+        setDbxNewRows([]);
         await loadDbxObject(
           activeDbxObject,
           page,
@@ -4941,30 +4809,42 @@ export function DatabaseView({
         );
       } catch (err) {
         setError(String(err));
-        setInsertRowError(String(err));
       }
       return;
     }
-    if (!activeEndpoint || !activeObject || activeConnection?.readOnly) return;
+
+    if (!activeEndpoint || !activeObject || activeConnection?.readOnly || newRows.length === 0)
+      return;
     setError(null);
     try {
-      const values = Object.entries(valuesByColumn).map(([column, value]) => ({
-        column,
-        value: value === null || value === undefined ? null : String(value),
-      }));
-      await databaseApi.insertRow({
-        endpoint: activeEndpoint,
-        table: activeObject.name,
-        values,
-        readOnly: activeConnection?.readOnly ?? false,
-        connectionId: activeConnection?.id,
-        projectRoot,
-      });
-      closeInsertRowDialog();
+      for (const row of dbxNewRows) {
+        const values = tableColumns.flatMap((column, index) => {
+          const value = row[index];
+          if (value === undefined) return [];
+          return [
+            {
+              column,
+              value:
+                value === null
+                  ? null
+                  : textToCellValue(typeof value === "string" ? value : String(value)),
+            },
+          ];
+        });
+        if (values.length === 0) continue;
+        await databaseApi.insertRow({
+          endpoint: activeEndpoint,
+          table: activeObject.name,
+          values,
+          readOnly: activeConnection?.readOnly ?? false,
+          connectionId: activeConnection?.id,
+          projectRoot,
+        });
+      }
+      setDbxNewRows([]);
       await loadTable(activeObject, page);
     } catch (err) {
       setError(String(err));
-      setInsertRowError(String(err));
     }
   }, [
     activeConnection?.id,
@@ -4975,16 +4855,38 @@ export function DatabaseView({
     activeEndpoint,
     activeObject,
     buildDbxGridSaveOptions,
-    closeInsertRowDialog,
     dbxGridOrderByInput,
     dbxGridWhereInput,
-    insertRowDraft,
+    dbxNewRows,
+    dbxPendingCellEdits,
     loadDbxObject,
     loadTable,
     page,
     projectRoot,
     queryResult,
+    setDbxNewRows,
+    setDbxPendingCellEdits,
     t,
+    tableColumns,
+  ]);
+
+  const insertRow = useCallback(() => {
+    if (activeDbxConnection && activeDbxObject && queryResult) {
+      if (!activeObject || !isDbxTableObject(activeDbxObject) || activeDbxConnection.readOnly)
+        return;
+      appendDbxNewRow();
+      return;
+    }
+    if (!activeEndpoint || !activeObject || activeConnection?.readOnly || !queryResult) return;
+    appendDbxNewRow();
+  }, [
+    activeConnection?.readOnly,
+    activeDbxConnection,
+    activeDbxObject,
+    activeEndpoint,
+    activeObject,
+    appendDbxNewRow,
+    queryResult,
   ]);
 
   const deleteDbxRowsByIndexes = useCallback(
@@ -6481,6 +6383,15 @@ export function DatabaseView({
               >
                 {t("database.insert")}
               </DbxButton>
+              <DbxButton
+                variant="outline"
+                size="sm"
+                icon={CheckSquare}
+                disabled={loading || dbxPendingChangeCount === 0}
+                onClick={() => void savePendingGridChanges()}
+              >
+                {t("database.saveGridChanges")}
+              </DbxButton>
               {dbxSqlPreviewStatements.length > 0 && (
                 <DbxButton
                   variant="outline"
@@ -6738,15 +6649,6 @@ export function DatabaseView({
                   >
                     {t("database.gridReset")}
                   </DbxButton>
-                  <DbxButton
-                    variant="outline"
-                    size="sm"
-                    icon={CheckSquare}
-                    disabled={loading || dbxPendingCellEditCount === 0}
-                    onClick={() => void saveDbxPendingCellEdits()}
-                  >
-                    {t("common.save")}
-                  </DbxButton>
                 </>
               )}
               <span style={{ color: "var(--text-hint)", fontSize: 12 }}>
@@ -6817,6 +6719,7 @@ export function DatabaseView({
               activeObject={activeObject}
               tableColumns={tableColumns}
               showRowIdColumn={showRowIdColumn}
+              canInsertRows={canInsertActiveTable}
               loading={loading}
               grid={dbxGrid}
               onKeyDown={handleDbxGridKeyDown}
@@ -7118,72 +7021,6 @@ export function DatabaseView({
               </div>
             </div>
           </div>
-        </div>
-      )}
-      {insertRowDraft !== null && (
-        <div
-          style={s.databaseDialogOverlay}
-          onMouseDown={(event) => {
-            if (event.target === event.currentTarget && !loading) closeInsertRowDialog();
-          }}
-        >
-          <form
-            role="dialog"
-            aria-modal="true"
-            aria-label={t("database.insertRow")}
-            style={{ ...s.databaseDialog, width: 560, maxWidth: "min(92vw, 560px)" }}
-            onSubmit={(event) => {
-              event.preventDefault();
-              void submitInsertRow();
-            }}
-          >
-            <div style={s.databaseDialogHeader}>{t("database.insertRow")}</div>
-            <div style={s.databaseDialogBody}>
-              <label style={s.databaseDialogField}>
-                <span style={s.databaseDialogLabel}>{t("database.insertJsonPrompt")}</span>
-                <textarea
-                  aria-label={t("database.insertJsonPrompt")}
-                  style={{
-                    ...s.databaseSqlInput,
-                    width: "100%",
-                    minHeight: 180,
-                    maxHeight: "45vh",
-                    boxSizing: "border-box",
-                    flex: "none",
-                  }}
-                  value={insertRowDraft}
-                  onChange={(event) => {
-                    setInsertRowDraft(event.target.value);
-                    if (insertRowError) setInsertRowError("");
-                  }}
-                  spellCheck={false}
-                  autoFocus
-                />
-              </label>
-              {insertRowError && (
-                <div role="alert" style={{ ...s.databaseDialogHint, color: "var(--danger)" }}>
-                  {insertRowError}
-                </div>
-              )}
-            </div>
-            <div style={s.databaseDialogFooter}>
-              <DbxDialogFooterButton
-                type="button"
-                onClick={closeInsertRowDialog}
-                disabled={loading}
-              >
-                {t("common.cancel")}
-              </DbxDialogFooterButton>
-              <DbxDialogFooterButton
-                type="submit"
-                variant="default"
-                icon={Plus}
-                disabled={loading || !insertRowDraft.trim()}
-              >
-                {t("database.insert")}
-              </DbxDialogFooterButton>
-            </div>
-          </form>
         </div>
       )}
       {dbxSqlPreviewOpen && (

@@ -1390,7 +1390,7 @@ fn marketplace_cache_key(
     page_size: usize,
 ) -> String {
     format!(
-        "{}|{:?}|{}|{}|{}",
+        "v2|{}|{:?}|{}|{}|{}",
         query.trim().to_lowercase(),
         sort,
         category.as_str(),
@@ -1602,7 +1602,7 @@ fn classify_marketplace_skill(text: &str) -> Vec<String> {
 async fn marketplace_get_json<T: for<'de> Deserialize<'de>>(url: &str) -> Result<T, String> {
     let mut request = MARKETPLACE_HTTP_CLIENT
         .get(url)
-        .header(USER_AGENT, "Aeroric/1.3.7")
+        .header(USER_AGENT, "Aeroric/1.3.8")
         .header(ACCEPT, "application/vnd.github+json, application/json");
     if url.starts_with(GITHUB_API_ORIGIN) {
         if let Some(token) = github_auth_token() {
@@ -1792,7 +1792,7 @@ async fn fetch_raw_github_file(
     }
     let response = MARKETPLACE_HTTP_CLIENT
         .get(url)
-        .header(USER_AGENT, "Aeroric/1.3.7")
+        .header(USER_AGENT, "Aeroric/1.3.8")
         .send()
         .await
         .map_err(|error| format!("Failed to download SKILL.md: {error}"))?
@@ -2076,11 +2076,13 @@ pub async fn search_marketplace_skills(
             .collect();
         let mut warning = None;
         let mut repository_cache: HashMap<String, GithubRepository> = HashMap::new();
-        if category != MarketplaceCategory::All
-            || matches!(
-                sort,
-                MarketplaceSort::Stars | MarketplaceSort::Updated | MarketplaceSort::Published
-            )
+        let enrich_listing = github_auth_token().is_some();
+        if enrich_listing
+            && (category != MarketplaceCategory::All
+                || matches!(
+                    sort,
+                    MarketplaceSort::Stars | MarketplaceSort::Updated | MarketplaceSort::Published
+                ))
         {
             warning =
                 enrich_marketplace_repository_metadata(&mut items, &mut repository_cache).await;
@@ -2102,52 +2104,26 @@ pub async fn search_marketplace_skills(
         };
         let start = page.saturating_mul(page_size);
         let end = (start + page_size).min(loaded_total);
-        let selected = if start < loaded_total {
+        let mut selected = if start < loaded_total {
             items[start..end].to_vec()
         } else {
             Vec::new()
         };
 
-        let mut enriched = Vec::with_capacity(selected.len());
-        for item in selected {
-            let source = item.source.clone();
-            let Some((owner, repo)) = github_repo_parts(&source) else {
-                enriched.push(item);
-                continue;
-            };
-            let repository = if let Some(repository) = repository_cache.get(&source) {
-                Ok(repository.clone())
-            } else {
-                marketplace_get_json::<GithubRepository>(&format!(
-                    "{GITHUB_API_ORIGIN}/repos/{owner}/{repo}"
-                ))
-                .await
-                .inspect(|repository| {
-                    repository_cache.insert(source.clone(), repository.clone());
-                })
-            };
-            let detailed = match repository {
-                Ok(repository) => {
-                    enrich_marketplace_skill_with_repository(item.clone(), owner, repo, repository)
-                        .await
-                }
-                Err(error) => Err(error),
-            };
-            match detailed {
-                Ok(value) => enriched.push(value),
-                Err(error) => {
-                    warning.get_or_insert(error);
-                    enriched.push(item);
-                }
+        if enrich_listing {
+            if let Some(error) =
+                enrich_marketplace_repository_metadata(&mut selected, &mut repository_cache).await
+            {
+                warning.get_or_insert(error);
             }
         }
-        sort_marketplace_skills(&mut enriched, sort);
-        enriched
+        sort_marketplace_skills(&mut selected, sort);
+        selected
             .iter_mut()
             .for_each(refresh_marketplace_install_status);
 
         Ok::<MarketplacePage, String>(MarketplacePage {
-            items: enriched,
+            items: selected,
             total,
             page,
             page_size,
@@ -2460,7 +2436,7 @@ pub async fn install_marketplace_skill(
     );
     let mut archive_request = MARKETPLACE_HTTP_CLIENT
         .get(archive_url)
-        .header(USER_AGENT, "Aeroric/1.3.7")
+        .header(USER_AGENT, "Aeroric/1.3.8")
         .header(ACCEPT, "application/vnd.github+json");
     if let Some(token) = github_auth_token() {
         archive_request =

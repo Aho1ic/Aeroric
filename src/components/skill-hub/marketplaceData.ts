@@ -6,7 +6,7 @@ export const DEFAULT_MARKETPLACE_QUERY = "";
 export const DEFAULT_MARKETPLACE_SORT: MarketplaceSort = "installs";
 export const DEFAULT_MARKETPLACE_CATEGORY: MarketplaceCategory = "all";
 
-const CACHE_KEY_PREFIX = "aeroric:marketplace:page:";
+const CACHE_KEY_PREFIX = "aeroric:marketplace:v2:page:";
 
 interface MarketplacePageRequest {
   query: string;

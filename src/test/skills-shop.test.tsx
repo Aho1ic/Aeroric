@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { SkillsShop } from "../components/skill-hub/SkillsShop";
@@ -179,6 +179,51 @@ describe("SkillsShop", () => {
     resolveRequest(page());
     await preload;
     expect(await screen.findByRole("heading", { name: "review-code" })).toBeInTheDocument();
+  });
+
+  it("hides load more and ignores repeated clicks while the next page is loading", async () => {
+    const nextSkill = { ...skill, id: "example/skills/test-code", name: "test-code" };
+    let resolveNextPage: (value: MarketplacePage) => void = () => {};
+    invokeMock.mockImplementation((command: string, args?: { page?: number }) => {
+      if (command !== "search_marketplace_skills") {
+        return Promise.reject(new Error(`Unexpected command: ${command}`));
+      }
+      if (args?.page === 1) {
+        return new Promise<MarketplacePage>((resolve) => {
+          resolveNextPage = resolve;
+        });
+      }
+      return Promise.resolve({ ...page(), total: 2, hasMore: true });
+    });
+
+    render(
+      <I18nProvider>
+        <SkillsShop />
+      </I18nProvider>,
+    );
+
+    const loadMore = await screen.findByRole("button", { name: "Load more" });
+    fireEvent.click(loadMore);
+    fireEvent.click(loadMore);
+
+    expect(
+      invokeMock.mock.calls.filter(
+        ([command, args]) =>
+          command === "search_marketplace_skills" && (args as { page?: number })?.page === 1,
+      ),
+    ).toHaveLength(1);
+    expect(screen.queryByRole("button", { name: "Load more" })).not.toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent("Loading...");
+
+    resolveNextPage({
+      items: [nextSkill],
+      total: 2,
+      page: 1,
+      pageSize: 12,
+      hasMore: false,
+      stale: false,
+    });
+    expect(await screen.findByRole("heading", { name: "test-code" })).toBeInTheDocument();
   });
 
   it("installs into the hub and emits the existing refresh event", async () => {

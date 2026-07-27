@@ -20,6 +20,7 @@ type Props = {
   activeObject: DbObject | null;
   tableColumns: string[];
   showRowIdColumn: boolean;
+  canInsertRows: boolean;
   loading: boolean;
   grid: DbxDataGridController;
   onKeyDown: KeyboardEventHandler<HTMLDivElement>;
@@ -106,6 +107,7 @@ export function DataGridView({
   activeObject,
   tableColumns,
   showRowIdColumn,
+  canInsertRows,
   loading,
   grid,
   onKeyDown,
@@ -123,6 +125,7 @@ export function DataGridView({
     dbxEditingCell,
     setDbxEditingCell,
     dbxPendingCellEdits,
+    dbxNewRows,
     dbxHoveredCell,
     setDbxHoveredCell,
     setDbxCellDetail,
@@ -135,6 +138,7 @@ export function DataGridView({
     autoFitDbxGridColumn,
     toggleDbxGridRowSelection,
     stageDbxCellEdit,
+    stageDbxNewRowCellEdit,
   } = grid.actions;
 
   if (tableColumns.length === 0) {
@@ -328,12 +332,22 @@ export function DataGridView({
         </thead>
         <tbody>
           {tableRows.map((row, rowIndex) => {
-            const dbxRowIndex =
+            const draftRowIndex = dbxNewRows.findIndex((values) => values === row.values);
+            const persistedDbxRowIndex =
               queryResult && activeDbxConnection ? queryResult.rows.indexOf(row) : -1;
-            const rowSelected = dbxRowIndex >= 0 && dbxGridSelectedRows.has(dbxRowIndex);
+            const dbxRowIndex =
+              draftRowIndex >= 0
+                ? (queryResult?.rows.length ?? 0) + draftRowIndex
+                : persistedDbxRowIndex;
+            const rowSelected =
+              draftRowIndex < 0 &&
+              persistedDbxRowIndex >= 0 &&
+              dbxGridSelectedRows.has(persistedDbxRowIndex);
             return (
               <tr
-                key={`${row.rowId ?? "sql"}:${rowIndex}`}
+                key={
+                  draftRowIndex >= 0 ? `new:${draftRowIndex}` : `${row.rowId ?? "sql"}:${rowIndex}`
+                }
                 style={rowSelected ? s.databaseGridRowSelected : undefined}
               >
                 {queryResult && activeDbxConnection && (
@@ -347,13 +361,15 @@ export function DataGridView({
                     <button
                       type="button"
                       aria-label={t("database.selectRow", { row: rowIndex + 1 })}
-                      disabled={dbxRowIndex < 0 || loading}
+                      disabled={draftRowIndex >= 0 || persistedDbxRowIndex < 0 || loading}
                       style={{
                         ...s.databaseGridRowNumberButton,
                         ...(rowSelected ? s.databaseGridRowNumberButtonSelected : undefined),
                       }}
                       onClick={(event) => {
-                        if (dbxRowIndex >= 0) toggleDbxGridRowSelection(dbxRowIndex, event);
+                        if (persistedDbxRowIndex >= 0) {
+                          toggleDbxGridRowSelection(persistedDbxRowIndex, event);
+                        }
                       }}
                     >
                       {dbxRowIndex >= 0 ? dbxRowIndex + 1 : rowIndex + 1}
@@ -372,10 +388,18 @@ export function DataGridView({
                   </td>
                 )}
                 {visibleTableColumns.map(({ column, index: columnIndex }) => {
-                  const original = valueToText(row.values[columnIndex]);
-                  const pendingEdit = dbxPendingCellEdits[`${dbxRowIndex}:${columnIndex}`] ?? null;
+                  const original =
+                    draftRowIndex >= 0 && row.values[columnIndex] == null
+                      ? ""
+                      : valueToText(row.values[columnIndex]);
+                  const pendingEdit =
+                    draftRowIndex < 0
+                      ? (dbxPendingCellEdits[`${persistedDbxRowIndex}:${columnIndex}`] ?? null)
+                      : null;
                   const displayValue = pendingEdit?.value ?? original;
-                  const previewable = Boolean(queryResult && activeDbxConnection);
+                  const previewable = Boolean(
+                    draftRowIndex < 0 && queryResult && activeDbxConnection,
+                  );
                   const isCellSelected =
                     dbxSelectedCell?.rowIndex === dbxRowIndex &&
                     dbxSelectedCell?.columnIndex === columnIndex;
@@ -387,10 +411,12 @@ export function DataGridView({
                     dbxHoveredCell?.rowIndex === dbxRowIndex &&
                     dbxHoveredCell?.columnIndex === columnIndex;
                   const editable = Boolean(
-                    queryResult &&
-                    queryResult.editable &&
-                    !activeConnectionReadOnly &&
-                    !activeDbxConnection?.readOnly,
+                    draftRowIndex >= 0
+                      ? canInsertRows && !activeConnectionReadOnly && !activeDbxConnection?.readOnly
+                      : queryResult &&
+                          queryResult.editable &&
+                          !activeConnectionReadOnly &&
+                          !activeDbxConnection?.readOnly,
                   );
                   return (
                     <td
@@ -425,14 +451,14 @@ export function DataGridView({
                         }
                       }}
                       onContextMenu={
-                        queryResult && activeDbxConnection
+                        draftRowIndex < 0 && queryResult && activeDbxConnection
                           ? (event) => {
                               event.preventDefault();
                               onOpenContextMenu({
                                 x: event.clientX,
                                 y: event.clientY,
                                 connectionId: activeDbxConnection.id,
-                                rowIndex: dbxRowIndex,
+                                rowIndex: persistedDbxRowIndex,
                                 columnIndex,
                                 column,
                                 value: row.values[columnIndex],
@@ -448,7 +474,9 @@ export function DataGridView({
                             value={displayValue}
                             onCancel={() => setDbxEditingCell(null)}
                             onCommit={(value) => {
-                              if (activeDbxConnection) {
+                              if (draftRowIndex >= 0) {
+                                stageDbxNewRowCellEdit(draftRowIndex, columnIndex, value);
+                              } else if (activeDbxConnection) {
                                 stageDbxCellEdit(dbxRowIndex, columnIndex, column, value, original);
                               } else {
                                 void onUpdateCell(row, column, value, original);

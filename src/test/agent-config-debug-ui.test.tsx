@@ -541,6 +541,26 @@ describe("Agent config and debug panel UI", () => {
     expect(await findConfigEditor("#!/bin/sh\n# updated\n")).toBeInTheDocument();
   });
 
+  it("adds and saves a custom model name when detection does not return it", async () => {
+    const user = userEvent.setup();
+    renderModelManagedAgentConfigPanel();
+
+    await findConfigEditor("#!/bin/sh\n");
+    const modelSearch = screen.getByRole("searchbox", { name: "Search models" });
+    await user.type(modelSearch, "gpt-5.6-manual");
+    await user.click(screen.getByRole("button", { name: "Add Model" }));
+
+    expect(screen.getByLabelText("gpt-5.6-manual")).toBeChecked();
+    await user.click(getEnabledSaveButton());
+
+    await waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith("update_custom_agent_models", {
+        id: "gpt55",
+        models: ["gpt-5.6", "gpt-5.6-manual"],
+      }),
+    );
+  });
+
   it("enables the Chat Completions bridge for an existing Codex agent", async () => {
     const user = userEvent.setup();
     renderModelManagedAgentConfigPanel();

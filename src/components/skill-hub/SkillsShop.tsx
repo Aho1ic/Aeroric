@@ -131,6 +131,8 @@ export function SkillsShop() {
   const [loadingMore, setLoadingMore] = useState(false);
   const [installing, setInstalling] = useState<Set<string>>(new Set());
   const requestIdRef = useRef(0);
+  const loadingMoreRef = useRef(false);
+  const loadingMoreRequestIdRef = useRef(0);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -142,9 +144,15 @@ export function SkillsShop() {
 
   const load = useCallback(
     async (nextPage: number, append: boolean) => {
+      if (append && loadingMoreRef.current) return;
       const requestId = ++requestIdRef.current;
-      if (append) setLoadingMore(true);
-      else setLoading(true);
+      if (append) {
+        loadingMoreRef.current = true;
+        loadingMoreRequestIdRef.current = requestId;
+        setLoadingMore(true);
+      } else {
+        setLoading(true);
+      }
       if (!append) setError(null);
       const cached = !append
         ? readCachedMarketplacePage(debouncedQuery, sort, category, nextPage)
@@ -183,7 +191,9 @@ export function SkillsShop() {
         setPage(nextPage);
       } catch (reason) {
         if (requestId !== requestIdRef.current) return;
-        if (cached) {
+        if (append) {
+          setWarning(String(reason));
+        } else if (cached) {
           setItems(cached.items);
           setTotal(cached.total);
           setHasMore(cached.hasMore);
@@ -193,9 +203,12 @@ export function SkillsShop() {
           setError(String(reason));
         }
       } finally {
+        if (append && loadingMoreRequestIdRef.current === requestId) {
+          loadingMoreRef.current = false;
+          setLoadingMore(false);
+        }
         if (requestId === requestIdRef.current) {
           setLoading(false);
-          setLoadingMore(false);
         }
       }
     },
@@ -424,14 +437,16 @@ export function SkillsShop() {
           </div>
           {hasMore ? (
             <div className="marketplace-load-more">
-              <Button
-                variant="outline"
-                disabled={loadingMore}
-                onClick={() => void load(page + 1, true)}
-              >
-                {loadingMore ? <RefreshCw size={13} className="spin" /> : null}
-                {loadingMore ? t("common.loading") : t("skill.shop.loadMore")}
-              </Button>
+              {loadingMore ? (
+                <div className="marketplace-load-more__status" role="status">
+                  <RefreshCw size={14} className="spin" />
+                  <span>{t("common.loading")}</span>
+                </div>
+              ) : (
+                <Button variant="outline" onClick={() => void load(page + 1, true)}>
+                  {t("skill.shop.loadMore")}
+                </Button>
+              )}
             </div>
           ) : null}
         </>
