@@ -1,7 +1,63 @@
 import type { CreateKind, FlatRow, FsEntry, TreeNode } from "./types";
 
+export type FileExplorerBreadcrumbSegment = {
+  label: string;
+  path: string;
+};
+
 export function pathSeparator(path: string): "/" | "\\" {
   return path.includes("\\") && !path.includes("/") ? "\\" : "/";
+}
+
+export function fileExplorerBreadcrumbSegments(
+  path: string,
+): FileExplorerBreadcrumbSegment[] {
+  const trimmed = path.trim();
+  if (!trimmed) return [];
+
+  const windowsMatch = trimmed.match(/^([A-Za-z]:)[\\/]*(.*)$/);
+  if (windowsMatch) {
+    const drive = windowsMatch[1];
+    const parts = windowsMatch[2].split(/[\\/]+/).filter(Boolean);
+    const segments: FileExplorerBreadcrumbSegment[] = [
+      { label: drive, path: `${drive}\\` },
+    ];
+    let current = `${drive}\\`;
+    for (const part of parts) {
+      current = current.endsWith("\\") ? `${current}${part}` : `${current}\\${part}`;
+      segments.push({ label: part, path: current });
+    }
+    return segments;
+  }
+
+  const absolute = trimmed.startsWith("/");
+  const parts = trimmed.split("/").filter(Boolean);
+  const segments: FileExplorerBreadcrumbSegment[] = absolute
+    ? [{ label: "/", path: "/" }]
+    : [];
+  let current = absolute ? "" : parts.shift() ?? "";
+  if (!absolute && current) {
+    segments.push({ label: current, path: current });
+  }
+  for (const part of parts) {
+    current = `${current}/${part}`;
+    segments.push({
+      label: part,
+      path: absolute ? current || "/" : current,
+    });
+  }
+  return segments;
+}
+
+export function isPathWithinRoot(path: string, rootPath: string): boolean {
+  const windowsPath = /^[A-Za-z]:[\\/]/.test(path) || /^[A-Za-z]:[\\/]/.test(rootPath);
+  const normalize = (value: string) => {
+    const normalized = value.replace(/\\/g, "/").replace(/\/+$/, "") || "/";
+    return windowsPath ? normalized.toLowerCase() : normalized;
+  };
+  const pathValue = normalize(path);
+  const rootValue = normalize(rootPath);
+  return pathValue === rootValue || pathValue.startsWith(rootValue === "/" ? "/" : `${rootValue}/`);
 }
 
 export function joinPath(parent: string, name: string): string {

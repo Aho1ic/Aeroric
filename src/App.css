@@ -2383,6 +2383,19 @@ html.dark .notebook-rich-text font[color="#000000"] {
   box-shadow: 0 0 0 3px var(--accent-subtle);
 }
 
+.file-explorer-breadcrumb-scroll {
+  scrollbar-width: none;
+}
+
+.file-explorer-breadcrumb-scroll::-webkit-scrollbar {
+  display: none;
+}
+
+.file-explorer-breadcrumb-scroll button:not(:disabled):hover {
+  color: var(--text-primary);
+  background: var(--bg-hover);
+}
+
 .sftp-icon-btn,
 .sftp-action-btn {
   display: inline-flex;

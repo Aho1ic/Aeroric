@@ -1774,6 +1774,12 @@ describe("DatabaseView workspace and data grid", () => {
     await user.click(await screen.findByRole("button", { name: /^trained_weights\s+TABLE$/i }));
 
     const grid = await screen.findByRole("grid", { name: "Data grid" });
+    const scrollTo = vi.fn();
+    Object.defineProperties(grid, {
+      scrollHeight: { configurable: true, value: 640 },
+      scrollLeft: { configurable: true, value: 24 },
+      scrollTo: { configurable: true, value: scrollTo },
+    });
     const weightCell = grid.querySelector("tbody tr td:nth-child(3)") as HTMLTableCellElement;
     await user.dblClick(weightCell);
     expect(weightCell.querySelector("input")).toHaveValue("0.7500");
@@ -1782,6 +1788,11 @@ describe("DatabaseView workspace and data grid", () => {
     await user.click(screen.getByRole("button", { name: "Insert" }));
     expect(screen.queryByRole("dialog", { name: "Insert row" })).not.toBeInTheDocument();
     expect(grid.querySelectorAll("tbody tr")).toHaveLength(2);
+    expect(scrollTo).toHaveBeenCalledWith({
+      top: 640,
+      left: 24,
+      behavior: "auto",
+    });
     const insertedRow = grid.querySelector("tbody tr:last-child") as HTMLTableRowElement;
     const idCell = insertedRow.querySelector("td:nth-child(2)") as HTMLTableCellElement;
     const insertedWeightCell = insertedRow.querySelector("td:nth-child(3)") as HTMLTableCellElement;

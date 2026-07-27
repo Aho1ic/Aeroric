@@ -154,6 +154,73 @@ describe("FileExplorer UI", () => {
     expect(onFileSelect).not.toHaveBeenCalled();
   });
 
+  it("shows the absolute current directory and navigates through project breadcrumbs", async () => {
+    const user = userEvent.setup();
+    const scrollTo = vi.fn();
+    const originalScrollTo = HTMLElement.prototype.scrollTo;
+    Object.defineProperty(HTMLElement.prototype, "scrollTo", {
+      configurable: true,
+      value: scrollTo,
+    });
+    vi.mocked(invoke).mockImplementation((command, args) => {
+      if (command !== "read_dir_entries") return Promise.resolve(undefined);
+      const path = (args as { path?: string } | undefined)?.path;
+      if (path === "/repo/src") {
+        return Promise.resolve([
+          {
+            name: "components",
+            path: "/repo/src/components",
+            is_dir: true,
+            extension: undefined,
+            is_gitignored: false,
+            modifiedAtMs: 100,
+          },
+        ]);
+      }
+      return Promise.resolve([
+        {
+          name: "src",
+          path: "/repo/src",
+          is_dir: true,
+          extension: undefined,
+          is_gitignored: false,
+          modifiedAtMs: 200,
+        },
+      ]);
+    });
+
+    try {
+      renderExplorer();
+
+      expect(await screen.findByRole("button", { name: "/repo" })).toHaveAttribute(
+        "aria-current",
+        "location",
+      );
+      expect(screen.getByRole("button", { name: "/" })).toBeDisabled();
+
+      await user.click(await screen.findByText("src"));
+
+      expect(screen.getByRole("button", { name: "/repo/src" })).toHaveAttribute(
+        "aria-current",
+        "location",
+      );
+      expect(scrollTo).toHaveBeenCalledWith({ left: 0, behavior: "smooth" });
+
+      await user.click(screen.getByRole("button", { name: "/repo" }));
+
+      expect(screen.getByRole("button", { name: "/repo" })).toHaveAttribute(
+        "aria-current",
+        "location",
+      );
+      expect(scrollTo).toHaveBeenCalledWith({ top: 0, behavior: "smooth" });
+    } finally {
+      Object.defineProperty(HTMLElement.prototype, "scrollTo", {
+        configurable: true,
+        value: originalScrollTo,
+      });
+    }
+  });
+
   it("shows a visible timeout when remote directory reads hang", async () => {
     vi.useFakeTimers();
     vi.mocked(invoke).mockImplementation((command) => {

@@ -116,6 +116,8 @@ export function DataGridView({
   onUpdateCell,
 }: Props) {
   const { t } = useI18n();
+  const tableWrapRef = useRef<HTMLDivElement>(null);
+  const previousNewRowCountRef = useRef(grid.state.dbxNewRows.length);
   const {
     dbxGridOrderByInput,
     dbxGridColumnWidths,
@@ -141,12 +143,31 @@ export function DataGridView({
     stageDbxNewRowCellEdit,
   } = grid.actions;
 
+  useLayoutEffect(() => {
+    const previousCount = previousNewRowCountRef.current;
+    previousNewRowCountRef.current = dbxNewRows.length;
+    if (dbxNewRows.length <= previousCount) return;
+
+    const tableWrap = tableWrapRef.current;
+    if (!tableWrap) return;
+    if (typeof tableWrap.scrollTo === "function") {
+      tableWrap.scrollTo({
+        top: tableWrap.scrollHeight,
+        left: tableWrap.scrollLeft,
+        behavior: "auto",
+      });
+      return;
+    }
+    tableWrap.scrollTop = tableWrap.scrollHeight;
+  }, [dbxNewRows.length]);
+
   if (tableColumns.length === 0) {
     return <div style={s.databaseEmpty}>{t("database.empty")}</div>;
   }
 
   return (
     <div
+      ref={tableWrapRef}
       style={s.databaseTableWrap}
       data-grid-variant={variant}
       role={queryResult && activeDbxConnection ? "grid" : undefined}

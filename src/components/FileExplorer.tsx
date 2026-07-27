@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo, useRef } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef, useLayoutEffect } from "react";
 import {
   formatInvokeError,
   remoteInvokeOptions,
@@ -6,7 +6,7 @@ import {
 } from "../hooks/useCancellableInvoke";
 import { invoke } from "@tauri-apps/api/core";
 import { confirm } from "@tauri-apps/plugin-dialog";
-import { ArrowDown, ArrowUp, RotateCcw, Search, X } from "lucide-react";
+import { ArrowDown, ArrowUp, ChevronRight, FolderOpen, RotateCcw, Search, X } from "lucide-react";
 import s from "../styles";
 import { useToast } from "./Toast";
 import { useI18n } from "../i18n";
@@ -40,7 +40,9 @@ import {
 } from "./file-explorer/types";
 import {
   findNode,
+  fileExplorerBreadcrumbSegments,
   flattenVisible,
+  isPathWithinRoot,
   joinPath,
   loadTreeNodes,
   parentPathOf,
@@ -122,6 +124,8 @@ export function FileExplorer({
   const [scrollTop, setScrollTop] = useState(0);
   const [viewportHeight, setViewportHeight] = useState(500);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const breadcrumbRef = useRef<HTMLDivElement>(null);
+  const breadcrumbInitializedRef = useRef(false);
   const { showToast } = useToast();
   const [ctxMenu, setCtxMenu] = useState<ContextMenuState | null>(null);
   const [creating, setCreating] = useState<{
@@ -355,6 +359,27 @@ export function FileExplorer({
     () => (selectedPath ? findNode(nodes, selectedPath) : null),
     [nodes, selectedPath],
   );
+  const currentDirectoryPath = useMemo(() => {
+    if (!selectedNode) return projectPath;
+    return selectedNode.is_dir ? selectedNode.path : parentPathOf(selectedNode.path);
+  }, [projectPath, selectedNode]);
+  const breadcrumbSegments = useMemo(
+    () => fileExplorerBreadcrumbSegments(currentDirectoryPath),
+    [currentDirectoryPath],
+  );
+  const [revealDirectoryPath, setRevealDirectoryPath] = useState<string | null>(null);
+
+  useLayoutEffect(() => {
+    const breadcrumbs = breadcrumbRef.current;
+    if (!breadcrumbs) return;
+    const behavior = breadcrumbInitializedRef.current ? "smooth" : "auto";
+    breadcrumbInitializedRef.current = true;
+    if (typeof breadcrumbs.scrollTo === "function") {
+      breadcrumbs.scrollTo({ left: breadcrumbs.scrollWidth, behavior });
+      return;
+    }
+    breadcrumbs.scrollLeft = breadcrumbs.scrollWidth;
+  }, [currentDirectoryPath, width]);
 
   // The create-input row is rendered outside the virtualized slice (see render block) so its
   // DOM node remains mounted even when scrolled out of view — otherwise the input ref would
@@ -483,6 +508,53 @@ export function FileExplorer({
     },
     [handleToggle, projectPath],
   );
+
+  const handleBreadcrumbNavigate = useCallback(
+    (path: string) => {
+      if (!isPathWithinRoot(path, projectPath)) return;
+      if (path === projectPath) {
+        setSelectedPath(null);
+        setRevealDirectoryPath(projectPath);
+        return;
+      }
+
+      const node = findNode(nodesRef.current, path);
+      if (!node?.is_dir) return;
+      setSelectedPath(path);
+      ensureExpanded(path);
+      setRevealDirectoryPath(path);
+    },
+    [ensureExpanded, projectPath],
+  );
+
+  useEffect(() => {
+    if (!revealDirectoryPath) return;
+    const tree = scrollRef.current;
+    if (!tree) return;
+    const scrollTreeTo = (top: number) => {
+      if (typeof tree.scrollTo === "function") {
+        tree.scrollTo({ top, behavior: "smooth" });
+      } else {
+        tree.scrollTop = top;
+      }
+    };
+    if (revealDirectoryPath === projectPath) {
+      scrollTreeTo(0);
+      setRevealDirectoryPath(null);
+      return;
+    }
+
+    const rowIndex = flat.findIndex(
+      (row) => row.kind === "node" && row.node.path === revealDirectoryPath,
+    );
+    if (rowIndex < 0) return;
+    const rowTop = rowIndex * ROW_HEIGHT;
+    const rowBottom = rowTop + ROW_HEIGHT;
+    if (rowTop < tree.scrollTop || rowBottom > tree.scrollTop + tree.clientHeight) {
+      scrollTreeTo(Math.max(0, rowTop - tree.clientHeight / 2 + ROW_HEIGHT));
+    }
+    setRevealDirectoryPath(null);
+  }, [flat, projectPath, revealDirectoryPath]);
 
   const startCreate = useCallback(
     (kind: CreateKind) => {
@@ -1049,10 +1121,46 @@ export function FileExplorer({
           <Search size={13} />
         </button>
       </div>
-      {/* Project root label */}
-      <div style={s.fileExplorerRootLabel}>
-        <span style={s.fileExplorerRootIcon} />
-        {projectName}
+      <div style={s.fileExplorerPathBar} title={`${projectName}: ${currentDirectoryPath}`}>
+        <FolderOpen size={13} style={s.fileExplorerPathIcon} aria-hidden="true" />
+        <div
+          ref={breadcrumbRef}
+          className="file-explorer-breadcrumb-scroll"
+          style={s.fileExplorerBreadcrumbViewport}
+          aria-label={currentDirectoryPath}
+        >
+          <div style={s.fileExplorerBreadcrumbs}>
+            {breadcrumbSegments.map((segment, index) => {
+              const navigable = isPathWithinRoot(segment.path, projectPath);
+              const current = segment.path === currentDirectoryPath;
+              return (
+                <span key={segment.path} style={s.fileExplorerBreadcrumbSegment}>
+                  {index > 0 && (
+                    <ChevronRight
+                      size={11}
+                      style={s.fileExplorerBreadcrumbSeparator}
+                      aria-hidden="true"
+                    />
+                  )}
+                  <button
+                    type="button"
+                    aria-label={segment.path}
+                    aria-current={current ? "location" : undefined}
+                    disabled={!navigable}
+                    style={{
+                      ...s.fileExplorerBreadcrumbButton,
+                      ...(current ? s.fileExplorerBreadcrumbButtonCurrent : undefined),
+                      ...(!navigable ? s.fileExplorerBreadcrumbButtonDisabled : undefined),
+                    }}
+                    onClick={() => handleBreadcrumbNavigate(segment.path)}
+                  >
+                    {segment.label}
+                  </button>
+                </span>
+              );
+            })}
+          </div>
+        </div>
       </div>
       {loadError && (
         <div
