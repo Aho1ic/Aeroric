@@ -752,13 +752,15 @@ export function AgentDetailModal({
                       />
                     </div>
 
-                    {/* Agent path section */}
-                    <AgentPathSection
-                      ref={pathSectionRef}
-                      agentKey={agentKey}
-                      hideSaveButton
-                      onDirtyChange={setPathDirty}
-                    />
+                    {/* Built-in runtimes keep editable executable/config paths here. */}
+                    {isBuiltIn && (
+                      <AgentPathSection
+                        ref={pathSectionRef}
+                        agentKey={agentKey}
+                        hideSaveButton
+                        onDirtyChange={setPathDirty}
+                      />
+                    )}
 
                     {/* Model detection + selection */}
                     {deletable && customProfile && (
@@ -782,9 +784,7 @@ export function AgentDetailModal({
                             >
                               {t("appSettings.agentModel")}
                             </div>
-                            <div
-                              style={{ marginTop: 3, fontSize: 11, color: "var(--text-hint)" }}
-                            >
+                            <div style={{ marginTop: 3, fontSize: 11, color: "var(--text-hint)" }}>
                               {detectedModels.length > 0
                                 ? t("appSettings.selectedModelsCount", {
                                     selected: selectedModels.length,
@@ -976,9 +976,7 @@ export function AgentDetailModal({
                             >
                               {t("appSettings.reasoningEffort")}
                             </div>
-                            <div
-                              style={{ marginTop: 3, fontSize: 11, color: "var(--text-hint)" }}
-                            >
+                            <div style={{ marginTop: 3, fontSize: 11, color: "var(--text-hint)" }}>
                               {t("appSettings.reasoningEffortHint")}
                             </div>
                           </div>
@@ -1001,17 +999,19 @@ export function AgentDetailModal({
                           >
                             {t("appSettings.reasoningEffortDefault")}
                           </Button>
-                          {(isCodex ? CODEX_REASONING_EFFORTS : CLAUDE_REASONING_EFFORTS).map((effort) => (
-                            <Button
-                              key={effort}
-                              variant="outline"
-                              size="sm"
-                              active={reasoningEffort === effort}
-                              onClick={() => setReasoningEffort(effort)}
-                            >
-                              {t(`appSettings.reasoningEffort.${effort}`)}
-                            </Button>
-                          ))}
+                          {(isCodex ? CODEX_REASONING_EFFORTS : CLAUDE_REASONING_EFFORTS).map(
+                            (effort) => (
+                              <Button
+                                key={effort}
+                                variant="outline"
+                                size="sm"
+                                active={reasoningEffort === effort}
+                                onClick={() => setReasoningEffort(effort)}
+                              >
+                                {t(`appSettings.reasoningEffort.${effort}`)}
+                              </Button>
+                            ),
+                          )}
                         </div>
                       </div>
                     )}
@@ -1173,9 +1173,7 @@ export function AgentDetailModal({
                     </div>
 
                     {transferMessage && (
-                      <div
-                        style={{ color: "var(--success)", fontSize: 12.5, marginTop: 10 }}
-                      >
+                      <div style={{ color: "var(--success)", fontSize: 12.5, marginTop: 10 }}>
                         {transferMessage}
                       </div>
                     )}

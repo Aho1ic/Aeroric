@@ -3,6 +3,11 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { SkillsShop } from "../components/skill-hub/SkillsShop";
 import { SKILL_HUB_CHANGED_EVENT } from "../components/app-settings/types";
+import {
+  clearMarketplacePageMemoryCache,
+  marketplacePageCacheKey,
+  preloadDefaultMarketplacePage,
+} from "../components/skill-hub/marketplaceData";
 import { I18nProvider } from "../i18n";
 import type { MarketplacePage, MarketplaceSkill } from "../types";
 
@@ -53,6 +58,7 @@ describe("SkillsShop", () => {
   beforeEach(() => {
     localStorage.clear();
     localStorage.setItem("aeroric:language", "en");
+    clearMarketplacePageMemoryCache();
     invokeMock.mockReset();
     confirmMock.mockReset();
     invokeMock.mockImplementation((command: string) => {
@@ -115,6 +121,64 @@ describe("SkillsShop", () => {
         ),
       { timeout: 1200 },
     );
+  });
+
+  it("shows the persisted first page while refreshing it in the background", async () => {
+    let resolveRefresh: (value: MarketplacePage) => void = () => {};
+    invokeMock.mockImplementation(
+      (command: string) =>
+        new Promise<MarketplacePage>((resolve, reject) => {
+          if (command === "search_marketplace_skills") {
+            resolveRefresh = resolve;
+          } else {
+            reject(new Error(`Unexpected command: ${command}`));
+          }
+        }),
+    );
+    localStorage.setItem(
+      marketplacePageCacheKey("", "installs", "all"),
+      JSON.stringify({ fetchedAt: Date.now(), page: page() }),
+    );
+
+    render(
+      <I18nProvider>
+        <SkillsShop />
+      </I18nProvider>,
+    );
+
+    expect(screen.getByRole("heading", { name: "review-code" })).toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Showing the latest cached marketplace data",
+    );
+
+    resolveRefresh(page());
+    await waitFor(() => expect(screen.queryByRole("status")).not.toBeInTheDocument());
+  });
+
+  it("deduplicates startup preload and the first shop request", async () => {
+    let resolveRequest: (value: MarketplacePage) => void = () => {};
+    invokeMock.mockImplementation(
+      (command: string) =>
+        new Promise<MarketplacePage>((resolve, reject) => {
+          if (command === "search_marketplace_skills") {
+            resolveRequest = resolve;
+          } else {
+            reject(new Error(`Unexpected command: ${command}`));
+          }
+        }),
+    );
+
+    const preload = preloadDefaultMarketplacePage();
+    render(
+      <I18nProvider>
+        <SkillsShop />
+      </I18nProvider>,
+    );
+
+    expect(invokeMock).toHaveBeenCalledTimes(1);
+    resolveRequest(page());
+    await preload;
+    expect(await screen.findByRole("heading", { name: "review-code" })).toBeInTheDocument();
   });
 
   it("installs into the hub and emits the existing refresh event", async () => {

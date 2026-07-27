@@ -16,15 +16,20 @@ import { useI18n } from "../../i18n";
 import type {
   MarketplaceCategory,
   MarketplaceInstallRecord,
-  MarketplacePage,
   MarketplaceSkill,
   MarketplaceSort,
 } from "../../types";
 import { SKILL_HUB_CHANGED_EVENT } from "../app-settings/types";
 import { Button } from "../ui/Button";
-
-const PAGE_SIZE = 12;
-const CACHE_KEY_PREFIX = "aeroric:marketplace:page:";
+import {
+  DEFAULT_MARKETPLACE_CATEGORY,
+  DEFAULT_MARKETPLACE_QUERY,
+  DEFAULT_MARKETPLACE_SORT,
+  invalidateMarketplacePageCaches,
+  loadMarketplacePage,
+  MARKETPLACE_PAGE_SIZE,
+  readCachedMarketplacePage,
+} from "./marketplaceData";
 
 const SORTS: MarketplaceSort[] = ["installs", "downloads", "stars", "updated", "published"];
 const CATEGORIES: MarketplaceCategory[] = [
@@ -60,23 +65,6 @@ function formatDate(value: string | undefined, locale: string) {
     month: "short",
     day: "numeric",
   }).format(date);
-}
-
-function pageCacheKey(
-  query: string,
-  sort: MarketplaceSort,
-  category: MarketplaceCategory,
-): string {
-  return `${CACHE_KEY_PREFIX}${encodeURIComponent(query)}:${sort}:${category}`;
-}
-
-function readCachedPage(cacheKey: string): MarketplacePage | null {
-  try {
-    const raw = localStorage.getItem(cacheKey);
-    return raw ? (JSON.parse(raw) as MarketplacePage) : null;
-  } catch {
-    return null;
-  }
 }
 
 function SkillAvatar({ skill }: { skill: MarketplaceSkill }) {
@@ -118,19 +106,28 @@ function MarketplaceSkeleton() {
 export function SkillsShop() {
   const { t, language } = useI18n();
   const locale = language === "zh" ? "zh-CN" : "en-US";
-  const [query, setQuery] = useState("");
-  const [debouncedQuery, setDebouncedQuery] = useState("");
-  const [sort, setSort] = useState<MarketplaceSort>("installs");
-  const [category, setCategory] = useState<MarketplaceCategory>("all");
+  const initialPage = useMemo(
+    () =>
+      readCachedMarketplacePage(
+        DEFAULT_MARKETPLACE_QUERY,
+        DEFAULT_MARKETPLACE_SORT,
+        DEFAULT_MARKETPLACE_CATEGORY,
+      ),
+    [],
+  );
+  const [query, setQuery] = useState(DEFAULT_MARKETPLACE_QUERY);
+  const [debouncedQuery, setDebouncedQuery] = useState(DEFAULT_MARKETPLACE_QUERY);
+  const [sort, setSort] = useState<MarketplaceSort>(DEFAULT_MARKETPLACE_SORT);
+  const [category, setCategory] = useState<MarketplaceCategory>(DEFAULT_MARKETPLACE_CATEGORY);
   const [page, setPage] = useState(0);
-  const [items, setItems] = useState<MarketplaceSkill[]>([]);
-  const [total, setTotal] = useState(0);
-  const [hasMore, setHasMore] = useState(false);
-  const [stale, setStale] = useState(false);
+  const [items, setItems] = useState<MarketplaceSkill[]>(initialPage?.items ?? []);
+  const [total, setTotal] = useState(initialPage?.total ?? 0);
+  const [hasMore, setHasMore] = useState(initialPage?.hasMore ?? false);
+  const [stale, setStale] = useState(initialPage !== null);
   const [warning, setWarning] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [installError, setInstallError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(initialPage === null);
   const [loadingMore, setLoadingMore] = useState(false);
   const [installing, setInstalling] = useState<Set<string>>(new Set());
   const requestIdRef = useRef(0);
@@ -149,14 +146,28 @@ export function SkillsShop() {
       if (append) setLoadingMore(true);
       else setLoading(true);
       if (!append) setError(null);
-      const cacheKey = pageCacheKey(debouncedQuery, sort, category);
+      const cached = !append
+        ? readCachedMarketplacePage(debouncedQuery, sort, category, nextPage)
+        : null;
+      if (cached) {
+        setItems(cached.items);
+        setTotal(cached.total);
+        setHasMore(cached.hasMore);
+        setStale(true);
+        setWarning(null);
+        setLoading(false);
+      } else if (!append) {
+        setItems([]);
+        setTotal(0);
+        setHasMore(false);
+      }
       try {
-        const result = await invoke<MarketplacePage>("search_marketplace_skills", {
+        const result = await loadMarketplacePage({
           query: debouncedQuery,
           sort,
           category,
           page: nextPage,
-          pageSize: PAGE_SIZE,
+          pageSize: MARKETPLACE_PAGE_SIZE,
         });
         if (requestId !== requestIdRef.current) return;
         setItems((current) => {
@@ -170,10 +181,8 @@ export function SkillsShop() {
         setStale(result.stale);
         setWarning(result.warning ?? null);
         setPage(nextPage);
-        if (!append) localStorage.setItem(cacheKey, JSON.stringify(result));
       } catch (reason) {
         if (requestId !== requestIdRef.current) return;
-        const cached = !append ? readCachedPage(cacheKey) : null;
         if (cached) {
           setItems(cached.items);
           setTotal(cached.total);
@@ -195,7 +204,6 @@ export function SkillsShop() {
 
   useEffect(() => {
     setPage(0);
-    setItems([]);
     void load(0, false);
   }, [load]);
 
@@ -208,6 +216,7 @@ export function SkillsShop() {
           skill,
           overwriteConflict,
         });
+        invalidateMarketplacePageCaches();
         setItems((current) =>
           current.map((item) =>
             item.id === skill.id ? { ...item, installStatus: "installed" } : item,

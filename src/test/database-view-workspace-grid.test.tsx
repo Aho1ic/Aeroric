@@ -1592,7 +1592,6 @@ describe("DatabaseView workspace and data grid", () => {
 
   it("previews and confirms DBX grid row inserts before executing them", async () => {
     const user = userEvent.setup();
-    const promptSpy = vi.spyOn(window, "prompt").mockReturnValueOnce('{"email":"new@example.com"}');
     vi.mocked(confirm).mockResolvedValue(true);
     vi.mocked(invoke).mockImplementation((command, args) => {
       if (command === "db_load_connections") return Promise.resolve([]);
@@ -1654,7 +1653,12 @@ describe("DatabaseView workspace and data grid", () => {
     await screen.findByText("alice@example.com");
     await user.click(screen.getByRole("button", { name: "Insert" }));
 
-    expect(promptSpy).toHaveBeenCalledWith("Insert row as JSON object", '{"email":null}');
+    const insertDialog = await screen.findByRole("dialog", { name: "Insert row" });
+    const insertJson = within(insertDialog).getByLabelText("Insert row as JSON object");
+    expect(insertJson).toHaveValue('{\n  "email": null\n}');
+    fireEvent.change(insertJson, { target: { value: '{"email":"new@example.com"}' } });
+    await user.click(within(insertDialog).getByRole("button", { name: "Insert" }));
+
     await waitFor(() => {
       expect(invoke).toHaveBeenCalledWith("dbx_insert_row", {
         request: expect.objectContaining({
@@ -1690,7 +1694,107 @@ describe("DatabaseView workspace and data grid", () => {
         }),
       }),
     });
-    promptSpy.mockRestore();
+  });
+
+  it("edits and inserts MySQL rows when object metadata uses uppercase TABLE", async () => {
+    const user = userEvent.setup();
+    vi.mocked(confirm).mockResolvedValue(true);
+    vi.mocked(invoke).mockImplementation((command, args) => {
+      if (command === "db_load_connections") return Promise.resolve([]);
+      if (command === "dbx_list_connections") return Promise.resolve([mysqlDbxConnection]);
+      if (command === "dbx_connect") return Promise.resolve(undefined);
+      if (command === "dbx_list_databases")
+        return Promise.resolve([{ name: "algorithm_trainer1" }]);
+      if (command === "dbx_list_schemas") return Promise.resolve([]);
+      if (command === "dbx_list_objects") {
+        return Promise.resolve([
+          {
+            name: "trained_weights",
+            object_type: "TABLE",
+            schema: "algorithm_trainer1",
+          },
+        ]);
+      }
+      if (command === "dbx_get_columns") {
+        return Promise.resolve([
+          { name: "id", data_type: "bigint", is_nullable: false, is_primary_key: false },
+          {
+            name: "weight",
+            data_type: "decimal(10,4)",
+            is_nullable: true,
+            is_primary_key: false,
+          },
+        ]);
+      }
+      if (command === "dbx_query_table_data") {
+        return Promise.resolve({
+          result: {
+            columns: ["id", "weight"],
+            column_types: ["bigint", "decimal(10,4)"],
+            column_sortables: [true, true],
+            rows: [[1, "0.7500"]],
+          },
+          totalRows: 1,
+          sql: "SELECT * FROM `algorithm_trainer1`.`trained_weights`",
+          countSql: "SELECT count(*) FROM `algorithm_trainer1`.`trained_weights`",
+        });
+      }
+      if (command === "dbx_insert_row") {
+        const execute = (args as { request: { execute?: boolean } }).request.execute;
+        return Promise.resolve({
+          statements: [
+            "INSERT INTO `algorithm_trainer1`.`trained_weights` (`id`, `weight`) VALUES (2, '0.9000')",
+          ],
+          rollbackStatements: [],
+          validationError: null,
+          executionSchema: "algorithm_trainer1",
+          executed: Boolean(execute),
+          rowsAffected: execute ? 1 : 0,
+        });
+      }
+      return Promise.resolve(undefined);
+    });
+
+    render(
+      React.createElement(
+        I18nProvider,
+        null,
+        React.createElement(DatabaseView, { sshConnections: [connection()] }),
+      ),
+    );
+
+    await user.click(await screen.findByRole("button", { name: /MySQL Source/i }));
+    await user.click(await screen.findByRole("button", { name: /^trained_weights\s+TABLE$/i }));
+
+    const grid = await screen.findByRole("grid", { name: "Data grid" });
+    const weightCell = grid.querySelector("tbody tr td:nth-child(3)") as HTMLTableCellElement;
+    await user.dblClick(weightCell);
+    expect(weightCell.querySelector("input")).toHaveValue("0.7500");
+
+    await user.click(screen.getByRole("button", { name: "Insert" }));
+    const insertDialog = await screen.findByRole("dialog", { name: "Insert row" });
+    const insertJson = within(insertDialog).getByLabelText("Insert row as JSON object");
+    fireEvent.change(insertJson, { target: { value: '{"id":2,"weight":"0.9000"}' } });
+    await user.click(within(insertDialog).getByRole("button", { name: "Insert" }));
+
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith("dbx_insert_row", {
+        request: expect.objectContaining({
+          connectionId: "dbx-mysql",
+          database: "algorithm_trainer1",
+          schema: "algorithm_trainer1",
+          execute: false,
+          options: expect.objectContaining({
+            databaseType: "mysql",
+            tableMeta: expect.objectContaining({
+              tableName: "trained_weights",
+              primaryKeys: [],
+            }),
+            newRows: [[2, "0.9000"]],
+          }),
+        }),
+      });
+    });
   });
 
   it("allows inserts into keyless DBX tables that do not support keyless row edits", async () => {
@@ -1701,7 +1805,6 @@ describe("DatabaseView workspace and data grid", () => {
       name: "ClickHouse Source",
       dbType: "clickhouse" as const,
     };
-    const promptSpy = vi.spyOn(window, "prompt").mockReturnValueOnce('{"name":"new row"}');
     vi.mocked(confirm).mockResolvedValue(true);
     vi.mocked(invoke).mockImplementation((command, args) => {
       if (command === "db_load_connections") return Promise.resolve([]);
@@ -1760,7 +1863,12 @@ describe("DatabaseView workspace and data grid", () => {
     expect(insertButton).toBeEnabled();
     await user.click(insertButton);
 
-    expect(promptSpy).toHaveBeenCalledWith("Insert row as JSON object", '{"id":null,"name":null}');
+    const insertDialog = await screen.findByRole("dialog", { name: "Insert row" });
+    const insertJson = within(insertDialog).getByLabelText("Insert row as JSON object");
+    expect(insertJson).toHaveValue('{\n  "id": null,\n  "name": null\n}');
+    fireEvent.change(insertJson, { target: { value: '{"name":"new row"}' } });
+    await user.click(within(insertDialog).getByRole("button", { name: "Insert" }));
+
     await waitFor(() => {
       expect(invoke).toHaveBeenCalledWith("dbx_insert_row", {
         request: expect.objectContaining({
@@ -1773,7 +1881,6 @@ describe("DatabaseView workspace and data grid", () => {
         }),
       });
     });
-    promptSpy.mockRestore();
   });
 
   it("previews and confirms DBX grid row deletes before executing them", async () => {

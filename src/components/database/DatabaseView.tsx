@@ -338,6 +338,8 @@ export function DatabaseView({
   const [dbxSqlPreviewStatements, setDbxSqlPreviewStatements] = useState<string[]>([]);
   const [dbxSqlPreviewRollback, setDbxSqlPreviewRollback] = useState<string[]>([]);
   const [dbxSqlPreviewDescription, setDbxSqlPreviewDescription] = useState("");
+  const [insertRowDraft, setInsertRowDraft] = useState<string | null>(null);
+  const [insertRowError, setInsertRowError] = useState("");
   const [visibleDatabaseConnectionId, setVisibleDatabaseConnectionId] = useState<string | null>(
     null,
   );
@@ -4819,7 +4821,7 @@ export function DatabaseView({
     t,
   ]);
 
-  const insertRow = useCallback(async () => {
+  const insertRow = useCallback(() => {
     if (activeDbxConnection && activeDbxObject && queryResult) {
       if (!activeObject || !isDbxTableObject(activeDbxObject) || activeDbxConnection.readOnly)
         return;
@@ -4832,16 +4834,61 @@ export function DatabaseView({
           .filter((column) => !metadataByName.get(column.toLowerCase())?.column_default)
           .map((column) => [column, null]),
       );
-      const raw = window.prompt(t("database.insertJsonPrompt"), JSON.stringify(sample));
-      if (!raw) return;
+      setInsertRowError("");
+      setInsertRowDraft(JSON.stringify(sample, null, 2));
+      return;
+    }
+    if (!activeEndpoint || !activeObject || activeConnection?.readOnly) return;
+    const sample = Object.fromEntries(
+      activeObject.columns
+        .filter((column) => !column.primaryKey && !column.defaultValue)
+        .map((column) => [column.name, null]),
+    );
+    setInsertRowError("");
+    setInsertRowDraft(JSON.stringify(sample, null, 2));
+  }, [
+    activeConnection?.readOnly,
+    activeDbxConnection,
+    activeDbxObject,
+    activeEndpoint,
+    activeObject,
+    dbxColumnsByTable,
+    queryResult,
+  ]);
+
+  const closeInsertRowDialog = useCallback(() => {
+    setInsertRowDraft(null);
+    setInsertRowError("");
+  }, []);
+
+  const submitInsertRow = useCallback(async () => {
+    if (insertRowDraft === null) return;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(insertRowDraft);
+    } catch {
+      setInsertRowError(t("database.insertJsonObjectError"));
+      return;
+    }
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      setInsertRowError(t("database.insertJsonObjectError"));
+      return;
+    }
+    const valuesByColumn = parsed as Record<string, unknown>;
+
+    if (activeDbxConnection && activeDbxObject && queryResult) {
+      if (!activeObject || !isDbxTableObject(activeDbxObject) || activeDbxConnection.readOnly)
+        return;
       try {
-        const parsed = JSON.parse(raw) as Record<string, unknown>;
         const newRow = queryResult.columns.map((column) =>
-          Object.prototype.hasOwnProperty.call(parsed, column) ? (parsed[column] ?? null) : null,
+          Object.prototype.hasOwnProperty.call(valuesByColumn, column)
+            ? (valuesByColumn[column] ?? null)
+            : null,
         );
         const options = buildDbxGridSaveOptions({ newRows: [newRow] });
         if (!options) return;
         setError(null);
+        setInsertRowError("");
         const preview = await databaseApi.dbxInsertRow({
           connectionId: activeDbxConnection.id,
           database: activeDbxDatabase,
@@ -4851,6 +4898,7 @@ export function DatabaseView({
         });
         if (preview.validationError) {
           setError(preview.validationError);
+          setInsertRowError(preview.validationError);
           return;
         }
         if (preview.statements.length === 0) return;
@@ -4879,8 +4927,10 @@ export function DatabaseView({
         });
         if (executed.validationError) {
           setError(executed.validationError);
+          setInsertRowError(executed.validationError);
           return;
         }
+        closeInsertRowDialog();
         await loadDbxObject(
           activeDbxObject,
           page,
@@ -4891,21 +4941,14 @@ export function DatabaseView({
         );
       } catch (err) {
         setError(String(err));
+        setInsertRowError(String(err));
       }
       return;
     }
     if (!activeEndpoint || !activeObject || activeConnection?.readOnly) return;
     setError(null);
-    const sample = Object.fromEntries(
-      activeObject.columns
-        .filter((column) => !column.primaryKey && !column.defaultValue)
-        .map((column) => [column.name, null]),
-    );
-    const raw = window.prompt(t("database.insertJsonPrompt"), JSON.stringify(sample));
-    if (!raw) return;
     try {
-      const parsed = JSON.parse(raw) as Record<string, unknown>;
-      const values = Object.entries(parsed).map(([column, value]) => ({
+      const values = Object.entries(valuesByColumn).map(([column, value]) => ({
         column,
         value: value === null || value === undefined ? null : String(value),
       }));
@@ -4917,9 +4960,11 @@ export function DatabaseView({
         connectionId: activeConnection?.id,
         projectRoot,
       });
+      closeInsertRowDialog();
       await loadTable(activeObject, page);
     } catch (err) {
       setError(String(err));
+      setInsertRowError(String(err));
     }
   }, [
     activeConnection?.id,
@@ -4930,9 +4975,10 @@ export function DatabaseView({
     activeEndpoint,
     activeObject,
     buildDbxGridSaveOptions,
-    dbxColumnsByTable,
+    closeInsertRowDialog,
     dbxGridOrderByInput,
     dbxGridWhereInput,
+    insertRowDraft,
     loadDbxObject,
     loadTable,
     page,
@@ -7072,6 +7118,72 @@ export function DatabaseView({
               </div>
             </div>
           </div>
+        </div>
+      )}
+      {insertRowDraft !== null && (
+        <div
+          style={s.databaseDialogOverlay}
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget && !loading) closeInsertRowDialog();
+          }}
+        >
+          <form
+            role="dialog"
+            aria-modal="true"
+            aria-label={t("database.insertRow")}
+            style={{ ...s.databaseDialog, width: 560, maxWidth: "min(92vw, 560px)" }}
+            onSubmit={(event) => {
+              event.preventDefault();
+              void submitInsertRow();
+            }}
+          >
+            <div style={s.databaseDialogHeader}>{t("database.insertRow")}</div>
+            <div style={s.databaseDialogBody}>
+              <label style={s.databaseDialogField}>
+                <span style={s.databaseDialogLabel}>{t("database.insertJsonPrompt")}</span>
+                <textarea
+                  aria-label={t("database.insertJsonPrompt")}
+                  style={{
+                    ...s.databaseSqlInput,
+                    width: "100%",
+                    minHeight: 180,
+                    maxHeight: "45vh",
+                    boxSizing: "border-box",
+                    flex: "none",
+                  }}
+                  value={insertRowDraft}
+                  onChange={(event) => {
+                    setInsertRowDraft(event.target.value);
+                    if (insertRowError) setInsertRowError("");
+                  }}
+                  spellCheck={false}
+                  autoFocus
+                />
+              </label>
+              {insertRowError && (
+                <div role="alert" style={{ ...s.databaseDialogHint, color: "var(--danger)" }}>
+                  {insertRowError}
+                </div>
+              )}
+            </div>
+            <div style={s.databaseDialogFooter}>
+              <DbxDialogFooterButton
+                type="button"
+                onClick={closeInsertRowDialog}
+                disabled={loading}
+              >
+                {t("common.cancel")}
+              </DbxDialogFooterButton>
+              <DbxDialogFooterButton
+                type="submit"
+                variant="default"
+                icon={Plus}
+                disabled={loading || !insertRowDraft.trim()}
+              >
+                {t("database.insert")}
+              </DbxDialogFooterButton>
+            </div>
+          </form>
         </div>
       )}
       {dbxSqlPreviewOpen && (

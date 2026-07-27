@@ -4,6 +4,9 @@ import App from "./App";
 import { ToastProvider } from "./components/Toast";
 import { NotificationsProvider } from "./hooks/useNotifications";
 import { I18nProvider, staticT } from "./i18n";
+import { scheduleMarketplacePreload } from "./components/skill-hub/marketplaceData";
+
+scheduleMarketplacePreload();
 
 class ErrorBoundary extends React.Component<
   { children: React.ReactNode },

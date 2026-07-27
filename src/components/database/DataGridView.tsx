@@ -388,7 +388,6 @@ export function DataGridView({
                     dbxHoveredCell?.columnIndex === columnIndex;
                   const editable = Boolean(
                     queryResult &&
-                    activeObject?.objectType === "table" &&
                     queryResult.editable &&
                     !activeConnectionReadOnly &&
                     !activeDbxConnection?.readOnly,

@@ -158,7 +158,7 @@ export function SkillHubView({ config, allProjects, onOpenAppSettings, embedded 
   }
 
   return (
-    <div style={s.skillHubBody}>
+    <div style={embedded ? { ...s.skillHubBody, padding: 0 } : s.skillHubBody}>
       {!embedded && (
         <div style={s.skillHubHeader}>
           <div style={s.skillHubHeaderMain}>

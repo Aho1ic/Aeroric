@@ -77,7 +77,15 @@ export function SkillsPanel() {
   const hubPath = config?.hubPath ?? "";
 
   return (
-    <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column", overflow: "hidden" }}>
+    <div
+      style={{
+        flex: 1,
+        minHeight: 0,
+        display: "flex",
+        flexDirection: "column",
+        overflow: "hidden",
+      }}
+    >
       <div style={s.skillsPanelBody}>
         <div style={s.skillsPanelField}>
           <label style={s.skillsPanelLabel}>{t("skill.settings.hubPath")}</label>
@@ -110,7 +118,7 @@ export function SkillsPanel() {
         {error ? <div style={s.skillsPanelError}>{error}</div> : null}
       </div>
 
-      <div style={{ flex: 1, minHeight: 0, overflow: "auto", padding: "0 20px 18px" }}>
+      <div style={s.skillsPanelContent}>
         <SkillHubView
           config={config}
           allProjects={allProjects}

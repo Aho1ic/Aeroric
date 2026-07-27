@@ -45,12 +45,20 @@ const agentBtnBase: React.CSSProperties = {
 export const skillHub = {
   // ── Settings panel ─────────────────────────────────────────────────────────
   skillsPanelBody: {
-    flex: 1,
-    overflowY: "auto" as const,
-    padding: "20px",
+    flex: "0 0 auto",
+    padding: "16px 20px 14px",
     display: "flex",
     flexDirection: "column" as const,
-    gap: 16,
+    gap: 12,
+    borderBottom: "1px solid var(--border-dim)",
+    background: "color-mix(in srgb, var(--bg-subtle) 54%, transparent)",
+  },
+  skillsPanelContent: {
+    flex: 1,
+    minHeight: 0,
+    display: "flex",
+    overflow: "hidden",
+    padding: "12px 20px 18px",
   },
   skillsPanelField: { display: "flex", flexDirection: "column" as const, gap: 6 },
   skillsPanelLabel: {
