@@ -26,6 +26,10 @@ vi.mock("../hooks/useAgentOptions", () => ({
     { value: "codex", label: "Codex" },
     { value: "custom", label: "Custom" },
   ],
+  useAgentSettings: () => ({
+    custom_agents: [],
+    builtin_agent_credentials: {},
+  }),
 }));
 
 describe("AllAgentConfigsPanel", () => {

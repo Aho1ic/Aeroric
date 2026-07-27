@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
 import * as Popover from "@radix-ui/react-popover";
@@ -12,10 +12,10 @@ import {
   Search,
   Upload,
 } from "lucide-react";
-import { useAgentOptions } from "../../hooks/useAgentOptions";
+import { useAgentOptions, useAgentSettings } from "../../hooks/useAgentOptions";
 import { useI18n } from "../../i18n";
 import { Button } from "../ui/Button";
-import { APP_SETTINGS_CHANGED_EVENT, type AppSettings } from "./types";
+import { APP_SETTINGS_CHANGED_EVENT } from "./types";
 import { AgentCardItem } from "./AgentCardItem";
 import { AddAgentModal } from "./AddAgentModal";
 import { AgentDetailModal } from "./AgentDetailModal";
@@ -38,6 +38,7 @@ function loadViewMode(): ViewMode {
 export function AllAgentConfigsPanel({ themeVariant }: { themeVariant: ThemeVariant }) {
   const { t } = useI18n();
   const agentOptions = useAgentOptions();
+  const settings = useAgentSettings();
   const [exporting, setExporting] = useState(false);
   const [importing, setImporting] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
@@ -47,26 +48,8 @@ export function AllAgentConfigsPanel({ themeVariant }: { themeVariant: ThemeVari
   const [viewMode, setViewMode] = useState<ViewMode>(loadViewMode);
   const [showAddAgentModal, setShowAddAgentModal] = useState(false);
   const [editingAgent, setEditingAgent] = useState<AgentOption | null>(null);
-  const [settings, setSettings] = useState<AppSettings | null>(null);
   const [showImportMenu, setShowImportMenu] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
-
-  useEffect(() => {
-    let cancelled = false;
-    const load = () => {
-      invoke<AppSettings>("load_app_settings")
-        .then((s) => {
-          if (!cancelled) setSettings(s);
-        })
-        .catch(() => {});
-    };
-    load();
-    window.addEventListener(APP_SETTINGS_CHANGED_EVENT, load);
-    return () => {
-      cancelled = true;
-      window.removeEventListener(APP_SETTINGS_CHANGED_EVENT, load);
-    };
-  }, []);
 
   const filteredAgents = useMemo(() => {
     const byTab = agentOptions.filter((o) => (tab === "anthropic" ? !o.codexLike : o.codexLike));
