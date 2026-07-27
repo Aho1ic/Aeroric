@@ -108,6 +108,7 @@ function renderModelManagedAgentConfigPanel() {
     base_url: "https://example.com/v1",
     api_key: "sk-test",
     models: ["gpt-5.6"],
+    enable_chat_completions_proxy: false,
   };
   vi.mocked(invoke).mockImplementation((command, args) => {
     if (command === "get_agent_config_file_path") {
@@ -130,6 +131,16 @@ function renderModelManagedAgentConfigPanel() {
       return Promise.resolve({
         ...appSettings,
         custom_agents: [{ ...baseProfile, models }],
+      });
+    }
+    if (command === "update_custom_agent_chat_completions_proxy") {
+      configContent = "#!/bin/sh\n# AERORIC_CODEX_CHAT_PROXY_VERSION=2\n";
+      const enabled = (args as { enabled: boolean }).enabled;
+      return Promise.resolve({
+        ...appSettings,
+        custom_agents: [
+          { ...baseProfile, enable_chat_completions_proxy: enabled },
+        ],
       });
     }
     return Promise.resolve(undefined);
@@ -530,6 +541,28 @@ describe("Agent config and debug panel UI", () => {
     expect(await findConfigEditor("#!/bin/sh\n# updated\n")).toBeInTheDocument();
   });
 
+  it("enables the Chat Completions bridge for an existing Codex agent", async () => {
+    const user = userEvent.setup();
+    renderModelManagedAgentConfigPanel();
+
+    await findConfigEditor("#!/bin/sh\n");
+    await user.click(screen.getByLabelText("Use Chat Completions compatibility bridge"));
+    await user.click(getEnabledSaveButton());
+
+    await waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith(
+        "update_custom_agent_chat_completions_proxy",
+        {
+          id: "gpt55",
+          enabled: true,
+        },
+      ),
+    );
+    expect(
+      await findConfigEditor("#!/bin/sh\n# AERORIC_CODEX_CHAT_PROXY_VERSION=2\n"),
+    ).toBeInTheDocument();
+  });
+
   it("enables 1M context for an existing Claude agent", async () => {
     const user = userEvent.setup();
     renderClaudeAgentConfigPanel();
@@ -683,6 +716,33 @@ describe("Agent config and debug panel UI", () => {
         model: "gpt-5.6-sol",
         models: ["gpt-5.6-sol"],
         enable_1m_context: false,
+        enable_chat_completions_proxy: false,
+      },
+    });
+  });
+
+  it("creates a Codex agent with the Chat Completions bridge enabled", async () => {
+    const user = userEvent.setup();
+    renderAddAgentPanel();
+
+    await user.type(screen.getByLabelText("Agent Name"), "Liwan");
+    await user.type(screen.getByLabelText("Base URL"), "https://metapi.example");
+    await user.type(screen.getByLabelText("API Key"), "sk-test");
+    await user.type(screen.getByLabelText("Model"), "gpt-5.6-sol");
+    await user.click(screen.getByLabelText("Use Chat Completions compatibility bridge"));
+    await user.click(screen.getByRole("button", { name: /^Add Agent$/i }));
+
+    expect(invoke).toHaveBeenCalledWith("setup_agent_profile", {
+      draft: {
+        id: "liwan",
+        label: "Liwan",
+        kind: "codex",
+        base_url: "https://metapi.example",
+        api_key: "sk-test",
+        model: "gpt-5.6-sol",
+        models: ["gpt-5.6-sol"],
+        enable_1m_context: false,
+        enable_chat_completions_proxy: true,
       },
     });
   });
@@ -722,6 +782,7 @@ describe("Agent config and debug panel UI", () => {
         model: "gpt-5.6",
         models: ["gpt-5.6"],
         enable_1m_context: false,
+        enable_chat_completions_proxy: false,
       },
     });
   });
@@ -756,6 +817,7 @@ describe("Agent config and debug panel UI", () => {
         model: "gpt-5.6",
         models: ["gpt-5.6", "gpt-5.6-luna"],
         enable_1m_context: false,
+        enable_chat_completions_proxy: false,
       },
     });
   });
@@ -782,6 +844,7 @@ describe("Agent config and debug panel UI", () => {
         model: "claude-opus-4-6",
         models: ["claude-opus-4-6"],
         enable_1m_context: true,
+        enable_chat_completions_proxy: false,
       },
     });
   });

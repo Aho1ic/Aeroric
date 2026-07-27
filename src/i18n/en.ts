@@ -142,6 +142,9 @@ export const en: Record<string, string> = {
   "appSettings.searchAgents": "Search agents...",
   "appSettings.enable1mContext": "Enable 1M context",
   "appSettings.enable1mContextHint": "Launch Claude with the selected model's 1M context variant.",
+  "appSettings.enableChatCompletionsProxy": "Use Chat Completions compatibility bridge",
+  "appSettings.enableChatCompletionsProxyHint":
+    "For providers that reliably support only OpenAI /v1/chat/completions. Aeroric converts Codex Responses requests locally.",
   "appSettings.availableModels": "Available Models",
   "appSettings.searchModels": "Search models",
   "appSettings.searchModelsPlaceholder": "Fuzzy search model names",

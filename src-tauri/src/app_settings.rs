@@ -32,6 +32,12 @@ static CACHED_CODEX_VERSION: OnceLock<Mutex<Option<Option<String>>>> = OnceLock:
 static SETTINGS_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 const CLAUDE_BUILTIN_MODEL_ALIASES: &[&str] = &["fable", "opus", "sonnet"];
 const CLAUDE_AGENT_SCRIPT_MARKER: &str = "# AERORIC_CLAUDE_WRAPPER_VERSION=2";
+const CODEX_AGENT_SCRIPT_MARKER: &str = "# AERORIC_CODEX_WRAPPER_VERSION=3";
+const CODEX_CHAT_PROXY_MARKER: &str = "# AERORIC_CODEX_CHAT_PROXY_VERSION=2";
+const CODEX_CHAT_PROXY_SCRIPT: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/resources/codex_chat_proxy.py"
+));
 
 pub fn get_login_shell_env() -> &'static [(String, String)] {
     crate::platform::login_shell_env()
@@ -58,6 +64,8 @@ pub struct CustomAgentProfile {
     pub models: Vec<String>,
     #[serde(default)]
     pub enable_1m_context: bool,
+    #[serde(default)]
+    pub enable_chat_completions_proxy: bool,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub username: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -83,6 +91,8 @@ pub struct AgentSetupDraft {
     pub models: Vec<String>,
     #[serde(default)]
     pub enable_1m_context: bool,
+    #[serde(default)]
+    pub enable_chat_completions_proxy: bool,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
@@ -130,6 +140,8 @@ pub struct AgentConfigBundleAgent {
     pub models: Vec<String>,
     #[serde(default)]
     pub enable_1m_context: bool,
+    #[serde(default)]
+    pub enable_chat_completions_proxy: bool,
 }
 
 fn default_config_present() -> bool {
@@ -349,6 +361,7 @@ fn normalize_custom_agent_profile(profile: CustomAgentProfile) -> Option<CustomA
         api_key: profile.api_key.trim().to_string(),
         models: normalize_model_list(profile.models),
         enable_1m_context: profile.enable_1m_context,
+        enable_chat_completions_proxy: profile.codex_like && profile.enable_chat_completions_proxy,
         username: String::new(),
         password: String::new(),
     })
@@ -1374,7 +1387,7 @@ model_auto_compact_token_limit = 219640
 [model_providers.{provider_key}]
 name = {label}
 base_url = {base_url}
-env_key = "ANTHROPIC_API_KEY"
+env_key = "OPENAI_API_KEY"
 wire_api = "responses"
 request_max_retries = 3
 stream_max_retries = 3
@@ -1482,6 +1495,29 @@ fn load_bundled_codex_catalog(codex_bin: &str) -> Option<String> {
         .then(|| String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
+fn split_codex_config_for_dynamic_base_url(config: &str) -> (&str, &str) {
+    let marker = "base_url = ";
+    let Some(index) = config.find(marker) else {
+        return (config, "");
+    };
+    let after_base_url = config[index..]
+        .find('\n')
+        .map(|offset| index + offset + 1)
+        .unwrap_or(config.len());
+    (&config[..index], &config[after_base_url..])
+}
+
+fn is_aeroric_codex_wrapper(content: &str) -> bool {
+    content.contains("# AERORIC_CODEX_WRAPPER_VERSION=")
+        || is_aeroric_codex_chat_proxy_wrapper(content)
+        || (content.contains("export CODEX_HOME=")
+            && content.contains("model_catalog_json = \"model-catalog.json\""))
+}
+
+fn is_aeroric_codex_chat_proxy_wrapper(content: &str) -> bool {
+    content.contains("# AERORIC_CODEX_CHAT_PROXY_VERSION=")
+}
+
 fn build_codex_agent_script(draft: &AgentSetupDraft) -> String {
     let id = sanitize_custom_agent_id(&draft.id);
     let models = normalize_setup_models(draft);
@@ -1495,35 +1531,119 @@ fn build_codex_agent_script(draft: &AgentSetupDraft) -> String {
     };
     let bundled_catalog = load_bundled_codex_catalog(&codex_bin);
     let model_catalog = build_codex_model_catalog(&models, bundled_catalog.as_deref());
+    let use_proxy = draft.enable_chat_completions_proxy;
+    let proxy_marker = if use_proxy {
+        CODEX_CHAT_PROXY_MARKER
+    } else {
+        CODEX_AGENT_SCRIPT_MARKER
+    };
+    let upstream_environment = if use_proxy {
+        format!(
+            "export AERORIC_UPSTREAM_BASE_URL={}\n",
+            shell_quote(&normalize_base_url(&draft.base_url))
+        )
+    } else {
+        String::new()
+    };
+    let proxy_setup = if use_proxy {
+        let (config_before_base_url, config_after_base_url) =
+            split_codex_config_for_dynamic_base_url(&config);
+        format!(
+            r#"proxy_script="$AGENT_HOME/codex-chat-proxy.py"
+cat <<'AERORIC_CODEX_CHAT_PROXY' > "$proxy_script"
+{proxy_script}
+AERORIC_CODEX_CHAT_PROXY
+chmod 700 "$proxy_script"
+
+port_file="$AGENT_HOME/codex-chat-proxy.port"
+rm -f "$port_file"
+python_bin=""
+if command -v python3 >/dev/null 2>&1; then
+  python_bin="python3"
+elif command -v python >/dev/null 2>&1; then
+  python_bin="python"
+fi
+if [ -z "$python_bin" ]; then
+  echo "This custom Codex agent requires Python 3 to bridge Responses to Chat Completions." >&2
+  exit 1
+fi
+"$python_bin" "$proxy_script" --port-file "$port_file" >/dev/null 2>&1 &
+proxy_pid=$!
+cleanup_proxy() {{
+  kill "$proxy_pid" 2>/dev/null || true
+  rm -f "$port_file"
+}}
+trap cleanup_proxy EXIT
+
+proxy_port=""
+for _ in $(seq 1 100); do
+  if [ -s "$port_file" ]; then
+    proxy_port="$(cat "$port_file")"
+    break
+  fi
+  sleep 0.02
+done
+if [ -z "$proxy_port" ]; then
+  echo "Failed to start the local Chat Completions bridge." >&2
+  exit 1
+fi
+
+{{
+  printf 'model = "%s"\n' "$selected_model"
+  printf 'model_catalog_json = "model-catalog.json"\n'
+  cat <<'AERORIC_CODEX_CONFIG_BEFORE_BASE_URL'
+{config_before_base_url}AERORIC_CODEX_CONFIG_BEFORE_BASE_URL
+  printf 'base_url = "http://127.0.0.1:%s/v1"\n' "$proxy_port"
+  cat <<'AERORIC_CODEX_CONFIG'
+{config_after_base_url}AERORIC_CODEX_CONFIG
+}} > "$CODEX_HOME/config.toml"
+"#,
+            proxy_script = CODEX_CHAT_PROXY_SCRIPT,
+            config_before_base_url = config_before_base_url,
+            config_after_base_url = config_after_base_url,
+        )
+    } else {
+        format!(
+            r#"{{
+  printf 'model = "%s"\n' "$selected_model"
+  printf 'model_catalog_json = "model-catalog.json"\n'
+  cat <<'AERORIC_CODEX_CONFIG'
+{config}AERORIC_CODEX_CONFIG
+}} > "$CODEX_HOME/config.toml"
+"#,
+            config = config,
+        )
+    };
     format!(
         r#"#!/bin/bash
 set -euo pipefail
+{proxy_marker}
 
 AGENT_HOME="${{AERORIC_AGENT_HOME:-$HOME/.aeroric/agent-homes/{id}}}"
 mkdir -p "$AGENT_HOME"
 export CODEX_HOME="$AGENT_HOME"
+export OPENAI_API_KEY={api_key}
 export ANTHROPIC_API_KEY={api_key}
-
+{upstream_environment}
 {picker}
 
 cat <<'AERORIC_CODEX_MODELS' > "$CODEX_HOME/model-catalog.json"
 {model_catalog}
 AERORIC_CODEX_MODELS
 
-{{
-  printf 'model = "%s"\n' "$selected_model"
-  printf 'model_catalog_json = "model-catalog.json"\n'
-  cat <<'AERORIC_CODEX_CONFIG'
-{config}AERORIC_CODEX_CONFIG
-}} > "$CODEX_HOME/config.toml"
+{proxy_setup}
 
-exec {codex_bin} "$@"
+{codex_bin} "$@" || codex_status=$?
+codex_status="${{codex_status:-0}}"
+exit "$codex_status"
 "#,
         id = id,
+        proxy_marker = proxy_marker,
         api_key = shell_quote(&draft.api_key),
+        upstream_environment = upstream_environment,
         picker = picker,
         model_catalog = model_catalog,
-        config = config,
+        proxy_setup = proxy_setup,
         codex_bin = shell_quote(&codex_bin),
     )
 }
@@ -1623,9 +1743,7 @@ fn write_agent_script_at_path(path: &Path, content: &str) -> Result<(), String> 
     atomic_write(path, content)?;
     #[cfg(not(windows))]
     {
-        let mut permissions = fs::metadata(path)
-            .map_err(|e| e.to_string())?
-            .permissions();
+        let mut permissions = fs::metadata(path).map_err(|e| e.to_string())?.permissions();
         permissions.set_mode(0o700);
         fs::set_permissions(path, permissions).map_err(|e| e.to_string())?;
     }
@@ -1920,7 +2038,8 @@ fn recover_custom_agent_credentials(profile: &mut CustomAgentProfile) {
     };
     if profile.base_url.is_empty() {
         let recovered = if profile.codex_like {
-            parse_generated_toml_string(&content, "base_url")
+            parse_generated_shell_value(&content, "AERORIC_UPSTREAM_BASE_URL")
+                .or_else(|| parse_generated_toml_string(&content, "base_url"))
         } else {
             parse_generated_shell_value(&content, "ANTHROPIC_BASE_URL")
         };
@@ -1930,7 +2049,7 @@ fn recover_custom_agent_credentials(profile: &mut CustomAgentProfile) {
     }
     if profile.api_key.is_empty() {
         let keys: &[&str] = if profile.codex_like {
-            &["ANTHROPIC_API_KEY"]
+            &["OPENAI_API_KEY", "ANTHROPIC_API_KEY"]
         } else {
             &["ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY"]
         };
@@ -1977,10 +2096,23 @@ fn refresh_stale_codex_agent_scripts(settings: &mut AppSettings) {
             continue;
         }
         let script_path = normalize_config_path(profile.path.clone());
-        let is_current = fs::read_to_string(&script_path)
-            .map(|content| content.contains("model_catalog_json = \"model-catalog.json\""))
-            .unwrap_or(false);
-        if is_current {
+        let script_content = fs::read_to_string(&script_path).unwrap_or_default();
+        // The saved profile is the only source of truth for the bridge. Earlier
+        // builds wrote the bridge into every Codex wrapper unconditionally, so a
+        // bridge marker in the script does not imply the user opted in — agents
+        // stay on the direct Responses endpoint until the setting is turned on.
+        let expected_marker = if profile.enable_chat_completions_proxy {
+            CODEX_CHAT_PROXY_MARKER
+        } else {
+            CODEX_AGENT_SCRIPT_MARKER
+        };
+        if script_content.contains(expected_marker) {
+            continue;
+        }
+        // Do not replace arbitrary user-authored shell scripts during startup.
+        // Empty/missing scripts can be regenerated, while legacy Aeroric Codex
+        // wrappers are recognized by their CODEX_HOME/model-catalog signature.
+        if !script_content.is_empty() && !is_aeroric_codex_wrapper(&script_content) {
             continue;
         }
         let draft = AgentSetupDraft {
@@ -1992,6 +2124,7 @@ fn refresh_stale_codex_agent_scripts(settings: &mut AppSettings) {
             model: profile.models[0].clone(),
             models: profile.models.clone(),
             enable_1m_context: profile.enable_1m_context,
+            enable_chat_completions_proxy: profile.enable_chat_completions_proxy,
         };
         if validate_agent_setup_draft(&draft).is_err() {
             continue;
@@ -2033,6 +2166,7 @@ fn refresh_stale_claude_agent_scripts(settings: &mut AppSettings) {
             model: profile.models[0].clone(),
             models: profile.models.clone(),
             enable_1m_context: profile.enable_1m_context,
+            enable_chat_completions_proxy: profile.enable_chat_completions_proxy,
         };
         if validate_agent_setup_draft(&draft).is_err() {
             continue;
@@ -2360,6 +2494,7 @@ fn collect_agent_config_bundle_agent(
             api_key: credentials.api_key,
             models: credentials.models,
             enable_1m_context: credentials.enable_1m_context,
+            enable_chat_completions_proxy: false,
         });
     }
 
@@ -2387,6 +2522,7 @@ fn collect_agent_config_bundle_agent(
         api_key: profile.api_key.clone(),
         models: profile.models.clone(),
         enable_1m_context: profile.enable_1m_context,
+        enable_chat_completions_proxy: profile.enable_chat_completions_proxy,
     })
 }
 
@@ -2433,6 +2569,7 @@ fn custom_agent_setup_draft(agent: &AgentConfigBundleAgent) -> Option<AgentSetup
         model: agent.models[0].clone(),
         models: agent.models.clone(),
         enable_1m_context: agent.enable_1m_context,
+        enable_chat_completions_proxy: agent.enable_chat_completions_proxy,
     })
 }
 
@@ -2531,6 +2668,7 @@ fn import_agent_config_entry(
                 api_key: agent.api_key,
                 models: agent.models,
                 enable_1m_context: agent.enable_1m_context,
+                enable_chat_completions_proxy: agent.enable_chat_completions_proxy,
                 username: String::new(),
                 password: String::new(),
             })
@@ -2709,7 +2847,9 @@ fn parse_cc_switch_providers(sql: &str) -> Result<Vec<AgentConfigBundleAgent>, S
     let mut agents = Vec::new();
     for line in sql.lines() {
         let trimmed = line.trim();
-        if !trimmed.starts_with("INSERT INTO \"providers\"") && !trimmed.starts_with("INSERT INTO providers") {
+        if !trimmed.starts_with("INSERT INTO \"providers\"")
+            && !trimmed.starts_with("INSERT INTO providers")
+        {
             continue;
         }
         // Extract column names from INSERT INTO "providers" ("col1", "col2", ...) VALUES (...)
@@ -2736,7 +2876,10 @@ fn parse_cc_switch_providers(sql: &str) -> Result<Vec<AgentConfigBundleAgent>, S
             },
         };
         let values_str = trimmed[values_marker..].trim();
-        let values_str = values_str.trim_start_matches('(').trim_end_matches(';').trim_end_matches(')');
+        let values_str = values_str
+            .trim_start_matches('(')
+            .trim_end_matches(';')
+            .trim_end_matches(')');
         let values = split_sql_values(values_str);
 
         if values.len() != columns.len() {
@@ -2786,12 +2929,21 @@ fn parse_cc_switch_providers(sql: &str) -> Result<Vec<AgentConfigBundleAgent>, S
                 .and_then(|v| v.as_str())
                 .unwrap_or("ANTHROPIC_AUTH_TOKEN");
             let api_key = env
-                .and_then(|e| e.get(api_key_field).or_else(|| e.get("ANTHROPIC_AUTH_TOKEN")).or_else(|| e.get("ANTHROPIC_API_KEY")))
+                .and_then(|e| {
+                    e.get(api_key_field)
+                        .or_else(|| e.get("ANTHROPIC_AUTH_TOKEN"))
+                        .or_else(|| e.get("ANTHROPIC_API_KEY"))
+                })
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
                 .to_string();
             let mut model_list = Vec::new();
-            for key in &["ANTHROPIC_MODEL", "ANTHROPIC_DEFAULT_HAIKU_MODEL", "ANTHROPIC_DEFAULT_SONNET_MODEL", "ANTHROPIC_DEFAULT_OPUS_MODEL"] {
+            for key in &[
+                "ANTHROPIC_MODEL",
+                "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+                "ANTHROPIC_DEFAULT_SONNET_MODEL",
+                "ANTHROPIC_DEFAULT_OPUS_MODEL",
+            ] {
                 if let Some(m) = env.and_then(|e| e.get(*key)).and_then(|v| v.as_str()) {
                     let m = m.to_string();
                     if !m.is_empty() && !model_list.contains(&m) {
@@ -2811,14 +2963,14 @@ fn parse_cc_switch_providers(sql: &str) -> Result<Vec<AgentConfigBundleAgent>, S
             let base_url = config
                 .get("env")
                 .and_then(|e| e.as_object())
-                .and_then(|e| e.get("OPENAI_BASE_URL").or_else(|| e.get("OPENAI_API_BASE")))
+                .and_then(|e| {
+                    e.get("OPENAI_BASE_URL")
+                        .or_else(|| e.get("OPENAI_API_BASE"))
+                })
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
                 .to_string();
-            let config_toml = config
-                .get("config")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
+            let config_toml = config.get("config").and_then(|v| v.as_str()).unwrap_or("");
             let mut model_list = Vec::new();
             for toml_line in config_toml.lines() {
                 let toml_line = toml_line.trim();
@@ -2860,6 +3012,7 @@ fn parse_cc_switch_providers(sql: &str) -> Result<Vec<AgentConfigBundleAgent>, S
             api_key,
             models,
             enable_1m_context: false,
+            enable_chat_completions_proxy: false,
         });
     }
     Ok(agents)
@@ -2946,8 +3099,56 @@ pub async fn save_custom_agent_profile(profile: CustomAgentProfile) -> Result<Ap
     let normalized = tokio::task::spawn_blocking(move || {
         let _guard = settings_lock().lock();
         let mut settings = load_settings_unlocked();
-        let profile = normalize_custom_agent_profile(profile)
+        let mut profile = normalize_custom_agent_profile(profile)
             .ok_or_else(|| "Invalid custom agent profile".to_string())?;
+
+        let existing = settings
+            .custom_agents
+            .iter()
+            .find(|existing| existing.id == profile.id)
+            .cloned();
+        let generated_wrapper = existing.as_ref().is_some_and(|existing| {
+            fs::read_to_string(normalize_config_path(existing.path.clone()))
+                .map(|content| is_aeroric_codex_wrapper(&content))
+                .unwrap_or(false)
+        });
+        let generated_settings_changed = existing.as_ref().is_some_and(|existing| {
+            generated_wrapper
+                && profile.codex_like
+                && profile.config_lang == "shellscript"
+                && !profile.base_url.trim().is_empty()
+                && !profile.api_key.trim().is_empty()
+                && !profile.models.is_empty()
+                && (existing.base_url != profile.base_url
+                    || existing.api_key != profile.api_key
+                    || existing.models != profile.models
+                    || existing.enable_chat_completions_proxy
+                        != profile.enable_chat_completions_proxy)
+        });
+        if generated_settings_changed {
+            let draft = AgentSetupDraft {
+                id: profile.id.clone(),
+                label: profile.label.clone(),
+                kind: AgentSetupKind::Codex,
+                base_url: profile.base_url.clone(),
+                api_key: profile.api_key.clone(),
+                model: profile.models[0].clone(),
+                models: profile.models.clone(),
+                enable_1m_context: profile.enable_1m_context,
+                enable_chat_completions_proxy: profile.enable_chat_completions_proxy,
+            };
+            validate_agent_setup_draft(&draft)?;
+            let script = build_codex_agent_script(&draft);
+            let script_path = normalize_config_path(profile.path.clone());
+            if script_path.trim().is_empty() {
+                let path = write_agent_script(&profile.id, &script)?;
+                profile.path = path.to_string_lossy().into_owned();
+            } else {
+                write_agent_script_at_path(Path::new(&script_path), &script)?;
+                profile.path = script_path;
+            }
+        }
+
         settings
             .custom_agents
             .retain(|existing| existing.id != profile.id);
@@ -2984,6 +3185,7 @@ pub async fn setup_agent_profile(draft: AgentSetupDraft) -> Result<AppSettings, 
             api_key: draft.api_key.trim().to_string(),
             models: normalize_setup_models(&draft),
             enable_1m_context: draft.enable_1m_context,
+            enable_chat_completions_proxy: draft.enable_chat_completions_proxy,
             username: String::new(),
             password: String::new(),
         };
@@ -3137,6 +3339,7 @@ pub async fn update_custom_agent_models(
             model: models[0].clone(),
             models: models.clone(),
             enable_1m_context: profile.enable_1m_context,
+            enable_chat_completions_proxy: profile.enable_chat_completions_proxy,
         };
         validate_agent_setup_draft(&draft)?;
         let script = build_agent_script(&draft);
@@ -3149,6 +3352,72 @@ pub async fn update_custom_agent_models(
             profile.path = script_path;
         }
         profile.models = models;
+
+        let dir = aeroric_dir()?;
+        fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        let path = settings_path()?;
+        let normalized = normalize_settings(settings);
+        let raw = serde_json::to_string_pretty(&normalized).map_err(|e| e.to_string())?;
+        atomic_write_private(&path, &raw)?;
+        Ok::<AppSettings, String>(normalized)
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    clear_cached_versions();
+    Ok(normalized)
+}
+
+#[tauri::command]
+pub async fn update_custom_agent_chat_completions_proxy(
+    id: String,
+    enabled: bool,
+) -> Result<AppSettings, String> {
+    let normalized = tokio::task::spawn_blocking(move || {
+        let _guard = settings_lock().lock();
+        let mut settings = load_settings_unlocked();
+        let normalized_id = sanitize_custom_agent_id(&id);
+
+        let Some(profile) = settings
+            .custom_agents
+            .iter_mut()
+            .find(|profile| profile.id == normalized_id)
+        else {
+            return Err("Custom agent not found".to_string());
+        };
+        if !profile.codex_like {
+            return Err("Chat Completions bridge is only available for Codex agents".to_string());
+        }
+        if profile.models.is_empty()
+            || profile.base_url.trim().is_empty()
+            || profile.api_key.trim().is_empty()
+        {
+            return Err("This agent does not have saved Codex setup settings".to_string());
+        }
+        if !matches!(profile.config_lang.as_str(), "shellscript") {
+            return Err("Chat Completions bridge requires a shell-script Codex agent".to_string());
+        }
+        let draft = AgentSetupDraft {
+            id: profile.id.clone(),
+            label: profile.label.clone(),
+            kind: AgentSetupKind::Codex,
+            base_url: profile.base_url.clone(),
+            api_key: profile.api_key.clone(),
+            model: profile.models[0].clone(),
+            models: profile.models.clone(),
+            enable_1m_context: profile.enable_1m_context,
+            enable_chat_completions_proxy: enabled,
+        };
+        validate_agent_setup_draft(&draft)?;
+        let script = build_codex_agent_script(&draft);
+        let script_path = normalize_config_path(profile.path.clone());
+        if script_path.trim().is_empty() {
+            let path = write_agent_script(&profile.id, &script)?;
+            profile.path = path.to_string_lossy().into_owned();
+        } else {
+            write_agent_script_at_path(Path::new(&script_path), &script)?;
+            profile.path = script_path;
+        }
+        profile.enable_chat_completions_proxy = enabled;
 
         let dir = aeroric_dir()?;
         fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
@@ -3200,6 +3469,7 @@ pub async fn update_custom_agent_context(
             model: profile.models[0].clone(),
             models: profile.models.clone(),
             enable_1m_context,
+            enable_chat_completions_proxy: profile.enable_chat_completions_proxy,
         };
         validate_agent_setup_draft(&draft)?;
         let script = build_claude_code_agent_script(&draft);
@@ -4015,6 +4285,7 @@ mod tests {
             api_key: "sk-test".to_string(),
             models: vec!["claude-sonnet".to_string()],
             enable_1m_context: true,
+            enable_chat_completions_proxy: false,
             username: String::new(),
             password: String::new(),
         });
@@ -4149,6 +4420,7 @@ api_key = "sk-codex"
                 api_key: "sk-imported".to_string(),
                 models: vec!["claude-opus".to_string()],
                 enable_1m_context: true,
+                enable_chat_completions_proxy: false,
             },
         )
         .unwrap();
@@ -4409,6 +4681,7 @@ api_key = "sk-codex"
                     api_key: String::new(),
                     models: Vec::new(),
                     enable_1m_context: false,
+                    enable_chat_completions_proxy: false,
                     username: String::new(),
                     password: String::new(),
                 },
@@ -4422,6 +4695,7 @@ api_key = "sk-codex"
                     api_key: String::new(),
                     models: Vec::new(),
                     enable_1m_context: false,
+                    enable_chat_completions_proxy: false,
                     username: String::new(),
                     password: String::new(),
                 },
@@ -4440,7 +4714,7 @@ api_key = "sk-codex"
     }
 
     #[test]
-    fn builds_codex_agent_script_with_isolated_config() {
+    fn builds_codex_agent_script_without_chat_bridge_by_default() {
         let draft = AgentSetupDraft {
             id: "gpt55".to_string(),
             label: "GPT55".to_string(),
@@ -4450,21 +4724,45 @@ api_key = "sk-codex"
             model: "gpt-5.6".to_string(),
             models: vec!["gpt-5.6".to_string(), "gpt-5.6-sol".to_string()],
             enable_1m_context: false,
+            enable_chat_completions_proxy: false,
         };
 
         let script = build_agent_script(&draft);
 
         assert!(script.contains("CODEX_HOME"));
+        assert!(script.contains(CODEX_AGENT_SCRIPT_MARKER));
         assert!(script.contains("base_url = \"https://example.com/v1\""));
+        assert!(!script.contains(CODEX_CHAT_PROXY_MARKER));
+        assert!(!script.contains("codex-chat-proxy.py"));
         assert!(script.contains("selected_model='gpt-5.6'"));
         assert!(script.contains("printf 'model = \"%s\"\\n' \"$selected_model\""));
         assert!(script.contains("model_catalog_json = \"model-catalog.json\""));
-        assert!(script.contains("\"slug\": \"gpt-5.6\""));
         assert!(script.contains("\"slug\": \"gpt-5.6-sol\""));
-        assert!(script.contains("env_key = \"ANTHROPIC_API_KEY\""));
-        assert!(script.contains("stream_max_retries = 3"));
-        assert!(script.contains("supports_websockets = false"));
-        assert!(script.contains("export ANTHROPIC_API_KEY='sk-test'"));
+        assert!(script.contains("env_key = \"OPENAI_API_KEY\""));
+        assert!(script.contains("export OPENAI_API_KEY='sk-test'"));
+    }
+
+    #[test]
+    fn builds_codex_agent_script_with_chat_completions_bridge() {
+        let draft = AgentSetupDraft {
+            id: "gpt55".to_string(),
+            label: "GPT55".to_string(),
+            kind: AgentSetupKind::Codex,
+            base_url: "https://example.com/v1/".to_string(),
+            api_key: "sk-test".to_string(),
+            model: "gpt-5.6".to_string(),
+            models: vec!["gpt-5.6".to_string(), "gpt-5.6-sol".to_string()],
+            enable_1m_context: false,
+            enable_chat_completions_proxy: true,
+        };
+
+        let script = build_agent_script(&draft);
+
+        assert!(script.contains("export AERORIC_UPSTREAM_BASE_URL='https://example.com/v1'"));
+        assert!(script.contains("printf 'base_url = \"http://127.0.0.1:%s/v1\"\\n'"));
+        assert!(!script.contains("base_url = \"https://example.com/v1\""));
+        assert!(script.contains(CODEX_CHAT_PROXY_MARKER));
+        assert!(script.contains("codex-chat-proxy.py"));
     }
 
     #[test]
@@ -4528,6 +4826,7 @@ api_key = "sk-codex"
             model: "claude-opus-4-8".to_string(),
             models: vec!["claude-opus-4-8".to_string(), "claude-opus-4-6".to_string()],
             enable_1m_context: true,
+            enable_chat_completions_proxy: false,
         };
 
         let script = build_agent_script(&draft);
@@ -4552,6 +4851,7 @@ api_key = "sk-codex"
             model: "claude-opus-4-6".to_string(),
             models: vec!["claude-opus-4-6".to_string()],
             enable_1m_context: false,
+            enable_chat_completions_proxy: false,
         };
 
         let script = build_agent_script(&draft);
@@ -4571,6 +4871,7 @@ api_key = "sk-codex"
             model: "gpt-5.6".to_string(),
             models: vec!["gpt-5.6".to_string(), "gpt-5.6-sol".to_string()],
             enable_1m_context: false,
+            enable_chat_completions_proxy: false,
         };
 
         let script = build_agent_script(&draft);
@@ -4598,6 +4899,7 @@ api_key = "sk-codex"
                 api_key: String::new(),
                 models: Vec::new(),
                 enable_1m_context: false,
+                enable_chat_completions_proxy: false,
                 username: "alice".to_string(),
                 password: "secret".to_string(),
             }],
@@ -4642,6 +4944,7 @@ api_key = "sk-codex"
                 api_key: String::new(),
                 models: Vec::new(),
                 enable_1m_context: false,
+                enable_chat_completions_proxy: false,
                 username: "alice".to_string(),
                 password: "secret".to_string(),
             }],
@@ -5012,6 +5315,7 @@ api_key = "sk-codex"
             api_key: String::new(),
             models: Vec::new(),
             enable_1m_context: false,
+            enable_chat_completions_proxy: false,
             username: String::new(),
             password: String::new(),
         };
@@ -5050,6 +5354,7 @@ fi
             api_key: String::new(),
             models: Vec::new(),
             enable_1m_context: false,
+            enable_chat_completions_proxy: false,
             username: String::new(),
             password: String::new(),
         };
@@ -5057,6 +5362,171 @@ fi
         recover_custom_agent_models(&mut profile);
 
         assert_eq!(profile.models, vec!["GLM-5.2"]);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn recovers_chat_proxy_upstream_credentials_from_generated_script() {
+        let dir = std::env::temp_dir().join(format!(
+            "aeroric-codex-proxy-credentials-{}",
+            uuid::Uuid::new_v4()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let script_path = dir.join("proxy.sh");
+        fs::write(
+            &script_path,
+            "#!/bin/bash\nexport OPENAI_API_KEY='sk-test'\nexport AERORIC_UPSTREAM_BASE_URL='https://example.com/v1'\n",
+        )
+        .unwrap();
+        let mut profile = CustomAgentProfile {
+            id: "proxy".to_string(),
+            label: "Proxy".to_string(),
+            path: script_path.to_string_lossy().into_owned(),
+            codex_like: true,
+            config_lang: "shellscript".to_string(),
+            base_url: String::new(),
+            api_key: String::new(),
+            models: vec!["gpt-5.6".to_string()],
+            enable_1m_context: false,
+            enable_chat_completions_proxy: true,
+            username: String::new(),
+            password: String::new(),
+        };
+
+        recover_custom_agent_credentials(&mut profile);
+
+        assert_eq!(profile.base_url, "https://example.com/v1");
+        assert_eq!(profile.api_key, "sk-test");
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn recognizes_legacy_aeroric_codex_wrappers() {
+        let script = r#"#!/bin/bash
+export CODEX_HOME="$AGENT_HOME"
+printf 'model_catalog_json = "model-catalog.json"\n'
+"#;
+
+        assert!(is_aeroric_codex_wrapper(script));
+        assert!(!is_aeroric_codex_chat_proxy_wrapper(script));
+    }
+
+    #[test]
+    fn refreshes_stale_codex_agent_scripts_to_chat_bridge() {
+        let dir =
+            std::env::temp_dir().join(format!("aeroric-codex-refresh-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&dir).unwrap();
+        let script_path = dir.join("liwan.sh");
+        fs::write(
+            &script_path,
+            "#!/bin/bash\n# AERORIC_CODEX_CHAT_PROXY_VERSION=1\n",
+        )
+        .unwrap();
+        let mut settings = AppSettings {
+            custom_agents: vec![CustomAgentProfile {
+                id: "liwan".to_string(),
+                label: "liwan".to_string(),
+                path: script_path.to_string_lossy().into_owned(),
+                codex_like: true,
+                config_lang: "shellscript".to_string(),
+                base_url: "https://metapi.example/v1".to_string(),
+                api_key: "sk-test".to_string(),
+                models: vec!["gpt-5.6-sol".to_string()],
+                enable_1m_context: false,
+                enable_chat_completions_proxy: true,
+                username: String::new(),
+                password: String::new(),
+            }],
+            ..AppSettings::default()
+        };
+
+        refresh_stale_codex_agent_scripts(&mut settings);
+
+        assert!(settings.custom_agents[0].enable_chat_completions_proxy);
+        let script = fs::read_to_string(&script_path).unwrap();
+        assert!(script.contains(CODEX_CHAT_PROXY_MARKER));
+        assert!(script.contains("export AERORIC_UPSTREAM_BASE_URL='https://metapi.example/v1'"));
+        assert!(script.contains("codex-chat-proxy.py"));
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn resets_codex_chat_bridge_wrappers_when_setting_is_off() {
+        let dir =
+            std::env::temp_dir().join(format!("aeroric-codex-unbridge-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&dir).unwrap();
+        let script_path = dir.join("muyuan.sh");
+        let bridged = build_codex_agent_script(&AgentSetupDraft {
+            id: "muyuan".to_string(),
+            label: "muyuan".to_string(),
+            kind: AgentSetupKind::Codex,
+            base_url: "https://muyuan.example/v1".to_string(),
+            api_key: "sk-test".to_string(),
+            model: "gpt-5.6-sol".to_string(),
+            models: vec!["gpt-5.6-sol".to_string()],
+            enable_1m_context: false,
+            enable_chat_completions_proxy: true,
+        });
+        fs::write(&script_path, &bridged).unwrap();
+        let mut settings = AppSettings {
+            custom_agents: vec![CustomAgentProfile {
+                id: "muyuan".to_string(),
+                label: "muyuan".to_string(),
+                path: script_path.to_string_lossy().into_owned(),
+                codex_like: true,
+                config_lang: "shellscript".to_string(),
+                base_url: "https://muyuan.example/v1".to_string(),
+                api_key: "sk-test".to_string(),
+                models: vec!["gpt-5.6-sol".to_string()],
+                enable_1m_context: false,
+                enable_chat_completions_proxy: false,
+                username: String::new(),
+                password: String::new(),
+            }],
+            ..AppSettings::default()
+        };
+
+        refresh_stale_codex_agent_scripts(&mut settings);
+
+        assert!(!settings.custom_agents[0].enable_chat_completions_proxy);
+        let script = fs::read_to_string(&script_path).unwrap();
+        assert!(script.contains(CODEX_AGENT_SCRIPT_MARKER));
+        assert!(!script.contains(CODEX_CHAT_PROXY_MARKER));
+        assert!(!script.contains("codex-chat-proxy.py"));
+        assert!(script.contains("base_url = \"https://muyuan.example/v1\""));
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn preserves_user_authored_codex_shell_scripts_during_refresh() {
+        let dir =
+            std::env::temp_dir().join(format!("aeroric-codex-preserve-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&dir).unwrap();
+        let script_path = dir.join("custom.sh");
+        let original = "#!/bin/bash\necho custom-codex-wrapper\n";
+        fs::write(&script_path, original).unwrap();
+        let mut settings = AppSettings {
+            custom_agents: vec![CustomAgentProfile {
+                id: "custom".to_string(),
+                label: "Custom".to_string(),
+                path: script_path.to_string_lossy().into_owned(),
+                codex_like: true,
+                config_lang: "shellscript".to_string(),
+                base_url: "https://example.com/v1".to_string(),
+                api_key: "sk-test".to_string(),
+                models: vec!["gpt-5.6".to_string()],
+                enable_1m_context: false,
+                enable_chat_completions_proxy: false,
+                username: String::new(),
+                password: String::new(),
+            }],
+            ..AppSettings::default()
+        };
+
+        refresh_stale_codex_agent_scripts(&mut settings);
+
+        assert_eq!(fs::read_to_string(&script_path).unwrap(), original);
+        assert!(!settings.custom_agents[0].enable_chat_completions_proxy);
         let _ = fs::remove_dir_all(dir);
     }
 
@@ -5082,6 +5552,7 @@ fi
                 api_key: "sk-test".to_string(),
                 models: vec!["claude-opus-4-6".to_string()],
                 enable_1m_context: true,
+                enable_chat_completions_proxy: false,
                 username: String::new(),
                 password: String::new(),
             }],

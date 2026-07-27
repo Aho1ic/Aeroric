@@ -94,6 +94,7 @@ export function AddAgentPanel({ onSaved }: { onSaved: (agentId: string) => void 
   const [detectedBalance, setDetectedBalance] = useState<AgentBalance | null>(null);
   const [selectedModels, setSelectedModels] = useState<string[]>([]);
   const [enable1mContext, setEnable1mContext] = useState(false);
+  const [enableChatCompletionsProxy, setEnableChatCompletionsProxy] = useState(false);
   const [detectingModels, setDetectingModels] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -166,6 +167,7 @@ export function AddAgentPanel({ onSaved }: { onSaved: (agentId: string) => void 
       model: setupModels[0] ?? model.trim(),
       models: setupModels,
       enable_1m_context: kind === "claude_code" && enable1mContext,
+      enable_chat_completions_proxy: kind === "codex" && enableChatCompletionsProxy,
     };
     setSaving(true);
     setSaved(false);
@@ -322,6 +324,7 @@ export function AddAgentPanel({ onSaved }: { onSaved: (agentId: string) => void 
                   setDetectedBalance(null);
                   setSelectedModels([]);
                   if (option.kind !== "claude_code") setEnable1mContext(false);
+                  if (option.kind !== "codex") setEnableChatCompletionsProxy(false);
                 }}
               >
                 <div style={{ fontSize: 12.5, fontWeight: 700, marginBottom: 4 }}>
@@ -335,6 +338,35 @@ export function AddAgentPanel({ onSaved }: { onSaved: (agentId: string) => void 
           })}
         </div>
       </div>
+
+      {kind === "codex" && (
+        <label
+          style={{
+            display: "flex",
+            alignItems: "flex-start",
+            gap: 8,
+            color: "var(--text-secondary)",
+            cursor: "pointer",
+          }}
+        >
+          <input
+            type="checkbox"
+            aria-label={t("appSettings.enableChatCompletionsProxy")}
+            checked={enableChatCompletionsProxy}
+            onChange={(event) => setEnableChatCompletionsProxy(event.target.checked)}
+          />
+          <span>
+            <span style={{ display: "block", fontSize: 12.5, fontWeight: 650 }}>
+              {t("appSettings.enableChatCompletionsProxy")}
+            </span>
+            <span
+              style={{ display: "block", marginTop: 3, fontSize: 11, color: "var(--text-hint)" }}
+            >
+              {t("appSettings.enableChatCompletionsProxyHint")}
+            </span>
+          </span>
+        </label>
+      )}
 
       {kind === "claude_code" && (
         <label

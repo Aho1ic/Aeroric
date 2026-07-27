@@ -12,6 +12,7 @@ export interface CustomAgentProfile {
   api_key?: string;
   models?: string[];
   enable_1m_context?: boolean;
+  enable_chat_completions_proxy?: boolean;
   username?: string;
   password?: string;
 }

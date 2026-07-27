@@ -138,6 +138,9 @@ export const zh: Record<string, string> = {
   "appSettings.searchAgents": "搜索 Agent...",
   "appSettings.enable1mContext": "开启 1M 上下文",
   "appSettings.enable1mContextHint": "启动 Claude 时使用所选模型的 1M 上下文版本。",
+  "appSettings.enableChatCompletionsProxy": "使用 Chat Completions 兼容桥接",
+  "appSettings.enableChatCompletionsProxyHint":
+    "适用于只稳定支持 OpenAI /v1/chat/completions 的渠道。Aeroric 会在本机将 Codex Responses 请求转换为 Chat Completions。",
   "appSettings.availableModels": "可用模型",
   "appSettings.searchModels": "搜索模型",
   "appSettings.searchModelsPlaceholder": "模糊搜索模型名称",

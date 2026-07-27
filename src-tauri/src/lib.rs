@@ -403,6 +403,7 @@ pub fn run() {
             app_settings::list_agent_models,
             app_settings::update_custom_agent_models,
             app_settings::update_custom_agent_context,
+            app_settings::update_custom_agent_chat_completions_proxy,
             app_settings::delete_custom_agent_profile,
             app_settings::rename_custom_agent_profile,
             app_settings::save_send_shortcut,

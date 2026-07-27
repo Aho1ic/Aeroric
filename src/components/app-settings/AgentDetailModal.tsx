@@ -106,6 +106,9 @@ export function AgentDetailModal({
   const [detectingModels, setDetectingModels] = useState(false);
   const [enable1mContext, setEnable1mContext] = useState(false);
   const [originalEnable1mContext, setOriginalEnable1mContext] = useState(false);
+  const [enableChatCompletionsProxy, setEnableChatCompletionsProxy] = useState(false);
+  const [originalEnableChatCompletionsProxy, setOriginalEnableChatCompletionsProxy] =
+    useState(false);
   const [reasoningEffort, setReasoningEffort] = useState<ModelReasoningEffort | null>(null);
   const [originalReasoningEffort, setOriginalReasoningEffort] =
     useState<ModelReasoningEffort | null>(null);
@@ -176,6 +179,8 @@ export function AgentDetailModal({
       setOriginalSelectedModels([]);
       setEnable1mContext(false);
       setOriginalEnable1mContext(false);
+      setEnableChatCompletionsProxy(false);
+      setOriginalEnableChatCompletionsProxy(false);
       setBaseUrl("");
       setOriginalBaseUrl("");
       setApiKey("");
@@ -198,6 +203,9 @@ export function AgentDetailModal({
         const contextEnabled = Boolean(profile?.enable_1m_context);
         setEnable1mContext(contextEnabled);
         setOriginalEnable1mContext(contextEnabled);
+        const proxyEnabled = Boolean(profile?.enable_chat_completions_proxy);
+        setEnableChatCompletionsProxy(proxyEnabled);
+        setOriginalEnableChatCompletionsProxy(proxyEnabled);
         setBaseUrl(profile?.base_url ?? "");
         setOriginalBaseUrl(profile?.base_url ?? "");
         setApiKey(profile?.api_key ?? "");
@@ -296,6 +304,9 @@ export function AgentDetailModal({
           const contextEnabled = Boolean(profile?.enable_1m_context);
           setEnable1mContext(contextEnabled);
           setOriginalEnable1mContext(contextEnabled);
+          const proxyEnabled = Boolean(profile?.enable_chat_completions_proxy);
+          setEnableChatCompletionsProxy(proxyEnabled);
+          setOriginalEnableChatCompletionsProxy(proxyEnabled);
         }
       }
       setTransferMessage(t("appSettings.agentConfigImported"));
@@ -364,6 +375,9 @@ export function AgentDetailModal({
   const canSave1mContext =
     Boolean(customProfile && !customProfile.codex_like) &&
     enable1mContext !== originalEnable1mContext;
+  const canSaveChatCompletionsProxy =
+    Boolean(customProfile?.codex_like) &&
+    enableChatCompletionsProxy !== originalEnableChatCompletionsProxy;
   const canDetectModels = Boolean(
     customProfile?.base_url?.trim() && customProfile?.api_key?.trim(),
   );
@@ -373,6 +387,7 @@ export function AgentDetailModal({
     isNameDirty ||
     canSaveModels ||
     canSave1mContext ||
+    canSaveChatCompletionsProxy ||
     canSaveReasoningEffort ||
     pathDirty ||
     isCredsDirty;
@@ -390,12 +405,24 @@ export function AgentDetailModal({
       if (isCredsDirty) {
         if (deletable && customProfile) {
           await invoke("save_custom_agent_profile", {
-            profile: { ...customProfile, base_url: baseUrl.trim(), api_key: apiKey.trim() },
+            profile: {
+              ...customProfile,
+              base_url: baseUrl.trim(),
+              api_key: apiKey.trim(),
+              enable_chat_completions_proxy: enableChatCompletionsProxy,
+            },
           });
           setOriginalBaseUrl(baseUrl.trim());
           setOriginalApiKey(apiKey.trim());
           setCustomProfile((prev) =>
-            prev ? { ...prev, base_url: baseUrl.trim(), api_key: apiKey.trim() } : prev,
+            prev
+              ? {
+                  ...prev,
+                  base_url: baseUrl.trim(),
+                  api_key: apiKey.trim(),
+                  enable_chat_completions_proxy: enableChatCompletionsProxy,
+                }
+              : prev,
           );
         } else {
           const loadedSettings = await invoke<AppSettings>("load_app_settings");
@@ -427,6 +454,24 @@ export function AgentDetailModal({
         }
       }
 
+      if (canSaveChatCompletionsProxy && !isCredsDirty) {
+        const nextSettings = await invoke<AppSettings>(
+          "update_custom_agent_chat_completions_proxy",
+          {
+            id: agentKey,
+            enabled: enableChatCompletionsProxy,
+          },
+        );
+        const profile =
+          nextSettings.custom_agents?.find((item) => item.id === String(agentKey)) ?? null;
+        setCustomProfile(profile);
+        const proxyEnabled = Boolean(profile?.enable_chat_completions_proxy);
+        setEnableChatCompletionsProxy(proxyEnabled);
+        setOriginalEnableChatCompletionsProxy(proxyEnabled);
+      } else if (canSaveChatCompletionsProxy) {
+        setOriginalEnableChatCompletionsProxy(enableChatCompletionsProxy);
+      }
+
       if (canSaveModels) {
         const models = normalizeModels(selectedModels);
         const nextSettings = await invoke<AppSettings>("update_custom_agent_models", {
@@ -455,7 +500,7 @@ export function AgentDetailModal({
         setOriginalEnable1mContext(contextEnabled);
       }
 
-      if (canSaveModels || canSave1mContext) {
+      if (canSaveModels || canSave1mContext || canSaveChatCompletionsProxy || isCredsDirty) {
         const content = await invoke<string | null>("read_agent_config_file", { agent: agentKey });
         if (content !== null) {
           setFileState({ status: "loaded", content });
@@ -812,6 +857,54 @@ export function AgentDetailModal({
                             onToggle={toggleModel}
                           />
                         )}
+                      </div>
+                    )}
+
+                    {/* Chat Completions compatibility bridge */}
+                    {deletable && customProfile?.codex_like && (
+                      <div
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "space-between",
+                          gap: 12,
+                          marginBottom: 18,
+                        }}
+                      >
+                        <label
+                          style={{
+                            display: "flex",
+                            alignItems: "flex-start",
+                            gap: 8,
+                            minWidth: 0,
+                            color: "var(--text-secondary)",
+                            cursor: "pointer",
+                          }}
+                        >
+                          <input
+                            type="checkbox"
+                            aria-label={t("appSettings.enableChatCompletionsProxy")}
+                            checked={enableChatCompletionsProxy}
+                            onChange={(event) =>
+                              setEnableChatCompletionsProxy(event.target.checked)
+                            }
+                          />
+                          <span>
+                            <span style={{ display: "block", fontSize: 13, fontWeight: 600 }}>
+                              {t("appSettings.enableChatCompletionsProxy")}
+                            </span>
+                            <span
+                              style={{
+                                display: "block",
+                                marginTop: 3,
+                                fontSize: 11,
+                                color: "var(--text-hint)",
+                              }}
+                            >
+                              {t("appSettings.enableChatCompletionsProxyHint")}
+                            </span>
+                          </span>
+                        </label>
                       </div>
                     )}
 
