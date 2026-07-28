@@ -1654,7 +1654,10 @@ async fn get_or_start_local_lsp_session(
     }
 
     let mut command = Command::new(&server.program);
-    command.args(&server.args).current_dir(project_root);
+    command
+        .args(&server.args)
+        .current_dir(project_root)
+        .envs(crate::app_settings::get_login_shell_env().iter().cloned());
     let session = start_local_lsp_session(
         command,
         file_uri(project_root),
@@ -2199,8 +2202,11 @@ fn parse_lsp_diagnostic_item(file_path: &str, value: &Value) -> Option<Diagnosti
 }
 
 fn command_available(program: &str) -> bool {
-    std::process::Command::new(program)
+    let mut command = std::process::Command::new(program);
+    crate::subprocess::configure_background_command(&mut command);
+    command
         .arg("--version")
+        .envs(crate::app_settings::get_login_shell_env().iter().cloned())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .status()

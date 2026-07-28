@@ -1,6 +1,7 @@
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
+#[cfg(target_os = "macos")]
 use std::process::Stdio;
 use std::sync::OnceLock;
 
@@ -315,10 +316,57 @@ fn select_macos_dmg_asset<'a>(
     })
 }
 
+fn linux_package_kind() -> Option<&'static str> {
+    if Path::new("/etc/debian_version").exists() {
+        Some("deb")
+    } else if Path::new("/etc/redhat-release").exists()
+        || !crate::platform::detect_path("rpm").is_empty()
+    {
+        Some("rpm")
+    } else {
+        None
+    }
+}
+
+fn select_release_installer_asset<'a>(
+    assets: &'a [GitHubReleaseAsset],
+    os: &str,
+    arch: &str,
+    linux_kind: Option<&str>,
+) -> Option<&'a GitHubReleaseAsset> {
+    match os {
+        "macos" => select_macos_dmg_asset(assets, arch),
+        "windows" => {
+            let suffix = match arch {
+                "aarch64" | "arm64" => "_arm64-setup.exe",
+                "x86_64" | "x64" => "_x64-setup.exe",
+                _ => return None,
+            };
+            assets.iter().find(|asset| {
+                let name = asset.name.to_ascii_lowercase();
+                name.starts_with("aeroric_") && name.ends_with(suffix)
+            })
+        }
+        "linux" if matches!(arch, "x86_64" | "x64") => {
+            let suffix = match linux_kind {
+                Some("deb") => "_amd64.deb",
+                Some("rpm") => "-1.x86_64.rpm",
+                _ => return None,
+            };
+            assets.iter().find(|asset| {
+                let name = asset.name.to_ascii_lowercase();
+                name.starts_with("aeroric") && name.ends_with(suffix)
+            })
+        }
+        _ => None,
+    }
+}
+
 fn expected_release_digest_asset_name(asset_name: &str) -> Option<String> {
-    asset_name
-        .strip_suffix(".dmg")
-        .map(|_| "SHA256SUMS.txt".to_string())
+    [".dmg", ".exe", ".deb", ".rpm"]
+        .iter()
+        .any(|suffix| asset_name.to_ascii_lowercase().ends_with(suffix))
+        .then(|| "SHA256SUMS.txt".to_string())
 }
 
 fn find_checksum_for_asset(
@@ -429,11 +477,17 @@ pub async fn get_pending_release_update(
         return Ok(None);
     }
 
+    let ready_to_restart = !matches!(
+        Path::new(&pending.asset_name)
+            .extension()
+            .and_then(|extension| extension.to_str()),
+        Some("deb" | "rpm")
+    );
     Ok(Some(ReleaseUpdatePrepareResult {
         tag_name: pending.tag_name,
         asset_name: pending.asset_name,
         installer_path: installer_path.to_string_lossy().into_owned(),
-        ready_to_restart: true,
+        ready_to_restart,
     }))
 }
 
@@ -506,9 +560,14 @@ fn release_to_notification(
     let release_version = release_version(&release.tag_name);
     let newer_than_current =
         compare_versions(&release_version, app_version) == std::cmp::Ordering::Greater;
-    let update_install_supported = cfg!(target_os = "macos")
-        && newer_than_current
-        && select_macos_dmg_asset(&release.assets, arch).is_some();
+    let update_install_supported = newer_than_current
+        && select_release_installer_asset(
+            &release.assets,
+            std::env::consts::OS,
+            arch,
+            linux_package_kind(),
+        )
+        .is_some();
 
     RemoteNotification {
         id: format!("release-{}", release.id),
@@ -682,6 +741,7 @@ async fn download_asset(asset: &GitHubReleaseAsset, target: &Path) -> Result<(),
         .map_err(|e| format!("Write download failed: {e}"))
 }
 
+#[cfg(target_os = "macos")]
 async fn run_command(program: &str, args: &[&str]) -> Result<String, String> {
     let output = tokio::process::Command::new(program)
         .args(args)
@@ -755,9 +815,30 @@ async fn install_macos_dmg(dmg_path: &Path) -> Result<String, String> {
     Ok(destination.to_string())
 }
 
-#[cfg(not(target_os = "macos"))]
-async fn install_macos_dmg(_dmg_path: &Path) -> Result<String, String> {
-    Err("In-app release installation is currently supported on macOS only.".to_string())
+async fn install_platform_package(
+    _app: &AppHandle,
+    installer: &Path,
+) -> Result<(String, bool), String> {
+    #[cfg(target_os = "macos")]
+    {
+        return install_macos_dmg(installer).await.map(|path| (path, true));
+    }
+    #[cfg(target_os = "windows")]
+    {
+        tokio::process::Command::new(installer)
+            .spawn()
+            .map_err(|error| format!("Failed to start Windows installer: {error}"))?;
+        _app.exit(0);
+        return Ok((installer.to_string_lossy().into_owned(), true));
+    }
+    #[cfg(target_os = "linux")]
+    {
+        tauri_plugin_opener::open_path(installer, None::<&str>)
+            .map_err(|error| format!("Failed to open system package installer: {error}"))?;
+        return Ok((installer.to_string_lossy().into_owned(), false));
+    }
+    #[allow(unreachable_code)]
+    Err("In-app release installation is not supported on this platform.".to_string())
 }
 
 // ── Tauri commands ───────────────────────────────────────────────────────────
@@ -865,18 +946,23 @@ pub async fn prepare_release_update(
     if compare_versions(&release_version, APP_VERSION) != std::cmp::Ordering::Greater {
         return Err("Selected release is not newer than the installed version.".to_string());
     }
-    let asset = select_macos_dmg_asset(&release.assets, current_arch())
-        .ok_or_else(|| "No compatible macOS DMG asset found for this release.".to_string())?
-        .clone();
+    let asset = select_release_installer_asset(
+        &release.assets,
+        std::env::consts::OS,
+        current_arch(),
+        linux_package_kind(),
+    )
+    .ok_or_else(|| "No compatible installer asset found for this release.".to_string())?
+    .clone();
     let update_dir = release_update_dir(&release.tag_name)?;
     let _ = tokio::fs::remove_dir_all(&update_dir).await;
     tokio::fs::create_dir_all(&update_dir)
         .await
         .map_err(|e| format!("Create update directory failed: {e}"))?;
-    let dmg_path = update_dir.join(&asset.name);
+    let installer_path_buf = update_dir.join(&asset.name);
 
-    download_asset(&asset, &dmg_path).await?;
-    let installer_path = dmg_path
+    download_asset(&asset, &installer_path_buf).await?;
+    let installer_path = installer_path_buf
         .to_str()
         .ok_or_else(|| "Invalid installer path".to_string())?
         .to_string();
@@ -893,7 +979,7 @@ pub async fn prepare_release_update(
         tag_name: release.tag_name,
         asset_name: asset.name,
         installer_path,
-        ready_to_restart: true,
+        ready_to_restart: !cfg!(target_os = "linux"),
     })
 }
 
@@ -910,20 +996,25 @@ pub async fn restart_and_install_release_update(
     }
 
     let updates_root = updates_dir()?;
-    let dmg_path = validate_pending_installer_path(
+    let installer_path = validate_pending_installer_path(
         &updates_root,
         &pending.tag_name,
         &pending.asset_name,
         Path::new(&pending.installer_path),
     )?;
-    if !dmg_path.exists() {
+    if !installer_path.exists() {
         return Err("Prepared installer was not found. Download the update again.".to_string());
     }
 
     let release = fetch_release_by_tag(&pending.tag_name).await?;
-    let asset = select_macos_dmg_asset(&release.assets, current_arch())
-        .ok_or_else(|| "No compatible macOS DMG asset found for this release.".to_string())?
-        .clone();
+    let asset = select_release_installer_asset(
+        &release.assets,
+        std::env::consts::OS,
+        current_arch(),
+        linux_package_kind(),
+    )
+    .ok_or_else(|| "No compatible installer asset found for this release.".to_string())?
+    .clone();
     if asset.name != pending.asset_name {
         return Err("Prepared update asset no longer matches the selected release.".to_string());
     }
@@ -934,26 +1025,30 @@ pub async fn restart_and_install_release_update(
         .find(|candidate| candidate.name == checksum_asset_name)
         .ok_or_else(|| "Missing checksum asset for prepared update.".to_string())?
         .clone();
-    let checksum_path = dmg_path.with_extension("sha256");
+    let checksum_path = installer_path.with_extension("sha256");
     download_asset(&checksum_asset, &checksum_path).await?;
     let checksum_text = tokio::fs::read_to_string(&checksum_path)
         .await
         .map_err(|e| format!("Read checksum failed: {e}"))?;
-    verify_downloaded_checksum(&dmg_path, &pending.asset_name, &checksum_text)?;
+    verify_downloaded_checksum(&installer_path, &pending.asset_name, &checksum_text)?;
 
-    let installed_app_path = install_macos_dmg(&dmg_path).await?;
-    let update_dir = dmg_path.parent().map(Path::to_path_buf);
+    let (installed_app_path, restarted) = install_platform_package(&app, &installer_path).await?;
+    let update_dir = installer_path.parent().map(Path::to_path_buf);
     let _ = tokio::task::spawn_blocking(clear_pending_update).await;
-    if let Some(dir) = update_dir {
-        let _ = tokio::fs::remove_dir_all(dir).await;
+    if cfg!(target_os = "macos") && restarted {
+        if let Some(dir) = update_dir {
+            let _ = tokio::fs::remove_dir_all(dir).await;
+        }
     }
-    app.request_restart();
+    if cfg!(target_os = "macos") {
+        app.request_restart();
+    }
 
     Ok(ReleaseInstallResult {
         tag_name: pending.tag_name,
         asset_name: pending.asset_name,
         installed_app_path,
-        restarted: true,
+        restarted,
     })
 }
 
@@ -1040,6 +1135,47 @@ mod tests {
     }
 
     #[test]
+    fn selects_windows_and_linux_installers() {
+        let assets = vec![
+            GitHubReleaseAsset {
+                name: "Aeroric_1.2.3_arm64-setup.exe".to_string(),
+                browser_download_url: "https://example.invalid/arm64.exe".to_string(),
+            },
+            GitHubReleaseAsset {
+                name: "Aeroric_1.2.3_x64-setup.exe".to_string(),
+                browser_download_url: "https://example.invalid/x64.exe".to_string(),
+            },
+            GitHubReleaseAsset {
+                name: "Aeroric_1.2.3_amd64.deb".to_string(),
+                browser_download_url: "https://example.invalid/a.deb".to_string(),
+            },
+            GitHubReleaseAsset {
+                name: "Aeroric-1.2.3-1.x86_64.rpm".to_string(),
+                browser_download_url: "https://example.invalid/a.rpm".to_string(),
+            },
+        ];
+
+        assert_eq!(
+            select_release_installer_asset(&assets, "windows", "aarch64", None)
+                .unwrap()
+                .name,
+            "Aeroric_1.2.3_arm64-setup.exe"
+        );
+        assert_eq!(
+            select_release_installer_asset(&assets, "linux", "x86_64", Some("deb"))
+                .unwrap()
+                .name,
+            "Aeroric_1.2.3_amd64.deb"
+        );
+        assert_eq!(
+            select_release_installer_asset(&assets, "linux", "x86_64", Some("rpm"))
+                .unwrap()
+                .name,
+            "Aeroric-1.2.3-1.x86_64.rpm"
+        );
+    }
+
+    #[test]
     fn release_notifications_are_installable_only_for_newer_versions_with_dmg_asset() {
         let release = GitHubRelease {
             id: 1,
@@ -1096,7 +1232,7 @@ mod tests {
             name: "Aeroric_9.9.9_aarch64.dmg".to_string(),
             browser_download_url: "https://example.invalid/Aeroric_9.9.9_aarch64.dmg".to_string(),
         };
-        let err = find_checksum_for_asset(&dmg, &[dmg.clone()]).unwrap_err();
+        let err = find_checksum_for_asset(&dmg, std::slice::from_ref(&dmg)).unwrap_err();
 
         assert!(err.contains("checksum"));
     }

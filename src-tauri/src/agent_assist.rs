@@ -76,6 +76,7 @@ async fn run_naming_agent_with_timeout(
 
     let mut cmd = tokio::process::Command::new(&launch.program);
     crate::subprocess::configure_background_tokio_command(&mut cmd);
+    cmd.args(&launch.args);
     if use_stdin_prompt {
         cmd.args([
             "exec",

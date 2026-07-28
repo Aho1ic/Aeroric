@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { useState } from "react";
 import { describe, expect, it, vi } from "vitest";
 import { I18nProvider } from "../i18n";
@@ -353,7 +353,7 @@ describe("ProjectRail project dragging", () => {
     expect(screen.getByRole("button", { name: "拖动项目 Alpha" })).toBeInTheDocument();
   });
 
-  it("selects the latest task when clicking a different project once", () => {
+  it("opens the Agent terminal initial page instead of the latest task when clicking a project", () => {
     const beta = project("p2", "Beta", 1);
     const onSwitch = vi.fn();
     const onSelectTask = vi.fn();
@@ -385,7 +385,7 @@ describe("ProjectRail project dragging", () => {
     fireEvent.click(screen.getByRole("button", { name: "Beta" }));
 
     expect(onSwitch).toHaveBeenCalledWith(beta);
-    expect(onSelectTask).toHaveBeenCalledWith("p2", "new-beta-task");
+    expect(onSelectTask).not.toHaveBeenCalled();
   });
 
   it("selects a task range with Shift and deletes it in one batch", () => {
@@ -446,5 +446,92 @@ describe("ProjectRail project dragging", () => {
     expect(onDeleteTasks).toHaveBeenCalledTimes(1);
     expect(onDeleteTasks).toHaveBeenCalledWith(["second", "third", "oldest"]);
     expect(onDeleteTask).not.toHaveBeenCalled();
+  });
+
+  it("expands the task list when clicking the already-active project", () => {
+    localStorage.setItem("aeroric:language", "en");
+    render(
+      <I18nProvider>
+        <ProjectRail
+          projects={[project("p1", "Alpha", 0)]}
+          allTasks={[task("only-task", "p1", 100)]}
+          activeProjectId="p1"
+          selectedTaskId={null}
+          isNewTask={false}
+          onSwitch={vi.fn()}
+          onOpen={vi.fn()}
+          onBack={vi.fn()}
+          onNewTask={vi.fn()}
+          onSelectTask={vi.fn()}
+          onDeleteTask={vi.fn()}
+          onToggleTaskStar={vi.fn()}
+          onRunTodo={vi.fn()}
+          themeVariant="light"
+          onToggleTheme={vi.fn()}
+          singleProjectMode
+        />
+      </I18nProvider>,
+    );
+
+    // "Hide tasks" 同时用于侧栏整体折叠按钮和项目行的箭头，这里只取项目行内的那个。
+    const projectRow = screen.getByRole("button", { name: "Alpha" }).closest("div");
+    expect(projectRow).not.toBeNull();
+
+    // 先手动折叠，再点项目名，验证历史对话列表被重新展开。
+    fireEvent.click(within(projectRow!).getByRole("button", { name: "Hide tasks" }));
+    expect(screen.queryByText("Task only-task")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Alpha" }));
+
+    expect(screen.getByText("Task only-task")).toBeInTheDocument();
+  });
+
+  it("restores the shared project list scroll position on a remounted rail", () => {
+    localStorage.setItem("aeroric:language", "en");
+    const renderRail = () =>
+      render(
+        <I18nProvider>
+          <ProjectRail
+            projects={[project("p1", "Alpha", 0), project("p2", "Beta", 1)]}
+            allTasks={[] as Task[]}
+            activeProjectId="p1"
+            selectedTaskId={null}
+            isNewTask={false}
+            onSwitch={vi.fn()}
+            onOpen={vi.fn()}
+            onBack={vi.fn()}
+            onNewTask={vi.fn()}
+            onSelectTask={vi.fn()}
+            onDeleteTask={vi.fn()}
+            onToggleTaskStar={vi.fn()}
+            onRunTodo={vi.fn()}
+            themeVariant="light"
+            onToggleTheme={vi.fn()}
+            singleProjectMode
+          />
+        </I18nProvider>,
+      );
+
+    const findListContainer = (container: HTMLElement) => {
+      const el = container.querySelector<HTMLElement>('[style*="overflow-y: auto"]');
+      expect(el).not.toBeNull();
+      return el!;
+    };
+
+    const first = renderRail();
+    const firstList = findListContainer(first.container);
+    // jsdom 没有布局，scrollTop 需要显式伪造后再派发 scroll 事件。
+    Object.defineProperty(firstList, "scrollTop", { configurable: true, value: 140 });
+    fireEvent.scroll(firstList);
+    first.unmount();
+
+    // 切换项目会换掉整条侧栏实例；新实例应恢复到共享的滚动位置而非跳回顶部。
+    const second = renderRail();
+    expect(findListContainer(second.container).scrollTop).toBe(140);
+
+    // 复位共享状态，避免污染后续用例。
+    const secondList = findListContainer(second.container);
+    Object.defineProperty(secondList, "scrollTop", { configurable: true, value: 0 });
+    fireEvent.scroll(secondList);
   });
 });

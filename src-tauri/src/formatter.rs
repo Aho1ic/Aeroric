@@ -96,6 +96,7 @@ pub async fn format_file(
         let output = cmd
             .args(&formatter.args)
             .current_dir(&root)
+            .envs(crate::app_settings::get_login_shell_env().iter().cloned())
             .output()
             .map_err(|e| format!("Failed to run formatter: {e}"))?;
         if !output.status.success() {

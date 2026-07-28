@@ -6,13 +6,18 @@ on:
 
 jobs:
   checks:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
 
       - name: Checkout dbx dependency
+        shell: bash
         env:
           # Pin the dbx path-dependency to a known-good commit for reproducible
           # builds. `Cargo.toml` uses a `path = "../dbx/..."` dependency whose
@@ -59,9 +64,11 @@ jobs:
           workspaces: ./src-tauri -> target
 
       - name: Install cargo-audit
+        if: runner.os == 'Linux'
         run: cargo install cargo-audit --version 0.22.1 --locked
 
       - name: Run cargo audit
+        if: runner.os == 'Linux'
         working-directory: src-tauri
         run: cargo audit
 

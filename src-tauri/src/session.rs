@@ -488,10 +488,7 @@ fn is_read_only_segment(segment: &str) -> bool {
         | "Get-Location" | "Get-ChildItem" | "Get-Content" | "Select-String" | "Get-Process"
         | "Get-Date" | "Get-Command" | "Test-Path" | "Resolve-Path" | "Where-Object"
         | "Measure-Object" | "Sort-Object" | "Select-Object" => true,
-        "sed" => {
-            tokens.contains(&"-n")
-                && !tokens.iter().any(|token| token.starts_with("-i"))
-        }
+        "sed" => tokens.contains(&"-n") && !tokens.iter().any(|token| token.starts_with("-i")),
         "find" => !tokens
             .iter()
             .any(|token| matches!(*token, "-delete" | "-exec" | "-ok")),

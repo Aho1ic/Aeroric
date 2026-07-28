@@ -19,15 +19,35 @@ fn conda_candidates() -> Vec<PathBuf> {
     if let Ok(path) = std::env::var("CONDA_EXE") {
         candidates.push(PathBuf::from(path));
     }
-    candidates.push(PathBuf::from("/opt/miniconda3/bin/conda"));
-    candidates.push(PathBuf::from("/opt/homebrew/bin/conda"));
-    candidates.push(PathBuf::from("/usr/local/bin/conda"));
-    candidates.push(PathBuf::from("conda"));
+    #[cfg(windows)]
+    {
+        for key in ["USERPROFILE", "LOCALAPPDATA", "ProgramData"] {
+            if let Some(root) = std::env::var_os(key).map(PathBuf::from) {
+                candidates.push(root.join("miniconda3").join("Scripts").join("conda.exe"));
+                candidates.push(root.join("anaconda3").join("Scripts").join("conda.exe"));
+                candidates.push(root.join("Miniconda3").join("Scripts").join("conda.exe"));
+                candidates.push(root.join("Anaconda3").join("Scripts").join("conda.exe"));
+            }
+        }
+        candidates.push(PathBuf::from(
+            r"C:\ProgramData\miniconda3\Scripts\conda.exe",
+        ));
+        candidates.push(PathBuf::from(r"C:\ProgramData\anaconda3\Scripts\conda.exe"));
+        candidates.push(PathBuf::from("conda.exe"));
+        return candidates;
+    }
+    #[cfg(not(windows))]
+    {
+        candidates.push(PathBuf::from("/opt/miniconda3/bin/conda"));
+        candidates.push(PathBuf::from("/opt/homebrew/bin/conda"));
+        candidates.push(PathBuf::from("/usr/local/bin/conda"));
+        candidates.push(PathBuf::from("conda"));
 
-    if let Ok(home) = std::env::var("HOME") {
-        candidates.push(PathBuf::from(&home).join("miniconda3/bin/conda"));
-        candidates.push(PathBuf::from(&home).join("anaconda3/bin/conda"));
-        candidates.push(PathBuf::from(&home).join("mambaforge/bin/conda"));
+        if let Ok(home) = std::env::var("HOME") {
+            candidates.push(PathBuf::from(&home).join("miniconda3/bin/conda"));
+            candidates.push(PathBuf::from(&home).join("anaconda3/bin/conda"));
+            candidates.push(PathBuf::from(&home).join("mambaforge/bin/conda"));
+        }
     }
     candidates
 }
@@ -49,7 +69,11 @@ fn env_name_from_path(path: &Path) -> String {
 }
 
 fn python_path_for_env(path: &Path) -> PathBuf {
-    path.join("bin").join("python")
+    if cfg!(windows) {
+        path.join("python.exe")
+    } else {
+        path.join("bin").join("python")
+    }
 }
 
 fn parse_conda_envs_with_python_exists<F>(raw: &[u8], python_exists: F) -> Vec<CondaEnvironment>
@@ -170,6 +194,7 @@ mod tests {
         );
     }
 
+    #[cfg(not(windows))]
     #[test]
     fn conda_candidates_include_default_miniconda_on_macos() {
         assert!(conda_candidates()
@@ -200,6 +225,20 @@ mod tests {
             names,
             vec!["base", "codex", "detect", "kiro", "labelimg", "labelme", "mahjong"]
         );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_conda_environments_use_python_exe() {
+        let raw =
+            br#"{"envs":["C:\\Users\\test\\miniconda3","C:\\Users\\test\\miniconda3\\envs\\cv"]}"#;
+        let envs = parse_conda_envs_with_python_exists(raw, |path| {
+            path.file_name().and_then(|name| name.to_str()) == Some("python.exe")
+        });
+        assert_eq!(envs.len(), 2);
+        assert!(envs
+            .iter()
+            .all(|environment| environment.python_path.ends_with("python.exe")));
     }
 
     #[test]

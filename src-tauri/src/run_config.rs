@@ -629,19 +629,10 @@ fn spawn_exit_watcher(child: Arc<Mutex<Child>>, snapshot: Arc<Mutex<RunProcessSn
 }
 
 fn shell_command(command: &str) -> Command {
-    #[cfg(target_os = "windows")]
-    {
-        let mut cmd = Command::new("cmd");
-        cmd.args(["/C", command]);
-        cmd
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        let mut cmd =
-            Command::new(std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string()));
-        cmd.args(["-lc", command]);
-        cmd
-    }
+    let shell = crate::platform::shell_command(command);
+    let mut cmd = Command::new(shell.program);
+    cmd.args(shell.args);
+    cmd
 }
 
 fn build_remote_shell_run_command(
@@ -735,6 +726,7 @@ pub fn start_run_config(
     crate::subprocess::configure_background_command(&mut shell);
     let mut child = shell
         .current_dir(&cwd)
+        .envs(crate::app_settings::get_login_shell_env().iter().cloned())
         .envs(env.iter())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

@@ -108,7 +108,12 @@ export function AddAgentPanel({ onSaved }: { onSaved: (agentId: string) => void 
         if (!text) return;
         try {
           const obj = JSON.parse(text.trim());
-          if (typeof obj === "object" && obj !== null && typeof obj.url === "string" && typeof obj.key === "string") {
+          if (
+            typeof obj === "object" &&
+            obj !== null &&
+            typeof obj.url === "string" &&
+            typeof obj.key === "string"
+          ) {
             setClipboardData({ url: obj.url, key: obj.key });
           }
         } catch {
@@ -240,7 +245,14 @@ export function AddAgentPanel({ onSaved }: { onSaved: (agentId: string) => void 
         >
           <Clipboard size={13} style={{ flexShrink: 0, color: "var(--accent)" }} />
           <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontWeight: 600, fontSize: 11.5, color: "var(--text-secondary)", marginBottom: 3 }}>
+            <div
+              style={{
+                fontWeight: 600,
+                fontSize: 11.5,
+                color: "var(--text-secondary)",
+                marginBottom: 3,
+              }}
+            >
               {t("appSettings.clipboardDetected")}
             </div>
             <div

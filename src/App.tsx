@@ -517,6 +517,7 @@ function App() {
     setActiveProject(updated);
     setHubMode(false);
     mountProject(updated.id);
+    updateProjectView(updated.id, createDefaultProjectViewState());
     if (resolveProjectLocation(updated).kind === "ssh") return;
     invoke("init_project_config", { projectPath: project.path }).catch((e: unknown) => {
       showToast(t("toast.initProjectConfigFailed", { error: String(e) }), "warning");
@@ -1305,7 +1306,13 @@ function App() {
 
       if (changed) {
         const task = next.find((t) => t.id === taskId);
-        if (task) persistProjectTasks(task.projectId, next, showToastRef.current, formatSaveTasksErrorRef.current);
+        if (task)
+          persistProjectTasks(
+            task.projectId,
+            next,
+            showToastRef.current,
+            formatSaveTasksErrorRef.current,
+          );
       }
       return changed ? next : prev;
     });
@@ -1331,7 +1338,13 @@ function App() {
 
       if (changed) {
         const task = next.find((t) => t.id === taskId);
-        if (task) persistProjectTasks(task.projectId, next, showToastRef.current, formatSaveTasksErrorRef.current);
+        if (task)
+          persistProjectTasks(
+            task.projectId,
+            next,
+            showToastRef.current,
+            formatSaveTasksErrorRef.current,
+          );
       }
       return changed ? next : prev;
     });

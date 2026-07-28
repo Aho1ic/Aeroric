@@ -9,9 +9,7 @@ export function pathSeparator(path: string): "/" | "\\" {
   return path.includes("\\") && !path.includes("/") ? "\\" : "/";
 }
 
-export function fileExplorerBreadcrumbSegments(
-  path: string,
-): FileExplorerBreadcrumbSegment[] {
+export function fileExplorerBreadcrumbSegments(path: string): FileExplorerBreadcrumbSegment[] {
   const trimmed = path.trim();
   if (!trimmed) return [];
 
@@ -19,9 +17,7 @@ export function fileExplorerBreadcrumbSegments(
   if (windowsMatch) {
     const drive = windowsMatch[1];
     const parts = windowsMatch[2].split(/[\\/]+/).filter(Boolean);
-    const segments: FileExplorerBreadcrumbSegment[] = [
-      { label: drive, path: `${drive}\\` },
-    ];
+    const segments: FileExplorerBreadcrumbSegment[] = [{ label: drive, path: `${drive}\\` }];
     let current = `${drive}\\`;
     for (const part of parts) {
       current = current.endsWith("\\") ? `${current}${part}` : `${current}\\${part}`;
@@ -32,10 +28,8 @@ export function fileExplorerBreadcrumbSegments(
 
   const absolute = trimmed.startsWith("/");
   const parts = trimmed.split("/").filter(Boolean);
-  const segments: FileExplorerBreadcrumbSegment[] = absolute
-    ? [{ label: "/", path: "/" }]
-    : [];
-  let current = absolute ? "" : parts.shift() ?? "";
+  const segments: FileExplorerBreadcrumbSegment[] = absolute ? [{ label: "/", path: "/" }] : [];
+  let current = absolute ? "" : (parts.shift() ?? "");
   if (!absolute && current) {
     segments.push({ label: current, path: current });
   }

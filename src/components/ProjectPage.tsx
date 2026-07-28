@@ -74,11 +74,12 @@ import {
   type ProjectActionResult,
 } from "./project-page/actionFeedback";
 import { projectVisibilityStyle } from "./project-page/visibility";
-import { buildRunnableFileCommand, selectRunnableCondaEnvironment } from "./file-viewer/run";
+import { isRunnableScriptFile, selectRunnableCondaEnvironment } from "./file-viewer/run";
 import { dispatchFileViewerCommand } from "./file-viewer/editorCommandEvents";
 import { isSqliteDatabaseFileName } from "./file-explorer/fileEntryUtils";
 import { agentDisplayLabel } from "../agents";
 import { useAgentOptions } from "../hooks/useAgentOptions";
+import { usePlatformRuntimeInfo } from "../hooks/usePlatformRuntimeInfo";
 import { useI18n } from "../i18n";
 import { AnimatedSelectionTrack } from "./ui/AnimatedSelection";
 import {
@@ -300,6 +301,7 @@ export function ProjectPage({
   const { t } = useI18n();
   const { showToast } = useToast();
   const agentOptions = useAgentOptions();
+  const platformRuntime = usePlatformRuntimeInfo();
   const {
     rightPanel,
     editorGroups,
@@ -573,16 +575,46 @@ export function ProjectPage({
     previewDisabled,
   });
   const selectedTask = projectTasks.find((t) => t.id === selectedTaskId) ?? null;
-  const activeRunConfigDraft = useCallback((): RunConfigDraft | null => {
+  const resolveRunnableFileCommand = useCallback(
+    async (filePath: string, env: CondaEnvironment | null): Promise<string | null> => {
+      if (!isRunnableScriptFile(filePath, projectLocation.kind === "ssh")) return null;
+      try {
+        const result = await invoke<{
+          command: string | null;
+          unavailableReason: string | null;
+        }>("build_runnable_file_command", {
+          filePath,
+          condaPath: env?.path ?? null,
+          condaPythonPath: env?.pythonPath ?? null,
+          remote: projectLocation.kind === "ssh",
+        });
+        if (result.command) return result.command;
+        if (result.unavailableReason) {
+          showToast(t("file.runUnavailable", { reason: result.unavailableReason }), "warning");
+        }
+      } catch (error) {
+        showToast(t("file.runUnavailable", { reason: String(error) }), "error");
+      }
+      return null;
+    },
+    [projectLocation.kind, showToast, t],
+  );
+  const activeRunConfigDraft = useCallback(async (): Promise<RunConfigDraft | null> => {
     if (!activeFilePath) return null;
     const env = selectRunnableCondaEnvironment(
       runnableCondaEnvironments,
       selectedCondaEnvPath,
       Boolean(remoteFileContext),
     );
-    const command = buildRunnableFileCommand(activeFilePath, env);
+    const command = await resolveRunnableFileCommand(activeFilePath, env);
     return command ? runConfigDraftForFile(activeFilePath, command) : null;
-  }, [activeFilePath, remoteFileContext, runnableCondaEnvironments, selectedCondaEnvPath]);
+  }, [
+    activeFilePath,
+    remoteFileContext,
+    resolveRunnableFileCommand,
+    runnableCondaEnvironments,
+    selectedCondaEnvPath,
+  ]);
 
   const activeDebugConfigDraft = useCallback(
     (): DebugConfigDraft | null =>
@@ -768,18 +800,19 @@ export function ProjectPage({
   }, []);
 
   const handleRunPythonFile = useCallback(
-    (filePath: string) => {
+    async (filePath: string) => {
       const env = selectRunnableCondaEnvironment(
         runnableCondaEnvironments,
         selectedCondaEnvPath,
         projectLocation.kind === "ssh",
       );
-      const cmd = buildRunnableFileCommand(filePath, env);
+      const cmd = await resolveRunnableFileCommand(filePath, env);
       if (!cmd) return;
       sendOrQueueShellCommand(cmd);
     },
     [
       projectLocation.kind,
+      resolveRunnableFileCommand,
       runnableCondaEnvironments,
       selectedCondaEnvPath,
       sendOrQueueShellCommand,
@@ -897,11 +930,13 @@ export function ProjectPage({
       }
 
       if (panel === "run") {
-        const draft = activeRunConfigDraft();
-        if (draft) {
-          runDraftRequestIdRef.current += 1;
-          setRunDraftRequest({ id: runDraftRequestIdRef.current, draft });
-        }
+        const requestId = runDraftRequestIdRef.current + 1;
+        runDraftRequestIdRef.current = requestId;
+        void activeRunConfigDraft().then((draft) => {
+          if (draft && runDraftRequestIdRef.current === requestId) {
+            setRunDraftRequest({ id: requestId, draft });
+          }
+        });
       }
 
       if (panel === "debug") {
@@ -1365,7 +1400,7 @@ export function ProjectPage({
         ]
       : shellSessions.map((shell, index) => ({
           ...shell,
-          label: `zsh ${index + 1}`,
+          label: `${platformRuntime.shellLabel} ${index + 1}`,
           remote: false as const,
         }));
   const workspaceTerminalVisible =
@@ -1671,7 +1706,7 @@ export function ProjectPage({
         )}
         {showAgentTabs && (
           <AnimatedSelectionTrack
-            value={isNewTask ? "__new__" : selectedTaskId ?? ""}
+            value={isNewTask ? "__new__" : (selectedTaskId ?? "")}
             ariaLabel="Agent terminal tabs"
             role="tablist"
             variant="underline"
@@ -2120,6 +2155,7 @@ export function ProjectPage({
                     onReady={handleShellReady}
                     showSessionTabs={false}
                     onSessionsChange={handleShellSessionsChange}
+                    shellLabel={platformRuntime.shellLabel}
                     height="100%"
                   />
                 </ErrorBoundary>

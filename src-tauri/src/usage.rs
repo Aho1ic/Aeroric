@@ -85,7 +85,8 @@ impl CodexRpcClient {
 
         let mut cmd = Command::new(&launch.program);
         crate::subprocess::configure_background_command(&mut cmd);
-        cmd.arg("app-server")
+        cmd.args(&launch.args)
+            .arg("app-server")
             .env("PATH", shell_path)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -279,14 +280,6 @@ pub struct CodexUsageData {
 pub async fn read_usage_snapshot(
     state: tauri::State<'_, crate::TaskManager>,
 ) -> Result<UsageSnapshot, String> {
-    if cfg!(windows) {
-        return Ok(UsageSnapshot {
-            claude: unavailable("Usage insights are temporarily disabled on Windows."),
-            codex: unavailable("Usage insights are temporarily disabled on Windows."),
-            fetched_at: chrono::Utc::now().timestamp(),
-        });
-    }
-
     // Clone the Arc so it can be moved into the blocking thread.
     let codex_rpc = Arc::clone(&state.codex_rpc);
     let (claude, codex_result) = tokio::join!(
@@ -544,34 +537,6 @@ fn wait_for_result(
     }
 }
 
-#[cfg(test)]
-mod codex_rpc_tests {
-    use super::{CodexRpcError, CodexRpcErrorKind};
-
-    #[test]
-    fn rpc_errors_keep_the_app_server_alive() {
-        let error = CodexRpcError::rpc(Some(401), "Unauthorized");
-
-        assert_eq!(error.kind, CodexRpcErrorKind::Rpc { code: Some(401) });
-        assert!(!error.invalidates_client());
-        assert!(!error.should_retry_with_empty_params());
-    }
-
-    #[test]
-    fn transport_errors_restart_the_app_server() {
-        let error = CodexRpcError::transport("connection closed");
-
-        assert!(error.invalidates_client());
-    }
-
-    #[test]
-    fn invalid_params_errors_retry_with_legacy_params_shape() {
-        let error = CodexRpcError::rpc(Some(-32602), "Invalid params");
-
-        assert!(error.should_retry_with_empty_params());
-    }
-}
-
 fn parse_codex_usage(account: Value, rate_limits: Value) -> CodexUsageData {
     let account_node = account.get("account").unwrap_or(&Value::Null);
     let rate_limit_source = rate_limits
@@ -661,5 +626,33 @@ fn parse_reset_value(value: &Value) -> Option<i64> {
 fn unavailable<T>(reason: impl Into<String>) -> UsageSource<T> {
     UsageSource::Unavailable {
         reason: reason.into(),
+    }
+}
+
+#[cfg(test)]
+mod codex_rpc_tests {
+    use super::{CodexRpcError, CodexRpcErrorKind};
+
+    #[test]
+    fn rpc_errors_keep_the_app_server_alive() {
+        let error = CodexRpcError::rpc(Some(401), "Unauthorized");
+
+        assert_eq!(error.kind, CodexRpcErrorKind::Rpc { code: Some(401) });
+        assert!(!error.invalidates_client());
+        assert!(!error.should_retry_with_empty_params());
+    }
+
+    #[test]
+    fn transport_errors_restart_the_app_server() {
+        let error = CodexRpcError::transport("connection closed");
+
+        assert!(error.invalidates_client());
+    }
+
+    #[test]
+    fn invalid_params_errors_retry_with_legacy_params_shape() {
+        let error = CodexRpcError::rpc(Some(-32602), "Invalid params");
+
+        assert!(error.should_retry_with_empty_params());
     }
 }

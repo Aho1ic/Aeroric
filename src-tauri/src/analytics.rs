@@ -1,11 +1,11 @@
 // ── Session metrics ───────────────────────────────────────────────────────────
 
 use chrono::Timelike;
-use std::sync::LazyLock;
 use parking_lot::Mutex;
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::LazyLock;
 use std::time::SystemTime;
 
 #[derive(serde::Serialize, Clone, Default)]
@@ -763,10 +763,22 @@ fn read_usage_statistics_sync(range_days: u32, agent: String) -> Result<UsageSta
 
     let (totals, series) =
         aggregate_requests(&requests, from, to, selected_agent, hourly, min_timestamp);
-    let (codex, _) =
-        aggregate_requests(&requests, from, to, Some(UsageAgent::Codex), false, min_timestamp);
-    let (claude, _) =
-        aggregate_requests(&requests, from, to, Some(UsageAgent::Claude), false, min_timestamp);
+    let (codex, _) = aggregate_requests(
+        &requests,
+        from,
+        to,
+        Some(UsageAgent::Codex),
+        false,
+        min_timestamp,
+    );
+    let (claude, _) = aggregate_requests(
+        &requests,
+        from,
+        to,
+        Some(UsageAgent::Claude),
+        false,
+        min_timestamp,
+    );
 
     Ok(UsageStatistics {
         range_days,
@@ -963,11 +975,11 @@ mod usage_statistics_tests {
 
         assert_eq!(totals.request_count, 2);
         assert_eq!(totals.input_tokens, 60);
-        assert!(series.len() >= 1);
+        assert!(!series.is_empty());
         assert!(series.iter().all(|bucket| bucket.totals.total_tokens > 0));
-        assert!(series.iter().any(|bucket| {
-            bucket.date == today.to_string() && bucket.hour == Some(now.hour())
-        }));
+        assert!(series
+            .iter()
+            .any(|bucket| { bucket.date == today.to_string() && bucket.hour == Some(now.hour()) }));
         // 零消耗小时不会出现在 series 中。
         assert!(series.iter().all(|bucket| bucket.totals.request_count > 0));
     }

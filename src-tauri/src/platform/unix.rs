@@ -30,8 +30,21 @@ pub(crate) fn login_shell_path() -> &'static str {
 }
 
 pub(crate) fn default_shell_command() -> ShellCommand {
+    let configured = std::env::var("SHELL")
+        .ok()
+        .filter(|value| PathBuf::from(value).is_file());
+    #[cfg(target_os = "linux")]
+    let fallback = ["/bin/bash", "/bin/sh"]
+        .into_iter()
+        .find(|path| PathBuf::from(path).is_file())
+        .unwrap_or("/bin/sh");
+    #[cfg(not(target_os = "linux"))]
+    let fallback = ["/bin/zsh", "/bin/bash", "/bin/sh"]
+        .into_iter()
+        .find(|path| PathBuf::from(path).is_file())
+        .unwrap_or("/bin/sh");
     ShellCommand {
-        program: std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string()),
+        program: configured.unwrap_or_else(|| fallback.to_string()),
         args: Vec::new(),
     }
 }

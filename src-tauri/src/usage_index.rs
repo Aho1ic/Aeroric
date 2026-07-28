@@ -426,7 +426,7 @@ mod tests {
             &mut connection,
             "/tmp/session.jsonl",
             state,
-            &[request.clone()],
+            std::slice::from_ref(&request),
         )
         .unwrap();
         replace_source(

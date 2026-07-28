@@ -55,7 +55,9 @@ export class ErrorBoundary extends Component<Props, State> {
         <div style={s.errorBoundaryTitle}>
           {staticT("errorBoundary.panelRenderError", { label })}
         </div>
-        <div style={s.errorBoundaryMessage}>{error.message || staticT("errorBoundary.unknownError")}</div>
+        <div style={s.errorBoundaryMessage}>
+          {error.message || staticT("errorBoundary.unknownError")}
+        </div>
         <button onClick={this.reset} style={s.errorBoundaryBtn}>
           {staticT("common.retry")}
         </button>

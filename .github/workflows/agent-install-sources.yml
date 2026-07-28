@@ -1,0 +1,79 @@
+name: Agent Install Sources
+
+on:
+  schedule:
+    - cron: "23 4 * * 1"
+  workflow_dispatch:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check Claude release metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(curl -fsSL --max-time 30 https://downloads.claude.ai/claude-code-releases/latest)"
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+ ]]
+          curl -fsSL --max-time 30 \
+            "https://downloads.claude.ai/claude-code-releases/${version}/manifest.json" \
+            | jq -e '
+              . as $root
+              [
+                "darwin-arm64",
+                "darwin-x64",
+                "linux-arm64",
+                "linux-x64",
+                "linux-arm64-musl",
+                "linux-x64-musl",
+                "win32-arm64",
+                "win32-x64"
+              ] as $targets
+              | all($targets[]; . as $target
+                  | ($root.platforms[$target].binary | type == "string")
+                  and ($root.platforms[$target].checksum | test("^[0-9a-fA-F]{64}$"))
+                  and ($root.platforms[$target].size | type == "number" and . > 0))
+            ' >/dev/null
+
+      - name: Check Codex native release metadata and checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          release="$(mktemp)"
+          checksums="$(mktemp)"
+          trap 'rm -f "$release" "$checksums"' EXIT
+          curl -fsSL --max-time 30 \
+            -H 'Accept: application/vnd.github+json' \
+            https://api.github.com/repos/openai/codex/releases/latest >"$release"
+          tag="$(jq -r '.tag_name' "$release")"
+          [[ "$tag" =~ ^rust-v[0-9]+\.[0-9]+\.[0-9]+ ]]
+          targets=(
+            aarch64-apple-darwin
+            x86_64-apple-darwin
+            aarch64-pc-windows-msvc
+            x86_64-pc-windows-msvc
+            aarch64-unknown-linux-musl
+            x86_64-unknown-linux-musl
+          )
+          for target in "${targets[@]}"; do
+            asset="codex-package-${target}.tar.gz"
+            jq -e --arg asset "$asset" '
+              any(.assets[];
+                .name == $asset
+                and (.size | type == "number" and . > 0)
+                and (.digest | test("^sha256:[0-9a-fA-F]{64}$")))
+            ' "$release" >/dev/null
+          done
+          checksum_digest="$(jq -r '
+            .assets[]
+            | select(.name == "codex-package_SHA256SUMS")
+            | .digest
+          ' "$release")"
+          [[ "$checksum_digest" =~ ^sha256:[0-9a-fA-F]{64}$ ]]
+          curl -fsSL --max-time 30 \
+            "https://github.com/openai/codex/releases/download/${tag}/codex-package_SHA256SUMS" \
+            >"$checksums"
+          echo "${checksum_digest#sha256:}  $checksums" | sha256sum --check -
+          for target in "${targets[@]}"; do
+            grep -Eq "^[0-9a-fA-F]{64}[[:space:]]+codex-package-${target}\\.tar\\.gz$" "$checksums"
+          done

@@ -42,6 +42,7 @@ fn run_git<S: AsRef<std::ffi::OsStr>>(
     crate::subprocess::configure_background_command(&mut cmd);
     cmd.args(args)
         .current_dir(project_path)
+        .envs(crate::app_settings::get_login_shell_env().iter().cloned())
         .output()
         .map_err(|e| e.to_string())
 }
@@ -71,6 +72,7 @@ async fn run_git_with_timeout(
     let mut child = cmd
         .args(&args)
         .current_dir(&project_path)
+        .envs(crate::app_settings::get_login_shell_env().iter().cloned())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true)
@@ -252,6 +254,7 @@ fn run_agent_commit_message_command(
     let launch = crate::app_settings::get_agent_launch_spec(agent);
     let mut cmd = Command::new(&launch.program);
     crate::subprocess::configure_background_command(&mut cmd);
+    cmd.args(&launch.args);
     if launch.codex_like {
         cmd.args(["exec", prompt]);
     } else {

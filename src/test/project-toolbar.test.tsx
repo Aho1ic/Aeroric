@@ -29,7 +29,26 @@ type RemoteConnectionMockProps = {
 };
 
 vi.mock("@tauri-apps/api/core", () => ({
-  invoke: vi.fn().mockResolvedValue({}),
+  invoke: vi.fn().mockImplementation((command: string, args?: Record<string, unknown>) => {
+    if (command === "get_platform_runtime_info") {
+      return Promise.resolve({
+        os: "macos",
+        arch: "aarch64",
+        shellKind: "zsh",
+        shellLabel: "zsh",
+        pathSeparator: "/",
+        canRunShellScripts: true,
+        shellScriptUnavailableReason: "",
+      });
+    }
+    if (command === "build_runnable_file_command") {
+      return Promise.resolve({
+        command: `python3 '${String(args?.filePath ?? "")}'\r`,
+        unavailableReason: null,
+      });
+    }
+    return Promise.resolve({});
+  }),
 }));
 
 vi.mock("../components/NewTaskView", () => ({

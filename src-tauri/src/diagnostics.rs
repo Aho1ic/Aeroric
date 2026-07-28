@@ -465,6 +465,7 @@ fn run_profile(root: &Path, profile: &str) -> Result<DiagnosticRunResult, String
     let output = cmd
         .args(args)
         .current_dir(root)
+        .envs(crate::app_settings::get_login_shell_env().iter().cloned())
         .output()
         .map_err(|e| format!("Failed to run diagnostics: {e}"))?;
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();

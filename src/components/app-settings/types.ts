@@ -72,6 +72,82 @@ export interface AgentUpgradeResult {
   current_version: string;
   message: string;
   channels?: AgentUpgradeChannel[];
+  channel?: string;
+  managed?: boolean;
+}
+
+export type AgentInstallErrorCode =
+  | "unsupported_platform"
+  | "invalid_agent"
+  | "operation_conflict"
+  | "network_unavailable"
+  | "proxy_authentication_required"
+  | "download_failed"
+  | "download_interrupted"
+  | "response_too_large"
+  | "checksum_failed"
+  | "archive_invalid"
+  | "permission_denied"
+  | "disk_full"
+  | "process_blocked"
+  | "install_failed"
+  | "verification_failed"
+  | "cancelled"
+  | "internal";
+
+export type AgentInstallStage =
+  | "detecting"
+  | "preparing_environment"
+  | "downloading"
+  | "verifying_download"
+  | "installing"
+  | "verifying_install"
+  | "refreshing_hooks"
+  | "completed"
+  | "failed"
+  | "cancelled";
+
+export interface AgentToolStatus {
+  agent: "claude" | "codex";
+  supported: boolean;
+  platform: string;
+  architecture: string;
+  libc: string;
+  installed: boolean;
+  version: string;
+  path: string;
+  channel: string;
+  managed: boolean;
+  error_code?: AgentInstallErrorCode | null;
+  error: string;
+}
+
+export interface AgentInstallProgress {
+  operation_id: string;
+  agent: "claude" | "codex";
+  stage: AgentInstallStage;
+  progress: number;
+  error_code?: AgentInstallErrorCode | null;
+  message: string;
+}
+
+export interface AgentInstallResult {
+  operation_id: string;
+  agent: "claude" | "codex";
+  success: boolean;
+  supported: boolean;
+  platform: string;
+  architecture: string;
+  libc: string;
+  version: string;
+  path: string;
+  channel: string;
+  managed: boolean;
+  stage: AgentInstallStage;
+  progress: number;
+  login_command: string;
+  error_code?: AgentInstallErrorCode | null;
+  message: string;
 }
 
 export type AgentSetupKind = "codex" | "claude_code";

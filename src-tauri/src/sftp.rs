@@ -32,7 +32,6 @@ pub(crate) enum SftpConflictStrategy {
     Replace,
 }
 
-
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct SftpEntry {
@@ -73,13 +72,17 @@ fn validate_sftp_local_path(path: &str) -> Result<PathBuf, String> {
     if !path.is_absolute() {
         return Err("Path must be absolute".to_string());
     }
-    let normalized = path
-        .components()
-        .collect::<PathBuf>();
+    let normalized = path.components().collect::<PathBuf>();
     let s = normalized.to_string_lossy();
     let sensitive = [
-        "/.ssh", "/etc/", "/usr/bin/", "/usr/sbin/", "/sbin/",
-        "/bin/", "/System/", "/Library/LaunchDaemons/",
+        "/.ssh",
+        "/etc/",
+        "/usr/bin/",
+        "/usr/sbin/",
+        "/sbin/",
+        "/bin/",
+        "/System/",
+        "/Library/LaunchDaemons/",
         "/Library/LaunchAgents/",
     ];
     for prefix in &sensitive {

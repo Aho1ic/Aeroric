@@ -196,7 +196,8 @@ describe("FileExplorer UI", () => {
         "aria-current",
         "location",
       );
-      expect(screen.getByRole("button", { name: "/" })).toBeDisabled();
+      // 祖先目录可点击：点击后换根到该目录（见下一个用例）。
+      expect(screen.getByRole("button", { name: "/" })).toBeEnabled();
 
       await user.click(await screen.findByText("src"));
 
@@ -219,6 +220,54 @@ describe("FileExplorer UI", () => {
         value: originalScrollTo,
       });
     }
+  });
+
+  it("re-roots the tree when navigating to a breadcrumb above the project root", async () => {
+    const user = userEvent.setup();
+    vi.mocked(invoke).mockImplementation((command, args) => {
+      if (command !== "read_dir_entries") return Promise.resolve(undefined);
+      const path = (args as { path?: string } | undefined)?.path;
+      if (path === "/") {
+        return Promise.resolve([
+          {
+            name: "repo",
+            path: "/repo",
+            is_dir: true,
+            extension: undefined,
+            is_gitignored: false,
+            modifiedAtMs: 300,
+          },
+          {
+            name: "other",
+            path: "/other",
+            is_dir: true,
+            extension: undefined,
+            is_gitignored: false,
+            modifiedAtMs: 200,
+          },
+        ]);
+      }
+      return Promise.resolve(entries);
+    });
+
+    renderExplorer();
+
+    expect(await screen.findByText("app.tsx")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "/" }));
+
+    // 换根后重新以 "/" 为 root 读取目录，兄弟目录变得可见。
+    expect(await screen.findByText("other")).toBeInTheDocument();
+    expect(
+      vi
+        .mocked(invoke)
+        .mock.calls.some(
+          ([command, args]) =>
+            command === "read_dir_entries" &&
+            (args as { path?: string; projectPath?: string }).path === "/" &&
+            (args as { path?: string; projectPath?: string }).projectPath === "/",
+        ),
+    ).toBe(true);
   });
 
   it("shows a visible timeout when remote directory reads hang", async () => {

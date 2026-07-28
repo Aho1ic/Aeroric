@@ -138,9 +138,7 @@ function renderModelManagedAgentConfigPanel() {
       const enabled = (args as { enabled: boolean }).enabled;
       return Promise.resolve({
         ...appSettings,
-        custom_agents: [
-          { ...baseProfile, enable_chat_completions_proxy: enabled },
-        ],
+        custom_agents: [{ ...baseProfile, enable_chat_completions_proxy: enabled }],
       });
     }
     return Promise.resolve(undefined);
@@ -570,13 +568,10 @@ describe("Agent config and debug panel UI", () => {
     await user.click(getEnabledSaveButton());
 
     await waitFor(() =>
-      expect(invoke).toHaveBeenCalledWith(
-        "update_custom_agent_chat_completions_proxy",
-        {
-          id: "gpt55",
-          enabled: true,
-        },
-      ),
+      expect(invoke).toHaveBeenCalledWith("update_custom_agent_chat_completions_proxy", {
+        id: "gpt55",
+        enabled: true,
+      }),
     );
     expect(
       await findConfigEditor("#!/bin/sh\n# AERORIC_CODEX_CHAT_PROXY_VERSION=2\n"),

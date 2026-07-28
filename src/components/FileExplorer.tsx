@@ -118,6 +118,19 @@ export function FileExplorer({
 }) {
   const { t } = useI18n();
   const [nodes, setNodes] = useState<TreeNode[]>([]);
+  // 面包屑点击祖先目录时把浏览根上移到该目录（本地模式）。后端 read_dir_entries 会把
+  // 每个路径都限制在传入的 projectPath 之内，所以“跳到上级目录”必须换根，而不是仅换选中项。
+  // 远程模式仍锁在 remote.projectPath 内，不放开越界浏览。
+  const [browseRoot, setBrowseRoot] = useState(projectPath);
+
+  // 切换项目(或远程上下文)时回到项目根,不保留上一个项目遗留的浏览根。
+  useEffect(() => {
+    setBrowseRoot(projectPath);
+    setSelectedPath(null);
+    nodesRef.current = [];
+    setNodes([]);
+  }, [projectPath, remote]);
+
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -188,12 +201,12 @@ export function FileExplorer({
       setCtxMenu({
         x: e.clientX,
         y: e.clientY,
-        path: projectPath,
+        path: browseRoot,
         isDir: true,
         isRoot: true,
       });
     },
-    [projectPath],
+    [browseRoot],
   );
 
   const closeCtxMenu = useCallback(() => setCtxMenu(null), []);
@@ -205,13 +218,13 @@ export function FileExplorer({
       setCtxMenu(null);
 
       try {
-        await invoke("open_in_system_file_manager", { path, projectPath });
+        await invoke("open_in_system_file_manager", { path, projectPath: browseRoot });
       } catch (error) {
         console.error("Failed to open file in system folder", error);
         showToast(t("file.failedOpenSystemFolder", { error: formatInvokeError(error) }));
       }
     },
-    [projectPath, showToast, t],
+    [browseRoot, showToast, t],
   );
 
   const copyPath = useCallback(async (event: React.MouseEvent, path: string, withAt: boolean) => {
@@ -275,8 +288,8 @@ export function FileExplorer({
             },
             remoteInvokeOptions(),
           )
-        : safeInvoke<FsEntry[]>("read_dir_entries", { path, projectPath }),
-    [projectPath, remote, safeInvoke],
+        : safeInvoke<FsEntry[]>("read_dir_entries", { path, projectPath: browseRoot }),
+    [browseRoot, remote, safeInvoke],
   );
 
   const refresh = useCallback(
@@ -288,7 +301,7 @@ export function FileExplorer({
       if (showLoading) setLoading(true);
 
       try {
-        const nextNodes = await loadTreeNodes(projectPath, nodesRef.current, async (path) => {
+        const nextNodes = await loadTreeNodes(browseRoot, nodesRef.current, async (path) => {
           const entries = await readEntries(path);
           return entries ? sortFileEntries(entries, sortField, sortDirection) : entries;
         });
@@ -307,13 +320,13 @@ export function FileExplorer({
         refreshInFlightRef.current = false;
       }
     },
-    [isCancelled, projectPath, readEntries, sortDirection, sortField],
+    [browseRoot, isCancelled, readEntries, sortDirection, sortField],
   );
 
   useEffect(() => {
     if (!active) return;
     void refresh(true);
-  }, [active, projectPath, refresh]);
+  }, [active, browseRoot, refresh]);
 
   useEffect(() => {
     if (!active) return;
@@ -352,17 +365,17 @@ export function FileExplorer({
     [nodes, searchQuery],
   );
   const flat = useMemo(
-    () => flattenVisible(visibleNodes, projectPath, creating),
-    [visibleNodes, projectPath, creating],
+    () => flattenVisible(visibleNodes, browseRoot, creating),
+    [visibleNodes, browseRoot, creating],
   );
   const selectedNode = useMemo(
     () => (selectedPath ? findNode(nodes, selectedPath) : null),
     [nodes, selectedPath],
   );
   const currentDirectoryPath = useMemo(() => {
-    if (!selectedNode) return projectPath;
+    if (!selectedNode) return browseRoot;
     return selectedNode.is_dir ? selectedNode.path : parentPathOf(selectedNode.path);
-  }, [projectPath, selectedNode]);
+  }, [browseRoot, selectedNode]);
   const breadcrumbSegments = useMemo(
     () => fileExplorerBreadcrumbSegments(currentDirectoryPath),
     [currentDirectoryPath],
@@ -500,31 +513,43 @@ export function FileExplorer({
 
   const ensureExpanded = useCallback(
     (dirPath: string) => {
-      if (dirPath === projectPath) return;
+      if (dirPath === browseRoot) return;
       const current = findNode(nodesRef.current, dirPath);
       if (!current?.expanded) {
         handleToggle(dirPath);
       }
     },
-    [handleToggle, projectPath],
+    [browseRoot, handleToggle],
   );
 
   const handleBreadcrumbNavigate = useCallback(
     (path: string) => {
-      if (!isPathWithinRoot(path, projectPath)) return;
-      if (path === projectPath) {
+      if (path === browseRoot) {
         setSelectedPath(null);
-        setRevealDirectoryPath(projectPath);
+        setRevealDirectoryPath(browseRoot);
         return;
       }
 
-      const node = findNode(nodesRef.current, path);
-      if (!node?.is_dir) return;
-      setSelectedPath(path);
-      ensureExpanded(path);
+      // 当前根之内：沿用原地展开 + 滚动定位，保留已加载的树。
+      if (isPathWithinRoot(path, browseRoot)) {
+        const node = findNode(nodesRef.current, path);
+        if (!node?.is_dir) return;
+        setSelectedPath(path);
+        ensureExpanded(path);
+        setRevealDirectoryPath(path);
+        return;
+      }
+
+      // 祖先目录在当前根之外，后端会拒绝读取，必须换根重新加载。
+      // 远程模式锁死在 remote.projectPath 内，不允许越界。
+      if (remote) return;
+      nodesRef.current = [];
+      setNodes([]);
+      setSelectedPath(null);
+      setBrowseRoot(path);
       setRevealDirectoryPath(path);
     },
-    [ensureExpanded, projectPath],
+    [browseRoot, ensureExpanded, remote],
   );
 
   useEffect(() => {
@@ -538,7 +563,7 @@ export function FileExplorer({
         tree.scrollTop = top;
       }
     };
-    if (revealDirectoryPath === projectPath) {
+    if (revealDirectoryPath === browseRoot) {
       scrollTreeTo(0);
       setRevealDirectoryPath(null);
       return;
@@ -554,14 +579,14 @@ export function FileExplorer({
       scrollTreeTo(Math.max(0, rowTop - tree.clientHeight / 2 + ROW_HEIGHT));
     }
     setRevealDirectoryPath(null);
-  }, [flat, projectPath, revealDirectoryPath]);
+  }, [browseRoot, flat, revealDirectoryPath]);
 
   const startCreate = useCallback(
     (kind: CreateKind) => {
       if (!ctxMenu) return;
       let parentPath: string;
       if (ctxMenu.isRoot) {
-        parentPath = projectPath;
+        parentPath = browseRoot;
       } else if (ctxMenu.isDir) {
         parentPath = ctxMenu.path;
         ensureExpanded(parentPath);
@@ -572,7 +597,7 @@ export function FileExplorer({
       setCreatingValue("");
       setCreating({ parentPath, kind });
     },
-    [ctxMenu, ensureExpanded, projectPath],
+    [browseRoot, ctxMenu, ensureExpanded],
   );
 
   const cancelCreate = useCallback(() => {
@@ -614,7 +639,7 @@ export function FileExplorer({
             remoteInvokeOptions(),
           );
         } else {
-          await safeInvoke("create_file", { path: fullPath, projectPath });
+          await safeInvoke("create_file", { path: fullPath, projectPath: browseRoot });
         }
       } else {
         if (remote) {
@@ -628,13 +653,13 @@ export function FileExplorer({
             remoteInvokeOptions(),
           );
         } else {
-          await safeInvoke("create_directory", { path: fullPath, projectPath });
+          await safeInvoke("create_directory", { path: fullPath, projectPath: browseRoot });
         }
       }
       if (isCancelled()) return;
       setCreating(null);
       setCreatingValue("");
-      if (parentPath !== projectPath) {
+      if (parentPath !== browseRoot) {
         ensureExpanded(parentPath);
       }
       await refresh();
@@ -651,13 +676,13 @@ export function FileExplorer({
       commitInFlightRef.current = false;
     }
   }, [
+    browseRoot,
     cancelCreate,
     creating,
     creatingValue,
     ensureExpanded,
     isCancelled,
     onFileSelect,
-    projectPath,
     refresh,
     remote,
     safeInvoke,
@@ -740,7 +765,7 @@ export function FileExplorer({
           remoteInvokeOptions(),
         );
       } else {
-        await safeInvoke("rename_path", { path: oldPath, newName: name, projectPath });
+        await safeInvoke("rename_path", { path: oldPath, newName: name, projectPath: browseRoot });
       }
       if (isCancelled()) return;
       cancelRename();
@@ -758,10 +783,10 @@ export function FileExplorer({
       renameInFlightRef.current = false;
     }
   }, [
+    browseRoot,
     cancelRename,
     isCancelled,
     onFileSelect,
-    projectPath,
     refresh,
     remote,
     renamingPath,
@@ -782,7 +807,7 @@ export function FileExplorer({
       const targetDirectory = pasteTargetDirectory({
         selectedPath,
         selectedIsDir: selectedNode?.is_dir ?? false,
-        rootPath: projectPath,
+        rootPath: browseRoot,
       });
       pasteInFlightRef.current = true;
       try {
@@ -801,7 +826,7 @@ export function FileExplorer({
           await safeInvoke("copy_paths_to_directory", {
             sourcePaths,
             targetDirectory,
-            projectPath,
+            projectPath: browseRoot,
           });
         }
         if (isCancelled()) return;
@@ -816,9 +841,9 @@ export function FileExplorer({
       }
     },
     [
+      browseRoot,
       ensureExpanded,
       isCancelled,
-      projectPath,
       refresh,
       remote,
       safeInvoke,
@@ -882,7 +907,7 @@ export function FileExplorer({
             remoteInvokeOptions(),
           );
         } else {
-          await safeInvoke("delete_path", { path: targetPath, projectPath });
+          await safeInvoke("delete_path", { path: targetPath, projectPath: browseRoot });
         }
         if (isCancelled()) return;
         const sep = pathSeparator(targetPath);
@@ -902,7 +927,7 @@ export function FileExplorer({
         deleteInFlightRef.current = false;
       }
     },
-    [isCancelled, projectPath, refresh, remote, safeInvoke, showToast, t],
+    [browseRoot, isCancelled, refresh, remote, safeInvoke, showToast, t],
   );
 
   const handleTreeKeyDown = useCallback(
@@ -1131,7 +1156,9 @@ export function FileExplorer({
         >
           <div style={s.fileExplorerBreadcrumbs}>
             {breadcrumbSegments.map((segment, index) => {
-              const navigable = isPathWithinRoot(segment.path, projectPath);
+              // 本地模式下所有祖先段都可点击(点击后换根,见 handleBreadcrumbNavigate);
+              // 远程模式仍只允许在 remote.projectPath 之内跳转。
+              const navigable = remote ? isPathWithinRoot(segment.path, projectPath) : true;
               const current = segment.path === currentDirectoryPath;
               return (
                 <span key={segment.path} style={s.fileExplorerBreadcrumbSegment}>

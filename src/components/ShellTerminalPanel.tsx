@@ -59,6 +59,7 @@ interface Props {
   onResizeStart?: (e: React.MouseEvent) => void;
   showSessionTabs?: boolean;
   onSessionsChange?: (sessions: ShellSession[], activeShellId: string | null) => void;
+  shellLabel?: string;
 }
 
 export const SHELL_TERMINAL_MAX_SESSIONS = 10;
@@ -334,6 +335,7 @@ export const ShellTerminalPanel = forwardRef<ShellTerminalPanelHandle, Props>(
       onResizeStart,
       showSessionTabs = true,
       onSessionsChange,
+      shellLabel = "Shell",
     },
     ref,
   ) {
@@ -562,7 +564,7 @@ export const ShellTerminalPanel = forwardRef<ShellTerminalPanelHandle, Props>(
                         whiteSpace: "nowrap",
                       }}
                     >
-                      zsh {index + 1}
+                      {shellLabel} {index + 1}
                     </span>
                   </button>
                   <button

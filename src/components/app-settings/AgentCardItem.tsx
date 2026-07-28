@@ -75,14 +75,8 @@ export function AgentCardItem({
   const summaryPadding = viewMode === "card" ? "12px 14px" : "10px 12px";
 
   return (
-    <div
-      className="agent-card-item"
-      style={containerStyle}
-    >
-      <div
-        style={{ ...summaryBaseStyle, padding: summaryPadding }}
-        onClick={onClick}
-      >
+    <div className="agent-card-item" style={containerStyle}>
+      <div style={{ ...summaryBaseStyle, padding: summaryPadding }} onClick={onClick}>
         <img
           src={logo}
           alt=""
@@ -138,7 +132,9 @@ export function AgentCardItem({
               }}
             >
               {baseUrl && (
-                <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                <span
+                  style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+                >
                   {maskBaseUrl(baseUrl)}
                 </span>
               )}

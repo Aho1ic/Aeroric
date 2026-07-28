@@ -524,8 +524,7 @@ export function AgentConfigPanel({
     selectedModels.length > 0 &&
     !sameModels(normalizeModels(selectedModels), originalSelectedModels);
   const canSaveReasoningEffort =
-    supportsReasoningEffort &&
-    reasoningEffort !== originalReasoningEffort;
+    supportsReasoningEffort && reasoningEffort !== originalReasoningEffort;
   const canSave1mContext =
     Boolean(customProfile && !customProfile.codex_like) &&
     enable1mContext !== originalEnable1mContext;

@@ -1199,21 +1199,14 @@ where
 }
 
 fn python_debug_adapter_program() -> String {
-    std::env::var("PYTHON").unwrap_or_else(|_| {
-        #[cfg(target_os = "windows")]
-        {
-            "python".to_string()
-        }
-        #[cfg(not(target_os = "windows"))]
-        {
-            "python3".to_string()
-        }
-    })
+    crate::platform::local_python_program()
 }
 
 fn python_debug_adapter_command() -> Command {
     let mut command = Command::new(python_debug_adapter_program());
-    command.args(["-m", "debugpy.adapter"]);
+    command
+        .args(["-m", "debugpy.adapter"])
+        .envs(crate::app_settings::get_login_shell_env().iter().cloned());
     command
 }
 
@@ -1228,6 +1221,7 @@ fn ensure_python_debug_adapter_available(
         .arg("-c")
         .arg("import debugpy.adapter")
         .current_dir(cwd)
+        .envs(crate::app_settings::get_login_shell_env().iter().cloned())
         .envs(env.iter())
         .stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -2529,6 +2523,7 @@ pub fn start_debug_config(
                 .arg(program)
                 .args(&config.args)
                 .current_dir(&cwd)
+                .envs(crate::app_settings::get_login_shell_env().iter().cloned())
                 .envs(config.env.iter())
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped());

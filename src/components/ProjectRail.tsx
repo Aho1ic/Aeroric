@@ -1,4 +1,14 @@
-import { useState, useEffect, useMemo, useRef, type MouseEvent, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type MouseEvent,
+  type ReactNode,
+  type UIEvent,
+} from "react";
 import {
   ChevronDown,
   ChevronRight,
@@ -42,6 +52,48 @@ type ProjectPointerDragState = {
 
 const POINTER_DRAG_MOVE_TOLERANCE = 5;
 
+// 每个已挂载的 ProjectPage 都渲染自己的 ProjectRail 实例(见 App.tsx 的 mountedProjects
+// 映射),切换项目实际是换掉整条侧栏。若不共享滚动位置,新实例会从 scrollTop=0 起绘,
+// 表现为“点一下项目就跳回列表顶部”。这里把滚动位置提到模块级并在实例间同步。
+let sharedRailScrollTop = 0;
+const railScrollSubscribers = new Set<(top: number) => void>();
+
+// 把滚动容器接到共享位置:挂载时恢复,滚动时广播给其他实例。
+function useSharedRailScroll() {
+  const scrollRef = useRef<HTMLDivElement>(null);
+  // 应用共享值时会触发一次 scroll 事件，需忽略以免自己覆盖自己。
+  const applyingRef = useRef(false);
+
+  const applyScrollTop = useCallback((top: number) => {
+    const el = scrollRef.current;
+    if (!el || el.scrollTop === top) return;
+    applyingRef.current = true;
+    el.scrollTop = top;
+    applyingRef.current = false;
+  }, []);
+
+  useLayoutEffect(() => {
+    applyScrollTop(sharedRailScrollTop);
+    railScrollSubscribers.add(applyScrollTop);
+    return () => {
+      railScrollSubscribers.delete(applyScrollTop);
+    };
+  }, [applyScrollTop]);
+
+  const handleScroll = useCallback(
+    (event: UIEvent<HTMLDivElement>) => {
+      if (applyingRef.current) return;
+      sharedRailScrollTop = event.currentTarget.scrollTop;
+      for (const subscriber of railScrollSubscribers) {
+        if (subscriber !== applyScrollTop) subscriber(sharedRailScrollTop);
+      }
+    },
+    [applyScrollTop],
+  );
+
+  return { scrollRef, handleScroll };
+}
+
 function normalizeProjectSearchText(value: string) {
   return value.normalize("NFKC").toLocaleLowerCase();
 }
@@ -80,16 +132,6 @@ export function buildProjectTaskGroups(projects: Project[], tasks: Task[]): Proj
       .filter((task) => task.projectId === project.id)
       .sort((a, b) => b.createdAt - a.createdAt),
   }));
-}
-
-export function getProjectClickTargetTaskId(
-  tasks: Task[],
-  selectedTaskId: string | null,
-): string | null {
-  if (selectedTaskId && tasks.some((task) => task.id === selectedTaskId)) {
-    return selectedTaskId;
-  }
-  return tasks[0]?.id ?? null;
 }
 
 export function getDefaultExpandedProjectIds(
@@ -520,6 +562,8 @@ export function ProjectRail({
     startWidth: number;
   } | null>(null);
   const suppressNextProjectClickRef = useRef(false);
+  const { scrollRef: projectListScrollRef, handleScroll: handleProjectListScroll } =
+    useSharedRailScroll();
   const isDark = themeVariant === "dark";
   const effectiveCollapsed = forceCollapsed || collapsed;
   const [expandedProjectIds, setExpandedProjectIds] = useState<Set<string>>(() =>
@@ -773,13 +817,13 @@ export function ProjectRail({
     );
   };
 
-  const handleProjectClick = (project: Project, tasks: Task[]) => {
+  const handleProjectClick = (project: Project) => {
     setSelectedTaskIds(new Set());
     taskSelectionAnchorRef.current = null;
-    const isActive = project.id === activeProjectId;
-    const targetTaskId = getProjectClickTargetTaskId(tasks, selectedTaskId);
+    // 点击项目总是展开其历史对话列表。activeProjectId 的 effect 只覆盖“切换到新项目”，
+    // 重复点击当前项目(已折叠)不会触发，所以这里显式展开。
+    setExpandedProjectIds((prev) => updateExpandedProjectIds(prev, project.id, true));
     onSwitch(project);
-    if (!isActive && targetTaskId) onSelectTask(project.id, targetTaskId);
   };
 
   const handleTaskClick = (
@@ -869,8 +913,6 @@ export function ProjectRail({
         </button>
 
         {railProjects.map((project) => {
-          const tasks =
-            projectTaskGroups.find((group) => group.project.id === project.id)?.tasks ?? [];
           return (
             <RailItem
               key={project.id}
@@ -880,7 +922,7 @@ export function ProjectRail({
               attentionCount={getAttentionCount(allTasks, project.id)}
               showBadge={attentionBadge}
               waveNonce={waveNonces.get(project.id) ?? 0}
-              onSwitch={() => handleProjectClick(project, tasks)}
+              onSwitch={() => handleProjectClick(project)}
             />
           );
         })}
@@ -997,7 +1039,11 @@ export function ProjectRail({
         </button>
       </div>
 
-      <div style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: "8px 8px 10px" }}>
+      <div
+        ref={projectListScrollRef}
+        onScroll={handleProjectListScroll}
+        style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: "8px 8px 10px" }}
+      >
         {railProjectGroups.map((railGroup) => {
           const groupKey = railGroup.isUngrouped ? UNGROUPED_PROJECT_GROUP : railGroup.name;
           const groupCollapsed = collapsedProjectGroups.has(groupKey);
@@ -1187,7 +1233,7 @@ export function ProjectRail({
                               event.preventDefault();
                               return;
                             }
-                            handleProjectClick(project, tasks);
+                            handleProjectClick(project);
                           }}
                           style={{
                             flex: 1,

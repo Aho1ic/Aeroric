@@ -458,12 +458,8 @@ fn cargo_command(
     Ok(("cargo".to_string(), args, display))
 }
 
-fn python_program() -> &'static str {
-    if cfg!(windows) {
-        "python"
-    } else {
-        "python3"
-    }
+fn python_program() -> String {
+    crate::platform::local_python_program()
 }
 
 fn python_command(
@@ -489,7 +485,7 @@ fn python_command(
         args.push("-k".to_string());
         args.push(test_name);
     }
-    let program = python_program().to_string();
+    let program = python_program();
     let display = format!("{program} {}", args.join(" "));
     Ok((program, args, display))
 }
@@ -1141,6 +1137,7 @@ fn run_profile(
     let output = command
         .args(args)
         .current_dir(root)
+        .envs(crate::app_settings::get_login_shell_env().iter().cloned())
         .output()
         .map_err(|e| format!("Failed to run tests: {e}"))?;
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
@@ -1324,7 +1321,7 @@ pub async fn remote_run_tests(
 }
 
 #[cfg(test)]
-mod tests {
+mod unit_tests {
     use super::*;
     use std::fs;
     use std::path::{Path, PathBuf};

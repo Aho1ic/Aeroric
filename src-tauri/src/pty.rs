@@ -422,8 +422,9 @@ pub(crate) fn spawn_pty_reader(
                         if let Some(ref tx) = startup_tx {
                             let _ = tx.send(());
                         }
-                        let data =
-                            std::str::from_utf8(&combined[..valid_len]).unwrap().to_owned();
+                        let data = std::str::from_utf8(&combined[..valid_len])
+                            .unwrap()
+                            .to_owned();
                         let data = match output_filter.as_mut() {
                             Some(filter) => match filter(data) {
                                 Some(data) if !data.is_empty() => data,
@@ -501,8 +502,12 @@ fn spawn_exit_monitor(app: AppHandle, task_id: String, project_path: String, is_
 }
 
 /// 为 Claude 命令构建 CommandBuilder，并根据 permission_mode 添加权限标志。
-fn build_claude_cmd(agent_bin: &str, permission_mode: &str) -> CommandBuilder {
-    let mut c = CommandBuilder::new(agent_bin);
+fn build_claude_cmd(
+    launch: &crate::app_settings::AgentLaunchSpec,
+    permission_mode: &str,
+) -> CommandBuilder {
+    let mut c = CommandBuilder::new(&launch.program);
+    c.args(&launch.args);
     // Claude Code 自 v2.1.150 起默认开启 xterm 鼠标上报（mouse mode 1002），会拦截
     // 终端原生框选——表现为运行时拖动看似选中却不进选区态、无法复制。关掉它后滚轮回退
     // 到 xterm 自身 scrollback，用户运行时即可直接拖动框选。官方开关，仅影响 Claude。
@@ -525,8 +530,12 @@ fn build_claude_cmd(agent_bin: &str, permission_mode: &str) -> CommandBuilder {
 }
 
 /// 为 Codex 命令构建 CommandBuilder，并根据 permission_mode 添加全局执行标志。
-fn build_codex_cmd(agent_bin: &str, permission_mode: &str) -> CommandBuilder {
-    let mut c = CommandBuilder::new(agent_bin);
+fn build_codex_cmd(
+    launch: &crate::app_settings::AgentLaunchSpec,
+    permission_mode: &str,
+) -> CommandBuilder {
+    let mut c = CommandBuilder::new(&launch.program);
+    c.args(&launch.args);
     match permission_mode {
         "auto_edit" => {
             // 等价于已弃用的 --full-auto（codex >= 0.128 已移除该别名）：
@@ -562,7 +571,12 @@ fn normalized_selected_model(selected_model: Option<&str>) -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
-fn add_claude_launch_args(cmd: &mut CommandBuilder, agent: &str, selected_model: Option<&str>, speed: Option<&str>) {
+fn add_claude_launch_args(
+    cmd: &mut CommandBuilder,
+    agent: &str,
+    selected_model: Option<&str>,
+    speed: Option<&str>,
+) {
     if agent != "claude" {
         return;
     }
@@ -764,7 +778,6 @@ pub async fn run_task(
     };
 
     let launch = crate::app_settings::get_agent_launch_spec(&agent);
-    let agent_bin = launch.program.clone();
     let is_codex = launch.codex_like;
     let use_native_initial_prompt =
         should_use_native_initial_prompt(&agent, is_codex, force_prompt_injection.unwrap_or(false));
@@ -801,7 +814,7 @@ pub async fn run_task(
     };
 
     let mut cmd = if is_codex {
-        let mut c = build_codex_cmd(&agent_bin, &permission_mode);
+        let mut c = build_codex_cmd(&launch, &permission_mode);
         add_codex_launch_args(&mut c, &project_path, selected_model.as_deref());
         // Codex 对非 managed 的 command hook 默认要求 trust,Aeroric 注入的是新 hash 会被
         // skip;由 Aeroric 注入、来源可信,这里免 trust 直接运行。
@@ -815,7 +828,7 @@ pub async fn run_task(
         }
         c
     } else {
-        let mut c = build_claude_cmd(&agent_bin, &permission_mode);
+        let mut c = build_claude_cmd(&launch, &permission_mode);
         add_claude_launch_args(&mut c, &agent, selected_model.as_deref(), speed.as_deref());
         // Claude >= 2.1.87：通过 --session-id 指定会话，跳过 /status 发现
         if let Some(ref sid) = pre_session_id {
@@ -1084,7 +1097,6 @@ pub async fn resume_task(
         .map_err(|e| e.to_string())?;
 
     let launch = crate::app_settings::get_agent_launch_spec(&agent);
-    let agent_bin = launch.program.clone();
     let selected_model = normalized_selected_model(selected_model.as_deref());
     // hook 可信时会话发现/状态由 event_watcher 驱动,跳过轮询 watcher;否则回退,
     // 且不注入 AERORIC_* 守卫变量,避免旧版但已安装 hook 的 agent 与轮询路径并行重复
@@ -1099,7 +1111,7 @@ pub async fn resume_task(
 
     let is_codex = launch.codex_like;
     let mut cmd = if is_codex {
-        let mut c = build_codex_cmd(&agent_bin, &permission_mode);
+        let mut c = build_codex_cmd(&launch, &permission_mode);
         add_codex_launch_args(&mut c, &project_path, selected_model.as_deref());
         // Aeroric 注入的 hook 默认未信任会被 Codex skip;来源可信,免 trust 直接运行。
         if use_hooks {
@@ -1110,7 +1122,7 @@ pub async fn resume_task(
         c
     } else {
         // resume 时 session_id 已知，使用 --resume 标志
-        let mut c = build_claude_cmd(&agent_bin, &permission_mode);
+        let mut c = build_claude_cmd(&launch, &permission_mode);
         add_claude_launch_args(&mut c, &agent, selected_model.as_deref(), speed.as_deref());
         c.arg("--resume");
         c.arg(&session_id);
@@ -1348,12 +1360,20 @@ mod tests {
 
     #[test]
     fn permission_flags_stay_with_their_cli_family() {
-        let claude_argv: Vec<_> = build_claude_cmd("claude", "ask")
+        let claude_launch = crate::app_settings::AgentLaunchSpec {
+            program: "claude".to_string(),
+            ..Default::default()
+        };
+        let codex_launch = crate::app_settings::AgentLaunchSpec {
+            program: "codex".to_string(),
+            ..Default::default()
+        };
+        let claude_argv: Vec<_> = build_claude_cmd(&claude_launch, "ask")
             .get_argv()
             .iter()
             .map(|arg| arg.to_string_lossy().into_owned())
             .collect();
-        let codex_argv: Vec<_> = build_codex_cmd("codex", "ask")
+        let codex_argv: Vec<_> = build_codex_cmd(&codex_launch, "ask")
             .get_argv()
             .iter()
             .map(|arg| arg.to_string_lossy().into_owned())
@@ -1363,6 +1383,29 @@ mod tests {
             .windows(2)
             .any(|args| args == ["--permission-mode", "default"]));
         assert!(!codex_argv.iter().any(|arg| arg == "--permission-mode"));
+    }
+
+    #[test]
+    fn interpreter_args_precede_agent_permission_flags() {
+        let launch = crate::app_settings::AgentLaunchSpec {
+            program: "bash".to_string(),
+            args: vec![r"C:\Users\test\.aeroric\agents\mimo.sh".to_string()],
+            ..Default::default()
+        };
+        let argv: Vec<_> = build_claude_cmd(&launch, "full_access")
+            .get_argv()
+            .iter()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+
+        assert_eq!(
+            argv,
+            vec![
+                "bash",
+                r"C:\Users\test\.aeroric\agents\mimo.sh",
+                "--dangerously-skip-permissions"
+            ]
+        );
     }
 
     #[test]
@@ -1405,7 +1448,11 @@ mod tests {
 
     #[test]
     fn codex_launch_uses_cd_argument_for_project_root() {
-        let mut cmd = build_codex_cmd("codex", "ask");
+        let launch = crate::app_settings::AgentLaunchSpec {
+            program: "codex".to_string(),
+            ..Default::default()
+        };
+        let mut cmd = build_codex_cmd(&launch, "ask");
         add_codex_launch_args(&mut cmd, "/tmp/example-project", None);
 
         let argv: Vec<_> = cmd

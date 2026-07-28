@@ -7,6 +7,7 @@ use tauri::Manager;
 use usage::CodexRpcClient;
 
 mod agent_assist;
+mod agent_tools;
 mod analytics;
 mod app_settings;
 mod conda;
@@ -412,7 +413,12 @@ pub fn run() {
             app_settings::detect_agent_versions_for_settings,
             app_settings::detect_agent_version,
             app_settings::upgrade_agent_versions,
+            agent_tools::get_agent_tool_status,
+            agent_tools::install_agent_tools,
+            agent_tools::cancel_agent_tool_install,
             app_settings::get_system_fonts,
+            platform::get_platform_runtime_info,
+            platform::build_runnable_file_command,
             conda::detect_conda_environments,
             conda::detect_remote_conda_environments,
             database::legacy_sqlite::db_load_connections,

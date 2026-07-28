@@ -278,6 +278,7 @@ impl Default for AppSettings {
 #[derive(Clone, Debug, Default)]
 pub struct AgentLaunchSpec {
     pub program: String,
+    pub args: Vec<String>,
     pub extra_env: Vec<(String, String)>,
     pub codex_like: bool,
 }
@@ -354,7 +355,7 @@ fn normalize_custom_agent_profile(profile: CustomAgentProfile) -> Option<CustomA
     Some(CustomAgentProfile {
         id,
         label,
-        path: resolve_agent_launch_spec_from_path(&profile.id, &path).program,
+        path: normalize_agent_configured_path(&profile.id, &path),
         codex_like: profile.codex_like,
         config_lang: normalize_config_lang(profile.config_lang),
         base_url: normalize_base_url(&profile.base_url),
@@ -389,12 +390,47 @@ fn normalize_config_path(path: String) -> String {
     if trimmed.is_empty() {
         return String::new();
     }
-    if let Some(stripped) = trimmed.strip_prefix("~/") {
+    let home_relative = trimmed
+        .strip_prefix("~/")
+        .or_else(|| trimmed.strip_prefix("~\\"));
+    if let Some(stripped) = home_relative {
         if let Some(home) = crate::platform::home_dir() {
             return home.join(stripped).to_string_lossy().into_owned();
         }
     }
+    #[cfg(windows)]
+    {
+        return expand_windows_env_vars(trimmed);
+    }
+    #[cfg(not(windows))]
     trimmed.to_string()
+}
+
+#[cfg(windows)]
+fn expand_windows_env_vars(value: &str) -> String {
+    let mut output = String::with_capacity(value.len());
+    let mut remaining = value;
+    while let Some(start) = remaining.find('%') {
+        output.push_str(&remaining[..start]);
+        let after_start = &remaining[start + 1..];
+        let Some(end) = after_start.find('%') else {
+            output.push_str(&remaining[start..]);
+            return output;
+        };
+        let name = &after_start[..end];
+        if name.is_empty() {
+            output.push_str("%%");
+        } else if let Some(expanded) = std::env::var_os(name) {
+            output.push_str(&expanded.to_string_lossy());
+        } else {
+            output.push('%');
+            output.push_str(name);
+            output.push('%');
+        }
+        remaining = &after_start[end + 1..];
+    }
+    output.push_str(remaining);
+    output
 }
 
 fn normalize_agent_label_key(value: &str) -> String {
@@ -672,6 +708,10 @@ fn get_agent_configured_path(settings: &AppSettings, agent: &str) -> String {
     }
 }
 
+pub(crate) fn configured_agent_path(settings: &AppSettings, agent: &str) -> String {
+    get_agent_configured_path(settings, agent)
+}
+
 fn clear_cached_versions() {
     *CACHED_CLAUDE_VERSION
         .get_or_init(|| Mutex::new(None))
@@ -702,7 +742,8 @@ fn detect_path(binary: &str) -> String {
 }
 
 fn resolve_input_path(path: &str, binary: &str) -> String {
-    let trimmed = path.trim();
+    let normalized = normalize_config_path(path.to_string());
+    let trimmed = normalized.trim();
     if trimmed.is_empty() {
         let detected = detect_path(binary);
         return if detected.is_empty() {
@@ -720,6 +761,15 @@ fn resolve_input_path(path: &str, binary: &str) -> String {
     }
 }
 
+fn normalize_agent_configured_path(agent: &str, path: &str) -> String {
+    let resolved = resolve_input_path(path, agent);
+    #[cfg(windows)]
+    if crate::platform::agent_script_command(Path::new(&resolved)).is_some() {
+        return resolved;
+    }
+    resolve_agent_launch_spec_from_path(agent, &resolved).program
+}
+
 #[cfg(not(windows))]
 fn resolve_agent_launch_spec_from_path(agent: &str, path: &str) -> AgentLaunchSpec {
     let program = resolve_input_path(path, agent);
@@ -728,6 +778,7 @@ fn resolve_agent_launch_spec_from_path(agent: &str, path: &str) -> AgentLaunchSp
     }
     AgentLaunchSpec {
         program,
+        args: Vec::new(),
         extra_env: Vec::new(),
         codex_like: false,
     }
@@ -910,26 +961,43 @@ fn prepend_to_path(entries: &[PathBuf]) -> Option<String> {
 }
 
 #[cfg(windows)]
+fn windows_script_launch(path: &Path) -> Option<AgentLaunchSpec> {
+    crate::platform::agent_script_command(path).map(|command| AgentLaunchSpec {
+        program: command.program,
+        args: command.args,
+        extra_env: Vec::new(),
+        codex_like: false,
+    })
+}
+
+#[cfg(windows)]
 fn resolve_agent_launch_spec_from_path(agent: &str, path: &str) -> AgentLaunchSpec {
     let resolved = resolve_input_path(path, agent);
     let resolved_path = Path::new(&resolved);
 
     match agent {
         "claude" => {
-            let program = if let Some(exe) = candidate_from_ancestors(
+            if let Some(exe) = candidate_from_ancestors(
                 resolved_path,
                 "@anthropic-ai",
                 "claude-code",
                 &["bin", "claude.exe"],
             ) {
-                exe.to_string_lossy().into_owned()
+                AgentLaunchSpec {
+                    program: exe.to_string_lossy().into_owned(),
+                    args: Vec::new(),
+                    extra_env: Vec::new(),
+                    codex_like: false,
+                }
+            } else if let Some(spec) = windows_script_launch(resolved_path) {
+                spec
             } else {
-                resolved
-            };
-            AgentLaunchSpec {
-                program,
-                extra_env: Vec::new(),
-                codex_like: false,
+                AgentLaunchSpec {
+                    program: resolved,
+                    args: Vec::new(),
+                    extra_env: Vec::new(),
+                    codex_like: false,
+                }
             }
         }
         "codex" => {
@@ -942,22 +1010,27 @@ fn resolve_agent_launch_spec_from_path(agent: &str, path: &str) -> AgentLaunchSp
                 extra_env.push(("CODEX_MANAGED_BY_NPM".to_string(), "1".to_string()));
                 AgentLaunchSpec {
                     program: program.to_string_lossy().into_owned(),
+                    args: Vec::new(),
                     extra_env,
                     codex_like: false,
                 }
+            } else if let Some(spec) = windows_script_launch(resolved_path) {
+                spec
             } else {
                 AgentLaunchSpec {
                     program: resolved,
+                    args: Vec::new(),
                     extra_env: Vec::new(),
                     codex_like: false,
                 }
             }
         }
-        _ => AgentLaunchSpec {
+        _ => windows_script_launch(resolved_path).unwrap_or_else(|| AgentLaunchSpec {
             program: resolved,
+            args: Vec::new(),
             extra_env: Vec::new(),
             codex_like: false,
-        },
+        }),
     }
 }
 
@@ -990,14 +1063,18 @@ fn inferred_agent_codex_like(program: &str) -> Option<bool> {
 }
 
 fn get_agent_launch_spec_from_settings(settings: &AppSettings, agent: &str) -> AgentLaunchSpec {
-    let mut spec =
-        resolve_agent_launch_spec_from_path(agent, &get_agent_configured_path(settings, agent));
-    spec.codex_like = inferred_agent_codex_like(&spec.program)
+    let configured_path = get_agent_configured_path(settings, agent);
+    let mut spec = resolve_agent_launch_spec_from_path(agent, &configured_path);
+    spec.codex_like = inferred_agent_codex_like(&configured_path)
         .unwrap_or_else(|| configured_agent_is_codex_like(settings, agent));
     append_agent_credential_env(settings, agent, &mut spec.extra_env);
     append_builtin_agent_api_env(settings, agent, &mut spec.extra_env);
     append_agent_proxy_env(settings, agent, &mut spec.extra_env);
     spec
+}
+
+pub(crate) fn get_agent_launch_spec_from(settings: &AppSettings, agent: &str) -> AgentLaunchSpec {
+    get_agent_launch_spec_from_settings(settings, agent)
 }
 
 fn shell_quote(value: &str) -> String {
@@ -1518,7 +1595,7 @@ fn is_aeroric_codex_chat_proxy_wrapper(content: &str) -> bool {
     content.contains("# AERORIC_CODEX_CHAT_PROXY_VERSION=")
 }
 
-fn build_codex_agent_script(draft: &AgentSetupDraft) -> String {
+fn build_codex_agent_shell_script(draft: &AgentSetupDraft) -> String {
     let id = sanitize_custom_agent_id(&draft.id);
     let models = normalize_setup_models(draft);
     let picker = model_picker_shell(&models);
@@ -1648,7 +1725,7 @@ exit "$codex_status"
     )
 }
 
-fn build_claude_code_agent_script(draft: &AgentSetupDraft) -> String {
+fn build_claude_code_agent_shell_script(draft: &AgentSetupDraft) -> String {
     let id = sanitize_custom_agent_id(&draft.id);
     let models = normalize_setup_models(draft);
     let picker = model_picker_shell(&models);
@@ -1705,6 +1782,213 @@ exec claude --model "$selected_model" "$@"
     )
 }
 
+#[cfg(any(windows, test))]
+fn powershell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "''"))
+}
+
+#[cfg(any(windows, test))]
+fn powershell_literal_block(value: &str) -> String {
+    format!("@'\n{}\n'@", value.replace("\r\n", "\n"))
+}
+
+#[cfg(any(windows, test))]
+fn powershell_recovery_values(draft: &AgentSetupDraft) -> String {
+    let model = normalize_setup_models(draft)
+        .first()
+        .cloned()
+        .unwrap_or_default();
+    let base_url = normalize_base_url(&draft.base_url);
+    format!(
+        "# AERORIC_RECOVERY selected_model={}\n# AERORIC_RECOVERY OPENAI_API_KEY={}\n# AERORIC_RECOVERY ANTHROPIC_API_KEY={}\n# AERORIC_RECOVERY ANTHROPIC_AUTH_TOKEN={}\n# AERORIC_RECOVERY ANTHROPIC_BASE_URL={}\n# AERORIC_RECOVERY AERORIC_UPSTREAM_BASE_URL={}\n",
+        shell_quote(&model),
+        shell_quote(&draft.api_key),
+        shell_quote(&draft.api_key),
+        shell_quote(&draft.api_key),
+        shell_quote(&base_url),
+        shell_quote(&base_url),
+    )
+}
+
+#[cfg(any(windows, test))]
+fn build_codex_agent_powershell_script(draft: &AgentSetupDraft) -> String {
+    let id = sanitize_custom_agent_id(&draft.id);
+    let models = normalize_setup_models(draft);
+    let default_model = models.first().cloned().unwrap_or_default();
+    let config = codex_config_for_draft(draft);
+    let codex_bin = detect_path("codex");
+    let codex_bin = if codex_bin.is_empty() {
+        "codex".to_string()
+    } else {
+        codex_bin
+    };
+    let bundled_catalog = load_bundled_codex_catalog(&codex_bin);
+    let model_catalog = build_codex_model_catalog(&models, bundled_catalog.as_deref());
+    let use_proxy = draft.enable_chat_completions_proxy;
+    let marker = if use_proxy {
+        CODEX_CHAT_PROXY_MARKER
+    } else {
+        CODEX_AGENT_SCRIPT_MARKER
+    };
+    let config_setup = if use_proxy {
+        let (before, after) = split_codex_config_for_dynamic_base_url(&config);
+        format!(
+            r#"$proxyScript = Join-Path $agentHome 'codex-chat-proxy.py'
+[System.IO.File]::WriteAllText($proxyScript, {proxy_script}, $utf8NoBom)
+$portFile = Join-Path $agentHome 'codex-chat-proxy.port'
+Remove-Item -LiteralPath $portFile -Force -ErrorAction SilentlyContinue
+$pythonCommand = Get-Command python3, python, py -ErrorAction SilentlyContinue | Select-Object -First 1
+if ($null -eq $pythonCommand) {{
+  throw 'This custom Codex agent requires Python 3 to bridge Responses to Chat Completions.'
+}}
+$pythonArgs = @()
+if ($pythonCommand.Name -eq 'py.exe' -or $pythonCommand.Name -eq 'py') {{ $pythonArgs += '-3' }}
+$pythonArgs += @(('"' + $proxyScript + '"'), '--port-file', ('"' + $portFile + '"'))
+$proxyProcess = Start-Process -FilePath $pythonCommand.Source -ArgumentList $pythonArgs -PassThru -WindowStyle Hidden
+for ($attempt = 0; $attempt -lt 100; $attempt++) {{
+  if ((Test-Path -LiteralPath $portFile) -and (Get-Item -LiteralPath $portFile).Length -gt 0) {{ break }}
+  Start-Sleep -Milliseconds 20
+}}
+if (-not (Test-Path -LiteralPath $portFile)) {{
+  Stop-Process -Id $proxyProcess.Id -Force -ErrorAction SilentlyContinue
+  throw 'Failed to start the local Chat Completions bridge.'
+}}
+$proxyPort = (Get-Content -LiteralPath $portFile -Raw).Trim()
+$configContent = 'model = "' + $selectedModel + '"' + [Environment]::NewLine +
+  'model_catalog_json = "model-catalog.json"' + [Environment]::NewLine +
+  {before} + [Environment]::NewLine +
+  'base_url = "http://127.0.0.1:' + $proxyPort + '/v1"' + [Environment]::NewLine +
+  {after}
+"#,
+            proxy_script = powershell_literal_block(CODEX_CHAT_PROXY_SCRIPT),
+            before = powershell_literal_block(before),
+            after = powershell_literal_block(after),
+        )
+    } else {
+        format!(
+            r#"$proxyProcess = $null
+$portFile = $null
+$configContent = 'model = "' + $selectedModel + '"' + [Environment]::NewLine +
+  'model_catalog_json = "model-catalog.json"' + [Environment]::NewLine +
+  {config}
+"#,
+            config = powershell_literal_block(&config),
+        )
+    };
+    format!(
+        r#"$ErrorActionPreference = 'Stop'
+{marker}
+{recovery}
+$agentHome = if ($env:AERORIC_AGENT_HOME) {{ $env:AERORIC_AGENT_HOME }} else {{ Join-Path $HOME {relative_home} }}
+New-Item -ItemType Directory -Force -Path $agentHome | Out-Null
+$env:CODEX_HOME = $agentHome
+$env:OPENAI_API_KEY = {api_key}
+$env:ANTHROPIC_API_KEY = {api_key}
+$env:AERORIC_UPSTREAM_BASE_URL = {base_url}
+$selectedModel = if ($env:AERORIC_AGENT_MODEL) {{ $env:AERORIC_AGENT_MODEL }} else {{ {default_model} }}
+$utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+[System.IO.File]::WriteAllText((Join-Path $agentHome 'model-catalog.json'), {model_catalog}, $utf8NoBom)
+{config_setup}
+[System.IO.File]::WriteAllText((Join-Path $agentHome 'config.toml'), $configContent, $utf8NoBom)
+try {{
+  & {codex_bin} @args
+  exit $LASTEXITCODE
+}} finally {{
+  if ($null -ne $proxyProcess) {{
+    Stop-Process -Id $proxyProcess.Id -Force -ErrorAction SilentlyContinue
+  }}
+  if ($null -ne $portFile) {{
+    Remove-Item -LiteralPath $portFile -Force -ErrorAction SilentlyContinue
+  }}
+}}
+"#,
+        marker = marker,
+        recovery = powershell_recovery_values(draft),
+        relative_home = powershell_quote(&format!(".aeroric\\agent-homes\\{id}")),
+        api_key = powershell_quote(draft.api_key.trim()),
+        base_url = powershell_quote(&normalize_base_url(&draft.base_url)),
+        default_model = powershell_quote(&default_model),
+        model_catalog = powershell_literal_block(&model_catalog),
+        config_setup = config_setup,
+        codex_bin = powershell_quote(&codex_bin),
+    )
+}
+
+#[cfg(any(windows, test))]
+fn build_claude_code_agent_powershell_script(draft: &AgentSetupDraft) -> String {
+    let id = sanitize_custom_agent_id(&draft.id);
+    let models = normalize_setup_models(draft);
+    let default_model = models.first().cloned().unwrap_or_default();
+    let claude_bin = detect_path("claude");
+    let claude_bin = if claude_bin.is_empty() {
+        "claude".to_string()
+    } else {
+        claude_bin
+    };
+    let context_setup = if draft.enable_1m_context {
+        r#"
+if (-not $selectedModel.EndsWith('[1m]')) { $selectedModel += '[1m]' }
+"#
+    } else {
+        ""
+    };
+    format!(
+        r#"$ErrorActionPreference = 'Stop'
+{marker}
+{recovery}
+$agentHome = if ($env:AERORIC_AGENT_HOME) {{ $env:AERORIC_AGENT_HOME }} else {{ Join-Path $HOME {relative_home} }}
+New-Item -ItemType Directory -Force -Path $agentHome, (Join-Path $agentHome 'tmp'), (Join-Path $agentHome 'session-env') | Out-Null
+$env:CLAUDE_CONFIG_DIR = $agentHome
+$env:CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC = '1'
+$env:CLAUDE_CODE_ATTRIBUTION_HEADER = '0'
+$env:CLAUDE_CODE_SESSION_ENV_DIR = Join-Path $agentHome 'session-env'
+$env:TMP = Join-Path $agentHome 'tmp'
+$env:TEMP = $env:TMP
+Remove-Item Env:ANTHROPIC_API_KEY, Env:ANTHROPIC_AUTH_TOKEN, Env:ANTHROPIC_BASE_URL -ErrorAction SilentlyContinue
+$selectedModel = if ($env:AERORIC_AGENT_MODEL) {{ $env:AERORIC_AGENT_MODEL }} else {{ {default_model} }}
+{context_setup}
+$env:ANTHROPIC_BASE_URL = {base_url}
+$env:ANTHROPIC_AUTH_TOKEN = {api_key}
+$env:AGENT_ROUTER_TOKEN = $env:ANTHROPIC_AUTH_TOKEN
+$env:ANTHROPIC_DEFAULT_OPUS_MODEL = $selectedModel
+$env:ANTHROPIC_DEFAULT_SONNET_MODEL = $selectedModel
+$env:ANTHROPIC_DEFAULT_HAIKU_MODEL = $selectedModel
+& {claude_bin} --model $selectedModel @args
+exit $LASTEXITCODE
+"#,
+        marker = CLAUDE_AGENT_SCRIPT_MARKER,
+        recovery = powershell_recovery_values(draft),
+        relative_home = powershell_quote(&format!(".aeroric\\agent-homes\\{id}")),
+        default_model = powershell_quote(&default_model),
+        context_setup = context_setup,
+        base_url = powershell_quote(&normalize_base_url(&draft.base_url)),
+        api_key = powershell_quote(draft.api_key.trim()),
+        claude_bin = powershell_quote(&claude_bin),
+    )
+}
+
+fn build_codex_agent_script(draft: &AgentSetupDraft) -> String {
+    #[cfg(windows)]
+    {
+        return build_codex_agent_powershell_script(draft);
+    }
+    #[cfg(not(windows))]
+    {
+        build_codex_agent_shell_script(draft)
+    }
+}
+
+fn build_claude_code_agent_script(draft: &AgentSetupDraft) -> String {
+    #[cfg(windows)]
+    {
+        return build_claude_code_agent_powershell_script(draft);
+    }
+    #[cfg(not(windows))]
+    {
+        build_claude_code_agent_shell_script(draft)
+    }
+}
+
 fn build_agent_script(draft: &AgentSetupDraft) -> String {
     match draft.kind {
         AgentSetupKind::Codex => build_codex_agent_script(draft),
@@ -1750,10 +2034,65 @@ fn write_agent_script_at_path(path: &Path, content: &str) -> Result<(), String> 
     Ok(())
 }
 
+fn native_agent_script_extension() -> &'static str {
+    if cfg!(windows) {
+        "ps1"
+    } else {
+        "sh"
+    }
+}
+
+fn default_agent_script_path(id: &str) -> Result<PathBuf, String> {
+    Ok(agent_scripts_dir()?.join(format!("{id}.{}", native_agent_script_extension())))
+}
+
+fn generated_agent_script_target_path(id: &str, current_path: &str) -> Result<PathBuf, String> {
+    let current_path = normalize_config_path(current_path.to_string());
+    if current_path.trim().is_empty() {
+        return default_agent_script_path(id);
+    }
+    let current = PathBuf::from(current_path);
+    if current
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case(native_agent_script_extension()))
+    {
+        return Ok(current);
+    }
+    Ok(current.with_extension(native_agent_script_extension()))
+}
+
+fn is_aeroric_generated_agent_wrapper(content: &str) -> bool {
+    is_aeroric_codex_wrapper(content)
+        || content.contains(CLAUDE_AGENT_SCRIPT_MARKER)
+        || (content.contains("export CLAUDE_CONFIG_DIR=")
+            && content.contains("CLAUDE_CODE_SESSION_ENV_DIR"))
+}
+
+fn write_generated_agent_script(
+    id: &str,
+    current_path: &str,
+    content: &str,
+) -> Result<PathBuf, String> {
+    let target = generated_agent_script_target_path(id, current_path)?;
+    write_agent_script_at_path(&target, content)?;
+
+    let previous = PathBuf::from(normalize_config_path(current_path.to_string()));
+    if !current_path.trim().is_empty() && previous != target {
+        let remove_previous = fs::read_to_string(&previous)
+            .map(|existing| is_aeroric_generated_agent_wrapper(&existing))
+            .unwrap_or(false);
+        if remove_previous {
+            let _ = fs::remove_file(previous);
+        }
+    }
+    Ok(target)
+}
+
 fn write_agent_script(id: &str, content: &str) -> Result<PathBuf, String> {
     let dir = agent_scripts_dir()?;
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    let path = dir.join(format!("{}.sh", id));
+    let path = default_agent_script_path(id)?;
     write_agent_script_at_path(&path, content)?;
     Ok(path)
 }
@@ -1780,7 +2119,11 @@ fn remove_agent_profile_file(path: &str) -> Result<(), String> {
 
 fn parse_generated_shell_value(content: &str, key: &str) -> Option<String> {
     for line in content.lines() {
-        let line = line.trim().strip_prefix("export ").unwrap_or(line.trim());
+        let trimmed = line.trim();
+        let line = trimmed
+            .strip_prefix("# AERORIC_RECOVERY ")
+            .or_else(|| trimmed.strip_prefix("export "))
+            .unwrap_or(trimmed);
         let Some(value) = line
             .strip_prefix(key)
             .and_then(|value| value.strip_prefix('='))
@@ -2106,7 +2449,11 @@ fn refresh_stale_codex_agent_scripts(settings: &mut AppSettings) {
         } else {
             CODEX_AGENT_SCRIPT_MARKER
         };
-        if script_content.contains(expected_marker) {
+        let requires_native_script_migration =
+            generated_agent_script_target_path(&profile.id, &script_path)
+                .map(|target| target.as_path() != Path::new(&script_path))
+                .unwrap_or(false);
+        if script_content.contains(expected_marker) && !requires_native_script_migration {
             continue;
         }
         // Do not replace arbitrary user-authored shell scripts during startup.
@@ -2130,12 +2477,8 @@ fn refresh_stale_codex_agent_scripts(settings: &mut AppSettings) {
             continue;
         }
         let script = build_codex_agent_script(&draft);
-        if script_path.trim().is_empty() {
-            if let Ok(path) = write_agent_script(&profile.id, &script) {
-                profile.path = path.to_string_lossy().into_owned();
-            }
-        } else if write_agent_script_at_path(Path::new(&script_path), &script).is_ok() {
-            profile.path = script_path;
+        if let Ok(path) = write_generated_agent_script(&profile.id, &script_path, &script) {
+            profile.path = path.to_string_lossy().into_owned();
         }
     }
 }
@@ -2151,10 +2494,16 @@ fn refresh_stale_claude_agent_scripts(settings: &mut AppSettings) {
             continue;
         }
         let script_path = normalize_config_path(profile.path.clone());
-        let is_current = fs::read_to_string(&script_path)
-            .map(|content| content.contains(CLAUDE_AGENT_SCRIPT_MARKER))
-            .unwrap_or(false);
-        if is_current {
+        let script_content = fs::read_to_string(&script_path).unwrap_or_default();
+        let is_current = script_content.contains(CLAUDE_AGENT_SCRIPT_MARKER);
+        let requires_native_script_migration =
+            generated_agent_script_target_path(&profile.id, &script_path)
+                .map(|target| target.as_path() != Path::new(&script_path))
+                .unwrap_or(false);
+        if is_current && !requires_native_script_migration {
+            continue;
+        }
+        if !script_content.is_empty() && !is_aeroric_generated_agent_wrapper(&script_content) {
             continue;
         }
         let draft = AgentSetupDraft {
@@ -2172,12 +2521,8 @@ fn refresh_stale_claude_agent_scripts(settings: &mut AppSettings) {
             continue;
         }
         let script = build_claude_code_agent_script(&draft);
-        if script_path.trim().is_empty() {
-            if let Ok(path) = write_agent_script(&profile.id, &script) {
-                profile.path = path.to_string_lossy().into_owned();
-            }
-        } else if write_agent_script_at_path(Path::new(&script_path), &script).is_ok() {
-            profile.path = script_path;
+        if let Ok(path) = write_generated_agent_script(&profile.id, &script_path, &script) {
+            profile.path = path.to_string_lossy().into_owned();
         }
     }
 }
@@ -2186,13 +2531,13 @@ fn normalize_settings(settings: AppSettings) -> AppSettings {
     let proxy_settings = migrate_legacy_proxy_settings(&settings);
     let agent_proxy_enabled = migrate_agent_proxy_enabled(&settings);
     AppSettings {
-        claude_path: resolve_agent_launch_spec_from_path("claude", &settings.claude_path).program,
+        claude_path: normalize_agent_configured_path("claude", &settings.claude_path),
         claude_gpt55_path: if settings.claude_gpt55_path.is_empty() {
             String::new()
         } else {
-            resolve_agent_launch_spec_from_path("claude_gpt55", &settings.claude_gpt55_path).program
+            normalize_agent_configured_path("claude_gpt55", &settings.claude_gpt55_path)
         },
-        codex_path: resolve_agent_launch_spec_from_path("codex", &settings.codex_path).program,
+        codex_path: normalize_agent_configured_path("codex", &settings.codex_path),
         claude_config_path: normalize_config_path(settings.claude_config_path),
         claude_gpt55_config_path: normalize_config_path(settings.claude_gpt55_config_path),
         codex_config_path: normalize_config_path(settings.codex_config_path),
@@ -2261,6 +2606,26 @@ fn load_settings_unlocked() -> AppSettings {
 pub fn load_settings_internal() -> AppSettings {
     let _guard = settings_lock().lock();
     load_settings_unlocked()
+}
+
+pub(crate) fn save_managed_agent_path(agent: &str, path: &Path) -> Result<(), String> {
+    {
+        let _guard = settings_lock().lock();
+        let mut settings = load_settings_unlocked();
+        let value = path.to_string_lossy().into_owned();
+        match agent {
+            "claude" => settings.claude_path = value,
+            "codex" => settings.codex_path = value,
+            _ => return Err(format!("Unknown managed agent: {agent}")),
+        }
+        let dir = aeroric_dir()?;
+        fs::create_dir_all(&dir).map_err(|error| error.to_string())?;
+        let normalized = normalize_settings(settings);
+        let raw = serde_json::to_string_pretty(&normalized).map_err(|error| error.to_string())?;
+        atomic_write_private(&settings_path()?, &raw)?;
+    }
+    clear_cached_versions();
+    Ok(())
 }
 
 pub fn get_agent_launch_spec(agent: &str) -> AgentLaunchSpec {
@@ -3140,13 +3505,8 @@ pub async fn save_custom_agent_profile(profile: CustomAgentProfile) -> Result<Ap
             validate_agent_setup_draft(&draft)?;
             let script = build_codex_agent_script(&draft);
             let script_path = normalize_config_path(profile.path.clone());
-            if script_path.trim().is_empty() {
-                let path = write_agent_script(&profile.id, &script)?;
-                profile.path = path.to_string_lossy().into_owned();
-            } else {
-                write_agent_script_at_path(Path::new(&script_path), &script)?;
-                profile.path = script_path;
-            }
+            let path = write_generated_agent_script(&profile.id, &script_path, &script)?;
+            profile.path = path.to_string_lossy().into_owned();
         }
 
         settings
@@ -3269,7 +3629,8 @@ pub async fn list_agent_models(agent: String) -> Result<AgentModels, String> {
         let launch = get_agent_launch_spec(&agent);
         let mut cmd = Command::new(&launch.program);
         crate::subprocess::configure_background_command(&mut cmd);
-        cmd.arg("debug")
+        cmd.args(&launch.args)
+            .arg("debug")
             .arg("models")
             .env("PATH", get_login_shell_path())
             .stdin(Stdio::null())
@@ -3344,13 +3705,8 @@ pub async fn update_custom_agent_models(
         validate_agent_setup_draft(&draft)?;
         let script = build_agent_script(&draft);
         let script_path = normalize_config_path(profile.path.clone());
-        if script_path.trim().is_empty() {
-            let path = write_agent_script(&profile.id, &script)?;
-            profile.path = path.to_string_lossy().into_owned();
-        } else {
-            write_agent_script_at_path(Path::new(&script_path), &script)?;
-            profile.path = script_path;
-        }
+        let path = write_generated_agent_script(&profile.id, &script_path, &script)?;
+        profile.path = path.to_string_lossy().into_owned();
         profile.models = models;
 
         let dir = aeroric_dir()?;
@@ -3410,13 +3766,8 @@ pub async fn update_custom_agent_chat_completions_proxy(
         validate_agent_setup_draft(&draft)?;
         let script = build_codex_agent_script(&draft);
         let script_path = normalize_config_path(profile.path.clone());
-        if script_path.trim().is_empty() {
-            let path = write_agent_script(&profile.id, &script)?;
-            profile.path = path.to_string_lossy().into_owned();
-        } else {
-            write_agent_script_at_path(Path::new(&script_path), &script)?;
-            profile.path = script_path;
-        }
+        let path = write_generated_agent_script(&profile.id, &script_path, &script)?;
+        profile.path = path.to_string_lossy().into_owned();
         profile.enable_chat_completions_proxy = enabled;
 
         let dir = aeroric_dir()?;
@@ -3474,13 +3825,8 @@ pub async fn update_custom_agent_context(
         validate_agent_setup_draft(&draft)?;
         let script = build_claude_code_agent_script(&draft);
         let script_path = normalize_config_path(profile.path.clone());
-        if script_path.trim().is_empty() {
-            let path = write_agent_script(&profile.id, &script)?;
-            profile.path = path.to_string_lossy().into_owned();
-        } else {
-            write_agent_script_at_path(Path::new(&script_path), &script)?;
-            profile.path = script_path;
-        }
+        let path = write_generated_agent_script(&profile.id, &script_path, &script)?;
+        profile.path = path.to_string_lossy().into_owned();
         profile.enable_1m_context = enable_1m_context;
 
         let dir = aeroric_dir()?;
@@ -3615,7 +3961,8 @@ pub async fn detect_agent_paths() -> Result<AppSettings, String> {
 fn detect_version(launch: &AgentLaunchSpec) -> Option<String> {
     let mut cmd = Command::new(&launch.program);
     crate::subprocess::configure_background_command(&mut cmd);
-    cmd.arg("--version")
+    cmd.args(&launch.args)
+        .arg("--version")
         .env("PATH", get_login_shell_path())
         .stdin(Stdio::null())
         .stderr(Stdio::piped());
@@ -3631,6 +3978,14 @@ fn detect_version(launch: &AgentLaunchSpec) -> Option<String> {
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
     extract_semver(&stdout).or_else(|| extract_semver(&stderr))
+}
+
+pub(crate) fn detect_launch_version(launch: &AgentLaunchSpec) -> Option<String> {
+    detect_version(launch)
+}
+
+pub(crate) fn extract_version(text: &str) -> Option<String> {
+    extract_semver(text)
 }
 
 fn extract_semver(text: &str) -> Option<String> {
@@ -3809,6 +4164,10 @@ pub struct AgentUpgradeResult {
     pub current_version: String,
     pub message: String,
     pub channels: Vec<AgentUpgradeChannel>,
+    #[serde(default)]
+    pub channel: String,
+    #[serde(default)]
+    pub managed: bool,
 }
 
 fn canonical_program_path(program: &str) -> String {
@@ -3829,6 +4188,10 @@ fn detected_upgrade_manager(program: &str) -> &'static str {
     } else {
         "standalone"
     }
+}
+
+pub(crate) fn upgrade_manager_for_path(program: &str) -> &'static str {
+    detected_upgrade_manager(program)
 }
 
 /// Homebrew 有 formula(Cellar,如 `brew install codex`)与 cask(Caskroom,
@@ -4124,8 +4487,9 @@ pub async fn upgrade_agent_versions(
             }
             let binary_agent = upgrade_binary_agent(kind);
             let launch = get_agent_launch_spec_from_settings(&settings, binary_agent);
+            let configured_program = get_agent_configured_path(&settings, binary_agent);
             let previous_version = detect_version(&launch).unwrap_or_default();
-            let channels = match build_agent_upgrade_commands(kind, &launch.program) {
+            let channels = match build_agent_upgrade_commands(kind, &configured_program) {
                 Ok(commands) => run_agent_upgrades(&commands),
                 Err(error) => vec![AgentUpgradeChannel {
                     channel: "detection".to_string(),
@@ -4163,6 +4527,12 @@ pub async fn upgrade_agent_versions(
                     current_version: current_version.clone(),
                     message,
                     channels: channels.clone(),
+                    channel: channels
+                        .iter()
+                        .map(|channel| channel.channel.as_str())
+                        .collect::<Vec<_>>()
+                        .join(","),
+                    managed: false,
                 })
             })
             .collect())
@@ -4321,8 +4691,10 @@ mod tests {
 }"#;
         std::fs::write(&config_path, config_content).unwrap();
 
-        let mut settings = AppSettings::default();
-        settings.claude_config_path = config_path.to_string_lossy().into_owned();
+        let mut settings = AppSettings {
+            claude_config_path: config_path.to_string_lossy().into_owned(),
+            ..AppSettings::default()
+        };
         settings
             .agent_label_overrides
             .insert("claude".to_string(), "Work Claude".to_string());
@@ -4493,6 +4865,59 @@ api_key = "sk-codex"
     fn resolves_empty_agent_path_to_binary_name_when_path_detection_fails() {
         let resolved = resolve_input_path("", "__aeroric_missing_agent_binary__");
         assert_eq!(resolved, "__aeroric_missing_agent_binary__");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_shell_agent_uses_an_interpreter_without_rewriting_configured_path() {
+        let path = r"C:\Users\test\.aeroric\agents\mimo.sh";
+        let launch = resolve_agent_launch_spec_from_path("mimo", path);
+
+        assert_ne!(launch.program, path);
+        assert!(launch.args.iter().any(|arg| arg.contains(path)));
+        assert_eq!(normalize_agent_configured_path("mimo", path), path);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_powershell_agent_is_never_passed_directly_to_create_process() {
+        let path = r"C:\Users\Test User\.aeroric\agents\mimo.ps1";
+        let launch = resolve_agent_launch_spec_from_path("mimo", path);
+
+        assert_ne!(launch.program, path);
+        assert!(launch
+            .program
+            .rsplit(['/', '\\'])
+            .next()
+            .is_some_and(|name| {
+                name.eq_ignore_ascii_case("pwsh.exe")
+                    || name.eq_ignore_ascii_case("pwsh")
+                    || name.eq_ignore_ascii_case("powershell.exe")
+                    || name.eq_ignore_ascii_case("powershell")
+            }));
+        assert!(launch.args.windows(2).any(|args| args == ["-File", path]));
+        assert_eq!(normalize_agent_configured_path("mimo", path), path);
+    }
+
+    #[test]
+    fn generated_agent_scripts_use_the_native_platform_extension() {
+        let native = native_agent_script_extension();
+        let other = if native == "ps1" { "sh" } else { "ps1" };
+        let current = format!("/tmp/aeroric-agent.{other}");
+        let target = generated_agent_script_target_path("aeroric-agent", &current).unwrap();
+
+        assert_eq!(
+            target.extension().and_then(|extension| extension.to_str()),
+            Some(native)
+        );
+        assert_eq!(
+            generated_agent_script_target_path(
+                "aeroric-agent",
+                &format!("/tmp/aeroric-agent.{native}")
+            )
+            .unwrap(),
+            PathBuf::from(format!("/tmp/aeroric-agent.{native}"))
+        );
     }
 
     #[test]
@@ -4713,6 +5138,7 @@ api_key = "sk-codex"
         );
     }
 
+    #[cfg(not(windows))]
     #[test]
     fn builds_codex_agent_script_without_chat_bridge_by_default() {
         let draft = AgentSetupDraft {
@@ -4742,6 +5168,7 @@ api_key = "sk-codex"
         assert!(script.contains("export OPENAI_API_KEY='sk-test'"));
     }
 
+    #[cfg(not(windows))]
     #[test]
     fn builds_codex_agent_script_with_chat_completions_bridge() {
         let draft = AgentSetupDraft {
@@ -4763,6 +5190,45 @@ api_key = "sk-codex"
         assert!(!script.contains("base_url = \"https://example.com/v1\""));
         assert!(script.contains(CODEX_CHAT_PROXY_MARKER));
         assert!(script.contains("codex-chat-proxy.py"));
+    }
+
+    #[test]
+    fn builds_native_windows_powershell_agent_launchers() {
+        let codex = AgentSetupDraft {
+            id: "gpt55".to_string(),
+            label: "GPT55".to_string(),
+            kind: AgentSetupKind::Codex,
+            base_url: "https://example.com/v1/".to_string(),
+            api_key: "sk'test".to_string(),
+            model: "gpt-5.6".to_string(),
+            models: vec!["gpt-5.6".to_string()],
+            enable_1m_context: false,
+            enable_chat_completions_proxy: true,
+        };
+        let codex_script = build_codex_agent_powershell_script(&codex);
+        assert!(codex_script.contains("$env:CODEX_HOME"));
+        assert!(codex_script.contains("$env:OPENAI_API_KEY = 'sk''test'"));
+        assert!(codex_script.contains("Start-Process"));
+        assert!(codex_script.contains("codex-chat-proxy.py"));
+        assert!(codex_script.contains(" @args"));
+        assert!(codex_script.contains("# AERORIC_RECOVERY selected_model='gpt-5.6'"));
+
+        let claude = AgentSetupDraft {
+            id: "agentrouter".to_string(),
+            label: "AgentRouter".to_string(),
+            kind: AgentSetupKind::ClaudeCode,
+            base_url: "https://agentrouter.org".to_string(),
+            api_key: "sk'test".to_string(),
+            model: "claude-opus-4-8".to_string(),
+            models: vec!["claude-opus-4-8".to_string()],
+            enable_1m_context: true,
+            enable_chat_completions_proxy: false,
+        };
+        let claude_script = build_claude_code_agent_powershell_script(&claude);
+        assert!(claude_script.contains("$env:CLAUDE_CONFIG_DIR"));
+        assert!(claude_script.contains("$env:ANTHROPIC_AUTH_TOKEN = 'sk''test'"));
+        assert!(claude_script.contains("$selectedModel += '[1m]'"));
+        assert!(claude_script.contains("--model $selectedModel @args"));
     }
 
     #[test]
@@ -4815,6 +5281,7 @@ api_key = "sk-codex"
         assert!(!catalog.contains("gpt-5.3"));
     }
 
+    #[cfg(not(windows))]
     #[test]
     fn builds_claude_code_agent_script_with_anthropic_env() {
         let draft = AgentSetupDraft {
@@ -4860,6 +5327,7 @@ api_key = "sk-codex"
         assert!(!script.contains("selected_model=\"${selected_model}[1m]\""));
     }
 
+    #[cfg(not(windows))]
     #[test]
     fn custom_agent_script_model_selection_is_non_interactive() {
         let draft = AgentSetupDraft {
@@ -5538,7 +6006,7 @@ printf 'model_catalog_json = "model-catalog.json"\n'
         let script_path = dir.join("agentrouter.sh");
         fs::write(
             &script_path,
-            "#!/bin/bash\nexport ANTHROPIC_AUTH_TOKEN='sk-test'\nexport ANTHROPIC_API_KEY=\"$ANTHROPIC_AUTH_TOKEN\"\n",
+            "#!/bin/bash\nset -euo pipefail\nAGENT_HOME=\"$HOME/.aeroric/agent-homes/agentrouter\"\nexport CLAUDE_CONFIG_DIR=\"$AGENT_HOME\"\nexport CLAUDE_CODE_SESSION_ENV_DIR=\"$AGENT_HOME/session-env\"\nexport ANTHROPIC_AUTH_TOKEN='sk-test'\nexport ANTHROPIC_API_KEY=\"$ANTHROPIC_AUTH_TOKEN\"\nexec claude \"$@\"\n",
         )
         .unwrap();
         let mut settings = AppSettings {
@@ -5565,6 +6033,42 @@ printf 'model_catalog_json = "model-catalog.json"\n'
         assert!(script.contains(CLAUDE_AGENT_SCRIPT_MARKER));
         assert!(script.contains("selected_model=\"${selected_model}[1m]\""));
         assert!(!script.contains("export ANTHROPIC_API_KEY"));
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn preserves_user_authored_claude_shell_scripts_during_refresh() {
+        let dir =
+            std::env::temp_dir().join(format!("aeroric-claude-preserve-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&dir).unwrap();
+        let script_path = dir.join("custom.sh");
+        let original = "#!/bin/bash\nexport ANTHROPIC_AUTH_TOKEN='custom'\necho custom-wrapper\n";
+        fs::write(&script_path, original).unwrap();
+        let mut settings = AppSettings {
+            custom_agents: vec![CustomAgentProfile {
+                id: "custom".to_string(),
+                label: "Custom".to_string(),
+                path: script_path.to_string_lossy().into_owned(),
+                codex_like: false,
+                config_lang: "shellscript".to_string(),
+                base_url: "https://example.com".to_string(),
+                api_key: "sk-test".to_string(),
+                models: vec!["claude-opus-4-6".to_string()],
+                enable_1m_context: false,
+                enable_chat_completions_proxy: false,
+                username: String::new(),
+                password: String::new(),
+            }],
+            ..AppSettings::default()
+        };
+
+        refresh_stale_claude_agent_scripts(&mut settings);
+
+        assert_eq!(fs::read_to_string(&script_path).unwrap(), original);
+        assert_eq!(
+            settings.custom_agents[0].path,
+            script_path.to_string_lossy()
+        );
         let _ = fs::remove_dir_all(dir);
     }
 

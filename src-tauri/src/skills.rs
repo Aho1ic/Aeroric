@@ -15,6 +15,9 @@ use crate::storage::{
     aeroric_dir, atomic_write, ensure_aeroric_dirs, load_projects, update_projects, Project,
 };
 
+/// 未配置技能库时使用的默认目录名（位于 `~/.aeroric/` 下）。
+const DEFAULT_HUB_DIR_NAME: &str = "skills_hub";
+
 const SKILLS_SH_ORIGIN: &str = "https://skills.sh";
 const GITHUB_API_ORIGIN: &str = "https://api.github.com";
 const MARKETPLACE_PAGE_SIZE: usize = 12;
@@ -82,8 +85,14 @@ pub struct SkillInstallation {
     pub installed_at: i64,
     pub link_path: String,
     pub target_path: String,
+    #[serde(default = "default_install_kind")]
+    pub install_kind: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub health: Option<String>, // "ok" | "broken" | "diverged"
+}
+
+fn default_install_kind() -> String {
+    "symlink".to_string()
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
@@ -461,6 +470,42 @@ fn save_hub_config_internal(config: &SkillHubConfig) -> Result<(), String> {
     atomic_write(&skill_hub_path()?, &raw)
 }
 
+/// 默认技能库目录：`~/.aeroric/skills_hub`。
+fn default_hub_dir() -> Result<PathBuf, String> {
+    Ok(aeroric_dir()?.join(DEFAULT_HUB_DIR_NAME))
+}
+
+/// 读取 hub 配置；未配置 `hub_path` 时落到默认目录（按需创建并持久化）。
+///
+/// 已有 `hub_path` 一律原样保留——包括指向已删除目录的情况，用户手动选择的路径
+/// 不能被默认值悄悄顶掉。只有真正“空配置”才会补默认值。
+fn load_hub_config_or_default() -> SkillHubConfig {
+    let config = load_hub_config_internal();
+    if config
+        .hub_path
+        .as_deref()
+        .is_some_and(|path| !path.trim().is_empty())
+    {
+        return config;
+    }
+
+    let Ok(dir) = default_hub_dir() else {
+        return config;
+    };
+    if fs::create_dir_all(&dir).is_err() {
+        return config;
+    }
+
+    let next = SkillHubConfig {
+        hub_project_id: config.hub_project_id.clone(),
+        hub_path: Some(dir.to_string_lossy().into_owned()),
+        created_at: config.created_at.or_else(|| Some(now_ms())),
+    };
+    // 持久化失败不影响本次返回值：前端仍能用默认目录，下次启动会再试。
+    let _ = save_hub_config_internal(&next);
+    next
+}
+
 fn load_installations_internal() -> InstallationsFile {
     let Ok(path) = installations_path() else {
         return InstallationsFile::default();
@@ -756,13 +801,49 @@ fn scan_skills_in(hub_path: &Path) -> Vec<Skill> {
 // ── Symlink helpers ──────────────────────────────────────────────────────────
 
 #[cfg(unix)]
-fn create_symlink(target: &Path, link: &Path) -> std::io::Result<()> {
+fn create_skill_installation(target: &Path, link: &Path) -> Result<String, String> {
     std::os::unix::fs::symlink(target, link)
+        .map(|_| "symlink".to_string())
+        .map_err(|error| error.to_string())
 }
 
 #[cfg(windows)]
-fn create_symlink(target: &Path, link: &Path) -> std::io::Result<()> {
-    std::os::windows::fs::symlink_dir(target, link)
+fn create_skill_installation(target: &Path, link: &Path) -> Result<String, String> {
+    let mut command = std::process::Command::new("cmd.exe");
+    crate::subprocess::configure_background_command(&mut command);
+    let junction = command
+        .args(["/D", "/C", "mklink", "/J"])
+        .arg(link)
+        .arg(target)
+        .output();
+    if junction.is_ok_and(|output| output.status.success()) {
+        return Ok("junction".to_string());
+    }
+    copy_skill_directory(target, link)?;
+    Ok("copy".to_string())
+}
+
+#[cfg(windows)]
+fn copy_skill_directory(source: &Path, destination: &Path) -> Result<(), String> {
+    fs::create_dir_all(destination).map_err(|error| error.to_string())?;
+    for entry in fs::read_dir(source).map_err(|error| error.to_string())? {
+        let entry = entry.map_err(|error| error.to_string())?;
+        let source_path = entry.path();
+        let destination_path = destination.join(entry.file_name());
+        let metadata = fs::symlink_metadata(&source_path).map_err(|error| error.to_string())?;
+        if metadata.file_type().is_symlink() {
+            return Err(format!(
+                "Skill copy fallback does not follow symlinks: {}",
+                source_path.display()
+            ));
+        }
+        if metadata.is_dir() {
+            copy_skill_directory(&source_path, &destination_path)?;
+        } else if metadata.is_file() {
+            fs::copy(&source_path, &destination_path).map_err(|error| error.to_string())?;
+        }
+    }
+    Ok(())
 }
 
 fn classify_existing(path: &Path) -> Option<(String, Option<String>)> {
@@ -836,11 +917,37 @@ fn remove_symlink_if_present(link_path: &Path) -> Result<bool, String> {
     Ok(true)
 }
 
+fn remove_recorded_installation(installation: &SkillInstallation) -> Result<bool, String> {
+    let path = Path::new(&installation.link_path);
+    let Ok(metadata) = fs::symlink_metadata(path) else {
+        return Ok(false);
+    };
+    match installation.install_kind.as_str() {
+        "copy" => {
+            if metadata.is_dir() && !metadata.file_type().is_symlink() {
+                fs::remove_dir_all(path).map_err(|error| error.to_string())?;
+                Ok(true)
+            } else {
+                Ok(false)
+            }
+        }
+        "junction" => {
+            fs::remove_dir(path).map_err(|error| error.to_string())?;
+            Ok(true)
+        }
+        _ if metadata.file_type().is_symlink() => {
+            fs::remove_file(path).map_err(|error| error.to_string())?;
+            Ok(true)
+        }
+        _ => Ok(false),
+    }
+}
+
 // ── Tauri commands ───────────────────────────────────────────────────────────
 
 #[tauri::command]
 pub async fn get_skill_hub_config() -> Result<SkillHubConfig, String> {
-    tokio::task::spawn_blocking(load_hub_config_internal)
+    tokio::task::spawn_blocking(load_hub_config_or_default)
         .await
         .map_err(|e| e.to_string())
 }
@@ -959,11 +1066,23 @@ pub async fn list_skill_installations(
             let target_canonical = Path::new(&ins.target_path).canonicalize();
             ins.health = Some(match fs::symlink_metadata(link) {
                 Err(_) => "broken".to_string(),
-                Ok(meta) if !meta.file_type().is_symlink() => "diverged".to_string(),
-                Ok(_) => match target_canonical {
-                    Err(_) => "broken".to_string(),
-                    Ok(expected) if symlink_points_to(link, &expected) => "ok".to_string(),
-                    Ok(_) => "diverged".to_string(),
+                Ok(meta) => match ins.install_kind.as_str() {
+                    "copy" if meta.is_dir() && link.join("SKILL.md").is_file() => "ok".to_string(),
+                    "junction" => match target_canonical {
+                        Err(_) => "broken".to_string(),
+                        Ok(expected)
+                            if link.canonicalize().is_ok_and(|actual| actual == expected) =>
+                        {
+                            "ok".to_string()
+                        }
+                        Ok(_) => "diverged".to_string(),
+                    },
+                    _ if meta.file_type().is_symlink() => match target_canonical {
+                        Err(_) => "broken".to_string(),
+                        Ok(expected) if symlink_points_to(link, &expected) => "ok".to_string(),
+                        Ok(_) => "diverged".to_string(),
+                    },
+                    _ => "diverged".to_string(),
                 },
             });
         }
@@ -1069,10 +1188,29 @@ pub async fn install_skill(
         let existing = classify_existing(&link_path);
 
         if let Some((kind, existing_target)) = existing.as_ref() {
+            let existing_installation = load_installations_internal()
+                .installations
+                .into_iter()
+                .find(|installation| {
+                    installation.skill_name == skill_name
+                        && installation.project_id == project_id
+                        && installation.agent == agent
+                        && installation.link_path == link_path_str
+                        && installation.target_path == target_path_str
+                });
             let already_same_symlink =
                 kind == "symlink" && symlink_points_to(&link_path, &skill_canonical);
+            let already_managed = existing_installation.as_ref().is_some_and(|installation| {
+                match installation.install_kind.as_str() {
+                    "junction" => link_path
+                        .canonicalize()
+                        .is_ok_and(|actual| actual == skill_canonical),
+                    "copy" => link_path.is_dir() && link_path.join("SKILL.md").is_file(),
+                    _ => already_same_symlink,
+                }
+            });
 
-            if already_same_symlink {
+            if already_managed {
                 // 幂等：补全 installations 记录
                 let installation = upsert_installation(
                     &skill_name,
@@ -1080,6 +1218,10 @@ pub async fn install_skill(
                     &agent,
                     &link_path_str,
                     &target_path_str,
+                    existing_installation
+                        .as_ref()
+                        .map(|installation| installation.install_kind.as_str())
+                        .unwrap_or("symlink"),
                 )?;
                 return Ok(InstallResult {
                     ok: true,
@@ -1105,14 +1247,15 @@ pub async fn install_skill(
             remove_existing(&link_path)?;
         }
 
-        create_symlink(&skill_canonical, &link_path).map_err(|e| {
-            format!(
-                "Failed to create symlink {} -> {}: {}",
-                link_path.display(),
-                skill_canonical.display(),
-                e
-            )
-        })?;
+        let install_kind =
+            create_skill_installation(&skill_canonical, &link_path).map_err(|e| {
+                format!(
+                    "Failed to install skill {} -> {}: {}",
+                    link_path.display(),
+                    skill_canonical.display(),
+                    e
+                )
+            })?;
 
         let installation = upsert_installation(
             &skill_name,
@@ -1120,6 +1263,7 @@ pub async fn install_skill(
             &agent,
             &link_path_str,
             &target_path_str,
+            &install_kind,
         )?;
 
         Ok(InstallResult {
@@ -1144,12 +1288,16 @@ pub async fn uninstall_skill(
             return Err(format!("Unsupported agent: {}", agent));
         }
         let mut file = load_installations_internal();
-        let target = file.installations.iter().find(|ins| {
-            ins.skill_name == skill_name && ins.project_id == project_id && ins.agent == agent
-        });
+        let target = file
+            .installations
+            .iter()
+            .find(|ins| {
+                ins.skill_name == skill_name && ins.project_id == project_id && ins.agent == agent
+            })
+            .cloned();
 
         let link_path = match target {
-            Some(ins) => PathBuf::from(&ins.link_path),
+            Some(ref ins) => PathBuf::from(&ins.link_path),
             None => {
                 // 即使没有记录，也尝试按约定路径清理
                 let projects = load_projects()?;
@@ -1161,8 +1309,9 @@ pub async fn uninstall_skill(
             }
         };
 
-        // 仅当现存的是 symlink 时才删除；普通目录保留以防误删用户内容
-        if let Ok(meta) = fs::symlink_metadata(&link_path) {
+        if let Some(installation) = target.as_ref() {
+            remove_recorded_installation(installation)?;
+        } else if let Ok(meta) = fs::symlink_metadata(&link_path) {
             if meta.file_type().is_symlink() {
                 fs::remove_file(&link_path).map_err(|e| e.to_string())?;
             }
@@ -1190,12 +1339,7 @@ pub async fn cleanup_installations_for_project(project_id: String) -> Result<usi
             .iter()
             .filter(|i| i.project_id == project_id)
         {
-            let link = Path::new(&ins.link_path);
-            if let Ok(meta) = fs::symlink_metadata(link) {
-                if meta.file_type().is_symlink() {
-                    let _ = fs::remove_file(link);
-                }
-            }
+            let _ = remove_recorded_installation(ins);
         }
 
         file.installations
@@ -1250,14 +1394,22 @@ pub async fn delete_skill(skill_name: String, skill_path: String) -> Result<Dele
         }
 
         let file = load_installations_internal();
-        let mut candidate_links: HashSet<PathBuf> = file
+        let matching_installations = file
             .installations
             .iter()
             .filter(|ins| {
                 ins.skill_name == skill_name && installation_targets_skill(ins, &skill_canonical)
             })
-            .map(|ins| PathBuf::from(&ins.link_path))
-            .collect();
+            .cloned()
+            .collect::<Vec<_>>();
+        let mut candidate_links: HashSet<PathBuf> = HashSet::new();
+        let mut removed_links = 0usize;
+        for installation in &matching_installations {
+            if remove_recorded_installation(installation)? {
+                removed_links += 1;
+            }
+            candidate_links.insert(PathBuf::from(&installation.link_path));
+        }
 
         for project in load_projects()? {
             let project_path = Path::new(&project.path);
@@ -1269,7 +1421,6 @@ pub async fn delete_skill(skill_name: String, skill_path: String) -> Result<Dele
             }
         }
 
-        let mut removed_links = 0usize;
         for link_path in candidate_links {
             if remove_symlink_if_present(&link_path)? {
                 removed_links += 1;
@@ -1300,6 +1451,7 @@ fn upsert_installation(
     agent: &str,
     link_path: &str,
     target_path: &str,
+    install_kind: &str,
 ) -> Result<SkillInstallation, String> {
     let mut file = load_installations_internal();
     if file.version == 0 {
@@ -1321,6 +1473,7 @@ fn upsert_installation(
         installed_at: now,
         link_path: link_path.to_string(),
         target_path: target_path.to_string(),
+        install_kind: install_kind.to_string(),
         health: Some(health),
     };
     match existing_idx {

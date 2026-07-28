@@ -10,6 +10,7 @@ import {
   AlertTriangle,
   AlertCircle,
   Download,
+  FolderOpen,
   RotateCcw,
   ArrowUpCircle,
 } from "lucide-react";
@@ -184,7 +185,9 @@ function NotificationEntry({
             onClick={handleInstallClick}
             aria-label={
               prepareResult
-                ? t("notification.restartUpdateAria", { tag: releaseTag ?? "" })
+                ? prepareResult.readyToRestart
+                  ? t("notification.restartUpdateAria", { tag: releaseTag ?? "" })
+                  : t("notification.openInstallerAria", { tag: releaseTag ?? "" })
                 : t("notification.downloadUpdateAria", { tag: releaseTag ?? "" })
             }
             style={{
@@ -204,8 +207,10 @@ function NotificationEntry({
               opacity: preparing || restarting ? 0.72 : 1,
             }}
           >
-            {prepareResult ? (
+            {prepareResult?.readyToRestart ? (
               <RotateCcw size={12} strokeWidth={2.4} />
+            ) : prepareResult ? (
+              <FolderOpen size={12} strokeWidth={2.4} />
             ) : (
               <Download size={12} strokeWidth={2.4} />
             )}
@@ -214,18 +219,26 @@ function NotificationEntry({
               : preparing
                 ? t("notification.downloadingUpdate")
                 : prepareResult
-                  ? t("notification.restartUpdate", { tag: releaseTag ?? "" })
+                  ? prepareResult.readyToRestart
+                    ? t("notification.restartUpdate", { tag: releaseTag ?? "" })
+                    : t("notification.openInstaller", { tag: releaseTag ?? "" })
                   : t("notification.downloadUpdate", { tag: releaseTag ?? "" })}
           </button>
         )}
         {prepareResult && !installResult && (
           <div style={{ ...notificationBodyStyle, marginTop: 6, WebkitLineClamp: 2 }}>
-            {t("notification.updateReadyRestart")}
+            {prepareResult.readyToRestart
+              ? t("notification.updateReadyRestart")
+              : t("notification.updateReadyOpenInstaller")}
           </div>
         )}
         {installResult && (
           <div style={{ ...notificationBodyStyle, marginTop: 6, WebkitLineClamp: 2 }}>
-            {t("notification.installCompleteRestarting", { path: installResult.installedAppPath })}
+            {installResult.restarted
+              ? t("notification.installCompleteRestarting", {
+                  path: installResult.installedAppPath,
+                })
+              : t("notification.installerOpened", { path: installResult.installedAppPath })}
           </div>
         )}
         {installError && (

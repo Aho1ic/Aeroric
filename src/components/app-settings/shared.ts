@@ -44,7 +44,7 @@ export function getAgentSettingsFilePath(agent: AgentKey): string {
   if (APP_PLATFORM === "windows") {
     if (agent === "claude") return "%USERPROFILE%\\.claude\\settings.json";
     if (agent === "claude_gpt55") return "%USERPROFILE%\\.claude\\start-gpt55.sh";
-    if (agent !== "codex") return "%USERPROFILE%\\.claude\\start-agent.sh";
+    if (agent !== "codex") return `%USERPROFILE%\\.aeroric\\agents\\${agent}.ps1`;
     return "%USERPROFILE%\\.codex\\config.toml";
   }
 
@@ -58,7 +58,7 @@ export function getAgentExecutablePlaceholder(agent: AgentKey): string {
   if (APP_PLATFORM === "windows") {
     if (agent === "claude") return "claude or C:\\Users\\<you>\\AppData\\Roaming\\npm\\claude.cmd";
     if (agent === "claude_gpt55") return "%USERPROFILE%\\.claude\\start-gpt55.sh";
-    if (agent !== "codex") return "%USERPROFILE%\\.claude\\start-agent.sh";
+    if (agent !== "codex") return `%USERPROFILE%\\.aeroric\\agents\\${agent}.ps1`;
     return "codex or C:\\Users\\<you>\\AppData\\Roaming\\npm\\codex.cmd";
   }
 

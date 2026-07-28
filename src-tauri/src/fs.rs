@@ -855,6 +855,7 @@ pub async fn list_project_files(project_path: String) -> Result<Vec<String>, Str
                 "--exclude-standard",
             ])
             .current_dir(&project_path)
+            .envs(crate::app_settings::get_login_shell_env().iter().cloned())
             .output()
             .map_err(|e| e.to_string())?;
 
@@ -916,6 +917,7 @@ pub async fn search_project_files(
         let output = cmd
             .args(["-c", "core.quotePath=false", "ls-files", "-z"])
             .current_dir(&root)
+            .envs(crate::app_settings::get_login_shell_env().iter().cloned())
             .output()
             .map_err(|e| e.to_string())?;
 

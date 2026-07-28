@@ -1335,7 +1335,12 @@ pub async fn search_text(
 
         let mut cmd = Command::new("rg");
         crate::subprocess::configure_background_command(&mut cmd);
-        let output = match cmd.args(args).current_dir(&root).output() {
+        let output = match cmd
+            .args(args)
+            .current_dir(&root)
+            .envs(crate::app_settings::get_login_shell_env().iter().cloned())
+            .output()
+        {
             Ok(output) => output,
             Err(_) => return fallback_search(&root, &query, &options),
         };

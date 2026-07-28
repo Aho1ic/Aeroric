@@ -474,9 +474,7 @@ export const AgentPathSection = forwardRef<
       </div>
 
       {!hideSaveButton && (
-        <div
-          style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 10 }}
-        >
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 10 }}>
           {saved && (
             <span
               style={{

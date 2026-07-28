@@ -66,11 +66,29 @@ struct RawDockerContainer {
 }
 
 fn docker_candidates() -> Vec<PathBuf> {
-    vec![
-        PathBuf::from("/opt/homebrew/bin/docker"),
-        PathBuf::from("/usr/local/bin/docker"),
-        PathBuf::from("docker"),
-    ]
+    let mut candidates = Vec::new();
+    #[cfg(windows)]
+    {
+        for key in ["ProgramFiles", "LOCALAPPDATA"] {
+            if let Some(root) = std::env::var_os(key).map(PathBuf::from) {
+                candidates.push(
+                    root.join("Docker")
+                        .join("Docker")
+                        .join("resources")
+                        .join("bin")
+                        .join("docker.exe"),
+                );
+            }
+        }
+        candidates.push(PathBuf::from("docker.exe"));
+    }
+    #[cfg(not(windows))]
+    {
+        candidates.push(PathBuf::from("/opt/homebrew/bin/docker"));
+        candidates.push(PathBuf::from("/usr/local/bin/docker"));
+        candidates.push(PathBuf::from("docker"));
+    }
+    candidates
 }
 
 fn command_error(label: &str, output: &Output) -> String {
@@ -124,6 +142,7 @@ fn run_local_docker_args(args: &[String]) -> Result<String, String> {
             return String::from_utf8(output.stdout).map_err(|err| err.to_string());
         }
         let error = command_error("docker", &output);
+        #[cfg(not(windows))]
         if should_retry_docker_with_sudo(&error) {
             match run_local_docker_command(&docker, args, true) {
                 Ok(sudo_output) if sudo_output.status.success() => {
