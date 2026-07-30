@@ -507,6 +507,16 @@ textarea::placeholder {
   color: var(--text-hint);
 }
 
+.remote-access-focus:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--ring) 68%, transparent);
+  outline-offset: 2px;
+}
+
+.remote-access-field:focus-visible {
+  border-color: var(--border-focus) !important;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--ring) 18%, transparent) !important;
+}
+
 body {
   font-family: var(--font-ui);
   font-size: 13px;

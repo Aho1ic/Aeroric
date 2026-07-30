@@ -7,6 +7,7 @@ import { font } from "./font";
 import { gitDiff } from "./git-diff";
 import { layout } from "./layout";
 import { panels } from "./panels";
+import { remoteAccess } from "./remote-access";
 import { skillHub } from "./skill-hub";
 import { task } from "./task";
 import { terminal } from "./terminal";
@@ -16,6 +17,7 @@ import { usage } from "./usage";
 const s = {
   ...layout,
   ...panels,
+  ...remoteAccess,
   ...terminal,
   ...dialogs,
   ...task,
@@ -38,6 +40,7 @@ export {
   gitDiff,
   layout,
   panels,
+  remoteAccess,
   skillHub,
   task,
   terminal,

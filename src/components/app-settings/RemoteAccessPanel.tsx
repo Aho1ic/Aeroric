@@ -1,13 +1,23 @@
-import { useCallback, useEffect, useState } from "react";
-import type React from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { confirm } from "@tauri-apps/plugin-dialog";
 import { QRCodeSVG } from "qrcode.react";
-import { RefreshCw, Smartphone, Trash2 } from "lucide-react";
+import {
+  AlertCircle,
+  Check,
+  ChevronDown,
+  Copy,
+  Globe2,
+  RefreshCw,
+  Server,
+  Smartphone,
+  Trash2,
+} from "lucide-react";
 import { useI18n } from "../../i18n";
 import s from "../../styles";
+import { writeClipboardText } from "../file-explorer/clipboard";
 import { Button } from "../ui/Button";
-import { IconButton } from "../IconButton";
 
 interface RemoteStatus {
   enabled: boolean;
@@ -36,44 +46,24 @@ interface RemoteInvite {
   expiresInSeconds: number;
 }
 
-const labelStyle: React.CSSProperties = {
-  fontSize: 12,
-  fontWeight: 600,
-  color: "var(--text-secondary)",
-  marginBottom: 5,
-  display: "block",
-};
+interface RemotePairedEvent {
+  deviceId?: string;
+  deviceName: string;
+}
 
-const hintStyle: React.CSSProperties = {
-  fontSize: 11,
-  color: "var(--text-hint)",
-  marginTop: 3,
-};
+interface NormalizedPublicConfig {
+  relayUrl: string;
+  relayToken: string;
+  publicEndpoints: string[];
+}
 
-const portInputStyle: React.CSSProperties = {
-  width: 90,
-  padding: "6px 9px",
-  background: "var(--bg-input)",
-  border: "1px solid var(--border-medium)",
-  borderRadius: 7,
-  color: "var(--text-primary)",
-  fontSize: 12.5,
-  fontFamily: "var(--font-mono)",
-  outline: "none",
-};
+type CopyTarget = "address" | "pairing";
+type ServiceAction = "starting" | "stopping";
 
-const wideInputStyle: React.CSSProperties = {
-  ...portInputStyle,
-  width: "100%",
-  boxSizing: "border-box",
-};
-
-const endpointsTextareaStyle: React.CSSProperties = {
-  ...wideInputStyle,
-  minHeight: 56,
-  resize: "vertical",
-  lineHeight: 1.5,
-};
+const REMOTE_REFRESH_INTERVAL_MS = 5_000;
+const FEEDBACK_DURATION_MS = 2_000;
+const MIN_REMOTE_PORT = 1024;
+const MAX_REMOTE_PORT = 65535;
 
 function formatTimestamp(ts: number, locale: string): string {
   if (!ts) return "—";
@@ -85,120 +75,278 @@ function formatTimestamp(ts: number, locale: string): string {
   });
 }
 
+function formatRemainingTime(seconds: number): string {
+  const safeSeconds = Math.max(0, seconds);
+  const minutes = Math.floor(safeSeconds / 60);
+  const remainder = safeSeconds % 60;
+  return `${minutes}:${String(remainder).padStart(2, "0")}`;
+}
+
+function normalizeWsAddress(value: string): string {
+  return value.trim().replace(/\/+$/, "");
+}
+
+function normalizePublicConfig(
+  relayUrl: string | null,
+  relayToken: string | null,
+  endpoints: string | null,
+): NormalizedPublicConfig {
+  const publicEndpoints = Array.from(
+    new Set(
+      (endpoints ?? "")
+        .split("\n")
+        .map(normalizeWsAddress)
+        .filter((endpoint) => endpoint.length > 0),
+    ),
+  );
+  return {
+    relayUrl: normalizeWsAddress(relayUrl ?? ""),
+    relayToken: (relayToken ?? "").trim(),
+    publicEndpoints,
+  };
+}
+
+function publicConfigMatchesStatus(config: NormalizedPublicConfig, status: RemoteStatus): boolean {
+  return (
+    config.relayUrl === (status.relayUrl ?? "") &&
+    config.relayToken === (status.relayToken ?? "") &&
+    config.publicEndpoints.length === status.publicEndpoints.length &&
+    config.publicEndpoints.every((endpoint, index) => endpoint === status.publicEndpoints[index])
+  );
+}
+
 export function RemoteAccessPanel() {
   const { language, t } = useI18n();
   const [status, setStatus] = useState<RemoteStatus | null>(null);
   const [devices, setDevices] = useState<RemoteDevice[]>([]);
   const [portDraft, setPortDraft] = useState("");
-  const [invite, setInvite] = useState<RemoteInvite | null>(null);
-  const [pairedNotice, setPairedNotice] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const [relayUrlDraft, setRelayUrlDraft] = useState<string | null>(null);
   const [relayTokenDraft, setRelayTokenDraft] = useState<string | null>(null);
   const [endpointsDraft, setEndpointsDraft] = useState<string | null>(null);
+  const [invite, setInvite] = useState<RemoteInvite | null>(null);
+  const [inviteExpiresAt, setInviteExpiresAt] = useState<number | null>(null);
+  const [inviteRemainingSeconds, setInviteRemainingSeconds] = useState(0);
+  const [inviteGeneratedNotice, setInviteGeneratedNotice] = useState(false);
+  const [pairedNotice, setPairedNotice] = useState<string | null>(null);
+  const [copiedTarget, setCopiedTarget] = useState<CopyTarget | null>(null);
+  const [publicExpanded, setPublicExpanded] = useState(false);
   const [configSaved, setConfigSaved] = useState(false);
+  const [initialLoading, setInitialLoading] = useState(true);
+  const [serviceAction, setServiceAction] = useState<ServiceAction | null>(null);
+  const [inviteBusy, setInviteBusy] = useState(false);
+  const [publicSaving, setPublicSaving] = useState(false);
+  const [revokingDeviceId, setRevokingDeviceId] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [serviceError, setServiceError] = useState<string | null>(null);
+  const [pairingError, setPairingError] = useState<string | null>(null);
+  const [publicError, setPublicError] = useState<string | null>(null);
+  const [devicesError, setDevicesError] = useState<string | null>(null);
 
-  const refresh = useCallback(async () => {
-    try {
-      const [nextStatus, nextDevices] = await Promise.all([
-        invoke<RemoteStatus>("remote_server_status"),
-        invoke<RemoteDevice[]>("remote_list_devices"),
-      ]);
-      setStatus(nextStatus);
-      setDevices(nextDevices);
-      setPortDraft((prev) => (prev === "" ? String(nextStatus.port) : prev));
-      // 公网配置草稿只在首次加载时填充,避免覆盖正在编辑的内容
-      setRelayUrlDraft((prev) => prev ?? nextStatus.relayUrl ?? "");
-      setRelayTokenDraft((prev) => prev ?? nextStatus.relayToken ?? "");
-      setEndpointsDraft((prev) => prev ?? nextStatus.publicEndpoints.join("\n"));
-    } catch (err) {
-      setError(String(err));
-    }
-  }, []);
+  const mountedRef = useRef(true);
+  const activeRefreshRef = useRef<Promise<void> | null>(null);
+  const stateEpochRef = useRef(0);
+  const mutationInFlightRef = useRef(false);
+  const draftsInitializedRef = useRef(false);
+  const publicDraftDirtyRef = useRef(false);
+  const portDraftDirtyRef = useRef(false);
+
+  const refresh = useCallback(
+    async ({
+      showLoading = false,
+      waitForCurrent = false,
+    }: {
+      showLoading?: boolean;
+      waitForCurrent?: boolean;
+    } = {}) => {
+      while (activeRefreshRef.current) {
+        if (!waitForCurrent) return;
+        await activeRefreshRef.current;
+      }
+      if (!mountedRef.current) return;
+
+      const requestEpoch = stateEpochRef.current;
+      const request = (async () => {
+        const [statusResult, devicesResult] = await Promise.allSettled([
+          invoke<RemoteStatus>("remote_server_status"),
+          invoke<RemoteDevice[]>("remote_list_devices"),
+        ]);
+        if (!mountedRef.current || requestEpoch !== stateEpochRef.current) return;
+
+        if (statusResult.status === "fulfilled") {
+          const nextStatus = statusResult.value;
+          setStatus(nextStatus);
+          setLoadError(null);
+          if (!draftsInitializedRef.current) {
+            draftsInitializedRef.current = true;
+            setPortDraft(String(nextStatus.port));
+            setRelayUrlDraft(nextStatus.relayUrl ?? "");
+            setRelayTokenDraft(nextStatus.relayToken ?? "");
+            setEndpointsDraft(nextStatus.publicEndpoints.join("\n"));
+          } else {
+            if (!portDraftDirtyRef.current) {
+              setPortDraft(String(nextStatus.port));
+            }
+            if (!publicDraftDirtyRef.current) {
+              setRelayUrlDraft(nextStatus.relayUrl ?? "");
+              setRelayTokenDraft(nextStatus.relayToken ?? "");
+              setEndpointsDraft(nextStatus.publicEndpoints.join("\n"));
+            }
+          }
+        } else {
+          setLoadError(String(statusResult.reason));
+        }
+
+        if (devicesResult.status === "fulfilled") {
+          setDevices(devicesResult.value);
+          setDevicesError(null);
+        } else {
+          setDevicesError(String(devicesResult.reason));
+        }
+      })();
+
+      activeRefreshRef.current = request;
+      if (showLoading) setInitialLoading(true);
+
+      try {
+        await request;
+      } finally {
+        if (activeRefreshRef.current === request) activeRefreshRef.current = null;
+        if (mountedRef.current && showLoading) setInitialLoading(false);
+      }
+    },
+    [],
+  );
 
   useEffect(() => {
-    void refresh();
-  }, [refresh]);
-
-  // 配对成功:二维码切换成完成态,并刷新设备列表。
-  useEffect(() => {
-    const unlisten = listen<{ deviceName: string }>("remote-device-paired", (event) => {
-      setInvite(null);
-      setPairedNotice(event.payload.deviceName);
-      void refresh();
-    });
+    mountedRef.current = true;
+    void refresh({ showLoading: true });
     return () => {
-      void unlisten.then((fn) => fn());
+      mountedRef.current = false;
     };
   }, [refresh]);
 
-  const handleToggle = async () => {
-    if (!status || busy) return;
-    setBusy(true);
-    setError(null);
-    setInvite(null);
-    try {
-      const command = status.enabled ? "remote_server_stop" : "remote_server_start";
-      const port = Number.parseInt(portDraft, 10);
-      const args = status.enabled || Number.isNaN(port) ? {} : { port };
-      setStatus(await invoke<RemoteStatus>(command, args));
-    } catch (err) {
-      setError(String(err));
-    } finally {
-      setBusy(false);
-    }
-  };
+  useEffect(() => {
+    const interval = window.setInterval(() => {
+      if (document.visibilityState !== "visible" || mutationInFlightRef.current) return;
+      void refresh();
+    }, REMOTE_REFRESH_INTERVAL_MS);
+    return () => window.clearInterval(interval);
+  }, [refresh]);
 
-  const handleCreateInvite = async () => {
-    setBusy(true);
-    setError(null);
-    setPairedNotice(null);
-    try {
-      setInvite(await invoke<RemoteInvite>("remote_create_invite"));
-    } catch (err) {
-      setError(String(err));
-    } finally {
-      setBusy(false);
-    }
-  };
+  useEffect(() => {
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
 
-  const handleRevoke = async (deviceId: string) => {
-    setError(null);
-    try {
-      await invoke("remote_revoke_device", { deviceId });
-      await refresh();
-    } catch (err) {
-      setError(String(err));
-    }
-  };
-
-  const handleSaveConfig = async () => {
-    if (busy) return;
-    setBusy(true);
-    setError(null);
-    setConfigSaved(false);
-    try {
-      const publicEndpoints = (endpointsDraft ?? "")
-        .split("\n")
-        .map((line) => line.trim())
-        .filter((line) => line.length > 0);
-      const next = await invoke<RemoteStatus>("remote_update_config", {
-        relayUrl: relayUrlDraft ?? "",
-        relayToken: relayTokenDraft ?? "",
-        publicEndpoints,
+    void listen<RemotePairedEvent>("remote-device-paired", (event) => {
+      if (disposed) return;
+      stateEpochRef.current += 1;
+      setInvite(null);
+      setInviteExpiresAt(null);
+      setInviteGeneratedNotice(false);
+      setPairingError(null);
+      setPairedNotice(event.payload.deviceName);
+      void refresh({ waitForCurrent: true });
+    })
+      .then((release) => {
+        if (disposed) release();
+        else unlisten = release;
+      })
+      .catch((error) => {
+        if (!disposed && mountedRef.current) {
+          setPairingError(
+            t("appSettings.remote.eventListenFailed", {
+              message: String(error),
+            }),
+          );
+        }
       });
-      setStatus(next);
-      setRelayUrlDraft(next.relayUrl ?? "");
-      setRelayTokenDraft(next.relayToken ?? "");
-      setEndpointsDraft(next.publicEndpoints.join("\n"));
-      setConfigSaved(true);
-    } catch (err) {
-      setError(String(err));
-    } finally {
-      setBusy(false);
+
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, [refresh, t]);
+
+  useEffect(() => {
+    if (inviteExpiresAt === null) {
+      setInviteRemainingSeconds(0);
+      return;
     }
-  };
+
+    let timer: number | undefined;
+    const updateRemaining = () => {
+      const remaining = Math.max(0, Math.ceil((inviteExpiresAt - Date.now()) / 1000));
+      setInviteRemainingSeconds(remaining);
+      if (remaining === 0 && timer !== undefined) {
+        window.clearInterval(timer);
+        timer = undefined;
+      }
+    };
+
+    updateRemaining();
+    if (inviteExpiresAt > Date.now()) {
+      timer = window.setInterval(updateRemaining, 1_000);
+    }
+    return () => {
+      if (timer !== undefined) window.clearInterval(timer);
+    };
+  }, [inviteExpiresAt]);
+
+  useEffect(() => {
+    if (!copiedTarget) return;
+    const timer = window.setTimeout(() => setCopiedTarget(null), FEEDBACK_DURATION_MS);
+    return () => window.clearTimeout(timer);
+  }, [copiedTarget]);
+
+  useEffect(() => {
+    if (!configSaved) return;
+    const timer = window.setTimeout(() => setConfigSaved(false), FEEDBACK_DURATION_MS);
+    return () => window.clearTimeout(timer);
+  }, [configSaved]);
+
+  useEffect(() => {
+    if (!inviteGeneratedNotice) return;
+    const timer = window.setTimeout(() => setInviteGeneratedNotice(false), FEEDBACK_DURATION_MS);
+    return () => window.clearTimeout(timer);
+  }, [inviteGeneratedNotice]);
+
+  useEffect(() => {
+    if (!pairedNotice) return;
+    const timer = window.setTimeout(() => setPairedNotice(null), FEEDBACK_DURATION_MS);
+    return () => window.clearTimeout(timer);
+  }, [pairedNotice]);
+
+  const normalizedPublicConfig = useMemo(
+    () => normalizePublicConfig(relayUrlDraft, relayTokenDraft, endpointsDraft),
+    [endpointsDraft, relayTokenDraft, relayUrlDraft],
+  );
+  const publicDirty =
+    status !== null &&
+    relayUrlDraft !== null &&
+    relayTokenDraft !== null &&
+    endpointsDraft !== null &&
+    !publicConfigMatchesStatus(normalizedPublicConfig, status);
+  const portDirty = status !== null && portDraft !== String(status.port);
+  const parsedPort = portDraft === "" ? null : Number(portDraft);
+  const portInvalid =
+    status !== null &&
+    (parsedPort === null ||
+      !Number.isInteger(parsedPort) ||
+      parsedPort < MIN_REMOTE_PORT ||
+      parsedPort > MAX_REMOTE_PORT);
+  const address = status?.running && status.lanIp ? `ws://${status.lanIp}:${status.port}` : null;
+  const inviteExpired = invite !== null && inviteRemainingSeconds <= 0;
+  const serviceBusy = serviceAction !== null;
+  const mutationBusy = serviceBusy || inviteBusy || publicSaving || revokingDeviceId !== null;
+  const publicConfigured = Boolean(status?.relayUrl || status?.publicEndpoints.length);
+
+  useEffect(() => {
+    publicDraftDirtyRef.current = publicDirty;
+  }, [publicDirty]);
+
+  useEffect(() => {
+    portDraftDirtyRef.current = portDirty;
+  }, [portDirty]);
 
   const relayStateLabel = (state: string): string => {
     if (state === "off") return t("appSettings.remote.relayState.off");
@@ -209,248 +357,728 @@ export function RemoteAccessPanel() {
     });
   };
 
-  const enabled = status?.enabled ?? false;
+  const serviceTitle = serviceAction
+    ? t(`appSettings.remote.${serviceAction}`)
+    : initialLoading && !status
+      ? t("appSettings.remote.statusLoading")
+      : !status
+        ? t("appSettings.remote.statusUnavailable")
+        : status?.running
+          ? t("appSettings.remote.statusActive")
+          : status?.enabled
+            ? t("appSettings.remote.statusStartFailed")
+            : t("appSettings.remote.statusStopped");
+
+  const serviceBadgeStyle = {
+    ...s.remoteBadge,
+    ...(!status && loadError
+      ? s.remoteBadgeDanger
+      : initialLoading && !status
+        ? s.remoteBadgeMuted
+        : status?.running
+          ? s.remoteBadgeSuccess
+          : status?.enabled
+            ? s.remoteBadgeDanger
+            : s.remoteBadgeMuted),
+  };
+
+  const relayBadgeStyle = {
+    ...s.remoteBadge,
+    ...(status?.relayUrl && status.relayState === "online"
+      ? s.remoteBadgeSuccess
+      : status?.relayUrl && status.relayState === "connecting"
+        ? s.remoteBadgeWarning
+        : status?.relayUrl && status.relayState.startsWith("error")
+          ? s.remoteBadgeDanger
+          : s.remoteBadgeMuted),
+  };
+
+  const clearInvite = () => {
+    setInvite(null);
+    setInviteExpiresAt(null);
+    setInviteGeneratedNotice(false);
+  };
+
+  const handleToggle = async () => {
+    if (!status || mutationInFlightRef.current || (!status.enabled && portInvalid)) return;
+    mutationInFlightRef.current = true;
+    stateEpochRef.current += 1;
+    setServiceAction(status.enabled ? "stopping" : "starting");
+    setServiceError(null);
+    clearInvite();
+
+    try {
+      const command = status.enabled ? "remote_server_stop" : "remote_server_start";
+      const args = status.enabled ? {} : { port: parsedPort! };
+      const nextStatus = await invoke<RemoteStatus>(command, args);
+      if (!mountedRef.current) return;
+      setStatus(nextStatus);
+      await refresh({ waitForCurrent: true });
+    } catch (error) {
+      if (mountedRef.current) setServiceError(String(error));
+      await refresh({ waitForCurrent: true });
+    } finally {
+      mutationInFlightRef.current = false;
+      if (mountedRef.current) setServiceAction(null);
+    }
+  };
+
+  const handleCreateInvite = async () => {
+    if (!status?.running || mutationInFlightRef.current) return;
+    mutationInFlightRef.current = true;
+    setInviteBusy(true);
+    setPairingError(null);
+    setPairedNotice(null);
+    setInviteGeneratedNotice(false);
+
+    try {
+      const nextInvite = await invoke<RemoteInvite>("remote_create_invite");
+      if (!mountedRef.current) return;
+      setInvite(nextInvite);
+      setInviteExpiresAt(Date.now() + nextInvite.expiresInSeconds * 1_000);
+      setInviteRemainingSeconds(nextInvite.expiresInSeconds);
+      setInviteGeneratedNotice(true);
+    } catch (error) {
+      if (mountedRef.current) {
+        setPairingError(
+          t("appSettings.remote.pairingFailed", {
+            message: String(error),
+          }),
+        );
+      }
+    } finally {
+      mutationInFlightRef.current = false;
+      if (mountedRef.current) setInviteBusy(false);
+    }
+  };
+
+  const handleCopy = async (value: string, target: CopyTarget) => {
+    try {
+      await writeClipboardText(value);
+      if (!mountedRef.current) return;
+      setCopiedTarget(target);
+      if (target === "address") setServiceError(null);
+      else setPairingError(null);
+    } catch (error) {
+      if (!mountedRef.current) return;
+      const message = t("appSettings.remote.copyFailed", { message: String(error) });
+      if (target === "address") setServiceError(message);
+      else setPairingError(message);
+    }
+  };
+
+  const handleRevoke = async (device: RemoteDevice) => {
+    if (mutationInFlightRef.current) return;
+    let accepted: boolean;
+    try {
+      accepted = await confirm(
+        t("appSettings.remote.revokeConfirmMessage", { name: device.name }),
+        {
+          title: t("appSettings.remote.revokeConfirmTitle"),
+          kind: "warning",
+        },
+      );
+    } catch (error) {
+      if (mountedRef.current) {
+        setDevicesError(
+          t("appSettings.remote.revokeFailed", {
+            message: String(error),
+          }),
+        );
+      }
+      return;
+    }
+    if (!mountedRef.current || !accepted || mutationInFlightRef.current) return;
+
+    mutationInFlightRef.current = true;
+    stateEpochRef.current += 1;
+    setRevokingDeviceId(device.id);
+    setDevicesError(null);
+    try {
+      await invoke("remote_revoke_device", { deviceId: device.id });
+      await refresh({ waitForCurrent: true });
+    } catch (error) {
+      if (mountedRef.current) {
+        setDevicesError(
+          t("appSettings.remote.revokeFailed", {
+            message: String(error),
+          }),
+        );
+      }
+    } finally {
+      mutationInFlightRef.current = false;
+      if (mountedRef.current) setRevokingDeviceId(null);
+    }
+  };
+
+  const handleSaveConfig = async () => {
+    if (!publicDirty || mutationInFlightRef.current) return;
+    mutationInFlightRef.current = true;
+    stateEpochRef.current += 1;
+    setPublicSaving(true);
+    setPublicError(null);
+    setConfigSaved(false);
+
+    try {
+      const nextStatus = await invoke<RemoteStatus>("remote_update_config", {
+        relayUrl: normalizedPublicConfig.relayUrl,
+        relayToken: normalizedPublicConfig.relayToken,
+        publicEndpoints: normalizedPublicConfig.publicEndpoints,
+      });
+      if (!mountedRef.current) return;
+      setStatus(nextStatus);
+      publicDraftDirtyRef.current = false;
+      setRelayUrlDraft(nextStatus.relayUrl ?? "");
+      setRelayTokenDraft(nextStatus.relayToken ?? "");
+      setEndpointsDraft(nextStatus.publicEndpoints.join("\n"));
+      clearInvite();
+      setConfigSaved(true);
+      await refresh({ waitForCurrent: true });
+    } catch (error) {
+      if (mountedRef.current) {
+        setPublicError(
+          t("appSettings.remote.configSaveFailed", {
+            message: String(error),
+          }),
+        );
+      }
+      await refresh({ waitForCurrent: true });
+    } finally {
+      mutationInFlightRef.current = false;
+      if (mountedRef.current) setPublicSaving(false);
+    }
+  };
 
   return (
-    <div style={{ maxWidth: 560 }}>
-      <p style={{ fontSize: 12, color: "var(--text-secondary)", lineHeight: 1.6, marginTop: 0 }}>
-        {t("appSettings.remote.description")}
-      </p>
+    <div style={s.remotePanel}>
+      <p style={s.remoteIntro}>{t("appSettings.remote.description")}</p>
 
-      {/* ── 服务开关 + 端口 ── */}
-      <div style={{ display: "flex", flexDirection: "column", gap: 5, marginTop: 14 }}>
-        <label style={labelStyle}>{t("appSettings.remote.serverToggle")}</label>
-        <button
-          type="button"
-          role="switch"
-          aria-checked={enabled}
-          aria-label={t("appSettings.remote.serverToggle")}
-          onClick={() => void handleToggle()}
-          style={s.settingToggle}
-        >
-          <span style={s.settingToggleLabel}>
-            {status?.running
-              ? t("appSettings.remote.statusRunning", {
-                  endpoint: `ws://${status.lanIp ?? "?"}:${status.port}`,
-                })
-              : t("appSettings.remote.statusStopped")}
-          </span>
-          <span
+      <section style={s.remoteStatusCard} aria-labelledby="remote-service-title">
+        <div style={s.remoteStatusHeader}>
+          <div style={s.remoteStatusIdentity}>
+            <span style={s.remoteStatusIcon} aria-hidden="true">
+              <Server size={19} strokeWidth={1.8} />
+            </span>
+            <div style={{ minWidth: 0 }}>
+              <div style={s.remoteStatusLabel}>{t("appSettings.remote.serverToggle")}</div>
+              <h2 id="remote-service-title" style={s.remoteStatusTitle}>
+                {serviceTitle}
+              </h2>
+              <div style={s.remoteStatusCopyRow}>
+                <span style={s.remoteStatusEndpoint}>
+                  {address ?? t("appSettings.remote.addressUnavailable")}
+                </span>
+                {address ? (
+                  <button
+                    type="button"
+                    className="remote-access-focus"
+                    style={s.remoteCopyButton}
+                    aria-label={t("appSettings.remote.copyAddress")}
+                    aria-live="polite"
+                    onClick={() => void handleCopy(address, "address")}
+                  >
+                    {copiedTarget === "address" ? (
+                      <Check size={12} strokeWidth={2} />
+                    ) : (
+                      <Copy size={12} strokeWidth={1.8} />
+                    )}
+                    {copiedTarget === "address"
+                      ? t("appSettings.remote.addressCopied")
+                      : t("appSettings.remote.copyAddress")}
+                  </button>
+                ) : null}
+              </div>
+              <div style={s.remoteStatusMeta}>
+                <span style={serviceBadgeStyle}>{serviceTitle}</span>
+                {status?.running ? (
+                  <span>
+                    {t("appSettings.remote.onlineConnections", {
+                      count: String(status.onlineCount),
+                    })}
+                  </span>
+                ) : null}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div style={s.remoteStatusActions}>
+          <div style={s.remotePortField}>
+            <label style={s.remoteLabel} htmlFor="remote-server-port">
+              {t("appSettings.remote.port")}
+            </label>
+            <input
+              id="remote-server-port"
+              className="remote-access-field"
+              style={s.remotePortInput}
+              value={portDraft}
+              disabled={!status || Boolean(status.running) || initialLoading || serviceBusy}
+              inputMode="numeric"
+              maxLength={5}
+              aria-invalid={portInvalid || undefined}
+              aria-describedby="remote-port-hint"
+              onChange={(event) => {
+                portDraftDirtyRef.current = true;
+                setPortDraft(event.currentTarget.value.replace(/[^0-9]/g, ""));
+                setServiceError(null);
+              }}
+            />
+          </div>
+          <button
+            type="button"
+            className="remote-access-focus"
+            role="switch"
+            aria-checked={status?.enabled ?? false}
+            aria-label={t("appSettings.remote.serverToggle")}
+            disabled={!status || initialLoading || mutationBusy || (!status.enabled && portInvalid)}
+            onClick={() => void handleToggle()}
             style={{
-              ...s.settingToggleTrack,
-              background: enabled ? "var(--primary-action-bg)" : "var(--border-medium)",
+              ...s.settingToggle,
+              width: 112,
+              minHeight: 34,
+              padding: "5px 8px 5px 10px",
+              opacity:
+                !status || initialLoading || mutationBusy || (!status.enabled && portInvalid)
+                  ? 0.55
+                  : 1,
+              cursor:
+                !status || initialLoading || mutationBusy || (!status.enabled && portInvalid)
+                  ? "not-allowed"
+                  : "pointer",
             }}
           >
+            <span style={{ ...s.settingToggleLabel, fontSize: 11.5 }}>
+              {status?.enabled
+                ? t("appSettings.remote.switchOn")
+                : t("appSettings.remote.switchOff")}
+            </span>
             <span
               style={{
-                ...s.settingToggleKnob,
-                transform: enabled ? "translateX(16px)" : "translateX(0)",
+                ...s.settingToggleTrack,
+                background: status?.enabled ? "var(--primary-action-bg)" : "var(--border-medium)",
               }}
-            />
-          </span>
-        </button>
-        <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 6 }}>
-          <label style={{ ...labelStyle, marginBottom: 0 }}>{t("appSettings.remote.port")}</label>
-          <input
-            style={portInputStyle}
-            value={portDraft}
-            disabled={enabled}
-            inputMode="numeric"
-            onChange={(e) => setPortDraft(e.target.value.replace(/[^0-9]/g, ""))}
-          />
-          {status?.running && status.onlineCount > 0 ? (
-            <span style={{ fontSize: 11.5, color: "var(--text-secondary)" }}>
-              {t("appSettings.remote.onlineCount", { count: String(status.onlineCount) })}
-            </span>
-          ) : null}
-        </div>
-        <span style={hintStyle}>{t("appSettings.remote.portHint")}</span>
-      </div>
-
-      {/* ── 公网访问(relay / 自定义地址) ── */}
-      <div style={{ marginTop: 22 }}>
-        <label style={labelStyle}>{t("appSettings.remote.publicAccess")}</label>
-        <div style={hintStyle}>{t("appSettings.remote.publicAccessHint")}</div>
-        <div style={{ display: "flex", flexDirection: "column", gap: 10, marginTop: 10 }}>
-          <div>
-            <label style={labelStyle}>{t("appSettings.remote.relayUrl")}</label>
-            <input
-              style={wideInputStyle}
-              value={relayUrlDraft ?? ""}
-              placeholder="wss://relay.example.com"
-              spellCheck={false}
-              onChange={(e) => {
-                setRelayUrlDraft(e.target.value);
-                setConfigSaved(false);
-              }}
-            />
-            <div style={hintStyle}>{t("appSettings.remote.relayUrlHint")}</div>
-          </div>
-          <div>
-            <label style={labelStyle}>{t("appSettings.remote.relayToken")}</label>
-            <input
-              style={wideInputStyle}
-              type="password"
-              value={relayTokenDraft ?? ""}
-              spellCheck={false}
-              autoComplete="off"
-              onChange={(e) => {
-                setRelayTokenDraft(e.target.value);
-                setConfigSaved(false);
-              }}
-            />
-            <div style={hintStyle}>{t("appSettings.remote.relayTokenHint")}</div>
-          </div>
-          <div>
-            <label style={labelStyle}>{t("appSettings.remote.publicEndpoints")}</label>
-            <textarea
-              style={endpointsTextareaStyle}
-              value={endpointsDraft ?? ""}
-              placeholder={"ws://100.64.0.5:6790\nwss://aeroric.example.com"}
-              spellCheck={false}
-              onChange={(e) => {
-                setEndpointsDraft(e.target.value);
-                setConfigSaved(false);
-              }}
-            />
-            <div style={hintStyle}>{t("appSettings.remote.publicEndpointsHint")}</div>
-          </div>
-          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-            <Button onClick={() => void handleSaveConfig()} disabled={busy}>
-              {t("appSettings.remote.saveConfig")}
-            </Button>
-            {status?.running && (status.relayUrl ?? "").length > 0 ? (
+            >
               <span
                 style={{
-                  fontSize: 11.5,
-                  color:
-                    status.relayState === "online"
-                      ? "var(--success)"
-                      : status.relayState.startsWith("error")
-                        ? "var(--danger)"
-                        : "var(--text-secondary)",
+                  ...s.settingToggleKnob,
+                  transform: status?.enabled ? "translateX(16px)" : "translateX(0)",
+                }}
+              />
+            </span>
+          </button>
+        </div>
+
+        <div
+          id="remote-port-hint"
+          style={{
+            ...s.remoteSectionHint,
+            flexBasis: "100%",
+            color: portInvalid ? "var(--danger)" : "var(--text-hint)",
+          }}
+        >
+          {portInvalid ? t("appSettings.remote.portInvalid") : t("appSettings.remote.portHint")}
+        </div>
+
+        {loadError || serviceError ? (
+          <div style={{ ...s.remoteError, flexBasis: "100%" }} role="alert">
+            <AlertCircle size={14} strokeWidth={1.9} />
+            <span style={{ flex: 1, minWidth: 0 }}>
+              {serviceError ??
+                t("appSettings.remote.loadError", {
+                  message: loadError ?? "",
+                })}
+            </span>
+            {loadError && !status ? (
+              <Button
+                variant="outline"
+                size="xs"
+                onClick={() => void refresh({ showLoading: true, waitForCurrent: true })}
+                disabled={initialLoading}
+              >
+                <RefreshCw
+                  size={12}
+                  className={initialLoading ? "spin" : undefined}
+                  strokeWidth={1.9}
+                />
+                {t("appSettings.remote.retry")}
+              </Button>
+            ) : null}
+          </div>
+        ) : null}
+      </section>
+
+      <div style={s.remoteSectionGrid}>
+        <section style={s.remoteSection} aria-labelledby="remote-pairing-title">
+          <div style={s.remoteSectionHeader}>
+            <div>
+              <h2 id="remote-pairing-title" style={s.remoteSectionTitle}>
+                {t("appSettings.remote.pairing")}
+              </h2>
+              <p style={s.remoteSectionHint}>{t("appSettings.remote.pairingDescription")}</p>
+            </div>
+            {invite ? (
+              <span
+                style={{
+                  ...s.remoteBadge,
+                  ...(inviteExpired ? s.remoteBadgeWarning : s.remoteBadgeSuccess),
                 }}
               >
-                {relayStateLabel(status.relayState)}
+                {inviteExpired
+                  ? t("appSettings.remote.inviteExpired")
+                  : t("appSettings.remote.inviteExpiresIn", {
+                      time: formatRemainingTime(inviteRemainingSeconds),
+                    })}
               </span>
             ) : null}
           </div>
-          {configSaved ? (
-            <div style={{ ...hintStyle, color: "var(--success)", marginTop: 0 }}>
-              {t("appSettings.remote.configSaved")}
+
+          <div style={s.remotePairingBody}>
+            {invite && !inviteExpired ? (
+              <div
+                style={s.remoteQrShell}
+                role="img"
+                aria-label={t("appSettings.remote.inviteGenerated")}
+              >
+                <QRCodeSVG value={invite.pairingUrl} size={190} marginSize={1} />
+                <span style={s.remoteQrMeta}>{invite.endpoint}</span>
+              </div>
+            ) : (
+              <div style={s.remotePairingEmpty}>
+                <Smartphone size={28} strokeWidth={1.6} aria-hidden="true" />
+                <span>
+                  {inviteExpired
+                    ? t("appSettings.remote.inviteExpired")
+                    : status?.running
+                      ? t("appSettings.remote.inviteHint")
+                      : t("appSettings.remote.pairingNeedsServer")}
+                </span>
+              </div>
+            )}
+
+            <div style={s.remoteActionRow}>
+              <Button
+                size="sm"
+                onClick={() => void handleCreateInvite()}
+                disabled={!status?.running || mutationBusy}
+              >
+                <RefreshCw size={13} className={inviteBusy ? "spin" : undefined} strokeWidth={2} />
+                {inviteBusy
+                  ? t("appSettings.remote.generatingInvite")
+                  : invite
+                    ? t("appSettings.remote.regenerateInvite")
+                    : t("appSettings.remote.createInvite")}
+              </Button>
+              {invite && !inviteExpired ? (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  aria-live="polite"
+                  onClick={() => void handleCopy(invite.pairingUrl, "pairing")}
+                >
+                  {copiedTarget === "pairing" ? (
+                    <Check size={13} strokeWidth={2} />
+                  ) : (
+                    <Copy size={13} strokeWidth={1.8} />
+                  )}
+                  {copiedTarget === "pairing"
+                    ? t("appSettings.remote.pairingLinkCopied")
+                    : t("appSettings.remote.copyPairingLink")}
+                </Button>
+              ) : null}
+            </div>
+
+            {inviteGeneratedNotice ? (
+              <div style={s.remoteFeedbackSuccess} role="status" aria-live="polite">
+                <Check size={13} strokeWidth={2} />
+                {t("appSettings.remote.inviteGenerated")}
+              </div>
+            ) : null}
+            {pairedNotice ? (
+              <div style={s.remotePairingNotice} role="status" aria-live="polite">
+                <Check size={13} strokeWidth={2} />
+                {t("appSettings.remote.pairedNotice", { name: pairedNotice })}
+              </div>
+            ) : null}
+            {pairingError ? (
+              <div style={s.remoteError} role="alert">
+                <AlertCircle size={14} strokeWidth={1.9} />
+                {pairingError}
+              </div>
+            ) : null}
+          </div>
+        </section>
+
+        <section style={s.remoteSection} aria-labelledby="remote-devices-title">
+          <div style={s.remoteSectionHeader}>
+            <div>
+              <h2 id="remote-devices-title" style={s.remoteSectionTitle}>
+                {t("appSettings.remote.devices")}
+              </h2>
+              <p style={s.remoteSectionHint}>
+                {status?.running
+                  ? t("appSettings.remote.onlineConnections", {
+                      count: String(status.onlineCount),
+                    })
+                  : t("appSettings.remote.statusStopped")}
+              </p>
+            </div>
+            <span style={{ ...s.remoteBadge, ...s.remoteBadgeMuted }}>{devices.length}</span>
+          </div>
+
+          {initialLoading && devices.length === 0 ? (
+            <div style={s.remoteEmptyState}>{t("appSettings.remote.loading")}</div>
+          ) : devices.length === 0 ? (
+            <div style={s.remoteEmptyState}>{t("appSettings.remote.noDevices")}</div>
+          ) : (
+            <div style={s.remoteDeviceList}>
+              {devices.map((device) => {
+                const revoking = revokingDeviceId === device.id;
+                return (
+                  <div key={device.id} style={s.remoteDeviceRow}>
+                    <span style={s.remoteDeviceIcon} aria-hidden="true">
+                      <Smartphone size={15} strokeWidth={1.8} />
+                    </span>
+                    <div style={s.remoteDeviceInfo}>
+                      <div style={s.remoteDeviceNameRow}>
+                        <span style={s.remoteDeviceName} title={device.name}>
+                          {device.name}
+                        </span>
+                        <span
+                          style={{
+                            ...s.remoteStatusDot,
+                            background: device.online ? "var(--success)" : "var(--text-hint)",
+                            boxShadow: device.online
+                              ? s.remoteStatusDot.boxShadow
+                              : "0 0 0 3px color-mix(in srgb, var(--text-hint) 12%, transparent)",
+                          }}
+                          aria-hidden="true"
+                        />
+                        <span
+                          style={{
+                            ...s.remoteDeviceState,
+                            color: device.online ? "var(--success)" : "var(--text-hint)",
+                          }}
+                        >
+                          {device.online
+                            ? t("appSettings.remote.online")
+                            : t("appSettings.remote.offline")}
+                        </span>
+                      </div>
+                      <div style={s.remoteDeviceMeta}>
+                        {t("appSettings.remote.lastSeen", {
+                          time: formatTimestamp(
+                            device.lastSeenAt,
+                            language === "zh" ? "zh-CN" : "en-US",
+                          ),
+                        })}
+                      </div>
+                    </div>
+                    <Button
+                      variant="ghost"
+                      size="icon-sm"
+                      aria-label={`${t("appSettings.remote.revoke")} ${device.name}`}
+                      title={t("appSettings.remote.revoke")}
+                      style={{ color: "var(--danger)" }}
+                      disabled={mutationBusy}
+                      onClick={() => void handleRevoke(device)}
+                    >
+                      {revoking ? (
+                        <RefreshCw size={14} className="spin" strokeWidth={1.8} />
+                      ) : (
+                        <Trash2 size={14} strokeWidth={1.8} />
+                      )}
+                    </Button>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {devicesError ? (
+            <div style={s.remoteError} role="alert">
+              <AlertCircle size={14} strokeWidth={1.9} />
+              <span style={{ flex: 1, minWidth: 0 }}>{devicesError}</span>
+              <Button
+                variant="outline"
+                size="xs"
+                onClick={() => void refresh({ waitForCurrent: true })}
+              >
+                {t("appSettings.remote.retry")}
+              </Button>
             </div>
           ) : null}
-        </div>
+        </section>
       </div>
 
-      {/* ── 配对二维码 ── */}
-      <div style={{ marginTop: 22 }}>
-        <label style={labelStyle}>{t("appSettings.remote.pairing")}</label>
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <Button
-            onClick={() => void handleCreateInvite()}
-            disabled={!status?.running || busy}
-            style={{ display: "inline-flex", alignItems: "center", gap: 6 }}
-          >
-            <RefreshCw size={13} strokeWidth={2} />
-            {invite
-              ? t("appSettings.remote.regenerateInvite")
-              : t("appSettings.remote.createInvite")}
-          </Button>
-        </div>
-        {!status?.running ? (
-          <div style={hintStyle}>{t("appSettings.remote.pairingNeedsServer")}</div>
-        ) : null}
-        {invite ? (
-          <div
-            style={{
-              marginTop: 12,
-              display: "inline-flex",
-              flexDirection: "column",
-              alignItems: "center",
-              gap: 8,
-              padding: 14,
-              background: "#fff",
-              borderRadius: 10,
-              border: "1px solid var(--border-medium)",
-            }}
-          >
-            <QRCodeSVG value={invite.pairingUrl} size={190} marginSize={1} />
-            <span style={{ fontSize: 11, color: "#555", fontFamily: "var(--font-mono)" }}>
-              {invite.endpoint}
+      <section style={s.remoteDisclosure}>
+        <button
+          type="button"
+          className="remote-access-focus"
+          style={s.remoteDisclosureHeader}
+          aria-expanded={publicExpanded}
+          aria-controls="remote-public-access-content"
+          aria-label={
+            publicExpanded
+              ? t("appSettings.remote.collapseAdvanced")
+              : t("appSettings.remote.expandAdvanced")
+          }
+          onClick={() => setPublicExpanded((expanded) => !expanded)}
+        >
+          <span style={s.remoteDisclosureTitleRow}>
+            <Globe2 size={16} strokeWidth={1.8} color="var(--text-secondary)" />
+            <span style={{ minWidth: 0, flex: 1 }}>
+              <span style={{ ...s.remoteSectionTitle, display: "block" }}>
+                {t("appSettings.remote.publicAccessAdvanced")}
+              </span>
+              <span style={{ ...s.remoteSectionHint, display: "block" }}>
+                {t("appSettings.remote.publicAccessSummary")}
+              </span>
             </span>
-          </div>
-        ) : null}
-        {invite ? <div style={hintStyle}>{t("appSettings.remote.inviteHint")}</div> : null}
-        {pairedNotice ? (
-          <div style={{ ...hintStyle, color: "var(--success)" }}>
-            {t("appSettings.remote.pairedNotice", { name: pairedNotice })}
-          </div>
-        ) : null}
-      </div>
+            <span style={relayBadgeStyle}>
+              {!status
+                ? t(
+                    initialLoading
+                      ? "appSettings.remote.statusLoading"
+                      : "appSettings.remote.statusUnavailable",
+                  )
+                : status.relayUrl
+                  ? relayStateLabel(status.relayState)
+                  : publicConfigured
+                    ? t("appSettings.remote.publicAccessConfigured")
+                    : t("appSettings.remote.publicAccessNotConfigured")}
+            </span>
+          </span>
+          <ChevronDown
+            size={16}
+            strokeWidth={1.9}
+            aria-hidden="true"
+            style={{
+              ...s.remoteDisclosureChevron,
+              transform: publicExpanded ? "rotate(180deg)" : "rotate(0deg)",
+            }}
+          />
+        </button>
 
-      {/* ── 已配对设备 ── */}
-      <div style={{ marginTop: 22 }}>
-        <label style={labelStyle}>{t("appSettings.remote.devices")}</label>
-        {devices.length === 0 ? (
-          <div style={hintStyle}>{t("appSettings.remote.noDevices")}</div>
-        ) : (
-          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-            {devices.map((device) => (
-              <div
-                key={device.id}
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 10,
-                  padding: "8px 10px",
-                  border: "1px solid var(--border-light)",
-                  borderRadius: 8,
-                  background: "var(--bg-secondary)",
-                }}
-              >
-                <Smartphone size={15} strokeWidth={1.8} color="var(--text-secondary)" />
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontSize: 12.5, color: "var(--text-primary)", fontWeight: 600 }}>
-                    {device.name}
-                    {device.online ? (
-                      <span
-                        style={{
-                          display: "inline-block",
-                          width: 7,
-                          height: 7,
-                          borderRadius: "50%",
-                          background: "var(--success)",
-                          marginLeft: 7,
-                        }}
-                        title={t("appSettings.remote.online")}
-                      />
-                    ) : null}
-                  </div>
-                  <div style={{ fontSize: 11, color: "var(--text-hint)" }}>
-                    {t("appSettings.remote.lastSeen", {
-                      time: formatTimestamp(
-                        device.lastSeenAt,
-                        language === "zh" ? "zh-CN" : "en-US",
-                      ),
-                    })}
-                  </div>
-                </div>
-                <IconButton
-                  icon={<Trash2 size={14} strokeWidth={1.8} />}
-                  title={t("appSettings.remote.revoke")}
-                  size={28}
-                  onClick={() => void handleRevoke(device.id)}
-                />
+        {publicExpanded ? (
+          <div id="remote-public-access-content" style={s.remoteDisclosureContent}>
+            <p style={{ ...s.remoteSectionHint, margin: 0 }}>
+              {t("appSettings.remote.publicAccessHint")}
+            </p>
+            {status?.enabled ? (
+              <div style={s.remoteWarning}>
+                <AlertCircle size={14} strokeWidth={1.9} />
+                {t("appSettings.remote.restartWarning")}
               </div>
-            ))}
-          </div>
-        )}
-      </div>
+            ) : null}
 
-      {error ? (
-        <div style={{ ...hintStyle, color: "var(--danger)", marginTop: 14 }}>{error}</div>
-      ) : null}
+            <div style={s.remoteFormGrid}>
+              <div style={s.remoteField}>
+                <label style={s.remoteLabel} htmlFor="remote-relay-url">
+                  {t("appSettings.remote.relayUrl")}
+                </label>
+                <input
+                  id="remote-relay-url"
+                  className="remote-access-field"
+                  style={s.remoteInput}
+                  value={relayUrlDraft ?? ""}
+                  placeholder="wss://relay.example.com"
+                  spellCheck={false}
+                  disabled={!status || initialLoading || publicSaving}
+                  onChange={(event) => {
+                    publicDraftDirtyRef.current = true;
+                    setRelayUrlDraft(event.currentTarget.value);
+                    setConfigSaved(false);
+                    setPublicError(null);
+                  }}
+                />
+                <span style={s.remoteSectionHint}>{t("appSettings.remote.relayUrlHint")}</span>
+              </div>
+
+              <div style={s.remoteField}>
+                <label style={s.remoteLabel} htmlFor="remote-relay-token">
+                  {t("appSettings.remote.relayToken")}
+                </label>
+                <input
+                  id="remote-relay-token"
+                  className="remote-access-field"
+                  style={s.remoteInput}
+                  type="password"
+                  value={relayTokenDraft ?? ""}
+                  spellCheck={false}
+                  autoComplete="off"
+                  disabled={!status || initialLoading || publicSaving}
+                  onChange={(event) => {
+                    publicDraftDirtyRef.current = true;
+                    setRelayTokenDraft(event.currentTarget.value);
+                    setConfigSaved(false);
+                    setPublicError(null);
+                  }}
+                />
+                <span style={s.remoteSectionHint}>{t("appSettings.remote.relayTokenHint")}</span>
+              </div>
+
+              <div style={{ ...s.remoteField, ...s.remoteFormFullWidth }}>
+                <label style={s.remoteLabel} htmlFor="remote-public-endpoints">
+                  {t("appSettings.remote.publicEndpoints")}
+                </label>
+                <textarea
+                  id="remote-public-endpoints"
+                  className="remote-access-field"
+                  style={s.remoteTextarea}
+                  value={endpointsDraft ?? ""}
+                  placeholder={"ws://100.64.0.5:6790\nwss://aeroric.example.com"}
+                  spellCheck={false}
+                  disabled={!status || initialLoading || publicSaving}
+                  onChange={(event) => {
+                    publicDraftDirtyRef.current = true;
+                    setEndpointsDraft(event.currentTarget.value);
+                    setConfigSaved(false);
+                    setPublicError(null);
+                  }}
+                />
+                <span style={s.remoteSectionHint}>
+                  {t("appSettings.remote.publicEndpointsHint")}
+                </span>
+              </div>
+            </div>
+
+            {publicError ? (
+              <div style={s.remoteError} role="alert">
+                <AlertCircle size={14} strokeWidth={1.9} />
+                {publicError}
+              </div>
+            ) : null}
+
+            <div
+              style={{
+                ...s.remoteActionRow,
+                justifyContent: "space-between",
+              }}
+            >
+              <div aria-live="polite">
+                {configSaved ? (
+                  <span style={s.remoteFeedbackSuccess}>
+                    <Check size={13} strokeWidth={2} />
+                    {t("appSettings.remote.configSaved")}
+                  </span>
+                ) : publicDirty ? (
+                  <span style={s.remoteFeedback}>{t("appSettings.remote.unsavedChanges")}</span>
+                ) : null}
+              </div>
+              <Button
+                size="sm"
+                onClick={() => void handleSaveConfig()}
+                disabled={!publicDirty || mutationBusy}
+              >
+                {publicSaving ? <RefreshCw size={13} className="spin" strokeWidth={1.9} /> : null}
+                {publicSaving
+                  ? t("appSettings.remote.savingConfig")
+                  : t("appSettings.remote.saveConfig")}
+              </Button>
+            </div>
+          </div>
+        ) : null}
+      </section>
     </div>
   );
 }
