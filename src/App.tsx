@@ -26,7 +26,7 @@ import {
 import type { FontFamily } from "./types";
 import { WelcomePage } from "./components/WelcomePage";
 import { AppSettingsEventHost } from "./components/AppSettingsEventHost";
-import type { SshProjectInput } from "./components/ssh/SshProjectDialog";
+import type { SshProjectInput } from "./components/ssh/sshProject";
 import type { WslProjectInput } from "./components/wsl/WslProjectDialog";
 import { selectDefaultCondaEnvironment } from "./components/file-viewer/run";
 import { SKILL_HUB_CHANGED_EVENT } from "./components/app-settings/types";

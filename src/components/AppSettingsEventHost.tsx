@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import type {
   FontFamily,
   TaskDisplayWindow,
@@ -6,12 +6,15 @@ import type {
   ThemeMode,
   ThemeVariant,
 } from "../types";
-import { AppSettingsDialog } from "./AppSettingsDialog";
 import {
   OPEN_APP_SETTINGS_EVENT,
   type NavKey,
   type OpenAppSettingsDetail,
 } from "./app-settings/types";
+
+const AppSettingsDialog = lazy(() =>
+  import("./AppSettingsDialog").then((module) => ({ default: module.AppSettingsDialog })),
+);
 
 export type AppSettingsEventHostProps = {
   themeVariant: ThemeVariant;
@@ -67,25 +70,27 @@ export function AppSettingsEventHost({
   if (!showAppSettings) return null;
 
   return (
-    <AppSettingsDialog
-      initialNav={initialSettingsNav}
-      themeVariant={themeVariant}
-      themeMode={themeMode}
-      systemPrefersDark={systemPrefersDark}
-      onThemeModeChange={onThemeModeChange}
-      terminalFontSize={terminalFontSize}
-      onTerminalFontSizeChange={onTerminalFontSizeChange}
-      taskDisplayWindow={taskDisplayWindow}
-      onTaskDisplayWindowChange={onTaskDisplayWindowChange}
-      attentionBadge={attentionBadge}
-      onAttentionBadgeChange={onAttentionBadgeChange}
-      sftpLocalDefaultPath={sftpLocalDefaultPath}
-      onSftpLocalDefaultPathChange={onSftpLocalDefaultPathChange}
-      uiFontFamily={uiFontFamily}
-      onUiFontFamilyChange={onUiFontFamilyChange}
-      monoFontFamily={monoFontFamily}
-      onMonoFontFamilyChange={onMonoFontFamilyChange}
-      onClose={() => setShowAppSettings(false)}
-    />
+    <Suspense fallback={null}>
+      <AppSettingsDialog
+        initialNav={initialSettingsNav}
+        themeVariant={themeVariant}
+        themeMode={themeMode}
+        systemPrefersDark={systemPrefersDark}
+        onThemeModeChange={onThemeModeChange}
+        terminalFontSize={terminalFontSize}
+        onTerminalFontSizeChange={onTerminalFontSizeChange}
+        taskDisplayWindow={taskDisplayWindow}
+        onTaskDisplayWindowChange={onTaskDisplayWindowChange}
+        attentionBadge={attentionBadge}
+        onAttentionBadgeChange={onAttentionBadgeChange}
+        sftpLocalDefaultPath={sftpLocalDefaultPath}
+        onSftpLocalDefaultPathChange={onSftpLocalDefaultPathChange}
+        uiFontFamily={uiFontFamily}
+        onUiFontFamilyChange={onUiFontFamilyChange}
+        monoFontFamily={monoFontFamily}
+        onMonoFontFamilyChange={onMonoFontFamilyChange}
+        onClose={() => setShowAppSettings(false)}
+      />
+    </Suspense>
   );
 }

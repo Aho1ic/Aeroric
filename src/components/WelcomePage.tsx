@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, useMemo } from "react";
+import { lazy, Suspense, useCallback, useEffect, useRef, useState, useMemo } from "react";
 import {
   Search,
   FolderOpen,
@@ -38,21 +38,44 @@ import { ProjectAvatar } from "./ProjectAvatar";
 import { SidebarFooterActions } from "./SidebarFooterActions";
 import { OPEN_APP_SETTINGS_EVENT } from "./app-settings/types";
 import { TimelineView } from "./TimelineView";
-import { SkillHubView } from "./skill-hub/SkillHubView";
-import { SshProjectPage, type SshProjectInput } from "./ssh/SshProjectDialog";
-import { SftpPanel } from "./sftp/SftpPanel";
-import { DockerServiceView } from "./docker/DockerServiceView";
-import { DatabaseView } from "./database/DatabaseView";
-import { NotebookPanel } from "./notebook/NotebookPanel";
+import type { SshProjectInput } from "./ssh/sshProject";
 import { DockerIcon } from "./DockerIcon";
 import RecursiveHeroCanvas from "./recursive-hero-effect/RecursiveHeroCanvas";
-import { UsageDashboard } from "./UsageDashboard";
 import { ProjectGroupDialog } from "./ProjectGroupDialog";
 import { AnimatedSelectionTrack } from "./ui/AnimatedSelection";
 import { useI18n, pluralKey } from "../i18n";
 import { APP_PLATFORM } from "../platform";
-import { WslProjectDialog, type WslProjectInput } from "./wsl/WslProjectDialog";
+import type { WslProjectInput } from "./wsl/WslProjectDialog";
 import s from "../styles";
+
+const SftpPanel = lazy(() =>
+  import("./sftp/SftpPanel").then((module) => ({ default: module.SftpPanel })),
+);
+const UsageDashboard = lazy(() =>
+  import("./UsageDashboard").then((module) => ({ default: module.UsageDashboard })),
+);
+const SkillHubView = lazy(() =>
+  import("./skill-hub/SkillHubView").then((module) => ({ default: module.SkillHubView })),
+);
+const DockerServiceView = lazy(() =>
+  import("./docker/DockerServiceView").then((module) => ({ default: module.DockerServiceView })),
+);
+const DatabaseView = lazy(() =>
+  import("./database/DatabaseView").then((module) => ({ default: module.DatabaseView })),
+);
+const NotebookPanel = lazy(() =>
+  import("./notebook/NotebookPanel").then((module) => ({ default: module.NotebookPanel })),
+);
+const SshProjectPage = lazy(() =>
+  import("./ssh/SshProjectDialog").then((module) => ({ default: module.SshProjectPage })),
+);
+const WslProjectDialog = lazy(() =>
+  import("./wsl/WslProjectDialog").then((module) => ({ default: module.WslProjectDialog })),
+);
+
+function LazyPane({ children }: { children: React.ReactNode }) {
+  return <Suspense fallback={null}>{children}</Suspense>;
+}
 
 function SidebarItem({
   icon,
@@ -419,14 +442,16 @@ export function WelcomePage({
         </div>
 
         {sftpOpen ? (
-          <SftpPanel
-            sshConnections={sshConnections}
-            localDefaultPath={sftpLocalDefaultPath}
-            active={sftpOpen}
-            width="100%"
-            themeVariant={themeVariant}
-            onClose={() => setSftpOpen(false)}
-          />
+          <LazyPane>
+            <SftpPanel
+              sshConnections={sshConnections}
+              localDefaultPath={sftpLocalDefaultPath}
+              active={sftpOpen}
+              width="100%"
+              themeVariant={themeVariant}
+              onClose={() => setSftpOpen(false)}
+            />
+          </LazyPane>
         ) : view === "timeline" ? (
           <TimelineView
             projects={allProjects}
@@ -441,30 +466,44 @@ export function WelcomePage({
             }}
           />
         ) : view === "usage" ? (
-          <UsageDashboard />
+          <LazyPane>
+            <UsageDashboard />
+          </LazyPane>
         ) : view === "skills" ? (
-          <SkillHubView
-            config={skillHubConfig}
-            allProjects={projects}
-            onOpenAppSettings={() => window.dispatchEvent(new CustomEvent(OPEN_APP_SETTINGS_EVENT))}
-          />
+          <LazyPane>
+            <SkillHubView
+              config={skillHubConfig}
+              allProjects={projects}
+              onOpenAppSettings={() =>
+                window.dispatchEvent(new CustomEvent(OPEN_APP_SETTINGS_EVENT))
+              }
+            />
+          </LazyPane>
         ) : view === "docker" ? (
-          <DockerServiceView />
+          <LazyPane>
+            <DockerServiceView />
+          </LazyPane>
         ) : view === "database" ? (
-          <DatabaseView sshConnections={sshConnections} />
+          <LazyPane>
+            <DatabaseView sshConnections={sshConnections} />
+          </LazyPane>
         ) : view === "notes" ? (
-          <NotebookPanel />
+          <LazyPane>
+            <NotebookPanel />
+          </LazyPane>
         ) : view === "ssh" ? (
-          <SshProjectPage
-            connections={sshConnections}
-            groups={sshGroups}
-            onConnectionsChange={onSshConnectionsChange}
-            onClose={() => switchWelcomeView("projects")}
-            onOpen={(input) => {
-              onOpenSshProject(input);
-              switchWelcomeView("projects");
-            }}
-          />
+          <LazyPane>
+            <SshProjectPage
+              connections={sshConnections}
+              groups={sshGroups}
+              onConnectionsChange={onSshConnectionsChange}
+              onClose={() => switchWelcomeView("projects")}
+              onOpen={(input) => {
+                onOpenSshProject(input);
+                switchWelcomeView("projects");
+              }}
+            />
+          </LazyPane>
         ) : (
           <div style={s.welcomePane}>
             <div style={s.searchRow}>
@@ -803,11 +842,13 @@ export function WelcomePage({
           onClose={() => setShowProjectGroupDialog(false)}
         />
       )}
-      <WslProjectDialog
-        open={showWslProjectDialog}
-        onClose={() => setShowWslProjectDialog(false)}
-        onOpen={onOpenWslProject}
-      />
+      <Suspense fallback={null}>
+        <WslProjectDialog
+          open={showWslProjectDialog}
+          onClose={() => setShowWslProjectDialog(false)}
+          onOpen={onOpenWslProject}
+        />
+      </Suspense>
     </div>
   );
 }

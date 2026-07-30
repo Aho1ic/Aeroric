@@ -398,6 +398,7 @@ pub fn run() {
             remote::remote_server_status,
             remote::remote_server_start,
             remote::remote_server_stop,
+            remote::remote_select_lan_ip,
             remote::remote_update_config,
             remote::remote_create_invite,
             remote::remote_list_devices,

@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AgentUpdatesPanel } from "../components/app-settings/AgentUpdatesPanel";
@@ -131,6 +131,31 @@ describe("AgentUpdatesPanel", () => {
         return Promise.resolve(null);
       },
     );
+  });
+
+  it("shows exactly one refresh action while versions are loading", async () => {
+    let resolveStatuses!: (value: typeof toolStatuses) => void;
+    const pendingStatuses = new Promise<typeof toolStatuses>((resolve) => {
+      resolveStatuses = resolve;
+    });
+    invokeMock.mockImplementation((command: string) => {
+      if (command === "get_agent_tool_status") return pendingStatuses;
+      if (command === "detect_agent_version") return Promise.resolve("1.0.0");
+      return Promise.resolve(null);
+    });
+
+    renderPanel();
+
+    expect(screen.getByRole("button", { name: "Refreshing..." })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Refresh Versions" })).not.toBeInTheDocument();
+
+    await act(async () => {
+      resolveStatuses(toolStatuses);
+      await pendingStatuses;
+    });
+
+    expect(await screen.findByRole("button", { name: "Refresh Versions" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Refreshing..." })).not.toBeInTheDocument();
   });
 
   it("selects all configurations and upgrades them together", async () => {

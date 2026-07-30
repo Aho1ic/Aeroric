@@ -32,6 +32,7 @@ interface RemoteStatus {
   running: boolean;
   port: number;
   lanIp: string | null;
+  lanAddresses: { interfaceName: string; ip: string }[];
   onlineCount: number;
   relayUrl: string | null;
   relayToken: string | null;
@@ -58,6 +59,12 @@ const baseStatus: RemoteStatus = {
   running: true,
   port: 6790,
   lanIp: "192.168.1.10",
+  lanAddresses: [
+    { interfaceName: "en0", ip: "192.168.1.10" },
+    { interfaceName: "utun4", ip: "100.125.106.127" },
+    { interfaceName: "utun5", ip: "10.0.0.2" },
+    { interfaceName: "utun1024", ip: "198.18.0.1" },
+  ],
   onlineCount: 0,
   relayUrl: null,
   relayToken: null,
@@ -82,6 +89,7 @@ const pairedDevice: RemoteDevice = {
 function cloneStatus(status: RemoteStatus): RemoteStatus {
   return {
     ...status,
+    lanAddresses: status.lanAddresses.map((address) => ({ ...address })),
     publicEndpoints: [...status.publicEndpoints],
   };
 }
@@ -124,6 +132,18 @@ function installBackend(options?: {
         enabled: false,
         running: false,
         onlineCount: 0,
+      };
+      return Promise.resolve(cloneStatus(state.status));
+    }
+    if (command === "remote_select_lan_ip") {
+      const lanIp = (args as { lanIp: string }).lanIp;
+      state.status = {
+        ...state.status,
+        lanIp,
+      };
+      state.invite = {
+        ...state.invite,
+        endpoint: `ws://${lanIp}:${state.status.port}`,
       };
       return Promise.resolve(cloneStatus(state.status));
     }
@@ -248,6 +268,30 @@ describe("RemoteAccessPanel", () => {
     await user.click(screen.getByRole("button", { name: "Copy LAN address" }));
     expect(clipboardWrite).toHaveBeenCalledWith("ws://192.168.1.10:6790");
     expect(await screen.findByText("Address copied")).toBeInTheDocument();
+  });
+
+  it("lists every local IPv4 address and uses the selected one for pairing", async () => {
+    const user = userEvent.setup();
+    installBackend();
+    renderPanel();
+
+    const addressSelect = await screen.findByLabelText("Local IP");
+    expect(addressSelect).toHaveValue("192.168.1.10");
+    expect(screen.getByRole("option", { name: "192.168.1.10 (en0)" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "100.125.106.127 (utun4)" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "10.0.0.2 (utun5)" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "198.18.0.1 (utun1024)" })).toBeInTheDocument();
+
+    await user.selectOptions(addressSelect, "10.0.0.2");
+    await waitFor(() =>
+      expect(vi.mocked(invoke)).toHaveBeenCalledWith("remote_select_lan_ip", {
+        lanIp: "10.0.0.2",
+      }),
+    );
+    expect(await screen.findByText("ws://10.0.0.2:6790")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Generate pairing QR code" }));
+    expect(await screen.findAllByText("ws://10.0.0.2:6790")).toHaveLength(2);
   });
 
   it("distinguishes an enabled server that failed to start", async () => {
@@ -489,13 +533,16 @@ describe("RemoteAccessPanel", () => {
     renderPanel();
 
     const serverSwitch = await screen.findByRole("switch", { name: "Remote server" });
+    await waitFor(() => expect(serverSwitch).toBeEnabled());
     await act(async () => {
       fireEvent.click(serverSwitch);
       await Promise.resolve();
       await Promise.resolve();
     });
 
-    expect(vi.mocked(invoke)).toHaveBeenCalledWith("remote_server_start", { port: 6790 });
+    await waitFor(() =>
+      expect(vi.mocked(invoke)).toHaveBeenCalledWith("remote_server_start", { port: 6790 }),
+    );
     expect(statusCalls).toBe(2);
     expect(deviceCalls).toBe(2);
     expect(screen.getByRole("heading", { name: "Starting…" })).toBeInTheDocument();

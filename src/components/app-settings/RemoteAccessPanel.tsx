@@ -24,12 +24,18 @@ interface RemoteStatus {
   running: boolean;
   port: number;
   lanIp: string | null;
+  lanAddresses: RemoteNetworkAddress[];
   onlineCount: number;
   relayUrl: string | null;
   relayToken: string | null;
   publicEndpoints: string[];
   /** off | connecting | online | error:<msg> */
   relayState: string;
+}
+
+interface RemoteNetworkAddress {
+  interfaceName: string;
+  ip: string;
 }
 
 interface RemoteDevice {
@@ -135,6 +141,7 @@ export function RemoteAccessPanel() {
   const [serviceAction, setServiceAction] = useState<ServiceAction | null>(null);
   const [inviteBusy, setInviteBusy] = useState(false);
   const [publicSaving, setPublicSaving] = useState(false);
+  const [addressSaving, setAddressSaving] = useState(false);
   const [revokingDeviceId, setRevokingDeviceId] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [serviceError, setServiceError] = useState<string | null>(null);
@@ -337,7 +344,8 @@ export function RemoteAccessPanel() {
   const address = status?.running && status.lanIp ? `ws://${status.lanIp}:${status.port}` : null;
   const inviteExpired = invite !== null && inviteRemainingSeconds <= 0;
   const serviceBusy = serviceAction !== null;
-  const mutationBusy = serviceBusy || inviteBusy || publicSaving || revokingDeviceId !== null;
+  const mutationBusy =
+    serviceBusy || inviteBusy || publicSaving || addressSaving || revokingDeviceId !== null;
   const publicConfigured = Boolean(status?.relayUrl || status?.publicEndpoints.length);
 
   useEffect(() => {
@@ -449,6 +457,34 @@ export function RemoteAccessPanel() {
     } finally {
       mutationInFlightRef.current = false;
       if (mountedRef.current) setInviteBusy(false);
+    }
+  };
+
+  const handleSelectLanIp = async (lanIp: string) => {
+    if (!status || lanIp === status.lanIp || mutationInFlightRef.current) return;
+    mutationInFlightRef.current = true;
+    stateEpochRef.current += 1;
+    setAddressSaving(true);
+    setServiceError(null);
+    clearInvite();
+
+    try {
+      const nextStatus = await invoke<RemoteStatus>("remote_select_lan_ip", { lanIp });
+      if (!mountedRef.current) return;
+      setStatus(nextStatus);
+      await refresh({ waitForCurrent: true });
+    } catch (error) {
+      if (mountedRef.current) {
+        setServiceError(
+          t("appSettings.remote.addressSelectFailed", {
+            message: String(error),
+          }),
+        );
+      }
+      await refresh({ waitForCurrent: true });
+    } finally {
+      mutationInFlightRef.current = false;
+      if (mountedRef.current) setAddressSaving(false);
     }
   };
 
@@ -603,6 +639,31 @@ export function RemoteAccessPanel() {
         </div>
 
         <div style={s.remoteStatusActions}>
+          <div style={s.remoteAddressField}>
+            <label style={s.remoteLabel} htmlFor="remote-lan-ip">
+              {t("appSettings.remote.localIp")}
+            </label>
+            <select
+              id="remote-lan-ip"
+              className="remote-access-field"
+              style={s.remoteAddressSelect}
+              value={status?.lanIp ?? ""}
+              disabled={
+                !status || initialLoading || mutationBusy || status.lanAddresses.length === 0
+              }
+              onChange={(event) => void handleSelectLanIp(event.currentTarget.value)}
+            >
+              {status?.lanAddresses.length ? (
+                status.lanAddresses.map((candidate) => (
+                  <option key={`${candidate.interfaceName}:${candidate.ip}`} value={candidate.ip}>
+                    {candidate.ip} ({candidate.interfaceName})
+                  </option>
+                ))
+              ) : (
+                <option value="">{t("appSettings.remote.noLocalIp")}</option>
+              )}
+            </select>
+          </div>
           <div style={s.remotePortField}>
             <label style={s.remoteLabel} htmlFor="remote-server-port">
               {t("appSettings.remote.port")}
@@ -676,7 +737,11 @@ export function RemoteAccessPanel() {
             color: portInvalid ? "var(--danger)" : "var(--text-hint)",
           }}
         >
-          {portInvalid ? t("appSettings.remote.portInvalid") : t("appSettings.remote.portHint")}
+          {portInvalid
+            ? t("appSettings.remote.portInvalid")
+            : addressSaving
+              ? t("appSettings.remote.savingLocalIp")
+              : t("appSettings.remote.localIpHint")}
         </div>
 
         {loadError || serviceError ? (

@@ -176,7 +176,7 @@ const styles = StyleSheet.create({
   cameraPlaceholder: { flex: 1, alignItems: "center", justifyContent: "center", gap: 14, padding: 24 },
   cameraHint: { color: theme.textSecondary, fontSize: 13, textAlign: "center", lineHeight: 20 },
   pairingOverlay: {
-    ...StyleSheet.absoluteFill,
+    ...StyleSheet.absoluteFillObject,
     backgroundColor: "rgba(13,17,23,0.82)",
     alignItems: "center",
     justifyContent: "center",

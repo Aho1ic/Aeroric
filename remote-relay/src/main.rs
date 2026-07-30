@@ -18,17 +18,20 @@ use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot, Semaphore};
 use tokio_tungstenite::tungstenite::handshake::server::{Request, Response};
 use tokio_tungstenite::tungstenite::protocol::{Message, WebSocketConfig};
 use tokio_tungstenite::WebSocketStream;
 
-use remote_protocol::{
-    parse_route, HostToRelay, RelayRoute, RelayToHost, RELAY_PROTOCOL_VERSION,
-};
+use remote_protocol::{parse_route, HostToRelay, RelayRoute, RelayToHost, RELAY_PROTOCOL_VERSION};
 
 /// 与桌面端 remote/server.rs 一致的单条消息上限。
 const MAX_MESSAGE_BYTES: usize = 1024 * 1024;
+const MAX_ACTIVE_CONNECTIONS: usize = 512;
+const MAX_PENDING_CONNECTIONS: usize = 256;
+const MAX_PENDING_PER_HOST: usize = 32;
+const HOST_CONTROL_QUEUE_CAPACITY: usize = 64;
+const WEBSOCKET_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 const REGISTER_TIMEOUT: Duration = Duration::from_secs(10);
 /// 通知桌面后等它拨数据连接的窗口。
 const DIAL_TIMEOUT: Duration = Duration::from_secs(15);
@@ -45,9 +48,14 @@ struct RelayConfig {
 #[derive(Default)]
 struct Registry {
     /// hostId → 控制连接出口(投递 ClientConnected)。
-    hosts: Mutex<HashMap<String, mpsc::UnboundedSender<Message>>>,
+    hosts: Mutex<HashMap<String, mpsc::Sender<Message>>>,
     /// connId → 把桌面数据连接交回手机接入任务的信道。
-    pending: Mutex<HashMap<String, oneshot::Sender<Ws>>>,
+    pending: Mutex<HashMap<String, PendingConnection>>,
+}
+
+struct PendingConnection {
+    host_id: String,
+    sender: oneshot::Sender<Ws>,
 }
 
 #[tokio::main]
@@ -69,13 +77,19 @@ async fn main() {
 
 async fn serve(listener: TcpListener, config: RelayConfig) {
     let registry = Arc::new(Registry::default());
+    let connection_slots = Arc::new(Semaphore::new(MAX_ACTIVE_CONNECTIONS));
     loop {
         let Ok((stream, peer)) = listener.accept().await else {
+            continue;
+        };
+        let Ok(permit) = connection_slots.clone().try_acquire_owned() else {
+            drop(stream);
             continue;
         };
         let registry = registry.clone();
         let config = config.clone();
         tokio::spawn(async move {
+            let _permit = permit;
             handle_connection(stream, peer.to_string(), registry, config).await;
         });
     }
@@ -97,8 +111,11 @@ async fn handle_connection(
         path = req.uri().path().to_string();
         Ok(resp)
     };
-    let Ok(ws) =
-        tokio_tungstenite::accept_hdr_async_with_config(stream, callback, Some(ws_config)).await
+    let Ok(Ok(ws)) = tokio::time::timeout(
+        WEBSOCKET_HANDSHAKE_TIMEOUT,
+        tokio_tungstenite::accept_hdr_async_with_config(stream, callback, Some(ws_config)),
+    )
+    .await
     else {
         return;
     };
@@ -171,11 +188,19 @@ async fn host_control(mut ws: Ws, registry: Arc<Registry>, config: RelayConfig) 
         return;
     }
 
-    let (tx, mut rx) = mpsc::unbounded_channel::<Message>();
+    let (tx, mut rx) = mpsc::channel::<Message>(HOST_CONTROL_QUEUE_CAPACITY);
     // 同 hostId 重复注册按「顶掉旧连接」处理:旧控制连接的 rx 发送端被覆盖后,
     // 其循环在下一次投递失败/断连时退出,且退出清理不会误删新连接(same_channel 守卫)
-    registry.hosts.lock().unwrap().insert(host_id.clone(), tx.clone());
-    if ws.send(control_text(&RelayToHost::Registered)).await.is_err() {
+    registry
+        .hosts
+        .lock()
+        .unwrap()
+        .insert(host_id.clone(), tx.clone());
+    if ws
+        .send(control_text(&RelayToHost::Registered))
+        .await
+        .is_err()
+    {
         cleanup_host(&registry, &host_id, &tx);
         return;
     }
@@ -223,9 +248,12 @@ async fn host_control(mut ws: Ws, registry: Arc<Registry>, config: RelayConfig) 
     eprintln!("[relay] host disconnected: {host_id}");
 }
 
-fn cleanup_host(registry: &Registry, host_id: &str, tx: &mpsc::UnboundedSender<Message>) {
+fn cleanup_host(registry: &Registry, host_id: &str, tx: &mpsc::Sender<Message>) {
     let mut hosts = registry.hosts.lock().unwrap();
-    if hosts.get(host_id).is_some_and(|current| current.same_channel(tx)) {
+    if hosts
+        .get(host_id)
+        .is_some_and(|current| current.same_channel(tx))
+    {
         hosts.remove(host_id);
     }
 }
@@ -239,12 +267,16 @@ async fn client_connect(ws: Ws, host_id: String, peer: String, registry: Arc<Reg
     };
     let conn_id = uuid::Uuid::new_v4().to_string();
     let (tx, rx) = oneshot::channel::<Ws>();
-    registry.pending.lock().unwrap().insert(conn_id.clone(), tx);
+    if !try_insert_pending(&registry, &host_id, &conn_id, tx) {
+        let mut ws = ws;
+        let _ = ws.close(None).await;
+        return;
+    }
     let notify = control_text(&RelayToHost::ClientConnected {
         conn_id: conn_id.clone(),
         peer: Some(peer),
     });
-    if host_tx.send(notify).is_err() {
+    if host_tx.try_send(notify).is_err() {
         registry.pending.lock().unwrap().remove(&conn_id);
         let mut ws = ws;
         let _ = ws.close(None).await;
@@ -262,11 +294,37 @@ async fn client_connect(ws: Ws, host_id: String, peer: String, registry: Arc<Reg
 
 /// 桌面数据连接:交给等待中的手机接入任务(由它执行 splice)。
 fn host_data(ws: Ws, conn_id: String, registry: Arc<Registry>) {
-    let Some(tx) = registry.pending.lock().unwrap().remove(&conn_id) else {
+    let Some(pending) = registry.pending.lock().unwrap().remove(&conn_id) else {
         // 无人等待(超时/伪造 connId):直接丢弃连接
         return;
     };
-    let _ = tx.send(ws);
+    let _ = pending.sender.send(ws);
+}
+
+fn try_insert_pending(
+    registry: &Registry,
+    host_id: &str,
+    conn_id: &str,
+    sender: oneshot::Sender<Ws>,
+) -> bool {
+    let mut pending = registry.pending.lock().unwrap();
+    if pending.len() >= MAX_PENDING_CONNECTIONS
+        || pending
+            .values()
+            .filter(|entry| entry.host_id == host_id)
+            .count()
+            >= MAX_PENDING_PER_HOST
+    {
+        return false;
+    }
+    pending.insert(
+        conn_id.to_string(),
+        PendingConnection {
+            host_id: host_id.to_string(),
+            sender,
+        },
+    );
+    true
 }
 
 /// 双向逐帧盲转发,任一侧断开即两侧收尾。
@@ -330,12 +388,38 @@ mod tests {
         serde_json::from_str(text).expect("control json")
     }
 
+    #[test]
+    fn pending_connections_are_bounded_per_host() {
+        let registry = Registry::default();
+        for index in 0..MAX_PENDING_PER_HOST {
+            let (sender, _receiver) = oneshot::channel::<Ws>();
+            assert!(try_insert_pending(
+                &registry,
+                "host-1",
+                &format!("conn-{index}"),
+                sender,
+            ));
+        }
+        let (sender, _receiver) = oneshot::channel::<Ws>();
+        assert!(!try_insert_pending(
+            &registry,
+            "host-1",
+            "one-too-many",
+            sender,
+        ));
+    }
+
     #[tokio::test]
     async fn relay_matches_host_and_client_and_splices_frames() {
-        let port = spawn_relay(RelayConfig { token: Some("s3cret".to_string()) }).await;
+        let port = spawn_relay(RelayConfig {
+            token: Some("s3cret".to_string()),
+        })
+        .await;
 
         // 桌面注册
-        let (mut host, _) = connect_async(format!("ws://127.0.0.1:{port}/host")).await.unwrap();
+        let (mut host, _) = connect_async(format!("ws://127.0.0.1:{port}/host"))
+            .await
+            .unwrap();
         host.send(Message::Text(
             serde_json::to_string(&HostToRelay::Register {
                 v: RELAY_PROTOCOL_VERSION,
@@ -346,18 +430,21 @@ mod tests {
         ))
         .await
         .unwrap();
-        assert_eq!(parse_control(&next_msg(&mut host).await), RelayToHost::Registered);
+        assert_eq!(
+            parse_control(&next_msg(&mut host).await),
+            RelayToHost::Registered
+        );
 
         // 手机接入 → 先发一帧(relay 应缓存在 WS 层直至撮合完成)
         let client_task = tokio::spawn(async move {
             let (mut client, _) = connect_async(format!("ws://127.0.0.1:{port}/connect/host-1"))
                 .await
                 .unwrap();
-            client.send(Message::Text("hello-from-phone".to_string())).await.unwrap();
             client
-                .send(Message::Binary(vec![1, 2, 3]))
+                .send(Message::Text("hello-from-phone".to_string()))
                 .await
                 .unwrap();
+            client.send(Message::Binary(vec![1, 2, 3])).await.unwrap();
             let echo = next_msg(&mut client).await;
             assert_eq!(echo, Message::Binary(vec![9, 9]));
         });
@@ -372,7 +459,10 @@ mod tests {
         let (mut data, _) = connect_async(format!("ws://127.0.0.1:{port}/data/{conn_id}"))
             .await
             .unwrap();
-        assert_eq!(next_msg(&mut data).await, Message::Text("hello-from-phone".to_string()));
+        assert_eq!(
+            next_msg(&mut data).await,
+            Message::Text("hello-from-phone".to_string())
+        );
         assert_eq!(next_msg(&mut data).await, Message::Binary(vec![1, 2, 3]));
         data.send(Message::Binary(vec![9, 9])).await.unwrap();
         client_task.await.unwrap();
@@ -380,8 +470,13 @@ mod tests {
 
     #[tokio::test]
     async fn wrong_token_is_rejected() {
-        let port = spawn_relay(RelayConfig { token: Some("s3cret".to_string()) }).await;
-        let (mut host, _) = connect_async(format!("ws://127.0.0.1:{port}/host")).await.unwrap();
+        let port = spawn_relay(RelayConfig {
+            token: Some("s3cret".to_string()),
+        })
+        .await;
+        let (mut host, _) = connect_async(format!("ws://127.0.0.1:{port}/host"))
+            .await
+            .unwrap();
         host.send(Message::Text(
             serde_json::to_string(&HostToRelay::Register {
                 v: RELAY_PROTOCOL_VERSION,

@@ -3,7 +3,7 @@ import type { Project, SshConnection, Task, TaskStatus } from "./types";
 import { isActiveTaskStatus, resolveProjectLocation, wslProjectPath } from "./types";
 import { createProjectPersister } from "./projectPersistence";
 import { createProjectTaskPersister } from "./taskPersistence";
-import { deriveRemoteProjectName } from "./components/ssh/SshProjectDialog";
+import { deriveRemoteProjectName } from "./components/ssh/sshProject";
 import { normalizeProjectOrder } from "./projectOrder";
 import { normalizeProjectRailWidth } from "./components/project-page/viewMode";
 

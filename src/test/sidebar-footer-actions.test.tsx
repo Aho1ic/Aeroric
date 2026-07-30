@@ -70,7 +70,7 @@ function renderSettingsFixture() {
 }
 
 describe("SidebarFooterActions", () => {
-  it("resets to the general settings page when opened from the sidebar button", () => {
+  it("resets to the general settings page when opened from the sidebar button", async () => {
     renderSettingsFixture();
 
     act(() => {
@@ -78,14 +78,14 @@ describe("SidebarFooterActions", () => {
         new CustomEvent(OPEN_APP_SETTINGS_EVENT, { detail: { initialNav: "codex" } }),
       );
     });
-    expect(screen.getByRole("dialog")).toHaveAttribute("data-initial-nav", "codex");
+    expect(await screen.findByRole("dialog")).toHaveAttribute("data-initial-nav", "codex");
 
     fireEvent.click(screen.getByTitle("App Settings"));
 
     expect(screen.getByRole("dialog")).toHaveAttribute("data-initial-nav", "general");
   });
 
-  it("opens the requested agent settings page from the global settings event host", () => {
+  it("opens the requested agent settings page from the global settings event host", async () => {
     renderSettingsFixture();
 
     act(() => {
@@ -94,6 +94,6 @@ describe("SidebarFooterActions", () => {
       );
     });
 
-    expect(screen.getByRole("dialog")).toHaveAttribute("data-initial-nav", "codex");
+    expect(await screen.findByRole("dialog")).toHaveAttribute("data-initial-nav", "codex");
   });
 });

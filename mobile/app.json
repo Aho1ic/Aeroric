@@ -9,11 +9,17 @@
     "userInterfaceStyle": "dark",
     "ios": {
       "supportsTablet": true,
+      "bundleIdentifier": "com.aeroric.mobile",
       "infoPlist": {
-        "NSCameraUsageDescription": "Aeroric 需要相机权限扫描桌面端的配对二维码"
+        "NSCameraUsageDescription": "Aeroric 需要相机权限扫描桌面端的配对二维码",
+        "NSLocalNetworkUsageDescription": "Aeroric 需要访问局域网以连接电脑上的远程服务",
+        "NSAppTransportSecurity": {
+          "NSAllowsLocalNetworking": true
+        }
       }
     },
     "android": {
+      "package": "com.aeroric.mobile",
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
         "foregroundImage": "./assets/android-icon-foreground.png",

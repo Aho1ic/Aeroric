@@ -102,7 +102,7 @@ describe("WelcomePage project cards", () => {
 
     await user.click(screen.getByRole("button", { name: "SSH" }));
 
-    expect(screen.getAllByText("Open SSH project").length).toBeGreaterThan(0);
+    expect((await screen.findAllByText("Open SSH project")).length).toBeGreaterThan(0);
   });
 
   it("opens project group management and assigns a project to a group", async () => {

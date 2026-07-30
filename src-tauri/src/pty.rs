@@ -233,6 +233,14 @@ fn release_claimed_session_paths(task_manager: &TaskManager, task_id: &str) {
 
 /// 设置 CommandBuilder 的标准环境变量。
 pub(crate) fn setup_env(cmd: &mut CommandBuilder) {
+    // CommandBuilder::new() snapshots the parent process environment before we
+    // merge the login-shell environment. Merely skipping NO_COLOR below does
+    // not remove an inherited value (for example when Aeroric itself is
+    // launched by a terminal/agent with NO_COLOR=1).
+    for key in ["NO_COLOR", "CLICOLOR", "CLICOLOR_FORCE", "FORCE_COLOR"] {
+        cmd.env_remove(key);
+    }
+
     let login_env = crate::app_settings::get_login_shell_env();
     for (key, value) in login_env {
         if key == "NO_COLOR" || key == "CLICOLOR" || key == "CLICOLOR_FORCE" || key == "FORCE_COLOR"
@@ -1528,5 +1536,29 @@ mod tests {
     fn codex_process_cwd_avoids_project_root() {
         let cwd = agent_process_cwd("/tmp/example-project", true);
         assert_ne!(cwd, std::path::PathBuf::from("/tmp/example-project"));
+    }
+
+    #[test]
+    fn setup_env_removes_inherited_no_color_and_enables_truecolor() {
+        let mut cmd = CommandBuilder::new("printf");
+        cmd.env("NO_COLOR", "1");
+        cmd.env("TERM", "dumb");
+        cmd.env("COLORTERM", "");
+
+        setup_env(&mut cmd);
+
+        assert!(cmd.get_env("NO_COLOR").is_none());
+        assert_eq!(
+            cmd.get_env("TERM").and_then(|value| value.to_str()),
+            Some("xterm-256color")
+        );
+        assert_eq!(
+            cmd.get_env("COLORTERM").and_then(|value| value.to_str()),
+            Some("truecolor")
+        );
+        assert_eq!(
+            cmd.get_env("FORCE_COLOR").and_then(|value| value.to_str()),
+            Some("3")
+        );
     }
 }

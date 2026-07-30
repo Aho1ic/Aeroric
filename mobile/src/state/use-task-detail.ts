@@ -1,6 +1,6 @@
 /** 单任务详情:tasks.get 拉取 + task-status 推送就地补丁,重连自动重拉。 */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { Task, TaskStatus, TaskStatusPush } from "../types";
 import { useConnection } from "./connection-context";
 
@@ -8,20 +8,34 @@ export function useTaskDetail(projectId: string, taskId: string) {
   const { status, request, onPush } = useConnection();
   const [task, setTask] = useState<Task | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const requestSeq = useRef(0);
 
   const refresh = useCallback(() => {
     if (status !== "online" || !projectId || !taskId) return;
+    const seq = ++requestSeq.current;
     request<Task>("tasks.get", { projectId, taskId })
       .then((loaded) => {
+        if (requestSeq.current !== seq) return;
         setTask(loaded);
         setError(null);
       })
-      .catch((err) => setError(err instanceof Error ? err.message : String(err)));
+      .catch((err) => {
+        if (requestSeq.current !== seq) return;
+        setError(err instanceof Error ? err.message : String(err));
+      });
   }, [projectId, request, status, taskId]);
 
   useEffect(() => {
     if (status === "online") refresh();
+    return () => {
+      requestSeq.current += 1;
+    };
   }, [refresh, status]);
+
+  useEffect(() => {
+    setTask(null);
+    setError(null);
+  }, [projectId, taskId]);
 
   useEffect(() => {
     return onPush((push, data) => {
@@ -33,8 +47,7 @@ export function useTaskDetail(projectId: string, taskId: string) {
           ? {
               ...prev,
               status: payload.status as TaskStatus,
-              approval:
-                payload.status === "input_required" ? payload.approval : undefined,
+              approval: payload.status === "input_required" ? payload.approval : undefined,
             }
           : prev,
       );

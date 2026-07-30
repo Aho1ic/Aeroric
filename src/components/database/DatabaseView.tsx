@@ -420,6 +420,8 @@ export function DatabaseView({
   const [tableInfoDdlError, setTableInfoDdlError] = useState("");
   const databaseSidebarResizeStartRef = useRef({ x: 0, width: DATABASE_SIDEBAR_DEFAULT_WIDTH });
   const openedInitialSqliteFilePathRef = useRef<string | null>(null);
+  const legacyLoadSequenceRef = useRef(0);
+  const dbxLoadSequenceRef = useRef(0);
   const [databaseSidebarWidth, setDatabaseSidebarWidth] = useState(DATABASE_SIDEBAR_DEFAULT_WIDTH);
   const [resizingDatabaseSidebar, setResizingDatabaseSidebar] = useState(false);
   const [pinnedTreeNodeIds, setPinnedTreeNodeIds] = useState<Set<string>>(loadPinnedTreeNodeIds);
@@ -804,11 +806,13 @@ export function DatabaseView({
 
   const inspect = useCallback(
     async (connection: DbConnectionConfig) => {
+      const requestSeq = ++legacyLoadSequenceRef.current;
       setLoading(true);
       setError(null);
       setSqlResult(null);
       try {
         const nextSchema = await databaseApi.inspect(connection.endpoint, projectRoot);
+        if (legacyLoadSequenceRef.current !== requestSeq) return;
         setSchema(nextSchema);
         const firstTable =
           nextSchema.objects.find((object) => object.objectType === "table") ??
@@ -824,6 +828,7 @@ export function DatabaseView({
             PAGE_SIZE,
             projectRoot,
           );
+          if (legacyLoadSequenceRef.current !== requestSeq) return;
           setQueryResult(result);
           setSql(`SELECT * FROM ${quoteSqlName(firstTable.name)}`);
         } else {
@@ -838,9 +843,10 @@ export function DatabaseView({
           );
         }
       } catch (err) {
+        if (legacyLoadSequenceRef.current !== requestSeq) return;
         setError(String(err));
       } finally {
-        setLoading(false);
+        if (legacyLoadSequenceRef.current === requestSeq) setLoading(false);
       }
     },
     [connections, projectRoot, saveConnections],
@@ -1283,6 +1289,7 @@ export function DatabaseView({
 
   const loadDbxDatabase = useCallback(
     async (connection: AeroricDbConnectionConfig, database: string | null) => {
+      const requestSeq = ++dbxLoadSequenceRef.current;
       setLoading(true);
       setError(null);
       try {
@@ -1293,6 +1300,7 @@ export function DatabaseView({
             .then((value) => (Array.isArray(value) ? value : []))
             .catch(() => [] as string[]),
         ]);
+        if (dbxLoadSequenceRef.current !== requestSeq) return;
         setActiveDbxDatabase(database);
         setActiveDbxSchema(null);
         setDbxSchemas(schemas.length > 0 ? schemas : deriveDbxSchemas(objects));
@@ -1302,9 +1310,10 @@ export function DatabaseView({
         setQueryResult(null);
         setSqlResult(null);
       } catch (err) {
+        if (dbxLoadSequenceRef.current !== requestSeq) return;
         setError(String(err));
       } finally {
-        setLoading(false);
+        if (dbxLoadSequenceRef.current === requestSeq) setLoading(false);
       }
     },
     [],
@@ -1312,10 +1321,12 @@ export function DatabaseView({
 
   const loadDbxSchema = useCallback(
     async (connection: AeroricDbConnectionConfig, database: string | null, schemaName: string) => {
+      const requestSeq = ++dbxLoadSequenceRef.current;
       setLoading(true);
       setError(null);
       try {
         const objects = await listAllDbxObjects(connection.id, database, schemaName);
+        if (dbxLoadSequenceRef.current !== requestSeq) return;
         setActiveDbxDatabase(database);
         setActiveDbxSchema(schemaName);
         setDbxSchemas((current) =>
@@ -1330,9 +1341,10 @@ export function DatabaseView({
         setQueryResult(null);
         setSqlResult(null);
       } catch (err) {
+        if (dbxLoadSequenceRef.current !== requestSeq) return;
         setError(String(err));
       } finally {
-        setLoading(false);
+        if (dbxLoadSequenceRef.current === requestSeq) setLoading(false);
       }
     },
     [],
@@ -1455,6 +1467,8 @@ export function DatabaseView({
 
   const loadDbxConnection = useCallback(
     async (connection: AeroricDbConnectionConfig) => {
+      const requestSeq = ++dbxLoadSequenceRef.current;
+      legacyLoadSequenceRef.current += 1;
       setActiveConnectionId(null);
       setActiveDbxConnectionId(connection.id);
       setSchema(null);
@@ -1476,12 +1490,15 @@ export function DatabaseView({
         setActiveDbxSchema(null);
         setWorkspaceMode(connection.dbType === "redis" ? "redis" : "mongo");
         await databaseApi.dbxConnect(connection.id);
+        if (dbxLoadSequenceRef.current !== requestSeq) return;
         if (connection.dbType === "redis") {
           const databases = await loadRedisSidebarDatabases(connection);
+          if (dbxLoadSequenceRef.current !== requestSeq) return;
           const firstDb = databases[0]?.db;
           setActiveDbxDatabase(firstDb == null ? null : `db${firstDb}`);
         } else {
           const databases = await loadMongoSidebarDatabases(connection);
+          if (dbxLoadSequenceRef.current !== requestSeq) return;
           const database = databases[0] ?? null;
           setActiveDbxDatabase(database);
         }
@@ -1491,7 +1508,9 @@ export function DatabaseView({
       setLoading(true);
       try {
         await databaseApi.dbxConnect(connection.id);
+        if (dbxLoadSequenceRef.current !== requestSeq) return;
         const databases = await databaseApi.dbxListDatabases(connection.id);
+        if (dbxLoadSequenceRef.current !== requestSeq) return;
         const targetDatabase = configuredTargetDatabase(connection);
         const visibleDatabases = filterDbxDatabasesForConnection(databases, connection);
         if (targetDatabase && visibleDatabases.length === 0) {
@@ -1511,12 +1530,14 @@ export function DatabaseView({
             .then((value) => (Array.isArray(value) ? value : []))
             .catch(() => [] as string[]),
         ]);
+        if (dbxLoadSequenceRef.current !== requestSeq) return;
         setDbxSchemas(schemas.length > 0 ? schemas : deriveDbxSchemas(objects));
         setDbxObjects(objects);
       } catch (err) {
+        if (dbxLoadSequenceRef.current !== requestSeq) return;
         setError(String(err));
       } finally {
-        setLoading(false);
+        if (dbxLoadSequenceRef.current === requestSeq) setLoading(false);
       }
     },
     [loadMongoSidebarDatabases, loadRedisSidebarDatabases, t],
@@ -1610,6 +1631,7 @@ export function DatabaseView({
       pageSize = dbxGridPageSize,
     ) => {
       if (!connection) return;
+      const requestSeq = ++dbxLoadSequenceRef.current;
       const normalizedWhereInput = whereInput?.trim() ?? "";
       const normalizedOrderBy = orderBy?.trim() ?? "";
       const sameDbxObject =
@@ -1628,6 +1650,7 @@ export function DatabaseView({
           whereInput: normalizedWhereInput || null,
           orderBy: normalizedOrderBy || null,
         });
+        if (dbxLoadSequenceRef.current !== requestSeq) return;
         let objectColumns: DbxColumnInfo[] = [];
         if (isDbxTableObject(object)) {
           try {
@@ -1637,6 +1660,7 @@ export function DatabaseView({
               database,
               object.schema ?? null,
             );
+            if (dbxLoadSequenceRef.current !== requestSeq) return;
             setDbxColumnsByTable((current) => ({
               ...current,
               [dbxObjectKey(object)]: objectColumns,
@@ -1645,6 +1669,7 @@ export function DatabaseView({
             objectColumns = [];
           }
         }
+        if (dbxLoadSequenceRef.current !== requestSeq) return;
         const primaryKeys = objectColumns
           .filter((column) => column.is_primary_key)
           .map((column) => column.name);
@@ -1703,9 +1728,10 @@ export function DatabaseView({
         });
         setSql(result.sql);
       } catch (err) {
+        if (dbxLoadSequenceRef.current !== requestSeq) return;
         setError(String(err));
       } finally {
-        setLoading(false);
+        if (dbxLoadSequenceRef.current === requestSeq) setLoading(false);
       }
     },
     [
@@ -1816,6 +1842,7 @@ export function DatabaseView({
 
   const handleSelectConnection = useCallback(
     (connection: DbConnectionConfig) => {
+      dbxLoadSequenceRef.current += 1;
       setActiveDbxConnectionId(null);
       setDbxDatabases([]);
       setDbxObjects([]);
@@ -1901,6 +1928,7 @@ export function DatabaseView({
   const loadTable = useCallback(
     async (object: DbObject, nextPage: number) => {
       if (!activeEndpoint) return;
+      const requestSeq = ++legacyLoadSequenceRef.current;
       setLoading(true);
       setError(null);
       setSqlResult(null);
@@ -1912,15 +1940,17 @@ export function DatabaseView({
           PAGE_SIZE,
           projectRoot,
         );
+        if (legacyLoadSequenceRef.current !== requestSeq) return;
         setActiveObject(object);
         setWorkspaceMode("table");
         setPage(nextPage);
         setQueryResult(result);
         setSql(`SELECT * FROM ${quoteSqlName(object.name)}`);
       } catch (err) {
+        if (legacyLoadSequenceRef.current !== requestSeq) return;
         setError(String(err));
       } finally {
-        setLoading(false);
+        if (legacyLoadSequenceRef.current === requestSeq) setLoading(false);
       }
     },
     [activeEndpoint, projectRoot],

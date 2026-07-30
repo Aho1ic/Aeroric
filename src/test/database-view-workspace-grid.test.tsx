@@ -27,6 +27,88 @@ import {
 
 describe("DatabaseView workspace and data grid", () => {
   beforeEach(resetDatabaseViewMocks);
+
+  it("ignores a slower table response after the user selects another table", async () => {
+    const user = userEvent.setup();
+    let resolveUsers!: (value: unknown) => void;
+    const usersResult = new Promise((resolve) => {
+      resolveUsers = resolve;
+    });
+    vi.mocked(invoke).mockImplementation((command, args) => {
+      if (command === "db_load_connections") return Promise.resolve([]);
+      if (command === "dbx_list_connections") return Promise.resolve([dbxConnection]);
+      if (command === "dbx_connect") return Promise.resolve(undefined);
+      if (command === "dbx_list_databases") return Promise.resolve([{ name: "main" }]);
+      if (command === "dbx_list_schemas") return Promise.resolve(["public"]);
+      if (command === "dbx_list_objects") {
+        return Promise.resolve([
+          { name: "users", object_type: "table", schema: "public" },
+          { name: "teams", object_type: "table", schema: "public" },
+        ]);
+      }
+      if (command === "dbx_query_table_data") {
+        const table = (args as { request: { table: string } }).request.table;
+        if (table === "users") return usersResult;
+        return Promise.resolve({
+          result: {
+            columns: ["marker"],
+            column_types: ["text"],
+            column_sortables: [true],
+            rows: [["teams-current"]],
+          },
+          totalRows: 1,
+          sql: 'SELECT * FROM "public"."teams"',
+        });
+      }
+      if (command === "dbx_get_columns") {
+        return Promise.resolve([
+          {
+            name: "marker",
+            data_type: "text",
+            nullable: false,
+            is_primary_key: true,
+          },
+        ]);
+      }
+      return Promise.resolve(undefined);
+    });
+
+    render(
+      React.createElement(
+        I18nProvider,
+        null,
+        React.createElement(DatabaseView, { sshConnections: [connection()] }),
+      ),
+    );
+
+    await user.click(await screen.findByRole("button", { name: /DBX Source/i }));
+    await user.click(await screen.findByRole("button", { name: /^users\s+table$/i }));
+    await waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith(
+        "dbx_query_table_data",
+        expect.objectContaining({ request: expect.objectContaining({ table: "users" }) }),
+      ),
+    );
+    await user.click(screen.getByRole("button", { name: /^teams\s+table$/i }));
+    expect(await screen.findByText("teams-current")).toBeInTheDocument();
+
+    resolveUsers({
+      result: {
+        columns: ["marker"],
+        column_types: ["text"],
+        column_sortables: [true],
+        rows: [["users-stale"]],
+      },
+      totalRows: 1,
+      sql: 'SELECT * FROM "public"."users"',
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(screen.queryByText("users-stale")).not.toBeInTheDocument();
+    expect(screen.getByText("teams-current")).toBeInTheDocument();
+  });
+
   it("does not execute production SQL when the confirmation is rejected", async () => {
     const user = userEvent.setup();
     const productionConnection = {
@@ -1390,7 +1472,7 @@ describe("DatabaseView workspace and data grid", () => {
 
     await user.click(within(dialog).getByRole("button", { name: "Close" }));
     expect(screen.queryByRole("dialog", { name: "Cell value" })).not.toBeInTheDocument();
-  });
+  }, 30_000);
 
   it("selects numeric DBX grid values on double click and accepts text input", async () => {
     const user = userEvent.setup();

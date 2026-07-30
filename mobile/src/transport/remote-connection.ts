@@ -3,8 +3,8 @@
  * 多 endpoint 并行竞速拨号、推送分发。
  * 协议见桌面端 src-tauri/src/remote/protocol.rs(envelope v2)与 crypto.rs(E2EE)。
  *
- * 连接流程:对全部 endpoints 同时开 WS,最先 onopen 者胜出(其余立即关闭)
- * → 明文 hello/hello_ack 握手派生会话密钥(校验配对时 pin 的主机公钥)
+ * 连接流程:对全部 endpoints 同时开 WS,依次让已连通候选完成 E2EE 握手与认证,
+ * 首个认证成功者胜出(其余随后关闭)
  * → 此后所有消息为加密二进制帧(kind=1 控制 JSON,kind=2 终端流)。
  *
  * 设计约束:纯 TS、WebSocket 可注入(RN 全局 WebSocket / 测试 FakeWebSocket),
@@ -57,6 +57,8 @@ export interface RemoteConnectionOptions {
   timers?: TimerApi;
   randomBytes?: RandomBytes;
   requestTimeoutMs?: number;
+  dialTimeoutMs?: number;
+  handshakeTimeoutMs?: number;
   heartbeatIntervalMs?: number;
   maxBackoffMs?: number;
   /** 测试用:关掉抖动让退避时序可断言 */
@@ -86,6 +88,8 @@ interface EventsSinceResult {
 export const EVENTS_RESET_PUSH = "events.reset";
 
 const DEFAULT_REQUEST_TIMEOUT = 15_000;
+const DEFAULT_DIAL_TIMEOUT = 10_000;
+const DEFAULT_HANDSHAKE_TIMEOUT = 10_000;
 const DEFAULT_HEARTBEAT_INTERVAL = 25_000;
 const DEFAULT_MAX_BACKOFF = 30_000;
 const INITIAL_BACKOFF = 1_000;
@@ -126,6 +130,8 @@ export class RemoteConnection {
   private readonly timers: TimerApi;
   private readonly randomBytes: RandomBytes | undefined;
   private readonly requestTimeoutMs: number;
+  private readonly dialTimeoutMs: number;
+  private readonly handshakeTimeoutMs: number;
   private readonly heartbeatIntervalMs: number;
   private readonly maxBackoffMs: number;
   private readonly jitter: (delay: number) => number;
@@ -141,6 +147,7 @@ export class RemoteConnection {
   private reconnectAttempts = 0;
   private reconnectTimer: unknown = null;
   private heartbeatTimer: unknown = null;
+  private attemptTimers = new Set<unknown>();
   /** 连接代数:旧 socket 的迟到回调用它自守卫 */
   private generation = 0;
 
@@ -166,6 +173,8 @@ export class RemoteConnection {
     this.timers = options.timers ?? defaultTimers;
     this.randomBytes = options.randomBytes;
     this.requestTimeoutMs = options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT;
+    this.dialTimeoutMs = options.dialTimeoutMs ?? DEFAULT_DIAL_TIMEOUT;
+    this.handshakeTimeoutMs = options.handshakeTimeoutMs ?? DEFAULT_HANDSHAKE_TIMEOUT;
     this.heartbeatIntervalMs = options.heartbeatIntervalMs ?? DEFAULT_HEARTBEAT_INTERVAL;
     this.maxBackoffMs = options.maxBackoffMs ?? DEFAULT_MAX_BACKOFF;
     this.jitter = options.jitter ?? ((delay) => delay * (0.85 + Math.random() * 0.3));
@@ -237,20 +246,102 @@ export class RemoteConnection {
     this.teardownSocket();
     this.setStatus(nextStatus);
     const generation = ++this.generation;
-    const racers: WebSocketLike[] = [];
-    let winner: WebSocketLike | null = null;
-    let pendingDials = 0;
-    const detach = (ws: WebSocketLike) => {
-      ws.onopen = null;
-      ws.onmessage = null;
-      ws.onclose = null;
-      ws.onerror = null;
+    type Candidate = {
+      ws: WebSocketLike;
+      phase: "dialing" | "ready" | "active" | "online" | "failed";
+      dialTimer: unknown | null;
+      handshakeTimer: unknown | null;
+      error: string | null;
+    };
+    const candidates: Candidate[] = [];
+    let active: Candidate | null = null;
+
+    const detach = (candidate: Candidate) => {
+      this.clearAttemptTimeout(candidate.dialTimer);
+      this.clearAttemptTimeout(candidate.handshakeTimer);
+      candidate.dialTimer = null;
+      candidate.handshakeTimer = null;
+      candidate.ws.onopen = null;
+      candidate.ws.onmessage = null;
+      candidate.ws.onclose = null;
+      candidate.ws.onerror = null;
       try {
-        ws.close();
+        candidate.ws.close();
       } catch {
         // 竞速失败方可能尚未建立,close 抛错可忽略
       }
     };
+
+    const finishRound = () => {
+      if (generation !== this.generation || active) return;
+      const ready = candidates.find((candidate) => candidate.phase === "ready");
+      if (ready) {
+        activate(ready);
+        return;
+      }
+      if (candidates.some((candidate) => candidate.phase === "dialing")) return;
+
+      const errors = candidates
+        .map((candidate) => candidate.error)
+        .filter((error): error is string => Boolean(error));
+      if (
+        candidates.length > 0 &&
+        errors.length === candidates.length &&
+        errors.every(isFatalAuthError)
+      ) {
+        this.lastAuthError = errors[errors.length - 1];
+        this.setStatus("unauthorized");
+        this.teardownSocket();
+        return;
+      }
+      this.scheduleReconnect();
+    };
+
+    const failCandidate = (candidate: Candidate, error?: string) => {
+      if (candidate.phase === "failed") return;
+      if (error) {
+        candidate.error = error;
+        this.lastAuthError = error;
+      }
+      const wasActive = active === candidate;
+      candidate.phase = "failed";
+      detach(candidate);
+      if (wasActive) {
+        active = null;
+        this.ws = null;
+        this.session = null;
+        this.handshake = null;
+        this.failAllPending(new Error(error ?? "connection lost"));
+        this.setStatus(nextStatus);
+      }
+      finishRound();
+    };
+
+    const markOnline = (candidate: Candidate) => {
+      if (generation !== this.generation || active !== candidate) return;
+      candidate.phase = "online";
+      this.clearAttemptTimeout(candidate.handshakeTimer);
+      candidate.handshakeTimer = null;
+      for (const other of candidates) {
+        if (other === candidate || other.phase === "failed") continue;
+        other.phase = "failed";
+        detach(other);
+      }
+      this.racers = [candidate.ws];
+    };
+
+    const activate = (candidate: Candidate) => {
+      if (generation !== this.generation || active || candidate.phase !== "ready") return;
+      active = candidate;
+      candidate.phase = "active";
+      this.ws = candidate.ws;
+      this.setStatus(nextStatus);
+      if (!this.beginHandshake(candidate.ws)) return;
+      candidate.handshakeTimer = this.setAttemptTimeout(() => {
+        failCandidate(candidate, "E2EE handshake timeout");
+      }, this.handshakeTimeoutMs);
+    };
+
     for (const endpoint of this.endpoints) {
       let ws: WebSocketLike;
       try {
@@ -258,66 +349,87 @@ export class RemoteConnection {
       } catch {
         continue;
       }
-      racers.push(ws);
-      pendingDials += 1;
+      const candidate: Candidate = {
+        ws,
+        phase: "dialing",
+        dialTimer: null,
+        handshakeTimer: null,
+        error: null,
+      };
+      candidates.push(candidate);
+      candidate.dialTimer = this.setAttemptTimeout(() => {
+        failCandidate(candidate, "WebSocket dial timeout");
+      }, this.dialTimeoutMs);
       ws.onopen = () => {
-        if (generation !== this.generation) return;
-        if (winner) {
-          detach(ws);
-          return;
-        }
-        winner = ws;
-        this.ws = ws;
-        for (const other of racers) {
-          if (other !== ws) detach(other);
-        }
-        this.racers = [ws];
-        this.beginHandshake(ws);
+        if (generation !== this.generation || candidate.phase !== "dialing") return;
+        this.clearAttemptTimeout(candidate.dialTimer);
+        candidate.dialTimer = null;
+        candidate.phase = "ready";
+        finishRound();
       };
       ws.onmessage = (event) => {
-        if (generation !== this.generation || winner !== ws) return;
-        this.handleMessage(event.data, generation);
+        if (
+          generation !== this.generation ||
+          active !== candidate ||
+          (candidate.phase !== "active" && candidate.phase !== "online")
+        )
+          return;
+        if (typeof event.data === "string") {
+          this.clearAttemptTimeout(candidate.handshakeTimer);
+          candidate.handshakeTimer = null;
+        }
+        this.handleMessage(
+          event.data,
+          generation,
+          ws,
+          (error) => failCandidate(candidate, error),
+          () => markOnline(candidate),
+        );
       };
       ws.onclose = () => {
         if (generation !== this.generation) return;
-        if (winner === ws) {
+        if (candidate.phase === "online") {
           this.handleDisconnect();
           return;
         }
-        if (winner) return;
-        pendingDials -= 1;
-        if (pendingDials <= 0) {
-          this.scheduleReconnect();
-        }
+        failCandidate(candidate, "connection closed before authentication");
       };
       ws.onerror = () => {
         // onerror 后通常伴随 onclose;这里不重复调度
       };
     }
-    this.racers = racers;
-    if (racers.length === 0) {
+    this.racers = candidates.map((candidate) => candidate.ws);
+    if (candidates.length === 0) {
       this.scheduleReconnect();
     }
   }
 
-  /** 胜出 socket 上开始 E2EE 握手:发明文 hello,等 hello_ack。 */
-  private beginHandshake(ws: WebSocketLike): void {
+  /** 候选 socket 上开始 E2EE 握手:发明文 hello,等 hello_ack。 */
+  private beginHandshake(ws: WebSocketLike): boolean {
     this.session = null;
     try {
       this.handshake = startHandshake(this.serverPublicKey, this.randomBytes);
       ws.send(this.handshake.helloJson);
+      return true;
     } catch (err) {
       // 公钥损坏 / 无随机源:重试无意义
       this.lastAuthError = err instanceof Error ? err.message : String(err);
       this.setStatus("unauthorized");
       this.teardownSocket();
+      return false;
     }
   }
 
-  private async authenticate(ws: WebSocketLike, generation: number): Promise<void> {
+  private async authenticate(
+    ws: WebSocketLike,
+    generation: number,
+    onCandidateFailure: (error: string) => void,
+    onAuthenticated: () => void,
+  ): Promise<void> {
     try {
       const result = (await this.sendRequest(ws, "auth", this.authParams())) as AuthSuccess;
-      if (generation !== this.generation) return;
+      if (generation !== this.generation || this.ws !== ws) return;
+      onAuthenticated();
       this.lastAuthError = null;
       this.reconnectAttempts = 0;
       this.setStatus("online");
@@ -325,7 +437,7 @@ export class RemoteConnection {
       this.startHeartbeat(generation);
       this.replayMissedEvents(ws, generation);
     } catch (err) {
-      if (generation !== this.generation) return;
+      if (generation !== this.generation || this.ws !== ws) return;
       const message = err instanceof Error ? err.message : String(err);
       this.lastAuthError = message;
       // 设备被撤销/令牌失效:停止自动重试,等用户重新配对
@@ -334,7 +446,7 @@ export class RemoteConnection {
         this.teardownSocket();
         return;
       }
-      this.handleDisconnect();
+      onCandidateFailure(message);
     }
   }
 
@@ -374,16 +486,31 @@ export class RemoteConnection {
   private scheduleReconnect(): void {
     this.teardownSocket();
     this.setStatus("reconnecting");
-    const backoff = Math.min(
-      INITIAL_BACKOFF * 2 ** this.reconnectAttempts,
-      this.maxBackoffMs,
-    );
+    const backoff = Math.min(INITIAL_BACKOFF * 2 ** this.reconnectAttempts, this.maxBackoffMs);
     this.reconnectAttempts += 1;
-    this.reconnectTimer = this.timers.setTimeout(() => {
-      this.reconnectTimer = null;
-      if (this.statusValue !== "reconnecting") return;
-      this.openSockets("reconnecting");
-    }, Math.round(this.jitter(backoff)));
+    this.reconnectTimer = this.timers.setTimeout(
+      () => {
+        this.reconnectTimer = null;
+        if (this.statusValue !== "reconnecting") return;
+        this.openSockets("reconnecting");
+      },
+      Math.round(this.jitter(backoff)),
+    );
+  }
+
+  private setAttemptTimeout(callback: () => void, delayMs: number): unknown {
+    let handle: unknown;
+    handle = this.timers.setTimeout(() => {
+      this.attemptTimers.delete(handle);
+      callback();
+    }, delayMs);
+    this.attemptTimers.add(handle);
+    return handle;
+  }
+
+  private clearAttemptTimeout(handle: unknown | null): void {
+    if (handle === null || !this.attemptTimers.delete(handle)) return;
+    this.timers.clearTimeout(handle);
   }
 
   private teardownSocket(): void {
@@ -391,6 +518,10 @@ export class RemoteConnection {
       this.timers.clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
     }
+    for (const timer of this.attemptTimers) {
+      this.timers.clearTimeout(timer);
+    }
+    this.attemptTimers.clear();
     this.stopHeartbeat();
     this.session = null;
     this.handshake = null;
@@ -476,7 +607,13 @@ export class RemoteConnection {
     });
   }
 
-  private handleMessage(data: unknown, generation: number): void {
+  private handleMessage(
+    data: unknown,
+    generation: number,
+    ws: WebSocketLike,
+    onCandidateFailure: (error: string) => void,
+    onAuthenticated: () => void,
+  ): void {
     // 明文 text 只存在于握手阶段(hello_ack / hello_error)
     if (typeof data === "string") {
       const handshake = this.handshake;
@@ -487,18 +624,11 @@ export class RemoteConnection {
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         this.lastAuthError = message;
-        if (isFatalAuthError(message)) {
-          this.setStatus("unauthorized");
-          this.teardownSocket();
-        } else {
-          this.handleDisconnect();
-        }
+        onCandidateFailure(message);
         return;
       }
       this.setStatus("authenticating");
-      if (this.ws) {
-        void this.authenticate(this.ws, generation);
-      }
+      void this.authenticate(ws, generation, onCandidateFailure, onAuthenticated);
       return;
     }
     if (!(data instanceof ArrayBuffer) || !this.session) return;
@@ -507,7 +637,11 @@ export class RemoteConnection {
       opened = this.session.decryptFrame(new Uint8Array(data));
     } catch {
       // 篡改/乱序:立即重建连接(快照协议保证终端画面恢复)
-      this.handleDisconnect();
+      if (this.statusValue === "online") {
+        this.handleDisconnect();
+      } else {
+        onCandidateFailure("encrypted handshake response is invalid");
+      }
       return;
     }
     if (opened.kind === KIND_TERMINAL) {

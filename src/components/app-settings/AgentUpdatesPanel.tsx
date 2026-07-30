@@ -271,15 +271,23 @@ export function AgentUpdatesPanel() {
             {t("appSettings.agentUpdatesHint")}
           </div>
         </div>
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => void refreshVersions()}
-          disabled={refreshing || busy}
-        >
-          <RefreshCw size={12} className={refreshing ? "spin" : undefined} />
-          {refreshing ? t("appSettings.refreshing") : t("appSettings.refreshVersions")}
-        </Button>
+        {refreshing ? (
+          <Button key="refreshing" variant="outline" size="sm" disabled aria-live="polite">
+            <RefreshCw size={12} className="spin" />
+            {t("appSettings.refreshing")}
+          </Button>
+        ) : (
+          <Button
+            key="refresh"
+            variant="outline"
+            size="sm"
+            onClick={() => void refreshVersions()}
+            disabled={busy}
+          >
+            <RefreshCw size={12} />
+            {t("appSettings.refreshVersions")}
+          </Button>
+        )}
       </div>
 
       {error && (

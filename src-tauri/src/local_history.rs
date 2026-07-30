@@ -77,7 +77,7 @@ pub(crate) fn list_entries(
     entries.sort_by(|a, b| {
         b.created_at_ms
             .cmp(&a.created_at_ms)
-            .then_with(|| b.id.cmp(&a.id))
+            .then_with(|| entry_id_sequence(&b.id).cmp(&entry_id_sequence(&a.id)))
     });
     entries.truncate(MAX_LIST_ENTRIES);
     Ok(entries)
@@ -195,13 +195,15 @@ fn create_snapshot(
             .write_all(content.as_bytes())
             .map_err(|e| e.to_string())?;
         let size = file_handle.metadata().map_err(|e| e.to_string())?.len();
-        return Ok(Some(LocalHistoryEntry {
+        let entry = LocalHistoryEntry {
             id,
             file_path: file.to_string_lossy().into_owned(),
             relative_path,
             created_at_ms: entry_id_timestamp_ms(&base_id).unwrap_or_else(now_ms),
             size,
-        }));
+        };
+        prune_history_dir(&history_dir, MAX_LIST_ENTRIES)?;
+        return Ok(Some(entry));
     }
 
     Err("Could not create a unique local history snapshot".to_string())
@@ -290,6 +292,34 @@ fn is_inside_history_dir(root: &Path, file: &Path) -> bool {
 
 fn entry_id_timestamp_ms(entry_id: &str) -> Option<u64> {
     entry_id.split('-').next()?.parse().ok()
+}
+
+fn entry_id_sequence(entry_id: &str) -> u16 {
+    entry_id
+        .split_once('-')
+        .and_then(|(_, suffix)| suffix.parse().ok())
+        .unwrap_or(0)
+}
+
+fn prune_history_dir(history_dir: &Path, max_entries: usize) -> Result<(), String> {
+    let mut entries = fs::read_dir(history_dir)
+        .map_err(|e| e.to_string())?
+        .filter_map(Result::ok)
+        .filter_map(|entry| {
+            let path = entry.path();
+            if path.extension().and_then(|ext| ext.to_str()) != Some(SNAPSHOT_EXTENSION) {
+                return None;
+            }
+            let id = path.file_stem()?.to_str()?.to_string();
+            let timestamp = entry_id_timestamp_ms(&id)?;
+            Some((timestamp, entry_id_sequence(&id), path))
+        })
+        .collect::<Vec<_>>();
+    entries.sort_by(|left, right| right.0.cmp(&left.0).then_with(|| right.1.cmp(&left.1)));
+    for (_, _, path) in entries.into_iter().skip(max_entries) {
+        fs::remove_file(path).map_err(|e| e.to_string())?;
+    }
+    Ok(())
 }
 
 fn now_ms() -> u64 {
@@ -387,6 +417,23 @@ mod tests {
         let err = read_entry(root.to_str().unwrap(), file.to_str().unwrap(), "../bad").unwrap_err();
 
         assert!(err.contains("Invalid local history entry id"));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn prunes_snapshot_files_beyond_retention_limit() {
+        let root = temp_project();
+        let history_dir = root.join(HISTORY_DIR).join("fixture");
+        fs::create_dir_all(&history_dir).unwrap();
+        for id in ["1000", "1001", "1002-1"] {
+            fs::write(history_dir.join(format!("{id}.txt")), id).unwrap();
+        }
+
+        prune_history_dir(&history_dir, 2).unwrap();
+
+        assert!(!history_dir.join("1000.txt").exists());
+        assert!(history_dir.join("1001.txt").exists());
+        assert!(history_dir.join("1002-1.txt").exists());
         let _ = fs::remove_dir_all(root);
     }
 }

@@ -27,6 +27,8 @@ pub(crate) use session_push::publish_session_appended;
 #[cfg(test)]
 mod lan_roundtrip_tests;
 
+use std::collections::HashSet;
+use std::net::{IpAddr, Ipv4Addr};
 use std::sync::Arc;
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -35,7 +37,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tauri::{AppHandle, Manager, Runtime, State};
 
-use crate::storage::{aeroric_dir, atomic_write};
+use crate::storage::{aeroric_dir, atomic_write_private, ensure_private_file_permissions};
 use auth::AuthStore;
 use event_log::EventLog;
 use server::{ClientRegistry, ServerHandle};
@@ -50,6 +52,9 @@ pub const DEFAULT_PORT: u16 = 6790;
 pub struct RemoteConfig {
     pub enabled: bool,
     pub port: u16,
+    /// 配对二维码优先公布的本机 IPv4 地址。服务仍监听 0.0.0.0。
+    #[serde(default)]
+    pub preferred_lan_ip: Option<String>,
     /// 自托管 relay 基址(ws:// 或 wss://),空 = 不用 relay。
     #[serde(default)]
     pub relay_url: Option<String>,
@@ -66,6 +71,7 @@ impl Default for RemoteConfig {
         Self {
             enabled: false,
             port: DEFAULT_PORT,
+            preferred_lan_ip: None,
             relay_url: None,
             relay_token: None,
             public_endpoints: Vec::new(),
@@ -81,9 +87,10 @@ fn load_config() -> RemoteConfig {
     let Ok(path) = config_path() else {
         return RemoteConfig::default();
     };
-    let Ok(raw) = std::fs::read_to_string(path) else {
+    let Ok(raw) = std::fs::read_to_string(&path) else {
         return RemoteConfig::default();
     };
+    let _ = ensure_private_file_permissions(&path);
     serde_json::from_str(&raw).unwrap_or_default()
 }
 
@@ -93,7 +100,7 @@ fn save_config(config: &RemoteConfig) -> Result<(), String> {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
     let raw = serde_json::to_string_pretty(config).map_err(|e| e.to_string())?;
-    atomic_write(&path, &raw)
+    atomic_write_private(&path, &raw)
 }
 
 // ── 全局状态 ─────────────────────────────────────────────────────────────────
@@ -213,11 +220,89 @@ pub(crate) fn host_name() -> String {
     }
 }
 
-/// 主出口网卡的局域网 IP。UDP connect 不发包,仅让内核选路由。
-fn lan_ip() -> Option<String> {
-    let socket = std::net::UdpSocket::bind("0.0.0.0:0").ok()?;
-    socket.connect("8.8.8.8:80").ok()?;
-    Some(socket.local_addr().ok()?.ip().to_string())
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteNetworkAddress {
+    pub interface_name: String,
+    pub ip: String,
+}
+
+fn address_priority(ip: Ipv4Addr, interface_name: &str) -> (u8, u8, String, u32) {
+    let [a, b, _, _] = ip.octets();
+    let range_priority = if a == 192 && b == 168 {
+        0
+    } else if a == 172 && (16..=31).contains(&b) {
+        1
+    } else if a == 10 {
+        2
+    } else if a == 100 && (64..=127).contains(&b) {
+        3
+    } else if a == 198 && (18..=19).contains(&b) {
+        // RFC 2544 benchmark ranges are commonly used by transparent proxies.
+        9
+    } else if ip.is_link_local() {
+        10
+    } else {
+        4
+    };
+    let interface_priority = if interface_name.starts_with("utun")
+        || interface_name.starts_with("tun")
+        || interface_name.starts_with("tap")
+        || interface_name.starts_with("wg")
+    {
+        1
+    } else {
+        0
+    };
+    (
+        range_priority,
+        interface_priority,
+        interface_name.to_ascii_lowercase(),
+        u32::from(ip),
+    )
+}
+
+/// 返回所有可用于手机直连的本机 IPv4，并将常规 LAN 地址排在隧道/代理地址之前。
+fn lan_addresses() -> Vec<RemoteNetworkAddress> {
+    let mut seen = HashSet::new();
+    let mut addresses = if_addrs::get_if_addrs()
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|interface| {
+            let IpAddr::V4(ip) = interface.ip() else {
+                return None;
+            };
+            if ip.is_loopback() || ip.is_unspecified() || ip.is_multicast() {
+                return None;
+            }
+            if !seen.insert(ip) {
+                return None;
+            }
+            Some((
+                address_priority(ip, &interface.name),
+                RemoteNetworkAddress {
+                    interface_name: interface.name,
+                    ip: ip.to_string(),
+                },
+            ))
+        })
+        .collect::<Vec<_>>();
+    addresses.sort_by(|left, right| left.0.cmp(&right.0));
+    addresses.into_iter().map(|(_, address)| address).collect()
+}
+
+fn selected_lan_ip(
+    preferred_lan_ip: Option<&str>,
+    addresses: &[RemoteNetworkAddress],
+) -> Option<String> {
+    preferred_lan_ip
+        .and_then(|preferred| {
+            addresses
+                .iter()
+                .find(|address| address.ip == preferred)
+                .map(|address| address.ip.clone())
+        })
+        .or_else(|| addresses.first().map(|address| address.ip.clone()))
 }
 
 // ── Tauri commands(桌面设置页专用) ─────────────────────────────────────────
@@ -229,6 +314,7 @@ pub struct RemoteStatus {
     pub running: bool,
     pub port: u16,
     pub lan_ip: Option<String>,
+    pub lan_addresses: Vec<RemoteNetworkAddress>,
     pub online_count: usize,
     pub relay_url: Option<String>,
     pub relay_token: Option<String>,
@@ -239,11 +325,12 @@ pub struct RemoteStatus {
 
 async fn current_status<R: Runtime>(app: &AppHandle<R>) -> RemoteStatus {
     let state = app.state::<RemoteState>();
-    let (enabled, port, relay_url, relay_token, public_endpoints) = {
+    let (enabled, port, preferred_lan_ip, relay_url, relay_token, public_endpoints) = {
         let cfg = state.config.lock();
         (
             cfg.enabled,
             cfg.port,
+            cfg.preferred_lan_ip.clone(),
             cfg.relay_url.clone(),
             cfg.relay_token.clone(),
             cfg.public_endpoints.clone(),
@@ -251,17 +338,39 @@ async fn current_status<R: Runtime>(app: &AppHandle<R>) -> RemoteStatus {
     };
     let running_port = state.running.lock().await.as_ref().map(|h| h.port);
     let relay_state = state.relay_state.lock().clone();
+    let lan_addresses = lan_addresses();
+    let lan_ip = selected_lan_ip(preferred_lan_ip.as_deref(), &lan_addresses);
     RemoteStatus {
         enabled,
         running: running_port.is_some(),
         port: running_port.unwrap_or(port),
-        lan_ip: lan_ip(),
+        lan_ip,
+        lan_addresses,
         online_count: state.clients.online_count(),
         relay_url,
         relay_token,
         public_endpoints,
         relay_state,
     }
+}
+
+#[tauri::command]
+pub async fn remote_select_lan_ip<R: Runtime>(
+    app: AppHandle<R>,
+    state: State<'_, RemoteState>,
+    lan_ip: String,
+) -> Result<RemoteStatus, String> {
+    let lan_ip = lan_ip.trim();
+    let addresses = lan_addresses();
+    if !addresses.iter().any(|address| address.ip == lan_ip) {
+        return Err(format!("Local IP is no longer available: {lan_ip}"));
+    }
+    {
+        let mut cfg = state.config.lock();
+        cfg.preferred_lan_ip = Some(lan_ip.to_string());
+        save_config(&cfg)?;
+    }
+    Ok(current_status(&app).await)
 }
 
 #[tauri::command]
@@ -375,7 +484,9 @@ pub async fn remote_create_invite<R: Runtime>(
     };
     // 候选地址:LAN 直连 → 自定义公网地址 → relay(手机端按序/竞速试连)
     let mut endpoints = Vec::new();
-    if let Some(ip) = lan_ip() {
+    let addresses = lan_addresses();
+    let preferred_lan_ip = state.config.lock().preferred_lan_ip.clone();
+    if let Some(ip) = selected_lan_ip(preferred_lan_ip.as_deref(), &addresses) {
         endpoints.push(format!("ws://{ip}:{port}"));
     }
     let (relay_endpoint, extra_endpoints) = {
@@ -412,6 +523,44 @@ pub async fn remote_create_invite<R: Runtime>(
         "endpoint": primary,
         "expiresInSeconds": 600,
     }))
+}
+
+#[cfg(test)]
+mod address_tests {
+    use super::{address_priority, selected_lan_ip, RemoteNetworkAddress};
+    use std::net::Ipv4Addr;
+
+    fn address(interface_name: &str, ip: &str) -> RemoteNetworkAddress {
+        RemoteNetworkAddress {
+            interface_name: interface_name.to_string(),
+            ip: ip.to_string(),
+        }
+    }
+
+    #[test]
+    fn regular_lan_addresses_rank_before_tunnels_and_proxy_benchmark_ranges() {
+        assert!(
+            address_priority(Ipv4Addr::new(192, 168, 1, 10), "en0")
+                < address_priority(Ipv4Addr::new(100, 125, 106, 127), "utun4")
+        );
+        assert!(
+            address_priority(Ipv4Addr::new(100, 125, 106, 127), "utun4")
+                < address_priority(Ipv4Addr::new(198, 18, 0, 1), "utun1024")
+        );
+    }
+
+    #[test]
+    fn saved_available_address_wins_over_automatic_order() {
+        let addresses = vec![address("en0", "192.168.1.10"), address("utun5", "10.0.0.2")];
+        assert_eq!(
+            selected_lan_ip(Some("10.0.0.2"), &addresses).as_deref(),
+            Some("10.0.0.2")
+        );
+        assert_eq!(
+            selected_lan_ip(Some("198.18.0.1"), &addresses).as_deref(),
+            Some("192.168.1.10")
+        );
+    }
 }
 
 #[derive(Serialize)]

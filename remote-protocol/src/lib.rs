@@ -58,7 +58,9 @@ pub enum RelayRoute {
 fn valid_id(id: &str) -> bool {
     !id.is_empty()
         && id.len() <= 128
-        && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
 }
 
 pub fn parse_route(path: &str) -> Option<RelayRoute> {
@@ -67,13 +69,17 @@ pub fn parse_route(path: &str) -> Option<RelayRoute> {
     }
     if let Some(host_id) = path.strip_prefix("/connect/") {
         if valid_id(host_id) {
-            return Some(RelayRoute::ClientConnect { host_id: host_id.to_string() });
+            return Some(RelayRoute::ClientConnect {
+                host_id: host_id.to_string(),
+            });
         }
         return None;
     }
     if let Some(conn_id) = path.strip_prefix("/data/") {
         if valid_id(conn_id) {
-            return Some(RelayRoute::HostData { conn_id: conn_id.to_string() });
+            return Some(RelayRoute::HostData {
+                conn_id: conn_id.to_string(),
+            });
         }
         return None;
     }
@@ -101,7 +107,9 @@ mod tests {
         assert_eq!(parse_route("/host"), Some(RelayRoute::HostControl));
         assert_eq!(
             parse_route("/connect/abc-DEF_123"),
-            Some(RelayRoute::ClientConnect { host_id: "abc-DEF_123".to_string() })
+            Some(RelayRoute::ClientConnect {
+                host_id: "abc-DEF_123".to_string()
+            })
         );
         assert_eq!(
             parse_route("/data/550e8400-e29b-41d4-a716-446655440000"),
@@ -113,9 +121,18 @@ mod tests {
         assert_eq!(parse_route("/connect/a/b"), None);
         assert_eq!(parse_route("/other"), None);
 
-        assert_eq!(host_control_url("wss://r.example.com/"), "wss://r.example.com/host");
-        assert_eq!(client_connect_url("ws://1.2.3.4:6791", "h1"), "ws://1.2.3.4:6791/connect/h1");
-        assert_eq!(host_data_url("ws://1.2.3.4:6791", "c1"), "ws://1.2.3.4:6791/data/c1");
+        assert_eq!(
+            host_control_url("wss://r.example.com/"),
+            "wss://r.example.com/host"
+        );
+        assert_eq!(
+            client_connect_url("ws://1.2.3.4:6791", "h1"),
+            "ws://1.2.3.4:6791/connect/h1"
+        );
+        assert_eq!(
+            host_data_url("ws://1.2.3.4:6791", "c1"),
+            "ws://1.2.3.4:6791/data/c1"
+        );
     }
 
     #[test]
@@ -127,11 +144,15 @@ mod tests {
         };
         let json = serde_json::to_string(&register).unwrap();
         assert_eq!(json, r#"{"type":"register","v":1,"host_id":"h1"}"#);
-        assert_eq!(serde_json::from_str::<HostToRelay>(&json).unwrap(), register);
+        assert_eq!(
+            serde_json::from_str::<HostToRelay>(&json).unwrap(),
+            register
+        );
 
-        let connected: RelayToHost =
-            serde_json::from_str(r#"{"type":"client_connected","conn_id":"c1","peer":"1.2.3.4:5"}"#)
-                .unwrap();
+        let connected: RelayToHost = serde_json::from_str(
+            r#"{"type":"client_connected","conn_id":"c1","peer":"1.2.3.4:5"}"#,
+        )
+        .unwrap();
         assert_eq!(
             connected,
             RelayToHost::ClientConnected {

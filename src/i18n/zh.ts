@@ -31,6 +31,12 @@ export const zh: Record<string, string> = {
   "appSettings.remote.copyAddress": "复制局域网地址",
   "appSettings.remote.addressCopied": "地址已复制",
   "appSettings.remote.copyFailed": "复制失败：{message}",
+  "appSettings.remote.localIp": "本机 IP",
+  "appSettings.remote.noLocalIp": "未检测到可用 IPv4",
+  "appSettings.remote.localIpHint":
+    "选择写入配对二维码的本机地址；下拉框包含局域网、Tailscale、WireGuard 和其他本机 IPv4。",
+  "appSettings.remote.savingLocalIp": "正在保存本机 IP…",
+  "appSettings.remote.addressSelectFailed": "无法选择本机 IP：{message}",
   "appSettings.remote.port": "端口",
   "appSettings.remote.portHint":
     "端口需在服务停止时修改。手机必须能访问本机（局域网配对需处于同一 Wi-Fi）。",

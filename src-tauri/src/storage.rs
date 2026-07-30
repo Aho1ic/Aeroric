@@ -8,6 +8,7 @@ use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 
 static PROJECTS_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+const MAX_TERMINAL_HISTORY_BYTES: usize = 8 * 1024 * 1024;
 
 // ── Data types (mirror TypeScript interfaces) ────────────────────────────────
 
@@ -251,24 +252,13 @@ pub(crate) fn append_task_terminal_history(task_id: &str, data: &str) -> Result<
     }
     ensure_terminal_history_dir()?;
     let path = terminal_history_path(task_id)?;
-    let mut file = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(path)
-        .map_err(|e| e.to_string())?;
-    file.write_all(data.as_bytes()).map_err(|e| e.to_string())
+    append_terminal_history_file(&path, data, MAX_TERMINAL_HISTORY_BYTES)
 }
 
 pub(crate) fn truncate_task_terminal_history(task_id: &str) -> Result<(), String> {
     ensure_terminal_history_dir()?;
     let path = terminal_history_path(task_id)?;
-    OpenOptions::new()
-        .create(true)
-        .write(true)
-        .truncate(true)
-        .open(path)
-        .map(|_| ())
-        .map_err(|e| e.to_string())
+    atomic_write_private(&path, "")
 }
 
 /// 终端历史当前字节数(文件缺失=0)。terminal hub 的水位初始化用。
@@ -286,12 +276,19 @@ pub(crate) fn read_task_terminal_history_tail(
     task_id: &str,
     max_bytes: u64,
 ) -> Result<(u64, String), String> {
-    use std::io::{Read as _, Seek, SeekFrom};
     let path = terminal_history_path(task_id)?;
+    read_terminal_history_tail_from_path(&path, max_bytes)
+}
+
+fn read_terminal_history_tail_from_path(
+    path: &Path,
+    max_bytes: u64,
+) -> Result<(u64, String), String> {
+    use std::io::{Read as _, Seek, SeekFrom};
     if !path.exists() {
         return Ok((0, String::new()));
     }
-    let mut file = fs::File::open(&path).map_err(|e| e.to_string())?;
+    let mut file = fs::File::open(path).map_err(|e| e.to_string())?;
     let total = file.metadata().map_err(|e| e.to_string())?.len();
     let start = total.saturating_sub(max_bytes);
     file.seek(SeekFrom::Start(start))
@@ -309,12 +306,13 @@ pub(crate) fn read_task_terminal_history_tail(
 }
 
 #[tauri::command]
-pub fn read_task_terminal_history(task_id: String) -> Result<String, String> {
-    let path = terminal_history_path(&task_id)?;
-    if !path.exists() {
-        return Ok(String::new());
-    }
-    fs::read_to_string(path).map_err(|e| e.to_string())
+pub async fn read_task_terminal_history(task_id: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        read_task_terminal_history_tail(&task_id, MAX_TERMINAL_HISTORY_BYTES as u64)
+            .map(|(_, history)| history)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -345,6 +343,43 @@ pub fn atomic_write(path: &Path, content: &str) -> Result<(), String> {
     let tmp = path.with_file_name(format!(".{file_name}.{uid}.tmp"));
     fs::write(&tmp, content).map_err(|e| e.to_string())?;
     fs::rename(&tmp, path).map_err(|e| e.to_string())
+}
+
+fn utf8_tail(content: &str, max_bytes: usize) -> &str {
+    if content.len() <= max_bytes {
+        return content;
+    }
+    let mut start = content.len() - max_bytes;
+    while start < content.len() && !content.is_char_boundary(start) {
+        start += 1;
+    }
+    &content[start..]
+}
+
+fn append_terminal_history_file(path: &Path, data: &str, max_bytes: usize) -> Result<(), String> {
+    let existing_len = fs::metadata(path)
+        .map(|metadata| metadata.len())
+        .unwrap_or(0);
+    if existing_len.saturating_add(data.len() as u64) <= max_bytes as u64 {
+        let mut options = OpenOptions::new();
+        options.create(true).append(true);
+        #[cfg(not(windows))]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut file = options.open(path).map_err(|e| e.to_string())?;
+        ensure_private_file_permissions(path)?;
+        return file.write_all(data.as_bytes()).map_err(|e| e.to_string());
+    }
+
+    let incoming = utf8_tail(data, max_bytes);
+    let retained_bytes = max_bytes.saturating_sub(incoming.len());
+    let (_, existing_tail) = read_terminal_history_tail_from_path(path, retained_bytes as u64)?;
+    let mut compacted = String::with_capacity(existing_tail.len() + incoming.len());
+    compacted.push_str(&existing_tail);
+    compacted.push_str(incoming);
+    atomic_write_private(path, utf8_tail(&compacted, max_bytes))
 }
 
 /// 原子写入,但把结果文件限制为仅所有者可读写 (0o600)。
@@ -443,6 +478,28 @@ mod tests {
 
         let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o600);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn terminal_history_keeps_only_a_bounded_utf8_tail() {
+        let dir = std::env::temp_dir().join(format!(
+            "aeroric-terminal-history-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("task.log");
+
+        append_terminal_history_file(&path, "012345", 10).unwrap();
+        append_terminal_history_file(&path, "你好世界", 10).unwrap();
+
+        let history = fs::read_to_string(&path).unwrap();
+        assert!(history.len() <= 10);
+        assert_eq!(history, "5好世界");
         let _ = fs::remove_dir_all(&dir);
     }
 

@@ -31,6 +31,12 @@ export const en: Record<string, string> = {
   "appSettings.remote.copyAddress": "Copy LAN address",
   "appSettings.remote.addressCopied": "Address copied",
   "appSettings.remote.copyFailed": "Could not copy: {message}",
+  "appSettings.remote.localIp": "Local IP",
+  "appSettings.remote.noLocalIp": "No usable IPv4 address detected",
+  "appSettings.remote.localIpHint":
+    "Choose the local address advertised in pairing QR codes. LAN, Tailscale, WireGuard, and other local IPv4 addresses are listed.",
+  "appSettings.remote.savingLocalIp": "Saving local IP…",
+  "appSettings.remote.addressSelectFailed": "Could not select the local IP: {message}",
   "appSettings.remote.port": "Port",
   "appSettings.remote.portHint":
     "Change the port while the server is stopped. Your phone must be able to reach this machine (same Wi-Fi for LAN pairing).",

@@ -64,7 +64,12 @@ class FakeWebSocket implements WebSocketLike {
   }
 
   /** 按序解密到目前为止的全部客户端加密帧,返回控制面 JSON 列表。 */
-  clientFrames(): Array<{ v: number; id: number; method: string; params: Record<string, unknown> }> {
+  clientFrames(): Array<{
+    v: number;
+    id: number;
+    method: string;
+    params: Record<string, unknown>;
+  }> {
     for (; this.consumed < this.sent.length; this.consumed += 1) {
       const item = this.sent[this.consumed];
       if (typeof item === "string") continue;
@@ -109,7 +114,12 @@ class FakeWebSocket implements WebSocketLike {
   }
 }
 
-function createHarness(overrides?: { endpoints?: string[]; serverKeys?: TestServerKeys }) {
+function createHarness(overrides?: {
+  endpoints?: string[];
+  serverKeys?: TestServerKeys;
+  dialTimeoutMs?: number;
+  handshakeTimeoutMs?: number;
+}) {
   const serverKeys = overrides?.serverKeys ?? testGenerateServerKeys();
   const sockets: FakeWebSocket[] = [];
   const urls: string[] = [];
@@ -123,6 +133,8 @@ function createHarness(overrides?: { endpoints?: string[]; serverKeys?: TestServ
       sockets.push(ws);
       return ws;
     },
+    dialTimeoutMs: overrides?.dialTimeoutMs,
+    handshakeTimeoutMs: overrides?.handshakeTimeoutMs,
     jitter: (delay) => delay,
   });
   const statuses: ConnectionStatus[] = [];
@@ -190,16 +202,67 @@ describe("RemoteConnection", () => {
   it("aborts as unauthorized when the host key does not match the pinned key", async () => {
     const h = createHarness();
     h.conn.start();
-    const winner = h.sockets[0];
-    winner.open();
+    const imposterKeys = testGenerateServerKeys();
+    for (const candidate of h.sockets) {
+      candidate.open();
+    }
     await flush();
-    // 冒名主机:用另一把静态密钥应答
-    winner.acceptHandshake(testGenerateServerKeys());
+    // 所有候选都是冒名主机时才停止重试；单个坏 endpoint 不应淘汰健康候选。
+    h.sockets[0].acceptHandshake(imposterKeys);
+    await flush();
+    h.sockets[1].acceptHandshake(imposterKeys);
     await flush();
     expect(h.conn.status).toBe("unauthorized");
     expect(h.conn.authError).toContain("主机身份验证失败");
     await vi.advanceTimersByTimeAsync(60_000);
     expect(h.sockets.length).toBe(2); // 不再重试
+  });
+
+  it("keeps other endpoints alive until one completes authenticated E2EE", async () => {
+    const h = createHarness();
+    h.conn.start();
+    const stale = h.sockets[0];
+    const healthy = h.sockets[1];
+    stale.open();
+    healthy.open();
+    await flush();
+
+    expect(stale.sent.some((frame) => typeof frame === "string")).toBe(true);
+    expect(healthy.sent).toHaveLength(0);
+    expect(healthy.closed).toBe(false);
+
+    stale.acceptHandshake(testGenerateServerKeys());
+    await flush();
+    expect(healthy.sent.some((frame) => typeof frame === "string")).toBe(true);
+
+    healthy.acceptHandshake(h.serverKeys);
+    await flush();
+    healthy.replyOk({ deviceId: "d1" });
+    await flush();
+
+    expect(h.conn.status).toBe("online");
+    expect(stale.closed).toBe(true);
+    expect(healthy.closed).toBe(false);
+  });
+
+  it("times out a silent handshake and falls back to an already-open endpoint", async () => {
+    const h = createHarness({ handshakeTimeoutMs: 500 });
+    h.conn.start();
+    const silent = h.sockets[0];
+    const healthy = h.sockets[1];
+    silent.open();
+    healthy.open();
+    await flush();
+
+    await vi.advanceTimersByTimeAsync(500);
+    expect(silent.closed).toBe(true);
+    expect(healthy.sent.some((frame) => typeof frame === "string")).toBe(true);
+
+    healthy.acceptHandshake(h.serverKeys);
+    await flush();
+    healthy.replyOk({ deviceId: "d1" });
+    await flush();
+    expect(h.conn.status).toBe("online");
   });
 
   it("correlates requests and pushes independently", async () => {
@@ -383,11 +446,7 @@ describe("RemoteConnection", () => {
     });
     await flush();
     expect(pushes).toHaveLength(2);
-    expect(pushes[1]).toEqual([
-      "task-status",
-      { task_id: "t1", status: "input_required" },
-      2,
-    ]);
+    expect(pushes[1]).toEqual(["task-status", { task_id: "t1", status: "input_required" }, 2]);
 
     // 重复 seq 的推送被单调丢弃
     second.receiveCtrl({
@@ -405,7 +464,12 @@ describe("RemoteConnection", () => {
     h.conn.onPush((push) => pushes.push(push));
 
     const winner = await goOnline(h);
-    winner.receiveCtrl({ v: 2, push: "task-status", seq: 7, data: { task_id: "t", status: "done" } });
+    winner.receiveCtrl({
+      v: 2,
+      push: "task-status",
+      seq: 7,
+      data: { task_id: "t", status: "done" },
+    });
     winner.dropped();
     await vi.advanceTimersByTimeAsync(1_000);
     const second = h.sockets[2];

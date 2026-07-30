@@ -38,6 +38,7 @@ base64 = "0.22"
 notify = "6"
 toml = "0.8"
 libc = "0.2"
+if-addrs = "0.15"
 parking_lot = "0.12"
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls", "stream"] }
 flate2 = "1"

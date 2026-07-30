@@ -52,6 +52,9 @@ jobs:
         with:
           node-version: 24
           cache: pnpm
+          cache-dependency-path: |
+            pnpm-lock.yaml
+            mobile/pnpm-lock.yaml
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -61,7 +64,10 @@ jobs:
       - name: Cache Rust dependencies
         uses: swatinem/rust-cache@v2
         with:
-          workspaces: ./src-tauri -> target
+          workspaces: |
+            ./src-tauri -> target
+            ./remote-protocol -> target
+            ./remote-relay -> target
 
       - name: Install cargo-audit
         if: runner.os == 'Linux'
@@ -72,19 +78,58 @@ jobs:
         working-directory: src-tauri
         run: cargo audit
 
+      - name: Audit remote protocol
+        if: runner.os == 'Linux'
+        working-directory: remote-protocol
+        run: cargo audit
+
+      - name: Audit remote relay
+        if: runner.os == 'Linux'
+        working-directory: remote-relay
+        run: cargo audit
+
       - name: Check Rust formatting
         run: cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
+
+      - name: Check remote protocol formatting
+        run: cargo fmt --manifest-path remote-protocol/Cargo.toml -- --check
+
+      - name: Check remote relay formatting
+        run: cargo fmt --manifest-path remote-relay/Cargo.toml -- --check
 
       - name: Run Clippy
         run: >
           cargo clippy --manifest-path src-tauri/Cargo.toml --locked
-          -- -D warnings
+          --all-targets --all-features -- -D warnings
+
+      - name: Run remote protocol Clippy
+        run: >
+          cargo clippy --manifest-path remote-protocol/Cargo.toml --locked
+          --all-targets --all-features -- -D warnings
+
+      - name: Run remote relay Clippy
+        run: >
+          cargo clippy --manifest-path remote-relay/Cargo.toml --locked
+          --all-targets --all-features -- -D warnings
 
       - name: Run Rust tests
-        run: cargo test --manifest-path src-tauri/Cargo.toml --locked
+        run: cargo test --manifest-path src-tauri/Cargo.toml --locked --all-targets --all-features
+
+      - name: Run remote protocol tests
+        run: >
+          cargo test --manifest-path remote-protocol/Cargo.toml --locked
+          --all-targets --all-features
+
+      - name: Run remote relay tests
+        run: >
+          cargo test --manifest-path remote-relay/Cargo.toml --locked
+          --all-targets --all-features
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Install mobile dependencies
+        run: pnpm --dir mobile install --frozen-lockfile --ignore-scripts
 
       - name: Run ESLint
         run: pnpm lint
@@ -97,3 +142,14 @@ jobs:
 
       - name: Run web build
         run: pnpm build
+
+      - name: Type-check mobile app
+        run: pnpm --dir mobile typecheck
+
+      - name: Run mobile tests
+        run: pnpm --dir mobile test
+
+      - name: Check generated mobile terminal
+        run: |
+          pnpm --dir mobile gen:terminal-html
+          git diff --exit-code -- mobile/src/terminal/terminal-html.generated.ts
