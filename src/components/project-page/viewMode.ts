@@ -6,6 +6,7 @@ export const PROJECT_RAIL_EXPANDED_WIDTH = 252;
 export const PROJECT_RAIL_COLLAPSED_WIDTH = 52;
 export const PROJECT_RAIL_MIN_WIDTH = 220;
 export const RIGHT_TOOLBAR_WIDTH = 44;
+export const SSH_SPLIT_GRID_TEMPLATE = "minmax(0, 1fr) 1px minmax(0, 1fr)";
 const COMPOSE_COMFORT_WIDTH = 760;
 const COMPOSE_ICON_ONLY_WIDTH = 680;
 
@@ -125,6 +126,60 @@ export function projectNotebookPanelStyle({
 export function shouldShowAgentTaskTabs({ taskCount }: { taskCount: number }): boolean {
   void taskCount;
   return false;
+}
+
+export interface ProjectFeatureAvailability {
+  filesDisabled: boolean;
+  gitChangesDisabled: boolean;
+  gitHistoryDisabled: boolean;
+  gitDisabled: boolean;
+  problemsDisabled: boolean;
+  terminalDisabled: boolean;
+  runDisabled: boolean;
+  testsDisabled: boolean;
+  searchDisabled: boolean;
+  debugDisabled: boolean;
+  previewDisabled: boolean;
+  settingsDisabled: boolean;
+}
+
+/**
+ * 按项目位置决定 IDE 能力可用性。
+ * - SSH:缺少可用连接时整体降级为只读/不可用。
+ * - WSL:首版支持文件、Git、终端与项目配置,LSP 依赖类功能(problems / tests /
+ *   debug / run / preview / search)暂不开放。
+ */
+export function projectFeatureAvailability({
+  projectLocation,
+  hasRemoteFileContext,
+  hasSupportedFileContext,
+  hasRemoteConnection,
+}: {
+  projectLocation: ProjectLocation;
+  hasRemoteFileContext: boolean;
+  hasSupportedFileContext: boolean;
+  hasRemoteConnection: boolean;
+}): ProjectFeatureAvailability {
+  const sshWithoutContext = projectLocation.kind === "ssh" && !hasRemoteFileContext;
+  const isWsl = projectLocation.kind === "wsl";
+  const lspBackedDisabled = isWsl || sshWithoutContext;
+  return {
+    filesDisabled: sshWithoutContext,
+    gitChangesDisabled: sshWithoutContext,
+    gitHistoryDisabled: sshWithoutContext,
+    gitDisabled: sshWithoutContext,
+    problemsDisabled: lspBackedDisabled,
+    terminalDisabled: !hasRemoteConnection && projectLocation.kind === "ssh",
+    runDisabled: lspBackedDisabled,
+    testsDisabled: lspBackedDisabled,
+    searchDisabled: lspBackedDisabled,
+    debugDisabled: lspBackedDisabled,
+    previewDisabled: lspBackedDisabled,
+    settingsDisabled:
+      projectLocation.kind === "ssh"
+        ? !hasRemoteFileContext
+        : !hasSupportedFileContext && projectLocation.kind !== "local",
+  };
 }
 
 export function visibleDockPanel(

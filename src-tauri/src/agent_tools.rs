@@ -301,8 +301,45 @@ impl CleanupDir {
 
 impl Drop for CleanupDir {
     fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.0);
+        let _ = remove_dir_all_with_retry(&self.0);
     }
+}
+
+fn with_windows_fs_retry<T>(
+    mut operation: impl FnMut() -> std::io::Result<T>,
+) -> std::io::Result<T> {
+    let attempts = if cfg!(windows) { 8 } else { 1 };
+    let mut last_error = None;
+    for attempt in 0..attempts {
+        match operation() {
+            Ok(value) => return Ok(value),
+            Err(error) => {
+                let retryable = matches!(
+                    error.kind(),
+                    std::io::ErrorKind::PermissionDenied
+                        | std::io::ErrorKind::WouldBlock
+                        | std::io::ErrorKind::Other
+                );
+                if !cfg!(windows) || !retryable || attempt + 1 == attempts {
+                    return Err(error);
+                }
+                last_error = Some(error);
+                std::thread::sleep(Duration::from_millis(75 * (attempt as u64 + 1)));
+            }
+        }
+    }
+    Err(last_error.unwrap_or_else(|| std::io::Error::other("filesystem retry failed")))
+}
+
+fn rename_with_retry(from: &Path, to: &Path) -> std::io::Result<()> {
+    with_windows_fs_retry(|| fs::rename(from, to))
+}
+
+fn remove_dir_all_with_retry(path: &Path) -> std::io::Result<()> {
+    if !path.exists() {
+        return Ok(());
+    }
+    with_windows_fs_retry(|| fs::remove_dir_all(path))
 }
 
 struct ActivatedDir {
@@ -332,12 +369,12 @@ impl ActivatedDir {
             ))
         });
         if let Some(backup) = backup.as_ref() {
-            fs::rename(target, backup)
+            rename_with_retry(target, backup)
                 .map_err(|error| InstallError::from_io(error, "Backup existing tool failed"))?;
         }
-        if let Err(error) = fs::rename(staged, target) {
+        if let Err(error) = rename_with_retry(staged, target) {
             if let Some(backup) = backup.as_ref() {
-                let _ = fs::rename(backup, target);
+                let _ = rename_with_retry(backup, target);
             }
             return Err(InstallError::from_io(
                 error,
@@ -354,7 +391,7 @@ impl ActivatedDir {
     fn commit(mut self) {
         self.committed = true;
         if let Some(backup) = self.backup.take() {
-            let _ = fs::remove_dir_all(backup);
+            let _ = remove_dir_all_with_retry(&backup);
         }
     }
 }
@@ -364,9 +401,9 @@ impl Drop for ActivatedDir {
         if self.committed {
             return;
         }
-        let _ = fs::remove_dir_all(&self.target);
+        let _ = remove_dir_all_with_retry(&self.target);
         if let Some(backup) = self.backup.as_ref() {
-            let _ = fs::rename(backup, &self.target);
+            let _ = rename_with_retry(backup, &self.target);
         }
     }
 }
@@ -1134,12 +1171,24 @@ async fn install_claude(
         app,
         operation_id,
         agent,
+        AgentInstallStage::Installing,
+        82,
+        None,
+        "Activating Claude Code",
+    );
+    ensure_not_cancelled(cancelled)?;
+    let installed_path = root.join("current").join(expected_file_name);
+    let activation = ActivatedDir::activate(&staged_current, &root.join("current"))?;
+    emit_progress(
+        app,
+        operation_id,
+        agent,
         AgentInstallStage::VerifyingInstall,
         86,
         None,
         "Verifying Claude Code",
     );
-    let detected = detect_version(&staged_binary, cancelled).await?;
+    let detected = detect_version(&installed_path, cancelled).await?;
     if detected != version {
         return Err(InstallError::new(
             AgentInstallErrorCode::VerificationFailed,
@@ -1147,8 +1196,6 @@ async fn install_claude(
         ));
     }
     ensure_not_cancelled(cancelled)?;
-    let installed_path = root.join("current").join(expected_file_name);
-    let activation = ActivatedDir::activate(&staged_current, &root.join("current"))?;
     crate::app_settings::save_managed_agent_path(agent.id(), &installed_path)
         .map_err(|message| InstallError::new(AgentInstallErrorCode::Internal, message))?;
     activation.commit();
@@ -1401,7 +1448,13 @@ async fn install_codex(
     );
     extract_tar_gz(&archive_path, &staged_current)?;
     ensure_not_cancelled(cancelled)?;
-    let staged_binary = verify_codex_layout(&staged_current)?;
+    verify_codex_layout(&staged_current)?;
+    ensure_not_cancelled(cancelled)?;
+    let installed_path =
+        root.join("current")
+            .join("bin")
+            .join(if cfg!(windows) { "codex.exe" } else { "codex" });
+    let activation = ActivatedDir::activate(&staged_current, &root.join("current"))?;
     emit_progress(
         app,
         operation_id,
@@ -1411,7 +1464,7 @@ async fn install_codex(
         None,
         "Verifying Codex",
     );
-    let detected = detect_version(&staged_binary, cancelled).await?;
+    let detected = detect_version(&installed_path, cancelled).await?;
     if detected != version {
         return Err(InstallError::new(
             AgentInstallErrorCode::VerificationFailed,
@@ -1419,11 +1472,6 @@ async fn install_codex(
         ));
     }
     ensure_not_cancelled(cancelled)?;
-    let installed_path =
-        root.join("current")
-            .join("bin")
-            .join(if cfg!(windows) { "codex.exe" } else { "codex" });
-    let activation = ActivatedDir::activate(&staged_current, &root.join("current"))?;
     crate::app_settings::save_managed_agent_path(agent.id(), &installed_path)
         .map_err(|message| InstallError::new(AgentInstallErrorCode::Internal, message))?;
     activation.commit();
@@ -1684,6 +1732,35 @@ mod tests {
         drop(activation);
 
         assert_eq!(fs::read_to_string(target.join("version")).unwrap(), "old");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn version_verification_executes_from_the_activated_final_path() {
+        let root = std::env::temp_dir().join(format!(
+            "aeroric-final-path-verification-{}",
+            Uuid::new_v4()
+        ));
+        let staged = root.join("staged");
+        let target = root.join("current");
+        fs::create_dir_all(&staged).unwrap();
+        let staged_binary = staged.join("tool");
+        fs::write(
+            &staged_binary,
+            "#!/bin/sh\ncase \"$0\" in */current/tool) echo 1.2.3 ;; *) exit 5 ;; esac\n",
+        )
+        .unwrap();
+        make_executable(&staged_binary).unwrap();
+
+        let activation = ActivatedDir::activate(&staged, &target).unwrap();
+        let cancelled = AtomicBool::new(false);
+        let detected = detect_version(&target.join("tool"), &cancelled)
+            .await
+            .unwrap();
+
+        assert_eq!(detected, "1.2.3");
+        activation.commit();
         let _ = fs::remove_dir_all(root);
     }
 }

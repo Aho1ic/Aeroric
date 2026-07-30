@@ -14,19 +14,85 @@ export interface Project {
 
 export type ProjectLocation =
   | { kind: "local"; path: string }
-  | { kind: "ssh"; connectionId: string; remotePath: string };
+  | { kind: "ssh"; connectionId: string; remotePath: string }
+  | { kind: "wsl"; distribution: string; linuxPath: string };
+
+export type LocalTarget = { kind: "local"; path: string };
+export type SshTarget = {
+  kind: "ssh";
+  connection: SshConnection;
+  projectPath: string;
+};
+export type WslTarget = {
+  kind: "wsl";
+  distribution: string;
+  projectPath: string;
+};
+export type ProjectTarget = LocalTarget | SshTarget | WslTarget;
+export type RemoteProjectTarget = SshTarget | WslTarget;
 
 export function resolveProjectLocation(project: Project): ProjectLocation {
   return project.location ?? { kind: "local", path: project.path };
 }
 
 export function isRemoteProject(project: Project): boolean {
-  return resolveProjectLocation(project).kind === "ssh";
+  return resolveProjectLocation(project).kind !== "local";
 }
 
 export function sshProjectPath(connectionId: string, remotePath: string): string {
   const normalizedRemotePath = remotePath.startsWith("/") ? remotePath : `/${remotePath}`;
   return `ssh://${connectionId}${normalizedRemotePath}`;
+}
+
+export function wslProjectPath(distribution: string, linuxPath: string): string {
+  const normalizedLinuxPath = linuxPath.startsWith("/") ? linuxPath : `/${linuxPath}`;
+  return `wsl://${encodeURIComponent(distribution)}${normalizedLinuxPath}`;
+}
+
+export interface WslDistribution {
+  name: string;
+  state: string;
+  version?: number;
+  isDefault: boolean;
+}
+
+export interface WslStatus {
+  supported: boolean;
+  installed: boolean;
+  distributionCount: number;
+  defaultDistribution?: string;
+  error?: string;
+}
+
+export interface WslDistributionProbe {
+  distribution: string;
+  state: string;
+  version?: number;
+  home: string;
+  shell: string;
+  user: string;
+  claudePath?: string;
+  codexPath?: string;
+}
+
+export interface WslEnvironment {
+  distribution: string;
+  home: string;
+  shell: string;
+  path: string;
+  variables: Record<string, string>;
+  sensitiveNames?: string[];
+}
+
+export interface WslDistributionSettings {
+  shellOverride?: string;
+  agentPaths: Record<string, string>;
+  agentConfigPaths: Record<string, string>;
+}
+
+export interface WslSettings {
+  defaultDistribution?: string;
+  distributions: Record<string, WslDistributionSettings>;
 }
 
 export interface SshConnection {
@@ -180,8 +246,13 @@ export function clampTerminalFontSize(value: number): TerminalFontSize {
 }
 
 export type FontFamily = string;
-export const DEFAULT_UI_FONT: FontFamily =
-  '"SF Pro Display", "IBM Plex Sans", "PingFang SC", "Noto Sans SC", sans-serif';
+export const DEFAULT_UI_FONT_BY_PLATFORM: Record<"windows" | "macos" | "linux", FontFamily> = {
+  windows: '"Segoe UI Variable", "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", sans-serif',
+  macos: '"SF Pro Display", "IBM Plex Sans", "PingFang SC", "Noto Sans SC", sans-serif',
+  linux:
+    '"Inter", "Noto Sans", "Noto Sans CJK SC", "WenQuanYi Micro Hei", "DejaVu Sans", sans-serif',
+};
+export const DEFAULT_UI_FONT: FontFamily = DEFAULT_UI_FONT_BY_PLATFORM.macos;
 // 旧默认值（缺 CJK 字形，会导致终端中文乱码/错位）。用于把老用户 localStorage 里
 // 存下的旧值自动迁移到新的含 CJK fallback 的字体链，见 App.tsx 的迁移逻辑。
 export const LEGACY_DEFAULT_MONO_FONTS: readonly FontFamily[] = [
@@ -189,8 +260,15 @@ export const LEGACY_DEFAULT_MONO_FONTS: readonly FontFamily[] = [
 ];
 // 西文等宽字体在前用于测量 cell 宽度，末尾补 CJK 等宽/全角字体，确保 Claude
 // 输出的中文有字形可回退，避免 WebGL renderer 下的乱码与宽度错位。
-export const DEFAULT_MONO_FONT: FontFamily =
-  '"JetBrains Mono", "Fira Code", "Sarasa Mono SC", "Maple Mono NF CN", ui-monospace, "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", "Noto Sans SC", monospace';
+export const DEFAULT_MONO_FONT_BY_PLATFORM: Record<"windows" | "macos" | "linux", FontFamily> = {
+  windows:
+    '"Cascadia Mono", "Cascadia Code", "Sarasa Mono SC", Consolas, "Microsoft YaHei", monospace',
+  macos:
+    '"JetBrains Mono", "Fira Code", "Sarasa Mono SC", "Maple Mono NF CN", ui-monospace, "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", "Noto Sans SC", monospace',
+  linux:
+    '"JetBrains Mono", "Noto Sans Mono CJK SC", "Sarasa Mono SC", "DejaVu Sans Mono", "Noto Sans Mono", monospace',
+};
+export const DEFAULT_MONO_FONT: FontFamily = DEFAULT_MONO_FONT_BY_PLATFORM.macos;
 
 export type TaskStatus =
   | "todo"
@@ -305,6 +383,9 @@ export interface ReleaseUpdatePrepareResult {
   assetName: string;
   installerPath: string;
   readyToRestart: boolean;
+  checksumVerified: boolean;
+  helperStatus: "ready" | "running" | "failed" | string;
+  error: string | null;
 }
 
 export interface TextSearchMatch {
@@ -785,6 +866,13 @@ export interface Skill {
   path: string;
   /** frontmatter 解析失败时的错误说明 */
   hasError?: string;
+}
+
+export interface PromptSkill {
+  /** CLI slash command 名称，不含前导 `/`。 */
+  name: string;
+  description?: string;
+  path: string;
 }
 
 export type SkillInstallationHealth = "ok" | "broken" | "diverged";

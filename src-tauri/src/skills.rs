@@ -76,6 +76,16 @@ pub struct Skill {
     pub has_error: Option<String>,
 }
 
+#[derive(Serialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct PromptSkill {
+    /// CLI 中实际使用的 slash command 名称（不含前导 `/`）。
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    pub path: String,
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct SkillInstallation {
@@ -798,6 +808,89 @@ fn scan_skills_in(hub_path: &Path) -> Vec<Skill> {
     skills
 }
 
+fn is_valid_prompt_skill_name(name: &str) -> bool {
+    !name.is_empty()
+        && name != "."
+        && name != ".."
+        && !name.starts_with('.')
+        && !name.chars().any(char::is_whitespace)
+        && !name.contains('/')
+        && !name.contains('\\')
+        && !name.contains('\0')
+}
+
+fn collect_prompt_skills(
+    root: &Path,
+    skills: &mut Vec<PromptSkill>,
+    seen_names: &mut HashSet<String>,
+) {
+    let Ok(entries) = fs::read_dir(root) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Some(directory_name) = path.file_name().and_then(|value| value.to_str()) else {
+            continue;
+        };
+        if !is_valid_prompt_skill_name(directory_name) || !path.join("SKILL.md").is_file() {
+            continue;
+        }
+        let (frontmatter_name, description) = fs::read_to_string(path.join("SKILL.md"))
+            .map(|content| {
+                let parsed = parse_frontmatter(&content);
+                (parsed.name, parsed.description)
+            })
+            .unwrap_or_default();
+        let name = frontmatter_name
+            .filter(|value| is_valid_prompt_skill_name(value))
+            .unwrap_or_else(|| directory_name.to_string());
+        if !seen_names.insert(name.to_lowercase()) {
+            continue;
+        }
+        skills.push(PromptSkill {
+            name,
+            description,
+            path: path.to_string_lossy().into_owned(),
+        });
+    }
+}
+
+fn prompt_skill_roots(project_path: &Path, agent: &str) -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+    let codex_like = agent == "codex";
+    if codex_like {
+        roots.push(project_path.join(".agents").join("skills"));
+        // Aeroric 历史版本把 Codex skill 安装在这里，继续识别以保持兼容。
+        roots.push(project_path.join(".codex").join("skills"));
+        if let Some(codex_home) = std::env::var_os("CODEX_HOME").map(PathBuf::from) {
+            roots.push(codex_home.join("skills"));
+        }
+        if let Some(home) = crate::platform::home_dir() {
+            roots.push(home.join(".codex").join("skills"));
+            roots.push(home.join(".agents").join("skills"));
+        }
+    } else {
+        roots.push(project_path.join(".claude").join("skills"));
+        if let Some(claude_home) = std::env::var_os("CLAUDE_CONFIG_DIR").map(PathBuf::from) {
+            roots.push(claude_home.join("skills"));
+        }
+        if let Some(home) = crate::platform::home_dir() {
+            roots.push(home.join(".claude").join("skills"));
+        }
+    }
+    roots
+}
+
+fn scan_prompt_skills(project_path: &Path, agent: &str) -> Vec<PromptSkill> {
+    let mut skills = Vec::new();
+    let mut seen_names = HashSet::new();
+    for root in prompt_skill_roots(project_path, agent) {
+        collect_prompt_skills(&root, &mut skills, &mut seen_names);
+    }
+    skills.sort_by(|left, right| left.name.to_lowercase().cmp(&right.name.to_lowercase()));
+    skills
+}
+
 // ── Symlink helpers ──────────────────────────────────────────────────────────
 
 #[cfg(unix)]
@@ -1043,6 +1136,28 @@ pub async fn list_skills() -> Result<Vec<Skill>, String> {
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn list_project_skills(
+    project_path: String,
+    agent: String,
+) -> Result<Vec<PromptSkill>, String> {
+    tokio::task::spawn_blocking(move || {
+        if !matches!(agent.as_str(), "claude" | "codex") {
+            return Err(format!("Unsupported agent skill type: {}", agent));
+        }
+        let project_path = PathBuf::from(project_path);
+        if !project_path.is_dir() {
+            return Err(format!(
+                "Project path does not exist: {}",
+                project_path.display()
+            ));
+        }
+        Ok(scan_prompt_skills(&project_path, &agent))
+    })
+    .await
+    .map_err(|error| error.to_string())?
 }
 
 #[tauri::command]
@@ -2681,6 +2796,68 @@ mod tests {
         let md = "---\nname: foo\nversion: \"1.4.2\"\ndescription: bar\n---\n";
         let parsed = parse_frontmatter(md);
         assert_eq!(parsed.version.as_deref(), Some("1.4.2"));
+    }
+
+    #[test]
+    fn prompt_skill_scanner_uses_frontmatter_name_and_project_precedence() {
+        let root = std::env::temp_dir().join(format!("aeroric-prompt-skills-{}", Uuid::new_v4()));
+        let project_skills = root.join("project");
+        let user_skills = root.join("user");
+        fs::create_dir_all(project_skills.join("debug")).unwrap();
+        fs::create_dir_all(user_skills.join("debug")).unwrap();
+        fs::create_dir_all(user_skills.join("verify")).unwrap();
+        fs::write(
+            project_skills.join("debug/SKILL.md"),
+            "---\nname: systematic-debugging\ndescription: Project debugger\n---\n",
+        )
+        .unwrap();
+        fs::write(
+            user_skills.join("debug/SKILL.md"),
+            "---\nname: systematic-debugging\ndescription: User debugger\n---\n",
+        )
+        .unwrap();
+        fs::write(
+            user_skills.join("verify/SKILL.md"),
+            "---\ndescription: Verify work\n---\n",
+        )
+        .unwrap();
+
+        let mut skills = Vec::new();
+        let mut seen = HashSet::new();
+        collect_prompt_skills(&project_skills, &mut skills, &mut seen);
+        collect_prompt_skills(&user_skills, &mut skills, &mut seen);
+        skills.sort_by(|left, right| left.name.cmp(&right.name));
+
+        assert_eq!(skills.len(), 2);
+        assert_eq!(skills[0].name, "systematic-debugging");
+        assert_eq!(skills[0].description.as_deref(), Some("Project debugger"));
+        assert_eq!(skills[1].name, "verify");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn prompt_skill_scanner_follows_installed_skill_symlinks() {
+        let root =
+            std::env::temp_dir().join(format!("aeroric-prompt-skill-link-{}", Uuid::new_v4()));
+        let target = root.join("hub/debug");
+        let project_skills = root.join("project/.claude/skills");
+        fs::create_dir_all(&target).unwrap();
+        fs::create_dir_all(&project_skills).unwrap();
+        fs::write(
+            target.join("SKILL.md"),
+            "---\nname: linked-debugger\ndescription: Linked skill\n---\n",
+        )
+        .unwrap();
+        std::os::unix::fs::symlink(&target, project_skills.join("debug")).unwrap();
+
+        let mut skills = Vec::new();
+        let mut seen = HashSet::new();
+        collect_prompt_skills(&project_skills, &mut skills, &mut seen);
+
+        assert_eq!(skills.len(), 1);
+        assert_eq!(skills[0].name, "linked-debugger");
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]

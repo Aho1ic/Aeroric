@@ -28,7 +28,7 @@ const connection: SshConnection = {
   createdAt: 1,
 };
 
-const remote = { connection, projectPath: "/srv/app" };
+const remote = { kind: "ssh" as const, connection, projectPath: "/srv/app" };
 
 describe("remote Git panels", () => {
   beforeEach(() => {

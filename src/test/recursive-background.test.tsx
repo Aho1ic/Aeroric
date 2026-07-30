@@ -168,6 +168,7 @@ function welcomePageProps(
     sshConnections: [],
     onSshConnectionsChange: vi.fn(),
     onOpenSshProject: vi.fn(),
+    onOpenWslProject: vi.fn(),
     ...overrides,
   };
 }

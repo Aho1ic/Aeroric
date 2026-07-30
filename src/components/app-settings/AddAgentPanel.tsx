@@ -77,10 +77,10 @@ function idFromBaseUrl(value: string): string {
 
 function deriveAgentId(label: string, baseUrl: string, kind: AgentSetupKind): string {
   const labelId = sanitizeAgentId(label);
-  if (labelId) return labelId;
   const urlId = idFromBaseUrl(baseUrl);
-  if (!urlId) return "";
-  return sanitizeAgentId(`${urlId}_${kind === "codex" ? "codex" : "claude"}`);
+  const baseId = labelId || urlId;
+  if (!baseId) return "";
+  return sanitizeAgentId(`${baseId}_${kind === "codex" ? "codex" : "claude"}`);
 }
 
 export function AddAgentPanel({ onSaved }: { onSaved: (agentId: string) => void }) {
@@ -178,10 +178,22 @@ export function AddAgentPanel({ onSaved }: { onSaved: (agentId: string) => void 
     setSaved(false);
     setError(null);
     try {
-      await invoke<AppSettings>("setup_agent_profile", { draft });
+      const settings = await invoke<AppSettings>("setup_agent_profile", { draft });
+      const savedAgentId =
+        settings.custom_agents?.[settings.custom_agents.length - 1]?.id ??
+        settings.custom_agents
+          ?.slice()
+          .reverse()
+          .find(
+            (profile) =>
+              profile.label === draft.label &&
+              profile.codex_like === (draft.kind === "codex") &&
+              profile.base_url === draft.base_url,
+          )?.id ??
+        generatedAgentId;
       window.dispatchEvent(new Event(APP_SETTINGS_CHANGED_EVENT));
       setSaved(true);
-      onSaved(generatedAgentId);
+      onSaved(savedAgentId);
     } catch (err) {
       setError(String(err));
     } finally {

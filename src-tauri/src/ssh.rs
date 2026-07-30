@@ -666,6 +666,8 @@ pub async fn run_remote_task(
         .lock()
         .remove(&task_id);
     let _ = crate::storage::truncate_task_terminal_history(&task_id);
+    // 历史清零 → 远程终端流水位换代,已订阅的手机端自动重新快照
+    crate::remote::terminal_hub::hub().reset_for_truncate(&task_id);
     let remote_command = build_remote_task_command(
         &agent,
         &permission_mode,

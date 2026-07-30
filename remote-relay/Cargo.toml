@@ -1,0 +1,21 @@
+[package]
+name = "aeroric-remote-relay"
+version = "0.1.0"
+edition = "2021"
+description = "Self-hosted blind relay for Aeroric mobile remote access (E2EE pass-through)"
+
+[[bin]]
+name = "aeroric-remote-relay"
+path = "src/main.rs"
+
+[dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "sync", "time"] }
+tokio-tungstenite = "0.24"
+futures-util = "0.3"
+serde_json = "1"
+uuid = { version = "1", features = ["v4"] }
+remote-protocol = { path = "../remote-protocol" }
+
+[profile.release]
+strip = true
+lto = true

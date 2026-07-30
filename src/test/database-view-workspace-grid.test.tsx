@@ -731,7 +731,7 @@ describe("DatabaseView workspace and data grid", () => {
     const emailType = within(table).getByTitle("Column type: varchar(50)");
     expect(emailType).toHaveTextContent("varchar(50)");
     expect(emailType).toHaveStyle({ color: "#f59e0b", fontWeight: "800" });
-    expect(emailType.style.fontFamily).toContain("Monaco");
+    expect(emailType.style.fontFamily).toContain("var(--font-mono)");
     expect(emailType.parentElement).toHaveStyle({ alignItems: "flex-start", textAlign: "left" });
     expect(within(table).getAllByTitle("Column type: text")).toHaveLength(2);
     const emailHeaderButton = within(

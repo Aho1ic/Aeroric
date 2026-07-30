@@ -292,6 +292,98 @@ pub async fn remote_write_project_config(
     .map_err(|e| e.to_string())?
 }
 
+fn read_wsl_project_config_from_root(
+    distribution: &str,
+    linux_root: &str,
+) -> Result<ProjectConfig, String> {
+    let mut command = crate::wsl::std_wsl_shell_command(
+        distribution,
+        build_remote_read_project_config_command(linux_root),
+    );
+    crate::subprocess::configure_background_command(&mut command);
+    let output = command.output().map_err(|error| error.to_string())?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(if stderr.is_empty() {
+            "Failed to read WSL project config".to_string()
+        } else {
+            stderr
+        });
+    }
+    let raw = String::from_utf8_lossy(&output.stdout);
+    if raw.trim().is_empty() {
+        return Ok(ProjectConfig::default());
+    }
+    Ok(toml::from_str(&raw).unwrap_or_default())
+}
+
+fn write_wsl_project_config_from_root(
+    distribution: &str,
+    linux_root: &str,
+    config: ProjectConfig,
+) -> Result<(), String> {
+    let raw = toml::to_string_pretty(&config).map_err(|error| error.to_string())?;
+    let mut command = crate::wsl::std_wsl_shell_command(
+        distribution,
+        build_remote_write_project_config_command(linux_root),
+    );
+    crate::subprocess::configure_background_command(&mut command);
+    let mut child = command
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| error.to_string())?;
+    child
+        .stdin
+        .take()
+        .ok_or_else(|| "Failed to open WSL project config writer".to_string())?
+        .write_all(raw.as_bytes())
+        .map_err(|error| format!("Failed to write WSL project config: {error}"))?;
+    let output = child
+        .wait_with_output()
+        .map_err(|error| error.to_string())?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        Err(if stderr.is_empty() {
+            "Failed to write WSL project config".to_string()
+        } else {
+            stderr
+        })
+    }
+}
+
+#[tauri::command]
+pub async fn read_wsl_project_config(
+    distribution: String,
+    linux_project_path: String,
+) -> Result<ProjectConfig, String> {
+    let linux_root = normalize_remote_config_root(&linux_project_path)?;
+    crate::wsl::validate_distribution_name(&distribution)?;
+    tokio::task::spawn_blocking(move || {
+        read_wsl_project_config_from_root(&distribution, &linux_root)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+pub async fn write_wsl_project_config(
+    distribution: String,
+    linux_project_path: String,
+    config: ProjectConfig,
+) -> Result<(), String> {
+    let linux_root = normalize_remote_config_root(&linux_project_path)?;
+    crate::wsl::validate_distribution_name(&distribution)?;
+    tokio::task::spawn_blocking(move || {
+        write_wsl_project_config_from_root(&distribution, &linux_root, config)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
 fn configured_path(value: &str) -> Option<PathBuf> {
     let trimmed = value.trim();
     if trimmed.is_empty() {

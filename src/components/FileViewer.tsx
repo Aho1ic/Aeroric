@@ -48,10 +48,11 @@ import type {
   LocalHistorySnapshot,
   LspInlayHint,
   LspSymbol,
-  SshConnection,
+  RemoteProjectTarget,
   TestCoverageSummary,
   ThemeVariant,
 } from "../types";
+import { targetCommand, targetFileArgs } from "../projectTarget";
 import { useI18n } from "../i18n";
 import { isRunnableScriptFile, selectRunnableCondaEnvironment } from "./file-viewer/run";
 import { lineColumnToOffset } from "./file-viewer/position";
@@ -105,10 +106,7 @@ import {
   projectRelativeGitPath,
 } from "./git-advanced/gitAdvancedState";
 
-type RemoteFileContext = {
-  connection: SshConnection;
-  projectPath: string;
-};
+type RemoteFileContext = RemoteProjectTarget;
 
 type ProjectEditorSettings = {
   editor?: {
@@ -696,7 +694,7 @@ const editorContextMenuItemStyle: CSSProperties = {
 };
 
 function sqliteEndpointForFile(filePath: string, remote?: RemoteFileContext): DbEndpoint {
-  if (remote) {
+  if (remote?.kind === "ssh") {
     return {
       kind: "ssh",
       connection: remote.connection,
@@ -771,6 +769,8 @@ function FilePreviewPane({
   const isMarkdown = isMarkdownFile(fileName);
   const isPreviewableImage = isPreviewableImageFile(fileName);
   const isSqliteDatabase = isSqliteDatabaseFile(fileName);
+  // LSP 首版仅支持 SSH 远程；WSL 项目暂不启动语言服务器。
+  const lspRemote = remote?.kind === "ssh" ? remote : undefined;
   const sqliteEndpoint = useMemo(
     () => (isSqliteDatabase ? sqliteEndpointForFile(filePath, remote) : null),
     [filePath, isSqliteDatabase, remote],
@@ -893,12 +893,10 @@ function FilePreviewPane({
       setFormatError(null);
       try {
         if (remote) {
-          await invoke("remote_write_file_content", {
-            connection: remote.connection,
-            remotePath: filePath,
-            remoteProjectPath: remote.projectPath,
-            content: value,
-          });
+          await invoke(
+            targetCommand(remote, "", "remote_write_file_content", "wsl_write_file_content"),
+            { ...targetFileArgs(remote, filePath), content: value },
+          );
         } else {
           await invoke("write_file_content", { path: filePath, content: value, projectPath });
         }
@@ -947,7 +945,7 @@ function FilePreviewPane({
     content,
     cursorLine: cursorPosition.line,
     cursorColumn: cursorPosition.column,
-    remote,
+    remote: lspRemote,
   });
   const currentLspRequest = useCallback(() => {
     if (!languageServer.request || content === null) return null;
@@ -977,7 +975,7 @@ function FilePreviewPane({
     projectPath,
     filePath,
     content,
-    remote,
+    remote: lspRemote,
     currentFileDiagnostics,
     isPreviewableImage,
     languageServer,
@@ -1082,7 +1080,7 @@ function FilePreviewPane({
         request: languageServer.request,
         available: Boolean(languageServer.status?.available),
         unavailableMessage: languageServer.message,
-        remote,
+        remote: lspRemote,
         onOpenTarget: handleOpenLspTarget,
         onError: setNavigationError,
       }),
@@ -1091,7 +1089,7 @@ function FilePreviewPane({
       languageServer.message,
       languageServer.request,
       languageServer.status?.available,
-      remote,
+      lspRemote,
       setNavigationError,
     ],
   );
@@ -1101,14 +1099,14 @@ function FilePreviewPane({
         request: languageServer.request,
         available: Boolean(languageServer.status?.available),
         unavailableMessage: languageServer.message,
-        remote,
+        remote: lspRemote,
         onError: setNavigationError,
       }),
     [
       languageServer.message,
       languageServer.request,
       languageServer.status?.available,
-      remote,
+      lspRemote,
       setNavigationError,
     ],
   );
@@ -1118,14 +1116,14 @@ function FilePreviewPane({
         request: languageServer.request,
         available: Boolean(languageServer.status?.available),
         unavailableMessage: languageServer.message,
-        remote,
+        remote: lspRemote,
         onError: setNavigationError,
       }),
     [
       languageServer.message,
       languageServer.request,
       languageServer.status?.available,
-      remote,
+      lspRemote,
       setNavigationError,
     ],
   );
@@ -1135,14 +1133,14 @@ function FilePreviewPane({
         request: languageServer.request,
         available: Boolean(languageServer.status?.available),
         unavailableMessage: languageServer.message,
-        remote,
+        remote: lspRemote,
         onError: setNavigationError,
       }),
     [
       languageServer.message,
       languageServer.request,
       languageServer.status?.available,
-      remote,
+      lspRemote,
       setNavigationError,
     ],
   );
@@ -1253,7 +1251,7 @@ function FilePreviewPane({
     setOutlineLoading(true);
     setOutlineError(null);
     const timer = window.setTimeout(() => {
-      void requestLspDocumentOutline(request, remote)
+      void requestLspDocumentOutline(request, lspRemote)
         .then((outline) => {
           if (cancelled) return;
           setOutlineSymbols(outline.symbols);
@@ -1285,7 +1283,7 @@ function FilePreviewPane({
     languageServer.status,
     languageServer.supported,
     projectPath,
-    remote,
+    lspRemote,
   ]);
 
   useEffect(() => {
@@ -1314,7 +1312,7 @@ function FilePreviewPane({
     setInlayHintsLoading(true);
     setInlayHintsError(null);
     const timer = window.setTimeout(() => {
-      void requestLspInlayHints(request, remote)
+      void requestLspInlayHints(request, lspRemote)
         .then((hints) => {
           if (!cancelled) setInlayHints(hints);
         })
@@ -1342,7 +1340,7 @@ function FilePreviewPane({
     languageServer.status,
     languageServer.supported,
     projectPath,
-    remote,
+    lspRemote,
   ]);
 
   useEffect(() => {
@@ -1411,28 +1409,20 @@ function FilePreviewPane({
           })
         : isPreviewableImage
           ? invoke<ImagePreviewData>(
-              remote ? "remote_read_image_preview" : "read_image_preview",
               remote
-                ? {
-                    connection: remote.connection,
-                    remotePath: filePath,
-                    remoteProjectPath: remote.projectPath,
-                  }
-                : { path: filePath, projectPath },
+                ? targetCommand(remote, "", "remote_read_image_preview", "wsl_read_image_preview")
+                : "read_image_preview",
+              remote ? targetFileArgs(remote, filePath) : { path: filePath, projectPath },
             ).then((preview) => {
               if (cancelled) return;
               setImagePreview(preview);
               setLoading(false);
             })
           : invoke<string>(
-              remote ? "remote_read_file_content" : "read_file_content",
               remote
-                ? {
-                    connection: remote.connection,
-                    remotePath: filePath,
-                    remoteProjectPath: remote.projectPath,
-                  }
-                : { path: filePath, projectPath },
+                ? targetCommand(remote, "", "remote_read_file_content", "wsl_read_file_content")
+                : "read_file_content",
+              remote ? targetFileArgs(remote, filePath) : { path: filePath, projectPath },
             ).then((nextContent) => {
               if (cancelled) return;
               setContent(nextContent);

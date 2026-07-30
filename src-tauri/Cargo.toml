@@ -20,6 +20,10 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
+[dev-dependencies]
+# mock runtime,供 remote 模块的 WS 集成测试构造 AppHandle
+tauri = { version = "2", features = ["test"] }
+
 [dependencies]
 tauri = { version = "2", features = [] }
 tauri-plugin-opener = "2"
@@ -27,7 +31,7 @@ tauri-plugin-dialog = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 regex = "1"
-tokio = { version = "1", features = ["sync", "macros", "rt", "time", "process", "io-util"] }
+tokio = { version = "1", features = ["sync", "macros", "rt", "time", "process", "io-util", "net"] }
 portable-pty = "0.8"
 chrono = "0.4"
 base64 = "0.22"
@@ -41,6 +45,17 @@ tar = "0.4"
 sha2 = "0.10"
 uuid = { version = "1", features = ["v4"] }
 tungstenite = "0.24"
+# 手机远程连接(remote 模块):异步 WS 服务端 + 帧收发 + CSPRNG token
+# rustls-tls-webpki-roots:relay_client 出站 wss 连自托管 relay(Let's Encrypt 证书)
+tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
+futures-util = "0.3"
+getrandom = "0.2"
+# E2EE(M4):X25519 握手 + ChaCha20-Poly1305 帧加密 + HKDF 密钥派生
+x25519-dalek = { version = "2", features = ["static_secrets"] }
+chacha20poly1305 = "0.10"
+hkdf = "0.12"
+# relay 撮合控制面消息(与 remote-relay 共享)
+remote-protocol = { path = "../remote-protocol" }
 url = "2"
 trash = "=5.2.6"
 font-kit = "=0.14.3"

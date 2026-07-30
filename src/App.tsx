@@ -18,16 +18,27 @@ import type {
   CondaEnvironment,
 } from "./types";
 import { isActiveTaskStatus, resolveProjectLocation, sshProjectPath } from "./types";
-import { DEFAULT_UI_FONT, DEFAULT_MONO_FONT, LEGACY_DEFAULT_MONO_FONTS } from "./types";
+import {
+  DEFAULT_UI_FONT_BY_PLATFORM,
+  DEFAULT_MONO_FONT_BY_PLATFORM,
+  LEGACY_DEFAULT_MONO_FONTS,
+} from "./types";
 import type { FontFamily } from "./types";
 import { WelcomePage } from "./components/WelcomePage";
 import { AppSettingsEventHost } from "./components/AppSettingsEventHost";
 import type { SshProjectInput } from "./components/ssh/SshProjectDialog";
+import type { WslProjectInput } from "./components/wsl/WslProjectDialog";
 import { selectDefaultCondaEnvironment } from "./components/file-viewer/run";
 import { SKILL_HUB_CHANGED_EVENT } from "./components/app-settings/types";
 import { useToast } from "./components/Toast";
 import { isHideWindowShortcut } from "./shortcuts";
-import { APP_PLATFORM } from "./platform";
+import {
+  APP_PLATFORM,
+  FONT_PLATFORM,
+  getFontStorageKey,
+  getTerminalFontSizeStorageKey,
+} from "./platform";
+import { composeFontStack } from "./utils/fonts";
 import { agentDisplayLabel, isCodexLikeAgent } from "./agents";
 import { useAgentOptions } from "./hooks/useAgentOptions";
 import { useTerminalManager } from "./hooks/useTerminalManager";
@@ -39,6 +50,7 @@ import {
   SFTP_LOCAL_PATH_STORAGE_KEY,
 } from "./settings";
 import { applyProjectOrder, normalizeProjectOrder, sortProjectsForRail } from "./projectOrder";
+import { taskCommandName } from "./projectTarget";
 import {
   loadProjectGroupNames,
   mergeProjectGroupNames,
@@ -67,6 +79,7 @@ import {
   PROJECT_RAIL_WIDTH_STORAGE_KEY,
   SELECTED_CONDA_ENV_KEY,
   shouldIgnoreTaskStatusTransition,
+  upsertWslProject,
   type ProjectViewState,
 } from "./appProjectState";
 import {
@@ -102,10 +115,20 @@ function App() {
     getInitialSftpLocalDefaultPath,
   );
   const [uiFontFamily, setUiFontFamily] = useState<FontFamily>(() =>
-    getInitialFontFamily("aeroric:uiFontFamily", DEFAULT_UI_FONT),
+    getInitialFontFamily(
+      getFontStorageKey("ui"),
+      DEFAULT_UI_FONT_BY_PLATFORM[FONT_PLATFORM],
+      [],
+      FONT_PLATFORM === "macos" ? "aeroric:uiFontFamily" : undefined,
+    ),
   );
   const [monoFontFamily, setMonoFontFamily] = useState<FontFamily>(() =>
-    getInitialFontFamily("aeroric:monoFontFamily", DEFAULT_MONO_FONT, LEGACY_DEFAULT_MONO_FONTS),
+    getInitialFontFamily(
+      getFontStorageKey("mono"),
+      DEFAULT_MONO_FONT_BY_PLATFORM[FONT_PLATFORM],
+      LEGACY_DEFAULT_MONO_FONTS,
+      FONT_PLATFORM === "macos" ? "aeroric:monoFontFamily" : undefined,
+    ),
   );
   const [projects, setProjects] = useState<Project[]>([]);
   const [projectGroups, setProjectGroups] = useState<string[]>(loadProjectGroupNames);
@@ -268,7 +291,7 @@ function App() {
   }, []);
 
   useEffect(() => {
-    localStorage.setItem("aeroric:terminalFontSize", String(terminalFontSize));
+    localStorage.setItem(getTerminalFontSizeStorageKey(), String(terminalFontSize));
   }, [terminalFontSize]);
 
   useEffect(() => {
@@ -303,15 +326,22 @@ function App() {
   }, [projects]);
 
   useEffect(() => {
-    const value = uiFontFamily.trim() || DEFAULT_UI_FONT;
-    localStorage.setItem("aeroric:uiFontFamily", value);
-    document.documentElement.style.setProperty("--font-ui", value);
+    const value = uiFontFamily.trim() || DEFAULT_UI_FONT_BY_PLATFORM[FONT_PLATFORM];
+    localStorage.setItem(getFontStorageKey("ui"), value);
+    // 用户只选单个族名时补齐当前平台的回退链，避免 Windows / Linux 缺字形。
+    document.documentElement.style.setProperty(
+      "--font-ui",
+      composeFontStack(value, DEFAULT_UI_FONT_BY_PLATFORM[FONT_PLATFORM]),
+    );
   }, [uiFontFamily]);
 
   useEffect(() => {
-    const value = monoFontFamily.trim() || DEFAULT_MONO_FONT;
-    localStorage.setItem("aeroric:monoFontFamily", value);
-    document.documentElement.style.setProperty("--font-mono", value);
+    const value = monoFontFamily.trim() || DEFAULT_MONO_FONT_BY_PLATFORM[FONT_PLATFORM];
+    localStorage.setItem(getFontStorageKey("mono"), value);
+    document.documentElement.style.setProperty(
+      "--font-mono",
+      composeFontStack(value, DEFAULT_MONO_FONT_BY_PLATFORM[FONT_PLATFORM]),
+    );
   }, [monoFontFamily]);
 
   const handleToggleTheme = useCallback(() => {
@@ -436,6 +466,140 @@ function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // 手机远程 task.create / task.resume:后端 RPC 校验后转发 remote-task-request,
+  // 这里复用桌面完整创建/恢复流程(worktree、附件、终端 buffer 等零重复,
+  // 见 src-tauri/src/remote/tasks_rpc.rs)。latest-ref 避免闭包过期 state。
+  const remoteRequestRef = useRef({
+    projects,
+    tasks,
+    submit: handleSubmitTask,
+    resume: handleResumeTask,
+    runTodo: handleRunTodoTask,
+    sshConnections,
+    t,
+  });
+  useEffect(() => {
+    remoteRequestRef.current = {
+      projects,
+      tasks,
+      submit: handleSubmitTask,
+      resume: handleResumeTask,
+      runTodo: handleRunTodoTask,
+      sshConnections,
+      t,
+    };
+  });
+  useEffect(() => {
+    const p = listen<{
+      requestId?: string;
+      kind: "create" | "resume";
+      projectId?: string;
+      taskId?: string;
+      prompt?: string;
+      agent?: string;
+      permissionMode?: string;
+    }>("remote-task-request", async (e) => {
+      const { requestId, kind, projectId, taskId, prompt, agent, permissionMode } = e.payload;
+      if (!requestId) return;
+      const complete = async (accepted: boolean, resultTaskId?: string, error?: string) => {
+        try {
+          await invoke("remote_complete_task_request", {
+            requestId,
+            accepted,
+            taskId: resultTaskId,
+            error,
+          });
+        } catch (err) {
+          console.error("remote_complete_task_request failed", err);
+        }
+      };
+      const current = remoteRequestRef.current;
+      if (kind === "resume") {
+        if (!taskId) {
+          await complete(false, undefined, "Resume request is missing taskId");
+          return;
+        }
+        const task = current.tasks.find((item) => item.id === taskId);
+        if (!task) {
+          await complete(false, undefined, `Task not found: ${taskId}`);
+          return;
+        }
+        if (projectId && task.projectId !== projectId) {
+          await complete(false, undefined, "Task does not belong to the requested project");
+          return;
+        }
+        const project = current.projects.find((item) => item.id === task.projectId);
+        if (!project) {
+          await complete(false, undefined, "Task project is missing on the desktop");
+          return;
+        }
+        const location = resolveProjectLocation(project);
+        if (
+          location.kind === "ssh" &&
+          !current.sshConnections.some((connection) => connection.id === location.connectionId)
+        ) {
+          await complete(false, undefined, "SSH connection is not configured on the desktop");
+          return;
+        }
+        if (
+          location.kind === "ssh" &&
+          !task.claudeSessionId &&
+          !task.codexSessionId &&
+          !task.claudeSessionPath &&
+          !task.codexSessionPath
+        ) {
+          await complete(false, undefined, "SSH task has no resumable session");
+          return;
+        }
+        // todo 任务从未启动过:走首次启动而非 session 恢复
+        const accepted =
+          task.status === "todo" ? current.runTodo(task) : await current.resume(taskId);
+        await complete(
+          accepted,
+          accepted ? taskId : undefined,
+          accepted ? undefined : "Task cannot be resumed on this desktop",
+        );
+        return;
+      }
+      if (kind !== "create" || !prompt) {
+        await complete(false, undefined, "Invalid task creation request");
+        return;
+      }
+      const project = current.projects.find((item) => item.id === projectId);
+      if (!project) {
+        showToastRef.current(current.t("remote.taskRequest.projectMissing"), "error");
+        await complete(false, undefined, "Project not found on the desktop");
+        return;
+      }
+      const location = resolveProjectLocation(project);
+      if (
+        location.kind === "ssh" &&
+        !current.sshConnections.some((connection) => connection.id === location.connectionId)
+      ) {
+        await complete(false, undefined, "SSH connection is not configured on the desktop");
+        return;
+      }
+      const createdTaskId = await current.submit(project, {
+        prompt,
+        agent: (agent ?? "claude") as AgentType,
+        permissionMode: (permissionMode ?? "ask") as PermissionMode,
+        images: [],
+        texts: [],
+        immediate: true,
+        launchMode: "local",
+        baseBranch: "",
+      });
+      await complete(
+        !!createdTaskId,
+        createdTaskId ?? undefined,
+        createdTaskId ? undefined : "Desktop rejected the task creation request",
+      );
+    });
+    return () => {
+      p.then((fn) => fn());
+    };
+  }, []);
+
   async function handleOpen() {
     const selected = await openDialog({ directory: true, multiple: false });
     if (!selected) return;
@@ -507,6 +671,20 @@ function App() {
     updateProjectView(project.id, createDefaultProjectViewState());
   }
 
+  function handleOpenWslProject(input: WslProjectInput) {
+    const now = Date.now();
+    const { project } = upsertWslProject(projects, input, now);
+    setProjects((previous) => {
+      const next = upsertWslProject(previous, input, now).projects;
+      persistProjects(next, showToast, formatSaveProjectsError);
+      return next;
+    });
+    setActiveProject(project);
+    setHubMode(false);
+    mountProject(project.id);
+    updateProjectView(project.id, createDefaultProjectViewState());
+  }
+
   function handleProjectClick(project: Project) {
     const updated = { ...project, lastOpenedAt: Date.now() };
     setProjects((prev) => {
@@ -518,7 +696,17 @@ function App() {
     setHubMode(false);
     mountProject(updated.id);
     updateProjectView(updated.id, createDefaultProjectViewState());
-    if (resolveProjectLocation(updated).kind === "ssh") return;
+    const location = resolveProjectLocation(updated);
+    if (location.kind === "ssh") return;
+    if (location.kind === "wsl") {
+      invoke("read_wsl_project_config", {
+        distribution: location.distribution,
+        linuxProjectPath: location.linuxPath,
+      }).catch((e: unknown) => {
+        showToast(t("toast.initProjectConfigFailed", { error: String(e) }), "warning");
+      });
+      return;
+    }
     invoke("init_project_config", { projectPath: project.path }).catch((e: unknown) => {
       showToast(t("toast.initProjectConfigFailed", { error: String(e) }), "warning");
     });
@@ -536,7 +724,7 @@ function App() {
     texts: string[] = [],
     injectPromptIntoTerminal = false,
   ) {
-    invoke("run_task", {
+    invoke(taskCommandName("local", "run"), {
       taskId: task.id,
       projectPath,
       prompt: task.prompt,
@@ -558,10 +746,28 @@ function App() {
   }
 
   function invokeRemoteRunTask(task: Task, connection: SshConnection, remoteProjectPath: string) {
-    invoke("run_remote_task", {
+    invoke(taskCommandName("ssh", "run"), {
       taskId: task.id,
       connection,
       remoteProjectPath,
+      prompt: task.prompt,
+      agent: task.agent,
+      permissionMode: task.permissionMode,
+      cols: tm.terminalSizeRef.current.cols,
+      rows: tm.terminalSizeRef.current.rows,
+      onOutput: tm.createOutputChannel(task.id),
+    }).catch((err: unknown) => {
+      const msg = err instanceof Error ? err.message : String(err);
+      tm.writeErrorToTerminal(task.id, `\r\nError: ${msg}\r\n`);
+      updateTaskStatus(task.id, "failed", undefined, msg);
+    });
+  }
+
+  function invokeWslRunTask(task: Task, distribution: string, linuxProjectPath: string) {
+    invoke(taskCommandName("wsl", "run"), {
+      taskId: task.id,
+      distribution,
+      linuxProjectPath,
       prompt: task.prompt,
       agent: task.agent,
       permissionMode: task.permissionMode,
@@ -610,24 +816,24 @@ function App() {
         ? sshConnections.find((connection) => connection.id === projectLocation.connectionId)
         : null;
 
-    if (projectLocation.kind === "ssh") {
-      if (!remoteConnection) {
+    if (projectLocation.kind !== "local") {
+      if (projectLocation.kind === "ssh" && !remoteConnection) {
         showToast(t("toast.remoteProjectMissingConnection"), "error");
-        return;
+        return null;
       }
       if (launchMode === "worktree") {
         showToast(t("toast.remoteProjectNoWorktree"), "warning");
-        return;
+        return null;
       }
       if (images.length > 0 || texts.length > 0) {
         showToast(t("toast.remoteProjectNoAttachments"), "warning");
-        return;
+        return null;
       }
     }
 
     if (launchMode === "worktree" && !baseBranch) {
       showToast(t("toast.worktreeBaseRequired"), "warning");
-      return;
+      return null;
     }
 
     // 1) 立即把任务推到 state 让 view 切到 RunningView。worktree 字段先留空，
@@ -653,14 +859,18 @@ function App() {
     mountProject(project.id);
     updateProjectView(project.id, { selectedTaskId: taskId, isNewTask: false });
 
-    if (!immediate) return;
+    if (!immediate) return taskId;
 
     // 2) 终端 buffer 在 PTY 启动前就要建好，否则首批输出会进不来 buffer。
     tm.resetTaskTerminal(taskId);
 
     if (projectLocation.kind === "ssh") {
       invokeRemoteRunTask(baseTask, remoteConnection!, projectLocation.remotePath);
-      return;
+      return taskId;
+    }
+    if (projectLocation.kind === "wsl") {
+      invokeWslRunTask(baseTask, projectLocation.distribution, projectLocation.linuxPath);
+      return taskId;
     }
 
     // 3) 如果是 worktree 模式，先创建 worktree，成功后把字段补回 task 再启动 PTY。
@@ -701,7 +911,7 @@ function App() {
           return next;
         });
         tm.removeTaskBuffers([taskId]);
-        return;
+        return null;
       }
     }
 
@@ -712,11 +922,12 @@ function App() {
       texts,
       injectPromptIntoTerminal,
     );
+    return taskId;
   }
 
   function handleRunTodoTask(task: Task) {
     const project = projects.find((p) => p.id === task.projectId);
-    if (!project) return;
+    if (!project) return false;
 
     setTasks((prev) => {
       const next = prev.map((t) =>
@@ -735,12 +946,17 @@ function App() {
       if (!connection) {
         showToast(t("toast.remoteProjectMissingConnection"), "error");
         updateTaskStatus(task.id, "failed", undefined, t("toast.remoteProjectMissingConnection"));
-        return;
+        return false;
       }
       invokeRemoteRunTask(task, connection, projectLocation.remotePath);
-      return;
+      return true;
+    }
+    if (projectLocation.kind === "wsl") {
+      invokeWslRunTask(task, projectLocation.distribution, projectLocation.linuxPath);
+      return true;
     }
     invokeRunTask(task, task.worktreePath ?? project.path, []);
+    return true;
   }
 
   function markTaskWorktreeDiscarded(taskId: string) {
@@ -803,14 +1019,21 @@ function App() {
     delete pendingResumeStartsRef.current[taskId];
     const task = tasks.find((t) => t.id === taskId);
     const project = projects.find((p) => p.id === task?.projectId);
-    if (project && resolveProjectLocation(project).kind === "ssh") {
-      invoke("cancel_remote_task", { taskId }).catch((e: unknown) => {
+    const projectLocation = project ? resolveProjectLocation(project) : null;
+    if (projectLocation?.kind === "ssh") {
+      invoke(taskCommandName("ssh", "cancel"), { taskId }).catch((e: unknown) => {
+        showToast(t("toast.cancelTaskFailed", { error: String(e) }));
+      });
+      return;
+    }
+    if (projectLocation?.kind === "wsl") {
+      invoke(taskCommandName("wsl", "cancel"), { taskId }).catch((e: unknown) => {
         showToast(t("toast.cancelTaskFailed", { error: String(e) }));
       });
       return;
     }
     const projectPath = task?.worktreePath ?? project?.path ?? "";
-    invoke("cancel_task", { taskId, projectPath }).catch((e: unknown) => {
+    invoke(taskCommandName("local", "cancel"), { taskId, projectPath }).catch((e: unknown) => {
       showToast(t("toast.cancelTaskFailed", { error: String(e) }));
     });
   }
@@ -824,7 +1047,7 @@ function App() {
         updateTaskStatus(task.id, "failed", undefined, t("toast.remoteProjectMissingConnection"));
         return;
       }
-      invoke("resume_remote_task", {
+      invoke(taskCommandName("ssh", "resume"), {
         taskId: task.id,
         connection,
         remoteProjectPath: projectLocation.remotePath,
@@ -841,7 +1064,25 @@ function App() {
       });
       return;
     }
-    invoke("resume_task", {
+    if (projectLocation.kind === "wsl") {
+      invoke(taskCommandName("wsl", "resume"), {
+        taskId: task.id,
+        distribution: projectLocation.distribution,
+        linuxProjectPath: projectLocation.linuxPath,
+        agent: task.agent,
+        sessionId,
+        permissionMode: task.permissionMode,
+        cols: tm.terminalSizeRef.current.cols,
+        rows: tm.terminalSizeRef.current.rows,
+        onOutput: tm.createOutputChannel(task.id),
+      }).catch((err: unknown) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        tm.writeErrorToTerminal(task.id, `\r\nError: ${msg}\r\n`);
+        updateTaskStatus(task.id, "failed", undefined, msg);
+      });
+      return;
+    }
+    invoke(taskCommandName("local", "resume"), {
       taskId: task.id,
       projectPath: task.worktreePath ?? project.path,
       agent: task.agent,
@@ -862,9 +1103,9 @@ function App() {
 
   async function handleResumeTask(taskId: string) {
     const task = tasks.find((t) => t.id === taskId);
-    if (!task) return;
+    if (!task) return false;
     const project = projects.find((p) => p.id === task.projectId);
-    if (!project) return;
+    if (!project) return false;
 
     const codexLike = isCodexLikeAgent(task.agent, agentOptions);
     const sessionPath = codexLike ? task.codexSessionPath : task.claudeSessionPath;
@@ -905,7 +1146,7 @@ function App() {
 
     if (!sessionId) {
       showToast(t("running.resumeUnavailable"), "warning");
-      return;
+      return false;
     }
 
     const restoredSessionFields: Partial<Task> = recoveredSessionPath
@@ -936,6 +1177,7 @@ function App() {
     pendingResumeStartsRef.current[taskId] = () => {
       invokeResumeTask(taskWithSession, project, sessionId);
     };
+    return true;
   }
 
   async function handleReconnectTask(taskId: string) {
@@ -1517,6 +1759,7 @@ function App() {
             tasks={tasks}
             onOpen={handleOpen}
             onOpenSshProject={handleOpenSshProject}
+            onOpenWslProject={handleOpenWslProject}
             onProjectClick={handleProjectClick}
             onDeleteProject={handleDeleteProject}
             onRenameProject={handleRenameProject}

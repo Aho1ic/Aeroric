@@ -497,6 +497,11 @@ body,
 button {
   font-family: inherit;
 }
+.prompt-editor:empty::before {
+  content: attr(data-placeholder);
+  color: var(--text-hint);
+  pointer-events: none;
+}
 input::placeholder,
 textarea::placeholder {
   color: var(--text-hint);
@@ -2717,14 +2722,64 @@ html.dark .notebook-rich-text font[color="#000000"] {
   background: var(--bg-panel);
 }
 
-.ssh-workspace-grid {
+.project-center-stack {
+  position: relative;
   flex: 1;
   min-width: 0;
   min-height: 0;
+  display: flex;
+  overflow: hidden;
+}
+
+.project-center-stack.ssh-split {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  gap: 1px;
+  grid-template-columns: minmax(0, 1fr) 1px minmax(0, 1fr);
+}
+
+.project-center-primary,
+.project-center-ssh {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--bg-panel);
+}
+
+.project-center-primary {
+  flex: 1;
+}
+
+.project-center-stack.ssh-full .project-center-primary {
+  position: absolute;
+  inset: 0;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.project-center-stack.ssh-split .project-center-primary {
+  grid-column: 1;
+}
+
+.project-center-stack.ssh-split .project-center-ssh-divider {
+  grid-column: 2;
+  width: 1px;
+  min-width: 1px;
   background: var(--border-dim);
+}
+
+.project-center-stack.ssh-split .project-center-ssh {
+  grid-column: 3;
+}
+
+.project-center-stack.ssh-full .project-center-ssh {
+  position: absolute;
+  inset: 0;
+}
+
+.project-center-ssh {
+  flex: 1;
 }
 
 .ssh-workspace-pane {
@@ -2738,10 +2793,6 @@ html.dark .notebook-rich-text font[color="#000000"] {
 
 .ssh-workspace-pane.fill {
   flex: 1;
-}
-
-.ssh-workspace-remote-slot {
-  border-right: 1px solid var(--border-dim);
 }
 
 .ssh-workspace-header {

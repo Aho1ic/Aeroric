@@ -2020,6 +2020,48 @@ fn validate_agent_setup_draft(draft: &AgentSetupDraft) -> Result<String, String>
     Ok(id)
 }
 
+fn setup_agent_kind_suffix(kind: &AgentSetupKind) -> &'static str {
+    match kind {
+        AgentSetupKind::Codex => "codex",
+        AgentSetupKind::ClaudeCode => "claude",
+    }
+}
+
+fn allocate_setup_agent_id(
+    requested_id: &str,
+    kind: &AgentSetupKind,
+    settings: &AppSettings,
+) -> Result<String, String> {
+    let requested = sanitize_custom_agent_id(requested_id);
+    if requested.is_empty() {
+        return Err("Agent ID is required".to_string());
+    }
+    let suffix = setup_agent_kind_suffix(kind);
+    let base = requested
+        .strip_suffix("_codex")
+        .or_else(|| requested.strip_suffix("_claude"))
+        .unwrap_or(&requested);
+    let base = if base.is_empty() { "agent" } else { base };
+    let preferred = sanitize_custom_agent_id(&format!("{base}_{suffix}"));
+    let is_used = |candidate: &str| {
+        matches!(candidate, "claude" | "claude_gpt55" | "codex")
+            || settings
+                .custom_agents
+                .iter()
+                .any(|profile| profile.id == candidate)
+    };
+    if !is_used(&preferred) {
+        return Ok(preferred);
+    }
+    for index in 2..=10_000 {
+        let candidate = sanitize_custom_agent_id(&format!("{preferred}_{index}"));
+        if !is_used(&candidate) {
+            return Ok(candidate);
+        }
+    }
+    Err("Could not allocate a unique Agent ID".to_string())
+}
+
 fn write_agent_script_at_path(path: &Path, content: &str) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|e| e.to_string())?;
@@ -2115,6 +2157,54 @@ fn remove_agent_profile_file(path: &str) -> Result<(), String> {
         ));
     }
     fs::remove_file(path).map_err(|error| error.to_string())
+}
+
+fn profile_uses_aeroric_generated_wrapper(profile: &CustomAgentProfile) -> bool {
+    let normalized_path = normalize_config_path(profile.path.clone());
+    if fs::read_to_string(&normalized_path)
+        .map(|content| is_aeroric_generated_agent_wrapper(&content))
+        .unwrap_or(false)
+    {
+        return true;
+    }
+    let expected_path = default_agent_script_path(&profile.id)
+        .ok()
+        .map(|path| normalize_config_path(path.to_string_lossy().into_owned()));
+    expected_path.as_deref() == Some(normalized_path.as_str())
+        && profile.config_lang == "shellscript"
+        && !profile.base_url.trim().is_empty()
+        && !profile.api_key.trim().is_empty()
+        && !profile.models.is_empty()
+}
+
+fn remove_exact_generated_agent_home_at(homes_root: &Path, id: &str) -> Result<(), String> {
+    let normalized_id = sanitize_custom_agent_id(id);
+    if normalized_id.is_empty() || normalized_id != id {
+        return Err("Refusing to delete an invalid Agent home path".to_string());
+    }
+    let target = homes_root.join(&normalized_id);
+    if target.parent() != Some(homes_root) {
+        return Err("Refusing to delete an Agent home outside the isolation directory".to_string());
+    }
+    let metadata = match fs::symlink_metadata(&target) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error.to_string()),
+    };
+    if metadata.file_type().is_symlink() || metadata.is_file() {
+        fs::remove_file(&target).map_err(|error| error.to_string())
+    } else if metadata.is_dir() {
+        fs::remove_dir_all(&target).map_err(|error| error.to_string())
+    } else {
+        Err(format!(
+            "Refusing to delete unsupported Agent home entry: {}",
+            target.display()
+        ))
+    }
+}
+
+fn remove_exact_generated_agent_home(id: &str) -> Result<(), String> {
+    remove_exact_generated_agent_home_at(&aeroric_dir()?.join("agent-homes"), id)
 }
 
 fn parse_generated_shell_value(content: &str, key: &str) -> Option<String> {
@@ -3532,7 +3622,11 @@ pub async fn save_custom_agent_profile(profile: CustomAgentProfile) -> Result<Ap
 pub async fn setup_agent_profile(draft: AgentSetupDraft) -> Result<AppSettings, String> {
     let normalized = tokio::task::spawn_blocking(move || {
         let _guard = settings_lock().lock();
-        let id = validate_agent_setup_draft(&draft)?;
+        validate_agent_setup_draft(&draft)?;
+        let mut settings = load_settings_unlocked();
+        let id = allocate_setup_agent_id(&draft.id, &draft.kind, &settings)?;
+        let mut draft = draft;
+        draft.id = id.clone();
         let script = build_agent_script(&draft);
         let script_path = write_agent_script(&id, &script)?;
         let profile = CustomAgentProfile {
@@ -3552,10 +3646,6 @@ pub async fn setup_agent_profile(draft: AgentSetupDraft) -> Result<AppSettings, 
         let profile = normalize_custom_agent_profile(profile)
             .ok_or_else(|| "Invalid custom agent profile".to_string())?;
 
-        let mut settings = load_settings_unlocked();
-        settings
-            .custom_agents
-            .retain(|existing| existing.id != profile.id);
         settings.custom_agents.push(profile);
 
         let dir = aeroric_dir()?;
@@ -3849,17 +3939,25 @@ pub async fn delete_custom_agent_profile(id: String) -> Result<AppSettings, Stri
         let _guard = settings_lock().lock();
         let mut settings = load_settings_unlocked();
         let normalized_id = sanitize_custom_agent_id(&id);
-        let removed_path = settings
+        let removed_profile = settings
             .custom_agents
             .iter()
             .find(|profile| profile.id == normalized_id)
-            .map(|profile| profile.path.clone());
-        if let Some(path) = removed_path.as_deref() {
-            remove_agent_profile_file(path)?;
+            .cloned();
+        if let Some(profile) = removed_profile.as_ref() {
+            let generated = profile_uses_aeroric_generated_wrapper(profile);
+            remove_agent_profile_file(&profile.path)?;
+            if generated {
+                remove_exact_generated_agent_home(&normalized_id)?;
+            }
         }
         settings
             .custom_agents
             .retain(|profile| profile.id != normalized_id);
+        settings.agent_label_overrides.remove(&normalized_id);
+        settings.builtin_agent_credentials.remove(&normalized_id);
+        settings.agent_proxy_enabled.remove(&normalized_id);
+        settings.agent_proxy_overrides.remove(&normalized_id);
 
         let dir = aeroric_dir()?;
         fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
@@ -4566,6 +4664,66 @@ pub async fn get_system_fonts() -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn test_custom_profile(id: &str, label: &str, codex_like: bool) -> CustomAgentProfile {
+        CustomAgentProfile {
+            id: id.to_string(),
+            label: label.to_string(),
+            path: format!("/tmp/{id}.sh"),
+            codex_like,
+            config_lang: "shellscript".to_string(),
+            base_url: "https://example.com/v1".to_string(),
+            api_key: "sk-test".to_string(),
+            models: vec!["model".to_string()],
+            enable_1m_context: false,
+            enable_chat_completions_proxy: false,
+            username: String::new(),
+            password: String::new(),
+        }
+    }
+
+    #[test]
+    fn new_agent_ids_include_type_and_never_overwrite_existing_profiles() {
+        let mut settings = AppSettings::default();
+        settings
+            .custom_agents
+            .push(test_custom_profile("demo_codex", "demo", true));
+
+        assert_eq!(
+            allocate_setup_agent_id("demo_codex", &AgentSetupKind::Codex, &settings).unwrap(),
+            "demo_codex_2"
+        );
+        assert_eq!(
+            allocate_setup_agent_id("demo_claude", &AgentSetupKind::ClaudeCode, &settings).unwrap(),
+            "demo_claude"
+        );
+        assert_eq!(
+            allocate_setup_agent_id("demo", &AgentSetupKind::ClaudeCode, &settings).unwrap(),
+            "demo_claude"
+        );
+    }
+
+    #[test]
+    fn generated_agent_home_deletion_is_exact_and_does_not_touch_siblings() {
+        let root = std::env::temp_dir().join(format!(
+            "aeroric-agent-home-delete-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let homes = root.join("agent-homes");
+        let selected = homes.join("demo_codex");
+        let sibling = homes.join("demo_claude");
+        fs::create_dir_all(selected.join("session-env")).unwrap();
+        fs::create_dir_all(&sibling).unwrap();
+        fs::write(selected.join("settings.json"), "{}").unwrap();
+        fs::write(sibling.join("settings.json"), "{}").unwrap();
+
+        remove_exact_generated_agent_home_at(&homes, "demo_codex").unwrap();
+
+        assert!(!selected.exists());
+        assert!(sibling.join("settings.json").exists());
+        assert!(remove_exact_generated_agent_home_at(&homes, "../outside").is_err());
+        let _ = fs::remove_dir_all(root);
+    }
 
     #[test]
     fn parses_versioned_agent_configuration_bundle() {

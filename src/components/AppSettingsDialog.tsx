@@ -12,6 +12,8 @@ import {
   PackageOpen,
   ChartNoAxesCombined,
   Archive,
+  Smartphone,
+  MonitorUp,
 } from "lucide-react";
 import type {
   ThemeMode,
@@ -32,11 +34,14 @@ import { FontPanel } from "./app-settings/FontPanel";
 import { HooksPanel } from "./app-settings/HooksPanel";
 import { SkillsPanel } from "./app-settings/SkillsPanel";
 import { ProxyPanel } from "./app-settings/ProxyPanel";
+import { RemoteAccessPanel } from "./app-settings/RemoteAccessPanel";
 import { AgentUpdatesPanel } from "./app-settings/AgentUpdatesPanel";
 import { AllAgentConfigsPanel } from "./app-settings/AllAgentConfigsPanel";
 import { UsageDashboard } from "./UsageDashboard";
 import { AnimatedSelectionTrack } from "./ui/AnimatedSelection";
 import type { AppSettingsNavItem, NavKey, NavSection } from "./app-settings/types";
+import { WslPanel } from "./app-settings/WslPanel";
+import { APP_PLATFORM } from "../platform";
 
 const ALL_AGENT_CONFIGS_NAV_KEY = "__all_agent_configs__";
 
@@ -46,6 +51,7 @@ const BASE_NAV_ITEMS: AppSettingsNavItem[] = [
   { key: "fonts", labelKey: "appSettings.fonts", section: "application", icon: Type },
   { key: "shortcuts", labelKey: "appSettings.shortcuts", section: "application", icon: Keyboard },
   { key: "proxy", labelKey: "appSettings.proxy", section: "application", icon: Network },
+  { key: "remote", labelKey: "appSettings.remote", section: "application", icon: Smartphone },
   {
     key: "usage",
     labelKey: "usageStats.nav",
@@ -170,6 +176,16 @@ export function AppSettingsDialog({
   ];
   const navItems = [
     ...BASE_NAV_ITEMS.filter((item) => item.section !== "about"),
+    ...(APP_PLATFORM === "windows"
+      ? [
+          {
+            key: "wsl",
+            labelKey: "wsl.title",
+            section: "application" as const,
+            icon: MonitorUp,
+          },
+        ]
+      : []),
     ...agentNavItems,
     ...BASE_NAV_ITEMS.filter((item) => item.section === "about"),
   ];
@@ -294,6 +310,10 @@ export function AppSettingsDialog({
               <ShortcutsPanel key="shortcuts" />
             ) : activeNav === "proxy" ? (
               <ProxyPanel key="proxy" />
+            ) : activeNav === "remote" ? (
+              <RemoteAccessPanel key="remote" />
+            ) : activeNav === "wsl" ? (
+              <WslPanel key="wsl" />
             ) : activeNav === "usage" ? (
               <UsageDashboard key="usage" embedded />
             ) : activeNav === "agent-updates" ? (

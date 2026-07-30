@@ -40,6 +40,10 @@ pub(crate) fn validate_ssh_shell_id(shell_id: &str) -> Result<(), String> {
     validate_namespaced_shell_id(shell_id, "ssh:", "SSH shell")
 }
 
+pub(crate) fn validate_wsl_shell_id(shell_id: &str) -> Result<(), String> {
+    validate_namespaced_shell_id(shell_id, "wsl:", "WSL shell")
+}
+
 fn validate_namespaced_shell_id(
     shell_id: &str,
     expected_prefix: &str,
@@ -145,7 +149,7 @@ fn finalize_task_exit(
     let _ = app.emit("task-status", payload);
 
     let _ = fs::remove_dir_all(task_attachments_dir(project_path, task_id));
-    crate::event_watcher::cleanup_task_events(task_id);
+    crate::event_watcher::cleanup_task_events(app, task_id);
 }
 
 fn save_task_images(
@@ -439,6 +443,8 @@ pub(crate) fn spawn_pty_reader(
                         };
                         if persist_terminal_history {
                             let _ = crate::storage::append_task_terminal_history(&id, &data);
+                            // 手机远程终端流 tee:无订阅者时近零开销,不影响桌面 Channel 路径
+                            crate::remote::terminal_hub::hub().publish(&id, &data);
                         }
                         // session_tx 需要独立副本；data 本身留给 emit 路径 move，避免多余堆分配
                         if let Some(ref tx) = session_tx {
@@ -718,6 +724,8 @@ pub async fn run_task(
         .lock()
         .remove(&task_id);
     let _ = crate::storage::truncate_task_terminal_history(&task_id);
+    // 历史清零 → 远程终端流水位换代,已订阅的手机端自动重新快照
+    crate::remote::terminal_hub::hub().reset_for_truncate(&task_id);
 
     let pair = native_pty_system()
         .openpty(PtySize {
@@ -940,21 +948,21 @@ pub async fn run_task(
     Ok(())
 }
 
-#[tauri::command]
-pub async fn cancel_task(
-    app: AppHandle,
-    task_manager: State<'_, TaskManager>,
-    task_id: String,
-    project_path: String,
+/// cancel_task 的内核,供 tauri command 与远程 RPC(remote 模块)共用。
+pub(crate) fn cancel_task_core<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    task_manager: &TaskManager,
+    task_id: &str,
+    project_path: &str,
 ) -> Result<(), String> {
-    validate_task_id(&task_id)?;
-    task_manager.cancelled_tasks.lock().insert(task_id.clone());
+    validate_task_id(task_id)?;
     task_manager
-        .manually_completed_tasks
+        .cancelled_tasks
         .lock()
-        .remove(&task_id);
+        .insert(task_id.to_string());
+    task_manager.manually_completed_tasks.lock().remove(task_id);
 
-    let child_arc = task_manager.child_handles.lock().get(&task_id).cloned();
+    let child_arc = task_manager.child_handles.lock().get(task_id).cloned();
     if let Some(arc) = child_arc {
         let mut child = arc.lock();
         let _ = child.kill();
@@ -962,11 +970,11 @@ pub async fn cancel_task(
     } else {
         // Orphaned/interrupted tasks have no live child in this app process.
         // Avoid leaving a stale cancellation marker that would affect a later manual resume.
-        task_manager.cancelled_tasks.lock().remove(&task_id);
+        task_manager.cancelled_tasks.lock().remove(task_id);
     }
 
     // 释放已声明的会话路径，确保相同提示词的任务可以重新运行
-    release_claimed_session_paths(&task_manager, &task_id);
+    release_claimed_session_paths(task_manager, task_id);
 
     let _ = app.emit(
         "task-status",
@@ -974,8 +982,57 @@ pub async fn cancel_task(
     );
 
     // 清理任务附件
-    let _ = fs::remove_dir_all(task_attachments_dir(&project_path, &task_id));
-    crate::event_watcher::cleanup_task_events(&task_id);
+    let _ = fs::remove_dir_all(task_attachments_dir(project_path, task_id));
+    crate::event_watcher::cleanup_task_events(app, task_id);
+
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn cancel_task(
+    app: AppHandle,
+    task_manager: State<'_, TaskManager>,
+    task_id: String,
+    project_path: String,
+) -> Result<(), String> {
+    cancel_task_core(&app, &task_manager, &task_id, &project_path)
+}
+
+/// complete_task 的内核,供 tauri command 与远程 RPC 共用。
+pub(crate) fn complete_task_core<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    task_manager: &TaskManager,
+    task_id: &str,
+    project_path: &str,
+) -> Result<(), String> {
+    validate_task_id(task_id)?;
+    task_manager
+        .manually_completed_tasks
+        .lock()
+        .insert(task_id.to_string());
+    task_manager.cancelled_tasks.lock().remove(task_id);
+
+    let child_arc = task_manager.child_handles.lock().get(task_id).cloned();
+    if let Some(arc) = child_arc {
+        let mut child = arc.lock();
+        let _ = child.kill();
+        let _ = child.wait();
+    } else {
+        // No live child means no exit monitor will consume this marker.
+        task_manager.manually_completed_tasks.lock().remove(task_id);
+    }
+
+    // 释放已声明的会话路径，确保相同提示词的任务可以重新运行
+    release_claimed_session_paths(task_manager, task_id);
+
+    let _ = app.emit(
+        "task-status",
+        serde_json::json!({ "task_id": task_id, "status": "done" }),
+    );
+
+    // 清理任务附件
+    let _ = fs::remove_dir_all(task_attachments_dir(project_path, task_id));
+    crate::event_watcher::cleanup_task_events(app, task_id);
 
     Ok(())
 }
@@ -987,39 +1044,7 @@ pub async fn complete_task(
     task_id: String,
     project_path: String,
 ) -> Result<(), String> {
-    validate_task_id(&task_id)?;
-    task_manager
-        .manually_completed_tasks
-        .lock()
-        .insert(task_id.clone());
-    task_manager.cancelled_tasks.lock().remove(&task_id);
-
-    let child_arc = task_manager.child_handles.lock().get(&task_id).cloned();
-    if let Some(arc) = child_arc {
-        let mut child = arc.lock();
-        let _ = child.kill();
-        let _ = child.wait();
-    } else {
-        // No live child means no exit monitor will consume this marker.
-        task_manager
-            .manually_completed_tasks
-            .lock()
-            .remove(&task_id);
-    }
-
-    // 释放已声明的会话路径，确保相同提示词的任务可以重新运行
-    release_claimed_session_paths(&task_manager, &task_id);
-
-    let _ = app.emit(
-        "task-status",
-        serde_json::json!({ "task_id": task_id, "status": "done" }),
-    );
-
-    // 清理任务附件
-    let _ = fs::remove_dir_all(task_attachments_dir(&project_path, &task_id));
-    crate::event_watcher::cleanup_task_events(&task_id);
-
-    Ok(())
+    complete_task_core(&app, &task_manager, &task_id, &project_path)
 }
 
 #[tauri::command]
@@ -1188,13 +1213,13 @@ pub async fn resume_task(
     Ok(())
 }
 
-#[tauri::command]
-pub async fn send_input(
-    task_manager: State<'_, TaskManager>,
-    task_id: String,
-    data: String,
+/// send_input 的内核,供 tauri command 与远程终端流(remote 模块)共用。
+pub(crate) fn write_task_input(
+    task_manager: &TaskManager,
+    task_id: &str,
+    data: &str,
 ) -> Result<(), String> {
-    let writer = task_manager.pty_writers.lock().get(&task_id).cloned();
+    let writer = task_manager.pty_writers.lock().get(task_id).cloned();
     if let Some(writer) = writer {
         let mut writer = writer.lock();
         writer
@@ -1205,10 +1230,10 @@ pub async fn send_input(
     Ok(())
 }
 
-#[tauri::command]
-pub async fn resize_pty(
-    task_manager: State<'_, TaskManager>,
-    task_id: String,
+/// resize_pty 的内核,供 tauri command 与远程终端流共用。
+pub(crate) fn resize_task_pty(
+    task_manager: &TaskManager,
+    task_id: &str,
     cols: u16,
     rows: u16,
 ) -> Result<(), String> {
@@ -1219,7 +1244,8 @@ pub async fn resize_pty(
         return Ok(());
     }
     let masters = task_manager.pty_masters.lock();
-    let master = masters.get(&task_id).cloned();
+    let master = masters.get(task_id).cloned();
+    drop(masters);
     if let Some(master) = master {
         let master = master.lock();
         master
@@ -1234,9 +1260,42 @@ pub async fn resize_pty(
         task_manager
             .pending_pty_sizes
             .lock()
-            .insert(task_id, (cols, rows));
+            .insert(task_id.to_string(), (cols, rows));
     }
     Ok(())
+}
+
+/// 当前 PTY 尺寸:优先活跃 master 实测,回退到 pending(尚未 spawn 时的预设)。
+pub(crate) fn current_task_pty_size(
+    task_manager: &TaskManager,
+    task_id: &str,
+) -> Option<(u16, u16)> {
+    let master = task_manager.pty_masters.lock().get(task_id).cloned();
+    if let Some(master) = master {
+        if let Ok(size) = master.lock().get_size() {
+            return Some((size.cols, size.rows));
+        }
+    }
+    task_manager.pending_pty_sizes.lock().get(task_id).copied()
+}
+
+#[tauri::command]
+pub async fn send_input(
+    task_manager: State<'_, TaskManager>,
+    task_id: String,
+    data: String,
+) -> Result<(), String> {
+    write_task_input(&task_manager, &task_id, &data)
+}
+
+#[tauri::command]
+pub async fn resize_pty(
+    task_manager: State<'_, TaskManager>,
+    task_id: String,
+    cols: u16,
+    rows: u16,
+) -> Result<(), String> {
+    resize_task_pty(&task_manager, &task_id, cols, rows)
 }
 
 #[tauri::command]

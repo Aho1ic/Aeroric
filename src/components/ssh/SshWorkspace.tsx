@@ -6,7 +6,7 @@ import s from "../../styles";
 import { SshConnectionDialog } from "./SshConnectionDialog";
 import { SshTerminalPanel } from "./SshTerminalPanel";
 
-type SshWorkspaceLayout = "split" | "full";
+export type SshWorkspaceLayout = "split" | "full";
 
 function connectionTarget(connection: SshConnection): string {
   return `${connection.username}@${connection.host}:${connection.port}`;
@@ -159,14 +159,12 @@ function SshCardPicker({
 
 function SshWorkspaceHeader({
   layout,
-  localProject,
   showingCards,
   onToggleLayout,
   onShowCards,
   onNewConnection,
 }: {
   layout: SshWorkspaceLayout;
-  localProject: boolean;
   showingCards: boolean;
   onToggleLayout: () => void;
   onShowCards: () => void;
@@ -196,16 +194,14 @@ function SshWorkspaceHeader({
         >
           <Server size={15} />
         </button>
-        {localProject && (
-          <button
-            type="button"
-            className="ssh-workspace-icon-btn"
-            title={layout === "full" ? t("ssh.splitView") : t("ssh.fullView")}
-            onClick={onToggleLayout}
-          >
-            {layout === "full" ? <Columns2 size={15} /> : <Maximize2 size={15} />}
-          </button>
-        )}
+        <button
+          type="button"
+          className="ssh-workspace-icon-btn"
+          title={layout === "full" ? t("ssh.splitView") : t("ssh.fullView")}
+          onClick={onToggleLayout}
+        >
+          {layout === "full" ? <Columns2 size={15} /> : <Maximize2 size={15} />}
+        </button>
       </div>
     </div>
   );
@@ -218,7 +214,8 @@ export function SshWorkspace({
   themeVariant,
   terminalFontSize,
   monoFontFamily,
-  remoteConnection,
+  layout,
+  onLayoutChange,
 }: {
   connections: SshConnection[];
   onConnectionsChange: (connections: SshConnection[]) => void;
@@ -227,9 +224,9 @@ export function SshWorkspace({
   terminalFontSize: TerminalFontSize;
   monoFontFamily: FontFamily;
   remoteConnection?: SshConnection;
+  layout: SshWorkspaceLayout;
+  onLayoutChange: (layout: SshWorkspaceLayout) => void;
 }) {
-  const localProject = !remoteConnection;
-  const [layout, setLayout] = useState<SshWorkspaceLayout>("full");
   const [selectedConnectionId, setSelectedConnectionId] = useState<string | null>(null);
   const [showCards, setShowCards] = useState(true);
   const [editingConnection, setEditingConnection] = useState<SshConnection | null>(null);
@@ -252,13 +249,12 @@ export function SshWorkspace({
     setDialogOpen(false);
   };
 
-  const renderChooserOrTerminal = (fill = true) => (
-    <div className={fill ? "ssh-workspace-pane fill" : "ssh-workspace-pane"}>
+  const renderChooserOrTerminal = () => (
+    <div className="ssh-workspace-pane fill">
       <SshWorkspaceHeader
         layout={layout}
-        localProject={localProject}
         showingCards={rightShowsCards}
-        onToggleLayout={() => setLayout((prev) => (prev === "full" ? "split" : "full"))}
+        onToggleLayout={() => onLayoutChange(layout === "full" ? "split" : "full")}
         onShowCards={() => setShowCards(true)}
         onNewConnection={() => {
           setEditingConnection(null);
@@ -300,16 +296,7 @@ export function SshWorkspace({
 
   return (
     <div className="ssh-workspace">
-      {remoteConnection ? (
-        <div className="ssh-workspace-grid">
-          <div className="ssh-workspace-pane ssh-workspace-remote-slot" />
-          {renderChooserOrTerminal(false)}
-        </div>
-      ) : layout === "split" ? (
-        <div className="ssh-workspace-grid">{renderChooserOrTerminal(false)}</div>
-      ) : (
-        renderChooserOrTerminal()
-      )}
+      {renderChooserOrTerminal()}
 
       {dialogOpen && (
         <SshConnectionDialog

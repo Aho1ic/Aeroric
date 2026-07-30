@@ -11,6 +11,7 @@ import {
   clampTerminalFontSize,
   normalizeTaskDisplayWindow,
 } from "./types";
+import { FONT_PLATFORM, getTerminalFontSizeStorageKey } from "./platform";
 
 export function getSystemPrefersDark(): boolean {
   return window.matchMedia("(prefers-color-scheme: dark)").matches;
@@ -29,7 +30,10 @@ export function resolveThemeVariant(mode: ThemeMode, systemPrefersDark: boolean)
 }
 
 export function getInitialTerminalFontSize(): TerminalFontSize {
-  const stored = localStorage.getItem("aeroric:terminalFontSize");
+  // 按平台隔离，老 key 仅作为 macOS 的迁移来源（历史版本只在 mac 上被使用过）。
+  const stored =
+    localStorage.getItem(getTerminalFontSizeStorageKey()) ??
+    (FONT_PLATFORM === "macos" ? localStorage.getItem("aeroric:terminalFontSize") : null);
   if (stored == null) return DEFAULT_TERMINAL_FONT_SIZE;
   const parsed = Number(stored);
   return Number.isFinite(parsed) ? clampTerminalFontSize(parsed) : DEFAULT_TERMINAL_FONT_SIZE;
@@ -49,8 +53,9 @@ export function getInitialFontFamily(
   key: string,
   fallback: FontFamily,
   legacyDefaults: readonly FontFamily[] = [],
+  legacyKey?: string,
 ): FontFamily {
-  const stored = localStorage.getItem(key);
+  const stored = localStorage.getItem(key) ?? (legacyKey ? localStorage.getItem(legacyKey) : null);
   if (!stored) return fallback;
   // 老用户 localStorage 里可能存着历史默认字体链（缺 CJK 字形）。若命中旧默认值，
   // 说明用户从未主动改过字体，自动迁移到当前默认值以修复终端中文乱码/错位。

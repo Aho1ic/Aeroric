@@ -18,6 +18,7 @@ import {
   NotebookTabs,
   ChartNoAxesCombined,
   FolderTree,
+  MonitorUp,
 } from "lucide-react";
 import * as Popover from "@radix-ui/react-popover";
 import type {
@@ -49,6 +50,8 @@ import { UsageDashboard } from "./UsageDashboard";
 import { ProjectGroupDialog } from "./ProjectGroupDialog";
 import { AnimatedSelectionTrack } from "./ui/AnimatedSelection";
 import { useI18n, pluralKey } from "../i18n";
+import { APP_PLATFORM } from "../platform";
+import { WslProjectDialog, type WslProjectInput } from "./wsl/WslProjectDialog";
 import s from "../styles";
 
 function SidebarItem({
@@ -129,6 +132,9 @@ export function projectMetaLabel(project: Project, sshConnections: SshConnection
     if (connection) return `${connection.username},${connection.host}`;
     return location.remotePath;
   }
+  if (location.kind === "wsl") {
+    return `${location.distribution} · ${location.linuxPath}`;
+  }
   return shortenPath(project.path);
 }
 
@@ -168,6 +174,7 @@ export function WelcomePage({
   sshConnections,
   onSshConnectionsChange,
   onOpenSshProject,
+  onOpenWslProject,
 }: {
   projects: Project[];
   allProjects: Project[];
@@ -204,6 +211,7 @@ export function WelcomePage({
   sshConnections: SshConnection[];
   onSshConnectionsChange: (connections: SshConnection[]) => void;
   onOpenSshProject: (input: SshProjectInput) => void;
+  onOpenWslProject: (input: WslProjectInput) => void;
 }) {
   const { t } = useI18n();
   const [query, setQuery] = useState("");
@@ -219,6 +227,7 @@ export function WelcomePage({
   >("projects");
   const [openProjectMenu, setOpenProjectMenu] = useState(false);
   const [showProjectGroupDialog, setShowProjectGroupDialog] = useState(false);
+  const [showWslProjectDialog, setShowWslProjectDialog] = useState(false);
   const [sftpOpen, setSftpOpen] = useState(false);
   const keepRecursiveBackgroundMounted = themeVariant === "light";
   const showRecursiveBackground = view === "projects" && !sftpOpen;
@@ -538,6 +547,24 @@ export function WelcomePage({
                         <Server size={14} strokeWidth={2.1} color="var(--text-muted)" />
                         <span>{t("welcome.openRemoteHost")}</span>
                       </button>
+                      {APP_PLATFORM === "windows" && (
+                        <button
+                          type="button"
+                          style={{
+                            ...s.toolbarMenuItem,
+                            width: "100%",
+                            border: "none",
+                            background: "transparent",
+                          }}
+                          onClick={() => {
+                            setOpenProjectMenu(false);
+                            setShowWslProjectDialog(true);
+                          }}
+                        >
+                          <MonitorUp size={14} strokeWidth={2.1} color="var(--text-muted)" />
+                          <span>{t("wsl.openProject")}</span>
+                        </button>
+                      )}
                     </Popover.Content>
                   </Popover.Portal>
                 </Popover.Root>
@@ -776,6 +803,11 @@ export function WelcomePage({
           onClose={() => setShowProjectGroupDialog(false)}
         />
       )}
+      <WslProjectDialog
+        open={showWslProjectDialog}
+        onClose={() => setShowWslProjectDialog(false)}
+        onOpen={onOpenWslProject}
+      />
     </div>
   );
 }

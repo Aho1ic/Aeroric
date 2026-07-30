@@ -96,9 +96,19 @@ vi.mock("../components/ProjectRail", () => ({
 }));
 
 vi.mock("../components/ssh/SshWorkspace", () => ({
-  SshWorkspace: ({ remoteConnection }: RemoteConnectionMockProps) => (
+  SshWorkspace: ({
+    remoteConnection,
+    layout,
+    onLayoutChange,
+  }: RemoteConnectionMockProps & {
+    layout: "split" | "full";
+    onLayoutChange: (layout: "split" | "full") => void;
+  }) => (
     <div data-testid="ssh-workspace" data-remote-connection={remoteConnection?.id ?? ""}>
       ssh workspace
+      <button type="button" onClick={() => onLayoutChange(layout === "full" ? "split" : "full")}>
+        toggle ssh layout
+      </button>
     </div>
   ),
 }));
@@ -1352,8 +1362,48 @@ describe("ProjectPage right toolbar", () => {
     expect(screen.getByTestId("shell-terminal")).toBeInTheDocument();
 
     await user.click(screen.getByTitle("SSH"));
-    expect(screen.queryByTestId("shell-terminal")).not.toBeInTheDocument();
+    expect(screen.getByTestId("shell-terminal")).toBeInTheDocument();
     expect(screen.getByTestId("ssh-workspace")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "toggle ssh layout" }));
+    expect(screen.getByTestId("project-center-stack")).toHaveAttribute("data-ssh-layout", "split");
+    expect(screen.getByTestId("project-center-stack")).toHaveStyle({
+      gridTemplateColumns: "minmax(0, 1fr) 1px minmax(0, 1fr)",
+    });
+    expect(screen.getByTestId("project-center-primary")).toBeInTheDocument();
+    expect(screen.getByTestId("project-center-primary")).toHaveStyle({ minWidth: "0" });
+    expect(screen.getByTestId("project-center-ssh-divider")).toBeInTheDocument();
+    expect(screen.getByTestId("project-center-ssh-divider")).toHaveStyle({
+      width: "1px",
+      minWidth: "1px",
+    });
+    expect(screen.getByTestId("project-center-ssh")).toBeInTheDocument();
+    expect(screen.getByTestId("project-center-ssh")).toHaveStyle({ minWidth: "0" });
+    expect(screen.getByTestId("shell-terminal")).toBeInTheDocument();
+  });
+
+  it("keeps an open file and its explorer mounted on the left when SSH is split", async () => {
+    const user = userEvent.setup();
+
+    render(
+      <I18nProvider>
+        <ProjectPage {...projectPageProps()} />
+      </I18nProvider>,
+    );
+
+    await user.click(screen.getByTitle("File Explorer"));
+    await user.click(screen.getByText("run.py"));
+    expect(screen.getByTitle("Run current file")).toBeInTheDocument();
+
+    await user.click(screen.getByTitle("SSH"));
+    expect(screen.getByTitle("Run current file")).toBeInTheDocument();
+    expect(screen.queryByTestId("file-explorer-panel")).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "toggle ssh layout" }));
+
+    expect(screen.getByTestId("project-center-stack")).toHaveAttribute("data-ssh-layout", "split");
+    expect(screen.getByTitle("Run current file")).toBeInTheDocument();
+    expect(screen.getByTestId("file-explorer-panel")).toBeInTheDocument();
   });
 
   it("runs a remote file in the SSH terminal without opening the SSH workspace", async () => {

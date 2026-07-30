@@ -12,8 +12,9 @@ import {
   remoteInvokeOptions,
 } from "../hooks/useCancellableInvoke";
 import s from "../styles";
-import type { SshConnection } from "../types";
+import type { RemoteProjectTarget } from "../types";
 import { AnimatedSelectionGroup } from "./ui/AnimatedSelection";
+import { targetProjectArgs } from "../projectTarget";
 
 const VIEW_MODE_KEY = "aeroric.diffViewMode";
 
@@ -26,10 +27,7 @@ interface Props {
   staged?: boolean;
   title: string;
   onClose: () => void;
-  remote?: {
-    connection: SshConnection;
-    projectPath: string;
-  };
+  remote?: RemoteProjectTarget;
 }
 
 export function GitDiffViewer({
@@ -63,13 +61,14 @@ export function GitDiffViewer({
         let result: string;
         if (mode === "commit" && commitHash) {
           if (remote) {
+            const command =
+              remote.kind === "ssh" ? "remote_git_show_commit_diff" : "wsl_git_show_commit_diff";
             result = await invokeWithTimeout(
-              invoke<string>("remote_git_show_commit_diff", {
-                connection: remote.connection,
-                remoteProjectPath: remote.projectPath,
+              invoke<string>(command, {
+                ...targetProjectArgs(remote),
                 commitHash,
               }),
-              "remote_git_show_commit_diff",
+              command,
               remoteInvokeOptions(),
             );
           } else {
@@ -77,14 +76,15 @@ export function GitDiffViewer({
           }
         } else if (mode === "commit-file" && commitHash && filePath !== undefined) {
           if (remote) {
+            const command =
+              remote.kind === "ssh" ? "remote_git_show_file_diff" : "wsl_git_show_file_diff";
             result = await invokeWithTimeout(
-              invoke<string>("remote_git_show_file_diff", {
-                connection: remote.connection,
-                remoteProjectPath: remote.projectPath,
+              invoke<string>(command, {
+                ...targetProjectArgs(remote),
                 commitHash,
                 filePath,
               }),
-              "remote_git_show_file_diff",
+              command,
               remoteInvokeOptions(),
             );
           } else {
@@ -96,14 +96,14 @@ export function GitDiffViewer({
           }
         } else if (mode === "file" && filePath !== undefined) {
           if (remote) {
+            const command = remote.kind === "ssh" ? "remote_git_file_diff" : "wsl_git_file_diff";
             result = await invokeWithTimeout(
-              invoke<string>("remote_git_file_diff", {
-                connection: remote.connection,
-                remoteProjectPath: remote.projectPath,
+              invoke<string>(command, {
+                ...targetProjectArgs(remote),
                 filePath,
                 staged: staged ?? false,
               }),
-              "remote_git_file_diff",
+              command,
               remoteInvokeOptions(),
             );
           } else {

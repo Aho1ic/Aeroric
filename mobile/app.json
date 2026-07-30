@@ -1,0 +1,39 @@
+{
+  "expo": {
+    "name": "Aeroric",
+    "slug": "aeroric-mobile",
+    "version": "0.1.0",
+    "scheme": "aeroric",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "dark",
+    "ios": {
+      "supportsTablet": true,
+      "infoPlist": {
+        "NSCameraUsageDescription": "Aeroric 需要相机权限扫描桌面端的配对二维码"
+      }
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#E6F4FE",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundImage": "./assets/android-icon-background.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      },
+      "predictiveBackGestureEnabled": false
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      "expo-router",
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Aeroric 需要相机权限扫描桌面端的配对二维码"
+        }
+      ],
+      "expo-secure-store"
+    ]
+  }
+}

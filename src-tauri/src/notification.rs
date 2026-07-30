@@ -1,9 +1,9 @@
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
-#[cfg(target_os = "macos")]
-use std::process::Stdio;
+use std::process::{Command, Stdio};
 use std::sync::OnceLock;
+use std::time::Duration;
 
 use chrono::Utc;
 use parking_lot::Mutex;
@@ -133,6 +133,11 @@ pub struct ReleaseUpdatePrepareResult {
     pub installer_path: String,
     #[serde(rename = "readyToRestart")]
     pub ready_to_restart: bool,
+    #[serde(rename = "checksumVerified")]
+    pub checksum_verified: bool,
+    #[serde(rename = "helperStatus")]
+    pub helper_status: String,
+    pub error: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -143,6 +148,13 @@ struct PendingReleaseUpdate {
     asset_name: String,
     #[serde(rename = "installerPath")]
     installer_path: String,
+    #[serde(rename = "checksumPath")]
+    checksum_path: String,
+    #[serde(rename = "checksumVerified")]
+    checksum_verified: bool,
+    #[serde(rename = "helperStatus")]
+    helper_status: String,
+    error: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -153,7 +165,21 @@ struct PendingReleaseUpdatePayload {
     asset_name: String,
     #[serde(rename = "installerPath")]
     installer_path: String,
+    #[serde(rename = "checksumPath", default)]
+    checksum_path: String,
+    #[serde(rename = "checksumVerified", default)]
+    checksum_verified: bool,
+    #[serde(rename = "helperStatus", default)]
+    helper_status: String,
+    #[serde(default)]
+    error: Option<String>,
 }
+
+const UPDATE_HELPER_FLAG: &str = "--aeroric-update-helper";
+const UPDATE_HELPER_READY: &str = "ready";
+#[cfg(any(target_os = "windows", target_os = "linux"))]
+const UPDATE_HELPER_RUNNING: &str = "running";
+const UPDATE_HELPER_FAILED: &str = "failed";
 
 // ── Path helpers ─────────────────────────────────────────────────────────────
 
@@ -173,6 +199,19 @@ fn updates_dir() -> Result<PathBuf, String> {
 
 fn pending_update_path() -> Result<PathBuf, String> {
     Ok(updates_dir()?.join("pending-release-update.json"))
+}
+
+fn update_helpers_dir() -> Result<PathBuf, String> {
+    Ok(updates_dir()?.join("helpers"))
+}
+
+#[cfg(any(target_os = "windows", target_os = "linux"))]
+fn update_helper_file_name() -> &'static str {
+    if cfg!(target_os = "windows") {
+        "Aeroric-update-helper.exe"
+    } else {
+        "Aeroric-update-helper"
+    }
 }
 
 // ── Storage I/O ──────────────────────────────────────────────────────────────
@@ -421,6 +460,29 @@ fn validate_pending_installer_path(
     Ok(canonical_installer)
 }
 
+fn verify_pending_update_files(
+    pending: &PendingReleaseUpdate,
+    installer_path: &Path,
+) -> Result<(), String> {
+    if !pending.checksum_verified {
+        return Err("Prepared update has not passed checksum verification.".to_string());
+    }
+    let checksum_path = Path::new(&pending.checksum_path)
+        .canonicalize()
+        .map_err(|e| format!("Resolve checksum path failed: {e}"))?;
+    let installer_path = installer_path
+        .canonicalize()
+        .map_err(|e| format!("Resolve installer path failed: {e}"))?;
+    if checksum_path.parent() != installer_path.parent()
+        || checksum_path.file_name() != Some(std::ffi::OsStr::new("SHA256SUMS.txt"))
+    {
+        return Err("Prepared checksum is outside the selected update directory.".to_string());
+    }
+    let checksum_text =
+        fs::read_to_string(&checksum_path).map_err(|e| format!("Read checksum failed: {e}"))?;
+    verify_downloaded_checksum(&installer_path, &pending.asset_name, &checksum_text)
+}
+
 fn verify_downloaded_checksum(
     asset_path: &Path,
     expected_file_name: &str,
@@ -477,17 +539,17 @@ pub async fn get_pending_release_update(
         return Ok(None);
     }
 
-    let ready_to_restart = !matches!(
-        Path::new(&pending.asset_name)
-            .extension()
-            .and_then(|extension| extension.to_str()),
-        Some("deb" | "rpm")
-    );
+    if verify_pending_update_files(&pending, &installer_path).is_err() {
+        return Ok(None);
+    }
     Ok(Some(ReleaseUpdatePrepareResult {
         tag_name: pending.tag_name,
         asset_name: pending.asset_name,
         installer_path: installer_path.to_string_lossy().into_owned(),
-        ready_to_restart,
+        ready_to_restart: true,
+        checksum_verified: true,
+        helper_status: pending.helper_status,
+        error: pending.error,
     }))
 }
 
@@ -524,7 +586,22 @@ fn load_pending_update() -> Result<PendingReleaseUpdate, String> {
         tag_name: pending.tag_name,
         asset_name: pending.asset_name,
         installer_path: pending.installer_path,
+        checksum_path: pending.checksum_path,
+        checksum_verified: pending.checksum_verified,
+        helper_status: if pending.helper_status.is_empty() {
+            UPDATE_HELPER_READY.to_string()
+        } else {
+            pending.helper_status
+        },
+        error: pending.error,
     })
+}
+
+fn update_pending_helper_status(status: &str, error: Option<String>) -> Result<(), String> {
+    let mut pending = load_pending_update()?;
+    pending.helper_status = status.to_string();
+    pending.error = error;
+    save_pending_update(&pending)
 }
 
 fn clear_pending_update() -> Result<(), String> {
@@ -815,30 +892,231 @@ async fn install_macos_dmg(dmg_path: &Path) -> Result<String, String> {
     Ok(destination.to_string())
 }
 
-async fn install_platform_package(
-    _app: &AppHandle,
-    installer: &Path,
-) -> Result<(String, bool), String> {
-    #[cfg(target_os = "macos")]
+#[cfg(any(target_os = "linux", test))]
+fn linux_package_tool(asset_name: &str) -> Result<&'static str, String> {
+    let lower = asset_name.to_ascii_lowercase();
+    if lower.ends_with(".deb") {
+        Ok("dpkg")
+    } else if lower.ends_with(".rpm") {
+        Ok("rpm")
+    } else {
+        Err("Unsupported Linux installer package.".to_string())
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn ensure_linux_update_prerequisites(asset_name: &str) -> Result<(PathBuf, PathBuf), String> {
+    let pkexec = crate::platform::detect_path("pkexec");
+    if pkexec.is_empty() {
+        return Err(
+            "Automatic update requires pkexec. Install polkit before restarting to update."
+                .to_string(),
+        );
+    }
+    let tool_name = linux_package_tool(asset_name)?;
+    let tool = crate::platform::detect_path(tool_name);
+    if tool.is_empty() {
+        return Err(format!(
+            "Automatic update requires {tool_name}, but it was not found."
+        ));
+    }
+    Ok((PathBuf::from(pkexec), PathBuf::from(tool)))
+}
+
+#[cfg(target_os = "linux")]
+fn run_linux_package_installer(installer: &Path, asset_name: &str) -> Result<(), String> {
+    let (pkexec, tool) = ensure_linux_update_prerequisites(asset_name)?;
+    let mut command = Command::new(pkexec);
+    command.arg(tool);
+    if asset_name.to_ascii_lowercase().ends_with(".deb") {
+        command.arg("-i");
+    } else {
+        command.args(["-U", "--replacepkgs"]);
+    }
+    let status = command
+        .arg(installer)
+        .stdin(Stdio::null())
+        .status()
+        .map_err(|error| format!("Failed to start privileged package installer: {error}"))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!(
+            "Package installer exited with status {}.",
+            status.code().unwrap_or(-1)
+        ))
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn run_windows_package_installer(installer: &Path) -> Result<(), String> {
+    let status = Command::new(installer)
+        .arg("/S")
+        .stdin(Stdio::null())
+        .status()
+        .map_err(|error| format!("Failed to start Windows installer: {error}"))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!(
+            "Windows installer exited with status {}.",
+            status.code().unwrap_or(-1)
+        ))
+    }
+}
+
+#[cfg(any(target_os = "windows", target_os = "linux"))]
+fn parent_process_is_running(pid: u32) -> bool {
+    #[cfg(unix)]
     {
-        return install_macos_dmg(installer).await.map(|path| (path, true));
+        // Signal 0 performs an existence/permission check without sending a signal.
+        return unsafe { libc::kill(pid as libc::pid_t, 0) == 0 };
     }
     #[cfg(target_os = "windows")]
     {
-        tokio::process::Command::new(installer)
-            .spawn()
-            .map_err(|error| format!("Failed to start Windows installer: {error}"))?;
-        _app.exit(0);
-        return Ok((installer.to_string_lossy().into_owned(), true));
-    }
-    #[cfg(target_os = "linux")]
-    {
-        tauri_plugin_opener::open_path(installer, None::<&str>)
-            .map_err(|error| format!("Failed to open system package installer: {error}"))?;
-        return Ok((installer.to_string_lossy().into_owned(), false));
+        let filter = format!("PID eq {pid}");
+        return Command::new("tasklist")
+            .args(["/FI", &filter, "/NH"])
+            .output()
+            .map(|output| {
+                String::from_utf8_lossy(&output.stdout)
+                    .split_whitespace()
+                    .any(|token| token == pid.to_string())
+            })
+            .unwrap_or(false);
     }
     #[allow(unreachable_code)]
-    Err("In-app release installation is not supported on this platform.".to_string())
+    false
+}
+
+#[cfg(any(target_os = "windows", target_os = "linux"))]
+fn wait_for_parent_exit(pid: u32) -> Result<(), String> {
+    for _ in 0..1200 {
+        if !parent_process_is_running(pid) {
+            return Ok(());
+        }
+        std::thread::sleep(Duration::from_millis(500));
+    }
+    Err("Timed out waiting for Aeroric to exit before installing the update.".to_string())
+}
+
+#[cfg(any(target_os = "windows", target_os = "linux"))]
+fn run_update_helper(parent_pid: u32, original_exe: &Path) -> Result<(), String> {
+    let pending = load_pending_update()?;
+    let installer = validate_pending_installer_path(
+        &updates_dir()?,
+        &pending.tag_name,
+        &pending.asset_name,
+        Path::new(&pending.installer_path),
+    )?;
+    verify_pending_update_files(&pending, &installer)?;
+    wait_for_parent_exit(parent_pid)?;
+
+    #[cfg(target_os = "windows")]
+    run_windows_package_installer(&installer)?;
+    #[cfg(target_os = "linux")]
+    run_linux_package_installer(&installer, &pending.asset_name)?;
+    Command::new(original_exe)
+        .spawn()
+        .map_err(|error| format!("Update installed, but Aeroric could not restart: {error}"))?;
+    clear_pending_update()?;
+    if let Some(update_dir) = installer.parent() {
+        let _ = fs::remove_dir_all(update_dir);
+    }
+    Ok(())
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "linux")))]
+fn run_update_helper(_parent_pid: u32, _original_exe: &Path) -> Result<(), String> {
+    Err("The update helper is only supported on Windows and Linux.".to_string())
+}
+
+fn schedule_update_helper_cleanup() {
+    let Ok(helpers_dir) = update_helpers_dir() else {
+        return;
+    };
+    std::thread::spawn(move || {
+        for _ in 0..20 {
+            if !helpers_dir.exists() || fs::remove_dir_all(&helpers_dir).is_ok() {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(500));
+        }
+    });
+}
+
+/// Runs before Tauri initializes. A copied Aeroric executable acts as the
+/// detached updater so Windows can replace the installed executable after the
+/// main process has fully released it.
+pub fn try_run_update_helper() -> bool {
+    let args: Vec<std::ffi::OsString> = std::env::args_os().collect();
+    if args.get(1).and_then(|arg| arg.to_str()) != Some(UPDATE_HELPER_FLAG) {
+        schedule_update_helper_cleanup();
+        return false;
+    }
+
+    let parent_pid = args
+        .get(2)
+        .and_then(|arg| arg.to_str())
+        .and_then(|arg| arg.parse::<u32>().ok());
+    let original_exe = args.get(3).map(PathBuf::from);
+    let result = match (parent_pid, original_exe) {
+        (Some(parent_pid), Some(original_exe)) => run_update_helper(parent_pid, &original_exe),
+        _ => Err("Invalid update helper arguments.".to_string()),
+    };
+    if let Err(error) = result {
+        let _ = update_pending_helper_status(UPDATE_HELPER_FAILED, Some(error));
+        if let Some(original_exe) = args.get(3) {
+            let _ = Command::new(original_exe).spawn();
+        }
+    }
+    true
+}
+
+#[cfg(any(target_os = "windows", target_os = "linux"))]
+fn launch_update_helper() -> Result<(String, bool), String> {
+    #[cfg(target_os = "linux")]
+    {
+        let pending = load_pending_update()?;
+        ensure_linux_update_prerequisites(&pending.asset_name)?;
+    }
+
+    let original_exe = std::env::current_exe()
+        .map_err(|error| format!("Find Aeroric executable failed: {error}"))?;
+    let helper_dir = update_helpers_dir()?.join(uuid::Uuid::new_v4().to_string());
+    fs::create_dir_all(&helper_dir)
+        .map_err(|error| format!("Create update helper directory failed: {error}"))?;
+    let helper_path = helper_dir.join(update_helper_file_name());
+    fs::copy(&original_exe, &helper_path)
+        .map_err(|error| format!("Copy update helper failed: {error}"))?;
+
+    let mut command = Command::new(&helper_path);
+    command
+        .arg(UPDATE_HELPER_FLAG)
+        .arg(std::process::id().to_string())
+        .arg(&original_exe)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
+    }
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+        const DETACHED_PROCESS: u32 = 0x0000_0008;
+        command.creation_flags(CREATE_NEW_PROCESS_GROUP | DETACHED_PROCESS);
+    }
+    update_pending_helper_status(UPDATE_HELPER_RUNNING, None)?;
+    if let Err(error) = command.spawn() {
+        let message = format!("Start update helper failed: {error}");
+        let _ = update_pending_helper_status(UPDATE_HELPER_FAILED, Some(message.clone()));
+        return Err(message);
+    }
+    Ok((original_exe.to_string_lossy().into_owned(), true))
 }
 
 // ── Tauri commands ───────────────────────────────────────────────────────────
@@ -954,22 +1232,49 @@ pub async fn prepare_release_update(
     )
     .ok_or_else(|| "No compatible installer asset found for this release.".to_string())?
     .clone();
+    let checksum_asset_name = find_checksum_for_asset(&asset, &release.assets)?;
+    let checksum_asset = release
+        .assets
+        .iter()
+        .find(|candidate| candidate.name == checksum_asset_name)
+        .ok_or_else(|| "Missing checksum asset for prepared update.".to_string())?
+        .clone();
     let update_dir = release_update_dir(&release.tag_name)?;
     let _ = tokio::fs::remove_dir_all(&update_dir).await;
     tokio::fs::create_dir_all(&update_dir)
         .await
         .map_err(|e| format!("Create update directory failed: {e}"))?;
     let installer_path_buf = update_dir.join(&asset.name);
+    let checksum_path_buf = update_dir.join(&checksum_asset.name);
 
     download_asset(&asset, &installer_path_buf).await?;
+    download_asset(&checksum_asset, &checksum_path_buf).await?;
+    let checksum_text = tokio::fs::read_to_string(&checksum_path_buf)
+        .await
+        .map_err(|e| format!("Read checksum failed: {e}"))?;
+    let verify_path = installer_path_buf.clone();
+    let verify_name = asset.name.clone();
+    tokio::task::spawn_blocking(move || {
+        verify_downloaded_checksum(&verify_path, &verify_name, &checksum_text)
+    })
+    .await
+    .map_err(|e| e.to_string())??;
     let installer_path = installer_path_buf
         .to_str()
         .ok_or_else(|| "Invalid installer path".to_string())?
+        .to_string();
+    let checksum_path = checksum_path_buf
+        .to_str()
+        .ok_or_else(|| "Invalid checksum path".to_string())?
         .to_string();
     let pending = PendingReleaseUpdate {
         tag_name: release.tag_name.clone(),
         asset_name: asset.name.clone(),
         installer_path: installer_path.clone(),
+        checksum_path,
+        checksum_verified: true,
+        helper_status: UPDATE_HELPER_READY.to_string(),
+        error: None,
     };
     tokio::task::spawn_blocking(move || save_pending_update(&pending))
         .await
@@ -979,7 +1284,10 @@ pub async fn prepare_release_update(
         tag_name: release.tag_name,
         asset_name: asset.name,
         installer_path,
-        ready_to_restart: !cfg!(target_os = "linux"),
+        ready_to_restart: true,
+        checksum_verified: true,
+        helper_status: UPDATE_HELPER_READY.to_string(),
+        error: None,
     })
 }
 
@@ -1005,44 +1313,32 @@ pub async fn restart_and_install_release_update(
     if !installer_path.exists() {
         return Err("Prepared installer was not found. Download the update again.".to_string());
     }
+    verify_pending_update_files(&pending, &installer_path)?;
 
-    let release = fetch_release_by_tag(&pending.tag_name).await?;
-    let asset = select_release_installer_asset(
-        &release.assets,
-        std::env::consts::OS,
-        current_arch(),
-        linux_package_kind(),
-    )
-    .ok_or_else(|| "No compatible installer asset found for this release.".to_string())?
-    .clone();
-    if asset.name != pending.asset_name {
-        return Err("Prepared update asset no longer matches the selected release.".to_string());
-    }
-    let checksum_asset_name = find_checksum_for_asset(&asset, &release.assets)?;
-    let checksum_asset = release
-        .assets
-        .iter()
-        .find(|candidate| candidate.name == checksum_asset_name)
-        .ok_or_else(|| "Missing checksum asset for prepared update.".to_string())?
-        .clone();
-    let checksum_path = installer_path.with_extension("sha256");
-    download_asset(&checksum_asset, &checksum_path).await?;
-    let checksum_text = tokio::fs::read_to_string(&checksum_path)
-        .await
-        .map_err(|e| format!("Read checksum failed: {e}"))?;
-    verify_downloaded_checksum(&installer_path, &pending.asset_name, &checksum_text)?;
-
-    let (installed_app_path, restarted) = install_platform_package(&app, &installer_path).await?;
-    let update_dir = installer_path.parent().map(Path::to_path_buf);
-    let _ = tokio::task::spawn_blocking(clear_pending_update).await;
-    if cfg!(target_os = "macos") && restarted {
+    #[cfg(target_os = "macos")]
+    let (installed_app_path, restarted) = {
+        let installed_app_path = install_macos_dmg(&installer_path).await?;
+        let update_dir = installer_path.parent().map(Path::to_path_buf);
+        let _ = tokio::task::spawn_blocking(clear_pending_update).await;
         if let Some(dir) = update_dir {
             let _ = tokio::fs::remove_dir_all(dir).await;
         }
-    }
-    if cfg!(target_os = "macos") {
         app.request_restart();
-    }
+        (installed_app_path, true)
+    };
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
+    let (installed_app_path, restarted) = {
+        let result = launch_update_helper().map_err(|error| {
+            let _ = update_pending_helper_status(UPDATE_HELPER_FAILED, Some(error.clone()));
+            error
+        })?;
+        app.exit(0);
+        result
+    };
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+    let (installed_app_path, restarted) = {
+        return Err("In-app release installation is not supported on this platform.".to_string());
+    };
 
     Ok(ReleaseInstallResult {
         tag_name: pending.tag_name,
@@ -1176,6 +1472,19 @@ mod tests {
     }
 
     #[test]
+    fn chooses_native_linux_package_tools() {
+        assert_eq!(
+            linux_package_tool("Aeroric_1.2.3_amd64.deb").unwrap(),
+            "dpkg"
+        );
+        assert_eq!(
+            linux_package_tool("Aeroric-1.2.3-1.x86_64.rpm").unwrap(),
+            "rpm"
+        );
+        assert!(linux_package_tool("Aeroric.AppImage").is_err());
+    }
+
+    #[test]
     fn release_notifications_are_installable_only_for_newer_versions_with_dmg_asset() {
         let release = GitHubRelease {
             id: 1,
@@ -1235,5 +1544,34 @@ mod tests {
         let err = find_checksum_for_asset(&dmg, std::slice::from_ref(&dmg)).unwrap_err();
 
         assert!(err.contains("checksum"));
+    }
+
+    #[test]
+    fn pending_updates_remain_ready_only_while_installer_checksum_matches() {
+        let root =
+            std::env::temp_dir().join(format!("aeroric-update-checksum-{}", uuid::Uuid::new_v4()));
+        let update_dir = root.join("v9.9.9");
+        fs::create_dir_all(&update_dir).unwrap();
+        let asset_name = "Aeroric_9.9.9_x64-setup.exe";
+        let installer = update_dir.join(asset_name);
+        fs::write(&installer, b"verified installer").unwrap();
+        let digest = format!("{:x}", Sha256::digest(b"verified installer"));
+        let checksum = update_dir.join("SHA256SUMS.txt");
+        fs::write(&checksum, format!("{digest}  {asset_name}\n")).unwrap();
+        let pending = PendingReleaseUpdate {
+            tag_name: "v9.9.9".to_string(),
+            asset_name: asset_name.to_string(),
+            installer_path: installer.to_string_lossy().into_owned(),
+            checksum_path: checksum.to_string_lossy().into_owned(),
+            checksum_verified: true,
+            helper_status: UPDATE_HELPER_READY.to_string(),
+            error: None,
+        };
+
+        verify_pending_update_files(&pending, &installer).unwrap();
+        fs::write(&installer, b"tampered installer").unwrap();
+        assert!(verify_pending_update_files(&pending, &installer).is_err());
+
+        let _ = fs::remove_dir_all(root);
     }
 }

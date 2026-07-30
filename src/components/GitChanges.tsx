@@ -26,8 +26,9 @@ import {
   useGitFileViewMode,
 } from "./git-view/GitFileBrowser";
 import { useTextInputIMEFix } from "./useTextInputIMEFix";
-import type { SshConnection } from "../types";
+import type { RemoteProjectTarget } from "../types";
 import { AnimatedSelectionGroup } from "./ui/AnimatedSelection";
+import { targetProjectArgs } from "../projectTarget";
 
 interface GitFileChange {
   path: string;
@@ -40,10 +41,7 @@ interface Props {
   currentTaskCreatedAt: number | null;
   onFileSelect: (filePath: string, staged: boolean, label: string) => void;
   width?: number;
-  remote?: {
-    connection: SshConnection;
-    projectPath: string;
-  };
+  remote?: RemoteProjectTarget;
 }
 
 function fileName(path: string): string {
@@ -59,9 +57,15 @@ export function GitChanges({
 }: Props) {
   const { t } = useI18n();
   const isRemote = Boolean(remote);
-  const gitCommandContext = remote
-    ? { connection: remote.connection, remoteProjectPath: remote.projectPath }
-    : { projectPath };
+  const gitCommandContext = remote ? targetProjectArgs(remote) : { projectPath };
+  const gitCommandName = useCallback(
+    (localCommand: string) => {
+      if (remote?.kind === "ssh") return `remote_${localCommand}`;
+      if (remote?.kind === "wsl") return `wsl_${localCommand}`;
+      return localCommand;
+    },
+    [remote],
+  );
   const [changes, setChanges] = useState<GitFileChange[]>([]);
   const [loading, setLoading] = useState(false);
   const [tab, setTab] = useState<"task" | "all">("all");
@@ -112,11 +116,8 @@ export function GitChanges({
       try {
         const result = remote
           ? await safeInvoke<GitFileChange[]>(
-              "remote_git_changes",
-              {
-                connection: remote.connection,
-                remoteProjectPath: remote.projectPath,
-              },
+              gitCommandName("git_changes"),
+              targetProjectArgs(remote),
               remoteInvokeOptions(),
             )
           : await safeInvoke<GitFileChange[]>("git_status", { projectPath });
@@ -128,7 +129,7 @@ export function GitChanges({
         if (!isCancelled()) setLoading(false);
       }
     },
-    [projectPath, remote, safeInvoke, isCancelled],
+    [projectPath, remote, safeInvoke, isCancelled, gitCommandName],
   );
 
   useEffect(() => {
@@ -186,12 +187,12 @@ export function GitChanges({
     e.stopPropagation();
     try {
       if (c.staged) {
-        await invokeGitCommand(isRemote ? "remote_git_unstage" : "git_unstage", {
+        await invokeGitCommand(gitCommandName("git_unstage"), {
           ...gitCommandContext,
           filePath: c.path,
         });
       } else {
-        await invokeGitCommand(isRemote ? "remote_git_stage" : "git_stage", {
+        await invokeGitCommand(gitCommandName("git_stage"), {
           ...gitCommandContext,
           filePath: c.path,
         });
@@ -211,12 +212,12 @@ export function GitChanges({
     try {
       setError(null);
       if (directory.staged) {
-        await invokeGitCommand(isRemote ? "remote_git_unstage_files" : "git_unstage_files", {
+        await invokeGitCommand(gitCommandName("git_unstage_files"), {
           ...gitCommandContext,
           filePaths: directory.filePaths,
         });
       } else {
-        await invokeGitCommand(isRemote ? "remote_git_stage_files" : "git_stage_files", {
+        await invokeGitCommand(gitCommandName("git_stage_files"), {
           ...gitCommandContext,
           filePaths: directory.filePaths,
         });
@@ -230,10 +231,7 @@ export function GitChanges({
   const handleStageAll = async () => {
     try {
       setError(null);
-      await invokeGitCommand(
-        isRemote ? "remote_git_stage_all" : "git_stage_all",
-        gitCommandContext,
-      );
+      await invokeGitCommand(gitCommandName("git_stage_all"), gitCommandContext);
       refresh();
     } catch (err) {
       setError(formatInvokeError(err));
@@ -243,10 +241,7 @@ export function GitChanges({
   const handleUnstageAll = async () => {
     try {
       setError(null);
-      await invokeGitCommand(
-        isRemote ? "remote_git_unstage_all" : "git_unstage_all",
-        gitCommandContext,
-      );
+      await invokeGitCommand(gitCommandName("git_unstage_all"), gitCommandContext);
       refresh();
     } catch (err) {
       setError(formatInvokeError(err));
@@ -269,7 +264,7 @@ export function GitChanges({
     if (!ok) return;
     try {
       setError(null);
-      await invokeGitCommand(isRemote ? "remote_git_discard_file" : "git_discard_file", {
+      await invokeGitCommand(gitCommandName("git_discard_file"), {
         ...gitCommandContext,
         filePath: c.path,
         untracked,
@@ -300,7 +295,7 @@ export function GitChanges({
     if (!ok) return;
     try {
       setError(null);
-      await invokeGitCommand(isRemote ? "remote_git_discard_files" : "git_discard_files", {
+      await invokeGitCommand(gitCommandName("git_discard_files"), {
         ...gitCommandContext,
         filePaths: directory.filePaths,
         untracked: directory.untracked,
@@ -321,10 +316,7 @@ export function GitChanges({
     if (!ok) return;
     try {
       setError(null);
-      await invokeGitCommand(
-        isRemote ? "remote_git_discard_all" : "git_discard_all",
-        gitCommandContext,
-      );
+      await invokeGitCommand(gitCommandName("git_discard_all"), gitCommandContext);
     } catch (err) {
       setError(t("git.discardFailed", { error: formatInvokeError(err) }));
     } finally {
@@ -357,7 +349,7 @@ export function GitChanges({
     setCommitting(true);
     setError(null);
     try {
-      await invokeGitCommand(isRemote ? "remote_git_commit" : "git_commit", {
+      await invokeGitCommand(gitCommandName("git_commit"), {
         ...gitCommandContext,
         message: commitMsg.trim(),
       });

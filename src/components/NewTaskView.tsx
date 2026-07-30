@@ -2,11 +2,11 @@ import { useState, useRef, useEffect, useMemo, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import * as Select from "@radix-ui/react-select";
 import { ChevronDown, Cpu, Sparkles, TriangleAlert } from "lucide-react";
-import type { Project, AgentType, PermissionMode } from "../types";
+import type { Project, AgentType, PermissionMode, PromptSkill } from "../types";
 import { isRemoteProject } from "../types";
 import { agentDisplayLabel, isCodexLikeAgent } from "../agents";
 import { useAgentOptions } from "../hooks/useAgentOptions";
-import type { HookAgentReadiness } from "./app-settings/types";
+import { SKILL_HUB_CHANGED_EVENT, type HookAgentReadiness } from "./app-settings/types";
 import { useToast } from "./Toast";
 import {
   MentionPopover,
@@ -14,7 +14,13 @@ import {
   type CrossProjectRef,
   type MentionItem,
 } from "./new-task/MentionPopover";
-import { PromptEditor, usePromptEditor, type PromptEditorContent } from "./new-task/PromptEditor";
+import {
+  PromptEditor,
+  usePromptEditor,
+  type PromptEditorContent,
+  type PromptSuggestionQuery,
+} from "./new-task/PromptEditor";
+import { SkillPopover } from "./new-task/SkillPopover";
 import { sanitizePromptHtml } from "./new-task/promptHtml";
 import { ImageAttachments } from "./new-task/ImageAttachments";
 import { TextAttachments, type PastedText } from "./new-task/TextAttachments";
@@ -134,6 +140,10 @@ export function NewTaskView({
 
   const [mentionSearch, setMentionSearch] = useState<string | null>(null);
   const [mentionIndex, setMentionIndex] = useState(0);
+  const [promptSkills, setPromptSkills] = useState<PromptSkill[]>([]);
+  const [skillsLoading, setSkillsLoading] = useState(false);
+  const [skillSearch, setSkillSearch] = useState<string | null>(null);
+  const [skillIndex, setSkillIndex] = useState(0);
   const [pastedImages, setPastedImages] = useState<PastedImage[]>(initialDraft?.pastedImages ?? []);
   const [pastedTexts, setPastedTexts] = useState<PastedText[]>(initialDraft?.pastedTexts ?? []);
   const [isEmpty, setIsEmpty] = useState(
@@ -367,6 +377,8 @@ export function NewTaskView({
   const modelSelectable =
     agentSupportsModelSelection &&
     (modelsLoading || availableModels.length > 0 || Boolean(modelsError) || Boolean(selectedModel));
+  const promptSkillAgent = codexLikeAgent ? "codex" : "claude";
+  const skillCommandPrefix = promptSkillAgent === "codex" ? "$" : "/";
   const agentReadiness = hookReadiness?.find((r) => r.agent === agent) ?? null;
   const hookBanner = (() => {
     if (!agentReadiness || agentReadiness.usable) return null;
@@ -386,6 +398,38 @@ export function NewTaskView({
     }
     return null;
   })();
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadSkills = () => {
+      if (!project.path || remoteProject) {
+        setPromptSkills([]);
+        setSkillsLoading(false);
+        return;
+      }
+      setSkillsLoading(true);
+      invoke<PromptSkill[]>("list_project_skills", {
+        projectPath: project.path,
+        agent: promptSkillAgent,
+      })
+        .then((skills) => {
+          if (!cancelled) setPromptSkills(Array.isArray(skills) ? skills : []);
+        })
+        .catch(() => {
+          if (!cancelled) setPromptSkills([]);
+        })
+        .finally(() => {
+          if (!cancelled) setSkillsLoading(false);
+        });
+    };
+
+    loadSkills();
+    window.addEventListener(SKILL_HUB_CHANGED_EVENT, loadSkills);
+    return () => {
+      cancelled = true;
+      window.removeEventListener(SKILL_HUB_CHANGED_EVENT, loadSkills);
+    };
+  }, [project.path, promptSkillAgent, remoteProject]);
 
   // Load current project file list
   useEffect(() => {
@@ -465,36 +509,53 @@ export function NewTaskView({
     return [...currentFiles, ...matchingProjects];
   }, [mentionSearch, allFiles, otherProjects, crossProjectFiles]);
 
+  const skillItems = useMemo(() => {
+    if (skillSearch === null) return [];
+    const query = skillSearch.trim().toLowerCase();
+    return promptSkills
+      .filter(
+        (skill) =>
+          !query ||
+          skill.name.toLowerCase().includes(query) ||
+          skill.description?.toLowerCase().includes(query),
+      )
+      .slice(0, 12);
+  }, [promptSkills, skillSearch]);
+
   const activeCrossProject =
     mentionSearch !== null ? parseCrossProject(mentionSearch, otherProjects) : null;
   const isCrossMode = activeCrossProject !== null;
   const isCrossLoading = isCrossMode && !crossProjectFiles.has(activeCrossProject!.id);
 
-  function updateMentionState() {
-    const sel = window.getSelection();
-    if (!sel || sel.rangeCount === 0) {
+  function updateSuggestionState(query: PromptSuggestionQuery) {
+    if (query?.kind === "mention") {
+      setMentionSearch(query.query);
+      setMentionIndex(0);
+      setSkillSearch(null);
+      return;
+    }
+    if (query?.kind === "skill") {
+      setSkillSearch(query.query);
+      setSkillIndex(0);
       setMentionSearch(null);
       return;
     }
-    const range = sel.getRangeAt(0);
-    if (!range.collapsed || range.startContainer.nodeType !== Node.TEXT_NODE) {
-      setMentionSearch(null);
-      return;
+    setMentionSearch(null);
+    setSkillSearch(null);
+  }
+
+  function handlePromptSkillSelect(skill: PromptSkill) {
+    if (!editorHandle.insertSkill(skill.name, skillCommandPrefix)) return;
+    const editor = editorRef.current;
+    if (editor) {
+      editorContentRef.current = {
+        html: editor.innerHTML,
+        text: editor.textContent || "",
+        hasChips: !!editor.querySelector("[data-file-path]"),
+      };
     }
-    const textNode = range.startContainer as Text;
-    const textBefore = textNode.textContent!.substring(0, range.startOffset);
-    const atIdx = textBefore.lastIndexOf("@");
-    if (atIdx === -1) {
-      setMentionSearch(null);
-      return;
-    }
-    const query = textBefore.substring(atIdx + 1);
-    if (query.includes(" ") || query.includes("\n")) {
-      setMentionSearch(null);
-      return;
-    }
-    setMentionSearch(query);
-    setMentionIndex(0);
+    setIsEmpty(false);
+    setSkillSearch(null);
   }
 
   function handleInitializeMd() {
@@ -543,6 +604,7 @@ export function NewTaskView({
     editorHandle.clear();
     setIsEmpty(true);
     setMentionSearch(null);
+    setSkillSearch(null);
     setPastedImages([]);
     setPastedTexts([]);
   }
@@ -645,7 +707,17 @@ export function NewTaskView({
       {/* Compose card */}
       <div style={{ ...s.composeCard, position: "relative" }} onPaste={handleEditorPaste}>
         {/* Mention dropdown */}
-        {mentionSearch !== null && (
+        {skillSearch !== null ? (
+          <SkillPopover
+            skillSearch={skillSearch}
+            skills={skillItems}
+            skillIndex={skillIndex}
+            loading={skillsLoading}
+            commandPrefix={skillCommandPrefix}
+            onSelectSkill={handlePromptSkillSelect}
+            onSetSkillIndex={setSkillIndex}
+          />
+        ) : mentionSearch !== null ? (
           <MentionPopover
             mentionSearch={mentionSearch}
             mentionItems={mentionItems}
@@ -661,7 +733,7 @@ export function NewTaskView({
             }}
             onSetMentionIndex={setMentionIndex}
           />
-        )}
+        ) : null}
 
         {/* Inline editor */}
         <PromptEditor
@@ -669,14 +741,25 @@ export function NewTaskView({
           isComposingRef={isComposingRef}
           mentionItems={mentionSearch !== null ? mentionItems : []}
           mentionIndex={mentionIndex}
+          skillItems={skillSearch !== null ? skillItems : []}
+          skillIndex={skillIndex}
+          skillMenuOpen={skillSearch !== null}
+          skillCommandPrefix={skillCommandPrefix}
+          placeholder={t("newTask.promptPlaceholder")}
           onSetIsEmpty={setIsEmpty}
-          onUpdateMention={updateMentionState}
+          onUpdateSuggestions={updateSuggestionState}
+          onDismissSuggestions={() => {
+            setMentionSearch(null);
+            setSkillSearch(null);
+          }}
           onSelectFile={() => setMentionSearch(null)}
           onSelectProject={(proj) => {
             setMentionSearch(`${proj.name}/`);
             setMentionIndex(0);
           }}
+          onSelectSkill={() => setSkillSearch(null)}
           onSetMentionIndex={setMentionIndex}
+          onSetSkillIndex={setSkillIndex}
           sendShortcut={sendShortcut}
           onSubmit={handleSubmit}
           onContentChange={(content) => {

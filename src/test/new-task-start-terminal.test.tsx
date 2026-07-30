@@ -9,6 +9,20 @@ import type { Project } from "../types";
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn().mockImplementation((command: string, args?: unknown) => {
     if (command === "list_project_files") return Promise.resolve([]);
+    if (command === "list_project_skills") {
+      return Promise.resolve([
+        {
+          name: "systematic-debugging",
+          description: "Investigate a bug before editing.",
+          path: "/tmp/aeroric/.claude/skills/systematic-debugging",
+        },
+        {
+          name: "verification-before-completion",
+          description: "Verify changes before completion.",
+          path: "/tmp/aeroric/.claude/skills/verification-before-completion",
+        },
+      ]);
+    }
     if (command === "get_project_git_branches") return Promise.resolve([]);
     if (command === "read_file_content") return Promise.reject(new Error("File not found"));
     if (command === "get_hook_readiness") {
@@ -111,6 +125,92 @@ describe("NewTaskView start terminal", () => {
         immediate: true,
       }),
     );
+  });
+
+  it("previews slash skills and inserts the selected skill like the CLI", async () => {
+    const user = userEvent.setup();
+    const onSubmit = vi.fn();
+
+    render(
+      <I18nProvider>
+        <NewTaskView project={project} onSubmit={onSubmit} />
+      </I18nProvider>,
+    );
+
+    const editor = screen.getByRole("textbox");
+    await user.type(editor, "/sys");
+
+    const skillOption = await screen.findByRole("option", { name: /systematic-debugging/ });
+    expect(skillOption).toBeVisible();
+    expect(
+      screen.queryByRole("option", { name: /verification-before-completion/ }),
+    ).not.toBeInTheDocument();
+
+    await user.click(skillOption);
+    expect(editor).toHaveTextContent("/systematic-debugging");
+    await user.type(editor, "inspect the failing test");
+    await user.click(screen.getByRole("button", { name: /Send/ }));
+
+    expect(onSubmit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        prompt: "/systematic-debugging inspect the failing test",
+        immediate: true,
+      }),
+    );
+    expect(invoke).toHaveBeenCalledWith("list_project_skills", {
+      projectPath: "/tmp/aeroric",
+      agent: "claude",
+    });
+  });
+
+  it("maps the slash picker to Codex's native $skill mention syntax", async () => {
+    const user = userEvent.setup();
+
+    render(
+      <I18nProvider>
+        <NewTaskView project={project} onSubmit={vi.fn()} />
+      </I18nProvider>,
+    );
+
+    await user.click(screen.getByRole("combobox", { name: "Agent" }));
+    await user.click(await screen.findByText("Codex"));
+    await waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith("list_project_skills", {
+        projectPath: "/tmp/aeroric",
+        agent: "codex",
+      }),
+    );
+
+    const editor = screen.getByRole("textbox");
+    await user.type(editor, "/ver");
+    expect(
+      await screen.findByRole("option", { name: /\$verification-before-completion/ }),
+    ).toBeVisible();
+    await user.keyboard("{Tab}");
+    expect(editor).toHaveTextContent("$verification-before-completion");
+  });
+
+  it("only opens the skill picker at the start of the prompt, like the CLI", async () => {
+    const user = userEvent.setup();
+
+    render(
+      <I18nProvider>
+        <NewTaskView project={project} onSubmit={vi.fn()} />
+      </I18nProvider>,
+    );
+
+    const editor = screen.getByRole("textbox");
+    // 路径片段里的斜杠不能弹出技能面板，否则输入 `src/App.tsx` 会误触发。
+    await user.type(editor, "edit src/sys");
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("option", { name: /systematic-debugging/ }),
+      ).not.toBeInTheDocument(),
+    );
+
+    await user.clear(editor);
+    await user.type(editor, "/sys");
+    expect(await screen.findByRole("option", { name: /systematic-debugging/ })).toBeVisible();
   });
 
   it("injects and submits the Claude initialization prompt through the terminal", async () => {

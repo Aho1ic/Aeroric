@@ -209,7 +209,7 @@ describe("GitAdvancedPanel", () => {
 
     renderPanel({
       projectPath: "/srv/app",
-      remote: { connection, projectPath: "/srv/app" },
+      remote: { kind: "ssh" as const, connection, projectPath: "/srv/app" },
     });
 
     fireEvent.click(await screen.findByRole("button", { name: "Diff" }));
@@ -260,7 +260,7 @@ describe("GitAdvancedPanel", () => {
     renderPanel({
       projectPath: "/srv/app",
       onOpenFile,
-      remote: { connection, projectPath: "/srv/app" },
+      remote: { kind: "ssh" as const, connection, projectPath: "/srv/app" },
     });
 
     fireEvent.click(await screen.findByRole("button", { name: "src/app.txt" }));
@@ -290,7 +290,7 @@ describe("GitAdvancedPanel", () => {
 
     renderPanel({
       projectPath: "/srv/app",
-      remote: { connection, projectPath: "/srv/app" },
+      remote: { kind: "ssh" as const, connection, projectPath: "/srv/app" },
     });
 
     await act(async () => {
@@ -331,7 +331,7 @@ describe("GitAdvancedPanel", () => {
 
     renderPanel({
       projectPath: "/srv/app",
-      remote: { connection, projectPath: "/srv/app" },
+      remote: { kind: "ssh" as const, connection, projectPath: "/srv/app" },
     });
 
     await screen.findByText(/WIP on main/);
@@ -368,7 +368,7 @@ describe("GitAdvancedPanel", () => {
 
     renderPanel({
       projectPath: "/srv/app",
-      remote: { connection, projectPath: "/srv/app" },
+      remote: { kind: "ssh" as const, connection, projectPath: "/srv/app" },
     });
 
     await screen.findByText("app.txt");

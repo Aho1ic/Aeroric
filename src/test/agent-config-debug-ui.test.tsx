@@ -723,7 +723,7 @@ describe("Agent config and debug panel UI", () => {
     });
     expect(invoke).toHaveBeenCalledWith("setup_agent_profile", {
       draft: {
-        id: "gpt55",
+        id: "gpt55_codex",
         label: "GPT55",
         kind: "codex",
         base_url: "https://example.com/v1",
@@ -749,7 +749,7 @@ describe("Agent config and debug panel UI", () => {
 
     expect(invoke).toHaveBeenCalledWith("setup_agent_profile", {
       draft: {
-        id: "liwan",
+        id: "liwan_codex",
         label: "Liwan",
         kind: "codex",
         base_url: "https://metapi.example",
@@ -824,7 +824,7 @@ describe("Agent config and debug panel UI", () => {
     await user.click(screen.getByRole("button", { name: /^Add Agent$/i }));
     expect(invoke).toHaveBeenCalledWith("setup_agent_profile", {
       draft: {
-        id: "manual",
+        id: "manual_codex",
         label: "Manual",
         kind: "codex",
         base_url: "https://example.com/v1",
@@ -851,7 +851,7 @@ describe("Agent config and debug panel UI", () => {
 
     expect(invoke).toHaveBeenCalledWith("setup_agent_profile", {
       draft: {
-        id: "agentrouter",
+        id: "agentrouter_claude",
         label: "AgentRouter",
         kind: "claude_code",
         base_url: "https://agentrouter.org",

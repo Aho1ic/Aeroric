@@ -783,7 +783,7 @@ export const database = {
     overflow: "hidden",
     lineHeight: 1.2,
     textAlign: "left" as const,
-    fontFamily: "Monaco, Menlo, Consolas, var(--font-mono)",
+    fontFamily: "var(--font-mono)",
     fontWeight: 800,
   },
   databaseGridHeaderName: {
@@ -794,7 +794,7 @@ export const database = {
     color: "var(--text-primary)",
     fontSize: 12,
     fontWeight: 800,
-    fontFamily: "Monaco, Menlo, Consolas, var(--font-mono)",
+    fontFamily: "var(--font-mono)",
   },
   databaseGridHeaderTypeLine: {
     minWidth: 0,
@@ -804,7 +804,7 @@ export const database = {
     color: "var(--text-hint)",
     fontSize: 11,
     fontWeight: 800,
-    fontFamily: "Monaco, Menlo, Consolas, var(--font-mono)",
+    fontFamily: "var(--font-mono)",
   },
   databaseGridHeaderCommentLine: {
     minWidth: 0,
@@ -814,7 +814,7 @@ export const database = {
     color: "var(--text-hint)",
     fontSize: 10,
     fontWeight: 600,
-    fontFamily: "Monaco, Menlo, Consolas, var(--font-mono)",
+    fontFamily: "var(--font-mono)",
   },
   databaseGridRowSelected: {
     background: "color-mix(in srgb, var(--accent) 10%, var(--bg-selected))",
@@ -992,7 +992,7 @@ export const database = {
     justifySelf: "center",
     maxWidth: "100%",
     color: "var(--text-hint)",
-    fontFamily: "Monaco, Menlo, Consolas, var(--font-mono)",
+    fontFamily: "var(--font-mono)",
     fontSize: 11.5,
     overflow: "hidden",
     textOverflow: "ellipsis",
@@ -1055,7 +1055,7 @@ export const database = {
     background: "transparent",
     color: "var(--text-secondary)",
     cursor: "pointer",
-    fontFamily: "Monaco, Menlo, Consolas, var(--font-mono)",
+    fontFamily: "var(--font-mono)",
     fontSize: 12,
     fontWeight: 700,
   },

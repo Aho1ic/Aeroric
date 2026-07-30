@@ -1,9 +1,10 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { Project, SshConnection, Task, TaskStatus } from "./types";
-import { isActiveTaskStatus, resolveProjectLocation } from "./types";
+import { isActiveTaskStatus, resolveProjectLocation, wslProjectPath } from "./types";
 import { createProjectPersister } from "./projectPersistence";
 import { createProjectTaskPersister } from "./taskPersistence";
 import { deriveRemoteProjectName } from "./components/ssh/SshProjectDialog";
+import { normalizeProjectOrder } from "./projectOrder";
 import { normalizeProjectRailWidth } from "./components/project-page/viewMode";
 
 export const PROJECT_RAIL_WIDTH_STORAGE_KEY = "aeroric:projectRailWidth";
@@ -25,6 +26,55 @@ export function deriveProjectName(path: string): string {
 export function normalizeRemotePath(path: string): string {
   const trimmed = path.trim();
   return trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
+}
+
+export interface WslProjectUpsertInput {
+  name: string;
+  distribution: string;
+  linuxPath: string;
+}
+
+/** 归一化 WSL 项目的 Linux 路径:保留根路径,其余去掉尾部斜杠。 */
+export function normalizeWslProjectPath(linuxPath: string): string {
+  return linuxPath.trim() === "/" ? "/" : normalizeRemotePath(linuxPath).replace(/\/+$/, "");
+}
+
+/**
+ * 打开 WSL 项目时的去重与持久化计算:同一发行版 + 同一 Linux 路径复用既有项目,
+ * 否则新建并置顶。与 SSH 项目保持一致的行为。
+ */
+export function upsertWslProject(
+  projects: Project[],
+  input: WslProjectUpsertInput,
+  now: number,
+): { project: Project; projects: Project[]; reused: boolean } {
+  const linuxPath = normalizeWslProjectPath(input.linuxPath);
+  const path = wslProjectPath(input.distribution, linuxPath);
+  const existing = projects.find((project) => {
+    const location = resolveProjectLocation(project);
+    return (
+      location.kind === "wsl" &&
+      location.distribution === input.distribution &&
+      location.linuxPath === linuxPath
+    );
+  });
+  const project: Project = existing
+    ? { ...existing, path, lastOpenedAt: now }
+    : {
+        id: `${now}`,
+        name: input.name,
+        path,
+        location: { kind: "wsl", distribution: input.distribution, linuxPath },
+        lastOpenedAt: now,
+        orderIndex: 0,
+      };
+  const next = existing
+    ? projects.map((item) => (item.id === project.id ? project : item))
+    : normalizeProjectOrder([project, ...projects]).map((item, index) => ({
+        ...item,
+        orderIndex: index,
+      }));
+  return { project, projects: next, reused: Boolean(existing) };
 }
 
 export function normalizeSshProjectNames(

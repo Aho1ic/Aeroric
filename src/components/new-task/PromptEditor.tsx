@@ -1,5 +1,5 @@
 import { useRef, useCallback } from "react";
-import type { Project } from "../../types";
+import type { Project, PromptSkill } from "../../types";
 import { CODE_EXTS } from "../../utils";
 import type { FileEntry, CrossProjectRef, MentionItem } from "./MentionPopover";
 import { APP_PLATFORM } from "../../platform";
@@ -36,6 +36,77 @@ function getMentionInfo(): {
   const query = textBefore.substring(atIdx + 1);
   if (query.includes(" ") || query.includes("\n")) return null;
   return { node: textNode, atOffset: atIdx, endOffset: range.startOffset, query };
+}
+
+function getSkillInfo(): {
+  node: Text;
+  slashOffset: number;
+  endOffset: number;
+  query: string;
+} | null {
+  const sel = window.getSelection();
+  if (!sel || sel.rangeCount === 0) return null;
+  const range = sel.getRangeAt(0);
+  if (!range.collapsed || range.startContainer.nodeType !== Node.TEXT_NODE) return null;
+  const textNode = range.startContainer as Text;
+  const textBefore = textNode.textContent!.substring(0, range.startOffset);
+  const slashOffset = textBefore.lastIndexOf("/");
+  if (slashOffset === -1) return null;
+  const query = textBefore.substring(slashOffset + 1);
+  if (query.includes(" ") || query.includes("\n")) return null;
+  // 与 CLI 一致：slash command 只在提示词开头生效，避免 `src/App.tsx`、
+  // `/Users/...` 这类路径把技能面板弹出来。
+  if (!isPromptStartOffset(textNode, slashOffset)) return null;
+  return { node: textNode, slashOffset, endOffset: range.startOffset, query };
+}
+
+/** 判断 `node` 的 `offset` 之前（整个编辑器范围内）是否只有空白，即光标处于提示词开头。 */
+function isPromptStartOffset(node: Text, offset: number): boolean {
+  if (node.textContent!.substring(0, offset).trim()) return false;
+  const editor = node.parentElement?.closest<HTMLElement>("[contenteditable]");
+  if (!editor) return true;
+  const precedingRange = document.createRange();
+  precedingRange.setStart(editor, 0);
+  precedingRange.setEnd(node, offset);
+  // chip（@file 引用）也会贡献文本，所以它出现在光标前时同样判定为非开头。
+  return !precedingRange.toString().trim();
+}
+
+export type PromptSuggestionQuery =
+  | { kind: "mention"; query: string }
+  | { kind: "skill"; query: string }
+  | null;
+
+function getPromptSuggestionQuery(): PromptSuggestionQuery {
+  const skill = getSkillInfo();
+  if (skill) return { kind: "skill", query: skill.query };
+  const mention = getMentionInfo();
+  return mention ? { kind: "mention", query: mention.query } : null;
+}
+
+function insertSkillAtCaret(
+  editor: HTMLDivElement,
+  skillName: string,
+  commandPrefix: "/" | "$",
+): boolean {
+  const info = getSkillInfo();
+  if (!info) return false;
+
+  const range = document.createRange();
+  range.setStart(info.node, info.slashOffset);
+  range.setEnd(info.node, info.endOffset);
+  range.deleteContents();
+  const inserted = document.createTextNode(`${commandPrefix}${skillName} `);
+  range.insertNode(inserted);
+
+  const newRange = document.createRange();
+  newRange.setStart(inserted, inserted.length);
+  newRange.collapse(true);
+  const selection = window.getSelection()!;
+  selection.removeAllRanges();
+  selection.addRange(newRange);
+  editor.focus();
+  return true;
 }
 
 function createChipElement(file: FileEntry, crossProject?: CrossProjectRef): HTMLSpanElement {
@@ -239,6 +310,7 @@ export interface PromptEditorHandle {
   serialize: () => string;
   clear: () => void;
   focus: () => void;
+  insertSkill: (skillName: string, commandPrefix: "/" | "$") => boolean;
 }
 
 export interface PromptEditorContent {
@@ -257,6 +329,8 @@ export function usePromptEditor() {
       if (editorRef.current) editorRef.current.innerHTML = "";
     },
     focus: () => editorRef.current?.focus(),
+    insertSkill: (skillName, commandPrefix) =>
+      editorRef.current ? insertSkillAtCaret(editorRef.current, skillName, commandPrefix) : false,
   };
 
   return { editorRef, isComposingRef, handle };
@@ -267,11 +341,19 @@ export function PromptEditor({
   isComposingRef,
   mentionItems,
   mentionIndex,
+  skillItems,
+  skillIndex,
+  skillMenuOpen,
+  skillCommandPrefix,
+  placeholder,
   onSetIsEmpty,
-  onUpdateMention,
+  onUpdateSuggestions,
+  onDismissSuggestions,
   onSelectFile,
   onSelectProject,
+  onSelectSkill,
   onSetMentionIndex,
+  onSetSkillIndex,
   sendShortcut,
   onSubmit,
   onContentChange,
@@ -281,11 +363,19 @@ export function PromptEditor({
   isComposingRef: React.MutableRefObject<boolean>;
   mentionItems: MentionItem[];
   mentionIndex: number;
+  skillItems: PromptSkill[];
+  skillIndex: number;
+  skillMenuOpen: boolean;
+  skillCommandPrefix: "/" | "$";
+  placeholder: string;
   onSetIsEmpty: (empty: boolean) => void;
-  onUpdateMention: () => void;
+  onUpdateSuggestions: (query: PromptSuggestionQuery) => void;
+  onDismissSuggestions: () => void;
   onSelectFile: (file: FileEntry, crossProject?: CrossProjectRef) => void;
   onSelectProject: (project: Project) => void;
+  onSelectSkill: (skill: PromptSkill) => void;
   onSetMentionIndex: (index: number) => void;
+  onSetSkillIndex: (index: number) => void;
   sendShortcut: SendShortcut;
   onSubmit: (immediate: boolean) => void;
   onContentChange?: (content: PromptEditorContent) => void;
@@ -368,13 +458,21 @@ export function PromptEditor({
     [captureContent, editorRef, onSelectProject],
   );
 
-  function updateMentionState() {
-    const info = getMentionInfo();
-    if (info) {
-      onUpdateMention();
-    } else {
-      onUpdateMention();
-    }
+  const selectSkill = useCallback(
+    (skill: PromptSkill) => {
+      const editor = editorRef.current;
+      if (!editor) return;
+      if (!insertSkillAtCaret(editor, skill.name, skillCommandPrefix)) return;
+
+      onSelectSkill(skill);
+      onSetIsEmpty(false);
+      captureContent();
+    },
+    [captureContent, editorRef, onSelectSkill, onSetIsEmpty, skillCommandPrefix],
+  );
+
+  function updateSuggestions() {
+    onUpdateSuggestions(getPromptSuggestionQuery());
   }
 
   function handleInput() {
@@ -387,7 +485,7 @@ export function PromptEditor({
     const hasChips = !!editor.querySelector("[data-file-path]");
     onSetIsEmpty(!text.trim() && !hasChips);
     captureContent();
-    onUpdateMention();
+    updateSuggestions();
   }
 
   function handleKeyDown(e: React.KeyboardEvent<HTMLDivElement>) {
@@ -404,9 +502,34 @@ export function PromptEditor({
           const hasChips = !!editor.querySelector("[data-file-path]");
           onSetIsEmpty(!text.trim() && !hasChips);
           captureContent();
-          onUpdateMention();
+          updateSuggestions();
           return;
         }
+      }
+    }
+
+    if (skillMenuOpen && e.key === "Escape") {
+      e.preventDefault();
+      onDismissSuggestions();
+      return;
+    }
+
+    if (skillItems.length > 0) {
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        onSetSkillIndex(Math.min(skillIndex + 1, skillItems.length - 1));
+        return;
+      }
+      if (e.key === "ArrowUp") {
+        e.preventDefault();
+        onSetSkillIndex(Math.max(skillIndex - 1, 0));
+        return;
+      }
+      if (e.key === "Enter" || e.key === "Tab") {
+        e.preventDefault();
+        const skill = skillItems[skillIndex];
+        if (skill) selectSkill(skill);
+        return;
       }
     }
 
@@ -431,7 +554,8 @@ export function PromptEditor({
         return;
       }
       if (e.key === "Escape") {
-        onUpdateMention();
+        e.preventDefault();
+        onDismissSuggestions();
         return;
       }
     }
@@ -445,7 +569,7 @@ export function PromptEditor({
       insertEditorLineBreak();
       onSetIsEmpty(false);
       captureContent();
-      onUpdateMention();
+      updateSuggestions();
     }
   }
 
@@ -478,7 +602,7 @@ export function PromptEditor({
     sel.addRange(range);
     onSetIsEmpty(false);
     captureContent();
-    onUpdateMention();
+    updateSuggestions();
   }
 
   function handleBeforeInputCapture(e: React.FormEvent<HTMLDivElement>) {
@@ -507,22 +631,25 @@ export function PromptEditor({
     const hasChips = !!editor.querySelector("[data-file-path]");
     onSetIsEmpty(!text.trim() && !hasChips);
     captureContent();
-    onUpdateMention();
+    updateSuggestions();
   }
 
   return (
     <div style={{ position: "relative" }}>
       <div
         ref={editorRef}
+        className="prompt-editor"
         contentEditable
         role="textbox"
         aria-multiline="true"
+        aria-label={placeholder}
+        data-placeholder={placeholder}
         suppressContentEditableWarning
         onInput={handleInput}
         onBeforeInputCapture={handleBeforeInputCapture}
         onKeyDown={handleKeyDown}
         onPaste={handlePaste}
-        onSelect={updateMentionState}
+        onSelect={updateSuggestions}
         onCompositionStart={() => {
           isComposingRef.current = true;
           compositionTextRef.current = "";
@@ -551,7 +678,7 @@ export function PromptEditor({
             onSetIsEmpty(!text.trim() && !hasChips);
           }
           captureContent();
-          onUpdateMention();
+          updateSuggestions();
         }}
         style={
           {

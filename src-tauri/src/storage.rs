@@ -46,6 +46,12 @@ pub enum ProjectLocation {
         #[serde(rename = "remotePath")]
         remote_path: String,
     },
+    #[serde(rename = "wsl")]
+    Wsl {
+        distribution: String,
+        #[serde(rename = "linuxPath")]
+        linux_path: String,
+    },
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -265,6 +271,43 @@ pub(crate) fn truncate_task_terminal_history(task_id: &str) -> Result<(), String
         .map_err(|e| e.to_string())
 }
 
+/// 终端历史当前字节数(文件缺失=0)。terminal hub 的水位初始化用。
+pub(crate) fn task_terminal_history_len(task_id: &str) -> u64 {
+    terminal_history_path(task_id)
+        .ok()
+        .and_then(|path| fs::metadata(path).ok())
+        .map(|meta| meta.len())
+        .unwrap_or(0)
+}
+
+/// 读取终端历史尾部(≤ max_bytes,起点对齐 UTF-8 字符边界)。
+/// 返回 (文件总长, 尾部内容);远程终端流以总长为快照水位。
+pub(crate) fn read_task_terminal_history_tail(
+    task_id: &str,
+    max_bytes: u64,
+) -> Result<(u64, String), String> {
+    use std::io::{Read as _, Seek, SeekFrom};
+    let path = terminal_history_path(task_id)?;
+    if !path.exists() {
+        return Ok((0, String::new()));
+    }
+    let mut file = fs::File::open(&path).map_err(|e| e.to_string())?;
+    let total = file.metadata().map_err(|e| e.to_string())?.len();
+    let start = total.saturating_sub(max_bytes);
+    file.seek(SeekFrom::Start(start))
+        .map_err(|e| e.to_string())?;
+    let mut bytes = Vec::with_capacity((total - start) as usize);
+    file.read_to_end(&mut bytes).map_err(|e| e.to_string())?;
+    // 掐头去掉截断的 UTF-8 续字节(0b10xxxxxx)
+    let skip = bytes
+        .iter()
+        .take(4)
+        .take_while(|b| (**b & 0b1100_0000) == 0b1000_0000)
+        .count();
+    let text = String::from_utf8_lossy(&bytes[skip..]).into_owned();
+    Ok((total, text))
+}
+
 #[tauri::command]
 pub fn read_task_terminal_history(task_id: String) -> Result<String, String> {
     let path = terminal_history_path(&task_id)?;
@@ -443,6 +486,27 @@ mod tests {
             Some(ProjectLocation::Ssh {
                 connection_id: "conn-1".to_string(),
                 remote_path: "/srv/app".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn wsl_project_location_round_trips() {
+        let raw = r#"{
+          "id":"p3",
+          "name":"linux",
+          "path":"wsl://Ubuntu-24.04/home/me/app",
+          "location":{"kind":"wsl","distribution":"Ubuntu-24.04","linuxPath":"/home/me/app"},
+          "lastOpenedAt":1700000000000
+        }"#;
+
+        let project: Project = serde_json::from_str(raw).unwrap();
+
+        assert_eq!(
+            project.location,
+            Some(ProjectLocation::Wsl {
+                distribution: "Ubuntu-24.04".to_string(),
+                linux_path: "/home/me/app".to_string(),
             })
         );
     }

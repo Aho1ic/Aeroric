@@ -285,7 +285,7 @@ describe("FileExplorer UI", () => {
           projectPath: "/srv/app",
           projectName: "app",
           onFileSelect: vi.fn(),
-          remote: { connection, projectPath: "/srv/app" },
+          remote: { kind: "ssh" as const, connection, projectPath: "/srv/app" },
           themeVariant: "light",
         }),
       ),

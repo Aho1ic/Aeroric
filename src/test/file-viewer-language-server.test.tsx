@@ -85,6 +85,7 @@ function renderFileViewer({
         remote={
           remote
             ? {
+                kind: "ssh" as const,
                 connection: {
                   id: "ssh-1",
                   name: "remote",

@@ -39,9 +39,12 @@ export function SidebarFooterActions({
   const isDark = themeVariant === "dark";
 
   return (
-    <>
+    <div
+      data-testid="sidebar-footer-actions-shell"
+      style={{ position: "relative", display: "inline-flex", minWidth: 0 }}
+    >
       <UpdateBanner />
-      <div style={s.sidebarFooterActions}>
+      <div data-testid="sidebar-footer-actions" style={s.sidebarFooterActions}>
         <NotificationBell />
         <button
           style={s.sidebarIconBtn}
@@ -67,6 +70,6 @@ export function SidebarFooterActions({
         </button>
         {ENABLE_USAGE_INSIGHTS ? <UsagePopover /> : null}
       </div>
-    </>
+    </div>
   );
 }

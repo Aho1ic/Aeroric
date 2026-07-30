@@ -232,7 +232,7 @@ describe("FileViewer LSP navigation", () => {
           onCloseAllTabs={vi.fn()}
           themeVariant="light"
           onOpenDefinition={onOpenDefinition}
-          remote={{ connection: remoteConnection, projectPath: "/srv/app" }}
+          remote={{ kind: "ssh", connection: remoteConnection, projectPath: "/srv/app" }}
         />
       </I18nProvider>,
     );

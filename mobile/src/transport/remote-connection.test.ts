@@ -1,0 +1,487 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  pairWithInvite,
+  RemoteConnection,
+  type ConnectionStatus,
+  type WebSocketLike,
+} from "./remote-connection";
+import {
+  KIND_CTRL,
+  KIND_TERMINAL,
+  testGenerateServerKeys,
+  testRespondHandshake,
+  type E2eeSession,
+  type TestServerKeys,
+} from "./e2ee";
+
+function utf8(text: string): Uint8Array {
+  return new TextEncoder().encode(text);
+}
+
+function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
+  return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
+}
+
+/** 模拟桌面端:WS 对端 + E2EE 服务端会话(严格按序解密客户端帧)。 */
+class FakeWebSocket implements WebSocketLike {
+  sent: Array<string | ArrayBufferLike | Uint8Array> = [];
+  closed = false;
+  serverSession: E2eeSession | null = null;
+  onopen: (() => void) | null = null;
+  onmessage: ((event: { data: unknown }) => void) | null = null;
+  onclose: (() => void) | null = null;
+  onerror: (() => void) | null = null;
+
+  private consumed = 0;
+  private ctrlFrames: Array<{
+    v: number;
+    id: number;
+    method: string;
+    params: Record<string, unknown>;
+  }> = [];
+  terminalFrames: Uint8Array[] = [];
+
+  send(data: string | ArrayBufferLike | Uint8Array): void {
+    this.sent.push(data);
+  }
+
+  close(): void {
+    this.closed = true;
+  }
+
+  // ── 测试驱动辅助 ──
+  open(): void {
+    this.onopen?.();
+  }
+
+  /** 服务端视角:消费客户端 hello,回 hello_ack 建立会话。 */
+  acceptHandshake(keys: TestServerKeys): void {
+    const hello = this.sent.find((d): d is string => typeof d === "string");
+    if (!hello) throw new Error("client never sent hello");
+    const { ackJson, session } = testRespondHandshake(keys, hello);
+    this.serverSession = session;
+    this.onmessage?.({ data: ackJson });
+  }
+
+  /** 按序解密到目前为止的全部客户端加密帧,返回控制面 JSON 列表。 */
+  clientFrames(): Array<{ v: number; id: number; method: string; params: Record<string, unknown> }> {
+    for (; this.consumed < this.sent.length; this.consumed += 1) {
+      const item = this.sent[this.consumed];
+      if (typeof item === "string") continue;
+      const bytes = item instanceof Uint8Array ? item : new Uint8Array(item as ArrayBufferLike);
+      const opened = this.serverSession!.decryptFrame(bytes);
+      if (opened.kind === KIND_CTRL) {
+        this.ctrlFrames.push(JSON.parse(new TextDecoder().decode(opened.plain)));
+      } else {
+        this.terminalFrames.push(opened.plain);
+      }
+    }
+    return this.ctrlFrames;
+  }
+
+  lastFrame(): { v: number; id: number; method: string; params: Record<string, unknown> } {
+    const frames = this.clientFrames();
+    return frames[frames.length - 1];
+  }
+
+  receiveCtrl(frame: unknown): void {
+    const sealed = this.serverSession!.encryptFrame(KIND_CTRL, utf8(JSON.stringify(frame)));
+    this.onmessage?.({ data: toArrayBuffer(sealed) });
+  }
+
+  receiveTerminal(plain: Uint8Array): void {
+    const sealed = this.serverSession!.encryptFrame(KIND_TERMINAL, plain);
+    this.onmessage?.({ data: toArrayBuffer(sealed) });
+  }
+
+  replyOk(result: unknown): void {
+    const { id } = this.lastFrame();
+    this.receiveCtrl({ v: 2, id, ok: true, result });
+  }
+
+  replyError(error: string): void {
+    const { id } = this.lastFrame();
+    this.receiveCtrl({ v: 2, id, ok: false, error });
+  }
+
+  dropped(): void {
+    this.onclose?.();
+  }
+}
+
+function createHarness(overrides?: { endpoints?: string[]; serverKeys?: TestServerKeys }) {
+  const serverKeys = overrides?.serverKeys ?? testGenerateServerKeys();
+  const sockets: FakeWebSocket[] = [];
+  const urls: string[] = [];
+  const conn = new RemoteConnection({
+    endpoints: overrides?.endpoints ?? ["ws://host-a:1", "ws://host-b:2"],
+    serverPublicKey: serverKeys.publicB64,
+    authParams: () => ({ deviceToken: "tok" }),
+    wsFactory: (url) => {
+      urls.push(url);
+      const ws = new FakeWebSocket();
+      sockets.push(ws);
+      return ws;
+    },
+    jitter: (delay) => delay,
+  });
+  const statuses: ConnectionStatus[] = [];
+  conn.onStatusChange((status) => statuses.push(status));
+  return {
+    conn,
+    serverKeys,
+    sockets,
+    urls,
+    statuses,
+    latest: () => sockets[sockets.length - 1],
+  };
+}
+
+async function flush(): Promise<void> {
+  for (let i = 0; i < 4; i++) {
+    await Promise.resolve();
+  }
+}
+
+/** 让第一个 endpoint 胜出并完成 握手 → auth,返回胜出 socket。 */
+async function goOnline(h: ReturnType<typeof createHarness>): Promise<FakeWebSocket> {
+  h.conn.start();
+  const winner = h.sockets[0];
+  winner.open();
+  await flush();
+  winner.acceptHandshake(h.serverKeys);
+  await flush();
+  winner.replyOk({ deviceId: "d1" });
+  await flush();
+  expect(h.conn.status).toBe("online");
+  return winner;
+}
+
+beforeEach(() => {
+  vi.useFakeTimers();
+});
+
+afterEach(() => {
+  vi.useRealTimers();
+});
+
+describe("RemoteConnection", () => {
+  it("handshakes, authenticates and reaches online (E2EE end-to-end)", async () => {
+    const h = createHarness();
+    const authResults: unknown[] = [];
+    h.conn.onAuthSuccess((auth) => authResults.push(auth));
+
+    const winner = await goOnline(h);
+    // 竞速:两个 endpoint 都被拨号
+    expect(h.urls).toEqual(["ws://host-a:1", "ws://host-b:2"]);
+    // 落败方被关闭
+    expect(h.sockets[1].closed).toBe(true);
+    // 第一条明文帧是 hello,随后 auth 走加密通道
+    expect(typeof winner.sent[0]).toBe("string");
+    expect(JSON.parse(winner.sent[0] as string).type).toBe("hello");
+    const authFrame = winner.clientFrames()[0];
+    expect(authFrame.v).toBe(2);
+    expect(authFrame.method).toBe("auth");
+    expect(authFrame.params).toEqual({ deviceToken: "tok" });
+    expect(authResults).toEqual([{ deviceId: "d1" }]);
+    expect(h.statuses).toEqual(["connecting", "authenticating", "online"]);
+  });
+
+  it("aborts as unauthorized when the host key does not match the pinned key", async () => {
+    const h = createHarness();
+    h.conn.start();
+    const winner = h.sockets[0];
+    winner.open();
+    await flush();
+    // 冒名主机:用另一把静态密钥应答
+    winner.acceptHandshake(testGenerateServerKeys());
+    await flush();
+    expect(h.conn.status).toBe("unauthorized");
+    expect(h.conn.authError).toContain("主机身份验证失败");
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(h.sockets.length).toBe(2); // 不再重试
+  });
+
+  it("correlates requests and pushes independently", async () => {
+    const h = createHarness();
+    const winner = await goOnline(h);
+
+    const pushes: Array<[string, unknown]> = [];
+    h.conn.onPush((push, data) => pushes.push([push, data]));
+
+    const promise = h.conn.request("projects.list");
+    winner.receiveCtrl({ v: 2, push: "task-status", data: { task_id: "t1", status: "done" } });
+    winner.replyOk([{ id: "p1" }]);
+    await expect(promise).resolves.toEqual([{ id: "p1" }]);
+    expect(pushes).toEqual([["task-status", { task_id: "t1", status: "done" }]]);
+  });
+
+  it("rejects request on error reply and when offline", async () => {
+    const h = createHarness();
+    await expect(h.conn.request("ping")).rejects.toThrow(/not online/);
+
+    const winner = await goOnline(h);
+    const promise = h.conn.request("tasks.list", { projectId: "p1" });
+    winner.replyError("Missing param: projectId");
+    await expect(promise).rejects.toThrow("Missing param: projectId");
+  });
+
+  it("times out requests", async () => {
+    const h = createHarness();
+    await goOnline(h);
+    const promise = h.conn.request("ping");
+    const assertion = expect(promise).rejects.toThrow(/request timeout/);
+    await vi.advanceTimersByTimeAsync(15_000);
+    await assertion;
+  });
+
+  it("reconnects with exponential backoff, racing all endpoints each round", async () => {
+    const h = createHarness();
+    h.conn.start();
+    expect(h.urls).toEqual(["ws://host-a:1", "ws://host-b:2"]);
+
+    // 双双失败 → 1s 后整轮重试
+    h.sockets[0].dropped();
+    h.sockets[1].dropped();
+    expect(h.conn.status).toBe("reconnecting");
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(h.urls.length).toBe(4);
+
+    // 再失败 → 2s 后第三轮
+    h.sockets[2].dropped();
+    h.sockets[3].dropped();
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(h.urls.length).toBe(6);
+
+    // 第三轮胜出并认证成功 → 退避计数重置
+    const winner = h.sockets[4];
+    winner.open();
+    await flush();
+    winner.acceptHandshake(h.serverKeys);
+    await flush();
+    winner.replyOk({ deviceId: "d1" });
+    await flush();
+    expect(h.conn.status).toBe("online");
+    winner.dropped();
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(h.urls.length).toBe(8);
+  });
+
+  it("stops retrying after token revocation", async () => {
+    const h = createHarness();
+    h.conn.start();
+    const winner = h.sockets[0];
+    winner.open();
+    await flush();
+    winner.acceptHandshake(h.serverKeys);
+    await flush();
+    winner.replyError("Unknown device token");
+    await flush();
+    expect(h.conn.status).toBe("unauthorized");
+    expect(h.conn.authError).toContain("Unknown device token");
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(h.sockets.length).toBe(2);
+  });
+
+  it("stop() prevents any further reconnects", async () => {
+    const h = createHarness();
+    const winner = await goOnline(h);
+    h.conn.stop();
+    expect(h.conn.status).toBe("stopped");
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(h.sockets.length).toBe(2);
+    expect(winner.closed).toBe(true);
+  });
+
+  it("sends heartbeat pings and reconnects when they time out", async () => {
+    const h = createHarness();
+    const winner = await goOnline(h);
+
+    // 25s 后发出 ping,pong 回来则继续在线
+    await vi.advanceTimersByTimeAsync(25_000);
+    expect(winner.lastFrame().method).toBe("ping");
+    winner.replyOk("pong");
+    await flush();
+    expect(h.conn.status).toBe("online");
+
+    // 下一轮 ping 无响应 → 10s 超时 → 重连
+    await vi.advanceTimersByTimeAsync(25_000);
+    expect(winner.lastFrame().method).toBe("ping");
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(h.conn.status).toBe("reconnecting");
+  });
+
+  it("encrypts terminal frames in both directions", async () => {
+    const h = createHarness();
+    const received: ArrayBuffer[] = [];
+    h.conn.onBinary((data) => received.push(data));
+
+    // 离线时发送被丢弃
+    expect(h.conn.sendBinary(new Uint8Array([1, 2, 3]))).toBe(false);
+
+    const winner = await goOnline(h);
+    expect(h.conn.sendBinary(new Uint8Array([9, 9]))).toBe(true);
+    winner.clientFrames();
+    expect(winner.terminalFrames.map((f) => Array.from(f))).toEqual([[9, 9]]);
+
+    winner.receiveTerminal(new Uint8Array([0x74, 1, 1, 0]));
+    expect(received.length).toBe(1);
+    expect(Array.from(new Uint8Array(received[0]))).toEqual([0x74, 1, 1, 0]);
+  });
+
+  it("drops the connection when an inbound frame fails to decrypt", async () => {
+    const h = createHarness();
+    const winner = await goOnline(h);
+    const sealed = winner.serverSession!.encryptFrame(KIND_CTRL, utf8("{}"));
+    sealed[sealed.length - 1] ^= 1;
+    winner.onmessage?.({ data: toArrayBuffer(sealed) });
+    expect(h.conn.status).toBe("reconnecting");
+  });
+
+  it("replays missed pushes via events.since after reconnect", async () => {
+    const h = createHarness();
+    const pushes: Array<[string, unknown, number | undefined]> = [];
+    h.conn.onPush((push, data, seq) => pushes.push([push, data, seq]));
+
+    const winner = await goOnline(h);
+    // 在线期间收到 seq=1 的推送(建立 watermark)
+    winner.receiveCtrl({
+      v: 2,
+      push: "task-status",
+      seq: 1,
+      data: { task_id: "t1", status: "running" },
+    });
+    expect(pushes).toHaveLength(1);
+
+    // 断线 → 重连(重新竞速 + 握手 + 认证)
+    winner.dropped();
+    await vi.advanceTimersByTimeAsync(1_000);
+    const second = h.sockets[2];
+    second.open();
+    await flush();
+    second.acceptHandshake(h.serverKeys);
+    await flush();
+    // 第一帧是 auth
+    expect(second.lastFrame().method).toBe("auth");
+    second.replyOk({ deviceId: "d1" });
+    await flush();
+    // 认证成功后自动请求补发
+    const replay = second.lastFrame();
+    expect(replay.method).toBe("events.since");
+    expect(replay.params).toEqual({ after: 1 });
+    second.receiveCtrl({
+      v: 2,
+      id: replay.id,
+      ok: true,
+      result: {
+        events: [
+          { seq: 2, event: "task-status", data: { task_id: "t1", status: "input_required" } },
+        ],
+        latestSeq: 2,
+        reset: false,
+      },
+    });
+    await flush();
+    expect(pushes).toHaveLength(2);
+    expect(pushes[1]).toEqual([
+      "task-status",
+      { task_id: "t1", status: "input_required" },
+      2,
+    ]);
+
+    // 重复 seq 的推送被单调丢弃
+    second.receiveCtrl({
+      v: 2,
+      push: "task-status",
+      seq: 2,
+      data: { task_id: "t1", status: "input_required" },
+    });
+    expect(pushes).toHaveLength(2);
+  });
+
+  it("broadcasts events.reset when the backfill window is gone", async () => {
+    const h = createHarness();
+    const pushes: string[] = [];
+    h.conn.onPush((push) => pushes.push(push));
+
+    const winner = await goOnline(h);
+    winner.receiveCtrl({ v: 2, push: "task-status", seq: 7, data: { task_id: "t", status: "done" } });
+    winner.dropped();
+    await vi.advanceTimersByTimeAsync(1_000);
+    const second = h.sockets[2];
+    second.open();
+    await flush();
+    second.acceptHandshake(h.serverKeys);
+    await flush();
+    second.replyOk({ deviceId: "d1" });
+    await flush();
+    const replay = second.lastFrame();
+    expect(replay.method).toBe("events.since");
+    second.receiveCtrl({
+      v: 2,
+      id: replay.id,
+      ok: true,
+      result: { events: [], latestSeq: 900, reset: true },
+    });
+    await flush();
+    expect(pushes[pushes.length - 1]).toBe("events.reset");
+  });
+});
+
+describe("pairWithInvite", () => {
+  function pairHarness(serverKeys: TestServerKeys) {
+    let ws: FakeWebSocket | null = null;
+    const promise = pairWithInvite({
+      endpoint: "ws://host:1",
+      invite: "inv",
+      deviceName: "iPhone",
+      serverPublicKey: serverKeys.publicB64,
+      wsFactory: () => {
+        ws = new FakeWebSocket();
+        return ws;
+      },
+    });
+    return { promise, socket: () => ws! };
+  }
+
+  it("handshakes then exchanges invite for device credentials", async () => {
+    const keys = testGenerateServerKeys();
+    const { promise, socket } = pairHarness(keys);
+    socket().open();
+    socket().acceptHandshake(keys);
+    const frame = socket().lastFrame();
+    expect(frame.method).toBe("auth");
+    expect(frame.params).toEqual({ invite: "inv", deviceName: "iPhone" });
+    socket().replyOk({
+      deviceId: "d1",
+      deviceToken: "tok",
+      host: { name: "Mac", version: "1", platform: "macos" },
+    });
+    await expect(promise).resolves.toMatchObject({ deviceId: "d1", deviceToken: "tok" });
+  });
+
+  it("rejects on auth failure with server message", async () => {
+    const keys = testGenerateServerKeys();
+    const { promise, socket } = pairHarness(keys);
+    socket().open();
+    socket().acceptHandshake(keys);
+    socket().replyError("Invalid or expired invite");
+    await expect(promise).rejects.toThrow("Invalid or expired invite");
+  });
+
+  it("rejects when the host identity does not match the QR code", async () => {
+    const keys = testGenerateServerKeys();
+    const { promise, socket } = pairHarness(keys);
+    socket().open();
+    socket().acceptHandshake(testGenerateServerKeys());
+    await expect(promise).rejects.toThrow(/主机身份验证失败/);
+  });
+
+  it("rejects on timeout", async () => {
+    const keys = testGenerateServerKeys();
+    const { promise } = pairHarness(keys);
+    const assertion = expect(promise).rejects.toThrow(/配对超时/);
+    await vi.advanceTimersByTimeAsync(12_000);
+    await assertion;
+  });
+});

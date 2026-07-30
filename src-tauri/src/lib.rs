@@ -27,6 +27,7 @@ mod notification;
 mod platform;
 mod ports;
 mod pty;
+mod remote;
 mod remote_fs;
 mod remote_git;
 mod run_config;
@@ -40,6 +41,9 @@ mod subprocess;
 mod tests;
 mod usage;
 mod usage_index;
+mod wsl;
+mod wsl_fs;
+mod wsl_git;
 
 use session::{ClaudeSessionInfo, CodexSessionInfo};
 
@@ -55,6 +59,7 @@ pub struct TaskManager {
     pub(crate) codex_sessions: Mutex<HashMap<String, CodexSessionInfo>>,
     pub(crate) claude_sessions: Mutex<HashMap<String, ClaudeSessionInfo>>,
     pub(crate) claimed_session_paths: Mutex<HashSet<String>>,
+    pub(crate) wsl_active_ids: Mutex<HashSet<String>>,
     /// Persistent `codex app-server` process reused across `read_usage_snapshot` calls.
     pub(crate) codex_rpc: Arc<Mutex<Option<CodexRpcClient>>>,
 }
@@ -123,6 +128,9 @@ fn hide_main_window(window: tauri::Window) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    if notification::try_run_update_helper() {
+        return;
+    }
     tauri::Builder::default()
         .setup(|app| {
             let dbx_state = crate::database::dbx_state::DbxState::new_blocking()
@@ -140,6 +148,8 @@ pub fn run() {
             // 启动 hook 事件文件 watcher
             crate::event_watcher::start(app.handle().clone());
             crate::usage_index::start(app.handle().clone());
+            // 手机远程连接:按持久化配置决定是否自动拉起 WS 服务
+            crate::remote::init(app.handle().clone());
             Ok(())
         })
         .manage(TaskManager {
@@ -152,10 +162,12 @@ pub fn run() {
             codex_sessions: Mutex::new(HashMap::new()),
             claude_sessions: Mutex::new(HashMap::new()),
             claimed_session_paths: Mutex::new(HashSet::new()),
+            wsl_active_ids: Mutex::new(HashSet::new()),
             codex_rpc: Arc::new(Mutex::new(None)),
         })
         .manage(run_config::RunConfigState::default())
         .manage(dap::DebugState::default())
+        .manage(remote::RemoteState::new())
         .on_window_event(|window, event| {
             // macOS: 点关闭按钮(红灯)时隐藏窗口而非退出,与 Cmd+W 行为一致;
             // 点 Dock 图标可唤回(见下方 Reopen 处理)。
@@ -383,6 +395,14 @@ pub fn run() {
             storage::save_project_tasks,
             storage::read_task_terminal_history,
             storage::delete_task_terminal_histories,
+            remote::remote_server_status,
+            remote::remote_server_start,
+            remote::remote_server_stop,
+            remote::remote_update_config,
+            remote::remote_create_invite,
+            remote::remote_list_devices,
+            remote::remote_revoke_device,
+            remote::remote_complete_task_request,
             ssh::load_ssh_connections,
             ssh::save_ssh_connections,
             ssh::open_ssh_shell,
@@ -390,6 +410,67 @@ pub fn run() {
             ssh::run_remote_task,
             ssh::resume_remote_task,
             ssh::cancel_remote_task,
+            wsl::get_wsl_status,
+            wsl::list_wsl_distributions,
+            wsl::probe_wsl_distribution,
+            wsl::read_wsl_environment,
+            wsl::load_wsl_settings,
+            wsl::save_wsl_settings,
+            wsl::read_wsl_config_file,
+            wsl::write_wsl_config_file,
+            wsl::get_wsl_agent_status,
+            wsl::read_wsl_agent_config,
+            wsl::write_wsl_agent_config,
+            wsl::restart_wsl,
+            wsl::validate_wsl_project_path,
+            wsl::open_wsl_shell,
+            wsl::kill_wsl_shell,
+            wsl::run_wsl_task,
+            wsl::resume_wsl_task,
+            wsl::cancel_wsl_task,
+            config::read_wsl_project_config,
+            config::write_wsl_project_config,
+            wsl_fs::wsl_read_dir_entries,
+            wsl_fs::wsl_read_file_content,
+            wsl_fs::wsl_read_image_preview,
+            wsl_fs::wsl_write_file_content,
+            wsl_fs::wsl_create_file,
+            wsl_fs::wsl_create_directory,
+            wsl_fs::wsl_delete_path,
+            wsl_fs::wsl_rename_path,
+            wsl_fs::wsl_copy_paths_to_directory,
+            wsl_git::wsl_git_status,
+            wsl_git::wsl_git_changes,
+            wsl_git::wsl_git_list_branches,
+            wsl_git::wsl_git_log,
+            wsl_git::wsl_git_commit_detail,
+            wsl_git::wsl_git_remote_counts,
+            wsl_git::wsl_git_show_diff,
+            wsl_git::wsl_git_show_commit_diff,
+            wsl_git::wsl_git_show_file_diff,
+            wsl_git::wsl_git_file_diff,
+            wsl_git::wsl_git_stage,
+            wsl_git::wsl_git_unstage,
+            wsl_git::wsl_git_stage_files,
+            wsl_git::wsl_git_unstage_files,
+            wsl_git::wsl_git_stage_all,
+            wsl_git::wsl_git_unstage_all,
+            wsl_git::wsl_git_commit,
+            wsl_git::wsl_git_discard_file,
+            wsl_git::wsl_git_discard_files,
+            wsl_git::wsl_git_discard_all,
+            wsl_git::wsl_git_push,
+            wsl_git::wsl_git_pull,
+            wsl_git::wsl_git_blame_file,
+            wsl_git::wsl_git_branch_graph,
+            wsl_git::wsl_git_stash_list,
+            wsl_git::wsl_git_stash_diff,
+            wsl_git::wsl_git_stash_push,
+            wsl_git::wsl_git_stash_apply,
+            wsl_git::wsl_git_stash_drop,
+            wsl_git::wsl_git_conflict_files,
+            wsl_git::wsl_git_conflict_preview,
+            wsl_git::wsl_git_resolve_conflict,
             app_settings::load_app_settings,
             app_settings::save_app_settings,
             app_settings::export_agent_config_bundle,
@@ -536,6 +617,7 @@ pub fn run() {
             skills::set_skill_hub_path,
             skills::clear_skill_hub,
             skills::list_skills,
+            skills::list_project_skills,
             skills::list_skill_installations,
             skills::install_skill,
             skills::uninstall_skill,

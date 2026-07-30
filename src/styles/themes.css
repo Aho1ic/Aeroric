@@ -157,8 +157,15 @@
   --radius-md: 10px;
   --radius-lg: 14px;
 
-  --font-ui: "Inter", "SF Pro Display", "IBM Plex Sans", "PingFang SC", "Noto Sans SC", sans-serif;
-  --font-mono: "JetBrains Mono", "Fira Code", ui-monospace, monospace;
+  /* App.tsx 会按平台把用户选择写到 documentElement 的内联样式上覆盖这里。
+     这两个兜底链要同时覆盖 macOS / Windows / Linux，并带 CJK 回退，
+     避免首帧或用户字体缺失时在 Windows / Linux 上出现方框和宽度错位。 */
+  --font-ui:
+    "Inter", "Segoe UI Variable", "Segoe UI", "SF Pro Display", "IBM Plex Sans", "PingFang SC",
+    "Microsoft YaHei UI", "Noto Sans SC", "Noto Sans CJK SC", sans-serif;
+  --font-mono:
+    "JetBrains Mono", "Cascadia Mono", "Fira Code", "Sarasa Mono SC", ui-monospace, Consolas,
+    "DejaVu Sans Mono", "PingFang SC", "Microsoft YaHei", "Noto Sans Mono CJK SC", monospace;
 }
 
 /* Design tokens: eye-care theme (warm sepia, low-contrast) */

@@ -5,7 +5,7 @@
 <h1 align="center">Aeroric：面向 AI 编程智能体的桌面工作台</h1>
 
 <p align="center">
-  在一个轻量桌面应用里管理 Claude Code、Codex、自定义智能体、多项目任务、实时终端、Git、SSH、SFTP、Docker、数据库、Skill Hub、Markdown 文档、随手记和版本发布流程。
+  在一个轻量桌面应用里管理 Claude Code、Codex、自定义智能体、多项目任务、实时终端、Git、SSH、WSL、SFTP、Docker、数据库、Skill Hub、Markdown 文档、随手记和版本发布流程。
 </p>
 
 <p align="center">
@@ -36,6 +36,7 @@ Aeroric 不替代 Claude Code 或 Codex，而是直接调用本机 CLI，并在�
 - **使用 IDE 级项目工具**：搜索替换、诊断查看、符号跳转、测试运行、DAP 调试、运行配置和本地 Web 预览。
 - **使用随手记**：快速记录 Markdown 或富文本内容，并在阅读/编辑之间切换。
 - **操作开发基础设施**：查看 Docker 容器和镜像、管理端口、使用 SFTP/SSH 工具，并通过 DBX 能力检查 SQLite、MySQL、PostgreSQL、Redis 和 MongoDB 资源。
+- **在 Windows 上直接使用 WSL**：检测已安装的发行版、管理 WSL 配置、打开 Linux 文件系统中的项目，并在指定发行版内运行终端、智能体任务和 Git 操作。
 - **集中管理技能与发布流程**：查看本地 Skill Hub，Review diff、暂存、提交、推送并管理版本发布页面。
 - **跟踪用量、会话与通知**：自动发现 Claude Code / Codex 的 JSONL 会话，查看 token 消耗和工具调用指标，让长时间任务可观测。
 
@@ -44,7 +45,7 @@ Aeroric 不替代 Claude Code 或 Codex，而是直接调用本机 CLI，并在�
 | 层级 | 作用 |
 | --- | --- |
 | React 19 + TypeScript + Vite | 主工作区 UI、项目面板、编辑器界面、任务视图和发布页面。 |
-| Tauri 2 + Rust | 桌面壳、原生文件/进程访问、PTY 编排、存储、Git、SSH/SFTP、Docker 和数据库命令。 |
+| Tauri 2 + Rust | 桌面壳、原生文件/进程访问、PTY 编排、存储、Git、SSH/SFTP、WSL、Docker 和数据库命令。 |
 | 智能体运行桥接层 | 以权限模式启动 Claude Code、Codex 和自定义命令，支持 hook 集成、会话发现、恢复和取消。 |
 | 项目工具链 | 文件浏览、CodeMirror/Shiki 编辑、LSP 诊断/跳转、DAP 调试、搜索、测试面板、Web 预览和本地历史。 |
 | 运维工具链 | Docker、端口、SSH 隧道、SFTP、DBX 驱动的数据库浏览/查询/导入导出、通知和发布资产流程。 |
@@ -157,6 +158,17 @@ SSH 连接可以在 Aeroric 中集中管理，远程 Shell、项目操作和智�
 <p align="center">
   <img src="./Aeroric_frame/深色模式SSH.jpg" alt="深色模式 SSH 连接视图" width="86%" />
 </p>
+
+### WSL（仅 Windows）
+
+在 Windows 上，WSL 发行版被当作独立的执行环境。Aeroric 会检测已安装的发行版，读取其登录 Shell 环境与 Agent 安装状态，并支持直接打开位于 Linux 文件系统中的项目，而不是按 Windows 共享目录访问。
+
+- **设置 → WSL**：检查 `wsl.exe` 可用性，列出发行版及其状态和 WSL 版本，选择默认发行版，查看登录 Shell 环境变量（敏感值默认遮蔽，可显式显示），覆盖 `claude` / `codex` 可执行文件与配置文件路径，编辑 `%USERPROFILE%\.wslconfig` 和 `/etc/wsl.conf`，并在确认后重启 WSL。
+- **打开 WSL 项目**：“打开项目”菜单提供 WSL 入口，需要选择发行版并填写绝对 Linux 路径（例如 `/home/dev/app`）。路径会先在发行版内校验，再创建项目，持久化标识为 `wsl://<发行版><Linux 路径>`。
+- **终端与智能体任务**：终端以及 Claude Code / Codex / 自定义智能体任务都在所选发行版的登录 Shell 内运行，PTY 输出、交互输入、恢复会话和取消行为与本地任务一致。
+- **文件与 Git**：WSL 项目的文件浏览、编辑、项目配置以及 Git 状态/暂存/提交/历史都直接在发行版内执行。
+
+首版 WSL 支持暂不包含 LSP 能力、测试面板、DAP 调试、网页预览、Docker、数据库工具、Conda、任务 worktree 和附件上传，相关面板在 WSL 项目中处于禁用状态；本地项目和 SSH 项目的能力保持不变。
 
 ### 技能库
 

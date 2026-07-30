@@ -44,14 +44,17 @@ import {
 } from "./ShellTerminalPanel";
 import { FileText, Plus, Terminal as TerminalIcon, X } from "lucide-react";
 import { SshTerminalPanel, type SshTerminalPanelHandle } from "./ssh/SshTerminalPanel";
+import { WslTerminalPanel, type WslTerminalPanelHandle } from "./wsl/WslTerminalPanel";
 import type { SftpEndpoint } from "./sftp/sftpTypes";
 import { ErrorBoundary } from "./ErrorBoundary";
-import { useProjectPanels, type EditorGroupId } from "../hooks/useProjectPanels";
+import { useProjectPanels, type EditorGroupId, type RightPanel } from "../hooks/useProjectPanels";
+import type { SshWorkspaceLayout } from "./ssh/SshWorkspace";
 import {
   centerWorkspaceMode,
+  projectFeatureAvailability,
   projectNotebookPanelStyle,
   projectResponsiveLayout,
-  projectSshRightPanelWidth,
+  SSH_SPLIT_GRID_TEMPLATE,
   shellCenterContentStyle,
   shellCenterLayerStyle,
   shouldShowAgentTaskTabs,
@@ -333,7 +336,12 @@ export function ProjectPage({
   const [shellSessions, setShellSessions] = useState<ShellSession[]>([]);
   const [activeShellId, setActiveShellId] = useState<string | null>(null);
   const [showRemoteProjectTerminal, setShowRemoteProjectTerminal] = useState(true);
-  const [rightSshMounted, setRightSshMounted] = useState(false);
+  const [sshLayout, setSshLayout] = useState<SshWorkspaceLayout>("full");
+  const [sshOrigin, setSshOrigin] = useState<{
+    rightPanel: RightPanel;
+    showShellTerminal: boolean;
+    showRemoteProjectTerminal: boolean;
+  } | null>(null);
   const [showSettings, setShowSettings] = useState(false);
   const [showFileSearch, setShowFileSearch] = useState(false);
   const [sftpMounted, setSftpMounted] = useState(false);
@@ -374,6 +382,7 @@ export function ProjectPage({
   const projectBodyRef = useRef<HTMLDivElement>(null);
   const shellRef = useRef<ShellTerminalPanelHandle>(null);
   const remoteSshRef = useRef<SshTerminalPanelHandle>(null);
+  const wslTerminalRef = useRef<WslTerminalPanelHandle>(null);
   const shellReadyRef = useRef(false);
   const remoteSshReadyRef = useRef(false);
   const pendingCmdRef = useRef<string | null>(null);
@@ -488,6 +497,28 @@ export function ProjectPage({
         : undefined,
     [projectLocation, remoteConnection],
   );
+  const wslFileContext = useMemo(
+    () =>
+      projectLocation.kind === "wsl"
+        ? {
+            kind: "wsl" as const,
+            distribution: projectLocation.distribution,
+            projectPath: projectLocation.linuxPath,
+          }
+        : undefined,
+    [projectLocation],
+  );
+  const supportedFileContext = useMemo(
+    () =>
+      remoteFileContext
+        ? {
+            kind: "ssh" as const,
+            connection: remoteFileContext.connection,
+            projectPath: remoteFileContext.projectPath,
+          }
+        : wslFileContext,
+    [remoteFileContext, wslFileContext],
+  );
   const sftpProjectConfig = useMemo(
     () =>
       remoteFileContext
@@ -500,7 +531,11 @@ export function ProjectPage({
     [project.path, remoteFileContext],
   );
   const lspDiagnosticsProjectRoot =
-    projectLocation.kind === "ssh" ? projectLocation.remotePath : project.path;
+    projectLocation.kind === "ssh"
+      ? projectLocation.remotePath
+      : projectLocation.kind === "wsl"
+        ? projectLocation.linuxPath
+        : project.path;
   useEffect(() => {
     let disposed = false;
     let unlisten: (() => void) | null = null;
@@ -532,48 +567,77 @@ export function ProjectPage({
   const [remoteCondaEnvironments, setRemoteCondaEnvironments] = useState<CondaEnvironment[]>([]);
   const runnableCondaEnvironments =
     projectLocation.kind === "ssh" ? remoteCondaEnvironments : condaEnvironments;
-  const fileRootPath = projectLocation.kind === "ssh" ? projectLocation.remotePath : project.path;
-  const filesDisabled = projectLocation.kind === "ssh" && !remoteFileContext;
-  const gitChangesDisabled = projectLocation.kind === "ssh" && !remoteFileContext;
-  const gitHistoryDisabled = projectLocation.kind === "ssh" && !remoteFileContext;
-  const gitDisabled = projectLocation.kind === "ssh" && !remoteFileContext;
-  const problemsDisabled = projectLocation.kind === "ssh" && !remoteFileContext;
-  const terminalDisabled = !remoteConnection && projectLocation.kind === "ssh";
-  const runDisabled = projectLocation.kind === "ssh" && !remoteFileContext;
-  const testsDisabled = projectLocation.kind === "ssh" && !remoteFileContext;
-  const searchDisabled = projectLocation.kind === "ssh" && !remoteFileContext;
-  const debugDisabled = projectLocation.kind === "ssh" && !remoteFileContext;
-  const previewDisabled = projectLocation.kind === "ssh" && !remoteFileContext;
-  const settingsDisabled = !remoteFileContext && projectLocation.kind === "ssh";
+  const fileRootPath =
+    projectLocation.kind === "ssh"
+      ? projectLocation.remotePath
+      : projectLocation.kind === "wsl"
+        ? projectLocation.linuxPath
+        : project.path;
+  const {
+    filesDisabled,
+    gitChangesDisabled,
+    gitHistoryDisabled,
+    gitDisabled,
+    problemsDisabled,
+    terminalDisabled,
+    runDisabled,
+    testsDisabled,
+    searchDisabled,
+    debugDisabled,
+    previewDisabled,
+    settingsDisabled,
+  } = projectFeatureAvailability({
+    projectLocation,
+    hasRemoteFileContext: Boolean(remoteFileContext),
+    hasSupportedFileContext: Boolean(supportedFileContext),
+    hasRemoteConnection: Boolean(remoteConnection),
+  });
   const showRemoteSshTerminal = shouldShowRemoteSshTerminal(
     projectLocation,
     Boolean(remoteConnection),
   );
-  const centerMode = centerWorkspaceMode(rightPanel, showShellTerminal);
+  const showRemoteTargetTerminal = showRemoteSshTerminal || projectLocation.kind === "wsl";
+  const isSshMode = rightPanel === "ssh";
+  const primaryRightPanel = isSshMode ? (sshOrigin?.rightPanel ?? null) : rightPanel;
+  const primaryShellTerminal = isSshMode
+    ? (sshOrigin?.showShellTerminal ?? showShellTerminal)
+    : showShellTerminal;
+  const primaryRemoteProjectTerminal = isSshMode
+    ? (sshOrigin?.showRemoteProjectTerminal ?? showRemoteProjectTerminal)
+    : showRemoteProjectTerminal;
+  const centerMode = centerWorkspaceMode(primaryRightPanel, primaryShellTerminal);
   const isSftpMode = centerMode === "sftp";
   const isShellMode = centerMode === "shell";
   const isDockerMode = centerMode === "docker";
-  const isSshMode = centerMode === "ssh";
   const isDatabaseMode = centerMode === "database";
   const isNotesMode = centerMode === "notes";
+  const primaryWorkspaceVisible = !isSshMode || sshLayout === "split";
   const hasEditorGroups = editorGroups.length > 0;
   const shellVisibleInCenter = shouldShowShellInCenter({
     shellMode: isShellMode,
     hasOpenFiles: hasEditorGroups,
     hasOpenDiff: Boolean(openDiff),
   });
-  const visibleRightPanel = visibleDockPanel(rightPanel, {
-    filesDisabled,
-    gitDisabled,
-    gitChangesDisabled,
-    gitHistoryDisabled,
-    problemsDisabled,
-    runDisabled,
-    searchDisabled,
-    testsDisabled,
-    debugDisabled,
-    previewDisabled,
-  });
+  const visibleRightPanel = visibleDockPanel(
+    isSshMode ? (sshLayout === "split" ? primaryRightPanel : null) : rightPanel,
+    {
+      filesDisabled,
+      gitDisabled,
+      gitChangesDisabled,
+      gitHistoryDisabled,
+      problemsDisabled,
+      runDisabled,
+      searchDisabled,
+      testsDisabled,
+      debugDisabled,
+      previewDisabled,
+    },
+  );
+  useEffect(() => {
+    if (rightPanel !== "ssh" && sshOrigin) {
+      setSshOrigin(null);
+    }
+  }, [rightPanel, sshOrigin]);
   const selectedTask = projectTasks.find((t) => t.id === selectedTaskId) ?? null;
   const resolveRunnableFileCommand = useCallback(
     async (filePath: string, env: CondaEnvironment | null): Promise<string | null> => {
@@ -646,10 +710,13 @@ export function ProjectPage({
   const gitContextPath =
     projectLocation.kind === "ssh"
       ? projectLocation.remotePath
-      : selectedTask?.worktreePath && !selectedTask.worktreeDiscarded
-        ? selectedTask.worktreePath
-        : project.path;
+      : projectLocation.kind === "wsl"
+        ? projectLocation.linuxPath
+        : selectedTask?.worktreePath && !selectedTask.worktreeDiscarded
+          ? selectedTask.worktreePath
+          : project.path;
   const remoteProjectPathKey = projectLocation.kind === "ssh" ? projectLocation.remotePath : "";
+  const wslProjectPathKey = projectLocation.kind === "wsl" ? projectLocation.linuxPath : "";
 
   const handleSearchFileSelect = useCallback(
     (path: string, name: string, selection?: { line: number; column?: number }) => {
@@ -747,7 +814,13 @@ export function ProjectPage({
   useEffect(() => {
     remoteSshReadyRef.current = false;
     pendingRemoteSshCmdRef.current = null;
-  }, [project.id, projectLocation.kind, remoteConnection?.id, remoteProjectPathKey]);
+  }, [
+    project.id,
+    projectLocation.kind,
+    remoteConnection?.id,
+    remoteProjectPathKey,
+    wslProjectPathKey,
+  ]);
 
   const handleSelectTask = useCallback(
     (targetProjectId: string, id: string) => {
@@ -764,6 +837,16 @@ export function ProjectPage({
         setShowRemoteProjectTerminal(true);
         if (remoteSshReadyRef.current && remoteSshRef.current) {
           remoteSshRef.current.sendCommand(cmd);
+        } else {
+          pendingRemoteSshCmdRef.current = cmd;
+        }
+        return;
+      }
+      if (projectLocation.kind === "wsl") {
+        setShowShellTerminal(false);
+        setShowRemoteProjectTerminal(true);
+        if (remoteSshReadyRef.current && wslTerminalRef.current) {
+          wslTerminalRef.current.sendCommand(cmd);
         } else {
           pendingRemoteSshCmdRef.current = cmd;
         }
@@ -828,6 +911,13 @@ export function ProjectPage({
     remoteSshReadyRef.current = true;
     flushPendingRemoteSshCommand();
   }, [flushPendingRemoteSshCommand]);
+
+  const handleWslReady = useCallback(() => {
+    remoteSshReadyRef.current = true;
+    if (!pendingRemoteSshCmdRef.current || !wslTerminalRef.current) return;
+    wslTerminalRef.current.sendCommand(pendingRemoteSshCmdRef.current);
+    pendingRemoteSshCmdRef.current = null;
+  }, []);
 
   const handleNewTask = useCallback(() => {
     clearFileAndDiff();
@@ -898,14 +988,47 @@ export function ProjectPage({
         rightPanel === panel ? "close" : "open",
         panel,
       );
+      if (panel === "ssh") {
+        if (rightPanel === "ssh") {
+          const origin = sshOrigin;
+          setSshOrigin(null);
+          setShowShellTerminal(origin?.showShellTerminal ?? false);
+          setShowRemoteProjectTerminal(origin?.showRemoteProjectTerminal ?? false);
+          if (origin?.rightPanel) {
+            openRightPanel(origin.rightPanel);
+          } else {
+            closeRightPanel();
+          }
+        } else {
+          setSshOrigin({
+            rightPanel,
+            showShellTerminal,
+            showRemoteProjectTerminal,
+          });
+          setSshLayout("full");
+          openRightPanel("ssh");
+        }
+        return;
+      }
       setShowShellTerminal(false);
       setShowRemoteProjectTerminal(false);
-      if (panel === "ssh" || panel === "notes") {
+      if (panel === "notes") {
         clearFileAndDiff();
       }
       handleTogglePanel(panel);
     },
-    [clearFileAndDiff, handleTogglePanel, rightPanel, showActionFeedback, t],
+    [
+      clearFileAndDiff,
+      closeRightPanel,
+      handleTogglePanel,
+      openRightPanel,
+      rightPanel,
+      showActionFeedback,
+      showRemoteProjectTerminal,
+      showShellTerminal,
+      sshOrigin,
+      t,
+    ],
   );
 
   const handleActivateIdeTool = useCallback(
@@ -965,11 +1088,23 @@ export function ProjectPage({
       "open",
       "ssh",
     );
-    setShowShellTerminal(false);
-    setShowRemoteProjectTerminal(false);
-    clearFileAndDiff();
+    if (rightPanel !== "ssh") {
+      setSshOrigin({
+        rightPanel,
+        showShellTerminal,
+        showRemoteProjectTerminal,
+      });
+      setSshLayout("full");
+    }
     openRightPanel("ssh");
-  }, [clearFileAndDiff, openRightPanel, showActionFeedback, t]);
+  }, [
+    openRightPanel,
+    rightPanel,
+    showActionFeedback,
+    showRemoteProjectTerminal,
+    showShellTerminal,
+    t,
+  ]);
 
   const handleOpenTerminal = useCallback(() => {
     showActionFeedback(
@@ -977,6 +1112,7 @@ export function ProjectPage({
       "open",
       "terminal",
     );
+    setSshOrigin(null);
     closeRightPanel();
     if (projectLocation.kind === "ssh") {
       if (!remoteConnection) return;
@@ -998,6 +1134,7 @@ export function ProjectPage({
       !terminalOpen ? "open" : "close",
       "terminal",
     );
+    setSshOrigin(null);
     if (projectLocation.kind === "ssh") {
       if (!remoteConnection) return;
       setShowShellTerminal(false);
@@ -1281,17 +1418,17 @@ export function ProjectPage({
 
   const currentTaskCreatedAt = selectedTask?.createdAt ?? null;
   const remoteSshMainVisible = shouldShowRemoteSshTerminalLayer({
-    showRemoteSshTerminal,
-    hasRemoteConnection: Boolean(remoteConnection),
+    showRemoteSshTerminal: showRemoteTargetTerminal && showRemoteProjectTerminal,
+    hasRemoteConnection: Boolean(remoteConnection) || projectLocation.kind === "wsl",
     hasOpenFiles: hasEditorGroups,
     hasOpenDiff: Boolean(openDiff),
     isSftpMode,
     isShellMode,
     isDockerMode,
-    isSshMode,
+    isSshMode: false,
     isDatabaseMode,
     isNotesMode,
-    terminalSelected: showRemoteProjectTerminal,
+    terminalSelected: primaryRemoteProjectTerminal,
   });
   const shellTerminalFontSize = useMemo(
     () => deriveShellTerminalFontSize(terminalFontSize),
@@ -1334,12 +1471,6 @@ export function ProjectPage({
   );
 
   useEffect(() => {
-    if (rightPanel === "ssh") {
-      setRightSshMounted(true);
-    }
-  }, [rightPanel]);
-
-  useEffect(() => {
     const element = projectBodyRef.current;
     if (!element) return;
 
@@ -1369,14 +1500,7 @@ export function ProjectPage({
     return () => observer.disconnect();
   }, [projectRailWidth, rightPanelWidth, visibleRightPanel]);
 
-  const effectiveRightPanelWidth =
-    rightPanel === "ssh"
-      ? projectSshRightPanelWidth({
-          containerWidth: projectBodyWidth,
-          railCollapsed: responsiveLayout.autoCollapseRail || isDatabaseMode,
-          railExpandedWidth: projectRailWidth,
-        })
-      : rightPanelWidth;
+  const effectiveRightPanelWidth = rightPanelWidth;
   const showAgentTabs = shouldShowAgentTaskTabs({ taskCount: projectTasks.length });
   const workspaceFileTabs = useMemo(
     () =>
@@ -1389,22 +1513,31 @@ export function ProjectPage({
     [editorGroups],
   );
   const workspaceTerminalTabs =
-    projectLocation.kind === "ssh" && remoteConnection
+    projectLocation.kind === "wsl"
       ? [
           {
-            id: "remote-terminal",
-            title: `SSH ${t("terminal.title")}`,
-            label: "SSH",
+            id: "wsl-terminal",
+            title: `WSL ${t("terminal.title")}`,
+            label: "WSL",
             remote: true as const,
           },
         ]
-      : shellSessions.map((shell, index) => ({
-          ...shell,
-          label: `${platformRuntime.shellLabel} ${index + 1}`,
-          remote: false as const,
-        }));
+      : projectLocation.kind === "ssh" && remoteConnection
+        ? [
+            {
+              id: "remote-terminal",
+              title: `SSH ${t("terminal.title")}`,
+              label: "SSH",
+              remote: true as const,
+            },
+          ]
+        : shellSessions.map((shell, index) => ({
+            ...shell,
+            label: `${platformRuntime.shellLabel} ${index + 1}`,
+            remote: false as const,
+          }));
   const workspaceTerminalVisible =
-    projectLocation.kind === "ssh" ? remoteSshMainVisible : showShellTerminal;
+    projectLocation.kind !== "local" ? remoteSshMainVisible : showShellTerminal;
   const showWorkspaceTabs = shouldShowWorkspaceTabs({
     fileTabCount: workspaceFileTabs.length,
     terminalTabCount: workspaceTerminalTabs.length,
@@ -1438,7 +1571,7 @@ export function ProjectPage({
   const handleWorkspaceTerminalTabSelect = useCallback(
     (terminalId: string) => {
       closeRightPanel();
-      if (projectLocation.kind === "ssh") {
+      if (projectLocation.kind !== "local") {
         setShowShellTerminal(false);
         setShowRemoteProjectTerminal(true);
         return;
@@ -1452,7 +1585,7 @@ export function ProjectPage({
 
   const handleWorkspaceTerminalTabClose = useCallback(
     (terminalId: string) => {
-      if (projectLocation.kind === "ssh") return;
+      if (projectLocation.kind !== "local") return;
       shellRef.current?.closeShell(terminalId);
     },
     [projectLocation.kind],
@@ -1672,7 +1805,7 @@ export function ProjectPage({
                 </div>
               );
             })}
-            {projectLocation.kind !== "ssh" && shellSessions.length > 0 && (
+            {projectLocation.kind === "local" && shellSessions.length > 0 && (
               <button
                 type="button"
                 aria-label={t("terminal.newTerminal")}
@@ -1904,377 +2037,444 @@ export function ProjectPage({
               {actionFeedback.message}
             </div>
           )}
-          {/* Foreground: SFTP, file viewer, diff, SSH shell, or new-task composer */}
           <div
-            style={{
-              position: "relative",
-              zIndex: 1,
-              minHeight: 0,
-              display: "flex",
-              flexDirection: "column",
-              flex: 1,
-            }}
+            className={`project-center-stack${
+              isSshMode ? (sshLayout === "split" ? " ssh-split" : " ssh-full") : ""
+            }`}
+            data-testid="project-center-stack"
+            data-ssh-layout={isSshMode ? sshLayout : undefined}
+            style={
+              isSshMode && sshLayout === "split"
+                ? { gridTemplateColumns: SSH_SPLIT_GRID_TEMPLATE }
+                : undefined
+            }
           >
-            <ErrorBoundary
-              label="主内容区"
-              fallback={(error, reset) => (
-                <div style={s.errorBoundaryWrap}>
-                  <div style={s.errorBoundaryIcon}>⚠</div>
-                  <div style={s.errorBoundaryTitle}>内容区渲染出错</div>
-                  <div style={s.errorBoundaryMessage}>{error.message || "未知错误"}</div>
-                  <div style={s.errorBoundaryActions}>
-                    <button onClick={reset} style={s.errorBoundaryBtn}>
-                      重试
-                    </button>
-                    <button
-                      onClick={() => {
-                        clearFileAndDiff();
-                        reset();
-                      }}
-                      style={s.errorBoundaryBtn}
-                    >
-                      返回任务视图
-                    </button>
-                  </div>
-                </div>
-              )}
+            <div
+              className="project-center-primary"
+              data-testid="project-center-primary"
+              aria-hidden={isSshMode && sshLayout === "full" ? "true" : undefined}
+              style={{ minWidth: 0 }}
             >
-              <Suspense fallback={<CenterSuspenseFallback label={t("common.loading")} />}>
-                {sftpMounted && (
-                  <SftpPanel
-                    sshConnections={sshConnections}
-                    localDefaultPath={
-                      projectLocation.kind === "local" ? project.path : sftpLocalDefaultPath
-                    }
-                    active={visible && isSftpMode}
-                    width="100%"
-                    themeVariant={themeVariant}
-                    currentSshConnectionId={
-                      projectLocation.kind === "ssh" ? projectLocation.connectionId : undefined
-                    }
-                    projectConfig={sftpProjectConfig}
-                  />
-                )}
-                {databaseMounted && (
-                  <div
-                    aria-hidden={!isDatabaseMode}
-                    style={{
-                      display: isDatabaseMode ? "flex" : "none",
-                      flex: "1 1 auto",
-                      width: "100%",
-                      minWidth: 0,
-                      minHeight: 0,
-                    }}
-                  >
-                    <DatabaseView
-                      projectRoot={projectLocation.kind === "local" ? project.path : undefined}
-                      initialSqliteFilePath={databaseFilePath ?? undefined}
-                      remoteConnection={
-                        projectLocation.kind === "ssh" ? remoteConnection : undefined
-                      }
-                      remoteProjectPath={
-                        projectLocation.kind === "ssh" ? projectLocation.remotePath : undefined
-                      }
-                      sshConnections={sshConnections}
-                    />
-                  </div>
-                )}
-                {!isSftpMode &&
-                  !isDatabaseMode &&
-                  (isSshMode ? (
-                    <SshWorkspace
-                      connections={sshConnections}
-                      onConnectionsChange={onSshConnectionsChange}
-                      active={visible && isSshMode}
-                      themeVariant={themeVariant}
-                      terminalFontSize={terminalFontSize}
-                      monoFontFamily={monoFontFamily}
-                      remoteConnection={
-                        projectLocation.kind === "ssh" ? remoteConnection : undefined
-                      }
-                    />
-                  ) : isDockerMode ? (
-                    <DockerServiceView
-                      remote={projectLocation.kind === "ssh" ? remoteConnection : undefined}
-                      sourceLabel={
-                        projectLocation.kind === "ssh" && remoteConnection
-                          ? `${remoteConnection.name} · ${projectLocation.remotePath}`
-                          : project.path
-                      }
-                    />
-                  ) : isNotesMode ? (
-                    <div style={projectNotebookPanelStyle({ containerWidth: projectBodyWidth })}>
-                      <ErrorBoundary label="随手记">
-                        <NotebookPanel width="100%" />
-                      </ErrorBoundary>
+              {/* Foreground: SFTP, file viewer, diff, shell, or new-task composer */}
+              <div
+                style={{
+                  position: "relative",
+                  zIndex: 1,
+                  minHeight: 0,
+                  display: "flex",
+                  flexDirection: "column",
+                  flex: 1,
+                }}
+              >
+                <ErrorBoundary
+                  label="主内容区"
+                  fallback={(error, reset) => (
+                    <div style={s.errorBoundaryWrap}>
+                      <div style={s.errorBoundaryIcon}>⚠</div>
+                      <div style={s.errorBoundaryTitle}>内容区渲染出错</div>
+                      <div style={s.errorBoundaryMessage}>{error.message || "未知错误"}</div>
+                      <div style={s.errorBoundaryActions}>
+                        <button onClick={reset} style={s.errorBoundaryBtn}>
+                          重试
+                        </button>
+                        <button
+                          onClick={() => {
+                            clearFileAndDiff();
+                            reset();
+                          }}
+                          style={s.errorBoundaryBtn}
+                        >
+                          返回任务视图
+                        </button>
+                      </div>
                     </div>
-                  ) : openDiff ? (
-                    openDiff.kind === "file" ? (
-                      <GitDiffViewer
-                        projectPath={gitContextPath}
-                        mode="file"
-                        filePath={openDiff.filePath}
-                        staged={openDiff.staged}
-                        title={openDiff.label}
-                        onClose={() => setOpenDiff(null)}
-                        remote={remoteFileContext}
+                  )}
+                >
+                  <Suspense fallback={<CenterSuspenseFallback label={t("common.loading")} />}>
+                    {sftpMounted && (
+                      <SftpPanel
+                        sshConnections={sshConnections}
+                        localDefaultPath={
+                          projectLocation.kind === "local" ? project.path : sftpLocalDefaultPath
+                        }
+                        active={visible && primaryWorkspaceVisible && isSftpMode}
+                        width="100%"
+                        themeVariant={themeVariant}
+                        currentSshConnectionId={
+                          projectLocation.kind === "ssh" ? projectLocation.connectionId : undefined
+                        }
+                        projectConfig={sftpProjectConfig}
                       />
-                    ) : openDiff.kind === "commit-file" ? (
-                      <GitDiffViewer
-                        projectPath={gitContextPath}
-                        mode="commit-file"
-                        commitHash={openDiff.hash}
-                        filePath={openDiff.filePath}
-                        title={openDiff.label}
-                        onClose={() => setOpenDiff(null)}
-                        remote={remoteFileContext}
-                      />
-                    ) : (
-                      <GitDiffViewer
-                        projectPath={gitContextPath}
-                        mode="commit"
-                        commitHash={openDiff.hash}
-                        title={openDiff.message}
-                        onClose={() => setOpenDiff(null)}
-                        remote={remoteFileContext}
-                      />
-                    )
-                  ) : editorGroups.length > 0 ? (
-                    <div
-                      style={{
-                        flex: 1,
-                        minWidth: 0,
-                        minHeight: 0,
-                        display: "flex",
-                        overflow: "hidden",
-                        background: "var(--bg-panel)",
-                      }}
-                    >
-                      {editorGroups.map((group, index) => (
+                    )}
+                    {databaseMounted && (
+                      <div
+                        aria-hidden={!isDatabaseMode}
+                        style={{
+                          display: isDatabaseMode ? "flex" : "none",
+                          flex: "1 1 auto",
+                          width: "100%",
+                          minWidth: 0,
+                          minHeight: 0,
+                        }}
+                      >
+                        <DatabaseView
+                          projectRoot={projectLocation.kind === "local" ? project.path : undefined}
+                          initialSqliteFilePath={databaseFilePath ?? undefined}
+                          remoteConnection={
+                            projectLocation.kind === "ssh" ? remoteConnection : undefined
+                          }
+                          remoteProjectPath={
+                            projectLocation.kind === "ssh" ? projectLocation.remotePath : undefined
+                          }
+                          sshConnections={sshConnections}
+                        />
+                      </div>
+                    )}
+                    {!isSftpMode &&
+                      !isDatabaseMode &&
+                      (isDockerMode ? (
+                        <DockerServiceView
+                          remote={projectLocation.kind === "ssh" ? remoteConnection : undefined}
+                          sourceLabel={
+                            projectLocation.kind === "ssh" && remoteConnection
+                              ? `${remoteConnection.name} · ${projectLocation.remotePath}`
+                              : project.path
+                          }
+                        />
+                      ) : isNotesMode ? (
                         <div
-                          key={group.id}
-                          onMouseDown={() => handleEditorGroupFocus(group.id)}
+                          style={projectNotebookPanelStyle({ containerWidth: projectBodyWidth })}
+                        >
+                          <ErrorBoundary label="随手记">
+                            <NotebookPanel width="100%" />
+                          </ErrorBoundary>
+                        </div>
+                      ) : openDiff ? (
+                        openDiff.kind === "file" ? (
+                          <GitDiffViewer
+                            projectPath={gitContextPath}
+                            mode="file"
+                            filePath={openDiff.filePath}
+                            staged={openDiff.staged}
+                            title={openDiff.label}
+                            onClose={() => setOpenDiff(null)}
+                            remote={supportedFileContext}
+                          />
+                        ) : openDiff.kind === "commit-file" ? (
+                          <GitDiffViewer
+                            projectPath={gitContextPath}
+                            mode="commit-file"
+                            commitHash={openDiff.hash}
+                            filePath={openDiff.filePath}
+                            title={openDiff.label}
+                            onClose={() => setOpenDiff(null)}
+                            remote={supportedFileContext}
+                          />
+                        ) : (
+                          <GitDiffViewer
+                            projectPath={gitContextPath}
+                            mode="commit"
+                            commitHash={openDiff.hash}
+                            title={openDiff.message}
+                            onClose={() => setOpenDiff(null)}
+                            remote={supportedFileContext}
+                          />
+                        )
+                      ) : editorGroups.length > 0 ? (
+                        <div
                           style={{
-                            flex: "1 1 0",
+                            flex: 1,
                             minWidth: 0,
                             minHeight: 0,
                             display: "flex",
-                            borderLeft: index === 0 ? "none" : "1px solid var(--border-dim)",
-                            boxShadow:
-                              group.id === activeEditorGroupId
-                                ? "inset 0 0 0 1px var(--accent)"
-                                : "none",
+                            overflow: "hidden",
+                            background: "var(--bg-panel)",
                           }}
                         >
-                          <FileViewer
-                            tabs={group.tabs}
-                            activeFilePath={group.activePath}
-                            projectPath={fileRootPath}
-                            onSelectTab={(path) => handleFileTabSelect(path, group.id)}
-                            onCloseTab={(path) => handleFileTabClose(path, group.id)}
-                            onCloseOtherTabs={(path) => handleCloseOtherFileTabs(path, group.id)}
-                            onCloseTabsToRight={(path) => handleCloseTabsToRight(path, group.id)}
-                            onCloseAllTabs={() => handleCloseAllFileTabs(group.id)}
-                            themeVariant={themeVariant}
-                            onRunMakeTarget={handleRunMakeTarget}
-                            remote={remoteFileContext}
-                            condaEnvironments={runnableCondaEnvironments}
-                            selectedCondaEnvPath={selectedCondaEnvPath}
-                            onSelectedCondaEnvPathChange={onSelectedCondaEnvPathChange}
-                            onRunPythonFile={handleRunPythonFile}
-                            onRunTestTarget={handleRunEditorTestTarget}
-                            onDebugTestTarget={
-                              debugDisabled ? undefined : handleDebugEditorTestTarget
-                            }
-                            debugBreakpoints={
-                              debugDisabled || remoteFileContext ? [] : editorDebugBreakpoints
-                            }
-                            diagnostics={editorDiagnostics}
-                            coverage={remoteFileContext ? null : editorCoverage}
-                            onToggleDebugBreakpoint={
-                              debugDisabled ? undefined : handleToggleEditorDebugBreakpoint
-                            }
-                            onOpenDefinition={handleDefinitionOpen}
-                            onFocusGroup={() => handleEditorGroupFocus(group.id)}
-                            showTabStrip={false}
-                            onSplitRight={
-                              group.id === "main" && group.id === activeEditorGroupId
-                                ? handleSplitEditorGroupRight
-                                : undefined
-                            }
-                          />
+                          {editorGroups.map((group, index) => (
+                            <div
+                              key={group.id}
+                              onMouseDown={() => handleEditorGroupFocus(group.id)}
+                              style={{
+                                flex: "1 1 0",
+                                minWidth: 0,
+                                minHeight: 0,
+                                display: "flex",
+                                borderLeft: index === 0 ? "none" : "1px solid var(--border-dim)",
+                                boxShadow:
+                                  group.id === activeEditorGroupId
+                                    ? "inset 0 0 0 1px var(--accent)"
+                                    : "none",
+                              }}
+                            >
+                              <FileViewer
+                                tabs={group.tabs}
+                                activeFilePath={group.activePath}
+                                projectPath={fileRootPath}
+                                onSelectTab={(path) => handleFileTabSelect(path, group.id)}
+                                onCloseTab={(path) => handleFileTabClose(path, group.id)}
+                                onCloseOtherTabs={(path) =>
+                                  handleCloseOtherFileTabs(path, group.id)
+                                }
+                                onCloseTabsToRight={(path) =>
+                                  handleCloseTabsToRight(path, group.id)
+                                }
+                                onCloseAllTabs={() => handleCloseAllFileTabs(group.id)}
+                                themeVariant={themeVariant}
+                                onRunMakeTarget={handleRunMakeTarget}
+                                remote={supportedFileContext}
+                                condaEnvironments={runnableCondaEnvironments}
+                                selectedCondaEnvPath={selectedCondaEnvPath}
+                                onSelectedCondaEnvPathChange={onSelectedCondaEnvPathChange}
+                                onRunPythonFile={handleRunPythonFile}
+                                onRunTestTarget={handleRunEditorTestTarget}
+                                onDebugTestTarget={
+                                  debugDisabled ? undefined : handleDebugEditorTestTarget
+                                }
+                                debugBreakpoints={
+                                  debugDisabled || remoteFileContext ? [] : editorDebugBreakpoints
+                                }
+                                diagnostics={editorDiagnostics}
+                                coverage={remoteFileContext ? null : editorCoverage}
+                                onToggleDebugBreakpoint={
+                                  debugDisabled ? undefined : handleToggleEditorDebugBreakpoint
+                                }
+                                onOpenDefinition={handleDefinitionOpen}
+                                onFocusGroup={() => handleEditorGroupFocus(group.id)}
+                                showTabStrip={false}
+                                onSplitRight={
+                                  group.id === "main" && group.id === activeEditorGroupId
+                                    ? handleSplitEditorGroupRight
+                                    : undefined
+                                }
+                              />
+                            </div>
+                          ))}
                         </div>
-                      ))}
-                    </div>
-                  ) : !activeWorkspaceTask ? (
-                    <NewTaskView
-                      project={project}
-                      otherProjects={otherProjects}
-                      onSubmit={onSubmitTask}
-                      initialDraft={newTaskDraftRef.current}
-                      onCacheDraft={handleCacheNewTaskDraft}
-                      compactControls={responsiveLayout.compactComposeControls}
-                    />
-                  ) : activeWorkspaceTask.status === ("todo" as TaskStatus) ? (
-                    <TodoTaskView
-                      task={activeWorkspaceTask}
-                      onRunTodo={onRunTodoTask}
-                      onUpdateTodo={onUpdateTodo}
-                    />
-                  ) : null)}
-              </Suspense>
-            </ErrorBoundary>
-          </div>
-
-          {shellTerminalMounted && projectLocation.kind !== "ssh" && !terminalDisabled && (
-            <div style={shellCenterLayerStyle(shellVisibleInCenter)}>
-              <div style={shellCenterContentStyle()}>
-                <ErrorBoundary label="终端">
-                  <ShellTerminalPanel
-                    ref={shellRef}
-                    projectPath={project.path}
-                    projectId={project.id}
-                    isActive={visible && shellVisibleInCenter && showShellTerminal}
-                    visible={shellVisibleInCenter && showShellTerminal}
-                    onMinimize={() => {
-                      setShowShellTerminal(false);
-                      if (hasEditorGroups) openRightPanel("files");
-                    }}
-                    onClose={() => {
-                      setShowShellTerminal(false);
-                      setShellTerminalMounted(false);
-                      setShellSessions([]);
-                      setActiveShellId(null);
-                      shellReadyRef.current = false;
-                      pendingCmdRef.current = null;
-                      if (hasEditorGroups) openRightPanel("files");
-                    }}
-                    themeVariant={themeVariant}
-                    terminalFontSize={shellTerminalFontSize}
-                    monoFontFamily={monoFontFamily}
-                    onReady={handleShellReady}
-                    showSessionTabs={false}
-                    onSessionsChange={handleShellSessionsChange}
-                    shellLabel={platformRuntime.shellLabel}
-                    height="100%"
-                  />
+                      ) : !activeWorkspaceTask ? (
+                        <NewTaskView
+                          project={project}
+                          otherProjects={otherProjects}
+                          onSubmit={onSubmitTask}
+                          initialDraft={newTaskDraftRef.current}
+                          onCacheDraft={handleCacheNewTaskDraft}
+                          compactControls={responsiveLayout.compactComposeControls}
+                        />
+                      ) : activeWorkspaceTask.status === ("todo" as TaskStatus) ? (
+                        <TodoTaskView
+                          task={activeWorkspaceTask}
+                          onRunTodo={onRunTodoTask}
+                          onUpdateTodo={onUpdateTodo}
+                        />
+                      ) : null)}
+                  </Suspense>
                 </ErrorBoundary>
               </div>
-            </div>
-          )}
 
-          {showRemoteSshTerminal && remoteConnection && (
-            <div
-              style={{
-                position: "absolute",
-                left: 0,
-                top: 0,
-                bottom: 0,
-                right: isSshMode ? "50%" : 0,
-                display: remoteSshMainVisible || isSshMode ? "flex" : "none",
-                zIndex: remoteSshMainVisible || isSshMode ? 4 : 0,
-                borderRight: isSshMode ? "1px solid var(--border-dim)" : "none",
-              }}
-            >
-              <ErrorBoundary label="SSH">
-                <SshTerminalPanel
-                  ref={remoteSshRef}
+              {shellTerminalMounted && projectLocation.kind !== "ssh" && !terminalDisabled && (
+                <div style={shellCenterLayerStyle(shellVisibleInCenter)}>
+                  <div style={shellCenterContentStyle()}>
+                    <ErrorBoundary label="终端">
+                      <ShellTerminalPanel
+                        ref={shellRef}
+                        projectPath={project.path}
+                        projectId={project.id}
+                        isActive={
+                          visible &&
+                          primaryWorkspaceVisible &&
+                          shellVisibleInCenter &&
+                          showShellTerminal
+                        }
+                        visible={shellVisibleInCenter && showShellTerminal}
+                        onMinimize={() => {
+                          setShowShellTerminal(false);
+                          if (hasEditorGroups) openRightPanel("files");
+                        }}
+                        onClose={() => {
+                          setShowShellTerminal(false);
+                          setShellTerminalMounted(false);
+                          setShellSessions([]);
+                          setActiveShellId(null);
+                          shellReadyRef.current = false;
+                          pendingCmdRef.current = null;
+                          if (hasEditorGroups) openRightPanel("files");
+                        }}
+                        themeVariant={themeVariant}
+                        terminalFontSize={shellTerminalFontSize}
+                        monoFontFamily={monoFontFamily}
+                        onReady={handleShellReady}
+                        showSessionTabs={false}
+                        onSessionsChange={handleShellSessionsChange}
+                        shellLabel={platformRuntime.shellLabel}
+                        height="100%"
+                      />
+                    </ErrorBoundary>
+                  </div>
+                </div>
+              )}
+
+              {showRemoteSshTerminal && remoteConnection && (
+                <div
+                  style={{
+                    position: "absolute",
+                    inset: 0,
+                    display: remoteSshMainVisible ? "flex" : "none",
+                    zIndex: remoteSshMainVisible ? 4 : 0,
+                  }}
+                >
+                  <ErrorBoundary label="SSH">
+                    <SshTerminalPanel
+                      ref={remoteSshRef}
+                      connections={sshConnections}
+                      onConnectionsChange={onSshConnectionsChange}
+                      active={visible && primaryWorkspaceVisible && remoteSshMainVisible}
+                      width="100%"
+                      themeVariant={themeVariant}
+                      terminalFontSize={terminalFontSize}
+                      monoFontFamily={monoFontFamily}
+                      initialConnectionId={remoteConnection.id}
+                      autoConnect
+                      hideConnectionList
+                      onReady={handleRemoteSshReady}
+                    />
+                  </ErrorBoundary>
+                </div>
+              )}
+
+              {projectLocation.kind === "wsl" && (
+                <div
+                  style={{
+                    position: "absolute",
+                    inset: 0,
+                    display: remoteSshMainVisible ? "flex" : "none",
+                    zIndex: remoteSshMainVisible ? 4 : 0,
+                  }}
+                >
+                  <ErrorBoundary label="WSL">
+                    <WslTerminalPanel
+                      ref={wslTerminalRef}
+                      projectId={project.id}
+                      distribution={projectLocation.distribution}
+                      linuxProjectPath={projectLocation.linuxPath}
+                      active={visible && primaryWorkspaceVisible && remoteSshMainVisible}
+                      themeVariant={themeVariant}
+                      terminalFontSize={terminalFontSize}
+                      monoFontFamily={monoFontFamily}
+                      onReady={handleWslReady}
+                    />
+                  </ErrorBoundary>
+                </div>
+              )}
+
+              {filePreviewTarget && (
+                <div
+                  className="sftp-preview-overlay"
+                  role="dialog"
+                  aria-modal="true"
+                  onMouseDown={(event) => {
+                    if (event.target === event.currentTarget) setFilePreviewTarget(null);
+                  }}
+                >
+                  <div
+                    className={`sftp-preview-dialog${filePreviewTarget.isDirectory ? " compact" : ""}`}
+                  >
+                    <Suspense fallback={<CenterSuspenseFallback label={t("common.loading")} />}>
+                      <SftpPreview
+                        endpoint={filePreviewTarget.endpoint}
+                        filePath={filePreviewTarget.filePath}
+                        isDirectory={filePreviewTarget.isDirectory}
+                        connections={filePreviewTarget.connections}
+                        themeVariant={themeVariant}
+                        onClose={() => setFilePreviewTarget(null)}
+                      />
+                    </Suspense>
+                  </div>
+                </div>
+              )}
+
+              {/* Background terminals */}
+              {projectTasks
+                .filter((t) => mountedTaskIds.has(t.id))
+                .map((task) => {
+                  const isVisible = shouldShowRunningTaskInCenter({
+                    hasOpenFiles: hasEditorGroups,
+                    hasOpenDiff: Boolean(openDiff),
+                    isShellMode,
+                    isSftpMode,
+                    isSshMode: false,
+                    isDockerMode,
+                    isDatabaseMode,
+                    isNotesMode,
+                    isNewTask: !taskWorkspaceVisible,
+                    hasSelectedTask: Boolean(selectedTask),
+                    taskId: task.id,
+                    selectedTaskId,
+                    taskStatus: task.status,
+                    hasSessionPath: Boolean(task.claudeSessionPath ?? task.codexSessionPath),
+                  });
+                  return (
+                    <RunningView
+                      key={task.id}
+                      task={task}
+                      projectPath={project.path}
+                      canRecoverSession={projectLocation.kind === "local"}
+                      runCount={taskRunCounts[task.id] ?? 0}
+                      visible={visible && primaryWorkspaceVisible && isVisible}
+                      projectActive={visible}
+                      onCancel={() => onCancelTask(task.id)}
+                      onResume={() => onResumeTask(task.id)}
+                      onMergeWorktree={() => onMergeWorktree(task.id)}
+                      onDiscardWorktree={() => onDiscardWorktree(task.id)}
+                      onReconnect={() => onReconnectTask(task.id)}
+                      onMarkDone={() => onMarkTaskDone(task.id)}
+                      onInput={(data) => onInput(task.id, data)}
+                      onResize={(cols, rows) => onResize(task.id, cols, rows)}
+                      onRegisterTerminal={(fn) => onRegisterTerminal(task.id, fn)}
+                      onTerminalReady={(generation) => onTerminalReady(task.id, generation)}
+                      onSnapshot={(snapshot) => onSnapshot(task.id, snapshot)}
+                      getRestoreState={() => getTaskRestoreState(task.id)}
+                      onRename={(name) => onRenameTask(task.id, name)}
+                      onGenerateName={() => onGenerateTaskName(task.id)}
+                      themeVariant={themeVariant}
+                      terminalFontSize={terminalFontSize}
+                      monoFontFamily={monoFontFamily}
+                      agentOptions={agentOptions}
+                    />
+                  );
+                })}
+            </div>
+
+            {isSshMode && sshLayout === "split" && (
+              <div
+                className="project-center-ssh-divider"
+                data-testid="project-center-ssh-divider"
+                style={{ width: 1, minWidth: 1 }}
+              />
+            )}
+            {isSshMode && (
+              <div
+                className="project-center-ssh"
+                data-testid="project-center-ssh"
+                style={{ minWidth: 0 }}
+              >
+                <SshWorkspace
                   connections={sshConnections}
                   onConnectionsChange={onSshConnectionsChange}
-                  active={visible && (remoteSshMainVisible || isSshMode)}
-                  width="100%"
+                  active={visible}
                   themeVariant={themeVariant}
                   terminalFontSize={terminalFontSize}
                   monoFontFamily={monoFontFamily}
-                  initialConnectionId={remoteConnection.id}
-                  autoConnect
-                  hideConnectionList
-                  onReady={handleRemoteSshReady}
+                  remoteConnection={projectLocation.kind === "ssh" ? remoteConnection : undefined}
+                  layout={sshLayout}
+                  onLayoutChange={setSshLayout}
                 />
-              </ErrorBoundary>
-            </div>
-          )}
-
-          {filePreviewTarget && (
-            <div
-              className="sftp-preview-overlay"
-              role="dialog"
-              aria-modal="true"
-              onMouseDown={(event) => {
-                if (event.target === event.currentTarget) setFilePreviewTarget(null);
-              }}
-            >
-              <div
-                className={`sftp-preview-dialog${filePreviewTarget.isDirectory ? " compact" : ""}`}
-              >
-                <Suspense fallback={<CenterSuspenseFallback label={t("common.loading")} />}>
-                  <SftpPreview
-                    endpoint={filePreviewTarget.endpoint}
-                    filePath={filePreviewTarget.filePath}
-                    isDirectory={filePreviewTarget.isDirectory}
-                    connections={filePreviewTarget.connections}
-                    themeVariant={themeVariant}
-                    onClose={() => setFilePreviewTarget(null)}
-                  />
-                </Suspense>
               </div>
-            </div>
-          )}
-
-          {/* Background terminals */}
-          {projectTasks
-            .filter((t) => mountedTaskIds.has(t.id))
-            .map((task) => {
-              const isVisible = shouldShowRunningTaskInCenter({
-                hasOpenFiles: hasEditorGroups,
-                hasOpenDiff: Boolean(openDiff),
-                isShellMode,
-                isSftpMode,
-                isSshMode,
-                isDockerMode,
-                isDatabaseMode,
-                isNotesMode,
-                isNewTask: !taskWorkspaceVisible,
-                hasSelectedTask: Boolean(selectedTask),
-                taskId: task.id,
-                selectedTaskId,
-                taskStatus: task.status,
-                hasSessionPath: Boolean(task.claudeSessionPath ?? task.codexSessionPath),
-              });
-              return (
-                <RunningView
-                  key={task.id}
-                  task={task}
-                  projectPath={project.path}
-                  canRecoverSession={projectLocation.kind === "local"}
-                  runCount={taskRunCounts[task.id] ?? 0}
-                  visible={visible && isVisible}
-                  projectActive={visible}
-                  onCancel={() => onCancelTask(task.id)}
-                  onResume={() => onResumeTask(task.id)}
-                  onMergeWorktree={() => onMergeWorktree(task.id)}
-                  onDiscardWorktree={() => onDiscardWorktree(task.id)}
-                  onReconnect={() => onReconnectTask(task.id)}
-                  onMarkDone={() => onMarkTaskDone(task.id)}
-                  onInput={(data) => onInput(task.id, data)}
-                  onResize={(cols, rows) => onResize(task.id, cols, rows)}
-                  onRegisterTerminal={(fn) => onRegisterTerminal(task.id, fn)}
-                  onTerminalReady={(generation) => onTerminalReady(task.id, generation)}
-                  onSnapshot={(snapshot) => onSnapshot(task.id, snapshot)}
-                  getRestoreState={() => getTaskRestoreState(task.id)}
-                  onRename={(name) => onRenameTask(task.id, name)}
-                  onGenerateName={() => onGenerateTaskName(task.id)}
-                  themeVariant={themeVariant}
-                  terminalFontSize={terminalFontSize}
-                  monoFontFamily={monoFontFamily}
-                  agentOptions={agentOptions}
-                />
-              );
-            })}
+            )}
+          </div>
         </div>
       </div>
 
-      {(visibleRightPanel || rightSshMounted) && (
+      {visibleRightPanel && (
         <div
           style={{
             position: "relative",
@@ -2310,7 +2510,7 @@ export function ProjectPage({
                   onFileSelect={handleFileSelectWithShellMinimize}
                   active={visible}
                   width={effectiveRightPanelWidth}
-                  remote={remoteFileContext}
+                  remote={supportedFileContext}
                   themeVariant={themeVariant}
                   onPreviewRequest={setFilePreviewTarget}
                   onOpenDatabaseFile={handleOpenDatabaseFile}
@@ -2329,7 +2529,7 @@ export function ProjectPage({
                   currentTaskCreatedAt={currentTaskCreatedAt}
                   onFileSelect={handleDiffFileSelectWithCollapse}
                   width={effectiveRightPanelWidth}
-                  remote={remoteFileContext}
+                  remote={supportedFileContext}
                 />
               </ErrorBoundary>
             )}
@@ -2345,7 +2545,7 @@ export function ProjectPage({
                   onCommitSelect={handleCommitSelectWithCollapse}
                   onFileClick={handleCommitFileClickWithCollapse}
                   width={effectiveRightPanelWidth}
-                  remote={remoteFileContext}
+                  remote={supportedFileContext}
                 />
               </ErrorBoundary>
             )}
@@ -2361,7 +2561,7 @@ export function ProjectPage({
                   activeFilePath={activeFilePath}
                   width={effectiveRightPanelWidth}
                   onOpenFile={handleGitAdvancedFileOpen}
-                  remote={remoteFileContext}
+                  remote={supportedFileContext}
                 />
               </ErrorBoundary>
             )}

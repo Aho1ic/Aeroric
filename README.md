@@ -5,7 +5,7 @@
 <h1 align="center">Aeroric: Desktop Workspace for AI Coding Agents</h1>
 
 <p align="center">
-Run Claude Code, Codex, and custom agents across projects with live terminals, task tracking, Git, SSH, SFTP, Docker, database tools, Skill Hub, Markdown docs, quick notes, and release workflows in one lightweight desktop app.
+Run Claude Code, Codex, and custom agents across projects with live terminals, task tracking, Git, SSH, WSL, SFTP, Docker, database tools, Skill Hub, Markdown docs, quick notes, and release workflows in one lightweight desktop app.
 </p>
 
 <p align="center">
@@ -36,6 +36,7 @@ Aeroric does not replace Claude Code or Codex. It calls the native CLIs and adds
 - **Use IDE-grade project tools**: search and replace, inspect diagnostics, jump through symbols, run tests, debug with DAP, manage run configurations, and preview local web apps.
 - **Keep quick notes**: write Markdown or rich text notes for task clues, command snippets, release checks, and temporary ideas.
 - **Operate development infrastructure**: view Docker containers and images, manage ports, use SFTP/SSH tools, and inspect SQLite, MySQL, PostgreSQL, Redis, and MongoDB resources through DBX-powered tooling.
+- **Work inside WSL on Windows**: detect installed distributions, manage WSL configuration, open projects on the Linux filesystem, and run terminals, agent tasks, and Git operations inside the selected distribution.
 - **Keep skills and release work close**: browse local Skill Hub content, review diffs, stage files, commit, push, and manage release pages.
 - **Track usage, sessions, and notifications**: discover Claude Code/Codex JSONL sessions, inspect token/tool-call metrics, and keep long-running work observable.
 
@@ -44,7 +45,7 @@ Aeroric does not replace Claude Code or Codex. It calls the native CLIs and adds
 | Layer | What it does |
 | --- | --- |
 | React 19 + TypeScript + Vite | Main workspace UI, project panels, editor surfaces, task views, and release screens. |
-| Tauri 2 + Rust | Desktop shell, native filesystem/process access, PTY orchestration, storage, Git, SSH/SFTP, Docker, and database commands. |
+| Tauri 2 + Rust | Desktop shell, native filesystem/process access, PTY orchestration, storage, Git, SSH/SFTP, WSL, Docker, and database commands. |
 | Agent runtime bridge | Launches Claude Code, Codex, and custom commands with permission modes, hook integration, session discovery, resume support, and cancellation. |
 | Project tooling | File explorer, CodeMirror/Shiki editing, LSP diagnostics/navigation, DAP debugging, search, test explorer, web preview, and local history. |
 | Operational tooling | Docker, ports, SSH tunnels, SFTP, DBX-backed database browsing/querying/import-export, notifications, and release asset workflows. |
@@ -158,6 +159,17 @@ SSH connections can be managed from Aeroric so remote shells, project operations
 <p align="center">
   <img src="./Aeroric_frame/深色模式SSH.jpg" alt="Dark SSH connection view" width="86%" />
 </p>
+
+### WSL (Windows only)
+
+On Windows, WSL distributions are treated as first-class execution environments. Aeroric detects the installed distributions, reads their login-shell environment and agent status, and can open a project that lives on the Linux filesystem instead of accessing it as a Windows share.
+
+- **Settings → WSL**: check `wsl.exe` availability, list distributions with state and WSL version, pick a default distribution, inspect the login-shell environment (sensitive values are masked until revealed), override the `claude` / `codex` executable and config paths, edit `%USERPROFILE%\.wslconfig` and `/etc/wsl.conf`, and restart WSL after a confirmation prompt.
+- **Open WSL Project**: the "Open project" menu offers a WSL entry that asks for a distribution and an absolute Linux path (for example `/home/dev/app`). The path is validated inside the distribution before the project is created, and the project is persisted as `wsl://<distribution><linux-path>`.
+- **Terminals and agent tasks**: shells and Claude Code / Codex / custom agent tasks run inside the selected distribution through your Linux login shell, with the same PTY streaming, interactive input, resume, and cancel behavior as local tasks.
+- **Files and Git**: file browsing, editing, project configuration, and Git status/stage/commit/history for WSL projects execute directly in the distribution.
+
+The first WSL release intentionally leaves out LSP features, the test explorer, DAP debugging, web preview, Docker, database tools, Conda, task worktrees, and attachment upload. Those panels are disabled for WSL projects, while local and SSH projects keep their full capability set.
 
 ### Skill Hub
 

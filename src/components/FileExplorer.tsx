@@ -49,12 +49,10 @@ import {
   pathSeparator,
   updateNode,
 } from "./file-explorer/treeUtils";
-import type { SshConnection, ThemeVariant } from "../types";
+import type { RemoteProjectTarget, SshConnection, ThemeVariant } from "../types";
+import { targetCommand, targetFileArgs, targetProjectArgs } from "../projectTarget";
 
-type RemoteFileContext = {
-  connection: SshConnection;
-  projectPath: string;
-};
+type RemoteFileContext = RemoteProjectTarget;
 
 type FilePreviewRequest = {
   endpoint: SftpEndpoint;
@@ -255,10 +253,10 @@ export function FileExplorer({
 
   useEffect(() => {
     let cancelled = false;
-    const command = remote ? "remote_read_project_config" : "read_project_config";
-    const args = remote
-      ? { connection: remote.connection, remoteProjectPath: remote.projectPath }
-      : { projectPath };
+    const command = remote
+      ? targetCommand(remote, "", "remote_read_project_config", "read_wsl_project_config")
+      : "read_project_config";
+    const args = remote ? targetProjectArgs(remote) : { projectPath };
 
     invoke<{ editor?: { file_browser_sort?: unknown } }>(command, args)
       .then((config) => {
@@ -280,12 +278,8 @@ export function FileExplorer({
     (path: string) =>
       remote
         ? safeInvoke<FsEntry[]>(
-            "remote_read_dir_entries",
-            {
-              connection: remote.connection,
-              remotePath: path,
-              remoteProjectPath: remote.projectPath,
-            },
+            targetCommand(remote, "", "remote_read_dir_entries", "wsl_read_dir_entries"),
+            targetFileArgs(remote, path),
             remoteInvokeOptions(),
           )
         : safeInvoke<FsEntry[]>("read_dir_entries", { path, projectPath: browseRoot }),
@@ -630,12 +624,8 @@ export function FileExplorer({
       if (kind === "file") {
         if (remote) {
           await safeInvoke(
-            "remote_create_file",
-            {
-              connection: remote.connection,
-              remotePath: fullPath,
-              remoteProjectPath: remote.projectPath,
-            },
+            targetCommand(remote, "", "remote_create_file", "wsl_create_file"),
+            targetFileArgs(remote, fullPath),
             remoteInvokeOptions(),
           );
         } else {
@@ -644,12 +634,8 @@ export function FileExplorer({
       } else {
         if (remote) {
           await safeInvoke(
-            "remote_create_directory",
-            {
-              connection: remote.connection,
-              remotePath: fullPath,
-              remoteProjectPath: remote.projectPath,
-            },
+            targetCommand(remote, "", "remote_create_directory", "wsl_create_directory"),
+            targetFileArgs(remote, fullPath),
             remoteInvokeOptions(),
           );
         } else {
@@ -755,12 +741,10 @@ export function FileExplorer({
     try {
       if (remote) {
         await safeInvoke(
-          "remote_rename_path",
+          targetCommand(remote, "", "remote_rename_path", "wsl_rename_path"),
           {
-            connection: remote.connection,
-            remotePath: oldPath,
+            ...targetFileArgs(remote, oldPath),
             newName: name,
-            remoteProjectPath: remote.projectPath,
           },
           remoteInvokeOptions(),
         );
@@ -811,7 +795,7 @@ export function FileExplorer({
       });
       pasteInFlightRef.current = true;
       try {
-        if (remote) {
+        if (remote?.kind === "ssh") {
           await safeInvoke(
             "remote_upload_local_paths_to_directory",
             {
@@ -822,6 +806,8 @@ export function FileExplorer({
             },
             remoteInvokeOptions(300_000),
           );
+        } else if (remote?.kind === "wsl") {
+          throw new Error("Copying Windows clipboard files into WSL is not supported yet.");
         } else {
           await safeInvoke("copy_paths_to_directory", {
             sourcePaths,
@@ -898,12 +884,8 @@ export function FileExplorer({
       try {
         if (remote) {
           await safeInvoke(
-            "remote_delete_path",
-            {
-              connection: remote.connection,
-              remotePath: targetPath,
-              remoteProjectPath: remote.projectPath,
-            },
+            targetCommand(remote, "", "remote_delete_path", "wsl_delete_path"),
+            targetFileArgs(remote, targetPath),
             remoteInvokeOptions(),
           );
         } else {
@@ -958,7 +940,7 @@ export function FileExplorer({
           if (onPreviewRequest) {
             const endpoint = fileExplorerPreviewEndpoint({
               selectedPath: selectedNode.path,
-              remote,
+              remote: remote?.kind === "ssh" ? remote : undefined,
             });
             if (!endpoint) return;
             const baseEndpoint: SftpEndpoint =
@@ -974,7 +956,7 @@ export function FileExplorer({
               endpoint: baseEndpoint,
               filePath: selectedNode.path,
               isDirectory: selectedNode.is_dir,
-              connections: remote ? [remote.connection] : [],
+              connections: remote?.kind === "ssh" ? [remote.connection] : [],
             });
           } else {
             setPreviewTarget({ path: selectedNode.path, isDir: selectedNode.is_dir });
@@ -997,7 +979,11 @@ export function FileExplorer({
   );
 
   const previewEndpoint = useMemo(
-    () => fileExplorerPreviewEndpoint({ selectedPath: previewTarget?.path ?? null, remote }),
+    () =>
+      fileExplorerPreviewEndpoint({
+        selectedPath: previewTarget?.path ?? null,
+        remote: remote?.kind === "ssh" ? remote : undefined,
+      }),
     [previewTarget, remote],
   );
 
@@ -1046,7 +1032,7 @@ export function FileExplorer({
               endpoint={previewBaseEndpoint}
               filePath={previewTarget.path}
               isDirectory={previewTarget.isDir}
-              connections={remote ? [remote.connection] : []}
+              connections={remote?.kind === "ssh" ? [remote.connection] : []}
               themeVariant={themeVariant}
               onClose={() => setPreviewTarget(null)}
             />

@@ -27,7 +27,7 @@ use std::time::Duration;
 
 use parking_lot::Mutex;
 use serde::Deserialize;
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Emitter, Manager, Runtime};
 
 use crate::session::{ClaudeSessionInfo, CodexSessionInfo};
 use crate::TaskManager;
@@ -48,6 +48,8 @@ struct HookEvent {
     session_id: String,
     #[serde(default)]
     transcript_path: String,
+    #[serde(default)]
+    tool_name: String,
 }
 
 pub fn start(app: AppHandle) {
@@ -248,22 +250,44 @@ fn emit_active_status(app: &AppHandle, ev: &HookEvent, status: &str) {
     if !tm.child_handles.lock().contains_key(&ev.task_id) {
         return;
     }
+    let remote = app.state::<crate::remote::RemoteState>();
+    let had_approval = remote.approvals.get(&ev.task_id).is_some();
+    let is_approval = status == "input_required"
+        && (ev.event == "PermissionRequest"
+            || (ev.event == "Notification" && !ev.tool_name.trim().is_empty()));
+    let approval = if is_approval {
+        Some(
+            remote
+                .approvals
+                .register(&ev.task_id, &ev.agent, &ev.event, Some(&ev.tool_name)),
+        )
+    } else {
+        remote.approvals.clear(&ev.task_id);
+        None
+    };
     {
         let mut last = last_status().lock();
-        if last.get(&ev.task_id).map(String::as_str) == Some(status) {
+        if approval.is_none()
+            && !had_approval
+            && last.get(&ev.task_id).map(String::as_str) == Some(status)
+        {
             return;
         }
         last.insert(ev.task_id.clone(), status.to_string());
     }
-    let _ = app.emit(
-        "task-status",
-        serde_json::json!({ "task_id": ev.task_id, "status": status }),
-    );
+    let mut payload = serde_json::json!({ "task_id": ev.task_id, "status": status });
+    if let Some(approval) = approval {
+        payload["approval"] = serde_json::to_value(approval).unwrap_or_default();
+    }
+    let _ = app.emit("task-status", payload);
 }
 
 /// 任务终态后清理对应目录(由 finalize_task_exit 调用)。
-pub fn cleanup_task_events(task_id: &str) {
+pub fn cleanup_task_events<R: Runtime>(app: &AppHandle<R>, task_id: &str) {
     last_status().lock().remove(task_id);
+    app.state::<crate::remote::RemoteState>()
+        .approvals
+        .clear(task_id);
     if let Ok(dir) = crate::hooks::events_dir_for(task_id) {
         let _ = fs::remove_dir_all(dir);
     }

@@ -10,7 +10,6 @@ import {
   AlertTriangle,
   AlertCircle,
   Download,
-  FolderOpen,
   RotateCcw,
   ArrowUpCircle,
 } from "lucide-react";
@@ -64,6 +63,7 @@ function NotificationEntry({
   const [installResult, setInstallResult] = useState<ReleaseInstallResult | null>(null);
   const releaseTag = item.releaseTag ?? null;
   const canInstallUpdate = Boolean(item.updateInstallSupported && releaseTag && !installResult);
+  const helperRunning = prepareResult?.helperStatus === "running";
 
   useEffect(() => {
     let cancelled = false;
@@ -75,8 +75,10 @@ function NotificationEntry({
         if (cancelled) return;
         if (result) {
           setPrepareResult(result);
+          setInstallError(result.error);
         } else {
           setPrepareResult(null);
+          setInstallError(null);
         }
       })
       .catch(() => undefined);
@@ -95,7 +97,7 @@ function NotificationEntry({
   const handleInstallClick = async (event: React.MouseEvent<HTMLButtonElement>) => {
     event.preventDefault();
     event.stopPropagation();
-    if (!releaseTag || preparing || restarting) return;
+    if (!releaseTag || preparing || restarting || helperRunning) return;
     setInstallError(null);
 
     if (!prepareResult) {
@@ -181,13 +183,11 @@ function NotificationEntry({
         {canInstallUpdate && (
           <button
             type="button"
-            disabled={preparing || restarting || Boolean(installResult)}
+            disabled={preparing || restarting || helperRunning || Boolean(installResult)}
             onClick={handleInstallClick}
             aria-label={
               prepareResult
-                ? prepareResult.readyToRestart
-                  ? t("notification.restartUpdateAria", { tag: releaseTag ?? "" })
-                  : t("notification.openInstallerAria", { tag: releaseTag ?? "" })
+                ? t("notification.restartUpdateAria", { tag: releaseTag ?? "" })
                 : t("notification.downloadUpdateAria", { tag: releaseTag ?? "" })
             }
             style={{
@@ -203,33 +203,27 @@ function NotificationEntry({
               color: "var(--control-active-fg)",
               fontSize: 11,
               fontWeight: 650,
-              cursor: preparing || restarting ? "default" : "pointer",
-              opacity: preparing || restarting ? 0.72 : 1,
+              cursor: preparing || restarting || helperRunning ? "default" : "pointer",
+              opacity: preparing || restarting || helperRunning ? 0.72 : 1,
             }}
           >
-            {prepareResult?.readyToRestart ? (
+            {prepareResult ? (
               <RotateCcw size={12} strokeWidth={2.4} />
-            ) : prepareResult ? (
-              <FolderOpen size={12} strokeWidth={2.4} />
             ) : (
               <Download size={12} strokeWidth={2.4} />
             )}
-            {restarting
+            {restarting || helperRunning
               ? t("notification.restartingUpdate")
               : preparing
                 ? t("notification.downloadingUpdate")
                 : prepareResult
-                  ? prepareResult.readyToRestart
-                    ? t("notification.restartUpdate", { tag: releaseTag ?? "" })
-                    : t("notification.openInstaller", { tag: releaseTag ?? "" })
+                  ? t("notification.restartUpdate", { tag: releaseTag ?? "" })
                   : t("notification.downloadUpdate", { tag: releaseTag ?? "" })}
           </button>
         )}
         {prepareResult && !installResult && (
           <div style={{ ...notificationBodyStyle, marginTop: 6, WebkitLineClamp: 2 }}>
-            {prepareResult.readyToRestart
-              ? t("notification.updateReadyRestart")
-              : t("notification.updateReadyOpenInstaller")}
+            {t("notification.updateReadyRestart")}
           </div>
         )}
         {installResult && (
@@ -489,8 +483,13 @@ export function UpdateBanner() {
 
   return (
     <div
+      data-testid="update-banner"
       style={{
-        margin: "0 6px 6px",
+        position: "absolute",
+        left: 0,
+        bottom: "calc(100% + 8px)",
+        width: 220,
+        boxSizing: "border-box",
         padding: "6px 10px",
         borderRadius: 8,
         background: "var(--accent-subtle)",

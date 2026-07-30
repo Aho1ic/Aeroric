@@ -5,11 +5,13 @@ import {
   TERMINAL_FONT_SIZE_MAX,
   TERMINAL_FONT_SIZE_STEP,
   clampTerminalFontSize,
-  DEFAULT_UI_FONT,
-  DEFAULT_MONO_FONT,
+  DEFAULT_UI_FONT_BY_PLATFORM,
+  DEFAULT_MONO_FONT_BY_PLATFORM,
 } from "../../types";
+import { FONT_PLATFORM } from "../../platform";
 import { useI18n } from "../../i18n";
 import s from "../../styles";
+import { composeFontStack } from "../../utils/fonts";
 import { FontSelector } from "./FontSelector";
 
 interface FontPanelProps {
@@ -34,6 +36,17 @@ export function FontPanel({
   const [pendingUiFont, setPendingUiFont] = useState(uiFontFamily);
   const [pendingMonoFont, setPendingMonoFont] = useState(monoFontFamily);
   const [pendingFontSize, setPendingFontSize] = useState(terminalFontSize);
+
+  // 预览必须用与 App.tsx 相同的方式补齐平台回退链，否则 mac 上看着正常的单个族名
+  // 在 Windows / Linux 预览里会命中浏览器默认字体，和实际生效结果不一致。
+  const uiPreviewFont = composeFontStack(
+    pendingUiFont.trim() || DEFAULT_UI_FONT_BY_PLATFORM[FONT_PLATFORM],
+    DEFAULT_UI_FONT_BY_PLATFORM[FONT_PLATFORM],
+  );
+  const monoPreviewFont = composeFontStack(
+    pendingMonoFont.trim() || DEFAULT_MONO_FONT_BY_PLATFORM[FONT_PLATFORM],
+    DEFAULT_MONO_FONT_BY_PLATFORM[FONT_PLATFORM],
+  );
 
   const dirty =
     pendingUiFont !== uiFontFamily ||
@@ -103,17 +116,17 @@ export function FontPanel({
         onChange={setPendingUiFont}
         label={t("font.uiFontFamily")}
         hint={t("font.uiFontFamilyHint")}
-        defaultFont={DEFAULT_UI_FONT}
+        defaultFont={DEFAULT_UI_FONT_BY_PLATFORM[FONT_PLATFORM]}
         preview={
           <div style={s.fontInlinePreview}>
             <span style={s.fontPreviewLabel}>{t("font.preview")}</span>
-            <span style={{ ...s.fontPreviewText, fontFamily: pendingUiFont }}>
+            <span style={{ ...s.fontPreviewText, fontFamily: uiPreviewFont }}>
               这是一段测试文字，用于预览字体效果。
             </span>
-            <span style={{ ...s.fontPreviewText, fontFamily: pendingUiFont }}>
+            <span style={{ ...s.fontPreviewText, fontFamily: uiPreviewFont }}>
               The quick brown fox jumps over the lazy dog.
             </span>
-            <span style={{ ...s.fontPreviewText, fontFamily: pendingUiFont }}>
+            <span style={{ ...s.fontPreviewText, fontFamily: uiPreviewFont }}>
               0123456789 !@#$%^&*()_+-={"{}"}[]|:;"&#39;&lt;&gt;,.?/
             </span>
           </div>
@@ -126,7 +139,7 @@ export function FontPanel({
         onChange={setPendingMonoFont}
         label={t("font.monoFontFamily")}
         hint={t("font.monoFontFamilyHint")}
-        defaultFont={DEFAULT_MONO_FONT}
+        defaultFont={DEFAULT_MONO_FONT_BY_PLATFORM[FONT_PLATFORM]}
         preview={
           <div style={s.fontInlinePreview}>
             <div style={s.fontPreviewHeaderRow}>
@@ -136,7 +149,7 @@ export function FontPanel({
             <div
               style={{
                 ...s.fontCodePreviewWindow,
-                fontFamily: pendingMonoFont,
+                fontFamily: monoPreviewFont,
               }}
             >
               <span style={s.fontCodeLine}>

@@ -79,6 +79,7 @@ function renderWelcome(overrides: Partial<React.ComponentProps<typeof WelcomePag
     sshConnections: overrides.sshConnections ?? [sshConnection()],
     onSshConnectionsChange: overrides.onSshConnectionsChange ?? vi.fn(),
     onOpenSshProject: overrides.onOpenSshProject ?? vi.fn(),
+    onOpenWslProject: overrides.onOpenWslProject ?? vi.fn(),
   };
 
   return render(React.createElement(I18nProvider, null, React.createElement(WelcomePage, props)));

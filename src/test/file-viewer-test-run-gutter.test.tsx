@@ -273,7 +273,7 @@ describe("FileViewer test run gutter", () => {
           onCloseTabsToRight={vi.fn()}
           onCloseAllTabs={vi.fn()}
           themeVariant="light"
-          remote={{ connection, projectPath: "/srv/app" }}
+          remote={{ kind: "ssh", connection, projectPath: "/srv/app" }}
           onRunTestTarget={onRunTestTarget}
           onDebugTestTarget={onDebugTestTarget}
         />

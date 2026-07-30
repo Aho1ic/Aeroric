@@ -17,8 +17,9 @@ import type {
   GitConflictResolution,
   GitStashDiff,
   GitStashEntry,
-  SshConnection,
+  RemoteProjectTarget,
 } from "../../types";
+import { targetProjectArgs } from "../../projectTarget";
 import { branchGraphSummary, projectRelativeGitPath, stashDisplayTitle } from "./gitAdvancedState";
 
 export function GitAdvancedPanel({
@@ -32,23 +33,21 @@ export function GitAdvancedPanel({
   activeFilePath: string | null;
   width: number;
   onOpenFile: (path: string, name: string, selection?: { line: number; column?: number }) => void;
-  remote?: {
-    connection: SshConnection;
-    projectPath: string;
-  };
+  remote?: RemoteProjectTarget;
 }) {
   const { t } = useI18n();
   const isRemote = Boolean(remote);
   const gitCommandContext = useMemo(
-    () =>
-      remote
-        ? { connection: remote.connection, remoteProjectPath: remote.projectPath }
-        : { projectPath },
+    () => (remote ? targetProjectArgs(remote) : { projectPath }),
     [projectPath, remote],
   );
   const gitCommandName = useCallback(
-    (command: string) => (isRemote ? `remote_${command}` : command),
-    [isRemote],
+    (command: string) => {
+      if (remote?.kind === "ssh") return `remote_${command}`;
+      if (remote?.kind === "wsl") return `wsl_${command}`;
+      return command;
+    },
+    [remote],
   );
   const invokeGitCommand = useCallback(
     async <T,>(command: string, args: Record<string, unknown>): Promise<T> => {

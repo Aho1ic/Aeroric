@@ -230,6 +230,8 @@ describe("SSH project opening", () => {
           themeVariant: "light",
           terminalFontSize: 11,
           monoFontFamily: "monospace",
+          layout: "full",
+          onLayoutChange: vi.fn(),
         }),
       ),
     );

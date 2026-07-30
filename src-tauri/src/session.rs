@@ -236,11 +236,13 @@ fn watch_codex_session(
 
     while is_task_active(&app, &task_id) {
         if let Ok(lines) = read_session_lines_since(&session_path, &mut offset, &mut partial) {
-            for line in lines {
+            // 手机远程:同批新行解析为结构化消息推送(无在线设备时零成本)
+            crate::remote::publish_session_appended(&app, &task_id, &lines, true);
+            for line in &lines {
                 process_codex_session_line(
                     &app,
                     &task_id,
-                    &line,
+                    line,
                     &project_path,
                     &mut waiting_for_user,
                     &mut pending_confirmation_calls,
@@ -615,8 +617,10 @@ fn watch_claude_session(app: AppHandle, task_id: String, session_path: PathBuf) 
 
     while is_task_active(&app, &task_id) {
         if let Ok(lines) = read_session_lines_since(&session_path, &mut offset, &mut partial) {
-            for line in lines {
-                process_claude_session_line(&app, &task_id, &line, &mut waiting_for_user);
+            // 手机远程:同批新行解析为结构化消息推送(无在线设备时零成本)
+            crate::remote::publish_session_appended(&app, &task_id, &lines, false);
+            for line in &lines {
+                process_claude_session_line(&app, &task_id, line, &mut waiting_for_user);
             }
         }
 
@@ -965,7 +969,11 @@ fn recover_session(
         .map(|(_, recovered)| recovered)
 }
 
-fn parse_session_lines(lines: &[String], is_codex: bool, messages: &mut Vec<SessionMessage>) {
+pub(crate) fn parse_session_lines(
+    lines: &[String],
+    is_codex: bool,
+    messages: &mut Vec<SessionMessage>,
+) {
     for line in lines {
         parse_session_line(line, is_codex, messages);
     }
