@@ -4,16 +4,8 @@
  */
 
 import { Stack, useLocalSearchParams } from "expo-router";
-import { useCallback, useState } from "react";
-import {
-  Alert,
-  KeyboardAvoidingView,
-  Platform,
-  Pressable,
-  StyleSheet,
-  Text,
-  View,
-} from "react-native";
+import { useCallback, useRef, useState } from "react";
+import { Alert, Pressable, StyleSheet, Text, View } from "react-native";
 import { ChangesPane } from "../../src/changes/ChangesPane";
 import { t } from "../../src/i18n";
 import { SessionPane } from "../../src/session/SessionPane";
@@ -23,6 +15,7 @@ import { TerminalPane } from "../../src/terminal/TerminalPane";
 import { taskAcceptsInput } from "../../src/types";
 import { taskStatusMeta } from "../../src/ui/task-status";
 import { theme } from "../../src/ui/theme";
+import { useKeyboardInset } from "../../src/ui/use-keyboard-inset";
 
 type TabKey = "session" | "terminal" | "changes";
 
@@ -33,11 +26,22 @@ export default function TaskDetailScreen() {
   const fallbackName = typeof params.name === "string" ? params.name : "";
   const { request } = useConnection();
   const { task, error, refresh } = useTaskDetail(projectId, taskId);
-  const [tab, setTab] = useState<TabKey>("session");
+  // Session/Terminal 融合:运行中默认看终端,结束后默认看会话;
+  // 用户手动点过 tab 后不再自动切换。
+  const [tab, setTabState] = useState<TabKey | null>(null);
+  const userPickedRef = useRef(false);
   const [acting, setActing] = useState(false);
+
+  const setTab = useCallback((key: TabKey) => {
+    userPickedRef.current = true;
+    setTabState(key);
+  }, []);
 
   const statusMeta = task ? taskStatusMeta(task.status) : null;
   const active = task ? taskAcceptsInput(task.status) : false;
+  const autoTab: TabKey = active ? "terminal" : "session";
+  const effectiveTab: TabKey = tab ?? autoTab;
+
   const title =
     task?.name?.trim() || task?.prompt.trim().split("\n")[0] || fallbackName || t("common.task");
 
@@ -85,12 +89,10 @@ export default function TaskDetailScreen() {
     Alert.alert(title, statusMeta ? t("task.currentStatus", { label: statusMeta.label }) : undefined, buttons);
   }, [active, runLifecycle, statusMeta, task, title]);
 
+  const keyboardInset = useKeyboardInset();
+
   return (
-    <KeyboardAvoidingView
-      style={styles.screen}
-      behavior={Platform.OS === "ios" ? "padding" : undefined}
-      keyboardVerticalOffset={Platform.OS === "ios" ? 88 : 0}
-    >
+    <View style={[styles.screen, { paddingBottom: keyboardInset }]}>
       <Stack.Screen
         options={{
           title,
@@ -121,27 +123,34 @@ export default function TaskDetailScreen() {
           ).map(([key, label]) => (
             <Pressable
               key={key}
-              style={[styles.tabButton, tab === key && styles.tabButtonActive]}
+              style={[styles.tabButton, effectiveTab === key && styles.tabButtonActive]}
               onPress={() => setTab(key)}
             >
-              <Text style={[styles.tabText, tab === key && styles.tabTextActive]}>{label}</Text>
+              <Text style={[styles.tabText, effectiveTab === key && styles.tabTextActive]}>
+                {label}
+              </Text>
             </Pressable>
           ))}
         </View>
       </View>
 
-      <View style={[styles.paneWrap, tab !== "session" && styles.paneHidden]}>
+      <View style={[styles.paneWrap, effectiveTab !== "session" && styles.paneHidden]}>
         {task ? (
-          <SessionPane projectId={projectId} task={task} active={tab === "session"} canSend={active} />
+          <SessionPane
+            projectId={projectId}
+            task={task}
+            active={effectiveTab === "session"}
+            canSend={active}
+          />
         ) : null}
       </View>
-      <View style={[styles.paneWrap, tab !== "terminal" && styles.paneHidden]}>
-        <TerminalPane taskId={taskId} active={tab === "terminal"} />
+      <View style={[styles.paneWrap, effectiveTab !== "terminal" && styles.paneHidden]}>
+        <TerminalPane taskId={taskId} active={effectiveTab === "terminal"} />
       </View>
-      <View style={[styles.paneWrap, tab !== "changes" && styles.paneHidden]}>
-        <ChangesPane projectId={projectId} taskId={taskId} active={tab === "changes"} />
+      <View style={[styles.paneWrap, effectiveTab !== "changes" && styles.paneHidden]}>
+        <ChangesPane projectId={projectId} taskId={taskId} active={effectiveTab === "changes"} />
       </View>
-    </KeyboardAvoidingView>
+    </View>
   );
 }
 
@@ -162,12 +171,13 @@ const styles = StyleSheet.create({
   statusText: { fontSize: 12.5, color: theme.textSecondary, flex: 1 },
   tabSwitch: {
     flexDirection: "row",
+    flexShrink: 0,
     backgroundColor: theme.bgElevated,
     borderRadius: 8,
     padding: 2,
     gap: 2,
   },
-  tabButton: { paddingHorizontal: 14, paddingVertical: 5, borderRadius: 6 },
+  tabButton: { paddingHorizontal: 12, paddingVertical: 5, borderRadius: 6 },
   tabButtonActive: { backgroundColor: theme.accent },
   tabText: { color: theme.textSecondary, fontSize: 13, fontWeight: "600" },
   tabTextActive: { color: "#fff" },

@@ -8,6 +8,7 @@ export const theme = {
   textSecondary: "#9198a1",
   textHint: "#656d76",
   accent: "#4493f8",
+  info: "#1f6feb",
   success: "#3fb950",
   warning: "#d29922",
   danger: "#f85149",

@@ -1,5 +1,5 @@
 import { Link, Stack, router, useFocusEffect } from "expo-router";
-import { useCallback, useMemo } from "react";
+import { useCallback, useMemo, useState } from "react";
 import {
   Pressable,
   RefreshControl,
@@ -106,6 +106,17 @@ function EmptyState({ hasHosts }: { hasHosts: boolean }) {
 export default function TaskDashboard() {
   const { ready, hosts, activeHost } = useHosts();
   const { sections, loading, error, refresh } = useHostTasks();
+  // 项目默认全部折叠;expanded 记录用户点开的项目 id
+  const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set());
+
+  const toggleProject = useCallback((projectId: string) => {
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(projectId)) next.delete(projectId);
+      else next.add(projectId);
+      return next;
+    });
+  }, []);
 
   // 从新建/详情页返回时同步一次(推送覆盖大多数场景,这里兜底)
   useFocusEffect(
@@ -118,14 +129,25 @@ export default function TaskDashboard() {
     () =>
       sections
         .filter((s: ProjectTasks) => s.tasks.length > 0)
-        .map((s: ProjectTasks) => ({
-          key: s.project.id,
-          title: s.project.name,
-          data: [...s.tasks].sort(
-            (a, b) => taskStatusRank(a.status) - taskStatusRank(b.status) || b.createdAt - a.createdAt,
-          ),
-        })),
-    [sections],
+        .map((s: ProjectTasks) => {
+          const isExpanded = expanded.has(s.project.id);
+          return {
+            key: s.project.id,
+            projectId: s.project.id,
+            title: s.project.name,
+            taskCount: s.tasks.length,
+            needsInput: s.tasks.some((task) => task.status === "input_required"),
+            isExpanded,
+            data: isExpanded
+              ? [...s.tasks].sort(
+                  (a, b) =>
+                    taskStatusRank(a.status) - taskStatusRank(b.status) ||
+                    b.createdAt - a.createdAt,
+                )
+              : [],
+          };
+        }),
+    [expanded, sections],
   );
 
   if (!ready) return <View style={styles.screen} />;
@@ -160,7 +182,25 @@ export default function TaskDashboard() {
         keyExtractor={(item) => item.id}
         renderItem={({ item }) => <TaskRow task={item} />}
         renderSectionHeader={({ section }) => (
-          <Text style={styles.sectionHeader}>{section.title}</Text>
+          <Pressable
+            style={({ pressed }) => [styles.sectionHeader, pressed && styles.sectionHeaderPressed]}
+            accessibilityRole="button"
+            accessibilityLabel={
+              section.isExpanded
+                ? t("home.collapseProject", { name: section.title })
+                : t("home.expandProject", { name: section.title })
+            }
+            onPress={() => toggleProject(section.projectId)}
+          >
+            <Text style={styles.sectionChevron}>{section.isExpanded ? "▾" : "▸"}</Text>
+            <Text style={styles.sectionTitle} numberOfLines={1}>
+              {section.title}
+            </Text>
+            {!section.isExpanded && section.needsInput ? (
+              <View style={styles.sectionAttentionDot} />
+            ) : null}
+            <Text style={styles.sectionCount}>{section.taskCount}</Text>
+          </Pressable>
         )}
         ListEmptyComponent={<EmptyState hasHosts={hosts.length > 0} />}
         contentContainerStyle={listSections.length === 0 ? styles.listEmpty : styles.list}
@@ -198,13 +238,43 @@ const styles = StyleSheet.create({
   list: { paddingBottom: 32 },
   listEmpty: { flexGrow: 1, justifyContent: "center" },
   sectionHeader: {
-    fontSize: 12,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    marginHorizontal: 12,
+    marginTop: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 11,
+    backgroundColor: theme.bgCard,
+    borderRadius: 10,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: theme.border,
+  },
+  sectionHeaderPressed: { opacity: 0.7 },
+  sectionChevron: { color: theme.textSecondary, fontSize: 12, width: 14 },
+  sectionTitle: {
+    flex: 1,
+    fontSize: 13.5,
     fontWeight: "700",
+    color: theme.text,
+  },
+  sectionAttentionDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: theme.warning,
+  },
+  sectionCount: {
+    minWidth: 22,
+    textAlign: "center",
+    fontSize: 11.5,
+    fontWeight: "600",
     color: theme.textSecondary,
-    paddingHorizontal: 16,
-    paddingTop: 18,
-    paddingBottom: 6,
-    textTransform: "uppercase",
+    backgroundColor: theme.bgElevated,
+    borderRadius: 9,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    overflow: "hidden",
   },
   taskRow: {
     flexDirection: "row",

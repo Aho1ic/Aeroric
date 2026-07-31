@@ -6,11 +6,11 @@ import { theme } from "./theme";
 const STATUS_COLOR: Record<TaskStatus, string> = {
   todo: theme.textHint,
   pending: theme.accent,
-  running: theme.accent,
+  running: theme.success,
   input_required: theme.warning,
   detached: theme.purple,
   interrupted: theme.warning,
-  done: theme.success,
+  done: theme.info,
   failed: theme.danger,
   cancelled: theme.textHint,
 };

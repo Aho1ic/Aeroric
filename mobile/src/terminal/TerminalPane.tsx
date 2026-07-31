@@ -43,6 +43,8 @@ export function TerminalPane({ taskId, active }: { taskId: string; active: boole
   const ctrlArmedRef = useRef(false);
   const autoFitDoneRef = useRef(false);
   const liveRef = useRef(false);
+  const wrapHeightRef = useRef(0);
+  const refitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const injectTerm = useCallback((msg: Record<string, unknown>) => {
     webviewRef.current?.injectJavaScript(
@@ -195,6 +197,25 @@ export function TerminalPane({ taskId, active }: { taskId: string; active: boole
     if (text) sendInput(text);
   }, [sendInput]);
 
+  // 键盘弹出/收起等导致终端区域高度变化时,运行中的任务自动重新适配
+  const handleWrapLayout = useCallback(
+    (event: { nativeEvent: { layout: { height: number } } }) => {
+      const height = event.nativeEvent.layout.height;
+      const prev = wrapHeightRef.current;
+      wrapHeightRef.current = height;
+      if (prev === 0 || Math.abs(prev - height) < 2 || !liveRef.current) return;
+      if (refitTimerRef.current) clearTimeout(refitTimerRef.current);
+      refitTimerRef.current = setTimeout(() => injectTerm({ type: "fit" }), 150);
+    },
+    [injectTerm],
+  );
+
+  useEffect(() => {
+    return () => {
+      if (refitTimerRef.current) clearTimeout(refitTimerRef.current);
+    };
+  }, []);
+
   const toolbarKeys: Array<{ label: string; onPress: () => void; active?: boolean }> = [
     { label: "Esc", onPress: () => sendInput("\x1b") },
     { label: "Tab", onPress: () => sendInput("\t") },
@@ -225,7 +246,7 @@ export function TerminalPane({ taskId, active }: { taskId: string; active: boole
         <Text style={styles.notice}>{t("term.disconnected")}</Text>
       ) : null}
       {streamError ? <Text style={styles.noticeError}>{streamError}</Text> : null}
-      <View style={styles.terminalWrap}>
+      <View style={styles.terminalWrap} onLayout={handleWrapLayout}>
         <WebView
           ref={webviewRef}
           source={{ html: TERMINAL_HTML }}
@@ -288,8 +309,10 @@ const styles = StyleSheet.create({
   },
   toolbarContent: { paddingHorizontal: 8, paddingVertical: 8, gap: 6 },
   key: {
-    paddingHorizontal: 13,
-    paddingVertical: 8,
+    minHeight: 40,
+    justifyContent: "center",
+    paddingHorizontal: 14,
+    paddingVertical: 9,
     borderRadius: 8,
     backgroundColor: theme.bgElevated,
     borderWidth: StyleSheet.hairlineWidth,

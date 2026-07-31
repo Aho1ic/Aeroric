@@ -49,6 +49,8 @@ const zh = {
   "home.pairNow": "扫码配对",
   "home.emptyTasks": "还没有任务。在电脑端创建任务后,这里会实时显示状态。",
   "home.hostsFallback": "主机",
+  "home.expandProject": "展开项目 {name}",
+  "home.collapseProject": "折叠项目 {name}",
 
   // 配对
   "pair.steps": "电脑端:Aeroric 设置 → 远程访问 → 启动远程服务 → 生成配对二维码",
@@ -189,6 +191,8 @@ const en: Record<MessageKey, string> = {
   "home.pairNow": "Scan to pair",
   "home.emptyTasks": "No tasks yet. Create one on the desktop and its status will appear here live.",
   "home.hostsFallback": "Hosts",
+  "home.expandProject": "Expand project {name}",
+  "home.collapseProject": "Collapse project {name}",
 
   "pair.steps":
     "On your computer: Aeroric Settings → Remote Access → start the server → generate the pairing QR code",
