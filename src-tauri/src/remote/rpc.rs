@@ -29,6 +29,8 @@ pub async fn dispatch<R: Runtime>(
         "hello" => hello(app),
         "events.since" => events_since(app, &params),
         "agents.list" => tasks_rpc::agents_list().await,
+        "agents.models" => tasks_rpc::agents_models(&params).await,
+        "stats.summary" => tasks_rpc::stats_summary().await,
         "projects.list" => projects_list().await,
         "tasks.list" => tasks_list(app, params).await,
         "tasks.get" => tasks_get(app, params).await,

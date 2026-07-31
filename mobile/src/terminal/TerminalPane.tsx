@@ -9,8 +9,15 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { WebView, type WebViewMessageEvent } from "react-native-webview";
 import * as Clipboard from "expo-clipboard";
+import { ChevronsDownUp, ClipboardPaste, Monitor, Smartphone } from "lucide-react-native";
 import { t } from "../i18n";
 import { useConnection } from "../state/connection-context";
+import {
+  REPEAT_DELAY_MS,
+  REPEAT_INTERVAL_MS,
+  TERMINAL_ACCESSORY_KEYS,
+  type TerminalAccessoryKey,
+} from "./accessory-keys";
 import {
   decodeTerminalFrame,
   encodeTerminalFrame,
@@ -21,7 +28,7 @@ import {
   textPayload,
 } from "./terminal-frames";
 import { TERMINAL_HTML } from "./terminal-html.generated";
-import { theme } from "../ui/theme";
+import { radii, spacing, theme, typography } from "../ui/theme";
 
 // streamId 连接内唯一即可;模块级递增避免屏幕快速开关时撞号
 let nextStreamId = 1;
@@ -39,12 +46,19 @@ export function TerminalPane({ taskId, active }: { taskId: string; active: boole
   const [webReady, setWebReady] = useState(false);
   const [streamError, setStreamError] = useState<string | null>(null);
   const [, setFontSize] = useState(13);
-  const [ctrlArmed, setCtrlArmed] = useState(false);
-  const ctrlArmedRef = useRef(false);
+  const [imeFocused, setImeFocused] = useState(false);
+  const [viewMode, setViewMode] = useState<"phone" | "desktop">("phone");
+  /** 入站帧回调注册后不再重建,靠 ref 读取最新视图模式。 */
+  const viewModeRef = useRef<"phone" | "desktop">("phone");
   const autoFitDoneRef = useRef(false);
   const liveRef = useRef(false);
+  const desktopSizeRef = useRef<{ cols: number; rows: number } | null>(null);
   const wrapHeightRef = useRef(0);
   const refitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const repeatTimersRef = useRef<{
+    timeout: ReturnType<typeof setTimeout> | null;
+    interval: ReturnType<typeof setInterval> | null;
+  }>({ timeout: null, interval: null });
 
   const injectTerm = useCallback((msg: Record<string, unknown>) => {
     webviewRef.current?.injectJavaScript(
@@ -55,21 +69,12 @@ export function TerminalPane({ taskId, active }: { taskId: string; active: boole
   const sendInput = useCallback(
     (data: string) => {
       if (!streamIdRef.current) return;
-      let payload = data;
-      if (ctrlArmedRef.current && data.length === 1) {
-        const code = data.toUpperCase().charCodeAt(0);
-        if (code >= 64 && code <= 95) {
-          payload = String.fromCharCode(code & 0x1f);
-        }
-        ctrlArmedRef.current = false;
-        setCtrlArmed(false);
-      }
       sendBinary(
         encodeTerminalFrame({
           opcode: TerminalOpcode.Input,
           streamId: streamIdRef.current,
           seq: 0,
-          payload: textPayload(payload),
+          payload: textPayload(data),
         }),
       );
     },
@@ -115,6 +120,8 @@ export function TerminalPane({ taskId, active }: { taskId: string; active: boole
           liveRef.current = meta?.live ?? false;
           injectTerm({ type: "reset" });
           if (meta?.cols && meta?.rows) {
+            // 记下桌面端尺寸,切「电脑视图」时用它还原
+            desktopSizeRef.current = { cols: meta.cols, rows: meta.rows };
             // 先按桌面端尺寸铺快照,避免 TUI 布局错乱
             injectTerm({ type: "resize", cols: meta.cols, rows: meta.rows });
           }
@@ -126,8 +133,8 @@ export function TerminalPane({ taskId, active }: { taskId: string; active: boole
           break;
         case TerminalOpcode.SnapshotEnd:
           injectTerm({ type: "scrollToBottom" });
-          // 运行中的任务:自动适配手机屏(SIGWINCH 触发 TUI 重绘)
-          if (liveRef.current && !autoFitDoneRef.current) {
+          // 运行中的任务:自动适配手机屏(SIGWINCH 触发 TUI 重绘);「电脑视图」下保持桌面尺寸
+          if (liveRef.current && !autoFitDoneRef.current && viewModeRef.current === "phone") {
             autoFitDoneRef.current = true;
             injectTerm({ type: "fit" });
           }
@@ -148,7 +155,13 @@ export function TerminalPane({ taskId, active }: { taskId: string; active: boole
 
   const handleWebMessage = useCallback(
     (event: WebViewMessageEvent) => {
-      let msg: { type?: string; data?: string; cols?: number; rows?: number };
+      let msg: {
+        type?: string;
+        data?: string;
+        cols?: number;
+        rows?: number;
+        focused?: boolean;
+      };
       try {
         msg = JSON.parse(event.nativeEvent.data);
       } catch {
@@ -160,6 +173,10 @@ export function TerminalPane({ taskId, active }: { taskId: string; active: boole
           break;
         case "input":
           if (typeof msg.data === "string") sendInput(msg.data);
+          break;
+        case "ime-focus":
+          // WebView 内隐藏 input 的 focus 状态,RN 的 Keyboard 事件覆盖不到
+          setImeFocused(!!msg.focused);
           break;
         case "fit-result":
           if (msg.cols && msg.rows && streamIdRef.current) {
@@ -210,41 +227,55 @@ export function TerminalPane({ taskId, active }: { taskId: string; active: boole
     [injectTerm],
   );
 
+  const stopRepeat = useCallback(() => {
+    const timers = repeatTimersRef.current;
+    if (timers.timeout) clearTimeout(timers.timeout);
+    if (timers.interval) clearInterval(timers.interval);
+    timers.timeout = null;
+    timers.interval = null;
+  }, []);
+
+  // 长按连发:首字符立即发出,REPEAT_DELAY_MS 后进入 REPEAT_INTERVAL_MS 的连发
+  const startRepeat = useCallback(
+    (key: TerminalAccessoryKey) => {
+      sendInput(key.bytes);
+      if (!key.repeatable) return;
+      stopRepeat();
+      repeatTimersRef.current.timeout = setTimeout(() => {
+        repeatTimersRef.current.interval = setInterval(
+          () => sendInput(key.bytes),
+          REPEAT_INTERVAL_MS,
+        );
+      }, REPEAT_DELAY_MS);
+    },
+    [sendInput, stopRepeat],
+  );
+
+  const toggleViewMode = useCallback(() => {
+    setViewMode((prev) => {
+      const next = prev === "phone" ? "desktop" : "phone";
+      viewModeRef.current = next;
+      const desktop = desktopSizeRef.current;
+      if (next === "desktop" && desktop) {
+        // 还原桌面端 cols/rows,靠 WebView 横向滚动看完整 TUI
+        injectTerm({ type: "resize", cols: desktop.cols, rows: desktop.rows });
+      } else {
+        injectTerm({ type: "fit" });
+      }
+      return next;
+    });
+  }, [injectTerm]);
+
   useEffect(() => {
     return () => {
       if (refitTimerRef.current) clearTimeout(refitTimerRef.current);
+      stopRepeat();
     };
-  }, []);
-
-  const toolbarKeys: Array<{ label: string; onPress: () => void; active?: boolean }> = [
-    { label: "Esc", onPress: () => sendInput("\x1b") },
-    { label: "Tab", onPress: () => sendInput("\t") },
-    {
-      label: "Ctrl",
-      active: ctrlArmed,
-      onPress: () => {
-        ctrlArmedRef.current = !ctrlArmedRef.current;
-        setCtrlArmed(ctrlArmedRef.current);
-      },
-    },
-    { label: "^C", onPress: () => sendInput("\x03") },
-    { label: "↑", onPress: () => sendInput("\x1b[A") },
-    { label: "↓", onPress: () => sendInput("\x1b[B") },
-    { label: "←", onPress: () => sendInput("\x1b[D") },
-    { label: "→", onPress: () => sendInput("\x1b[C") },
-    { label: "⏎", onPress: () => sendInput("\r") },
-    { label: t("term.paste"), onPress: () => void pasteFromClipboard() },
-    { label: "A-", onPress: () => adjustFont(-1) },
-    { label: "A+", onPress: () => adjustFont(1) },
-    { label: t("term.fit"), onPress: () => injectTerm({ type: "fit" }) },
-    { label: t("term.keyboard"), onPress: () => injectTerm({ type: "focus" }) },
-  ];
+  }, [stopRepeat]);
 
   return (
     <View style={styles.screen}>
-      {status !== "online" ? (
-        <Text style={styles.notice}>{t("term.disconnected")}</Text>
-      ) : null}
+      {status !== "online" ? <Text style={styles.notice}>{t("term.disconnected")}</Text> : null}
       {streamError ? <Text style={styles.noticeError}>{streamError}</Text> : null}
       <View style={styles.terminalWrap} onLayout={handleWrapLayout}>
         <WebView
@@ -262,23 +293,72 @@ export function TerminalPane({ taskId, active }: { taskId: string; active: boole
           containerStyle={styles.webview}
         />
       </View>
-      <ScrollView
-        horizontal
-        keyboardShouldPersistTaps="always"
-        showsHorizontalScrollIndicator={false}
-        style={styles.toolbar}
-        contentContainerStyle={styles.toolbarContent}
-      >
-        {toolbarKeys.map((key) => (
-          <Pressable
-            key={key.label}
-            onPress={key.onPress}
-            style={[styles.key, key.active && styles.keyActive]}
+      <View style={styles.accessoryBar}>
+        <View style={styles.accessoryRow}>
+          {/* 固定在 ScrollView 外:开了输入法就是收起按钮,否则是手机/电脑视图切换 */}
+          {imeFocused ? (
+            <Pressable
+              onPress={() => injectTerm({ type: "blur" })}
+              accessibilityLabel={t("term.hideKeyboard")}
+              style={[styles.key, styles.keyPinned]}
+            >
+              <ChevronsDownUp size={17} color={theme.text} />
+            </Pressable>
+          ) : (
+            <Pressable
+              onPress={toggleViewMode}
+              accessibilityLabel={
+                viewMode === "phone" ? t("term.desktopView") : t("term.phoneView")
+              }
+              style={[styles.key, styles.keyPinned, viewMode === "desktop" && styles.keyActive]}
+            >
+              {viewMode === "phone" ? (
+                <Smartphone size={17} color={theme.text} />
+              ) : (
+                <Monitor size={17} color={theme.onAccent} />
+              )}
+            </Pressable>
+          )}
+          <ScrollView
+            horizontal
+            keyboardShouldPersistTaps="always"
+            showsHorizontalScrollIndicator={false}
+            style={styles.keyScroll}
+            contentContainerStyle={styles.keyScrollContent}
           >
-            <Text style={[styles.keyText, key.active && styles.keyTextActive]}>{key.label}</Text>
-          </Pressable>
-        ))}
-      </ScrollView>
+            <Pressable
+              onPress={() => void pasteFromClipboard()}
+              accessibilityLabel={t("term.paste")}
+              style={styles.key}
+            >
+              <ClipboardPaste size={16} color={theme.text} />
+              <Text style={styles.keyText}>{t("term.paste")}</Text>
+            </Pressable>
+            {TERMINAL_ACCESSORY_KEYS.map((key) => (
+              <Pressable
+                key={key.id}
+                onPressIn={() => startRepeat(key)}
+                onPressOut={stopRepeat}
+                style={styles.key}
+              >
+                <Text style={styles.keyText}>{key.label}</Text>
+              </Pressable>
+            ))}
+            <Pressable onPress={() => adjustFont(-1)} style={styles.key}>
+              <Text style={styles.keyText}>A-</Text>
+            </Pressable>
+            <Pressable onPress={() => adjustFont(1)} style={styles.key}>
+              <Text style={styles.keyText}>A+</Text>
+            </Pressable>
+          </ScrollView>
+        </View>
+        <Pressable style={styles.liveInputBar} onPress={() => injectTerm({ type: "focus" })}>
+          <Text style={styles.liveInputTitle}>{t("term.liveInput")}</Text>
+          <Text style={styles.liveInputDetail}>
+            {imeFocused ? t("term.hideKeyboard") : t("term.tapToShowKeyboard")}
+          </Text>
+        </Pressable>
+      </View>
     </View>
   );
 }
@@ -287,38 +367,60 @@ const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: theme.bg },
   notice: {
     color: theme.warning,
-    fontSize: 12,
-    paddingHorizontal: 12,
-    paddingVertical: 6,
+    fontSize: typography.metaSize,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.xs + 2,
     backgroundColor: theme.bgCard,
   },
   noticeError: {
     color: theme.danger,
-    fontSize: 12,
-    paddingHorizontal: 12,
-    paddingVertical: 6,
+    fontSize: typography.metaSize,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.xs + 2,
     backgroundColor: theme.bgCard,
   },
   terminalWrap: { flex: 1, backgroundColor: theme.bg },
   webview: { flex: 1, backgroundColor: theme.bg },
-  toolbar: {
-    flexGrow: 0,
+  accessoryBar: {
     borderTopWidth: StyleSheet.hairlineWidth,
     borderTopColor: theme.border,
     backgroundColor: theme.bgCard,
   },
-  toolbarContent: { paddingHorizontal: 8, paddingVertical: 8, gap: 6 },
+  accessoryRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.sm,
+    gap: spacing.xs + 2,
+  },
+  keyScroll: { flexGrow: 0, flexShrink: 1 },
+  keyScrollContent: { gap: spacing.xs + 2, alignItems: "center" },
   key: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.xs + 2,
     minHeight: 40,
-    justifyContent: "center",
-    paddingHorizontal: 14,
+    paddingHorizontal: spacing.md + 2,
     paddingVertical: 9,
-    borderRadius: 8,
+    borderRadius: radii.button,
     backgroundColor: theme.bgElevated,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: theme.border,
   },
+  keyPinned: { paddingHorizontal: spacing.md },
   keyActive: { backgroundColor: theme.accent, borderColor: theme.accent },
-  keyText: { color: theme.text, fontSize: 13.5, fontWeight: "600" },
-  keyTextActive: { color: "#fff" },
+  keyText: { color: theme.text, fontSize: typography.bodySize, fontWeight: "600" },
+  liveInputBar: {
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: theme.border,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.md,
+    gap: 1,
+  },
+  liveInputTitle: {
+    color: theme.text,
+    fontSize: typography.metaSize,
+    fontWeight: "600",
+  },
+  liveInputDetail: { color: theme.textSecondary, fontSize: typography.metaSize },
 });

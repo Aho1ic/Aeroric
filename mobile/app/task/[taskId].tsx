@@ -14,7 +14,7 @@ import { useTaskDetail } from "../../src/state/use-task-detail";
 import { TerminalPane } from "../../src/terminal/TerminalPane";
 import { taskAcceptsInput } from "../../src/types";
 import { taskStatusMeta } from "../../src/ui/task-status";
-import { theme } from "../../src/ui/theme";
+import { radii, theme } from "../../src/ui/theme";
 import { useKeyboardInset } from "../../src/ui/use-keyboard-inset";
 
 type TabKey = "session" | "terminal" | "changes";
@@ -167,17 +167,17 @@ const styles = StyleSheet.create({
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: theme.border,
   },
-  statusDot: { width: 8, height: 8, borderRadius: 4 },
+  statusDot: { width: 8, height: 8, borderRadius: radii.pill },
   statusText: { fontSize: 12.5, color: theme.textSecondary, flex: 1 },
   tabSwitch: {
     flexDirection: "row",
     flexShrink: 0,
     backgroundColor: theme.bgElevated,
-    borderRadius: 8,
+    borderRadius: radii.button,
     padding: 2,
     gap: 2,
   },
-  tabButton: { paddingHorizontal: 12, paddingVertical: 5, borderRadius: 6 },
+  tabButton: { paddingHorizontal: 12, paddingVertical: 5, borderRadius: radii.button - 2 },
   tabButtonActive: { backgroundColor: theme.accent },
   tabText: { color: theme.textSecondary, fontSize: 13, fontWeight: "600" },
   tabTextActive: { color: "#fff" },

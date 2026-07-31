@@ -1,21 +1,20 @@
+/**
+ * 首页:品牌头部 + 统计概览 + 项目列表(点击进项目页,右侧 ＋ 直接建任务)。
+ * 任务不再内嵌在首页,改由 app/project/[projectId].tsx 展示。
+ */
+
 import { Link, Stack, router, useFocusEffect } from "expo-router";
+import { Plus } from "lucide-react-native";
 import { useCallback, useMemo, useState } from "react";
-import {
-  Pressable,
-  RefreshControl,
-  SectionList,
-  StyleSheet,
-  Text,
-  View,
-} from "react-native";
+import { FlatList, Image, Pressable, RefreshControl, StyleSheet, Text, View } from "react-native";
+import { NewTaskSheet } from "../src/components/NewTaskSheet";
 import { t } from "../src/i18n";
 import { useConnection } from "../src/state/connection-context";
+import { useHostStats } from "../src/state/use-host-stats";
 import { useHosts } from "../src/state/hosts-context";
 import { useHostTasks, type ProjectTasks } from "../src/state/use-host-tasks";
-import type { Task } from "../src/types";
-import { relativeTime } from "../src/ui/relative-time";
-import { taskStatusMeta, taskStatusRank } from "../src/ui/task-status";
-import { theme } from "../src/ui/theme";
+import { formatCount, formatDuration } from "../src/ui/format-duration";
+import { radii, spacing, theme, typography } from "../src/ui/theme";
 
 function ConnectionBanner() {
   const { status, authError } = useConnection();
@@ -50,168 +49,177 @@ function ConnectionBanner() {
   );
 }
 
-function TaskRow({ task }: { task: Task }) {
-  const meta = taskStatusMeta(task.status);
-  const title = task.name?.trim() || task.prompt.trim().split("\n")[0] || t("home.unnamedTask");
-  const needsInput = task.status === "input_required";
+function StatCard({ value, label }: { value: string; label: string }) {
   return (
-    <Pressable
-      style={({ pressed }) => [
-        styles.taskRow,
-        needsInput && styles.taskRowAttention,
-        pressed && styles.taskRowPressed,
-      ]}
-      onPress={() =>
-        router.push({
-          pathname: "/task/[taskId]",
-          params: { taskId: task.id, projectId: task.projectId, name: title },
-        })
-      }
-    >
-      <View style={[styles.statusDot, { backgroundColor: meta.color }]} />
-      <View style={styles.taskBody}>
-        <Text style={styles.taskTitle} numberOfLines={1}>
-          {title}
-        </Text>
-        <Text style={styles.taskMeta} numberOfLines={1}>
-          <Text style={{ color: meta.color }}>{meta.label}</Text>
-          {`  ·  ${task.agent}  ·  ${relativeTime(task.createdAt)}`}
-        </Text>
-      </View>
-    </Pressable>
-  );
-}
-
-function EmptyState({ hasHosts }: { hasHosts: boolean }) {
-  if (!hasHosts) {
-    return (
-      <View style={styles.emptyWrap}>
-        <Text style={styles.emptyTitle}>Aeroric</Text>
-        <Text style={styles.emptyText}>{t("home.pairIntro")}</Text>
-        <Link href="/pair" asChild>
-          <Pressable style={styles.primaryButton}>
-            <Text style={styles.primaryButtonText}>{t("home.pairNow")}</Text>
-          </Pressable>
-        </Link>
-      </View>
-    );
-  }
-  return (
-    <View style={styles.emptyWrap}>
-      <Text style={styles.emptyText}>{t("home.emptyTasks")}</Text>
+    <View style={styles.statCard}>
+      <Text style={styles.statValue} numberOfLines={1}>
+        {value}
+      </Text>
+      <Text style={styles.statLabel} numberOfLines={1}>
+        {label}
+      </Text>
     </View>
   );
 }
 
-export default function TaskDashboard() {
+function ProjectCard({
+  section,
+  onNewTask,
+}: {
+  section: ProjectTasks;
+  onNewTask: (projectId: string) => void;
+}) {
+  const { project, tasks } = section;
+  const needsInput = tasks.some((task) => task.status === "input_required");
+  const initial = project.name.trim().charAt(0).toUpperCase() || "?";
+  return (
+    <Pressable
+      style={({ pressed }) => [styles.projectCard, pressed && styles.pressed]}
+      accessibilityRole="button"
+      accessibilityLabel={t("home.openProject", { name: project.name })}
+      onPress={() =>
+        router.push({
+          pathname: "/project/[projectId]",
+          params: { projectId: project.id, name: project.name },
+        })
+      }
+    >
+      <View style={styles.projectAvatar}>
+        <Text style={styles.projectAvatarText}>{initial}</Text>
+      </View>
+      <View style={styles.projectBody}>
+        <View style={styles.projectTitleRow}>
+          <Text style={styles.projectName} numberOfLines={1}>
+            {project.name}
+          </Text>
+          {needsInput ? <View style={styles.attentionDot} /> : null}
+        </View>
+        <Text style={styles.projectMeta} numberOfLines={1}>
+          {t("home.projectTaskCount", { count: tasks.length })}
+        </Text>
+      </View>
+      <Pressable
+        hitSlop={8}
+        style={({ pressed }) => [styles.addButton, pressed && styles.pressed]}
+        accessibilityRole="button"
+        accessibilityLabel={t("home.newTaskFor", { name: project.name })}
+        onPress={(e) => {
+          // 阻止冒泡到卡片,否则会同时导航进项目页
+          e.stopPropagation();
+          onNewTask(project.id);
+        }}
+      >
+        <Plus size={18} color={theme.text} strokeWidth={2.4} />
+      </Pressable>
+    </Pressable>
+  );
+}
+
+function PairPrompt() {
+  return (
+    <View style={styles.emptyWrap}>
+      <Image source={require("../assets/icon.png")} style={styles.emptyLogo} />
+      <Text style={styles.emptyTitle}>Aeroric</Text>
+      <Text style={styles.emptyText}>{t("home.pairIntro")}</Text>
+      <Link href="/pair" asChild>
+        <Pressable style={styles.primaryButton}>
+          <Text style={styles.primaryButtonText}>{t("home.pairNow")}</Text>
+        </Pressable>
+      </Link>
+    </View>
+  );
+}
+
+export default function HomeScreen() {
   const { ready, hosts, activeHost } = useHosts();
   const { sections, loading, error, refresh } = useHostTasks();
-  // 项目默认全部折叠;expanded 记录用户点开的项目 id
-  const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set());
-
-  const toggleProject = useCallback((projectId: string) => {
-    setExpanded((prev) => {
-      const next = new Set(prev);
-      if (next.has(projectId)) next.delete(projectId);
-      else next.add(projectId);
-      return next;
-    });
-  }, []);
+  const { stats, refresh: refreshStats } = useHostStats();
+  const [newTaskProjectId, setNewTaskProjectId] = useState<string | null>(null);
 
   // 从新建/详情页返回时同步一次(推送覆盖大多数场景,这里兜底)
   useFocusEffect(
     useCallback(() => {
       refresh();
-    }, [refresh]),
+      refreshStats();
+    }, [refresh, refreshStats]),
   );
 
-  const listSections = useMemo(
-    () =>
-      sections
-        .filter((s: ProjectTasks) => s.tasks.length > 0)
-        .map((s: ProjectTasks) => {
-          const isExpanded = expanded.has(s.project.id);
-          return {
-            key: s.project.id,
-            projectId: s.project.id,
-            title: s.project.name,
-            taskCount: s.tasks.length,
-            needsInput: s.tasks.some((task) => task.status === "input_required"),
-            isExpanded,
-            data: isExpanded
-              ? [...s.tasks].sort(
-                  (a, b) =>
-                    taskStatusRank(a.status) - taskStatusRank(b.status) ||
-                    b.createdAt - a.createdAt,
-                )
-              : [],
-          };
-        }),
-    [expanded, sections],
-  );
+  const onRefresh = useCallback(() => {
+    refresh();
+    refreshStats();
+  }, [refresh, refreshStats]);
 
   if (!ready) return <View style={styles.screen} />;
 
+  const hasHosts = hosts.length > 0;
+
   return (
     <View style={styles.screen}>
-      <Stack.Screen
-        options={{
-          headerRight: () =>
-            hosts.length > 0 ? (
-              <View style={styles.headerActions}>
-                <Link href="/new-task" asChild>
-                  <Pressable hitSlop={8}>
-                    <Text style={styles.headerNew}>＋</Text>
-                  </Pressable>
-                </Link>
-                <Link href="/hosts" asChild>
-                  <Pressable hitSlop={8}>
-                    <Text style={styles.headerAction}>
-                      {activeHost?.name ?? t("home.hostsFallback")}
-                    </Text>
-                  </Pressable>
-                </Link>
-              </View>
-            ) : null,
-        }}
-      />
-      {hosts.length > 0 ? <ConnectionBanner /> : null}
+      <Stack.Screen options={{ headerShown: false }} />
+      <View style={styles.brandBar}>
+        <Image source={require("../assets/icon.png")} style={styles.brandLogo} />
+        <Text style={styles.brandName}>Aeroric</Text>
+        <View style={styles.brandSpacer} />
+        {hasHosts ? (
+          <Link href="/hosts" asChild>
+            <Pressable hitSlop={8}>
+              <Text style={styles.headerAction}>{activeHost?.name ?? t("home.hostsFallback")}</Text>
+            </Pressable>
+          </Link>
+        ) : null}
+      </View>
+
+      {hasHosts ? <ConnectionBanner /> : null}
       {error ? <Text style={styles.errorText}>{error}</Text> : null}
-      <SectionList
-        sections={listSections}
-        keyExtractor={(item) => item.id}
-        renderItem={({ item }) => <TaskRow task={item} />}
-        renderSectionHeader={({ section }) => (
-          <Pressable
-            style={({ pressed }) => [styles.sectionHeader, pressed && styles.sectionHeaderPressed]}
-            accessibilityRole="button"
-            accessibilityLabel={
-              section.isExpanded
-                ? t("home.collapseProject", { name: section.title })
-                : t("home.expandProject", { name: section.title })
-            }
-            onPress={() => toggleProject(section.projectId)}
-          >
-            <Text style={styles.sectionChevron}>{section.isExpanded ? "▾" : "▸"}</Text>
-            <Text style={styles.sectionTitle} numberOfLines={1}>
-              {section.title}
-            </Text>
-            {!section.isExpanded && section.needsInput ? (
-              <View style={styles.sectionAttentionDot} />
-            ) : null}
-            <Text style={styles.sectionCount}>{section.taskCount}</Text>
-          </Pressable>
-        )}
-        ListEmptyComponent={<EmptyState hasHosts={hosts.length > 0} />}
-        contentContainerStyle={listSections.length === 0 ? styles.listEmpty : styles.list}
-        refreshControl={
-          <RefreshControl
-            refreshing={loading}
-            onRefresh={refresh}
-            tintColor={theme.textSecondary}
-          />
+
+      <FlatList
+        data={hasHosts ? sections : []}
+        keyExtractor={(item) => item.project.id}
+        renderItem={({ item }) => <ProjectCard section={item} onNewTask={setNewTaskProjectId} />}
+        ListHeaderComponent={
+          hasHosts ? (
+            <View>
+              {stats ? (
+                <View style={styles.statsRow}>
+                  <StatCard
+                    value={formatCount(stats.totalAgentsSpawned)}
+                    label={t("home.statAgents")}
+                  />
+                  <StatCard
+                    value={formatDuration(stats.agentTimeMs)}
+                    label={t("home.statAgentTime")}
+                  />
+                  <StatCard value={formatCount(stats.totalPRsCreated)} label={t("home.statPRs")} />
+                </View>
+              ) : null}
+              {sections.length > 0 ? (
+                <Text style={styles.sectionLabel}>{t("home.projects")}</Text>
+              ) : null}
+            </View>
+          ) : null
         }
-        stickySectionHeadersEnabled={false}
+        ListEmptyComponent={
+          hasHosts ? (
+            <View style={styles.emptyWrap}>
+              <Text style={styles.emptyText}>{t("home.emptyProjects")}</Text>
+            </View>
+          ) : (
+            <PairPrompt />
+          )
+        }
+        contentContainerStyle={
+          hasHosts && sections.length > 0 ? styles.list : styles.listEmpty
+        }
+        refreshControl={
+          <RefreshControl refreshing={loading} onRefresh={onRefresh} tintColor={theme.textSecondary} />
+        }
+      />
+
+      <NewTaskSheet
+        visible={newTaskProjectId !== null}
+        lockedProjectId={newTaskProjectId ?? undefined}
+        onClose={() => setNewTaskProjectId(null)}
+        onCreated={onRefresh}
       />
     </View>
   );
@@ -219,92 +227,114 @@ export default function TaskDashboard() {
 
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: theme.bg },
+  brandBar: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+    paddingHorizontal: spacing.lg,
+    paddingTop: 56,
+    paddingBottom: spacing.md,
+  },
+  brandLogo: { width: 26, height: 26, borderRadius: radii.button - 3 },
+  brandName: { color: theme.text, fontSize: 20, fontWeight: "700" },
+  brandSpacer: { flex: 1 },
   banner: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 8,
-    paddingHorizontal: 16,
-    paddingVertical: 8,
+    gap: spacing.sm,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.sm,
     backgroundColor: theme.bgCard,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: theme.border,
   },
-  bannerDot: { width: 8, height: 8, borderRadius: 4 },
+  bannerDot: { width: 8, height: 8, borderRadius: radii.pill },
   bannerText: { fontSize: 12.5, flex: 1 },
   bannerAction: { fontSize: 12.5, color: theme.accent, fontWeight: "600" },
-  headerAction: { color: theme.accent, fontSize: 14, fontWeight: "600" },
-  headerActions: { flexDirection: "row", alignItems: "center", gap: 16 },
-  headerNew: { color: theme.accent, fontSize: 22, fontWeight: "600", marginTop: -2 },
+  headerAction: { color: theme.accent, fontSize: typography.bodySize, fontWeight: "600" },
   list: { paddingBottom: 32 },
   listEmpty: { flexGrow: 1, justifyContent: "center" },
-  sectionHeader: {
+  statsRow: {
     flexDirection: "row",
-    alignItems: "center",
-    gap: 8,
-    marginHorizontal: 12,
-    marginTop: 10,
-    paddingHorizontal: 12,
-    paddingVertical: 11,
-    backgroundColor: theme.bgCard,
-    borderRadius: 10,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: theme.border,
+    gap: spacing.sm,
+    paddingHorizontal: spacing.md,
+    paddingTop: spacing.md,
   },
-  sectionHeaderPressed: { opacity: 0.7 },
-  sectionChevron: { color: theme.textSecondary, fontSize: 12, width: 14 },
-  sectionTitle: {
+  statCard: {
     flex: 1,
-    fontSize: 13.5,
-    fontWeight: "700",
-    color: theme.text,
-  },
-  sectionAttentionDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    backgroundColor: theme.warning,
-  },
-  sectionCount: {
-    minWidth: 22,
-    textAlign: "center",
-    fontSize: 11.5,
-    fontWeight: "600",
-    color: theme.textSecondary,
-    backgroundColor: theme.bgElevated,
-    borderRadius: 9,
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    overflow: "hidden",
-  },
-  taskRow: {
-    flexDirection: "row",
     alignItems: "center",
-    gap: 10,
-    marginHorizontal: 12,
-    marginVertical: 3,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
+    gap: 3,
+    paddingVertical: spacing.md,
+    paddingHorizontal: spacing.xs,
     backgroundColor: theme.bgCard,
-    borderRadius: 10,
+    borderRadius: radii.row,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: theme.border,
   },
-  taskRowAttention: { borderColor: theme.warning, borderWidth: 1 },
-  taskRowPressed: { opacity: 0.7 },
-  statusDot: { width: 9, height: 9, borderRadius: 4.5 },
-  taskBody: { flex: 1, gap: 2 },
-  taskTitle: { color: theme.text, fontSize: 14.5, fontWeight: "600" },
-  taskMeta: { color: theme.textHint, fontSize: 12 },
+  statValue: { color: theme.text, fontSize: typography.titleSize, fontWeight: "700" },
+  statLabel: { color: theme.textSecondary, fontSize: typography.labelSize, fontWeight: "500" },
+  sectionLabel: {
+    color: theme.textSecondary,
+    fontSize: typography.metaSize,
+    fontWeight: "700",
+    paddingHorizontal: spacing.lg,
+    paddingTop: spacing.xl,
+    paddingBottom: spacing.sm,
+  },
+  projectCard: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.md,
+    marginHorizontal: spacing.md,
+    marginVertical: spacing.xs,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.md,
+    backgroundColor: theme.bgCard,
+    borderRadius: radii.card,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: theme.border,
+  },
+  pressed: { opacity: 0.7 },
+  projectAvatar: {
+    width: 36,
+    height: 36,
+    borderRadius: radii.button,
+    backgroundColor: theme.bgElevated,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  projectAvatarText: { color: theme.text, fontSize: 15, fontWeight: "700" },
+  projectBody: { flex: 1, gap: 2 },
+  projectTitleRow: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
+  projectName: { color: theme.text, fontSize: 15, fontWeight: "600", flexShrink: 1 },
+  attentionDot: { width: 8, height: 8, borderRadius: radii.pill, backgroundColor: theme.warning },
+  projectMeta: { color: theme.textHint, fontSize: typography.metaSize },
+  addButton: {
+    width: 34,
+    height: 34,
+    borderRadius: radii.button,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: theme.bgElevated,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: theme.border,
+  },
   emptyWrap: { alignItems: "center", paddingHorizontal: 32, gap: 14 },
+  emptyLogo: { width: 64, height: 64, borderRadius: radii.card },
   emptyTitle: { color: theme.text, fontSize: 26, fontWeight: "700" },
   emptyText: { color: theme.textSecondary, fontSize: 13.5, lineHeight: 21, textAlign: "center" },
   primaryButton: {
     backgroundColor: theme.accent,
-    borderRadius: 10,
+    borderRadius: radii.button,
     paddingHorizontal: 26,
     paddingVertical: 12,
     marginTop: 6,
   },
-  primaryButtonText: { color: "#fff", fontSize: 15, fontWeight: "600" },
-  errorText: { color: theme.danger, fontSize: 12, paddingHorizontal: 16, paddingTop: 8 },
+  primaryButtonText: { color: theme.onAccent, fontSize: 15, fontWeight: "600" },
+  errorText: {
+    color: theme.danger,
+    fontSize: typography.metaSize,
+    paddingHorizontal: spacing.lg,
+    paddingTop: spacing.sm,
+  },
 });

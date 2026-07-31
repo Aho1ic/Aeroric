@@ -1,6 +1,6 @@
 /**
- * RN 端极简 i18n:系统语言检测(Intl,Hermes 内建)+ en/zh 字典 + {var} 插值。
- * 纯 TS 无 RN 依赖,vitest 直测;语言在 App 启动时确定(跟随系统,无运行时切换)。
+ * RN 端极简 i18n:en/zh 字典 + {var} 插值。界面固定中文(不跟随系统 locale)。
+ * 纯 TS 无 RN 依赖,vitest 直测;en 字典保留供 setLanguage 与测试使用。
  * 新增用户可见文案必须同时补 en 与 zh(与桌面端约定一致)。
  */
 
@@ -47,10 +47,20 @@ const zh = {
   "home.pairIntro":
     "在电脑端打开 设置 → 远程访问,启动远程服务并生成配对二维码,然后用手机扫码连接。",
   "home.pairNow": "扫码配对",
-  "home.emptyTasks": "还没有任务。在电脑端创建任务后,这里会实时显示状态。",
   "home.hostsFallback": "主机",
-  "home.expandProject": "展开项目 {name}",
-  "home.collapseProject": "折叠项目 {name}",
+  "home.statAgents": "已启动 Agent",
+  "home.statAgentTime": "Agent 时长",
+  "home.statPRs": "PR 数量",
+  "home.projects": "项目",
+  "home.emptyProjects": "桌面端还没有项目。在电脑端添加项目后,这里会显示。",
+  "home.projectTaskCount": "{count} 个任务",
+  "home.newTaskFor": "在项目 {name} 中新建任务",
+  "home.openProject": "打开项目 {name}",
+
+  // 项目页
+  "project.empty": "该项目还没有任务。",
+  "project.browseFiles": "浏览文件",
+  "project.viewChanges": "查看变更",
 
   // 配对
   "pair.steps": "电脑端:Aeroric 设置 → 远程访问 → 启动远程服务 → 生成配对二维码",
@@ -94,9 +104,15 @@ const zh = {
   "newTask.sentBody": "任务已提交到桌面端执行,列表稍候会显示新任务。",
   "newTask.ok": "好",
   "newTask.createFailed": "创建失败",
-  "perm.ask": "每次询问",
+  "newTask.agent": "Agent",
+  "newTask.model": "模型",
+  "newTask.modelAuto": "默认",
+  "newTask.modelsLoading": "正在获取模型列表…",
+  "newTask.modelsUnavailable": "该 agent 未提供可选模型,将使用默认模型。",
+  "newTask.cancel": "取消",
+  "perm.ask": "请求确认",
   "perm.ask.hint": "工具调用逐一确认,最稳妥",
-  "perm.auto_edit": "自动编辑",
+  "perm.auto_edit": "替我审批",
   "perm.auto_edit.hint": "允许自动改文件,命令仍需确认",
   "perm.full_access": "完全访问",
   "perm.full_access.hint": "全自动执行,不再询问",
@@ -132,9 +148,12 @@ const zh = {
 
   // 终端 tab
   "term.paste": "粘贴",
-  "term.fit": "适配",
-  "term.keyboard": "键盘",
   "term.disconnected": "连接已断开,恢复后将自动重新同步终端…",
+  "term.liveInput": "实时输入",
+  "term.tapToShowKeyboard": "点击唤起键盘",
+  "term.hideKeyboard": "收起输入法",
+  "term.phoneView": "手机视图",
+  "term.desktopView": "电脑视图",
 
   // 变更(diff)
   "changes.empty": "工作区没有未提交的变更。",
@@ -189,10 +208,19 @@ const en: Record<MessageKey, string> = {
   "home.pairIntro":
     "On your computer, open Settings → Remote Access, start the server and generate the pairing QR code, then scan it here.",
   "home.pairNow": "Scan to pair",
-  "home.emptyTasks": "No tasks yet. Create one on the desktop and its status will appear here live.",
   "home.hostsFallback": "Hosts",
-  "home.expandProject": "Expand project {name}",
-  "home.collapseProject": "Collapse project {name}",
+  "home.statAgents": "Agents spawned",
+  "home.statAgentTime": "Agent time",
+  "home.statPRs": "PRs created",
+  "home.projects": "Projects",
+  "home.emptyProjects": "No projects on the desktop yet — add one there and it will show up here.",
+  "home.projectTaskCount": "{count} tasks",
+  "home.newTaskFor": "New task in project {name}",
+  "home.openProject": "Open project {name}",
+
+  "project.empty": "No tasks in this project yet.",
+  "project.browseFiles": "Browse files",
+  "project.viewChanges": "View changes",
 
   "pair.steps":
     "On your computer: Aeroric Settings → Remote Access → start the server → generate the pairing QR code",
@@ -237,6 +265,12 @@ const en: Record<MessageKey, string> = {
   "newTask.sentBody": "Task submitted to the desktop — it will appear in the list shortly.",
   "newTask.ok": "OK",
   "newTask.createFailed": "Create failed",
+  "newTask.agent": "Agent",
+  "newTask.model": "Model",
+  "newTask.modelAuto": "Default",
+  "newTask.modelsLoading": "Loading models…",
+  "newTask.modelsUnavailable": "This agent exposes no model choices — the default will be used.",
+  "newTask.cancel": "Cancel",
   "perm.ask": "Ask every time",
   "perm.ask.hint": "Confirm each tool call — safest",
   "perm.auto_edit": "Auto edit",
@@ -272,9 +306,12 @@ const en: Record<MessageKey, string> = {
   "session.send": "Send",
 
   "term.paste": "Paste",
-  "term.fit": "Fit",
-  "term.keyboard": "Keyboard",
   "term.disconnected": "Connection lost — the terminal will resync automatically…",
+  "term.liveInput": "Live input",
+  "term.tapToShowKeyboard": "Tap to show keyboard",
+  "term.hideKeyboard": "Hide keyboard",
+  "term.phoneView": "Phone view",
+  "term.desktopView": "Desktop view",
 
   "changes.empty": "No uncommitted changes in the working tree.",
   "changes.unavailable.ssh": "View changes for SSH projects on the desktop.",
@@ -290,16 +327,8 @@ const en: Record<MessageKey, string> = {
 
 const dictionaries: Record<Language, Record<MessageKey, string>> = { en, zh };
 
-function detectLanguage(): Language {
-  try {
-    const locale = Intl.DateTimeFormat().resolvedOptions().locale ?? "";
-    return /^zh(\b|-)/i.test(locale) ? "zh" : "en";
-  } catch {
-    return "en";
-  }
-}
-
-let currentLanguage: Language = detectLanguage();
+// 界面锁定中文(不再跟随系统 locale);en 字典保留,供 setLanguage 与测试使用。
+let currentLanguage: Language = "zh";
 
 export function getLanguage(): Language {
   return currentLanguage;

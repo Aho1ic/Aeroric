@@ -9,7 +9,7 @@ import { FlatList, Pressable, StyleSheet, Text, View } from "react-native";
 import { t } from "../src/i18n";
 import { useConnection } from "../src/state/connection-context";
 import type { FsEntryView, ProjectFilesResult } from "../src/types";
-import { theme } from "../src/ui/theme";
+import { radii, theme } from "../src/ui/theme";
 
 export default function FilesScreen() {
   const params = useLocalSearchParams<{ projectId?: string; path?: string; name?: string }>();
@@ -105,7 +105,7 @@ const styles = StyleSheet.create({
   retryButton: {
     borderWidth: 1,
     borderColor: theme.border,
-    borderRadius: 8,
+    borderRadius: radii.button,
     paddingHorizontal: 18,
     paddingVertical: 8,
   },

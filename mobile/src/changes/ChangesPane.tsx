@@ -10,7 +10,7 @@ import { FlatList, Platform, Pressable, ScrollView, StyleSheet, Text, View } fro
 import { t } from "../i18n";
 import { useConnection } from "../state/connection-context";
 import type { GitChangesResult, GitDiffResult, GitFileChange } from "../types";
-import { theme } from "../ui/theme";
+import { radii, theme } from "../ui/theme";
 
 const MONO = Platform.select({ ios: "Menlo", default: "monospace" });
 
@@ -49,7 +49,9 @@ export function ChangesPane({
   active,
 }: {
   projectId: string;
-  taskId: string;
+  /** 省略 = 项目级变更(git 根取项目路径);传入 = 该任务的 worktree。
+   *  注意必须整键省略而非传空串:后端只看键是否存在(见 remote/files_rpc.rs 的 resolve_git_root)。 */
+  taskId?: string;
   active: boolean;
 }) {
   const { request, status } = useConnection();
@@ -64,7 +66,7 @@ export function ChangesPane({
     if (status !== "online" || !projectId) return;
     setLoading(true);
     setError(null);
-    request<GitChangesResult>("git.changes", { projectId, taskId })
+    request<GitChangesResult>("git.changes", { projectId, ...(taskId ? { taskId } : {}) })
       .then((result) => {
         if (!result.available) {
           setUnavailable(result.reason ?? "ssh");
@@ -98,7 +100,7 @@ export function ChangesPane({
       }));
       request<GitDiffResult>("git.diff", {
         projectId,
-        taskId,
+        ...(taskId ? { taskId } : {}),
         path: change.path,
         staged: change.staged,
       })
@@ -229,7 +231,7 @@ const styles = StyleSheet.create({
   retryButton: {
     borderWidth: 1,
     borderColor: theme.border,
-    borderRadius: 8,
+    borderRadius: radii.button,
     paddingHorizontal: 18,
     paddingVertical: 8,
   },
@@ -238,7 +240,7 @@ const styles = StyleSheet.create({
   browseText: { color: theme.accent, fontSize: 13.5, fontWeight: "600" },
   fileCard: {
     backgroundColor: theme.bgCard,
-    borderRadius: 10,
+    borderRadius: radii.row,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: theme.border,
     marginBottom: 8,

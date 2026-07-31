@@ -32,10 +32,10 @@ const glue = `
     scrollback: 10000,
     cursorBlink: true,
     theme: {
-      background: "#0d1117",
-      foreground: "#e6edf3",
-      cursor: "#e6edf3",
-      selectionBackground: "#4493f866",
+      background: "#111111",
+      foreground: "#e0e0e0",
+      cursor: "#e0e0e0",
+      selectionBackground: "#3b82f666",
     },
   });
   var fit = new FitAddon.FitAddon();
@@ -87,8 +87,19 @@ const glue = `
       post({ type: "input", data: "\\u007f" });
     }
   });
+  // 键盘显隐由 RN 侧的工具栏按钮联动:RN 的 Keyboard 事件不覆盖 WebView 内的 focus,
+  // 所以这里主动上报隐藏 input 的 focus 状态。
+  ime.addEventListener("focus", function () {
+    post({ type: "ime-focus", focused: true });
+  });
+  ime.addEventListener("blur", function () {
+    post({ type: "ime-focus", focused: false });
+  });
   function focusIme() {
     ime.focus({ preventScroll: true });
+  }
+  function blurIme() {
+    ime.blur();
   }
 
   // ── 触摸滚动:xterm 不处理 touch,自己把位移换算成 scrollLines ──
@@ -167,6 +178,9 @@ const glue = `
           case "focus":
             focusIme();
             break;
+          case "blur":
+            blurIme();
+            break;
           case "scrollToBottom":
             term.scrollToBottom();
             break;
@@ -187,7 +201,7 @@ const html = `<!doctype html>
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
 <style>
 ${xtermCss}
-html, body, #root { height: 100%; margin: 0; padding: 0; background: #0d1117; }
+html, body, #root { height: 100%; margin: 0; padding: 0; background: #111111; }
 /* 滚动统一走 touch → scrollLines,禁用 viewport 自身滚动避免双重滚动冲突 */
 .xterm .xterm-viewport { overflow-y: hidden; }
 .xterm { touch-action: none; }

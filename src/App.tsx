@@ -498,8 +498,10 @@ function App() {
       prompt?: string;
       agent?: string;
       permissionMode?: string;
+      selectedModel?: string;
     }>("remote-task-request", async (e) => {
-      const { requestId, kind, projectId, taskId, prompt, agent, permissionMode } = e.payload;
+      const { requestId, kind, projectId, taskId, prompt, agent, permissionMode, selectedModel } =
+        e.payload;
       if (!requestId) return;
       const complete = async (accepted: boolean, resultTaskId?: string, error?: string) => {
         try {
@@ -583,6 +585,7 @@ function App() {
         prompt,
         agent: (agent ?? "claude") as AgentType,
         permissionMode: (permissionMode ?? "ask") as PermissionMode,
+        selectedModel,
         images: [],
         texts: [],
         immediate: true,

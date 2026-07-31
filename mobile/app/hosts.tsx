@@ -13,7 +13,7 @@ import { t } from "../src/i18n";
 import { useConnection } from "../src/state/connection-context";
 import { useHosts } from "../src/state/hosts-context";
 import type { PairedHost } from "../src/types";
-import { theme } from "../src/ui/theme";
+import { radii, theme } from "../src/ui/theme";
 
 export default function HostsScreen() {
   const { hosts, activeHost, setActiveHost, removeHost, updateHostEndpoints } = useHosts();
@@ -145,7 +145,7 @@ const styles = StyleSheet.create({
   list: { padding: 14, gap: 8 },
   hostCard: {
     backgroundColor: theme.bgCard,
-    borderRadius: 12,
+    borderRadius: radii.card,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: theme.border,
   },
@@ -171,7 +171,7 @@ const styles = StyleSheet.create({
   editHint: { color: theme.textSecondary, fontSize: 12, lineHeight: 18 },
   editInput: {
     minHeight: 84,
-    borderRadius: 10,
+    borderRadius: radii.input,
     borderWidth: 1,
     borderColor: theme.border,
     backgroundColor: theme.bg,
@@ -182,7 +182,7 @@ const styles = StyleSheet.create({
   },
   saveButton: {
     backgroundColor: theme.accent,
-    borderRadius: 10,
+    borderRadius: radii.button,
     paddingVertical: 10,
     alignItems: "center",
   },
@@ -191,7 +191,7 @@ const styles = StyleSheet.create({
   emptyText: { color: theme.textSecondary, fontSize: 13.5, textAlign: "center", marginTop: 40 },
   addButton: {
     marginTop: 10,
-    borderRadius: 12,
+    borderRadius: radii.card,
     borderWidth: 1,
     borderColor: theme.border,
     paddingVertical: 13,

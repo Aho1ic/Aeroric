@@ -307,6 +307,19 @@ pub(crate) async fn task_resume<R: Runtime>(
 /// RPC `task.create { projectId, prompt, agent, permissionMode }`:参数校验后
 /// 转桌面前端 handleSubmitTask。projectId 是否存在由前端判定并 toast,
 /// 服务端不读存储,保持该路径零盘 IO(桌面必在线,反馈闭环在 UI)。
+/// 某个 agent 的可选模型列表。
+///
+/// 安全:只回传 `models`,刻意丢弃 `AgentModels::balance`(账户余额属敏感信息),
+/// 与 `agents_list` 不回传 base_url/api_key 的约定一致。
+pub(crate) async fn agents_models(params: &Value) -> Result<Value, String> {
+    let agent = str_param(params, "agent")?;
+    if agent.len() > 64 {
+        return Err("Invalid agent".to_string());
+    }
+    let models = crate::app_settings::list_agent_models(agent).await?.models;
+    Ok(json!({ "models": models }))
+}
+
 pub(crate) async fn task_create<R: Runtime>(
     app: &AppHandle<R>,
     params: &Value,
@@ -315,6 +328,13 @@ pub(crate) async fn task_create<R: Runtime>(
     let prompt = str_param(params, "prompt")?;
     let agent = str_param(params, "agent")?;
     let permission_mode = str_param(params, "permissionMode")?;
+    // 未选具体模型时省略该字段,由桌面端沿用其默认模型。
+    let selected_model = params
+        .get("selectedModel")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
 
     if prompt.len() > MAX_PROMPT_BYTES {
         return Err("Prompt too long".to_string());
@@ -325,6 +345,9 @@ pub(crate) async fn task_create<R: Runtime>(
     if !PERMISSION_MODES.contains(&permission_mode.as_str()) {
         return Err(format!("Invalid permissionMode: {permission_mode}"));
     }
+    if selected_model.as_ref().is_some_and(|m| m.len() > 128) {
+        return Err("Invalid selectedModel".to_string());
+    }
 
     forward_task_request(
         app,
@@ -334,6 +357,7 @@ pub(crate) async fn task_create<R: Runtime>(
             "prompt": prompt,
             "agent": agent,
             "permissionMode": permission_mode,
+            "selectedModel": selected_model,
         }),
     )
     .await
@@ -375,6 +399,35 @@ fn load_task_by_id(task_id: &str) -> Result<storage::Task, String> {
         }
     }
     found.ok_or_else(|| format!("Task not found: {task_id}"))
+}
+
+/// 首页统计卡数据。
+///
+/// `storage::Task` 只有 `created_at`,没有结束时间戳,因此已结束任务的耗时无法还原:
+/// `agentTimeMs` 只累加当前在跑任务的 `now - created_at`(故带 approximate 标记),
+/// 而 Aeroric 没有 PR 能力,`totalPRsCreated` 恒为 null 由前端渲染成占位符。
+pub(crate) async fn stats_summary() -> Result<Value, String> {
+    tauri::async_runtime::spawn_blocking(|| {
+        let now = chrono::Utc::now().timestamp_millis();
+        let mut total_agents = 0u64;
+        let mut agent_time_ms = 0i64;
+        for project in storage::load_projects()? {
+            for task in storage::load_project_tasks(project.id)? {
+                total_agents += 1;
+                if matches!(task.status.as_str(), "running" | "detached") {
+                    agent_time_ms += (now - task.created_at).max(0);
+                }
+            }
+        }
+        Ok(json!({
+            "totalAgentsSpawned": total_agents,
+            "agentTimeMs": agent_time_ms,
+            "agentTimeApproximate": true,
+            "totalPRsCreated": Value::Null,
+        }))
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[cfg(test)]

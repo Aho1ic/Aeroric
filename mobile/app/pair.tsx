@@ -17,7 +17,7 @@ import { useHosts } from "../src/state/hosts-context";
 import { parsePairingOffer } from "../src/transport/pairing-offer";
 import { pairWithInvite } from "../src/transport/remote-connection";
 import type { PairedHost } from "../src/types";
-import { theme } from "../src/ui/theme";
+import { radii, theme } from "../src/ui/theme";
 
 function deviceDisplayName(): string {
   return (
@@ -166,7 +166,7 @@ const styles = StyleSheet.create({
   stepText: { color: theme.textSecondary, fontSize: 13, lineHeight: 20 },
   cameraCard: {
     height: 300,
-    borderRadius: 14,
+    borderRadius: radii.card,
     overflow: "hidden",
     backgroundColor: theme.bgCard,
     borderWidth: StyleSheet.hairlineWidth,
@@ -186,7 +186,7 @@ const styles = StyleSheet.create({
   dividerText: { color: theme.textHint, fontSize: 12, textAlign: "center", marginTop: 6 },
   input: {
     minHeight: 72,
-    borderRadius: 10,
+    borderRadius: radii.input,
     borderWidth: 1,
     borderColor: theme.border,
     backgroundColor: theme.bgCard,
@@ -197,7 +197,7 @@ const styles = StyleSheet.create({
   },
   primaryButton: {
     backgroundColor: theme.accent,
-    borderRadius: 10,
+    borderRadius: radii.button,
     paddingVertical: 12,
     alignItems: "center",
   },

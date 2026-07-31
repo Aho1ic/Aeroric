@@ -25,7 +25,7 @@ import type {
   SessionMessagesResult,
   Task,
 } from "../types";
-import { theme } from "../ui/theme";
+import { radii, theme } from "../ui/theme";
 import { MarkdownText } from "./MarkdownText";
 import { mergeAppended } from "./messages";
 
@@ -329,7 +329,7 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(68,147,248,0.14)",
     borderColor: "rgba(68,147,248,0.28)",
     borderWidth: 1,
-    borderRadius: 14,
+    borderRadius: radii.card,
     paddingHorizontal: 13,
     paddingVertical: 9,
   },
@@ -338,7 +338,7 @@ const styles = StyleSheet.create({
   toolCard: {
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: theme.border,
-    borderRadius: 8,
+    borderRadius: radii.button,
     overflow: "hidden",
   },
   toolHeader: {
@@ -374,7 +374,7 @@ const styles = StyleSheet.create({
     margin: 10,
     marginBottom: 0,
     padding: 12,
-    borderRadius: 10,
+    borderRadius: radii.row,
     borderWidth: 1,
     borderColor: theme.warning,
     backgroundColor: "rgba(210,153,34,0.10)",
@@ -385,7 +385,7 @@ const styles = StyleSheet.create({
   approvalButtons: { flexDirection: "row", gap: 10 },
   approvalButton: {
     flex: 1,
-    borderRadius: 8,
+    borderRadius: radii.button,
     paddingVertical: 10,
     alignItems: "center",
   },
@@ -414,7 +414,7 @@ const styles = StyleSheet.create({
     flex: 1,
     minHeight: 38,
     maxHeight: 120,
-    borderRadius: 10,
+    borderRadius: radii.input,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: theme.border,
     backgroundColor: theme.bgElevated,
@@ -425,7 +425,7 @@ const styles = StyleSheet.create({
   },
   sendButton: {
     backgroundColor: theme.accent,
-    borderRadius: 10,
+    borderRadius: radii.button,
     paddingHorizontal: 16,
     paddingVertical: 10,
   },

@@ -2,7 +2,7 @@
 
 import { useMemo } from "react";
 import { Platform, StyleSheet, Text, View } from "react-native";
-import { theme } from "../ui/theme";
+import { radii, theme } from "../ui/theme";
 import { parseMarkdown, type MdInline } from "./markdown";
 
 const MONO = Platform.select({ ios: "Menlo", default: "monospace" });
@@ -115,7 +115,7 @@ const styles = StyleSheet.create({
   },
   codeBlock: {
     backgroundColor: theme.bgElevated,
-    borderRadius: 8,
+    borderRadius: radii.button,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: theme.border,
     paddingHorizontal: 10,

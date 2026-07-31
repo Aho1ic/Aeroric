@@ -9,7 +9,7 @@ import { FlatList, Platform, Pressable, ScrollView, StyleSheet, Text, View } fro
 import { t } from "../src/i18n";
 import { useConnection } from "../src/state/connection-context";
 import type { ReadFileResult } from "../src/types";
-import { theme } from "../src/ui/theme";
+import { radii, theme } from "../src/ui/theme";
 
 const MONO = Platform.select({ ios: "Menlo", default: "monospace" });
 
@@ -84,7 +84,7 @@ const styles = StyleSheet.create({
   retryButton: {
     borderWidth: 1,
     borderColor: theme.border,
-    borderRadius: 8,
+    borderRadius: radii.button,
     paddingHorizontal: 18,
     paddingVertical: 8,
   },
