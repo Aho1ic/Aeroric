@@ -77,15 +77,15 @@ pub struct Task {
         skip_serializing_if = "Option::is_none"
     )]
     pub selected_model: Option<String>,
-    // Codex：minimal/low/medium/high/xhigh；Claude：low/medium/high/xhigh/max/ultracode。
-    // 值集合不同，前端各用各的原生值，不做统一映射。
+    // 前端统一展示 low/medium/high/xhigh/max/ultra；Claude 启动时将 ultra
+    // 转成原生命令需要的 `ultracode`。
     #[serde(
         rename = "reasoningEffort",
         default,
         skip_serializing_if = "Option::is_none"
     )]
     pub reasoning_effort: Option<String>,
-    // 目前仅 Claude 支持 fast/normal；Codex 无独立 fast 概念。
+    // Codex 与 Claude 都支持 standard/fast，启动层负责映射到各自 CLI 参数。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub speed: Option<String>,
     pub status: String,

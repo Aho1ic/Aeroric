@@ -44,7 +44,9 @@ function NewTaskForm({ lockedProjectId, onClose, onCreated }: NewTaskFormProps) 
   const [agent, setAgent] = useState<string>("claude");
   const [models, setModels] = useState<string[] | null>(null);
   const [modelsLoading, setModelsLoading] = useState(false);
-  const [selectedModel, setSelectedModel] = useState<string | null>(null);
+  const [selectedModel, setSelectedModel] = useState<string>("");
+  const [reasoningEffort, setReasoningEffort] = useState<string | null>(null);
+  const [speed, setSpeed] = useState<"standard" | "fast">("standard");
   const [permissionMode, setPermissionMode] = useState<PermissionMode>("ask");
   const [prompt, setPrompt] = useState("");
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -84,14 +86,25 @@ function NewTaskForm({ lockedProjectId, onClose, onCreated }: NewTaskFormProps) 
     let cancelled = false;
     setModelsLoading(true);
     setModels(null);
-    setSelectedModel(null);
+    setSelectedModel("");
+    setReasoningEffort(null);
+    setSpeed("standard");
     request<{ models: string[] }>("agents.models", { agent })
       .then((res) => {
         if (cancelled) return;
-        setModels(res.models ?? []);
+        const normalized: string[] = [];
+        const seen = new Set<string>();
+        for (const raw of res.models ?? []) {
+          const model = raw.trim();
+          const key = model.toLocaleLowerCase();
+          if (!model || seen.has(key)) continue;
+          seen.add(key);
+          normalized.push(model);
+        }
+        setModels(normalized);
       })
       .catch(() => {
-        // 模型列表拿不到不阻塞建任务:留空表示「用桌面端默认模型」
+        // 模型列表拿不到时不提供默认模型,避免大小写/配置漂移导致误用模型。
         if (!cancelled) setModels([]);
       })
       .finally(() => {
@@ -102,8 +115,28 @@ function NewTaskForm({ lockedProjectId, onClose, onCreated }: NewTaskFormProps) 
     };
   }, [agent, request, status]);
 
+  const selectedAgent = agents.find((item) => item.id === agent);
+  const codexLike = Boolean(selectedAgent?.codexLike);
+  const supportsUltra = !codexLike || selectedModel.trim().toLocaleLowerCase() === "gpt-5.6-sol";
+  const reasoningOptions = codexLike
+    ? supportsUltra
+      ? ["minimal", "low", "medium", "high", "xhigh", "max", "ultra"]
+      : ["minimal", "low", "medium", "high", "xhigh", "max"]
+    : ["low", "medium", "high", "xhigh", "max", "ultra"];
+
+  useEffect(() => {
+    if (reasoningEffort === "minimal" && !codexLike) {
+      setReasoningEffort(null);
+      return;
+    }
+    if (reasoningEffort === "ultra" && codexLike && !supportsUltra) {
+      setReasoningEffort(null);
+    }
+  }, [codexLike, reasoningEffort, supportsUltra]);
+
   const submit = useCallback(() => {
     const text = prompt.trim();
+    const model = selectedModel.trim();
     if (!projectId || !text || submitting) return;
     setSubmitting(true);
     request("task.create", {
@@ -111,7 +144,9 @@ function NewTaskForm({ lockedProjectId, onClose, onCreated }: NewTaskFormProps) 
       prompt: text,
       agent,
       permissionMode,
-      ...(selectedModel ? { selectedModel } : {}),
+      ...(model ? { selectedModel: model } : {}),
+      ...(reasoningEffort ? { reasoningEffort } : {}),
+      speed,
     })
       .then(() => {
         onCreated?.();
@@ -132,10 +167,13 @@ function NewTaskForm({ lockedProjectId, onClose, onCreated }: NewTaskFormProps) 
     prompt,
     request,
     selectedModel,
+    reasoningEffort,
+    speed,
     submitting,
   ]);
 
-  const canSubmit = status === "online" && !!projectId && !!prompt.trim() && !submitting;
+  const canSubmit =
+    status === "online" && !!projectId && !!prompt.trim() && !submitting;
   const lockedProject = lockedProjectId
     ? projects.find((p) => p.id === lockedProjectId)
     : undefined;
@@ -177,51 +215,99 @@ function NewTaskForm({ lockedProjectId, onClose, onCreated }: NewTaskFormProps) 
       )}
 
       <Text style={styles.sectionLabel}>{t("newTask.agent")}</Text>
-      <View style={styles.chipWrap}>
-        {agents.map((choice) => (
-          <Pressable
-            key={choice.id}
-            style={[styles.chip, agent === choice.id && styles.chipActive]}
-            onPress={() => setAgent(choice.id)}
-          >
-            <Text style={[styles.chipText, agent === choice.id && styles.chipTextActive]}>
-              {choice.label}
-            </Text>
-          </Pressable>
-        ))}
+      <View style={styles.agentColumns}>
+        {([false, true] as const).map((codexLike) => {
+          const family = agents.filter((choice) => choice.codexLike === codexLike);
+          return (
+            <View key={codexLike ? "openai" : "anthropic"} style={styles.agentColumn}>
+              <Text style={styles.columnTitle}>
+                {t(codexLike ? "newTask.openai" : "newTask.anthropic")}
+              </Text>
+              <View style={styles.agentRows}>
+                {family.length > 0 ? family.map((choice) => (
+                  <Pressable
+                    key={choice.id}
+                    style={[styles.agentRow, agent === choice.id && styles.agentRowActive]}
+                    onPress={() => setAgent(choice.id)}
+                  >
+                    <Text
+                      style={[styles.agentRowText, agent === choice.id && styles.chipTextActive]}
+                      numberOfLines={1}
+                      ellipsizeMode="tail"
+                    >
+                      {choice.label}
+                    </Text>
+                  </Pressable>
+                )) : <Text style={styles.hint}>—</Text>}
+              </View>
+            </View>
+          );
+        })}
       </View>
 
       <Text style={styles.sectionLabel}>{t("newTask.model")}</Text>
       {modelsLoading ? (
         <Text style={styles.hint}>{t("newTask.modelsLoading")}</Text>
-      ) : models && models.length > 0 ? (
-        <View style={styles.chipWrap}>
+      ) : models ? (
+        <View style={styles.modelList}>
           <Pressable
-            style={[styles.chip, selectedModel === null && styles.chipActive]}
-            onPress={() => setSelectedModel(null)}
+            style={[styles.modelRow, !selectedModel && styles.chipActive]}
+            onPress={() => setSelectedModel("")}
           >
-            <Text style={[styles.chipText, selectedModel === null && styles.chipTextActive]}>
+            <Text style={[styles.modelText, !selectedModel && styles.chipTextActive]}>
               {t("newTask.modelAuto")}
             </Text>
           </Pressable>
           {models.map((model) => (
             <Pressable
               key={model}
-              style={[styles.chip, selectedModel === model && styles.chipActive]}
+              style={[styles.modelRow, selectedModel === model && styles.chipActive]}
               onPress={() => setSelectedModel(model)}
             >
               <Text
-                style={[styles.chipText, selectedModel === model && styles.chipTextActive]}
+                style={[styles.modelText, selectedModel === model && styles.chipTextActive]}
                 numberOfLines={1}
+                ellipsizeMode="tail"
               >
                 {model}
               </Text>
             </Pressable>
           ))}
+          {models.length === 0 ? <Text style={styles.hint}>{t("newTask.modelsUnavailable")}</Text> : null}
         </View>
       ) : (
         <Text style={styles.hint}>{t("newTask.modelsUnavailable")}</Text>
       )}
+
+      <Text style={styles.sectionLabel}>{t("newTask.reasoning")}</Text>
+      <View style={styles.optionGrid}>
+        {reasoningOptions.map((effort) => (
+          <Pressable
+            key={effort}
+            style={[styles.optionButton, reasoningEffort === effort && styles.chipActive]}
+            onPress={() => setReasoningEffort(effort)}
+          >
+            <Text style={[styles.chipText, reasoningEffort === effort && styles.chipTextActive]}>
+              {t(`newTask.reasoning.${effort}` as Parameters<typeof t>[0])}
+            </Text>
+          </Pressable>
+        ))}
+      </View>
+
+      <Text style={styles.sectionLabel}>{t("newTask.speed")}</Text>
+      <View style={styles.optionGrid}>
+        {(["standard", "fast"] as const).map((value) => (
+          <Pressable
+            key={value}
+            style={[styles.optionButton, speed === value && styles.chipActive]}
+            onPress={() => setSpeed(value)}
+          >
+            <Text style={[styles.chipText, speed === value && styles.chipTextActive]}>
+              {t(`newTask.speed.${value}` as Parameters<typeof t>[0])}
+            </Text>
+          </Pressable>
+        ))}
+      </View>
 
       <Text style={styles.sectionLabel}>{t("newTask.permission")}</Text>
       <View style={styles.permList}>
@@ -356,6 +442,60 @@ const styles = StyleSheet.create({
   chipActive: { backgroundColor: theme.accent, borderColor: theme.accent },
   chipText: { color: theme.text, fontSize: 13.5 },
   chipTextActive: { color: theme.onAccent, fontWeight: "600" },
+  agentColumns: { flexDirection: "row", gap: spacing.sm },
+  agentColumn: {
+    flex: 1,
+    minWidth: 0,
+    borderRadius: radii.row,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: theme.border,
+    backgroundColor: theme.bgCard,
+    overflow: "hidden",
+  },
+  columnTitle: {
+    color: theme.textSecondary,
+    fontSize: typography.metaSize,
+    fontWeight: "700",
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.sm,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: theme.border,
+  },
+  agentRows: { padding: 4, gap: 4 },
+  agentRow: {
+    minHeight: 38,
+    justifyContent: "center",
+    paddingHorizontal: spacing.sm,
+    borderRadius: radii.button,
+  },
+  agentRowActive: { backgroundColor: theme.accent },
+  agentRowText: { color: theme.text, fontSize: 13.5, flex: 1 },
+  modelList: {
+    borderRadius: radii.row,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: theme.border,
+    backgroundColor: theme.bgCard,
+    padding: 4,
+    gap: 4,
+  },
+  modelRow: {
+    minHeight: 38,
+    justifyContent: "center",
+    paddingHorizontal: spacing.md,
+    borderRadius: radii.button,
+  },
+  modelText: { color: theme.text, fontSize: 13, flex: 1 },
+  optionGrid: { flexDirection: "row", flexWrap: "wrap", gap: spacing.sm },
+  optionButton: {
+    minWidth: 74,
+    alignItems: "center",
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    borderRadius: radii.button,
+    backgroundColor: theme.bgCard,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: theme.border,
+  },
   permList: { gap: 6 },
   permRow: {
     flexDirection: "row",

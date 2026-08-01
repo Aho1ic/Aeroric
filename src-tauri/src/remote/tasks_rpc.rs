@@ -317,13 +317,14 @@ pub(crate) async fn agents_models(params: &Value) -> Result<Value, String> {
     if agent.len() > 64 {
         return Err("Invalid agent".to_string());
     }
+    require_known_agent(&agent).await?;
     let models = crate::app_settings::list_agent_models(agent).await?.models;
     Ok(json!({ "models": models }))
 }
 
 /// RPC `task.create { projectId, prompt, agent, permissionMode }`:参数校验后
 /// 转桌面前端 handleSubmitTask。projectId 是否存在由前端判定并 toast,
-/// 服务端不读存储,保持该路径零盘 IO(桌面必在线,反馈闭环在 UI)。
+/// agent 需要从桌面设置中确认存在,避免未知值落入默认启动路径。
 pub(crate) async fn task_create<R: Runtime>(
     app: &AppHandle<R>,
     params: &Value,
@@ -332,9 +333,21 @@ pub(crate) async fn task_create<R: Runtime>(
     let prompt = str_param(params, "prompt")?;
     let agent = str_param(params, "agent")?;
     let permission_mode = str_param(params, "permissionMode")?;
-    // 未选具体模型时省略该字段,由桌面端沿用其默认模型。
+    // 模型、推理强度和速度均由桌面端再次按 agent/model 规则校验。
     let selected_model = params
         .get("selectedModel")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+    let reasoning_effort = params
+        .get("reasoningEffort")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+    let speed = params
+        .get("speed")
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|s| !s.is_empty())
@@ -346,11 +359,21 @@ pub(crate) async fn task_create<R: Runtime>(
     if agent.len() > 64 {
         return Err("Invalid agent".to_string());
     }
+    require_known_agent(&agent).await?;
     if !PERMISSION_MODES.contains(&permission_mode.as_str()) {
         return Err(format!("Invalid permissionMode: {permission_mode}"));
     }
     if selected_model.as_ref().is_some_and(|m| m.len() > 128) {
         return Err("Invalid selectedModel".to_string());
+    }
+    if reasoning_effort
+        .as_ref()
+        .is_some_and(|effort| effort.len() > 32)
+    {
+        return Err("Invalid reasoningEffort".to_string());
+    }
+    if speed.as_ref().is_some_and(|value| value.len() > 16) {
+        return Err("Invalid speed".to_string());
     }
 
     forward_task_request(
@@ -362,9 +385,24 @@ pub(crate) async fn task_create<R: Runtime>(
             "agent": agent,
             "permissionMode": permission_mode,
             "selectedModel": selected_model,
+            "reasoningEffort": reasoning_effort,
+            "speed": speed,
         }),
     )
     .await
+}
+
+async fn require_known_agent(agent: &str) -> Result<(), String> {
+    let agent = agent.to_string();
+    let known =
+        tauri::async_runtime::spawn_blocking(move || crate::app_settings::is_known_agent(&agent))
+            .await
+            .map_err(|error| error.to_string())?;
+    if known {
+        Ok(())
+    } else {
+        Err("Unknown agent".to_string())
+    }
 }
 
 async fn forward_task_request<R: Runtime>(

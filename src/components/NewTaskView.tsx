@@ -1,7 +1,6 @@
 import { useState, useRef, useEffect, useMemo, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import * as Select from "@radix-ui/react-select";
-import { ChevronDown, Cpu, Sparkles, TriangleAlert } from "lucide-react";
+import { Sparkles, TriangleAlert } from "lucide-react";
 import type { Project, AgentType, PermissionMode, PromptSkill } from "../types";
 import { isRemoteProject } from "../types";
 import { agentDisplayLabel, isCodexLikeAgent } from "../agents";
@@ -24,12 +23,8 @@ import { SkillPopover } from "./new-task/SkillPopover";
 import { sanitizePromptHtml } from "./new-task/promptHtml";
 import { ImageAttachments } from "./new-task/ImageAttachments";
 import { TextAttachments, type PastedText } from "./new-task/TextAttachments";
-import {
-  AgentPermSelector,
-  composeModelMenuContentStyle,
-  composeModelMenuViewportStyle,
-  type ComposeMenu,
-} from "./new-task/AgentPermSelector";
+import { AgentPermSelector, type ComposeMenu } from "./new-task/AgentPermSelector";
+import { ModelOptionsMenu } from "./new-task/ModelOptionsMenu";
 import { LaunchModeSelector, type LaunchMode } from "./new-task/LaunchModeSelector";
 import { buildPromptWithTaskModes, shouldShowInstructionsBanner } from "./new-task/goalMode";
 import { useI18n } from "../i18n";
@@ -43,6 +38,13 @@ import {
 import claudeGif from "../assets/gif/claude.gif";
 import codexGif from "../assets/gif/codex.gif";
 import s from "../styles";
+import {
+  availableReasoningEfforts,
+  findModelIgnoreCase,
+  normalizeModelList,
+  type ReasoningEffort,
+  type TaskSpeed,
+} from "../modelOptions";
 
 interface PastedImage {
   id: string;
@@ -56,6 +58,8 @@ export interface NewTaskDraft {
   planMode: boolean;
   goalMode?: boolean;
   fastMode?: boolean;
+  reasoningEffort?: ReasoningEffort | null;
+  speed?: TaskSpeed;
   pastedImages: PastedImage[];
   pastedTexts?: PastedText[];
   launchMode?: LaunchMode;
@@ -105,7 +109,8 @@ export function NewTaskView({
     launchMode: LaunchMode;
     baseBranch: string;
     selectedModel?: string;
-    speed?: string;
+    reasoningEffort?: ReasoningEffort | null;
+    speed?: TaskSpeed;
     injectPromptIntoTerminal?: boolean;
   }) => void;
   onStartTerminal?: () => void;
@@ -121,7 +126,12 @@ export function NewTaskView({
   const [permMode, setPermMode] = useState<PermissionMode>(initialDraft?.permMode ?? "full_access");
   const [planMode, setPlanMode] = useState(initialDraft?.planMode ?? false);
   const [goalMode, setGoalMode] = useState(initialDraft?.goalMode ?? false);
-  const [fastMode, setFastMode] = useState(initialDraft?.fastMode ?? false);
+  const [speed, setSpeed] = useState<TaskSpeed>(
+    initialDraft?.speed ?? (initialDraft?.fastMode ? "fast" : "standard"),
+  );
+  const [reasoningEffort, setReasoningEffort] = useState<ReasoningEffort | null>(
+    initialDraft?.reasoningEffort ?? null,
+  );
   const [launchMode, setLaunchMode] = useState<LaunchMode>(
     remoteProject ? "local" : (initialDraft?.launchMode ?? "local"),
   );
@@ -183,7 +193,8 @@ export function NewTaskView({
     permMode,
     planMode,
     goalMode,
-    fastMode,
+    speed,
+    reasoningEffort,
     pastedImages,
     pastedTexts,
     launchMode,
@@ -196,7 +207,8 @@ export function NewTaskView({
       permMode,
       planMode,
       goalMode,
-      fastMode,
+      speed,
+      reasoningEffort,
       pastedImages,
       pastedTexts,
       launchMode,
@@ -208,7 +220,8 @@ export function NewTaskView({
     permMode,
     planMode,
     goalMode,
-    fastMode,
+    speed,
+    reasoningEffort,
     pastedImages,
     pastedTexts,
     launchMode,
@@ -239,7 +252,9 @@ export function NewTaskView({
         permMode: data.permMode,
         planMode: data.planMode,
         goalMode: data.goalMode,
-        fastMode: data.fastMode,
+        fastMode: data.speed === "fast",
+        speed: data.speed,
+        reasoningEffort: data.reasoningEffort,
         pastedImages: data.pastedImages,
         pastedTexts: data.pastedTexts,
         launchMode: data.launchMode,
@@ -290,10 +305,11 @@ export function NewTaskView({
       invoke<AgentModels>("list_agent_models", { agent: targetAgent })
         .then((result) => {
           if (modelRequestIdRef.current !== requestId) return;
-          const models = Array.isArray(result.models) ? result.models : [];
+          const models = normalizeModelList(Array.isArray(result.models) ? result.models : []);
           setAvailableModels(models);
           setSelectedModel((current) => {
-            if (current && models.includes(current)) return current;
+            const canonical = findModelIgnoreCase(models, current);
+            if (canonical) return canonical;
             return models[0] ?? "";
           });
         })
@@ -374,9 +390,13 @@ export function NewTaskView({
   const codexLikeAgent = isCodexLikeAgent(agent, agentOptions);
   const customAgent = agentOptions.some((option) => option.value === agent && option.custom);
   const agentSupportsModelSelection = agent === "claude" || codexLikeAgent || customAgent;
-  const modelSelectable =
-    agentSupportsModelSelection &&
-    (modelsLoading || availableModels.length > 0 || Boolean(modelsError) || Boolean(selectedModel));
+  const modelSelectable = agentSupportsModelSelection;
+  const availableEfforts = availableReasoningEfforts(codexLikeAgent, selectedModel);
+  useEffect(() => {
+    if (reasoningEffort && !availableEfforts.includes(reasoningEffort)) {
+      setReasoningEffort(null);
+    }
+  }, [availableEfforts, reasoningEffort]);
   const promptSkillAgent = codexLikeAgent ? "codex" : "claude";
   const skillCommandPrefix = promptSkillAgent === "codex" ? "$" : "/";
   const agentReadiness = hookReadiness?.find((r) => r.agent === agent) ?? null;
@@ -576,6 +596,8 @@ export function NewTaskView({
       launchMode: "local",
       baseBranch: "",
       selectedModel: modelSelectable ? selectedModel || undefined : undefined,
+      reasoningEffort,
+      speed,
       injectPromptIntoTerminal: agent === "claude",
     });
   }
@@ -599,7 +621,8 @@ export function NewTaskView({
       launchMode,
       baseBranch,
       selectedModel: modelSelectable ? selectedModel || undefined : undefined,
-      speed: fastMode && agent === "claude" ? "fast" : undefined,
+      reasoningEffort,
+      speed,
     });
     editorHandle.clear();
     setIsEmpty(true);
@@ -838,103 +861,20 @@ export function NewTaskView({
             }
             modelControls={
               modelSelectable ? (
-                <Select.Root
-                  value={selectedModel || "__none__"}
-                  open={composeOpenMenu === "model"}
-                  onOpenChange={(open) => {
-                    setComposeOpenMenu(open ? "model" : null);
-                    if (open) loadAgentModels(agent);
-                  }}
-                  onValueChange={(value) => {
-                    if (!value.startsWith("__")) {
-                      setSelectedModel(value);
-                    }
-                    setComposeOpenMenu(null);
-                  }}
-                >
-                  <Select.Trigger
-                    style={{
-                      ...(compactControls ? s.toolbarBtnIconOnly : s.toolbarBtn),
-                      maxWidth: compactControls ? undefined : 180,
-                      minHeight: compactControls ? 24 : 24,
-                      height: 24,
-                      padding: compactControls ? 0 : "2px 7px",
-                    }}
-                    aria-label={t("newTask.model")}
-                    title={modelsError || selectedModel || t("newTask.model")}
-                    disabled={modelsLoading && availableModels.length === 0}
-                  >
-                    <Cpu size={14} strokeWidth={2} color="var(--usage-codex)" />
-                    {!compactControls && (
-                      <span
-                        style={{
-                          overflow: "hidden",
-                          textOverflow: "ellipsis",
-                          whiteSpace: "nowrap",
-                          minWidth: 0,
-                        }}
-                      >
-                        {modelsLoading && !selectedModel
-                          ? t("newTask.modelsLoading")
-                          : selectedModel || t("newTask.modelAuto")}
-                      </span>
-                    )}
-                    {!compactControls && (
-                      <Select.Icon>
-                        <ChevronDown size={12} strokeWidth={2.5} style={{ opacity: 0.58 }} />
-                      </Select.Icon>
-                    )}
-                  </Select.Trigger>
-                  <Select.Portal>
-                    <Select.Content
-                      position="popper"
-                      side="bottom"
-                      align="end"
-                      sideOffset={6}
-                      collisionPadding={8}
-                      style={composeModelMenuContentStyle()}
-                    >
-                      <Select.Viewport style={composeModelMenuViewportStyle()}>
-                        {modelsLoading && availableModels.length === 0 ? (
-                          <Select.Item value="__loading__" disabled style={s.toolbarMenuItem}>
-                            <Select.ItemText>{t("newTask.modelsLoading")}</Select.ItemText>
-                          </Select.Item>
-                        ) : modelsError ? (
-                          <Select.Item value="__error__" disabled style={s.toolbarMenuItem}>
-                            <Select.ItemText>{t("newTask.modelsUnavailable")}</Select.ItemText>
-                          </Select.Item>
-                        ) : availableModels.length === 0 ? (
-                          <Select.Item value="__empty__" disabled style={s.toolbarMenuItem}>
-                            <Select.ItemText>{t("newTask.modelsUnavailable")}</Select.ItemText>
-                          </Select.Item>
-                        ) : (
-                          availableModels.map((model) => (
-                            <Select.Item
-                              key={model}
-                              value={model}
-                              style={s.toolbarMenuItem}
-                              onFocus={(e) => {
-                                e.currentTarget.style.background = "var(--accent-subtle)";
-                              }}
-                              onBlur={(e) => {
-                                e.currentTarget.style.background = "transparent";
-                              }}
-                              onMouseEnter={(e) => {
-                                e.currentTarget.style.background = "var(--accent-subtle)";
-                              }}
-                              onMouseLeave={(e) => {
-                                e.currentTarget.style.background = "transparent";
-                              }}
-                            >
-                              <Cpu size={13} strokeWidth={2} color="var(--text-muted)" />
-                              <Select.ItemText>{model}</Select.ItemText>
-                            </Select.Item>
-                          ))
-                        )}
-                      </Select.Viewport>
-                    </Select.Content>
-                  </Select.Portal>
-                </Select.Root>
+                <ModelOptionsMenu
+                  agent={agent}
+                  models={availableModels}
+                  selectedModel={selectedModel}
+                  onModelChange={setSelectedModel}
+                  reasoningEffort={reasoningEffort}
+                  onReasoningChange={setReasoningEffort}
+                  speed={speed}
+                  onSpeedChange={setSpeed}
+                  loading={modelsLoading}
+                  error={modelsError}
+                  compact={compactControls}
+                  onOpen={() => loadAgentModels(agent)}
+                />
               ) : null
             }
             onSetAgent={setAgent}
@@ -943,9 +883,6 @@ export function NewTaskView({
             onOpenMenuChange={setComposeOpenMenu}
             onTogglePlanMode={() => setPlanMode((v) => !v)}
             onToggleGoalMode={() => setGoalMode((v) => !v)}
-            onToggleFastMode={() => setFastMode((v) => !v)}
-            fastMode={fastMode}
-            isClaudeAgent={agent === "claude"}
             onSubmit={handleSubmit}
           />
         </div>

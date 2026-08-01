@@ -5,9 +5,10 @@ export const CODEX_REASONING_EFFORTS = [
   "high",
   "xhigh",
   "max",
+  "ultra",
 ] as const;
 
-export const CLAUDE_REASONING_EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;
+export const CLAUDE_REASONING_EFFORTS = ["low", "medium", "high", "xhigh", "max", "ultra"] as const;
 
 export const MODEL_REASONING_EFFORTS = [
   "minimal",
@@ -16,6 +17,7 @@ export const MODEL_REASONING_EFFORTS = [
   "high",
   "xhigh",
   "max",
+  "ultra",
 ] as const;
 
 export type ModelReasoningEffort = (typeof MODEL_REASONING_EFFORTS)[number];
@@ -47,7 +49,8 @@ function findRootReasoningEffortLine(content: string): {
 }
 
 export function readModelReasoningEffort(content: string): ModelReasoningEffort | null {
-  const value = findRootReasoningEffortLine(content)?.value;
+  const value = findRootReasoningEffortLine(content)?.value.toLocaleLowerCase();
+  if (value === "ultracode") return "ultra";
   return MODEL_REASONING_EFFORTS.includes(value as ModelReasoningEffort)
     ? (value as ModelReasoningEffort)
     : null;

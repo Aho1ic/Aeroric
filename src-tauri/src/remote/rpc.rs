@@ -41,6 +41,8 @@ pub async fn dispatch<R: Runtime>(
         "project.writeFile" => files_rpc::project_write_file(params).await,
         "agentConfig.list" => agent_config_rpc::agent_config_list().await,
         "agentConfig.save" => agent_config_rpc::agent_config_save(params).await,
+        "agentConfig.detectModels" => agent_config_rpc::agent_config_detect_models(params).await,
+        "agentConfig.create" => agent_config_rpc::agent_config_create(params).await,
         "git.changes" => files_rpc::git_changes(params).await,
         "git.diff" => files_rpc::git_diff(params).await,
         "task.input" => tasks_rpc::task_input(app, &params),

@@ -66,6 +66,9 @@ const project: Project = {
   lastOpenedAt: 1,
 };
 
+const defaultInvokeImplementation =
+  vi.mocked(invoke).getMockImplementation() ?? (() => Promise.resolve(undefined));
+
 describe("NewTaskView start terminal", () => {
   beforeEach(() => {
     vi.mocked(invoke).mockClear();
@@ -286,6 +289,7 @@ describe("NewTaskView start terminal", () => {
     await screen.findByText("claude-opus-4-8");
 
     await user.click(screen.getByRole("combobox", { name: "Model" }));
+    await user.click(screen.getByRole("button", { name: "Model" }));
     await user.click(await screen.findByText("claude-sonnet-4-8"));
     await user.click(screen.getByRole("button", { name: /Start Terminal/ }));
 
@@ -313,6 +317,7 @@ describe("NewTaskView start terminal", () => {
     await screen.findByText("opus");
 
     await user.click(screen.getByRole("combobox", { name: "Model" }));
+    await user.click(screen.getByRole("button", { name: "Model" }));
     await user.click(await screen.findByText("sonnet"));
     await user.click(screen.getByRole("button", { name: /Start Terminal/ }));
 
@@ -343,6 +348,7 @@ describe("NewTaskView start terminal", () => {
     await screen.findByText("gpt-5.6");
 
     await user.click(screen.getByRole("combobox", { name: "Model" }));
+    await user.click(screen.getByRole("button", { name: "Model" }));
     await user.click(await screen.findByText("gpt-5.6-terra"));
     await user.click(screen.getByRole("button", { name: /Start Terminal/ }));
 
@@ -352,5 +358,46 @@ describe("NewTaskView start terminal", () => {
         selectedModel: "gpt-5.6-terra",
       }),
     );
+  });
+
+  it("falls back to the agent default when model discovery is unavailable", async () => {
+    const user = userEvent.setup();
+    const onSubmit = vi.fn();
+    vi.mocked(invoke).mockImplementation((command, _args) => {
+      if (command === "list_agent_models") return Promise.resolve({ models: [] });
+      if (command === "list_project_files" || command === "list_project_skills") {
+        return Promise.resolve([]);
+      }
+      if (command === "get_project_git_branches") return Promise.resolve([]);
+      if (command === "get_hook_readiness") {
+        return Promise.resolve([{ agent: "claude", usable: true }]);
+      }
+      if (command === "read_file_content") return Promise.reject(new Error("File not found"));
+      if (command === "load_app_settings") return Promise.resolve({ custom_agents: [] });
+      return Promise.resolve({});
+    });
+
+    try {
+      render(
+        <I18nProvider>
+          <NewTaskView project={project} onSubmit={onSubmit} />
+        </I18nProvider>,
+      );
+
+      await waitFor(() =>
+        expect(invoke).toHaveBeenCalledWith("list_agent_models", { agent: "claude" }),
+      );
+      await user.click(screen.getByRole("button", { name: /Start Terminal/ }));
+
+      expect(onSubmit).toHaveBeenCalledWith(
+        expect.objectContaining({
+          agent: "claude",
+          selectedModel: undefined,
+          immediate: true,
+        }),
+      );
+    } finally {
+      vi.mocked(invoke).mockImplementation(defaultInvokeImplementation);
+    }
   });
 });

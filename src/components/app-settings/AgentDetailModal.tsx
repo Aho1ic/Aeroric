@@ -27,6 +27,7 @@ import {
 } from "./reasoningEffort";
 import { ModelSelectionList } from "./ModelSelectionList";
 import { AnimatedSelectionGroup } from "../ui/AnimatedSelection";
+import { normalizeModelList, sameModel } from "../../modelOptions";
 
 type FileState =
   | { status: "loading" }
@@ -57,15 +58,11 @@ const nameInputStyle: CSSProperties = {
 };
 
 function normalizeModels(models: string[] = []): string[] {
-  const out: string[] = [];
-  for (const model of models.map((item) => item.trim()).filter(Boolean)) {
-    if (!out.includes(model)) out.push(model);
-  }
-  return out;
+  return normalizeModelList(models);
 }
 
 function sameModels(a: string[], b: string[]): boolean {
-  return a.length === b.length && a.every((item, index) => item === b[index]);
+  return a.length === b.length && a.every((item, index) => sameModel(item, b[index]));
 }
 
 export function AgentDetailModal({
@@ -84,6 +81,7 @@ export function AgentDetailModal({
   const agentKey = option.value as AgentKey;
   const deletable = option.custom === true;
   const isCodex = option.codexLike === true;
+  const isBuiltIn = isBuiltInAgent(option.value);
 
   const { language, t } = useI18n();
   const [activeTab, setActiveTab] = useState<DetailTab>("basic");
@@ -226,10 +224,14 @@ export function AgentDetailModal({
       .then((loadedSettings) => {
         if (cancelled) return;
         const creds = loadedSettings.builtin_agent_credentials?.[agentKey];
+        const savedModels = normalizeModels(creds?.models ?? []);
         setBaseUrl(creds?.base_url ?? "");
         setOriginalBaseUrl(creds?.base_url ?? "");
         setApiKey(creds?.api_key ?? "");
         setOriginalApiKey(creds?.api_key ?? "");
+        setDetectedModels(savedModels);
+        setSelectedModels(savedModels);
+        setOriginalSelectedModels(savedModels);
       })
       .catch(() => {});
     return () => {
@@ -318,25 +320,32 @@ export function AgentDetailModal({
   }
 
   async function handleDetectModels() {
-    if (!customProfile?.base_url || !customProfile.api_key) return;
     setDetectingModels(true);
     setError(null);
     setDetectedBalance(null);
     try {
-      const detected = await invoke<AgentModels>("detect_agent_models", {
-        kind: customProfile.codex_like ? "codex" : "claude_code",
-        baseUrl: customProfile.base_url,
-        apiKey: customProfile.api_key,
-      });
+      const detected =
+        (isBuiltIn && baseUrl.trim() && apiKey.trim()) ||
+        (!isBuiltIn && baseUrl.trim() && apiKey.trim())
+          ? await invoke<AgentModels>("detect_agent_models", {
+              kind: isCodex ? "codex" : "claude_code",
+              baseUrl: baseUrl.trim(),
+              apiKey: apiKey.trim(),
+            })
+          : await invoke<AgentModels>("list_agent_models", { agent: agentKey });
       const nextModels = normalizeModels(detected.models);
       const selected = new Set(selectedModels.length > 0 ? selectedModels : originalSelectedModels);
       const retained = normalizeModels([
-        ...nextModels.filter((model) => selected.has(model)),
-        ...Array.from(selected).filter((model) => !nextModels.includes(model)),
+        ...nextModels.filter((model) =>
+          Array.from(selected).some((item) => sameModel(item, model)),
+        ),
+        ...Array.from(selected).filter(
+          (model) => !nextModels.some((item) => sameModel(item, model)),
+        ),
       ]);
       setDetectedModels(normalizeModels([...nextModels, ...retained]));
       setDetectedBalance(detected.balance ?? null);
-      setSelectedModels(retained);
+      setSelectedModels(isBuiltIn ? nextModels : retained);
     } catch (e) {
       setError(String(e));
     } finally {
@@ -363,7 +372,9 @@ export function AgentDetailModal({
 
   function toggleModel(modelName: string) {
     setSelectedModels((prev) => {
-      if (prev.includes(modelName)) return prev.filter((item) => item !== modelName);
+      if (prev.some((item) => sameModel(item, modelName))) {
+        return prev.filter((item) => !sameModel(item, modelName));
+      }
       return [...prev, modelName];
     });
   }
@@ -378,7 +389,8 @@ export function AgentDetailModal({
   const isDirty = fileState.status === "loaded" && fileState.content !== original;
   const isNameDirty = deletable && agentName.trim() !== originalAgentName;
   const canSaveModels =
-    selectedModels.length > 0 &&
+    (deletable || isBuiltIn) &&
+    (isBuiltIn || selectedModels.length > 0) &&
     !sameModels(normalizeModels(selectedModels), originalSelectedModels);
   const canSaveReasoningEffort =
     fileState.status === "loaded" && reasoningEffort !== originalReasoningEffort;
@@ -388,9 +400,7 @@ export function AgentDetailModal({
   const canSaveChatCompletionsProxy =
     Boolean(customProfile?.codex_like) &&
     enableChatCompletionsProxy !== originalEnableChatCompletionsProxy;
-  const canDetectModels = Boolean(
-    customProfile?.base_url?.trim() && customProfile?.api_key?.trim(),
-  );
+  const canDetectModels = isBuiltIn || Boolean(baseUrl.trim() && apiKey.trim());
   const isCredsDirty = baseUrl !== originalBaseUrl || apiKey !== originalApiKey;
   const hasAnyChanges =
     isDirty ||
@@ -412,7 +422,7 @@ export function AgentDetailModal({
         await pathSectionRef.current.save();
       }
 
-      if (isCredsDirty) {
+      if (isCredsDirty || (isBuiltIn && canSaveModels)) {
         if (deletable && customProfile) {
           await invoke("save_custom_agent_profile", {
             profile: {
@@ -444,7 +454,7 @@ export function AgentDetailModal({
               [agentKey]: {
                 base_url: baseUrl.trim(),
                 api_key: apiKey.trim(),
-                models: existing?.models ?? [],
+                models: isBuiltIn ? normalizeModels(selectedModels) : (existing?.models ?? []),
                 enable_1m_context: existing?.enable_1m_context ?? false,
               },
             },
@@ -452,6 +462,7 @@ export function AgentDetailModal({
           await invoke("save_app_settings", { settings: nextSettings });
           setOriginalBaseUrl(baseUrl.trim());
           setOriginalApiKey(apiKey.trim());
+          setOriginalSelectedModels(normalizeModels(selectedModels));
         }
       }
 
@@ -555,8 +566,6 @@ export function AgentDetailModal({
       setSaving(false);
     }
   }
-
-  const isBuiltIn = isBuiltInAgent(option.value);
 
   const tabItems: { key: DetailTab; labelKey: string }[] = [
     { key: "basic", labelKey: "appSettings.agentDetailBasicConfig" },
@@ -764,10 +773,11 @@ export function AgentDetailModal({
                     </div>
 
                     {/* Built-in runtimes keep editable executable/config paths here. */}
-                    {isBuiltIn && (
+                    {(isBuiltIn || deletable) && (
                       <AgentPathSection
                         ref={pathSectionRef}
                         agentKey={agentKey}
+                        hideInstallation={deletable && !isBuiltIn}
                         hideSaveButton
                         onDirtyChange={setPathDirty}
                         onSettingsDetected={(detected) => {
@@ -780,7 +790,7 @@ export function AgentDetailModal({
                     )}
 
                     {/* Model detection + selection */}
-                    {deletable && customProfile && (
+                    {(isBuiltIn || (deletable && customProfile)) && (
                       <div style={{ marginBottom: 18 }}>
                         <div
                           style={{

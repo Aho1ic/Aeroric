@@ -520,13 +520,19 @@ fn shell_word(value: &str) -> String {
     crate::ssh::shell_word_posix(value)
 }
 
-fn agent_args(agent: &str, permission_mode: &str) -> Vec<String> {
+fn agent_args(
+    agent: &str,
+    permission_mode: &str,
+    selected_model: Option<&str>,
+    reasoning_effort: Option<&str>,
+    speed: Option<&str>,
+) -> Vec<String> {
     let agent = if matches!(agent, "codex" | "claude_gpt55") {
         "codex"
     } else {
         agent
     };
-    match agent {
+    let mut args = match agent {
         "claude" => match permission_mode {
             "ask" => vec!["--permission-mode".to_string(), "default".to_string()],
             "auto_edit" => vec!["--permission-mode".to_string(), "acceptEdits".to_string()],
@@ -544,7 +550,41 @@ fn agent_args(agent: &str, permission_mode: &str) -> Vec<String> {
             _ => Vec::new(),
         },
         _ => Vec::new(),
+    };
+
+    if matches!(agent, "codex" | "claude_gpt55") {
+        if let Some(model) = selected_model {
+            args.push("-m".to_string());
+            args.push(model.to_string());
+        }
+        if let Some(effort) = reasoning_effort {
+            args.push("-c".to_string());
+            args.push(format!(
+                "model_reasoning_effort={}",
+                toml::Value::String(effort.to_string())
+            ));
+        }
+        if speed == Some("fast") {
+            args.push("-c".to_string());
+            args.push("service_tier=\"priority\"".to_string());
+        }
+    } else {
+        if agent == "claude" {
+            if let Some(model) = selected_model {
+                args.push("--model".to_string());
+                args.push(model.to_string());
+            }
+        }
+        if let Some(effort) = reasoning_effort.filter(|effort| *effort != "ultracode") {
+            args.push("--effort".to_string());
+            args.push(effort.to_string());
+        }
+        if speed == Some("fast") {
+            args.push("--fast".to_string());
+        }
     }
+
+    args
 }
 
 fn build_agent_command(
@@ -554,16 +594,27 @@ fn build_agent_command(
     linux_project_path: &str,
     prompt: Option<&str>,
     session_id: Option<&str>,
+    selected_model: Option<&str>,
+    reasoning_effort: Option<&str>,
+    speed: Option<&str>,
 ) -> Result<WslCommandSpec, String> {
     let project_path = validate_linux_absolute_path(linux_project_path)?;
     let (executable, _, probe) = resolve_agent_paths(distribution, agent)?;
-    let args = agent_invocation_args(agent, permission_mode, prompt, session_id);
+    let args = agent_invocation_args(
+        agent,
+        permission_mode,
+        prompt,
+        session_id,
+        selected_model,
+        reasoning_effort,
+        speed,
+    );
     let shell = resolve_login_shell(distribution, probe.shell)?;
     wsl_exec_spec(
         distribution,
         &login_shell_args(
             &shell,
-            &project_shell_command(&project_path, &executable, &args),
+            &project_shell_command(&project_path, &executable, &args, selected_model),
         ),
     )
 }
@@ -574,8 +625,17 @@ fn agent_invocation_args(
     permission_mode: &str,
     prompt: Option<&str>,
     session_id: Option<&str>,
+    selected_model: Option<&str>,
+    reasoning_effort: Option<&str>,
+    speed: Option<&str>,
 ) -> Vec<String> {
-    let mut args = agent_args(agent, permission_mode);
+    let mut args = agent_args(
+        agent,
+        permission_mode,
+        selected_model,
+        reasoning_effort,
+        speed,
+    );
     let codex_like = matches!(agent, "codex" | "claude_gpt55");
     if let Some(session_id) = session_id {
         if codex_like {
@@ -594,11 +654,21 @@ fn agent_invocation_args(
 }
 
 /// `cd 项目目录 && exec <agent>`：所有参数走 POSIX quoting，避免注入。
-fn project_shell_command(project_path: &str, executable: &str, args: &[String]) -> String {
+fn project_shell_command(
+    project_path: &str,
+    executable: &str,
+    args: &[String],
+    selected_model: Option<&str>,
+) -> String {
     let command = std::iter::once(shell_word(executable))
         .chain(args.iter().map(|arg| shell_word(arg)))
         .collect::<Vec<_>>()
         .join(" ");
+    let command = if let Some(model) = selected_model {
+        format!("env AERORIC_AGENT_MODEL={} {}", shell_word(model), command)
+    } else {
+        command
+    };
     format!(
         "cd -- {} && exec {}",
         crate::ssh::shell_quote_posix(project_path),
@@ -673,6 +743,8 @@ fn spawn_wsl_task_pty(
     cols: Option<u16>,
     rows: Option<u16>,
     on_output: Channel<String>,
+    initial_prelude: Option<Vec<u8>>,
+    initial_prompt: Option<(Vec<u8>, Vec<u8>)>,
 ) -> Result<(), String> {
     let pair = native_pty_system()
         .openpty(PtySize {
@@ -704,6 +776,8 @@ fn spawn_wsl_task_pty(
         "task-status",
         serde_json::json!({ "task_id": task_id, "status": "running" }),
     );
+    let needs_initial_input = initial_prelude.is_some() || initial_prompt.is_some();
+    let (startup_tx, startup_rx) = std::sync::mpsc::channel();
     crate::pty::spawn_pty_reader(
         app.clone(),
         task_id.to_string(),
@@ -715,10 +789,20 @@ fn spawn_wsl_task_pty(
         reader,
         true,
         None,
-        None,
+        needs_initial_input.then_some(startup_tx),
         None,
         None,
     );
+    if needs_initial_input {
+        if let Some(writer) = task_manager.pty_writers.lock().get(task_id).cloned() {
+            crate::pty::spawn_initial_input_injection(
+                writer,
+                initial_prelude,
+                initial_prompt,
+                startup_rx,
+            );
+        }
+    }
     spawn_wsl_exit_monitor(app, task_id.to_string());
     Ok(())
 }
@@ -1133,12 +1217,39 @@ pub async fn run_wsl_task(
     prompt: String,
     agent: String,
     permission_mode: String,
+    selected_model: Option<String>,
+    reasoning_effort: Option<String>,
+    speed: Option<String>,
     cols: Option<u16>,
     rows: Option<u16>,
     on_output: Channel<String>,
 ) -> Result<(), String> {
     crate::pty::validate_task_id(&task_id)?;
     ensure_distribution_available(&distribution)?;
+    let is_codex = matches!(agent.as_str(), "codex" | "claude_gpt55");
+    let selected_model = crate::pty::normalized_selected_model(selected_model.as_deref());
+    let reasoning_effort = crate::pty::normalized_reasoning_effort(
+        reasoning_effort.as_deref(),
+        is_codex,
+        selected_model.as_deref(),
+    )?;
+    let speed = crate::pty::normalized_speed(speed.as_deref())?;
+    let uses_ultracode = !is_codex && reasoning_effort.as_deref() == Some("ultracode");
+    let spec = build_agent_command(
+        &distribution,
+        &agent,
+        &permission_mode,
+        &linux_project_path,
+        (!uses_ultracode).then_some(prompt.as_str()),
+        None,
+        selected_model.as_deref(),
+        reasoning_effort.as_deref(),
+        speed.as_deref(),
+    )?;
+    let initial_prelude = uses_ultracode.then(crate::pty::initial_ultracode_command);
+    let initial_prompt = uses_ultracode
+        .then(|| crate::pty::initial_prompt_input_chunks(&prompt))
+        .flatten();
     task_manager.cancelled_tasks.lock().remove(&task_id);
     task_manager
         .manually_completed_tasks
@@ -1146,15 +1257,17 @@ pub async fn run_wsl_task(
         .remove(&task_id);
     let _ = crate::storage::truncate_task_terminal_history(&task_id);
     crate::remote::terminal_hub::hub().reset_for_truncate(&task_id);
-    let spec = build_agent_command(
-        &distribution,
-        &agent,
-        &permission_mode,
-        &linux_project_path,
-        Some(&prompt),
-        None,
-    )?;
-    spawn_wsl_task_pty(app, &task_manager, &task_id, spec, cols, rows, on_output)
+    spawn_wsl_task_pty(
+        app,
+        &task_manager,
+        &task_id,
+        spec,
+        cols,
+        rows,
+        on_output,
+        initial_prelude,
+        initial_prompt,
+    )
 }
 
 #[tauri::command]
@@ -1167,17 +1280,24 @@ pub async fn resume_wsl_task(
     agent: String,
     session_id: String,
     permission_mode: String,
+    selected_model: Option<String>,
+    reasoning_effort: Option<String>,
+    speed: Option<String>,
     cols: Option<u16>,
     rows: Option<u16>,
     on_output: Channel<String>,
 ) -> Result<(), String> {
     crate::pty::validate_task_id(&task_id)?;
     ensure_distribution_available(&distribution)?;
-    task_manager.cancelled_tasks.lock().remove(&task_id);
-    task_manager
-        .manually_completed_tasks
-        .lock()
-        .remove(&task_id);
+    let is_codex = matches!(agent.as_str(), "codex" | "claude_gpt55");
+    let selected_model = crate::pty::normalized_selected_model(selected_model.as_deref());
+    let reasoning_effort = crate::pty::normalized_reasoning_effort(
+        reasoning_effort.as_deref(),
+        is_codex,
+        selected_model.as_deref(),
+    )?;
+    let speed = crate::pty::normalized_speed(speed.as_deref())?;
+    let uses_ultracode = !is_codex && reasoning_effort.as_deref() == Some("ultracode");
     let spec = build_agent_command(
         &distribution,
         &agent,
@@ -1185,8 +1305,27 @@ pub async fn resume_wsl_task(
         &linux_project_path,
         None,
         Some(&session_id),
+        selected_model.as_deref(),
+        reasoning_effort.as_deref(),
+        speed.as_deref(),
     )?;
-    spawn_wsl_task_pty(app, &task_manager, &task_id, spec, cols, rows, on_output)
+    let initial_prelude = uses_ultracode.then(crate::pty::initial_ultracode_command);
+    task_manager.cancelled_tasks.lock().remove(&task_id);
+    task_manager
+        .manually_completed_tasks
+        .lock()
+        .remove(&task_id);
+    spawn_wsl_task_pty(
+        app,
+        &task_manager,
+        &task_id,
+        spec,
+        cols,
+        rows,
+        on_output,
+        initial_prelude,
+        None,
+    )
 }
 
 #[tauri::command]
@@ -1337,15 +1476,39 @@ mod tests {
     #[test]
     fn agent_invocation_args_match_permission_and_resume_semantics() {
         assert_eq!(
-            agent_invocation_args("claude", "full_access", Some("fix bug"), None),
+            agent_invocation_args(
+                "claude",
+                "full_access",
+                Some("fix bug"),
+                None,
+                None,
+                None,
+                None,
+            ),
             vec!["--dangerously-skip-permissions", "fix bug"]
         );
         assert_eq!(
-            agent_invocation_args("claude", "auto_edit", None, Some("session-1")),
+            agent_invocation_args(
+                "claude",
+                "auto_edit",
+                None,
+                Some("session-1"),
+                None,
+                None,
+                None,
+            ),
             vec!["--permission-mode", "acceptEdits", "--resume", "session-1"]
         );
         assert_eq!(
-            agent_invocation_args("codex", "auto_edit", Some("ship it"), None),
+            agent_invocation_args(
+                "codex",
+                "auto_edit",
+                Some("ship it"),
+                None,
+                None,
+                None,
+                None,
+            ),
             vec![
                 "--sandbox",
                 "workspace-write",
@@ -1356,15 +1519,47 @@ mod tests {
             ]
         );
         assert_eq!(
-            agent_invocation_args("codex", "ask", None, Some("session-2")),
+            agent_invocation_args("codex", "ask", None, Some("session-2"), None, None, None,),
             vec!["resume", "session-2"]
         );
         // 空 prompt 不应追加空参数，只保留权限模式参数。
         assert_eq!(
-            agent_invocation_args("claude", "ask", Some("   "), None),
+            agent_invocation_args("claude", "ask", Some("   "), None, None, None, None,),
             vec!["--permission-mode", "default"]
         );
-        assert!(agent_invocation_args("codex", "ask", Some("   "), None).is_empty());
+        assert!(
+            agent_invocation_args("codex", "ask", Some("   "), None, None, None, None,).is_empty()
+        );
+    }
+
+    #[test]
+    fn agent_invocation_args_forward_model_reasoning_and_speed() {
+        let args = agent_invocation_args(
+            "codex",
+            "ask",
+            None,
+            Some("session-2"),
+            Some("gpt-5.6-terra"),
+            Some("high"),
+            Some("fast"),
+        );
+        assert_eq!(
+            args,
+            vec![
+                "-m",
+                "gpt-5.6-terra",
+                "-c",
+                "model_reasoning_effort=\"high\"",
+                "-c",
+                "service_tier=\"priority\"",
+                "resume",
+                "session-2",
+            ]
+        );
+        assert_eq!(
+            project_shell_command("/home/me/app", "claude", &[], Some("claude-sonnet"),),
+            "cd -- '/home/me/app' && exec env AERORIC_AGENT_MODEL=claude-sonnet claude"
+        );
     }
 
     #[test]
@@ -1374,6 +1569,7 @@ mod tests {
                 "/home/me/my app",
                 "/home/me/bin/claude",
                 &["--resume".to_string(), "a b".to_string()],
+                None,
             ),
             "cd -- '/home/me/my app' && exec /home/me/bin/claude --resume 'a b'"
         );
@@ -1385,7 +1581,7 @@ mod tests {
             "Ubuntu-24.04",
             &login_shell_args(
                 "/bin/zsh",
-                &project_shell_command("/home/me/app", "claude", &[]),
+                &project_shell_command("/home/me/app", "claude", &[], None),
             ),
         )
         .unwrap();

@@ -17,6 +17,8 @@ import {
 } from "./types";
 import { Button } from "../ui/Button";
 import { ModelSelectionList } from "./ModelSelectionList";
+import { normalizeModelList, sameModel } from "../../modelOptions";
+import { AnimatedSelectionGroup } from "../ui/AnimatedSelection";
 
 const inputStyle: React.CSSProperties = {
   width: "100%",
@@ -95,6 +97,7 @@ export function AddAgentPanel({ onSaved }: { onSaved: (agentId: string) => void 
   const [selectedModels, setSelectedModels] = useState<string[]>([]);
   const [enable1mContext, setEnable1mContext] = useState(false);
   const [enableChatCompletionsProxy, setEnableChatCompletionsProxy] = useState(false);
+  const [proxyEnabled, setProxyEnabled] = useState(false);
   const [detectingModels, setDetectingModels] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -150,7 +153,7 @@ export function AddAgentPanel({ onSaved }: { onSaved: (agentId: string) => void 
         baseUrl: baseUrl.trim(),
         apiKey: apiKey.trim(),
       });
-      setModels(detected.models);
+      setModels(normalizeModelList(detected.models));
       setDetectedBalance(detected.balance ?? null);
       setSelectedModels([]);
     } catch (err) {
@@ -173,6 +176,7 @@ export function AddAgentPanel({ onSaved }: { onSaved: (agentId: string) => void 
       models: setupModels,
       enable_1m_context: kind === "claude_code" && enable1mContext,
       enable_chat_completions_proxy: kind === "codex" && enableChatCompletionsProxy,
+      ...(proxyEnabled ? { proxy_enabled: true } : {}),
     };
     setSaving(true);
     setSaved(false);
@@ -203,7 +207,9 @@ export function AddAgentPanel({ onSaved }: { onSaved: (agentId: string) => void 
 
   function toggleModel(modelName: string) {
     setSelectedModels((prev) => {
-      if (prev.includes(modelName)) return prev.filter((item) => item !== modelName);
+      if (prev.some((item) => sameModel(item, modelName))) {
+        return prev.filter((item) => !sameModel(item, modelName));
+      }
       return [...prev, modelName];
     });
   }
@@ -211,8 +217,8 @@ export function AddAgentPanel({ onSaved }: { onSaved: (agentId: string) => void 
   function handleAddManualModel() {
     const next = model.trim();
     if (!next) return;
-    setModels((prev) => (prev.includes(next) ? prev : [...prev, next]));
-    setSelectedModels((prev) => (prev.includes(next) ? prev : [...prev, next]));
+    setModels((prev) => normalizeModelList([...prev, next]));
+    setSelectedModels((prev) => normalizeModelList([...prev, next]));
     setModel("");
     window.requestAnimationFrame(() => modelInputRef.current?.focus());
   }
@@ -326,41 +332,26 @@ export function AddAgentPanel({ onSaved }: { onSaved: (agentId: string) => void 
 
       <div>
         <label style={labelStyle}>{t("appSettings.agentRuntime")}</label>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-          {kindOptions.map((option) => {
-            const selected = kind === option.kind;
-            return (
-              <button
-                key={option.kind}
-                type="button"
-                style={{
-                  textAlign: "left",
-                  border: `1px solid ${selected ? "var(--accent)" : "var(--border-medium)"}`,
-                  background: selected ? "var(--control-active-bg)" : "var(--bg-card)",
-                  color: selected ? "var(--control-active-fg)" : "var(--text-primary)",
-                  borderRadius: 8,
-                  padding: "10px 11px",
-                  cursor: "pointer",
-                }}
-                onClick={() => {
-                  setKind(option.kind);
-                  setModels([]);
-                  setDetectedBalance(null);
-                  setSelectedModels([]);
-                  if (option.kind !== "claude_code") setEnable1mContext(false);
-                  if (option.kind !== "codex") setEnableChatCompletionsProxy(false);
-                }}
-              >
-                <div style={{ fontSize: 12.5, fontWeight: 700, marginBottom: 4 }}>
-                  {t(option.labelKey)}
-                </div>
-                <div style={{ fontSize: 11.5, color: selected ? "inherit" : "var(--text-hint)" }}>
-                  {t(option.hintKey)}
-                </div>
-              </button>
-            );
-          })}
-        </div>
+        <AnimatedSelectionGroup
+          value={kind}
+          onChange={(nextKind) => {
+            setKind(nextKind as AgentSetupKind);
+            setModels([]);
+            setDetectedBalance(null);
+            setSelectedModels([]);
+            if (nextKind !== "claude_code") setEnable1mContext(false);
+            if (nextKind !== "codex") setEnableChatCompletionsProxy(false);
+          }}
+          ariaLabel={t("appSettings.agentRuntime")}
+          equalWidth
+          itemStyle={{ minHeight: 42, padding: "7px 10px", fontSize: 12.5 }}
+          options={kindOptions.map((option) => ({
+            value: option.kind,
+            label: t(option.labelKey),
+            title: t(option.hintKey),
+          }))}
+          style={{ width: "100%" }}
+        />
       </div>
 
       {kind === "codex" && (
@@ -420,6 +411,31 @@ export function AddAgentPanel({ onSaved }: { onSaved: (agentId: string) => void 
           </span>
         </label>
       )}
+
+      <label
+        style={{
+          display: "flex",
+          alignItems: "flex-start",
+          gap: 8,
+          color: "var(--text-secondary)",
+          cursor: "pointer",
+        }}
+      >
+        <input
+          type="checkbox"
+          aria-label={t("appSettings.enableProxy")}
+          checked={proxyEnabled}
+          onChange={(event) => setProxyEnabled(event.target.checked)}
+        />
+        <span>
+          <span style={{ display: "block", fontSize: 12.5, fontWeight: 650 }}>
+            {t("appSettings.enableProxy")}
+          </span>
+          <span style={{ display: "block", marginTop: 3, fontSize: 11, color: "var(--text-hint)" }}>
+            {t("appSettings.enableProxyHint")}
+          </span>
+        </span>
+      </label>
 
       <div>
         <label style={labelStyle} htmlFor={nameInputId}>

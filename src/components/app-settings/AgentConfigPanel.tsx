@@ -25,6 +25,7 @@ import {
   type ModelReasoningEffort,
 } from "./reasoningEffort";
 import { ModelSelectionList } from "./ModelSelectionList";
+import { normalizeModelList, sameModel } from "../../modelOptions";
 
 type FileState =
   | { status: "loading" }
@@ -53,15 +54,11 @@ const nameInputStyle: CSSProperties = {
 };
 
 function normalizeModels(models: string[] = []): string[] {
-  const out: string[] = [];
-  for (const model of models.map((item) => item.trim()).filter(Boolean)) {
-    if (!out.includes(model)) out.push(model);
-  }
-  return out;
+  return normalizeModelList(models);
 }
 
 function sameModels(a: string[], b: string[]): boolean {
-  return a.length === b.length && a.every((item, index) => item === b[index]);
+  return a.length === b.length && a.every((item, index) => sameModel(item, b[index]));
 }
 
 export function AgentConfigPanel({
@@ -368,8 +365,12 @@ export function AgentConfigPanel({
       const nextModels = normalizeModels(detected.models);
       const selected = new Set(selectedModels.length > 0 ? selectedModels : originalSelectedModels);
       const retained = normalizeModels([
-        ...nextModels.filter((model) => selected.has(model)),
-        ...Array.from(selected).filter((model) => !nextModels.includes(model)),
+        ...nextModels.filter((model) =>
+          Array.from(selected).some((item) => sameModel(item, model)),
+        ),
+        ...Array.from(selected).filter(
+          (model) => !nextModels.some((item) => sameModel(item, model)),
+        ),
       ]);
       setDetectedModels(normalizeModels([...nextModels, ...retained]));
       setDetectedBalance(detected.balance ?? null);
@@ -495,7 +496,9 @@ export function AgentConfigPanel({
 
   function toggleModel(modelName: string) {
     setSelectedModels((prev) => {
-      if (prev.includes(modelName)) return prev.filter((item) => item !== modelName);
+      if (prev.some((item) => sameModel(item, modelName))) {
+        return prev.filter((item) => !sameModel(item, modelName));
+      }
       return [...prev, modelName];
     });
   }

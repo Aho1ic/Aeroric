@@ -2,6 +2,7 @@ import { Plus, Search, X } from "lucide-react";
 import { useMemo, useState } from "react";
 import { useI18n } from "../../i18n";
 import { Button } from "../ui/Button";
+import { sameModel } from "../../modelOptions";
 
 function fuzzyTokenMatches(value: string, token: string): boolean {
   if (value.includes(token)) return true;
@@ -145,7 +146,7 @@ export function ModelSelectionList({
       >
         {filteredModels.length > 0 ? (
           filteredModels.map((item) => {
-            const selected = selectedModels.includes(item);
+            const selected = selectedModels.some((model) => sameModel(model, item));
             return (
               <label
                 key={item}

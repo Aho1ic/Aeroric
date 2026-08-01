@@ -121,8 +121,14 @@ fn remote_agent_program_word(agent: &str) -> Result<String, String> {
     })
 }
 
-fn remote_agent_args(agent: &str, permission_mode: &str) -> Vec<String> {
-    match if is_remote_codex_like_agent(agent) {
+fn remote_agent_args(
+    agent: &str,
+    permission_mode: &str,
+    selected_model: Option<&str>,
+    reasoning_effort: Option<&str>,
+    speed: Option<&str>,
+) -> Vec<String> {
+    let mut args = match if is_remote_codex_like_agent(agent) {
         "codex"
     } else {
         agent
@@ -144,11 +150,53 @@ fn remote_agent_args(agent: &str, permission_mode: &str) -> Vec<String> {
             _ => vec![],
         },
         _ => vec![],
+    };
+
+    if is_remote_codex_like_agent(agent) {
+        if let Some(model) = selected_model {
+            args.push("-m".to_string());
+            args.push(model.to_string());
+        }
+        if let Some(effort) = reasoning_effort {
+            args.push("-c".to_string());
+            args.push(format!(
+                "model_reasoning_effort={}",
+                toml::Value::String(effort.to_string())
+            ));
+        }
+        if speed == Some("fast") {
+            args.push("-c".to_string());
+            args.push("service_tier=\"priority\"".to_string());
+        }
+    } else {
+        if agent == "claude" {
+            if let Some(model) = selected_model {
+                args.push("--model".to_string());
+                args.push(model.to_string());
+            }
+        }
+        if let Some(effort) = reasoning_effort.filter(|effort| *effort != "ultracode") {
+            args.push("--effort".to_string());
+            args.push(effort.to_string());
+        }
+        if speed == Some("fast") {
+            args.push("--fast".to_string());
+        }
     }
+
+    args
 }
 
-fn build_remote_command(program_word: String, args: &[String]) -> String {
-    std::iter::once(program_word)
+fn build_remote_command(
+    program_word: String,
+    args: &[String],
+    selected_model: Option<&str>,
+) -> String {
+    let model_env =
+        selected_model.map(|model| format!("AERORIC_AGENT_MODEL={}", shell_word_posix(model)));
+    model_env
+        .into_iter()
+        .chain(std::iter::once(program_word))
         .chain(args.iter().map(|arg| shell_word_posix(arg)))
         .collect::<Vec<_>>()
         .join(" ")
@@ -159,9 +207,18 @@ fn build_remote_task_command(
     permission_mode: &str,
     remote_project_path: &str,
     prompt: Option<&str>,
+    selected_model: Option<&str>,
+    reasoning_effort: Option<&str>,
+    speed: Option<&str>,
 ) -> Result<String, String> {
     let program_word = remote_agent_program_word(agent)?;
-    let mut args = remote_agent_args(agent, permission_mode);
+    let mut args = remote_agent_args(
+        agent,
+        permission_mode,
+        selected_model,
+        reasoning_effort,
+        speed,
+    );
     if let Some(prompt) = prompt.map(str::trim).filter(|value| !value.is_empty()) {
         if is_remote_codex_like_agent(agent) {
             args.push("--".to_string());
@@ -171,7 +228,7 @@ fn build_remote_task_command(
     Ok(format!(
         "cd -- {} && {}",
         shell_quote_posix(remote_project_path),
-        build_remote_command(program_word, &args)
+        build_remote_command(program_word, &args, selected_model)
     ))
 }
 
@@ -180,9 +237,18 @@ fn build_remote_resume_command(
     permission_mode: &str,
     remote_project_path: &str,
     session_id: &str,
+    selected_model: Option<&str>,
+    reasoning_effort: Option<&str>,
+    speed: Option<&str>,
 ) -> Result<String, String> {
     let program_word = remote_agent_program_word(agent)?;
-    let mut args = remote_agent_args(agent, permission_mode);
+    let mut args = remote_agent_args(
+        agent,
+        permission_mode,
+        selected_model,
+        reasoning_effort,
+        speed,
+    );
     if is_remote_codex_like_agent(agent) {
         args.push("resume".to_string());
         args.push(session_id.to_string());
@@ -193,7 +259,7 @@ fn build_remote_resume_command(
     Ok(format!(
         "cd -- {} && {}",
         shell_quote_posix(remote_project_path),
-        build_remote_command(program_word, &args)
+        build_remote_command(program_word, &args, selected_model)
     ))
 }
 
@@ -486,6 +552,8 @@ fn spawn_remote_task_pty(
     cols: Option<u16>,
     rows: Option<u16>,
     on_output: Channel<String>,
+    initial_prelude: Option<Vec<u8>>,
+    initial_prompt: Option<(Vec<u8>, Vec<u8>)>,
 ) -> Result<(), String> {
     let pair = native_pty_system()
         .openpty(PtySize {
@@ -507,6 +575,8 @@ fn spawn_remote_task_pty(
         serde_json::json!({ "task_id": task_id, "status": "running" }),
     );
 
+    let needs_initial_input = initial_prelude.is_some() || initial_prompt.is_some();
+    let (startup_tx, startup_rx) = std::sync::mpsc::channel();
     crate::pty::spawn_pty_reader(
         app.clone(),
         task_id.to_string(),
@@ -518,10 +588,20 @@ fn spawn_remote_task_pty(
         reader,
         true,
         None,
-        None,
+        needs_initial_input.then_some(startup_tx),
         None,
         None,
     );
+    if needs_initial_input {
+        if let Some(writer) = task_manager.pty_writers.lock().get(task_id).cloned() {
+            crate::pty::spawn_initial_input_injection(
+                writer,
+                initial_prelude,
+                initial_prompt,
+                startup_rx,
+            );
+        }
+    }
     spawn_remote_task_exit_monitor(app, task_id.to_string());
     Ok(())
 }
@@ -655,11 +735,36 @@ pub async fn run_remote_task(
     prompt: String,
     agent: String,
     permission_mode: String,
+    selected_model: Option<String>,
+    reasoning_effort: Option<String>,
+    speed: Option<String>,
     cols: Option<u16>,
     rows: Option<u16>,
     on_output: Channel<String>,
 ) -> Result<(), String> {
     crate::pty::validate_task_id(&task_id)?;
+    let is_codex = is_remote_codex_like_agent(&agent);
+    let selected_model = crate::pty::normalized_selected_model(selected_model.as_deref());
+    let reasoning_effort = crate::pty::normalized_reasoning_effort(
+        reasoning_effort.as_deref(),
+        is_codex,
+        selected_model.as_deref(),
+    )?;
+    let speed = crate::pty::normalized_speed(speed.as_deref())?;
+    let uses_ultracode = !is_codex && reasoning_effort.as_deref() == Some("ultracode");
+    let remote_command = build_remote_task_command(
+        &agent,
+        &permission_mode,
+        &remote_project_path,
+        (!uses_ultracode).then_some(prompt.as_str()),
+        selected_model.as_deref(),
+        reasoning_effort.as_deref(),
+        speed.as_deref(),
+    )?;
+    let initial_prelude = uses_ultracode.then(crate::pty::initial_ultracode_command);
+    let initial_prompt = uses_ultracode
+        .then(|| crate::pty::initial_prompt_input_chunks(&prompt))
+        .flatten();
     task_manager.cancelled_tasks.lock().remove(&task_id);
     task_manager
         .manually_completed_tasks
@@ -668,14 +773,18 @@ pub async fn run_remote_task(
     let _ = crate::storage::truncate_task_terminal_history(&task_id);
     // 历史清零 → 远程终端流水位换代,已订阅的手机端自动重新快照
     crate::remote::terminal_hub::hub().reset_for_truncate(&task_id);
-    let remote_command = build_remote_task_command(
-        &agent,
-        &permission_mode,
-        &remote_project_path,
-        Some(&prompt),
-    )?;
     let cmd = build_ssh_remote_command(&connection, remote_command);
-    spawn_remote_task_pty(app, &task_manager, &task_id, cmd, cols, rows, on_output)
+    spawn_remote_task_pty(
+        app,
+        &task_manager,
+        &task_id,
+        cmd,
+        cols,
+        rows,
+        on_output,
+        initial_prelude,
+        initial_prompt,
+    )
 }
 
 #[tauri::command]
@@ -688,20 +797,50 @@ pub async fn resume_remote_task(
     agent: String,
     session_id: String,
     permission_mode: String,
+    selected_model: Option<String>,
+    reasoning_effort: Option<String>,
+    speed: Option<String>,
     cols: Option<u16>,
     rows: Option<u16>,
     on_output: Channel<String>,
 ) -> Result<(), String> {
     crate::pty::validate_task_id(&task_id)?;
+    let is_codex = is_remote_codex_like_agent(&agent);
+    let selected_model = crate::pty::normalized_selected_model(selected_model.as_deref());
+    let reasoning_effort = crate::pty::normalized_reasoning_effort(
+        reasoning_effort.as_deref(),
+        is_codex,
+        selected_model.as_deref(),
+    )?;
+    let speed = crate::pty::normalized_speed(speed.as_deref())?;
+    let uses_ultracode = !is_codex && reasoning_effort.as_deref() == Some("ultracode");
+    let remote_command = build_remote_resume_command(
+        &agent,
+        &permission_mode,
+        &remote_project_path,
+        &session_id,
+        selected_model.as_deref(),
+        reasoning_effort.as_deref(),
+        speed.as_deref(),
+    )?;
+    let initial_prelude = uses_ultracode.then(crate::pty::initial_ultracode_command);
     task_manager.cancelled_tasks.lock().remove(&task_id);
     task_manager
         .manually_completed_tasks
         .lock()
         .remove(&task_id);
-    let remote_command =
-        build_remote_resume_command(&agent, &permission_mode, &remote_project_path, &session_id)?;
     let cmd = build_ssh_remote_command(&connection, remote_command);
-    spawn_remote_task_pty(app, &task_manager, &task_id, cmd, cols, rows, on_output)
+    spawn_remote_task_pty(
+        app,
+        &task_manager,
+        &task_id,
+        cmd,
+        cols,
+        rows,
+        on_output,
+        initial_prelude,
+        None,
+    )
 }
 
 #[tauri::command]
@@ -1013,6 +1152,9 @@ mod tests {
                 "auto_edit",
                 "/srv/app's repo",
                 Some("fix Bob's bug"),
+                None,
+                None,
+                None,
             )
             .unwrap(),
             "cd -- '/srv/app'\\''s repo' && 'claude' --permission-mode acceptEdits 'fix Bob'\\''s bug'"
@@ -1022,7 +1164,15 @@ mod tests {
     #[test]
     fn remote_codex_task_command_uses_sandbox_flags_and_separator() {
         assert_eq!(
-            build_remote_task_command("codex", "auto_edit", "/srv/app", Some("inspect status"))
+            build_remote_task_command(
+                "codex",
+                "auto_edit",
+                "/srv/app",
+                Some("inspect status"),
+                None,
+                None,
+                None,
+            )
                 .unwrap(),
             "cd -- '/srv/app' && 'codex' --sandbox workspace-write -a on-request -- 'inspect status'"
         );
@@ -1036,6 +1186,9 @@ mod tests {
                 "full_access",
                 "/srv/app",
                 Some("inspect status"),
+                None,
+                None,
+                None,
             )
             .unwrap(),
             "cd -- '/srv/app' && \"$HOME/.claude/start-gpt55.sh\" --dangerously-bypass-approvals-and-sandbox -- 'inspect status'"
@@ -1045,12 +1198,29 @@ mod tests {
     #[test]
     fn remote_resume_command_uses_agent_specific_session_flags() {
         assert_eq!(
-            build_remote_resume_command("claude", "ask", "/srv/app", "claude-session").unwrap(),
+            build_remote_resume_command(
+                "claude",
+                "ask",
+                "/srv/app",
+                "claude-session",
+                None,
+                None,
+                None,
+            )
+            .unwrap(),
             "cd -- '/srv/app' && 'claude' --permission-mode default --resume claude-session"
         );
         assert_eq!(
-            build_remote_resume_command("codex", "full_access", "/srv/app", "codex-session")
-                .unwrap(),
+            build_remote_resume_command(
+                "codex",
+                "full_access",
+                "/srv/app",
+                "codex-session",
+                None,
+                None,
+                None,
+            )
+            .unwrap(),
             "cd -- '/srv/app' && 'codex' --dangerously-bypass-approvals-and-sandbox resume codex-session"
         );
     }
@@ -1058,7 +1228,34 @@ mod tests {
     #[test]
     fn remote_agent_id_rejects_shell_metacharacters() {
         assert!(validate_remote_agent_id("claude; touch /tmp/pwn").is_err());
-        assert!(build_remote_task_command("custom_agent", "ask", "/srv/app", None).is_ok());
+        assert!(build_remote_task_command(
+            "custom_agent",
+            "ask",
+            "/srv/app",
+            None,
+            None,
+            None,
+            None,
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn remote_task_command_forwards_model_reasoning_and_speed() {
+        let command = build_remote_task_command(
+            "codex",
+            "auto_edit",
+            "/srv/app",
+            Some("inspect status"),
+            Some("gpt-5.6-terra"),
+            Some("high"),
+            Some("fast"),
+        )
+        .unwrap();
+        assert!(command.contains("AERORIC_AGENT_MODEL=gpt-5.6-terra"));
+        assert!(command.contains("-m gpt-5.6-terra"));
+        assert!(command.contains("model_reasoning_effort=\"high\""));
+        assert!(command.contains("service_tier=\"priority\""));
     }
 
     #[test]

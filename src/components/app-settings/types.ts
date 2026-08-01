@@ -162,6 +162,7 @@ export interface AgentSetupDraft {
   models: string[];
   enable_1m_context: boolean;
   enable_chat_completions_proxy: boolean;
+  proxy_enabled?: boolean;
 }
 
 export interface AgentModels {

@@ -248,6 +248,7 @@ export function ProjectPage({
     launchMode: "local" | "worktree";
     baseBranch: string;
     selectedModel?: string;
+    reasoningEffort?: string | null;
     speed?: string;
     injectPromptIntoTerminal?: boolean;
   }) => void;

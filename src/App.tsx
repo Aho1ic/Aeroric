@@ -499,9 +499,21 @@ function App() {
       agent?: string;
       permissionMode?: string;
       selectedModel?: string;
+      reasoningEffort?: string | null;
+      speed?: string;
     }>("remote-task-request", async (e) => {
-      const { requestId, kind, projectId, taskId, prompt, agent, permissionMode, selectedModel } =
-        e.payload;
+      const {
+        requestId,
+        kind,
+        projectId,
+        taskId,
+        prompt,
+        agent,
+        permissionMode,
+        selectedModel,
+        reasoningEffort,
+        speed,
+      } = e.payload;
       if (!requestId) return;
       const complete = async (accepted: boolean, resultTaskId?: string, error?: string) => {
         try {
@@ -586,6 +598,8 @@ function App() {
         agent: (agent ?? "claude") as AgentType,
         permissionMode: (permissionMode ?? "ask") as PermissionMode,
         selectedModel,
+        reasoningEffort,
+        speed,
         images: [],
         texts: [],
         immediate: true,
@@ -733,6 +747,7 @@ function App() {
       prompt: task.prompt,
       agent: task.agent,
       selectedModel: task.selectedModel,
+      reasoningEffort: task.reasoningEffort,
       speed: task.speed,
       permissionMode: task.permissionMode,
       images,
@@ -755,6 +770,9 @@ function App() {
       remoteProjectPath,
       prompt: task.prompt,
       agent: task.agent,
+      selectedModel: task.selectedModel,
+      reasoningEffort: task.reasoningEffort,
+      speed: task.speed,
       permissionMode: task.permissionMode,
       cols: tm.terminalSizeRef.current.cols,
       rows: tm.terminalSizeRef.current.rows,
@@ -773,6 +791,9 @@ function App() {
       linuxProjectPath,
       prompt: task.prompt,
       agent: task.agent,
+      selectedModel: task.selectedModel,
+      reasoningEffort: task.reasoningEffort,
+      speed: task.speed,
       permissionMode: task.permissionMode,
       cols: tm.terminalSizeRef.current.cols,
       rows: tm.terminalSizeRef.current.rows,
@@ -796,6 +817,7 @@ function App() {
       launchMode,
       baseBranch,
       selectedModel,
+      reasoningEffort,
       speed,
       injectPromptIntoTerminal,
     }: {
@@ -805,6 +827,7 @@ function App() {
       texts: string[];
       permissionMode: PermissionMode;
       selectedModel?: string;
+      reasoningEffort?: string | null;
       speed?: string;
       immediate: boolean;
       launchMode: "local" | "worktree";
@@ -848,6 +871,7 @@ function App() {
       name: prompt.trim() ? undefined : agentDisplayLabel(agent, agentOptions),
       agent,
       selectedModel,
+      reasoningEffort: reasoningEffort ?? undefined,
       speed,
       permissionMode,
       status: immediate ? "pending" : "todo",
@@ -1057,6 +1081,9 @@ function App() {
         agent: task.agent,
         sessionId,
         permissionMode: task.permissionMode,
+        selectedModel: task.selectedModel,
+        reasoningEffort: task.reasoningEffort,
+        speed: task.speed,
         cols: tm.terminalSizeRef.current.cols,
         rows: tm.terminalSizeRef.current.rows,
         onOutput: tm.createOutputChannel(task.id),
@@ -1075,6 +1102,9 @@ function App() {
         agent: task.agent,
         sessionId,
         permissionMode: task.permissionMode,
+        selectedModel: task.selectedModel,
+        reasoningEffort: task.reasoningEffort,
+        speed: task.speed,
         cols: tm.terminalSizeRef.current.cols,
         rows: tm.terminalSizeRef.current.rows,
         onOutput: tm.createOutputChannel(task.id),
@@ -1093,6 +1123,7 @@ function App() {
       prompt: task.prompt,
       permissionMode: task.permissionMode,
       selectedModel: task.selectedModel,
+      reasoningEffort: task.reasoningEffort,
       speed: task.speed,
       cols: tm.terminalSizeRef.current.cols,
       rows: tm.terminalSizeRef.current.rows,

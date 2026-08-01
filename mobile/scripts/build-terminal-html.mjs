@@ -55,11 +55,12 @@ const glue = `
   ime.setAttribute("autocapitalize", "none");
   ime.setAttribute("spellcheck", "false");
   ime.style.cssText =
-    "position:fixed;left:0;bottom:0;width:1px;height:1px;opacity:0;" +
+    "position:fixed;left:2px;bottom:2px;width:2px;height:2px;opacity:0.01;" +
     "padding:0;border:0;resize:none;background:transparent;color:transparent;" +
-    "caret-color:transparent;z-index:-1;";
+    "caret-color:transparent;z-index:20;pointer-events:none;";
   document.body.appendChild(ime);
   var composing = false;
+  var suppressNextInput = false;
   function flushIme() {
     if (ime.value) {
       post({ type: "input", data: ime.value });
@@ -68,12 +69,33 @@ const glue = `
   }
   ime.addEventListener("compositionstart", function () {
     composing = true;
+    suppressNextInput = false;
   });
   ime.addEventListener("compositionend", function () {
     composing = false;
     flushIme();
   });
+  // iOS/Android 的英文、数字、符号输入有时只触发 beforeinput/input,
+  // 不会进入 composition。beforeinput 直接发送可见字符,避免隐藏 textarea
+  // 的零尺寸/负 z-index 让非中文输入丢失。
+  ime.addEventListener("beforeinput", function (ev) {
+    if (composing) return;
+    if (ev.inputType === "insertText" && ev.data) {
+      ev.preventDefault();
+      post({ type: "input", data: ev.data });
+      ime.value = "";
+      suppressNextInput = true;
+    } else if (ev.inputType === "deleteContentBackward" && !ime.value) {
+      ev.preventDefault();
+      post({ type: "input", data: "\u007f" });
+    }
+  });
   ime.addEventListener("input", function () {
+    if (suppressNextInput) {
+      suppressNextInput = false;
+      ime.value = "";
+      return;
+    }
     if (!composing) flushIme();
   });
   ime.addEventListener("keydown", function (ev) {
@@ -96,6 +118,8 @@ const glue = `
     post({ type: "ime-focus", focused: false });
   });
   function focusIme() {
+    term.blur();
+    ime.value = "";
     ime.focus({ preventScroll: true });
   }
   function blurIme() {

@@ -107,10 +107,14 @@ export const AgentPathSection = forwardRef<
   {
     agentKey: AgentKey;
     hideSaveButton?: boolean;
+    hideInstallation?: boolean;
     onDirtyChange?: (dirty: boolean) => void;
     onSettingsDetected?: (settings: AppSettings) => void;
   }
->(function AgentPathSection({ agentKey, hideSaveButton, onDirtyChange, onSettingsDetected }, ref) {
+>(function AgentPathSection(
+  { agentKey, hideSaveButton, hideInstallation, onDirtyChange, onSettingsDetected },
+  ref,
+) {
   const { t } = useI18n();
   const builtInAgent = isBuiltInAgent(agentKey) ? agentKey : null;
   const pathField = builtInAgent ? pathFieldByAgent[builtInAgent] : null;
@@ -328,46 +332,48 @@ export const AgentPathSection = forwardRef<
     <div style={{ display: "flex", flexDirection: "column", gap: 12, marginBottom: 18 }}>
       {error && <div style={{ color: "var(--danger)", fontSize: 12.5 }}>{error}</div>}
 
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-        }}
-      >
-        <span style={{ fontSize: 13, fontWeight: 600, color: "var(--text-primary)" }}>
-          {t("appSettings.installation")}
-        </span>
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          {loading && (
-            <span style={{ color: "var(--text-hint)", fontSize: 12 }}>{t("common.loading")}</span>
-          )}
-          {pathField && (
-            <Button variant="outline" size="sm" onClick={handleDetect} disabled={detecting}>
-              <RefreshCw size={12} className={detecting ? "spin" : undefined} />
-              {detecting ? t("appSettings.detecting") : t("appSettings.autoDetect")}
+      {!hideInstallation && (
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+          }}
+        >
+          <span style={{ fontSize: 13, fontWeight: 600, color: "var(--text-primary)" }}>
+            {t("appSettings.installation")}
+          </span>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            {loading && (
+              <span style={{ color: "var(--text-hint)", fontSize: 12 }}>{t("common.loading")}</span>
+            )}
+            {pathField && (
+              <Button variant="outline" size="sm" onClick={handleDetect} disabled={detecting}>
+                <RefreshCw size={12} className={detecting ? "spin" : undefined} />
+                {detecting ? t("appSettings.detecting") : t("appSettings.autoDetect")}
+              </Button>
+            )}
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => loadVersions(settings)}
+              disabled={refreshing || upgrading}
+            >
+              <RefreshCw size={12} className={refreshing ? "spin" : undefined} />
+              {refreshing ? t("appSettings.refreshing") : t("appSettings.refreshVersions")}
             </Button>
-          )}
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => loadVersions(settings)}
-            disabled={refreshing || upgrading}
-          >
-            <RefreshCw size={12} className={refreshing ? "spin" : undefined} />
-            {refreshing ? t("appSettings.refreshing") : t("appSettings.refreshVersions")}
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => void handleUpgrade()}
-            disabled={upgrading || refreshing || loading}
-          >
-            <RefreshCw size={12} className={upgrading ? "spin" : undefined} />
-            {upgrading ? t("appSettings.upgrading") : t("appSettings.upgradeToLatest")}
-          </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => void handleUpgrade()}
+              disabled={upgrading || refreshing || loading}
+            >
+              <RefreshCw size={12} className={upgrading ? "spin" : undefined} />
+              {upgrading ? t("appSettings.upgrading") : t("appSettings.upgradeToLatest")}
+            </Button>
+          </div>
         </div>
-      </div>
+      )}
 
       {upgradeResult && (
         <div
@@ -387,36 +393,38 @@ export const AgentPathSection = forwardRef<
         </div>
       )}
 
-      <div style={fieldStyle}>
-        <label style={labelStyle}>{pathLabel}</label>
-        <input
-          style={{
-            ...inputStyle,
-            opacity: loading ? 0.65 : 1,
-            cursor: loading ? "wait" : "text",
-          }}
-          value={currentPath}
-          onChange={(e) => {
-            clearVersions();
-            const nextPath = e.target.value;
-            setSettings((prev) => {
-              if (pathField) return { ...prev, [pathField]: nextPath };
-              return {
-                ...prev,
-                custom_agents: (prev.custom_agents ?? []).map((profile) =>
-                  profile.id === agentKey ? { ...profile, path: nextPath } : profile,
-                ),
-              };
-            });
-          }}
-          placeholder={getAgentExecutablePlaceholder(agentKey)}
-          disabled={loading}
-          spellCheck={false}
-        />
-        <span style={hintStyle}>{pathHint}</span>
-      </div>
+      {!hideInstallation && (
+        <div style={fieldStyle}>
+          <label style={labelStyle}>{pathLabel}</label>
+          <input
+            style={{
+              ...inputStyle,
+              opacity: loading ? 0.65 : 1,
+              cursor: loading ? "wait" : "text",
+            }}
+            value={currentPath}
+            onChange={(e) => {
+              clearVersions();
+              const nextPath = e.target.value;
+              setSettings((prev) => {
+                if (pathField) return { ...prev, [pathField]: nextPath };
+                return {
+                  ...prev,
+                  custom_agents: (prev.custom_agents ?? []).map((profile) =>
+                    profile.id === agentKey ? { ...profile, path: nextPath } : profile,
+                  ),
+                };
+              });
+            }}
+            placeholder={getAgentExecutablePlaceholder(agentKey)}
+            disabled={loading}
+            spellCheck={false}
+          />
+          <span style={hintStyle}>{pathHint}</span>
+        </div>
+      )}
 
-      {configPathField && (
+      {!hideInstallation && configPathField && (
         <div style={fieldStyle}>
           <label style={labelStyle}>{t("appSettings.configFilePath")}</label>
           <input
@@ -466,17 +474,19 @@ export const AgentPathSection = forwardRef<
         {t("appSettings.enableProxy")}
       </label>
 
-      <div style={fieldStyle}>
-        <label style={labelStyle}>{t("appSettings.installedVersions")}</label>
-        <input
-          style={inputStyle}
-          value={versionValue}
-          readOnly
-          placeholder={t("common.notDetected")}
-          spellCheck={false}
-        />
-        <span style={hintStyle}>{t("appSettings.versionsHint")}</span>
-      </div>
+      {!hideInstallation && (
+        <div style={fieldStyle}>
+          <label style={labelStyle}>{t("appSettings.installedVersions")}</label>
+          <input
+            style={inputStyle}
+            value={versionValue}
+            readOnly
+            placeholder={t("common.notDetected")}
+            spellCheck={false}
+          />
+          <span style={hintStyle}>{t("appSettings.versionsHint")}</span>
+        </div>
+      )}
 
       {!hideSaveButton && (
         <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 10 }}>

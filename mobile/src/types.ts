@@ -58,6 +58,9 @@ export interface Task {
   name?: string;
   prompt: string;
   agent: string;
+  selectedModel?: string;
+  reasoningEffort?: string;
+  speed?: string;
   status: TaskStatus;
   createdAt: number;
   attentionRequestedAt?: number;
@@ -153,6 +156,7 @@ export interface AgentConfigEntry {
   models?: string[];
   enable1mContext?: boolean;
   enableChatCompletionsProxy?: boolean;
+  proxyEnabled?: boolean;
 }
 
 export type PermissionMode = "ask" | "auto_edit" | "full_access";

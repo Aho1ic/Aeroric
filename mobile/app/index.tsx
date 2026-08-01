@@ -113,7 +113,7 @@ function ProjectCard({
 }) {
   const { project, tasks } = section;
   const needsInput = tasks.some((task) => task.status === "input_required");
-  const initial = project.name.trim().charAt(0).toUpperCase() || "?";
+  const activeCount = tasks.filter((task) => ["pending", "running", "input_required"].includes(task.status)).length;
   const pinned = Boolean(project.pinned);
   return (
     <Pressable
@@ -127,9 +127,6 @@ function ProjectCard({
         })
       }
     >
-      <View style={styles.projectAvatar}>
-        <Text style={styles.projectAvatarText}>{initial}</Text>
-      </View>
       <View style={styles.projectBody}>
         <View style={styles.projectTitleRow}>
           <Text style={styles.projectName} numberOfLines={1}>
@@ -138,7 +135,11 @@ function ProjectCard({
           {needsInput ? <View style={styles.attentionDot} /> : null}
         </View>
         <Text style={styles.projectMeta} numberOfLines={1}>
+          {project.path}
+        </Text>
+        <Text style={styles.projectMeta} numberOfLines={1}>
           {t("home.projectTaskCount", { count: tasks.length })}
+          {activeCount > 0 ? `  ·  ${activeCount} ${t("status.running")}` : ""}
         </Text>
       </View>
       <Pressable
@@ -158,8 +159,8 @@ function ProjectCard({
           onTogglePinned(project.id, !pinned);
         }}
       >
-        <Pin
-          size={16}
+          <Pin
+          size={13}
           color={pinned ? theme.onAccent : theme.textSecondary}
           strokeWidth={pinned ? 2.6 : 2}
         />
@@ -175,7 +176,7 @@ function ProjectCard({
           onNewTask(project.id);
         }}
       >
-        <Plus size={18} color={theme.text} strokeWidth={2.4} />
+        <Plus size={15} color={theme.text} strokeWidth={2.4} />
       </Pressable>
     </Pressable>
   );
@@ -443,34 +444,25 @@ const styles = StyleSheet.create({
   projectCard: {
     flexDirection: "row",
     alignItems: "center",
-    gap: spacing.md,
+    gap: spacing.sm,
     marginHorizontal: spacing.md,
     marginVertical: spacing.xs,
     paddingHorizontal: spacing.md,
-    paddingVertical: spacing.md,
+    paddingVertical: spacing.sm,
     backgroundColor: theme.bgCard,
     borderRadius: radii.card,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: theme.border,
   },
   pressed: { opacity: 0.7 },
-  projectAvatar: {
-    width: 36,
-    height: 36,
-    borderRadius: radii.button,
-    backgroundColor: theme.bgElevated,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  projectAvatarText: { color: theme.text, fontSize: 15, fontWeight: "700" },
   projectBody: { flex: 1, gap: 2 },
   projectTitleRow: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
   projectName: { color: theme.text, fontSize: 15, fontWeight: "600", flexShrink: 1 },
   attentionDot: { width: 8, height: 8, borderRadius: radii.pill, backgroundColor: theme.warning },
   projectMeta: { color: theme.textHint, fontSize: typography.metaSize },
   addButton: {
-    width: 34,
-    height: 34,
+    width: 28,
+    height: 28,
     borderRadius: radii.button,
     alignItems: "center",
     justifyContent: "center",

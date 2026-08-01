@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::fs;
+use std::net::{IpAddr, SocketAddr};
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -93,6 +94,8 @@ pub struct AgentSetupDraft {
     pub enable_1m_context: bool,
     #[serde(default)]
     pub enable_chat_completions_proxy: bool,
+    #[serde(default)]
+    pub proxy_enabled: bool,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
@@ -1093,13 +1096,104 @@ fn normalize_base_url(value: &str) -> String {
     value.trim().trim_end_matches('/').to_string()
 }
 
-fn model_endpoint(base_url: &str) -> String {
-    let base = normalize_base_url(base_url);
-    if base.ends_with("/v1") {
-        format!("{}/models", base)
-    } else {
-        format!("{}/v1/models", base)
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ModelDetectionPolicy {
+    LocalUser,
+    PairedDevice,
+}
+
+fn is_private_or_local_ip(address: IpAddr) -> bool {
+    match address {
+        IpAddr::V4(address) => {
+            let octets = address.octets();
+            address.is_private()
+                || address.is_loopback()
+                || address.is_link_local()
+                || address.is_unspecified()
+                || address.is_broadcast()
+                || address.is_multicast()
+                || (octets[0] == 100 && (64..=127).contains(&octets[1]))
+        }
+        IpAddr::V6(address) => {
+            let segments = address.segments();
+            address
+                .to_ipv4()
+                .map(|mapped| is_private_or_local_ip(IpAddr::V4(mapped)))
+                .unwrap_or(false)
+                || address.is_loopback()
+                || address.is_unspecified()
+                || address.is_multicast()
+                || (segments[0] & 0xfe00) == 0xfc00
+                || (segments[0] & 0xffc0) == 0xfe80
+        }
     }
+}
+
+async fn resolve_remote_model_addresses(base_url: &url::Url) -> Result<Vec<SocketAddr>, String> {
+    let host = base_url
+        .host_str()
+        .ok_or_else(|| "Base URL must include a host".to_string())?;
+    let port = base_url
+        .port_or_known_default()
+        .ok_or_else(|| "Base URL must include a supported port".to_string())?;
+    let addresses = tokio::net::lookup_host((host, port))
+        .await
+        .map_err(|error| format!("Could not resolve model endpoint: {error}"))?
+        .filter(|address| !is_private_or_local_ip(address.ip()))
+        .collect::<Vec<_>>();
+    if addresses.is_empty() {
+        return Err("Remote model detection cannot target a local or private address".to_string());
+    }
+    Ok(addresses)
+}
+
+fn validate_model_base_url(
+    base_url: &str,
+    policy: ModelDetectionPolicy,
+) -> Result<url::Url, String> {
+    let normalized = normalize_base_url(base_url);
+    if normalized.is_empty() {
+        return Err("Base URL is required".to_string());
+    }
+    let url = url::Url::parse(&normalized).map_err(|_| "Invalid Base URL".to_string())?;
+    if !matches!(url.scheme(), "http" | "https") {
+        return Err("Base URL must use http or https".to_string());
+    }
+    if !url.username().is_empty() || url.password().is_some() {
+        return Err("Base URL cannot contain credentials".to_string());
+    }
+    let host = url
+        .host_str()
+        .ok_or_else(|| "Base URL must include a host".to_string())?;
+    if matches!(policy, ModelDetectionPolicy::PairedDevice) {
+        let normalized_host = host.trim_end_matches('.').to_ascii_lowercase();
+        let local_name = normalized_host == "localhost"
+            || normalized_host.ends_with(".localhost")
+            || normalized_host.ends_with(".local");
+        let private_ip = normalized_host
+            .parse::<IpAddr>()
+            .map(is_private_or_local_ip)
+            .unwrap_or(false);
+        if local_name || private_ip {
+            return Err(
+                "Remote model detection cannot target a local or private address".to_string(),
+            );
+        }
+    }
+    Ok(url)
+}
+
+fn model_endpoint(base_url: &url::Url) -> String {
+    let mut endpoint = base_url.clone();
+    let mut path = endpoint.path().trim_end_matches('/').to_string();
+    if !path.ends_with("/v1") {
+        path.push_str("/v1");
+    }
+    path.push_str("/models");
+    endpoint.set_path(&path);
+    endpoint.set_query(None);
+    endpoint.set_fragment(None);
+    endpoint.to_string()
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1391,7 +1485,7 @@ fn parse_model_ids(value: serde_json::Value) -> Vec<String> {
     let mut out = Vec::new();
     collect_model_ids(&value, &mut out);
     out.sort_by_key(|model| model.to_ascii_lowercase());
-    out.dedup();
+    out.dedup_by(|left, right| left.eq_ignore_ascii_case(right));
     out
 }
 
@@ -1413,12 +1507,13 @@ fn list_builtin_claude_models() -> Vec<String> {
 
 fn normalize_model_list(models: Vec<String>) -> Vec<String> {
     let mut out = Vec::new();
+    let mut seen = HashSet::new();
     for model in models
         .into_iter()
         .map(|model| model.trim().to_string())
         .filter(|model| !model.is_empty())
     {
-        if !out.contains(&model) {
+        if seen.insert(model.to_ascii_lowercase()) {
             out.push(model);
         }
     }
@@ -2630,6 +2725,7 @@ fn refresh_stale_codex_agent_scripts(settings: &mut AppSettings) {
             models: profile.models.clone(),
             enable_1m_context: profile.enable_1m_context,
             enable_chat_completions_proxy: profile.enable_chat_completions_proxy,
+            proxy_enabled: false,
         };
         if validate_agent_setup_draft(&draft).is_err() {
             continue;
@@ -2674,6 +2770,7 @@ fn refresh_stale_claude_agent_scripts(settings: &mut AppSettings) {
             models: profile.models.clone(),
             enable_1m_context: profile.enable_1m_context,
             enable_chat_completions_proxy: profile.enable_chat_completions_proxy,
+            proxy_enabled: false,
         };
         if validate_agent_setup_draft(&draft).is_err() {
             continue;
@@ -3090,6 +3187,7 @@ fn custom_agent_setup_draft(agent: &AgentConfigBundleAgent) -> Option<AgentSetup
         models: agent.models.clone(),
         enable_1m_context: agent.enable_1m_context,
         enable_chat_completions_proxy: agent.enable_chat_completions_proxy,
+        proxy_enabled: false,
     })
 }
 
@@ -3656,6 +3754,7 @@ pub async fn save_custom_agent_profile(profile: CustomAgentProfile) -> Result<Ap
                 models: profile.models.clone(),
                 enable_1m_context: profile.enable_1m_context,
                 enable_chat_completions_proxy: profile.enable_chat_completions_proxy,
+                proxy_enabled: false,
             };
             validate_agent_setup_draft(&draft)?;
             let script = build_codex_agent_script(&draft);
@@ -3695,7 +3794,7 @@ pub async fn setup_agent_profile(draft: AgentSetupDraft) -> Result<AppSettings, 
         let script = build_agent_script(&draft);
         let script_path = write_agent_script(&id, &script)?;
         let profile = CustomAgentProfile {
-            id,
+            id: id.clone(),
             label: draft.label.trim().to_string(),
             path: script_path.to_string_lossy().into_owned(),
             codex_like: matches!(draft.kind, AgentSetupKind::Codex),
@@ -3711,6 +3810,7 @@ pub async fn setup_agent_profile(draft: AgentSetupDraft) -> Result<AppSettings, 
         let profile = normalize_custom_agent_profile(profile)
             .ok_or_else(|| "Invalid custom agent profile".to_string())?;
 
+        settings.agent_proxy_enabled.insert(id, draft.proxy_enabled);
         settings.custom_agents.push(profile);
 
         let dir = aeroric_dir()?;
@@ -3733,19 +3833,49 @@ pub async fn detect_agent_models(
     base_url: String,
     api_key: String,
 ) -> Result<AgentModels, String> {
-    let endpoint = model_endpoint(&base_url);
+    detect_agent_models_with_policy(kind, base_url, api_key, ModelDetectionPolicy::LocalUser).await
+}
+
+pub(crate) async fn detect_agent_models_for_remote(
+    kind: AgentSetupKind,
+    base_url: String,
+    api_key: String,
+) -> Result<AgentModels, String> {
+    detect_agent_models_with_policy(kind, base_url, api_key, ModelDetectionPolicy::PairedDevice)
+        .await
+}
+
+async fn detect_agent_models_with_policy(
+    kind: AgentSetupKind,
+    base_url: String,
+    api_key: String,
+    policy: ModelDetectionPolicy,
+) -> Result<AgentModels, String> {
     let api_key = api_key.trim().to_string();
-    if normalize_base_url(&base_url).is_empty() {
-        return Err("Base URL is required".to_string());
-    }
     if api_key.is_empty() {
         return Err("API key is required".to_string());
     }
+    let base_url = validate_model_base_url(&base_url, policy)?;
+    let endpoint = model_endpoint(&base_url);
 
-    let client = reqwest::Client::new();
+    let resolved_addresses = if matches!(policy, ModelDetectionPolicy::PairedDevice) {
+        Some(resolve_remote_model_addresses(&base_url).await?)
+    } else {
+        None
+    };
+    let mut client_builder = reqwest::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .redirect(reqwest::redirect::Policy::none());
+    if let Some(addresses) = resolved_addresses.as_deref() {
+        let host = base_url
+            .host_str()
+            .ok_or_else(|| "Base URL must include a host".to_string())?;
+        client_builder = client_builder.resolve_to_addrs(host, addresses);
+    }
+    let client = client_builder.build().map_err(|error| error.to_string())?;
     let value = fetch_agent_model_json(&client, &endpoint, &kind, &api_key).await?;
     let models = parse_model_ids(value);
-    let balance = fetch_agent_balance(&client, &base_url, &api_key).await;
+    let balance = fetch_agent_balance(&client, base_url.as_str(), &api_key).await;
     Ok(AgentModels { models, balance })
 }
 
@@ -3759,6 +3889,16 @@ pub async fn list_agent_models(agent: String) -> Result<AgentModels, String> {
             .find(|profile| profile.id == agent)
         {
             let models = normalize_model_list(profile.models.clone());
+            if !models.is_empty() {
+                return Ok(AgentModels {
+                    models,
+                    balance: None,
+                });
+            }
+        }
+
+        if let Some(credentials) = settings.builtin_agent_credentials.get(&agent) {
+            let models = normalize_model_list(credentials.models.clone());
             if !models.is_empty() {
                 return Ok(AgentModels {
                     models,
@@ -3856,6 +3996,7 @@ pub async fn update_custom_agent_models(
             models: models.clone(),
             enable_1m_context: profile.enable_1m_context,
             enable_chat_completions_proxy: profile.enable_chat_completions_proxy,
+            proxy_enabled: false,
         };
         validate_agent_setup_draft(&draft)?;
         let script = build_agent_script(&draft);
@@ -3917,6 +4058,7 @@ pub async fn update_custom_agent_chat_completions_proxy(
             models: profile.models.clone(),
             enable_1m_context: profile.enable_1m_context,
             enable_chat_completions_proxy: enabled,
+            proxy_enabled: false,
         };
         validate_agent_setup_draft(&draft)?;
         let script = build_codex_agent_script(&draft);
@@ -3976,6 +4118,7 @@ pub async fn update_custom_agent_context(
             models: profile.models.clone(),
             enable_1m_context,
             enable_chat_completions_proxy: profile.enable_chat_completions_proxy,
+            proxy_enabled: false,
         };
         validate_agent_setup_draft(&draft)?;
         let script = build_claude_code_agent_script(&draft);
@@ -5458,6 +5601,7 @@ api_key = "sk-codex"
             models: vec!["gpt-5.6".to_string(), "gpt-5.6-sol".to_string()],
             enable_1m_context: false,
             enable_chat_completions_proxy: false,
+            proxy_enabled: false,
         };
 
         let script = build_agent_script(&draft);
@@ -5488,6 +5632,7 @@ api_key = "sk-codex"
             models: vec!["gpt-5.6".to_string(), "gpt-5.6-sol".to_string()],
             enable_1m_context: false,
             enable_chat_completions_proxy: true,
+            proxy_enabled: false,
         };
 
         let script = build_agent_script(&draft);
@@ -5511,6 +5656,7 @@ api_key = "sk-codex"
             models: vec!["gpt-5.6".to_string()],
             enable_1m_context: false,
             enable_chat_completions_proxy: true,
+            proxy_enabled: false,
         };
         let codex_script = build_codex_agent_powershell_script(&codex);
         assert!(codex_script.contains("$env:CODEX_HOME"));
@@ -5530,6 +5676,7 @@ api_key = "sk-codex"
             models: vec!["claude-opus-4-8".to_string()],
             enable_1m_context: true,
             enable_chat_completions_proxy: false,
+            proxy_enabled: false,
         };
         let claude_script = build_claude_code_agent_powershell_script(&claude);
         assert!(claude_script.contains("$env:CLAUDE_CONFIG_DIR"));
@@ -5601,6 +5748,7 @@ api_key = "sk-codex"
             models: vec!["claude-opus-4-8".to_string(), "claude-opus-4-6".to_string()],
             enable_1m_context: true,
             enable_chat_completions_proxy: false,
+            proxy_enabled: false,
         };
 
         let script = build_agent_script(&draft);
@@ -5626,6 +5774,7 @@ api_key = "sk-codex"
             models: vec!["claude-opus-4-6".to_string()],
             enable_1m_context: false,
             enable_chat_completions_proxy: false,
+            proxy_enabled: false,
         };
 
         let script = build_agent_script(&draft);
@@ -5647,6 +5796,7 @@ api_key = "sk-codex"
             models: vec!["gpt-5.6".to_string(), "gpt-5.6-sol".to_string()],
             enable_1m_context: false,
             enable_chat_completions_proxy: false,
+            proxy_enabled: false,
         };
 
         let script = build_agent_script(&draft);
@@ -5927,6 +6077,37 @@ api_key = "sk-codex"
     }
 
     #[test]
+    fn model_detection_url_policy_rejects_unsafe_remote_targets() {
+        let public = validate_model_base_url(
+            "https://api.example.com/v1/",
+            ModelDetectionPolicy::PairedDevice,
+        )
+        .unwrap();
+        assert_eq!(model_endpoint(&public), "https://api.example.com/v1/models");
+        assert!(validate_model_base_url(
+            "http://127.0.0.1:11434",
+            ModelDetectionPolicy::PairedDevice,
+        )
+        .is_err());
+        assert!(validate_model_base_url(
+            "ftp://api.example.com",
+            ModelDetectionPolicy::PairedDevice,
+        )
+        .is_err());
+        assert!(validate_model_base_url(
+            "https://user:pass@api.example.com",
+            ModelDetectionPolicy::PairedDevice,
+        )
+        .is_err());
+        assert!(
+            validate_model_base_url("http://127.0.0.1:11434", ModelDetectionPolicy::LocalUser,)
+                .is_ok()
+        );
+        assert!(is_private_or_local_ip("::ffff:127.0.0.1".parse().unwrap()));
+        assert!(is_private_or_local_ip("100.64.0.1".parse().unwrap()));
+    }
+
+    #[test]
     fn parses_openrouter_key_balance() {
         let value = serde_json::json!({
             "data": {
@@ -6030,7 +6211,7 @@ api_key = "sk-codex"
 
         assert_eq!(
             parse_model_ids(value),
-            vec!["claude", "claude-opus-4-6", "glm", "GLM", "GLM-5.2", "mimo"]
+            vec!["claude", "claude-opus-4-6", "glm", "GLM-5.2", "mimo"]
         );
     }
 
@@ -6241,6 +6422,7 @@ printf 'model_catalog_json = "model-catalog.json"\n'
             models: vec!["gpt-5.6-sol".to_string()],
             enable_1m_context: false,
             enable_chat_completions_proxy: true,
+            proxy_enabled: false,
         });
         fs::write(&script_path, &bridged).unwrap();
         let mut settings = AppSettings {

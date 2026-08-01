@@ -578,29 +578,164 @@ fn codex_project_trust_override(project_path: &str) -> String {
     )
 }
 
-fn normalized_selected_model(selected_model: Option<&str>) -> Option<String> {
+pub(crate) fn normalized_selected_model(selected_model: Option<&str>) -> Option<String> {
     selected_model
         .map(str::trim)
         .filter(|model| !model.is_empty())
         .map(ToOwned::to_owned)
 }
 
+const CODEX_REASONING_EFFORTS: &[&str] =
+    &["minimal", "low", "medium", "high", "xhigh", "max", "ultra"];
+const CLAUDE_REASONING_EFFORTS: &[&str] = &["low", "medium", "high", "xhigh", "max", "ultracode"];
+const CODEX_ULTRA_MODELS: &[&str] = &["gpt-5.6-sol"];
+
+pub(crate) fn normalized_speed(speed: Option<&str>) -> Result<Option<String>, String> {
+    let Some(speed) = speed.map(str::trim).filter(|speed| !speed.is_empty()) else {
+        return Ok(None);
+    };
+    match speed.to_ascii_lowercase().as_str() {
+        "standard" => Ok(Some("standard".to_string())),
+        "fast" => Ok(Some("fast".to_string())),
+        _ => Err("Invalid speed".to_string()),
+    }
+}
+
+pub(crate) fn normalized_reasoning_effort(
+    reasoning_effort: Option<&str>,
+    is_codex: bool,
+    selected_model: Option<&str>,
+) -> Result<Option<String>, String> {
+    let Some(raw) = reasoning_effort
+        .map(str::trim)
+        .filter(|effort| !effort.is_empty())
+    else {
+        return Ok(None);
+    };
+    let mut effort = raw.to_ascii_lowercase();
+    if !is_codex && effort == "ultra" {
+        effort = "ultracode".to_string();
+    }
+    let supported = if is_codex {
+        CODEX_REASONING_EFFORTS
+    } else {
+        CLAUDE_REASONING_EFFORTS
+    };
+    if !supported.contains(&effort.as_str()) {
+        return Err("Invalid reasoningEffort".to_string());
+    }
+    if is_codex && effort == "ultra" {
+        let model = selected_model.ok_or_else(|| "Codex Ultra requires gpt-5.6-sol".to_string())?;
+        if !CODEX_ULTRA_MODELS
+            .iter()
+            .any(|candidate| model.eq_ignore_ascii_case(candidate))
+        {
+            return Err("Codex Ultra requires gpt-5.6-sol".to_string());
+        }
+    }
+    Ok(Some(effort))
+}
+
 fn add_claude_launch_args(
     cmd: &mut CommandBuilder,
     agent: &str,
     selected_model: Option<&str>,
+    reasoning_effort: Option<&str>,
     speed: Option<&str>,
 ) {
-    if agent != "claude" {
-        return;
+    if agent == "claude" {
+        if let Some(model) = normalized_selected_model(selected_model) {
+            cmd.arg("--model");
+            cmd.arg(model);
+        }
     }
-    if let Some(model) = normalized_selected_model(selected_model) {
-        cmd.arg("--model");
-        cmd.arg(model);
+    if let Some(effort) = reasoning_effort.filter(|effort| *effort != "ultracode") {
+        cmd.arg("--effort");
+        cmd.arg(effort);
     }
     if speed == Some("fast") {
         cmd.arg("--fast");
     }
+}
+
+fn uses_ultracode_terminal_command(is_codex: bool, reasoning_effort: Option<&str>) -> bool {
+    !is_codex && reasoning_effort == Some("ultracode")
+}
+
+pub(crate) fn initial_ultracode_command() -> Vec<u8> {
+    b"/effort ultracode\r".to_vec()
+}
+
+fn add_codex_launch_args(
+    cmd: &mut CommandBuilder,
+    project_path: &str,
+    selected_model: Option<&str>,
+    reasoning_effort: Option<&str>,
+    speed: Option<&str>,
+) {
+    cmd.arg("-C");
+    cmd.arg(project_path);
+    cmd.arg("-c");
+    cmd.arg(codex_project_trust_override(project_path));
+    if let Some(model) = normalized_selected_model(selected_model) {
+        cmd.arg("-m");
+        cmd.arg(model);
+    }
+    if let Some(effort) = reasoning_effort {
+        cmd.arg("-c");
+        cmd.arg(format!(
+            "model_reasoning_effort={}",
+            toml::Value::String(effort.to_string())
+        ));
+    }
+    if speed == Some("fast") {
+        cmd.arg("-c");
+        cmd.arg("service_tier=\"priority\"");
+    }
+}
+
+pub(crate) fn spawn_initial_input_injection(
+    writer: Arc<parking_lot::Mutex<Box<dyn Write + Send>>>,
+    prelude: Option<Vec<u8>>,
+    prompt: Option<(Vec<u8>, Vec<u8>)>,
+    startup_rx: std::sync::mpsc::Receiver<()>,
+) {
+    tokio::task::spawn_blocking(move || {
+        let startup_deadline = Instant::now() + Duration::from_secs(3);
+        if startup_rx.recv_timeout(Duration::from_secs(2)).is_ok() {
+            while Instant::now() < startup_deadline {
+                match startup_rx.recv_timeout(Duration::from_millis(300)) {
+                    Ok(()) => continue,
+                    Err(_) => break,
+                }
+            }
+        }
+        if let Some(prelude) = prelude {
+            {
+                let mut writer = writer.lock();
+                let _ = writer.write_all(&prelude);
+                let _ = writer.flush();
+            }
+            // Claude renders the effort picker asynchronously. Give it one input turn
+            // before the initial prompt so `/effort ultracode` is handled first.
+            std::thread::sleep(Duration::from_millis(160));
+        }
+        let Some((paste, submit)) = prompt else {
+            return;
+        };
+        {
+            let mut writer = writer.lock();
+            let _ = writer.write_all(&paste);
+            let _ = writer.flush();
+        }
+        // Agent TUIs may intentionally ignore an Enter delivered in the same
+        // PTY write as a bracketed paste. Submit in a later input turn so the
+        // initial prompt is executed instead of remaining in the composer.
+        std::thread::sleep(Duration::from_millis(80));
+        let mut writer = writer.lock();
+        let _ = writer.write_all(&submit);
+        let _ = writer.flush();
+    });
 }
 
 fn prompt_with_project_prefix(prompt: &str, prompt_prefix: &str) -> String {
@@ -622,7 +757,7 @@ fn initial_prompt_args(prompt: &str, is_codex: bool) -> Vec<String> {
     }
 }
 
-fn initial_prompt_input_chunks(prompt: &str) -> Option<(Vec<u8>, Vec<u8>)> {
+pub(crate) fn initial_prompt_input_chunks(prompt: &str) -> Option<(Vec<u8>, Vec<u8>)> {
     if prompt.is_empty() {
         return None;
     }
@@ -659,52 +794,6 @@ fn agent_process_cwd(project_path: &str, is_codex: bool) -> PathBuf {
     }
 }
 
-fn spawn_initial_prompt_injection(
-    writer: Arc<parking_lot::Mutex<Box<dyn Write + Send>>>,
-    paste: Vec<u8>,
-    submit: Vec<u8>,
-    startup_rx: std::sync::mpsc::Receiver<()>,
-) {
-    tokio::task::spawn_blocking(move || {
-        let startup_deadline = Instant::now() + Duration::from_secs(3);
-        if startup_rx.recv_timeout(Duration::from_secs(2)).is_ok() {
-            while Instant::now() < startup_deadline {
-                match startup_rx.recv_timeout(Duration::from_millis(300)) {
-                    Ok(()) => continue,
-                    Err(_) => break,
-                }
-            }
-        }
-        {
-            let mut writer = writer.lock();
-            let _ = writer.write_all(&paste);
-            let _ = writer.flush();
-        }
-        // Agent TUIs may intentionally ignore an Enter delivered in the same
-        // PTY write as a bracketed paste. Submit in a later input turn so the
-        // initial prompt is executed instead of remaining in the composer.
-        std::thread::sleep(Duration::from_millis(80));
-        let mut writer = writer.lock();
-        let _ = writer.write_all(&submit);
-        let _ = writer.flush();
-    });
-}
-
-fn add_codex_launch_args(
-    cmd: &mut CommandBuilder,
-    project_path: &str,
-    selected_model: Option<&str>,
-) {
-    cmd.arg("-C");
-    cmd.arg(project_path);
-    cmd.arg("-c");
-    cmd.arg(codex_project_trust_override(project_path));
-    if let Some(model) = normalized_selected_model(selected_model) {
-        cmd.arg("-m");
-        cmd.arg(model);
-    }
-}
-
 // ── Tauri 命令 ───────────────────────────────────────────────────────────────
 
 #[tauri::command]
@@ -719,6 +808,7 @@ pub async fn run_task(
     images: Option<Vec<String>>,
     texts: Option<Vec<String>>,
     selected_model: Option<String>,
+    reasoning_effort: Option<String>,
     speed: Option<String>,
     force_prompt_injection: Option<bool>,
     cols: Option<u16>,
@@ -795,9 +885,17 @@ pub async fn run_task(
 
     let launch = crate::app_settings::get_agent_launch_spec(&agent);
     let is_codex = launch.codex_like;
-    let use_native_initial_prompt =
-        should_use_native_initial_prompt(&agent, is_codex, force_prompt_injection.unwrap_or(false));
     let selected_model = normalized_selected_model(selected_model.as_deref());
+    let reasoning_effort = normalized_reasoning_effort(
+        reasoning_effort.as_deref(),
+        is_codex,
+        selected_model.as_deref(),
+    )?;
+    let speed = normalized_speed(speed.as_deref())?;
+    let uses_ultracode = uses_ultracode_terminal_command(is_codex, reasoning_effort.as_deref());
+    let use_native_initial_prompt =
+        should_use_native_initial_prompt(&agent, is_codex, force_prompt_injection.unwrap_or(false))
+            && !uses_ultracode;
 
     // 版本统一走全局探测（带缓存），判断是否支持 --session-id。
     // 缓存未命中时 *_version_gte 会启子进程探测，故放进 spawn_blocking 避免阻塞 async runtime。
@@ -831,7 +929,13 @@ pub async fn run_task(
 
     let mut cmd = if is_codex {
         let mut c = build_codex_cmd(&launch, &permission_mode);
-        add_codex_launch_args(&mut c, &project_path, selected_model.as_deref());
+        add_codex_launch_args(
+            &mut c,
+            &project_path,
+            selected_model.as_deref(),
+            reasoning_effort.as_deref(),
+            speed.as_deref(),
+        );
         // Codex 对非 managed 的 command hook 默认要求 trust,Aeroric 注入的是新 hash 会被
         // skip;由 Aeroric 注入、来源可信,这里免 trust 直接运行。
         if use_hooks {
@@ -845,7 +949,13 @@ pub async fn run_task(
         c
     } else {
         let mut c = build_claude_cmd(&launch, &permission_mode);
-        add_claude_launch_args(&mut c, &agent, selected_model.as_deref(), speed.as_deref());
+        add_claude_launch_args(
+            &mut c,
+            &agent,
+            selected_model.as_deref(),
+            reasoning_effort.as_deref(),
+            speed.as_deref(),
+        );
         // Claude >= 2.1.87：通过 --session-id 指定会话，跳过 /status 发现
         if let Some(ref sid) = pre_session_id {
             c.arg("--session-id");
@@ -935,7 +1045,7 @@ pub async fn run_task(
         reader,
         true,
         session_tx,
-        if starts_with_prompt && !use_native_initial_prompt {
+        if uses_ultracode || (starts_with_prompt && !use_native_initial_prompt) {
             Some(startup_tx)
         } else {
             None
@@ -943,12 +1053,14 @@ pub async fn run_task(
         None,
         None,
     );
-    if !use_native_initial_prompt {
-        if let Some((paste, submit)) = initial_prompt_input_chunks(&final_prompt) {
-            let writer = task_manager.pty_writers.lock().get(&task_id).cloned();
-            if let Some(writer) = writer {
-                spawn_initial_prompt_injection(writer, paste, submit, startup_rx);
-            }
+    let initial_prelude = uses_ultracode.then(initial_ultracode_command);
+    let initial_prompt = (!use_native_initial_prompt)
+        .then(|| initial_prompt_input_chunks(&final_prompt))
+        .flatten();
+    if initial_prelude.is_some() || initial_prompt.is_some() {
+        let writer = task_manager.pty_writers.lock().get(&task_id).cloned();
+        if let Some(writer) = writer {
+            spawn_initial_input_injection(writer, initial_prelude, initial_prompt, startup_rx);
         }
     }
     spawn_exit_monitor(app, task_id, project_path, is_codex);
@@ -1108,6 +1220,7 @@ pub async fn resume_task(
     _prompt: String,
     permission_mode: String,
     selected_model: Option<String>,
+    reasoning_effort: Option<String>,
     speed: Option<String>,
     cols: Option<u16>,
     rows: Option<u16>,
@@ -1130,7 +1243,15 @@ pub async fn resume_task(
         .map_err(|e| e.to_string())?;
 
     let launch = crate::app_settings::get_agent_launch_spec(&agent);
+    let is_codex = launch.codex_like;
     let selected_model = normalized_selected_model(selected_model.as_deref());
+    let reasoning_effort = normalized_reasoning_effort(
+        reasoning_effort.as_deref(),
+        is_codex,
+        selected_model.as_deref(),
+    )?;
+    let speed = normalized_speed(speed.as_deref())?;
+    let uses_ultracode = uses_ultracode_terminal_command(is_codex, reasoning_effort.as_deref());
     // hook 可信时会话发现/状态由 event_watcher 驱动,跳过轮询 watcher;否则回退,
     // 且不注入 AERORIC_* 守卫变量,避免旧版但已安装 hook 的 agent 与轮询路径并行重复
     // 上报。版本统一走全局带缓存的探测。
@@ -1142,10 +1263,15 @@ pub async fn resume_task(
             .unwrap_or(false)
     };
 
-    let is_codex = launch.codex_like;
     let mut cmd = if is_codex {
         let mut c = build_codex_cmd(&launch, &permission_mode);
-        add_codex_launch_args(&mut c, &project_path, selected_model.as_deref());
+        add_codex_launch_args(
+            &mut c,
+            &project_path,
+            selected_model.as_deref(),
+            reasoning_effort.as_deref(),
+            speed.as_deref(),
+        );
         // Aeroric 注入的 hook 默认未信任会被 Codex skip;来源可信,免 trust 直接运行。
         if use_hooks {
             c.arg("--dangerously-bypass-hook-trust");
@@ -1156,7 +1282,13 @@ pub async fn resume_task(
     } else {
         // resume 时 session_id 已知，使用 --resume 标志
         let mut c = build_claude_cmd(&launch, &permission_mode);
-        add_claude_launch_args(&mut c, &agent, selected_model.as_deref(), speed.as_deref());
+        add_claude_launch_args(
+            &mut c,
+            &agent,
+            selected_model.as_deref(),
+            reasoning_effort.as_deref(),
+            speed.as_deref(),
+        );
         c.arg("--resume");
         c.arg(&session_id);
         // Claude:命令行 `--settings` 传入 Aeroric 自有 hooks 文件,不改用户配置。
@@ -1201,6 +1333,7 @@ pub async fn resume_task(
             is_codex,
         );
     }
+    let (startup_tx, startup_rx) = std::sync::mpsc::channel();
     spawn_pty_reader(
         app.clone(),
         task_id.clone(),
@@ -1212,10 +1345,21 @@ pub async fn resume_task(
         reader,
         true,
         None,
-        None,
+        uses_ultracode.then_some(startup_tx),
         None,
         None,
     );
+    if uses_ultracode {
+        let writer = task_manager.pty_writers.lock().get(&task_id).cloned();
+        if let Some(writer) = writer {
+            spawn_initial_input_injection(
+                writer,
+                Some(initial_ultracode_command()),
+                None,
+                startup_rx,
+            );
+        }
+    }
     spawn_exit_monitor(app, task_id, project_path, is_codex);
 
     Ok(())
@@ -1501,6 +1645,19 @@ mod tests {
     }
 
     #[test]
+    fn reasoning_effort_normalization_keeps_legacy_minimal_and_validates_ultra() {
+        assert_eq!(
+            normalized_reasoning_effort(Some("minimal"), true, None).unwrap(),
+            Some("minimal".to_string())
+        );
+        assert_eq!(
+            normalized_reasoning_effort(Some("ultra"), true, Some("gpt-5.6-sol")).unwrap(),
+            Some("ultra".to_string())
+        );
+        assert!(normalized_reasoning_effort(Some("ultra"), true, Some("gpt-5.6")).is_err());
+    }
+
+    #[test]
     fn project_prompt_prefix_is_not_applied_to_interactive_terminal_start() {
         assert_eq!(prompt_with_project_prefix("", "prefix"), "");
     }
@@ -1520,7 +1677,7 @@ mod tests {
             ..Default::default()
         };
         let mut cmd = build_codex_cmd(&launch, "ask");
-        add_codex_launch_args(&mut cmd, "/tmp/example-project", None);
+        add_codex_launch_args(&mut cmd, "/tmp/example-project", None, None, None);
 
         let argv: Vec<_> = cmd
             .get_argv()
