@@ -6,42 +6,15 @@
 import { Stack, router, useLocalSearchParams } from "expo-router";
 import { FolderTree, GitBranch, Plus } from "lucide-react-native";
 import { useCallback, useMemo, useState } from "react";
-import { FlatList, Pressable, RefreshControl, StyleSheet, Text, View } from "react-native";
+import { FlatList, RefreshControl, StyleSheet, Text, View } from "react-native";
 import { ChangesPane } from "../../src/changes/ChangesPane";
 import { NewTaskSheet } from "../../src/components/NewTaskSheet";
 import { TaskRow } from "../../src/components/TaskRow";
 import { t } from "../../src/i18n";
 import { useHostTasks } from "../../src/state/use-host-tasks";
+import { HeaderActions, HeaderIconButton } from "../../src/ui/HeaderIconButton";
 import { taskStatusRank } from "../../src/ui/task-status";
-import { radii, spacing, theme, typography } from "../../src/ui/theme";
-
-function HeaderIconButton({
-  label,
-  active,
-  onPress,
-  children,
-}: {
-  label: string;
-  active?: boolean;
-  onPress: () => void;
-  children: React.ReactNode;
-}) {
-  return (
-    <Pressable
-      hitSlop={8}
-      accessibilityRole="button"
-      accessibilityLabel={label}
-      onPress={onPress}
-      style={({ pressed }) => [
-        styles.iconButton,
-        active && styles.iconButtonActive,
-        pressed && styles.pressed,
-      ]}
-    >
-      {children}
-    </Pressable>
-  );
-}
+import { spacing, theme, typography } from "../../src/ui/theme";
 
 export default function ProjectScreen() {
   const params = useLocalSearchParams<{ projectId: string; name?: string }>();
@@ -76,7 +49,7 @@ export default function ProjectScreen() {
         options={{
           title,
           headerRight: () => (
-            <View style={styles.headerActions}>
+            <HeaderActions>
               <HeaderIconButton label={t("project.browseFiles")} onPress={openFiles}>
                 <FolderTree size={17} color={theme.text} />
               </HeaderIconButton>
@@ -93,7 +66,7 @@ export default function ProjectScreen() {
               >
                 <Plus size={18} color={theme.text} strokeWidth={2.4} />
               </HeaderIconButton>
-            </View>
+            </HeaderActions>
           ),
         }}
       />
@@ -135,19 +108,6 @@ export default function ProjectScreen() {
 
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: theme.bg },
-  headerActions: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
-  iconButton: {
-    width: 32,
-    height: 32,
-    borderRadius: radii.button,
-    alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: theme.bgElevated,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: theme.border,
-  },
-  iconButtonActive: { backgroundColor: theme.accent, borderColor: theme.accent },
-  pressed: { opacity: 0.7 },
   list: { paddingTop: spacing.sm, paddingBottom: 32 },
   listEmpty: { flexGrow: 1, justifyContent: "center" },
   emptyWrap: { alignItems: "center", paddingHorizontal: 32 },

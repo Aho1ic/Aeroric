@@ -6,6 +6,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { rememberTasks } from "../notifications/task-name-cache";
 import type { Project, Task, TaskStatus, TaskStatusPush } from "../types";
+import { sortProjectEntries, sortProjectsForList } from "../ui/group-projects";
 import { useConnection } from "./connection-context";
 
 export interface ProjectTasks {
@@ -19,7 +20,13 @@ interface HostTasksState {
   error: string | null;
 }
 
-export function useHostTasks(): HostTasksState & { refresh: () => void } {
+export interface HostTasksActions {
+  refresh: () => void;
+  /** 置顶/取消置顶:先乐观改本地并重排,失败回滚。桌面端读同一份 projects.json。 */
+  setPinned: (projectId: string, pinned: boolean) => void;
+}
+
+export function useHostTasks(): HostTasksState & HostTasksActions {
   const { status, request, onPush } = useConnection();
   const [state, setState] = useState<HostTasksState>({
     sections: [],
@@ -38,12 +45,7 @@ export function useHostTasks(): HostTasksState & { refresh: () => void } {
     void (async () => {
       try {
         const projects = await request<Project[]>("projects.list");
-        const visible = projects
-          .filter((p) => !p.hiddenFromRail)
-          .sort(
-            (a, b) =>
-              (a.orderIndex ?? 1e15) - (b.orderIndex ?? 1e15) || b.lastOpenedAt - a.lastOpenedAt,
-          );
+        const visible = sortProjectsForList(projects.filter((p) => !p.hiddenFromRail));
         const sections = await Promise.all(
           visible.map(async (project) => {
             const tasks = await request<Task[]>("tasks.list", { projectId: project.id });
@@ -109,5 +111,30 @@ export function useHostTasks(): HostTasksState & { refresh: () => void } {
     });
   }, [onPush, refresh]);
 
-  return { ...state, refresh };
+  const setPinned = useCallback(
+    (projectId: string, pinned: boolean) => {
+      let snapshot: ProjectTasks[] = [];
+      setState((prev) => {
+        snapshot = prev.sections;
+        const patched = prev.sections.map((section) =>
+          section.project.id === projectId
+            ? { ...section, project: { ...section.project, pinned } }
+            : section,
+        );
+        return { ...prev, sections: sortProjectEntries(patched) };
+      });
+      const rollback = snapshot;
+      void (async () => {
+        try {
+          await request("projects.setPinned", { projectId, pinned });
+        } catch {
+          // 写回失败(离线/桌面拒绝)→ 回滚到点击前的顺序,避免手机端与桌面不一致
+          setState((prev) => ({ ...prev, sections: rollback }));
+        }
+      })();
+    },
+    [request],
+  );
+
+  return { ...state, refresh, setPinned };
 }

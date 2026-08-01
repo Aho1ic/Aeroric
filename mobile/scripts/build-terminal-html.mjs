@@ -102,18 +102,93 @@ const glue = `
     ime.blur();
   }
 
-  // ── 触摸滚动:xterm 不处理 touch,自己把位移换算成 scrollLines ──
+  // ── 触摸滚动:xterm 不处理 touch,自己做像素级跟手 + 惯性 ──
+  // 整行部分交给 scrollLines,不足一行的余量用 transform 平移 .xterm-screen,
+  // 避免"一行一跳"的顿挫;抬手后按摩擦系数衰减出惯性,到顶/到底即停。
   var screenEl = term.element;
+  var rowsEl = screenEl.querySelector(".xterm-screen") || screenEl;
   var touchY = null;
   var touchMoved = false;
-  var pxRest = 0;
+  var subPx = 0;
+  var velocity = 0;
+  var lastMoveAt = 0;
+  var inertiaId = null;
+
+  function now() {
+    return typeof performance !== "undefined" && performance.now ? performance.now() : +new Date();
+  }
+  function cellHeight() {
+    var cell = term.rows > 0 ? screenEl.clientHeight / term.rows : 17;
+    return !cell || cell < 4 ? 17 : cell;
+  }
+  function atBottom() {
+    var buf = term.buffer.active;
+    return buf.viewportY >= buf.baseY;
+  }
+  function atTop() {
+    return term.buffer.active.viewportY <= 0;
+  }
+  function applySubPx() {
+    rowsEl.style.transform = subPx ? "translateY(" + -subPx + "px)" : "";
+  }
+  function resetSubPx() {
+    if (subPx !== 0) {
+      subPx = 0;
+      applySubPx();
+    }
+  }
+  // 正数 = 内容向上走(看更新的输出)。
+  function scrollByPx(px) {
+    var cell = cellHeight();
+    subPx += px;
+    var lines = Math.floor(subPx / cell);
+    if (lines !== 0) {
+      var before = term.buffer.active.viewportY;
+      term.scrollLines(lines);
+      subPx -= (term.buffer.active.viewportY - before) * cell;
+    }
+    // 到顶/到底不留残余偏移,否则边缘会露出空白条
+    if ((subPx > 0 && atBottom()) || (subPx < 0 && atTop())) subPx = 0;
+    applySubPx();
+  }
+
+  function stopInertia() {
+    if (inertiaId !== null) {
+      cancelAnimationFrame(inertiaId);
+      inertiaId = null;
+    }
+  }
+  function startInertia() {
+    var prev = now();
+    function step() {
+      var t = now();
+      var dt = t - prev;
+      prev = t;
+      if (dt <= 0) dt = 16;
+      if (dt > 50) dt = 50;
+      scrollByPx(velocity * dt);
+      velocity *= Math.pow(0.95, dt / 16);
+      var stuck = (velocity > 0 && atBottom()) || (velocity < 0 && atTop());
+      if (stuck || Math.abs(velocity) < 0.02) {
+        inertiaId = null;
+        velocity = 0;
+        resetSubPx();
+        return;
+      }
+      inertiaId = requestAnimationFrame(step);
+    }
+    inertiaId = requestAnimationFrame(step);
+  }
+
   screenEl.addEventListener(
     "touchstart",
     function (ev) {
       if (ev.touches.length !== 1) return;
+      stopInertia();
+      velocity = 0;
       touchY = ev.touches[0].clientY;
       touchMoved = false;
-      pxRest = 0;
+      lastMoveAt = now();
     },
     { passive: true }
   );
@@ -121,18 +196,16 @@ const glue = `
     "touchmove",
     function (ev) {
       if (touchY === null || ev.touches.length !== 1) return;
-      var y = ev.touches[0].clientY;
-      var cell = term.rows > 0 ? screenEl.clientHeight / term.rows : 17;
-      if (!cell || cell < 4) cell = 17;
-      var delta = touchY - y + pxRest;
-      var lines = (delta / cell) | 0;
-      pxRest = delta - lines * cell;
-      touchY = y;
-      if (lines !== 0) {
-        touchMoved = true;
-        term.scrollLines(lines);
-      }
       ev.preventDefault();
+      var y = ev.touches[0].clientY;
+      var delta = touchY - y;
+      touchY = y;
+      var t = now();
+      var dt = t - lastMoveAt;
+      lastMoveAt = t;
+      if (dt > 0 && dt < 200) velocity = velocity * 0.6 + (delta / dt) * 0.4;
+      if (Math.abs(delta) >= 1) touchMoved = true;
+      scrollByPx(delta);
     },
     { passive: false }
   );
@@ -140,12 +213,20 @@ const glue = `
     // 轻点(未滚动)时唤起键盘
     if (touchY !== null && !touchMoved) focusIme();
     touchY = null;
+    if (touchMoved && Math.abs(velocity) > 0.05 && now() - lastMoveAt < 120) {
+      startInertia();
+    } else {
+      velocity = 0;
+      resetSubPx();
+    }
+  });
+  screenEl.addEventListener("touchcancel", function () {
+    touchY = null;
+    velocity = 0;
+    stopInertia();
+    resetSubPx();
   });
 
-  function atBottom() {
-    var buf = term.buffer.active;
-    return buf.viewportY >= buf.baseY;
-  }
   window.__aeroricTerm = {
     handle: function (msg) {
       try {
@@ -154,11 +235,15 @@ const glue = `
             // 用户上翻阅读历史时不强行拉回底部
             var follow = atBottom();
             term.write(msg.data, function () {
-              if (follow) term.scrollToBottom();
+              if (follow) {
+                resetSubPx();
+                term.scrollToBottom();
+              }
             });
             break;
           }
           case "reset":
+            resetSubPx();
             term.reset();
             break;
           case "resize":
@@ -182,6 +267,7 @@ const glue = `
             blurIme();
             break;
           case "scrollToBottom":
+            resetSubPx();
             term.scrollToBottom();
             break;
         }
@@ -202,9 +288,11 @@ const html = `<!doctype html>
 <style>
 ${xtermCss}
 html, body, #root { height: 100%; margin: 0; padding: 0; background: #111111; }
-/* 滚动统一走 touch → scrollLines,禁用 viewport 自身滚动避免双重滚动冲突 */
+/* 滚动统一走 touch → scrollLines + transform,禁用 viewport 自身滚动避免双重滚动冲突 */
 .xterm .xterm-viewport { overflow-y: hidden; }
 .xterm { touch-action: none; }
+/* 跟手平移的图层提示:让 translateY 走合成器,避免每帧重排 */
+.xterm .xterm-screen { will-change: transform; }
 </style>
 </head>
 <body>

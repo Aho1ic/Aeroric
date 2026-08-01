@@ -89,6 +89,12 @@ class FakeWebSocket implements WebSocketLike {
     return frames[frames.length - 1];
   }
 
+  /** 认证后会并发发出 events.since 与 hello,按方法名定位比 lastFrame() 稳。 */
+  frameFor(method: string): { v: number; id: number; method: string; params: Record<string, unknown> } {
+    const frames = this.clientFrames().filter((frame) => frame.method === method);
+    return frames[frames.length - 1];
+  }
+
   receiveCtrl(frame: unknown): void {
     const sealed = this.serverSession!.encryptFrame(KIND_CTRL, utf8(JSON.stringify(frame)));
     this.onmessage?.({ data: toArrayBuffer(sealed) });
@@ -429,7 +435,7 @@ describe("RemoteConnection", () => {
     second.replyOk({ deviceId: "d1" });
     await flush();
     // 认证成功后自动请求补发
-    const replay = second.lastFrame();
+    const replay = second.frameFor("events.since");
     expect(replay.method).toBe("events.since");
     expect(replay.params).toEqual({ after: 1 });
     second.receiveCtrl({
@@ -479,7 +485,7 @@ describe("RemoteConnection", () => {
     await flush();
     second.replyOk({ deviceId: "d1" });
     await flush();
-    const replay = second.lastFrame();
+    const replay = second.frameFor("events.since");
     expect(replay.method).toBe("events.since");
     second.receiveCtrl({
       v: 2,

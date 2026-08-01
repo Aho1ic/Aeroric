@@ -10,6 +10,8 @@ export interface Project {
   group?: string;
   /** 为 true 时不在左侧常驻竖条显示，仅可从首页或「展开全部」抽屉访问。缺省=常驻。 */
   hiddenFromRail?: boolean;
+  /** 置顶：在各自分组内排最前，分组折叠时仍露出。桌面与手机共享同一份状态。 */
+  pinned?: boolean;
 }
 
 export type ProjectLocation =

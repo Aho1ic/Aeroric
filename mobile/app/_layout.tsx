@@ -30,6 +30,7 @@ export default function RootLayout() {
           <Stack.Screen name="new-task" options={{ title: t("nav.newTask") }} />
           <Stack.Screen name="project/[projectId]" options={{ title: t("home.projects") }} />
           <Stack.Screen name="task/[taskId]" options={{ title: t("common.task") }} />
+          <Stack.Screen name="agent-config" options={{ title: t("agentConfig.title") }} />
           <Stack.Screen name="files" options={{ title: t("files.title") }} />
           <Stack.Screen name="file-view" options={{ title: t("files.title") }} />
         </Stack>

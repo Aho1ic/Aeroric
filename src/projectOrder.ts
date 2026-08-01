@@ -16,10 +16,15 @@ export function normalizeProjectOrder(projects: Project[]): Project[] {
   return changed ? normalized : projects;
 }
 
+// 置顶只影响展示序,不改 orderIndex —— 否则一次置顶会把拖拽出来的顺序永久打乱。
+// 分组渲染在此之后进行,所以置顶效果天然被限制在各自分组内。
 export function sortProjectsForRail(projects: Project[]): Project[] {
   return projects
     .map((project, index) => ({ project, index }))
     .sort((a, b) => {
+      if (Boolean(a.project.pinned) !== Boolean(b.project.pinned)) {
+        return a.project.pinned ? -1 : 1;
+      }
       const aOrder = finiteOrderIndex(a.project);
       const bOrder = finiteOrderIndex(b.project);
       if (aOrder !== null || bOrder !== null) {

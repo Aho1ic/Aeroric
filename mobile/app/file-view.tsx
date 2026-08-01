@@ -1,15 +1,28 @@
 /**
- * 只读文件查看:project.readFile,按行虚拟渲染(FlatList),
- * 超限内容由服务端截断并提示。
+ * 文件查看 / 编辑:project.readFile 读取,project.writeFile 保存。
+ * 查看态用「竖向 ScrollView + 横向 ScrollView + 整块 Text」渲染(避免 VirtualizedList 嵌套告警);
+ * 编辑态用 multiline TextInput。被截断的文件只读,防止保存时截掉尾部内容。
  */
 
 import { Stack, useLocalSearchParams } from "expo-router";
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { FlatList, Platform, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { useCallback, useEffect, useState } from "react";
+import {
+  ActivityIndicator,
+  Alert,
+  Platform,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+} from "react-native";
 import { t } from "../src/i18n";
 import { useConnection } from "../src/state/connection-context";
-import type { ReadFileResult } from "../src/types";
-import { radii, theme } from "../src/ui/theme";
+import type { ReadFileResult, WriteFileResult } from "../src/types";
+import { HeaderActions } from "../src/ui/HeaderIconButton";
+import { radii, spacing, theme } from "../src/ui/theme";
+import { useKeyboardInset } from "../src/ui/use-keyboard-inset";
 
 const MONO = Platform.select({ ios: "Menlo", default: "monospace" });
 
@@ -21,6 +34,10 @@ export default function FileViewScreen() {
   const { request, status } = useConnection();
   const [result, setResult] = useState<ReadFileResult | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState("");
+  const [saving, setSaving] = useState(false);
+  const keyboardInset = useKeyboardInset();
 
   const refresh = useCallback(() => {
     if (status !== "online" || !projectId || !path) return;
@@ -34,11 +51,70 @@ export default function FileViewScreen() {
     if (result === null) refresh();
   }, [refresh, result]);
 
-  const lines = useMemo(() => (result?.content ?? "").split("\n"), [result?.content]);
+  const content = result?.content ?? "";
+  const truncated = !!result?.truncated;
+  const canEdit = !!result && result.available !== false && !truncated;
+
+  const startEdit = useCallback(() => {
+    setDraft(content);
+    setEditing(true);
+  }, [content]);
+
+  const cancelEdit = useCallback(() => {
+    setEditing(false);
+    setDraft("");
+  }, []);
+
+  const save = useCallback(() => {
+    if (saving) return;
+    setSaving(true);
+    const next = draft;
+    request<WriteFileResult>("project.writeFile", { projectId, path, content: next })
+      .then((res) => {
+        if (res.available === false) throw new Error(t("changes.unavailable.ssh"));
+        setResult((prev) => (prev ? { ...prev, content: next } : prev));
+        setEditing(false);
+        setDraft("");
+        Alert.alert(t("files.saved"));
+      })
+      .catch((err) =>
+        Alert.alert(t("files.saveFailed"), err instanceof Error ? err.message : String(err)),
+      )
+      .finally(() => setSaving(false));
+  }, [draft, path, projectId, request, saving]);
 
   return (
-    <View style={styles.screen}>
-      <Stack.Screen options={{ title }} />
+    <View style={[styles.screen, { paddingBottom: keyboardInset }]}>
+      <Stack.Screen
+        options={{
+          title,
+          headerRight: () =>
+            !result ? null : (
+              <HeaderActions>
+                {saving ? (
+                  <ActivityIndicator size="small" color={theme.accent} />
+                ) : editing ? (
+                  <>
+                    <Pressable hitSlop={8} onPress={cancelEdit}>
+                      <Text style={styles.headerLink}>{t("files.cancelEdit")}</Text>
+                    </Pressable>
+                    <Pressable hitSlop={8} onPress={save}>
+                      <Text style={[styles.headerLink, styles.headerLinkStrong]}>
+                        {t("files.save")}
+                      </Text>
+                    </Pressable>
+                  </>
+                ) : (
+                  <Pressable hitSlop={8} disabled={!canEdit} onPress={startEdit}>
+                    <Text style={[styles.headerLink, !canEdit && styles.headerLinkDisabled]}>
+                      {t("files.edit")}
+                    </Text>
+                  </Pressable>
+                )}
+              </HeaderActions>
+            ),
+        }}
+      />
       {error ? (
         <View style={styles.center}>
           <Text style={styles.errorText}>{error}</Text>
@@ -52,24 +128,32 @@ export default function FileViewScreen() {
         </View>
       ) : (
         <>
-          {result.truncated ? (
+          {truncated ? (
             <Text style={styles.truncatedBanner}>
-              {t("files.truncated", { kb: Math.round((result.content?.length ?? 0) / 1024) })}
+              {t("files.truncated", { kb: Math.round(content.length / 1024) })} ·{" "}
+              {t("files.readOnlyTruncated")}
             </Text>
           ) : null}
-          <ScrollView horizontal contentContainerStyle={styles.hScroll}>
-            <FlatList
-              data={lines}
-              keyExtractor={(_, index) => String(index)}
-              initialNumToRender={60}
-              windowSize={11}
-              renderItem={({ item }) => (
-                <Text style={styles.codeLine} numberOfLines={1}>
-                  {item || " "}
-                </Text>
-              )}
+          {editing ? (
+            <TextInput
+              style={styles.editor}
+              value={draft}
+              onChangeText={setDraft}
+              multiline
+              autoCorrect={false}
+              autoCapitalize="none"
+              spellCheck={false}
+              textAlignVertical="top"
             />
-          </ScrollView>
+          ) : (
+            <ScrollView contentContainerStyle={styles.vScroll}>
+              <ScrollView horizontal contentContainerStyle={styles.hScroll}>
+                <Text style={styles.code} selectable>
+                  {content || " "}
+                </Text>
+              </ScrollView>
+            </ScrollView>
+          )}
         </>
       )}
     </View>
@@ -78,6 +162,9 @@ export default function FileViewScreen() {
 
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: theme.bg },
+  headerLink: { color: theme.accent, fontSize: 13.5, fontWeight: "600" },
+  headerLinkStrong: { fontWeight: "700" },
+  headerLinkDisabled: { color: theme.textHint },
   center: { flex: 1, alignItems: "center", justifyContent: "center", gap: 12, padding: 24 },
   hint: { color: theme.textSecondary, fontSize: 13 },
   errorText: { color: theme.danger, fontSize: 13, textAlign: "center", lineHeight: 19 },
@@ -96,12 +183,22 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
     backgroundColor: theme.bgCard,
   },
+  vScroll: { paddingVertical: spacing.sm },
   hScroll: { minWidth: "100%" },
-  codeLine: {
+  code: {
     fontFamily: MONO,
     fontSize: 11.5,
     lineHeight: 17,
     color: theme.textSecondary,
     paddingHorizontal: 12,
+  },
+  editor: {
+    flex: 1,
+    fontFamily: MONO,
+    fontSize: 12,
+    lineHeight: 18,
+    color: theme.text,
+    paddingHorizontal: 12,
+    paddingVertical: spacing.sm,
   },
 });

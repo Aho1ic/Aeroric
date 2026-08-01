@@ -11,6 +11,7 @@
  * 定时器与随机源可注入,保证 vitest 全覆盖。
  */
 
+import type { HostIdentity } from "../types";
 import {
   E2eeSession,
   KIND_CTRL,
@@ -123,7 +124,7 @@ const defaultTimers: TimerApi = {
 };
 
 export class RemoteConnection {
-  private readonly endpoints: string[];
+  private endpoints: string[];
   private readonly serverPublicKey: string;
   private readonly authParams: () => Record<string, unknown>;
   private readonly wsFactory: WebSocketFactory;
@@ -155,6 +156,11 @@ export class RemoteConnection {
   private pushListeners = new Set<(push: string, data: unknown, seq?: number) => void>();
   private authListeners = new Set<(auth: AuthSuccess) => void>();
   private binaryListeners = new Set<(data: ArrayBuffer) => void>();
+  private identityListeners = new Set<
+    (identity: HostIdentity, connectedEndpoint: string | null) => void
+  >();
+  /** 竞速胜出的地址(用于把有效地址排到候选列表最前) */
+  private activeEndpoint: string | null = null;
   private lastAuthError: string | null = null;
   /** 最后一次已分发的带 seq 推送(watermark);0 = 尚未收到任何可补发事件 */
   private lastPushSeq = 0;
@@ -209,6 +215,43 @@ export class RemoteConnection {
     return () => this.binaryListeners.delete(listener);
   }
 
+  /**
+   * 每次认证成功后由 `hello` 带回的实时主机身份(hostId / hostName / 当前候选地址),
+   * 附带本轮竞速实际连上的地址。消费方据此刷新已保存主机,解决换网段后地址过期。
+   */
+  onHostIdentity(
+    listener: (identity: HostIdentity, connectedEndpoint: string | null) => void,
+  ): () => void {
+    this.identityListeners.add(listener);
+    return () => this.identityListeners.delete(listener);
+  }
+
+  /**
+   * 就地替换候选地址(主机记录被身份合并刷新后调用),避免重建整个连接。
+   * 已在线时只记下,留给下次重连;未在线时立刻用新地址重拨,
+   * 免得用户刚手填完正确地址还要等最长 30s 的退避。
+   */
+  updateEndpoints(next: string[]): void {
+    const cleaned = next.filter((endpoint) => endpoint.length > 0);
+    if (cleaned.length === 0) return;
+    if (
+      cleaned.length === this.endpoints.length &&
+      cleaned.every((endpoint, index) => endpoint === this.endpoints[index])
+    ) {
+      return;
+    }
+    this.endpoints = [...cleaned];
+    if (
+      this.statusValue === "online" ||
+      this.statusValue === "stopped" ||
+      this.statusValue === "unauthorized"
+    ) {
+      return;
+    }
+    this.reconnectAttempts = 0;
+    this.openSockets("connecting");
+  }
+
   /** 发送终端流帧(自动加密);离线时静默丢弃(终端流由重订阅快照兜底)。 */
   sendBinary(data: Uint8Array): boolean {
     if (this.statusValue !== "online" || !this.ws || !this.session) return false;
@@ -248,6 +291,7 @@ export class RemoteConnection {
     const generation = ++this.generation;
     type Candidate = {
       ws: WebSocketLike;
+      endpoint: string;
       phase: "dialing" | "ready" | "active" | "online" | "failed";
       dialTimer: unknown | null;
       handshakeTimer: unknown | null;
@@ -328,6 +372,7 @@ export class RemoteConnection {
         detach(other);
       }
       this.racers = [candidate.ws];
+      this.activeEndpoint = candidate.endpoint;
     };
 
     const activate = (candidate: Candidate) => {
@@ -351,6 +396,7 @@ export class RemoteConnection {
       }
       const candidate: Candidate = {
         ws,
+        endpoint,
         phase: "dialing",
         dialTimer: null,
         handshakeTimer: null,
@@ -436,6 +482,7 @@ export class RemoteConnection {
       this.authListeners.forEach((listener) => listener(result));
       this.startHeartbeat(generation);
       this.replayMissedEvents(ws, generation);
+      this.fetchHostIdentity(ws, generation);
     } catch (err) {
       if (generation !== this.generation || this.ws !== ws) return;
       const message = err instanceof Error ? err.message : String(err);
@@ -483,8 +530,24 @@ export class RemoteConnection {
       });
   }
 
-  private scheduleReconnect(): void {
-    this.teardownSocket();
+  /**
+   * 认证成功后取一次实时主机身份(桌面 rpc.rs::hello)。
+   * 纯附加信息:失败不影响连接可用性,静默吞掉即可。
+   */
+  private fetchHostIdentity(ws: WebSocketLike, generation: number): void {
+    const connectedEndpoint = this.activeEndpoint;
+    this.sendRequest<HostIdentity>(ws, "hello")
+      .then((identity) => {
+        if (generation !== this.generation || this.statusValue !== "online") return;
+        if (!identity || typeof identity !== "object") return;
+        this.identityListeners.forEach((listener) => listener(identity, connectedEndpoint));
+      })
+      .catch(() => {
+        // 旧桌面版本没有身份字段 / 请求超时:保持已保存地址不变
+      });
+  }
+
+  private scheduleReconnect(): void {    this.teardownSocket();
     this.setStatus("reconnecting");
     const backoff = Math.min(INITIAL_BACKOFF * 2 ** this.reconnectAttempts, this.maxBackoffMs);
     this.reconnectAttempts += 1;
@@ -526,6 +589,7 @@ export class RemoteConnection {
     this.session = null;
     this.handshake = null;
     this.ws = null;
+    this.activeEndpoint = null;
     if (this.racers.length > 0) {
       const racers = this.racers;
       this.racers = [];

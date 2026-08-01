@@ -2015,6 +2015,8 @@ export const zh: Record<string, string> = {
   "projectRail.expandGroup": "展开项目分组 {name}",
   "projectRail.collapseGroup": "折叠项目分组 {name}",
   "projectRail.resize": "调整项目侧栏宽度",
+  "projectRail.pin": "在分组内置顶",
+  "projectRail.unpin": "取消分组内置顶",
   "toolbar.fileExplorer": "文件浏览器",
   "toolbar.gitChanges": "Git 变更",
   "toolbar.gitHistory": "Git 历史",

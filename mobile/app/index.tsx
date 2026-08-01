@@ -4,9 +4,17 @@
  */
 
 import { Link, Stack, router, useFocusEffect } from "expo-router";
-import { Plus } from "lucide-react-native";
-import { useCallback, useMemo, useState } from "react";
-import { FlatList, Image, Pressable, RefreshControl, StyleSheet, Text, View } from "react-native";
+import { ChevronDown, ChevronRight, Pin, Plus, SlidersHorizontal } from "lucide-react-native";
+import { useCallback, useMemo, useState, type ReactNode } from "react";
+import {
+  Image,
+  Pressable,
+  RefreshControl,
+  SectionList,
+  StyleSheet,
+  Text,
+  View,
+} from "react-native";
 import { NewTaskSheet } from "../src/components/NewTaskSheet";
 import { t } from "../src/i18n";
 import { useConnection } from "../src/state/connection-context";
@@ -14,6 +22,11 @@ import { useHostStats } from "../src/state/use-host-stats";
 import { useHosts } from "../src/state/hosts-context";
 import { useHostTasks, type ProjectTasks } from "../src/state/use-host-tasks";
 import { formatCount, formatDuration } from "../src/ui/format-duration";
+import {
+  UNGROUPED_PROJECT_GROUP,
+  groupProjectEntries,
+  visibleGroupEntries,
+} from "../src/ui/group-projects";
 import { radii, spacing, theme, typography } from "../src/ui/theme";
 
 function ConnectionBanner() {
@@ -49,29 +62,59 @@ function ConnectionBanner() {
   );
 }
 
-function StatCard({ value, label }: { value: string; label: string }) {
-  return (
-    <View style={styles.statCard}>
-      <Text style={styles.statValue} numberOfLines={1}>
-        {value}
-      </Text>
+function StatCard({
+  value,
+  icon,
+  label,
+  onPress,
+  accessibilityLabel,
+}: {
+  value?: string;
+  icon?: ReactNode;
+  label: string;
+  onPress?: () => void;
+  accessibilityLabel?: string;
+}) {
+  const body = (
+    <>
+      {icon ? (
+        <View style={styles.statIcon}>{icon}</View>
+      ) : (
+        <Text style={styles.statValue} numberOfLines={1}>
+          {value}
+        </Text>
+      )}
       <Text style={styles.statLabel} numberOfLines={1}>
         {label}
       </Text>
-    </View>
+    </>
+  );
+  if (!onPress) return <View style={styles.statCard}>{body}</View>;
+  return (
+    <Pressable
+      style={({ pressed }) => [styles.statCard, pressed && styles.pressed]}
+      accessibilityRole="button"
+      accessibilityLabel={accessibilityLabel ?? label}
+      onPress={onPress}
+    >
+      {body}
+    </Pressable>
   );
 }
 
 function ProjectCard({
   section,
   onNewTask,
+  onTogglePinned,
 }: {
   section: ProjectTasks;
   onNewTask: (projectId: string) => void;
+  onTogglePinned: (projectId: string, pinned: boolean) => void;
 }) {
   const { project, tasks } = section;
   const needsInput = tasks.some((task) => task.status === "input_required");
   const initial = project.name.trim().charAt(0).toUpperCase() || "?";
+  const pinned = Boolean(project.pinned);
   return (
     <Pressable
       style={({ pressed }) => [styles.projectCard, pressed && styles.pressed]}
@@ -99,7 +142,30 @@ function ProjectCard({
         </Text>
       </View>
       <Pressable
-        hitSlop={8}
+        hitSlop={6}
+        style={({ pressed }) => [
+          styles.addButton,
+          pinned && styles.pinButtonActive,
+          pressed && styles.pressed,
+        ]}
+        accessibilityRole="button"
+        accessibilityState={{ selected: pinned }}
+        accessibilityLabel={t(pinned ? "home.unpinProject" : "home.pinProject", {
+          name: project.name,
+        })}
+        onPress={(e) => {
+          e.stopPropagation();
+          onTogglePinned(project.id, !pinned);
+        }}
+      >
+        <Pin
+          size={16}
+          color={pinned ? theme.onAccent : theme.textSecondary}
+          strokeWidth={pinned ? 2.6 : 2}
+        />
+      </Pressable>
+      <Pressable
+        hitSlop={6}
         style={({ pressed }) => [styles.addButton, pressed && styles.pressed]}
         accessibilityRole="button"
         accessibilityLabel={t("home.newTaskFor", { name: project.name })}
@@ -111,6 +177,36 @@ function ProjectCard({
       >
         <Plus size={18} color={theme.text} strokeWidth={2.4} />
       </Pressable>
+    </Pressable>
+  );
+}
+
+function GroupHeader({
+  name,
+  count,
+  collapsed,
+  onToggle,
+}: {
+  name: string;
+  count: number;
+  collapsed: boolean;
+  onToggle: () => void;
+}) {
+  const label = name === UNGROUPED_PROJECT_GROUP ? t("home.group.ungrouped") : name;
+  const Chevron = collapsed ? ChevronRight : ChevronDown;
+  return (
+    <Pressable
+      style={({ pressed }) => [styles.groupHeader, pressed && styles.pressed]}
+      accessibilityRole="button"
+      accessibilityState={{ expanded: !collapsed }}
+      accessibilityLabel={t(collapsed ? "home.expandGroup" : "home.collapseGroup", { name: label })}
+      onPress={onToggle}
+    >
+      <Chevron size={14} color={theme.textSecondary} strokeWidth={2.4} />
+      <Text style={styles.groupHeaderText} numberOfLines={1}>
+        {label}
+      </Text>
+      <Text style={styles.groupHeaderCount}>{count}</Text>
     </Pressable>
   );
 }
@@ -132,9 +228,11 @@ function PairPrompt() {
 
 export default function HomeScreen() {
   const { ready, hosts, activeHost } = useHosts();
-  const { sections, loading, error, refresh } = useHostTasks();
+  const { sections, loading, error, refresh, setPinned } = useHostTasks();
   const { stats, refresh: refreshStats } = useHostStats();
   const [newTaskProjectId, setNewTaskProjectId] = useState<string | null>(null);
+  // 折叠态只存在组件内,不持久化(桌面端才是分组的权威来源)
+  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(() => new Set());
 
   // 从新建/详情页返回时同步一次(推送覆盖大多数场景,这里兜底)
   useFocusEffect(
@@ -148,6 +246,28 @@ export default function HomeScreen() {
     refresh();
     refreshStats();
   }, [refresh, refreshStats]);
+
+  const toggleGroup = useCallback((name: string) => {
+    setCollapsedGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(name)) next.delete(name);
+      else next.add(name);
+      return next;
+    });
+  }, []);
+
+  const groups = useMemo(() => groupProjectEntries(sections), [sections]);
+  // 折叠的分组仍保留置顶项目,所以 data 可能少于 entries;分组头计数用整组数量
+  const listSections = useMemo(
+    () =>
+      groups.map((group) => ({
+        ...group,
+        data: visibleGroupEntries(group, collapsedGroups.has(group.name)),
+      })),
+    [collapsedGroups, groups],
+  );
+  // 只有「未分组」一组时不必显示分组头,避免平铺列表多出一行噪音
+  const showGroupHeaders = groups.length > 1 || (groups.length === 1 && !groups[0].isUngrouped);
 
   if (!ready) return <View style={styles.screen} />;
 
@@ -172,26 +292,42 @@ export default function HomeScreen() {
       {hasHosts ? <ConnectionBanner /> : null}
       {error ? <Text style={styles.errorText}>{error}</Text> : null}
 
-      <FlatList
-        data={hasHosts ? sections : []}
+      <SectionList
+        sections={hasHosts ? listSections : []}
         keyExtractor={(item) => item.project.id}
-        renderItem={({ item }) => <ProjectCard section={item} onNewTask={setNewTaskProjectId} />}
+        stickySectionHeadersEnabled={false}
+        renderItem={({ item }) => (
+          <ProjectCard
+            section={item}
+            onNewTask={setNewTaskProjectId}
+            onTogglePinned={setPinned}
+          />
+        )}
+        renderSectionHeader={({ section }) =>
+          showGroupHeaders ? (
+            <GroupHeader
+              name={section.name}
+              count={section.entries.length}
+              collapsed={collapsedGroups.has(section.name)}
+              onToggle={() => toggleGroup(section.name)}
+            />
+          ) : null
+        }
         ListHeaderComponent={
           hasHosts ? (
             <View>
-              {stats ? (
-                <View style={styles.statsRow}>
-                  <StatCard
-                    value={formatCount(stats.totalAgentsSpawned)}
-                    label={t("home.statAgents")}
-                  />
-                  <StatCard
-                    value={formatDuration(stats.agentTimeMs)}
-                    label={t("home.statAgentTime")}
-                  />
-                  <StatCard value={formatCount(stats.totalPRsCreated)} label={t("home.statPRs")} />
-                </View>
-              ) : null}
+              <View style={styles.statsRow}>
+                <StatCard value={formatCount(sections.length)} label={t("home.statProjects")} />
+                <StatCard
+                  value={stats ? formatDuration(stats.agentTimeMs) : "—"}
+                  label={t("home.statAgentTime")}
+                />
+                <StatCard
+                  icon={<SlidersHorizontal size={20} color={theme.text} strokeWidth={2.2} />}
+                  label={t("home.statAgentConfig")}
+                  onPress={() => router.push("/agent-config")}
+                />
+              </View>
               {sections.length > 0 ? (
                 <Text style={styles.sectionLabel}>{t("home.projects")}</Text>
               ) : null}
@@ -207,11 +343,13 @@ export default function HomeScreen() {
             <PairPrompt />
           )
         }
-        contentContainerStyle={
-          hasHosts && sections.length > 0 ? styles.list : styles.listEmpty
-        }
+        contentContainerStyle={hasHosts && sections.length > 0 ? styles.list : styles.listEmpty}
         refreshControl={
-          <RefreshControl refreshing={loading} onRefresh={onRefresh} tintColor={theme.textSecondary} />
+          <RefreshControl
+            refreshing={loading}
+            onRefresh={onRefresh}
+            tintColor={theme.textSecondary}
+          />
         }
       />
 
@@ -272,6 +410,11 @@ const styles = StyleSheet.create({
     borderColor: theme.border,
   },
   statValue: { color: theme.text, fontSize: typography.titleSize, fontWeight: "700" },
+  statIcon: {
+    height: typography.titleSize + 4,
+    alignItems: "center",
+    justifyContent: "center",
+  },
   statLabel: { color: theme.textSecondary, fontSize: typography.labelSize, fontWeight: "500" },
   sectionLabel: {
     color: theme.textSecondary,
@@ -281,6 +424,22 @@ const styles = StyleSheet.create({
     paddingTop: spacing.xl,
     paddingBottom: spacing.sm,
   },
+  groupHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.xs,
+    marginHorizontal: spacing.md,
+    paddingHorizontal: spacing.sm,
+    paddingTop: spacing.md,
+    paddingBottom: spacing.xs,
+  },
+  groupHeaderText: {
+    flex: 1,
+    color: theme.textSecondary,
+    fontSize: typography.metaSize,
+    fontWeight: "700",
+  },
+  groupHeaderCount: { color: theme.textHint, fontSize: typography.metaSize, fontWeight: "600" },
   projectCard: {
     flexDirection: "row",
     alignItems: "center",
@@ -319,6 +478,8 @@ const styles = StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: theme.border,
   },
+  // 置顶按下态:与桌面端 --control-active-bg 同一视觉语义
+  pinButtonActive: { backgroundColor: theme.accent, borderColor: theme.accent },
   emptyWrap: { alignItems: "center", paddingHorizontal: 32, gap: 14 },
   emptyLogo: { width: 64, height: 64, borderRadius: radii.card },
   emptyTitle: { color: theme.text, fontSize: 26, fontWeight: "700" },

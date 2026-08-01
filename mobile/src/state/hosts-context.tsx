@@ -11,10 +11,11 @@ import {
   type ReactNode,
 } from "react";
 import { t } from "../i18n";
-import type { PairedHost } from "../types";
+import type { HostIdentity, PairedHost } from "../types";
 import {
   addOrReplaceHost,
   loadHostStore,
+  mergeHostIdentity,
   saveHostStore,
   type HostStoreState,
 } from "../storage/host-store";
@@ -28,6 +29,12 @@ interface HostsContextValue {
   setActiveHost: (hostId: string) => Promise<void>;
   /** 编辑主机候选地址(自定义公网地址等);空列表被拒绝。 */
   updateHostEndpoints: (hostId: string, endpoints: string[]) => Promise<void>;
+  /** 用连接后 `hello` 带回的实时身份刷新记录:补 hostId、合并重复记录、更新 LAN 地址。 */
+  reconcileHostIdentity: (
+    hostId: string,
+    identity: HostIdentity,
+    connectedEndpoint?: string | null,
+  ) => Promise<void>;
 }
 
 const HostsContext = createContext<HostsContextValue | null>(null);
@@ -54,6 +61,8 @@ export function HostsProvider({ children }: { children: ReactNode }) {
   const transact = useCallback((update: (current: HostStoreState) => HostStoreState) => {
     const operation = writeQueueRef.current.then(async () => {
       const next = update(stateRef.current);
+      // 更新函数原样返回旧引用 = 无变化,跳过一次多余的 SecureStore 写入与重渲染
+      if (next === stateRef.current) return;
       // SecureStore 成功后才发布 React 内存态，避免 UI 显示无法在重启后恢复的数据。
       await saveHostStore(next);
       stateRef.current = next;
@@ -109,6 +118,15 @@ export function HostsProvider({ children }: { children: ReactNode }) {
     [transact],
   );
 
+  const reconcileHostIdentity = useCallback(
+    async (hostId: string, identity: HostIdentity, connectedEndpoint?: string | null) => {
+      await transact((current) =>
+        mergeHostIdentity(current, hostId, identity, connectedEndpoint ?? null),
+      );
+    },
+    [transact],
+  );
+
   const value = useMemo<HostsContextValue>(
     () => ({
       ready,
@@ -118,8 +136,18 @@ export function HostsProvider({ children }: { children: ReactNode }) {
       removeHost,
       setActiveHost,
       updateHostEndpoints,
+      reconcileHostIdentity,
     }),
-    [addHost, ready, removeHost, setActiveHost, state.activeHostId, state.hosts, updateHostEndpoints],
+    [
+      addHost,
+      ready,
+      reconcileHostIdentity,
+      removeHost,
+      setActiveHost,
+      state.activeHostId,
+      state.hosts,
+      updateHostEndpoints,
+    ],
   );
 
   return <HostsContext.Provider value={value}>{children}</HostsContext.Provider>;

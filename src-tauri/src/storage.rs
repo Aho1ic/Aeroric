@@ -33,6 +33,9 @@ pub struct Project {
         skip_serializing_if = "std::ops::Not::not"
     )]
     pub hidden_from_rail: bool,
+    // 置顶：在各自分组内排最前，分组折叠时仍露出。桌面与手机共享同一份状态。
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub pinned: bool,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]

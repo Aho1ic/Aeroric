@@ -48,6 +48,8 @@ export interface Project {
   lastOpenedAt: number;
   orderIndex?: number;
   hiddenFromRail?: boolean;
+  /** 置顶:在各自分组内排最前,分组折叠时仍露出。桌面与手机共享同一份状态。 */
+  pinned?: boolean;
 }
 
 export interface Task {
@@ -69,6 +71,20 @@ export interface HostInfo {
   name: string;
   version: string;
   platform: string;
+}
+
+/**
+ * 连接建立后由 `hello` 带回的实时主机身份(桌面 remote/mod.rs::live_identity)。
+ * 手机端据此把已保存记录的 LAN 地址刷新到当前网段,而不是新建一条记录。
+ */
+export interface HostIdentity {
+  /** 桌面静态密钥派生的稳定身份;同一台电脑换网段后不变 */
+  hostId?: string;
+  hostName?: string;
+  /** 全部候选地址(LAN → 自定义公网 → relay) */
+  endpoints?: string[];
+  /** endpoints 中属于内网直连的子集;只有这些会替换本地旧 LAN 地址 */
+  lanEndpoints?: string[];
 }
 
 /** 服务端推送帧(events_bridge 白名单事件) */
@@ -123,6 +139,22 @@ export interface AgentChoice {
   codexLike: boolean;
 }
 
+/**
+ * RPC agentConfig.list 的条目。内置 agent 只有前四个字段(editable=false);
+ * 自定义 profile 才带 baseUrl / apiKey / models。
+ */
+export interface AgentConfigEntry {
+  id: string;
+  label: string;
+  codexLike: boolean;
+  editable: boolean;
+  baseUrl?: string;
+  apiKey?: string;
+  models?: string[];
+  enable1mContext?: boolean;
+  enableChatCompletionsProxy?: boolean;
+}
+
 export type PermissionMode = "ask" | "auto_edit" | "full_access";
 
 export const PERMISSION_MODE_VALUES: PermissionMode[] = ["ask", "auto_edit", "full_access"];
@@ -175,4 +207,11 @@ export interface ReadFileResult {
   content?: string;
   truncated?: boolean;
   totalBytes?: number;
+}
+
+/** `project.writeFile` 的返回:SSH/WSL 项目 available=false。 */
+export interface WriteFileResult {
+  available: boolean;
+  reason?: "ssh" | "wsl";
+  ok?: boolean;
 }

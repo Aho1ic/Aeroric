@@ -5,6 +5,7 @@
 //! 服务默认关闭,由设置页开关控制;开关与端口持久化在
 //! `~/.aeroric/remote-config.json`(不进 settings.json,避免搅动大结构)。
 
+mod agent_config_rpc;
 mod agent_keymap;
 mod audit;
 mod auth;
@@ -303,6 +304,54 @@ fn selected_lan_ip(
                 .map(|address| address.ip.clone())
         })
         .or_else(|| addresses.first().map(|address| address.ip.clone()))
+}
+
+/// `hello` 用的实时主机身份:hostId / hostName / 当前可直连的候选地址。
+///
+/// 与 `remote_create_invite` 同一套取法(LAN 直连 → 自定义公网地址 → relay),
+/// 区别是把**全部** LAN 地址都带上(preferred 排最前),让手机端能在换网段后
+/// 刷新已保存主机的地址,而不是新建一条记录。服务未运行时端口取配置值。
+pub(crate) async fn live_identity<R: Runtime>(app: &AppHandle<R>) -> serde_json::Value {
+    let state = app.state::<RemoteState>();
+    let running_port = state.running.lock().await.as_ref().map(|h| h.port);
+    let addresses = lan_addresses();
+    let (port, preferred_lan_ip, relay_url, public_endpoints) = {
+        let cfg = state.config.lock();
+        (
+            running_port.unwrap_or(cfg.port),
+            cfg.preferred_lan_ip.clone(),
+            cfg.relay_url
+                .as_deref()
+                .filter(|u| !u.trim().is_empty())
+                .map(str::to_string),
+            cfg.public_endpoints.clone(),
+        )
+    };
+    let mut endpoints = Vec::new();
+    if let Some(ip) = selected_lan_ip(preferred_lan_ip.as_deref(), &addresses) {
+        endpoints.push(format!("ws://{ip}:{port}"));
+    }
+    for address in &addresses {
+        let endpoint = format!("ws://{}:{port}", address.ip);
+        if !endpoints.contains(&endpoint) {
+            endpoints.push(endpoint);
+        }
+    }
+    let lan_endpoints = endpoints.clone();
+    endpoints.extend(public_endpoints);
+    if let Some(relay) = relay_url {
+        endpoints.push(remote_protocol::client_connect_url(
+            &relay,
+            &state.keys.host_id(),
+        ));
+    }
+    json!({
+        "hostId": state.keys.host_id(),
+        "hostName": host_name(),
+        "endpoints": endpoints,
+        // 仅 LAN 的子集:手机端据此只替换旧的内网地址,保留用户手填的隧道地址
+        "lanEndpoints": lan_endpoints,
+    })
 }
 
 // ── Tauri commands(桌面设置页专用) ─────────────────────────────────────────

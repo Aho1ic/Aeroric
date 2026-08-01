@@ -1474,6 +1474,14 @@ function App() {
     });
   }
 
+  function handleToggleProjectPinned(projectId: string) {
+    setProjects((prev) => {
+      const next = prev.map((p) => (p.id === projectId ? { ...p, pinned: !p.pinned } : p));
+      persistProjects(next, showToast, formatSaveProjectsError);
+      return next;
+    });
+  }
+
   function handleAssignProjectGroup(projectId: string, groupName: string | null) {
     const normalized = normalizeProjectGroupName(groupName);
     setProjects((prev) => {
@@ -1717,6 +1725,7 @@ function App() {
                 onBack={handleBack}
                 onSwitchProject={handleProjectClick}
                 onReorderProjects={handleReorderProjects}
+                onToggleProjectPinned={handleToggleProjectPinned}
                 projectGroups={projectGroups}
                 projectRailWidth={projectRailWidth}
                 onProjectRailWidthChange={handleProjectRailWidthChange}

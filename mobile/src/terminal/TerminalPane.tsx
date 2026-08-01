@@ -352,12 +352,13 @@ export function TerminalPane({ taskId, active }: { taskId: string; active: boole
             </Pressable>
           </ScrollView>
         </View>
-        <Pressable style={styles.liveInputBar} onPress={() => injectTerm({ type: "focus" })}>
-          <Text style={styles.liveInputTitle}>{t("term.liveInput")}</Text>
-          <Text style={styles.liveInputDetail}>
-            {imeFocused ? t("term.hideKeyboard") : t("term.tapToShowKeyboard")}
-          </Text>
-        </Pressable>
+        {/* 输入法弹出后这一行让位给键盘,只留上面的粘贴/ESC 行 */}
+        {imeFocused ? null : (
+          <Pressable style={styles.liveInputBar} onPress={() => injectTerm({ type: "focus" })}>
+            <Text style={styles.liveInputTitle}>{t("term.liveInput")}</Text>
+            <Text style={styles.liveInputDetail}>{t("term.tapToShowKeyboard")}</Text>
+          </Pressable>
+        )}
       </View>
     </View>
   );
@@ -390,7 +391,7 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     paddingHorizontal: spacing.sm,
-    paddingVertical: spacing.sm,
+    paddingVertical: spacing.xs,
     gap: spacing.xs + 2,
   },
   keyScroll: { flexGrow: 0, flexShrink: 1 },
@@ -399,22 +400,23 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: spacing.xs + 2,
-    minHeight: 40,
-    paddingHorizontal: spacing.md + 2,
-    paddingVertical: 9,
+    minHeight: 32,
+    paddingHorizontal: spacing.sm + 2,
+    paddingVertical: 5,
     borderRadius: radii.button,
     backgroundColor: theme.bgElevated,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: theme.border,
   },
-  keyPinned: { paddingHorizontal: spacing.md },
+  keyPinned: { paddingHorizontal: spacing.sm + 4 },
   keyActive: { backgroundColor: theme.accent, borderColor: theme.accent },
-  keyText: { color: theme.text, fontSize: typography.bodySize, fontWeight: "600" },
+  keyText: { color: theme.text, fontSize: 12.5, fontWeight: "600" },
   liveInputBar: {
     borderTopWidth: StyleSheet.hairlineWidth,
     borderTopColor: theme.border,
+    alignItems: "center",
     paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.md,
+    paddingVertical: spacing.sm,
     gap: 1,
   },
   liveInputTitle: {

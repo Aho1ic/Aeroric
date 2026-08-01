@@ -1,23 +1,26 @@
 /**
- * 任务详情页:会话 / 终端双 tab + 生命周期操作(取消/完成/恢复)。
- * 会话 tab 是 vibe coding 主界面(审批卡 + prompt 输入);终端 tab 永远是兜底。
+ * 任务详情页:主视图(会话/终端合一)/ 文件 / 变更 三个图标 tab + 生命周期操作(取消/完成/恢复)。
+ * 主视图按任务状态自动取舍:running 显示终端,结束后显示会话——两者不会同时出现,故合成一个按钮。
  */
 
 import { Stack, useLocalSearchParams } from "expo-router";
-import { useCallback, useRef, useState } from "react";
-import { Alert, Pressable, StyleSheet, Text, View } from "react-native";
+import { FolderTree, GitCompare, MessageSquare, SquareTerminal } from "lucide-react-native";
+import { useCallback, useState } from "react";
+import { ActivityIndicator, Alert, Pressable, StyleSheet, Text, View } from "react-native";
 import { ChangesPane } from "../../src/changes/ChangesPane";
+import { FilesPane } from "../../src/files/FilesPane";
 import { t } from "../../src/i18n";
 import { SessionPane } from "../../src/session/SessionPane";
 import { useConnection } from "../../src/state/connection-context";
 import { useTaskDetail } from "../../src/state/use-task-detail";
 import { TerminalPane } from "../../src/terminal/TerminalPane";
 import { taskAcceptsInput } from "../../src/types";
+import { HeaderIconButton } from "../../src/ui/HeaderIconButton";
 import { taskStatusMeta } from "../../src/ui/task-status";
 import { radii, theme } from "../../src/ui/theme";
 import { useKeyboardInset } from "../../src/ui/use-keyboard-inset";
 
-type TabKey = "session" | "terminal" | "changes";
+type TabKey = "main" | "files" | "changes";
 
 export default function TaskDetailScreen() {
   const params = useLocalSearchParams<{ taskId: string; projectId?: string; name?: string }>();
@@ -26,21 +29,15 @@ export default function TaskDetailScreen() {
   const fallbackName = typeof params.name === "string" ? params.name : "";
   const { request } = useConnection();
   const { task, error, refresh } = useTaskDetail(projectId, taskId);
-  // Session/Terminal 融合:运行中默认看终端,结束后默认看会话;
-  // 用户手动点过 tab 后不再自动切换。
-  const [tab, setTabState] = useState<TabKey | null>(null);
-  const userPickedRef = useRef(false);
+  const [tab, setTab] = useState<TabKey>("main");
   const [acting, setActing] = useState(false);
-
-  const setTab = useCallback((key: TabKey) => {
-    userPickedRef.current = true;
-    setTabState(key);
-  }, []);
 
   const statusMeta = task ? taskStatusMeta(task.status) : null;
   const active = task ? taskAcceptsInput(task.status) : false;
-  const autoTab: TabKey = active ? "terminal" : "session";
-  const effectiveTab: TabKey = tab ?? autoTab;
+  // 会话与终端合并:运行中看终端,结束后看会话。
+  const mainPane: "session" | "terminal" = active ? "terminal" : "session";
+  const showSession = tab === "main" && mainPane === "session";
+  const showTerminal = tab === "main" && mainPane === "terminal";
 
   const title =
     task?.name?.trim() || task?.prompt.trim().split("\n")[0] || fallbackName || t("common.task");
@@ -86,10 +83,16 @@ export default function TaskDetailScreen() {
       });
     }
     buttons.push({ text: t("common.close"), style: "cancel" as const });
-    Alert.alert(title, statusMeta ? t("task.currentStatus", { label: statusMeta.label }) : undefined, buttons);
+    Alert.alert(
+      title,
+      statusMeta ? t("task.currentStatus", { label: statusMeta.label }) : undefined,
+      buttons,
+    );
   }, [active, runLifecycle, statusMeta, task, title]);
 
   const keyboardInset = useKeyboardInset();
+
+  const mainLabel = mainPane === "terminal" ? t("task.tab.terminal") : t("task.tab.session");
 
   return (
     <View style={[styles.screen, { paddingBottom: keyboardInset }]}>
@@ -97,9 +100,17 @@ export default function TaskDetailScreen() {
         options={{
           title,
           headerRight: () => (
-            <Pressable hitSlop={10} onPress={showActions} disabled={acting || !task}>
-              <Text style={styles.headerAction}>{acting ? "…" : t("task.actions")}</Text>
-            </Pressable>
+            <HeaderIconButton
+              label={t("task.actions")}
+              disabled={acting || !task}
+              onPress={showActions}
+            >
+              {acting ? (
+                <ActivityIndicator size="small" color={theme.accent} />
+              ) : (
+                <Text style={styles.headerActionText}>{t("task.actions")}</Text>
+              )}
+            </HeaderIconButton>
           ),
         }}
       />
@@ -111,44 +122,64 @@ export default function TaskDetailScreen() {
             <Text style={[styles.statusText, { color: statusMeta.color }]}>{statusMeta.label}</Text>
           </>
         ) : (
-          <Text style={styles.statusText}>{error ? t("task.loadFailed", { error }) : t("common.loading")}</Text>
+          <Text style={styles.statusText}>
+            {error ? t("task.loadFailed", { error }) : t("common.loading")}
+          </Text>
         )}
         <View style={styles.tabSwitch}>
           {(
             [
-              ["session", t("task.tab.session")],
-              ["terminal", t("task.tab.terminal")],
+              ["main", mainLabel],
+              ["files", t("task.tab.files")],
               ["changes", t("task.tab.changes")],
             ] as Array<[TabKey, string]>
-          ).map(([key, label]) => (
-            <Pressable
-              key={key}
-              style={[styles.tabButton, effectiveTab === key && styles.tabButtonActive]}
-              onPress={() => setTab(key)}
-            >
-              <Text style={[styles.tabText, effectiveTab === key && styles.tabTextActive]}>
-                {label}
-              </Text>
-            </Pressable>
-          ))}
+          ).map(([key, label]) => {
+            const on = tab === key;
+            const color = on ? theme.onAccent : theme.textSecondary;
+            return (
+              <Pressable
+                key={key}
+                accessibilityRole="button"
+                accessibilityLabel={label}
+                accessibilityState={{ selected: on }}
+                style={[styles.tabButton, on && styles.tabButtonActive]}
+                onPress={() => setTab(key)}
+              >
+                {key === "main" ? (
+                  mainPane === "terminal" ? (
+                    <SquareTerminal size={17} color={color} />
+                  ) : (
+                    <MessageSquare size={17} color={color} />
+                  )
+                ) : key === "files" ? (
+                  <FolderTree size={17} color={color} />
+                ) : (
+                  <GitCompare size={17} color={color} />
+                )}
+              </Pressable>
+            );
+          })}
         </View>
       </View>
 
-      <View style={[styles.paneWrap, effectiveTab !== "session" && styles.paneHidden]}>
+      <View style={[styles.paneWrap, !showSession && styles.paneHidden]}>
         {task ? (
           <SessionPane
             projectId={projectId}
             task={task}
-            active={effectiveTab === "session"}
+            active={showSession}
             canSend={active}
           />
         ) : null}
       </View>
-      <View style={[styles.paneWrap, effectiveTab !== "terminal" && styles.paneHidden]}>
-        <TerminalPane taskId={taskId} active={effectiveTab === "terminal"} />
+      <View style={[styles.paneWrap, !showTerminal && styles.paneHidden]}>
+        <TerminalPane taskId={taskId} active={showTerminal} />
       </View>
-      <View style={[styles.paneWrap, effectiveTab !== "changes" && styles.paneHidden]}>
-        <ChangesPane projectId={projectId} taskId={taskId} active={effectiveTab === "changes"} />
+      <View style={[styles.paneWrap, tab !== "files" && styles.paneHidden]}>
+        <FilesPane projectId={projectId} active={tab === "files"} />
+      </View>
+      <View style={[styles.paneWrap, tab !== "changes" && styles.paneHidden]}>
+        <ChangesPane projectId={projectId} taskId={taskId} active={tab === "changes"} />
       </View>
     </View>
   );
@@ -156,7 +187,13 @@ export default function TaskDetailScreen() {
 
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: theme.bg },
-  headerAction: { color: theme.accent, fontSize: 14.5, fontWeight: "600" },
+  headerActionText: {
+    color: theme.accent,
+    fontSize: 12,
+    fontWeight: "600",
+    textAlign: "center",
+    includeFontPadding: false,
+  },
   statusBar: {
     flexDirection: "row",
     alignItems: "center",
@@ -177,10 +214,14 @@ const styles = StyleSheet.create({
     padding: 2,
     gap: 2,
   },
-  tabButton: { paddingHorizontal: 12, paddingVertical: 5, borderRadius: radii.button - 2 },
+  tabButton: {
+    width: 34,
+    height: 26,
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: radii.button - 2,
+  },
   tabButtonActive: { backgroundColor: theme.accent },
-  tabText: { color: theme.textSecondary, fontSize: 13, fontWeight: "600" },
-  tabTextActive: { color: "#fff" },
   paneWrap: { flex: 1 },
   paneHidden: { display: "none" },
 });

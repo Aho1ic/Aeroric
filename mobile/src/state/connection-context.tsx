@@ -27,16 +27,28 @@ interface ConnectionContextValue {
 const ConnectionContext = createContext<ConnectionContextValue | null>(null);
 
 export function ConnectionProvider({ children }: { children: ReactNode }) {
-  const { activeHost } = useHosts();
+  const { activeHost, reconcileHostIdentity } = useHosts();
   const connRef = useRef<RemoteConnection | null>(null);
   const [status, setStatus] = useState<ConnectionStatus>("idle");
   const [authError, setAuthError] = useState<string | null>(null);
   // push 监听表挂在 provider 层,连接重建时自动重挂,消费方无感
   const pushListeners = useRef(new Set<(push: string, data: unknown, seq?: number) => void>());
   const binaryListeners = useRef(new Set<(data: ArrayBuffer) => void>());
+  // 身份合并会改写 activeHost(端点/名称),但那不该触发重连:
+  // 连接效果只认「换主机」这件事,主机内容变化走 ref + updateEndpoints。
+  const hostRef = useRef(activeHost);
+  hostRef.current = activeHost;
+  const reconcileRef = useRef(reconcileHostIdentity);
+  reconcileRef.current = reconcileHostIdentity;
+
+  const hostKey = activeHost
+    ? `${activeHost.id}|${activeHost.publicKey ?? ""}|${activeHost.deviceToken}`
+    : null;
+  const endpointsKey = activeHost ? activeHost.endpoints.join("\n") : "";
 
   useEffect(() => {
-    if (!activeHost) {
+    const host = hostRef.current;
+    if (!host) {
       connRef.current?.stop();
       connRef.current = null;
       setStatus("idle");
@@ -44,7 +56,7 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
       return;
     }
     // M1 时代的旧记录没有 pin 公钥,无法建立 E2EE 通道:引导重新配对
-    if (!activeHost.publicKey) {
+    if (!host.publicKey) {
       connRef.current?.stop();
       connRef.current = null;
       setStatus("unauthorized");
@@ -52,9 +64,9 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
       return;
     }
     const conn = new RemoteConnection({
-      endpoints: activeHost.endpoints,
-      serverPublicKey: activeHost.publicKey,
-      authParams: () => ({ deviceToken: activeHost.deviceToken }),
+      endpoints: host.endpoints,
+      serverPublicKey: host.publicKey,
+      authParams: () => ({ deviceToken: host.deviceToken }),
     });
     connRef.current = conn;
     const offStatus = conn.onStatusChange((next) => {
@@ -67,16 +79,29 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
     const offBinary = conn.onBinary((data) => {
       binaryListeners.current.forEach((listener) => listener(data));
     });
+    // 认证成功后桌面回传实时身份:补 hostId、合并跨网段产生的重复记录、刷新 LAN 地址
+    const offIdentity = conn.onHostIdentity((identity, connectedEndpoint) => {
+      void reconcileRef.current(host.id, identity, connectedEndpoint).catch(() => {
+        // 合并失败(SecureStore 写入异常)不影响当前连接,下次认证成功还会再试
+      });
+    });
     conn.start();
     setStatus(conn.status);
     return () => {
       offStatus();
       offPush();
       offBinary();
+      offIdentity();
       conn.stop();
       if (connRef.current === conn) connRef.current = null;
     };
-  }, [activeHost]);
+  }, [hostKey]);
+
+  // 端点变化(身份合并刷新 / 用户手动编辑)就地生效,不重建连接
+  useEffect(() => {
+    if (!endpointsKey) return;
+    connRef.current?.updateEndpoints(endpointsKey.split("\n"));
+  }, [endpointsKey, hostKey]);
 
   const value = useMemo<ConnectionContextValue>(
     () => ({

@@ -132,7 +132,11 @@ impl ApprovalRegistry {
 }
 
 /// RPC `agents.list`:手机新建任务页的 agent 选项(内置 + 自定义 profile 窄面视图,
-/// 绝不回传 base_url/api_key 等敏感字段)。
+/// 不回传 base_url/api_key 等敏感字段 —— 建任务不需要它们)。
+///
+/// 注:凭据不是全局不可见了 —— 手机端「Agent 配置」页走独立的
+/// `agentConfig.list` / `agentConfig.save`(见 `agent_config_rpc.rs`),那里按用户
+/// 要求刻意回传并允许改写。本接口保持窄面,不要顺手往里加字段。
 pub(crate) async fn agents_list() -> Result<Value, String> {
     tauri::async_runtime::spawn_blocking(|| {
         let settings = crate::app_settings::load_settings_internal();
@@ -304,13 +308,10 @@ pub(crate) async fn task_resume<R: Runtime>(
     .await
 }
 
-/// RPC `task.create { projectId, prompt, agent, permissionMode }`:参数校验后
-/// 转桌面前端 handleSubmitTask。projectId 是否存在由前端判定并 toast,
-/// 服务端不读存储,保持该路径零盘 IO(桌面必在线,反馈闭环在 UI)。
-/// 某个 agent 的可选模型列表。
+/// RPC `agents.models { agent }`:某个 agent 的可选模型列表。
 ///
-/// 安全:只回传 `models`,刻意丢弃 `AgentModels::balance`(账户余额属敏感信息),
-/// 与 `agents_list` 不回传 base_url/api_key 的约定一致。
+/// 安全:只回传 `models`,刻意丢弃 `AgentModels::balance`(账户余额属敏感信息)。
+/// 与 `agents_list` 一样保持窄面;需要读写 base_url/api_key 的走 `agentConfig.*`。
 pub(crate) async fn agents_models(params: &Value) -> Result<Value, String> {
     let agent = str_param(params, "agent")?;
     if agent.len() > 64 {
@@ -320,6 +321,9 @@ pub(crate) async fn agents_models(params: &Value) -> Result<Value, String> {
     Ok(json!({ "models": models }))
 }
 
+/// RPC `task.create { projectId, prompt, agent, permissionMode }`:参数校验后
+/// 转桌面前端 handleSubmitTask。projectId 是否存在由前端判定并 toast,
+/// 服务端不读存储,保持该路径零盘 IO(桌面必在线,反馈闭环在 UI)。
 pub(crate) async fn task_create<R: Runtime>(
     app: &AppHandle<R>,
     params: &Value,

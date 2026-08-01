@@ -202,6 +202,7 @@ export function ProjectPage({
   onBack,
   onSwitchProject,
   onReorderProjects,
+  onToggleProjectPinned,
   projectGroups = [],
   projectRailWidth,
   onProjectRailWidthChange,
@@ -272,6 +273,7 @@ export function ProjectPage({
   onBack: () => void;
   onSwitchProject: (project: Project) => void;
   onReorderProjects: (orderedProjectIds: string[]) => void;
+  onToggleProjectPinned?: (projectId: string) => void;
   projectGroups?: string[];
   projectRailWidth?: number;
   onProjectRailWidthChange?: (width: number) => void;
@@ -1622,6 +1624,7 @@ export function ProjectPage({
         onToggleTheme={onToggleTheme}
         onSwitch={onSwitchProject}
         onReorderProjects={onReorderProjects}
+        onToggleProjectPinned={onToggleProjectPinned}
         projectGroups={projectGroups}
         projectRailWidth={projectRailWidth}
         onProjectRailWidthChange={onProjectRailWidthChange}

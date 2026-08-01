@@ -17,6 +17,7 @@ import {
   Moon,
   PanelLeftClose,
   PanelLeftOpen,
+  Pin,
   PinOff,
   Play,
   Plus,
@@ -512,6 +513,7 @@ export function ProjectRail({
   onRunTodo,
   onResumeTask,
   onReorderProjects,
+  onToggleProjectPinned,
   projectGroups: projectGroupNames = [],
   projectRailWidth = PROJECT_RAIL_EXPANDED_WIDTH,
   onProjectRailWidthChange,
@@ -537,6 +539,7 @@ export function ProjectRail({
   onRunTodo: (task: Task) => void;
   onResumeTask?: (taskId: string) => void;
   onReorderProjects?: (orderedProjectIds: string[]) => void;
+  onToggleProjectPinned?: (projectId: string) => void;
   projectGroups?: string[];
   projectRailWidth?: number;
   onProjectRailWidthChange?: (width: number) => void;
@@ -551,6 +554,8 @@ export function ProjectRail({
   const [agentSettingsHov, setAgentSettingsHov] = useState(false);
   const [themeHov, setThemeHov] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
+  // 未置顶项目的空心 Pin 只在悬停/当前项目上露出,避免整列图标噪音。
+  const [hoveredProjectId, setHoveredProjectId] = useState<string | null>(null);
   const [draggedProjectId, setDraggedProjectId] = useState<string | null>(null);
   const [dragOverProjectId, setDragOverProjectId] = useState<string | null>(null);
   const [resizing, setResizing] = useState(false);
@@ -1047,6 +1052,10 @@ export function ProjectRail({
         {railProjectGroups.map((railGroup) => {
           const groupKey = railGroup.isUngrouped ? UNGROUPED_PROJECT_GROUP : railGroup.name;
           const groupCollapsed = collapsedProjectGroups.has(groupKey);
+          // 折叠时置顶项目仍然露出;分组头的计数保持整组数量,不受折叠影响。
+          const visibleProjects = groupCollapsed
+            ? railGroup.projects.filter((entry) => entry.project.pinned)
+            : railGroup.projects;
           return (
             <div key={groupKey} style={{ marginBottom: showProjectGroupHeaders ? 8 : 0 }}>
               {showProjectGroupHeaders && (
@@ -1117,327 +1126,363 @@ export function ProjectRail({
                 </button>
               )}
 
-              {!groupCollapsed &&
-                railGroup.projects.map(({ project, tasks }) => {
-                  const isActive = project.id === activeProjectId;
-                  const expanded = expandedProjectIds.has(project.id);
-                  const status = getProjectStatus(allTasks, project.id);
-                  const attentionCount = getAttentionCount(allTasks, project.id);
-                  const taskCountLabel = projectTaskCountLabel(tasks.length, t("task.tasks"));
-                  const selectedProjectTasks = tasks.filter((task) => selectedTaskIds.has(task.id));
-                  const deletableSelectedTaskIds = selectedProjectTasks
-                    .filter((task) => !task.starred)
-                    .map((task) => task.id);
-                  return (
-                    <div key={project.id} style={{ marginBottom: 6 }}>
-                      <div
-                        ref={setProjectItemRef(project.id)}
-                        data-project-rail-row
+              {visibleProjects.map(({ project, tasks }) => {
+                const isActive = project.id === activeProjectId;
+                const expanded = expandedProjectIds.has(project.id);
+                const status = getProjectStatus(allTasks, project.id);
+                const attentionCount = getAttentionCount(allTasks, project.id);
+                const taskCountLabel = projectTaskCountLabel(tasks.length, t("task.tasks"));
+                const selectedProjectTasks = tasks.filter((task) => selectedTaskIds.has(task.id));
+                const deletableSelectedTaskIds = selectedProjectTasks
+                  .filter((task) => !task.starred)
+                  .map((task) => task.id);
+                return (
+                  <div key={project.id} style={{ marginBottom: 6 }}>
+                    <div
+                      ref={setProjectItemRef(project.id)}
+                      data-project-rail-row
+                      onMouseEnter={() => setHoveredProjectId(project.id)}
+                      onMouseLeave={() =>
+                        setHoveredProjectId((current) => (current === project.id ? null : current))
+                      }
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 8,
+                        minHeight: 38,
+                        padding: "4px 4px",
+                        borderRadius: 8,
+                        background:
+                          dragOverProjectId === project.id
+                            ? "var(--bg-hover)"
+                            : isActive
+                              ? "var(--accent-subtle)"
+                              : "transparent",
+                        opacity: draggedProjectId === project.id ? 0.55 : 1,
+                        transform:
+                          draggedProjectId === project.id
+                            ? "scale(0.985)"
+                            : dragOverProjectId === project.id
+                              ? "translateY(2px)"
+                              : "none",
+                        boxShadow:
+                          dragOverProjectId === project.id
+                            ? "inset 0 0 0 1px var(--accent)"
+                            : "none",
+                        cursor: "default",
+                        transition:
+                          "background 0.14s ease, opacity 0.14s ease, transform 0.16s ease, box-shadow 0.16s ease",
+                      }}
+                    >
+                      <button
+                        type="button"
+                        data-project-rail-no-drag
+                        onClick={() =>
+                          setExpandedProjectIds((prev) => {
+                            return updateExpandedProjectIds(
+                              prev,
+                              project.id,
+                              !prev.has(project.id),
+                            );
+                          })
+                        }
+                        title={expanded ? t("task.hideTasks") : t("task.showTasks")}
+                        aria-label={expanded ? t("task.hideTasks") : t("task.showTasks")}
                         style={{
+                          width: 22,
+                          height: 22,
+                          border: "none",
+                          background: "transparent",
+                          color: "var(--text-hint)",
+                          cursor: "pointer",
+                          display: "inline-flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                        }}
+                      >
+                        {expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                      </button>
+                      <button
+                        type="button"
+                        aria-label={t("projectRail.dragProject", { name: project.name })}
+                        title={t("projectRail.dragProject", { name: project.name })}
+                        onPointerDown={(event) => handleProjectPointerDown(event, project.id)}
+                        onPointerMove={handleProjectPointerMove}
+                        onPointerUp={handleProjectPointerUp}
+                        onPointerCancel={handleProjectPointerCancel}
+                        style={{
+                          width: 29,
+                          height: 29,
+                          position: "relative",
+                          flexShrink: 0,
+                          display: "inline-flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          border: "none",
+                          borderRadius: 7,
+                          background: "transparent",
+                          color: "var(--text-primary)",
+                          cursor: draggedProjectId === project.id ? "grabbing" : "grab",
+                          padding: 0,
+                          touchAction: "none",
+                          userSelect: "none",
+                        }}
+                      >
+                        <ProjectAvatar name={project.name} size={25} />
+                        <AttentionIndicator
+                          status={status}
+                          count={attentionCount}
+                          showBadge={attentionBadge}
+                          borderColor={isActive ? "var(--accent-subtle)" : "var(--bg-sidebar)"}
+                        />
+                      </button>
+                      <button
+                        type="button"
+                        aria-label={project.name}
+                        onClick={(event) => {
+                          if (suppressNextProjectClickRef.current) {
+                            suppressNextProjectClickRef.current = false;
+                            event.preventDefault();
+                            return;
+                          }
+                          handleProjectClick(project);
+                        }}
+                        style={{
+                          flex: 1,
+                          minWidth: 0,
                           display: "flex",
                           alignItems: "center",
                           gap: 8,
-                          minHeight: 38,
-                          padding: "4px 4px",
-                          borderRadius: 8,
-                          background:
-                            dragOverProjectId === project.id
-                              ? "var(--bg-hover)"
-                              : isActive
-                                ? "var(--accent-subtle)"
-                                : "transparent",
-                          opacity: draggedProjectId === project.id ? 0.55 : 1,
-                          transform:
-                            draggedProjectId === project.id
-                              ? "scale(0.985)"
-                              : dragOverProjectId === project.id
-                                ? "translateY(2px)"
-                                : "none",
-                          boxShadow:
-                            dragOverProjectId === project.id
-                              ? "inset 0 0 0 1px var(--accent)"
-                              : "none",
-                          cursor: "default",
-                          transition:
-                            "background 0.14s ease, opacity 0.14s ease, transform 0.16s ease, box-shadow 0.16s ease",
+                          border: "none",
+                          background: "transparent",
+                          color: isActive ? "var(--accent)" : "var(--text-primary)",
+                          cursor: draggedProjectId === project.id ? "grabbing" : "pointer",
+                          textAlign: "left",
+                          fontFamily: "var(--font-ui)",
                         }}
                       >
+                        <span style={{ flex: 1, minWidth: 0 }}>
+                          <span
+                            style={{
+                              display: "block",
+                              fontSize: 12.8,
+                              fontWeight: isActive ? 700 : 620,
+                              overflow: "hidden",
+                              textOverflow: "clip",
+                              whiteSpace: "nowrap",
+                            }}
+                          >
+                            {project.name}
+                          </span>
+                          {taskCountLabel && (
+                            <span
+                              style={{
+                                display: "block",
+                                fontSize: 10.8,
+                                color: "var(--text-muted)",
+                              }}
+                            >
+                              {taskCountLabel}
+                            </span>
+                          )}
+                        </span>
+                        {project.hiddenFromRail && (
+                          <PinOff
+                            size={12}
+                            strokeWidth={2}
+                            color="var(--text-hint)"
+                            style={s.railHiddenIcon}
+                          />
+                        )}
+                      </button>
+                      {/* 已置顶常驻显示;未置顶只在悬停或当前项目上露出,避免整列图标噪音。 */}
+                      {(project.pinned || hoveredProjectId === project.id || isActive) && (
                         <button
                           type="button"
                           data-project-rail-no-drag
-                          onClick={() =>
-                            setExpandedProjectIds((prev) => {
-                              return updateExpandedProjectIds(
-                                prev,
-                                project.id,
-                                !prev.has(project.id),
-                              );
-                            })
+                          title={project.pinned ? t("projectRail.unpin") : t("projectRail.pin")}
+                          aria-label={
+                            project.pinned ? t("projectRail.unpin") : t("projectRail.pin")
                           }
-                          title={expanded ? t("task.hideTasks") : t("task.showTasks")}
-                          aria-label={expanded ? t("task.hideTasks") : t("task.showTasks")}
+                          aria-pressed={project.pinned ?? false}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            onToggleProjectPinned?.(project.id);
+                          }}
                           style={{
-                            width: 22,
-                            height: 22,
-                            border: "none",
-                            background: "transparent",
-                            color: "var(--text-hint)",
+                            width: 26,
+                            height: 26,
+                            border: "1px solid var(--border-dim)",
+                            borderRadius: 6,
+                            background: project.pinned
+                              ? "var(--control-active-bg)"
+                              : "var(--bg-card)",
+                            color: project.pinned
+                              ? "var(--control-active-fg)"
+                              : "var(--text-muted)",
                             cursor: "pointer",
                             display: "inline-flex",
                             alignItems: "center",
                             justifyContent: "center",
+                            flexShrink: 0,
                           }}
                         >
-                          {expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                          <Pin size={13} strokeWidth={project.pinned ? 2.6 : 2} />
                         </button>
+                      )}
+                      {isActive && (
                         <button
                           type="button"
-                          aria-label={t("projectRail.dragProject", { name: project.name })}
-                          title={t("projectRail.dragProject", { name: project.name })}
-                          onPointerDown={(event) => handleProjectPointerDown(event, project.id)}
-                          onPointerMove={handleProjectPointerMove}
-                          onPointerUp={handleProjectPointerUp}
-                          onPointerCancel={handleProjectPointerCancel}
+                          data-project-rail-no-drag
+                          title={t("task.newTask")}
+                          aria-label={t("task.newTask")}
+                          onClick={onNewTask}
                           style={{
-                            width: 29,
-                            height: 29,
-                            position: "relative",
-                            flexShrink: 0,
+                            width: 26,
+                            height: 26,
+                            border: "1px solid var(--border-dim)",
+                            borderRadius: 6,
+                            background: isNewTask ? "var(--control-active-bg)" : "var(--bg-card)",
+                            color: isNewTask ? "var(--control-active-fg)" : "var(--text-muted)",
+                            cursor: "pointer",
                             display: "inline-flex",
                             alignItems: "center",
                             justifyContent: "center",
-                            border: "none",
-                            borderRadius: 7,
-                            background: "transparent",
-                            color: "var(--text-primary)",
-                            cursor: draggedProjectId === project.id ? "grabbing" : "grab",
-                            padding: 0,
-                            touchAction: "none",
-                            userSelect: "none",
+                            flexShrink: 0,
                           }}
                         >
-                          <ProjectAvatar name={project.name} size={25} />
-                          <AttentionIndicator
-                            status={status}
-                            count={attentionCount}
-                            showBadge={attentionBadge}
-                            borderColor={isActive ? "var(--accent-subtle)" : "var(--bg-sidebar)"}
-                          />
+                          <Plus size={14} strokeWidth={2.4} />
                         </button>
-                        <button
-                          type="button"
-                          aria-label={project.name}
-                          onClick={(event) => {
-                            if (suppressNextProjectClickRef.current) {
-                              suppressNextProjectClickRef.current = false;
-                              event.preventDefault();
-                              return;
-                            }
-                            handleProjectClick(project);
-                          }}
-                          style={{
-                            flex: 1,
-                            minWidth: 0,
-                            display: "flex",
-                            alignItems: "center",
-                            gap: 8,
-                            border: "none",
-                            background: "transparent",
-                            color: isActive ? "var(--accent)" : "var(--text-primary)",
-                            cursor: draggedProjectId === project.id ? "grabbing" : "pointer",
-                            textAlign: "left",
-                            fontFamily: "var(--font-ui)",
-                          }}
-                        >
-                          <span style={{ flex: 1, minWidth: 0 }}>
-                            <span
-                              style={{
-                                display: "block",
-                                fontSize: 12.8,
-                                fontWeight: isActive ? 700 : 620,
-                                overflow: "hidden",
-                                textOverflow: "clip",
-                                whiteSpace: "nowrap",
-                              }}
-                            >
-                              {project.name}
-                            </span>
-                            {taskCountLabel && (
-                              <span
-                                style={{
-                                  display: "block",
-                                  fontSize: 10.8,
-                                  color: "var(--text-muted)",
-                                }}
-                              >
-                                {taskCountLabel}
-                              </span>
-                            )}
-                          </span>
-                          {project.hiddenFromRail && (
-                            <PinOff
-                              size={12}
-                              strokeWidth={2}
-                              color="var(--text-hint)"
-                              style={s.railHiddenIcon}
-                            />
-                          )}
-                        </button>
-                        {isActive && (
-                          <button
-                            type="button"
-                            data-project-rail-no-drag
-                            title={t("task.newTask")}
-                            aria-label={t("task.newTask")}
-                            onClick={onNewTask}
-                            style={{
-                              width: 26,
-                              height: 26,
-                              border: "1px solid var(--border-dim)",
-                              borderRadius: 6,
-                              background: isNewTask ? "var(--control-active-bg)" : "var(--bg-card)",
-                              color: isNewTask ? "var(--control-active-fg)" : "var(--text-muted)",
-                              cursor: "pointer",
-                              display: "inline-flex",
-                              alignItems: "center",
-                              justifyContent: "center",
-                              flexShrink: 0,
-                            }}
-                          >
-                            <Plus size={14} strokeWidth={2.4} />
-                          </button>
-                        )}
-                      </div>
-
-                      {expanded && (
-                        <div
-                          style={{
-                            marginLeft: 22,
-                            paddingTop: 3,
-                            display: "flex",
-                            flexDirection: "column",
-                            gap: 1,
-                          }}
-                        >
-                          {selectedProjectTasks.length > 0 && (
-                            <div
-                              role="toolbar"
-                              aria-label={t("task.selectedActions")}
-                              style={{
-                                minHeight: 30,
-                                display: "flex",
-                                alignItems: "center",
-                                gap: 4,
-                                margin: "2px 0 3px",
-                                padding: "3px 4px 3px 8px",
-                                border: "1px solid var(--border-medium)",
-                                borderRadius: 6,
-                                background: "var(--bg-card)",
-                              }}
-                            >
-                              <span
-                                style={{
-                                  flex: 1,
-                                  minWidth: 0,
-                                  fontSize: 10.8,
-                                  fontWeight: 650,
-                                  color: "var(--text-secondary)",
-                                }}
-                              >
-                                {t("task.selectedCount", { count: selectedProjectTasks.length })}
-                              </span>
-                              <button
-                                type="button"
-                                aria-label={t("task.deleteSelected")}
-                                title={t("task.deleteSelected")}
-                                disabled={deletableSelectedTaskIds.length === 0 || !onDeleteTasks}
-                                onClick={() => onDeleteTasks?.(deletableSelectedTaskIds)}
-                                style={{
-                                  minWidth: 24,
-                                  height: 24,
-                                  display: "inline-flex",
-                                  alignItems: "center",
-                                  justifyContent: "center",
-                                  gap: 4,
-                                  padding: "0 6px",
-                                  border: "none",
-                                  borderRadius: 5,
-                                  background: "transparent",
-                                  color:
-                                    deletableSelectedTaskIds.length > 0
-                                      ? "var(--danger)"
-                                      : "var(--text-hint)",
-                                  cursor:
-                                    deletableSelectedTaskIds.length > 0 && onDeleteTasks
-                                      ? "pointer"
-                                      : "default",
-                                  opacity:
-                                    deletableSelectedTaskIds.length > 0 && onDeleteTasks ? 1 : 0.45,
-                                  fontFamily: "var(--font-ui)",
-                                  fontSize: 10.8,
-                                }}
-                              >
-                                <Trash2 size={11} strokeWidth={2.2} />
-                                <span>{t("common.delete")}</span>
-                              </button>
-                              <button
-                                type="button"
-                                aria-label={t("task.clearSelection")}
-                                title={t("task.clearSelection")}
-                                onClick={() => {
-                                  setSelectedTaskIds(new Set());
-                                  taskSelectionAnchorRef.current = null;
-                                }}
-                                style={{
-                                  width: 24,
-                                  height: 24,
-                                  display: "inline-flex",
-                                  alignItems: "center",
-                                  justifyContent: "center",
-                                  border: "none",
-                                  borderRadius: 5,
-                                  background: "transparent",
-                                  color: "var(--text-muted)",
-                                  cursor: "pointer",
-                                }}
-                              >
-                                <X size={11} strokeWidth={2.2} />
-                              </button>
-                            </div>
-                          )}
-                          {tasks.length === 0 ? (
-                            <div
-                              style={{
-                                padding: "10px 8px 12px",
-                                fontSize: 11.5,
-                                color: "var(--text-hint)",
-                              }}
-                            >
-                              {t("task.noTasksYet")}
-                            </div>
-                          ) : (
-                            tasks.map((task) => (
-                              <RailTaskItem
-                                key={task.id}
-                                task={task}
-                                selected={selectedTaskId === task.id}
-                                multiSelected={selectedTaskIds.has(task.id)}
-                                isNewTask={isNewTask}
-                                onSelect={(event) => handleTaskClick(event, project, tasks, task)}
-                                onDelete={() => onDeleteTask(task.id)}
-                                onToggleStar={() => onToggleTaskStar(task.id)}
-                                onRunTodo={() => onRunTodo(task)}
-                                onResumeTask={
-                                  onResumeTask ? () => onResumeTask(task.id) : undefined
-                                }
-                              />
-                            ))
-                          )}
-                        </div>
                       )}
                     </div>
-                  );
-                })}
+
+                    {expanded && (
+                      <div
+                        style={{
+                          marginLeft: 22,
+                          paddingTop: 3,
+                          display: "flex",
+                          flexDirection: "column",
+                          gap: 1,
+                        }}
+                      >
+                        {selectedProjectTasks.length > 0 && (
+                          <div
+                            role="toolbar"
+                            aria-label={t("task.selectedActions")}
+                            style={{
+                              minHeight: 30,
+                              display: "flex",
+                              alignItems: "center",
+                              gap: 4,
+                              margin: "2px 0 3px",
+                              padding: "3px 4px 3px 8px",
+                              border: "1px solid var(--border-medium)",
+                              borderRadius: 6,
+                              background: "var(--bg-card)",
+                            }}
+                          >
+                            <span
+                              style={{
+                                flex: 1,
+                                minWidth: 0,
+                                fontSize: 10.8,
+                                fontWeight: 650,
+                                color: "var(--text-secondary)",
+                              }}
+                            >
+                              {t("task.selectedCount", { count: selectedProjectTasks.length })}
+                            </span>
+                            <button
+                              type="button"
+                              aria-label={t("task.deleteSelected")}
+                              title={t("task.deleteSelected")}
+                              disabled={deletableSelectedTaskIds.length === 0 || !onDeleteTasks}
+                              onClick={() => onDeleteTasks?.(deletableSelectedTaskIds)}
+                              style={{
+                                minWidth: 24,
+                                height: 24,
+                                display: "inline-flex",
+                                alignItems: "center",
+                                justifyContent: "center",
+                                gap: 4,
+                                padding: "0 6px",
+                                border: "none",
+                                borderRadius: 5,
+                                background: "transparent",
+                                color:
+                                  deletableSelectedTaskIds.length > 0
+                                    ? "var(--danger)"
+                                    : "var(--text-hint)",
+                                cursor:
+                                  deletableSelectedTaskIds.length > 0 && onDeleteTasks
+                                    ? "pointer"
+                                    : "default",
+                                opacity:
+                                  deletableSelectedTaskIds.length > 0 && onDeleteTasks ? 1 : 0.45,
+                                fontFamily: "var(--font-ui)",
+                                fontSize: 10.8,
+                              }}
+                            >
+                              <Trash2 size={11} strokeWidth={2.2} />
+                              <span>{t("common.delete")}</span>
+                            </button>
+                            <button
+                              type="button"
+                              aria-label={t("task.clearSelection")}
+                              title={t("task.clearSelection")}
+                              onClick={() => {
+                                setSelectedTaskIds(new Set());
+                                taskSelectionAnchorRef.current = null;
+                              }}
+                              style={{
+                                width: 24,
+                                height: 24,
+                                display: "inline-flex",
+                                alignItems: "center",
+                                justifyContent: "center",
+                                border: "none",
+                                borderRadius: 5,
+                                background: "transparent",
+                                color: "var(--text-muted)",
+                                cursor: "pointer",
+                              }}
+                            >
+                              <X size={11} strokeWidth={2.2} />
+                            </button>
+                          </div>
+                        )}
+                        {tasks.length === 0 ? (
+                          <div
+                            style={{
+                              padding: "10px 8px 12px",
+                              fontSize: 11.5,
+                              color: "var(--text-hint)",
+                            }}
+                          >
+                            {t("task.noTasksYet")}
+                          </div>
+                        ) : (
+                          tasks.map((task) => (
+                            <RailTaskItem
+                              key={task.id}
+                              task={task}
+                              selected={selectedTaskId === task.id}
+                              multiSelected={selectedTaskIds.has(task.id)}
+                              isNewTask={isNewTask}
+                              onSelect={(event) => handleTaskClick(event, project, tasks, task)}
+                              onDelete={() => onDeleteTask(task.id)}
+                              onToggleStar={() => onToggleTaskStar(task.id)}
+                              onRunTodo={() => onRunTodo(task)}
+                              onResumeTask={onResumeTask ? () => onResumeTask(task.id) : undefined}
+                            />
+                          ))
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           );
         })}

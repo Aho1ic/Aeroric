@@ -2080,6 +2080,8 @@ export const en: Record<string, string> = {
   "projectRail.expandGroup": "Expand project group {name}",
   "projectRail.collapseGroup": "Collapse project group {name}",
   "projectRail.resize": "Resize project sidebar",
+  "projectRail.pin": "Pin to top of group",
+  "projectRail.unpin": "Unpin from top of group",
   "toolbar.fileExplorer": "File Explorer",
   "toolbar.gitChanges": "Git Changes",
   "toolbar.gitHistory": "Git History",

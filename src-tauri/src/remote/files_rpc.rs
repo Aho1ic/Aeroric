@@ -8,7 +8,12 @@
 //!   杜绝 `--no-index` 兜底分支读到项目外文件)。
 //!
 //! 与 session.messages 一致:SSH / WSL 项目不报错,返回 `available:false` +
-//! 原因,手机端据此展示「请在桌面查看」。写操作一律不暴露。
+//! 原因,手机端据此展示「请在桌面查看」。
+//!
+//! 写口只有 `project.writeFile` 一个,且是受限的:必须是项目内已存在的普通文件、
+//! 体积不超过 `MAX_FILE_RESPONSE_BYTES`、不新建/不删除/不改目录;落盘复用桌面
+//! `fs::write_file_content`(内含 `validate_path_within` 与 local-history 快照,
+//! 因此远程改写同样能在桌面「本地历史」里回滚)。
 
 use serde_json::{json, Value};
 
@@ -124,6 +129,56 @@ pub(crate) async fn project_read_file(params: Value) -> Result<Value, String> {
         "truncated": truncated,
         "totalBytes": total_bytes,
     }))
+}
+
+/// RPC `project.writeFile { projectId, path, content }`:受限写回。
+///
+/// 护栏:SSH/WSL 项目拒绝;路径必须落在项目根内(这里先判一次,`fs::write_file_content`
+/// 的 `validate_path_within` 再兜底);目标必须是已存在的普通文件(不新建、不覆盖目录、
+/// 不跟随指向项目外的软链);内容体积与读接口同一上限。
+/// 「在项目外」与「不是普通文件」共用同一条错误信息 —— 否则这个接口会变成探测
+/// 桌面任意绝对路径是否存在的探针。
+pub(crate) async fn project_write_file(params: Value) -> Result<Value, String> {
+    let project_id = str_param(&params, "projectId")?;
+    let path = str_param(&params, "path")?;
+    let content = params
+        .get("content")
+        .and_then(Value::as_str)
+        .ok_or("Missing param: content")?
+        .to_string();
+    if content.len() > MAX_FILE_RESPONSE_BYTES {
+        return Err("File too large to save".to_string());
+    }
+    let project = load_project(project_id).await?;
+    if let Some(reason) = non_local_reason(&project) {
+        return Ok(unavailable(reason));
+    }
+    let target = path.clone();
+    let project_path = project.path.clone();
+    let relative = tauri::async_runtime::spawn_blocking(move || {
+        let root = std::path::Path::new(&project_path).canonicalize().ok()?;
+        // canonicalize 会解掉 `..` 与软链,所以指向项目外的软链在这里就被挡下
+        let resolved = std::path::Path::new(&target).canonicalize().ok()?;
+        if !resolved.starts_with(&root) || !resolved.is_file() {
+            return None;
+        }
+        Some(
+            resolved
+                .strip_prefix(&root)
+                .ok()?
+                .to_string_lossy()
+                .into_owned(),
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())?
+    .ok_or("Only existing regular files inside the project can be saved")?;
+    crate::fs::write_file_content(path, content, project.path).await?;
+    super::audit::log(
+        "remote-file-written",
+        json!({ "projectId": project.id, "path": relative }),
+    );
+    Ok(json!({ "available": true, "ok": true }))
 }
 
 /// RPC `git.changes { projectId, taskId? }`:工作区变更列表。

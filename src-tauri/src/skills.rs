@@ -1090,6 +1090,7 @@ pub async fn set_skill_hub_path(path: String) -> Result<SetHubResult, String> {
                         order_index: None,
                         group: None,
                         hidden_from_rail: false,
+                        pinned: false,
                     };
                     projects.push(project.clone());
                     (project, true)
