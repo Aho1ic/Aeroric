@@ -18,7 +18,6 @@ import { taskAcceptsInput } from "../../src/types";
 import { HeaderIconButton } from "../../src/ui/HeaderIconButton";
 import { taskStatusMeta } from "../../src/ui/task-status";
 import { radii, theme } from "../../src/ui/theme";
-import { useKeyboardInset } from "../../src/ui/use-keyboard-inset";
 
 type TabKey = "main" | "files" | "changes";
 
@@ -90,12 +89,10 @@ export default function TaskDetailScreen() {
     );
   }, [active, runLifecycle, statusMeta, task, title]);
 
-  const keyboardInset = useKeyboardInset();
-
   const mainLabel = mainPane === "terminal" ? t("task.tab.terminal") : t("task.tab.session");
 
   return (
-    <View style={[styles.screen, { paddingBottom: keyboardInset }]}>
+    <View style={styles.screen}>
       <Stack.Screen
         options={{
           title,
@@ -164,12 +161,7 @@ export default function TaskDetailScreen() {
 
       <View style={[styles.paneWrap, !showSession && styles.paneHidden]}>
         {task ? (
-          <SessionPane
-            projectId={projectId}
-            task={task}
-            active={showSession}
-            canSend={active}
-          />
+          <SessionPane projectId={projectId} task={task} active={showSession} canSend={active} />
         ) : null}
       </View>
       <View style={[styles.paneWrap, !showTerminal && styles.paneHidden]}>

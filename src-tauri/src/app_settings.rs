@@ -2305,6 +2305,45 @@ fn parse_claude_builtin_credentials(content: &str) -> BuiltInAgentCredentials {
     credentials
 }
 
+fn parse_claude_credentials_file(content: &str) -> BuiltInAgentCredentials {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(content) else {
+        return BuiltInAgentCredentials::default();
+    };
+
+    // Claude's official credentials file normally contains OAuth access tokens.
+    // Only accept fields that explicitly identify an API key; never treat an
+    // accessToken, refreshToken, or account token as an API key.
+    fn visit(value: &serde_json::Value, credentials: &mut BuiltInAgentCredentials) {
+        let Some(object) = value.as_object() else {
+            return;
+        };
+        for (key, value) in object {
+            if let Some(text) = value.as_str() {
+                match key.as_str() {
+                    "ANTHROPIC_BASE_URL" | "baseUrl" | "base_url" => {
+                        if credentials.base_url.is_empty() {
+                            credentials.base_url = normalize_base_url(text);
+                        }
+                    }
+                    "ANTHROPIC_API_KEY" | "ANTHROPIC_AUTH_TOKEN" | "apiKey" | "api_key" => {
+                        if credentials.api_key.is_empty() && !text.trim().is_empty() {
+                            credentials.api_key = text.trim().to_string();
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            if credentials.base_url.is_empty() || credentials.api_key.is_empty() {
+                visit(value, credentials);
+            }
+        }
+    }
+
+    let mut credentials = BuiltInAgentCredentials::default();
+    visit(&value, &mut credentials);
+    credentials
+}
+
 fn parse_shell_builtin_credentials(content: &str) -> BuiltInAgentCredentials {
     let mut credentials = BuiltInAgentCredentials {
         base_url: ["ANTHROPIC_BASE_URL", "OPENAI_BASE_URL"]
@@ -2456,6 +2495,35 @@ fn merged_builtin_agent_credentials(
         credentials.models = recovered.models;
     }
     credentials.enable_1m_context |= recovered.enable_1m_context;
+    credentials.base_url = normalize_base_url(&credentials.base_url);
+    credentials.api_key = credentials.api_key.trim().to_string();
+    credentials.models = normalize_model_list(credentials.models);
+    credentials
+}
+
+fn detect_builtin_agent_credentials(
+    settings: &AppSettings,
+    agent: &str,
+    config_path: &Path,
+    config_content: &str,
+) -> BuiltInAgentCredentials {
+    let mut credentials = merged_builtin_agent_credentials(settings, agent, config_content);
+    if agent == "claude" && (credentials.base_url.is_empty() || credentials.api_key.is_empty()) {
+        if let Some(parent) = config_path.parent() {
+            if let Ok(content) = fs::read_to_string(parent.join(".credentials.json")) {
+                let recovered = parse_claude_credentials_file(&content);
+                if credentials.base_url.is_empty() {
+                    credentials.base_url = recovered.base_url;
+                }
+                if credentials.api_key.is_empty() {
+                    credentials.api_key = recovered.api_key;
+                }
+            }
+        }
+    }
+    if agent == "codex" && credentials.api_key.is_empty() {
+        credentials.api_key = read_codex_auth_api_key(config_path).unwrap_or_default();
+    }
     credentials.base_url = normalize_base_url(&credentials.base_url);
     credentials.api_key = credentials.api_key.trim().to_string();
     credentials.models = normalize_model_list(credentials.models);
@@ -2811,7 +2879,7 @@ fn validate_all_agent_config_bundle_path(path: &str, must_exist: bool) -> Result
     Ok(candidate)
 }
 
-fn default_builtin_agent_config_path(agent: &str) -> Result<PathBuf, String> {
+pub(crate) fn default_builtin_agent_config_path(agent: &str) -> Result<PathBuf, String> {
     let home =
         crate::platform::home_dir().ok_or_else(|| "Cannot find home directory".to_string())?;
     match agent {
@@ -2929,10 +2997,7 @@ fn collect_agent_config_bundle_agent(
             }
             None => String::new(),
         };
-        let mut credentials = merged_builtin_agent_credentials(settings, agent, &config_content);
-        if agent == "codex" && credentials.api_key.is_empty() {
-            credentials.api_key = read_codex_auth_api_key(&path).unwrap_or_default();
-        }
+        let credentials = detect_builtin_agent_credentials(settings, agent, &path, &config_content);
         return Ok(AgentConfigBundleAgent {
             id: agent.to_string(),
             label: settings
@@ -4050,6 +4115,43 @@ pub async fn detect_agent_paths() -> Result<AppSettings, String> {
         settings.claude_path = detect_path("claude");
         settings.claude_gpt55_path = default_claude_gpt55_path();
         settings.codex_path = detect_path("codex");
+
+        for agent in ["claude", "codex"] {
+            let config_path = match agent {
+                "claude" => {
+                    if settings.claude_config_path.trim().is_empty() {
+                        default_builtin_agent_config_path(agent)?
+                    } else {
+                        PathBuf::from(normalize_config_path(settings.claude_config_path.clone()))
+                    }
+                }
+                "codex" => {
+                    if settings.codex_config_path.trim().is_empty() {
+                        default_builtin_agent_config_path(agent)?
+                    } else {
+                        PathBuf::from(normalize_config_path(settings.codex_config_path.clone()))
+                    }
+                }
+                _ => unreachable!(),
+            };
+            let config_content = fs::read_to_string(&config_path).unwrap_or_default();
+            let credentials =
+                detect_builtin_agent_credentials(&settings, agent, &config_path, &config_content);
+            let config_path_string = config_path.to_string_lossy().into_owned();
+            match agent {
+                "claude" => settings.claude_config_path = config_path_string,
+                "codex" => settings.codex_config_path = config_path_string,
+                _ => unreachable!(),
+            }
+            if !credentials.base_url.is_empty()
+                || !credentials.api_key.is_empty()
+                || !credentials.models.is_empty()
+            {
+                settings
+                    .builtin_agent_credentials
+                    .insert(agent.to_string(), credentials);
+            }
+        }
         Ok(normalize_settings(settings))
     })
     .await
@@ -4922,6 +5024,53 @@ api_key = "sk-codex"
         );
 
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn detects_codex_api_key_from_auth_without_promoting_oauth_tokens() {
+        let root =
+            std::env::temp_dir().join(format!("aeroric-codex-detect-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let config_path = root.join("config.toml");
+        std::fs::write(
+            root.join("auth.json"),
+            r#"{"auth_mode":"chatgpt","tokens":{"access_token":"oauth-token"}}"#,
+        )
+        .unwrap();
+
+        let credentials = detect_builtin_agent_credentials(
+            &AppSettings::default(),
+            "codex",
+            &config_path,
+            "model = \"gpt-5.6\"\n",
+        );
+        assert_eq!(credentials.api_key, "");
+        assert_eq!(credentials.models, vec!["gpt-5.6"]);
+
+        std::fs::write(
+            root.join("auth.json"),
+            r#"{"auth_mode":"apikey","OPENAI_API_KEY":"sk-detected"}"#,
+        )
+        .unwrap();
+        let credentials =
+            detect_builtin_agent_credentials(&AppSettings::default(), "codex", &config_path, "");
+        assert_eq!(credentials.api_key, "sk-detected");
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn claude_credentials_parser_ignores_oauth_tokens() {
+        let oauth = parse_claude_credentials_file(
+            r#"{"claudeAiOauth":{"accessToken":"oauth-token","refreshToken":"refresh"}}"#,
+        );
+        assert_eq!(oauth.api_key, "");
+
+        let api = parse_claude_credentials_file(
+            r#"{"apiKey":"sk-claude","baseUrl":"https://api.example.com/v1/"}"#,
+        );
+        assert_eq!(api.api_key, "sk-claude");
+        assert_eq!(api.base_url, "https://api.example.com/v1");
     }
 
     #[test]

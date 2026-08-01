@@ -2,11 +2,20 @@
  * 终端面板:WebView 内嵌 xterm + 触屏工具条。
  * 从 M2 的 app/terminal/[taskId] 页面抽出,供任务详情页「终端」tab 复用;
  * `active=false`(切到会话 tab)时退订终端流,切回时重订阅走快照恢复。
- * 键盘避让由宿主页面统一处理。
+ * 键盘避让、终端重排与工具栏在本面板内统一处理。
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import {
+  KeyboardAvoidingView,
+  Platform,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  useWindowDimensions,
+  View,
+} from "react-native";
 import { WebView, type WebViewMessageEvent } from "react-native-webview";
 import * as Clipboard from "expo-clipboard";
 import { ChevronsDownUp, ClipboardPaste, Monitor, Smartphone } from "lucide-react-native";
@@ -36,7 +45,6 @@ let nextStreamId = 1;
 interface SnapshotMeta {
   cols?: number | null;
   rows?: number | null;
-  live?: boolean;
 }
 
 export function TerminalPane({ taskId, active }: { taskId: string; active: boolean }) {
@@ -48,13 +56,15 @@ export function TerminalPane({ taskId, active }: { taskId: string; active: boole
   const [, setFontSize] = useState(13);
   const [imeFocused, setImeFocused] = useState(false);
   const [viewMode, setViewMode] = useState<"phone" | "desktop">("phone");
+  const { width: windowWidth, height: windowHeight } = useWindowDimensions();
   /** 入站帧回调注册后不再重建,靠 ref 读取最新视图模式。 */
   const viewModeRef = useRef<"phone" | "desktop">("phone");
   const autoFitDoneRef = useRef(false);
-  const liveRef = useRef(false);
   const desktopSizeRef = useRef<{ cols: number; rows: number } | null>(null);
   const wrapHeightRef = useRef(0);
   const refitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingWritesRef = useRef("");
+  const writeFrameRef = useRef<number | null>(null);
   const repeatTimersRef = useRef<{
     timeout: ReturnType<typeof setTimeout> | null;
     interval: ReturnType<typeof setInterval> | null;
@@ -65,6 +75,47 @@ export function TerminalPane({ taskId, active }: { taskId: string; active: boole
       `window.__aeroricTerm && window.__aeroricTerm.handle(${JSON.stringify(msg)}); true;`,
     );
   }, []);
+
+  const flushTermWrites = useCallback(
+    (scrollToBottom = false) => {
+      if (writeFrameRef.current !== null) {
+        cancelAnimationFrame(writeFrameRef.current);
+        writeFrameRef.current = null;
+      }
+      const data = pendingWritesRef.current;
+      if (!data) return false;
+      pendingWritesRef.current = "";
+      injectTerm({ type: "write", data, scrollToBottom });
+      return true;
+    },
+    [injectTerm],
+  );
+
+  const queueTermWrite = useCallback(
+    (data: string) => {
+      pendingWritesRef.current += data;
+      if (writeFrameRef.current !== null) return;
+      writeFrameRef.current = requestAnimationFrame(() => {
+        writeFrameRef.current = null;
+        flushTermWrites();
+      });
+    },
+    [flushTermWrites],
+  );
+
+  const scheduleRelayout = useCallback(() => {
+    if (!active || !webReady) return;
+    if (refitTimerRef.current) clearTimeout(refitTimerRef.current);
+    refitTimerRef.current = setTimeout(() => {
+      refitTimerRef.current = null;
+      const desktop = desktopSizeRef.current;
+      if (viewModeRef.current === "desktop" && desktop) {
+        injectTerm({ type: "viewMode", mode: "desktop", ...desktop });
+      } else {
+        injectTerm({ type: "fit" });
+      }
+    }, 120);
+  }, [active, injectTerm, webReady]);
 
   const sendInput = useCallback(
     (data: string) => {
@@ -117,7 +168,7 @@ export function TerminalPane({ taskId, active }: { taskId: string; active: boole
       switch (frame.opcode) {
         case TerminalOpcode.SnapshotStart: {
           const meta = parseJsonPayload<SnapshotMeta>(frame.payload);
-          liveRef.current = meta?.live ?? false;
+          pendingWritesRef.current = "";
           injectTerm({ type: "reset" });
           if (meta?.cols && meta?.rows) {
             // 记下桌面端尺寸,切「电脑视图」时用它还原
@@ -129,12 +180,12 @@ export function TerminalPane({ taskId, active }: { taskId: string; active: boole
         }
         case TerminalOpcode.SnapshotChunk:
         case TerminalOpcode.Output:
-          injectTerm({ type: "write", data: payloadText(frame.payload) });
+          queueTermWrite(payloadText(frame.payload));
           break;
         case TerminalOpcode.SnapshotEnd:
-          injectTerm({ type: "scrollToBottom" });
-          // 运行中的任务:自动适配手机屏(SIGWINCH 触发 TUI 重绘);「电脑视图」下保持桌面尺寸
-          if (liveRef.current && !autoFitDoneRef.current && viewModeRef.current === "phone") {
+          if (!flushTermWrites(true)) injectTerm({ type: "scrollToBottom" });
+          // 手机视图按当前 WebView 尺寸适配;运行中的任务会通过远端 resize 触发 SIGWINCH。
+          if (!autoFitDoneRef.current && viewModeRef.current === "phone") {
             autoFitDoneRef.current = true;
             injectTerm({ type: "fit" });
           }
@@ -151,7 +202,7 @@ export function TerminalPane({ taskId, active }: { taskId: string; active: boole
           break;
       }
     });
-  }, [injectTerm, onBinary]);
+  }, [flushTermWrites, injectTerm, onBinary, queueTermWrite]);
 
   const handleWebMessage = useCallback(
     (event: WebViewMessageEvent) => {
@@ -179,6 +230,7 @@ export function TerminalPane({ taskId, active }: { taskId: string; active: boole
           setImeFocused(!!msg.focused);
           break;
         case "fit-result":
+        case "resize-result":
           if (msg.cols && msg.rows && streamIdRef.current) {
             sendBinary(
               encodeTerminalFrame({
@@ -202,7 +254,11 @@ export function TerminalPane({ taskId, active }: { taskId: string; active: boole
       setFontSize((prev) => {
         const next = Math.min(22, Math.max(9, prev + delta));
         injectTerm({ type: "fontSize", size: next });
-        injectTerm({ type: "fit" });
+        if (viewModeRef.current === "desktop" && desktopSizeRef.current) {
+          injectTerm({ type: "viewMode", mode: "desktop", ...desktopSizeRef.current });
+        } else {
+          injectTerm({ type: "fit" });
+        }
         return next;
       });
     },
@@ -220,11 +276,10 @@ export function TerminalPane({ taskId, active }: { taskId: string; active: boole
       const height = event.nativeEvent.layout.height;
       const prev = wrapHeightRef.current;
       wrapHeightRef.current = height;
-      if (prev === 0 || Math.abs(prev - height) < 2 || !liveRef.current) return;
-      if (refitTimerRef.current) clearTimeout(refitTimerRef.current);
-      refitTimerRef.current = setTimeout(() => injectTerm({ type: "fit" }), 150);
+      if (prev !== 0 && Math.abs(prev - height) < 2) return;
+      scheduleRelayout();
     },
-    [injectTerm],
+    [scheduleRelayout],
   );
 
   const stopRepeat = useCallback(() => {
@@ -257,8 +312,7 @@ export function TerminalPane({ taskId, active }: { taskId: string; active: boole
       viewModeRef.current = next;
       const desktop = desktopSizeRef.current;
       if (next === "desktop" && desktop) {
-        // 还原桌面端 cols/rows,靠 WebView 横向滚动看完整 TUI
-        injectTerm({ type: "resize", cols: desktop.cols, rows: desktop.rows });
+        injectTerm({ type: "viewMode", mode: "desktop", ...desktop });
       } else {
         injectTerm({ type: "fit" });
       }
@@ -267,14 +321,30 @@ export function TerminalPane({ taskId, active }: { taskId: string; active: boole
   }, [injectTerm]);
 
   useEffect(() => {
+    scheduleRelayout();
+  }, [scheduleRelayout, viewMode, windowHeight, windowWidth]);
+
+  useEffect(() => {
+    if (active || refitTimerRef.current === null) return;
+    clearTimeout(refitTimerRef.current);
+    refitTimerRef.current = null;
+  }, [active]);
+
+  useEffect(() => {
     return () => {
       if (refitTimerRef.current) clearTimeout(refitTimerRef.current);
+      if (writeFrameRef.current !== null) cancelAnimationFrame(writeFrameRef.current);
+      writeFrameRef.current = null;
+      pendingWritesRef.current = "";
       stopRepeat();
     };
   }, [stopRepeat]);
 
   return (
-    <View style={styles.screen}>
+    <KeyboardAvoidingView
+      style={styles.screen}
+      behavior={Platform.OS === "ios" ? "padding" : undefined}
+    >
       {status !== "online" ? <Text style={styles.notice}>{t("term.disconnected")}</Text> : null}
       {streamError ? <Text style={styles.noticeError}>{streamError}</Text> : null}
       <View style={styles.terminalWrap} onLayout={handleWrapLayout}>
@@ -360,7 +430,7 @@ export function TerminalPane({ taskId, active }: { taskId: string; active: boole
           </Pressable>
         )}
       </View>
-    </View>
+    </KeyboardAvoidingView>
   );
 }
 

@@ -1,4 +1,5 @@
 import { render, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { invoke } from "@tauri-apps/api/core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentOption, CustomAgentProfile } from "../agents";
@@ -119,6 +120,49 @@ describe("Agent detail modal", () => {
     expect(await screen.findByText("安装")).toBeInTheDocument();
     await waitFor(() => {
       expect(screen.getByDisplayValue("/opt/homebrew/bin/codex")).toBeInTheDocument();
+    });
+  });
+
+  it("shows detected built-in config and credentials in the same detail view", async () => {
+    const detectedSettings = {
+      ...baseSettings,
+      codex_path: "/opt/homebrew/bin/codex",
+      codex_config_path: "/Users/macbook/.codex/config.toml",
+      builtin_agent_credentials: {
+        codex: {
+          base_url: "https://api.example.com/v1",
+          api_key: "sk-detected",
+          models: ["gpt-5.6"],
+          enable_1m_context: false,
+        },
+      },
+    };
+    vi.mocked(invoke).mockImplementation((command, args) => {
+      if (command === "detect_agent_paths") return Promise.resolve(detectedSettings);
+      if (command === "get_agent_config_file_path") {
+        const agent = (args as { agent: string }).agent;
+        return Promise.resolve(agent === "codex" ? detectedSettings.codex_config_path : "");
+      }
+      if (command === "read_agent_config_file") return Promise.resolve('model = "gpt-5.6"\n');
+      if (command === "load_app_settings") return Promise.resolve(baseSettings);
+      if (command === "detect_agent_versions_for_settings") {
+        return Promise.resolve({
+          claude_version: "",
+          claude_gpt55_version: "",
+          codex_version: "codex 1.0.0",
+        });
+      }
+      return Promise.resolve(undefined);
+    });
+
+    const user = userEvent.setup();
+    renderModal(builtInOption);
+    await user.click(await screen.findByRole("button", { name: "自动检测" }));
+
+    await waitFor(() => {
+      expect(screen.getByDisplayValue("https://api.example.com/v1")).toBeInTheDocument();
+      expect(screen.getByDisplayValue("sk-detected")).toHaveAttribute("type", "password");
+      expect(screen.getByDisplayValue("/Users/macbook/.codex/config.toml")).toBeInTheDocument();
     });
   });
 });

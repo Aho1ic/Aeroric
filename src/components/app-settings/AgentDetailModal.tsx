@@ -755,6 +755,7 @@ export function AgentDetailModal({
                       <label style={labelStyle}>{t("appSettings.agentApiKey")}</label>
                       <input
                         style={nameInputStyle}
+                        type="password"
                         value={apiKey}
                         onChange={(event) => setApiKey(event.target.value)}
                         placeholder="sk-..."
@@ -769,6 +770,12 @@ export function AgentDetailModal({
                         agentKey={agentKey}
                         hideSaveButton
                         onDirtyChange={setPathDirty}
+                        onSettingsDetected={(detected) => {
+                          const credentials = detected.builtin_agent_credentials?.[agentKey];
+                          if (!credentials) return;
+                          setBaseUrl(credentials.base_url ?? "");
+                          setApiKey(credentials.api_key ?? "");
+                        }}
                       />
                     )}
 

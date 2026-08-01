@@ -228,7 +228,7 @@ export const en: Record<string, string> = {
   "appSettings.configFilePath": "Configuration File Path",
   "appSettings.configFilePathPlaceholder": "Leave empty",
   "appSettings.configFilePathHint":
-    "Leave empty to keep the config editor disabled. Aeroric does not read global agent config files by default.",
+    "Leave empty to use the Agent's official default config path; custom paths take priority.",
   "appSettings.configFileNotConfigured": "Config file path is not configured.",
   "appSettings.agentConfigTransfer": "Import and Export",
   "appSettings.agentConfigTransferHint":

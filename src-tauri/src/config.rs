@@ -398,9 +398,11 @@ fn agent_config_path_from_settings(
     settings: &AppSettings,
 ) -> Result<Option<PathBuf>, String> {
     match agent {
-        "claude" => Ok(configured_path(&settings.claude_config_path)),
+        "claude" => Ok(configured_path(&settings.claude_config_path)
+            .or_else(|| app_settings::default_builtin_agent_config_path("claude").ok())),
         "claude_gpt55" => Ok(configured_path(&settings.claude_gpt55_config_path)),
-        "codex" => Ok(configured_path(&settings.codex_config_path)),
+        "codex" => Ok(configured_path(&settings.codex_config_path)
+            .or_else(|| app_settings::default_builtin_agent_config_path("codex").ok())),
         _ => settings
             .custom_agents
             .iter()
@@ -548,16 +550,17 @@ commit_message_timeout_secs = 15
     }
 
     #[test]
-    fn built_in_agent_config_paths_are_unconfigured_by_default() {
+    fn built_in_agent_config_paths_fall_back_to_official_defaults() {
         let settings = AppSettings::default();
+        let home = crate::platform::home_dir().unwrap();
 
         assert_eq!(
             agent_config_path_from_settings("claude", &settings).unwrap(),
-            None
+            Some(home.join(".claude").join("settings.json"))
         );
         assert_eq!(
             agent_config_path_from_settings("codex", &settings).unwrap(),
-            None
+            Some(home.join(".codex").join("config.toml"))
         );
     }
 

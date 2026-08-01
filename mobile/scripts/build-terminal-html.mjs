@@ -102,11 +102,9 @@ const glue = `
     ime.blur();
   }
 
-  // ── 触摸滚动:xterm 不处理 touch,自己做像素级跟手 + 惯性 ──
-  // 整行部分交给 scrollLines,不足一行的余量用 transform 平移 .xterm-screen,
-  // 避免"一行一跳"的顿挫;抬手后按摩擦系数衰减出惯性,到顶/到底即停。
+  // ── 触摸滚动:xterm 不处理 touch,自己做整行滚动 + 惯性 ──
+  // 只让 xterm 的 buffer viewport 改变位置,不再同时 transform 画布,避免文字闪烁。
   var screenEl = term.element;
-  var rowsEl = screenEl.querySelector(".xterm-screen") || screenEl;
   var touchY = null;
   var touchMoved = false;
   var subPx = 0;
@@ -128,20 +126,14 @@ const glue = `
   function atTop() {
     return term.buffer.active.viewportY <= 0;
   }
-  function applySubPx() {
-    rowsEl.style.transform = subPx ? "translateY(" + -subPx + "px)" : "";
-  }
   function resetSubPx() {
-    if (subPx !== 0) {
-      subPx = 0;
-      applySubPx();
-    }
+    subPx = 0;
   }
   // 正数 = 内容向上走(看更新的输出)。
   function scrollByPx(px) {
     var cell = cellHeight();
     subPx += px;
-    var lines = Math.floor(subPx / cell);
+    var lines = Math.trunc(subPx / cell);
     if (lines !== 0) {
       var before = term.buffer.active.viewportY;
       term.scrollLines(lines);
@@ -149,7 +141,6 @@ const glue = `
     }
     // 到顶/到底不留残余偏移,否则边缘会露出空白条
     if ((subPx > 0 && atBottom()) || (subPx < 0 && atTop())) subPx = 0;
-    applySubPx();
   }
 
   function stopInertia() {
@@ -227,6 +218,54 @@ const glue = `
     resetSubPx();
   });
 
+  // ── 电脑视图:保留桌面端 cols/rows,但按比例缩放到手机 WebView ──
+  var rootEl = document.getElementById("root");
+  var desktopMode = false;
+
+  function rendererCellSize() {
+    try {
+      var cell = term._core._renderService.dimensions.css.cell;
+      if (cell && cell.width > 0 && cell.height > 0) return cell;
+    } catch (_) {}
+    return { width: 8, height: 17 };
+  }
+
+  function clearDesktopScale() {
+    desktopMode = false;
+    screenEl.style.transform = "";
+    screenEl.style.transformOrigin = "";
+    screenEl.style.width = "";
+    screenEl.style.height = "";
+    rootEl.style.overflow = "hidden";
+  }
+
+  function applyDesktopScale(cols, rows, notify) {
+    desktopMode = true;
+    term.resize(cols, rows);
+    var cell = rendererCellSize();
+    var naturalWidth = Math.max(1, cols * cell.width);
+    var naturalHeight = Math.max(1, rows * cell.height);
+    var availableWidth = Math.max(1, document.documentElement.clientWidth);
+    var availableHeight = Math.max(1, document.documentElement.clientHeight);
+    var scale = Math.min(1, availableWidth / naturalWidth, availableHeight / naturalHeight);
+    screenEl.style.width = naturalWidth + "px";
+    screenEl.style.height = naturalHeight + "px";
+    screenEl.style.transformOrigin = "top left";
+    screenEl.style.transform = "scale(" + scale + ")";
+    // 缩放后通常完整可见;scale=1 时保留原始尺寸的滚动兜底。
+    rootEl.style.overflow = scale < 0.999 ? "hidden" : "auto";
+    if (notify) post({ type: "resize-result", cols: cols, rows: rows });
+  }
+
+  function fitPhone() {
+    clearDesktopScale();
+    var dims = fit.proposeDimensions();
+    if (dims && dims.cols > 1 && dims.rows > 1) {
+      term.resize(dims.cols, dims.rows);
+      post({ type: "fit-result", cols: dims.cols, rows: dims.rows });
+    }
+  }
+
   window.__aeroricTerm = {
     handle: function (msg) {
       try {
@@ -235,7 +274,7 @@ const glue = `
             // 用户上翻阅读历史时不强行拉回底部
             var follow = atBottom();
             term.write(msg.data, function () {
-              if (follow) {
+              if (follow || msg.scrollToBottom) {
                 resetSubPx();
                 term.scrollToBottom();
               }
@@ -247,16 +286,23 @@ const glue = `
             term.reset();
             break;
           case "resize":
-            if (msg.cols > 1 && msg.rows > 1) term.resize(msg.cols, msg.rows);
+            if (msg.cols > 1 && msg.rows > 1) {
+              if (desktopMode) applyDesktopScale(msg.cols, msg.rows, false);
+              else term.resize(msg.cols, msg.rows);
+            }
             break;
           case "fontSize":
             term.options.fontSize = msg.size;
             break;
           case "fit": {
-            var dims = fit.proposeDimensions();
-            if (dims && dims.cols > 1 && dims.rows > 1) {
-              term.resize(dims.cols, dims.rows);
-              post({ type: "fit-result", cols: dims.cols, rows: dims.rows });
+            fitPhone();
+            break;
+          }
+          case "viewMode": {
+            if (msg.mode === "desktop" && msg.cols > 1 && msg.rows > 1) {
+              applyDesktopScale(msg.cols, msg.rows, true);
+            } else {
+              fitPhone();
             }
             break;
           }
@@ -288,11 +334,10 @@ const html = `<!doctype html>
 <style>
 ${xtermCss}
 html, body, #root { height: 100%; margin: 0; padding: 0; background: #111111; }
-/* 滚动统一走 touch → scrollLines + transform,禁用 viewport 自身滚动避免双重滚动冲突 */
+/* 滚动统一走 touch → xterm buffer viewport,避免 viewport 与画布双重滚动 */
 .xterm .xterm-viewport { overflow-y: hidden; }
 .xterm { touch-action: none; }
-/* 跟手平移的图层提示:让 translateY 走合成器,避免每帧重排 */
-.xterm .xterm-screen { will-change: transform; }
+.xterm .xterm-screen { transform-origin: top left; }
 </style>
 </head>
 <body>

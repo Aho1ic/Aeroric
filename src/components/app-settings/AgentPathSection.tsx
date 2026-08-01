@@ -108,8 +108,9 @@ export const AgentPathSection = forwardRef<
     agentKey: AgentKey;
     hideSaveButton?: boolean;
     onDirtyChange?: (dirty: boolean) => void;
+    onSettingsDetected?: (settings: AppSettings) => void;
   }
->(function AgentPathSection({ agentKey, hideSaveButton, onDirtyChange }, ref) {
+>(function AgentPathSection({ agentKey, hideSaveButton, onDirtyChange, onSettingsDetected }, ref) {
   const { t } = useI18n();
   const builtInAgent = isBuiltInAgent(agentKey) ? agentKey : null;
   const pathField = builtInAgent ? pathFieldByAgent[builtInAgent] : null;
@@ -248,9 +249,13 @@ export const AgentPathSection = forwardRef<
       const nextSettings: AppSettings = {
         ...settings,
         [pathField]: detected[pathField],
+        ...(configPathField ? { [configPathField]: detected[configPathField] } : {}),
+        builtin_agent_credentials:
+          detected.builtin_agent_credentials ?? settings.builtin_agent_credentials,
         send_shortcut: normalizeSendShortcut(detected.send_shortcut),
       };
       setSettings(nextSettings);
+      onSettingsDetected?.(nextSettings);
       await loadVersions(nextSettings);
     } catch (e) {
       setError(String(e));

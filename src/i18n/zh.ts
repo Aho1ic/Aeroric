@@ -211,8 +211,7 @@ export const zh: Record<string, string> = {
   "appSettings.configFile": "配置文件",
   "appSettings.configFilePath": "配置文件路径",
   "appSettings.configFilePathPlaceholder": "留空",
-  "appSettings.configFilePathHint":
-    "留空时禁用配置文件编辑器。Aeroric 默认不会读取全局智能体配置文件。",
+  "appSettings.configFilePathHint": "留空时使用 Agent 官方默认配置路径；自定义路径会优先使用。",
   "appSettings.configFileNotConfigured": "尚未配置配置文件路径。",
   "appSettings.agentConfigTransfer": "导入与导出",
   "appSettings.agentConfigTransferHint":
