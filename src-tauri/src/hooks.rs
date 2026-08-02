@@ -150,7 +150,7 @@ fn hook_command(node_path: &str, script: &str) -> String {
             "powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command \"& '{}' '{}'\"",
             quote(node_path),
             quote(script)
-        );
+        )
     }
     #[cfg(not(windows))]
     {
