@@ -16,6 +16,13 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v6
 
+      - name: Normalize Windows checkout line endings
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          git config core.autocrlf false
+          git checkout-index --all --force
+
       - name: Checkout dbx dependency
         shell: bash
         env:
