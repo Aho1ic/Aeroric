@@ -166,7 +166,9 @@ fn remote_agent_args(
         }
         if speed == Some("fast") {
             args.push("-c".to_string());
-            args.push("service_tier=\"priority\"".to_string());
+            args.push("features.fast_mode=true".to_string());
+            args.push("-c".to_string());
+            args.push("service_tier=\"fast\"".to_string());
         }
     } else {
         if agent == "claude" {
@@ -180,7 +182,8 @@ fn remote_agent_args(
             args.push(effort.to_string());
         }
         if speed == Some("fast") {
-            args.push("--fast".to_string());
+            args.push("--settings".to_string());
+            args.push(r#"{"fastMode":true}"#.to_string());
         }
     }
 
@@ -1255,7 +1258,19 @@ mod tests {
         assert!(command.contains("AERORIC_AGENT_MODEL=gpt-5.6-terra"));
         assert!(command.contains("-m gpt-5.6-terra"));
         assert!(command.contains("model_reasoning_effort=\"high\""));
-        assert!(command.contains("service_tier=\"priority\""));
+        assert!(command.contains("features.fast_mode=true"));
+        assert!(command.contains("service_tier=\"fast\""));
+    }
+
+    #[test]
+    fn remote_claude_fast_mode_uses_settings_json() {
+        let command =
+            build_remote_task_command("claude", "ask", "/srv/app", None, None, None, Some("fast"))
+                .unwrap();
+        let unsupported_fast_flag = ["--", "fast"].concat();
+
+        assert!(command.contains("--settings '{\"fastMode\":true}'"));
+        assert!(!command.contains(&unsupported_fast_flag));
     }
 
     #[test]

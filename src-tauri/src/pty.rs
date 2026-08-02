@@ -654,7 +654,8 @@ fn add_claude_launch_args(
         cmd.arg(effort);
     }
     if speed == Some("fast") {
-        cmd.arg("--fast");
+        cmd.arg("--settings");
+        cmd.arg(r#"{"fastMode":true}"#);
     }
 }
 
@@ -690,7 +691,9 @@ fn add_codex_launch_args(
     }
     if speed == Some("fast") {
         cmd.arg("-c");
-        cmd.arg("service_tier=\"priority\"");
+        cmd.arg("features.fast_mode=true");
+        cmd.arg("-c");
+        cmd.arg("service_tier=\"fast\"");
     }
 }
 
@@ -1687,6 +1690,53 @@ mod tests {
         assert!(argv
             .windows(2)
             .any(|pair| pair == ["-C", "/tmp/example-project"]));
+    }
+
+    #[test]
+    fn fast_mode_launch_args_use_supported_cli_configuration() {
+        let claude_launch = crate::app_settings::AgentLaunchSpec {
+            program: "claude".to_string(),
+            ..Default::default()
+        };
+        let mut claude_cmd = build_claude_cmd(&claude_launch, "ask");
+        add_claude_launch_args(&mut claude_cmd, "claude", None, None, Some("fast"));
+        let claude_argv: Vec<_> = claude_cmd
+            .get_argv()
+            .iter()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+        let unsupported_fast_flag = ["--", "fast"].concat();
+
+        assert!(claude_argv
+            .windows(2)
+            .any(|pair| pair == ["--settings", r#"{"fastMode":true}"#]));
+        assert!(!claude_argv.iter().any(|arg| arg == &unsupported_fast_flag));
+
+        let codex_launch = crate::app_settings::AgentLaunchSpec {
+            program: "codex".to_string(),
+            ..Default::default()
+        };
+        let mut codex_cmd = build_codex_cmd(&codex_launch, "ask");
+        add_codex_launch_args(
+            &mut codex_cmd,
+            "/tmp/example-project",
+            None,
+            None,
+            Some("fast"),
+        );
+        let codex_argv: Vec<_> = codex_cmd
+            .get_argv()
+            .iter()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+
+        assert!(codex_argv
+            .windows(2)
+            .any(|pair| pair == ["-c", "features.fast_mode=true"]));
+        assert!(codex_argv
+            .windows(2)
+            .any(|pair| pair == ["-c", "service_tier=\"fast\""]));
+        assert!(!codex_argv.iter().any(|arg| arg == &unsupported_fast_flag));
     }
 
     #[test]

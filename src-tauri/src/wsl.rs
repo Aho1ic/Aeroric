@@ -566,7 +566,9 @@ fn agent_args(
         }
         if speed == Some("fast") {
             args.push("-c".to_string());
-            args.push("service_tier=\"priority\"".to_string());
+            args.push("features.fast_mode=true".to_string());
+            args.push("-c".to_string());
+            args.push("service_tier=\"fast\"".to_string());
         }
     } else {
         if agent == "claude" {
@@ -580,7 +582,8 @@ fn agent_args(
             args.push(effort.to_string());
         }
         if speed == Some("fast") {
-            args.push("--fast".to_string());
+            args.push("--settings".to_string());
+            args.push(r#"{"fastMode":true}"#.to_string());
         }
     }
 
@@ -1551,9 +1554,22 @@ mod tests {
                 "-c",
                 "model_reasoning_effort=\"high\"",
                 "-c",
-                "service_tier=\"priority\"",
+                "features.fast_mode=true",
+                "-c",
+                "service_tier=\"fast\"",
                 "resume",
                 "session-2",
+            ]
+        );
+        let claude_args =
+            agent_invocation_args("claude", "ask", None, None, None, None, Some("fast"));
+        assert_eq!(
+            claude_args,
+            vec![
+                "--permission-mode",
+                "default",
+                "--settings",
+                r#"{"fastMode":true}"#
             ]
         );
         assert_eq!(
