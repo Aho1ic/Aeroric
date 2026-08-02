@@ -124,7 +124,69 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile --ignore-scripts
 
-      - name: Build ${{ matrix.name }}
+      - name: Prepare Windows MSI bundle version
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          base_version="${version%%-*}"
+          prerelease="${version#*-}"
+          bundle_version="$version"
+
+          if [[ "$prerelease" != "$version" ]]; then
+            numeric_suffix="${prerelease##*.}"
+            if [[ ! "$numeric_suffix" =~ ^[0-9]+$ ]]; then
+              echo "::error::Windows MSI requires a numeric prerelease suffix, got '$prerelease'"
+              exit 1
+            fi
+            numeric_value=$((10#$numeric_suffix))
+            if (( numeric_value > 65535 )); then
+              echo "::error::Windows MSI prerelease number must be <= 65535, got '$numeric_value'"
+              exit 1
+            fi
+            bundle_version="${base_version}-${numeric_value}"
+          fi
+
+          printf '{"version":"%s"}\n' "$bundle_version" > tauri.windows-release.json
+          env_file="$GITHUB_ENV"
+          if command -v cygpath >/dev/null 2>&1; then
+            env_file="$(cygpath --unix "$GITHUB_ENV")"
+          fi
+          echo "TAURI_RELEASE_VERSION=$version" >> "$env_file"
+          echo "TAURI_WINDOWS_BUNDLE_VERSION=$bundle_version" >> "$env_file"
+
+      - name: Build ${{ matrix.name }} (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: >
+          pnpm tauri build --target ${{ matrix.target }} ${{ matrix.bundle_args }}
+          --config tauri.windows-release.json -- --locked
+
+      - name: Restore prerelease version in Windows artifact filenames
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$TAURI_RELEASE_VERSION" == "$TAURI_WINDOWS_BUNDLE_VERSION" ]]; then
+            rm -f tauri.windows-release.json
+            exit 0
+          fi
+
+          for bundle in nsis msi; do
+            bundle_dir="src-tauri/target/${{ matrix.target }}/release/bundle/${bundle}"
+            shopt -s nullglob
+            for artifact in "$bundle_dir"/*"$TAURI_WINDOWS_BUNDLE_VERSION"*; do
+              filename="${artifact##*/}"
+              renamed="${filename//$TAURI_WINDOWS_BUNDLE_VERSION/$TAURI_RELEASE_VERSION}"
+              mv "$artifact" "$bundle_dir/$renamed"
+            done
+            shopt -u nullglob
+          done
+          rm -f tauri.windows-release.json
+
+      - name: Build ${{ matrix.name }} (non-Windows)
+        if: runner.os != 'Windows'
         run: pnpm tauri build --target ${{ matrix.target }} ${{ matrix.bundle_args }} -- --locked
 
       - name: Upload build artifacts
