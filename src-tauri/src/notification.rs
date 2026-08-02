@@ -1328,9 +1328,8 @@ pub async fn restart_and_install_release_update(
     };
     #[cfg(any(target_os = "windows", target_os = "linux"))]
     let (installed_app_path, restarted) = {
-        let result = launch_update_helper().map_err(|error| {
+        let result = launch_update_helper().inspect_err(|error| {
             let _ = update_pending_helper_status(UPDATE_HELPER_FAILED, Some(error.clone()));
-            error
         })?;
         app.exit(0);
         result

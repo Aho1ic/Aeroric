@@ -1225,7 +1225,7 @@ pub fn apply_text_replacements_for_root(
     for (path, mut file_replacements) in grouped {
         let mut content =
             fs::read_to_string(&path).map_err(|e| format!("Read file failed: {e}"))?;
-        file_replacements.sort_by(|left, right| right.start.cmp(&left.start));
+        file_replacements.sort_by_key(|right| std::cmp::Reverse(right.start));
         let mut applied_in_file = 0;
         for replacement in file_replacements {
             if replacement.start > replacement.end
@@ -1283,7 +1283,7 @@ pub fn apply_remote_text_replacements_for_root(
     let mut applied = 0;
     for (path, mut file_replacements) in grouped {
         let mut content = read_remote_text_file(connection, &path)?;
-        file_replacements.sort_by(|left, right| right.start.cmp(&left.start));
+        file_replacements.sort_by_key(|right| std::cmp::Reverse(right.start));
         let mut applied_in_file = 0;
         for replacement in file_replacements {
             if replacement.start > replacement.end

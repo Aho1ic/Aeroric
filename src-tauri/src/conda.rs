@@ -34,7 +34,7 @@ fn conda_candidates() -> Vec<PathBuf> {
         ));
         candidates.push(PathBuf::from(r"C:\ProgramData\anaconda3\Scripts\conda.exe"));
         candidates.push(PathBuf::from("conda.exe"));
-        return candidates;
+        candidates
     }
     #[cfg(not(windows))]
     {
@@ -48,8 +48,8 @@ fn conda_candidates() -> Vec<PathBuf> {
             candidates.push(PathBuf::from(&home).join("anaconda3/bin/conda"));
             candidates.push(PathBuf::from(&home).join("mambaforge/bin/conda"));
         }
+        candidates
     }
-    candidates
 }
 
 fn env_name_from_path(path: &Path) -> String {
@@ -179,8 +179,10 @@ pub async fn detect_remote_conda_environments(
 
 #[cfg(test)]
 mod tests {
+    #[cfg(not(windows))]
+    use super::conda_candidates;
     use super::{
-        build_remote_conda_env_list_command, conda_candidates, env_name_from_path,
+        build_remote_conda_env_list_command, env_name_from_path,
         parse_conda_envs_with_python_exists,
     };
     use std::path::Path;

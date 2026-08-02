@@ -107,6 +107,9 @@ async fn handle_connection(
         ..Default::default()
     };
     let mut path = String::new();
+    // tungstenite's required handshake error type is intentionally large; the
+    // callback only accepts the successful response and never constructs it.
+    #[allow(clippy::result_large_err)]
     let callback = |req: &Request, resp: Response| {
         path = req.uri().path().to_string();
         Ok(resp)

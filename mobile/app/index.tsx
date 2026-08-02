@@ -6,21 +6,14 @@
 import { Link, Stack, router, useFocusEffect } from "expo-router";
 import { ChevronDown, ChevronRight, Pin, Plus, SlidersHorizontal } from "lucide-react-native";
 import { useCallback, useMemo, useState, type ReactNode } from "react";
-import {
-  Image,
-  Pressable,
-  RefreshControl,
-  SectionList,
-  StyleSheet,
-  Text,
-  View,
-} from "react-native";
+import { Image, RefreshControl, SectionList, StyleSheet, Text, View } from "react-native";
 import { NewTaskSheet } from "../src/components/NewTaskSheet";
 import { t } from "../src/i18n";
 import { useConnection } from "../src/state/connection-context";
 import { useHostStats } from "../src/state/use-host-stats";
 import { useHosts } from "../src/state/hosts-context";
 import { useHostTasks, type ProjectTasks } from "../src/state/use-host-tasks";
+import type { Task } from "../src/types";
 import { formatCount, formatDuration } from "../src/ui/format-duration";
 import {
   UNGROUPED_PROJECT_GROUP,
@@ -28,6 +21,7 @@ import {
   visibleGroupEntries,
 } from "../src/ui/group-projects";
 import { radii, spacing, theme, typography } from "../src/ui/theme";
+import { AnimatedPressable } from "../src/ui/AnimatedPressable";
 
 function ConnectionBanner() {
   const { status, authError } = useConnection();
@@ -53,9 +47,9 @@ function ConnectionBanner() {
       <Text style={[styles.bannerText, { color: meta.color }]}>{meta.text}</Text>
       {status === "unauthorized" ? (
         <Link href="/pair" asChild>
-          <Pressable hitSlop={8}>
+          <AnimatedPressable hitSlop={8}>
             <Text style={styles.bannerAction}>{t("home.rePairAction")}</Text>
-          </Pressable>
+          </AnimatedPressable>
         </Link>
       ) : null}
     </View>
@@ -91,14 +85,14 @@ function StatCard({
   );
   if (!onPress) return <View style={styles.statCard}>{body}</View>;
   return (
-    <Pressable
+    <AnimatedPressable
       style={({ pressed }) => [styles.statCard, pressed && styles.pressed]}
       accessibilityRole="button"
       accessibilityLabel={accessibilityLabel ?? label}
       onPress={onPress}
     >
       {body}
-    </Pressable>
+    </AnimatedPressable>
   );
 }
 
@@ -113,10 +107,12 @@ function ProjectCard({
 }) {
   const { project, tasks } = section;
   const needsInput = tasks.some((task) => task.status === "input_required");
-  const activeCount = tasks.filter((task) => ["pending", "running", "input_required"].includes(task.status)).length;
+  const activeCount = tasks.filter((task) =>
+    ["pending", "running", "input_required"].includes(task.status),
+  ).length;
   const pinned = Boolean(project.pinned);
   return (
-    <Pressable
+    <AnimatedPressable
       style={({ pressed }) => [styles.projectCard, pressed && styles.pressed]}
       accessibilityRole="button"
       accessibilityLabel={t("home.openProject", { name: project.name })}
@@ -142,7 +138,7 @@ function ProjectCard({
           {activeCount > 0 ? `  ·  ${activeCount} ${t("status.running")}` : ""}
         </Text>
       </View>
-      <Pressable
+      <AnimatedPressable
         hitSlop={6}
         style={({ pressed }) => [
           styles.addButton,
@@ -159,13 +155,13 @@ function ProjectCard({
           onTogglePinned(project.id, !pinned);
         }}
       >
-          <Pin
+        <Pin
           size={13}
           color={pinned ? theme.onAccent : theme.textSecondary}
           strokeWidth={pinned ? 2.6 : 2}
         />
-      </Pressable>
-      <Pressable
+      </AnimatedPressable>
+      <AnimatedPressable
         hitSlop={6}
         style={({ pressed }) => [styles.addButton, pressed && styles.pressed]}
         accessibilityRole="button"
@@ -177,8 +173,8 @@ function ProjectCard({
         }}
       >
         <Plus size={15} color={theme.text} strokeWidth={2.4} />
-      </Pressable>
-    </Pressable>
+      </AnimatedPressable>
+    </AnimatedPressable>
   );
 }
 
@@ -196,7 +192,7 @@ function GroupHeader({
   const label = name === UNGROUPED_PROJECT_GROUP ? t("home.group.ungrouped") : name;
   const Chevron = collapsed ? ChevronRight : ChevronDown;
   return (
-    <Pressable
+    <AnimatedPressable
       style={({ pressed }) => [styles.groupHeader, pressed && styles.pressed]}
       accessibilityRole="button"
       accessibilityState={{ expanded: !collapsed }}
@@ -208,7 +204,7 @@ function GroupHeader({
         {label}
       </Text>
       <Text style={styles.groupHeaderCount}>{count}</Text>
-    </Pressable>
+    </AnimatedPressable>
   );
 }
 
@@ -219,9 +215,9 @@ function PairPrompt() {
       <Text style={styles.emptyTitle}>Aeroric</Text>
       <Text style={styles.emptyText}>{t("home.pairIntro")}</Text>
       <Link href="/pair" asChild>
-        <Pressable style={styles.primaryButton}>
+        <AnimatedPressable style={styles.primaryButton}>
           <Text style={styles.primaryButtonText}>{t("home.pairNow")}</Text>
-        </Pressable>
+        </AnimatedPressable>
       </Link>
     </View>
   );
@@ -229,11 +225,12 @@ function PairPrompt() {
 
 export default function HomeScreen() {
   const { ready, hosts, activeHost } = useHosts();
-  const { sections, loading, error, refresh, setPinned } = useHostTasks();
+  const { sections, loading, error, refresh, upsertTask, setPinned } = useHostTasks();
   const { stats, refresh: refreshStats } = useHostStats();
   const [newTaskProjectId, setNewTaskProjectId] = useState<string | null>(null);
-  // 折叠态只存在组件内,不持久化(桌面端才是分组的权威来源)
-  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(() => new Set());
+  // 默认全部折叠；仅记录用户主动展开的分组，新出现的分组也自然保持折叠。
+  // 置顶项目的折叠可见规则仍由 visibleGroupEntries 统一处理。
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(() => new Set());
 
   // 从新建/详情页返回时同步一次(推送覆盖大多数场景,这里兜底)
   useFocusEffect(
@@ -244,12 +241,21 @@ export default function HomeScreen() {
   );
 
   const onRefresh = useCallback(() => {
-    refresh();
+    void refresh();
     refreshStats();
   }, [refresh, refreshStats]);
 
+  const onCreated = useCallback(
+    (task: Task) => {
+      upsertTask(task);
+      void refresh();
+      refreshStats();
+    },
+    [refresh, refreshStats, upsertTask],
+  );
+
   const toggleGroup = useCallback((name: string) => {
-    setCollapsedGroups((prev) => {
+    setExpandedGroups((prev) => {
       const next = new Set(prev);
       if (next.has(name)) next.delete(name);
       else next.add(name);
@@ -263,9 +269,9 @@ export default function HomeScreen() {
     () =>
       groups.map((group) => ({
         ...group,
-        data: visibleGroupEntries(group, collapsedGroups.has(group.name)),
+        data: visibleGroupEntries(group, !expandedGroups.has(group.name)),
       })),
-    [collapsedGroups, groups],
+    [expandedGroups, groups],
   );
   // 只有「未分组」一组时不必显示分组头,避免平铺列表多出一行噪音
   const showGroupHeaders = groups.length > 1 || (groups.length === 1 && !groups[0].isUngrouped);
@@ -283,9 +289,9 @@ export default function HomeScreen() {
         <View style={styles.brandSpacer} />
         {hasHosts ? (
           <Link href="/hosts" asChild>
-            <Pressable hitSlop={8}>
+            <AnimatedPressable hitSlop={8}>
               <Text style={styles.headerAction}>{activeHost?.name ?? t("home.hostsFallback")}</Text>
-            </Pressable>
+            </AnimatedPressable>
           </Link>
         ) : null}
       </View>
@@ -298,18 +304,14 @@ export default function HomeScreen() {
         keyExtractor={(item) => item.project.id}
         stickySectionHeadersEnabled={false}
         renderItem={({ item }) => (
-          <ProjectCard
-            section={item}
-            onNewTask={setNewTaskProjectId}
-            onTogglePinned={setPinned}
-          />
+          <ProjectCard section={item} onNewTask={setNewTaskProjectId} onTogglePinned={setPinned} />
         )}
         renderSectionHeader={({ section }) =>
           showGroupHeaders ? (
             <GroupHeader
               name={section.name}
               count={section.entries.length}
-              collapsed={collapsedGroups.has(section.name)}
+              collapsed={!expandedGroups.has(section.name)}
               onToggle={() => toggleGroup(section.name)}
             />
           ) : null
@@ -358,7 +360,7 @@ export default function HomeScreen() {
         visible={newTaskProjectId !== null}
         lockedProjectId={newTaskProjectId ?? undefined}
         onClose={() => setNewTaskProjectId(null)}
-        onCreated={onRefresh}
+        onCreated={onCreated}
       />
     </View>
   );

@@ -7,12 +7,10 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { rememberTasks } from "../notifications/task-name-cache";
 import type { Project, Task, TaskStatus, TaskStatusPush } from "../types";
 import { sortProjectEntries, sortProjectsForList } from "../ui/group-projects";
+import { upsertTaskInSections, type TaskSection } from "../ui/upsert-task";
 import { useConnection } from "./connection-context";
 
-export interface ProjectTasks {
-  project: Project;
-  tasks: Task[];
-}
+export type ProjectTasks = TaskSection;
 
 interface HostTasksState {
   sections: ProjectTasks[];
@@ -21,10 +19,14 @@ interface HostTasksState {
 }
 
 export interface HostTasksActions {
-  refresh: () => void;
+  refresh: () => Promise<void>;
+  /** 将桌面确认的任务快照立即合并到当前列表,随后可再做一致性刷新。 */
+  upsertTask: (task: Task) => void;
   /** 置顶/取消置顶:先乐观改本地并重排,失败回滚。桌面端读同一份 projects.json。 */
   setPinned: (projectId: string, pinned: boolean) => void;
 }
+
+export { upsertTaskInSections } from "../ui/upsert-task";
 
 export function useHostTasks(): HostTasksState & HostTasksActions {
   const { status, request, onPush } = useConnection();
@@ -35,14 +37,25 @@ export function useHostTasks(): HostTasksState & HostTasksActions {
   });
   const fetchSeq = useRef(0);
   const lastUnknownRefresh = useRef(0);
+  const refreshInFlight = useRef<Promise<void> | null>(null);
+  const refreshQueued = useRef(false);
   // 已知任务 id 镜像:push 处理需要同步判断,不能依赖异步的 setState updater
   const knownTaskIds = useRef<Set<string>>(new Set());
 
-  const refresh = useCallback(() => {
-    if (status !== "online") return;
+  const refresh = useCallback((): Promise<void> => {
+    if (status !== "online") return Promise.resolve();
+    if (refreshInFlight.current) {
+      refreshQueued.current = true;
+      const inFlight = refreshInFlight.current;
+      return inFlight.then(() => {
+        if (!refreshQueued.current) return;
+        refreshQueued.current = false;
+        return refresh();
+      });
+    }
     const seq = ++fetchSeq.current;
     setState((prev) => ({ ...prev, loading: true, error: null }));
-    void (async () => {
+    const work = (async () => {
       try {
         const projects = await request<Project[]>("projects.list");
         const visible = sortProjectsForList(projects.filter((p) => !p.hiddenFromRail));
@@ -68,12 +81,26 @@ export function useHostTasks(): HostTasksState & HostTasksActions {
         }));
       }
     })();
+    let tracked!: Promise<void>;
+    tracked = work.finally(() => {
+      if (refreshInFlight.current === tracked) refreshInFlight.current = null;
+    });
+    refreshInFlight.current = tracked;
+    return tracked;
   }, [request, status]);
 
   // 上线(含重连后)自动同步
   useEffect(() => {
-    if (status === "online") refresh();
+    if (status === "online") void refresh();
   }, [refresh, status]);
+
+  const upsertTask = useCallback((task: Task) => {
+    // 让任何已经开始的旧快照失效,避免它在本地即时补丁之后覆盖新任务。
+    fetchSeq.current += 1;
+    knownTaskIds.current.add(task.id);
+    rememberTasks(task.projectId, [task]);
+    setState((prev) => ({ ...prev, sections: upsertTaskInSections(prev.sections, task) }));
+  }, []);
 
   // task-status 推送 → 就地补丁;未知 task_id 说明桌面端新建了任务,节流拉一次全量;
   // events.reset(重连补发无法精确衔接)→ 直接全量刷新
@@ -96,17 +123,16 @@ export function useHostTasks(): HostTasksState & HostTasksActions {
             tasks[index] = {
               ...tasks[index],
               status: payload.status as TaskStatus,
-              approval:
-                payload.status === "input_required" ? payload.approval : undefined,
+              approval: payload.status === "input_required" ? payload.approval : undefined,
             };
             return { ...section, tasks };
           }),
         }));
         return;
       }
-      if (Date.now() - lastUnknownRefresh.current > 2_000) {
+      if (Date.now() - lastUnknownRefresh.current > 250) {
         lastUnknownRefresh.current = Date.now();
-        refresh();
+        void refresh();
       }
     });
   }, [onPush, refresh]);
@@ -136,5 +162,5 @@ export function useHostTasks(): HostTasksState & HostTasksActions {
     [request],
   );
 
-  return { ...state, refresh, setPinned };
+  return { ...state, refresh, upsertTask, setPinned };
 }

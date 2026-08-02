@@ -6,34 +6,83 @@
  * - `mode="modal"`:首页项目卡片 ＋ 触发的底部抽屉,`lockedProjectId` 锁定项目、不显示选择器
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Alert,
   KeyboardAvoidingView,
   Modal,
   Platform,
-  Pressable,
   ScrollView,
   StyleSheet,
   Text,
   TextInput,
   View,
 } from "react-native";
+import { Gauge, Zap } from "lucide-react-native";
 import { t } from "../i18n";
 import { useConnection } from "../state/connection-context";
+import {
+  loadLastModels,
+  rememberLastModel,
+  saveLastModels,
+  type LastModelsByAgent,
+} from "../storage/new-task-models";
 import {
   PERMISSION_MODE_VALUES,
   type AgentChoice,
   type PermissionMode,
   type Project,
+  type RemoteTaskActionResult,
+  type Task,
 } from "../types";
+import { AnimatedPressable } from "../ui/AnimatedPressable";
+import { AnimatedSelection } from "../ui/AnimatedSelection";
+import { ANTHROPIC_BRAND, AnthropicIcon, OpenAIIcon } from "../ui/brand-icons";
 import { radii, spacing, theme, typography } from "../ui/theme";
+
+/** 两栏各默认显示 5 行，更多配置在各自列内滚动。 */
+const AGENT_ROW_HEIGHT = 40;
+const AGENT_LIST_MAX_HEIGHT = AGENT_ROW_HEIGHT * 5 + 4 * 4 + 8;
+
+interface AgentTaskSelection {
+  reasoningEffort: string | null;
+  speed: "standard" | "fast";
+  permissionMode: PermissionMode;
+}
+
+const DEFAULT_AGENT_TASK_SELECTION: AgentTaskSelection = {
+  reasoningEffort: null,
+  speed: "standard",
+  permissionMode: "ask",
+};
+
+function normalizeModels(rawModels: string[]): string[] {
+  const normalized: string[] = [];
+  const seen = new Set<string>();
+  for (const raw of rawModels) {
+    const model = raw.trim();
+    const key = model.toLocaleLowerCase();
+    if (!model || seen.has(key)) continue;
+    seen.add(key);
+    normalized.push(model);
+  }
+  return normalized;
+}
+
+function preferredModel(models: string[], lastModel?: string): string {
+  const remembered = lastModel?.trim().toLocaleLowerCase();
+  if (remembered) {
+    const matched = models.find((model) => model.toLocaleLowerCase() === remembered);
+    if (matched) return matched;
+  }
+  return models[0] ?? "";
+}
 
 interface NewTaskFormProps {
   /** 锁定项目(来自项目卡片 ＋),不渲染项目选择器。 */
   lockedProjectId?: string;
   onClose: () => void;
-  onCreated?: () => void;
+  onCreated?: (task: Task) => void;
 }
 
 function NewTaskForm({ lockedProjectId, onClose, onCreated }: NewTaskFormProps) {
@@ -42,15 +91,39 @@ function NewTaskForm({ lockedProjectId, onClose, onCreated }: NewTaskFormProps) 
   const [agents, setAgents] = useState<AgentChoice[]>([]);
   const [projectId, setProjectId] = useState<string>(lockedProjectId ?? "");
   const [agent, setAgent] = useState<string>("claude");
-  const [models, setModels] = useState<string[] | null>(null);
-  const [modelsLoading, setModelsLoading] = useState(false);
+  const [modelState, setModelState] = useState<{
+    agent: string;
+    models: string[] | null;
+    loading: boolean;
+  }>({ agent: "", models: null, loading: false });
   const [selectedModel, setSelectedModel] = useState<string>("");
   const [reasoningEffort, setReasoningEffort] = useState<string | null>(null);
   const [speed, setSpeed] = useState<"standard" | "fast">("standard");
   const [permissionMode, setPermissionMode] = useState<PermissionMode>("ask");
+  const [lastModels, setLastModels] = useState<LastModelsByAgent>({});
+  const [lastModelsLoaded, setLastModelsLoaded] = useState(false);
   const [prompt, setPrompt] = useState("");
   const [loadError, setLoadError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const modelCacheRef = useRef(new Map<string, string[]>());
+  const lastModelsRef = useRef<LastModelsByAgent>({});
+  const agentSelectionsRef = useRef(new Map<string, AgentTaskSelection>());
+
+  const models = modelState.agent === agent ? modelState.models : null;
+  const modelsLoading = modelState.agent === agent && modelState.loading;
+
+  useEffect(() => {
+    let cancelled = false;
+    void loadLastModels().then((stored) => {
+      if (cancelled) return;
+      lastModelsRef.current = stored;
+      setLastModels(stored);
+      setLastModelsLoaded(true);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     if (status !== "online") return;
@@ -80,66 +153,122 @@ function NewTaskForm({ lockedProjectId, onClose, onCreated }: NewTaskFormProps) 
     };
   }, [lockedProjectId, request, status]);
 
-  // agent 变化 → 重新拉该 agent 的模型列表,并清掉上一个 agent 的选择
+  const anthropicAgents = useMemo(() => agents.filter((choice) => !choice.codexLike), [agents]);
+  const openaiAgents = useMemo(() => agents.filter((choice) => choice.codexLike), [agents]);
+  const selectedAgent = useMemo(() => agents.find((item) => item.id === agent), [agent, agents]);
+
+  const selectAgent = useCallback(
+    (next: AgentChoice) => {
+      if (next.id === agent) return;
+      agentSelectionsRef.current.set(agent, { reasoningEffort, speed, permissionMode });
+      const restored = agentSelectionsRef.current.get(next.id) ?? DEFAULT_AGENT_TASK_SELECTION;
+      setAgent(next.id);
+      setSelectedModel("");
+      setReasoningEffort(restored.reasoningEffort);
+      setSpeed(restored.speed);
+      setPermissionMode(restored.permissionMode);
+    },
+    [agent, permissionMode, reasoningEffort, speed],
+  );
+
+  // 配置切换时优先命中本次表单的缓存；首次才向桌面端请求，避免来回切换有空白和卡顿。
   useEffect(() => {
-    if (status !== "online" || !agent) return;
+    if (status !== "online" || !agent) {
+      setModelState({ agent, models: null, loading: false });
+      return;
+    }
     let cancelled = false;
-    setModelsLoading(true);
-    setModels(null);
     setSelectedModel("");
-    setReasoningEffort(null);
-    setSpeed("standard");
+    const cached = modelCacheRef.current.get(agent);
+    if (cached) {
+      setModelState({ agent, models: cached, loading: false });
+      return () => {
+        cancelled = true;
+      };
+    }
+    setModelState({ agent, models: null, loading: true });
     request<{ models: string[] }>("agents.models", { agent })
       .then((res) => {
         if (cancelled) return;
-        const normalized: string[] = [];
-        const seen = new Set<string>();
-        for (const raw of res.models ?? []) {
-          const model = raw.trim();
-          const key = model.toLocaleLowerCase();
-          if (!model || seen.has(key)) continue;
-          seen.add(key);
-          normalized.push(model);
-        }
-        setModels(normalized);
+        const normalized = normalizeModels(res.models ?? []);
+        modelCacheRef.current.set(agent, normalized);
+        setModelState({ agent, models: normalized, loading: false });
       })
       .catch(() => {
-        // 模型列表拿不到时不提供默认模型,避免大小写/配置漂移导致误用模型。
-        if (!cancelled) setModels([]);
-      })
-      .finally(() => {
-        if (!cancelled) setModelsLoading(false);
+        // 模型列表拿不到时不显示“默认”，避免大小写/配置漂移导致误用模型。
+        if (!cancelled) setModelState({ agent, models: [], loading: false });
       });
     return () => {
       cancelled = true;
     };
   }, [agent, request, status]);
 
-  const selectedAgent = agents.find((item) => item.id === agent);
+  useEffect(() => {
+    if (!models || !lastModelsLoaded) return;
+    setSelectedModel(preferredModel(models, lastModels[agent]));
+  }, [agent, lastModels, lastModelsLoaded, models]);
+
+  const selectModel = useCallback(
+    (model: string) => {
+      setSelectedModel(model);
+      const next = rememberLastModel(lastModelsRef.current, agent, model);
+      if (next === lastModelsRef.current) return;
+      lastModelsRef.current = next;
+      setLastModels(next);
+      void saveLastModels(next);
+    },
+    [agent],
+  );
+
   const codexLike = Boolean(selectedAgent?.codexLike);
   const supportsUltra = !codexLike || selectedModel.trim().toLocaleLowerCase() === "gpt-5.6-sol";
-  const reasoningOptions = codexLike
-    ? supportsUltra
-      ? ["minimal", "low", "medium", "high", "xhigh", "max", "ultra"]
-      : ["minimal", "low", "medium", "high", "xhigh", "max"]
-    : ["low", "medium", "high", "xhigh", "max", "ultra"];
+  const reasoningOptions = useMemo(
+    () =>
+      codexLike
+        ? supportsUltra
+          ? ["minimal", "low", "medium", "high", "xhigh", "max", "ultra"]
+          : ["minimal", "low", "medium", "high", "xhigh", "max"]
+        : ["low", "medium", "high", "xhigh", "max", "ultra"],
+    [codexLike, supportsUltra],
+  );
 
   useEffect(() => {
-    if (reasoningEffort === "minimal" && !codexLike) {
+    if (reasoningEffort && !reasoningOptions.includes(reasoningEffort)) {
       setReasoningEffort(null);
-      return;
+      agentSelectionsRef.current.set(agent, { reasoningEffort: null, speed, permissionMode });
     }
-    if (reasoningEffort === "ultra" && codexLike && !supportsUltra) {
-      setReasoningEffort(null);
-    }
-  }, [codexLike, reasoningEffort, supportsUltra]);
+  }, [agent, permissionMode, reasoningEffort, reasoningOptions, speed]);
+
+  const selectReasoningEffort = useCallback(
+    (next: string) => {
+      setReasoningEffort(next);
+      agentSelectionsRef.current.set(agent, { reasoningEffort: next, speed, permissionMode });
+    },
+    [agent, permissionMode, speed],
+  );
+
+  const selectSpeed = useCallback(
+    (next: "standard" | "fast") => {
+      setSpeed(next);
+      agentSelectionsRef.current.set(agent, { reasoningEffort, speed: next, permissionMode });
+    },
+    [agent, permissionMode, reasoningEffort],
+  );
+
+  const selectPermissionMode = useCallback(
+    (next: PermissionMode) => {
+      setPermissionMode(next);
+      agentSelectionsRef.current.set(agent, { reasoningEffort, speed, permissionMode: next });
+    },
+    [agent, reasoningEffort, speed],
+  );
 
   const submit = useCallback(() => {
     const text = prompt.trim();
     const model = selectedModel.trim();
     if (!projectId || !text || submitting) return;
     setSubmitting(true);
-    request("task.create", {
+    request<RemoteTaskActionResult>("task.create", {
       projectId,
       prompt: text,
       agent,
@@ -148,11 +277,22 @@ function NewTaskForm({ lockedProjectId, onClose, onCreated }: NewTaskFormProps) 
       ...(reasoningEffort ? { reasoningEffort } : {}),
       speed,
     })
-      .then(() => {
-        onCreated?.();
-        Alert.alert(t("newTask.sent"), t("newTask.sentBody"), [
-          { text: t("newTask.ok"), onPress: onClose },
-        ]);
+      .then((result) => {
+        // 新版桌面端回传权威快照;旧版只回 taskId 时用最小本地快照兜底,
+        // 让手机在下一次一致性刷新前也能立即看到这条任务。
+        const task: Task = result.task ?? {
+          id: result.taskId ?? `${Date.now()}`,
+          projectId,
+          prompt: text,
+          agent,
+          selectedModel: model || undefined,
+          reasoningEffort: reasoningEffort ?? undefined,
+          speed,
+          status: "pending",
+          createdAt: Date.now(),
+        };
+        onCreated?.(task);
+        onClose();
       })
       .catch((err) =>
         Alert.alert(t("newTask.createFailed"), err instanceof Error ? err.message : String(err)),
@@ -173,7 +313,13 @@ function NewTaskForm({ lockedProjectId, onClose, onCreated }: NewTaskFormProps) 
   ]);
 
   const canSubmit =
-    status === "online" && !!projectId && !!prompt.trim() && !submitting;
+    status === "online" &&
+    !!projectId &&
+    !!prompt.trim() &&
+    !submitting &&
+    models !== null &&
+    !modelsLoading &&
+    lastModelsLoaded;
   const lockedProject = lockedProjectId
     ? projects.find((p) => p.id === lockedProjectId)
     : undefined;
@@ -194,7 +340,7 @@ function NewTaskForm({ lockedProjectId, onClose, onCreated }: NewTaskFormProps) 
           <Text style={styles.sectionLabel}>{t("newTask.project")}</Text>
           <View style={styles.chipWrap}>
             {projects.map((project) => (
-              <Pressable
+              <AnimatedPressable
                 key={project.id}
                 style={[styles.chip, projectId === project.id && styles.chipActive]}
                 onPress={() => setProjectId(project.id)}
@@ -205,7 +351,7 @@ function NewTaskForm({ lockedProjectId, onClose, onCreated }: NewTaskFormProps) 
                 >
                   {project.name}
                 </Text>
-              </Pressable>
+              </AnimatedPressable>
             ))}
             {projects.length === 0 && status === "online" && !loadError ? (
               <Text style={styles.hint}>{t("newTask.noProjects")}</Text>
@@ -216,115 +362,135 @@ function NewTaskForm({ lockedProjectId, onClose, onCreated }: NewTaskFormProps) 
 
       <Text style={styles.sectionLabel}>{t("newTask.agent")}</Text>
       <View style={styles.agentColumns}>
-        {([false, true] as const).map((codexLike) => {
-          const family = agents.filter((choice) => choice.codexLike === codexLike);
-          return (
-            <View key={codexLike ? "openai" : "anthropic"} style={styles.agentColumn}>
-              <Text style={styles.columnTitle}>
-                {t(codexLike ? "newTask.openai" : "newTask.anthropic")}
-              </Text>
-              <View style={styles.agentRows}>
-                {family.length > 0 ? family.map((choice) => (
-                  <Pressable
-                    key={choice.id}
-                    style={[styles.agentRow, agent === choice.id && styles.agentRowActive]}
-                    onPress={() => setAgent(choice.id)}
+        <View style={styles.agentColumn}>
+          <View style={styles.agentColumnHeader}>
+            <AnthropicIcon size={15} color={ANTHROPIC_BRAND} />
+            <Text style={styles.agentColumnTitle}>{t("newTask.anthropic")}</Text>
+          </View>
+          <ScrollView
+            style={styles.agentList}
+            contentContainerStyle={styles.agentRows}
+            nestedScrollEnabled
+            directionalLockEnabled
+            keyboardShouldPersistTaps="handled"
+          >
+            {anthropicAgents.length > 0 ? (
+              anthropicAgents.map((choice) => (
+                <AnimatedPressable
+                  key={choice.id}
+                  style={[styles.agentRow, agent === choice.id && styles.agentRowActive]}
+                  onPress={() => selectAgent(choice)}
+                  accessibilityRole="button"
+                  accessibilityLabel={choice.label}
+                  accessibilityState={{ selected: agent === choice.id }}
+                >
+                  <Text
+                    style={[styles.agentRowText, agent === choice.id && styles.agentRowTextActive]}
+                    numberOfLines={1}
+                    ellipsizeMode="tail"
                   >
-                    <Text
-                      style={[styles.agentRowText, agent === choice.id && styles.chipTextActive]}
-                      numberOfLines={1}
-                      ellipsizeMode="tail"
-                    >
-                      {choice.label}
-                    </Text>
-                  </Pressable>
-                )) : <Text style={styles.hint}>—</Text>}
-              </View>
-            </View>
-          );
-        })}
+                    {choice.label}
+                  </Text>
+                </AnimatedPressable>
+              ))
+            ) : (
+              <Text style={styles.agentEmpty}>—</Text>
+            )}
+          </ScrollView>
+        </View>
+
+        <View style={styles.agentColumn}>
+          <View style={styles.agentColumnHeader}>
+            <OpenAIIcon size={15} color={theme.text} />
+            <Text style={styles.agentColumnTitle}>{t("newTask.openai")}</Text>
+          </View>
+          <ScrollView
+            style={styles.agentList}
+            contentContainerStyle={styles.agentRows}
+            nestedScrollEnabled
+            directionalLockEnabled
+            keyboardShouldPersistTaps="handled"
+          >
+            {openaiAgents.length > 0 ? (
+              openaiAgents.map((choice) => (
+                <AnimatedPressable
+                  key={choice.id}
+                  style={[styles.agentRow, agent === choice.id && styles.agentRowActive]}
+                  onPress={() => selectAgent(choice)}
+                  accessibilityRole="button"
+                  accessibilityLabel={choice.label}
+                  accessibilityState={{ selected: agent === choice.id }}
+                >
+                  <Text
+                    style={[styles.agentRowText, agent === choice.id && styles.agentRowTextActive]}
+                    numberOfLines={1}
+                    ellipsizeMode="tail"
+                  >
+                    {choice.label}
+                  </Text>
+                </AnimatedPressable>
+              ))
+            ) : (
+              <Text style={styles.agentEmpty}>—</Text>
+            )}
+          </ScrollView>
+        </View>
       </View>
 
       <Text style={styles.sectionLabel}>{t("newTask.model")}</Text>
-      {modelsLoading ? (
+      {modelsLoading || !lastModelsLoaded ? (
         <Text style={styles.hint}>{t("newTask.modelsLoading")}</Text>
-      ) : models ? (
-        <View style={styles.modelList}>
-          <Pressable
-            style={[styles.modelRow, !selectedModel && styles.chipActive]}
-            onPress={() => setSelectedModel("")}
-          >
-            <Text style={[styles.modelText, !selectedModel && styles.chipTextActive]}>
-              {t("newTask.modelAuto")}
-            </Text>
-          </Pressable>
-          {models.map((model) => (
-            <Pressable
-              key={model}
-              style={[styles.modelRow, selectedModel === model && styles.chipActive]}
-              onPress={() => setSelectedModel(model)}
-            >
-              <Text
-                style={[styles.modelText, selectedModel === model && styles.chipTextActive]}
-                numberOfLines={1}
-                ellipsizeMode="tail"
-              >
-                {model}
-              </Text>
-            </Pressable>
-          ))}
-          {models.length === 0 ? <Text style={styles.hint}>{t("newTask.modelsUnavailable")}</Text> : null}
-        </View>
+      ) : models && models.length > 0 ? (
+        <AnimatedSelection
+          value={selectedModel}
+          options={models.map((model) => ({ value: model, label: model }))}
+          onChange={selectModel}
+          horizontal
+          style={styles.modelSelection}
+        />
       ) : (
         <Text style={styles.hint}>{t("newTask.modelsUnavailable")}</Text>
       )}
 
       <Text style={styles.sectionLabel}>{t("newTask.reasoning")}</Text>
-      <View style={styles.optionGrid}>
-        {reasoningOptions.map((effort) => (
-          <Pressable
-            key={effort}
-            style={[styles.optionButton, reasoningEffort === effort && styles.chipActive]}
-            onPress={() => setReasoningEffort(effort)}
-          >
-            <Text style={[styles.chipText, reasoningEffort === effort && styles.chipTextActive]}>
-              {t(`newTask.reasoning.${effort}` as Parameters<typeof t>[0])}
-            </Text>
-          </Pressable>
-        ))}
-      </View>
+      <AnimatedSelection
+        value={reasoningEffort ?? "__none__"}
+        options={reasoningOptions.map((effort) => ({
+          value: effort,
+          label: t(`newTask.reasoning.${effort}` as Parameters<typeof t>[0]),
+        }))}
+        onChange={selectReasoningEffort}
+        dense
+        style={styles.optionSelection}
+      />
 
       <Text style={styles.sectionLabel}>{t("newTask.speed")}</Text>
-      <View style={styles.optionGrid}>
-        {(["standard", "fast"] as const).map((value) => (
-          <Pressable
-            key={value}
-            style={[styles.optionButton, speed === value && styles.chipActive]}
-            onPress={() => setSpeed(value)}
-          >
-            <Text style={[styles.chipText, speed === value && styles.chipTextActive]}>
-              {t(`newTask.speed.${value}` as Parameters<typeof t>[0])}
-            </Text>
-          </Pressable>
-        ))}
-      </View>
+      <AnimatedSelection
+        value={speed}
+        options={(["standard", "fast"] as const).map((value) => ({
+          value,
+          label: t(`newTask.speed.${value}` as Parameters<typeof t>[0]),
+          icon:
+            value === "fast" ? (
+              <Zap size={14} color={speed === value ? theme.onAccent : theme.accent} />
+            ) : (
+              <Gauge size={14} color={speed === value ? theme.onAccent : theme.textSecondary} />
+            ),
+        }))}
+        onChange={selectSpeed}
+        style={styles.optionSelection}
+      />
 
       <Text style={styles.sectionLabel}>{t("newTask.permission")}</Text>
-      <View style={styles.permList}>
-        {PERMISSION_MODE_VALUES.map((mode) => (
-          <Pressable
-            key={mode}
-            style={[styles.permRow, permissionMode === mode && styles.permRowActive]}
-            onPress={() => setPermissionMode(mode)}
-          >
-            <View style={styles.permTextWrap}>
-              <Text style={styles.permLabel}>{t(`perm.${mode}`)}</Text>
-              <Text style={styles.permHint}>{t(`perm.${mode}.hint`)}</Text>
-            </View>
-            <View style={[styles.radio, permissionMode === mode && styles.radioActive]} />
-          </Pressable>
-        ))}
-      </View>
+      <AnimatedSelection
+        value={permissionMode}
+        options={PERMISSION_MODE_VALUES.map((mode) => ({
+          value: mode,
+          label: t(`perm.${mode}`),
+        }))}
+        onChange={selectPermissionMode}
+        style={styles.permissionSelection}
+      />
 
       <Text style={styles.sectionLabel}>Prompt</Text>
       <TextInput
@@ -337,7 +503,7 @@ function NewTaskForm({ lockedProjectId, onClose, onCreated }: NewTaskFormProps) 
         textAlignVertical="top"
       />
 
-      <Pressable
+      <AnimatedPressable
         style={[styles.submitButton, !canSubmit && styles.submitDisabled]}
         disabled={!canSubmit}
         onPress={submit}
@@ -345,7 +511,7 @@ function NewTaskForm({ lockedProjectId, onClose, onCreated }: NewTaskFormProps) 
         <Text style={styles.submitText}>
           {submitting ? t("newTask.submitting") : t("newTask.submit")}
         </Text>
-      </Pressable>
+      </AnimatedPressable>
       <Text style={styles.hint}>{t("newTask.footnote")}</Text>
     </ScrollView>
   );
@@ -374,13 +540,13 @@ export function NewTaskSheet({
   visible: boolean;
   lockedProjectId?: string;
   onClose: () => void;
-  onCreated?: () => void;
+  onCreated?: (task: Task) => void;
 }) {
   return (
     <Modal
       visible={visible}
       animationType="slide"
-      presentationStyle="pageSheet"
+      presentationStyle="fullScreen"
       onRequestClose={onClose}
     >
       <KeyboardAvoidingView
@@ -389,9 +555,9 @@ export function NewTaskSheet({
       >
         <View style={styles.sheetHeader}>
           <Text style={styles.sheetTitle}>{t("nav.newTask")}</Text>
-          <Pressable hitSlop={10} onPress={onClose}>
+          <AnimatedPressable hitSlop={10} onPress={onClose} style={styles.closeButton}>
             <Text style={styles.sheetClose}>{t("newTask.cancel")}</Text>
-          </Pressable>
+          </AnimatedPressable>
         </View>
         {/* key:每次打开都重置表单状态 */}
         <NewTaskForm
@@ -411,14 +577,15 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     paddingHorizontal: spacing.lg,
-    paddingTop: Platform.OS === "ios" ? spacing.lg : 44,
+    // 全屏 Modal 后 header 会顶到状态栏下,56 与首页 brandBar 的 paddingTop 保持同一约定
+    paddingTop: Platform.OS === "ios" ? 56 : 44,
     paddingBottom: spacing.md,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: theme.border,
   },
   sheetTitle: { flex: 1, color: theme.text, fontSize: 17, fontWeight: "700" },
   sheetClose: { color: theme.accent, fontSize: typography.bodySize, fontWeight: "600" },
-  content: { padding: spacing.lg, paddingBottom: 40, gap: 10 },
+  content: { padding: spacing.lg, paddingBottom: 40, gap: spacing.sm },
   notice: { color: theme.warning, fontSize: 12.5 },
   noticeError: { color: theme.danger, fontSize: 12.5 },
   lockedProject: { color: theme.text, fontSize: 15, fontWeight: "700" },
@@ -431,8 +598,11 @@ const styles = StyleSheet.create({
   },
   chipWrap: { flexDirection: "row", flexWrap: "wrap", gap: spacing.sm },
   chip: {
+    minHeight: 42,
+    alignItems: "center",
+    justifyContent: "center",
     paddingHorizontal: 13,
-    paddingVertical: spacing.sm,
+    paddingVertical: spacing.xs,
     borderRadius: radii.button,
     backgroundColor: theme.bgCard,
     borderWidth: StyleSheet.hairlineWidth,
@@ -440,85 +610,63 @@ const styles = StyleSheet.create({
     maxWidth: "100%",
   },
   chipActive: { backgroundColor: theme.accent, borderColor: theme.accent },
-  chipText: { color: theme.text, fontSize: 13.5 },
+  chipText: {
+    color: theme.text,
+    fontSize: 13.5,
+    includeFontPadding: false,
+    textAlignVertical: "center",
+  },
   chipTextActive: { color: theme.onAccent, fontWeight: "600" },
-  agentColumns: { flexDirection: "row", gap: spacing.sm },
-  agentColumn: {
-    flex: 1,
-    minWidth: 0,
+  agentColumns: { flexDirection: "row", alignItems: "stretch", gap: spacing.sm },
+  agentColumn: { flex: 1, minWidth: 0, gap: spacing.xs },
+  agentColumnHeader: {
+    minHeight: 28,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+  },
+  agentColumnTitle: {
+    color: theme.textSecondary,
+    fontSize: typography.metaSize,
+    fontWeight: "700",
+  },
+  agentList: {
+    height: AGENT_LIST_MAX_HEIGHT,
     borderRadius: radii.row,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: theme.border,
     backgroundColor: theme.bgCard,
     overflow: "hidden",
   },
-  columnTitle: {
-    color: theme.textSecondary,
-    fontSize: typography.metaSize,
-    fontWeight: "700",
-    paddingHorizontal: spacing.sm,
-    paddingVertical: spacing.sm,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: theme.border,
-  },
   agentRows: { padding: 4, gap: 4 },
+  agentEmpty: {
+    color: theme.textHint,
+    fontSize: typography.metaSize,
+    paddingVertical: spacing.md,
+    textAlign: "center",
+  },
   agentRow: {
-    minHeight: 38,
+    minHeight: AGENT_ROW_HEIGHT,
+    alignItems: "center",
     justifyContent: "center",
     paddingHorizontal: spacing.sm,
     borderRadius: radii.button,
   },
   agentRowActive: { backgroundColor: theme.accent },
-  agentRowText: { color: theme.text, fontSize: 13.5, flex: 1 },
-  modelList: {
-    borderRadius: radii.row,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: theme.border,
-    backgroundColor: theme.bgCard,
-    padding: 4,
-    gap: 4,
+  // 不加 flex:1 —— flex:1 会把 Text 撑满整行,文字随之左对齐、无法真正居中
+  agentRowText: {
+    color: theme.text,
+    fontSize: 14,
+    flexShrink: 1,
+    textAlign: "center",
+    includeFontPadding: false,
+    textAlignVertical: "center",
   },
-  modelRow: {
-    minHeight: 38,
-    justifyContent: "center",
-    paddingHorizontal: spacing.md,
-    borderRadius: radii.button,
-  },
-  modelText: { color: theme.text, fontSize: 13, flex: 1 },
-  optionGrid: { flexDirection: "row", flexWrap: "wrap", gap: spacing.sm },
-  optionButton: {
-    minWidth: 74,
-    alignItems: "center",
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
-    borderRadius: radii.button,
-    backgroundColor: theme.bgCard,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: theme.border,
-  },
-  permList: { gap: 6 },
-  permRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 10,
-    padding: spacing.md,
-    borderRadius: radii.row,
-    backgroundColor: theme.bgCard,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: theme.border,
-  },
-  permRowActive: { borderColor: theme.accent, borderWidth: 1 },
-  permTextWrap: { flex: 1, gap: 2 },
-  permLabel: { color: theme.text, fontSize: typography.bodySize, fontWeight: "600" },
-  permHint: { color: theme.textHint, fontSize: typography.metaSize },
-  radio: {
-    width: 16,
-    height: 16,
-    borderRadius: radii.pill,
-    borderWidth: 2,
-    borderColor: theme.border,
-  },
-  radioActive: { borderColor: theme.accent, backgroundColor: theme.accent },
+  agentRowTextActive: { color: theme.onAccent, fontWeight: "600" },
+  optionSelection: { alignSelf: "stretch" },
+  modelSelection: { alignSelf: "stretch" },
+  permissionSelection: { alignSelf: "stretch" },
   promptInput: {
     minHeight: 120,
     borderRadius: radii.input,
@@ -531,6 +679,7 @@ const styles = StyleSheet.create({
     lineHeight: 20,
   },
   submitButton: {
+    minHeight: 50,
     backgroundColor: theme.accent,
     borderRadius: radii.button,
     paddingVertical: 13,
@@ -539,5 +688,11 @@ const styles = StyleSheet.create({
   },
   submitDisabled: { opacity: 0.4 },
   submitText: { color: theme.onAccent, fontSize: 15, fontWeight: "700" },
+  closeButton: {
+    minHeight: 34,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: spacing.xs,
+  },
   hint: { color: theme.textHint, fontSize: typography.metaSize, lineHeight: 18 },
 });

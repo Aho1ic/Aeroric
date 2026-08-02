@@ -146,7 +146,7 @@ fn hook_command(node_path: &str, script: &str) -> String {
     #[cfg(windows)]
     {
         let quote = |value: &str| value.replace('\'', "''");
-        return format!(
+        format!(
             "powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command \"& '{}' '{}'\"",
             quote(node_path),
             quote(script)

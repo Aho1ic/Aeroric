@@ -1,7 +1,6 @@
-import { fireEvent, render, screen } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import type { ComponentProps } from "react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { I18nProvider } from "../i18n";
 import { ModelOptionsMenu } from "../components/new-task/ModelOptionsMenu";
 
@@ -47,7 +46,36 @@ function renderMenu(overrides: Partial<ComponentProps<typeof ModelOptionsMenu>> 
   );
 }
 
+function openMainMenu() {
+  fireEvent.click(screen.getByRole("combobox", { name: "Model" }));
+  return screen.getByRole("menu", { name: "Model options" });
+}
+
+function hoverPanel(panel: "model" | "reasoning" | "speed", x = 100, y = 100) {
+  const trigger = screen.getByRole("button", {
+    name: panel === "model" ? "Model" : panel === "reasoning" ? "Reasoning effort" : "Speed",
+  });
+  fireEvent.mouseEnter(trigger, { clientX: x, clientY: y });
+  return trigger;
+}
+
+function advanceTimers(milliseconds: number) {
+  act(() => {
+    vi.advanceTimersByTime(milliseconds);
+  });
+}
+
+function getSubmenuContent(panel: "model" | "reasoning" | "speed") {
+  return document.querySelector<HTMLElement>(
+    `[data-model-options-submenu-content="${panel}"][data-side="right"]`,
+  );
+}
+
 describe("ModelOptionsMenu", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("shows the model and reasoning summary while collapsed", () => {
     renderMenu({ speed: "fast" });
 
@@ -64,48 +92,103 @@ describe("ModelOptionsMenu", () => {
     expect(screen.getByTestId("fast-indicator")).toHaveAttribute("aria-label", "Fast");
   });
 
-  it("reveals each submenu on hover without requiring a click", async () => {
-    const user = userEvent.setup();
+  it("shows only the three category entries in the main menu", () => {
     renderMenu();
 
-    await user.click(screen.getByRole("combobox", { name: "Model" }));
+    const mainMenu = openMainMenu();
 
-    const modelTrigger = screen.getByRole("button", { name: "Model" });
-    const reasoningTrigger = screen.getByRole("button", { name: "Reasoning effort" });
-    const speedTrigger = screen.getByRole("button", { name: "Speed" });
-
-    expect(modelTrigger).toHaveAttribute("aria-haspopup", "menu");
-    expect(modelTrigger.querySelector('[data-model-options-arrow="model"]')).toBeInTheDocument();
-
-    await user.hover(modelTrigger);
-    const content = document.querySelector<HTMLElement>("[data-model-options-content]");
-    expect(content).toHaveAttribute("data-side", "bottom");
-    expect(content?.style.width).toBe("fit-content");
-    expect(screen.getByRole("menu", { name: /^Model$/ })).toBeInTheDocument();
-    expect(screen.getByRole("menu", { name: /^Model$/ }).style.overflowY).toBe("auto");
-    expect(screen.getByRole("menuitemradio", { name: "gpt-5.6" })).toBeInTheDocument();
-
-    await user.hover(reasoningTrigger);
-    expect(content).toHaveAttribute("data-side", "bottom");
+    expect(mainMenu).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Model" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Reasoning effort" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Speed" })).toBeInTheDocument();
+    expect(screen.queryByRole("menuitemradio")).not.toBeInTheDocument();
     expect(screen.queryByRole("menu", { name: /^Model$/ })).not.toBeInTheDocument();
-    expect(screen.getByRole("menu", { name: /^Reasoning effort$/ })).toBeInTheDocument();
-
-    await user.hover(speedTrigger);
-    expect(content).toHaveAttribute("data-side", "bottom");
-    expect(screen.getByRole("menu", { name: /^Speed$/ })).toBeInTheDocument();
-    expect(screen.getByRole("menuitemradio", { name: "Fast" })).toBeInTheDocument();
   });
 
-  it("keeps labels on one line and sizes long model options to the content", async () => {
-    const user = userEvent.setup();
+  it("does not open a submenu before the 300ms stationary delay", () => {
+    vi.useFakeTimers();
+    renderMenu();
+    openMainMenu();
+
+    hoverPanel("model");
+    advanceTimers(299);
+
+    expect(screen.queryByRole("menu", { name: /^Model$/ })).not.toBeInTheDocument();
+  });
+
+  it("keeps waiting while the pointer is moving noticeably", () => {
+    vi.useFakeTimers();
+    renderMenu();
+    openMainMenu();
+
+    const trigger = hoverPanel("model", 100, 100);
+    for (let step = 1; step <= 4; step += 1) {
+      advanceTimers(100);
+      fireEvent.mouseMove(trigger, { clientX: 100 + step * 12, clientY: 100 });
+    }
+
+    expect(screen.queryByRole("menu", { name: /^Model$/ })).not.toBeInTheDocument();
+
+    advanceTimers(299);
+    expect(screen.queryByRole("menu", { name: /^Model$/ })).not.toBeInTheDocument();
+    advanceTimers(1);
+    expect(screen.getByRole("menu", { name: /^Model$/ })).toBeInTheDocument();
+  });
+
+  it("opens after 300ms when only slight pointer jitter occurs", () => {
+    vi.useFakeTimers();
+    renderMenu();
+    openMainMenu();
+
+    const trigger = hoverPanel("model", 100, 100);
+    advanceTimers(299);
+    fireEvent.mouseMove(trigger, { clientX: 101, clientY: 101 });
+    advanceTimers(1);
+
+    expect(screen.getByRole("menu", { name: /^Model$/ })).toBeInTheDocument();
+  });
+
+  it("keeps the main menu below and replaces the child menu only after the next delay", () => {
+    vi.useFakeTimers();
+    renderMenu();
+    const mainMenu = openMainMenu();
+
+    hoverPanel("model");
+    advanceTimers(300);
+
+    const mainContent = document.querySelector<HTMLElement>("[data-model-options-content]");
+    expect(mainContent).toHaveAttribute("data-side", "bottom");
+    expect(getSubmenuContent("model")).toHaveAttribute("data-side", "right");
+    expect(screen.getByRole("menu", { name: /^Model$/ })).toBeInTheDocument();
+
+    const reasoningTrigger = screen.getByRole("button", { name: "Reasoning effort" });
+    fireEvent.mouseEnter(reasoningTrigger, { clientX: 200, clientY: 100 });
+
+    expect(screen.getByRole("menu", { name: /^Model$/ })).toBeInTheDocument();
+    expect(screen.queryByRole("menu", { name: /^Reasoning effort$/ })).not.toBeInTheDocument();
+
+    advanceTimers(299);
+    expect(screen.getByRole("menu", { name: /^Model$/ })).toBeInTheDocument();
+    advanceTimers(1);
+
+    expect(screen.queryByRole("menu", { name: /^Model$/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("menu", { name: /^Reasoning effort$/ })).toBeInTheDocument();
+    expect(mainContent).toHaveAttribute("data-side", "bottom");
+    expect(getSubmenuContent("reasoning")).toHaveAttribute("data-side", "right");
+    expect(mainMenu).toBeInTheDocument();
+  });
+
+  it("keeps labels and long model options on one line with content-sized menus", () => {
+    vi.useFakeTimers();
     const longModel = "claude-sonnet-4-20250514-with-a-very-long-model-name";
     renderMenu({ models: ["short", longModel], selectedModel: longModel });
 
-    await user.click(screen.getByRole("combobox", { name: "Model" }));
-    const modelTrigger = screen.getByRole("button", { name: "Model" });
-    await user.hover(modelTrigger);
+    openMainMenu();
+    const modelTrigger = hoverPanel("model");
+    advanceTimers(300);
 
     const content = document.querySelector<HTMLElement>("[data-model-options-content]");
+    const mainMenu = screen.getByRole("menu", { name: "Model options" });
     const modelPanel = screen.getByRole("menu", { name: /^Model$/ });
     const longModelOption = screen.getByRole("menuitemradio", { name: longModel });
 
@@ -113,19 +196,76 @@ describe("ModelOptionsMenu", () => {
     expect(content?.style.maxWidth).toBe("calc(100vw - 20px)");
     expect(modelPanel.style.maxHeight).toContain("--radix-popover-content-available-height");
     expect(modelTrigger).toHaveStyle({ whiteSpace: "nowrap" });
+    expect(screen.getByRole("button", { name: "Reasoning effort" })).toHaveStyle({
+      whiteSpace: "nowrap",
+    });
+    expect(screen.getByRole("button", { name: "Speed" })).toHaveStyle({
+      whiteSpace: "nowrap",
+    });
     expect(longModelOption).toHaveStyle({ whiteSpace: "nowrap" });
+    expect(mainMenu).not.toContainElement(longModelOption);
+    expect(getSubmenuContent("model")).toHaveAttribute("data-side", "right");
   });
 
-  it("keeps option selection callbacks unchanged", async () => {
-    const user = userEvent.setup();
+  it("keeps both menus open after leaving an entry and selecting a child option", () => {
+    vi.useFakeTimers();
     const onReasoningChange = vi.fn();
     renderMenu({ onReasoningChange });
+    openMainMenu();
 
-    await user.click(screen.getByRole("combobox", { name: "Model" }));
-    fireEvent.mouseEnter(screen.getByRole("button", { name: "Reasoning effort" }));
-    await user.click(screen.getByRole("menuitemradio", { name: "Low" }));
+    const reasoningTrigger = hoverPanel("reasoning");
+    advanceTimers(300);
+    const reasoningMenu = screen.getByRole("menu", { name: /^Reasoning effort$/ });
+
+    fireEvent.mouseLeave(reasoningTrigger);
+    expect(reasoningMenu).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("menuitemradio", { name: "Low" }));
 
     expect(onReasoningChange).toHaveBeenCalledWith("low");
+    expect(screen.getByRole("menu", { name: "Model options" })).toBeInTheDocument();
+    expect(screen.getByRole("menu", { name: /^Reasoning effort$/ })).toBeInTheDocument();
+  });
+
+  it("closes the parent and child menus on an outside pointer event", () => {
+    vi.useFakeTimers();
+    renderMenu();
+    openMainMenu();
+    hoverPanel("model");
+    advanceTimers(300);
+
+    expect(screen.getByRole("menu", { name: /^Model$/ })).toBeInTheDocument();
+    fireEvent.pointerDown(document.body);
+
+    expect(screen.queryByRole("menu", { name: "Model options" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("menu", { name: /^Model$/ })).not.toBeInTheDocument();
+  });
+
+  it("closes both menus with Escape while a child menu is open", () => {
+    vi.useFakeTimers();
+    renderMenu();
+    openMainMenu();
+    hoverPanel("model");
+    advanceTimers(300);
+
+    fireEvent.keyDown(document, { key: "Escape", code: "Escape" });
+
+    expect(screen.queryByRole("menu", { name: "Model options" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("menu", { name: /^Model$/ })).not.toBeInTheDocument();
+  });
+
+  it("keeps option selection callbacks unchanged", () => {
+    vi.useFakeTimers();
+    const onModelChange = vi.fn();
+    renderMenu({ onModelChange });
+    openMainMenu();
+    hoverPanel("model");
+    advanceTimers(300);
+
+    fireEvent.click(screen.getByRole("menuitemradio", { name: "gpt-5.6-sol" }));
+
+    expect(onModelChange).toHaveBeenCalledWith("gpt-5.6-sol");
+    expect(screen.getByRole("menu", { name: /^Model$/ })).toBeInTheDocument();
   });
 
   it("does not render the fast indicator in standard mode", () => {

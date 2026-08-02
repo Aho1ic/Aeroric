@@ -575,7 +575,7 @@ fn save_marketplace_cache_page(key: &str, page: &MarketplacePage) -> Result<(), 
     });
     cache
         .entries
-        .sort_by(|a, b| b.fetched_at.cmp(&a.fetched_at));
+        .sort_by_key(|b| std::cmp::Reverse(b.fetched_at));
     cache.entries.truncate(24);
     let raw = serde_json::to_string_pretty(&cache).map_err(|e| e.to_string())?;
     atomic_write(&marketplace_cache_path()?, &raw)
@@ -804,7 +804,7 @@ fn collect_skills(dir: &Path, skills: &mut Vec<Skill>, depth: usize) {
 fn scan_skills_in(hub_path: &Path) -> Vec<Skill> {
     let mut skills: Vec<Skill> = Vec::new();
     collect_skills(hub_path, &mut skills, 0);
-    skills.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    skills.sort_by_key(|a| a.name.to_lowercase());
     skills
 }
 
@@ -887,7 +887,7 @@ fn scan_prompt_skills(project_path: &Path, agent: &str) -> Vec<PromptSkill> {
     for root in prompt_skill_roots(project_path, agent) {
         collect_prompt_skills(&root, &mut skills, &mut seen_names);
     }
-    skills.sort_by(|left, right| left.name.to_lowercase().cmp(&right.name.to_lowercase()));
+    skills.sort_by_key(|left| left.name.to_lowercase());
     skills
 }
 

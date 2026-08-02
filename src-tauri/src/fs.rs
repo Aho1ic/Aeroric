@@ -734,6 +734,7 @@ pub async fn copy_paths_to_directory(
     .map_err(|e| e.to_string())?
 }
 
+#[cfg(any(target_os = "macos", test))]
 fn parse_clipboard_file_paths_output(raw: &str) -> Vec<String> {
     raw.lines()
         .map(str::trim)

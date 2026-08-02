@@ -70,6 +70,13 @@ export interface Task {
   approval?: ApprovalRequest;
 }
 
+/** task.create/task.resume 的远程确认结果。task 为桌面端权威快照,可为空以兼容旧桌面。 */
+export interface RemoteTaskActionResult {
+  accepted: boolean;
+  taskId?: string;
+  task?: Task;
+}
+
 export interface HostInfo {
   name: string;
   version: string;

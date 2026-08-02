@@ -162,7 +162,7 @@ pub(crate) fn detect_path(binary: &str) -> String {
     }
 
     let has_extension = Path::new(binary).extension().is_some();
-    find_on_path(binary, &path_value, has_extension).unwrap_or_default()
+    find_on_path(binary, path_value, has_extension).unwrap_or_default()
 }
 
 fn find_on_path(binary: &str, path_value: &str, has_extension: bool) -> Option<String> {

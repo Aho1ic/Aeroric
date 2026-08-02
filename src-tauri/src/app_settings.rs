@@ -403,7 +403,7 @@ fn normalize_config_path(path: String) -> String {
     }
     #[cfg(windows)]
     {
-        return expand_windows_env_vars(trimmed);
+        expand_windows_env_vars(trimmed)
     }
     #[cfg(not(windows))]
     trimmed.to_string()
@@ -1536,6 +1536,7 @@ fn validate_model_name(model: &str) -> bool {
             .any(|ch| matches!(ch, '\0' | '\n' | '\r' | '"' | '\\'))
 }
 
+#[cfg(not(windows))]
 fn model_picker_shell(selected_models: &[String]) -> String {
     let default_model = selected_models.first().cloned().unwrap_or_default();
     format!(
@@ -1690,6 +1691,7 @@ fn is_aeroric_codex_chat_proxy_wrapper(content: &str) -> bool {
     content.contains("# AERORIC_CODEX_CHAT_PROXY_VERSION=")
 }
 
+#[cfg(not(windows))]
 fn build_codex_agent_shell_script(draft: &AgentSetupDraft) -> String {
     let id = sanitize_custom_agent_id(&draft.id);
     let models = normalize_setup_models(draft);
@@ -1820,6 +1822,7 @@ exit "$codex_status"
     )
 }
 
+#[cfg(not(windows))]
 fn build_claude_code_agent_shell_script(draft: &AgentSetupDraft) -> String {
     let id = sanitize_custom_agent_id(&draft.id);
     let models = normalize_setup_models(draft);
@@ -2065,7 +2068,7 @@ exit $LASTEXITCODE
 fn build_codex_agent_script(draft: &AgentSetupDraft) -> String {
     #[cfg(windows)]
     {
-        return build_codex_agent_powershell_script(draft);
+        build_codex_agent_powershell_script(draft)
     }
     #[cfg(not(windows))]
     {
@@ -2076,7 +2079,7 @@ fn build_codex_agent_script(draft: &AgentSetupDraft) -> String {
 fn build_claude_code_agent_script(draft: &AgentSetupDraft) -> String {
     #[cfg(windows)]
     {
-        return build_claude_code_agent_powershell_script(draft);
+        build_claude_code_agent_powershell_script(draft)
     }
     #[cfg(not(windows))]
     {
@@ -2420,10 +2423,10 @@ fn parse_claude_credentials_file(content: &str) -> BuiltInAgentCredentials {
                             credentials.base_url = normalize_base_url(text);
                         }
                     }
-                    "ANTHROPIC_API_KEY" | "ANTHROPIC_AUTH_TOKEN" | "apiKey" | "api_key" => {
-                        if credentials.api_key.is_empty() && !text.trim().is_empty() {
-                            credentials.api_key = text.trim().to_string();
-                        }
+                    "ANTHROPIC_API_KEY" | "ANTHROPIC_AUTH_TOKEN" | "apiKey" | "api_key"
+                        if credentials.api_key.is_empty() && !text.trim().is_empty() =>
+                    {
+                        credentials.api_key = text.trim().to_string();
                     }
                     _ => {}
                 }

@@ -2267,12 +2267,11 @@ fn parse_parameter_information(
     let label_value = value.get("label")?;
     let label = if let Some(text) = label_value.as_str() {
         text.to_string()
-    } else if let Some(range) = label_value.as_array() {
+    } else {
+        let range = label_value.as_array()?;
         let start = range.first()?.as_u64()? as usize;
         let end = range.get(1)?.as_u64()? as usize;
         signature_label.get(start..end)?.to_string()
-    } else {
-        return None;
     };
     Some(LspParameterInformation {
         label,
@@ -2718,7 +2717,7 @@ fn apply_text_edits_to_content(content: &str, edits: &[LspTextEdit]) -> AppliedT
         ranges.push((start, end, text_edit.new_text.clone()));
     }
 
-    ranges.sort_by(|left, right| right.0.cmp(&left.0));
+    ranges.sort_by_key(|right| std::cmp::Reverse(right.0));
     let mut next_content = content.to_string();
     let mut edits_applied = 0;
     for (start, end, new_text) in ranges {

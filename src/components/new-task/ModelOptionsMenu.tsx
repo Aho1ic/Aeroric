@@ -1,4 +1,11 @@
-import { useState, type CSSProperties, type ReactNode } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+  type MouseEvent as ReactMouseEvent,
+  type ReactNode,
+} from "react";
 import { ChevronDown, ChevronRight, Cpu, Gauge, SlidersHorizontal, Zap } from "lucide-react";
 import * as Popover from "@radix-ui/react-popover";
 import type { AgentType } from "../../types";
@@ -13,6 +20,9 @@ import {
 import s from "../../styles";
 
 type Panel = "model" | "reasoning" | "speed";
+
+const SUBMENU_OPEN_DELAY_MS = 300;
+const MOUSE_MOVEMENT_TOLERANCE_PX = 2;
 
 function setMenuItemHover(el: HTMLElement, hover: boolean, active: boolean) {
   const highlighted = hover || active;
@@ -38,18 +48,22 @@ function optionButtonStyle(active: boolean): CSSProperties {
   };
 }
 
-function submenuStyle(active: boolean): CSSProperties {
+function submenuContentStyle(): CSSProperties {
   return {
-    flex: active ? "0 1 auto" : "0 0 0px",
-    width: active ? "max-content" : 0,
-    maxWidth: active ? "calc(100vw - 24px)" : 0,
+    width: "fit-content",
+    maxWidth: "calc(100vw - 24px)",
     minWidth: 0,
-    opacity: active ? 1 : 0,
-    transform: active ? "translateX(0)" : "translateX(-8px)",
-    pointerEvents: active ? "auto" : "none",
-    overflow: "hidden",
-    transition: "opacity 0.14s ease, transform 0.17s ease",
+    maxHeight: "min(320px, var(--radix-popover-content-available-height, calc(100vh - 42px)))",
+    overflowY: "auto",
+    overscrollBehavior: "contain",
+    padding: 6,
   };
+}
+
+function isModelOptionsSubmenuTarget(target: EventTarget | null) {
+  return (
+    target instanceof Element && target.closest("[data-model-options-submenu-content]") !== null
+  );
 }
 
 export function ModelOptionsMenu({
@@ -85,12 +99,82 @@ export function ModelOptionsMenu({
   const efforts = availableReasoningEfforts(codexLike, selectedModel);
   const [open, setOpen] = useState(false);
   const [panel, setPanel] = useState<Panel | null>(null);
+  const pendingPanelRef = useRef<Panel | null>(null);
+  const hoverTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastPointerPositionRef = useRef<{ x: number; y: number } | null>(null);
+
+  function clearHoverTimer() {
+    if (hoverTimerRef.current !== null) {
+      window.clearTimeout(hoverTimerRef.current);
+      hoverTimerRef.current = null;
+    }
+  }
+
+  function schedulePanelOpen(panelId: Panel) {
+    clearHoverTimer();
+    pendingPanelRef.current = panelId;
+    hoverTimerRef.current = window.setTimeout(() => {
+      if (pendingPanelRef.current === panelId) {
+        pendingPanelRef.current = null;
+        setPanel(panelId);
+      }
+      hoverTimerRef.current = null;
+    }, SUBMENU_OPEN_DELAY_MS);
+  }
+
+  function cancelPendingPanel(panelId: Panel) {
+    if (pendingPanelRef.current !== panelId) return;
+    pendingPanelRef.current = null;
+    lastPointerPositionRef.current = null;
+    clearHoverTimer();
+  }
+
+  function handlePanelMouseEnter(panelId: Panel, event: ReactMouseEvent<HTMLButtonElement>) {
+    lastPointerPositionRef.current = { x: event.clientX, y: event.clientY };
+    if (panel === panelId) return;
+    schedulePanelOpen(panelId);
+  }
+
+  function handlePanelMouseMove(panelId: Panel, event: ReactMouseEvent<HTMLButtonElement>) {
+    if (panel === panelId) return;
+    const previous = lastPointerPositionRef.current;
+    const current = { x: event.clientX, y: event.clientY };
+    lastPointerPositionRef.current = current;
+    if (!previous) {
+      schedulePanelOpen(panelId);
+      return;
+    }
+    if (
+      Math.abs(current.x - previous.x) <= MOUSE_MOVEMENT_TOLERANCE_PX &&
+      Math.abs(current.y - previous.y) <= MOUSE_MOVEMENT_TOLERANCE_PX
+    ) {
+      return;
+    }
+    schedulePanelOpen(panelId);
+  }
+
+  function handlePanelMouseLeave(panelId: Panel) {
+    cancelPendingPanel(panelId);
+  }
 
   function setMenuOpen(next: boolean) {
     setOpen(next);
-    if (!next) setPanel(null);
+    if (!next) {
+      clearHoverTimer();
+      pendingPanelRef.current = null;
+      lastPointerPositionRef.current = null;
+      setPanel(null);
+    }
     if (next) onOpen?.();
   }
+
+  useEffect(() => {
+    return () => {
+      if (hoverTimerRef.current !== null) {
+        window.clearTimeout(hoverTimerRef.current);
+      }
+    };
+  }, []);
 
   const modelLabel = selectedModel || (loading ? t("newTask.modelsLoading") : t("newTask.model"));
   const reasoningLabel = reasoningEffort
@@ -119,7 +203,6 @@ export function ModelOptionsMenu({
             onBlur={(event) => setMenuItemHover(event.currentTarget, false, active)}
             onClick={() => {
               onModelChange(model);
-              setPanel(null);
             }}
             title={model}
           >
@@ -161,7 +244,6 @@ export function ModelOptionsMenu({
           onBlur={(event) => setMenuItemHover(event.currentTarget, false, active)}
           onClick={() => {
             onReasoningChange(effort);
-            setPanel(null);
           }}
         >
           {effort ? t(`newTask.reasoning.${effort}`) : t("newTask.modelDefault")}
@@ -186,7 +268,6 @@ export function ModelOptionsMenu({
           onBlur={(event) => setMenuItemHover(event.currentTarget, false, active)}
           onClick={() => {
             onSpeedChange(item);
-            setPanel(null);
           }}
         >
           {item === "fast" && <Zap size={13} color="var(--speed-fast-fg)" aria-hidden="true" />}
@@ -206,7 +287,6 @@ export function ModelOptionsMenu({
 
     return (
       <div
-        id={`model-options-panel-${activePanel}`}
         role="menu"
         aria-label={
           activePanel === "model"
@@ -216,13 +296,9 @@ export function ModelOptionsMenu({
               : t("newTask.speedLabel")
         }
         data-model-options-panel={activePanel}
+        data-model-options-submenu-content={activePanel}
         style={{
-          ...submenuStyle(true),
-          maxHeight:
-            "min(320px, var(--radix-popover-content-available-height, calc(100vh - 42px)))",
-          overflowY: "auto",
-          overscrollBehavior: "contain",
-          paddingLeft: 6,
+          ...submenuContentStyle(),
           borderLeft: "1px solid var(--border-dim)",
         }}
       >
@@ -240,54 +316,90 @@ export function ModelOptionsMenu({
   ) {
     const active = panel === panelId;
     return (
-      <button
-        type="button"
-        aria-label={label}
-        aria-haspopup="menu"
-        aria-expanded={active}
-        aria-controls={active ? `model-options-panel-${panelId}` : undefined}
-        data-model-options-trigger={panelId}
-        style={optionButtonStyle(active)}
-        onMouseEnter={() => setPanel(panelId)}
-        onFocus={() => setPanel(panelId)}
-        onClick={() => setPanel(panelId)}
-        title={valueTitle}
-      >
-        {icon}
-        <span style={{ flex: "0 0 auto", minWidth: 0, whiteSpace: "nowrap" }}>{label}</span>
-        <span
-          style={{
-            minWidth: 0,
-            maxWidth: "min(220px, 36vw)",
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-            whiteSpace: "nowrap",
-            flexShrink: 1,
-            color: active ? "var(--text-secondary)" : "var(--text-hint)",
-            fontSize: 11,
-          }}
-        >
-          {value}
-        </span>
-        <ChevronRight
-          size={13}
-          strokeWidth={2.2}
-          aria-hidden="true"
-          data-model-options-arrow={panelId}
-          style={{
-            flexShrink: 0,
-            color: active ? "var(--accent)" : "var(--text-hint)",
-            opacity: active ? 1 : 0.72,
-            transform: active ? "translateX(2px)" : "translateX(0)",
-            transition: "color 0.12s ease, opacity 0.12s ease, transform 0.12s ease",
-          }}
-        />
-      </button>
+      <Popover.Root open={active} modal={false} onOpenChange={() => {}}>
+        <Popover.Anchor asChild>
+          <button
+            type="button"
+            aria-label={label}
+            aria-haspopup="menu"
+            aria-expanded={active}
+            aria-controls={active ? `model-options-panel-${panelId}` : undefined}
+            data-model-options-trigger={panelId}
+            style={optionButtonStyle(active)}
+            onMouseEnter={(event) => {
+              setMenuItemHover(event.currentTarget, true, active);
+              handlePanelMouseEnter(panelId, event);
+            }}
+            onMouseMove={(event) => handlePanelMouseMove(panelId, event)}
+            onMouseLeave={(event) => {
+              setMenuItemHover(event.currentTarget, false, active);
+              handlePanelMouseLeave(panelId);
+            }}
+            onFocus={(event) => setMenuItemHover(event.currentTarget, true, active)}
+            onBlur={(event) => setMenuItemHover(event.currentTarget, false, active)}
+            title={valueTitle}
+          >
+            {icon}
+            <span style={{ flex: "0 0 auto", minWidth: 0, whiteSpace: "nowrap" }}>{label}</span>
+            <span
+              style={{
+                minWidth: 0,
+                maxWidth: "min(220px, 36vw)",
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
+                flexShrink: 1,
+                color: active ? "var(--text-secondary)" : "var(--text-hint)",
+                fontSize: 11,
+              }}
+            >
+              {value}
+            </span>
+            <ChevronRight
+              size={13}
+              strokeWidth={2.2}
+              aria-hidden="true"
+              data-model-options-arrow={panelId}
+              style={{
+                flexShrink: 0,
+                color: active ? "var(--accent)" : "var(--text-hint)",
+                opacity: active ? 1 : 0.72,
+                transform: active ? "translateX(2px)" : "translateX(0)",
+                transition: "color 0.12s ease, opacity 0.12s ease, transform 0.12s ease",
+              }}
+            />
+          </button>
+        </Popover.Anchor>
+        <Popover.Portal>
+          <Popover.Content
+            id={`model-options-panel-${panelId}`}
+            side="right"
+            align="start"
+            sideOffset={6}
+            collisionPadding={8}
+            avoidCollisions={false}
+            data-model-options-submenu-content={panelId}
+            onEscapeKeyDown={(event) => {
+              event.preventDefault();
+              setMenuOpen(false);
+            }}
+            onOpenAutoFocus={(event) => event.preventDefault()}
+            onCloseAutoFocus={(event) => event.preventDefault()}
+            style={{
+              ...s.toolbarMenuContent,
+              ...submenuContentStyle(),
+              zIndex: 4001,
+            }}
+          >
+            {active ? renderSubmenu(panelId) : null}
+          </Popover.Content>
+        </Popover.Portal>
+      </Popover.Root>
     );
   }
 
   return (
-    <Popover.Root open={open} onOpenChange={setMenuOpen}>
+    <Popover.Root open={open} modal={false} onOpenChange={setMenuOpen}>
       <Popover.Trigger asChild>
         <button
           type="button"
@@ -373,6 +485,11 @@ export function ModelOptionsMenu({
           collisionPadding={8}
           avoidCollisions={false}
           data-model-options-content
+          onInteractOutside={(event) => {
+            if (isModelOptionsSubmenuTarget(event.target)) {
+              event.preventDefault();
+            }
+          }}
           style={{
             ...s.toolbarMenuContent,
             width: "fit-content",
@@ -392,7 +509,6 @@ export function ModelOptionsMenu({
               maxWidth: "100%",
               minWidth: 0,
               alignItems: "stretch",
-              gap: panel ? 6 : 0,
             }}
           >
             <div
@@ -435,7 +551,6 @@ export function ModelOptionsMenu({
                 t(`newTask.speed.${speed}`),
               )}
             </div>
-            <div style={submenuStyle(panel !== null)}>{panel ? renderSubmenu(panel) : null}</div>
           </div>
         </Popover.Content>
       </Popover.Portal>

@@ -401,10 +401,10 @@ fn list_ports_sync(project_path: &str) -> Result<Vec<ListeningPort>, String> {
             .filter(|output| output.status.success())
             .map(|output| parse_tasklist_csv(&String::from_utf8_lossy(&output.stdout)))
             .unwrap_or_default();
-        return Ok(parse_netstat_listen_output(
+        Ok(parse_netstat_listen_output(
             &String::from_utf8_lossy(&netstat_output.stdout),
             &process_names,
-        ));
+        ))
     }
 
     #[cfg(not(windows))]

@@ -112,6 +112,7 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
+          toolchain: 1.97.0
           targets: ${{ matrix.target }}
 
       - name: Cache Rust dependencies
