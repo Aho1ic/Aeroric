@@ -114,7 +114,16 @@ jobs:
           --all-targets --all-features -- -D warnings
 
       - name: Run Rust tests
+        if: runner.os != 'Windows'
         run: cargo test --manifest-path src-tauri/Cargo.toml --locked --all-targets --all-features
+
+      # The Tauri test binary cannot be launched by the Windows hosted runner's
+      # native GUI runtime, although it compiles successfully there.
+      - name: Compile Windows Rust tests
+        if: runner.os == 'Windows'
+        run: >
+          cargo test --manifest-path src-tauri/Cargo.toml --locked
+          --all-targets --all-features --no-run
 
       - name: Run remote protocol tests
         run: >
