@@ -182,6 +182,8 @@ pub fn dbx_generate_schema_sync_sql(
         database_type,
         target_schema.as_deref(),
         cascade_delete.unwrap_or(false),
+        None,
+        &[],
     ))
 }
 

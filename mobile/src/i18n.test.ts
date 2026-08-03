@@ -29,4 +29,9 @@ describe("i18n", () => {
     expect(t("perm.auto_edit")).toBe("替我审批");
     expect(t("perm.full_access")).toBe("完全访问");
   });
+
+  it("速度只有普通与快速", () => {
+    expect(t("newTask.speed.standard")).toBe("普通");
+    expect(t("newTask.speed.fast")).toBe("快速");
+  });
 });

@@ -9,7 +9,6 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   KeyboardAvoidingView,
   Platform,
-  Pressable,
   ScrollView,
   StyleSheet,
   Text,
@@ -21,6 +20,7 @@ import * as Clipboard from "expo-clipboard";
 import { ChevronsDownUp, ClipboardPaste, Monitor, Smartphone } from "lucide-react-native";
 import { t } from "../i18n";
 import { useConnection } from "../state/connection-context";
+import { AnimatedPressable } from "../ui/AnimatedPressable";
 import {
   REPEAT_DELAY_MS,
   REPEAT_INTERVAL_MS,
@@ -367,15 +367,15 @@ export function TerminalPane({ taskId, active }: { taskId: string; active: boole
         <View style={styles.accessoryRow}>
           {/* 固定在 ScrollView 外:开了输入法就是收起按钮,否则是手机/电脑视图切换 */}
           {imeFocused ? (
-            <Pressable
+            <AnimatedPressable
               onPress={() => injectTerm({ type: "blur" })}
               accessibilityLabel={t("term.hideKeyboard")}
               style={[styles.key, styles.keyPinned]}
             >
               <ChevronsDownUp size={17} color={theme.text} />
-            </Pressable>
+            </AnimatedPressable>
           ) : (
-            <Pressable
+            <AnimatedPressable
               onPress={toggleViewMode}
               accessibilityLabel={
                 viewMode === "phone" ? t("term.desktopView") : t("term.phoneView")
@@ -387,7 +387,7 @@ export function TerminalPane({ taskId, active }: { taskId: string; active: boole
               ) : (
                 <Monitor size={17} color={theme.onAccent} />
               )}
-            </Pressable>
+            </AnimatedPressable>
           )}
           <ScrollView
             horizontal
@@ -396,38 +396,41 @@ export function TerminalPane({ taskId, active }: { taskId: string; active: boole
             style={styles.keyScroll}
             contentContainerStyle={styles.keyScrollContent}
           >
-            <Pressable
+            <AnimatedPressable
               onPress={() => void pasteFromClipboard()}
               accessibilityLabel={t("term.paste")}
               style={styles.key}
             >
               <ClipboardPaste size={16} color={theme.text} />
               <Text style={styles.keyText}>{t("term.paste")}</Text>
-            </Pressable>
+            </AnimatedPressable>
             {TERMINAL_ACCESSORY_KEYS.map((key) => (
-              <Pressable
+              <AnimatedPressable
                 key={key.id}
                 onPressIn={() => startRepeat(key)}
                 onPressOut={stopRepeat}
                 style={styles.key}
               >
                 <Text style={styles.keyText}>{key.label}</Text>
-              </Pressable>
+              </AnimatedPressable>
             ))}
-            <Pressable onPress={() => adjustFont(-1)} style={styles.key}>
+            <AnimatedPressable onPress={() => adjustFont(-1)} style={styles.key}>
               <Text style={styles.keyText}>A-</Text>
-            </Pressable>
-            <Pressable onPress={() => adjustFont(1)} style={styles.key}>
+            </AnimatedPressable>
+            <AnimatedPressable onPress={() => adjustFont(1)} style={styles.key}>
               <Text style={styles.keyText}>A+</Text>
-            </Pressable>
+            </AnimatedPressable>
           </ScrollView>
         </View>
         {/* 输入法弹出后这一行让位给键盘,只留上面的粘贴/ESC 行 */}
         {imeFocused ? null : (
-          <Pressable style={styles.liveInputBar} onPress={() => injectTerm({ type: "focus" })}>
+          <AnimatedPressable
+            style={styles.liveInputBar}
+            onPress={() => injectTerm({ type: "focus" })}
+          >
             <Text style={styles.liveInputTitle}>{t("term.liveInput")}</Text>
             <Text style={styles.liveInputDetail}>{t("term.tapToShowKeyboard")}</Text>
-          </Pressable>
+          </AnimatedPressable>
         )}
       </View>
     </KeyboardAvoidingView>

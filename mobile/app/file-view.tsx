@@ -10,7 +10,6 @@ import {
   ActivityIndicator,
   Alert,
   Platform,
-  Pressable,
   ScrollView,
   StyleSheet,
   Text,
@@ -21,6 +20,7 @@ import { t } from "../src/i18n";
 import { useConnection } from "../src/state/connection-context";
 import type { ReadFileResult, WriteFileResult } from "../src/types";
 import { HeaderActions } from "../src/ui/HeaderIconButton";
+import { AnimatedPressable } from "../src/ui/AnimatedPressable";
 import { radii, spacing, theme } from "../src/ui/theme";
 import { useKeyboardInset } from "../src/ui/use-keyboard-inset";
 
@@ -95,21 +95,21 @@ export default function FileViewScreen() {
                   <ActivityIndicator size="small" color={theme.accent} />
                 ) : editing ? (
                   <>
-                    <Pressable hitSlop={8} onPress={cancelEdit}>
+                    <AnimatedPressable hitSlop={8} onPress={cancelEdit}>
                       <Text style={styles.headerLink}>{t("files.cancelEdit")}</Text>
-                    </Pressable>
-                    <Pressable hitSlop={8} onPress={save}>
+                    </AnimatedPressable>
+                    <AnimatedPressable hitSlop={8} onPress={save}>
                       <Text style={[styles.headerLink, styles.headerLinkStrong]}>
                         {t("files.save")}
                       </Text>
-                    </Pressable>
+                    </AnimatedPressable>
                   </>
                 ) : (
-                  <Pressable hitSlop={8} disabled={!canEdit} onPress={startEdit}>
+                  <AnimatedPressable hitSlop={8} disabled={!canEdit} onPress={startEdit}>
                     <Text style={[styles.headerLink, !canEdit && styles.headerLinkDisabled]}>
                       {t("files.edit")}
                     </Text>
-                  </Pressable>
+                  </AnimatedPressable>
                 )}
               </HeaderActions>
             ),
@@ -118,9 +118,9 @@ export default function FileViewScreen() {
       {error ? (
         <View style={styles.center}>
           <Text style={styles.errorText}>{error}</Text>
-          <Pressable style={styles.retryButton} onPress={refresh}>
+          <AnimatedPressable style={styles.retryButton} onPress={refresh}>
             <Text style={styles.retryText}>{t("common.retry")}</Text>
-          </Pressable>
+          </AnimatedPressable>
         </View>
       ) : !result ? (
         <View style={styles.center}>

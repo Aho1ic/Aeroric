@@ -59,4 +59,18 @@ describe("createProjectTaskPersister", () => {
 
     vi.useRealTimers();
   });
+
+  it("flushes a pending snapshot before a remote task request is acknowledged", async () => {
+    vi.useFakeTimers();
+    const save = vi.fn(() => Promise.resolve());
+    const persist = createProjectTaskPersister(save, { debounceMs: 350 });
+
+    persist("p1", [task("created", "p1", "pending")]);
+    await persist.flush("p1");
+
+    expect(save).toHaveBeenCalledTimes(1);
+    expect(save).toHaveBeenCalledWith("p1", [task("created", "p1", "pending")]);
+
+    vi.useRealTimers();
+  });
 });

@@ -114,11 +114,14 @@ fn options_from_request(request: &ExecuteQueryRequest) -> QueryExecutionOptions 
         max_rows: request.max_rows,
         fetch_size: request.fetch_size,
         page_size: request.page_size,
+        catalog: None,
         result_session_id: non_empty(request.result_session_id.clone()),
         client_session_id: non_empty(request.client_session_id.clone()),
         timeout_secs: request.timeout_secs,
         execution_id: non_empty(request.execution_id.clone()),
         use_transaction: None,
+        continue_on_error: false,
+        execution_mode: Default::default(),
     }
 }
 
@@ -127,11 +130,14 @@ fn options_from_multi_request(request: &ExecuteMultiRequest) -> QueryExecutionOp
         max_rows: request.max_rows,
         fetch_size: request.fetch_size,
         page_size: request.page_size,
+        catalog: None,
         result_session_id: non_empty(request.result_session_id.clone()),
         client_session_id: non_empty(request.client_session_id.clone()),
         timeout_secs: request.timeout_secs,
         execution_id: non_empty(request.execution_id.clone()),
         use_transaction: request.use_transaction,
+        continue_on_error: false,
+        execution_mode: Default::default(),
     }
 }
 
@@ -302,6 +308,7 @@ pub async fn dbx_close_result_session(
         &database,
         &session_id,
         client_session_id.as_deref(),
+        None,
     )
     .await
     .map(|_| ())

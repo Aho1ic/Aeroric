@@ -6,7 +6,7 @@
 import { Stack, useLocalSearchParams } from "expo-router";
 import { FolderTree, GitCompare, MessageSquare, SquareTerminal } from "lucide-react-native";
 import { useCallback, useState } from "react";
-import { ActivityIndicator, Alert, Pressable, StyleSheet, Text, View } from "react-native";
+import { ActivityIndicator, Alert, StyleSheet, Text, View } from "react-native";
 import { ChangesPane } from "../../src/changes/ChangesPane";
 import { FilesPane } from "../../src/files/FilesPane";
 import { t } from "../../src/i18n";
@@ -14,7 +14,9 @@ import { SessionPane } from "../../src/session/SessionPane";
 import { useConnection } from "../../src/state/connection-context";
 import { useTaskDetail } from "../../src/state/use-task-detail";
 import { TerminalPane } from "../../src/terminal/TerminalPane";
+import type { RemoteTaskActionResult } from "../../src/types";
 import { taskAcceptsInput } from "../../src/types";
+import { AnimatedSelection } from "../../src/ui/AnimatedSelection";
 import { HeaderIconButton } from "../../src/ui/HeaderIconButton";
 import { taskStatusMeta } from "../../src/ui/task-status";
 import { radii, theme } from "../../src/ui/theme";
@@ -27,7 +29,7 @@ export default function TaskDetailScreen() {
   const projectId = typeof params.projectId === "string" ? params.projectId : "";
   const fallbackName = typeof params.name === "string" ? params.name : "";
   const { request } = useConnection();
-  const { task, error, refresh } = useTaskDetail(projectId, taskId);
+  const { task, error, refresh, patchTask } = useTaskDetail(projectId, taskId);
   const [tab, setTab] = useState<TabKey>("main");
   const [acting, setActing] = useState(false);
 
@@ -42,20 +44,45 @@ export default function TaskDetailScreen() {
     task?.name?.trim() || task?.prompt.trim().split("\n")[0] || fallbackName || t("common.task");
 
   const runLifecycle = useCallback(
-    (method: "task.cancel" | "task.complete" | "task.resume", doneHint: string) => {
+    (method: "task.cancel" | "task.complete" | "task.resume") => {
       if (acting) return;
+      const previousTask = task;
+      const optimisticResume = method === "task.resume" && previousTask !== null;
       setActing(true);
-      request(method, { projectId, taskId })
-        .then(() => {
-          if (method === "task.resume") Alert.alert(doneHint);
-          refresh();
+      if (optimisticResume) {
+        patchTask({ status: "pending", approval: undefined, attentionRequestedAt: undefined });
+      }
+      const operation =
+        method === "task.resume"
+          ? request<RemoteTaskActionResult>(method, { projectId, taskId })
+          : request(method, { projectId, taskId });
+      operation
+        .then((result) => {
+          if (method === "task.resume") {
+            const response = result as RemoteTaskActionResult;
+            if (response.task) patchTask(response.task);
+            else
+              patchTask({
+                status: "pending",
+                approval: undefined,
+                attentionRequestedAt: undefined,
+              });
+          }
+          void refresh();
         })
-        .catch((err) =>
-          Alert.alert(t("common.opFailed"), err instanceof Error ? err.message : String(err)),
-        )
+        .catch((err) => {
+          if (optimisticResume && previousTask) {
+            patchTask({
+              status: previousTask.status,
+              approval: previousTask.approval,
+              attentionRequestedAt: previousTask.attentionRequestedAt,
+            });
+          }
+          Alert.alert(t("common.opFailed"), err instanceof Error ? err.message : String(err));
+        })
         .finally(() => setActing(false));
     },
-    [acting, projectId, refresh, request, taskId],
+    [acting, patchTask, projectId, refresh, request, task, taskId],
   );
 
   const showActions = useCallback(() => {
@@ -64,21 +91,17 @@ export default function TaskDetailScreen() {
     if (active) {
       buttons.push({
         text: t("task.markComplete"),
-        onPress: () => runLifecycle("task.complete", ""),
+        onPress: () => runLifecycle("task.complete"),
       });
       buttons.push({
         text: t("task.cancelTask"),
         style: "destructive" as const,
-        onPress: () => runLifecycle("task.cancel", ""),
+        onPress: () => runLifecycle("task.cancel"),
       });
     } else {
       buttons.push({
         text: task.status === "todo" ? t("task.startTask") : t("task.resumeTask"),
-        onPress: () =>
-          runLifecycle(
-            "task.resume",
-            task.status === "todo" ? t("task.startRequested") : t("task.resumeRequested"),
-          ),
+        onPress: () => runLifecycle("task.resume"),
       });
     }
     buttons.push({ text: t("common.close"), style: "cancel" as const });
@@ -123,40 +146,51 @@ export default function TaskDetailScreen() {
             {error ? t("task.loadFailed", { error }) : t("common.loading")}
           </Text>
         )}
-        <View style={styles.tabSwitch}>
-          {(
-            [
-              ["main", mainLabel],
-              ["files", t("task.tab.files")],
-              ["changes", t("task.tab.changes")],
-            ] as Array<[TabKey, string]>
-          ).map(([key, label]) => {
-            const on = tab === key;
-            const color = on ? theme.onAccent : theme.textSecondary;
-            return (
-              <Pressable
-                key={key}
-                accessibilityRole="button"
-                accessibilityLabel={label}
-                accessibilityState={{ selected: on }}
-                style={[styles.tabButton, on && styles.tabButtonActive]}
-                onPress={() => setTab(key)}
-              >
-                {key === "main" ? (
-                  mainPane === "terminal" ? (
-                    <SquareTerminal size={17} color={color} />
-                  ) : (
-                    <MessageSquare size={17} color={color} />
-                  )
-                ) : key === "files" ? (
-                  <FolderTree size={17} color={color} />
+        <AnimatedSelection
+          value={tab}
+          options={[
+            {
+              value: "main" as const,
+              label: mainLabel,
+              icon:
+                mainPane === "terminal" ? (
+                  <SquareTerminal
+                    size={17}
+                    color={tab === "main" ? theme.onAccent : theme.textSecondary}
+                  />
                 ) : (
-                  <GitCompare size={17} color={color} />
-                )}
-              </Pressable>
-            );
-          })}
-        </View>
+                  <MessageSquare
+                    size={17}
+                    color={tab === "main" ? theme.onAccent : theme.textSecondary}
+                  />
+                ),
+            },
+            {
+              value: "files" as const,
+              label: t("task.tab.files"),
+              icon: (
+                <FolderTree
+                  size={17}
+                  color={tab === "files" ? theme.onAccent : theme.textSecondary}
+                />
+              ),
+            },
+            {
+              value: "changes" as const,
+              label: t("task.tab.changes"),
+              icon: (
+                <GitCompare
+                  size={17}
+                  color={tab === "changes" ? theme.onAccent : theme.textSecondary}
+                />
+              ),
+            },
+          ]}
+          onChange={setTab}
+          compact
+          iconOnly
+          style={styles.tabSwitch}
+        />
       </View>
 
       <View style={[styles.paneWrap, !showSession && styles.paneHidden]}>
@@ -199,21 +233,8 @@ const styles = StyleSheet.create({
   statusDot: { width: 8, height: 8, borderRadius: radii.pill },
   statusText: { fontSize: 12.5, color: theme.textSecondary, flex: 1 },
   tabSwitch: {
-    flexDirection: "row",
     flexShrink: 0,
-    backgroundColor: theme.bgElevated,
-    borderRadius: radii.button,
-    padding: 2,
-    gap: 2,
   },
-  tabButton: {
-    width: 34,
-    height: 26,
-    alignItems: "center",
-    justifyContent: "center",
-    borderRadius: radii.button - 2,
-  },
-  tabButtonActive: { backgroundColor: theme.accent },
   paneWrap: { flex: 1 },
   paneHidden: { display: "none" },
 });

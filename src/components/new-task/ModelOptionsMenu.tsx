@@ -21,7 +21,7 @@ import s from "../../styles";
 
 type Panel = "model" | "reasoning" | "speed";
 
-const SUBMENU_OPEN_DELAY_MS = 300;
+const SUBMENU_OPEN_DELAY_MS = 150;
 const MOUSE_MOVEMENT_TOLERANCE_PX = 2;
 
 function setMenuItemHover(el: HTMLElement, hover: boolean, active: boolean) {
@@ -42,9 +42,11 @@ function optionButtonStyle(active: boolean): CSSProperties {
     background: active ? "var(--accent-subtle)" : "transparent",
     color: active ? "var(--text-primary)" : "var(--text-secondary)",
     textAlign: "left",
+    justifyContent: "flex-start",
     whiteSpace: "nowrap",
     flexShrink: 0,
-    transition: "background 0.12s ease, color 0.12s ease, transform 0.12s ease",
+    transition:
+      "background-color 180ms ease, color 180ms ease, transform 220ms cubic-bezier(0.22, 1, 0.36, 1)",
   };
 }
 
@@ -270,8 +272,10 @@ export function ModelOptionsMenu({
             onSpeedChange(item);
           }}
         >
+          <span style={{ flex: 1, minWidth: 0, textAlign: "left" }}>
+            {t(`newTask.speed.${item}`)}
+          </span>
           {item === "fast" && <Zap size={13} color="var(--speed-fast-fg)" aria-hidden="true" />}
-          {t(`newTask.speed.${item}`)}
         </button>
       );
     });
@@ -297,10 +301,8 @@ export function ModelOptionsMenu({
         }
         data-model-options-panel={activePanel}
         data-model-options-submenu-content={activePanel}
-        style={{
-          ...submenuContentStyle(),
-          borderLeft: "1px solid var(--border-dim)",
-        }}
+        className="model-options-scroll"
+        style={submenuContentStyle()}
       >
         {content}
       </div>
@@ -379,6 +381,7 @@ export function ModelOptionsMenu({
             collisionPadding={8}
             avoidCollisions={false}
             data-model-options-submenu-content={panelId}
+            className="model-options-submenu model-options-scroll"
             onEscapeKeyDown={(event) => {
               event.preventDefault();
               setMenuOpen(false);
@@ -388,6 +391,8 @@ export function ModelOptionsMenu({
             style={{
               ...s.toolbarMenuContent,
               ...submenuContentStyle(),
+              borderLeft: "none",
+              borderRight: "none",
               zIndex: 4001,
             }}
           >
@@ -465,6 +470,7 @@ export function ModelOptionsMenu({
                   role="img"
                   aria-label={t("newTask.speed.fast")}
                   title={t("newTask.speed.fast")}
+                  className="model-options-fast-indicator"
                   style={{ display: "inline-flex", flexShrink: 0, color: "var(--speed-fast-fg)" }}
                 >
                   <Zap size={13} strokeWidth={2.4} aria-hidden="true" />
@@ -543,10 +549,10 @@ export function ModelOptionsMenu({
                 <Gauge size={14} color="var(--text-muted)" aria-hidden="true" />,
                 t("newTask.speedLabel"),
                 <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+                  {t(`newTask.speed.${speed}`)}
                   {speed === "fast" && (
                     <Zap size={12} color="var(--speed-fast-fg)" aria-hidden="true" />
                   )}
-                  {t(`newTask.speed.${speed}`)}
                 </span>,
                 t(`newTask.speed.${speed}`),
               )}

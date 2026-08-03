@@ -97,6 +97,7 @@ fn default_connection_config(
     ConnectionConfig {
         id: id.to_string(),
         name: name.to_string(),
+        note: String::new(),
         db_type: dbx_type_to_core(db_type),
         driver_profile: None,
         driver_label: None,
@@ -109,6 +110,7 @@ fn default_connection_config(
         database,
         visible_databases: None,
         visible_schemas: None,
+        show_system_schemas: false,
         attached_databases: Vec::new(),
         init_script: None,
         color: None,
@@ -133,6 +135,7 @@ fn default_connection_config(
         redis_cluster_nodes: String::new(),
         redis_key_separator: default_redis_key_separator(),
         redis_scan_page_size: None,
+        redis_database_aliases: std::collections::HashMap::new(),
         etcd_endpoints: String::new(),
         gbase_server: String::new(),
         informix_server: String::new(),
@@ -143,6 +146,7 @@ fn default_connection_config(
         read_only,
         is_production: false,
         production_databases: Vec::new(),
+        database_info: None,
     }
 }
 

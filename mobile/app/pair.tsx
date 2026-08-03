@@ -5,7 +5,6 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Platform,
-  Pressable,
   ScrollView,
   StyleSheet,
   Text,
@@ -17,14 +16,11 @@ import { useHosts } from "../src/state/hosts-context";
 import { parsePairingOffer } from "../src/transport/pairing-offer";
 import { pairWithInvite } from "../src/transport/remote-connection";
 import type { PairedHost } from "../src/types";
+import { AnimatedPressable } from "../src/ui/AnimatedPressable";
 import { radii, theme } from "../src/ui/theme";
 
 function deviceDisplayName(): string {
-  return (
-    Device.deviceName ??
-    Device.modelName ??
-    (Platform.OS === "ios" ? "iPhone" : "Android")
-  );
+  return Device.deviceName ?? Device.modelName ?? (Platform.OS === "ios" ? "iPhone" : "Android");
 }
 
 function newHostId(): string {
@@ -117,14 +113,15 @@ export default function PairScreen() {
         ) : (
           <View style={styles.cameraPlaceholder}>
             <Text style={styles.cameraHint}>
-              {permission?.canAskAgain === false
-                ? t("pair.cameraDenied")
-                : t("pair.cameraNeeded")}
+              {permission?.canAskAgain === false ? t("pair.cameraDenied") : t("pair.cameraNeeded")}
             </Text>
             {permission?.canAskAgain !== false ? (
-              <Pressable style={styles.primaryButton} onPress={() => void requestPermission()}>
+              <AnimatedPressable
+                style={styles.primaryButton}
+                onPress={() => void requestPermission()}
+              >
                 <Text style={styles.primaryButtonText}>{t("pair.grantCamera")}</Text>
-              </Pressable>
+              </AnimatedPressable>
             ) : null}
           </View>
         )}
@@ -147,13 +144,13 @@ export default function PairScreen() {
         autoCorrect={false}
         multiline
       />
-      <Pressable
+      <AnimatedPressable
         style={[styles.primaryButton, (!manualCode.trim() || pairing) && styles.buttonDisabled]}
         disabled={!manualCode.trim() || pairing}
         onPress={() => void handleCode(manualCode)}
       >
         <Text style={styles.primaryButtonText}>{t("pair.connect")}</Text>
-      </Pressable>
+      </AnimatedPressable>
 
       {error ? <Text style={styles.errorText}>{error}</Text> : null}
     </ScrollView>
@@ -173,7 +170,13 @@ const styles = StyleSheet.create({
     borderColor: theme.border,
   },
   camera: { flex: 1 },
-  cameraPlaceholder: { flex: 1, alignItems: "center", justifyContent: "center", gap: 14, padding: 24 },
+  cameraPlaceholder: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 14,
+    padding: 24,
+  },
   cameraHint: { color: theme.textSecondary, fontSize: 13, textAlign: "center", lineHeight: 20 },
   pairingOverlay: {
     ...StyleSheet.absoluteFillObject,

@@ -660,9 +660,10 @@ pub fn remote_complete_task_request(
     accepted: bool,
     task_id: Option<String>,
     error: Option<String>,
+    task: Option<serde_json::Value>,
 ) -> Result<(), String> {
     let result = if accepted {
-        Ok(json!({ "accepted": true, "taskId": task_id }))
+        Ok(json!({ "accepted": true, "taskId": task_id, "task": task }))
     } else {
         Err(error.unwrap_or_else(|| "Desktop rejected the task request".to_string()))
     };

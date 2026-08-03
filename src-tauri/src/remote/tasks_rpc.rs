@@ -323,8 +323,8 @@ pub(crate) async fn agents_models(params: &Value) -> Result<Value, String> {
 }
 
 /// RPC `task.create { projectId, prompt, agent, permissionMode }`:参数校验后
-/// 转桌面前端 handleSubmitTask。projectId 是否存在由前端判定并 toast,
-/// agent 需要从桌面设置中确认存在,避免未知值落入默认启动路径。
+/// 转桌面前端 handleSubmitTask。成功响应同时携带桌面生成的任务快照,
+/// 让手机可以先就地渲染,再用 tasks.list 做一致性校验。
 pub(crate) async fn task_create<R: Runtime>(
     app: &AppHandle<R>,
     params: &Value,

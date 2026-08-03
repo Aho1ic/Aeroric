@@ -28,6 +28,8 @@ const MODES: LaunchMode[] = ["local", "worktree"];
 
 function setMenuItemHover(el: HTMLElement, hover: boolean) {
   el.style.background = hover ? "var(--accent-subtle)" : "transparent";
+  el.style.color = "var(--text-primary)";
+  el.style.transform = hover ? "translateX(1px)" : "translateX(0)";
 }
 
 export function LaunchModeSelector({

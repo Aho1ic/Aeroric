@@ -1,12 +1,13 @@
 /** 任务行卡片:首页曾内联,现由项目页复用。点击进入任务详情。 */
 
 import { router } from "expo-router";
-import { Pressable, StyleSheet, Text, View } from "react-native";
+import { StyleSheet, Text, View } from "react-native";
 import { t } from "../i18n";
 import type { Task } from "../types";
 import { relativeTime } from "../ui/relative-time";
 import { taskStatusMeta } from "../ui/task-status";
 import { radii, spacing, theme, typography } from "../ui/theme";
+import { AnimatedPressable } from "../ui/AnimatedPressable";
 
 export function taskTitle(task: Task): string {
   return task.name?.trim() || task.prompt.trim().split("\n")[0] || t("home.unnamedTask");
@@ -17,7 +18,7 @@ export function TaskRow({ task }: { task: Task }) {
   const title = taskTitle(task);
   const needsInput = task.status === "input_required";
   return (
-    <Pressable
+    <AnimatedPressable
       style={({ pressed }) => [
         styles.taskRow,
         needsInput && styles.taskRowAttention,
@@ -40,7 +41,7 @@ export function TaskRow({ task }: { task: Task }) {
           {`  ·  ${task.agent}  ·  ${relativeTime(task.createdAt)}`}
         </Text>
       </View>
-    </Pressable>
+    </AnimatedPressable>
   );
 }
 

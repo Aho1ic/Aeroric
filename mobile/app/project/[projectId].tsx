@@ -12,6 +12,7 @@ import { NewTaskSheet } from "../../src/components/NewTaskSheet";
 import { TaskRow } from "../../src/components/TaskRow";
 import { t } from "../../src/i18n";
 import { useHostTasks } from "../../src/state/use-host-tasks";
+import type { Task } from "../../src/types";
 import { HeaderActions, HeaderIconButton } from "../../src/ui/HeaderIconButton";
 import { taskStatusRank } from "../../src/ui/task-status";
 import { spacing, theme, typography } from "../../src/ui/theme";
@@ -20,7 +21,7 @@ export default function ProjectScreen() {
   const params = useLocalSearchParams<{ projectId: string; name?: string }>();
   const projectId = typeof params.projectId === "string" ? params.projectId : "";
   const fallbackName = typeof params.name === "string" ? params.name : "";
-  const { sections, loading, error, refresh } = useHostTasks();
+  const { sections, loading, error, refresh, upsertTask } = useHostTasks();
   const [showChanges, setShowChanges] = useState(false);
   const [newTaskOpen, setNewTaskOpen] = useState(false);
 
@@ -42,6 +43,14 @@ export default function ProjectScreen() {
   const openFiles = useCallback(() => {
     router.push({ pathname: "/files", params: { projectId, name: title } });
   }, [projectId, title]);
+
+  const onCreated = useCallback(
+    (task: Task) => {
+      upsertTask(task);
+      void refresh();
+    },
+    [refresh, upsertTask],
+  );
 
   return (
     <View style={styles.screen}>
@@ -100,7 +109,7 @@ export default function ProjectScreen() {
         visible={newTaskOpen}
         lockedProjectId={projectId}
         onClose={() => setNewTaskOpen(false)}
-        onCreated={refresh}
+        onCreated={onCreated}
       />
     </View>
   );

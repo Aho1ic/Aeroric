@@ -30,11 +30,11 @@ jobs:
           # builds. `Cargo.toml` uses a `path = "../dbx/..."` dependency whose
           # source is NOT constrained by Cargo.lock, so without this pin every
           # run would silently pull dbx's moving main HEAD. Bump deliberately.
-          DBX_REF: 3f6e885ee0c5fdfde2d91d461b03f518068e8a4e
+          DBX_REF: 8559aec8bce4efeb4f52080da8ab1839733ef45b
         run: |
           set -euo pipefail
           git init ../dbx
-          git -C ../dbx fetch --depth 1 https://github.com/Aho1ic/dbx.git "$DBX_REF"
+          git -C ../dbx fetch --depth 1 https://github.com/t8y2/dbx.git "$DBX_REF"
           git -C ../dbx checkout --detach "$DBX_REF"
 
       - name: Install Linux system dependencies

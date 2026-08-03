@@ -10,10 +10,10 @@ export function useTaskDetail(projectId: string, taskId: string) {
   const [error, setError] = useState<string | null>(null);
   const requestSeq = useRef(0);
 
-  const refresh = useCallback(() => {
-    if (status !== "online" || !projectId || !taskId) return;
+  const refresh = useCallback((): Promise<void> => {
+    if (status !== "online" || !projectId || !taskId) return Promise.resolve();
     const seq = ++requestSeq.current;
-    request<Task>("tasks.get", { projectId, taskId })
+    return request<Task>("tasks.get", { projectId, taskId })
       .then((loaded) => {
         if (requestSeq.current !== seq) return;
         setTask(loaded);
@@ -24,6 +24,10 @@ export function useTaskDetail(projectId: string, taskId: string) {
         setError(err instanceof Error ? err.message : String(err));
       });
   }, [projectId, request, status, taskId]);
+
+  const patchTask = useCallback((patch: Partial<Task>) => {
+    setTask((prev) => (prev ? { ...prev, ...patch } : prev));
+  }, []);
 
   useEffect(() => {
     if (status === "online") refresh();
@@ -54,5 +58,5 @@ export function useTaskDetail(projectId: string, taskId: string) {
     });
   }, [onPush, taskId]);
 
-  return { task, error, refresh };
+  return { task, error, refresh, patchTask };
 }

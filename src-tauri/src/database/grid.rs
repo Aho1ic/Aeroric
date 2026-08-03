@@ -368,12 +368,15 @@ mod tests {
             columns: vec!["count".to_string()],
             column_types: Vec::new(),
             column_sortables: Vec::new(),
+            spatial_columns: Vec::new(),
+            spatial_values: Vec::new(),
             rows: vec![vec![json!(42)]],
             affected_rows: 0,
             execution_time_ms: 1,
             truncated: false,
             session_id: None,
             has_more: false,
+            elasticsearch_raw_body: None,
         };
 
         assert_eq!(first_u64_cell(&result), Some(42));
@@ -389,6 +392,7 @@ mod tests {
             source_columns: Some(vec![Some("id".to_string()), Some("email".to_string())]),
             rows: vec![vec![json!(1), json!("alice@example.com")]],
             exclude_primary_keys: false,
+            include_computed_columns: false,
             insert_mode: Default::default(),
         });
 
@@ -422,6 +426,7 @@ mod tests {
     fn builds_context_filter_condition_with_dbx_core() {
         let condition = context_filter_condition(DataGridContextFilterConditionOptions {
             database_type: Some(DatabaseType::Postgres),
+            identifier_quote: None,
             column_name: "email".to_string(),
             mode: DataGridContextFilterMode::Like,
             value: json!("alice@example.com"),

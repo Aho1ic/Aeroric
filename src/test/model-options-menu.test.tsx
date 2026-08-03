@@ -105,13 +105,13 @@ describe("ModelOptionsMenu", () => {
     expect(screen.queryByRole("menu", { name: /^Model$/ })).not.toBeInTheDocument();
   });
 
-  it("does not open a submenu before the 300ms stationary delay", () => {
+  it("does not open a submenu before the 150ms stationary delay", () => {
     vi.useFakeTimers();
     renderMenu();
     openMainMenu();
 
     hoverPanel("model");
-    advanceTimers(299);
+    advanceTimers(149);
 
     expect(screen.queryByRole("menu", { name: /^Model$/ })).not.toBeInTheDocument();
   });
@@ -129,19 +129,19 @@ describe("ModelOptionsMenu", () => {
 
     expect(screen.queryByRole("menu", { name: /^Model$/ })).not.toBeInTheDocument();
 
-    advanceTimers(299);
+    advanceTimers(149);
     expect(screen.queryByRole("menu", { name: /^Model$/ })).not.toBeInTheDocument();
     advanceTimers(1);
     expect(screen.getByRole("menu", { name: /^Model$/ })).toBeInTheDocument();
   });
 
-  it("opens after 300ms when only slight pointer jitter occurs", () => {
+  it("opens after 150ms when only slight pointer jitter occurs", () => {
     vi.useFakeTimers();
     renderMenu();
     openMainMenu();
 
     const trigger = hoverPanel("model", 100, 100);
-    advanceTimers(299);
+    advanceTimers(149);
     fireEvent.mouseMove(trigger, { clientX: 101, clientY: 101 });
     advanceTimers(1);
 
@@ -154,7 +154,7 @@ describe("ModelOptionsMenu", () => {
     const mainMenu = openMainMenu();
 
     hoverPanel("model");
-    advanceTimers(300);
+    advanceTimers(150);
 
     const mainContent = document.querySelector<HTMLElement>("[data-model-options-content]");
     expect(mainContent).toHaveAttribute("data-side", "bottom");
@@ -167,7 +167,7 @@ describe("ModelOptionsMenu", () => {
     expect(screen.getByRole("menu", { name: /^Model$/ })).toBeInTheDocument();
     expect(screen.queryByRole("menu", { name: /^Reasoning effort$/ })).not.toBeInTheDocument();
 
-    advanceTimers(299);
+    advanceTimers(149);
     expect(screen.getByRole("menu", { name: /^Model$/ })).toBeInTheDocument();
     advanceTimers(1);
 
@@ -185,7 +185,7 @@ describe("ModelOptionsMenu", () => {
 
     openMainMenu();
     const modelTrigger = hoverPanel("model");
-    advanceTimers(300);
+    advanceTimers(150);
 
     const content = document.querySelector<HTMLElement>("[data-model-options-content]");
     const mainMenu = screen.getByRole("menu", { name: "Model options" });
@@ -214,7 +214,7 @@ describe("ModelOptionsMenu", () => {
     openMainMenu();
 
     const reasoningTrigger = hoverPanel("reasoning");
-    advanceTimers(300);
+    advanceTimers(150);
     const reasoningMenu = screen.getByRole("menu", { name: /^Reasoning effort$/ });
 
     fireEvent.mouseLeave(reasoningTrigger);
@@ -232,7 +232,7 @@ describe("ModelOptionsMenu", () => {
     renderMenu();
     openMainMenu();
     hoverPanel("model");
-    advanceTimers(300);
+    advanceTimers(150);
 
     expect(screen.getByRole("menu", { name: /^Model$/ })).toBeInTheDocument();
     fireEvent.pointerDown(document.body);
@@ -246,7 +246,7 @@ describe("ModelOptionsMenu", () => {
     renderMenu();
     openMainMenu();
     hoverPanel("model");
-    advanceTimers(300);
+    advanceTimers(150);
 
     fireEvent.keyDown(document, { key: "Escape", code: "Escape" });
 
@@ -260,7 +260,7 @@ describe("ModelOptionsMenu", () => {
     renderMenu({ onModelChange });
     openMainMenu();
     hoverPanel("model");
-    advanceTimers(300);
+    advanceTimers(150);
 
     fireEvent.click(screen.getByRole("menuitemradio", { name: "gpt-5.6-sol" }));
 
@@ -272,5 +272,43 @@ describe("ModelOptionsMenu", () => {
     renderMenu({ speed: "standard" });
 
     expect(screen.queryByTestId("fast-indicator")).not.toBeInTheDocument();
+  });
+
+  it("hides submenu edge lines and scrollbars while keeping the entrance animated", () => {
+    vi.useFakeTimers();
+    renderMenu({ models: Array.from({ length: 24 }, (_, index) => `gpt-model-${index}`) });
+    openMainMenu();
+    hoverPanel("model");
+    advanceTimers(150);
+
+    const submenuContent = getSubmenuContent("model");
+    const submenu = screen.getByRole("menu", { name: /^Model$/ });
+
+    expect(submenuContent).toHaveClass("model-options-submenu", "model-options-scroll");
+    expect(submenuContent?.style.borderLeftStyle).toBe("none");
+    expect(submenuContent?.style.borderRightStyle).toBe("none");
+    expect(submenu).toHaveClass("model-options-scroll");
+  });
+
+  it("keeps speed labels left aligned and places the fast icon after its label", () => {
+    vi.useFakeTimers();
+    renderMenu();
+    openMainMenu();
+    hoverPanel("speed");
+    advanceTimers(150);
+
+    const standard = screen.getByRole("menuitemradio", { name: "Standard" });
+    const fast = screen.getByRole("menuitemradio", { name: "Fast" });
+
+    expect(standard).toHaveStyle({ justifyContent: "flex-start" });
+    expect(fast).toHaveStyle({ justifyContent: "flex-start" });
+    expect(fast.firstElementChild).toHaveTextContent("Fast");
+    expect(fast.lastElementChild?.tagName).toBe("svg");
+  });
+
+  it("adds the flowing blue indicator class to collapsed fast mode", () => {
+    renderMenu({ speed: "fast" });
+
+    expect(screen.getByTestId("fast-indicator")).toHaveClass("model-options-fast-indicator");
   });
 });

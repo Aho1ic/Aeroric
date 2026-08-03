@@ -7,11 +7,12 @@
 import { router } from "expo-router";
 import { ChevronLeft, FileText, Folder } from "lucide-react-native";
 import { useCallback, useEffect, useState } from "react";
-import { FlatList, Pressable, StyleSheet, Text, View } from "react-native";
+import { FlatList, StyleSheet, Text, View } from "react-native";
 import { t } from "../i18n";
 import { useConnection } from "../state/connection-context";
 import type { FsEntryView, ProjectFilesResult } from "../types";
 import { radii, spacing, theme } from "../ui/theme";
+import { AnimatedPressable } from "../ui/AnimatedPressable";
 
 function parentOf(path: string): string {
   const parts = path.split("/").filter(Boolean);
@@ -82,7 +83,7 @@ export function FilesPane({
   return (
     <View style={styles.pane}>
       {path ? (
-        <Pressable
+        <AnimatedPressable
           style={styles.crumbBar}
           accessibilityRole="button"
           accessibilityLabel={t("files.back")}
@@ -92,7 +93,7 @@ export function FilesPane({
           <Text style={styles.crumbText} numberOfLines={1} ellipsizeMode="head">
             {path}
           </Text>
-        </Pressable>
+        </AnimatedPressable>
       ) : null}
       <FlatList
         data={entries ?? []}
@@ -106,14 +107,14 @@ export function FilesPane({
               {error ? error : loading ? t("common.loading") : t("files.empty")}
             </Text>
             {error ? (
-              <Pressable style={styles.retryButton} onPress={refresh}>
+              <AnimatedPressable style={styles.retryButton} onPress={refresh}>
                 <Text style={styles.retryText}>{t("common.retry")}</Text>
-              </Pressable>
+              </AnimatedPressable>
             ) : null}
           </View>
         }
         renderItem={({ item }) => (
-          <Pressable
+          <AnimatedPressable
             style={styles.row}
             onPress={() =>
               item.is_dir
@@ -133,7 +134,7 @@ export function FilesPane({
               {item.name}
             </Text>
             {item.is_dir ? <Text style={styles.chevron}>›</Text> : null}
-          </Pressable>
+          </AnimatedPressable>
         )}
       />
     </View>

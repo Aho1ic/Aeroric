@@ -14,6 +14,9 @@ export const theme = {
   /** 主行动按钮的亮色填充(orca surfaceBright)。 */
   surfaceBright: "#f5f5f5",
   accent: "#3b82f6",
+  accentSoft: "#1d355f",
+  accentPressed: "#2563c7",
+  accentBorder: "#376fc7",
   onAccent: "#ffffff",
   info: "#3b82f6",
   success: "#22c55e",

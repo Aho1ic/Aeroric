@@ -4,7 +4,8 @@
  */
 
 import type { ReactNode } from "react";
-import { Pressable, StyleSheet, View } from "react-native";
+import { StyleSheet, View } from "react-native";
+import { AnimatedPressable } from "./AnimatedPressable";
 import { radii, spacing, theme } from "./theme";
 
 export function HeaderIconButton({
@@ -21,7 +22,7 @@ export function HeaderIconButton({
   children: ReactNode;
 }) {
   return (
-    <Pressable
+    <AnimatedPressable
       hitSlop={8}
       accessibilityRole="button"
       accessibilityLabel={label}
@@ -36,7 +37,7 @@ export function HeaderIconButton({
       ]}
     >
       {children}
-    </Pressable>
+    </AnimatedPressable>
   );
 }
 

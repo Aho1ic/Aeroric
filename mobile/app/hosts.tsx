@@ -1,18 +1,11 @@
 import { Link } from "expo-router";
 import { useState } from "react";
-import {
-  Alert,
-  FlatList,
-  Pressable,
-  StyleSheet,
-  Text,
-  TextInput,
-  View,
-} from "react-native";
+import { Alert, FlatList, StyleSheet, Text, TextInput, View } from "react-native";
 import { t } from "../src/i18n";
 import { useConnection } from "../src/state/connection-context";
 import { useHosts } from "../src/state/hosts-context";
 import type { PairedHost } from "../src/types";
+import { AnimatedPressable } from "../src/ui/AnimatedPressable";
 import { radii, theme } from "../src/ui/theme";
 
 export default function HostsScreen() {
@@ -69,11 +62,14 @@ export default function HostsScreen() {
           const isEditing = item.id === editingHostId;
           return (
             <View style={[styles.hostCard, isActive && styles.hostCardActive]}>
-              <Pressable
+              <AnimatedPressable
                 style={styles.hostRow}
                 onPress={() => {
                   void setActiveHost(item.id).catch((err) => {
-                    Alert.alert(t("hosts.switchFailed"), err instanceof Error ? err.message : String(err));
+                    Alert.alert(
+                      t("hosts.switchFailed"),
+                      err instanceof Error ? err.message : String(err),
+                    );
                   });
                 }}
                 onLongPress={() => confirmRemove(item)}
@@ -82,26 +78,31 @@ export default function HostsScreen() {
                   <Text style={styles.hostName}>
                     {item.name}
                     {isActive && status === "online" ? (
-                      <Text style={{ color: theme.success }}>  ●</Text>
+                      <Text style={{ color: theme.success }}> ●</Text>
                     ) : null}
                   </Text>
                   <Text style={styles.hostEndpoint} numberOfLines={1}>
                     {item.endpoints.length > 1
-                      ? t("hosts.endpointCount", { first: item.endpoints[0], count: item.endpoints.length })
+                      ? t("hosts.endpointCount", {
+                          first: item.endpoints[0],
+                          count: item.endpoints.length,
+                        })
                       : item.endpoints[0]}
                   </Text>
                 </View>
                 {isActive ? <Text style={styles.activeBadge}>{t("hosts.active")}</Text> : null}
-                <Pressable
+                <AnimatedPressable
                   hitSlop={10}
                   onPress={() => (isEditing ? setEditingHostId(null) : startEditEndpoints(item))}
                 >
-                  <Text style={styles.editText}>{isEditing ? t("hosts.collapse") : t("hosts.edit")}</Text>
-                </Pressable>
-                <Pressable hitSlop={10} onPress={() => confirmRemove(item)}>
+                  <Text style={styles.editText}>
+                    {isEditing ? t("hosts.collapse") : t("hosts.edit")}
+                  </Text>
+                </AnimatedPressable>
+                <AnimatedPressable hitSlop={10} onPress={() => confirmRemove(item)}>
                   <Text style={styles.removeText}>{t("hosts.remove")}</Text>
-                </Pressable>
-              </Pressable>
+                </AnimatedPressable>
+              </AnimatedPressable>
               {isEditing ? (
                 <View style={styles.editArea}>
                   <Text style={styles.editHint}>{t("hosts.endpointsHint")}</Text>
@@ -115,13 +116,13 @@ export default function HostsScreen() {
                     placeholder={"ws://192.168.1.10:6790\nwss://relay.example.com/connect/…"}
                     placeholderTextColor={theme.textHint}
                   />
-                  <Pressable
+                  <AnimatedPressable
                     style={[styles.saveButton, savingEndpoints && styles.buttonDisabled]}
                     disabled={savingEndpoints}
                     onPress={() => saveEndpoints(item)}
                   >
                     <Text style={styles.saveButtonText}>{t("hosts.saveEndpoints")}</Text>
-                  </Pressable>
+                  </AnimatedPressable>
                 </View>
               ) : null}
             </View>
@@ -130,9 +131,9 @@ export default function HostsScreen() {
         ListEmptyComponent={<Text style={styles.emptyText}>{t("hosts.empty")}</Text>}
         ListFooterComponent={
           <Link href="/pair" asChild>
-            <Pressable style={styles.addButton}>
+            <AnimatedPressable style={styles.addButton}>
               <Text style={styles.addButtonText}>{t("hosts.addNew")}</Text>
-            </Pressable>
+            </AnimatedPressable>
           </Link>
         }
       />

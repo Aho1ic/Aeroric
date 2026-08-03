@@ -76,6 +76,7 @@ import {
   persistProjects,
   persistProjectTasks,
   persistProjectTasksQuietly,
+  flushProjectTasks,
   PROJECT_RAIL_WIDTH_STORAGE_KEY,
   SELECTED_CONDA_ENV_KEY,
   shouldIgnoreTaskStatusTransition,
@@ -515,13 +516,19 @@ function App() {
         speed,
       } = e.payload;
       if (!requestId) return;
-      const complete = async (accepted: boolean, resultTaskId?: string, error?: string) => {
+      const complete = async (
+        accepted: boolean,
+        resultTaskId?: string,
+        error?: string,
+        resultTask?: Task,
+      ) => {
         try {
           await invoke("remote_complete_task_request", {
             requestId,
             accepted,
             taskId: resultTaskId,
             error,
+            task: resultTask,
           });
         } catch (err) {
           console.error("remote_complete_task_request failed", err);
@@ -568,10 +575,30 @@ function App() {
         // todo 任务从未启动过:走首次启动而非 session 恢复
         const accepted =
           task.status === "todo" ? current.runTodo(task) : await current.resume(taskId);
+        const pendingTask = accepted
+          ? {
+              ...task,
+              status: "pending" as TaskStatus,
+              approval: undefined,
+              attentionRequestedAt: undefined,
+            }
+          : undefined;
+        if (accepted && pendingTask) {
+          // React 的 setTasks updater 可能在当前异步回调返回后才执行;
+          // 先把远程确认快照直接排队,再 flush,避免手机下一次 tasks.list 读到旧文件。
+          persistProjectTasks(
+            task.projectId,
+            current.tasks.map((item) => (item.id === task.id ? pendingTask : item)),
+            showToastRef.current,
+            formatSaveTasksErrorRef.current,
+          );
+          await flushProjectTasks(task.projectId);
+        }
         await complete(
           accepted,
           accepted ? taskId : undefined,
           accepted ? undefined : "Task cannot be resumed on this desktop",
+          pendingTask,
         );
         return;
       }
@@ -593,7 +620,7 @@ function App() {
         await complete(false, undefined, "SSH connection is not configured on the desktop");
         return;
       }
-      const createdTaskId = await current.submit(project, {
+      const createdTask = await current.submit(project, {
         prompt,
         agent: (agent ?? "claude") as AgentType,
         permissionMode: (permissionMode ?? "ask") as PermissionMode,
@@ -606,10 +633,24 @@ function App() {
         launchMode: "local",
         baseBranch: "",
       });
+      // Remote callers must not race the debounced desktop task write. The
+      // returned task snapshot lets the phone render immediately while this
+      // flush guarantees the next tasks.list/tasks.get sees the same task.
+      if (createdTask) {
+        // 同上:不要依赖 setTasks updater 已经完成,远程响应前显式排入最新快照。
+        persistProjectTasks(
+          project.id,
+          [createdTask, ...current.tasks],
+          showToastRef.current,
+          formatSaveTasksErrorRef.current,
+        );
+        await flushProjectTasks(project.id);
+      }
       await complete(
-        !!createdTaskId,
-        createdTaskId ?? undefined,
-        createdTaskId ? undefined : "Desktop rejected the task creation request",
+        !!createdTask,
+        createdTask?.id,
+        createdTask ? undefined : "Desktop rejected the task creation request",
+        createdTask ?? undefined,
       );
     });
     return () => {
@@ -774,6 +815,7 @@ function App() {
       reasoningEffort: task.reasoningEffort,
       speed: task.speed,
       permissionMode: task.permissionMode,
+      forcePromptInjection: Boolean(task.prompt.trim()),
       cols: tm.terminalSizeRef.current.cols,
       rows: tm.terminalSizeRef.current.rows,
       onOutput: tm.createOutputChannel(task.id),
@@ -795,6 +837,7 @@ function App() {
       reasoningEffort: task.reasoningEffort,
       speed: task.speed,
       permissionMode: task.permissionMode,
+      forcePromptInjection: Boolean(task.prompt.trim()),
       cols: tm.terminalSizeRef.current.cols,
       rows: tm.terminalSizeRef.current.rows,
       onOutput: tm.createOutputChannel(task.id),
@@ -877,6 +920,13 @@ function App() {
       status: immediate ? "pending" : "todo",
       createdAt: Date.now(),
     };
+    // setTasks 的 updater 由 React 调度;远程 task.create 需要在返回前可等待的持久化快照。
+    persistProjectTasks(
+      baseTask.projectId,
+      [baseTask, ...tasks],
+      showToastRef.current,
+      formatSaveTasksErrorRef.current,
+    );
     setTasks((prev) => {
       const next = [baseTask, ...prev];
       persistProjectTasks(baseTask.projectId, next, showToast, formatSaveTasksError);
@@ -886,18 +936,18 @@ function App() {
     mountProject(project.id);
     updateProjectView(project.id, { selectedTaskId: taskId, isNewTask: false });
 
-    if (!immediate) return taskId;
+    if (!immediate) return baseTask;
 
     // 2) 终端 buffer 在 PTY 启动前就要建好，否则首批输出会进不来 buffer。
     tm.resetTaskTerminal(taskId);
 
     if (projectLocation.kind === "ssh") {
       invokeRemoteRunTask(baseTask, remoteConnection!, projectLocation.remotePath);
-      return taskId;
+      return baseTask;
     }
     if (projectLocation.kind === "wsl") {
       invokeWslRunTask(baseTask, projectLocation.distribution, projectLocation.linuxPath);
-      return taskId;
+      return baseTask;
     }
 
     // 3) 如果是 worktree 模式，先创建 worktree，成功后把字段补回 task 再启动 PTY。
@@ -929,6 +979,20 @@ function App() {
           persistProjectTasks(baseTask.projectId, next, showToast, formatSaveTasksError);
           return next;
         });
+        persistProjectTasks(
+          baseTask.projectId,
+          [
+            {
+              ...baseTask,
+              worktreePath,
+              worktreeBranch,
+              baseBranch: resolvedBaseBranch,
+            },
+            ...tasks,
+          ],
+          showToastRef.current,
+          formatSaveTasksErrorRef.current,
+        );
       } catch (e) {
         showToast(t("toast.worktreeCreateFailed", { error: String(e) }), "error");
         // 回滚刚加的占位 task
@@ -937,19 +1001,31 @@ function App() {
           persistProjectTasks(baseTask.projectId, next, showToast, formatSaveTasksError);
           return next;
         });
+        persistProjectTasks(
+          baseTask.projectId,
+          tasks,
+          showToastRef.current,
+          formatSaveTasksErrorRef.current,
+        );
         tm.removeTaskBuffers([taskId]);
         return null;
       }
     }
 
+    const launchedTask = {
+      ...baseTask,
+      worktreePath,
+      worktreeBranch,
+      baseBranch: resolvedBaseBranch,
+    };
     invokeRunTask(
-      { ...baseTask, worktreePath, worktreeBranch, baseBranch: resolvedBaseBranch },
+      launchedTask,
       worktreePath ?? project.path,
       images,
       texts,
-      injectPromptIntoTerminal,
+      injectPromptIntoTerminal ?? Boolean(prompt.trim()),
     );
-    return taskId;
+    return launchedTask;
   }
 
   function handleRunTodoTask(task: Task) {

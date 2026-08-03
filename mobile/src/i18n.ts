@@ -126,7 +126,7 @@ const zh = {
   "newTask.reasoning.max": "Max",
   "newTask.reasoning.ultra": "Ultra",
   "newTask.speed": "速度",
-  "newTask.speed.standard": "标准",
+  "newTask.speed.standard": "普通",
   "newTask.speed.fast": "快速",
   "newTask.cancel": "取消",
   "perm.ask": "请求确认",
@@ -232,6 +232,9 @@ const zh = {
   "agentConfig.createFailed": "创建 Agent 失败",
   "agentConfig.detectFailed": "检测模型失败",
   "agentConfig.scannedModels": "已扫描模型",
+  "agentConfig.scannedSelected": "已选 {selected}/{total}",
+  "agentConfig.searchPlaceholder": "搜索 Agent 名称",
+  "agentConfig.noMatch": "没有匹配的 Agent。",
 } as const;
 
 export type MessageKey = keyof typeof zh;
@@ -453,6 +456,9 @@ const en: Record<MessageKey, string> = {
   "agentConfig.createFailed": "Could not create agent",
   "agentConfig.detectFailed": "Could not detect models",
   "agentConfig.scannedModels": "Scanned models",
+  "agentConfig.scannedSelected": "{selected}/{total} selected",
+  "agentConfig.searchPlaceholder": "Search agent name",
+  "agentConfig.noMatch": "No matching agent.",
 };
 
 const dictionaries: Record<Language, Record<MessageKey, string>> = { en, zh };

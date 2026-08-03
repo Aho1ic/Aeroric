@@ -39,6 +39,8 @@ function agentIcon(agent: AgentType, options = [] as ReturnType<typeof useAgentO
 
 function setMenuItemHover(el: HTMLElement, hover: boolean) {
   el.style.background = hover ? "var(--accent-subtle)" : "transparent";
+  el.style.color = "var(--text-primary)";
+  el.style.transform = hover ? "translateX(1px)" : "translateX(0)";
 }
 
 function SendShortcutIcon({ keys }: { keys: string[] }) {
@@ -523,6 +525,14 @@ export function AgentPermSelector({
                   }}
                   disabled={saveAsTodoDisabled}
                   title={saveAsTodoTitle}
+                  onMouseEnter={(e) => {
+                    if (!saveAsTodoDisabled) setMenuItemHover(e.currentTarget, true);
+                  }}
+                  onMouseLeave={(e) => setMenuItemHover(e.currentTarget, false)}
+                  onFocus={(e) => {
+                    if (!saveAsTodoDisabled) setMenuItemHover(e.currentTarget, true);
+                  }}
+                  onBlur={(e) => setMenuItemHover(e.currentTarget, false)}
                   onClick={() => {
                     if (saveAsTodoDisabled) return;
                     if (hasContent) onSubmit(false);

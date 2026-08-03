@@ -64,6 +64,16 @@ rusqlite = { version = "0.32", features = ["bundled", "backup"] }
 dbx-core = { path = "../../dbx/crates/dbx-core", default-features = false }
 tauri-plugin-clipboard-manager = "2"
 
+# Keep the Aeroric path dependency on the same compatibility forks as dbx.
+# The latest dbx-core uses the patched MySQL EOF/auth API and GaussDB-aware
+# PostgreSQL crates; resolving these from crates.io would silently produce an
+# incompatible lockfile.
+[patch.crates-io]
+mysql_async = { git = "https://github.com/t8y2/mysql_async.git", rev = "b615bb0b10b5975182a4aa069cabc3d09021f6ab" }
+tokio-postgres = { git = "https://github.com/t8y2/tokio-postgres-gaussdb.git", rev = "115f9fef10f0fc3669b5337955e4eb461fc349a6" }
+postgres-types = { git = "https://github.com/t8y2/tokio-postgres-gaussdb.git", rev = "115f9fef10f0fc3669b5337955e4eb461fc349a6" }
+postgres-protocol = { git = "https://github.com/t8y2/tokio-postgres-gaussdb.git", rev = "115f9fef10f0fc3669b5337955e4eb461fc349a6" }
+
 [features]
 # DevTools (right-click → Inspect, remote webview debugging) is opt-in so it
 # never ships in release builds, where it would let anyone open the console and

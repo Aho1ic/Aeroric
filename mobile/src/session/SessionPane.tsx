@@ -7,15 +7,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import {
-  ActivityIndicator,
-  Pressable,
-  ScrollView,
-  StyleSheet,
-  Text,
-  TextInput,
-  View,
-} from "react-native";
+import { ActivityIndicator, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { t } from "../i18n";
 import { useConnection } from "../state/connection-context";
 import type {
@@ -26,6 +18,7 @@ import type {
   Task,
 } from "../types";
 import { radii, theme } from "../ui/theme";
+import { AnimatedPressable } from "../ui/AnimatedPressable";
 import { MarkdownText } from "./MarkdownText";
 import { mergeAppended } from "./messages";
 
@@ -33,12 +26,12 @@ function ToolUseCard({ name, input }: { name: string; input: string }) {
   const [expanded, setExpanded] = useState(false);
   return (
     <View style={styles.toolCard}>
-      <Pressable style={styles.toolHeader} onPress={() => setExpanded((prev) => !prev)}>
+      <AnimatedPressable style={styles.toolHeader} onPress={() => setExpanded((prev) => !prev)}>
         <Text style={styles.toolChevron}>{expanded ? "▾" : "▸"}</Text>
         <Text style={styles.toolName} numberOfLines={1}>
           🔧 {name}
         </Text>
-      </Pressable>
+      </AnimatedPressable>
       {expanded ? (
         <Text style={styles.toolInput} selectable>
           {input}
@@ -52,11 +45,9 @@ function ThinkingBlock({ thinking }: { thinking: string }) {
   const [expanded, setExpanded] = useState(false);
   return (
     <View>
-      <Pressable style={styles.thinkingToggle} onPress={() => setExpanded((prev) => !prev)}>
-        <Text style={styles.thinkingLabel}>
-          {expanded ? "▾" : "▸"} 思考过程
-        </Text>
-      </Pressable>
+      <AnimatedPressable style={styles.thinkingToggle} onPress={() => setExpanded((prev) => !prev)}>
+        <Text style={styles.thinkingLabel}>{expanded ? "▾" : "▸"} 思考过程</Text>
+      </AnimatedPressable>
       {expanded ? (
         <Text style={styles.thinkingText} selectable>
           {thinking}
@@ -230,7 +221,7 @@ export function SessionPane({
           ) : null}
           {task.approval ? (
             <View style={styles.approvalButtons}>
-              <Pressable
+              <AnimatedPressable
                 style={[styles.approvalButton, styles.approveButton]}
                 disabled={responding !== null}
                 onPress={() => respond("approve")}
@@ -238,8 +229,8 @@ export function SessionPane({
                 <Text style={styles.approveText}>
                   {responding === "approve" ? t("session.sending") : t("session.approve")}
                 </Text>
-              </Pressable>
-              <Pressable
+              </AnimatedPressable>
+              <AnimatedPressable
                 style={[styles.approvalButton, styles.denyButton]}
                 disabled={responding !== null}
                 onPress={() => respond("deny")}
@@ -247,13 +238,11 @@ export function SessionPane({
                 <Text style={styles.denyText}>
                   {responding === "deny" ? t("session.sending") : t("session.deny")}
                 </Text>
-              </Pressable>
+              </AnimatedPressable>
             </View>
           ) : null}
           <Text style={styles.approvalHint}>
-            {task.approval
-              ? t("session.approvalStale")
-              : t("session.replyHint")}
+            {task.approval ? t("session.approvalStale") : t("session.replyHint")}
           </Text>
         </View>
       ) : null}
@@ -281,9 +270,7 @@ export function SessionPane({
         {error ? <Text style={styles.errorText}>加载会话失败:{error}</Text> : null}
         {!loading && !error && unavailableReason ? (
           <Text style={styles.hintText}>
-            {unavailableReason === "ssh"
-              ? t("session.sshUnavailable")
-              : t("session.notStarted")}
+            {unavailableReason === "ssh" ? t("session.sshUnavailable") : t("session.notStarted")}
           </Text>
         ) : null}
         {!loading && !error && !unavailableReason && messages.length === 0 ? (
@@ -304,13 +291,13 @@ export function SessionPane({
           editable={canSend && !sending}
           multiline
         />
-        <Pressable
+        <AnimatedPressable
           style={[styles.sendButton, (!canSend || !draft.trim() || sending) && styles.sendDisabled]}
           disabled={!canSend || !draft.trim() || sending}
           onPress={sendPrompt}
         >
           <Text style={styles.sendText}>{sending ? "…" : t("session.send")}</Text>
-        </Pressable>
+        </AnimatedPressable>
       </View>
     </View>
   );

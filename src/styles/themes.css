@@ -39,6 +39,7 @@
   --accent-soft: rgba(124, 58, 237, 0.26);
   --accent-hover: #6d28d9;
   --accent-subtle: rgba(124, 58, 237, 0.1);
+  --speed-fast-fg: #2563eb;
 
   --background: var(--bg-root);
   --foreground: var(--text-primary);
@@ -206,6 +207,7 @@ html.eyecare {
   --accent-soft: rgba(139, 92, 246, 0.28);
   --accent-hover: #7c3aed;
   --accent-subtle: rgba(139, 92, 246, 0.12);
+  --speed-fast-fg: #2563eb;
 
   /* 品牌标识保持蓝色，不随护眼主题变成米黄/棕褐色（回退到 :root 的蓝色定义） */
 
@@ -266,6 +268,7 @@ html.dark {
   --accent-soft: rgba(192, 132, 252, 0.34);
   --accent-hover: #d8b4fe;
   --accent-subtle: rgba(192, 132, 252, 0.14);
+  --speed-fast-fg: #60a5fa;
 
   --icon-folder: #d9a441;
   --icon-folder-open: #d9a441;

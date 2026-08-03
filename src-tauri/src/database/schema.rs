@@ -113,6 +113,7 @@ pub async fn dbx_get_object_source(
         &name,
         object_type,
         signature.as_deref(),
+        None,
     )
     .await
 }

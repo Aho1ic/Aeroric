@@ -216,6 +216,7 @@ mod tests {
             connection_id: "c".to_string(),
             database: "main".to_string(),
             schema: None,
+            identifier_quote: None,
             table_name: "users".to_string(),
             file_path: "/tmp/users.csv".to_string(),
             format: "json".to_string(),
@@ -227,6 +228,9 @@ mod tests {
             row_limit: None,
             skip_count: true,
             batch_size: None,
+            date_time_format: None,
+            numeric_column_right_align: false,
+            column_comments: None,
         }
     }
 

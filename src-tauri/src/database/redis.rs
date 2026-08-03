@@ -201,7 +201,7 @@ fn adapt_redis_value(value: RedisValue) -> AeroricRedisValue {
             None,
             None,
         ),
-        RedisValueData::Json { value } => (value, false, None, None),
+        RedisValueData::Json { value } => (Value::String(value), false, None, None),
         RedisValueData::List {
             items,
             total,
@@ -242,7 +242,7 @@ fn adapt_redis_value(value: RedisValue) -> AeroricRedisValue {
             Some(total),
             scan_cursor,
         ),
-        RedisValueData::Stream { entries } => (
+        RedisValueData::Stream { entries, total, .. } => (
             Value::Array(
                 entries
                     .into_iter()
@@ -257,7 +257,7 @@ fn adapt_redis_value(value: RedisValue) -> AeroricRedisValue {
                     .collect(),
             ),
             false,
-            None,
+            total,
             None,
         ),
         RedisValueData::Unknown => (Value::Null, false, None, None),

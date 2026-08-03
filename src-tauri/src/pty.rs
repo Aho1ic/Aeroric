@@ -20,6 +20,18 @@ pub(crate) const PTY_EMIT_MAX_BATCH_BYTES: usize = 64 * 1024;
 /// 有界 channel 容量：满时 reader 线程阻塞，反压传播至 OS 内核 PTY 缓冲区，
 /// 最终使写入进程（Claude/Codex）的 write() 系统调用阻塞，从源头限流。
 const PTY_EMIT_CHANNEL_CAPACITY: usize = 32;
+const STARTUP_FIRST_OUTPUT_TIMEOUT: Duration = Duration::from_secs(2);
+const STARTUP_NO_OUTPUT_FALLBACK: Duration = Duration::from_secs(5);
+const STARTUP_OUTPUT_QUIET: Duration = Duration::from_millis(220);
+const STARTUP_OUTPUT_MAX_WAIT: Duration = Duration::from_secs(2);
+
+/// 启动态门控信号:首条输入可能需要等 trust folder / hook 授权完成后再投递。
+#[derive(Debug)]
+pub(crate) enum StartupSignal {
+    Output(String),
+    UserInput,
+    SessionReady,
+}
 
 fn task_attachments_dir(project_path: &str, task_id: &str) -> std::path::PathBuf {
     Path::new(project_path)
@@ -364,7 +376,7 @@ fn flush_pty_batch(app: &AppHandle, id: &str, sink: &OutputSink, batch: &mut Str
 ///
 /// - `sink`：agent / SSH 传 `OutputSink::Channel`，本地 shell 传 `OutputSink::Event`
 /// - `session_tx`：可选 channel，用于将原始文本转发给 session watcher
-/// - `startup_tx`：首批有效输出出现时通知等待注入初始输入的任务
+/// - `startup_tx`：把原始输出转成启动态信号,供初始输入门控判断
 /// - `output_filter`：可选输出过滤器，可在发送到前端前消费或改写数据
 /// - `on_finish`：PTY 关闭后执行的可选清理回调
 pub(crate) fn spawn_pty_reader(
@@ -375,7 +387,7 @@ pub(crate) fn spawn_pty_reader(
     reader: Box<dyn Read + Send>,
     persist_terminal_history: bool,
     session_tx: Option<std::sync::mpsc::Sender<String>>,
-    startup_tx: Option<std::sync::mpsc::Sender<()>>,
+    startup_tx: Option<std::sync::mpsc::Sender<StartupSignal>>,
     output_filter: Option<PtyOutputFilter>,
     on_finish: Option<Box<dyn FnOnce() + Send>>,
 ) {
@@ -431,12 +443,12 @@ pub(crate) fn spawn_pty_reader(
                     };
 
                     if valid_len > 0 {
-                        if let Some(ref tx) = startup_tx {
-                            let _ = tx.send(());
-                        }
                         let data = std::str::from_utf8(&combined[..valid_len])
                             .unwrap()
                             .to_owned();
+                        if let Some(ref tx) = startup_tx {
+                            let _ = tx.send(StartupSignal::Output(data.clone()));
+                        }
                         let data = match output_filter.as_mut() {
                             Some(filter) => match filter(data) {
                                 Some(data) if !data.is_empty() => data,
@@ -697,21 +709,212 @@ fn add_codex_launch_args(
     }
 }
 
+fn strip_startup_ansi(input: &str) -> String {
+    let bytes = input.as_bytes();
+    let mut output = String::with_capacity(input.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        match bytes[index] {
+            0x1b => {
+                index += 1;
+                if index >= bytes.len() {
+                    break;
+                }
+                match bytes[index] {
+                    b'[' => {
+                        index += 1;
+                        while index < bytes.len() {
+                            let byte = bytes[index];
+                            index += 1;
+                            if (0x40..=0x7e).contains(&byte) {
+                                break;
+                            }
+                        }
+                    }
+                    b']' => {
+                        // OSC: consume until BEL or the ST sequence ESC \\.
+                        index += 1;
+                        while index < bytes.len() {
+                            if bytes[index] == 0x07 {
+                                index += 1;
+                                break;
+                            }
+                            if bytes[index] == 0x1b && bytes.get(index + 1).copied() == Some(b'\\')
+                            {
+                                index += 2;
+                                break;
+                            }
+                            index += 1;
+                        }
+                    }
+                    _ => index += 1,
+                }
+            }
+            byte if byte.is_ascii_control() && byte != b'\n' && byte != b'\r' => {
+                output.push(' ');
+                index += 1;
+            }
+            _ => {
+                let remaining = &input[index..];
+                if let Some(ch) = remaining.chars().next() {
+                    output.push(ch);
+                    index += ch.len_utf8();
+                } else {
+                    break;
+                }
+            }
+        }
+    }
+    output
+}
+
+fn startup_gate_text(input: &str) -> bool {
+    let clean = strip_startup_ansi(input)
+        .to_ascii_lowercase()
+        .replace(['\r', '\n'], " ");
+    let compact = clean.split_whitespace().collect::<Vec<_>>().join(" ");
+    let trust_scope = compact.contains("folder") || compact.contains("workspace");
+    let trust_gate = compact.contains("trust this")
+        || compact.contains("trust folder")
+        || compact.contains("trust workspace")
+        || compact.contains("workspace trust")
+        || (compact.contains("do you trust") && trust_scope)
+        || (compact.contains("trusted") && trust_scope);
+    let hook_scope = compact.contains("hook") || compact.contains("hooks");
+    let hook_gate = hook_scope
+        && (compact.contains("allow")
+            || compact.contains("approve")
+            || compact.contains("enable")
+            || compact.contains("trust")
+            || compact.contains("authorize")
+            || compact.contains("permission to")
+            || compact.contains("run hook"));
+    trust_gate || hook_gate
+}
+
+fn startup_output_indicates_gate(tail: &mut String, output: &str) -> bool {
+    let clean = strip_startup_ansi(output);
+    if clean.is_empty() {
+        return false;
+    }
+    tail.push_str(&clean);
+    if startup_gate_text(tail) {
+        tail.clear();
+        return true;
+    }
+    const TAIL_LIMIT: usize = 512;
+    if tail.len() > TAIL_LIMIT {
+        let keep_from = tail.len() - TAIL_LIMIT;
+        tail.drain(..keep_from);
+    }
+    false
+}
+
+pub(crate) fn register_initial_input_signal(
+    task_manager: &TaskManager,
+    task_id: &str,
+    sender: std::sync::mpsc::Sender<StartupSignal>,
+) {
+    task_manager
+        .initial_input_signals
+        .lock()
+        .insert(task_id.to_string(), sender);
+}
+
+pub(crate) fn notify_initial_input_session_ready(task_manager: &TaskManager, task_id: &str) {
+    let sender = task_manager
+        .initial_input_signals
+        .lock()
+        .get(task_id)
+        .cloned();
+    if let Some(sender) = sender {
+        let _ = sender.send(StartupSignal::SessionReady);
+    }
+}
+
+fn wait_for_initial_input_ready(startup_rx: std::sync::mpsc::Receiver<StartupSignal>) -> bool {
+    let started_at = Instant::now();
+    let no_output_deadline = started_at + STARTUP_NO_OUTPUT_FALLBACK;
+    let first_output_at = None::<Instant>;
+    let mut first_output_at = first_output_at;
+    let mut gate_pending = false;
+    let mut user_confirmed_gate = false;
+    let mut detection_tail = String::new();
+
+    loop {
+        let now = Instant::now();
+        let wait = if first_output_at.is_none() {
+            no_output_deadline
+                .saturating_duration_since(now)
+                .min(STARTUP_FIRST_OUTPUT_TIMEOUT)
+        } else if gate_pending {
+            Duration::from_millis(300)
+        } else {
+            STARTUP_OUTPUT_QUIET
+        };
+
+        match startup_rx.recv_timeout(wait) {
+            Ok(StartupSignal::Output(output)) => {
+                let now = Instant::now();
+                first_output_at.get_or_insert(now);
+                if startup_output_indicates_gate(&mut detection_tail, &output) {
+                    gate_pending = true;
+                    user_confirmed_gate = false;
+                }
+                if !gate_pending
+                    && now.duration_since(first_output_at.unwrap()) >= STARTUP_OUTPUT_MAX_WAIT
+                {
+                    return true;
+                }
+            }
+            Ok(StartupSignal::UserInput) => {
+                if gate_pending {
+                    user_confirmed_gate = true;
+                    detection_tail.clear();
+                }
+            }
+            Ok(StartupSignal::SessionReady) => {
+                // SessionStart 是 hook 链路的权威就绪信号,即使上一个输出块看起来像
+                // 授权提示,收到它也说明门槛已经被用户/Agent处理完毕。
+                return true;
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                if first_output_at.is_none() {
+                    if Instant::now() >= no_output_deadline {
+                        // 自定义 Agent 可能完全不打印 banner,保留原有超时兜底。
+                        return true;
+                    }
+                    continue;
+                }
+                if gate_pending {
+                    if user_confirmed_gate {
+                        return true;
+                    }
+                    continue;
+                }
+                return true;
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                return !gate_pending || user_confirmed_gate;
+            }
+        }
+    }
+}
+
 pub(crate) fn spawn_initial_input_injection(
     writer: Arc<parking_lot::Mutex<Box<dyn Write + Send>>>,
     prelude: Option<Vec<u8>>,
     prompt: Option<(Vec<u8>, Vec<u8>)>,
-    startup_rx: std::sync::mpsc::Receiver<()>,
+    startup_rx: std::sync::mpsc::Receiver<StartupSignal>,
+    on_finish: Option<Box<dyn FnOnce() + Send>>,
 ) {
     tokio::task::spawn_blocking(move || {
-        let startup_deadline = Instant::now() + Duration::from_secs(3);
-        if startup_rx.recv_timeout(Duration::from_secs(2)).is_ok() {
-            while Instant::now() < startup_deadline {
-                match startup_rx.recv_timeout(Duration::from_millis(300)) {
-                    Ok(()) => continue,
-                    Err(_) => break,
-                }
+        let ready = wait_for_initial_input_ready(startup_rx);
+        if !ready {
+            if let Some(on_finish) = on_finish {
+                on_finish();
             }
+            return;
         }
         if let Some(prelude) = prelude {
             {
@@ -723,21 +926,23 @@ pub(crate) fn spawn_initial_input_injection(
             // before the initial prompt so `/effort ultracode` is handled first.
             std::thread::sleep(Duration::from_millis(160));
         }
-        let Some((paste, submit)) = prompt else {
-            return;
-        };
-        {
+        if let Some((paste, submit)) = prompt {
+            {
+                let mut writer = writer.lock();
+                let _ = writer.write_all(&paste);
+                let _ = writer.flush();
+            }
+            // Agent TUIs may intentionally ignore an Enter delivered in the same
+            // PTY write as a bracketed paste. Submit in a later input turn so the
+            // initial prompt is executed instead of remaining in the composer.
+            std::thread::sleep(Duration::from_millis(80));
             let mut writer = writer.lock();
-            let _ = writer.write_all(&paste);
+            let _ = writer.write_all(&submit);
             let _ = writer.flush();
         }
-        // Agent TUIs may intentionally ignore an Enter delivered in the same
-        // PTY write as a bracketed paste. Submit in a later input turn so the
-        // initial prompt is executed instead of remaining in the composer.
-        std::thread::sleep(Duration::from_millis(80));
-        let mut writer = writer.lock();
-        let _ = writer.write_all(&submit);
-        let _ = writer.flush();
+        if let Some(on_finish) = on_finish {
+            on_finish();
+        }
     });
 }
 
@@ -1036,7 +1241,15 @@ pub async fn run_task(
     } else {
         None
     };
+    let initial_prelude = uses_ultracode.then(initial_ultracode_command);
+    let initial_prompt = (!use_native_initial_prompt)
+        .then(|| initial_prompt_input_chunks(&final_prompt))
+        .flatten();
+    let needs_initial_input = initial_prelude.is_some() || initial_prompt.is_some();
     let (startup_tx, startup_rx) = std::sync::mpsc::channel();
+    if needs_initial_input {
+        register_initial_input_signal(&task_manager, &task_id, startup_tx.clone());
+    }
     spawn_pty_reader(
         app.clone(),
         task_id.clone(),
@@ -1048,22 +1261,26 @@ pub async fn run_task(
         reader,
         true,
         session_tx,
-        if uses_ultracode || (starts_with_prompt && !use_native_initial_prompt) {
-            Some(startup_tx)
-        } else {
-            None
-        },
+        needs_initial_input.then_some(startup_tx),
         None,
         None,
     );
-    let initial_prelude = uses_ultracode.then(initial_ultracode_command);
-    let initial_prompt = (!use_native_initial_prompt)
-        .then(|| initial_prompt_input_chunks(&final_prompt))
-        .flatten();
-    if initial_prelude.is_some() || initial_prompt.is_some() {
+    if needs_initial_input {
         let writer = task_manager.pty_writers.lock().get(&task_id).cloned();
         if let Some(writer) = writer {
-            spawn_initial_input_injection(writer, initial_prelude, initial_prompt, startup_rx);
+            let signals = Arc::clone(&task_manager.initial_input_signals);
+            let cleanup_id = task_id.clone();
+            spawn_initial_input_injection(
+                writer,
+                initial_prelude,
+                initial_prompt,
+                startup_rx,
+                Some(Box::new(move || {
+                    signals.lock().remove(&cleanup_id);
+                })),
+            );
+        } else {
+            task_manager.initial_input_signals.lock().remove(&task_id);
         }
     }
     spawn_exit_monitor(app, task_id, project_path, is_codex);
@@ -1337,6 +1554,9 @@ pub async fn resume_task(
         );
     }
     let (startup_tx, startup_rx) = std::sync::mpsc::channel();
+    if uses_ultracode {
+        register_initial_input_signal(&task_manager, &task_id, startup_tx.clone());
+    }
     spawn_pty_reader(
         app.clone(),
         task_id.clone(),
@@ -1355,12 +1575,19 @@ pub async fn resume_task(
     if uses_ultracode {
         let writer = task_manager.pty_writers.lock().get(&task_id).cloned();
         if let Some(writer) = writer {
+            let signals = Arc::clone(&task_manager.initial_input_signals);
+            let cleanup_id = task_id.clone();
             spawn_initial_input_injection(
                 writer,
                 Some(initial_ultracode_command()),
                 None,
                 startup_rx,
+                Some(Box::new(move || {
+                    signals.lock().remove(&cleanup_id);
+                })),
             );
+        } else {
+            task_manager.initial_input_signals.lock().remove(&task_id);
         }
     }
     spawn_exit_monitor(app, task_id, project_path, is_codex);
@@ -1381,6 +1608,15 @@ pub(crate) fn write_task_input(
             .write_all(data.as_bytes())
             .map_err(|e| e.to_string())?;
         writer.flush().map_err(|e| e.to_string())?;
+        drop(writer);
+        let startup_signal = task_manager
+            .initial_input_signals
+            .lock()
+            .get(task_id)
+            .cloned();
+        if let Some(startup_signal) = startup_signal {
+            let _ = startup_signal.send(StartupSignal::UserInput);
+        }
     }
     Ok(())
 }
@@ -1645,6 +1881,40 @@ mod tests {
             initial_prompt_input_chunks("hello\nworld").unwrap(),
             (b"\x1b[200~hello\nworld\x1b[201~".to_vec(), b"\r".to_vec())
         );
+    }
+
+    #[test]
+    fn startup_gate_detection_strips_ansi_and_ignores_session_hook_logs() {
+        assert!(startup_gate_text(
+            "\x1b[33mDo you trust this folder? [y/N]\x1b[0m"
+        ));
+        assert!(startup_gate_text(
+            "Hooks are enabled. Allow hooks for this workspace?"
+        ));
+        assert!(!startup_gate_text("hook: SessionStart Completed"));
+        assert!(!startup_gate_text("Starting workspace session"));
+    }
+
+    #[test]
+    fn startup_input_waits_for_confirmation_after_a_gate() {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        sender
+            .send(StartupSignal::Output(
+                "Workspace trust: Do you trust this folder?".to_string(),
+            ))
+            .unwrap();
+        let waiter = std::thread::spawn(move || wait_for_initial_input_ready(receiver));
+        std::thread::sleep(Duration::from_millis(40));
+        sender.send(StartupSignal::UserInput).unwrap();
+        assert!(waiter.join().unwrap());
+    }
+
+    #[test]
+    fn startup_input_releases_immediately_on_session_start() {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let waiter = std::thread::spawn(move || wait_for_initial_input_ready(receiver));
+        sender.send(StartupSignal::SessionReady).unwrap();
+        assert!(waiter.join().unwrap());
     }
 
     #[test]

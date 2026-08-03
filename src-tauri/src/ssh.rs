@@ -580,6 +580,9 @@ fn spawn_remote_task_pty(
 
     let needs_initial_input = initial_prelude.is_some() || initial_prompt.is_some();
     let (startup_tx, startup_rx) = std::sync::mpsc::channel();
+    if needs_initial_input {
+        crate::pty::register_initial_input_signal(task_manager, task_id, startup_tx.clone());
+    }
     crate::pty::spawn_pty_reader(
         app.clone(),
         task_id.to_string(),
@@ -597,12 +600,19 @@ fn spawn_remote_task_pty(
     );
     if needs_initial_input {
         if let Some(writer) = task_manager.pty_writers.lock().get(task_id).cloned() {
+            let signals = Arc::clone(&task_manager.initial_input_signals);
+            let cleanup_id = task_id.to_string();
             crate::pty::spawn_initial_input_injection(
                 writer,
                 initial_prelude,
                 initial_prompt,
                 startup_rx,
+                Some(Box::new(move || {
+                    signals.lock().remove(&cleanup_id);
+                })),
             );
+        } else {
+            task_manager.initial_input_signals.lock().remove(task_id);
         }
     }
     spawn_remote_task_exit_monitor(app, task_id.to_string());
@@ -741,6 +751,7 @@ pub async fn run_remote_task(
     selected_model: Option<String>,
     reasoning_effort: Option<String>,
     speed: Option<String>,
+    force_prompt_injection: Option<bool>,
     cols: Option<u16>,
     rows: Option<u16>,
     on_output: Channel<String>,
@@ -754,18 +765,19 @@ pub async fn run_remote_task(
         selected_model.as_deref(),
     )?;
     let speed = crate::pty::normalized_speed(speed.as_deref())?;
+    let force_prompt_injection = force_prompt_injection.unwrap_or(false);
     let uses_ultracode = !is_codex && reasoning_effort.as_deref() == Some("ultracode");
     let remote_command = build_remote_task_command(
         &agent,
         &permission_mode,
         &remote_project_path,
-        (!uses_ultracode).then_some(prompt.as_str()),
+        (!uses_ultracode && !force_prompt_injection).then_some(prompt.as_str()),
         selected_model.as_deref(),
         reasoning_effort.as_deref(),
         speed.as_deref(),
     )?;
     let initial_prelude = uses_ultracode.then(crate::pty::initial_ultracode_command);
-    let initial_prompt = uses_ultracode
+    let initial_prompt = (uses_ultracode || force_prompt_injection)
         .then(|| crate::pty::initial_prompt_input_chunks(&prompt))
         .flatten();
     task_manager.cancelled_tasks.lock().remove(&task_id);

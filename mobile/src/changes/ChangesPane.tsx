@@ -6,10 +6,11 @@
 
 import { router } from "expo-router";
 import { useCallback, useEffect, useState } from "react";
-import { FlatList, Platform, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { FlatList, Platform, ScrollView, StyleSheet, Text, View } from "react-native";
 import { t } from "../i18n";
 import { useConnection } from "../state/connection-context";
 import type { GitChangesResult, GitDiffResult, GitFileChange } from "../types";
+import { AnimatedPressable } from "../ui/AnimatedPressable";
 import { radii, theme } from "../ui/theme";
 
 const MONO = Platform.select({ ios: "Menlo", default: "monospace" });
@@ -152,14 +153,12 @@ export function ChangesPane({
       refreshing={loading}
       onRefresh={refresh}
       ListHeaderComponent={
-        <Pressable
+        <AnimatedPressable
           style={styles.browseRow}
-          onPress={() =>
-            router.push({ pathname: "/files", params: { projectId } })
-          }
+          onPress={() => router.push({ pathname: "/files", params: { projectId } })}
         >
           <Text style={styles.browseText}>{t("changes.browseFiles")} ›</Text>
-        </Pressable>
+        </AnimatedPressable>
       }
       ListEmptyComponent={
         <View style={styles.center}>
@@ -167,9 +166,9 @@ export function ChangesPane({
             {error ? error : loading ? t("common.loading") : t("changes.empty")}
           </Text>
           {error ? (
-            <Pressable style={styles.retryButton} onPress={refresh}>
+            <AnimatedPressable style={styles.retryButton} onPress={refresh}>
               <Text style={styles.retryText}>{t("common.retry")}</Text>
-            </Pressable>
+            </AnimatedPressable>
           ) : null}
         </View>
       }
@@ -180,14 +179,14 @@ export function ChangesPane({
         const isOpen = expanded === key;
         return (
           <View style={styles.fileCard}>
-            <Pressable style={styles.fileRow} onPress={() => toggleDiff(item)}>
+            <AnimatedPressable style={styles.fileRow} onPress={() => toggleDiff(item)}>
               <Text style={[styles.fileBadge, { color: badge.color }]}>{badge.label}</Text>
               <Text style={styles.filePath} numberOfLines={1}>
                 {item.path}
               </Text>
               {item.staged ? <Text style={styles.stagedTag}>{t("changes.staged")}</Text> : null}
               <Text style={styles.chevron}>{isOpen ? "▾" : "▸"}</Text>
-            </Pressable>
+            </AnimatedPressable>
             {isOpen ? (
               <View style={styles.diffWrap}>
                 {diff?.loading ? <Text style={styles.hint}>{t("common.loading")}</Text> : null}

@@ -4,8 +4,6 @@ import {
   ActivityIndicator,
   Alert,
   FlatList,
-  Modal,
-  Pressable,
   ScrollView,
   StyleSheet,
   Text,
@@ -13,9 +11,13 @@ import {
   View,
 } from "react-native";
 import { useFocusEffect } from "expo-router";
+import { Check, LayoutGrid, Plus, Rows3, Search } from "lucide-react-native";
 import { t } from "../src/i18n";
 import { useConnection } from "../src/state/connection-context";
+import { AnimatedPressable } from "../src/ui/AnimatedPressable";
 import { AnimatedSelection } from "../src/ui/AnimatedSelection";
+import { ANTHROPIC_BRAND, AnthropicIcon, OpenAIIcon } from "../src/ui/brand-icons";
+import { fuzzyMatch } from "../src/ui/fuzzy-match";
 import type { AgentConfigEntry } from "../src/types";
 import { radii, spacing, theme, typography } from "../src/ui/theme";
 
@@ -27,7 +29,6 @@ interface Draft {
   name: string;
   baseUrl: string;
   apiKey: string;
-  modelsText: string;
   kind: AgentKind;
   bridge: boolean;
   proxy: boolean;
@@ -55,15 +56,10 @@ function toDraft(agent?: AgentConfigEntry, kind: AgentKind = "codex"): Draft {
     name: agent?.label ?? "",
     baseUrl: agent?.baseUrl ?? "",
     apiKey: agent?.apiKey ?? "",
-    modelsText: (agent?.models ?? []).join("\n"),
     kind: agent ? (agent.codexLike ? "codex" : "claude_code") : kind,
     bridge: Boolean(agent?.enableChatCompletionsProxy),
     proxy: Boolean(agent?.proxyEnabled),
   };
-}
-
-function parseTextModels(text: string): string[] {
-  return normalizeModels(text.split(/[\n,]/));
 }
 
 function ToggleRow({
@@ -78,7 +74,12 @@ function ToggleRow({
   onChange: (value: boolean) => void;
 }) {
   return (
-    <Pressable style={styles.toggleRow} onPress={() => onChange(!value)} accessibilityRole="switch" accessibilityState={{ checked: value }}>
+    <AnimatedPressable
+      style={styles.toggleRow}
+      onPress={() => onChange(!value)}
+      accessibilityRole="switch"
+      accessibilityState={{ checked: value }}
+    >
       <View style={styles.toggleCopy}>
         <Text style={styles.fieldLabel}>{label}</Text>
         <Text style={styles.hint}>{hint}</Text>
@@ -86,7 +87,7 @@ function ToggleRow({
       <View style={[styles.switchTrack, value && styles.switchTrackActive]}>
         <View style={[styles.switchThumb, value && styles.switchThumbActive]} />
       </View>
-    </Pressable>
+    </AnimatedPressable>
   );
 }
 
@@ -124,42 +125,44 @@ function AgentEditor({
   const detect = () => {
     if ((!agentId && (!draft.baseUrl.trim() || !draft.apiKey.trim())) || detecting) return;
     setDetecting(true);
-    const promise = agentId && (!draft.baseUrl.trim() || !draft.apiKey.trim())
-      ? request<{ models: string[] }>("agents.models", { agent: agentId })
-      : request<{ models: string[] }>("agentConfig.detectModels", {
-          kind: draft.kind,
-          baseUrl: draft.baseUrl.trim(),
-          apiKey: draft.apiKey.trim(),
-        });
+    const promise =
+      agentId && (!draft.baseUrl.trim() || !draft.apiKey.trim())
+        ? request<{ models: string[] }>("agents.models", { agent: agentId })
+        : request<{ models: string[] }>("agentConfig.detectModels", {
+            kind: draft.kind,
+            baseUrl: draft.baseUrl.trim(),
+            apiKey: draft.apiKey.trim(),
+          });
     promise
       .then((result) => {
-        const models = normalizeModels(result.models ?? []);
-        setAvailableModels(models);
-        setSelectedModels(models);
-        setDraft((previous) => ({ ...previous, modelsText: models.join("\n") }));
+        const scanned = normalizeModels(result.models ?? []);
+        // 不动 selectedModels:保留用户此前的勾选。已勾选但本次未扫描到的模型
+        // 追加到末尾,避免它们从列表消失后无法取消。
+        setAvailableModels(normalizeModels([...scanned, ...selectedModels]));
       })
-      .catch((error) => Alert.alert(t("agentConfig.detectFailed"), error instanceof Error ? error.message : String(error)))
+      .catch((error) =>
+        Alert.alert(
+          t("agentConfig.detectFailed"),
+          error instanceof Error ? error.message : String(error),
+        ),
+      )
       .finally(() => setDetecting(false));
   };
 
   const addModel = () => {
     const model = modelInput.trim();
     if (!model) return;
-    const nextModels = normalizeModels([...selectedModels, model]);
     setAvailableModels((previous) => normalizeModels([...previous, model]));
-    setSelectedModels(nextModels);
-    setDraft((previous) => ({ ...previous, modelsText: nextModels.join("\n") }));
+    setSelectedModels((previous) => normalizeModels([...previous, model]));
     setModelInput("");
   };
 
   const toggleModel = (model: string) => {
-    const nextModels = selectedModels.some(
-      (item) => item.toLocaleLowerCase() === model.toLocaleLowerCase(),
-    )
-      ? selectedModels.filter((item) => item.toLocaleLowerCase() !== model.toLocaleLowerCase())
-      : [...selectedModels, model];
-    setSelectedModels(nextModels);
-    setDraft((previous) => ({ ...previous, modelsText: nextModels.join("\n") }));
+    setSelectedModels((previous) =>
+      previous.some((item) => item.toLocaleLowerCase() === model.toLocaleLowerCase())
+        ? previous.filter((item) => item.toLocaleLowerCase() !== model.toLocaleLowerCase())
+        : [...previous, model],
+    );
   };
 
   return (
@@ -212,28 +215,22 @@ function AgentEditor({
         placeholder="sk-…"
         placeholderTextColor={theme.textHint}
       />
-      <Text style={styles.fieldLabel}>{t("agentConfig.models")}</Text>
-      <TextInput
-        style={[styles.input, styles.inputMultiline]}
-        value={draft.modelsText}
-        onChangeText={(modelsText) => {
-          setDraft((previous) => ({ ...previous, modelsText }));
-          setSelectedModels(parseTextModels(modelsText));
-        }}
-        autoCapitalize="none"
-        autoCorrect={false}
-        multiline
-        placeholder={t("agentConfig.modelsHint")}
-        placeholderTextColor={theme.textHint}
-      />
       <View style={styles.modelActionRow}>
-        <Pressable
-          style={[styles.outlineButton, ((!agentId && (!draft.baseUrl.trim() || !draft.apiKey.trim())) || detecting) && styles.buttonDisabled]}
+        <AnimatedPressable
+          style={[
+            styles.outlineButton,
+            ((!agentId && (!draft.baseUrl.trim() || !draft.apiKey.trim())) || detecting) &&
+              styles.buttonDisabled,
+          ]}
           disabled={(!agentId && (!draft.baseUrl.trim() || !draft.apiKey.trim())) || detecting}
           onPress={detect}
         >
-          {detecting ? <ActivityIndicator size="small" color={theme.accent} /> : <Text style={styles.outlineButtonText}>{t("agentConfig.detect")}</Text>}
-        </Pressable>
+          {detecting ? (
+            <ActivityIndicator size="small" color={theme.accent} />
+          ) : (
+            <Text style={styles.outlineButtonText}>{t("agentConfig.detect")}</Text>
+          )}
+        </AnimatedPressable>
         <TextInput
           style={[styles.input, styles.modelInput]}
           value={modelInput}
@@ -244,22 +241,55 @@ function AgentEditor({
           placeholderTextColor={theme.textHint}
           onSubmitEditing={addModel}
         />
-        <Pressable style={styles.outlineButton} onPress={addModel}>
-          <Text style={styles.outlineButtonText}>+</Text>
-        </Pressable>
+        <AnimatedPressable
+          style={styles.outlineButton}
+          onPress={addModel}
+          accessibilityLabel={t("agentConfig.addModel")}
+        >
+          <Plus size={16} color={theme.text} />
+        </AnimatedPressable>
       </View>
       {availableModels.length > 0 ? (
         <View style={styles.scannedModels}>
-          <Text style={styles.hint}>{t("agentConfig.scannedModels")}</Text>
-          {availableModels.map((model) => {
-            const selected = selectedModels.some((item) => item.toLocaleLowerCase() === model.toLocaleLowerCase());
-            return (
-              <Pressable key={model} style={[styles.modelCheckRow, selected && styles.modelCheckRowActive]} onPress={() => toggleModel(model)}>
-                <View style={[styles.checkbox, selected && styles.checkboxActive]} />
-                <Text style={styles.modelCheckText} numberOfLines={1} ellipsizeMode="tail">{model}</Text>
-              </Pressable>
-            );
-          })}
+          <View style={styles.scannedHead}>
+            <Text style={styles.fieldLabel}>{t("agentConfig.scannedModels")}</Text>
+            <Text style={styles.hint}>
+              {t("agentConfig.scannedSelected", {
+                selected: String(selectedModels.length),
+                total: String(availableModels.length),
+              })}
+            </Text>
+          </View>
+          {/* 独立可滚动区:高度上限落在 ScrollView 上,外层 overflow:hidden 裁剪,
+              模型再多也不会溢出压住下方的代理开关与取消/保存。 */}
+          <ScrollView
+            style={styles.scannedScroll}
+            contentContainerStyle={styles.scannedList}
+            nestedScrollEnabled
+            keyboardShouldPersistTaps="handled"
+          >
+            {availableModels.map((model) => {
+              const selected = selectedModels.some(
+                (item) => item.toLocaleLowerCase() === model.toLocaleLowerCase(),
+              );
+              return (
+                <AnimatedPressable
+                  key={model}
+                  style={[styles.modelCheckRow, selected && styles.modelCheckRowActive]}
+                  onPress={() => toggleModel(model)}
+                  accessibilityRole="checkbox"
+                  accessibilityState={{ checked: selected }}
+                >
+                  <View style={[styles.checkbox, selected && styles.checkboxActive]}>
+                    {selected ? <Check size={11} color={theme.onAccent} strokeWidth={3} /> : null}
+                  </View>
+                  <Text style={styles.modelCheckText} numberOfLines={1} ellipsizeMode="tail">
+                    {model}
+                  </Text>
+                </AnimatedPressable>
+              );
+            })}
+          </ScrollView>
         </View>
       ) : null}
       {draft.kind === "codex" && showBridge ? (
@@ -287,6 +317,7 @@ export default function AgentConfigScreen() {
   const [error, setError] = useState<string | null>(null);
   const [provider, setProvider] = useState<Provider>("anthropic");
   const [viewMode, setViewMode] = useState<ViewMode>("bar");
+  const [query, setQuery] = useState("");
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draft, setDraft] = useState<Draft>(() => toDraft(undefined));
   const [availableModels, setAvailableModels] = useState<string[]>([]);
@@ -307,9 +338,21 @@ export default function AgentConfigScreen() {
       .finally(() => setLoading(false));
   }, [request]);
 
-  useFocusEffect(useCallback(() => { refresh(); }, [refresh]));
+  useFocusEffect(
+    useCallback(() => {
+      refresh();
+    }, [refresh]),
+  );
 
-  const visibleAgents = useMemo(() => agents.filter((agent) => providerOf(agent) === provider), [agents, provider]);
+  const providerAgents = useMemo(
+    () => agents.filter((agent) => providerOf(agent) === provider),
+    [agents, provider],
+  );
+
+  const visibleAgents = useMemo(
+    () => providerAgents.filter((agent) => fuzzyMatch(agent.label, query)),
+    [providerAgents, query],
+  );
 
   const startEdit = (agent: AgentConfigEntry) => {
     setEditingId(agent.id);
@@ -336,7 +379,7 @@ export default function AgentConfigScreen() {
 
   const save = (agent?: AgentConfigEntry) => {
     if (saving) return;
-    const models = parseTextModels(draft.modelsText);
+    const models = normalizeModels(selectedModels);
     if ((!agent && !draft.name.trim()) || models.length === 0) {
       Alert.alert(t("agentConfig.createFailed"), t("newTask.modelRequired"));
       return;
@@ -357,7 +400,12 @@ export default function AgentConfigScreen() {
         refresh();
         if (!agent) Alert.alert(t("agentConfig.created"));
       })
-      .catch((err) => Alert.alert(agent ? t("hosts.saveFailed") : t("agentConfig.createFailed"), err instanceof Error ? err.message : String(err)))
+      .catch((err) =>
+        Alert.alert(
+          agent ? t("hosts.saveFailed") : t("agentConfig.createFailed"),
+          err instanceof Error ? err.message : String(err),
+        ),
+      )
       .finally(() => setSaving(false));
   };
 
@@ -380,12 +428,22 @@ export default function AgentConfigScreen() {
         setModelInput={setModelInput}
       />
       <View style={styles.editorActions}>
-        <Pressable style={styles.cancelButton} onPress={closeEditor}>
+        <AnimatedPressable style={styles.cancelButton} onPress={closeEditor}>
           <Text style={styles.cancelButtonText}>{t("hosts.cancel")}</Text>
-        </Pressable>
-        <Pressable style={[styles.saveButton, saving && styles.buttonDisabled]} disabled={saving} onPress={() => save(agent)}>
-          {saving ? <ActivityIndicator size="small" color={theme.onAccent} /> : <Text style={styles.saveButtonText}>{agent ? t("agentConfig.save") : t("agentConfig.create")}</Text>}
-        </Pressable>
+        </AnimatedPressable>
+        <AnimatedPressable
+          style={[styles.saveButton, saving && styles.buttonDisabled]}
+          disabled={saving}
+          onPress={() => save(agent)}
+        >
+          {saving ? (
+            <ActivityIndicator size="small" color={theme.onAccent} />
+          ) : (
+            <Text style={styles.saveButtonText}>
+              {agent ? t("agentConfig.save") : t("agentConfig.create")}
+            </Text>
+          )}
+        </AnimatedPressable>
       </View>
     </View>
   );
@@ -393,34 +451,87 @@ export default function AgentConfigScreen() {
   return (
     <View style={styles.screen}>
       <FlatList
-        key={`${provider}-${viewMode}`}
+        key={`${provider}-${viewMode}-${editingId ? "editing" : "browsing"}`}
         data={visibleAgents}
-        numColumns={viewMode === "grid" ? 2 : 1}
+        numColumns={editingId ? 1 : viewMode === "grid" ? 2 : 1}
         keyExtractor={(item) => item.id}
-        columnWrapperStyle={viewMode === "grid" ? styles.gridRow : undefined}
+        columnWrapperStyle={!editingId && viewMode === "grid" ? styles.gridRow : undefined}
         contentContainerStyle={styles.list}
         ListHeaderComponent={
           <View style={styles.toolbar}>
             <AnimatedSelection
               value={provider}
               options={[
-                { value: "anthropic", label: t("agentConfig.anthropic") },
-                { value: "openai", label: t("agentConfig.openai") },
+                {
+                  value: "anthropic",
+                  label: t("agentConfig.anthropic"),
+                  icon: (
+                    <AnthropicIcon
+                      size={16}
+                      color={provider === "anthropic" ? theme.onAccent : ANTHROPIC_BRAND}
+                    />
+                  ),
+                },
+                {
+                  value: "openai",
+                  label: t("agentConfig.openai"),
+                  icon: (
+                    <OpenAIIcon
+                      size={16}
+                      color={provider === "openai" ? theme.onAccent : theme.text}
+                    />
+                  ),
+                },
               ]}
               onChange={setProvider}
             />
             <View style={styles.toolbarRow}>
+              <View style={styles.searchBox}>
+                <Search size={15} color={theme.textHint} />
+                <TextInput
+                  style={styles.searchInput}
+                  value={query}
+                  onChangeText={setQuery}
+                  placeholder={t("agentConfig.searchPlaceholder")}
+                  placeholderTextColor={theme.textHint}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  clearButtonMode="while-editing"
+                  returnKeyType="search"
+                />
+              </View>
               <AnimatedSelection
                 value={viewMode}
                 options={[
-                  { value: "bar", label: t("agentConfig.barView") },
-                  { value: "grid", label: t("agentConfig.gridView") },
+                  {
+                    value: "bar",
+                    label: t("agentConfig.barView"),
+                    icon: (
+                      <Rows3
+                        size={16}
+                        color={viewMode === "bar" ? theme.onAccent : theme.textSecondary}
+                      />
+                    ),
+                  },
+                  {
+                    value: "grid",
+                    label: t("agentConfig.gridView"),
+                    icon: (
+                      <LayoutGrid
+                        size={16}
+                        color={viewMode === "grid" ? theme.onAccent : theme.textSecondary}
+                      />
+                    ),
+                  },
                 ]}
                 onChange={setViewMode}
+                compact
+                iconOnly
               />
-              <Pressable style={styles.addButton} onPress={startCreate}>
-                <Text style={styles.addButtonText}>＋ {t("agentConfig.add")}</Text>
-              </Pressable>
+              <AnimatedPressable style={styles.addButton} onPress={startCreate}>
+                <Plus size={16} color={theme.onAccent} />
+                <Text style={styles.addButtonText}>{t("agentConfig.add")}</Text>
+              </AnimatedPressable>
             </View>
             {createOpen ? renderEditor() : null}
           </View>
@@ -428,24 +539,50 @@ export default function AgentConfigScreen() {
         renderItem={({ item }) => {
           const editing = item.id === editingId;
           return (
-            <View style={[styles.card, viewMode === "grid" && styles.gridCard]}>
+            <View
+              style={[
+                styles.card,
+                viewMode === "grid" && !editingId && styles.gridCard,
+                editing && styles.editingCard,
+              ]}
+            >
               <View style={styles.cardHead}>
                 <View style={styles.cardTitleWrap}>
-                  <Text style={styles.cardTitle} numberOfLines={1}>{item.label}</Text>
+                  <Text style={styles.cardTitle} numberOfLines={1}>
+                    {item.label}
+                  </Text>
                   <Text style={styles.cardMeta} numberOfLines={1}>
-                    {item.baseUrl || (item.codexLike ? t("agentConfig.openai") : t("agentConfig.anthropic"))}
+                    {item.baseUrl ||
+                      (item.codexLike ? t("agentConfig.openai") : t("agentConfig.anthropic"))}
                   </Text>
                 </View>
-                <Pressable hitSlop={10} onPress={() => (editing ? closeEditor() : startEdit(item))}>
-                  <Text style={styles.actionText}>{editing ? t("agentConfig.collapse") : t("agentConfig.edit")}</Text>
-                </Pressable>
+                <AnimatedPressable
+                  hitSlop={10}
+                  style={styles.actionButton}
+                  onPress={() => (editing ? closeEditor() : startEdit(item))}
+                >
+                  <Text style={styles.actionText}>
+                    {editing ? t("agentConfig.collapse") : t("agentConfig.edit")}
+                  </Text>
+                </AnimatedPressable>
               </View>
               {editing ? renderEditor(item) : null}
             </View>
           );
         }}
         ListEmptyComponent={
-          loading ? <ActivityIndicator style={styles.loading} color={theme.textSecondary} /> : <Text style={styles.emptyText}>{error ?? (status === "online" ? t("agentConfig.empty") : t("agentConfig.offline"))}</Text>
+          loading ? (
+            <ActivityIndicator style={styles.loading} color={theme.textSecondary} />
+          ) : (
+            <Text style={styles.emptyText}>
+              {error ??
+                (query.trim() && providerAgents.length > 0
+                  ? t("agentConfig.noMatch")
+                  : status === "online"
+                    ? t("agentConfig.empty")
+                    : t("agentConfig.offline"))}
+            </Text>
+          )
         }
         refreshing={loading && agents.length > 0}
         onRefresh={refresh}
@@ -459,42 +596,181 @@ const styles = StyleSheet.create({
   list: { padding: spacing.md, gap: spacing.sm, paddingBottom: 36 },
   toolbar: { gap: spacing.sm, marginBottom: spacing.sm },
   toolbarRow: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
-  addButton: { flex: 1, minHeight: 34, alignItems: "center", justifyContent: "center", borderRadius: radii.button, backgroundColor: theme.accent, paddingHorizontal: spacing.sm },
-  addButtonText: { color: theme.onAccent, fontSize: 13, fontWeight: "700" },
+  searchBox: {
+    flex: 1,
+    minWidth: 0,
+    minHeight: 40,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    paddingHorizontal: spacing.sm,
+    borderRadius: radii.input,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: theme.border,
+    backgroundColor: theme.bgElevated,
+  },
+  searchInput: {
+    flex: 1,
+    minWidth: 0,
+    color: theme.text,
+    fontSize: 13.5,
+    paddingVertical: 0,
+    includeFontPadding: false,
+  },
+  addButton: {
+    minHeight: 40,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+    borderRadius: radii.button,
+    backgroundColor: theme.accent,
+    paddingHorizontal: spacing.md,
+  },
+  addButtonText: { color: theme.onAccent, fontSize: 14, fontWeight: "700" },
   gridRow: { gap: spacing.sm },
-  card: { flex: 1, backgroundColor: theme.bgCard, borderRadius: radii.card, borderWidth: StyleSheet.hairlineWidth, borderColor: theme.border, marginBottom: spacing.sm, overflow: "hidden" },
+  card: {
+    flex: 1,
+    backgroundColor: theme.bgCard,
+    borderRadius: radii.card,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: theme.border,
+    marginBottom: spacing.sm,
+    overflow: "hidden",
+  },
   gridCard: { maxWidth: "50%" },
+  editingCard: { maxWidth: "100%", width: "100%" },
   cardHead: { flexDirection: "row", alignItems: "center", gap: spacing.md, padding: spacing.md },
   cardTitleWrap: { flex: 1, minWidth: 0, gap: 3 },
   cardTitle: { color: theme.text, fontSize: 15, fontWeight: "600" },
   cardMeta: { color: theme.textHint, fontSize: typography.metaSize },
-  actionText: { color: theme.accent, fontSize: typography.metaSize, fontWeight: "600" },
-  editorWrap: { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: theme.border, padding: spacing.md, gap: spacing.md },
+  actionButton: {
+    minHeight: 32,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: spacing.xs,
+  },
+  actionText: {
+    color: theme.accent,
+    fontSize: typography.metaSize,
+    fontWeight: "600",
+    includeFontPadding: false,
+  },
+  editorWrap: {
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: theme.border,
+    padding: spacing.md,
+    gap: spacing.md,
+  },
   editor: { gap: spacing.sm },
   fieldLabel: { color: theme.textSecondary, fontSize: typography.metaSize, fontWeight: "700" },
   hint: { color: theme.textHint, fontSize: typography.metaSize, lineHeight: 18 },
-  input: { minHeight: 40, borderRadius: radii.input, borderWidth: StyleSheet.hairlineWidth, borderColor: theme.border, backgroundColor: theme.bgElevated, color: theme.text, paddingHorizontal: spacing.md, paddingVertical: spacing.sm, fontSize: 13 },
-  inputMultiline: { minHeight: 76, textAlignVertical: "top" },
+  input: {
+    minHeight: 40,
+    borderRadius: radii.input,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: theme.border,
+    backgroundColor: theme.bgElevated,
+    color: theme.text,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    fontSize: 13,
+  },
   modelActionRow: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
   modelInput: { flex: 1, minWidth: 0 },
-  outlineButton: { minHeight: 38, alignItems: "center", justifyContent: "center", paddingHorizontal: spacing.sm, borderRadius: radii.button, borderWidth: StyleSheet.hairlineWidth, borderColor: theme.border, backgroundColor: theme.bgElevated },
+  outlineButton: {
+    minHeight: 40,
+    minWidth: 40,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: spacing.sm,
+    borderRadius: radii.button,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: theme.accentBorder,
+    backgroundColor: theme.accentSoft,
+  },
   outlineButtonText: { color: theme.text, fontSize: 12.5, fontWeight: "600" },
-  scannedModels: { maxHeight: 210, gap: 4, padding: 4, borderRadius: radii.row, backgroundColor: theme.bgElevated },
-  modelCheckRow: { minHeight: 36, flexDirection: "row", alignItems: "center", gap: spacing.sm, paddingHorizontal: spacing.sm, borderRadius: radii.button },
-  modelCheckRowActive: { backgroundColor: "#2454a0" },
-  modelCheckText: { flex: 1, minWidth: 0, color: theme.text, fontSize: 12.5 },
-  checkbox: { width: 15, height: 15, borderRadius: 4, borderWidth: 1.5, borderColor: theme.border },
+  scannedModels: {
+    borderRadius: radii.row,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: theme.border,
+    backgroundColor: theme.bgElevated,
+    overflow: "hidden",
+  },
+  scannedHead: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: spacing.sm,
+    paddingHorizontal: spacing.sm,
+    paddingTop: spacing.sm,
+    paddingBottom: spacing.xs,
+  },
+  // ≈ 5.5 行(36 + 4 gap),超出后区域内部滚动
+  scannedScroll: { maxHeight: 224 },
+  scannedList: { gap: 4, padding: 4 },
+  modelCheckRow: {
+    minHeight: 36,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+    paddingHorizontal: spacing.sm,
+    borderRadius: radii.button,
+  },
+  modelCheckRowActive: { backgroundColor: theme.accentSoft },
+  modelCheckText: {
+    flex: 1,
+    minWidth: 0,
+    color: theme.text,
+    fontSize: 12.5,
+    includeFontPadding: false,
+    textAlignVertical: "center",
+  },
+  checkbox: {
+    width: 18,
+    height: 18,
+    borderRadius: 5,
+    borderWidth: 1.5,
+    borderColor: theme.border,
+    alignItems: "center",
+    justifyContent: "center",
+  },
   checkboxActive: { backgroundColor: theme.accent, borderColor: theme.accent },
-  toggleRow: { flexDirection: "row", alignItems: "center", gap: spacing.md, paddingVertical: spacing.xs },
+  toggleRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.md,
+    paddingVertical: spacing.xs,
+  },
   toggleCopy: { flex: 1, gap: 2 },
-  switchTrack: { width: 42, height: 24, borderRadius: 12, justifyContent: "center", padding: 3, backgroundColor: theme.border },
+  switchTrack: {
+    width: 42,
+    height: 24,
+    borderRadius: 12,
+    justifyContent: "center",
+    padding: 3,
+    backgroundColor: theme.border,
+  },
   switchTrackActive: { backgroundColor: theme.accent },
   switchThumb: { width: 18, height: 18, borderRadius: 9, backgroundColor: theme.textSecondary },
   switchThumbActive: { alignSelf: "flex-end", backgroundColor: theme.onAccent },
   editorActions: { flexDirection: "row", justifyContent: "flex-end", gap: spacing.sm },
-  cancelButton: { minHeight: 40, justifyContent: "center", paddingHorizontal: spacing.md },
+  cancelButton: {
+    minHeight: 40,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: spacing.md,
+  },
   cancelButtonText: { color: theme.textSecondary, fontSize: 13, fontWeight: "600" },
-  saveButton: { minHeight: 40, minWidth: 84, alignItems: "center", justifyContent: "center", paddingHorizontal: spacing.md, borderRadius: radii.button, backgroundColor: theme.accent },
+  saveButton: {
+    minHeight: 40,
+    minWidth: 84,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: spacing.md,
+    borderRadius: radii.button,
+    backgroundColor: theme.accent,
+  },
   saveButtonText: { color: theme.onAccent, fontSize: 13, fontWeight: "700" },
   buttonDisabled: { opacity: 0.45 },
   loading: { marginTop: spacing.xl },

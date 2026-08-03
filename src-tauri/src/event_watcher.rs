@@ -181,6 +181,7 @@ fn handle_session_start(app: &AppHandle, ev: &HookEvent) {
         return;
     }
     let tm = app.state::<TaskManager>();
+    crate::pty::notify_initial_input_session_ready(&tm, &ev.task_id);
     let session_path = ev.transcript_path.clone();
 
     // 已注册过且 session_id 一致则跳过,避免重复 emit

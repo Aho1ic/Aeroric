@@ -690,9 +690,11 @@ body {
 
 /* ── Branch Popover (searchable select) ─────────────────────────── */
 .branch-popover-content {
-  background: var(--bg-card);
+  background: color-mix(in srgb, var(--bg-card) 90%, transparent);
+  backdrop-filter: blur(18px) saturate(1.16);
+  -webkit-backdrop-filter: blur(18px) saturate(1.16);
   border: 1px solid var(--border-medium);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-lg);
   box-shadow: var(--shadow-popover);
   z-index: 2000;
   width: var(--radix-popover-trigger-width);
@@ -728,9 +730,13 @@ body {
   cursor: pointer;
   padding: 2px;
   color: var(--text-hint);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
+  transition:
+    color 0.12s ease,
+    background 0.12s ease;
 }
 .branch-popover-clear:hover {
+  background: var(--accent-subtle);
   color: var(--text-muted);
 }
 .branch-popover-list {
@@ -756,17 +762,28 @@ body {
   padding: 6px 10px;
   border: none;
   background: none;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   font-size: 13px;
   color: var(--text-primary);
   font-family: var(--font-ui);
   cursor: pointer;
   text-align: left;
   outline: none;
+  transition:
+    background 0.12s ease,
+    color 0.12s ease,
+    transform 0.12s ease;
 }
 .branch-popover-item:hover {
-  background: var(--control-active-bg);
-  color: var(--control-active-fg);
+  background: var(--accent-subtle);
+  color: var(--text-primary);
+  transform: translateX(1px);
+}
+.branch-popover-item:focus-visible {
+  background: var(--accent-subtle);
+  color: var(--text-primary);
+  outline: 1px solid var(--border-focus);
+  outline-offset: -1px;
 }
 .branch-popover-item-name {
   flex: 1;
@@ -1149,6 +1166,132 @@ body {
 }
 ::-webkit-scrollbar-thumb:hover {
   background: var(--text-hint);
+}
+
+/* ── Model options submenu ────────────────────────────────────── */
+.model-options-scroll {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.model-options-scroll::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
+}
+
+.model-options-submenu[data-state="open"] {
+  transform-origin: var(--radix-popover-content-transform-origin, left top);
+  animation: model-options-submenu-enter 190ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  will-change: opacity, transform, filter;
+}
+
+@keyframes model-options-submenu-enter {
+  from {
+    opacity: 0;
+    filter: blur(2px) saturate(0.9);
+    transform: translate3d(-7px, 4px, 0) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    filter: blur(0) saturate(1);
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+}
+
+.model-options-fast-indicator {
+  position: relative;
+  isolation: isolate;
+  filter: drop-shadow(0 0 4px color-mix(in srgb, var(--speed-fast-fg) 42%, transparent));
+}
+
+.model-options-fast-indicator::before,
+.model-options-fast-indicator::after {
+  position: absolute;
+  inset: -4px;
+  border-radius: 999px;
+  pointer-events: none;
+  content: "";
+}
+
+.model-options-fast-indicator::before {
+  z-index: -1;
+  background: radial-gradient(
+    circle,
+    color-mix(in srgb, var(--speed-fast-fg) 45%, transparent),
+    transparent 70%
+  );
+  opacity: 0.25;
+  transform: scale(0.72);
+  animation: model-options-fast-aura 2.2s ease-in-out infinite;
+}
+
+.model-options-fast-indicator::after {
+  z-index: 1;
+  background: linear-gradient(
+    105deg,
+    transparent 20%,
+    color-mix(in srgb, var(--speed-fast-fg) 68%, transparent) 48%,
+    transparent 76%
+  );
+  background-size: 220% 100%;
+  opacity: 0;
+  animation: model-options-fast-flow 2.1s ease-in-out infinite;
+}
+
+.model-options-fast-indicator > svg {
+  position: relative;
+  z-index: 2;
+  animation: model-options-fast-flicker 2.2s ease-in-out infinite;
+}
+
+@keyframes model-options-fast-aura {
+  0%,
+  100% {
+    opacity: 0.2;
+    transform: scale(0.72);
+  }
+  45% {
+    opacity: 0.62;
+    transform: scale(1.1);
+  }
+}
+
+@keyframes model-options-fast-flow {
+  0% {
+    background-position: 140% 0;
+    opacity: 0;
+  }
+  24%,
+  68% {
+    opacity: 0.72;
+  }
+  100% {
+    background-position: -120% 0;
+    opacity: 0;
+  }
+}
+
+@keyframes model-options-fast-flicker {
+  0%,
+  100% {
+    transform: translateY(0) rotate(0deg);
+  }
+  42% {
+    transform: translateY(-0.5px) rotate(-4deg);
+  }
+  70% {
+    transform: translateY(0.3px) rotate(1deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .model-options-submenu[data-state="open"],
+  .model-options-fast-indicator::before,
+  .model-options-fast-indicator::after,
+  .model-options-fast-indicator > svg {
+    animation: none !important;
+  }
 }
 
 .file-viewer-tab-strip {

@@ -127,6 +127,10 @@ export function persistProjectTasksQuietly(projectId: string, allTasks: Task[]) 
   queuedProjectTaskPersist(projectId, allTasks);
 }
 
+export function flushProjectTasks(projectId: string): Promise<void> {
+  return queuedProjectTaskPersist.flush(projectId);
+}
+
 export interface ProjectViewState {
   selectedTaskId: string | null;
   isNewTask: boolean;
