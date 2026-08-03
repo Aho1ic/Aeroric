@@ -65,6 +65,11 @@ export function TerminalPane({ taskId, active }: { taskId: string; active: boole
   const refitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingWritesRef = useRef("");
   const writeFrameRef = useRef<number | null>(null);
+  const snapshotInProgressRef = useRef(false);
+  const trackedWriteSequenceRef = useRef(0);
+  const acknowledgedWriteSequenceRef = useRef(0);
+  const snapshotLayoutBarrierRef = useRef<number | null>(null);
+  const snapshotLayoutPendingRef = useRef(false);
   const repeatTimersRef = useRef<{
     timeout: ReturnType<typeof setTimeout> | null;
     interval: ReturnType<typeof setInterval> | null;
@@ -76,8 +81,45 @@ export function TerminalPane({ taskId, active }: { taskId: string; active: boole
     );
   }, []);
 
+  const completeSnapshotLayout = useCallback(() => {
+    snapshotLayoutPendingRef.current = false;
+    snapshotLayoutBarrierRef.current = null;
+    if (viewModeRef.current !== "phone" || autoFitDoneRef.current) return;
+    autoFitDoneRef.current = true;
+    injectTerm({ type: "fit" });
+  }, [injectTerm]);
+
+  const requestSnapshotPhoneFit = useCallback(() => {
+    if (viewModeRef.current !== "phone" || autoFitDoneRef.current) return;
+    const barrier = trackedWriteSequenceRef.current;
+    snapshotLayoutBarrierRef.current = barrier;
+    if (acknowledgedWriteSequenceRef.current >= barrier) {
+      completeSnapshotLayout();
+    } else {
+      snapshotLayoutPendingRef.current = true;
+    }
+  }, [completeSnapshotLayout]);
+
+  const handleWriteComplete = useCallback(
+    (writeId: number) => {
+      acknowledgedWriteSequenceRef.current = Math.max(
+        acknowledgedWriteSequenceRef.current,
+        writeId,
+      );
+      const barrier = snapshotLayoutBarrierRef.current;
+      if (
+        snapshotLayoutPendingRef.current &&
+        barrier !== null &&
+        acknowledgedWriteSequenceRef.current >= barrier
+      ) {
+        completeSnapshotLayout();
+      }
+    },
+    [completeSnapshotLayout],
+  );
+
   const flushTermWrites = useCallback(
-    (scrollToBottom = false) => {
+    (scrollToBottom = false, trackCompletion = snapshotInProgressRef.current) => {
       if (writeFrameRef.current !== null) {
         cancelAnimationFrame(writeFrameRef.current);
         writeFrameRef.current = null;
@@ -85,7 +127,11 @@ export function TerminalPane({ taskId, active }: { taskId: string; active: boole
       const data = pendingWritesRef.current;
       if (!data) return false;
       pendingWritesRef.current = "";
-      injectTerm({ type: "write", data, scrollToBottom });
+      const message: Record<string, unknown> = { type: "write", data, scrollToBottom };
+      if (trackCompletion) {
+        message.writeId = ++trackedWriteSequenceRef.current;
+      }
+      injectTerm(message);
       return true;
     },
     [injectTerm],
@@ -169,6 +215,9 @@ export function TerminalPane({ taskId, active }: { taskId: string; active: boole
         case TerminalOpcode.SnapshotStart: {
           const meta = parseJsonPayload<SnapshotMeta>(frame.payload);
           pendingWritesRef.current = "";
+          snapshotInProgressRef.current = true;
+          snapshotLayoutPendingRef.current = false;
+          snapshotLayoutBarrierRef.current = null;
           injectTerm({ type: "reset" });
           if (meta?.cols && meta?.rows) {
             // 记下桌面端尺寸,切「电脑视图」时用它还原
@@ -183,12 +232,11 @@ export function TerminalPane({ taskId, active }: { taskId: string; active: boole
           queueTermWrite(payloadText(frame.payload));
           break;
         case TerminalOpcode.SnapshotEnd:
-          if (!flushTermWrites(true)) injectTerm({ type: "scrollToBottom" });
-          // 手机视图按当前 WebView 尺寸适配;运行中的任务会通过远端 resize 触发 SIGWINCH。
-          if (!autoFitDoneRef.current && viewModeRef.current === "phone") {
-            autoFitDoneRef.current = true;
-            injectTerm({ type: "fit" });
-          }
+          snapshotInProgressRef.current = false;
+          if (!flushTermWrites(true, true)) injectTerm({ type: "scrollToBottom" });
+          // 等快照写入 xterm 队列完成后再适配手机尺寸,否则全屏 TUI 的光标定位
+          // 会按旧列数与新列数交错解析,在两侧形成竖排残影。
+          requestSnapshotPhoneFit();
           break;
         case TerminalOpcode.Resized: {
           const size = parseJsonPayload<{ cols: number; rows: number }>(frame.payload);
@@ -202,7 +250,7 @@ export function TerminalPane({ taskId, active }: { taskId: string; active: boole
           break;
       }
     });
-  }, [flushTermWrites, injectTerm, onBinary, queueTermWrite]);
+  }, [flushTermWrites, injectTerm, onBinary, queueTermWrite, requestSnapshotPhoneFit]);
 
   const handleWebMessage = useCallback(
     (event: WebViewMessageEvent) => {
@@ -211,6 +259,7 @@ export function TerminalPane({ taskId, active }: { taskId: string; active: boole
         data?: string;
         cols?: number;
         rows?: number;
+        writeId?: number;
         focused?: boolean;
       };
       try {
@@ -229,6 +278,11 @@ export function TerminalPane({ taskId, active }: { taskId: string; active: boole
           // WebView 内隐藏 input 的 focus 状态,RN 的 Keyboard 事件覆盖不到
           setImeFocused(!!msg.focused);
           break;
+        case "write-complete":
+          if (typeof msg.writeId === "number" && Number.isInteger(msg.writeId) && msg.writeId > 0) {
+            handleWriteComplete(msg.writeId);
+          }
+          break;
         case "fit-result":
         case "resize-result":
           if (msg.cols && msg.rows && streamIdRef.current) {
@@ -246,7 +300,7 @@ export function TerminalPane({ taskId, active }: { taskId: string; active: boole
           break;
       }
     },
-    [sendBinary, sendInput],
+    [handleWriteComplete, sendBinary, sendInput],
   );
 
   const adjustFont = useCallback(
@@ -336,6 +390,9 @@ export function TerminalPane({ taskId, active }: { taskId: string; active: boole
       if (writeFrameRef.current !== null) cancelAnimationFrame(writeFrameRef.current);
       writeFrameRef.current = null;
       pendingWritesRef.current = "";
+      snapshotInProgressRef.current = false;
+      snapshotLayoutPendingRef.current = false;
+      snapshotLayoutBarrierRef.current = null;
       stopRepeat();
     };
   }, [stopRepeat]);

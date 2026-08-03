@@ -16,6 +16,7 @@ interface TaskBuffer {
 }
 
 export type TerminalWriteFn = (data: string, callback?: () => void) => void;
+export type TerminalResizeFn = (cols: number, rows: number) => void;
 
 interface TerminalWriteState {
   pending: string[];
@@ -74,6 +75,7 @@ export function useTerminalManager() {
     {},
   );
   const terminalWriteRefs = useRef<Record<string, TerminalWriteFn>>({});
+  const terminalResizeRefs = useRef<Record<string, TerminalResizeFn>>({});
   const terminalWriteStateRef = useRef<Record<string, TerminalWriteState>>({});
   const terminalSizeRef = useRef<{ cols: number; rows: number }>({ cols: 220, rows: 50 });
 
@@ -186,6 +188,7 @@ export function useTerminalManager() {
       delete taskBufferRef.current[taskId];
       delete terminalSnapshotRef.current[taskId];
       delete terminalWriteRefs.current[taskId];
+      delete terminalResizeRefs.current[taskId];
       delete terminalWriteStateRef.current[taskId];
     }
   }, []);
@@ -209,13 +212,26 @@ export function useTerminalManager() {
     invoke("resize_pty", { taskId, cols, rows }).catch(console.error);
   }, []);
 
+  // 远程手机调整的是共享 PTY。桌面端只同步本地 xterm 的逻辑网格，不能再调用
+  // handleResize 回写 PTY，否则会和手机端互相触发 resize，最终把 TUI 打散。
+  const handleRemoteResize = useCallback((taskId: string, cols: number, rows: number) => {
+    if (!Number.isInteger(cols) || !Number.isInteger(rows) || cols < 2 || rows < 2) return;
+    terminalResizeRefs.current[taskId]?.(cols, rows);
+  }, []);
+
   const handleRegisterTerminal = useCallback(
-    (taskId: string, fn: TerminalWriteFn | null): number => {
+    (taskId: string, fn: TerminalWriteFn | null, resizeFn?: TerminalResizeFn): number => {
       const state = resetTerminalWriteState(taskId);
       if (fn) {
         terminalWriteRefs.current[taskId] = fn;
+        if (resizeFn) {
+          terminalResizeRefs.current[taskId] = resizeFn;
+        } else {
+          delete terminalResizeRefs.current[taskId];
+        }
       } else {
         delete terminalWriteRefs.current[taskId];
+        delete terminalResizeRefs.current[taskId];
       }
       return state.generation;
     },
@@ -274,6 +290,7 @@ export function useTerminalManager() {
     writeErrorToTerminal,
     handleInput,
     handleResize,
+    handleRemoteResize,
     handleRegisterTerminal,
     handleTerminalReady,
     handleSnapshot,

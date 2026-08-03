@@ -32,6 +32,7 @@ import { extractRunPreviewCandidates } from "./preview/portPanelState";
 import { ProjectRail } from "./ProjectRail";
 import { SettingsDialog } from "./SettingsDialog";
 import { useToast } from "./Toast";
+import type { TerminalResizeFn, TerminalWriteFn } from "../hooks/useTerminalManager";
 import { renderIdeToolIcon, RightToolbar } from "./RightToolbar";
 import { IconButton } from "./IconButton";
 import { TodoTaskView } from "./TodoTaskView";
@@ -267,7 +268,8 @@ export function ProjectPage({
   onResize: (taskId: string, cols: number, rows: number) => void;
   onRegisterTerminal: (
     taskId: string,
-    writeFn: ((data: string, callback?: () => void) => void) | null,
+    writeFn: TerminalWriteFn | null,
+    resizeFn?: TerminalResizeFn,
   ) => number;
   onTerminalReady: (taskId: string, generation: number) => void;
   onSnapshot: (taskId: string, snapshot: string) => void;
@@ -2433,7 +2435,9 @@ export function ProjectPage({
                       onMarkDone={() => onMarkTaskDone(task.id)}
                       onInput={(data) => onInput(task.id, data)}
                       onResize={(cols, rows) => onResize(task.id, cols, rows)}
-                      onRegisterTerminal={(fn) => onRegisterTerminal(task.id, fn)}
+                      onRegisterTerminal={(fn, resizeFn) =>
+                        onRegisterTerminal(task.id, fn, resizeFn)
+                      }
                       onTerminalReady={(generation) => onTerminalReady(task.id, generation)}
                       onSnapshot={(snapshot) => onSnapshot(task.id, snapshot)}
                       getRestoreState={() => getTaskRestoreState(task.id)}

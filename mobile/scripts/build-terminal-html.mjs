@@ -302,6 +302,9 @@ const glue = `
                 resetSubPx();
                 term.scrollToBottom();
               }
+              if (typeof msg.writeId === "number" && msg.writeId > 0) {
+                post({ type: "write-complete", writeId: msg.writeId });
+              }
             });
             break;
           }

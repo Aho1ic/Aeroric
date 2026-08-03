@@ -12,6 +12,7 @@ import { useUsageSnapshot } from "../hooks/useUsageSnapshot";
 import { ENABLE_USAGE_INSIGHTS } from "../platform";
 import { agentDisplayLabel, isCodexLikeAgent, type AgentOption } from "../agents";
 import { useI18n } from "../i18n";
+import type { TerminalResizeFn } from "../hooks/useTerminalManager";
 import s from "../styles";
 import {
   X,
@@ -97,7 +98,10 @@ export function RunningView({
   onMarkDone: () => void;
   onInput: (data: string) => void;
   onResize: (cols: number, rows: number) => void;
-  onRegisterTerminal: (writeFn: ((data: string, callback?: () => void) => void) | null) => number;
+  onRegisterTerminal: (
+    writeFn: ((data: string, callback?: () => void) => void) | null,
+    resizeFn?: TerminalResizeFn,
+  ) => number;
   onTerminalReady: (generation: number) => void;
   onSnapshot?: (snapshot: string) => void;
   getRestoreState?: () => { initialData?: string; initialSnapshot?: string };

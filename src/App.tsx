@@ -460,9 +460,17 @@ function App() {
         updateTaskSession(task_id, session_id, session_path);
       },
     );
+    const p3 = listen<{ task_id: string; cols: number; rows: number }>(
+      "remote-terminal-resized",
+      (e) => {
+        const { task_id, cols, rows } = e.payload;
+        tm.handleRemoteResize(task_id, cols, rows);
+      },
+    );
     return () => {
       p1.then((fn) => fn());
       p2.then((fn) => fn());
+      p3.then((fn) => fn());
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);

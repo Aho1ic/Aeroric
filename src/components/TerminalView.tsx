@@ -21,13 +21,17 @@ import {
   applyTerminalFontSize,
   applyTerminalFontFamily,
 } from "./terminalShared";
+import type { TerminalResizeFn } from "../hooks/useTerminalManager";
 import { attachLinuxIMEFix, attachMacWebKitShiftInputFix } from "./terminalInputFix";
 import "@xterm/xterm/css/xterm.css";
 
 interface TerminalViewProps {
   onInput: (data: string) => void;
   onResize: (cols: number, rows: number) => void;
-  onRegisterTerminal: (writeFn: ((data: string, callback?: () => void) => void) | null) => number;
+  onRegisterTerminal: (
+    writeFn: ((data: string, callback?: () => void) => void) | null,
+    resizeFn?: TerminalResizeFn,
+  ) => number;
   onReady?: (generation: number) => void;
   themeVariant: ThemeVariant;
   terminalFontSize: TerminalFontSize;
@@ -123,7 +127,13 @@ export function TerminalView({
       onInputRef.current(data);
     };
 
-    const terminalGeneration = onRegisterRef.current(writer.write);
+    const syncRemoteResize: TerminalResizeFn = (cols, rows) => {
+      if (!Number.isInteger(cols) || !Number.isInteger(rows) || cols < 2 || rows < 2) return;
+      term.resize(cols, rows);
+      // 远程尺寸已经由服务端写入 PTY，这次只同步渲染器，不要再次通知后端。
+      lastSizeRef.current = { cols, rows };
+    };
+    const terminalGeneration = onRegisterRef.current(writer.write, syncRemoteResize);
 
     const completeRestore = () => {
       onReadyRef.current?.(terminalGeneration);
