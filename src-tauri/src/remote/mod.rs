@@ -208,6 +208,10 @@ pub(crate) fn host_name() -> String {
     #[cfg(not(target_os = "windows"))]
     {
         let mut buf = [0u8; 256];
+        // SAFETY: `buf` is a valid writable byte array and its length is the
+        // exact capacity passed to libc. `gethostname` writes at most that
+        // many bytes; the result is treated as bytes until the NUL terminator
+        // is found and then validated as UTF-8 below.
         let ok = unsafe { libc::gethostname(buf.as_mut_ptr() as *mut libc::c_char, buf.len()) };
         if ok == 0 {
             let end = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());

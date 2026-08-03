@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::fs;
 use std::io::Write;
 use std::path::PathBuf;
@@ -44,6 +45,44 @@ fn is_false(value: &bool) -> bool {
 
 fn ssh_connections_path() -> Result<PathBuf, String> {
     Ok(crate::storage::aeroric_dir()?.join("ssh-connections.json"))
+}
+
+fn ssh_passwords_path() -> Result<PathBuf, String> {
+    Ok(crate::storage::aeroric_dir()?.join("ssh-passwords.json"))
+}
+
+fn prepare_ssh_connections_for_storage(
+    connections: Vec<SshConnection>,
+) -> (Vec<SshConnection>, BTreeMap<String, String>) {
+    let mut public_connections = Vec::with_capacity(connections.len());
+    let mut passwords = BTreeMap::new();
+    for mut connection in connections {
+        if let Some(password) = connection.password.take().filter(|value| !value.is_empty()) {
+            passwords.insert(connection.id.clone(), password);
+        }
+        public_connections.push(connection);
+    }
+    (public_connections, passwords)
+}
+
+fn load_ssh_passwords() -> Result<BTreeMap<String, String>, String> {
+    let path = ssh_passwords_path()?;
+    if !path.exists() {
+        return Ok(BTreeMap::new());
+    }
+    crate::storage::ensure_private_file_permissions(&path)?;
+    let raw = fs::read_to_string(path).map_err(|e| e.to_string())?;
+    serde_json::from_str(&raw).map_err(|e| e.to_string())
+}
+
+fn save_ssh_connections_sync(connections: Vec<SshConnection>) -> Result<(), String> {
+    crate::storage::ensure_aeroric_dirs()?;
+    let (public_connections, passwords) = prepare_ssh_connections_for_storage(connections);
+    let public_raw =
+        serde_json::to_string_pretty(&public_connections).map_err(|e| e.to_string())?;
+    let password_raw = serde_json::to_string_pretty(&passwords).map_err(|e| e.to_string())?;
+    crate::storage::atomic_write_private(&ssh_passwords_path()?, &format!("{password_raw}\n"))?;
+    crate::storage::atomic_write_private(&ssh_connections_path()?, &format!("{public_raw}\n"))
 }
 
 pub(crate) fn shell_quote_posix(value: &str) -> String {
@@ -266,8 +305,45 @@ fn build_remote_resume_command(
     ))
 }
 
+/// `StrictHostKeyChecking=yes` makes ssh refuse hosts that are absent from
+/// known_hosts. That is the safe default, but ssh's own wording gives the user
+/// no way forward, so attach the concrete remediation to the raw stderr.
+pub(crate) fn annotate_ssh_error(connection: &SshConnection, error: impl Into<String>) -> String {
+    let error = error.into();
+    let lowered = error.to_ascii_lowercase();
+    let is_host_key_failure = lowered.contains("host key verification failed")
+        || lowered.contains("no matching host key")
+        || (lowered.contains("host key") && lowered.contains("changed"));
+    if !is_host_key_failure {
+        return error;
+    }
+    let target = if connection.port == 22 {
+        connection.host.clone()
+    } else {
+        format!("[{}]:{}", connection.host, connection.port)
+    };
+    let scan = if connection.port == 22 {
+        format!("ssh-keyscan {} >> ~/.ssh/known_hosts", connection.host)
+    } else {
+        format!(
+            "ssh-keyscan -p {} {} >> ~/.ssh/known_hosts",
+            connection.port, connection.host
+        )
+    };
+    format!(
+        "{error}\n\nAeroric requires a verified host key (StrictHostKeyChecking=yes). \
+Add {target} to ~/.ssh/known_hosts before connecting, for example by running \
+`{scan}` after confirming the fingerprint, or by connecting once with your own \
+ssh client. If the key legitimately changed, remove the stale entry with \
+`ssh-keygen -R {target}` first."
+    )
+}
+
 fn build_ssh_args(connection: &SshConnection, force_tty: bool) -> Vec<String> {
     let mut args = vec![if force_tty { "-tt" } else { "-T" }.to_string()];
+    // Never silently trust a changed or previously unseen host key. Users can
+    // provision the host key in their normal SSH known_hosts file first.
+    args.extend(["-o".to_string(), "StrictHostKeyChecking=yes".to_string()]);
     if force_tty {
         args.extend(["-o".to_string(), "IPQoS=none".to_string()]);
     }
@@ -626,8 +702,24 @@ pub async fn load_ssh_connections() -> Result<Vec<SshConnection>, String> {
         if !path.exists() {
             return Ok(vec![]);
         }
+        crate::storage::ensure_private_file_permissions(&path)?;
         let raw = fs::read_to_string(&path).map_err(|e| e.to_string())?;
-        serde_json::from_str(&raw).map_err(|e| e.to_string())
+        let mut connections: Vec<SshConnection> =
+            serde_json::from_str(&raw).map_err(|e| e.to_string())?;
+        let passwords = load_ssh_passwords()?;
+        let mut has_legacy_password = false;
+        for connection in &mut connections {
+            if let Some(password) = passwords.get(&connection.id) {
+                connection.password = Some(password.clone());
+            } else if connection.password.is_some() {
+                // Migrate the old inline-password format on the next write.
+                has_legacy_password = true;
+            }
+        }
+        if has_legacy_password {
+            save_ssh_connections_sync(connections.clone())?;
+        }
+        Ok(connections)
     })
     .await
     .map_err(|e| e.to_string())?
@@ -635,13 +727,9 @@ pub async fn load_ssh_connections() -> Result<Vec<SshConnection>, String> {
 
 #[tauri::command]
 pub async fn save_ssh_connections(connections: Vec<SshConnection>) -> Result<(), String> {
-    tokio::task::spawn_blocking(move || {
-        crate::storage::ensure_aeroric_dirs()?;
-        let raw = serde_json::to_string_pretty(&connections).map_err(|e| e.to_string())?;
-        crate::storage::atomic_write_private(&ssh_connections_path()?, &raw)
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    tokio::task::spawn_blocking(move || save_ssh_connections_sync(connections))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -908,6 +996,59 @@ mod tests {
     }
 
     #[test]
+    fn host_key_failures_carry_remediation_and_other_errors_pass_through() {
+        let connection = SshConnection {
+            id: "conn-1".to_string(),
+            name: "prod".to_string(),
+            group: None,
+            host: "prod.example.com".to_string(),
+            port: 2200,
+            username: "deploy".to_string(),
+            identity_file: None,
+            password: None,
+            remote_path: None,
+            auto_sudo_with_password: false,
+            created_at: 1,
+            last_connected_at: None,
+        };
+
+        let annotated = annotate_ssh_error(&connection, "Host key verification failed.");
+        assert!(annotated.contains("Host key verification failed."));
+        assert!(annotated.contains("StrictHostKeyChecking=yes"));
+        // Non-default ports must be bracketed the way known_hosts records them.
+        assert!(annotated.contains("[prod.example.com]:2200"));
+        assert!(annotated.contains("ssh-keyscan -p 2200 prod.example.com"));
+
+        // An unrelated failure must not gain host-key advice.
+        let unrelated = annotate_ssh_error(&connection, "Permission denied (publickey).");
+        assert_eq!(unrelated, "Permission denied (publickey).");
+    }
+
+    #[test]
+    fn persisted_ssh_connections_keep_passwords_out_of_public_json() {
+        let (public, passwords) = prepare_ssh_connections_for_storage(vec![SshConnection {
+            id: "conn-1".to_string(),
+            name: "prod".to_string(),
+            group: None,
+            host: "prod.example.com".to_string(),
+            port: 22,
+            username: "deploy".to_string(),
+            identity_file: None,
+            password: Some("secret".to_string()),
+            remote_path: None,
+            auto_sudo_with_password: false,
+            created_at: 1,
+            last_connected_at: None,
+        }]);
+
+        let public_json = serde_json::to_string(&public).unwrap();
+
+        assert!(!public_json.contains("secret"));
+        assert!(!public_json.contains("password"));
+        assert_eq!(passwords.get("conn-1"), Some(&"secret".to_string()));
+    }
+
+    #[test]
     fn ssh_args_include_default_port_and_target() {
         let args = build_ssh_args(
             &SshConnection {
@@ -931,6 +1072,8 @@ mod tests {
             args,
             vec![
                 "-tt",
+                "-o",
+                "StrictHostKeyChecking=yes",
                 "-o",
                 "IPQoS=none",
                 "-p",
@@ -964,6 +1107,8 @@ mod tests {
             args,
             vec![
                 "-tt",
+                "-o",
+                "StrictHostKeyChecking=yes",
                 "-o",
                 "IPQoS=none",
                 "-p",
@@ -1053,8 +1198,11 @@ mod tests {
             true,
         );
 
-        assert_eq!(args[5], "deploy && whoami@prod.example.com; touch /tmp/bad");
-        assert_eq!(args.len(), 6);
+        assert_eq!(
+            args.last().unwrap(),
+            "deploy && whoami@prod.example.com; touch /tmp/bad"
+        );
+        assert_eq!(args.len(), 8);
     }
 
     #[test]
@@ -1147,6 +1295,8 @@ mod tests {
             spec.args,
             vec![
                 "-T",
+                "-o",
+                "StrictHostKeyChecking=yes",
                 "-p",
                 "2200",
                 "-N",

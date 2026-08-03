@@ -349,7 +349,10 @@ fn run_ssh_output(connection: &SshConnection, remote_command: String) -> Result<
     crate::subprocess::configure_background_command(&mut cmd);
     let output = cmd.output().map_err(|e| e.to_string())?;
     if !output.status.success() {
-        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+        return Err(crate::ssh::annotate_ssh_error(
+            connection,
+            String::from_utf8_lossy(&output.stderr).trim(),
+        ));
     }
     Ok(output.stdout)
 }

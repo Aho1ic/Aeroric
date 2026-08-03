@@ -123,7 +123,9 @@ impl ApprovalRegistry {
         if entry.request.request_id != request_id {
             return Err("Approval request is stale".to_string());
         }
-        Ok(pending.remove(task_id).expect("entry checked above"))
+        pending
+            .remove(task_id)
+            .ok_or_else(|| "Approval request disappeared before it could be consumed".to_string())
     }
 
     fn restore(&self, task_id: String, entry: ApprovalEntry) {

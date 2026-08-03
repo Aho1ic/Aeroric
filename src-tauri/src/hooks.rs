@@ -102,10 +102,9 @@ fn codex_config_path() -> Result<PathBuf, String> {
 
 /// 检测可用的 node 解释器路径,失败返回 None。
 pub fn detect_node() -> Option<String> {
-    let raw = crate::platform::detect_path("node");
-    if raw.is_empty() {
-        return None;
-    }
+    let raw = crate::node_runtime::detect_node()?
+        .to_string_lossy()
+        .into_owned();
     // realpath 解析,绕开 nvm/asdf 这类 shim——仅 Unix 需要。
     // Windows 上 fs::canonicalize 会产出带 `\\?\` 前缀的 verbatim 路径,
     // 该前缀 cmd.exe 不识别(与 OS 版本无关,Win10+ 同样如此),会导致 hook

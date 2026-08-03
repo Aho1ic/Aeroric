@@ -99,14 +99,14 @@ fn run_remote_git_output(
     cmd.output().map_err(|e| e.to_string())
 }
 
-fn output_error(output: &Output, fallback: &str) -> String {
+fn output_error(connection: &SshConnection, output: &Output, fallback: &str) -> String {
     let stderr = String::from_utf8_lossy(&output.stderr);
     let stdout = String::from_utf8_lossy(&output.stdout);
     let message = format!("{}{}", stderr, stdout).trim().to_string();
     if message.is_empty() {
         fallback.to_string()
     } else {
-        message
+        crate::ssh::annotate_ssh_error(connection, message)
     }
 }
 
@@ -117,7 +117,11 @@ fn run_remote_git(
 ) -> Result<String, String> {
     let output = run_remote_git_output(connection, remote_project_path, args)?;
     if !output.status.success() {
-        return Err(output_error(&output, "Remote git command failed"));
+        return Err(output_error(
+            connection,
+            &output,
+            "Remote git command failed",
+        ));
     }
     Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }
@@ -230,6 +234,7 @@ fn remote_git_list_untracked_files(
     )?;
     if !output.status.success() {
         return Err(output_error(
+            connection,
             &output,
             "Failed to list remote untracked files",
         ));
@@ -272,7 +277,11 @@ fn remote_git_read_text_file(
     crate::subprocess::configure_background_command(&mut cmd);
     let output = cmd.output().map_err(|e| e.to_string())?;
     if !output.status.success() {
-        return Err(output_error(&output, "Failed to read remote git file"));
+        return Err(output_error(
+            connection,
+            &output,
+            "Failed to read remote git file",
+        ));
     }
     Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }
@@ -304,7 +313,11 @@ fn remote_git_write_text_file(
     }
     let output = child.wait_with_output().map_err(|e| e.to_string())?;
     if !output.status.success() {
-        return Err(output_error(&output, "Failed to write remote git file"));
+        return Err(output_error(
+            connection,
+            &output,
+            "Failed to write remote git file",
+        ));
     }
     Ok(())
 }
@@ -341,7 +354,11 @@ pub async fn remote_git_changes(
         ]);
         let output = run_remote_git_output(&connection, &remote_project_path, &args)?;
         if !output.status.success() {
-            return Err(output_error(&output, "Failed to get remote git status"));
+            return Err(output_error(
+                &connection,
+                &output,
+                "Failed to get remote git status",
+            ));
         }
         Ok(crate::git::parse_porcelain_z_status(&output.stdout))
     })
@@ -512,7 +529,11 @@ pub async fn remote_git_show_commit_diff(
             &["show".to_string(), "--format=".to_string(), commit_hash],
         )?;
         if !output.status.success() {
-            return Err(output_error(&output, "Failed to get remote commit diff"));
+            return Err(output_error(
+                &connection,
+                &output,
+                "Failed to get remote commit diff",
+            ));
         }
         Ok(trim_output(output.stdout, COMMIT_DIFF_LIMIT))
     })
@@ -542,7 +563,11 @@ pub async fn remote_git_show_file_diff(
             ],
         )?;
         if !output.status.success() {
-            return Err(output_error(&output, "Failed to get remote file diff"));
+            return Err(output_error(
+                &connection,
+                &output,
+                "Failed to get remote file diff",
+            ));
         }
         Ok(trim_output(output.stdout, COMMIT_DIFF_LIMIT))
     })
@@ -568,7 +593,11 @@ pub async fn remote_git_file_diff(
 
         let output = run_remote_git_output(&connection, &remote_project_path, &args)?;
         if !output.status.success() {
-            return Err(output_error(&output, "Failed to get remote file diff"));
+            return Err(output_error(
+                &connection,
+                &output,
+                "Failed to get remote file diff",
+            ));
         }
         if !output.stdout.is_empty() || staged {
             return Ok(trim_output(output.stdout, WORKTREE_DIFF_LIMIT));
@@ -587,6 +616,7 @@ pub async fn remote_git_file_diff(
         )?;
         if !fallback.status.success() && fallback.status.code() != Some(1) {
             return Err(output_error(
+                &connection,
                 &fallback,
                 "Failed to get remote untracked file diff",
             ));
@@ -853,7 +883,11 @@ pub async fn remote_git_blame_file(
             ],
         )?;
         if !output.status.success() {
-            return Err(output_error(&output, "Failed to load remote git blame"));
+            return Err(output_error(
+                &connection,
+                &output,
+                "Failed to load remote git blame",
+            ));
         }
         Ok(crate::git::GitBlameResult {
             file_path,
@@ -894,6 +928,7 @@ pub async fn remote_git_branch_graph(
         )?;
         if !output.status.success() {
             return Err(output_error(
+                &connection,
                 &output,
                 "Failed to load remote git branch graph",
             ));
@@ -921,7 +956,11 @@ pub async fn remote_git_stash_list(
             &str_args(&["stash", "list", "--format=%gd%x1f%H%x1f%cr%x1f%s"]),
         )?;
         if !output.status.success() {
-            return Err(output_error(&output, "Failed to list remote git stashes"));
+            return Err(output_error(
+                &connection,
+                &output,
+                "Failed to list remote git stashes",
+            ));
         }
         Ok(crate::git::parse_stash_list(&output.stdout))
     })
@@ -953,6 +992,7 @@ pub async fn remote_git_stash_diff(
         )?;
         if !output.status.success() {
             return Err(output_error(
+                &connection,
                 &output,
                 "Failed to load remote git stash diff",
             ));
@@ -1070,6 +1110,7 @@ pub async fn remote_git_conflict_files(
         )?;
         if !output.status.success() {
             return Err(output_error(
+                &connection,
                 &output,
                 "Failed to list remote conflict files",
             ));

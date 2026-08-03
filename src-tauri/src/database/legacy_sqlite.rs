@@ -879,15 +879,147 @@ fn split_sql_statements(sql: &str) -> Vec<String> {
     statements
 }
 
+fn strip_leading_sql_comments(mut sql: &str) -> &str {
+    loop {
+        sql = sql.trim_start();
+        if let Some(comment) = sql.strip_prefix("--") {
+            sql = comment.split_once('\n').map(|(_, rest)| rest).unwrap_or("");
+            continue;
+        }
+        if let Some(comment) = sql.strip_prefix("/*") {
+            sql = comment
+                .find("*/")
+                .map(|end| &comment[end + 2..])
+                .unwrap_or("");
+            continue;
+        }
+        return sql;
+    }
+}
+
 fn first_sql_word(sql: &str) -> String {
-    sql.split_whitespace()
+    strip_leading_sql_comments(sql)
+        .split_whitespace()
         .next()
-        .unwrap_or("")
+        .unwrap_or_default()
         .to_ascii_lowercase()
 }
 
+/// Blank out string literals, quoted identifiers and comments so keyword
+/// matching only ever sees SQL code. Without this a read-only query such as
+/// `WITH x AS (SELECT * FROM logs WHERE action = 'delete') SELECT * FROM x`
+/// is misread as a mutation and rejected. Each removed byte becomes a space so
+/// neighbouring words cannot fuse into a new token.
+fn strip_sql_literals(sql: &str) -> String {
+    let bytes = sql.as_bytes();
+    let mut output = String::with_capacity(sql.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        let byte = bytes[index];
+        let closing = match byte {
+            b'\'' => Some(b'\''),
+            b'"' => Some(b'"'),
+            b'`' => Some(b'`'),
+            b'[' => Some(b']'),
+            _ => None,
+        };
+        if let Some(closing) = closing {
+            output.push(' ');
+            index += 1;
+            while index < bytes.len() {
+                // '' inside a single-quoted literal is an escaped quote.
+                if bytes[index] == closing {
+                    if closing == b'\'' && bytes.get(index + 1) == Some(&b'\'') {
+                        output.push_str("  ");
+                        index += 2;
+                        continue;
+                    }
+                    output.push(' ');
+                    index += 1;
+                    break;
+                }
+                output.push(' ');
+                index += 1;
+            }
+            continue;
+        }
+        if byte == b'-' && bytes.get(index + 1) == Some(&b'-') {
+            while index < bytes.len() && bytes[index] != b'\n' {
+                output.push(' ');
+                index += 1;
+            }
+            continue;
+        }
+        if byte == b'/' && bytes.get(index + 1) == Some(&b'*') {
+            output.push_str("  ");
+            index += 2;
+            while index < bytes.len() {
+                if bytes[index] == b'*' && bytes.get(index + 1) == Some(&b'/') {
+                    output.push_str("  ");
+                    index += 2;
+                    break;
+                }
+                output.push(' ');
+                index += 1;
+            }
+            continue;
+        }
+        // Keep the scan ASCII-only: a non-ASCII byte can only belong to an
+        // identifier or literal, never to a keyword we look for.
+        output.push(if byte.is_ascii() { byte as char } else { ' ' });
+        index += 1;
+    }
+    output
+}
+
 fn is_query_statement(sql: &str) -> bool {
-    matches!(first_sql_word(sql).as_str(), "select" | "with" | "pragma")
+    match first_sql_word(sql).as_str() {
+        "select" | "pragma" => true,
+        // A WITH clause can prefix INSERT/UPDATE/DELETE/REPLACE. Treat those
+        // statements as writes so read-only connections cannot bypass the
+        // guard by hiding a mutation behind a CTE.
+        "with" => !contains_sql_word(
+            &strip_sql_literals(strip_leading_sql_comments(sql)),
+            &["insert", "update", "delete", "replace"],
+        ),
+        _ => false,
+    }
+}
+
+fn contains_sql_word(sql: &str, words: &[&str]) -> bool {
+    let normalized = sql.to_ascii_lowercase();
+    normalized
+        .split(|character: char| !character.is_ascii_alphanumeric() && character != '_')
+        .any(|word| words.contains(&word))
+}
+
+fn validate_sqlite_statement(statement: &str) -> Result<(), String> {
+    // Scan code only. `SELECT 'load_extension'` is an ordinary read, and a
+    // literal containing `=` must not trip the PRAGMA rule.
+    let normalized = strip_sql_literals(strip_leading_sql_comments(statement)).to_ascii_lowercase();
+    let normalized = normalized.trim().to_string();
+    let first = first_sql_word(&normalized);
+    let dangerous = matches!(first.as_str(), "attach" | "detach")
+        || (first == "vacuum" && contains_sql_word(&normalized, &["into"]))
+        || normalized.contains("load_extension")
+        || (first == "pragma"
+            && (normalized.contains('=')
+                || [
+                    "pragma writable_schema",
+                    "pragma trusted_schema",
+                    "pragma journal_mode(",
+                    "pragma locking_mode(",
+                    "pragma wal_checkpoint(",
+                ]
+                .iter()
+                .any(|prefix| normalized.starts_with(prefix))));
+    if dangerous {
+        return Err(
+            "SQLite statement is blocked because it can load extensions or access files outside the selected database"
+                .to_string(),
+        );
+    }
+    Ok(())
 }
 
 fn execute_query_sql(
@@ -922,6 +1054,9 @@ fn execute_sql(
     if statements.is_empty() {
         return Err("SQL cannot be empty".to_string());
     }
+    for statement in &statements {
+        validate_sqlite_statement(statement)?;
+    }
     let conn = Connection::open(path).map_err(|e| e.to_string())?;
     let page_size = normalize_page_size(page_size);
     if read_only
@@ -939,7 +1074,9 @@ fn execute_sql(
     for statement in statements.iter().take(statements.len().saturating_sub(1)) {
         rows_affected += conn.execute(statement, []).map_err(|e| e.to_string())?;
     }
-    let last = statements.last().expect("non-empty statements");
+    let Some(last) = statements.last() else {
+        return Err("SQL cannot be empty".to_string());
+    };
     if is_query_statement(last) {
         let mut result = execute_query_sql(&conn, last, page.max(1), page_size)?;
         result.rows_affected = rows_affected;
@@ -1289,6 +1426,87 @@ mod tests {
         .is_err());
 
         let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn read_only_rejects_mutating_ctes() {
+        let path = std::env::temp_dir().join(format!("aeroric-test-{}.db", Uuid::new_v4()));
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute("CREATE TABLE notes (title TEXT)", []).unwrap();
+        }
+        assert!(execute_sql(
+            &path,
+            "WITH target AS (SELECT rowid FROM notes) DELETE FROM notes WHERE rowid IN (SELECT rowid FROM target)",
+            1,
+            Some(100),
+            true,
+        )
+        .is_err());
+
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn blocks_sqlite_file_and_extension_escape_hatches() {
+        for statement in [
+            "ATTACH DATABASE '/tmp/other.db' AS other",
+            "/* user input */ DETACH DATABASE other",
+            "VACUUM INTO '/tmp/backup.db'",
+            "SELECT load_extension('/tmp/extension')",
+            "PRAGMA writable_schema = ON",
+        ] {
+            let error = validate_sqlite_statement(statement).unwrap_err();
+            assert!(error.contains("blocked"), "statement: {statement}");
+        }
+    }
+
+    #[test]
+    fn permits_normal_sqlite_queries_and_schema_changes() {
+        for statement in [
+            "-- read\nSELECT * FROM notes",
+            "PRAGMA table_info('notes')",
+            "CREATE TABLE notes (title TEXT)",
+            "UPDATE notes SET title = 'ok'",
+        ] {
+            assert!(
+                validate_sqlite_statement(statement).is_ok(),
+                "statement: {statement}"
+            );
+        }
+    }
+
+    #[test]
+    fn keyword_guards_ignore_string_literals_and_quoted_identifiers() {
+        // Keywords that only appear as data must not trip the guards.
+        for statement in [
+            "SELECT 'load_extension' AS label",
+            "SELECT * FROM notes WHERE title = 'attach database'",
+            "INSERT INTO notes (title) VALUES ('vacuum into backup')",
+            "SELECT \"load_extension\" FROM notes",
+        ] {
+            assert!(
+                validate_sqlite_statement(statement).is_ok(),
+                "statement: {statement}"
+            );
+        }
+
+        // A read-only CTE whose literal mentions a write verb stays a query.
+        assert!(is_query_statement(
+            "WITH x AS (SELECT * FROM logs WHERE action = 'delete') SELECT * FROM x"
+        ));
+        assert!(is_query_statement(
+            "WITH x AS (SELECT * FROM logs WHERE action IN ('insert', 'update')) SELECT * FROM x"
+        ));
+
+        // The real mutation behind a CTE is still classified as a write.
+        assert!(!is_query_statement(
+            "WITH target AS (SELECT rowid FROM notes) DELETE FROM notes WHERE rowid IN (SELECT rowid FROM target)"
+        ));
+
+        // And the escape hatches remain blocked when they are real code.
+        assert!(validate_sqlite_statement("SELECT load_extension('/tmp/x')").is_err());
+        assert!(validate_sqlite_statement("ATTACH DATABASE '/tmp/o.db' AS o").is_err());
     }
 
     #[test]

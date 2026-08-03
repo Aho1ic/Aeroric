@@ -9,6 +9,35 @@ use crate::ssh::SshConnection;
 
 const MAX_TEXT_SEARCH_RESULTS: usize = 500;
 const MAX_REMOTE_REPLACE_FILE_BYTES: u64 = 2 * 1024 * 1024;
+const MAX_REGEX_PATTERN_BYTES: usize = 8 * 1024;
+const REGEX_SIZE_LIMIT_BYTES: usize = 1024 * 1024;
+
+fn compile_search_regex(
+    pattern: &str,
+    case_sensitive: bool,
+    label: &str,
+) -> Result<regex::Regex, String> {
+    if pattern.len() > MAX_REGEX_PATTERN_BYTES {
+        return Err(format!(
+            "{label} is too long; regex patterns are limited to {MAX_REGEX_PATTERN_BYTES} bytes"
+        ));
+    }
+    regex::RegexBuilder::new(pattern)
+        .case_insensitive(!case_sensitive)
+        .size_limit(REGEX_SIZE_LIMIT_BYTES)
+        .dfa_size_limit(REGEX_SIZE_LIMIT_BYTES)
+        .build()
+        .map_err(|error| format!("Invalid regex: {error}"))
+}
+
+fn validate_regex_query(query: &str, options: &TextSearchOptions) -> Result<(), String> {
+    if options.regex.unwrap_or(false) && query.len() > MAX_REGEX_PATTERN_BYTES {
+        return Err(format!(
+            "Search regex is too long; regex patterns are limited to {MAX_REGEX_PATTERN_BYTES} bytes"
+        ));
+    }
+    Ok(())
+}
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -233,7 +262,10 @@ fn run_remote_search_output(
     crate::subprocess::configure_background_command(&mut cmd);
     let output = cmd.output().map_err(|e| e.to_string())?;
     if !output.status.success() {
-        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+        return Err(crate::ssh::annotate_ssh_error(
+            connection,
+            String::from_utf8_lossy(&output.stderr).trim(),
+        ));
     }
     Ok(output.stdout)
 }
@@ -270,7 +302,10 @@ fn write_remote_text_file(
     }
     let output = child.wait_with_output().map_err(|e| e.to_string())?;
     if !output.status.success() {
-        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+        return Err(crate::ssh::annotate_ssh_error(
+            connection,
+            String::from_utf8_lossy(&output.stderr).trim(),
+        ));
     }
     Ok(())
 }
@@ -369,7 +404,7 @@ fn glob_matches(pattern: &str, rel_path: &str, file_name: &str) -> bool {
     let path_mode = pattern.contains('/');
     let target = if path_mode { rel_path } else { file_name };
     let regex = glob_to_regex(pattern, path_mode);
-    regex::Regex::new(&regex)
+    compile_search_regex(&regex, true, "Glob pattern")
         .map(|regex| regex.is_match(target))
         .unwrap_or(false)
 }
@@ -418,12 +453,11 @@ fn fallback_match_line(
     options: &TextSearchOptions,
 ) -> Result<Option<(usize, String)>, String> {
     if options.regex.unwrap_or(false) {
-        let pattern = if options.case_sensitive.unwrap_or(false) {
-            query.to_string()
-        } else {
-            format!("(?i){query}")
-        };
-        let re = regex::Regex::new(&pattern).map_err(|e| format!("Invalid regex: {e}"))?;
+        let re = compile_search_regex(
+            query,
+            options.case_sensitive.unwrap_or(false),
+            "Search regex",
+        )?;
         for found in re.find_iter(line) {
             if options.whole_word.unwrap_or(false)
                 && (!is_left_word_boundary(line, found.start())
@@ -658,9 +692,6 @@ fn compile_structured_pattern(
     options: &TextSearchOptions,
 ) -> Result<regex::Regex, String> {
     let mut regex = String::new();
-    if !options.case_sensitive.unwrap_or(false) {
-        regex.push_str("(?i)");
-    }
     let chars: Vec<char> = pattern.trim().chars().collect();
     let mut index = 0;
     let mut pending_literal = String::new();
@@ -703,7 +734,11 @@ fn compile_structured_pattern(
     if !pending_literal.is_empty() {
         regex.push_str(&regex::escape(&pending_literal));
     }
-    regex::Regex::new(&regex).map_err(|e| format!("Invalid structured pattern: {e}"))
+    compile_search_regex(
+        &regex,
+        options.case_sensitive.unwrap_or(false),
+        "Structured search pattern",
+    )
 }
 
 fn line_info_at(content: &str, offset: usize) -> (usize, usize, String) {
@@ -850,12 +885,11 @@ struct ReplacementMatch {
 }
 
 fn regex_for_query(query: &str, options: &TextSearchOptions) -> Result<regex::Regex, String> {
-    let pattern = if options.case_sensitive.unwrap_or(false) {
-        query.to_string()
-    } else {
-        format!("(?i){query}")
-    };
-    regex::Regex::new(&pattern).map_err(|e| format!("Invalid regex: {e}"))
+    compile_search_regex(
+        query,
+        options.case_sensitive.unwrap_or(false),
+        "Replacement regex",
+    )
 }
 
 fn replacement_matches_in_line(
@@ -1053,6 +1087,7 @@ pub fn replace_text_preview_for_root(
             truncated: false,
         });
     }
+    validate_regex_query(&query, options)?;
     let mut files = Vec::new();
     let mut total_matches = 0;
     let truncated = collect_replace_preview_dir(
@@ -1180,12 +1215,16 @@ fn remote_replace_text_preview_for_root(
             truncated: false,
         });
     }
+    validate_regex_query(&query, options)?;
     let remote_command = build_remote_search_command(remote_root, &query, options);
     let mut cmd = crate::ssh::std_ssh_command_for_remote_command(connection, remote_command);
     crate::subprocess::configure_background_command(&mut cmd);
     let output = cmd.output().map_err(|e| e.to_string())?;
     if !output.status.success() && output.status.code() != Some(1) {
-        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+        return Err(crate::ssh::annotate_ssh_error(
+            connection,
+            String::from_utf8_lossy(&output.stderr).trim(),
+        ));
     }
     let stdout = String::from_utf8_lossy(&output.stdout);
     parse_remote_rg_replace_preview(remote_root, &stdout, &query, replacement, options)
@@ -1330,6 +1369,7 @@ pub async fn search_text(
         if query.is_empty() {
             return Ok(Vec::new());
         }
+        validate_regex_query(&query, &options)?;
         let limit = options.limit();
         let args = build_rg_search_args(&query, &options);
 
@@ -1368,13 +1408,17 @@ pub async fn remote_search_text(
         if query.is_empty() {
             return Ok(Vec::new());
         }
+        validate_regex_query(&query, &options)?;
         let limit = options.limit();
         let remote_command = build_remote_search_command(&remote_root, &query, &options);
         let mut cmd = crate::ssh::std_ssh_command_for_remote_command(&connection, remote_command);
         crate::subprocess::configure_background_command(&mut cmd);
         let output = cmd.output().map_err(|e| e.to_string())?;
         if !output.status.success() && output.status.code() != Some(1) {
-            return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+            return Err(crate::ssh::annotate_ssh_error(
+                &connection,
+                String::from_utf8_lossy(&output.stderr).trim(),
+            ));
         }
         let stdout = String::from_utf8_lossy(&output.stdout);
         Ok(parse_rg_json_lines(Path::new(&remote_root), &stdout, limit))
@@ -1624,6 +1668,23 @@ mod tests {
         let found = fallback_match_line("let value = 42", r"\d+", &options).unwrap();
 
         assert_eq!(found, Some((13, "42".to_string())));
+    }
+
+    #[test]
+    fn regex_search_rejects_unbounded_patterns() {
+        let options = TextSearchOptions {
+            case_sensitive: Some(false),
+            regex: Some(true),
+            whole_word: Some(false),
+            include_glob: None,
+            exclude_glob: None,
+            limit: Some(20),
+        };
+        let query = "a".repeat(MAX_REGEX_PATTERN_BYTES + 1);
+
+        let error = fallback_match_line("anything", &query, &options).unwrap_err();
+
+        assert!(error.contains("limited to 8192 bytes"));
     }
 
     #[test]

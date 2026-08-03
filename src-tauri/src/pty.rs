@@ -24,6 +24,13 @@ const STARTUP_FIRST_OUTPUT_TIMEOUT: Duration = Duration::from_secs(2);
 const STARTUP_NO_OUTPUT_FALLBACK: Duration = Duration::from_secs(5);
 const STARTUP_OUTPUT_QUIET: Duration = Duration::from_millis(220);
 const STARTUP_OUTPUT_MAX_WAIT: Duration = Duration::from_secs(2);
+const STARTUP_GATE_INPUT_SETTLE: Duration = Duration::from_millis(600);
+/// 门控等待的绝对上限。误判成门控时,没有上限会让首条 prompt 永不投递,
+/// 并把 blocking 线程占到 PTY 断开为止。到点后放弃注入而不是硬写入,
+/// 因为此时若确实存在真实确认框,写入会落进选择器。
+const STARTUP_GATE_MAX_WAIT: Duration = Duration::from_secs(120);
+/// `generic_gate` 判定所用的尾部窗口大小(字节)。
+const GENERIC_GATE_WINDOW: usize = 200;
 
 /// 启动态门控信号:首条输入可能需要等 trust folder / hook 授权完成后再投递。
 #[derive(Debug)]
@@ -444,9 +451,10 @@ pub(crate) fn spawn_pty_reader(
                     };
 
                     if valid_len > 0 {
-                        let data = std::str::from_utf8(&combined[..valid_len])
-                            .unwrap()
-                            .to_owned();
+                        let Ok(data) = std::str::from_utf8(&combined[..valid_len]) else {
+                            continue;
+                        };
+                        let data = data.to_owned();
                         if let Some(ref tx) = startup_tx {
                             let _ = tx.send(StartupSignal::Output(data.clone()));
                         }
@@ -769,11 +777,60 @@ fn strip_startup_ansi(input: &str) -> String {
     output
 }
 
+/// 返回不超过 `limit` 字节的尾部切片,且不切断 UTF-8 字符边界。
+fn trailing_window(text: &str, limit: usize) -> &str {
+    if text.len() <= limit {
+        return text;
+    }
+    let mut start = text.len() - limit;
+    while start < text.len() && !text.is_char_boundary(start) {
+        start += 1;
+    }
+    &text[start..]
+}
+
+fn has_choice_marker(text: &str) -> bool {
+    text.contains('?')
+        || text.contains("[y/n]")
+        || text.contains("[yes/no]")
+        || text.contains("(y/n)")
+        || text.contains("(yes/no)")
+        || text.contains("press enter")
+        || text.contains("select an option")
+        || text.contains("choose an option")
+        || (text.contains("1.") && text.contains("2."))
+}
+
+fn has_confirmation_scope(text: &str) -> bool {
+    text.contains("continue")
+        || text.contains("proceed")
+        || text.contains("confirm")
+        || text.contains("select")
+        || text.contains("choose")
+        || text.contains("allow")
+        || text.contains("approve")
+        || text.contains("trust")
+        || text.contains("review")
+        || text.contains("permission")
+        || text.contains("authorize")
+        || text.contains("enable")
+        || text.contains("want to")
+        || text.contains("are you sure")
+}
+
 fn startup_gate_text(input: &str) -> bool {
     let clean = strip_startup_ansi(input)
         .to_ascii_lowercase()
         .replace(['\r', '\n'], " ");
     let compact = clean.split_whitespace().collect::<Vec<_>>().join(" ");
+    let choice_marker = has_choice_marker(&compact);
+    let confirmation_scope = has_confirmation_scope(&compact);
+    // The generic gate is the loosest rule, so evaluate it only over the trailing
+    // window. Detection runs against an accumulated tail, and a `?` printed by a
+    // startup banner must not pair up with an unrelated "enable"/"review" word
+    // several hundred bytes later — that misread defers the prompt indefinitely.
+    let recent = trailing_window(&compact, GENERIC_GATE_WINDOW);
+    let generic_gate = has_choice_marker(recent) && has_confirmation_scope(recent);
     let trust_scope = compact.contains("folder") || compact.contains("workspace");
     let trust_gate = compact.contains("trust this")
         || compact.contains("trust folder")
@@ -782,15 +839,18 @@ fn startup_gate_text(input: &str) -> bool {
         || (compact.contains("do you trust") && trust_scope)
         || (compact.contains("trusted") && trust_scope);
     let hook_scope = compact.contains("hook") || compact.contains("hooks");
+    // Codex can stop at a review selector before SessionStart is emitted. This
+    // text is not necessarily phrased as a question, so treat it as a gate on
+    // its own; otherwise the deferred prompt can be written into the selector.
+    let hook_review_gate = hook_scope
+        && (compact.contains("need review")
+            || compact.contains("needs review")
+            || compact.contains("review required")
+            || compact.contains("review needed"));
     let hook_gate = hook_scope
-        && (compact.contains("allow")
-            || compact.contains("approve")
-            || compact.contains("enable")
-            || compact.contains("trust")
-            || compact.contains("authorize")
-            || compact.contains("permission to")
-            || compact.contains("run hook"));
-    trust_gate || hook_gate
+        && confirmation_scope
+        && (choice_marker || compact.contains("permission to") || compact.contains("run hook"));
+    trust_gate || hook_review_gate || hook_gate || generic_gate
 }
 
 fn startup_output_indicates_gate(tail: &mut String, output: &str) -> bool {
@@ -834,6 +894,13 @@ pub(crate) fn notify_initial_input_session_ready(task_manager: &TaskManager, tas
 }
 
 fn wait_for_initial_input_ready(startup_rx: std::sync::mpsc::Receiver<StartupSignal>) -> bool {
+    wait_for_initial_input_ready_with_cap(startup_rx, STARTUP_GATE_MAX_WAIT)
+}
+
+fn wait_for_initial_input_ready_with_cap(
+    startup_rx: std::sync::mpsc::Receiver<StartupSignal>,
+    gate_max_wait: Duration,
+) -> bool {
     let started_at = Instant::now();
     let no_output_deadline = started_at + STARTUP_NO_OUTPUT_FALLBACK;
     let first_output_at = None::<Instant>;
@@ -849,7 +916,7 @@ fn wait_for_initial_input_ready(startup_rx: std::sync::mpsc::Receiver<StartupSig
                 .saturating_duration_since(now)
                 .min(STARTUP_FIRST_OUTPUT_TIMEOUT)
         } else if gate_pending {
-            Duration::from_millis(300)
+            STARTUP_GATE_INPUT_SETTLE
         } else {
             STARTUP_OUTPUT_QUIET
         };
@@ -890,6 +957,11 @@ fn wait_for_initial_input_ready(startup_rx: std::sync::mpsc::Receiver<StartupSig
                 if gate_pending {
                     if user_confirmed_gate {
                         return true;
+                    }
+                    if Instant::now().duration_since(started_at) >= gate_max_wait {
+                        // 门控迟迟没被应答:要么判定误报,要么用户已经放弃。
+                        // 两种情况都不该继续占用 blocking 线程。
+                        return false;
                     }
                     continue;
                 }
@@ -1892,8 +1964,49 @@ mod tests {
         assert!(startup_gate_text(
             "Hooks are enabled. Allow hooks for this workspace?"
         ));
+        assert!(startup_gate_text(
+            "Hook needs review before the session can start"
+        ));
+        assert!(startup_gate_text(
+            "Select an option to continue: 1. Review 2. Allow"
+        ));
         assert!(!startup_gate_text("hook: SessionStart Completed"));
         assert!(!startup_gate_text("Starting workspace session"));
+    }
+
+    #[test]
+    fn startup_gate_ignores_a_stale_banner_question_mark() {
+        // A banner prints "? for shortcuts" and then, several hundred bytes
+        // later, an unrelated tip mentioning "enable". Neither is a gate, and
+        // pairing them across that distance would defer the initial prompt
+        // until the cap expires.
+        let banner = format!(
+            "welcome to the agent. press ? for shortcuts. {}tip: enable telemetry in settings.",
+            "loading modules. ".repeat(GENERIC_GATE_WINDOW / 8)
+        );
+        assert!(!startup_gate_text(&banner));
+
+        // The same words inside one prompt are still a gate.
+        assert!(startup_gate_text(
+            "Enable telemetry for this project? [y/N]"
+        ));
+    }
+
+    #[test]
+    fn startup_input_gives_up_on_a_gate_that_is_never_answered() {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        sender
+            .send(StartupSignal::Output(
+                "Hook needs review before continuing".to_string(),
+            ))
+            .unwrap();
+        // Hold the sender for the whole wait so the loop cannot exit through
+        // Disconnected. Only the absolute cap can release it.
+        let waiter = std::thread::spawn(move || {
+            wait_for_initial_input_ready_with_cap(receiver, Duration::from_millis(50))
+        });
+        assert!(!waiter.join().unwrap());
+        drop(sender);
     }
 
     #[test]
@@ -1908,6 +2021,38 @@ mod tests {
         std::thread::sleep(Duration::from_millis(40));
         sender.send(StartupSignal::UserInput).unwrap();
         assert!(waiter.join().unwrap());
+    }
+
+    #[test]
+    fn startup_input_waits_through_multiple_confirmation_screens() {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        sender
+            .send(StartupSignal::Output(
+                "Hook needs review: select an option".to_string(),
+            ))
+            .unwrap();
+        let waiter = std::thread::spawn(move || wait_for_initial_input_ready(receiver));
+        std::thread::sleep(Duration::from_millis(40));
+        sender.send(StartupSignal::UserInput).unwrap();
+        sender
+            .send(StartupSignal::Output(
+                "Do you trust this workspace? [y/N]".to_string(),
+            ))
+            .unwrap();
+        sender.send(StartupSignal::UserInput).unwrap();
+        assert!(waiter.join().unwrap());
+    }
+
+    #[test]
+    fn startup_input_is_not_released_by_an_unanswered_gate() {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        sender
+            .send(StartupSignal::Output(
+                "Hook needs review before continuing".to_string(),
+            ))
+            .unwrap();
+        drop(sender);
+        assert!(!wait_for_initial_input_ready(receiver));
     }
 
     #[test]

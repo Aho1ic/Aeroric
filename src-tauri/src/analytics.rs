@@ -515,7 +515,7 @@ fn pricing_for_request(request: &UsageRequest) -> Option<ModelPricing> {
     {
         (5.0, 0.5, 6.25, 25.0)
     } else if model.contains("sonnet-5") {
-        let introductory_end = chrono::NaiveDate::from_ymd_opt(2026, 8, 31).unwrap();
+        let introductory_end = chrono::NaiveDate::from_ymd_opt(2026, 8, 31)?;
         if request.date <= introductory_end {
             (2.0, 0.2, 2.5, 10.0)
         } else {

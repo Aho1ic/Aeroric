@@ -23,6 +23,7 @@ mod git;
 mod hooks;
 mod local_history;
 mod lsp;
+mod node_runtime;
 mod notification;
 mod platform;
 mod ports;
@@ -503,6 +504,7 @@ pub fn run() {
             agent_tools::get_agent_tool_status,
             agent_tools::install_agent_tools,
             agent_tools::cancel_agent_tool_install,
+            node_runtime::install_nodejs_on_windows,
             app_settings::get_system_fonts,
             platform::get_platform_runtime_info,
             platform::build_runnable_file_command,

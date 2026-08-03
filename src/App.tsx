@@ -816,7 +816,12 @@ function App() {
     });
   }
 
-  function invokeRemoteRunTask(task: Task, connection: SshConnection, remoteProjectPath: string) {
+  function invokeRemoteRunTask(
+    task: Task,
+    connection: SshConnection,
+    remoteProjectPath: string,
+    injectPromptIntoTerminal = false,
+  ) {
     invoke(taskCommandName("ssh", "run"), {
       taskId: task.id,
       connection,
@@ -827,7 +832,7 @@ function App() {
       reasoningEffort: task.reasoningEffort,
       speed: task.speed,
       permissionMode: task.permissionMode,
-      forcePromptInjection: Boolean(task.prompt.trim()),
+      forcePromptInjection: injectPromptIntoTerminal,
       cols: tm.terminalSizeRef.current.cols,
       rows: tm.terminalSizeRef.current.rows,
       onOutput: tm.createOutputChannel(task.id),
@@ -838,7 +843,12 @@ function App() {
     });
   }
 
-  function invokeWslRunTask(task: Task, distribution: string, linuxProjectPath: string) {
+  function invokeWslRunTask(
+    task: Task,
+    distribution: string,
+    linuxProjectPath: string,
+    injectPromptIntoTerminal = false,
+  ) {
     invoke(taskCommandName("wsl", "run"), {
       taskId: task.id,
       distribution,
@@ -849,7 +859,7 @@ function App() {
       reasoningEffort: task.reasoningEffort,
       speed: task.speed,
       permissionMode: task.permissionMode,
-      forcePromptInjection: Boolean(task.prompt.trim()),
+      forcePromptInjection: injectPromptIntoTerminal,
       cols: tm.terminalSizeRef.current.cols,
       rows: tm.terminalSizeRef.current.rows,
       onOutput: tm.createOutputChannel(task.id),
@@ -954,11 +964,21 @@ function App() {
     tm.resetTaskTerminal(taskId);
 
     if (projectLocation.kind === "ssh") {
-      invokeRemoteRunTask(baseTask, remoteConnection!, projectLocation.remotePath);
+      invokeRemoteRunTask(
+        baseTask,
+        remoteConnection!,
+        projectLocation.remotePath,
+        injectPromptIntoTerminal ?? false,
+      );
       return baseTask;
     }
     if (projectLocation.kind === "wsl") {
-      invokeWslRunTask(baseTask, projectLocation.distribution, projectLocation.linuxPath);
+      invokeWslRunTask(
+        baseTask,
+        projectLocation.distribution,
+        projectLocation.linuxPath,
+        injectPromptIntoTerminal ?? false,
+      );
       return baseTask;
     }
 
@@ -1035,7 +1055,10 @@ function App() {
       worktreePath ?? project.path,
       images,
       texts,
-      injectPromptIntoTerminal ?? Boolean(prompt.trim()),
+      // Built-in agents accept the initial prompt as a CLI argument and queue it
+      // behind their own startup confirmation flow. Only flows that explicitly
+      // need to type into the interactive composer opt into PTY injection.
+      injectPromptIntoTerminal ?? false,
     );
     return launchedTask;
   }

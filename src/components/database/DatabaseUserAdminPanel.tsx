@@ -65,11 +65,18 @@ function userAdminDialect(dbType: DbxDatabaseType): UserAdminDialect {
 // standard_conforming_strings setting; a plain '...' literal would let a
 // backslash-quote sequence escape the string when that setting is off.
 function quoteSqlString(value: string): string {
-  return `E'${value.replace(/\\/g, "\\\\").replace(/'/g, "''")}'`;
+  const escaped = value
+    // PostgreSQL text values cannot contain NUL. Keep it data-only instead of
+    // allowing a driver/parser to treat it as a C-string terminator.
+    .replace(/\0/g, "\\u0000")
+    .replace(/\\/g, "\\\\")
+    .replace(/'/g, "''");
+  return `E'${escaped}'`;
 }
 
 function quoteMySqlString(value: string): string {
-  return `'${value.replace(/\\/g, "\\\\").replace(/'/g, "''")}'`;
+  const escaped = value.replace(/\0/g, "\\0").replace(/\\/g, "\\\\").replace(/'/g, "''");
+  return `'${escaped}'`;
 }
 
 function quoteMySqlIdentifier(value: string): string {
@@ -522,6 +529,10 @@ export function DatabaseUserAdminPanel({ connection, database, schema }: Props) 
   }, [selectedLabel]);
 
   async function executeConfirmed(sql: string, messageKey: string) {
+    if (sql.includes("\0")) {
+      setStatus(t("database.userAdminInvalidInput"));
+      return;
+    }
     const accepted = await confirm(`${t(messageKey)}\n\n${sql}`, {
       title: t("database.previewSql"),
       kind: "warning",

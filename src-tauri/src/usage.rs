@@ -323,7 +323,9 @@ fn read_codex_usage_with_client(
         }
     }
 
-    let client = guard.as_mut().unwrap();
+    let Some(client) = guard.as_mut() else {
+        return unavailable("Codex usage client was not available after startup");
+    };
 
     match attempt_codex_usage_calls(client) {
         Ok(data) => UsageSource::Available { data },

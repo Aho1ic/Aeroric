@@ -9,10 +9,13 @@ import { SessionView } from "./SessionView";
 import { useToast } from "./Toast";
 import { shortenPath, getUsageColor } from "../utils";
 import { useUsageSnapshot } from "../hooks/useUsageSnapshot";
+import { usePlatformRuntimeInfo } from "../hooks/usePlatformRuntimeInfo";
 import { ENABLE_USAGE_INSIGHTS } from "../platform";
 import { agentDisplayLabel, isCodexLikeAgent, type AgentOption } from "../agents";
 import { useI18n } from "../i18n";
 import type { TerminalResizeFn } from "../hooks/useTerminalManager";
+import { shouldOfferWindowsNodeInstaller } from "./agentRuntimeRecovery";
+import { Button } from "./ui/Button";
 import s from "../styles";
 import {
   X,
@@ -32,6 +35,18 @@ interface SessionMetrics {
   total_tokens: number;
   context_tokens: number;
   context_window: number;
+}
+
+interface NodeRuntimeInstallResult {
+  nodePath: string;
+  version: string;
+  alreadyInstalled: boolean;
+}
+
+interface AgentToolInstallResult {
+  agent: string;
+  success: boolean;
+  message: string;
 }
 
 function formatDuration(secs: number): string {
@@ -114,6 +129,7 @@ export function RunningView({
 }) {
   const { t } = useI18n();
   const { showToast } = useToast();
+  const runtimeInfo = usePlatformRuntimeInfo();
   const isActive =
     task.status === "pending" || task.status === "running" || task.status === "input_required";
   const isDetached = task.status === "detached";
@@ -143,8 +159,17 @@ export function RunningView({
   const [worktreeBusy, setWorktreeBusy] = useState<"merge" | "discard" | null>(null);
   const [exporting, setExporting] = useState(false);
   const [bannerCompact, setBannerCompact] = useState(false);
+  const [nodeInstallerState, setNodeInstallerState] = useState<
+    "idle" | "installing" | "succeeded" | "failed"
+  >("idle");
+  const [nodeInstallerMessage, setNodeInstallerMessage] = useState("");
   const titleInputRef = useRef<HTMLInputElement>(null);
   const interruptedBannerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    setNodeInstallerState("idle");
+    setNodeInstallerMessage("");
+  }, [task.id, runCount]);
 
   useEffect(() => {
     if (!shouldLoadTerminalHistory) {
@@ -291,12 +316,52 @@ export function RunningView({
   const terminalInitialData = shouldLoadTerminalHistory
     ? terminalHistory || restoreState.initialData || ""
     : restoreState.initialData || terminalHistory;
+  const shouldShowNodeInstaller =
+    task.status === "failed" &&
+    shouldOfferWindowsNodeInstaller(
+      runtimeInfo.os,
+      `${task.failureReason ?? ""}\n${terminalInitialData}`,
+    );
   const terminalInitialSnapshot = terminalHistory ? undefined : restoreState.initialSnapshot;
   const hasTerminalRestoreState = Boolean(terminalInitialData || terminalInitialSnapshot);
   const terminalViewKey =
     shouldLoadTerminalHistory && hasTerminalRestoreState
       ? `${task.id}-${runCount}-${terminalHistoryVersion}`
       : `${task.id}-${runCount}`;
+
+  const handleInstallNode = async () => {
+    if (nodeInstallerState === "installing") return;
+
+    setNodeInstallerState("installing");
+    setNodeInstallerMessage("");
+    try {
+      const node = await invoke<NodeRuntimeInstallResult>("install_nodejs_on_windows");
+      const operationId =
+        typeof crypto !== "undefined" && "randomUUID" in crypto
+          ? crypto.randomUUID()
+          : `node-runtime-recovery-${Date.now()}`;
+      const results = await invoke<AgentToolInstallResult[]>("install_agent_tools", {
+        request: {
+          operation_id: operationId,
+          agents: ["claude"],
+        },
+      });
+      const claude = results.find((result) => result.agent === "claude");
+      if (!claude?.success) {
+        throw new Error(claude?.message || t("running.nodeInstallerClaudeFailed"));
+      }
+
+      const message = t("running.nodeInstallerSuccess", { version: node.version });
+      setNodeInstallerState("succeeded");
+      setNodeInstallerMessage(message);
+      showToast(message, "success");
+    } catch (error) {
+      const message = t("running.nodeInstallerFailure", { error: String(error) });
+      setNodeInstallerState("failed");
+      setNodeInstallerMessage(message);
+      showToast(message, "error");
+    }
+  };
 
   const terminalHistoryFallback = hasTerminalRestoreState ? (
     <div style={s.terminalContainer}>
@@ -739,18 +804,84 @@ export function RunningView({
             borderTop: "1px solid var(--border-dim)",
             flexShrink: 0,
             display: "flex",
-            alignItems: "center",
-            gap: 8,
+            flexDirection: "column",
+            alignItems: "stretch",
+            gap: shouldShowNodeInstaller ? 10 : 0,
           }}
         >
-          <StatusIcon status={task.status} />
-          <span style={{ fontSize: 12, color: "var(--text-muted)" }}>
-            {task.status === "done"
-              ? t("task.completed")
-              : task.status === "failed"
-                ? (task.failureReason ?? t("task.failed"))
-                : t("task.cancelled")}
-          </span>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <StatusIcon status={task.status} />
+            <span style={{ fontSize: 12, color: "var(--text-muted)" }}>
+              {task.status === "done"
+                ? t("task.completed")
+                : task.status === "failed"
+                  ? (task.failureReason ?? t("task.failed"))
+                  : t("task.cancelled")}
+            </span>
+          </div>
+          {shouldShowNodeInstaller && (
+            <div
+              data-testid="node-runtime-recovery"
+              style={{
+                display: "flex",
+                alignItems: "flex-start",
+                gap: 10,
+                padding: "10px 12px",
+                borderRadius: 8,
+                border: "1px solid color-mix(in srgb, var(--warning) 45%, var(--border-dim))",
+                background: "color-mix(in srgb, var(--warning) 9%, var(--bg-input))",
+              }}
+            >
+              <AlertTriangle
+                size={16}
+                strokeWidth={2.1}
+                style={{ color: "var(--warning)", flexShrink: 0, marginTop: 1 }}
+              />
+              <div style={{ minWidth: 0, flex: 1 }}>
+                <div style={{ fontSize: 12, fontWeight: 650, color: "var(--text-primary)" }}>
+                  {t("running.nodeInstallerTitle")}
+                </div>
+                <div
+                  style={{
+                    marginTop: 3,
+                    fontSize: 11.5,
+                    lineHeight: 1.45,
+                    color: "var(--text-secondary)",
+                  }}
+                >
+                  {t("running.nodeInstallerDescription")}
+                </div>
+                {nodeInstallerMessage && (
+                  <div
+                    role="status"
+                    style={{
+                      marginTop: 6,
+                      fontSize: 11.5,
+                      lineHeight: 1.4,
+                      color:
+                        nodeInstallerState === "failed" ? "var(--danger)" : "var(--text-secondary)",
+                    }}
+                  >
+                    {nodeInstallerMessage}
+                  </div>
+                )}
+              </div>
+              <Button
+                size="sm"
+                disabled={nodeInstallerState === "installing" || nodeInstallerState === "succeeded"}
+                onClick={() => void handleInstallNode()}
+              >
+                <Download size={13} strokeWidth={2.2} />
+                <span>
+                  {nodeInstallerState === "installing"
+                    ? t("running.installingNodeJs")
+                    : nodeInstallerState === "succeeded"
+                      ? t("running.nodeInstallerReady")
+                      : t("running.installNodeJs")}
+                </span>
+              </Button>
+            </div>
+          )}
         </div>
       )}
     </div>

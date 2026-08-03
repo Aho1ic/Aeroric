@@ -32,9 +32,11 @@ static CACHED_CLAUDE_VERSION: OnceLock<Mutex<Option<Option<String>>>> = OnceLock
 static CACHED_CODEX_VERSION: OnceLock<Mutex<Option<Option<String>>>> = OnceLock::new();
 static SETTINGS_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 const CLAUDE_BUILTIN_MODEL_ALIASES: &[&str] = &["fable", "opus", "sonnet"];
-const CLAUDE_AGENT_SCRIPT_MARKER: &str = "# AERORIC_CLAUDE_WRAPPER_VERSION=2";
-const CODEX_AGENT_SCRIPT_MARKER: &str = "# AERORIC_CODEX_WRAPPER_VERSION=3";
-const CODEX_CHAT_PROXY_MARKER: &str = "# AERORIC_CODEX_CHAT_PROXY_VERSION=2";
+const CLAUDE_AGENT_SCRIPT_MARKER: &str = "# AERORIC_CLAUDE_WRAPPER_VERSION=5";
+const CLAUDE_AGENT_SCRIPT_MARKER_PREFIX: &str = "# AERORIC_CLAUDE_WRAPPER_VERSION=";
+const CODEX_AGENT_SCRIPT_MARKER: &str = "# AERORIC_CODEX_WRAPPER_VERSION=4";
+const CODEX_CHAT_PROXY_MARKER: &str = "# AERORIC_CODEX_CHAT_PROXY_VERSION=3";
+const LOCAL_CHAT_PROXY_BYPASS: &str = "127.0.0.1,localhost,::1";
 const CODEX_CHAT_PROXY_SCRIPT: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/resources/codex_chat_proxy.py"
@@ -736,6 +738,31 @@ fn agent_scripts_dir() -> Result<PathBuf, String> {
     Ok(aeroric_dir()?.join("agents"))
 }
 
+fn agent_api_key_path(id: &str) -> Result<PathBuf, String> {
+    let id = sanitize_custom_agent_id(id);
+    if id.is_empty() {
+        return Err("Invalid custom agent id".to_string());
+    }
+    Ok(aeroric_dir()?.join("agent-credentials").join(id))
+}
+
+fn write_agent_api_key(id: &str, api_key: &str) -> Result<(), String> {
+    let path = agent_api_key_path(id)?;
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    }
+    atomic_write_private(&path, api_key.trim())
+}
+
+fn remove_agent_api_key(id: &str) -> Result<(), String> {
+    let path = agent_api_key_path(id)?;
+    match fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error.to_string()),
+    }
+}
+
 fn settings_path() -> Result<PathBuf, String> {
     Ok(aeroric_dir()?.join("settings.json"))
 }
@@ -800,9 +827,9 @@ pub(crate) fn ensure_user_agent_script_executable(path: &Path) -> Result<(), Str
         return Ok(());
     }
     let mode = metadata.permissions().mode();
-    // Scripts we generate under ~/.aeroric/agents embed the provider API key
-    // (export ANTHROPIC_API_KEY=...), so force owner-only 0o700 to keep other
-    // local users from reading the secret. For an arbitrary user-provided
+    // Scripts we generate under ~/.aeroric/agents read an owner-only provider
+    // API-key sidecar at runtime, so force owner-only 0o700 for the wrapper as
+    // well. For an arbitrary user-provided
     // program path we only add the execute bit and leave its other bits alone,
     // so we never silently tighten permissions on the user's own binaries.
     let is_managed_agent_script = agent_scripts_dir()
@@ -1719,6 +1746,24 @@ fn build_codex_agent_shell_script(draft: &AgentSetupDraft) -> String {
     } else {
         String::new()
     };
+    // Codex talks to the bridge over 127.0.0.1.  A process-level HTTP proxy
+    // must never receive that request: many proxy servers interpret its own
+    // loopback address and reply with a 502 before the local bridge is reached.
+    let local_proxy_bypass_environment = if use_proxy {
+        format!(
+            r#"existing_no_proxy="${{NO_PROXY:-${{no_proxy:-}}}}"
+if [ -n "$existing_no_proxy" ]; then
+  export NO_PROXY="${{existing_no_proxy}},{local_proxy_bypass}"
+else
+  export NO_PROXY="{local_proxy_bypass}"
+fi
+export no_proxy="$NO_PROXY"
+"#,
+            local_proxy_bypass = LOCAL_CHAT_PROXY_BYPASS,
+        )
+    } else {
+        String::new()
+    };
     let proxy_setup = if use_proxy {
         let (config_before_base_url, config_after_base_url) =
             split_codex_config_for_dynamic_base_url(&config);
@@ -1796,9 +1841,20 @@ set -euo pipefail
 AGENT_HOME="${{AERORIC_AGENT_HOME:-$HOME/.aeroric/agent-homes/{id}}}"
 mkdir -p "$AGENT_HOME"
 export CODEX_HOME="$AGENT_HOME"
-export OPENAI_API_KEY={api_key}
-export ANTHROPIC_API_KEY={api_key}
+API_KEY_FILE="${{AERORIC_AGENT_API_KEY_FILE:-$HOME/.aeroric/agent-credentials/{id}}}"
+if [ ! -r "$API_KEY_FILE" ]; then
+  echo "Aeroric API key file is missing: $API_KEY_FILE" >&2
+  exit 1
+fi
+api_key="$(cat -- "$API_KEY_FILE")"
+if [ -z "$api_key" ]; then
+  echo "Aeroric API key file is empty: $API_KEY_FILE" >&2
+  exit 1
+fi
+export OPENAI_API_KEY="$api_key"
+export ANTHROPIC_API_KEY="$api_key"
 {upstream_environment}
+{local_proxy_bypass_environment}
 {picker}
 
 cat <<'AERORIC_CODEX_MODELS' > "$CODEX_HOME/model-catalog.json"
@@ -1809,12 +1865,13 @@ AERORIC_CODEX_MODELS
 
 {codex_bin} "$@" || codex_status=$?
 codex_status="${{codex_status:-0}}"
+unset api_key
 exit "$codex_status"
 "#,
         id = id,
         proxy_marker = proxy_marker,
-        api_key = shell_quote(&draft.api_key),
         upstream_environment = upstream_environment,
+        local_proxy_bypass_environment = local_proxy_bypass_environment,
         picker = picker,
         model_catalog = model_catalog,
         proxy_setup = proxy_setup,
@@ -1859,11 +1916,22 @@ unset ANTHROPIC_DEFAULT_HAIKU_MODEL
 unset ANTHROPIC_MODEL
 unset AGENT_ROUTER_TOKEN
 
+API_KEY_FILE="${{AERORIC_AGENT_API_KEY_FILE:-$HOME/.aeroric/agent-credentials/{id}}}"
+if [ ! -r "$API_KEY_FILE" ]; then
+  echo "Aeroric API key file is missing: $API_KEY_FILE" >&2
+  exit 1
+fi
+api_key="$(cat -- "$API_KEY_FILE")"
+if [ -z "$api_key" ]; then
+  echo "Aeroric API key file is empty: $API_KEY_FILE" >&2
+  exit 1
+fi
+
 {picker}
 {context_setup}
 
 export ANTHROPIC_BASE_URL={base_url}
-export ANTHROPIC_AUTH_TOKEN={api_key}
+export ANTHROPIC_AUTH_TOKEN="$api_key"
 export AGENT_ROUTER_TOKEN="$ANTHROPIC_AUTH_TOKEN"
 export ANTHROPIC_DEFAULT_OPUS_MODEL="$selected_model"
 export ANTHROPIC_DEFAULT_SONNET_MODEL="$selected_model"
@@ -1876,7 +1944,6 @@ exec claude --model "$selected_model" "$@"
         picker = picker,
         context_setup = context_setup,
         base_url = shell_quote(&normalize_base_url(&draft.base_url)),
-        api_key = shell_quote(&draft.api_key),
     )
 }
 
@@ -1898,11 +1965,8 @@ fn powershell_recovery_values(draft: &AgentSetupDraft) -> String {
         .unwrap_or_default();
     let base_url = normalize_base_url(&draft.base_url);
     format!(
-        "# AERORIC_RECOVERY selected_model={}\n# AERORIC_RECOVERY OPENAI_API_KEY={}\n# AERORIC_RECOVERY ANTHROPIC_API_KEY={}\n# AERORIC_RECOVERY ANTHROPIC_AUTH_TOKEN={}\n# AERORIC_RECOVERY ANTHROPIC_BASE_URL={}\n# AERORIC_RECOVERY AERORIC_UPSTREAM_BASE_URL={}\n",
+        "# AERORIC_RECOVERY selected_model={}\n# AERORIC_RECOVERY ANTHROPIC_BASE_URL={}\n# AERORIC_RECOVERY AERORIC_UPSTREAM_BASE_URL={}\n",
         shell_quote(&model),
-        shell_quote(&draft.api_key),
-        shell_quote(&draft.api_key),
-        shell_quote(&draft.api_key),
         shell_quote(&base_url),
         shell_quote(&base_url),
     )
@@ -1927,6 +1991,27 @@ fn build_codex_agent_powershell_script(draft: &AgentSetupDraft) -> String {
         CODEX_CHAT_PROXY_MARKER
     } else {
         CODEX_AGENT_SCRIPT_MARKER
+    };
+    // Keep the Responses bridge on the local loopback interface even when the
+    // terminal inherited HTTP(S)_PROXY from Aeroric or the parent shell.
+    let local_proxy_bypass_environment = if use_proxy {
+        format!(
+            r#"$existingNoProxy = $env:NO_PROXY
+if ([string]::IsNullOrWhiteSpace($existingNoProxy)) {{
+  $existingNoProxy = $env:no_proxy
+}}
+$localProxyBypass = '{local_proxy_bypass}'
+if ([string]::IsNullOrWhiteSpace($existingNoProxy)) {{
+  $env:NO_PROXY = $localProxyBypass
+}} else {{
+  $env:NO_PROXY = "$existingNoProxy,$localProxyBypass"
+}}
+$env:no_proxy = $env:NO_PROXY
+"#,
+            local_proxy_bypass = LOCAL_CHAT_PROXY_BYPASS,
+        )
+    } else {
+        String::new()
     };
     let config_setup = if use_proxy {
         let (before, after) = split_codex_config_for_dynamic_base_url(&config);
@@ -1980,9 +2065,18 @@ $configContent = 'model = "' + $selectedModel + '"' + [Environment]::NewLine +
 $agentHome = if ($env:AERORIC_AGENT_HOME) {{ $env:AERORIC_AGENT_HOME }} else {{ Join-Path $HOME {relative_home} }}
 New-Item -ItemType Directory -Force -Path $agentHome | Out-Null
 $env:CODEX_HOME = $agentHome
-$env:OPENAI_API_KEY = {api_key}
-$env:ANTHROPIC_API_KEY = {api_key}
+$apiKeyFile = if ($env:AERORIC_AGENT_API_KEY_FILE) {{ $env:AERORIC_AGENT_API_KEY_FILE }} else {{ Join-Path $HOME {api_key_file} }}
+if (-not (Test-Path -LiteralPath $apiKeyFile -PathType Leaf)) {{
+  throw "Aeroric API key file is missing: $apiKeyFile"
+}}
+$apiKey = [System.IO.File]::ReadAllText($apiKeyFile).Trim()
+if ([string]::IsNullOrEmpty($apiKey)) {{
+  throw "Aeroric API key file is empty: $apiKeyFile"
+}}
+$env:OPENAI_API_KEY = $apiKey
+$env:ANTHROPIC_API_KEY = $apiKey
 $env:AERORIC_UPSTREAM_BASE_URL = {base_url}
+{local_proxy_bypass_environment}
 $selectedModel = if ($env:AERORIC_AGENT_MODEL) {{ $env:AERORIC_AGENT_MODEL }} else {{ {default_model} }}
 $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 [System.IO.File]::WriteAllText((Join-Path $agentHome 'model-catalog.json'), {model_catalog}, $utf8NoBom)
@@ -2003,12 +2097,85 @@ try {{
         marker = marker,
         recovery = powershell_recovery_values(draft),
         relative_home = powershell_quote(&format!(".aeroric\\agent-homes\\{id}")),
-        api_key = powershell_quote(draft.api_key.trim()),
+        api_key_file = powershell_quote(&format!(".aeroric\\agent-credentials\\{id}")),
         base_url = powershell_quote(&normalize_base_url(&draft.base_url)),
+        local_proxy_bypass_environment = local_proxy_bypass_environment,
         default_model = powershell_quote(&default_model),
         model_catalog = powershell_literal_block(&model_catalog),
         config_setup = config_setup,
         codex_bin = powershell_quote(&codex_bin),
+    )
+}
+
+#[cfg(any(windows, test))]
+fn powershell_claude_resolution_block(configured_path: &str) -> String {
+    format!(
+        r#"$nodeDirectories = @(
+  $env:NODE_HOME,
+  $env:NVM_SYMLINK,
+  [Environment]::ExpandEnvironmentVariables('%ProgramFiles%\nodejs'),
+  [Environment]::ExpandEnvironmentVariables('%ProgramFiles(x86)%\nodejs'),
+  [Environment]::ExpandEnvironmentVariables('%LOCALAPPDATA%\Programs\nodejs')
+)
+foreach ($nodeDirectory in $nodeDirectories) {{
+  if (-not [string]::IsNullOrWhiteSpace($nodeDirectory) -and (Test-Path -LiteralPath (Join-Path $nodeDirectory 'node.exe') -PathType Leaf)) {{
+    $env:PATH = "$nodeDirectory;$env:PATH"
+    break
+  }}
+}}
+
+$claudeExecutable = $null
+$configuredClaude = {configured_path}
+if (-not [string]::IsNullOrWhiteSpace($configuredClaude)) {{
+  $configuredCommand = Get-Command $configuredClaude -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+  if ($null -ne $configuredCommand) {{
+    $claudeExecutable = if ($configuredCommand.Path) {{ $configuredCommand.Path }} else {{ $configuredCommand.Source }}
+  }} elseif (Test-Path -LiteralPath $configuredClaude -PathType Leaf) {{
+    $claudeExecutable = (Resolve-Path -LiteralPath $configuredClaude).Path
+  }}
+}}
+if ([string]::IsNullOrWhiteSpace($claudeExecutable)) {{
+  $claudeCommand = Get-Command 'claude' -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+  if ($null -ne $claudeCommand) {{
+    $claudeExecutable = if ($claudeCommand.Path) {{ $claudeCommand.Path }} else {{ $claudeCommand.Source }}
+  }}
+}}
+
+$claudeCandidates = @(
+  [Environment]::ExpandEnvironmentVariables('%USERPROFILE%\.aeroric\tools\claude\current\claude.exe'),
+  [Environment]::ExpandEnvironmentVariables('%APPDATA%\npm\claude.cmd'),
+  [Environment]::ExpandEnvironmentVariables('%APPDATA%\npm\claude.ps1'),
+  [Environment]::ExpandEnvironmentVariables('%USERPROFILE%\.local\bin\claude.exe'),
+  [Environment]::ExpandEnvironmentVariables('%USERPROFILE%\.npm-global\bin\claude.cmd'),
+  [Environment]::ExpandEnvironmentVariables('%USERPROFILE%\scoop\shims\claude.cmd'),
+  [Environment]::ExpandEnvironmentVariables('%LOCALAPPDATA%\Programs\claude-code\claude.exe'),
+  [Environment]::ExpandEnvironmentVariables('%LOCALAPPDATA%\Programs\Claude\claude.exe')
+)
+$npmCommand = Get-Command 'npm' -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+if ($null -ne $npmCommand) {{
+  $npmExecutable = if ($npmCommand.Path) {{ $npmCommand.Path }} else {{ $npmCommand.Source }}
+  $npmPrefix = (& $npmExecutable prefix -g 2>$null | Select-Object -First 1)
+  if ($null -ne $npmPrefix) {{
+    $npmPrefix = $npmPrefix.ToString().Trim()
+    if ($npmPrefix) {{
+      $claudeCandidates += Join-Path $npmPrefix 'claude.cmd'
+      $claudeCandidates += Join-Path $npmPrefix 'claude.ps1'
+    }}
+  }}
+}}
+if ([string]::IsNullOrWhiteSpace($claudeExecutable)) {{
+  foreach ($candidate in $claudeCandidates) {{
+    if (-not [string]::IsNullOrWhiteSpace($candidate) -and (Test-Path -LiteralPath $candidate -PathType Leaf)) {{
+      $claudeExecutable = (Resolve-Path -LiteralPath $candidate).Path
+      break
+    }}
+  }}
+}}
+if ([string]::IsNullOrWhiteSpace($claudeExecutable)) {{
+  throw 'AERORIC_CLAUDE_CLI_NOT_FOUND: Claude Code CLI was not found. Install Node.js and Claude Code, or add its executable directory to PATH.'
+}}
+"#,
+        configured_path = powershell_quote(configured_path),
     )
 }
 
@@ -2045,13 +2212,22 @@ $env:TEMP = $env:TMP
 Remove-Item Env:ANTHROPIC_API_KEY, Env:ANTHROPIC_AUTH_TOKEN, Env:ANTHROPIC_BASE_URL -ErrorAction SilentlyContinue
 $selectedModel = if ($env:AERORIC_AGENT_MODEL) {{ $env:AERORIC_AGENT_MODEL }} else {{ {default_model} }}
 {context_setup}
+$apiKeyFile = if ($env:AERORIC_AGENT_API_KEY_FILE) {{ $env:AERORIC_AGENT_API_KEY_FILE }} else {{ Join-Path $HOME {api_key_file} }}
+if (-not (Test-Path -LiteralPath $apiKeyFile -PathType Leaf)) {{
+  throw "Aeroric API key file is missing: $apiKeyFile"
+}}
+$apiKey = [System.IO.File]::ReadAllText($apiKeyFile).Trim()
+if ([string]::IsNullOrEmpty($apiKey)) {{
+  throw "Aeroric API key file is empty: $apiKeyFile"
+}}
 $env:ANTHROPIC_BASE_URL = {base_url}
-$env:ANTHROPIC_AUTH_TOKEN = {api_key}
+$env:ANTHROPIC_AUTH_TOKEN = $apiKey
 $env:AGENT_ROUTER_TOKEN = $env:ANTHROPIC_AUTH_TOKEN
 $env:ANTHROPIC_DEFAULT_OPUS_MODEL = $selectedModel
 $env:ANTHROPIC_DEFAULT_SONNET_MODEL = $selectedModel
 $env:ANTHROPIC_DEFAULT_HAIKU_MODEL = $selectedModel
-& {claude_bin} --model $selectedModel @args
+{cli_resolution}
+& $claudeExecutable --model $selectedModel @args
 exit $LASTEXITCODE
 "#,
         marker = CLAUDE_AGENT_SCRIPT_MARKER,
@@ -2059,9 +2235,9 @@ exit $LASTEXITCODE
         relative_home = powershell_quote(&format!(".aeroric\\agent-homes\\{id}")),
         default_model = powershell_quote(&default_model),
         context_setup = context_setup,
+        api_key_file = powershell_quote(&format!(".aeroric\\agent-credentials\\{id}")),
         base_url = powershell_quote(&normalize_base_url(&draft.base_url)),
-        api_key = powershell_quote(draft.api_key.trim()),
-        claude_bin = powershell_quote(&claude_bin),
+        cli_resolution = powershell_claude_resolution_block(&claude_bin),
     )
 }
 
@@ -2107,6 +2283,9 @@ fn validate_agent_setup_draft(draft: &AgentSetupDraft) -> Result<String, String>
     }
     if draft.api_key.trim().is_empty() {
         return Err("API key is required".to_string());
+    }
+    if draft.api_key.contains('\0') || draft.base_url.contains('\0') {
+        return Err("API key and base URL cannot contain NUL bytes".to_string());
     }
     let models = normalize_setup_models(draft);
     if models.is_empty() {
@@ -2204,7 +2383,7 @@ fn generated_agent_script_target_path(id: &str, current_path: &str) -> Result<Pa
 
 fn is_aeroric_generated_agent_wrapper(content: &str) -> bool {
     is_aeroric_codex_wrapper(content)
-        || content.contains(CLAUDE_AGENT_SCRIPT_MARKER)
+        || content.contains(CLAUDE_AGENT_SCRIPT_MARKER_PREFIX)
         || (content.contains("export CLAUDE_CONFIG_DIR=")
             && content.contains("CLAUDE_CODE_SESSION_ENV_DIR"))
 }
@@ -2213,9 +2392,11 @@ fn write_generated_agent_script(
     id: &str,
     current_path: &str,
     content: &str,
+    api_key: &str,
 ) -> Result<PathBuf, String> {
     let target = generated_agent_script_target_path(id, current_path)?;
     write_agent_script_at_path(&target, content)?;
+    write_agent_api_key(id, api_key)?;
 
     let previous = PathBuf::from(normalize_config_path(current_path.to_string()));
     if !current_path.trim().is_empty() && previous != target {
@@ -2229,11 +2410,12 @@ fn write_generated_agent_script(
     Ok(target)
 }
 
-fn write_agent_script(id: &str, content: &str) -> Result<PathBuf, String> {
+fn write_agent_script(id: &str, content: &str, api_key: &str) -> Result<PathBuf, String> {
     let dir = agent_scripts_dir()?;
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let path = default_agent_script_path(id)?;
     write_agent_script_at_path(&path, content)?;
+    write_agent_api_key(id, api_key)?;
     Ok(path)
 }
 
@@ -2734,7 +2916,9 @@ fn refresh_stale_codex_agent_scripts(settings: &mut AppSettings) {
             continue;
         }
         let script = build_codex_agent_script(&draft);
-        if let Ok(path) = write_generated_agent_script(&profile.id, &script_path, &script) {
+        if let Ok(path) =
+            write_generated_agent_script(&profile.id, &script_path, &script, &profile.api_key)
+        {
             profile.path = path.to_string_lossy().into_owned();
         }
     }
@@ -2779,7 +2963,9 @@ fn refresh_stale_claude_agent_scripts(settings: &mut AppSettings) {
             continue;
         }
         let script = build_claude_code_agent_script(&draft);
-        if let Ok(path) = write_generated_agent_script(&profile.id, &script_path, &script) {
+        if let Ok(path) =
+            write_generated_agent_script(&profile.id, &script_path, &script, &profile.api_key)
+        {
             profile.path = path.to_string_lossy().into_owned();
         }
     }
@@ -3261,7 +3447,10 @@ fn import_agent_config_entry(
             let (path, config_lang) = if let Some(draft) = custom_agent_setup_draft(&agent) {
                 let id = validate_agent_setup_draft(&draft)?;
                 let script = build_agent_script(&draft);
-                (write_agent_script(&id, &script)?, "shellscript".to_string())
+                (
+                    write_agent_script(&id, &script, &draft.api_key)?,
+                    "shellscript".to_string(),
+                )
             } else {
                 let extension = match agent.config_lang.as_str() {
                     "json" => "json",
@@ -3762,7 +3951,8 @@ pub async fn save_custom_agent_profile(profile: CustomAgentProfile) -> Result<Ap
             validate_agent_setup_draft(&draft)?;
             let script = build_codex_agent_script(&draft);
             let script_path = normalize_config_path(profile.path.clone());
-            let path = write_generated_agent_script(&profile.id, &script_path, &script)?;
+            let path =
+                write_generated_agent_script(&profile.id, &script_path, &script, &profile.api_key)?;
             profile.path = path.to_string_lossy().into_owned();
         }
 
@@ -3795,7 +3985,7 @@ pub async fn setup_agent_profile(draft: AgentSetupDraft) -> Result<AppSettings, 
         let mut draft = draft;
         draft.id = id.clone();
         let script = build_agent_script(&draft);
-        let script_path = write_agent_script(&id, &script)?;
+        let script_path = write_agent_script(&id, &script, &draft.api_key)?;
         let profile = CustomAgentProfile {
             id: id.clone(),
             label: draft.label.trim().to_string(),
@@ -4004,7 +4194,8 @@ pub async fn update_custom_agent_models(
         validate_agent_setup_draft(&draft)?;
         let script = build_agent_script(&draft);
         let script_path = normalize_config_path(profile.path.clone());
-        let path = write_generated_agent_script(&profile.id, &script_path, &script)?;
+        let path =
+            write_generated_agent_script(&profile.id, &script_path, &script, &profile.api_key)?;
         profile.path = path.to_string_lossy().into_owned();
         profile.models = models;
 
@@ -4066,7 +4257,8 @@ pub async fn update_custom_agent_chat_completions_proxy(
         validate_agent_setup_draft(&draft)?;
         let script = build_codex_agent_script(&draft);
         let script_path = normalize_config_path(profile.path.clone());
-        let path = write_generated_agent_script(&profile.id, &script_path, &script)?;
+        let path =
+            write_generated_agent_script(&profile.id, &script_path, &script, &profile.api_key)?;
         profile.path = path.to_string_lossy().into_owned();
         profile.enable_chat_completions_proxy = enabled;
 
@@ -4126,7 +4318,8 @@ pub async fn update_custom_agent_context(
         validate_agent_setup_draft(&draft)?;
         let script = build_claude_code_agent_script(&draft);
         let script_path = normalize_config_path(profile.path.clone());
-        let path = write_generated_agent_script(&profile.id, &script_path, &script)?;
+        let path =
+            write_generated_agent_script(&profile.id, &script_path, &script, &profile.api_key)?;
         profile.path = path.to_string_lossy().into_owned();
         profile.enable_1m_context = enable_1m_context;
 
@@ -4158,6 +4351,7 @@ pub async fn delete_custom_agent_profile(id: String) -> Result<AppSettings, Stri
         if let Some(profile) = removed_profile.as_ref() {
             let generated = profile_uses_aeroric_generated_wrapper(profile);
             remove_agent_profile_file(&profile.path)?;
+            remove_agent_api_key(&normalized_id)?;
             if generated {
                 remove_exact_generated_agent_home(&normalized_id)?;
             }
@@ -5320,6 +5514,19 @@ api_key = "sk-codex"
         assert_eq!(resolved, "__aeroric_missing_agent_binary__");
     }
 
+    #[test]
+    fn recognizes_previous_claude_wrapper_versions_for_safe_refresh() {
+        assert!(is_aeroric_generated_agent_wrapper(
+            "# AERORIC_CLAUDE_WRAPPER_VERSION=2\n& 'claude' @args"
+        ));
+        assert!(is_aeroric_generated_agent_wrapper(
+            "# AERORIC_CLAUDE_WRAPPER_VERSION=4\n& 'claude' @args"
+        ));
+        assert!(!is_aeroric_generated_agent_wrapper(
+            "# My Claude wrapper\n& 'claude' @args"
+        ));
+    }
+
     #[cfg(windows)]
     #[test]
     fn windows_shell_agent_uses_an_interpreter_without_rewriting_configured_path() {
@@ -5619,7 +5826,9 @@ api_key = "sk-codex"
         assert!(script.contains("model_catalog_json = \"model-catalog.json\""));
         assert!(script.contains("\"slug\": \"gpt-5.6-sol\""));
         assert!(script.contains("env_key = \"OPENAI_API_KEY\""));
-        assert!(script.contains("export OPENAI_API_KEY='sk-test'"));
+        assert!(script.contains("API_KEY_FILE=\"${AERORIC_AGENT_API_KEY_FILE:-$HOME/.aeroric/agent-credentials/gpt55}\""));
+        assert!(!script.contains("existing_no_proxy="));
+        assert!(!script.contains("sk-test"));
     }
 
     #[cfg(not(windows))]
@@ -5645,6 +5854,10 @@ api_key = "sk-codex"
         assert!(!script.contains("base_url = \"https://example.com/v1\""));
         assert!(script.contains(CODEX_CHAT_PROXY_MARKER));
         assert!(script.contains("codex-chat-proxy.py"));
+        assert!(
+            script.contains(r#"export NO_PROXY="${existing_no_proxy},127.0.0.1,localhost,::1""#)
+        );
+        assert!(script.contains("export no_proxy=\"$NO_PROXY\""));
     }
 
     #[test]
@@ -5663,9 +5876,12 @@ api_key = "sk-codex"
         };
         let codex_script = build_codex_agent_powershell_script(&codex);
         assert!(codex_script.contains("$env:CODEX_HOME"));
-        assert!(codex_script.contains("$env:OPENAI_API_KEY = 'sk''test'"));
+        assert!(codex_script.contains("agent-credentials\\gpt55"));
+        assert!(!codex_script.contains("sk''test"));
         assert!(codex_script.contains("Start-Process"));
         assert!(codex_script.contains("codex-chat-proxy.py"));
+        assert!(codex_script.contains("$localProxyBypass = '127.0.0.1,localhost,::1'"));
+        assert!(codex_script.contains("$env:no_proxy = $env:NO_PROXY"));
         assert!(codex_script.contains(" @args"));
         assert!(codex_script.contains("# AERORIC_RECOVERY selected_model='gpt-5.6'"));
 
@@ -5683,7 +5899,18 @@ api_key = "sk-codex"
         };
         let claude_script = build_claude_code_agent_powershell_script(&claude);
         assert!(claude_script.contains("$env:CLAUDE_CONFIG_DIR"));
-        assert!(claude_script.contains("$env:ANTHROPIC_AUTH_TOKEN = 'sk''test'"));
+        assert!(claude_script.contains("# AERORIC_CLAUDE_WRAPPER_VERSION=5"));
+        assert!(claude_script.contains("agent-credentials\\agentrouter"));
+        assert!(!claude_script.contains("sk''test"));
+        assert!(claude_script.contains("Get-Command 'claude' -CommandType Application"));
+        assert!(claude_script.contains("%ProgramFiles%\\nodejs"));
+        assert!(claude_script.contains("$env:PATH = \"$nodeDirectory;$env:PATH\""));
+        assert!(
+            claude_script.contains("%USERPROFILE%\\.aeroric\\tools\\claude\\current\\claude.exe")
+        );
+        assert!(claude_script.contains("%APPDATA%\\npm\\claude.cmd"));
+        assert!(claude_script.contains("npmExecutable prefix -g"));
+        assert!(claude_script.contains("AERORIC_CLAUDE_CLI_NOT_FOUND"));
         assert!(claude_script.contains("$selectedModel += '[1m]'"));
         assert!(claude_script.contains("--model $selectedModel @args"));
     }
@@ -5758,7 +5985,8 @@ api_key = "sk-codex"
 
         assert!(script.contains("CLAUDE_CONFIG_DIR"));
         assert!(script.contains("export ANTHROPIC_BASE_URL='https://agentrouter.org'"));
-        assert!(script.contains("export ANTHROPIC_AUTH_TOKEN='sk-test'"));
+        assert!(script.contains("export ANTHROPIC_AUTH_TOKEN=\"$api_key\""));
+        assert!(!script.contains("sk-test"));
         assert!(!script.contains("export ANTHROPIC_API_KEY"));
         assert!(script.contains("selected_model='claude-opus-4-8'"));
         assert!(script.contains("selected_model=\"${selected_model}[1m]\""));
@@ -6378,7 +6606,7 @@ printf 'model_catalog_json = "model-catalog.json"\n'
         let script_path = dir.join("liwan.sh");
         fs::write(
             &script_path,
-            "#!/bin/bash\n# AERORIC_CODEX_CHAT_PROXY_VERSION=1\n",
+            "#!/bin/bash\n# AERORIC_CODEX_CHAT_PROXY_VERSION=2\n",
         )
         .unwrap();
         let mut settings = AppSettings {
@@ -6406,6 +6634,7 @@ printf 'model_catalog_json = "model-catalog.json"\n'
         assert!(script.contains(CODEX_CHAT_PROXY_MARKER));
         assert!(script.contains("export AERORIC_UPSTREAM_BASE_URL='https://metapi.example/v1'"));
         assert!(script.contains("codex-chat-proxy.py"));
+        assert!(script.contains("export no_proxy=\"$NO_PROXY\""));
         let _ = fs::remove_dir_all(dir);
     }
 

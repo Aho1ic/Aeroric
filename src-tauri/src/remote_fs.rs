@@ -335,7 +335,10 @@ fn run_ssh_output(connection: &SshConnection, remote_command: String) -> Result<
     crate::subprocess::configure_background_command(&mut cmd);
     let output = cmd.output().map_err(|e| e.to_string())?;
     if !output.status.success() {
-        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+        return Err(crate::ssh::annotate_ssh_error(
+            connection,
+            String::from_utf8_lossy(&output.stderr).trim(),
+        ));
     }
     Ok(output.stdout)
 }
@@ -527,7 +530,10 @@ pub async fn remote_write_file_content(
         }
         let output = child.wait_with_output().map_err(|e| e.to_string())?;
         if !output.status.success() {
-            return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+            return Err(crate::ssh::annotate_ssh_error(
+                &connection,
+                String::from_utf8_lossy(&output.stderr).trim(),
+            ));
         }
         Ok(())
     })
@@ -738,7 +744,10 @@ pub async fn remote_upload_local_paths_to_directory(
             .output()
             .map_err(|e| e.to_string())?;
         if !output.status.success() {
-            return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+            return Err(crate::ssh::annotate_ssh_error(
+                &connection,
+                String::from_utf8_lossy(&output.stderr).trim(),
+            ));
         }
         Ok(())
     })

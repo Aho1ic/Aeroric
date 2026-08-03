@@ -18,6 +18,13 @@
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage"
   },
+  "pnpm": {
+    "overrides": {
+      "undici": "7.28.0",
+      "brace-expansion@^1.0.0": "1.1.17",
+      "brace-expansion@^5.0.0": "5.0.9"
+    }
+  },
   "dependencies": {
     "@codemirror/lang-cpp": "^6.0.3",
     "@codemirror/lang-css": "^6.3.1",

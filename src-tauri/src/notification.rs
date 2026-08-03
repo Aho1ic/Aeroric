@@ -970,6 +970,9 @@ fn parent_process_is_running(pid: u32) -> bool {
     #[cfg(unix)]
     {
         // Signal 0 performs an existence/permission check without sending a signal.
+        // SAFETY: `kill(pid, 0)` does not deliver a signal or mutate process
+        // state; the cast is from the validated platform PID type to libc's
+        // expected pid_t representation.
         return unsafe { libc::kill(pid as libc::pid_t, 0) == 0 };
     }
     #[cfg(target_os = "windows")]

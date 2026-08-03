@@ -148,6 +148,16 @@ jobs:
       - name: Install mobile dependencies
         run: pnpm --dir mobile install --frozen-lockfile --ignore-scripts
 
+      # Advisory only: a newly published advisory in the dependency tree is not
+      # a defect in the commit under test, so it must not turn unrelated pull
+      # requests red. Read the step output and pin an override deliberately.
+      - name: Audit JavaScript dependencies
+        if: runner.os == 'Linux'
+        continue-on-error: true
+        run: |
+          pnpm audit --audit-level high
+          pnpm --dir mobile audit --audit-level high
+
       - name: Run ESLint
         run: pnpm lint
 
@@ -156,6 +166,18 @@ jobs:
 
       - name: Run tests
         run: pnpm test
+
+      - name: Run web coverage
+        if: runner.os == 'Linux'
+        run: pnpm test:coverage
+
+      - name: Upload web coverage
+        if: runner.os == 'Linux'
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-coverage
+          path: coverage
+          if-no-files-found: error
 
       - name: Run web build
         run: pnpm build

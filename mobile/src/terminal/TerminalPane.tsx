@@ -409,7 +409,9 @@ export function TerminalPane({ taskId, active }: { taskId: string; active: boole
           ref={webviewRef}
           source={{ html: TERMINAL_HTML }}
           onMessage={handleWebMessage}
-          originWhitelist={["*"]}
+          // The terminal is bundled as inline HTML; no remote navigation is
+          // required or permitted.
+          originWhitelist={["about:blank"]}
           javaScriptEnabled
           domStorageEnabled={false}
           allowFileAccess={false}

@@ -1176,8 +1176,8 @@ fn parse_codex_session_line(line: &str, messages: &mut Vec<SessionMessage>) {
                         })
                         .unwrap_or_default();
                     if !parts.is_empty() {
-                        if messages.last().map(|m| m.role.as_str()) == Some("assistant") {
-                            messages.last_mut().unwrap().content.extend(parts);
+                        if let Some(last) = messages.last_mut().filter(|m| m.role == "assistant") {
+                            last.content.extend(parts);
                         } else {
                             messages.push(SessionMessage {
                                 role: "assistant".to_string(),
@@ -1210,8 +1210,8 @@ fn parse_codex_session_line(line: &str, messages: &mut Vec<SessionMessage>) {
                         name,
                         input,
                     };
-                    if messages.last().map(|m| m.role.as_str()) == Some("assistant") {
-                        messages.last_mut().unwrap().content.push(part);
+                    if let Some(last) = messages.last_mut().filter(|m| m.role == "assistant") {
+                        last.content.push(part);
                     } else {
                         messages.push(SessionMessage {
                             role: "assistant".to_string(),
