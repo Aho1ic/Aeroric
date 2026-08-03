@@ -37,6 +37,7 @@ function finish() {
         ts: Date.now(),
         task_id: taskId,
         agent: process.env.AERORIC_AGENT || "",
+        codex_like: process.env.AERORIC_AGENT_CODEX_LIKE === "1",
         event: pick(payload, "hook_event_name", "event_name", "hookEventName", "event"),
         session_id:
           pick(payload, "session_id", "conversation_id", "sessionId", "conversationId") ||

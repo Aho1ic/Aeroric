@@ -1642,7 +1642,8 @@ pub(crate) fn register_and_watch_session(
         serde_json::json!({
             "task_id": task_id,
             "session_id": session_id,
-            "session_path": path_string
+            "session_path": path_string,
+            "codex_like": is_codex,
         }),
     );
 
@@ -1759,6 +1760,7 @@ fn spawn_claude_lazy_session_attach(
                 "task_id": task_id,
                 "session_id": session_id,
                 "session_path": path_string,
+                "codex_like": false,
             }),
         );
 

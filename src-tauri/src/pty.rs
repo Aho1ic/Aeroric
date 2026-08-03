@@ -284,11 +284,12 @@ pub(crate) fn setup_env(cmd: &mut CommandBuilder) {
 /// 注入 Aeroric hook 守卫所需的环境变量。
 /// hook 脚本依靠 AERORIC_TASK_ID + AERORIC_EVENT_DIR 同时存在才工作,
 /// 用户在 Aeroric 之外手动跑 agent 时这些变量缺失,脚本立即 exit 0。
-fn setup_aeroric_env(cmd: &mut CommandBuilder, task_id: &str, agent: &str) {
+fn setup_aeroric_env(cmd: &mut CommandBuilder, task_id: &str, agent: &str, is_codex: bool) {
     if let Ok(dir) = crate::hooks::events_dir_for(task_id) {
         cmd.env("AERORIC_TASK_ID", task_id);
         cmd.env("AERORIC_EVENT_DIR", dir.to_string_lossy().as_ref());
         cmd.env("AERORIC_AGENT", agent);
+        cmd.env("AERORIC_AGENT_CODEX_LIKE", if is_codex { "1" } else { "0" });
     }
 }
 
@@ -1190,7 +1191,7 @@ pub async fn run_task(
         cmd.env("AERORIC_AGENT_MODEL", model);
     }
     if use_hooks {
-        setup_aeroric_env(&mut cmd, &task_id, &agent);
+        setup_aeroric_env(&mut cmd, &task_id, &agent, is_codex);
     }
     for (key, value) in &launch.extra_env {
         cmd.env(key, value);
@@ -1526,7 +1527,7 @@ pub async fn resume_task(
         cmd.env("AERORIC_AGENT_MODEL", model);
     }
     if use_hooks {
-        setup_aeroric_env(&mut cmd, &task_id, &agent);
+        setup_aeroric_env(&mut cmd, &task_id, &agent, is_codex);
     }
     for (key, value) in &launch.extra_env {
         cmd.env(key, value);

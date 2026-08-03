@@ -50,6 +50,14 @@ struct HookEvent {
     transcript_path: String,
     #[serde(default)]
     tool_name: String,
+    /// 新版由启动器显式传入,旧版事件没有此字段,回退到 agent == "codex"。
+    #[serde(default)]
+    codex_like: Option<bool>,
+}
+
+fn event_is_codex_like(ev: &HookEvent) -> bool {
+    ev.codex_like
+        .unwrap_or_else(|| crate::app_settings::is_codex_like_agent(&ev.agent))
 }
 
 pub fn start(app: AppHandle) {
@@ -183,27 +191,27 @@ fn handle_session_start(app: &AppHandle, ev: &HookEvent) {
     let tm = app.state::<TaskManager>();
     crate::pty::notify_initial_input_session_ready(&tm, &ev.task_id);
     let session_path = ev.transcript_path.clone();
+    let is_codex = event_is_codex_like(ev);
 
     // 已注册过且 session_id 一致则跳过,避免重复 emit
-    let already = match ev.agent.as_str() {
-        "codex" => tm
-            .codex_sessions
+    let already = if is_codex {
+        tm.codex_sessions
             .lock()
             .get(&ev.task_id)
             .map(|info| info.session_id == ev.session_id)
-            .unwrap_or(false),
-        _ => tm
-            .claude_sessions
+            .unwrap_or(false)
+    } else {
+        tm.claude_sessions
             .lock()
             .get(&ev.task_id)
             .map(|info| info.session_id == ev.session_id && !info.is_placeholder)
-            .unwrap_or(false),
+            .unwrap_or(false)
     };
     if already {
         return;
     }
 
-    if ev.agent == "codex" {
+    if is_codex {
         tm.codex_sessions.lock().insert(
             ev.task_id.clone(),
             CodexSessionInfo {
@@ -232,6 +240,7 @@ fn handle_session_start(app: &AppHandle, ev: &HookEvent) {
             "task_id": ev.task_id,
             "session_id": ev.session_id,
             "session_path": session_path,
+            "codex_like": is_codex,
         }),
     );
 }
@@ -291,5 +300,30 @@ pub fn cleanup_task_events<R: Runtime>(app: &AppHandle<R>, task_id: &str) {
         .clear(task_id);
     if let Ok(dir) = crate::hooks::events_dir_for(task_id) {
         let _ = fs::remove_dir_all(dir);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{event_is_codex_like, HookEvent};
+
+    #[test]
+    fn explicit_custom_agent_kind_overrides_agent_name() {
+        let codex_event: HookEvent =
+            serde_json::from_str(r#"{"agent":"custom-claude-wrapper","codex_like":true}"#).unwrap();
+        let claude_event: HookEvent =
+            serde_json::from_str(r#"{"agent":"custom-codex-wrapper","codex_like":false}"#).unwrap();
+
+        assert!(event_is_codex_like(&codex_event));
+        assert!(!event_is_codex_like(&claude_event));
+    }
+
+    #[test]
+    fn legacy_event_keeps_agent_based_fallback() {
+        let codex_event: HookEvent = serde_json::from_str(r#"{"agent":"codex"}"#).unwrap();
+        let claude_event: HookEvent = serde_json::from_str(r#"{"agent":"claude"}"#).unwrap();
+
+        assert!(event_is_codex_like(&codex_event));
+        assert!(!event_is_codex_like(&claude_event));
     }
 }

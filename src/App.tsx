@@ -152,6 +152,7 @@ function App() {
 
   const tm = useTerminalManager();
   const pendingResumeStartsRef = useRef<Record<string, () => void>>({});
+  const agentOptionsRef = useRef(agentOptions);
 
   useEffect(() => {
     invoke<CondaEnvironment[]>("detect_conda_environments")
@@ -188,10 +189,11 @@ function App() {
   const formatSaveProjectsErrorRef = useRef(formatSaveProjectsError);
   const formatSaveTasksErrorRef = useRef(formatSaveTasksError);
   useEffect(() => {
+    agentOptionsRef.current = agentOptions;
     showToastRef.current = showToast;
     formatSaveProjectsErrorRef.current = formatSaveProjectsError;
     formatSaveTasksErrorRef.current = formatSaveTasksError;
-  }, [showToast, formatSaveProjectsError, formatSaveTasksError]);
+  }, [agentOptions, showToast, formatSaveProjectsError, formatSaveTasksError]);
 
   const persistTasksForHook = useCallback(
     (projectId: string, allTasks: Task[]) => {
@@ -453,13 +455,15 @@ function App() {
         if (status === "done") scheduleForDoneTask(task_id);
       },
     );
-    const p2 = listen<{ task_id: string; session_id: string; session_path: string }>(
-      "task-session",
-      (e) => {
-        const { task_id, session_id, session_path } = e.payload;
-        updateTaskSession(task_id, session_id, session_path);
-      },
-    );
+    const p2 = listen<{
+      task_id: string;
+      session_id: string;
+      session_path: string;
+      codex_like?: boolean;
+    }>("task-session", (e) => {
+      const { task_id, session_id, session_path, codex_like } = e.payload;
+      updateTaskSession(task_id, session_id, session_path, codex_like);
+    });
     const p3 = listen<{ task_id: string; cols: number; rows: number }>(
       "remote-terminal-resized",
       (e) => {
@@ -1227,7 +1231,9 @@ function App() {
 
     const codexLike = isCodexLikeAgent(task.agent, agentOptions);
     const sessionPath = codexLike ? task.codexSessionPath : task.claudeSessionPath;
+    const legacySessionPath = codexLike ? task.claudeSessionPath : task.codexSessionPath;
     let sessionId = codexLike ? task.codexSessionId : task.claudeSessionId;
+    const legacySessionId = codexLike ? task.claudeSessionId : task.codexSessionId;
     let recoveredSessionPath = sessionPath;
     if (!sessionId && sessionPath && resolveProjectLocation(project).kind === "local") {
       try {
@@ -1239,6 +1245,26 @@ function App() {
           })) ?? undefined;
       } catch (err) {
         console.error("read_session_id failed", err);
+      }
+    }
+
+    // 旧版本曾把自定义 Agent 的会话写入另一侧字段。优先兼容已有的 ID，
+    // 避免用户必须依赖模糊的 prompt/时间匹配才能恢复。
+    if (!sessionId && legacySessionId) {
+      sessionId = legacySessionId;
+      recoveredSessionPath = legacySessionPath ?? recoveredSessionPath;
+    }
+    if (!sessionId && legacySessionPath && resolveProjectLocation(project).kind === "local") {
+      try {
+        sessionId =
+          (await invoke<string | null>("read_session_id", {
+            sessionPath: legacySessionPath,
+            projectPath: task.worktreePath ?? project.path,
+            isCodex: codexLike,
+          })) ?? undefined;
+        if (sessionId) recoveredSessionPath = legacySessionPath;
+      } catch (err) {
+        console.error("read legacy session_id failed", err);
       }
     }
 
@@ -1267,11 +1293,19 @@ function App() {
       return false;
     }
 
-    const restoredSessionFields: Partial<Task> = recoveredSessionPath
-      ? codexLike
-        ? { codexSessionId: sessionId, codexSessionPath: recoveredSessionPath }
-        : { claudeSessionId: sessionId, claudeSessionPath: recoveredSessionPath }
-      : {};
+    const restoredSessionFields: Partial<Task> = codexLike
+      ? {
+          codexSessionId: sessionId,
+          codexSessionPath: recoveredSessionPath,
+          claudeSessionId: undefined,
+          claudeSessionPath: undefined,
+        }
+      : {
+          claudeSessionId: sessionId,
+          claudeSessionPath: recoveredSessionPath,
+          codexSessionId: undefined,
+          codexSessionPath: undefined,
+        };
     const taskWithSession: Task = { ...task, ...restoredSessionFields };
 
     // Reset task status, clear buffer, and bump run counter to remount the terminal
@@ -1301,13 +1335,6 @@ function App() {
   async function handleReconnectTask(taskId: string) {
     const task = tasks.find((t) => t.id === taskId);
     if (!task) return;
-    const codexLike = isCodexLikeAgent(task.agent, agentOptions);
-    const sessionId = codexLike ? task.codexSessionId : task.claudeSessionId;
-    const sessionPath = codexLike ? task.codexSessionPath : task.claudeSessionPath;
-    if (!sessionId && !sessionPath) {
-      showToast(t("running.resumeUnavailable"), "warning");
-      return;
-    }
 
     try {
       await invoke("reset_task_process", { taskId });
@@ -1315,7 +1342,7 @@ function App() {
       showToast(t("toast.resetTaskFailed", { error: String(e) }));
       return;
     }
-    handleResumeTask(taskId);
+    await handleResumeTask(taskId);
   }
 
   function handleMarkTaskDone(taskId: string) {
@@ -1681,17 +1708,25 @@ function App() {
             showToastRef.current,
             formatSaveTasksErrorRef.current,
           );
+        if (task && status === "done") void flushProjectTasks(task.projectId);
       }
       return changed ? next : prev;
     });
   }
 
-  function updateTaskSession(taskId: string, sessionId: string, sessionPath: string) {
+  function updateTaskSession(
+    taskId: string,
+    sessionId: string,
+    sessionPath: string,
+    codexLikeFromEvent?: boolean,
+  ) {
     setTasks((prev) => {
       let changed = false;
       const next = prev.map((task) => {
         if (task.id !== taskId) return task;
-        if (task.agent === "claude") {
+        const codexLike =
+          codexLikeFromEvent ?? isCodexLikeAgent(task.agent, agentOptionsRef.current);
+        if (!codexLike) {
           if (task.claudeSessionId === sessionId && task.claudeSessionPath === sessionPath)
             return task;
           changed = true;
@@ -1706,13 +1741,15 @@ function App() {
 
       if (changed) {
         const task = next.find((t) => t.id === taskId);
-        if (task)
+        if (task) {
           persistProjectTasks(
             task.projectId,
             next,
             showToastRef.current,
             formatSaveTasksErrorRef.current,
           );
+          void flushProjectTasks(task.projectId);
+        }
       }
       return changed ? next : prev;
     });
