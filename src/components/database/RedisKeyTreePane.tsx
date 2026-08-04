@@ -124,7 +124,7 @@ export function RedisKeyTreePane({
           onKeyDown={(event) => {
             if (event.key === "Enter") void onSearch(event.currentTarget.value);
           }}
-          placeholder="*"
+          placeholder={t("database.placeholder.keyPattern")}
         />
         <DbxButton
           variant={fuzzyKeySearch ? "default" : "outline"}

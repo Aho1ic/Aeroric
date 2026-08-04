@@ -233,7 +233,7 @@ export function AgentDetailModal({
         setSelectedModels(savedModels);
         setOriginalSelectedModels(savedModels);
       })
-      .catch(() => {});
+      .catch(console.error);
     return () => {
       cancelled = true;
     };

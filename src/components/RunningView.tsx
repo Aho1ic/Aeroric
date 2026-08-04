@@ -298,7 +298,7 @@ export function RunningView({
           if (cancelled) return;
           setMetrics(nextMetrics);
         })
-        .catch(() => {});
+        .catch(console.error);
     };
 
     load();

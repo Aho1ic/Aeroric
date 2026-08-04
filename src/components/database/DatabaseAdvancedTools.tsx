@@ -352,7 +352,7 @@ export function DatabaseAdvancedTools({
             style={s.databaseDialogInput}
             value={tablesText}
             onChange={(event) => setTablesText(event.target.value)}
-            placeholder="users, orders"
+            placeholder={t("database.placeholder.tables")}
           />
         </label>
       </div>

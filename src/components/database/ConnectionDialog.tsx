@@ -811,7 +811,7 @@ export function ConnectionDialog({
                           style={s.databaseDialogInput}
                           value={draftFilePath}
                           onChange={(event) => setDraftFilePath(event.target.value)}
-                          placeholder="/path/to/database.db"
+                          placeholder={t("database.placeholder.sqlitePath")}
                         />
                         <DbxButton
                           variant="ghost"
@@ -956,7 +956,7 @@ export function ConnectionDialog({
                           style={s.databaseDialogInput}
                           value={draftUrlParams}
                           onChange={(event) => setDraftUrlParams(event.target.value)}
-                          placeholder="sslmode=require&connectTimeout=15"
+                          placeholder={t("database.placeholder.connectionParams")}
                         />
                       </label>
                       {selectedProfile.key === "redis" && (
@@ -996,7 +996,7 @@ export function ConnectionDialog({
                                   onChange={(event) =>
                                     setDraftRedisSentinelNodes(event.target.value)
                                   }
-                                  placeholder={"sentinel-1:26379\nsentinel-2:26379"}
+                                  placeholder={t("database.placeholder.sentinelNodes")}
                                 />
                               </label>
                               <label style={s.databaseDialogField}>
@@ -1009,7 +1009,7 @@ export function ConnectionDialog({
                                   onChange={(event) =>
                                     setDraftRedisSentinelMaster(event.target.value)
                                   }
-                                  placeholder="mymaster"
+                                  placeholder={t("database.placeholder.sentinelMaster")}
                                 />
                               </label>
                               <label style={s.databaseDialogField}>
@@ -1063,7 +1063,7 @@ export function ConnectionDialog({
                                 }}
                                 value={draftRedisClusterNodes}
                                 onChange={(event) => setDraftRedisClusterNodes(event.target.value)}
-                                placeholder={"redis-1:6379\nredis-2:6379"}
+                                placeholder={t("database.placeholder.clusterNodes")}
                               />
                             </label>
                           )}
@@ -1075,7 +1075,7 @@ export function ConnectionDialog({
                               style={s.databaseDialogInput}
                               value={draftRedisKeySeparator}
                               onChange={(event) => setDraftRedisKeySeparator(event.target.value)}
-                              placeholder=":"
+                              placeholder={t("database.placeholder.keySeparator")}
                             />
                           </label>
                         </>

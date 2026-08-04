@@ -77,6 +77,14 @@ import type {
   TableAdminSqlOptions,
   TableStructureSqlOptions,
   TableStructureSqlResult,
+  SchemaDiffPreparationOptions,
+  SchemaDiffPreparation,
+  DataComparePreparationOptions,
+  DataComparePreparation,
+  DataCompareSyncPlanOptions,
+  DataCompareSyncPlan,
+  DataCompareFromTablesOptions,
+  DataCompareFromTablesPreparation,
 } from "../types/database";
 
 export function isTerminalDbxTransferProgress(progress: DbxTransferProgress): boolean {
@@ -357,8 +365,8 @@ export const databaseApi = {
       ? startDbxTransferWithProgress(request, onProgress)
       : invoke<void>("dbx_start_transfer", { request }),
   dbxCancelTransfer: (transferId: string) => invoke<void>("dbx_cancel_transfer", { transferId }),
-  dbxPrepareSchemaDiff: (options: unknown) =>
-    invoke<unknown>("dbx_prepare_schema_diff", { options }),
+  dbxPrepareSchemaDiff: (options: SchemaDiffPreparationOptions) =>
+    invoke<SchemaDiffPreparation>("dbx_prepare_schema_diff", { options }),
   dbxGenerateSchemaSyncSql: (params: {
     diffs: unknown[];
     functionDiffs?: unknown[] | null;
@@ -369,12 +377,12 @@ export const databaseApi = {
     targetSchema?: string | null;
     cascadeDelete?: boolean | null;
   }) => invoke<string>("dbx_generate_schema_sync_sql", params),
-  dbxPrepareDataCompare: (options: unknown) =>
-    invoke<unknown>("dbx_prepare_data_compare", { options }),
-  dbxBuildDataCompareSyncPlan: (options: unknown) =>
-    invoke<unknown>("dbx_build_data_compare_sync_plan", { options }),
-  dbxPrepareDataCompareFromTables: (options: unknown) =>
-    invoke<unknown>("dbx_prepare_data_compare_from_tables", { options }),
+  dbxPrepareDataCompare: (options: DataComparePreparationOptions) =>
+    invoke<DataComparePreparation>("dbx_prepare_data_compare", { options }),
+  dbxBuildDataCompareSyncPlan: (options: DataCompareSyncPlanOptions) =>
+    invoke<DataCompareSyncPlan>("dbx_build_data_compare_sync_plan", { options }),
+  dbxPrepareDataCompareFromTables: (options: DataCompareFromTablesOptions) =>
+    invoke<DataCompareFromTablesPreparation>("dbx_prepare_data_compare_from_tables", { options }),
   dbxBuildTableStructureChangeSql: (options: TableStructureSqlOptions) =>
     invoke<TableStructureSqlResult>("dbx_build_table_structure_change_sql", { options }),
   dbxBuildSingleColumnAlterSql: (options: SingleColumnAlterSqlOptions) =>

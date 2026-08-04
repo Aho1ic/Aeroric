@@ -349,7 +349,7 @@ export function NewTaskView({
           setPermMode(defaultPerm);
         }
       })
-      .catch(() => {});
+      .catch(console.error);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [agentOptions, project.id, remoteProject]);
 

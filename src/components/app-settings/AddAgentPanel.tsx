@@ -123,7 +123,7 @@ export function AddAgentPanel({ onSaved }: { onSaved: (agentId: string) => void 
           // not valid JSON, ignore
         }
       })
-      .catch(() => {});
+      .catch(console.error);
   }, []);
 
   const generatedAgentId = useMemo(

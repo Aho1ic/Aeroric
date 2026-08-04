@@ -248,7 +248,7 @@ export const SshTerminalPanel = forwardRef<SshTerminalPanelHandle, Props>(functi
         taskId: activeSession.shellId,
         cols: size.cols,
         rows: size.rows,
-      }).catch(() => {});
+      }).catch(console.error);
     };
 
     initTimeoutId = window.setTimeout(() => {
@@ -315,7 +315,7 @@ export const SshTerminalPanel = forwardRef<SshTerminalPanelHandle, Props>(functi
             taskId: activeSession.shellId,
             cols: size.cols,
             rows: size.rows,
-          }).catch(() => {});
+          }).catch(console.error);
         }
       }
       terminalRef.current.focus();

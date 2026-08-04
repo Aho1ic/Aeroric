@@ -5932,7 +5932,7 @@ export function DatabaseView({
                   style={s.databaseDialogInput}
                   value={sqlFilePath}
                   onChange={(event) => setSqlFilePath(event.target.value)}
-                  placeholder="/path/to/script.sql"
+                  placeholder={t("database.placeholder.sqlScriptPath")}
                 />
               </label>
               <label style={s.databaseDialogField}>

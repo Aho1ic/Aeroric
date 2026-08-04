@@ -111,7 +111,7 @@ export function RedisCommandSessionView({
           disabled={commandRunning}
           autoComplete="off"
           spellCheck={false}
-          placeholder="GET user:1"
+          placeholder={t("database.placeholder.redisCommand")}
         />
         <DbxButton
           type="submit"

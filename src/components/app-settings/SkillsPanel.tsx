@@ -24,7 +24,7 @@ export function SkillsPanel() {
         setConfig(cfg ?? null);
         setAllProjects(projects);
       })
-      .catch(() => {});
+      .catch(console.error);
   }, []);
 
   useEffect(() => {

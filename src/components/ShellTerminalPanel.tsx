@@ -155,7 +155,7 @@ const ShellTerminalInstance = forwardRef<
       const last = lastSizeRef.current;
       if (last && last.cols === s.cols && last.rows === s.rows) return;
       lastSizeRef.current = { cols: s.cols, rows: s.rows };
-      invoke("resize_pty", { taskId: shellId, cols: s.cols, rows: s.rows }).catch(() => {});
+      invoke("resize_pty", { taskId: shellId, cols: s.cols, rows: s.rows }).catch(console.error);
     };
 
     initTimeoutId = window.setTimeout(() => {
@@ -182,12 +182,12 @@ const ShellTerminalInstance = forwardRef<
     const disposeSmartCopy = attachSmartCopy(term, {
       onPaste: (text) => {
         writer.pauseForUserInput();
-        invoke("send_input", { taskId: shellId, data: text }).catch(() => {});
+        invoke("send_input", { taskId: shellId, data: text }).catch(console.error);
       },
     });
     const linuxIME = attachLinuxIMEFix(term, (data) => {
       writer.pauseForUserInput();
-      invoke("send_input", { taskId: shellId, data }).catch(() => {});
+      invoke("send_input", { taskId: shellId, data }).catch(console.error);
     });
     const disposeOnData = { dispose: () => linuxIME.dispose() };
 
@@ -256,7 +256,7 @@ const ShellTerminalInstance = forwardRef<
         const last = lastSizeRef.current;
         if (!last || last.cols !== s.cols || last.rows !== s.rows) {
           lastSizeRef.current = { cols: s.cols, rows: s.rows };
-          invoke("resize_pty", { taskId: shellId, cols: s.cols, rows: s.rows }).catch(() => {});
+          invoke("resize_pty", { taskId: shellId, cols: s.cols, rows: s.rows }).catch(console.error);
         }
       }
       focusTerminal();
@@ -281,7 +281,7 @@ const ShellTerminalInstance = forwardRef<
     const last = lastSizeRef.current;
     if (last && last.cols === size.cols && last.rows === size.rows) return;
     lastSizeRef.current = { cols: size.cols, rows: size.rows };
-    invoke("resize_pty", { taskId: shellId, cols: size.cols, rows: size.rows }).catch(() => {});
+    invoke("resize_pty", { taskId: shellId, cols: size.cols, rows: size.rows }).catch(console.error);
   }, [terminalFontSize, shellId]);
 
   useEffect(() => {
@@ -296,7 +296,7 @@ const ShellTerminalInstance = forwardRef<
     const last = lastSizeRef.current;
     if (last && last.cols === size.cols && last.rows === size.rows) return;
     lastSizeRef.current = { cols: size.cols, rows: size.rows };
-    invoke("resize_pty", { taskId: shellId, cols: size.cols, rows: size.rows }).catch(() => {});
+    invoke("resize_pty", { taskId: shellId, cols: size.cols, rows: size.rows }).catch(console.error);
   }, [monoFontFamily, shellId]);
 
   return (
@@ -367,7 +367,7 @@ export const ShellTerminalPanel = forwardRef<ShellTerminalPanelHandle, Props>(
         if (closingIndex === -1) return;
 
         const nextShells = shells.filter((shell) => shell.id !== shellId);
-        invoke("kill_shell", { shellId }).catch(() => {});
+        invoke("kill_shell", { shellId }).catch(console.error);
         setShells(nextShells);
         delete shellRefs.current[shellId];
 
@@ -411,7 +411,7 @@ export const ShellTerminalPanel = forwardRef<ShellTerminalPanelHandle, Props>(
 
     const handleCloseAll = useCallback(() => {
       for (const shell of shells) {
-        invoke("kill_shell", { shellId: shell.id }).catch(() => {});
+        invoke("kill_shell", { shellId: shell.id }).catch(console.error);
         delete shellRefs.current[shell.id];
       }
       setShells([]);

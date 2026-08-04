@@ -796,3 +796,161 @@ export interface DatabaseDriverManifest {
   schemaVersion: number;
   drivers: DatabaseDriverManifestEntry[];
 }
+
+// Schema diff types
+export interface SchemaDiffTableInfo {
+  name: string;
+  table_type?: string;
+  comment?: string | null;
+  parent_schema?: string | null;
+  parent_name?: string | null;
+  columns?: DbxColumnInfo[];
+  indexes?: Array<{ name: string; unique?: boolean; columns: string[] }>;
+  foreign_keys?: Array<{ name: string; columns: string[]; ref_table?: string; ref_columns?: string[] }>;
+  triggers?: Array<{ name: string; sql?: string }>;
+  ddl?: string | null;
+}
+
+export interface SchemaDiffDetailInfo {
+  name: string;
+  columns: Array<{
+    name: string;
+    data_type: string;
+    is_nullable: boolean;
+    column_default?: string | null;
+    is_primary_key: boolean;
+    extra?: string | null;
+    comment?: string | null;
+    numeric_precision?: number | null;
+    numeric_scale?: number | null;
+    character_maximum_length?: number | null;
+  }>;
+  indexes?: unknown[];
+  foreign_keys?: unknown[];
+  triggers?: unknown[];
+  ddl?: string | null;
+}
+
+export interface SchemaDiffFunctionInfo {
+  name: string;
+  schema?: string;
+  signature?: string;
+  source?: string;
+}
+
+export interface SchemaDiffSequenceInfo {
+  name: string;
+  schema?: string;
+  start?: number;
+  increment?: number;
+  minValue?: number;
+  maxValue?: number;
+}
+
+export interface SchemaDiffRuleInfo {
+  name: string;
+  definition?: string;
+}
+
+export interface SchemaDiffOwnerInfo {
+  objectType: string;
+  objectName: string;
+  owner: string;
+}
+
+export interface SchemaDiffPreparationOptions {
+  sourceTables: SchemaDiffTableInfo[];
+  targetTables: SchemaDiffTableInfo[];
+  sourceDetails?: SchemaDiffDetailInfo[];
+  targetDetails?: SchemaDiffDetailInfo[];
+  sourceFunctions?: SchemaDiffFunctionInfo[];
+  targetFunctions?: SchemaDiffFunctionInfo[];
+  sourceSequences?: SchemaDiffSequenceInfo[];
+  targetSequences?: SchemaDiffSequenceInfo[];
+  sourceRules?: SchemaDiffRuleInfo[];
+  targetRules?: SchemaDiffRuleInfo[];
+  sourceOwners?: SchemaDiffOwnerInfo[];
+  targetOwners?: SchemaDiffOwnerInfo[];
+  databaseType: string;
+  targetSchema?: string | null;
+  ignoreComments?: boolean;
+  cascadeDelete?: boolean;
+}
+
+export interface SchemaDiffPreparation {
+  diffs: unknown[];
+  functionDiffs?: unknown[];
+  sequenceDiffs?: unknown[];
+  ruleDiffs?: unknown[];
+  ownerDiffs?: unknown[];
+  syncSql?: string;
+}
+
+// Data compare types
+export interface DataComparePreparationOptions {
+  tableName: string;
+  columns: string[];
+  keyColumns: string[];
+  sourceConnectionId?: string;
+  sourceDatabase?: string;
+  sourceSchema?: string;
+  targetConnectionId?: string;
+  targetDatabase?: string;
+  targetSchema?: string;
+  filters?: Record<string, unknown>;
+}
+
+export interface DataComparePreparation {
+  result?: {
+    added?: unknown[];
+    removed?: unknown[];
+    modified?: unknown[];
+  };
+  syncSql?: string;
+}
+
+export interface DataCompareSyncPlanOptions {
+  sourceConnectionId?: string;
+  sourceDatabase?: string;
+  sourceSchema?: string;
+  sourceTable?: string;
+  targetConnectionId?: string;
+  targetDatabase?: string;
+  targetSchema?: string;
+  targetTable?: string;
+  added?: unknown[];
+  removed?: unknown[];
+  modified?: unknown[];
+  keyColumns?: string[];
+  columns?: string[];
+}
+
+export interface DataCompareSyncPlan {
+  statements?: unknown[];
+  summary?: Record<string, unknown>;
+}
+
+export interface DataCompareFromTablesOptions {
+  sourceConnectionId: string;
+  sourceDatabase?: string;
+  sourceSchema?: string;
+  sourceTable: string;
+  targetConnectionId: string;
+  targetDatabase?: string;
+  targetSchema?: string;
+  targetTable: string;
+  columns?: string[];
+  keyColumns?: string[];
+  fetchBatchSize?: number;
+}
+
+export interface DataCompareFromTablesPreparation {
+  result?: {
+    added?: unknown[];
+    removed?: unknown[];
+    modified?: unknown[];
+  };
+  syncSql?: string;
+  columns?: string[];
+  keyColumns?: string[];
+}

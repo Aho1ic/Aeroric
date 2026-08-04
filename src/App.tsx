@@ -1124,7 +1124,7 @@ function App() {
         projectPath: project.path,
         worktreePath: task.worktreePath,
         branch: task.worktreeBranch,
-      }).catch(() => {});
+      }).catch(console.error);
       markTaskWorktreeDiscarded(taskId);
     } catch (e) {
       showToast(t("toast.worktreeMergeFailed", { error: String(e) }), "error");

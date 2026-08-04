@@ -39,7 +39,7 @@ export function usePlatformRuntimeInfo(): PlatformRuntimeInfo {
         cached = value;
         setRuntime(value);
       })
-      .catch(() => {});
+      .catch(console.error);
   }, []);
 
   return runtime;

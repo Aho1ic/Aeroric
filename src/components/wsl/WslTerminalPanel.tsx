@@ -105,7 +105,7 @@ export const WslTerminalPanel = forwardRef<
       if (!size) return;
       if (lastSizeRef.current?.cols === size.cols && lastSizeRef.current.rows === size.rows) return;
       lastSizeRef.current = size;
-      invoke("resize_pty", { taskId: shellId, cols: size.cols, rows: size.rows }).catch(() => {});
+      invoke("resize_pty", { taskId: shellId, cols: size.cols, rows: size.rows }).catch(console.error);
     };
     startTimer = window.setTimeout(() => {
       fit();
@@ -143,7 +143,7 @@ export const WslTerminalPanel = forwardRef<
       input.dispose();
       disposeGuard();
       disposeInputFix();
-      invoke("kill_wsl_shell", { shellId }).catch(() => {});
+      invoke("kill_wsl_shell", { shellId }).catch(console.error);
       terminalRef.current = null;
       fitAddonRef.current = null;
       term.dispose();

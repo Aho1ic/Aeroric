@@ -35,7 +35,7 @@ function loadAgentSettings(force = false): Promise<AppSettings> {
 }
 
 function handleSettingsChanged() {
-  void loadAgentSettings(true).catch(() => {});
+  void loadAgentSettings(true).catch(console.error);
 }
 
 function subscribe(subscriber: () => void) {
@@ -53,7 +53,7 @@ function subscribe(subscriber: () => void) {
 
 function useEnsureAgentSettingsLoaded() {
   useEffect(() => {
-    void loadAgentSettings().catch(() => {});
+    void loadAgentSettings().catch(console.error);
   }, []);
 }
 

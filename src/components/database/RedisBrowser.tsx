@@ -1307,7 +1307,7 @@ export function RedisBrowser({
                           if (event.key === "Enter") void saveTtl();
                           if (event.key === "Escape") setEditingTtl(false);
                         }}
-                        placeholder="-1"
+                        placeholder={t("database.placeholder.ttl")}
                         autoFocus
                       />
                       <DbxButton
@@ -2322,7 +2322,7 @@ export function RedisBrowser({
                 style={{ ...s.databaseDialogInput, width: 120 }}
                 value={ttlDraft}
                 onChange={(event) => setTtlDraft(event.target.value)}
-                placeholder="TTL"
+                placeholder={t("database.placeholder.ttlLabel")}
               />
               {valueDraftDirty && !selectedValueIsBinaryString && (
                 <DbxButton
