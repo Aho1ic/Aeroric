@@ -1076,23 +1076,28 @@ fn uses_native_initial_prompt(agent: &str, is_codex: bool) -> bool {
     matches!((agent, is_codex), ("claude", false) | ("codex", true))
 }
 
-/// Aeroric-generated Claude wrappers forward their positional arguments to the
-/// real CLI. Prefer that native delivery path for them as well; PTY injection
-/// is only a fallback for arbitrary custom wrappers that may not forward args.
+/// Aeroric-generated Claude/Codex wrappers forward their positional arguments
+/// to the real CLI. Prefer that native delivery path for them as well; PTY
+/// injection is only a fallback for arbitrary custom wrappers that may not
+/// forward args.
 fn launch_supports_native_initial_prompt(
     agent: &str,
     is_codex: bool,
     launch: &crate::app_settings::AgentLaunchSpec,
 ) -> bool {
-    if uses_native_initial_prompt(agent, is_codex) || is_codex {
-        return uses_native_initial_prompt(agent, is_codex);
+    if uses_native_initial_prompt(agent, is_codex) {
+        return true;
     }
 
     let Ok(content) = fs::read_to_string(&launch.program) else {
         return false;
     };
-    content.contains("# AERORIC_CLAUDE_WRAPPER_VERSION=")
-        && (content.contains("\"$@\"") || content.contains("@args"))
+    let marker = if is_codex {
+        "# AERORIC_CODEX_WRAPPER_VERSION="
+    } else {
+        "# AERORIC_CLAUDE_WRAPPER_VERSION="
+    };
+    content.contains(marker) && (content.contains("\"$@\"") || content.contains("@args"))
 }
 
 fn should_use_native_initial_prompt(
@@ -2000,6 +2005,31 @@ mod tests {
             initial_prompt_input_chunks("hello\nworld").unwrap(),
             (b"\x1b[200~hello\nworld\x1b[201~".to_vec(), b"\r".to_vec())
         );
+    }
+
+    #[test]
+    fn generated_codex_wrapper_supports_native_initial_prompt() {
+        let root = std::env::temp_dir().join(format!("aeroric-pty-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("hkai.sh");
+        std::fs::write(
+            &path,
+            "#!/bin/bash\n# AERORIC_CODEX_WRAPPER_VERSION=4\nexec codex \"$@\"\n",
+        )
+        .unwrap();
+        let launch = crate::app_settings::AgentLaunchSpec {
+            program: path.to_string_lossy().into_owned(),
+            codex_like: true,
+            ..Default::default()
+        };
+
+        assert!(launch_supports_native_initial_prompt("hkai", true, &launch));
+        assert!(!launch_supports_native_initial_prompt(
+            "hkai", false, &launch
+        ));
+
+        let _ = std::fs::remove_file(path);
+        let _ = std::fs::remove_dir(root);
     }
 
     #[test]
