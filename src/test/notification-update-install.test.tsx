@@ -284,8 +284,17 @@ describe("Notification release updater", () => {
 
     expect(screen.getByTestId("update-banner")).toHaveStyle({
       position: "absolute",
-      bottom: "calc(100% + 8px)",
+      bottom: "calc(100% + 7px)",
+      width: "9px",
+      height: "9px",
+      borderRadius: "50%",
+      background: "var(--danger)",
     });
+    expect(screen.getByTestId("update-banner")).toHaveAttribute(
+      "aria-label",
+      "Update available: v9.9.9",
+    );
+    expect(screen.queryByText("Update available: v9.9.9")).not.toBeInTheDocument();
     expect(screen.getByTestId("sidebar-body")).toBeInTheDocument();
   });
 });

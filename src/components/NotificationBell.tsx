@@ -11,7 +11,6 @@ import {
   AlertCircle,
   Download,
   RotateCcw,
-  ArrowUpCircle,
 } from "lucide-react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { invoke } from "@tauri-apps/api/core";
@@ -476,62 +475,26 @@ export function NotificationBell({
 export function UpdateBanner() {
   const { t } = useI18n();
   const { latestUpdate } = useNotifications();
-  const [dismissed, setDismissed] = useState<string | null>(null);
 
-  if (!latestUpdate || !latestUpdate.releaseTag || latestUpdate.releaseTag === dismissed)
-    return null;
+  if (!latestUpdate || !latestUpdate.releaseTag) return null;
 
   return (
     <div
       data-testid="update-banner"
+      role="status"
+      aria-label={t("notification.updateAvailable", { tag: latestUpdate.releaseTag })}
       style={{
         position: "absolute",
-        left: 0,
-        bottom: "calc(100% + 8px)",
-        width: 220,
-        boxSizing: "border-box",
-        padding: "6px 10px",
-        borderRadius: 8,
-        background: "var(--accent-subtle)",
-        border: "1px solid var(--accent)",
-        display: "flex",
-        alignItems: "center",
-        gap: 6,
-        cursor: "default",
+        right: 2,
+        bottom: "calc(100% + 7px)",
+        width: 9,
+        height: 9,
+        borderRadius: "50%",
+        background: "var(--danger)",
+        border: "2px solid var(--bg-sidebar)",
+        boxShadow: "0 0 0 1px color-mix(in srgb, var(--danger) 42%, transparent)",
+        pointerEvents: "auto",
       }}
-    >
-      <ArrowUpCircle size={14} strokeWidth={2} color="var(--accent)" style={{ flexShrink: 0 }} />
-      <span
-        style={{
-          fontSize: 11,
-          fontWeight: 600,
-          color: "var(--accent)",
-          flex: 1,
-          overflow: "hidden",
-          textOverflow: "ellipsis",
-          whiteSpace: "nowrap",
-        }}
-      >
-        {t("notification.updateAvailable", { tag: latestUpdate.releaseTag })}
-      </span>
-      <button
-        type="button"
-        onClick={() => setDismissed(latestUpdate.releaseTag ?? null)}
-        style={{
-          background: "none",
-          border: "none",
-          cursor: "pointer",
-          padding: 1,
-          borderRadius: 4,
-          display: "flex",
-          alignItems: "center",
-          color: "var(--text-hint)",
-          flexShrink: 0,
-        }}
-        title={t("common.close")}
-      >
-        <X size={12} strokeWidth={2} />
-      </button>
-    </div>
+    />
   );
 }

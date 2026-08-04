@@ -22,7 +22,11 @@ import {
   applyTerminalFontFamily,
 } from "./terminalShared";
 import type { TerminalResizeFn } from "../hooks/useTerminalManager";
-import { attachLinuxIMEFix, attachMacWebKitShiftInputFix } from "./terminalInputFix";
+import {
+  applyTerminalTextareaInputAttributes,
+  attachLinuxIMEFix,
+  attachMacWebKitShiftInputFix,
+} from "./terminalInputFix";
 import "@xterm/xterm/css/xterm.css";
 
 interface TerminalViewProps {
@@ -99,6 +103,7 @@ export function TerminalView({
     const serializeAddon = new SerializeAddon();
     term.loadAddon(serializeAddon);
     term.open(container);
+    applyTerminalTextareaInputAttributes(term);
     const disposeInputFix = attachMacWebKitShiftInputFix(term);
     // Agent TUIs frequently mix ASCII, CJK, emoji, and box drawing glyphs.
     // The DOM renderer handles font fallback more reliably in WKWebView; WebGL can

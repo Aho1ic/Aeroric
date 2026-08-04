@@ -344,7 +344,9 @@ export function AddAgentPanel({ onSaved }: { onSaved: (agentId: string) => void 
           }}
           ariaLabel={t("appSettings.agentRuntime")}
           equalWidth
-          itemStyle={{ minHeight: 42, padding: "7px 10px", fontSize: 12.5 }}
+          className="agent-runtime-selector"
+          itemClassName="agent-runtime-selector__item"
+          itemStyle={{ minHeight: 30, padding: "5px 10px", fontSize: 12.5 }}
           options={kindOptions.map((option) => ({
             value: option.kind,
             label: t(option.labelKey),

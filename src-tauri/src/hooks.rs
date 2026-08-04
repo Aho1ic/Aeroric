@@ -138,6 +138,59 @@ pub fn aeroric_claude_settings_path() -> Result<PathBuf, String> {
     Ok(hooks_dir()?.join("claude-settings.json"))
 }
 
+/// Add Claude fast mode to a settings object without changing the hook
+/// structure supplied by Aeroric. Keeping this in a file avoids Windows
+/// CreateProcess argument escaping for inline JSON.
+fn with_claude_fast_mode(mut value: Value) -> Result<Value, String> {
+    let object = value
+        .as_object_mut()
+        .ok_or_else(|| "Claude settings must be a JSON object".to_string())?;
+    object.insert("fastMode".to_string(), Value::Bool(true));
+    Ok(value)
+}
+
+/// Resolve the one settings file Claude should receive for a launch.
+///
+/// Claude accepts a JSON file path for `--settings`; using one path is also
+/// important when Aeroric hooks are enabled because two `--settings` flags are
+/// not consistently merged by all Claude Code/Windows combinations.
+pub fn claude_settings_path_for_launch(
+    fast_mode: bool,
+    include_hooks: bool,
+) -> Result<Option<PathBuf>, String> {
+    if !fast_mode {
+        return if include_hooks {
+            Ok(Some(aeroric_claude_settings_path()?))
+        } else {
+            Ok(None)
+        };
+    }
+
+    let base = if include_hooks {
+        let hooks_path = aeroric_claude_settings_path()?;
+        let raw = fs::read_to_string(&hooks_path)
+            .map_err(|error| format!("read {}: {error}", hooks_path.display()))?;
+        serde_json::from_str::<Value>(&raw)
+            .map_err(|error| format!("parse {}: {error}", hooks_path.display()))?
+    } else {
+        Value::Object(Map::new())
+    };
+    let value = with_claude_fast_mode(base)?;
+
+    let dir = hooks_dir()?;
+    fs::create_dir_all(&dir).map_err(|error| format!("create {}: {error}", dir.display()))?;
+    // Keep hook and no-hook launches in separate stable files so concurrent
+    // tasks cannot overwrite each other's settings between spawn and parse.
+    let path = dir.join(if include_hooks {
+        "claude-runtime-fast-hooks.json"
+    } else {
+        "claude-runtime-fast.json"
+    });
+    let raw = serde_json::to_string_pretty(&value).map_err(|error| error.to_string())?;
+    atomic_write(&path, &raw)?;
+    Ok(Some(path))
+}
+
 /// 构造 hook 调用命令。始终写入 Node 的绝对路径，避免 Agent 子 shell 与桌面
 /// 进程看到不同 PATH。Windows 统一经系统 PowerShell 调用，兼容 cmd/PowerShell
 /// 两种 hook 执行宿主；Unix 使用 POSIX 单引号。
@@ -642,6 +695,19 @@ mod tests {
             .unwrap();
         assert!(cmd.contains(r"C:\node.exe"));
         assert!(cmd.contains(r"C:\hooks\aeroric-hook.mjs"));
+    }
+
+    #[test]
+    fn claude_fast_settings_preserve_hooks_and_use_a_boolean_flag() {
+        let base = serde_json::json!({
+            "hooks": { "SessionStart": [{ "hooks": [] }] },
+            "fastMode": false
+        });
+
+        let merged = with_claude_fast_mode(base).expect("merge fast mode");
+
+        assert_eq!(merged["fastMode"], Value::Bool(true));
+        assert!(merged["hooks"]["SessionStart"].is_array());
     }
 
     // ── Claude 旧版注入清理(迁移)────────────────────────────────────────────

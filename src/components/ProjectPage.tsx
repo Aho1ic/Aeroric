@@ -86,6 +86,7 @@ import { useAgentOptions } from "../hooks/useAgentOptions";
 import { usePlatformRuntimeInfo } from "../hooks/usePlatformRuntimeInfo";
 import { useI18n } from "../i18n";
 import { AnimatedSelectionTrack } from "./ui/AnimatedSelection";
+import { formatTerminalTabLabel } from "./terminalTabLabel";
 import {
   getIdeToolTitleWithDisabledReason,
   getCommandPaletteIdeTools,
@@ -350,6 +351,7 @@ export function ProjectPage({
   const [showSettings, setShowSettings] = useState(false);
   const [showFileSearch, setShowFileSearch] = useState(false);
   const [sftpMounted, setSftpMounted] = useState(false);
+  const [sftpConnectionId, setSftpConnectionId] = useState<string | null>(null);
   const [databaseMounted, setDatabaseMounted] = useState(false);
   const [commandPaletteInitialInput, setCommandPaletteInitialInput] = useState<string | null>(null);
   const [launchedDebugSession, setLaunchedDebugSession] = useState<DebugSessionSnapshot | null>(
@@ -1111,6 +1113,18 @@ export function ProjectPage({
     t,
   ]);
 
+  const handleOpenSftpConnection = useCallback(
+    (connection: SshConnection) => {
+      setSftpMounted(true);
+      setSftpConnectionId(connection.id);
+      setSshOrigin(null);
+      setShowShellTerminal(false);
+      setShowRemoteProjectTerminal(false);
+      openRightPanel("sftp");
+    },
+    [openRightPanel],
+  );
+
   const handleOpenTerminal = useCallback(() => {
     showActionFeedback(
       t("project.actionFeedback.opened", { action: t("terminal.title") }),
@@ -1538,7 +1552,7 @@ export function ProjectPage({
           ]
         : shellSessions.map((shell, index) => ({
             ...shell,
-            label: `${platformRuntime.shellLabel} ${index + 1}`,
+            label: formatTerminalTabLabel(platformRuntime.shellLabel, index),
             remote: false as const,
           }));
   const workspaceTerminalVisible =
@@ -1650,6 +1664,7 @@ export function ProjectPage({
             ariaLabel="Workspace tabs"
             role="tablist"
             variant="underline"
+            className="terminal-session-tabs"
             dataTestId="workspace-tabs"
             style={{
               minHeight: 34,
@@ -1748,8 +1763,10 @@ export function ProjectPage({
               return (
                 <div
                   key={`terminal:${terminal.id}`}
+                  className="terminal-session-tab"
                   data-animated-selection-item
                   data-selection-value={`terminal:${terminal.id}`}
+                  data-selected={selected ? "true" : "false"}
                   style={{
                     height: 24,
                     maxWidth: 150,
@@ -1770,6 +1787,7 @@ export function ProjectPage({
                     onClick={() => handleWorkspaceTerminalTabSelect(terminal.id)}
                     style={{
                       minWidth: 0,
+                      flex: 1,
                       height: "100%",
                       display: "inline-flex",
                       alignItems: "center",
@@ -1777,14 +1795,17 @@ export function ProjectPage({
                       padding: "0 7px 0 8px",
                       border: "none",
                       background: "transparent",
+                      overflow: "hidden",
+                      whiteSpace: "nowrap",
                       color: selected ? "var(--control-active-fg)" : "var(--text-muted)",
                       cursor: "pointer",
                       fontSize: 11,
                       fontWeight: selected ? 650 : 560,
                     }}
                   >
+                    <span className="terminal-session-tab__cursor" aria-hidden="true" />
                     <TerminalIcon size={12} />
-                    <span>{terminal.label}</span>
+                    <span className="terminal-session-tab__label">{terminal.label}</span>
                   </button>
                   {!terminal.remote && (
                     <button
@@ -2099,6 +2120,10 @@ export function ProjectPage({
                   <Suspense fallback={<CenterSuspenseFallback label={t("common.loading")} />}>
                     {sftpMounted && (
                       <SftpPanel
+                        key={
+                          sftpConnectionId ??
+                          (projectLocation.kind === "ssh" ? projectLocation.connectionId : "local")
+                        }
                         sshConnections={sshConnections}
                         localDefaultPath={
                           projectLocation.kind === "local" ? project.path : sftpLocalDefaultPath
@@ -2107,7 +2132,10 @@ export function ProjectPage({
                         width="100%"
                         themeVariant={themeVariant}
                         currentSshConnectionId={
-                          projectLocation.kind === "ssh" ? projectLocation.connectionId : undefined
+                          sftpConnectionId ??
+                          (projectLocation.kind === "ssh"
+                            ? projectLocation.connectionId
+                            : undefined)
                         }
                         projectConfig={sftpProjectConfig}
                       />
@@ -2472,6 +2500,7 @@ export function ProjectPage({
                   themeVariant={themeVariant}
                   terminalFontSize={terminalFontSize}
                   monoFontFamily={monoFontFamily}
+                  onOpenSftp={handleOpenSftpConnection}
                   remoteConnection={projectLocation.kind === "ssh" ? remoteConnection : undefined}
                   layout={sshLayout}
                   onLayoutChange={setSshLayout}
@@ -2707,6 +2736,7 @@ export function ProjectPage({
                   themeVariant={themeVariant}
                   terminalFontSize={terminalFontSize}
                   monoFontFamily={monoFontFamily}
+                  onConnectSftp={handleOpenSftpConnection}
                 />
               </ErrorBoundary>
             </div>

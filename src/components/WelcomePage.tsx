@@ -252,6 +252,7 @@ export function WelcomePage({
   const [showProjectGroupDialog, setShowProjectGroupDialog] = useState(false);
   const [showWslProjectDialog, setShowWslProjectDialog] = useState(false);
   const [sftpOpen, setSftpOpen] = useState(false);
+  const [sftpConnectionId, setSftpConnectionId] = useState<string | undefined>();
   const keepRecursiveBackgroundMounted = themeVariant === "light";
   const showRecursiveBackground = view === "projects" && !sftpOpen;
   const sshGroups = useMemo(
@@ -267,6 +268,7 @@ export function WelcomePage({
   );
   const switchWelcomeView = useCallback((nextView: typeof view) => {
     setSftpOpen(false);
+    setSftpConnectionId(undefined);
     setView(nextView);
   }, []);
 
@@ -392,7 +394,10 @@ export function WelcomePage({
                 label={t("sftp.title")}
                 selectionValue="sftp"
                 active={sftpOpen}
-                onClick={() => setSftpOpen(true)}
+                onClick={() => {
+                  setSftpConnectionId(undefined);
+                  setSftpOpen(true);
+                }}
               />
               <SidebarItem
                 icon={<Server size={15} />}
@@ -444,11 +449,13 @@ export function WelcomePage({
         {sftpOpen ? (
           <LazyPane>
             <SftpPanel
+              key={sftpConnectionId ?? "default"}
               sshConnections={sshConnections}
               localDefaultPath={sftpLocalDefaultPath}
               active={sftpOpen}
               width="100%"
               themeVariant={themeVariant}
+              currentSshConnectionId={sftpConnectionId}
               onClose={() => setSftpOpen(false)}
             />
           </LazyPane>
@@ -501,6 +508,10 @@ export function WelcomePage({
               onOpen={(input) => {
                 onOpenSshProject(input);
                 switchWelcomeView("projects");
+              }}
+              onOpenSftp={(connection) => {
+                setSftpConnectionId(connection.id);
+                setSftpOpen(true);
               }}
             />
           </LazyPane>

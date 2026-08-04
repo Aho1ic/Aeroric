@@ -3,7 +3,11 @@ import { Channel, invoke } from "@tauri-apps/api/core";
 import { Terminal as XTerm } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import type { FontFamily, TerminalFontSize, ThemeVariant } from "../../types";
-import { attachLinuxIMEFix, attachMacWebKitShiftInputFix } from "../terminalInputFix";
+import {
+  applyTerminalTextareaInputAttributes,
+  attachLinuxIMEFix,
+  attachMacWebKitShiftInputFix,
+} from "../terminalInputFix";
 import { attachSmartCopy } from "../terminalCopyHelper";
 import {
   applyTerminalFontFamily,
@@ -82,6 +86,7 @@ export const WslTerminalPanel = forwardRef<
     terminalRef.current = term;
     fitAddonRef.current = fitAddon;
     term.open(container);
+    applyTerminalTextareaInputAttributes(term);
     const disposeInputFix = attachMacWebKitShiftInputFix(term);
     loadWebglAddon(term);
     const writer = createSmartWriter(term, () => themeVariant, { resumeOnAnyOutput: true });
@@ -105,7 +110,9 @@ export const WslTerminalPanel = forwardRef<
       if (!size) return;
       if (lastSizeRef.current?.cols === size.cols && lastSizeRef.current.rows === size.rows) return;
       lastSizeRef.current = size;
-      invoke("resize_pty", { taskId: shellId, cols: size.cols, rows: size.rows }).catch(console.error);
+      invoke("resize_pty", { taskId: shellId, cols: size.cols, rows: size.rows }).catch(
+        console.error,
+      );
     };
     startTimer = window.setTimeout(() => {
       fit();

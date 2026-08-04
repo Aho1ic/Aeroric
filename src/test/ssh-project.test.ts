@@ -1,7 +1,7 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import React from "react";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { I18nProvider } from "../i18n";
 import type { SshConnection } from "../types";
 import {
@@ -25,6 +25,11 @@ function connection(remotePath?: string): SshConnection {
 }
 
 describe("SSH project opening", () => {
+  beforeEach(() => {
+    Element.prototype.hasPointerCapture ??= () => false;
+    Element.prototype.scrollIntoView ??= () => {};
+  });
+
   it("derives a remote project name from the final path segment", () => {
     expect(deriveRemoteProjectName("/srv/apps/aeroric/", "Prod")).toBe("aeroric");
     expect(deriveRemoteProjectName("   ", "Prod")).toBe("Prod");
@@ -69,6 +74,70 @@ describe("SSH project opening", () => {
     );
   });
 
+  it("opens SSH and SFTP actions from the home SSH context menu", async () => {
+    const user = userEvent.setup();
+    const onOpen = vi.fn();
+    const onOpenSftp = vi.fn();
+    const sshPage = () => screen.getByRole("button", { name: /Prod.*example\.com:22/ });
+
+    render(
+      React.createElement(
+        I18nProvider,
+        null,
+        React.createElement(SshProjectPage, {
+          connections: [connection("/srv/apps/aeroric")],
+          onConnectionsChange: vi.fn(),
+          onClose: vi.fn(),
+          onOpen,
+          onOpenSftp,
+        }),
+      ),
+    );
+
+    fireEvent.contextMenu(sshPage(), { clientX: 80, clientY: 80 });
+    await user.click(screen.getByRole("menuitem", { name: "Connect" }));
+    await user.click(screen.getByRole("menuitem", { name: "SSH" }));
+    expect(onOpen).toHaveBeenCalledWith({
+      connectionId: "conn-1",
+      remotePath: "/srv/apps/aeroric",
+      name: "Prod",
+    });
+
+    fireEvent.contextMenu(sshPage(), { clientX: 80, clientY: 80 });
+    await user.click(screen.getByRole("menuitem", { name: "Connect" }));
+    await user.click(screen.getByRole("menuitem", { name: "SFTP" }));
+    expect(onOpenSftp).toHaveBeenCalledWith(expect.objectContaining({ id: "conn-1" }));
+  });
+
+  it("copies an SSH command from the home SSH context menu", async () => {
+    const user = userEvent.setup();
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      value: { writeText },
+      configurable: true,
+    });
+
+    render(
+      React.createElement(
+        I18nProvider,
+        null,
+        React.createElement(SshProjectPage, {
+          connections: [{ ...connection("/srv/apps/aeroric"), port: 2222 }],
+          onConnectionsChange: vi.fn(),
+          onClose: vi.fn(),
+          onOpen: vi.fn(),
+        }),
+      ),
+    );
+
+    fireEvent.contextMenu(screen.getByRole("button", { name: /Prod.*example\.com:2222/ }), {
+      clientX: 80,
+      clientY: 80,
+    });
+    await user.click(screen.getByRole("menuitem", { name: "Copy SSH command" }));
+    expect(writeText).toHaveBeenCalledWith("ssh -p 2222 deploy@example.com");
+  });
+
   it("disables project-card password copy when no password is saved", () => {
     render(
       React.createElement(
@@ -105,8 +174,10 @@ describe("SSH project opening", () => {
 
     await user.click(screen.getByRole("button", { name: "New connection" }));
 
-    const groupSelect = screen.getByLabelText("Group");
-    expect(groupSelect.tagName).toBe("SELECT");
+    const groupSelect = screen.getByRole("combobox", { name: "Group" });
+    expect(groupSelect).toHaveClass("radix-select-trigger");
+    groupSelect.focus();
+    await user.keyboard("{Enter}");
     expect(screen.getByRole("option", { name: "Production" })).toBeInTheDocument();
     expect(screen.getByRole("option", { name: "Staging" })).toBeInTheDocument();
   });
@@ -209,6 +280,35 @@ describe("SSH project opening", () => {
     await user.click(screen.getByRole("button", { name: "Copy password" }));
 
     expect(writeText).toHaveBeenCalledWith("card-secret");
+  });
+
+  it("opens SFTP from the sidebar SSH connection context menu", async () => {
+    const user = userEvent.setup();
+    const onConnect = vi.fn();
+    render(
+      React.createElement(
+        I18nProvider,
+        null,
+        React.createElement(SshConnectionList, {
+          connections: [connection("/srv/apps/aeroric")],
+          selectedId: null,
+          onSelect: vi.fn(),
+          onCreate: vi.fn(),
+          onEdit: vi.fn(),
+          onDelete: vi.fn(),
+          onConnect,
+        }),
+      ),
+    );
+
+    fireEvent.contextMenu(screen.getByRole("button", { name: /Prod.*example\.com:22/ }), {
+      clientX: 80,
+      clientY: 80,
+    });
+    await user.click(screen.getByRole("menuitem", { name: "Connect" }));
+    await user.click(screen.getByRole("menuitem", { name: "SFTP" }));
+
+    expect(onConnect).toHaveBeenCalledWith(expect.objectContaining({ id: "conn-1" }), "sftp");
   });
 
   it("copies the saved SSH password from a project page SSH workspace card", async () => {

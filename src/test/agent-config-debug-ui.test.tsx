@@ -700,6 +700,11 @@ describe("Agent config and debug panel UI", () => {
     const user = userEvent.setup();
     renderAddAgentPanel();
 
+    expect(screen.getByRole("group", { name: "Agent Runtime" })).toHaveClass(
+      "agent-runtime-selector",
+    );
+    expect(screen.getByRole("button", { name: "Codex" })).toHaveStyle({ minHeight: "30px" });
+
     await user.type(screen.getByLabelText("Agent Name"), "GPT55");
     await user.type(screen.getByLabelText("Base URL"), "https://example.com/v1");
     await user.type(screen.getByLabelText("API Key"), "sk-test");

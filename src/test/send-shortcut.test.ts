@@ -5,12 +5,21 @@ import {
   getNewlineShortcutLabel,
   getSendShortcutKeys,
   getSendShortcutLabel,
+  isPromptUndoShortcut,
   normalizeSendShortcut,
   shouldInsertPromptNewlineKey,
   shouldSubmitPromptKey,
 } from "../shortcuts";
 
 describe("send shortcut helpers", () => {
+  test("recognizes Cmd+Z and Ctrl+Z without hijacking Alt+Z", () => {
+    expect(isPromptUndoShortcut({ key: "z", metaKey: true, ctrlKey: false })).toBe(true);
+    expect(isPromptUndoShortcut({ key: "Z", metaKey: false, ctrlKey: true })).toBe(true);
+    expect(isPromptUndoShortcut({ key: "z", metaKey: true, ctrlKey: false, altKey: true })).toBe(
+      false,
+    );
+  });
+
   test("defaults to modifier plus Enter", () => {
     expect(DEFAULT_SEND_SHORTCUT).toBe("mod_enter");
     expect(normalizeSendShortcut(undefined)).toBe("mod_enter");

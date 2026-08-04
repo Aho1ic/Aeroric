@@ -4,6 +4,7 @@ import type { FontFamily, SshConnection, TerminalFontSize, ThemeVariant } from "
 import { useI18n } from "../../i18n";
 import s from "../../styles";
 import { SshConnectionDialog } from "./SshConnectionDialog";
+import { SshConnectionContextMenu, type SshConnectionProtocol } from "./SshConnectionContextMenu";
 import { SshTerminalPanel } from "./SshTerminalPanel";
 
 export type SshWorkspaceLayout = "split" | "full";
@@ -42,14 +43,21 @@ function SshCardPicker({
   selectedId,
   onOpen,
   onEdit,
+  onConnect,
 }: {
   connections: SshConnection[];
   selectedId: string | null;
   onOpen: (connection: SshConnection) => void;
   onEdit: (connection: SshConnection) => void;
+  onConnect?: (connection: SshConnection, protocol: SshConnectionProtocol) => void;
 }) {
   const { t } = useI18n();
   const [copiedConnectionId, setCopiedConnectionId] = useState<string | null>(null);
+  const [contextMenu, setContextMenu] = useState<{
+    connection: SshConnection;
+    x: number;
+    y: number;
+  } | null>(null);
   const grouped = useMemo(
     () => groupConnections(connections, t("ssh.defaultGroup")),
     [connections, t],
@@ -77,6 +85,15 @@ function SshCardPicker({
                 <div
                   key={connection.id}
                   style={selected ? s.sshProjectCardSelected : s.sshProjectCard}
+                  onContextMenu={(event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    setContextMenu({
+                      connection,
+                      x: event.clientX,
+                      y: event.clientY,
+                    });
+                  }}
                 >
                   <button
                     type="button"
@@ -153,6 +170,15 @@ function SshCardPicker({
           </div>
         </section>
       ))}
+      {contextMenu && (
+        <SshConnectionContextMenu
+          connection={contextMenu.connection}
+          x={contextMenu.x}
+          y={contextMenu.y}
+          onClose={() => setContextMenu(null)}
+          onConnect={(connection, protocol) => onConnect?.(connection, protocol)}
+        />
+      )}
     </div>
   );
 }
@@ -214,6 +240,7 @@ export function SshWorkspace({
   themeVariant,
   terminalFontSize,
   monoFontFamily,
+  onOpenSftp,
   layout,
   onLayoutChange,
 }: {
@@ -224,6 +251,7 @@ export function SshWorkspace({
   terminalFontSize: TerminalFontSize;
   monoFontFamily: FontFamily;
   remoteConnection?: SshConnection;
+  onOpenSftp?: (connection: SshConnection) => void;
   layout: SshWorkspaceLayout;
   onLayoutChange: (layout: SshWorkspaceLayout) => void;
 }) {
@@ -273,6 +301,14 @@ export function SshWorkspace({
             onEdit={(connection) => {
               setEditingConnection(connection);
               setDialogOpen(true);
+            }}
+            onConnect={(connection, protocol) => {
+              if (protocol === "sftp") {
+                onOpenSftp?.(connection);
+                return;
+              }
+              setSelectedConnectionId(connection.id);
+              setShowCards(false);
             }}
           />
         </div>

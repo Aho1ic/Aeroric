@@ -1544,6 +1544,11 @@ export const zh: Record<string, string> = {
     "当前 {agent} 版本 {detected} 低于 {min}，任务状态检测已回退到轮询。升级 {agent} 到 {min}+ 可启用更可靠的 hook 状态检测。",
   "newTask.hookNoNode":
     "未检测到 Node.js，任务状态检测已回退到轮询。安装 Node.js 后可启用 hook 状态检测。",
+  "newTask.installNodeJs": "一键安装 Node.js",
+  "newTask.installingNodeJs": "正在安装 Node.js…",
+  "newTask.nodeInstallerReady": "已安装",
+  "newTask.nodeInstallerSuccess": "Node.js {version} 安装完成，Hook 状态已刷新。",
+  "newTask.nodeInstallerFailure": "安装 Node.js 失败：{error}",
   "newTask.hookNotInstalled":
     "{agent} 的 hook 未安装，任务状态检测已回退到轮询。可在「设置 → Hooks」中重新安装。",
   "newTask.initializeButton": "一键初始化",
@@ -1928,6 +1933,12 @@ export const zh: Record<string, string> = {
   "ssh.passwordStorageHint":
     "密码以明文保存在本机 Aeroric 应用数据目录下仅所有者可读写的文件中（Unix 权限 0600），不会写入系统钥匙串。连接时通过 sshpass 环境变量交给系统 SSH。建议优先使用 SSH 密钥；密码可留空以在终端交互输入。",
   "ssh.connect": "连接",
+  "ssh.connectionMenu": "连接操作",
+  "ssh.connectSsh": "SSH",
+  "ssh.connectSftp": "SFTP",
+  "ssh.copyLink": "复制链接",
+  "ssh.copyCommand": "复制 SSH 命令",
+  "ssh.copied": "已复制",
   "ssh.disconnect": "断开",
   "ssh.selectAndConnect": "选择一个已保存连接，然后连接。",
   "sshProject.title": "打开 SSH 项目",

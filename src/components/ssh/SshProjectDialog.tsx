@@ -4,6 +4,7 @@ import type { SshConnection } from "../../types";
 import { useI18n } from "../../i18n";
 import s from "../../styles";
 import { SshConnectionDialog } from "./SshConnectionDialog";
+import { SshConnectionContextMenu, type SshConnectionProtocol } from "./SshConnectionContextMenu";
 import { sshProjectInputForConnection, type SshProjectInput } from "./sshProject";
 
 export {
@@ -18,6 +19,7 @@ interface Props {
   onConnectionsChange: (connections: SshConnection[]) => void;
   onClose: () => void;
   onOpen: (input: SshProjectInput) => void;
+  onOpenSftp?: (connection: SshConnection) => void;
 }
 
 function connectionTarget(connection: SshConnection): string {
@@ -102,6 +104,7 @@ export function SshProjectPage({
   onConnectionsChange,
   onClose,
   onOpen,
+  onOpenSftp,
 }: Props) {
   const { t } = useI18n();
   const firstOpenable = connections.find((connection) => connection.remotePath?.trim());
@@ -111,6 +114,11 @@ export function SshProjectPage({
   const [groupDialogOpen, setGroupDialogOpen] = useState(false);
   const [initialGroup, setInitialGroup] = useState("");
   const [copiedConnectionId, setCopiedConnectionId] = useState<string | null>(null);
+  const [contextMenu, setContextMenu] = useState<{
+    connection: SshConnection;
+    x: number;
+    y: number;
+  } | null>(null);
   const selectedConnection = useMemo(
     () => connections.find((connection) => connection.id === selectedId) ?? connections[0] ?? null,
     [connections, selectedId],
@@ -193,6 +201,16 @@ export function SshProjectPage({
                       <div
                         key={connection.id}
                         style={selected ? s.sshProjectCardSelected : s.sshProjectCard}
+                        onContextMenu={(event) => {
+                          event.preventDefault();
+                          event.stopPropagation();
+                          setSelectedId(connection.id);
+                          setContextMenu({
+                            connection,
+                            x: event.clientX,
+                            y: event.clientY,
+                          });
+                        }}
                       >
                         <button
                           type="button"
@@ -321,6 +339,21 @@ export function SshProjectPage({
             setInitialGroup(group);
             setCreatingConnection(true);
             setGroupDialogOpen(false);
+          }}
+        />
+      )}
+      {contextMenu && (
+        <SshConnectionContextMenu
+          connection={contextMenu.connection}
+          x={contextMenu.x}
+          y={contextMenu.y}
+          onClose={() => setContextMenu(null)}
+          onConnect={(connection, protocol: SshConnectionProtocol) => {
+            if (protocol === "sftp") {
+              onOpenSftp?.(connection);
+              return;
+            }
+            openConnection(connection);
           }}
         />
       )}

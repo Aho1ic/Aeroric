@@ -14,7 +14,11 @@ import { Plug, Power, Server } from "lucide-react";
 import type { FontFamily, SshConnection, TerminalFontSize, ThemeVariant } from "../../types";
 import { useI18n } from "../../i18n";
 import s from "../../styles";
-import { attachLinuxIMEFix, attachMacWebKitShiftInputFix } from "../terminalInputFix";
+import {
+  applyTerminalTextareaInputAttributes,
+  attachLinuxIMEFix,
+  attachMacWebKitShiftInputFix,
+} from "../terminalInputFix";
 import { attachSmartCopy } from "../terminalCopyHelper";
 import {
   applyTerminalFontFamily,
@@ -28,6 +32,7 @@ import {
 } from "../terminalShared";
 import { SshConnectionDialog } from "./SshConnectionDialog";
 import { SshConnectionList } from "./SshConnectionList";
+import type { SshConnectionProtocol } from "./SshConnectionContextMenu";
 import { createSshShellId, shouldAttemptSshAutoConnect } from "./session";
 import "@xterm/xterm/css/xterm.css";
 
@@ -48,6 +53,7 @@ interface Props {
   autoConnect?: boolean;
   hideConnectionList?: boolean;
   onReady?: () => void;
+  onConnectSftp?: (connection: SshConnection) => void;
 }
 
 export interface SshTerminalPanelHandle {
@@ -67,6 +73,7 @@ export const SshTerminalPanel = forwardRef<SshTerminalPanelHandle, Props>(functi
     autoConnect = false,
     hideConnectionList = false,
     onReady,
+    onConnectSftp,
   },
   ref,
 ) {
@@ -164,20 +171,42 @@ export const SshTerminalPanel = forwardRef<SshTerminalPanelHandle, Props>(functi
     [activeSession, connections, saveConnections, selectedId],
   );
 
+  const connectConnection = useCallback(
+    (connection: SshConnection) => {
+      if (!connection) return;
+      if (activeSession) {
+        invoke("kill_ssh_shell", { shellId: activeSession.shellId }).catch(console.error);
+      }
+      const now = Date.now();
+      const nextConnection = { ...connection, lastConnectedAt: now };
+      saveConnections(
+        connections.map((item) => (item.id === nextConnection.id ? nextConnection : item)),
+      );
+      setError(null);
+      setActiveSession({
+        shellId: createSshShellId(nextConnection.id, now),
+        connection: nextConnection,
+      });
+    },
+    [activeSession, connections, saveConnections],
+  );
+
   const handleConnect = useCallback(() => {
     if (!selectedConnection) return;
-    if (activeSession) {
-      invoke("kill_ssh_shell", { shellId: activeSession.shellId }).catch(console.error);
-    }
-    const now = Date.now();
-    const connection = { ...selectedConnection, lastConnectedAt: now };
-    saveConnections(connections.map((item) => (item.id === connection.id ? connection : item)));
-    setError(null);
-    setActiveSession({
-      shellId: createSshShellId(connection.id, now),
-      connection,
-    });
-  }, [activeSession, connections, saveConnections, selectedConnection]);
+    connectConnection(selectedConnection);
+  }, [connectConnection, selectedConnection]);
+
+  const handleConnectionMenuAction = useCallback(
+    (connection: SshConnection, protocol: SshConnectionProtocol) => {
+      setSelectedId(connection.id);
+      if (protocol === "sftp") {
+        onConnectSftp?.(connection);
+        return;
+      }
+      connectConnection(connection);
+    },
+    [connectConnection, onConnectSftp],
+  );
 
   const handleDisconnect = useCallback(() => {
     if (activeSession) {
@@ -216,6 +245,7 @@ export const SshTerminalPanel = forwardRef<SshTerminalPanelHandle, Props>(functi
     terminalRef.current = term;
     fitAddonRef.current = fitAddon;
     term.open(container);
+    applyTerminalTextareaInputAttributes(term);
     const disposeInputFix = attachMacWebKitShiftInputFix(term);
     loadWebglAddon(term);
     const writer = createSmartWriter(term, () => themeVariant, {
@@ -385,6 +415,7 @@ export const SshTerminalPanel = forwardRef<SshTerminalPanelHandle, Props>(functi
             setDialogOpen(true);
           }}
           onDelete={handleDeleteConnection}
+          onConnect={handleConnectionMenuAction}
         />
       )}
 

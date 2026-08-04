@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { createPortal } from "react-dom";
-import { Eye, EyeOff, Save, X } from "lucide-react";
+import * as Select from "@radix-ui/react-select";
+import { Check, ChevronDown, Eye, EyeOff, Save, X } from "lucide-react";
 import type { SshConnection } from "../../types";
 import { useI18n } from "../../i18n";
 import s from "../../styles";
@@ -133,19 +134,61 @@ export function SshConnectionDialog({
             <label key={field} style={s.sshField}>
               <span style={s.sshLabel}>{labels[field]}</span>
               {field === "group" && groupOptions.length > 0 ? (
-                <select
-                  aria-label={labels[field]}
-                  value={draft.group}
-                  onChange={(event) => updateField("group", event.target.value)}
-                  style={errors[field] ? s.sshInputInvalid : s.sshInput}
+                <Select.Root
+                  value={draft.group || "__default__"}
+                  onValueChange={(value) =>
+                    updateField("group", value === "__default__" ? "" : value)
+                  }
                 >
-                  <option value="">{t("ssh.defaultGroup")}</option>
-                  {groupOptions.map((group) => (
-                    <option key={group} value={group}>
-                      {group}
-                    </option>
-                  ))}
-                </select>
+                  <Select.Trigger
+                    aria-label={labels[field]}
+                    className="radix-select-trigger"
+                    style={{
+                      ...(errors[field] ? s.sshInputInvalid : s.sshInput),
+                      minHeight: 34,
+                      height: 34,
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "space-between",
+                      gap: 8,
+                      padding: "0 9px",
+                    }}
+                  >
+                    <Select.Value>{draft.group || t("ssh.defaultGroup")}</Select.Value>
+                    <Select.Icon>
+                      <ChevronDown size={13} strokeWidth={2.2} color="var(--text-hint)" />
+                    </Select.Icon>
+                  </Select.Trigger>
+                  <Select.Portal>
+                    <Select.Content
+                      position="popper"
+                      sideOffset={4}
+                      className="radix-select-content"
+                      style={s.settingsSelectContent}
+                    >
+                      <Select.Viewport className="radix-select-viewport">
+                        {["__default__", ...groupOptions].map((value) => {
+                          const selected = (value === "__default__" ? "" : value) === draft.group;
+                          return (
+                            <Select.Item
+                              key={value}
+                              value={value}
+                              className="radix-select-item"
+                              style={selected ? s.settingsSelectOptionSelected : undefined}
+                            >
+                              <Select.ItemText>
+                                {value === "__default__" ? t("ssh.defaultGroup") : value}
+                              </Select.ItemText>
+                              <Select.ItemIndicator className="radix-select-item-indicator">
+                                <Check size={13} />
+                              </Select.ItemIndicator>
+                            </Select.Item>
+                          );
+                        })}
+                      </Select.Viewport>
+                    </Select.Content>
+                  </Select.Portal>
+                </Select.Root>
               ) : field === "password" ? (
                 <div style={{ position: "relative", display: "flex", alignItems: "center" }}>
                   <input

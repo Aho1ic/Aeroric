@@ -4,6 +4,15 @@ export type SendShortcut = "mod_enter" | "enter";
 
 export const DEFAULT_SEND_SHORTCUT: SendShortcut = "mod_enter";
 
+export function isPromptUndoShortcut(event: {
+  key: string;
+  metaKey: boolean;
+  ctrlKey: boolean;
+  altKey?: boolean;
+}): boolean {
+  return event.key.toLowerCase() === "z" && !event.altKey && (event.metaKey || event.ctrlKey);
+}
+
 export interface PromptKeyEventLike {
   key: string;
   metaKey: boolean;

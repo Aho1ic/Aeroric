@@ -126,6 +126,60 @@ fn validate_project_root(project_path: &str) -> Result<std::path::PathBuf, Strin
     Ok(canonical)
 }
 
+/// Enumerate project files when Git is unavailable (a common case for a
+/// freshly installed Windows desktop client). This keeps @-references useful
+/// for ordinary folders while avoiding the dependency directories that make a
+/// recursive fallback prohibitively large.
+fn list_project_files_from_directory(root: &Path) -> Result<Vec<String>, String> {
+    let mut pending = vec![root.to_path_buf()];
+    let mut files = Vec::new();
+
+    while let Some(directory) = pending.pop() {
+        let entries = std::fs::read_dir(&directory)
+            .map_err(|error| format!("Cannot read {}: {error}", directory.display()))?;
+
+        for entry in entries {
+            let entry = entry.map_err(|error| format!("Cannot read project entry: {error}"))?;
+            let file_type = entry
+                .file_type()
+                .map_err(|error| format!("Cannot inspect {}: {error}", entry.path().display()))?;
+
+            if file_type.is_dir() {
+                let name = entry.file_name();
+                if IGNORED_DIRS
+                    .iter()
+                    .any(|ignored| name.to_string_lossy().eq_ignore_ascii_case(ignored))
+                {
+                    continue;
+                }
+                pending.push(entry.path());
+                continue;
+            }
+
+            // Do not follow symlinked directories during a fallback walk. A
+            // project may contain links into large external trees, and Git's
+            // file list does not traverse those directories either.
+            if !file_type.is_file() {
+                continue;
+            }
+
+            let relative = entry
+                .path()
+                .strip_prefix(root)
+                .map_err(|error| format!("Cannot make project path relative: {error}"))?
+                .to_string_lossy()
+                .replace('\\', "/");
+            if !relative.is_empty() && relative_git_path_is_safe(&relative) {
+                files.push(relative);
+            }
+        }
+    }
+
+    files.sort();
+    files.dedup();
+    Ok(files)
+}
+
 /// Names whose stem (the substring before the first `.`) are reserved on Windows. Only consulted
 /// when compiling for Windows; on Unix these are perfectly valid filenames (matching VS Code's
 /// behavior of validating against the running OS, not the lowest common denominator).
@@ -858,6 +912,27 @@ mod tests {
         );
     }
 
+    #[test]
+    fn fallback_project_file_list_skips_common_dependency_directories() {
+        let root = unique_test_dir("project-files-fallback");
+        std::fs::create_dir_all(root.join("src")).expect("create source directory");
+        std::fs::create_dir_all(root.join("node_modules")).expect("create dependency directory");
+        std::fs::create_dir_all(root.join(".git")).expect("create git directory");
+        std::fs::write(root.join("README.md"), "readme").expect("create readme");
+        std::fs::write(root.join("src").join("main.ts"), "main").expect("create source");
+        std::fs::write(root.join("node_modules").join("package.js"), "dependency")
+            .expect("create dependency file");
+        std::fs::write(root.join(".git").join("config"), "git").expect("create git metadata");
+
+        let files = list_project_files_from_directory(&root).expect("list project files");
+
+        let _ = std::fs::remove_dir_all(&root);
+        assert_eq!(
+            files,
+            vec!["README.md".to_string(), "src/main.ts".to_string()]
+        );
+    }
+
     #[cfg(unix)]
     #[test]
     fn strict_project_reads_reject_symlink_escape() {
@@ -885,7 +960,13 @@ mod tests {
 #[tauri::command]
 pub async fn list_project_files(project_path: String) -> Result<Vec<String>, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        let mut cmd = std::process::Command::new("git");
+        let root = validate_project_root(&project_path)?;
+        let git_path = crate::platform::detect_path("git");
+        if git_path.is_empty() {
+            return list_project_files_from_directory(&root);
+        }
+
+        let mut cmd = std::process::Command::new(git_path);
         crate::subprocess::configure_background_command(&mut cmd);
         let output = cmd
             .args([
@@ -896,15 +977,22 @@ pub async fn list_project_files(project_path: String) -> Result<Vec<String>, Str
                 "-o",
                 "--exclude-standard",
             ])
-            .current_dir(&project_path)
+            .current_dir(&root)
             .envs(crate::app_settings::get_login_shell_env().iter().cloned())
-            .output()
-            .map_err(|e| e.to_string())?;
+            .output();
+
+        let Ok(output) = output else {
+            return list_project_files_from_directory(&root);
+        };
+
+        if !output.status.success() {
+            return list_project_files_from_directory(&root);
+        }
 
         let mut files: Vec<String> = String::from_utf8_lossy(&output.stdout)
             .lines()
-            .filter(|l| !l.is_empty())
-            .map(|l| l.to_string())
+            .map(|l| l.trim_end_matches('\r').replace('\\', "/"))
+            .filter(|l| !l.is_empty() && relative_git_path_is_safe(l))
             .collect();
 
         files.sort();

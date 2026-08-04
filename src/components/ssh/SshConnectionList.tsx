@@ -1,7 +1,9 @@
+import { useState } from "react";
 import { Copy, Edit3, Plus, Server, Trash2 } from "lucide-react";
 import type { SshConnection } from "../../types";
 import { useI18n } from "../../i18n";
 import s from "../../styles";
+import { SshConnectionContextMenu, type SshConnectionProtocol } from "./SshConnectionContextMenu";
 
 interface Props {
   connections: SshConnection[];
@@ -10,6 +12,7 @@ interface Props {
   onCreate: () => void;
   onEdit: (connection: SshConnection) => void;
   onDelete: (connectionId: string) => void;
+  onConnect?: (connection: SshConnection, protocol: SshConnectionProtocol) => void;
 }
 
 function connectionSubtitle(connection: SshConnection): string {
@@ -24,8 +27,14 @@ export function SshConnectionList({
   onCreate,
   onEdit,
   onDelete,
+  onConnect,
 }: Props) {
   const { t } = useI18n();
+  const [contextMenu, setContextMenu] = useState<{
+    connection: SshConnection;
+    x: number;
+    y: number;
+  } | null>(null);
   const groupedConnections = connections.reduce<Array<[string, SshConnection[]]>>(
     (groups, connection) => {
       const groupName = connection.group?.trim() || t("ssh.defaultGroup");
@@ -83,6 +92,16 @@ export function SshConnectionList({
                     type="button"
                     style={selected ? s.sshConnectionRowSelected : s.sshConnectionRow}
                     onClick={() => onSelect(connection)}
+                    onContextMenu={(event) => {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      onSelect(connection);
+                      setContextMenu({
+                        connection,
+                        x: event.clientX,
+                        y: event.clientY,
+                      });
+                    }}
                   >
                     <Server
                       size={16}
@@ -164,6 +183,17 @@ export function SshConnectionList({
             </div>
           ))}
         </div>
+      )}
+      {contextMenu && (
+        <SshConnectionContextMenu
+          connection={contextMenu.connection}
+          x={contextMenu.x}
+          y={contextMenu.y}
+          onClose={() => setContextMenu(null)}
+          onConnect={(connection, protocol) => {
+            onConnect?.(connection, protocol);
+          }}
+        />
       )}
     </div>
   );

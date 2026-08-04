@@ -16,10 +16,15 @@ import {
   applyTerminalFontSize,
   applyTerminalFontFamily,
 } from "./terminalShared";
-import { attachLinuxIMEFix, attachMacWebKitShiftInputFix } from "./terminalInputFix";
+import {
+  applyTerminalTextareaInputAttributes,
+  attachLinuxIMEFix,
+  attachMacWebKitShiftInputFix,
+} from "./terminalInputFix";
 import { Minus, Plus, Terminal as TerminalIcon, Trash2, X } from "lucide-react";
 import { useI18n } from "../i18n";
 import { shellTerminalPanelRootStyle } from "./project-page/viewMode";
+import { compactTerminalLabel, formatTerminalTabLabel } from "./terminalTabLabel";
 import { AnimatedSelectionTrack } from "./ui/AnimatedSelection";
 import "@xterm/xterm/css/xterm.css";
 
@@ -141,6 +146,7 @@ const ShellTerminalInstance = forwardRef<
     terminalRef.current = term;
     fitAddonRef.current = fitAddon;
     term.open(container);
+    applyTerminalTextareaInputAttributes(term);
     const disposeInputFix = attachMacWebKitShiftInputFix(term);
     loadWebglAddon(term);
     const writer = createSmartWriter(term, () => themeVariantRef.current, {
@@ -256,7 +262,9 @@ const ShellTerminalInstance = forwardRef<
         const last = lastSizeRef.current;
         if (!last || last.cols !== s.cols || last.rows !== s.rows) {
           lastSizeRef.current = { cols: s.cols, rows: s.rows };
-          invoke("resize_pty", { taskId: shellId, cols: s.cols, rows: s.rows }).catch(console.error);
+          invoke("resize_pty", { taskId: shellId, cols: s.cols, rows: s.rows }).catch(
+            console.error,
+          );
         }
       }
       focusTerminal();
@@ -281,7 +289,9 @@ const ShellTerminalInstance = forwardRef<
     const last = lastSizeRef.current;
     if (last && last.cols === size.cols && last.rows === size.rows) return;
     lastSizeRef.current = { cols: size.cols, rows: size.rows };
-    invoke("resize_pty", { taskId: shellId, cols: size.cols, rows: size.rows }).catch(console.error);
+    invoke("resize_pty", { taskId: shellId, cols: size.cols, rows: size.rows }).catch(
+      console.error,
+    );
   }, [terminalFontSize, shellId]);
 
   useEffect(() => {
@@ -296,7 +306,9 @@ const ShellTerminalInstance = forwardRef<
     const last = lastSizeRef.current;
     if (last && last.cols === size.cols && last.rows === size.rows) return;
     lastSizeRef.current = { cols: size.cols, rows: size.rows };
-    invoke("resize_pty", { taskId: shellId, cols: size.cols, rows: size.rows }).catch(console.error);
+    invoke("resize_pty", { taskId: shellId, cols: size.cols, rows: size.rows }).catch(
+      console.error,
+    );
   }, [monoFontFamily, shellId]);
 
   return (
@@ -501,6 +513,7 @@ export const ShellTerminalPanel = forwardRef<ShellTerminalPanelHandle, Props>(
             value={activeShellId ?? ""}
             ariaLabel={t("terminal.title")}
             role="tablist"
+            className="terminal-session-tabs"
             style={{
               minHeight: 30,
               flexShrink: 0,
@@ -518,12 +531,15 @@ export const ShellTerminalPanel = forwardRef<ShellTerminalPanelHandle, Props>(
               return (
                 <div
                   key={shell.id}
+                  className="terminal-session-tab"
                   data-animated-selection-item
                   data-selection-value={shell.id}
+                  data-selected={selected ? "true" : "false"}
                   style={{
                     height: 22,
                     minWidth: 0,
-                    maxWidth: 106,
+                    minHeight: 22,
+                    maxWidth: 168,
                     display: "inline-flex",
                     alignItems: "center",
                     padding: "0 3px 0 0",
@@ -539,9 +555,10 @@ export const ShellTerminalPanel = forwardRef<ShellTerminalPanelHandle, Props>(
                     aria-selected={selected}
                     tabIndex={selected ? 0 : -1}
                     onClick={() => setActiveShellId(shell.id)}
-                    title={shell.title}
+                    title={formatTerminalTabLabel(shellLabel, index)}
                     style={{
                       minWidth: 0,
+                      flex: 1,
                       height: "100%",
                       display: "inline-flex",
                       alignItems: "center",
@@ -549,22 +566,21 @@ export const ShellTerminalPanel = forwardRef<ShellTerminalPanelHandle, Props>(
                       padding: "0 3px 0 7px",
                       border: 0,
                       background: "transparent",
+                      overflow: "hidden",
+                      whiteSpace: "nowrap",
                       color: selected ? "var(--control-active-fg)" : "var(--text-muted)",
                       cursor: "pointer",
                       fontSize: 11,
                       fontWeight: selected ? 650 : 560,
                     }}
                   >
+                    <span className="terminal-session-tab__cursor" aria-hidden="true" />
                     <TerminalIcon size={11.5} />
-                    <span
-                      style={{
-                        minWidth: 0,
-                        overflow: "hidden",
-                        textOverflow: "ellipsis",
-                        whiteSpace: "nowrap",
-                      }}
-                    >
-                      {shellLabel} {index + 1}
+                    <span className="terminal-session-tab__label">
+                      {compactTerminalLabel(shellLabel)}
+                    </span>
+                    <span className="terminal-session-tab__index" aria-hidden="true">
+                      {index + 1}
                     </span>
                   </button>
                   <button

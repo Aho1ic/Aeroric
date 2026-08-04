@@ -4,6 +4,7 @@ import { CODE_EXTS } from "../../utils";
 import type { FileEntry, CrossProjectRef, MentionItem } from "./MentionPopover";
 import { APP_PLATFORM } from "../../platform";
 import {
+  isPromptUndoShortcut,
   shouldInsertPromptNewlineKey,
   shouldSubmitPromptKey,
   type SendShortcut,
@@ -489,6 +490,10 @@ export function PromptEditor({
   }
 
   function handleKeyDown(e: React.KeyboardEvent<HTMLDivElement>) {
+    // Keep the browser's native contenteditable history transaction intact.
+    // In particular, do not let suggestion/submit handling consume Cmd/Ctrl+Z.
+    if (!isComposingRef.current && isPromptUndoShortcut(e)) return;
+
     if (!isComposingRef.current && (e.key === "Backspace" || e.key === "Delete")) {
       const editor = editorRef.current;
       const sel = window.getSelection();

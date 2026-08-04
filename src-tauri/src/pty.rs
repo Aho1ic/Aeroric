@@ -662,7 +662,6 @@ fn add_claude_launch_args(
     agent: &str,
     selected_model: Option<&str>,
     reasoning_effort: Option<&str>,
-    speed: Option<&str>,
 ) {
     if agent == "claude" {
         if let Some(model) = normalized_selected_model(selected_model) {
@@ -673,10 +672,6 @@ fn add_claude_launch_args(
     if let Some(effort) = reasoning_effort {
         cmd.arg("--effort");
         cmd.arg(effort);
-    }
-    if speed == Some("fast") {
-        cmd.arg("--settings");
-        cmd.arg(r#"{"fastMode":true}"#);
     }
 }
 
@@ -1271,6 +1266,11 @@ pub async fn run_task(
             .await
             .unwrap_or(false)
     };
+    let claude_settings_path = if is_codex {
+        None
+    } else {
+        crate::hooks::claude_settings_path_for_launch(speed.as_deref() == Some("fast"), use_hooks)?
+    };
 
     let mut cmd = if is_codex {
         let mut c = build_codex_cmd(&launch, &permission_mode);
@@ -1299,7 +1299,6 @@ pub async fn run_task(
             &agent,
             selected_model.as_deref(),
             reasoning_effort.as_deref(),
-            speed.as_deref(),
         );
         // Claude >= 2.1.87：通过 --session-id 指定会话，跳过 /status 发现
         if let Some(ref sid) = pre_session_id {
@@ -1308,11 +1307,9 @@ pub async fn run_task(
         }
         // Claude:hook 可信时通过 `--settings <Aeroric 自有文件>` 传入 hooks,不修改用户的
         // ~/.claude/settings.json(Claude 对 hooks 跨源 merge,用户 hook 不受影响)。
-        if use_hooks {
-            if let Ok(p) = crate::hooks::aeroric_claude_settings_path() {
-                c.arg("--settings");
-                c.arg(p.to_string_lossy().as_ref());
-            }
+        if let Some(path) = claude_settings_path.as_ref() {
+            c.arg("--settings");
+            c.arg(path.to_string_lossy().as_ref());
         }
         if use_native_initial_prompt {
             for arg in initial_prompt_args(&final_prompt, false) {
@@ -1625,6 +1622,11 @@ pub async fn resume_task(
             .await
             .unwrap_or(false)
     };
+    let claude_settings_path = if is_codex {
+        None
+    } else {
+        crate::hooks::claude_settings_path_for_launch(speed.as_deref() == Some("fast"), use_hooks)?
+    };
 
     let mut cmd = if is_codex {
         let mut c = build_codex_cmd(&launch, &permission_mode);
@@ -1650,16 +1652,13 @@ pub async fn resume_task(
             &agent,
             selected_model.as_deref(),
             reasoning_effort.as_deref(),
-            speed.as_deref(),
         );
         c.arg("--resume");
         c.arg(&session_id);
         // Claude:命令行 `--settings` 传入 Aeroric 自有 hooks 文件,不改用户配置。
-        if use_hooks {
-            if let Ok(p) = crate::hooks::aeroric_claude_settings_path() {
-                c.arg("--settings");
-                c.arg(p.to_string_lossy().as_ref());
-            }
+        if let Some(path) = claude_settings_path.as_ref() {
+            c.arg("--settings");
+            c.arg(path.to_string_lossy().as_ref());
         }
         c
     };
@@ -2224,7 +2223,7 @@ mod tests {
             ..Default::default()
         };
         let mut cmd = build_claude_cmd(&launch, "ask");
-        add_claude_launch_args(&mut cmd, "claude", None, Some("ultracode"), None);
+        add_claude_launch_args(&mut cmd, "claude", None, Some("ultracode"));
         let argv: Vec<_> = cmd
             .get_argv()
             .iter()
@@ -2285,7 +2284,7 @@ mod tests {
             ..Default::default()
         };
         let mut claude_cmd = build_claude_cmd(&claude_launch, "ask");
-        add_claude_launch_args(&mut claude_cmd, "claude", None, None, Some("fast"));
+        add_claude_launch_args(&mut claude_cmd, "claude", None, None);
         let claude_argv: Vec<_> = claude_cmd
             .get_argv()
             .iter()
@@ -2293,9 +2292,8 @@ mod tests {
             .collect();
         let unsupported_fast_flag = ["--", "fast"].concat();
 
-        assert!(claude_argv
-            .windows(2)
-            .any(|pair| pair == ["--settings", r#"{"fastMode":true}"#]));
+        assert!(!claude_argv.iter().any(|arg| arg.contains("fastMode")));
+        assert!(!claude_argv.iter().any(|arg| arg == "--settings"));
         assert!(!claude_argv.iter().any(|arg| arg == &unsupported_fast_flag));
 
         let codex_launch = crate::app_settings::AgentLaunchSpec {

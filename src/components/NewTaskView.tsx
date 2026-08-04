@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useMemo, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Sparkles, TriangleAlert } from "lucide-react";
+import { Download, Sparkles, TriangleAlert } from "lucide-react";
 import type { Project, AgentType, PermissionMode, PromptSkill } from "../types";
 import { isRemoteProject } from "../types";
 import { agentDisplayLabel, isCodexLikeAgent } from "../agents";
@@ -27,6 +27,7 @@ import { AgentPermSelector, type ComposeMenu } from "./new-task/AgentPermSelecto
 import { ModelOptionsMenu } from "./new-task/ModelOptionsMenu";
 import { LaunchModeSelector, type LaunchMode } from "./new-task/LaunchModeSelector";
 import { buildPromptWithTaskModes, shouldShowInstructionsBanner } from "./new-task/goalMode";
+import { Button } from "./ui/Button";
 import { useI18n } from "../i18n";
 import { APP_PLATFORM } from "../platform";
 import {
@@ -71,6 +72,12 @@ type CrossProjectFileMap = Map<string, FileEntry[]>;
 
 interface AgentModels {
   models: string[];
+}
+
+interface NodeRuntimeInstallResult {
+  nodePath: string;
+  version: string;
+  alreadyInstalled: boolean;
 }
 
 function parseFileEntry(f: string): FileEntry {
@@ -372,6 +379,10 @@ export function NewTaskView({
 
   // Hook 就绪状态：版本过低 / 无 node 时软提示用户(任务仍可启动,已回退轮询)。
   const [hookReadiness, setHookReadiness] = useState<HookAgentReadiness[] | null>(null);
+  const [nodeInstallerState, setNodeInstallerState] = useState<
+    "idle" | "installing" | "succeeded" | "failed"
+  >("idle");
+  const [nodeInstallerMessage, setNodeInstallerMessage] = useState("");
 
   useEffect(() => {
     let cancelled = false;
@@ -418,6 +429,36 @@ export function NewTaskView({
     }
     return null;
   })();
+  const showWindowsNodeInstaller =
+    APP_PLATFORM === "windows" && agentReadiness?.reason === "no_node";
+
+  const handleInstallNodeJs = async () => {
+    if (nodeInstallerState === "installing") return;
+
+    setNodeInstallerState("installing");
+    setNodeInstallerMessage("");
+    try {
+      const node = await invoke<NodeRuntimeInstallResult>("install_nodejs_on_windows");
+      // Installation refreshes the backend cache. Refresh the banner as well
+      // so the current page can immediately reflect hook readiness.
+      try {
+        const readiness = await invoke<HookAgentReadiness[]>("get_hook_readiness");
+        setHookReadiness(readiness);
+      } catch {
+        // Node installation itself succeeded; the next page refresh can retry
+        // the readiness query if the transient IPC call failed.
+      }
+      const message = t("newTask.nodeInstallerSuccess", { version: node.version });
+      setNodeInstallerState("succeeded");
+      setNodeInstallerMessage(message);
+      showToast(message, "success");
+    } catch (error) {
+      const message = t("newTask.nodeInstallerFailure", { error: String(error) });
+      setNodeInstallerState("failed");
+      setNodeInstallerMessage(message);
+      showToast(message, "error");
+    }
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -725,9 +766,41 @@ export function NewTaskView({
 
       {/* Hook fallback / upgrade hint (soft — does not block task start) */}
       {hookBanner && (
-        <div style={s.agentMissingMdBanner}>
+        <div style={s.agentMissingMdBanner} data-testid="hook-fallback-banner">
           <TriangleAlert size={15} style={s.hookFallbackIcon} />
-          <div style={s.hookFallbackText}>{hookBanner}</div>
+          <div style={{ ...s.hookFallbackText, flex: 1, minWidth: 0 }}>
+            <div>{hookBanner}</div>
+            {nodeInstallerMessage && (
+              <div
+                role="status"
+                style={{
+                  marginTop: 5,
+                  color:
+                    nodeInstallerState === "failed" ? "var(--danger)" : "var(--text-secondary)",
+                }}
+              >
+                {nodeInstallerMessage}
+              </div>
+            )}
+          </div>
+          {showWindowsNodeInstaller && (
+            <Button
+              size="sm"
+              variant="outline"
+              data-testid="install-nodejs-button"
+              disabled={nodeInstallerState === "installing" || nodeInstallerState === "succeeded"}
+              onClick={() => void handleInstallNodeJs()}
+            >
+              <Download size={13} strokeWidth={2.2} />
+              <span>
+                {nodeInstallerState === "installing"
+                  ? t("newTask.installingNodeJs")
+                  : nodeInstallerState === "succeeded"
+                    ? t("newTask.nodeInstallerReady")
+                    : t("newTask.installNodeJs")}
+              </span>
+            </Button>
+          )}
         </div>
       )}
 

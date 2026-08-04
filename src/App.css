@@ -118,10 +118,114 @@
   border-radius: var(--radius-sm) var(--radius-sm) 0 0;
 }
 
+/* Terminal session tabs stay on one optical baseline even when the shell
+ * name is long. The shared AnimatedSelection indicator remains the active
+ * surface; this beam is only a lightweight focus/cursor accent. */
+.terminal-session-tabs .terminal-session-tab {
+  box-sizing: border-box;
+  overflow: hidden;
+  white-space: nowrap;
+}
+.terminal-session-tabs .terminal-session-tab__cursor {
+  width: 2px;
+  height: 13px;
+  flex: 0 0 2px;
+  border-radius: 999px;
+  background: transparent;
+  transition:
+    background 180ms ease,
+    box-shadow 180ms ease,
+    opacity 180ms ease;
+}
+.terminal-session-tabs .terminal-session-tab[data-selected="true"] .terminal-session-tab__cursor {
+  background: linear-gradient(
+    180deg,
+    var(--accent),
+    color-mix(in srgb, var(--accent) 30%, transparent)
+  );
+  box-shadow:
+    0 0 0 2px color-mix(in srgb, var(--accent) 12%, transparent),
+    0 0 10px color-mix(in srgb, var(--accent) 72%, transparent);
+  animation: aeroric-terminal-tab-cursor 1.8s ease-in-out infinite;
+}
+.terminal-session-tabs .terminal-session-tab__label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.terminal-session-tabs .terminal-session-tab__index {
+  flex: 0 0 auto;
+  color: color-mix(in srgb, currentColor 68%, transparent);
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+}
+
+@keyframes aeroric-terminal-tab-cursor {
+  0%,
+  100% {
+    opacity: 0.72;
+  }
+
+  50% {
+    opacity: 1;
+  }
+}
+
+/* Compact, high-contrast provider switch in Add Agent. */
+.agent-runtime-selector {
+  gap: 3px;
+  padding: 3px;
+  border-radius: 11px;
+  border-color: color-mix(in srgb, var(--border-medium) 80%, var(--accent) 20%);
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--accent) 7%, transparent), transparent 58%),
+    color-mix(in srgb, var(--bg-card) 86%, var(--bg-subtle));
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, white 8%, transparent),
+    0 8px 22px color-mix(in srgb, #000 10%, transparent);
+}
+.agent-runtime-selector .animated-selection__indicator {
+  border-radius: 8px;
+  border-color: color-mix(in srgb, var(--accent) 54%, var(--border-medium));
+  background: linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--accent) 22%, var(--control-active-bg)),
+    var(--control-active-bg)
+  );
+  box-shadow:
+    0 5px 14px color-mix(in srgb, var(--accent) 18%, transparent),
+    inset 0 1px 0 color-mix(in srgb, white 12%, transparent);
+}
+.agent-runtime-selector__item {
+  min-height: 30px;
+  border-radius: 8px;
+  letter-spacing: 0.01em;
+}
+.agent-runtime-selector__item::before {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentColor;
+  content: "";
+  opacity: 0.5;
+  transition:
+    opacity 160ms ease,
+    transform 180ms ease;
+}
+.agent-runtime-selector__item[aria-pressed="true"]::before {
+  opacity: 0.9;
+  transform: scale(1.15);
+}
+
 @media (prefers-reduced-motion: reduce) {
   .animated-selection__indicator,
-  .animated-selection__item {
+  .animated-selection__item,
+  .terminal-session-tabs .terminal-session-tab__cursor {
     transition-duration: 0.01ms !important;
+    animation: none !important;
   }
 }
 
@@ -3204,10 +3308,9 @@ html:not(.dark) .xterm-helper-textarea {
   color: var(--text-hint) !important;
   border-bottom: 2px solid color-mix(in srgb, var(--accent) 70%, transparent);
   box-sizing: border-box;
-  width: max-content;
-  max-width: none;
-  height: auto !important;
-  min-height: 1em;
+  /* xterm writes the caret-relative width/height inline while composing.
+   * Do not override those dimensions: Windows IME uses the helper textarea's
+   * rect as the candidate-window anchor. */
   white-space: nowrap !important;
   overflow-wrap: normal;
   word-break: normal;
@@ -3238,7 +3341,6 @@ html:not(.dark) .xterm-helper-textarea {
   }
 }
 
-.xterm .composition-view:not(.active),
-.xterm .composition-view:empty {
+.xterm .composition-view:not(.active) {
   display: none !important;
 }

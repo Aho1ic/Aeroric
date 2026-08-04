@@ -168,6 +168,10 @@ pub async fn install_nodejs_on_windows() -> Result<NodeRuntimeInstallResult, Str
     {
         if let Some(path) = detect_node() {
             let version = node_version(&path).await?;
+            // The desktop process may have cached a previous `no_node` result;
+            // refresh hooks even when Node was installed before the button was
+            // clicked so the project home reflects the current runtime.
+            crate::hooks::cache_status(crate::hooks::ensure_installed());
             return Ok(NodeRuntimeInstallResult {
                 node_path: path.to_string_lossy().into_owned(),
                 version,

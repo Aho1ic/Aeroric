@@ -1598,6 +1598,12 @@ export const en: Record<string, string> = {
     "{agent} {detected} is below {min}. Task status detection has fallen back to polling — upgrade {agent} to {min}+ to enable the more reliable hook-based detection.",
   "newTask.hookNoNode":
     "Node.js was not detected, so task status detection has fallen back to polling. Install Node.js to enable hook-based detection.",
+  "newTask.installNodeJs": "Install Node.js",
+  "newTask.installingNodeJs": "Installing Node.js…",
+  "newTask.nodeInstallerReady": "Installed",
+  "newTask.nodeInstallerSuccess":
+    "Node.js {version} is installed and hook readiness has been refreshed.",
+  "newTask.nodeInstallerFailure": "Node.js installation failed: {error}",
   "newTask.hookNotInstalled":
     "{agent} hooks are not installed, so task status detection has fallen back to polling. Reinstall from Settings → Hooks.",
   "newTask.initializeButton": "Initialize",
@@ -1991,6 +1997,12 @@ export const en: Record<string, string> = {
   "ssh.passwordStorageHint":
     "Passwords are stored as plaintext in a local owner-only file under Aeroric app data (Unix mode 0600), not in the OS keychain. They are passed to system SSH via sshpass environment variables. Prefer SSH keys when possible; leave the password blank to use interactive prompts instead.",
   "ssh.connect": "Connect",
+  "ssh.connectionMenu": "Connection actions",
+  "ssh.connectSsh": "SSH",
+  "ssh.connectSftp": "SFTP",
+  "ssh.copyLink": "Copy link",
+  "ssh.copyCommand": "Copy SSH command",
+  "ssh.copied": "Copied",
   "ssh.disconnect": "Disconnect",
   "ssh.selectAndConnect": "Select a saved connection, then connect.",
   "sshProject.title": "Open SSH project",
