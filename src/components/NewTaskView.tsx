@@ -388,7 +388,6 @@ export function NewTaskView({
   }, []);
 
   const codexLikeAgent = isCodexLikeAgent(agent, agentOptions);
-  const injectInitialPromptIntoTerminal = agent === "claude" || codexLikeAgent;
   const customAgent = agentOptions.some((option) => option.value === agent && option.custom);
   const agentSupportsModelSelection = agent === "claude" || codexLikeAgent || customAgent;
   const modelSelectable = agentSupportsModelSelection;
@@ -624,10 +623,10 @@ export function NewTaskView({
       selectedModel: modelSelectable ? selectedModel || undefined : undefined,
       reasoningEffort,
       speed,
-      // Claude and Codex both need the first prompt to be typed and submitted
-      // after the PTY has passed any interactive startup confirmations. Their
-      // positional CLI prompt is not reliable in the embedded terminal.
-      injectPromptIntoTerminal: injectInitialPromptIntoTerminal,
+      // Claude/Codex receive normal first prompts through their native CLI
+      // argument. This avoids racing the welcome screen's PTY redraw. Flows
+      // that explicitly need the interactive composer (for example the
+      // CLAUDE.md initializer above) opt into PTY injection separately.
     });
     editorHandle.clear();
     setIsEmpty(true);

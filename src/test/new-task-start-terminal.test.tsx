@@ -127,12 +127,12 @@ describe("NewTaskView start terminal", () => {
         prompt: "inspect the current files",
         agent: "claude",
         immediate: true,
-        injectPromptIntoTerminal: true,
       }),
     );
+    expect(onSubmit.mock.calls[0][0]).not.toHaveProperty("injectPromptIntoTerminal");
   });
 
-  it("passes Codex's initial prompt for terminal injection", async () => {
+  it("lets Codex use its native initial prompt argument", async () => {
     const user = userEvent.setup();
     const onSubmit = vi.fn();
 
@@ -154,9 +154,9 @@ describe("NewTaskView start terminal", () => {
         prompt: "inspect the current files",
         agent: "codex",
         immediate: true,
-        injectPromptIntoTerminal: true,
       }),
     );
+    expect(onSubmit.mock.calls[0][0]).not.toHaveProperty("injectPromptIntoTerminal");
   });
 
   it("previews slash skills and inserts the selected skill like the CLI", async () => {
