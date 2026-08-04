@@ -1076,6 +1076,25 @@ fn uses_native_initial_prompt(agent: &str, is_codex: bool) -> bool {
     matches!((agent, is_codex), ("claude", false) | ("codex", true))
 }
 
+/// Aeroric-generated Claude wrappers forward their positional arguments to the
+/// real CLI. Prefer that native delivery path for them as well; PTY injection
+/// is only a fallback for arbitrary custom wrappers that may not forward args.
+fn launch_supports_native_initial_prompt(
+    agent: &str,
+    is_codex: bool,
+    launch: &crate::app_settings::AgentLaunchSpec,
+) -> bool {
+    if uses_native_initial_prompt(agent, is_codex) || is_codex {
+        return uses_native_initial_prompt(agent, is_codex);
+    }
+
+    let Ok(content) = fs::read_to_string(&launch.program) else {
+        return false;
+    };
+    content.contains("# AERORIC_CLAUDE_WRAPPER_VERSION=")
+        && (content.contains("\"$@\"") || content.contains("@args"))
+}
+
 fn should_use_native_initial_prompt(
     agent: &str,
     is_codex: bool,
@@ -1197,8 +1216,11 @@ pub async fn run_task(
     )?;
     let speed = normalized_speed(speed.as_deref())?;
     let uses_ultracode = uses_ultracode_terminal_command(is_codex, reasoning_effort.as_deref());
+    let force_prompt_injection = force_prompt_injection.unwrap_or(false);
     let use_native_initial_prompt =
-        should_use_native_initial_prompt(&agent, is_codex, force_prompt_injection.unwrap_or(false))
+        (should_use_native_initial_prompt(&agent, is_codex, force_prompt_injection)
+            || (!force_prompt_injection
+                && launch_supports_native_initial_prompt(&agent, is_codex, &launch)))
             && !uses_ultracode;
 
     // 版本统一走全局探测（带缓存），判断是否支持 --session-id。
