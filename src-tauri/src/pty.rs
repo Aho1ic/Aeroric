@@ -670,7 +670,7 @@ fn add_claude_launch_args(
             cmd.arg(model);
         }
     }
-    if let Some(effort) = reasoning_effort.filter(|effort| *effort != "ultracode") {
+    if let Some(effort) = reasoning_effort {
         cmd.arg("--effort");
         cmd.arg(effort);
     }
@@ -682,6 +682,14 @@ fn add_claude_launch_args(
 
 fn uses_ultracode_terminal_command(is_codex: bool, reasoning_effort: Option<&str>) -> bool {
     !is_codex && reasoning_effort == Some("ultracode")
+}
+
+fn should_use_ultracode_terminal_command(
+    is_codex: bool,
+    reasoning_effort: Option<&str>,
+    native_cli_args_supported: bool,
+) -> bool {
+    uses_ultracode_terminal_command(is_codex, reasoning_effort) && !native_cli_args_supported
 }
 
 pub(crate) fn initial_ultracode_command() -> Vec<u8> {
@@ -1220,13 +1228,19 @@ pub async fn run_task(
         selected_model.as_deref(),
     )?;
     let speed = normalized_speed(speed.as_deref())?;
-    let uses_ultracode = uses_ultracode_terminal_command(is_codex, reasoning_effort.as_deref());
     let force_prompt_injection = force_prompt_injection.unwrap_or(false);
+    let native_cli_args_supported = uses_native_initial_prompt(&agent, is_codex)
+        || launch_supports_native_initial_prompt(&agent, is_codex, &launch);
     let use_native_initial_prompt =
         (should_use_native_initial_prompt(&agent, is_codex, force_prompt_injection)
             || (!force_prompt_injection
                 && launch_supports_native_initial_prompt(&agent, is_codex, &launch)))
-            && !uses_ultracode;
+            && native_cli_args_supported;
+    let uses_ultracode = should_use_ultracode_terminal_command(
+        is_codex,
+        reasoning_effort.as_deref(),
+        native_cli_args_supported,
+    );
 
     // 版本统一走全局探测（带缓存），判断是否支持 --session-id。
     // 缓存未命中时 *_version_gte 会启子进程探测，故放进 spawn_blocking 避免阻塞 async runtime。
@@ -1594,7 +1608,13 @@ pub async fn resume_task(
         selected_model.as_deref(),
     )?;
     let speed = normalized_speed(speed.as_deref())?;
-    let uses_ultracode = uses_ultracode_terminal_command(is_codex, reasoning_effort.as_deref());
+    let native_cli_args_supported = uses_native_initial_prompt(&agent, is_codex)
+        || launch_supports_native_initial_prompt(&agent, is_codex, &launch);
+    let uses_ultracode = should_use_ultracode_terminal_command(
+        is_codex,
+        reasoning_effort.as_deref(),
+        native_cli_args_supported,
+    );
     // hook 可信时会话发现/状态由 event_watcher 驱动,跳过轮询 watcher;否则回退,
     // 且不注入 AERORIC_* 守卫变量,避免旧版但已安装 hook 的 agent 与轮询路径并行重复
     // 上报。版本统一走全局带缓存的探测。
@@ -2195,6 +2215,35 @@ mod tests {
             Some("ultra".to_string())
         );
         assert!(normalized_reasoning_effort(Some("ultra"), true, Some("gpt-5.6")).is_err());
+    }
+
+    #[test]
+    fn claude_ultra_uses_native_cli_effort_argument() {
+        let launch = crate::app_settings::AgentLaunchSpec {
+            program: "claude".to_string(),
+            ..Default::default()
+        };
+        let mut cmd = build_claude_cmd(&launch, "ask");
+        add_claude_launch_args(&mut cmd, "claude", None, Some("ultracode"), None);
+        let argv: Vec<_> = cmd
+            .get_argv()
+            .iter()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+
+        assert!(argv
+            .windows(2)
+            .any(|pair| pair == ["--effort", "ultracode"]));
+        assert!(!should_use_ultracode_terminal_command(
+            false,
+            Some("ultracode"),
+            true
+        ));
+        assert!(should_use_ultracode_terminal_command(
+            false,
+            Some("ultracode"),
+            false
+        ));
     }
 
     #[test]
