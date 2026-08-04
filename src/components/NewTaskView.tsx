@@ -388,6 +388,7 @@ export function NewTaskView({
   }, []);
 
   const codexLikeAgent = isCodexLikeAgent(agent, agentOptions);
+  const injectInitialPromptIntoTerminal = agent === "claude" || codexLikeAgent;
   const customAgent = agentOptions.some((option) => option.value === agent && option.custom);
   const agentSupportsModelSelection = agent === "claude" || codexLikeAgent || customAgent;
   const modelSelectable = agentSupportsModelSelection;
@@ -623,6 +624,10 @@ export function NewTaskView({
       selectedModel: modelSelectable ? selectedModel || undefined : undefined,
       reasoningEffort,
       speed,
+      // Claude and Codex both need the first prompt to be typed and submitted
+      // after the PTY has passed any interactive startup confirmations. Their
+      // positional CLI prompt is not reliable in the embedded terminal.
+      injectPromptIntoTerminal: injectInitialPromptIntoTerminal,
     });
     editorHandle.clear();
     setIsEmpty(true);

@@ -24,7 +24,7 @@ const STARTUP_FIRST_OUTPUT_TIMEOUT: Duration = Duration::from_secs(2);
 const STARTUP_NO_OUTPUT_FALLBACK: Duration = Duration::from_secs(5);
 const STARTUP_OUTPUT_QUIET: Duration = Duration::from_millis(220);
 const STARTUP_OUTPUT_MAX_WAIT: Duration = Duration::from_secs(2);
-const STARTUP_GATE_INPUT_SETTLE: Duration = Duration::from_millis(600);
+const STARTUP_GATE_INPUT_SETTLE: Duration = Duration::from_millis(1200);
 /// 门控等待的绝对上限。误判成门控时,没有上限会让首条 prompt 永不投递,
 /// 并把 blocking 线程占到 PTY 断开为止。到点后放弃注入而不是硬写入,
 /// 因为此时若确实存在真实确认框,写入会落进选择器。
@@ -814,6 +814,7 @@ fn has_confirmation_scope(text: &str) -> bool {
         || text.contains("permission")
         || text.contains("authorize")
         || text.contains("enable")
+        || text.contains("accept")
         || text.contains("want to")
         || text.contains("are you sure")
 }
@@ -850,7 +851,22 @@ fn startup_gate_text(input: &str) -> bool {
     let hook_gate = hook_scope
         && confirmation_scope
         && (choice_marker || compact.contains("permission to") || compact.contains("run hook"));
-    trust_gate || hook_review_gate || hook_gate || generic_gate
+    // Claude's full-access launch can show a separate "Bypass Permissions"
+    // acceptance screen after trust and hook prompts. It may not contain a
+    // question mark, so recognize the explicit acceptance wording as a gate.
+    let bypass_scope = compact.contains("bypass permission")
+        || compact.contains("bypass approval")
+        || compact.contains("skip permission")
+        || compact.contains("bypass mode")
+        || compact.contains("dangerously bypass");
+    let bypass_gate = bypass_scope
+        && (compact.contains("i accept")
+            || compact.contains("accept the risk")
+            || (has_choice_marker(&compact)
+                && (compact.contains("yes")
+                    || compact.contains("accept")
+                    || compact.contains("no"))));
+    trust_gate || hook_review_gate || hook_gate || bypass_gate || generic_gate
 }
 
 fn startup_output_indicates_gate(tail: &mut String, output: &str) -> bool {
@@ -918,7 +934,9 @@ fn wait_for_initial_input_ready_with_cap(
         } else if gate_pending {
             STARTUP_GATE_INPUT_SETTLE
         } else {
-            STARTUP_OUTPUT_QUIET
+            STARTUP_OUTPUT_MAX_WAIT
+                .saturating_sub(now.duration_since(first_output_at.unwrap()))
+                .min(STARTUP_OUTPUT_QUIET)
         };
 
         match startup_rx.recv_timeout(wait) {
@@ -965,7 +983,12 @@ fn wait_for_initial_input_ready_with_cap(
                     }
                     continue;
                 }
-                return true;
+                if Instant::now().duration_since(first_output_at.unwrap())
+                    >= STARTUP_OUTPUT_MAX_WAIT
+                {
+                    return true;
+                }
+                continue;
             }
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
                 return !gate_pending || user_confirmed_gate;
@@ -1940,6 +1963,7 @@ mod tests {
         assert!(should_use_native_initial_prompt("claude", false, false));
         assert!(!should_use_native_initial_prompt("claude", false, true));
         assert!(should_use_native_initial_prompt("codex", true, false));
+        assert!(!should_use_native_initial_prompt("codex", true, true));
         assert!(initial_prompt_args("", true).is_empty());
         assert_eq!(
             initial_prompt_args("hello\nworld", true),
@@ -1969,6 +1993,9 @@ mod tests {
         ));
         assert!(startup_gate_text(
             "Select an option to continue: 1. Review 2. Allow"
+        ));
+        assert!(startup_gate_text(
+            "Bypass Permissions mode\n1. Yes, I accept\n2. No, exit"
         ));
         assert!(!startup_gate_text("hook: SessionStart Completed"));
         assert!(!startup_gate_text("Starting workspace session"));
@@ -2041,6 +2068,48 @@ mod tests {
             .unwrap();
         sender.send(StartupSignal::UserInput).unwrap();
         assert!(waiter.join().unwrap());
+    }
+
+    #[test]
+    fn startup_input_waits_through_delayed_trust_hook_and_bypass_screens() {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let (done_sender, done_receiver) = std::sync::mpsc::channel();
+        sender
+            .send(StartupSignal::Output(
+                "Workspace trust: Do you trust this folder?".to_string(),
+            ))
+            .unwrap();
+        let waiter = std::thread::spawn(move || {
+            let ready = wait_for_initial_input_ready(receiver);
+            done_sender.send(ready).unwrap();
+        });
+
+        std::thread::sleep(Duration::from_millis(40));
+        sender.send(StartupSignal::UserInput).unwrap();
+        // The next screen can take longer than the old 600ms settle window.
+        std::thread::sleep(Duration::from_millis(800));
+        assert!(done_receiver.try_recv().is_err());
+
+        sender
+            .send(StartupSignal::Output(
+                "Hook needs review: select an option".to_string(),
+            ))
+            .unwrap();
+        std::thread::sleep(Duration::from_millis(40));
+        sender.send(StartupSignal::UserInput).unwrap();
+        std::thread::sleep(Duration::from_millis(800));
+        assert!(done_receiver.try_recv().is_err());
+
+        sender
+            .send(StartupSignal::Output(
+                "Bypass Permissions mode\n1. Yes, I accept\n2. No, exit".to_string(),
+            ))
+            .unwrap();
+        std::thread::sleep(Duration::from_millis(40));
+        sender.send(StartupSignal::UserInput).unwrap();
+
+        assert!(done_receiver.recv_timeout(Duration::from_secs(3)).unwrap());
+        assert!(waiter.join().is_ok());
     }
 
     #[test]

@@ -125,7 +125,36 @@ describe("NewTaskView start terminal", () => {
     expect(onSubmit).toHaveBeenCalledWith(
       expect.objectContaining({
         prompt: "inspect the current files",
+        agent: "claude",
         immediate: true,
+        injectPromptIntoTerminal: true,
+      }),
+    );
+  });
+
+  it("passes Codex's initial prompt for terminal injection", async () => {
+    const user = userEvent.setup();
+    const onSubmit = vi.fn();
+
+    render(
+      <I18nProvider>
+        <NewTaskView project={project} onSubmit={onSubmit} />
+      </I18nProvider>,
+    );
+
+    await user.click(screen.getByRole("combobox", { name: "Agent" }));
+    await user.click(await screen.findByText("Codex"));
+
+    const editor = screen.getByRole("textbox");
+    await user.type(editor, "inspect the current files");
+    await user.click(screen.getByRole("button", { name: /Send/ }));
+
+    expect(onSubmit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        prompt: "inspect the current files",
+        agent: "codex",
+        immediate: true,
+        injectPromptIntoTerminal: true,
       }),
     );
   });

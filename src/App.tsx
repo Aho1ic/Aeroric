@@ -1055,9 +1055,9 @@ function App() {
       worktreePath ?? project.path,
       images,
       texts,
-      // Built-in agents accept the initial prompt as a CLI argument and queue it
-      // behind their own startup confirmation flow. Only flows that explicitly
-      // need to type into the interactive composer opt into PTY injection.
+      // Built-in agents can accept the initial prompt as a CLI argument, but
+      // flows that need to type into the interactive composer explicitly opt
+      // into PTY injection so startup confirmations are handled first.
       injectPromptIntoTerminal ?? false,
     );
     return launchedTask;
