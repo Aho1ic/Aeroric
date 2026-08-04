@@ -3030,6 +3030,11 @@ fn load_settings_unlocked() -> AppSettings {
         return settings;
     }
 
+    // Older releases wrote settings.json with the platform default mode even
+    // though it contains API keys and proxy passwords. Tighten existing files
+    // on read so a user who has not changed settings since upgrading is still
+    // protected.
+    let _ = crate::storage::ensure_private_file_permissions(&path);
     let raw = match fs::read_to_string(&path) {
         Ok(r) => r,
         Err(_) => return AppSettings::default(),

@@ -30,6 +30,7 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({
 interface RemoteStatus {
   enabled: boolean;
   running: boolean;
+  networkExposed: boolean;
   port: number;
   lanIp: string | null;
   lanAddresses: { interfaceName: string; ip: string }[];
@@ -57,6 +58,7 @@ interface RemoteInvite {
 const baseStatus: RemoteStatus = {
   enabled: true,
   running: true,
+  networkExposed: true,
   port: 6790,
   lanIp: "192.168.1.10",
   lanAddresses: [
@@ -148,6 +150,10 @@ function installBackend(options?: {
       return Promise.resolve(cloneStatus(state.status));
     }
     if (command === "remote_create_invite") {
+      state.status = {
+        ...state.status,
+        networkExposed: true,
+      };
       return Promise.resolve({ ...state.invite });
     }
     if (command === "remote_revoke_device") {
@@ -232,6 +238,43 @@ describe("RemoteAccessPanel", () => {
 
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  it("does not advertise a LAN endpoint before pairing exposes the listener", async () => {
+    installBackend({
+      status: {
+        ...baseStatus,
+        networkExposed: false,
+      },
+    });
+
+    renderPanel();
+
+    expect(
+      await screen.findByText("Listening locally until you generate a pairing QR code"),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Copy LAN address" })).not.toBeInTheDocument();
+  });
+
+  it("refreshes listener exposure after a successful pairing invite", async () => {
+    const user = userEvent.setup();
+    installBackend({
+      status: {
+        ...baseStatus,
+        networkExposed: false,
+      },
+    });
+
+    renderPanel();
+    expect(
+      await screen.findByText("Listening locally until you generate a pairing QR code"),
+    ).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Generate pairing QR code" }));
+
+    expect(await screen.findAllByText("ws://192.168.1.10:6790")).toHaveLength(2);
+    expect(screen.getByRole("button", { name: "Copy LAN address" })).toBeInTheDocument();
+    await waitFor(() => expect(vi.mocked(invoke)).toHaveBeenCalledWith("remote_server_status"));
   });
 
   it("shows loading, retries a failed initial load, and copies the LAN address", async () => {
@@ -743,6 +786,98 @@ describe("RemoteAccessPanel", () => {
 
     unmount();
     await waitFor(() => expect(eventMocks.unlisten).toHaveBeenCalledOnce());
+  });
+
+  it("does not restore a consumed invite when pairing finishes before its response", async () => {
+    const user = userEvent.setup();
+    const pendingInvite = deferred<RemoteInvite>();
+    const backend = installBackend({
+      status: {
+        ...baseStatus,
+        networkExposed: false,
+      },
+    });
+    vi.mocked(invoke).mockImplementation((command, args) => {
+      if (command === "remote_create_invite") return pendingInvite.promise;
+      if (command === "remote_server_status") {
+        return Promise.resolve(cloneStatus(backend.status));
+      }
+      if (command === "remote_list_devices") {
+        return Promise.resolve(backend.devices.map((device) => ({ ...device })));
+      }
+      return Promise.reject(new Error(`unexpected command: ${String(command)} ${String(args)}`));
+    });
+    renderPanel();
+
+    await screen.findByRole("switch", { name: "Remote server" });
+    await waitFor(() => expect(eventMocks.pairedHandler).not.toBeNull());
+    await user.click(screen.getByRole("button", { name: "Generate pairing QR code" }));
+    expect(screen.getByRole("button", { name: "Generating…" })).toBeDisabled();
+
+    backend.status = {
+      ...backend.status,
+      networkExposed: true,
+    };
+    backend.devices = [{ ...pairedDevice }];
+    await act(async () => {
+      eventMocks.pairedHandler?.({ payload: { deviceName: pairedDevice.name } });
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      pendingInvite.resolve({ ...baseInvite });
+      await pendingInvite.promise;
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(await screen.findByText(`Paired with ${pairedDevice.name}.`)).toBeInTheDocument();
+    expect(screen.queryByLabelText("Pairing QR code generated")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Copy pairing link" })).not.toBeInTheDocument();
+  });
+
+  it("does not show a late invite failure after pairing", async () => {
+    const user = userEvent.setup();
+    const pendingInvite = deferred<RemoteInvite>();
+    const backend = installBackend();
+    vi.mocked(invoke).mockImplementation((command, args) => {
+      if (command === "remote_create_invite") return pendingInvite.promise;
+      if (command === "remote_server_status") {
+        return Promise.resolve(cloneStatus(backend.status));
+      }
+      if (command === "remote_list_devices") {
+        return Promise.resolve(backend.devices.map((device) => ({ ...device })));
+      }
+      return Promise.reject(new Error(`unexpected command: ${String(command)} ${String(args)}`));
+    });
+    renderPanel();
+
+    await screen.findByRole("switch", { name: "Remote server" });
+    await waitFor(() => expect(eventMocks.pairedHandler).not.toBeNull());
+    await user.click(screen.getByRole("button", { name: "Generate pairing QR code" }));
+
+    backend.devices = [{ ...pairedDevice }];
+    await act(async () => {
+      eventMocks.pairedHandler?.({ payload: { deviceName: pairedDevice.name } });
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      pendingInvite.reject(new Error("late invite failure"));
+      try {
+        await pendingInvite.promise;
+      } catch {
+        // The component owns this rejection; awaiting it here merely flushes
+        // the deferred promise without creating an unhandled test rejection.
+      }
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(await screen.findByText(`Paired with ${pairedDevice.name}.`)).toBeInTheDocument();
+    expect(
+      screen.queryByText("Could not generate a pairing QR code: Error: late invite failure"),
+    ).not.toBeInTheDocument();
   });
 
   it("requires confirmation before revoking a device and refreshes after success", async () => {

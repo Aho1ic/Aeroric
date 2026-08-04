@@ -28,6 +28,7 @@ export const zh: Record<string, string> = {
   "appSettings.remote.switchOff": "关闭",
   "appSettings.remote.address": "局域网地址",
   "appSettings.remote.addressUnavailable": "服务运行后将显示局域网地址",
+  "appSettings.remote.addressLocalOnly": "生成配对二维码前仅监听本机",
   "appSettings.remote.copyAddress": "复制局域网地址",
   "appSettings.remote.addressCopied": "地址已复制",
   "appSettings.remote.copyFailed": "复制失败：{message}",

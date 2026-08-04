@@ -9,8 +9,10 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import { AppState } from "react-native";
 import { t } from "../i18n";
 import { RemoteConnection, type ConnectionStatus } from "../transport/remote-connection";
+import { subscribeForegroundConnectionRecovery } from "./foreground-recovery";
 import { useHosts } from "./hosts-context";
 
 interface ConnectionContextValue {
@@ -42,9 +44,17 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
   reconcileRef.current = reconcileHostIdentity;
 
   const hostKey = activeHost
-    ? `${activeHost.id}|${activeHost.publicKey ?? ""}|${activeHost.deviceToken}`
+    ? `${activeHost.id}|${activeHost.publicKey ?? ""}|${activeHost.deviceToken}|${activeHost.protocol ?? "aeroric"}`
     : null;
   const endpointsKey = activeHost ? activeHost.endpoints.join("\n") : "";
+
+  // 移动系统可能在后台或短暂 inactive 期间静默丢弃 WebSocket。每次
+  // 回到 `active` 都交给连接层；重复 active 事件在订阅层去重。
+  useEffect(() => {
+    return subscribeForegroundConnectionRecovery(AppState, () => {
+      connRef.current?.notifyForeground();
+    });
+  }, []);
 
   useEffect(() => {
     const host = hostRef.current;
@@ -67,6 +77,7 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
       endpoints: host.endpoints,
       serverPublicKey: host.publicKey,
       authParams: () => ({ deviceToken: host.deviceToken }),
+      protocol: host.protocol ?? "aeroric",
     });
     connRef.current = conn;
     const offStatus = conn.onStatusChange((next) => {

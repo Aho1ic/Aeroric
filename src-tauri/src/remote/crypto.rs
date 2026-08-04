@@ -108,6 +108,13 @@ impl StaticKeys {
         URL_SAFE_NO_PAD.encode(self.public.as_bytes())
     }
 
+    /// Raw static key material for a negotiated compatibility protocol. The
+    /// caller remains inside the remote module and never serializes the
+    /// private key; this is only used to derive an in-memory session key.
+    pub(crate) fn secret_bytes(&self) -> [u8; 32] {
+        self.secret.to_bytes()
+    }
+
     /// hostId:静态公钥 SHA-256 前 16 字节的 base64url。用于 relay 撮合,
     /// 公开无害(公钥本身就在配对 QR 里)。
     pub fn host_id(&self) -> String {

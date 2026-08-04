@@ -111,7 +111,7 @@ pub(crate) async fn project_read_file(params: Value) -> Result<Value, String> {
     if let Some(reason) = non_local_reason(&project) {
         return Ok(unavailable(reason));
     }
-    let content = crate::fs::read_file_content(path, project.path).await?;
+    let content = crate::fs::read_project_file_content(path, project.path).await?;
     let total_bytes = content.len();
     let truncated = total_bytes > MAX_FILE_RESPONSE_BYTES;
     let content = if truncated {

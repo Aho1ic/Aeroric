@@ -20,6 +20,12 @@ import {
   type PendingHandshake,
   type RandomBytes,
 } from "./e2ee";
+import {
+  OrcaE2EESession,
+  startOrcaE2EEHandshake,
+  type OrcaE2EEContext,
+  type OrcaE2EEPendingHandshake,
+} from "./orca-e2ee-v2";
 
 export const PROTOCOL_VERSION = 2;
 
@@ -54,6 +60,10 @@ export interface RemoteConnectionOptions {
   serverPublicKey: string;
   /** 每次(重)连成功后发送的 auth 参数(deviceToken 等) */
   authParams: () => Record<string, unknown>;
+  /** Wire protocol. Defaults to Aeroric for existing pairings. */
+  protocol?: "aeroric" | "orca";
+  /** Orca v2 transport context; direct is used when omitted. */
+  orcaContext?: OrcaE2EEContext;
   wsFactory?: WebSocketFactory;
   timers?: TimerApi;
   randomBytes?: RandomBytes;
@@ -70,6 +80,13 @@ interface PendingRequest {
   resolve: (value: unknown) => void;
   reject: (err: Error) => void;
   timer: unknown;
+}
+
+/** One liveness request shared by foreground recovery and the normal heartbeat. */
+interface LivenessProbe {
+  ws: WebSocketLike;
+  generation: number;
+  inboundSequence: number;
 }
 
 export interface AuthSuccess {
@@ -94,6 +111,10 @@ const DEFAULT_HANDSHAKE_TIMEOUT = 10_000;
 const DEFAULT_HEARTBEAT_INTERVAL = 25_000;
 const DEFAULT_MAX_BACKOFF = 30_000;
 const INITIAL_BACKOFF = 1_000;
+// React Native can preserve a dead WebSocket while the app is suspended. A
+// foreground event more than a moment after this round started should replace
+// an in-flight dial instead of waiting out its remaining timeout/backoff.
+const STALE_FOREGROUND_DIAL_MS = 2_000;
 
 const textEncoder = new TextEncoder();
 const textDecoder = new TextDecoder();
@@ -103,6 +124,8 @@ function isFatalAuthError(message: string): boolean {
   return (
     message.includes("Unknown device token") ||
     message.includes("主机身份验证失败") ||
+    message.includes("unauthorized") ||
+    message.includes("bad_auth") ||
     message.includes("Unsupported protocol")
   );
 }
@@ -127,6 +150,8 @@ export class RemoteConnection {
   private endpoints: string[];
   private readonly serverPublicKey: string;
   private readonly authParams: () => Record<string, unknown>;
+  private readonly protocol: "aeroric" | "orca";
+  private readonly orcaContext: OrcaE2EEContext;
   private readonly wsFactory: WebSocketFactory;
   private readonly timers: TimerApi;
   private readonly randomBytes: RandomBytes | undefined;
@@ -140,17 +165,22 @@ export class RemoteConnection {
   private ws: WebSocketLike | null = null;
   /** 竞速期间的全部候选 socket(teardown 时统一关闭) */
   private racers: WebSocketLike[] = [];
-  private session: E2eeSession | null = null;
-  private handshake: PendingHandshake | null = null;
+  private session: E2eeSession | OrcaE2EESession | null = null;
+  private handshake: PendingHandshake | OrcaE2EEPendingHandshake | null = null;
+  private orcaAuthenticated = false;
   private statusValue: ConnectionStatus = "idle";
   private nextId = 1;
-  private pending = new Map<number, PendingRequest>();
+  private pending = new Map<string, PendingRequest>();
   private reconnectAttempts = 0;
   private reconnectTimer: unknown = null;
   private heartbeatTimer: unknown = null;
   private attemptTimers = new Set<unknown>();
+  /** 前台恢复与常规心跳共用一个在途探针，避免并发 ping 互相误判。 */
+  private livenessProbe: LivenessProbe | null = null;
   /** 连接代数:旧 socket 的迟到回调用它自守卫 */
   private generation = 0;
+  /** 当前竞速拨号轮次开始时间;用于前台恢复时识别被系统挂起的半开连接。 */
+  private dialStartedAt: number | null = null;
 
   private statusListeners = new Set<(status: ConnectionStatus) => void>();
   private pushListeners = new Set<(push: string, data: unknown, seq?: number) => void>();
@@ -164,6 +194,8 @@ export class RemoteConnection {
   private lastAuthError: string | null = null;
   /** 最后一次已分发的带 seq 推送(watermark);0 = 尚未收到任何可补发事件 */
   private lastPushSeq = 0;
+  /** 仅在认证/解析成功的入站帧上递增，不能被畸形数据伪造为“存活”。 */
+  private inboundSequence = 0;
 
   constructor(options: RemoteConnectionOptions) {
     if (options.endpoints.length === 0) {
@@ -175,6 +207,13 @@ export class RemoteConnection {
     this.endpoints = [...options.endpoints];
     this.serverPublicKey = options.serverPublicKey;
     this.authParams = options.authParams;
+    this.protocol = options.protocol ?? "aeroric";
+    this.orcaContext = options.orcaContext ?? {
+      protocol: "orca-mobile-e2ee",
+      initiator: "mobile",
+      responder: "desktop",
+      transport: "direct",
+    };
     this.wsFactory = options.wsFactory ?? defaultWsFactory;
     this.timers = options.timers ?? defaultTimers;
     this.randomBytes = options.randomBytes;
@@ -256,7 +295,11 @@ export class RemoteConnection {
   sendBinary(data: Uint8Array): boolean {
     if (this.statusValue !== "online" || !this.ws || !this.session) return false;
     try {
-      this.ws.send(this.session.encryptFrame(KIND_TERMINAL, data));
+      if (this.session instanceof OrcaE2EESession) {
+        this.ws.send(this.session.encryptBinary(data));
+      } else {
+        this.ws.send(this.session.encryptFrame(KIND_TERMINAL, data));
+      }
       return true;
     } catch {
       return false;
@@ -275,6 +318,46 @@ export class RemoteConnection {
     this.failAllPending(new Error("connection stopped"));
   }
 
+  /**
+   * 应用回到前台时调用。iOS/Android 可能在后台回收网络路径却不向 JS
+   * 派发 close，导致连接永远卡在 dialing 或 E2EE 握手中。只有早于本次
+   * 前台恢复 2 秒以上的轮次才会被替换，避免连续 active 信号反复中断新拨号。
+   */
+  notifyForeground(): void {
+    if (this.statusValue === "online") {
+      this.probeForegroundConnection();
+      return;
+    }
+
+    let abandonedStaleRound = false;
+    const hasActiveRetryRound = this.statusValue === "reconnecting" && this.racers.length > 0;
+    if (
+      (this.statusValue === "connecting" ||
+        this.statusValue === "authenticating" ||
+        hasActiveRetryRound) &&
+      this.dialStartedAt !== null &&
+      Date.now() - this.dialStartedAt >= STALE_FOREGROUND_DIAL_MS
+    ) {
+      // authenticating 时可能有尚未完成的内部 auth 请求；先拒绝它，防止旧
+      // generation 的 promise 留到超时后才清理。
+      this.failAllPending(new Error("connection restarted after app resumed"));
+      // 这个半开轮次本身已经代表一次失败；沿用其退避计数，不能因用户
+      // 多次切回前台而持续把不可达主机显示成新的首次拨号。
+      this.scheduleReconnect();
+      abandonedStaleRound = true;
+    }
+
+    if (this.statusValue === "reconnecting" && this.racers.length === 0) {
+      // 用户已经回到前台，没必要继续等后台期间保留下来的指数退避。
+      // 只有原本就是等待中的退避才视为一次全新的前台尝试；若刚废弃了
+      // 半开连接，则必须保留其刚记下的失败次数。
+      if (!abandonedStaleRound) {
+        this.reconnectAttempts = 0;
+      }
+      this.openSockets("connecting");
+    }
+  }
+
   /** 发送白名单 RPC 请求;离线时直接拒绝(调用方决定重试策略)。 */
   request<T = unknown>(method: string, params?: Record<string, unknown>): Promise<T> {
     if (this.statusValue !== "online" || !this.ws) {
@@ -288,6 +371,7 @@ export class RemoteConnection {
   private openSockets(nextStatus: ConnectionStatus): void {
     this.teardownSocket();
     this.setStatus(nextStatus);
+    this.dialStartedAt = Date.now();
     const generation = ++this.generation;
     type Candidate = {
       ws: WebSocketLike;
@@ -453,8 +537,12 @@ export class RemoteConnection {
   /** 候选 socket 上开始 E2EE 握手:发明文 hello,等 hello_ack。 */
   private beginHandshake(ws: WebSocketLike): boolean {
     this.session = null;
+    this.orcaAuthenticated = false;
     try {
-      this.handshake = startHandshake(this.serverPublicKey, this.randomBytes);
+      this.handshake =
+        this.protocol === "orca"
+          ? startOrcaE2EEHandshake(this.serverPublicKey, this.orcaContext, this.randomBytes)
+          : startHandshake(this.serverPublicKey, this.randomBytes);
       ws.send(this.handshake.helloJson);
       return true;
     } catch (err) {
@@ -509,6 +597,7 @@ export class RemoteConnection {
    * 缓冲滚动/服务端重启无法精确衔接时广播 events.reset,消费方全量刷新。
    */
   private replayMissedEvents(ws: WebSocketLike, generation: number): void {
+    if (this.protocol === "orca") return;
     const after = this.lastPushSeq;
     if (after <= 0) return;
     this.sendRequest<EventsSinceResult>(ws, "events.since", { after })
@@ -535,6 +624,7 @@ export class RemoteConnection {
    * 纯附加信息:失败不影响连接可用性,静默吞掉即可。
    */
   private fetchHostIdentity(ws: WebSocketLike, generation: number): void {
+    if (this.protocol === "orca") return;
     const connectedEndpoint = this.activeEndpoint;
     this.sendRequest<HostIdentity>(ws, "hello")
       .then((identity) => {
@@ -547,7 +637,8 @@ export class RemoteConnection {
       });
   }
 
-  private scheduleReconnect(): void {    this.teardownSocket();
+  private scheduleReconnect(): void {
+    this.teardownSocket();
     this.setStatus("reconnecting");
     const backoff = Math.min(INITIAL_BACKOFF * 2 ** this.reconnectAttempts, this.maxBackoffMs);
     this.reconnectAttempts += 1;
@@ -586,10 +677,13 @@ export class RemoteConnection {
     }
     this.attemptTimers.clear();
     this.stopHeartbeat();
+    this.livenessProbe = null;
     this.session = null;
     this.handshake = null;
+    this.orcaAuthenticated = false;
     this.ws = null;
     this.activeEndpoint = null;
+    this.dialStartedAt = null;
     if (this.racers.length > 0) {
       const racers = this.racers;
       this.racers = [];
@@ -612,21 +706,82 @@ export class RemoteConnection {
 
   private startHeartbeat(generation: number): void {
     this.stopHeartbeat();
-    const tick = () => {
-      this.heartbeatTimer = this.timers.setTimeout(() => {
-        if (generation !== this.generation || this.statusValue !== "online" || !this.ws) return;
-        this.sendRequest(this.ws, "ping", undefined, 10_000)
-          .then(() => {
-            if (generation === this.generation && this.statusValue === "online") tick();
-          })
-          .catch(() => {
-            if (generation === this.generation && this.statusValue === "online") {
-              this.handleDisconnect();
-            }
-          });
-      }, this.heartbeatIntervalMs);
+    this.scheduleHeartbeat(generation);
+  }
+
+  private scheduleHeartbeat(generation: number): void {
+    if (generation !== this.generation || this.statusValue !== "online" || !this.ws) return;
+    this.stopHeartbeat();
+    this.heartbeatTimer = this.timers.setTimeout(() => {
+      this.heartbeatTimer = null;
+      if (generation !== this.generation || this.statusValue !== "online" || !this.ws) return;
+      this.runLivenessProbe(generation);
+    }, this.heartbeatIntervalMs);
+  }
+
+  /**
+   * 恢复前台时立即验证在线 socket。移动系统可能静默回收后台连接，若只等
+   * 常规 25 秒心跳，用户会额外看到一段“在线”但不可用的假状态。
+   */
+  private probeForegroundConnection(): void {
+    // 让前台探测取代下一个定时心跳；若已有心跳在途，复用它而不是并发发 ping。
+    this.stopHeartbeat();
+    this.runLivenessProbe(this.generation);
+  }
+
+  /**
+   * 发起一次 socket 存活探测。请求本身的成功当然证明连接可用；如果请求超时，
+   * 同一 socket 上任何已认证、已解析的入站帧也足以证明它仍活着，因此不能误断开。
+   */
+  private runLivenessProbe(generation: number): void {
+    const ws = this.ws;
+    if (
+      generation !== this.generation ||
+      this.statusValue !== "online" ||
+      !ws ||
+      !this.session ||
+      this.livenessProbe
+    ) {
+      return;
+    }
+
+    const probe: LivenessProbe = {
+      ws,
+      generation,
+      inboundSequence: this.inboundSequence,
     };
-    tick();
+    this.livenessProbe = probe;
+    this.sendRequest(ws, this.protocol === "orca" ? "status.get" : "ping", undefined, 10_000).then(
+      () => this.finishLivenessProbe(probe),
+      () => this.failLivenessProbe(probe),
+    );
+  }
+
+  private finishLivenessProbe(probe: LivenessProbe): void {
+    if (!this.isCurrentLivenessProbe(probe)) return;
+    this.livenessProbe = null;
+    this.scheduleHeartbeat(probe.generation);
+  }
+
+  private failLivenessProbe(probe: LivenessProbe): void {
+    if (!this.isCurrentLivenessProbe(probe)) return;
+    this.livenessProbe = null;
+    if (this.inboundSequence > probe.inboundSequence) {
+      // 例如另一个 RPC 响应、推送或终端帧在 ping 丢失时到达；同一经过认证的
+      // socket 已经证明存活，恢复常规定时器即可。
+      this.scheduleHeartbeat(probe.generation);
+      return;
+    }
+    this.handleDisconnect();
+  }
+
+  private isCurrentLivenessProbe(probe: LivenessProbe): boolean {
+    return (
+      this.livenessProbe === probe &&
+      probe.generation === this.generation &&
+      this.statusValue === "online" &&
+      this.ws === probe.ws
+    );
   }
 
   private stopHeartbeat(): void {
@@ -644,7 +799,7 @@ export class RemoteConnection {
     params?: Record<string, unknown>,
     timeoutMs?: number,
   ): Promise<T> {
-    const id = this.nextId++;
+    const id = this.protocol === "orca" ? `rpc-${this.nextId++}` : String(this.nextId++);
     return new Promise<T>((resolve, reject) => {
       const session = this.session;
       if (!session) {
@@ -661,8 +816,15 @@ export class RemoteConnection {
         timer,
       });
       try {
-        const payload = JSON.stringify({ v: PROTOCOL_VERSION, id, method, params: params ?? {} });
-        ws.send(session.encryptFrame(KIND_CTRL, textEncoder.encode(payload)));
+        const payload =
+          this.protocol === "orca"
+            ? JSON.stringify({ id, method, params: params ?? {} })
+            : JSON.stringify({ v: PROTOCOL_VERSION, id: Number(id), method, params: params ?? {} });
+        if (session instanceof OrcaE2EESession) {
+          ws.send(session.encryptText(payload));
+        } else {
+          ws.send(session.encryptFrame(KIND_CTRL, textEncoder.encode(payload)));
+        }
       } catch (err) {
         this.timers.clearTimeout(timer);
         this.pending.delete(id);
@@ -678,10 +840,9 @@ export class RemoteConnection {
     onCandidateFailure: (error: string) => void,
     onAuthenticated: () => void,
   ): void {
-    // 明文 text 只存在于握手阶段(hello_ack / hello_error)
-    if (typeof data === "string") {
+    // 明文 text 只存在于握手阶段(hello_ack / e2ee_ready)。
+    if (typeof data === "string" && this.handshake && !this.session) {
       const handshake = this.handshake;
-      if (!handshake || this.session) return;
       this.handshake = null;
       try {
         this.session = handshake.finish(data);
@@ -692,13 +853,120 @@ export class RemoteConnection {
         return;
       }
       this.setStatus("authenticating");
-      void this.authenticate(ws, generation, onCandidateFailure, onAuthenticated);
+      if (this.session instanceof OrcaE2EESession) {
+        const deviceToken = this.authParams().deviceToken;
+        if (typeof deviceToken !== "string" || deviceToken.length === 0) {
+          onCandidateFailure("bad_auth");
+          return;
+        }
+        try {
+          ws.send(
+            this.session.encryptText(
+              JSON.stringify({
+                type: "e2ee_auth",
+                v: 2,
+                transcriptHashB64: this.session.transcriptHashB64,
+                deviceToken,
+              }),
+            ),
+          );
+        } catch (err) {
+          onCandidateFailure(err instanceof Error ? err.message : String(err));
+        }
+      } else {
+        void this.authenticate(ws, generation, onCandidateFailure, onAuthenticated);
+      }
       return;
     }
-    if (!(data instanceof ArrayBuffer) || !this.session) return;
+
+    if (!this.session) return;
+    if (this.session instanceof OrcaE2EESession) {
+      let plaintext: string | Uint8Array;
+      try {
+        if (typeof data === "string") {
+          plaintext = this.session.decryptText(data);
+        } else if (data instanceof ArrayBuffer) {
+          plaintext = this.session.decryptBinary(new Uint8Array(data));
+        } else if (data instanceof Uint8Array) {
+          plaintext = this.session.decryptBinary(data);
+        } else {
+          return;
+        }
+      } catch {
+        if (this.statusValue === "online") this.handleDisconnect();
+        else onCandidateFailure("encrypted handshake response is invalid");
+        return;
+      }
+      this.noteValidatedInboundTraffic();
+      if (typeof plaintext !== "string") {
+        const buffer = toArrayBuffer(plaintext);
+        this.binaryListeners.forEach((listener) => listener(buffer));
+        return;
+      }
+      let frame: {
+        id?: string;
+        ok?: boolean;
+        result?: unknown;
+        error?: { code?: string; message?: string };
+        type?: string;
+        v?: number;
+        transcriptHashB64?: string;
+        push?: string;
+        data?: unknown;
+      };
+      try {
+        frame = JSON.parse(plaintext) as typeof frame;
+      } catch {
+        return;
+      }
+      if (!this.orcaAuthenticated) {
+        if (
+          frame.type !== "e2ee_authenticated" ||
+          frame.v !== 2 ||
+          frame.transcriptHashB64 !== this.session.transcriptHashB64
+        ) {
+          const message = frame.error?.message ?? "bad_auth";
+          onCandidateFailure(message);
+          return;
+        }
+        this.orcaAuthenticated = true;
+        this.lastAuthError = null;
+        this.reconnectAttempts = 0;
+        this.setStatus("online");
+        onAuthenticated();
+        const token = this.authParams().deviceToken;
+        this.authListeners.forEach((listener) =>
+          listener({
+            deviceId: typeof token === "string" ? token : "orca",
+            ...(typeof token === "string" ? { deviceToken: token } : {}),
+          }),
+        );
+        this.startHeartbeat(generation);
+        return;
+      }
+      if (typeof frame.push === "string") {
+        this.pushListeners.forEach((listener) => listener(frame.push!, frame.data));
+        return;
+      }
+      if (typeof frame.id !== "string" || typeof frame.ok !== "boolean") return;
+      const pending = this.pending.get(frame.id);
+      if (!pending) return;
+      this.pending.delete(frame.id);
+      this.timers.clearTimeout(pending.timer);
+      if (frame.ok) {
+        pending.resolve(frame.result);
+      } else {
+        pending.reject(new Error(frame.error?.message ?? frame.error?.code ?? "request failed"));
+      }
+      return;
+    }
+
+    const bytes =
+      data instanceof ArrayBuffer ? new Uint8Array(data) : data instanceof Uint8Array ? data : null;
+    if (!bytes) return;
     let opened: { kind: number; plain: Uint8Array };
     try {
-      opened = this.session.decryptFrame(new Uint8Array(data));
+      opened = this.session.decryptFrame(bytes);
     } catch {
       // 篡改/乱序:立即重建连接(快照协议保证终端画面恢复)
       if (this.statusValue === "online") {
@@ -709,6 +977,7 @@ export class RemoteConnection {
       return;
     }
     if (opened.kind === KIND_TERMINAL) {
+      this.noteValidatedInboundTraffic();
       const buffer = toArrayBuffer(opened.plain);
       this.binaryListeners.forEach((listener) => listener(buffer));
       return;
@@ -729,6 +998,12 @@ export class RemoteConnection {
       seq?: number;
       data?: unknown;
     };
+    if (
+      typeof frame.push === "string" ||
+      (typeof frame.id === "number" && typeof frame.ok === "boolean")
+    ) {
+      this.noteValidatedInboundTraffic();
+    }
     if (typeof frame.push === "string") {
       // 带 seq 的推送参与 watermark:只单调分发,防重复/乱序
       if (typeof frame.seq === "number") {
@@ -741,9 +1016,9 @@ export class RemoteConnection {
       return;
     }
     if (typeof frame.id === "number") {
-      const pending = this.pending.get(frame.id);
+      const pending = this.pending.get(String(frame.id));
       if (!pending) return;
-      this.pending.delete(frame.id);
+      this.pending.delete(String(frame.id));
       this.timers.clearTimeout(pending.timer);
       if (frame.ok) {
         pending.resolve(frame.result);
@@ -759,6 +1034,10 @@ export class RemoteConnection {
       pending.reject(err);
     }
     this.pending.clear();
+  }
+
+  private noteValidatedInboundTraffic(): void {
+    this.inboundSequence += 1;
   }
 
   private setStatus(status: ConnectionStatus): void {

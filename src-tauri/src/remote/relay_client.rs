@@ -168,7 +168,14 @@ async fn run_control<R: Runtime>(
                         if let Ok(RelayToHost::ClientConnected { conn_id, peer }) =
                             serde_json::from_str::<RelayToHost>(&text)
                         {
-                            dial_data_connection(app, relay_url, conn_id, peer, shutdown.clone());
+                            dial_data_connection(
+                                app,
+                                relay_url,
+                                conn_id,
+                                peer,
+                                host_id.clone(),
+                                shutdown.clone(),
+                            );
                         }
                     }
                     Some(Ok(Message::Ping(payload))) => {
@@ -202,6 +209,7 @@ fn dial_data_connection<R: Runtime>(
     relay_url: &str,
     conn_id: String,
     peer: Option<String>,
+    host_id: String,
     shutdown: watch::Receiver<bool>,
 ) {
     let app = app.clone();
@@ -219,7 +227,14 @@ fn dial_data_connection<R: Runtime>(
     tauri::async_runtime::spawn(async move {
         match connect_async_with_config(&url, Some(ws_config()), false).await {
             Ok((ws, _)) => {
-                super::server::serve_ws(app, ws, peer_ip, shutdown).await;
+                super::server::serve_ws(
+                    app,
+                    ws,
+                    peer_ip,
+                    super::server::ConnectionContext::Relay { host_id },
+                    shutdown,
+                )
+                .await;
             }
             Err(err) => {
                 eprintln!("[remote] relay data dial failed: {err}");

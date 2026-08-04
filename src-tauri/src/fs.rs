@@ -398,7 +398,25 @@ pub async fn read_dir_entries(path: String, project_path: String) -> Result<Vec<
 
 #[tauri::command]
 pub async fn read_file_content(path: String, project_path: String) -> Result<String, String> {
-    let validated_path = validate_path_within(&path, &project_path, true)?;
+    read_file_content_with_policy(path, project_path, true).await
+}
+
+/// Read a project file without following a final symlink outside the project.
+/// Remote callers use this stricter policy; local settings retain the legacy
+/// allowance for symlinked instruction files.
+pub async fn read_project_file_content(
+    path: String,
+    project_path: String,
+) -> Result<String, String> {
+    read_file_content_with_policy(path, project_path, false).await
+}
+
+async fn read_file_content_with_policy(
+    path: String,
+    project_path: String,
+    allow_symlink_escape: bool,
+) -> Result<String, String> {
+    let validated_path = validate_path_within(&path, &project_path, allow_symlink_escape)?;
 
     tauri::async_runtime::spawn_blocking(move || {
         use std::io::Read;
@@ -838,6 +856,29 @@ mod tests {
                 "/Users/me/Folder".to_string()
             ]
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn strict_project_reads_reject_symlink_escape() {
+        let root = unique_test_dir("symlink-policy");
+        let outside = unique_test_dir("symlink-outside");
+        std::fs::create_dir_all(&root).expect("create root");
+        std::fs::create_dir_all(&outside).expect("create outside");
+        let outside_file = outside.join("secret.txt");
+        let link = root.join("linked.txt");
+        std::fs::write(&outside_file, "secret").expect("create outside file");
+        std::os::unix::fs::symlink(&outside_file, &link).expect("create symlink");
+
+        assert!(
+            validate_path_within(&link.to_string_lossy(), &root.to_string_lossy(), true).is_ok()
+        );
+        assert!(
+            validate_path_within(&link.to_string_lossy(), &root.to_string_lossy(), false).is_err()
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&outside);
     }
 }
 

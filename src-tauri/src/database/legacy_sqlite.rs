@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use rusqlite::types::{Value as SqlValue, ValueRef};
-use rusqlite::{params, Connection, ToSql};
+use rusqlite::{params, Connection, OpenFlags, ToSql};
 use serde::{Deserialize, Serialize};
 use serde_json::{Number, Value};
 use uuid::Uuid;
@@ -317,6 +317,7 @@ fn scp_command(connection: &SshConnection) -> Command {
     } else {
         Command::new("scp")
     };
+    command.arg("-o").arg("StrictHostKeyChecking=yes");
     command.arg("-P").arg(connection.port.to_string());
     if let Some(identity_file) = connection
         .identity_file
@@ -352,19 +353,87 @@ fn run_scp(mut command: Command) -> Result<(), String> {
     }
 }
 
+fn remote_file_fingerprint(
+    connection: &SshConnection,
+    remote_path: &str,
+) -> Result<Option<String>, String> {
+    let quoted = crate::ssh::shell_quote_posix(remote_path);
+    let command_text = format!(
+        "if [ -f {quoted} ]; then if stat -c '%s:%Y' {quoted} 2>/dev/null; then :; elif stat -f '%z:%m' {quoted} 2>/dev/null; then :; else exit 2; fi; else exit 3; fi"
+    );
+    let mut command = crate::ssh::std_ssh_command_for_remote_command(connection, command_text);
+    crate::subprocess::configure_background_command(&mut command);
+    let output = command.output().map_err(|e| e.to_string())?;
+    if output.status.success() {
+        let fingerprint = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if fingerprint.is_empty() {
+            return Err("Remote database metadata is empty".to_string());
+        }
+        return Ok(Some(fingerprint));
+    }
+    if output.status.code() == Some(3) {
+        return Ok(None);
+    }
+    Err(crate::ssh::annotate_ssh_error(
+        connection,
+        String::from_utf8_lossy(&output.stderr).trim(),
+    ))
+}
+
+fn ensure_remote_sqlite_snapshot_is_safe(
+    connection: &SshConnection,
+    remote_path: &str,
+    initial_fingerprint: &str,
+) -> Result<(), String> {
+    for suffix in ["-wal", "-shm"] {
+        if remote_file_fingerprint(connection, &format!("{remote_path}{suffix}"))?.is_some() {
+            return Err(
+                "Remote SQLite is using WAL sidecar files; refusing an unsafe stale snapshot"
+                    .to_string(),
+            );
+        }
+    }
+    let current = remote_file_fingerprint(connection, remote_path)?
+        .ok_or_else(|| "Remote SQLite database disappeared during the operation".to_string())?;
+    if current != initial_fingerprint {
+        return Err(
+            "Remote SQLite database changed during the operation; no local snapshot was uploaded"
+                .to_string(),
+        );
+    }
+    Ok(())
+}
+
 fn temp_db_path() -> Result<PathBuf, String> {
     let dir = std::env::temp_dir().join("aeroric-db");
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    tighten_temp_directory_permissions(&dir)?;
     Ok(dir.join(format!("{}.db", Uuid::new_v4())))
 }
 
-fn download_remote_db(connection: &SshConnection, remote_path: &str) -> Result<PathBuf, String> {
+fn tighten_temp_directory_permissions(path: &Path) -> Result<(), String> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o700)).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+fn download_remote_db(
+    connection: &SshConnection,
+    remote_path: &str,
+) -> Result<(PathBuf, String), String> {
+    let fingerprint = remote_file_fingerprint(connection, remote_path)?
+        .ok_or_else(|| "Remote SQLite database does not exist".to_string())?;
+    ensure_remote_sqlite_snapshot_is_safe(connection, remote_path, &fingerprint)?;
     let local_path = temp_db_path()?;
     let mut command = scp_command(connection);
     command.arg(remote_target(connection, remote_path));
     command.arg(&local_path);
     run_scp(command)?;
-    Ok(local_path)
+    crate::storage::ensure_private_file_permissions(&local_path)?;
+    Ok((local_path, fingerprint))
 }
 
 fn upload_remote_db(
@@ -398,12 +467,20 @@ fn with_sqlite<T>(
                 &path,
                 project_path.as_deref().or(project_root.as_deref()),
             )?;
-            let local_path = download_remote_db(&connection, &remote_path)?;
+            let (local_path, fingerprint) = download_remote_db(&connection, &remote_path)?;
             let result = action(&local_path);
-            if result.is_ok() && write {
-                if let Err(err) = upload_remote_db(&connection, &local_path, &remote_path) {
+            if result.is_ok() {
+                if let Err(err) =
+                    ensure_remote_sqlite_snapshot_is_safe(&connection, &remote_path, &fingerprint)
+                {
                     let _ = fs::remove_file(&local_path);
                     return Err(err);
+                }
+                if write {
+                    if let Err(err) = upload_remote_db(&connection, &local_path, &remote_path) {
+                        let _ = fs::remove_file(&local_path);
+                        return Err(err);
+                    }
                 }
             }
             let _ = fs::remove_file(&local_path);
@@ -1057,7 +1134,15 @@ fn execute_sql(
     for statement in &statements {
         validate_sqlite_statement(statement)?;
     }
-    let conn = Connection::open(path).map_err(|e| e.to_string())?;
+    // The statement classifier is deliberately conservative, but SQLite must
+    // enforce read-only mode too: PRAGMA syntax has write-capable forms that
+    // are easy to miss in a text-only guard.
+    let conn = if read_only {
+        Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+    } else {
+        Connection::open(path)
+    }
+    .map_err(|e| e.to_string())?;
     let page_size = normalize_page_size(page_size);
     if read_only
         && statements
@@ -1424,6 +1509,7 @@ mod tests {
             true,
         )
         .is_err());
+        assert!(execute_sql(&path, "PRAGMA user_version (123)", 1, Some(100), true).is_err());
 
         let _ = fs::remove_file(path);
     }

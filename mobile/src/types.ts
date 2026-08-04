@@ -14,6 +14,8 @@ export interface PairedHost {
   endpoints: string[];
   /** 配对时 pin 的桌面静态公钥(E2EE 信任根);旧 M1 记录缺失 → 需重新配对 */
   publicKey?: string;
+  /** Optional wire selection for Orca-compatible hosts; legacy records stay Aeroric. */
+  protocol?: "aeroric" | "orca";
   deviceId: string;
   deviceToken: string;
   pairedAt: number;

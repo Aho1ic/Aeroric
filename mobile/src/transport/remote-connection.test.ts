@@ -90,7 +90,12 @@ class FakeWebSocket implements WebSocketLike {
   }
 
   /** 认证后会并发发出 events.since 与 hello,按方法名定位比 lastFrame() 稳。 */
-  frameFor(method: string): { v: number; id: number; method: string; params: Record<string, unknown> } {
+  frameFor(method: string): {
+    v: number;
+    id: number;
+    method: string;
+    params: Record<string, unknown>;
+  } {
     const frames = this.clientFrames().filter((frame) => frame.method === method);
     return frames[frames.length - 1];
   }
@@ -336,6 +341,105 @@ describe("RemoteConnection", () => {
     expect(h.urls.length).toBe(8);
   });
 
+  it("redials a stale in-flight round when the app returns to the foreground", async () => {
+    const h = createHarness();
+    h.conn.start();
+    const staleSockets = [...h.sockets];
+
+    // A suspended RN app can retain these sockets in CONNECTING even after the
+    // OS has dropped their network path and paused their timeout callbacks.
+    await vi.advanceTimersByTimeAsync(2_000);
+    h.conn.notifyForeground();
+
+    expect(h.conn.status).toBe("connecting");
+    expect(h.urls).toEqual(["ws://host-a:1", "ws://host-b:2", "ws://host-a:1", "ws://host-b:2"]);
+    expect(staleSockets.every((socket) => socket.closed)).toBe(true);
+  });
+
+  it("keeps a fresh in-flight round when duplicate foreground signals arrive", async () => {
+    const h = createHarness();
+    h.conn.start();
+    const freshSockets = [...h.sockets];
+
+    await vi.advanceTimersByTimeAsync(1_999);
+    h.conn.notifyForeground();
+    h.conn.notifyForeground();
+
+    expect(h.urls).toEqual(["ws://host-a:1", "ws://host-b:2"]);
+    expect(freshSockets.some((socket) => socket.closed)).toBe(false);
+  });
+
+  it("skips a queued reconnect delay when the app returns to the foreground", async () => {
+    const h = createHarness();
+    h.conn.start();
+    h.sockets[0].dropped();
+    h.sockets[1].dropped();
+    expect(h.conn.status).toBe("reconnecting");
+
+    h.conn.notifyForeground();
+
+    expect(h.conn.status).toBe("connecting");
+    expect(h.urls).toEqual(["ws://host-a:1", "ws://host-b:2", "ws://host-a:1", "ws://host-b:2"]);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(h.urls).toHaveLength(4);
+  });
+
+  it("keeps escalating after stale foreground rounds are abandoned", async () => {
+    const h = createHarness();
+    h.conn.start();
+
+    // Each foreground recovery replaces a stale in-flight round. Those rounds
+    // still count as failed attempts, rather than resetting to a 1s retry on
+    // every app resume during a real outage.
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      await vi.advanceTimersByTimeAsync(2_000);
+      h.conn.notifyForeground();
+    }
+
+    const currentRound = h.sockets.slice(-2);
+    currentRound[0].dropped();
+    currentRound[1].dropped();
+    expect(h.conn.status).toBe("reconnecting");
+
+    // Two abandoned rounds have already booked two failures, so this next
+    // retry waits 4s (not a reset 1s backoff).
+    const socketsBeforeRetry = h.sockets.length;
+    await vi.advanceTimersByTimeAsync(3_999);
+    expect(h.sockets).toHaveLength(socketsBeforeRetry);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(h.sockets).toHaveLength(socketsBeforeRetry + 2);
+  });
+
+  it("redials a stale active retry round without resetting its backoff", async () => {
+    const h = createHarness();
+    h.conn.start();
+    h.sockets[0].dropped();
+    h.sockets[1].dropped();
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    // `openSockets("reconnecting")` leaves the retry's sockets in flight while
+    // preserving the reconnecting status. A suspension here must take the same
+    // stale-dial path as an initial round.
+    expect(h.conn.status).toBe("reconnecting");
+    const staleRetrySockets = h.sockets.slice(-2);
+    await vi.advanceTimersByTimeAsync(2_000);
+    h.conn.notifyForeground();
+
+    expect(h.conn.status).toBe("connecting");
+    expect(staleRetrySockets.every((socket) => socket.closed)).toBe(true);
+
+    // The initial failed round plus this abandoned retry book two failures, so
+    // a further failure waits 4s instead of being reset to the 1s first retry.
+    const replacementRound = h.sockets.slice(-2);
+    replacementRound[0].dropped();
+    replacementRound[1].dropped();
+    const socketsBeforeRetry = h.sockets.length;
+    await vi.advanceTimersByTimeAsync(3_999);
+    expect(h.sockets).toHaveLength(socketsBeforeRetry);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(h.sockets).toHaveLength(socketsBeforeRetry + 2);
+  });
+
   it("stops retrying after token revocation", async () => {
     const h = createHarness();
     h.conn.start();
@@ -378,6 +482,57 @@ describe("RemoteConnection", () => {
     expect(winner.lastFrame().method).toBe("ping");
     await vi.advanceTimersByTimeAsync(10_000);
     expect(h.conn.status).toBe("reconnecting");
+  });
+
+  it("probes an online socket immediately after returning to the foreground", async () => {
+    const h = createHarness();
+    const winner = await goOnline(h);
+
+    h.conn.notifyForeground();
+    expect(winner.frameFor("ping").method).toBe("ping");
+
+    // The foreground probe uses the existing ping timeout rather than waiting
+    // for the next 25-second heartbeat to discover a silently dropped socket.
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(h.conn.status).toBe("reconnecting");
+  });
+
+  it("keeps the socket when another valid response arrives during a foreground probe", async () => {
+    const h = createHarness();
+    const winner = await goOnline(h);
+
+    const request = h.conn.request("projects.list");
+    h.conn.notifyForeground();
+    expect(winner.frameFor("ping").method).toBe("ping");
+
+    const projects = winner.frameFor("projects.list");
+    winner.receiveCtrl({ v: 2, id: projects.id, ok: true, result: [] });
+    await expect(request).resolves.toEqual([]);
+
+    // The foreground ping itself is deliberately left unanswered. The valid
+    // response above proves this same authenticated socket is still alive.
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(h.conn.status).toBe("online");
+    expect(winner.closed).toBe(false);
+  });
+
+  it("reuses an in-flight heartbeat for foreground liveness and accepts its response", async () => {
+    const h = createHarness();
+    const winner = await goOnline(h);
+
+    await vi.advanceTimersByTimeAsync(25_000);
+    const heartbeat = winner.frameFor("ping");
+    h.conn.notifyForeground();
+
+    // A foreground edge while a heartbeat is pending must not create a second
+    // independent timeout that can race to tear down a healthy connection.
+    expect(winner.clientFrames().filter((frame) => frame.method === "ping")).toHaveLength(1);
+    winner.receiveCtrl({ v: 2, id: heartbeat.id, ok: true, result: "pong" });
+    await flush();
+
+    expect(h.conn.status).toBe("online");
+    await vi.advanceTimersByTimeAsync(25_000);
+    expect(winner.clientFrames().filter((frame) => frame.method === "ping")).toHaveLength(2);
   });
 
   it("encrypts terminal frames in both directions", async () => {

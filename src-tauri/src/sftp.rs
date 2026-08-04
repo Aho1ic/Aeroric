@@ -387,6 +387,7 @@ fn scp_base_spec(connection: &SshConnection) -> CommandSpec {
     } else {
         ("scp".to_string(), Vec::new(), Vec::new())
     };
+    args.extend(["-o".to_string(), "StrictHostKeyChecking=yes".to_string()]);
     args.push("-P".to_string());
     args.push(connection.port.to_string());
     args.push("-r".to_string());
@@ -437,6 +438,16 @@ fn scp_download_spec(
     }
     spec.args.push(local_directory.to_string());
     Ok(spec)
+}
+
+fn tighten_temp_directory_permissions(path: &Path) -> Result<(), String> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(())
 }
 
 fn run_command_spec(spec: CommandSpec) -> Result<(), String> {
@@ -1120,6 +1131,7 @@ fn copy_or_move_paths(
                     .as_nanos()
             ));
             std::fs::create_dir(&temp_root).map_err(|e| e.to_string())?;
+            tighten_temp_directory_permissions(&temp_root)?;
             let temp_string = temp_root.to_string_lossy().into_owned();
             let source_paths = paths
                 .iter()
@@ -1253,6 +1265,7 @@ mod tests {
 
         assert!(spec.args.contains(&"-P".to_string()));
         assert!(spec.args.contains(&"2222".to_string()));
+        assert!(spec.args.contains(&"StrictHostKeyChecking=yes".to_string()));
         assert!(spec.args.contains(&"-o".to_string()));
         assert!(spec
             .args

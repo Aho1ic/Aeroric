@@ -22,6 +22,7 @@ import { Button } from "../ui/Button";
 interface RemoteStatus {
   enabled: boolean;
   running: boolean;
+  networkExposed: boolean;
   port: number;
   lanIp: string | null;
   lanAddresses: RemoteNetworkAddress[];
@@ -341,7 +342,17 @@ export function RemoteAccessPanel() {
       !Number.isInteger(parsedPort) ||
       parsedPort < MIN_REMOTE_PORT ||
       parsedPort > MAX_REMOTE_PORT);
-  const address = status?.running && status.lanIp ? `ws://${status.lanIp}:${status.port}` : null;
+  // A fresh server intentionally listens only on loopback until the user
+  // generates a pairing QR. Do not offer a copied LAN URL before that explicit
+  // exposure action, because it would be a dead endpoint.
+  const address =
+    status?.running && status.networkExposed && status.lanIp
+      ? `ws://${status.lanIp}:${status.port}`
+      : null;
+  const addressUnavailable =
+    status?.running && !status.networkExposed
+      ? t("appSettings.remote.addressLocalOnly")
+      : t("appSettings.remote.addressUnavailable");
   const inviteExpired = invite !== null && inviteRemainingSeconds <= 0;
   const serviceBusy = serviceAction !== null;
   const mutationBusy =
@@ -434,6 +445,10 @@ export function RemoteAccessPanel() {
   const handleCreateInvite = async () => {
     if (!status?.running || mutationInFlightRef.current) return;
     mutationInFlightRef.current = true;
+    // A completed pairing invalidates the QR. If its event arrives while the
+    // invite request is in flight, do not let the late response restore that
+    // already-consumed invite.
+    const inviteEpoch = stateEpochRef.current;
     setInviteBusy(true);
     setPairingError(null);
     setPairedNotice(null);
@@ -441,13 +456,17 @@ export function RemoteAccessPanel() {
 
     try {
       const nextInvite = await invoke<RemoteInvite>("remote_create_invite");
-      if (!mountedRef.current) return;
+      if (!mountedRef.current || inviteEpoch !== stateEpochRef.current) return;
       setInvite(nextInvite);
       setInviteExpiresAt(Date.now() + nextInvite.expiresInSeconds * 1_000);
       setInviteRemainingSeconds(nextInvite.expiresInSeconds);
       setInviteGeneratedNotice(true);
+      // The backend may have replaced a loopback listener with a LAN listener
+      // as part of issuing this invite. Refresh before re-enabling UI actions
+      // so the copied/displayed address reflects that verified new state.
+      await refresh({ waitForCurrent: true });
     } catch (error) {
-      if (mountedRef.current) {
+      if (mountedRef.current && inviteEpoch === stateEpochRef.current) {
         setPairingError(
           t("appSettings.remote.pairingFailed", {
             message: String(error),
@@ -602,9 +621,7 @@ export function RemoteAccessPanel() {
                   {serviceTitle}
                 </h2>
                 <div style={s.remoteStatusCopyRow}>
-                  <span style={s.remoteStatusEndpoint}>
-                    {address ?? t("appSettings.remote.addressUnavailable")}
-                  </span>
+                  <span style={s.remoteStatusEndpoint}>{address ?? addressUnavailable}</span>
                   {address ? (
                     <button
                       type="button"

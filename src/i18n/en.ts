@@ -28,6 +28,7 @@ export const en: Record<string, string> = {
   "appSettings.remote.switchOff": "Off",
   "appSettings.remote.address": "LAN address",
   "appSettings.remote.addressUnavailable": "The LAN address appears after the server starts",
+  "appSettings.remote.addressLocalOnly": "Listening locally until you generate a pairing QR code",
   "appSettings.remote.copyAddress": "Copy LAN address",
   "appSettings.remote.addressCopied": "Address copied",
   "appSettings.remote.copyFailed": "Could not copy: {message}",

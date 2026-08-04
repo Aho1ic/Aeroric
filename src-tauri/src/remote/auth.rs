@@ -110,6 +110,9 @@ pub struct AuthStore {
     persist: bool,
     #[cfg(test)]
     persist_failure: Option<String>,
+    /// Only used to exercise callers' rollback path after listener changes.
+    #[cfg(test)]
+    invite_failure: Option<String>,
 }
 
 pub enum AuthOutcome {
@@ -132,6 +135,8 @@ impl AuthStore {
             persist: true,
             #[cfg(test)]
             persist_failure: None,
+            #[cfg(test)]
+            invite_failure: None,
         }
     }
 
@@ -144,6 +149,7 @@ impl AuthStore {
             throttle: HashMap::new(),
             persist: false,
             persist_failure: None,
+            invite_failure: None,
         }
     }
 
@@ -166,8 +172,28 @@ impl AuthStore {
         &self.devices
     }
 
+    /// Used by the connection-registration gate after authentication. The
+    /// caller holds the same auth lock as device revocation, making it
+    /// impossible to register a session for a device that was revoked in the
+    /// authentication-to-registration window.
+    pub fn contains_device(&self, device_id: &str) -> bool {
+        self.devices.iter().any(|device| device.id == device_id)
+    }
+
+    /// Inject an invite-generation error without changing production token
+    /// generation. This lets listener lifecycle tests cover a CSPRNG failure
+    /// after a loopback listener has already been widened.
+    #[cfg(test)]
+    pub(crate) fn set_invite_failure(&mut self, error: Option<String>) {
+        self.invite_failure = error;
+    }
+
     /// 生成一次性 invite,返回明文 token(嵌入 QR)。
     pub fn create_invite(&mut self) -> Result<String, String> {
+        #[cfg(test)]
+        if let Some(error) = &self.invite_failure {
+            return Err(error.clone());
+        }
         self.prune_invites();
         if self.invites.len() >= MAX_PENDING_INVITES {
             // 挤掉最早过期的一条,保证「重新生成二维码」永远可用。
@@ -328,6 +354,7 @@ mod tests {
             throttle: HashMap::new(),
             persist: false,
             persist_failure: None,
+            invite_failure: None,
         }
     }
 

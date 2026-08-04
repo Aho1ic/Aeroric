@@ -54,6 +54,7 @@ getrandom = "0.2"
 # E2EE(M4):X25519 握手 + ChaCha20-Poly1305 帧加密 + HKDF 密钥派生
 x25519-dalek = { version = "2", features = ["static_secrets"] }
 chacha20poly1305 = "0.10"
+xsalsa20poly1305 = "0.9.1"
 hkdf = "0.12"
 # relay 撮合控制面消息(与 remote-relay 共享)
 remote-protocol = { path = "../remote-protocol" }
