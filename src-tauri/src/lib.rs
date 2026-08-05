@@ -22,6 +22,8 @@ mod fs;
 mod git;
 mod hooks;
 mod local_history;
+mod local_router;
+mod local_router_commands;
 mod lsp;
 mod node_runtime;
 mod notification;
@@ -153,6 +155,7 @@ pub fn run() {
             // 启动 hook 事件文件 watcher
             crate::event_watcher::start(app.handle().clone());
             crate::usage_index::start(app.handle().clone());
+            crate::local_router_commands::init(app.handle());
             // 手机远程连接:按持久化配置决定是否自动拉起 WS 服务
             crate::remote::init(app.handle().clone());
             Ok(())
@@ -174,6 +177,10 @@ pub fn run() {
         .manage(run_config::RunConfigState::default())
         .manage(dap::DebugState::default())
         .manage(remote::RemoteState::new())
+        .manage(
+            local_router_commands::LocalRouterManager::for_app()
+                .expect("Failed to initialize local router state"),
+        )
         .on_window_event(|window, event| {
             // macOS: 点关闭按钮(红灯)时隐藏窗口而非退出,与 Cmd+W 行为一致;
             // 点 Dock 图标可唤回(见下方 Reopen 处理)。
@@ -481,6 +488,10 @@ pub fn run() {
             wsl_git::wsl_git_resolve_conflict,
             app_settings::load_app_settings,
             app_settings::save_app_settings,
+            local_router_commands::get_local_router_status,
+            local_router_commands::set_local_router_enabled,
+            local_router_commands::update_local_router_settings,
+            local_router_commands::get_local_router_requests,
             app_settings::export_agent_config_bundle,
             app_settings::export_all_agent_config_bundle,
             app_settings::import_agent_config_bundle,
@@ -640,6 +651,10 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while running tauri application")
         .run(|_app_handle, _event| {
+            if let tauri::RunEvent::Exit = _event {
+                let manager = _app_handle.state::<local_router_commands::LocalRouterManager>();
+                tauri::async_runtime::block_on(manager.shutdown());
+            }
             // macOS: 当窗口被 Cmd+W 隐藏（hide）后，点击 Dock 图标会触发 Reopen，
             // 此时没有可见窗口，需要手动把主窗口重新显示并聚焦。
             #[cfg(target_os = "macos")]

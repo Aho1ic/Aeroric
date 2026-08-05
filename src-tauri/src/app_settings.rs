@@ -28,6 +28,13 @@ fn default_shift_enter_newline() -> bool {
     true
 }
 
+const DEFAULT_LOCAL_ROUTER_HOST: &str = "127.0.0.1";
+const DEFAULT_LOCAL_ROUTER_PORT: u16 = 18080;
+
+fn default_true() -> bool {
+    true
+}
+
 static CACHED_CLAUDE_VERSION: OnceLock<Mutex<Option<Option<String>>>> = OnceLock::new();
 static CACHED_CODEX_VERSION: OnceLock<Mutex<Option<Option<String>>>> = OnceLock::new();
 static SETTINGS_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
@@ -219,6 +226,46 @@ pub struct BuiltInAgentCredentials {
     pub enable_1m_context: bool,
 }
 
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct LocalRouterSettings {
+    #[serde(default)]
+    pub show_on_home: bool,
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_local_router_host")]
+    pub listen_host: String,
+    #[serde(default = "default_local_router_port")]
+    pub listen_port: u16,
+    #[serde(default = "default_true")]
+    pub claude_enabled: bool,
+    #[serde(default = "default_true")]
+    pub codex_enabled: bool,
+    #[serde(default = "default_true")]
+    pub record_usage: bool,
+}
+
+fn default_local_router_host() -> String {
+    DEFAULT_LOCAL_ROUTER_HOST.to_string()
+}
+
+const fn default_local_router_port() -> u16 {
+    DEFAULT_LOCAL_ROUTER_PORT
+}
+
+impl Default for LocalRouterSettings {
+    fn default() -> Self {
+        Self {
+            show_on_home: false,
+            enabled: false,
+            listen_host: default_local_router_host(),
+            listen_port: default_local_router_port(),
+            claude_enabled: true,
+            codex_enabled: true,
+            record_usage: true,
+        }
+    }
+}
+
 fn default_custom_agent_codex_like() -> bool {
     true
 }
@@ -248,6 +295,8 @@ pub struct AppSettings {
     #[serde(default)]
     pub proxy_settings: ProxySettings,
     #[serde(default)]
+    pub local_router_settings: LocalRouterSettings,
+    #[serde(default)]
     pub agent_proxy_enabled: HashMap<String, bool>,
     #[serde(default, skip_serializing)]
     pub agent_proxy_overrides: HashMap<String, LegacyAgentProxyConfig>,
@@ -271,6 +320,7 @@ impl Default for AppSettings {
             agent_label_overrides: HashMap::new(),
             builtin_agent_credentials: HashMap::new(),
             proxy_settings: ProxySettings::default(),
+            local_router_settings: LocalRouterSettings::default(),
             agent_proxy_enabled: HashMap::new(),
             agent_proxy_overrides: HashMap::new(),
             custom_agents: Vec::new(),
@@ -521,6 +571,24 @@ fn normalize_proxy_settings(settings: ProxySettings) -> ProxySettings {
     }
 }
 
+fn normalize_local_router_settings(settings: LocalRouterSettings) -> LocalRouterSettings {
+    let listen_host = match settings.listen_host.trim().to_ascii_lowercase().as_str() {
+        "localhost" => "localhost".to_string(),
+        "::1" | "[::1]" => "::1".to_string(),
+        "127.0.0.1" => DEFAULT_LOCAL_ROUTER_HOST.to_string(),
+        _ => DEFAULT_LOCAL_ROUTER_HOST.to_string(),
+    };
+    LocalRouterSettings {
+        listen_host,
+        listen_port: if settings.listen_port >= 1024 {
+            settings.listen_port
+        } else {
+            DEFAULT_LOCAL_ROUTER_PORT
+        },
+        ..settings
+    }
+}
+
 fn normalize_agent_proxy_enabled(overrides: HashMap<String, bool>) -> HashMap<String, bool> {
     overrides
         .into_iter()
@@ -690,6 +758,54 @@ fn append_builtin_agent_api_env(
             }
         }
     }
+}
+
+fn append_local_router_env(
+    settings: &AppSettings,
+    agent: &str,
+    extra_env: &mut Vec<(String, String)>,
+) {
+    let router = &settings.local_router_settings;
+    let (enabled, base_url_key, route_prefix) = match agent {
+        "claude" => (router.claude_enabled, "ANTHROPIC_BASE_URL", "claude"),
+        "codex" => (router.codex_enabled, "OPENAI_BASE_URL", "codex/v1"),
+        _ => return,
+    };
+    if !router.enabled || !enabled {
+        return;
+    }
+
+    let host = if router.listen_host == "::1" {
+        "[::1]"
+    } else {
+        router.listen_host.as_str()
+    };
+    extra_env.push((
+        base_url_key.to_string(),
+        format!("http://{host}:{}/{route_prefix}", router.listen_port),
+    ));
+
+    let mut no_proxy = extra_env
+        .iter()
+        .rev()
+        .find(|(key, _)| key.eq_ignore_ascii_case("NO_PROXY"))
+        .map(|(_, value)| {
+            value
+                .split(',')
+                .map(str::trim)
+                .filter(|item| !item.is_empty())
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    for bypass in ["127.0.0.1", "localhost", "::1"] {
+        if !no_proxy.iter().any(|item| item == bypass) {
+            no_proxy.push(bypass.to_string());
+        }
+    }
+    let no_proxy = no_proxy.join(",");
+    extra_env.push(("NO_PROXY".to_string(), no_proxy.clone()));
+    extra_env.push(("no_proxy".to_string(), no_proxy));
 }
 
 fn get_agent_configured_path(settings: &AppSettings, agent: &str) -> String {
@@ -1113,6 +1229,7 @@ fn get_agent_launch_spec_from_settings(settings: &AppSettings, agent: &str) -> A
     append_agent_credential_env(settings, agent, &mut spec.extra_env);
     append_builtin_agent_api_env(settings, agent, &mut spec.extra_env);
     append_agent_proxy_env(settings, agent, &mut spec.extra_env);
+    append_local_router_env(settings, agent, &mut spec.extra_env);
     spec
 }
 
@@ -3049,6 +3166,7 @@ fn normalize_settings(settings: AppSettings) -> AppSettings {
             settings.builtin_agent_credentials,
         ),
         proxy_settings,
+        local_router_settings: normalize_local_router_settings(settings.local_router_settings),
         agent_proxy_enabled,
         agent_proxy_overrides: HashMap::new(),
         custom_agents: normalize_custom_agents(settings.custom_agents),
@@ -3074,6 +3192,7 @@ fn load_settings_unlocked() -> AppSettings {
             agent_label_overrides: HashMap::new(),
             builtin_agent_credentials: HashMap::new(),
             proxy_settings: ProxySettings::default(),
+            local_router_settings: LocalRouterSettings::default(),
             agent_proxy_enabled: HashMap::new(),
             agent_proxy_overrides: HashMap::new(),
             custom_agents: Vec::new(),
@@ -5170,6 +5289,109 @@ pub async fn get_system_fonts() -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn last_env_value<'a>(launch: &'a AgentLaunchSpec, key: &str) -> Option<&'a str> {
+        launch
+            .extra_env
+            .iter()
+            .rev()
+            .find(|(candidate, _)| candidate == key)
+            .map(|(_, value)| value.as_str())
+    }
+
+    #[test]
+    fn legacy_settings_default_to_a_disabled_local_router() {
+        let settings: AppSettings = serde_json::from_str("{}").unwrap();
+        assert_eq!(
+            settings.local_router_settings,
+            LocalRouterSettings::default()
+        );
+        assert!(!settings.local_router_settings.enabled);
+        assert!(settings.local_router_settings.claude_enabled);
+        assert!(settings.local_router_settings.codex_enabled);
+    }
+
+    #[test]
+    fn local_router_settings_are_restricted_to_loopback() {
+        let normalized = normalize_settings(AppSettings {
+            local_router_settings: LocalRouterSettings {
+                listen_host: "0.0.0.0".to_string(),
+                listen_port: 80,
+                ..LocalRouterSettings::default()
+            },
+            ..AppSettings::default()
+        });
+        assert_eq!(
+            normalized.local_router_settings.listen_host,
+            DEFAULT_LOCAL_ROUTER_HOST
+        );
+        assert_eq!(
+            normalized.local_router_settings.listen_port,
+            DEFAULT_LOCAL_ROUTER_PORT
+        );
+    }
+
+    #[test]
+    fn enabled_local_router_overrides_builtin_agent_base_urls_last() {
+        let mut settings = AppSettings {
+            local_router_settings: LocalRouterSettings {
+                enabled: true,
+                listen_host: "::1".to_string(),
+                listen_port: 19090,
+                ..LocalRouterSettings::default()
+            },
+            ..AppSettings::default()
+        };
+        settings.builtin_agent_credentials.insert(
+            "claude".to_string(),
+            BuiltInAgentCredentials {
+                base_url: "https://claude.example.test".to_string(),
+                ..BuiltInAgentCredentials::default()
+            },
+        );
+        settings.builtin_agent_credentials.insert(
+            "codex".to_string(),
+            BuiltInAgentCredentials {
+                base_url: "https://codex.example.test/v1".to_string(),
+                ..BuiltInAgentCredentials::default()
+            },
+        );
+
+        let claude = get_agent_launch_spec_from_settings(&settings, "claude");
+        assert_eq!(
+            last_env_value(&claude, "ANTHROPIC_BASE_URL"),
+            Some("http://[::1]:19090/claude")
+        );
+        let codex = get_agent_launch_spec_from_settings(&settings, "codex");
+        assert_eq!(
+            last_env_value(&codex, "OPENAI_BASE_URL"),
+            Some("http://[::1]:19090/codex/v1")
+        );
+        assert_eq!(
+            last_env_value(&codex, "NO_PROXY"),
+            Some("127.0.0.1,localhost,::1")
+        );
+    }
+
+    #[test]
+    fn local_router_does_not_change_disabled_or_non_builtin_agents() {
+        let mut settings = AppSettings {
+            local_router_settings: LocalRouterSettings {
+                enabled: true,
+                claude_enabled: false,
+                ..LocalRouterSettings::default()
+            },
+            ..AppSettings::default()
+        };
+        settings
+            .custom_agents
+            .push(test_custom_profile("custom", "custom", true));
+
+        let claude = get_agent_launch_spec_from_settings(&settings, "claude");
+        assert_eq!(last_env_value(&claude, "ANTHROPIC_BASE_URL"), None);
+        let custom = get_agent_launch_spec_from_settings(&settings, "custom");
+        assert_eq!(last_env_value(&custom, "OPENAI_BASE_URL"), None);
+    }
 
     fn test_custom_profile(id: &str, label: &str, codex_like: bool) -> CustomAgentProfile {
         CustomAgentProfile {

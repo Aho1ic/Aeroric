@@ -41,6 +41,7 @@ libc = "0.2"
 if-addrs = "0.15"
 parking_lot = "0.12"
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls", "stream"] }
+axum = "0.8"
 flate2 = "1"
 tar = "0.4"
 zip = { version = "=8.6.0", default-features = false, features = ["deflate"] }

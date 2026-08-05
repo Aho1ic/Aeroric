@@ -33,10 +33,53 @@ export interface AppSettings {
   agent_label_overrides?: Record<string, string>;
   builtin_agent_credentials?: Record<string, BuiltInAgentCredentials>;
   proxy_settings?: ProxySettings;
+  local_router_settings?: LocalRouterSettings;
   agent_proxy_enabled?: Record<string, boolean>;
   custom_agents?: CustomAgentProfile[];
   send_shortcut: SendShortcut;
   terminal_shift_enter_newline: boolean;
+}
+
+export interface LocalRouterSettings {
+  show_on_home: boolean;
+  enabled: boolean;
+  listen_host: string;
+  listen_port: number;
+  claude_enabled: boolean;
+  codex_enabled: boolean;
+  record_usage: boolean;
+}
+
+export interface LocalRouterStatus {
+  desired_enabled: boolean;
+  running: boolean;
+  starting: boolean;
+  listen_url: string | null;
+  total_requests: number;
+  successful_requests: number;
+  failed_requests: number;
+  active_requests?: number;
+  input_tokens: number;
+  output_tokens: number;
+  cache_creation_tokens: number;
+  cache_read_tokens: number;
+  last_error: string | null;
+}
+
+export const DEFAULT_LOCAL_ROUTER_SETTINGS: LocalRouterSettings = {
+  show_on_home: false,
+  enabled: false,
+  listen_host: "127.0.0.1",
+  listen_port: 18080,
+  claude_enabled: true,
+  codex_enabled: true,
+  record_usage: true,
+};
+
+export function normalizeLocalRouterSettings(
+  value: Partial<LocalRouterSettings> | null | undefined,
+): LocalRouterSettings {
+  return { ...DEFAULT_LOCAL_ROUTER_SETTINGS, ...(value ?? {}) };
 }
 
 export interface BuiltInAgentCredentials {

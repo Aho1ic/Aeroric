@@ -1,4 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState, useMemo } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import {
   Search,
   FolderOpen,
@@ -19,6 +20,8 @@ import {
   ChartNoAxesCombined,
   FolderTree,
   MonitorUp,
+  LoaderCircle,
+  Route,
 } from "lucide-react";
 import * as Popover from "@radix-ui/react-popover";
 import type {
@@ -36,7 +39,14 @@ import { isRemoteProject, resolveProjectLocation } from "../types";
 import { getAvatarGradient, shortenPath } from "../utils";
 import { ProjectAvatar } from "./ProjectAvatar";
 import { SidebarFooterActions } from "./SidebarFooterActions";
-import { OPEN_APP_SETTINGS_EVENT } from "./app-settings/types";
+import {
+  APP_SETTINGS_CHANGED_EVENT,
+  OPEN_APP_SETTINGS_EVENT,
+  normalizeLocalRouterSettings,
+  type AppSettings,
+  type LocalRouterSettings,
+  type LocalRouterStatus,
+} from "./app-settings/types";
 import { TimelineView } from "./TimelineView";
 import type { SshProjectInput } from "./ssh/sshProject";
 import { DockerIcon } from "./DockerIcon";
@@ -75,6 +85,162 @@ const WslProjectDialog = lazy(() =>
 
 function LazyPane({ children }: { children: React.ReactNode }) {
   return <Suspense fallback={null}>{children}</Suspense>;
+}
+
+export function HomeLocalRouterToggle() {
+  const { t } = useI18n();
+  const [settings, setSettings] = useState<LocalRouterSettings | null>(null);
+  const [status, setStatus] = useState<LocalRouterStatus | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const refreshAll = useCallback(async () => {
+    try {
+      const [appSettings, routerStatus] = await Promise.all([
+        invoke<AppSettings>("load_app_settings"),
+        invoke<LocalRouterStatus>("get_local_router_status"),
+      ]);
+      setSettings(normalizeLocalRouterSettings(appSettings.local_router_settings));
+      setStatus(routerStatus);
+      setError(null);
+    } catch (cause) {
+      setError(String(cause));
+    }
+  }, []);
+
+  const refreshStatus = useCallback(async () => {
+    try {
+      const nextStatus = await invoke<LocalRouterStatus>("get_local_router_status");
+      setStatus(nextStatus);
+      setError(null);
+    } catch (cause) {
+      setError(String(cause));
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshAll();
+    window.addEventListener(APP_SETTINGS_CHANGED_EVENT, refreshAll);
+    return () => window.removeEventListener(APP_SETTINGS_CHANGED_EVENT, refreshAll);
+  }, [refreshAll]);
+
+  useEffect(() => {
+    if (!settings?.show_on_home) return;
+    const interval = window.setInterval(() => {
+      if (document.visibilityState === "visible" && !busy) void refreshStatus();
+    }, 5_000);
+    return () => window.clearInterval(interval);
+  }, [busy, refreshStatus, settings?.show_on_home]);
+
+  if (!settings?.show_on_home) return null;
+
+  const checked = status?.desired_enabled ?? settings.enabled;
+  const disabled = busy || status === null || Boolean(status?.starting);
+  const failed = Boolean(error || (checked && status?.last_error && !status.running));
+  const iconColor = failed
+    ? "var(--danger)"
+    : status?.running
+      ? "var(--success)"
+      : status?.starting
+        ? "var(--color-warning)"
+        : "var(--text-muted)";
+  const statusLabel = error
+    ? t("welcome.localRouterFailed", { message: error })
+    : status?.starting
+      ? t("welcome.localRouterStarting")
+      : status?.running
+        ? t("welcome.localRouterRunning")
+        : checked && status?.last_error
+          ? t("welcome.localRouterFailed", { message: status.last_error })
+          : t("welcome.localRouterStopped");
+
+  async function handleToggle() {
+    if (disabled) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const nextStatus = await invoke<LocalRouterStatus>("set_local_router_enabled", {
+        enabled: !checked,
+      });
+      setStatus(nextStatus);
+      setSettings((previous) =>
+        previous ? { ...previous, enabled: nextStatus.desired_enabled } : previous,
+      );
+      window.dispatchEvent(new Event(APP_SETTINGS_CHANGED_EVENT));
+    } catch (cause) {
+      setError(String(cause));
+      await refreshStatus();
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      aria-label={t("welcome.localRouterToggle")}
+      title={`${t("welcome.localRouter")}: ${statusLabel}`}
+      disabled={disabled}
+      onClick={() => void handleToggle()}
+      style={{
+        height: 38,
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 8,
+        padding: "0 9px",
+        flexShrink: 0,
+        border: `1px solid ${failed ? "var(--danger)" : "var(--border-medium)"}`,
+        borderRadius: "var(--radius-md)",
+        background: "color-mix(in srgb, var(--bg-input) 82%, transparent)",
+        color: "var(--text-primary)",
+        cursor: disabled ? "not-allowed" : "pointer",
+        opacity: disabled && !status?.starting ? 0.58 : 1,
+      }}
+    >
+      {status?.starting || busy ? (
+        <LoaderCircle
+          size={15}
+          strokeWidth={2}
+          color={iconColor}
+          aria-hidden="true"
+          style={{ animation: "spin 0.8s linear infinite" }}
+        />
+      ) : (
+        <Route size={15} strokeWidth={2} color={iconColor} aria-hidden="true" />
+      )}
+      <span
+        aria-hidden="true"
+        style={{
+          width: 34,
+          height: 20,
+          padding: 2,
+          display: "inline-flex",
+          alignItems: "center",
+          boxSizing: "border-box",
+          flexShrink: 0,
+          borderRadius: 999,
+          background: checked ? "var(--primary-action-bg)" : "var(--border-medium)",
+          transition: "background 0.15s",
+        }}
+      >
+        <span
+          style={{
+            width: 16,
+            height: 16,
+            display: "block",
+            flexShrink: 0,
+            borderRadius: 999,
+            background: "var(--control-knob-bg)",
+            boxShadow: "var(--shadow-switch-thumb)",
+            transform: checked ? "translateX(14px)" : "translateX(0)",
+            transition: "transform 0.15s",
+          }}
+        />
+      </span>
+    </button>
+  );
 }
 
 function SidebarItem({
@@ -546,6 +712,7 @@ export function WelcomePage({
               </div>
 
               <div style={s.actionRow}>
+                <HomeLocalRouterToggle />
                 <button
                   type="button"
                   style={s.secondaryActionBtn}

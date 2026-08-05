@@ -14,6 +14,7 @@ import {
   Archive,
   Smartphone,
   MonitorUp,
+  Route,
 } from "lucide-react";
 import type {
   ThemeMode,
@@ -34,6 +35,7 @@ import { FontPanel } from "./app-settings/FontPanel";
 import { HooksPanel } from "./app-settings/HooksPanel";
 import { SkillsPanel } from "./app-settings/SkillsPanel";
 import { ProxyPanel } from "./app-settings/ProxyPanel";
+import { LocalRouterPanel } from "./app-settings/LocalRouterPanel";
 import { RemoteAccessPanel } from "./app-settings/RemoteAccessPanel";
 import { AgentUpdatesPanel } from "./app-settings/AgentUpdatesPanel";
 import { AllAgentConfigsPanel } from "./app-settings/AllAgentConfigsPanel";
@@ -51,6 +53,12 @@ const BASE_NAV_ITEMS: AppSettingsNavItem[] = [
   { key: "fonts", labelKey: "appSettings.fonts", section: "application", icon: Type },
   { key: "shortcuts", labelKey: "appSettings.shortcuts", section: "application", icon: Keyboard },
   { key: "proxy", labelKey: "appSettings.proxy", section: "application", icon: Network },
+  {
+    key: "local-router",
+    labelKey: "appSettings.localRouter",
+    section: "application",
+    icon: Route,
+  },
   { key: "remote", labelKey: "appSettings.remote", section: "application", icon: Smartphone },
   {
     key: "usage",
@@ -310,6 +318,8 @@ export function AppSettingsDialog({
               <ShortcutsPanel key="shortcuts" />
             ) : activeNav === "proxy" ? (
               <ProxyPanel key="proxy" />
+            ) : activeNav === "local-router" ? (
+              <LocalRouterPanel key="local-router" />
             ) : activeNav === "remote" ? (
               <RemoteAccessPanel key="remote" />
             ) : activeNav === "wsl" ? (
