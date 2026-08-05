@@ -35,6 +35,65 @@ logging.basicConfig(
 )
 logger = logging.getLogger("codex-chat-proxy")
 
+# Think tags for inline reasoning detection (models like DeepSeek, Qwen)
+THINK_OPEN_TAG = "<think>"
+THINK_CLOSE_TAG = "</think>"
+
+
+def extract_reasoning_text(delta: dict) -> Optional[str]:
+    """Extract reasoning text from various Chat Completions delta fields.
+
+    Checks reasoning_content, reasoning (string or object), and reasoning_details.
+    Compatible with CC Switch's extract_reasoning_field_text logic.
+    """
+    for key in ("reasoning_content", "reasoning"):
+        value = delta.get(key)
+        if isinstance(value, str) and value:
+            return value
+
+    reasoning = delta.get("reasoning")
+    if isinstance(reasoning, dict):
+        for key in ("content", "text", "summary"):
+            value = reasoning.get(key)
+            if isinstance(value, str) and value:
+                return value
+
+    details = delta.get("reasoning_details")
+    if isinstance(details, str) and details:
+        return details
+    if isinstance(details, list):
+        parts = []
+        for part in details:
+            if isinstance(part, dict):
+                for key in ("text", "content", "summary"):
+                    value = part.get(key)
+                    if isinstance(value, str) and value:
+                        parts.append(value)
+                        break
+        if parts:
+            return "\n\n".join(parts)
+
+    return None
+
+
+def extract_delta_content_text(content: Any) -> str:
+    """Extract text from delta.content which may be a string or a list of parts."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        chunks = []
+        for part in content:
+            if isinstance(part, str):
+                chunks.append(part)
+            elif isinstance(part, dict):
+                part_type = part.get("type", "")
+                if part_type in ("text", "output_text", "input_text"):
+                    text = part.get("text")
+                    if isinstance(text, str):
+                        chunks.append(text)
+        return "".join(chunks)
+    return ""
+
 
 def text_from_content(value: Any) -> str:
     if isinstance(value, str):
@@ -420,6 +479,9 @@ class ResponseStream:
         self.text_started = False
         self.finished = False
         self.usage: Optional[Json] = None
+        # Inline think detection state (for models that embed <think> in content)
+        self._think_mode = "detecting"  # detecting | reasoning | text
+        self._think_buffer = ""
 
     def send(self, event: str, payload: Json) -> None:
         raw = f"event: {event}\ndata: {json.dumps(payload, ensure_ascii=False, separators=(',', ':'))}\n\n"
@@ -468,6 +530,135 @@ class ResponseStream:
             },
         )
 
+    # -- Inline think tag handling (for models that embed <think> in content) --
+
+    def _send_reasoning_delta(self, delta: str) -> None:
+        """Send a reasoning summary text delta event."""
+        if not self.reasoning:
+            self.send(
+                "response.reasoning_summary_part.added",
+                {
+                    "type": "response.reasoning_summary_part.added",
+                    "item_id": self.message_id,
+                    "output_index": 0,
+                    "summary_index": 0,
+                },
+            )
+        self.reasoning += delta
+        self.send(
+            "response.reasoning_summary_text.delta",
+            {
+                "type": "response.reasoning_summary_text.delta",
+                "item_id": self.message_id,
+                "output_index": 0,
+                "summary_index": 0,
+                "delta": delta,
+            },
+        )
+
+    def _send_text_delta(self, delta: str) -> None:
+        """Send an output text delta event."""
+        self.start_text()
+        self.text += delta
+        self.send(
+            "response.output_text.delta",
+            {
+                "type": "response.output_text.delta",
+                "item_id": self.message_id,
+                "output_index": 0,
+                "content_index": 0,
+                "delta": delta,
+            },
+        )
+
+    def _finalize_reasoning(self) -> None:
+        """Close the reasoning summary if it was started."""
+        if self.reasoning:
+            self.send(
+                "response.reasoning_summary_text.done",
+                {
+                    "type": "response.reasoning_summary_text.done",
+                    "item_id": self.message_id,
+                    "output_index": 0,
+                    "summary_index": 0,
+                    "text": self.reasoning,
+                },
+            )
+
+    def _push_content_delta(self, delta: str) -> None:
+        """Push content delta, detecting and extracting inline <think> tags."""
+        if self._think_mode == "text":
+            self._finalize_reasoning()
+            self._send_text_delta(delta)
+            return
+
+        # Buffer content to detect <think> prefix
+        self._think_buffer += delta
+
+        if self._think_mode == "detecting":
+            trimmed = self._think_buffer.lstrip()
+            if not trimmed:
+                return  # Need more content to decide
+            if trimmed.startswith(THINK_OPEN_TAG):
+                self._think_mode = "reasoning"
+                self._drain_inline_think()
+                return
+            if THINK_OPEN_TAG.startswith(trimmed):
+                return  # Could still be <think>, need more
+            # Not a think tag, flush as text
+            self._think_mode = "text"
+            self._finalize_reasoning()
+            buf = self._think_buffer
+            self._think_buffer = ""
+            self._send_text_delta(buf)
+            return
+
+        # In reasoning mode, buffer until we find </think>
+        self._drain_inline_think()
+
+    def _drain_inline_think(self) -> None:
+        """Process buffered content looking for complete <think>...</think> blocks."""
+        if THINK_CLOSE_TAG not in self._think_buffer:
+            return  # Need more content
+
+        while THINK_CLOSE_TAG in self._think_buffer:
+            idx = self._think_buffer.index(THINK_CLOSE_TAG)
+            reasoning_text = self._think_buffer[:idx]
+            if reasoning_text:
+                self._send_reasoning_delta(reasoning_text)
+            self._finalize_reasoning()
+            remaining = self._think_buffer[idx + len(THINK_CLOSE_TAG):]
+            self._think_buffer = ""
+            self._think_mode = "text"
+            if remaining:
+                # Check if there's another <think> block
+                if THINK_OPEN_TAG in remaining:
+                    before, after = remaining.split(THINK_OPEN_TAG, 1)
+                    if before:
+                        self._send_text_delta(before)
+                    self._think_buffer = after
+                    self._think_mode = "reasoning"
+                else:
+                    self._send_text_delta(remaining)
+
+    def _flush_inline_think_at_boundary(self) -> None:
+        """Flush any remaining inline think buffer at tool call boundary."""
+        if self._think_mode == "text":
+            return
+        if self._think_mode == "detecting":
+            self._think_mode = "text"
+            if self._think_buffer:
+                self._finalize_reasoning()
+                self._send_text_delta(self._think_buffer)
+                self._think_buffer = ""
+            return
+        # In reasoning mode - flush remaining as reasoning
+        if self._think_buffer:
+            self._send_reasoning_delta(self._think_buffer)
+            self._think_buffer = ""
+        self._finalize_reasoning()
+        self._think_mode = "text"
+
     def handle_chunk(self, chunk: Json) -> None:
         self.start()
         if isinstance(chunk.get("usage"), dict):
@@ -478,47 +669,20 @@ class ResponseStream:
         choice = choices[0] if isinstance(choices[0], dict) else {}
         delta = choice.get("delta") if isinstance(choice.get("delta"), dict) else {}
 
-        reasoning = delta.get("reasoning_content") or delta.get("reasoning")
-        if isinstance(reasoning, str) and reasoning:
-            if not self.reasoning:
-                self.send(
-                    "response.reasoning_summary_part.added",
-                    {
-                        "type": "response.reasoning_summary_part.added",
-                        "item_id": self.message_id,
-                        "output_index": 0,
-                        "summary_index": 0,
-                    },
-                )
-            self.reasoning += reasoning
-            self.send(
-                "response.reasoning_summary_text.delta",
-                {
-                    "type": "response.reasoning_summary_text.delta",
-                    "item_id": self.message_id,
-                    "output_index": 0,
-                    "summary_index": 0,
-                    "delta": reasoning,
-                },
-            )
+        # Extract reasoning from various fields (reasoning_content, reasoning, reasoning_details)
+        reasoning = extract_reasoning_text(delta)
+        if reasoning:
+            self._send_reasoning_delta(reasoning)
 
+        # Handle content (may be string or list of parts)
         content = delta.get("content")
-        if isinstance(content, str) and content:
-            self.start_text()
-            self.text += content
-            self.send(
-                "response.output_text.delta",
-                {
-                    "type": "response.output_text.delta",
-                    "item_id": self.message_id,
-                    "output_index": 0,
-                    "content_index": 0,
-                    "delta": content,
-                },
-            )
+        content_text = extract_delta_content_text(content)
+        if content_text:
+            self._push_content_delta(content_text)
 
         tool_calls = delta.get("tool_calls")
         if isinstance(tool_calls, list):
+            self._flush_inline_think_at_boundary()
             for call in tool_calls:
                 if not isinstance(call, dict):
                     continue
@@ -571,6 +735,8 @@ class ResponseStream:
             return
         self.finished = True
         self.start()
+        # Flush any remaining inline think buffer
+        self._flush_inline_think_at_boundary()
         if self.reasoning:
             self.send(
                 "response.reasoning_summary_text.done",
