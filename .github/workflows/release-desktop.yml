@@ -136,7 +136,7 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile --ignore-scripts
 
-      - name: Require release signing credentials
+      - name: Detect release signing credentials
         shell: bash
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
@@ -147,26 +147,41 @@ jobs:
           KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
           WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
           WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+          REQUIRE_SIGNED_RELEASES: ${{ vars.REQUIRE_SIGNED_RELEASES }}
         run: |
           set -euo pipefail
+          missing=()
           if [[ "${{ runner.os }}" == "macOS" ]]; then
             for name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID KEYCHAIN_PASSWORD; do
               if [[ -z "${!name}" ]]; then
-                echo "::error::Required macOS signing secret is missing: $name"
-                exit 1
+                missing+=("$name")
               fi
             done
           elif [[ "${{ runner.os }}" == "Windows" ]]; then
             for name in WINDOWS_CERTIFICATE WINDOWS_CERTIFICATE_PASSWORD; do
               if [[ -z "${!name}" ]]; then
-                echo "::error::Required Windows signing secret is missing: $name"
-                exit 1
+                missing+=("$name")
               fi
             done
           fi
 
+          if [[ "${#missing[@]}" -eq 0 && "${{ runner.os }}" != "Linux" ]]; then
+            echo "AERORIC_SIGN_RELEASE=true" >> "$GITHUB_ENV"
+            echo "Release signing credentials are configured for ${{ runner.os }}."
+          else
+            echo "AERORIC_SIGN_RELEASE=false" >> "$GITHUB_ENV"
+            if [[ "${{ runner.os }}" != "Linux" ]]; then
+              message="${{ runner.os }} signing credentials are incomplete: ${missing[*]}"
+              if [[ "${REQUIRE_SIGNED_RELEASES:-false}" == "true" ]]; then
+                echo "::error::${message}"
+                exit 1
+              fi
+              echo "::warning::${message}. Building unsigned installers; set repository variable REQUIRE_SIGNED_RELEASES=true to forbid this fallback."
+            fi
+          fi
+
       - name: Import Apple Developer ID certificate
-        if: runner.os == 'macOS'
+        if: runner.os == 'macOS' && env.AERORIC_SIGN_RELEASE == 'true'
         shell: bash
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
@@ -212,7 +227,7 @@ jobs:
           echo "APPLE_KEYCHAIN_PATH=$keychain_path" >> "$GITHUB_ENV"
 
       - name: Import Windows code-signing certificate
-        if: runner.os == 'Windows'
+        if: runner.os == 'Windows' && env.AERORIC_SIGN_RELEASE == 'true'
         shell: pwsh
         env:
           WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
@@ -262,21 +277,26 @@ jobs:
             bundle_version="${base_version}-${numeric_value}"
           fi
 
-          timestamp_url="${WINDOWS_TIMESTAMP_URL:-http://timestamp.digicert.com}"
-          jq -n \
-            --arg version "$bundle_version" \
-            --arg thumbprint "$WINDOWS_CERTIFICATE_THUMBPRINT" \
-            --arg timestampUrl "$timestamp_url" \
-            '{
-              version: $version,
-              bundle: {
-                windows: {
-                  certificateThumbprint: $thumbprint,
-                  digestAlgorithm: "sha256",
-                  timestampUrl: $timestampUrl
+          if [[ "$AERORIC_SIGN_RELEASE" == "true" ]]; then
+            timestamp_url="${WINDOWS_TIMESTAMP_URL:-http://timestamp.digicert.com}"
+            jq -n \
+              --arg version "$bundle_version" \
+              --arg thumbprint "$WINDOWS_CERTIFICATE_THUMBPRINT" \
+              --arg timestampUrl "$timestamp_url" \
+              '{
+                version: $version,
+                bundle: {
+                  windows: {
+                    certificateThumbprint: $thumbprint,
+                    digestAlgorithm: "sha256",
+                    timestampUrl: $timestampUrl
+                  }
                 }
-              }
-            }' > tauri.windows-release.json
+              }' > tauri.windows-release.json
+          else
+            jq -n --arg version "$bundle_version" '{version: $version}' \
+              > tauri.windows-release.json
+          fi
           env_file="$GITHUB_ENV"
           if command -v cygpath >/dev/null 2>&1; then
             env_file="$(cygpath --unix "$GITHUB_ENV")"
@@ -316,11 +336,15 @@ jobs:
           rm -f tauri.windows-release.json
 
       - name: Build ${{ matrix.name }} (macOS, signed and notarized)
-        if: runner.os == 'macOS'
+        if: runner.os == 'macOS' && env.AERORIC_SIGN_RELEASE == 'true'
         env:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: pnpm tauri build --target ${{ matrix.target }} ${{ matrix.bundle_args }} -- --locked
+
+      - name: Build ${{ matrix.name }} (macOS, unsigned)
+        if: runner.os == 'macOS' && env.AERORIC_SIGN_RELEASE != 'true'
         run: pnpm tauri build --target ${{ matrix.target }} ${{ matrix.bundle_args }} -- --locked
 
       - name: Build ${{ matrix.name }} (Linux)
@@ -328,7 +352,7 @@ jobs:
         run: pnpm tauri build --target ${{ matrix.target }} ${{ matrix.bundle_args }} -- --locked
 
       - name: Verify Windows installer signatures
-        if: runner.os == 'Windows'
+        if: runner.os == 'Windows' && env.AERORIC_SIGN_RELEASE == 'true'
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
@@ -348,10 +372,26 @@ jobs:
             Write-Host "Verified Authenticode signature: $($artifact.Name)"
           }
           "windows signatures verified" |
-            Out-File "$bundleRoot/SIGNATURES_VERIFIED-${{ matrix.artifact_name }}.txt" -Encoding utf8
+            Out-File "$bundleRoot/SIGNING_STATUS-${{ matrix.artifact_name }}.txt" -Encoding utf8
+
+      - name: Record unsigned Windows package status
+        if: runner.os == 'Windows' && env.AERORIC_SIGN_RELEASE != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          bundle_root="src-tauri/target/${{ matrix.target }}/release/bundle"
+          shopt -s nullglob
+          artifacts=("$bundle_root"/nsis/*.exe "$bundle_root"/msi/*.msi)
+          shopt -u nullglob
+          if [[ "${#artifacts[@]}" -ne 2 ]]; then
+            echo "::error::Expected one NSIS installer and one MSI; found ${#artifacts[@]}."
+            exit 1
+          fi
+          printf 'Windows installers are unsigned because repository signing secrets are not configured.\n' \
+            > "$bundle_root/SIGNING_STATUS-${{ matrix.artifact_name }}.txt"
 
       - name: Verify macOS signature and notarization ticket
-        if: runner.os == 'macOS'
+        if: runner.os == 'macOS' && env.AERORIC_SIGN_RELEASE == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -366,7 +406,22 @@ jobs:
           spctl --assess --type execute --verbose=2 "$app_path"
           xcrun stapler validate "$dmg_path"
           printf 'macOS signature and notarization verified\n' \
-            > "$bundle_root/SIGNATURES_VERIFIED-${{ matrix.artifact_name }}.txt"
+            > "$bundle_root/SIGNING_STATUS-${{ matrix.artifact_name }}.txt"
+
+      - name: Record unsigned macOS package status
+        if: runner.os == 'macOS' && env.AERORIC_SIGN_RELEASE != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          bundle_root="src-tauri/target/${{ matrix.target }}/release/bundle"
+          app_path="$bundle_root/macos/Aeroric.app"
+          dmg_path="$(find "$bundle_root/dmg" -maxdepth 1 -type f -name '*.dmg' -print -quit)"
+          if [[ ! -d "$app_path" || -z "$dmg_path" ]]; then
+            echo "::error::Expected app bundle and DMG were not produced"
+            exit 1
+          fi
+          printf 'macOS installer is not Developer ID signed or notarized because repository signing secrets are not configured.\n' \
+            > "$bundle_root/SIGNING_STATUS-${{ matrix.artifact_name }}.txt"
 
       - name: Record Linux signing policy
         if: runner.os == 'Linux'
@@ -374,7 +429,7 @@ jobs:
         run: |
           bundle_root="src-tauri/target/${{ matrix.target }}/release/bundle"
           printf 'Linux package signing is not configured; package checksums are verified at release.\n' \
-            > "$bundle_root/SIGNATURES_VERIFIED-${{ matrix.artifact_name }}.txt"
+            > "$bundle_root/SIGNING_STATUS-${{ matrix.artifact_name }}.txt"
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v7
@@ -387,7 +442,7 @@ jobs:
             src-tauri/target/${{ matrix.target }}/release/bundle/msi/*.msi
             src-tauri/target/${{ matrix.target }}/release/bundle/deb/*.deb
             src-tauri/target/${{ matrix.target }}/release/bundle/rpm/*.rpm
-            src-tauri/target/${{ matrix.target }}/release/bundle/SIGNATURES_VERIFIED-*.txt
+            src-tauri/target/${{ matrix.target }}/release/bundle/SIGNING_STATUS-*.txt
 
   release:
     name: Create GitHub Release
@@ -431,18 +486,18 @@ jobs:
             "Aeroric_${VERSION}_x64.dmg"
             "Aeroric_${VERSION}_x64_en-US.msi"
           )
-          signature_markers=(
-            "SIGNATURES_VERIFIED-linux-x86_64.txt"
-            "SIGNATURES_VERIFIED-macos-arm64.txt"
-            "SIGNATURES_VERIFIED-macos-x86_64.txt"
-            "SIGNATURES_VERIFIED-windows-arm64.txt"
-            "SIGNATURES_VERIFIED-windows-x86_64.txt"
+          signing_status_markers=(
+            "SIGNING_STATUS-linux-x86_64.txt"
+            "SIGNING_STATUS-macos-arm64.txt"
+            "SIGNING_STATUS-macos-x86_64.txt"
+            "SIGNING_STATUS-windows-arm64.txt"
+            "SIGNING_STATUS-windows-x86_64.txt"
           )
 
           missing=0
-          for marker in "${signature_markers[@]}"; do
+          for marker in "${signing_status_markers[@]}"; do
             if [[ ! -f "release-artifacts/${marker}" ]]; then
-              echo "::error::Missing platform signature-verification marker: ${marker}"
+              echo "::error::Missing platform signing-status marker: ${marker}"
               missing=1
             fi
           done
@@ -457,7 +512,15 @@ jobs:
             find release-artifacts -maxdepth 1 -type f -printf '%f\n' | sort
             exit 1
           fi
-          rm -- "release-artifacts"/SIGNATURES_VERIFIED-*.txt
+
+          {
+            printf 'Aeroric %s installer signing status\n\n' "$VERSION"
+            for marker in "${signing_status_markers[@]}"; do
+              printf '%s: ' "${marker#SIGNING_STATUS-}"
+              cat "release-artifacts/${marker}"
+            done
+          } > release-artifacts/SIGNING_STATUS.txt
+          rm -- "release-artifacts"/SIGNING_STATUS-*.txt
 
           (
             cd release-artifacts
