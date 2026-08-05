@@ -17,6 +17,7 @@ interface Props {
   connections: SshConnection[];
   groups?: string[];
   onConnectionsChange: (connections: SshConnection[]) => void;
+  onDeleteConnection?: (connectionId: string) => void | Promise<void>;
   onClose: () => void;
   onOpen: (input: SshProjectInput) => void;
   onOpenSftp?: (connection: SshConnection) => void;
@@ -102,6 +103,7 @@ export function SshProjectPage({
   connections,
   groups = [],
   onConnectionsChange,
+  onDeleteConnection,
   onClose,
   onOpen,
   onOpenSftp,
@@ -160,6 +162,18 @@ export function SshProjectPage({
   function openConnection(connection: SshConnection) {
     const input = sshProjectInputForConnection(connection);
     if (input) onOpen(input);
+  }
+
+  function deleteConnection(connectionId: string) {
+    const nextConnections = connections.filter((connection) => connection.id !== connectionId);
+    if (onDeleteConnection) {
+      void onDeleteConnection(connectionId);
+    } else {
+      onConnectionsChange(nextConnections);
+    }
+    if (selectedId === connectionId) {
+      setSelectedId(nextConnections[0]?.id ?? "");
+    }
   }
 
   function handleOpen() {
@@ -355,6 +369,7 @@ export function SshProjectPage({
             }
             openConnection(connection);
           }}
+          onDelete={(connection) => deleteConnection(connection.id)}
         />
       )}
     </div>

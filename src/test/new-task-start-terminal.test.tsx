@@ -52,6 +52,14 @@ vi.mock("@tauri-apps/api/core", () => ({
             config_lang: "shellscript",
             models: ["claude-opus-4-8", "claude-sonnet-4-8"],
           },
+          {
+            id: "local_codex",
+            label: "Local Codex",
+            path: "/tmp/local-codex.sh",
+            codex_like: true,
+            config_lang: "shellscript",
+            models: ["gpt-5.6"],
+          },
         ],
       });
     }
@@ -132,7 +140,7 @@ describe("NewTaskView start terminal", () => {
     expect(onSubmit.mock.calls[0][0]).not.toHaveProperty("injectPromptIntoTerminal");
   });
 
-  it("lets Codex use its native initial prompt argument", async () => {
+  it("defers Codex's initial prompt through the terminal startup gates", async () => {
     const user = userEvent.setup();
     const onSubmit = vi.fn();
 
@@ -154,9 +162,36 @@ describe("NewTaskView start terminal", () => {
         prompt: "inspect the current files",
         agent: "codex",
         immediate: true,
+        injectPromptIntoTerminal: true,
       }),
     );
-    expect(onSubmit.mock.calls[0][0]).not.toHaveProperty("injectPromptIntoTerminal");
+  });
+
+  it("defers custom Codex-like prompts through the same startup gates", async () => {
+    const user = userEvent.setup();
+    const onSubmit = vi.fn();
+
+    render(
+      <I18nProvider>
+        <NewTaskView project={project} onSubmit={onSubmit} />
+      </I18nProvider>,
+    );
+
+    await user.click(screen.getByRole("combobox", { name: "Agent" }));
+    await user.click(await screen.findByText("Local Codex"));
+
+    const editor = screen.getByRole("textbox");
+    await user.type(editor, "inspect the custom wrapper");
+    await user.click(screen.getByRole("button", { name: /Send/ }));
+
+    expect(onSubmit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        prompt: "inspect the custom wrapper",
+        agent: "local_codex",
+        immediate: true,
+        injectPromptIntoTerminal: true,
+      }),
+    );
   });
 
   it("previews slash skills and inserts the selected skill like the CLI", async () => {

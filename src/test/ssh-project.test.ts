@@ -138,6 +138,35 @@ describe("SSH project opening", () => {
     expect(writeText).toHaveBeenCalledWith("ssh -p 2222 deploy@example.com");
   });
 
+  it("physically deletes a connection from the home SSH context menu", async () => {
+    const user = userEvent.setup();
+    const onConnectionsChange = vi.fn();
+    const onDeleteConnection = vi.fn();
+
+    render(
+      React.createElement(
+        I18nProvider,
+        null,
+        React.createElement(SshProjectPage, {
+          connections: [connection("/srv/apps/aeroric")],
+          onConnectionsChange,
+          onDeleteConnection,
+          onClose: vi.fn(),
+          onOpen: vi.fn(),
+        }),
+      ),
+    );
+
+    fireEvent.contextMenu(screen.getByRole("button", { name: /Prod.*example\.com:22/ }), {
+      clientX: 80,
+      clientY: 80,
+    });
+    await user.click(screen.getByRole("menuitem", { name: "Delete" }));
+
+    expect(onDeleteConnection).toHaveBeenCalledWith("conn-1");
+    expect(onConnectionsChange).not.toHaveBeenCalled();
+  });
+
   it("disables project-card password copy when no password is saved", () => {
     render(
       React.createElement(
@@ -309,6 +338,33 @@ describe("SSH project opening", () => {
     await user.click(screen.getByRole("menuitem", { name: "SFTP" }));
 
     expect(onConnect).toHaveBeenCalledWith(expect.objectContaining({ id: "conn-1" }), "sftp");
+  });
+
+  it("deletes from the sidebar SSH connection context menu", async () => {
+    const user = userEvent.setup();
+    const onDelete = vi.fn();
+    render(
+      React.createElement(
+        I18nProvider,
+        null,
+        React.createElement(SshConnectionList, {
+          connections: [connection("/srv/apps/aeroric")],
+          selectedId: null,
+          onSelect: vi.fn(),
+          onCreate: vi.fn(),
+          onEdit: vi.fn(),
+          onDelete,
+        }),
+      ),
+    );
+
+    fireEvent.contextMenu(screen.getByRole("button", { name: /Prod.*example\.com:22/ }), {
+      clientX: 80,
+      clientY: 80,
+    });
+    await user.click(screen.getByRole("menuitem", { name: "Delete" }));
+
+    expect(onDelete).toHaveBeenCalledWith("conn-1");
   });
 
   it("copies the saved SSH password from a project page SSH workspace card", async () => {

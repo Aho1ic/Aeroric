@@ -1249,7 +1249,8 @@ pub async fn run_wsl_task(
         selected_model.as_deref(),
     )?;
     let speed = crate::pty::normalized_speed(speed.as_deref())?;
-    let force_prompt_injection = force_prompt_injection.unwrap_or(false);
+    let force_prompt_injection =
+        crate::pty::should_force_prompt_injection(is_codex, force_prompt_injection);
     let uses_ultracode = !is_codex && reasoning_effort.as_deref() == Some("ultracode");
     let spec = build_agent_command(
         &distribution,

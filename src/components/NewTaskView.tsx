@@ -664,10 +664,11 @@ export function NewTaskView({
       selectedModel: modelSelectable ? selectedModel || undefined : undefined,
       reasoningEffort,
       speed,
-      // Claude/Codex receive normal first prompts through their native CLI
-      // argument. This avoids racing the welcome screen's PTY redraw. Flows
-      // that explicitly need the interactive composer (for example the
-      // CLAUDE.md initializer above) opt into PTY injection separately.
+      // Codex can show trust / hook review selectors before its composer is
+      // ready. Route its first prompt through the guarded PTY injection path,
+      // which waits for those startup gates and submits on a later input turn.
+      // Claude's native positional prompt path is already reliable here.
+      ...(codexLikeAgent ? { injectPromptIntoTerminal: true } : {}),
     });
     editorHandle.clear();
     setIsEmpty(true);

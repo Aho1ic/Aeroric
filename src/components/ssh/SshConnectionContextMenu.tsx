@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type CSSProperties } from "react";
-import { Check, ChevronRight, Clipboard, Link, Plug, Terminal } from "lucide-react";
+import { Check, ChevronRight, Clipboard, Link, Plug, Terminal, Trash2 } from "lucide-react";
 import { createPortal } from "react-dom";
 import type { SshConnection } from "../../types";
 import { useI18n } from "../../i18n";
@@ -14,10 +14,11 @@ interface Props {
   y: number;
   onClose: () => void;
   onConnect: (connection: SshConnection, protocol: SshConnectionProtocol) => void;
+  onDelete: (connection: SshConnection) => void;
 }
 
 const MENU_WIDTH = 214;
-const MENU_HEIGHT = 142;
+const MENU_HEIGHT = 178;
 
 function menuPosition(x: number, y: number): CSSProperties {
   return {
@@ -37,7 +38,14 @@ function menuItemStyle(active = false): CSSProperties {
   };
 }
 
-export function SshConnectionContextMenu({ connection, x, y, onClose, onConnect }: Props) {
+export function SshConnectionContextMenu({
+  connection,
+  x,
+  y,
+  onClose,
+  onConnect,
+  onDelete,
+}: Props) {
   const { t } = useI18n();
   const [connectMenuOpen, setConnectMenuOpen] = useState(false);
   const [copied, setCopied] = useState<"link" | "command" | null>(null);
@@ -176,6 +184,18 @@ export function SshConnectionContextMenu({ connection, x, y, onClose, onConnect 
             <Clipboard style={s.toolbarMenuItemIcon} />
           )}
           {copied === "command" ? t("ssh.copied") : t("ssh.copyCommand")}
+        </button>
+        <button
+          type="button"
+          role="menuitem"
+          style={{ ...menuItemStyle(), color: "var(--danger)" }}
+          onClick={() => {
+            onDelete(connection);
+            onClose();
+          }}
+        >
+          <Trash2 style={s.toolbarMenuItemIcon} />
+          {t("common.delete")}
         </button>
       </div>
     </>

@@ -6,6 +6,7 @@ use std::process::Command;
 use std::sync::Arc;
 use std::time::Duration;
 
+use parking_lot::Mutex;
 use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 use serde::{Deserialize, Serialize};
 use tauri::ipc::Channel;
@@ -51,6 +52,8 @@ fn ssh_passwords_path() -> Result<PathBuf, String> {
     Ok(crate::storage::aeroric_dir()?.join("ssh-passwords.json"))
 }
 
+static SSH_CONNECTIONS_STORAGE_LOCK: Mutex<()> = Mutex::new(());
+
 fn prepare_ssh_connections_for_storage(
     connections: Vec<SshConnection>,
 ) -> (Vec<SshConnection>, BTreeMap<String, String>) {
@@ -75,7 +78,7 @@ fn load_ssh_passwords() -> Result<BTreeMap<String, String>, String> {
     serde_json::from_str(&raw).map_err(|e| e.to_string())
 }
 
-fn save_ssh_connections_sync(connections: Vec<SshConnection>) -> Result<(), String> {
+fn write_ssh_connections_storage(connections: Vec<SshConnection>) -> Result<(), String> {
     crate::storage::ensure_aeroric_dirs()?;
     let (public_connections, passwords) = prepare_ssh_connections_for_storage(connections);
     let public_raw =
@@ -83,6 +86,40 @@ fn save_ssh_connections_sync(connections: Vec<SshConnection>) -> Result<(), Stri
     let password_raw = serde_json::to_string_pretty(&passwords).map_err(|e| e.to_string())?;
     crate::storage::atomic_write_private(&ssh_passwords_path()?, &format!("{password_raw}\n"))?;
     crate::storage::atomic_write_private(&ssh_connections_path()?, &format!("{public_raw}\n"))
+}
+
+fn save_ssh_connections_sync(connections: Vec<SshConnection>) -> Result<(), String> {
+    let _guard = SSH_CONNECTIONS_STORAGE_LOCK.lock();
+    write_ssh_connections_storage(connections)
+}
+
+fn remove_ssh_connection(
+    mut connections: Vec<SshConnection>,
+    connection_id: &str,
+) -> Vec<SshConnection> {
+    connections.retain(|connection| connection.id != connection_id);
+    connections
+}
+
+fn delete_ssh_connection_sync(connection_id: &str) -> Result<Vec<SshConnection>, String> {
+    let _guard = SSH_CONNECTIONS_STORAGE_LOCK.lock();
+    let path = ssh_connections_path()?;
+    let mut connections = if path.exists() {
+        crate::storage::ensure_private_file_permissions(&path)?;
+        let raw = fs::read_to_string(&path).map_err(|e| e.to_string())?;
+        serde_json::from_str::<Vec<SshConnection>>(&raw).map_err(|e| e.to_string())?
+    } else {
+        Vec::new()
+    };
+    let passwords = load_ssh_passwords()?;
+    for connection in &mut connections {
+        if let Some(password) = passwords.get(&connection.id) {
+            connection.password = Some(password.clone());
+        }
+    }
+    let remaining = remove_ssh_connection(connections, connection_id);
+    write_ssh_connections_storage(remaining.clone())?;
+    Ok(remaining)
 }
 
 pub(crate) fn shell_quote_posix(value: &str) -> String {
@@ -733,6 +770,13 @@ pub async fn save_ssh_connections(connections: Vec<SshConnection>) -> Result<(),
 }
 
 #[tauri::command]
+pub async fn delete_ssh_connection(connection_id: String) -> Result<Vec<SshConnection>, String> {
+    tokio::task::spawn_blocking(move || delete_ssh_connection_sync(&connection_id))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
 pub async fn open_ssh_shell(
     app: AppHandle,
     task_manager: State<'_, crate::TaskManager>,
@@ -853,7 +897,8 @@ pub async fn run_remote_task(
         selected_model.as_deref(),
     )?;
     let speed = crate::pty::normalized_speed(speed.as_deref())?;
-    let force_prompt_injection = force_prompt_injection.unwrap_or(false);
+    let force_prompt_injection =
+        crate::pty::should_force_prompt_injection(is_codex, force_prompt_injection);
     let uses_ultracode = !is_codex && reasoning_effort.as_deref() == Some("ultracode");
     let remote_command = build_remote_task_command(
         &agent,
@@ -1046,6 +1091,49 @@ mod tests {
         assert!(!public_json.contains("secret"));
         assert!(!public_json.contains("password"));
         assert_eq!(passwords.get("conn-1"), Some(&"secret".to_string()));
+    }
+
+    #[test]
+    fn removing_ssh_connection_drops_the_record_and_its_password() {
+        let connections = vec![
+            SshConnection {
+                id: "conn-1".to_string(),
+                name: "prod".to_string(),
+                group: None,
+                host: "old.example.com".to_string(),
+                port: 22,
+                username: "deploy".to_string(),
+                identity_file: None,
+                password: Some("old-secret".to_string()),
+                remote_path: None,
+                auto_sudo_with_password: false,
+                created_at: 1,
+                last_connected_at: None,
+            },
+            SshConnection {
+                id: "conn-2".to_string(),
+                name: "prod".to_string(),
+                group: None,
+                host: "new.example.com".to_string(),
+                port: 22,
+                username: "deploy".to_string(),
+                identity_file: None,
+                password: Some("new-secret".to_string()),
+                remote_path: None,
+                auto_sudo_with_password: false,
+                created_at: 2,
+                last_connected_at: None,
+            },
+        ];
+
+        let remaining = remove_ssh_connection(connections, "conn-1");
+        let (public, passwords) = prepare_ssh_connections_for_storage(remaining);
+
+        assert_eq!(public.len(), 1);
+        assert_eq!(public[0].id, "conn-2");
+        assert_eq!(public[0].name, "prod");
+        assert!(!passwords.contains_key("conn-1"));
+        assert_eq!(passwords.get("conn-2"), Some(&"new-secret".to_string()));
     }
 
     #[test]

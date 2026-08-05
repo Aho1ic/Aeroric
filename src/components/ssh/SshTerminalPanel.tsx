@@ -44,6 +44,7 @@ interface ActiveSshSession {
 interface Props {
   connections: SshConnection[];
   onConnectionsChange: (connections: SshConnection[]) => void;
+  onDeleteConnection?: (connectionId: string) => void | Promise<void>;
   active: boolean;
   width: number | string;
   themeVariant: ThemeVariant;
@@ -64,6 +65,7 @@ export const SshTerminalPanel = forwardRef<SshTerminalPanelHandle, Props>(functi
   {
     connections,
     onConnectionsChange,
+    onDeleteConnection,
     active,
     width,
     themeVariant,
@@ -163,12 +165,16 @@ export const SshTerminalPanel = forwardRef<SshTerminalPanelHandle, Props>(functi
         setActiveSession(null);
       }
       const next = connections.filter((connection) => connection.id !== connectionId);
-      saveConnections(next);
+      if (onDeleteConnection) {
+        void onDeleteConnection(connectionId);
+      } else {
+        saveConnections(next);
+      }
       if (selectedId === connectionId) {
         setSelectedId(next[0]?.id ?? null);
       }
     },
-    [activeSession, connections, saveConnections, selectedId],
+    [activeSession, connections, onDeleteConnection, saveConnections, selectedId],
   );
 
   const connectConnection = useCallback(

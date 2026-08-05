@@ -193,6 +193,7 @@ export function SshConnectionList({
           onConnect={(connection, protocol) => {
             onConnect?.(connection, protocol);
           }}
+          onDelete={(connection) => onDelete(connection.id)}
         />
       )}
     </div>

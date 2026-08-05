@@ -1955,6 +1955,7 @@ export const zh: Record<string, string> = {
   "sshProject.createGroup": "创建分组",
   "sshProject.newGroupHint": "分组会在你为该分组新建连接后保存。",
   "toast.saveSshConnectionsFailed": "保存 SSH 连接失败：{error}",
+  "toast.deleteSshConnectionFailed": "永久删除 SSH 连接失败：{error}",
   "running.cancel": "取消",
   "running.mergeTo": "合并到 {branch}",
   "running.merging": "合并中...",

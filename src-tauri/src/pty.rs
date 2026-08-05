@@ -1107,6 +1107,16 @@ fn should_use_native_initial_prompt(
     !force_prompt_injection && uses_native_initial_prompt(agent, is_codex)
 }
 
+pub(crate) fn should_force_prompt_injection(
+    is_codex: bool,
+    force_prompt_injection: Option<bool>,
+) -> bool {
+    // Codex may render workspace-trust and hook-review selectors before the
+    // composer exists. Keep its initial prompt out of CLI positional args and
+    // deliver it through the guarded PTY path after those gates settle.
+    is_codex || force_prompt_injection.unwrap_or(false)
+}
+
 fn stable_agent_spawn_cwd() -> PathBuf {
     crate::platform::home_dir()
         .filter(|path| path.is_dir())
@@ -1219,7 +1229,7 @@ pub async fn run_task(
         selected_model.as_deref(),
     )?;
     let speed = normalized_speed(speed.as_deref())?;
-    let force_prompt_injection = force_prompt_injection.unwrap_or(false);
+    let force_prompt_injection = should_force_prompt_injection(is_codex, force_prompt_injection);
     let native_cli_args_supported = uses_native_initial_prompt(&agent, is_codex)
         || launch_supports_native_initial_prompt(&agent, is_codex, &launch);
     let use_native_initial_prompt =
@@ -1337,9 +1347,9 @@ pub async fn run_task(
         serde_json::json!({ "task_id": task_id, "status": "running" }),
     );
 
-    // 内置 Agent 默认使用原生命令行参数执行首条消息，避免 PTY 启动阶段清空过早注入的
-    // 输入。一键初始化可强制改走终端注入；自定义 Agent 包装脚本也不一定兼容 positional
-    // prompt，因此等待首批终端输出后再注入，并为没有启动输出的脚本保留超时兜底。
+    // Claude 默认使用原生命令行参数执行首条消息。Codex 始终走受门控保护的终端注入，
+    // 等 trust / hook review 等启动选择器结束后再粘贴并提交；自定义 Agent 包装脚本若
+    // 不支持 positional prompt 也沿用同一兜底，并为没有启动输出的脚本保留超时。
     // 因此这里不能启动 /status watcher，避免抢占用户输入或污染浅色终端背景。
     let starts_with_prompt = !final_prompt.is_empty();
     let session_tx = if starts_with_prompt {
@@ -2006,6 +2016,10 @@ mod tests {
         assert!(!should_use_native_initial_prompt("claude", false, true));
         assert!(should_use_native_initial_prompt("codex", true, false));
         assert!(!should_use_native_initial_prompt("codex", true, true));
+        assert!(!should_force_prompt_injection(false, None));
+        assert!(should_force_prompt_injection(false, Some(true)));
+        assert!(should_force_prompt_injection(true, None));
+        assert!(should_force_prompt_injection(true, Some(false)));
         assert!(initial_prompt_args("", true).is_empty());
         assert_eq!(
             initial_prompt_args("hello\nworld", true),

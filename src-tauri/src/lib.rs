@@ -412,6 +412,7 @@ pub fn run() {
             remote::remote_complete_task_request,
             ssh::load_ssh_connections,
             ssh::save_ssh_connections,
+            ssh::delete_ssh_connection,
             ssh::open_ssh_shell,
             ssh::kill_ssh_shell,
             ssh::run_remote_task,

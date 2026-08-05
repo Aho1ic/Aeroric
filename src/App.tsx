@@ -220,6 +220,21 @@ function App() {
     [showToast, t],
   );
 
+  const handleDeleteSshConnection = useCallback(
+    async (connectionId: string) => {
+      try {
+        const connections = await invoke<SshConnection[]>("delete_ssh_connection", {
+          connectionId,
+        });
+        setSshConnections(connections);
+      } catch (e: unknown) {
+        console.error(e);
+        showToast(t("toast.deleteSshConnectionFailed", { error: String(e) }), "error");
+      }
+    },
+    [showToast, t],
+  );
+
   const mountProject = useCallback((projectId: string) => {
     setMountedProjectIds((prev) => (prev.includes(projectId) ? prev : [...prev, projectId]));
   }, []);
@@ -1927,6 +1942,7 @@ function App() {
                 onMonoFontFamilyChange={setMonoFontFamily}
                 sshConnections={sshConnections}
                 onSshConnectionsChange={handleSshConnectionsChange}
+                onDeleteSshConnection={handleDeleteSshConnection}
                 condaEnvironments={condaEnvironments}
                 selectedCondaEnvPath={selectedCondaEnvPath}
                 onSelectedCondaEnvPathChange={setSelectedCondaEnvPath}
@@ -1963,6 +1979,7 @@ function App() {
             onEnterSkillHub={handleEnterSkillHub}
             sshConnections={sshConnections}
             onSshConnectionsChange={handleSshConnectionsChange}
+            onDeleteSshConnection={handleDeleteSshConnection}
             themeVariant={themeVariant}
             themeMode={themeMode}
             systemPrefersDark={systemPrefersDark}

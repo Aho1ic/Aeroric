@@ -44,12 +44,14 @@ function SshCardPicker({
   onOpen,
   onEdit,
   onConnect,
+  onDelete,
 }: {
   connections: SshConnection[];
   selectedId: string | null;
   onOpen: (connection: SshConnection) => void;
   onEdit: (connection: SshConnection) => void;
   onConnect?: (connection: SshConnection, protocol: SshConnectionProtocol) => void;
+  onDelete: (connection: SshConnection) => void;
 }) {
   const { t } = useI18n();
   const [copiedConnectionId, setCopiedConnectionId] = useState<string | null>(null);
@@ -177,6 +179,7 @@ function SshCardPicker({
           y={contextMenu.y}
           onClose={() => setContextMenu(null)}
           onConnect={(connection, protocol) => onConnect?.(connection, protocol)}
+          onDelete={onDelete}
         />
       )}
     </div>
@@ -236,6 +239,7 @@ function SshWorkspaceHeader({
 export function SshWorkspace({
   connections,
   onConnectionsChange,
+  onDeleteConnection,
   active,
   themeVariant,
   terminalFontSize,
@@ -246,6 +250,7 @@ export function SshWorkspace({
 }: {
   connections: SshConnection[];
   onConnectionsChange: (connections: SshConnection[]) => void;
+  onDeleteConnection?: (connectionId: string) => void | Promise<void>;
   active: boolean;
   themeVariant: ThemeVariant;
   terminalFontSize: TerminalFontSize;
@@ -275,6 +280,19 @@ export function SshWorkspace({
     setShowCards(false);
     setEditingConnection(null);
     setDialogOpen(false);
+  };
+
+  const deleteConnection = (connectionId: string) => {
+    const next = connections.filter((connection) => connection.id !== connectionId);
+    if (onDeleteConnection) {
+      void onDeleteConnection(connectionId);
+    } else {
+      onConnectionsChange(next);
+    }
+    if (selectedConnectionId === connectionId) {
+      setSelectedConnectionId(next[0]?.id ?? null);
+      setShowCards(true);
+    }
   };
 
   const renderChooserOrTerminal = () => (
@@ -310,6 +328,7 @@ export function SshWorkspace({
               setSelectedConnectionId(connection.id);
               setShowCards(false);
             }}
+            onDelete={(connection) => deleteConnection(connection.id)}
           />
         </div>
       ) : (
@@ -317,6 +336,7 @@ export function SshWorkspace({
           key={selectedConnection!.id}
           connections={connections}
           onConnectionsChange={onConnectionsChange}
+          onDeleteConnection={onDeleteConnection}
           active={active}
           width="100%"
           themeVariant={themeVariant}

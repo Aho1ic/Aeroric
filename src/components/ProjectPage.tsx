@@ -221,6 +221,7 @@ export function ProjectPage({
   onExitSkillHub,
   sshConnections,
   onSshConnectionsChange,
+  onDeleteSshConnection,
   condaEnvironments,
   selectedCondaEnvPath,
   onSelectedCondaEnvPathChange,
@@ -307,6 +308,7 @@ export function ProjectPage({
   onExitSkillHub?: () => void;
   sshConnections: SshConnection[];
   onSshConnectionsChange: (connections: SshConnection[]) => void;
+  onDeleteSshConnection?: (connectionId: string) => void | Promise<void>;
   condaEnvironments: CondaEnvironment[];
   selectedCondaEnvPath: string | null;
   onSelectedCondaEnvPathChange: (path: string | null) => void;
@@ -2367,6 +2369,7 @@ export function ProjectPage({
                       ref={remoteSshRef}
                       connections={sshConnections}
                       onConnectionsChange={onSshConnectionsChange}
+                      onDeleteConnection={onDeleteSshConnection}
                       active={visible && primaryWorkspaceVisible && remoteSshMainVisible}
                       width="100%"
                       themeVariant={themeVariant}
@@ -2502,6 +2505,7 @@ export function ProjectPage({
                 <SshWorkspace
                   connections={sshConnections}
                   onConnectionsChange={onSshConnectionsChange}
+                  onDeleteConnection={onDeleteSshConnection}
                   active={visible}
                   themeVariant={themeVariant}
                   terminalFontSize={terminalFontSize}
@@ -2737,6 +2741,7 @@ export function ProjectPage({
                 <SshTerminalPanel
                   connections={sshConnections}
                   onConnectionsChange={onSshConnectionsChange}
+                  onDeleteConnection={onDeleteSshConnection}
                   active={visible && rightPanel === "ssh"}
                   width={effectiveRightPanelWidth}
                   themeVariant={themeVariant}

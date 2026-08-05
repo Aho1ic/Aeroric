@@ -196,6 +196,7 @@ export function WelcomePage({
   onEnterSkillHub,
   sshConnections,
   onSshConnectionsChange,
+  onDeleteSshConnection,
   onOpenSshProject,
   onOpenWslProject,
 }: {
@@ -233,6 +234,7 @@ export function WelcomePage({
   onEnterSkillHub: () => void;
   sshConnections: SshConnection[];
   onSshConnectionsChange: (connections: SshConnection[]) => void;
+  onDeleteSshConnection?: (connectionId: string) => void | Promise<void>;
   onOpenSshProject: (input: SshProjectInput) => void;
   onOpenWslProject: (input: WslProjectInput) => void;
 }) {
@@ -504,6 +506,7 @@ export function WelcomePage({
               connections={sshConnections}
               groups={sshGroups}
               onConnectionsChange={onSshConnectionsChange}
+              onDeleteConnection={onDeleteSshConnection}
               onClose={() => switchWelcomeView("projects")}
               onOpen={(input) => {
                 onOpenSshProject(input);

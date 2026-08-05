@@ -2018,6 +2018,7 @@ export const en: Record<string, string> = {
   "sshProject.createGroup": "Create group",
   "sshProject.newGroupHint": "A group is saved when you create a connection in it.",
   "toast.saveSshConnectionsFailed": "Failed to save SSH connections: {error}",
+  "toast.deleteSshConnectionFailed": "Failed to permanently delete SSH connection: {error}",
   "running.cancel": "Cancel",
   "running.mergeTo": "Merge to {branch}",
   "running.merging": "Merging...",
