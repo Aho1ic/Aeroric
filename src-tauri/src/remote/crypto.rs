@@ -23,7 +23,9 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use x25519_dalek::{PublicKey, StaticSecret};
 
-use crate::storage::{aeroric_dir, atomic_write_private};
+use crate::storage::{
+    aeroric_dir, atomic_write_private, ensure_private_dir, ensure_private_file_permissions,
+};
 
 /// 加密帧内层类型:控制面(JSON 文本)。
 pub const KIND_CTRL: u8 = 1;
@@ -70,6 +72,7 @@ impl StaticKeys {
     pub fn load_or_create() -> Result<Self, String> {
         let path = aeroric_dir()?.join("remote-keypair.json");
         if let Ok(raw) = std::fs::read_to_string(&path) {
+            ensure_private_file_permissions(&path)?;
             if let Ok(file) = serde_json::from_str::<KeypairFile>(&raw) {
                 if let Ok(bytes) = URL_SAFE_NO_PAD.decode(&file.secret) {
                     if let Ok(arr) = <[u8; 32]>::try_from(bytes) {
@@ -86,7 +89,7 @@ impl StaticKeys {
         }
         let keys = Self::ephemeral()?;
         if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+            ensure_private_dir(parent)?;
         }
         let file = KeypairFile {
             secret: URL_SAFE_NO_PAD.encode(keys.secret.as_bytes()),

@@ -515,6 +515,8 @@ export function ProjectRail({
   onReorderProjects,
   onToggleProjectPinned,
   projectGroups: projectGroupNames = [],
+  collapsedProjectGroups: controlledCollapsedProjectGroups,
+  onCollapsedProjectGroupsChange,
   projectRailWidth = PROJECT_RAIL_EXPANDED_WIDTH,
   onProjectRailWidthChange,
   themeVariant,
@@ -541,6 +543,8 @@ export function ProjectRail({
   onReorderProjects?: (orderedProjectIds: string[]) => void;
   onToggleProjectPinned?: (projectId: string) => void;
   projectGroups?: string[];
+  collapsedProjectGroups?: ReadonlySet<string>;
+  onCollapsedProjectGroupsChange?: (groups: Set<string>) => void;
   projectRailWidth?: number;
   onProjectRailWidthChange?: (width: number) => void;
   themeVariant: ThemeVariant;
@@ -574,9 +578,30 @@ export function ProjectRail({
   const [expandedProjectIds, setExpandedProjectIds] = useState<Set<string>>(() =>
     getDefaultExpandedProjectIds(projects, activeProjectId),
   );
-  const [collapsedProjectGroups, setCollapsedProjectGroups] = useState<Set<string>>(new Set());
+  const [localCollapsedProjectGroups, setLocalCollapsedProjectGroups] = useState<Set<string>>(
+    new Set(),
+  );
   const [selectedTaskIds, setSelectedTaskIds] = useState<Set<string>>(new Set());
   const taskSelectionAnchorRef = useRef<{ projectId: string; taskId: string } | null>(null);
+  const usesControlledProjectGroupCollapse =
+    controlledCollapsedProjectGroups !== undefined && onCollapsedProjectGroupsChange !== undefined;
+  const collapsedProjectGroups = usesControlledProjectGroupCollapse
+    ? controlledCollapsedProjectGroups
+    : localCollapsedProjectGroups;
+  const updateCollapsedProjectGroups = useCallback(
+    (updater: (current: ReadonlySet<string>) => Set<string>) => {
+      if (usesControlledProjectGroupCollapse) {
+        onCollapsedProjectGroupsChange(updater(controlledCollapsedProjectGroups));
+        return;
+      }
+      setLocalCollapsedProjectGroups((current) => updater(current));
+    },
+    [
+      controlledCollapsedProjectGroups,
+      onCollapsedProjectGroupsChange,
+      usesControlledProjectGroupCollapse,
+    ],
+  );
 
   const projectTaskGroups = useMemo(
     () => buildProjectTaskGroups(projects, allTasks),
@@ -735,18 +760,6 @@ export function ProjectRail({
       return updateExpandedProjectIds(prev, activeProjectId, true);
     });
   }, [activeProjectId]);
-
-  useEffect(() => {
-    const activeGroup =
-      projects.find((project) => project.id === activeProjectId)?.group?.trim() ||
-      UNGROUPED_PROJECT_GROUP;
-    setCollapsedProjectGroups((current) => {
-      if (!current.has(activeGroup)) return current;
-      const next = new Set(current);
-      next.delete(activeGroup);
-      return next;
-    });
-  }, [activeProjectId, projects]);
 
   const showProjectGroupHeaders = railProjectGroups.some((group) => !group.isUngrouped);
 
@@ -1075,7 +1088,7 @@ export function ProjectRail({
                         })
                   }
                   onClick={() =>
-                    setCollapsedProjectGroups((current) => {
+                    updateCollapsedProjectGroups((current) => {
                       const next = new Set(current);
                       if (next.has(groupKey)) next.delete(groupKey);
                       else next.add(groupKey);

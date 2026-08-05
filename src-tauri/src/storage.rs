@@ -134,6 +134,10 @@ fn projects_path() -> Result<PathBuf, String> {
     Ok(aeroric_dir()?.join("projects.json"))
 }
 
+fn projects_dir() -> Result<PathBuf, String> {
+    Ok(aeroric_dir()?.join("projects"))
+}
+
 fn projects_lock() -> &'static Mutex<()> {
     PROJECTS_LOCK.get_or_init(|| Mutex::new(()))
 }
@@ -174,15 +178,28 @@ pub(crate) fn terminal_history_path(task_id: &str) -> Result<PathBuf, String> {
 }
 
 pub(crate) fn ensure_aeroric_dirs() -> Result<(), String> {
-    fs::create_dir_all(aeroric_dir()?).map_err(|e| e.to_string())
+    ensure_private_dir(&aeroric_dir()?)
 }
 
 fn ensure_project_dir(project_id: &str) -> Result<(), String> {
-    fs::create_dir_all(project_dir(project_id)?).map_err(|e| e.to_string())
+    ensure_aeroric_dirs()?;
+    ensure_private_dir(&projects_dir()?)?;
+    ensure_private_dir(&project_dir(project_id)?)
 }
 
 fn ensure_terminal_history_dir() -> Result<(), String> {
-    fs::create_dir_all(terminal_history_dir()?).map_err(|e| e.to_string())
+    ensure_aeroric_dirs()?;
+    ensure_private_dir(&terminal_history_dir()?)
+}
+
+pub(crate) fn ensure_private_dir(path: &Path) -> Result<(), String> {
+    fs::create_dir_all(path).map_err(|e| e.to_string())?;
+    #[cfg(not(windows))]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o700)).map_err(|e| e.to_string())?;
+    }
+    Ok(())
 }
 
 // ── Tauri commands ────────────────────────────────────────────────────────────
@@ -194,10 +211,12 @@ pub fn load_projects() -> Result<Vec<Project>, String> {
 }
 
 fn load_projects_unlocked() -> Result<Vec<Project>, String> {
+    ensure_aeroric_dirs()?;
     let path = projects_path()?;
     if !path.exists() {
         return Ok(vec![]);
     }
+    ensure_private_file_permissions(&path)?;
     let raw = fs::read_to_string(&path).map_err(|e| e.to_string())?;
     serde_json::from_str(&raw).map_err(|e| e.to_string())
 }
@@ -211,7 +230,7 @@ pub fn save_projects(projects: Vec<Project>) -> Result<(), String> {
 fn save_projects_unlocked(projects: &[Project]) -> Result<(), String> {
     ensure_aeroric_dirs()?;
     let raw = serde_json::to_string_pretty(&projects).map_err(|e| e.to_string())?;
-    atomic_write(&projects_path()?, &raw)
+    atomic_write_private(&projects_path()?, &raw)
 }
 
 pub(crate) fn update_projects<R>(
@@ -226,10 +245,12 @@ pub(crate) fn update_projects<R>(
 
 #[tauri::command]
 pub fn load_project_tasks(project_id: String) -> Result<Vec<Task>, String> {
+    ensure_project_dir(&project_id)?;
     let path = tasks_path(&project_id)?;
     if !path.exists() {
         return Ok(vec![]);
     }
+    ensure_private_file_permissions(&path)?;
     let raw = fs::read_to_string(&path).map_err(|e| e.to_string())?;
     serde_json::from_str(&raw).map_err(|e| e.to_string())
 }
@@ -246,7 +267,7 @@ pub fn save_project_tasks(project_id: String, tasks: Vec<Task>) -> Result<(), St
         return Ok(());
     }
     let raw = serde_json::to_string_pretty(&tasks).map_err(|e| e.to_string())?;
-    atomic_write(&path, &raw)
+    atomic_write_private(&path, &raw)
 }
 
 pub(crate) fn append_task_terminal_history(task_id: &str, data: &str) -> Result<(), String> {
@@ -291,6 +312,7 @@ fn read_terminal_history_tail_from_path(
     if !path.exists() {
         return Ok((0, String::new()));
     }
+    ensure_private_file_permissions(path)?;
     let mut file = fs::File::open(path).map_err(|e| e.to_string())?;
     let total = file.metadata().map_err(|e| e.to_string())?.len();
     let start = total.saturating_sub(max_bytes);
@@ -481,6 +503,28 @@ mod tests {
 
         let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o600);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn ensure_private_dir_tightens_existing_directory() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!(
+            "aeroric-private-dir-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        fs::set_permissions(&dir, fs::Permissions::from_mode(0o755)).unwrap();
+
+        ensure_private_dir(&dir).unwrap();
+
+        let mode = fs::metadata(&dir).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o700);
         let _ = fs::remove_dir_all(&dir);
     }
 

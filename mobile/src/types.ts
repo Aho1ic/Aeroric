@@ -152,8 +152,7 @@ export interface AgentChoice {
 }
 
 /**
- * RPC agentConfig.list 的条目。内置 agent 只有前四个字段(editable=false);
- * 自定义 profile 才带 baseUrl / apiKey / models。
+ * RPC agentConfig.list 的条目。API Key 永不回传明文，只报告是否已配置。
  */
 export interface AgentConfigEntry {
   id: string;
@@ -161,7 +160,7 @@ export interface AgentConfigEntry {
   codexLike: boolean;
   editable: boolean;
   baseUrl?: string;
-  apiKey?: string;
+  apiKeyConfigured?: boolean;
   models?: string[];
   enable1mContext?: boolean;
   enableChatCompletionsProxy?: boolean;

@@ -203,19 +203,23 @@ The release workflow helps collect version context, review publish state, and ke
 
 Download the installer for your platform from the GitHub Releases page. Each desktop release is expected to publish macOS DMG, Windows NSIS/MSI, Linux DEB/RPM, and `SHA256SUMS.txt` checksum assets.
 
-Install Claude Code and/or Codex before using agent tasks in Aeroric. On macOS, if the unsigned app is blocked by Gatekeeper, run:
-
-```bash
-xattr -rd com.apple.quarantine /Applications/Aeroric.app
-```
+Install Claude Code and/or Codex before using agent tasks in Aeroric. Published
+macOS installers are Developer ID signed and notarized; published Windows
+installers are Authenticode signed.
 
 ## Development
 
 Local builds need Node.js 24, pnpm 9, Rust stable, the Tauri platform dependencies for your OS, and a sibling DBX checkout that satisfies `src-tauri/Cargo.toml`:
 
 ```bash
-git clone https://github.com/Aho1ic/dbx.git ../dbx
+git clone https://github.com/t8y2/dbx.git ../dbx
+git -C ../dbx checkout 8559aec8bce4efeb4f52080da8ab1839733ef45b
+./scripts/prepare-dbx.sh
 ```
+
+The preparation script applies Aeroric's reviewed DBX dependency/security
+updates from `patches/dbx-security.patch`. It is idempotent and is also run by
+the checks and desktop-release workflows.
 
 ```bash
 pnpm dev            # Start Vite dev server on port 1420
@@ -241,6 +245,18 @@ For a tagged release such as `v1.3.8`, keep `package.json`, `src-tauri/tauri.con
 - `Aeroric_X.Y.Z_x64.dmg`
 - `Aeroric_X.Y.Z_x64_en-US.msi`
 - `SHA256SUMS.txt`
+
+The release workflow intentionally fails when signing credentials are absent.
+Configure these GitHub Actions secrets before tagging:
+
+- macOS: `APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`, `APPLE_ID`,
+  `APPLE_PASSWORD`, `APPLE_TEAM_ID`, and `KEYCHAIN_PASSWORD`
+- Windows: `WINDOWS_CERTIFICATE` and `WINDOWS_CERTIFICATE_PASSWORD`
+
+`WINDOWS_TIMESTAMP_URL` may be set as a repository variable to override the
+default DigiCert timestamp service. The workflow verifies Authenticode
+signatures, macOS code signatures, and the stapled notarization ticket before
+it uploads release artifacts.
 
 ## Acknowledgments
 

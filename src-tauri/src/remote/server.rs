@@ -326,7 +326,27 @@ pub(crate) async fn start_with_scope<R: Runtime>(
         (cfg.relay_url.clone(), cfg.relay_token.clone())
     };
     if let Some(relay_url) = relay_url.filter(|u| !u.trim().is_empty()) {
-        super::relay_client::spawn(app.clone(), relay_url, relay_token, shutdown_rx.clone());
+        match super::normalize_relay_url(&relay_url) {
+            Ok(relay_url)
+                if relay_token
+                    .as_deref()
+                    .is_some_and(|token| !token.trim().is_empty()) =>
+            {
+                super::relay_client::spawn(
+                    app.clone(),
+                    relay_url,
+                    relay_token,
+                    shutdown_rx.clone(),
+                );
+            }
+            Ok(_) => {
+                *app.state::<RemoteState>().relay_state.lock() =
+                    "error:relay token is required".to_string();
+            }
+            Err(error) => {
+                *app.state::<RemoteState>().relay_state.lock() = format!("error:{error}");
+            }
+        }
     }
 
     let listener_stopped =

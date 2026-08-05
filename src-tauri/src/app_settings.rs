@@ -754,6 +754,19 @@ fn write_agent_api_key(id: &str, api_key: &str) -> Result<(), String> {
     atomic_write_private(&path, api_key.trim())
 }
 
+/// Synchronize the agent credentials file with the API key from settings.
+/// This ensures the credentials file is always up to date, even when the
+/// agent script itself doesn't need regeneration.
+fn sync_agent_credentials(id: &str, expected_api_key: &str) -> Result<(), String> {
+    let path = agent_api_key_path(id)?;
+    let current_key = fs::read_to_string(&path).unwrap_or_default();
+    if current_key.trim() != expected_api_key.trim() {
+        write_agent_api_key(id, expected_api_key)
+    } else {
+        Ok(())
+    }
+}
+
 fn remove_agent_api_key(id: &str) -> Result<(), String> {
     let path = agent_api_key_path(id)?;
     match fs::remove_file(path) {
@@ -1786,7 +1799,9 @@ if [ -z "$python_bin" ]; then
   echo "This custom Codex agent requires Python 3 to bridge Responses to Chat Completions." >&2
   exit 1
 fi
-"$python_bin" "$proxy_script" --port-file "$port_file" >/dev/null 2>&1 &
+proxy_log="$AGENT_HOME/codex-chat-proxy.log"
+export AERORIC_PROXY_LOG_LEVEL="${{AERORIC_PROXY_LOG_LEVEL:-INFO}}"
+"$python_bin" "$proxy_script" --port-file "$port_file" >"$proxy_log" 2>&1 &
 proxy_pid=$!
 cleanup_proxy() {{
   kill "$proxy_pid" 2>/dev/null || true
@@ -2027,7 +2042,9 @@ if ($null -eq $pythonCommand) {{
 $pythonArgs = @()
 if ($pythonCommand.Name -eq 'py.exe' -or $pythonCommand.Name -eq 'py') {{ $pythonArgs += '-3' }}
 $pythonArgs += @(('"' + $proxyScript + '"'), '--port-file', ('"' + $portFile + '"'))
-$proxyProcess = Start-Process -FilePath $pythonCommand.Source -ArgumentList $pythonArgs -PassThru -WindowStyle Hidden
+$proxyLog = Join-Path $agentHome 'codex-chat-proxy.log'
+$env:AERORIC_PROXY_LOG_LEVEL = if ($env:AERORIC_PROXY_LOG_LEVEL) {{ $env:AERORIC_PROXY_LOG_LEVEL }} else {{ 'INFO' }}
+$proxyProcess = Start-Process -FilePath $pythonCommand.Source -ArgumentList $pythonArgs -PassThru -WindowStyle Hidden -RedirectStandardOutput $proxyLog -RedirectStandardError (Join-Path $agentHome 'codex-chat-proxy-err.log')
 for ($attempt = 0; $attempt -lt 100; $attempt++) {{
   if ((Test-Path -LiteralPath $portFile) -and (Get-Item -LiteralPath $portFile).Length -gt 0) {{ break }}
   Start-Sleep -Milliseconds 20
@@ -2658,7 +2675,10 @@ fn parse_shell_builtin_credentials(content: &str) -> BuiltInAgentCredentials {
     credentials
 }
 
-fn parse_codex_builtin_credentials(content: &str) -> BuiltInAgentCredentials {
+fn parse_codex_builtin_credentials_with_env(
+    content: &str,
+    env: &impl Fn(&str) -> Option<String>,
+) -> BuiltInAgentCredentials {
     let mut credentials = BuiltInAgentCredentials::default();
     let Ok(table) = toml::from_str::<toml::Table>(content) else {
         return credentials;
@@ -2690,17 +2710,22 @@ fn parse_codex_builtin_credentials(content: &str) -> BuiltInAgentCredentials {
             provider_table
                 .and_then(|provider| provider.get("env_key"))
                 .and_then(toml::Value::as_str)
-                .and_then(|key| std::env::var(key).ok())
+                .and_then(env)
         })
         .or_else(|| {
             ["OPENAI_API_KEY", "CODEX_API_KEY", "ANTHROPIC_API_KEY"]
                 .into_iter()
-                .find_map(|key| std::env::var(key).ok())
+                .find_map(env)
         })
         .unwrap_or_default()
         .trim()
         .to_string();
     credentials
+}
+
+#[cfg(test)]
+fn parse_codex_builtin_credentials(content: &str) -> BuiltInAgentCredentials {
+    parse_codex_builtin_credentials_with_env(content, &|key| std::env::var(key).ok())
 }
 
 fn codex_auth_path(config_path: &Path) -> Option<PathBuf> {
@@ -2745,26 +2770,35 @@ fn write_codex_auth_api_key(config_path: &Path, api_key: &str) -> Result<(), Str
     atomic_write_private(&auth_path, &content)
 }
 
-fn parse_builtin_agent_credentials(agent: &str, content: &str) -> BuiltInAgentCredentials {
+fn parse_builtin_agent_credentials_with_env(
+    agent: &str,
+    content: &str,
+    env: &impl Fn(&str) -> Option<String>,
+) -> BuiltInAgentCredentials {
     match agent {
         "claude" => parse_claude_builtin_credentials(content),
         "claude_gpt55" => parse_shell_builtin_credentials(content),
-        "codex" => parse_codex_builtin_credentials(content),
+        "codex" => parse_codex_builtin_credentials_with_env(content, env),
         _ => BuiltInAgentCredentials::default(),
     }
 }
 
-fn merged_builtin_agent_credentials(
+fn parse_builtin_agent_credentials(agent: &str, content: &str) -> BuiltInAgentCredentials {
+    parse_builtin_agent_credentials_with_env(agent, content, &|key| std::env::var(key).ok())
+}
+
+fn merged_builtin_agent_credentials_with_env(
     settings: &AppSettings,
     agent: &str,
     config_content: &str,
+    env: &impl Fn(&str) -> Option<String>,
 ) -> BuiltInAgentCredentials {
     let mut credentials = settings
         .builtin_agent_credentials
         .get(agent)
         .cloned()
         .unwrap_or_default();
-    let recovered = parse_builtin_agent_credentials(agent, config_content);
+    let recovered = parse_builtin_agent_credentials_with_env(agent, config_content, env);
     if credentials.base_url.is_empty() {
         credentials.base_url = recovered.base_url;
     }
@@ -2781,13 +2815,15 @@ fn merged_builtin_agent_credentials(
     credentials
 }
 
-fn detect_builtin_agent_credentials(
+fn detect_builtin_agent_credentials_with_env(
     settings: &AppSettings,
     agent: &str,
     config_path: &Path,
     config_content: &str,
+    env: &impl Fn(&str) -> Option<String>,
 ) -> BuiltInAgentCredentials {
-    let mut credentials = merged_builtin_agent_credentials(settings, agent, config_content);
+    let mut credentials =
+        merged_builtin_agent_credentials_with_env(settings, agent, config_content, env);
     if agent == "claude" && (credentials.base_url.is_empty() || credentials.api_key.is_empty()) {
         if let Some(parent) = config_path.parent() {
             if let Ok(content) = fs::read_to_string(parent.join(".credentials.json")) {
@@ -2808,6 +2844,21 @@ fn detect_builtin_agent_credentials(
     credentials.api_key = credentials.api_key.trim().to_string();
     credentials.models = normalize_model_list(credentials.models);
     credentials
+}
+
+fn detect_builtin_agent_credentials(
+    settings: &AppSettings,
+    agent: &str,
+    config_path: &Path,
+    config_content: &str,
+) -> BuiltInAgentCredentials {
+    detect_builtin_agent_credentials_with_env(
+        settings,
+        agent,
+        config_path,
+        config_content,
+        &|key| std::env::var(key).ok(),
+    )
 }
 
 fn recover_custom_agent_credentials(profile: &mut CustomAgentProfile) {
@@ -2876,6 +2927,10 @@ fn refresh_stale_codex_agent_scripts(settings: &mut AppSettings) {
         {
             continue;
         }
+        // Always sync credentials file to ensure API key is up to date,
+        // even if the script itself doesn't need regeneration.
+        let _ = sync_agent_credentials(&profile.id, &profile.api_key);
+
         let script_path = normalize_config_path(profile.path.clone());
         let script_content = fs::read_to_string(&script_path).unwrap_or_default();
         // The saved profile is the only source of truth for the bridge. Earlier
@@ -2934,6 +2989,10 @@ fn refresh_stale_claude_agent_scripts(settings: &mut AppSettings) {
         {
             continue;
         }
+        // Always sync credentials file to ensure API key is up to date,
+        // even if the script itself doesn't need regeneration.
+        let _ = sync_agent_credentials(&profile.id, &profile.api_key);
+
         let script_path = normalize_config_path(profile.path.clone());
         let script_content = fs::read_to_string(&script_path).unwrap_or_default();
         let is_current = script_content.contains(CLAUDE_AGENT_SCRIPT_MARKER);
@@ -5383,11 +5442,12 @@ api_key = "sk-codex"
         )
         .unwrap();
 
-        let credentials = detect_builtin_agent_credentials(
+        let credentials = detect_builtin_agent_credentials_with_env(
             &AppSettings::default(),
             "codex",
             &config_path,
             "model = \"gpt-5.6\"\n",
+            &|_| None,
         );
         assert_eq!(credentials.api_key, "");
         assert_eq!(credentials.models, vec!["gpt-5.6"]);
@@ -5397,8 +5457,13 @@ api_key = "sk-codex"
             r#"{"auth_mode":"apikey","OPENAI_API_KEY":"sk-detected"}"#,
         )
         .unwrap();
-        let credentials =
-            detect_builtin_agent_credentials(&AppSettings::default(), "codex", &config_path, "");
+        let credentials = detect_builtin_agent_credentials_with_env(
+            &AppSettings::default(),
+            "codex",
+            &config_path,
+            "",
+            &|_| None,
+        );
         assert_eq!(credentials.api_key, "sk-detected");
 
         let _ = std::fs::remove_dir_all(root);

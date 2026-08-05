@@ -10,7 +10,7 @@ export const en: Record<string, string> = {
   "appSettings.proxy": "Proxy",
   "appSettings.remote": "Remote Access",
   "appSettings.remote.description":
-    "Pair your phone with Aeroric to monitor tasks, view terminals and steer agents remotely. The server is off by default and only accepts paired devices.",
+    "Pair only devices you fully trust. A paired phone can read and modify project files, create or cancel tasks, control agents and terminals, and change agent configuration. Existing API key plaintext is never sent back to the phone.",
   "appSettings.remote.loading": "Loading remote access status…",
   "appSettings.remote.loadError": "Could not load remote access status: {message}",
   "appSettings.remote.retry": "Retry",
@@ -46,14 +46,14 @@ export const en: Record<string, string> = {
   "appSettings.remote.onlineConnections": "{count} active connection(s)",
   "appSettings.remote.pairing": "Pair a phone",
   "appSettings.remote.pairingDescription":
-    "Generate a single-use code, then scan it with the Aeroric mobile app.",
+    "Generate a single-use code for a fully trusted device. Pairing grants remote control over projects, tasks, terminals, agents, and agent configuration.",
   "appSettings.remote.createInvite": "Generate pairing QR code",
   "appSettings.remote.regenerateInvite": "Regenerate QR code",
   "appSettings.remote.generatingInvite": "Generating…",
   "appSettings.remote.inviteGenerated": "Pairing QR code generated",
   "appSettings.remote.pairingNeedsServer": "Start the remote server to generate a pairing code.",
   "appSettings.remote.inviteHint":
-    "Scan with the Aeroric mobile app. The code is single-use and expires in 10 minutes.",
+    "Scan only on a phone you control and trust. The code is single-use and expires in 10 minutes.",
   "appSettings.remote.inviteExpiresIn": "Expires in {time}",
   "appSettings.remote.inviteExpired": "This pairing code has expired.",
   "appSettings.remote.copyPairingLink": "Copy pairing link",
@@ -83,9 +83,9 @@ export const en: Record<string, string> = {
     "Reach this machine from cellular networks via a self-hosted relay or your own tunnel (Tailscale, frp, cloudflared). All traffic is end-to-end encrypted — the relay only forwards ciphertext. See docs/remote-public-access.md.",
   "appSettings.remote.relayUrl": "Relay URL",
   "appSettings.remote.relayUrlHint":
-    "Base address of your self-hosted relay (ws:// or wss://). Leave empty to disable.",
+    "Use a wss:// base address for a remote relay. ws:// is accepted only for localhost development.",
   "appSettings.remote.relayToken": "Relay token",
-  "appSettings.remote.relayTokenHint": "Shared secret set via RELAY_TOKEN on the relay (optional).",
+  "appSettings.remote.relayTokenHint": "Required shared secret set via RELAY_TOKEN on the relay.",
   "appSettings.remote.publicEndpoints": "Custom public endpoints",
   "appSettings.remote.publicEndpointsHint":
     "One ws://… or wss://… address per line (e.g. Tailscale IP, frp or cloudflared tunnel). Included in new pairing QR codes.",

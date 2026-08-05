@@ -1,6 +1,6 @@
 [package]
 name = "aeroric"
-version = "1.4.0-rc.3"
+version = "1.4.0-rc.4"
 description = "Desktop task manager for AI coding agents"
 authors = ["Aeroric"]
 edition = "2021"
@@ -43,6 +43,7 @@ parking_lot = "0.12"
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls", "stream"] }
 flate2 = "1"
 tar = "0.4"
+zip = { version = "=8.6.0", default-features = false, features = ["deflate"] }
 sha2 = "0.10"
 uuid = { version = "1", features = ["v4"] }
 tungstenite = "0.24"

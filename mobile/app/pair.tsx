@@ -102,6 +102,9 @@ export default function PairScreen() {
       keyboardShouldPersistTaps="handled"
     >
       <Text style={styles.stepText}>{t("pair.steps")}</Text>
+      <View style={styles.trustWarning}>
+        <Text style={styles.trustWarningText}>{t("pair.trustWarning")}</Text>
+      </View>
 
       <View style={styles.cameraCard}>
         {cameraGranted ? (
@@ -161,6 +164,14 @@ const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: theme.bg },
   content: { padding: 20, gap: 14 },
   stepText: { color: theme.textSecondary, fontSize: 13, lineHeight: 20 },
+  trustWarning: {
+    borderRadius: radii.input,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: theme.warning,
+    backgroundColor: theme.bgCard,
+    padding: 12,
+  },
+  trustWarningText: { color: theme.textSecondary, fontSize: 12.5, lineHeight: 19 },
   cameraCard: {
     height: 300,
     borderRadius: radii.card,

@@ -206,6 +206,8 @@ export function ProjectPage({
   onReorderProjects,
   onToggleProjectPinned,
   projectGroups = [],
+  collapsedProjectGroups,
+  onCollapsedProjectGroupsChange,
   projectRailWidth,
   onProjectRailWidthChange,
   onOpen,
@@ -279,6 +281,8 @@ export function ProjectPage({
   onReorderProjects: (orderedProjectIds: string[]) => void;
   onToggleProjectPinned?: (projectId: string) => void;
   projectGroups?: string[];
+  collapsedProjectGroups?: ReadonlySet<string>;
+  onCollapsedProjectGroupsChange?: (groups: Set<string>) => void;
   projectRailWidth?: number;
   onProjectRailWidthChange?: (width: number) => void;
   onOpen: () => void;
@@ -1643,6 +1647,8 @@ export function ProjectPage({
         onReorderProjects={onReorderProjects}
         onToggleProjectPinned={onToggleProjectPinned}
         projectGroups={projectGroups}
+        collapsedProjectGroups={collapsedProjectGroups}
+        onCollapsedProjectGroupsChange={onCollapsedProjectGroupsChange}
         projectRailWidth={projectRailWidth}
         onProjectRailWidthChange={onProjectRailWidthChange}
         onOpen={onOpen}

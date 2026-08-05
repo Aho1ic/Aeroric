@@ -15,7 +15,7 @@ use base64::Engine;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::storage::{aeroric_dir, atomic_write_private};
+use crate::storage::{aeroric_dir, atomic_write_private, ensure_private_dir};
 
 const INVITE_TTL: Duration = Duration::from_secs(10 * 60);
 /// 同时存活的 invite 上限,防止无限累积。
@@ -82,7 +82,7 @@ pub fn load_devices() -> Vec<DeviceEntry> {
 pub fn save_devices(devices: &[DeviceEntry]) -> Result<(), String> {
     let path = devices_path()?;
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        ensure_private_dir(parent)?;
     }
     let raw = serde_json::to_string_pretty(devices).map_err(|e| e.to_string())?;
     atomic_write_private(&path, &raw)
@@ -267,7 +267,7 @@ impl AuthStore {
         if let Some(invite_token) = invite {
             self.prune_invites();
             let hash = hash_token(invite_token);
-            if self.invites.remove(&hash).is_none() {
+            if !self.invites.contains_key(&hash) {
                 return Err("Invalid or expired invite".to_string());
             }
             let device_token = generate_token()?;
@@ -285,8 +285,15 @@ impl AuthStore {
                 last_seen_at: now_ms(),
             };
             let (device_id, device_name) = (entry.id.clone(), entry.name.clone());
-            self.devices.push(entry);
-            self.persist_devices()?;
+            let mut next = self.devices.clone();
+            next.push(entry);
+            // Commit the durable device list before changing memory or
+            // consuming the single-use invite. A disk failure therefore does
+            // not create a memory-only credential or force the user to
+            // regenerate a QR code.
+            self.persist_device_list(&next)?;
+            self.devices = next;
+            self.invites.remove(&hash);
             return Ok(AuthOutcome::Paired {
                 device_id,
                 device_name,
@@ -435,6 +442,25 @@ mod tests {
         assert!(store
             .authenticate_inner(None, Some(&device_token), None)
             .is_ok());
+    }
+
+    #[test]
+    fn pairing_persistence_failure_keeps_invite_and_device_list_unchanged() {
+        let mut store = empty_store();
+        let invite = store.create_invite().unwrap();
+        store.persist_failure = Some("disk full".to_string());
+
+        assert!(store
+            .authenticate_inner(Some(&invite), None, Some("Phone"))
+            .is_err_and(|error| error == "disk full"));
+        assert!(store.devices().is_empty());
+
+        store.persist_failure = None;
+        assert!(matches!(
+            store.authenticate_inner(Some(&invite), None, Some("Phone")),
+            Ok(AuthOutcome::Paired { .. })
+        ));
+        assert_eq!(store.devices().len(), 1);
     }
 
     #[test]

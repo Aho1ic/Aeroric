@@ -1,0 +1,139 @@
+diff --git a/crates/dbx-core/Cargo.toml b/crates/dbx-core/Cargo.toml
+index 84a0afa3d..c91f91c91 100644
+--- a/crates/dbx-core/Cargo.toml
++++ b/crates/dbx-core/Cargo.toml
+@@ -45,19 +45,19 @@ sqlparser = { version = "0.62.0", features = ["visitor"] }
+ redis = { version = "0.32.2", features = ["tokio-comp", "tls-rustls", "tls-rustls-insecure", "tokio-rustls-comp", "sentinel", "cluster-async"] }
+ rustls = { version = "0.23", features = ["aws-lc-rs"] }
+ rustls-pemfile = "2.2"
+-tiberius = { version = "0.12.3", default-features = false, features = ["tds73", "chrono", "rust_decimal", "rustls", "sql-browser-tokio"] }
++tiberius = { version = "0.12.3", default-features = false, features = ["tds73", "chrono", "rust_decimal", "native-tls", "sql-browser-tokio"] }
+ reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls", "socks"] }
+ prometheus-parse = "=0.2.5"
+ futures = "0.3"
+ iana-time-zone = "0.1"
+ mongodb = "3.2.5"
+-russh = "0.60"
++russh = { version = "0.62.5", default-features = false, features = ["flate2", "aws-lc-rs"] }
+ pageant = "0.2"
+ portpicker = "0.1.1"
+ csv = "1"
+-calamine = { version = "0.30.1", features = ["dates"] }
++calamine = { version = "0.36.1", features = ["dates"] }
+ ssfmt = { version = "0.1.2", default-features = false }
+-quick-xml = "0.37"
++quick-xml = "0.41"
+ base64 = "0.22"
+ jsonwebtoken = "9"
+ aes-gcm = "0.10"
+diff --git a/crates/dbx-core/src/table_import.rs b/crates/dbx-core/src/table_import.rs
+index fc52a56ec..9df446c9e 100644
+--- a/crates/dbx-core/src/table_import.rs
++++ b/crates/dbx-core/src/table_import.rs
+@@ -11,8 +11,10 @@ use calamine::{
+     ReaderRef as CalamineReaderRef,
+ };
+ use chrono::{DateTime, NaiveDate, NaiveDateTime};
+-use quick_xml::events::{BytesStart, Event};
++use quick_xml::escape::resolve_predefined_entity;
++use quick_xml::events::{BytesRef, BytesStart, BytesText, Event};
+ use quick_xml::Reader as XmlReader;
++use quick_xml::XmlVersion;
+ use serde::{Deserialize, Serialize};
+ use sha2::{Digest, Sha256};
+ 
+@@ -1275,13 +1277,31 @@ fn xml_local_name_eq(name: &[u8], expected: &[u8]) -> bool {
+ fn xml_attr_value<R>(reader: &XmlReader<R>, element: &BytesStart<'_>, key: &[u8]) -> Option<String> {
+     element.attributes().flatten().find_map(|attr| {
+         if xml_local_name_eq(attr.key.as_ref(), key) {
+-            attr.decode_and_unescape_value(reader.decoder()).ok().map(|value| value.into_owned())
++            attr.decoded_and_normalized_value(XmlVersion::Implicit1_0, reader.decoder())
++                .ok()
++                .map(|value| value.into_owned())
+         } else {
+             None
+         }
+     })
+ }
+ 
++fn append_xlsx_xml_text(target: &mut String, text: &BytesText<'_>) -> Result<(), String> {
++    target.push_str(&text.xml10_content().map_err(|error| error.to_string())?);
++    Ok(())
++}
++
++fn append_xlsx_xml_reference(target: &mut String, reference: &BytesRef<'_>) -> Result<(), String> {
++    if let Some(character) = reference.resolve_char_ref().map_err(|error| error.to_string())? {
++        target.push(character);
++        return Ok(());
++    }
++    let name = reference.decode().map_err(|error| error.to_string())?;
++    let value = resolve_predefined_entity(&name).ok_or_else(|| format!("Unknown XML entity: &{name};"))?;
++    target.push_str(value);
++    Ok(())
++}
++
+ fn xlsx_builtin_temporal_kind(num_fmt_id: u16) -> Option<XlsxTemporalKind> {
+     match num_fmt_id {
+         14..=17 => Some(XlsxTemporalKind::Date),
+@@ -1608,7 +1628,10 @@ fn read_xlsx_shared_strings(
+                 phonetic_depth = phonetic_depth.saturating_add(1);
+             }
+             Ok(Event::Text(text)) if in_item && in_text => {
+-                current.push_str(&text.unescape().map_err(|error| error.to_string())?);
++                append_xlsx_xml_text(&mut current, &text)?;
++            }
++            Ok(Event::GeneralRef(reference)) if in_item && in_text => {
++                append_xlsx_xml_reference(&mut current, &reference)?;
+             }
+             Ok(Event::End(element)) if xml_local_name_eq(element.name().as_ref(), b"t") => {
+                 in_text = false;
+@@ -1801,7 +1824,10 @@ fn open_xlsx_shared_strings_with_control(
+                 phonetic_depth = phonetic_depth.saturating_add(1);
+             }
+             Ok(Event::Text(text)) if in_item && in_text => {
+-                current.push_str(&text.unescape().map_err(|error| error.to_string())?);
++                append_xlsx_xml_text(&mut current, &text)?;
++            }
++            Ok(Event::GeneralRef(reference)) if in_item && in_text => {
++                append_xlsx_xml_reference(&mut current, &reference)?;
+             }
+             Ok(Event::End(element)) if xml_local_name_eq(element.name().as_ref(), b"t") => {
+                 in_text = false;
+@@ -1998,10 +2024,16 @@ fn parse_xlsx_preview_file_with_options(
+                     inline_phonetic_depth = inline_phonetic_depth.saturating_add(1);
+                 }
+                 Ok(Event::Text(text)) if in_value => {
+-                    current_cell.value.push_str(&text.unescape().map_err(|error| error.to_string())?);
++                    append_xlsx_xml_text(&mut current_cell.value, &text)?;
+                 }
+                 Ok(Event::Text(text)) if in_inline_text => {
+-                    current_cell.inline_value.push_str(&text.unescape().map_err(|error| error.to_string())?);
++                    append_xlsx_xml_text(&mut current_cell.inline_value, &text)?;
++                }
++                Ok(Event::GeneralRef(reference)) if in_value => {
++                    append_xlsx_xml_reference(&mut current_cell.value, &reference)?;
++                }
++                Ok(Event::GeneralRef(reference)) if in_inline_text => {
++                    append_xlsx_xml_reference(&mut current_cell.inline_value, &reference)?;
+                 }
+                 Ok(Event::End(element)) if xml_local_name_eq(element.name().as_ref(), b"v") => {
+                     in_value = false;
+@@ -2679,10 +2711,16 @@ fn stream_xlsx_rows_to_channel_with_control(
+                 inline_phonetic_depth = inline_phonetic_depth.saturating_add(1);
+             }
+             Ok(Event::Text(text)) if in_value => {
+-                current_cell.value.push_str(&text.unescape().map_err(|error| error.to_string())?);
++                append_xlsx_xml_text(&mut current_cell.value, &text)?;
+             }
+             Ok(Event::Text(text)) if in_inline_text => {
+-                current_cell.inline_value.push_str(&text.unescape().map_err(|error| error.to_string())?);
++                append_xlsx_xml_text(&mut current_cell.inline_value, &text)?;
++            }
++            Ok(Event::GeneralRef(reference)) if in_value => {
++                append_xlsx_xml_reference(&mut current_cell.value, &reference)?;
++            }
++            Ok(Event::GeneralRef(reference)) if in_inline_text => {
++                append_xlsx_xml_reference(&mut current_cell.inline_value, &reference)?;
+             }
+             Ok(Event::End(element)) if xml_local_name_eq(element.name().as_ref(), b"v") => in_value = false,
+             Ok(Event::End(element)) if xml_local_name_eq(element.name().as_ref(), b"t") => in_inline_text = false,

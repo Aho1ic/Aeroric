@@ -1,11 +1,5 @@
 import type { CSSProperties } from "react";
-import {
-  Decoration,
-  EditorView,
-  GutterMarker,
-  WidgetType,
-  gutter,
-} from "@uiw/react-codemirror";
+import { Decoration, EditorView, GutterMarker, WidgetType, gutter } from "@uiw/react-codemirror";
 import { StreamLanguage } from "@codemirror/language";
 import type { Extension } from "@codemirror/state";
 import type { DbEndpoint, DiagnosticSeverity, GitBlameLine } from "../../types";
@@ -606,10 +600,7 @@ export const editorContextMenuItemStyle: CSSProperties = {
   cursor: "pointer",
 };
 
-export function sqliteEndpointForFile(
-  filePath: string,
-  remote?: RemoteFileContext,
-): DbEndpoint {
+export function sqliteEndpointForFile(filePath: string, remote?: RemoteFileContext): DbEndpoint {
   if (remote?.kind === "ssh") {
     return {
       kind: "ssh",

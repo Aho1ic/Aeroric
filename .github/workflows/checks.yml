@@ -1,7 +1,10 @@
 name: Checks
 
 on:
+  workflow_call:
   push:
+    branches:
+      - "**"
   pull_request:
 
 jobs:
@@ -36,6 +39,10 @@ jobs:
           git init ../dbx
           git -C ../dbx fetch --depth 1 https://github.com/t8y2/dbx.git "$DBX_REF"
           git -C ../dbx checkout --detach "$DBX_REF"
+
+      - name: Apply Aeroric DBX security patch
+        shell: bash
+        run: ./scripts/prepare-dbx.sh
 
       - name: Install Linux system dependencies
         if: runner.os == 'Linux'
@@ -84,7 +91,9 @@ jobs:
       - name: Run cargo audit
         if: runner.os == 'Linux'
         working-directory: src-tauri
-        run: cargo audit
+        # rkyv is only present in Cargo.lock as rust_decimal's disabled optional
+        # dependency; `cargo tree -i rkyv` has no active path in this build.
+        run: cargo audit --ignore RUSTSEC-2026-0235
 
       - name: Audit remote protocol
         if: runner.os == 'Linux'

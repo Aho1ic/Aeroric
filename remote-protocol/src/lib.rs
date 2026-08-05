@@ -24,7 +24,8 @@ pub enum HostToRelay {
     Register {
         v: u32,
         host_id: String,
-        /// relay 部署方通过 RELAY_TOKEN 环境变量启用的共享口令(可选)。
+        /// relay 部署方通过必填的 RELAY_TOKEN 环境变量设置的共享口令。
+        /// Option 仅用于兼容旧客户端并让 relay 明确拒绝缺失口令。
         #[serde(default, skip_serializing_if = "Option::is_none")]
         token: Option<String>,
     },

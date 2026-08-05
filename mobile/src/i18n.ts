@@ -69,6 +69,8 @@ const zh = {
 
   // 配对
   "pair.steps": "电脑端:Aeroric 设置 → 远程访问 → 启动远程服务 → 生成配对二维码",
+  "pair.trustWarning":
+    "仅配对你完全信任的电脑。配对后，本手机可读取和修改项目文件、新建或取消任务、操控 Agent 与终端，并修改 Agent 配置；已有 API Key 明文不会下发。",
   "pair.cameraDenied": "相机权限被拒绝,请在系统设置中开启,或在下方手动粘贴配对码。",
   "pair.cameraNeeded": "扫码需要相机权限",
   "pair.grantCamera": "授权相机",
@@ -199,6 +201,11 @@ const zh = {
   "agentConfig.title": "Agent 配置",
   "agentConfig.baseUrl": "接口地址",
   "agentConfig.apiKey": "API Key",
+  "agentConfig.apiKeyConfiguredPlaceholder": "已配置（留空保持不变）",
+  "agentConfig.apiKeyConfiguredHint":
+    "电脑端已有 API Key；为保护凭据，手机端不会读取明文。留空将保留原值。",
+  "agentConfig.clearApiKey": "清除已保存的 API Key",
+  "agentConfig.clearApiKeyHint": "保存后 Agent 将无法使用该凭据，除非同时输入新的 API Key。",
   "agentConfig.models": "模型列表",
   "agentConfig.modelsHint": "每行一个模型",
   "agentConfig.showKey": "显示",
@@ -297,6 +304,8 @@ const en: Record<MessageKey, string> = {
 
   "pair.steps":
     "On your computer: Aeroric Settings → Remote Access → start the server → generate the pairing QR code",
+  "pair.trustWarning":
+    "Pair only a computer you fully trust. This phone will be able to read and modify project files, create or cancel tasks, control agents and terminals, and change agent configuration. Existing API key plaintext is never sent to the phone.",
   "pair.cameraDenied":
     "Camera permission denied. Enable it in system settings, or paste the pairing code below.",
   "pair.cameraNeeded": "Camera permission is required to scan",
@@ -422,6 +431,12 @@ const en: Record<MessageKey, string> = {
   "agentConfig.title": "Agent config",
   "agentConfig.baseUrl": "Base URL",
   "agentConfig.apiKey": "API key",
+  "agentConfig.apiKeyConfiguredPlaceholder": "Configured (leave blank to keep)",
+  "agentConfig.apiKeyConfiguredHint":
+    "An API key is configured on the desktop. Its plaintext is never sent to the phone; leave this blank to keep it.",
+  "agentConfig.clearApiKey": "Clear saved API key",
+  "agentConfig.clearApiKeyHint":
+    "After saving, the agent cannot use this credential unless you enter a replacement key.",
   "agentConfig.models": "Models",
   "agentConfig.modelsHint": "One model per line",
   "agentConfig.showKey": "Show",

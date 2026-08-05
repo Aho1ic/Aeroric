@@ -69,6 +69,56 @@ describe("ProjectRail project dragging", () => {
     expect(screen.getByRole("button", { name: "Beta" })).toBeInTheDocument();
   });
 
+  it("keeps a project group collapsed when switching to one of its pinned projects", () => {
+    localStorage.setItem("aeroric:language", "en");
+    const projects = [
+      { ...project("p1", "Alpha", 0), group: "Work", pinned: true },
+      { ...project("p2", "Beta", 1), group: "Work", pinned: true },
+      { ...project("p3", "Gamma", 2), group: "Work" },
+    ];
+
+    function Harness() {
+      const [activeProjectId, setActiveProjectId] = useState("p1");
+      const [collapsedProjectGroups, setCollapsedProjectGroups] = useState<Set<string>>(new Set());
+      return (
+        <I18nProvider>
+          <ProjectRail
+            key={activeProjectId}
+            projects={projects}
+            projectGroups={["Work"]}
+            collapsedProjectGroups={collapsedProjectGroups}
+            onCollapsedProjectGroupsChange={setCollapsedProjectGroups}
+            allTasks={[]}
+            activeProjectId={activeProjectId}
+            selectedTaskId={null}
+            isNewTask={false}
+            onSwitch={(nextProject) => setActiveProjectId(nextProject.id)}
+            onOpen={vi.fn()}
+            onBack={vi.fn()}
+            onNewTask={vi.fn()}
+            onSelectTask={vi.fn()}
+            onDeleteTask={vi.fn()}
+            onToggleTaskStar={vi.fn()}
+            onRunTodo={vi.fn()}
+            themeVariant="light"
+            onToggleTheme={vi.fn()}
+            singleProjectMode
+          />
+        </I18nProvider>
+      );
+    }
+
+    render(<Harness />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Collapse project group Work" }));
+    expect(screen.queryByRole("button", { name: "Gamma" })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Beta" }));
+
+    expect(screen.getByRole("button", { name: "Expand project group Work" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Gamma" })).not.toBeInTheDocument();
+  });
+
   it("reports project rail width changes from the resize separator", () => {
     localStorage.setItem("aeroric:language", "en");
     const onProjectRailWidthChange = vi.fn();

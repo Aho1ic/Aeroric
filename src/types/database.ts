@@ -806,7 +806,12 @@ export interface SchemaDiffTableInfo {
   parent_name?: string | null;
   columns?: DbxColumnInfo[];
   indexes?: Array<{ name: string; unique?: boolean; columns: string[] }>;
-  foreign_keys?: Array<{ name: string; columns: string[]; ref_table?: string; ref_columns?: string[] }>;
+  foreign_keys?: Array<{
+    name: string;
+    columns: string[];
+    ref_table?: string;
+    ref_columns?: string[];
+  }>;
   triggers?: Array<{ name: string; sql?: string }>;
   ddl?: string | null;
 }

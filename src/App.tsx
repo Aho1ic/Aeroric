@@ -133,6 +133,7 @@ function App() {
   );
   const [projects, setProjects] = useState<Project[]>([]);
   const [projectGroups, setProjectGroups] = useState<string[]>(loadProjectGroupNames);
+  const [collapsedProjectGroups, setCollapsedProjectGroups] = useState<Set<string>>(new Set());
   const [projectRailWidth, setProjectRailWidth] = useState(
     () => loadProjectRailWidth() ?? PROJECT_RAIL_EXPANDED_WIDTH,
   );
@@ -1902,6 +1903,8 @@ function App() {
                 onReorderProjects={handleReorderProjects}
                 onToggleProjectPinned={handleToggleProjectPinned}
                 projectGroups={projectGroups}
+                collapsedProjectGroups={collapsedProjectGroups}
+                onCollapsedProjectGroupsChange={setCollapsedProjectGroups}
                 projectRailWidth={projectRailWidth}
                 onProjectRailWidthChange={handleProjectRailWidthChange}
                 onOpen={handleOpen}

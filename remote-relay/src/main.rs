@@ -7,8 +7,8 @@
 //!
 //! 配置(环境变量):
 //! - `RELAY_PORT`:监听端口,默认 6791。
-//! - `RELAY_TOKEN`:可选。设置后桌面注册必须携带相同 token(手机接入
-//!   无需 token——能否用起来取决于 E2EE 握手,relay 只做撮合)。
+//! - `RELAY_TOKEN`:必填。桌面注册必须携带相同 token(手机接入无需
+//!   token——能否用起来取决于 E2EE 握手,relay 只做撮合)。
 //!
 //! 协议见 remote-protocol crate;部署指南见仓库 docs/remote-public-access.md。
 
@@ -40,9 +40,9 @@ const CONTROL_IDLE_DISCONNECT: Duration = Duration::from_secs(75);
 
 type Ws = WebSocketStream<TcpStream>;
 
-#[derive(Clone, Default)]
+#[derive(Clone)]
 struct RelayConfig {
-    token: Option<String>,
+    token: String,
 }
 
 #[derive(Default)]
@@ -64,15 +64,23 @@ async fn main() {
         .ok()
         .and_then(|p| p.parse().ok())
         .unwrap_or(6791);
-    let token = std::env::var("RELAY_TOKEN").ok().filter(|t| !t.is_empty());
+    let token = require_relay_token(std::env::var("RELAY_TOKEN").ok())
+        .unwrap_or_else(|error| panic!("{error}"));
     let listener = TcpListener::bind(("0.0.0.0", port))
         .await
         .unwrap_or_else(|e| panic!("failed to bind 0.0.0.0:{port}: {e}"));
-    eprintln!(
-        "[relay] listening on 0.0.0.0:{port} (host auth: {})",
-        if token.is_some() { "token" } else { "open" }
-    );
+    eprintln!("[relay] listening on 0.0.0.0:{port} (host auth: token)");
     serve(listener, RelayConfig { token }).await;
+}
+
+fn require_relay_token(token: Option<String>) -> Result<String, String> {
+    token
+        .map(|token| token.trim().to_string())
+        .filter(|token| !token.is_empty())
+        .ok_or_else(|| {
+            "RELAY_TOKEN is required and must be non-empty; refusing to start an open relay"
+                .to_string()
+        })
 }
 
 async fn serve(listener: TcpListener, config: RelayConfig) {
@@ -172,7 +180,7 @@ async fn host_control(mut ws: Ws, registry: Arc<Registry>, config: RelayConfig) 
             return;
         }
     };
-    if config.token != token {
+    if token.as_deref() != Some(config.token.as_str()) {
         let _ = ws
             .send(control_text(&RelayToHost::Error {
                 message: "invalid relay token".to_string(),
@@ -192,13 +200,15 @@ async fn host_control(mut ws: Ws, registry: Arc<Registry>, config: RelayConfig) 
     }
 
     let (tx, mut rx) = mpsc::channel::<Message>(HOST_CONTROL_QUEUE_CAPACITY);
-    // 同 hostId 重复注册按「顶掉旧连接」处理:旧控制连接的 rx 发送端被覆盖后,
-    // 其循环在下一次投递失败/断连时退出,且退出清理不会误删新连接(same_channel 守卫)
-    registry
-        .hosts
-        .lock()
-        .unwrap()
-        .insert(host_id.clone(), tx.clone());
+    if !try_register_host(&registry, &host_id, tx.clone()) {
+        let _ = ws
+            .send(control_text(&RelayToHost::Error {
+                message: "host id is already registered".to_string(),
+            }))
+            .await;
+        let _ = ws.close(None).await;
+        return;
+    }
     if ws
         .send(control_text(&RelayToHost::Registered))
         .await
@@ -249,6 +259,15 @@ async fn host_control(mut ws: Ws, registry: Arc<Registry>, config: RelayConfig) 
     }
     cleanup_host(&registry, &host_id, &tx);
     eprintln!("[relay] host disconnected: {host_id}");
+}
+
+fn try_register_host(registry: &Registry, host_id: &str, tx: mpsc::Sender<Message>) -> bool {
+    let mut hosts = registry.hosts.lock().unwrap();
+    if hosts.contains_key(host_id) {
+        return false;
+    }
+    hosts.insert(host_id.to_string(), tx);
+    true
 }
 
 fn cleanup_host(registry: &Registry, host_id: &str, tx: &mpsc::Sender<Message>) {
@@ -367,6 +386,12 @@ mod tests {
         port
     }
 
+    fn test_config() -> RelayConfig {
+        RelayConfig {
+            token: "s3cret".to_string(),
+        }
+    }
+
     async fn next_msg<S>(ws: &mut WebSocketStream<S>) -> Message
     where
         S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
@@ -412,12 +437,19 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn relay_token_is_required() {
+        assert!(require_relay_token(None).is_err());
+        assert!(require_relay_token(Some("   ".to_string())).is_err());
+        assert_eq!(
+            require_relay_token(Some(" secret ".to_string())).unwrap(),
+            "secret"
+        );
+    }
+
     #[tokio::test]
     async fn relay_matches_host_and_client_and_splices_frames() {
-        let port = spawn_relay(RelayConfig {
-            token: Some("s3cret".to_string()),
-        })
-        .await;
+        let port = spawn_relay(test_config()).await;
 
         // 桌面注册
         let (mut host, _) = connect_async(format!("ws://127.0.0.1:{port}/host"))
@@ -473,10 +505,7 @@ mod tests {
 
     #[tokio::test]
     async fn wrong_token_is_rejected() {
-        let port = spawn_relay(RelayConfig {
-            token: Some("s3cret".to_string()),
-        })
-        .await;
+        let port = spawn_relay(test_config()).await;
         let (mut host, _) = connect_async(format!("ws://127.0.0.1:{port}/host"))
             .await
             .unwrap();
@@ -497,8 +526,44 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn duplicate_host_registration_is_rejected_without_replacing_the_first() {
+        let port = spawn_relay(test_config()).await;
+        let register = serde_json::to_string(&HostToRelay::Register {
+            v: RELAY_PROTOCOL_VERSION,
+            host_id: "host-1".to_string(),
+            token: Some("s3cret".to_string()),
+        })
+        .unwrap();
+
+        let (mut first, _) = connect_async(format!("ws://127.0.0.1:{port}/host"))
+            .await
+            .unwrap();
+        first.send(Message::Text(register.clone())).await.unwrap();
+        assert_eq!(
+            parse_control(&next_msg(&mut first).await),
+            RelayToHost::Registered
+        );
+
+        let (mut duplicate, _) = connect_async(format!("ws://127.0.0.1:{port}/host"))
+            .await
+            .unwrap();
+        duplicate.send(Message::Text(register)).await.unwrap();
+        let RelayToHost::Error { message } = parse_control(&next_msg(&mut duplicate).await) else {
+            panic!("expected duplicate registration error")
+        };
+        assert!(message.contains("already registered"));
+
+        let (mut client, _) = connect_async(format!("ws://127.0.0.1:{port}/connect/host-1"))
+            .await
+            .unwrap();
+        let message = parse_control(&next_msg(&mut first).await);
+        assert!(matches!(message, RelayToHost::ClientConnected { .. }));
+        let _ = client.close(None).await;
+    }
+
+    #[tokio::test]
     async fn client_to_unknown_host_is_closed() {
-        let port = spawn_relay(RelayConfig::default()).await;
+        let port = spawn_relay(test_config()).await;
         let (mut client, _) = connect_async(format!("ws://127.0.0.1:{port}/connect/ghost"))
             .await
             .unwrap();
@@ -516,7 +581,7 @@ mod tests {
 
     #[tokio::test]
     async fn forged_data_conn_id_is_dropped() {
-        let port = spawn_relay(RelayConfig::default()).await;
+        let port = spawn_relay(test_config()).await;
         let (mut data, _) = connect_async(format!("ws://127.0.0.1:{port}/data/forged"))
             .await
             .unwrap();

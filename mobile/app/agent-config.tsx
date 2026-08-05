@@ -29,6 +29,7 @@ interface Draft {
   name: string;
   baseUrl: string;
   apiKey: string;
+  clearApiKey: boolean;
   kind: AgentKind;
   bridge: boolean;
   proxy: boolean;
@@ -55,7 +56,8 @@ function toDraft(agent?: AgentConfigEntry, kind: AgentKind = "codex"): Draft {
   return {
     name: agent?.label ?? "",
     baseUrl: agent?.baseUrl ?? "",
-    apiKey: agent?.apiKey ?? "",
+    apiKey: "",
+    clearApiKey: false,
     kind: agent ? (agent.codexLike ? "codex" : "claude_code") : kind,
     bridge: Boolean(agent?.enableChatCompletionsProxy),
     proxy: Boolean(agent?.proxyEnabled),
@@ -100,6 +102,7 @@ function AgentEditor({
   setSelectedModels,
   canChangeKind,
   agentId,
+  apiKeyConfigured,
   showBridge,
   request,
   detecting,
@@ -115,6 +118,7 @@ function AgentEditor({
   setSelectedModels: Dispatch<SetStateAction<string[]>>;
   canChangeKind: boolean;
   agentId?: string;
+  apiKeyConfigured: boolean;
   showBridge: boolean;
   request: ReturnType<typeof useConnection>["request"];
   detecting: boolean;
@@ -122,17 +126,19 @@ function AgentEditor({
   modelInput: string;
   setModelInput: (value: string) => void;
 }) {
+  const hasUsableApiKey =
+    Boolean(draft.apiKey.trim()) || (Boolean(agentId) && apiKeyConfigured && !draft.clearApiKey);
+  const detectDisabled = !draft.baseUrl.trim() || !hasUsableApiKey || detecting;
+
   const detect = () => {
-    if ((!agentId && (!draft.baseUrl.trim() || !draft.apiKey.trim())) || detecting) return;
+    if (detectDisabled) return;
     setDetecting(true);
-    const promise =
-      agentId && (!draft.baseUrl.trim() || !draft.apiKey.trim())
-        ? request<{ models: string[] }>("agents.models", { agent: agentId })
-        : request<{ models: string[] }>("agentConfig.detectModels", {
-            kind: draft.kind,
-            baseUrl: draft.baseUrl.trim(),
-            apiKey: draft.apiKey.trim(),
-          });
+    const promise = request<{ models: string[] }>("agentConfig.detectModels", {
+      ...(agentId ? { id: agentId } : {}),
+      kind: draft.kind,
+      baseUrl: draft.baseUrl.trim(),
+      ...(draft.apiKey.trim() ? { apiKey: draft.apiKey.trim() } : {}),
+    });
     promise
       .then((result) => {
         const scanned = normalizeModels(result.models ?? []);
@@ -208,21 +214,42 @@ function AgentEditor({
       <TextInput
         style={styles.input}
         value={draft.apiKey}
-        onChangeText={(apiKey) => setDraft((previous) => ({ ...previous, apiKey }))}
+        onChangeText={(apiKey) =>
+          setDraft((previous) => ({
+            ...previous,
+            apiKey,
+            clearApiKey: apiKey.trim() ? false : previous.clearApiKey,
+          }))
+        }
         autoCapitalize="none"
         autoCorrect={false}
         secureTextEntry
-        placeholder="sk-…"
+        placeholder={
+          agentId && apiKeyConfigured ? t("agentConfig.apiKeyConfiguredPlaceholder") : "sk-…"
+        }
         placeholderTextColor={theme.textHint}
       />
+      {agentId && apiKeyConfigured ? (
+        <>
+          <Text style={styles.hint}>{t("agentConfig.apiKeyConfiguredHint")}</Text>
+          <ToggleRow
+            label={t("agentConfig.clearApiKey")}
+            hint={t("agentConfig.clearApiKeyHint")}
+            value={draft.clearApiKey}
+            onChange={(clearApiKey) =>
+              setDraft((previous) => ({
+                ...previous,
+                clearApiKey,
+                apiKey: clearApiKey ? "" : previous.apiKey,
+              }))
+            }
+          />
+        </>
+      ) : null}
       <View style={styles.modelActionRow}>
         <AnimatedPressable
-          style={[
-            styles.outlineButton,
-            ((!agentId && (!draft.baseUrl.trim() || !draft.apiKey.trim())) || detecting) &&
-              styles.buttonDisabled,
-          ]}
-          disabled={(!agentId && (!draft.baseUrl.trim() || !draft.apiKey.trim())) || detecting}
+          style={[styles.outlineButton, detectDisabled && styles.buttonDisabled]}
+          disabled={detectDisabled}
           onPress={detect}
         >
           {detecting ? (
@@ -380,7 +407,10 @@ export default function AgentConfigScreen() {
   const save = (agent?: AgentConfigEntry) => {
     if (saving) return;
     const models = normalizeModels(selectedModels);
-    if ((!agent && !draft.name.trim()) || models.length === 0) {
+    if (
+      (!agent && (!draft.name.trim() || !draft.baseUrl.trim() || !draft.apiKey.trim())) ||
+      models.length === 0
+    ) {
       Alert.alert(t("agentConfig.createFailed"), t("newTask.modelRequired"));
       return;
     }
@@ -389,7 +419,8 @@ export default function AgentConfigScreen() {
       ...(agent ? { id: agent.id } : {}),
       ...(agent ? {} : { label: draft.name.trim(), kind: draft.kind }),
       baseUrl: draft.baseUrl.trim(),
-      apiKey: draft.apiKey.trim(),
+      ...(draft.apiKey.trim() ? { apiKey: draft.apiKey.trim() } : {}),
+      ...(agent && draft.clearApiKey ? { clearApiKey: true } : {}),
       models,
       enableChatCompletionsProxy: draft.kind === "codex" && draft.bridge,
       proxyEnabled: draft.proxy,
@@ -420,6 +451,7 @@ export default function AgentConfigScreen() {
         setSelectedModels={setSelectedModels}
         canChangeKind={!agent}
         agentId={agent?.id}
+        apiKeyConfigured={Boolean(agent?.apiKeyConfigured)}
         showBridge={agent?.id !== "codex"}
         request={request}
         detecting={detecting}

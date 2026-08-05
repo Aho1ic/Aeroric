@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import os
 import sys
 import uuid
@@ -24,6 +25,15 @@ from urllib.request import Request, urlopen
 
 
 Json = dict[str, Any]
+
+# Configure logging to stderr so it can be captured
+LOG_LEVEL = os.environ.get("AERORIC_PROXY_LOG_LEVEL", "WARNING").upper()
+logging.basicConfig(
+    level=getattr(logging, LOG_LEVEL, logging.WARNING),
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    stream=sys.stderr,
+)
+logger = logging.getLogger("codex-chat-proxy")
 
 
 def text_from_content(value: Any) -> str:
@@ -656,6 +666,7 @@ class ResponseStream:
             return
         self.finished = True
         self.start()
+        logger.error("response.failed: type=%s message=%s", error_type, message)
         self.send(
             "response.failed",
             {
@@ -676,6 +687,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
         # Keep model discovery usable through the bridge as well.
         upstream = os.environ.get("AERORIC_UPSTREAM_BASE_URL", "")
         target = upstream_path(upstream, self.path)
+        logger.info("GET %s -> %s", self.path, target)
         try:
             response = urlopen(Request(target, headers=self.forward_headers()), timeout=30)
             payload = response.read()
@@ -685,6 +697,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(payload)
         except Exception as error:
+            logger.error("GET error: %s", error)
             self.send_error(502, str(error))
 
     def do_POST(self) -> None:
@@ -716,9 +729,11 @@ class ProxyHandler(BaseHTTPRequestHandler):
         self.send_header("Connection", "close")
         self.end_headers()
 
+        logger.info("Proxying request to %s (model=%s)", target, body.get("model", ""))
         try:
             with urlopen(request, timeout=300) as upstream:
                 content_type = upstream.headers.get("Content-Type", "")
+                logger.debug("Upstream response: status=%d content-type=%s", upstream.status, content_type)
                 if "text/event-stream" in content_type:
                     for _event, data in sse_events(upstream):
                         if data.strip() == "[DONE]":
@@ -727,15 +742,14 @@ class ProxyHandler(BaseHTTPRequestHandler):
                         try:
                             chunk = json.loads(data)
                         except json.JSONDecodeError:
+                            logger.warning("Failed to parse SSE data: %s", data[:200])
                             continue
                         if isinstance(chunk, dict):
                             if "error" in chunk:
                                 error = chunk["error"]
-                                stream.failed(
-                                    error.get("message", str(error))
-                                    if isinstance(error, dict)
-                                    else str(error)
-                                )
+                                error_msg = error.get("message", str(error)) if isinstance(error, dict) else str(error)
+                                logger.error("Upstream SSE error: %s", error_msg)
+                                stream.failed(error_msg)
                                 return
                             stream.handle_chunk(chunk)
                     stream.finish()
@@ -759,10 +773,13 @@ class ProxyHandler(BaseHTTPRequestHandler):
                     stream.finish()
         except HTTPError as error:
             details = error.read(2048).decode("utf-8", "replace")
+            logger.error("Upstream HTTP error %d: %s", error.code, details[:500])
             stream.failed(f"upstream HTTP {error.code}: {details}")
         except (URLError, TimeoutError, BrokenPipeError, ConnectionError) as error:
+            logger.error("Upstream connection error: %s", error)
             stream.failed(f"upstream connection failed: {error}", "connection_error")
         except Exception as error:
+            logger.error("Unexpected error: %s", error, exc_info=True)
             stream.failed(str(error))
 
     def forward_headers(self, extra: Optional[Json] = None) -> dict[str, str]:

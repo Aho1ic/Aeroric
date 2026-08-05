@@ -10,7 +10,7 @@ export const zh: Record<string, string> = {
   "appSettings.proxy": "代理",
   "appSettings.remote": "远程访问",
   "appSettings.remote.description":
-    "将手机与 Aeroric 配对，即可远程查看任务状态、终端输出并操控 Agent。服务默认关闭，仅接受已配对设备。",
+    "仅配对你完全信任的设备。配对后的手机可读取和修改项目文件、新建或取消任务、操控 Agent 与终端，并修改 Agent 配置；已有 API Key 明文不会回传手机。",
   "appSettings.remote.loading": "正在读取远程访问状态…",
   "appSettings.remote.loadError": "无法加载远程访问状态：{message}",
   "appSettings.remote.retry": "重试",
@@ -45,13 +45,15 @@ export const zh: Record<string, string> = {
   "appSettings.remote.onlineCount": "{count} 台设备在线",
   "appSettings.remote.onlineConnections": "{count} 个在线连接",
   "appSettings.remote.pairing": "配对手机",
-  "appSettings.remote.pairingDescription": "生成一次性二维码，使用 Aeroric 手机 App 扫码连接。",
+  "appSettings.remote.pairingDescription":
+    "为完全信任的设备生成一次性二维码。配对会授予项目、任务、终端、Agent 与 Agent 配置的远程控制权限。",
   "appSettings.remote.createInvite": "生成配对二维码",
   "appSettings.remote.regenerateInvite": "重新生成二维码",
   "appSettings.remote.generatingInvite": "正在生成…",
   "appSettings.remote.inviteGenerated": "配对二维码已生成",
   "appSettings.remote.pairingNeedsServer": "先启动远程服务,才能生成配对码。",
-  "appSettings.remote.inviteHint": "使用 Aeroric 手机 App 扫码。配对码仅单次有效，10 分钟后过期。",
+  "appSettings.remote.inviteHint":
+    "仅使用你本人控制且信任的手机扫码。配对码仅单次有效，10 分钟后过期。",
   "appSettings.remote.inviteExpiresIn": "{time} 后过期",
   "appSettings.remote.inviteExpired": "此配对二维码已过期。",
   "appSettings.remote.copyPairingLink": "复制配对链接",
@@ -80,9 +82,10 @@ export const zh: Record<string, string> = {
   "appSettings.remote.publicAccessHint":
     "通过自托管 Relay 或自有隧道（Tailscale、frp、cloudflared）让手机在蜂窝网络下连回本机。全链路端到端加密，Relay 只转发密文。详见 docs/remote-public-access.md。",
   "appSettings.remote.relayUrl": "Relay 地址",
-  "appSettings.remote.relayUrlHint": "自托管 Relay 的基址（ws:// 或 wss://），留空表示不使用。",
+  "appSettings.remote.relayUrlHint":
+    "远程 Relay 必须使用 wss:// 基址；仅本机开发允许 ws:// localhost。",
   "appSettings.remote.relayToken": "Relay 口令",
-  "appSettings.remote.relayTokenHint": "Relay 部署时通过 RELAY_TOKEN 设置的共享口令（可选）。",
+  "appSettings.remote.relayTokenHint": "Relay 部署时通过 RELAY_TOKEN 设置的必填共享口令。",
   "appSettings.remote.publicEndpoints": "自定义公网地址",
   "appSettings.remote.publicEndpointsHint":
     "每行一个 ws://… 或 wss://… 地址（如 Tailscale IP、frp / cloudflared 隧道），会写入新生成的配对二维码。",

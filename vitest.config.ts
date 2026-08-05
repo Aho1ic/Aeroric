@@ -20,6 +20,12 @@ export default defineConfig({
       reporter: ["text", "lcov"],
       include: ["src/**/*.{ts,tsx}"],
       exclude: ["src/test/**", "src/vite-env.d.ts", "src/styles.ts"],
+      thresholds: {
+        statements: 60,
+        branches: 55,
+        functions: 60,
+        lines: 60,
+      },
     },
   },
 });

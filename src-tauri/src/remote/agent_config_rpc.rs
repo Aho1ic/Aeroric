@@ -1,9 +1,8 @@
 //! Agent 配置的远程读写 RPC(手机端「Agent 配置」页)。
 //!
-//! ⚠️ 安全说明:本模块**刻意**放宽了 `tasks_rpc::agents_list` /
-//! `agents_models` 的「绝不回传 base_url / api_key」约定 —— 这是用户明确要求的
-//! 能力(手机上远程改 agent 接入配置)。凭据只在 E2EE 通道内传输,且只对已配对
-//! 并通过 auth 的设备可见;手机端展示层默认对 API Key 掩码。
+//! 安全说明:已配对设备可以写入新的 API Key，但 `agentConfig.list`
+//! 永不回传已有明文凭据。列表只返回 `apiKeyConfigured`;保存时缺失或
+//! 空 `apiKey` 表示保留原值，清除必须显式发送 `clearApiKey=true`。
 //!
 //! 自定义 profile 写入统一走
 //! `crate::app_settings::save_custom_agent_profile`,由它负责校验、codex
@@ -35,7 +34,7 @@ fn profile_view(profile: &CustomAgentProfile, proxy_enabled: bool) -> Value {
         "codexLike": profile.codex_like,
         "editable": true,
         "baseUrl": profile.base_url,
-        "apiKey": profile.api_key,
+        "apiKeyConfigured": !profile.api_key.trim().is_empty(),
         "models": profile.models,
         "enable1mContext": profile.enable_1m_context,
         "enableChatCompletionsProxy": profile.enable_chat_completions_proxy,
@@ -43,7 +42,7 @@ fn profile_view(profile: &CustomAgentProfile, proxy_enabled: bool) -> Value {
     })
 }
 
-/// RPC `agentConfig.list`:内置和自定义 profile 都回传可编辑的连接字段。
+/// RPC `agentConfig.list`:回传可编辑字段，但不回传已有 API Key。
 pub(crate) async fn agent_config_list() -> Result<Value, String> {
     tauri::async_runtime::spawn_blocking(|| {
         let settings = crate::app_settings::load_settings_internal();
@@ -59,7 +58,7 @@ pub(crate) async fn agent_config_list() -> Result<Value, String> {
                 "codexLike": codex_like,
                 "editable": true,
                 "baseUrl": credentials.base_url,
-                "apiKey": credentials.api_key,
+                "apiKeyConfigured": !credentials.api_key.trim().is_empty(),
                 "models": credentials.models,
                 "enable1mContext": credentials.enable_1m_context,
                 "proxyEnabled": settings.agent_proxy_enabled.get(id).copied().unwrap_or(false),
@@ -169,6 +168,14 @@ fn setup_id(label: &str, requested: Option<String>, kind: &AgentSetupKind) -> St
     format!("{id}_{suffix}")
 }
 
+fn apply_api_key_update(current: &mut String, api_key: Option<String>, clear: bool) {
+    if clear {
+        current.clear();
+    } else if let Some(api_key) = api_key.filter(|value| !value.is_empty()) {
+        *current = api_key;
+    }
+}
+
 /// RPC `agentConfig.save`:更新内置或自定义 agent 的接入字段、代理和模型列表。
 pub(crate) async fn agent_config_save(params: Value) -> Result<Value, String> {
     let id = str_param(&params, "id")?;
@@ -177,6 +184,10 @@ pub(crate) async fn agent_config_save(params: Value) -> Result<Value, String> {
     }
     let base_url = text_param(&params, "baseUrl", MAX_BASE_URL_LEN)?;
     let api_key = text_param(&params, "apiKey", MAX_API_KEY_LEN)?;
+    let clear_api_key = bool_param(&params, "clearApiKey")?.unwrap_or(false);
+    if clear_api_key && api_key.as_deref().is_some_and(|value| !value.is_empty()) {
+        return Err("apiKey and clearApiKey cannot be used together".to_string());
+    }
     let models = models_param(&params)?;
     let enable_1m_context = bool_param(&params, "enable1mContext")?;
     let enable_chat_completions_proxy = bool_param(&params, "enableChatCompletionsProxy")?;
@@ -195,9 +206,7 @@ pub(crate) async fn agent_config_save(params: Value) -> Result<Value, String> {
         if let Some(value) = base_url {
             credentials.base_url = value;
         }
-        if let Some(value) = api_key {
-            credentials.api_key = value;
-        }
+        apply_api_key_update(&mut credentials.api_key, api_key, clear_api_key);
         if let Some(value) = models {
             credentials.models = value;
         }
@@ -236,9 +245,7 @@ pub(crate) async fn agent_config_save(params: Value) -> Result<Value, String> {
     if let Some(base_url) = base_url {
         profile.base_url = base_url;
     }
-    if let Some(api_key) = api_key {
-        profile.api_key = api_key;
-    }
+    apply_api_key_update(&mut profile.api_key, api_key, clear_api_key);
     if let Some(models) = models {
         profile.models = models;
     }
@@ -270,15 +277,67 @@ pub(crate) async fn agent_config_save(params: Value) -> Result<Value, String> {
 }
 
 pub(crate) async fn agent_config_detect_models(params: Value) -> Result<Value, String> {
-    let kind = kind_param(&params)?;
-    let base_url = text_param(&params, "baseUrl", MAX_BASE_URL_LEN)?.unwrap_or_default();
-    let api_key = text_param(&params, "apiKey", MAX_API_KEY_LEN)?.unwrap_or_default();
+    let id = text_param(&params, "id", MAX_ID_LEN)?.filter(|value| !value.is_empty());
+    let mut kind = params
+        .get("kind")
+        .map(|_| kind_param(&params))
+        .transpose()?;
+    let mut base_url = text_param(&params, "baseUrl", MAX_BASE_URL_LEN)?
+        .filter(|value| !value.is_empty())
+        .unwrap_or_default();
+    let mut api_key = text_param(&params, "apiKey", MAX_API_KEY_LEN)?
+        .filter(|value| !value.is_empty())
+        .unwrap_or_default();
+
+    if let Some(id) = id {
+        let settings =
+            tauri::async_runtime::spawn_blocking(crate::app_settings::load_settings_internal)
+                .await
+                .map_err(|error| error.to_string())?;
+        if matches!(id.as_str(), "claude" | "codex") {
+            let credentials = settings
+                .builtin_agent_credentials
+                .get(&id)
+                .cloned()
+                .unwrap_or_default();
+            kind.get_or_insert(if id == "codex" {
+                AgentSetupKind::Codex
+            } else {
+                AgentSetupKind::ClaudeCode
+            });
+            if base_url.is_empty() {
+                base_url = credentials.base_url;
+            }
+            if api_key.is_empty() {
+                api_key = credentials.api_key;
+            }
+        } else {
+            let profile = settings
+                .custom_agents
+                .iter()
+                .find(|profile| profile.id == id)
+                .ok_or_else(|| format!("Agent not found: {id}"))?;
+            kind.get_or_insert(if profile.codex_like {
+                AgentSetupKind::Codex
+            } else {
+                AgentSetupKind::ClaudeCode
+            });
+            if base_url.is_empty() {
+                base_url = profile.base_url.clone();
+            }
+            if api_key.is_empty() {
+                api_key = profile.api_key.clone();
+            }
+        }
+    }
+
+    let kind = kind.ok_or_else(|| "Missing param: kind".to_string())?;
     if base_url.trim().is_empty() || api_key.trim().is_empty() {
         return Err("Base URL and API key are required".to_string());
     }
     let models =
         crate::app_settings::detect_agent_models_for_remote(kind, base_url, api_key).await?;
-    Ok(json!({ "models": models.models, "balance": models.balance }))
+    Ok(json!({ "models": models.models }))
 }
 
 pub(crate) async fn agent_config_create(params: Value) -> Result<Value, String> {
@@ -351,5 +410,40 @@ mod tests {
     fn models_param_rejects_overlong_model_name() {
         let long = "m".repeat(MAX_MODEL_LEN + 1);
         assert!(models_param(&json!({ "models": [long] })).is_err());
+    }
+
+    #[test]
+    fn profile_view_reports_key_presence_without_serializing_the_secret() {
+        let profile = CustomAgentProfile {
+            id: "work".to_string(),
+            label: "Work".to_string(),
+            path: "/tmp/work".to_string(),
+            codex_like: true,
+            config_lang: "shellscript".to_string(),
+            base_url: "https://api.example.test".to_string(),
+            api_key: "secret-value".to_string(),
+            models: vec!["model".to_string()],
+            enable_1m_context: false,
+            enable_chat_completions_proxy: false,
+            username: String::new(),
+            password: String::new(),
+        };
+        let view = profile_view(&profile, false);
+        assert_eq!(view["apiKeyConfigured"], true);
+        assert!(view.get("apiKey").is_none());
+        assert!(!view.to_string().contains("secret-value"));
+    }
+
+    #[test]
+    fn api_key_updates_require_a_new_value_or_explicit_clear() {
+        let mut current = "keep-me".to_string();
+        apply_api_key_update(&mut current, None, false);
+        assert_eq!(current, "keep-me");
+        apply_api_key_update(&mut current, Some(String::new()), false);
+        assert_eq!(current, "keep-me");
+        apply_api_key_update(&mut current, Some("replacement".to_string()), false);
+        assert_eq!(current, "replacement");
+        apply_api_key_update(&mut current, None, true);
+        assert!(current.is_empty());
     }
 }

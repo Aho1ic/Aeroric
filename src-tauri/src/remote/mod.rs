@@ -39,8 +39,11 @@ use base64::Engine;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tauri::{AppHandle, Manager, Runtime, State};
+use url::{Host, Url};
 
-use crate::storage::{aeroric_dir, atomic_write_private, ensure_private_file_permissions};
+use crate::storage::{
+    aeroric_dir, atomic_write_private, ensure_private_dir, ensure_private_file_permissions,
+};
 use auth::AuthStore;
 use event_log::EventLog;
 use server::{ClientRegistry, ListenerScope, ServerHandle};
@@ -87,6 +90,50 @@ fn config_path() -> Result<std::path::PathBuf, String> {
     Ok(aeroric_dir()?.join("remote-config.json"))
 }
 
+fn normalize_ws_endpoint(
+    value: &str,
+    label: &str,
+    allow_non_loopback_ws: bool,
+) -> Result<String, String> {
+    let value = value.trim();
+    let url = Url::parse(value).map_err(|_| format!("{label} must be a valid WebSocket URL"))?;
+    if !url.username().is_empty() || url.password().is_some() {
+        return Err(format!("{label} must not contain embedded credentials"));
+    }
+    if url.query().is_some() || url.fragment().is_some() {
+        return Err(format!("{label} must not contain a query or fragment"));
+    }
+    let host = url
+        .host()
+        .ok_or_else(|| format!("{label} must include a host"))?;
+    let loopback = match host {
+        Host::Domain(domain) => domain.eq_ignore_ascii_case("localhost"),
+        Host::Ipv4(address) => address.is_loopback(),
+        Host::Ipv6(address) => address.is_loopback(),
+    };
+    match url.scheme() {
+        "wss" => {}
+        "ws" if allow_non_loopback_ws || loopback => {}
+        "ws" => {
+            return Err(format!(
+                "{label} must use wss:// unless it connects to localhost"
+            ));
+        }
+        _ => return Err(format!("{label} must use ws:// or wss://")),
+    }
+    Ok(url.as_str().trim_end_matches('/').to_string())
+}
+
+fn normalize_relay_url(value: &str) -> Result<String, String> {
+    normalize_ws_endpoint(value, "Relay URL", false)
+}
+
+fn normalize_public_endpoint(value: &str) -> Result<String, String> {
+    // Direct endpoints carry the application's E2EE protocol and may
+    // intentionally be private ws:// LAN/Tailscale addresses.
+    normalize_ws_endpoint(value, "Endpoint", true)
+}
+
 fn load_config() -> RemoteConfig {
     let Ok(path) = config_path() else {
         return RemoteConfig::default();
@@ -95,13 +142,40 @@ fn load_config() -> RemoteConfig {
         return RemoteConfig::default();
     };
     let _ = ensure_private_file_permissions(&path);
-    serde_json::from_str(&raw).unwrap_or_default()
+    let mut config = serde_json::from_str::<RemoteConfig>(&raw).unwrap_or_default();
+    let relay_valid = config
+        .relay_url
+        .as_deref()
+        .map(normalize_relay_url)
+        .transpose()
+        .ok()
+        .flatten();
+    let relay_token = config
+        .relay_token
+        .as_deref()
+        .map(str::trim)
+        .filter(|token| !token.is_empty())
+        .map(str::to_string);
+    if config.relay_url.is_some() && (relay_valid.is_none() || relay_token.is_none()) {
+        eprintln!("[remote] ignoring an insecure relay URL or a relay without a token");
+        config.relay_url = None;
+        config.relay_token = None;
+    } else {
+        config.relay_url = relay_valid;
+        config.relay_token = relay_token;
+    }
+    config.public_endpoints = config
+        .public_endpoints
+        .into_iter()
+        .filter_map(|endpoint| normalize_public_endpoint(&endpoint).ok())
+        .collect();
+    config
 }
 
 fn save_config(config: &RemoteConfig) -> Result<(), String> {
     let path = config_path()?;
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        ensure_private_dir(parent)?;
     }
     let raw = serde_json::to_string_pretty(config).map_err(|e| e.to_string())?;
     atomic_write_private(&path, &raw)
@@ -632,47 +706,44 @@ pub async fn remote_update_config<R: Runtime>(
     public_endpoints: Option<Vec<String>>,
 ) -> Result<RemoteStatus, String> {
     let _lifecycle = state.lifecycle.lock().await;
-    fn valid_ws_url(url: &str) -> bool {
-        url.starts_with("ws://") || url.starts_with("wss://")
-    }
     let was_running;
     {
         let mut cfg = state.config.lock();
-        let relay_url = relay_url.map(|u| u.trim().trim_end_matches('/').to_string());
+        let mut next = cfg.clone();
+        let relay_url = relay_url.map(|url| url.trim().to_string());
         match relay_url {
-            Some(url) if url.is_empty() => cfg.relay_url = None,
+            Some(url) if url.is_empty() => {
+                next.relay_url = None;
+                next.relay_token = None;
+            }
             Some(url) => {
-                if !valid_ws_url(&url) {
-                    return Err("Relay URL must start with ws:// or wss://".to_string());
-                }
-                cfg.relay_url = Some(url);
+                next.relay_url = Some(normalize_relay_url(&url)?);
             }
             None => {}
         }
         if let Some(token) = relay_token {
             let token = token.trim().to_string();
-            cfg.relay_token = (!token.is_empty()).then_some(token);
+            next.relay_token = (!token.is_empty()).then_some(token);
         }
         if let Some(endpoints) = public_endpoints {
             let mut cleaned = Vec::new();
             for endpoint in endpoints {
-                let endpoint = endpoint.trim().trim_end_matches('/').to_string();
-                if endpoint.is_empty() {
+                if endpoint.trim().is_empty() {
                     continue;
                 }
-                if !valid_ws_url(&endpoint) {
-                    return Err(format!(
-                        "Endpoint must start with ws:// or wss://: {endpoint}"
-                    ));
-                }
+                let endpoint = normalize_public_endpoint(&endpoint)?;
                 if !cleaned.contains(&endpoint) {
                     cleaned.push(endpoint);
                 }
             }
-            cfg.public_endpoints = cleaned;
+            next.public_endpoints = cleaned;
         }
-        save_config(&cfg)?;
-        was_running = cfg.enabled;
+        if next.relay_url.is_some() && next.relay_token.is_none() {
+            return Err("Relay token is required when a relay URL is configured".to_string());
+        }
+        save_config(&next)?;
+        was_running = next.enabled;
+        *cfg = next;
     }
     // relay 生命周期挂在服务上:重启使新配置生效
     if was_running {
@@ -803,7 +874,10 @@ async fn create_invite_for_addresses_locked<R: Runtime>(
 
 #[cfg(test)]
 mod address_tests {
-    use super::{address_priority, selected_lan_ip, RemoteNetworkAddress};
+    use super::{
+        address_priority, normalize_public_endpoint, normalize_relay_url, selected_lan_ip,
+        RemoteNetworkAddress,
+    };
     use std::net::Ipv4Addr;
 
     fn address(interface_name: &str, ip: &str) -> RemoteNetworkAddress {
@@ -835,6 +909,35 @@ mod address_tests {
         assert_eq!(
             selected_lan_ip(Some("198.18.0.1"), &addresses).as_deref(),
             Some("192.168.1.10")
+        );
+    }
+
+    #[test]
+    fn relay_urls_require_tls_except_on_loopback() {
+        assert_eq!(
+            normalize_relay_url("wss://relay.example.test/").unwrap(),
+            "wss://relay.example.test"
+        );
+        assert!(normalize_relay_url("ws://relay.example.test").is_err());
+        assert!(normalize_relay_url("ws://192.168.1.2:6791").is_err());
+        assert_eq!(
+            normalize_relay_url("ws://127.0.0.1:6791/").unwrap(),
+            "ws://127.0.0.1:6791"
+        );
+        assert_eq!(
+            normalize_relay_url("ws://[::1]:6791").unwrap(),
+            "ws://[::1]:6791"
+        );
+    }
+
+    #[test]
+    fn websocket_urls_reject_credentials_queries_and_invalid_schemes() {
+        assert!(normalize_relay_url("wss://user:secret@relay.example.test").is_err());
+        assert!(normalize_relay_url("wss://relay.example.test?token=secret").is_err());
+        assert!(normalize_relay_url("https://relay.example.test").is_err());
+        assert_eq!(
+            normalize_public_endpoint("ws://100.64.0.2:6790/").unwrap(),
+            "ws://100.64.0.2:6790"
         );
     }
 }

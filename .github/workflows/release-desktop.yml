@@ -14,6 +14,12 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  quality-gate:
+    name: Quality gate
+    uses: ./.github/workflows/checks.yml
+    permissions:
+      contents: read
+
   verify-version:
     name: Verify version consistency
     runs-on: ubuntu-latest
@@ -36,7 +42,9 @@ jobs:
 
   build:
     name: Build ${{ matrix.name }}
-    needs: verify-version
+    needs:
+      - quality-gate
+      - verify-version
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -86,6 +94,10 @@ jobs:
           git -C ../dbx fetch --depth 1 https://github.com/t8y2/dbx.git "$DBX_REF"
           git -C ../dbx checkout --detach "$DBX_REF"
 
+      - name: Apply Aeroric DBX security patch
+        shell: bash
+        run: ./scripts/prepare-dbx.sh
+
       - name: Install Linux system dependencies
         if: runner.os == 'Linux'
         run: |
@@ -124,6 +136,108 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile --ignore-scripts
 
+      - name: Require release signing credentials
+        shell: bash
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [[ "${{ runner.os }}" == "macOS" ]]; then
+            for name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID KEYCHAIN_PASSWORD; do
+              if [[ -z "${!name}" ]]; then
+                echo "::error::Required macOS signing secret is missing: $name"
+                exit 1
+              fi
+            done
+          elif [[ "${{ runner.os }}" == "Windows" ]]; then
+            for name in WINDOWS_CERTIFICATE WINDOWS_CERTIFICATE_PASSWORD; do
+              if [[ -z "${!name}" ]]; then
+                echo "::error::Required Windows signing secret is missing: $name"
+                exit 1
+              fi
+            done
+          fi
+
+      - name: Import Apple Developer ID certificate
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          set -euo pipefail
+          certificate_path="$RUNNER_TEMP/aeroric-release.p12"
+          keychain_path="$RUNNER_TEMP/aeroric-release.keychain-db"
+          CERTIFICATE_PATH="$certificate_path" python3 - <<'PY'
+          import base64
+          import os
+          from pathlib import Path
+
+          encoded = "".join(os.environ["APPLE_CERTIFICATE"].split())
+          Path(os.environ["CERTIFICATE_PATH"]).write_bytes(base64.b64decode(encoded))
+          PY
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$keychain_path"
+          security set-keychain-settings -lut 21600 "$keychain_path"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$keychain_path"
+          security import "$certificate_path" \
+            -P "$APPLE_CERTIFICATE_PASSWORD" \
+            -A \
+            -t cert \
+            -f pkcs12 \
+            -k "$keychain_path"
+          security set-key-partition-list \
+            -S apple-tool:,apple:,codesign: \
+            -s \
+            -k "$KEYCHAIN_PASSWORD" \
+            "$keychain_path"
+          security list-keychains -d user -s "$keychain_path"
+          identity="$(
+            security find-identity -v -p codesigning "$keychain_path" |
+              sed -n 's/.*\"\\(Developer ID Application:.*\\)\"/\\1/p' |
+              head -n 1
+          )"
+          if [[ -z "$identity" ]]; then
+            echo "::error::No Developer ID Application identity was found in APPLE_CERTIFICATE"
+            exit 1
+          fi
+          echo "APPLE_SIGNING_IDENTITY=$identity" >> "$GITHUB_ENV"
+          echo "APPLE_KEYCHAIN_PATH=$keychain_path" >> "$GITHUB_ENV"
+
+      - name: Import Windows code-signing certificate
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $certificatePath = Join-Path $env:RUNNER_TEMP "aeroric-release.pfx"
+          $certificateBytes = [Convert]::FromBase64String(
+            ($env:WINDOWS_CERTIFICATE -replace "\s", "")
+          )
+          [IO.File]::WriteAllBytes($certificatePath, $certificateBytes)
+          $securePassword = ConvertTo-SecureString `
+            -String $env:WINDOWS_CERTIFICATE_PASSWORD `
+            -Force `
+            -AsPlainText
+          $certificate = Import-PfxCertificate `
+            -FilePath $certificatePath `
+            -CertStoreLocation Cert:\CurrentUser\My `
+            -Password $securePassword
+          if (-not $certificate.HasPrivateKey) {
+            throw "The imported Windows certificate does not contain a private key."
+          }
+          "WINDOWS_CERTIFICATE_THUMBPRINT=$($certificate.Thumbprint)" |
+            Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
       - name: Prepare Windows MSI bundle version
         if: runner.os == 'Windows'
         shell: bash
@@ -148,13 +262,29 @@ jobs:
             bundle_version="${base_version}-${numeric_value}"
           fi
 
-          printf '{"version":"%s"}\n' "$bundle_version" > tauri.windows-release.json
+          timestamp_url="${WINDOWS_TIMESTAMP_URL:-http://timestamp.digicert.com}"
+          jq -n \
+            --arg version "$bundle_version" \
+            --arg thumbprint "$WINDOWS_CERTIFICATE_THUMBPRINT" \
+            --arg timestampUrl "$timestamp_url" \
+            '{
+              version: $version,
+              bundle: {
+                windows: {
+                  certificateThumbprint: $thumbprint,
+                  digestAlgorithm: "sha256",
+                  timestampUrl: $timestampUrl
+                }
+              }
+            }' > tauri.windows-release.json
           env_file="$GITHUB_ENV"
           if command -v cygpath >/dev/null 2>&1; then
             env_file="$(cygpath --unix "$GITHUB_ENV")"
           fi
           echo "TAURI_RELEASE_VERSION=$version" >> "$env_file"
           echo "TAURI_WINDOWS_BUNDLE_VERSION=$bundle_version" >> "$env_file"
+        env:
+          WINDOWS_TIMESTAMP_URL: ${{ vars.WINDOWS_TIMESTAMP_URL }}
 
       - name: Build ${{ matrix.name }} (Windows)
         if: runner.os == 'Windows'
@@ -185,9 +315,66 @@ jobs:
           done
           rm -f tauri.windows-release.json
 
-      - name: Build ${{ matrix.name }} (non-Windows)
-        if: runner.os != 'Windows'
+      - name: Build ${{ matrix.name }} (macOS, signed and notarized)
+        if: runner.os == 'macOS'
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: pnpm tauri build --target ${{ matrix.target }} ${{ matrix.bundle_args }} -- --locked
+
+      - name: Build ${{ matrix.name }} (Linux)
+        if: runner.os == 'Linux'
+        run: pnpm tauri build --target ${{ matrix.target }} ${{ matrix.bundle_args }} -- --locked
+
+      - name: Verify Windows installer signatures
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $bundleRoot = "src-tauri/target/${{ matrix.target }}/release/bundle"
+          $artifacts = @(
+            Get-ChildItem "$bundleRoot/nsis" -Filter *.exe -File
+            Get-ChildItem "$bundleRoot/msi" -Filter *.msi -File
+          )
+          if ($artifacts.Count -ne 2) {
+            throw "Expected one signed NSIS installer and one signed MSI; found $($artifacts.Count)."
+          }
+          foreach ($artifact in $artifacts) {
+            $signature = Get-AuthenticodeSignature -FilePath $artifact.FullName
+            if ($signature.Status -ne "Valid") {
+              throw "Invalid Authenticode signature on $($artifact.Name): $($signature.Status)"
+            }
+            Write-Host "Verified Authenticode signature: $($artifact.Name)"
+          }
+          "windows signatures verified" |
+            Out-File "$bundleRoot/SIGNATURES_VERIFIED-${{ matrix.artifact_name }}.txt" -Encoding utf8
+
+      - name: Verify macOS signature and notarization ticket
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          bundle_root="src-tauri/target/${{ matrix.target }}/release/bundle"
+          app_path="$bundle_root/macos/Aeroric.app"
+          dmg_path="$(find "$bundle_root/dmg" -maxdepth 1 -type f -name '*.dmg' -print -quit)"
+          if [[ ! -d "$app_path" || -z "$dmg_path" ]]; then
+            echo "::error::Expected signed app bundle and DMG were not produced"
+            exit 1
+          fi
+          codesign --verify --deep --strict --verbose=2 "$app_path"
+          spctl --assess --type execute --verbose=2 "$app_path"
+          xcrun stapler validate "$dmg_path"
+          printf 'macOS signature and notarization verified\n' \
+            > "$bundle_root/SIGNATURES_VERIFIED-${{ matrix.artifact_name }}.txt"
+
+      - name: Record Linux signing policy
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          bundle_root="src-tauri/target/${{ matrix.target }}/release/bundle"
+          printf 'Linux package signing is not configured; package checksums are verified at release.\n' \
+            > "$bundle_root/SIGNATURES_VERIFIED-${{ matrix.artifact_name }}.txt"
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v7
@@ -200,6 +387,7 @@ jobs:
             src-tauri/target/${{ matrix.target }}/release/bundle/msi/*.msi
             src-tauri/target/${{ matrix.target }}/release/bundle/deb/*.deb
             src-tauri/target/${{ matrix.target }}/release/bundle/rpm/*.rpm
+            src-tauri/target/${{ matrix.target }}/release/bundle/SIGNATURES_VERIFIED-*.txt
 
   release:
     name: Create GitHub Release
@@ -243,8 +431,21 @@ jobs:
             "Aeroric_${VERSION}_x64.dmg"
             "Aeroric_${VERSION}_x64_en-US.msi"
           )
+          signature_markers=(
+            "SIGNATURES_VERIFIED-linux-x86_64.txt"
+            "SIGNATURES_VERIFIED-macos-arm64.txt"
+            "SIGNATURES_VERIFIED-macos-x86_64.txt"
+            "SIGNATURES_VERIFIED-windows-arm64.txt"
+            "SIGNATURES_VERIFIED-windows-x86_64.txt"
+          )
 
           missing=0
+          for marker in "${signature_markers[@]}"; do
+            if [[ ! -f "release-artifacts/${marker}" ]]; then
+              echo "::error::Missing platform signature-verification marker: ${marker}"
+              missing=1
+            fi
+          done
           for asset in "${expected[@]}"; do
             if [[ ! -f "release-artifacts/${asset}" ]]; then
               echo "::error::Missing release asset: ${asset}"
@@ -256,6 +457,7 @@ jobs:
             find release-artifacts -maxdepth 1 -type f -printf '%f\n' | sort
             exit 1
           fi
+          rm -- "release-artifacts"/SIGNATURES_VERIFIED-*.txt
 
           (
             cd release-artifacts

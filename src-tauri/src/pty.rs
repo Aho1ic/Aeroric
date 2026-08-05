@@ -930,29 +930,25 @@ fn wait_for_initial_input_ready_with_cap(
 
     loop {
         let now = Instant::now();
-        let wait = if first_output_at.is_none() {
-            no_output_deadline
+        let wait = match first_output_at {
+            None => no_output_deadline
                 .saturating_duration_since(now)
-                .min(STARTUP_FIRST_OUTPUT_TIMEOUT)
-        } else if gate_pending {
-            STARTUP_GATE_INPUT_SETTLE
-        } else {
-            STARTUP_OUTPUT_MAX_WAIT
-                .saturating_sub(now.duration_since(first_output_at.unwrap()))
-                .min(STARTUP_OUTPUT_QUIET)
+                .min(STARTUP_FIRST_OUTPUT_TIMEOUT),
+            Some(_) if gate_pending => STARTUP_GATE_INPUT_SETTLE,
+            Some(first_output_at) => STARTUP_OUTPUT_MAX_WAIT
+                .saturating_sub(now.duration_since(first_output_at))
+                .min(STARTUP_OUTPUT_QUIET),
         };
 
         match startup_rx.recv_timeout(wait) {
             Ok(StartupSignal::Output(output)) => {
                 let now = Instant::now();
-                first_output_at.get_or_insert(now);
+                let first_output = *first_output_at.get_or_insert(now);
                 if startup_output_indicates_gate(&mut detection_tail, &output) {
                     gate_pending = true;
                     user_confirmed_gate = false;
                 }
-                if !gate_pending
-                    && now.duration_since(first_output_at.unwrap()) >= STARTUP_OUTPUT_MAX_WAIT
-                {
+                if !gate_pending && now.duration_since(first_output) >= STARTUP_OUTPUT_MAX_WAIT {
                     return true;
                 }
             }
