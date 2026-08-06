@@ -520,7 +520,10 @@ mod tests {
         );
         // A value nested under a table header should be ignored.
         let nested = "[model_providers.foo]\nmodel_reasoning_effort = \"low\"\n";
-        assert_eq!(read_root_toml_string(nested, "model_reasoning_effort"), None);
+        assert_eq!(
+            read_root_toml_string(nested, "model_reasoning_effort"),
+            None
+        );
     }
 
     #[test]
@@ -534,7 +537,10 @@ mod tests {
             read_root_json_string(content, "model_reasoning_speed"),
             Some("fast".to_string())
         );
-        assert_eq!(read_root_json_string("not json", "model_reasoning_effort"), None);
+        assert_eq!(
+            read_root_json_string("not json", "model_reasoning_effort"),
+            None
+        );
     }
 
     #[test]

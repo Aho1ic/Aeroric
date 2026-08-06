@@ -4418,7 +4418,8 @@ async fn detect_agent_models_with_policy(
 pub async fn list_agent_models(agent: String) -> Result<AgentModels, String> {
     tokio::task::spawn_blocking(move || {
         let settings = load_settings_internal();
-        let (reasoning_effort, reasoning_speed) = crate::config::read_agent_reasoning_settings(&agent);
+        let (reasoning_effort, reasoning_speed) =
+            crate::config::read_agent_reasoning_settings(&agent);
         if let Some(profile) = settings
             .custom_agents
             .iter()

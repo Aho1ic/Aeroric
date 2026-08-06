@@ -132,15 +132,7 @@ impl UpstreamTarget {
     /// original `new` surface used by tests that exercise URL validation.
     #[allow(dead_code)]
     pub fn new(base_url: impl AsRef<str>) -> Result<Self, RouterError> {
-        Self::with_details(
-            "target",
-            "Target",
-            base_url,
-            "",
-            Vec::new(),
-            false,
-            false,
-        )
+        Self::with_details("target", "Target", base_url, "", Vec::new(), false, false)
     }
 
     pub fn id(&self) -> &str {
