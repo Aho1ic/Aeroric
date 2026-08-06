@@ -1091,12 +1091,20 @@ fn launch_supports_native_initial_prompt(
     let Ok(content) = fs::read_to_string(&launch.program) else {
         return false;
     };
+    // Aeroric-generated wrappers forward positional arguments to the real CLI.
+    // Both the standard wrapper and the chat-completions proxy wrapper support
+    // this, so recognize both markers. Without the chat proxy marker here,
+    // custom codex-like agents that use the proxy wrapper fall through to the
+    // less reliable PTY injection path even though their script forwards args.
     let marker = if is_codex {
         "# AERORIC_CODEX_WRAPPER_VERSION="
     } else {
         "# AERORIC_CLAUDE_WRAPPER_VERSION="
     };
-    content.contains(marker) && (content.contains("\"$@\"") || content.contains("@args"))
+    let chat_proxy_marker = "# AERORIC_CODEX_CHAT_PROXY_VERSION=";
+    let has_wrapper_marker =
+        content.contains(marker) || (is_codex && content.contains(chat_proxy_marker));
+    has_wrapper_marker && (content.contains("\"$@\"") || content.contains("@args"))
 }
 
 fn should_use_native_initial_prompt(
@@ -1229,13 +1237,37 @@ pub async fn run_task(
         selected_model.as_deref(),
     )?;
     let speed = normalized_speed(speed.as_deref())?;
+
+    // hook 链路是否可信:可信则注入 AERORIC_* 守卫变量让 hook 脚本上报事件,会话发现
+    // 与状态全部由 event_watcher 驱动、跳过 /status 轮询 watcher;不可信(无 node /
+    // 未安装 / 版本过低)则不注入 env、并回退轮询路径——否则旧版但仍支持 hook 的 agent
+    // 会同时触发已安装 hook 与轮询 watcher,导致 session 注册/状态重复上报。
+    // 先于 cmd 构建计算,因为 Codex 的 --dangerously-bypass-hook-trust 必须加在
+    // `--`/positional prompt 之前。
+    // 提前计算 use_hooks:custom agent 的 prompt 投递路径选择需要参考它。
+    let use_hooks = {
+        let agent = agent.clone();
+        tokio::task::spawn_blocking(move || crate::hooks::usable_for(&agent))
+            .await
+            .unwrap_or(false)
+    };
+
     let force_prompt_injection = should_force_prompt_injection(is_codex, force_prompt_injection);
     let native_cli_args_supported = uses_native_initial_prompt(&agent, is_codex)
         || launch_supports_native_initial_prompt(&agent, is_codex, &launch);
+    // Built-in agents (claude/codex) always use native CLI args. Custom
+    // wrappers that forward positional args also prefer this path. The
+    // guarded PTY injection is only used when the wrapper cannot accept
+    // positional args, or when hooks are available (meaning trust/hook
+    // startup gates may need to be waited for before the prompt is safe to
+    // inject). When hooks are unavailable for a custom codex-like agent,
+    // there are no startup gates to wait for, so native CLI args are both
+    // safe and more reliable than timing-dependent PTY injection.
     let use_native_initial_prompt =
         (should_use_native_initial_prompt(&agent, is_codex, force_prompt_injection)
             || (!force_prompt_injection
-                && launch_supports_native_initial_prompt(&agent, is_codex, &launch)))
+                && launch_supports_native_initial_prompt(&agent, is_codex, &launch))
+            || (force_prompt_injection && !use_hooks && native_cli_args_supported))
             && native_cli_args_supported;
     let uses_ultracode = should_use_ultracode_terminal_command(
         is_codex,
@@ -1243,8 +1275,8 @@ pub async fn run_task(
         native_cli_args_supported,
     );
 
-    // 版本统一走全局探测（带缓存），判断是否支持 --session-id。
-    // 缓存未命中时 *_version_gte 会启子进程探测，故放进 spawn_blocking 避免阻塞 async runtime。
+    // 版本统一走全局探测(带缓存),判断是否支持 --session-id。
+    // 缓存未命中时 *_version_gte 会启子进程探测,故放进 spawn_blocking 避免阻塞 async runtime。
     let version_agent = agent.clone();
     let use_explicit_session = !is_codex
         && tokio::task::spawn_blocking(move || {
@@ -1253,24 +1285,11 @@ pub async fn run_task(
         .await
         .unwrap_or(false);
 
-    // 预生成 session id（仅 Claude >= 2.1.87 使用）
+    // 预生成 session id(仅 Claude >= 2.1.87 使用)
     let pre_session_id = if use_explicit_session {
         Some(uuid::Uuid::new_v4().to_string())
     } else {
         None
-    };
-
-    // hook 链路是否可信:可信则注入 AERORIC_* 守卫变量让 hook 脚本上报事件,会话发现
-    // 与状态全部由 event_watcher 驱动、跳过 /status 轮询 watcher;不可信(无 node /
-    // 未安装 / 版本过低)则不注入 env、并回退轮询路径——否则旧版但仍支持 hook 的 agent
-    // 会同时触发已安装 hook 与轮询 watcher,导致 session 注册/状态重复上报。
-    // 先于 cmd 构建计算,因为 Codex 的 --dangerously-bypass-hook-trust 必须加在
-    // `--`/positional prompt 之前。
-    let use_hooks = {
-        let agent = agent.clone();
-        tokio::task::spawn_blocking(move || crate::hooks::usable_for(&agent))
-            .await
-            .unwrap_or(false)
     };
     let claude_settings_path = if is_codex {
         None

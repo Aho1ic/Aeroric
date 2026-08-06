@@ -347,6 +347,8 @@ export interface AgentBalance {
 
 export function formatAgentBalance(balance: AgentBalance, language: "en" | "zh"): string {
   const formatter = new Intl.NumberFormat(language === "zh" ? "zh-CN" : "en-US", {
+    style: "currency",
+    currency: "USD",
     maximumFractionDigits: 6,
   });
   const total =

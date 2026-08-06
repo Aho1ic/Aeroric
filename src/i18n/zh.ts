@@ -320,7 +320,7 @@ export const zh: Record<string, string> = {
   "appSettings.clearModels": "清空",
   "appSettings.detectModels": "检测模型",
   "appSettings.detectingModels": "检测中...",
-  "appSettings.keyBalanceAvailable": "已使用/总共额度：{amount}",
+  "appSettings.keyBalanceAvailable": "已用 / 总额:{amount}",
   "appSettings.detectedModelsCount": "已检测到 {count} 个模型",
   "appSettings.selectedModelsCount": "已选择 {selected} / {count} 个模型",
   "appSettings.reasoningEffort": "推理强度",
