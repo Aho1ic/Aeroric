@@ -457,17 +457,6 @@ jobs:
         with:
           path: release-artifacts
           merge-multiple: true
-          # Only download the platform build artifacts produced by the
-          # build matrix. Without this filter, download-artifact also
-          # pulls in unrelated artifacts from the reusable quality-gate
-          # workflow (e.g. web-coverage HTML), which then get uploaded
-          # to the GitHub Release as junk files.
-          name: |
-            windows-x86_64
-            windows-arm64
-            macos-x86_64
-            macos-arm64
-            linux-x86_64
 
       - name: Flatten artifact directories
         shell: bash
@@ -542,5 +531,14 @@ jobs:
         uses: softprops/action-gh-release@v3
         with:
           generate_release_notes: true
-          files: release-artifacts/**/*
+          # Only upload installer artifacts. The download-artifact step
+          # above also downloads unrelated artifacts (e.g. web-coverage
+          # HTML from the quality-gate workflow); this glob filter
+          # ensures only the expected installer files are published.
+          files: |
+            release-artifacts/*.rpm
+            release-artifacts/*.dmg
+            release-artifacts/*.deb
+            release-artifacts/*.exe
+            release-artifacts/*.msi
           token: ${{ secrets.GITHUB_TOKEN }}
