@@ -541,7 +541,9 @@ function TargetCard({
               </InlineBadge>
             ) : null}
             {queuePosition ? (
-              <InlineBadge color="var(--accent)">P{queuePosition}</InlineBadge>
+              <InlineBadge color="var(--accent)">
+                {t("appSettings.localRouter.targetPosition", { pos: queuePosition })}
+              </InlineBadge>
             ) : null}
             {isPrimary ? (
               <InlineBadge color="var(--accent)">
@@ -739,7 +741,9 @@ function FailoverQueueEditor({
               background: "var(--bg-input)",
             }}
           >
-            <InlineBadge color="var(--accent)">P{index + 1}</InlineBadge>
+            <InlineBadge color="var(--accent)">
+              {t("appSettings.localRouter.targetPosition", { pos: index + 1 })}
+            </InlineBadge>
             <span
               title={label}
               style={{
@@ -790,7 +794,10 @@ function FailoverQueueEditor({
       })}
       <div style={{ ...hintStyle, marginTop: 2 }}>
         {t("appSettings.localRouter.failoverQueueHint", {
-          agent: agent === "claude" ? "Claude Code" : "Codex",
+          agent:
+            agent === "claude"
+              ? t("appSettings.localRouter.claude")
+              : t("appSettings.localRouter.codex"),
         })}
       </div>
     </div>
@@ -812,7 +819,10 @@ function RequestRecordRow({
   const originalModel = request.model || t("appSettings.localRouter.requestUnknownModel");
   const mappedModel =
     request.outboundModel && request.outboundModel !== request.model
-      ? `${originalModel} → ${request.outboundModel}`
+      ? t("appSettings.localRouter.requestModelMapping", {
+          from: originalModel,
+          to: request.outboundModel,
+        })
       : originalModel;
   const completedAt = new Date(request.completedAt).toLocaleString(locale, {
     month: "2-digit",
@@ -847,7 +857,9 @@ function RequestRecordRow({
           }}
         />
         <strong style={{ color: "var(--text-primary)", fontSize: 11.5 }}>
-          {request.agent === "claude" ? "Claude" : "Codex"}
+          {request.agent === "claude"
+            ? t("appSettings.localRouter.claude")
+            : t("appSettings.localRouter.codex")}
         </strong>
         <span
           title={target}
@@ -875,7 +887,10 @@ function RequestRecordRow({
         </span>
       </div>
       <div
-        title={`${request.endpoint} · ${mappedModel}`}
+        title={t("appSettings.localRouter.requestEndpointModel", {
+          endpoint: request.endpoint,
+          model: mappedModel,
+        })}
         style={{
           color: "var(--text-hint)",
           fontFamily: "var(--font-mono)",
@@ -884,14 +899,23 @@ function RequestRecordRow({
           overflowWrap: "anywhere",
         }}
       >
-        {request.endpoint} · {mappedModel}
+        {t("appSettings.localRouter.requestEndpointModel", {
+          endpoint: request.endpoint,
+          model: mappedModel,
+        })}
       </div>
       <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
-        <InlineBadge color={statusColor}>HTTP {request.statusCode}</InlineBadge>
+        <InlineBadge color={statusColor}>
+          {t("appSettings.localRouter.requestStatus", { code: request.statusCode })}
+        </InlineBadge>
         <InlineBadge>
           {t("appSettings.localRouter.requestAttempts", { count: request.attemptCount })}
         </InlineBadge>
-        <InlineBadge>{request.latencyMs.toLocaleString()} ms</InlineBadge>
+        <InlineBadge>
+          {t("appSettings.localRouter.requestLatencyMs", {
+            ms: request.latencyMs.toLocaleString(),
+          })}
+        </InlineBadge>
         {request.isStreaming ? (
           <InlineBadge>{t("appSettings.localRouter.requestStreaming")}</InlineBadge>
         ) : null}

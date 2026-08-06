@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type React from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { readText } from "@tauri-apps/plugin-clipboard-manager";
-import { Check, Clipboard, KeyRound, Plus, RefreshCw, Server, X } from "lucide-react";
+import { Check, Clipboard, Eye, EyeOff, KeyRound, Plus, RefreshCw, Server, X } from "lucide-react";
 import { sanitizeAgentId } from "../../agents";
 import { useI18n } from "../../i18n";
 import s from "../../styles";
@@ -91,6 +91,7 @@ export function AddAgentPanel({ onSaved }: { onSaved: (agentId: string) => void 
   const [kind, setKind] = useState<AgentSetupKind>("codex");
   const [baseUrl, setBaseUrl] = useState("");
   const [apiKey, setApiKey] = useState("");
+  const [showApiKey, setShowApiKey] = useState(false);
   const [model, setModel] = useState("");
   const [models, setModels] = useState<string[]>([]);
   const [detectedBalance, setDetectedBalance] = useState<AgentBalance | null>(null);
@@ -495,8 +496,8 @@ export function AddAgentPanel({ onSaved }: { onSaved: (agentId: string) => void 
             />
             <input
               id={apiKeyInputId}
-              style={{ ...monoInputStyle, paddingLeft: 30 }}
-              type="password"
+              style={{ ...monoInputStyle, paddingLeft: 30, paddingRight: 32 }}
+              type={showApiKey ? "text" : "password"}
               value={apiKey}
               onChange={(event) => {
                 setApiKey(event.target.value);
@@ -506,7 +507,33 @@ export function AddAgentPanel({ onSaved }: { onSaved: (agentId: string) => void 
               }}
               placeholder="sk-..."
               spellCheck={false}
+              autoComplete="off"
             />
+            <button
+              type="button"
+              aria-label={t("appSettings.toggleApiKeyVisibility")}
+              title={t("appSettings.toggleApiKeyVisibility")}
+              onClick={() => setShowApiKey((show) => !show)}
+              style={{
+                position: "absolute",
+                right: 6,
+                top: "50%",
+                transform: "translateY(-50%)",
+                width: 22,
+                height: 22,
+                display: "inline-flex",
+                alignItems: "center",
+                justifyContent: "center",
+                padding: 0,
+                border: "none",
+                borderRadius: 4,
+                background: "transparent",
+                color: "var(--text-hint)",
+                cursor: "pointer",
+              }}
+            >
+              {showApiKey ? <EyeOff size={13} /> : <Eye size={13} />}
+            </button>
           </div>
         </div>
       </div>

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
-import { Check, Download, RefreshCw, Trash2, Upload, X, Zap } from "lucide-react";
+import { Check, Download, Eye, EyeOff, RefreshCw, Trash2, Upload, X, Zap } from "lucide-react";
 import { useI18n } from "../../i18n";
 import s from "../../styles";
 import { AgentPathSection, type AgentPathSectionHandle } from "./AgentPathSection";
@@ -126,6 +126,7 @@ export function AgentDetailModal({
   const [originalBaseUrl, setOriginalBaseUrl] = useState("");
   const [apiKey, setApiKey] = useState("");
   const [originalApiKey, setOriginalApiKey] = useState("");
+  const [showApiKey, setShowApiKey] = useState(false);
   const [pathDirty, setPathDirty] = useState(false);
   const pathSectionRef = useRef<AgentPathSectionHandle>(null);
   const fileContentImeFix = useTextInputIMEFix<HTMLTextAreaElement>((content) =>
@@ -794,14 +795,42 @@ export function AgentDetailModal({
                     {/* API Key */}
                     <div style={{ marginBottom: 16 }}>
                       <label style={labelStyle}>{t("appSettings.agentApiKey")}</label>
-                      <input
-                        style={nameInputStyle}
-                        type="password"
-                        value={apiKey}
-                        onChange={(event) => setApiKey(event.target.value)}
-                        placeholder="sk-..."
-                        spellCheck={false}
-                      />
+                      <div style={{ position: "relative" }}>
+                        <input
+                          style={{ ...nameInputStyle, paddingRight: 32 }}
+                          type={showApiKey ? "text" : "password"}
+                          value={apiKey}
+                          onChange={(event) => setApiKey(event.target.value)}
+                          placeholder="sk-..."
+                          spellCheck={false}
+                          autoComplete="off"
+                        />
+                        <button
+                          type="button"
+                          aria-label={t("appSettings.toggleApiKeyVisibility")}
+                          title={t("appSettings.toggleApiKeyVisibility")}
+                          onClick={() => setShowApiKey((show) => !show)}
+                          style={{
+                            position: "absolute",
+                            right: 6,
+                            top: "50%",
+                            transform: "translateY(-50%)",
+                            width: 22,
+                            height: 22,
+                            display: "inline-flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            padding: 0,
+                            border: "none",
+                            borderRadius: 4,
+                            background: "transparent",
+                            color: "var(--text-hint)",
+                            cursor: "pointer",
+                          }}
+                        >
+                          {showApiKey ? <EyeOff size={13} /> : <Eye size={13} />}
+                        </button>
+                      </div>
                     </div>
 
                     {/* Built-in runtimes keep editable executable/config paths here. */}

@@ -1303,96 +1303,54 @@ body {
   }
 }
 
+/* 蓝色闪电指示器：直接在 Zap 图标本体上呈现流动通电效果，不使用背景渐变光环。
+   设计目标：高级、大气、水平。
+   层次：
+   1) 容器稳定外光晕（drop-shadow），营造“通电”氛围，不闪烁；
+   2) 图标本体亮度/光晕呼吸（brightness + drop-shadow 周期变化），模拟电流强弱；
+   3) 图标轻微纵向浮动 + 缩放，呈现“流”的动感而非抖动。
+   全部动画只作用于 svg 本体，移除了原先的 ::before / ::after 渐变背景层。 */
 .model-options-fast-indicator {
   position: relative;
   isolation: isolate;
-  filter: drop-shadow(0 0 4px color-mix(in srgb, var(--speed-fast-fg) 42%, transparent));
-}
-
-.model-options-fast-indicator::before,
-.model-options-fast-indicator::after {
-  position: absolute;
-  inset: -4px;
-  border-radius: 999px;
-  pointer-events: none;
-  content: "";
-}
-
-.model-options-fast-indicator::before {
-  z-index: -1;
-  background: radial-gradient(
-    circle,
-    color-mix(in srgb, var(--speed-fast-fg) 45%, transparent),
-    transparent 70%
-  );
-  opacity: 0.25;
-  transform: scale(0.72);
-  animation: model-options-fast-aura 2.2s ease-in-out infinite;
-}
-
-.model-options-fast-indicator::after {
-  z-index: 1;
-  background: linear-gradient(
-    105deg,
-    transparent 20%,
-    color-mix(in srgb, var(--speed-fast-fg) 68%, transparent) 48%,
-    transparent 76%
-  );
-  background-size: 220% 100%;
-  opacity: 0;
-  animation: model-options-fast-flow 2.1s ease-in-out infinite;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--speed-fast-fg);
+  /* 稳定底光：始终存在的柔和光晕，奠定“通电”基调 */
+  filter: drop-shadow(0 0 2.5px color-mix(in srgb, var(--speed-fast-fg) 60%, transparent));
 }
 
 .model-options-fast-indicator > svg {
   position: relative;
   z-index: 2;
-  animation: model-options-fast-flicker 2.2s ease-in-out infinite;
-}
-
-@keyframes model-options-fast-aura {
-  0%,
-  100% {
-    opacity: 0.2;
-    transform: scale(0.72);
-  }
-  45% {
-    opacity: 0.62;
-    transform: scale(1.1);
-  }
-}
-
-@keyframes model-options-fast-flow {
-  0% {
-    background-position: 140% 0;
-    opacity: 0;
-  }
-  24%,
-  68% {
-    opacity: 0.72;
-  }
-  100% {
-    background-position: -120% 0;
-    opacity: 0;
-  }
+  animation: model-options-fast-flicker 2.4s ease-in-out infinite;
 }
 
 @keyframes model-options-fast-flicker {
   0%,
   100% {
-    transform: translateY(0) rotate(0deg);
+    transform: translateY(0) scale(1);
+    /* 静息：内敛的稳定光 */
+    filter: brightness(1)
+      drop-shadow(0 0 0 color-mix(in srgb, var(--speed-fast-fg) 0%, transparent));
   }
-  42% {
-    transform: translateY(-0.5px) rotate(-4deg);
+  46% {
+    /* 高光峰值：亮度提升 + 强光晕扩散，电流“贯通”瞬间 */
+    transform: translateY(-0.4px) scale(1.08);
+    filter: brightness(1.45)
+      drop-shadow(0 0 3.5px color-mix(in srgb, var(--speed-fast-fg) 85%, transparent));
   }
-  70% {
-    transform: translateY(0.3px) rotate(1deg);
+  72% {
+    /* 余波：轻微回落、光晕渐收 */
+    transform: translateY(0) scale(1.02);
+    filter: brightness(1.12)
+      drop-shadow(0 0 1.5px color-mix(in srgb, var(--speed-fast-fg) 50%, transparent));
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
   .model-options-submenu[data-state="open"],
-  .model-options-fast-indicator::before,
-  .model-options-fast-indicator::after,
   .model-options-fast-indicator > svg {
     animation: none !important;
   }
