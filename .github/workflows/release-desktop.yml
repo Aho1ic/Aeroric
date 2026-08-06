@@ -457,6 +457,17 @@ jobs:
         with:
           path: release-artifacts
           merge-multiple: true
+          # Only download the platform build artifacts produced by the
+          # build matrix. Without this filter, download-artifact also
+          # pulls in unrelated artifacts from the reusable quality-gate
+          # workflow (e.g. web-coverage HTML), which then get uploaded
+          # to the GitHub Release as junk files.
+          name: |
+            windows-x86_64
+            windows-arm64
+            macos-x86_64
+            macos-arm64
+            linux-x86_64
 
       - name: Flatten artifact directories
         shell: bash
