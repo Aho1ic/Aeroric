@@ -352,6 +352,11 @@ export const en: Record<string, string> = {
   "appSettings.reasoningEffort.xhigh": "XHigh",
   "appSettings.reasoningEffort.max": "Max",
   "appSettings.reasoningEffort.ultra": "Ultra",
+  "appSettings.reasoningSpeed": "Reasoning speed",
+  "appSettings.reasoningSpeedHint":
+    "Writes model_reasoning_speed to the local agent config file, used as the default for the model dropdown on the home page.",
+  "appSettings.reasoningSpeed.standard": "Standard",
+  "appSettings.reasoningSpeed.fast": "Fast",
   "appSettings.customAgentPath": "{agent} Script",
   "appSettings.customAgentPathShort": "Script Path",
   "appSettings.customAgentPathHint":

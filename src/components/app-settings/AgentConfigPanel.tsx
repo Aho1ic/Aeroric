@@ -1,7 +1,7 @@
 import { useEffect, useState, type CSSProperties } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
-import { Check, Download, RefreshCw, Trash2, Upload } from "lucide-react";
+import { Check, Download, RefreshCw, Trash2, Upload, Zap } from "lucide-react";
 import { useI18n } from "../../i18n";
 import s from "../../styles";
 import { AgentPathSection } from "./AgentPathSection";
@@ -24,6 +24,11 @@ import {
   setModelReasoningEffort,
   type ModelReasoningEffort,
 } from "./reasoningEffort";
+import {
+  readModelReasoningSpeed,
+  setModelReasoningSpeed,
+  type ModelReasoningSpeed,
+} from "./reasoningSpeed";
 import { ModelSelectionList } from "./ModelSelectionList";
 import { normalizeModelList, sameModel } from "../../modelOptions";
 
@@ -110,6 +115,10 @@ export function AgentConfigPanel({
   const [originalReasoningEffort, setOriginalReasoningEffort] =
     useState<ModelReasoningEffort | null>(null);
   const [savingReasoningEffort, setSavingReasoningEffort] = useState(false);
+  const [reasoningSpeed, setReasoningSpeed] = useState<ModelReasoningSpeed | null>(null);
+  const [originalReasoningSpeed, setOriginalReasoningSpeed] =
+    useState<ModelReasoningSpeed | null>(null);
+  const [savingReasoningSpeed, setSavingReasoningSpeed] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [importing, setImporting] = useState(false);
   const [transferMessage, setTransferMessage] = useState<string | null>(null);
@@ -120,6 +129,7 @@ export function AgentConfigPanel({
   function handleFileContentChange(content: string) {
     setFileState({ status: "loaded", content });
     setReasoningEffort(readModelReasoningEffort(content));
+    setReasoningSpeed(readModelReasoningSpeed(content));
   }
 
   useEffect(() => {
@@ -151,6 +161,8 @@ export function AgentConfigPanel({
           setOriginal("");
           setReasoningEffort(null);
           setOriginalReasoningEffort(null);
+          setReasoningSpeed(null);
+          setOriginalReasoningSpeed(null);
           return;
         }
         if (c === undefined) return;
@@ -159,6 +171,9 @@ export function AgentConfigPanel({
         const effort = readModelReasoningEffort(c);
         setReasoningEffort(effort);
         setOriginalReasoningEffort(effort);
+        const speed = readModelReasoningSpeed(c);
+        setReasoningSpeed(speed);
+        setOriginalReasoningSpeed(speed);
       })
       .catch((e) => {
         if (!cancelled) setError(String(e));
@@ -217,9 +232,12 @@ export function AgentConfigPanel({
     try {
       await invoke("write_agent_config_file", { agent: agentKey, content: fileState.content });
       setOriginal(fileState.content);
-      const effort = agentKey === "codex" ? readModelReasoningEffort(fileState.content) : null;
+      const effort = readModelReasoningEffort(fileState.content);
       setReasoningEffort(effort);
       setOriginalReasoningEffort(effort);
+      const speed = readModelReasoningSpeed(fileState.content);
+      setReasoningSpeed(speed);
+      setOriginalReasoningSpeed(speed);
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
     } catch (e) {
@@ -281,11 +299,12 @@ export function AgentConfigPanel({
         setResolvedFilePath(result.config_path);
         setFileState({ status: "loaded", content: nextContent });
         setOriginal(nextContent);
-        if (agentKey === "codex") {
-          const effort = readModelReasoningEffort(nextContent);
-          setReasoningEffort(effort);
-          setOriginalReasoningEffort(effort);
-        }
+        const effort = readModelReasoningEffort(nextContent);
+        setReasoningEffort(effort);
+        setOriginalReasoningEffort(effort);
+        const speed = readModelReasoningSpeed(nextContent);
+        setReasoningSpeed(speed);
+        setOriginalReasoningSpeed(speed);
         if (deletable) {
           const settings = await invoke<AppSettings>("load_app_settings");
           const profile =
@@ -416,7 +435,8 @@ export function AgentConfigPanel({
 
   async function handleSaveReasoningEffort() {
     if (fileState.status !== "loaded") return;
-    const content = setModelReasoningEffort(fileState.content, reasoningEffort);
+    let content = setModelReasoningEffort(fileState.content, reasoningEffort);
+    content = setModelReasoningSpeed(content, reasoningSpeed);
     setSavingReasoningEffort(true);
     setError(null);
     setSaved(false);
@@ -425,12 +445,33 @@ export function AgentConfigPanel({
       setFileState({ status: "loaded", content });
       setOriginal(content);
       setOriginalReasoningEffort(reasoningEffort);
+      setOriginalReasoningSpeed(reasoningSpeed);
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
     } catch (e) {
       setError(String(e));
     } finally {
       setSavingReasoningEffort(false);
+    }
+  }
+
+  async function handleSaveReasoningSpeed() {
+    if (fileState.status !== "loaded") return;
+    const content = setModelReasoningSpeed(fileState.content, reasoningSpeed);
+    setSavingReasoningSpeed(true);
+    setError(null);
+    setSaved(false);
+    try {
+      await invoke("write_agent_config_file", { agent: agentKey, content });
+      setFileState({ status: "loaded", content });
+      setOriginal(content);
+      setOriginalReasoningSpeed(reasoningSpeed);
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setSavingReasoningSpeed(false);
     }
   }
 
@@ -528,6 +569,8 @@ export function AgentConfigPanel({
     !sameModels(normalizeModels(selectedModels), originalSelectedModels);
   const canSaveReasoningEffort =
     supportsReasoningEffort && reasoningEffort !== originalReasoningEffort;
+  const canSaveReasoningSpeed =
+    supportsReasoningEffort && reasoningSpeed !== originalReasoningSpeed;
   const canSave1mContext =
     Boolean(customProfile && !customProfile.codex_like) &&
     enable1mContext !== originalEnable1mContext;
@@ -877,6 +920,69 @@ export function AgentConfigPanel({
                   {t(`appSettings.reasoningEffort.${effort}`)}
                 </Button>
               ))}
+            </div>
+          </div>
+        )}
+
+        {fileState.status === "loaded" && (
+          <div style={{ marginBottom: 18 }}>
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: 8,
+                marginBottom: 8,
+              }}
+            >
+              <div>
+                <div style={{ fontSize: 13, fontWeight: 600, color: "var(--text-primary)" }}>
+                  {t("appSettings.reasoningSpeed")}
+                </div>
+                <div style={{ marginTop: 3, fontSize: 11, color: "var(--text-hint)" }}>
+                  {t("appSettings.reasoningSpeedHint")}
+                </div>
+              </div>
+              <Button
+                variant="default"
+                size="sm"
+                onClick={handleSaveReasoningSpeed}
+                disabled={savingReasoningSpeed || !canSaveReasoningSpeed}
+              >
+                {savingReasoningSpeed ? t("common.saving") : t("common.save")}
+              </Button>
+            </div>
+            <div
+              role="group"
+              aria-label={t("appSettings.reasoningSpeed")}
+              style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}
+            >
+              <Button
+                variant="outline"
+                size="sm"
+                active={reasoningSpeed === null || reasoningSpeed === "standard"}
+                onClick={() => setReasoningSpeed("standard")}
+              >
+                {t("appSettings.reasoningSpeed.standard")}
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                active={reasoningSpeed === "fast"}
+                onClick={() => setReasoningSpeed("fast")}
+              >
+                {t("appSettings.reasoningSpeed.fast")}
+                <span
+                  className="model-options-fast-indicator"
+                  style={{
+                    display: "inline-flex",
+                    marginLeft: 4,
+                    color: "var(--speed-fast-fg)",
+                  }}
+                >
+                  <Zap size={13} strokeWidth={2.4} aria-hidden="true" />
+                </span>
+              </Button>
             </div>
           </div>
         )}

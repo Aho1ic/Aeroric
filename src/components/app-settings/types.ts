@@ -336,6 +336,8 @@ export interface AgentSetupDraft {
 export interface AgentModels {
   models: string[];
   balance?: AgentBalance | null;
+  reasoning_effort?: string | null;
+  reasoning_speed?: string | null;
 }
 
 export interface AgentBalance {

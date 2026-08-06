@@ -28,6 +28,7 @@ import {
   AlertTriangle,
   CheckCircle2,
   Download,
+  Zap,
 } from "lucide-react";
 
 interface SessionMetrics {
@@ -145,9 +146,15 @@ export function RunningView({
   const [terminalHistoryVersion, setTerminalHistoryVersion] = useState(0);
   const shouldLoadTerminalHistory = !isActive && !isDetached && !isInterrupted;
   const currentAgentLabel = agentDisplayLabel(task.agent, agentOptions);
-  const currentAgentBadge = task.selectedModel
-    ? `${currentAgentLabel} · ${task.selectedModel}`
-    : currentAgentLabel;
+  const reasoningLabel = task.reasoningEffort
+    ? t(`newTask.reasoning.${task.reasoningEffort}`)
+    : t("newTask.modelDefault");
+  const speedIsFast = task.speed === "fast";
+  const currentAgentBadgeParts = task.selectedModel
+    ? [currentAgentLabel, task.selectedModel, reasoningLabel]
+    : [currentAgentLabel, reasoningLabel];
+  if (speedIsFast) currentAgentBadgeParts.push(t("newTask.speed.fast"));
+  const currentAgentBadge = currentAgentBadgeParts.join(" · ");
 
   const { snapshot: usageSnapshot } = useUsageSnapshot(visible && ENABLE_USAGE_INSIGHTS);
 
@@ -606,9 +613,24 @@ export function RunningView({
                 overflow: "hidden",
                 textOverflow: "ellipsis",
                 whiteSpace: "nowrap",
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 4,
               }}
             >
               {currentAgentBadge}
+              {speedIsFast && (
+                <span
+                  className="model-options-fast-indicator"
+                  style={{
+                    display: "inline-flex",
+                    flexShrink: 0,
+                    color: "var(--speed-fast-fg)",
+                  }}
+                >
+                  <Zap size={13} strokeWidth={2.4} aria-hidden="true" />
+                </span>
+              )}
             </span>
           </span>
           <span style={s.runMetaText}>{permissionModeLabel(task.permissionMode, task.agent)}</span>

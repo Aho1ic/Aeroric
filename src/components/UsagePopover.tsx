@@ -27,7 +27,7 @@ function UsageMetricRow({ label, window }: { label: string; window: UsageWindow 
   return (
     <div style={s.usageMetricRow}>
       <span style={s.usageMetricLabel}>{label}</span>
-      <span style={{ ...s.usageMetricValue, color }}>
+      <span style={{ ...s.usageMetricValue, color, whiteSpace: "nowrap" as const }}>
         {window.remainingPercent}
         {t("usage.left")}
       </span>

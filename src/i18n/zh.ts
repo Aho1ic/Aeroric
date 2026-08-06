@@ -333,6 +333,11 @@ export const zh: Record<string, string> = {
   "appSettings.reasoningEffort.xhigh": "XHigh",
   "appSettings.reasoningEffort.max": "Max",
   "appSettings.reasoningEffort.ultra": "Ultra",
+  "appSettings.reasoningSpeed": "推理速度",
+  "appSettings.reasoningSpeedHint":
+    "保存后会将 model_reasoning_speed 写入本地 agent 配置文件，用于主页模型下拉框的默认值。",
+  "appSettings.reasoningSpeed.standard": "标准",
+  "appSettings.reasoningSpeed.fast": "快速",
   "appSettings.customAgentPath": "{agent} 脚本",
   "appSettings.customAgentPathShort": "脚本路径",
   "appSettings.customAgentPathHint": "仅保存到本机应用设置。请输入可执行 wrapper 脚本路径。",

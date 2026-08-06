@@ -112,6 +112,12 @@ pub struct AgentModels {
     pub models: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub balance: Option<AgentBalance>,
+    /// Reasoning effort configured for this agent in its local config file.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<String>,
+    /// Reasoning speed configured for this agent in its local config file.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_speed: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -4400,13 +4406,19 @@ async fn detect_agent_models_with_policy(
     let value = fetch_agent_model_json(&client, &endpoint, &kind, &api_key).await?;
     let models = parse_model_ids(value);
     let balance = fetch_agent_balance(&client, base_url.as_str(), &api_key).await;
-    Ok(AgentModels { models, balance })
+    Ok(AgentModels {
+        models,
+        balance,
+        reasoning_effort: None,
+        reasoning_speed: None,
+    })
 }
 
 #[tauri::command]
 pub async fn list_agent_models(agent: String) -> Result<AgentModels, String> {
     tokio::task::spawn_blocking(move || {
         let settings = load_settings_internal();
+        let (reasoning_effort, reasoning_speed) = crate::config::read_agent_reasoning_settings(&agent);
         if let Some(profile) = settings
             .custom_agents
             .iter()
@@ -4417,6 +4429,8 @@ pub async fn list_agent_models(agent: String) -> Result<AgentModels, String> {
                 return Ok(AgentModels {
                     models,
                     balance: None,
+                    reasoning_effort,
+                    reasoning_speed,
                 });
             }
         }
@@ -4427,6 +4441,8 @@ pub async fn list_agent_models(agent: String) -> Result<AgentModels, String> {
                 return Ok(AgentModels {
                     models,
                     balance: None,
+                    reasoning_effort,
+                    reasoning_speed,
                 });
             }
         }
@@ -4435,6 +4451,8 @@ pub async fn list_agent_models(agent: String) -> Result<AgentModels, String> {
             return Ok(AgentModels {
                 models: list_builtin_claude_models(),
                 balance: None,
+                reasoning_effort,
+                reasoning_speed,
             });
         }
 
@@ -4442,6 +4460,8 @@ pub async fn list_agent_models(agent: String) -> Result<AgentModels, String> {
             return Ok(AgentModels {
                 models: Vec::new(),
                 balance: None,
+                reasoning_effort,
+                reasoning_speed,
             });
         }
 
@@ -4472,6 +4492,8 @@ pub async fn list_agent_models(agent: String) -> Result<AgentModels, String> {
         Ok(AgentModels {
             models: parse_codex_model_catalog(&stdout)?,
             balance: None,
+            reasoning_effort,
+            reasoning_speed,
         })
     })
     .await

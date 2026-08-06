@@ -43,6 +43,7 @@ import {
   availableReasoningEfforts,
   findModelIgnoreCase,
   normalizeModelList,
+  REASONING_EFFORTS,
   type ReasoningEffort,
   type TaskSpeed,
 } from "../modelOptions";
@@ -72,6 +73,8 @@ type CrossProjectFileMap = Map<string, FileEntry[]>;
 
 interface AgentModels {
   models: string[];
+  reasoning_effort?: string | null;
+  reasoning_speed?: string | null;
 }
 
 interface NodeRuntimeInstallResult {
@@ -319,6 +322,21 @@ export function NewTaskView({
             if (canonical) return canonical;
             return models[0] ?? "";
           });
+          // Apply agent-config defaults only when the user has no cached draft
+          // (so a saved agent config's reasoning effort / speed become the
+          // initial values on the home page without overriding prior choices).
+          if (!initialDraft) {
+            const rawEffort = result.reasoning_effort ?? null;
+            const configEffort =
+              rawEffort && (REASONING_EFFORTS as readonly string[]).includes(rawEffort)
+                ? (rawEffort as ReasoningEffort)
+                : null;
+            const configSpeed = result.reasoning_speed ?? null;
+            setReasoningEffort((current) => (current === null ? configEffort : current));
+            setSpeed((current) =>
+              current === "standard" && configSpeed === "fast" ? "fast" : current,
+            );
+          }
         })
         .catch((error: unknown) => {
           if (modelRequestIdRef.current !== requestId) return;
@@ -332,6 +350,9 @@ export function NewTaskView({
           }
         });
     },
+    // initialDraft is intentionally excluded so that caching a draft does not
+    // re-trigger model loading and overwrite the agent-config defaults.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [agentOptions],
   );
 

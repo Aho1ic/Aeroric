@@ -449,9 +449,93 @@ pub fn write_agent_config_file(agent: String, content: String) -> Result<(), Str
     atomic_write(&path, &content)
 }
 
+/// Reads the `model_reasoning_effort` and `model_reasoning_speed` values from the given
+/// agent's local config file. Both are stored at the TOML root level for Codex-style
+/// configs, or as a root JSON key for Claude-style JSON configs. Returns `(effort, speed)`,
+/// each `None` when the key is absent or holds an unrecognized value.
+pub fn read_agent_reasoning_settings(agent: &str) -> (Option<String>, Option<String>) {
+    let settings = app_settings::load_settings_internal();
+    let path = match agent_config_path_from_settings(agent, &settings) {
+        Ok(Some(path)) => path,
+        _ => return (None, None),
+    };
+    let Ok(content) = fs::read_to_string(&path) else {
+        return (None, None);
+    };
+    let effort = read_root_toml_string(&content, "model_reasoning_effort")
+        .or_else(|| read_root_json_string(&content, "model_reasoning_effort"));
+    let speed = read_root_toml_string(&content, "model_reasoning_speed")
+        .or_else(|| read_root_json_string(&content, "model_reasoning_speed"));
+    let effort = effort.filter(|v| is_valid_effort(v));
+    let speed = speed.filter(|v| matches!(v.as_str(), "standard" | "fast"));
+    (effort, speed)
+}
+
+fn read_root_toml_string(content: &str, key: &str) -> Option<String> {
+    let pattern = format!(r#"(?m)^[ \t]*{key}[ \t]*=[ \t]*"([^"\r\n]*)""#);
+    let table_header = regex::Regex::new(r"(?m)^[ \t]*\[[^\r\n]+\][ \t]*(?:#[^\r\n]*)?$").ok()?;
+    let root_content = match table_header.find(content) {
+        Some(m) => &content[..m.start()],
+        None => content,
+    };
+    let re = regex::Regex::new(&pattern).ok()?;
+    let value = re
+        .captures(root_content)
+        .and_then(|caps| caps.get(1).map(|m| m.as_str().to_string()));
+    value.map(|v| v.to_lowercase())
+}
+
+fn read_root_json_string(content: &str, key: &str) -> Option<String> {
+    let trimmed = content.trim();
+    if !trimmed.starts_with('{') {
+        return None;
+    }
+    let parsed: serde_json::Value = serde_json::from_str(trimmed).ok()?;
+    let value = parsed.get(key)?;
+    let str_value = value.as_str()?;
+    Some(str_value.to_lowercase())
+}
+
+fn is_valid_effort(value: &str) -> bool {
+    matches!(
+        value,
+        "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra" | "ultracode"
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reads_root_toml_reasoning_settings() {
+        let content = "model_reasoning_effort = \"high\"\nmodel_reasoning_speed = \"fast\"\n\n[model_providers.foo]\nname = \"Foo\"\n";
+        assert_eq!(
+            read_root_toml_string(content, "model_reasoning_effort"),
+            Some("high".to_string())
+        );
+        assert_eq!(
+            read_root_toml_string(content, "model_reasoning_speed"),
+            Some("fast".to_string())
+        );
+        // A value nested under a table header should be ignored.
+        let nested = "[model_providers.foo]\nmodel_reasoning_effort = \"low\"\n";
+        assert_eq!(read_root_toml_string(nested, "model_reasoning_effort"), None);
+    }
+
+    #[test]
+    fn reads_root_json_reasoning_settings() {
+        let content = "{\n  \"model_reasoning_effort\": \"medium\",\n  \"model_reasoning_speed\": \"fast\"\n}\n";
+        assert_eq!(
+            read_root_json_string(content, "model_reasoning_effort"),
+            Some("medium".to_string())
+        );
+        assert_eq!(
+            read_root_json_string(content, "model_reasoning_speed"),
+            Some("fast".to_string())
+        );
+        assert_eq!(read_root_json_string("not json", "model_reasoning_effort"), None);
+    }
 
     #[test]
     fn default_project_config_disables_format_on_save() {

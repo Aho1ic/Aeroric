@@ -96,6 +96,7 @@ export const common = {
   usageMetricValue: {
     fontSize: 11,
     fontWeight: 700,
+    whiteSpace: "nowrap" as const,
   },
   usageMetricMeta: {
     fontSize: 10,
