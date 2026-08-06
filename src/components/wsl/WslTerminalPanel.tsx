@@ -7,6 +7,7 @@ import {
   applyTerminalTextareaInputAttributes,
   attachLinuxIMEFix,
   attachMacWebKitShiftInputFix,
+  attachWindowsIMEPositionFix,
 } from "../terminalInputFix";
 import { attachSmartCopy } from "../terminalCopyHelper";
 import {
@@ -88,6 +89,7 @@ export const WslTerminalPanel = forwardRef<
     term.open(container);
     applyTerminalTextareaInputAttributes(term);
     const disposeInputFix = attachMacWebKitShiftInputFix(term);
+    const disposeWindowsImeFix = attachWindowsIMEPositionFix(term);
     loadWebglAddon(term);
     const writer = createSmartWriter(term, () => themeVariant, { resumeOnAnyOutput: true });
     const disposeGuard = attachMacWebKitTerminalGuard({ term, container, writer });
@@ -150,6 +152,7 @@ export const WslTerminalPanel = forwardRef<
       input.dispose();
       disposeGuard();
       disposeInputFix();
+      disposeWindowsImeFix();
       invoke("kill_wsl_shell", { shellId }).catch(console.error);
       terminalRef.current = null;
       fitAddonRef.current = null;

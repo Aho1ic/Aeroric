@@ -1,25 +1,37 @@
+use super::cache_injector;
+use super::chat_bridge::{chat_response_to_responses, responses_to_chat, ChatSseTransformer};
+use super::circuit_breaker::{CircuitBreakerConfig, CircuitBreakerRegistry, CircuitPermit};
+use super::session;
+use super::thinking_optimizer;
+use super::transforms::{self, PreparedRequest};
 use super::usage::{self, TokenUsage, UsageCapture, UsageStore};
 use super::{
-    RouterAgent, RouterRequestRecord, RouterRuntimeConfig, RuntimeMetrics, UpstreamTarget,
-    HEALTH_PATH, ROUTE_AGENT_HEADER,
+    RouterAgent, RouterAgentPolicy, RouterRequestRecord, RouterRuntimeConfig, RuntimeMetrics,
+    UpstreamTarget, HEALTH_PATH, ROUTE_AGENT_HEADER,
 };
 use axum::body::{to_bytes, Body, Bytes};
 use axum::extract::{Request, State};
-use axum::http::header::{CONNECTION, CONTENT_ENCODING, CONTENT_LENGTH, CONTENT_TYPE, HOST};
-use axum::http::{HeaderMap, HeaderName, StatusCode, Uri};
+use axum::http::header::{
+    ACCEPT_ENCODING, AUTHORIZATION, CONNECTION, CONTENT_ENCODING, CONTENT_LENGTH, CONTENT_TYPE,
+    HOST,
+};
+use axum::http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{any, get};
 use axum::{Json, Router};
 use futures_util::stream::{self, BoxStream};
 use futures_util::StreamExt;
 use serde_json::{json, Value};
+use std::collections::VecDeque;
 use std::io;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
 use url::Url;
 
 const MAX_REQUEST_BODY_BYTES: usize = 64 * 1024 * 1024;
+const MAX_RESPONSE_BODY_BYTES: usize = 64 * 1024 * 1024;
+const ANTHROPIC_ONE_M_BETA: &str = "context-1m-2025-08-07";
 const HOP_BY_HOP_HEADERS: &[&str] = &[
     "connection",
     "keep-alive",
@@ -32,13 +44,14 @@ const HOP_BY_HOP_HEADERS: &[&str] = &[
     "transfer-encoding",
     "upgrade",
 ];
+const NON_RETRYABLE_STATUS_CODES: &[u16] = &[400, 405, 406, 413, 414, 415, 422, 501];
 
 #[derive(Clone)]
 pub(crate) struct ServerContext {
-    pub(crate) client: reqwest::Client,
     pub(crate) config: Arc<RwLock<RouterRuntimeConfig>>,
     pub(crate) usage_store: UsageStore,
     pub(crate) metrics: Arc<RuntimeMetrics>,
+    pub(crate) circuit_breakers: Arc<CircuitBreakerRegistry>,
 }
 
 pub(crate) fn router(context: ServerContext) -> Router {
@@ -65,13 +78,12 @@ async fn proxy_request(State(context): State<ServerContext>, request: Request) -
     };
 
     let runtime_config = context.config.read().await.clone();
-    let record_usage = runtime_config.record_usage;
-    let target = runtime_config.upstreams.target(route.agent).cloned();
+    let agent_runtime = runtime_config.upstreams.agent(route.agent).clone();
     let mut completion = RequestCompletion::new(
         route.agent,
         started,
         started_at,
-        record_usage,
+        runtime_config.record_usage,
         context.usage_store.clone(),
         context.metrics.clone(),
     );
@@ -99,148 +111,211 @@ async fn proxy_request(State(context): State<ServerContext>, request: Request) -
     let request_metadata = request_metadata(&body_bytes);
     completion.set_request_model(request_metadata.model.clone());
     completion.set_streaming(request_metadata.streaming);
+    completion.set_endpoint(route.forward_path.clone());
+    let session_body = serde_json::from_slice::<Value>(&body_bytes).ok();
+    completion.set_session_id(Some(session::extract_session_id(
+        route.agent,
+        &parts.headers,
+        session_body.as_ref(),
+    )));
 
-    let Some(target) = target else {
+    let candidates = agent_runtime.candidates();
+    if candidates.is_empty() {
+        let message = if agent_runtime.policy.auto_failover_enabled {
+            "automatic failover is enabled, but its queue has no valid targets"
+        } else {
+            "routing is disabled or no active target is configured for this agent"
+        };
         completion
             .complete(
                 TokenUsage::default(),
                 StatusCode::SERVICE_UNAVAILABLE.as_u16(),
                 request_metadata.streaming,
-                Some("routing is disabled for this agent".to_string()),
+                Some(message.to_string()),
             )
             .await;
-        return json_error(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "local routing is disabled for this agent",
-        );
-    };
-
-    let upstream_url = match build_upstream_url(&target, &route.forward_path, parts.uri.query()) {
-        Ok(url) => url,
-        Err(message) => {
-            completion
-                .complete(
-                    TokenUsage::default(),
-                    StatusCode::BAD_GATEWAY.as_u16(),
-                    request_metadata.streaming,
-                    Some(message.to_string()),
-                )
-                .await;
-            return json_error(StatusCode::BAD_GATEWAY, "invalid upstream route");
-        }
-    };
-
-    let method = parts.method.clone();
-    let outbound_headers = filter_request_headers(parts.headers);
-    let upstream_response = context
-        .client
-        .request(method.clone(), upstream_url)
-        .headers(outbound_headers)
-        .body(body_bytes)
-        .send()
-        .await;
-    let upstream_response = match upstream_response {
-        Ok(response) => response,
-        Err(error) => {
-            let (status, summary) = classify_send_error(&error);
-            completion
-                .complete(
-                    TokenUsage::default(),
-                    status.as_u16(),
-                    request_metadata.streaming,
-                    Some(summary.to_string()),
-                )
-                .await;
-            return json_error(status, summary);
-        }
-    };
-
-    let status = upstream_response.status();
-    let response_headers = filter_response_headers(upstream_response.headers().clone());
-    let is_sse = response_headers
-        .get(CONTENT_TYPE)
-        .and_then(|value| value.to_str().ok())
-        .map(|value| value.to_ascii_lowercase().contains("text/event-stream"))
-        .unwrap_or(false);
-    let is_streaming = request_metadata.streaming || is_sse;
-    let content_encoding = response_headers
-        .get(CONTENT_ENCODING)
-        .and_then(|value| value.to_str().ok());
-    let content_encoding = content_encoding.map(str::to_string);
-    let response_error =
-        (status.as_u16() >= 400).then(|| format!("upstream returned HTTP {}", status.as_u16()));
-    let expected_body_bytes = upstream_response.content_length();
-
-    let mut response = Response::new(Body::empty());
-    *response.status_mut() = status;
-    *response.headers_mut() = response_headers;
-
-    if method == axum::http::Method::HEAD
-        || matches!(status, StatusCode::NO_CONTENT | StatusCode::NOT_MODIFIED)
-    {
-        completion
-            .complete(
-                TokenUsage::default(),
-                status.as_u16(),
-                is_streaming,
-                response_error.clone(),
-            )
-            .await;
-        return response;
+        return json_error(StatusCode::SERVICE_UNAVAILABLE, message);
     }
 
-    let state = ProxyBodyState {
-        upstream: Box::pin(upstream_response.bytes_stream()),
-        capture: Some(UsageCapture::new(
-            route.agent,
-            is_streaming,
-            content_encoding.as_deref(),
-        )),
-        completion: Some(completion),
-        status_code: status.as_u16(),
-        is_streaming,
-        response_error,
-        expected_body_bytes,
-        forwarded_body_bytes: 0,
-    };
-    let stream = stream::unfold(Some(state), |state| async move {
-        let Some(mut state) = state else {
-            return None;
+    let method = parts.method;
+    let query = parts.uri.query().map(str::to_string);
+    let outbound_headers = filter_request_headers(parts.headers);
+    let policy = agent_runtime.policy;
+    let circuit_config = policy.circuit_breaker_config();
+    let max_attempts = policy.max_attempts();
+    let bypass_circuit_breaker = !policy.auto_failover_enabled;
+    let mut attempted_targets = 0usize;
+    let mut last_failure: Option<AttemptFailure> = None;
+    let mut saw_circuit_candidate = false;
+
+    for target in candidates {
+        if attempted_targets >= max_attempts {
+            break;
+        }
+
+        let permit = if bypass_circuit_breaker {
+            CircuitPermit {
+                allowed: true,
+                used_half_open_permit: false,
+            }
+        } else {
+            context
+                .circuit_breakers
+                .allow_request(route.agent, target.id(), circuit_config.clone())
+                .await
         };
-        match state.upstream.next().await {
-            Some(Ok(chunk)) => {
-                if let Some(capture) = state.capture.as_mut() {
-                    capture.push(&chunk);
-                }
-                state.forwarded_body_bytes = state
-                    .forwarded_body_bytes
-                    .saturating_add(chunk.len() as u64);
-                if state.expected_body_bytes == Some(state.forwarded_body_bytes) {
-                    state.finish(None).await;
-                    Some((Ok::<Bytes, io::Error>(chunk), None))
+        if !permit.allowed {
+            continue;
+        }
+        saw_circuit_candidate = true;
+        attempted_targets += 1;
+
+        let attempt = attempt_target(
+            &runtime_config,
+            &route,
+            &method,
+            query.as_deref(),
+            &outbound_headers,
+            &body_bytes,
+            &request_metadata,
+            &policy,
+            &target,
+        )
+        .await;
+
+        match attempt {
+            AttemptResult::Retry(mut failure) => {
+                failure.attempt_count = attempted_targets;
+                context
+                    .circuit_breakers
+                    .record_failure(
+                        route.agent,
+                        target.id(),
+                        circuit_config.clone(),
+                        permit.used_half_open_permit,
+                        &failure.summary,
+                    )
+                    .await;
+                last_failure = Some(failure);
+            }
+            AttemptResult::Return(mut upstream) => {
+                upstream.attempt_count = attempted_targets;
+                completion.set_target(
+                    target.id(),
+                    target.name(),
+                    &upstream.endpoint,
+                    &upstream.outbound_model,
+                    attempted_targets,
+                );
+
+                if upstream.error_summary.is_some() {
+                    context
+                        .circuit_breakers
+                        .release_neutral(
+                            route.agent,
+                            target.id(),
+                            circuit_config.clone(),
+                            permit.used_half_open_permit,
+                        )
+                        .await;
+                } else if upstream.is_streaming_body() {
+                    upstream.attach_stream_completion(StreamCompletion {
+                        completion,
+                        circuit_breakers: context.circuit_breakers.clone(),
+                        circuit_config: circuit_config.clone(),
+                        agent: route.agent,
+                        target_id: target.id().to_string(),
+                        used_half_open_permit: permit.used_half_open_permit,
+                    });
+                    mark_active_target(&context, route.agent, target.id()).await;
+                    return upstream.into_response(route.agent);
                 } else {
-                    Some((Ok::<Bytes, io::Error>(chunk), Some(state)))
+                    context
+                        .circuit_breakers
+                        .record_success(
+                            route.agent,
+                            target.id(),
+                            circuit_config.clone(),
+                            permit.used_half_open_permit,
+                        )
+                        .await;
+                    mark_active_target(&context, route.agent, target.id()).await;
                 }
-            }
-            Some(Err(error)) => {
-                let summary = classify_body_error(&error);
-                state.finish(Some(&summary)).await;
-                Some((Err(io::Error::other(summary)), None))
-            }
-            None => {
-                state.finish(None).await;
-                None
+
+                let usage = upstream.capture_usage(route.agent);
+                let status = upstream.status;
+                let is_streaming = upstream.is_streaming;
+                let error_summary = upstream.error_summary.clone();
+                let response = upstream.into_response(route.agent);
+                completion
+                    .complete(usage, status.as_u16(), is_streaming, error_summary)
+                    .await;
+                return response;
             }
         }
+    }
+
+    let failure = last_failure.unwrap_or_else(|| AttemptFailure {
+        status: StatusCode::SERVICE_UNAVAILABLE,
+        upstream_status: None,
+        headers: HeaderMap::new(),
+        body: Bytes::new(),
+        summary: if saw_circuit_candidate {
+            "all configured upstream targets failed".to_string()
+        } else {
+            "all configured upstream targets are circuit-open or busy probing".to_string()
+        },
+        endpoint: route.forward_path.clone(),
+        outbound_model: request_metadata.model.clone(),
+        target_id: String::new(),
+        target_name: String::new(),
+        attempt_count: attempted_targets,
     });
-    *response.body_mut() = Body::from_stream(stream);
-    response
+    completion.set_target(
+        &failure.target_id,
+        &failure.target_name,
+        &failure.endpoint,
+        &failure.outbound_model,
+        failure.attempt_count,
+    );
+    let status = failure.upstream_status.unwrap_or(failure.status);
+    let summary = failure.summary.clone();
+    completion
+        .complete(
+            TokenUsage::default(),
+            status.as_u16(),
+            request_metadata.streaming,
+            Some(summary.clone()),
+        )
+        .await;
+    if failure.upstream_status.is_some() {
+        buffered_response(status, failure.headers, failure.body)
+    } else {
+        json_error(status, &summary)
+    }
+}
+
+async fn mark_active_target(context: &ServerContext, agent: RouterAgent, target_id: &str) {
+    let mut config = context.config.write().await;
+    config.upstreams.agent_mut(agent).policy.active_target = target_id.to_string();
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct SelectedRoute {
     agent: RouterAgent,
     forward_path: String,
+}
+
+impl SelectedRoute {
+    fn bridges_responses_to_chat(&self, target: &UpstreamTarget) -> bool {
+        if self.agent != RouterAgent::Codex || !target.enable_chat_completions_proxy() {
+            return false;
+        }
+        matches!(
+            self.forward_path.trim_end_matches('/'),
+            "/responses" | "/v1/responses"
+        )
+    }
 }
 
 fn select_route(uri: &Uri, headers: &HeaderMap) -> Result<SelectedRoute, &'static str> {
@@ -272,6 +347,8 @@ fn select_route(uri: &Uri, headers: &HeaderMap) -> Result<SelectedRoute, &'stati
         || path.starts_with("/responses")
         || path.starts_with("/v1/chat/completions")
         || path.starts_with("/chat/completions")
+        || path.starts_with("/v1/models")
+        || path == "/models"
     {
         (RouterAgent::Codex, path.to_string())
     } else if let Some(agent) = marker {
@@ -423,10 +500,877 @@ fn request_metadata(body: &[u8]) -> RequestMetadata {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
+async fn attempt_target(
+    runtime_config: &RouterRuntimeConfig,
+    route: &SelectedRoute,
+    method: &Method,
+    query: Option<&str>,
+    original_headers: &HeaderMap,
+    original_body: &[u8],
+    request_metadata: &RequestMetadata,
+    policy: &RouterAgentPolicy,
+    target: &UpstreamTarget,
+) -> AttemptResult {
+    let prepared = transforms::prepare_request(original_body, target, policy);
+    let request_model = prepared.request_model.clone();
+    let outbound_model = prepared.outbound_model.clone();
+    let mut one_m_context = prepared.one_m_context;
+    let bridge = route.bridges_responses_to_chat(target);
+    let endpoint = if bridge {
+        "/v1/chat/completions".to_string()
+    } else {
+        route.forward_path.clone()
+    };
+    let upstream_url = match build_upstream_url(target, &endpoint, query) {
+        Ok(url) => url,
+        Err(message) => {
+            return AttemptResult::Retry(AttemptFailure::transport(
+                target,
+                StatusCode::BAD_GATEWAY,
+                message,
+                endpoint,
+                outbound_model,
+            ));
+        }
+    };
+
+    let mut current_json = prepared.json.clone();
+    let mut current_body = match request_body_for_target(&prepared, bridge) {
+        Ok(body) => body,
+        Err(message) => {
+            return AttemptResult::Return(AttemptResponse::local_error(
+                StatusCode::BAD_REQUEST,
+                message,
+                endpoint,
+                outbound_model,
+            ));
+        }
+    };
+    // Preflight optimization for Claude: inject thinking configuration and
+    // prompt-cache breakpoints before the first upstream send. Both run only
+    // when enabled by policy; the rectifier retry path below re-serializes the
+    // body independently and does not re-run these passes.
+    let mut interleaved_thinking = false;
+    if route.agent == RouterAgent::Claude {
+        if let Some(json) = current_json.as_mut() {
+            if policy.thinking_optimizer_enabled {
+                if let Some(outcome) = thinking_optimizer::optimize(json) {
+                    one_m_context |= outcome.one_m_context;
+                    interleaved_thinking |= outcome.interleaved_thinking_beta;
+                    current_body = serde_json::to_vec(json).unwrap_or(current_body);
+                }
+            }
+            if policy.cache_injection_enabled {
+                cache_injector::inject(json);
+                current_body = serde_json::to_vec(json).unwrap_or(current_body);
+            }
+        }
+    }
+
+    let mut rectifier_retried = false;
+
+    loop {
+        let headers = match outbound_headers(
+            original_headers,
+            route.agent,
+            target,
+            bridge,
+            one_m_context,
+            interleaved_thinking,
+        ) {
+            Ok(headers) => headers,
+            Err(message) => {
+                return AttemptResult::Retry(AttemptFailure::transport(
+                    target,
+                    StatusCode::BAD_GATEWAY,
+                    message,
+                    endpoint,
+                    outbound_model,
+                ));
+            }
+        };
+
+        let request = runtime_config
+            .client()
+            .request(method.clone(), upstream_url.clone())
+            .headers(headers)
+            .body(current_body.clone());
+        let raw = match send_upstream(
+            request,
+            method,
+            request_metadata.streaming,
+            policy.auto_failover_enabled,
+            policy.streaming_first_byte_timeout,
+            policy.non_streaming_timeout,
+        )
+        .await
+        {
+            Ok(response) => response,
+            Err(failure) => {
+                return AttemptResult::Retry(AttemptFailure::transport(
+                    target,
+                    failure.status,
+                    failure.summary,
+                    endpoint,
+                    outbound_model,
+                ));
+            }
+        };
+
+        if raw.status.as_u16() >= 400 {
+            let status = raw.status;
+            let (headers, body) = raw.into_buffered();
+            let summary = upstream_error_summary(status, &headers, &body);
+            if !rectifier_retried && policy.rectifier_enabled && route.agent == RouterAgent::Claude
+            {
+                if let Some(json) = current_json.as_ref() {
+                    if let Some((rectified, _kind)) =
+                        transforms::rectify_request_for_error(json, &summary)
+                    {
+                        current_json = Some(rectified.clone());
+                        current_body = serde_json::to_vec(&rectified).unwrap_or(current_body);
+                        rectifier_retried = true;
+                        continue;
+                    }
+                }
+            }
+
+            let response = AttemptResponse {
+                status,
+                headers,
+                body: AttemptBody::Buffered(body),
+                is_streaming: request_metadata.streaming,
+                error_summary: Some(summary.clone()),
+                endpoint: endpoint.clone(),
+                outbound_model: outbound_model.clone(),
+                attempt_count: 0,
+            };
+            if is_non_retryable_status(status) {
+                return AttemptResult::Return(response);
+            }
+            return AttemptResult::Retry(AttemptFailure {
+                status,
+                upstream_status: Some(status),
+                headers: response.headers,
+                body: match response.body {
+                    AttemptBody::Buffered(body) => body,
+                    AttemptBody::Streaming(_) => Bytes::new(),
+                },
+                summary,
+                endpoint,
+                outbound_model,
+                target_id: target.id().to_string(),
+                target_name: target.name().to_string(),
+                attempt_count: 0,
+            });
+        }
+
+        return match raw.body {
+            RawAttemptBody::Buffered(body) => {
+                let mut headers = raw.headers;
+                let body = if bridge {
+                    match serde_json::from_slice::<Value>(&body) {
+                        Ok(payload) => {
+                            headers.remove(CONTENT_ENCODING);
+                            headers.remove(CONTENT_LENGTH);
+                            headers
+                                .insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+                            serde_json::to_vec(&chat_response_to_responses(
+                                &payload,
+                                if outbound_model.is_empty() {
+                                    &request_model
+                                } else {
+                                    &outbound_model
+                                },
+                            ))
+                            .map(Bytes::from)
+                            .unwrap_or(body)
+                        }
+                        Err(_) => body,
+                    }
+                } else {
+                    body
+                };
+                AttemptResult::Return(AttemptResponse {
+                    status: raw.status,
+                    headers,
+                    body: AttemptBody::Buffered(body),
+                    is_streaming: request_metadata.streaming,
+                    error_summary: None,
+                    endpoint,
+                    outbound_model,
+                    attempt_count: 0,
+                })
+            }
+            RawAttemptBody::Streaming { first, rest } => {
+                let mut headers = raw.headers;
+                headers.remove(CONTENT_LENGTH);
+                if bridge {
+                    headers.remove(CONTENT_ENCODING);
+                    headers.insert(
+                        CONTENT_TYPE,
+                        HeaderValue::from_static("text/event-stream; charset=utf-8"),
+                    );
+                }
+                let idle_timeout = if policy.auto_failover_enabled {
+                    policy.streaming_idle_timeout
+                } else {
+                    0
+                };
+                AttemptResult::Return(AttemptResponse {
+                    status: raw.status,
+                    headers,
+                    body: AttemptBody::Streaming(StreamingAttemptBody {
+                        first,
+                        rest,
+                        bridge_model: bridge.then(|| {
+                            if outbound_model.is_empty() {
+                                request_model.clone()
+                            } else {
+                                outbound_model.clone()
+                            }
+                        }),
+                        idle_timeout,
+                        stream_completion: None,
+                    }),
+                    is_streaming: true,
+                    error_summary: None,
+                    endpoint,
+                    outbound_model,
+                    attempt_count: 0,
+                })
+            }
+        };
+    }
+}
+
+fn request_body_for_target(prepared: &PreparedRequest, bridge: bool) -> Result<Vec<u8>, String> {
+    if !bridge {
+        return Ok(prepared.bytes.clone());
+    }
+    let json = prepared
+        .json
+        .as_ref()
+        .ok_or_else(|| "Codex Responses-to-Chat bridge requires a JSON request body".to_string())?;
+    serde_json::to_vec(&responses_to_chat(json))
+        .map_err(|error| format!("failed to convert Responses request: {error}"))
+}
+
+fn outbound_headers(
+    original: &HeaderMap,
+    agent: RouterAgent,
+    target: &UpstreamTarget,
+    bridge: bool,
+    one_m_context: bool,
+    interleaved_thinking: bool,
+) -> Result<HeaderMap, String> {
+    let mut headers = original.clone();
+    headers.remove(CONTENT_LENGTH);
+    if bridge {
+        headers.remove(ACCEPT_ENCODING);
+        headers.insert(ACCEPT_ENCODING, HeaderValue::from_static("identity"));
+        headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+    }
+
+    if !target.api_key().is_empty() {
+        headers.remove(AUTHORIZATION);
+        headers.remove("x-api-key");
+        let key = HeaderValue::from_str(target.api_key())
+            .map_err(|_| "target API key contains invalid header characters".to_string())?;
+        match agent {
+            RouterAgent::Claude => {
+                headers.insert("x-api-key", key);
+                let bearer = HeaderValue::from_str(&format!("Bearer {}", target.api_key()))
+                    .map_err(|_| "target API key contains invalid header characters".to_string())?;
+                headers.insert(AUTHORIZATION, bearer);
+            }
+            RouterAgent::Codex => {
+                let bearer = HeaderValue::from_str(&format!("Bearer {}", target.api_key()))
+                    .map_err(|_| "target API key contains invalid header characters".to_string())?;
+                headers.insert(AUTHORIZATION, bearer);
+            }
+        }
+    }
+
+    if agent == RouterAgent::Claude && (one_m_context || interleaved_thinking) {
+        let mut values = headers
+            .get("anthropic-beta")
+            .and_then(|value| value.to_str().ok())
+            .map(|value| {
+                value
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(str::to_string)
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        if one_m_context
+            && !values
+                .iter()
+                .any(|value| value.eq_ignore_ascii_case(ANTHROPIC_ONE_M_BETA))
+        {
+            values.push(ANTHROPIC_ONE_M_BETA.to_string());
+        }
+        if interleaved_thinking
+            && !values.iter().any(|value| {
+                value.eq_ignore_ascii_case(thinking_optimizer::INTERLEAVED_THINKING_BETA)
+            })
+        {
+            values.push(thinking_optimizer::INTERLEAVED_THINKING_BETA.to_string());
+        }
+        let value = HeaderValue::from_str(&values.join(","))
+            .map_err(|_| "failed to construct anthropic-beta header".to_string())?;
+        headers.insert("anthropic-beta", value);
+    }
+
+    Ok(headers)
+}
+
+struct TransportFailure {
+    status: StatusCode,
+    summary: String,
+}
+
+struct RawAttemptResponse {
+    status: StatusCode,
+    headers: HeaderMap,
+    body: RawAttemptBody,
+}
+
+impl RawAttemptResponse {
+    fn into_buffered(self) -> (HeaderMap, Bytes) {
+        match self.body {
+            RawAttemptBody::Buffered(body) => (self.headers, body),
+            RawAttemptBody::Streaming { .. } => (self.headers, Bytes::new()),
+        }
+    }
+}
+
+enum RawAttemptBody {
+    Buffered(Bytes),
+    Streaming {
+        first: Option<Bytes>,
+        rest: BoxStream<'static, Result<Bytes, reqwest::Error>>,
+    },
+}
+
+async fn send_upstream(
+    request: reqwest::RequestBuilder,
+    method: &Method,
+    streaming: bool,
+    timeouts_enabled: bool,
+    first_byte_timeout: u64,
+    non_streaming_timeout: u64,
+) -> Result<RawAttemptResponse, TransportFailure> {
+    if streaming {
+        let operation = async {
+            let response = request.send().await.map_err(transport_from_reqwest)?;
+            let status = response.status();
+            let headers = filter_response_headers(response.headers().clone());
+            if status.as_u16() >= 400
+                || *method == Method::HEAD
+                || matches!(status, StatusCode::NO_CONTENT | StatusCode::NOT_MODIFIED)
+            {
+                let body = read_response_body_limited(response).await?;
+                return Ok(RawAttemptResponse {
+                    status,
+                    headers,
+                    body: RawAttemptBody::Buffered(body),
+                });
+            }
+            let mut stream = response.bytes_stream().boxed();
+            let first = stream
+                .next()
+                .await
+                .transpose()
+                .map_err(transport_from_reqwest)?;
+            Ok(RawAttemptResponse {
+                status,
+                headers,
+                body: RawAttemptBody::Streaming {
+                    first,
+                    rest: stream,
+                },
+            })
+        };
+        if timeouts_enabled && first_byte_timeout > 0 {
+            tokio::time::timeout(Duration::from_secs(first_byte_timeout), operation)
+                .await
+                .map_err(|_| TransportFailure {
+                    status: StatusCode::GATEWAY_TIMEOUT,
+                    summary: format!(
+                        "upstream did not produce its first response chunk within {first_byte_timeout}s"
+                    ),
+                })?
+        } else {
+            operation.await
+        }
+    } else {
+        let operation = async {
+            let response = request.send().await.map_err(transport_from_reqwest)?;
+            let status = response.status();
+            let headers = filter_response_headers(response.headers().clone());
+            let body = if *method == Method::HEAD
+                || matches!(status, StatusCode::NO_CONTENT | StatusCode::NOT_MODIFIED)
+            {
+                Bytes::new()
+            } else {
+                read_response_body_limited(response).await?
+            };
+            Ok(RawAttemptResponse {
+                status,
+                headers,
+                body: RawAttemptBody::Buffered(body),
+            })
+        };
+        if timeouts_enabled && non_streaming_timeout > 0 {
+            tokio::time::timeout(Duration::from_secs(non_streaming_timeout), operation)
+                .await
+                .map_err(|_| TransportFailure {
+                    status: StatusCode::GATEWAY_TIMEOUT,
+                    summary: format!(
+                        "upstream non-streaming request exceeded {non_streaming_timeout}s"
+                    ),
+                })?
+        } else {
+            operation.await
+        }
+    }
+}
+
+async fn read_response_body_limited(
+    response: reqwest::Response,
+) -> Result<Bytes, TransportFailure> {
+    let mut stream = response.bytes_stream();
+    let mut body = Vec::new();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(transport_from_reqwest)?;
+        if body.len().saturating_add(chunk.len()) > MAX_RESPONSE_BODY_BYTES {
+            return Err(TransportFailure {
+                status: StatusCode::BAD_GATEWAY,
+                summary: "upstream response exceeded the local router limit".to_string(),
+            });
+        }
+        body.extend_from_slice(&chunk);
+    }
+    Ok(Bytes::from(body))
+}
+
+fn transport_from_reqwest(error: reqwest::Error) -> TransportFailure {
+    if error.is_timeout() {
+        TransportFailure {
+            status: StatusCode::GATEWAY_TIMEOUT,
+            summary: "upstream request timed out".to_string(),
+        }
+    } else if error.is_connect() {
+        TransportFailure {
+            status: StatusCode::BAD_GATEWAY,
+            summary: "failed to connect to upstream".to_string(),
+        }
+    } else {
+        TransportFailure {
+            status: StatusCode::BAD_GATEWAY,
+            summary: "upstream request or response stream failed".to_string(),
+        }
+    }
+}
+
+fn is_non_retryable_status(status: StatusCode) -> bool {
+    NON_RETRYABLE_STATUS_CODES.contains(&status.as_u16())
+}
+
+/// Decompress an upstream error response body for inspection. Mirrors the
+/// encoding handling used for usage capture so compressed error responses are
+/// still legible. Falls back to the raw body when the encoding is unknown or the
+/// decoder fails, so a malformed body never masks the real upstream status.
+fn decompress_upstream_body(headers: &HeaderMap, body: &[u8]) -> Vec<u8> {
+    let Some(encoding) = headers
+        .get(CONTENT_ENCODING)
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.eq_ignore_ascii_case("identity"))
+    else {
+        return body.to_vec();
+    };
+    let Some(decoded) = usage::decode_for_inspection(body, Some(encoding)) else {
+        return body.to_vec();
+    };
+    decoded
+}
+
+fn upstream_error_summary(status: StatusCode, headers: &HeaderMap, body: &[u8]) -> String {
+    let decoded = decompress_upstream_body(headers, body);
+    let parsed = serde_json::from_slice::<Value>(&decoded).ok();
+    let message = parsed
+        .as_ref()
+        .and_then(|value| {
+            value
+                .pointer("/error/message")
+                .or_else(|| value.get("message"))
+                .and_then(Value::as_str)
+        })
+        .map(str::trim)
+        .filter(|message| !message.is_empty())
+        .map(str::to_string)
+        .or_else(|| {
+            let text = String::from_utf8_lossy(body);
+            let text = text.trim();
+            (!text.is_empty()).then(|| text.chars().take(512).collect())
+        })
+        .unwrap_or_else(|| "upstream rejected the request".to_string());
+    format!("upstream returned HTTP {}: {message}", status.as_u16())
+}
+
+enum AttemptResult {
+    Return(AttemptResponse),
+    Retry(AttemptFailure),
+}
+
+struct AttemptFailure {
+    status: StatusCode,
+    upstream_status: Option<StatusCode>,
+    headers: HeaderMap,
+    body: Bytes,
+    summary: String,
+    endpoint: String,
+    outbound_model: String,
+    target_id: String,
+    target_name: String,
+    attempt_count: usize,
+}
+
+impl AttemptFailure {
+    fn transport(
+        target: &UpstreamTarget,
+        status: StatusCode,
+        summary: impl Into<String>,
+        endpoint: String,
+        outbound_model: String,
+    ) -> Self {
+        Self {
+            status,
+            upstream_status: None,
+            headers: HeaderMap::new(),
+            body: Bytes::new(),
+            summary: summary.into(),
+            endpoint,
+            outbound_model,
+            target_id: target.id().to_string(),
+            target_name: target.name().to_string(),
+            attempt_count: 0,
+        }
+    }
+}
+
+struct AttemptResponse {
+    status: StatusCode,
+    headers: HeaderMap,
+    body: AttemptBody,
+    is_streaming: bool,
+    error_summary: Option<String>,
+    endpoint: String,
+    outbound_model: String,
+    attempt_count: usize,
+}
+
+impl AttemptResponse {
+    fn local_error(
+        status: StatusCode,
+        message: String,
+        endpoint: String,
+        outbound_model: String,
+    ) -> Self {
+        let body = Bytes::from(
+            serde_json::to_vec(&json!({
+                "error": {"type": "local_router_error", "message": message}
+            }))
+            .unwrap_or_default(),
+        );
+        let mut headers = HeaderMap::new();
+        headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+        Self {
+            status,
+            headers,
+            body: AttemptBody::Buffered(body),
+            is_streaming: false,
+            error_summary: Some(message),
+            endpoint,
+            outbound_model,
+            attempt_count: 0,
+        }
+    }
+
+    fn is_streaming_body(&self) -> bool {
+        matches!(self.body, AttemptBody::Streaming(_))
+    }
+
+    fn attach_stream_completion(&mut self, completion: StreamCompletion) {
+        if let AttemptBody::Streaming(stream) = &mut self.body {
+            stream.stream_completion = Some(completion);
+        }
+    }
+
+    fn capture_usage(&self, agent: RouterAgent) -> TokenUsage {
+        let AttemptBody::Buffered(body) = &self.body else {
+            return TokenUsage::default();
+        };
+        let content_encoding = self
+            .headers
+            .get(CONTENT_ENCODING)
+            .and_then(|value| value.to_str().ok());
+        let mut capture = UsageCapture::new(agent, self.is_streaming, content_encoding);
+        capture.push(body);
+        capture.finish()
+    }
+
+    fn into_response(self, agent: RouterAgent) -> Response {
+        match self.body {
+            AttemptBody::Buffered(body) => buffered_response(self.status, self.headers, body),
+            AttemptBody::Streaming(streaming) => {
+                streaming_response(self.status, self.headers, streaming, agent)
+            }
+        }
+    }
+}
+
+enum AttemptBody {
+    Buffered(Bytes),
+    Streaming(StreamingAttemptBody),
+}
+
+struct StreamingAttemptBody {
+    first: Option<Bytes>,
+    rest: BoxStream<'static, Result<Bytes, reqwest::Error>>,
+    bridge_model: Option<String>,
+    idle_timeout: u64,
+    stream_completion: Option<StreamCompletion>,
+}
+
+struct StreamCompletion {
+    completion: RequestCompletion,
+    circuit_breakers: Arc<CircuitBreakerRegistry>,
+    circuit_config: CircuitBreakerConfig,
+    agent: RouterAgent,
+    target_id: String,
+    used_half_open_permit: bool,
+}
+
+fn streaming_response(
+    status: StatusCode,
+    mut headers: HeaderMap,
+    streaming: StreamingAttemptBody,
+    agent: RouterAgent,
+) -> Response {
+    headers.remove(CONTENT_LENGTH);
+    let mut state = ProxyBodyState {
+        upstream: streaming.rest,
+        pending: VecDeque::new(),
+        transformer: streaming.bridge_model.map(ChatSseTransformer::new),
+        capture: Some(UsageCapture::new(agent, true, None)),
+        stream_completion: streaming.stream_completion,
+        status_code: status.as_u16(),
+        idle_timeout: streaming.idle_timeout,
+        upstream_finished: false,
+        finalized: false,
+    };
+    if let Some(first) = streaming.first {
+        state.accept_upstream_chunk(&first);
+    }
+    let stream = stream::unfold(Some(state), |state| async move {
+        let Some(mut state) = state else {
+            return None;
+        };
+        loop {
+            if state.upstream_finished && !state.finalized {
+                state.finalize_success().await;
+            }
+            if let Some(chunk) = state.pending.pop_front() {
+                return Some((Ok::<Bytes, io::Error>(chunk), Some(state)));
+            }
+            if state.upstream_finished {
+                return None;
+            }
+
+            match state.next_upstream_chunk().await {
+                Ok(Some(chunk)) => state.accept_upstream_chunk(&chunk),
+                Ok(None) => {
+                    if let Some(transformer) = state.transformer.as_mut() {
+                        for chunk in transformer.finish() {
+                            state.enqueue_output(chunk);
+                        }
+                    }
+                    state.upstream_finished = true;
+                }
+                Err(summary) => {
+                    state.finalize_failure(&summary).await;
+                    return Some((Err(io::Error::other(summary)), None));
+                }
+            }
+        }
+    });
+
+    let mut response = Response::new(Body::from_stream(stream));
+    *response.status_mut() = status;
+    *response.headers_mut() = headers;
+    response
+}
+
+struct ProxyBodyState {
+    upstream: BoxStream<'static, Result<Bytes, reqwest::Error>>,
+    pending: VecDeque<Bytes>,
+    transformer: Option<ChatSseTransformer>,
+    capture: Option<UsageCapture>,
+    stream_completion: Option<StreamCompletion>,
+    status_code: u16,
+    idle_timeout: u64,
+    upstream_finished: bool,
+    finalized: bool,
+}
+
+impl ProxyBodyState {
+    fn accept_upstream_chunk(&mut self, chunk: &[u8]) {
+        if let Some(transformer) = self.transformer.as_mut() {
+            for output in transformer.push(chunk) {
+                self.enqueue_output(output);
+            }
+        } else {
+            self.enqueue_output(Bytes::copy_from_slice(chunk));
+        }
+    }
+
+    fn enqueue_output(&mut self, chunk: Bytes) {
+        if let Some(capture) = self.capture.as_mut() {
+            capture.push(&chunk);
+        }
+        self.pending.push_back(chunk);
+    }
+
+    async fn next_upstream_chunk(&mut self) -> Result<Option<Bytes>, String> {
+        let next = self.upstream.next();
+        let result = if self.idle_timeout == 0 {
+            next.await
+        } else {
+            tokio::time::timeout(Duration::from_secs(self.idle_timeout), next)
+                .await
+                .map_err(|_| {
+                    format!(
+                        "upstream response stream was silent for {}s",
+                        self.idle_timeout
+                    )
+                })?
+        };
+        result
+            .transpose()
+            .map_err(|error| transport_from_reqwest(error).summary)
+    }
+
+    async fn finalize_success(&mut self) {
+        if self.finalized {
+            return;
+        }
+        self.finalized = true;
+        let usage = self
+            .capture
+            .take()
+            .map(UsageCapture::finish)
+            .unwrap_or_default();
+        if let Some(stream_completion) = self.stream_completion.take() {
+            stream_completion
+                .circuit_breakers
+                .record_success(
+                    stream_completion.agent,
+                    &stream_completion.target_id,
+                    stream_completion.circuit_config,
+                    stream_completion.used_half_open_permit,
+                )
+                .await;
+            stream_completion
+                .completion
+                .complete(usage, self.status_code, true, None)
+                .await;
+        }
+    }
+
+    async fn finalize_failure(&mut self, summary: &str) {
+        if self.finalized {
+            return;
+        }
+        self.finalized = true;
+        let usage = self
+            .capture
+            .take()
+            .map(UsageCapture::finish)
+            .unwrap_or_default();
+        if let Some(stream_completion) = self.stream_completion.take() {
+            stream_completion
+                .circuit_breakers
+                .record_failure(
+                    stream_completion.agent,
+                    &stream_completion.target_id,
+                    stream_completion.circuit_config,
+                    stream_completion.used_half_open_permit,
+                    summary,
+                )
+                .await;
+            stream_completion
+                .completion
+                .complete(usage, self.status_code, true, Some(summary.to_string()))
+                .await;
+        }
+    }
+}
+
+impl Drop for ProxyBodyState {
+    fn drop(&mut self) {
+        if self.finalized {
+            return;
+        }
+        self.finalized = true;
+        let usage = self
+            .capture
+            .take()
+            .map(UsageCapture::finish)
+            .unwrap_or_default();
+        let Some(stream_completion) = self.stream_completion.take() else {
+            return;
+        };
+        let summary = "client disconnected before the upstream response completed".to_string();
+        if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+            runtime.spawn(async move {
+                stream_completion
+                    .circuit_breakers
+                    .release_neutral(
+                        stream_completion.agent,
+                        &stream_completion.target_id,
+                        stream_completion.circuit_config,
+                        stream_completion.used_half_open_permit,
+                    )
+                    .await;
+                stream_completion
+                    .completion
+                    .complete(usage, 0, true, Some(summary))
+                    .await;
+            });
+        } else {
+            stream_completion
+                .completion
+                .complete_without_runtime(&summary);
+        }
+    }
+}
+
 struct CompletionContext {
     request_id: String,
+    session_id: Option<String>,
     agent: RouterAgent,
     request_model: String,
+    outbound_model: Option<String>,
+    target_id: Option<String>,
+    target_name: Option<String>,
+    endpoint: String,
+    attempt_count: usize,
     started: Instant,
     started_at: i64,
     record_usage: bool,
@@ -452,8 +1396,14 @@ impl RequestCompletion {
         Self {
             context: Some(CompletionContext {
                 request_id: uuid::Uuid::new_v4().to_string(),
+                session_id: None,
                 agent,
                 request_model: String::new(),
+                outbound_model: None,
+                target_id: None,
+                target_name: None,
+                endpoint: String::new(),
+                attempt_count: 0,
                 started,
                 started_at,
                 record_usage,
@@ -470,9 +1420,39 @@ impl RequestCompletion {
         }
     }
 
+    fn set_session_id(&mut self, session_id: Option<String>) {
+        if let Some(context) = self.context.as_mut() {
+            context.session_id = session_id;
+        }
+    }
+
     fn set_streaming(&mut self, streaming: bool) {
         if let Some(context) = self.context.as_mut() {
             context.is_streaming = streaming;
+        }
+    }
+
+    fn set_endpoint(&mut self, endpoint: String) {
+        if let Some(context) = self.context.as_mut() {
+            context.endpoint = endpoint;
+        }
+    }
+
+    fn set_target(
+        &mut self,
+        target_id: &str,
+        target_name: &str,
+        endpoint: &str,
+        outbound_model: &str,
+        attempt_count: usize,
+    ) {
+        if let Some(context) = self.context.as_mut() {
+            context.target_id = (!target_id.is_empty()).then(|| target_id.to_string());
+            context.target_name = (!target_name.is_empty()).then(|| target_name.to_string());
+            context.endpoint = endpoint.to_string();
+            context.outbound_model =
+                (!outbound_model.trim().is_empty()).then(|| outbound_model.to_string());
+            context.attempt_count = attempt_count;
         }
     }
 
@@ -489,30 +1469,14 @@ impl RequestCompletion {
         }
     }
 
-    fn complete_detached(
-        mut self,
-        usage: TokenUsage,
-        status_code: u16,
-        is_streaming: bool,
-        error_summary: String,
-    ) {
-        let Some(mut context) = self.context.take() else {
+    fn complete_without_runtime(mut self, error_summary: &str) {
+        let Some(context) = self.context.take() else {
             return;
         };
-        context.is_streaming = is_streaming;
-        if let Ok(runtime) = tokio::runtime::Handle::try_current() {
-            runtime.spawn(finalize_request(
-                context,
-                usage,
-                status_code,
-                Some(error_summary),
-            ));
-        } else {
-            context.metrics.finish_request(false);
-            context
-                .metrics
-                .set_error(Some(context.agent), &error_summary);
-        }
+        context.metrics.finish_request(false);
+        context
+            .metrics
+            .set_error(Some(context.agent), error_summary);
     }
 }
 
@@ -558,15 +1522,22 @@ async fn finalize_request(
         .model
         .clone()
         .filter(|model| !model.trim().is_empty())
+        .or_else(|| context.outbound_model.clone())
         .or_else(|| {
             (!context.request_model.trim().is_empty()).then_some(context.request_model.clone())
         })
         .unwrap_or_else(|| "unknown".to_string());
     let record = RouterRequestRecord {
         request_id: context.request_id,
+        session_id: context.session_id,
         response_id: usage.response_id,
         agent: context.agent,
+        target_id: context.target_id,
+        target_name: context.target_name,
+        endpoint: context.endpoint,
+        attempt_count: context.attempt_count.min(u32::MAX as usize) as u32,
         model,
+        outbound_model: context.outbound_model,
         input_tokens: usage.input_tokens,
         output_tokens: usage.output_tokens,
         cache_creation_tokens: usage.cache_creation_tokens,
@@ -587,68 +1558,11 @@ async fn finalize_request(
     }
 }
 
-struct ProxyBodyState {
-    upstream: BoxStream<'static, Result<Bytes, reqwest::Error>>,
-    capture: Option<UsageCapture>,
-    completion: Option<RequestCompletion>,
-    status_code: u16,
-    is_streaming: bool,
-    response_error: Option<String>,
-    expected_body_bytes: Option<u64>,
-    forwarded_body_bytes: u64,
-}
-
-impl ProxyBodyState {
-    async fn finish(mut self, transport_error: Option<&str>) {
-        let usage = self
-            .capture
-            .take()
-            .map(UsageCapture::finish)
-            .unwrap_or_default();
-        let error = transport_error
-            .map(str::to_string)
-            .or_else(|| self.response_error.clone());
-        if let Some(completion) = self.completion.take() {
-            completion
-                .complete(usage, self.status_code, self.is_streaming, error)
-                .await;
-        }
-    }
-}
-
-impl Drop for ProxyBodyState {
-    fn drop(&mut self) {
-        let Some(completion) = self.completion.take() else {
-            return;
-        };
-        let usage = self
-            .capture
-            .take()
-            .map(UsageCapture::finish)
-            .unwrap_or_default();
-        let error = self.response_error.take().unwrap_or_else(|| {
-            "client disconnected before the upstream response completed".to_string()
-        });
-        completion.complete_detached(usage, self.status_code, self.is_streaming, error);
-    }
-}
-
-fn classify_send_error(error: &reqwest::Error) -> (StatusCode, &'static str) {
-    if error.is_timeout() {
-        (StatusCode::GATEWAY_TIMEOUT, "upstream request timed out")
-    } else if error.is_connect() {
-        (StatusCode::BAD_GATEWAY, "failed to connect to upstream")
-    } else {
-        (StatusCode::BAD_GATEWAY, "failed to send upstream request")
-    }
-}
-
-fn classify_body_error(error: &reqwest::Error) -> &'static str {
-    if error.is_timeout() {
-        "upstream response stream timed out"
-    } else {
-        "upstream response stream failed"
-    }
+fn buffered_response(status: StatusCode, headers: HeaderMap, body: Bytes) -> Response {
+    let mut response = Response::new(Body::from(body));
+    *response.status_mut() = status;
+    *response.headers_mut() = headers;
+    response
 }
 
 fn json_error(status: StatusCode, message: &str) -> Response {
@@ -668,7 +1582,7 @@ fn json_error(status: StatusCode, message: &str) -> Response {
 mod tests {
     use super::*;
     use crate::local_router::{
-        LocalRouterState, RouterUpstreams, UpstreamTarget, ROUTE_AGENT_HEADER,
+        LocalRouterState, RouterAgentRuntime, RouterUpstreams, UpstreamTarget, ROUTE_AGENT_HEADER,
     };
     use axum::http::HeaderValue;
     use std::convert::Infallible;
@@ -787,8 +1701,29 @@ mod tests {
         (address, task)
     }
 
+    fn runtime_with_target(
+        agent: RouterAgent,
+        target: UpstreamTarget,
+        policy: RouterAgentPolicy,
+    ) -> RouterUpstreams {
+        let runtime = RouterAgentRuntime {
+            targets: vec![target],
+            policy,
+        };
+        match agent {
+            RouterAgent::Claude => RouterUpstreams {
+                claude: runtime,
+                codex: RouterAgentRuntime::default(),
+            },
+            RouterAgent::Codex => RouterUpstreams {
+                claude: RouterAgentRuntime::default(),
+                codex: runtime,
+            },
+        }
+    }
+
     #[tokio::test]
-    async fn forwards_json_and_records_usage_without_sensitive_request_data() {
+    async fn forwards_json_and_records_target_usage_without_sensitive_request_data() {
         let captured = Arc::new(Mutex::new(CapturedRequest::default()));
         let mock_state = captured.clone();
         let upstream = Router::new().fallback(any(move |request: Request| {
@@ -821,17 +1756,29 @@ mod tests {
         let database_path = temp_database_path();
         let router = LocalRouterState::with_database_path(database_path.clone()).unwrap();
         let local_port = unused_port();
+        let target = UpstreamTarget::with_details(
+            "codex",
+            "Codex",
+            format!("http://{upstream_address}/api/v1"),
+            "",
+            Vec::new(),
+            false,
+            false,
+        )
+        .unwrap();
         let info = router
             .start(RouterRuntimeConfig::new(
                 "127.0.0.1",
                 local_port,
                 true,
-                RouterUpstreams {
-                    claude: None,
-                    codex: Some(
-                        UpstreamTarget::new(format!("http://{upstream_address}/api/v1")).unwrap(),
-                    ),
-                },
+                runtime_with_target(
+                    RouterAgent::Codex,
+                    target,
+                    RouterAgentPolicy {
+                        active_target: "codex".to_string(),
+                        ..RouterAgentPolicy::default()
+                    },
+                ),
             ))
             .await
             .unwrap();
@@ -861,6 +1808,9 @@ mod tests {
 
         let recent = router.recent_requests(10).await.unwrap();
         assert_eq!(recent.len(), 1);
+        assert_eq!(recent[0].target_id.as_deref(), Some("codex"));
+        assert_eq!(recent[0].endpoint, "/v1/responses");
+        assert_eq!(recent[0].attempt_count, 1);
         assert_eq!(recent[0].input_tokens, 21);
         assert_eq!(recent[0].output_tokens, 8);
         assert_eq!(recent[0].cache_read_tokens, 5);
@@ -870,6 +1820,164 @@ mod tests {
         router.stop().await.unwrap();
         upstream_task.abort();
         let _ = upstream_task.await;
+        remove_database(&database_path);
+    }
+
+    #[tokio::test]
+    async fn failover_uses_queue_order_and_records_attempt_count() {
+        let failing = Router::new().fallback(any(|| async {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error":{"message":"down"}})),
+            )
+        }));
+        let healthy = Router::new().fallback(any(|| async {
+            Json(json!({"id":"resp_ok","model":"gpt-test","output":[],"usage":{}}))
+        }));
+        let (failing_address, failing_task) = start_mock_upstream(failing).await;
+        let (healthy_address, healthy_task) = start_mock_upstream(healthy).await;
+        let first = UpstreamTarget::with_details(
+            "first",
+            "First",
+            format!("http://{failing_address}/v1"),
+            "",
+            Vec::new(),
+            false,
+            false,
+        )
+        .unwrap();
+        let second = UpstreamTarget::with_details(
+            "second",
+            "Second",
+            format!("http://{healthy_address}/v1"),
+            "",
+            Vec::new(),
+            false,
+            false,
+        )
+        .unwrap();
+        let policy = RouterAgentPolicy {
+            auto_failover_enabled: true,
+            max_retries: 1,
+            failover_queue: vec!["first".to_string(), "second".to_string()],
+            active_target: "first".to_string(),
+            ..RouterAgentPolicy::default()
+        };
+        let upstreams = RouterUpstreams {
+            claude: RouterAgentRuntime::default(),
+            codex: RouterAgentRuntime {
+                targets: vec![first, second],
+                policy,
+            },
+        };
+        let database_path = temp_database_path();
+        let router = LocalRouterState::with_database_path(database_path.clone()).unwrap();
+        let info = router
+            .start(RouterRuntimeConfig::new(
+                "127.0.0.1",
+                unused_port(),
+                true,
+                upstreams,
+            ))
+            .await
+            .unwrap();
+        let response = reqwest::Client::new()
+            .post(format!("{}/codex/v1/responses", info.base_url))
+            .json(&json!({"model":"gpt-test","input":"hello"}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let records = router.recent_requests(5).await.unwrap();
+        assert_eq!(records[0].target_id.as_deref(), Some("second"));
+        assert_eq!(records[0].attempt_count, 2);
+
+        router.stop().await.unwrap();
+        failing_task.abort();
+        healthy_task.abort();
+        let _ = failing_task.await;
+        let _ = healthy_task.await;
+        remove_database(&database_path);
+    }
+
+    #[tokio::test]
+    async fn non_retryable_http_error_does_not_fail_over() {
+        let second_hits = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let failing = Router::new().fallback(any(|| async {
+            (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error":{"message":"bad input"}})),
+            )
+        }));
+        let hits = second_hits.clone();
+        let healthy = Router::new().fallback(any(move || {
+            let hits = hits.clone();
+            async move {
+                hits.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Json(json!({"id":"unexpected"}))
+            }
+        }));
+        let (failing_address, failing_task) = start_mock_upstream(failing).await;
+        let (healthy_address, healthy_task) = start_mock_upstream(healthy).await;
+        let targets = vec![
+            UpstreamTarget::with_details(
+                "first",
+                "First",
+                format!("http://{failing_address}/v1"),
+                "",
+                Vec::new(),
+                false,
+                false,
+            )
+            .unwrap(),
+            UpstreamTarget::with_details(
+                "second",
+                "Second",
+                format!("http://{healthy_address}/v1"),
+                "",
+                Vec::new(),
+                false,
+                false,
+            )
+            .unwrap(),
+        ];
+        let upstreams = RouterUpstreams {
+            claude: RouterAgentRuntime::default(),
+            codex: RouterAgentRuntime {
+                targets,
+                policy: RouterAgentPolicy {
+                    auto_failover_enabled: true,
+                    max_retries: 3,
+                    failover_queue: vec!["first".to_string(), "second".to_string()],
+                    ..RouterAgentPolicy::default()
+                },
+            },
+        };
+        let database_path = temp_database_path();
+        let router = LocalRouterState::with_database_path(database_path.clone()).unwrap();
+        let info = router
+            .start(RouterRuntimeConfig::new(
+                "127.0.0.1",
+                unused_port(),
+                true,
+                upstreams,
+            ))
+            .await
+            .unwrap();
+        let response = reqwest::Client::new()
+            .post(format!("{}/codex/v1/responses", info.base_url))
+            .json(&json!({"model":"gpt-test","input":"bad"}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(second_hits.load(std::sync::atomic::Ordering::SeqCst), 0);
+
+        router.stop().await.unwrap();
+        failing_task.abort();
+        healthy_task.abort();
+        let _ = failing_task.await;
+        let _ = healthy_task.await;
         remove_database(&database_path);
     }
 
@@ -896,17 +2004,29 @@ mod tests {
 
         let database_path = temp_database_path();
         let router = LocalRouterState::with_database_path(database_path.clone()).unwrap();
+        let target = UpstreamTarget::with_details(
+            "claude",
+            "Claude",
+            format!("http://{upstream_address}"),
+            "",
+            Vec::new(),
+            false,
+            false,
+        )
+        .unwrap();
         let info = router
             .start(RouterRuntimeConfig::new(
                 "127.0.0.1",
                 unused_port(),
                 true,
-                RouterUpstreams {
-                    claude: Some(
-                        UpstreamTarget::new(format!("http://{upstream_address}")).unwrap(),
-                    ),
-                    codex: None,
-                },
+                runtime_with_target(
+                    RouterAgent::Claude,
+                    target,
+                    RouterAgentPolicy {
+                        active_target: "claude".to_string(),
+                        ..RouterAgentPolicy::default()
+                    },
+                ),
             ))
             .await
             .unwrap();
@@ -931,5 +2051,114 @@ mod tests {
         upstream_task.abort();
         let _ = upstream_task.await;
         remove_database(&database_path);
+    }
+
+    #[tokio::test]
+    async fn bridges_codex_responses_to_chat_completions() {
+        let upstream = Router::new().fallback(any(|request: Request| async move {
+            assert_eq!(request.uri().path(), "/v1/chat/completions");
+            let body = to_bytes(request.into_body(), MAX_REQUEST_BODY_BYTES)
+                .await
+                .unwrap();
+            let json: Value = serde_json::from_slice(&body).unwrap();
+            assert_eq!(json["messages"][0]["role"], "user");
+            Json(json!({
+                "id":"chat_1",
+                "model":"gpt-test",
+                "choices":[{"message":{"role":"assistant","content":"Hello"}}],
+                "usage":{"prompt_tokens":4,"completion_tokens":2}
+            }))
+        }));
+        let (upstream_address, upstream_task) = start_mock_upstream(upstream).await;
+        let target = UpstreamTarget::with_details(
+            "chat",
+            "Chat",
+            format!("http://{upstream_address}/v1"),
+            "",
+            vec!["gpt-test".to_string()],
+            false,
+            true,
+        )
+        .unwrap();
+        let database_path = temp_database_path();
+        let router = LocalRouterState::with_database_path(database_path.clone()).unwrap();
+        let info = router
+            .start(RouterRuntimeConfig::new(
+                "127.0.0.1",
+                unused_port(),
+                true,
+                runtime_with_target(
+                    RouterAgent::Codex,
+                    target,
+                    RouterAgentPolicy {
+                        active_target: "chat".to_string(),
+                        ..RouterAgentPolicy::default()
+                    },
+                ),
+            ))
+            .await
+            .unwrap();
+        let response = reqwest::Client::new()
+            .post(format!("{}/codex/v1/responses", info.base_url))
+            .json(&json!({
+                "model":"gpt-test",
+                "input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"Hello"}]}],
+                "stream":false
+            }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let payload: Value = response.json().await.unwrap();
+        assert_eq!(payload["object"], "response");
+        assert_eq!(payload["output"][0]["content"][0]["text"], "Hello");
+
+        router.stop().await.unwrap();
+        upstream_task.abort();
+        let _ = upstream_task.await;
+        remove_database(&database_path);
+    }
+
+    fn build_error_summary(encoding: &str, body: &[u8]) -> String {
+        let mut headers = HeaderMap::new();
+        if !encoding.eq_ignore_ascii_case("identity") {
+            headers.insert(
+                axum::http::HeaderName::from_bytes(b"content-encoding").unwrap(),
+                HeaderValue::from_str(encoding).unwrap(),
+            );
+        }
+        upstream_error_summary(StatusCode::BAD_REQUEST, &headers, body)
+    }
+
+    #[test]
+    fn upstream_error_summary_decompresses_gzip() {
+        let json = br#"{"error":{"message":"compressed gzip failure"}}"#;
+        let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        use std::io::Write;
+        encoder.write_all(json).unwrap();
+        let body = encoder.finish().unwrap();
+        let summary = build_error_summary("gzip", &body);
+        assert!(summary.contains("HTTP 400"));
+        assert!(summary.contains("compressed gzip failure"));
+    }
+
+    #[test]
+    fn upstream_error_summary_decompresses_brotli() {
+        use std::io::Write;
+        let json = br#"{"error":{"message":"compressed brotli failure"}}"#;
+        let mut writer = brotli::CompressorWriter::new(Vec::new(), 4096, 6, 22);
+        writer.write_all(json).unwrap();
+        writer.flush().unwrap();
+        let body = writer.into_inner();
+        let summary = build_error_summary("br", &body);
+        assert!(summary.contains("compressed brotli failure"));
+    }
+
+    #[test]
+    fn upstream_error_summary_decompresses_zstd() {
+        let json = br#"{"error":{"message":"compressed zstd failure"}}"#;
+        let body = zstd::encode_all(json.as_slice(), 3).unwrap();
+        let summary = build_error_summary("zstd", &body);
+        assert!(summary.contains("compressed zstd failure"));
     }
 }

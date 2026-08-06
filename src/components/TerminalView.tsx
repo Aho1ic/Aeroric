@@ -26,6 +26,7 @@ import {
   applyTerminalTextareaInputAttributes,
   attachLinuxIMEFix,
   attachMacWebKitShiftInputFix,
+  attachWindowsIMEPositionFix,
 } from "./terminalInputFix";
 import "@xterm/xterm/css/xterm.css";
 
@@ -105,6 +106,7 @@ export function TerminalView({
     term.open(container);
     applyTerminalTextareaInputAttributes(term);
     const disposeInputFix = attachMacWebKitShiftInputFix(term);
+    const disposeWindowsImeFix = attachWindowsIMEPositionFix(term);
     // Agent TUIs frequently mix ASCII, CJK, emoji, and box drawing glyphs.
     // The DOM renderer handles font fallback more reliably in WKWebView; WebGL can
     // drop glyphs from fallback fonts and make terminal text appear missing.
@@ -212,6 +214,7 @@ export function TerminalView({
       disposeMacWebKitGuard();
       disposeCursorLineHighlight();
       disposeInputFix();
+      disposeWindowsImeFix();
       disposeSmartCopy();
       disposeOnData.dispose();
       if (resizeTimer) clearTimeout(resizeTimer);

@@ -48,6 +48,56 @@ export interface LocalRouterSettings {
   claude_enabled: boolean;
   codex_enabled: boolean;
   record_usage: boolean;
+  use_global_proxy: boolean;
+  claude: LocalRouterAgentSettings;
+  codex: LocalRouterAgentSettings;
+}
+
+export interface LocalRouterAgentSettings {
+  auto_failover_enabled: boolean;
+  max_retries: number;
+  streaming_first_byte_timeout: number;
+  streaming_idle_timeout: number;
+  non_streaming_timeout: number;
+  circuit_failure_threshold: number;
+  circuit_success_threshold: number;
+  circuit_timeout_seconds: number;
+  circuit_error_rate_percent: number;
+  circuit_min_requests: number;
+  active_target: string;
+  failover_queue: string[];
+  model_mapping_enabled: boolean;
+  rectifier_enabled: boolean;
+  thinking_optimizer_enabled: boolean;
+  cache_injection_enabled: boolean;
+}
+
+export type LocalRouterAgent = "claude" | "codex";
+export type LocalRouterCircuitState = "closed" | "open" | "half_open";
+
+export interface LocalRouterCircuitStats {
+  state: LocalRouterCircuitState;
+  consecutive_failures: number;
+  consecutive_successes: number;
+  total_requests: number;
+  failed_requests: number;
+  last_success_at: number | null;
+  last_failure_at: number | null;
+  last_error: string | null;
+}
+
+export interface LocalRouterTargetStatus {
+  agent: LocalRouterAgent;
+  target_id: string;
+  target_name: string;
+  base_url: string;
+  active: boolean;
+  queue_position: number | null;
+  models: string[];
+  enable_1m_context: boolean;
+  enable_chat_completions_proxy: boolean;
+  healthy: boolean;
+  circuit: LocalRouterCircuitStats;
 }
 
 export interface LocalRouterStatus {
@@ -64,22 +114,97 @@ export interface LocalRouterStatus {
   cache_creation_tokens: number;
   cache_read_tokens: number;
   last_error: string | null;
+  targets: LocalRouterTargetStatus[];
+}
+
+export interface LocalRouterRequestRecord {
+  requestId: string;
+  sessionId: string | null;
+  responseId: string | null;
+  agent: LocalRouterAgent;
+  targetId: string | null;
+  targetName: string | null;
+  endpoint: string;
+  attemptCount: number;
+  model: string;
+  outboundModel: string | null;
+  inputTokens: number;
+  outputTokens: number;
+  cacheCreationTokens: number;
+  cacheReadTokens: number;
+  statusCode: number;
+  latencyMs: number;
+  startedAt: number;
+  completedAt: number;
+  isStreaming: boolean;
+  success: boolean;
+  errorSummary: string | null;
 }
 
 export const DEFAULT_LOCAL_ROUTER_SETTINGS: LocalRouterSettings = {
   show_on_home: false,
   enabled: false,
   listen_host: "127.0.0.1",
-  listen_port: 18080,
+  listen_port: 15721,
   claude_enabled: true,
   codex_enabled: true,
   record_usage: true,
+  use_global_proxy: true,
+  claude: {
+    auto_failover_enabled: false,
+    max_retries: 3,
+    streaming_first_byte_timeout: 60,
+    streaming_idle_timeout: 120,
+    non_streaming_timeout: 600,
+    circuit_failure_threshold: 4,
+    circuit_success_threshold: 2,
+    circuit_timeout_seconds: 60,
+    circuit_error_rate_percent: 60,
+    circuit_min_requests: 10,
+    active_target: "",
+    failover_queue: [],
+    model_mapping_enabled: true,
+    rectifier_enabled: true,
+    thinking_optimizer_enabled: false,
+    cache_injection_enabled: false,
+  },
+  codex: {
+    auto_failover_enabled: false,
+    max_retries: 3,
+    streaming_first_byte_timeout: 60,
+    streaming_idle_timeout: 120,
+    non_streaming_timeout: 600,
+    circuit_failure_threshold: 4,
+    circuit_success_threshold: 2,
+    circuit_timeout_seconds: 60,
+    circuit_error_rate_percent: 60,
+    circuit_min_requests: 10,
+    active_target: "",
+    failover_queue: [],
+    model_mapping_enabled: true,
+    rectifier_enabled: true,
+    thinking_optimizer_enabled: false,
+    cache_injection_enabled: false,
+  },
 };
 
 export function normalizeLocalRouterSettings(
   value: Partial<LocalRouterSettings> | null | undefined,
 ): LocalRouterSettings {
-  return { ...DEFAULT_LOCAL_ROUTER_SETTINGS, ...(value ?? {}) };
+  return {
+    ...DEFAULT_LOCAL_ROUTER_SETTINGS,
+    ...(value ?? {}),
+    claude: {
+      ...DEFAULT_LOCAL_ROUTER_SETTINGS.claude,
+      ...(value?.claude ?? {}),
+      failover_queue: [...(value?.claude?.failover_queue ?? [])],
+    },
+    codex: {
+      ...DEFAULT_LOCAL_ROUTER_SETTINGS.codex,
+      ...(value?.codex ?? {}),
+      failover_queue: [...(value?.codex?.failover_queue ?? [])],
+    },
+  };
 }
 
 export interface BuiltInAgentCredentials {

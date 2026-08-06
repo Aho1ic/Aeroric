@@ -20,6 +20,7 @@ import {
   applyTerminalTextareaInputAttributes,
   attachLinuxIMEFix,
   attachMacWebKitShiftInputFix,
+  attachWindowsIMEPositionFix,
 } from "./terminalInputFix";
 import { Minus, Plus, Terminal as TerminalIcon, Trash2, X } from "lucide-react";
 import { useI18n } from "../i18n";
@@ -148,6 +149,7 @@ const ShellTerminalInstance = forwardRef<
     term.open(container);
     applyTerminalTextareaInputAttributes(term);
     const disposeInputFix = attachMacWebKitShiftInputFix(term);
+    const disposeWindowsImeFix = attachWindowsIMEPositionFix(term);
     loadWebglAddon(term);
     const writer = createSmartWriter(term, () => themeVariantRef.current, {
       resumeOnAnyOutput: true,
@@ -249,6 +251,7 @@ const ShellTerminalInstance = forwardRef<
       fitAddonRef.current = null;
       disposeMacWebKitGuard();
       disposeInputFix();
+      disposeWindowsImeFix();
       term.dispose();
     };
   }, [focusTerminal, shellId, projectPath]);

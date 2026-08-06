@@ -1,6 +1,6 @@
 [package]
 name = "aeroric"
-version = "1.4.0-rc.7"
+version = "1.4.0"
 description = "Desktop task manager for AI coding agents"
 authors = ["Aeroric"]
 edition = "2021"
@@ -40,9 +40,11 @@ toml = "0.8"
 libc = "0.2"
 if-addrs = "0.15"
 parking_lot = "0.12"
-reqwest = { version = "0.13", default-features = false, features = ["json", "rustls", "stream"] }
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls", "socks", "stream"] }
 axum = "0.8"
 flate2 = "1"
+brotli = "7"
+zstd = "0.13"
 tar = "0.4"
 zip = { version = "=8.6.0", default-features = false, features = ["deflate"] }
 sha2 = "0.10"

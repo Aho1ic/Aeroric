@@ -18,6 +18,239 @@ afterEach(() => {
 });
 
 describe("terminal input fixes", () => {
+  function createWindowsImeTerm(
+    overrides: {
+      syncTextArea?: () => void;
+      updateCompositionElements?: () => void;
+      cols?: number;
+      rows?: number;
+      cursorX?: number;
+      cursorY?: number;
+    } = {},
+  ) {
+    const terminalElement = document.createElement("div");
+    terminalElement.className = "xterm";
+    const screen = document.createElement("div");
+    screen.className = "xterm-screen";
+    Object.defineProperty(screen, "getBoundingClientRect", {
+      value: () => ({
+        x: 0,
+        y: 0,
+        top: 0,
+        left: 0,
+        width: (overrides.cols ?? 80) * 10,
+        height: (overrides.rows ?? 24) * 20,
+        right: (overrides.cols ?? 80) * 10,
+        bottom: (overrides.rows ?? 24) * 20,
+        toJSON: () => ({}),
+      }),
+      configurable: true,
+    });
+    screen.style.width = `${(overrides.cols ?? 80) * 10}px`;
+    screen.style.height = `${(overrides.rows ?? 24) * 20}px`;
+    terminalElement.appendChild(screen);
+    const textarea = document.createElement("textarea");
+    terminalElement.appendChild(textarea);
+    document.body.appendChild(terminalElement);
+
+    const listeners: Array<{
+      event: string;
+      listener: EventListenerOrEventListenerObject;
+      options?: boolean | AddEventListenerOptions;
+    }> = [];
+    const originalAddEventListener = textarea.addEventListener.bind(textarea);
+    vi.spyOn(textarea, "addEventListener").mockImplementation((event, listener, options) => {
+      listeners.push({ event, listener, options });
+      originalAddEventListener(event, listener, options);
+    });
+
+    const syncTextArea = vi.fn(overrides.syncTextArea);
+    const updateCompositionElements = vi.fn(overrides.updateCompositionElements);
+    const dispoables: Array<() => void> = [];
+    const term = {
+      textarea,
+      element: terminalElement,
+      cols: overrides.cols ?? 80,
+      rows: overrides.rows ?? 24,
+      buffer: {
+        active: {
+          cursorX: overrides.cursorX ?? 0,
+          cursorY: overrides.cursorY ?? 0,
+        },
+      },
+      onRender: vi.fn((cb: () => void) => {
+        const handle = { dispose: () => {} };
+        (term as { __renderCb?: () => void }).__renderCb = cb;
+        dispoables.push(() => delete (term as { __renderCb?: () => void }).__renderCb);
+        return handle;
+      }),
+      onCursorMove: vi.fn((cb: () => void) => {
+        const handle = { dispose: () => {} };
+        (term as { __cursorCb?: () => void }).__cursorCb = cb;
+        dispoables.push(() => delete (term as { __cursorCb?: () => void }).__cursorCb);
+        return handle;
+      }),
+      _core: {
+        _syncTextArea: syncTextArea,
+        _compositionHelper: { updateCompositionElements },
+      },
+    };
+    return { term, textarea, terminalElement, listeners, syncTextArea, updateCompositionElements };
+  }
+
+  it("repositions the Windows IME before xterm starts composition", async () => {
+    vi.resetModules();
+    vi.doMock("../platform", () => ({
+      APP_PLATFORM: "windows",
+      ENABLE_USAGE_INSIGHTS: true,
+      IS_MAC_WEBKIT: false,
+      IS_OTHER_WEBKIT: false,
+      detectAppPlatform: () => "windows",
+      isAppleWebKit: () => false,
+    }));
+    const { attachWindowsIMEPositionFix } = await import("../components/terminalInputFix");
+    const { term, textarea, terminalElement, listeners, syncTextArea, updateCompositionElements } =
+      createWindowsImeTerm();
+
+    const dispose = attachWindowsIMEPositionFix(term as never);
+    textarea.dispatchEvent(new CompositionEvent("compositionstart", { data: "" }));
+
+    expect(syncTextArea).toHaveBeenCalledTimes(1);
+    expect(
+      listeners.some(
+        (listener) => listener.event === "compositionstart" && listener.options === true,
+      ),
+    ).toBe(true);
+    await Promise.resolve();
+    expect(updateCompositionElements).toHaveBeenCalledTimes(1);
+
+    dispose();
+    textarea.dispatchEvent(new CompositionEvent("compositionstart", { data: "" }));
+    await Promise.resolve();
+    expect(syncTextArea).toHaveBeenCalledTimes(1);
+    expect(updateCompositionElements).toHaveBeenCalledTimes(1);
+
+    terminalElement.remove();
+  });
+
+  it("syncs textarea position on render when not composing", async () => {
+    vi.resetModules();
+    vi.doMock("../platform", () => ({
+      APP_PLATFORM: "windows",
+      ENABLE_USAGE_INSIGHTS: true,
+      IS_MAC_WEBKIT: false,
+      IS_OTHER_WEBKIT: false,
+      detectAppPlatform: () => "windows",
+      isAppleWebKit: () => false,
+    }));
+    const { attachWindowsIMEPositionFix } = await import("../components/terminalInputFix");
+    const { term, textarea, terminalElement } = createWindowsImeTerm({
+      cols: 10,
+      rows: 4,
+      cursorX: 3,
+      cursorY: 1,
+    });
+
+    const dispose = attachWindowsIMEPositionFix(term as never);
+    // rAF is async; flush it so the scheduled positioning runs synchronously
+    // after the onRender callback fires.
+    (term as unknown as { __renderCb?: () => void }).__renderCb?.();
+    await new Promise((resolve) => requestAnimationFrame(() => resolve(null)));
+
+    expect(textarea.style.left).toBe("30px");
+    expect(textarea.style.top).toBe("20px");
+    dispose();
+    terminalElement.remove();
+  });
+
+  it("syncs textarea position on cursor move when not composing", async () => {
+    vi.resetModules();
+    vi.doMock("../platform", () => ({
+      APP_PLATFORM: "windows",
+      ENABLE_USAGE_INSIGHTS: true,
+      IS_MAC_WEBKIT: false,
+      IS_OTHER_WEBKIT: false,
+      detectAppPlatform: () => "windows",
+      isAppleWebKit: () => false,
+    }));
+    const { attachWindowsIMEPositionFix } = await import("../components/terminalInputFix");
+    const { term, textarea, terminalElement } = createWindowsImeTerm({
+      cols: 10,
+      rows: 4,
+      cursorX: 5,
+      cursorY: 2,
+    });
+
+    const dispose = attachWindowsIMEPositionFix(term as never);
+    (term as unknown as { __cursorCb?: () => void }).__cursorCb?.();
+    await new Promise((resolve) => requestAnimationFrame(() => resolve(null)));
+
+    expect(textarea.style.left).toBe("50px");
+    expect(textarea.style.top).toBe("40px");
+    dispose();
+    terminalElement.remove();
+  });
+
+  it("does not sync during active composition", async () => {
+    vi.resetModules();
+    vi.doMock("../platform", () => ({
+      APP_PLATFORM: "windows",
+      ENABLE_USAGE_INSIGHTS: true,
+      IS_MAC_WEBKIT: false,
+      IS_OTHER_WEBKIT: false,
+      detectAppPlatform: () => "windows",
+      isAppleWebKit: () => false,
+    }));
+    const { attachWindowsIMEPositionFix } = await import("../components/terminalInputFix");
+    const { term, textarea, terminalElement } = createWindowsImeTerm({
+      cols: 10,
+      rows: 4,
+      cursorX: 7,
+      cursorY: 3,
+    });
+
+    const dispose = attachWindowsIMEPositionFix(term as never);
+    textarea.dispatchEvent(new CompositionEvent("compositionstart", { data: "" }));
+    // compositionstart parks the textarea at the cursor (70px, 60px). Simulate
+    // xterm's updateCompositionElements nudging it elsewhere mid-composition.
+    textarea.style.left = "999px";
+    (term as unknown as { __renderCb?: () => void }).__renderCb?.();
+    await new Promise((resolve) => requestAnimationFrame(() => resolve(null)));
+
+    // While composing the proactive sync must leave xterm's positioning intact.
+    expect(textarea.style.left).toBe("999px");
+    dispose();
+    terminalElement.remove();
+  });
+
+  it("compositionstart always runs DOM fallback even if _syncTextArea succeeds", async () => {
+    vi.resetModules();
+    vi.doMock("../platform", () => ({
+      APP_PLATFORM: "windows",
+      ENABLE_USAGE_INSIGHTS: true,
+      IS_MAC_WEBKIT: false,
+      IS_OTHER_WEBKIT: false,
+      detectAppPlatform: () => "windows",
+      isAppleWebKit: () => false,
+    }));
+    const { attachWindowsIMEPositionFix } = await import("../components/terminalInputFix");
+    const { term, textarea, terminalElement } = createWindowsImeTerm({
+      cols: 10,
+      rows: 4,
+      cursorX: 7,
+      cursorY: 3,
+    });
+
+    const dispose = attachWindowsIMEPositionFix(term as never);
+    textarea.dispatchEvent(new CompositionEvent("compositionstart", { data: "" }));
+
+    // _syncTextArea succeeding must not skip the geometry fallback.
+    expect(textarea.style.left).toBe("70px");
+    expect(textarea.style.top).toBe("60px");
+    dispose();
+    terminalElement.remove();
+  });
+
   it("normalizes macOS WebKit pinyin text committed while IME is closing", () => {
     expect(normalizeCommittedCompositionText("s'dsd")).toBe("sd");
     expect(normalizeCommittedCompositionText("sds'dsd")).toBe("sd");

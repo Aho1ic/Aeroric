@@ -1,4 +1,5 @@
 use super::{RouterAgent, RouterError};
+use brotli::Decompressor as BrotliDecoder;
 use flate2::read::{DeflateDecoder, GzDecoder, ZlibDecoder};
 use rusqlite::{params, Connection};
 use serde::Serialize;
@@ -8,6 +9,7 @@ use std::io::Read;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use zstd::stream::Decoder as ZstdDecoder;
 
 const MAX_CAPTURE_BYTES: usize = 8 * 1024 * 1024;
 const MAX_ERROR_CHARS: usize = 512;
@@ -26,9 +28,15 @@ pub(crate) struct TokenUsage {
 #[serde(rename_all = "camelCase")]
 pub struct RouterRequestRecord {
     pub request_id: String,
+    pub session_id: Option<String>,
     pub response_id: Option<String>,
     pub agent: RouterAgent,
+    pub target_id: Option<String>,
+    pub target_name: Option<String>,
+    pub endpoint: String,
+    pub attempt_count: u32,
     pub model: String,
+    pub outbound_model: Option<String>,
     pub input_tokens: u64,
     pub output_tokens: u64,
     pub cache_creation_tokens: u64,
@@ -85,9 +93,15 @@ impl UsageStore {
                     "
                     INSERT INTO router_requests (
                         request_id,
+                        session_id,
                         response_id,
                         agent,
+                        target_id,
+                        target_name,
+                        endpoint,
+                        attempt_count,
                         model,
+                        outbound_model,
                         input_tokens,
                         output_tokens,
                         cache_creation_tokens,
@@ -101,15 +115,22 @@ impl UsageStore {
                         error_summary
                     ) VALUES (
                         ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8,
-                        ?9, ?10, ?11, ?12, ?13, ?14, ?15
+                        ?9, ?10, ?11, ?12, ?13, ?14, ?15,
+                        ?16, ?17, ?18, ?19, ?20, ?21
                     )
                     ON CONFLICT(request_id) DO NOTHING
                     ",
                     params![
                         request.request_id,
+                        request.session_id,
                         request.response_id,
                         request.agent.as_str(),
+                        request.target_id,
+                        request.target_name,
+                        request.endpoint,
+                        i64::from(request.attempt_count),
                         request.model,
+                        request.outbound_model,
                         as_sql_integer(request.input_tokens),
                         as_sql_integer(request.output_tokens),
                         as_sql_integer(request.cache_creation_tokens),
@@ -181,9 +202,15 @@ impl UsageStore {
                     "
                     SELECT
                         request_id,
+                        session_id,
                         response_id,
                         agent,
+                        target_id,
+                        target_name,
+                        endpoint,
+                        attempt_count,
                         model,
+                        outbound_model,
                         input_tokens,
                         output_tokens,
                         cache_creation_tokens,
@@ -203,26 +230,32 @@ impl UsageStore {
                 .map_err(|error| RouterError::storage(error.to_string()))?;
             let rows = statement
                 .query_map(params![limit], |row| {
-                    let agent = match row.get::<_, String>(2)?.as_str() {
+                    let agent = match row.get::<_, String>(3)?.as_str() {
                         "codex" => RouterAgent::Codex,
                         _ => RouterAgent::Claude,
                     };
                     Ok(RouterRequestRecord {
                         request_id: row.get(0)?,
-                        response_id: row.get(1)?,
+                        session_id: row.get(1)?,
+                        response_id: row.get(2)?,
                         agent,
-                        model: row.get(3)?,
-                        input_tokens: nonnegative(row.get(4)?),
-                        output_tokens: nonnegative(row.get(5)?),
-                        cache_creation_tokens: nonnegative(row.get(6)?),
-                        cache_read_tokens: nonnegative(row.get(7)?),
-                        status_code: row.get::<_, i64>(8)?.clamp(0, u16::MAX as i64) as u16,
-                        latency_ms: nonnegative(row.get(9)?),
-                        started_at: row.get(10)?,
-                        completed_at: row.get(11)?,
-                        is_streaming: row.get::<_, i64>(12)? != 0,
-                        success: row.get::<_, i64>(13)? != 0,
-                        error_summary: row.get(14)?,
+                        target_id: row.get(4)?,
+                        target_name: row.get(5)?,
+                        endpoint: row.get(6)?,
+                        attempt_count: row.get::<_, i64>(7)?.clamp(0, u32::MAX as i64) as u32,
+                        model: row.get(8)?,
+                        outbound_model: row.get(9)?,
+                        input_tokens: nonnegative(row.get(10)?),
+                        output_tokens: nonnegative(row.get(11)?),
+                        cache_creation_tokens: nonnegative(row.get(12)?),
+                        cache_read_tokens: nonnegative(row.get(13)?),
+                        status_code: row.get::<_, i64>(14)?.clamp(0, u16::MAX as i64) as u16,
+                        latency_ms: nonnegative(row.get(15)?),
+                        started_at: row.get(16)?,
+                        completed_at: row.get(17)?,
+                        is_streaming: row.get::<_, i64>(18)? != 0,
+                        success: row.get::<_, i64>(19)? != 0,
+                        error_summary: row.get(20)?,
                     })
                 })
                 .map_err(|error| RouterError::storage(error.to_string()))?;
@@ -254,9 +287,15 @@ fn open_database(path: &PathBuf) -> Result<Connection, RouterError> {
             "
             CREATE TABLE IF NOT EXISTS router_requests (
                 request_id TEXT PRIMARY KEY,
+                session_id TEXT,
                 response_id TEXT,
                 agent TEXT NOT NULL CHECK (agent IN ('claude', 'codex')),
+                target_id TEXT,
+                target_name TEXT,
+                endpoint TEXT NOT NULL DEFAULT '',
+                attempt_count INTEGER NOT NULL DEFAULT 0,
                 model TEXT NOT NULL,
+                outbound_model TEXT,
                 input_tokens INTEGER NOT NULL DEFAULT 0,
                 output_tokens INTEGER NOT NULL DEFAULT 0,
                 cache_creation_tokens INTEGER NOT NULL DEFAULT 0,
@@ -279,7 +318,45 @@ fn open_database(path: &PathBuf) -> Result<Connection, RouterError> {
             ",
         )
         .map_err(|error| RouterError::storage(error.to_string()))?;
+    ensure_column(&connection, "session_id", "TEXT")?;
+    ensure_column(&connection, "target_id", "TEXT")?;
+    ensure_column(&connection, "target_name", "TEXT")?;
+    ensure_column(&connection, "endpoint", "TEXT NOT NULL DEFAULT ''")?;
+    ensure_column(&connection, "attempt_count", "INTEGER NOT NULL DEFAULT 0")?;
+    ensure_column(&connection, "outbound_model", "TEXT")?;
+    connection
+        .execute_batch(
+            "
+            CREATE INDEX IF NOT EXISTS router_requests_target_completed_at
+                ON router_requests (agent, target_id, completed_at DESC);
+            ",
+        )
+        .map_err(|error| RouterError::storage(error.to_string()))?;
     Ok(connection)
+}
+
+fn ensure_column(
+    connection: &Connection,
+    column: &str,
+    definition: &str,
+) -> Result<(), RouterError> {
+    let mut statement = connection
+        .prepare("PRAGMA table_info(router_requests)")
+        .map_err(|error| RouterError::storage(error.to_string()))?;
+    let exists = statement
+        .query_map([], |row| row.get::<_, String>(1))
+        .map_err(|error| RouterError::storage(error.to_string()))?
+        .filter_map(Result::ok)
+        .any(|name| name == column);
+    drop(statement);
+    if exists {
+        return Ok(());
+    }
+    connection
+        .execute_batch(&format!(
+            "ALTER TABLE router_requests ADD COLUMN {column} {definition};"
+        ))
+        .map_err(|error| RouterError::storage(error.to_string()))
 }
 
 fn nonnegative(value: i64) -> u64 {
@@ -401,7 +478,7 @@ impl UsageCapture {
     }
 }
 
-fn decode_for_inspection(bytes: &[u8], encoding: Option<&str>) -> Option<Vec<u8>> {
+pub(crate) fn decode_for_inspection(bytes: &[u8], encoding: Option<&str>) -> Option<Vec<u8>> {
     let mut decoded = Vec::new();
     match encoding.unwrap_or("identity").trim() {
         "" | "identity" => return Some(bytes.to_vec()),
@@ -423,6 +500,20 @@ fn decode_for_inspection(bytes: &[u8], encoding: Option<&str>) -> Option<Vec<u8>
                     .read_to_end(&mut decoded)
                     .ok()?;
             }
+        }
+        "br" | "brotli" => {
+            let decoder = BrotliDecoder::new(bytes, 4096);
+            decoder
+                .take((MAX_CAPTURE_BYTES + 1) as u64)
+                .read_to_end(&mut decoded)
+                .ok()?;
+        }
+        "zstd" => {
+            ZstdDecoder::with_buffer(bytes)
+                .ok()?
+                .take((MAX_CAPTURE_BYTES + 1) as u64)
+                .read_to_end(&mut decoded)
+                .ok()?;
         }
         _ => return None,
     };
@@ -616,9 +707,15 @@ mod tests {
         store
             .insert(RouterRequestRecord {
                 request_id: "request-1".to_string(),
+                session_id: Some("session-1".to_string()),
                 response_id: Some("resp-1".to_string()),
                 agent: RouterAgent::Codex,
+                target_id: Some("codex".to_string()),
+                target_name: Some("Codex".to_string()),
+                endpoint: "/v1/responses".to_string(),
+                attempt_count: 1,
                 model: "gpt-5.6".to_string(),
+                outbound_model: Some("gpt-5.6".to_string()),
                 input_tokens: 10,
                 output_tokens: 2,
                 cache_creation_tokens: 0,
@@ -640,6 +737,7 @@ mod tests {
         assert_eq!(summary.cache_read_tokens, 4);
         let recent = store.recent_requests(10).await.unwrap();
         assert_eq!(recent.len(), 1);
+        assert_eq!(recent[0].session_id.as_deref(), Some("session-1"));
 
         let connection = Connection::open(&path).unwrap();
         let mut statement = connection
@@ -664,5 +762,45 @@ mod tests {
         let summary = sanitize_summary(&format!("upstream\n failed {}", "x".repeat(600)));
         assert!(!summary.contains('\n'));
         assert!(summary.chars().count() <= MAX_ERROR_CHARS);
+    }
+
+    fn compressed_json_usage(agent: RouterAgent, encoding: &str, payload: &[u8]) -> TokenUsage {
+        let mut capture = UsageCapture::new(agent, false, Some(encoding));
+        capture.push(payload);
+        capture.finish()
+    }
+
+    #[test]
+    fn decompresses_gzip_usage_response() {
+        let json = br#"{"usage":{"input_tokens":11,"output_tokens":7}}"#;
+        let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        use std::io::Write;
+        encoder.write_all(json).unwrap();
+        let payload = encoder.finish().unwrap();
+        let usage = compressed_json_usage(RouterAgent::Claude, "gzip", &payload);
+        assert_eq!(usage.input_tokens, 11);
+        assert_eq!(usage.output_tokens, 7);
+    }
+
+    #[test]
+    fn decompresses_brotli_usage_response() {
+        use std::io::Write;
+        let json = br#"{"usage":{"input_tokens":42,"output_tokens":3}}"#;
+        let mut writer = brotli::CompressorWriter::new(Vec::new(), 4096, 6, 22);
+        writer.write_all(json).unwrap();
+        writer.flush().unwrap();
+        let payload = writer.into_inner();
+        let usage = compressed_json_usage(RouterAgent::Claude, "br", &payload);
+        assert_eq!(usage.input_tokens, 42);
+        assert_eq!(usage.output_tokens, 3);
+    }
+
+    #[test]
+    fn decompresses_zstd_usage_response() {
+        let json = br#"{"usage":{"input_tokens":99,"output_tokens":1}}"#;
+        let payload = zstd::encode_all(json.as_slice(), 3).unwrap();
+        let usage = compressed_json_usage(RouterAgent::Claude, "zstd", &payload);
+        assert_eq!(usage.input_tokens, 99);
+        assert_eq!(usage.output_tokens, 1);
     }
 }

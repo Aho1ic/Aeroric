@@ -1,7 +1,16 @@
 import type { Terminal } from "@xterm/xterm";
-import { IS_MAC_WEBKIT, IS_OTHER_WEBKIT } from "../platform";
+import { APP_PLATFORM, IS_MAC_WEBKIT, IS_OTHER_WEBKIT } from "../platform";
 
 type TerminalWithInput = Pick<Terminal, "input" | "textarea">;
+type WindowsImeTerminalCore = {
+  _syncTextArea?: () => void;
+  _compositionHelper?: {
+    updateCompositionElements?: () => void;
+  };
+};
+type TerminalWithWindowsImeInternals = Terminal & {
+  _core?: WindowsImeTerminalCore;
+};
 
 // 诊断开关：置为 true 会在 webview 控制台输出 IME 事件流（需 release 包启用
 // tauri "devtools" feature 才能在 app 内打开开发者工具）。排查 IME 问题时开启，
@@ -390,6 +399,111 @@ export function attachMacWebKitShiftInputFix(term: TerminalWithInput): () => voi
   return () => {
     textarea.removeEventListener("keydown", handleKeyDown);
     textarea.removeEventListener("beforeinput", handleBeforeInput);
+  };
+}
+
+function positionWindowsImeTextareaFallback(term: Terminal, textarea: HTMLTextAreaElement): void {
+  const terminalElement = term.element ?? textarea.closest<HTMLElement>(".xterm");
+  const screen = terminalElement?.querySelector<HTMLElement>(".xterm-screen");
+  if (!screen || term.cols < 1 || term.rows < 1) return;
+
+  const bounds = screen.getBoundingClientRect();
+  const measuredWidth = bounds.width || Number.parseFloat(screen.style.width);
+  const measuredHeight = bounds.height || Number.parseFloat(screen.style.height);
+  if (!(measuredWidth > 0) || !(measuredHeight > 0)) return;
+
+  const cellWidth = measuredWidth / term.cols;
+  const cellHeight = measuredHeight / term.rows;
+  const cursorX = Math.min(Math.max(term.buffer.active.cursorX, 0), term.cols - 1);
+  const cursorY = Math.min(Math.max(term.buffer.active.cursorY, 0), term.rows - 1);
+  textarea.style.left = `${cursorX * cellWidth}px`;
+  textarea.style.top = `${cursorY * cellHeight}px`;
+  textarea.style.width = `${Math.max(cellWidth, 1)}px`;
+  textarea.style.height = `${Math.max(cellHeight, 1)}px`;
+  textarea.style.lineHeight = `${Math.max(cellHeight, 1)}px`;
+}
+
+/**
+ * xterm 6.0 can leave its hidden textarea at a stale cursor position after a
+ * high-frequency TUI redraw. Windows IMEs lock their candidate/preedit anchor
+ * as composition starts, so synchronize the textarea in the capture phase,
+ * before xterm marks the composition helper as active. The install also parks
+ * the textarea at the cursor proactively on every render and cursor move while
+ * no composition is active, so compositionstart already finds the textarea at
+ * the right place instead of relying solely on xterm's guarded _syncTextArea.
+ */
+export function attachWindowsIMEPositionFix(term: Terminal): () => void {
+  if (APP_PLATFORM !== "windows" || !term.textarea) return () => {};
+
+  const textarea = term.textarea;
+  const terminalWithInternals = term as TerminalWithWindowsImeInternals;
+  let disposed = false;
+  let composing = false;
+  const rafHandle: { current: number | null } = { current: null };
+  const isActive = () => !disposed && !composing;
+
+  const scheduleProactiveSync = () => {
+    if (rafHandle.current !== null || !isActive()) return;
+    rafHandle.current = window.requestAnimationFrame(() => {
+      rafHandle.current = null;
+      if (isActive()) positionWindowsImeTextareaFallback(term, textarea);
+    });
+  };
+
+  const handleCompositionStartCapture = () => {
+    composing = true;
+    const core = terminalWithInternals._core;
+    try {
+      if (typeof core?._syncTextArea === "function") {
+        core._syncTextArea.call(core);
+      }
+    } catch {
+      // Keep a DOM-based fallback for xterm private API changes.
+    }
+    // Run the DOM fallback unconditionally so the textarea is anchored at the
+    // cursor even when _syncTextArea succeeds but its isCursorInViewport guard
+    // skipped a real geometry update.
+    positionWindowsImeTextareaFallback(term, textarea);
+
+    queueMicrotask(() => {
+      if (disposed) return;
+      const helper = terminalWithInternals._core?._compositionHelper;
+      try {
+        if (typeof helper?.updateCompositionElements === "function") {
+          helper.updateCompositionElements.call(helper);
+          return;
+        }
+      } catch {
+        // Fall through to the geometry-only fallback.
+      }
+      positionWindowsImeTextareaFallback(term, textarea);
+    });
+  };
+
+  const handleCompositionEndCapture = () => {
+    composing = false;
+  };
+
+  textarea.addEventListener("compositionstart", handleCompositionStartCapture, true);
+  textarea.addEventListener("compositionend", handleCompositionEndCapture, true);
+
+  // Proactive sync: keep the textarea parked at the cursor between renders so
+  // compositionstart finds it already anchored. onRender is high-frequency, so
+  // coalesce through rAF; onCursorMove is comparatively low-frequency but still
+  // routes through the same rAF gate to avoid redundant layout writes. Skip
+  // while composing so xterm's updateCompositionElements owns the textarea.
+  const onRenderDisposable = term.onRender(() => scheduleProactiveSync());
+  const onCursorMoveDisposable = term.onCursorMove(() => scheduleProactiveSync());
+  return () => {
+    disposed = true;
+    textarea.removeEventListener("compositionstart", handleCompositionStartCapture, true);
+    textarea.removeEventListener("compositionend", handleCompositionEndCapture, true);
+    onRenderDisposable.dispose();
+    onCursorMoveDisposable.dispose();
+    if (rafHandle.current !== null) {
+      window.cancelAnimationFrame(rafHandle.current);
+      rafHandle.current = null;
+    }
   };
 }
 

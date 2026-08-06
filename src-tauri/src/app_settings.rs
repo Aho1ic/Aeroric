@@ -29,7 +29,7 @@ fn default_shift_enter_newline() -> bool {
 }
 
 const DEFAULT_LOCAL_ROUTER_HOST: &str = "127.0.0.1";
-const DEFAULT_LOCAL_ROUTER_PORT: u16 = 18080;
+const DEFAULT_LOCAL_ROUTER_PORT: u16 = 15721;
 
 fn default_true() -> bool {
     true
@@ -227,6 +227,101 @@ pub struct BuiltInAgentCredentials {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct LocalRouterAgentSettings {
+    #[serde(default)]
+    pub auto_failover_enabled: bool,
+    #[serde(default = "default_local_router_max_retries")]
+    pub max_retries: u8,
+    #[serde(default = "default_local_router_streaming_first_byte_timeout")]
+    pub streaming_first_byte_timeout: u64,
+    #[serde(default = "default_local_router_streaming_idle_timeout")]
+    pub streaming_idle_timeout: u64,
+    #[serde(default = "default_local_router_non_streaming_timeout")]
+    pub non_streaming_timeout: u64,
+    #[serde(default = "default_local_router_circuit_failure_threshold")]
+    pub circuit_failure_threshold: u32,
+    #[serde(default = "default_local_router_circuit_success_threshold")]
+    pub circuit_success_threshold: u32,
+    #[serde(default = "default_local_router_circuit_timeout_seconds")]
+    pub circuit_timeout_seconds: u64,
+    #[serde(default = "default_local_router_circuit_error_rate_percent")]
+    pub circuit_error_rate_percent: u8,
+    #[serde(default = "default_local_router_circuit_min_requests")]
+    pub circuit_min_requests: u32,
+    #[serde(default)]
+    pub active_target: String,
+    #[serde(default)]
+    pub failover_queue: Vec<String>,
+    #[serde(default = "default_true")]
+    pub model_mapping_enabled: bool,
+    #[serde(default = "default_true")]
+    pub rectifier_enabled: bool,
+    #[serde(default)]
+    pub thinking_optimizer_enabled: bool,
+    #[serde(default)]
+    pub cache_injection_enabled: bool,
+}
+
+const fn default_local_router_max_retries() -> u8 {
+    3
+}
+
+const fn default_local_router_streaming_first_byte_timeout() -> u64 {
+    60
+}
+
+const fn default_local_router_streaming_idle_timeout() -> u64 {
+    120
+}
+
+const fn default_local_router_non_streaming_timeout() -> u64 {
+    600
+}
+
+const fn default_local_router_circuit_failure_threshold() -> u32 {
+    4
+}
+
+const fn default_local_router_circuit_success_threshold() -> u32 {
+    2
+}
+
+const fn default_local_router_circuit_timeout_seconds() -> u64 {
+    60
+}
+
+const fn default_local_router_circuit_error_rate_percent() -> u8 {
+    60
+}
+
+const fn default_local_router_circuit_min_requests() -> u32 {
+    10
+}
+
+impl Default for LocalRouterAgentSettings {
+    fn default() -> Self {
+        Self {
+            auto_failover_enabled: false,
+            max_retries: default_local_router_max_retries(),
+            streaming_first_byte_timeout: default_local_router_streaming_first_byte_timeout(),
+            streaming_idle_timeout: default_local_router_streaming_idle_timeout(),
+            non_streaming_timeout: default_local_router_non_streaming_timeout(),
+            circuit_failure_threshold: default_local_router_circuit_failure_threshold(),
+            circuit_success_threshold: default_local_router_circuit_success_threshold(),
+            circuit_timeout_seconds: default_local_router_circuit_timeout_seconds(),
+            circuit_error_rate_percent: default_local_router_circuit_error_rate_percent(),
+            circuit_min_requests: default_local_router_circuit_min_requests(),
+            active_target: String::new(),
+            failover_queue: Vec::new(),
+            model_mapping_enabled: true,
+            rectifier_enabled: true,
+            thinking_optimizer_enabled: false,
+            cache_injection_enabled: false,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct LocalRouterSettings {
     #[serde(default)]
     pub show_on_home: bool,
@@ -242,6 +337,12 @@ pub struct LocalRouterSettings {
     pub codex_enabled: bool,
     #[serde(default = "default_true")]
     pub record_usage: bool,
+    #[serde(default = "default_true")]
+    pub use_global_proxy: bool,
+    #[serde(default)]
+    pub claude: LocalRouterAgentSettings,
+    #[serde(default)]
+    pub codex: LocalRouterAgentSettings,
 }
 
 fn default_local_router_host() -> String {
@@ -262,6 +363,9 @@ impl Default for LocalRouterSettings {
             claude_enabled: true,
             codex_enabled: true,
             record_usage: true,
+            use_global_proxy: true,
+            claude: LocalRouterAgentSettings::default(),
+            codex: LocalRouterAgentSettings::default(),
         }
     }
 }
@@ -572,11 +676,18 @@ fn normalize_proxy_settings(settings: ProxySettings) -> ProxySettings {
 }
 
 fn normalize_local_router_settings(settings: LocalRouterSettings) -> LocalRouterSettings {
-    let listen_host = match settings.listen_host.trim().to_ascii_lowercase().as_str() {
-        "localhost" => "localhost".to_string(),
-        "::1" | "[::1]" => "::1".to_string(),
-        "127.0.0.1" => DEFAULT_LOCAL_ROUTER_HOST.to_string(),
-        _ => DEFAULT_LOCAL_ROUTER_HOST.to_string(),
+    let listen_host = match settings.listen_host.trim() {
+        value if value.eq_ignore_ascii_case("localhost") => "127.0.0.1".to_string(),
+        value if value.starts_with('[') && value.ends_with(']') => value
+            .trim_start_matches('[')
+            .trim_end_matches(']')
+            .parse::<IpAddr>()
+            .map(|address| address.to_string())
+            .unwrap_or_else(|_| DEFAULT_LOCAL_ROUTER_HOST.to_string()),
+        value => value
+            .parse::<IpAddr>()
+            .map(|address| address.to_string())
+            .unwrap_or_else(|_| DEFAULT_LOCAL_ROUTER_HOST.to_string()),
     };
     LocalRouterSettings {
         listen_host,
@@ -585,6 +696,38 @@ fn normalize_local_router_settings(settings: LocalRouterSettings) -> LocalRouter
         } else {
             DEFAULT_LOCAL_ROUTER_PORT
         },
+        claude: normalize_local_router_agent_settings(settings.claude),
+        codex: normalize_local_router_agent_settings(settings.codex),
+        ..settings
+    }
+}
+
+fn normalize_local_router_agent_settings(
+    settings: LocalRouterAgentSettings,
+) -> LocalRouterAgentSettings {
+    let mut seen = HashSet::new();
+    let failover_queue = settings
+        .failover_queue
+        .into_iter()
+        .map(|target| target.trim().to_string())
+        .filter(|target| !target.is_empty() && seen.insert(target.clone()))
+        .collect();
+    LocalRouterAgentSettings {
+        max_retries: settings.max_retries.min(10),
+        streaming_first_byte_timeout: settings.streaming_first_byte_timeout.clamp(1, 120),
+        streaming_idle_timeout: if settings.streaming_idle_timeout == 0 {
+            0
+        } else {
+            settings.streaming_idle_timeout.clamp(60, 600)
+        },
+        non_streaming_timeout: settings.non_streaming_timeout.clamp(60, 1200),
+        circuit_failure_threshold: settings.circuit_failure_threshold.clamp(1, 20),
+        circuit_success_threshold: settings.circuit_success_threshold.clamp(1, 10),
+        circuit_timeout_seconds: settings.circuit_timeout_seconds.min(300),
+        circuit_error_rate_percent: settings.circuit_error_rate_percent.min(100),
+        circuit_min_requests: settings.circuit_min_requests.clamp(5, 100),
+        active_target: settings.active_target.trim().to_string(),
+        failover_queue,
         ..settings
     }
 }
@@ -775,14 +918,19 @@ fn append_local_router_env(
         return;
     }
 
-    let host = if router.listen_host == "::1" {
-        "[::1]"
+    let connect_host = match router.listen_host.as_str() {
+        "0.0.0.0" => "127.0.0.1",
+        "::" => "::1",
+        host => host,
+    };
+    let url_host = if connect_host.contains(':') {
+        format!("[{connect_host}]")
     } else {
-        router.listen_host.as_str()
+        connect_host.to_string()
     };
     extra_env.push((
         base_url_key.to_string(),
-        format!("http://{host}:{}/{route_prefix}", router.listen_port),
+        format!("http://{url_host}:{}/{route_prefix}", router.listen_port),
     ));
 
     let mut no_proxy = extra_env
@@ -798,7 +946,7 @@ fn append_local_router_env(
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
-    for bypass in ["127.0.0.1", "localhost", "::1"] {
+    for bypass in ["127.0.0.1", "localhost", "::1", connect_host] {
         if !no_proxy.iter().any(|item| item == bypass) {
             no_proxy.push(bypass.to_string());
         }
@@ -5312,7 +5460,7 @@ mod tests {
     }
 
     #[test]
-    fn local_router_settings_are_restricted_to_loopback() {
+    fn local_router_settings_accept_ip_listeners_and_reject_privileged_ports() {
         let normalized = normalize_settings(AppSettings {
             local_router_settings: LocalRouterSettings {
                 listen_host: "0.0.0.0".to_string(),
@@ -5321,10 +5469,7 @@ mod tests {
             },
             ..AppSettings::default()
         });
-        assert_eq!(
-            normalized.local_router_settings.listen_host,
-            DEFAULT_LOCAL_ROUTER_HOST
-        );
+        assert_eq!(normalized.local_router_settings.listen_host, "0.0.0.0");
         assert_eq!(
             normalized.local_router_settings.listen_port,
             DEFAULT_LOCAL_ROUTER_PORT

@@ -45,6 +45,13 @@ export const zh: Record<string, string> = {
   "appSettings.localRouter.outputTokens": "输出",
   "appSettings.localRouter.cacheReadTokens": "缓存读取",
   "appSettings.localRouter.cacheCreationTokens": "缓存写入",
+  "appSettings.localRouter.promptCacheSection": "Prompt 缓存",
+  "appSettings.localRouter.thinkingOptimizer": "优化 thinking 配置",
+  "appSettings.localRouter.thinkingOptimizerHint":
+    "为 Sonnet 5+/Opus 4.8+ 注入自适应 thinking，或为较旧的 Claude 模型注入传统 thinking 预算。",
+  "appSettings.localRouter.cacheInjection": "注入 Prompt 缓存断点",
+  "appSettings.localRouter.cacheInjectionHint":
+    "在 Claude 的 system、tools 与消息上写入 cache_control 断点，使提示词在上游被缓存。",
   "appSettings.remote": "远程访问",
   "appSettings.remote.description":
     "仅配对你完全信任的设备。配对后的手机可读取和修改项目文件、新建或取消任务、操控 Agent 与终端，并修改 Agent 配置；已有 API Key 明文不会回传手机。",

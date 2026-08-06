@@ -18,6 +18,7 @@ import {
   applyTerminalTextareaInputAttributes,
   attachLinuxIMEFix,
   attachMacWebKitShiftInputFix,
+  attachWindowsIMEPositionFix,
 } from "../terminalInputFix";
 import { attachSmartCopy } from "../terminalCopyHelper";
 import {
@@ -253,6 +254,7 @@ export const SshTerminalPanel = forwardRef<SshTerminalPanelHandle, Props>(functi
     term.open(container);
     applyTerminalTextareaInputAttributes(term);
     const disposeInputFix = attachMacWebKitShiftInputFix(term);
+    const disposeWindowsImeFix = attachWindowsIMEPositionFix(term);
     loadWebglAddon(term);
     const writer = createSmartWriter(term, () => themeVariant, {
       resumeOnAnyOutput: true,
@@ -323,6 +325,7 @@ export const SshTerminalPanel = forwardRef<SshTerminalPanelHandle, Props>(functi
       input.dispose();
       disposeMacWebKitGuard();
       disposeInputFix();
+      disposeWindowsImeFix();
       terminalRef.current = null;
       fitAddonRef.current = null;
       lastSizeRef.current = null;

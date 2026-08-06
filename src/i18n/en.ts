@@ -46,6 +46,13 @@ export const en: Record<string, string> = {
   "appSettings.localRouter.outputTokens": "Output",
   "appSettings.localRouter.cacheReadTokens": "Cache read",
   "appSettings.localRouter.cacheCreationTokens": "Cache write",
+  "appSettings.localRouter.promptCacheSection": "Prompt caching",
+  "appSettings.localRouter.thinkingOptimizer": "Optimize thinking config",
+  "appSettings.localRouter.thinkingOptimizerHint":
+    "Inject adaptive thinking for Sonnet 5+/Opus 4.8+ or legacy thinking budgets for older Claude models.",
+  "appSettings.localRouter.cacheInjection": "Inject prompt-cache breakpoints",
+  "appSettings.localRouter.cacheInjectionHint":
+    "Stamp cache_control breakpoints onto Claude system, tools, and messages so prompts are cached upstream.",
   "appSettings.remote": "Remote Access",
   "appSettings.remote.description":
     "Pair only devices you fully trust. A paired phone can read and modify project files, create or cancel tasks, control agents and terminals, and change agent configuration. Existing API key plaintext is never sent back to the phone.",

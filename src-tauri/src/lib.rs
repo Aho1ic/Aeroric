@@ -491,6 +491,8 @@ pub fn run() {
             local_router_commands::get_local_router_status,
             local_router_commands::set_local_router_enabled,
             local_router_commands::update_local_router_settings,
+            local_router_commands::switch_local_router_target,
+            local_router_commands::reset_local_router_circuit,
             local_router_commands::get_local_router_requests,
             app_settings::export_agent_config_bundle,
             app_settings::export_all_agent_config_bundle,

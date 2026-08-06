@@ -43,6 +43,7 @@ const runningStatus: LocalRouterStatus = {
   cache_creation_tokens: 80,
   cache_read_tokens: 560,
   last_error: null,
+  targets: [],
 };
 
 function appSettings(localRouterSettings = enabledSettings): AppSettings {
