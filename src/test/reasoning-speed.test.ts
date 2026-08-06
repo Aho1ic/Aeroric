@@ -11,16 +11,12 @@ describe("Agent reasoning speed config", () => {
     );
     expect(readModelReasoningSpeed('model_reasoning_speed = "turbo"\n')).toBeNull();
     // A speed nested under a table header is ignored.
-    expect(
-      readModelReasoningSpeed('[profiles.work]\nmodel_reasoning_speed = "fast"\n'),
-    ).toBeNull();
+    expect(readModelReasoningSpeed('[profiles.work]\nmodel_reasoning_speed = "fast"\n')).toBeNull();
   });
 
   it("reads a speed from a root JSON config", () => {
     expect(
-      readModelReasoningSpeed(
-        '{\n  "model": "claude",\n  "model_reasoning_speed": "fast"\n}\n',
-      ),
+      readModelReasoningSpeed('{\n  "model": "claude",\n  "model_reasoning_speed": "fast"\n}\n'),
     ).toBe("fast");
     expect(readModelReasoningSpeed('{"model_reasoning_speed": "standard"}')).toBe("standard");
     expect(readModelReasoningSpeed('{"model_reasoning_speed": 5}')).toBeNull();
@@ -40,9 +36,9 @@ describe("Agent reasoning speed config", () => {
     expect(setModelReasoningSpeed(content, "fast")).toBe(
       'model_reasoning_speed = "fast"\nmodel = "gpt-5"\n',
     );
-    expect(
-      setModelReasoningSpeed('model_reasoning_speed = "fast"\nmodel = "gpt-5"\n', null),
-    ).toBe('model = "gpt-5"\n');
+    expect(setModelReasoningSpeed('model_reasoning_speed = "fast"\nmodel = "gpt-5"\n', null)).toBe(
+      'model = "gpt-5"\n',
+    );
   });
 
   it("writes and removes the speed in a JSON config", () => {

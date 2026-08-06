@@ -54,10 +54,7 @@ export function readModelReasoningSpeed(content: string): ModelReasoningSpeed | 
   return readJsonReasoningSpeed(content);
 }
 
-export function setModelReasoningSpeed(
-  content: string,
-  speed: ModelReasoningSpeed | null,
-): string {
+export function setModelReasoningSpeed(content: string, speed: ModelReasoningSpeed | null): string {
   const existing = findRootReasoningSpeedLine(content);
   if (existing) {
     if (speed === null) {

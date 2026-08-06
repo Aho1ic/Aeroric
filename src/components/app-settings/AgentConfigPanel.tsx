@@ -116,8 +116,9 @@ export function AgentConfigPanel({
     useState<ModelReasoningEffort | null>(null);
   const [savingReasoningEffort, setSavingReasoningEffort] = useState(false);
   const [reasoningSpeed, setReasoningSpeed] = useState<ModelReasoningSpeed | null>(null);
-  const [originalReasoningSpeed, setOriginalReasoningSpeed] =
-    useState<ModelReasoningSpeed | null>(null);
+  const [originalReasoningSpeed, setOriginalReasoningSpeed] = useState<ModelReasoningSpeed | null>(
+    null,
+  );
   const [savingReasoningSpeed, setSavingReasoningSpeed] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [importing, setImporting] = useState(false);

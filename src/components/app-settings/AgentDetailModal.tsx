@@ -116,8 +116,9 @@ export function AgentDetailModal({
   const [originalReasoningEffort, setOriginalReasoningEffort] =
     useState<ModelReasoningEffort | null>(null);
   const [reasoningSpeed, setReasoningSpeed] = useState<ModelReasoningSpeed | null>(null);
-  const [originalReasoningSpeed, setOriginalReasoningSpeed] =
-    useState<ModelReasoningSpeed | null>(null);
+  const [originalReasoningSpeed, setOriginalReasoningSpeed] = useState<ModelReasoningSpeed | null>(
+    null,
+  );
   const [exporting, setExporting] = useState(false);
   const [importing, setImporting] = useState(false);
   const [transferMessage, setTransferMessage] = useState<string | null>(null);
