@@ -647,13 +647,14 @@ fn first_u64(value: &Value, keys: &[&str]) -> Option<u64> {
 mod tests {
     use super::*;
     use serde_json::json;
+    use std::path::Path;
     use uuid::Uuid;
 
     fn temp_database_path() -> PathBuf {
         std::env::temp_dir().join(format!("aeroric-router-{}.sqlite3", Uuid::new_v4()))
     }
 
-    fn remove_database(path: &PathBuf) {
+    fn remove_database(path: &Path) {
         for suffix in ["", "-wal", "-shm"] {
             let candidate = PathBuf::from(format!("{}{suffix}", path.display()));
             let _ = fs::remove_file(candidate);

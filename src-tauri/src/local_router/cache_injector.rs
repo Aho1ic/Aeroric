@@ -210,9 +210,7 @@ fn second_to_last_user_message(messages: &mut [Value]) -> Option<&mut Value> {
         .filter(|(_, message)| message.get("role").and_then(Value::as_str) == Some("user"))
         .map(|(index, _)| index);
     indices.next()?; // last user message
-    let Some(second_to_last) = indices.next() else {
-        return None;
-    };
+    let second_to_last = indices.next()?;
     messages.get_mut(second_to_last)
 }
 

@@ -168,12 +168,11 @@ fn rectify_thinking_signature(body: &mut Value) -> bool {
         };
         let mut next = Vec::with_capacity(content.len());
         for block in content.iter() {
-            match block.get("type").and_then(Value::as_str) {
-                Some("thinking" | "redacted_thinking") => {
-                    changed = true;
-                    continue;
-                }
-                _ => {}
+            if let Some("thinking" | "redacted_thinking") =
+                block.get("type").and_then(Value::as_str)
+            {
+                changed = true;
+                continue;
             }
 
             if block.get("signature").is_some() {

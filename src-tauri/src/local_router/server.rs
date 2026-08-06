@@ -1179,9 +1179,7 @@ fn streaming_response(
         state.accept_upstream_chunk(&first);
     }
     let stream = stream::unfold(Some(state), |state| async move {
-        let Some(mut state) = state else {
-            return None;
-        };
+        let mut state = state?;
         loop {
             if state.upstream_finished && !state.finalized {
                 state.finalize_success().await;
@@ -1588,7 +1586,7 @@ mod tests {
     use std::convert::Infallible;
     use std::fs;
     use std::net::{Ipv4Addr, SocketAddr};
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
     use tokio::sync::Mutex;
     use uuid::Uuid;
 
@@ -1684,7 +1682,7 @@ mod tests {
         ))
     }
 
-    fn remove_database(path: &PathBuf) {
+    fn remove_database(path: &Path) {
         for suffix in ["", "-wal", "-shm"] {
             let _ = fs::remove_file(PathBuf::from(format!("{}{suffix}", path.display())));
         }
