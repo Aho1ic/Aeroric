@@ -531,14 +531,16 @@ jobs:
         uses: softprops/action-gh-release@v3
         with:
           generate_release_notes: true
-          # Only upload installer artifacts. The download-artifact step
-          # above also downloads unrelated artifacts (e.g. web-coverage
-          # HTML from the quality-gate workflow); this glob filter
-          # ensures only the expected installer files are published.
+          # Only upload installer artifacts and the checksum file.
+          # The download-artifact step also downloads unrelated
+          # artifacts (e.g. web-coverage HTML from the quality-gate
+          # workflow); this explicit list ensures only the expected
+          # files are published to the GitHub Release.
           files: |
             release-artifacts/*.rpm
             release-artifacts/*.dmg
             release-artifacts/*.deb
             release-artifacts/*.exe
             release-artifacts/*.msi
+            release-artifacts/SHA256SUMS.txt
           token: ${{ secrets.GITHUB_TOKEN }}
