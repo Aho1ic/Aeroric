@@ -181,9 +181,7 @@ describe("Agent detail modal", () => {
         configContent = '#!/bin/sh\n# updated wrapper\nmodel = "gpt-5.6-terra"\n';
         return Promise.resolve({
           ...baseSettings,
-          custom_agents: [
-            { ...customProfile, models: ["gpt-5", "gpt-5.6-terra"] },
-          ],
+          custom_agents: [{ ...customProfile, models: ["gpt-5", "gpt-5.6-terra"] }],
         });
       }
       return Promise.resolve(undefined);
