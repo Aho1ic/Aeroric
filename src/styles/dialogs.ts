@@ -13,9 +13,7 @@ export const dialogs = {
   modalBox: {
     width: "min(920px, calc(100vw - 48px), calc(133.333vh - 128px))",
     aspectRatio: "4 / 3",
-    background: "color-mix(in srgb, var(--bg-card) 52%, transparent)",
-    backdropFilter: "blur(44px) saturate(1.4)",
-    WebkitBackdropFilter: "blur(44px) saturate(1.4)",
+    background: "var(--bg-card)",
     border: "1px solid color-mix(in srgb, var(--border-medium) 72%, #ffffff 28%)",
     borderRadius: 28,
     boxShadow: "var(--shadow-popover)",
@@ -29,9 +27,7 @@ export const dialogs = {
   settingsNav: {
     width: 180,
     flexShrink: 0,
-    background: "color-mix(in srgb, var(--bg-sidebar) 68%, transparent)",
-    backdropFilter: "blur(16px) saturate(1.2)",
-    WebkitBackdropFilter: "blur(16px) saturate(1.2)",
+    background: "var(--bg-sidebar)",
     borderRight: "1px solid var(--border-dim)",
     display: "flex",
     flexDirection: "column" as const,
@@ -84,9 +80,7 @@ export const dialogs = {
     flexDirection: "column" as const,
     overflow: "hidden",
     minWidth: 0,
-    background: "color-mix(in srgb, var(--bg-card) 55%, transparent)",
-    backdropFilter: "blur(40px) saturate(1.3)",
-    WebkitBackdropFilter: "blur(40px) saturate(1.3)",
+    background: "var(--bg-card)",
   },
   settingsContentHeader: {
     display: "flex",

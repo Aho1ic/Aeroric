@@ -4,17 +4,13 @@
 //! 永不回传已有明文凭据。列表只返回 `apiKeyConfigured`;保存时缺失或
 //! 空 `apiKey` 表示保留原值，清除必须显式发送 `clearApiKey=true`。
 //!
-//! 自定义 profile 写入统一走
-//! `crate::app_settings::save_custom_agent_profile`,由它负责校验、codex
-//! wrapper 脚本重写与 `atomic_write_private`;内置 agent 则通过统一设置保存链路
-//! 更新凭据、模型和代理开关。
+//! 保存统一走 app settings 的锁内字段更新入口，由它负责校验、wrapper
+//! 脚本重写与设置文件的原子持久化。
 
 use serde_json::{json, Value};
 
 use super::rpc::str_param;
-use crate::app_settings::{
-    AgentSetupDraft, AgentSetupKind, BuiltInAgentCredentials, CustomAgentProfile,
-};
+use crate::app_settings::{AgentSetupDraft, AgentSetupKind, CustomAgentProfile};
 
 const MAX_ID_LEN: usize = 64;
 const MAX_BASE_URL_LEN: usize = 512;
@@ -131,6 +127,15 @@ fn bool_param(params: &Value, key: &str) -> Result<Option<bool>, String> {
         .ok_or_else(|| format!("Invalid {key}"))
 }
 
+#[cfg(test)]
+fn apply_api_key_update(current: &mut String, api_key: Option<String>, clear: bool) {
+    if clear {
+        current.clear();
+    } else if let Some(api_key) = api_key.filter(|value| !value.is_empty()) {
+        *current = api_key;
+    }
+}
+
 fn kind_param(params: &Value) -> Result<AgentSetupKind, String> {
     serde_json::from_value(
         params
@@ -168,14 +173,6 @@ fn setup_id(label: &str, requested: Option<String>, kind: &AgentSetupKind) -> St
     format!("{id}_{suffix}")
 }
 
-fn apply_api_key_update(current: &mut String, api_key: Option<String>, clear: bool) {
-    if clear {
-        current.clear();
-    } else if let Some(api_key) = api_key.filter(|value| !value.is_empty()) {
-        *current = api_key;
-    }
-}
-
 /// RPC `agentConfig.save`:更新内置或自定义 agent 的接入字段、代理和模型列表。
 pub(crate) async fn agent_config_save(params: Value) -> Result<Value, String> {
     let id = str_param(&params, "id")?;
@@ -194,37 +191,17 @@ pub(crate) async fn agent_config_save(params: Value) -> Result<Value, String> {
     let proxy_enabled = bool_param(&params, "proxyEnabled")?;
 
     if matches!(id.as_str(), "claude" | "codex") {
-        let mut settings =
-            tauri::async_runtime::spawn_blocking(crate::app_settings::load_settings_internal)
-                .await
-                .map_err(|e| e.to_string())?;
-        let mut credentials = settings
-            .builtin_agent_credentials
-            .get(&id)
-            .cloned()
-            .unwrap_or_else(BuiltInAgentCredentials::default);
-        if let Some(value) = base_url {
-            credentials.base_url = value;
-        }
-        apply_api_key_update(&mut credentials.api_key, api_key, clear_api_key);
-        if let Some(value) = models {
-            credentials.models = value;
-        }
-        if let Some(value) = enable_1m_context {
-            credentials.enable_1m_context = value;
-        }
-        settings
-            .builtin_agent_credentials
-            .insert(id.clone(), credentials);
-        if let Some(enabled) = proxy_enabled {
-            if enabled {
-                settings.agent_proxy_enabled.insert(id.clone(), true);
-            } else {
-                settings.agent_proxy_enabled.remove(&id);
-            }
-        }
+        let update_id = id.clone();
         tauri::async_runtime::spawn_blocking(move || {
-            crate::app_settings::save_app_settings(settings)
+            crate::app_settings::update_builtin_agent_config_internal(
+                update_id,
+                base_url,
+                api_key,
+                clear_api_key,
+                models,
+                enable_1m_context,
+                proxy_enabled,
+            )
         })
         .await
         .map_err(|e| e.to_string())??;
@@ -232,46 +209,21 @@ pub(crate) async fn agent_config_save(params: Value) -> Result<Value, String> {
         return Ok(json!({ "ok": true }));
     }
 
-    let settings =
-        tauri::async_runtime::spawn_blocking(crate::app_settings::load_settings_internal)
-            .await
-            .map_err(|e| e.to_string())?;
-    let mut profile = settings
-        .custom_agents
-        .into_iter()
-        .find(|profile| profile.id == id)
-        .ok_or_else(|| format!("Agent not found: {id}"))?;
-
-    if let Some(base_url) = base_url {
-        profile.base_url = base_url;
-    }
-    apply_api_key_update(&mut profile.api_key, api_key, clear_api_key);
-    if let Some(models) = models {
-        profile.models = models;
-    }
-    if profile.models.is_empty() {
-        return Err("At least one model is required".to_string());
-    }
-    if let Some(value) = enable_1m_context {
-        profile.enable_1m_context = value;
-    }
-    if let Some(value) = enable_chat_completions_proxy {
-        profile.enable_chat_completions_proxy = value;
-    }
-
-    let mut saved_settings = crate::app_settings::save_custom_agent_profile(profile).await?;
-    if let Some(enabled) = proxy_enabled {
-        if enabled {
-            saved_settings.agent_proxy_enabled.insert(id.clone(), true);
-        } else {
-            saved_settings.agent_proxy_enabled.remove(&id);
-        }
-        tauri::async_runtime::spawn_blocking(move || {
-            crate::app_settings::save_app_settings(saved_settings)
-        })
-        .await
-        .map_err(|e| e.to_string())??;
-    }
+    let update_id = id.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::app_settings::update_custom_agent_config_internal(
+            update_id,
+            base_url,
+            api_key,
+            clear_api_key,
+            models,
+            enable_1m_context,
+            enable_chat_completions_proxy,
+            proxy_enabled,
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())??;
     super::audit::log("agent-config-saved", json!({ "id": id }));
     Ok(json!({ "ok": true }))
 }

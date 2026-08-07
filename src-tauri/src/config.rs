@@ -449,13 +449,12 @@ pub fn write_agent_config_file(agent: String, content: String) -> Result<(), Str
     atomic_write(&path, &content)
 }
 
-/// Reads the `model_reasoning_effort` and `model_reasoning_speed` values from the given
-/// agent's local config file. Both are stored at the TOML root level for Codex-style
-/// configs, or as a root JSON key for Claude-style JSON configs. Returns `(effort, speed)`,
-/// each `None` when the key is absent or holds an unrecognized value.
-pub fn read_agent_reasoning_settings(agent: &str) -> (Option<String>, Option<String>) {
-    let settings = app_settings::load_settings_internal();
-    let path = match agent_config_path_from_settings(agent, &settings) {
+/// Reads the agent's reasoning defaults without loading the settings file again.
+pub(crate) fn read_agent_reasoning_settings_from_settings(
+    agent: &str,
+    settings: &AppSettings,
+) -> (Option<String>, Option<String>) {
+    let path = match agent_config_path_from_settings(agent, settings) {
         Ok(Some(path)) => path,
         _ => return (None, None),
     };

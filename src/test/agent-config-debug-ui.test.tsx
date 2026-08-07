@@ -225,7 +225,12 @@ function renderJovernaAgentConfigPanel() {
     if (command === "read_agent_config_file") return Promise.resolve("#!/bin/sh\n");
     if (command === "load_app_settings") return Promise.resolve(jovernaSettings);
     if (command === "detect_agent_version") return Promise.resolve("claude 1.0.0");
-    if (command === "save_app_settings") return Promise.resolve(undefined);
+    if (command === "update_agent_path_settings") {
+      return Promise.resolve({
+        ...jovernaSettings,
+        agent_proxy_enabled: { joverna: true },
+      });
+    }
     return Promise.resolve(undefined);
   });
   render(
@@ -318,9 +323,14 @@ function renderProxyPanel() {
     proxy_settings: { url: "", no_proxy: "" },
     agent_proxy_enabled: { joverna: true },
   };
-  vi.mocked(invoke).mockImplementation((command) => {
+  vi.mocked(invoke).mockImplementation((command, args) => {
     if (command === "load_app_settings") return Promise.resolve(settings);
-    if (command === "save_app_settings") return Promise.resolve(undefined);
+    if (command === "update_proxy_settings") {
+      return Promise.resolve({
+        ...settings,
+        proxy_settings: (args as { proxySettings: typeof settings.proxy_settings }).proxySettings,
+      });
+    }
     return Promise.resolve(undefined);
   });
   render(
@@ -615,12 +625,12 @@ describe("Agent config and debug panel UI", () => {
     await user.click(getEnabledSaveButton());
 
     await waitFor(() =>
-      expect(invoke).toHaveBeenCalledWith("save_app_settings", {
-        settings: expect.objectContaining({
-          agent_proxy_enabled: {
-            joverna: true,
-          },
-        }),
+      expect(invoke).toHaveBeenCalledWith("update_agent_path_settings", {
+        agent: "joverna",
+        builtinCredentials: null,
+        configPath: null,
+        executablePath: null,
+        proxyEnabled: true,
       }),
     );
   });
@@ -644,18 +654,13 @@ describe("Agent config and debug panel UI", () => {
     await user.click(screen.getByRole("button", { name: /^Save$/i }));
 
     await waitFor(() =>
-      expect(invoke).toHaveBeenCalledWith("save_app_settings", {
-        settings: expect.objectContaining({
-          proxy_settings: {
-            url: "127.0.0.1:7890",
-            no_proxy: "localhost,127.0.0.1",
-            username: "alice",
-            password: "secret",
-          },
-          agent_proxy_enabled: {
-            joverna: true,
-          },
-        }),
+      expect(invoke).toHaveBeenCalledWith("update_proxy_settings", {
+        proxySettings: {
+          url: "127.0.0.1:7890",
+          no_proxy: "localhost,127.0.0.1",
+          username: "alice",
+          password: "secret",
+        },
       }),
     );
   });

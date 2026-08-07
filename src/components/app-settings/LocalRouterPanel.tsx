@@ -206,6 +206,17 @@ function isAgentSettingsValid(settings: LocalRouterAgentSettings): boolean {
   );
 }
 
+function isFailoverQueueValid(
+  settings: LocalRouterAgentSettings,
+  targets: LocalRouterTargetStatus[],
+): boolean {
+  if (!settings.auto_failover_enabled) return true;
+  if (settings.failover_queue.length === 0) return false;
+  if (targets.length === 0) return true;
+  const targetIds = new Set(targets.map((target) => target.target_id));
+  return settings.failover_queue.some((targetId) => targetIds.has(targetId));
+}
+
 function preferredTargetIds(targets: LocalRouterTargetStatus[]): string[] {
   const active = targets.find((target) => target.active)?.target_id;
   return targets
@@ -1054,9 +1065,20 @@ export function LocalRouterPanel() {
   const normalizedHost = normalizeRouterHost(settings.listen_host);
   const hostInvalid = !isValidRouterHost(normalizedHost);
   const nonLoopbackHost = !hostInvalid && !isLoopbackRouterHost(normalizedHost);
+  const targetsByAgent = useMemo(() => {
+    const targets = status?.targets ?? [];
+    return {
+      claude: targets.filter((target) => target.agent === "claude"),
+      codex: targets.filter((target) => target.agent === "codex"),
+    };
+  }, [status?.targets]);
   const agentConfigurationInvalid =
     !isAgentSettingsValid(settings.claude) || !isAgentSettingsValid(settings.codex);
-  const configurationInvalid = hostInvalid || portInvalid || agentConfigurationInvalid;
+  const failoverConfigurationInvalid =
+    (settings.claude_enabled && !isFailoverQueueValid(settings.claude, targetsByAgent.claude)) ||
+    (settings.codex_enabled && !isFailoverQueueValid(settings.codex, targetsByAgent.codex));
+  const configurationInvalid =
+    hostInvalid || portInvalid || agentConfigurationInvalid || failoverConfigurationInvalid;
   const settingsForComparison = useMemo(
     () => ({
       ...settings,
@@ -1070,16 +1092,11 @@ export function LocalRouterPanel() {
     portDraft !== String(originalSettings.listen_port);
   const busy = loading || saving || toggling;
   const desiredEnabled = status?.desired_enabled ?? settings.enabled;
-  const targetsByAgent = useMemo(() => {
-    const targets = status?.targets ?? [];
-    return {
-      claude: targets.filter((target) => target.agent === "claude"),
-      codex: targets.filter((target) => target.agent === "codex"),
-    };
-  }, [status?.targets]);
   const selectedTargets = targetsByAgent[selectedAgent];
   const selectedAgentSettings = settings[selectedAgent];
   const selectedAgentEnabled = isAgentEnabled(settings, selectedAgent);
+  const selectedFailoverQueueInvalid =
+    selectedAgentEnabled && !isFailoverQueueValid(selectedAgentSettings, selectedTargets);
   const selectedAgentLabel =
     selectedAgent === "claude"
       ? t("appSettings.localRouter.claude")
@@ -1552,8 +1569,7 @@ export function LocalRouterPanel() {
                   disabled={busy || !selectedAgentEnabled}
                   onChange={handleAutoFailoverChange}
                 />
-                {selectedAgentSettings.auto_failover_enabled &&
-                selectedAgentSettings.failover_queue.length === 0 ? (
+                {selectedFailoverQueueInvalid ? (
                   <div
                     role="alert"
                     style={{
@@ -1566,7 +1582,11 @@ export function LocalRouterPanel() {
                     }}
                   >
                     <AlertCircle size={13} strokeWidth={2} style={{ marginTop: 1 }} />
-                    {t("appSettings.localRouter.failoverQueueRequired")}
+                    {t(
+                      selectedAgentSettings.failover_queue.length === 0
+                        ? "appSettings.localRouter.failoverQueueRequired"
+                        : "appSettings.localRouter.failoverQueueInvalid",
+                    )}
                   </div>
                 ) : null}
                 <FailoverQueueEditor

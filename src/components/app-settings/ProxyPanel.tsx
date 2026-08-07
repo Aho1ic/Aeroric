@@ -103,8 +103,9 @@ export function ProxyPanel() {
     setSaved(false);
     setError(null);
     try {
-      await invoke("save_app_settings", { settings });
-      const next = settingsWithProxy(await invoke<AppSettings>("load_app_settings"));
+      const next = settingsWithProxy(
+        await invoke<AppSettings>("update_proxy_settings", { proxySettings: proxy }),
+      );
       setSettings(next);
       setOriginalSettings(next);
       window.dispatchEvent(new Event(APP_SETTINGS_CHANGED_EVENT));

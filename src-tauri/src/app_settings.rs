@@ -6,12 +6,13 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::OnceLock;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use crate::storage::{atomic_write, atomic_write_private};
 
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 fn default_send_shortcut() -> String {
     "mod_enter".to_string()
@@ -37,6 +38,7 @@ fn default_true() -> bool {
 
 static CACHED_CLAUDE_VERSION: OnceLock<Mutex<Option<Option<String>>>> = OnceLock::new();
 static CACHED_CODEX_VERSION: OnceLock<Mutex<Option<Option<String>>>> = OnceLock::new();
+static CACHED_SETTINGS: OnceLock<Mutex<Option<CachedSettings>>> = OnceLock::new();
 static SETTINGS_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 const CLAUDE_BUILTIN_MODEL_ALIASES: &[&str] = &["fable", "opus", "sonnet"];
 const CLAUDE_AGENT_SCRIPT_MARKER: &str = "# AERORIC_CLAUDE_WRAPPER_VERSION=5";
@@ -3329,11 +3331,59 @@ fn normalize_settings(settings: AppSettings) -> AppSettings {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct SettingsFileFingerprint {
+    path: PathBuf,
+    modified: Option<SystemTime>,
+    len: u64,
+    content_sha256: Option<[u8; 32]>,
+}
+
+#[derive(Clone)]
+struct CachedSettings {
+    fingerprint: SettingsFileFingerprint,
+    settings: AppSettings,
+}
+
+fn settings_file_fingerprint(path: &Path) -> SettingsFileFingerprint {
+    let metadata = fs::metadata(path).ok();
+    let content_sha256 = fs::read(path)
+        .ok()
+        .map(|content| Sha256::digest(content).into());
+    SettingsFileFingerprint {
+        path: path.to_path_buf(),
+        modified: metadata.as_ref().and_then(|value| value.modified().ok()),
+        len: metadata.map(|value| value.len()).unwrap_or_default(),
+        content_sha256,
+    }
+}
+
+fn cache_settings(path: &Path, settings: &AppSettings) {
+    *CACHED_SETTINGS.get_or_init(|| Mutex::new(None)).lock() = Some(CachedSettings {
+        fingerprint: settings_file_fingerprint(path),
+        settings: settings.clone(),
+    });
+}
+
+fn get_cached_settings(path: &Path) -> Option<AppSettings> {
+    let fingerprint = settings_file_fingerprint(path);
+    CACHED_SETTINGS
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .as_ref()
+        .filter(|cached| cached.fingerprint == fingerprint)
+        .map(|cached| cached.settings.clone())
+}
+
 fn load_settings_unlocked() -> AppSettings {
     let path = match settings_path() {
         Ok(p) => p,
         Err(_) => return AppSettings::default(),
     };
+
+    if let Some(cached) = get_cached_settings(&path) {
+        return cached;
+    }
 
     if !path.exists() {
         let settings = normalize_settings(AppSettings {
@@ -3357,7 +3407,9 @@ fn load_settings_unlocked() -> AppSettings {
             let _ = fs::create_dir_all(&dir);
         }
         if let Ok(raw) = serde_json::to_string_pretty(&settings) {
-            let _ = atomic_write_private(&path, &raw);
+            if atomic_write_private(&path, &raw).is_ok() {
+                cache_settings(&path, &settings);
+            }
         }
         return settings;
     }
@@ -3381,12 +3433,204 @@ fn load_settings_unlocked() -> AppSettings {
             let _ = atomic_write_private(&path, &raw);
         }
     }
+    cache_settings(&path, &normalized);
     normalized
 }
 
 pub fn load_settings_internal() -> AppSettings {
     let _guard = settings_lock().lock();
     load_settings_unlocked()
+}
+
+fn persist_settings_unlocked(settings: AppSettings) -> Result<AppSettings, String> {
+    let dir = aeroric_dir()?;
+    fs::create_dir_all(&dir).map_err(|error| error.to_string())?;
+    let path = settings_path()?;
+    let normalized = normalize_settings(settings);
+    let raw = serde_json::to_string_pretty(&normalized).map_err(|error| error.to_string())?;
+    atomic_write_private(&path, &raw)?;
+    cache_settings(&path, &normalized);
+    Ok(normalized)
+}
+
+fn update_settings_locked<F>(update: F) -> Result<AppSettings, String>
+where
+    F: FnOnce(&mut AppSettings) -> Result<(), String>,
+{
+    let normalized = {
+        let _guard = settings_lock().lock();
+        let mut settings = load_settings_unlocked();
+        update(&mut settings)?;
+        persist_settings_unlocked(settings)?
+    };
+    clear_cached_versions();
+    Ok(normalized)
+}
+
+fn set_agent_proxy_enabled(settings: &mut AppSettings, agent: &str, enabled: bool) {
+    if enabled {
+        settings.agent_proxy_enabled.insert(agent.to_string(), true);
+    } else {
+        settings.agent_proxy_enabled.remove(agent);
+    }
+}
+
+fn apply_builtin_agent_access_update(
+    settings: &mut AppSettings,
+    agent: &str,
+    base_url: Option<String>,
+    api_key: Option<String>,
+    clear_api_key: bool,
+    models: Option<Vec<String>>,
+    enable_1m_context: Option<bool>,
+) -> Result<(), String> {
+    if !matches!(agent, "claude" | "claude_gpt55" | "codex") {
+        return Err(format!("Unknown built-in Agent: {agent}"));
+    }
+    let credentials = settings
+        .builtin_agent_credentials
+        .entry(agent.to_string())
+        .or_default();
+    if let Some(base_url) = base_url {
+        credentials.base_url = base_url.trim().to_string();
+    }
+    if clear_api_key {
+        credentials.api_key.clear();
+    } else if let Some(api_key) = api_key.filter(|value| !value.is_empty()) {
+        credentials.api_key = api_key.trim().to_string();
+    }
+    if let Some(models) = models {
+        credentials.models = normalize_model_list(models);
+    }
+    if let Some(enabled) = enable_1m_context {
+        credentials.enable_1m_context = enabled;
+    }
+    Ok(())
+}
+
+pub(crate) fn update_builtin_agent_config_internal(
+    agent: String,
+    base_url: Option<String>,
+    api_key: Option<String>,
+    clear_api_key: bool,
+    models: Option<Vec<String>>,
+    enable_1m_context: Option<bool>,
+    proxy_enabled: Option<bool>,
+) -> Result<AppSettings, String> {
+    update_settings_locked(move |settings| {
+        apply_builtin_agent_access_update(
+            settings,
+            &agent,
+            base_url,
+            api_key,
+            clear_api_key,
+            models,
+            enable_1m_context,
+        )?;
+        if let Some(enabled) = proxy_enabled {
+            set_agent_proxy_enabled(settings, &agent, enabled);
+        }
+        Ok(())
+    })
+}
+
+#[tauri::command]
+pub async fn update_builtin_agent_access(
+    agent: String,
+    base_url: Option<String>,
+    api_key: Option<String>,
+    clear_api_key: bool,
+    models: Option<Vec<String>>,
+) -> Result<AppSettings, String> {
+    tokio::task::spawn_blocking(move || {
+        update_builtin_agent_config_internal(
+            agent,
+            base_url,
+            api_key,
+            clear_api_key,
+            models,
+            None,
+            None,
+        )
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+pub async fn update_proxy_settings(proxy_settings: ProxySettings) -> Result<AppSettings, String> {
+    tokio::task::spawn_blocking(move || {
+        update_settings_locked(move |settings| {
+            settings.proxy_settings = proxy_settings;
+            Ok(())
+        })
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+pub async fn update_agent_path_settings(
+    agent: String,
+    executable_path: Option<String>,
+    config_path: Option<String>,
+    proxy_enabled: Option<bool>,
+    builtin_credentials: Option<BuiltInAgentCredentials>,
+) -> Result<AppSettings, String> {
+    tokio::task::spawn_blocking(move || {
+        update_settings_locked(move |settings| {
+            match agent.as_str() {
+                "claude" => {
+                    if let Some(executable_path) = executable_path {
+                        settings.claude_path = executable_path;
+                    }
+                    if let Some(config_path) = config_path {
+                        settings.claude_config_path = config_path;
+                    }
+                }
+                "claude_gpt55" => {
+                    if let Some(executable_path) = executable_path {
+                        settings.claude_gpt55_path = executable_path;
+                    }
+                    if let Some(config_path) = config_path {
+                        settings.claude_gpt55_config_path = config_path;
+                    }
+                }
+                "codex" => {
+                    if let Some(executable_path) = executable_path {
+                        settings.codex_path = executable_path;
+                    }
+                    if let Some(config_path) = config_path {
+                        settings.codex_config_path = config_path;
+                    }
+                }
+                _ => {
+                    if let Some(executable_path) = executable_path {
+                        let normalized_id = sanitize_custom_agent_id(&agent);
+                        let profile = settings
+                            .custom_agents
+                            .iter_mut()
+                            .find(|profile| profile.id == normalized_id)
+                            .ok_or_else(|| "Custom Agent not found".to_string())?;
+                        profile.path = executable_path;
+                    }
+                }
+            }
+            if let Some(credentials) = builtin_credentials {
+                if matches!(agent.as_str(), "claude" | "claude_gpt55" | "codex") {
+                    settings
+                        .builtin_agent_credentials
+                        .insert(agent.clone(), credentials);
+                }
+            }
+            if let Some(enabled) = proxy_enabled {
+                set_agent_proxy_enabled(settings, &agent, enabled);
+            }
+            Ok(())
+        })
+    })
+    .await
+    .map_err(|error| error.to_string())?
 }
 
 pub(crate) fn save_managed_agent_path(agent: &str, path: &Path) -> Result<(), String> {
@@ -3432,13 +3676,7 @@ pub async fn load_app_settings() -> Result<AppSettings, String> {
 pub fn save_app_settings(settings: AppSettings) -> Result<(), String> {
     {
         let _guard = settings_lock().lock();
-        let dir = aeroric_dir()?;
-        fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-        let path = settings_path()?;
-        let normalized = normalize_settings(settings);
-        let raw = serde_json::to_string_pretty(&normalized).map_err(|e| e.to_string())?;
-        // settings.json holds custom-agent API keys and proxy passwords.
-        atomic_write_private(&path, &raw)?;
+        persist_settings_unlocked(settings)?;
     }
     clear_cached_versions();
     Ok(())
@@ -4241,75 +4479,141 @@ pub async fn save_agent_paths(
     Ok(normalized)
 }
 
+fn upsert_custom_agent_profile_unlocked(
+    settings: &mut AppSettings,
+    profile: CustomAgentProfile,
+) -> Result<(), String> {
+    let mut profile = normalize_custom_agent_profile(profile)
+        .ok_or_else(|| "Invalid custom agent profile".to_string())?;
+    let existing = settings
+        .custom_agents
+        .iter()
+        .find(|existing| existing.id == profile.id)
+        .cloned();
+    let generated_wrapper = existing.as_ref().is_some_and(|existing| {
+        fs::read_to_string(normalize_config_path(existing.path.clone()))
+            .map(|content| is_aeroric_codex_wrapper(&content))
+            .unwrap_or(false)
+    });
+    let generated_settings_changed = existing.as_ref().is_some_and(|existing| {
+        generated_wrapper
+            && profile.codex_like
+            && profile.config_lang == "shellscript"
+            && !profile.base_url.trim().is_empty()
+            && !profile.api_key.trim().is_empty()
+            && !profile.models.is_empty()
+            && (existing.base_url != profile.base_url
+                || existing.api_key != profile.api_key
+                || existing.models != profile.models
+                || existing.enable_chat_completions_proxy != profile.enable_chat_completions_proxy)
+    });
+    if generated_settings_changed {
+        let draft = AgentSetupDraft {
+            id: profile.id.clone(),
+            label: profile.label.clone(),
+            kind: AgentSetupKind::Codex,
+            base_url: profile.base_url.clone(),
+            api_key: profile.api_key.clone(),
+            model: profile.models[0].clone(),
+            models: profile.models.clone(),
+            enable_1m_context: profile.enable_1m_context,
+            enable_chat_completions_proxy: profile.enable_chat_completions_proxy,
+            proxy_enabled: false,
+        };
+        validate_agent_setup_draft(&draft)?;
+        let script = build_codex_agent_script(&draft);
+        let script_path = normalize_config_path(profile.path.clone());
+        let path =
+            write_generated_agent_script(&profile.id, &script_path, &script, &profile.api_key)?;
+        profile.path = path.to_string_lossy().into_owned();
+    }
+
+    settings
+        .custom_agents
+        .retain(|existing| existing.id != profile.id);
+    settings.custom_agents.push(profile);
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn save_custom_agent_profile(profile: CustomAgentProfile) -> Result<AppSettings, String> {
-    let normalized = tokio::task::spawn_blocking(move || {
-        let _guard = settings_lock().lock();
-        let mut settings = load_settings_unlocked();
-        let mut profile = normalize_custom_agent_profile(profile)
-            .ok_or_else(|| "Invalid custom agent profile".to_string())?;
-
-        let existing = settings
-            .custom_agents
-            .iter()
-            .find(|existing| existing.id == profile.id)
-            .cloned();
-        let generated_wrapper = existing.as_ref().is_some_and(|existing| {
-            fs::read_to_string(normalize_config_path(existing.path.clone()))
-                .map(|content| is_aeroric_codex_wrapper(&content))
-                .unwrap_or(false)
-        });
-        let generated_settings_changed = existing.as_ref().is_some_and(|existing| {
-            generated_wrapper
-                && profile.codex_like
-                && profile.config_lang == "shellscript"
-                && !profile.base_url.trim().is_empty()
-                && !profile.api_key.trim().is_empty()
-                && !profile.models.is_empty()
-                && (existing.base_url != profile.base_url
-                    || existing.api_key != profile.api_key
-                    || existing.models != profile.models
-                    || existing.enable_chat_completions_proxy
-                        != profile.enable_chat_completions_proxy)
-        });
-        if generated_settings_changed {
-            let draft = AgentSetupDraft {
-                id: profile.id.clone(),
-                label: profile.label.clone(),
-                kind: AgentSetupKind::Codex,
-                base_url: profile.base_url.clone(),
-                api_key: profile.api_key.clone(),
-                model: profile.models[0].clone(),
-                models: profile.models.clone(),
-                enable_1m_context: profile.enable_1m_context,
-                enable_chat_completions_proxy: profile.enable_chat_completions_proxy,
-                proxy_enabled: false,
-            };
-            validate_agent_setup_draft(&draft)?;
-            let script = build_codex_agent_script(&draft);
-            let script_path = normalize_config_path(profile.path.clone());
-            let path =
-                write_generated_agent_script(&profile.id, &script_path, &script, &profile.api_key)?;
-            profile.path = path.to_string_lossy().into_owned();
-        }
-
-        settings
-            .custom_agents
-            .retain(|existing| existing.id != profile.id);
-        settings.custom_agents.push(profile);
-
-        let dir = aeroric_dir()?;
-        fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-        let path = settings_path()?;
-        let normalized = normalize_settings(settings);
-        let raw = serde_json::to_string_pretty(&normalized).map_err(|e| e.to_string())?;
-        atomic_write_private(&path, &raw)?;
-        Ok::<AppSettings, String>(normalized)
+    tokio::task::spawn_blocking(move || {
+        update_settings_locked(move |settings| {
+            upsert_custom_agent_profile_unlocked(settings, profile)
+        })
     })
     .await
-    .map_err(|e| e.to_string())??;
-    clear_cached_versions();
-    Ok(normalized)
+    .map_err(|error| error.to_string())?
+}
+
+pub(crate) fn update_custom_agent_config_internal(
+    id: String,
+    base_url: Option<String>,
+    api_key: Option<String>,
+    clear_api_key: bool,
+    models: Option<Vec<String>>,
+    enable_1m_context: Option<bool>,
+    enable_chat_completions_proxy: Option<bool>,
+    proxy_enabled: Option<bool>,
+) -> Result<AppSettings, String> {
+    update_settings_locked(move |settings| {
+        let normalized_id = sanitize_custom_agent_id(&id);
+        let mut profile = settings
+            .custom_agents
+            .iter()
+            .find(|profile| profile.id == normalized_id)
+            .cloned()
+            .ok_or_else(|| format!("Agent not found: {id}"))?;
+        if let Some(base_url) = base_url {
+            profile.base_url = base_url;
+        }
+        if clear_api_key {
+            profile.api_key.clear();
+        } else if let Some(api_key) = api_key.filter(|value| !value.is_empty()) {
+            profile.api_key = api_key;
+        }
+        if let Some(models) = models {
+            profile.models = normalize_model_list(models);
+        }
+        if profile.models.is_empty() {
+            return Err("At least one model is required".to_string());
+        }
+        if let Some(enabled) = enable_1m_context {
+            profile.enable_1m_context = enabled;
+        }
+        if let Some(enabled) = enable_chat_completions_proxy {
+            profile.enable_chat_completions_proxy = enabled;
+        }
+        upsert_custom_agent_profile_unlocked(settings, profile)?;
+        if let Some(enabled) = proxy_enabled {
+            set_agent_proxy_enabled(settings, &normalized_id, enabled);
+        }
+        Ok(())
+    })
+}
+
+#[tauri::command]
+pub async fn update_custom_agent_access(
+    id: String,
+    base_url: Option<String>,
+    api_key: Option<String>,
+    clear_api_key: bool,
+    enable_chat_completions_proxy: Option<bool>,
+) -> Result<AppSettings, String> {
+    tokio::task::spawn_blocking(move || {
+        update_custom_agent_config_internal(
+            id,
+            base_url,
+            api_key,
+            clear_api_key,
+            None,
+            None,
+            enable_chat_completions_proxy,
+            None,
+        )
+    })
+    .await
+    .map_err(|error| error.to_string())?
 }
 
 #[tauri::command]
@@ -4419,7 +4723,7 @@ pub async fn list_agent_models(agent: String) -> Result<AgentModels, String> {
     tokio::task::spawn_blocking(move || {
         let settings = load_settings_internal();
         let (reasoning_effort, reasoning_speed) =
-            crate::config::read_agent_reasoning_settings(&agent);
+            crate::config::read_agent_reasoning_settings_from_settings(&agent, &settings);
         if let Some(profile) = settings
             .custom_agents
             .iter()
@@ -5468,6 +5772,38 @@ mod tests {
             .rev()
             .find(|(candidate, _)| candidate == key)
             .map(|(_, value)| value.as_str())
+    }
+
+    #[test]
+    fn settings_cache_invalidates_after_an_external_file_change() {
+        let root =
+            std::env::temp_dir().join(format!("aeroric-settings-cache-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("settings.json");
+        std::fs::write(&path, "{}").unwrap();
+
+        let settings = AppSettings {
+            send_shortcut: "enter".to_string(),
+            ..AppSettings::default()
+        };
+        cache_settings(&path, &settings);
+        assert_eq!(
+            get_cached_settings(&path).map(|cached| cached.send_shortcut),
+            Some("enter".to_string())
+        );
+
+        let original_fingerprint = settings_file_fingerprint(&path);
+        std::fs::write(&path, "[]").unwrap();
+        let changed_fingerprint = settings_file_fingerprint(&path);
+        assert_eq!(original_fingerprint.len, changed_fingerprint.len);
+        assert_ne!(
+            original_fingerprint.content_sha256,
+            changed_fingerprint.content_sha256
+        );
+        assert!(get_cached_settings(&path).is_none());
+
+        *CACHED_SETTINGS.get_or_init(|| Mutex::new(None)).lock() = None;
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

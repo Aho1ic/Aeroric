@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useState } from "react";
+import { Fragment, memo, useEffect, useState } from "react";
 import {
   X,
   Keyboard,
@@ -124,6 +124,89 @@ function NavItemIcon({
   return null;
 }
 
+const SettingsPanel = memo(function SettingsPanel({
+  nav,
+  themeVariant,
+  themeMode,
+  systemPrefersDark,
+  onThemeModeChange,
+  terminalFontSize,
+  onTerminalFontSizeChange,
+  taskDisplayWindow,
+  onTaskDisplayWindowChange,
+  attentionBadge,
+  onAttentionBadgeChange,
+  sftpLocalDefaultPath,
+  onSftpLocalDefaultPathChange,
+  uiFontFamily,
+  onUiFontFamilyChange,
+  monoFontFamily,
+  onMonoFontFamilyChange,
+}: {
+  nav: NavKey;
+  themeVariant: ThemeVariant;
+  themeMode: ThemeMode;
+  systemPrefersDark: boolean;
+  onThemeModeChange: (mode: ThemeMode) => void;
+  terminalFontSize: TerminalFontSize;
+  onTerminalFontSizeChange: (size: TerminalFontSize) => void;
+  taskDisplayWindow: TaskDisplayWindow;
+  onTaskDisplayWindowChange: (window: TaskDisplayWindow) => void;
+  attentionBadge: boolean;
+  onAttentionBadgeChange: (enabled: boolean) => void;
+  sftpLocalDefaultPath: string;
+  onSftpLocalDefaultPathChange: (path: string) => void;
+  uiFontFamily: FontFamily;
+  onUiFontFamilyChange: (family: FontFamily) => void;
+  monoFontFamily: FontFamily;
+  onMonoFontFamilyChange: (family: FontFamily) => void;
+}) {
+  if (nav === "theme") {
+    return (
+      <ThemePanel
+        themeMode={themeMode}
+        systemPrefersDark={systemPrefersDark}
+        onThemeModeChange={onThemeModeChange}
+      />
+    );
+  }
+  if (nav === "fonts") {
+    return (
+      <FontPanel
+        terminalFontSize={terminalFontSize}
+        onTerminalFontSizeChange={onTerminalFontSizeChange}
+        uiFontFamily={uiFontFamily}
+        onUiFontFamilyChange={onUiFontFamilyChange}
+        monoFontFamily={monoFontFamily}
+        onMonoFontFamilyChange={onMonoFontFamilyChange}
+      />
+    );
+  }
+  if (nav === "shortcuts") return <ShortcutsPanel />;
+  if (nav === "proxy") return <ProxyPanel />;
+  if (nav === "local-router") return <LocalRouterPanel />;
+  if (nav === "remote") return <RemoteAccessPanel />;
+  if (nav === "wsl") return <WslPanel />;
+  if (nav === "usage") return <UsageDashboard embedded />;
+  if (nav === "agent-updates") return <AgentUpdatesPanel />;
+  if (nav === ALL_AGENT_CONFIGS_NAV_KEY) {
+    return <AllAgentConfigsPanel themeVariant={themeVariant} />;
+  }
+  if (nav === "hooks") return <HooksPanel />;
+  if (nav === "skills") return <SkillsPanel />;
+  if (nav === "about") return <AboutPanel />;
+  return (
+    <GeneralPanel
+      taskDisplayWindow={taskDisplayWindow}
+      onTaskDisplayWindowChange={onTaskDisplayWindowChange}
+      attentionBadge={attentionBadge}
+      onAttentionBadgeChange={onAttentionBadgeChange}
+      sftpLocalDefaultPath={sftpLocalDefaultPath}
+      onSftpLocalDefaultPathChange={onSftpLocalDefaultPathChange}
+    />
+  );
+});
+
 export function AppSettingsDialog({
   onClose,
   initialNav = "general",
@@ -165,10 +248,18 @@ export function AppSettingsDialog({
 }) {
   const { t } = useI18n();
   const [activeNav, setActiveNav] = useState<NavKey>(initialNav);
+  const [renderedNav, setRenderedNav] = useState<NavKey>(initialNav);
 
   useEffect(() => {
     setActiveNav(initialNav);
+    setRenderedNav(initialNav);
   }, [initialNav]);
+
+  useEffect(() => {
+    if (renderedNav === activeNav) return;
+    const frame = requestAnimationFrame(() => setRenderedNav(activeNav));
+    return () => cancelAnimationFrame(frame);
+  }, [activeNav, renderedNav]);
 
   function handleOverlayClick(e: React.MouseEvent) {
     if (e.target === e.currentTarget) onClose();
@@ -287,66 +378,25 @@ export function AppSettingsDialog({
               </button>
             </div>
 
-            {activeNav === "general" ? (
-              <GeneralPanel
-                key="general"
-                taskDisplayWindow={taskDisplayWindow}
-                onTaskDisplayWindowChange={onTaskDisplayWindowChange}
-                attentionBadge={attentionBadge}
-                onAttentionBadgeChange={onAttentionBadgeChange}
-                sftpLocalDefaultPath={sftpLocalDefaultPath}
-                onSftpLocalDefaultPathChange={onSftpLocalDefaultPathChange}
-              />
-            ) : activeNav === "theme" ? (
-              <ThemePanel
-                key="theme"
-                themeMode={themeMode}
-                systemPrefersDark={systemPrefersDark}
-                onThemeModeChange={onThemeModeChange}
-              />
-            ) : activeNav === "fonts" ? (
-              <FontPanel
-                key="fonts"
-                terminalFontSize={terminalFontSize}
-                onTerminalFontSizeChange={onTerminalFontSizeChange}
-                uiFontFamily={uiFontFamily}
-                onUiFontFamilyChange={onUiFontFamilyChange}
-                monoFontFamily={monoFontFamily}
-                onMonoFontFamilyChange={onMonoFontFamilyChange}
-              />
-            ) : activeNav === "shortcuts" ? (
-              <ShortcutsPanel key="shortcuts" />
-            ) : activeNav === "proxy" ? (
-              <ProxyPanel key="proxy" />
-            ) : activeNav === "local-router" ? (
-              <LocalRouterPanel key="local-router" />
-            ) : activeNav === "remote" ? (
-              <RemoteAccessPanel key="remote" />
-            ) : activeNav === "wsl" ? (
-              <WslPanel key="wsl" />
-            ) : activeNav === "usage" ? (
-              <UsageDashboard key="usage" embedded />
-            ) : activeNav === "agent-updates" ? (
-              <AgentUpdatesPanel key="agent-updates" />
-            ) : activeNav === ALL_AGENT_CONFIGS_NAV_KEY ? (
-              <AllAgentConfigsPanel key="all-agent-configs" themeVariant={themeVariant} />
-            ) : activeNav === "hooks" ? (
-              <HooksPanel key="hooks" />
-            ) : activeNav === "skills" ? (
-              <SkillsPanel key="skills" />
-            ) : activeNav === "about" ? (
-              <AboutPanel key="about" />
-            ) : (
-              <GeneralPanel
-                key="general-fallback"
-                taskDisplayWindow={taskDisplayWindow}
-                onTaskDisplayWindowChange={onTaskDisplayWindowChange}
-                attentionBadge={attentionBadge}
-                onAttentionBadgeChange={onAttentionBadgeChange}
-                sftpLocalDefaultPath={sftpLocalDefaultPath}
-                onSftpLocalDefaultPathChange={onSftpLocalDefaultPathChange}
-              />
-            )}
+            <SettingsPanel
+              nav={renderedNav}
+              themeVariant={themeVariant}
+              themeMode={themeMode}
+              systemPrefersDark={systemPrefersDark}
+              onThemeModeChange={onThemeModeChange}
+              terminalFontSize={terminalFontSize}
+              onTerminalFontSizeChange={onTerminalFontSizeChange}
+              taskDisplayWindow={taskDisplayWindow}
+              onTaskDisplayWindowChange={onTaskDisplayWindowChange}
+              attentionBadge={attentionBadge}
+              onAttentionBadgeChange={onAttentionBadgeChange}
+              sftpLocalDefaultPath={sftpLocalDefaultPath}
+              onSftpLocalDefaultPathChange={onSftpLocalDefaultPathChange}
+              uiFontFamily={uiFontFamily}
+              onUiFontFamilyChange={onUiFontFamilyChange}
+              monoFontFamily={monoFontFamily}
+              onMonoFontFamilyChange={onMonoFontFamilyChange}
+            />
           </div>
         </div>
       </div>

@@ -15,6 +15,7 @@ use crate::ssh::SshConnection;
 
 const RUN_CONFIG_VERSION: u32 = 1;
 const MAX_OUTPUT_CHARS: usize = 200_000;
+const MAX_RETAINED_FINISHED_PROCESSES: usize = 64;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
@@ -108,7 +109,54 @@ struct RunProcessHandle {
 
 #[derive(Default)]
 pub struct RunConfigState {
-    processes: Mutex<HashMap<String, RunProcessHandle>>,
+    processes: Arc<Mutex<HashMap<String, RunProcessHandle>>>,
+}
+
+fn finished_process_ids_to_remove(snapshots: &[(String, RunProcessSnapshot)]) -> Vec<String> {
+    let mut finished = snapshots
+        .iter()
+        .filter(|(_, snapshot)| snapshot.status != RunProcessStatus::Running)
+        .map(|(id, snapshot)| {
+            (
+                id.clone(),
+                snapshot.finished_at.unwrap_or(snapshot.started_at),
+            )
+        })
+        .collect::<Vec<_>>();
+    if finished.len() <= MAX_RETAINED_FINISHED_PROCESSES {
+        return Vec::new();
+    }
+    finished.sort_by_key(|(_, finished_at)| *finished_at);
+    let remove_count = finished.len() - MAX_RETAINED_FINISHED_PROCESSES;
+    finished
+        .into_iter()
+        .take(remove_count)
+        .map(|(id, _)| id)
+        .collect()
+}
+
+fn prune_finished_processes(processes: &mut HashMap<String, RunProcessHandle>) {
+    let snapshots = processes
+        .iter()
+        .map(|(id, handle)| (id.clone(), handle.snapshot.lock().clone()))
+        .collect::<Vec<_>>();
+    for id in finished_process_ids_to_remove(&snapshots) {
+        processes.remove(&id);
+    }
+}
+
+fn spawn_process_cleanup(
+    processes: Arc<Mutex<HashMap<String, RunProcessHandle>>>,
+    snapshot: Arc<Mutex<RunProcessSnapshot>>,
+) {
+    thread::spawn(move || loop {
+        thread::sleep(Duration::from_millis(250));
+        if snapshot.lock().status == RunProcessStatus::Running {
+            continue;
+        }
+        prune_finished_processes(&mut processes.lock());
+        break;
+    });
 }
 
 fn default_run_config_version() -> u32 {
@@ -723,7 +771,7 @@ pub fn start_run_config(
     let run_id = format!("run-{}", Uuid::new_v4());
     let started_at = now_millis();
     let mut shell = shell_command(&command);
-    crate::subprocess::configure_background_command(&mut shell);
+    crate::subprocess::configure_terminable_process_tree(&mut shell);
     let mut child = shell
         .current_dir(&cwd)
         .envs(crate::app_settings::get_login_shell_env().iter().cloned())
@@ -762,6 +810,7 @@ pub fn start_run_config(
             snapshot: Arc::clone(&snapshot),
         },
     );
+    spawn_process_cleanup(Arc::clone(&state.processes), Arc::clone(&snapshot));
 
     let snapshot = snapshot.lock().clone();
     Ok(snapshot)
@@ -791,7 +840,7 @@ pub fn remote_start_run_config(
     let started_at = now_millis();
     let remote_command = build_remote_shell_run_command(&cwd, &command, &env);
     let mut shell = crate::ssh::std_ssh_command_for_remote_command(&connection, remote_command);
-    crate::subprocess::configure_background_command(&mut shell);
+    crate::subprocess::configure_terminable_process_tree(&mut shell);
     let mut child = shell
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -827,6 +876,7 @@ pub fn remote_start_run_config(
             snapshot: Arc::clone(&snapshot),
         },
     );
+    spawn_process_cleanup(Arc::clone(&state.processes), Arc::clone(&snapshot));
 
     let snapshot = snapshot.lock().clone();
     Ok(snapshot)
@@ -845,7 +895,8 @@ pub fn stop_run_config(
         .ok_or_else(|| "Run process not found".to_string())?;
     {
         let mut child = handle.child.lock();
-        let _ = child.kill();
+        crate::subprocess::terminate_process_tree(&mut child)
+            .map_err(|error| format!("Failed to stop run process tree: {error}"))?;
     }
     let mut snapshot = handle.snapshot.lock();
     snapshot.status = RunProcessStatus::Stopped;
@@ -881,6 +932,38 @@ mod tests {
             .expect("system clock")
             .as_nanos();
         std::env::temp_dir().join(format!("aeroric-run-config-test-{name}-{suffix}"))
+    }
+
+    fn process_snapshot(id: usize, status: RunProcessStatus) -> (String, RunProcessSnapshot) {
+        let timestamp = id as u128;
+        (
+            format!("run-{id}"),
+            RunProcessSnapshot {
+                run_id: format!("run-{id}"),
+                config_id: "config".to_string(),
+                name: "Run".to_string(),
+                command: "true".to_string(),
+                cwd: "/tmp".to_string(),
+                status,
+                output: String::new(),
+                exit_code: Some(0),
+                started_at: timestamp,
+                finished_at: Some(timestamp),
+            },
+        )
+    }
+
+    #[test]
+    fn prunes_only_the_oldest_finished_run_processes() {
+        let mut snapshots = (0..MAX_RETAINED_FINISHED_PROCESSES + 3)
+            .map(|id| process_snapshot(id, RunProcessStatus::Exited))
+            .collect::<Vec<_>>();
+        snapshots.push(process_snapshot(999, RunProcessStatus::Running));
+
+        let removed = finished_process_ids_to_remove(&snapshots);
+
+        assert_eq!(removed, vec!["run-0", "run-1", "run-2"]);
+        assert!(!removed.contains(&"run-999".to_string()));
     }
 
     #[test]

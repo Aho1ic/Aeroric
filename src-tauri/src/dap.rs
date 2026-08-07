@@ -32,6 +32,7 @@ use protocol::{
 };
 
 const DEBUG_CONFIG_VERSION: u32 = 1;
+const MAX_RETAINED_FINISHED_SESSIONS: usize = 64;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
@@ -234,7 +235,61 @@ enum SessionCommand {
 
 #[derive(Default)]
 pub struct DebugState {
-    sessions: Mutex<HashMap<String, DebugSessionHandle>>,
+    sessions: Arc<Mutex<HashMap<String, DebugSessionHandle>>>,
+}
+
+fn debug_session_is_finished(status: &DebugSessionStatus) -> bool {
+    matches!(
+        status,
+        DebugSessionStatus::Exited | DebugSessionStatus::Failed | DebugSessionStatus::Stopped
+    )
+}
+
+fn finished_session_ids_to_remove(snapshots: &[(String, DebugSessionSnapshot)]) -> Vec<String> {
+    let mut finished = snapshots
+        .iter()
+        .filter(|(_, snapshot)| debug_session_is_finished(&snapshot.status))
+        .map(|(id, snapshot)| {
+            (
+                id.clone(),
+                snapshot.finished_at.unwrap_or(snapshot.started_at),
+            )
+        })
+        .collect::<Vec<_>>();
+    if finished.len() <= MAX_RETAINED_FINISHED_SESSIONS {
+        return Vec::new();
+    }
+    finished.sort_by_key(|(_, finished_at)| *finished_at);
+    let remove_count = finished.len() - MAX_RETAINED_FINISHED_SESSIONS;
+    finished
+        .into_iter()
+        .take(remove_count)
+        .map(|(id, _)| id)
+        .collect()
+}
+
+fn prune_finished_sessions(sessions: &mut HashMap<String, DebugSessionHandle>) {
+    let snapshots = sessions
+        .iter()
+        .map(|(id, handle)| (id.clone(), handle.snapshot.lock().clone()))
+        .collect::<Vec<_>>();
+    for id in finished_session_ids_to_remove(&snapshots) {
+        sessions.remove(&id);
+    }
+}
+
+fn spawn_debug_session_cleanup(
+    sessions: Arc<Mutex<HashMap<String, DebugSessionHandle>>>,
+    snapshot: Arc<Mutex<DebugSessionSnapshot>>,
+) {
+    thread::spawn(move || loop {
+        thread::sleep(Duration::from_millis(250));
+        if !debug_session_is_finished(&snapshot.lock().status) {
+            continue;
+        }
+        prune_finished_sessions(&mut sessions.lock());
+        break;
+    });
 }
 
 fn default_debug_config_version() -> u32 {
@@ -2717,6 +2772,7 @@ pub fn start_debug_config(
             remote_project_path: None,
         },
     );
+    spawn_debug_session_cleanup(Arc::clone(&state.sessions), Arc::clone(&snapshot));
 
     let snapshot = snapshot.lock().clone();
     Ok(snapshot)
@@ -3132,6 +3188,7 @@ pub fn remote_start_debug_config(
             remote_project_path: Some(remote_root),
         },
     );
+    spawn_debug_session_cleanup(Arc::clone(&state.sessions), Arc::clone(&snapshot));
 
     let snapshot = snapshot.lock().clone();
     Ok(snapshot)
@@ -3394,6 +3451,45 @@ mod tests {
             .expect("system clock")
             .as_nanos();
         std::env::temp_dir().join(format!("aeroric-debug-config-test-{name}-{suffix}"))
+    }
+
+    fn session_snapshot(id: usize, status: DebugSessionStatus) -> (String, DebugSessionSnapshot) {
+        let timestamp = id as u128;
+        (
+            format!("debug-{id}"),
+            DebugSessionSnapshot {
+                debug_id: format!("debug-{id}"),
+                config_id: "config".to_string(),
+                name: "Debug".to_string(),
+                program: "app.js".to_string(),
+                cwd: "/tmp".to_string(),
+                status,
+                output: String::new(),
+                paused_reason: None,
+                call_stack: Vec::new(),
+                scopes: Vec::new(),
+                exit_code: Some(0),
+                started_at: timestamp,
+                finished_at: Some(timestamp),
+            },
+        )
+    }
+
+    #[test]
+    fn prunes_only_the_oldest_finished_debug_sessions() {
+        let mut snapshots = (0..MAX_RETAINED_FINISHED_SESSIONS + 3)
+            .map(|id| session_snapshot(id, DebugSessionStatus::Exited))
+            .collect::<Vec<_>>();
+        snapshots.push(session_snapshot(997, DebugSessionStatus::Starting));
+        snapshots.push(session_snapshot(998, DebugSessionStatus::Running));
+        snapshots.push(session_snapshot(999, DebugSessionStatus::Paused));
+
+        let removed = finished_session_ids_to_remove(&snapshots);
+
+        assert_eq!(removed, vec!["debug-0", "debug-1", "debug-2"]);
+        assert!(!removed.contains(&"debug-997".to_string()));
+        assert!(!removed.contains(&"debug-998".to_string()));
+        assert!(!removed.contains(&"debug-999".to_string()));
     }
 
     #[test]

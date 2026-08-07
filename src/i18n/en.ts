@@ -76,6 +76,8 @@ export const en: Record<string, string> = {
   "appSettings.localRouter.failoverQueueEmpty": "Failover queue is empty.",
   "appSettings.localRouter.failoverQueueRequired":
     "Auto failover is enabled but the queue is empty.",
+  "appSettings.localRouter.failoverQueueInvalid":
+    "The failover queue does not contain an available target.",
   "appSettings.localRouter.failoverInitialize": "Initialize queue by target order",
   "appSettings.localRouter.failoverQueueHint":
     "{agent} failover order: switch top-to-bottom on failure.",
@@ -115,9 +117,9 @@ export const en: Record<string, string> = {
     "Minimum requests needed before the error rate is evaluated.",
   "appSettings.localRouter.maxRetries": "Max retries",
   "appSettings.localRouter.maxRetriesHint": "Max retries after a failed request. 0 disables retry.",
-  "appSettings.localRouter.streamingFirstByte": "Streaming first-byte timeout (s)",
+  "appSettings.localRouter.streamingFirstByte": "Streaming startup timeout (s)",
   "appSettings.localRouter.streamingFirstByteHint":
-    "Max time to wait for the first byte of a streaming request.",
+    "Max time to wait for the upstream to start a valid response stream.",
   "appSettings.localRouter.streamingIdle": "Streaming idle timeout (s)",
   "appSettings.localRouter.streamingIdleHint": "Max gap between streaming chunks. 0 disables it.",
   "appSettings.localRouter.nonStreaming": "Non-streaming timeout (s)",

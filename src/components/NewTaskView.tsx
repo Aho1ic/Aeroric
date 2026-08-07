@@ -5,7 +5,17 @@ import type { Project, AgentType, PermissionMode, PromptSkill } from "../types";
 import { isRemoteProject } from "../types";
 import { agentDisplayLabel, isCodexLikeAgent } from "../agents";
 import { useAgentOptions } from "../hooks/useAgentOptions";
-import { SKILL_HUB_CHANGED_EVENT, type HookAgentReadiness } from "./app-settings/types";
+import {
+  clearAgentModelCache,
+  getCachedAgentModels,
+  refreshAgentModels,
+  type AgentModelSnapshot,
+} from "../hooks/agentModelCache";
+import {
+  APP_SETTINGS_CHANGED_EVENT,
+  SKILL_HUB_CHANGED_EVENT,
+  type HookAgentReadiness,
+} from "./app-settings/types";
 import { useToast } from "./Toast";
 import {
   MentionPopover,
@@ -70,12 +80,6 @@ export interface NewTaskDraft {
 }
 
 type CrossProjectFileMap = Map<string, FileEntry[]>;
-
-interface AgentModels {
-  models: string[];
-  reasoning_effort?: string | null;
-  reasoning_speed?: string | null;
-}
 
 interface NodeRuntimeInstallResult {
   nodePath: string;
@@ -310,38 +314,54 @@ export function NewTaskView({
       }
       const requestId = modelRequestIdRef.current + 1;
       modelRequestIdRef.current = requestId;
-      setModelsLoading(true);
       setModelsError(null);
-      invoke<AgentModels>("list_agent_models", { agent: targetAgent })
+      const cached = getCachedAgentModels(targetAgent);
+
+      const applyModels = (result: AgentModelSnapshot) => {
+        if (modelRequestIdRef.current !== requestId) return;
+        const models = normalizeModelList(Array.isArray(result.models) ? result.models : []);
+        setAvailableModels(models);
+        setSelectedModel((current) => {
+          const canonical = findModelIgnoreCase(models, current);
+          if (canonical) return canonical;
+          return models[0] ?? "";
+        });
+        // Apply agent-config defaults only when the user has no cached draft
+        // (so a saved agent config's reasoning effort / speed become the
+        // initial values on the home page without overriding prior choices).
+        if (!initialDraft) {
+          const rawEffort = result.reasoning_effort ?? null;
+          const configEffort =
+            rawEffort && (REASONING_EFFORTS as readonly string[]).includes(rawEffort)
+              ? (rawEffort as ReasoningEffort)
+              : null;
+          const configSpeed = result.reasoning_speed ?? null;
+          setReasoningEffort((current) => (current === null ? configEffort : current));
+          setSpeed((current) =>
+            current === "standard" && configSpeed === "fast" ? "fast" : current,
+          );
+        }
+      };
+
+      if (cached) {
+        applyModels(cached);
+        setModelsLoading(false);
+      } else {
+        setAvailableModels([]);
+        setSelectedModel("");
+        setModelsLoading(true);
+      }
+
+      refreshAgentModels(targetAgent)
         .then((result) => {
-          if (modelRequestIdRef.current !== requestId) return;
-          const models = normalizeModelList(Array.isArray(result.models) ? result.models : []);
-          setAvailableModels(models);
-          setSelectedModel((current) => {
-            const canonical = findModelIgnoreCase(models, current);
-            if (canonical) return canonical;
-            return models[0] ?? "";
-          });
-          // Apply agent-config defaults only when the user has no cached draft
-          // (so a saved agent config's reasoning effort / speed become the
-          // initial values on the home page without overriding prior choices).
-          if (!initialDraft) {
-            const rawEffort = result.reasoning_effort ?? null;
-            const configEffort =
-              rawEffort && (REASONING_EFFORTS as readonly string[]).includes(rawEffort)
-                ? (rawEffort as ReasoningEffort)
-                : null;
-            const configSpeed = result.reasoning_speed ?? null;
-            setReasoningEffort((current) => (current === null ? configEffort : current));
-            setSpeed((current) =>
-              current === "standard" && configSpeed === "fast" ? "fast" : current,
-            );
-          }
+          applyModels(result);
         })
         .catch((error: unknown) => {
           if (modelRequestIdRef.current !== requestId) return;
-          setAvailableModels([]);
-          setSelectedModel("");
+          if (!cached) {
+            setAvailableModels([]);
+            setSelectedModel("");
+          }
           setModelsError(error instanceof Error ? error.message : String(error));
         })
         .finally(() => {
@@ -358,6 +378,15 @@ export function NewTaskView({
 
   useEffect(() => {
     loadAgentModels(agent);
+  }, [agent, loadAgentModels]);
+
+  useEffect(() => {
+    const handleSettingsChanged = () => {
+      clearAgentModelCache();
+      loadAgentModels(agent);
+    };
+    window.addEventListener(APP_SETTINGS_CHANGED_EVENT, handleSettingsChanged);
+    return () => window.removeEventListener(APP_SETTINGS_CHANGED_EVENT, handleSettingsChanged);
   }, [agent, loadAgentModels]);
 
   // Load default agent and permission mode from project config when project changes

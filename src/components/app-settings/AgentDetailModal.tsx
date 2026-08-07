@@ -74,12 +74,14 @@ export function AgentDetailModal({
   option,
   themeVariant,
   logo,
+  settings,
   onClose,
   onDeleted,
 }: {
   option: AgentOption;
   themeVariant: ThemeVariant;
   logo: string;
+  settings?: AppSettings | null;
   onClose: () => void;
   onDeleted?: () => void;
 }) {
@@ -145,19 +147,17 @@ export function AgentDetailModal({
     setFileState({ status: "loading" });
     setError(null);
     setSaved(false);
-    invoke<string>("get_agent_config_file_path", { agent: agentKey })
-      .then((resolvedPath) => {
+    const pathPromise = option.configFile.trim()
+      ? Promise.resolve(option.configFile)
+      : invoke<string>("get_agent_config_file_path", { agent: agentKey });
+    Promise.all([pathPromise, invoke<string | null>("read_agent_config_file", { agent: agentKey })])
+      .then(([resolvedPath, content]) => {
         if (cancelled) return;
         setResolvedFilePath(resolvedPath);
         if (!resolvedPath.trim()) {
           setFileState({ status: "unconfigured" });
-          return null;
-        }
-        return invoke<string | null>("read_agent_config_file", { agent: agentKey });
-      })
-      .then((c) => {
-        if (cancelled) return;
-        if (c === null) {
+          return;
+        } else if (content === null) {
           setFileState({ status: "loaded", content: "" });
           setOriginal("");
           setReasoningEffort(null);
@@ -166,13 +166,12 @@ export function AgentDetailModal({
           setOriginalReasoningSpeed(null);
           return;
         }
-        if (c === undefined) return;
-        setFileState({ status: "loaded", content: c });
-        setOriginal(c);
-        const effort = readModelReasoningEffort(c);
+        setFileState({ status: "loaded", content });
+        setOriginal(content);
+        const effort = readModelReasoningEffort(content);
         setReasoningEffort(effort);
         setOriginalReasoningEffort(effort);
-        const speed = readModelReasoningSpeed(c);
+        const speed = readModelReasoningSpeed(content);
         setReasoningSpeed(speed);
         setOriginalReasoningSpeed(speed);
       })
@@ -185,33 +184,17 @@ export function AgentDetailModal({
   }, [agentKey, option.configFile]);
 
   useEffect(() => {
-    if (!deletable) {
-      setCustomProfile(null);
-      setDetectedModels([]);
-      setDetectedBalance(null);
-      setSelectedModels([]);
-      setOriginalSelectedModels([]);
-      setEnable1mContext(false);
-      setOriginalEnable1mContext(false);
-      setEnableChatCompletionsProxy(false);
-      setOriginalEnableChatCompletionsProxy(false);
-      setBaseUrl("");
-      setOriginalBaseUrl("");
-      setApiKey("");
-      setOriginalApiKey("");
-      return;
-    }
-    setDetectedBalance(null);
     let cancelled = false;
-    invoke<AppSettings>("load_app_settings")
-      .then((settings) => {
-        if (cancelled) return;
+
+    function applySettings(loadedSettings: AppSettings) {
+      if (cancelled) return;
+      setDetectedBalance(null);
+      if (deletable) {
         const profile =
-          settings.custom_agents?.find((item) => item.id === String(agentKey)) ?? null;
+          loadedSettings.custom_agents?.find((item) => item.id === String(agentKey)) ?? null;
         const savedModels = normalizeModels(profile?.models ?? []);
         setCustomProfile(profile);
         setDetectedModels(savedModels);
-        setDetectedBalance(null);
         setSelectedModels(savedModels);
         setOriginalSelectedModels(savedModels);
         const contextEnabled = Boolean(profile?.enable_1m_context);
@@ -224,36 +207,39 @@ export function AgentDetailModal({
         setOriginalBaseUrl(profile?.base_url ?? "");
         setApiKey(profile?.api_key ?? "");
         setOriginalApiKey(profile?.api_key ?? "");
-      })
-      .catch((e) => {
-        if (!cancelled) setError(String(e));
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [agentKey, deletable]);
+        return;
+      }
 
-  useEffect(() => {
-    if (deletable) return;
-    let cancelled = false;
-    invoke<AppSettings>("load_app_settings")
-      .then((loadedSettings) => {
-        if (cancelled) return;
-        const creds = loadedSettings.builtin_agent_credentials?.[agentKey];
-        const savedModels = normalizeModels(creds?.models ?? []);
-        setBaseUrl(creds?.base_url ?? "");
-        setOriginalBaseUrl(creds?.base_url ?? "");
-        setApiKey(creds?.api_key ?? "");
-        setOriginalApiKey(creds?.api_key ?? "");
-        setDetectedModels(savedModels);
-        setSelectedModels(savedModels);
-        setOriginalSelectedModels(savedModels);
-      })
-      .catch(console.error);
+      setCustomProfile(null);
+      setEnable1mContext(false);
+      setOriginalEnable1mContext(false);
+      setEnableChatCompletionsProxy(false);
+      setOriginalEnableChatCompletionsProxy(false);
+      const creds = loadedSettings.builtin_agent_credentials?.[agentKey];
+      const savedModels = normalizeModels(creds?.models ?? []);
+      setBaseUrl(creds?.base_url ?? "");
+      setOriginalBaseUrl(creds?.base_url ?? "");
+      setApiKey(creds?.api_key ?? "");
+      setOriginalApiKey(creds?.api_key ?? "");
+      setDetectedModels(savedModels);
+      setSelectedModels(savedModels);
+      setOriginalSelectedModels(savedModels);
+    }
+
+    if (settings) {
+      applySettings(settings);
+    } else {
+      invoke<AppSettings>("load_app_settings")
+        .then(applySettings)
+        .catch((reason) => {
+          if (!cancelled) setError(String(reason));
+        });
+    }
+
     return () => {
       cancelled = true;
     };
-  }, [agentKey, deletable]);
+  }, [agentKey, deletable, settings]);
 
   async function handleExportConfig() {
     if (exporting || importing) return;
@@ -440,19 +426,30 @@ export function AgentDetailModal({
     setError(null);
     setSaved(false);
     try {
+      const regeneratesConfig =
+        canSaveModels || canSave1mContext || canSaveChatCompletionsProxy || isCredsDirty;
+      if (isDirty && regeneratesConfig) {
+        throw new Error(
+          "The Agent settings and raw config were both changed. Save or discard the raw config changes before updating settings that regenerate this file.",
+        );
+      }
+
+      let latestContent = fileState.status === "loaded" ? fileState.content : null;
+
       if (pathSectionRef.current?.isDirty) {
         await pathSectionRef.current.save();
       }
 
       if (isCredsDirty || (isBuiltIn && canSaveModels)) {
         if (deletable && customProfile) {
-          await invoke("save_custom_agent_profile", {
-            profile: {
-              ...customProfile,
-              base_url: baseUrl.trim(),
-              api_key: apiKey.trim(),
-              enable_chat_completions_proxy: enableChatCompletionsProxy,
-            },
+          await invoke("update_custom_agent_access", {
+            id: agentKey,
+            baseUrl: baseUrl !== originalBaseUrl ? baseUrl.trim() : null,
+            apiKey: apiKey !== originalApiKey && apiKey.trim() ? apiKey.trim() : null,
+            clearApiKey: apiKey !== originalApiKey && !apiKey.trim(),
+            enableChatCompletionsProxy: canSaveChatCompletionsProxy
+              ? enableChatCompletionsProxy
+              : null,
           });
           setOriginalBaseUrl(baseUrl.trim());
           setOriginalApiKey(apiKey.trim());
@@ -467,21 +464,13 @@ export function AgentDetailModal({
               : prev,
           );
         } else {
-          const loadedSettings = await invoke<AppSettings>("load_app_settings");
-          const existing = loadedSettings.builtin_agent_credentials?.[agentKey];
-          const nextSettings: AppSettings = {
-            ...loadedSettings,
-            builtin_agent_credentials: {
-              ...(loadedSettings.builtin_agent_credentials ?? {}),
-              [agentKey]: {
-                base_url: baseUrl.trim(),
-                api_key: apiKey.trim(),
-                models: isBuiltIn ? normalizeModels(selectedModels) : (existing?.models ?? []),
-                enable_1m_context: existing?.enable_1m_context ?? false,
-              },
-            },
-          };
-          await invoke("save_app_settings", { settings: nextSettings });
+          await invoke<AppSettings>("update_builtin_agent_access", {
+            agent: agentKey,
+            baseUrl: baseUrl !== originalBaseUrl ? baseUrl.trim() : null,
+            apiKey: apiKey !== originalApiKey && apiKey.trim() ? apiKey.trim() : null,
+            clearApiKey: apiKey !== originalApiKey && !apiKey.trim(),
+            models: canSaveModels ? normalizeModels(selectedModels) : null,
+          });
           setOriginalBaseUrl(baseUrl.trim());
           setOriginalApiKey(apiKey.trim());
           setOriginalSelectedModels(normalizeModels(selectedModels));
@@ -543,9 +532,10 @@ export function AgentDetailModal({
         setOriginalEnable1mContext(contextEnabled);
       }
 
-      if (canSaveModels || canSave1mContext || canSaveChatCompletionsProxy || isCredsDirty) {
+      if (regeneratesConfig) {
         const content = await invoke<string | null>("read_agent_config_file", { agent: agentKey });
         if (content !== null) {
+          latestContent = content;
           setFileState({ status: "loaded", content });
           setOriginal(content);
           const effort = readModelReasoningEffort(content);
@@ -557,17 +547,16 @@ export function AgentDetailModal({
         }
       }
 
-      if ((canSaveReasoningEffort || canSaveReasoningSpeed) && fileState.status === "loaded") {
-        let updatedContent = setModelReasoningEffort(fileState.content, reasoningEffort);
+      if ((canSaveReasoningEffort || canSaveReasoningSpeed) && latestContent !== null) {
+        let updatedContent = setModelReasoningEffort(latestContent, reasoningEffort);
         updatedContent = setModelReasoningSpeed(updatedContent, reasoningSpeed);
+        latestContent = updatedContent;
         setFileState({ status: "loaded", content: updatedContent });
-        if (!isDirty || fileState.content === original) {
+        if (!isDirty) {
           await invoke("write_agent_config_file", { agent: agentKey, content: updatedContent });
           setOriginal(updatedContent);
           setOriginalReasoningEffort(reasoningEffort);
           setOriginalReasoningSpeed(reasoningSpeed);
-        } else {
-          setFileState({ status: "loaded", content: updatedContent });
         }
       }
 
@@ -633,9 +622,7 @@ export function AgentDetailModal({
             flexDirection: "column",
             border: "1px solid color-mix(in srgb, var(--border-medium) 72%, #ffffff 28%)",
             borderRadius: 28,
-            background: "color-mix(in srgb, var(--bg-card) 52%, transparent)",
-            backdropFilter: "blur(44px) saturate(1.4)",
-            WebkitBackdropFilter: "blur(44px) saturate(1.4)",
+            background: "var(--bg-card)",
             boxShadow: "var(--shadow-popover)",
             overflow: "hidden",
           }}
@@ -838,6 +825,7 @@ export function AgentDetailModal({
                       <AgentPathSection
                         ref={pathSectionRef}
                         agentKey={agentKey}
+                        initialSettings={settings}
                         hideInstallation={deletable && !isBuiltIn}
                         hideSaveButton
                         onDirtyChange={setPathDirty}
@@ -1421,9 +1409,7 @@ export function AgentDetailModal({
               width: "min(420px, calc(100vw - 32px))",
               border: "1px solid color-mix(in srgb, var(--border-medium) 72%, #ffffff 28%)",
               borderRadius: 22,
-              background: "color-mix(in srgb, var(--bg-card) 52%, transparent)",
-              backdropFilter: "blur(44px) saturate(1.4)",
-              WebkitBackdropFilter: "blur(44px) saturate(1.4)",
+              background: "var(--bg-card)",
               boxShadow: "var(--shadow-popover)",
               padding: 18,
             }}

@@ -38,9 +38,7 @@ export function AddAgentModal({
           flexDirection: "column",
           border: "1px solid color-mix(in srgb, var(--border-medium) 72%, #ffffff 28%)",
           borderRadius: 28,
-          background: "color-mix(in srgb, var(--bg-card) 52%, transparent)",
-          backdropFilter: "blur(44px) saturate(1.4)",
-          WebkitBackdropFilter: "blur(44px) saturate(1.4)",
+          background: "var(--bg-card)",
           boxShadow: "var(--shadow-popover)",
           overflow: "hidden",
         }}

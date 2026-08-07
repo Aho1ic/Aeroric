@@ -31,6 +31,7 @@ use url::Url;
 
 const MAX_REQUEST_BODY_BYTES: usize = 64 * 1024 * 1024;
 const MAX_RESPONSE_BODY_BYTES: usize = 64 * 1024 * 1024;
+const MAX_STREAM_PRIME_BYTES: usize = 256 * 1024;
 const ANTHROPIC_ONE_M_BETA: &str = "context-1m-2025-08-07";
 const HOP_BY_HOP_HEADERS: &[&str] = &[
     "connection",
@@ -316,6 +317,23 @@ impl SelectedRoute {
             "/responses" | "/v1/responses"
         )
     }
+
+    fn semantic_protocol(&self, target: &UpstreamTarget) -> Option<SemanticProtocol> {
+        if self.agent == RouterAgent::Claude && self.forward_path.starts_with("/v1/messages") {
+            return Some(SemanticProtocol::Anthropic);
+        }
+        if self.agent != RouterAgent::Codex {
+            return None;
+        }
+        if self.bridges_responses_to_chat(target) || self.forward_path.contains("/chat/completions")
+        {
+            Some(SemanticProtocol::ChatCompletions)
+        } else if self.forward_path.contains("/responses") {
+            Some(SemanticProtocol::Responses)
+        } else {
+            None
+        }
+    }
 }
 
 fn select_route(uri: &Uri, headers: &HeaderMap) -> Result<SelectedRoute, &'static str> {
@@ -596,7 +614,8 @@ async fn attempt_target(
             .request(method.clone(), upstream_url.clone())
             .headers(headers)
             .body(current_body.clone());
-        let raw = match send_upstream(
+        let stream_started_at = Instant::now();
+        let mut raw = match send_upstream(
             request,
             method,
             request_metadata.streaming,
@@ -646,7 +665,7 @@ async fn attempt_target(
                 outbound_model: outbound_model.clone(),
                 attempt_count: 0,
             };
-            if is_non_retryable_status(status) {
+            if !should_retry_status(route.agent, target, status) {
                 return AttemptResult::Return(response);
             }
             return AttemptResult::Retry(AttemptFailure {
@@ -664,6 +683,32 @@ async fn attempt_target(
                 target_name: target.name().to_string(),
                 attempt_count: 0,
             });
+        }
+
+        let semantic_protocol = policy
+            .auto_failover_enabled
+            .then(|| route.semantic_protocol(target))
+            .flatten();
+        if let Some(protocol) = semantic_protocol {
+            raw = match validate_success_response(
+                raw,
+                protocol,
+                stream_started_at,
+                policy.streaming_first_byte_timeout,
+            )
+            .await
+            {
+                Ok(raw) => raw,
+                Err(failure) => {
+                    return AttemptResult::Retry(AttemptFailure::transport(
+                        target,
+                        failure.status,
+                        failure.summary,
+                        endpoint,
+                        outbound_model,
+                    ));
+                }
+            };
         }
 
         return match raw.body {
@@ -718,6 +763,8 @@ async fn attempt_target(
                 } else {
                     0
                 };
+                let semantic_protocol =
+                    semantic_protocol.filter(|_| !response_body_is_encoded(&headers));
                 AttemptResult::Return(AttemptResponse {
                     status: raw.status,
                     headers,
@@ -731,6 +778,7 @@ async fn attempt_target(
                                 outbound_model.clone()
                             }
                         }),
+                        semantic_protocol,
                         idle_timeout,
                         stream_completion: None,
                     }),
@@ -856,6 +904,19 @@ enum RawAttemptBody {
     },
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SemanticProtocol {
+    Anthropic,
+    Responses,
+    ChatCompletions,
+}
+
+enum StreamStartInspection {
+    Pending,
+    Safe,
+    Failed(String),
+}
+
 async fn send_upstream(
     request: reqwest::RequestBuilder,
     method: &Method,
@@ -940,6 +1001,380 @@ async fn send_upstream(
     }
 }
 
+async fn validate_success_response(
+    response: RawAttemptResponse,
+    protocol: SemanticProtocol,
+    stream_started_at: Instant,
+    semantic_timeout_seconds: u64,
+) -> Result<RawAttemptResponse, TransportFailure> {
+    let RawAttemptResponse {
+        status,
+        headers,
+        body,
+    } = response;
+    let body = match body {
+        RawAttemptBody::Buffered(body) => {
+            let decoded = decompress_upstream_body(&headers, &body);
+            if let Some(summary) = semantic_error_from_bytes(protocol, &decoded) {
+                return Err(TransportFailure {
+                    status: StatusCode::BAD_GATEWAY,
+                    summary,
+                });
+            }
+            RawAttemptBody::Buffered(body)
+        }
+        RawAttemptBody::Streaming { first, rest } => {
+            if response_body_is_encoded(&headers) {
+                RawAttemptBody::Streaming { first, rest }
+            } else {
+                prime_streaming_body(
+                    first,
+                    rest,
+                    protocol,
+                    stream_started_at,
+                    semantic_timeout_seconds,
+                )
+                .await?
+            }
+        }
+    };
+    Ok(RawAttemptResponse {
+        status,
+        headers,
+        body,
+    })
+}
+
+fn response_body_is_encoded(headers: &HeaderMap) -> bool {
+    headers
+        .get(CONTENT_ENCODING)
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .is_some_and(|value| !value.is_empty() && !value.eq_ignore_ascii_case("identity"))
+}
+
+async fn prime_streaming_body(
+    first: Option<Bytes>,
+    mut rest: BoxStream<'static, Result<Bytes, reqwest::Error>>,
+    protocol: SemanticProtocol,
+    stream_started_at: Instant,
+    semantic_timeout_seconds: u64,
+) -> Result<RawAttemptBody, TransportFailure> {
+    let mut buffered = Vec::new();
+    if let Some(first) = first {
+        buffered.extend_from_slice(&first);
+    }
+
+    loop {
+        match inspect_stream_start(protocol, &buffered, false) {
+            StreamStartInspection::Safe => {
+                return Ok(RawAttemptBody::Streaming {
+                    first: Some(Bytes::from(buffered)),
+                    rest,
+                });
+            }
+            StreamStartInspection::Failed(summary) => {
+                return Err(TransportFailure {
+                    status: StatusCode::BAD_GATEWAY,
+                    summary,
+                });
+            }
+            StreamStartInspection::Pending => {}
+        }
+
+        if buffered.len() >= MAX_STREAM_PRIME_BYTES {
+            return Err(TransportFailure {
+                status: StatusCode::BAD_GATEWAY,
+                summary: format!(
+                    "upstream produced no semantic output within the {} KiB stream preflight limit",
+                    MAX_STREAM_PRIME_BYTES / 1024
+                ),
+            });
+        }
+
+        let next = if semantic_timeout_seconds == 0 {
+            rest.next().await
+        } else {
+            let remaining = Duration::from_secs(semantic_timeout_seconds)
+                .saturating_sub(stream_started_at.elapsed());
+            if remaining.is_zero() {
+                return Err(TransportFailure {
+                    status: StatusCode::GATEWAY_TIMEOUT,
+                    summary: format!(
+                        "upstream produced no semantic output within {semantic_timeout_seconds}s"
+                    ),
+                });
+            }
+            tokio::time::timeout(remaining, rest.next())
+                .await
+                .map_err(|_| TransportFailure {
+                    status: StatusCode::GATEWAY_TIMEOUT,
+                    summary: format!(
+                        "upstream produced no semantic output within {semantic_timeout_seconds}s"
+                    ),
+                })?
+        };
+
+        match next {
+            Some(Ok(chunk)) => buffered.extend_from_slice(&chunk),
+            Some(Err(error)) => return Err(transport_from_reqwest(error)),
+            None => {
+                return match inspect_stream_start(protocol, &buffered, true) {
+                    StreamStartInspection::Safe => Ok(RawAttemptBody::Streaming {
+                        first: (!buffered.is_empty()).then(|| Bytes::from(buffered)),
+                        rest,
+                    }),
+                    StreamStartInspection::Failed(summary) => Err(TransportFailure {
+                        status: StatusCode::BAD_GATEWAY,
+                        summary,
+                    }),
+                    StreamStartInspection::Pending => Err(TransportFailure {
+                        status: StatusCode::BAD_GATEWAY,
+                        summary: "upstream stream ended before producing semantic output"
+                            .to_string(),
+                    }),
+                };
+            }
+        }
+    }
+}
+
+fn inspect_stream_start(
+    protocol: SemanticProtocol,
+    buffered: &[u8],
+    end_of_stream: bool,
+) -> StreamStartInspection {
+    let trimmed = buffered
+        .iter()
+        .position(|byte| !byte.is_ascii_whitespace())
+        .map(|start| &buffered[start..])
+        .unwrap_or_default();
+    if matches!(trimmed.first(), Some(b'{') | Some(b'[')) {
+        if let Ok(value) = serde_json::from_slice::<Value>(trimmed) {
+            return semantic_error_from_value(protocol, &value)
+                .map(StreamStartInspection::Failed)
+                .unwrap_or(StreamStartInspection::Safe);
+        }
+    }
+
+    let normalized = String::from_utf8_lossy(buffered).replace("\r\n", "\n");
+    let blocks = normalized.split("\n\n").collect::<Vec<_>>();
+    let complete_blocks = if end_of_stream {
+        blocks.len()
+    } else {
+        blocks.len().saturating_sub(1)
+    };
+    for block in blocks.into_iter().take(complete_blocks) {
+        match inspect_sse_block(protocol, block) {
+            StreamStartInspection::Pending => {}
+            result => return result,
+        }
+    }
+    StreamStartInspection::Pending
+}
+
+fn inspect_sse_block(protocol: SemanticProtocol, block: &str) -> StreamStartInspection {
+    let mut named_event = None;
+    let mut data_lines = Vec::new();
+    for line in block.lines() {
+        if let Some(event) = line.strip_prefix("event:") {
+            named_event = Some(event.trim());
+        } else if let Some(data) = line.strip_prefix("data:") {
+            data_lines.push(data.trim_start());
+        }
+    }
+    if data_lines.is_empty() {
+        return StreamStartInspection::Pending;
+    }
+    let data = data_lines.join("\n");
+    if data.trim() == "[DONE]" {
+        return StreamStartInspection::Safe;
+    }
+    let Ok(value) = serde_json::from_str::<Value>(&data) else {
+        return StreamStartInspection::Pending;
+    };
+    if let Some(summary) = semantic_error_from_value(protocol, &value) {
+        return StreamStartInspection::Failed(summary);
+    }
+    let event = named_event
+        .filter(|event| !event.is_empty())
+        .or_else(|| value.get("type").and_then(Value::as_str))
+        .unwrap_or_default();
+    if event == "error" || event == "response.failed" {
+        return StreamStartInspection::Failed(format!(
+            "{} upstream emitted {event} before output",
+            semantic_protocol_name(protocol)
+        ));
+    }
+
+    match protocol {
+        SemanticProtocol::Anthropic => match event {
+            "message_start" | "content_block_start" | "ping" | "" => StreamStartInspection::Pending,
+            _ => StreamStartInspection::Safe,
+        },
+        SemanticProtocol::Responses => match event {
+            "response.created"
+            | "response.in_progress"
+            | "response.queued"
+            | "response.output_item.added"
+            | "response.content_part.added"
+            | "response.reasoning_summary_part.added"
+            | "" => StreamStartInspection::Pending,
+            _ => StreamStartInspection::Safe,
+        },
+        SemanticProtocol::ChatCompletions => {
+            if chat_chunk_has_output(&value) {
+                StreamStartInspection::Safe
+            } else {
+                StreamStartInspection::Pending
+            }
+        }
+    }
+}
+
+fn chat_chunk_has_output(value: &Value) -> bool {
+    if value.get("usage").is_some_and(|usage| !usage.is_null()) {
+        return true;
+    }
+    value
+        .get("choices")
+        .and_then(Value::as_array)
+        .is_some_and(|choices| {
+            choices.iter().any(|choice| {
+                if choice
+                    .get("finish_reason")
+                    .is_some_and(|reason| !reason.is_null())
+                {
+                    return true;
+                }
+                let Some(delta) = choice.get("delta") else {
+                    return false;
+                };
+                delta
+                    .get("content")
+                    .and_then(Value::as_str)
+                    .is_some_and(|content| !content.is_empty())
+                    || [
+                        "tool_calls",
+                        "function_call",
+                        "reasoning",
+                        "reasoning_content",
+                    ]
+                    .into_iter()
+                    .any(|key| delta.get(key).is_some_and(|part| !part.is_null()))
+            })
+        })
+}
+
+fn semantic_error_from_bytes(protocol: SemanticProtocol, body: &[u8]) -> Option<String> {
+    let value = serde_json::from_slice::<Value>(body).ok()?;
+    semantic_error_from_value(protocol, &value)
+}
+
+fn semantic_error_from_value(protocol: SemanticProtocol, value: &Value) -> Option<String> {
+    let payload = if protocol == SemanticProtocol::Responses {
+        value.get("response").unwrap_or(value)
+    } else {
+        value
+    };
+    let status = payload.get("status").and_then(Value::as_str);
+    let error = payload.get("error").filter(|error| !error.is_null());
+    let explicit_error = payload.get("type").and_then(Value::as_str) == Some("error");
+    let failed = match protocol {
+        SemanticProtocol::Responses => {
+            matches!(status, Some("failed" | "cancelled")) || error.is_some()
+        }
+        SemanticProtocol::Anthropic | SemanticProtocol::ChatCompletions => {
+            explicit_error || error.is_some()
+        }
+    };
+    if !failed {
+        return None;
+    }
+
+    let detail = error.unwrap_or(payload);
+    let kind = detail
+        .get("type")
+        .and_then(Value::as_str)
+        .or_else(|| detail.get("code").and_then(Value::as_str))
+        .or(status)
+        .unwrap_or("upstream_error");
+    let message = detail
+        .get("message")
+        .and_then(Value::as_str)
+        .or_else(|| detail.as_str())
+        .filter(|message| !message.trim().is_empty())
+        .unwrap_or("upstream reported a semantic failure");
+    Some(format!(
+        "{} upstream {kind}: {message}",
+        semantic_protocol_name(protocol)
+    ))
+}
+
+fn semantic_protocol_name(protocol: SemanticProtocol) -> &'static str {
+    match protocol {
+        SemanticProtocol::Anthropic => "Anthropic",
+        SemanticProtocol::Responses => "Responses",
+        SemanticProtocol::ChatCompletions => "Chat Completions",
+    }
+}
+
+struct SemanticStreamObserver {
+    protocol: SemanticProtocol,
+    pending: Vec<u8>,
+}
+
+impl SemanticStreamObserver {
+    fn new(protocol: SemanticProtocol) -> Self {
+        Self {
+            protocol,
+            pending: Vec::new(),
+        }
+    }
+
+    fn push(&mut self, chunk: &[u8]) -> Option<String> {
+        self.pending.extend_from_slice(chunk);
+        while let Some((index, delimiter_len)) = find_sse_delimiter(&self.pending) {
+            let block = self
+                .pending
+                .drain(..index + delimiter_len)
+                .collect::<Vec<_>>();
+            if let StreamStartInspection::Failed(summary) =
+                inspect_sse_block(self.protocol, &String::from_utf8_lossy(&block[..index]))
+            {
+                return Some(summary);
+            }
+        }
+        if self.pending.len() > MAX_STREAM_PRIME_BYTES {
+            self.pending.clear();
+        }
+        None
+    }
+
+    fn finish(&mut self) -> Option<String> {
+        if self.pending.is_empty() {
+            return None;
+        }
+        let block = std::mem::take(&mut self.pending);
+        match inspect_sse_block(self.protocol, &String::from_utf8_lossy(&block)) {
+            StreamStartInspection::Failed(summary) => Some(summary),
+            StreamStartInspection::Pending | StreamStartInspection::Safe => None,
+        }
+    }
+}
+
+fn find_sse_delimiter(bytes: &[u8]) -> Option<(usize, usize)> {
+    for index in 0..bytes.len() {
+        if bytes.get(index..index + 2) == Some(b"\n\n") {
+            return Some((index, 2));
+        }
+        if bytes.get(index..index + 4) == Some(b"\r\n\r\n") {
+            return Some((index, 4));
+        }
+    }
+    None
+}
+
 async fn read_response_body_limited(
     response: reqwest::Response,
 ) -> Result<Bytes, TransportFailure> {
@@ -977,8 +1412,23 @@ fn transport_from_reqwest(error: reqwest::Error) -> TransportFailure {
     }
 }
 
-fn is_non_retryable_status(status: StatusCode) -> bool {
-    NON_RETRYABLE_STATUS_CODES.contains(&status.as_u16())
+fn should_retry_status(agent: RouterAgent, target: &UpstreamTarget, status: StatusCode) -> bool {
+    if agent == RouterAgent::Codex
+        && matches!(status, StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN)
+        && target.api_key().is_empty()
+        && target
+            .base_url()
+            .host_str()
+            .is_some_and(|host| host.eq_ignore_ascii_case("chatgpt.com"))
+        && target
+            .base_url()
+            .path()
+            .trim_end_matches('/')
+            .ends_with("/backend-api/codex")
+    {
+        return false;
+    }
+    !NON_RETRYABLE_STATUS_CODES.contains(&status.as_u16())
 }
 
 /// Decompress an upstream error response body for inspection. Mirrors the
@@ -1144,6 +1594,7 @@ struct StreamingAttemptBody {
     first: Option<Bytes>,
     rest: BoxStream<'static, Result<Bytes, reqwest::Error>>,
     bridge_model: Option<String>,
+    semantic_protocol: Option<SemanticProtocol>,
     idle_timeout: u64,
     stream_completion: Option<StreamCompletion>,
 }
@@ -1168,6 +1619,8 @@ fn streaming_response(
         upstream: streaming.rest,
         pending: VecDeque::new(),
         transformer: streaming.bridge_model.map(ChatSseTransformer::new),
+        semantic_observer: streaming.semantic_protocol.map(SemanticStreamObserver::new),
+        semantic_failure: None,
         capture: Some(UsageCapture::new(agent, true, None)),
         stream_completion: streaming.stream_completion,
         status_code: status.as_u16(),
@@ -1182,10 +1635,22 @@ fn streaming_response(
         let mut state = state?;
         loop {
             if state.upstream_finished && !state.finalized {
-                state.finalize_success().await;
+                if let Some(summary) = state
+                    .semantic_observer
+                    .as_mut()
+                    .and_then(SemanticStreamObserver::finish)
+                {
+                    state.finalize_failure(&summary).await;
+                } else {
+                    state.finalize_success().await;
+                }
             }
             if let Some(chunk) = state.pending.pop_front() {
                 return Some((Ok::<Bytes, io::Error>(chunk), Some(state)));
+            }
+            if let Some(summary) = state.semantic_failure.take() {
+                state.finalize_failure(&summary).await;
+                return None;
             }
             if state.upstream_finished {
                 return None;
@@ -1219,6 +1684,8 @@ struct ProxyBodyState {
     upstream: BoxStream<'static, Result<Bytes, reqwest::Error>>,
     pending: VecDeque<Bytes>,
     transformer: Option<ChatSseTransformer>,
+    semantic_observer: Option<SemanticStreamObserver>,
+    semantic_failure: Option<String>,
     capture: Option<UsageCapture>,
     stream_completion: Option<StreamCompletion>,
     status_code: u16,
@@ -1229,6 +1696,12 @@ struct ProxyBodyState {
 
 impl ProxyBodyState {
     fn accept_upstream_chunk(&mut self, chunk: &[u8]) {
+        if self.semantic_failure.is_none() {
+            self.semantic_failure = self
+                .semantic_observer
+                .as_mut()
+                .and_then(|observer| observer.push(chunk));
+        }
         if let Some(transformer) = self.transformer.as_mut() {
             for output in transformer.push(chunk) {
                 self.enqueue_output(output);
@@ -1591,6 +2064,151 @@ mod tests {
     use uuid::Uuid;
 
     #[test]
+    fn retry_policy_protects_official_codex_auth_but_allows_other_accounts() {
+        let official = UpstreamTarget::with_details(
+            "codex",
+            "Codex",
+            "https://chatgpt.com/backend-api/codex",
+            "",
+            Vec::new(),
+            false,
+            false,
+        )
+        .unwrap();
+        assert!(!should_retry_status(
+            RouterAgent::Codex,
+            &official,
+            StatusCode::UNAUTHORIZED
+        ));
+        assert!(!should_retry_status(
+            RouterAgent::Codex,
+            &official,
+            StatusCode::FORBIDDEN
+        ));
+
+        let third_party = UpstreamTarget::with_details(
+            "custom",
+            "Custom",
+            "https://gateway.example.test/v1",
+            "provider-key",
+            Vec::new(),
+            false,
+            false,
+        )
+        .unwrap();
+        assert!(should_retry_status(
+            RouterAgent::Codex,
+            &third_party,
+            StatusCode::UNAUTHORIZED
+        ));
+        assert!(!should_retry_status(
+            RouterAgent::Codex,
+            &third_party,
+            StatusCode::BAD_REQUEST
+        ));
+    }
+
+    #[test]
+    fn semantic_failure_detection_does_not_reject_incomplete_responses() {
+        let failed = json!({
+            "status": "failed",
+            "error": {"type": "server_error", "message": "busy"},
+            "output": []
+        });
+        assert!(
+            semantic_error_from_value(SemanticProtocol::Responses, &failed)
+                .is_some_and(|summary| summary.contains("busy"))
+        );
+
+        let incomplete = json!({
+            "status": "incomplete",
+            "incomplete_details": {"reason": "max_output_tokens"},
+            "output": []
+        });
+        assert_eq!(
+            semantic_error_from_value(SemanticProtocol::Responses, &incomplete),
+            None
+        );
+    }
+
+    #[test]
+    fn stream_priming_waits_through_lifecycle_events_and_catches_failure() {
+        let lifecycle = b"event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"status\":\"in_progress\"}}\n\n";
+        assert!(matches!(
+            inspect_stream_start(SemanticProtocol::Responses, lifecycle, false),
+            StreamStartInspection::Pending
+        ));
+
+        let structural = b"event: response.output_item.added\ndata: {\"type\":\"response.output_item.added\",\"item\":{\"type\":\"message\",\"content\":[]}}\n\nevent: response.content_part.added\ndata: {\"type\":\"response.content_part.added\",\"part\":{\"type\":\"output_text\",\"text\":\"\"}}\n\n";
+        assert!(matches!(
+            inspect_stream_start(SemanticProtocol::Responses, structural, false),
+            StreamStartInspection::Pending
+        ));
+
+        let failed = b"event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"status\":\"in_progress\"}}\n\nevent: response.failed\ndata: {\"type\":\"response.failed\",\"response\":{\"status\":\"failed\",\"error\":{\"message\":\"overloaded\"}}}\n\n";
+        assert!(matches!(
+            inspect_stream_start(SemanticProtocol::Responses, failed, false),
+            StreamStartInspection::Failed(summary) if summary.contains("overloaded")
+        ));
+
+        let output = b"event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"hello\"}\n\n";
+        assert!(matches!(
+            inspect_stream_start(SemanticProtocol::Responses, output, false),
+            StreamStartInspection::Safe
+        ));
+    }
+
+    #[test]
+    fn anthropic_stream_priming_waits_for_content_after_block_start() {
+        let structural = b"event: content_block_start\ndata: {\"type\":\"content_block_start\",\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n";
+        assert!(matches!(
+            inspect_stream_start(SemanticProtocol::Anthropic, structural, false),
+            StreamStartInspection::Pending
+        ));
+
+        let output = b"event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"hello\"}}\n\n";
+        assert!(matches!(
+            inspect_stream_start(SemanticProtocol::Anthropic, output, false),
+            StreamStartInspection::Safe
+        ));
+    }
+
+    #[test]
+    fn chat_stream_role_only_chunk_is_not_committed_as_output() {
+        let role = b"data: {\"choices\":[{\"delta\":{\"role\":\"assistant\"},\"finish_reason\":null}]}\n\n";
+        assert!(matches!(
+            inspect_stream_start(SemanticProtocol::ChatCompletions, role, false),
+            StreamStartInspection::Pending
+        ));
+        let content =
+            b"data: {\"choices\":[{\"delta\":{\"content\":\"hello\"},\"finish_reason\":null}]}\n\n";
+        assert!(matches!(
+            inspect_stream_start(SemanticProtocol::ChatCompletions, content, false),
+            StreamStartInspection::Safe
+        ));
+    }
+
+    #[test]
+    fn semantic_stream_observer_detects_failure_after_output() {
+        let mut observer = SemanticStreamObserver::new(SemanticProtocol::Responses);
+        assert_eq!(
+            observer.push(
+                b"event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"hello\"}\n\n"
+            ),
+            None
+        );
+        assert_eq!(
+            observer.push(
+                b"event: response.failed\ndata: {\"type\":\"response.failed\",\"response\":{\"error\":{\"message\":\"late failure\"}}}\n"
+            ),
+            None
+        );
+        assert!(observer
+            .push(b"\n")
+            .is_some_and(|summary| summary.contains("late failure")));
+    }
+
+    #[test]
     fn agent_prefixes_and_compatibility_paths_are_distinct() {
         let request = Request::builder()
             .uri("/claude/v1/messages")
@@ -1707,6 +2325,33 @@ mod tests {
         let runtime = RouterAgentRuntime {
             targets: vec![target],
             policy,
+        };
+        match agent {
+            RouterAgent::Claude => RouterUpstreams {
+                claude: runtime,
+                codex: RouterAgentRuntime::default(),
+            },
+            RouterAgent::Codex => RouterUpstreams {
+                claude: RouterAgentRuntime::default(),
+                codex: runtime,
+            },
+        }
+    }
+
+    fn failover_upstreams(
+        agent: RouterAgent,
+        targets: Vec<UpstreamTarget>,
+        target_ids: &[&str],
+    ) -> RouterUpstreams {
+        let runtime = RouterAgentRuntime {
+            targets,
+            policy: RouterAgentPolicy {
+                auto_failover_enabled: true,
+                max_retries: target_ids.len().saturating_sub(1) as u8,
+                active_target: target_ids.first().copied().unwrap_or_default().to_string(),
+                failover_queue: target_ids.iter().map(|id| (*id).to_string()).collect(),
+                ..RouterAgentPolicy::default()
+            },
         };
         match agent {
             RouterAgent::Claude => RouterUpstreams {
@@ -1895,6 +2540,219 @@ mod tests {
         healthy_task.abort();
         let _ = failing_task.await;
         let _ = healthy_task.await;
+        remove_database(&database_path);
+    }
+
+    #[tokio::test]
+    async fn buffered_2xx_semantic_failure_fails_over() {
+        let failing = Router::new().fallback(any(|| async {
+            Json(json!({
+                "status": "failed",
+                "error": {"type": "server_error", "message": "primary overloaded"},
+                "output": []
+            }))
+        }));
+        let healthy = Router::new().fallback(any(|| async {
+            Json(json!({"id":"resp_fallback","status":"completed","output":[],"usage":{}}))
+        }));
+        let (failing_address, failing_task) = start_mock_upstream(failing).await;
+        let (healthy_address, healthy_task) = start_mock_upstream(healthy).await;
+        let targets = vec![
+            UpstreamTarget::with_details(
+                "first",
+                "First",
+                format!("http://{failing_address}/v1"),
+                "",
+                Vec::new(),
+                false,
+                false,
+            )
+            .unwrap(),
+            UpstreamTarget::with_details(
+                "second",
+                "Second",
+                format!("http://{healthy_address}/v1"),
+                "",
+                Vec::new(),
+                false,
+                false,
+            )
+            .unwrap(),
+        ];
+        let database_path = temp_database_path();
+        let router = LocalRouterState::with_database_path(database_path.clone()).unwrap();
+        let info = router
+            .start(RouterRuntimeConfig::new(
+                "127.0.0.1",
+                unused_port(),
+                true,
+                failover_upstreams(RouterAgent::Codex, targets, &["first", "second"]),
+            ))
+            .await
+            .unwrap();
+
+        let response = reqwest::Client::new()
+            .post(format!("{}/codex/v1/responses", info.base_url))
+            .json(&json!({"model":"gpt-test","input":"hello"}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.json::<Value>().await.unwrap()["id"],
+            "resp_fallback"
+        );
+        let records = router.recent_requests(5).await.unwrap();
+        assert_eq!(records[0].target_id.as_deref(), Some("second"));
+        assert_eq!(records[0].attempt_count, 2);
+
+        router.stop().await.unwrap();
+        failing_task.abort();
+        healthy_task.abort();
+        let _ = failing_task.await;
+        let _ = healthy_task.await;
+        remove_database(&database_path);
+    }
+
+    #[tokio::test]
+    async fn response_failed_before_stream_output_fails_over() {
+        let failing = Router::new().fallback(any(|| async {
+            let chunks = vec![Ok::<Bytes, Infallible>(Bytes::from_static(
+                b"event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"status\":\"in_progress\"}}\n\nevent: response.failed\ndata: {\"type\":\"response.failed\",\"response\":{\"status\":\"failed\",\"error\":{\"message\":\"stream overloaded\"}}}\n\n",
+            ))];
+            let mut response = Response::new(Body::from_stream(stream::iter(chunks)));
+            response
+                .headers_mut()
+                .insert(CONTENT_TYPE, HeaderValue::from_static("text/event-stream"));
+            response
+        }));
+        let healthy = Router::new().fallback(any(|| async {
+            let chunks = vec![Ok::<Bytes, Infallible>(Bytes::from_static(
+                b"event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"fallback output\"}\n\nevent: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\"}}\n\n",
+            ))];
+            let mut response = Response::new(Body::from_stream(stream::iter(chunks)));
+            response
+                .headers_mut()
+                .insert(CONTENT_TYPE, HeaderValue::from_static("text/event-stream"));
+            response
+        }));
+        let (failing_address, failing_task) = start_mock_upstream(failing).await;
+        let (healthy_address, healthy_task) = start_mock_upstream(healthy).await;
+        let targets = vec![
+            UpstreamTarget::with_details(
+                "first",
+                "First",
+                format!("http://{failing_address}/v1"),
+                "",
+                Vec::new(),
+                false,
+                false,
+            )
+            .unwrap(),
+            UpstreamTarget::with_details(
+                "second",
+                "Second",
+                format!("http://{healthy_address}/v1"),
+                "",
+                Vec::new(),
+                false,
+                false,
+            )
+            .unwrap(),
+        ];
+        let database_path = temp_database_path();
+        let router = LocalRouterState::with_database_path(database_path.clone()).unwrap();
+        let info = router
+            .start(RouterRuntimeConfig::new(
+                "127.0.0.1",
+                unused_port(),
+                true,
+                failover_upstreams(RouterAgent::Codex, targets, &["first", "second"]),
+            ))
+            .await
+            .unwrap();
+
+        let response = reqwest::Client::new()
+            .post(format!("{}/codex/v1/responses", info.base_url))
+            .json(&json!({"model":"gpt-test","input":"hello","stream":true}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response.text().await.unwrap();
+        assert!(body.contains("fallback output"));
+        assert!(!body.contains("stream overloaded"));
+        let records = router.recent_requests(5).await.unwrap();
+        assert_eq!(records[0].target_id.as_deref(), Some("second"));
+        assert_eq!(records[0].attempt_count, 2);
+
+        router.stop().await.unwrap();
+        failing_task.abort();
+        healthy_task.abort();
+        let _ = failing_task.await;
+        let _ = healthy_task.await;
+        remove_database(&database_path);
+    }
+
+    #[tokio::test]
+    async fn response_failed_after_stream_output_marks_the_target_unhealthy() {
+        let upstream = Router::new().fallback(any(|| async {
+            let chunks = vec![
+                Ok::<Bytes, Infallible>(Bytes::from_static(
+                    b"event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"partial\"}\n\n",
+                )),
+                Ok::<Bytes, Infallible>(Bytes::from_static(
+                    b"event: response.failed\ndata: {\"type\":\"response.failed\",\"response\":{\"status\":\"failed\",\"error\":{\"message\":\"late failure\"}}}\n\n",
+                )),
+            ];
+            let mut response = Response::new(Body::from_stream(stream::iter(chunks)));
+            response
+                .headers_mut()
+                .insert(CONTENT_TYPE, HeaderValue::from_static("text/event-stream"));
+            response
+        }));
+        let (upstream_address, upstream_task) = start_mock_upstream(upstream).await;
+        let target = UpstreamTarget::with_details(
+            "only",
+            "Only",
+            format!("http://{upstream_address}/v1"),
+            "",
+            Vec::new(),
+            false,
+            false,
+        )
+        .unwrap();
+        let database_path = temp_database_path();
+        let router = LocalRouterState::with_database_path(database_path.clone()).unwrap();
+        let config = RouterRuntimeConfig::new(
+            "127.0.0.1",
+            unused_port(),
+            true,
+            failover_upstreams(RouterAgent::Codex, vec![target], &["only"]),
+        );
+        let info = router.start(config.clone()).await.unwrap();
+
+        let response = reqwest::Client::new()
+            .post(format!("{}/codex/v1/responses", info.base_url))
+            .json(&json!({"model":"gpt-test","input":"hello","stream":true}))
+            .send()
+            .await
+            .unwrap();
+        let body = response.text().await.unwrap();
+        assert!(body.contains("partial"));
+        assert!(body.contains("late failure"));
+        let records = router.recent_requests(5).await.unwrap();
+        assert!(!records[0].success);
+        assert!(records[0]
+            .error_summary
+            .as_deref()
+            .is_some_and(|summary| summary.contains("late failure")));
+        let targets = router.target_statuses(&config).await;
+        assert_eq!(targets[0].circuit.consecutive_failures, 1);
+
+        router.stop().await.unwrap();
+        upstream_task.abort();
+        let _ = upstream_task.await;
         remove_database(&database_path);
     }
 

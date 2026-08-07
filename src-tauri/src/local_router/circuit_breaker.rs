@@ -376,4 +376,24 @@ mod tests {
         assert!(breaker.allow_request(config.clone()).await.allowed);
         assert!(!breaker.allow_request(config).await.allowed);
     }
+
+    #[tokio::test]
+    async fn neutral_result_releases_the_half_open_probe() {
+        let config = CircuitBreakerConfig {
+            failure_threshold: 1,
+            timeout_seconds: 0,
+            ..CircuitBreakerConfig::default()
+        };
+        let breaker = CircuitBreaker::new(config.clone());
+        breaker
+            .record_failure(config.clone(), false, "failed")
+            .await;
+
+        let first = breaker.allow_request(config.clone()).await;
+        assert!(first.allowed && first.used_half_open_permit);
+        breaker.release_neutral(first.used_half_open_permit).await;
+
+        let second = breaker.allow_request(config).await;
+        assert!(second.allowed && second.used_half_open_permit);
+    }
 }

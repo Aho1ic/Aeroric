@@ -106,13 +106,21 @@ export const AgentPathSection = forwardRef<
   AgentPathSectionHandle,
   {
     agentKey: AgentKey;
+    initialSettings?: AppSettings | null;
     hideSaveButton?: boolean;
     hideInstallation?: boolean;
     onDirtyChange?: (dirty: boolean) => void;
     onSettingsDetected?: (settings: AppSettings) => void;
   }
 >(function AgentPathSection(
-  { agentKey, hideSaveButton, hideInstallation, onDirtyChange, onSettingsDetected },
+  {
+    agentKey,
+    initialSettings,
+    hideSaveButton,
+    hideInstallation,
+    onDirtyChange,
+    onSettingsDetected,
+  },
   ref,
 ) {
   const { t } = useI18n();
@@ -141,15 +149,17 @@ export const AgentPathSection = forwardRef<
     send_shortcut: DEFAULT_SEND_SHORTCUT,
     terminal_shift_enter_newline: DEFAULT_SHIFT_ENTER_NEWLINE,
   };
-  const [settings, setSettings] = useState<AppSettings>(emptySettings);
-  const [originalSettings, setOriginalSettings] = useState<AppSettings>(emptySettings);
+  const [settings, setSettings] = useState<AppSettings>(initialSettings ?? emptySettings);
+  const [originalSettings, setOriginalSettings] = useState<AppSettings>(
+    initialSettings ?? emptySettings,
+  );
   const [versions, setVersions] = useState<AgentVersions>({
     claude_version: "",
     claude_gpt55_version: "",
     codex_version: "",
   });
   const [customVersion, setCustomVersion] = useState("");
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(!initialSettings);
   const [detecting, setDetecting] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -177,7 +187,7 @@ export const AgentPathSection = forwardRef<
         const detected = await invoke<AgentVersions>("detect_agent_versions_for_settings", {
           settings: next,
         });
-        if (versionRequestIdRef.current === requestId) {
+        if (detected && versionRequestIdRef.current === requestId) {
           setVersions(detected);
         }
       } catch (e) {
@@ -209,7 +219,13 @@ export const AgentPathSection = forwardRef<
           if (!cancelled) setLoading(false);
         });
     };
-    load();
+    if (initialSettings) {
+      setSettings(initialSettings);
+      setOriginalSettings(initialSettings);
+      setLoading(false);
+    } else {
+      load();
+    }
     const handler = () => {
       if (skipNextChangeEventRef.current) {
         skipNextChangeEventRef.current = false;
@@ -223,7 +239,7 @@ export const AgentPathSection = forwardRef<
       cancelled = true;
       window.removeEventListener(APP_SETTINGS_CHANGED_EVENT, handler);
     };
-  }, []);
+  }, [initialSettings]);
 
   useEffect(() => {
     if (loading || error || didAutoLoadRef.current) return;
@@ -273,9 +289,32 @@ export const AgentPathSection = forwardRef<
     setError(null);
     setSaved(false);
     try {
-      const next = await invoke("save_app_settings", { settings }).then(() =>
-        invoke<AppSettings>("load_app_settings"),
-      );
+      const customAgent = findCustomAgent(settings, agentKey);
+      const originalCustomAgent = findCustomAgent(originalSettings, agentKey);
+      const executablePath = pathField ? settings[pathField] : (customAgent?.path ?? "");
+      const originalExecutablePath = pathField
+        ? originalSettings[pathField]
+        : (originalCustomAgent?.path ?? "");
+      const configPath = configPathField ? settings[configPathField] : "";
+      const originalConfigPath = configPathField ? originalSettings[configPathField] : "";
+      const proxyEnabled = getAgentProxyEnabled(settings, agentKey);
+      const originalProxyEnabled = getAgentProxyEnabled(originalSettings, agentKey);
+      const credentials = builtInAgent
+        ? settings.builtin_agent_credentials?.[builtInAgent]
+        : undefined;
+      const originalCredentials = builtInAgent
+        ? originalSettings.builtin_agent_credentials?.[builtInAgent]
+        : undefined;
+      const next = await invoke<AppSettings>("update_agent_path_settings", {
+        agent: agentKey,
+        executablePath: executablePath !== originalExecutablePath ? executablePath : null,
+        configPath: configPath !== originalConfigPath ? configPath : null,
+        proxyEnabled: proxyEnabled !== originalProxyEnabled ? proxyEnabled : null,
+        builtinCredentials:
+          credentials && JSON.stringify(credentials) !== JSON.stringify(originalCredentials)
+            ? credentials
+            : null,
+      });
       setSettings(next);
       setOriginalSettings(next);
       skipNextChangeEventRef.current = true;
@@ -288,7 +327,15 @@ export const AgentPathSection = forwardRef<
     } finally {
       setSaving(false);
     }
-  }, [settings, loadVersions]);
+  }, [
+    agentKey,
+    builtInAgent,
+    configPathField,
+    loadVersions,
+    originalSettings,
+    pathField,
+    settings,
+  ]);
 
   async function handleUpgrade() {
     setUpgrading(true);

@@ -58,14 +58,18 @@ export function AllAgentConfigsPanel({ themeVariant }: { themeVariant: ThemeVari
     return byTab.filter((o) => o.label.toLowerCase().includes(q));
   }, [agentOptions, tab, searchQuery]);
 
-  function getAgentMeta(agentKey: string) {
-    if (!settings) return {};
-    const creds = settings.builtin_agent_credentials?.[agentKey];
-    if (creds) return { baseUrl: creds.base_url, apiKey: creds.api_key };
-    const custom = settings.custom_agents?.find((a) => a.id === agentKey);
-    if (custom) return { baseUrl: custom.base_url, apiKey: custom.api_key };
-    return {};
-  }
+  const agentMetaById = useMemo(() => {
+    const result = new Map<string, { baseUrl?: string; apiKey?: string }>();
+    for (const [agentId, credentials] of Object.entries(
+      settings?.builtin_agent_credentials ?? {},
+    )) {
+      result.set(agentId, { baseUrl: credentials.base_url, apiKey: credentials.api_key });
+    }
+    for (const profile of settings?.custom_agents ?? []) {
+      result.set(profile.id, { baseUrl: profile.base_url, apiKey: profile.api_key });
+    }
+    return result;
+  }, [settings]);
 
   function handleViewModeChange(mode: ViewMode) {
     setViewMode(mode);
@@ -192,9 +196,7 @@ export function AllAgentConfigsPanel({ themeVariant }: { themeVariant: ThemeVari
           padding: "16px 18px",
           border: "1px solid var(--border-dim)",
           borderRadius: "var(--radius-lg)",
-          background: "color-mix(in srgb, var(--bg-subtle) 72%, transparent)",
-          backdropFilter: "blur(12px) saturate(1.15)",
-          WebkitBackdropFilter: "blur(12px) saturate(1.15)",
+          background: "var(--bg-subtle)",
         }}
       >
         <div
@@ -262,9 +264,7 @@ export function AllAgentConfigsPanel({ themeVariant }: { themeVariant: ThemeVari
                     padding: 4,
                     border: "1px solid var(--border-medium)",
                     borderRadius: "var(--radius-md)",
-                    background: "color-mix(in srgb, var(--bg-card) 96%, transparent)",
-                    backdropFilter: "blur(18px) saturate(1.3)",
-                    WebkitBackdropFilter: "blur(18px) saturate(1.3)",
+                    background: "var(--bg-card)",
                     boxShadow: "var(--shadow-popover)",
                   }}
                 >
@@ -481,7 +481,7 @@ export function AllAgentConfigsPanel({ themeVariant }: { themeVariant: ThemeVari
         )}
 
         {filteredAgents.map((option) => {
-          const meta = getAgentMeta(option.value);
+          const meta = agentMetaById.get(option.value) ?? {};
           return (
             <AgentCardItem
               key={option.value}
@@ -508,6 +508,7 @@ export function AllAgentConfigsPanel({ themeVariant }: { themeVariant: ThemeVari
           option={editingAgent}
           themeVariant={themeVariant}
           logo={editingAgent.codexLike ? chatgptLogo : claudeLogo}
+          settings={settings}
           onClose={() => setEditingAgent(null)}
           onDeleted={handleAgentDeleted}
         />

@@ -397,7 +397,10 @@ impl RouterRuntimeConfig {
 
     pub fn validate(&self) -> Result<SocketAddr, RouterError> {
         let listen_addr = validate_listen_address(&self.listen_address, self.port)?;
-        for runtime in [&self.upstreams.claude, &self.upstreams.codex] {
+        for (agent, runtime) in [
+            (RouterAgent::Claude, &self.upstreams.claude),
+            (RouterAgent::Codex, &self.upstreams.codex),
+        ] {
             let mut ids = HashSet::new();
             for target in &runtime.targets {
                 if !ids.insert(target.id()) {
@@ -407,6 +410,23 @@ impl RouterRuntimeConfig {
                     )));
                 }
                 reject_router_loop(target, listen_addr)?;
+            }
+            if runtime.policy.auto_failover_enabled {
+                if runtime.policy.failover_queue.is_empty() {
+                    return Err(RouterError::invalid_config(format!(
+                        "automatic failover for {agent} requires a non-empty failover queue"
+                    )));
+                }
+                if let Some(target_id) = runtime
+                    .policy
+                    .failover_queue
+                    .iter()
+                    .find(|target_id| !ids.contains(target_id.as_str()))
+                {
+                    return Err(RouterError::invalid_config(format!(
+                        "automatic failover for {agent} references unknown target: {target_id}"
+                    )));
+                }
             }
         }
         if let Some(proxy) = &self.outbound_proxy {
@@ -1024,6 +1044,85 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["second", "first"]
         );
+    }
+
+    #[test]
+    fn enabled_failover_requires_a_valid_queue() {
+        let target = UpstreamTarget::with_details(
+            "first",
+            "First",
+            "https://first.example/v1",
+            "",
+            Vec::new(),
+            false,
+            false,
+        )
+        .unwrap();
+        let runtime = |failover_queue: Vec<String>| RouterAgentRuntime {
+            targets: vec![target.clone()],
+            policy: RouterAgentPolicy {
+                auto_failover_enabled: true,
+                failover_queue,
+                ..RouterAgentPolicy::default()
+            },
+        };
+
+        let empty = RouterRuntimeConfig::new(
+            "127.0.0.1",
+            43123,
+            false,
+            RouterUpstreams {
+                claude: runtime(Vec::new()),
+                codex: RouterAgentRuntime::default(),
+            },
+        );
+        assert!(empty
+            .validate()
+            .is_err_and(|error| error.message.contains("non-empty failover queue")));
+
+        let no_targets = RouterRuntimeConfig::new(
+            "127.0.0.1",
+            43123,
+            false,
+            RouterUpstreams {
+                claude: RouterAgentRuntime {
+                    targets: Vec::new(),
+                    policy: RouterAgentPolicy {
+                        auto_failover_enabled: true,
+                        failover_queue: vec!["missing".to_string()],
+                        ..RouterAgentPolicy::default()
+                    },
+                },
+                codex: RouterAgentRuntime::default(),
+            },
+        );
+        assert!(no_targets
+            .validate()
+            .is_err_and(|error| error.message.contains("unknown target")));
+
+        let unknown = RouterRuntimeConfig::new(
+            "127.0.0.1",
+            43123,
+            false,
+            RouterUpstreams {
+                claude: runtime(vec!["missing".to_string()]),
+                codex: RouterAgentRuntime::default(),
+            },
+        );
+        assert!(unknown
+            .validate()
+            .is_err_and(|error| error.message.contains("unknown target")));
+
+        let valid = RouterRuntimeConfig::new(
+            "127.0.0.1",
+            43123,
+            false,
+            RouterUpstreams {
+                claude: runtime(vec!["first".to_string()]),
+                codex: RouterAgentRuntime::default(),
+            },
+        );
+        assert!(valid.validate().is_ok());
     }
 
     #[test]

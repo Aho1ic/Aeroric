@@ -4,6 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentOption, CustomAgentProfile } from "../agents";
 import { AgentDetailModal } from "../components/app-settings/AgentDetailModal";
+import type { AppSettings } from "../components/app-settings/types";
 import { I18nProvider } from "../i18n";
 
 vi.mock("@tauri-apps/api/core", () => ({
@@ -43,7 +44,7 @@ const builtInOption: AgentOption = {
   codexLike: true,
 };
 
-const baseSettings = {
+const baseSettings: AppSettings = {
   claude_path: "",
   claude_gpt55_path: "",
   codex_path: "/opt/homebrew/bin/codex",
@@ -66,6 +67,7 @@ function renderModal(option: AgentOption) {
         option={option}
         themeVariant="light"
         logo="/test-logo.svg"
+        settings={baseSettings}
         onClose={vi.fn()}
       />
     </I18nProvider>,
@@ -112,6 +114,7 @@ describe("Agent detail modal", () => {
     for (const label of ["Model Default", "Minimal", "Low", "Medium", "High", "XHigh", "Max"]) {
       expect(within(reasoningGroup).getByRole("button", { name: label })).toBeInTheDocument();
     }
+    expect(invoke).not.toHaveBeenCalledWith("load_app_settings");
   });
 
   it("keeps installation path settings for built-in agents", async () => {
@@ -164,5 +167,47 @@ describe("Agent detail modal", () => {
       expect(screen.getByDisplayValue("sk-detected")).toHaveAttribute("type", "password");
       expect(screen.getByDisplayValue("/Users/macbook/.codex/config.toml")).toBeInTheDocument();
     });
+  });
+
+  it("applies reasoning changes to the regenerated custom Agent config", async () => {
+    let configContent = 'model_reasoning_effort = "medium"\n#!/bin/sh\n';
+    vi.mocked(invoke).mockImplementation((command) => {
+      if (command === "read_agent_config_file") return Promise.resolve(configContent);
+      if (command === "load_app_settings") return Promise.resolve(baseSettings);
+      if (command === "detect_agent_models") {
+        return Promise.resolve({ models: ["gpt-5", "gpt-5.6-terra"] });
+      }
+      if (command === "update_custom_agent_models") {
+        configContent = '#!/bin/sh\n# updated wrapper\nmodel = "gpt-5.6-terra"\n';
+        return Promise.resolve({
+          ...baseSettings,
+          custom_agents: [
+            { ...customProfile, models: ["gpt-5", "gpt-5.6-terra"] },
+          ],
+        });
+      }
+      return Promise.resolve(undefined);
+    });
+
+    const user = userEvent.setup();
+    renderModal(customOption);
+    const reasoningGroup = await screen.findByRole("group", { name: "推理强度" });
+    await user.click(within(reasoningGroup).getByRole("button", { name: "High" }));
+    await user.click(screen.getByRole("button", { name: "检测模型" }));
+    await user.click(await screen.findByLabelText("gpt-5.6-terra"));
+    await user.click(screen.getByRole("button", { name: /^保存$/ }));
+
+    await waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith("write_agent_config_file", {
+        agent: "liwan",
+        content: expect.stringContaining("# updated wrapper"),
+      }),
+    );
+    const writeCall = vi
+      .mocked(invoke)
+      .mock.calls.find(([command]) => command === "write_agent_config_file");
+    expect((writeCall?.[1] as { content: string }).content).toContain(
+      'model_reasoning_effort = "high"',
+    );
   });
 });

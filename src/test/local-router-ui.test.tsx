@@ -9,6 +9,7 @@ import {
   type AppSettings,
   type LocalRouterSettings,
   type LocalRouterStatus,
+  type LocalRouterTargetStatus,
 } from "../components/app-settings/types";
 import { I18nProvider } from "../i18n";
 
@@ -45,6 +46,53 @@ const runningStatus: LocalRouterStatus = {
   last_error: null,
   targets: [],
 };
+
+const claudeTargets: LocalRouterTargetStatus[] = [
+  {
+    agent: "claude",
+    target_id: "claude",
+    target_name: "Claude Code",
+    base_url: "https://api.anthropic.com",
+    active: true,
+    queue_position: null,
+    models: [],
+    enable_1m_context: false,
+    enable_chat_completions_proxy: false,
+    healthy: true,
+    circuit: {
+      state: "closed",
+      consecutive_failures: 0,
+      consecutive_successes: 0,
+      total_requests: 0,
+      failed_requests: 0,
+      last_success_at: null,
+      last_failure_at: null,
+      last_error: null,
+    },
+  },
+  {
+    agent: "claude",
+    target_id: "claude-backup",
+    target_name: "Claude Backup",
+    base_url: "https://backup.example.test",
+    active: false,
+    queue_position: null,
+    models: [],
+    enable_1m_context: false,
+    enable_chat_completions_proxy: false,
+    healthy: true,
+    circuit: {
+      state: "closed",
+      consecutive_failures: 0,
+      consecutive_successes: 0,
+      total_requests: 0,
+      failed_requests: 0,
+      last_success_at: null,
+      last_failure_at: null,
+      last_error: null,
+    },
+  },
+];
 
 function appSettings(localRouterSettings = enabledSettings): AppSettings {
   return {
@@ -147,6 +195,70 @@ describe("LocalRouterPanel", () => {
 
     expect(vi.mocked(invoke)).toHaveBeenCalledWith("set_local_router_enabled", { enabled: true });
     await waitFor(() => expect(serviceSwitch).toBeChecked());
+  });
+
+  it("initializes the failover queue in target order before saving", async () => {
+    const user = userEvent.setup();
+    const status = { ...runningStatus, targets: claudeTargets };
+    vi.mocked(invoke).mockImplementation((command, payload) => {
+      if (command === "load_app_settings") return Promise.resolve(appSettings());
+      if (command === "get_local_router_status") return Promise.resolve(status);
+      if (command === "get_local_router_requests") return Promise.resolve([]);
+      if (command === "update_local_router_settings") {
+        const next = (payload as { settings: LocalRouterSettings }).settings;
+        return Promise.resolve(appSettings(next));
+      }
+      return Promise.reject(new Error(`unexpected command: ${command}`));
+    });
+
+    renderWithI18n(<LocalRouterPanel />);
+
+    const failoverSwitch = await screen.findByRole("switch", { name: "Auto failover" });
+    await user.click(failoverSwitch);
+    await user.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() =>
+      expect(vi.mocked(invoke)).toHaveBeenCalledWith("update_local_router_settings", {
+        settings: {
+          ...enabledSettings,
+          claude: {
+            ...enabledSettings.claude,
+            auto_failover_enabled: true,
+            active_target: "claude",
+            failover_queue: ["claude", "claude-backup"],
+          },
+        },
+      }),
+    );
+  });
+
+  it("blocks saving when failover only references unavailable targets", async () => {
+    const invalidSettings: LocalRouterSettings = {
+      ...enabledSettings,
+      claude: {
+        ...enabledSettings.claude,
+        auto_failover_enabled: true,
+        active_target: "missing",
+        failover_queue: ["missing"],
+      },
+    };
+    vi.mocked(invoke).mockImplementation((command) => {
+      if (command === "load_app_settings") {
+        return Promise.resolve(appSettings(invalidSettings));
+      }
+      if (command === "get_local_router_status") {
+        return Promise.resolve({ ...runningStatus, targets: claudeTargets });
+      }
+      if (command === "get_local_router_requests") return Promise.resolve([]);
+      return Promise.reject(new Error(`unexpected command: ${command}`));
+    });
+
+    renderWithI18n(<LocalRouterPanel />);
+
+    expect(
+      await screen.findByText("The failover queue does not contain an available target."),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
   });
 });
 
