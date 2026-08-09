@@ -1,6 +1,17 @@
 @import "./styles/themes.css";
 @import "./styles/font-selector.css";
 
+.database-grid-column-filter {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.database-grid-column-header:hover .database-grid-column-filter,
+.database-grid-column-filter[data-shown="true"] {
+  opacity: 1;
+  pointer-events: auto;
+}
+
 /* ── Shared animated navigation / tabs / segmented controls ────── */
 .animated-selection {
   position: relative;

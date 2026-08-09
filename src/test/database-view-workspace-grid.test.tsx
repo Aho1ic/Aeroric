@@ -668,7 +668,7 @@ describe("DatabaseView workspace and data grid", () => {
 
   it("applies DBX grid filtering, sorting, search, and column visibility controls", async () => {
     const user = userEvent.setup();
-    vi.mocked(invoke).mockImplementation((command) => {
+    vi.mocked(invoke).mockImplementation((command, args) => {
       if (command === "db_load_connections") return Promise.resolve([]);
       if (command === "dbx_list_connections") return Promise.resolve([dbxConnection]);
       if (command === "dbx_connect") return Promise.resolve(undefined);
@@ -711,6 +711,13 @@ describe("DatabaseView workspace and data grid", () => {
           sql: 'SELECT * FROM "public"."users"',
           countSql: 'SELECT count(*) FROM "public"."users"',
         });
+      }
+      if (command === "dbx_build_data_grid_context_filter_condition") {
+        const options = (args as { options: { columnName: string; mode: string; value: unknown } })
+          .options;
+        if (options.columnName === "email" && options.mode === "like") {
+          return Promise.resolve("\"email\" LIKE '%alice%'");
+        }
       }
       if (command === "dbx_get_table_ddl") {
         return Promise.resolve('CREATE TABLE "public"."users" (id integer);');
@@ -816,9 +823,8 @@ describe("DatabaseView workspace and data grid", () => {
     expect(emailType.style.fontFamily).toContain("var(--font-mono)");
     expect(emailType.parentElement).toHaveStyle({ alignItems: "flex-start", textAlign: "left" });
     expect(within(table).getAllByTitle("Column type: text")).toHaveLength(2);
-    const emailHeaderButton = within(
-      within(table).getByRole("columnheader", { name: /email/ }),
-    ).getByRole("button", { name: "email" });
+    const emailHeader = within(table).getByRole("columnheader", { name: /email/ });
+    const emailHeaderButton = within(emailHeader).getByRole("button", { name: "email" });
     expect(emailHeaderButton).toHaveStyle({
       display: "grid",
       gridTemplateColumns: "minmax(0, 1fr) 30px",
@@ -832,6 +838,57 @@ describe("DatabaseView workspace and data grid", () => {
     const statusHeader = within(table).getByRole("columnheader", { name: "status" });
     expect(within(statusHeader).getAllByRole("button")).toHaveLength(1);
     expect(within(statusHeader).getByRole("button", { name: "Resize status" })).toBeInTheDocument();
+    expect(
+      within(emailHeader).queryByRole("button", { name: "Filter email" }),
+    ).not.toBeInTheDocument();
+    fireEvent.mouseEnter(emailHeader);
+    await user.click(within(emailHeader).getByRole("button", { name: "Filter email" }));
+    const fuzzyFilterInput = screen.getByLabelText("Fuzzy search email");
+    await user.type(fuzzyFilterInput, "alice");
+    await user.click(
+      within(fuzzyFilterInput.closest("form") as HTMLFormElement).getByRole("button", {
+        name: "Apply",
+      }),
+    );
+    expect(invoke).toHaveBeenCalledWith("dbx_build_data_grid_context_filter_condition", {
+      options: {
+        databaseType: "postgres",
+        columnName: "email",
+        mode: "like",
+        value: "alice",
+        columnInfo: {
+          name: "email",
+          data_type: "varchar(50)",
+          is_nullable: true,
+          is_primary_key: false,
+          comment: "Email address",
+        },
+      },
+    });
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith("dbx_query_table_data", {
+        request: expect.objectContaining({
+          whereInput: `(status = 'active') AND ("email" LIKE '%alice%')`,
+          orderBy: '"id" ASC',
+        }),
+      });
+    });
+    await user.click(within(emailHeader).getByRole("button", { name: "Filter email" }));
+    const activeFuzzyFilterInput = screen.getByLabelText("Fuzzy search email");
+    await user.click(
+      within(activeFuzzyFilterInput.closest("form") as HTMLFormElement).getByRole("button", {
+        name: "Clear",
+      }),
+    );
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith("dbx_query_table_data", {
+        request: expect.objectContaining({ whereInput: "status = 'active'" }),
+      });
+    });
+    fireEvent.mouseLeave(emailHeader);
+    expect(
+      within(emailHeader).queryByRole("button", { name: "Filter email" }),
+    ).not.toBeInTheDocument();
     expect(screen.queryByText("Table")).not.toBeInTheDocument();
     expect(screen.queryByText("postgres: DBX Source")).not.toBeInTheDocument();
     expect(screen.queryByLabelText("Select visible rows")).not.toBeInTheDocument();

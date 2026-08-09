@@ -1971,6 +1971,8 @@ function App() {
             onRenameProject={handleRenameProject}
             onToggleProjectHidden={handleToggleProjectHidden}
             projectGroups={projectGroups}
+            collapsedProjectGroups={collapsedProjectGroups}
+            onCollapsedProjectGroupsChange={setCollapsedProjectGroups}
             onAssignProjectGroup={handleAssignProjectGroup}
             onCreateProjectGroup={handleCreateProjectGroup}
             onRenameProjectGroup={handleRenameProjectGroup}

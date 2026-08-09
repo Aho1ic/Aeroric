@@ -122,6 +122,34 @@ describe("WelcomePage project cards", () => {
     expect(onAssignProjectGroup).toHaveBeenCalledWith("p1", "Work");
   });
 
+  it("groups home projects into the same collapsible sections as the project rail", async () => {
+    localStorage.setItem("aeroric:language", "en");
+    const user = userEvent.setup();
+    const projects: Project[] = [
+      { ...remoteProject(), id: "work", name: "Work API", group: "Work" },
+      { ...remoteProject(), id: "personal", name: "Personal Notes", group: "Personal" },
+      { ...remoteProject(), id: "loose", name: "Loose Project" },
+    ];
+
+    renderWelcome({ projects, allProjects: projects, projectGroups: ["Work", "Personal"] });
+
+    expect(screen.getByRole("button", { name: "Collapse project group Work" })).toHaveAttribute(
+      "aria-expanded",
+      "true",
+    );
+    expect(screen.getByRole("button", { name: "Collapse project group Personal" })).toBeVisible();
+    expect(screen.getByText("Ungrouped")).toBeVisible();
+    expect(screen.getByText("Work API")).toBeVisible();
+
+    await user.click(screen.getByRole("button", { name: "Collapse project group Work" }));
+    expect(screen.queryByText("Work API")).not.toBeInTheDocument();
+    expect(screen.getByText("Personal Notes")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Expand project group Work" })).toHaveAttribute(
+      "aria-expanded",
+      "false",
+    );
+  });
+
   it("uses the Docker logo icon in the home sidebar", () => {
     renderWelcome();
 

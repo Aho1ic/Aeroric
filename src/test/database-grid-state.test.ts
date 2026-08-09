@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  combineDbxGridWhereFilters,
   combineDbxGridWhereCondition,
   dbxFilterModeForCellAction,
   dbxGridContextRowIndexes,
@@ -10,6 +11,7 @@ import {
   invertDbxGridColumns,
   nextDbxOrderByForColumn,
   pruneDbxGridColumnWidths,
+  pruneDbxGridColumnFuzzyFilters,
   pruneDbxGridHiddenColumns,
   stageDbxPendingCellEdit,
   toggleDbxGridColumn,
@@ -39,6 +41,12 @@ describe("databaseGridState", () => {
     expect(combineDbxGridWhereCondition("active = 1", '"id" = 1')).toBe(
       '(active = 1) AND ("id" = 1)',
     );
+    expect(
+      combineDbxGridWhereFilters("active = 1", {
+        email: { value: "alice", condition: "\"email\" LIKE '%alice%'" },
+        team: { value: "core", condition: "\"team\" LIKE '%core%'" },
+      }),
+    ).toBe("((active = 1) AND (\"email\" LIKE '%alice%')) AND (\"team\" LIKE '%core%')");
   });
 
   it("derives visible columns and current-page search results", () => {
@@ -60,6 +68,14 @@ describe("databaseGridState", () => {
     expect(pruneDbxGridColumnWidths(widths, ["id"])).toEqual({ id: 90 });
     const stableWidths = { id: 90 };
     expect(pruneDbxGridColumnWidths(stableWidths, ["id"])).toBe(stableWidths);
+
+    const filters = {
+      id: { value: "1", condition: "\"id\"::text LIKE '%1%'" },
+      missing: { value: "x", condition: "\"missing\" LIKE '%x%'" },
+    };
+    expect(pruneDbxGridColumnFuzzyFilters(filters, ["id"])).toEqual({ id: filters.id });
+    const stableFilters = { id: filters.id };
+    expect(pruneDbxGridColumnFuzzyFilters(stableFilters, ["id"])).toBe(stableFilters);
   });
 
   it("keeps at least one column visible when toggling or inverting", () => {

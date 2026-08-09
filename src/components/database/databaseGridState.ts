@@ -5,6 +5,13 @@ export type DatabaseRow = DbRow;
 
 export type TableExportFormat = "csv" | "json" | "markdown" | "insertSql" | "updateSql" | "xlsx";
 
+export type DbxGridColumnFuzzyFilter = {
+  value: string;
+  condition: string;
+};
+
+export type DbxGridColumnFuzzyFilters = Record<string, DbxGridColumnFuzzyFilter>;
+
 export type DbxGridHeaderContextMenuState = {
   x: number;
   y: number;
@@ -101,6 +108,25 @@ export function dbxFilterModeForCellAction(
 export function combineDbxGridWhereCondition(currentWhere: string, condition: string): string {
   const current = currentWhere.trim();
   return current ? `(${current}) AND (${condition})` : condition;
+}
+
+export function combineDbxGridWhereFilters(
+  currentWhere: string,
+  filters: DbxGridColumnFuzzyFilters,
+): string {
+  return Object.values(filters).reduce(
+    (whereInput, filter) => combineDbxGridWhereCondition(whereInput, filter.condition),
+    currentWhere.trim(),
+  );
+}
+
+export function pruneDbxGridColumnFuzzyFilters(
+  current: DbxGridColumnFuzzyFilters,
+  columns: string[],
+): DbxGridColumnFuzzyFilters {
+  const available = new Set(columns);
+  const entries = Object.entries(current).filter(([column]) => available.has(column));
+  return entries.length === Object.keys(current).length ? current : Object.fromEntries(entries);
 }
 
 export function visibleDbxGridColumns(

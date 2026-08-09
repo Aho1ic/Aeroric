@@ -1,5 +1,12 @@
-import { useLayoutEffect, useRef, type CSSProperties, type KeyboardEventHandler } from "react";
-import { ArrowDown, ArrowUp, ArrowUpDown } from "lucide-react";
+import {
+  useLayoutEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+  type KeyboardEventHandler,
+} from "react";
+import { ArrowDown, ArrowUp, ArrowUpDown, Funnel } from "lucide-react";
+import * as Popover from "@radix-ui/react-popover";
 import type { AeroricDbConnectionConfig, DbObject, DbQueryResult } from "../../types";
 import {
   dbxGridColumnSortable,
@@ -25,6 +32,7 @@ type Props = {
   grid: DbxDataGridController;
   onKeyDown: KeyboardEventHandler<HTMLDivElement>;
   onSortColumn: (column: string) => void | Promise<void>;
+  onFilterColumn: (column: string, value: string) => void | Promise<void>;
   onOpenContextMenu: (menu: DbxGridContextMenuState) => void;
   onUpdateCell: (
     row: DatabaseRow,
@@ -33,6 +41,173 @@ type Props = {
     original: string,
   ) => void | Promise<void>;
 };
+
+type ColumnFuzzyFilterProps = {
+  column: string;
+  value: string;
+  visible: boolean;
+  loading: boolean;
+  right: number;
+  onApply: (value: string) => void | Promise<void>;
+};
+
+function ColumnFuzzyFilter({
+  column,
+  value,
+  visible,
+  loading,
+  right,
+  onApply,
+}: ColumnFuzzyFilterProps) {
+  const { t } = useI18n();
+  const [open, setOpen] = useState(false);
+  const [draft, setDraft] = useState(value);
+  const shown = visible || open || Boolean(value);
+
+  const apply = async (nextValue: string) => {
+    await onApply(nextValue);
+    setOpen(false);
+  };
+
+  return (
+    <Popover.Root
+      open={open}
+      onOpenChange={(nextOpen) => {
+        setOpen(nextOpen);
+        if (nextOpen) setDraft(value);
+      }}
+    >
+      <Popover.Trigger asChild>
+        <button
+          type="button"
+          className="database-grid-column-filter"
+          data-shown={shown}
+          aria-label={t("database.columnFuzzyFilter", { column })}
+          aria-hidden={!shown}
+          tabIndex={shown ? 0 : -1}
+          title={t("database.columnFuzzyFilter", { column })}
+          disabled={loading}
+          onClick={(event) => event.stopPropagation()}
+          style={{
+            position: "absolute",
+            top: "50%",
+            right,
+            transform: "translateY(-50%)",
+            width: 26,
+            height: 26,
+            display: "inline-flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: 0,
+            border: "1px solid var(--border-dim)",
+            borderRadius: "var(--radius-sm)",
+            background: value ? "var(--control-active-bg)" : "var(--bg-panel)",
+            color: value ? "var(--accent)" : "var(--text-muted)",
+            cursor: loading ? "default" : "pointer",
+            transition: "opacity 0.14s ease, color 0.14s ease, background 0.14s ease",
+            zIndex: 2,
+          }}
+        >
+          <Funnel size={13} strokeWidth={2} aria-hidden="true" />
+        </button>
+      </Popover.Trigger>
+      <Popover.Portal>
+        <Popover.Content
+          sideOffset={6}
+          align="end"
+          style={{
+            width: 268,
+            padding: 12,
+            border: "1px solid var(--border-medium)",
+            borderRadius: "var(--radius-md)",
+            background: "var(--bg-card)",
+            boxShadow: "var(--shadow-popover)",
+            color: "var(--text-primary)",
+            zIndex: 1200,
+          }}
+        >
+          <form
+            onSubmit={(event) => {
+              event.preventDefault();
+              void apply(draft.trim());
+            }}
+          >
+            <label
+              htmlFor={`database-column-filter-${column}`}
+              style={{ display: "block", marginBottom: 8, fontSize: 12, fontWeight: 700 }}
+            >
+              {t("database.columnFuzzyFilterTitle", { column })}
+            </label>
+            <input
+              id={`database-column-filter-${column}`}
+              autoFocus
+              value={draft}
+              onChange={(event) => setDraft(event.currentTarget.value)}
+              placeholder={t("database.columnFuzzyFilterPlaceholder")}
+              style={{
+                width: "100%",
+                height: 34,
+                boxSizing: "border-box",
+                padding: "0 10px",
+                border: "1px solid var(--border-medium)",
+                borderRadius: "var(--radius-sm)",
+                outline: "none",
+                background: "var(--bg-input)",
+                color: "var(--text-primary)",
+                fontFamily: "var(--font-ui)",
+                fontSize: 12.5,
+              }}
+            />
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "flex-end",
+                gap: 8,
+                marginTop: 10,
+              }}
+            >
+              {value && (
+                <button
+                  type="button"
+                  disabled={loading}
+                  onClick={() => void apply("")}
+                  style={{
+                    height: 30,
+                    padding: "0 10px",
+                    border: "1px solid var(--border-dim)",
+                    borderRadius: "var(--radius-sm)",
+                    background: "transparent",
+                    color: "var(--text-muted)",
+                    cursor: "pointer",
+                  }}
+                >
+                  {t("common.clear")}
+                </button>
+              )}
+              <button
+                type="submit"
+                disabled={loading || !draft.trim()}
+                style={{
+                  height: 30,
+                  padding: "0 12px",
+                  border: "1px solid var(--accent)",
+                  borderRadius: "var(--radius-sm)",
+                  background: "var(--accent)",
+                  color: "var(--primary-action-fg)",
+                  cursor: loading || !draft.trim() ? "default" : "pointer",
+                  opacity: loading || !draft.trim() ? 0.55 : 1,
+                  fontWeight: 700,
+                }}
+              >
+                {t("common.apply")}
+              </button>
+            </div>
+          </form>
+        </Popover.Content>
+      </Popover.Portal>
+    </Popover.Root>
+  );
+}
 
 type CellEditorProps = {
   value: string;
@@ -112,14 +287,17 @@ export function DataGridView({
   grid,
   onKeyDown,
   onSortColumn,
+  onFilterColumn,
   onOpenContextMenu,
   onUpdateCell,
 }: Props) {
   const { t } = useI18n();
   const tableWrapRef = useRef<HTMLDivElement>(null);
+  const [hoveredHeaderColumn, setHoveredHeaderColumn] = useState<string | null>(null);
   const previousNewRowCountRef = useRef(grid.state.dbxNewRows.length);
   const {
     dbxGridOrderByInput,
+    dbxGridColumnFuzzyFilters,
     dbxGridColumnWidths,
     dbxGridSelectedRows,
     dbxSelectedCell,
@@ -246,6 +424,7 @@ export function DataGridView({
               return (
                 <th
                   key={column}
+                  className="database-grid-column-header"
                   aria-label={column}
                   style={{
                     ...s.databaseTh,
@@ -255,6 +434,10 @@ export function DataGridView({
                     paddingRight: queryResult && activeDbxConnection ? 12 : 8,
                   }}
                   title={columnDetailsTitle}
+                  onMouseEnter={() => setHoveredHeaderColumn(column)}
+                  onMouseLeave={() =>
+                    setHoveredHeaderColumn((current) => (current === column ? null : current))
+                  }
                   onContextMenu={
                     queryResult && activeDbxConnection
                       ? (event) => {
@@ -314,6 +497,16 @@ export function DataGridView({
                         >
                           {columnHeaderContent}
                         </span>
+                      )}
+                      {variant === "table" && (
+                        <ColumnFuzzyFilter
+                          column={column}
+                          value={dbxGridColumnFuzzyFilters[column]?.value ?? ""}
+                          visible={hoveredHeaderColumn === column}
+                          loading={loading}
+                          right={sortable ? 46 : 12}
+                          onApply={(value) => onFilterColumn(column, value)}
+                        />
                       )}
                       <button
                         type="button"

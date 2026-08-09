@@ -14,16 +14,19 @@ import {
   initialDbxGridColumnWidths,
 } from "../../lib/databaseUtils";
 import {
+  combineDbxGridWhereFilters,
   filterDbxGridColumnOptions,
   filterDbxGridRows,
   invertDbxGridColumns,
   pruneDbxGridColumnWidths,
+  pruneDbxGridColumnFuzzyFilters,
   pruneDbxGridHiddenColumns,
   stageDbxPendingCellEdit,
   toggleDbxGridColumn,
   toggleDbxGridRowSelection as toggleDbxGridRowSelectionState,
   visibleDbxGridColumns,
   type DatabaseRow,
+  type DbxGridColumnFuzzyFilters,
   type DbxPendingCellEdits,
   type TableExportFormat,
 } from "./databaseGridState";
@@ -73,6 +76,8 @@ export function useDbxDataGrid({
   showRowIdColumn,
 }: UseDbxDataGridOptions) {
   const [dbxGridWhereInput, setDbxGridWhereInput] = useState("");
+  const [dbxGridColumnFuzzyFilters, setDbxGridColumnFuzzyFilters] =
+    useState<DbxGridColumnFuzzyFilters>({});
   const [dbxGridOrderByInput, setDbxGridOrderByInput] = useState("");
   const [dbxGridSearch, setDbxGridSearch] = useState("");
   const [dbxGridColumnSearch, setDbxGridColumnSearch] = useState("");
@@ -137,6 +142,10 @@ export function useDbxDataGrid({
   const filteredDbxGridColumnOptions = useMemo(
     () => filterDbxGridColumnOptions(tableColumns, dbxGridColumnSearch),
     [dbxGridColumnSearch, tableColumns],
+  );
+  const dbxGridEffectiveWhereInput = useMemo(
+    () => combineDbxGridWhereFilters(dbxGridWhereInput, dbxGridColumnFuzzyFilters),
+    [dbxGridColumnFuzzyFilters, dbxGridWhereInput],
   );
   const tableRows = useMemo(() => {
     const loadedRows = filterDbxGridRows(rawTableRows, dbxGridSearch);
@@ -206,6 +215,12 @@ export function useDbxDataGrid({
   }, [tableColumns]);
 
   useEffect(() => {
+    setDbxGridColumnFuzzyFilters((current) =>
+      pruneDbxGridColumnFuzzyFilters(current, tableColumns),
+    );
+  }, [tableColumns]);
+
+  useEffect(() => {
     if (!resizingDbxGridColumn) return undefined;
     const originalCursor = document.body.style.cursor;
     const originalUserSelect = document.body.style.userSelect;
@@ -248,6 +263,7 @@ export function useDbxDataGrid({
       if (!sameDbxObject) {
         setDbxGridSearch("");
         setDbxGridColumnSearch("");
+        setDbxGridColumnFuzzyFilters({});
         setDbxGridHiddenColumns(new Set());
         setDbxGridColumnWidths(initialDbxGridColumnWidths(columns, rows, columnTypes));
       } else {
@@ -266,6 +282,7 @@ export function useDbxDataGrid({
     setDbxGridOrderByInput("");
     setDbxGridSearch("");
     setDbxGridColumnSearch("");
+    setDbxGridColumnFuzzyFilters({});
     setDbxGridHiddenColumns(new Set());
     setDbxGridColumnWidths({});
     setDbxPendingCellEdits({});
@@ -394,6 +411,8 @@ export function useDbxDataGrid({
     state: {
       dbxGridWhereInput,
       setDbxGridWhereInput,
+      dbxGridColumnFuzzyFilters,
+      setDbxGridColumnFuzzyFilters,
       dbxGridOrderByInput,
       setDbxGridOrderByInput,
       dbxGridSearch,
@@ -447,6 +466,7 @@ export function useDbxDataGrid({
       dbxGridTableMinWidth,
       activeDbxGridColumnsByName,
       filteredDbxGridColumnOptions,
+      dbxGridEffectiveWhereInput,
       tableRows,
       formattedDbxCellPreview,
       dbxRowPreviewFields,

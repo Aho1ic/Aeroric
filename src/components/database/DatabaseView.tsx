@@ -96,6 +96,7 @@ import { confirmDbxProductionOperation, hasProductionProtection } from "./databa
 import { DataGridView } from "./DataGridView";
 import {
   combineDbxGridWhereCondition,
+  combineDbxGridWhereFilters,
   dbxFilterModeForCellAction,
   dbxGridContextRowIndexes,
   dbxOrderByForColumn,
@@ -104,6 +105,7 @@ import {
   type DatabaseRow,
   type DbxGridCellContextMenuAction,
   type DbxGridCellContextMenuState,
+  type DbxGridColumnFuzzyFilters,
   type DbxGridHeaderContextMenuAction,
   type DbxGridHeaderContextMenuState,
   type TableExportFormat,
@@ -623,6 +625,8 @@ export function DatabaseView({
   const {
     dbxGridWhereInput,
     setDbxGridWhereInput,
+    dbxGridColumnFuzzyFilters,
+    setDbxGridColumnFuzzyFilters,
     dbxGridOrderByInput,
     setDbxGridOrderByInput,
     dbxGridSearch,
@@ -663,6 +667,7 @@ export function DatabaseView({
   const {
     visibleTableColumns,
     filteredDbxGridColumnOptions,
+    dbxGridEffectiveWhereInput,
     formattedDbxCellPreview,
     dbxRowPreviewFields,
     filteredDbxRowPreviewFields,
@@ -703,7 +708,7 @@ export function DatabaseView({
         ? `${quoteSqlName(activeDbxObject.schema)}.${quoteSqlName(activeDbxObject.name)}`
         : quoteSqlName(activeDbxObject.name);
       const clauses = [`SELECT * FROM ${tableName}`];
-      const whereInput = dbxGridWhereInput.trim();
+      const whereInput = dbxGridEffectiveWhereInput.trim();
       const orderByInput = dbxGridOrderByInput.trim();
       if (whereInput) clauses.push(`WHERE ${whereInput}`);
       if (orderByInput) clauses.push(`ORDER BY ${orderByInput}`);
@@ -717,7 +722,7 @@ export function DatabaseView({
     activeDbxConnection,
     activeDbxObject,
     dbxGridOrderByInput,
-    dbxGridWhereInput,
+    dbxGridEffectiveWhereInput,
     page,
     queryResult,
     sql,
@@ -1629,13 +1634,23 @@ export function DatabaseView({
       whereInput?: string | null,
       orderBy?: string | null,
       pageSize = dbxGridPageSize,
+      columnFuzzyFiltersOverride?: DbxGridColumnFuzzyFilters,
     ) => {
       if (!connection) return;
       const requestSeq = ++dbxLoadSequenceRef.current;
       const normalizedWhereInput = whereInput?.trim() ?? "";
       const normalizedOrderBy = orderBy?.trim() ?? "";
       const sameDbxObject =
-        activeDbxObject?.name === object.name && activeDbxObject?.schema === object.schema;
+        activeDbxConnection?.id === connection.id &&
+        activeDbxDatabase === database &&
+        activeDbxObject?.name === object.name &&
+        activeDbxObject?.schema === object.schema;
+      const activeColumnFuzzyFilters =
+        columnFuzzyFiltersOverride ?? (sameDbxObject ? dbxGridColumnFuzzyFilters : {});
+      const effectiveWhereInput = combineDbxGridWhereFilters(
+        normalizedWhereInput,
+        activeColumnFuzzyFilters,
+      );
       setLoading(true);
       setError(null);
       setSqlResult(null);
@@ -1647,7 +1662,7 @@ export function DatabaseView({
           table: object.name,
           page: nextPage,
           pageSize,
-          whereInput: normalizedWhereInput || null,
+          whereInput: effectiveWhereInput || null,
           orderBy: normalizedOrderBy || null,
         });
         if (dbxLoadSequenceRef.current !== requestSeq) return;
@@ -1738,6 +1753,7 @@ export function DatabaseView({
       activeDbxConnection,
       activeDbxDatabase,
       activeDbxObject,
+      dbxGridColumnFuzzyFilters,
       dbxGridPageSize,
       initializeLoadedGrid,
     ],
@@ -1777,11 +1793,21 @@ export function DatabaseView({
   const resetActiveDbxGrid = useCallback(async () => {
     resetGridPresentation();
     if (!activeDbxConnection || !activeDbxObject) return;
-    await loadDbxObject(activeDbxObject, 1, activeDbxConnection, activeDbxDatabase, "", "");
+    await loadDbxObject(
+      activeDbxObject,
+      1,
+      activeDbxConnection,
+      activeDbxDatabase,
+      "",
+      "",
+      dbxGridPageSize,
+      {},
+    );
   }, [
     activeDbxConnection,
     activeDbxDatabase,
     activeDbxObject,
+    dbxGridPageSize,
     loadDbxObject,
     resetGridPresentation,
   ]);
@@ -1811,6 +1837,59 @@ export function DatabaseView({
       loadDbxObject,
       queryResult,
       setDbxGridOrderByInput,
+    ],
+  );
+
+  const applyDbxGridColumnFuzzyFilter = useCallback(
+    async (column: string, value: string) => {
+      if (!activeDbxConnection || !activeDbxObject || !queryResult) return;
+      const normalizedValue = value.trim();
+      const nextFilters: DbxGridColumnFuzzyFilters = { ...dbxGridColumnFuzzyFilters };
+      if (!normalizedValue) {
+        delete nextFilters[column];
+      } else {
+        try {
+          const columnInfo =
+            activeDbxGridColumns.find((item) => item.name.toLowerCase() === column.toLowerCase()) ??
+            null;
+          const condition = await databaseApi.dbxBuildDataGridContextFilterCondition({
+            databaseType: activeDbxConnection.dbType,
+            columnName: column,
+            mode: "like",
+            value: normalizedValue,
+            columnInfo,
+          });
+          if (!condition) return;
+          nextFilters[column] = { value: normalizedValue, condition };
+        } catch (err) {
+          setError(String(err));
+          return;
+        }
+      }
+      setDbxGridColumnFuzzyFilters(nextFilters);
+      await loadDbxObject(
+        activeDbxObject,
+        1,
+        activeDbxConnection,
+        activeDbxDatabase,
+        dbxGridWhereInput,
+        dbxGridOrderByInput,
+        dbxGridPageSize,
+        nextFilters,
+      );
+    },
+    [
+      activeDbxConnection,
+      activeDbxDatabase,
+      activeDbxGridColumns,
+      activeDbxObject,
+      dbxGridColumnFuzzyFilters,
+      dbxGridOrderByInput,
+      dbxGridPageSize,
+      dbxGridWhereInput,
+      loadDbxObject,
+      queryResult,
+      setDbxGridColumnFuzzyFilters,
     ],
   );
 
@@ -2948,7 +3027,7 @@ export function DatabaseView({
         columns,
         columnTypes,
         primaryKeys: activeObject?.primaryKeys ?? [],
-        whereInput: dbxGridWhereInput.trim() || null,
+        whereInput: dbxGridEffectiveWhereInput.trim() || null,
         orderBy: dbxGridOrderByInput.trim() || null,
       });
     },
@@ -2960,7 +3039,7 @@ export function DatabaseView({
       activeObject?.primaryKeys,
       dbxGridExportFormat,
       dbxGridOrderByInput,
-      dbxGridWhereInput,
+      dbxGridEffectiveWhereInput,
       exportDbxTableObject,
       queryResult,
       visibleTableColumns,
@@ -5163,6 +5242,7 @@ export function DatabaseView({
       }
       if (action === "clearFilter") {
         setDbxGridWhereInput("");
+        setDbxGridColumnFuzzyFilters({});
         if (activeDbxConnection && activeDbxObject) {
           await loadDbxObject(
             activeDbxObject,
@@ -5171,6 +5251,8 @@ export function DatabaseView({
             activeDbxDatabase,
             "",
             dbxGridOrderByInput,
+            dbxGridPageSize,
+            {},
           );
         }
         return;
@@ -5252,6 +5334,7 @@ export function DatabaseView({
       copyNodeName,
       dbxGridContextRows,
       dbxGridOrderByInput,
+      dbxGridPageSize,
       dbxGridWhereInput,
       loadDbxObject,
       queryResult,
@@ -5259,6 +5342,7 @@ export function DatabaseView({
       setDbxColumnPreview,
       setDbxColumnPreviewSearch,
       setDbxGridOrderByInput,
+      setDbxGridColumnFuzzyFilters,
       setDbxGridWhereInput,
       setDbxRowPreview,
       setDbxRowPreviewSearch,
@@ -6754,6 +6838,7 @@ export function DatabaseView({
               grid={dbxGrid}
               onKeyDown={handleDbxGridKeyDown}
               onSortColumn={toggleDbxGridColumnSort}
+              onFilterColumn={applyDbxGridColumnFuzzyFilter}
               onOpenContextMenu={setContextMenu}
               onUpdateCell={updateCell}
             />

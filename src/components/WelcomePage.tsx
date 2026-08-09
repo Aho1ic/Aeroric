@@ -4,6 +4,7 @@ import {
   Search,
   FolderOpen,
   ChevronDown,
+  ChevronRight,
   GitBranch,
   Layers,
   Plus,
@@ -52,6 +53,7 @@ import type { SshProjectInput } from "./ssh/sshProject";
 import { DockerIcon } from "./DockerIcon";
 import RecursiveHeroCanvas from "./recursive-hero-effect/RecursiveHeroCanvas";
 import { ProjectGroupDialog } from "./ProjectGroupDialog";
+import { groupProjectsForRail, UNGROUPED_PROJECT_GROUP } from "../projectGroups";
 import { AnimatedSelectionTrack } from "./ui/AnimatedSelection";
 import { useI18n, pluralKey } from "../i18n";
 import { APP_PLATFORM } from "../platform";
@@ -337,6 +339,8 @@ export function WelcomePage({
   onRenameProject,
   onToggleProjectHidden,
   projectGroups = [],
+  collapsedProjectGroups: controlledCollapsedProjectGroups,
+  onCollapsedProjectGroupsChange,
   onAssignProjectGroup = () => {},
   onCreateProjectGroup = () => {},
   onRenameProjectGroup = () => {},
@@ -375,6 +379,8 @@ export function WelcomePage({
   onRenameProject: (projectId: string, name: string) => void;
   onToggleProjectHidden: (projectId: string) => void;
   projectGroups?: string[];
+  collapsedProjectGroups?: ReadonlySet<string>;
+  onCollapsedProjectGroupsChange?: (groups: Set<string>) => void;
   onAssignProjectGroup?: (projectId: string, groupName: string | null) => void;
   onCreateProjectGroup?: (groupName: string) => void;
   onRenameProjectGroup?: (oldName: string, nextName: string) => void;
@@ -418,6 +424,9 @@ export function WelcomePage({
   >("projects");
   const [openProjectMenu, setOpenProjectMenu] = useState(false);
   const [showProjectGroupDialog, setShowProjectGroupDialog] = useState(false);
+  const [localCollapsedProjectGroups, setLocalCollapsedProjectGroups] = useState<Set<string>>(
+    new Set(),
+  );
   const [showWslProjectDialog, setShowWslProjectDialog] = useState(false);
   const [sftpOpen, setSftpOpen] = useState(false);
   const [sftpConnectionId, setSftpConnectionId] = useState<string | undefined>();
@@ -447,6 +456,23 @@ export function WelcomePage({
       (p) => p.name.toLowerCase().includes(q) || p.path.toLowerCase().includes(q),
     );
   }, [projects, query]);
+  const groupedFilteredProjects = useMemo(() => {
+    const groups = groupProjectsForRail(filtered, projectGroups);
+    return query.trim() ? groups.filter((group) => group.projects.length > 0) : groups;
+  }, [filtered, projectGroups, query]);
+  const collapsedProjectGroups = controlledCollapsedProjectGroups ?? localCollapsedProjectGroups;
+  const showProjectGroupHeaders = groupedFilteredProjects.some((group) => !group.isUngrouped);
+
+  const toggleProjectGroup = useCallback(
+    (groupKey: string) => {
+      const next = new Set(collapsedProjectGroups);
+      if (next.has(groupKey)) next.delete(groupKey);
+      else next.add(groupKey);
+      if (onCollapsedProjectGroupsChange) onCollapsedProjectGroupsChange(next);
+      else setLocalCollapsedProjectGroups(next);
+    },
+    [collapsedProjectGroups, onCollapsedProjectGroupsChange],
+  );
 
   const startProjectRename = useCallback((project: Project) => {
     setEditingProjectId(project.id);
@@ -824,187 +850,233 @@ export function WelcomePage({
               {filtered.length === 0 ? (
                 <WelcomeEmpty hasProjects={projects.length > 0} onOpen={onOpen} />
               ) : (
-                filtered.map((p) => {
-                  const [from] = getAvatarGradient(p.name);
-                  const isEditingProject = editingProjectId === p.id;
+                groupedFilteredProjects.map((group) => {
+                  const groupKey = group.isUngrouped ? UNGROUPED_PROJECT_GROUP : group.name;
+                  const groupLabel = group.isUngrouped ? t("projectGroups.ungrouped") : group.name;
+                  const groupCollapsed = collapsedProjectGroups.has(groupKey);
                   return (
-                    <div
-                      key={p.id}
-                      role="button"
-                      tabIndex={0}
-                      style={{
-                        ...s.projectItem,
-                        background: "transparent",
-                        borderColor: hov === p.id ? "var(--border-medium)" : "transparent",
-                        boxShadow: hov === p.id ? "inset 0 0 0 1px var(--border-dim)" : "none",
-                      }}
-                      onMouseDown={(event) => {
-                        if (!isEditingProject) return;
-                        if (event.target === editingProjectInputRef.current) return;
-                        suppressProjectClickRef.current = p.id;
-                      }}
-                      onMouseEnter={() => setHov(p.id)}
-                      onMouseLeave={() => setHov(null)}
-                      onClick={(event) => {
-                        if (isEditingProject || suppressProjectClickRef.current === p.id) {
-                          suppressProjectClickRef.current = null;
-                          event.preventDefault();
-                          return;
-                        }
-                        onProjectClick(p);
-                      }}
-                      onKeyDown={(e) => {
-                        if (e.key !== "Enter" && e.key !== " ") return;
-                        e.preventDefault();
-                        if (isEditingProject) return;
-                        onProjectClick(p);
-                      }}
-                    >
-                      <ProjectAvatar
-                        name={p.name}
-                        size={34}
-                        style={{ boxShadow: hov === p.id ? `0 10px 18px ${from}26` : "none" }}
-                      />
-
-                      <div style={{ flex: 1, minWidth: 0 }}>
-                        {isEditingProject ? (
-                          <input
-                            aria-label={t("welcome.renameProject")}
-                            ref={editingProjectInputRef}
-                            value={editingProjectName}
-                            autoCapitalize="off"
-                            autoCorrect="off"
-                            spellCheck={false}
-                            style={s.projectNameInput}
-                            onChange={(event) => {
-                              const nextName = event.currentTarget.value;
-                              setEditingProjectName(nextName);
-                              editingProjectNameRef.current = nextName;
-                            }}
-                            onBlur={() => commitProjectRename(p.id)}
-                            onKeyDown={(event) => {
-                              event.stopPropagation();
-                              if (event.key === "Enter") {
-                                event.preventDefault();
-                                commitProjectRename(p.id);
-                              } else if (event.key === "Escape") {
-                                event.preventDefault();
-                                cancelProjectRename();
-                              }
-                            }}
-                          />
-                        ) : (
-                          <div style={s.projectName}>{p.name}</div>
-                        )}
-                        <div style={s.projectMeta}>{projectMetaLabel(p, sshConnections)}</div>
-                      </div>
-
-                      {isRemoteProject(p) ? (
-                        <span style={s.projectTag}>{t("welcome.ssh")}</span>
-                      ) : p.branch ? (
-                        <span style={s.branchBadge}>
-                          <GitBranch size={10} strokeWidth={2} />
-                          {p.branch}
-                        </span>
-                      ) : (
-                        <span style={s.projectTag}>{t("welcome.local")}</span>
+                    <section key={groupKey} style={s.projectGroupSection}>
+                      {showProjectGroupHeaders && (
+                        <button
+                          type="button"
+                          style={s.projectGroupHeader}
+                          aria-label={t(
+                            groupCollapsed
+                              ? "projectRail.expandGroup"
+                              : "projectRail.collapseGroup",
+                            { name: groupLabel },
+                          )}
+                          aria-expanded={!groupCollapsed}
+                          onClick={() => toggleProjectGroup(groupKey)}
+                        >
+                          <span style={s.projectGroupHeaderLabel}>
+                            {groupCollapsed ? (
+                              <ChevronRight size={13} aria-hidden="true" />
+                            ) : (
+                              <ChevronDown size={13} aria-hidden="true" />
+                            )}
+                            <span style={s.projectGroupHeaderName}>{groupLabel}</span>
+                          </span>
+                          <span style={s.projectGroupHeaderCount}>{group.projects.length}</span>
+                        </button>
                       )}
+                      {(!groupCollapsed || Boolean(query.trim())) &&
+                        group.projects.map((p) => {
+                          const [from] = getAvatarGradient(p.name);
+                          const isEditingProject = editingProjectId === p.id;
+                          return (
+                            <div
+                              key={p.id}
+                              role="button"
+                              tabIndex={0}
+                              style={{
+                                ...s.projectItem,
+                                background: "transparent",
+                                borderColor: hov === p.id ? "var(--border-medium)" : "transparent",
+                                boxShadow:
+                                  hov === p.id ? "inset 0 0 0 1px var(--border-dim)" : "none",
+                              }}
+                              onMouseDown={(event) => {
+                                if (!isEditingProject) return;
+                                if (event.target === editingProjectInputRef.current) return;
+                                suppressProjectClickRef.current = p.id;
+                              }}
+                              onMouseEnter={() => setHov(p.id)}
+                              onMouseLeave={() => setHov(null)}
+                              onClick={(event) => {
+                                if (isEditingProject || suppressProjectClickRef.current === p.id) {
+                                  suppressProjectClickRef.current = null;
+                                  event.preventDefault();
+                                  return;
+                                }
+                                onProjectClick(p);
+                              }}
+                              onKeyDown={(e) => {
+                                if (e.key !== "Enter" && e.key !== " ") return;
+                                e.preventDefault();
+                                if (isEditingProject) return;
+                                onProjectClick(p);
+                              }}
+                            >
+                              <ProjectAvatar
+                                name={p.name}
+                                size={34}
+                                style={{
+                                  boxShadow: hov === p.id ? `0 10px 18px ${from}26` : "none",
+                                }}
+                              />
 
-                      <span
-                        role="button"
-                        tabIndex={0}
-                        style={{
-                          ...s.projectPinBtn,
-                          ...(p.hiddenFromRail ? s.projectPinBtnHidden : s.projectPinBtnPinned),
-                        }}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          onToggleProjectHidden(p.id);
-                        }}
-                        onKeyDown={(e) => {
-                          if (e.key !== "Enter" && e.key !== " ") return;
-                          e.preventDefault();
-                          e.stopPropagation();
-                          onToggleProjectHidden(p.id);
-                        }}
-                        title={
-                          p.hiddenFromRail ? t("welcome.pinToRail") : t("welcome.unpinFromRail")
-                        }
-                      >
-                        {p.hiddenFromRail ? (
-                          <PinOff size={11} strokeWidth={2} />
-                        ) : (
-                          <Pin size={11} strokeWidth={2} />
-                        )}
-                        {p.hiddenFromRail
-                          ? t("welcome.notPinnedToRail")
-                          : t("welcome.pinnedToRail")}
-                      </span>
+                              <div style={{ flex: 1, minWidth: 0 }}>
+                                {isEditingProject ? (
+                                  <input
+                                    aria-label={t("welcome.renameProject")}
+                                    ref={editingProjectInputRef}
+                                    value={editingProjectName}
+                                    autoCapitalize="off"
+                                    autoCorrect="off"
+                                    spellCheck={false}
+                                    style={s.projectNameInput}
+                                    onChange={(event) => {
+                                      const nextName = event.currentTarget.value;
+                                      setEditingProjectName(nextName);
+                                      editingProjectNameRef.current = nextName;
+                                    }}
+                                    onBlur={() => commitProjectRename(p.id)}
+                                    onKeyDown={(event) => {
+                                      event.stopPropagation();
+                                      if (event.key === "Enter") {
+                                        event.preventDefault();
+                                        commitProjectRename(p.id);
+                                      } else if (event.key === "Escape") {
+                                        event.preventDefault();
+                                        cancelProjectRename();
+                                      }
+                                    }}
+                                  />
+                                ) : (
+                                  <div style={s.projectName}>{p.name}</div>
+                                )}
+                                <div style={s.projectMeta}>
+                                  {projectMetaLabel(p, sshConnections)}
+                                </div>
+                              </div>
 
-                      <button
-                        type="button"
-                        style={{
-                          marginLeft: 8,
-                          padding: "4px 6px",
-                          background: "transparent",
-                          border: "none",
-                          borderRadius: 6,
-                          cursor: "pointer",
-                          color: "var(--text-muted)",
-                          display: "flex",
-                          alignItems: "center",
-                          opacity: hov === p.id ? 1 : 0,
-                          transition: "opacity 0.15s, color 0.15s",
-                        }}
-                        onMouseEnter={(e) => {
-                          (e.currentTarget as HTMLButtonElement).style.color =
-                            "var(--text-primary)";
-                        }}
-                        onMouseLeave={(e) => {
-                          (e.currentTarget as HTMLButtonElement).style.color = "var(--text-muted)";
-                        }}
-                        onMouseDown={(e) => {
-                          e.preventDefault();
-                          e.stopPropagation();
-                        }}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          startProjectRename(p);
-                        }}
-                        title={t("welcome.renameProject")}
-                      >
-                        <Pencil size={14} strokeWidth={1.8} />
-                      </button>
+                              {isRemoteProject(p) ? (
+                                <span style={s.projectTag}>{t("welcome.ssh")}</span>
+                              ) : p.branch ? (
+                                <span style={s.branchBadge}>
+                                  <GitBranch size={10} strokeWidth={2} />
+                                  {p.branch}
+                                </span>
+                              ) : (
+                                <span style={s.projectTag}>{t("welcome.local")}</span>
+                              )}
 
-                      <button
-                        style={{
-                          marginLeft: 8,
-                          padding: "4px 6px",
-                          background: "transparent",
-                          border: "none",
-                          borderRadius: 6,
-                          cursor: "pointer",
-                          color: "var(--text-muted)",
-                          display: "flex",
-                          alignItems: "center",
-                          opacity: hov === p.id ? 1 : 0,
-                          transition: "opacity 0.15s, color 0.15s",
-                        }}
-                        onMouseEnter={(e) => {
-                          (e.currentTarget as HTMLButtonElement).style.color = "var(--danger)";
-                        }}
-                        onMouseLeave={(e) => {
-                          (e.currentTarget as HTMLButtonElement).style.color = "var(--text-muted)";
-                        }}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          onDeleteProject(p.id);
-                        }}
-                        title={t("welcome.deleteProject")}
-                      >
-                        <Trash2 size={14} strokeWidth={1.8} />
-                      </button>
-                    </div>
+                              <span
+                                role="button"
+                                tabIndex={0}
+                                style={{
+                                  ...s.projectPinBtn,
+                                  ...(p.hiddenFromRail
+                                    ? s.projectPinBtnHidden
+                                    : s.projectPinBtnPinned),
+                                }}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  onToggleProjectHidden(p.id);
+                                }}
+                                onKeyDown={(e) => {
+                                  if (e.key !== "Enter" && e.key !== " ") return;
+                                  e.preventDefault();
+                                  e.stopPropagation();
+                                  onToggleProjectHidden(p.id);
+                                }}
+                                title={
+                                  p.hiddenFromRail
+                                    ? t("welcome.pinToRail")
+                                    : t("welcome.unpinFromRail")
+                                }
+                              >
+                                {p.hiddenFromRail ? (
+                                  <PinOff size={11} strokeWidth={2} />
+                                ) : (
+                                  <Pin size={11} strokeWidth={2} />
+                                )}
+                                {p.hiddenFromRail
+                                  ? t("welcome.notPinnedToRail")
+                                  : t("welcome.pinnedToRail")}
+                              </span>
+
+                              <button
+                                type="button"
+                                style={{
+                                  marginLeft: 8,
+                                  padding: "4px 6px",
+                                  background: "transparent",
+                                  border: "none",
+                                  borderRadius: 6,
+                                  cursor: "pointer",
+                                  color: "var(--text-muted)",
+                                  display: "flex",
+                                  alignItems: "center",
+                                  opacity: hov === p.id ? 1 : 0,
+                                  transition: "opacity 0.15s, color 0.15s",
+                                }}
+                                onMouseEnter={(e) => {
+                                  (e.currentTarget as HTMLButtonElement).style.color =
+                                    "var(--text-primary)";
+                                }}
+                                onMouseLeave={(e) => {
+                                  (e.currentTarget as HTMLButtonElement).style.color =
+                                    "var(--text-muted)";
+                                }}
+                                onMouseDown={(e) => {
+                                  e.preventDefault();
+                                  e.stopPropagation();
+                                }}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  startProjectRename(p);
+                                }}
+                                title={t("welcome.renameProject")}
+                              >
+                                <Pencil size={14} strokeWidth={1.8} />
+                              </button>
+
+                              <button
+                                style={{
+                                  marginLeft: 8,
+                                  padding: "4px 6px",
+                                  background: "transparent",
+                                  border: "none",
+                                  borderRadius: 6,
+                                  cursor: "pointer",
+                                  color: "var(--text-muted)",
+                                  display: "flex",
+                                  alignItems: "center",
+                                  opacity: hov === p.id ? 1 : 0,
+                                  transition: "opacity 0.15s, color 0.15s",
+                                }}
+                                onMouseEnter={(e) => {
+                                  (e.currentTarget as HTMLButtonElement).style.color =
+                                    "var(--danger)";
+                                }}
+                                onMouseLeave={(e) => {
+                                  (e.currentTarget as HTMLButtonElement).style.color =
+                                    "var(--text-muted)";
+                                }}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  onDeleteProject(p.id);
+                                }}
+                                title={t("welcome.deleteProject")}
+                              >
+                                <Trash2 size={14} strokeWidth={1.8} />
+                              </button>
+                            </div>
+                          );
+                        })}
+                    </section>
                   );
                 })
               )}
