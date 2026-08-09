@@ -502,6 +502,7 @@ export const zh: Record<string, string> = {
   "skill.empty.openSettings": "打开设置",
   "skill.header.title": "技能库",
   "skill.list.loading": "加载中...",
+  "skill.list.loadError": "技能加载失败：{error}",
   "skill.list.count": "{count} 个 skill",
   "skill.list.empty": "目录下没有包含 SKILL.md 的子目录。",
   "skill.search": "搜索技能...",

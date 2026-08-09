@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { confirm } from "@tauri-apps/plugin-dialog";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
@@ -32,6 +32,27 @@ interface Props {
   embedded?: boolean;
 }
 
+export const SKILL_LOAD_TIMEOUT_MS = 10_000;
+
+function withTimeout<T>(operation: Promise<T>, command: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = globalThis.setTimeout(() => {
+      reject(new Error(`${command} timed out after ${SKILL_LOAD_TIMEOUT_MS}ms`));
+    }, SKILL_LOAD_TIMEOUT_MS);
+
+    operation.then(
+      (value) => {
+        globalThis.clearTimeout(timer);
+        resolve(value);
+      },
+      (reason) => {
+        globalThis.clearTimeout(timer);
+        reject(reason);
+      },
+    );
+  });
+}
+
 export function SkillHubView({ config, allProjects, onOpenAppSettings, embedded }: Props) {
   const { t } = useI18n();
   const [skills, setSkills] = useState<Skill[]>([]);
@@ -43,28 +64,60 @@ export function SkillHubView({ config, allProjects, onOpenAppSettings, embedded 
   const [activeTab, setActiveTab] = useState<"installed" | "shop" | "local">("installed");
   const [skillSearch, setSkillSearch] = useState("");
   const [importMessage, setImportMessage] = useState<string | null>(null);
+  const loadRequestId = useRef(0);
 
-  const loadSkills = useCallback(() => {
+  const loadSkills = useCallback(async () => {
+    const requestId = ++loadRequestId.current;
     if (!config?.hubPath) {
       setSkills([]);
+      setInstallations([]);
+      setLoading(false);
+      setError(null);
       return;
     }
     setLoading(true);
     setError(null);
-    Promise.all([
-      invoke<Skill[]>("list_skills"),
+    const skillsRequest = withTimeout(invoke<Skill[]>("list_skills"), "list_skills");
+    const installationsRequest = withTimeout(
       invoke<SkillInstallation[]>("list_skill_installations", { skillName: null }),
-    ])
-      .then(([rows, installs]) => {
-        setSkills(rows);
-        setInstallations(installs);
-      })
-      .catch((e) => setError(String(e)))
-      .finally(() => setLoading(false));
-  }, [config?.hubPath]);
+      "list_skill_installations",
+    );
+
+    skillsRequest.then(
+      (rows) => {
+        if (loadRequestId.current === requestId) setSkills(rows);
+      },
+      () => undefined,
+    );
+    installationsRequest.then(
+      (rows) => {
+        if (loadRequestId.current === requestId) setInstallations(rows);
+      },
+      () => undefined,
+    );
+
+    const [skillsResult, installationsResult] = await Promise.allSettled([
+      skillsRequest,
+      installationsRequest,
+    ]);
+    if (loadRequestId.current !== requestId) return;
+
+    const failures = [skillsResult, installationsResult]
+      .filter((result): result is PromiseRejectedResult => result.status === "rejected")
+      .map((result) => String(result.reason));
+    if (skillsResult.status === "rejected") setSkills([]);
+    if (installationsResult.status === "rejected") setInstallations([]);
+    setError(
+      failures.length > 0 ? t("skill.list.loadError", { error: failures.join("; ") }) : null,
+    );
+    setLoading(false);
+  }, [config?.hubPath, t]);
 
   useEffect(() => {
-    loadSkills();
+    void loadSkills();
+    return () => {
+      loadRequestId.current += 1;
+    };
   }, [loadSkills, refreshKey]);
 
   useEffect(() => {
@@ -230,6 +283,9 @@ export function SkillHubView({ config, allProjects, onOpenAppSettings, embedded 
         <div style={s.skillHubError}>
           <AlertCircle size={14} strokeWidth={2} />
           <span>{error}</span>
+          <button type="button" style={s.skillRowManageBtn} onClick={() => void loadSkills()}>
+            {t("common.retry")}
+          </button>
         </div>
       ) : null}
 

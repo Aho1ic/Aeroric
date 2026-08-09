@@ -544,6 +544,7 @@ export const en: Record<string, string> = {
   "skill.empty.openSettings": "Open Settings",
   "skill.header.title": "Skills",
   "skill.list.loading": "Loading skills...",
+  "skill.list.loadError": "Failed to load skills: {error}",
   "skill.list.count": "{count} skills",
   "skill.list.empty": "No SKILL.md folders found in the hub directory.",
   "skill.search": "Search skills...",

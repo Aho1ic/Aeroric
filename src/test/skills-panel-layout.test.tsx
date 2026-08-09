@@ -1,7 +1,8 @@
-import { render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { invoke } from "@tauri-apps/api/core";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SkillsPanel } from "../components/app-settings/SkillsPanel";
+import { SKILL_LOAD_TIMEOUT_MS, SkillHubView } from "../components/skill-hub/SkillHubView";
 import { I18nProvider } from "../i18n";
 
 vi.mock("@tauri-apps/api/core", () => ({
@@ -32,6 +33,10 @@ describe("Skills settings layout", () => {
     });
   });
 
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("keeps the path section compact and connects it to the embedded tabs", async () => {
     const { container } = render(
       <I18nProvider>
@@ -50,5 +55,75 @@ describe("Skills settings layout", () => {
     expect((content as HTMLElement).style.padding).toBe("12px 20px 18px");
     expect((content as HTMLElement).style.overflow).toBe("hidden");
     expect((embeddedHub as HTMLElement).style.padding).toBe("0px");
+  });
+
+  it("ends loading with a recoverable error when the skill scan never settles", async () => {
+    vi.useFakeTimers();
+    vi.mocked(invoke).mockImplementation((command) => {
+      if (command === "list_skills") return new Promise(() => undefined);
+      if (command === "list_skill_installations") return Promise.resolve([]);
+      return Promise.resolve(undefined);
+    });
+
+    render(
+      <I18nProvider>
+        <SkillHubView
+          config={{ hubPath: "/skills", hubProjectId: "skill-hub" }}
+          allProjects={[]}
+          onOpenAppSettings={vi.fn()}
+        />
+      </I18nProvider>,
+    );
+
+    expect(screen.getByText("Loading skills...")).toBeInTheDocument();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(SKILL_LOAD_TIMEOUT_MS);
+    });
+
+    expect(screen.queryByText("Loading skills...")).not.toBeInTheDocument();
+    expect(screen.getByText(/list_skills timed out/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(
+      vi.mocked(invoke).mock.calls.filter(([command]) => command === "list_skills"),
+    ).toHaveLength(2);
+  });
+
+  it("keeps loaded skills visible when installation health checks time out", async () => {
+    vi.useFakeTimers();
+    vi.mocked(invoke).mockImplementation((command) => {
+      if (command === "list_skills") {
+        return Promise.resolve([
+          {
+            name: "test-skill",
+            displayName: "Test Skill",
+            description: "Loaded before installation health",
+            path: "/skills/test-skill",
+          },
+        ]);
+      }
+      if (command === "list_skill_installations") return new Promise(() => undefined);
+      return Promise.resolve(undefined);
+    });
+
+    render(
+      <I18nProvider>
+        <SkillHubView
+          config={{ hubPath: "/skills", hubProjectId: "skill-hub" }}
+          allProjects={[]}
+          onOpenAppSettings={vi.fn()}
+        />
+      </I18nProvider>,
+    );
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(screen.getByText("Test Skill")).toBeInTheDocument();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(SKILL_LOAD_TIMEOUT_MS);
+    });
+    expect(screen.getByText(/list_skill_installations timed out/)).toBeInTheDocument();
+    expect(screen.getByText("Test Skill")).toBeInTheDocument();
   });
 });

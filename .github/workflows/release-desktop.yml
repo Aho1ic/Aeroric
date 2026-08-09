@@ -64,12 +64,12 @@ jobs:
             artifact_name: macos-x86_64
             runner: macos-15-intel
             target: x86_64-apple-darwin
-            bundle_args: --bundles app,dmg
+            bundle_args: --bundles app
           - name: macOS ARM64
             artifact_name: macos-arm64
             runner: macos-15
             target: aarch64-apple-darwin
-            bundle_args: --bundles app,dmg
+            bundle_args: --bundles app
           - name: Linux x86_64
             artifact_name: linux-x86_64
             runner: ubuntu-22.04
@@ -350,6 +350,44 @@ jobs:
       - name: Build ${{ matrix.name }} (Linux)
         if: runner.os == 'Linux'
         run: pnpm tauri build --target ${{ matrix.target }} ${{ matrix.bundle_args }} -- --locked
+
+      - name: Package deterministic macOS DMG
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          bundle_root="src-tauri/target/${{ matrix.target }}/release/bundle"
+          case "${{ matrix.target }}" in
+            aarch64-apple-darwin) dmg_arch="aarch64" ;;
+            x86_64-apple-darwin) dmg_arch="x64" ;;
+            *) echo "::error::Unsupported macOS target: ${{ matrix.target }}"; exit 1 ;;
+          esac
+          ./scripts/create-macos-dmg.sh \
+            "$bundle_root/macos/Aeroric.app" \
+            "$bundle_root/dmg/Aeroric_${version}_${dmg_arch}.dmg" \
+            "Aeroric ${version}"
+
+      - name: Notarize and staple deterministic macOS DMG
+        if: runner.os == 'macOS' && env.AERORIC_SIGN_RELEASE == 'true'
+        shell: bash
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          dmg_path="$(find "src-tauri/target/${{ matrix.target }}/release/bundle/dmg" -maxdepth 1 -type f -name '*.dmg' -print -quit)"
+          if [[ -z "$dmg_path" ]]; then
+            echo "::error::Deterministic DMG was not produced"
+            exit 1
+          fi
+          xcrun notarytool submit "$dmg_path" \
+            --apple-id "$APPLE_ID" \
+            --password "$APPLE_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID" \
+            --wait
+          xcrun stapler staple "$dmg_path"
 
       - name: Verify Windows installer signatures
         if: runner.os == 'Windows' && env.AERORIC_SIGN_RELEASE == 'true'
