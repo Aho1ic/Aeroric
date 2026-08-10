@@ -118,14 +118,23 @@ export function AllAgentConfigsPanel({ themeVariant }: { themeVariant: ThemeVari
     setMessage(null);
     setError(null);
     try {
-      const result = await invoke<{ imported_agent_ids: string[] }>(
-        "import_all_agent_config_bundle",
-        { inputPath },
-      );
+      const importedAgentIds = inputPath.endsWith(".aeroric-agent.json")
+        ? [
+            (
+              await invoke<{ agent_id: string }>("import_agent_config_bundle", {
+                inputPath,
+              })
+            ).agent_id,
+          ]
+        : (
+            await invoke<{ imported_agent_ids: string[] }>("import_all_agent_config_bundle", {
+              inputPath,
+            })
+          ).imported_agent_ids;
       window.dispatchEvent(new Event(APP_SETTINGS_CHANGED_EVENT));
       setMessage(
         t("appSettings.allAgentConfigsImported", {
-          count: result.imported_agent_ids.length,
+          count: importedAgentIds.length,
         }),
       );
     } catch (reason) {

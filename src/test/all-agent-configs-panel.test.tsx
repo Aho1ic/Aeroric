@@ -80,4 +80,36 @@ describe("AllAgentConfigsPanel", () => {
     expect(changed).toHaveBeenCalledTimes(1);
     window.removeEventListener(APP_SETTINGS_CHANGED_EVENT, changed);
   });
+
+  it("imports a single Agent bundle from the Aeroric import menu", async () => {
+    const user = userEvent.setup();
+    openMock.mockResolvedValue("/tmp/zzz_codex.aeroric-agent.json");
+    invokeMock.mockImplementation((command: string) => {
+      if (command === "import_agent_config_bundle") {
+        return Promise.resolve({
+          agent_id: "zzz_codex",
+          config_path: "/tmp/zzz_codex.sh",
+        });
+      }
+      return Promise.resolve(undefined);
+    });
+    const changed = vi.fn();
+    window.addEventListener(APP_SETTINGS_CHANGED_EVENT, changed);
+
+    render(
+      <I18nProvider>
+        <AllAgentConfigsPanel themeVariant="light" />
+      </I18nProvider>,
+    );
+
+    await user.click(screen.getByRole("button", { name: /Import all/ }));
+    await user.click(screen.getByText("From Aeroric"));
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith("import_agent_config_bundle", {
+        inputPath: "/tmp/zzz_codex.aeroric-agent.json",
+      }),
+    );
+    expect(changed).toHaveBeenCalledTimes(1);
+    window.removeEventListener(APP_SETTINGS_CHANGED_EVENT, changed);
+  });
 });
