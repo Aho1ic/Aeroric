@@ -40,7 +40,8 @@
           "cameraPermission": "Aeroric 需要相机权限扫描桌面端的配对二维码"
         }
       ],
-      "expo-secure-store"
+      "expo-secure-store",
+      "./plugins/with-local-notifications-only"
     ]
   }
 }
