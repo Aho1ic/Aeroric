@@ -398,6 +398,10 @@ async fn accept_loop<R: Runtime>(
             _ = listener_shutdown_wait.changed() => break,
             accepted = listener.accept() => {
                 let Ok((stream, peer)) = accepted else { continue };
+                // 终端交互全是单字符小包:Nagle 会把它们攒到前一个包被 ACK 才发,
+                // 与对端的延迟 ACK 叠加时每次按键最多多等约 40ms。远程链路
+                // (WireGuard 等)RTT 本身就高,这段等待会直接体现为打字延迟。
+                let _ = stream.set_nodelay(true);
                 let Ok(slot) = connection_slots.clone().try_acquire_owned() else {
                     // Refuse excess sockets immediately; the peer can retry after
                     // an existing client finishes or is closed.

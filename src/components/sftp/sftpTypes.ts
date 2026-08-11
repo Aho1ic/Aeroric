@@ -41,7 +41,8 @@ export type SftpFileIconKind =
   | "text"
   | "file";
 
-export type SftpSortField = "name" | "modified";
+export const SFTP_SORT_FIELDS = ["name", "modified", "size", "type"] as const;
+export type SftpSortField = (typeof SFTP_SORT_FIELDS)[number];
 export type SftpSortDirection = "asc" | "desc";
 export type SftpSortPreference = {
   field: SftpSortField;
@@ -183,6 +184,15 @@ export function sortSftpEntries(
       const modifiedDiff = ((a.modifiedAtMs ?? 0) - (b.modifiedAtMs ?? 0)) * sign;
       if (modifiedDiff !== 0) return modifiedDiff;
     }
+    if (field === "size") {
+      const sizeDiff = ((a.size ?? 0) - (b.size ?? 0)) * sign;
+      if (sizeDiff !== 0) return sizeDiff;
+    }
+    if (field === "type") {
+      const typeDiff =
+        inferFileType(a).localeCompare(inferFileType(b), undefined, { sensitivity: "base" }) * sign;
+      if (typeDiff !== 0) return typeDiff;
+    }
     return a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" }) * sign;
   });
 }
@@ -190,8 +200,7 @@ export function sortSftpEntries(
 export function normalizeSftpSortPreference(value: unknown): SftpSortPreference {
   if (!value || typeof value !== "object") return DEFAULT_SFTP_SORT_PREFERENCE;
   const candidate = value as Partial<SftpSortPreference>;
-  const field =
-    candidate.field === "name" || candidate.field === "modified" ? candidate.field : null;
+  const field = SFTP_SORT_FIELDS.find((item) => item === candidate.field) ?? null;
   const direction =
     candidate.direction === "asc" || candidate.direction === "desc" ? candidate.direction : null;
   if (!field || !direction) return DEFAULT_SFTP_SORT_PREFERENCE;
@@ -340,6 +349,20 @@ export function sftpFileIconKind(entry: SftpEntry): SftpFileIconKind {
   }
   if (["txt", "log", "env", "ini", "conf"].includes(ext)) return "text";
   return "file";
+}
+
+/**
+ * 推断条目类型:目录返回 "folder",文件返回小写扩展名,无扩展名文件返回 "file"。
+ * 用于按类型排序与类型展示,保证同类文件聚在一起。
+ */
+export function inferFileType(entry: Pick<SftpEntry, "name" | "isDir" | "extension">): string {
+  if (entry.isDir) return "folder";
+  const explicit = entry.extension?.trim().replace(/^\.+/, "").toLowerCase();
+  if (explicit) return explicit;
+  const name = entry.name.replace(/\/+$/, "");
+  const dotIndex = name.lastIndexOf(".");
+  if (dotIndex <= 0 || dotIndex === name.length - 1) return "file";
+  return name.slice(dotIndex + 1).toLowerCase();
 }
 
 export function isSftpImageFile(name: string): boolean {

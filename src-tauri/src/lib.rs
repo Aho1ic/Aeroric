@@ -25,6 +25,7 @@ mod local_history;
 mod local_router;
 mod local_router_commands;
 mod lsp;
+mod mcp;
 mod node_runtime;
 mod notification;
 mod platform;
@@ -489,6 +490,7 @@ pub fn run() {
             app_settings::load_app_settings,
             app_settings::save_app_settings,
             app_settings::update_proxy_settings,
+            app_settings::test_proxy_connection,
             app_settings::update_agent_path_settings,
             app_settings::update_builtin_agent_access,
             app_settings::update_custom_agent_access,
@@ -520,6 +522,7 @@ pub fn run() {
             app_settings::detect_agent_version,
             app_settings::upgrade_agent_versions,
             agent_tools::get_agent_tool_status,
+            agent_tools::get_agent_latest_versions,
             agent_tools::install_agent_tools,
             agent_tools::cancel_agent_tool_install,
             node_runtime::install_nodejs_on_windows,
@@ -653,6 +656,9 @@ pub fn run() {
             skills::search_marketplace_skills,
             skills::get_marketplace_skill_details,
             skills::install_marketplace_skill,
+            mcp::get_mcp_settings,
+            mcp::set_mcp_settings,
+            mcp::test_mcp_server,
         ])
         .build(tauri::generate_context!())
         .expect("error while running tauri application")

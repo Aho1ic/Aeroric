@@ -41,7 +41,8 @@
         }
       ],
       "expo-secure-store",
-      "./plugins/with-local-notifications-only"
+      "./plugins/with-local-notifications-only",
+      "./plugins/with-release-launch-scheme"
     ]
   }
 }

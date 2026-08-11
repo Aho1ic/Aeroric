@@ -15,6 +15,7 @@ import {
   Smartphone,
   MonitorUp,
   Route,
+  Plug,
 } from "lucide-react";
 import type {
   ThemeMode,
@@ -43,6 +44,7 @@ import { UsageDashboard } from "./UsageDashboard";
 import { AnimatedSelectionTrack } from "./ui/AnimatedSelection";
 import type { AppSettingsNavItem, NavKey, NavSection } from "./app-settings/types";
 import { WslPanel } from "./app-settings/WslPanel";
+import { McpPanel } from "./app-settings/McpPanel";
 import { APP_PLATFORM } from "../platform";
 
 const ALL_AGENT_CONFIGS_NAV_KEY = "__all_agent_configs__";
@@ -60,6 +62,7 @@ const BASE_NAV_ITEMS: AppSettingsNavItem[] = [
     icon: Route,
   },
   { key: "remote", labelKey: "appSettings.remote", section: "application", icon: Smartphone },
+  { key: "mcp", labelKey: "appSettings.mcp", section: "application", icon: Plug },
   {
     key: "usage",
     labelKey: "usageStats.nav",
@@ -186,6 +189,7 @@ const SettingsPanel = memo(function SettingsPanel({
   if (nav === "proxy") return <ProxyPanel />;
   if (nav === "local-router") return <LocalRouterPanel />;
   if (nav === "remote") return <RemoteAccessPanel />;
+  if (nav === "mcp") return <McpPanel />;
   if (nav === "wsl") return <WslPanel />;
   if (nav === "usage") return <UsageDashboard embedded />;
   if (nav === "agent-updates") return <AgentUpdatesPanel />;

@@ -95,23 +95,35 @@ vi.mock("../components/ProjectRail", () => ({
   ProjectRail: () => <nav>rail</nav>,
 }));
 
-vi.mock("../components/ssh/SshWorkspace", () => ({
-  SshWorkspace: ({
-    remoteConnection,
-    layout,
-    onLayoutChange,
-  }: RemoteConnectionMockProps & {
-    layout: "split" | "full";
-    onLayoutChange: (layout: "split" | "full") => void;
-  }) => (
-    <div data-testid="ssh-workspace" data-remote-connection={remoteConnection?.id ?? ""}>
-      ssh workspace
-      <button type="button" onClick={() => onLayoutChange(layout === "full" ? "split" : "full")}>
-        toggle ssh layout
-      </button>
-    </div>
-  ),
-}));
+vi.mock("../components/ssh/SshWorkspace", async () => {
+  const ReactModule = await import("react");
+  return {
+    SshWorkspace: ({
+      remoteConnection,
+      layout,
+      onLayoutChange,
+    }: RemoteConnectionMockProps & {
+      layout: "split" | "full";
+      onLayoutChange: (layout: "split" | "full") => void;
+    }) => {
+      const [page, setPage] = ReactModule.useState(1);
+      return (
+        <div data-testid="ssh-workspace" data-remote-connection={remoteConnection?.id ?? ""}>
+          ssh workspace
+          <button
+            type="button"
+            onClick={() => onLayoutChange(layout === "full" ? "split" : "full")}
+          >
+            toggle ssh layout
+          </button>
+          <button type="button" onClick={() => setPage((current) => current + 1)}>
+            ssh page {page}
+          </button>
+        </div>
+      );
+    },
+  };
+});
 
 vi.mock("../components/FileExplorer", () => ({
   FileExplorer: ({
@@ -1334,11 +1346,34 @@ describe("ProjectPage right toolbar", () => {
     );
 
     await user.click(screen.getByTitle("SSH"));
-    expect(screen.getByTestId("ssh-workspace")).toBeInTheDocument();
+    expect(screen.getByTestId("ssh-workspace")).toBeVisible();
 
     await user.click(screen.getByTitle("Terminal"));
-    expect(screen.queryByTestId("ssh-workspace")).not.toBeInTheDocument();
+    expect(screen.getByTestId("ssh-workspace")).not.toBeVisible();
     expect(screen.getByTestId("shell-terminal")).toBeInTheDocument();
+  });
+
+  it("hides the SSH workspace without losing its current state", async () => {
+    const user = userEvent.setup();
+
+    render(
+      <I18nProvider>
+        <ProjectPage {...projectPageProps()} />
+      </I18nProvider>,
+    );
+
+    const sshButton = screen.getByTitle("SSH");
+    await user.click(sshButton);
+    const sshWorkspace = await screen.findByTestId("ssh-workspace");
+    await user.click(screen.getByRole("button", { name: "ssh page 1" }));
+    expect(screen.getByRole("button", { name: "ssh page 2" })).toBeVisible();
+
+    await user.click(sshButton);
+    expect(sshWorkspace).toBeInTheDocument();
+    expect(sshWorkspace).not.toBeVisible();
+
+    await user.click(sshButton);
+    expect(screen.getByRole("button", { name: "ssh page 2" })).toBeVisible();
   });
 
   it("shows only the latest right-toolbar workspace", async () => {
@@ -1351,10 +1386,10 @@ describe("ProjectPage right toolbar", () => {
     );
 
     await user.click(screen.getByTitle("SSH"));
-    expect(screen.getByTestId("ssh-workspace")).toBeInTheDocument();
+    expect(screen.getByTestId("ssh-workspace")).toBeVisible();
 
     await user.click(screen.getByTitle("Docker"));
-    expect(screen.queryByTestId("ssh-workspace")).not.toBeInTheDocument();
+    expect(screen.getByTestId("ssh-workspace")).not.toBeVisible();
     expect(screen.getByTestId("docker-view")).toBeInTheDocument();
 
     await user.click(screen.getByTitle("Terminal"));

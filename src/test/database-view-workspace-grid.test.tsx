@@ -951,7 +951,7 @@ describe("DatabaseView workspace and data grid", () => {
     const tableInfoTabs = screen.getByRole("tablist", { name: "Table info sections" });
     const ddlTab = await within(tableInfoTabs).findByRole("tab", { name: /DDL 1/i });
     expect(ddlTab).toBeInTheDocument();
-  });
+  }, 60_000);
 
   it("keeps long DBX column type text clear of sort controls", async () => {
     const user = userEvent.setup();
@@ -1529,7 +1529,7 @@ describe("DatabaseView workspace and data grid", () => {
 
     await user.click(within(dialog).getByRole("button", { name: "Close" }));
     expect(screen.queryByRole("dialog", { name: "Cell value" })).not.toBeInTheDocument();
-  }, 30_000);
+  }, 60_000);
 
   it("selects numeric DBX grid values on double click and accepts text input", async () => {
     const user = userEvent.setup();

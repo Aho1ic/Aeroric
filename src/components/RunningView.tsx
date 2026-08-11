@@ -15,6 +15,7 @@ import { agentDisplayLabel, isCodexLikeAgent, type AgentOption } from "../agents
 import { useI18n } from "../i18n";
 import type { TerminalResizeFn } from "../hooks/useTerminalManager";
 import { shouldOfferWindowsNodeInstaller } from "./agentRuntimeRecovery";
+import { AgentConfigSwitchDialog, type AgentConfigSwitchValues } from "./AgentConfigSwitchDialog";
 import { Button } from "./ui/Button";
 import s from "../styles";
 import {
@@ -29,6 +30,7 @@ import {
   CheckCircle2,
   Download,
   Zap,
+  Settings2,
 } from "lucide-react";
 
 interface SessionMetrics {
@@ -87,6 +89,7 @@ export function RunningView({
   onDiscardWorktree,
   onReconnect,
   onMarkDone,
+  onSwitchConfig,
   onInput,
   onResize,
   onRegisterTerminal,
@@ -112,6 +115,7 @@ export function RunningView({
   onDiscardWorktree?: () => Promise<void>;
   onReconnect: () => void;
   onMarkDone: () => void;
+  onSwitchConfig?: (values: AgentConfigSwitchValues) => Promise<void> | void;
   onInput: (data: string) => void;
   onResize: (cols: number, rows: number) => void;
   onRegisterTerminal: (
@@ -165,6 +169,7 @@ export function RunningView({
   const [generatingName, setGeneratingName] = useState(false);
   const [worktreeBusy, setWorktreeBusy] = useState<"merge" | "discard" | null>(null);
   const [exporting, setExporting] = useState(false);
+  const [switchConfigOpen, setSwitchConfigOpen] = useState(false);
   const [bannerCompact, setBannerCompact] = useState(false);
   const [nodeInstallerState, setNodeInstallerState] = useState<
     "idle" | "installing" | "succeeded" | "failed"
@@ -504,6 +509,18 @@ export function RunningView({
         </div>
         {isActive && (
           <>
+            {onSwitchConfig && (
+              <button
+                type="button"
+                style={s.resumeBtn}
+                onClick={() => setSwitchConfigOpen(true)}
+                disabled={switchConfigOpen}
+                title={t("running.switchConfig")}
+              >
+                <Settings2 size={12} strokeWidth={2.3} />
+                <span>{t("running.switchConfig")}</span>
+              </button>
+            )}
             <button style={s.doneBtn} onClick={onMarkDone}>
               <CheckCircle2 size={12} strokeWidth={2.5} />
               <span>{t("running.markDone")}</span>
@@ -906,6 +923,15 @@ export function RunningView({
           )}
         </div>
       )}
+      <AgentConfigSwitchDialog
+        task={task}
+        open={switchConfigOpen}
+        onClose={() => setSwitchConfigOpen(false)}
+        onSubmit={async (values) => {
+          await onSwitchConfig?.(values);
+          setSwitchConfigOpen(false);
+        }}
+      />
     </div>
   );
 }

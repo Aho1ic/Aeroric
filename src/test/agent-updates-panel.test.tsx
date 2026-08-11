@@ -4,24 +4,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AgentUpdatesPanel } from "../components/app-settings/AgentUpdatesPanel";
 import { I18nProvider } from "../i18n";
 
-const { agentOptions, invokeMock, toolStatuses } = vi.hoisted(() => ({
-  agentOptions: [
-    {
-      value: "claude",
-      label: "Claude Code",
-      configFile: "",
-      configLang: "json",
-      codexLike: false,
-    },
-    {
-      value: "codex",
-      label: "Codex",
-      configFile: "",
-      configLang: "toml",
-      codexLike: true,
-    },
-  ],
+const { invokeMock, latestVersions, toolStatuses } = vi.hoisted(() => ({
   invokeMock: vi.fn(),
+  latestVersions: [
+    { agent: "claude", version: "1.1.0", error_code: null as string | null, error: "" },
+    { agent: "codex", version: "1.1.0", error_code: null as string | null, error: "" },
+  ],
   toolStatuses: [
     {
       agent: "claude",
@@ -62,10 +50,6 @@ vi.mock("@tauri-apps/api/event", () => ({
   listen: vi.fn().mockResolvedValue(() => {}),
 }));
 
-vi.mock("../hooks/useAgentOptions", () => ({
-  useAgentOptions: () => agentOptions,
-}));
-
 function renderPanel() {
   return render(
     <I18nProvider>
@@ -78,7 +62,6 @@ describe("AgentUpdatesPanel", () => {
   beforeEach(() => {
     localStorage.setItem("aeroric:language", "en");
     invokeMock.mockReset();
-    agentOptions.splice(2);
     toolStatuses[0].installed = true;
     toolStatuses[0].managed = false;
     toolStatuses[0].version = "1.0.0";
@@ -89,13 +72,15 @@ describe("AgentUpdatesPanel", () => {
     toolStatuses[1].version = "1.0.0";
     toolStatuses[1].error_code = null;
     toolStatuses[1].error = "";
+    latestVersions[0].version = "1.1.0";
+    latestVersions[1].version = "1.1.0";
     invokeMock.mockImplementation(
       (
         command: string,
         args?: { agents?: string[]; request?: { operation_id: string; agents: string[] } },
       ) => {
         if (command === "get_agent_tool_status") return Promise.resolve(toolStatuses);
-        if (command === "detect_agent_version") return Promise.resolve("1.0.0");
+        if (command === "get_agent_latest_versions") return Promise.resolve(latestVersions);
         if (command === "upgrade_agent_versions") {
           return Promise.resolve(
             (args?.agents ?? []).map((agent) => ({
@@ -133,6 +118,15 @@ describe("AgentUpdatesPanel", () => {
     );
   });
 
+  it("renders exactly one card for Claude Code and one for Codex", async () => {
+    renderPanel();
+
+    expect(await screen.findByText("Claude Code")).toBeInTheDocument();
+    expect(screen.getByText("Codex")).toBeInTheDocument();
+    // 简化后不再有逐配置的多选 checkbox。
+    expect(screen.queryAllByRole("checkbox")).toHaveLength(0);
+  });
+
   it("shows exactly one refresh action while versions are loading", async () => {
     let resolveStatuses!: (value: typeof toolStatuses) => void;
     const pendingStatuses = new Promise<typeof toolStatuses>((resolve) => {
@@ -140,7 +134,7 @@ describe("AgentUpdatesPanel", () => {
     });
     invokeMock.mockImplementation((command: string) => {
       if (command === "get_agent_tool_status") return pendingStatuses;
-      if (command === "detect_agent_version") return Promise.resolve("1.0.0");
+      if (command === "get_agent_latest_versions") return Promise.resolve(latestVersions);
       return Promise.resolve(null);
     });
 
@@ -158,44 +152,49 @@ describe("AgentUpdatesPanel", () => {
     expect(screen.queryByRole("button", { name: "Refreshing..." })).not.toBeInTheDocument();
   });
 
-  it("selects all configurations and upgrades them together", async () => {
-    const user = userEvent.setup();
+  it("shows current and latest versions with an update-available hint", async () => {
     renderPanel();
 
-    await waitFor(() =>
-      expect(invokeMock).toHaveBeenCalledWith("detect_agent_version", { agent: "claude" }),
-    );
-    // 两个分类卡片各有“全选” checkbox,分别勾选后再点各自的“Upgrade all”。
-    const selectAllCheckboxes = screen.getAllByRole("checkbox", {
-      name: "Select all Agent configurations",
-    });
-    expect(selectAllCheckboxes).toHaveLength(2);
-    await user.click(selectAllCheckboxes[0]);
-    await user.click(selectAllCheckboxes[1]);
-
-    const upgradeAllButtons = await screen.findAllByRole("button", { name: "Upgrade all" });
-    expect(upgradeAllButtons).toHaveLength(2);
-    await user.click(upgradeAllButtons[0]);
-    await user.click(upgradeAllButtons[1]);
-
-    await waitFor(() =>
-      expect(invokeMock).toHaveBeenCalledWith("upgrade_agent_versions", { agents: ["claude"] }),
-    );
-    expect(invokeMock).toHaveBeenCalledWith("upgrade_agent_versions", { agents: ["codex"] });
+    expect(await screen.findAllByText(/Current version: 1\.0\.0/)).toHaveLength(2);
+    expect(screen.getAllByText(/Latest version: 1\.1\.0/)).toHaveLength(2);
+    expect(screen.getAllByText("Update available")).toHaveLength(2);
+    expect(screen.queryByText("Up to date")).not.toBeInTheDocument();
   });
 
-  it("upgrades only the Codex category from its action button", async () => {
+  it("marks an Agent as up to date when both versions match", async () => {
+    latestVersions[0].version = "1.0.0";
+    renderPanel();
+
+    expect(await screen.findByText("Up to date")).toBeInTheDocument();
+    expect(screen.getAllByText("Update available")).toHaveLength(1);
+  });
+
+  it("hides the latest version row when the lookup fails", async () => {
+    invokeMock.mockImplementation((command: string) => {
+      if (command === "get_agent_tool_status") return Promise.resolve(toolStatuses);
+      if (command === "get_agent_latest_versions") return Promise.reject("network_unavailable");
+      return Promise.resolve(null);
+    });
+    renderPanel();
+
+    expect(await screen.findAllByText(/Current version: 1\.0\.0/)).toHaveLength(2);
+    expect(screen.queryByText(/Latest version/)).not.toBeInTheDocument();
+    expect(screen.queryByText("Update available")).not.toBeInTheDocument();
+    expect(screen.queryByText("Up to date")).not.toBeInTheDocument();
+  });
+
+  it("upgrades only the Agent whose button was clicked", async () => {
     const user = userEvent.setup();
     renderPanel();
 
-    await waitFor(() =>
-      expect(screen.getAllByRole("button", { name: "Upgrade all" })).toHaveLength(2),
-    );
-    await user.click(screen.getAllByRole("button", { name: "Upgrade all" })[1]);
+    const upgradeButtons = await screen.findAllByRole("button", { name: "Upgrade" });
+    expect(upgradeButtons).toHaveLength(2);
+    await user.click(upgradeButtons[1]);
 
     await waitFor(() =>
       expect(invokeMock).toHaveBeenCalledWith("upgrade_agent_versions", { agents: ["codex"] }),
     );
+    expect(invokeMock).not.toHaveBeenCalledWith("upgrade_agent_versions", { agents: ["claude"] });
   });
 
   it("installs a missing built-in Agent instead of running the upgrade command", async () => {
@@ -204,9 +203,7 @@ describe("AgentUpdatesPanel", () => {
     const user = userEvent.setup();
     renderPanel();
 
-    // Claude 分类缺失 → 头部按钮显示 "Install all";点击触发 install_agent_tools(["claude"])。
-    const installButtons = await screen.findAllByRole("button", { name: "Install all" });
-    await user.click(installButtons[0]);
+    await user.click(await screen.findByRole("button", { name: "Install" }));
 
     await waitFor(() =>
       expect(invokeMock).toHaveBeenCalledWith("install_agent_tools", {
@@ -219,77 +216,20 @@ describe("AgentUpdatesPanel", () => {
     expect(invokeMock).not.toHaveBeenCalledWith("upgrade_agent_versions", { agents: ["claude"] });
     expect(await screen.findByText("/managed/claude")).toBeInTheDocument();
     expect(screen.getByText("Login command:")).toBeInTheDocument();
-    expect(screen.getByText("claude")).toBeInTheDocument();
   });
 
-  it("splits mixed bulk actions across category cards", async () => {
-    toolStatuses[0].installed = false;
-    toolStatuses[0].version = "";
-    const user = userEvent.setup();
-    renderPanel();
-
-    // Claude 分类(claude 缺失):全选后 Install all → install_agent_tools(["claude"])
-    const selectAllCheckboxes = screen.getAllByRole("checkbox", {
-      name: "Select all Agent configurations",
-    });
-    await user.click(selectAllCheckboxes[0]);
-    const installButtons = await screen.findAllByRole("button", { name: "Install all" });
-    await user.click(installButtons[0]);
-    await waitFor(() =>
-      expect(invokeMock).toHaveBeenCalledWith("install_agent_tools", {
-        request: {
-          operation_id: expect.any(String),
-          agents: ["claude"],
-        },
-      }),
-    );
-    await waitFor(() =>
-      expect(invokeMock).toHaveBeenCalledWith("detect_agent_version", { agent: "claude" }),
-    );
-    // Codex 分类(codex 已安装):Upgrade all → upgrade_agent_versions(["codex"])
-    // 第一张卡(Claude)因 claude 缺失显示 Install all;第二张卡(Codex)显示 Upgrade all。
-    const upgradeAllButtons = await screen.findAllByRole("button", { name: "Upgrade all" });
-    expect(upgradeAllButtons).toHaveLength(1);
-    await user.click(upgradeAllButtons[0]);
-    await waitFor(
-      () => {
-        const codexUpgradeCall = invokeMock.mock.calls.find(
-          ([command, args]) =>
-            command === "upgrade_agent_versions" &&
-            (args as { agents?: string[] } | undefined)?.agents?.includes("codex"),
-        );
-        expect(codexUpgradeCall).toBeDefined();
-      },
-      { timeout: 8000 },
-    );
-  });
-
-  it("excludes an unsupported missing Agent from installation and bulk actions", async () => {
+  it("disables the action and explains why on an unsupported platform", async () => {
     toolStatuses[0].installed = false;
     toolStatuses[0].version = "";
     toolStatuses[0].error_code = "unsupported_platform";
     toolStatuses[0].error = "Claude Code is not available for linux/aarch64";
-    const user = userEvent.setup();
     renderPanel();
 
-    // 不支持时 Claude 分类卡片的 Install all 应被禁用。
-    const installButtons = await screen.findAllByRole("button", { name: "Install all" });
-    expect(installButtons[0]).toBeDisabled();
+    // Claude 未安装 → 按钮为 Install，但平台不支持所以禁用；Codex 仍可升级。
+    const installButton = await screen.findByRole("button", { name: "Install" });
+    expect(installButton).toBeDisabled();
     expect(screen.getByText("One-click install is unavailable on this platform.")).toBeVisible();
-    expect(screen.getByRole("checkbox", { name: "Claude Code" })).toBeDisabled();
-
-    // Codex 分类可正常全选 + Upgrade all。
-    const selectAllCheckboxes = screen.getAllByRole("checkbox", {
-      name: "Select all Agent configurations",
-    });
-    await user.click(selectAllCheckboxes[1]);
-    const upgradeAllButtons = await screen.findAllByRole("button", { name: "Upgrade all" });
-    await user.click(upgradeAllButtons[1]);
-
-    await waitFor(() =>
-      expect(invokeMock).toHaveBeenCalledWith("upgrade_agent_versions", { agents: ["codex"] }),
-    );
-    expect(invokeMock).not.toHaveBeenCalledWith("install_agent_tools", expect.anything());
+    expect(screen.getByRole("button", { name: "Upgrade" })).toBeEnabled();
   });
 
   it("keeps the existing upgrade channel available on an unsupported install platform", async () => {
@@ -298,13 +238,13 @@ describe("AgentUpdatesPanel", () => {
     const user = userEvent.setup();
     renderPanel();
 
-    // claude 仍 installed=true,分类显示 Upgrade all 且可用。
-    const upgradeAllButtons = await screen.findAllByRole("button", { name: "Upgrade all" });
-    expect(upgradeAllButtons[0]).toBeEnabled();
-    await user.click(upgradeAllButtons[0]);
+    // claude 仍 installed=true，但 unsupported 时按钮禁用，Codex 依旧可升级。
+    const upgradeButtons = await screen.findAllByRole("button", { name: "Upgrade" });
+    expect(upgradeButtons[0]).toBeDisabled();
+    await user.click(upgradeButtons[1]);
 
     await waitFor(() =>
-      expect(invokeMock).toHaveBeenCalledWith("upgrade_agent_versions", { agents: ["claude"] }),
+      expect(invokeMock).toHaveBeenCalledWith("upgrade_agent_versions", { agents: ["codex"] }),
     );
   });
 
@@ -313,8 +253,8 @@ describe("AgentUpdatesPanel", () => {
     const user = userEvent.setup();
     renderPanel();
 
-    const upgradeAllButtons = await screen.findAllByRole("button", { name: "Upgrade all" });
-    await user.click(upgradeAllButtons[1]);
+    const upgradeButtons = await screen.findAllByRole("button", { name: "Upgrade" });
+    await user.click(upgradeButtons[1]);
 
     await waitFor(() =>
       expect(invokeMock).toHaveBeenCalledWith("install_agent_tools", {
@@ -329,59 +269,21 @@ describe("AgentUpdatesPanel", () => {
   it("keeps a localized operation conflict visible after refreshing versions", async () => {
     toolStatuses[0].installed = false;
     toolStatuses[0].version = "";
-    invokeMock.mockImplementation(
-      (
-        command: string,
-        args?: { agents?: string[]; request?: { operation_id: string; agents: string[] } },
-      ) => {
-        if (command === "get_agent_tool_status") return Promise.resolve(toolStatuses);
-        if (command === "detect_agent_version") return Promise.resolve("1.0.0");
-        if (command === "install_agent_tools") {
-          return Promise.reject(
-            `operation_conflict: claude is already being installed by operation ${args?.request?.operation_id}`,
-          );
-        }
-        return Promise.resolve([]);
-      },
-    );
-    const user = userEvent.setup();
-    renderPanel();
-
-    const installButtons = await screen.findAllByRole("button", { name: "Install all" });
-    await user.click(installButtons[0]);
-
-    expect(
-      await screen.findByText("This Agent already has an installation in progress."),
-    ).toBeVisible();
-  });
-
-  it("never sends a custom Agent to the built-in installer", async () => {
-    agentOptions.push({
-      value: "custom-agent",
-      label: "Custom Agent",
-      configFile: "",
-      configLang: "json",
-      codexLike: false,
+    invokeMock.mockImplementation((command: string) => {
+      if (command === "get_agent_tool_status") return Promise.resolve(toolStatuses);
+      if (command === "get_agent_latest_versions") return Promise.resolve(latestVersions);
+      if (command === "install_agent_tools") {
+        return Promise.reject("operation_conflict: claude is already being installed");
+      }
+      return Promise.resolve([]);
     });
     const user = userEvent.setup();
     renderPanel();
 
-    const customCheckbox = await screen.findByRole("checkbox", { name: "Custom Agent" });
-    await user.click(customCheckbox);
-    // 自定义 Agent 与 claude 同属 Claude 分类;claude managed=false 已安装 → 走 upgrade。
-    const upgradeAllButtons = await screen.findAllByRole("button", { name: "Upgrade all" });
-    await user.click(upgradeAllButtons[0]);
+    await user.click(await screen.findByRole("button", { name: "Install" }));
 
-    await waitFor(() =>
-      expect(invokeMock).toHaveBeenCalledWith("upgrade_agent_versions", {
-        agents: ["claude", "custom-agent"],
-      }),
-    );
-    const installCalls = invokeMock.mock.calls.filter(
-      ([command]) => command === "install_agent_tools",
-    );
     expect(
-      installCalls.every(([, args]) => !(args?.request?.agents ?? []).includes("custom-agent")),
-    ).toBe(true);
+      await screen.findByText("This Agent already has an installation in progress."),
+    ).toBeVisible();
   });
 });

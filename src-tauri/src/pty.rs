@@ -1297,6 +1297,24 @@ pub async fn run_task(
         crate::hooks::claude_settings_path_for_launch(speed.as_deref() == Some("fast"), use_hooks)?
     };
 
+    // MCP 配置路径/profile 名:Claude 用 --mcp-config,Codex 用 -p
+    let claude_mcp_config_path = if is_codex {
+        None
+    } else {
+        crate::mcp::claude_mcp_config_path_for_launch()?
+    };
+    let codex_mcp_profile = if is_codex {
+        // 内建 Codex 用 ~/.codex,自定义 codex-like 用 agent-homes/{id}
+        let codex_home = if agent == "codex" {
+            crate::hooks::codex_home()?
+        } else {
+            crate::app_settings::custom_agent_home(&agent)?
+        };
+        crate::mcp::codex_mcp_profile_for_launch(&codex_home)?
+    } else {
+        None
+    };
+
     let mut cmd = if is_codex {
         let mut c = build_codex_cmd(&launch, &permission_mode);
         add_codex_launch_args(
@@ -1310,6 +1328,11 @@ pub async fn run_task(
         // skip;由 Aeroric 注入、来源可信,这里免 trust 直接运行。
         if use_hooks {
             c.arg("--dangerously-bypass-hook-trust");
+        }
+        // MCP profile 必须在 `--`/positional prompt 前注入
+        if let Some(ref profile) = codex_mcp_profile {
+            c.arg("-p");
+            c.arg(profile);
         }
         if use_native_initial_prompt {
             for arg in initial_prompt_args(&final_prompt, true) {
@@ -1334,6 +1357,11 @@ pub async fn run_task(
         // ~/.claude/settings.json(Claude 对 hooks 跨源 merge,用户 hook 不受影响)。
         if let Some(path) = claude_settings_path.as_ref() {
             c.arg("--settings");
+            c.arg(path.to_string_lossy().as_ref());
+        }
+        // MCP 配置通过 --mcp-config 注入
+        if let Some(path) = claude_mcp_config_path.as_ref() {
+            c.arg("--mcp-config");
             c.arg(path.to_string_lossy().as_ref());
         }
         if use_native_initial_prompt {
@@ -1561,6 +1589,7 @@ pub async fn get_active_task_ids(
 
 #[tauri::command]
 pub async fn reset_task_process(
+    app: AppHandle,
     task_manager: State<'_, TaskManager>,
     task_id: String,
 ) -> Result<(), String> {
@@ -1572,12 +1601,38 @@ pub async fn reset_task_process(
         .remove(&task_id);
     let child_arc = {
         let mut masters = task_manager.pty_masters.lock();
+        let mut pending_sizes = task_manager.pending_pty_sizes.lock();
         let mut writers = task_manager.pty_writers.lock();
         let mut children = task_manager.child_handles.lock();
         masters.remove(&task_id);
+        pending_sizes.remove(&task_id);
         writers.remove(&task_id);
         children.remove(&task_id)
     };
+    task_manager.initial_input_signals.lock().remove(&task_id);
+
+    // A reset replaces the process under the same task ID. Clear the old
+    // session registrations before killing the child so its watcher cannot
+    // keep reporting stale status events into the replacement run.
+    let codex_path = task_manager
+        .codex_sessions
+        .lock()
+        .remove(&task_id)
+        .map(|info| info.session_path);
+    let claude_path = task_manager
+        .claude_sessions
+        .lock()
+        .remove(&task_id)
+        .map(|info| info.session_path);
+    let mut claimed = task_manager.claimed_session_paths.lock();
+    if let Some(path) = codex_path {
+        claimed.remove(&path);
+    }
+    if let Some(path) = claude_path {
+        claimed.remove(&path);
+    }
+    drop(claimed);
+    crate::event_watcher::cleanup_task_events(&app, &task_id);
 
     if let Some(arc) = child_arc {
         let mut child = arc.lock();
@@ -1653,6 +1708,23 @@ pub async fn resume_task(
         crate::hooks::claude_settings_path_for_launch(speed.as_deref() == Some("fast"), use_hooks)?
     };
 
+    // MCP 配置路径/profile 名:Claude 用 --mcp-config,Codex 用 -p
+    let claude_mcp_config_path = if is_codex {
+        None
+    } else {
+        crate::mcp::claude_mcp_config_path_for_launch()?
+    };
+    let codex_mcp_profile = if is_codex {
+        let codex_home = if agent == "codex" {
+            crate::hooks::codex_home()?
+        } else {
+            crate::app_settings::custom_agent_home(&agent)?
+        };
+        crate::mcp::codex_mcp_profile_for_launch(&codex_home)?
+    } else {
+        None
+    };
+
     let mut cmd = if is_codex {
         let mut c = build_codex_cmd(&launch, &permission_mode);
         add_codex_launch_args(
@@ -1665,6 +1737,11 @@ pub async fn resume_task(
         // Aeroric 注入的 hook 默认未信任会被 Codex skip;来源可信,免 trust 直接运行。
         if use_hooks {
             c.arg("--dangerously-bypass-hook-trust");
+        }
+        // MCP profile 必须在 resume 子命令前注入
+        if let Some(ref profile) = codex_mcp_profile {
+            c.arg("-p");
+            c.arg(profile);
         }
         c.arg("resume");
         c.arg(&session_id);
@@ -1683,6 +1760,11 @@ pub async fn resume_task(
         // Claude:命令行 `--settings` 传入 Aeroric 自有 hooks 文件,不改用户配置。
         if let Some(path) = claude_settings_path.as_ref() {
             c.arg("--settings");
+            c.arg(path.to_string_lossy().as_ref());
+        }
+        // MCP 配置通过 --mcp-config 注入
+        if let Some(path) = claude_mcp_config_path.as_ref() {
+            c.arg("--mcp-config");
             c.arg(path.to_string_lossy().as_ref());
         }
         c

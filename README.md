@@ -246,7 +246,9 @@ For a tagged release such as `v1.3.8`, keep `package.json`, `src-tauri/tauri.con
 - `Aeroric_X.Y.Z_x64_en-US.msi`
 - `SHA256SUMS.txt`
 
-The release workflow intentionally fails when signing credentials are absent.
+The release workflow intentionally fails when signing credentials are absent and
+`REQUIRE_SIGNED_RELEASES=true` is set. By default, unsigned installers are built
+when credentials are missing.
 Configure these GitHub Actions secrets before tagging:
 
 - macOS: `APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`, `APPLE_ID`,

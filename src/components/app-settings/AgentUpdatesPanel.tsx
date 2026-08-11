@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties }
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { Check, Download, RefreshCw, Square, TriangleAlert } from "lucide-react";
-import { useAgentOptions } from "../../hooks/useAgentOptions";
 import { useI18n } from "../../i18n";
 import { Button } from "../ui/Button";
 import claudeLogo from "../../assets/claude.svg";
@@ -13,11 +12,13 @@ import {
   type AgentInstallProgress,
   type AgentInstallResult,
   type AgentInstallStage,
+  type AgentLatestVersion,
   type AgentToolStatus,
   type AgentUpgradeResult,
 } from "./types";
 
-const BUILT_IN_AGENTS = new Set(["claude", "codex"]);
+const AGENTS = ["claude", "codex"] as const;
+type Agent = (typeof AGENTS)[number];
 
 const installErrorKey: Record<AgentInstallErrorCode, string> = {
   unsupported_platform: "appSettings.installError.unsupportedPlatform",
@@ -69,25 +70,17 @@ type ProgressSnapshot = {
   percent: number | null;
 };
 
-type Translate = (key: string, params?: Record<string, string | number>) => string;
-
-type Category = {
-  codexLike: boolean;
+type AgentData = {
+  agent: Agent;
   name: string;
   logo: string;
-  items: ReturnType<typeof useAgentOptions>;
-};
-
-type AgentDerivation = {
-  agent: string;
-  label: string;
-  builtIn: boolean;
-  managed: boolean;
   installed: boolean;
   statusLoading: boolean;
   unsupported: boolean;
-  unsupportedInstall: boolean;
-  rowBusy: boolean;
+  managed: boolean;
+  currentVersion: string;
+  latestVersion: string;
+  busy: boolean;
   progressSnapshot: ProgressSnapshot | null;
   success: boolean | undefined;
   isInstall: boolean;
@@ -95,54 +88,72 @@ type AgentDerivation = {
   loginCommand: string | undefined;
   installPath: string | undefined;
   resultMessage: string | undefined;
-  selectable: boolean;
 };
 
 export function AgentUpdatesPanel() {
   const { t } = useI18n();
-  const agentOptions = useAgentOptions();
-  const agentIds = useMemo(
-    () => agentOptions.map((option) => String(option.value)),
-    [agentOptions],
-  );
-  const [selected, setSelected] = useState<Set<string>>(() => new Set());
-  const [versions, setVersions] = useState<Record<string, string>>({});
-  const [statuses, setStatuses] = useState<Record<string, AgentToolStatus>>({});
-  const [upgradeResults, setUpgradeResults] = useState<Record<string, AgentUpgradeResult>>({});
-  const [installResults, setInstallResults] = useState<Record<string, AgentInstallResult>>({});
-  const [progress, setProgress] = useState<Record<string, AgentInstallProgress>>({});
+  const [statuses, setStatuses] = useState<Record<Agent, AgentToolStatus | null>>({
+    claude: null,
+    codex: null,
+  });
+  const [upgradeResults, setUpgradeResults] = useState<Record<Agent, AgentUpgradeResult | null>>({
+    claude: null,
+    codex: null,
+  });
+  const [installResults, setInstallResults] = useState<Record<Agent, AgentInstallResult | null>>({
+    claude: null,
+    codex: null,
+  });
+  const [progress, setProgress] = useState<Record<Agent, AgentInstallProgress | null>>({
+    claude: null,
+    codex: null,
+  });
+  const [latestVersions, setLatestVersions] = useState<Record<Agent, string>>({
+    claude: "",
+    codex: "",
+  });
   const [refreshing, setRefreshing] = useState(false);
-  const [busyAgents, setBusyAgents] = useState<Set<string>>(() => new Set());
+  const [busyAgents, setBusyAgents] = useState<Set<Agent>>(new Set());
   const [operationId, setOperationId] = useState<string | null>(null);
-  const activeOperationsRef = useRef<Record<string, string>>({});
+  const activeOperationsRef = useRef<Record<Agent, string>>({} as Record<Agent, string>);
   const [error, setError] = useState<string | null>(null);
 
   const refreshVersions = useCallback(async () => {
     setRefreshing(true);
     setError(null);
     try {
-      const [toolStatuses, detected] = await Promise.all([
-        invoke<AgentToolStatus[]>("get_agent_tool_status"),
-        Promise.all(
-          agentIds.map(async (agent) => [
-            agent,
-            await invoke<string>("detect_agent_version", { agent }),
-          ]),
-        ),
-      ]);
-      setStatuses(Object.fromEntries(toolStatuses.map((status) => [status.agent, status])));
-      setVersions(Object.fromEntries(detected));
+      const toolStatuses = await invoke<AgentToolStatus[]>("get_agent_tool_status");
+      const statusMap: Record<Agent, AgentToolStatus | null> = { claude: null, codex: null };
+      for (const status of toolStatuses) {
+        if (status.agent === "claude" || status.agent === "codex") {
+          statusMap[status.agent] = status;
+        }
+      }
+      setStatuses(statusMap);
     } catch (reason) {
       setError(String(reason));
     } finally {
       setRefreshing(false);
     }
-  }, [agentIds]);
+
+    // 最新版本需要联网查询，失败时静默降级：只隐藏"最新版本"一行，不阻塞安装状态展示。
+    try {
+      const latest = await invoke<AgentLatestVersion[]>("get_agent_latest_versions");
+      const latestMap: Record<Agent, string> = { claude: "", codex: "" };
+      for (const entry of latest) {
+        if (entry.agent === "claude" || entry.agent === "codex") {
+          latestMap[entry.agent] = entry.version;
+        }
+      }
+      setLatestVersions(latestMap);
+    } catch {
+      setLatestVersions({ claude: "", codex: "" });
+    }
+  }, []);
 
   useEffect(() => {
-    setSelected((current) => new Set([...current].filter((agent) => agentIds.includes(agent))));
     void refreshVersions();
-  }, [agentIds, refreshVersions]);
+  }, [refreshVersions]);
 
   useEffect(() => {
     let disposed = false;
@@ -150,8 +161,12 @@ export function AgentUpdatesPanel() {
     void listen<AgentInstallProgress>("agent-tool-install-progress", (event) => {
       if (disposed) return;
       const next = event.payload;
-      if (activeOperationsRef.current[next.agent] !== next.operation_id) return;
-      setProgress((current) => ({ ...current, [next.agent]: next }));
+      if (
+        (next.agent === "claude" || next.agent === "codex") &&
+        activeOperationsRef.current[next.agent] === next.operation_id
+      ) {
+        setProgress((current) => ({ ...current, [next.agent]: next }));
+      }
     }).then((release) => {
       if (disposed) release();
       else unlisten = release;
@@ -162,107 +177,53 @@ export function AgentUpdatesPanel() {
     };
   }, []);
 
-  const selectableAgentIds = useMemo(
-    () =>
-      agentIds.filter((agent) => {
-        if (!BUILT_IN_AGENTS.has(agent)) return true;
-        const status = statuses[agent];
-        return Boolean(
-          status && !(!status.installed && status.error_code === "unsupported_platform"),
-        );
-      }),
-    [agentIds, statuses],
-  );
+  async function runAgent(agent: Agent) {
+    const status = statuses[agent];
+    if (!status || (!status.installed && status.error_code === "unsupported_platform")) {
+      return;
+    }
 
-  useEffect(() => {
-    setSelected(
-      (current) => new Set([...current].filter((agent) => selectableAgentIds.includes(agent))),
-    );
-  }, [selectableAgentIds]);
+    const isInstall = !status.installed || status.managed;
+    const nextOperationId = isInstall ? newOperationId() : null;
 
-  async function runAgents(agents: string[]) {
-    const runnableAgents = agents.filter((agent) => {
-      if (!BUILT_IN_AGENTS.has(agent)) return true;
-      const status = statuses[agent];
-      return Boolean(
-        status && !(!status.installed && status.error_code === "unsupported_platform"),
-      );
-    });
-    if (runnableAgents.length === 0) return;
-    const installAgents = runnableAgents.filter((agent) => {
-      const status = statuses[agent];
-      return BUILT_IN_AGENTS.has(agent) && (!status?.installed || status.managed);
-    });
-    const upgradeAgents = runnableAgents.filter((agent) => !installAgents.includes(agent));
-    const nextOperationId = installAgents.length > 0 ? newOperationId() : null;
-    setBusyAgents(new Set(runnableAgents));
+    setBusyAgents(new Set([agent]));
     setOperationId(nextOperationId);
     if (nextOperationId) {
-      activeOperationsRef.current = {
-        ...activeOperationsRef.current,
-        ...Object.fromEntries(installAgents.map((agent) => [agent, nextOperationId])),
-      };
+      activeOperationsRef.current[agent] = nextOperationId;
     }
-    setProgress((current) => {
-      const next = { ...current };
-      for (const agent of runnableAgents) delete next[agent];
-      return next;
-    });
-    setInstallResults((current) => {
-      const next = { ...current };
-      for (const agent of runnableAgents) delete next[agent];
-      return next;
-    });
-    setUpgradeResults((current) => {
-      const next = { ...current };
-      for (const agent of runnableAgents) delete next[agent];
-      return next;
-    });
+    setProgress((current) => ({ ...current, [agent]: null }));
+    setInstallResults((current) => ({ ...current, [agent]: null }));
+    setUpgradeResults((current) => ({ ...current, [agent]: null }));
     setError(null);
 
     try {
-      const tasks: Promise<void>[] = [];
-      if (installAgents.length > 0 && nextOperationId) {
-        tasks.push(
-          invoke<AgentInstallResult[]>("install_agent_tools", {
-            request: {
-              operation_id: nextOperationId,
-              agents: installAgents,
-            },
-          }).then((results) => {
-            setInstallResults((current) => ({
-              ...current,
-              ...Object.fromEntries(results.map((result) => [result.agent, result])),
-            }));
-          }),
-        );
+      if (isInstall && nextOperationId) {
+        const results = await invoke<AgentInstallResult[]>("install_agent_tools", {
+          request: {
+            operation_id: nextOperationId,
+            agents: [agent],
+          },
+        });
+        setInstallResults((current) => ({
+          ...current,
+          [agent]: results[0] ?? null,
+        }));
+      } else {
+        const results = await invoke<AgentUpgradeResult[]>("upgrade_agent_versions", {
+          agents: [agent],
+        });
+        setUpgradeResults((current) => ({
+          ...current,
+          [agent]: results[0] ?? null,
+        }));
       }
-      if (upgradeAgents.length > 0) {
-        tasks.push(
-          invoke<AgentUpgradeResult[]>("upgrade_agent_versions", {
-            agents: upgradeAgents,
-          }).then((results) => {
-            setUpgradeResults((current) => ({
-              ...current,
-              ...Object.fromEntries(results.map((result) => [result.agent, result])),
-            }));
-          }),
-        );
-      }
-      const outcomes = await Promise.allSettled(tasks);
-      const failures = outcomes
-        .filter((outcome): outcome is PromiseRejectedResult => outcome.status === "rejected")
-        .map((outcome) => installInvokeErrorMessage(outcome.reason, t));
       await refreshVersions();
-      if (failures.length > 0) setError(failures.join("\n"));
       window.dispatchEvent(new Event(APP_SETTINGS_CHANGED_EVENT));
+    } catch (reason) {
+      setError(installInvokeErrorMessage(reason, t));
     } finally {
-      if (nextOperationId) {
-        for (const agent of installAgents) {
-          if (activeOperationsRef.current[agent] === nextOperationId) {
-            delete activeOperationsRef.current[agent];
-          }
-        }
+      if (nextOperationId && activeOperationsRef.current[agent] === nextOperationId) {
+        delete activeOperationsRef.current[agent];
       }
       setBusyAgents(new Set());
       setOperationId(null);
@@ -276,60 +237,27 @@ export function AgentUpdatesPanel() {
     );
   }
 
-  const busy = busyAgents.size > 0;
-
-  // 按 codexLike 分两类:claude code (false) 与 codex (true),分别上下两个大卡片。
-  const categories: Category[] = useMemo(() => {
-    const claudeItems: ReturnType<typeof useAgentOptions> = [];
-    const codexItems: ReturnType<typeof useAgentOptions> = [];
-    for (const option of agentOptions) {
-      if (option.codexLike) codexItems.push(option);
-      else claudeItems.push(option);
-    }
-    return [
-      {
-        codexLike: false,
-        name: t("appSettings.localRouter.claude"),
-        logo: claudeLogo,
-        items: claudeItems,
-      },
-      {
-        codexLike: true,
-        name: t("appSettings.localRouter.codex"),
-        logo: chatgptLogo,
-        items: codexItems,
-      },
-    ];
-  }, [agentOptions, t]);
-
-  // 为每个 agent 派生展示状态(逐 agent 进度/结果),但不再逐行显示版本。
-  const derivationsByAgent = useMemo(() => {
-    const map = new Map<string, AgentDerivation>();
-    for (const option of agentOptions) {
-      const agent = String(option.value);
-      const builtIn = BUILT_IN_AGENTS.has(agent);
+  const agentsData: AgentData[] = useMemo(() => {
+    return AGENTS.map((agent) => {
       const status = statuses[agent];
-      const unsupported = status?.error_code === "unsupported_platform";
-      const installed = builtIn ? Boolean(status?.installed) : Boolean(versions[agent]);
-      const statusLoading = builtIn && !status;
-      const unsupportedInstall = builtIn && !installed && unsupported;
-      const rowBusy = busyAgents.has(agent);
       const installProgress = progress[agent];
       const installResult = installResults[agent];
       const upgradeResult = upgradeResults[agent];
       const success = installResult?.success ?? upgradeResult?.success;
       const resultErrorCode: AgentInstallErrorCode | undefined =
         installResult?.success === false ? (installResult.error_code ?? undefined) : undefined;
-      map.set(agent, {
+
+      return {
         agent,
-        label: option.label,
-        builtIn,
+        name: agent === "claude" ? "Claude Code" : "Codex",
+        logo: agent === "claude" ? claudeLogo : chatgptLogo,
+        installed: Boolean(status?.installed),
+        statusLoading: !status,
+        unsupported: status?.error_code === "unsupported_platform",
         managed: Boolean(status?.managed),
-        installed,
-        statusLoading,
-        unsupported,
-        unsupportedInstall,
-        rowBusy,
+        currentVersion: status?.version ?? "",
+        latestVersion: latestVersions[agent],
+        busy: busyAgents.has(agent),
         progressSnapshot: installProgress
           ? {
               stage: t(stageKey[installProgress.stage]),
@@ -342,21 +270,11 @@ export function AgentUpdatesPanel() {
         loginCommand: installResult?.success ? installResult.login_command : undefined,
         installPath: installResult?.success && installResult.path ? installResult.path : undefined,
         resultMessage: installResult?.message ?? upgradeResult?.message,
-        selectable: selectableAgentIds.includes(agent),
-      });
-    }
-    return map;
-  }, [
-    agentOptions,
-    statuses,
-    versions,
-    progress,
-    installResults,
-    upgradeResults,
-    busyAgents,
-    selectableAgentIds,
-    t,
-  ]);
+      };
+    });
+  }, [statuses, progress, installResults, upgradeResults, latestVersions, busyAgents, t]);
+
+  const busy = busyAgents.size > 0;
 
   return (
     <div style={{ flex: 1, minHeight: 0, overflow: "auto", padding: "18px 20px" }}>
@@ -413,80 +331,9 @@ export function AgentUpdatesPanel() {
       )}
 
       <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-        {categories.map((category) => {
-          const derivations = category.items
-            .map((option) => derivationsByAgent.get(String(option.value)))
-            .filter((d): d is AgentDerivation => Boolean(d));
-          if (!derivations.length) return null;
-
-          // 该分类是否被本平台完全不支持(仅内置且均未安装且不支持)。
-          const builtInDerivations = derivations.filter((d) => d.builtIn);
-          const allUnsupported =
-            builtInDerivations.length > 0 &&
-            builtInDerivations.every((d) => d.unsupported && !d.installed);
-
-          // 该分类的“代表”版本:取首个内置 agent 的版本;无内置则取首个检测到的版本。
-          // 由于后端 UpgradeKind 按 Claude/Codex 去重,同类全部 agent 共享同一版本——
-          // 因此分类卡片上展示一份版本即可,不再逐配置显示相同版本号。
-          const representative =
-            builtInDerivations[0] ?? derivations.find((d) => d.installed) ?? derivations[0];
-          const showVersionUnknown = !representative.installed && !representative.statusLoading;
-          const categoryBusy = derivations.some((d) => d.rowBusy);
-          const selectableAgents = derivations.filter((d) => d.selectable).map((d) => d.agent);
-          const selectedCount = selectableAgents.filter((agent) => selected.has(agent)).length;
-          const allCategorySelected =
-            selectableAgents.length > 0 && selectedCount === selectableAgents.length;
-          const indeterminate = selectedCount > 0 && !allCategorySelected;
-          const needsInstall = builtInDerivations.some((d) => !d.installed && !d.unsupported);
-
-          return (
-            <CategoryCard
-              key={category.codexLike ? "codex" : "claude"}
-              logo={category.logo}
-              name={category.name}
-              count={category.items.length}
-              managed={representative.managed}
-              statusLoading={representative.statusLoading}
-              unsupported={allUnsupported}
-              showVersionUnknown={showVersionUnknown}
-              busy={categoryBusy}
-              allSelected={allCategorySelected}
-              indeterminate={indeterminate}
-              onToggleAll={(checked) =>
-                setSelected((current) => {
-                  const next = new Set(current);
-                  if (checked) selectableAgents.forEach((agent) => next.add(agent));
-                  else selectableAgents.forEach((agent) => next.delete(agent));
-                  return next;
-                })
-              }
-              onRun={() => void runAgents(selectableAgents)}
-              actionLabel={
-                needsInstall
-                  ? t("appSettings.updatesCategoryInstallAll")
-                  : t("appSettings.updatesCategoryUpgradeAll")
-              }
-              t={t}
-            >
-              {derivations.map((derivation) => (
-                <CategoryAgentRow
-                  key={derivation.agent}
-                  derivation={derivation}
-                  checked={selected.has(derivation.agent)}
-                  onToggle={(checked) =>
-                    setSelected((current) => {
-                      const next = new Set(current);
-                      if (checked) next.add(derivation.agent);
-                      else next.delete(derivation.agent);
-                      return next;
-                    })
-                  }
-                  t={t}
-                />
-              ))}
-            </CategoryCard>
-          );
-        })}
+        {agentsData.map((data) => (
+          <AgentCard key={data.agent} data={data} onRun={() => void runAgent(data.agent)} t={t} />
+        ))}
       </div>
 
       {operationId && (
@@ -508,280 +355,226 @@ const cardStyle: CSSProperties = {
   overflow: "hidden",
 };
 
-const countBadgeStyle: CSSProperties = {
-  display: "inline-flex",
-  alignItems: "center",
-  padding: "1px 7px",
-  borderRadius: 999,
-  fontSize: 10,
-  fontWeight: 600,
-  color: "var(--text-hint)",
-  background: "color-mix(in srgb, var(--text-hint) 12%, transparent)",
-};
-
-type CategoryCardProps = {
-  logo: string;
-  name: string;
-  count: number;
-  managed: boolean;
-  statusLoading: boolean;
-  unsupported: boolean;
-  showVersionUnknown: boolean;
-  busy: boolean;
-  allSelected: boolean;
-  indeterminate: boolean;
-  onToggleAll: (checked: boolean) => void;
+type AgentCardProps = {
+  data: AgentData;
   onRun: () => void;
-  actionLabel: string;
-  t: Translate;
-  children: React.ReactNode;
+  t: (key: string, params?: Record<string, string | number>) => string;
 };
 
-function CategoryCard({
-  logo,
-  name,
-  count,
-  managed,
-  statusLoading,
-  unsupported,
-  showVersionUnknown,
-  busy,
-  allSelected,
-  indeterminate,
-  onToggleAll,
-  onRun,
-  actionLabel,
-  t,
-  children,
-}: CategoryCardProps) {
-  const versionStatus = unsupported
-    ? t("appSettings.updatesCategoryUnsupported")
-    : showVersionUnknown
-      ? t("appSettings.updatesCategoryVersionUnknown")
-      : `${t("appSettings.updatesCategoryVersionLabel")}${
-          managed ? ` · ${t("appSettings.aeroricManaged")}` : ""
-        }`;
-  return (
-    <section style={cardStyle}>
-      <header
-        style={{
-          display: "grid",
-          gridTemplateColumns: "auto minmax(0, 1fr) auto auto",
-          alignItems: "center",
-          gap: 14,
-          padding: "14px 16px",
-          borderBottom: "1px solid var(--border-dim)",
-          background: "var(--bg-subtle)",
-        }}
-      >
-        <img
-          src={logo}
-          alt=""
-          aria-hidden="true"
-          style={{ width: 28, height: 28, borderRadius: 6, flexShrink: 0 }}
-        />
-        <div style={{ minWidth: 0 }}>
-          <div
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: 8,
-              fontSize: 14,
-              fontWeight: 650,
-              color: "var(--text-primary)",
-            }}
-          >
-            {t("appSettings.updatesCategoryCard", { name })}
-            <span style={countBadgeStyle}>
-              {t("appSettings.updatesCategoryCovering", { count })}
-            </span>
-          </div>
-          <div
-            style={{
-              marginTop: 3,
-              fontSize: 11,
-              color: unsupported ? "var(--danger)" : "var(--text-hint)",
-            }}
-          >
-            {versionStatus}
-          </div>
-        </div>
-        <input
-          type="checkbox"
-          aria-label={t("appSettings.selectAllAgents")}
-          checked={allSelected}
-          ref={(el) => {
-            if (el) el.indeterminate = indeterminate;
-          }}
-          onChange={(event) => onToggleAll(event.target.checked)}
-          disabled={busy || statusLoading}
-        />
-        <Button variant="default" size="sm" onClick={onRun} disabled={busy || unsupported}>
-          {busy ? <RefreshCw size={12} className="spin" /> : <Download size={12} />}
-          {busy ? t("appSettings.installWorking") : actionLabel}
-        </Button>
-      </header>
-
-      <div style={{ display: "flex", flexDirection: "column" }}>{children}</div>
-    </section>
-  );
-}
-
-type CategoryAgentRowProps = {
-  derivation: AgentDerivation;
-  checked: boolean;
-  onToggle: (checked: boolean) => void;
-  t: Translate;
-};
-
-function CategoryAgentRow({ derivation, checked, onToggle, t }: CategoryAgentRowProps) {
+function AgentCard({ data, onRun, t }: AgentCardProps) {
   const {
-    label,
+    name,
+    logo,
     installed,
-    managed,
-    unsupportedInstall,
-    rowBusy,
-    progressSnapshot,
     statusLoading,
+    unsupported,
+    managed,
+    currentVersion,
+    latestVersion,
+    busy,
+    progressSnapshot,
     success,
     isInstall,
     resultErrorCode,
     loginCommand,
     installPath,
     resultMessage,
-    selectable,
-  } = derivation;
+  } = data;
+
+  const actionLabel = installed ? t("appSettings.upgradeAgent") : t("appSettings.installAgent");
+  // 仅在两侧版本都已知时才判断"有更新"，避免离线或查询失败时误报。
+  const updateAvailable = Boolean(
+    latestVersion && currentVersion && latestVersion !== currentVersion,
+  );
+
   return (
-    <div
-      style={{
-        display: "grid",
-        gridTemplateColumns: "24px minmax(120px, 1fr) minmax(150px, 1.2fr)",
-        alignItems: "center",
-        columnGap: 12,
-        padding: "9px 16px",
-        borderBottom: "1px solid var(--border-dim)",
-      }}
-    >
-      <input
-        type="checkbox"
-        aria-label={label}
-        checked={checked}
-        onChange={(event) => onToggle(event.target.checked)}
-        disabled={rowBusy || statusLoading || !selectable || unsupportedInstall}
-      />
-      <div style={{ minWidth: 0 }}>
-        <div
-          title={label}
-          style={{
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-            whiteSpace: "nowrap",
-            color: "var(--text-primary)",
-            fontSize: 12.5,
-            fontWeight: 600,
-          }}
-        >
-          {label}
-        </div>
-        <div style={{ marginTop: 2, fontSize: 10.5, color: "var(--text-hint)" }}>
-          {installed
-            ? managed
-              ? t("appSettings.aeroricManaged")
-              : t("appSettings.updatesCategoryVersionLabel")
-            : t("appSettings.updatesCategoryVersionUnknown")}
-        </div>
-      </div>
-      <div style={{ minWidth: 0 }}>
-        {rowBusy && progressSnapshot ? (
-          <>
-            <div
-              style={{
-                display: "flex",
-                justifyContent: "space-between",
-                gap: 8,
-                fontSize: 10.5,
-                color: "var(--text-secondary)",
-              }}
-            >
-              <span>{progressSnapshot.stage}</span>
-              <span>{progressSnapshot.percent ?? ""}%</span>
+    <section style={cardStyle}>
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "auto minmax(0, 1fr) auto",
+          alignItems: "center",
+          gap: 14,
+          padding: "16px 18px",
+        }}
+      >
+        <img
+          src={logo}
+          alt=""
+          aria-hidden="true"
+          style={{ width: 36, height: 36, borderRadius: 8, flexShrink: 0 }}
+        />
+        <div style={{ minWidth: 0 }}>
+          <div
+            style={{
+              fontSize: 14.5,
+              fontWeight: 650,
+              color: "var(--text-primary)",
+              marginBottom: 6,
+            }}
+          >
+            {name}
+          </div>
+          {unsupported ? (
+            <div style={{ fontSize: 11.5, color: "var(--danger)" }}>
+              {t(installErrorKey.unsupported_platform)}
             </div>
-            <div
-              style={{
-                height: 3,
-                marginTop: 3,
-                overflow: "hidden",
-                borderRadius: 2,
-                background: "var(--border-dim)",
-              }}
-            >
+          ) : statusLoading ? (
+            <div style={{ fontSize: 11.5, color: "var(--text-hint)" }}>
+              {t("appSettings.loadingStatus")}
+            </div>
+          ) : !installed ? (
+            <div style={{ fontSize: 11.5, color: "var(--text-hint)" }}>
+              {t("appSettings.notInstalled")}
+            </div>
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
               <div
                 style={{
-                  width: `${progressSnapshot.percent ?? 0}%`,
-                  height: "100%",
-                  background: "var(--accent)",
-                  transition: "width 160ms ease",
-                }}
-              />
-            </div>
-          </>
-        ) : (
-          <>
-            {unsupportedInstall && (
-              <div style={{ fontSize: 10.5, color: "var(--danger)" }}>
-                {t(installErrorKey.unsupported_platform)}
-              </div>
-            )}
-            {!unsupportedInstall && success !== undefined && (
-              <div
-                title={resultMessage}
-                style={{
+                  fontSize: 11.5,
+                  color: "var(--text-secondary)",
                   display: "flex",
                   alignItems: "center",
-                  gap: 4,
-                  fontSize: 10.5,
-                  color: success ? "var(--success)" : "var(--danger)",
+                  gap: 6,
                 }}
               >
-                {success ? <Check size={11} /> : <TriangleAlert size={11} />}
-                {success
-                  ? isInstall
-                    ? t("appSettings.installComplete")
-                    : t("appSettings.upgradeComplete")
-                  : isInstall
-                    ? t("appSettings.installFailed")
-                    : t("appSettings.upgradeFailed")}
+                <span>
+                  {t("appSettings.currentVersion")}: {currentVersion || t("appSettings.unknown")}
+                </span>
+                {managed && (
+                  <>
+                    <span style={{ color: "var(--border-dim)" }}>•</span>
+                    <span style={{ color: "var(--text-hint)" }}>
+                      {t("appSettings.aeroricManaged")}
+                    </span>
+                  </>
+                )}
               </div>
-            )}
-            {!unsupportedInstall && success && isInstall && installPath && (
-              <div
-                title={installPath}
-                style={{
-                  marginTop: 2,
-                  fontSize: 10.5,
-                  color: "var(--text-hint)",
-                  overflow: "hidden",
-                  textOverflow: "ellipsis",
-                  whiteSpace: "nowrap",
-                }}
-              >
-                {installPath}
-              </div>
-            )}
-            {!unsupportedInstall && success && isInstall && loginCommand && (
-              <div style={{ marginTop: 2, fontSize: 10.5, color: "var(--text-hint)" }}>
-                {t("appSettings.loginCommand")}:{" "}
-                <code style={{ fontFamily: "var(--font-mono)" }}>{loginCommand}</code>
-              </div>
-            )}
-            {!unsupportedInstall && success === undefined && resultErrorCode && (
-              <div style={{ fontSize: 10.5, color: "var(--text-hint)" }}>
-                {t(installErrorKey[resultErrorCode])}
-              </div>
-            )}
-          </>
-        )}
+              {latestVersion && (
+                <div
+                  style={{
+                    fontSize: 11.5,
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 6,
+                    color: updateAvailable ? "var(--accent)" : "var(--text-hint)",
+                  }}
+                >
+                  <span>
+                    {t("appSettings.latestVersion")}: {latestVersion}
+                  </span>
+                  <span style={{ color: "var(--border-dim)" }}>•</span>
+                  <span>
+                    {updateAvailable ? t("appSettings.updateAvailable") : t("appSettings.upToDate")}
+                  </span>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+        <Button variant="default" size="sm" onClick={onRun} disabled={busy || unsupported}>
+          {busy ? <RefreshCw size={12} className="spin" /> : <Download size={12} />}
+          {busy ? t("appSettings.installWorking") : actionLabel}
+        </Button>
       </div>
-    </div>
+
+      {busy && progressSnapshot && (
+        <div
+          style={{
+            padding: "0 18px 16px",
+            borderTop: "1px solid var(--border-dim)",
+            paddingTop: 12,
+          }}
+        >
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              gap: 8,
+              fontSize: 11,
+              color: "var(--text-secondary)",
+              marginBottom: 6,
+            }}
+          >
+            <span>{progressSnapshot.stage}</span>
+            <span>{progressSnapshot.percent ?? ""}%</span>
+          </div>
+          <div
+            style={{
+              height: 4,
+              overflow: "hidden",
+              borderRadius: 2,
+              background: "var(--border-dim)",
+            }}
+          >
+            <div
+              style={{
+                width: `${progressSnapshot.percent ?? 0}%`,
+                height: "100%",
+                background: "var(--accent)",
+                transition: "width 160ms ease",
+              }}
+            />
+          </div>
+        </div>
+      )}
+
+      {!busy && success !== undefined && (
+        <div
+          style={{
+            padding: "12px 18px",
+            borderTop: "1px solid var(--border-dim)",
+            background: "var(--bg-subtle)",
+          }}
+        >
+          <div
+            title={resultMessage}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 6,
+              fontSize: 11.5,
+              color: success ? "var(--success)" : "var(--danger)",
+              marginBottom: success && (installPath || loginCommand) ? 6 : 0,
+            }}
+          >
+            {success ? <Check size={13} /> : <TriangleAlert size={13} />}
+            {success
+              ? isInstall
+                ? t("appSettings.installComplete")
+                : t("appSettings.upgradeComplete")
+              : isInstall
+                ? t("appSettings.installFailed")
+                : t("appSettings.upgradeFailed")}
+          </div>
+          {success && isInstall && installPath && (
+            <div
+              title={installPath}
+              style={{
+                fontSize: 10.5,
+                color: "var(--text-hint)",
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
+                marginBottom: loginCommand ? 4 : 0,
+              }}
+            >
+              {installPath}
+            </div>
+          )}
+          {success && isInstall && loginCommand && (
+            <div style={{ fontSize: 10.5, color: "var(--text-hint)" }}>
+              {t("appSettings.loginCommand")}:{" "}
+              <code style={{ fontFamily: "var(--font-mono)" }}>{loginCommand}</code>
+            </div>
+          )}
+          {!success && resultErrorCode && (
+            <div style={{ fontSize: 10.5, color: "var(--text-hint)", marginTop: 4 }}>
+              {t(installErrorKey[resultErrorCode])}
+            </div>
+          )}
+        </div>
+      )}
+    </section>
   );
 }

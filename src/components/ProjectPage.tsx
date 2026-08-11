@@ -26,6 +26,7 @@ import type {
 import { resolveProjectLocation } from "../types";
 import { NewTaskView, type NewTaskDraft } from "./NewTaskView";
 import { RunningView } from "./RunningView";
+import type { AgentConfigSwitchValues } from "./AgentConfigSwitchDialog";
 import { FileExplorer } from "./FileExplorer";
 import { CommandPalette, type CommandPaletteCommand } from "./command-palette/CommandPalette";
 import { extractRunPreviewCandidates } from "./preview/portPanelState";
@@ -196,6 +197,7 @@ export function ProjectPage({
   onDiscardWorktree,
   onReconnectTask,
   onMarkTaskDone,
+  onSwitchTaskConfig,
   onInput,
   onResize,
   onRegisterTerminal,
@@ -268,6 +270,7 @@ export function ProjectPage({
   onDiscardWorktree: (id: string) => Promise<void>;
   onReconnectTask: (id: string) => void;
   onMarkTaskDone: (id: string) => void;
+  onSwitchTaskConfig?: (id: string, values: AgentConfigSwitchValues) => Promise<void> | void;
   onInput: (taskId: string, data: string) => void;
   onResize: (taskId: string, cols: number, rows: number) => void;
   onRegisterTerminal: (
@@ -349,6 +352,9 @@ export function ProjectPage({
   const [activeShellId, setActiveShellId] = useState<string | null>(null);
   const [showRemoteProjectTerminal, setShowRemoteProjectTerminal] = useState(true);
   const [sshLayout, setSshLayout] = useState<SshWorkspaceLayout>("full");
+  // SSH 工作区首次打开后常驻挂载,切换按钮只做显示/隐藏,避免已连接的会话被销毁。
+  const [sshMounted, setSshMounted] = useState(false);
+  const [sshVisible, setSshVisible] = useState(false);
   const [sshOrigin, setSshOrigin] = useState<{
     rightPanel: RightPanel;
     showShellTerminal: boolean;
@@ -610,7 +616,7 @@ export function ProjectPage({
     Boolean(remoteConnection),
   );
   const showRemoteTargetTerminal = showRemoteSshTerminal || projectLocation.kind === "wsl";
-  const isSshMode = rightPanel === "ssh";
+  const isSshMode = rightPanel === "ssh" && sshVisible;
   const primaryRightPanel = isSshMode ? (sshOrigin?.rightPanel ?? null) : rightPanel;
   const primaryShellTerminal = isSshMode
     ? (sshOrigin?.showShellTerminal ?? showShellTerminal)
@@ -647,10 +653,10 @@ export function ProjectPage({
     },
   );
   useEffect(() => {
-    if (rightPanel !== "ssh" && sshOrigin) {
-      setSshOrigin(null);
-    }
-  }, [rightPanel, sshOrigin]);
+    if (rightPanel === "ssh") return;
+    if (sshOrigin) setSshOrigin(null);
+    if (sshVisible) setSshVisible(false);
+  }, [rightPanel, sshOrigin, sshVisible]);
   const selectedTask = projectTasks.find((t) => t.id === selectedTaskId) ?? null;
   const resolveRunnableFileCommand = useCallback(
     async (filePath: string, env: CondaEnvironment | null): Promise<string | null> => {
@@ -994,16 +1000,19 @@ export function ProjectPage({
         setDatabaseMounted(true);
       }
       const label = projectPanelFeedbackLabel(panel, t);
+      const panelActive = panel === "ssh" ? isSshMode : rightPanel === panel;
       showActionFeedback(
-        rightPanel === panel
+        panelActive
           ? t("project.actionFeedback.closed", { action: label })
           : t("project.actionFeedback.opened", { action: label }),
-        rightPanel === panel ? "close" : "open",
+        panelActive ? "close" : "open",
         panel,
       );
       if (panel === "ssh") {
-        if (rightPanel === "ssh") {
+        if (panelActive) {
+          // 只隐藏 SSH 工作区,保留已建立的连接与终端输出。
           const origin = sshOrigin;
+          setSshVisible(false);
           setSshOrigin(null);
           setShowShellTerminal(origin?.showShellTerminal ?? false);
           setShowRemoteProjectTerminal(origin?.showRemoteProjectTerminal ?? false);
@@ -1018,7 +1027,10 @@ export function ProjectPage({
             showShellTerminal,
             showRemoteProjectTerminal,
           });
-          setSshLayout("full");
+          // 首次打开默认全屏;再次显示时沿用上次的 full / split 布局。
+          if (!sshMounted) setSshLayout("full");
+          setSshMounted(true);
+          setSshVisible(true);
           openRightPanel("ssh");
         }
         return;
@@ -1034,11 +1046,13 @@ export function ProjectPage({
       clearFileAndDiff,
       closeRightPanel,
       handleTogglePanel,
+      isSshMode,
       openRightPanel,
       rightPanel,
       showActionFeedback,
       showRemoteProjectTerminal,
       showShellTerminal,
+      sshMounted,
       sshOrigin,
       t,
     ],
@@ -1101,21 +1115,25 @@ export function ProjectPage({
       "open",
       "ssh",
     );
-    if (rightPanel !== "ssh") {
+    if (!isSshMode) {
       setSshOrigin({
         rightPanel,
         showShellTerminal,
         showRemoteProjectTerminal,
       });
-      setSshLayout("full");
+      if (!sshMounted) setSshLayout("full");
     }
+    setSshMounted(true);
+    setSshVisible(true);
     openRightPanel("ssh");
   }, [
+    isSshMode,
     openRightPanel,
     rightPanel,
     showActionFeedback,
     showRemoteProjectTerminal,
     showShellTerminal,
+    sshMounted,
     t,
   ]);
 
@@ -1124,6 +1142,7 @@ export function ProjectPage({
       setSftpMounted(true);
       setSftpConnectionId(connection.id);
       setSshOrigin(null);
+      setSshVisible(false);
       setShowShellTerminal(false);
       setShowRemoteProjectTerminal(false);
       openRightPanel("sftp");
@@ -2470,6 +2489,11 @@ export function ProjectPage({
                       onDiscardWorktree={() => onDiscardWorktree(task.id)}
                       onReconnect={() => onReconnectTask(task.id)}
                       onMarkDone={() => onMarkTaskDone(task.id)}
+                      onSwitchConfig={
+                        onSwitchTaskConfig
+                          ? (values) => onSwitchTaskConfig(task.id, values)
+                          : undefined
+                      }
                       onInput={(data) => onInput(task.id, data)}
                       onResize={(cols, rows) => onResize(task.id, cols, rows)}
                       onRegisterTerminal={(fn, resizeFn) =>
@@ -2496,17 +2520,18 @@ export function ProjectPage({
                 style={{ width: 1, minWidth: 1 }}
               />
             )}
-            {isSshMode && (
+            {sshMounted && (
               <div
                 className="project-center-ssh"
                 data-testid="project-center-ssh"
-                style={{ minWidth: 0 }}
+                aria-hidden={!isSshMode}
+                style={{ display: isSshMode ? "flex" : "none", minWidth: 0 }}
               >
                 <SshWorkspace
                   connections={sshConnections}
                   onConnectionsChange={onSshConnectionsChange}
                   onDeleteConnection={onDeleteSshConnection}
-                  active={visible}
+                  active={visible && isSshMode}
                   themeVariant={themeVariant}
                   terminalFontSize={terminalFontSize}
                   monoFontFamily={monoFontFamily}

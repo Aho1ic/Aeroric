@@ -94,8 +94,14 @@ fn claude_settings_path() -> Result<PathBuf, String> {
     Ok(home_dir()?.join(".claude").join("settings.json"))
 }
 
+/// 内建 Codex 的 CODEX_HOME(`~/.codex`)。自定义 codex-like Agent 有各自的
+/// 隔离 home,见 `crate::app_settings::custom_agent_home`。
+pub fn codex_home() -> Result<PathBuf, String> {
+    Ok(home_dir()?.join(".codex"))
+}
+
 fn codex_config_path() -> Result<PathBuf, String> {
-    Ok(home_dir()?.join(".codex").join("config.toml"))
+    Ok(codex_home()?.join("config.toml"))
 }
 
 // ── Node 检测 ───────────────────────────────────────────────────────────────
@@ -154,19 +160,24 @@ fn with_claude_fast_mode(mut value: Value) -> Result<Value, String> {
 /// Claude accepts a JSON file path for `--settings`; using one path is also
 /// important when Aeroric hooks are enabled because two `--settings` flags are
 /// not consistently merged by all Claude Code/Windows combinations.
+///
+/// MCP 不经此路径:Claude 的 settings.json 无 `mcpServers` 顶层键,MCP 服务器
+/// 只能经 `--mcp-config <file>` 加载,见 `crate::mcp::claude_mcp_config_path_for_launch`。
 pub fn claude_settings_path_for_launch(
     fast_mode: bool,
     include_hooks: bool,
 ) -> Result<Option<PathBuf>, String> {
+    let needs_settings = include_hooks;
+
     if !fast_mode {
-        return if include_hooks {
+        return if needs_settings {
             Ok(Some(aeroric_claude_settings_path()?))
         } else {
             Ok(None)
         };
     }
 
-    let base = if include_hooks {
+    let base = if needs_settings {
         let hooks_path = aeroric_claude_settings_path()?;
         let raw = fs::read_to_string(&hooks_path)
             .map_err(|error| format!("read {}: {error}", hooks_path.display()))?;
@@ -213,6 +224,10 @@ fn hook_command(node_path: &str, script: &str) -> String {
 
 /// 构造仅含 Aeroric hooks 的 Claude settings 值。只放 `hooks`(数组型,Claude 会
 /// 跨来源 merge + 按 command 去重),不含任何标量 key,因此不会覆盖用户配置。
+///
+/// MCP 不走这里:Claude 的 settings.json 没有 `mcpServers` 顶层键(实测经
+/// `--settings` 传入会被忽略),MCP 服务器只能经 `--mcp-config <file>` 加载。
+/// 见 `crate::mcp::claude_mcp_config_path_for_launch`。
 fn build_claude_settings_value(node_path: &str, script: &str) -> Value {
     let entry = serde_json::json!({
         "hooks": [{ "type": "command", "command": hook_command(node_path, script) }],
@@ -221,7 +236,10 @@ fn build_claude_settings_value(node_path: &str, script: &str) -> Value {
     for event in CLAUDE_EVENTS {
         hooks.insert((*event).to_string(), Value::Array(vec![entry.clone()]));
     }
-    serde_json::json!({ "hooks": Value::Object(hooks) })
+
+    let mut settings_object = Map::new();
+    settings_object.insert("hooks".to_string(), Value::Object(hooks));
+    Value::Object(settings_object)
 }
 
 /// 写入 Aeroric 自有 Claude settings 文件。用 serde_json 序列化——Windows 路径里的

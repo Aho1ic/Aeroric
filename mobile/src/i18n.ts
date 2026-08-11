@@ -176,6 +176,10 @@ const zh = {
   "term.hideKeyboard": "收起输入法",
   "term.phoneView": "手机视图",
   "term.desktopView": "电脑视图",
+  "term.copy": "复制",
+  "term.copied": "已复制到剪贴板",
+  "term.selectionHint": "拖动调整选区",
+  "term.cancelSelection": "取消选择",
 
   // 变更(diff)
   "changes.empty": "工作区没有未提交的变更。",
@@ -409,6 +413,10 @@ const en: Record<MessageKey, string> = {
   "term.hideKeyboard": "Hide keyboard",
   "term.phoneView": "Phone view",
   "term.desktopView": "Desktop view",
+  "term.copy": "Copy",
+  "term.copied": "Copied to clipboard",
+  "term.selectionHint": "Drag to adjust selection",
+  "term.cancelSelection": "Cancel selection",
 
   "changes.empty": "No uncommitted changes in the working tree.",
   "changes.unavailable.ssh": "View changes for SSH projects on the desktop.",

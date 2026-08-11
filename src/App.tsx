@@ -39,7 +39,8 @@ import {
   getTerminalFontSizeStorageKey,
 } from "./platform";
 import { composeFontStack } from "./utils/fonts";
-import { agentDisplayLabel, isCodexLikeAgent } from "./agents";
+import { agentDisplayLabel, isBuiltInAgent, isCodexLikeAgent } from "./agents";
+import type { AgentConfigSwitchValues } from "./components/AgentConfigSwitchDialog";
 import { useAgentOptions } from "./hooks/useAgentOptions";
 import { useTerminalManager } from "./hooks/useTerminalManager";
 import { useWorktreeDiffStats } from "./hooks/useWorktreeDiffStats";
@@ -97,6 +98,83 @@ import {
 const ProjectPage = lazy(() =>
   import("./components/ProjectPage").then((module) => ({ default: module.ProjectPage })),
 );
+
+interface SessionHandoffContent {
+  type: "text" | "tool_use" | "tool_result" | "thinking";
+  text?: string;
+  id?: string;
+  name?: string;
+  input?: string;
+  output?: string;
+  thinking?: string;
+}
+
+interface SessionHandoffMessage {
+  role: "user" | "assistant";
+  content: SessionHandoffContent[];
+}
+
+const MAX_HANDOFF_TERMINAL_BYTES = 8 * 1024 * 1024; // 8 MiB
+const MAX_HANDOFF_TRANSCRIPT_BYTES = 256 * 1024; // 256 KiB
+
+function formatSessionHandoff(
+  task: Task,
+  sourceAgentLabel: string,
+  messages: SessionHandoffMessage[],
+  terminalHistory: string,
+): string {
+  let transcript = messages
+    .map((message) => {
+      const parts = message.content
+        .map((content) => {
+          if (content.type === "text") return content.text ?? "";
+          if (content.type === "thinking") return `[thinking]\n${content.thinking ?? ""}`;
+          if (content.type === "tool_result") {
+            return `[tool result ${content.id ? `(${content.id})` : ""}]\n${content.output ?? ""}`;
+          }
+          return `[tool ${content.name ?? "unknown"} ${content.id ? `(${content.id})` : ""}]\n${content.input ?? ""}`;
+        })
+        .filter((part) => part.trim())
+        .join("\n");
+      return parts ? `${message.role.toUpperCase()}:\n${parts}` : "";
+    })
+    .filter(Boolean)
+    .join("\n\n");
+
+  // 尾部截断 transcript:超出 MAX_HANDOFF_TRANSCRIPT_BYTES 时保留最新部分
+  if (transcript.length > MAX_HANDOFF_TRANSCRIPT_BYTES) {
+    const tail = transcript.slice(-MAX_HANDOFF_TRANSCRIPT_BYTES);
+    const firstNewline = tail.indexOf("\n");
+    transcript =
+      "[...earlier conversation truncated...]\n" + tail.slice(firstNewline >= 0 ? firstNewline : 0);
+  }
+
+  // 尾部截断 terminal:超出 MAX_HANDOFF_TERMINAL_BYTES 时保留最新部分
+  let terminal = terminalHistory.trim();
+  if (terminal.length > MAX_HANDOFF_TERMINAL_BYTES) {
+    const tail = terminal.slice(-MAX_HANDOFF_TERMINAL_BYTES);
+    const firstNewline = tail.indexOf("\n");
+    terminal =
+      "[...earlier terminal output truncated...]\n" +
+      tail.slice(firstNewline >= 0 ? firstNewline : 0);
+  }
+
+  return [
+    "[Aeroric context handoff]",
+    `You are continuing an in-progress coding task that was started with ${sourceAgentLabel}.`,
+    "The previous agent became unavailable. Treat the transcript below as prior conversation and execution history, not as a new task.",
+    "Do not restart completed work. Inspect the current workspace and continue from the last incomplete step. Preserve the original user intent and existing changes.",
+    `Original task:\n${task.prompt}`,
+    transcript
+      ? `Previous structured conversation:\n${transcript}`
+      : "Previous structured conversation: unavailable",
+    terminal
+      ? `Previous terminal output (may include CLI and tool output):\n${terminal}`
+      : "Previous terminal output: unavailable",
+    "Continue the task now. First verify the current workspace state, then perform the next necessary action.",
+  ].join("\n\n");
+}
+
 function App() {
   const { showToast } = useToast();
   const { t } = useI18n();
@@ -809,11 +887,12 @@ function App() {
     images: string[],
     texts: string[] = [],
     injectPromptIntoTerminal = false,
+    promptOverride?: string,
   ) {
     invoke(taskCommandName("local", "run"), {
       taskId: task.id,
       projectPath,
-      prompt: task.prompt,
+      prompt: promptOverride ?? task.prompt,
       agent: task.agent,
       selectedModel: task.selectedModel,
       reasoningEffort: task.reasoningEffort,
@@ -837,12 +916,13 @@ function App() {
     connection: SshConnection,
     remoteProjectPath: string,
     injectPromptIntoTerminal = false,
+    promptOverride?: string,
   ) {
     invoke(taskCommandName("ssh", "run"), {
       taskId: task.id,
       connection,
       remoteProjectPath,
-      prompt: task.prompt,
+      prompt: promptOverride ?? task.prompt,
       agent: task.agent,
       selectedModel: task.selectedModel,
       reasoningEffort: task.reasoningEffort,
@@ -864,12 +944,13 @@ function App() {
     distribution: string,
     linuxProjectPath: string,
     injectPromptIntoTerminal = false,
+    promptOverride?: string,
   ) {
     invoke(taskCommandName("wsl", "run"), {
       taskId: task.id,
       distribution,
       linuxProjectPath,
-      prompt: task.prompt,
+      prompt: promptOverride ?? task.prompt,
       agent: task.agent,
       selectedModel: task.selectedModel,
       reasoningEffort: task.reasoningEffort,
@@ -1369,6 +1450,153 @@ function App() {
       invokeResumeTask(taskWithSession, project, sessionId);
     };
     return true;
+  }
+
+  async function handleSwitchTaskConfig(taskId: string, values: AgentConfigSwitchValues) {
+    const task = tasks.find((item) => item.id === taskId);
+    if (!task) return;
+    const project = projects.find((item) => item.id === task.projectId);
+    if (!project) return;
+
+    const projectLocation = resolveProjectLocation(project);
+    const sourceCodexLike = isCodexLikeAgent(task.agent, agentOptions);
+    const targetCodexLike = isCodexLikeAgent(values.agent, agentOptions);
+    const sameAgentFamily = sourceCodexLike === targetCodexLike;
+    // 内建 Agent(claude/codex)共享 ~/.claude 与 ~/.codex;每个自定义 Agent 有独立的
+    // agent-homes/{id}。会话文件只存在于写它的那个 home 里,所以只有两端 home 相同才能
+    // 原生 resume:内建↔内建(同家族即同 home)、或同一个自定义 Agent 自己换模型/权限。
+    // 内建↔自定义、以及两个不同的自定义 Agent 都必须走 handoff。
+    const sourceIsBuiltin = isBuiltInAgent(task.agent);
+    const targetIsBuiltin = isBuiltInAgent(values.agent);
+    const sameAgentHome = sourceIsBuiltin && targetIsBuiltin ? true : task.agent === values.agent;
+    const canNativeResume = sameAgentFamily && sameAgentHome;
+
+    const sourceSessionPath = sourceCodexLike ? task.codexSessionPath : task.claudeSessionPath;
+    let sourceSessionId = sourceCodexLike ? task.codexSessionId : task.claudeSessionId;
+    const sourceProjectPath = task.worktreePath ?? project.path;
+    let handoffPrompt: string | undefined;
+
+    if (!sourceSessionId && sourceSessionPath && projectLocation.kind === "local") {
+      try {
+        sourceSessionId =
+          (await invoke<string | null>("read_session_id", {
+            sessionPath: sourceSessionPath,
+            projectPath: sourceProjectPath,
+            isCodex: sourceCodexLike,
+          })) ?? undefined;
+      } catch (error) {
+        console.warn("read_session_id during agent switch failed", error);
+      }
+    }
+
+    // Native resume is lossless only inside the same Claude-like/Codex-like
+    // session family AND when both agents share the same session home.
+    if (!canNativeResume || !sourceSessionId) {
+      let messages: SessionHandoffMessage[] = [];
+      if (sourceSessionPath && projectLocation.kind === "local") {
+        try {
+          messages = await invoke<SessionHandoffMessage[]>("read_session_messages", {
+            sessionPath: sourceSessionPath,
+            projectPath: sourceProjectPath,
+            isCodex: sourceCodexLike,
+          });
+        } catch (error) {
+          console.warn("read_session_messages during agent switch failed", error);
+        }
+      }
+      let terminalHistory = "";
+      try {
+        terminalHistory = await invoke<string>("read_task_terminal_history", { taskId });
+      } catch (error) {
+        console.warn("read_task_terminal_history during agent switch failed", error);
+      }
+      handoffPrompt = formatSessionHandoff(
+        task,
+        agentDisplayLabel(task.agent, agentOptions),
+        messages,
+        terminalHistory,
+      );
+      if (!messages.length && !terminalHistory.trim() && !task.prompt.trim()) {
+        showToast(t("running.switchConfigNoContext"), "error");
+        return;
+      }
+    }
+
+    try {
+      // reset_task_process removes the old PTY handles before killing the child,
+      // so its exit monitor cannot emit a stale done/failed transition for the
+      // replacement process.
+      await invoke("reset_task_process", { taskId });
+    } catch (error) {
+      showToast(t("running.switchConfigFailed", { error: String(error) }), "error");
+      return;
+    }
+
+    const nextTask: Task = {
+      ...task,
+      agent: values.agent,
+      selectedModel: values.selectedModel,
+      reasoningEffort: values.reasoningEffort ?? undefined,
+      speed: values.speed,
+      permissionMode: values.permissionMode,
+      status: "pending",
+      attentionRequestedAt: undefined,
+      ...(canNativeResume
+        ? null
+        : targetCodexLike
+          ? { claudeSessionId: undefined, claudeSessionPath: undefined }
+          : { codexSessionId: undefined, codexSessionPath: undefined }),
+    };
+    const nextTasks = tasks.map((item) => (item.id === taskId ? nextTask : item));
+    setTasks(nextTasks);
+    persistProjectTasks(task.projectId, nextTasks, showToast, formatSaveTasksError);
+    await flushProjectTasks(task.projectId);
+    tm.resetTaskTerminal(taskId);
+    setTaskRunCounts((prev) => ({ ...prev, [taskId]: (prev[taskId] ?? 0) + 1 }));
+
+    if (canNativeResume && sourceSessionId) {
+      pendingResumeStartsRef.current[taskId] = () => {
+        invokeResumeTask(nextTask, project, sourceSessionId);
+      };
+      return;
+    }
+
+    const injectPrompt = true;
+    if (projectLocation.kind === "ssh") {
+      const connection = sshConnections.find((item) => item.id === projectLocation.connectionId);
+      if (!connection) {
+        const message = t("toast.remoteProjectMissingConnection");
+        updateTaskStatus(taskId, "failed", undefined, message);
+        showToast(message, "error");
+        return;
+      }
+      invokeRemoteRunTask(
+        nextTask,
+        connection,
+        projectLocation.remotePath,
+        injectPrompt,
+        handoffPrompt,
+      );
+      return;
+    }
+    if (projectLocation.kind === "wsl") {
+      invokeWslRunTask(
+        nextTask,
+        projectLocation.distribution,
+        projectLocation.linuxPath,
+        injectPrompt,
+        handoffPrompt,
+      );
+      return;
+    }
+    invokeRunTask(
+      nextTask,
+      nextTask.worktreePath ?? project.path,
+      [],
+      [],
+      injectPrompt,
+      handoffPrompt,
+    );
   }
 
   async function handleReconnectTask(taskId: string) {
@@ -1908,6 +2136,7 @@ function App() {
                 onDiscardWorktree={handleDiscardWorktree}
                 onReconnectTask={handleReconnectTask}
                 onMarkTaskDone={handleMarkTaskDone}
+                onSwitchTaskConfig={handleSwitchTaskConfig}
                 onInput={tm.handleInput}
                 onResize={tm.handleResize}
                 onRegisterTerminal={tm.handleRegisterTerminal}

@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { I18nProvider } from "../i18n";
@@ -165,13 +165,40 @@ describe("SftpPanel", () => {
     const progressButton = await screen.findByRole("button", { name: /Transfer progress/i });
     expect(progressButton).toHaveAttribute("aria-busy", "true");
 
-    await user.hover(progressButton);
-    expect(screen.getByText(/Copying README.md/i)).toBeInTheDocument();
+    await user.click(progressButton);
+    const history = screen.getByRole("region", { name: /Transfer history/i });
+    expect(within(history).getByText("README.md")).toBeInTheDocument();
+    expect(within(history).getByText("Running")).toBeInTheDocument();
 
     transferControl.finish?.();
     await waitFor(() => expect(progressButton).toHaveAttribute("aria-busy", "false"));
-    await user.hover(progressButton);
-    expect(screen.getByText(/Copied README.md/i)).toBeInTheDocument();
+    await waitFor(() => expect(within(history).getByText("Completed")).toBeInTheDocument());
+  });
+
+  it("shows the transfer icon until a transfer starts, and keeps history reachable", async () => {
+    const user = userEvent.setup();
+    vi.mocked(invoke).mockResolvedValue([]);
+
+    render(
+      <I18nProvider>
+        <SftpPanel
+          sshConnections={connections}
+          localDefaultPath="/Users/me"
+          active
+          themeVariant="light"
+          currentSshConnectionId="conn-2"
+        />
+      </I18nProvider>,
+    );
+
+    // 平时没有任务:按钮常驻但不显示百分比。
+    const progressButton = screen.getByRole("button", { name: /Transfer progress/i });
+    expect(progressButton).toHaveAttribute("aria-busy", "false");
+    expect(progressButton.querySelector(".sftp-progress-count")).toBeNull();
+
+    await user.click(progressButton);
+    const history = screen.getByRole("region", { name: /Transfer history/i });
+    expect(within(history).getByText(/No transfer tasks/i)).toBeInTheDocument();
   });
 
   it("defaults panes to modification time descending sort", async () => {
@@ -217,8 +244,106 @@ describe("SftpPanel", () => {
 
     const rows = await screen.findAllByText(/\.txt$/);
     expect(rows.map((row) => row.textContent)).toEqual(["new.txt", "old.txt"]);
-    expect(screen.getAllByRole("button", { name: "Modified" })[0]).toHaveClass("active");
-    expect(screen.getAllByRole("button", { name: "Desc" })[0]).toBeInTheDocument();
+    const modifiedHeader = screen.getAllByRole("button", { name: /^Modified/ })[0];
+    expect(modifiedHeader).toHaveClass("sorted");
+    expect(modifiedHeader).toHaveAttribute("aria-sort", "descending");
+  });
+
+  it("sorts by a column when its header is clicked and toggles direction", async () => {
+    const user = userEvent.setup();
+    vi.mocked(invoke).mockImplementation((command, args) => {
+      if (command === "sftp_read_dir") {
+        const endpoint = (args as { endpoint: { kind: string } }).endpoint;
+        if (endpoint.kind !== "local") return Promise.resolve([]);
+        return Promise.resolve([
+          { name: "b.txt", path: "/Users/me/b.txt", isDir: false, size: 1, modifiedAtMs: 300 },
+          { name: "a.txt", path: "/Users/me/a.txt", isDir: false, size: 2, modifiedAtMs: 100 },
+        ]);
+      }
+      return Promise.resolve([]);
+    });
+
+    render(
+      <I18nProvider>
+        <SftpPanel
+          sshConnections={connections}
+          localDefaultPath="/Users/me"
+          active
+          themeVariant="light"
+          currentSshConnectionId="conn-2"
+        />
+      </I18nProvider>,
+    );
+
+    await user.click(screen.getAllByRole("button", { name: "Open pane" })[0]);
+    expect((await screen.findAllByText(/\.txt$/)).map((row) => row.textContent)).toEqual([
+      "b.txt",
+      "a.txt",
+    ]);
+
+    await user.click(screen.getAllByRole("button", { name: /^Name/ })[0]);
+    expect(screen.getAllByText(/\.txt$/).map((row) => row.textContent)).toEqual(["a.txt", "b.txt"]);
+
+    await user.click(screen.getAllByRole("button", { name: /^Name/ })[0]);
+    expect(screen.getAllByRole("button", { name: /^Name/ })[0]).toHaveAttribute(
+      "aria-sort",
+      "descending",
+    );
+    expect(screen.getAllByText(/\.txt$/).map((row) => row.textContent)).toEqual(["b.txt", "a.txt"]);
+  });
+
+  it("reorders columns when a header is dragged onto another header", async () => {
+    const user = userEvent.setup();
+    vi.mocked(invoke).mockImplementation((command, args) => {
+      if (command === "sftp_read_dir") {
+        const endpoint = (args as { endpoint: { kind: string } }).endpoint;
+        if (endpoint.kind !== "local") return Promise.resolve([]);
+        return Promise.resolve([
+          { name: "a.txt", path: "/Users/me/a.txt", isDir: false, size: 1, modifiedAtMs: 1 },
+        ]);
+      }
+      return Promise.resolve([]);
+    });
+
+    render(
+      <I18nProvider>
+        <SftpPanel
+          sshConnections={connections}
+          localDefaultPath="/Users/me"
+          active
+          themeVariant="light"
+          currentSshConnectionId="conn-2"
+        />
+      </I18nProvider>,
+    );
+
+    await user.click(screen.getAllByRole("button", { name: "Open pane" })[0]);
+    await screen.findByText("a.txt");
+
+    const head = document.querySelectorAll(".sftp-list-head")[0];
+    const labels = () =>
+      Array.from(head.querySelectorAll(".sftp-list-head-cell")).map((cell) =>
+        cell.textContent?.replace(/[▲▼\s]/g, ""),
+      );
+    expect(labels()).toEqual(["Name", "Modified", "Size", "Type"]);
+
+    const dataTransfer = {
+      data: {} as Record<string, string>,
+      setData(key: string, value: string) {
+        this.data[key] = value;
+      },
+      getData(key: string) {
+        return this.data[key];
+      },
+      effectAllowed: "none",
+    };
+    const modifiedHeader = screen.getAllByRole("button", { name: /^Modified/ })[0];
+    const sizeHeader = screen.getAllByRole("button", { name: /^Size/ })[0];
+    fireEvent.dragStart(sizeHeader, { dataTransfer });
+    fireEvent.dragOver(modifiedHeader, { dataTransfer });
+    fireEvent.drop(modifiedHeader, { dataTransfer });
+
+    await waitFor(() => expect(labels()).toEqual(["Name", "Size", "Modified", "Type"]));
   });
 
   it("copies every cmd-selected file in one transfer", async () => {

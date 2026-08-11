@@ -221,6 +221,39 @@ export interface ProxySettings {
   password?: string;
 }
 
+export type ProxyTestReason =
+  | "ok"
+  | "empty_url"
+  | "invalid_url"
+  | "client_build_failed"
+  | "timeout"
+  | "connect_failed"
+  | "proxy_auth_required"
+  | "http_error"
+  | "request_failed";
+
+/** 对应 Rust `ProxyTestResult`（serde camelCase）。文案由前端按 reason 走 i18n。 */
+export interface ProxyTestResult {
+  success: boolean;
+  reason: ProxyTestReason | string;
+  detail?: string;
+  statusCode?: number;
+  latencyMs?: number;
+}
+
+export interface McpServer {
+  name: string;
+  command: string;
+  args?: string[];
+  env?: Record<string, string>;
+  enabled?: boolean;
+}
+
+export interface McpSettings {
+  servers: Record<string, McpServer>;
+  enabled?: boolean;
+}
+
 export interface AgentVersions {
   claude_version: string;
   claude_gpt55_version: string;
@@ -286,6 +319,14 @@ export interface AgentToolStatus {
   path: string;
   channel: string;
   managed: boolean;
+  error_code?: AgentInstallErrorCode | null;
+  error: string;
+}
+
+/** 对应 Rust `AgentLatestVersion`：不安装即可查询到的最新可用版本。 */
+export interface AgentLatestVersion {
+  agent: "claude" | "codex";
+  version: string;
   error_code?: AgentInstallErrorCode | null;
   error: string;
 }

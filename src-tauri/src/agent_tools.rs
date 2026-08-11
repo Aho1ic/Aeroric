@@ -1619,6 +1619,86 @@ pub async fn get_agent_tool_status() -> Result<Vec<AgentToolStatus>, String> {
     .map_err(|error| error.to_string())
 }
 
+/// 查询 Claude Code 官方发布服务的最新版本号（不下载安装包）。
+async fn latest_claude_version(cancelled: &AtomicBool) -> InstallResult<String> {
+    claude_platform()?;
+    let client = http_client(&["downloads.claude.ai"])?;
+    let version_bytes = download_small_bytes(
+        &client,
+        "https://downloads.claude.ai/claude-code-releases/latest",
+        MAX_METADATA_BYTES,
+        cancelled,
+    )
+    .await?;
+    let version = String::from_utf8(version_bytes)
+        .map_err(|error| {
+            InstallError::new(
+                AgentInstallErrorCode::DownloadFailed,
+                format!("Invalid Claude release version: {error}"),
+            )
+        })?
+        .trim()
+        .to_string();
+    if crate::app_settings::extract_version(&version).as_deref() != Some(version.as_str()) {
+        return Err(InstallError::new(
+            AgentInstallErrorCode::DownloadFailed,
+            "Claude release service returned an invalid version",
+        ));
+    }
+    Ok(version)
+}
+
+/// 查询 Codex GitHub Release 的最新版本号（只读取 release metadata）。
+async fn latest_codex_version(cancelled: &AtomicBool) -> InstallResult<String> {
+    codex_target()?;
+    let client = http_client(&["api.github.com"])?;
+    let release_bytes =
+        download_small_bytes(&client, CODEX_RELEASE_API, MAX_METADATA_BYTES, cancelled).await?;
+    let release: GitHubRelease = serde_json::from_slice(&release_bytes).map_err(|error| {
+        InstallError::new(
+            AgentInstallErrorCode::DownloadFailed,
+            format!("Invalid Codex release metadata: {error}"),
+        )
+    })?;
+    codex_version_from_tag(&release.tag_name)
+}
+
+/// 单个内置 Agent 的最新可用版本。查询失败时只返回错误信息，不影响其它 Agent。
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+pub struct AgentLatestVersion {
+    pub agent: String,
+    pub version: String,
+    pub error_code: Option<AgentInstallErrorCode>,
+    pub error: String,
+}
+
+#[tauri::command]
+pub async fn get_agent_latest_versions() -> Result<Vec<AgentLatestVersion>, String> {
+    let cancelled = AtomicBool::new(false);
+    let mut results = Vec::with_capacity(2);
+    for agent in [BuiltInAgent::Claude, BuiltInAgent::Codex] {
+        let outcome = match agent {
+            BuiltInAgent::Claude => latest_claude_version(&cancelled).await,
+            BuiltInAgent::Codex => latest_codex_version(&cancelled).await,
+        };
+        results.push(match outcome {
+            Ok(version) => AgentLatestVersion {
+                agent: agent.id().to_string(),
+                version,
+                error_code: None,
+                error: String::new(),
+            },
+            Err(error) => AgentLatestVersion {
+                agent: agent.id().to_string(),
+                version: String::new(),
+                error_code: Some(error.code),
+                error: error.message,
+            },
+        });
+    }
+    Ok(results)
+}
+
 #[tauri::command]
 pub async fn install_agent_tools(
     app: AppHandle,

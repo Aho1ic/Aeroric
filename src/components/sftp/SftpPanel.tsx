@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, type CSSProperties } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import * as Select from "@radix-ui/react-select";
 import { confirm } from "@tauri-apps/plugin-dialog";
 import {
   ArrowRight,
   ArrowUp,
+  ArrowUpDown,
   Archive,
   Check,
   ChevronRight,
@@ -49,6 +50,7 @@ import {
   formatSftpTransferPercent,
   flattenSftpTreeEntries,
   groupSftpSshConnections,
+  inferFileType,
   normalizeSftpSortPreference,
   sftpBreadcrumbSegments,
   sftpClickAction,
@@ -71,6 +73,8 @@ import s from "../../styles";
 
 type PaneSide = "left" | "right";
 
+type ColumnType = SftpSortField;
+
 type PaneState = {
   endpoint: SftpEndpoint;
   entries: SftpEntry[];
@@ -88,6 +92,7 @@ type PaneState = {
   childErrors: Map<string, string>;
   sortField: SftpSortField;
   sortDirection: SftpSortDirection;
+  columnOrder: ColumnType[];
 };
 
 type SftpProjectConfigContext =
@@ -130,7 +135,11 @@ type TransferTask = {
   completed: number;
   total: number;
   progress: number;
+  finishedAt: number | null;
 };
+
+/** 传输结束后百分比继续展示的时长,超过则回落为传输图标。 */
+const SFTP_RECENT_TRANSFER_MS = 4000;
 
 function endpointLabel(endpoint: SftpEndpoint): string {
   return endpoint.kind === "local" ? "Local" : endpoint.connectionName;
@@ -182,6 +191,7 @@ function makeInitialPane(
     childErrors: new Map(),
     sortField: sortPreference.field,
     sortDirection: sortPreference.direction,
+    columnOrder: ["name", "modified", "size", "type"],
   };
 }
 
@@ -236,6 +246,32 @@ function formatSize(size?: number | null): string {
   return `${(size / 1024 / 1024).toFixed(1)} MB`;
 }
 
+const SFTP_COLUMN_WIDTHS: Record<ColumnType, string> = {
+  name: "minmax(0, 1fr)",
+  size: "72px",
+  modified: "minmax(0, 96px)",
+  type: "minmax(0, 72px)",
+};
+
+function sftpColumnsTemplate(columnOrder: ColumnType[]): string {
+  return columnOrder.map((column) => SFTP_COLUMN_WIDTHS[column]).join(" ");
+}
+
+function formatModified(modifiedAtMs?: number | null): string {
+  if (!modifiedAtMs) return "";
+  const date = new Date(modifiedAtMs);
+  const now = new Date();
+  const isToday = date.toDateString() === now.toDateString();
+  if (isToday) {
+    return date.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+  }
+  const isThisYear = date.getFullYear() === now.getFullYear();
+  if (isThisYear) {
+    return date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  }
+  return date.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
+}
+
 export function SftpPanel({
   sshConnections,
   localDefaultPath,
@@ -283,6 +319,13 @@ export function SftpPanel({
   const [previewTarget, setPreviewTarget] = useState<PreviewTarget>(null);
   const [transferConflict, setTransferConflict] = useState<TransferConflict>(null);
   const [transferTasks, setTransferTasks] = useState<TransferTask[]>([]);
+  const [showTransferHistory, setShowTransferHistory] = useState(false);
+  // 用于在最近一次传输结束满 SFTP_RECENT_TRANSFER_MS 后触发一次重渲染,把百分比换回图标。
+  const [recentTransferTick, setRecentTransferTick] = useState(() => Date.now());
+  const [draggedColumn, setDraggedColumn] = useState<{
+    side: PaneSide;
+    column: ColumnType;
+  } | null>(null);
   const sshConnectionGroups = useMemo(
     () => groupSftpSshConnections(sshConnections, t("ssh.defaultGroup")),
     [sshConnections, t],
@@ -298,6 +341,7 @@ export function SftpPanel({
       completed: 0,
       total,
       progress: 0,
+      finishedAt: null,
     };
     setTransferTasks((current) => [task, ...current].slice(0, 8));
     return task.id;
@@ -312,6 +356,7 @@ export function SftpPanel({
               status,
               completed: status === "completed" ? task.total : task.completed,
               progress: status === "completed" ? 100 : task.progress,
+              finishedAt: Date.now(),
             }
           : task,
       ),
@@ -331,6 +376,21 @@ export function SftpPanel({
       ),
     );
   }, []);
+
+  const clearCompletedTransferTasks = useCallback(() => {
+    setTransferTasks((current) => current.filter((task) => task.status === "running"));
+  }, []);
+
+  const latestFinishedAt = transferTasks[0]?.finishedAt ?? null;
+  useEffect(() => {
+    if (latestFinishedAt == null) return;
+    const elapsed = Date.now() - latestFinishedAt;
+    if (elapsed >= SFTP_RECENT_TRANSFER_MS) return;
+    const timer = setTimeout(() => {
+      setRecentTransferTick(Date.now());
+    }, SFTP_RECENT_TRANSFER_MS - elapsed);
+    return () => clearTimeout(timer);
+  }, [latestFinishedAt]);
 
   const transferPathsWithProgress = useCallback(
     async (
@@ -879,6 +939,54 @@ export function SftpPanel({
     [panes, refreshPane, showToast, sshConnections, t],
   );
 
+  const handleColumnDragStart = useCallback(
+    (event: React.DragEvent, side: PaneSide, column: ColumnType) => {
+      // WebKit cancels drags that carry no dataTransfer payload.
+      event.dataTransfer.setData("text/plain", column);
+      event.dataTransfer.effectAllowed = "move";
+      setDraggedColumn({ side, column });
+    },
+    [],
+  );
+
+  const handleColumnDragOver = useCallback(
+    (event: React.DragEvent, side: PaneSide) => {
+      if (!draggedColumn || draggedColumn.side !== side) return;
+      event.preventDefault();
+    },
+    [draggedColumn],
+  );
+
+  const handleColumnDrop = useCallback(
+    (event: React.DragEvent, side: PaneSide, targetColumn: ColumnType) => {
+      // Keep the drop from reaching the list-level file transfer handler.
+      event.preventDefault();
+      event.stopPropagation();
+      if (!draggedColumn || draggedColumn.side !== side) return;
+      const sourceColumn = draggedColumn.column;
+      if (sourceColumn === targetColumn) {
+        setDraggedColumn(null);
+        return;
+      }
+      updatePane(side, (prev) => {
+        const newOrder = [...prev.columnOrder];
+        const sourceIndex = newOrder.indexOf(sourceColumn);
+        const targetIndex = newOrder.indexOf(targetColumn);
+        if (sourceIndex >= 0 && targetIndex >= 0) {
+          newOrder.splice(sourceIndex, 1);
+          newOrder.splice(targetIndex, 0, sourceColumn);
+        }
+        return { ...prev, columnOrder: newOrder };
+      });
+      setDraggedColumn(null);
+    },
+    [draggedColumn, updatePane],
+  );
+
+  const handleColumnDragEnd = useCallback(() => {
+    setDraggedColumn(null);
+  }, []);
+
   const renderPane = (side: PaneSide) => {
     const pane = panes[side];
     const opposite: PaneSide = side === "left" ? "right" : "left";
@@ -898,6 +1006,9 @@ export function SftpPanel({
       pane.sortField,
       pane.sortDirection,
     );
+    const columnsStyle = {
+      "--sftp-columns": sftpColumnsTemplate(pane.columnOrder),
+    } as CSSProperties;
     return (
       <div className={`sftp-pane${focusedSide === side ? " focused" : ""}`}>
         <div className="sftp-pane-status">
@@ -1060,65 +1171,6 @@ export function SftpPanel({
           <>
             <div className="sftp-actions">
               <button
-                className={`sftp-action-btn${pane.sortField === "name" ? " active" : ""}`}
-                onClick={() =>
-                  updatePane(side, (prev) => ({
-                    ...prev,
-                    sortField: "name",
-                    sortDirection: "asc",
-                    entries: sortSftpEntries(prev.entries, "name", "asc"),
-                    childrenByPath: new Map(
-                      Array.from(prev.childrenByPath.entries()).map(([path, entries]) => [
-                        path,
-                        sortSftpEntries(entries, "name", "asc"),
-                      ]),
-                    ),
-                  }))
-                }
-              >
-                {t("file.sortByName")}
-              </button>
-              <button
-                className={`sftp-action-btn${pane.sortField === "modified" ? " active" : ""}`}
-                onClick={() =>
-                  updatePane(side, (prev) => ({
-                    ...prev,
-                    sortField: "modified",
-                    sortDirection: "desc",
-                    entries: sortSftpEntries(prev.entries, "modified", "desc"),
-                    childrenByPath: new Map(
-                      Array.from(prev.childrenByPath.entries()).map(([path, entries]) => [
-                        path,
-                        sortSftpEntries(entries, "modified", "desc"),
-                      ]),
-                    ),
-                  }))
-                }
-              >
-                {t("file.sortByModified")}
-              </button>
-              <button
-                className="sftp-action-btn"
-                onClick={() =>
-                  updatePane(side, (prev) => {
-                    const sortDirection = prev.sortDirection === "asc" ? "desc" : "asc";
-                    return {
-                      ...prev,
-                      sortDirection,
-                      entries: sortSftpEntries(prev.entries, prev.sortField, sortDirection),
-                      childrenByPath: new Map(
-                        Array.from(prev.childrenByPath.entries()).map(([path, entries]) => [
-                          path,
-                          sortSftpEntries(entries, prev.sortField, sortDirection),
-                        ]),
-                      ),
-                    };
-                  })
-                }
-              >
-                {pane.sortDirection === "asc" ? t("file.sortAsc") : t("file.sortDesc")}
-              </button>
-              <button
                 className="sftp-action-btn"
                 onClick={() =>
                   setEndpoint(side, { ...pane.endpoint, path: sftpParentPath(pane.endpoint.path) })
@@ -1190,9 +1242,71 @@ export function SftpPanel({
                 setDragPayload(null);
               }}
             >
-              <div className="sftp-list-head">
-                <span>{t("sftp.name")}</span>
-                <span>{t("sftp.size")}</span>
+              <div className="sftp-list-head" style={columnsStyle}>
+                {pane.columnOrder.map((column) => {
+                  const isSortField = pane.sortField === column;
+                  const sortIndicator = isSortField
+                    ? pane.sortDirection === "asc"
+                      ? " ▲"
+                      : " ▼"
+                    : "";
+
+                  const getColumnLabel = (col: ColumnType) => {
+                    if (col === "name") return t("sftp.name");
+                    if (col === "size") return t("sftp.size");
+                    if (col === "modified") return t("sftp.modified");
+                    if (col === "type") return t("sftp.type");
+                    return col;
+                  };
+
+                  const handleSort = (field: SftpSortField) => {
+                    updatePane(side, (prev) => {
+                      const isSameField = prev.sortField === field;
+                      const newDirection =
+                        isSameField && prev.sortDirection === "asc" ? "desc" : "asc";
+                      return {
+                        ...prev,
+                        sortField: field,
+                        sortDirection: newDirection,
+                        entries: sortSftpEntries(prev.entries, field, newDirection),
+                        childrenByPath: new Map(
+                          Array.from(prev.childrenByPath.entries()).map(([path, entries]) => [
+                            path,
+                            sortSftpEntries(entries, field, newDirection),
+                          ]),
+                        ),
+                      };
+                    });
+                  };
+
+                  return (
+                    <button
+                      key={column}
+                      type="button"
+                      className={`sftp-list-head-cell ${column}${isSortField ? " sorted" : ""}${
+                        draggedColumn?.column === column && draggedColumn?.side === side
+                          ? " dragging"
+                          : ""
+                      }`}
+                      aria-sort={
+                        isSortField
+                          ? pane.sortDirection === "asc"
+                            ? "ascending"
+                            : "descending"
+                          : "none"
+                      }
+                      draggable
+                      onDragStart={(event) => handleColumnDragStart(event, side, column)}
+                      onDragOver={(event) => handleColumnDragOver(event, side)}
+                      onDrop={(event) => handleColumnDrop(event, side, column)}
+                      onDragEnd={handleColumnDragEnd}
+                      onClick={() => handleSort(column)}
+                    >
+                      {getColumnLabel(column)}
+                      {sortIndicator}
+                    </button>
+                  );
+                })}
               </div>
               {pane.loading && <div className="sftp-empty">{t("common.loading")}</div>}
               {!pane.loading && pane.error && <div className="sftp-empty error">{pane.error}</div>}
@@ -1207,6 +1321,7 @@ export function SftpPanel({
                   <div
                     key={entry.path}
                     className={`sftp-row${pane.selectedPaths.has(entry.path) ? " selected" : ""}`}
+                    style={columnsStyle}
                     draggable
                     onClick={(event) => {
                       if (event.detail > 1) return;
@@ -1241,34 +1356,65 @@ export function SftpPanel({
                       setDragPayload(null);
                     }}
                   >
-                    <span className="sftp-row-name" style={{ paddingLeft: depth * 16 }}>
-                      <button
-                        type="button"
-                        className={`sftp-expand-btn${entry.isDir ? "" : " hidden"}`}
-                        disabled={!entry.isDir}
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          toggleExpanded(side, entry);
-                        }}
-                      >
-                        {pane.expandedPaths.has(entry.path) ? (
-                          <ChevronDown size={12} />
-                        ) : (
-                          <ChevronRight size={12} />
-                        )}
-                      </button>
-                      <EntryIcon entry={entry} />
-                      {entry.name}
-                      {pane.loadingChildren.has(entry.path) && (
-                        <span className="sftp-row-hint">{t("common.loading")}</span>
-                      )}
-                      {pane.childErrors.has(entry.path) && (
-                        <span className="sftp-row-error">{pane.childErrors.get(entry.path)}</span>
-                      )}
-                    </span>
-                    <span className="sftp-row-size">
-                      {entry.isDir ? "" : formatSize(entry.size)}
-                    </span>
+                    {pane.columnOrder.map((column) => {
+                      if (column === "name") {
+                        return (
+                          <span
+                            key="name"
+                            className="sftp-row-name"
+                            style={{ paddingLeft: depth * 16 }}
+                          >
+                            <button
+                              type="button"
+                              className={`sftp-expand-btn${entry.isDir ? "" : " hidden"}`}
+                              disabled={!entry.isDir}
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                toggleExpanded(side, entry);
+                              }}
+                            >
+                              {pane.expandedPaths.has(entry.path) ? (
+                                <ChevronDown size={12} />
+                              ) : (
+                                <ChevronRight size={12} />
+                              )}
+                            </button>
+                            <EntryIcon entry={entry} />
+                            {entry.name}
+                            {pane.loadingChildren.has(entry.path) && (
+                              <span className="sftp-row-hint">{t("common.loading")}</span>
+                            )}
+                            {pane.childErrors.has(entry.path) && (
+                              <span className="sftp-row-error">
+                                {pane.childErrors.get(entry.path)}
+                              </span>
+                            )}
+                          </span>
+                        );
+                      }
+                      if (column === "size") {
+                        return (
+                          <span key="size" className="sftp-row-size">
+                            {entry.isDir ? "" : formatSize(entry.size)}
+                          </span>
+                        );
+                      }
+                      if (column === "modified") {
+                        return (
+                          <span key="modified" className="sftp-row-modified">
+                            {formatModified(entry.modifiedAtMs)}
+                          </span>
+                        );
+                      }
+                      if (column === "type") {
+                        return (
+                          <span key="type" className="sftp-row-type">
+                            {inferFileType(entry)}
+                          </span>
+                        );
+                      }
+                      return null;
+                    })}
                   </div>
                 ))}
             </div>
@@ -1290,6 +1436,11 @@ export function SftpPanel({
       : lastTransfer
         ? lastTransfer.progress
         : 0;
+  // 传输中或刚结束时展示百分比,其余时间回落为传输图标。
+  const showTransferPercent =
+    runningTransferCount > 0 ||
+    (lastTransfer?.finishedAt != null &&
+      recentTransferTick - lastTransfer.finishedAt < SFTP_RECENT_TRANSFER_MS);
   const transferProgressLabel =
     progressState === "running"
       ? t("sftp.transferProgressRunning", { count: runningTransferCount })
@@ -1298,21 +1449,6 @@ export function SftpPanel({
         : progressState === "failed"
           ? t("sftp.transferProgressFailed")
           : t("sftp.transferProgress");
-  const transferTaskLine = (task: TransferTask) => {
-    const name = task.names.join(", ");
-    const percent = `${formatSftpTransferPercent(task.completed, task.total)}%`;
-    if (task.status === "running") {
-      return `${t(task.operation === "copy" ? "sftp.transferCopying" : "sftp.transferMoving", {
-        name,
-      })} - ${percent}`;
-    }
-    if (task.status === "completed") {
-      return `${t(task.operation === "copy" ? "sftp.transferCopied" : "sftp.transferMoved", {
-        name,
-      })} - ${percent}`;
-    }
-    return `${t("sftp.transferFailed", { name })} - ${percent}`;
-  };
 
   return (
     <div
@@ -1326,38 +1462,85 @@ export function SftpPanel({
           {t("sftp.title")}
         </div>
         <div className="sftp-header-actions">
-          {transferTasks.length > 0 && (
-            <div className="sftp-transfer-progress">
-              <button
-                type="button"
-                className={`sftp-transfer-progress-btn ${progressState}`}
-                aria-label={transferProgressLabel}
-                aria-busy={runningTransferCount > 0}
-                title={transferProgressLabel}
+          <div className="sftp-transfer-progress">
+            <button
+              type="button"
+              className={`sftp-transfer-progress-btn ${progressState}${
+                showTransferPercent ? " with-percent" : ""
+              }${showTransferHistory ? " open" : ""}`}
+              aria-label={transferProgressLabel}
+              aria-busy={runningTransferCount > 0}
+              aria-expanded={showTransferHistory}
+              title={transferProgressLabel}
+              onClick={() => setShowTransferHistory((prev) => !prev)}
+            >
+              {showTransferPercent ? (
+                <>
+                  <span
+                    className="sftp-progress-ring"
+                    style={{
+                      background: sftpProgressRingBackground(
+                        activeProgressPercent,
+                        progressState === "failed" ? "var(--danger)" : "var(--accent)",
+                      ),
+                    }}
+                    aria-hidden="true"
+                  />
+                  <span className="sftp-progress-count">{activeProgressPercent}</span>
+                </>
+              ) : (
+                <ArrowUpDown size={14} strokeWidth={2} aria-hidden="true" />
+              )}
+            </button>
+            {showTransferHistory && (
+              <div
+                className="sftp-transfer-history"
+                role="region"
+                aria-label={t("sftp.transferHistory")}
               >
-                <span
-                  className="sftp-progress-ring"
-                  style={{
-                    background: sftpProgressRingBackground(
-                      activeProgressPercent,
-                      progressState === "failed" ? "var(--danger)" : "var(--accent)",
-                    ),
-                  }}
-                  aria-hidden="true"
-                />
-                <span className="sftp-progress-count">{activeProgressPercent}</span>
-              </button>
-              <div className="sftp-transfer-popover" role="status">
-                <div className="sftp-transfer-popover-title">{t("sftp.transferTasks")}</div>
-                {transferTasks.map((task) => (
-                  <div key={task.id} className={`sftp-transfer-task ${task.status}`}>
-                    <span className="sftp-transfer-task-dot" aria-hidden="true" />
-                    <span>{transferTaskLine(task)}</span>
+                <div className="sftp-transfer-history-header">
+                  <span className="sftp-transfer-history-title">{t("sftp.transferHistory")}</span>
+                  <button
+                    type="button"
+                    className="sftp-icon-btn"
+                    onClick={clearCompletedTransferTasks}
+                    title={t("sftp.clearHistory")}
+                    disabled={!transferTasks.some((task) => task.status !== "running")}
+                  >
+                    <Trash2 size={12} />
+                  </button>
+                </div>
+                {transferTasks.length === 0 ? (
+                  <div className="sftp-transfer-history-empty">{t("sftp.noTransfers")}</div>
+                ) : (
+                  <div className="sftp-transfer-history-list">
+                    {transferTasks.map((task) => (
+                      <div key={task.id} className={`sftp-transfer-task ${task.status}`}>
+                        <span className="sftp-transfer-task-icon" aria-hidden="true">
+                          {task.operation === "copy" ? <Copy size={12} /> : <MoveRight size={12} />}
+                        </span>
+                        <div className="sftp-transfer-task-content">
+                          <div className="sftp-transfer-task-name">{task.names.join(", ")}</div>
+                          <div className="sftp-transfer-task-meta">
+                            <span className="sftp-transfer-task-status">
+                              {task.status === "running"
+                                ? t("sftp.transferRunning")
+                                : task.status === "completed"
+                                  ? t("sftp.transferCompleted")
+                                  : t("sftp.transferFailedStatus")}
+                            </span>
+                            <span className="sftp-transfer-task-progress">
+                              {formatSftpTransferPercent(task.completed, task.total)}%
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
                   </div>
-                ))}
+                )}
               </div>
-            </div>
-          )}
+            )}
+          </div>
           {onClose && (
             <button
               className="sftp-icon-btn"

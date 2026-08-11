@@ -6,21 +6,14 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import {
-  KeyboardAvoidingView,
-  Platform,
-  ScrollView,
-  StyleSheet,
-  Text,
-  useWindowDimensions,
-  View,
-} from "react-native";
+import { ScrollView, StyleSheet, Text, useWindowDimensions, Vibration, View } from "react-native";
 import { WebView, type WebViewMessageEvent } from "react-native-webview";
 import * as Clipboard from "expo-clipboard";
-import { ChevronsDownUp, ClipboardPaste, Monitor, Smartphone } from "lucide-react-native";
+import { ChevronsDownUp, ClipboardPaste, Copy, Monitor, Smartphone, X } from "lucide-react-native";
 import { t } from "../i18n";
 import { useConnection } from "../state/connection-context";
 import { AnimatedPressable } from "../ui/AnimatedPressable";
+import { useKeyboardInset } from "../ui/use-keyboard-inset";
 import {
   REPEAT_DELAY_MS,
   REPEAT_INTERVAL_MS,
@@ -42,6 +35,11 @@ import { radii, spacing, theme, typography } from "../ui/theme";
 // streamId 连接内唯一即可;模块级递增避免屏幕快速开关时撞号
 let nextStreamId = 1;
 
+/** 视作「打字回显」的片段上限:超过这个长度按批量输出处理,走 rAF 合并。 */
+const ECHO_FLUSH_MAX_BYTES = 64;
+/** 距上次写入超过这个间隔,说明输出已空闲,下一个小片段立即写入。 */
+const ECHO_IDLE_GAP_MS = 40;
+
 interface SnapshotMeta {
   cols?: number | null;
   rows?: number | null;
@@ -55,8 +53,17 @@ export function TerminalPane({ taskId, active }: { taskId: string; active: boole
   const [streamError, setStreamError] = useState<string | null>(null);
   const [, setFontSize] = useState(13);
   const [imeFocused, setImeFocused] = useState(false);
+  const [hasSelection, setHasSelection] = useState(false);
+  const [copied, setCopied] = useState(false);
   const [viewMode, setViewMode] = useState<"phone" | "desktop">("phone");
   const { width: windowWidth, height: windowHeight } = useWindowDimensions();
+  /**
+   * 输入法高度:WebView 内的隐藏 input 不参与 RN 布局,KeyboardAvoidingView
+   * 抬不动它,键盘弹出时会盖住终端底部(也就是光标所在行)。用实测键盘高度
+   * 给终端区留出等高的底部内边距,把光标行顶到键盘上方。
+   */
+  const keyboardInset = useKeyboardInset();
+  const copiedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   /** 入站帧回调注册后不再重建,靠 ref 读取最新视图模式。 */
   const viewModeRef = useRef<"phone" | "desktop">("phone");
   const autoFitDoneRef = useRef(false);
@@ -65,6 +72,7 @@ export function TerminalPane({ taskId, active }: { taskId: string; active: boole
   const refitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingWritesRef = useRef("");
   const writeFrameRef = useRef<number | null>(null);
+  const lastFlushAtRef = useRef(0);
   const snapshotInProgressRef = useRef(false);
   const trackedWriteSequenceRef = useRef(0);
   const acknowledgedWriteSequenceRef = useRef(0);
@@ -127,6 +135,7 @@ export function TerminalPane({ taskId, active }: { taskId: string; active: boole
       const data = pendingWritesRef.current;
       if (!data) return false;
       pendingWritesRef.current = "";
+      lastFlushAtRef.current = Date.now();
       const message: Record<string, unknown> = { type: "write", data, scrollToBottom };
       if (trackCompletion) {
         message.writeId = ++trackedWriteSequenceRef.current;
@@ -137,10 +146,21 @@ export function TerminalPane({ taskId, active }: { taskId: string; active: boole
     [injectTerm],
   );
 
+  /**
+   * 写入节流策略:
+   * - 高速输出(连续帧)按 rAF 合并,避免每帧多次 injectJavaScript 把渲染打满。
+   * - 空闲后的第一个小片段立即写入。远程链路(WireGuard 等)RTT 本就有几十毫秒,
+   *   再等一个 rAF(最多 ~16ms)会让回显明显发钝;而这种小片段正是打字回显。
+   */
   const queueTermWrite = useCallback(
     (data: string) => {
       pendingWritesRef.current += data;
       if (writeFrameRef.current !== null) return;
+      const idleGap = Date.now() - lastFlushAtRef.current;
+      if (pendingWritesRef.current.length <= ECHO_FLUSH_MAX_BYTES && idleGap >= ECHO_IDLE_GAP_MS) {
+        flushTermWrites();
+        return;
+      }
       writeFrameRef.current = requestAnimationFrame(() => {
         writeFrameRef.current = null;
         flushTermWrites();
@@ -261,6 +281,8 @@ export function TerminalPane({ taskId, active }: { taskId: string; active: boole
         rows?: number;
         writeId?: number;
         focused?: boolean;
+        hasSelection?: boolean;
+        text?: string;
       };
       try {
         msg = JSON.parse(event.nativeEvent.data);
@@ -282,6 +304,22 @@ export function TerminalPane({ taskId, active }: { taskId: string; active: boole
           if (typeof msg.writeId === "number" && Number.isInteger(msg.writeId) && msg.writeId > 0) {
             handleWriteComplete(msg.writeId);
           }
+          break;
+        case "selection":
+          setHasSelection(!!msg.hasSelection);
+          if (!msg.hasSelection) setCopied(false);
+          break;
+        case "selection-text":
+          if (msg.text) {
+            void Clipboard.setStringAsync(msg.text);
+            setCopied(true);
+            if (copiedTimerRef.current) clearTimeout(copiedTimerRef.current);
+            copiedTimerRef.current = setTimeout(() => setCopied(false), 1500);
+          }
+          break;
+        case "haptic":
+          // 长按进入选择模式的触感反馈;iOS 上 Vibration 为短促一下
+          Vibration.vibrate(10);
           break;
         case "fit-result":
         case "resize-result":
@@ -387,6 +425,7 @@ export function TerminalPane({ taskId, active }: { taskId: string; active: boole
   useEffect(() => {
     return () => {
       if (refitTimerRef.current) clearTimeout(refitTimerRef.current);
+      if (copiedTimerRef.current) clearTimeout(copiedTimerRef.current);
       if (writeFrameRef.current !== null) cancelAnimationFrame(writeFrameRef.current);
       writeFrameRef.current = null;
       pendingWritesRef.current = "";
@@ -398,10 +437,13 @@ export function TerminalPane({ taskId, active }: { taskId: string; active: boole
   }, [stopRepeat]);
 
   return (
-    <KeyboardAvoidingView
-      style={styles.screen}
-      behavior={Platform.OS === "ios" ? "padding" : undefined}
-    >
+    /**
+     * 不用 KeyboardAvoidingView:真正需要避让的输入框在 WebView 内部(隐藏
+     * textarea),不参与 RN 布局,KAV 无从测量;且 KAV 在带导航头的屏幕上
+     * 常把 header 高度算漏。这里直接用实测键盘高度做底部内边距,单一来源,
+     * 顺带让 onLayout 触发 refit,把光标行顶到键盘上方。
+     */
+    <View style={[styles.screen, { paddingBottom: keyboardInset }]}>
       {status !== "online" ? <Text style={styles.notice}>{t("term.disconnected")}</Text> : null}
       {streamError ? <Text style={styles.noticeError}>{streamError}</Text> : null}
       <View style={styles.terminalWrap} onLayout={handleWrapLayout}>
@@ -422,6 +464,31 @@ export function TerminalPane({ taskId, active }: { taskId: string; active: boole
           containerStyle={styles.webview}
         />
       </View>
+      {/* 长按选中后浮出:复制 / 取消。放在工具条上方,避免被输入法挤走 */}
+      {hasSelection ? (
+        <View style={styles.selectionBar}>
+          <Text style={styles.selectionHint}>
+            {copied ? t("term.copied") : t("term.selectionHint")}
+          </Text>
+          <View style={styles.selectionActions}>
+            <AnimatedPressable
+              onPress={() => injectTerm({ type: "copySelection" })}
+              accessibilityLabel={t("term.copy")}
+              style={[styles.key, styles.keyAccent]}
+            >
+              <Copy size={15} color={theme.onAccent} />
+              <Text style={[styles.keyText, styles.keyTextAccent]}>{t("term.copy")}</Text>
+            </AnimatedPressable>
+            <AnimatedPressable
+              onPress={() => injectTerm({ type: "clearSelection" })}
+              accessibilityLabel={t("term.cancelSelection")}
+              style={styles.key}
+            >
+              <X size={15} color={theme.text} />
+            </AnimatedPressable>
+          </View>
+        </View>
+      ) : null}
       <View style={styles.accessoryBar}>
         <View style={styles.accessoryRow}>
           {/* 固定在 ScrollView 外:开了输入法就是收起按钮,否则是手机/电脑视图切换 */}
@@ -492,7 +559,7 @@ export function TerminalPane({ taskId, active }: { taskId: string; active: boole
           </AnimatedPressable>
         )}
       </View>
-    </KeyboardAvoidingView>
+    </View>
   );
 }
 
@@ -542,7 +609,26 @@ const styles = StyleSheet.create({
   },
   keyPinned: { paddingHorizontal: spacing.sm + 4 },
   keyActive: { backgroundColor: theme.accent, borderColor: theme.accent },
+  keyAccent: { backgroundColor: theme.accent, borderColor: theme.accent },
   keyText: { color: theme.text, fontSize: 12.5, fontWeight: "600" },
+  keyTextAccent: { color: theme.onAccent },
+  selectionBar: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: spacing.sm,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.xs + 2,
+    backgroundColor: theme.bgElevated,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: theme.border,
+  },
+  selectionHint: {
+    flexShrink: 1,
+    color: theme.textSecondary,
+    fontSize: typography.metaSize,
+  },
+  selectionActions: { flexDirection: "row", alignItems: "center", gap: spacing.xs + 2 },
   liveInputBar: {
     borderTopWidth: StyleSheet.hairlineWidth,
     borderTopColor: theme.border,

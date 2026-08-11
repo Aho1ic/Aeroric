@@ -4,7 +4,10 @@ import react from "@vitejs/plugin-react";
 export default defineConfig({
   plugins: [react()],
   test: {
-    testTimeout: 15000,
+    // 覆盖率插桩 + 并行 worker 会让重 UI 测试的墙钟时间放大 5~6 倍(CPU 超订),
+    // 15s 对最慢的几个 DBX 网格测试只剩 ~20% 余量,在更慢的 CI runner 上会翻转成超时。
+    // 全局给到 30s,个别已知偏重的测试再单独放宽。
+    testTimeout: 30000,
     // Node 25 exposes an experimental global localStorage without a persistence path,
     // which emits one warning per Vitest worker. Tests use jsdom's isolated storage.
     execArgv: ["--no-experimental-webstorage"],

@@ -6,11 +6,12 @@ import DOMPurify from "dompurify";
 import { useI18n } from "../i18n";
 
 interface SessionContent {
-  type: "text" | "tool_use" | "thinking";
+  type: "text" | "tool_use" | "tool_result" | "thinking";
   text?: string;
   id?: string;
   name?: string;
   input?: string;
+  output?: string;
   thinking?: string;
 }
 

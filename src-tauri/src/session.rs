@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashSet, VecDeque};
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader, BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
@@ -699,9 +699,52 @@ pub(crate) enum SessionContent {
         name: String,
         input: String,
     },
+    ToolResult {
+        id: String,
+        output: String,
+    },
     Thinking {
         thinking: String,
     },
+}
+
+/// 单次读取会话记录时保留的最大行数(按尾部保留)。长会话的 JSONL 可达数百 MB,
+/// 整体读进内存会让桌面进程 RSS 随会话线性膨胀;Agent 交接与 UI 回看都只需要最近的
+/// 上下文,因此只保留尾部。取 20000 行:够覆盖一次交接所需的近期对话,又把峰值
+/// 内存钳在可控范围。
+const MAX_SESSION_LINES: usize = 20_000;
+
+/// 流式读取 JSONL,只在内存里保留最后 `MAX_SESSION_LINES` 行。
+///
+/// 格式探测(`is_codex_format`)只看**开头**若干行,而尾部窗口可能已经把它们丢掉,
+/// 所以这里在流式扫描时顺便对前 `SESSION_FORMAT_DETECTION_LINES` 行做探测,
+/// 把结论单独返回,避免为了探测而全量驻留。
+fn read_session_tail(path: &Path) -> Result<(Vec<String>, bool), String> {
+    let file = File::open(path).map_err(|e| e.to_string())?;
+    let reader = BufReader::new(file);
+    // VecDeque 做固定容量环形窗口,超出容量时从头部弹出,保证尾部 N 行。
+    let mut tail: VecDeque<String> = VecDeque::with_capacity(MAX_SESSION_LINES.min(1024));
+    let mut scanned = 0usize;
+    let mut detected_codex = false;
+
+    for line in reader.lines() {
+        let line = line.map_err(|e| e.to_string())?;
+        if line.trim().is_empty() {
+            continue;
+        }
+        if scanned < SESSION_FORMAT_DETECTION_LINES {
+            scanned += 1;
+            if !detected_codex && line_is_codex_format(&line) {
+                detected_codex = true;
+            }
+        }
+        if tail.len() == MAX_SESSION_LINES {
+            tail.pop_front();
+        }
+        tail.push_back(line);
+    }
+
+    Ok((Vec::from(tail), detected_codex))
 }
 
 #[tauri::command]
@@ -712,19 +755,12 @@ pub async fn read_session_messages(
 ) -> Result<Vec<SessionMessage>, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let canonical = validate_session_path(&session_path, &project_path, is_codex)?;
-        let file = File::open(&canonical).map_err(|e| e.to_string())?;
-        let reader = BufReader::new(file);
-        let lines: Vec<String> = reader
-            .lines()
-            .map(|line| line.map_err(|e| e.to_string()))
-            .filter_map(|line| match line {
-                Ok(line) if !line.trim().is_empty() => Some(Ok(line)),
-                Ok(_) => None,
-                Err(err) => Some(Err(err)),
-            })
-            .collect::<Result<_, _>>()?;
-
-        Ok(parse_session_messages(&lines, is_codex))
+        let (lines, detected_codex) = read_session_tail(&canonical)?;
+        Ok(parse_session_messages_with_format(
+            &lines,
+            is_codex,
+            detected_codex,
+        ))
     })
     .await
     .map_err(|e| e.to_string())?
@@ -765,20 +801,37 @@ pub async fn recover_task_session(
 
 const SESSION_FORMAT_DETECTION_LINES: usize = 200;
 
+/// 单行是否带 Codex 专有的事件标记。供整段探测与流式探测共用。
+fn line_is_codex_format(line: &str) -> bool {
+    serde_json::from_str::<serde_json::Value>(line)
+        .ok()
+        .and_then(|val| {
+            val.get("type")
+                .and_then(|v| v.as_str())
+                .map(|kind| matches!(kind, "session_meta" | "event_msg"))
+        })
+        .unwrap_or(false)
+}
+
 fn is_codex_format<S: AsRef<str>>(lines: &[S]) -> bool {
-    for line in lines.iter().take(SESSION_FORMAT_DETECTION_LINES) {
-        if let Ok(val) = serde_json::from_str::<serde_json::Value>(line.as_ref()) {
-            match val.get("type").and_then(|v| v.as_str()) {
-                Some("session_meta") | Some("event_msg") => return true,
-                _ => {}
-            }
-        }
-    }
-    false
+    lines
+        .iter()
+        .take(SESSION_FORMAT_DETECTION_LINES)
+        .any(|line| line_is_codex_format(line.as_ref()))
 }
 
 fn parse_session_messages(lines: &[String], prefer_codex: bool) -> Vec<SessionMessage> {
-    let detected_codex = is_codex_format(lines);
+    parse_session_messages_with_format(lines, prefer_codex, is_codex_format(lines))
+}
+
+/// 与 `parse_session_messages` 相同,但允许调用方给出已经算好的格式探测结论。
+/// 尾部截断读取时,开头的 `session_meta` 行可能已不在 `lines` 里,必须由流式扫描
+/// 阶段的探测结果补上,否则 Codex 会话会被误判成 Claude 格式而解析为空。
+fn parse_session_messages_with_format(
+    lines: &[String],
+    prefer_codex: bool,
+    detected_codex: bool,
+) -> Vec<SessionMessage> {
     let primary_is_codex = detected_codex || prefer_codex;
     let mut messages = Vec::new();
     parse_session_lines(lines, primary_is_codex, &mut messages);
@@ -1040,17 +1093,43 @@ fn claude_user_content(content: Option<&serde_json::Value>) -> Vec<SessionConten
         }
         Some(serde_json::Value::Array(blocks)) => blocks
             .iter()
-            .filter_map(|b| {
-                if b.get("type").and_then(|v| v.as_str()) == Some("text") {
-                    let text = b.get("text").and_then(|v| v.as_str()).unwrap_or("");
-                    if !text.trim().is_empty() {
-                        return Some(SessionContent::Text {
+            .filter_map(
+                |block| match block.get("type").and_then(|value| value.as_str()) {
+                    Some("text") => {
+                        let text = block
+                            .get("text")
+                            .and_then(|value| value.as_str())
+                            .unwrap_or("");
+                        (!text.trim().is_empty()).then(|| SessionContent::Text {
                             text: text.to_string(),
-                        });
+                        })
                     }
-                }
-                None
-            })
+                    Some("tool_result") => {
+                        let id = block
+                            .get("tool_use_id")
+                            .and_then(|value| value.as_str())
+                            .unwrap_or("")
+                            .to_string();
+                        let output = match block.get("content") {
+                            Some(serde_json::Value::String(text)) => text.clone(),
+                            Some(serde_json::Value::Array(items)) => items
+                                .iter()
+                                .filter_map(|item| {
+                                    item.get("text")
+                                        .and_then(|value| value.as_str())
+                                        .map(ToOwned::to_owned)
+                                })
+                                .collect::<Vec<_>>()
+                                .join("\n"),
+                            Some(value) => serde_json::to_string_pretty(value).unwrap_or_default(),
+                            None => String::new(),
+                        };
+                        (!output.trim().is_empty())
+                            .then_some(SessionContent::ToolResult { id, output })
+                    }
+                    _ => None,
+                },
+            )
             .collect(),
         _ => Vec::new(),
     }
@@ -1216,6 +1295,24 @@ fn parse_codex_session_line(line: &str, messages: &mut Vec<SessionMessage>) {
                         messages.push(SessionMessage {
                             role: "assistant".to_string(),
                             content: vec![part],
+                        });
+                    }
+                }
+                "function_call_output" => {
+                    let id = payload
+                        .and_then(|item| item.get("call_id"))
+                        .and_then(|value| value.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    let output = payload
+                        .and_then(|item| item.get("output"))
+                        .and_then(|value| value.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    if !output.trim().is_empty() {
+                        messages.push(SessionMessage {
+                            role: "user".to_string(),
+                            content: vec![SessionContent::ToolResult { id, output }],
                         });
                     }
                 }
@@ -2283,6 +2380,18 @@ mod tests {
         .to_string()
     }
 
+    fn codex_tool_output_line(call_id: &str, output: &str) -> String {
+        serde_json::json!({
+            "type": "response_item",
+            "payload": {
+                "type": "function_call_output",
+                "call_id": call_id,
+                "output": output
+            }
+        })
+        .to_string()
+    }
+
     fn ignored_codex_like_line(idx: usize) -> String {
         serde_json::json!({
             "type": "turn_context",
@@ -2311,6 +2420,99 @@ mod tests {
         assert!(matches!(
             &messages[1].content[0],
             SessionContent::Text { text } if text == "assistant reply"
+        ));
+    }
+
+    #[test]
+    fn read_session_tail_keeps_only_the_newest_lines() {
+        let path = std::env::temp_dir().join(format!(
+            "aeroric-session-tail-{}-{}.jsonl",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        // 头部放 session_meta(Codex 标记),再写超过窗口上限的行数,
+        // 使最早的行必然被挤出尾部窗口。
+        let mut raw = String::from(r#"{"type":"session_meta","payload":{"id":"abc"}}"#);
+        raw.push('\n');
+        let total = MAX_SESSION_LINES + 50;
+        for idx in 0..total {
+            raw.push_str(&codex_user_line(&format!("message-{idx}")));
+            raw.push('\n');
+        }
+        std::fs::write(&path, &raw).expect("write session file");
+
+        let (lines, detected_codex) = read_session_tail(&path).expect("read tail");
+        let _ = std::fs::remove_file(&path);
+
+        // 窗口被钳制,且保留的是最新的行。
+        assert_eq!(lines.len(), MAX_SESSION_LINES);
+        assert!(lines.last().expect("last line").contains(&format!(
+            "message-{}",
+            total - 1
+        )));
+        assert!(!lines.iter().any(|line| line.contains("\"message-0\"")));
+        // 关键:session_meta 已被挤出窗口,格式探测仍须在流式扫描阶段命中,
+        // 否则 Codex 会话会被当成 Claude 格式解析成空列表。
+        assert!(detected_codex, "codex format must be detected while streaming");
+        let messages = parse_session_messages_with_format(&lines, false, detected_codex);
+        assert!(!messages.is_empty(), "truncated codex tail must still parse");
+    }
+
+    #[test]
+    fn parse_session_messages_preserves_codex_tool_output_for_handoff() {
+        let lines = vec![
+            codex_user_line("inspect the file"),
+            codex_tool_output_line("call-1", "file contents"),
+        ];
+
+        let messages = parse_session_messages(&lines, true);
+
+        assert_eq!(messages.len(), 2);
+        assert!(matches!(
+            &messages[1].content[0],
+            SessionContent::ToolResult { id, output }
+                if id == "call-1" && output == "file contents"
+        ));
+    }
+
+    #[test]
+    fn parse_session_messages_preserves_claude_tool_result_for_handoff() {
+        let lines = vec![
+            serde_json::json!({
+                "type": "assistant",
+                "message": {
+                    "content": [{
+                        "type": "tool_use",
+                        "id": "tool-1",
+                        "name": "Read",
+                        "input": {"file_path": "src/main.rs"}
+                    }]
+                }
+            })
+            .to_string(),
+            serde_json::json!({
+                "type": "user",
+                "message": {
+                    "content": [{
+                        "type": "tool_result",
+                        "tool_use_id": "tool-1",
+                        "content": "source text"
+                    }]
+                }
+            })
+            .to_string(),
+        ];
+
+        let messages = parse_session_messages(&lines, false);
+
+        assert_eq!(messages.len(), 2);
+        assert!(matches!(
+            &messages[1].content[0],
+            SessionContent::ToolResult { id, output }
+                if id == "tool-1" && output == "source text"
         ));
     }
 
