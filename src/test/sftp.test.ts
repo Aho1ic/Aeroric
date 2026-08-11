@@ -9,6 +9,7 @@ import {
   formatSftpTransferPercent,
   flattenSftpTreeEntries,
   filterSftpTreeEntriesByName,
+  formatSftpModifiedTime,
   groupSftpSshConnections,
   normalizeSftpSortPreference,
   pruneExpandedPathsForFolderSelection,
@@ -27,6 +28,24 @@ import {
 } from "../components/sftp/sftpTypes";
 
 describe("sftp panel helpers", () => {
+  it("formats recent SFTP modification times with Chinese relative-day labels", () => {
+    const now = new Date(2026, 7, 10, 18, 0).getTime();
+    const labels = { today: "今天", yesterday: "昨天", dayBeforeYesterday: "前天" };
+
+    expect(formatSftpModifiedTime(new Date(2026, 7, 10, 9, 8).getTime(), labels, now)).toBe(
+      "今天 09:08",
+    );
+    expect(formatSftpModifiedTime(new Date(2026, 7, 9, 21, 37).getTime(), labels, now)).toBe(
+      "昨天 21:37",
+    );
+    expect(formatSftpModifiedTime(new Date(2026, 7, 8, 15, 34).getTime(), labels, now)).toBe(
+      "前天 15:34",
+    );
+    expect(formatSftpModifiedTime(new Date(2026, 7, 7, 12, 30).getTime(), labels, now)).toBe(
+      "2026/8/7 12:30",
+    );
+  });
+
   it("uses stable keys for local and ssh endpoints", () => {
     expect(sftpEndpointKey({ kind: "local", path: "/Users/me" })).toBe("local:/Users/me");
     expect(

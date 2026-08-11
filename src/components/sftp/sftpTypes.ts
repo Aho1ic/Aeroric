@@ -59,6 +59,32 @@ export const DEFAULT_SFTP_SORT_PREFERENCE: SftpSortPreference = {
   direction: "desc",
 };
 
+export interface SftpRelativeDayLabels {
+  today: string;
+  yesterday: string;
+  dayBeforeYesterday: string;
+}
+
+export function formatSftpModifiedTime(
+  modifiedAtMs: number | null | undefined,
+  labels: SftpRelativeDayLabels,
+  nowMs = Date.now(),
+): string {
+  if (typeof modifiedAtMs !== "number" || !Number.isFinite(modifiedAtMs)) return "";
+  const date = new Date(modifiedAtMs);
+  const now = new Date(nowMs);
+  if (Number.isNaN(date.getTime()) || Number.isNaN(now.getTime())) return "";
+
+  const dateDay = Date.UTC(date.getFullYear(), date.getMonth(), date.getDate());
+  const nowDay = Date.UTC(now.getFullYear(), now.getMonth(), now.getDate());
+  const daysAgo = Math.round((nowDay - dateDay) / 86_400_000);
+  const time = `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+  if (daysAgo === 0) return `${labels.today} ${time}`;
+  if (daysAgo === 1) return `${labels.yesterday} ${time}`;
+  if (daysAgo === 2) return `${labels.dayBeforeYesterday} ${time}`;
+  return `${date.getFullYear()}/${date.getMonth() + 1}/${date.getDate()} ${time}`;
+}
+
 export type SftpTauriEndpoint =
   | { kind: "local"; path: string }
   | { kind: "ssh"; connection: SshConnection; path: string };

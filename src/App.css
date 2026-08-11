@@ -2103,6 +2103,336 @@ html.dark .notebook-rich-text font[color="#000000"] {
   overflow: hidden;
 }
 
+.agent-config-switch-dialog {
+  width: min(720px, calc(100vw - 28px));
+  max-height: min(820px, calc(100vh - 28px));
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--border-medium) 86%, var(--accent) 14%);
+  border-radius: 12px;
+  background: var(--bg-card);
+  box-shadow:
+    0 24px 72px color-mix(in srgb, #000 24%, transparent),
+    0 0 0 1px color-mix(in srgb, white 4%, transparent);
+}
+
+.agent-config-switch-header {
+  min-height: 66px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--border-dim);
+  background: color-mix(in srgb, var(--bg-card) 84%, var(--bg-subtle));
+}
+
+.agent-config-switch-heading {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 11px;
+}
+
+.agent-config-switch-heading-icon {
+  width: 32px;
+  height: 32px;
+  flex: 0 0 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--border-medium));
+  border-radius: 7px;
+  background: var(--accent-subtle);
+  color: var(--accent);
+}
+
+.agent-config-switch-title {
+  color: var(--text-primary);
+  font-size: 15px;
+  font-weight: 720;
+  letter-spacing: 0;
+}
+
+.agent-config-switch-subtitle {
+  margin-top: 3px;
+  color: var(--text-hint);
+  font-size: 11.5px;
+  line-height: 1.4;
+}
+
+.agent-config-switch-body {
+  min-height: 0;
+  display: grid;
+  gap: 18px;
+  padding: 18px 20px 20px;
+  overflow-y: auto;
+}
+
+.agent-config-switch-section,
+.agent-config-switch-field,
+.agent-config-switch-controls {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.agent-config-switch-controls {
+  gap: 14px;
+  padding-top: 2px;
+}
+
+.agent-config-switch-label {
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 680;
+  letter-spacing: 0;
+}
+
+.agent-config-switch-groups {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.agent-config-switch-group {
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--border-dim);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--bg-input) 50%, transparent);
+}
+
+.agent-config-switch-group-title {
+  height: 34px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 9px;
+  border-bottom: 1px solid var(--border-dim);
+  color: var(--text-secondary);
+  font-size: 11.5px;
+  font-weight: 700;
+}
+
+.agent-config-switch-group-title img {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  object-fit: contain;
+}
+
+.agent-config-switch-group-count {
+  min-width: 18px;
+  height: 18px;
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 9px;
+  background: var(--bg-subtle);
+  color: var(--text-muted);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+.agent-config-switch-options {
+  max-height: 170px;
+  display: grid;
+  gap: 3px;
+  padding: 5px;
+  overflow-y: auto;
+}
+
+.agent-config-switch-option {
+  width: 100%;
+  min-width: 0;
+  min-height: 48px;
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr) 20px;
+  align-items: center;
+  gap: 9px;
+  padding: 6px 7px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    background 0.14s ease,
+    border-color 0.14s ease,
+    color 0.14s ease,
+    transform 0.14s ease;
+}
+
+.agent-config-switch-option:hover:not(:disabled) {
+  border-color: var(--border-medium);
+  background: var(--control-hover-bg);
+  transform: translateY(-1px);
+}
+
+.agent-config-switch-option:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--ring) 24%, transparent);
+}
+
+.agent-config-switch-option.selected {
+  border-color: color-mix(in srgb, var(--accent) 48%, var(--border-medium));
+  background: color-mix(in srgb, var(--accent) 12%, var(--control-active-bg));
+}
+
+.agent-config-switch-option:disabled {
+  cursor: default;
+  opacity: 0.62;
+}
+
+.agent-config-switch-option > img {
+  width: 22px;
+  height: 22px;
+  object-fit: contain;
+}
+
+.agent-config-switch-option-copy {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.agent-config-switch-option-name,
+.agent-config-switch-option-path {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-config-switch-option-name {
+  font-size: 12.5px;
+  font-weight: 650;
+}
+
+.agent-config-switch-option-path {
+  color: var(--text-hint);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+}
+
+.agent-config-switch-option-check {
+  width: 18px;
+  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 5px;
+  color: var(--accent);
+}
+
+.agent-config-switch-option.selected .agent-config-switch-option-check {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+.agent-config-switch-empty {
+  padding: 14px 9px;
+  color: var(--text-hint);
+  font-size: 11px;
+}
+
+.agent-config-switch-select-shell {
+  position: relative;
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.agent-config-switch-select {
+  width: 100%;
+  min-height: 36px;
+  appearance: none;
+  padding: 7px 34px 7px 10px;
+  border: 1px solid var(--border-medium);
+  border-radius: var(--radius-md);
+  outline: none;
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font-family: var(--font-ui);
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition:
+    border-color 0.14s ease,
+    box-shadow 0.14s ease;
+}
+
+.agent-config-switch-select:focus {
+  border-color: var(--border-focus);
+  box-shadow: 0 0 0 3px var(--accent-subtle);
+}
+
+.agent-config-switch-select:disabled {
+  cursor: default;
+  opacity: 0.58;
+}
+
+.agent-config-switch-select-shell > svg {
+  position: absolute;
+  right: 11px;
+  color: var(--text-muted);
+  pointer-events: none;
+}
+
+.agent-config-switch-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--text-hint);
+  font-size: 11.5px;
+}
+
+.agent-config-switch-status.error {
+  color: var(--danger);
+}
+
+.agent-config-switch-segmented {
+  width: 100%;
+  display: flex;
+  box-sizing: border-box;
+  padding: 3px;
+}
+
+.agent-config-switch-segmented-item {
+  min-height: 30px;
+  padding: 5px 8px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 11.5px;
+}
+
+.agent-config-switch-segmented.reasoning .agent-config-switch-segmented-item {
+  min-width: 58px;
+}
+
+.agent-config-switch-footer {
+  background: color-mix(in srgb, var(--bg-card) 88%, var(--bg-subtle));
+}
+
+@media (max-width: 620px) {
+  .agent-config-switch-dialog {
+    max-height: calc(100vh - 16px);
+  }
+
+  .agent-config-switch-body {
+    padding: 16px;
+  }
+
+  .agent-config-switch-groups {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
 .sftp-panel {
   position: relative;
   flex: 1;
@@ -2116,7 +2446,13 @@ html.dark .notebook-rich-text font[color="#000000"] {
     linear-gradient(180deg, color-mix(in srgb, var(--bg-card) 82%, transparent), transparent 190px),
     var(--bg-panel);
   color: var(--text-primary);
+  font-weight: 600;
   overflow: hidden;
+}
+
+.sftp-panel button,
+.sftp-panel input {
+  font-weight: 600;
 }
 
 .sftp-header {
@@ -2364,7 +2700,7 @@ html.dark .notebook-rich-text font[color="#000000"] {
 }
 
 .sftp-transfer-task-name {
-  font-weight: 550;
+  font-weight: 650;
   color: var(--text-primary);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -2769,8 +3105,8 @@ html.dark .notebook-rich-text font[color="#000000"] {
   display: grid;
   grid-template-columns: var(--sftp-columns, minmax(0, 1fr) 72px);
   align-items: center;
-  min-height: 26px;
-  padding: 0 8px;
+  min-height: 30px;
+  padding: 0;
   box-sizing: border-box;
 }
 
@@ -2794,6 +3130,14 @@ html.dark .notebook-rich-text font[color="#000000"] {
     background 0.12s ease,
     color 0.12s ease,
     box-shadow 0.12s ease;
+}
+
+.sftp-row:nth-child(even) {
+  background: color-mix(in srgb, var(--bg-subtle) 38%, transparent);
+}
+
+.sftp-row:nth-child(odd) {
+  background: color-mix(in srgb, var(--bg-panel) 88%, var(--bg-hover));
 }
 
 .sftp-row:hover {
@@ -2869,6 +3213,8 @@ html.dark .notebook-rich-text font[color="#000000"] {
   display: inline-flex;
   align-items: center;
   gap: 4px;
+  height: 100%;
+  box-sizing: border-box;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -2905,6 +3251,12 @@ html.dark .notebook-rich-text font[color="#000000"] {
 }
 
 .sftp-row-size {
+  min-width: 0;
+  height: 100%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  box-sizing: border-box;
   color: var(--text-muted);
   font-family: var(--font-mono);
   font-size: 11px;
@@ -2913,6 +3265,11 @@ html.dark .notebook-rich-text font[color="#000000"] {
 
 .sftp-row-modified,
 .sftp-row-type {
+  min-width: 0;
+  height: 100%;
+  display: inline-flex;
+  align-items: center;
+  box-sizing: border-box;
   color: var(--text-muted);
   font-size: 11px;
   overflow: hidden;
@@ -2921,6 +3278,11 @@ html.dark .notebook-rich-text font[color="#000000"] {
 }
 
 .sftp-list-head-cell {
+  height: 100%;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  box-sizing: border-box;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -2929,7 +3291,7 @@ html.dark .notebook-rich-text font[color="#000000"] {
   appearance: none;
   background: none;
   border: 0;
-  padding: 0;
+  padding: 0 10px;
   margin: 0;
   min-width: 0;
   color: inherit;
@@ -2937,11 +3299,58 @@ html.dark .notebook-rich-text font[color="#000000"] {
   text-align: left;
 }
 
+.sftp-list-head-cell:not(:first-child),
+.sftp-row > span:not(:first-child) {
+  border-left: 1px solid color-mix(in srgb, var(--border-medium) 68%, transparent);
+}
+
+.sftp-row > span {
+  padding-right: 10px;
+  padding-left: 10px;
+}
+
+.sftp-list-head-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sftp-sort-indicator {
+  width: 17px;
+  height: 17px;
+  flex: 0 0 17px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  color: var(--text-hint);
+  opacity: 0;
+  transition:
+    opacity 0.12s ease,
+    color 0.12s ease,
+    border-color 0.12s ease,
+    background 0.12s ease;
+}
+
+.sftp-list-head-cell:hover .sftp-sort-indicator,
+.sftp-sort-indicator.active {
+  opacity: 1;
+}
+
+.sftp-sort-indicator.active {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 34%, var(--border-medium));
+  background: color-mix(in srgb, var(--accent) 11%, var(--bg-input));
+  box-shadow: inset 0 1px 0 color-mix(in srgb, white 8%, transparent);
+}
+
 .sftp-list-head-cell:hover {
   color: var(--text-primary);
 }
 
 .sftp-list-head-cell.size {
+  justify-content: flex-end;
   text-align: right;
 }
 

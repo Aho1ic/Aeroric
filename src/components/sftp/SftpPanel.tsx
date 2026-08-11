@@ -4,6 +4,7 @@ import * as Select from "@radix-ui/react-select";
 import { confirm } from "@tauri-apps/plugin-dialog";
 import {
   ArrowRight,
+  ArrowDown,
   ArrowUp,
   ArrowUpDown,
   Archive,
@@ -47,6 +48,7 @@ import {
   defaultSftpPathForEndpoint,
   DEFAULT_SFTP_SORT_PREFERENCE,
   filterSftpTreeEntriesByName,
+  formatSftpModifiedTime,
   formatSftpTransferPercent,
   flattenSftpTreeEntries,
   groupSftpSshConnections,
@@ -248,28 +250,13 @@ function formatSize(size?: number | null): string {
 
 const SFTP_COLUMN_WIDTHS: Record<ColumnType, string> = {
   name: "minmax(0, 1fr)",
-  size: "72px",
-  modified: "minmax(0, 96px)",
-  type: "minmax(0, 72px)",
+  size: "92px",
+  modified: "138px",
+  type: "104px",
 };
 
 function sftpColumnsTemplate(columnOrder: ColumnType[]): string {
   return columnOrder.map((column) => SFTP_COLUMN_WIDTHS[column]).join(" ");
-}
-
-function formatModified(modifiedAtMs?: number | null): string {
-  if (!modifiedAtMs) return "";
-  const date = new Date(modifiedAtMs);
-  const now = new Date();
-  const isToday = date.toDateString() === now.toDateString();
-  if (isToday) {
-    return date.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
-  }
-  const isThisYear = date.getFullYear() === now.getFullYear();
-  if (isThisYear) {
-    return date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
-  }
-  return date.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
 }
 
 export function SftpPanel({
@@ -1245,12 +1232,6 @@ export function SftpPanel({
               <div className="sftp-list-head" style={columnsStyle}>
                 {pane.columnOrder.map((column) => {
                   const isSortField = pane.sortField === column;
-                  const sortIndicator = isSortField
-                    ? pane.sortDirection === "asc"
-                      ? " ▲"
-                      : " ▼"
-                    : "";
-
                   const getColumnLabel = (col: ColumnType) => {
                     if (col === "name") return t("sftp.name");
                     if (col === "size") return t("sftp.size");
@@ -1302,8 +1283,21 @@ export function SftpPanel({
                       onDragEnd={handleColumnDragEnd}
                       onClick={() => handleSort(column)}
                     >
-                      {getColumnLabel(column)}
-                      {sortIndicator}
+                      <span className="sftp-list-head-label">{getColumnLabel(column)}</span>
+                      <span
+                        className={`sftp-sort-indicator${isSortField ? " active" : ""}`}
+                        aria-hidden="true"
+                      >
+                        {isSortField ? (
+                          pane.sortDirection === "asc" ? (
+                            <ArrowUp size={11} strokeWidth={2.4} />
+                          ) : (
+                            <ArrowDown size={11} strokeWidth={2.4} />
+                          )
+                        ) : (
+                          <ArrowUpDown size={11} strokeWidth={1.8} />
+                        )}
+                      </span>
                     </button>
                   );
                 })}
@@ -1362,7 +1356,7 @@ export function SftpPanel({
                           <span
                             key="name"
                             className="sftp-row-name"
-                            style={{ paddingLeft: depth * 16 }}
+                            style={{ paddingLeft: 10 + depth * 16 }}
                           >
                             <button
                               type="button"
@@ -1402,7 +1396,11 @@ export function SftpPanel({
                       if (column === "modified") {
                         return (
                           <span key="modified" className="sftp-row-modified">
-                            {formatModified(entry.modifiedAtMs)}
+                            {formatSftpModifiedTime(entry.modifiedAtMs, {
+                              today: t("sftp.today"),
+                              yesterday: t("sftp.yesterday"),
+                              dayBeforeYesterday: t("sftp.dayBeforeYesterday"),
+                            })}
                           </span>
                         );
                       }
