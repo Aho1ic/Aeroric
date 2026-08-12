@@ -2225,8 +2225,9 @@ mod tests {
         parse_branch_graph_log, parse_conflict_hunks, parse_conflict_paths_z,
         parse_porcelain_z_status, parse_stash_list, path_to_string,
         resolve_conflict_markers_keep_both, run_git, run_git_check,
-        untracked_files_under_directory, validate_git_revision, validate_stash_ref, GitBlameLine,
-        GitBranchGraphCommit, GitConflictFile, GitConflictResolution, GitFileChange, GitStashEntry,
+        untracked_files_under_directory, validate_git_revision, validate_project_path,
+        validate_stash_ref, GitBlameLine, GitBranchGraphCommit, GitConflictFile,
+        GitConflictResolution, GitFileChange, GitStashEntry,
     };
     use std::{fs, path::PathBuf, process::Command};
 
@@ -2292,6 +2293,16 @@ mod tests {
                 staged: false,
             }]
         );
+    }
+
+    #[test]
+    fn rejects_file_path_as_git_project_root() {
+        let repo = TempRepo::new();
+        let file = repo.path.join("not-a-project");
+        fs::write(&file, "content").unwrap();
+
+        let error = validate_project_path(&path_to_string(&file).unwrap()).unwrap_err();
+        assert_eq!(error, "Project path is not a directory");
     }
 
     #[test]

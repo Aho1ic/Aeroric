@@ -17,7 +17,7 @@ pub(super) fn validate_project_path(project_path: &str) -> Result<(), String> {
     let canonical = path
         .canonicalize()
         .map_err(|error| format!("Cannot resolve project path: {}", error))?;
-    if canonical != path && !canonical.is_dir() {
+    if !canonical.is_dir() {
         return Err("Project path is not a directory".to_string());
     }
     Ok(())
