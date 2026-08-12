@@ -2090,9 +2090,9 @@ pub async fn import_agent_config_bundle(
         )?;
         clear_cached_versions();
         cache_settings(&settings_file, &settings);
-        Ok(imported
+        imported
             .pop()
-            .ok_or_else(|| "Agent configuration bundle is empty".to_string())?)
+            .ok_or_else(|| "Agent configuration bundle is empty".to_string())
     })
     .await
     .map_err(|error| error.to_string())?

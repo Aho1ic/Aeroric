@@ -10,12 +10,11 @@ use std::fmt;
 
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
+use crypto_secretbox::{AeadInPlace, Key, KeyInit, Nonce, XSalsa20Poly1305};
 use hkdf::Hkdf;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use x25519_dalek::{PublicKey, StaticSecret};
-use xsalsa20poly1305::aead::{AeadInPlace, KeyInit};
-use xsalsa20poly1305::{Key, Nonce, XSalsa20Poly1305};
 
 use super::crypto::StaticKeys;
 

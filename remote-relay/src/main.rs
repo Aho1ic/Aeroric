@@ -13,8 +13,9 @@
 //! 协议见 remote-protocol crate;部署指南见仓库 docs/remote-public-access.md。
 
 use std::collections::HashMap;
+use std::net::{IpAddr, SocketAddr};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use futures_util::{SinkExt, StreamExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -30,6 +31,10 @@ const MAX_MESSAGE_BYTES: usize = 1024 * 1024;
 const MAX_ACTIVE_CONNECTIONS: usize = 512;
 const MAX_PENDING_CONNECTIONS: usize = 256;
 const MAX_PENDING_PER_HOST: usize = 32;
+const CLIENT_CONNECT_RATE_LIMIT: u32 = 12;
+const CLIENT_CONNECT_RATE_WINDOW: Duration = Duration::from_secs(10);
+const CLIENT_RATE_LIMIT_RETENTION: Duration = Duration::from_secs(10 * 60);
+const MAX_CLIENT_RATE_LIMIT_ENTRIES: usize = 4096;
 const HOST_CONTROL_QUEUE_CAPACITY: usize = 64;
 const WEBSOCKET_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 const REGISTER_TIMEOUT: Duration = Duration::from_secs(10);
@@ -51,11 +56,19 @@ struct Registry {
     hosts: Mutex<HashMap<String, mpsc::Sender<Message>>>,
     /// connId → 把桌面数据连接交回手机接入任务的信道。
     pending: Mutex<HashMap<String, PendingConnection>>,
+    /// 来源 IP → 手机接入速率窗口。只限制无 token 的 `/connect/:hostId`。
+    client_rate_limits: Mutex<HashMap<IpAddr, ClientRateLimit>>,
 }
 
 struct PendingConnection {
     host_id: String,
     sender: oneshot::Sender<Ws>,
+}
+
+struct ClientRateLimit {
+    window_started: Instant,
+    attempts: u32,
+    last_seen: Instant,
 }
 
 #[tokio::main]
@@ -98,14 +111,14 @@ async fn serve(listener: TcpListener, config: RelayConfig) {
         let config = config.clone();
         tokio::spawn(async move {
             let _permit = permit;
-            handle_connection(stream, peer.to_string(), registry, config).await;
+            handle_connection(stream, peer, registry, config).await;
         });
     }
 }
 
 async fn handle_connection(
     stream: TcpStream,
-    peer: String,
+    peer: SocketAddr,
     registry: Arc<Registry>,
     config: RelayConfig,
 ) {
@@ -115,11 +128,13 @@ async fn handle_connection(
         ..Default::default()
     };
     let mut path = String::new();
+    let mut client_ip = peer.ip();
     // tungstenite's required handshake error type is intentionally large; the
     // callback only accepts the successful response and never constructs it.
     #[allow(clippy::result_large_err)]
     let callback = |req: &Request, resp: Response| {
         path = req.uri().path().to_string();
+        client_ip = rate_limit_source_ip(peer.ip(), req);
         Ok(resp)
     };
     let Ok(Ok(ws)) = tokio::time::timeout(
@@ -133,7 +148,7 @@ async fn handle_connection(
     match parse_route(&path) {
         Some(RelayRoute::HostControl) => host_control(ws, registry, config).await,
         Some(RelayRoute::ClientConnect { host_id }) => {
-            client_connect(ws, host_id, peer, registry).await
+            client_connect(ws, host_id, peer, client_ip, registry).await
         }
         Some(RelayRoute::HostData { conn_id }) => host_data(ws, conn_id, registry),
         None => {
@@ -281,7 +296,18 @@ fn cleanup_host(registry: &Registry, host_id: &str, tx: &mpsc::Sender<Message>) 
 }
 
 /// 手机接入:通知桌面拨数据连接,等到后逐帧对接。
-async fn client_connect(ws: Ws, host_id: String, peer: String, registry: Arc<Registry>) {
+async fn client_connect(
+    ws: Ws,
+    host_id: String,
+    peer: SocketAddr,
+    client_ip: IpAddr,
+    registry: Arc<Registry>,
+) {
+    if !try_acquire_client_connect(&registry, client_ip, Instant::now()) {
+        let mut ws = ws;
+        let _ = ws.close(None).await;
+        return;
+    }
     let Some(host_tx) = registry.hosts.lock().unwrap().get(&host_id).cloned() else {
         let mut ws = ws;
         let _ = ws.close(None).await;
@@ -296,7 +322,7 @@ async fn client_connect(ws: Ws, host_id: String, peer: String, registry: Arc<Reg
     }
     let notify = control_text(&RelayToHost::ClientConnected {
         conn_id: conn_id.clone(),
-        peer: Some(peer),
+        peer: Some(peer.to_string()),
     });
     if host_tx.try_send(notify).is_err() {
         registry.pending.lock().unwrap().remove(&conn_id);
@@ -312,6 +338,54 @@ async fn client_connect(ws: Ws, host_id: String, peer: String, registry: Arc<Reg
             let _ = ws.close(None).await;
         }
     }
+}
+
+fn rate_limit_source_ip(peer: IpAddr, request: &Request) -> IpAddr {
+    // 部署文档中的 TLS 反代与 relay 同机；仅对 loopback 反代信任来源头，
+    // 避免公网直连客户端伪造 X-Forwarded-For 绕过限流。
+    if !peer.is_loopback() {
+        return peer;
+    }
+    ["x-forwarded-for", "x-real-ip"]
+        .iter()
+        .filter_map(|name| request.headers().get(*name))
+        .filter_map(|value| value.to_str().ok())
+        // 取本机反代追加的最右一项，不信任客户端预先伪造的左侧链。
+        .filter_map(|value| value.rsplit(',').next())
+        .find_map(|value| value.trim().parse().ok())
+        .unwrap_or(peer)
+}
+
+fn try_acquire_client_connect(registry: &Registry, peer: IpAddr, now: Instant) -> bool {
+    let mut limits = registry.client_rate_limits.lock().unwrap();
+    if limits.len() >= MAX_CLIENT_RATE_LIMIT_ENTRIES {
+        limits.retain(|_, entry| now.duration_since(entry.last_seen) < CLIENT_RATE_LIMIT_RETENTION);
+        if limits.len() >= MAX_CLIENT_RATE_LIMIT_ENTRIES && !limits.contains_key(&peer) {
+            if let Some(oldest) = limits
+                .iter()
+                .min_by_key(|(_, entry)| entry.last_seen)
+                .map(|(address, _)| *address)
+            {
+                limits.remove(&oldest);
+            }
+        }
+    }
+
+    let entry = limits.entry(peer).or_insert(ClientRateLimit {
+        window_started: now,
+        attempts: 0,
+        last_seen: now,
+    });
+    entry.last_seen = now;
+    if now.duration_since(entry.window_started) >= CLIENT_CONNECT_RATE_WINDOW {
+        entry.window_started = now;
+        entry.attempts = 0;
+    }
+    if entry.attempts >= CLIENT_CONNECT_RATE_LIMIT {
+        return false;
+    }
+    entry.attempts += 1;
+    true
 }
 
 /// 桌面数据连接:交给等待中的手机接入任务(由它执行 splice)。
@@ -435,6 +509,42 @@ mod tests {
             "one-too-many",
             sender,
         ));
+    }
+
+    #[test]
+    fn client_connections_are_rate_limited_per_source_ip() {
+        let registry = Registry::default();
+        let now = Instant::now();
+        let first: IpAddr = "203.0.113.10".parse().unwrap();
+        let second: IpAddr = "203.0.113.11".parse().unwrap();
+
+        for _ in 0..CLIENT_CONNECT_RATE_LIMIT {
+            assert!(try_acquire_client_connect(&registry, first, now));
+        }
+        assert!(!try_acquire_client_connect(&registry, first, now));
+        assert!(try_acquire_client_connect(&registry, second, now));
+        assert!(try_acquire_client_connect(
+            &registry,
+            first,
+            now + CLIENT_CONNECT_RATE_WINDOW,
+        ));
+    }
+
+    #[test]
+    fn forwarded_client_ip_is_trusted_only_from_a_loopback_proxy() {
+        let request = Request::builder()
+            .uri("/connect/host")
+            .header("x-forwarded-for", "203.0.113.10, 198.51.100.30")
+            .body(())
+            .unwrap();
+        let loopback: IpAddr = "127.0.0.1".parse().unwrap();
+        let public: IpAddr = "198.51.100.20".parse().unwrap();
+
+        assert_eq!(
+            rate_limit_source_ip(loopback, &request),
+            "198.51.100.30".parse::<IpAddr>().unwrap()
+        );
+        assert_eq!(rate_limit_source_ip(public, &request), public);
     }
 
     #[test]

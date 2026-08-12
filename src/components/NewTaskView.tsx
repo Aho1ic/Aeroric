@@ -57,11 +57,14 @@ import {
   type ReasoningEffort,
   type TaskSpeed,
 } from "../modelOptions";
-
-interface PastedImage {
-  id: string;
-  dataUrl: string;
-}
+import {
+  MAX_TASK_IMAGE_BYTES,
+  MAX_TASK_IMAGE_COUNT,
+  MAX_TASK_IMAGE_TOTAL_BYTES,
+  selectTaskImageCandidates,
+  type TaskImageAttachment as PastedImage,
+  type TaskImageRejection,
+} from "../taskAttachments";
 
 export interface NewTaskDraft {
   promptHtml: string;
@@ -169,6 +172,8 @@ export function NewTaskView({
   const [skillSearch, setSkillSearch] = useState<string | null>(null);
   const [skillIndex, setSkillIndex] = useState(0);
   const [pastedImages, setPastedImages] = useState<PastedImage[]>(initialDraft?.pastedImages ?? []);
+  // 同步预留已接受但尚在 FileReader 中的图片预算，防止连续粘贴绕过限额。
+  const reservedImagesRef = useRef<PastedImage[]>([...(initialDraft?.pastedImages ?? [])]);
   const [pastedTexts, setPastedTexts] = useState<PastedText[]>(initialDraft?.pastedTexts ?? []);
   const [isEmpty, setIsEmpty] = useState(
     () =>
@@ -724,6 +729,7 @@ export function NewTaskView({
     setIsEmpty(true);
     setMentionSearch(null);
     setSkillSearch(null);
+    reservedImagesRef.current = [];
     setPastedImages([]);
     setPastedTexts([]);
   }
@@ -737,16 +743,61 @@ export function NewTaskView({
     const imageItems = items.filter((item) => item.type.startsWith("image/"));
     if (imageItems.length > 0) {
       e.preventDefault();
-      for (const item of imageItems) {
+      const files = imageItems.flatMap((item) => {
         const file = item.getAsFile();
-        if (!file) continue;
+        return file ? [file] : [];
+      });
+      const { accepted, rejections } = selectTaskImageCandidates(reservedImagesRef.current, files);
+      const rejectionMessages: Record<TaskImageRejection, string> = {
+        unsupported: t("newTask.imageUnsupported"),
+        "too-large": t("newTask.imageTooLarge", {
+          size: String(MAX_TASK_IMAGE_BYTES / 1024 / 1024),
+        }),
+        "too-many": t("newTask.imageCountLimit", { count: String(MAX_TASK_IMAGE_COUNT) }),
+        "total-too-large": t("newTask.imageTotalLimit", {
+          size: String(MAX_TASK_IMAGE_TOTAL_BYTES / 1024 / 1024),
+        }),
+      };
+      const rejection = rejections.values().next().value;
+      if (rejection) showToast(rejectionMessages[rejection], "warning");
+
+      const reservations = accepted.map((file) => ({
+        file,
+        image: {
+          id: `${Date.now()}-${Math.random()}`,
+          dataUrl: "",
+          byteSize: file.size,
+          mimeType: file.type,
+        } satisfies PastedImage,
+      }));
+      reservedImagesRef.current = [
+        ...reservedImagesRef.current,
+        ...reservations.map(({ image }) => image),
+      ];
+
+      for (const { file, image } of reservations) {
         const reader = new FileReader();
+        const releaseReservation = () => {
+          reservedImagesRef.current = reservedImagesRef.current.filter(
+            (reserved) => reserved.id !== image.id,
+          );
+        };
         reader.onload = (ev) => {
           const dataUrl = ev.target?.result as string;
-          if (!dataUrl) return;
-          setPastedImages((prev) => [...prev, { id: `${Date.now()}-${Math.random()}`, dataUrl }]);
+          if (!dataUrl) {
+            releaseReservation();
+            return;
+          }
+          if (!reservedImagesRef.current.some((reserved) => reserved.id === image.id)) return;
+          const completed = { ...image, dataUrl };
+          reservedImagesRef.current = reservedImagesRef.current.map((reserved) =>
+            reserved.id === image.id ? completed : reserved,
+          );
+          setPastedImages((prev) => [...prev, completed]);
           setIsEmpty(false);
         };
+        reader.onerror = releaseReservation;
+        reader.onabort = releaseReservation;
         reader.readAsDataURL(file);
       }
     }
@@ -928,6 +979,9 @@ export function NewTaskView({
             <ImageAttachments
               images={pastedImages}
               onRemove={(id) => {
+                reservedImagesRef.current = reservedImagesRef.current.filter(
+                  (image) => image.id !== id,
+                );
                 setPastedImages((prev) => {
                   const next = prev.filter((i) => i.id !== id);
                   if (next.length === 0 && pastedTexts.length === 0) {

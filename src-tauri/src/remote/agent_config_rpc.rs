@@ -8,6 +8,7 @@
 //! 脚本重写与设置文件的原子持久化。
 
 use serde_json::{json, Value};
+use tauri::{AppHandle, Emitter, Runtime};
 
 use super::rpc::str_param;
 use crate::app_settings::{AgentSetupDraft, AgentSetupKind, CustomAgentProfile};
@@ -17,6 +18,11 @@ const MAX_BASE_URL_LEN: usize = 512;
 const MAX_API_KEY_LEN: usize = 512;
 const MAX_MODELS: usize = 64;
 const MAX_MODEL_LEN: usize = 128;
+
+fn notify_settings_changed<R: Runtime>(app: &AppHandle<R>) {
+    // 配置已经原子落盘；通知失败不应让远端误以为保存失败并重复提交。
+    let _ = app.emit("aeroric:app-settings-changed", ());
+}
 
 fn profile_view(profile: &CustomAgentProfile, proxy_enabled: bool) -> Value {
     let label = if profile.label.trim().is_empty() {
@@ -174,7 +180,10 @@ fn setup_id(label: &str, requested: Option<String>, kind: &AgentSetupKind) -> St
 }
 
 /// RPC `agentConfig.save`:更新内置或自定义 agent 的接入字段、代理和模型列表。
-pub(crate) async fn agent_config_save(params: Value) -> Result<Value, String> {
+pub(crate) async fn agent_config_save<R: Runtime>(
+    app: &AppHandle<R>,
+    params: Value,
+) -> Result<Value, String> {
     let id = str_param(&params, "id")?;
     if id.len() > MAX_ID_LEN {
         return Err("Invalid id".to_string());
@@ -206,6 +215,7 @@ pub(crate) async fn agent_config_save(params: Value) -> Result<Value, String> {
         .await
         .map_err(|e| e.to_string())??;
         super::audit::log("agent-config-saved", json!({ "id": id }));
+        notify_settings_changed(app);
         return Ok(json!({ "ok": true }));
     }
 
@@ -225,6 +235,7 @@ pub(crate) async fn agent_config_save(params: Value) -> Result<Value, String> {
     .await
     .map_err(|e| e.to_string())??;
     super::audit::log("agent-config-saved", json!({ "id": id }));
+    notify_settings_changed(app);
     Ok(json!({ "ok": true }))
 }
 
@@ -292,7 +303,10 @@ pub(crate) async fn agent_config_detect_models(params: Value) -> Result<Value, S
     Ok(json!({ "models": models.models }))
 }
 
-pub(crate) async fn agent_config_create(params: Value) -> Result<Value, String> {
+pub(crate) async fn agent_config_create<R: Runtime>(
+    app: &AppHandle<R>,
+    params: Value,
+) -> Result<Value, String> {
     let label = str_param(&params, "label")?;
     if label.len() > MAX_ID_LEN {
         return Err("Invalid label".to_string());
@@ -324,6 +338,7 @@ pub(crate) async fn agent_config_create(params: Value) -> Result<Value, String> 
         .map(|profile| profile.id.clone())
         .unwrap_or_default();
     super::audit::log("agent-config-created", json!({ "id": id }));
+    notify_settings_changed(app);
     Ok(json!({ "ok": true, "id": id }))
 }
 

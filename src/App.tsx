@@ -29,7 +29,11 @@ import { AppSettingsEventHost } from "./components/AppSettingsEventHost";
 import type { SshProjectInput } from "./components/ssh/sshProject";
 import type { WslProjectInput } from "./components/wsl/WslProjectDialog";
 import { selectDefaultCondaEnvironment } from "./components/file-viewer/run";
-import { SKILL_HUB_CHANGED_EVENT, type LocalRouterStatus } from "./components/app-settings/types";
+import {
+  APP_SETTINGS_CHANGED_EVENT,
+  SKILL_HUB_CHANGED_EVENT,
+  type LocalRouterStatus,
+} from "./components/app-settings/types";
 import { useToast } from "./components/Toast";
 import { isHideWindowShortcut } from "./shortcuts";
 import {
@@ -84,6 +88,12 @@ import {
   upsertWslProject,
   type ProjectViewState,
 } from "./appProjectState";
+import {
+  applyProjectPinnedChange,
+  dispatchAppSettingsChanged,
+  PROJECT_PINNED_CHANGED_EVENT,
+  type ProjectPinnedChangedPayload,
+} from "./appRemoteEvents";
 import {
   disableTextInputAutoFeatures,
   getInitialAttentionBadge,
@@ -680,10 +690,26 @@ function App() {
         tm.handleRemoteResize(task_id, cols, rows);
       },
     );
+    const p4 = listen<ProjectPinnedChangedPayload>(PROJECT_PINNED_CHANGED_EVENT, (e) => {
+      setProjects((prev) => {
+        const next = applyProjectPinnedChange(prev, e.payload);
+        if (next !== prev) {
+          // 把字段补丁合入桌面当前最新快照；串行持久化队列会让它排在任何旧写入之后。
+          persistProjects(next, showToastRef.current, formatSaveProjectsErrorRef.current);
+        }
+        return next;
+      });
+    });
+    const p5 = listen(APP_SETTINGS_CHANGED_EVENT, () => {
+      // Rust/Tauri 事件桥接到现有 DOM 事件总线，让所有设置消费者统一刷新。
+      dispatchAppSettingsChanged(window);
+    });
     return () => {
       p1.then((fn) => fn());
       p2.then((fn) => fn());
       p3.then((fn) => fn());
+      p4.then((fn) => fn());
+      p5.then((fn) => fn());
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);

@@ -4,7 +4,7 @@
 //! 新增方法 = 新增一个 match 分支 + 对应实现,便于审计。
 
 use serde_json::{json, Value};
-use tauri::{AppHandle, Manager, Runtime};
+use tauri::{AppHandle, Emitter, Manager, Runtime};
 
 use super::{agent_config_rpc, event_log, files_rpc, session_push, tasks_rpc};
 use crate::storage;
@@ -32,7 +32,7 @@ pub async fn dispatch<R: Runtime>(
         "agents.models" => tasks_rpc::agents_models(&params).await,
         "stats.summary" => tasks_rpc::stats_summary().await,
         "projects.list" => projects_list().await,
-        "projects.setPinned" => projects_set_pinned(params).await,
+        "projects.setPinned" => projects_set_pinned(app, params).await,
         "tasks.list" => tasks_list(app, params).await,
         "tasks.get" => tasks_get(app, params).await,
         "session.messages" => session_push::session_messages(params).await,
@@ -40,9 +40,9 @@ pub async fn dispatch<R: Runtime>(
         "project.readFile" => files_rpc::project_read_file(params).await,
         "project.writeFile" => files_rpc::project_write_file(params).await,
         "agentConfig.list" => agent_config_rpc::agent_config_list().await,
-        "agentConfig.save" => agent_config_rpc::agent_config_save(params).await,
+        "agentConfig.save" => agent_config_rpc::agent_config_save(app, params).await,
         "agentConfig.detectModels" => agent_config_rpc::agent_config_detect_models(params).await,
-        "agentConfig.create" => agent_config_rpc::agent_config_create(params).await,
+        "agentConfig.create" => agent_config_rpc::agent_config_create(app, params).await,
         "git.changes" => files_rpc::git_changes(params).await,
         "git.diff" => files_rpc::git_diff(params).await,
         "task.input" => tasks_rpc::task_input(app, &params),
@@ -79,12 +79,16 @@ async fn hello<R: Runtime>(app: &AppHandle<R>) -> Result<Value, String> {
 
 /// RPC `projects.setPinned { projectId, pinned }`:跨端同步的置顶开关。
 /// 只改 `pinned`,不动 `orderIndex`,避免与桌面拖拽排序语义冲突。
-async fn projects_set_pinned(params: Value) -> Result<Value, String> {
+async fn projects_set_pinned<R: Runtime>(
+    app: &AppHandle<R>,
+    params: Value,
+) -> Result<Value, String> {
     let project_id = str_param(&params, "projectId")?;
     let pinned = params
         .get("pinned")
         .and_then(Value::as_bool)
         .ok_or("Missing param: pinned")?;
+    let updated_project_id = project_id.clone();
     tauri::async_runtime::spawn_blocking(move || {
         storage::update_projects(|projects| {
             let project = projects
@@ -98,6 +102,12 @@ async fn projects_set_pinned(params: Value) -> Result<Value, String> {
     })
     .await
     .map_err(|e| e.to_string())??;
+    // 桌面 WebView 持有项目内存快照；字段级事件让它合并手机端写入并把
+    // 当前最新快照排入持久化队列，避免下一次桌面操作把 pinned 覆盖回去。
+    let _ = app.emit(
+        "project-pinned-changed",
+        json!({ "projectId": updated_project_id, "pinned": pinned }),
+    );
     Ok(json!({ "ok": true }))
 }
 

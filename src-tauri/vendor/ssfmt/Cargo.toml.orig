@@ -1,0 +1,25 @@
+[package]
+name = "ssfmt"
+version = "0.1.2"
+edition = "2021"
+description = "Excel-compatible ECMA-376 number format codes"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/ketbra/ssfmt"
+keywords = ["excel", "spreadsheet", "formatting", "ecma-376"]
+categories = ["parsing", "text-processing"]
+
+[dependencies]
+chrono = { version = "0.4", optional = true, default-features = false, features = ["std"] }
+lru = "0.18.2"
+num-bigint = { version = "0.4", optional = true }
+thiserror = "2.0"
+
+[dev-dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+flate2 = "1.0"
+
+[features]
+default = ["chrono"]
+chrono = ["dep:chrono"]
+bigint = ["dep:num-bigint"]

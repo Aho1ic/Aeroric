@@ -58,7 +58,7 @@ getrandom = "0.2"
 # E2EE(M4):X25519 握手 + ChaCha20-Poly1305 帧加密 + HKDF 密钥派生
 x25519-dalek = { version = "2", features = ["static_secrets"] }
 chacha20poly1305 = "0.10"
-xsalsa20poly1305 = "0.9.1"
+crypto_secretbox = "0.1.1"
 hkdf = "0.12"
 # relay 撮合控制面消息(与 remote-relay 共享)
 remote-protocol = { path = "../remote-protocol" }
@@ -75,6 +75,8 @@ tauri-plugin-clipboard-manager = "2"
 # incompatible lockfile.
 [patch.crates-io]
 portable-pty = { path = "vendor/portable-pty" }
+ssfmt = { path = "vendor/ssfmt" }
+notify-types = { path = "vendor/notify-types" }
 mysql_async = { git = "https://github.com/t8y2/mysql_async.git", rev = "b615bb0b10b5975182a4aa069cabc3d09021f6ab" }
 tokio-postgres = { git = "https://github.com/t8y2/tokio-postgres-gaussdb.git", rev = "115f9fef10f0fc3669b5337955e4eb461fc349a6" }
 postgres-types = { git = "https://github.com/t8y2/tokio-postgres-gaussdb.git", rev = "115f9fef10f0fc3669b5337955e4eb461fc349a6" }

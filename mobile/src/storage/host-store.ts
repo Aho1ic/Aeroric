@@ -71,17 +71,30 @@ function isSameIdentity(a: PairedHost, b: PairedHost): boolean {
 
 /** 私网直连地址(含 CGNAT / link-local):换网段后会失效,可被 hello 刷新替换。 */
 function isPrivateLanEndpoint(endpoint: string): boolean {
-  const host = /^wss?:\/\/([^/:]+)/.exec(normalizeEndpoint(endpoint))?.[1];
+  const match = /^wss?:\/\/(?:\[([^\]]+)\]|([^/:]+))/i.exec(normalizeEndpoint(endpoint));
+  const host = match?.[1] ?? match?.[2];
   if (!host) return false;
   const octets = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.\d{1,3}$/.exec(host);
-  if (!octets) return false;
-  const [a, b] = [Number(octets[1]), Number(octets[2])];
-  if (a === 10 || a === 127) return true;
-  if (a === 192 && b === 168) return true;
-  if (a === 172 && b >= 16 && b <= 31) return true;
-  if (a === 169 && b === 254) return true;
-  if (a === 100 && b >= 64 && b <= 127) return true;
-  return false;
+  if (octets) {
+    const [a, b] = [Number(octets[1]), Number(octets[2])];
+    if (a === 10 || a === 127) return true;
+    if (a === 192 && b === 168) return true;
+    if (a === 172 && b >= 16 && b <= 31) return true;
+    if (a === 169 && b === 254) return true;
+    if (a === 100 && b >= 64 && b <= 127) return true;
+    return false;
+  }
+
+  const ipv6 = host.split("%", 1)[0].toLowerCase();
+  if (ipv6 === "::" || ipv6 === "::1") return true;
+  const firstHextet = Number.parseInt(ipv6.split(":", 1)[0], 16);
+  if (!Number.isFinite(firstHextet)) return false;
+  // fc00::/7 (ULA)、fe80::/10 (link-local) 与已废弃但仍可能出现的 fec0::/10。
+  return (
+    (firstHextet & 0xfe00) === 0xfc00 ||
+    (firstHextet & 0xffc0) === 0xfe80 ||
+    (firstHextet & 0xffc0) === 0xfec0
+  );
 }
 
 function dedupe(endpoints: string[]): string[] {

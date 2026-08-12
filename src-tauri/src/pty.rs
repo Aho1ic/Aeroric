@@ -40,6 +40,9 @@ const AGENT_LAUNCH_PREFLIGHT_TIMEOUT: Duration = Duration::from_secs(2);
 const AGENT_LAUNCH_PREFLIGHT_POLL: Duration = Duration::from_millis(25);
 const TERMINAL_HISTORY_SETTLE_POLL: Duration = Duration::from_millis(40);
 const TERMINAL_HISTORY_SETTLE_MAX: Duration = Duration::from_millis(320);
+const MAX_TASK_IMAGE_COUNT: usize = 8;
+const MAX_TASK_IMAGE_BYTES: usize = 10 * 1024 * 1024;
+const MAX_TASK_IMAGE_TOTAL_BYTES: usize = 32 * 1024 * 1024;
 static STARTUP_SIGNAL_GENERATION: AtomicU64 = AtomicU64::new(1);
 
 /// 启动态门控信号:首条输入可能需要等 trust folder / hook 授权完成后再投递。
@@ -199,33 +202,90 @@ fn save_task_images(
     if images.is_empty() {
         return Ok(vec![]);
     }
+    let decoded = decode_task_images_with_limits(
+        images,
+        MAX_TASK_IMAGE_COUNT,
+        MAX_TASK_IMAGE_BYTES,
+        MAX_TASK_IMAGE_TOTAL_BYTES,
+    )?;
     let attachments_dir = task_attachments_dir(project_path, task_id);
     fs::create_dir_all(&attachments_dir).map_err(|e| e.to_string())?;
     let mut paths = Vec::new();
-    for (i, data_url) in images.iter().enumerate() {
-        // 解析 "data:image/png;base64,<data>" 格式
-        let comma = data_url.find(',').ok_or("invalid image data URL")?;
-        let header = &data_url[..comma];
-        let b64 = &data_url[comma + 1..];
-        let ext = if header.contains("jpeg") || header.contains("jpg") {
-            "jpg"
-        } else if header.contains("gif") {
-            "gif"
-        } else if header.contains("webp") {
-            "webp"
-        } else {
-            "png"
-        };
-        use base64::Engine;
-        let data = base64::engine::general_purpose::STANDARD
-            .decode(b64)
-            .map_err(|e| e.to_string())?;
+    for (i, image) in decoded.into_iter().enumerate() {
+        let ext = image.extension;
         let filename = format!("{}.{}", i, ext);
         let file_path = attachments_dir.join(&filename);
-        fs::write(&file_path, &data).map_err(|e| e.to_string())?;
+        if let Err(error) = fs::write(&file_path, &image.data) {
+            for path in &paths {
+                let _ = fs::remove_file(path);
+            }
+            return Err(error.to_string());
+        }
         paths.push(file_path.to_string_lossy().into_owned());
     }
     Ok(paths)
+}
+
+struct DecodedTaskImage {
+    extension: &'static str,
+    data: Vec<u8>,
+}
+
+fn decode_task_images_with_limits(
+    images: &[String],
+    max_count: usize,
+    max_image_bytes: usize,
+    max_total_bytes: usize,
+) -> Result<Vec<DecodedTaskImage>, String> {
+    if images.len() > max_count {
+        return Err(format!("Too many task images (maximum {max_count})"));
+    }
+
+    let mut decoded = Vec::with_capacity(images.len());
+    let mut total_bytes = 0usize;
+    for data_url in images {
+        let (header, b64) = data_url
+            .split_once(',')
+            .ok_or_else(|| "Invalid image data URL".to_string())?;
+        let extension = match header.to_ascii_lowercase().as_str() {
+            "data:image/png;base64" => "png",
+            "data:image/jpeg;base64" | "data:image/jpg;base64" => "jpg",
+            "data:image/gif;base64" => "gif",
+            "data:image/webp;base64" => "webp",
+            _ => return Err("Unsupported task image type".to_string()),
+        };
+        // 在分配解码缓冲区前先按 Base64 上界拒绝超大输入。
+        let max_encoded_bytes = max_image_bytes
+            .checked_add(2)
+            .and_then(|value| value.checked_div(3))
+            .and_then(|value| value.checked_mul(4))
+            .and_then(|value| value.checked_add(4))
+            .ok_or_else(|| "Task image size limit overflow".to_string())?;
+        if b64.len() > max_encoded_bytes {
+            return Err(format!(
+                "Task image exceeds the {max_image_bytes} byte limit"
+            ));
+        }
+        use base64::Engine;
+        let data = base64::engine::general_purpose::STANDARD
+            .decode(b64)
+            .map_err(|_| "Invalid task image Base64 data".to_string())?;
+        if data.len() > max_image_bytes {
+            return Err(format!(
+                "Task image exceeds the {max_image_bytes} byte limit"
+            ));
+        }
+        total_bytes = total_bytes
+            .checked_add(data.len())
+            .ok_or_else(|| "Task image total size overflow".to_string())?;
+        if total_bytes > max_total_bytes {
+            return Err(format!(
+                "Task images exceed the {max_total_bytes} byte total limit"
+            ));
+        }
+        decoded.push(DecodedTaskImage { extension, data });
+    }
+    Ok(decoded)
 }
 
 fn save_task_texts(
@@ -1222,8 +1282,15 @@ pub async fn run_task(
         })
         .map_err(|e| e.to_string())?;
 
-    // 将图片保存至 .aeroric/attachments/ 并获取文件路径
-    let image_paths = save_task_images(&project_path, &task_id, &images.unwrap_or_default())?;
+    // 将同步 Base64 解码和文件 I/O 移出 Tokio runtime；前后端均有限额，后端为安全边界。
+    let image_paths = {
+        let project_path = project_path.clone();
+        let task_id = task_id.clone();
+        let images = images.unwrap_or_default();
+        tokio::task::spawn_blocking(move || save_task_images(&project_path, &task_id, &images))
+            .await
+            .map_err(|e| e.to_string())??
+    };
 
     // 将文本附件保存至 .aeroric/attachments/ 并获取文件路径
     // 用 spawn_blocking 把同步文件 I/O 移出 Tokio runtime（AGENTS.md 要求）
@@ -2228,6 +2295,25 @@ pub async fn kill_shell(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn task_image_decoder_enforces_type_count_and_byte_budgets() {
+        let png = "data:image/png;base64,AQID".to_string();
+        let decoded = decode_task_images_with_limits(std::slice::from_ref(&png), 1, 3, 3).unwrap();
+        assert_eq!(decoded[0].extension, "png");
+        assert_eq!(decoded[0].data, vec![1, 2, 3]);
+
+        assert!(decode_task_images_with_limits(&[png.clone(), png.clone()], 1, 10, 20).is_err());
+        assert!(decode_task_images_with_limits(
+            &["data:image/svg+xml;base64,AQID".to_string()],
+            1,
+            10,
+            10,
+        )
+        .is_err());
+        assert!(decode_task_images_with_limits(std::slice::from_ref(&png), 1, 2, 10).is_err());
+        assert!(decode_task_images_with_limits(&[png.clone(), png], 2, 3, 5).is_err());
+    }
 
     #[test]
     fn codex_project_trust_override_quotes_project_path() {

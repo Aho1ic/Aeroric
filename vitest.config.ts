@@ -15,6 +15,8 @@ export default defineConfig({
     environment: "jsdom",
     // 全局注入 expect、describe、it 等，无需每个文件手动 import
     globals: true,
+    // 移动端有自己的 Vitest 配置和 CI 任务，避免根配置重复收集 mobile 测试。
+    include: ["src/**/*.test.{ts,tsx}"],
     // 在每个测试文件运行前执行的 setup（引入 @testing-library/jest-dom 扩展）
     setupFiles: ["./src/test/setup.ts"],
     // 覆盖率报告
@@ -28,6 +30,12 @@ export default defineConfig({
         branches: 55,
         functions: 60,
         lines: 60,
+        "src/appRemoteEvents.ts": {
+          statements: 100,
+          branches: 100,
+          functions: 100,
+          lines: 100,
+        },
       },
     },
   },

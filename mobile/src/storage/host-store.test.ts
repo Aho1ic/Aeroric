@@ -136,6 +136,30 @@ describe("mergeHostIdentity", () => {
     expect(after.hosts[0].endpoints).toContain("wss://relay.example.com/connect/x");
   });
 
+  it("换网段后同时淘汰过期的 IPv6 ULA 与 link-local 地址", () => {
+    const before = state([
+      host({
+        id: "a",
+        hostId: "H1",
+        endpoints: [
+          "ws://[fd12:3456::10]:6790",
+          "ws://[fe80::10%en0]:6790",
+          "wss://relay.example.com/connect/x",
+        ],
+      }),
+    ]);
+    const identity: HostIdentity = {
+      hostId: "H1",
+      lanEndpoints: ["ws://[fd12:9999::20]:6790"],
+    };
+
+    const after = mergeHostIdentity(before, "a", identity, "ws://[fd12:9999::20]:6790");
+
+    expect(after.hosts[0].endpoints).not.toContain("ws://[fd12:3456::10]:6790");
+    expect(after.hosts[0].endpoints).not.toContain("ws://[fe80::10%en0]:6790");
+    expect(after.hosts[0].endpoints).toContain("wss://relay.example.com/connect/x");
+  });
+
   it("把本轮实际连上的地址排到候选列表最前", () => {
     const before = state([
       host({ id: "a", hostId: "H1", endpoints: ["ws://192.168.1.10:6790"] }),

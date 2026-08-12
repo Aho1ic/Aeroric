@@ -32,6 +32,10 @@ export default defineConfig(async () => ({
           }
           if (id.includes("/@tauri-apps/")) return "vendor-tauri";
           if (id.includes("/@radix-ui/")) return "vendor-radix";
+          if (id.includes("/lucide-react/")) return "vendor-icons";
+          if (id.includes("/marked/") || id.includes("/dompurify/") || id.includes("/qrcode/")) {
+            return "vendor-content";
+          }
           return undefined;
         },
       },
