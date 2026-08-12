@@ -4,7 +4,7 @@ import { useI18n } from "../../i18n";
 import { databaseApi } from "../../lib/databaseApi";
 import s from "../../styles";
 import type { DbxColumnInfo, EditableStructureColumn } from "../../types/database";
-import { DbxButton, DbxIconButton } from "./DbxButton";
+import { Button as DbxButton, IconButton as DbxIconButton } from "../ui/Button";
 
 interface Props {
   connectionId?: string;

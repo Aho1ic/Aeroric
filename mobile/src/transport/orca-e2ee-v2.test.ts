@@ -81,7 +81,7 @@ describe("Orca E2EE v2 compatibility", () => {
       },
       (length) => new Uint8Array(length).fill(7),
     );
-    const hello = JSON.parse(pending.helloJson) as Record<string, any>;
+    const hello = JSON.parse(pending.helloJson) as Record<string, unknown>;
     const ready = {
       type: "e2ee_ready",
       v: 2,
@@ -89,7 +89,7 @@ describe("Orca E2EE v2 compatibility", () => {
       clientNonceB64: hello.clientNonceB64,
       desktopNonceB64: base64(new Uint8Array(32).fill(3)),
       selection: { framing: 2, payloadKinds: ["text", "binary"] },
-      context: { ...hello.context, transport: "relay" },
+      context: { ...(hello.context as Record<string, unknown>), transport: "relay" },
       extra: true,
     };
     expect(() => pending.finish(JSON.stringify(ready))).toThrow();

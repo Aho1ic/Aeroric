@@ -65,7 +65,7 @@ import type {
 } from "../../types";
 import { useI18n } from "../../i18n";
 import { databaseApi } from "../../lib/databaseApi";
-import { DbxButton, DbxDialogFooterButton } from "./DbxButton";
+import { Button as DbxButton, DialogFooterButton as DbxDialogFooterButton } from "../ui/Button";
 import { ConnectionDialog } from "./ConnectionDialog";
 import {
   dbxGridRowsToTsv,
@@ -111,6 +111,8 @@ import {
   type TableExportFormat,
 } from "./databaseGridState";
 import { DBX_GRID_PAGE_SIZE_OPTIONS, useDbxDataGrid } from "./useDbxDataGrid";
+import { DatabaseWorkspaceProvider, useDatabaseWorkspaceStore } from "./DatabaseWorkspaceContext";
+import type { WorkspaceTab } from "./databaseWorkspaceStore";
 
 export { dbxColumnInfoToEditableStructureColumn } from "./databaseViewModel";
 import {
@@ -127,7 +129,6 @@ import {
   type DbWorkspaceMode,
   productionSqlPreview,
   listAllDbxObjects,
-  type DatabaseContextMenuState,
   type WorkspaceTabContextMenuAction,
   type DbxDatabaseContextMenuAction,
   type DbxSchemaContextMenuAction,
@@ -205,7 +206,15 @@ interface Props {
   sshConnections?: SshConnection[];
 }
 
-export function DatabaseView({
+export function DatabaseView(props: Props) {
+  return (
+    <DatabaseWorkspaceProvider>
+      <DatabaseViewContent {...props} />
+    </DatabaseWorkspaceProvider>
+  );
+}
+
+function DatabaseViewContent({
   projectRoot,
   initialSqliteFilePath,
   remoteConnection,
@@ -214,8 +223,16 @@ export function DatabaseView({
   const { t } = useI18n();
   const [connections, setConnections] = useState<DbConnectionConfig[]>([]);
   const [dbxConnections, setDbxConnections] = useState<AeroricDbConnectionConfig[]>([]);
-  const [activeConnectionId, setActiveConnectionId] = useState<string | null>(null);
-  const [activeDbxConnectionId, setActiveDbxConnectionId] = useState<string | null>(null);
+  const activeConnectionId = useDatabaseWorkspaceStore(
+    (state) => state.navigation.activeConnectionId,
+  );
+  const setActiveConnectionId = useDatabaseWorkspaceStore((state) => state.setActiveConnectionId);
+  const activeDbxConnectionId = useDatabaseWorkspaceStore(
+    (state) => state.navigation.activeDbxConnectionId,
+  );
+  const setActiveDbxConnectionId = useDatabaseWorkspaceStore(
+    (state) => state.setActiveDbxConnectionId,
+  );
   const [schema, setSchema] = useState<DbSchema | null>(null);
   const [dbxDatabases, setDbxDatabases] = useState<DbxDatabaseInfo[]>([]);
   const [dbxSchemas, setDbxSchemas] = useState<string[]>([]);
@@ -237,10 +254,12 @@ export function DatabaseView({
   } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [workspaceMode, setWorkspaceMode] = useState<DbWorkspaceMode>("table");
-  type WorkspaceTab = { id: string; mode: DbWorkspaceMode; label: string; closable: boolean };
-  const [workspaceTabs, setWorkspaceTabs] = useState<WorkspaceTab[]>([]);
-  const [activeTabId, setActiveTabId] = useState<string>("");
-  const [shortWorkspaceTabIds, setShortWorkspaceTabIds] = useState<Set<string>>(new Set());
+  const workspaceTabs = useDatabaseWorkspaceStore((state) => state.workspace.tabs);
+  const setWorkspaceTabs = useDatabaseWorkspaceStore((state) => state.setWorkspaceTabs);
+  const activeTabId = useDatabaseWorkspaceStore((state) => state.workspace.activeTabId);
+  const setActiveTabId = useDatabaseWorkspaceStore((state) => state.setActiveTabId);
+  const shortWorkspaceTabIds = useDatabaseWorkspaceStore((state) => state.workspace.shortTabIds);
+  const setShortWorkspaceTabIds = useDatabaseWorkspaceStore((state) => state.setShortTabIds);
 
   const closeWorkspaceTab = useCallback(
     (tabId: string) => {
@@ -261,17 +280,20 @@ export function DatabaseView({
         return next;
       });
     },
-    [activeTabId],
+    [activeTabId, setActiveTabId, setShortWorkspaceTabIds, setWorkspaceTabs],
   );
 
-  const activateWorkspaceTab = useCallback((tab: WorkspaceTab | undefined) => {
-    if (!tab) {
-      setActiveTabId("");
-      return;
-    }
-    setActiveTabId(tab.id);
-    setWorkspaceMode(tab.mode);
-  }, []);
+  const activateWorkspaceTab = useCallback(
+    (tab: WorkspaceTab | undefined) => {
+      if (!tab) {
+        setActiveTabId("");
+        return;
+      }
+      setActiveTabId(tab.id);
+      setWorkspaceMode(tab.mode);
+    },
+    [setActiveTabId],
+  );
 
   const closeWorkspaceTabs = useCallback(
     (tabIds: Set<string>) => {
@@ -288,11 +310,14 @@ export function DatabaseView({
         return next;
       });
     },
-    [activeTabId, activateWorkspaceTab],
+    [setWorkspaceTabs, setShortWorkspaceTabIds, activeTabId, activateWorkspaceTab],
   );
 
-  const [connectionDialogOpen, setConnectionDialogOpen] = useState(false);
-  const [editingDbxConnectionId, setEditingDbxConnectionId] = useState<string | null>(null);
+  const connectionDialogOpen = useDatabaseWorkspaceStore((state) => state.dialogs.connectionOpen);
+  const editingDbxConnectionId = useDatabaseWorkspaceStore(
+    (state) => state.dialogs.editingConnectionId,
+  );
+  const setConnectionDialog = useDatabaseWorkspaceStore((state) => state.setConnectionDialog);
   const [newConnectionGroup, setNewConnectionGroup] = useState<string | null>(null);
   const [driverManifest, setDriverManifest] = useState<DatabaseDriverManifest | null>(null);
   const [createDatabaseConnectionId, setCreateDatabaseConnectionId] = useState<string | null>(null);
@@ -376,7 +401,8 @@ export function DatabaseView({
   const [tableImportBatchSize, setTableImportBatchSize] = useState("500");
   const [tableImportLoading, setTableImportLoading] = useState(false);
   const [tableImportError, setTableImportError] = useState("");
-  const [contextMenu, setContextMenu] = useState<DatabaseContextMenuState>(null);
+  const contextMenu = useDatabaseWorkspaceStore((state) => state.menus.contextMenu);
+  const setContextMenu = useDatabaseWorkspaceStore((state) => state.setContextMenu);
   const runWorkspaceTabContextMenuAction = useCallback(
     (action: WorkspaceTabContextMenuAction) => {
       const menu = contextMenu?.kind === "workspace-tab" ? contextMenu : null;
@@ -413,7 +439,15 @@ export function DatabaseView({
         closeWorkspaceTabs(new Set(workspaceTabs.map((tab) => tab.id)));
       }
     },
-    [closeWorkspaceTab, closeWorkspaceTabs, contextMenu, workspaceTabs],
+    [
+      closeWorkspaceTab,
+      closeWorkspaceTabs,
+      contextMenu,
+      setContextMenu,
+      setShortWorkspaceTabIds,
+      setWorkspaceTabs,
+      workspaceTabs,
+    ],
   );
   const [tableInfoActiveTab, setTableInfoActiveTab] = useState<TableInfoTab>("columns");
   const [tableInfoSearch, setTableInfoSearch] = useState("");
@@ -907,7 +941,7 @@ export function DatabaseView({
     setActiveConnectionId(connection.id);
     setWorkspaceMode("table");
     inspect(connection);
-  }, [createInitialSqliteEndpoint, inspect]);
+  }, [createInitialSqliteEndpoint, inspect, setActiveConnectionId, setActiveDbxConnectionId]);
 
   useEffect(() => {
     if (!resizingDatabaseSidebar) return undefined;
@@ -965,26 +999,29 @@ export function DatabaseView({
       setActiveConnectionId(connection.id);
       inspect(connection);
     },
-    [connections, inspect, saveConnections],
+    [connections, inspect, saveConnections, setActiveConnectionId],
   );
 
-  const openNewConnectionDialog = useCallback((connectionGroup: unknown = null) => {
-    setEditingDbxConnectionId(null);
-    setNewConnectionGroup(typeof connectionGroup === "string" ? connectionGroup.trim() : null);
-    setError(null);
-    setConnectionDialogOpen(true);
-  }, []);
+  const openNewConnectionDialog = useCallback(
+    (connectionGroup: unknown = null) => {
+      setNewConnectionGroup(typeof connectionGroup === "string" ? connectionGroup.trim() : null);
+      setError(null);
+      setConnectionDialog(true);
+    },
+    [setConnectionDialog],
+  );
 
-  const openEditDbxConnectionDialog = useCallback((connection: AeroricDbConnectionConfig) => {
-    setEditingDbxConnectionId(connection.id);
-    setError(null);
-    setConnectionDialogOpen(true);
-  }, []);
+  const openEditDbxConnectionDialog = useCallback(
+    (connection: AeroricDbConnectionConfig) => {
+      setError(null);
+      setConnectionDialog(true, connection.id);
+    },
+    [setConnectionDialog],
+  );
 
   const closeConnectionDialog = useCallback(() => {
-    setConnectionDialogOpen(false);
-    setEditingDbxConnectionId(null);
-  }, []);
+    setConnectionDialog(false);
+  }, [setConnectionDialog]);
 
   const openDriverManager = useCallback(async () => {
     setWorkspaceMode("drivers");
@@ -1198,7 +1235,7 @@ export function DatabaseView({
         setError(String(err));
       }
     },
-    [loadDbxColumnsForTables],
+    [loadDbxColumnsForTables, setActiveConnectionId, setActiveDbxConnectionId],
   );
 
   const confirmDbxProductionSql = useCallback(
@@ -1545,7 +1582,13 @@ export function DatabaseView({
         if (dbxLoadSequenceRef.current === requestSeq) setLoading(false);
       }
     },
-    [loadMongoSidebarDatabases, loadRedisSidebarDatabases, t],
+    [
+      loadMongoSidebarDatabases,
+      loadRedisSidebarDatabases,
+      setActiveConnectionId,
+      setActiveDbxConnectionId,
+      t,
+    ],
   );
 
   const selectRedisSidebarDatabase = useCallback(
@@ -1558,7 +1601,7 @@ export function DatabaseView({
       setActiveMongoWorkspaceDatabase(null);
       setWorkspaceMode("redis");
     },
-    [],
+    [setActiveConnectionId, setActiveDbxConnectionId],
   );
 
   const selectRedisSidebarKey = useCallback(
@@ -1571,7 +1614,7 @@ export function DatabaseView({
       setActiveMongoWorkspaceDatabase(null);
       setWorkspaceMode("redis");
     },
-    [],
+    [setActiveConnectionId, setActiveDbxConnectionId],
   );
 
   const selectMongoSidebarDatabase = useCallback(
@@ -1585,7 +1628,7 @@ export function DatabaseView({
       setWorkspaceMode("mongo");
       await loadMongoSidebarCollections(connection, database);
     },
-    [loadMongoSidebarCollections],
+    [loadMongoSidebarCollections, setActiveConnectionId, setActiveDbxConnectionId],
   );
 
   const selectMongoSidebarCollection = useCallback(
@@ -1601,7 +1644,12 @@ export function DatabaseView({
         await loadMongoSidebarCollections(connection, database);
       }
     },
-    [loadMongoSidebarCollections, mongoCollectionsByDatabase],
+    [
+      loadMongoSidebarCollections,
+      mongoCollectionsByDatabase,
+      setActiveConnectionId,
+      setActiveDbxConnectionId,
+    ],
   );
 
   const selectMongoSidebarDocument = useCallback(
@@ -1622,7 +1670,12 @@ export function DatabaseView({
         await loadMongoSidebarDocuments(connection, database, collection);
       }
     },
-    [loadMongoSidebarDocuments, mongoDocumentsByCollection],
+    [
+      loadMongoSidebarDocuments,
+      mongoDocumentsByCollection,
+      setActiveConnectionId,
+      setActiveDbxConnectionId,
+    ],
   );
 
   const loadDbxObject = useCallback(
@@ -1752,20 +1805,23 @@ export function DatabaseView({
     [
       activeDbxConnection,
       activeDbxDatabase,
-      activeDbxObject,
+      activeDbxObject?.name,
+      activeDbxObject?.schema,
       dbxGridColumnFuzzyFilters,
       dbxGridPageSize,
       initializeLoadedGrid,
+      setActiveTabId,
+      setWorkspaceTabs,
     ],
   );
 
   const handleConnectionSaved = useCallback(
     (next: AeroricDbConnectionConfig[], connection: AeroricDbConnectionConfig) => {
       setDbxConnections(next);
-      setEditingDbxConnectionId(null);
+      setConnectionDialog(false);
       return loadDbxConnection(connection);
     },
-    [loadDbxConnection],
+    [loadDbxConnection, setConnectionDialog],
   );
 
   const reloadActiveDbxGrid = useCallback(
@@ -1931,7 +1987,7 @@ export function DatabaseView({
       setWorkspaceMode("table");
       inspect(connection);
     },
-    [inspect],
+    [inspect, setActiveConnectionId, setActiveDbxConnectionId],
   );
 
   const handleSelectDbxConnection = useCallback(
@@ -1960,7 +2016,7 @@ export function DatabaseView({
         setSqlResult(null);
       }
     },
-    [activeConnectionId, connections, saveConnections, t],
+    [activeConnectionId, connections, saveConnections, setActiveConnectionId, t],
   );
 
   const handleDeleteDbxConnection = useCallback(
@@ -1991,7 +2047,7 @@ export function DatabaseView({
         setLoading(false);
       }
     },
-    [activeDbxConnectionId, t],
+    [activeDbxConnectionId, setActiveDbxConnectionId, t],
   );
 
   const toggleReadOnly = useCallback(() => {
@@ -2129,7 +2185,7 @@ export function DatabaseView({
         setVisibleDatabaseLoading(false);
       }
     },
-    [loadVisibleDatabaseNames],
+    [loadVisibleDatabaseNames, setContextMenu],
   );
 
   const saveVisibleDatabaseConfig = useCallback(
@@ -2286,7 +2342,7 @@ export function DatabaseView({
         setDatabaseExportLoading(false);
       }
     },
-    [],
+    [setContextMenu],
   );
 
   const toggleDatabaseExportTable = useCallback((table: string) => {
@@ -2392,7 +2448,7 @@ export function DatabaseView({
         setTableImportLoading(false);
       }
     },
-    [],
+    [setContextMenu],
   );
 
   const chooseTableImportFile = useCallback(async () => {
@@ -2855,7 +2911,7 @@ export function DatabaseView({
         setLoading(false);
       }
     },
-    [],
+    [setActiveConnectionId, setActiveDbxConnectionId],
   );
 
   const showDbxObjectSource = useCallback(
@@ -2904,7 +2960,7 @@ export function DatabaseView({
         setLoading(false);
       }
     },
-    [],
+    [setActiveConnectionId, setActiveDbxConnectionId],
   );
 
   const writeDbxProcedureExecutionDraft = useCallback(
@@ -2919,7 +2975,7 @@ export function DatabaseView({
       setQueryResult(null);
       setError(null);
     },
-    [],
+    [setActiveConnectionId, setActiveDbxConnectionId],
   );
 
   const writeDbxObjectSqlDraft = useCallback(
@@ -2946,7 +3002,7 @@ export function DatabaseView({
       setQueryResult(null);
       setError(null);
     },
-    [],
+    [setActiveConnectionId, setActiveDbxConnectionId],
   );
 
   const exportDbxTableObject = useCallback(
@@ -3590,30 +3646,36 @@ export function DatabaseView({
     },
     [
       contextMenu,
-      activeDbxDatabase,
-      activeDbxObject,
-      copyDbxObjectStructure,
-      copyDbxObjectStructureDdl,
-      copyNodeName,
+      setContextMenu,
       dbxConnections,
-      dbxObjects,
-      dropDbxObject,
-      exportDbxObjectStructure,
-      exportDbxTableObject,
-      loadDbxColumnsForTables,
-      loadDbxConnection,
-      loadDbxObject,
-      loadTableInfoDdlForObject,
-      openDbxObjectStructure,
-      openDatabaseExportDialog,
-      openQueryHistory,
-      openTableImportDialog,
-      showDbxObjectDdl,
-      showDbxObjectSource,
       t,
       togglePinnedTreeNode,
+      copyNodeName,
+      setActiveDbxConnectionId,
+      loadDbxObject,
+      showDbxObjectSource,
       writeDbxProcedureExecutionDraft,
+      openDbxObjectStructure,
+      loadDbxConnection,
+      activeDbxObject?.name,
+      activeDbxObject?.schema,
+      showDbxObjectDdl,
+      setActiveConnectionId,
+      setWorkspaceTabs,
+      setActiveTabId,
+      loadDbxColumnsForTables,
+      loadTableInfoDdlForObject,
       writeDbxObjectSqlDraft,
+      openQueryHistory,
+      dbxObjects,
+      openTableImportDialog,
+      activeDbxDatabase,
+      openDatabaseExportDialog,
+      exportDbxTableObject,
+      copyDbxObjectStructure,
+      copyDbxObjectStructureDdl,
+      exportDbxObjectStructure,
+      dropDbxObject,
     ],
   );
 
@@ -3896,6 +3958,9 @@ export function DatabaseView({
       openDatabaseExportDialog,
       openQueryHistory,
       saveDbxDefaultDatabase,
+      setActiveConnectionId,
+      setActiveDbxConnectionId,
+      setContextMenu,
       togglePinnedTreeNode,
     ],
   );
@@ -4015,6 +4080,9 @@ export function DatabaseView({
       loadDbxSchema,
       openDatabaseExportDialog,
       openQueryHistory,
+      setActiveConnectionId,
+      setActiveDbxConnectionId,
+      setContextMenu,
       togglePinnedTreeNode,
     ],
   );
@@ -4041,7 +4109,15 @@ export function DatabaseView({
       }
       await dropDbxColumn(connection, menu.database, menu.object, menu.column);
     },
-    [contextMenu, copyNodeName, dbxConnections, dropDbxColumn],
+    [
+      contextMenu,
+      copyNodeName,
+      dbxConnections,
+      dropDbxColumn,
+      setActiveConnectionId,
+      setActiveDbxConnectionId,
+      setContextMenu,
+    ],
   );
 
   const runDbxTableChildContextMenuAction = useCallback(
@@ -4057,7 +4133,7 @@ export function DatabaseView({
       }
       await dropDbxTableChildObject(connection, menu.database, menu.object, menu.childObject);
     },
-    [contextMenu, copyNodeName, dbxConnections, dropDbxTableChildObject],
+    [contextMenu, copyNodeName, dbxConnections, dropDbxTableChildObject, setContextMenu],
   );
 
   const runDbxObjectGroupContextMenuAction = useCallback(
@@ -4090,7 +4166,15 @@ export function DatabaseView({
         await loadDbxDatabase(connection, menu.database);
       }
     },
-    [contextMenu, dbxConnections, loadDbxDatabase, loadDbxSchema],
+    [
+      contextMenu,
+      dbxConnections,
+      loadDbxDatabase,
+      loadDbxSchema,
+      setActiveConnectionId,
+      setActiveDbxConnectionId,
+      setContextMenu,
+    ],
   );
 
   const runNoSqlContextMenuAction = useCallback(
@@ -4286,21 +4370,24 @@ export function DatabaseView({
     },
     [
       contextMenu,
-      copyNodeName,
+      setContextMenu,
       dbxConnections,
       loadMongoSidebarCollections,
-      loadMongoSidebarDatabases,
-      loadMongoSidebarDocuments,
+      togglePinnedTreeNode,
       loadRedisSidebarDatabases,
-      loadRedisSidebarKeys,
-      selectMongoSidebarCollection,
-      selectMongoSidebarDatabase,
-      selectMongoSidebarDocument,
+      copyNodeName,
+      setActiveConnectionId,
+      setActiveDbxConnectionId,
       selectRedisSidebarDatabase,
-      selectRedisSidebarKey,
       saveDbxDefaultDatabase,
       t,
-      togglePinnedTreeNode,
+      loadRedisSidebarKeys,
+      selectRedisSidebarKey,
+      loadMongoSidebarDatabases,
+      selectMongoSidebarDatabase,
+      loadMongoSidebarDocuments,
+      selectMongoSidebarDocument,
+      selectMongoSidebarCollection,
     ],
   );
 
@@ -4458,30 +4545,33 @@ export function DatabaseView({
       }
     },
     [
-      activeConnectionId,
-      activeDbxConnectionId,
-      connections,
       contextMenu,
-      copyDbxConnection,
-      copyLegacyConnection,
-      copyNodeName,
+      setContextMenu,
+      connections,
       dbxConnections,
-      handleDeleteConnection,
-      handleDeleteDbxConnection,
-      handleExecuteSqlFile,
-      handleNewQuery,
-      handleSelectConnection,
       inspect,
       loadDbxConnection,
-      projectRoot,
+      handleSelectConnection,
+      handleNewQuery,
+      openQueryHistory,
+      handleExecuteSqlFile,
       t,
       createDuckDbAttachedDatabaseFile,
       openCreateDatabaseDialog,
-      openEditDbxConnectionDialog,
-      openQueryHistory,
+      copyNodeName,
       openVisibleDatabasesDialog,
-      moveDbxConnectionToGroup,
+      openEditDbxConnectionDialog,
+      projectRoot,
       toggleDbxConnectionPinned,
+      moveDbxConnectionToGroup,
+      activeDbxConnectionId,
+      activeConnectionId,
+      setActiveDbxConnectionId,
+      setActiveConnectionId,
+      copyLegacyConnection,
+      copyDbxConnection,
+      handleDeleteConnection,
+      handleDeleteDbxConnection,
     ],
   );
 
@@ -4519,6 +4609,7 @@ export function DatabaseView({
       deleteDbxConnectionGroup,
       openNewConnectionDialog,
       renameDbxConnectionGroup,
+      setContextMenu,
       t,
     ],
   );
@@ -5180,6 +5271,7 @@ export function DatabaseView({
       dbxGridWhereInput,
       loadDbxObject,
       queryResult,
+      setContextMenu,
       setDbxColumnPreview,
       setDbxColumnPreviewSearch,
       setDbxGridOrderByInput,
@@ -5325,28 +5417,29 @@ export function DatabaseView({
       }
     },
     [
-      activeDbxConnection,
-      activeDbxDatabase,
-      activeDbxObject,
-      buildDbxGridContextFilterOptions,
-      buildDbxGridCopyOptions,
       contextMenu,
+      setContextMenu,
       copyNodeName,
-      dbxGridContextRows,
+      setDbxCellPreview,
+      queryResult,
+      setDbxRowPreviewSearch,
+      setDbxRowPreview,
+      setDbxColumnPreviewSearch,
+      setDbxColumnPreview,
+      activeDbxConnection,
+      activeDbxObject,
+      setDbxGridOrderByInput,
+      loadDbxObject,
+      activeDbxDatabase,
+      dbxGridWhereInput,
+      setDbxGridWhereInput,
+      setDbxGridColumnFuzzyFilters,
       dbxGridOrderByInput,
       dbxGridPageSize,
-      dbxGridWhereInput,
-      loadDbxObject,
-      queryResult,
-      setDbxCellPreview,
-      setDbxColumnPreview,
-      setDbxColumnPreviewSearch,
-      setDbxGridOrderByInput,
-      setDbxGridColumnFuzzyFilters,
-      setDbxGridWhereInput,
-      setDbxRowPreview,
-      setDbxRowPreviewSearch,
+      buildDbxGridContextFilterOptions,
       visibleTableColumns,
+      dbxGridContextRows,
+      buildDbxGridCopyOptions,
     ],
   );
 

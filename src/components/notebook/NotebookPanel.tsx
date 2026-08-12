@@ -30,16 +30,8 @@ import {
   highlightCodeInnerHtml,
   NOTEBOOK_CODE_LANGUAGE_OPTIONS,
 } from "../../syntaxHighlight";
-
-type NotebookFormat = "markdown" | "richtext";
-
-type NotebookNote = {
-  id: string;
-  title: string;
-  body: string;
-  format: NotebookFormat;
-  updatedAt: number;
-};
+import { NotebookStoreProvider, useNotebookStore } from "./NotebookContext";
+import { createNotebookStore, type NotebookFormat, type NotebookNote } from "./notebookStore";
 
 type StoredNotebookNote = Partial<Omit<NotebookNote, "format">> & {
   format?: NotebookFormat | "txt";
@@ -413,7 +405,17 @@ function ColorTool({
   );
 }
 
-export function NotebookPanel({ width = "100%" }: { width?: number | string }) {
+export function NotebookPanel(props: { width?: number | string }) {
+  const storeRef = useRef<ReturnType<typeof createNotebookStore> | null>(null);
+  if (!storeRef.current) storeRef.current = createNotebookStore(loadNotes());
+  return (
+    <NotebookStoreProvider store={storeRef.current}>
+      <NotebookPanelContent {...props} />
+    </NotebookStoreProvider>
+  );
+}
+
+function NotebookPanelContent({ width = "100%" }: { width?: number | string }) {
   const { t } = useI18n();
   const markdownContentRef = useRef<HTMLTextAreaElement | null>(null);
   const richTextRef = useRef<HTMLDivElement | null>(null);
@@ -428,8 +430,10 @@ export function NotebookPanel({ width = "100%" }: { width?: number | string }) {
   const noteItemRefs = useRef<Map<string, HTMLElement>>(new Map());
   const notePointerDragRef = useRef<NotebookPointerDragState | null>(null);
   const suppressNextNoteClickRef = useRef(false);
-  const [notes, setNotes] = useState<NotebookNote[]>(() => loadNotes());
-  const [activeId, setActiveId] = useState<string | null>(() => notes[0]?.id ?? null);
+  const notes = useNotebookStore((state) => state.notes);
+  const setNotes = useNotebookStore((state) => state.setNotes);
+  const activeId = useNotebookStore((state) => state.activeId);
+  const setActiveId = useNotebookStore((state) => state.setActiveId);
   const [mode, setMode] = useState<"edit" | "read">("edit");
   const [creating, setCreating] = useState(false);
   const [pendingTitleFocusId, setPendingTitleFocusId] = useState<string | null>(null);
@@ -483,7 +487,7 @@ export function NotebookPanel({ width = "100%" }: { width?: number | string }) {
     if (activeId && notes.length > 0 && !notes.some((note) => note.id === activeId)) {
       setActiveId(notes[0].id);
     }
-  }, [activeId, notes]);
+  }, [activeId, notes, setActiveId]);
 
   useEffect(() => {
     if (!creating) return;
@@ -522,7 +526,7 @@ export function NotebookPanel({ width = "100%" }: { width?: number | string }) {
       }
       richTextSyncedNoteIdRef.current = activeNote.id;
     }
-  }, [activeNote?.body, activeNote?.format, activeNote?.id, mode]);
+  }, [activeNote?.body, activeNote?.format, activeNote?.id, mode, setNotes]);
 
   useEffect(() => {
     const close = (event: MouseEvent) => {

@@ -10,10 +10,13 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
-    "lint": "eslint src --max-warnings 0",
-    "lint:fix": "eslint src --fix",
-    "format": "prettier --write \"src/**/*.{ts,tsx,css}\"",
-    "format:check": "prettier --check \"src/**/*.{ts,tsx,css}\"",
+    "lint": "eslint src packages mobile/app mobile/src --max-warnings 0",
+    "lint:fix": "eslint src packages mobile/app mobile/src --fix",
+    "format": "prettier --write \"{src,packages,mobile/app,mobile/src}/**/*.{ts,tsx,css,json}\"",
+    "format:check": "prettier --check \"{src,packages,mobile/app,mobile/src}/**/*.{ts,tsx,css,json}\"",
+    "typecheck": "tsc --noEmit && pnpm --dir mobile typecheck",
+    "check:design-tokens": "node scripts/generate-design-tokens.mjs --check",
+    "generate:design-tokens": "node scripts/generate-design-tokens.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage"
@@ -25,7 +28,19 @@
       "brace-expansion@^5.0.0": "5.0.9",
       "nanoid@^3.0.0": "3.3.17",
       "postcss": "8.5.25",
+      "js-yaml@^3.0.0": "3.15.1",
+      "js-yaml@^4.0.0": "4.3.1",
+      "uuid@<11.1.1": "11.1.1",
       "undici": "7.29.0"
+    },
+    "auditConfig": {
+      "ignoreGhsas": [
+        "GHSA-5p2g-fcmc-qvqq",
+        "GHSA-w3rx-r6r6-pgpr"
+      ]
+    },
+    "patchedDependencies": {
+      "image-size@1.2.1": "mobile/patches/image-size@1.2.1.patch"
     }
   },
   "dependencies": {
@@ -65,7 +80,8 @@
     "qrcode.react": "^4.2.0",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",
-    "shiki": "^4.0.2"
+    "shiki": "^4.0.2",
+    "zustand": "^5.0.14"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

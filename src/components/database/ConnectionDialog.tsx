@@ -18,7 +18,11 @@ import {
 import type { AeroricDbConnectionConfig, DbEndpoint, DbxDatabaseType } from "../../types";
 import { useI18n } from "../../i18n";
 import { databaseApi } from "../../lib/databaseApi";
-import { DbxButton, DbxButtonGroup, DbxSegmentedButton } from "./DbxButton";
+import {
+  Button as DbxButton,
+  ButtonGroup as DbxButtonGroup,
+  SegmentedButton as DbxSegmentedButton,
+} from "../ui/Button";
 import { PasswordInput } from "./DatabaseViewPrimitives";
 import { parseConnectionUrl } from "./databaseConnectionUrl";
 import s from "../../styles";

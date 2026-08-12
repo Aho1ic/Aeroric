@@ -26,7 +26,10 @@ use tokio_tungstenite::tungstenite::protocol::{Message, WebSocketConfig};
 use tokio_tungstenite::WebSocketStream;
 
 use super::auth::AuthOutcome;
-use super::protocol::{parse_request, RpcResponse, PROTOCOL_VERSION};
+use super::protocol::{
+    parse_auth_request, parse_request, push_json, select_rpc_version, RpcResponse, RpcVersion,
+    PROTOCOL_VERSION,
+};
 use super::{audit, crypto, orca_crypto, orca_rpc, rpc, RemoteState};
 
 const AUTH_TIMEOUT: Duration = Duration::from_secs(10);
@@ -75,6 +78,7 @@ impl OutboundSender {
 
 pub struct ClientHandle {
     pub device_id: String,
+    rpc_version: RpcVersion,
     sender: OutboundSender,
 }
 
@@ -85,11 +89,16 @@ pub struct ClientRegistry {
 }
 
 impl ClientRegistry {
-    fn register(&self, device_id: String, sender: OutboundSender) -> u64 {
+    fn register(&self, device_id: String, rpc_version: RpcVersion, sender: OutboundSender) -> u64 {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
-        self.inner
-            .lock()
-            .insert(id, ClientHandle { device_id, sender });
+        self.inner.lock().insert(
+            id,
+            ClientHandle {
+                device_id,
+                rpc_version,
+                sender,
+            },
+        );
         id
     }
 
@@ -97,11 +106,12 @@ impl ClientRegistry {
         self.inner.lock().remove(&client_id);
     }
 
-    /// 事件桥用:向所有在线客户端推送 text 帧。
-    pub fn broadcast_text(&self, text: &str) {
+    /// 事件桥按每条连接协商出的版本编码，避免 v2/v3 客户端相互污染。
+    pub fn broadcast_push(&self, event: &str, seq: Option<u64>, data: &Value) {
         let clients = self.inner.lock();
         for handle in clients.values() {
-            let _ = handle.sender.send(Message::Text(text.to_string()));
+            let text = push_json(handle.rpc_version, event, seq, data);
+            let _ = handle.sender.send(Message::Text(text));
         }
     }
 
@@ -136,11 +146,15 @@ impl ClientRegistry {
 fn register_authenticated_client(
     state: &RemoteState,
     device_id: &str,
+    rpc_version: RpcVersion,
     sender: OutboundSender,
 ) -> Option<u64> {
     let auth = state.auth.lock();
-    auth.contains_device(device_id)
-        .then(|| state.clients.register(device_id.to_string(), sender))
+    auth.contains_device(device_id).then(|| {
+        state
+            .clients
+            .register(device_id.to_string(), rpc_version, sender)
+    })
 }
 
 // ── 服务生命周期 ─────────────────────────────────────────────────────────────
@@ -579,6 +593,7 @@ struct AuthenticatedFirstMessage {
     device_id: String,
     reply: String,
     paired_device_name: Option<String>,
+    rpc_version: RpcVersion,
 }
 
 async fn abort_pending_pairing<R: Runtime>(
@@ -804,8 +819,12 @@ pub(crate) async fn serve_ws<R, S>(
         let _ = sink.close().await;
         return;
     }
-    let client_id =
-        register_authenticated_client(&state, &authentication.device_id, outbound.clone());
+    let client_id = register_authenticated_client(
+        &state,
+        &authentication.device_id,
+        authentication.rpc_version,
+        outbound.clone(),
+    );
     let Some(client_id) = client_id else {
         abort_pending_pairing(&app, &authentication).await;
         let _ = sink.close().await;
@@ -908,7 +927,7 @@ pub(crate) async fn serve_ws<R, S>(
                                 let reply = if session.is_orca() {
                                     orca_rpc::handle(&app, &text).await
                                 } else {
-                                    handle_request(&app, &text).await
+                                    handle_request(&app, &text, authentication.rpc_version).await
                                 };
                                 if !send_encrypted(&mut sink, &mut session, crypto::KIND_CTRL, reply.as_bytes()).await {
                                     break;
@@ -1058,6 +1077,7 @@ fn authenticate_first_message<R: Runtime>(
                     })
                     .to_string(),
                     paired_device_name: None,
+                    rpc_version: RpcVersion::V2,
                 })
             }
             Ok(AuthOutcome::Paired { .. }) => {
@@ -1078,13 +1098,16 @@ fn authenticate_first_message<R: Runtime>(
             }
         };
     }
-    let req = match parse_request(raw) {
+    let req = match parse_auth_request(raw) {
         Ok(req) => req,
-        Err(err) => return Err(RpcResponse::failure(0, err).to_json()),
+        Err(err) => return Err(RpcResponse::malformed(RpcVersion::V2, err).to_json()),
     };
     if req.method != "auth" {
-        return Err(RpcResponse::failure(req.id, "First message must be auth").to_json());
+        return Err(
+            RpcResponse::failure(RpcVersion::V2, req.id, "First message must be auth").to_json(),
+        );
     }
+    let rpc_version = select_rpc_version(&req.params);
     let invite = req.params.get("invite").and_then(Value::as_str);
     let device_token = req.params.get("deviceToken").and_then(Value::as_str);
     let device_name = req.params.get("deviceName").and_then(Value::as_str);
@@ -1109,17 +1132,20 @@ fn authenticate_first_message<R: Runtime>(
             device_token,
         }) => {
             let reply = RpcResponse::success(
+                RpcVersion::V2,
                 req.id,
                 json!({
                     "deviceId": device_id,
                     "deviceToken": device_token,
                     "host": host,
+                    "rpcVersion": rpc_version.as_u32(),
                 }),
             );
             Ok(AuthenticatedFirstMessage {
                 device_id,
                 reply: reply.to_json(),
                 paired_device_name: Some(device_name),
+                rpc_version,
             })
         }
         Ok(AuthOutcome::Authenticated { device_id, .. }) => {
@@ -1129,12 +1155,20 @@ fn authenticate_first_message<R: Runtime>(
                     json!({ "peer": peer.to_string(), "deviceId": device_id }),
                 );
             }
-            let reply =
-                RpcResponse::success(req.id, json!({ "deviceId": device_id, "host": host }));
+            let reply = RpcResponse::success(
+                RpcVersion::V2,
+                req.id,
+                json!({
+                    "deviceId": device_id,
+                    "host": host,
+                    "rpcVersion": rpc_version.as_u32(),
+                }),
+            );
             Ok(AuthenticatedFirstMessage {
                 device_id,
                 reply: reply.to_json(),
                 paired_device_name: None,
+                rpc_version,
             })
         }
         Err(err) => {
@@ -1144,23 +1178,27 @@ fn authenticate_first_message<R: Runtime>(
                     json!({ "peer": peer.to_string(), "error": err }),
                 );
             }
-            Err(RpcResponse::failure(req.id, err).to_json())
+            Err(RpcResponse::failure(RpcVersion::V2, req.id, err).to_json())
         }
     }
 }
 
-async fn handle_request<R: Runtime>(app: &AppHandle<R>, raw: &str) -> String {
-    let req = match parse_request(raw) {
+async fn handle_request<R: Runtime>(
+    app: &AppHandle<R>,
+    raw: &str,
+    rpc_version: RpcVersion,
+) -> String {
+    let req = match parse_request(raw, rpc_version) {
         Ok(req) => req,
-        Err(err) => return RpcResponse::failure(0, err).to_json(),
+        Err(err) => return RpcResponse::malformed(rpc_version, err).to_json(),
     };
     // 已认证连接不允许再发 auth(避免把配对逻辑暴露在长连接里)。
     if req.method == "auth" {
-        return RpcResponse::failure(req.id, "Already authenticated").to_json();
+        return RpcResponse::failure(rpc_version, req.id, "Already authenticated").to_json();
     }
     match rpc::dispatch(app, &req.method, req.params).await {
-        Ok(result) => RpcResponse::success(req.id, result).to_json(),
-        Err(err) => RpcResponse::failure(req.id, err).to_json(),
+        Ok(result) => RpcResponse::success(rpc_version, req.id, result).to_json(),
+        Err(err) => RpcResponse::failure(rpc_version, req.id, err).to_json(),
     }
 }
 
@@ -1217,6 +1255,7 @@ mod tests {
         assert!(register_authenticated_client(
             &revoked_first,
             &device_id,
+            RpcVersion::V2,
             OutboundSender::new(tx, disconnect_tx),
         )
         .is_none());
@@ -1231,6 +1270,7 @@ mod tests {
         assert!(register_authenticated_client(
             &registered_first,
             &device_id,
+            RpcVersion::V2,
             OutboundSender::new(tx, disconnect_tx),
         )
         .is_some());

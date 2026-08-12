@@ -1,115 +1,256 @@
-//! 手机远程连接的线协议(v2:E2EE 强制,见 crypto.rs)。
+//! 手机远程连接的控制面协议。
 //!
-//! 明文阶段仅有握手两条 text 帧(hello / hello_ack);此后所有消息都封在
-//! 加密二进制帧里。控制面(kind=1)内层仍是 JSON,三种消息:
-//! - 请求:  `{"v":2,"id":<u64>,"method":"...","params":{...}}`
-//! - 响应:  `{"v":2,"id":<u64>,"ok":true,"result":...}` / `{"v":2,"id":<u64>,"ok":false,"error":"..."}`
-//! - 推送:  `{"v":2,"push":"<event>","data":...}`(服务端→客户端单向)
-//!
-//! v1(明文 JSON)已废弃:收到旧版本 hello/请求一律拒连,不做隐式降级。
+//! E2EE hello/auth、terminal binary framing 与持久化配对仍固定使用 v2。
+//! 认证成功后，双方可在加密通道内协商 RPC v3；字段缺失或旧客户端固定
+//! 回退 v2，确保已配对设备和旧版本可以长期互通。
 
-use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde::Deserialize;
+use serde_json::{json, Value};
 
+/// E2EE/hello 协议版本。它与加密通道内协商的 RPC 版本相互独立。
 pub const PROTOCOL_VERSION: u32 = 2;
+pub const RPC_V2: u32 = 2;
+pub const RPC_V3: u32 = 3;
 
-/// 客户端→服务端请求。
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RpcVersion {
+    V2,
+    V3,
+}
+
+impl RpcVersion {
+    pub fn as_u32(self) -> u32 {
+        match self {
+            Self::V2 => RPC_V2,
+            Self::V3 => RPC_V3,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum RpcId {
+    Number(u64),
+    Text(String),
+}
+
+impl RpcId {
+    fn value(&self) -> Value {
+        match self {
+            Self::Number(id) => json!(id),
+            Self::Text(id) => json!(id),
+        }
+    }
+}
+
+/// 统一的领域请求。wire 差异在解析边界消失，业务分发无需感知版本。
+#[derive(Debug)]
 pub struct RpcRequest {
-    pub v: u32,
-    pub id: u64,
+    pub id: RpcId,
     pub method: String,
-    #[serde(default)]
     pub params: Value,
 }
 
-/// 服务端→客户端响应。
-#[derive(Debug, Serialize)]
+#[derive(Debug, Deserialize)]
+struct RpcV2Request {
+    v: u32,
+    id: u64,
+    method: String,
+    #[serde(default)]
+    params: Value,
+}
+
+#[derive(Debug, Deserialize)]
+struct RpcV3Request {
+    v: u32,
+    #[serde(rename = "type")]
+    kind: String,
+    id: String,
+    method: String,
+    #[serde(default)]
+    params: Value,
+}
+
+/// 认证消息始终是 v2。新增协商字段只出现在 params 中。
+pub fn parse_auth_request(raw: &str) -> Result<RpcRequest, String> {
+    let req: RpcV2Request =
+        serde_json::from_str(raw).map_err(|error| format!("Malformed request: {error}"))?;
+    if req.v != RPC_V2 {
+        return Err(format!("Unsupported auth protocol version {}", req.v));
+    }
+    Ok(RpcRequest {
+        id: RpcId::Number(req.id),
+        method: req.method,
+        params: req.params,
+    })
+}
+
+/// 解析认证后的 v2/v3 请求。
+pub fn parse_request(raw: &str, negotiated: RpcVersion) -> Result<RpcRequest, String> {
+    match negotiated {
+        RpcVersion::V2 => parse_auth_request(raw),
+        RpcVersion::V3 => {
+            let req: RpcV3Request =
+                serde_json::from_str(raw).map_err(|error| format!("Malformed request: {error}"))?;
+            if req.v != RPC_V3 || req.kind != "request" || req.id.is_empty() {
+                return Err("Malformed v3 request envelope".to_string());
+            }
+            Ok(RpcRequest {
+                id: RpcId::Text(req.id),
+                method: req.method,
+                params: req.params,
+            })
+        }
+    }
+}
+
+pub fn select_rpc_version(params: &Value) -> RpcVersion {
+    let supports_v3 = params
+        .get("supportedRpcVersions")
+        .and_then(Value::as_array)
+        .is_some_and(|versions| versions.iter().any(|version| version.as_u64() == Some(3)));
+    if supports_v3 {
+        RpcVersion::V3
+    } else {
+        RpcVersion::V2
+    }
+}
+
 pub struct RpcResponse {
-    pub v: u32,
-    pub id: u64,
-    pub ok: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub result: Option<Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub error: Option<String>,
+    version: RpcVersion,
+    id: RpcId,
+    result: Result<Value, RpcError>,
+}
+
+struct RpcError {
+    code: &'static str,
+    message: String,
+    retryable: bool,
 }
 
 impl RpcResponse {
-    pub fn success(id: u64, result: Value) -> Self {
+    pub fn success(version: RpcVersion, id: RpcId, result: Value) -> Self {
         Self {
-            v: PROTOCOL_VERSION,
+            version,
             id,
-            ok: true,
-            result: Some(result),
-            error: None,
+            result: Ok(result),
         }
     }
 
-    pub fn failure(id: u64, error: impl Into<String>) -> Self {
+    pub fn failure(version: RpcVersion, id: RpcId, error: impl Into<String>) -> Self {
         Self {
-            v: PROTOCOL_VERSION,
+            version,
             id,
-            ok: false,
-            result: None,
-            error: Some(error.into()),
+            result: Err(RpcError {
+                code: "remote_error",
+                message: error.into(),
+                retryable: false,
+            }),
         }
+    }
+
+    pub fn malformed(version: RpcVersion, error: impl Into<String>) -> Self {
+        let id = match version {
+            RpcVersion::V2 => RpcId::Number(0),
+            RpcVersion::V3 => RpcId::Text(String::new()),
+        };
+        Self::failure(version, id, error)
     }
 
     pub fn to_json(&self) -> String {
-        serde_json::to_string(self).unwrap_or_else(|_| {
-            format!(
-                "{{\"v\":{PROTOCOL_VERSION},\"id\":{},\"ok\":false,\"error\":\"serialize failed\"}}",
-                self.id
-            )
+        let id = self.id.value();
+        let value = match (&self.result, self.version) {
+            (Ok(result), RpcVersion::V2) => {
+                json!({ "v": RPC_V2, "id": id, "ok": true, "result": result })
+            }
+            (Err(error), RpcVersion::V2) => {
+                json!({ "v": RPC_V2, "id": id, "ok": false, "error": error.message })
+            }
+            (Ok(result), RpcVersion::V3) => json!({
+                "v": RPC_V3,
+                "type": "response",
+                "id": id,
+                "ok": true,
+                "result": result,
+            }),
+            (Err(error), RpcVersion::V3) => json!({
+                "v": RPC_V3,
+                "type": "response",
+                "id": id,
+                "ok": false,
+                "error": {
+                    "code": error.code,
+                    "message": error.message,
+                    "retryable": error.retryable,
+                },
+            }),
+        };
+        serde_json::to_string(&value).unwrap_or_else(|_| {
+            json!({
+                "v": self.version.as_u32(),
+                "id": id,
+                "ok": false,
+                "error": "serialize failed",
+            })
+            .to_string()
         })
     }
 }
 
-/// 服务端→客户端推送(桌面事件桥转发 task-status 等)。
-/// `seq` 仅在事件进了 event_log(可补发)时携带,客户端以此维护 watermark。
-#[derive(Debug, Serialize)]
-pub struct RpcPush<'a> {
-    pub v: u32,
-    pub push: &'a str,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub seq: Option<u64>,
-    pub data: Value,
+pub fn push_json(version: RpcVersion, event: &str, seq: Option<u64>, data: &Value) -> String {
+    match version {
+        RpcVersion::V2 => json!({
+            "v": RPC_V2,
+            "push": event,
+            "seq": seq,
+            "data": data,
+        }),
+        RpcVersion::V3 => json!({
+            "v": RPC_V3,
+            "type": "push",
+            "event": event,
+            "seq": seq,
+            "data": data,
+        }),
+    }
+    .to_string()
 }
 
-impl<'a> RpcPush<'a> {
-    pub fn new(event: &'a str, data: Value) -> Self {
-        Self {
-            v: PROTOCOL_VERSION,
-            push: event,
-            seq: None,
-            data,
-        }
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn v3_wire_shape_matches_shared_golden_fixture() {
+        let fixture: Value = serde_json::from_str(include_str!(
+            "../../../packages/remote-contracts/fixtures/rpc-golden.json"
+        ))
+        .expect("shared golden fixture");
+        let request = parse_request(&fixture["request"].to_string(), RpcVersion::V3)
+            .expect("parse v3 request");
+        assert_eq!(request.id, RpcId::Text("rpc-7".to_string()));
+
+        let response = RpcResponse::success(RpcVersion::V3, request.id, json!([]));
+        let response_value: Value = serde_json::from_str(&response.to_json()).expect("response");
+        assert_eq!(response_value, fixture["success"]);
+
+        let push = push_json(
+            RpcVersion::V3,
+            "task-status",
+            Some(42),
+            &json!({ "task_id": "task-1", "status": "running" }),
+        );
+        assert_eq!(
+            serde_json::from_str::<Value>(&push).expect("push"),
+            fixture["push"]
+        );
     }
 
-    pub fn with_seq(event: &'a str, seq: u64, data: Value) -> Self {
-        Self {
-            v: PROTOCOL_VERSION,
-            push: event,
-            seq: Some(seq),
-            data,
-        }
+    #[test]
+    fn negotiation_defaults_to_v2_for_old_clients() {
+        assert_eq!(select_rpc_version(&json!({})), RpcVersion::V2);
+        assert_eq!(
+            select_rpc_version(&json!({ "supportedRpcVersions": [3, 2] })),
+            RpcVersion::V3
+        );
     }
-
-    pub fn to_json(&self) -> Option<String> {
-        serde_json::to_string(self).ok()
-    }
-}
-
-/// 解析请求;协议版本不匹配返回 Err(错误文案随响应回给客户端)。
-pub fn parse_request(raw: &str) -> Result<RpcRequest, String> {
-    let req: RpcRequest =
-        serde_json::from_str(raw).map_err(|e| format!("Malformed request: {e}"))?;
-    if req.v != PROTOCOL_VERSION {
-        return Err(format!(
-            "Unsupported protocol version {} (server speaks {PROTOCOL_VERSION})",
-            req.v
-        ));
-    }
-    Ok(req)
 }

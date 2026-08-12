@@ -10,7 +10,6 @@
 use serde_json::{json, Value};
 use tauri::{AppHandle, Manager, Runtime};
 
-use super::protocol::RpcPush;
 use super::rpc::str_param;
 use super::RemoteState;
 use crate::storage::{self, Project, ProjectLocation, Task};
@@ -103,7 +102,7 @@ pub(crate) fn publish_session_appended<R: Runtime>(
         return;
     }
     let data = json!({ "task_id": task_id, "messages": messages });
-    if let Some(text) = RpcPush::new("session.appended", data).to_json() {
-        state.clients.broadcast_text(&text);
-    }
+    state
+        .clients
+        .broadcast_push("session.appended", None, &data);
 }

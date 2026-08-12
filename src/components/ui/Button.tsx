@@ -1,9 +1,16 @@
 import {
+  Children,
+  createContext,
+  isValidElement,
+  useContext,
   useState,
   type ButtonHTMLAttributes,
   type CSSProperties,
   type HTMLAttributes,
+  type ReactNode,
 } from "react";
+import type { LucideIcon } from "lucide-react";
+import { AnimatedSelectionTrack } from "./AnimatedSelection";
 
 export type ButtonVariant = "default" | "outline" | "secondary" | "ghost" | "destructive" | "link";
 export type ButtonSize =
@@ -16,11 +23,20 @@ export type ButtonSize =
   | "icon-sm"
   | "icon-lg";
 
-type ButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
+export type ButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
   variant?: ButtonVariant;
   size?: ButtonSize;
+  icon?: LucideIcon;
+  iconPosition?: "start" | "end";
   active?: boolean;
 };
+
+export type ButtonGroupProps = HTMLAttributes<HTMLDivElement> & { children?: ReactNode };
+export type MenuItemProps = Omit<ButtonProps, "variant" | "size" | "role"> & {
+  destructive?: boolean;
+};
+
+const ButtonGroupContext = createContext(false);
 
 const baseButtonStyle: CSSProperties = {
   display: "inline-flex",
@@ -123,7 +139,7 @@ const sizeStyle: Record<ButtonSize, CSSProperties> = {
     gap: 4,
   },
   sm: {
-    height: 30,
+    height: 28,
     padding: "0 10px",
     borderRadius: "var(--radius-sm)",
     fontSize: 12,
@@ -166,10 +182,23 @@ const sizeStyle: Record<ButtonSize, CSSProperties> = {
   },
 };
 
+const iconSizes: Record<ButtonSize, number> = {
+  default: 16,
+  xs: 12,
+  sm: 14,
+  lg: 16,
+  icon: 16,
+  "icon-xs": 12,
+  "icon-sm": 14,
+  "icon-lg": 16,
+};
+
 export function Button({
   type = "button",
   variant = "default",
   size = "default",
+  icon: Icon,
+  iconPosition = "start",
   active = false,
   disabled = false,
   style,
@@ -183,6 +212,8 @@ export function Button({
   const [hovered, setHovered] = useState(false);
   const [focused, setFocused] = useState(false);
   const showHover = hovered && !disabled;
+  const isIconOnly = size.startsWith("icon") || (!children && Icon);
+  const iconElement = Icon ? <Icon size={iconSizes[size]} aria-hidden /> : null;
   const resolvedVariant: ButtonVariant = active ? "secondary" : variant;
   const resolvedStyle: CSSProperties = {
     ...baseButtonStyle,
@@ -236,24 +267,98 @@ export function Button({
       }}
       {...props}
     >
-      {children}
+      {iconPosition === "start" ? iconElement : null}
+      {!isIconOnly ? children : null}
+      {iconPosition === "end" ? iconElement : null}
     </button>
   );
 }
 
-export function ButtonGroup({ children, style, ...props }: HTMLAttributes<HTMLDivElement>) {
+export function IconButton(props: Omit<ButtonProps, "children">) {
+  return <Button variant="ghost" size="icon" {...props} />;
+}
+
+export function ButtonGroup({
+  children,
+  style,
+  className,
+  role,
+  "aria-label": ariaLabel,
+}: ButtonGroupProps) {
+  const items = Children.toArray(children);
+  const activeIndex = items.findIndex(
+    (child) => isValidElement<ButtonProps>(child) && child.props.active,
+  );
   return (
-    <div
-      role={props.role ?? "group"}
+    <AnimatedSelectionTrack
+      value={activeIndex}
+      ariaLabel={typeof ariaLabel === "string" ? ariaLabel : ""}
+      role={role === "tablist" ? "tablist" : "group"}
+      className={className}
+      dataSlot="button-group"
       style={{
-        display: "inline-flex",
-        alignItems: "center",
-        gap: 6,
+        ...style,
+      }}
+    >
+      {items.map((child, index) => (
+        <span
+          key={isValidElement(child) && child.key != null ? child.key : index}
+          data-animated-selection-item
+          data-selection-value={String(index)}
+          style={{ position: "relative", zIndex: 1, display: "inline-flex" }}
+        >
+          <ButtonGroupContext.Provider value>{child}</ButtonGroupContext.Provider>
+        </span>
+      ))}
+    </AnimatedSelectionTrack>
+  );
+}
+
+export function SegmentedButton({
+  active = false,
+  variant = "ghost",
+  size = "sm",
+  ...props
+}: ButtonProps) {
+  const grouped = useContext(ButtonGroupContext);
+  return (
+    <Button
+      active={grouped ? false : active}
+      aria-pressed={active}
+      variant={grouped ? "ghost" : active ? "secondary" : variant}
+      size={size}
+      {...props}
+      style={{
+        background: grouped ? "transparent" : undefined,
+        color: grouped ? (active ? "var(--control-active-fg)" : "var(--text-muted)") : undefined,
+        ...props.style,
+      }}
+    />
+  );
+}
+
+export function MenuItem({ destructive = false, icon, style, children, ...props }: MenuItemProps) {
+  return (
+    <Button
+      role="menuitem"
+      variant={destructive ? "destructive" : "ghost"}
+      size="sm"
+      icon={icon}
+      style={{
+        width: "100%",
+        justifyContent: "flex-start",
+        borderRadius: 8,
+        background: destructive ? "var(--danger-subtle, rgba(239, 68, 68, 0.1))" : undefined,
+        color: destructive ? "var(--danger, #ef4444)" : undefined,
         ...style,
       }}
       {...props}
     >
       {children}
-    </div>
+    </Button>
   );
+}
+
+export function DialogFooterButton({ variant = "outline", size = "sm", ...props }: ButtonProps) {
+  return <Button variant={variant} size={size} {...props} />;
 }

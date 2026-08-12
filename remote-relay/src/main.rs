@@ -12,10 +12,8 @@
 //!
 //! 协议见 remote-protocol crate;部署指南见仓库 docs/remote-public-access.md。
 
-use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
-use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::sync::Arc;
 
 use futures_util::{SinkExt, StreamExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -26,74 +24,30 @@ use tokio_tungstenite::WebSocketStream;
 
 use remote_protocol::{parse_route, HostToRelay, RelayRoute, RelayToHost, RELAY_PROTOCOL_VERSION};
 
-/// 与桌面端 remote/server.rs 一致的单条消息上限。
-const MAX_MESSAGE_BYTES: usize = 1024 * 1024;
-const MAX_ACTIVE_CONNECTIONS: usize = 512;
-const MAX_PENDING_CONNECTIONS: usize = 256;
-const MAX_PENDING_PER_HOST: usize = 32;
-const CLIENT_CONNECT_RATE_LIMIT: u32 = 12;
-const CLIENT_CONNECT_RATE_WINDOW: Duration = Duration::from_secs(10);
-const CLIENT_RATE_LIMIT_RETENTION: Duration = Duration::from_secs(10 * 60);
-const MAX_CLIENT_RATE_LIMIT_ENTRIES: usize = 4096;
-const HOST_CONTROL_QUEUE_CAPACITY: usize = 64;
-const WEBSOCKET_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
-const REGISTER_TIMEOUT: Duration = Duration::from_secs(10);
-/// 通知桌面后等它拨数据连接的窗口。
-const DIAL_TIMEOUT: Duration = Duration::from_secs(15);
-const CONTROL_PING_INTERVAL: Duration = Duration::from_secs(25);
-const CONTROL_IDLE_DISCONNECT: Duration = Duration::from_secs(75);
+mod config;
+mod rate_limit;
+mod registry;
+mod splice;
+
+use config::{
+    RelayConfig, CONTROL_IDLE_DISCONNECT, CONTROL_PING_INTERVAL, DIAL_TIMEOUT,
+    HOST_CONTROL_QUEUE_CAPACITY, MAX_ACTIVE_CONNECTIONS, MAX_MESSAGE_BYTES, REGISTER_TIMEOUT,
+    WEBSOCKET_HANDSHAKE_TIMEOUT,
+};
+use rate_limit::{source_ip as rate_limit_source_ip, try_acquire as try_acquire_rate_limit};
+use registry::{cleanup_host, try_insert_pending, try_register_host, Registry};
+use splice::splice;
 
 type Ws = WebSocketStream<TcpStream>;
 
-#[derive(Clone)]
-struct RelayConfig {
-    token: String,
-}
-
-#[derive(Default)]
-struct Registry {
-    /// hostId → 控制连接出口(投递 ClientConnected)。
-    hosts: Mutex<HashMap<String, mpsc::Sender<Message>>>,
-    /// connId → 把桌面数据连接交回手机接入任务的信道。
-    pending: Mutex<HashMap<String, PendingConnection>>,
-    /// 来源 IP → 手机接入速率窗口。只限制无 token 的 `/connect/:hostId`。
-    client_rate_limits: Mutex<HashMap<IpAddr, ClientRateLimit>>,
-}
-
-struct PendingConnection {
-    host_id: String,
-    sender: oneshot::Sender<Ws>,
-}
-
-struct ClientRateLimit {
-    window_started: Instant,
-    attempts: u32,
-    last_seen: Instant,
-}
-
 #[tokio::main]
 async fn main() {
-    let port: u16 = std::env::var("RELAY_PORT")
-        .ok()
-        .and_then(|p| p.parse().ok())
-        .unwrap_or(6791);
-    let token = require_relay_token(std::env::var("RELAY_TOKEN").ok())
-        .unwrap_or_else(|error| panic!("{error}"));
+    let (port, config) = RelayConfig::from_env().unwrap_or_else(|error| panic!("{error}"));
     let listener = TcpListener::bind(("0.0.0.0", port))
         .await
         .unwrap_or_else(|e| panic!("failed to bind 0.0.0.0:{port}: {e}"));
     eprintln!("[relay] listening on 0.0.0.0:{port} (host auth: token)");
-    serve(listener, RelayConfig { token }).await;
-}
-
-fn require_relay_token(token: Option<String>) -> Result<String, String> {
-    token
-        .map(|token| token.trim().to_string())
-        .filter(|token| !token.is_empty())
-        .ok_or_else(|| {
-            "RELAY_TOKEN is required and must be non-empty; refusing to start an open relay"
-                .to_string()
-        })
+    serve(listener, config).await;
 }
 
 async fn serve(listener: TcpListener, config: RelayConfig) {
@@ -276,25 +230,6 @@ async fn host_control(mut ws: Ws, registry: Arc<Registry>, config: RelayConfig) 
     eprintln!("[relay] host disconnected: {host_id}");
 }
 
-fn try_register_host(registry: &Registry, host_id: &str, tx: mpsc::Sender<Message>) -> bool {
-    let mut hosts = registry.hosts.lock().unwrap();
-    if hosts.contains_key(host_id) {
-        return false;
-    }
-    hosts.insert(host_id.to_string(), tx);
-    true
-}
-
-fn cleanup_host(registry: &Registry, host_id: &str, tx: &mpsc::Sender<Message>) {
-    let mut hosts = registry.hosts.lock().unwrap();
-    if hosts
-        .get(host_id)
-        .is_some_and(|current| current.same_channel(tx))
-    {
-        hosts.remove(host_id);
-    }
-}
-
 /// 手机接入:通知桌面拨数据连接,等到后逐帧对接。
 async fn client_connect(
     ws: Ws,
@@ -303,7 +238,11 @@ async fn client_connect(
     client_ip: IpAddr,
     registry: Arc<Registry>,
 ) {
-    if !try_acquire_client_connect(&registry, client_ip, Instant::now()) {
+    if !try_acquire_rate_limit(
+        &registry.client_rate_limits,
+        client_ip,
+        std::time::Instant::now(),
+    ) {
         let mut ws = ws;
         let _ = ws.close(None).await;
         return;
@@ -340,54 +279,6 @@ async fn client_connect(
     }
 }
 
-fn rate_limit_source_ip(peer: IpAddr, request: &Request) -> IpAddr {
-    // 部署文档中的 TLS 反代与 relay 同机；仅对 loopback 反代信任来源头，
-    // 避免公网直连客户端伪造 X-Forwarded-For 绕过限流。
-    if !peer.is_loopback() {
-        return peer;
-    }
-    ["x-forwarded-for", "x-real-ip"]
-        .iter()
-        .filter_map(|name| request.headers().get(*name))
-        .filter_map(|value| value.to_str().ok())
-        // 取本机反代追加的最右一项，不信任客户端预先伪造的左侧链。
-        .filter_map(|value| value.rsplit(',').next())
-        .find_map(|value| value.trim().parse().ok())
-        .unwrap_or(peer)
-}
-
-fn try_acquire_client_connect(registry: &Registry, peer: IpAddr, now: Instant) -> bool {
-    let mut limits = registry.client_rate_limits.lock().unwrap();
-    if limits.len() >= MAX_CLIENT_RATE_LIMIT_ENTRIES {
-        limits.retain(|_, entry| now.duration_since(entry.last_seen) < CLIENT_RATE_LIMIT_RETENTION);
-        if limits.len() >= MAX_CLIENT_RATE_LIMIT_ENTRIES && !limits.contains_key(&peer) {
-            if let Some(oldest) = limits
-                .iter()
-                .min_by_key(|(_, entry)| entry.last_seen)
-                .map(|(address, _)| *address)
-            {
-                limits.remove(&oldest);
-            }
-        }
-    }
-
-    let entry = limits.entry(peer).or_insert(ClientRateLimit {
-        window_started: now,
-        attempts: 0,
-        last_seen: now,
-    });
-    entry.last_seen = now;
-    if now.duration_since(entry.window_started) >= CLIENT_CONNECT_RATE_WINDOW {
-        entry.window_started = now;
-        entry.attempts = 0;
-    }
-    if entry.attempts >= CLIENT_CONNECT_RATE_LIMIT {
-        return false;
-    }
-    entry.attempts += 1;
-    true
-}
-
 /// 桌面数据连接:交给等待中的手机接入任务(由它执行 splice)。
 fn host_data(ws: Ws, conn_id: String, registry: Arc<Registry>) {
     let Some(pending) = registry.pending.lock().unwrap().remove(&conn_id) else {
@@ -397,61 +288,16 @@ fn host_data(ws: Ws, conn_id: String, registry: Arc<Registry>) {
     let _ = pending.sender.send(ws);
 }
 
-fn try_insert_pending(
-    registry: &Registry,
-    host_id: &str,
-    conn_id: &str,
-    sender: oneshot::Sender<Ws>,
-) -> bool {
-    let mut pending = registry.pending.lock().unwrap();
-    if pending.len() >= MAX_PENDING_CONNECTIONS
-        || pending
-            .values()
-            .filter(|entry| entry.host_id == host_id)
-            .count()
-            >= MAX_PENDING_PER_HOST
-    {
-        return false;
-    }
-    pending.insert(
-        conn_id.to_string(),
-        PendingConnection {
-            host_id: host_id.to_string(),
-            sender,
-        },
-    );
-    true
-}
-
-/// 双向逐帧盲转发,任一侧断开即两侧收尾。
-async fn splice(a: Ws, b: Ws) {
-    let (mut a_sink, mut a_stream) = a.split();
-    let (mut b_sink, mut b_stream) = b.split();
-    let a_to_b = async {
-        while let Some(Ok(msg)) = a_stream.next().await {
-            let closing = matches!(msg, Message::Close(_));
-            if b_sink.send(msg).await.is_err() || closing {
-                break;
-            }
-        }
-        let _ = b_sink.close().await;
-    };
-    let b_to_a = async {
-        while let Some(Ok(msg)) = b_stream.next().await {
-            let closing = matches!(msg, Message::Close(_));
-            if a_sink.send(msg).await.is_err() || closing {
-                break;
-            }
-        }
-        let _ = a_sink.close().await;
-    };
-    tokio::join!(a_to_b, b_to_a);
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::{Duration, Instant};
+
     use tokio_tungstenite::connect_async;
+
+    use crate::config::require_relay_token;
+    use crate::rate_limit::{CLIENT_CONNECT_RATE_LIMIT, CLIENT_CONNECT_RATE_WINDOW};
+    use crate::registry::MAX_PENDING_PER_HOST;
 
     async fn spawn_relay(config: RelayConfig) -> u16 {
         let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
@@ -519,14 +365,26 @@ mod tests {
         let second: IpAddr = "203.0.113.11".parse().unwrap();
 
         for _ in 0..CLIENT_CONNECT_RATE_LIMIT {
-            assert!(try_acquire_client_connect(&registry, first, now));
+            assert!(try_acquire_rate_limit(
+                &registry.client_rate_limits,
+                first,
+                now
+            ));
         }
-        assert!(!try_acquire_client_connect(&registry, first, now));
-        assert!(try_acquire_client_connect(&registry, second, now));
-        assert!(try_acquire_client_connect(
-            &registry,
+        assert!(!try_acquire_rate_limit(
+            &registry.client_rate_limits,
             first,
-            now + CLIENT_CONNECT_RATE_WINDOW,
+            now
+        ));
+        assert!(try_acquire_rate_limit(
+            &registry.client_rate_limits,
+            second,
+            now
+        ));
+        assert!(try_acquire_rate_limit(
+            &registry.client_rate_limits,
+            first,
+            now + CLIENT_CONNECT_RATE_WINDOW
         ));
     }
 

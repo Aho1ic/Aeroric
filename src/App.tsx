@@ -1,6 +1,6 @@
 import { lazy, Suspense, useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { open as openDialog, confirm } from "@tauri-apps/plugin-dialog";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import type {
@@ -484,6 +484,8 @@ function App() {
   }, [themeVariant, themeMode]);
 
   useEffect(() => {
+    if (!isTauri()) return;
+
     // Tauri window theme only understands light/dark/null; map eyecare to light
     // so the native chrome (titlebar, scrollbars) stays in the light family.
     const nativeTheme = themeMode === "system" ? null : themeMode === "dark" ? "dark" : "light";

@@ -1538,7 +1538,7 @@ pub async fn run_task(
             created_at,
         );
     }
-    let needs_status_session_watcher = !(pre_session_id.is_some() && !is_codex)
+    let needs_status_session_watcher = (pre_session_id.is_none() || is_codex)
         && should_start_status_session_watcher(use_hooks, is_codex, !starts_with_prompt);
     let session_tx = if needs_status_session_watcher {
         let (session_tx, session_rx) = std::sync::mpsc::channel::<String>();

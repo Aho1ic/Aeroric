@@ -1,5 +1,5 @@
 import { useI18n } from "../../i18n";
-import { DbxButton } from "./DbxButton";
+import { Button as DbxButton } from "../ui/Button";
 
 export interface RedisCommandHistoryEntry {
   id: number;

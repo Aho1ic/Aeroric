@@ -15,7 +15,6 @@ import {
   ScrollView,
   StyleSheet,
   Text,
-  TextInput,
   View,
 } from "react-native";
 import { Gauge, Zap } from "lucide-react-native";
@@ -38,6 +37,7 @@ import {
 import { AnimatedPressable } from "../ui/AnimatedPressable";
 import { AnimatedSelection } from "../ui/AnimatedSelection";
 import { ANTHROPIC_BRAND, AnthropicIcon, OpenAIIcon } from "../ui/brand-icons";
+import { Button, Field } from "../ui/primitives";
 import { radii, spacing, theme, typography } from "../ui/theme";
 
 /** 两栏各默认显示 5 行，更多配置在各自列内滚动。 */
@@ -492,26 +492,22 @@ function NewTaskForm({ lockedProjectId, onClose, onCreated }: NewTaskFormProps) 
         style={styles.permissionSelection}
       />
 
-      <Text style={styles.sectionLabel}>Prompt</Text>
-      <TextInput
-        style={styles.promptInput}
+      <Field
+        label="Prompt"
         value={prompt}
         onChangeText={setPrompt}
         placeholder={t("newTask.promptPlaceholder")}
-        placeholderTextColor={theme.textHint}
         multiline
         textAlignVertical="top"
+        style={styles.promptInput}
       />
 
-      <AnimatedPressable
-        style={[styles.submitButton, !canSubmit && styles.submitDisabled]}
+      <Button
+        label={submitting ? t("newTask.submitting") : t("newTask.submit")}
         disabled={!canSubmit}
         onPress={submit}
-      >
-        <Text style={styles.submitText}>
-          {submitting ? t("newTask.submitting") : t("newTask.submit")}
-        </Text>
-      </AnimatedPressable>
+        style={styles.submitButton}
+      />
       <Text style={styles.hint}>{t("newTask.footnote")}</Text>
     </ScrollView>
   );
@@ -669,25 +665,13 @@ const styles = StyleSheet.create({
   permissionSelection: { alignSelf: "stretch" },
   promptInput: {
     minHeight: 120,
-    borderRadius: radii.input,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: theme.border,
-    backgroundColor: theme.bgCard,
-    color: theme.text,
-    padding: spacing.md,
-    fontSize: typography.bodySize,
     lineHeight: 20,
+    paddingTop: spacing.md,
   },
   submitButton: {
     minHeight: 50,
-    backgroundColor: theme.accent,
-    borderRadius: radii.button,
-    paddingVertical: 13,
-    alignItems: "center",
     marginTop: spacing.sm,
   },
-  submitDisabled: { opacity: 0.4 },
-  submitText: { color: theme.onAccent, fontSize: 15, fontWeight: "700" },
   closeButton: {
     minHeight: 34,
     alignItems: "center",

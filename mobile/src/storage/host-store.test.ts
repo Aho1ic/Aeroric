@@ -6,12 +6,7 @@ vi.mock("expo-secure-store", () => ({
 }));
 
 import type { HostIdentity, PairedHost } from "../types";
-import {
-  addOrReplaceHost,
-  isSameHost,
-  mergeHostIdentity,
-  type HostStoreState,
-} from "./host-store";
+import { addOrReplaceHost, isSameHost, mergeHostIdentity, type HostStoreState } from "./host-store";
 
 function host(overrides: Partial<PairedHost>): PairedHost {
   return {
@@ -51,10 +46,7 @@ describe("host identity", () => {
       endpoints: ["wss://relay.example/host-a"],
     });
 
-    const next = addOrReplaceHost(
-      { hosts: [oldHost], activeHostId: oldHost.id },
-      newHost,
-    );
+    const next = addOrReplaceHost({ hosts: [oldHost], activeHostId: oldHost.id }, newHost);
     expect(next.hosts).toEqual([newHost]);
   });
 
@@ -161,9 +153,7 @@ describe("mergeHostIdentity", () => {
   });
 
   it("把本轮实际连上的地址排到候选列表最前", () => {
-    const before = state([
-      host({ id: "a", hostId: "H1", endpoints: ["ws://192.168.1.10:6790"] }),
-    ]);
+    const before = state([host({ id: "a", hostId: "H1", endpoints: ["ws://192.168.1.10:6790"] })]);
     const identity: HostIdentity = {
       hostId: "H1",
       lanEndpoints: ["ws://10.10.20.5:6790", "ws://10.10.20.2:6790"],
@@ -175,9 +165,7 @@ describe("mergeHostIdentity", () => {
   });
 
   it("桌面未返回 LAN 地址时保留已保存端点,不清空", () => {
-    const before = state([
-      host({ id: "a", hostId: "H1", endpoints: ["ws://192.168.1.10:6790"] }),
-    ]);
+    const before = state([host({ id: "a", hostId: "H1", endpoints: ["ws://192.168.1.10:6790"] })]);
 
     const after = mergeHostIdentity(before, "a", { hostId: "H1" });
 

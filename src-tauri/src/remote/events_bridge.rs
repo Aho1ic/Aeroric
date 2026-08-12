@@ -7,7 +7,6 @@
 use serde_json::Value;
 use tauri::{AppHandle, Listener, Manager, Runtime};
 
-use super::protocol::RpcPush;
 use super::RemoteState;
 
 /// 转发给手机的桌面事件白名单。M2/M3 按需扩充(终端流走独立二进制通道,不在此列)。
@@ -35,9 +34,7 @@ pub fn attach<R: Runtime>(app: &AppHandle<R>) -> Vec<tauri::EventId> {
                 }
                 // 先入事件日志(重连 watermark 补发源),推送 envelope 携带 seq
                 let seq = event_log.append(event_name, data.clone());
-                if let Some(text) = RpcPush::with_seq(event_name, seq, data).to_json() {
-                    clients.broadcast_text(&text);
-                }
+                clients.broadcast_push(event_name, Some(seq), &data);
             })
         })
         .collect()

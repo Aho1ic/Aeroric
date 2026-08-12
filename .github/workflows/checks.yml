@@ -68,7 +68,6 @@ jobs:
           cache: pnpm
           cache-dependency-path: |
             pnpm-lock.yaml
-            mobile/pnpm-lock.yaml
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -154,9 +153,6 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile --ignore-scripts
 
-      - name: Install mobile dependencies
-        run: pnpm --dir mobile install --frozen-lockfile --ignore-scripts
-
       - name: Audit JavaScript dependencies
         if: runner.os == 'Linux'
         run: |
@@ -168,6 +164,9 @@ jobs:
 
       - name: Check formatting
         run: pnpm format:check
+
+      - name: Check generated design tokens
+        run: pnpm check:design-tokens
 
       - name: Run tests
         run: pnpm test

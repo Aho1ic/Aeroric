@@ -1,0 +1,37 @@
+{
+  "request": {
+    "v": 3,
+    "type": "request",
+    "id": "rpc-7",
+    "method": "projects.list",
+    "params": {}
+  },
+  "success": {
+    "v": 3,
+    "type": "response",
+    "id": "rpc-7",
+    "ok": true,
+    "result": []
+  },
+  "failure": {
+    "v": 3,
+    "type": "response",
+    "id": "rpc-7",
+    "ok": false,
+    "error": {
+      "code": "not_found",
+      "message": "Project not found",
+      "retryable": false
+    }
+  },
+  "push": {
+    "v": 3,
+    "type": "push",
+    "event": "task-status",
+    "seq": 42,
+    "data": {
+      "task_id": "task-1",
+      "status": "running"
+    }
+  }
+}

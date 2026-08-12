@@ -9,7 +9,7 @@ import type {
   DbxColumnInfo,
   DbxObjectInfo,
 } from "../../types";
-import { DbxButton } from "./DbxButton";
+import { Button as DbxButton } from "../ui/Button";
 
 interface SearchResultItem {
   id: string;
