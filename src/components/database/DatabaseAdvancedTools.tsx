@@ -10,7 +10,7 @@ import type {
   DbxObjectInfo,
   DbxTransferProgress,
 } from "../../types";
-import { DbxButton } from "./DbxButton";
+import { Button as DbxButton } from "../ui/Button";
 import { confirmDbxProductionOperation } from "./databaseProductionSafety";
 
 export type DatabaseAdvancedToolMode = "transfer" | "schema-diff" | "data-compare";

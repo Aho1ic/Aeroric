@@ -14,6 +14,7 @@ import { t } from "../../src/i18n";
 import { useHostTasks } from "../../src/state/use-host-tasks";
 import type { Task } from "../../src/types";
 import { HeaderActions, HeaderIconButton } from "../../src/ui/HeaderIconButton";
+import { EmptyState } from "../../src/ui/primitives";
 import { taskStatusRank } from "../../src/ui/task-status";
 import { spacing, theme, typography } from "../../src/ui/theme";
 
@@ -89,11 +90,7 @@ export default function ProjectScreen() {
           data={tasks}
           keyExtractor={(item) => item.id}
           renderItem={({ item }) => <TaskRow task={item} />}
-          ListEmptyComponent={
-            <View style={styles.emptyWrap}>
-              <Text style={styles.emptyText}>{t("project.empty")}</Text>
-            </View>
-          }
+          ListEmptyComponent={<EmptyState title={t("project.empty")} />}
           contentContainerStyle={tasks.length === 0 ? styles.listEmpty : styles.list}
           refreshControl={
             <RefreshControl
@@ -119,8 +116,6 @@ const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: theme.bg },
   list: { paddingTop: spacing.sm, paddingBottom: 32 },
   listEmpty: { flexGrow: 1, justifyContent: "center" },
-  emptyWrap: { alignItems: "center", paddingHorizontal: 32 },
-  emptyText: { color: theme.textSecondary, fontSize: 13.5, lineHeight: 21, textAlign: "center" },
   errorText: {
     color: theme.danger,
     fontSize: typography.metaSize,

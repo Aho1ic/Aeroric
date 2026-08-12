@@ -26,8 +26,16 @@ import {
   type OrcaE2EEContext,
   type OrcaE2EEPendingHandshake,
 } from "./orca-e2ee-v2";
+import {
+  RPC_V2,
+  authenticationParams,
+  decodeAeroricEnvelope,
+  encodeAeroricRequest,
+  negotiatedRpcVersion,
+  type RpcVersion,
+} from "./rpc-codec";
 
-export const PROTOCOL_VERSION = 2;
+export const PROTOCOL_VERSION = RPC_V2;
 
 export type ConnectionStatus =
   | "idle"
@@ -93,6 +101,7 @@ export interface AuthSuccess {
   deviceId: string;
   deviceToken?: string;
   host?: { name: string; version: string; platform: string };
+  rpcVersion?: RpcVersion;
 }
 
 /** RPC events.since 的响应(重连 watermark 补发)。 */
@@ -168,6 +177,7 @@ export class RemoteConnection {
   private session: E2eeSession | OrcaE2EESession | null = null;
   private handshake: PendingHandshake | OrcaE2EEPendingHandshake | null = null;
   private orcaAuthenticated = false;
+  private rpcVersion: RpcVersion = RPC_V2;
   private statusValue: ConnectionStatus = "idle";
   private nextId = 1;
   private pending = new Map<string, PendingRequest>();
@@ -561,8 +571,15 @@ export class RemoteConnection {
     onAuthenticated: () => void,
   ): Promise<void> {
     try {
-      const result = (await this.sendRequest(ws, "auth", this.authParams())) as AuthSuccess;
+      const result = (await this.sendRequest(
+        ws,
+        "auth",
+        authenticationParams(this.authParams()),
+        undefined,
+        RPC_V2,
+      )) as AuthSuccess;
       if (generation !== this.generation || this.ws !== ws) return;
+      this.rpcVersion = negotiatedRpcVersion(result.rpcVersion);
       onAuthenticated();
       this.lastAuthError = null;
       this.reconnectAttempts = 0;
@@ -653,8 +670,7 @@ export class RemoteConnection {
   }
 
   private setAttemptTimeout(callback: () => void, delayMs: number): unknown {
-    let handle: unknown;
-    handle = this.timers.setTimeout(() => {
+    const handle = this.timers.setTimeout(() => {
       this.attemptTimers.delete(handle);
       callback();
     }, delayMs);
@@ -681,6 +697,7 @@ export class RemoteConnection {
     this.session = null;
     this.handshake = null;
     this.orcaAuthenticated = false;
+    this.rpcVersion = RPC_V2;
     this.ws = null;
     this.activeEndpoint = null;
     this.dialStartedAt = null;
@@ -798,6 +815,7 @@ export class RemoteConnection {
     method: string,
     params?: Record<string, unknown>,
     timeoutMs?: number,
+    versionOverride?: RpcVersion,
   ): Promise<T> {
     const id = this.protocol === "orca" ? `rpc-${this.nextId++}` : String(this.nextId++);
     return new Promise<T>((resolve, reject) => {
@@ -819,7 +837,7 @@ export class RemoteConnection {
         const payload =
           this.protocol === "orca"
             ? JSON.stringify({ id, method, params: params ?? {} })
-            : JSON.stringify({ v: PROTOCOL_VERSION, id: Number(id), method, params: params ?? {} });
+            : encodeAeroricRequest(versionOverride ?? this.rpcVersion, id, method, params ?? {});
         if (session instanceof OrcaE2EESession) {
           ws.send(session.encryptText(payload));
         } else {
@@ -989,42 +1007,28 @@ export class RemoteConnection {
     } catch {
       return;
     }
-    const frame = parsed as {
-      id?: number;
-      ok?: boolean;
-      result?: unknown;
-      error?: string;
-      push?: string;
-      seq?: number;
-      data?: unknown;
-    };
-    if (
-      typeof frame.push === "string" ||
-      (typeof frame.id === "number" && typeof frame.ok === "boolean")
-    ) {
-      this.noteValidatedInboundTraffic();
-    }
-    if (typeof frame.push === "string") {
+    const envelope = decodeAeroricEnvelope(parsed);
+    if (!envelope) return;
+    this.noteValidatedInboundTraffic();
+    if (envelope.kind === "push") {
       // 带 seq 的推送参与 watermark:只单调分发,防重复/乱序
-      if (typeof frame.seq === "number") {
-        if (frame.seq <= this.lastPushSeq) return;
-        this.lastPushSeq = frame.seq;
+      if (typeof envelope.seq === "number") {
+        if (envelope.seq <= this.lastPushSeq) return;
+        this.lastPushSeq = envelope.seq;
       }
       this.pushListeners.forEach((listener) =>
-        listener(frame.push as string, frame.data, frame.seq),
+        listener(envelope.event, envelope.data, envelope.seq),
       );
       return;
     }
-    if (typeof frame.id === "number") {
-      const pending = this.pending.get(String(frame.id));
-      if (!pending) return;
-      this.pending.delete(String(frame.id));
-      this.timers.clearTimeout(pending.timer);
-      if (frame.ok) {
-        pending.resolve(frame.result);
-      } else {
-        pending.reject(new Error(frame.error ?? "request failed"));
-      }
+    const pending = this.pending.get(envelope.id);
+    if (!pending) return;
+    this.pending.delete(envelope.id);
+    this.timers.clearTimeout(pending.timer);
+    if (envelope.ok) {
+      pending.resolve(envelope.result);
+    } else {
+      pending.reject(new Error(envelope.error));
     }
   }
 

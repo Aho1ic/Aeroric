@@ -152,6 +152,9 @@ export function startOrcaE2EEHandshake(
       if (!equalBytes(bytesFromCanonicalBase64(ready.clientNonceB64), clientNonce)) {
         throw new Error("Orca E2EE client nonce mismatch");
       }
+      if (!equalBytes(desktopPublicKey, serverPublicKey)) {
+        throw new Error("Orca E2EE desktop identity mismatch");
+      }
       const sharedSecret = x25519.getSharedSecret(clientSecret, desktopPublicKey);
       if (sharedSecret.every((byte) => byte === 0)) {
         throw new Error("Invalid Orca E2EE desktop key");
@@ -226,6 +229,9 @@ function parseReady(
   }
   if (!isRecord(ready.context) || !contextsEqual(ready.context, expectedContext)) {
     throw new Error("Orca E2EE context mismatch");
+  }
+  if (typeof ready.desktopPublicKeyB64 !== "string" || typeof ready.desktopNonceB64 !== "string") {
+    throw new Error("Invalid Orca E2EE ready key material");
   }
   const desktopPublicKey = bytesFromCanonicalBase64(ready.desktopPublicKeyB64);
   const desktopNonce = bytesFromCanonicalBase64(ready.desktopNonceB64);
@@ -413,7 +419,7 @@ function defaultRandomBytes(length: number): Uint8Array {
   return bytes;
 }
 
-function isRecord(value: unknown): value is Record<string, any> {
+function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 

@@ -2,141 +2,14 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::time::Duration;
-use tokio::io::{AsyncRead, AsyncReadExt};
+
+mod transport;
+
+use transport::{
+    git_command_error, run_git, run_git_check, run_git_with_timeout, validate_project_path,
+};
 
 pub(crate) const MAX_STASH_DIFF_CHARS: usize = 200_000;
-
-// ── 辅助函数 ─────────────────────────────────────────────────────────────────
-
-/// Validate that project_path is absolute and looks like a real project directory.
-fn validate_project_path(project_path: &str) -> Result<(), String> {
-    let path = Path::new(project_path);
-    if !path.is_absolute() {
-        return Err("Project path must be absolute".to_string());
-    }
-    if !path.exists() {
-        return Err("Project path does not exist".to_string());
-    }
-    // Resolve symlinks / .. and ensure the path didn't escape
-    let canonical = path
-        .canonicalize()
-        .map_err(|e| format!("Cannot resolve project path: {}", e))?;
-    if canonical != path {
-        // Allow symlinks that resolve to a valid directory, but block obvious traversal
-        if !canonical.is_dir() {
-            return Err("Project path is not a directory".to_string());
-        }
-    }
-    Ok(())
-}
-
-/// 执行 git 命令并返回原始 Output。
-/// 泛型 S 允许同时接受 `&[&str]` 和 `&[String]`。
-fn run_git<S: AsRef<std::ffi::OsStr>>(
-    project_path: &str,
-    args: &[S],
-) -> Result<std::process::Output, String> {
-    validate_project_path(project_path)?;
-
-    let mut cmd = std::process::Command::new("git");
-    crate::subprocess::configure_background_command(&mut cmd);
-    cmd.args(args)
-        .current_dir(project_path)
-        .envs(crate::app_settings::get_login_shell_env().iter().cloned())
-        .output()
-        .map_err(|e| e.to_string())
-}
-
-async fn read_pipe_to_end<R: AsyncRead + Unpin>(
-    mut pipe: R,
-    stream_name: &str,
-) -> Result<Vec<u8>, String> {
-    let mut data = Vec::new();
-    pipe.read_to_end(&mut data)
-        .await
-        .map_err(|e| format!("Failed to read git {}: {}", stream_name, e))?;
-    Ok(data)
-}
-
-/// 带超时的 git 命令执行。
-/// 超时后会终止底层 git 子进程，避免后台进程和阻塞线程持续积压。
-async fn run_git_with_timeout(
-    project_path: String,
-    args: Vec<String>,
-    timeout: Duration,
-) -> Result<Output, String> {
-    validate_project_path(&project_path)?;
-
-    let mut cmd = tokio::process::Command::new("git");
-    crate::subprocess::configure_background_tokio_command(&mut cmd);
-    let mut child = cmd
-        .args(&args)
-        .current_dir(&project_path)
-        .envs(crate::app_settings::get_login_shell_env().iter().cloned())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true)
-        .spawn()
-        .map_err(|e| e.to_string())?;
-
-    let stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| "Failed to capture git stdout".to_string())?;
-    let stderr = child
-        .stderr
-        .take()
-        .ok_or_else(|| "Failed to capture git stderr".to_string())?;
-
-    let stdout_task = tokio::spawn(read_pipe_to_end(stdout, "stdout"));
-    let stderr_task = tokio::spawn(read_pipe_to_end(stderr, "stderr"));
-
-    let status = match tokio::time::timeout(timeout, child.wait()).await {
-        Ok(result) => result.map_err(|e| e.to_string())?,
-        Err(_) => {
-            let _ = child.start_kill();
-            let _ = tokio::time::timeout(Duration::from_secs(1), child.wait()).await;
-            stdout_task.abort();
-            stderr_task.abort();
-            let _ = stdout_task.await;
-            let _ = stderr_task.await;
-            return Err(format!("Git 命令执行超时（{}秒）", timeout.as_secs()));
-        }
-    };
-
-    let stdout = stdout_task
-        .await
-        .map_err(|e| format!("Git stdout task failed: {}", e))??;
-    let stderr = stderr_task
-        .await
-        .map_err(|e| format!("Git stderr task failed: {}", e))??;
-
-    Ok(Output {
-        status,
-        stdout,
-        stderr,
-    })
-}
-
-/// 执行 git 命令，若退出码非零则将 stderr 作为错误返回。
-fn run_git_check<S: AsRef<std::ffi::OsStr>>(project_path: &str, args: &[S]) -> Result<(), String> {
-    let output = run_git(project_path, args)?;
-    if !output.status.success() {
-        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
-    }
-    Ok(())
-}
-
-fn git_command_error(output: &Output, fallback: &str) -> String {
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let message = format!("{}{}", stderr, stdout).trim().to_string();
-    if message.is_empty() {
-        fallback.to_string()
-    } else {
-        message
-    }
-}
 
 fn validate_git_relative_path(relative_path: &str) -> Result<(), String> {
     if relative_path.is_empty() {

@@ -13,7 +13,8 @@ function base64UrlDecode(code: string): string {
   const normalized = code.replace(/-/g, "+").replace(/_/g, "/");
   const padded = normalized + "=".repeat((4 - (normalized.length % 4)) % 4);
   // atob 在 RN(Hermes)与 node 20+ 均可用
-  const binary = typeof atob === "function" ? atob(padded) : Buffer.from(padded, "base64").toString("binary");
+  const binary =
+    typeof atob === "function" ? atob(padded) : Buffer.from(padded, "base64").toString("binary");
   // UTF-8 还原(offer 含主机名,可能有非 ASCII)
   const bytes = Uint8Array.from(binary, (ch) => ch.charCodeAt(0));
   return new TextDecoder().decode(bytes);

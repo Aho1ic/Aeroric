@@ -89,10 +89,7 @@ describe("visibleGroupEntries", () => {
   )[0];
 
   it("展开时返回整组", () => {
-    expect(visibleGroupEntries(group, false).map((e) => e.project.id)).toEqual([
-      "pinned",
-      "plain",
-    ]);
+    expect(visibleGroupEntries(group, false).map((e) => e.project.id)).toEqual(["pinned", "plain"]);
   });
 
   it("折叠时只保留置顶项目", () => {

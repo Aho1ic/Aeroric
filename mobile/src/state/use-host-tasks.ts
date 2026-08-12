@@ -81,8 +81,7 @@ export function useHostTasks(): HostTasksState & HostTasksActions {
         }));
       }
     })();
-    let tracked!: Promise<void>;
-    tracked = work.finally(() => {
+    const tracked = work.finally(() => {
       if (refreshInFlight.current === tracked) refreshInFlight.current = null;
     });
     refreshInFlight.current = tracked;

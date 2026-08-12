@@ -17,7 +17,7 @@ import {
 } from "../../lib/redisKeyTree";
 import s from "../../styles";
 import type { RedisDatabaseInfo } from "../../types";
-import { DbxButton } from "./DbxButton";
+import { Button as DbxButton } from "../ui/Button";
 
 interface RedisKeyTreePaneProps {
   databases: RedisDatabaseInfo[];

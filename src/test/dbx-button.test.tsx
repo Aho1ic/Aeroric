@@ -2,13 +2,13 @@ import { render, screen } from "@testing-library/react";
 import { Copy, Plus } from "lucide-react";
 import { describe, expect, it } from "vitest";
 import {
-  DbxButton,
-  DbxButtonGroup,
-  DbxDialogFooterButton,
-  DbxIconButton,
-  DbxMenuItem,
-  DbxSegmentedButton,
-} from "../components/database/DbxButton";
+  Button as DbxButton,
+  ButtonGroup as DbxButtonGroup,
+  DialogFooterButton as DbxDialogFooterButton,
+  IconButton as DbxIconButton,
+  MenuItem as DbxMenuItem,
+  SegmentedButton as DbxSegmentedButton,
+} from "../components/ui/Button";
 
 describe("DbxButton", () => {
   it("renders dbx-sized icon-only buttons", () => {

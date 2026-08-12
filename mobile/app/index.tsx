@@ -7,6 +7,7 @@ import { Link, Stack, router, useFocusEffect } from "expo-router";
 import { ChevronDown, ChevronRight, Pin, Plus, SlidersHorizontal } from "lucide-react-native";
 import { useCallback, useMemo, useState, type ReactNode } from "react";
 import { Image, RefreshControl, SectionList, StyleSheet, Text, View } from "react-native";
+import appIcon from "../assets/icon.png";
 import { NewTaskSheet } from "../src/components/NewTaskSheet";
 import { t } from "../src/i18n";
 import { useConnection } from "../src/state/connection-context";
@@ -211,7 +212,7 @@ function GroupHeader({
 function PairPrompt() {
   return (
     <View style={styles.emptyWrap}>
-      <Image source={require("../assets/icon.png")} style={styles.emptyLogo} />
+      <Image source={appIcon} style={styles.emptyLogo} />
       <Text style={styles.emptyTitle}>Aeroric</Text>
       <Text style={styles.emptyText}>{t("home.pairIntro")}</Text>
       <Link href="/pair" asChild>
@@ -284,7 +285,7 @@ export default function HomeScreen() {
     <View style={styles.screen}>
       <Stack.Screen options={{ headerShown: false }} />
       <View style={styles.brandBar}>
-        <Image source={require("../assets/icon.png")} style={styles.brandLogo} />
+        <Image source={appIcon} style={styles.brandLogo} />
         <Text style={styles.brandName}>Aeroric</Text>
         <View style={styles.brandSpacer} />
         {hasHosts ? (

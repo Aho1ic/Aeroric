@@ -2,7 +2,7 @@ import { Download } from "lucide-react";
 import { useI18n } from "../../i18n";
 import s from "../../styles";
 import type { DbxColumnInfo, DbxObjectInfo } from "../../types/database";
-import { DbxButton } from "./DbxButton";
+import { Button as DbxButton } from "../ui/Button";
 
 interface Props {
   tables: DbxObjectInfo[];

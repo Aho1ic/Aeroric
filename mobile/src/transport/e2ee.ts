@@ -34,8 +34,9 @@ function utf8(text: string): Uint8Array {
 }
 
 export function defaultRandomBytes(length: number): Uint8Array {
-  const globalCrypto = (globalThis as { crypto?: { getRandomValues?: (b: Uint8Array) => Uint8Array } })
-    .crypto;
+  const globalCrypto = (
+    globalThis as { crypto?: { getRandomValues?: (b: Uint8Array) => Uint8Array } }
+  ).crypto;
   if (!globalCrypto?.getRandomValues) {
     throw new Error("No secure random source; import install-crypto before connecting");
   }
@@ -57,9 +58,7 @@ export function base64UrlToBytes(text: string): Uint8Array {
   const normalized = text.replace(/-/g, "+").replace(/_/g, "/");
   const padded = normalized + "=".repeat((4 - (normalized.length % 4)) % 4);
   const binary =
-    typeof atob === "function"
-      ? atob(padded)
-      : Buffer.from(padded, "base64").toString("binary");
+    typeof atob === "function" ? atob(padded) : Buffer.from(padded, "base64").toString("binary");
   return Uint8Array.from(binary, (ch) => ch.charCodeAt(0));
 }
 
@@ -179,7 +178,11 @@ export function startHandshake(
       if (ack.type === "hello_error") {
         throw new Error(ack.error ?? "主机拒绝了连接");
       }
-      if (ack.type !== "hello_ack" || typeof ack.pub !== "string" || typeof ack.confirm !== "string") {
+      if (
+        ack.type !== "hello_ack" ||
+        typeof ack.pub !== "string" ||
+        typeof ack.confirm !== "string"
+      ) {
         throw new Error("握手响应无效");
       }
       const serverEph = base64UrlToBytes(ack.pub);
@@ -224,7 +227,9 @@ export interface TestServerKeys {
   publicB64: string;
 }
 
-export function testGenerateServerKeys(randomBytes: RandomBytes = defaultRandomBytes): TestServerKeys {
+export function testGenerateServerKeys(
+  randomBytes: RandomBytes = defaultRandomBytes,
+): TestServerKeys {
   const secret = randomBytes(32);
   return { secret, publicB64: bytesToBase64Url(x25519.getPublicKey(secret)) };
 }

@@ -36,7 +36,7 @@ import {
 import s from "../../styles";
 import type { AeroricDbConnectionConfig } from "../../types";
 import { AnimatedSelectionGroup } from "../ui/AnimatedSelection";
-import { DbxButton, DbxMenuItem } from "./DbxButton";
+import { Button as DbxButton, MenuItem as DbxMenuItem } from "../ui/Button";
 import { confirmDbxProductionOperation, hasProductionProtection } from "./databaseProductionSafety";
 import { RedisCommandSessionView, type RedisCommandHistoryEntry } from "./RedisCommandSessionView";
 import { RedisJsonTree } from "./RedisJsonTree";

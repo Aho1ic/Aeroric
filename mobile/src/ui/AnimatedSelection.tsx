@@ -72,13 +72,13 @@ export function AnimatedSelection<T extends string>({
         useNativeDriver: true,
       }),
     ]).start();
-  }, [activeLayout?.x, activeLayout?.y, translateX, translateY]);
+  }, [activeLayout, translateX, translateY]);
 
   useEffect(() => {
     if (!horizontal || !activeLayout || horizontalWidth <= 0) return;
     const x = Math.max(0, activeLayout.x - (horizontalWidth - activeLayout.width) / 2);
     horizontalScrollRef.current?.scrollTo({ x, animated: hasMeasured.current });
-  }, [activeLayout?.width, activeLayout?.x, horizontal, horizontalWidth]);
+  }, [activeLayout, horizontal, horizontalWidth]);
 
   const recordLayout = (key: string, event: LayoutChangeEvent) => {
     const { x, y, width, height } = event.nativeEvent.layout;

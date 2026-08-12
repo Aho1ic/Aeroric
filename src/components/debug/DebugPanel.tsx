@@ -32,6 +32,7 @@ import type {
 } from "../../types";
 import type { OpenFileSelection } from "../../hooks/projectPanelsState";
 import { Button, ButtonGroup } from "../ui/Button";
+import { DebugPanelProvider, useDebugPanelStore } from "./DebugPanelContext";
 import { AnimatedSelectionGroup } from "../ui/AnimatedSelection";
 import {
   buildDebugConfigDraft,
@@ -241,7 +242,15 @@ function newBreakpointFromDraft(draft: NewBreakpointDraft): DebugBreakpoint | nu
   return breakpoint;
 }
 
-export function DebugPanel({
+export function DebugPanel(props: Parameters<typeof DebugPanelContent>[0]) {
+  return (
+    <DebugPanelProvider>
+      <DebugPanelContent {...props} />
+    </DebugPanelProvider>
+  );
+}
+
+function DebugPanelContent({
   projectPath,
   width,
   onOpenLocation,
@@ -268,18 +277,24 @@ export function DebugPanel({
   const [saving, setSaving] = useState(false);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [sessions, setSessions] = useState<DebugSessionSnapshot[]>([]);
-  const [activeDebugId, setActiveDebugId] = useState<string | null>(null);
-  const [expandedVariables, setExpandedVariables] = useState<Record<string, DebugVariable[]>>({});
-  const [expandingVariables, setExpandingVariables] = useState<Record<string, boolean>>({});
-  const [watchDraft, setWatchDraft] = useState("");
+  const sessions = useDebugPanelStore((state) => state.sessions);
+  const setSessions = useDebugPanelStore((state) => state.setSessions);
+  const activeDebugId = useDebugPanelStore((state) => state.activeDebugId);
+  const setActiveDebugId = useDebugPanelStore((state) => state.setActiveDebugId);
+  const expandedVariables = useDebugPanelStore((state) => state.expandedVariables);
+  const setExpandedVariables = useDebugPanelStore((state) => state.setExpandedVariables);
+  const expandingVariables = useDebugPanelStore((state) => state.expandingVariables);
+  const setExpandingVariables = useDebugPanelStore((state) => state.setExpandingVariables);
+  const watchDraft = useDebugPanelStore((state) => state.watchDraft);
+  const setWatchDraft = useDebugPanelStore((state) => state.setWatchDraft);
   const [watchProjectPath, setWatchProjectPath] = useState(projectPath);
   const [watchExpressions, setWatchExpressions] = useState<string[]>(() =>
     readPersistentWatchExpressions(projectPath),
   );
   const [watchResults, setWatchResults] = useState<Record<string, DebugEvaluationRecord>>({});
   const [evaluatingWatches, setEvaluatingWatches] = useState<Record<string, boolean>>({});
-  const [consoleInput, setConsoleInput] = useState("");
+  const consoleInput = useDebugPanelStore((state) => state.consoleInput);
+  const setConsoleInput = useDebugPanelStore((state) => state.setConsoleInput);
   const [consoleEntries, setConsoleEntries] = useState<DebugConsoleEntry[]>([]);
   const [consoleRunning, setConsoleRunning] = useState(false);
   const [newBreakpoint, setNewBreakpoint] = useState<NewBreakpointDraft>(defaultNewBreakpointDraft);
@@ -356,10 +371,13 @@ export function DebugPanel({
     setError(null);
   }, []);
 
-  const recordSessionSnapshot = useCallback((snapshot: DebugSessionSnapshot) => {
-    setSessions((prev) => upsertDebugSessionSnapshot(prev, snapshot));
-    setActiveDebugId(snapshot.debugId);
-  }, []);
+  const recordSessionSnapshot = useCallback(
+    (snapshot: DebugSessionSnapshot) => {
+      setSessions((prev) => upsertDebugSessionSnapshot(prev, snapshot));
+      setActiveDebugId(snapshot.debugId);
+    },
+    [setActiveDebugId, setSessions],
+  );
 
   const updateVisualBreakpoints = useCallback(
     (updater: (breakpoints: DebugBreakpoint[]) => DebugBreakpoint[]) => {
@@ -458,7 +476,7 @@ export function DebugPanel({
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, [liveDebugIds]);
+  }, [liveDebugIds, setSessions]);
 
   useEffect(() => {
     if (watchProjectPath === projectPath) return;
@@ -482,7 +500,7 @@ export function DebugPanel({
   useEffect(() => {
     setExpandedVariables({});
     setExpandingVariables({});
-  }, [pauseKey]);
+  }, [pauseKey, setExpandedVariables, setExpandingVariables]);
 
   const saveDraft = async (): Promise<DebugConfig | null> => {
     setSaving(true);
@@ -691,7 +709,7 @@ export function DebugPanel({
     setWatchExpressions((prev) => (prev.includes(expression) ? prev : [...prev, expression]));
     setWatchDraft("");
     if (alreadyWatching && canEvaluate) void refreshWatch(expression);
-  }, [canEvaluate, refreshWatch, watchDraft, watchExpressions]);
+  }, [canEvaluate, refreshWatch, setWatchDraft, watchDraft, watchExpressions]);
 
   const removeWatch = useCallback((expression: string) => {
     setWatchExpressions((prev) => prev.filter((item) => item !== expression));
@@ -727,7 +745,7 @@ export function DebugPanel({
     } finally {
       setConsoleRunning(false);
     }
-  }, [canEvaluate, consoleInput, evaluateExpression]);
+  }, [canEvaluate, consoleInput, evaluateExpression, setConsoleInput]);
 
   const addBreakpoint = useCallback(() => {
     const breakpoint = newBreakpointFromDraft(newBreakpoint);

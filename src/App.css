@@ -1,5 +1,49 @@
+@import "./styles/design-tokens.generated.css";
 @import "./styles/themes.css";
 @import "./styles/font-selector.css";
+
+/* Cross-platform design-system bridge. Existing feature styles keep their
+ * stable semantic names while new primitives consume the shared --ds-* set. */
+:root {
+  --background: var(--ds-canvas);
+  --card: var(--ds-surface);
+  --popover: var(--ds-surface-elevated);
+  --primary: var(--ds-accent);
+  --primary-foreground: var(--ds-on-accent);
+  --ring: var(--ds-focus);
+}
+
+:where(button, input, select, textarea):focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--ds-focus) 58%, transparent);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 1ms !important;
+  }
+}
+
+.ui-spinner {
+  width: 18px;
+  height: 18px;
+  display: inline-block;
+  border: 2px solid var(--ds-border);
+  border-top-color: var(--ds-accent);
+  border-radius: 50%;
+  animation: ui-spinner-rotate 0.75s linear infinite;
+}
+
+@keyframes ui-spinner-rotate {
+  to {
+    transform: rotate(360deg);
+  }
+}
 
 .database-grid-column-filter {
   opacity: 0;

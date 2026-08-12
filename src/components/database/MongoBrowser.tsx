@@ -20,7 +20,7 @@ import { useI18n } from "../../i18n";
 import { useMongoBrowser } from "../../hooks/useMongoBrowser";
 import s from "../../styles";
 import type { AeroricDbConnectionConfig } from "../../types";
-import { DbxButton, DbxMenuItem } from "./DbxButton";
+import { Button as DbxButton, MenuItem as DbxMenuItem } from "../ui/Button";
 import { AnimatedSelectionGroup } from "../ui/AnimatedSelection";
 import { confirmDbxProductionOperation, hasProductionProtection } from "./databaseProductionSafety";
 

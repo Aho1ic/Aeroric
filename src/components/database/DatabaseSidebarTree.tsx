@@ -32,7 +32,7 @@ import type {
 import { useI18n } from "../../i18n";
 import s from "../../styles";
 import { supportsDbxUserAdmin } from "./DatabaseUserAdminPanel";
-import { DbxButton } from "./DbxButton";
+import { Button as DbxButton } from "../ui/Button";
 import { ConnectionNameBadge, ExpansionGlyph } from "./DatabaseTreePrimitives";
 import { useDatabaseSidebarTreeDerived } from "./useDatabaseSidebarTreeDerived";
 import {

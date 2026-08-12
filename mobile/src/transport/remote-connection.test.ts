@@ -205,9 +205,52 @@ describe("RemoteConnection", () => {
     const authFrame = winner.clientFrames()[0];
     expect(authFrame.v).toBe(2);
     expect(authFrame.method).toBe("auth");
-    expect(authFrame.params).toEqual({ deviceToken: "tok" });
+    expect(authFrame.params).toEqual({
+      deviceToken: "tok",
+      supportedRpcVersions: [3, 2],
+      capabilities: ["typed-envelope", "structured-error"],
+    });
     expect(authResults).toEqual([{ deviceId: "d1" }]);
     expect(h.statuses).toEqual(["connecting", "authenticating", "online"]);
+  });
+
+  it("keeps auth on v2 then uses negotiated v3 envelopes", async () => {
+    const h = createHarness();
+    h.conn.start();
+    const winner = h.sockets[0];
+    winner.open();
+    await flush();
+    winner.acceptHandshake(h.serverKeys);
+    await flush();
+    winner.receiveCtrl({
+      v: 2,
+      id: winner.lastFrame().id,
+      ok: true,
+      result: { deviceId: "d1", rpcVersion: 3 },
+    });
+    await flush();
+
+    const resultPromise = h.conn.request<string[]>("projects.list");
+    await flush();
+    const request = winner.clientFrames().at(-1) as unknown as {
+      v: number;
+      type: string;
+      id: string;
+      method: string;
+    };
+    expect(request).toMatchObject({
+      v: 3,
+      type: "request",
+      method: "projects.list",
+    });
+    winner.receiveCtrl({
+      v: 3,
+      type: "response",
+      id: request.id,
+      ok: true,
+      result: ["project-1"],
+    });
+    await expect(resultPromise).resolves.toEqual(["project-1"]);
   });
 
   it("aborts as unauthorized when the host key does not match the pinned key", async () => {

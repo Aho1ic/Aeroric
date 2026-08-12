@@ -5,7 +5,7 @@ import { useI18n } from "../../i18n";
 import { databaseApi } from "../../lib/databaseApi";
 import s from "../../styles";
 import type { AeroricDbConnectionConfig, DbxDatabaseType, DbxQueryResult } from "../../types";
-import { DbxButton } from "./DbxButton";
+import { Button as DbxButton } from "../ui/Button";
 
 type UserAdminDialect = "mysql" | "postgres";
 type PrivilegeScope = "mysql" | "database" | "schema" | "table" | "role";

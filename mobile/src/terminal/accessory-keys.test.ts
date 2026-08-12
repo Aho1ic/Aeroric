@@ -1,9 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  REPEAT_DELAY_MS,
-  REPEAT_INTERVAL_MS,
-  TERMINAL_ACCESSORY_KEYS,
-} from "./accessory-keys";
+import { REPEAT_DELAY_MS, REPEAT_INTERVAL_MS, TERMINAL_ACCESSORY_KEYS } from "./accessory-keys";
 
 const byId = new Map(TERMINAL_ACCESSORY_KEYS.map((k) => [k.id, k]));
 

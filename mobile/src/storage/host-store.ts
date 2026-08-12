@@ -23,8 +23,7 @@ export async function loadHostStore(): Promise<HostStoreState> {
     const parsed = JSON.parse(raw) as Partial<HostStoreState>;
     const hosts = Array.isArray(parsed.hosts) ? parsed.hosts : [];
     const activeHostId =
-      typeof parsed.activeHostId === "string" &&
-      hosts.some((h) => h.id === parsed.activeHostId)
+      typeof parsed.activeHostId === "string" && hosts.some((h) => h.id === parsed.activeHostId)
         ? parsed.activeHostId
         : (hosts[0]?.id ?? null);
     return { hosts, activeHostId };

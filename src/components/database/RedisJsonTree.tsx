@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
-import { DbxButton } from "./DbxButton";
+import { Button as DbxButton } from "../ui/Button";
 import {
   redisJsonChildNodes,
   redisJsonIsContainer,
