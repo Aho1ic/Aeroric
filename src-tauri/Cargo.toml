@@ -74,6 +74,7 @@ tauri-plugin-clipboard-manager = "2"
 # PostgreSQL crates; resolving these from crates.io would silently produce an
 # incompatible lockfile.
 [patch.crates-io]
+portable-pty = { path = "vendor/portable-pty" }
 mysql_async = { git = "https://github.com/t8y2/mysql_async.git", rev = "b615bb0b10b5975182a4aa069cabc3d09021f6ab" }
 tokio-postgres = { git = "https://github.com/t8y2/tokio-postgres-gaussdb.git", rev = "115f9fef10f0fc3669b5337955e4eb461fc349a6" }
 postgres-types = { git = "https://github.com/t8y2/tokio-postgres-gaussdb.git", rev = "115f9fef10f0fc3669b5337955e4eb461fc349a6" }

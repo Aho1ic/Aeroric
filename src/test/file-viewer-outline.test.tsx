@@ -256,4 +256,32 @@ describe("FileViewer code outline", () => {
     resolveSymbols([]);
     expect(await within(outline).findByText("No symbols found.")).toBeInTheDocument();
   });
+
+  it("does not present a missing optional language server as an outline failure", async () => {
+    vi.mocked(invoke).mockImplementation((command) => {
+      if (command === "read_project_config") {
+        return Promise.resolve({ editor: { format_on_save: false } });
+      }
+      if (command === "read_file_content") return Promise.resolve(content);
+      if (command === "lsp_server_status") {
+        return Promise.resolve({
+          supported: true,
+          available: false,
+          languageId: "typescriptreact",
+          command: { program: "typescript-language-server", args: ["--stdio"] },
+          installHint: "pnpm add -D typescript-language-server typescript",
+        });
+      }
+      return Promise.reject(new Error(`unexpected command: ${command}`));
+    });
+
+    renderFileViewer();
+
+    await screen.findByText("LSP unavailable");
+    expect(screen.queryByRole("navigation", { name: "Outline" })).not.toBeInTheDocument();
+    expect(screen.queryByText(/Outline failed/)).not.toBeInTheDocument();
+    expect(
+      vi.mocked(invoke).mock.calls.some(([command]) => command === "lsp_document_symbols"),
+    ).toBe(false);
+  });
 });

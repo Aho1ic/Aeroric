@@ -1,7 +1,11 @@
 use portable_pty::{native_pty_system, CommandBuilder, PtySize};
+use serde::Serialize;
+use std::collections::HashMap;
 use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tauri::ipc::Channel;
@@ -31,6 +35,11 @@ const STARTUP_GATE_INPUT_SETTLE: Duration = Duration::from_millis(1200);
 const STARTUP_GATE_MAX_WAIT: Duration = Duration::from_secs(120);
 /// `generic_gate` 判定所用的尾部窗口大小(字节)。
 const GENERIC_GATE_WINDOW: usize = 200;
+const AGENT_LAUNCH_PREFLIGHT_TIMEOUT: Duration = Duration::from_secs(2);
+const AGENT_LAUNCH_PREFLIGHT_POLL: Duration = Duration::from_millis(25);
+const TERMINAL_HISTORY_SETTLE_POLL: Duration = Duration::from_millis(40);
+const TERMINAL_HISTORY_SETTLE_MAX: Duration = Duration::from_millis(320);
+static STARTUP_SIGNAL_GENERATION: AtomicU64 = AtomicU64::new(1);
 
 /// 启动态门控信号:首条输入可能需要等 trust folder / hook 授权完成后再投递。
 #[derive(Debug)]
@@ -38,7 +47,17 @@ pub(crate) enum StartupSignal {
     Output(String),
     UserInput,
     SessionReady,
+    Cancelled,
 }
+
+#[derive(Clone)]
+pub(crate) struct StartupSignalRegistration {
+    generation: u64,
+    sender: std::sync::mpsc::Sender<StartupSignal>,
+}
+
+pub(crate) type StartupSignalRegistry =
+    Arc<parking_lot::Mutex<HashMap<String, StartupSignalRegistration>>>;
 
 fn task_attachments_dir(project_path: &str, task_id: &str) -> std::path::PathBuf {
     Path::new(project_path)
@@ -894,11 +913,34 @@ pub(crate) fn register_initial_input_signal(
     task_manager: &TaskManager,
     task_id: &str,
     sender: std::sync::mpsc::Sender<StartupSignal>,
+) -> u64 {
+    let generation = STARTUP_SIGNAL_GENERATION.fetch_add(1, Ordering::Relaxed);
+    task_manager.initial_input_signals.lock().insert(
+        task_id.to_string(),
+        StartupSignalRegistration { generation, sender },
+    );
+    generation
+}
+
+pub(crate) fn clear_initial_input_signal_if_current(
+    signals: &StartupSignalRegistry,
+    task_id: &str,
+    generation: u64,
 ) {
-    task_manager
-        .initial_input_signals
-        .lock()
-        .insert(task_id.to_string(), sender);
+    let mut signals = signals.lock();
+    if signals
+        .get(task_id)
+        .is_some_and(|registration| registration.generation == generation)
+    {
+        signals.remove(task_id);
+    }
+}
+
+pub(crate) fn cancel_initial_input_signal(task_manager: &TaskManager, task_id: &str) {
+    let registration = task_manager.initial_input_signals.lock().remove(task_id);
+    if let Some(registration) = registration {
+        let _ = registration.sender.send(StartupSignal::Cancelled);
+    }
 }
 
 pub(crate) fn notify_initial_input_session_ready(task_manager: &TaskManager, task_id: &str) {
@@ -906,7 +948,7 @@ pub(crate) fn notify_initial_input_session_ready(task_manager: &TaskManager, tas
         .initial_input_signals
         .lock()
         .get(task_id)
-        .cloned();
+        .map(|registration| registration.sender.clone());
     if let Some(sender) = sender {
         let _ = sender.send(StartupSignal::SessionReady);
     }
@@ -963,6 +1005,7 @@ fn wait_for_initial_input_ready_with_cap(
                 // 授权提示,收到它也说明门槛已经被用户/Agent处理完毕。
                 return true;
             }
+            Ok(StartupSignal::Cancelled) => return false,
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
                 if first_output_at.is_none() {
                     if Instant::now() >= no_output_deadline {
@@ -989,9 +1032,7 @@ fn wait_for_initial_input_ready_with_cap(
                 }
                 continue;
             }
-            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
-                return !gate_pending || user_confirmed_gate;
-            }
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return false,
         }
     }
 }
@@ -1434,9 +1475,8 @@ pub async fn run_task(
         .flatten();
     let needs_initial_input = initial_prelude.is_some() || initial_prompt.is_some();
     let (startup_tx, startup_rx) = std::sync::mpsc::channel();
-    if needs_initial_input {
-        register_initial_input_signal(&task_manager, &task_id, startup_tx.clone());
-    }
+    let startup_generation = needs_initial_input
+        .then(|| register_initial_input_signal(&task_manager, &task_id, startup_tx.clone()));
     spawn_pty_reader(
         app.clone(),
         task_id.clone(),
@@ -1457,17 +1497,23 @@ pub async fn run_task(
         if let Some(writer) = writer {
             let signals = Arc::clone(&task_manager.initial_input_signals);
             let cleanup_id = task_id.clone();
+            let cleanup_generation =
+                startup_generation.expect("initial input registration must exist");
             spawn_initial_input_injection(
                 writer,
                 initial_prelude,
                 initial_prompt,
                 startup_rx,
                 Some(Box::new(move || {
-                    signals.lock().remove(&cleanup_id);
+                    clear_initial_input_signal_if_current(
+                        &signals,
+                        &cleanup_id,
+                        cleanup_generation,
+                    );
                 })),
             );
         } else {
-            task_manager.initial_input_signals.lock().remove(&task_id);
+            cancel_initial_input_signal(&task_manager, &task_id);
         }
     }
     spawn_exit_monitor(app, task_id, project_path, is_codex);
@@ -1587,60 +1633,190 @@ pub async fn get_active_task_ids(
         .collect())
 }
 
+fn preflight_agent_launch_spec(
+    launch: &crate::app_settings::AgentLaunchSpec,
+    cwd: Option<&Path>,
+    timeout: Duration,
+) -> Result<(), String> {
+    let mut command = Command::new(&launch.program);
+    crate::subprocess::configure_background_command(&mut command);
+    command
+        .args(&launch.args)
+        .arg("--version")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    if let Some(cwd) = cwd {
+        command.current_dir(cwd);
+    }
+    for (key, value) in crate::app_settings::get_login_shell_env() {
+        command.env(key, value);
+    }
+    for (key, value) in &launch.extra_env {
+        command.env(key, value);
+    }
+
+    let mut child = command
+        .spawn()
+        .map_err(|error| format!("Failed to launch `{}`: {error}", launch.program))?;
+    let deadline = Instant::now() + timeout;
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) if status.success() => return Ok(()),
+            Ok(Some(status)) => {
+                return Err(format!(
+                    "Agent command `{}` exited during validation with {status}",
+                    launch.program
+                ));
+            }
+            Ok(None) if Instant::now() < deadline => {
+                std::thread::sleep(AGENT_LAUNCH_PREFLIGHT_POLL);
+            }
+            Ok(None) => {
+                let _ = crate::subprocess::terminate_process_tree(&mut child);
+                let _ = child.wait();
+                // Some custom wrappers do not implement --version and enter
+                // their normal interactive loop instead. Reaching that loop
+                // still proves that the configured program can be executed.
+                return Ok(());
+            }
+            Err(error) => {
+                let _ = crate::subprocess::terminate_process_tree(&mut child);
+                let _ = child.wait();
+                return Err(format!(
+                    "Failed to validate agent command `{}`: {error}",
+                    launch.program
+                ));
+            }
+        }
+    }
+}
+
+#[tauri::command]
+pub async fn validate_agent_launch(agent: String, project_path: String) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || {
+        let launch = crate::app_settings::get_agent_launch_spec(&agent);
+        let cwd = agent_process_cwd(&project_path, launch.codex_like);
+        preflight_agent_launch_spec(&launch, Some(&cwd), AGENT_LAUNCH_PREFLIGHT_TIMEOUT)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[derive(Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ResetTaskProcessResult {
+    had_live_process: bool,
+    claude_session_id: Option<String>,
+    claude_session_path: Option<String>,
+    codex_session_id: Option<String>,
+    codex_session_path: Option<String>,
+}
+
+fn wait_for_terminal_history_to_settle(task_id: &str) {
+    let deadline = Instant::now() + TERMINAL_HISTORY_SETTLE_MAX;
+    let mut previous_len = crate::storage::task_terminal_history_len(task_id);
+    let mut stable_samples = 0;
+    while Instant::now() < deadline {
+        std::thread::sleep(TERMINAL_HISTORY_SETTLE_POLL);
+        let current_len = crate::storage::task_terminal_history_len(task_id);
+        if current_len == previous_len {
+            stable_samples += 1;
+            if stable_samples >= 2 {
+                return;
+            }
+        } else {
+            previous_len = current_len;
+            stable_samples = 0;
+        }
+    }
+}
+
 #[tauri::command]
 pub async fn reset_task_process(
     app: AppHandle,
     task_manager: State<'_, TaskManager>,
     task_id: String,
-) -> Result<(), String> {
+) -> Result<ResetTaskProcessResult, String> {
     validate_task_id(&task_id)?;
     task_manager.cancelled_tasks.lock().remove(&task_id);
     task_manager
         .manually_completed_tasks
         .lock()
         .remove(&task_id);
-    let child_arc = {
+    let (master, writer, child_arc) = {
         let mut masters = task_manager.pty_masters.lock();
         let mut pending_sizes = task_manager.pending_pty_sizes.lock();
         let mut writers = task_manager.pty_writers.lock();
         let mut children = task_manager.child_handles.lock();
-        masters.remove(&task_id);
+        let master = masters.remove(&task_id);
         pending_sizes.remove(&task_id);
-        writers.remove(&task_id);
-        children.remove(&task_id)
+        let writer = writers.remove(&task_id);
+        let child = children.remove(&task_id);
+        (master, writer, child)
     };
-    task_manager.initial_input_signals.lock().remove(&task_id);
+    cancel_initial_input_signal(&task_manager, &task_id);
 
     // A reset replaces the process under the same task ID. Clear the old
     // session registrations before killing the child so its watcher cannot
     // keep reporting stale status events into the replacement run.
-    let codex_path = task_manager
-        .codex_sessions
-        .lock()
-        .remove(&task_id)
-        .map(|info| info.session_path);
-    let claude_path = task_manager
-        .claude_sessions
-        .lock()
-        .remove(&task_id)
-        .map(|info| info.session_path);
+    let mut codex_info = task_manager.codex_sessions.lock().remove(&task_id);
+    let mut claude_info = task_manager.claude_sessions.lock().remove(&task_id);
+    let codex_path = codex_info.as_ref().map(|info| info.session_path.clone());
+    let claude_path = claude_info.as_ref().map(|info| info.session_path.clone());
     let mut claimed = task_manager.claimed_session_paths.lock();
-    if let Some(path) = codex_path {
-        claimed.remove(&path);
+    if let Some(path) = codex_path.as_ref() {
+        claimed.remove(path);
     }
-    if let Some(path) = claude_path {
-        claimed.remove(&path);
+    if let Some(path) = claude_path.as_ref() {
+        claimed.remove(path);
     }
     drop(claimed);
     crate::event_watcher::cleanup_task_events(&app, &task_id);
 
+    let had_live_process = child_arc.is_some();
     if let Some(arc) = child_arc {
         let mut child = arc.lock();
         let _ = child.kill();
         let _ = child.wait();
     }
 
-    Ok(())
+    // Keep the PTY endpoints alive until the child has exited so the reader can
+    // drain its final output. Dropping them afterwards lets the reader reach
+    // EOF, append the tail to terminal history, and finish before handoff reads.
+    drop(writer);
+    drop(master);
+    if had_live_process {
+        wait_for_terminal_history_to_settle(&task_id);
+    }
+
+    // A hook/session watcher may already have parsed a final SessionStart when
+    // reset removed the maps. Sweep once more before returning so that late
+    // source-session metadata is included in the handoff snapshot rather than
+    // leaking into the replacement run.
+    if let Some(late_info) = task_manager.codex_sessions.lock().remove(&task_id) {
+        task_manager
+            .claimed_session_paths
+            .lock()
+            .remove(&late_info.session_path);
+        codex_info = Some(late_info);
+    }
+    if let Some(late_info) = task_manager.claude_sessions.lock().remove(&task_id) {
+        task_manager
+            .claimed_session_paths
+            .lock()
+            .remove(&late_info.session_path);
+        claude_info = Some(late_info);
+    }
+
+    let claude_info = claude_info.filter(|info| !info.is_placeholder);
+    Ok(ResetTaskProcessResult {
+        had_live_process,
+        claude_session_id: claude_info.as_ref().map(|info| info.session_id.clone()),
+        claude_session_path: claude_info.map(|info| info.session_path),
+        codex_session_id: codex_info.as_ref().map(|info| info.session_id.clone()),
+        codex_session_path: codex_info.map(|info| info.session_path),
+    })
 }
 
 #[tauri::command]
@@ -1803,9 +1979,8 @@ pub async fn resume_task(
         );
     }
     let (startup_tx, startup_rx) = std::sync::mpsc::channel();
-    if uses_ultracode {
-        register_initial_input_signal(&task_manager, &task_id, startup_tx.clone());
-    }
+    let startup_generation = uses_ultracode
+        .then(|| register_initial_input_signal(&task_manager, &task_id, startup_tx.clone()));
     spawn_pty_reader(
         app.clone(),
         task_id.clone(),
@@ -1826,17 +2001,23 @@ pub async fn resume_task(
         if let Some(writer) = writer {
             let signals = Arc::clone(&task_manager.initial_input_signals);
             let cleanup_id = task_id.clone();
+            let cleanup_generation =
+                startup_generation.expect("initial input registration must exist");
             spawn_initial_input_injection(
                 writer,
                 Some(initial_ultracode_command()),
                 None,
                 startup_rx,
                 Some(Box::new(move || {
-                    signals.lock().remove(&cleanup_id);
+                    clear_initial_input_signal_if_current(
+                        &signals,
+                        &cleanup_id,
+                        cleanup_generation,
+                    );
                 })),
             );
         } else {
-            task_manager.initial_input_signals.lock().remove(&task_id);
+            cancel_initial_input_signal(&task_manager, &task_id);
         }
     }
     spawn_exit_monitor(app, task_id, project_path, is_codex);
@@ -1862,7 +2043,7 @@ pub(crate) fn write_task_input(
             .initial_input_signals
             .lock()
             .get(task_id)
-            .cloned();
+            .map(|registration| registration.sender.clone());
         if let Some(startup_signal) = startup_signal {
             let _ = startup_signal.send(StartupSignal::UserInput);
         }
@@ -2312,6 +2493,49 @@ mod tests {
         let waiter = std::thread::spawn(move || wait_for_initial_input_ready(receiver));
         sender.send(StartupSignal::SessionReady).unwrap();
         assert!(waiter.join().unwrap());
+    }
+
+    #[test]
+    fn startup_input_stops_when_the_run_is_cancelled() {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        sender.send(StartupSignal::Cancelled).unwrap();
+        assert!(!wait_for_initial_input_ready(receiver));
+    }
+
+    #[test]
+    fn stale_startup_cleanup_does_not_remove_the_replacement_registration() {
+        let signals: StartupSignalRegistry = Arc::new(parking_lot::Mutex::new(HashMap::new()));
+        let (sender, _receiver) = std::sync::mpsc::channel();
+        signals.lock().insert(
+            "task-1".to_string(),
+            StartupSignalRegistration {
+                generation: 2,
+                sender,
+            },
+        );
+
+        clear_initial_input_signal_if_current(&signals, "task-1", 1);
+
+        assert_eq!(
+            signals
+                .lock()
+                .get("task-1")
+                .map(|registration| registration.generation),
+            Some(2)
+        );
+    }
+
+    #[test]
+    fn agent_launch_preflight_reports_a_missing_program() {
+        let launch = crate::app_settings::AgentLaunchSpec {
+            program: format!("/aeroric/definitely/missing/agent-{}", uuid::Uuid::new_v4()),
+            ..Default::default()
+        };
+
+        let error =
+            preflight_agent_launch_spec(&launch, None, Duration::from_millis(50)).unwrap_err();
+
+        assert!(error.contains(&launch.program));
     }
 
     #[test]

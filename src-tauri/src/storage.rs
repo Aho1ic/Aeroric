@@ -104,6 +104,14 @@ pub struct Task {
     pub codex_session_id: Option<String>,
     #[serde(rename = "codexSessionPath", skip_serializing_if = "Option::is_none")]
     pub codex_session_path: Option<String>,
+    #[serde(rename = "sessionAgent", skip_serializing_if = "Option::is_none")]
+    pub session_agent: Option<String>,
+    #[serde(
+        rename = "sessionCodexLike",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub session_codex_like: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub starred: Option<bool>,
     #[serde(rename = "failureReason", skip_serializing_if = "Option::is_none")]

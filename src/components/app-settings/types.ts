@@ -45,6 +45,7 @@ export interface LocalRouterSettings {
   enabled: boolean;
   listen_host: string;
   listen_port: number;
+  access_token: string;
   claude_enabled: boolean;
   codex_enabled: boolean;
   record_usage: boolean;
@@ -146,6 +147,7 @@ export const DEFAULT_LOCAL_ROUTER_SETTINGS: LocalRouterSettings = {
   enabled: false,
   listen_host: "127.0.0.1",
   listen_port: 15721,
+  access_token: "",
   claude_enabled: true,
   codex_enabled: true,
   record_usage: true,

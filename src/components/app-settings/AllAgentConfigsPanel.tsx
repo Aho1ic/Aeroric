@@ -24,6 +24,7 @@ import type { ThemeVariant } from "../../types";
 import claudeLogo from "../../assets/claude.svg";
 import chatgptLogo from "../../assets/chatgpt.svg";
 import { AnimatedSelectionGroup } from "../ui/AnimatedSelection";
+import { refreshLocalRouterRuntime } from "./shared";
 
 type ProviderTab = "anthropic" | "openai";
 type ViewMode = "card" | "bar";
@@ -131,6 +132,7 @@ export function AllAgentConfigsPanel({ themeVariant }: { themeVariant: ThemeVari
               inputPath,
             })
           ).imported_agent_ids;
+      await refreshLocalRouterRuntime();
       window.dispatchEvent(new Event(APP_SETTINGS_CHANGED_EVENT));
       setMessage(
         t("appSettings.allAgentConfigsImported", {
@@ -161,6 +163,7 @@ export function AllAgentConfigsPanel({ themeVariant }: { themeVariant: ThemeVari
       const result = await invoke<{ imported_agent_ids: string[] }>("import_cc_switch_config", {
         inputPath,
       });
+      await refreshLocalRouterRuntime();
       window.dispatchEvent(new Event(APP_SETTINGS_CHANGED_EVENT));
       setMessage(
         t("appSettings.allAgentConfigsImported", {

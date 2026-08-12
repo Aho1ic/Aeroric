@@ -232,6 +232,37 @@ describe("LocalRouterPanel", () => {
     );
   });
 
+  it("filters router targets and highlights failover queue members", async () => {
+    const user = userEvent.setup();
+    const settings: LocalRouterSettings = {
+      ...enabledSettings,
+      claude: {
+        ...enabledSettings.claude,
+        auto_failover_enabled: true,
+        active_target: "claude",
+        failover_queue: ["claude", "claude-backup"],
+      },
+    };
+    const status = { ...runningStatus, targets: claudeTargets };
+    vi.mocked(invoke).mockImplementation((command) => {
+      if (command === "load_app_settings") return Promise.resolve(appSettings(settings));
+      if (command === "get_local_router_status") return Promise.resolve(status);
+      if (command === "get_local_router_requests") return Promise.resolve([]);
+      return Promise.reject(new Error(`unexpected command: ${command}`));
+    });
+
+    renderWithI18n(<LocalRouterPanel />);
+
+    const search = await screen.findByRole("searchbox", { name: "Search router targets" });
+    expect(screen.getByRole("article", { name: "Claude Code" })).toBeInTheDocument();
+    await user.type(search, "backup");
+
+    expect(screen.queryByRole("article", { name: "Claude Code" })).not.toBeInTheDocument();
+    const backup = screen.getByRole("article", { name: "Claude Backup" });
+    expect(backup).toBeInTheDocument();
+    expect(backup.getAttribute("style")).toContain("var(--success)");
+  });
+
   it("blocks saving when failover only references unavailable targets", async () => {
     const invalidSettings: LocalRouterSettings = {
       ...enabledSettings,
@@ -259,6 +290,43 @@ describe("LocalRouterPanel", () => {
       await screen.findByText("The failover queue does not contain an available target."),
     ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
+  });
+
+  it("requires and saves an access token for non-loopback listeners", async () => {
+    const user = userEvent.setup();
+    const networkSettings: LocalRouterSettings = {
+      ...enabledSettings,
+      listen_host: "0.0.0.0",
+      access_token: "aeroric-0123456789abcdef0123456789abcdef",
+    };
+    vi.mocked(invoke).mockImplementation((command, payload) => {
+      if (command === "load_app_settings") return Promise.resolve(appSettings(networkSettings));
+      if (command === "get_local_router_status") return Promise.resolve(runningStatus);
+      if (command === "get_local_router_requests") return Promise.resolve([]);
+      if (command === "update_local_router_settings") {
+        const next = (payload as { settings: LocalRouterSettings }).settings;
+        return Promise.resolve(appSettings(next));
+      }
+      return Promise.reject(new Error(`unexpected command: ${command}`));
+    });
+
+    renderWithI18n(<LocalRouterPanel />);
+
+    const tokenInput = await screen.findByLabelText("Access token");
+    await user.clear(tokenInput);
+    await user.type(tokenInput, "too-short");
+    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
+
+    const replacement = "aeroric-fedcba9876543210fedcba9876543210";
+    await user.clear(tokenInput);
+    await user.type(tokenInput, replacement);
+    await user.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() =>
+      expect(vi.mocked(invoke)).toHaveBeenCalledWith("update_local_router_settings", {
+        settings: { ...networkSettings, access_token: replacement },
+      }),
+    );
   });
 });
 

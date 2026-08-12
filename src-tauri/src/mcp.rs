@@ -462,7 +462,8 @@ fn toml_string(value: &str) -> String {
 
 /// 构造 Codex profile 的 `[mcp_servers.*]` TOML 文本。
 fn build_codex_mcp_toml(servers: &[&McpServerConfig]) -> String {
-    let mut out = String::from("# 由 Aeroric 生成,请勿手工编辑。内容随 MCP 设置在任务启动时重写。\n");
+    let mut out =
+        String::from("# 由 Aeroric 生成,请勿手工编辑。内容随 MCP 设置在任务启动时重写。\n");
     for server in servers {
         out.push_str(&format!("\n[mcp_servers.{}]\n", toml_string(&server.name)));
         out.push_str(&format!("command = {}\n", toml_string(&server.command)));
@@ -709,7 +710,10 @@ mod tests {
     #[test]
     fn claude_mcp_config_uses_mcp_servers_shape() {
         let mut with_env = server("fs", "npx");
-        with_env.args = vec!["-y".into(), "@modelcontextprotocol/server-filesystem".into()];
+        with_env.args = vec![
+            "-y".into(),
+            "@modelcontextprotocol/server-filesystem".into(),
+        ];
         with_env.env.insert("API_KEY".into(), "secret".into());
         let settings = enabled_settings(vec![with_env]);
         let value = build_claude_mcp_config(&active_servers(&settings));
@@ -788,7 +792,8 @@ mod tests {
         let settings = enabled_settings(vec![hostile]);
         let raw = build_codex_mcp_toml(&active_servers(&settings));
 
-        let parsed = toml::from_str::<toml::Value>(&raw).expect("hostile input must stay valid TOML");
+        let parsed =
+            toml::from_str::<toml::Value>(&raw).expect("hostile input must stay valid TOML");
         let entry = parsed
             .get("mcp_servers")
             .and_then(|servers| servers.get(r#"we"ird\name"#))
@@ -855,7 +860,11 @@ mod tests {
         {
             use std::os::unix::fs::PermissionsExt;
             let mode = fs::metadata(&path).expect("metadata").permissions().mode();
-            assert_eq!(mode & 0o777, 0o600, "profile must not be group/world readable");
+            assert_eq!(
+                mode & 0o777,
+                0o600,
+                "profile must not be group/world readable"
+            );
         }
 
         let _ = fs::remove_dir_all(&home);

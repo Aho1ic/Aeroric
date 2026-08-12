@@ -249,6 +249,52 @@ describe("SftpPanel", () => {
     expect(modifiedHeader).toHaveAttribute("aria-sort", "descending");
   });
 
+  it("shows placeholders for missing sizes while preserving zero-byte file sizes", async () => {
+    vi.mocked(invoke).mockImplementation((command, args) => {
+      if (command !== "sftp_read_dir") return Promise.resolve([]);
+      const endpoint = (args as { endpoint: { kind: string } }).endpoint;
+      if (endpoint.kind !== "local") return Promise.resolve([]);
+      return Promise.resolve([
+        { name: "folder", path: "/Users/me/folder", isDir: true },
+        { name: "empty.txt", path: "/Users/me/empty.txt", isDir: false, size: 0 },
+        { name: "unknown.txt", path: "/Users/me/unknown.txt", isDir: false },
+      ]);
+    });
+
+    render(
+      <I18nProvider>
+        <SftpPanel
+          sshConnections={connections}
+          localDefaultPath="/Users/me"
+          active
+          themeVariant="light"
+          currentSshConnectionId="conn-2"
+        />
+      </I18nProvider>,
+    );
+
+    await userEvent.click(screen.getAllByRole("button", { name: "Open pane" })[0]);
+
+    expect(
+      screen
+        .getByText("folder", { selector: ".sftp-row-name" })
+        .closest(".sftp-row")
+        ?.querySelector(".sftp-row-size"),
+    ).toHaveTextContent("--");
+    expect(
+      screen
+        .getByText("empty.txt", { selector: ".sftp-row-name" })
+        .closest(".sftp-row")
+        ?.querySelector(".sftp-row-size"),
+    ).toHaveTextContent("0 B");
+    expect(
+      screen
+        .getByText("unknown.txt", { selector: ".sftp-row-name" })
+        .closest(".sftp-row")
+        ?.querySelector(".sftp-row-size"),
+    ).toHaveTextContent("--");
+  });
+
   it("sorts by a column when its header is clicked and toggles direction", async () => {
     const user = userEvent.setup();
     vi.mocked(invoke).mockImplementation((command, args) => {

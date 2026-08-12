@@ -29,6 +29,7 @@ pub const DEFAULT_CLAUDE_UPSTREAM: &str = "https://api.anthropic.com";
 pub const DEFAULT_CODEX_UPSTREAM: &str = "https://api.openai.com/v1";
 pub const DEFAULT_CODEX_CHATGPT_UPSTREAM: &str = "https://chatgpt.com/backend-api/codex";
 pub const ROUTE_AGENT_HEADER: &str = "x-aeroric-route-agent";
+pub const ROUTER_TOKEN_HEADER: &str = "x-aeroric-router-token";
 pub const HEALTH_PATH: &str = "/_aeroric/local-router/health";
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Serialize)]
@@ -359,6 +360,7 @@ pub struct RouterRuntimeConfig {
     pub listen_address: String,
     pub port: u16,
     pub record_usage: bool,
+    access_token: String,
     pub upstreams: RouterUpstreams,
     pub outbound_proxy: Option<RouterOutboundProxy>,
     client: reqwest::Client,
@@ -376,10 +378,16 @@ impl RouterRuntimeConfig {
             listen_address: listen_address.into(),
             port,
             record_usage,
+            access_token: String::new(),
             upstreams,
             outbound_proxy: None,
             client,
         }
+    }
+
+    pub fn with_access_token(mut self, access_token: impl Into<String>) -> Self {
+        self.access_token = access_token.into().trim().to_string();
+        self
     }
 
     pub fn with_outbound_proxy(
@@ -395,8 +403,22 @@ impl RouterRuntimeConfig {
         self.client.clone()
     }
 
+    pub(crate) fn equivalent_without_client(&self, other: &Self) -> bool {
+        self.listen_address == other.listen_address
+            && self.port == other.port
+            && self.record_usage == other.record_usage
+            && self.access_token == other.access_token
+            && self.upstreams == other.upstreams
+            && self.outbound_proxy == other.outbound_proxy
+    }
+
     pub fn validate(&self) -> Result<SocketAddr, RouterError> {
         let listen_addr = validate_listen_address(&self.listen_address, self.port)?;
+        if !listen_addr.ip().is_loopback() && self.access_token.len() < 32 {
+            return Err(RouterError::invalid_config(
+                "non-loopback local router listeners require an access token of at least 32 characters",
+            ));
+        }
         for (agent, runtime) in [
             (RouterAgent::Claude, &self.upstreams.claude),
             (RouterAgent::Codex, &self.upstreams.codex),
@@ -736,6 +758,21 @@ impl LocalRouterState {
             failed_requests: self.metrics.failed_requests.load(Ordering::Relaxed),
             last_error: self.metrics.last_error.read().clone(),
         }
+    }
+
+    pub async fn config_matches(&self, candidate: &RouterRuntimeConfig) -> bool {
+        let config = {
+            let running = self.running.lock().await;
+            let Some(server) = running
+                .as_ref()
+                .filter(|server| server.alive.load(Ordering::Acquire))
+            else {
+                return false;
+            };
+            server.config.clone()
+        };
+        let matches = config.read().await.equivalent_without_client(candidate);
+        matches
     }
 
     pub async fn target_statuses(
@@ -1123,6 +1160,20 @@ mod tests {
             },
         );
         assert!(valid.validate().is_ok());
+    }
+
+    #[test]
+    fn non_loopback_listener_requires_a_strong_access_token() {
+        let without_token =
+            RouterRuntimeConfig::new("0.0.0.0", 43123, false, RouterUpstreams::default());
+        assert!(without_token
+            .validate()
+            .is_err_and(|error| error.message.contains("access token")));
+
+        let with_token =
+            RouterRuntimeConfig::new("0.0.0.0", 43123, false, RouterUpstreams::default())
+                .with_access_token("aeroric-0123456789abcdef0123456789abcdef");
+        assert!(with_token.validate().is_ok());
     }
 
     #[test]

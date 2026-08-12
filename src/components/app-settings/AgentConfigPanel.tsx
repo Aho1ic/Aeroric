@@ -31,6 +31,7 @@ import {
 } from "./reasoningSpeed";
 import { ModelSelectionList } from "./ModelSelectionList";
 import { normalizeModelList, sameModel } from "../../modelOptions";
+import { refreshLocalRouterRuntime } from "./shared";
 
 type FileState =
   | { status: "loading" }
@@ -291,6 +292,7 @@ export function AgentConfigPanel({
         "import_agent_config_bundle",
         { inputPath },
       );
+      await refreshLocalRouterRuntime();
       window.dispatchEvent(new Event(APP_SETTINGS_CHANGED_EVENT));
       if (result.agent_id === String(agentKey)) {
         const content = await invoke<string | null>("read_agent_config_file", {
@@ -343,6 +345,7 @@ export function AgentConfigPanel({
       await invoke("rename_custom_agent_profile", { id: agentKey, label: next });
       setAgentName(next);
       setOriginalAgentName(next);
+      await refreshLocalRouterRuntime();
       window.dispatchEvent(new Event(APP_SETTINGS_CHANGED_EVENT));
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
@@ -360,6 +363,7 @@ export function AgentConfigPanel({
     setSaved(false);
     try {
       await invoke("delete_custom_agent_profile", { id: agentKey });
+      await refreshLocalRouterRuntime();
       window.dispatchEvent(new Event(APP_SETTINGS_CHANGED_EVENT));
       onDeleted?.();
     } catch (e) {
@@ -424,6 +428,7 @@ export function AgentConfigPanel({
         setFileState({ status: "loaded", content });
         setOriginal(content);
       }
+      await refreshLocalRouterRuntime();
       window.dispatchEvent(new Event(APP_SETTINGS_CHANGED_EVENT));
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
@@ -496,6 +501,7 @@ export function AgentConfigPanel({
         setFileState({ status: "loaded", content });
         setOriginal(content);
       }
+      await refreshLocalRouterRuntime();
       window.dispatchEvent(new Event(APP_SETTINGS_CHANGED_EVENT));
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
@@ -526,6 +532,7 @@ export function AgentConfigPanel({
         setFileState({ status: "loaded", content });
         setOriginal(content);
       }
+      await refreshLocalRouterRuntime();
       window.dispatchEvent(new Event(APP_SETTINGS_CHANGED_EVENT));
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);

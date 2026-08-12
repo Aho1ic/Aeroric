@@ -1,6 +1,6 @@
 # Aeroric 项目代码审查与优化报告
 
-> 审查日期：2026-07-10  
+> 最近更新：2026-08-11
 > 审查范围：React/TypeScript 前端、Tauri/Rust 后端、测试、构建脚本、CI 与开发依赖  
 > 优化原则：不改变用户可见行为、不修改 Tauri command 契约、不升级依赖、优先拆分低耦合职责
 
@@ -21,6 +21,8 @@
 - 导出明确的 `RightPanel` 类型，避免面板基础设施通过 hook 返回值反推公共类型。
 - 将连接草稿纯逻辑和完整连接对话框迁出 `DatabaseView`，保留既有 API 契约和交互。
 - 将 DataGrid 纯状态计算、展示/交互 hook 和共享网格组件迁出 `DatabaseView`。
+- 将应用设置导航、平台过滤、面板注册与预加载集中到单一注册表，低频面板形成独立 chunk。
+- 将 Rust `app_settings.rs` 的模型探测、Agent wrapper、配置包和版本/升级逻辑迁到四个内部子模块，保留原 command 门面。
 - 在 CI 中加入 `format:check`，并清理 jsdom canvas 与 Node 25 Web Storage 测试警告。
 
 三个主要父文件共减少 4,865 行。迁出的代码保留在职责明确的生产模块中，目标是减少单文件认知负担和冲突面，而不是人为减少项目总代码量。
@@ -42,7 +44,7 @@
 - `pnpm test`：105 个测试文件、804 个测试通过
 - `cargo check`
 
-本轮未修改 Rust 代码、Tauri command 名称、事件名称、持久化格式或前后端 JSON 字段。
+应用设置域重构前的最新基线为前端 1,301 个测试、Rust 690 个测试全部通过；`AppSettingsDialog` 主 chunk 为 216,982 字节。本轮修改了 Rust 内部组织，但未修改 Tauri command 名称/参数/返回值、事件名称、持久化格式或前后端 JSON 字段。
 
 ## 3. 架构评价
 
@@ -120,6 +122,14 @@
 - LSP file URI、hover、location、range、position、completion 与 Markdown 文本解析。
 
 Transport、session actor、进程生命周期与 workspace edit 写入仍保留原位，避免一次性扩大异步和并发重构范围。
+
+### 已处理：应用设置域责任与包体
+
+- `AppSettingsDialog.tsx` 已不再同时维护导航数组和面板条件分支；导航 key、分组、图标、平台可见性、组件和预加载入口均由 `panelRegistry.tsx` 定义。
+- 低频面板通过 `React.lazy` 拆包，当前面板立即加载，其他可用面板在首帧后预取；WSL 仅在 Windows 注册和预取。
+- `app_settings.rs` 已将四个业务域迁出，父模块仍保留公共类型、持久化协调、公共函数门面和全部 `#[tauri::command]`。
+
+仍保留的高风险热点为 `DatabaseView.tsx`、DAP/LSP transport 与 session 生命周期、`DebugPanel.tsx` 和 `NotebookPanel.tsx`。本轮未扩展到这些范围，也未处理 `mobile`。
 
 ### P2：其他超长前端文件
 
@@ -281,6 +291,27 @@ API 调用、确认流程、连接切换重置、编辑保存和 command safety 
 
 `dap.rs` 与 `lsp.rs` 通过私有 `mod protocol` 使用这些实现；Tauri command 名称、参数、返回类型、状态持有和前端调用契约均未改变。已有模块测试继续从父模块覆盖迁出的内部函数。
 
+### 5.12 应用设置前后端边界
+
+前端新增 `src/components/app-settings/panelRegistry.tsx`，集中管理面板注册、平台过滤和预加载。`SettingsPanelHost` 提供统一 Suspense 加载态和面板级错误边界；预加载失败不会关闭设置弹窗。General、Theme、Fonts 和 Shortcuts 保持直接加载，其余低频面板均形成独立 chunk。
+
+Rust 新增：
+
+- `app_settings/models.rs`：模型 URL 安全策略、认证重试、目录解析和余额请求。
+- `app_settings/agent_scripts.rs`：Shell/PowerShell wrapper、凭据恢复和旧 wrapper 刷新。
+- `app_settings/config_bundles.rs`：单 Agent/全量配置包、便携转换和 CC Switch SQL 解析。
+- `app_settings/versions.rs`：版本解析/缓存、安装方式识别、升级命令选择与执行。
+
+共49 个领域测试随实现迁入子模块；持久化、代理、迁移和跨域启动行为测试保留在父模块。
+
+生产构建实测：
+
+| 产物 | 重构前 | 重构后 | 变化 |
+| --- | ---: | ---: | ---: |
+| `AppSettingsDialog-*.js` | 216,982 B | 39,059 B | -82.00% |
+
+独立面板 chunk 包括 Proxy、Local Router、Remote Access、MCP、WSL、Usage、Agent Updates、Hooks、Skills、All Agent Configs 和 About。
+
 ## 6. 文件行数变化
 
 | 文件 | 修改前 | 修改后 | 变化 |
@@ -292,7 +323,9 @@ API 调用、确认流程、连接切换重置、编辑保存和 command safety 
 | `src/components/database/RedisBrowser.tsx` | 2,896 | 2,163 | -733 |
 | `src-tauri/src/dap.rs` | 4,405 | 4,142 | -263 |
 | `src-tauri/src/lsp.rs` | 3,866 | 3,730 | -136 |
-| **合计** | **34,332** | **27,628** | **-6,704** |
+| `src-tauri/src/app_settings.rs` | 7,978 | 3,765 | -4,213 |
+| `src/components/AppSettingsDialog.tsx` | 409 | 298 | -111 |
+| **合计** | **42,719** | **31,691** | **-11,028** |
 
 新增生产模块行数：
 
@@ -321,6 +354,11 @@ API 调用、确认流程、连接切换重置、编辑保存和 command safety 
 | `RedisCommandSessionView.tsx` | 127 |
 | `src-tauri/src/dap/protocol.rs` | 288 |
 | `src-tauri/src/lsp/protocol.rs` | 147 |
+| `src/components/app-settings/panelRegistry.tsx` | 299 |
+| `src-tauri/src/app_settings/models.rs` | 704 |
+| `src-tauri/src/app_settings/agent_scripts.rs` | 2,213 |
+| `src-tauri/src/app_settings/config_bundles.rs` | 791 |
+| `src-tauri/src/app_settings/versions.rs` | 597 |
 
 数据库主测试拆分后行数：
 
@@ -355,6 +393,13 @@ API 调用、确认流程、连接切换重置、编辑保存和 command safety 
 - `cargo check`：通过
 - `cargo test`：339 个测试通过
 
+应用设置域本轮追加验收：
+
+- 设置面板定向 Vitest：3 个文件、17 个测试通过。
+- `AppSettingsDialog` 主 chunk 为 39,059 字节，相对 216,982 字节下降 82.00%。
+- Rust `app_settings` 定向测试：73 个测试通过，其中 49 个已迁入四个子模块。
+- 全量验收结果：`pnpm test` 1,306 个测试全部通过，`cargo test --lib` 690 个测试全部通过。
+
 新增测试文件：
 
 - `src/test/database-connection-url.test.ts`
@@ -367,6 +412,7 @@ API 调用、确认流程、连接切换重置、编辑保存和 command safety 
 - `src/test/database-view-nosql.test.tsx`
 - `src/test/database-sidebar-tree-state.test.ts`
 - `src/test/redis-browser-state.test.ts`
+- `src/test/app-settings-panel-registry.test.tsx`
 
 覆盖：
 
@@ -394,4 +440,5 @@ API 调用、确认流程、连接切换重置、编辑保存和 command safety 
 - 未修改视觉设计、交互文案或国际化资源。
 - 未修改 Tauri command 契约和数据库持久化。
 - 未执行 `cargo audit` 或桌面安装包构建；这些仍由 CI/release workflow 覆盖。
-- 未创建分支；所有提交均位于 `main`。
+- 未扫描或修改 `mobile`，未执行桌面端人工逐项点击验收。
+- 工作区位于 `main`，未创建其他分支；本轮未提交或推送。

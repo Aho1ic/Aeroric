@@ -28,8 +28,8 @@ export const en: Record<string, string> = {
   "appSettings.localRouter.listenSection": "Listen address",
   "appSettings.localRouter.host": "Host",
   "appSettings.localRouter.port": "Port",
-  "appSettings.localRouter.hostHint": "Loopback access only: 127.0.0.1, localhost, or ::1.",
-  "appSettings.localRouter.hostInvalid": "Use 127.0.0.1, localhost, or ::1.",
+  "appSettings.localRouter.hostHint": "Use localhost or a valid IPv4 or IPv6 address.",
+  "appSettings.localRouter.hostInvalid": "Enter localhost or a valid IPv4 or IPv6 address.",
   "appSettings.localRouter.portInvalid": "Enter a port from 1024 to 65535.",
   "appSettings.localRouter.optionsSection": "Options",
   "appSettings.localRouter.showOnHome": "Show router switch on the home page",
@@ -58,6 +58,9 @@ export const en: Record<string, string> = {
   "appSettings.localRouter.circuitSection": "Circuit breaker",
   "appSettings.localRouter.failoverSection": "Failover",
   "appSettings.localRouter.targetsSection": "Targets",
+  "appSettings.localRouter.targetSearch": "Search router targets",
+  "appSettings.localRouter.targetSearchPlaceholder": "Search configuration names…",
+  "appSettings.localRouter.targetsNoMatch": "No matching router targets.",
   "appSettings.localRouter.requestsSection": "Request log",
   "appSettings.localRouter.requestsHint":
     "Last 20 routed requests, diagnostic only — no prompts or response bodies.",
@@ -140,7 +143,16 @@ export const en: Record<string, string> = {
   "appSettings.localRouter.requestStreaming": "Streaming",
   "appSettings.localRouter.requestTokens": "In {input} / Out {output}",
   "appSettings.localRouter.nonLoopbackWarning":
-    "Listening on a non-loopback address may expose the router to other devices on your network — confirm the network is trusted.",
+    "A non-loopback listener is reachable from the network. Every proxy request must include the access token.",
+  "appSettings.localRouter.accessToken": "Access token",
+  "appSettings.localRouter.accessTokenHint":
+    "Clients may send this as a Bearer token, x-api-key, or x-aeroric-router-token.",
+  "appSettings.localRouter.accessTokenInvalid":
+    "The access token must contain at least 32 characters.",
+  "appSettings.localRouter.showAccessToken": "Show access token",
+  "appSettings.localRouter.hideAccessToken": "Hide access token",
+  "appSettings.localRouter.copyAccessToken": "Copy access token",
+  "appSettings.localRouter.regenerateAccessToken": "Generate a new access token",
   "appSettings.localRouter.useGlobalProxy": "Use global proxy",
   "appSettings.localRouter.useGlobalProxyHint":
     "Route outbound router traffic through the global proxy.",
@@ -2242,6 +2254,7 @@ export const en: Record<string, string> = {
   "running.cancelTask": "Cancel task",
   "running.markDone": "Mark completed",
   "running.switchConfig": "Switch configuration",
+  "running.switchConfigShort": "Switch",
   "running.switchConfigTitle": "Switch configuration and continue",
   "running.switchConfigHint": "Continue this task with the full context from {agent}.",
   "running.switchConfigFile": "Configuration file",

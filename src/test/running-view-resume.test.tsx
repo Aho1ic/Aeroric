@@ -46,6 +46,7 @@ function renderRunningView(task: Task, canRecoverSession = false) {
         onResume={vi.fn()}
         onReconnect={vi.fn()}
         onMarkDone={vi.fn()}
+        onSwitchConfig={vi.fn()}
         onInput={vi.fn()}
         onResize={vi.fn()}
         onRegisterTerminal={vi.fn(() => 1)}
@@ -62,7 +63,15 @@ function renderRunningView(task: Task, canRecoverSession = false) {
 
 describe("RunningView resume affordance", () => {
   beforeEach(() => {
+    localStorage.setItem("aeroric:language", "en");
     vi.mocked(invoke).mockResolvedValue({});
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        observe() {}
+        disconnect() {}
+      },
+    );
   });
 
   it("shows resume for a completed task that only has a saved session path", () => {
@@ -86,6 +95,44 @@ describe("RunningView resume affordance", () => {
 
   it("allows local completed tasks to recover missing session metadata", () => {
     renderRunningView(completedTask, true);
+
+    expect(screen.getByRole("button", { name: "Resume" })).not.toHaveAttribute(
+      "title",
+      "This task has no session ID, so it cannot be resumed.",
+    );
+  });
+
+  it("offers configuration switching for an interrupted conversation", () => {
+    renderRunningView({
+      ...completedTask,
+      status: "interrupted",
+      codexSessionId: "session-1",
+      codexSessionPath: "/tmp/session-1.jsonl",
+    });
+
+    expect(screen.getByTitle("Switch configuration")).toBeInTheDocument();
+  });
+
+  it("offers configuration switching for a failed task that still has context", () => {
+    renderRunningView({
+      ...completedTask,
+      status: "failed",
+      failureReason: "Process exited with code 1",
+    });
+
+    expect(screen.getByRole("button", { name: "Switch configuration" })).toBeInTheDocument();
+  });
+
+  it("uses the saved session owner after a failed switch changed the task agent", () => {
+    renderRunningView({
+      ...completedTask,
+      agent: "claude",
+      status: "failed",
+      codexSessionId: "codex-session",
+      codexSessionPath: "/tmp/codex-session.jsonl",
+      sessionAgent: "codex",
+      sessionCodexLike: true,
+    });
 
     expect(screen.getByRole("button", { name: "Resume" })).not.toHaveAttribute(
       "title",

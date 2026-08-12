@@ -2449,16 +2449,22 @@ mod tests {
 
         // 窗口被钳制,且保留的是最新的行。
         assert_eq!(lines.len(), MAX_SESSION_LINES);
-        assert!(lines.last().expect("last line").contains(&format!(
-            "message-{}",
-            total - 1
-        )));
+        assert!(lines
+            .last()
+            .expect("last line")
+            .contains(&format!("message-{}", total - 1)));
         assert!(!lines.iter().any(|line| line.contains("\"message-0\"")));
         // 关键:session_meta 已被挤出窗口,格式探测仍须在流式扫描阶段命中,
         // 否则 Codex 会话会被当成 Claude 格式解析成空列表。
-        assert!(detected_codex, "codex format must be detected while streaming");
+        assert!(
+            detected_codex,
+            "codex format must be detected while streaming"
+        );
         let messages = parse_session_messages_with_format(&lines, false, detected_codex);
-        assert!(!messages.is_empty(), "truncated codex tail must still parse");
+        assert!(
+            !messages.is_empty(),
+            "truncated codex tail must still parse"
+        );
     }
 
     #[test]

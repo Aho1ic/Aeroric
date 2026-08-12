@@ -446,6 +446,7 @@ function FilePreviewPane({
     !isPreviewableImage &&
     content !== null &&
     languageServer.supported &&
+    languageServer.status?.available &&
     (outlineLoading || outlineLoaded || outlineError),
   );
   const showStickyScroll = Boolean(
@@ -640,8 +641,8 @@ function FilePreviewPane({
     if (!languageServer.status.available) {
       setOutlineSymbols([]);
       setOutlineLoading(false);
-      setOutlineLoaded(true);
-      setOutlineError(languageServer.message ?? "Language server is unavailable.");
+      setOutlineLoaded(false);
+      setOutlineError(null);
       setOutlineTruncated(false);
       return;
     }

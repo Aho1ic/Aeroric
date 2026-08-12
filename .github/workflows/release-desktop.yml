@@ -147,7 +147,6 @@ jobs:
           KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
           WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
           WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
-          REQUIRE_SIGNED_RELEASES: ${{ vars.REQUIRE_SIGNED_RELEASES }}
         run: |
           set -euo pipefail
           missing=()
@@ -172,11 +171,8 @@ jobs:
             echo "AERORIC_SIGN_RELEASE=false" >> "$GITHUB_ENV"
             if [[ "${{ runner.os }}" != "Linux" ]]; then
               message="${{ runner.os }} signing credentials are incomplete: ${missing[*]}"
-              if [[ "${REQUIRE_SIGNED_RELEASES:-false}" == "true" ]]; then
-                echo "::error::${message}"
-                exit 1
-              fi
-              echo "::warning::${message}. Building unsigned installers; set repository variable REQUIRE_SIGNED_RELEASES=true to forbid this fallback."
+              echo "::error::${message}. Tagged desktop releases must be signed."
+              exit 1
             fi
           fi
 
@@ -581,4 +577,5 @@ jobs:
             release-artifacts/*.exe
             release-artifacts/*.msi
             release-artifacts/SHA256SUMS.txt
+            release-artifacts/SIGNING_STATUS.txt
           token: ${{ secrets.GITHUB_TOKEN }}

@@ -242,7 +242,7 @@ function EntryIcon({ entry }: { entry: SftpEntry }) {
 }
 
 function formatSize(size?: number | null): string {
-  if (!size) return "";
+  if (size == null) return "--";
   if (size < 1024) return `${size} B`;
   if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
   return `${(size / 1024 / 1024).toFixed(1)} MB`;
@@ -1389,7 +1389,7 @@ export function SftpPanel({
                       if (column === "size") {
                         return (
                           <span key="size" className="sftp-row-size">
-                            {entry.isDir ? "" : formatSize(entry.size)}
+                            {entry.isDir ? "--" : formatSize(entry.size)}
                           </span>
                         );
                       }

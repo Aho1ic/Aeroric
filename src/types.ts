@@ -302,6 +302,10 @@ export interface Task {
   codexSessionPath?: string;
   claudeSessionId?: string;
   claudeSessionPath?: string;
+  /** 实际创建当前会话的 Agent；切换配置失败后仍用于定位原会话 home。 */
+  sessionAgent?: AgentType;
+  /** 实际会话所属协议族；避免切换后的 task.agent 误导 resume/session 解析。 */
+  sessionCodexLike?: boolean;
   worktreePath?: string;
   worktreeBranch?: string;
   baseBranch?: string;

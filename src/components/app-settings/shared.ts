@@ -1,5 +1,6 @@
 import type React from "react";
 import { createElement } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { APP_PLATFORM } from "../../platform";
 import s from "../../styles";
 import type { AgentKey } from "./types";
@@ -29,6 +30,14 @@ export const shortcutKeyStyle: React.CSSProperties = {
   lineHeight: "inherit",
   verticalAlign: "middle",
 };
+
+export async function refreshLocalRouterRuntime(): Promise<void> {
+  try {
+    await invoke("get_local_router_status");
+  } catch {
+    // The router may be disabled or unavailable. Agent settings should still save.
+  }
+}
 
 export function renderShortcutKeys(keys: string[], keyStyle = shortcutKeyStyle) {
   return createElement(

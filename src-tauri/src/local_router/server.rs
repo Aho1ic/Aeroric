@@ -7,7 +7,7 @@ use super::transforms::{self, PreparedRequest};
 use super::usage::{self, TokenUsage, UsageCapture, UsageStore};
 use super::{
     RouterAgent, RouterAgentPolicy, RouterRequestRecord, RouterRuntimeConfig, RuntimeMetrics,
-    UpstreamTarget, HEALTH_PATH, ROUTE_AGENT_HEADER,
+    UpstreamTarget, HEALTH_PATH, ROUTER_TOKEN_HEADER, ROUTE_AGENT_HEADER,
 };
 use axum::body::{to_bytes, Body, Bytes};
 use axum::extract::{Request, State};
@@ -22,6 +22,7 @@ use axum::{Json, Router};
 use futures_util::stream::{self, BoxStream};
 use futures_util::StreamExt;
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use std::collections::VecDeque;
 use std::io;
 use std::sync::Arc;
@@ -72,7 +73,7 @@ async fn health_check() -> Json<Value> {
 async fn proxy_request(State(context): State<ServerContext>, request: Request) -> Response {
     let started = Instant::now();
     let started_at = usage::unix_millis();
-    let (parts, body) = request.into_parts();
+    let (mut parts, body) = request.into_parts();
     let route = match select_route(&parts.uri, &parts.headers) {
         Ok(route) => route,
         Err(message) => return json_error(StatusCode::NOT_FOUND, message),
@@ -80,6 +81,10 @@ async fn proxy_request(State(context): State<ServerContext>, request: Request) -
 
     let runtime_config = context.config.read().await.clone();
     let agent_runtime = runtime_config.upstreams.agent(route.agent).clone();
+    if !request_is_authorized(&runtime_config, route.agent, &parts.headers) {
+        return unauthorized_response();
+    }
+    strip_router_credentials(&mut parts.headers, &runtime_config.access_token);
     let mut completion = RequestCompletion::new(
         route.agent,
         started,
@@ -467,7 +472,90 @@ fn filter_request_headers(headers: HeaderMap) -> HeaderMap {
     filtered.remove(HOST);
     filtered.remove(CONTENT_LENGTH);
     filtered.remove(ROUTE_AGENT_HEADER);
+    filtered.remove(ROUTER_TOKEN_HEADER);
     filtered
+}
+
+fn request_is_authorized(
+    config: &RouterRuntimeConfig,
+    agent: RouterAgent,
+    headers: &HeaderMap,
+) -> bool {
+    let Ok(listen_addr) = super::validate_listen_address(&config.listen_address, config.port)
+    else {
+        return false;
+    };
+    if listen_addr.ip().is_loopback() {
+        return true;
+    }
+
+    let provided = router_credentials(headers);
+    if provided
+        .iter()
+        .any(|credential| constant_time_secret_eq(credential, &config.access_token))
+    {
+        return true;
+    }
+
+    config
+        .upstreams
+        .agent(agent)
+        .candidates()
+        .first()
+        .map(|target| target.api_key())
+        .filter(|api_key| !api_key.is_empty())
+        .is_some_and(|api_key| {
+            provided
+                .iter()
+                .any(|credential| constant_time_secret_eq(credential, api_key))
+        })
+}
+
+fn router_credentials(headers: &HeaderMap) -> Vec<&str> {
+    let mut credentials = Vec::with_capacity(3);
+    for header in [ROUTER_TOKEN_HEADER, "x-api-key"] {
+        if let Some(value) = headers.get(header).and_then(|value| value.to_str().ok()) {
+            credentials.push(value.trim());
+        }
+    }
+    if let Some(value) = headers
+        .get(AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.trim().strip_prefix("Bearer "))
+    {
+        credentials.push(value.trim());
+    }
+    credentials
+}
+
+fn constant_time_secret_eq(provided: &str, expected: &str) -> bool {
+    if expected.is_empty() {
+        return false;
+    }
+    let provided = Sha256::digest(provided.as_bytes());
+    let expected = Sha256::digest(expected.as_bytes());
+    provided
+        .iter()
+        .zip(expected.iter())
+        .fold(0_u8, |difference, (left, right)| {
+            difference | (left ^ right)
+        })
+        == 0
+}
+
+fn strip_router_credentials(headers: &mut HeaderMap, access_token: &str) {
+    headers.remove(ROUTER_TOKEN_HEADER);
+    for header in [AUTHORIZATION.as_str(), "x-api-key"] {
+        let is_router_token = headers
+            .get(header)
+            .and_then(|value| value.to_str().ok())
+            .map(str::trim)
+            .map(|value| value.strip_prefix("Bearer ").unwrap_or(value).trim())
+            .is_some_and(|value| constant_time_secret_eq(value, access_token));
+        if is_router_token {
+            headers.remove(header);
+        }
+    }
 }
 
 fn filter_response_headers(headers: HeaderMap) -> HeaderMap {
@@ -2049,6 +2137,18 @@ fn json_error(status: StatusCode, message: &str) -> Response {
         .into_response()
 }
 
+fn unauthorized_response() -> Response {
+    let mut response = json_error(
+        StatusCode::UNAUTHORIZED,
+        "a valid local router access token is required",
+    );
+    response.headers_mut().insert(
+        "www-authenticate",
+        HeaderValue::from_static("Bearer realm=\"Aeroric Local Router\""),
+    );
+    response
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2267,6 +2367,10 @@ mod tests {
         headers.insert(CONNECTION, HeaderValue::from_static("keep-alive, x-remove"));
         headers.insert("x-remove", HeaderValue::from_static("private"));
         headers.insert(ROUTE_AGENT_HEADER, HeaderValue::from_static("codex"));
+        headers.insert(
+            ROUTER_TOKEN_HEADER,
+            HeaderValue::from_static("router-secret"),
+        );
         headers.insert(HOST, HeaderValue::from_static("127.0.0.1"));
         let filtered = filter_request_headers(headers);
         assert_eq!(filtered["authorization"], "Bearer secret");
@@ -2274,7 +2378,103 @@ mod tests {
         assert!(!filtered.contains_key(CONNECTION));
         assert!(!filtered.contains_key("x-remove"));
         assert!(!filtered.contains_key(ROUTE_AGENT_HEADER));
+        assert!(!filtered.contains_key(ROUTER_TOKEN_HEADER));
         assert!(!filtered.contains_key(HOST));
+    }
+
+    #[test]
+    fn non_loopback_requests_require_router_or_active_upstream_credentials() {
+        let target = UpstreamTarget::with_details(
+            "codex",
+            "Codex",
+            "https://api.example.test/v1",
+            "upstream-secret",
+            Vec::new(),
+            false,
+            false,
+        )
+        .unwrap();
+        let config = RouterRuntimeConfig::new(
+            "0.0.0.0",
+            43123,
+            false,
+            runtime_with_target(
+                RouterAgent::Codex,
+                target,
+                RouterAgentPolicy {
+                    active_target: "codex".to_string(),
+                    ..RouterAgentPolicy::default()
+                },
+            ),
+        )
+        .with_access_token("aeroric-0123456789abcdef0123456789abcdef");
+
+        assert!(!request_is_authorized(
+            &config,
+            RouterAgent::Codex,
+            &HeaderMap::new()
+        ));
+
+        let mut router_token = HeaderMap::new();
+        router_token.insert(
+            ROUTER_TOKEN_HEADER,
+            HeaderValue::from_static("aeroric-0123456789abcdef0123456789abcdef"),
+        );
+        assert!(request_is_authorized(
+            &config,
+            RouterAgent::Codex,
+            &router_token
+        ));
+
+        let mut upstream_token = HeaderMap::new();
+        upstream_token.insert(
+            AUTHORIZATION,
+            HeaderValue::from_static("Bearer upstream-secret"),
+        );
+        assert!(request_is_authorized(
+            &config,
+            RouterAgent::Codex,
+            &upstream_token
+        ));
+
+        let mut wrong_token = HeaderMap::new();
+        wrong_token.insert(
+            AUTHORIZATION,
+            HeaderValue::from_static("Bearer wrong-secret"),
+        );
+        assert!(!request_is_authorized(
+            &config,
+            RouterAgent::Codex,
+            &wrong_token
+        ));
+    }
+
+    #[test]
+    fn loopback_requests_remain_compatible_without_credentials() {
+        let config =
+            RouterRuntimeConfig::new("127.0.0.1", 43123, false, RouterUpstreams::default());
+        assert!(request_is_authorized(
+            &config,
+            RouterAgent::Claude,
+            &HeaderMap::new()
+        ));
+    }
+
+    #[test]
+    fn router_access_credentials_are_not_forwarded_upstream() {
+        let access_token = "aeroric-0123456789abcdef0123456789abcdef";
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            ROUTER_TOKEN_HEADER,
+            HeaderValue::from_static("must-not-forward"),
+        );
+        headers.insert(
+            AUTHORIZATION,
+            HeaderValue::from_static("Bearer aeroric-0123456789abcdef0123456789abcdef"),
+        );
+        strip_router_credentials(&mut headers, access_token);
+        assert!(!headers.contains_key(ROUTER_TOKEN_HEADER));
+        assert!(!headers.contains_key(AUTHORIZATION));
     }
 
     #[derive(Clone, Debug, Default)]

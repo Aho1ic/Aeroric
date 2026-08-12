@@ -3133,11 +3133,11 @@ html.dark .notebook-rich-text font[color="#000000"] {
 }
 
 .sftp-row:nth-child(even) {
-  background: color-mix(in srgb, var(--bg-subtle) 38%, transparent);
+  background: var(--bg-subtle);
 }
 
 .sftp-row:nth-child(odd) {
-  background: color-mix(in srgb, var(--bg-panel) 88%, var(--bg-hover));
+  background: var(--bg-panel);
 }
 
 .sftp-row:hover {
@@ -3299,8 +3299,7 @@ html.dark .notebook-rich-text font[color="#000000"] {
   text-align: left;
 }
 
-.sftp-list-head-cell:not(:first-child),
-.sftp-row > span:not(:first-child) {
+.sftp-list-head-cell:not(:first-child) {
   border-left: 1px solid color-mix(in srgb, var(--border-medium) 68%, transparent);
 }
 

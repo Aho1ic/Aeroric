@@ -20,7 +20,10 @@ import {
   ChevronDown,
   ChevronRight,
   Code2,
+  Copy,
   DatabaseZap,
+  Eye,
+  EyeOff,
   Gauge,
   Globe2,
   House,
@@ -31,6 +34,7 @@ import {
   RefreshCw,
   RotateCcw,
   Route,
+  Search,
   ScrollText,
   ShieldCheck,
   Shuffle,
@@ -44,6 +48,7 @@ import { useI18n } from "../../i18n";
 import s from "../../styles";
 import { AnimatedSelectionGroup } from "../ui/AnimatedSelection";
 import { Button } from "../ui/Button";
+import { writeClipboardText } from "../file-explorer/clipboard";
 import {
   APP_SETTINGS_CHANGED_EVENT,
   DEFAULT_LOCAL_ROUTER_SETTINGS,
@@ -63,6 +68,7 @@ const MIN_ROUTER_PORT = 1024;
 const MAX_ROUTER_PORT = 65535;
 const REQUEST_LOG_LIMIT = 20;
 const ROUTER_AGENTS: readonly LocalRouterAgent[] = ["claude", "codex"];
+const MIN_ACCESS_TOKEN_LENGTH = 32;
 
 type Translate = ReturnType<typeof useI18n>["t"];
 
@@ -145,6 +151,12 @@ function normalizeRouterHost(value: string): string {
   return candidate.toLowerCase() === "localhost" ? "localhost" : candidate;
 }
 
+function generateRouterAccessToken(): string {
+  const bytes = new Uint8Array(24);
+  crypto.getRandomValues(bytes);
+  return `aeroric-${Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("")}`;
+}
+
 function isLoopbackRouterHost(value: string): boolean {
   const candidate = stripHostBrackets(value).toLowerCase();
   if (candidate === "localhost" || candidate === "::1" || candidate === "0:0:0:0:0:0:0:1") {
@@ -159,6 +171,7 @@ function routerSettingsEqual(a: LocalRouterSettings, b: LocalRouterSettings): bo
     a.enabled === b.enabled &&
     a.listen_host === b.listen_host &&
     a.listen_port === b.listen_port &&
+    a.access_token === b.access_token &&
     a.claude_enabled === b.claude_enabled &&
     a.codex_enabled === b.codex_enabled &&
     a.record_usage === b.record_usage &&
@@ -502,6 +515,7 @@ function TargetCard({
   const switching = action === switchAction;
   const resetting = action === resetAction;
   const isPrimary = queuePosition === 1;
+  const inFailoverQueue = queuePosition !== null;
   const circuitColor =
     target.circuit.state === "open"
       ? "var(--danger)"
@@ -518,12 +532,18 @@ function TargetCard({
 
   return (
     <article
+      aria-label={target.target_name}
       style={{
         ...insetPanelStyle,
         gap: 9,
-        borderColor: target.active
-          ? "color-mix(in srgb, var(--success) 46%, var(--border-dim))"
-          : "var(--border-dim)",
+        borderColor: inFailoverQueue
+          ? "color-mix(in srgb, var(--success) 72%, var(--border-dim))"
+          : target.active
+            ? "color-mix(in srgb, var(--success) 46%, var(--border-dim))"
+            : "var(--border-dim)",
+        boxShadow: inFailoverQueue
+          ? "0 0 0 1px color-mix(in srgb, var(--success) 18%, transparent)"
+          : "none",
       }}
     >
       <div
@@ -961,6 +981,7 @@ export function LocalRouterPanel() {
     DEFAULT_LOCAL_ROUTER_SETTINGS,
   );
   const [selectedAgent, setSelectedAgent] = useState<LocalRouterAgent>("claude");
+  const [targetSearchQuery, setTargetSearchQuery] = useState("");
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [portDraft, setPortDraft] = useState(String(DEFAULT_LOCAL_ROUTER_SETTINGS.listen_port));
   const [status, setStatus] = useState<LocalRouterStatus | null>(null);
@@ -972,6 +993,8 @@ export function LocalRouterPanel() {
   const [requestsLoading, setRequestsLoading] = useState(false);
   const [targetAction, setTargetAction] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
+  const [showAccessToken, setShowAccessToken] = useState(false);
+  const [accessTokenCopied, setAccessTokenCopied] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const refreshStatus = useCallback(async () => {
@@ -1065,6 +1088,8 @@ export function LocalRouterPanel() {
   const normalizedHost = normalizeRouterHost(settings.listen_host);
   const hostInvalid = !isValidRouterHost(normalizedHost);
   const nonLoopbackHost = !hostInvalid && !isLoopbackRouterHost(normalizedHost);
+  const accessTokenInvalid =
+    nonLoopbackHost && settings.access_token.trim().length < MIN_ACCESS_TOKEN_LENGTH;
   const targetsByAgent = useMemo(() => {
     const targets = status?.targets ?? [];
     return {
@@ -1078,7 +1103,11 @@ export function LocalRouterPanel() {
     (settings.claude_enabled && !isFailoverQueueValid(settings.claude, targetsByAgent.claude)) ||
     (settings.codex_enabled && !isFailoverQueueValid(settings.codex, targetsByAgent.codex));
   const configurationInvalid =
-    hostInvalid || portInvalid || agentConfigurationInvalid || failoverConfigurationInvalid;
+    hostInvalid ||
+    portInvalid ||
+    accessTokenInvalid ||
+    agentConfigurationInvalid ||
+    failoverConfigurationInvalid;
   const settingsForComparison = useMemo(
     () => ({
       ...settings,
@@ -1093,6 +1122,13 @@ export function LocalRouterPanel() {
   const busy = loading || saving || toggling;
   const desiredEnabled = status?.desired_enabled ?? settings.enabled;
   const selectedTargets = targetsByAgent[selectedAgent];
+  const visibleTargets = useMemo(() => {
+    const query = targetSearchQuery.trim().toLocaleLowerCase();
+    if (!query) return selectedTargets;
+    return selectedTargets.filter((target) =>
+      `${target.target_name} ${target.target_id}`.toLocaleLowerCase().includes(query),
+    );
+  }, [selectedTargets, targetSearchQuery]);
   const selectedAgentSettings = settings[selectedAgent];
   const selectedAgentEnabled = isAgentEnabled(settings, selectedAgent);
   const selectedFailoverQueueInvalid =
@@ -1501,7 +1537,47 @@ export function LocalRouterPanel() {
             />
 
             <div>
-              <SectionHeading icon={Network}>
+              <SectionHeading
+                icon={Network}
+                action={
+                  <label
+                    style={{
+                      position: "relative",
+                      display: "flex",
+                      minWidth: 0,
+                      flex: "1 1 180px",
+                      maxWidth: 260,
+                      alignItems: "center",
+                    }}
+                  >
+                    <Search
+                      aria-hidden="true"
+                      size={13}
+                      strokeWidth={2}
+                      style={{
+                        position: "absolute",
+                        left: 8,
+                        color: "var(--text-hint)",
+                        pointerEvents: "none",
+                      }}
+                    />
+                    <input
+                      type="search"
+                      aria-label={t("appSettings.localRouter.targetSearch")}
+                      placeholder={t("appSettings.localRouter.targetSearchPlaceholder")}
+                      value={targetSearchQuery}
+                      onChange={(event) => setTargetSearchQuery(event.currentTarget.value)}
+                      style={{
+                        ...inputStyle,
+                        height: 28,
+                        paddingLeft: 27,
+                        fontFamily: "inherit",
+                        fontSize: 11.5,
+                      }}
+                    />
+                  </label>
+                }
+              >
                 {t("appSettings.localRouter.targetsSection")}
               </SectionHeading>
               {!selectedAgentEnabled ? (
@@ -1518,28 +1594,42 @@ export function LocalRouterPanel() {
               ) : null}
               {selectedTargets.length ? (
                 <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                  {selectedTargets.map((target) => {
-                    const queueIndex = selectedAgentSettings.failover_queue.indexOf(
-                      target.target_id,
-                    );
-                    return (
-                      <TargetCard
-                        key={target.target_id}
-                        target={target}
-                        queuePosition={queueIndex >= 0 ? queueIndex + 1 : null}
-                        settings={selectedAgentSettings}
-                        agentEnabled={selectedAgentEnabled}
-                        action={targetAction}
-                        disabled={busy}
-                        t={t}
-                        onSwitch={() => void handleSwitchTarget(selectedAgent, target.target_id)}
-                        onToggleQueue={() => toggleFailoverTarget(target.target_id)}
-                        onResetCircuit={() =>
-                          void handleResetCircuit(selectedAgent, target.target_id)
-                        }
-                      />
-                    );
-                  })}
+                  {visibleTargets.length ? (
+                    visibleTargets.map((target) => {
+                      const queueIndex = selectedAgentSettings.failover_queue.indexOf(
+                        target.target_id,
+                      );
+                      return (
+                        <TargetCard
+                          key={target.target_id}
+                          target={target}
+                          queuePosition={queueIndex >= 0 ? queueIndex + 1 : null}
+                          settings={selectedAgentSettings}
+                          agentEnabled={selectedAgentEnabled}
+                          action={targetAction}
+                          disabled={busy}
+                          t={t}
+                          onSwitch={() => void handleSwitchTarget(selectedAgent, target.target_id)}
+                          onToggleQueue={() => toggleFailoverTarget(target.target_id)}
+                          onResetCircuit={() =>
+                            void handleResetCircuit(selectedAgent, target.target_id)
+                          }
+                        />
+                      );
+                    })
+                  ) : (
+                    <div
+                      style={{
+                        ...insetPanelStyle,
+                        borderStyle: "dashed",
+                        color: "var(--text-hint)",
+                        fontSize: 11,
+                        lineHeight: 1.5,
+                      }}
+                    >
+                      {t("appSettings.localRouter.targetsNoMatch")}
+                    </div>
+                  )}
                 </div>
               ) : (
                 <div
@@ -1944,24 +2034,115 @@ export function LocalRouterPanel() {
             </div>
           ) : null}
           {nonLoopbackHost ? (
-            <div
-              role="alert"
-              style={{
-                display: "flex",
-                alignItems: "flex-start",
-                gap: 7,
-                marginTop: 8,
-                padding: "8px 9px",
-                border: "1px solid color-mix(in srgb, var(--color-warning) 35%, transparent)",
-                borderRadius: "var(--radius-sm)",
-                color: "var(--color-warning)",
-                background: "color-mix(in srgb, var(--color-warning) 8%, transparent)",
-                fontSize: 11,
-                lineHeight: 1.45,
-              }}
-            >
-              <AlertTriangle size={14} strokeWidth={2} style={{ marginTop: 1, flexShrink: 0 }} />
-              <span>{t("appSettings.localRouter.nonLoopbackWarning")}</span>
+            <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 8 }}>
+              <div
+                role="alert"
+                style={{
+                  display: "flex",
+                  alignItems: "flex-start",
+                  gap: 7,
+                  padding: "8px 9px",
+                  border: "1px solid color-mix(in srgb, var(--color-warning) 35%, transparent)",
+                  borderRadius: "var(--radius-sm)",
+                  color: "var(--color-warning)",
+                  background: "color-mix(in srgb, var(--color-warning) 8%, transparent)",
+                  fontSize: 11,
+                  lineHeight: 1.45,
+                }}
+              >
+                <AlertTriangle size={14} strokeWidth={2} style={{ marginTop: 1, flexShrink: 0 }} />
+                <span>{t("appSettings.localRouter.nonLoopbackWarning")}</span>
+              </div>
+              <div>
+                <label htmlFor="local-router-access-token" style={labelStyle}>
+                  {t("appSettings.localRouter.accessToken")}
+                </label>
+                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                  <input
+                    id="local-router-access-token"
+                    type={showAccessToken ? "text" : "password"}
+                    style={{
+                      ...inputStyle,
+                      minWidth: 0,
+                      borderColor: accessTokenInvalid ? "var(--danger)" : "var(--border-medium)",
+                      opacity: busy ? 0.6 : 1,
+                    }}
+                    value={settings.access_token}
+                    disabled={busy}
+                    aria-invalid={accessTokenInvalid || undefined}
+                    aria-describedby="local-router-access-token-hint"
+                    autoComplete="new-password"
+                    spellCheck={false}
+                    onChange={(event) => {
+                      const access_token = event.currentTarget.value;
+                      setSettings((previous) => ({ ...previous, access_token }));
+                    }}
+                  />
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    aria-label={
+                      showAccessToken
+                        ? t("appSettings.localRouter.hideAccessToken")
+                        : t("appSettings.localRouter.showAccessToken")
+                    }
+                    title={
+                      showAccessToken
+                        ? t("appSettings.localRouter.hideAccessToken")
+                        : t("appSettings.localRouter.showAccessToken")
+                    }
+                    disabled={busy}
+                    onClick={() => setShowAccessToken((visible) => !visible)}
+                  >
+                    {showAccessToken ? <EyeOff size={14} /> : <Eye size={14} />}
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    aria-label={t("appSettings.localRouter.copyAccessToken")}
+                    title={t("appSettings.localRouter.copyAccessToken")}
+                    disabled={busy || !settings.access_token}
+                    onClick={() => {
+                      void writeClipboardText(settings.access_token)
+                        .then(() => {
+                          setAccessTokenCopied(true);
+                          window.setTimeout(() => setAccessTokenCopied(false), 2_000);
+                        })
+                        .catch((cause) => setError(String(cause)));
+                    }}
+                  >
+                    {accessTokenCopied ? <Check size={14} /> : <Copy size={14} />}
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    aria-label={t("appSettings.localRouter.regenerateAccessToken")}
+                    title={t("appSettings.localRouter.regenerateAccessToken")}
+                    disabled={busy}
+                    onClick={() => {
+                      try {
+                        const access_token = generateRouterAccessToken();
+                        setSettings((previous) => ({ ...previous, access_token }));
+                      } catch (cause) {
+                        setError(String(cause));
+                      }
+                    }}
+                  >
+                    <RefreshCw size={14} />
+                  </Button>
+                </div>
+                <div
+                  id="local-router-access-token-hint"
+                  style={{
+                    ...hintStyle,
+                    color: accessTokenInvalid ? "var(--danger)" : "var(--text-hint)",
+                  }}
+                >
+                  {accessTokenInvalid
+                    ? t("appSettings.localRouter.accessTokenInvalid")
+                    : t("appSettings.localRouter.accessTokenHint")}
+                </div>
+              </div>
             </div>
           ) : null}
         </section>

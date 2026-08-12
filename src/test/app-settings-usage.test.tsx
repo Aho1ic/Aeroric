@@ -18,7 +18,7 @@ vi.mock("../components/app-settings/AllAgentConfigsPanel", () => ({
 }));
 
 describe("AppSettingsDialog usage statistics", () => {
-  it("exposes token usage in settings and renders the embedded dashboard", () => {
+  it("exposes token usage in settings and renders the embedded dashboard", async () => {
     localStorage.setItem("aeroric:language", "en");
 
     render(
@@ -47,14 +47,14 @@ describe("AppSettingsDialog usage statistics", () => {
     );
 
     expect(screen.getByRole("button", { name: "Statistics" })).toBeInTheDocument();
-    expect(screen.getByTestId("usage-dashboard")).toHaveAttribute("data-embedded", "true");
+    expect(await screen.findByTestId("usage-dashboard")).toHaveAttribute("data-embedded", "true");
     expect(screen.getByRole("dialog", { name: "App Settings" })).toHaveClass("settings-modal-box");
     expect(screen.getByRole("dialog", { name: "App Settings" })).toHaveStyle({
       aspectRatio: "4 / 3",
     });
   });
 
-  it("commits navigation selection before mounting the next settings page", () => {
+  it("commits navigation selection before mounting the next settings page", async () => {
     localStorage.setItem("aeroric:language", "en");
     const frames: FrameRequestCallback[] = [];
     const requestFrame = vi
@@ -95,13 +95,13 @@ describe("AppSettingsDialog usage statistics", () => {
     fireEvent.click(agentConfigs);
 
     expect(agentConfigs).toHaveAttribute("aria-pressed", "true");
-    expect(screen.getByTestId("usage-dashboard")).toBeInTheDocument();
+    expect(await screen.findByTestId("usage-dashboard")).toBeInTheDocument();
     expect(screen.queryByTestId("all-agent-configs")).not.toBeInTheDocument();
 
     act(() => {
       for (const frame of frames.splice(0)) frame(performance.now());
     });
-    expect(screen.getByTestId("all-agent-configs")).toBeInTheDocument();
+    expect(await screen.findByTestId("all-agent-configs")).toBeInTheDocument();
 
     requestFrame.mockRestore();
     cancelFrame.mockRestore();

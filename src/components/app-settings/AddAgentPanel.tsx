@@ -19,6 +19,7 @@ import { Button } from "../ui/Button";
 import { ModelSelectionList } from "./ModelSelectionList";
 import { normalizeModelList, sameModel } from "../../modelOptions";
 import { AnimatedSelectionGroup } from "../ui/AnimatedSelection";
+import { refreshLocalRouterRuntime } from "./shared";
 
 const inputStyle: React.CSSProperties = {
   width: "100%",
@@ -196,6 +197,7 @@ export function AddAgentPanel({ onSaved }: { onSaved: (agentId: string) => void 
               profile.base_url === draft.base_url,
           )?.id ??
         generatedAgentId;
+      await refreshLocalRouterRuntime();
       window.dispatchEvent(new Event(APP_SETTINGS_CHANGED_EVENT));
       setSaved(true);
       onSaved(savedAgentId);

@@ -693,9 +693,9 @@ fn spawn_remote_task_pty(
 
     let needs_initial_input = initial_prelude.is_some() || initial_prompt.is_some();
     let (startup_tx, startup_rx) = std::sync::mpsc::channel();
-    if needs_initial_input {
-        crate::pty::register_initial_input_signal(task_manager, task_id, startup_tx.clone());
-    }
+    let startup_generation = needs_initial_input.then(|| {
+        crate::pty::register_initial_input_signal(task_manager, task_id, startup_tx.clone())
+    });
     crate::pty::spawn_pty_reader(
         app.clone(),
         task_id.to_string(),
@@ -715,17 +715,23 @@ fn spawn_remote_task_pty(
         if let Some(writer) = task_manager.pty_writers.lock().get(task_id).cloned() {
             let signals = Arc::clone(&task_manager.initial_input_signals);
             let cleanup_id = task_id.to_string();
+            let cleanup_generation =
+                startup_generation.expect("initial input registration must exist");
             crate::pty::spawn_initial_input_injection(
                 writer,
                 initial_prelude,
                 initial_prompt,
                 startup_rx,
                 Some(Box::new(move || {
-                    signals.lock().remove(&cleanup_id);
+                    crate::pty::clear_initial_input_signal_if_current(
+                        &signals,
+                        &cleanup_id,
+                        cleanup_generation,
+                    );
                 })),
             );
         } else {
-            task_manager.initial_input_signals.lock().remove(task_id);
+            crate::pty::cancel_initial_input_signal(task_manager, task_id);
         }
     }
     spawn_remote_task_exit_monitor(app, task_id.to_string());

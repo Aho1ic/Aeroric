@@ -64,8 +64,7 @@ pub struct TaskManager {
     pub(crate) claude_sessions: Mutex<HashMap<String, ClaudeSessionInfo>>,
     pub(crate) claimed_session_paths: Mutex<HashSet<String>>,
     /// 启动态初始输入的门控信号:trust/hook 等交互完成后再投递 prompt。
-    pub(crate) initial_input_signals:
-        Arc<Mutex<HashMap<String, std::sync::mpsc::Sender<pty::StartupSignal>>>>,
+    pub(crate) initial_input_signals: pty::StartupSignalRegistry,
     pub(crate) wsl_active_ids: Mutex<HashSet<String>>,
     /// Persistent `codex app-server` process reused across `read_usage_snapshot` calls.
     pub(crate) codex_rpc: Arc<Mutex<Option<CodexRpcClient>>>,
@@ -83,7 +82,7 @@ impl TaskManager {
         pending_sizes.remove(id);
         writers.remove(id);
         children.remove(id);
-        self.initial_input_signals.lock().remove(id);
+        pty::cancel_initial_input_signal(self, id);
     }
 }
 
@@ -204,6 +203,7 @@ pub fn run() {
             pty::cancel_task,
             pty::complete_task,
             pty::get_active_task_ids,
+            pty::validate_agent_launch,
             pty::reset_task_process,
             pty::send_input,
             pty::resize_pty,

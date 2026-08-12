@@ -33,6 +33,7 @@ import {
 import { ModelSelectionList } from "./ModelSelectionList";
 import { AnimatedSelectionGroup } from "../ui/AnimatedSelection";
 import { normalizeModelList, sameModel } from "../../modelOptions";
+import { refreshLocalRouterRuntime } from "./shared";
 
 type FileState =
   | { status: "loading" }
@@ -284,6 +285,7 @@ export function AgentDetailModal({
         "import_agent_config_bundle",
         { inputPath },
       );
+      await refreshLocalRouterRuntime();
       window.dispatchEvent(new Event(APP_SETTINGS_CHANGED_EVENT));
       if (result.agent_id === String(agentKey)) {
         const content = await invoke<string | null>("read_agent_config_file", {
@@ -364,6 +366,7 @@ export function AgentDetailModal({
     setError(null);
     try {
       await invoke("delete_custom_agent_profile", { id: agentKey });
+      await refreshLocalRouterRuntime();
       window.dispatchEvent(new Event(APP_SETTINGS_CHANGED_EVENT));
       onDeleted?.();
       onClose();
@@ -579,6 +582,7 @@ export function AgentDetailModal({
         setOriginalReasoningSpeed(speed);
       }
 
+      await refreshLocalRouterRuntime();
       window.dispatchEvent(new Event(APP_SETTINGS_CHANGED_EVENT));
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);

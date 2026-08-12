@@ -1,22 +1,5 @@
-import { Fragment, memo, useEffect, useState } from "react";
-import {
-  X,
-  Keyboard,
-  Monitor,
-  Info,
-  Settings as SettingsIcon,
-  Type,
-  Zap,
-  Blocks,
-  Network,
-  PackageOpen,
-  ChartNoAxesCombined,
-  Archive,
-  Smartphone,
-  MonitorUp,
-  Route,
-  Plug,
-} from "lucide-react";
+import { Fragment, memo, Suspense, useEffect, useMemo, useState } from "react";
+import { X } from "lucide-react";
 import type {
   ThemeMode,
   ThemeVariant,
@@ -28,57 +11,18 @@ import { useI18n } from "../i18n";
 import s from "../styles";
 import chatgptLogo from "../assets/chatgpt.svg";
 
-import { AboutPanel } from "./app-settings/AboutPanel";
-import { GeneralPanel } from "./app-settings/GeneralPanel";
-import { ShortcutsPanel } from "./app-settings/ShortcutsPanel";
-import { ThemePanel } from "./app-settings/ThemePanel";
-import { FontPanel } from "./app-settings/FontPanel";
-import { HooksPanel } from "./app-settings/HooksPanel";
-import { SkillsPanel } from "./app-settings/SkillsPanel";
-import { ProxyPanel } from "./app-settings/ProxyPanel";
-import { LocalRouterPanel } from "./app-settings/LocalRouterPanel";
-import { RemoteAccessPanel } from "./app-settings/RemoteAccessPanel";
-import { AgentUpdatesPanel } from "./app-settings/AgentUpdatesPanel";
-import { AllAgentConfigsPanel } from "./app-settings/AllAgentConfigsPanel";
-import { UsageDashboard } from "./UsageDashboard";
 import { AnimatedSelectionTrack } from "./ui/AnimatedSelection";
 import type { AppSettingsNavItem, NavKey, NavSection } from "./app-settings/types";
-import { WslPanel } from "./app-settings/WslPanel";
-import { McpPanel } from "./app-settings/McpPanel";
 import { APP_PLATFORM } from "../platform";
-
-const ALL_AGENT_CONFIGS_NAV_KEY = "__all_agent_configs__";
-
-const BASE_NAV_ITEMS: AppSettingsNavItem[] = [
-  { key: "general", labelKey: "appSettings.general", section: "application", icon: SettingsIcon },
-  { key: "theme", labelKey: "appSettings.theme", section: "application", icon: Monitor },
-  { key: "fonts", labelKey: "appSettings.fonts", section: "application", icon: Type },
-  { key: "shortcuts", labelKey: "appSettings.shortcuts", section: "application", icon: Keyboard },
-  { key: "proxy", labelKey: "appSettings.proxy", section: "application", icon: Network },
-  {
-    key: "local-router",
-    labelKey: "appSettings.localRouter",
-    section: "application",
-    icon: Route,
-  },
-  { key: "remote", labelKey: "appSettings.remote", section: "application", icon: Smartphone },
-  { key: "mcp", labelKey: "appSettings.mcp", section: "application", icon: Plug },
-  {
-    key: "usage",
-    labelKey: "usageStats.nav",
-    section: "agents",
-    icon: ChartNoAxesCombined,
-  },
-  {
-    key: "agent-updates",
-    labelKey: "appSettings.agentUpdates",
-    section: "agents",
-    icon: PackageOpen,
-  },
-  { key: "hooks", labelKey: "appSettings.hooks", section: "agents", icon: Zap },
-  { key: "skills", labelKey: "skill.settings.navLabel", section: "agents", icon: Blocks },
-  { key: "about", labelKey: "appSettings.about", section: "about", icon: Info },
-];
+import { ErrorBoundary } from "./ErrorBoundary";
+import {
+  getAvailableSettingsPanels,
+  getSettingsPanel,
+  preloadSettingsPanel,
+  preloadSettingsPanels,
+  type SettingsPanelEntry,
+  type SettingsPanelProps,
+} from "./app-settings/panelRegistry";
 
 const SECTION_ORDER: NavSection[] = ["application", "agents", "about"];
 
@@ -127,87 +71,41 @@ function NavItemIcon({
   return null;
 }
 
-const SettingsPanel = memo(function SettingsPanel({
-  nav,
-  themeVariant,
-  themeMode,
-  systemPrefersDark,
-  onThemeModeChange,
-  terminalFontSize,
-  onTerminalFontSizeChange,
-  taskDisplayWindow,
-  onTaskDisplayWindowChange,
-  attentionBadge,
-  onAttentionBadgeChange,
-  sftpLocalDefaultPath,
-  onSftpLocalDefaultPathChange,
-  uiFontFamily,
-  onUiFontFamilyChange,
-  monoFontFamily,
-  onMonoFontFamilyChange,
-}: {
-  nav: NavKey;
-  themeVariant: ThemeVariant;
-  themeMode: ThemeMode;
-  systemPrefersDark: boolean;
-  onThemeModeChange: (mode: ThemeMode) => void;
-  terminalFontSize: TerminalFontSize;
-  onTerminalFontSizeChange: (size: TerminalFontSize) => void;
-  taskDisplayWindow: TaskDisplayWindow;
-  onTaskDisplayWindowChange: (window: TaskDisplayWindow) => void;
-  attentionBadge: boolean;
-  onAttentionBadgeChange: (enabled: boolean) => void;
-  sftpLocalDefaultPath: string;
-  onSftpLocalDefaultPathChange: (path: string) => void;
-  uiFontFamily: FontFamily;
-  onUiFontFamilyChange: (family: FontFamily) => void;
-  monoFontFamily: FontFamily;
-  onMonoFontFamilyChange: (family: FontFamily) => void;
-}) {
-  if (nav === "theme") {
-    return (
-      <ThemePanel
-        themeMode={themeMode}
-        systemPrefersDark={systemPrefersDark}
-        onThemeModeChange={onThemeModeChange}
-      />
-    );
-  }
-  if (nav === "fonts") {
-    return (
-      <FontPanel
-        terminalFontSize={terminalFontSize}
-        onTerminalFontSizeChange={onTerminalFontSizeChange}
-        uiFontFamily={uiFontFamily}
-        onUiFontFamilyChange={onUiFontFamilyChange}
-        monoFontFamily={monoFontFamily}
-        onMonoFontFamilyChange={onMonoFontFamilyChange}
-      />
-    );
-  }
-  if (nav === "shortcuts") return <ShortcutsPanel />;
-  if (nav === "proxy") return <ProxyPanel />;
-  if (nav === "local-router") return <LocalRouterPanel />;
-  if (nav === "remote") return <RemoteAccessPanel />;
-  if (nav === "mcp") return <McpPanel />;
-  if (nav === "wsl") return <WslPanel />;
-  if (nav === "usage") return <UsageDashboard embedded />;
-  if (nav === "agent-updates") return <AgentUpdatesPanel />;
-  if (nav === ALL_AGENT_CONFIGS_NAV_KEY) {
-    return <AllAgentConfigsPanel themeVariant={themeVariant} />;
-  }
-  if (nav === "hooks") return <HooksPanel />;
-  if (nav === "skills") return <SkillsPanel />;
-  if (nav === "about") return <AboutPanel />;
+function SettingsPanelLoading({ label }: { label: string }) {
   return (
-    <GeneralPanel
-      taskDisplayWindow={taskDisplayWindow}
-      onTaskDisplayWindowChange={onTaskDisplayWindowChange}
-      attentionBadge={attentionBadge}
-      onAttentionBadgeChange={onAttentionBadgeChange}
-      sftpLocalDefaultPath={sftpLocalDefaultPath}
-      onSftpLocalDefaultPathChange={onSftpLocalDefaultPathChange}
-    />
+    <div
+      role="status"
+      style={{
+        flex: 1,
+        minHeight: 0,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        color: "var(--text-hint)",
+        fontSize: 13,
+      }}
+    >
+      {label}
+    </div>
+  );
+}
+
+export const SettingsPanelHost = memo(function SettingsPanelHost({
+  entry,
+  loadingLabel,
+  panelProps,
+}: {
+  entry: SettingsPanelEntry;
+  loadingLabel: string;
+  panelProps: SettingsPanelProps;
+}) {
+  const Panel = entry.Component;
+  return (
+    <ErrorBoundary key={entry.key} label={entry.label ?? entry.labelKey ?? entry.key}>
+      <Suspense fallback={<SettingsPanelLoading label={loadingLabel} />}>
+        <Panel {...panelProps} />
+      </Suspense>
+    </ErrorBoundary>
   );
 });
 
@@ -269,31 +167,19 @@ export function AppSettingsDialog({
     if (e.target === e.currentTarget) onClose();
   }
 
-  const agentNavItems: AppSettingsNavItem[] = [
-    {
-      key: ALL_AGENT_CONFIGS_NAV_KEY,
-      labelKey: "appSettings.allAgentConfigs",
-      section: "agents" as const,
-      icon: Archive,
-    },
-  ];
-  const navItems = [
-    ...BASE_NAV_ITEMS.filter((item) => item.section !== "about"),
-    ...(APP_PLATFORM === "windows"
-      ? [
-          {
-            key: "wsl",
-            labelKey: "wsl.title",
-            section: "application" as const,
-            icon: MonitorUp,
-          },
-        ]
-      : []),
-    ...agentNavItems,
-    ...BASE_NAV_ITEMS.filter((item) => item.section === "about"),
-  ];
+  const navItems = useMemo(() => getAvailableSettingsPanels(APP_PLATFORM), []);
 
-  const activeItem = navItems.find((n) => n.key === activeNav) ?? navItems[0];
+  useEffect(() => {
+    const current = getSettingsPanel(initialNav, navItems);
+    void preloadSettingsPanel(current).catch(() => undefined);
+    const frame = requestAnimationFrame(() => {
+      void preloadSettingsPanels(navItems, current.key);
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [initialNav, navItems]);
+
+  const activeItem = getSettingsPanel(activeNav, navItems);
+  const renderedItem = getSettingsPanel(renderedNav, navItems);
   const activeLabel = activeItem.label ?? t(activeItem.labelKey ?? activeItem.key);
 
   const sectionGroups = SECTION_ORDER.map((section) => ({
@@ -382,24 +268,27 @@ export function AppSettingsDialog({
               </button>
             </div>
 
-            <SettingsPanel
-              nav={renderedNav}
-              themeVariant={themeVariant}
-              themeMode={themeMode}
-              systemPrefersDark={systemPrefersDark}
-              onThemeModeChange={onThemeModeChange}
-              terminalFontSize={terminalFontSize}
-              onTerminalFontSizeChange={onTerminalFontSizeChange}
-              taskDisplayWindow={taskDisplayWindow}
-              onTaskDisplayWindowChange={onTaskDisplayWindowChange}
-              attentionBadge={attentionBadge}
-              onAttentionBadgeChange={onAttentionBadgeChange}
-              sftpLocalDefaultPath={sftpLocalDefaultPath}
-              onSftpLocalDefaultPathChange={onSftpLocalDefaultPathChange}
-              uiFontFamily={uiFontFamily}
-              onUiFontFamilyChange={onUiFontFamilyChange}
-              monoFontFamily={monoFontFamily}
-              onMonoFontFamilyChange={onMonoFontFamilyChange}
+            <SettingsPanelHost
+              entry={renderedItem}
+              loadingLabel={t("common.loading")}
+              panelProps={{
+                themeVariant,
+                themeMode,
+                systemPrefersDark,
+                onThemeModeChange,
+                terminalFontSize,
+                onTerminalFontSizeChange,
+                taskDisplayWindow,
+                onTaskDisplayWindowChange,
+                attentionBadge,
+                onAttentionBadgeChange,
+                sftpLocalDefaultPath,
+                onSftpLocalDefaultPathChange,
+                uiFontFamily,
+                onUiFontFamilyChange,
+                monoFontFamily,
+                onMonoFontFamilyChange,
+              }}
             />
           </div>
         </div>

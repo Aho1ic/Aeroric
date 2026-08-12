@@ -12,6 +12,11 @@ import { useUsageSnapshot } from "../hooks/useUsageSnapshot";
 import { usePlatformRuntimeInfo } from "../hooks/usePlatformRuntimeInfo";
 import { ENABLE_USAGE_INSIGHTS } from "../platform";
 import { agentDisplayLabel, isCodexLikeAgent, type AgentOption } from "../agents";
+import {
+  getTaskSessionFields,
+  hasTaskContinuationContext,
+  resolveTaskSessionOwner,
+} from "../taskSession";
 import { useI18n } from "../i18n";
 import type { TerminalResizeFn } from "../hooks/useTerminalManager";
 import { shouldOfferWindowsNodeInstaller } from "./agentRuntimeRecovery";
@@ -139,9 +144,12 @@ export function RunningView({
     task.status === "pending" || task.status === "running" || task.status === "input_required";
   const isDetached = task.status === "detached";
   const isInterrupted = task.status === "interrupted";
-  const sessionPath = task.claudeSessionPath ?? task.codexSessionPath;
-  const codexLike = isCodexLikeAgent(task.agent, agentOptions);
-  const resumeSessionId = codexLike ? task.codexSessionId : task.claudeSessionId;
+  const isFailed = task.status === "failed";
+  const currentCodexLike = isCodexLikeAgent(task.agent, agentOptions);
+  const sessionOwner = resolveTaskSessionOwner(task, agentOptions);
+  const sessionFields = getTaskSessionFields(task, sessionOwner.codexLike);
+  const sessionPath = sessionFields.sessionPath ?? sessionFields.legacySessionPath;
+  const resumeSessionId = sessionFields.sessionId ?? sessionFields.legacySessionId;
   const resumeAvailable = Boolean(
     resumeSessionId || sessionPath || (canRecoverSession && !task.worktreeDiscarded),
   );
@@ -149,6 +157,8 @@ export function RunningView({
   const [terminalHistory, setTerminalHistory] = useState("");
   const [terminalHistoryVersion, setTerminalHistoryVersion] = useState(0);
   const shouldLoadTerminalHistory = !isActive && !isDetached && !isInterrupted;
+  const failedSwitchAvailable =
+    isFailed && (hasTaskContinuationContext(task) || Boolean(terminalHistory.trim()));
   const currentAgentLabel = agentDisplayLabel(task.agent, agentOptions);
   const reasoningLabel = task.reasoningEffort
     ? t(`newTask.reasoning.${task.reasoningEffort}`)
@@ -253,14 +263,14 @@ export function RunningView({
       await invoke<void>("export_session_markdown", {
         sessionPath,
         projectPath,
-        isCodex: codexLike,
+        isCodex: sessionOwner.codexLike,
         outputPath,
         taskMeta: {
           name: task.name,
           prompt: task.prompt,
-          agent: task.agent,
+          agent: sessionOwner.agent,
           createdAt: task.createdAt,
-          sessionId: codexLike ? task.codexSessionId : task.claudeSessionId,
+          sessionId: resumeSessionId,
           worktreeBranch: task.worktreeBranch,
           baseBranch: task.baseBranch,
           additions: task.additions,
@@ -507,20 +517,20 @@ export function RunningView({
             </button>
           )}
         </div>
+        {onSwitchConfig && (isActive || failedSwitchAvailable) && (
+          <button
+            type="button"
+            style={s.resumeBtn}
+            onClick={() => setSwitchConfigOpen(true)}
+            disabled={switchConfigOpen}
+            title={t("running.switchConfig")}
+          >
+            <Settings2 size={12} strokeWidth={2.3} />
+            <span>{t("running.switchConfig")}</span>
+          </button>
+        )}
         {isActive && (
           <>
-            {onSwitchConfig && (
-              <button
-                type="button"
-                style={s.resumeBtn}
-                onClick={() => setSwitchConfigOpen(true)}
-                disabled={switchConfigOpen}
-                title={t("running.switchConfig")}
-              >
-                <Settings2 size={12} strokeWidth={2.3} />
-                <span>{t("running.switchConfig")}</span>
-              </button>
-            )}
             <button style={s.doneBtn} onClick={onMarkDone}>
               <CheckCircle2 size={12} strokeWidth={2.5} />
               <span>{t("running.markDone")}</span>
@@ -781,6 +791,20 @@ export function RunningView({
                       : t("running.resumeTask")}
                 </span>
               </button>
+              {isInterrupted && onSwitchConfig && (
+                <button
+                  type="button"
+                  style={s.interruptedSecondaryBtn}
+                  onClick={() => setSwitchConfigOpen(true)}
+                  disabled={switchConfigOpen}
+                  title={t("running.switchConfig")}
+                >
+                  <Settings2 size={12} strokeWidth={2.1} />
+                  <span>
+                    {bannerCompact ? t("running.switchConfigShort") : t("running.switchConfig")}
+                  </span>
+                </button>
+              )}
               {isInterrupted && (
                 <button type="button" style={s.interruptedSecondaryBtn} onClick={onMarkDone}>
                   <CheckCircle2 size={12} strokeWidth={2.1} />
@@ -798,7 +822,7 @@ export function RunningView({
               key={sessionPath}
               sessionPath={sessionPath}
               projectPath={projectPath}
-              isCodex={codexLike}
+              isCodex={sessionOwner.codexLike}
               fallback={terminalHistoryFallback}
             />
           ) : (
@@ -822,7 +846,7 @@ export function RunningView({
             isActive={visible}
             initialData={terminalInitialData}
             initialSnapshot={terminalInitialSnapshot}
-            highlightCursorLine={codexLike}
+            highlightCursorLine={currentCodexLike}
           />
         </div>
       ) : (
@@ -830,7 +854,7 @@ export function RunningView({
           key={sessionPath}
           sessionPath={sessionPath}
           projectPath={projectPath}
-          isCodex={codexLike}
+          isCodex={sessionOwner.codexLike}
           fallback={terminalHistoryFallback}
         />
       )}

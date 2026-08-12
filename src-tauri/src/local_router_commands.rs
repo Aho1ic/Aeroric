@@ -292,6 +292,7 @@ fn runtime_config(settings: &AppSettings) -> Result<RouterRuntimeConfig, String>
         router.record_usage,
         upstreams,
     )
+    .with_access_token(router.access_token.clone())
     .with_outbound_proxy(outbound_proxy)
     .map_err(|error| error.to_string())?;
     config.validate().map_err(|error| error.to_string())?;
@@ -351,6 +352,29 @@ async fn apply_settings(
 
     *manager.lifecycle_error.write() = None;
     Ok(app_settings::load_settings_internal())
+}
+
+async fn sync_runtime_from_settings(manager: &LocalRouterManager) -> Result<(), String> {
+    let settings = app_settings::load_settings_internal();
+    if settings.local_router_settings.enabled {
+        let candidate_runtime = runtime_config(&settings)?;
+        if !manager.router.config_matches(&candidate_runtime).await {
+            let _starting = StartingGuard::new(manager.starting.clone());
+            manager
+                .router
+                .start(candidate_runtime)
+                .await
+                .map_err(|error| error.to_string())?;
+        }
+    } else if manager.router.status().await.running {
+        manager
+            .router
+            .stop()
+            .await
+            .map_err(|error| error.to_string())?;
+    }
+    *manager.lifecycle_error.write() = None;
+    Ok(())
 }
 
 pub fn init(app: &AppHandle) {
@@ -436,6 +460,8 @@ fn parse_router_agent(value: &str) -> Result<RouterAgent, String> {
 pub async fn get_local_router_status(
     manager: State<'_, LocalRouterManager>,
 ) -> Result<LocalRouterUiStatus, String> {
+    let _operation = manager.operation_lock.lock().await;
+    sync_runtime_from_settings(&manager).await?;
     Ok(status_for(&manager).await)
 }
 
@@ -465,7 +491,8 @@ pub async fn update_local_router_settings(
     let _operation = manager.operation_lock.lock().await;
     let current = app_settings::load_settings_internal();
     let mut candidate = current.clone();
-    candidate.local_router_settings = settings;
+    candidate.local_router_settings =
+        app_settings::normalize_local_router_settings_for_update(settings);
     match apply_settings(&manager, current, candidate).await {
         Ok(settings) => Ok(settings),
         Err(error) => {
@@ -498,10 +525,38 @@ pub async fn switch_local_router_target(
     let mut candidate = current.clone();
     match agent {
         RouterAgent::Claude => {
-            candidate.local_router_settings.claude.active_target = target_id.to_string()
+            candidate.local_router_settings.claude.active_target = target_id.to_string();
+            if candidate.local_router_settings.claude.auto_failover_enabled {
+                let previous_queue = candidate
+                    .local_router_settings
+                    .claude
+                    .failover_queue
+                    .clone();
+                candidate.local_router_settings.claude.failover_queue = std::iter::once(target_id)
+                    .chain(
+                        previous_queue
+                            .iter()
+                            .map(String::as_str)
+                            .filter(|id| *id != target_id),
+                    )
+                    .map(str::to_string)
+                    .collect();
+            }
         }
         RouterAgent::Codex => {
-            candidate.local_router_settings.codex.active_target = target_id.to_string()
+            candidate.local_router_settings.codex.active_target = target_id.to_string();
+            if candidate.local_router_settings.codex.auto_failover_enabled {
+                let previous_queue = candidate.local_router_settings.codex.failover_queue.clone();
+                candidate.local_router_settings.codex.failover_queue = std::iter::once(target_id)
+                    .chain(
+                        previous_queue
+                            .iter()
+                            .map(String::as_str)
+                            .filter(|id| *id != target_id),
+                    )
+                    .map(str::to_string)
+                    .collect();
+            }
         }
     }
     apply_settings(&manager, current, candidate).await?;
