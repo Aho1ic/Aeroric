@@ -1,18 +1,25 @@
 /* Design tokens: light theme */
 :root {
-  --bg-root: #fbfbfc;
-  --bg-shell: #f7f7fa;
-  --bg-titlebar: #fbfbfc;
-  --bg-sidebar: #f6f6f8;
-  --bg-sidebar-elevated: #ffffff;
-  --bg-panel: #ffffff;
-  --bg-card: #ffffff;
-  --bg-hover: #f0eef8;
+  --app-canvas:
+    radial-gradient(circle at 12% -8%, rgba(124, 58, 237, 0.2), transparent 34%),
+    radial-gradient(circle at 94% 4%, rgba(14, 165, 233, 0.16), transparent 31%),
+    linear-gradient(145deg, #edf2ff 0%, #f8fafc 48%, #edf7ff 100%);
+  --bg-root: rgba(248, 250, 252, 0.7);
+  --bg-shell: rgba(247, 248, 252, 0.5);
+  --bg-titlebar: rgba(251, 251, 252, 0.68);
+  --bg-sidebar: rgba(246, 246, 248, 0.58);
+  --bg-sidebar-elevated: rgba(255, 255, 255, 0.72);
+  --bg-panel: rgba(255, 255, 255, 0.62);
+  --bg-card: rgba(255, 255, 255, 0.72);
+  --bg-hover: rgba(240, 238, 248, 0.64);
   --bg-selected: rgba(124, 58, 237, 0.12);
-  --bg-subtle: #f4f4f7;
-  --bg-input: #ffffff;
-  --terminal-bg: #f6f8fa;
+  --bg-subtle: rgba(244, 244, 247, 0.52);
+  --bg-input: rgba(255, 255, 255, 0.68);
+  --terminal-bg: rgba(246, 248, 250, 0.9);
   --bg: var(--bg-root);
+  --glass-blur: blur(24px) saturate(1.28);
+  --glass-blur-compact: blur(16px) saturate(1.2);
+  --glass-highlight: rgba(255, 255, 255, 0.5);
 
   --border-dim: rgba(39, 39, 42, 0.09);
   --border-medium: rgba(39, 39, 42, 0.14);
@@ -171,18 +178,23 @@
 
 /* Design tokens: eye-care theme (warm sepia, low-contrast) */
 html.eyecare {
-  --bg-root: #f6eddc;
-  --bg-shell: #f3e8d3;
-  --bg-titlebar: #f6eddc;
-  --bg-sidebar: #f8f0df;
-  --bg-sidebar-elevated: #fff8ea;
-  --bg-panel: #fdf7e9;
-  --bg-card: #fffaf0;
-  --bg-hover: #efe2c7;
+  --app-canvas:
+    radial-gradient(circle at 8% -6%, rgba(180, 83, 9, 0.16), transparent 34%),
+    radial-gradient(circle at 92% 8%, rgba(139, 92, 246, 0.12), transparent 30%),
+    linear-gradient(145deg, #eadcc2 0%, #f7eedb 50%, #efe3ca 100%);
+  --bg-root: rgba(246, 237, 220, 0.72);
+  --bg-shell: rgba(243, 232, 211, 0.52);
+  --bg-titlebar: rgba(246, 237, 220, 0.68);
+  --bg-sidebar: rgba(248, 240, 223, 0.6);
+  --bg-sidebar-elevated: rgba(255, 248, 234, 0.74);
+  --bg-panel: rgba(253, 247, 233, 0.64);
+  --bg-card: rgba(255, 250, 240, 0.74);
+  --bg-hover: rgba(239, 226, 199, 0.66);
   --bg-selected: rgba(101, 84, 51, 0.12);
-  --bg-subtle: #f2e7d0;
-  --bg-input: #fffaf0;
-  --terminal-bg: #fdf6e3;
+  --bg-subtle: rgba(242, 231, 208, 0.54);
+  --bg-input: rgba(255, 250, 240, 0.7);
+  --terminal-bg: rgba(253, 246, 227, 0.9);
+  --glass-highlight: rgba(255, 252, 242, 0.48);
 
   --border-dim: rgba(101, 84, 51, 0.12);
   --border-medium: rgba(101, 84, 51, 0.2);
@@ -232,18 +244,23 @@ html.eyecare {
 
 /* Design tokens: dark theme */
 html.dark {
-  --bg-root: #09090b;
-  --bg-shell: #0c0c10;
-  --bg-titlebar: #09090b;
-  --bg-sidebar: #0f0f13;
-  --bg-sidebar-elevated: #141419;
-  --bg-panel: #101014;
-  --bg-card: #18181d;
-  --bg-hover: #24212d;
+  --app-canvas:
+    radial-gradient(circle at 12% -8%, rgba(126, 34, 206, 0.28), transparent 36%),
+    radial-gradient(circle at 96% 4%, rgba(2, 132, 199, 0.2), transparent 32%),
+    linear-gradient(145deg, #07080d 0%, #0b0d15 52%, #071018 100%);
+  --bg-root: rgba(9, 9, 11, 0.72);
+  --bg-shell: rgba(12, 12, 16, 0.54);
+  --bg-titlebar: rgba(9, 9, 11, 0.68);
+  --bg-sidebar: rgba(15, 15, 19, 0.6);
+  --bg-sidebar-elevated: rgba(20, 20, 25, 0.74);
+  --bg-panel: rgba(16, 16, 20, 0.64);
+  --bg-card: rgba(24, 24, 29, 0.72);
+  --bg-hover: rgba(36, 33, 45, 0.66);
   --bg-selected: rgba(192, 132, 252, 0.2);
-  --bg-subtle: #16161b;
-  --bg-input: #111116;
-  --terminal-bg: #050506;
+  --bg-subtle: rgba(22, 22, 27, 0.56);
+  --bg-input: rgba(17, 17, 22, 0.68);
+  --terminal-bg: rgba(5, 5, 6, 0.9);
+  --glass-highlight: rgba(255, 255, 255, 0.09);
 
   --border-dim: rgba(244, 244, 245, 0.08);
   --border-medium: rgba(244, 244, 245, 0.14);

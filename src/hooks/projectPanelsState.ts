@@ -55,6 +55,10 @@ export function createDefaultEditorGroupsState(): EditorGroupsState {
   };
 }
 
+export function closeAllEditorFileTabs(_previous: EditorGroupsState): EditorGroupsState {
+  return createDefaultEditorGroupsState();
+}
+
 function emptyEditorGroup(id: EditorGroupId): EditorGroup {
   return { id, tabs: [], activePath: null };
 }

@@ -9,7 +9,7 @@ import type { ThemeVariant } from "../types";
 // ── Theme ────────────────────────────────────────────────────────────────────
 
 export const DARK_THEME = {
-  background: "#050506",
+  background: "rgba(5, 5, 6, 0.9)",
   foreground: "#d6dce8",
   cursor: "#eadfff",
   selectionBackground: "#30224b",
@@ -32,7 +32,7 @@ export const DARK_THEME = {
 };
 
 export const LIGHT_THEME = {
-  background: "#f6f8fa",
+  background: "rgba(246, 248, 250, 0.9)",
   foreground: "#24292f",
   cursor: "#24292f",
   selectionBackground: "#b3d7ff",
@@ -56,7 +56,7 @@ export const LIGHT_THEME = {
 
 // Solarized Light–inspired warm palette to match the eyecare CSS tokens.
 export const EYECARE_THEME = {
-  background: "#fdf6e3",
+  background: "rgba(253, 246, 227, 0.9)",
   foreground: "#586e75",
   cursor: "#586e75",
   selectionBackground: "#eee8d5",
@@ -805,6 +805,7 @@ export function initTerminal(
     fontFamily,
     fontSize,
     theme: themeFor(variant),
+    allowTransparency: true,
     allowProposedApi: true,
     // 当运行中的 TUI（Claude Code / Codex）开启鼠标上报时，xterm 默认把拖动当作
     // 鼠标事件转发给程序并取消本地选区，导致 macOS 用户"运行时无法框选"。开启此项后

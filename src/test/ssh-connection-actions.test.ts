@@ -23,4 +23,17 @@ describe("SSH connection actions", () => {
       "ssh -i '/Users/me/key file' -p 2222 deploy@example.com",
     );
   });
+
+  it("builds a paste-ready password SSH command with the complete connection target", () => {
+    expect(
+      sshConnectionCommand({
+        ...connection,
+        host: "10.0.0.8",
+        username: "root",
+        password: " s3c'ret value ",
+      }),
+    ).toBe(
+      "env SSHPASS=' s3c'\\''ret value ' sshpass -e ssh -o PreferredAuthentications=password,keyboard-interactive -o PubkeyAuthentication=no -i '/Users/me/key file' -p 2222 root@10.0.0.8",
+    );
+  });
 });

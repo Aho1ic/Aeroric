@@ -26,5 +26,17 @@ export function sshConnectionCommand(connection: SshConnection): string {
   if (connection.identityFile?.trim()) {
     options.unshift("-i", shellQuote(connection.identityFile.trim()));
   }
-  return `ssh ${options.join(" ")} ${shellQuote(`${connection.username.trim()}@${formatSshHost(connection.host)}`)}`;
+  const target = shellQuote(`${connection.username.trim()}@${formatSshHost(connection.host)}`);
+  const password = connection.password;
+  if (password == null || password.length === 0) {
+    return `ssh ${options.join(" ")} ${target}`;
+  }
+
+  const passwordOptions = [
+    "-o",
+    "PreferredAuthentications=password,keyboard-interactive",
+    "-o",
+    "PubkeyAuthentication=no",
+  ];
+  return `env SSHPASS=${shellQuote(password)} sshpass -e ssh ${passwordOptions.join(" ")} ${options.join(" ")} ${target}`;
 }

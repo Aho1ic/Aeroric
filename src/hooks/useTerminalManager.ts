@@ -266,20 +266,23 @@ export function useTerminalManager() {
     const buf = taskBufferRef.current[taskId];
     const snapshotState = terminalSnapshotRef.current[taskId];
 
-    if (!buf) return { initialData: "" };
+    if (!buf) return { initialData: "", rawReplayData: "" };
+
+    const rawReplayData = buf.chunks.join("");
 
     if (!snapshotState?.snapshot) {
-      return { initialData: buf.chunks.join("") };
+      return { initialData: rawReplayData, rawReplayData };
     }
 
     const absLen = getBufferAbsLen(buf);
     if (snapshotState.bufferLength < 0 || snapshotState.bufferLength > absLen) {
-      return { initialData: buf.chunks.join("") };
+      return { initialData: rawReplayData, rawReplayData };
     }
 
     return {
       initialSnapshot: snapshotState.snapshot,
       initialData: joinBufferFrom(buf, snapshotState.bufferLength),
+      rawReplayData,
     };
   }, []);
 

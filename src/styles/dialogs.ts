@@ -9,6 +9,8 @@ export const dialogs = {
     display: "flex",
     alignItems: "center",
     justifyContent: "center",
+    backdropFilter: "blur(10px) saturate(1.08)",
+    WebkitBackdropFilter: "blur(10px) saturate(1.08)",
   },
   modalBox: {
     width: "min(920px, calc(100vw - 48px), calc(133.333vh - 128px))",
@@ -20,6 +22,8 @@ export const dialogs = {
     display: "flex",
     flexDirection: "row" as const,
     overflow: "hidden",
+    backdropFilter: "var(--glass-blur)",
+    WebkitBackdropFilter: "var(--glass-blur)",
   },
   settingsModalBox: {
     width: "min(max(920px, 86vw), calc(100vw - 40px), calc(133.333vh - 74.667px))",
@@ -200,6 +204,8 @@ export const dialogs = {
     padding: 4,
     minWidth: "var(--radix-select-trigger-width)",
     overflow: "hidden",
+    backdropFilter: "var(--glass-blur-compact)",
+    WebkitBackdropFilter: "var(--glass-blur-compact)",
   },
   settingsSelectViewport: {
     padding: 0,

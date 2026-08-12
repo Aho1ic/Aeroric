@@ -122,7 +122,9 @@ describe("SSH project opening", () => {
         I18nProvider,
         null,
         React.createElement(SshProjectPage, {
-          connections: [{ ...connection("/srv/apps/aeroric"), port: 2222 }],
+          connections: [
+            { ...connection("/srv/apps/aeroric"), port: 2222, password: "secret-pass" },
+          ],
           onConnectionsChange: vi.fn(),
           onClose: vi.fn(),
           onOpen: vi.fn(),
@@ -135,7 +137,9 @@ describe("SSH project opening", () => {
       clientY: 80,
     });
     await user.click(screen.getByRole("menuitem", { name: "Copy SSH command" }));
-    expect(writeText).toHaveBeenCalledWith("ssh -p 2222 deploy@example.com");
+    expect(writeText).toHaveBeenCalledWith(
+      "env SSHPASS=secret-pass sshpass -e ssh -o PreferredAuthentications=password,keyboard-interactive -o PubkeyAuthentication=no -p 2222 deploy@example.com",
+    );
   });
 
   it("physically deletes a connection from the home SSH context menu", async () => {

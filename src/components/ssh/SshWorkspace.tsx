@@ -6,8 +6,9 @@ import s from "../../styles";
 import { SshConnectionDialog } from "./SshConnectionDialog";
 import { SshConnectionContextMenu, type SshConnectionProtocol } from "./SshConnectionContextMenu";
 import { SshTerminalPanel } from "./SshTerminalPanel";
+import type { AuxiliaryWorkspaceLayout } from "../project-page/viewMode";
 
-export type SshWorkspaceLayout = "split" | "full";
+export type SshWorkspaceLayout = AuxiliaryWorkspaceLayout;
 
 function connectionTarget(connection: SshConnection): string {
   return `${connection.username}@${connection.host}:${connection.port}`;

@@ -1,11 +1,35 @@
 import { describe, expect, it } from "vitest";
 import {
+  closeAllEditorFileTabs,
   openFileInEditorGroup,
   openFileTab,
   splitEditorGroupRight,
 } from "../hooks/projectPanelsState";
 
 describe("project panel file opening", () => {
+  it("closes file tabs in every editor group", () => {
+    expect(
+      closeAllEditorFileTabs({
+        activeGroupId: "side",
+        groups: [
+          {
+            id: "main",
+            tabs: [{ path: "/repo/a.ts", name: "a.ts" }],
+            activePath: "/repo/a.ts",
+          },
+          {
+            id: "side",
+            tabs: [{ path: "/repo/b.ts", name: "b.ts" }],
+            activePath: "/repo/b.ts",
+          },
+        ],
+      }),
+    ).toEqual({
+      activeGroupId: "main",
+      groups: [{ id: "main", tabs: [], activePath: null }],
+    });
+  });
+
   it("adds a new tab and stores the requested editor selection", () => {
     const next = openFileTab(
       { tabs: [], activePath: null },

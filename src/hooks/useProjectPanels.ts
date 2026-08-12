@@ -1,6 +1,7 @@
 import { useState, useCallback, useRef } from "react";
 import {
   MAIN_EDITOR_GROUP_ID,
+  closeAllEditorFileTabs,
   createDefaultEditorGroupsState,
   openFileInEditorGroup,
   splitEditorGroupRight,
@@ -186,6 +187,10 @@ export function useProjectPanels() {
     [updateEditorGroup],
   );
 
+  const handleCloseAllEditorFileTabs = useCallback(() => {
+    setEditorGroupsState(closeAllEditorFileTabs);
+  }, []);
+
   const activeEditorGroup =
     editorGroupsState.groups.find((group) => group.id === editorGroupsState.activeGroupId) ??
     editorGroupsState.groups[0] ??
@@ -288,6 +293,7 @@ export function useProjectPanels() {
     handleCloseOtherFileTabs,
     handleCloseTabsToRight,
     handleCloseAllFileTabs,
+    handleCloseAllEditorFileTabs,
     handleDiffFileSelect,
     handleCommitSelect,
     handleCommitFileClick,

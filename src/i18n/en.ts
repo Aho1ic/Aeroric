@@ -2300,8 +2300,11 @@ export const en: Record<string, string> = {
   "running.nodeInstallerClaudeFailed": "Claude Code installation failed",
   "session.thinking": "Thinking…",
   "session.loading": "Loading session…",
+  "session.loadingEarlier": "Loading earlier conversation history…",
   "session.unableToLoad": "Unable to load session: {error}",
   "session.noMessages": "No messages found in session file.",
+  "session.terminalFallback":
+    "Structured history recovery failed. Showing terminal history instead: {error}",
   "usage.title": "Usage",
   "usage.loading": "Loading usage…",
   "usage.failed": "Failed to load usage: {error}",

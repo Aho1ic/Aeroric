@@ -392,6 +392,7 @@ pub fn run() {
             analytics::read_usage_statistics,
             usage_index::refresh_usage_statistics_index,
             session::read_session_messages,
+            session::read_session_message_page,
             session::read_session_id,
             session::recover_task_session,
             session::export_session_markdown,

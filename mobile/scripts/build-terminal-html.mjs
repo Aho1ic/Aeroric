@@ -57,8 +57,9 @@ const glue = `
     fontFamily: "Menlo, Consolas, 'DejaVu Sans Mono', monospace",
     scrollback: 10000,
     cursorBlink: true,
+    allowTransparency: true,
     theme: {
-      background: "#111111",
+      background: "rgba(8, 12, 22, 0.9)",
       foreground: "#e0e0e0",
       cursor: "#e0e0e0",
       selectionBackground: "#3b82f666",
@@ -586,9 +587,9 @@ const html = `<!doctype html>
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
 <style>
 ${xtermCss}
-html, body, #root { height: 100%; margin: 0; padding: 0; background: #111111; }
+html, body, #root { height: 100%; margin: 0; padding: 0; background: transparent; }
 /* 滚动统一走 touch → xterm buffer viewport,避免 viewport 与画布双重滚动 */
-.xterm .xterm-viewport { overflow-y: hidden; }
+.xterm .xterm-viewport { overflow-y: hidden; background: transparent !important; }
 .xterm { touch-action: none; }
 .xterm .xterm-screen { transform-origin: top left; }
 /* 长按选区由脚本接管:屏蔽 iOS 原生长按放大镜/共享菜单,避免与自定义选区冲突。

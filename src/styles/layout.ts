@@ -33,6 +33,8 @@ export const layout = {
     display: "flex",
     flexDirection: "column",
     padding: "12px 7px 10px",
+    backdropFilter: "var(--glass-blur)",
+    WebkitBackdropFilter: "var(--glass-blur)",
   },
   sidebarBrand: {
     display: "flex",
@@ -130,6 +132,8 @@ export const layout = {
     flexDirection: "column",
     overflow: "hidden",
     background: "color-mix(in srgb, var(--bg-panel) 64%, transparent)",
+    backdropFilter: "var(--glass-blur)",
+    WebkitBackdropFilter: "var(--glass-blur)",
   },
   searchRow: {
     display: "flex",
@@ -138,6 +142,8 @@ export const layout = {
     padding: "18px 22px 12px",
     borderBottom: "1px solid var(--border-dim)",
     background: "color-mix(in srgb, var(--bg-panel) 78%, transparent)",
+    backdropFilter: "var(--glass-blur-compact)",
+    WebkitBackdropFilter: "var(--glass-blur-compact)",
     flexShrink: 0,
   },
   searchBox: {
@@ -152,6 +158,8 @@ export const layout = {
     borderRadius: "var(--radius-lg)",
     transition: "box-shadow 0.18s ease, border-color 0.18s ease",
     boxShadow: "var(--shadow-xs)",
+    backdropFilter: "var(--glass-blur-compact)",
+    WebkitBackdropFilter: "var(--glass-blur-compact)",
   },
   searchInput: {
     flex: 1,

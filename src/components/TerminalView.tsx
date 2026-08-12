@@ -21,7 +21,7 @@ import {
   applyTerminalFontSize,
   applyTerminalFontFamily,
 } from "./terminalShared";
-import type { TerminalResizeFn } from "../hooks/useTerminalManager";
+import type { TerminalResizeFn, TerminalWriteFn } from "../hooks/useTerminalManager";
 import {
   applyTerminalTextareaInputAttributes,
   attachLinuxIMEFix,
@@ -33,10 +33,7 @@ import "@xterm/xterm/css/xterm.css";
 interface TerminalViewProps {
   onInput: (data: string) => void;
   onResize: (cols: number, rows: number) => void;
-  onRegisterTerminal: (
-    writeFn: ((data: string, callback?: () => void) => void) | null,
-    resizeFn?: TerminalResizeFn,
-  ) => number;
+  onRegisterTerminal: (writeFn: TerminalWriteFn | null, resizeFn?: TerminalResizeFn) => number;
   onReady?: (generation: number) => void;
   themeVariant: ThemeVariant;
   terminalFontSize: TerminalFontSize;
@@ -44,8 +41,19 @@ interface TerminalViewProps {
   isActive?: boolean;
   initialData?: string;
   initialSnapshot?: string;
+  rawReplayData?: string;
   onSnapshot?: (snapshot: string) => void;
   highlightCursorLine?: boolean;
+}
+
+interface TerminalRuntime {
+  term: Terminal;
+  fitAddon: FitAddon;
+  serializeAddon: SerializeAddon;
+  writer: ReturnType<typeof createSmartWriter>;
+  theme: ThemeVariant;
+  focus: () => void;
+  dispose: () => void;
 }
 
 export function TerminalView({
@@ -59,33 +67,52 @@ export function TerminalView({
   isActive = true,
   initialData,
   initialSnapshot,
+  rawReplayData,
   onSnapshot,
   highlightCursorLine = false,
 }: TerminalViewProps) {
   const containerRef = useRef<HTMLDivElement>(null);
-  const terminalRef = useRef<Terminal | null>(null);
-  const fitAddonRef = useRef<FitAddon | null>(null);
+  const runtimeRef = useRef<TerminalRuntime | null>(null);
   const onInputRef = useRef(onInput);
   const onResizeRef = useRef(onResize);
   const onRegisterRef = useRef(onRegisterTerminal);
   const onReadyRef = useRef(onReady);
   const onSnapshotRef = useRef(onSnapshot);
+  const isActiveRef = useRef(isActive);
   const lastSizeRef = useRef<{ cols: number; rows: number } | null>(null);
   const shiftEnterNewlineRef = useRef<boolean>(DEFAULT_SHIFT_ENTER_NEWLINE);
-  const themeVariantRef = useRef(themeVariant);
-  const highlightCursorLineRef = useRef(highlightCursorLine);
-  highlightCursorLineRef.current = highlightCursorLine;
-  onReadyRef.current = onReady;
-  onSnapshotRef.current = onSnapshot;
-  themeVariantRef.current = themeVariant;
+  const desiredThemeRef = useRef(themeVariant);
+  const rebuildRef = useRef<((theme: ThemeVariant, onComplete?: () => void) => void) | null>(null);
+  const rebuildingRef = useRef(true);
+  const pendingWriteCallbacksRef = useRef<Array<(() => void) | undefined>>([]);
+  const rawChunksRef = useRef<string[] | null>(null);
 
-  // Keep refs current on every render
+  if (rawChunksRef.current === null) {
+    const raw = rawReplayData ?? initialData ?? "";
+    rawChunksRef.current = raw ? [raw] : [];
+  }
+
   onInputRef.current = onInput;
   onResizeRef.current = onResize;
   onRegisterRef.current = onRegisterTerminal;
+  onReadyRef.current = onReady;
+  onSnapshotRef.current = onSnapshot;
+  isActiveRef.current = isActive;
+  desiredThemeRef.current = themeVariant;
 
-  // 仅在 cols/rows 真正变化时回调；否则会触发 resize_pty → SIGWINCH →
-  // 下游 TUI（Claude Code / Codex）全屏重绘，导致每次切回都看到一次多余重画。
+  const stableWriteRef = useRef<TerminalWriteFn | null>(null);
+  if (stableWriteRef.current === null) {
+    stableWriteRef.current = (data, callback) => {
+      rawChunksRef.current?.push(data);
+      const runtime = runtimeRef.current;
+      if (rebuildingRef.current || !runtime) {
+        pendingWriteCallbacksRef.current.push(callback);
+        return;
+      }
+      runtime.writer.write(data, callback);
+    };
+  }
+
   const notifyResize = useCallback((cols: number, rows: number) => {
     const last = lastSizeRef.current;
     if (last && last.cols === cols && last.rows === rows) return;
@@ -94,66 +121,160 @@ export function TerminalView({
   }, []);
 
   useEffect(() => {
-    if (!containerRef.current) return;
     const container = containerRef.current;
+    if (!container) return;
+    let disposed = false;
+    const pendingWriteCallbacks = pendingWriteCallbacksRef.current;
 
-    const { term, fitAddon } = initTerminal(themeVariant, 1000, terminalFontSize, monoFontFamily);
-    terminalRef.current = term;
-    fitAddonRef.current = fitAddon;
+    const createRuntime = (theme: ThemeVariant): TerminalRuntime => {
+      const { term, fitAddon } = initTerminal(theme, 1000, terminalFontSize, monoFontFamily);
+      const serializeAddon = new SerializeAddon();
+      term.loadAddon(serializeAddon);
+      term.open(container);
+      applyTerminalTextareaInputAttributes(term);
 
-    const serializeAddon = new SerializeAddon();
-    term.loadAddon(serializeAddon);
-    term.open(container);
-    applyTerminalTextareaInputAttributes(term);
-    const disposeInputFix = attachMacWebKitShiftInputFix(term);
-    const disposeWindowsImeFix = attachWindowsIMEPositionFix(term);
-    // Agent TUIs frequently mix ASCII, CJK, emoji, and box drawing glyphs.
-    // The DOM renderer handles font fallback more reliably in WKWebView; WebGL can
-    // drop glyphs from fallback fonts and make terminal text appear missing.
-
-    const size = safeFit(fitAddon, term, container);
-    if (size) notifyResize(size.cols, size.rows);
-
-    const focusTerminal = () => {
-      window.requestAnimationFrame(() => {
-        if (term.textarea?.disabled) {
-          term.textarea.disabled = false;
-        }
-        term.focus();
-        term.textarea?.focus({ preventScroll: true });
+      const writer = createSmartWriter(term, () => theme);
+      const disposeInputFix = attachMacWebKitShiftInputFix(term);
+      const disposeWindowsImeFix = attachWindowsIMEPositionFix(term);
+      const disposeMacWebKitGuard = attachMacWebKitTerminalGuard({ term, container, writer });
+      const disposeCursorLineHighlight = highlightCursorLine
+        ? attachCursorLineHighlight(term, container)
+        : () => {};
+      const sendInput = (data: string) => {
+        writer.pauseForUserInput();
+        onInputRef.current(data);
+      };
+      const disposeSmartCopy = attachSmartCopy(term, {
+        matchesNewline: (event) => matchesTerminalNewline(event, shiftEnterNewlineRef.current),
+        onNewline: () => sendInput(TERMINAL_NEWLINE_SEQUENCE),
+        onPaste: (text) => sendInput(text),
       });
+      const linuxIme = attachLinuxIMEFix(term, sendInput);
+
+      const focus = () => {
+        if (!isActiveRef.current) return;
+        window.requestAnimationFrame(() => {
+          if (term.textarea?.disabled) term.textarea.disabled = false;
+          term.focus();
+          term.textarea?.focus({ preventScroll: true });
+        });
+      };
+
+      const handlePointerDown = (event: PointerEvent) => {
+        if (event.button === 0) focus();
+      };
+      container.addEventListener("pointerdown", handlePointerDown as EventListener);
+
+      return {
+        term,
+        fitAddon,
+        serializeAddon,
+        writer,
+        theme,
+        focus,
+        dispose: () => {
+          container.removeEventListener("pointerdown", handlePointerDown as EventListener);
+          disposeMacWebKitGuard();
+          disposeCursorLineHighlight();
+          disposeInputFix();
+          disposeWindowsImeFix();
+          disposeSmartCopy();
+          linuxIme.dispose();
+          term.dispose();
+          container.replaceChildren();
+        },
+      };
     };
 
-    const writer = createSmartWriter(term, () => themeVariantRef.current);
-    const disposeMacWebKitGuard = attachMacWebKitTerminalGuard({ term, container, writer });
-    const disposeCursorLineHighlight = highlightCursorLineRef.current
-      ? attachCursorLineHighlight(term, container)
-      : () => {};
-    const sendInput = (data: string) => {
-      writer.pauseForUserInput();
-      onInputRef.current(data);
+    const fitRuntime = (runtime: TerminalRuntime) => {
+      const size = safeFit(runtime.fitAddon, runtime.term, container);
+      if (size) notifyResize(size.cols, size.rows);
     };
 
+    const finishQueuedWrites = (
+      runtime: TerminalRuntime,
+      renderedLength: number,
+      viewportY: number,
+      wasAtBottom: boolean,
+      hadFocus: boolean,
+      onComplete?: () => void,
+    ) => {
+      if (disposed || runtimeRef.current !== runtime) return;
+      const raw = rawChunksRef.current?.join("") ?? "";
+      if (raw.length > renderedLength) {
+        runtime.writer.write(raw.slice(renderedLength), () =>
+          finishQueuedWrites(runtime, raw.length, viewportY, wasAtBottom, hadFocus, onComplete),
+        );
+        return;
+      }
+      if (runtime.theme !== desiredThemeRef.current) {
+        runtime.dispose();
+        runtimeRef.current = null;
+        rebuildingRef.current = false;
+        rebuildRef.current?.(desiredThemeRef.current, onComplete);
+        return;
+      }
+
+      rebuildingRef.current = false;
+      if (wasAtBottom) {
+        runtime.term.scrollToBottom();
+      } else {
+        runtime.term.scrollToLine(Math.min(viewportY, runtime.term.buffer.active.baseY));
+      }
+      if (hadFocus) runtime.focus();
+      const callbacks = pendingWriteCallbacks.splice(0);
+      callbacks.forEach((callback) => callback?.());
+      onComplete?.();
+    };
+
+    rebuildRef.current = (theme, onComplete) => {
+      if (disposed || rebuildingRef.current) return;
+      const previous = runtimeRef.current;
+      const raw = rawChunksRef.current?.join("") ?? "";
+      rebuildingRef.current = true;
+      const viewportY = previous?.term.buffer.active.viewportY ?? 0;
+      const wasAtBottom = previous
+        ? previous.term.buffer.active.viewportY >= previous.term.buffer.active.baseY
+        : true;
+      const hadFocus = Boolean(previous?.term.textarea === document.activeElement);
+      previous?.dispose();
+
+      const runtime = createRuntime(theme);
+      runtimeRef.current = runtime;
+      fitRuntime(runtime);
+      if (raw) {
+        runtime.writer.write(raw, () =>
+          finishQueuedWrites(runtime, raw.length, viewportY, wasAtBottom, hadFocus, onComplete),
+        );
+      } else {
+        finishQueuedWrites(runtime, 0, viewportY, wasAtBottom, hadFocus, onComplete);
+      }
+    };
+
+    const runtime = createRuntime(themeVariant);
+    runtimeRef.current = runtime;
+    fitRuntime(runtime);
     const syncRemoteResize: TerminalResizeFn = (cols, rows) => {
       if (!Number.isInteger(cols) || !Number.isInteger(rows) || cols < 2 || rows < 2) return;
-      term.resize(cols, rows);
-      // 远程尺寸已经由服务端写入 PTY，这次只同步渲染器，不要再次通知后端。
+      const current = runtimeRef.current;
+      if (!current) return;
+      current.term.resize(cols, rows);
       lastSizeRef.current = { cols, rows };
     };
-    const terminalGeneration = onRegisterRef.current(writer.write, syncRemoteResize);
+    const terminalGeneration = onRegisterRef.current(stableWriteRef.current, syncRemoteResize);
+    const restoredRawLength = rawChunksRef.current?.join("").length ?? 0;
 
     const completeRestore = () => {
-      onReadyRef.current?.(terminalGeneration);
-      focusTerminal();
+      finishQueuedWrites(runtime, restoredRawLength, 0, true, true, () => {
+        onReadyRef.current?.(terminalGeneration);
+      });
     };
-
     window.requestAnimationFrame(() => {
-      const s = safeFit(fitAddon, term, container);
-      if (s) notifyResize(s.cols, s.rows);
+      fitRuntime(runtime);
       if (initialSnapshot) {
-        term.write(initialSnapshot, () => {
+        runtime.term.write(initialSnapshot, () => {
           if (initialData) {
-            term.write(initialData, completeRestore);
+            runtime.writer.write(initialData, completeRestore);
             return;
           }
           completeRestore();
@@ -161,73 +282,54 @@ export function TerminalView({
         return;
       }
       if (initialData) {
-        term.write(initialData, completeRestore);
+        runtime.writer.write(initialData, completeRestore);
         return;
       }
       completeRestore();
     });
 
-    const disposeSmartCopy = attachSmartCopy(term, {
-      matchesNewline: (e) => matchesTerminalNewline(e, shiftEnterNewlineRef.current),
-      onNewline: () => sendInput(TERMINAL_NEWLINE_SEQUENCE),
-      onPaste: (text) => sendInput(text),
-    });
-    const linuxIME = attachLinuxIMEFix(term, sendInput);
-    const disposeOnData = { dispose: () => linuxIME.dispose() };
-
-    const handlePointerDown = (e: PointerEvent) => {
-      if (e.button === 0) {
-        focusTerminal();
-      }
-    };
     const handleVisibilityChange = () => {
       if (document.visibilityState !== "visible") return;
       window.requestAnimationFrame(() => {
-        const s = safeFit(fitAddon, term, container);
-        if (s) notifyResize(s.cols, s.rows);
-        term.focus();
+        const current = runtimeRef.current;
+        if (!current) return;
+        fitRuntime(current);
+        current.focus();
       });
     };
-
-    container.addEventListener("pointerdown", handlePointerDown as EventListener);
     document.addEventListener("visibilitychange", handleVisibilityChange);
 
     let resizeTimer: ReturnType<typeof setTimeout> | null = null;
     const resizeObserver = new ResizeObserver(() => {
-      if (resizeTimer) clearTimeout(resizeTimer);
-      resizeTimer = setTimeout(() => {
-        const s = safeFit(fitAddon, term, container);
-        if (s) notifyResize(s.cols, s.rows);
+      if (resizeTimer) window.clearTimeout(resizeTimer);
+      resizeTimer = window.setTimeout(() => {
+        const current = runtimeRef.current;
+        if (current) fitRuntime(current);
       }, 50);
     });
     resizeObserver.observe(container);
 
     return () => {
+      disposed = true;
       try {
-        const snapshot = serializeAddon.serialize();
+        const snapshot = runtimeRef.current?.serializeAddon.serialize();
         if (snapshot) onSnapshotRef.current?.(snapshot);
       } catch {
-        /* ignore */
+        // Terminal teardown must remain best-effort.
       }
       onRegisterRef.current(null);
-      fitAddonRef.current = null;
-      disposeMacWebKitGuard();
-      disposeCursorLineHighlight();
-      disposeInputFix();
-      disposeWindowsImeFix();
-      disposeSmartCopy();
-      disposeOnData.dispose();
-      if (resizeTimer) clearTimeout(resizeTimer);
+      rebuildRef.current = null;
+      if (resizeTimer) window.clearTimeout(resizeTimer);
       resizeObserver.disconnect();
-      container.removeEventListener("pointerdown", handlePointerDown as EventListener);
       document.removeEventListener("visibilitychange", handleVisibilityChange);
-      terminalRef.current = null;
-      term.dispose();
+      runtimeRef.current?.dispose();
+      runtimeRef.current = null;
+      rebuildingRef.current = true;
+      const callbacks = pendingWriteCallbacks.splice(0);
+      callbacks.forEach((callback) => callback?.());
     };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Keep the configured "insert newline" combo in sync with app settings.
-  // Mirrors NewTaskView: load once, then react to the global settings event.
   useEffect(() => {
     function loadNewlineShortcut() {
       invoke<{ terminal_shift_enter_newline?: unknown }>("load_app_settings")
@@ -246,55 +348,53 @@ export function TerminalView({
   }, []);
 
   useEffect(() => {
-    if (!isActive) return;
+    const runtime = runtimeRef.current;
+    if (!runtime || !isActive) return;
     window.requestAnimationFrame(() => {
-      if (!fitAddonRef.current || !terminalRef.current || !containerRef.current) return;
-      const s = safeFit(fitAddonRef.current, terminalRef.current, containerRef.current);
-      if (s) notifyResize(s.cols, s.rows);
-      terminalRef.current.focus();
+      const current = runtimeRef.current;
+      const container = containerRef.current;
+      if (!current || !container) return;
+      const size = safeFit(current.fitAddon, current.term, container);
+      if (size) notifyResize(size.cols, size.rows);
+      current.focus();
     });
   }, [isActive, notifyResize]);
 
   useEffect(() => {
-    if (terminalRef.current) {
-      terminalRef.current.options.cursorBlink = isActive;
-    }
+    if (runtimeRef.current) runtimeRef.current.term.options.cursorBlink = isActive;
   }, [isActive]);
 
   useEffect(() => {
-    if (terminalRef.current) {
-      terminalRef.current.options.theme = themeFor(themeVariant);
-    }
+    const runtime = runtimeRef.current;
+    if (!runtime || runtime.theme === themeVariant) return;
+    rebuildRef.current?.(themeVariant);
   }, [themeVariant]);
 
   useEffect(() => {
-    if (!terminalRef.current || !fitAddonRef.current || !containerRef.current) return;
-    const size = applyTerminalFontSize(
-      terminalRef.current,
-      fitAddonRef.current,
-      terminalFontSize,
-      containerRef.current,
-    );
+    const runtime = runtimeRef.current;
+    const container = containerRef.current;
+    if (!runtime || !container) return;
+    const size = applyTerminalFontSize(runtime.term, runtime.fitAddon, terminalFontSize, container);
     if (size) notifyResize(size.cols, size.rows);
   }, [terminalFontSize, notifyResize]);
 
   useEffect(() => {
-    if (!terminalRef.current || !fitAddonRef.current || !containerRef.current) return;
-    const size = applyTerminalFontFamily(
-      terminalRef.current,
-      fitAddonRef.current,
-      monoFontFamily,
-      containerRef.current,
-    );
+    const runtime = runtimeRef.current;
+    const container = containerRef.current;
+    if (!runtime || !container) return;
+    const size = applyTerminalFontFamily(runtime.term, runtime.fitAddon, monoFontFamily, container);
     if (size) notifyResize(size.cols, size.rows);
   }, [monoFontFamily, notifyResize]);
 
   return (
     <div
       ref={containerRef}
+      data-testid="agent-terminal"
       style={{
         width: "100%",
         height: "100%",
+        minWidth: 0,
+        minHeight: 0,
         overflow: "hidden",
         cursor: "text",
         background: themeFor(themeVariant).background,

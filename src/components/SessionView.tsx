@@ -1,49 +1,123 @@
-import { useState, useEffect, useRef, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { ChevronDown, ChevronRight, Wrench, Copy, Check } from "lucide-react";
+import {
+  Brain,
+  Check,
+  ChevronDown,
+  ChevronRight,
+  Copy,
+  FileText,
+  Paperclip,
+  Wrench,
+} from "lucide-react";
 import { marked } from "marked";
 import DOMPurify from "dompurify";
 import { useI18n } from "../i18n";
 
-interface SessionContent {
-  type: "text" | "tool_use" | "tool_result" | "thinking";
+export interface SessionContent {
+  type: "text" | "tool_use" | "tool_result" | "thinking" | "attachment";
   text?: string;
   id?: string;
   name?: string;
   input?: string;
   output?: string;
   thinking?: string;
+  mediaType?: string;
+  source?: string;
 }
 
-interface SessionMessage {
+export interface SessionMessage {
   role: "user" | "assistant";
   content: SessionContent[];
+}
+
+interface SessionMessagePage {
+  messages: SessionMessage[];
+  nextCursor: number | null;
+  hasMore: boolean;
+}
+
+export function mergeSessionMessagePages(
+  earlier: SessionMessage[],
+  later: SessionMessage[],
+  isCodex: boolean,
+): SessionMessage[] {
+  if (!isCodex || earlier.length === 0 || later.length === 0) {
+    return [...earlier, ...later];
+  }
+
+  const mergedEarlier = [...earlier];
+  const mergedLater = [...later];
+  const earlierBoundary = mergedEarlier[mergedEarlier.length - 1];
+  const laterBoundary = mergedLater[0];
+  if (earlierBoundary.role !== laterBoundary.role) return [...mergedEarlier, ...mergedLater];
+
+  if (earlierBoundary.role === "assistant") {
+    mergedEarlier[mergedEarlier.length - 1] = {
+      ...earlierBoundary,
+      content: [...earlierBoundary.content, ...laterBoundary.content],
+    };
+    mergedLater.shift();
+    return [...mergedEarlier, ...mergedLater];
+  }
+
+  const earlierText = new Set(
+    earlierBoundary.content
+      .filter((content) => content.type === "text")
+      .map((content) => content.text ?? ""),
+  );
+  const repeatsCodexEvent = laterBoundary.content.some(
+    (content) => content.type === "text" && earlierText.has(content.text ?? ""),
+  );
+  if (!repeatsCodexEvent) return [...mergedEarlier, ...mergedLater];
+
+  mergedEarlier[mergedEarlier.length - 1] = {
+    ...earlierBoundary,
+    content: [
+      ...earlierBoundary.content,
+      ...laterBoundary.content.filter(
+        (content) => content.type !== "text" || !earlierText.has(content.text ?? ""),
+      ),
+    ],
+  };
+  mergedLater.shift();
+  return [...mergedEarlier, ...mergedLater];
 }
 
 export function renderSessionMarkdown(text: string): string {
   return DOMPurify.sanitize(marked(text, { async: false }) as string);
 }
 
-function ToolUseCard({ name, input }: { name: string; input: string }) {
+function ExpandableCard({
+  title,
+  content,
+  icon,
+}: {
+  title: string;
+  content: string;
+  icon: ReactNode;
+}) {
   const [expanded, setExpanded] = useState(false);
   return (
     <div
       style={{
         margin: "6px 0",
         border: "1px solid var(--border-dim)",
-        borderRadius: 6,
+        borderRadius: 8,
         overflow: "hidden",
         fontSize: 12,
+        background: "var(--bg-panel)",
       }}
     >
       <button
-        onClick={() => setExpanded((e) => !e)}
+        type="button"
+        onClick={() => setExpanded((value) => !value)}
         style={{
           width: "100%",
           display: "flex",
           alignItems: "center",
           gap: 7,
-          padding: "5px 10px",
+          padding: "7px 10px",
           background: "var(--bg-input)",
           border: "none",
           cursor: "pointer",
@@ -51,31 +125,25 @@ function ToolUseCard({ name, input }: { name: string; input: string }) {
           color: "var(--text-secondary)",
         }}
       >
-        {expanded ? (
-          <ChevronDown size={11} style={{ flexShrink: 0 }} />
-        ) : (
-          <ChevronRight size={11} style={{ flexShrink: 0 }} />
-        )}
-        <Wrench size={11} style={{ color: "var(--text-hint)", flexShrink: 0 }} />
-        <span style={{ fontFamily: "var(--font-mono)", fontWeight: 600 }}>{name}</span>
+        {expanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+        {icon}
+        <span style={{ fontFamily: "var(--font-mono)", fontWeight: 650 }}>{title}</span>
       </button>
       {expanded && (
         <pre
           style={{
             margin: 0,
-            padding: "8px 12px",
+            padding: "10px 12px",
             fontSize: 11,
             fontFamily: "var(--font-mono)",
             color: "var(--text-secondary)",
             background: "var(--bg-root)",
             overflowX: "auto",
             whiteSpace: "pre-wrap",
-            wordBreak: "break-all",
-            maxHeight: 280,
-            overflowY: "auto",
+            wordBreak: "break-word",
           }}
         >
-          {input}
+          {content}
         </pre>
       )}
     </div>
@@ -84,151 +152,172 @@ function ToolUseCard({ name, input }: { name: string; input: string }) {
 
 function ThinkingBlock({ thinking }: { thinking: string }) {
   const { t } = useI18n();
-  const [expanded, setExpanded] = useState(false);
   return (
-    <div style={{ marginBottom: 6 }}>
-      <button
-        onClick={() => setExpanded((e) => !e)}
-        style={{
-          display: "flex",
-          alignItems: "center",
-          gap: 5,
-          background: "none",
-          border: "none",
-          cursor: "pointer",
-          padding: "2px 0",
-          color: "var(--text-hint)",
-          fontSize: 11.5,
-          fontStyle: "italic",
-        }}
-      >
-        {expanded ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
-        <span>{t("session.thinking")}</span>
-      </button>
-      {expanded && (
-        <div
+    <ExpandableCard
+      title={t("session.thinking")}
+      content={thinking}
+      icon={<Brain size={12} aria-hidden="true" />}
+    />
+  );
+}
+
+function AttachmentCard({ content }: { content: SessionContent }) {
+  const source = content.source ?? "";
+  const mediaType = content.mediaType ?? "application/octet-stream";
+  const name = content.name || "attachment";
+  const canPreviewImage = mediaType.startsWith("image/") && /^(data:|https?:\/\/)/.test(source);
+
+  return (
+    <div style={{ margin: "7px 0" }}>
+      {canPreviewImage && (
+        <img
+          src={source}
+          alt={name}
           style={{
-            padding: "6px 12px",
-            fontSize: 12,
-            color: "var(--text-muted)",
-            fontStyle: "italic",
-            borderLeft: "2px solid var(--border-dim)",
-            marginLeft: 4,
-            marginTop: 4,
-            whiteSpace: "pre-wrap",
-            wordBreak: "break-word",
-            lineHeight: 1.55,
+            display: "block",
+            maxWidth: "100%",
+            maxHeight: 420,
+            marginBottom: 6,
+            borderRadius: 8,
+            border: "1px solid var(--border-dim)",
+            objectFit: "contain",
           }}
-        >
-          {thinking}
-        </div>
+        />
       )}
+      <ExpandableCard
+        title={`${name} · ${mediaType}`}
+        content={source}
+        icon={<Paperclip size={12} aria-hidden="true" />}
+      />
     </div>
   );
 }
 
-function UserMessageBubble({ text }: { text: string }) {
+function CopyButton({ text }: { text: string }) {
   const [copied, setCopied] = useState(false);
-
   const handleCopy = () => {
-    navigator.clipboard.writeText(text).then(() => {
+    void navigator.clipboard.writeText(text).then(() => {
       setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
+      window.setTimeout(() => setCopied(false), 1500);
     });
   };
-
   return (
-    <div style={{ marginBottom: 14, display: "flex", justifyContent: "flex-end" }}>
-      <div
-        style={{ maxWidth: "72%", position: "relative" }}
-        className="user-message-bubble"
-        onMouseEnter={(e) => {
-          const btn = (e.currentTarget as HTMLElement).querySelector(
-            ".copy-btn",
-          ) as HTMLElement | null;
-          if (btn) btn.style.opacity = "1";
-        }}
-        onMouseLeave={(e) => {
-          const btn = (e.currentTarget as HTMLElement).querySelector(
-            ".copy-btn",
-          ) as HTMLElement | null;
-          if (btn) btn.style.opacity = "0";
-        }}
-      >
-        <button
-          className="copy-btn"
-          onClick={handleCopy}
-          style={{
-            position: "absolute",
-            top: 6,
-            right: 8,
-            opacity: 0,
-            transition: "opacity 0.15s",
-            background: "none",
-            border: "none",
-            cursor: "pointer",
-            padding: 2,
-            color: "var(--text-muted)",
-            display: "flex",
-            alignItems: "center",
-          }}
-        >
-          {copied ? <Check size={13} /> : <Copy size={13} />}
-        </button>
-        <div
-          style={{
-            padding: "10px 16px",
-            background: "color-mix(in srgb, var(--accent) 12%, transparent)",
-            border: "1px solid color-mix(in srgb, var(--accent) 22%, transparent)",
-            boxShadow: "inset 0 1px 0 color-mix(in srgb, #fff 18%, transparent)",
-            color: "var(--text-primary)",
-            borderRadius: 14,
-            fontSize: 13.5,
-            lineHeight: 1.6,
-            whiteSpace: "pre-wrap",
-            wordBreak: "break-word",
-          }}
-        >
-          {text}
-        </div>
-      </div>
-    </div>
+    <button
+      type="button"
+      className="copy-btn"
+      aria-label="Copy message"
+      onClick={handleCopy}
+      style={{
+        position: "absolute",
+        top: 7,
+        right: 8,
+        opacity: 0,
+        transition: "opacity 0.15s",
+        background: "none",
+        border: "none",
+        cursor: "pointer",
+        padding: 2,
+        color: "var(--text-muted)",
+        display: "flex",
+        alignItems: "center",
+      }}
+    >
+      {copied ? <Check size={13} /> : <Copy size={13} />}
+    </button>
   );
 }
 
-function MessageBlock({ message }: { message: SessionMessage }) {
-  const isUser = message.role === "user";
-
-  if (isUser) {
-    const text = message.content
-      .filter((c) => c.type === "text")
-      .map((c) => c.text ?? "")
-      .join("\n");
-    if (!text.trim()) return null;
-    return <UserMessageBubble text={text} />;
-  }
-
-  const textParts = message.content.filter((c) => c.type === "text");
-  const toolParts = message.content.filter((c) => c.type === "tool_use");
-  const thinkingParts = message.content.filter((c) => c.type === "thinking");
-
-  if (textParts.length === 0 && toolParts.length === 0 && thinkingParts.length === 0) return null;
-
-  return (
-    <div style={{ marginBottom: 18 }}>
-      {thinkingParts.map((t, i) => (
-        <ThinkingBlock key={i} thinking={t.thinking ?? ""} />
-      ))}
-      {textParts.map((t, i) => (
+function MessageContent({ content }: { content: SessionContent }) {
+  switch (content.type) {
+    case "text":
+      return (
         <div
-          key={i}
           className="session-prose"
-          dangerouslySetInnerHTML={{ __html: renderSessionMarkdown(t.text ?? "") }}
+          dangerouslySetInnerHTML={{ __html: renderSessionMarkdown(content.text ?? "") }}
         />
-      ))}
-      {toolParts.map((t, i) => (
-        <ToolUseCard key={i} name={t.name ?? ""} input={t.input ?? ""} />
-      ))}
+      );
+    case "thinking":
+      return <ThinkingBlock thinking={content.thinking ?? ""} />;
+    case "tool_use":
+      return (
+        <ExpandableCard
+          title={content.name || "tool"}
+          content={content.input ?? ""}
+          icon={<Wrench size={12} aria-hidden="true" />}
+        />
+      );
+    case "tool_result":
+      return (
+        <ExpandableCard
+          title={content.id ? `result · ${content.id}` : "tool result"}
+          content={content.output ?? ""}
+          icon={<FileText size={12} aria-hidden="true" />}
+        />
+      );
+    case "attachment":
+      return <AttachmentCard content={content} />;
+  }
+}
+
+function MessageBubble({ message }: { message: SessionMessage }) {
+  const isUser = message.role === "user";
+  const copyText = message.content
+    .map((content) =>
+      content.type === "text"
+        ? (content.text ?? "")
+        : content.type === "thinking"
+          ? (content.thinking ?? "")
+          : content.type === "tool_use"
+            ? (content.input ?? "")
+            : content.type === "tool_result"
+              ? (content.output ?? "")
+              : (content.source ?? ""),
+    )
+    .filter(Boolean)
+    .join("\n");
+
+  if (message.content.length === 0) return null;
+  return (
+    <div
+      data-session-role={message.role}
+      style={{
+        marginBottom: 14,
+        display: "flex",
+        justifyContent: isUser ? "flex-end" : "flex-start",
+      }}
+    >
+      <div
+        className={isUser ? "user-message-bubble" : "assistant-message-bubble"}
+        style={{
+          width: "fit-content",
+          maxWidth: isUser ? "78%" : "88%",
+          minWidth: 0,
+          position: "relative",
+          padding: "10px 16px",
+          borderRadius: 14,
+          border: isUser
+            ? "1px solid color-mix(in srgb, var(--accent) 25%, var(--border-dim))"
+            : "1px solid var(--border-dim)",
+          background: isUser
+            ? "color-mix(in srgb, var(--accent) 12%, var(--bg-panel))"
+            : "color-mix(in srgb, var(--bg-card) 90%, var(--bg-panel))",
+          color: "var(--text-primary)",
+          overflow: "hidden",
+        }}
+        onMouseEnter={(event) => {
+          const button = event.currentTarget.querySelector<HTMLElement>(".copy-btn");
+          if (button) button.style.opacity = "1";
+        }}
+        onMouseLeave={(event) => {
+          const button = event.currentTarget.querySelector<HTMLElement>(".copy-btn");
+          if (button) button.style.opacity = "0";
+        }}
+      >
+        {copyText && <CopyButton text={copyText} />}
+        {message.content.map((content, index) => (
+          <MessageContent key={`${content.type}-${content.id ?? index}`} content={content} />
+        ))}
+      </div>
     </div>
   );
 }
@@ -247,31 +336,107 @@ export function SessionView({
   const { t } = useI18n();
   const [messages, setMessages] = useState<SessionMessage[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadingEarlier, setLoadingEarlier] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const pendingScrollRestoreRef = useRef<{ height: number; top: number } | null>(null);
+
+  useLayoutEffect(() => {
+    const restore = pendingScrollRestoreRef.current;
+    const element = scrollRef.current;
+    if (!restore || !element) return;
+    element.scrollTop = restore.top + (element.scrollHeight - restore.height);
+    pendingScrollRestoreRef.current = null;
+  }, [messages]);
 
   useEffect(() => {
     let cancelled = false;
+    setMessages([]);
     setLoading(true);
+    setLoadingEarlier(false);
     setError(null);
-    invoke<SessionMessage[]>("read_session_messages", { sessionPath, projectPath, isCodex })
-      .then((msgs) => {
+
+    const load = async () => {
+      let cursor: number | null = null;
+      let displayedFirstPage = false;
+      try {
+        for (;;) {
+          const page: SessionMessagePage = await invoke<SessionMessagePage>(
+            "read_session_message_page",
+            {
+              sessionPath,
+              projectPath,
+              isCodex,
+              cursor,
+            },
+          );
+          if (cancelled) return;
+
+          if (page.messages.length > 0) {
+            if (!displayedFirstPage) {
+              displayedFirstPage = true;
+              setMessages(page.messages);
+              setLoading(false);
+              setLoadingEarlier(page.hasMore);
+              window.requestAnimationFrame(() => {
+                const element = scrollRef.current;
+                if (element) element.scrollTop = element.scrollHeight;
+              });
+            } else {
+              const element = scrollRef.current;
+              if (element) {
+                pendingScrollRestoreRef.current = {
+                  height: element.scrollHeight,
+                  top: element.scrollTop,
+                };
+              }
+              setMessages((current) => mergeSessionMessagePages(page.messages, current, isCodex));
+            }
+          }
+
+          if (!page.hasMore || page.nextCursor == null) {
+            setLoading(false);
+            setLoadingEarlier(false);
+            return;
+          }
+          if (cursor !== null && page.nextCursor >= cursor) {
+            throw new Error("Invalid session history cursor");
+          }
+          cursor = page.nextCursor;
+        }
+      } catch (caught) {
         if (cancelled) return;
-        setMessages(msgs);
+        setError(String(caught));
         setLoading(false);
-      })
-      .catch((err) => {
-        if (cancelled) return;
-        setError(String(err));
-        setLoading(false);
-      });
+        setLoadingEarlier(false);
+      }
+    };
+
+    void load();
     return () => {
       cancelled = true;
     };
   }, [sessionPath, projectPath, isCodex]);
 
   if (!loading && fallback && (error || messages.length === 0)) {
-    return <>{fallback}</>;
+    return (
+      <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
+        <div
+          role="alert"
+          style={{
+            flexShrink: 0,
+            padding: "8px 14px",
+            borderBottom: "1px solid var(--border-dim)",
+            background: "color-mix(in srgb, var(--warning) 10%, var(--bg-panel))",
+            color: "var(--text-secondary)",
+            fontSize: 12,
+          }}
+        >
+          {t("session.terminalFallback", { error: error ?? t("session.noMessages") })}
+        </div>
+        {fallback}
+      </div>
+    );
   }
 
   return (
@@ -294,12 +459,12 @@ export function SessionView({
         WebkitBackdropFilter: "blur(22px) saturate(1.38)",
       }}
     >
-      {loading && (
-        <div style={{ color: "var(--text-hint)", fontSize: 13, padding: "12px 0" }}>
-          {t("session.loading")}
+      {(loading || loadingEarlier) && (
+        <div style={{ color: "var(--text-hint)", fontSize: 12, padding: "6px 0 12px" }}>
+          {loading ? t("session.loading") : t("session.loadingEarlier")}
         </div>
       )}
-      {error && (
+      {error && !fallback && (
         <div style={{ color: "var(--text-muted)", fontSize: 13, padding: "12px 0" }}>
           {t("session.unableToLoad", { error })}
         </div>
@@ -309,8 +474,8 @@ export function SessionView({
           {t("session.noMessages")}
         </div>
       )}
-      {messages.map((msg, i) => (
-        <MessageBlock key={i} message={msg} />
+      {messages.map((message, index) => (
+        <MessageBubble key={index} message={message} />
       ))}
     </div>
   );

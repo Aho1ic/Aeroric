@@ -100,6 +100,7 @@ export function RunningView({
   onRegisterTerminal,
   onTerminalReady,
   onSnapshot,
+  onSessionRecovered,
   getRestoreState,
   onRename,
   onGenerateName,
@@ -129,7 +130,12 @@ export function RunningView({
   ) => number;
   onTerminalReady: (generation: number) => void;
   onSnapshot?: (snapshot: string) => void;
-  getRestoreState?: () => { initialData?: string; initialSnapshot?: string };
+  onSessionRecovered?: (sessionId: string, sessionPath: string, codexLike: boolean) => void;
+  getRestoreState?: () => {
+    initialData?: string;
+    initialSnapshot?: string;
+    rawReplayData?: string;
+  };
   onRename: (name: string) => void;
   onGenerateName: () => Promise<void>;
   themeVariant: ThemeVariant;
@@ -148,8 +154,19 @@ export function RunningView({
   const currentCodexLike = isCodexLikeAgent(task.agent, agentOptions);
   const sessionOwner = resolveTaskSessionOwner(task, agentOptions);
   const sessionFields = getTaskSessionFields(task, sessionOwner.codexLike);
-  const sessionPath = sessionFields.sessionPath ?? sessionFields.legacySessionPath;
-  const resumeSessionId = sessionFields.sessionId ?? sessionFields.legacySessionId;
+  const persistedSessionPath = sessionFields.sessionPath ?? sessionFields.legacySessionPath;
+  const persistedSessionId = sessionFields.sessionId ?? sessionFields.legacySessionId;
+  const [recoveredSession, setRecoveredSession] = useState<{
+    sessionId: string;
+    sessionPath: string;
+  } | null>(null);
+  const [sessionRecovery, setSessionRecovery] = useState<"idle" | "loading" | "failed">("idle");
+  const [sessionRecoveryError, setSessionRecoveryError] = useState<string | null>(null);
+  const onSessionRecoveredRef = useRef(onSessionRecovered);
+  const sessionRecoveryAttemptRef = useRef<string | null>(null);
+  onSessionRecoveredRef.current = onSessionRecovered;
+  const sessionPath = persistedSessionPath ?? recoveredSession?.sessionPath;
+  const resumeSessionId = persistedSessionId ?? recoveredSession?.sessionId;
   const resumeAvailable = Boolean(
     resumeSessionId || sessionPath || (canRecoverSession && !task.worktreeDiscarded),
   );
@@ -187,6 +204,71 @@ export function RunningView({
   const [nodeInstallerMessage, setNodeInstallerMessage] = useState("");
   const titleInputRef = useRef<HTMLInputElement>(null);
   const interruptedBannerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    sessionRecoveryAttemptRef.current = null;
+    setRecoveredSession(null);
+    setSessionRecovery("idle");
+    setSessionRecoveryError(null);
+  }, [task.id]);
+
+  useEffect(() => {
+    if (task.status !== "done" || persistedSessionPath || recoveredSession) return;
+    const attemptKey = `${task.id}:${sessionOwner.codexLike ? "codex" : "claude"}`;
+    if (sessionRecoveryAttemptRef.current === attemptKey) return;
+    sessionRecoveryAttemptRef.current = attemptKey;
+    if (!canRecoverSession || task.worktreeDiscarded) {
+      setSessionRecovery("failed");
+      setSessionRecoveryError(t("running.resumeUnavailable"));
+      return;
+    }
+
+    let cancelled = false;
+    setSessionRecovery("loading");
+    setSessionRecoveryError(null);
+    invoke<{ sessionId: string; sessionPath: string } | null>("recover_task_session", {
+      projectPath,
+      prompt: task.prompt,
+      createdAt: task.createdAt,
+      isCodex: sessionOwner.codexLike,
+    })
+      .then((recovered) => {
+        if (cancelled) return;
+        if (!recovered) {
+          setSessionRecovery("failed");
+          setSessionRecoveryError(t("session.noMessages"));
+          return;
+        }
+        setRecoveredSession(recovered);
+        setSessionRecovery("idle");
+        onSessionRecoveredRef.current?.(
+          recovered.sessionId,
+          recovered.sessionPath,
+          sessionOwner.codexLike,
+        );
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        setSessionRecovery("failed");
+        setSessionRecoveryError(String(error));
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    canRecoverSession,
+    persistedSessionPath,
+    projectPath,
+    recoveredSession,
+    sessionOwner.codexLike,
+    t,
+    task.createdAt,
+    task.id,
+    task.prompt,
+    task.status,
+    task.worktreeDiscarded,
+  ]);
 
   useEffect(() => {
     setNodeInstallerState("idle");
@@ -399,6 +481,7 @@ export function RunningView({
         isActive={false}
         initialData={terminalInitialData}
         initialSnapshot={terminalInitialSnapshot}
+        rawReplayData={restoreState.rawReplayData}
       />
     </div>
   ) : undefined;
@@ -831,23 +914,47 @@ export function RunningView({
             </div>
           )}
         </div>
+      ) : task.status === "done" && !sessionPath && sessionRecovery !== "failed" ? (
+        <div className="terminal-record-pane" style={s.interruptedNoSessionPane}>
+          {t("session.loading")}
+        </div>
       ) : isActive || !sessionPath ? (
-        <div style={s.terminalContainer}>
-          <TerminalView
-            key={terminalViewKey}
-            onInput={onInput}
-            onResize={onResize}
-            onRegisterTerminal={onRegisterTerminal}
-            onReady={onTerminalReady}
-            onSnapshot={onSnapshot}
-            themeVariant={themeVariant}
-            terminalFontSize={terminalFontSize}
-            monoFontFamily={monoFontFamily}
-            isActive={visible}
-            initialData={terminalInitialData}
-            initialSnapshot={terminalInitialSnapshot}
-            highlightCursorLine={currentCodexLike}
-          />
+        <div style={{ ...s.terminalContainer, display: "flex", flexDirection: "column" }}>
+          {!isActive && !sessionPath && (
+            <div
+              role="alert"
+              style={{
+                flexShrink: 0,
+                padding: "8px 14px",
+                borderBottom: "1px solid var(--border-dim)",
+                background: "color-mix(in srgb, var(--warning) 10%, var(--bg-panel))",
+                color: "var(--text-secondary)",
+                fontSize: 12,
+              }}
+            >
+              {t("session.terminalFallback", {
+                error: sessionRecoveryError ?? t("session.noMessages"),
+              })}
+            </div>
+          )}
+          <div style={{ flex: 1, minHeight: 0 }}>
+            <TerminalView
+              key={terminalViewKey}
+              onInput={onInput}
+              onResize={onResize}
+              onRegisterTerminal={onRegisterTerminal}
+              onReady={onTerminalReady}
+              onSnapshot={onSnapshot}
+              themeVariant={themeVariant}
+              terminalFontSize={terminalFontSize}
+              monoFontFamily={monoFontFamily}
+              isActive={visible}
+              initialData={terminalInitialData}
+              initialSnapshot={terminalInitialSnapshot}
+              rawReplayData={restoreState.rawReplayData}
+              highlightCursorLine={currentCodexLike}
+            />
+          </div>
         </div>
       ) : (
         <SessionView

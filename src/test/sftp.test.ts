@@ -172,7 +172,7 @@ describe("sftp panel helpers", () => {
 
   it("formats the light terminal background as a readable light surface", async () => {
     const { LIGHT_THEME } = await import("../components/terminalShared");
-    expect(LIGHT_THEME.background).toBe("#f6f8fa");
+    expect(LIGHT_THEME.background).toBe("rgba(246, 248, 250, 0.9)");
     expect(LIGHT_THEME.foreground).toBe("#24292f");
   });
 

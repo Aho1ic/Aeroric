@@ -722,18 +722,20 @@ describe("ProjectPage right toolbar", () => {
 
     await user.click(screen.getByTitle("Terminal"));
     expect(await screen.findByTestId("shell-terminal")).toBeInTheDocument();
-    await user.click(screen.getByTitle("Terminal"));
-    // Closing the terminal must keep open file tabs visible (not a black empty bar).
-    expect(screen.queryByTestId("shell-terminal")).not.toBeInTheDocument();
-    expect(
-      within(screen.getByTestId("workspace-tabs")).getByRole("tab", { name: "run.py" }),
-    ).toHaveAttribute("aria-selected", "true");
 
     await user.click(
       within(screen.getByTestId("workspace-tabs")).getByRole("button", {
-        name: "Close run.py",
+        name: "Close All Tabs",
       }),
     );
+    expect(
+      within(screen.getByTestId("workspace-tabs")).queryByRole("tab", { name: "run.py" }),
+    ).not.toBeInTheDocument();
+    expect(
+      within(screen.getByTestId("workspace-tabs")).getByRole("tab", { name: "zsh 1" }),
+    ).toHaveAttribute("aria-selected", "true");
+
+    await user.click(screen.getByTitle("Terminal"));
     expect(screen.queryByTestId("workspace-tabs")).not.toBeInTheDocument();
   });
 
@@ -1381,7 +1383,7 @@ describe("ProjectPage right toolbar", () => {
 
     render(
       <I18nProvider>
-        <ProjectPage {...projectPageProps()} />
+        <ProjectPage {...projectPagePropsWithWorkspace()} />
       </I18nProvider>,
     );
 
@@ -1400,7 +1402,6 @@ describe("ProjectPage right toolbar", () => {
     expect(screen.getByTestId("shell-terminal")).toBeInTheDocument();
     expect(screen.getByTestId("ssh-workspace")).toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: "toggle ssh layout" }));
     expect(screen.getByTestId("project-center-stack")).toHaveAttribute("data-ssh-layout", "split");
     expect(screen.getByTestId("project-center-stack")).toHaveStyle({
       gridTemplateColumns: "minmax(0, 1fr) 1px minmax(0, 1fr)",
@@ -1415,30 +1416,103 @@ describe("ProjectPage right toolbar", () => {
     expect(screen.getByTestId("project-center-ssh")).toBeInTheDocument();
     expect(screen.getByTestId("project-center-ssh")).toHaveStyle({ minWidth: "0" });
     expect(screen.getByTestId("shell-terminal")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "toggle ssh layout" }));
+    expect(screen.getByTestId("project-center-stack")).toHaveAttribute("data-ssh-layout", "full");
+    await user.click(screen.getByTitle("SSH"));
+    await user.click(screen.getByTitle("SSH"));
+    expect(screen.getByTestId("project-center-stack")).toHaveAttribute("data-ssh-layout", "full");
   });
 
-  it("keeps an open file and its explorer mounted on the left when SSH is split", async () => {
+  it("keeps the Agent on the left and preserves the file workspace while SSH is split", async () => {
     const user = userEvent.setup();
 
     render(
       <I18nProvider>
-        <ProjectPage {...projectPageProps()} />
+        <ProjectPage {...projectPagePropsWithWorkspace()} />
       </I18nProvider>,
     );
 
     await user.click(screen.getByTitle("File Explorer"));
     await user.click(screen.getByText("run.py"));
     expect(screen.getByTitle("Run current file")).toBeInTheDocument();
+    expect(screen.getByTestId("project-center-stack")).toHaveAttribute(
+      "data-auxiliary-workspace",
+      "file",
+    );
+    expect(screen.getByTestId("project-center-agent")).toBeVisible();
 
     await user.click(screen.getByTitle("SSH"));
     expect(screen.getByTitle("Run current file")).toBeInTheDocument();
     expect(screen.queryByTestId("file-explorer-panel")).not.toBeInTheDocument();
-
-    await user.click(screen.getByRole("button", { name: "toggle ssh layout" }));
-
     expect(screen.getByTestId("project-center-stack")).toHaveAttribute("data-ssh-layout", "split");
-    expect(screen.getByTitle("Run current file")).toBeInTheDocument();
+    expect(screen.getByTestId("project-center-agent")).toBeVisible();
+
+    await user.click(screen.getByTitle("SSH"));
+    expect(screen.getByTestId("project-center-stack")).toHaveAttribute(
+      "data-auxiliary-workspace",
+      "file",
+    );
+    expect(screen.getByTitle("Run current file")).toBeVisible();
     expect(screen.getByTestId("file-explorer-panel")).toBeInTheDocument();
+  });
+
+  it("defaults terminal and file details to independent Agent splits and remembers full mode", async () => {
+    const user = userEvent.setup();
+    render(
+      <I18nProvider>
+        <ProjectPage {...projectPagePropsWithWorkspace()} />
+      </I18nProvider>,
+    );
+
+    await user.click(screen.getByTitle("Terminal"));
+    expect(screen.getByTestId("project-center-stack")).toHaveAttribute(
+      "data-auxiliary-workspace",
+      "terminal",
+    );
+    expect(screen.getByTestId("project-center-stack")).toHaveAttribute(
+      "data-auxiliary-layout",
+      "split",
+    );
+    expect(screen.getByTestId("project-center-agent")).toBeVisible();
+
+    await user.click(screen.getByRole("button", { name: "Full view" }));
+    expect(screen.getByTestId("project-center-stack")).toHaveAttribute(
+      "data-auxiliary-layout",
+      "full",
+    );
+    expect(screen.getByTestId("project-center-agent")).not.toBeVisible();
+
+    await user.click(screen.getByTitle("Terminal"));
+    await user.click(screen.getByTitle("File Explorer"));
+    await user.click(await screen.findByText("run.py"));
+    expect(screen.getByTestId("project-center-stack")).toHaveAttribute(
+      "data-auxiliary-workspace",
+      "file",
+    );
+    expect(screen.getByTestId("project-center-stack")).toHaveAttribute(
+      "data-auxiliary-layout",
+      "split",
+    );
+
+    await user.click(screen.getByTitle("Terminal"));
+    expect(screen.getByTestId("project-center-stack")).toHaveAttribute(
+      "data-auxiliary-layout",
+      "full",
+    );
+  });
+
+  it("keeps auxiliary workspaces full-width when no Agent conversation is selected", async () => {
+    const user = userEvent.setup();
+    render(
+      <I18nProvider>
+        <ProjectPage {...projectPageProps()} />
+      </I18nProvider>,
+    );
+
+    await user.click(screen.getByTitle("SSH"));
+    expect(screen.getByTestId("project-center-stack")).toHaveAttribute("data-ssh-layout", "full");
+    expect(screen.getByTestId("project-center-agent")).not.toBeVisible();
   });
 
   it("runs a remote file in the SSH terminal without opening the SSH workspace", async () => {

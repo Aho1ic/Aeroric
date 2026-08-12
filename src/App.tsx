@@ -2387,6 +2387,7 @@ function App() {
                 onRegisterTerminal={tm.handleRegisterTerminal}
                 onTerminalReady={handleTerminalReady}
                 onSnapshot={tm.handleSnapshot}
+                onTaskSessionRecovered={updateTaskSession}
                 onBack={handleBack}
                 onSwitchProject={handleProjectClick}
                 onReorderProjects={handleReorderProjects}

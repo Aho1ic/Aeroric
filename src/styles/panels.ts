@@ -57,6 +57,8 @@ export const panels = {
     borderRadius: "var(--radius-lg) var(--radius-lg) 0 0",
     boxShadow: "var(--shadow-compose)",
     overflow: "visible",
+    backdropFilter: "var(--glass-blur)",
+    WebkitBackdropFilter: "var(--glass-blur)",
   },
   agentMissingMdBanner: {
     display: "flex",

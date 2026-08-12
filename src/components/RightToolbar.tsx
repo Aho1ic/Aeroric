@@ -163,6 +163,8 @@ export function RightToolbar({
         width: 48,
         flexShrink: 0,
         background: "var(--bg-sidebar)",
+        backdropFilter: "var(--glass-blur)",
+        WebkitBackdropFilter: "var(--glass-blur)",
         borderLeft: "1px solid var(--border-dim)",
         display: "flex",
         flexDirection: "column",

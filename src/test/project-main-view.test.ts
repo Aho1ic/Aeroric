@@ -5,6 +5,8 @@ import {
   projectNotebookPanelStyle,
   projectRailWidthForProjects,
   projectResponsiveLayout,
+  effectiveAuxiliaryLayout,
+  resolveAuxiliaryWorkspace,
   shouldShowAgentTaskTabs,
   projectSshRightPanelWidth,
   shellCenterContentStyle,
@@ -21,6 +23,20 @@ import {
 import { projectVisibilityStyle } from "../components/project-page/visibility";
 
 describe("project main view mode", () => {
+  it("prioritizes SSH, terminal and file auxiliary workspaces and requires an Agent for split", () => {
+    expect(
+      resolveAuxiliaryWorkspace({ sshActive: true, terminalActive: true, fileActive: true }),
+    ).toBe("ssh");
+    expect(
+      resolveAuxiliaryWorkspace({ sshActive: false, terminalActive: true, fileActive: true }),
+    ).toBe("terminal");
+    expect(
+      resolveAuxiliaryWorkspace({ sshActive: false, terminalActive: false, fileActive: true }),
+    ).toBe("file");
+    expect(effectiveAuxiliaryLayout({ layout: "split", hasAgentConversation: false })).toBe("full");
+    expect(effectiveAuxiliaryLayout({ layout: "split", hasAgentConversation: true })).toBe("split");
+  });
+
   it("shows the SSH terminal in the center for connected SSH projects", () => {
     const location: ProjectLocation = {
       kind: "ssh",

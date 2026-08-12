@@ -6,7 +6,36 @@ export const PROJECT_RAIL_EXPANDED_WIDTH = 252;
 export const PROJECT_RAIL_COLLAPSED_WIDTH = 52;
 export const PROJECT_RAIL_MIN_WIDTH = 220;
 export const RIGHT_TOOLBAR_WIDTH = 44;
-export const SSH_SPLIT_GRID_TEMPLATE = "minmax(0, 1fr) 1px minmax(0, 1fr)";
+export type AuxiliaryWorkspaceType = "ssh" | "file" | "terminal";
+export type AuxiliaryWorkspaceLayout = "split" | "full";
+
+export const AUXILIARY_SPLIT_GRID_TEMPLATE = "minmax(0, 1fr) 1px minmax(0, 1fr)";
+export const SSH_SPLIT_GRID_TEMPLATE = AUXILIARY_SPLIT_GRID_TEMPLATE;
+
+export function resolveAuxiliaryWorkspace({
+  sshActive,
+  terminalActive,
+  fileActive,
+}: {
+  sshActive: boolean;
+  terminalActive: boolean;
+  fileActive: boolean;
+}): AuxiliaryWorkspaceType | null {
+  if (sshActive) return "ssh";
+  if (terminalActive) return "terminal";
+  if (fileActive) return "file";
+  return null;
+}
+
+export function effectiveAuxiliaryLayout({
+  layout,
+  hasAgentConversation,
+}: {
+  layout: AuxiliaryWorkspaceLayout;
+  hasAgentConversation: boolean;
+}): AuxiliaryWorkspaceLayout {
+  return hasAgentConversation ? layout : "full";
+}
 const COMPOSE_COMFORT_WIDTH = 760;
 const COMPOSE_ICON_ONLY_WIDTH = 680;
 

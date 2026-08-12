@@ -71,7 +71,9 @@ describe("RunningView completed history fallback", () => {
     vi.mocked(invoke).mockReset();
     vi.mocked(invoke).mockImplementation((command) => {
       if (command === "read_task_terminal_history") return Promise.resolve("");
-      if (command === "read_session_messages") return Promise.resolve([]);
+      if (command === "read_session_message_page") {
+        return Promise.resolve({ messages: [], nextCursor: null, hasMore: false });
+      }
       if (command === "read_session_metrics") {
         return Promise.resolve({
           duration_secs: 0,
@@ -99,7 +101,9 @@ describe("RunningView completed history fallback", () => {
       if (command === "read_task_terminal_history") {
         return Promise.resolve("terminal transcript from disk");
       }
-      if (command === "read_session_messages") return Promise.resolve([]);
+      if (command === "read_session_message_page") {
+        return Promise.resolve({ messages: [], nextCursor: null, hasMore: false });
+      }
       if (command === "read_session_metrics") {
         return Promise.resolve({
           duration_secs: 0,

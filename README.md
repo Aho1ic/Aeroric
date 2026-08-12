@@ -264,6 +264,6 @@ it uploads release artifacts.
 
 Aeroric builds on excellent open-source projects including [Tauri](https://github.com/tauri-apps/tauri), [React](https://github.com/facebook/react), [xterm.js](https://github.com/xtermjs/xterm.js), [CodeMirror](https://codemirror.net/), and [Shiki](https://shiki.style/).
 
-Special thanks to [hanshuaikang/nezha](https://github.com/hanshuaikang/nezha) and [t8y2/dbx](https://github.com/t8y2/dbx) for open-source work that informs Aeroric's agent workspace and database tooling.
+Special thanks to [hanshuaikang/nezha](https://github.com/hanshuaikang/nezha), [t8y2/dbx](https://github.com/t8y2/dbx), [stablyai/orca](https://github.com/stablyai/orca), and [farion1231/cc-switch](https://github.com/farion1231/cc-switch) for open-source work that informs Aeroric's agent workspace, database tooling, mobile experience, and agent configuration workflows.
 
 Community recognition: [LINUX DO](https://linux.do).

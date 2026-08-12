@@ -41,6 +41,8 @@ export const common = {
     background: "var(--bg-card)",
     boxShadow: "var(--shadow-md)",
     zIndex: 9999,
+    backdropFilter: "var(--glass-blur-compact)",
+    WebkitBackdropFilter: "var(--glass-blur-compact)",
   },
   usagePopoverHeader: {
     padding: "0 0 7px",

@@ -44,19 +44,20 @@ import {
   type ShellTerminalPanelHandle,
   type ShellSession,
 } from "./ShellTerminalPanel";
-import { FileText, Plus, Terminal as TerminalIcon, X } from "lucide-react";
+import { Columns2, FileText, Maximize2, Plus, Terminal as TerminalIcon, X } from "lucide-react";
 import { SshTerminalPanel, type SshTerminalPanelHandle } from "./ssh/SshTerminalPanel";
 import { WslTerminalPanel, type WslTerminalPanelHandle } from "./wsl/WslTerminalPanel";
 import type { SftpEndpoint } from "./sftp/sftpTypes";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { useProjectPanels, type EditorGroupId, type RightPanel } from "../hooks/useProjectPanels";
-import type { SshWorkspaceLayout } from "./ssh/SshWorkspace";
 import {
+  AUXILIARY_SPLIT_GRID_TEMPLATE,
   centerWorkspaceMode,
+  effectiveAuxiliaryLayout,
   projectFeatureAvailability,
   projectNotebookPanelStyle,
   projectResponsiveLayout,
-  SSH_SPLIT_GRID_TEMPLATE,
+  resolveAuxiliaryWorkspace,
   shellCenterContentStyle,
   shellCenterLayerStyle,
   shouldShowAgentTaskTabs,
@@ -67,6 +68,8 @@ import {
   shouldShowTaskWorkspace,
   shouldShowWorkspaceTabs,
   visibleDockPanel,
+  type AuxiliaryWorkspaceLayout,
+  type AuxiliaryWorkspaceType,
 } from "./project-page/viewMode";
 import {
   appendProjectActionLog,
@@ -134,6 +137,26 @@ import { inferTestProfileForFile, type TestRunPanelRequest } from "./tests/testE
 import s from "../styles";
 
 const PROJECT_ACTION_LOG_STORAGE_PREFIX = "aeroric:project-action-log:";
+const AUXILIARY_LAYOUT_STORAGE_PREFIX = "aeroric:auxiliary-layout:";
+
+type AuxiliaryLayouts = Record<AuxiliaryWorkspaceType, AuxiliaryWorkspaceLayout>;
+
+function readAuxiliaryLayouts(projectId: string): AuxiliaryLayouts {
+  const defaults: AuxiliaryLayouts = { ssh: "split", file: "split", terminal: "split" };
+  if (typeof window === "undefined") return defaults;
+  try {
+    const parsed = JSON.parse(
+      window.localStorage.getItem(`${AUXILIARY_LAYOUT_STORAGE_PREFIX}${projectId}`) ?? "{}",
+    ) as Partial<AuxiliaryLayouts>;
+    return {
+      ssh: parsed.ssh === "full" ? "full" : "split",
+      file: parsed.file === "full" ? "full" : "split",
+      terminal: parsed.terminal === "full" ? "full" : "split",
+    };
+  } catch {
+    return defaults;
+  }
+}
 
 function escapeDraftHtml(text: string): string {
   return text.replace(/[&<>"']/g, (char) => {
@@ -150,6 +173,27 @@ function escapeDraftHtml(text: string): string {
         return "&#39;";
     }
   });
+}
+
+function AuxiliaryLayoutToggle({
+  layout,
+  onChange,
+}: {
+  layout: AuxiliaryWorkspaceLayout;
+  onChange: (layout: AuxiliaryWorkspaceLayout) => void;
+}) {
+  const { t } = useI18n();
+  return (
+    <button
+      type="button"
+      className="ssh-workspace-icon-btn auxiliary-layout-toggle"
+      aria-label={layout === "full" ? t("ssh.splitView") : t("ssh.fullView")}
+      title={layout === "full" ? t("ssh.splitView") : t("ssh.fullView")}
+      onClick={() => onChange(layout === "full" ? "split" : "full")}
+    >
+      {layout === "full" ? <Columns2 size={15} /> : <Maximize2 size={15} />}
+    </button>
+  );
 }
 
 type LspDiagnosticsEvent = {
@@ -203,6 +247,7 @@ export function ProjectPage({
   onRegisterTerminal,
   onTerminalReady,
   onSnapshot,
+  onTaskSessionRecovered,
   onBack,
   onSwitchProject,
   onReorderProjects,
@@ -280,6 +325,12 @@ export function ProjectPage({
   ) => number;
   onTerminalReady: (taskId: string, generation: number) => void;
   onSnapshot: (taskId: string, snapshot: string) => void;
+  onTaskSessionRecovered?: (
+    taskId: string,
+    sessionId: string,
+    sessionPath: string,
+    codexLike: boolean,
+  ) => void;
   onBack: () => void;
   onSwitchProject: (project: Project) => void;
   onReorderProjects: (orderedProjectIds: string[]) => void;
@@ -339,6 +390,7 @@ export function ProjectPage({
     handleCloseOtherFileTabs,
     handleCloseTabsToRight,
     handleCloseAllFileTabs,
+    handleCloseAllEditorFileTabs,
     handleDiffFileSelect,
     handleCommitSelect,
     handleCommitFileClick,
@@ -351,7 +403,27 @@ export function ProjectPage({
   const [shellSessions, setShellSessions] = useState<ShellSession[]>([]);
   const [activeShellId, setActiveShellId] = useState<string | null>(null);
   const [showRemoteProjectTerminal, setShowRemoteProjectTerminal] = useState(true);
-  const [sshLayout, setSshLayout] = useState<SshWorkspaceLayout>("full");
+  const [auxiliaryLayouts, setAuxiliaryLayouts] = useState<AuxiliaryLayouts>(() =>
+    readAuxiliaryLayouts(project.id),
+  );
+  const setAuxiliaryLayout = useCallback(
+    (type: AuxiliaryWorkspaceType, layout: AuxiliaryWorkspaceLayout) => {
+      setAuxiliaryLayouts((current) => {
+        const next = { ...current, [type]: layout };
+        try {
+          window.localStorage.setItem(
+            `${AUXILIARY_LAYOUT_STORAGE_PREFIX}${project.id}`,
+            JSON.stringify(next),
+          );
+        } catch {
+          // 布局记忆失败不应阻塞当前切换。
+        }
+        return next;
+      });
+    },
+    [project.id],
+  );
+  const sshLayout = auxiliaryLayouts.ssh;
   // SSH 工作区首次打开后常驻挂载,切换按钮只做显示/隐藏,避免已连接的会话被销毁。
   const [sshMounted, setSshMounted] = useState(false);
   const [sshVisible, setSshVisible] = useState(false);
@@ -637,21 +709,18 @@ export function ProjectPage({
     hasOpenFiles: hasEditorGroups,
     hasOpenDiff: Boolean(openDiff),
   });
-  const visibleRightPanel = visibleDockPanel(
-    isSshMode ? (sshLayout === "split" ? primaryRightPanel : null) : rightPanel,
-    {
-      filesDisabled,
-      gitDisabled,
-      gitChangesDisabled,
-      gitHistoryDisabled,
-      problemsDisabled,
-      runDisabled,
-      searchDisabled,
-      testsDisabled,
-      debugDisabled,
-      previewDisabled,
-    },
-  );
+  const visibleRightPanel = visibleDockPanel(isSshMode ? null : rightPanel, {
+    filesDisabled,
+    gitDisabled,
+    gitChangesDisabled,
+    gitHistoryDisabled,
+    problemsDisabled,
+    runDisabled,
+    searchDisabled,
+    testsDisabled,
+    debugDisabled,
+    previewDisabled,
+  });
   useEffect(() => {
     if (rightPanel === "ssh") return;
     if (sshOrigin) setSshOrigin(null);
@@ -1027,8 +1096,6 @@ export function ProjectPage({
             showShellTerminal,
             showRemoteProjectTerminal,
           });
-          // 首次打开默认全屏;再次显示时沿用上次的 full / split 布局。
-          if (!sshMounted) setSshLayout("full");
           setSshMounted(true);
           setSshVisible(true);
           openRightPanel("ssh");
@@ -1052,7 +1119,6 @@ export function ProjectPage({
       showActionFeedback,
       showRemoteProjectTerminal,
       showShellTerminal,
-      sshMounted,
       sshOrigin,
       t,
     ],
@@ -1121,7 +1187,6 @@ export function ProjectPage({
         showShellTerminal,
         showRemoteProjectTerminal,
       });
-      if (!sshMounted) setSshLayout("full");
     }
     setSshMounted(true);
     setSshVisible(true);
@@ -1133,7 +1198,6 @@ export function ProjectPage({
     showActionFeedback,
     showRemoteProjectTerminal,
     showShellTerminal,
-    sshMounted,
     t,
   ]);
 
@@ -1485,6 +1549,34 @@ export function ProjectPage({
     hasSessionPath: Boolean(selectedTask?.claudeSessionPath ?? selectedTask?.codexSessionPath),
   });
   const activeWorkspaceTask = taskWorkspaceVisible ? selectedTask : null;
+  const agentConversationSelected = Boolean(
+    activeWorkspaceTask && activeWorkspaceTask.status !== ("todo" as TaskStatus),
+  );
+  const auxiliaryWorkspace = resolveAuxiliaryWorkspace({
+    sshActive: isSshMode,
+    terminalActive:
+      !isSshMode && (projectLocation.kind === "local" ? showShellTerminal : remoteSshMainVisible),
+    fileActive:
+      !isSshMode && !showShellTerminal && !remoteSshMainVisible && hasEditorGroups && !openDiff,
+  });
+  const auxiliaryLayout = auxiliaryWorkspace
+    ? effectiveAuxiliaryLayout({
+        layout: auxiliaryLayouts[auxiliaryWorkspace],
+        hasAgentConversation: agentConversationSelected,
+      })
+    : null;
+  const auxiliarySplit = auxiliaryWorkspace !== null && auxiliaryLayout === "split";
+  const primaryWorkspaceOverride = Boolean(
+    openDiff || isSftpMode || isDockerMode || isDatabaseMode || isNotesMode,
+  );
+  const showAgentWorkspacePane =
+    agentConversationSelected &&
+    !primaryWorkspaceOverride &&
+    (!auxiliaryWorkspace || auxiliarySplit);
+  const showPrimaryWorkspacePane =
+    !agentConversationSelected ||
+    primaryWorkspaceOverride ||
+    (auxiliaryWorkspace !== null && auxiliaryWorkspace !== "ssh");
   const topRightPanelActive = topRightIdeTools.some((tool) => tool.panel === rightPanel);
   const showTopRightIdeTools =
     topRightIdeTools.length > 0 &&
@@ -1706,6 +1798,30 @@ export function ProjectPage({
               overflowX: "auto",
             }}
           >
+            {workspaceFileTabs.length > 0 && (
+              <button
+                type="button"
+                aria-label={t("file.closeAllTabs")}
+                title={t("file.closeAllTabs")}
+                onClick={handleCloseAllEditorFileTabs}
+                style={{
+                  width: 24,
+                  height: 24,
+                  display: "inline-flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  padding: 0,
+                  border: "1px solid var(--border-dim)",
+                  borderRadius: 6,
+                  background: "transparent",
+                  color: "var(--text-secondary)",
+                  cursor: "pointer",
+                  flexShrink: 0,
+                }}
+              >
+                <X size={12} />
+              </button>
+            )}
             {workspaceFileTabs.map((tab) => {
               const selected =
                 !workspaceTerminalVisible &&
@@ -2093,22 +2209,109 @@ export function ProjectPage({
           )}
           <div
             className={`project-center-stack${
-              isSshMode ? (sshLayout === "split" ? " ssh-split" : " ssh-full") : ""
+              auxiliaryWorkspace ? ` auxiliary-${auxiliaryLayout}` : ""
             }`}
             data-testid="project-center-stack"
-            data-ssh-layout={isSshMode ? sshLayout : undefined}
+            data-ssh-layout={isSshMode ? (auxiliaryLayout ?? sshLayout) : undefined}
+            data-auxiliary-workspace={auxiliaryWorkspace ?? undefined}
+            data-auxiliary-layout={auxiliaryLayout ?? undefined}
             style={
-              isSshMode && sshLayout === "split"
-                ? { gridTemplateColumns: SSH_SPLIT_GRID_TEMPLATE }
-                : undefined
+              auxiliarySplit ? { gridTemplateColumns: AUXILIARY_SPLIT_GRID_TEMPLATE } : undefined
             }
           >
             <div
+              className="project-center-agent"
+              data-testid="project-center-agent"
+              aria-hidden={!showAgentWorkspacePane}
+              style={{ display: showAgentWorkspacePane ? "flex" : "none", minWidth: 0 }}
+            >
+              {projectTasks
+                .filter((task) => mountedTaskIds.has(task.id))
+                .map((task) => {
+                  const isVisible = shouldShowRunningTaskInCenter({
+                    hasOpenFiles: false,
+                    hasOpenDiff: false,
+                    isShellMode: false,
+                    isSftpMode: false,
+                    isSshMode: false,
+                    isDockerMode: false,
+                    isDatabaseMode: false,
+                    isNotesMode: false,
+                    isNewTask: !taskWorkspaceVisible,
+                    hasSelectedTask: Boolean(selectedTask),
+                    taskId: task.id,
+                    selectedTaskId,
+                    taskStatus: task.status,
+                    hasSessionPath: Boolean(task.claudeSessionPath ?? task.codexSessionPath),
+                  });
+                  return (
+                    <RunningView
+                      key={task.id}
+                      task={task}
+                      projectPath={task.worktreePath ?? project.path}
+                      canRecoverSession={projectLocation.kind === "local"}
+                      runCount={taskRunCounts[task.id] ?? 0}
+                      visible={visible && showAgentWorkspacePane && isVisible}
+                      projectActive={visible}
+                      onCancel={() => onCancelTask(task.id)}
+                      onResume={() => onResumeTask(task.id)}
+                      onMergeWorktree={() => onMergeWorktree(task.id)}
+                      onDiscardWorktree={() => onDiscardWorktree(task.id)}
+                      onReconnect={() => onReconnectTask(task.id)}
+                      onMarkDone={() => onMarkTaskDone(task.id)}
+                      onSwitchConfig={
+                        onSwitchTaskConfig
+                          ? (values) => onSwitchTaskConfig(task.id, values)
+                          : undefined
+                      }
+                      onInput={(data) => onInput(task.id, data)}
+                      onResize={(cols, rows) => onResize(task.id, cols, rows)}
+                      onRegisterTerminal={(fn, resizeFn) =>
+                        onRegisterTerminal(task.id, fn, resizeFn)
+                      }
+                      onTerminalReady={(generation) => onTerminalReady(task.id, generation)}
+                      onSnapshot={(snapshot) => onSnapshot(task.id, snapshot)}
+                      onSessionRecovered={
+                        onTaskSessionRecovered
+                          ? (sessionId, sessionPath, codexLike) =>
+                              onTaskSessionRecovered(task.id, sessionId, sessionPath, codexLike)
+                          : undefined
+                      }
+                      getRestoreState={() => getTaskRestoreState(task.id)}
+                      onRename={(name) => onRenameTask(task.id, name)}
+                      onGenerateName={() => onGenerateTaskName(task.id)}
+                      themeVariant={themeVariant}
+                      terminalFontSize={terminalFontSize}
+                      monoFontFamily={monoFontFamily}
+                      agentOptions={agentOptions}
+                    />
+                  );
+                })}
+            </div>
+
+            {auxiliarySplit && (
+              <div
+                className="project-center-auxiliary-divider project-center-ssh-divider"
+                data-testid="project-center-ssh-divider"
+                style={{ width: 1, minWidth: 1 }}
+              />
+            )}
+            <div
               className="project-center-primary"
               data-testid="project-center-primary"
-              aria-hidden={isSshMode && sshLayout === "full" ? "true" : undefined}
-              style={{ minWidth: 0 }}
+              aria-hidden={!showPrimaryWorkspacePane}
+              style={{
+                display: showPrimaryWorkspacePane ? "flex" : "none",
+                minWidth: 0,
+                gridColumn: auxiliarySplit ? 3 : undefined,
+              }}
             >
+              {agentConversationSelected && auxiliaryWorkspace && auxiliaryWorkspace !== "ssh" && (
+                <AuxiliaryLayoutToggle
+                  layout={auxiliaryLayout ?? "full"}
+                  onChange={(layout) => setAuxiliaryLayout(auxiliaryWorkspace, layout)}
+                />
+              )}
               {/* Foreground: SFTP, file viewer, diff, shell, or new-task composer */}
               <div
                 style={{
@@ -2453,79 +2656,18 @@ export function ProjectPage({
                   </div>
                 </div>
               )}
-
-              {/* Background terminals */}
-              {projectTasks
-                .filter((t) => mountedTaskIds.has(t.id))
-                .map((task) => {
-                  const isVisible = shouldShowRunningTaskInCenter({
-                    hasOpenFiles: hasEditorGroups,
-                    hasOpenDiff: Boolean(openDiff),
-                    isShellMode,
-                    isSftpMode,
-                    isSshMode: false,
-                    isDockerMode,
-                    isDatabaseMode,
-                    isNotesMode,
-                    isNewTask: !taskWorkspaceVisible,
-                    hasSelectedTask: Boolean(selectedTask),
-                    taskId: task.id,
-                    selectedTaskId,
-                    taskStatus: task.status,
-                    hasSessionPath: Boolean(task.claudeSessionPath ?? task.codexSessionPath),
-                  });
-                  return (
-                    <RunningView
-                      key={task.id}
-                      task={task}
-                      projectPath={project.path}
-                      canRecoverSession={projectLocation.kind === "local"}
-                      runCount={taskRunCounts[task.id] ?? 0}
-                      visible={visible && primaryWorkspaceVisible && isVisible}
-                      projectActive={visible}
-                      onCancel={() => onCancelTask(task.id)}
-                      onResume={() => onResumeTask(task.id)}
-                      onMergeWorktree={() => onMergeWorktree(task.id)}
-                      onDiscardWorktree={() => onDiscardWorktree(task.id)}
-                      onReconnect={() => onReconnectTask(task.id)}
-                      onMarkDone={() => onMarkTaskDone(task.id)}
-                      onSwitchConfig={
-                        onSwitchTaskConfig
-                          ? (values) => onSwitchTaskConfig(task.id, values)
-                          : undefined
-                      }
-                      onInput={(data) => onInput(task.id, data)}
-                      onResize={(cols, rows) => onResize(task.id, cols, rows)}
-                      onRegisterTerminal={(fn, resizeFn) =>
-                        onRegisterTerminal(task.id, fn, resizeFn)
-                      }
-                      onTerminalReady={(generation) => onTerminalReady(task.id, generation)}
-                      onSnapshot={(snapshot) => onSnapshot(task.id, snapshot)}
-                      getRestoreState={() => getTaskRestoreState(task.id)}
-                      onRename={(name) => onRenameTask(task.id, name)}
-                      onGenerateName={() => onGenerateTaskName(task.id)}
-                      themeVariant={themeVariant}
-                      terminalFontSize={terminalFontSize}
-                      monoFontFamily={monoFontFamily}
-                      agentOptions={agentOptions}
-                    />
-                  );
-                })}
             </div>
 
-            {isSshMode && sshLayout === "split" && (
-              <div
-                className="project-center-ssh-divider"
-                data-testid="project-center-ssh-divider"
-                style={{ width: 1, minWidth: 1 }}
-              />
-            )}
             {sshMounted && (
               <div
                 className="project-center-ssh"
                 data-testid="project-center-ssh"
                 aria-hidden={!isSshMode}
-                style={{ display: isSshMode ? "flex" : "none", minWidth: 0 }}
+                style={{
+                  display: isSshMode ? "flex" : "none",
+                  minWidth: 0,
+                  gridColumn: auxiliarySplit ? 3 : undefined,
+                }}
               >
                 <SshWorkspace
                   connections={sshConnections}
@@ -2537,8 +2679,8 @@ export function ProjectPage({
                   monoFontFamily={monoFontFamily}
                   onOpenSftp={handleOpenSftpConnection}
                   remoteConnection={projectLocation.kind === "ssh" ? remoteConnection : undefined}
-                  layout={sshLayout}
-                  onLayoutChange={setSshLayout}
+                  layout={isSshMode ? (auxiliaryLayout ?? sshLayout) : sshLayout}
+                  onLayoutChange={(layout) => setAuxiliaryLayout("ssh", layout)}
                 />
               </div>
             )}

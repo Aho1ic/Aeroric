@@ -688,6 +688,14 @@ pub(crate) struct SessionMessage {
     content: Vec<SessionContent>,
 }
 
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionMessagePage {
+    messages: Vec<SessionMessage>,
+    next_cursor: Option<u64>,
+    has_more: bool,
+}
+
 #[derive(serde::Serialize, Clone)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub(crate) enum SessionContent {
@@ -706,6 +714,96 @@ pub(crate) enum SessionContent {
     Thinking {
         thinking: String,
     },
+    Attachment {
+        name: String,
+        #[serde(rename = "mediaType")]
+        media_type: String,
+        source: String,
+    },
+}
+
+const SESSION_MESSAGE_PAGE_LINES: usize = 1_000;
+const SESSION_MESSAGE_READ_CHUNK_BYTES: u64 = 64 * 1024;
+
+/// 从 `cursor` 之前反向读取最多 `limit` 条完整 JSONL 记录。
+/// 返回的行仍按时间正序排列，`next_cursor` 指向本页最早一行的字节起点。
+fn read_session_page_lines(
+    path: &Path,
+    cursor: Option<u64>,
+    limit: usize,
+) -> Result<(Vec<String>, Option<u64>, bool), String> {
+    let mut file = File::open(path).map_err(|error| error.to_string())?;
+    let file_len = file.metadata().map_err(|error| error.to_string())?.len();
+    let end = cursor.unwrap_or(file_len).min(file_len);
+    if end == 0 || limit == 0 {
+        return Ok((Vec::new(), None, false));
+    }
+
+    let mut start = end;
+    let mut bytes = Vec::new();
+    loop {
+        let next_start = start.saturating_sub(SESSION_MESSAGE_READ_CHUNK_BYTES);
+        let chunk_len = (start - next_start) as usize;
+        let mut chunk = vec![0u8; chunk_len];
+        file.seek(SeekFrom::Start(next_start))
+            .map_err(|error| error.to_string())?;
+        file.read_exact(&mut chunk)
+            .map_err(|error| error.to_string())?;
+        chunk.extend(bytes);
+        bytes = chunk;
+        start = next_start;
+
+        let complete_line_count = bytes
+            .split(|byte| *byte == b'\n')
+            .enumerate()
+            .filter(|(index, line)| {
+                (start == 0 || *index > 0) && !line.iter().all(u8::is_ascii_whitespace)
+            })
+            .count();
+        if complete_line_count >= limit || start == 0 {
+            break;
+        }
+    }
+
+    let mut ranges = Vec::new();
+    let mut line_start = 0usize;
+    for (index, byte) in bytes.iter().enumerate() {
+        if *byte != b'\n' {
+            continue;
+        }
+        if (start == 0 || line_start > 0)
+            && !bytes[line_start..index].iter().all(u8::is_ascii_whitespace)
+        {
+            ranges.push((line_start, index));
+        }
+        line_start = index + 1;
+    }
+    if line_start < bytes.len()
+        && (start == 0 || line_start > 0)
+        && !bytes[line_start..].iter().all(u8::is_ascii_whitespace)
+    {
+        ranges.push((line_start, bytes.len()));
+    }
+
+    if ranges.is_empty() && start == 0 {
+        return Ok((Vec::new(), None, false));
+    }
+
+    let first = ranges.len().saturating_sub(limit);
+    let selected = &ranges[first..];
+    let page_start = selected
+        .first()
+        .map(|(range_start, _)| start + *range_start as u64)
+        .unwrap_or(end);
+    let mut lines = Vec::with_capacity(selected.len());
+    for (range_start, range_end) in selected {
+        let line = std::str::from_utf8(&bytes[*range_start..*range_end])
+            .map_err(|error| format!("Session file is not valid UTF-8: {error}"))?;
+        lines.push(line.trim_end_matches('\r').to_string());
+    }
+    let has_more = page_start > 0;
+
+    Ok((lines, has_more.then_some(page_start), has_more))
 }
 
 /// 单次读取会话记录时保留的最大行数(按尾部保留)。长会话的 JSONL 可达数百 MB,
@@ -764,6 +862,28 @@ pub async fn read_session_messages(
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn read_session_message_page(
+    session_path: String,
+    project_path: String,
+    is_codex: bool,
+    cursor: Option<u64>,
+) -> Result<SessionMessagePage, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let canonical = validate_session_path(&session_path, &project_path, is_codex)?;
+        let (lines, next_cursor, has_more) =
+            read_session_page_lines(&canonical, cursor, SESSION_MESSAGE_PAGE_LINES)?;
+        let messages = parse_session_messages_with_format(&lines, is_codex, is_codex);
+        Ok(SessionMessagePage {
+            messages,
+            next_cursor,
+            has_more,
+        })
+    })
+    .await
+    .map_err(|error| error.to_string())?
 }
 
 #[tauri::command]
@@ -1055,6 +1175,19 @@ fn parse_claude_session_line(line: &str, messages: &mut Vec<SessionMessage>) {
         return;
     };
     let msg_type = val.get("type").and_then(|v| v.as_str()).unwrap_or("");
+    if msg_type == "attachment" {
+        if let Some(content) = attachment_from_value(
+            val.get("attachment")
+                .or_else(|| val.get("payload"))
+                .unwrap_or(&val),
+        ) {
+            messages.push(SessionMessage {
+                role: "user".to_string(),
+                content: vec![content],
+            });
+        }
+        return;
+    }
     let Some(message) = val.get("message") else {
         return;
     };
@@ -1127,6 +1260,9 @@ fn claude_user_content(content: Option<&serde_json::Value>) -> Vec<SessionConten
                         (!output.trim().is_empty())
                             .then_some(SessionContent::ToolResult { id, output })
                     }
+                    Some("image") | Some("document") | Some("attachment") => {
+                        attachment_from_value(block)
+                    }
                     _ => None,
                 },
             )
@@ -1174,10 +1310,113 @@ fn claude_assistant_blocks(blocks: &[serde_json::Value]) -> Vec<SessionContent> 
                     }
                 }
             }
+            Some("image") | Some("document") | Some("attachment") => {
+                if let Some(attachment) = attachment_from_value(block) {
+                    parts.push(attachment);
+                }
+            }
             _ => {}
         }
     }
     parts
+}
+
+fn json_value_to_display(value: Option<&serde_json::Value>) -> String {
+    match value {
+        Some(serde_json::Value::String(text)) => text.clone(),
+        Some(value) => serde_json::to_string_pretty(value).unwrap_or_default(),
+        None => String::new(),
+    }
+}
+
+fn attachment_from_value(value: &serde_json::Value) -> Option<SessionContent> {
+    let source_value = value.get("source").unwrap_or(value);
+    let media_type = value
+        .get("media_type")
+        .or_else(|| value.get("mediaType"))
+        .or_else(|| source_value.get("media_type"))
+        .or_else(|| source_value.get("mediaType"))
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("application/octet-stream")
+        .to_string();
+    let name = value
+        .get("name")
+        .or_else(|| value.get("file_name"))
+        .or_else(|| value.get("filename"))
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("attachment")
+        .to_string();
+    let source = source_value
+        .get("url")
+        .or_else(|| source_value.get("image_url"))
+        .or_else(|| source_value.get("path"))
+        .or_else(|| source_value.get("file_path"))
+        .or_else(|| source_value.get("filePath"))
+        .and_then(serde_json::Value::as_str)
+        .map(ToOwned::to_owned)
+        .or_else(|| {
+            source_value
+                .get("data")
+                .and_then(serde_json::Value::as_str)
+                .map(|data| format!("data:{media_type};base64,{data}"))
+        })?;
+    Some(SessionContent::Attachment {
+        name,
+        media_type,
+        source,
+    })
+}
+
+fn append_assistant_content(messages: &mut Vec<SessionMessage>, part: SessionContent) {
+    if let Some(last) = messages
+        .last_mut()
+        .filter(|message| message.role == "assistant")
+    {
+        last.content.push(part);
+    } else {
+        messages.push(SessionMessage {
+            role: "assistant".to_string(),
+            content: vec![part],
+        });
+    }
+}
+
+fn append_codex_user_message(messages: &mut Vec<SessionMessage>, mut content: Vec<SessionContent>) {
+    let duplicate_text = messages
+        .last()
+        .filter(|message| message.role == "user")
+        .map(|message| {
+            content.iter().any(|candidate| {
+                let SessionContent::Text {
+                    text: candidate_text,
+                } = candidate
+                else {
+                    return false;
+                };
+                message.content.iter().any(
+                    |existing| matches!(existing, SessionContent::Text { text } if text == candidate_text),
+                )
+            })
+        })
+        .unwrap_or(false);
+
+    if duplicate_text {
+        if let Some(last) = messages.last_mut() {
+            content.retain(|candidate| match candidate {
+                SessionContent::Text { text: candidate } => !last
+                    .content
+                    .iter()
+                    .any(|existing| matches!(existing, SessionContent::Text { text } if text == candidate)),
+                _ => true,
+            });
+            last.content.extend(content);
+        }
+        return;
+    }
+    messages.push(SessionMessage {
+        role: "user".to_string(),
+        content,
+    });
 }
 
 fn parse_codex_session(lines: &[&str]) -> Vec<SessionMessage> {
@@ -1209,12 +1448,12 @@ fn parse_codex_session_line(line: &str, messages: &mut Vec<SessionMessage>) {
                     .and_then(|v| v.as_str())
                     .unwrap_or("");
                 if !text.trim().is_empty() {
-                    messages.push(SessionMessage {
-                        role: "user".to_string(),
-                        content: vec![SessionContent::Text {
+                    append_codex_user_message(
+                        messages,
+                        vec![SessionContent::Text {
                             text: text.to_string(),
                         }],
-                    });
+                    );
                 }
             }
         }
@@ -1230,7 +1469,7 @@ fn parse_codex_session_line(line: &str, messages: &mut Vec<SessionMessage>) {
                         .and_then(|p| p.get("role"))
                         .and_then(|v| v.as_str())
                         .unwrap_or("");
-                    if role != "assistant" {
+                    if !matches!(role, "assistant" | "user") {
                         return;
                     }
                     let parts: Vec<SessionContent> = payload
@@ -1241,7 +1480,7 @@ fn parse_codex_session_line(line: &str, messages: &mut Vec<SessionMessage>) {
                                 .iter()
                                 .filter_map(|b| {
                                     let t = b.get("type").and_then(|v| v.as_str())?;
-                                    if matches!(t, "output_text" | "text") {
+                                    if matches!(t, "output_text" | "input_text" | "text") {
                                         let text = b.get("text").and_then(|v| v.as_str())?;
                                         if !text.trim().is_empty() {
                                             return Some(SessionContent::Text {
@@ -1249,66 +1488,113 @@ fn parse_codex_session_line(line: &str, messages: &mut Vec<SessionMessage>) {
                                             });
                                         }
                                     }
+                                    if matches!(t, "input_image" | "image" | "attachment") {
+                                        return attachment_from_value(b);
+                                    }
                                     None
                                 })
                                 .collect()
                         })
                         .unwrap_or_default();
                     if !parts.is_empty() {
-                        if let Some(last) = messages.last_mut().filter(|m| m.role == "assistant") {
-                            last.content.extend(parts);
+                        if role == "assistant" {
+                            if let Some(last) =
+                                messages.last_mut().filter(|m| m.role == "assistant")
+                            {
+                                last.content.extend(parts);
+                            } else {
+                                messages.push(SessionMessage {
+                                    role: "assistant".to_string(),
+                                    content: parts,
+                                });
+                            }
                         } else {
-                            messages.push(SessionMessage {
-                                role: "assistant".to_string(),
-                                content: parts,
-                            });
+                            append_codex_user_message(messages, parts);
                         }
                     }
                 }
-                "function_call" => {
+                "reasoning" => {
+                    let thinking = payload
+                        .and_then(|item| item.get("summary").or_else(|| item.get("content")))
+                        .map(|summary| match summary {
+                            serde_json::Value::String(text) => text.clone(),
+                            serde_json::Value::Array(items) => items
+                                .iter()
+                                .filter_map(|item| {
+                                    item.get("text").and_then(serde_json::Value::as_str)
+                                })
+                                .collect::<Vec<_>>()
+                                .join("\n"),
+                            other => serde_json::to_string_pretty(other).unwrap_or_default(),
+                        })
+                        .unwrap_or_default();
+                    if !thinking.trim().is_empty() {
+                        append_assistant_content(messages, SessionContent::Thinking { thinking });
+                    }
+                }
+                "agent_message" => {
+                    let text = payload
+                        .and_then(|item| item.get("message").or_else(|| item.get("text")))
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("");
+                    if !text.trim().is_empty() {
+                        append_assistant_content(
+                            messages,
+                            SessionContent::Text {
+                                text: text.to_string(),
+                            },
+                        );
+                    }
+                }
+                "function_call" | "custom_tool_call" => {
                     let call_id = payload
-                        .and_then(|p| p.get("call_id"))
+                        .and_then(|p| p.get("call_id").or_else(|| p.get("id")))
                         .and_then(|v| v.as_str())
                         .unwrap_or("")
                         .to_string();
                     let name = payload
                         .and_then(|p| p.get("name"))
                         .and_then(|v| v.as_str())
-                        .unwrap_or("")
+                        .unwrap_or(if payload_type == "custom_tool_call" {
+                            "custom_tool"
+                        } else {
+                            "tool"
+                        })
                         .to_string();
-                    let raw = payload
-                        .and_then(|p| p.get("arguments"))
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("{}");
-                    let input = serde_json::from_str::<serde_json::Value>(raw)
-                        .ok()
-                        .and_then(|v| serde_json::to_string_pretty(&v).ok())
-                        .unwrap_or_else(|| raw.to_string());
-                    let part = SessionContent::ToolUse {
-                        id: call_id,
-                        name,
-                        input,
+                    let raw_value = payload.and_then(|p| {
+                        p.get("arguments")
+                            .or_else(|| p.get("input"))
+                            .or_else(|| p.get("payload"))
+                    });
+                    let input = match raw_value {
+                        Some(serde_json::Value::String(raw)) => {
+                            serde_json::from_str::<serde_json::Value>(raw)
+                                .ok()
+                                .and_then(|value| serde_json::to_string_pretty(&value).ok())
+                                .unwrap_or_else(|| raw.clone())
+                        }
+                        value => json_value_to_display(value),
                     };
-                    if let Some(last) = messages.last_mut().filter(|m| m.role == "assistant") {
-                        last.content.push(part);
-                    } else {
-                        messages.push(SessionMessage {
-                            role: "assistant".to_string(),
-                            content: vec![part],
-                        });
-                    }
+                    append_assistant_content(
+                        messages,
+                        SessionContent::ToolUse {
+                            id: call_id,
+                            name,
+                            input,
+                        },
+                    );
                 }
-                "function_call_output" => {
+                "function_call_output" | "custom_tool_call_output" => {
                     let id = payload
-                        .and_then(|item| item.get("call_id"))
+                        .and_then(|item| item.get("call_id").or_else(|| item.get("id")))
                         .and_then(|value| value.as_str())
                         .unwrap_or("")
                         .to_string();
-                    let output = payload
-                        .and_then(|item| item.get("output"))
-                        .and_then(|value| value.as_str())
-                        .unwrap_or("")
-                        .to_string();
+                    let output = json_value_to_display(payload.and_then(|item| {
+                        item.get("output")
+                            .or_else(|| item.get("result"))
+                            .or_else(|| item.get("content"))
+                    }));
                     if !output.trim().is_empty() {
                         messages.push(SessionMessage {
                             role: "user".to_string(),
@@ -2512,6 +2798,124 @@ mod tests {
             !messages.is_empty(),
             "truncated codex tail must still parse"
         );
+    }
+
+    #[test]
+    fn session_message_pages_cover_more_than_twenty_thousand_lines_without_gaps() {
+        let path = std::env::temp_dir().join(format!(
+            "aeroric-session-pages-{}-{}.jsonl",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        let total = 20_137usize;
+        let raw = (0..total)
+            .map(|index| format!("记录-{index}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        fs::write(&path, raw).expect("write paged session fixture");
+
+        let mut cursor = None;
+        let mut pages = Vec::new();
+        loop {
+            let (lines, next_cursor, has_more) =
+                read_session_page_lines(&path, cursor, SESSION_MESSAGE_PAGE_LINES)
+                    .expect("read session page");
+            assert!(lines.len() <= SESSION_MESSAGE_PAGE_LINES);
+            pages.push(lines);
+            if !has_more {
+                break;
+            }
+            let next = next_cursor.expect("cursor while more pages remain");
+            if let Some(previous) = cursor {
+                assert!(next < previous, "cursor must move toward the file start");
+            }
+            cursor = Some(next);
+        }
+        let _ = fs::remove_file(&path);
+
+        let restored = pages.into_iter().rev().flatten().collect::<Vec<_>>();
+        assert_eq!(restored.len(), total);
+        for (index, line) in restored.iter().enumerate() {
+            assert_eq!(line, &format!("记录-{index}"));
+        }
+    }
+
+    #[test]
+    fn parse_codex_custom_tools_reasoning_and_attachments() {
+        let lines = vec![
+            serde_json::json!({
+                "type": "response_item",
+                "payload": {
+                    "type": "reasoning",
+                    "summary": [{"type": "summary_text", "text": "reasoning summary"}]
+                }
+            })
+            .to_string(),
+            serde_json::json!({
+                "type": "response_item",
+                "payload": {
+                    "type": "custom_tool_call",
+                    "call_id": "custom-1",
+                    "name": "image_lookup",
+                    "input": {"query": "diagram"}
+                }
+            })
+            .to_string(),
+            serde_json::json!({
+                "type": "response_item",
+                "payload": {
+                    "type": "custom_tool_call_output",
+                    "call_id": "custom-1",
+                    "output": {"status": "ok", "items": [1, 2]}
+                }
+            })
+            .to_string(),
+            serde_json::json!({
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{
+                        "type": "input_image",
+                        "name": "reference.png",
+                        "media_type": "image/png",
+                        "url": "https://example.test/reference.png"
+                    }]
+                }
+            })
+            .to_string(),
+        ];
+
+        let messages = parse_session_messages(&lines, true);
+        assert!(messages.iter().flat_map(|message| &message.content).any(|content| {
+            matches!(content, SessionContent::Thinking { thinking } if thinking == "reasoning summary")
+        }));
+        assert!(messages
+            .iter()
+            .flat_map(|message| &message.content)
+            .any(|content| {
+                matches!(content, SessionContent::ToolUse { id, name, input }
+                if id == "custom-1" && name == "image_lookup" && input.contains("diagram"))
+            }));
+        assert!(messages
+            .iter()
+            .flat_map(|message| &message.content)
+            .any(|content| {
+                matches!(content, SessionContent::ToolResult { id, output }
+                if id == "custom-1" && output.contains("items"))
+            }));
+        assert!(messages
+            .iter()
+            .flat_map(|message| &message.content)
+            .any(|content| {
+                matches!(content, SessionContent::Attachment { name, media_type, source }
+                if name == "reference.png"
+                    && media_type == "image/png"
+                    && source == "https://example.test/reference.png")
+            }));
     }
 
     #[test]

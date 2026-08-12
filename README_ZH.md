@@ -245,6 +245,6 @@ pnpm tauri build    # 构建生产桌面包
 
 Aeroric 基于 [Tauri](https://github.com/tauri-apps/tauri)、[React](https://github.com/facebook/react)、[xterm.js](https://github.com/xtermjs/xterm.js)、[CodeMirror](https://codemirror.net/) 和 [Shiki](https://shiki.style/) 等优秀开源项目构建。
 
-特别感谢 [hanshuaikang/nezha](https://github.com/hanshuaikang/nezha) 和 [t8y2/dbx](https://github.com/t8y2/dbx)，这些开源工作为 Aeroric 的智能体工作台和数据库工具提供了启发与参考。
+特别感谢 [hanshuaikang/nezha](https://github.com/hanshuaikang/nezha)、[t8y2/dbx](https://github.com/t8y2/dbx)、[stablyai/orca](https://github.com/stablyai/orca) 和 [farion1231/cc-switch](https://github.com/farion1231/cc-switch)，这些开源工作为 Aeroric 的智能体工作台、数据库工具、移动端体验和智能体配置流程提供了启发与参考。
 
 链接认可 LINUX DO 社区：[linux.do](https://linux.do)。

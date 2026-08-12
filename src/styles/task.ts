@@ -9,6 +9,8 @@ export const task = {
     display: "flex",
     flexDirection: "column",
     overflow: "hidden",
+    backdropFilter: "var(--glass-blur)",
+    WebkitBackdropFilter: "var(--glass-blur)",
   },
   taskPanelCollapsed: {
     width: 52,
@@ -205,6 +207,8 @@ export const task = {
     display: "flex",
     flexDirection: "column" as const,
     gap: 14,
+    backdropFilter: "var(--glass-blur)",
+    WebkitBackdropFilter: "var(--glass-blur)",
   },
   branchDialogTitle: {
     fontSize: 14,

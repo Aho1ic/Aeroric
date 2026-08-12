@@ -609,6 +609,10 @@ body,
   min-width: 1100px;
   overflow: hidden;
 }
+#root {
+  isolation: isolate;
+  background: transparent;
+}
 button {
   font-family: inherit;
 }
@@ -637,11 +641,59 @@ body {
   font-size: 13px;
   line-height: 1.5;
   color: var(--text-primary);
-  background: var(--bg-root);
+  background: var(--app-canvas);
+  background-attachment: fixed;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
   -webkit-user-select: none;
   user-select: none;
+}
+
+/* Global material system: semantic surface tokens stay translucent while blur
+ * is applied only at structural/elevated boundaries. Avoiding blur on every
+ * nested row keeps terminal, editor and large virtualized lists responsive. */
+:where(input, textarea:not(.xterm-helper-textarea), select),
+:where([role="dialog"], [role="menu"], .radix-select-content, .branch-popover-content) {
+  backdrop-filter: var(--glass-blur-compact);
+  -webkit-backdrop-filter: var(--glass-blur-compact);
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  :root {
+    --bg-root: #fbfbfc;
+    --bg-shell: #f7f7fa;
+    --bg-titlebar: #fbfbfc;
+    --bg-sidebar: #f6f6f8;
+    --bg-sidebar-elevated: #ffffff;
+    --bg-panel: #ffffff;
+    --bg-card: #ffffff;
+    --bg-subtle: #f4f4f7;
+    --bg-input: #ffffff;
+  }
+
+  html.eyecare {
+    --bg-root: #f6eddc;
+    --bg-shell: #f3e8d3;
+    --bg-titlebar: #f6eddc;
+    --bg-sidebar: #f8f0df;
+    --bg-sidebar-elevated: #fff8ea;
+    --bg-panel: #fdf7e9;
+    --bg-card: #fffaf0;
+    --bg-subtle: #f2e7d0;
+    --bg-input: #fffaf0;
+  }
+
+  html.dark {
+    --bg-root: #09090b;
+    --bg-shell: #0c0c10;
+    --bg-titlebar: #09090b;
+    --bg-sidebar: #0f0f13;
+    --bg-sidebar-elevated: #141419;
+    --bg-panel: #101014;
+    --bg-card: #18181d;
+    --bg-subtle: #16161b;
+    --bg-input: #111116;
+  }
 }
 
 /* ── Radix Select ───────────────────────────────────────────────── */
@@ -3490,11 +3542,12 @@ html.dark .notebook-rich-text font[color="#000000"] {
   overflow: hidden;
 }
 
-.project-center-stack.ssh-split {
+.project-center-stack.auxiliary-split {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 1px minmax(0, 1fr);
 }
 
+.project-center-agent,
 .project-center-primary,
 .project-center-ssh {
   position: relative;
@@ -3506,39 +3559,42 @@ html.dark .notebook-rich-text font[color="#000000"] {
   background: var(--bg-panel);
 }
 
+.project-center-agent,
 .project-center-primary {
   flex: 1;
 }
 
-.project-center-stack.ssh-full .project-center-primary {
-  position: absolute;
-  inset: 0;
-  visibility: hidden;
-  pointer-events: none;
-}
-
-.project-center-stack.ssh-split .project-center-primary {
+.project-center-stack.auxiliary-split .project-center-agent {
   grid-column: 1;
 }
 
-.project-center-stack.ssh-split .project-center-ssh-divider {
+.project-center-stack.auxiliary-split .project-center-auxiliary-divider {
   grid-column: 2;
   width: 1px;
   min-width: 1px;
   background: var(--border-dim);
 }
 
-.project-center-stack.ssh-split .project-center-ssh {
+.project-center-stack.auxiliary-split .project-center-primary,
+.project-center-stack.auxiliary-split .project-center-ssh {
   grid-column: 3;
 }
 
-.project-center-stack.ssh-full .project-center-ssh {
+.project-center-stack.auxiliary-full .project-center-primary,
+.project-center-stack.auxiliary-full .project-center-ssh {
   position: absolute;
   inset: 0;
 }
 
 .project-center-ssh {
   flex: 1;
+}
+
+.auxiliary-layout-toggle {
+  position: absolute;
+  top: 6px;
+  right: 10px;
+  z-index: 12;
 }
 
 .ssh-workspace-pane {
