@@ -1008,6 +1008,7 @@ function App() {
       taskId: task.id,
       projectPath,
       prompt: promptOverride ?? task.prompt,
+      createdAt: task.createdAt,
       agent: task.agent,
       selectedModel: task.selectedModel,
       reasoningEffort: task.reasoningEffort,

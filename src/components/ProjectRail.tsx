@@ -28,7 +28,7 @@ import {
   X,
 } from "lucide-react";
 import type { Project, Task, ThemeVariant } from "../types";
-import { isActiveTaskStatus } from "../types";
+import { isActiveTaskStatus, resolveProjectLocation } from "../types";
 import { ProjectAvatar } from "./ProjectAvatar";
 import { StatusIcon } from "./StatusIcon";
 import { NotificationBell } from "./NotificationBell";
@@ -40,6 +40,7 @@ import {
   PROJECT_RAIL_EXPANDED_WIDTH,
 } from "./project-page/viewMode";
 import { groupProjectsForRail, UNGROUPED_PROJECT_GROUP } from "../projectGroups";
+import { hasTaskContinuationContext } from "../taskSession";
 import s from "../styles";
 import claudeWaveGif from "../assets/gif/claude-wave.gif";
 
@@ -192,6 +193,7 @@ function RailTaskItem({
   onToggleStar,
   onRunTodo,
   onResumeTask,
+  allowSessionRecovery,
 }: {
   task: Task;
   selected: boolean;
@@ -202,6 +204,7 @@ function RailTaskItem({
   onToggleStar: () => void;
   onRunTodo: () => void;
   onResumeTask?: () => void;
+  allowSessionRecovery?: boolean;
 }) {
   const { t } = useI18n();
   const [hovered, setHovered] = useState(false);
@@ -216,7 +219,8 @@ function RailTaskItem({
       task.codexSessionId ||
       task.codexSessionPath ||
       task.claudeSessionId ||
-      task.claudeSessionPath,
+      task.claudeSessionPath ||
+      (allowSessionRecovery && hasTaskContinuationContext(task)),
     );
 
   return (
@@ -1487,6 +1491,9 @@ export function ProjectRail({
                               onDelete={() => onDeleteTask(task.id)}
                               onToggleStar={() => onToggleTaskStar(task.id)}
                               onRunTodo={() => onRunTodo(task)}
+                              allowSessionRecovery={
+                                resolveProjectLocation(project).kind === "local"
+                              }
                               onResumeTask={onResumeTask ? () => onResumeTask(task.id) : undefined}
                             />
                           ))

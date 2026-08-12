@@ -7,12 +7,13 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::ipc::Channel;
 use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::session::{
-    should_start_status_session_watcher, spawn_resume_session_watcher, spawn_status_session_watcher,
+    should_start_status_session_watcher, spawn_claude_lazy_session_attach,
+    spawn_codex_session_recovery, spawn_resume_session_watcher, spawn_status_session_watcher,
 };
 use crate::TaskManager;
 
@@ -1189,6 +1190,7 @@ pub async fn run_task(
     task_id: String,
     project_path: String,
     prompt: String,
+    created_at: Option<i64>,
     agent: String,
     permission_mode: String,
     images: Option<Vec<String>>,
@@ -1435,26 +1437,43 @@ pub async fn run_task(
         serde_json::json!({ "task_id": task_id, "status": "running" }),
     );
 
-    // Claude 默认使用原生命令行参数执行首条消息。Codex 始终走受门控保护的终端注入，
-    // 等 trust / hook review 等启动选择器结束后再粘贴并提交；自定义 Agent 包装脚本若
-    // 不支持 positional prompt 也沿用同一兜底，并为没有启动输出的脚本保留超时。
-    // 因此这里不能启动 /status watcher，避免抢占用户输入或污染浅色终端背景。
-    let starts_with_prompt = !final_prompt.is_empty();
-    let session_tx = if starts_with_prompt {
-        if !use_hooks && !is_codex && pre_session_id.is_some() {
-            let (_session_tx, session_rx) = std::sync::mpsc::channel::<String>();
-            spawn_status_session_watcher(
+    // Claude >= 2.1.87 接受 Aeroric 预先生成的 session id。先把这个 ID 注册为
+    // placeholder 并广播给前端，再等待 transcript 文件出现；这样任务刚创建并
+    // 启动后就能持久化恢复上下文，不会依赖“标记完成”时的退出竞态。
+    if let Some(session_id) = pre_session_id.clone() {
+        if !is_codex {
+            spawn_claude_lazy_session_attach(
                 app.clone(),
                 task_id.clone(),
+                session_id,
                 project_path.clone(),
-                is_codex,
-                session_rx,
-                pre_session_id.clone(),
-                true,
             );
         }
-        None
-    } else if should_start_status_session_watcher(use_hooks, is_codex, true) {
+    }
+
+    // Codex 不能通过 CLI 参数预置 session id，因此带 prompt 时启动无副作用的
+    // session 文件发现；Claude 使用上面的预置 ID，不再发送会抢占用户输入的
+    // /status。
+    let starts_with_prompt = !final_prompt.is_empty();
+    if is_codex && starts_with_prompt {
+        let created_at = created_at.unwrap_or_else(|| {
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .ok()
+                .and_then(|duration| i64::try_from(duration.as_millis()).ok())
+                .unwrap_or_default()
+        });
+        spawn_codex_session_recovery(
+            app.clone(),
+            task_id.clone(),
+            project_path.clone(),
+            final_prompt.clone(),
+            created_at,
+        );
+    }
+    let needs_status_session_watcher = !(pre_session_id.is_some() && !is_codex)
+        && should_start_status_session_watcher(use_hooks, is_codex, !starts_with_prompt);
+    let session_tx = if needs_status_session_watcher {
         let (session_tx, session_rx) = std::sync::mpsc::channel::<String>();
         spawn_status_session_watcher(
             app.clone(),
@@ -1462,8 +1481,8 @@ pub async fn run_task(
             project_path.clone(),
             is_codex,
             session_rx,
-            pre_session_id,
-            true,
+            None,
+            !starts_with_prompt,
         );
         Some(session_tx)
     } else {

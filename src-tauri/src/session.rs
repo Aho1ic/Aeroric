@@ -1780,14 +1780,57 @@ fn should_send_status_command(
 
 pub(crate) fn should_start_status_session_watcher(
     use_hooks: bool,
-    _is_codex: bool,
+    is_codex: bool,
     prompt_empty: bool,
 ) -> bool {
+    if is_codex {
+        // Codex 有无 prompt 的启动期优先走文件发现，避免把 /status 写入
+        // trust/review 界面；hook 不可用时保留旧的 /status 兜底。
+        return !use_hooks && !prompt_empty;
+    }
     if use_hooks {
         return false;
     }
 
     !prompt_empty
+}
+
+/// Codex 没有公开的启动参数用于预置 session id。带首条 prompt 的任务启动后，
+/// 通过新生成的 session 文件按项目、提示词和创建时间匹配真实 session，避免向
+/// 正在显示启动确认界面的 PTY 注入 `/status`。
+pub(crate) fn spawn_codex_session_recovery(
+    app: AppHandle,
+    task_id: String,
+    project_path: String,
+    prompt: String,
+    created_at: i64,
+) {
+    thread::spawn(move || {
+        // 30 秒覆盖 Codex 启动、trust/review 和首条消息落盘的常见延迟；任务
+        // 退出后仍继续短暂扫描，确保手动完成不会抢在 session 事件之前清理状态。
+        for _ in 0..150 {
+            let registered = {
+                let tm = app.state::<TaskManager>();
+                let registered = tm.codex_sessions.lock().contains_key(&task_id);
+                registered
+            };
+            if registered {
+                return;
+            }
+
+            if let Some(recovered) = recover_session(&project_path, &prompt, created_at, true) {
+                register_and_watch_session(
+                    &app,
+                    &task_id,
+                    &recovered.session_id,
+                    &project_path,
+                    true,
+                );
+                return;
+            }
+            thread::sleep(Duration::from_millis(200));
+        }
+    });
 }
 
 fn send_status_command(app: &AppHandle, task_id: &str, is_codex: bool) {
@@ -1815,14 +1858,16 @@ fn send_status_command(app: &AppHandle, task_id: &str, is_codex: bool) {
     }
 }
 
-/// 空 prompt Claude 启动专用：立刻按预置 UUID 注册并广播 session id，
-/// 后台等真实 jsonl 文件出现后再 attach 监听。
+/// Claude 启动专用：立刻按预置 UUID 注册并广播 session id，后台等真实 jsonl
+/// 文件出现后再 attach 监听。
 /// 最长 2 分钟或任务结束，避免线程长期挂着。
 ///
 /// 注入的 `claude_sessions` 条目以 `is_placeholder: true` 标记，`is_task_active`
 /// 和 `finalize_task_exit::had_agent_session` 都会跳过；文件出现后升级为真，
 /// 任何退出路径都会清理占位条目和 claimed 路径。
-fn spawn_claude_lazy_session_attach(
+/// Claude 已经通过 `--session-id` 预先确定会话 ID 时，立即广播并持久化该 ID，
+/// 同时后台等待 transcript 文件出现后再升级为可监视的真实会话。
+pub(crate) fn spawn_claude_lazy_session_attach(
     app: AppHandle,
     task_id: String,
     session_id: String,
@@ -1834,6 +1879,21 @@ fn spawn_claude_lazy_session_attach(
         };
         let expected = sessions_dir.join(format!("{}.jsonl", session_id));
         let path_string = expected.to_string_lossy().into_owned();
+
+        // Hook 可能比 lazy attach 更早写入真实会话；此时直接退出，避免重复
+        // claim 和启动第二个 transcript watcher。
+        {
+            let tm = app.state::<TaskManager>();
+            if tm
+                .claude_sessions
+                .lock()
+                .get(&task_id)
+                .map(|info| info.session_id == session_id && !info.is_placeholder)
+                .unwrap_or(false)
+            {
+                return;
+            }
+        }
 
         if !claim_session_path(&app, &path_string) {
             return;
@@ -1877,15 +1937,24 @@ fn spawn_claude_lazy_session_attach(
             if expected.exists() {
                 // 升级为真：placeholder 翻成 false，让 is_task_active / had_agent_session
                 // 重新识别为有效会话。
-                {
+                let should_start_watcher = {
                     let tm = app.state::<TaskManager>();
                     let mut sessions = tm.claude_sessions.lock();
                     if let Some(info) = sessions.get_mut(&task_id) {
-                        info.is_placeholder = false;
+                        if info.is_placeholder {
+                            info.is_placeholder = false;
+                            true
+                        } else {
+                            false
+                        }
+                    } else {
+                        false
                     }
-                }
+                };
                 attached = true;
-                watch_claude_session(app.clone(), task_id.clone(), expected.clone());
+                if should_start_watcher {
+                    watch_claude_session(app.clone(), task_id.clone(), expected.clone());
+                }
                 break;
             }
             thread::sleep(Duration::from_millis(500));
@@ -1942,31 +2011,9 @@ pub(crate) fn spawn_status_session_watcher(
     // ── Claude >= 2.1.87 快速路径：预置 session id，不发 /status ──
     if let Some(ref sid) = pre_session_id {
         if !is_codex {
-            let app2 = app.clone();
-            let tid2 = task_id.clone();
-            let pp2 = project_path.clone();
-            let sid2 = sid.clone();
-            thread::spawn(move || {
-                // 等待 Claude 创建 session 文件，最长 10 秒
-                register_and_watch_session(&app2, &tid2, &sid2, &pp2, false);
-
-                // 如果 register_and_watch_session 无法找到文件（内部 wait_for_session_file 超时），
-                // 检查是否已经成功注册；若未注册则回退到旧的 /status 流程。
-                let registered = {
-                    let tm = app2.state::<TaskManager>();
-                    let sessions = tm.claude_sessions.lock();
-                    sessions
-                        .get(&tid2)
-                        .map(|info| !info.session_path.is_empty())
-                        .unwrap_or(false)
-                };
-                if registered {
-                    return; // 成功，rx 仍会被 drop 但不影响 pty_reader
-                }
-
-                // 回退：启动旧的 /status 流程
-                run_status_session_watcher(app2, tid2, pp2, false, rx);
-            });
+            // ID 已经在 run_task 启动前确定，并由 spawn_claude_lazy_session_attach
+            // 立即发给前端；这里不再等待文件或重复启动 watcher。
+            spawn_claude_lazy_session_attach(app, task_id, sid.clone(), project_path);
             return;
         }
     }
@@ -2837,6 +2884,7 @@ mod tests {
         assert!(should_start_status_session_watcher(false, true, false));
         assert!(should_start_status_session_watcher(false, false, false));
         assert!(!should_start_status_session_watcher(true, false, false));
+        assert!(!should_start_status_session_watcher(true, true, false));
     }
 
     #[test]
