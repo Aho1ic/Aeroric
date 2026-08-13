@@ -310,17 +310,29 @@ async fn handshake(
     let mut stderr_lines = BufReader::new(stderr).lines();
     let mut captured_stderr: Vec<String> = Vec::new();
 
+    // 服务器可能在我们写入之前就已经退出。这时 stdin 已经没有读端,write/flush 会拿到
+    // BrokenPipe——但「管道断了」不是有用的诊断,真正的原因在服务器的 stderr 里。把这种
+    // 情况和 stdout EOF 走同一条路径:排空 stderr 并报告「握手前退出」。
+    //
+    // 写入能否落进管道缓冲区取决于内核调度,所以 BrokenPipe 是否出现本身就是平台相关的
+    // 竞争(Linux 上常见,macOS 上写入通常先进缓冲区),不能作为返回值的分支依据。
     let request = initialize_request();
-    if let Err(err) = stdin.write_all(request.as_bytes()).await {
-        return McpTestResult::Error {
-            message: format!("无法发送初始化请求: {err}"),
-            stderr: None,
-        };
+    let write_result = async {
+        stdin.write_all(request.as_bytes()).await?;
+        stdin.flush().await
     }
-    if let Err(err) = stdin.flush().await {
+    .await;
+    if let Err(err) = write_result {
+        if err.kind() != std::io::ErrorKind::BrokenPipe {
+            return McpTestResult::Error {
+                message: format!("无法发送初始化请求: {err}"),
+                stderr: None,
+            };
+        }
+        drain_stderr(&mut stderr_lines, &mut captured_stderr).await;
         return McpTestResult::Error {
-            message: format!("无法发送初始化请求: {err}"),
-            stderr: None,
+            message: "MCP 服务器在完成握手前退出".to_string(),
+            stderr: collected_stderr(&captured_stderr),
         };
     }
 
