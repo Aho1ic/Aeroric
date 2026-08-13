@@ -1054,7 +1054,9 @@ pub async fn sftp_delete_paths(endpoint: SftpEndpoint, paths: Vec<String>) -> Re
                 return Err("This connection cannot delete files".to_string());
             }
             for path in paths {
-                backend.delete(&validate_storage_path(&path)?)?;
+                let path = validate_storage_path(&path)?;
+                let path = crate::storage_backend::validate_storage_mutation_path(&path)?;
+                backend.delete(&path)?;
             }
             Ok(())
         }
@@ -1492,6 +1494,13 @@ fn copy_or_move_storage_paths(
     move_paths: bool,
     conflict_strategy: SftpConflictStrategy,
 ) -> Result<(), String> {
+    // 移动存储根目录最终会删除源。必须在下载/复制前拒绝，而不是写完目标后才失败。
+    if move_paths && matches!(source, SftpEndpoint::Storage { .. }) {
+        for path in &paths {
+            let path = validate_storage_path(path)?;
+            crate::storage_backend::validate_storage_mutation_path(&path)?;
+        }
+    }
     match (&source, &target) {
         // 同一存储连接内部搬移。
         (

@@ -453,7 +453,8 @@ impl StorageBackend for BaiduBackend {
     }
 
     fn delete(&self, path: &str) -> Result<(), String> {
-        let absolute = self.absolute(path);
+        let path = crate::storage_backend::validate_storage_mutation_path(path)?;
+        let absolute = self.absolute(&path);
         let result = self.block(async {
             self.file_manager("delete", serde_json::json!([absolute.clone()]))
                 .await
@@ -463,7 +464,8 @@ impl StorageBackend for BaiduBackend {
     }
 
     fn rename(&self, from: &str, to: &str) -> Result<(), String> {
-        let from_absolute = self.absolute(from);
+        let from = crate::storage_backend::validate_storage_mutation_path(from)?;
+        let from_absolute = self.absolute(&from);
         let to_absolute = self.absolute(to);
         let from_parent = path_parent(&from_absolute);
         let to_parent = path_parent(&to_absolute);

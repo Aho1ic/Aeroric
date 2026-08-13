@@ -166,9 +166,10 @@ fn split_secrets(connections: Vec<StorageConnection>) -> (Vec<StorageConnection>
     let mut secrets: SecretMap = BTreeMap::new();
     for mut connection in connections {
         let taken = std::mem::take(&mut connection.secrets);
+        let allowed = connection.protocol.secret_keys();
         let kept: BTreeMap<String, String> = taken
             .into_iter()
-            .filter(|(_, value)| !value.is_empty())
+            .filter(|(key, value)| !value.is_empty() && allowed.contains(&key.as_str()))
             .collect();
         if !kept.is_empty() {
             secrets.insert(connection.id.clone(), kept);
@@ -176,6 +177,24 @@ fn split_secrets(connections: Vec<StorageConnection>) -> (Vec<StorageConnection>
         public.push(connection);
     }
     (public, secrets)
+}
+
+/// 合并编辑表单没有回传的旧凭据，并把结果限制在当前协议声明的白名单内。
+fn merge_connection_secrets(next: &mut StorageConnection, existing: Option<&StorageConnection>) {
+    let allowed = next.protocol.secret_keys();
+    next.secrets
+        .retain(|key, value| !value.is_empty() && allowed.contains(&key.as_str()));
+
+    let Some(existing) = existing.filter(|item| item.protocol == next.protocol) else {
+        return;
+    };
+    for (key, value) in &existing.secrets {
+        if allowed.contains(&key.as_str())
+            && next.secrets.get(key).map(String::is_empty).unwrap_or(true)
+        {
+            next.secrets.insert(key.clone(), value.clone());
+        }
+    }
 }
 
 fn load_secrets() -> Result<SecretMap, String> {
@@ -215,7 +234,12 @@ fn load_connections_with_secrets_unlocked() -> Result<Vec<StorageConnection>, St
     let secrets = load_secrets()?;
     for connection in &mut connections {
         if let Some(entry) = secrets.get(&connection.id) {
-            connection.secrets = entry.clone();
+            let allowed = connection.protocol.secret_keys();
+            connection.secrets = entry
+                .iter()
+                .filter(|(key, value)| !value.is_empty() && allowed.contains(&key.as_str()))
+                .map(|(key, value)| (key.clone(), value.clone()))
+                .collect();
         }
     }
     Ok(connections)
@@ -305,9 +329,14 @@ pub async fn storage_list_connections() -> Result<Vec<StorageConnection>, String
 pub async fn storage_secret_keys() -> Result<BTreeMap<String, Vec<String>>, String> {
     tokio::task::spawn_blocking(|| {
         let _guard = STORAGE_CONNECTIONS_LOCK.lock();
-        Ok(load_secrets()?
+        Ok(load_connections_with_secrets_unlocked()?
             .into_iter()
-            .map(|(id, entry)| (id, entry.into_keys().collect()))
+            .map(|connection| {
+                (
+                    connection.id,
+                    connection.secrets.into_keys().collect::<Vec<_>>(),
+                )
+            })
             .collect())
     })
     .await
@@ -324,18 +353,20 @@ pub async fn storage_save_connection(
         let _guard = STORAGE_CONNECTIONS_LOCK.lock();
         let mut connections = load_connections_with_secrets_unlocked()?;
         let mut next = connection;
-        if let Some(existing) = connections.iter().find(|item| item.id == next.id) {
-            // 空值表示未修改,沿用已保存的凭据,避免表单回显空白就清掉 token。
-            for (key, value) in &existing.secrets {
-                if next.secrets.get(key).map(String::is_empty).unwrap_or(true) {
-                    next.secrets.insert(key.clone(), value.clone());
-                }
-            }
+        let existing = connections.iter().find(|item| item.id == next.id);
+        merge_connection_secrets(&mut next, existing);
+        if let Some(existing) = existing {
             if next.created_at == 0 {
                 next.created_at = existing.created_at;
             }
+            if existing.protocol.is_system_mount()
+                && (existing.protocol != next.protocol
+                    || existing.config != next.config
+                    || existing.secrets != next.secrets)
+            {
+                crate::storage_backend_mount::unmount(&existing.id)?;
+            }
         }
-        next.secrets.retain(|_, value| !value.is_empty());
         match connections.iter_mut().find(|item| item.id == next.id) {
             Some(slot) => *slot = next,
             None => connections.push(next),
@@ -355,6 +386,11 @@ pub async fn storage_delete_connection(
     tokio::task::spawn_blocking(move || {
         let _guard = STORAGE_CONNECTIONS_LOCK.lock();
         let mut connections = load_connections_with_secrets_unlocked()?;
+        if let Some(existing) = connections.iter().find(|item| item.id == connection_id) {
+            if existing.protocol.is_system_mount() {
+                crate::storage_backend_mount::unmount(&existing.id)?;
+            }
+        }
         connections.retain(|item| item.id != connection_id);
         write_connections(connections.clone())?;
         Ok(split_secrets(connections).0)
@@ -418,6 +454,38 @@ mod tests {
             .insert("sessionToken".to_string(), String::new());
         let (_, secrets) = split_secrets(vec![input]);
         assert!(!secrets["conn-1"].contains_key("sessionToken"));
+    }
+
+    #[test]
+    fn split_secrets_drops_keys_not_owned_by_the_protocol() {
+        let mut input = connection(StorageProtocol::S3);
+        input
+            .secrets
+            .insert("refreshToken".to_string(), "stale-oauth-token".to_string());
+        input
+            .secrets
+            .insert("unexpected".to_string(), "not-allowed".to_string());
+        let (_, secrets) = split_secrets(vec![input]);
+        assert!(!secrets["conn-1"].contains_key("refreshToken"));
+        assert!(!secrets["conn-1"].contains_key("unexpected"));
+    }
+
+    #[test]
+    fn merge_secrets_preserves_same_protocol_but_drops_cross_protocol_credentials() {
+        let existing = connection(StorageProtocol::S3);
+        let mut same_protocol = connection(StorageProtocol::S3);
+        same_protocol.secrets.clear();
+        merge_connection_secrets(&mut same_protocol, Some(&existing));
+        assert_eq!(same_protocol.secrets["accessKeyId"], "AKIA");
+
+        let mut switched = connection(StorageProtocol::WebdavHttps);
+        switched.config = BTreeMap::from([(
+            "endpoint".to_string(),
+            "https://dav.example.com".to_string(),
+        )]);
+        switched.secrets.clear();
+        merge_connection_secrets(&mut switched, Some(&existing));
+        assert!(switched.secrets.is_empty());
     }
 
     #[test]

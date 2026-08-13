@@ -24,7 +24,7 @@ export const storageApi = {
     return invoke<Record<string, string[]>>("storage_secret_keys");
   },
 
-  /** 新增或更新。`secrets` 中留空的键表示保留已保存的值。 */
+  /** 新增或更新。同协议下 `secrets` 留空会保留已保存值；切换协议会清除旧凭据。 */
   saveConnection(connection: StorageConnection): Promise<StorageConnection[]> {
     return invoke<StorageConnection[]>("storage_save_connection", { connection });
   },

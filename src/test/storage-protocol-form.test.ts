@@ -257,6 +257,23 @@ describe("存储草稿归一", () => {
     });
   });
 
+  it("切换协议时不会复用旧协议的凭据或 OAuth token", () => {
+    const next = switchStorageDraftProtocol(
+      draft("dropbox", {
+        config: { root: "/media" },
+        secrets: {
+          accessToken: "dropbox-access",
+          refreshToken: "dropbox-refresh",
+          clientId: "dropbox-client",
+        },
+      }),
+      "googleDrive",
+    );
+    expect(next.protocol).toBe("googleDrive");
+    expect(next.config).toEqual({ root: "/media" });
+    expect(next.secrets).toEqual({});
+  });
+
   it("空分组不写 group 字段", () => {
     expect(normalizeStorageDraft(draft("dropbox", { group: "  " }))).not.toHaveProperty("group");
   });

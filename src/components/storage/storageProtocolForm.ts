@@ -292,30 +292,22 @@ export function storageDraftFromConnection(
   };
 }
 
-/** 切换协议时保留仍然有用的字段,丢掉不属于新协议的输入。 */
+/** 切换协议时只保留仍适用的公开配置；凭据一律清空，避免跨协议复用密钥/token。 */
 export function switchStorageDraftProtocol(
   draft: StorageConnectionDraft,
   protocol: StorageProtocol,
 ): StorageConnectionDraft {
+  if (protocol === draft.protocol) return draft;
   const nextConfigKeys = new Set(
     storageFieldsForProtocol(protocol)
       .filter((spec) => spec.kind === "config")
-      .map((spec) => spec.key),
-  );
-  const nextSecretKeys = new Set(
-    storageFieldsForProtocol(protocol)
-      .filter((spec) => spec.kind === "secret")
       .map((spec) => spec.key),
   );
   const config: Record<string, string> = {};
   for (const [key, value] of Object.entries(draft.config)) {
     if (nextConfigKeys.has(key)) config[key] = value;
   }
-  const secrets: Record<string, string> = {};
-  for (const [key, value] of Object.entries(draft.secrets)) {
-    if (nextSecretKeys.has(key)) secrets[key] = value;
-  }
-  return { ...draft, protocol, config, secrets };
+  return { ...draft, protocol, config, secrets: {} };
 }
 
 function isBlank(value: string | undefined): boolean {

@@ -7,8 +7,8 @@
 use opendal::{ErrorKind, Operator};
 
 use crate::storage_backend::{
-    join_storage_path, normalize_storage_path, Capability, StorageBackend, StorageEntry,
-    StorageStat,
+    join_storage_path, normalize_storage_path, validate_storage_mutation_path, Capability,
+    StorageBackend, StorageEntry, StorageStat,
 };
 use crate::storage_conn::{StorageConnection, StorageProtocol};
 
@@ -116,27 +116,29 @@ impl StorageBackend for OpendalBackend {
     }
 
     fn delete(&self, path: &str) -> Result<(), String> {
+        let path = validate_storage_mutation_path(path)?;
         // 目录需要递归删除;先 stat 判断类型,stat 失败则按文件删。
-        match self.stat(path) {
+        match self.stat(&path) {
             Ok(stat) if stat.is_dir => self.block(self.operator.delete_options(
-                &to_opendal_path(path, true),
+                &to_opendal_path(&path, true),
                 opendal::options::DeleteOptions {
                     recursive: true,
                     ..Default::default()
                 },
             )),
-            _ => self.block(self.operator.delete(&to_opendal_path(path, false))),
+            _ => self.block(self.operator.delete(&to_opendal_path(&path, false))),
         }
     }
 
     fn rename(&self, from: &str, to: &str) -> Result<(), String> {
-        let stat = self.stat(from)?;
+        let from = validate_storage_mutation_path(from)?;
+        let stat = self.stat(&from)?;
         if stat.is_dir {
             // 对象存储没有目录 rename;逐条 copy 后删除源目录。
-            self.copy_dir_recursive(from, to)?;
-            return self.delete(from);
+            self.copy_dir_recursive(&from, to)?;
+            return self.delete(&from);
         }
-        let from_path = to_opendal_path(from, false);
+        let from_path = to_opendal_path(&from, false);
         let to_path = to_opendal_path(to, false);
         match self.block(self.operator.rename(&from_path, &to_path)) {
             Ok(()) => Ok(()),
@@ -343,6 +345,12 @@ fn build_dropbox(connection: &StorageConnection) -> Result<Operator, String> {
                 .client_id(&client_id)
                 .client_secret(&client_secret);
         }
+        (Some(_), _, _) => {
+            return Err(
+                "Dropbox refresh credentials are incomplete; reconnect with your app client ID and client secret"
+                    .to_string(),
+            )
+        }
         _ => {
             builder = builder.access_token(&require_secret(connection, "accessToken")?);
         }
@@ -362,6 +370,12 @@ fn build_gdrive(connection: &StorageConnection) -> Result<Operator, String> {
                 .refresh_token(&refresh_token)
                 .client_id(&client_id)
                 .client_secret(&client_secret);
+        }
+        (Some(_), _, _) => {
+            return Err(
+                "Google Drive refresh credentials are incomplete; reconnect with your app client ID and client secret"
+                    .to_string(),
+            )
         }
         _ => {
             builder = builder.access_token(&require_secret(connection, "accessToken")?);

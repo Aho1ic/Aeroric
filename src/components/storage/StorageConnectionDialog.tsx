@@ -82,6 +82,19 @@ export function StorageConnectionDialog({
     () => storageFieldsForProtocol(draft.protocol, descriptor),
     [descriptor, draft.protocol],
   );
+  const effectiveSavedSecretKeys = useMemo(
+    () => (connection?.protocol === draft.protocol ? savedSecretKeys : []),
+    [connection?.protocol, draft.protocol, savedSecretKeys],
+  );
+  const hasSavedOAuthCredentials = useMemo(() => {
+    if (!credentialOptions) return false;
+    const saved = new Set(effectiveSavedSecretKeys);
+    return (
+      saved.has("refreshToken") &&
+      saved.has("clientId") &&
+      (!credentialOptions.requiresClientSecret || saved.has("clientSecret"))
+    );
+  }, [credentialOptions, effectiveSavedSecretKeys]);
   const protocolGroups = useMemo(() => groupStorageProtocols(descriptors), [descriptors]);
 
   useEffect(() => {
@@ -153,7 +166,7 @@ export function StorageConnectionDialog({
 
   async function handleSubmit(event: React.FormEvent) {
     event.preventDefault();
-    const nextErrors = validateStorageDraft(draft, savedSecretKeys);
+    const nextErrors = validateStorageDraft(draft, effectiveSavedSecretKeys);
     setErrors(nextErrors);
     if (Object.keys(nextErrors).length > 0) return;
     setSaveError(null);
@@ -358,7 +371,7 @@ export function StorageConnectionDialog({
               clientSecret={clientSecret}
               onClientSecretChange={setClientSecret}
               authorizing={authorizing}
-              authorized={authorized || savedSecretKeys.includes("refreshToken")}
+              authorized={authorized || hasSavedOAuthCredentials}
               error={authError}
               onAuthorize={authorize}
             />
@@ -369,7 +382,7 @@ export function StorageConnectionDialog({
               spec.kind === "config"
                 ? (draft.config[spec.key] ?? "")
                 : (draft.secrets[spec.key] ?? "");
-            const saved = spec.kind === "secret" && savedSecretKeys.includes(spec.key);
+            const saved = spec.kind === "secret" && effectiveSavedSecretKeys.includes(spec.key);
             const isRevealed = revealed.has(spec.key);
             return (
               <label key={`${spec.kind}:${spec.key}`} style={s.sshField}>

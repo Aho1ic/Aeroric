@@ -444,6 +444,7 @@ pub fn run() {
             session::read_session_message_page,
             session::read_session_id,
             session::recover_task_session,
+            session::adopt_session_for_agent,
             session::export_session_markdown,
             config::init_project_config,
             config::read_project_config,

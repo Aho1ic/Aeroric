@@ -12,8 +12,8 @@ use std::sync::Mutex;
 use smb2::{ClientConfig, SmbClient, Tree};
 
 use crate::storage_backend::{
-    join_storage_path, normalize_storage_path, Capability, StorageBackend, StorageEntry,
-    StorageStat,
+    join_storage_path, normalize_storage_path, validate_storage_mutation_path, Capability,
+    StorageBackend, StorageEntry, StorageStat,
 };
 use crate::storage_conn::StorageConnection;
 
@@ -129,25 +129,27 @@ impl StorageBackend for SmbBackend {
     }
 
     fn delete(&self, path: &str) -> Result<(), String> {
-        let stat = self.stat(path)?;
+        let path = validate_storage_mutation_path(path)?;
+        let stat = self.stat(&path)?;
         if !stat.is_dir {
-            let smb_path = self.to_smb_path(path);
+            let smb_path = self.to_smb_path(&path);
             return self.with_session(move |tree, conn| {
                 Box::pin(async move { tree.delete_file(conn, &smb_path).await })
             });
         }
         // SMB 的 delete_directory 要求目录为空,先递归清空。
-        for entry in self.read_dir(path)? {
+        for entry in self.read_dir(&path)? {
             self.delete(&entry.path)?;
         }
-        let smb_path = self.to_smb_path(path);
+        let smb_path = self.to_smb_path(&path);
         self.with_session(move |tree, conn| {
             Box::pin(async move { tree.delete_directory(conn, &smb_path).await })
         })
     }
 
     fn rename(&self, from: &str, to: &str) -> Result<(), String> {
-        let from_path = self.to_smb_path(from);
+        let from = validate_storage_mutation_path(from)?;
+        let from_path = self.to_smb_path(&from);
         let to_path = self.to_smb_path(to);
         self.with_session(move |tree, conn| {
             Box::pin(async move { tree.rename(conn, &from_path, &to_path).await })

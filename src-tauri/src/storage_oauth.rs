@@ -44,7 +44,8 @@ pub fn provider_for(protocol: StorageProtocol) -> Option<OauthProvider> {
             token_url: "https://api.dropboxapi.com/oauth2/token",
             scope: "files.content.read files.content.write files.metadata.read \
                     files.metadata.write account_info.read",
-            requires_client_secret: false,
+            // OpenDAL 0.58 的长期刷新流程要求 client_id + client_secret + refresh_token。
+            requires_client_secret: true,
             supports_pkce: true,
         }),
         StorageProtocol::OneDrive => Some(OauthProvider {
@@ -58,7 +59,8 @@ pub fn provider_for(protocol: StorageProtocol) -> Option<OauthProvider> {
             authorize_url: "https://accounts.google.com/o/oauth2/v2/auth",
             token_url: "https://oauth2.googleapis.com/token",
             scope: "https://www.googleapis.com/auth/drive",
-            requires_client_secret: false,
+            // OpenDAL 0.58 的长期刷新流程要求 client_id + client_secret + refresh_token。
+            requires_client_secret: true,
             supports_pkce: true,
         }),
         StorageProtocol::Box => Some(OauthProvider {
@@ -295,16 +297,27 @@ fn callback_page(success: bool, message: &str) -> String {
     )
 }
 
-/// 在 127.0.0.1 上起一个一次性回调服务器,返回(端口, 结果接收端)。
+/// 在 127.0.0.1 上起一个一次性回调服务器。
+///
+/// `shutdown` 被发送或直接丢弃时都会触发 graceful shutdown，确保成功、失败和
+/// 超时路径都释放监听端口。
 async fn spawn_callback_server(
     expected_state: String,
-) -> Result<(u16, oneshot::Receiver<Result<String, String>>), String> {
+) -> Result<
+    (
+        u16,
+        oneshot::Receiver<Result<String, String>>,
+        oneshot::Sender<()>,
+    ),
+    String,
+> {
     let listener = tokio::net::TcpListener::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, 0)))
         .await
         .map_err(|e| e.to_string())?;
     let port = listener.local_addr().map_err(|e| e.to_string())?.port();
 
     let (sender, receiver) = oneshot::channel::<Result<String, String>>();
+    let (shutdown_sender, shutdown_receiver) = oneshot::channel::<()>();
     let sender = Arc::new(std::sync::Mutex::new(Some(sender)));
     let expected_state = Arc::new(expected_state);
 
@@ -339,10 +352,14 @@ async fn spawn_callback_server(
     }));
 
     tokio::spawn(async move {
-        let _ = axum::serve(listener, app).await;
+        let _ = axum::serve(listener, app)
+            .with_graceful_shutdown(async move {
+                let _ = shutdown_receiver.await;
+            })
+            .await;
     });
 
-    Ok((port, receiver))
+    Ok((port, receiver, shutdown_sender))
 }
 
 /// 用 authorization code 换 token。
@@ -454,7 +471,7 @@ pub async fn storage_oauth_authorize(
 
     let state = random_token(24)?;
     let pkce = generate_pkce()?;
-    let (port, receiver) = spawn_callback_server(state.clone()).await?;
+    let (port, receiver, shutdown) = spawn_callback_server(state.clone()).await?;
     let redirect_uri = redirect_uri_for(port);
     let authorize_url =
         build_authorize_url(&provider, &client_id, &redirect_uri, &state, Some(&pkce));
@@ -464,7 +481,9 @@ pub async fn storage_oauth_authorize(
         .open_url(authorize_url, None::<&str>)
         .map_err(|error| error.to_string())?;
 
-    let code = match tokio::time::timeout(AUTH_TIMEOUT, receiver).await {
+    let callback = tokio::time::timeout(AUTH_TIMEOUT, receiver).await;
+    let _ = shutdown.send(());
+    let code = match callback {
         Ok(Ok(Ok(code))) => code,
         Ok(Ok(Err(error))) => return Err(error),
         Ok(Err(_)) => return Err("Authorization was cancelled".to_string()),
@@ -598,6 +617,8 @@ mod tests {
     #[test]
     fn builtin_source_is_refused_when_the_service_mandates_a_secret() {
         for protocol in [
+            StorageProtocol::Dropbox,
+            StorageProtocol::GoogleDrive,
             StorageProtocol::Box,
             StorageProtocol::AliyunDrive,
             StorageProtocol::BaiduNetdisk,
@@ -647,21 +668,24 @@ mod tests {
     }
 
     #[test]
-    fn pkce_only_services_never_advertise_a_secret_requirement() {
-        for protocol in [
-            StorageProtocol::Dropbox,
-            StorageProtocol::OneDrive,
-            StorageProtocol::GoogleDrive,
-        ] {
+    fn oauth_options_match_long_term_backend_credentials() {
+        for protocol in [StorageProtocol::Dropbox, StorageProtocol::GoogleDrive] {
             let options = credential_options(protocol).unwrap();
-            assert!(!options.requires_client_secret, "{}", protocol.as_str());
+            assert!(options.requires_client_secret, "{}", protocol.as_str());
             assert!(options.supports_pkce, "{}", protocol.as_str());
+            assert!(!options.builtin_available, "{}", protocol.as_str());
         }
+
+        let one_drive = credential_options(StorageProtocol::OneDrive).unwrap();
+        assert!(!one_drive.requires_client_secret);
+        assert!(one_drive.supports_pkce);
     }
 
     #[test]
     fn secret_mandating_services_can_never_use_builtin_credentials() {
         for protocol in [
+            StorageProtocol::Dropbox,
+            StorageProtocol::GoogleDrive,
             StorageProtocol::Box,
             StorageProtocol::AliyunDrive,
             StorageProtocol::BaiduNetdisk,
@@ -746,5 +770,53 @@ mod tests {
         let page = callback_page(false, "<script>alert(1)</script>");
         assert!(!page.contains("<script>"));
         assert!(page.contains("&lt;script&gt;"));
+    }
+
+    #[tokio::test]
+    async fn callback_server_releases_its_port_after_shutdown() {
+        let (port, receiver, shutdown) = spawn_callback_server("expected-state".to_string())
+            .await
+            .unwrap();
+        let response = reqwest::get(format!(
+            "http://127.0.0.1:{port}/callback?code=abc&state=expected-state"
+        ))
+        .await
+        .unwrap();
+        assert!(response.status().is_success());
+        assert_eq!(receiver.await.unwrap().unwrap(), "abc");
+
+        shutdown.send(()).unwrap();
+        let address = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
+        let closed = tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                if tokio::net::TcpStream::connect(address).await.is_err() {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await;
+        assert!(closed.is_ok(), "OAuth callback port remained open");
+    }
+
+    #[tokio::test]
+    async fn callback_server_releases_its_port_when_shutdown_sender_is_dropped() {
+        let (port, receiver, shutdown) = spawn_callback_server("expected-state".to_string())
+            .await
+            .unwrap();
+        drop(receiver);
+        drop(shutdown);
+
+        let address = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
+        let closed = tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                if tokio::net::TcpStream::connect(address).await.is_err() {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await;
+        assert!(closed.is_ok(), "OAuth callback port remained open");
     }
 }

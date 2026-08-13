@@ -67,6 +67,23 @@ export function canNativeResumeWithAgent(
   return sourceIsBuiltin && targetIsBuiltin ? true : source.agent === targetAgent;
 }
 
+/**
+ * True when the two configurations belong to the same CLI family but read their
+ * transcripts from different homes. `claude --resume` / `codex resume` only look
+ * inside their own home, so the transcript has to be adopted into the target
+ * home first; once it is there, native resume replays the full conversation tree
+ * instead of falling back to a text handoff.
+ */
+export function canAdoptSessionForAgent(
+  task: Task,
+  targetAgent: AgentType,
+  agentOptions?: AgentOption[],
+): boolean {
+  const source = resolveTaskSessionOwner(task, agentOptions);
+  if (source.codexLike !== isCodexLikeAgent(targetAgent, agentOptions)) return false;
+  return source.agent !== targetAgent && !canNativeResumeWithAgent(task, targetAgent, agentOptions);
+}
+
 export function hasTaskContinuationContext(task: Task): boolean {
   return Boolean(
     task.prompt.trim() ||

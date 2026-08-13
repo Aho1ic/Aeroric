@@ -1944,6 +1944,111 @@ fn find_codex_session_file(session_id: &str, project_path: &str) -> Option<PathB
         .max_by_key(|p| session_modified_at(p))
 }
 
+// ── 跨配置会话接管 ───────────────────────────────────────────────────────────
+
+/// 目标 Agent 读取 transcript 的根目录。内建 Agent 用 `~/.claude` / `~/.codex`,
+/// 自定义 Agent 用各自的隔离 home(`~/.aeroric/agent-homes/{id}`)。
+fn session_home_for_agent(agent: &str, is_codex: bool) -> Result<PathBuf, String> {
+    match crate::app_settings::custom_agent_home_dir_name(agent) {
+        Some(_) => crate::app_settings::custom_agent_home(agent),
+        None if is_codex => crate::hooks::codex_home(),
+        None => crate::platform::home_dir()
+            .map(|home| home.join(".claude"))
+            .ok_or_else(|| "Cannot resolve the home directory".to_string()),
+    }
+}
+
+/// 目标 Agent 接管一个会话文件后的落盘路径。
+///
+/// Claude 按 `<home>/projects/<encoded-project>/<session-id>.jsonl` 定位;Codex 按
+/// `<home>/sessions/<yyyy>/<mm>/<dd>/rollout-*.jsonl` 递归搜索,所以沿用源文件的
+/// 相对布局(年月日目录 + 文件名)即可被 `codex resume <id>` 找到。
+fn adopted_session_target_path(
+    source: &Path,
+    agent: &str,
+    is_codex: bool,
+    project_path: &str,
+) -> Result<PathBuf, String> {
+    let home = session_home_for_agent(agent, is_codex)?;
+    let file_name = source
+        .file_name()
+        .ok_or_else(|| "Session path has no file name".to_string())?;
+    if !is_codex {
+        return Ok(home
+            .join("projects")
+            .join(encode_claude_project_path(project_path))
+            .join(file_name));
+    }
+
+    // 尽量保留 `sessions/<yyyy>/<mm>/<dd>/` 这层结构,Codex 的 picker 与索引都按它扫描。
+    let date_parts: Vec<_> = source
+        .parent()
+        .map(|parent| {
+            parent
+                .components()
+                .rev()
+                .take(3)
+                .filter_map(|component| component.as_os_str().to_str().map(str::to_string))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let mut target = home.join("sessions");
+    if date_parts.len() == 3
+        && date_parts
+            .iter()
+            .all(|part| part.len() <= 4 && part.chars().all(|c| c.is_ascii_digit()))
+    {
+        for part in date_parts.iter().rev() {
+            target = target.join(part);
+        }
+    }
+    Ok(target.join(file_name))
+}
+
+/// 把一个会话 transcript 复制进目标 Agent 的 home,让目标配置可以原生 resume。
+///
+/// 两个 Agent 各有隔离 home 时,`claude --resume <id>` / `codex resume <id>` 只会在自己
+/// 的 home 里查找,跨配置切换因此必然落到「把上下文塞进 prompt」的降级路径——那条路径
+/// 依赖终端回放文本,既丢结构化工具调用又容易带入乱码。先接管文件,原生 resume 就能直接
+/// 复用完整对话树。
+///
+/// 目标已存在同名文件时直接复用(重复切换是幂等的),不覆盖已有 transcript。
+#[tauri::command]
+pub async fn adopt_session_for_agent(
+    session_path: String,
+    project_path: String,
+    is_codex: bool,
+    target_agent: String,
+) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        if !crate::app_settings::is_known_agent(&target_agent) {
+            return Err(format!("Unknown agent: {target_agent}"));
+        }
+        let canonical = validate_session_path(&session_path, &project_path, is_codex)?;
+        let target =
+            adopted_session_target_path(&canonical, &target_agent, is_codex, &project_path)?;
+        if let Ok(existing) = target.canonicalize() {
+            if existing == canonical {
+                return Ok(canonical.to_string_lossy().into_owned());
+            }
+        }
+        if target.exists() {
+            return Ok(target.to_string_lossy().into_owned());
+        }
+        if let Some(parent) = target.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|error| format!("Cannot create the target session directory: {error}"))?;
+            crate::storage::ensure_private_dir(parent)?;
+        }
+        std::fs::copy(&canonical, &target)
+            .map_err(|error| format!("Cannot adopt the session transcript: {error}"))?;
+        crate::storage::ensure_private_file_permissions(&target)?;
+        Ok(target.to_string_lossy().into_owned())
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
 // ── /status-based session discovery ──────────────────────────────────────────
 
 /// 从 Claude Code 的 `/status` 输出中提取 Session ID。
@@ -3366,5 +3471,82 @@ mod tests {
             .expect("temp dir export path should validate");
         assert!(canonical.is_absolute());
         assert_eq!(canonical.extension().and_then(|e| e.to_str()), Some("md"));
+    }
+
+    #[test]
+    fn adopted_codex_target_keeps_the_date_directory_layout() {
+        let source = PathBuf::from(
+            "/tmp/src-home/sessions/2026/08/13/rollout-2026-08-13T00-00-00-abc.jsonl",
+        );
+        let target = adopted_session_target_path(&source, "codex", true, "/tmp/project")
+            .expect("codex target path should resolve");
+
+        let tail: Vec<_> = target
+            .components()
+            .rev()
+            .take(5)
+            .filter_map(|c| c.as_os_str().to_str())
+            .collect();
+        assert_eq!(
+            tail,
+            vec![
+                "rollout-2026-08-13T00-00-00-abc.jsonl",
+                "13",
+                "08",
+                "2026",
+                "sessions",
+            ]
+        );
+    }
+
+    #[test]
+    fn adopted_codex_target_drops_non_date_parents() {
+        // 源文件不在 `<yyyy>/<mm>/<dd>/` 布局下时只保留 sessions/ 根，避免搬进无意义的目录。
+        let source = PathBuf::from("/tmp/src-home/sessions/rollout-loose.jsonl");
+        let target = adopted_session_target_path(&source, "codex", true, "/tmp/project")
+            .expect("codex target path should resolve");
+
+        let tail: Vec<_> = target
+            .components()
+            .rev()
+            .take(2)
+            .filter_map(|c| c.as_os_str().to_str())
+            .collect();
+        assert_eq!(tail, vec!["rollout-loose.jsonl", "sessions"]);
+    }
+
+    #[test]
+    fn adopted_claude_target_uses_the_encoded_project_directory() {
+        let source = PathBuf::from("/tmp/src-home/projects/-tmp-project/session-uuid.jsonl");
+        let target = adopted_session_target_path(&source, "claude", false, "/tmp/project")
+            .expect("claude target path should resolve");
+
+        let tail: Vec<_> = target
+            .components()
+            .rev()
+            .take(3)
+            .filter_map(|c| c.as_os_str().to_str())
+            .collect();
+        assert_eq!(
+            tail,
+            vec![
+                "session-uuid.jsonl",
+                encode_claude_project_path("/tmp/project").as_str(),
+                "projects",
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn adopt_session_for_agent_rejects_unknown_agents() {
+        let error = adopt_session_for_agent(
+            "/tmp/whatever.jsonl".into(),
+            "/tmp/project".into(),
+            true,
+            "not-a-real-agent".into(),
+        )
+        .await
+        .expect_err("unknown agents must be rejected before any file access");
+        assert!(error.contains("Unknown agent"), "unexpected error: {error}");
     }
 }

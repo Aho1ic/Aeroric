@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  canAdoptSessionForAgent,
   canNativeResumeWithAgent,
   getTaskSessionFields,
   hasTaskContinuationContext,
@@ -88,5 +89,61 @@ describe("task session ownership", () => {
   it("recognizes prompt-only continuation context for interrupted tasks", () => {
     expect(hasTaskContinuationContext(baseTask)).toBe(true);
     expect(hasTaskContinuationContext({ ...baseTask, prompt: "" })).toBe(false);
+  });
+
+  it("adopts the transcript when two same-family configs use different homes", () => {
+    const options = [
+      {
+        value: "codex-a",
+        label: "Codex A",
+        configFile: "/tmp/codex-a",
+        configLang: "toml" as const,
+        codexLike: true,
+        custom: true,
+      },
+      {
+        value: "codex-b",
+        label: "Codex B",
+        configFile: "/tmp/codex-b",
+        configLang: "toml" as const,
+        codexLike: true,
+        custom: true,
+      },
+      {
+        value: "claude-a",
+        label: "Claude A",
+        configFile: "/tmp/claude-a",
+        configLang: "json" as const,
+        codexLike: false,
+        custom: true,
+      },
+    ];
+    const codexTask: Task = {
+      ...baseTask,
+      agent: "codex-a",
+      codexSessionId: "codex-session",
+      codexSessionPath: "/tmp/rollout.jsonl",
+      sessionAgent: "codex-a",
+      sessionCodexLike: true,
+    };
+
+    // Different home, same CLI family: adopt the file so native resume works.
+    expect(canAdoptSessionForAgent(codexTask, "codex-b", options)).toBe(true);
+    // Same config resumes natively already, nothing to adopt.
+    expect(canAdoptSessionForAgent(codexTask, "codex-a", options)).toBe(false);
+    // Cross-family switches have incompatible transcript formats.
+    expect(canAdoptSessionForAgent(codexTask, "claude-a", options)).toBe(false);
+  });
+
+  it("does not adopt between built-in agents that already share a home", () => {
+    const builtinCodexTask: Task = {
+      ...baseTask,
+      agent: "codex",
+      codexSessionId: "codex-session",
+      sessionAgent: "codex",
+      sessionCodexLike: true,
+    };
+
+    expect(canAdoptSessionForAgent(builtinCodexTask, "claude_gpt55")).toBe(false);
   });
 });

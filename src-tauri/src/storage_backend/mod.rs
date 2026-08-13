@@ -173,6 +173,17 @@ pub fn normalize_storage_path(path: &str) -> String {
     format!("/{}", parts.join("/"))
 }
 
+/// 校验会破坏数据的操作目标。连接根目录只用于浏览，永远不能作为删除目标。
+///
+/// 这个检查放在共享后端层，避免前端回归或直接 IPC 调用绕过 UI 限制。
+pub fn validate_storage_mutation_path(path: &str) -> Result<String, String> {
+    let normalized = normalize_storage_path(path);
+    if normalized == "/" {
+        return Err("Refusing to modify the storage root".to_string());
+    }
+    Ok(normalized)
+}
+
 /// 从路径取末段名称。
 pub fn path_basename(path: &str) -> String {
     let normalized = normalize_storage_path(path);
@@ -306,6 +317,14 @@ mod tests {
         assert_eq!(normalize_storage_path("/../../etc/passwd"), "/etc/passwd");
         assert_eq!(normalize_storage_path("../.."), "/");
         assert_eq!(normalize_storage_path("/a/../.."), "/");
+    }
+
+    #[test]
+    fn mutation_paths_reject_every_root_alias() {
+        for path in ["/", "/.", "/a/..", "../.."] {
+            assert!(validate_storage_mutation_path(path).is_err(), "{path}");
+        }
+        assert_eq!(validate_storage_mutation_path("/a/../b").unwrap(), "/b");
     }
 
     #[test]

@@ -841,7 +841,7 @@ mod tests {
         let mut auth_failed = false;
         let (value, used) = fetch_agent_model_json_from_candidates(
             &client,
-            &[endpoint.clone()],
+            std::slice::from_ref(&endpoint),
             &AgentSetupKind::Codex,
             "sk-test",
             &mut auth_failed,

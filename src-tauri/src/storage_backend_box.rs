@@ -357,7 +357,8 @@ impl StorageBackend for BoxBackend {
     }
 
     fn delete(&self, path: &str) -> Result<(), String> {
-        let absolute = self.absolute(path);
+        let path = crate::storage_backend::validate_storage_mutation_path(path)?;
+        let absolute = self.absolute(&path);
         let result = self.block(async {
             let node = self.resolve(&absolute).await?;
             let url = if node.is_dir {
@@ -384,7 +385,8 @@ impl StorageBackend for BoxBackend {
     }
 
     fn rename(&self, from: &str, to: &str) -> Result<(), String> {
-        let from_absolute = self.absolute(from);
+        let from = crate::storage_backend::validate_storage_mutation_path(from)?;
+        let from_absolute = self.absolute(&from);
         let to_absolute = self.absolute(to);
         let result = self.block(async {
             let node = self.resolve(&from_absolute).await?;

@@ -10,9 +10,12 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use cap_std::ambient_authority;
+use cap_std::fs::Dir;
+
 use crate::storage_backend::{
-    join_storage_path, normalize_storage_path, system_time_to_ms, Capability, StorageBackend,
-    StorageEntry, StorageStat,
+    join_storage_path, normalize_storage_path, system_time_to_ms, validate_storage_mutation_path,
+    Capability, StorageBackend, StorageEntry, StorageStat,
 };
 use crate::storage_conn::{StorageConnection, StorageProtocol};
 
@@ -41,32 +44,27 @@ pub(crate) fn mount_point_for(connection_id: &str) -> Result<PathBuf, String> {
     Ok(mounts_root()?.join(connection_id))
 }
 
-/// 校验一个绝对路径确实落在挂载点内部。
-///
-/// 这是本模块的安全核心:先归一化(消掉 `.` 与 `..`),再确认前缀。
-/// 归一化在字符串层完成,不依赖文件存在,因此对尚未创建的目标路径同样有效。
-pub(crate) fn resolve_within_mount(mount_point: &Path, path: &str) -> Result<PathBuf, String> {
+/// 把存储绝对路径转换为挂载目录句柄下的相对路径。
+fn relative_mount_path(path: &str) -> PathBuf {
     let normalized = normalize_storage_path(path);
     let relative = normalized.trim_start_matches('/');
-    let candidate = if relative.is_empty() {
-        mount_point.to_path_buf()
+    if relative.is_empty() {
+        PathBuf::from(".")
     } else {
-        mount_point.join(relative)
-    };
-    // normalize_storage_path 已消除 `..`,这里再核对一次前缀,双重保险。
-    if !candidate.starts_with(mount_point) {
-        return Err("Path escapes the mount point".to_string());
+        PathBuf::from(relative)
     }
-    for component in candidate.components() {
-        if matches!(component, std::path::Component::ParentDir) {
-            return Err("Path escapes the mount point".to_string());
-        }
-    }
-    Ok(candidate)
 }
 
 pub struct MountBackend {
-    mount_point: PathBuf,
+    root: Dir,
+}
+
+impl MountBackend {
+    fn open(mount_point: &Path) -> Result<Self, String> {
+        let root = Dir::open_ambient_dir(mount_point, ambient_authority())
+            .map_err(|error| format!("Cannot open mount point: {error}"))?;
+        Ok(Self { root })
+    }
 }
 
 impl StorageBackend for MountBackend {
@@ -76,9 +74,9 @@ impl StorageBackend for MountBackend {
 
     fn read_dir(&self, path: &str) -> Result<Vec<StorageEntry>, String> {
         let parent = normalize_storage_path(path);
-        let dir = resolve_within_mount(&self.mount_point, &parent)?;
+        let dir = relative_mount_path(&parent);
         let mut entries = Vec::new();
-        for item in std::fs::read_dir(&dir).map_err(|e| e.to_string())? {
+        for item in self.root.read_dir(&dir).map_err(|e| e.to_string())? {
             let item = item.map_err(|e| e.to_string())?;
             let name = item.file_name().to_string_lossy().to_string();
             let metadata = match item.metadata() {
@@ -92,80 +90,103 @@ impl StorageBackend for MountBackend {
                 name,
                 is_dir,
                 size: if is_dir { None } else { Some(metadata.len()) },
-                modified_at_ms: metadata.modified().ok().and_then(system_time_to_ms),
+                modified_at_ms: metadata
+                    .modified()
+                    .ok()
+                    .and_then(|time| system_time_to_ms(time.into_std())),
             });
         }
         Ok(entries)
     }
 
     fn read(&self, path: &str) -> Result<Vec<u8>, String> {
-        let target = resolve_within_mount(&self.mount_point, path)?;
-        std::fs::read(target).map_err(|e| e.to_string())
+        self.root
+            .read(relative_mount_path(path))
+            .map_err(|e| e.to_string())
     }
 
     fn write(&self, path: &str, bytes: &[u8]) -> Result<(), String> {
-        let target = resolve_within_mount(&self.mount_point, path)?;
-        std::fs::write(target, bytes).map_err(|e| e.to_string())
+        self.root
+            .write(relative_mount_path(path), bytes)
+            .map_err(|e| e.to_string())
     }
 
     fn create_dir(&self, path: &str) -> Result<(), String> {
-        let target = resolve_within_mount(&self.mount_point, path)?;
-        std::fs::create_dir_all(target).map_err(|e| e.to_string())
+        self.root
+            .create_dir_all(relative_mount_path(path))
+            .map_err(|e| e.to_string())
     }
 
     fn delete(&self, path: &str) -> Result<(), String> {
-        let target = resolve_within_mount(&self.mount_point, path)?;
-        if target == self.mount_point {
-            return Err("Refusing to delete the mount point".to_string());
-        }
-        let metadata = std::fs::symlink_metadata(&target).map_err(|e| e.to_string())?;
+        let path = validate_storage_mutation_path(path)?;
+        let target = relative_mount_path(&path);
+        let metadata = self
+            .root
+            .symlink_metadata(&target)
+            .map_err(|e| e.to_string())?;
         if metadata.is_dir() {
-            std::fs::remove_dir_all(target).map_err(|e| e.to_string())
+            self.root.remove_dir_all(target).map_err(|e| e.to_string())
         } else {
-            std::fs::remove_file(target).map_err(|e| e.to_string())
+            self.root.remove_file(target).map_err(|e| e.to_string())
         }
     }
 
     fn rename(&self, from: &str, to: &str) -> Result<(), String> {
-        let source = resolve_within_mount(&self.mount_point, from)?;
-        let destination = resolve_within_mount(&self.mount_point, to)?;
-        if destination.exists() {
+        let from = validate_storage_mutation_path(from)?;
+        let source = relative_mount_path(&from);
+        let destination = relative_mount_path(to);
+        if self.root.symlink_metadata(&destination).is_ok() {
             return Err("A file or folder with that name already exists".to_string());
         }
-        std::fs::rename(source, destination).map_err(|e| e.to_string())
+        self.root
+            .rename(source, &self.root, destination)
+            .map_err(|e| e.to_string())
     }
 
     fn copy(&self, from: &str, to: &str) -> Result<(), String> {
-        let source = resolve_within_mount(&self.mount_point, from)?;
-        let destination = resolve_within_mount(&self.mount_point, to)?;
-        copy_recursive(&source, &destination)
+        copy_recursive(
+            &self.root,
+            &relative_mount_path(from),
+            &relative_mount_path(to),
+        )
     }
 
     fn stat(&self, path: &str) -> Result<StorageStat, String> {
-        let target = resolve_within_mount(&self.mount_point, path)?;
-        let metadata = std::fs::metadata(target).map_err(|e| e.to_string())?;
+        let metadata = self
+            .root
+            .metadata(relative_mount_path(path))
+            .map_err(|e| e.to_string())?;
         let is_dir = metadata.is_dir();
         Ok(StorageStat {
             is_dir,
             size: if is_dir { None } else { Some(metadata.len()) },
-            modified_at_ms: metadata.modified().ok().and_then(system_time_to_ms),
+            modified_at_ms: metadata
+                .modified()
+                .ok()
+                .and_then(|time| system_time_to_ms(time.into_std())),
         })
     }
 }
 
-fn copy_recursive(source: &Path, destination: &Path) -> Result<(), String> {
-    let metadata = std::fs::symlink_metadata(source).map_err(|e| e.to_string())?;
+fn copy_recursive(root: &Dir, source: &Path, destination: &Path) -> Result<(), String> {
+    let metadata = root.symlink_metadata(source).map_err(|e| e.to_string())?;
     if !metadata.is_dir() {
         if let Some(parent) = destination.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+            root.create_dir_all(parent).map_err(|e| e.to_string())?;
         }
-        std::fs::copy(source, destination).map_err(|e| e.to_string())?;
+        root.copy(source, root, destination)
+            .map_err(|e| e.to_string())?;
         return Ok(());
     }
-    std::fs::create_dir_all(destination).map_err(|e| e.to_string())?;
-    for entry in std::fs::read_dir(source).map_err(|e| e.to_string())? {
+    root.create_dir_all(destination)
+        .map_err(|e| e.to_string())?;
+    for entry in root.read_dir(source).map_err(|e| e.to_string())? {
         let entry = entry.map_err(|e| e.to_string())?;
-        copy_recursive(&entry.path(), &destination.join(entry.file_name()))?;
+        copy_recursive(
+            root,
+            &source.join(entry.file_name()),
+            &destination.join(entry.file_name()),
+        )?;
     }
     Ok(())
 }
@@ -336,7 +357,7 @@ pub(crate) fn unmount(connection_id: &str) -> Result<(), String> {
 
 pub fn build(connection: &StorageConnection) -> Result<Box<dyn StorageBackend>, String> {
     let mount_point = ensure_mounted(connection)?;
-    Ok(Box::new(MountBackend { mount_point }))
+    Ok(Box::new(MountBackend::open(&mount_point)?))
 }
 
 /// AFP 在新版 macOS 上已废弃,UI 需要提示用户。
@@ -348,6 +369,19 @@ pub fn is_deprecated(protocol: StorageProtocol) -> bool {
 mod tests {
     use super::*;
     use std::collections::BTreeMap;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    fn temp_dir(label: &str) -> PathBuf {
+        let path = std::env::temp_dir().join(format!(
+            "aeroric-mount-{label}-{}-{}",
+            std::process::id(),
+            TEMP_COUNTER.fetch_add(1, Ordering::Relaxed)
+        ));
+        std::fs::create_dir_all(&path).unwrap();
+        path
+    }
 
     fn connection(protocol: StorageProtocol) -> StorageConnection {
         StorageConnection {
@@ -363,25 +397,69 @@ mod tests {
     }
 
     #[test]
-    fn resolve_within_mount_keeps_paths_inside() {
-        let mount = PathBuf::from("/tmp/aeroric-mount");
+    fn storage_paths_are_relative_to_the_open_mount_handle() {
+        assert_eq!(relative_mount_path("/a/b.txt"), PathBuf::from("a/b.txt"));
+        assert_eq!(relative_mount_path("/"), PathBuf::from("."));
         assert_eq!(
-            resolve_within_mount(&mount, "/a/b.txt").unwrap(),
-            mount.join("a/b.txt")
+            relative_mount_path("/../../../etc/passwd"),
+            PathBuf::from("etc/passwd")
         );
-        assert_eq!(resolve_within_mount(&mount, "/").unwrap(), mount);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn mount_backend_rejects_symlink_escape_for_reads_writes_and_copies() {
+        use std::os::unix::fs::symlink;
+
+        let mount = temp_dir("symlink-mount");
+        let outside = temp_dir("symlink-outside");
+        std::fs::write(outside.join("secret.txt"), b"secret").unwrap();
+        symlink(&outside, mount.join("escape")).unwrap();
+        symlink(outside.join("secret.txt"), mount.join("file-link")).unwrap();
+        std::fs::create_dir(mount.join("container")).unwrap();
+        symlink(&outside, mount.join("container/escape")).unwrap();
+        let backend = MountBackend::open(&mount).unwrap();
+
+        assert!(backend.read("/escape/secret.txt").is_err());
+        assert!(backend.read_dir("/escape").is_err());
+        assert!(backend.stat("/escape/secret.txt").is_err());
+        assert!(backend.write("/escape/new.txt", b"blocked").is_err());
+        assert!(backend.create_dir("/escape/new-dir").is_err());
+        assert!(backend.copy("/escape/secret.txt", "/copy.txt").is_err());
+        assert!(backend.delete("/escape/secret.txt").is_err());
+        assert!(backend
+            .rename("/escape/secret.txt", "/renamed.txt")
+            .is_err());
+        assert!(backend.read("/file-link").is_err());
+        assert!(backend.write("/file-link", b"blocked").is_err());
+        assert!(backend.stat("/file-link").is_err());
+        assert!(backend.copy("/file-link", "/copied-link").is_err());
+        backend.delete("/container").unwrap();
+        assert!(!outside.join("new.txt").exists());
+        assert!(!outside.join("new-dir").exists());
+        assert_eq!(
+            std::fs::read(outside.join("secret.txt")).unwrap(),
+            b"secret"
+        );
+        assert!(outside.join("secret.txt").exists());
+        assert!(!mount.join("copy.txt").exists());
+        assert!(!mount.join("copied-link").exists());
+        assert!(!mount.join("renamed.txt").exists());
+        assert!(!mount.join("container").exists());
+
+        drop(backend);
+        std::fs::remove_dir_all(&mount).unwrap();
+        std::fs::remove_dir_all(&outside).unwrap();
     }
 
     #[test]
-    fn resolve_within_mount_blocks_traversal() {
-        let mount = PathBuf::from("/tmp/aeroric-mount");
-        // 归一化后逃逸尝试被夹回挂载点内,绝不会指向 /etc/passwd。
-        let resolved = resolve_within_mount(&mount, "/../../../etc/passwd").unwrap();
-        assert!(resolved.starts_with(&mount));
-        assert_eq!(resolved, mount.join("etc/passwd"));
-
-        let resolved = resolve_within_mount(&mount, "/a/../../..").unwrap();
-        assert_eq!(resolved, mount);
+    fn mount_backend_refuses_root_deletion_and_rename() {
+        let mount = temp_dir("root-mutation");
+        let backend = MountBackend::open(&mount).unwrap();
+        assert!(backend.delete("/").is_err());
+        assert!(backend.rename("/", "/renamed").is_err());
+        drop(backend);
+        std::fs::remove_dir_all(&mount).unwrap();
     }
 
     #[test]

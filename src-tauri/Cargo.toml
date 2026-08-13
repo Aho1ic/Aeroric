@@ -1,6 +1,6 @@
 [package]
 name = "aeroric"
-version = "1.4.2"
+version = "1.4.3"
 description = "Desktop task manager for AI coding agents"
 authors = ["Aeroric"]
 edition = "2021"
@@ -38,6 +38,7 @@ base64 = "0.22"
 notify = "6"
 toml = "0.8"
 libc = "0.2"
+cap-std = "4"
 if-addrs = "0.15"
 parking_lot = "0.12"
 # query/form/multipart:storage 后端(Box、百度网盘、OAuth token 交换)需要

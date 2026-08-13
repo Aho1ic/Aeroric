@@ -106,6 +106,7 @@ import {
   resolveThemeVariant,
 } from "./appThemeState";
 import {
+  canAdoptSessionForAgent,
   canNativeResumeWithAgent,
   getTaskSessionFields,
   resolveTaskSessionOwner,
@@ -144,8 +145,13 @@ interface ResolvedTaskSession {
   sessionPath?: string;
 }
 
-const MAX_HANDOFF_TERMINAL_BYTES = 8 * 1024 * 1024; // 8 MiB
-const MAX_HANDOFF_TRANSCRIPT_BYTES = 256 * 1024; // 256 KiB
+// The structured transcript is the reliable context source: it comes from the
+// session JSONL and keeps roles, tool calls and results intact. Sanitized
+// terminal history is only a fallback for what the transcript cannot show, so it
+// gets a much smaller budget — a multi-megabyte terminal dump would otherwise
+// bury the conversation and blow past the next agent's context window.
+const MAX_HANDOFF_TERMINAL_BYTES = 64 * 1024; // 64 KiB
+const MAX_HANDOFF_TRANSCRIPT_BYTES = 512 * 1024; // 512 KiB
 
 function formatSessionHandoff(
   task: Task,
@@ -1597,13 +1603,45 @@ function App() {
     sourceTask = applyResolvedTaskSession(sourceTask, sourceOwner, sourceSession);
     sourceOwner = resolveTaskSessionOwner(sourceTask, agentOptions);
 
-    const canNativeResume =
-      canNativeResumeWithAgent(sourceTask, values.agent, agentOptions) &&
-      Boolean(sourceSession.sessionId);
     const sourceProjectPath = sourceTask.worktreePath ?? project.path;
+    let resumeSessionId = canNativeResumeWithAgent(sourceTask, values.agent, agentOptions)
+      ? sourceSession.sessionId
+      : undefined;
+
+    // Two different configurations of the same CLI keep separate homes
+    // (CODEX_HOME / CLAUDE_CONFIG_DIR), and `codex resume` / `claude --resume`
+    // only read their own home. Copying the transcript into the target home lets
+    // the new configuration replay the real conversation tree instead of being
+    // handed a flattened text summary.
+    if (
+      !resumeSessionId &&
+      projectLocation.kind === "local" &&
+      sourceSession.sessionId &&
+      sourceSession.sessionPath &&
+      canAdoptSessionForAgent(sourceTask, values.agent, agentOptions)
+    ) {
+      try {
+        const adoptedPath = await invoke<string>("adopt_session_for_agent", {
+          sessionPath: sourceSession.sessionPath,
+          projectPath: sourceProjectPath,
+          isCodex: sourceOwner.codexLike,
+          targetAgent: values.agent,
+        });
+        resumeSessionId = sourceSession.sessionId;
+        sourceTask = applyResolvedTaskSession(
+          sourceTask,
+          { agent: values.agent, codexLike: sourceOwner.codexLike },
+          { sessionId: sourceSession.sessionId, sessionPath: adoptedPath },
+        );
+      } catch (error) {
+        // Adoption is an optimization; fall back to the text handoff below.
+        console.warn("adopt_session_for_agent during agent switch failed", error);
+      }
+    }
+
     let handoffPrompt: string | undefined;
 
-    if (!canNativeResume) {
+    if (!resumeSessionId) {
       let messages: SessionHandoffMessage[] = [];
       if (sourceSession.sessionPath && projectLocation.kind === "local") {
         try {
@@ -1652,8 +1690,8 @@ function App() {
     await flushProjectTasks(task.projectId);
 
     pendingTaskStartsRef.current[taskId] = () => {
-      if (canNativeResume && sourceSession.sessionId) {
-        invokeResumeTask(nextTask, project, sourceSession.sessionId);
+      if (resumeSessionId) {
+        invokeResumeTask(nextTask, project, resumeSessionId);
         return;
       }
 
