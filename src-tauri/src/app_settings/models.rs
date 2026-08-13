@@ -89,17 +89,144 @@ pub(super) fn validate_model_base_url(
     Ok(url)
 }
 
-pub(super) fn model_endpoint(base_url: &url::Url) -> String {
-    let mut endpoint = base_url.clone();
-    let mut path = endpoint.path().trim_end_matches('/').to_string();
-    if !path.ends_with("/v1") {
-        path.push_str("/v1");
+/// 已知的「Anthropic / Coding Plan 兼容子路径」后缀,按长度降序排列以保证最长后缀优先命中
+/// (否则 `/anthropic` 会把 `/api/anthropic` 提前截断,剥出残缺的 `.../api` 根)。
+///
+/// 这类 base URL 只承载对话协议,模型目录通常挂在剥离后缀的 API 根上:
+/// `https://token-plan-cn.xiaomimimo.com/anthropic` 的模型列表在
+/// `https://token-plan-cn.xiaomimimo.com/v1/models`,拼成 `/anthropic/v1/models` 会 404。
+const KNOWN_COMPAT_SUFFIXES: &[&str] = &[
+    "/api/claudecode",
+    "/api/anthropic",
+    "/apps/anthropic",
+    "/api/coding",
+    "/claudecode",
+    "/anthropic",
+    "/step_plan",
+    "/coding",
+    "/claude",
+];
+
+/// 单次探测请求超时。候选端点会串行尝试,单请求不能占满整体预算。
+const MODEL_DETECT_REQUEST_TIMEOUT: Duration = Duration::from_secs(8);
+
+/// 全部候选探测的总时间预算。超出后停止继续尝试并回报已知错误,
+/// 避免「检测模型」按钮在慢上游上长时间无响应。
+const MODEL_DETECT_TOTAL_BUDGET: Duration = Duration::from_secs(30);
+
+/// 错误详情中保留的响应体长度上限,避免把整页 HTML 错误页塞进错误串。
+const ERROR_BODY_MAX_CHARS: usize = 200;
+
+/// 模型探测使用的 CLI User-Agent。
+///
+/// 不少聚合网关(如 agentrouter.org)按 User-Agent 名称前缀做客户端白名单:
+/// 缺省 UA 或通用 UA 会先被 401 `unauthorized client detected` 拦掉,根本走不到鉴权。
+/// 白名单只看名称前缀、不校验版本号,所以用静态值即可,不会随 CLI 升级失效。
+const CLAUDE_CLI_DETECT_USER_AGENT: &str = "claude-cli/2.1.161 (external, cli)";
+const CODEX_CLI_DETECT_USER_AGENT: &str = "codex_cli_rs/0.77.0";
+
+/// 探测(含余额查询)客户端的默认 User-Agent。
+pub(super) fn default_model_detect_user_agent() -> &'static str {
+    CLAUDE_CLI_DETECT_USER_AGENT
+}
+
+/// base URL 是否以 OpenAI 风格版本段 `/v{N}` 结尾(`/v1`、智谱 `.../paas/v4`)。
+/// 这类 URL 版本号已在路径里,模型端点是 `{base}/models`,再补 `/v1` 会 404。
+fn ends_with_version_segment(url: &str) -> bool {
+    url.rsplit('/')
+        .next()
+        .unwrap_or("")
+        .strip_prefix('v')
+        .is_some_and(|digits| !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()))
+}
+
+/// 若 base URL 以任一 [`KNOWN_COMPAT_SUFFIXES`] 结尾,返回剥离后的剩余部分。
+fn strip_compat_suffix(base_url: &str) -> Option<&str> {
+    KNOWN_COMPAT_SUFFIXES
+        .iter()
+        .find(|suffix| base_url.ends_with(**suffix))
+        .map(|suffix| &base_url[..base_url.len() - suffix.len()])
+}
+
+/// 剥离尾部版本段 `/v{N}`,用于推导 API 根。
+fn strip_version_segment(base_url: &str) -> Option<&str> {
+    ends_with_version_segment(base_url)
+        .then(|| base_url.rfind('/').map(|index| &base_url[..index]))
+        .flatten()
+}
+
+/// 剥离后的串是否仍是「scheme://host」及更深路径(防止把 host 也吃掉)。
+fn keeps_origin(candidate: &str) -> bool {
+    candidate
+        .find("://")
+        .is_some_and(|index| candidate.len() > index + 3)
+}
+
+fn base_without_query(base_url: &url::Url) -> String {
+    let mut url = base_url.clone();
+    url.set_query(None);
+    url.set_fragment(None);
+    url.to_string().trim_end_matches('/').to_string()
+}
+
+fn push_unique(out: &mut Vec<String>, candidate: String) {
+    if !out.iter().any(|existing| existing == &candidate) {
+        out.push(candidate);
     }
-    path.push_str("/models");
-    endpoint.set_path(&path);
-    endpoint.set_query(None);
-    endpoint.set_fragment(None);
-    endpoint.to_string()
+}
+
+/// 构造模型列表端点候选,按「最可能正确」排序:
+///
+/// 1. base 以版本段结尾 → `{base}/models`;版本段非 `/v1` 时再兜底 `{base}/v1/models`
+/// 2. 否则 → `{base}/v1/models`
+/// 3. base 命中兼容子路径 → 剥离后追加 `{root}/v1/models`、`{root}/models`
+///
+/// 所有候选与 base URL 同源,只改 path,因此 [`ModelDetectionPolicy::PairedDevice`]
+/// 的 DNS 固定(`resolve_to_addrs`)对候选同样生效。
+pub(super) fn model_endpoint_candidates(base_url: &url::Url) -> Vec<String> {
+    let root = base_without_query(base_url);
+    let mut candidates = Vec::new();
+
+    if ends_with_version_segment(&root) {
+        push_unique(&mut candidates, format!("{root}/models"));
+        if !root.ends_with("/v1") {
+            push_unique(&mut candidates, format!("{root}/v1/models"));
+        }
+    } else {
+        push_unique(&mut candidates, format!("{root}/v1/models"));
+    }
+
+    if let Some(stripped) = strip_compat_suffix(&root) {
+        let stripped = stripped.trim_end_matches('/');
+        if keeps_origin(stripped) {
+            push_unique(&mut candidates, format!("{stripped}/v1/models"));
+            push_unique(&mut candidates, format!("{stripped}/models"));
+        }
+    }
+
+    candidates
+}
+
+/// New API / One API 系网关的公开模型目录(`/api/pricing`)候选。
+///
+/// 仅在全部带鉴权的 `/models` 候选都「端点不存在」时作为兜底 —— 一旦出现过鉴权失败,
+/// 就不能用公开目录顶替,否则会把「API Key 无效」掩盖成一份查不到权限的模型列表。
+pub(super) fn public_model_catalog_candidates(base_url: &url::Url) -> Vec<String> {
+    let root = base_without_query(base_url);
+    let api_root = strip_compat_suffix(&root)
+        .or_else(|| strip_version_segment(&root))
+        .map(|stripped| stripped.trim_end_matches('/'))
+        .filter(|stripped| keeps_origin(stripped))
+        .unwrap_or(root.as_str());
+
+    let mut candidates = vec![format!("{api_root}/api/pricing")];
+    // 再补一条「站点根」候选。用 url 改 path 而非拼字符串,IPv6 字面量 host 才能保留方括号。
+    let mut origin = base_url.clone();
+    origin.set_query(None);
+    origin.set_fragment(None);
+    origin.set_path("/api/pricing");
+    push_unique(&mut candidates, origin.to_string());
+    candidates
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -141,36 +268,231 @@ pub(super) fn apply_model_auth(
     }
 }
 
-pub(super) async fn fetch_agent_model_json(
+/// 单个端点的探测结果,决定是否继续尝试下一个候选。
+#[derive(Debug)]
+enum EndpointOutcome {
+    /// 成功拿到 JSON。
+    Found(serde_json::Value),
+    /// 端点不存在(404/405)或响应不是模型目录 —— 换下一个候选。
+    Missing(String),
+    /// 鉴权/其它错误 —— 换端点也不会好转,但仍记录以便所有候选耗尽后回报。
+    Failed(String),
+}
+
+/// User-Agent 尝试顺序:先按 agent 类型用最贴近真实 CLI 的 UA(网关白名单通常按名称
+/// 前缀匹配),再退回另一种 CLI UA。两个都试完仍失败才认为不是 UA 问题。
+fn model_user_agent_attempts(kind: &AgentSetupKind) -> [&'static str; 2] {
+    match kind {
+        AgentSetupKind::Codex => [CODEX_CLI_DETECT_USER_AGENT, CLAUDE_CLI_DETECT_USER_AGENT],
+        AgentSetupKind::ClaudeCode => [CLAUDE_CLI_DETECT_USER_AGENT, CODEX_CLI_DETECT_USER_AGENT],
+    }
+}
+
+/// 网关的「客户端未授权」拦截:UA 不在白名单时先于鉴权返回 401/403。
+/// 命中即说明值得换 UA 重试,而不是判定 API Key 无效。
+fn looks_like_client_rejection(body: &str) -> bool {
+    let body = body.to_ascii_lowercase();
+    body.contains("unauthorized client")
+        || body.contains("unauthorized_client")
+        || body.contains("client not allowed")
+        || body.contains("forbidden client")
+        || body.contains("invalid client")
+}
+
+fn truncate_body(body: &str) -> String {
+    let body = body.trim();
+    if body.chars().count() <= ERROR_BODY_MAX_CHARS {
+        return body.to_string();
+    }
+    let mut out: String = body.chars().take(ERROR_BODY_MAX_CHARS).collect();
+    out.push('…');
+    out
+}
+
+fn describe_http_error(status: reqwest::StatusCode, body: &str) -> String {
+    let body = truncate_body(body);
+    if body.is_empty() {
+        format!("HTTP {status}")
+    } else {
+        format!("HTTP {status}: {body}")
+    }
+}
+
+/// 响应是否确实是模型目录。有些网关对未知路径返回 200 + HTML 首页或
+/// `{"success":false}`,不校验就会把「探测成功但零模型」当作结果。
+fn contains_model_catalog(value: &serde_json::Value) -> bool {
+    !parse_model_ids(value.clone()).is_empty()
+}
+
+async fn probe_model_endpoint(
     client: &reqwest::Client,
     endpoint: &str,
     kind: &AgentSetupKind,
     api_key: &str,
-) -> Result<serde_json::Value, String> {
-    let attempts = model_auth_attempts(kind);
-    for (index, auth) in attempts.into_iter().enumerate() {
-        let response = apply_model_auth(client.get(endpoint), api_key, auth)
-            .send()
-            .await
-            .map_err(|e| e.to_string())?;
-        let status = response.status();
-        if status.is_success() {
-            return response
-                .json::<serde_json::Value>()
-                .await
-                .map_err(|e| e.to_string());
-        }
+) -> EndpointOutcome {
+    let auth_attempts = model_auth_attempts(kind);
+    let user_agents = model_user_agent_attempts(kind);
+    let mut last_failure: Option<String> = None;
 
-        let can_retry_auth = matches!(
-            status,
-            reqwest::StatusCode::UNAUTHORIZED | reqwest::StatusCode::FORBIDDEN
-        ) && index + 1 < attempts.len();
-        if !can_retry_auth {
-            return Err(format!("Model detection failed: HTTP {}", status));
+    for (auth_index, auth) in auth_attempts.into_iter().enumerate() {
+        for (ua_index, user_agent) in user_agents.into_iter().enumerate() {
+            let request = apply_model_auth(client.get(endpoint), api_key, auth)
+                .header(reqwest::header::USER_AGENT, user_agent)
+                .header(reqwest::header::ACCEPT, "application/json")
+                .timeout(MODEL_DETECT_REQUEST_TIMEOUT);
+            let response = match request.send().await {
+                Ok(response) => response,
+                Err(error) => {
+                    // 传输层错误(DNS/TLS/超时)与鉴权头和 UA 无关,换组合没有意义。
+                    return EndpointOutcome::Failed(error.to_string());
+                }
+            };
+
+            let status = response.status();
+            if status.is_success() {
+                let body = response.text().await.unwrap_or_default();
+                // 2xx 说明鉴权头与 UA 都已被接受,换组合重试没有意义:
+                // 响应不是模型目录时直接判定该候选路径不对,交给下一个候选。
+                return match serde_json::from_str::<serde_json::Value>(&body) {
+                    Ok(value) if contains_model_catalog(&value) => EndpointOutcome::Found(value),
+                    Ok(_) => EndpointOutcome::Missing(format!(
+                        "HTTP {status}: response has no model list"
+                    )),
+                    Err(error) => {
+                        EndpointOutcome::Missing(format!("HTTP {status}: invalid JSON ({error})"))
+                    }
+                };
+            }
+
+            let body = response.text().await.unwrap_or_default();
+            if matches!(
+                status,
+                reqwest::StatusCode::NOT_FOUND | reqwest::StatusCode::METHOD_NOT_ALLOWED
+            ) {
+                // 端点不存在与鉴权头/UA 无关,直接判定该候选不可用。
+                return EndpointOutcome::Missing(describe_http_error(status, &body));
+            }
+
+            let detail = describe_http_error(status, &body);
+            let auth_rejected = matches!(
+                status,
+                reqwest::StatusCode::UNAUTHORIZED | reqwest::StatusCode::FORBIDDEN
+            );
+            // 命中「客户端未授权」时优先换 UA;否则 UA 相同无需重复尝试,直接换鉴权头。
+            let retry_user_agent = auth_rejected
+                && looks_like_client_rejection(&detail)
+                && ua_index + 1 < user_agents.len();
+            last_failure = Some(detail);
+            if retry_user_agent {
+                continue;
+            }
+            if auth_rejected && auth_index + 1 < auth_attempts.len() {
+                break;
+            }
+            return EndpointOutcome::Failed(last_failure.take().unwrap_or_default());
         }
     }
 
-    Err("Model detection failed".to_string())
+    // 走到这里说明鉴权头/UA 组合全部耗尽,最后一次失败详情最能反映真实原因。
+    EndpointOutcome::Failed(last_failure.unwrap_or_else(|| "Model detection failed".to_string()))
+}
+
+/// 按候选顺序探测模型目录端点。
+///
+/// 返回 `Ok((json, endpoint))`;`auth_failed` 用于告知调用方是否出现过鉴权失败 ——
+/// 出现过就不能再用公开目录兜底,以免把「API Key 无效」显示成一份模型列表。
+pub(super) async fn fetch_agent_model_json_from_candidates(
+    client: &reqwest::Client,
+    candidates: &[String],
+    kind: &AgentSetupKind,
+    api_key: &str,
+    auth_failed: &mut bool,
+) -> Result<(serde_json::Value, String), String> {
+    let deadline = std::time::Instant::now() + MODEL_DETECT_TOTAL_BUDGET;
+    let mut errors: Vec<String> = Vec::new();
+
+    for endpoint in candidates {
+        if std::time::Instant::now() >= deadline {
+            errors.push("timed out before all endpoints were tried".to_string());
+            break;
+        }
+        match probe_model_endpoint(client, endpoint, kind, api_key).await {
+            EndpointOutcome::Found(value) => return Ok((value, endpoint.clone())),
+            EndpointOutcome::Missing(detail) => {
+                errors.push(format!("{endpoint} -> {detail}"));
+            }
+            EndpointOutcome::Failed(detail) => {
+                *auth_failed = true;
+                errors.push(format!("{endpoint} -> {detail}"));
+            }
+        }
+    }
+
+    Err(format!(
+        "Model detection failed: {}",
+        if errors.is_empty() {
+            "no endpoint candidates".to_string()
+        } else {
+            errors.join("; ")
+        }
+    ))
+}
+
+/// 从 New API 系公开目录(`/api/pricing`)读取模型名。
+///
+/// 该端点无需鉴权,字段是 `model_name` 而非 `id`,因此单独解析。
+pub(super) async fn fetch_public_model_catalog(
+    client: &reqwest::Client,
+    candidates: &[String],
+    kind: &AgentSetupKind,
+) -> Option<Vec<String>> {
+    let user_agent = model_user_agent_attempts(kind)[0];
+    for endpoint in candidates {
+        let response = client
+            .get(endpoint)
+            .header(reqwest::header::USER_AGENT, user_agent)
+            .header(reqwest::header::ACCEPT, "application/json")
+            .timeout(MODEL_DETECT_REQUEST_TIMEOUT)
+            .send()
+            .await
+            .ok()?;
+        if !response.status().is_success() {
+            continue;
+        }
+        let Ok(value) = response.json::<serde_json::Value>().await else {
+            continue;
+        };
+        let models = parse_public_catalog_model_ids(&value);
+        if !models.is_empty() {
+            return Some(models);
+        }
+    }
+    None
+}
+
+/// 解析 `/api/pricing` 形态的公开目录:`{"data":[{"model_name":"..."}]}`。
+pub(super) fn parse_public_catalog_model_ids(value: &serde_json::Value) -> Vec<String> {
+    let items = value
+        .get("data")
+        .and_then(serde_json::Value::as_array)
+        .or_else(|| value.as_array());
+    let Some(items) = items else {
+        return Vec::new();
+    };
+
+    let mut out = Vec::new();
+    for item in items {
+        if let Some(name) = item
+            .get("model_name")
+            .or_else(|| item.get("model"))
+            .and_then(serde_json::Value::as_str)
+        {
+            push_model_id(&mut out, name);
+        }
+    }
+    out.sort_by_key(|model| model.to_ascii_lowercase());
+    out.dedup_by(|left, right| left.eq_ignore_ascii_case(right));
+    out
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -283,6 +605,11 @@ pub(super) async fn get_balance_json(
     let response = client
         .get(endpoint)
         .bearer_auth(api_key)
+        // 余额端点与模型端点常共用同一 UA 白名单,缺省 UA 会被 401 拦掉。
+        .header(
+            reqwest::header::USER_AGENT,
+            default_model_detect_user_agent(),
+        )
         .timeout(Duration::from_secs(5))
         .send()
         .await
@@ -448,62 +775,370 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn retries_unauthorized_model_requests_with_api_key_headers() {
+    /// 极小的测试 HTTP 服务:按到达顺序回放 `responses`,并记录每次请求头,
+    /// 用于断言候选顺序、UA 与鉴权头重试行为。
+    fn serve_responses(
+        responses: Vec<(u16, &'static str)>,
+    ) -> (String, std::thread::JoinHandle<Vec<String>>) {
         use std::io::{Read, Write};
         use std::net::TcpListener;
-        use std::thread;
 
         let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
-        let endpoint = format!("http://{}/v1/models", listener.local_addr().unwrap());
-        let server = thread::spawn(move || {
-            for attempt in 0..2 {
+        let origin = format!("http://{}", listener.local_addr().unwrap());
+        let handle = std::thread::spawn(move || {
+            let mut seen = Vec::new();
+            for (status, body) in responses {
                 let (mut stream, _) = listener.accept().unwrap();
                 stream
                     .set_read_timeout(Some(Duration::from_secs(5)))
                     .unwrap();
                 let mut request = Vec::new();
-                let mut chunk = [0_u8; 2048];
+                let mut chunk = [0_u8; 4096];
                 while !request.windows(4).any(|window| window == b"\r\n\r\n") {
-                    let count = stream.read(&mut chunk).unwrap();
-                    if count == 0 {
-                        break;
+                    match stream.read(&mut chunk) {
+                        Ok(0) | Err(_) => break,
+                        Ok(count) => request.extend_from_slice(&chunk[..count]),
                     }
-                    request.extend_from_slice(&chunk[..count]);
                 }
-                let request = String::from_utf8_lossy(&request).to_ascii_lowercase();
-
-                if attempt == 0 {
-                    assert!(request.contains("authorization: bearer sk-test"));
-                    assert!(!request.contains("x-api-key:"));
-                    stream
-                        .write_all(
-                            b"HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
-                        )
-                        .unwrap();
-                } else {
-                    assert!(request.contains("authorization: bearer sk-test"));
-                    assert!(request.contains("x-api-key: sk-test"));
-                    assert!(request.contains("anthropic-version: 2023-06-01"));
-                    let body = br#"{"data":[{"id":"fallback-model"}]}"#;
-                    write!(
-                        stream,
-                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-                        body.len()
-                    )
-                    .unwrap();
-                    stream.write_all(body).unwrap();
-                }
+                seen.push(String::from_utf8_lossy(&request).to_string());
+                let reason = if status == 200 { "OK" } else { "Error" };
+                write!(
+                    stream,
+                    "HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                )
+                .unwrap();
+                let _ = stream.write_all(body.as_bytes());
             }
+            seen
         });
+        (origin, handle)
+    }
+
+    fn request_line(request: &str) -> String {
+        request.lines().next().unwrap_or("").to_string()
+    }
+
+    fn header_value(request: &str, name: &str) -> String {
+        let prefix = format!("{}:", name.to_ascii_lowercase());
+        request
+            .lines()
+            .find(|line| line.to_ascii_lowercase().starts_with(&prefix))
+            .map(|line| line[prefix.len()..].trim().to_string())
+            .unwrap_or_default()
+    }
+
+    #[tokio::test]
+    async fn retries_unauthorized_model_requests_with_api_key_headers() {
+        // 首个 UA 组合返回 401(且不是「客户端未授权」),应改换鉴权头而不是换 UA。
+        let (origin, server) = serve_responses(vec![
+            (401, "{\"error\":\"invalid auth\"}"),
+            (200, r#"{"data":[{"id":"fallback-model"}]}"#),
+        ]);
+        let endpoint = format!("{origin}/v1/models");
 
         let client = reqwest::Client::builder().no_proxy().build().unwrap();
-        let value = fetch_agent_model_json(&client, &endpoint, &AgentSetupKind::Codex, "sk-test")
-            .await
-            .unwrap();
+        let mut auth_failed = false;
+        let (value, used) = fetch_agent_model_json_from_candidates(
+            &client,
+            &[endpoint.clone()],
+            &AgentSetupKind::Codex,
+            "sk-test",
+            &mut auth_failed,
+        )
+        .await
+        .unwrap();
 
         assert_eq!(parse_model_ids(value), vec!["fallback-model"]);
-        server.join().unwrap();
+        assert_eq!(used, endpoint);
+        let seen = server.join().unwrap();
+        assert_eq!(seen.len(), 2);
+        assert_eq!(header_value(&seen[0], "authorization"), "Bearer sk-test");
+        assert!(header_value(&seen[0], "x-api-key").is_empty());
+        assert_eq!(header_value(&seen[1], "x-api-key"), "sk-test");
+        assert_eq!(header_value(&seen[1], "anthropic-version"), "2023-06-01");
+    }
+
+    #[tokio::test]
+    async fn sends_cli_user_agent_and_retries_client_rejections_with_another_agent() {
+        // agentrouter.org 形态:UA 不在白名单时先于鉴权返回 401 unauthorized client。
+        let (origin, server) = serve_responses(vec![
+            (
+                401,
+                r#"{"error":{"message":"unauthorized client detected"}}"#,
+            ),
+            (200, r#"{"data":[{"id":"claude-opus-5"}]}"#),
+        ]);
+        let endpoint = format!("{origin}/v1/models");
+
+        let client = reqwest::Client::builder().no_proxy().build().unwrap();
+        let mut auth_failed = false;
+        let (value, _) = fetch_agent_model_json_from_candidates(
+            &client,
+            &[endpoint],
+            &AgentSetupKind::Codex,
+            "sk-test",
+            &mut auth_failed,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(parse_model_ids(value), vec!["claude-opus-5"]);
+        let seen = server.join().unwrap();
+        assert_eq!(seen.len(), 2);
+        // Codex 先用 codex_cli_rs,被拒后换 claude-cli;两次都必须带 UA。
+        assert_eq!(
+            header_value(&seen[0], "user-agent"),
+            CODEX_CLI_DETECT_USER_AGENT
+        );
+        assert_eq!(
+            header_value(&seen[1], "user-agent"),
+            CLAUDE_CLI_DETECT_USER_AGENT
+        );
+        // 换 UA 重试必须沿用同一鉴权头,不能顺带换掉。
+        assert_eq!(header_value(&seen[1], "authorization"), "Bearer sk-test");
+    }
+
+    #[tokio::test]
+    async fn falls_back_to_next_candidate_when_compat_path_returns_404() {
+        // token-plan-cn.xiaomimimo.com/anthropic 形态:/anthropic/v1/models 404,
+        // 剥离 /anthropic 后的 /v1/models 才是真正的模型目录。
+        let (origin, server) = serve_responses(vec![
+            (404, "<html>404 Not Found</html>"),
+            (200, r#"{"data":[{"id":"MiMo-VL"}]}"#),
+        ]);
+        let base = validate_model_base_url(
+            &format!("{origin}/anthropic"),
+            ModelDetectionPolicy::LocalUser,
+        )
+        .unwrap();
+        let candidates = model_endpoint_candidates(&base);
+        assert_eq!(
+            candidates,
+            vec![
+                format!("{origin}/anthropic/v1/models"),
+                format!("{origin}/v1/models"),
+                format!("{origin}/models"),
+            ]
+        );
+
+        let client = reqwest::Client::builder().no_proxy().build().unwrap();
+        let mut auth_failed = false;
+        let (value, used) = fetch_agent_model_json_from_candidates(
+            &client,
+            &candidates,
+            &AgentSetupKind::ClaudeCode,
+            "sk-test",
+            &mut auth_failed,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(parse_model_ids(value), vec!["MiMo-VL"]);
+        assert_eq!(used, format!("{origin}/v1/models"));
+        assert!(!auth_failed);
+        let seen = server.join().unwrap();
+        // 404 不该触发 UA / 鉴权头重试,应立即换下一个候选。
+        assert_eq!(seen.len(), 2);
+        assert!(request_line(&seen[0]).contains("/anthropic/v1/models"));
+        assert!(request_line(&seen[1]).contains("/v1/models"));
+    }
+
+    #[tokio::test]
+    async fn treats_non_catalog_success_as_missing_endpoint() {
+        // 有些网关对未知路径返回 200 + 非目录 JSON,不能当成「零模型」成功。
+        let (origin, server) = serve_responses(vec![
+            (200, r#"{"success":false,"message":"not found"}"#),
+            (200, r#"{"data":[{"id":"real-model"}]}"#),
+        ]);
+        let candidates = vec![
+            format!("{origin}/anthropic/v1/models"),
+            format!("{origin}/v1/models"),
+        ];
+
+        let client = reqwest::Client::builder().no_proxy().build().unwrap();
+        let mut auth_failed = false;
+        let (value, used) = fetch_agent_model_json_from_candidates(
+            &client,
+            &candidates,
+            &AgentSetupKind::ClaudeCode,
+            "sk-test",
+            &mut auth_failed,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(parse_model_ids(value), vec!["real-model"]);
+        assert_eq!(used, candidates[1]);
+        assert_eq!(server.join().unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn reports_auth_failure_instead_of_silently_succeeding() {
+        // 鉴权失败时必须把错误报给用户,不能退到公开目录伪装成成功。
+        let (origin, server) = serve_responses(vec![
+            (401, r#"{"error":{"message":"无效的令牌"}}"#),
+            (401, r#"{"error":{"message":"无效的令牌"}}"#),
+            (401, r#"{"error":{"message":"无效的令牌"}}"#),
+        ]);
+
+        let client = reqwest::Client::builder().no_proxy().build().unwrap();
+        let mut auth_failed = false;
+        let error = fetch_agent_model_json_from_candidates(
+            &client,
+            &[format!("{origin}/v1/models")],
+            &AgentSetupKind::ClaudeCode,
+            "sk-bad",
+            &mut auth_failed,
+        )
+        .await
+        .unwrap_err();
+
+        assert!(auth_failed);
+        assert!(error.contains("HTTP 401"), "unexpected error: {error}");
+        assert!(error.contains("无效的令牌"), "unexpected error: {error}");
+        drop(server);
+    }
+
+    #[test]
+    fn builds_model_endpoint_candidates_for_common_gateway_shapes() {
+        let candidates = |raw: &str| {
+            let url = validate_model_base_url(raw, ModelDetectionPolicy::LocalUser).unwrap();
+            model_endpoint_candidates(&url)
+        };
+
+        assert_eq!(
+            candidates("https://api.siliconflow.cn"),
+            vec!["https://api.siliconflow.cn/v1/models"]
+        );
+        assert_eq!(
+            candidates("https://agentrouter.org"),
+            vec!["https://agentrouter.org/v1/models"]
+        );
+        assert_eq!(
+            candidates("https://token-plan-cn.xiaomimimo.com/anthropic"),
+            vec![
+                "https://token-plan-cn.xiaomimimo.com/anthropic/v1/models",
+                "https://token-plan-cn.xiaomimimo.com/v1/models",
+                "https://token-plan-cn.xiaomimimo.com/models",
+            ]
+        );
+        // 版本段已在路径里:{base}/models 必须排在 {base}/v1/models 之前。
+        assert_eq!(
+            candidates("https://open.bigmodel.cn/api/coding/paas/v4"),
+            vec![
+                "https://open.bigmodel.cn/api/coding/paas/v4/models",
+                "https://open.bigmodel.cn/api/coding/paas/v4/v1/models",
+            ]
+        );
+        // 最长后缀优先:/api/anthropic 不能只剥掉 /anthropic 而留下残缺的 /api 根。
+        assert_eq!(
+            candidates("https://api.z.ai/api/anthropic"),
+            vec![
+                "https://api.z.ai/api/anthropic/v1/models",
+                "https://api.z.ai/v1/models",
+                "https://api.z.ai/models",
+            ]
+        );
+        // 尾部斜杠与 /v1 不应产生重复候选。
+        assert_eq!(
+            candidates("https://api.example.com/v1/"),
+            vec!["https://api.example.com/v1/models"]
+        );
+    }
+
+    #[test]
+    fn detects_version_and_compat_suffix_shapes() {
+        assert!(ends_with_version_segment("https://x.com/v1"));
+        assert!(ends_with_version_segment(
+            "https://x.com/api/coding/paas/v4"
+        ));
+        assert!(!ends_with_version_segment("https://x.com/vX"));
+        assert!(!ends_with_version_segment("https://x.com/anthropic"));
+        assert_eq!(
+            strip_compat_suffix("https://api.z.ai/api/anthropic"),
+            Some("https://api.z.ai")
+        );
+        assert_eq!(strip_compat_suffix("https://api.z.ai/api"), None);
+        // 剥离后只剩 scheme:// 时必须判定为不保留源,避免拼出畸形 URL。
+        assert!(!keeps_origin("https://"));
+        assert!(keeps_origin("https://api.z.ai"));
+    }
+
+    #[test]
+    fn builds_public_catalog_candidates_from_api_root() {
+        let url = validate_model_base_url(
+            "https://agentrouter.org/anthropic",
+            ModelDetectionPolicy::LocalUser,
+        )
+        .unwrap();
+        assert_eq!(
+            public_model_catalog_candidates(&url),
+            vec!["https://agentrouter.org/api/pricing"]
+        );
+
+        let versioned =
+            validate_model_base_url("https://gw.example.com/v1", ModelDetectionPolicy::LocalUser)
+                .unwrap();
+        assert_eq!(
+            public_model_catalog_candidates(&versioned),
+            vec!["https://gw.example.com/api/pricing"]
+        );
+
+        // 兜底候选必须与 base URL 同源(含端口),否则 PairedDevice 的 DNS 固定会失效。
+        let ported = validate_model_base_url(
+            "https://gw.example.com:8443/nested/anthropic",
+            ModelDetectionPolicy::LocalUser,
+        )
+        .unwrap();
+        assert_eq!(
+            public_model_catalog_candidates(&ported),
+            vec![
+                "https://gw.example.com:8443/nested/api/pricing",
+                "https://gw.example.com:8443/api/pricing",
+            ]
+        );
+
+        // IPv6 字面量 host 需保留方括号,拼字符串会拼出畸形 URL。
+        let ipv6 = validate_model_base_url(
+            "http://[2001:db8::1]:9000/v1",
+            ModelDetectionPolicy::LocalUser,
+        )
+        .unwrap();
+        assert_eq!(
+            public_model_catalog_candidates(&ipv6),
+            vec!["http://[2001:db8::1]:9000/api/pricing"]
+        );
+    }
+
+    #[test]
+    fn parses_new_api_public_pricing_catalog() {
+        let value = serde_json::json!({
+            "data": [
+                { "model_name": "claude-opus-5", "model_ratio": 1.0 },
+                { "model_name": "claude-opus-4-8" },
+                { "model_name": "claude-opus-5" },
+                { "model_ratio": 2.0 }
+            ]
+        });
+
+        assert_eq!(
+            parse_public_catalog_model_ids(&value),
+            vec!["claude-opus-4-8", "claude-opus-5"]
+        );
+        assert!(parse_public_catalog_model_ids(&serde_json::json!({ "data": [] })).is_empty());
+    }
+
+    #[test]
+    fn flags_client_rejection_bodies_only() {
+        assert!(looks_like_client_rejection(
+            "HTTP 401: {\"error\":{\"message\":\"unauthorized client detected\"}}"
+        ));
+        assert!(looks_like_client_rejection("Invalid Client"));
+        assert!(!looks_like_client_rejection(
+            "HTTP 401: {\"error\":{\"message\":\"无效的令牌\"}}"
+        ));
+        assert!(!looks_like_client_rejection("HTTP 401: Invalid API Key"));
     }
     #[test]
     fn detects_supported_balance_providers_and_endpoints() {
@@ -535,7 +1170,10 @@ mod tests {
             ModelDetectionPolicy::PairedDevice,
         )
         .unwrap();
-        assert_eq!(model_endpoint(&public), "https://api.example.com/v1/models");
+        assert_eq!(
+            model_endpoint_candidates(&public),
+            vec!["https://api.example.com/v1/models"]
+        );
         assert!(validate_model_base_url(
             "http://127.0.0.1:11434",
             ModelDetectionPolicy::PairedDevice,

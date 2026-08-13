@@ -4,6 +4,7 @@ import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialo
 import { Check, Download, Eye, EyeOff, RefreshCw, Trash2, Upload, X, Zap } from "lucide-react";
 import { useI18n } from "../../i18n";
 import s from "../../styles";
+import { zLayers } from "../../styles/zLayers";
 import { AgentPathSection, type AgentPathSectionHandle } from "./AgentPathSection";
 import {
   APP_SETTINGS_CHANGED_EVENT,
@@ -605,7 +606,8 @@ export function AgentDetailModal({
         style={{
           position: "fixed",
           inset: 0,
-          zIndex: 3000,
+          // AppSettingsDialog(overlay)内部弹出,需高于其遮罩。
+          zIndex: zLayers.overlayNested,
           display: "flex",
           alignItems: "center",
           justifyContent: "center",
@@ -1393,7 +1395,8 @@ export function AgentDetailModal({
           style={{
             position: "fixed",
             inset: 0,
-            zIndex: 3100,
+            // 本模态自身已在 overlayNested,删除确认再叠一层。
+            zIndex: zLayers.overlayNestedDeep,
             display: "flex",
             alignItems: "center",
             justifyContent: "center",

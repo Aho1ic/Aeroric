@@ -14,6 +14,9 @@ export function toTauriSftpEndpoint(
   connections: SshConnection[],
 ): SftpTauriEndpoint {
   if (endpoint.kind === "local") return { kind: "local", path: endpoint.path };
+  if (endpoint.kind === "storage") {
+    return { kind: "storage", connectionId: endpoint.connectionId, path: endpoint.path };
+  }
   const connection = connections.find((item) => item.id === endpoint.connectionId);
   if (!connection) {
     throw new Error(`SSH connection not found: ${endpoint.connectionName}`);

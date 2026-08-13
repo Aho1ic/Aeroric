@@ -16,6 +16,7 @@ import {
 } from "../../lib/databaseUtils";
 import { useI18n } from "../../i18n";
 import s from "../../styles";
+import { zLayers } from "../../styles/zLayers";
 import { DBX_GRID_DEFAULT_COLUMN_WIDTH, type DbxDataGridController } from "./useDbxDataGrid";
 import type { DatabaseRow, DbxGridContextMenuState } from "./databaseGridState";
 
@@ -123,7 +124,7 @@ function ColumnFuzzyFilter({
             background: "var(--bg-card)",
             boxShadow: "var(--shadow-popover)",
             color: "var(--text-primary)",
-            zIndex: 1200,
+            zIndex: zLayers.popover,
           }}
         >
           <form

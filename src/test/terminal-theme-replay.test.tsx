@@ -42,6 +42,7 @@ vi.mock("../components/terminalShared", () => ({
   safeFit: () => ({ cols: 80, rows: 24 }),
   createSmartWriter: (term: { write: (data: string, callback?: () => void) => void }) => ({
     write: (data: string, callback?: () => void) => term.write(data, callback),
+    writeImmediate: (data: string, callback?: () => void) => term.write(data, callback),
     pauseForUserInput: vi.fn(),
   }),
   attachMacWebKitTerminalGuard: () => vi.fn(),

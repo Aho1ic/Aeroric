@@ -17,6 +17,8 @@
         "height": 720,
         "minWidth": 1100,
         "minHeight": 580,
+        "titleBarStyle": "Transparent",
+        "backgroundColor": "#fbfbfc",
         "acceptFirstMouse": true
       }
     ],

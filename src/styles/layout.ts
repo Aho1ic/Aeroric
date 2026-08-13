@@ -126,14 +126,15 @@ export const layout = {
     overflow: "visible",
     opacity: 0.5,
   },
+  // 首页项目区直接叠在递归动画画布上。这里刻意不加 background 底色与 backdrop-filter：
+  // 半透明蒙层 + 24px 模糊会把画布压成一层虚影，动画等于看不见。需要可读性的地方
+  // （搜索框、项目行、分组标题）各自有实心/描边样式，不依赖整块面板的毛玻璃。
   welcomePane: {
     flex: 1,
     display: "flex",
     flexDirection: "column",
     overflow: "hidden",
-    background: "color-mix(in srgb, var(--bg-panel) 64%, transparent)",
-    backdropFilter: "var(--glass-blur)",
-    WebkitBackdropFilter: "var(--glass-blur)",
+    background: "transparent",
   },
   searchRow: {
     display: "flex",
@@ -141,9 +142,7 @@ export const layout = {
     gap: 14,
     padding: "18px 22px 12px",
     borderBottom: "1px solid var(--border-dim)",
-    background: "color-mix(in srgb, var(--bg-panel) 78%, transparent)",
-    backdropFilter: "var(--glass-blur-compact)",
-    WebkitBackdropFilter: "var(--glass-blur-compact)",
+    background: "transparent",
     flexShrink: 0,
   },
   searchBox: {

@@ -1,8 +1,10 @@
 import type { SshConnection } from "../../types";
+import type { StorageConnection } from "../../types/storage";
 
 export type SftpEndpoint =
   | { kind: "local"; path: string }
-  | { kind: "ssh"; connectionId: string; connectionName: string; path: string };
+  | { kind: "ssh"; connectionId: string; connectionName: string; path: string }
+  | { kind: "storage"; connectionId: string; connectionName: string; path: string };
 
 export type SftpOperation = "copy" | "move";
 
@@ -87,12 +89,13 @@ export function formatSftpModifiedTime(
 
 export type SftpTauriEndpoint =
   | { kind: "local"; path: string }
-  | { kind: "ssh"; connection: SshConnection; path: string };
+  | { kind: "ssh"; connection: SshConnection; path: string }
+  // 存储连接只传 id,凭据由后端从 0600 的 secrets 文件读取,不经过前端。
+  | { kind: "storage"; connectionId: string; path: string };
 
 export function sftpEndpointKey(endpoint: SftpEndpoint): string {
-  return endpoint.kind === "local"
-    ? `local:${endpoint.path}`
-    : `ssh:${endpoint.connectionId}:${endpoint.path}`;
+  if (endpoint.kind === "local") return `local:${endpoint.path}`;
+  return `${endpoint.kind}:${endpoint.connectionId}:${endpoint.path}`;
 }
 
 export function sftpDropOperation(source: SftpEndpoint, target: SftpEndpoint): SftpOperation {
@@ -134,7 +137,35 @@ export function defaultSftpPathForEndpoint(
   localDefaultPath: string,
 ): string {
   if (kind === "local") return localDefaultPath;
+  // storage 的路径前缀由后端 `root` 配置解析,前端始终从 "/" 开始。
+  if (kind === "storage") return "/";
   return connection?.remotePath?.trim() || "/";
+}
+
+export type SftpStorageConnectionGroup = {
+  label: string;
+  connections: StorageConnection[];
+};
+
+/** 与 `groupSftpSshConnections` 同构,保持下拉框两类连接的分组体验一致。 */
+export function groupSftpStorageConnections(
+  connections: StorageConnection[],
+  defaultGroupLabel: string,
+): SftpStorageConnectionGroup[] {
+  const groups: SftpStorageConnectionGroup[] = [];
+  const byLabel = new Map<string, SftpStorageConnectionGroup>();
+  for (const connection of connections) {
+    const label = connection.group?.trim() || defaultGroupLabel;
+    const existing = byLabel.get(label);
+    if (existing) {
+      existing.connections.push(connection);
+      continue;
+    }
+    const group = { label, connections: [connection] };
+    byLabel.set(label, group);
+    groups.push(group);
+  }
+  return groups;
 }
 
 export function sftpFileName(path: string): string {

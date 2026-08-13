@@ -32,7 +32,6 @@ import { selectDefaultCondaEnvironment } from "./components/file-viewer/run";
 import {
   APP_SETTINGS_CHANGED_EVENT,
   SKILL_HUB_CHANGED_EVENT,
-  type LocalRouterStatus,
 } from "./components/app-settings/types";
 import { useToast } from "./components/Toast";
 import { isHideWindowShortcut } from "./shortcuts";
@@ -43,7 +42,7 @@ import {
   getTerminalFontSizeStorageKey,
 } from "./platform";
 import { composeFontStack } from "./utils/fonts";
-import { agentDisplayLabel, isCodexLikeAgent, type AgentOption } from "./agents";
+import { agentDisplayLabel, isCodexLikeAgent } from "./agents";
 import type { AgentConfigSwitchValues } from "./components/AgentConfigSwitchDialog";
 import { useAgentOptions } from "./hooks/useAgentOptions";
 import { useTerminalManager } from "./hooks/useTerminalManager";
@@ -102,6 +101,8 @@ import {
   getInitialTerminalFontSize,
   getInitialThemeMode,
   getSystemPrefersDark,
+  nativeThemeForVariant,
+  nativeWindowBackgroundForVariant,
   resolveThemeVariant,
 } from "./appThemeState";
 import {
@@ -141,41 +142,6 @@ interface ResetTaskProcessResult {
 interface ResolvedTaskSession {
   sessionId?: string;
   sessionPath?: string;
-}
-
-type LocalRouterAgent = "claude" | "codex";
-
-function localRouterAgentFor(agent: AgentType, agentOptions: AgentOption[]): LocalRouterAgent {
-  return isCodexLikeAgent(agent, agentOptions) ? "codex" : "claude";
-}
-
-function localRouterTargetIdFor(agent: AgentType): string {
-  // claude_gpt55 is a Codex-compatible launcher; its provider family is the
-  // shared Codex target set rather than a separate router target.
-  return agent === "claude_gpt55" ? "codex" : agent;
-}
-
-function localRouterTargetForTaskSwitch(
-  task: Task,
-  targetAgent: AgentType,
-  projectLocationKind: string,
-  status: LocalRouterStatus,
-  agentOptions: AgentOption[],
-) {
-  if (projectLocationKind !== "local" || !status.desired_enabled || !status.running) {
-    return null;
-  }
-
-  const sourceOwner = resolveTaskSessionOwner(task, agentOptions);
-  const sourceAgent = localRouterAgentFor(sourceOwner.agent, agentOptions);
-  const targetAgentFamily = localRouterAgentFor(targetAgent, agentOptions);
-  if (sourceAgent !== targetAgentFamily) return null;
-
-  const targetId = localRouterTargetIdFor(targetAgent);
-  const target = status.targets.find(
-    (item) => item.agent === targetAgentFamily && item.target_id === targetId,
-  );
-  return target ? { agent: targetAgentFamily, targetId } : null;
 }
 
 const MAX_HANDOFF_TERMINAL_BYTES = 8 * 1024 * 1024; // 8 MiB
@@ -486,11 +452,16 @@ function App() {
   useEffect(() => {
     if (!isTauri()) return;
 
-    // Tauri window theme only understands light/dark/null; map eyecare to light
-    // so the native chrome (titlebar, scrollbars) stays in the light family.
-    const nativeTheme = themeMode === "system" ? null : themeMode === "dark" ? "dark" : "light";
-    getCurrentWindow().setTheme(nativeTheme).catch(console.error);
-  }, [themeMode]);
+    // 原生窗口装饰跟随已经解析好的 variant，而不是原始 themeMode：system 模式下传 null
+    // 只是把决定权交回系统，深色系统 + 深色 UI 时标题栏仍可能停在浅色。这里显式给出
+    // light/dark，并同步窗口背景色——macOS 的透明标题栏正是透出这层背景。
+    const nativeTheme = nativeThemeForVariant(themeVariant);
+    const currentWindow = getCurrentWindow();
+    Promise.all([
+      currentWindow.setTheme(nativeTheme),
+      currentWindow.setBackgroundColor(nativeWindowBackgroundForVariant(themeVariant)),
+    ]).catch(console.error);
+  }, [themeVariant]);
 
   useEffect(() => {
     // Cmd+W 收起窗口（隐藏到 Dock），仅 macOS 启用：隐藏后点 Dock 图标可唤回
@@ -1597,95 +1568,6 @@ function App() {
     if (!project) return;
 
     const projectLocation = resolveProjectLocation(project);
-    const sameProtocolFamily =
-      localRouterAgentFor(task.agent, agentOptions) ===
-      localRouterAgentFor(values.agent, agentOptions);
-
-    // A same-family switch is a provider-target change when the running
-    // process is already attached to Aeroric's local router. Keep the PTY,
-    // terminal buffer and provider-native session untouched; only the next
-    // API request should use the selected target.
-    if (sameProtocolFamily) {
-      const taskHasLiveProcess = ["running", "input_required", "detached"].includes(task.status);
-      if (!taskHasLiveProcess) {
-        const nextTask: Task = {
-          ...task,
-          agent: values.agent,
-          selectedModel: values.selectedModel,
-          reasoningEffort: values.reasoningEffort ?? undefined,
-          speed: values.speed,
-          permissionMode: values.permissionMode,
-        };
-        const nextTasks = tasks.map((item) => (item.id === taskId ? nextTask : item));
-        setTasks(nextTasks);
-        persistProjectTasks(task.projectId, nextTasks, showToast, formatSaveTasksError);
-        await flushProjectTasks(task.projectId);
-        return;
-      }
-
-      if (projectLocation.kind !== "local") {
-        showToast(
-          t("running.switchConfigFailed", {
-            error: "同一协议族配置切换需要本机 Local Router",
-          }),
-          "error",
-        );
-        return;
-      }
-
-      let localRouterStatus: LocalRouterStatus;
-      try {
-        localRouterStatus = await invoke<LocalRouterStatus>("get_local_router_status");
-      } catch (error) {
-        showToast(t("running.switchConfigFailed", { error: String(error) }), "error");
-        return;
-      }
-      const localRouterTarget = localRouterTargetForTaskSwitch(
-        task,
-        values.agent,
-        projectLocation.kind,
-        localRouterStatus,
-        agentOptions,
-      );
-      if (!localRouterTarget) {
-        showToast(
-          t("running.switchConfigFailed", {
-            error: "Local Router 未运行或目标配置不存在",
-          }),
-          "error",
-        );
-        return;
-      }
-
-      try {
-        await invoke("switch_local_router_target", {
-          agent: localRouterTarget.agent,
-          targetId: localRouterTarget.targetId,
-        });
-      } catch (error) {
-        // Do not fall back to killing the current process after a router
-        // switch failure: that would turn a reversible target error into a
-        // lossy cross-process handoff.
-        showToast(t("running.switchConfigFailed", { error: String(error) }), "error");
-        return;
-      }
-
-      const nextTask: Task = {
-        ...task,
-        agent: values.agent,
-        selectedModel: values.selectedModel,
-        reasoningEffort: values.reasoningEffort ?? undefined,
-        speed: values.speed,
-        permissionMode: values.permissionMode,
-        attentionRequestedAt: undefined,
-        failureReason: undefined,
-      };
-      const nextTasks = tasks.map((item) => (item.id === taskId ? nextTask : item));
-      setTasks(nextTasks);
-      persistProjectTasks(task.projectId, nextTasks, showToast, formatSaveTasksError);
-      await flushProjectTasks(task.projectId);
-      return;
-    }
 
     if (projectLocation.kind === "local") {
       try {

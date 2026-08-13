@@ -202,7 +202,8 @@ export function TerminalView({
       if (disposed || runtimeRef.current !== runtime) return;
       const raw = rawChunksRef.current?.join("") ?? "";
       if (raw.length > renderedLength) {
-        runtime.writer.write(raw.slice(renderedLength), () =>
+        // 恢复期间新到的输出属于"补齐历史"的一部分，同样不要走帧预算。
+        runtime.writer.writeImmediate(raw.slice(renderedLength), () =>
           finishQueuedWrites(runtime, raw.length, viewportY, wasAtBottom, hadFocus, onComplete),
         );
         return;
@@ -243,7 +244,9 @@ export function TerminalView({
       runtimeRef.current = runtime;
       fitRuntime(runtime);
       if (raw) {
-        runtime.writer.write(raw, () =>
+        // 切换主题会重建 xterm 实例并重放整个缓冲，同样必须一次性灌入，
+        // 否则换个主题就要再看一遍滚动动画。
+        runtime.writer.writeImmediate(raw, () =>
           finishQueuedWrites(runtime, raw.length, viewportY, wasAtBottom, hadFocus, onComplete),
         );
       } else {
@@ -271,10 +274,12 @@ export function TerminalView({
     };
     window.requestAnimationFrame(() => {
       fitRuntime(runtime);
+      // 历史恢复走 writeImmediate：逐帧写入会让用户看到一遍从中间滚到底部的回放动画
+      // （没有 snapshot 的终端要补的是整个 8 MB 缓冲）。这里只要最终画面。
       if (initialSnapshot) {
         runtime.term.write(initialSnapshot, () => {
           if (initialData) {
-            runtime.writer.write(initialData, completeRestore);
+            runtime.writer.writeImmediate(initialData, completeRestore);
             return;
           }
           completeRestore();
@@ -282,7 +287,7 @@ export function TerminalView({
         return;
       }
       if (initialData) {
-        runtime.writer.write(initialData, completeRestore);
+        runtime.writer.writeImmediate(initialData, completeRestore);
         return;
       }
       completeRestore();

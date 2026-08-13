@@ -41,6 +41,14 @@ mod sftp;
 mod skills;
 mod ssh;
 mod storage;
+mod storage_backend;
+mod storage_backend_baidu;
+mod storage_backend_box;
+mod storage_backend_mount;
+mod storage_backend_opendal;
+mod storage_backend_smb;
+mod storage_conn;
+mod storage_oauth;
 mod subprocess;
 mod tests;
 mod usage;
@@ -83,6 +91,36 @@ impl TaskManager {
         writers.remove(id);
         children.remove(id);
         pty::cancel_initial_input_signal(self, id);
+    }
+
+    /// Remove a completed process generation only if it is still the current
+    /// child for this task ID. A manual configuration switch reuses the task ID
+    /// for a new process, so an old exit monitor must not clean up the new PTY.
+    pub(crate) fn remove_pty_handles_if_current(
+        &self,
+        id: &str,
+        expected: &Arc<Mutex<Box<dyn portable_pty::Child + Send + Sync>>>,
+    ) -> bool {
+        let mut masters = self.pty_masters.lock();
+        let mut pending_sizes = self.pending_pty_sizes.lock();
+        let mut writers = self.pty_writers.lock();
+        let mut children = self.child_handles.lock();
+        if !children
+            .get(id)
+            .is_some_and(|current| Arc::ptr_eq(current, expected))
+        {
+            return false;
+        }
+        masters.remove(id);
+        pending_sizes.remove(id);
+        writers.remove(id);
+        children.remove(id);
+        drop(children);
+        drop(writers);
+        drop(pending_sizes);
+        drop(masters);
+        pty::cancel_initial_input_signal(self, id);
+        true
     }
 }
 
@@ -313,6 +351,17 @@ pub fn run() {
             sftp::sftp_rename_path,
             sftp::sftp_copy_paths,
             sftp::sftp_move_paths,
+            storage_conn::storage_list_connections,
+            storage_conn::storage_secret_keys,
+            storage_conn::storage_save_connection,
+            storage_conn::storage_delete_connection,
+            storage_conn::storage_touch_connection,
+            storage_oauth::storage_oauth_authorize,
+            storage_oauth::storage_oauth_credential_options,
+            sftp::storage_protocols,
+            sftp::storage_capabilities,
+            sftp::storage_test_connection,
+            sftp::storage_unmount_connection,
             git::generate_commit_message,
             agent_assist::generate_task_name,
             git::git_status,

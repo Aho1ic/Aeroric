@@ -1,11 +1,13 @@
 import type React from "react";
 
+import { zLayers } from "./zLayers";
+
 export const dialogs = {
   modalOverlay: {
     position: "fixed" as const,
     inset: 0,
     background: "var(--overlay-bg)",
-    zIndex: 1000,
+    zIndex: zLayers.overlay,
     display: "flex",
     alignItems: "center",
     justifyContent: "center",
@@ -196,7 +198,7 @@ export const dialogs = {
     transition: "transform 0.15s",
   },
   settingsSelectContent: {
-    zIndex: 2000,
+    zIndex: zLayers.popover,
     background: "var(--bg-card)",
     border: "1px solid var(--border-medium)",
     borderRadius: "var(--radius-md)",

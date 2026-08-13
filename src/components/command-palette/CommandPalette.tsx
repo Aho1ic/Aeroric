@@ -15,6 +15,7 @@ import {
   moveCommandPaletteSelection,
   rankCommandPaletteItems,
 } from "./commandPaletteState";
+import { zLayers } from "../../styles/zLayers";
 import type { CommandPaletteItem } from "./types";
 
 const QUICK_OPEN_LIMIT = 60;
@@ -210,7 +211,7 @@ export function CommandPalette({
       style={{
         position: "fixed",
         inset: 0,
-        zIndex: 1200,
+        zIndex: zLayers.overlay,
         background: "rgba(0,0,0,0.28)",
         display: "flex",
         alignItems: "flex-start",

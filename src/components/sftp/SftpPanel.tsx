@@ -11,6 +11,7 @@ import {
   Check,
   ChevronRight,
   ChevronDown,
+  Cloud,
   Code2,
   Copy,
   Cpu,
@@ -33,6 +34,8 @@ import {
   X,
 } from "lucide-react";
 import type { SshConnection, ThemeVariant } from "../../types";
+import type { StorageCapability, StorageConnection } from "../../types/storage";
+import { storageConnectionSummary } from "../storage/storageProtocolForm";
 import { useI18n } from "../../i18n";
 import { useToast } from "../Toast";
 import { writeClipboardText } from "../file-explorer/clipboard";
@@ -52,6 +55,7 @@ import {
   formatSftpTransferPercent,
   flattenSftpTreeEntries,
   groupSftpSshConnections,
+  groupSftpStorageConnections,
   inferFileType,
   normalizeSftpSortPreference,
   sftpBreadcrumbSegments,
@@ -148,7 +152,8 @@ function endpointLabel(endpoint: SftpEndpoint): string {
 }
 
 function endpointStorageValue(endpoint: SftpEndpoint): string {
-  return endpoint.kind === "local" ? "local" : `ssh:${endpoint.connectionId}`;
+  if (endpoint.kind === "local") return "local";
+  return `${endpoint.kind}:${endpoint.connectionId}`;
 }
 
 function endpointFromStorageValue(
@@ -156,10 +161,22 @@ function endpointFromStorageValue(
   currentPath: string,
   connections: SshConnection[],
   localDefaultPath: string,
+  storageConnections: StorageConnection[] = [],
 ): SftpEndpoint {
   if (value === "local") {
     void currentPath;
     return { kind: "local", path: localDefaultPath };
+  }
+  if (value.startsWith("storage:")) {
+    const connectionId = value.slice("storage:".length);
+    const connection = storageConnections.find((item) => item.id === connectionId);
+    if (!connection) return { kind: "local", path: localDefaultPath };
+    return {
+      kind: "storage",
+      connectionId: connection.id,
+      connectionName: connection.name,
+      path: defaultSftpPathForEndpoint("storage", undefined, localDefaultPath),
+    };
   }
   const connectionId = value.replace(/^ssh:/, "");
   const connection = connections.find((item) => item.id === connectionId) ?? connections[0];
@@ -261,20 +278,25 @@ function sftpColumnsTemplate(columnOrder: ColumnType[]): string {
 
 export function SftpPanel({
   sshConnections,
+  storageConnections = [],
   localDefaultPath,
   active,
   width,
   themeVariant,
   currentSshConnectionId,
+  currentStorageConnectionId,
   onClose,
   projectConfig,
 }: {
   sshConnections: SshConnection[];
+  /** 对象存储 / 网盘 / 文件共享连接。凭据不在此列,仅有 id 与公开配置。 */
+  storageConnections?: StorageConnection[];
   localDefaultPath: string;
   active: boolean;
   width?: number | string;
   themeVariant: ThemeVariant;
   currentSshConnectionId?: string;
+  currentStorageConnectionId?: string;
   onClose?: () => void;
   projectConfig?: SftpProjectConfigContext;
 }) {
@@ -285,6 +307,20 @@ export function SftpPanel({
     makeInitialPane({ kind: "local", path: localDefaultPath }, defaultSort),
   );
   const [right, setRight] = useState(() => {
+    const storage = currentStorageConnectionId
+      ? storageConnections.find((connection) => connection.id === currentStorageConnectionId)
+      : undefined;
+    if (storage) {
+      return makeInitialPane(
+        {
+          kind: "storage",
+          connectionId: storage.id,
+          connectionName: storage.name,
+          path: defaultSftpPathForEndpoint("storage", undefined, localDefaultPath),
+        },
+        defaultSort,
+      );
+    }
     const first =
       sshConnections.find((connection) => connection.id === currentSshConnectionId) ??
       sshConnections[0];
@@ -316,6 +352,64 @@ export function SftpPanel({
   const sshConnectionGroups = useMemo(
     () => groupSftpSshConnections(sshConnections, t("ssh.defaultGroup")),
     [sshConnections, t],
+  );
+  const storageConnectionGroups = useMemo(
+    () => groupSftpStorageConnections(storageConnections, t("ssh.defaultGroup")),
+    [storageConnections, t],
+  );
+  // 各存储连接的能力位。缺失时按"全支持"处理,由后端返回真实错误。
+  const [storageCapabilities, setStorageCapabilities] = useState<Record<string, StorageCapability>>(
+    {},
+  );
+
+  const usedStorageIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const pane of [left, right]) {
+      if (pane.endpoint.kind === "storage") ids.add(pane.endpoint.connectionId);
+    }
+    return Array.from(ids).sort().join(",");
+  }, [left, right]);
+
+  useEffect(() => {
+    const ids = usedStorageIds ? usedStorageIds.split(",") : [];
+    const missing = ids.filter((id) => !(id in storageCapabilities));
+    if (missing.length === 0) return;
+    let cancelled = false;
+    void Promise.all(
+      missing.map(async (id) => {
+        try {
+          return [
+            id,
+            await invoke<StorageCapability>("storage_capabilities", {
+              connectionId: id,
+            }),
+          ] as const;
+        } catch (error) {
+          console.warn("Failed to read storage capabilities", error);
+          return null;
+        }
+      }),
+    ).then((results) => {
+      if (cancelled) return;
+      const resolved = results.filter((entry): entry is [string, StorageCapability] =>
+        Boolean(entry),
+      );
+      if (resolved.length === 0) return;
+      setStorageCapabilities((prev) => ({ ...prev, ...Object.fromEntries(resolved) }));
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [storageCapabilities, usedStorageIds]);
+
+  /** 端点是否支持某项动作。非 storage 端点始终支持。 */
+  const endpointSupports = useCallback(
+    (endpoint: SftpEndpoint, action: keyof StorageCapability): boolean => {
+      if (endpoint.kind !== "storage") return true;
+      const capability = storageCapabilities[endpoint.connectionId];
+      return capability ? capability[action] : true;
+    },
+    [storageCapabilities],
   );
 
   const beginTransferTask = useCallback((operation: SftpOperation, paths: string[]) => {
@@ -1000,7 +1094,13 @@ export function SftpPanel({
       <div className={`sftp-pane${focusedSide === side ? " focused" : ""}`}>
         <div className="sftp-pane-status">
           <span className="sftp-endpoint-badge">
-            {pane.endpoint.kind === "local" ? <HardDrive size={13} /> : <Server size={13} />}
+            {pane.endpoint.kind === "local" ? (
+              <HardDrive size={13} />
+            ) : pane.endpoint.kind === "storage" ? (
+              <Cloud size={13} />
+            ) : (
+              <Server size={13} />
+            )}
             {endpointLabel(pane.endpoint)}
           </span>
           <span className="sftp-selection-label">{selectedName ?? t("sftp.noSelection")}</span>
@@ -1014,6 +1114,7 @@ export function SftpPanel({
                 pane.endpoint.path,
                 sshConnections,
                 localDefaultPath,
+                storageConnections,
               );
               updatePane(side, () => makeInitialPane(nextEndpoint));
             }}
@@ -1021,7 +1122,13 @@ export function SftpPanel({
             <Select.Trigger aria-label={t("sftp.location")} className="sftp-select-trigger">
               <Select.Value>
                 <span className="sftp-select-value">
-                  {pane.endpoint.kind === "local" ? <HardDrive /> : <Server />}
+                  {pane.endpoint.kind === "local" ? (
+                    <HardDrive />
+                  ) : pane.endpoint.kind === "storage" ? (
+                    <Cloud />
+                  ) : (
+                    <Server />
+                  )}
                   <span>{endpointLabel(pane.endpoint)}</span>
                 </span>
               </Select.Value>
@@ -1067,6 +1174,39 @@ export function SftpPanel({
                               <span className="sftp-machine-name">{connection.name}</span>
                               <span className="sftp-machine-meta">
                                 {connection.username}@{connection.host}:{connection.port}
+                              </span>
+                            </span>
+                          </Select.ItemText>
+                          <Select.ItemIndicator style={s.settingsSelectIndicator}>
+                            <Check />
+                          </Select.ItemIndicator>
+                        </Select.Item>
+                      ))}
+                    </Select.Group>
+                  ))}
+                  {storageConnectionGroups.map((group) => (
+                    <Select.Group key={`storage-${group.label}`}>
+                      <Select.Label className="sftp-select-group-label">
+                        <span>
+                          {t("storage.title")} · {group.label}
+                        </span>
+                        <span>{group.connections.length}</span>
+                      </Select.Label>
+                      {group.connections.map((connection) => (
+                        <Select.Item
+                          key={connection.id}
+                          value={`storage:${connection.id}`}
+                          className="sftp-machine-item sftp-remote-machine-item"
+                        >
+                          <Cloud />
+                          <Select.ItemText>
+                            <span className="sftp-machine-copy">
+                              <span className="sftp-machine-name">{connection.name}</span>
+                              <span className="sftp-machine-meta">
+                                {t(`storage.protocol.${connection.protocol}`)}
+                                {storageConnectionSummary(connection)
+                                  ? ` · ${storageConnectionSummary(connection)}`
+                                  : ""}
                               </span>
                             </span>
                           </Select.ItemText>
@@ -1166,13 +1306,27 @@ export function SftpPanel({
                 <ArrowUp size={13} />
                 {t("sftp.up")}
               </button>
-              <button className="sftp-action-btn" onClick={() => createFolder(side)}>
+              <button
+                className="sftp-action-btn"
+                disabled={!endpointSupports(pane.endpoint, "createDir")}
+                title={
+                  endpointSupports(pane.endpoint, "createDir")
+                    ? undefined
+                    : t("storage.unsupportedAction")
+                }
+                onClick={() => createFolder(side)}
+              >
                 <FolderPlus size={13} />
                 {t("sftp.newFolder")}
               </button>
               <button
                 className="sftp-action-btn"
-                disabled={!pane.selectedPath}
+                disabled={!pane.selectedPath || !endpointSupports(pane.endpoint, "rename")}
+                title={
+                  endpointSupports(pane.endpoint, "rename")
+                    ? undefined
+                    : t("storage.unsupportedAction")
+                }
                 onClick={() => renameSelected(side)}
               >
                 <Pencil size={13} />
@@ -1180,7 +1334,11 @@ export function SftpPanel({
               </button>
               <button
                 className="sftp-action-btn"
-                disabled={!pane.selectedPath}
+                disabled={
+                  !pane.selectedPath ||
+                  !endpointSupports(pane.endpoint, "read") ||
+                  !endpointSupports(panes[opposite].endpoint, "write")
+                }
                 onClick={() => runTransfer("copy", side, opposite)}
               >
                 <Copy size={13} />
@@ -1188,7 +1346,12 @@ export function SftpPanel({
               </button>
               <button
                 className="sftp-action-btn"
-                disabled={!pane.selectedPath}
+                disabled={
+                  !pane.selectedPath ||
+                  !endpointSupports(pane.endpoint, "read") ||
+                  !endpointSupports(pane.endpoint, "delete") ||
+                  !endpointSupports(panes[opposite].endpoint, "write")
+                }
                 onClick={() => runTransfer("move", side, opposite)}
               >
                 <MoveRight size={13} />
@@ -1196,7 +1359,12 @@ export function SftpPanel({
               </button>
               <button
                 className="sftp-action-btn danger"
-                disabled={!pane.selectedPath}
+                disabled={!pane.selectedPath || !endpointSupports(pane.endpoint, "delete")}
+                title={
+                  endpointSupports(pane.endpoint, "delete")
+                    ? undefined
+                    : t("storage.unsupportedAction")
+                }
                 onClick={() => deleteSelected(side)}
               >
                 <Trash2 size={13} />

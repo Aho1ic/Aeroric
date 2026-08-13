@@ -6,6 +6,7 @@ import s from "../../styles";
 import { SshConnectionDialog } from "./SshConnectionDialog";
 import { SshConnectionContextMenu, type SshConnectionProtocol } from "./SshConnectionContextMenu";
 import { sshProjectInputForConnection, type SshProjectInput } from "./sshProject";
+import { useCopyFeedback } from "./useCopyFeedback";
 
 export {
   deriveRemoteProjectName,
@@ -115,7 +116,7 @@ export function SshProjectPage({
   const [creatingConnection, setCreatingConnection] = useState(false);
   const [groupDialogOpen, setGroupDialogOpen] = useState(false);
   const [initialGroup, setInitialGroup] = useState("");
-  const [copiedConnectionId, setCopiedConnectionId] = useState<string | null>(null);
+  const { copiedId: copiedConnectionId, markCopied } = useCopyFeedback();
   const [contextMenu, setContextMenu] = useState<{
     connection: SshConnection;
     x: number;
@@ -264,31 +265,20 @@ export function SshProjectPage({
                         </button>
                         <button
                           type="button"
+                          className="ssh-copy-action"
                           title={canCopyPassword ? t("ssh.copyPassword") : t("ssh.noPasswordHint")}
                           aria-label={t("ssh.copyPassword")}
                           style={{
                             ...s.sshProjectCardEdit,
                             opacity: canCopyPassword ? 1 : 0.35,
                             cursor: canCopyPassword ? "pointer" : "not-allowed",
-                            transform: copied ? "scale(1.12)" : "scale(1)",
-                            color: copied ? "var(--success)" : s.sshProjectCardEdit.color,
-                            border: copied
-                              ? "1px solid var(--success)"
-                              : s.sshProjectCardEdit.border,
-                            transition:
-                              "transform 0.16s ease, color 0.16s ease, border-color 0.16s ease",
                           }}
                           data-copied={copied ? "true" : undefined}
                           disabled={!canCopyPassword}
                           onClick={() => {
                             if (!canCopyPassword) return;
                             void copyConnectionPassword(connection).then(() => {
-                              setCopiedConnectionId(connection.id);
-                              window.setTimeout(() => {
-                                setCopiedConnectionId((current) =>
-                                  current === connection.id ? null : current,
-                                );
-                              }, 900);
+                              markCopied(connection.id);
                             });
                           }}
                         >

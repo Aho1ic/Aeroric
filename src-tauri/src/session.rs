@@ -601,10 +601,31 @@ fn claude_sessions_dirs_for_project(project_path: &str) -> Vec<PathBuf> {
     roots
 }
 
-fn claude_sessions_dir_for_project(project_path: &str) -> Option<PathBuf> {
-    claude_sessions_dirs_for_project(project_path)
-        .into_iter()
-        .next()
+/// 某个具体 Agent 写 transcript 的目录。
+///
+/// 内建 claude/claude_gpt55 用 `~/.claude/projects/<encoded>`;自定义 claude-like Agent 的
+/// 启动脚本会 `export CLAUDE_CONFIG_DIR="$HOME/.aeroric/agent-homes/{id}"`(见
+/// `app_settings::agent_scripts`),因此写到 `<agent-home>/projects/<encoded>`。
+///
+/// 早期实现统一取 `claude_sessions_dirs_for_project()` 的第一项(永远是 `~/.claude`),
+/// 导致自定义 Agent 的预置 session 路径指向一个永不存在的文件:它会被立刻广播并持久化,
+/// 之后读会话就报 `Cannot resolve session path`。
+fn claude_sessions_dir_for_agent_in(
+    home: &Path,
+    agent: &str,
+    project_path: &str,
+) -> Option<PathBuf> {
+    let encoded_project = encode_claude_project_path(project_path);
+    let config_root = match crate::app_settings::custom_agent_home_dir_name(agent) {
+        Some(name) => home.join(".aeroric").join("agent-homes").join(name),
+        None => home.join(".claude"),
+    };
+    Some(config_root.join("projects").join(encoded_project))
+}
+
+fn claude_sessions_dir_for_agent(agent: &str, project_path: &str) -> Option<PathBuf> {
+    let home = crate::platform::home_dir()?;
+    claude_sessions_dir_for_agent_in(&home, agent, project_path)
 }
 
 fn watch_claude_session(app: AppHandle, task_id: String, session_path: PathBuf) {
@@ -2165,9 +2186,10 @@ pub(crate) fn spawn_claude_lazy_session_attach(
     task_id: String,
     session_id: String,
     project_path: String,
+    agent: String,
 ) {
     thread::spawn(move || {
-        let Some(sessions_dir) = claude_sessions_dir_for_project(&project_path) else {
+        let Some(sessions_dir) = claude_sessions_dir_for_agent(&agent, &project_path) else {
             return;
         };
         let expected = sessions_dir.join(format!("{}.jsonl", session_id));
@@ -2227,30 +2249,70 @@ pub(crate) fn spawn_claude_lazy_session_attach(
             if !alive {
                 break;
             }
-            if expected.exists() {
-                // 升级为真：placeholder 翻成 false，让 is_task_active / had_agent_session
-                // 重新识别为有效会话。
-                let should_start_watcher = {
-                    let tm = app.state::<TaskManager>();
-                    let mut sessions = tm.claude_sessions.lock();
-                    if let Some(info) = sessions.get_mut(&task_id) {
-                        if info.is_placeholder {
-                            info.is_placeholder = false;
-                            true
-                        } else {
-                            false
-                        }
-                    } else {
-                        false
+            // 预期路径优先，同时兜底搜索全部已知 session root：Agent 的 CLAUDE_CONFIG_DIR
+            // 可能被用户脚本改到别处，那时预期路径永远不出现，而广播出去的路径已经被
+            // 前端持久化。搜到真实文件就地纠正，避免留下读不了的死路径。
+            let found = if expected.exists() {
+                Some(expected.clone())
+            } else {
+                find_claude_session_file(&session_id, &project_path)
+            };
+            let Some(actual) = found else {
+                thread::sleep(Duration::from_millis(500));
+                continue;
+            };
+            let actual_string = actual.to_string_lossy().into_owned();
+            let corrected = actual_string != path_string;
+
+            // 升级为真：placeholder 翻成 false，让 is_task_active / had_agent_session
+            // 重新识别为有效会话。
+            let should_start_watcher = {
+                let tm = app.state::<TaskManager>();
+                let mut sessions = tm.claude_sessions.lock();
+                match sessions.get_mut(&task_id) {
+                    Some(info) if info.is_placeholder => {
+                        info.is_placeholder = false;
+                        info.session_path = actual_string.clone();
+                        true
                     }
-                };
-                attached = true;
-                if should_start_watcher {
-                    watch_claude_session(app.clone(), task_id.clone(), expected.clone());
+                    _ => false,
                 }
-                break;
+            };
+
+            if should_start_watcher && corrected {
+                // 换 claim：旧的猜测路径不再持有，新路径若已被别的任务占用则放弃接管。
+                let claimed_actual = {
+                    let tm = app.state::<TaskManager>();
+                    let mut claimed = tm.claimed_session_paths.lock();
+                    claimed.remove(&path_string);
+                    claimed.insert(actual_string.clone())
+                };
+                if !claimed_actual {
+                    // 已被其他任务监听：还原占位标记，交给下方清理分支收尾。
+                    let tm = app.state::<TaskManager>();
+                    if let Some(info) = tm.claude_sessions.lock().get_mut(&task_id) {
+                        info.is_placeholder = true;
+                        info.session_path = path_string.clone();
+                    }
+                    break;
+                }
+                // 让前端把先前持久化的错误路径替换为真实路径。
+                let _ = app.emit(
+                    "task-session",
+                    serde_json::json!({
+                        "task_id": task_id,
+                        "session_id": session_id,
+                        "session_path": actual_string,
+                        "codex_like": false,
+                    }),
+                );
             }
-            thread::sleep(Duration::from_millis(500));
+
+            attached = true;
+            if should_start_watcher {
+                watch_claude_session(app.clone(), task_id.clone(), actual);
+            }
+            break;
         }
 
         // 文件出现 → watch_claude_session 已接管，claude_sessions 条目交给
@@ -2285,6 +2347,7 @@ pub(crate) fn spawn_status_session_watcher(
     app: AppHandle,
     task_id: String,
     project_path: String,
+    agent: String,
     is_codex: bool,
     rx: mpsc::Receiver<String>,
     pre_session_id: Option<String>,
@@ -2296,7 +2359,7 @@ pub(crate) fn spawn_status_session_watcher(
     // 后台再无限等文件出现后 attach 监听。
     if let Some(ref sid) = pre_session_id {
         if !is_codex && prompt_empty {
-            spawn_claude_lazy_session_attach(app, task_id, sid.clone(), project_path);
+            spawn_claude_lazy_session_attach(app, task_id, sid.clone(), project_path, agent);
             return;
         }
     }
@@ -2306,7 +2369,7 @@ pub(crate) fn spawn_status_session_watcher(
         if !is_codex {
             // ID 已经在 run_task 启动前确定，并由 spawn_claude_lazy_session_attach
             // 立即发给前端；这里不再等待文件或重复启动 watcher。
-            spawn_claude_lazy_session_attach(app, task_id, sid.clone(), project_path);
+            spawn_claude_lazy_session_attach(app, task_id, sid.clone(), project_path, agent);
             return;
         }
     }
@@ -2907,6 +2970,37 @@ mod tests {
                 .join("projects")
                 .join(encode_claude_project_path(project_path))]
         );
+
+        let _ = fs::remove_dir_all(home);
+    }
+
+    #[test]
+    fn claude_transcript_dir_follows_the_agents_own_config_home() {
+        let home = std::env::temp_dir().join(format!("aeroric-agent-dir-{}", uuid::Uuid::new_v4()));
+        let project_path = "/tmp/example project";
+        let encoded = encode_claude_project_path(project_path);
+
+        // 内建 Agent 写 ~/.claude/projects/<encoded>
+        for builtin in ["claude", "claude_gpt55"] {
+            assert_eq!(
+                claude_sessions_dir_for_agent_in(&home, builtin, project_path),
+                Some(home.join(".claude").join("projects").join(&encoded)),
+                "builtin agent {builtin} must use ~/.claude",
+            );
+        }
+
+        // 自定义 Agent 的 CLAUDE_CONFIG_DIR 是隔离 home，transcript 也在那里；
+        // 用 ~/.claude 猜路径会得到一个永不存在的文件。
+        let custom = claude_sessions_dir_for_agent_in(&home, "sota_claude", project_path).unwrap();
+        assert_eq!(
+            custom,
+            home.join(".aeroric")
+                .join("agent-homes")
+                .join("sota_claude")
+                .join("projects")
+                .join(&encoded),
+        );
+        assert_ne!(custom, home.join(".claude").join("projects").join(&encoded));
 
         let _ = fs::remove_dir_all(home);
     }

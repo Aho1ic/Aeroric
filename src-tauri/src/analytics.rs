@@ -68,6 +68,24 @@ pub(crate) fn is_codex_session(content: &str) -> bool {
     false
 }
 
+/// Claude transcript 不像 Codex 那样自带 `model_context_window`，只在每条 assistant
+/// 消息上记录 model。为了让终端顶栏能显示"上下文占用 / 窗口"，这里按 model 推导窗口。
+///
+/// 覆盖不到的 model（第三方中转、自定义 slug）返回 None，前端据此隐藏上下文这一项——
+/// 宁可少显示一项，也不要给出一个编造的百分比。
+pub(crate) fn claude_context_window_for_model(model: &str) -> Option<u64> {
+    let slug = model.trim().to_ascii_lowercase();
+    if slug.is_empty() {
+        return None;
+    }
+    // Anthropic 官方模型：Sonnet 4 起支持 1M beta，但 transcript 不记录是否启用，
+    // 因此统一按默认 200K 计算，避免把已用量显示成"看起来还很空"。
+    if slug.starts_with("claude-") {
+        return Some(200_000);
+    }
+    None
+}
+
 fn parse_claude_metrics(content: &str) -> SessionMetrics {
     let mut input_tokens: u64 = 0;
     let mut output_tokens: u64 = 0;
@@ -75,6 +93,7 @@ fn parse_claude_metrics(content: &str) -> SessionMetrics {
     let mut cache_read: u64 = 0;
     let mut tool_calls: u64 = 0;
     let mut last_context: u64 = 0;
+    let mut last_model: Option<String> = None;
     let mut first_ts: Option<f64> = None;
     let mut last_ts: Option<f64> = None;
 
@@ -90,6 +109,11 @@ fn parse_claude_metrics(content: &str) -> SessionMetrics {
         let Some(message) = val.get("message") else {
             continue;
         };
+        if let Some(model) = message.get("model").and_then(|v| v.as_str()) {
+            if !model.trim().is_empty() {
+                last_model = Some(model.to_string());
+            }
+        }
 
         if let Some(usage) = message.get("usage") {
             let inp = usage
@@ -130,7 +154,11 @@ fn parse_claude_metrics(content: &str) -> SessionMetrics {
         duration_secs: duration_from(first_ts, last_ts),
         total_tokens: input_tokens + output_tokens + cache_creation + cache_read,
         context_tokens: last_context,
-        context_window: 0, // Claude session 不带窗口大小
+        // Claude session 不带窗口大小，按最后一条 assistant 的 model 推导。
+        context_window: last_model
+            .as_deref()
+            .and_then(claude_context_window_for_model)
+            .unwrap_or(0),
     }
 }
 
@@ -800,6 +828,60 @@ pub async fn read_usage_statistics(
     tokio::task::spawn_blocking(move || read_usage_statistics_sync(range_days, agent))
         .await
         .map_err(|error| format!("read_usage_statistics join error: {error}"))?
+}
+
+#[cfg(test)]
+mod session_metrics_tests {
+    use super::*;
+
+    /// Claude 顶栏必须能拿到时长 / TOKENS / 上下文三项。窗口大小 transcript 里没有，
+    /// 由 model 推导。
+    #[test]
+    fn claude_metrics_expose_duration_tokens_and_context_window() {
+        let content = concat!(
+            r#"{"type":"user","timestamp":"2026-08-13T05:58:04.000Z","message":{"role":"user"}}"#,
+            "\n",
+            r#"{"type":"assistant","timestamp":"2026-08-13T05:58:10.000Z","message":{"model":"claude-opus-5","usage":{"input_tokens":100,"output_tokens":20,"cache_creation_input_tokens":5,"cache_read_input_tokens":1000},"content":[{"type":"tool_use"}]}}"#,
+            "\n",
+            r#"{"type":"assistant","timestamp":"2026-08-13T05:59:04.000Z","message":{"model":"claude-opus-5","usage":{"input_tokens":200,"output_tokens":30,"cache_creation_input_tokens":0,"cache_read_input_tokens":4000}}}"#,
+            "\n",
+        );
+
+        let metrics = parse_claude_metrics(content);
+        assert_eq!(metrics.duration_secs, 60.0);
+        assert_eq!(metrics.total_tokens, 100 + 20 + 5 + 1000 + 200 + 30 + 4000);
+        // 上下文 = 最后一轮 prompt 大小（input + cache_creation + cache_read）
+        assert_eq!(metrics.context_tokens, 200 + 4000);
+        assert_eq!(metrics.context_window, 200_000);
+        assert_eq!(metrics.tool_calls, 1);
+    }
+
+    /// 第三方中转的 model slug 推导不出窗口时保持 0，让前端只显示占用量而不是编造百分比。
+    #[test]
+    fn unknown_claude_model_leaves_the_context_window_unset() {
+        let content = concat!(
+            r#"{"type":"assistant","timestamp":"2026-08-13T05:58:10.000Z","message":{"model":"z-ai/glm-5.2","usage":{"input_tokens":10,"output_tokens":2,"cache_read_input_tokens":30}}}"#,
+            "\n",
+        );
+        let metrics = parse_claude_metrics(content);
+        assert_eq!(metrics.context_window, 0);
+        assert_eq!(metrics.context_tokens, 40);
+        assert_eq!(metrics.total_tokens, 42);
+    }
+
+    #[test]
+    fn codex_metrics_still_read_the_window_from_the_transcript() {
+        let content = concat!(
+            r#"{"type":"session_meta","timestamp":"2026-08-13T05:58:00.000Z","payload":{"type":"session_meta"}}"#,
+            "\n",
+            r#"{"type":"event_msg","timestamp":"2026-08-13T05:58:30.000Z","payload":{"type":"token_count","info":{"total_token_usage":{"total_tokens":5000},"last_token_usage":{"total_tokens":1200},"model_context_window":258400}}}"#,
+            "\n",
+        );
+        let metrics = parse_codex_metrics(content);
+        assert_eq!(metrics.total_tokens, 5000);
+        assert_eq!(metrics.context_tokens, 1200);
+        assert_eq!(metrics.context_window, 258_400);
+    }
 }
 
 #[cfg(test)]

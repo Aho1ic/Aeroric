@@ -20,6 +20,13 @@ pub(crate) enum SftpEndpoint {
         connection: SshConnection,
         path: String,
     },
+    /// 对象存储 / 网盘 / 文件共享。只带连接 id,凭据由后端自行从 0600
+    /// 的 secrets 文件读取,不经过前端。
+    Storage {
+        #[serde(rename = "connectionId")]
+        connection_id: String,
+        path: String,
+    },
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
@@ -814,6 +821,18 @@ pub async fn sftp_read_dir(endpoint: SftpEndpoint) -> Result<Vec<SftpEntry>, Str
                 &String::from_utf8_lossy(&stdout),
             ))
         }
+        SftpEndpoint::Storage {
+            connection_id,
+            path,
+        } => {
+            let path = validate_storage_path(&path)?;
+            let backend = storage_backend_for(&connection_id)?;
+            Ok(backend
+                .read_dir(&path)?
+                .into_iter()
+                .map(storage_entry_to_sftp)
+                .collect())
+        }
     })
     .await
     .map_err(|e| e.to_string())?
@@ -837,6 +856,30 @@ pub async fn sftp_read_text_file(endpoint: SftpEndpoint) -> Result<String, Strin
             let path = validate_sftp_remote_path(&path)?;
             let stdout = run_ssh_output(&connection, build_remote_read_text_command(&path))?;
             String::from_utf8(stdout).map_err(|e| e.to_string())
+        }
+        SftpEndpoint::Storage {
+            connection_id,
+            path,
+        } => {
+            let path = validate_storage_path(&path)?;
+            let backend = storage_backend_for(&connection_id)?;
+            let stat = backend.stat(&path)?;
+            if let Some(size) = stat.size {
+                if size > MAX_SFTP_TEXT_FILE_BYTES {
+                    return Err(format!(
+                        "File too large ({:.1} MB)",
+                        size as f64 / 1024.0 / 1024.0
+                    ));
+                }
+            }
+            let bytes = backend.read(&path)?;
+            if bytes.len() as u64 > MAX_SFTP_TEXT_FILE_BYTES {
+                return Err(format!(
+                    "File too large ({:.1} MB)",
+                    bytes.len() as f64 / 1024.0 / 1024.0
+                ));
+            }
+            String::from_utf8(bytes).map_err(|e| e.to_string())
         }
     })
     .await
@@ -891,6 +934,39 @@ pub async fn sftp_read_image_preview(
                 byte_length: bytes.len() as u64,
             })
         }
+        SftpEndpoint::Storage {
+            connection_id,
+            path,
+        } => {
+            let path = validate_storage_path(&path)?;
+            let mime_type = remote_image_mime_type(&path)
+                .ok_or_else(|| "Unsupported image format".to_string())?;
+            let backend = storage_backend_for(&connection_id)?;
+            if let Some(size) = backend.stat(&path)?.size {
+                if size > MAX_SFTP_IMAGE_PREVIEW_BYTES {
+                    return Err(format!(
+                        "Image too large ({:.1} MB)",
+                        size as f64 / 1024.0 / 1024.0
+                    ));
+                }
+            }
+            let bytes = backend.read(&path)?;
+            if bytes.len() as u64 > MAX_SFTP_IMAGE_PREVIEW_BYTES {
+                return Err(format!(
+                    "Image too large ({:.1} MB)",
+                    bytes.len() as f64 / 1024.0 / 1024.0
+                ));
+            }
+            Ok(SftpImagePreviewData {
+                data_url: format!(
+                    "data:{};base64,{}",
+                    mime_type,
+                    base64::engine::general_purpose::STANDARD.encode(&bytes)
+                ),
+                mime_type: mime_type.to_string(),
+                byte_length: bytes.len() as u64,
+            })
+        }
     })
     .await
     .map_err(|e| e.to_string())?
@@ -911,6 +987,14 @@ pub async fn sftp_read_directory_summary(
                 run_ssh_output(&connection, build_remote_directory_summary_command(&path))?;
             parse_remote_directory_summary(&stdout)
         }
+        SftpEndpoint::Storage {
+            connection_id,
+            path,
+        } => {
+            let path = validate_storage_path(&path)?;
+            let backend = storage_backend_for(&connection_id)?;
+            storage_directory_summary(backend.as_ref(), &path)
+        }
     })
     .await
     .map_err(|e| e.to_string())?
@@ -929,6 +1013,17 @@ pub async fn sftp_create_directory(endpoint: SftpEndpoint, name: String) -> Resu
             SftpEndpoint::Ssh { connection, path } => {
                 let target = join_remote_path(&validate_sftp_remote_path(&path)?, name);
                 run_ssh_output(&connection, build_remote_create_dir_command(&target)).map(|_| ())
+            }
+            SftpEndpoint::Storage {
+                connection_id,
+                path,
+            } => {
+                let parent = validate_storage_path(&path)?;
+                let backend = storage_backend_for(&connection_id)?;
+                if !backend.capability().create_dir {
+                    return Err("This connection cannot create folders".to_string());
+                }
+                backend.create_dir(&crate::storage_backend::join_storage_path(&parent, name))
             }
         }
     })
@@ -952,6 +1047,16 @@ pub async fn sftp_delete_paths(endpoint: SftpEndpoint, paths: Vec<String>) -> Re
                 .map(|path| validate_sftp_remote_path(&path))
                 .collect::<Result<Vec<_>, String>>()?;
             run_ssh_output(&connection, build_remote_delete_command(&paths)).map(|_| ())
+        }
+        SftpEndpoint::Storage { connection_id, .. } => {
+            let backend = storage_backend_for(&connection_id)?;
+            if !backend.capability().delete {
+                return Err("This connection cannot delete files".to_string());
+            }
+            for path in paths {
+                backend.delete(&validate_storage_path(&path)?)?;
+            }
+            Ok(())
         }
     })
     .await
@@ -983,6 +1088,21 @@ pub async fn sftp_rename_path(
                 let path = validate_sftp_remote_path(&path)?;
                 run_ssh_output(&connection, build_remote_rename_command(&path, new_name)?)
                     .map(|_| ())
+            }
+            SftpEndpoint::Storage { connection_id, .. } => {
+                let source = validate_storage_path(&path)?;
+                let backend = storage_backend_for(&connection_id)?;
+                if !backend.capability().rename {
+                    return Err("This connection cannot rename files".to_string());
+                }
+                let destination = crate::storage_backend::join_storage_path(
+                    &crate::storage_backend::path_parent(&source),
+                    new_name,
+                );
+                if backend.stat(&destination).is_ok() {
+                    return Err("A file or folder with that name already exists".to_string());
+                }
+                backend.rename(&source, &destination)
             }
         }
     })
@@ -1030,6 +1150,178 @@ pub async fn sftp_move_paths(
     .map_err(|e| e.to_string())?
 }
 
+// ---------------------------------------------------------------------------
+// Storage endpoints(对象存储 / 网盘 / 文件共享)
+// ---------------------------------------------------------------------------
+
+/// 按连接 id 构造存储后端。凭据由 `storage_conn` 从 0600 文件读取。
+fn storage_backend_for(
+    connection_id: &str,
+) -> Result<Box<dyn crate::storage_backend::StorageBackend>, String> {
+    let connection = crate::storage_conn::find_connection(connection_id)?;
+    crate::storage_backend::build_backend(&connection)
+}
+
+fn storage_entry_to_sftp(entry: crate::storage_backend::StorageEntry) -> SftpEntry {
+    SftpEntry {
+        extension: extension_for_name(&entry.name, entry.is_dir),
+        name: entry.name,
+        path: entry.path,
+        is_dir: entry.is_dir,
+        size: entry.size,
+        modified_at_ms: entry.modified_at_ms,
+    }
+}
+
+/// 递归统计存储目录,供目录摘要使用。
+fn storage_directory_summary(
+    backend: &dyn crate::storage_backend::StorageBackend,
+    path: &str,
+) -> Result<SftpDirectorySummary, String> {
+    let mut summary = SftpDirectorySummary {
+        file_count: 0,
+        directory_count: 0,
+        total_size: 0,
+        modified_at_ms: None,
+    };
+    let mut stack = vec![path.to_string()];
+    while let Some(current) = stack.pop() {
+        for entry in backend.read_dir(&current)? {
+            if entry.is_dir {
+                summary.directory_count += 1;
+                stack.push(entry.path);
+                continue;
+            }
+            summary.file_count += 1;
+            summary.total_size += entry.size.unwrap_or(0);
+            if let Some(modified) = entry.modified_at_ms {
+                summary.modified_at_ms = Some(match summary.modified_at_ms {
+                    Some(current) => current.max(modified),
+                    None => modified,
+                });
+            }
+        }
+    }
+    Ok(summary)
+}
+
+/// 校验存储路径。归一化在 `storage_backend` 内完成,这里只挡空路径。
+fn validate_storage_path(path: &str) -> Result<String, String> {
+    if path.trim().is_empty() {
+        return Err("Path is required".to_string());
+    }
+    Ok(crate::storage_backend::normalize_storage_path(path))
+}
+
+/// 递归把存储后端里的一个条目下载到本地目录。
+fn download_storage_path(
+    backend: &dyn crate::storage_backend::StorageBackend,
+    source: &str,
+    target_dir: &Path,
+) -> Result<(), String> {
+    let name = crate::storage_backend::path_basename(source);
+    validate_entry_name(&name)?;
+    let destination = target_dir.join(&name);
+    if backend.stat(source)?.is_dir {
+        std::fs::create_dir_all(&destination).map_err(|e| e.to_string())?;
+        for entry in backend.read_dir(source)? {
+            download_storage_path(backend, &entry.path, &destination)?;
+        }
+        return Ok(());
+    }
+    let bytes = backend.read(source)?;
+    std::fs::write(&destination, bytes).map_err(|e| e.to_string())
+}
+
+/// 递归把本地路径上传到存储后端目录下。
+fn upload_storage_path(
+    backend: &dyn crate::storage_backend::StorageBackend,
+    source: &Path,
+    target_dir: &str,
+) -> Result<(), String> {
+    let name = source
+        .file_name()
+        .map(|value| value.to_string_lossy().into_owned())
+        .ok_or_else(|| "Cannot resolve file name".to_string())?;
+    let destination = crate::storage_backend::join_storage_path(target_dir, &name);
+    let metadata = std::fs::symlink_metadata(source).map_err(|e| e.to_string())?;
+    if metadata.is_dir() {
+        backend.create_dir(&destination)?;
+        for entry in std::fs::read_dir(source).map_err(|e| e.to_string())? {
+            let entry = entry.map_err(|e| e.to_string())?;
+            upload_storage_path(backend, &entry.path(), &destination)?;
+        }
+        return Ok(());
+    }
+    let bytes = std::fs::read(source).map_err(|e| e.to_string())?;
+    backend.write(&destination, &bytes)
+}
+
+/// 冲突检查:目标目录里是否已有同名条目。
+fn ensure_storage_names_available(
+    backend: &dyn crate::storage_backend::StorageBackend,
+    names: &[String],
+    target_dir: &str,
+    conflict_strategy: SftpConflictStrategy,
+) -> Result<(), String> {
+    if conflict_strategy == SftpConflictStrategy::Merge {
+        return Ok(());
+    }
+    let existing = backend.read_dir(target_dir).unwrap_or_default();
+    for name in names {
+        let Some(entry) = existing.iter().find(|entry| &entry.name == name) else {
+            continue;
+        };
+        match conflict_strategy {
+            SftpConflictStrategy::Fail => {
+                return Err(format!("\"{name}\" already exists in the destination"))
+            }
+            SftpConflictStrategy::Replace => backend.delete(&entry.path)?,
+            SftpConflictStrategy::Merge => {}
+        }
+    }
+    Ok(())
+}
+
+/// 列出全部协议的元信息,驱动前端协议选择器与动态表单。
+#[tauri::command]
+pub async fn storage_protocols() -> Result<Vec<crate::storage_backend::ProtocolDescriptor>, String>
+{
+    Ok(crate::storage_backend::protocol_descriptors())
+}
+
+/// 报告某连接的能力位,前端据此禁用不支持的动作。
+#[tauri::command]
+pub async fn storage_capabilities(
+    connection_id: String,
+) -> Result<crate::storage_backend::Capability, String> {
+    tokio::task::spawn_blocking(move || {
+        let connection = crate::storage_conn::find_connection(&connection_id)?;
+        Ok(crate::storage_backend::capability_for(connection.protocol))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// 连接测试:真正建一次后端并列一次根目录。
+#[tauri::command]
+pub async fn storage_test_connection(connection_id: String) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || {
+        let backend = storage_backend_for(&connection_id)?;
+        backend.read_dir("/").map(|_| ())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// 卸载 AFP / NFS 挂载点。
+#[tauri::command]
+pub async fn storage_unmount_connection(connection_id: String) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || crate::storage_backend_mount::unmount(&connection_id))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
 fn copy_or_move_paths(
     source: SftpEndpoint,
     paths: Vec<String>,
@@ -1039,6 +1331,12 @@ fn copy_or_move_paths(
 ) -> Result<(), String> {
     if paths.is_empty() {
         return Ok(());
+    }
+    // storage endpoint 参与的组合单独处理,保持下面 local/ssh 的原有逻辑不变。
+    if matches!(source, SftpEndpoint::Storage { .. })
+        || matches!(target, SftpEndpoint::Storage { .. })
+    {
+        return copy_or_move_storage_paths(source, paths, target, move_paths, conflict_strategy);
     }
     match (&source, &target) {
         (SftpEndpoint::Local { .. }, SftpEndpoint::Local { path: target_path }) => {
@@ -1177,7 +1475,263 @@ fn copy_or_move_paths(
             let _ = std::fs::remove_dir_all(&temp_root);
             transfer_result
         }
+        // storage 组合已在函数开头分流,这里不可达。
+        (SftpEndpoint::Storage { .. }, _) | (_, SftpEndpoint::Storage { .. }) => {
+            Err("Unsupported transfer".to_string())
+        }
     }
+}
+
+/// 处理任一端为 storage 的复制/移动。
+///
+/// 跨后端(storage ↔ ssh)先落地到 0700 的临时目录再转发,复用现有 scp 路径。
+fn copy_or_move_storage_paths(
+    source: SftpEndpoint,
+    paths: Vec<String>,
+    target: SftpEndpoint,
+    move_paths: bool,
+    conflict_strategy: SftpConflictStrategy,
+) -> Result<(), String> {
+    match (&source, &target) {
+        // 同一存储连接内部搬移。
+        (
+            SftpEndpoint::Storage { connection_id, .. },
+            SftpEndpoint::Storage {
+                connection_id: target_id,
+                path: target_path,
+            },
+        ) if connection_id == target_id => {
+            let backend = storage_backend_for(connection_id)?;
+            let capability = backend.capability();
+            if move_paths && !capability.rename {
+                return Err("This connection cannot move files".to_string());
+            }
+            if !move_paths && !capability.copy {
+                return Err("This connection cannot copy files".to_string());
+            }
+            let target_dir = validate_storage_path(target_path)?;
+            let sources = paths
+                .iter()
+                .map(|path| validate_storage_path(path))
+                .collect::<Result<Vec<_>, String>>()?;
+            let names = sources
+                .iter()
+                .map(|path| crate::storage_backend::path_basename(path))
+                .collect::<Vec<_>>();
+            ensure_storage_names_available(
+                backend.as_ref(),
+                &names,
+                &target_dir,
+                conflict_strategy,
+            )?;
+            for path in &sources {
+                let destination = crate::storage_backend::join_storage_path(
+                    &target_dir,
+                    &crate::storage_backend::path_basename(path),
+                );
+                if move_paths {
+                    backend.rename(path, &destination)?;
+                } else {
+                    backend.copy(path, &destination)?;
+                }
+            }
+            Ok(())
+        }
+        // 存储 → 本地。
+        (
+            SftpEndpoint::Storage { connection_id, .. },
+            SftpEndpoint::Local { path: target_path },
+        ) => {
+            let backend = storage_backend_for(connection_id)?;
+            let target_dir = validate_sftp_local_path(target_path)?;
+            let sources = paths
+                .iter()
+                .map(|path| validate_storage_path(path))
+                .collect::<Result<Vec<_>, String>>()?;
+            let names = sources
+                .iter()
+                .map(|path| crate::storage_backend::path_basename(path))
+                .collect::<Vec<_>>();
+            ensure_local_target_names_available(&names, target_path, conflict_strategy)?;
+            for path in &sources {
+                download_storage_path(backend.as_ref(), path, &target_dir)?;
+            }
+            if move_paths {
+                for path in &sources {
+                    backend.delete(path)?;
+                }
+            }
+            Ok(())
+        }
+        // 本地 → 存储。
+        (
+            SftpEndpoint::Local { .. },
+            SftpEndpoint::Storage {
+                connection_id,
+                path: target_path,
+            },
+        ) => {
+            let backend = storage_backend_for(connection_id)?;
+            if !backend.capability().write {
+                return Err("This connection is read-only".to_string());
+            }
+            let target_dir = validate_storage_path(target_path)?;
+            let sources = paths
+                .iter()
+                .map(|path| validate_sftp_local_path(path))
+                .collect::<Result<Vec<_>, String>>()?;
+            ensure_storage_names_available(
+                backend.as_ref(),
+                &local_basenames(&paths)?,
+                &target_dir,
+                conflict_strategy,
+            )?;
+            for path in &sources {
+                upload_storage_path(backend.as_ref(), path, &target_dir)?;
+            }
+            if move_paths {
+                delete_local_sources(&paths)?;
+            }
+            Ok(())
+        }
+        // 存储 ↔ 存储(不同连接)/ 存储 ↔ ssh:经本地临时目录中转。
+        _ => transfer_storage_via_temp_dir(source, paths, target, move_paths, conflict_strategy),
+    }
+}
+
+/// 经 0700 临时目录中转的跨后端搬移。
+fn transfer_storage_via_temp_dir(
+    source: SftpEndpoint,
+    paths: Vec<String>,
+    target: SftpEndpoint,
+    move_paths: bool,
+    conflict_strategy: SftpConflictStrategy,
+) -> Result<(), String> {
+    let temp_root = std::env::temp_dir().join(format!(
+        "aeroric-storage-transfer-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|e| e.to_string())?
+            .as_nanos()
+    ));
+    std::fs::create_dir(&temp_root).map_err(|e| e.to_string())?;
+    tighten_temp_directory_permissions(&temp_root)?;
+    let temp_string = temp_root.to_string_lossy().into_owned();
+
+    let result = (|| -> Result<(), String> {
+        // 1) 把源侧内容取到临时目录。
+        match &source {
+            SftpEndpoint::Storage { connection_id, .. } => {
+                let backend = storage_backend_for(connection_id)?;
+                for path in &paths {
+                    download_storage_path(
+                        backend.as_ref(),
+                        &validate_storage_path(path)?,
+                        &temp_root,
+                    )?;
+                }
+            }
+            SftpEndpoint::Ssh { connection, .. } => {
+                let source_paths = paths
+                    .iter()
+                    .map(|path| validate_sftp_remote_path(path))
+                    .collect::<Result<Vec<_>, String>>()?;
+                run_command_spec(scp_download_spec(connection, &source_paths, &temp_string)?)?;
+            }
+            SftpEndpoint::Local { .. } => {
+                return Err("Unsupported transfer".to_string());
+            }
+        }
+
+        let staged = std::fs::read_dir(&temp_root)
+            .map_err(|e| e.to_string())?
+            .filter_map(|entry| entry.ok())
+            .map(|entry| entry.path())
+            .collect::<Vec<_>>();
+
+        // 2) 从临时目录写入目标侧。
+        match &target {
+            SftpEndpoint::Storage {
+                connection_id,
+                path: target_path,
+            } => {
+                let backend = storage_backend_for(connection_id)?;
+                if !backend.capability().write {
+                    return Err("This connection is read-only".to_string());
+                }
+                let target_dir = validate_storage_path(target_path)?;
+                let names = staged
+                    .iter()
+                    .filter_map(|path| path.file_name())
+                    .map(|name| name.to_string_lossy().into_owned())
+                    .collect::<Vec<_>>();
+                ensure_storage_names_available(
+                    backend.as_ref(),
+                    &names,
+                    &target_dir,
+                    conflict_strategy,
+                )?;
+                for path in &staged {
+                    upload_storage_path(backend.as_ref(), path, &target_dir)?;
+                }
+            }
+            SftpEndpoint::Ssh {
+                connection,
+                path: target_path,
+            } => {
+                let target_path = validate_sftp_remote_path(target_path)?;
+                let local_paths = staged
+                    .iter()
+                    .map(|path| path.to_string_lossy().into_owned())
+                    .collect::<Vec<_>>();
+                let names = local_basenames(&local_paths)?;
+                if conflict_strategy == SftpConflictStrategy::Fail {
+                    run_ssh_output(
+                        connection,
+                        build_remote_conflict_check_command(&names, &target_path)?,
+                    )?;
+                } else if conflict_strategy == SftpConflictStrategy::Merge {
+                    run_ssh_output(
+                        connection,
+                        build_remote_merge_conflict_check_command(&names, &target_path)?,
+                    )?;
+                } else if conflict_strategy == SftpConflictStrategy::Replace {
+                    run_ssh_output(
+                        connection,
+                        build_remote_delete_target_names_command(&names, &target_path)?,
+                    )?;
+                }
+                run_command_spec(scp_upload_spec(connection, &local_paths, &target_path)?)?;
+            }
+            SftpEndpoint::Local { .. } => {
+                return Err("Unsupported transfer".to_string());
+            }
+        }
+
+        // 3) 只有全部写入成功后才删除源。
+        if move_paths {
+            match &source {
+                SftpEndpoint::Storage { connection_id, .. } => {
+                    let backend = storage_backend_for(connection_id)?;
+                    for path in &paths {
+                        backend.delete(&validate_storage_path(path)?)?;
+                    }
+                }
+                SftpEndpoint::Ssh { connection, .. } => {
+                    let source_paths = paths
+                        .iter()
+                        .map(|path| validate_sftp_remote_path(path))
+                        .collect::<Result<Vec<_>, String>>()?;
+                    run_ssh_output(connection, build_remote_delete_command(&source_paths))?;
+                }
+                SftpEndpoint::Local { .. } => {}
+            }
+        }
+        Ok(())
+    })();
+
+    let _ = std::fs::remove_dir_all(&temp_root);
+    result
 }
 
 #[cfg(test)]

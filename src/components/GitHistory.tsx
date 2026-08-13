@@ -16,6 +16,7 @@ import {
   X,
 } from "lucide-react";
 import { useI18n } from "../i18n";
+import { zLayers } from "../styles/zLayers";
 import { GitFileBrowser, GitFileViewToggle, useGitFileViewMode } from "./git-view/GitFileBrowser";
 import type { RemoteProjectTarget } from "../types";
 import { targetProjectArgs } from "../projectTarget";
@@ -454,7 +455,7 @@ export function GitHistory({
                 border: "1px solid var(--border-dim)",
                 borderRadius: 7,
                 boxShadow: "var(--shadow-popover)",
-                zIndex: 200,
+                zIndex: zLayers.dropdownInline,
                 overflow: "hidden",
               }}
             >

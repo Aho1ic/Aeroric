@@ -1,5 +1,7 @@
 import type React from "react";
 
+import { zLayers } from "./zLayers";
+
 const skillRowManageBase: React.CSSProperties = {
   padding: "6px 12px",
   background: "transparent",
@@ -460,7 +462,7 @@ export const skillHub = {
     position: "fixed" as const,
     inset: 0,
     background: "transparent",
-    zIndex: 1100,
+    zIndex: zLayers.overlayNested,
     display: "flex",
     alignItems: "center",
     justifyContent: "center",
@@ -516,7 +518,7 @@ export const skillHub = {
     color: "var(--text-secondary)",
   },
   skillInstallProjectPopoverContent: {
-    zIndex: 2000,
+    zIndex: zLayers.popover,
     width: "var(--radix-popover-trigger-width)",
     minWidth: 220,
     maxWidth: 360,
@@ -638,7 +640,7 @@ export const skillHub = {
     position: "fixed" as const,
     inset: 0,
     background: "var(--overlay-bg)",
-    zIndex: 1200,
+    zIndex: zLayers.overlayNestedDeep,
     display: "flex",
     alignItems: "center",
     justifyContent: "center",

@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { Check, Plus, Edit2, Trash2, TriangleAlert, X } from "lucide-react";
 import { useI18n } from "../../i18n";
 import s from "../../styles";
+import { zLayers } from "../../styles/zLayers";
 import { Button } from "../ui/Button";
 import { APP_SETTINGS_CHANGED_EVENT, type McpSettings, type McpServer } from "./types";
 
@@ -426,7 +427,8 @@ export function McpPanel() {
           style={{
             position: "fixed",
             inset: 0,
-            zIndex: 3000,
+            // AppSettingsDialog(overlay)内部弹出,需高于其遮罩。
+            zIndex: zLayers.overlayNested,
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
@@ -664,7 +666,8 @@ export function McpPanel() {
           style={{
             position: "fixed",
             inset: 0,
-            zIndex: 3000,
+            // 可能叠在编辑弹窗(overlayNested)之上。
+            zIndex: zLayers.overlayNestedDeep,
             display: "flex",
             alignItems: "center",
             justifyContent: "center",

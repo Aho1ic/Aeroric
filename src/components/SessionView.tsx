@@ -327,11 +327,15 @@ export function SessionView({
   projectPath,
   isCodex,
   fallback,
+  onLoadFailed,
 }: {
   sessionPath: string;
   projectPath: string;
   isCodex: boolean;
   fallback?: ReactNode;
+  // 会话文件读不出来时通知调用方（路径失效、越界、解析失败）。
+  // RunningView 用它触发一次会话重新发现，修掉历史上被写坏的持久化路径。
+  onLoadFailed?: (error: string) => void;
 }) {
   const { t } = useI18n();
   const [messages, setMessages] = useState<SessionMessage[]>([]);
@@ -340,6 +344,8 @@ export function SessionView({
   const [error, setError] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const pendingScrollRestoreRef = useRef<{ height: number; top: number } | null>(null);
+  const onLoadFailedRef = useRef(onLoadFailed);
+  onLoadFailedRef.current = onLoadFailed;
 
   useLayoutEffect(() => {
     const restore = pendingScrollRestoreRef.current;
@@ -409,6 +415,7 @@ export function SessionView({
         setError(String(caught));
         setLoading(false);
         setLoadingEarlier(false);
+        onLoadFailedRef.current?.(String(caught));
       }
     };
 

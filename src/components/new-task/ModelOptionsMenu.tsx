@@ -18,6 +18,7 @@ import {
   type TaskSpeed,
 } from "../../modelOptions";
 import s from "../../styles";
+import { zLayers } from "../../styles/zLayers";
 
 type Panel = "model" | "reasoning" | "speed";
 
@@ -393,7 +394,7 @@ export function ModelOptionsMenu({
               ...submenuContentStyle(),
               borderLeft: "none",
               borderRight: "none",
-              zIndex: 4001,
+              zIndex: zLayers.popoverNested,
             }}
           >
             {active ? renderSubmenu(panelId) : null}
@@ -505,7 +506,7 @@ export function ModelOptionsMenu({
               "min(360px, var(--radix-popover-content-available-height, calc(100vh - 24px)))",
             overflow: "hidden",
             padding: 6,
-            zIndex: 4000,
+            zIndex: zLayers.popover,
           }}
         >
           <div

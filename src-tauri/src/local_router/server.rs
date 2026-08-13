@@ -1,6 +1,7 @@
 use super::cache_injector;
 use super::chat_bridge::{chat_response_to_responses, responses_to_chat, ChatSseTransformer};
 use super::circuit_breaker::{CircuitBreakerConfig, CircuitBreakerRegistry, CircuitPermit};
+use super::inline_tool_calls;
 use super::session;
 use super::thinking_optimizer;
 use super::transforms::{self, PreparedRequest};
@@ -125,7 +126,7 @@ async fn proxy_request(State(context): State<ServerContext>, request: Request) -
         session_body.as_ref(),
     )));
 
-    let candidates = agent_runtime.candidates();
+    let candidates = agent_runtime.candidates_for(route.target_id.as_deref());
     if candidates.is_empty() {
         let message = if agent_runtime.policy.auto_failover_enabled {
             "automatic failover is enabled, but its queue has no valid targets"
@@ -149,10 +150,17 @@ async fn proxy_request(State(context): State<ServerContext>, request: Request) -
     let policy = agent_runtime.policy;
     let circuit_config = policy.circuit_breaker_config();
     let max_attempts = policy.max_attempts();
-    let bypass_circuit_breaker = !policy.auto_failover_enabled;
+    // 熔断器只在"还有别的目标可以接住流量"时才有意义。以下两种情况必须直通：
+    //  - 未开启自动故障转移：候选永远只有一个 active_target
+    //  - 请求指定了目标（/targets/<id>/…）：这是 Agent 配置的固定上游，不是路由偏好
+    // 否则一次瞬时上游抖动就会把唯一目标熔断 circuit_timeout_seconds 秒，
+    // 期间所有请求直接 503 "circuit-open or busy probing"，表现为该配置整体不可用。
+    let single_pinned_target = route.target_id.is_some() || candidates.len() <= 1;
+    let bypass_circuit_breaker = !policy.auto_failover_enabled || single_pinned_target;
     let mut attempted_targets = 0usize;
     let mut last_failure: Option<AttemptFailure> = None;
     let mut saw_circuit_candidate = false;
+    let mut skipped_open_target: Option<UpstreamTarget> = None;
 
     for target in candidates {
         if attempted_targets >= max_attempts {
@@ -171,6 +179,9 @@ async fn proxy_request(State(context): State<ServerContext>, request: Request) -
                 .await
         };
         if !permit.allowed {
+            if skipped_open_target.is_none() {
+                skipped_open_target = Some(target);
+            }
             continue;
         }
         saw_circuit_candidate = true;
@@ -233,7 +244,9 @@ async fn proxy_request(State(context): State<ServerContext>, request: Request) -
                         target_id: target.id().to_string(),
                         used_half_open_permit: permit.used_half_open_permit,
                     });
-                    mark_active_target(&context, route.agent, target.id()).await;
+                    if route.target_id.is_none() {
+                        mark_active_target(&context, route.agent, target.id()).await;
+                    }
                     return upstream.into_response(route.agent);
                 } else {
                     context
@@ -245,7 +258,9 @@ async fn proxy_request(State(context): State<ServerContext>, request: Request) -
                             permit.used_half_open_permit,
                         )
                         .await;
-                    mark_active_target(&context, route.agent, target.id()).await;
+                    if route.target_id.is_none() {
+                        mark_active_target(&context, route.agent, target.id()).await;
+                    }
                 }
 
                 let usage = upstream.capture_usage(route.agent);
@@ -257,6 +272,84 @@ async fn proxy_request(State(context): State<ServerContext>, request: Request) -
                     .complete(usage, status.as_u16(), is_streaming, error_summary)
                     .await;
                 return response;
+            }
+        }
+    }
+
+    // 所有候选都被熔断挡住时，宁可赌一次真实请求也不要凭空 503：真实请求最坏是拿到
+    // 上游错误（并记为失败），而凭空 503 会让 agent 在整个熔断窗口内完全无法工作。
+    if !saw_circuit_candidate {
+        if let Some(target) = skipped_open_target {
+            attempted_targets += 1;
+            let attempt = attempt_target(
+                &runtime_config,
+                &route,
+                &method,
+                query.as_deref(),
+                &outbound_headers,
+                &body_bytes,
+                &request_metadata,
+                &policy,
+                &target,
+            )
+            .await;
+            match attempt {
+                AttemptResult::Retry(mut failure) => {
+                    failure.attempt_count = attempted_targets;
+                    context
+                        .circuit_breakers
+                        .record_failure(
+                            route.agent,
+                            target.id(),
+                            circuit_config.clone(),
+                            false,
+                            &failure.summary,
+                        )
+                        .await;
+                    last_failure = Some(failure);
+                }
+                AttemptResult::Return(mut upstream) => {
+                    upstream.attempt_count = attempted_targets;
+                    completion.set_target(
+                        target.id(),
+                        target.name(),
+                        &upstream.endpoint,
+                        &upstream.outbound_model,
+                        attempted_targets,
+                    );
+                    if upstream.error_summary.is_none() {
+                        if upstream.is_streaming_body() {
+                            upstream.attach_stream_completion(StreamCompletion {
+                                completion,
+                                circuit_breakers: context.circuit_breakers.clone(),
+                                circuit_config: circuit_config.clone(),
+                                agent: route.agent,
+                                target_id: target.id().to_string(),
+                                used_half_open_permit: false,
+                            });
+                            if route.target_id.is_none() {
+                                mark_active_target(&context, route.agent, target.id()).await;
+                            }
+                            return upstream.into_response(route.agent);
+                        }
+                        context
+                            .circuit_breakers
+                            .record_success(route.agent, target.id(), circuit_config.clone(), false)
+                            .await;
+                        if route.target_id.is_none() {
+                            mark_active_target(&context, route.agent, target.id()).await;
+                        }
+                    }
+                    let usage = upstream.capture_usage(route.agent);
+                    let status = upstream.status;
+                    let is_streaming = upstream.is_streaming;
+                    let error_summary = upstream.error_summary.clone();
+                    let response = upstream.into_response(route.agent);
+                    completion
+                        .complete(usage, status.as_u16(), is_streaming, error_summary)
+                        .await;
+                    return response;
+                }
             }
         }
     }
@@ -310,6 +403,7 @@ async fn mark_active_target(context: &ServerContext, agent: RouterAgent, target_
 struct SelectedRoute {
     agent: RouterAgent,
     forward_path: String,
+    target_id: Option<String>,
 }
 
 impl SelectedRoute {
@@ -359,13 +453,13 @@ fn select_route(uri: &Uri, headers: &HeaderMap) -> Result<SelectedRoute, &'stati
     let path = uri.path();
     let prefixed = strip_agent_prefix(path, "/claude", RouterAgent::Claude)
         .or_else(|| strip_agent_prefix(path, "/codex", RouterAgent::Codex));
-    let (agent, forward_path) = if let Some((agent, path)) = prefixed {
+    let (agent, forward_path, target_id) = if let Some((agent, path, target_id)) = prefixed {
         if marker.is_some_and(|marker| marker != agent) {
             return Err("local router path and agent marker disagree");
         }
-        (agent, path)
+        (agent, path, target_id)
     } else if path.starts_with("/v1/messages") {
-        (RouterAgent::Claude, path.to_string())
+        (RouterAgent::Claude, path.to_string(), None)
     } else if path.starts_with("/v1/responses")
         || path.starts_with("/responses")
         || path.starts_with("/v1/chat/completions")
@@ -373,9 +467,9 @@ fn select_route(uri: &Uri, headers: &HeaderMap) -> Result<SelectedRoute, &'stati
         || path.starts_with("/v1/models")
         || path == "/models"
     {
-        (RouterAgent::Codex, path.to_string())
+        (RouterAgent::Codex, path.to_string(), None)
     } else if let Some(agent) = marker {
-        (agent, path.to_string())
+        (agent, path.to_string(), None)
     } else {
         return Err("unknown local router endpoint");
     };
@@ -388,6 +482,7 @@ fn select_route(uri: &Uri, headers: &HeaderMap) -> Result<SelectedRoute, &'stati
     Ok(SelectedRoute {
         agent,
         forward_path,
+        target_id,
     })
 }
 
@@ -395,19 +490,32 @@ fn strip_agent_prefix(
     path: &str,
     prefix: &str,
     agent: RouterAgent,
-) -> Option<(RouterAgent, String)> {
+) -> Option<(RouterAgent, String, Option<String>)> {
     let suffix = path.strip_prefix(prefix)?;
     if !suffix.is_empty() && !suffix.starts_with('/') {
         return None;
     }
-    Some((
-        agent,
-        if suffix.is_empty() {
-            "/".to_string()
-        } else {
-            suffix.to_string()
-        },
-    ))
+    let suffix = suffix.strip_prefix('/').unwrap_or(suffix);
+    let (target_id, forward_path) = suffix
+        .strip_prefix("targets/")
+        .and_then(|target| target.split_once('/'))
+        .map(|(target_id, path)| {
+            (
+                (!target_id.is_empty()).then(|| target_id.to_string()),
+                format!("/{path}"),
+            )
+        })
+        .unwrap_or_else(|| {
+            (
+                None,
+                if suffix.is_empty() {
+                    "/".to_string()
+                } else {
+                    format!("/{suffix}")
+                },
+            )
+        });
+    Some((agent, forward_path, target_id))
 }
 
 fn normalize_codex_path(path: &str) -> String {
@@ -825,6 +933,16 @@ async fn attempt_target(
                 } else {
                     body
                 };
+                // 非流式 Responses：部分中转会把工具调用写进 assistant 文本，
+                // Codex 会原样打印那段标记且工具不执行，这里还原成原生 function_call。
+                let body = if route.agent == RouterAgent::Codex
+                    && route.forward_path.contains("/responses")
+                    && !response_body_is_encoded(&headers)
+                {
+                    repair_inline_tool_calls_in_body(&body).unwrap_or(body)
+                } else {
+                    body
+                };
                 AttemptResult::Return(AttemptResponse {
                     status: raw.status,
                     headers,
@@ -851,8 +969,8 @@ async fn attempt_target(
                 } else {
                     0
                 };
-                let semantic_protocol =
-                    semantic_protocol.filter(|_| !response_body_is_encoded(&headers));
+                let body_is_encoded = response_body_is_encoded(&headers);
+                let semantic_protocol = semantic_protocol.filter(|_| !body_is_encoded);
                 AttemptResult::Return(AttemptResponse {
                     status: raw.status,
                     headers,
@@ -867,6 +985,12 @@ async fn attempt_target(
                             }
                         }),
                         semantic_protocol,
+                        // 桥接过的流由 ChatSseTransformer 直接产出原生工具调用；
+                        // 只有直连 Responses 的上游会把工具调用写进文本里。
+                        repair_inline_tool_calls: !bridge
+                            && route.agent == RouterAgent::Codex
+                            && route.forward_path.contains("/responses")
+                            && !body_is_encoded,
                         idle_timeout,
                         stream_completion: None,
                     }),
@@ -1683,6 +1807,8 @@ struct StreamingAttemptBody {
     rest: BoxStream<'static, Result<Bytes, reqwest::Error>>,
     bridge_model: Option<String>,
     semantic_protocol: Option<SemanticProtocol>,
+    /// 是否需要把文本形态的工具调用还原成原生 `function_call`(仅 Codex Responses 流)。
+    repair_inline_tool_calls: bool,
     idle_timeout: u64,
     stream_completion: Option<StreamCompletion>,
 }
@@ -1707,6 +1833,9 @@ fn streaming_response(
         upstream: streaming.rest,
         pending: VecDeque::new(),
         transformer: streaming.bridge_model.map(ChatSseTransformer::new),
+        inline_tool_calls: streaming
+            .repair_inline_tool_calls
+            .then(inline_tool_calls::InlineToolCallSseFilter::new),
         semantic_observer: streaming.semantic_protocol.map(SemanticStreamObserver::new),
         semantic_failure: None,
         capture: Some(UsageCapture::new(agent, true, None)),
@@ -1752,6 +1881,11 @@ fn streaming_response(
                             state.enqueue_output(chunk);
                         }
                     }
+                    if let Some(filter) = state.inline_tool_calls.as_mut() {
+                        for chunk in filter.finish() {
+                            state.enqueue_output(chunk);
+                        }
+                    }
                     state.upstream_finished = true;
                 }
                 Err(summary) => {
@@ -1772,6 +1906,7 @@ struct ProxyBodyState {
     upstream: BoxStream<'static, Result<Bytes, reqwest::Error>>,
     pending: VecDeque<Bytes>,
     transformer: Option<ChatSseTransformer>,
+    inline_tool_calls: Option<inline_tool_calls::InlineToolCallSseFilter>,
     semantic_observer: Option<SemanticStreamObserver>,
     semantic_failure: Option<String>,
     capture: Option<UsageCapture>,
@@ -1792,6 +1927,10 @@ impl ProxyBodyState {
         }
         if let Some(transformer) = self.transformer.as_mut() {
             for output in transformer.push(chunk) {
+                self.enqueue_output(output);
+            }
+        } else if let Some(filter) = self.inline_tool_calls.as_mut() {
+            for output in filter.push(chunk) {
                 self.enqueue_output(output);
             }
         } else {
@@ -2060,17 +2199,38 @@ impl Drop for RequestCompletion {
     }
 }
 
+/// 客户端主动断开导致的收尾原因。用户按 Esc 打断、关闭任务、切走配置都会走到这里，
+/// 属于正常操作而非路由故障，因此不能污染"最近错误"横幅和失败计数——否则用户每次
+/// 打断都会看到一条红色报错。请求行仍会落库，方便在请求历史里排查。
+const CLIENT_ABORT_SUMMARIES: [&str; 2] = [
+    "client disconnected before the upstream response completed",
+    "local router request was cancelled",
+];
+
+fn is_client_abort_summary(summary: &str) -> bool {
+    CLIENT_ABORT_SUMMARIES.contains(&summary)
+}
+
 async fn finalize_request(
     context: CompletionContext,
     usage: TokenUsage,
     status_code: u16,
     error_summary: Option<String>,
 ) {
+    let client_aborted = error_summary
+        .as_deref()
+        .is_some_and(is_client_abort_summary);
     let success = error_summary.is_none() && (200..400).contains(&status_code);
-    context.metrics.finish_request(success);
+    if !client_aborted {
+        context.metrics.finish_request(success);
+    } else {
+        context.metrics.finish_client_abort();
+    }
     let error_summary = error_summary.as_deref().map(usage::sanitize_summary);
     if let Some(message) = error_summary.as_deref() {
-        context.metrics.set_error(Some(context.agent), message);
+        if !client_aborted {
+            context.metrics.set_error(Some(context.agent), message);
+        }
     }
     if !context.record_usage {
         return;
@@ -2115,6 +2275,19 @@ async fn finalize_request(
             format!("failed to record local router usage: {error}"),
         );
     }
+}
+
+/// 把非流式 Responses body 里"文本形态的工具调用"改写成原生 `function_call`。
+/// 没有需要改写的内容(或 body 不是 JSON)时返回 None，调用方保持原 body。
+fn repair_inline_tool_calls_in_body(body: &Bytes) -> Option<Bytes> {
+    if !inline_tool_calls::contains_sentinel(&String::from_utf8_lossy(body)) {
+        return None;
+    }
+    let mut payload = serde_json::from_slice::<Value>(body).ok()?;
+    if !inline_tool_calls::rewrite_response_payload(&mut payload) {
+        return None;
+    }
+    serde_json::to_vec(&payload).ok().map(Bytes::from)
 }
 
 fn buffered_response(status: StatusCode, headers: HeaderMap, body: Bytes) -> Response {
@@ -2325,6 +2498,25 @@ mod tests {
         let route = select_route(request.uri(), request.headers()).unwrap();
         assert_eq!(route.agent, RouterAgent::Codex);
         assert_eq!(route.forward_path, "/v1/responses");
+        assert_eq!(route.target_id, None);
+
+        let request = Request::builder()
+            .uri("/codex/targets/codex-team/v1/responses")
+            .body(Body::empty())
+            .unwrap();
+        let route = select_route(request.uri(), request.headers()).unwrap();
+        assert_eq!(route.agent, RouterAgent::Codex);
+        assert_eq!(route.forward_path, "/v1/responses");
+        assert_eq!(route.target_id.as_deref(), Some("codex-team"));
+
+        let request = Request::builder()
+            .uri("/claude/targets/claude-team/v1/messages")
+            .body(Body::empty())
+            .unwrap();
+        let route = select_route(request.uri(), request.headers()).unwrap();
+        assert_eq!(route.agent, RouterAgent::Claude);
+        assert_eq!(route.forward_path, "/v1/messages");
+        assert_eq!(route.target_id.as_deref(), Some("claude-team"));
 
         let request = Request::builder()
             .uri("/v1/responses")
@@ -3034,6 +3226,161 @@ mod tests {
         healthy_task.abort();
         let _ = failing_task.await;
         let _ = healthy_task.await;
+        remove_database(&database_path);
+    }
+
+    /// 单目标配置绝不能被熔断器锁死：没有第二个上游可以接住流量时，熔断只会让
+    /// 该配置在整个窗口内彻底不可用（用户可见的表现是每个请求秒回 503
+    /// "circuit-open or busy probing"）。
+    #[tokio::test]
+    async fn a_single_target_keeps_serving_after_repeated_upstream_errors() {
+        let hits = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counter = hits.clone();
+        // 前 4 次返回真实 503（正好达到默认 failure_threshold），第 5 次恢复。
+        let upstream = Router::new().fallback(any(move || {
+            let counter = counter.clone();
+            async move {
+                let seen = counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                if seen < 4 {
+                    return (
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        Json(json!({"error":{"message":"Service temporarily unavailable"}})),
+                    )
+                        .into_response();
+                }
+                Json(json!({"id":"recovered"})).into_response()
+            }
+        }));
+        let (address, upstream_task) = start_mock_upstream(upstream).await;
+        let target = UpstreamTarget::with_details(
+            "only",
+            "Only",
+            format!("http://{address}/v1"),
+            "",
+            Vec::new(),
+            false,
+            false,
+        )
+        .unwrap();
+        let database_path = temp_database_path();
+        let router = LocalRouterState::with_database_path(database_path.clone()).unwrap();
+        let info = router
+            .start(RouterRuntimeConfig::new(
+                "127.0.0.1",
+                unused_port(),
+                true,
+                failover_upstreams(RouterAgent::Codex, vec![target], &["only"]),
+            ))
+            .await
+            .unwrap();
+
+        let client = reqwest::Client::new();
+        let url = format!("{}/codex/v1/responses", info.base_url);
+        for _ in 0..4 {
+            let response = client
+                .post(&url)
+                .json(&json!({"model":"gpt-test","input":"hello"}))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        }
+
+        // 熔断窗口内的第 5 个请求仍必须真正打到上游，而不是被本地凭空拒掉。
+        let response = client
+            .post(&url)
+            .json(&json!({"model":"gpt-test","input":"hello"}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(response.text().await.unwrap().contains("recovered"));
+        assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), 5);
+
+        router.stop().await.unwrap();
+        upstream_task.abort();
+        let _ = upstream_task.await;
+        remove_database(&database_path);
+    }
+
+    /// 目标限定路由（/targets/<id>/…）代表 Agent 自己的固定上游，同样不能被熔断
+    /// 锁死——它没有故障转移队列可退。
+    #[tokio::test]
+    async fn a_pinned_target_route_is_not_gated_by_the_circuit_breaker() {
+        let hits = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counter = hits.clone();
+        let upstream = Router::new().fallback(any(move || {
+            let counter = counter.clone();
+            async move {
+                let seen = counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                if seen < 4 {
+                    return (
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        Json(json!({"error":{"message":"busy"}})),
+                    )
+                        .into_response();
+                }
+                Json(json!({"id":"pinned-ok"})).into_response()
+            }
+        }));
+        let (address, upstream_task) = start_mock_upstream(upstream).await;
+        let targets = vec![
+            UpstreamTarget::with_details(
+                "primary",
+                "Primary",
+                format!("http://{address}/v1"),
+                "",
+                Vec::new(),
+                false,
+                false,
+            )
+            .unwrap(),
+            UpstreamTarget::with_details(
+                "secondary",
+                "Secondary",
+                format!("http://{address}/v1"),
+                "",
+                Vec::new(),
+                false,
+                false,
+            )
+            .unwrap(),
+        ];
+        let database_path = temp_database_path();
+        let router = LocalRouterState::with_database_path(database_path.clone()).unwrap();
+        let info = router
+            .start(RouterRuntimeConfig::new(
+                "127.0.0.1",
+                unused_port(),
+                true,
+                failover_upstreams(RouterAgent::Codex, targets, &["primary", "secondary"]),
+            ))
+            .await
+            .unwrap();
+
+        let client = reqwest::Client::new();
+        let url = format!("{}/codex/targets/primary/v1/responses", info.base_url);
+        for _ in 0..4 {
+            let response = client
+                .post(&url)
+                .json(&json!({"model":"gpt-test","input":"hello"}))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        }
+        let response = client
+            .post(&url)
+            .json(&json!({"model":"gpt-test","input":"hello"}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(response.text().await.unwrap().contains("pinned-ok"));
+
+        router.stop().await.unwrap();
+        upstream_task.abort();
+        let _ = upstream_task.await;
         remove_database(&database_path);
     }
 

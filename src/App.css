@@ -11,6 +11,21 @@
   --primary: var(--ds-accent);
   --primary-foreground: var(--ds-on-accent);
   --ring: var(--ds-focus);
+
+  /* z-index 层级量表 —— 必须与 src/styles/zLayers.ts 保持一致。
+   * 瞬态浮层(--z-popover 及以上)始终高于模态遮罩层(--z-overlay),
+   * 否则 Radix Portal 浮层会被同挂 body 的遮罩盖住。 */
+  --z-base: 1;
+  --z-sticky: 20;
+  --z-dropdown-inline: 200;
+  --z-overlay: 3000;
+  --z-overlay-nested: 3100;
+  --z-overlay-nested-deep: 3200;
+  --z-popover: 4200;
+  --z-popover-nested: 4300;
+  --z-context-menu-backdrop: 4399;
+  --z-context-menu: 4400;
+  --z-toast: 4600;
 }
 
 :where(button, input, select, textarea):focus-visible {
@@ -772,7 +787,7 @@ body {
   border: 1px solid var(--border-medium);
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-popover);
-  z-index: 2000;
+  z-index: var(--z-popover);
   min-width: var(--radix-select-trigger-width);
   max-height: 280px;
   overflow: hidden;
@@ -907,7 +922,7 @@ body {
   border: 1px solid var(--border-medium);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-popover);
-  z-index: 2000;
+  z-index: var(--z-popover);
   width: var(--radix-popover-trigger-width);
   /* trigger 较窄（如 NewTaskView 的 launch-mode 行）时兜底，避免分支名被截断 */
   min-width: 220px;
@@ -1067,6 +1082,79 @@ body {
   }
   50% {
     box-shadow: 0 0 0 4px color-mix(in srgb, var(--success) 0%, transparent);
+  }
+}
+
+/* SSH 卡片"复制密码"按钮的点击反馈：按下时快速回弹，复制成功后扩散一圈水波并
+   短暂变成成功色。三处复制入口（连接列表 / 工作区 / 项目对话框）共用。 */
+.ssh-copy-action {
+  position: relative;
+  transition:
+    transform 140ms ease,
+    color 160ms ease,
+    border-color 160ms ease;
+}
+
+.ssh-copy-action:not(:disabled):active {
+  transform: scale(0.9);
+}
+
+.ssh-copy-action[data-copied="true"] {
+  color: var(--success) !important;
+  border-color: var(--success) !important;
+  animation: ssh-copy-pop 320ms ease;
+}
+
+/* 水波用 ::after 画，不额外插 DOM 节点，也不影响按钮自身的图标布局。 */
+.ssh-copy-action[data-copied="true"]::after {
+  content: "";
+  position: absolute;
+  inset: -2px;
+  border-radius: inherit;
+  border: 1px solid var(--success);
+  animation: ssh-copy-ripple 520ms ease-out forwards;
+  pointer-events: none;
+}
+
+@keyframes ssh-copy-pop {
+  0% {
+    transform: scale(0.9);
+  }
+  55% {
+    transform: scale(1.14);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+@keyframes ssh-copy-ripple {
+  from {
+    opacity: 0.75;
+    transform: scale(0.85);
+  }
+  to {
+    opacity: 0;
+    transform: scale(1.75);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ssh-copy-action,
+  .ssh-copy-action[data-copied="true"] {
+    animation: none;
+    transition:
+      color 160ms ease,
+      border-color 160ms ease;
+  }
+
+  .ssh-copy-action:not(:disabled):active {
+    transform: none;
+  }
+
+  .ssh-copy-action[data-copied="true"]::after {
+    animation: none;
+    opacity: 0;
   }
 }
 
@@ -1492,7 +1580,7 @@ body {
   border: 1px solid var(--border-medium);
   border-radius: 7px;
   box-shadow: var(--shadow-md);
-  z-index: 2000;
+  z-index: var(--z-popover);
 }
 
 .file-viewer-tab-menu-item {

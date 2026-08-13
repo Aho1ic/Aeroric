@@ -29,6 +29,20 @@ export function resolveThemeVariant(mode: ThemeMode, systemPrefersDark: boolean)
   return mode;
 }
 
+// 原生窗口装饰（macOS titlebar / Win32 chrome）只认 light/dark；eyecare 归入 light
+// 家族，让系统按钮与滚动条保持浅色外观。
+export function nativeThemeForVariant(variant: ThemeVariant): "light" | "dark" {
+  return variant === "dark" ? "dark" : "light";
+}
+
+// macOS 的 titlebarAppearsTransparent 会透出窗口背景色，所以标题栏配色由这里决定。
+// 取值与 App.css 里 prefers-reduced-transparency 下的实色 token 保持一致。
+export function nativeWindowBackgroundForVariant(variant: ThemeVariant): string {
+  if (variant === "dark") return "#09090b";
+  if (variant === "eyecare") return "#f6eddc";
+  return "#fbfbfc";
+}
+
 export function getInitialTerminalFontSize(): TerminalFontSize {
   // 按平台隔离，老 key 仅作为 macOS 的迁移来源（历史版本只在 mac 上被使用过）。
   const stored =

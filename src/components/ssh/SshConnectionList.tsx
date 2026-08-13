@@ -1,9 +1,10 @@
 import { useState } from "react";
-import { Copy, Edit3, Plus, Server, Trash2 } from "lucide-react";
+import { Check, Copy, Edit3, Plus, Server, Trash2 } from "lucide-react";
 import type { SshConnection } from "../../types";
 import { useI18n } from "../../i18n";
 import s from "../../styles";
 import { SshConnectionContextMenu, type SshConnectionProtocol } from "./SshConnectionContextMenu";
+import { useCopyFeedback } from "./useCopyFeedback";
 
 interface Props {
   connections: SshConnection[];
@@ -30,11 +31,21 @@ export function SshConnectionList({
   onConnect,
 }: Props) {
   const { t } = useI18n();
+  const { copiedId, markCopied } = useCopyFeedback();
   const [contextMenu, setContextMenu] = useState<{
     connection: SshConnection;
     x: number;
     y: number;
   } | null>(null);
+  // 只有真的写进剪贴板才给成功反馈，否则用户会以为复制成功了。
+  const copyPassword = async (connectionId: string, password: string) => {
+    try {
+      await navigator.clipboard?.writeText(password);
+      markCopied(connectionId);
+    } catch (error) {
+      console.warn("copy ssh password failed", error);
+    }
+  };
   const groupedConnections = connections.reduce<Array<[string, SshConnection[]]>>(
     (groups, connection) => {
       const groupName = connection.group?.trim() || t("ssh.defaultGroup");
@@ -114,9 +125,11 @@ export function SshConnectionList({
                     <span style={s.sshConnectionActions}>
                       <span
                         role="button"
+                        className="ssh-copy-action"
                         tabIndex={canCopyPassword ? 0 : -1}
                         aria-disabled={!canCopyPassword}
                         aria-label={t("ssh.copyPassword")}
+                        data-copied={copiedId === connection.id ? "true" : undefined}
                         style={{
                           ...s.sshRowAction,
                           opacity: canCopyPassword ? 1 : 0.35,
@@ -126,17 +139,17 @@ export function SshConnectionList({
                         onClick={(event) => {
                           event.stopPropagation();
                           if (!canCopyPassword) return;
-                          void navigator.clipboard?.writeText(password);
+                          void copyPassword(connection.id, password);
                         }}
                         onKeyDown={(event) => {
                           if (event.key !== "Enter" && event.key !== " ") return;
                           event.preventDefault();
                           event.stopPropagation();
                           if (!canCopyPassword) return;
-                          void navigator.clipboard?.writeText(password);
+                          void copyPassword(connection.id, password);
                         }}
                       >
-                        <Copy size={13} />
+                        {copiedId === connection.id ? <Check size={13} /> : <Copy size={13} />}
                       </span>
                       <span
                         role="button"

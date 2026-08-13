@@ -142,6 +142,18 @@ describe("RunningView resume affordance", () => {
     expect(screen.getByRole("button", { name: "Switch configuration" })).toBeInTheDocument();
   });
 
+  it("offers configuration switching after a task has completed", () => {
+    renderRunningView(completedTask);
+
+    expect(screen.getByRole("button", { name: "Switch configuration" })).toBeInTheDocument();
+  });
+
+  it("offers configuration switching while the terminal is detached", () => {
+    renderRunningView({ ...completedTask, status: "detached" });
+
+    expect(screen.getByRole("button", { name: "Switch configuration" })).toBeInTheDocument();
+  });
+
   it("uses the saved session owner after a failed switch changed the task agent", () => {
     renderRunningView({
       ...completedTask,

@@ -24,6 +24,7 @@ import type { ThemeVariant } from "../../types";
 import claudeLogo from "../../assets/claude.svg";
 import chatgptLogo from "../../assets/chatgpt.svg";
 import { AnimatedSelectionGroup } from "../ui/AnimatedSelection";
+import { zLayers } from "../../styles/zLayers";
 import { refreshLocalRouterRuntime } from "./shared";
 
 type ProviderTab = "anthropic" | "openai";
@@ -268,7 +269,7 @@ export function AllAgentConfigsPanel({ themeVariant }: { themeVariant: ThemeVari
                   avoidCollisions
                   sticky="always"
                   style={{
-                    zIndex: 9999,
+                    zIndex: zLayers.popover,
                     minWidth: 180,
                     maxWidth: "min(280px, calc(100vw - 24px))",
                     maxHeight: "min(320px, var(--radix-popover-content-available-height))",

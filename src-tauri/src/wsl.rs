@@ -6,6 +6,7 @@ use std::process::{Command, Output, Stdio};
 use std::sync::Arc;
 use std::time::Duration;
 
+use parking_lot::Mutex;
 use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 use serde::{Deserialize, Serialize};
 use tauri::ipc::Channel;
@@ -699,27 +700,26 @@ fn resolve_login_shell(distribution: &str, probe_shell: String) -> Result<String
         .unwrap_or(probe_shell))
 }
 
-fn spawn_wsl_exit_monitor(app: AppHandle, task_id: String) {
+fn spawn_wsl_exit_monitor(
+    app: AppHandle,
+    task_id: String,
+    child_handle: Arc<Mutex<Box<dyn portable_pty::Child + Send + Sync>>>,
+) {
     tokio::task::spawn_blocking(move || loop {
-        let exit_status = {
-            let manager = app.state::<crate::TaskManager>();
-            let child = manager.child_handles.lock().get(&task_id).cloned();
-            child.and_then(|child| child.lock().try_wait().ok().flatten())
-        };
+        let exit_status = child_handle.lock().try_wait().ok().flatten();
         if let Some(status) = exit_status {
+            let manager = app.state::<crate::TaskManager>();
+            if !manager.remove_pty_handles_if_current(&task_id, &child_handle) {
+                return;
+            }
             let (cancelled, manually_completed) = {
-                let manager = app.state::<crate::TaskManager>();
                 let result = (
                     manager.cancelled_tasks.lock().remove(&task_id),
                     manager.manually_completed_tasks.lock().remove(&task_id),
                 );
                 result
             };
-            {
-                let manager = app.state::<crate::TaskManager>();
-                manager.remove_pty_handles(&task_id);
-                manager.wsl_active_ids.lock().remove(&task_id);
-            }
+            manager.wsl_active_ids.lock().remove(&task_id);
             if cancelled || manually_completed {
                 return;
             }
@@ -771,7 +771,8 @@ fn spawn_wsl_task_pty(
         .master
         .take_writer()
         .map_err(|error| error.to_string())?;
-    crate::pty::register_pty_handles(task_manager, task_id, pair.master, writer, child)?;
+    let child_handle =
+        crate::pty::register_pty_handles(task_manager, task_id, pair.master, writer, child)?;
     task_manager
         .wsl_active_ids
         .lock()
@@ -823,7 +824,7 @@ fn spawn_wsl_task_pty(
             crate::pty::cancel_initial_input_signal(task_manager, task_id);
         }
     }
-    spawn_wsl_exit_monitor(app, task_id.to_string());
+    spawn_wsl_exit_monitor(app, task_id.to_string(), child_handle);
     Ok(())
 }
 

@@ -172,6 +172,26 @@ fn targets_for_agent(
     }
 
     let mut targets = vec![built_in_target(settings, agent)?];
+    if agent == RouterAgent::Codex {
+        if let Some(credentials) = settings
+            .builtin_agent_credentials
+            .get("claude_gpt55")
+            .filter(|credentials| !credentials.base_url.trim().is_empty())
+        {
+            targets.push(
+                UpstreamTarget::with_details(
+                    "claude_gpt55",
+                    target_label(settings, "claude_gpt55", "Claude GPT-5.5"),
+                    credentials.base_url.trim(),
+                    credentials.api_key.as_str(),
+                    credentials.models.clone(),
+                    credentials.enable_1m_context,
+                    false,
+                )
+                .map_err(|error| error.to_string())?,
+            );
+        }
+    }
     for profile in &settings.custom_agents {
         let belongs_to_agent = match agent {
             RouterAgent::Claude => !profile.codex_like,
@@ -607,6 +627,11 @@ mod tests {
             .entry("codex".to_string())
             .or_default()
             .base_url = "https://example.test/openai/v1".to_string();
+        settings
+            .builtin_agent_credentials
+            .entry("claude_gpt55".to_string())
+            .or_default()
+            .base_url = "https://gpt55.example/v1".to_string();
         settings.custom_agents.push(CustomAgentProfile {
             id: "chat-provider".to_string(),
             label: "Chat Provider".to_string(),
@@ -623,12 +648,13 @@ mod tests {
         });
 
         let config = runtime_config(&settings).unwrap();
-        assert_eq!(config.upstreams.codex.targets.len(), 2);
+        assert_eq!(config.upstreams.codex.targets.len(), 3);
         assert_eq!(
             config.upstreams.codex.targets[0].base_url().as_str(),
             "https://example.test/openai/v1"
         );
-        assert!(config.upstreams.codex.targets[1].enable_chat_completions_proxy());
+        assert_eq!(config.upstreams.codex.targets[1].id(), "claude_gpt55");
+        assert!(config.upstreams.codex.targets[2].enable_chat_completions_proxy());
     }
 
     #[test]

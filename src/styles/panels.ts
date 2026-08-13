@@ -1,6 +1,7 @@
 import type React from "react";
 
 import { ROW_HEIGHT } from "../components/file-explorer/types";
+import { zLayers } from "./zLayers";
 
 export const panels = {
   newTaskOuter: {
@@ -345,7 +346,7 @@ export const panels = {
     boxShadow: "var(--shadow-popover)",
     padding: 5,
     minWidth: 180,
-    zIndex: 9999,
+    zIndex: zLayers.popover,
   },
   toolbarActionMenuContent: {
     background: "color-mix(in srgb, var(--bg-card) 90%, transparent)",
@@ -356,7 +357,7 @@ export const panels = {
     boxShadow: "var(--shadow-popover)",
     padding: 5,
     minWidth: 230,
-    zIndex: 9999,
+    zIndex: zLayers.popover,
   },
   toolbarMenuItem: {
     display: "flex",
@@ -477,7 +478,7 @@ export const panels = {
     position: "absolute",
     top: "calc(100% + 6px)",
     left: 0,
-    zIndex: 100,
+    zIndex: zLayers.dropdownInline,
     background: "var(--bg-card)",
     border: "1px solid var(--border-medium)",
     borderRadius: "var(--radius-md)",
@@ -531,7 +532,7 @@ export const panels = {
     bottom: "calc(100% + 6px)",
     left: 0,
     right: 0,
-    zIndex: 200,
+    zIndex: zLayers.dropdownInline,
     background: "var(--bg-card)",
     border: "1px solid var(--border-medium)",
     borderRadius: "var(--radius-md)",
@@ -766,7 +767,7 @@ export const panels = {
   fileSearchDialogBackdrop: {
     position: "fixed" as const,
     inset: 0,
-    zIndex: 1600,
+    zIndex: zLayers.overlay,
     display: "flex",
     alignItems: "flex-start",
     justifyContent: "center",
@@ -862,7 +863,7 @@ export const panels = {
     whiteSpace: "nowrap" as const,
   },
   fileSearchTypeContent: {
-    zIndex: 2000,
+    zIndex: zLayers.popover,
     background: "var(--bg-sidebar)",
     border: "1px solid var(--border-medium)",
     borderRadius: "var(--radius-md)",
@@ -1035,11 +1036,11 @@ export const panels = {
   fileCtxBackdrop: {
     position: "fixed" as const,
     inset: 0,
-    zIndex: 999,
+    zIndex: zLayers.contextMenuBackdrop,
   },
   fileCtxMenu: {
     position: "fixed" as const,
-    zIndex: 1000,
+    zIndex: zLayers.contextMenu,
     background: "var(--bg-sidebar)",
     border: "1px solid var(--border-dim)",
     borderRadius: 6,
@@ -1393,7 +1394,7 @@ export const panels = {
   sshDialogOverlay: {
     position: "fixed",
     inset: 0,
-    zIndex: 3000,
+    zIndex: zLayers.overlay,
     display: "flex",
     alignItems: "center",
     justifyContent: "center",

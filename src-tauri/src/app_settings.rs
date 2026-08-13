@@ -488,6 +488,20 @@ pub fn is_known_agent(agent: &str) -> bool {
             .any(|profile| profile.id == agent)
 }
 
+/// 自定义 Agent 隔离 home 的目录名(`~/.aeroric/agent-homes/{name}`);内建 Agent 返回 None,
+/// 因为它们直接使用 `~/.claude` / `~/.codex`。
+///
+/// 会话文件定位需要它:自定义 claude-like Agent 的启动脚本把 `CLAUDE_CONFIG_DIR` 指向
+/// 隔离 home,transcript 因此落在 `<agent-home>/projects/<encoded-project>/` 而不是
+/// `~/.claude/projects/...`。
+pub(crate) fn custom_agent_home_dir_name(agent: &str) -> Option<String> {
+    if matches!(agent, "claude" | "claude_gpt55" | "codex") {
+        return None;
+    }
+    let normalized = sanitize_custom_agent_id(agent);
+    (!normalized.is_empty()).then_some(normalized)
+}
+
 fn default_claude_gpt55_path() -> String {
     crate::platform::home_dir()
         .map(|home| home.join(".claude").join("start-gpt55.sh"))
@@ -915,7 +929,7 @@ fn append_builtin_agent_api_env(
         return;
     };
     if !credentials.base_url.is_empty() {
-        if agent == "codex" {
+        if matches!(agent, "codex" | "claude_gpt55") {
             extra_env.push(("OPENAI_BASE_URL".to_string(), credentials.base_url.clone()));
         } else {
             extra_env.push((
@@ -925,7 +939,7 @@ fn append_builtin_agent_api_env(
         }
     }
     if !credentials.api_key.is_empty() {
-        if agent == "codex" {
+        if matches!(agent, "codex" | "claude_gpt55") {
             for key in ["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "CODEX_API_KEY"] {
                 extra_env.push((key.to_string(), credentials.api_key.clone()));
             }
@@ -937,7 +951,7 @@ fn append_builtin_agent_api_env(
             extra_env.push(("ANTHROPIC_API_KEY".to_string(), credentials.api_key.clone()));
         }
     }
-    if agent != "codex" {
+    if !matches!(agent, "codex" | "claude_gpt55") {
         if let Some(model) = credentials.models.first() {
             let model = if credentials.enable_1m_context && !model.ends_with("[1m]") {
                 format!("{model}[1m]")
@@ -959,9 +973,21 @@ fn append_builtin_agent_api_env(
 fn append_local_router_env(
     settings: &AppSettings,
     agent: &str,
+    router_listening: bool,
     extra_env: &mut Vec<(String, String)>,
 ) {
     let router = &settings.local_router_settings;
+    if agent == "claude_gpt55"
+        && settings
+            .builtin_agent_credentials
+            .get(agent)
+            .is_none_or(|credentials| credentials.base_url.trim().is_empty())
+    {
+        // Without a configured GPT-5.5 upstream the launcher script is the
+        // source of truth. Pinning it to the built-in Codex target would make
+        // the selected configuration look active while using Codex instead.
+        return;
+    }
     let codex_like = match agent {
         "claude" => false,
         "codex" | "claude_gpt55" => true,
@@ -970,8 +996,11 @@ fn append_local_router_env(
             .iter()
             .find(|profile| profile.id == other)
         {
-            Some(profile) => profile.codex_like,
+            // Profiles without an upstream URL rely on their own launcher
+            // configuration and cannot be pinned to a router target.
+            Some(profile) if !profile.base_url.trim().is_empty() => profile.codex_like,
             None => return,
+            Some(_) => return,
         },
     };
     let (enabled, base_url_key, route_prefix) = if codex_like {
@@ -979,7 +1008,11 @@ fn append_local_router_env(
     } else {
         (router.claude_enabled, "ANTHROPIC_BASE_URL", "claude")
     };
-    if !router.enabled || !enabled {
+    // `router_listening` 为假说明服务没真的在监听(开关刚打开还没起、端口被占、绑定失败、
+    // 正在停服)。把 Agent 指向一个没人接的端口只会得到
+    // `error sending request for url (http://127.0.0.1:18080/...)`，
+    // 不如直接让它按自己的配置直连上游。
+    if !router.enabled || !enabled || !router_listening {
         return;
     }
 
@@ -993,6 +1026,11 @@ fn append_local_router_env(
     } else {
         connect_host.to_string()
     };
+    let target_id = agent;
+    let route_prefix = route_prefix
+        .split_once('/')
+        .map(|(family, suffix)| format!("{family}/targets/{target_id}/{suffix}"))
+        .unwrap_or_else(|| format!("{route_prefix}/targets/{target_id}"));
     extra_env.push((
         base_url_key.to_string(),
         format!("http://{url_host}:{}/{route_prefix}", router.listen_port),
@@ -1450,7 +1488,11 @@ fn inferred_agent_codex_like(program: &str) -> Option<bool> {
     None
 }
 
-fn get_agent_launch_spec_from_settings(settings: &AppSettings, agent: &str) -> AgentLaunchSpec {
+fn build_agent_launch_spec(
+    settings: &AppSettings,
+    agent: &str,
+    router_listening: bool,
+) -> AgentLaunchSpec {
     let configured_path = get_agent_configured_path(settings, agent);
     let mut spec = resolve_agent_launch_spec_from_path(agent, &configured_path);
     spec.codex_like = inferred_agent_codex_like(&configured_path)
@@ -1458,8 +1500,14 @@ fn get_agent_launch_spec_from_settings(settings: &AppSettings, agent: &str) -> A
     append_agent_credential_env(settings, agent, &mut spec.extra_env);
     append_builtin_agent_api_env(settings, agent, &mut spec.extra_env);
     append_agent_proxy_env(settings, agent, &mut spec.extra_env);
-    append_local_router_env(settings, agent, &mut spec.extra_env);
+    append_local_router_env(settings, agent, router_listening, &mut spec.extra_env);
     spec
+}
+
+fn get_agent_launch_spec_from_settings(settings: &AppSettings, agent: &str) -> AgentLaunchSpec {
+    let router_listening =
+        crate::local_router::is_listening_on(settings.local_router_settings.listen_port);
+    build_agent_launch_spec(settings, agent, router_listening)
 }
 
 pub(crate) fn get_agent_launch_spec_from(settings: &AppSettings, agent: &str) -> AgentLaunchSpec {
@@ -2392,7 +2440,7 @@ async fn detect_agent_models_with_policy(
         return Err("API key is required".to_string());
     }
     let base_url = validate_model_base_url(&base_url, policy)?;
-    let endpoint = model_endpoint(&base_url);
+    let candidates = model_endpoint_candidates(&base_url);
 
     let resolved_addresses = if matches!(policy, ModelDetectionPolicy::PairedDevice) {
         Some(resolve_remote_model_addresses(&base_url).await?)
@@ -2400,17 +2448,49 @@ async fn detect_agent_models_with_policy(
         None
     };
     let mut client_builder = reqwest::Client::builder()
-        .timeout(Duration::from_secs(10))
+        // 候选端点串行探测,总预算在 models.rs 内按 deadline 控制,
+        // 这里不再设客户端级总超时,避免第一个慢候选耗尽后续机会。
         .redirect(reqwest::redirect::Policy::none());
     if let Some(addresses) = resolved_addresses.as_deref() {
         let host = base_url
             .host_str()
             .ok_or_else(|| "Base URL must include a host".to_string())?;
+        // 候选端点与 base URL 同源(仅替换 path),因此固定解析对全部候选生效。
         client_builder = client_builder.resolve_to_addrs(host, addresses);
     }
     let client = client_builder.build().map_err(|error| error.to_string())?;
-    let value = fetch_agent_model_json(&client, &endpoint, &kind, &api_key).await?;
-    let models = parse_model_ids(value);
+
+    let mut auth_failed = false;
+    let detected = fetch_agent_model_json_from_candidates(
+        &client,
+        &candidates,
+        &kind,
+        &api_key,
+        &mut auth_failed,
+    )
+    .await;
+
+    let models = match detected {
+        Ok((value, _endpoint)) => parse_model_ids(value),
+        Err(error) => {
+            // 只有在「所有候选都是端点不存在」时才退到公开目录:出现过鉴权失败就必须
+            // 把错误报出去,否则会把 API Key 无效伪装成一份不可用的模型列表。
+            if auth_failed {
+                return Err(error);
+            }
+            let public = fetch_public_model_catalog(
+                &client,
+                &public_model_catalog_candidates(&base_url),
+                &kind,
+            )
+            .await;
+            match public {
+                Some(models) if !models.is_empty() => models,
+                _ => return Err(error),
+            }
+        }
+    };
+
     let balance = fetch_agent_balance(&client, base_url.as_str(), &api_key).await;
     Ok(AgentModels {
         models,
@@ -3055,6 +3135,12 @@ mod tests {
             .map(|(_, value)| value.as_str())
     }
 
+    /// 按"路由确实在监听"构建启动参数。测试进程里没有真的起服务，
+    /// 所以显式给出这个前提，与线上从 [`crate::local_router::is_listening_on`] 读到的一致。
+    fn launch_spec_with_router_listening(settings: &AppSettings, agent: &str) -> AgentLaunchSpec {
+        build_agent_launch_spec(settings, agent, true)
+    }
+
     #[test]
     fn settings_cache_invalidates_after_an_external_file_change() {
         let root =
@@ -3154,21 +3240,79 @@ mod tests {
                 ..BuiltInAgentCredentials::default()
             },
         );
+        settings.builtin_agent_credentials.insert(
+            "claude_gpt55".to_string(),
+            BuiltInAgentCredentials {
+                base_url: "https://gpt55.example.test/v1".to_string(),
+                ..BuiltInAgentCredentials::default()
+            },
+        );
 
-        let claude = get_agent_launch_spec_from_settings(&settings, "claude");
+        let claude = launch_spec_with_router_listening(&settings, "claude");
         assert_eq!(
             last_env_value(&claude, "ANTHROPIC_BASE_URL"),
-            Some("http://[::1]:19090/claude")
+            Some("http://[::1]:19090/claude/targets/claude")
         );
-        let codex = get_agent_launch_spec_from_settings(&settings, "codex");
+        let codex = launch_spec_with_router_listening(&settings, "codex");
         assert_eq!(
             last_env_value(&codex, "OPENAI_BASE_URL"),
-            Some("http://[::1]:19090/codex/v1")
+            Some("http://[::1]:19090/codex/targets/codex/v1")
+        );
+        let claude_gpt55 = launch_spec_with_router_listening(&settings, "claude_gpt55");
+        assert_eq!(
+            last_env_value(&claude_gpt55, "OPENAI_BASE_URL"),
+            Some("http://[::1]:19090/codex/targets/claude_gpt55/v1")
         );
         assert_eq!(
             last_env_value(&codex, "NO_PROXY"),
             Some("127.0.0.1,localhost,::1")
         );
+    }
+
+    #[test]
+    fn local_router_does_not_replace_an_unconfigured_gpt55_launcher() {
+        let settings = AppSettings {
+            local_router_settings: LocalRouterSettings {
+                enabled: true,
+                ..LocalRouterSettings::default()
+            },
+            ..AppSettings::default()
+        };
+
+        let launch = launch_spec_with_router_listening(&settings, "claude_gpt55");
+        assert_eq!(last_env_value(&launch, "OPENAI_BASE_URL"), None);
+    }
+
+    /// 开关是开的但服务没在监听时不能改写 base URL，否则 Agent 会一直请求
+    /// `http://127.0.0.1:<port>/...` 并报 `error sending request for url`。
+    #[test]
+    fn a_router_that_is_not_listening_leaves_agent_base_urls_alone() {
+        let mut settings = AppSettings {
+            local_router_settings: LocalRouterSettings {
+                enabled: true,
+                listen_port: 19092,
+                ..LocalRouterSettings::default()
+            },
+            ..AppSettings::default()
+        };
+        settings.builtin_agent_credentials.insert(
+            "codex".to_string(),
+            BuiltInAgentCredentials {
+                base_url: "https://codex.example.test/v1".to_string(),
+                ..BuiltInAgentCredentials::default()
+            },
+        );
+        settings
+            .custom_agents
+            .push(test_custom_profile("custom", "custom", true));
+
+        let codex = build_agent_launch_spec(&settings, "codex", false);
+        assert_eq!(
+            last_env_value(&codex, "OPENAI_BASE_URL"),
+            Some("https://codex.example.test/v1")
+        );
+        let custom = build_agent_launch_spec(&settings, "custom", false);
+        assert_eq!(last_env_value(&custom, "OPENAI_BASE_URL"), None);
     }
 
     #[test]
@@ -3191,7 +3335,7 @@ mod tests {
             },
         );
 
-        let launch = get_agent_launch_spec_from_settings(&settings, "codex");
+        let launch = launch_spec_with_router_listening(&settings, "codex");
         assert_eq!(last_env_value(&launch, "OPENAI_API_KEY"), Some(token));
         assert_eq!(last_env_value(&launch, "CODEX_API_KEY"), Some(token));
     }
@@ -3211,12 +3355,19 @@ mod tests {
             .custom_agents
             .push(test_custom_profile("custom", "custom", true));
 
-        let claude = get_agent_launch_spec_from_settings(&settings, "claude");
+        let claude = launch_spec_with_router_listening(&settings, "claude");
         assert_eq!(last_env_value(&claude, "ANTHROPIC_BASE_URL"), None);
-        let custom = get_agent_launch_spec_from_settings(&settings, "custom");
+        let custom = launch_spec_with_router_listening(&settings, "custom");
         assert_eq!(
             last_env_value(&custom, "OPENAI_BASE_URL"),
-            Some("http://127.0.0.1:19091/codex/v1")
+            Some("http://127.0.0.1:19091/codex/targets/custom/v1")
+        );
+
+        settings.custom_agents[0].base_url.clear();
+        let custom_without_router_target = launch_spec_with_router_listening(&settings, "custom");
+        assert_eq!(
+            last_env_value(&custom_without_router_target, "OPENAI_BASE_URL"),
+            None
         );
     }
 

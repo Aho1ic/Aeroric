@@ -22,6 +22,7 @@ import type {
   SshConnection,
 } from "../../types";
 import { useI18n } from "../../i18n";
+import { zLayers } from "../../styles/zLayers";
 import { AnimatedSelectionGroup } from "../ui/AnimatedSelection";
 
 type DockerTab = "images" | "containers";
@@ -825,7 +826,7 @@ export function DockerServiceView({
           style={{
             position: "fixed",
             inset: 0,
-            zIndex: 3000,
+            zIndex: zLayers.overlay,
             display: "flex",
             alignItems: "center",
             justifyContent: "center",

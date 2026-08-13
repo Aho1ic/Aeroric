@@ -40,7 +40,8 @@ toml = "0.8"
 libc = "0.2"
 if-addrs = "0.15"
 parking_lot = "0.12"
-reqwest = { version = "0.13", default-features = false, features = ["json", "rustls", "socks", "stream"] }
+# query/form/multipart:storage 后端(Box、百度网盘、OAuth token 交换)需要
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls", "socks", "stream", "query", "form", "multipart"] }
 axum = "0.8"
 flate2 = "1"
 brotli = "7"
@@ -66,6 +67,21 @@ url = "2"
 trash = "=5.2.6"
 font-kit = "=0.14.3"
 rusqlite = { version = "0.32", features = ["bundled", "backup"] }
+# 对象存储 / 网盘 / WebDAV 统一访问层。只启用实际用到的 service,
+# 其余 50+ service(hdfs、rocksdb 等)会引入原生工具链依赖,不启用。
+opendal = { version = "0.58.1", features = [
+  "services-s3",
+  "services-oss",
+  "services-cos",
+  "services-upyun",
+  "services-webdav",
+  "services-dropbox",
+  "services-gdrive",
+  "services-onedrive",
+  "services-aliyun-drive",
+] }
+# SMB 客户端(纯 Rust,无需 sudo 挂载)
+smb2 = "0.18.1"
 dbx-core = { path = "../../dbx/crates/dbx-core", default-features = false }
 tauri-plugin-clipboard-manager = "2"
 

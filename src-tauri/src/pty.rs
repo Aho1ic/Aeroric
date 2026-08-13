@@ -131,9 +131,13 @@ fn finalize_task_exit(
     is_codex: bool,
     exit_ok: bool,
     exit_code: Option<u32>,
+    child_handle: &Arc<parking_lot::Mutex<Box<dyn portable_pty::Child + Send + Sync>>>,
 ) {
+    let tm = app.state::<TaskManager>();
+    if !tm.remove_pty_handles_if_current(task_id, child_handle) {
+        return;
+    }
     let (is_cancelled, is_manually_completed) = {
-        let tm = app.state::<TaskManager>();
         let mut cancelled = tm.cancelled_tasks.lock();
         let mut manually_completed = tm.manually_completed_tasks.lock();
         (
@@ -144,8 +148,6 @@ fn finalize_task_exit(
 
     let had_agent_session;
     {
-        let tm = app.state::<TaskManager>();
-        tm.remove_pty_handles(task_id);
         let codex_info = tm.codex_sessions.lock().remove(task_id);
         let codex_path = codex_info.map(|info| info.session_path);
         let claude_info = tm.claude_sessions.lock().remove(task_id);
@@ -387,7 +389,7 @@ pub(crate) fn register_pty_handles(
     master: Box<dyn portable_pty::MasterPty + Send>,
     writer: Box<dyn Write + Send>,
     child: Box<dyn portable_pty::Child + Send + Sync>,
-) -> Result<(), String> {
+) -> Result<Arc<parking_lot::Mutex<Box<dyn portable_pty::Child + Send + Sync>>>, String> {
     let mut masters = task_manager.pty_masters.lock();
     let mut pending_sizes = task_manager.pending_pty_sizes.lock();
     if let Some((cols, rows)) = pending_sizes.remove(id) {
@@ -407,11 +409,12 @@ pub(crate) fn register_pty_handles(
         .pty_writers
         .lock()
         .insert(id.to_string(), Arc::new(parking_lot::Mutex::new(writer)));
+    let child_handle = Arc::new(parking_lot::Mutex::new(child));
     task_manager
         .child_handles
         .lock()
-        .insert(id.to_string(), Arc::new(parking_lot::Mutex::new(child)));
-    Ok(())
+        .insert(id.to_string(), Arc::clone(&child_handle));
+    Ok(child_handle)
 }
 
 #[derive(Clone, Copy)]
@@ -587,17 +590,15 @@ pub(crate) fn spawn_pty_reader(
 }
 
 /// 在后台线程中轮询子进程退出状态，退出后调用 finalize_task_exit。
-fn spawn_exit_monitor(app: AppHandle, task_id: String, project_path: String, is_codex: bool) {
+fn spawn_exit_monitor(
+    app: AppHandle,
+    task_id: String,
+    project_path: String,
+    is_codex: bool,
+    child_handle: Arc<parking_lot::Mutex<Box<dyn portable_pty::Child + Send + Sync>>>,
+) {
     tokio::task::spawn_blocking(move || loop {
-        let exit_status = {
-            let tm = app.state::<TaskManager>();
-            let child_arc = tm.child_handles.lock().get(&task_id).cloned();
-            if let Some(arc) = child_arc {
-                arc.lock().try_wait().ok().flatten()
-            } else {
-                return;
-            }
-        };
+        let exit_status = child_handle.lock().try_wait().ok().flatten();
 
         if let Some(status) = exit_status {
             let exit_ok = status.success();
@@ -608,7 +609,15 @@ fn spawn_exit_monitor(app: AppHandle, task_id: String, project_path: String, is_
             };
             // 等待会话注册完成
             wait_for_session(&app, &task_id, is_codex);
-            finalize_task_exit(&app, &task_id, &project_path, is_codex, exit_ok, exit_code);
+            finalize_task_exit(
+                &app,
+                &task_id,
+                &project_path,
+                is_codex,
+                exit_ok,
+                exit_code,
+                &child_handle,
+            );
             return;
         }
 
@@ -1497,7 +1506,7 @@ pub async fn run_task(
     drop(pair.slave);
     let reader = pair.master.try_clone_reader().map_err(|e| e.to_string())?;
     let writer = pair.master.take_writer().map_err(|e| e.to_string())?;
-    register_pty_handles(&task_manager, &task_id, pair.master, writer, child)?;
+    let child_handle = register_pty_handles(&task_manager, &task_id, pair.master, writer, child)?;
 
     let _ = app.emit(
         "task-status",
@@ -1514,6 +1523,7 @@ pub async fn run_task(
                 task_id.clone(),
                 session_id,
                 project_path.clone(),
+                agent.clone(),
             );
         }
     }
@@ -1546,6 +1556,7 @@ pub async fn run_task(
             app.clone(),
             task_id.clone(),
             project_path.clone(),
+            agent.clone(),
             is_codex,
             session_rx,
             None,
@@ -1602,7 +1613,7 @@ pub async fn run_task(
             cancel_initial_input_signal(&task_manager, &task_id);
         }
     }
-    spawn_exit_monitor(app, task_id, project_path, is_codex);
+    spawn_exit_monitor(app, task_id, project_path, is_codex, child_handle);
 
     Ok(())
 }
@@ -2047,7 +2058,7 @@ pub async fn resume_task(
     drop(pair.slave);
     let reader = pair.master.try_clone_reader().map_err(|e| e.to_string())?;
     let writer = pair.master.take_writer().map_err(|e| e.to_string())?;
-    register_pty_handles(&task_manager, &task_id, pair.master, writer, child)?;
+    let child_handle = register_pty_handles(&task_manager, &task_id, pair.master, writer, child)?;
 
     let _ = app.emit(
         "task-status",
@@ -2106,7 +2117,7 @@ pub async fn resume_task(
             cancel_initial_input_signal(&task_manager, &task_id);
         }
     }
-    spawn_exit_monitor(app, task_id, project_path, is_codex);
+    spawn_exit_monitor(app, task_id, project_path, is_codex, child_handle);
 
     Ok(())
 }

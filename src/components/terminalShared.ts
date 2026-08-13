@@ -277,6 +277,14 @@ export function remapLightAnsiForeground(data: string, variant: ThemeVariant): s
 
 export interface SmartWriter {
   write: (data: string, callback?: () => void) => void;
+  /**
+   * 一次性灌入历史回放，绕过每帧字节预算。
+   *
+   * 逐帧写入是为了给实时输出留出渲染时间，但用在恢复历史上会把"补齐 N MB 缓冲"
+   * 变成用户肉眼可见的、从中间一路滚到底部的动画（8 MB / 32 KB 每帧 ≈ 250 帧）。
+   * 恢复历史时用户要的只是最终画面，直接交给 xterm 自己的写队列。
+   */
+  writeImmediate: (data: string, callback?: () => void) => void;
   drainPending: () => void;
   setSelectionPaused: (paused: boolean) => void;
   pauseForUserInput: (durationMs?: number) => void;
@@ -764,6 +772,21 @@ export function createSmartWriter(
     drainPending();
   }
 
+  function writeImmediate(data: string, callback?: () => void) {
+    if (!data) {
+      callback?.();
+      return;
+    }
+    const output = remapLightAnsiForeground(colorizePlainTerminalOutput(data), getThemeVariant());
+    // 仍按 ANSI 边界切块（xterm 对超大单块写入不友好），但不受帧预算限制，
+    // 由 xterm 自己的写队列在同一批里消化完。
+    const chunks = splitTerminalWriteChunk(output);
+    for (let index = 0; index < chunks.length; index += 1) {
+      const isLast = index === chunks.length - 1;
+      term.write(chunks[index], isLast ? callback : undefined);
+    }
+  }
+
   function setSelectionPaused(paused: boolean) {
     state.selectionPaused = paused;
     if (!paused) scheduleDrain();
@@ -776,7 +799,7 @@ export function createSmartWriter(
     if (state.pendingChunks.length > 0) scheduleDrain(durationMs);
   }
 
-  return { write, drainPending, setSelectionPaused, pauseForUserInput };
+  return { write, writeImmediate, drainPending, setSelectionPaused, pauseForUserInput };
 }
 
 // ── xterm initialization ─────────────────────────────────────────────────────

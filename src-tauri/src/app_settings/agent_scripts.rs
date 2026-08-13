@@ -44,11 +44,17 @@ fi
     )
 }
 
+/// 新建 Agent 未显式选择推理强度时写入的默认值。
+///
+/// Aeroric 的使用场景以复杂工程任务为主，默认 `high` 经常需要用户手动再调高一档；
+/// 统一默认到 `xhigh`，需要更低强度的用户仍可在 Agent 配置里显式选择。
+pub(super) const DEFAULT_MODEL_REASONING_EFFORT: &str = "xhigh";
+
 pub(super) fn codex_config_for_draft(draft: &AgentSetupDraft) -> String {
     let provider = sanitize_custom_agent_id(&draft.id);
     format!(
         r#"model_provider = {provider}
-model_reasoning_effort = "high"
+model_reasoning_effort = "{DEFAULT_MODEL_REASONING_EFFORT}"
 model_context_window = 258400
 model_auto_compact_token_limit = 219640
 
@@ -74,11 +80,19 @@ pub(super) fn fallback_codex_model(model: &str, priority: usize) -> serde_json::
         "slug": model,
         "display_name": model,
         "description": "Custom model configured in Aeroric.",
-        "default_reasoning_level": "high",
-        "supported_reasoning_levels": [{
-            "effort": "high",
-            "description": "Greater reasoning depth for complex problems"
-        }],
+        // 目录必须声明 xhigh，否则默认写入的 model_reasoning_effort = "xhigh"
+        // 会被 Codex 当成不支持的取值。
+        "default_reasoning_level": DEFAULT_MODEL_REASONING_EFFORT,
+        "supported_reasoning_levels": [
+            {
+                "effort": "high",
+                "description": "Greater reasoning depth for complex problems"
+            },
+            {
+                "effort": "xhigh",
+                "description": "Maximum reasoning depth for the hardest problems"
+            }
+        ],
         "shell_type": "shell_command",
         "visibility": "list",
         "supported_in_api": true,
@@ -1654,6 +1668,53 @@ api_key = "sk-codex"
         assert!(script.contains("API_KEY_FILE=\"${AERORIC_AGENT_API_KEY_FILE:-$HOME/.aeroric/agent-credentials/gpt55}\""));
         assert!(!script.contains("existing_no_proxy="));
         assert!(!script.contains("sk-test"));
+    }
+
+    /// 没有显式设置过推理强度的 Agent 一律默认 xhigh；模型目录必须同时声明该等级，
+    /// 否则 Codex 会拒绝这个取值。
+    #[test]
+    fn new_agents_default_to_xhigh_reasoning_effort() {
+        let draft = AgentSetupDraft {
+            id: "defaults".to_string(),
+            label: "Defaults".to_string(),
+            kind: AgentSetupKind::Codex,
+            base_url: "https://example.com/v1/".to_string(),
+            api_key: "sk-test".to_string(),
+            model: "gpt-5.6-sol".to_string(),
+            models: vec!["gpt-5.6-sol".to_string()],
+            enable_1m_context: false,
+            enable_chat_completions_proxy: false,
+            proxy_enabled: false,
+        };
+
+        let config = codex_config_for_draft(&draft);
+        assert!(
+            config.contains(r#"model_reasoning_effort = "xhigh""#),
+            "unexpected config: {config}"
+        );
+
+        // 目录既可能来自 `codex debug models --bundled`，也可能来自内置兜底；
+        // 两条路径都必须声明 xhigh，否则 Codex 会拒绝上面写入的取值。
+        let script = build_agent_script(&draft);
+        assert!(
+            script.contains("\"effort\": \"xhigh\""),
+            "catalog missing xhigh"
+        );
+        let fallback = fallback_codex_model("custom-model", 0);
+        assert_eq!(
+            fallback
+                .get("default_reasoning_level")
+                .and_then(|v| v.as_str()),
+            Some("xhigh")
+        );
+        assert!(fallback
+            .get("supported_reasoning_levels")
+            .and_then(|levels| levels.as_array())
+            .is_some_and(|levels| levels
+                .iter()
+                .any(
+                    |level| level.get("effort").and_then(|effort| effort.as_str()) == Some("xhigh")
+                )));
     }
 
     #[cfg(not(windows))]

@@ -4,6 +4,7 @@ import { createPortal } from "react-dom";
 import type { SshConnection } from "../../types";
 import { useI18n } from "../../i18n";
 import s from "../../styles";
+import { zLayers } from "../../styles/zLayers";
 import { sshConnectionCommand, sshConnectionUrl } from "./sshConnectionActions";
 
 export type SshConnectionProtocol = "ssh" | "sftp";
@@ -77,7 +78,7 @@ export function SshConnectionContextMenu({
     <>
       <div
         aria-hidden="true"
-        style={{ position: "fixed", inset: 0, zIndex: 9998 }}
+        style={{ position: "fixed", inset: 0, zIndex: zLayers.contextMenuBackdrop }}
         onPointerDown={onClose}
         onContextMenu={(event) => {
           event.preventDefault();
@@ -93,7 +94,7 @@ export function SshConnectionContextMenu({
           position: "fixed",
           minWidth: MENU_WIDTH,
           padding: 5,
-          zIndex: 9999,
+          zIndex: zLayers.contextMenu,
         }}
         onPointerDown={(event) => event.stopPropagation()}
         onContextMenu={(event) => {

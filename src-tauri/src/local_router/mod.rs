@@ -1,6 +1,7 @@
 mod cache_injector;
 mod chat_bridge;
 mod circuit_breaker;
+mod inline_tool_calls;
 mod server;
 mod session;
 mod thinking_optimizer;
@@ -236,6 +237,16 @@ pub struct RouterAgentRuntime {
 
 impl RouterAgentRuntime {
     pub fn candidates(&self) -> Vec<UpstreamTarget> {
+        self.candidates_for(None)
+    }
+
+    pub fn candidates_for(&self, preferred_target: Option<&str>) -> Vec<UpstreamTarget> {
+        if let Some(id) = preferred_target {
+            // A target-qualified URL represents an Agent configuration, not a
+            // routing preference. Falling through to the shared failover queue
+            // would silently run the task with a different configuration.
+            return self.target(id).cloned().into_iter().collect();
+        }
         if self.policy.auto_failover_enabled {
             let mut seen = HashSet::new();
             self.policy
@@ -586,6 +597,16 @@ impl RuntimeMetrics {
         }
     }
 
+    /// 客户端主动断开：只回收在途计数，不计成功也不计失败。用户打断任务是正常操作，
+    /// 算进失败率会让健康面板和"最近错误"横幅长期显示成故障。
+    pub(crate) fn finish_client_abort(&self) {
+        let _ =
+            self.active_requests
+                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+                    Some(current.saturating_sub(1))
+                });
+    }
+
     pub(crate) fn set_error(&self, agent: Option<RouterAgent>, message: impl AsRef<str>) {
         *self.last_error.write() = Some(RouterErrorSummary {
             occurred_at: chrono::Utc::now().timestamp_millis(),
@@ -605,8 +626,46 @@ struct RunningServer {
     info: RouterServerInfo,
     started: Instant,
     alive: Arc<AtomicBool>,
+    /// 与 [`LISTENING`] 里记录的代号对应，停服时只撤销自己那一代的标记。
+    generation: u64,
     shutdown: Option<oneshot::Sender<()>>,
     task: JoinHandle<()>,
+}
+
+/// 当前真正在监听的端口，`None` 表示没有在跑。
+///
+/// Agent 的 `OPENAI_BASE_URL` / `ANTHROPIC_BASE_URL` 在启动进程时就被写死，只看设置里的
+/// `enabled` 开关会出现这种情况：开关是开的但服务实际没起来(端口被占、绑定失败、启动
+/// 中途失败)，Agent 仍被指向 127.0.0.1:<port>，于是每次请求都是
+/// `error sending request for url (http://127.0.0.1:18080/...)`。启动新任务时读这个值，
+/// 就能在服务没真正监听时回落到上游直连。
+///
+/// 记录 generation 而不只是端口：restart 会先在同一端口上绑好新 listener 再停旧的，
+/// 只按端口撤销会把新服务的标记一起清掉。
+static LISTENING: ParkingRwLock<Option<(u64, u16)>> = ParkingRwLock::new(None);
+static LISTENING_GENERATION: AtomicU64 = AtomicU64::new(0);
+
+fn next_listening_generation() -> u64 {
+    LISTENING_GENERATION.fetch_add(1, Ordering::Relaxed) + 1
+}
+
+fn set_listening(generation: u64, port: u16) {
+    *LISTENING.write() = Some((generation, port));
+}
+
+fn clear_listening(generation: u64) {
+    let mut current = LISTENING.write();
+    if current.is_some_and(|(active, _)| active == generation) {
+        *current = None;
+    }
+}
+
+/// 本地路由是否正在监听给定端口。仅在确认监听时返回 true，宁可让 Agent 直连上游，
+/// 也不要把它指向一个没人接的端口。
+pub fn is_listening_on(port: u16) -> bool {
+    LISTENING
+        .read()
+        .is_some_and(|(_, active_port)| active_port == port)
 }
 
 pub struct LocalRouterState {
@@ -874,6 +933,9 @@ impl LocalRouterState {
         let alive = Arc::new(AtomicBool::new(true));
         let task_alive = alive.clone();
         let task_metrics = self.metrics.clone();
+        // 监听已经建立成功（listener 已 bind），到这里才允许把 Agent 指向本地端口。
+        let generation = next_listening_generation();
+        set_listening(generation, listener_addr.port());
         let task = tokio::spawn(async move {
             let result = axum::serve(listener, app)
                 .with_graceful_shutdown(async move {
@@ -881,6 +943,7 @@ impl LocalRouterState {
                 })
                 .await;
             task_alive.store(false, Ordering::Release);
+            clear_listening(generation);
             if let Err(error) = result {
                 task_metrics.set_error(None, format!("local router server stopped: {error}"));
             }
@@ -892,6 +955,7 @@ impl LocalRouterState {
             info,
             started: Instant::now(),
             alive,
+            generation,
             shutdown: Some(shutdown_tx),
             task,
         })
@@ -899,6 +963,9 @@ impl LocalRouterState {
 }
 
 async fn stop_running_server(mut server: RunningServer) -> Result<(), RouterError> {
+    // 先撤掉"正在监听"标记再关服务：关闭过程中启动的新任务应该直连上游，
+    // 而不是指向一个马上就不存在的端口。
+    clear_listening(server.generation);
     if let Some(shutdown) = server.shutdown.take() {
         let _ = shutdown.send(());
     }
@@ -1070,6 +1137,8 @@ mod tests {
             },
         };
         assert_eq!(runtime.candidates()[0].id(), "second");
+        assert_eq!(runtime.candidates_for(Some("first"))[0].id(), "first");
+        assert!(runtime.candidates_for(Some("missing")).is_empty());
 
         runtime.policy.auto_failover_enabled = true;
         runtime.policy.failover_queue = vec!["second".to_string(), "first".to_string()];
@@ -1080,6 +1149,14 @@ mod tests {
                 .map(|target| target.id().to_string())
                 .collect::<Vec<_>>(),
             vec!["second", "first"]
+        );
+        assert_eq!(
+            runtime
+                .candidates_for(Some("first"))
+                .into_iter()
+                .map(|target| target.id().to_string())
+                .collect::<Vec<_>>(),
+            vec!["first"]
         );
     }
 
