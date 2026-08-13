@@ -56,13 +56,12 @@ jobs:
             libsoup-3.0-dev \
             libjavascriptcoregtk-4.1-dev
 
+      # 版本来自 package.json 的 packageManager 字段（pnpm@10.33.0）。
+      # 这里不能再写 `version:`，否则 action 会因为「Multiple versions of pnpm
+      # specified」报错。lockfile 由 pnpm 10 生成，pnpm 9 会以
+      # ERR_PNPM_LOCKFILE_CONFIG_MISMATCH 拒绝 --frozen-lockfile。
       - name: Setup pnpm
         uses: pnpm/action-setup@v6
-        with:
-          # pnpm-lock.yaml 由 pnpm 10 生成，其 patchedDependencies 哈希格式与
-          # pnpm 9 不兼容，pnpm 9 会以 ERR_PNPM_LOCKFILE_CONFIG_MISMATCH 拒绝
-          # --frozen-lockfile。保持与 package.json 的 packageManager 一致。
-          version: 10
 
       - name: Setup Node.js
         uses: actions/setup-node@v6
