@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { I18nProvider } from "../i18n";
 import { RunningView } from "../components/RunningView";
@@ -157,5 +157,45 @@ describe("RunningView resume affordance", () => {
       "title",
       "This task has no session ID, so it cannot be resumed.",
     );
+  });
+
+  it("keeps the switch dialog open when applying the configuration fails", async () => {
+    const onSwitchConfig = vi.fn().mockResolvedValue(false);
+    const failedTask: Task = {
+      ...completedTask,
+      status: "failed",
+      failureReason: "Process exited with code 1",
+    };
+
+    render(
+      <I18nProvider>
+        <RunningView
+          task={failedTask}
+          projectPath="/tmp/project"
+          onCancel={vi.fn()}
+          onResume={vi.fn()}
+          onReconnect={vi.fn()}
+          onMarkDone={vi.fn()}
+          onSwitchConfig={onSwitchConfig}
+          onInput={vi.fn()}
+          onResize={vi.fn()}
+          onRegisterTerminal={vi.fn(() => 1)}
+          onTerminalReady={vi.fn()}
+          onRename={vi.fn()}
+          onGenerateName={vi.fn().mockResolvedValue(undefined)}
+          themeVariant="light"
+          terminalFontSize={11}
+          monoFontFamily="JetBrains Mono"
+        />
+      </I18nProvider>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Switch configuration" }));
+    const submit = await screen.findByRole("button", { name: "Switch and continue" });
+    await waitFor(() => expect(submit).toBeEnabled());
+    fireEvent.click(submit);
+
+    await waitFor(() => expect(onSwitchConfig).toHaveBeenCalledTimes(1));
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
   });
 });

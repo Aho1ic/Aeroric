@@ -43,7 +43,7 @@ export function AgentConfigSwitchDialog({
   task: Task;
   open: boolean;
   onClose: () => void;
-  onSubmit: (values: AgentConfigSwitchValues) => Promise<void> | void;
+  onSubmit: (values: AgentConfigSwitchValues) => Promise<boolean | void> | boolean | void;
 }) {
   const { t } = useI18n();
   const agentOptions = useAgentOptions();
@@ -151,13 +151,14 @@ export function AgentConfigSwitchDialog({
     if (!canSubmit || submitting) return;
     setSubmitting(true);
     try {
-      await onSubmit({
+      const applied = await onSubmit({
         agent,
         selectedModel: selectedModel || undefined,
         reasoningEffort,
         speed,
         permissionMode,
       });
+      if (applied === false) setSubmitting(false);
     } catch {
       setSubmitting(false);
     }

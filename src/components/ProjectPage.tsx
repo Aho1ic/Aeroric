@@ -315,7 +315,10 @@ export function ProjectPage({
   onDiscardWorktree: (id: string) => Promise<void>;
   onReconnectTask: (id: string) => void;
   onMarkTaskDone: (id: string) => void;
-  onSwitchTaskConfig?: (id: string, values: AgentConfigSwitchValues) => Promise<void> | void;
+  onSwitchTaskConfig?: (
+    id: string,
+    values: AgentConfigSwitchValues,
+  ) => Promise<boolean | void> | boolean | void;
   onInput: (taskId: string, data: string) => void;
   onResize: (taskId: string, cols: number, rows: number) => void;
   onRegisterTerminal: (

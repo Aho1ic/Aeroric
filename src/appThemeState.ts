@@ -29,6 +29,16 @@ export function resolveThemeVariant(mode: ThemeMode, systemPrefersDark: boolean)
   return mode;
 }
 
+export function nativeThemeForVariant(variant: ThemeVariant): "light" | "dark" {
+  return variant === "dark" ? "dark" : "light";
+}
+
+export function nativeWindowBackgroundForVariant(variant: ThemeVariant): string {
+  if (variant === "dark") return "#09090b";
+  if (variant === "eyecare") return "#f6eddc";
+  return "#fbfbfc";
+}
+
 export function getInitialTerminalFontSize(): TerminalFontSize {
   // 按平台隔离，老 key 仅作为 macOS 的迁移来源（历史版本只在 mac 上被使用过）。
   const stored =

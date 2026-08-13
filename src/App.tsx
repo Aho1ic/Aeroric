@@ -1,5 +1,6 @@
 import { lazy, Suspense, useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { open as openDialog, confirm } from "@tauri-apps/plugin-dialog";
+import { setTheme as setAppTheme } from "@tauri-apps/api/app";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -102,6 +103,8 @@ import {
   getInitialTerminalFontSize,
   getInitialThemeMode,
   getSystemPrefersDark,
+  nativeThemeForVariant,
+  nativeWindowBackgroundForVariant,
   resolveThemeVariant,
 } from "./appThemeState";
 import {
@@ -486,11 +489,19 @@ function App() {
   useEffect(() => {
     if (!isTauri()) return;
 
-    // Tauri window theme only understands light/dark/null; map eyecare to light
-    // so the native chrome (titlebar, scrollbars) stays in the light family.
-    const nativeTheme = themeMode === "system" ? null : themeMode === "dark" ? "dark" : "light";
-    getCurrentWindow().setTheme(nativeTheme).catch(console.error);
-  }, [themeMode]);
+    // Keep AppKit/Win32 chrome on the exact variant already resolved for the
+    // web UI. In particular, an explicit dark value is more reliable than
+    // resetting to `null` for system mode and waiting for a second native
+    // appearance propagation. The window background is also the surface shown
+    // through macOS's transparent title bar.
+    const nativeTheme = nativeThemeForVariant(themeVariant);
+    const currentWindow = getCurrentWindow();
+    Promise.all([
+      setAppTheme(nativeTheme),
+      currentWindow.setTheme(nativeTheme),
+      currentWindow.setBackgroundColor(nativeWindowBackgroundForVariant(themeVariant)),
+    ]).catch(console.error);
+  }, [themeVariant]);
 
   useEffect(() => {
     // Cmd+W 收起窗口（隐藏到 Dock），仅 macOS 启用：隐藏后点 Dock 图标可唤回
@@ -1590,55 +1601,46 @@ function App() {
     return true;
   }
 
-  async function handleSwitchTaskConfig(taskId: string, values: AgentConfigSwitchValues) {
+  async function handleSwitchTaskConfig(
+    taskId: string,
+    values: AgentConfigSwitchValues,
+  ): Promise<boolean> {
     const task = tasks.find((item) => item.id === taskId);
-    if (!task) return;
+    if (!task) return false;
     const project = projects.find((item) => item.id === task.projectId);
-    if (!project) return;
+    if (!project) return false;
 
     const projectLocation = resolveProjectLocation(project);
     const sameProtocolFamily =
       localRouterAgentFor(task.agent, agentOptions) ===
       localRouterAgentFor(values.agent, agentOptions);
 
-    // A same-family switch is a provider-target change when the running
-    // process is already attached to Aeroric's local router. Keep the PTY,
-    // terminal buffer and provider-native session untouched; only the next
-    // API request should use the selected target.
-    if (sameProtocolFamily) {
-      const taskHasLiveProcess = ["running", "input_required", "detached"].includes(task.status);
-      if (!taskHasLiveProcess) {
-        const nextTask: Task = {
-          ...task,
+    if (projectLocation.kind === "local") {
+      try {
+        // Validate with std::process before changing Router state or touching
+        // the current PTY. A missing/non-executable profile cannot disturb a
+        // healthy run or make the global target disagree with it.
+        await invoke("validate_agent_launch", {
           agent: values.agent,
-          selectedModel: values.selectedModel,
-          reasoningEffort: values.reasoningEffort ?? undefined,
-          speed: values.speed,
-          permissionMode: values.permissionMode,
-        };
-        const nextTasks = tasks.map((item) => (item.id === taskId ? nextTask : item));
-        setTasks(nextTasks);
-        persistProjectTasks(task.projectId, nextTasks, showToast, formatSaveTasksError);
-        await flushProjectTasks(task.projectId);
-        return;
+          projectPath: task.worktreePath ?? project.path,
+        });
+      } catch (error) {
+        showToast(t("running.switchConfigFailed", { error: String(error) }), "error");
+        return false;
       }
+    }
 
-      if (projectLocation.kind !== "local") {
-        showToast(
-          t("running.switchConfigFailed", {
-            error: "同一协议族配置切换需要本机 Local Router",
-          }),
-          "error",
-        );
-        return;
-      }
-
+    // If this process family is routed through Local Router, update its target
+    // before replacing the process. This is only one part of applying a
+    // configuration: the Agent still has to restart so its executable/home,
+    // model, reasoning, speed and permission arguments all take effect.
+    if (sameProtocolFamily && projectLocation.kind === "local") {
       let localRouterStatus: LocalRouterStatus;
       try {
         localRouterStatus = await invoke<LocalRouterStatus>("get_local_router_status");
       } catch (error) {
         showToast(t("running.switchConfigFailed", { error: String(error) }), "error");
-        return;
+        return false;
       }
       const localRouterTarget = localRouterTargetForTaskSwitch(
         task,
@@ -1647,57 +1649,18 @@ function App() {
         localRouterStatus,
         agentOptions,
       );
-      if (!localRouterTarget) {
-        showToast(
-          t("running.switchConfigFailed", {
-            error: "Local Router 未运行或目标配置不存在",
-          }),
-          "error",
-        );
-        return;
-      }
-
-      try {
-        await invoke("switch_local_router_target", {
-          agent: localRouterTarget.agent,
-          targetId: localRouterTarget.targetId,
-        });
-      } catch (error) {
-        // Do not fall back to killing the current process after a router
-        // switch failure: that would turn a reversible target error into a
-        // lossy cross-process handoff.
-        showToast(t("running.switchConfigFailed", { error: String(error) }), "error");
-        return;
-      }
-
-      const nextTask: Task = {
-        ...task,
-        agent: values.agent,
-        selectedModel: values.selectedModel,
-        reasoningEffort: values.reasoningEffort ?? undefined,
-        speed: values.speed,
-        permissionMode: values.permissionMode,
-        attentionRequestedAt: undefined,
-        failureReason: undefined,
-      };
-      const nextTasks = tasks.map((item) => (item.id === taskId ? nextTask : item));
-      setTasks(nextTasks);
-      persistProjectTasks(task.projectId, nextTasks, showToast, formatSaveTasksError);
-      await flushProjectTasks(task.projectId);
-      return;
-    }
-
-    if (projectLocation.kind === "local") {
-      try {
-        // Validate with std::process before touching the current PTY. A missing
-        // or non-executable profile therefore cannot tear down a healthy run.
-        await invoke("validate_agent_launch", {
-          agent: values.agent,
-          projectPath: task.worktreePath ?? project.path,
-        });
-      } catch (error) {
-        showToast(t("running.switchConfigFailed", { error: String(error) }), "error");
-        return;
+      if (localRouterTarget) {
+        try {
+          await invoke("switch_local_router_target", {
+            agent: localRouterTarget.agent,
+            targetId: localRouterTarget.targetId,
+          });
+          dispatchAppSettingsChanged(window);
+        } catch (error) {
+          // Do not kill a healthy process after a router switch failure.
+          showToast(t("running.switchConfigFailed", { error: String(error) }), "error");
+          return false;
+        }
       }
     }
 
@@ -1706,7 +1669,7 @@ function App() {
       resetSnapshot = await invoke<ResetTaskProcessResult>("reset_task_process", { taskId });
     } catch (error) {
       showToast(t("running.switchConfigFailed", { error: String(error) }), "error");
-      return;
+      return false;
     }
 
     let sourceTask = mergeResetTaskSession(task, resetSnapshot);
@@ -1743,7 +1706,7 @@ function App() {
       }
       if (!messages.length && !terminalHistory.trim() && !sourceTask.prompt.trim()) {
         showToast(t("running.switchConfigNoContext"), "error");
-        return;
+        return false;
       }
       handoffPrompt = formatSessionHandoff(
         sourceTask,
@@ -1814,6 +1777,7 @@ function App() {
     };
     tm.resetTaskTerminal(taskId);
     setTaskRunCounts((prev) => ({ ...prev, [taskId]: (prev[taskId] ?? 0) + 1 }));
+    return true;
   }
 
   async function handleReconnectTask(taskId: string) {

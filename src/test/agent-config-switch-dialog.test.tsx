@@ -124,4 +124,21 @@ describe("AgentConfigSwitchDialog", () => {
     expect(screen.getByRole("button", { name: "替我审批" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "完全访问" })).toBeInTheDocument();
   });
+
+  it("allows retrying when the configuration was not applied", async () => {
+    localStorage.setItem("aeroric:language", "en");
+    const onSubmit = vi.fn().mockResolvedValue(false);
+
+    render(
+      <I18nProvider>
+        <AgentConfigSwitchDialog task={task} open onClose={vi.fn()} onSubmit={onSubmit} />
+      </I18nProvider>,
+    );
+
+    const submit = await screen.findByRole("button", { name: "Switch and continue" });
+    fireEvent.click(submit);
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(submit).toBeEnabled());
+  });
 });

@@ -121,7 +121,7 @@ export function RunningView({
   onDiscardWorktree?: () => Promise<void>;
   onReconnect: () => void;
   onMarkDone: () => void;
-  onSwitchConfig?: (values: AgentConfigSwitchValues) => Promise<void> | void;
+  onSwitchConfig?: (values: AgentConfigSwitchValues) => Promise<boolean | void> | boolean | void;
   onInput: (data: string) => void;
   onResize: (cols: number, rows: number) => void;
   onRegisterTerminal: (
@@ -1059,8 +1059,9 @@ export function RunningView({
         open={switchConfigOpen}
         onClose={() => setSwitchConfigOpen(false)}
         onSubmit={async (values) => {
-          await onSwitchConfig?.(values);
-          setSwitchConfigOpen(false);
+          const applied = await onSwitchConfig?.(values);
+          if (applied !== false) setSwitchConfigOpen(false);
+          return applied;
         }}
       />
     </div>
