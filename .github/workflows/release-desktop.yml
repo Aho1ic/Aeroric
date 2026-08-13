@@ -113,7 +113,9 @@ jobs:
       - name: Setup pnpm
         uses: pnpm/action-setup@v6
         with:
-          version: 9
+          # 与 checks.yml 保持一致：lockfile 由 pnpm 10 生成，pnpm 9 无法通过
+          # --frozen-lockfile 校验 patchedDependencies。
+          version: 10
 
       - name: Setup Node.js
         uses: actions/setup-node@v6
