@@ -29,10 +29,14 @@ export function resolveThemeVariant(mode: ThemeMode, systemPrefersDark: boolean)
   return mode;
 }
 
+// 原生窗口装饰（macOS titlebar / Win32 chrome）只认 light/dark；eyecare 归入 light
+// 家族，让系统按钮与滚动条保持浅色外观。
 export function nativeThemeForVariant(variant: ThemeVariant): "light" | "dark" {
   return variant === "dark" ? "dark" : "light";
 }
 
+// macOS 的 titlebarAppearsTransparent 会透出窗口背景色，所以标题栏配色由这里决定。
+// 取值与 App.css 里 prefers-reduced-transparency 下的实色 token 保持一致。
 export function nativeWindowBackgroundForVariant(variant: ThemeVariant): string {
   if (variant === "dark") return "#09090b";
   if (variant === "eyecare") return "#f6eddc";
@@ -57,6 +61,11 @@ export function getInitialTaskDisplayWindow(): TaskDisplayWindow {
 export function getInitialAttentionBadge(): boolean {
   // 默认开启:项目栏显示待确认任务数量角标;关闭后回退为黄色小圆点
   return localStorage.getItem("aeroric:attentionBadge") !== "0";
+}
+
+export function getInitialDshWebSearchEnabled(): boolean {
+  // 默认开启:DSH 任务允许使用 web_search 工具
+  return localStorage.getItem("aeroric:dshWebSearchEnabled") !== "0";
 }
 
 export function getInitialFontFamily(

@@ -1,6 +1,7 @@
 import type React from "react";
 
 import { ROW_HEIGHT } from "../components/file-explorer/types";
+import { zLayers } from "./zLayers";
 
 export const panels = {
   newTaskOuter: {
@@ -9,7 +10,7 @@ export const panels = {
     flexDirection: "column",
     alignItems: "center",
     justifyContent: "center",
-    padding: "0 48px",
+    padding: "0 20px",
     position: "relative",
     overflow: "visible",
   },
@@ -51,7 +52,7 @@ export const panels = {
   },
   composeCard: {
     width: "100%",
-    maxWidth: 820,
+    maxWidth: 940,
     background: "var(--bg-card)",
     border: "1px solid var(--border-medium)",
     borderRadius: "var(--radius-lg) var(--radius-lg) 0 0",
@@ -213,7 +214,7 @@ export const panels = {
   },
   composeActionDock: {
     width: "100%",
-    maxWidth: 820,
+    maxWidth: 940,
     marginTop: -1,
     padding: "6px 7px",
     borderRadius: "0 0 var(--radius-lg) var(--radius-lg)",
@@ -258,7 +259,9 @@ export const panels = {
     display: "flex",
     alignItems: "center",
     gap: 3,
-    flexShrink: 0,
+    minWidth: 0,
+    flexShrink: 1,
+    overflow: "hidden",
     marginBottom: 0,
     padding: 0,
     boxSizing: "border-box" as const,
@@ -313,6 +316,8 @@ export const panels = {
     cursor: "pointer",
     whiteSpace: "nowrap" as const,
     flex: "0 1 auto",
+    minWidth: 0,
+    overflow: "hidden",
     transition: "background 0.15s, border-color 0.15s, color 0.15s, opacity 0.15s",
   },
   toolbarBtnIconOnly: {
@@ -345,7 +350,7 @@ export const panels = {
     boxShadow: "var(--shadow-popover)",
     padding: 5,
     minWidth: 180,
-    zIndex: 9999,
+    zIndex: zLayers.popover,
   },
   toolbarActionMenuContent: {
     background: "color-mix(in srgb, var(--bg-card) 90%, transparent)",
@@ -356,7 +361,7 @@ export const panels = {
     boxShadow: "var(--shadow-popover)",
     padding: 5,
     minWidth: 230,
-    zIndex: 9999,
+    zIndex: zLayers.popover,
   },
   toolbarMenuItem: {
     display: "flex",
@@ -477,7 +482,7 @@ export const panels = {
     position: "absolute",
     top: "calc(100% + 6px)",
     left: 0,
-    zIndex: 100,
+    zIndex: zLayers.dropdownInline,
     background: "var(--bg-card)",
     border: "1px solid var(--border-medium)",
     borderRadius: "var(--radius-md)",
@@ -531,7 +536,7 @@ export const panels = {
     bottom: "calc(100% + 6px)",
     left: 0,
     right: 0,
-    zIndex: 200,
+    zIndex: zLayers.dropdownInline,
     background: "var(--bg-card)",
     border: "1px solid var(--border-medium)",
     borderRadius: "var(--radius-md)",
@@ -766,7 +771,7 @@ export const panels = {
   fileSearchDialogBackdrop: {
     position: "fixed" as const,
     inset: 0,
-    zIndex: 1600,
+    zIndex: zLayers.overlay,
     display: "flex",
     alignItems: "flex-start",
     justifyContent: "center",
@@ -862,7 +867,7 @@ export const panels = {
     whiteSpace: "nowrap" as const,
   },
   fileSearchTypeContent: {
-    zIndex: 2000,
+    zIndex: zLayers.popover,
     background: "var(--bg-sidebar)",
     border: "1px solid var(--border-medium)",
     borderRadius: "var(--radius-md)",
@@ -1035,11 +1040,11 @@ export const panels = {
   fileCtxBackdrop: {
     position: "fixed" as const,
     inset: 0,
-    zIndex: 999,
+    zIndex: zLayers.contextMenuBackdrop,
   },
   fileCtxMenu: {
     position: "fixed" as const,
-    zIndex: 1000,
+    zIndex: zLayers.contextMenu,
     background: "var(--bg-sidebar)",
     border: "1px solid var(--border-dim)",
     borderRadius: 6,
@@ -1393,7 +1398,7 @@ export const panels = {
   sshDialogOverlay: {
     position: "fixed",
     inset: 0,
-    zIndex: 3000,
+    zIndex: zLayers.overlay,
     display: "flex",
     alignItems: "center",
     justifyContent: "center",

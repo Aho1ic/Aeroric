@@ -2,7 +2,7 @@
   "expo": {
     "name": "Aeroric",
     "slug": "aeroric-mobile",
-    "version": "0.1.0",
+    "version": "1.4.4",
     "scheme": "aeroric",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
@@ -20,6 +20,7 @@
     },
     "android": {
       "package": "com.aeroric.mobile",
+      "versionCode": 10404,
       "softwareKeyboardLayoutMode": "resize",
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
@@ -41,6 +42,7 @@
         }
       ],
       "expo-secure-store",
+      "./plugins/with-android-lan-websocket",
       "./plugins/with-local-notifications-only",
       "./plugins/with-release-launch-scheme"
     ]

@@ -22,38 +22,51 @@ import { Button } from "../ui/Button";
 
 const AUTO_VERSION_DETECT_DELAY_MS = 350;
 
-type AgentPathField = "claude_path" | "claude_gpt55_path" | "codex_path";
-type AgentConfigPathField = "claude_config_path" | "claude_gpt55_config_path" | "codex_config_path";
-type AgentVersionField = "claude_version" | "claude_gpt55_version" | "codex_version";
+type AgentPathField = "claude_path" | "claude_gpt55_path" | "codex_path" | "dsh_path";
+type AgentConfigPathField =
+  | "claude_config_path"
+  | "claude_gpt55_config_path"
+  | "codex_config_path"
+  | "dsh_config_path";
+type AgentVersionField =
+  | "claude_version"
+  | "claude_gpt55_version"
+  | "codex_version"
+  | "dsh_version";
 
 const pathFieldByAgent: Record<BuiltInAgentType, AgentPathField> = {
   claude: "claude_path",
   claude_gpt55: "claude_gpt55_path",
   codex: "codex_path",
+  dsh: "dsh_path",
 };
 
 const versionFieldByAgent: Record<BuiltInAgentType, AgentVersionField> = {
   claude: "claude_version",
   claude_gpt55: "claude_gpt55_version",
   codex: "codex_version",
+  dsh: "dsh_version",
 };
 
 const configPathFieldByAgent: Record<BuiltInAgentType, AgentConfigPathField> = {
   claude: "claude_config_path",
   claude_gpt55: "claude_gpt55_config_path",
   codex: "codex_config_path",
+  dsh: "dsh_config_path",
 };
 
 const pathLabelKeyByAgent: Record<BuiltInAgentType, string> = {
   claude: "appSettings.claudePath",
   claude_gpt55: "appSettings.claudeGpt55Path",
   codex: "appSettings.codexPath",
+  dsh: "appSettings.dshPath",
 };
 
 const pathHintKeyByAgent: Record<BuiltInAgentType, string> = {
   claude: "appSettings.claudePathHint",
   claude_gpt55: "appSettings.claudeGpt55PathHint",
   codex: "appSettings.codexPathHint",
+  dsh: "appSettings.dshPathHint",
 };
 
 function findCustomAgent(settings: AppSettings, agentKey: AgentKey): CustomAgentProfile | null {

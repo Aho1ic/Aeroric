@@ -27,9 +27,11 @@ export interface AppSettings {
   claude_path: string;
   claude_gpt55_path: string;
   codex_path: string;
+  dsh_path?: string;
   claude_config_path: string;
   claude_gpt55_config_path: string;
   codex_config_path: string;
+  dsh_config_path?: string;
   agent_label_overrides?: Record<string, string>;
   builtin_agent_credentials?: Record<string, BuiltInAgentCredentials>;
   proxy_settings?: ProxySettings;
@@ -260,6 +262,7 @@ export interface AgentVersions {
   claude_version: string;
   claude_gpt55_version: string;
   codex_version: string;
+  dsh_version?: string;
 }
 
 export interface AgentUpgradeChannel {
@@ -361,7 +364,8 @@ export interface AgentInstallResult {
   message: string;
 }
 
-export type AgentSetupKind = "codex" | "claude_code";
+export type AgentSetupKind = "codex" | "claude_code" | "dsh";
+export type DshApiProtocol = "openai-completions" | "openai-responses" | "anthropic-messages";
 
 export interface AgentSetupDraft {
   id: string;
@@ -373,6 +377,7 @@ export interface AgentSetupDraft {
   models: string[];
   enable_1m_context: boolean;
   enable_chat_completions_proxy: boolean;
+  dsh_api_protocol?: DshApiProtocol;
   proxy_enabled?: boolean;
 }
 
@@ -426,6 +431,7 @@ export interface AppSettingsNavItem {
 export const APP_SETTINGS_CHANGED_EVENT = "aeroric:app-settings-changed";
 export const SKILL_HUB_CHANGED_EVENT = "aeroric:skill-hub-changed";
 export const OPEN_APP_SETTINGS_EVENT = "aeroric:open-app-settings";
+export const START_DSH_CREATOR_DRAFT_EVENT = "aeroric:start-dsh-creator-draft";
 
 export interface OpenAppSettingsDetail {
   initialNav?: NavKey;

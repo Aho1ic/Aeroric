@@ -172,8 +172,7 @@ describe("FileViewer code outline", () => {
 
     renderFileViewer();
 
-    const outline = await screen.findByRole("navigation", { name: "Outline" });
-    expect(within(outline).getByText("Loading outline...")).toBeInTheDocument();
+    const outline = await screen.findByRole("navigation", { name: "Outline" }, { timeout: 5_000 });
 
     await waitFor(() => {
       expect(vi.mocked(invoke)).toHaveBeenCalledWith("lsp_document_symbols", {

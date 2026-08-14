@@ -9,11 +9,13 @@ export type IdeToolAvailability = {
   searchDisabled?: boolean;
   debugDisabled?: boolean;
   previewDisabled?: boolean;
+  skillsDisabled?: boolean;
 };
 
 export type IdeToolAvailabilityFlag = keyof IdeToolAvailability;
 
 export type IdeToolIcon =
+  | "book"
   | "bug"
   | "circle-alert"
   | "flask"
@@ -49,6 +51,7 @@ const SSH_UNAVAILABLE_TITLES: Partial<Record<Exclude<RightPanel, null>, string>>
   run: "Run Configurations require an active SSH connection",
   preview: "Web Preview requires an active SSH connection",
   search: "Search requires an active SSH connection",
+  skills: "Project Skills are available for local projects only",
 };
 
 export const IDE_TOOL_REGISTRY = [
@@ -128,6 +131,17 @@ export const IDE_TOOL_REGISTRY = [
     toolbarGroup: "utility",
     order: 100,
     disableWhen: ["searchDisabled"],
+  },
+  {
+    id: "skills",
+    panel: "skills",
+    titleKey: "skills.installedSkills",
+    icon: "book",
+    commandId: "project-skills",
+    commandKeywords: ["skills", "prompt", "installed"],
+    toolbarGroup: "utility",
+    order: 110,
+    disableWhen: ["skillsDisabled"],
   },
 ] as const satisfies readonly IdeToolMetadata[];
 

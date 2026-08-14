@@ -8,6 +8,7 @@ import type {
 } from "../types";
 import {
   OPEN_APP_SETTINGS_EVENT,
+  START_DSH_CREATOR_DRAFT_EVENT,
   type NavKey,
   type OpenAppSettingsDetail,
 } from "./app-settings/types";
@@ -33,6 +34,8 @@ export type AppSettingsEventHostProps = {
   onUiFontFamilyChange: (family: FontFamily) => void;
   monoFontFamily: FontFamily;
   onMonoFontFamilyChange: (family: FontFamily) => void;
+  dshWebSearchEnabled: boolean;
+  onDshWebSearchEnabledChange: (enabled: boolean) => void;
 };
 
 export function AppSettingsEventHost({
@@ -52,6 +55,8 @@ export function AppSettingsEventHost({
   onUiFontFamilyChange,
   monoFontFamily,
   onMonoFontFamilyChange,
+  dshWebSearchEnabled,
+  onDshWebSearchEnabledChange,
 }: AppSettingsEventHostProps) {
   const [showAppSettings, setShowAppSettings] = useState(false);
   const [initialSettingsNav, setInitialSettingsNav] = useState<NavKey>("general");
@@ -63,8 +68,13 @@ export function AppSettingsEventHost({
       setInitialSettingsNav(detail?.initialNav ?? "general");
       setShowAppSettings(true);
     };
+    const startCreatorDraft = () => setShowAppSettings(false);
     window.addEventListener(OPEN_APP_SETTINGS_EVENT, open);
-    return () => window.removeEventListener(OPEN_APP_SETTINGS_EVENT, open);
+    window.addEventListener(START_DSH_CREATOR_DRAFT_EVENT, startCreatorDraft);
+    return () => {
+      window.removeEventListener(OPEN_APP_SETTINGS_EVENT, open);
+      window.removeEventListener(START_DSH_CREATOR_DRAFT_EVENT, startCreatorDraft);
+    };
   }, []);
 
   if (!showAppSettings) return null;
@@ -89,6 +99,8 @@ export function AppSettingsEventHost({
         onUiFontFamilyChange={onUiFontFamilyChange}
         monoFontFamily={monoFontFamily}
         onMonoFontFamilyChange={onMonoFontFamilyChange}
+        dshWebSearchEnabled={dshWebSearchEnabled}
+        onDshWebSearchEnabledChange={onDshWebSearchEnabledChange}
         onClose={() => setShowAppSettings(false)}
       />
     </Suspense>

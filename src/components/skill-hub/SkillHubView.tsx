@@ -57,6 +57,7 @@ export function SkillHubView({ config, allProjects, onOpenAppSettings, embedded 
   const { t } = useI18n();
   const [skills, setSkills] = useState<Skill[]>([]);
   const [installations, setInstallations] = useState<SkillInstallation[]>([]);
+  const [installationsLoaded, setInstallationsLoaded] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [managedSkill, setManagedSkill] = useState<Skill | null>(null);
@@ -71,12 +72,14 @@ export function SkillHubView({ config, allProjects, onOpenAppSettings, embedded 
     if (!config?.hubPath) {
       setSkills([]);
       setInstallations([]);
+      setInstallationsLoaded(true);
       setLoading(false);
       setError(null);
       return;
     }
     setLoading(true);
     setError(null);
+    setInstallationsLoaded(false);
     const skillsRequest = withTimeout(invoke<Skill[]>("list_skills"), "list_skills");
     const installationsRequest = withTimeout(
       invoke<SkillInstallation[]>("list_skill_installations", { skillName: null }),
@@ -91,7 +94,10 @@ export function SkillHubView({ config, allProjects, onOpenAppSettings, embedded 
     );
     installationsRequest.then(
       (rows) => {
-        if (loadRequestId.current === requestId) setInstallations(rows);
+        if (loadRequestId.current === requestId) {
+          setInstallations(rows);
+          setInstallationsLoaded(true);
+        }
       },
       () => undefined,
     );
@@ -138,14 +144,19 @@ export function SkillHubView({ config, allProjects, onOpenAppSettings, embedded 
   }, [installations]);
 
   const filteredSkills = useMemo(() => {
-    if (!skillSearch.trim()) return skills;
+    // “已安装”只展示至少有一个项目安装记录的 skill。安装记录查询失败时
+    // 保留原列表，避免网络/IPC 短暂故障把已有内容误隐藏。
+    const installedSkills = installationsLoaded
+      ? skills.filter((skill) => installations.some((ins) => ins.skillName === skill.name))
+      : skills;
+    if (!skillSearch.trim()) return installedSkills;
     const q = skillSearch.trim().toLowerCase();
-    return skills.filter(
+    return installedSkills.filter(
       (sk) =>
         sk.name.toLowerCase().includes(q) ||
         (sk.displayName && sk.displayName.toLowerCase().includes(q)),
     );
-  }, [skills, skillSearch]);
+  }, [skills, installations, installationsLoaded, skillSearch]);
 
   const handleImportLocal = useCallback(async () => {
     const selected = await openDialog({

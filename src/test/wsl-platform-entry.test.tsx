@@ -72,6 +72,8 @@ function renderSettings(AppSettingsDialog: SettingsDialog, I18nProvider: Provide
         onUiFontFamilyChange: vi.fn(),
         monoFontFamily: "system",
         onMonoFontFamilyChange: vi.fn(),
+        dshWebSearchEnabled: true,
+        onDshWebSearchEnabledChange: vi.fn(),
         onClose: vi.fn(),
       }),
     ),
@@ -198,6 +200,7 @@ describe("WSL 项目的首版功能开关", () => {
       searchDisabled: true,
       debugDisabled: true,
       previewDisabled: true,
+      skillsDisabled: true,
     });
   });
 
@@ -222,6 +225,7 @@ describe("WSL 项目的首版功能开关", () => {
       searchDisabled: false,
       debugDisabled: false,
       previewDisabled: false,
+      skillsDisabled: false,
     });
   });
 
@@ -246,12 +250,12 @@ describe("WSL 项目的首版功能开关", () => {
     const disabledIds = tools.filter((tool) => tool.disabled).map((tool) => tool.id);
 
     expect(disabledIds.sort()).toEqual(
-      ["debug", "preview", "problems", "run", "search", "tests"].sort(),
+      ["debug", "preview", "problems", "run", "search", "skills", "tests"].sort(),
     );
     expect(tools.find((tool) => tool.id === "git-advanced")?.disabled).toBe(false);
     expect(
       IDE_TOOL_REGISTRY.filter((tool) => isIdeToolDisabled(tool, wslAvailability)).length,
-    ).toBe(6);
+    ).toBe(7);
   });
 
   it("WSL 下命令面板只暴露可用工具", () => {
@@ -262,7 +266,15 @@ describe("WSL 项目的首版功能开关", () => {
 
   it("WSL 下被禁用的面板不会作为 dock 面板展示", () => {
     const dockFlags = { ...wslAvailability };
-    for (const panel of ["problems", "run", "tests", "debug", "preview", "search"] as const) {
+    for (const panel of [
+      "problems",
+      "run",
+      "tests",
+      "debug",
+      "preview",
+      "search",
+      "skills",
+    ] as const) {
       expect(visibleDockPanel(panel, dockFlags)).toBeNull();
     }
     expect(visibleDockPanel("files", dockFlags)).toBe("files");

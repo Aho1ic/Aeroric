@@ -41,12 +41,17 @@ describe("AppSettingsDialog usage statistics", () => {
           onUiFontFamilyChange={vi.fn()}
           monoFontFamily="system"
           onMonoFontFamilyChange={vi.fn()}
+          dshWebSearchEnabled={true}
+          onDshWebSearchEnabledChange={vi.fn()}
           onClose={vi.fn()}
         />
       </I18nProvider>,
     );
 
     expect(screen.getByRole("button", { name: "Statistics" })).toBeInTheDocument();
+    const agentConfigs = screen.getByRole("button", { name: "Agent Configs" });
+    const statistics = screen.getByRole("button", { name: "Statistics" });
+    expect(agentConfigs.compareDocumentPosition(statistics)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
     expect(await screen.findByTestId("usage-dashboard")).toHaveAttribute("data-embedded", "true");
     expect(screen.getByRole("dialog", { name: "App Settings" })).toHaveClass("settings-modal-box");
     expect(screen.getByRole("dialog", { name: "App Settings" })).toHaveStyle({
@@ -85,6 +90,8 @@ describe("AppSettingsDialog usage statistics", () => {
           onUiFontFamilyChange={vi.fn()}
           monoFontFamily="system"
           onMonoFontFamilyChange={vi.fn()}
+          dshWebSearchEnabled={true}
+          onDshWebSearchEnabledChange={vi.fn()}
           onClose={vi.fn()}
         />
       </I18nProvider>,

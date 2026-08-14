@@ -601,10 +601,31 @@ fn claude_sessions_dirs_for_project(project_path: &str) -> Vec<PathBuf> {
     roots
 }
 
-fn claude_sessions_dir_for_project(project_path: &str) -> Option<PathBuf> {
-    claude_sessions_dirs_for_project(project_path)
-        .into_iter()
-        .next()
+/// 某个具体 Agent 写 transcript 的目录。
+///
+/// 内建 claude/claude_gpt55 用 `~/.claude/projects/<encoded>`;自定义 claude-like Agent 的
+/// 启动脚本会 `export CLAUDE_CONFIG_DIR="$HOME/.aeroric/agent-homes/{id}"`(见
+/// `app_settings::agent_scripts`),因此写到 `<agent-home>/projects/<encoded>`。
+///
+/// 早期实现统一取 `claude_sessions_dirs_for_project()` 的第一项(永远是 `~/.claude`),
+/// 导致自定义 Agent 的预置 session 路径指向一个永不存在的文件:它会被立刻广播并持久化,
+/// 之后读会话就报 `Cannot resolve session path`。
+fn claude_sessions_dir_for_agent_in(
+    home: &Path,
+    agent: &str,
+    project_path: &str,
+) -> Option<PathBuf> {
+    let encoded_project = encode_claude_project_path(project_path);
+    let config_root = match crate::app_settings::custom_agent_home_dir_name(agent) {
+        Some(name) => home.join(".aeroric").join("agent-homes").join(name),
+        None => home.join(".claude"),
+    };
+    Some(config_root.join("projects").join(encoded_project))
+}
+
+fn claude_sessions_dir_for_agent(agent: &str, project_path: &str) -> Option<PathBuf> {
+    let home = crate::platform::home_dir()?;
+    claude_sessions_dir_for_agent_in(&home, agent, project_path)
 }
 
 fn watch_claude_session(app: AppHandle, task_id: String, session_path: PathBuf) {
@@ -689,10 +710,10 @@ fn process_claude_session_line(
 
 // ── Session messages (for conversation view) ──────────────────────────────────
 
-#[derive(serde::Serialize, Clone)]
+#[derive(serde::Serialize, Clone, Debug)]
 pub(crate) struct SessionMessage {
-    role: String,
-    content: Vec<SessionContent>,
+    pub(crate) role: String,
+    pub(crate) content: Vec<SessionContent>,
 }
 
 #[derive(serde::Serialize)]
@@ -703,7 +724,7 @@ pub struct SessionMessagePage {
     has_more: bool,
 }
 
-#[derive(serde::Serialize, Clone)]
+#[derive(serde::Serialize, Clone, Debug)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub(crate) enum SessionContent {
     Text {
@@ -857,9 +878,15 @@ pub async fn read_session_messages(
     session_path: String,
     project_path: String,
     is_codex: bool,
+    family: Option<String>,
 ) -> Result<Vec<SessionMessage>, String> {
+    let family = crate::app_settings::resolve_family_param(family.as_deref(), is_codex);
     tauri::async_runtime::spawn_blocking(move || {
-        let canonical = validate_session_path(&session_path, &project_path, is_codex)?;
+        let canonical = validate_session_path_for(&session_path, &project_path, family)?;
+        if family == crate::app_settings::AgentFamily::Dsh {
+            let (lines, _) = read_session_tail(&canonical)?;
+            return crate::session_dsh::parse_dsh_session_lines(&lines);
+        }
         let (lines, detected_codex) = read_session_tail(&canonical)?;
         Ok(parse_session_messages_with_format(
             &lines,
@@ -876,13 +903,19 @@ pub async fn read_session_message_page(
     session_path: String,
     project_path: String,
     is_codex: bool,
+    family: Option<String>,
     cursor: Option<u64>,
 ) -> Result<SessionMessagePage, String> {
+    let family = crate::app_settings::resolve_family_param(family.as_deref(), is_codex);
     tauri::async_runtime::spawn_blocking(move || {
-        let canonical = validate_session_path(&session_path, &project_path, is_codex)?;
+        let canonical = validate_session_path_for(&session_path, &project_path, family)?;
         let (lines, next_cursor, has_more) =
             read_session_page_lines(&canonical, cursor, SESSION_MESSAGE_PAGE_LINES)?;
-        let messages = parse_session_messages_with_format(&lines, is_codex, is_codex);
+        let messages = if family == crate::app_settings::AgentFamily::Dsh {
+            crate::session_dsh::parse_dsh_session_lines(&lines)?
+        } else {
+            parse_session_messages_with_format(&lines, is_codex, is_codex)
+        };
         Ok(SessionMessagePage {
             messages,
             next_cursor,
@@ -898,9 +931,14 @@ pub async fn read_session_id(
     session_path: String,
     project_path: String,
     is_codex: bool,
+    family: Option<String>,
 ) -> Result<Option<String>, String> {
+    let family = crate::app_settings::resolve_family_param(family.as_deref(), is_codex);
     tauri::async_runtime::spawn_blocking(move || {
-        let canonical = validate_session_path(&session_path, &project_path, is_codex)?;
+        let canonical = validate_session_path_for(&session_path, &project_path, family)?;
+        if family == crate::app_settings::AgentFamily::Dsh {
+            return Ok(crate::session_dsh::read_dsh_session_header(&canonical).map(|(id, _)| id));
+        }
         Ok(resolve_session_id_from_file(&canonical, is_codex))
     })
     .await
@@ -913,8 +951,24 @@ pub async fn recover_task_session(
     prompt: String,
     created_at: i64,
     is_codex: bool,
+    family: Option<String>,
+    agent: Option<String>,
 ) -> Result<Option<RecoveredSession>, String> {
+    let family = crate::app_settings::resolve_family_param(family.as_deref(), is_codex);
     tauri::async_runtime::spawn_blocking(move || {
+        if family == crate::app_settings::AgentFamily::Dsh {
+            // dsh 无法按 prompt 匹配(transcript 首条 user/message 含前缀拼接),
+            // 按创建时间(留 10s 裕量)取该项目最新会话。
+            return Ok(crate::session_dsh::newest_dsh_session_since(
+                agent.as_deref().unwrap_or("dsh"),
+                &project_path,
+                created_at - 10_000,
+            )
+            .map(|(session_id, path)| RecoveredSession {
+                session_id,
+                session_path: path.to_string_lossy().into_owned(),
+            }));
+        }
         Ok(recover_session(
             &project_path,
             &prompt,
@@ -1638,6 +1692,19 @@ pub(crate) fn validate_session_path(
     project_path: &str,
     is_codex: bool,
 ) -> Result<PathBuf, String> {
+    validate_session_path_for(
+        session_path,
+        project_path,
+        crate::app_settings::AgentFamily::from_codex_like(is_codex),
+    )
+}
+
+/// family 版校验:dsh 的允许根为托管 DSH_HOME 的 sessions 目录。
+pub(crate) fn validate_session_path_for(
+    session_path: &str,
+    project_path: &str,
+    family: crate::app_settings::AgentFamily,
+) -> Result<PathBuf, String> {
     let path = Path::new(session_path);
     if !path.is_absolute() {
         return Err("Session path must be absolute".into());
@@ -1649,16 +1716,19 @@ pub(crate) fn validate_session_path(
         return Err("Session path is not a regular file".into());
     }
 
-    let allowed_roots: Vec<PathBuf> = if is_codex {
-        codex_sessions_roots(project_path)
+    let allowed_roots: Vec<PathBuf> = match family {
+        crate::app_settings::AgentFamily::Codex => codex_sessions_roots(project_path)
             .into_iter()
             .filter_map(|p| p.canonicalize().ok())
-            .collect()
-    } else {
-        claude_sessions_dirs_for_project(project_path)
+            .collect(),
+        crate::app_settings::AgentFamily::Claude => claude_sessions_dirs_for_project(project_path)
             .into_iter()
             .filter_map(|p| p.canonicalize().ok())
-            .collect()
+            .collect(),
+        crate::app_settings::AgentFamily::Dsh => crate::session_dsh::dsh_session_allowed_roots()
+            .into_iter()
+            .filter_map(|p| p.canonicalize().ok())
+            .collect(),
     };
 
     if allowed_roots.is_empty() {
@@ -1923,6 +1993,111 @@ fn find_codex_session_file(session_id: &str, project_path: &str) -> Option<PathB
         .max_by_key(|p| session_modified_at(p))
 }
 
+// ── 跨配置会话接管 ───────────────────────────────────────────────────────────
+
+/// 目标 Agent 读取 transcript 的根目录。内建 Agent 用 `~/.claude` / `~/.codex`,
+/// 自定义 Agent 用各自的隔离 home(`~/.aeroric/agent-homes/{id}`)。
+fn session_home_for_agent(agent: &str, is_codex: bool) -> Result<PathBuf, String> {
+    match crate::app_settings::custom_agent_home_dir_name(agent) {
+        Some(_) => crate::app_settings::custom_agent_home(agent),
+        None if is_codex => crate::hooks::codex_home(),
+        None => crate::platform::home_dir()
+            .map(|home| home.join(".claude"))
+            .ok_or_else(|| "Cannot resolve the home directory".to_string()),
+    }
+}
+
+/// 目标 Agent 接管一个会话文件后的落盘路径。
+///
+/// Claude 按 `<home>/projects/<encoded-project>/<session-id>.jsonl` 定位;Codex 按
+/// `<home>/sessions/<yyyy>/<mm>/<dd>/rollout-*.jsonl` 递归搜索,所以沿用源文件的
+/// 相对布局(年月日目录 + 文件名)即可被 `codex resume <id>` 找到。
+fn adopted_session_target_path(
+    source: &Path,
+    agent: &str,
+    is_codex: bool,
+    project_path: &str,
+) -> Result<PathBuf, String> {
+    let home = session_home_for_agent(agent, is_codex)?;
+    let file_name = source
+        .file_name()
+        .ok_or_else(|| "Session path has no file name".to_string())?;
+    if !is_codex {
+        return Ok(home
+            .join("projects")
+            .join(encode_claude_project_path(project_path))
+            .join(file_name));
+    }
+
+    // 尽量保留 `sessions/<yyyy>/<mm>/<dd>/` 这层结构,Codex 的 picker 与索引都按它扫描。
+    let date_parts: Vec<_> = source
+        .parent()
+        .map(|parent| {
+            parent
+                .components()
+                .rev()
+                .take(3)
+                .filter_map(|component| component.as_os_str().to_str().map(str::to_string))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let mut target = home.join("sessions");
+    if date_parts.len() == 3
+        && date_parts
+            .iter()
+            .all(|part| part.len() <= 4 && part.chars().all(|c| c.is_ascii_digit()))
+    {
+        for part in date_parts.iter().rev() {
+            target = target.join(part);
+        }
+    }
+    Ok(target.join(file_name))
+}
+
+/// 把一个会话 transcript 复制进目标 Agent 的 home,让目标配置可以原生 resume。
+///
+/// 两个 Agent 各有隔离 home 时,`claude --resume <id>` / `codex resume <id>` 只会在自己
+/// 的 home 里查找,跨配置切换因此必然落到「把上下文塞进 prompt」的降级路径——那条路径
+/// 依赖终端回放文本,既丢结构化工具调用又容易带入乱码。先接管文件,原生 resume 就能直接
+/// 复用完整对话树。
+///
+/// 目标已存在同名文件时直接复用(重复切换是幂等的),不覆盖已有 transcript。
+#[tauri::command]
+pub async fn adopt_session_for_agent(
+    session_path: String,
+    project_path: String,
+    is_codex: bool,
+    target_agent: String,
+) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        if !crate::app_settings::is_known_agent(&target_agent) {
+            return Err(format!("Unknown agent: {target_agent}"));
+        }
+        let canonical = validate_session_path(&session_path, &project_path, is_codex)?;
+        let target =
+            adopted_session_target_path(&canonical, &target_agent, is_codex, &project_path)?;
+        if let Ok(existing) = target.canonicalize() {
+            if existing == canonical {
+                return Ok(canonical.to_string_lossy().into_owned());
+            }
+        }
+        if target.exists() {
+            return Ok(target.to_string_lossy().into_owned());
+        }
+        if let Some(parent) = target.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|error| format!("Cannot create the target session directory: {error}"))?;
+            crate::storage::ensure_private_dir(parent)?;
+        }
+        std::fs::copy(&canonical, &target)
+            .map_err(|error| format!("Cannot adopt the session transcript: {error}"))?;
+        crate::storage::ensure_private_file_permissions(&target)?;
+        Ok(target.to_string_lossy().into_owned())
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
 // ── /status-based session discovery ──────────────────────────────────────────
 
 /// 从 Claude Code 的 `/status` 输出中提取 Session ID。
@@ -2165,9 +2340,10 @@ pub(crate) fn spawn_claude_lazy_session_attach(
     task_id: String,
     session_id: String,
     project_path: String,
+    agent: String,
 ) {
     thread::spawn(move || {
-        let Some(sessions_dir) = claude_sessions_dir_for_project(&project_path) else {
+        let Some(sessions_dir) = claude_sessions_dir_for_agent(&agent, &project_path) else {
             return;
         };
         let expected = sessions_dir.join(format!("{}.jsonl", session_id));
@@ -2227,30 +2403,70 @@ pub(crate) fn spawn_claude_lazy_session_attach(
             if !alive {
                 break;
             }
-            if expected.exists() {
-                // 升级为真：placeholder 翻成 false，让 is_task_active / had_agent_session
-                // 重新识别为有效会话。
-                let should_start_watcher = {
-                    let tm = app.state::<TaskManager>();
-                    let mut sessions = tm.claude_sessions.lock();
-                    if let Some(info) = sessions.get_mut(&task_id) {
-                        if info.is_placeholder {
-                            info.is_placeholder = false;
-                            true
-                        } else {
-                            false
-                        }
-                    } else {
-                        false
+            // 预期路径优先，同时兜底搜索全部已知 session root：Agent 的 CLAUDE_CONFIG_DIR
+            // 可能被用户脚本改到别处，那时预期路径永远不出现，而广播出去的路径已经被
+            // 前端持久化。搜到真实文件就地纠正，避免留下读不了的死路径。
+            let found = if expected.exists() {
+                Some(expected.clone())
+            } else {
+                find_claude_session_file(&session_id, &project_path)
+            };
+            let Some(actual) = found else {
+                thread::sleep(Duration::from_millis(500));
+                continue;
+            };
+            let actual_string = actual.to_string_lossy().into_owned();
+            let corrected = actual_string != path_string;
+
+            // 升级为真：placeholder 翻成 false，让 is_task_active / had_agent_session
+            // 重新识别为有效会话。
+            let should_start_watcher = {
+                let tm = app.state::<TaskManager>();
+                let mut sessions = tm.claude_sessions.lock();
+                match sessions.get_mut(&task_id) {
+                    Some(info) if info.is_placeholder => {
+                        info.is_placeholder = false;
+                        info.session_path = actual_string.clone();
+                        true
                     }
-                };
-                attached = true;
-                if should_start_watcher {
-                    watch_claude_session(app.clone(), task_id.clone(), expected.clone());
+                    _ => false,
                 }
-                break;
+            };
+
+            if should_start_watcher && corrected {
+                // 换 claim：旧的猜测路径不再持有，新路径若已被别的任务占用则放弃接管。
+                let claimed_actual = {
+                    let tm = app.state::<TaskManager>();
+                    let mut claimed = tm.claimed_session_paths.lock();
+                    claimed.remove(&path_string);
+                    claimed.insert(actual_string.clone())
+                };
+                if !claimed_actual {
+                    // 已被其他任务监听：还原占位标记，交给下方清理分支收尾。
+                    let tm = app.state::<TaskManager>();
+                    if let Some(info) = tm.claude_sessions.lock().get_mut(&task_id) {
+                        info.is_placeholder = true;
+                        info.session_path = path_string.clone();
+                    }
+                    break;
+                }
+                // 让前端把先前持久化的错误路径替换为真实路径。
+                let _ = app.emit(
+                    "task-session",
+                    serde_json::json!({
+                        "task_id": task_id,
+                        "session_id": session_id,
+                        "session_path": actual_string,
+                        "codex_like": false,
+                    }),
+                );
             }
-            thread::sleep(Duration::from_millis(500));
+
+            attached = true;
+            if should_start_watcher {
+                watch_claude_session(app.clone(), task_id.clone(), actual);
+            }
+            break;
         }
 
         // 文件出现 → watch_claude_session 已接管，claude_sessions 条目交给
@@ -2285,6 +2501,7 @@ pub(crate) fn spawn_status_session_watcher(
     app: AppHandle,
     task_id: String,
     project_path: String,
+    agent: String,
     is_codex: bool,
     rx: mpsc::Receiver<String>,
     pre_session_id: Option<String>,
@@ -2296,7 +2513,7 @@ pub(crate) fn spawn_status_session_watcher(
     // 后台再无限等文件出现后 attach 监听。
     if let Some(ref sid) = pre_session_id {
         if !is_codex && prompt_empty {
-            spawn_claude_lazy_session_attach(app, task_id, sid.clone(), project_path);
+            spawn_claude_lazy_session_attach(app, task_id, sid.clone(), project_path, agent);
             return;
         }
     }
@@ -2306,7 +2523,7 @@ pub(crate) fn spawn_status_session_watcher(
         if !is_codex {
             // ID 已经在 run_task 启动前确定，并由 spawn_claude_lazy_session_attach
             // 立即发给前端；这里不再等待文件或重复启动 watcher。
-            spawn_claude_lazy_session_attach(app, task_id, sid.clone(), project_path);
+            spawn_claude_lazy_session_attach(app, task_id, sid.clone(), project_path, agent);
             return;
         }
     }
@@ -2439,14 +2656,16 @@ pub async fn export_session_markdown(
     session_path: String,
     project_path: String,
     is_codex: bool,
+    family: Option<String>,
     output_path: String,
     task_meta: ExportTaskMeta,
 ) -> Result<(), String> {
+    let family = crate::app_settings::resolve_family_param(family.as_deref(), is_codex);
     tokio::task::spawn_blocking(move || {
         export_session_markdown_inner(
             &session_path,
             &project_path,
-            is_codex,
+            family,
             &output_path,
             &task_meta,
         )
@@ -2912,6 +3131,37 @@ mod tests {
     }
 
     #[test]
+    fn claude_transcript_dir_follows_the_agents_own_config_home() {
+        let home = std::env::temp_dir().join(format!("aeroric-agent-dir-{}", uuid::Uuid::new_v4()));
+        let project_path = "/tmp/example project";
+        let encoded = encode_claude_project_path(project_path);
+
+        // 内建 Agent 写 ~/.claude/projects/<encoded>
+        for builtin in ["claude", "claude_gpt55"] {
+            assert_eq!(
+                claude_sessions_dir_for_agent_in(&home, builtin, project_path),
+                Some(home.join(".claude").join("projects").join(&encoded)),
+                "builtin agent {builtin} must use ~/.claude",
+            );
+        }
+
+        // 自定义 Agent 的 CLAUDE_CONFIG_DIR 是隔离 home，transcript 也在那里；
+        // 用 ~/.claude 猜路径会得到一个永不存在的文件。
+        let custom = claude_sessions_dir_for_agent_in(&home, "sota_claude", project_path).unwrap();
+        assert_eq!(
+            custom,
+            home.join(".aeroric")
+                .join("agent-homes")
+                .join("sota_claude")
+                .join("projects")
+                .join(&encoded),
+        );
+        assert_ne!(custom, home.join(".claude").join("projects").join(&encoded));
+
+        let _ = fs::remove_dir_all(home);
+    }
+
+    #[test]
     fn resolve_session_id_reads_claude_session_id_and_filename_fallback() {
         let dir = std::env::temp_dir();
         let meta_path = dir.join("claude-session-with-title.jsonl");
@@ -3272,5 +3522,82 @@ mod tests {
             .expect("temp dir export path should validate");
         assert!(canonical.is_absolute());
         assert_eq!(canonical.extension().and_then(|e| e.to_str()), Some("md"));
+    }
+
+    #[test]
+    fn adopted_codex_target_keeps_the_date_directory_layout() {
+        let source = PathBuf::from(
+            "/tmp/src-home/sessions/2026/08/13/rollout-2026-08-13T00-00-00-abc.jsonl",
+        );
+        let target = adopted_session_target_path(&source, "codex", true, "/tmp/project")
+            .expect("codex target path should resolve");
+
+        let tail: Vec<_> = target
+            .components()
+            .rev()
+            .take(5)
+            .filter_map(|c| c.as_os_str().to_str())
+            .collect();
+        assert_eq!(
+            tail,
+            vec![
+                "rollout-2026-08-13T00-00-00-abc.jsonl",
+                "13",
+                "08",
+                "2026",
+                "sessions",
+            ]
+        );
+    }
+
+    #[test]
+    fn adopted_codex_target_drops_non_date_parents() {
+        // 源文件不在 `<yyyy>/<mm>/<dd>/` 布局下时只保留 sessions/ 根，避免搬进无意义的目录。
+        let source = PathBuf::from("/tmp/src-home/sessions/rollout-loose.jsonl");
+        let target = adopted_session_target_path(&source, "codex", true, "/tmp/project")
+            .expect("codex target path should resolve");
+
+        let tail: Vec<_> = target
+            .components()
+            .rev()
+            .take(2)
+            .filter_map(|c| c.as_os_str().to_str())
+            .collect();
+        assert_eq!(tail, vec!["rollout-loose.jsonl", "sessions"]);
+    }
+
+    #[test]
+    fn adopted_claude_target_uses_the_encoded_project_directory() {
+        let source = PathBuf::from("/tmp/src-home/projects/-tmp-project/session-uuid.jsonl");
+        let target = adopted_session_target_path(&source, "claude", false, "/tmp/project")
+            .expect("claude target path should resolve");
+
+        let tail: Vec<_> = target
+            .components()
+            .rev()
+            .take(3)
+            .filter_map(|c| c.as_os_str().to_str())
+            .collect();
+        assert_eq!(
+            tail,
+            vec![
+                "session-uuid.jsonl",
+                encode_claude_project_path("/tmp/project").as_str(),
+                "projects",
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn adopt_session_for_agent_rejects_unknown_agents() {
+        let error = adopt_session_for_agent(
+            "/tmp/whatever.jsonl".into(),
+            "/tmp/project".into(),
+            true,
+            "not-a-real-agent".into(),
+        )
+        .await
+        .expect_err("unknown agents must be rejected before any file access");
+        assert!(error.contains("Unknown agent"), "unexpected error: {error}");
     }
 }

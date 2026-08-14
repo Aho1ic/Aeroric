@@ -1,12 +1,14 @@
-import type { AgentType, BuiltInAgentType } from "./types";
+import type { AgentType, BuiltInAgentType, ProtocolFamily } from "./types";
 
-export type AgentConfigLang = "json" | "toml" | "shellscript";
+export type AgentConfigLang = "json" | "toml" | "yaml" | "shellscript";
 
 export interface CustomAgentProfile {
   id: string;
   label: string;
   path: string;
   codex_like: boolean;
+  /** 协议族("claude"/"codex"/"dsh");缺省由 codex_like 推导,兼容旧档案。 */
+  family?: ProtocolFamily | "";
   config_lang: AgentConfigLang;
   base_url?: string;
   api_key?: string;
@@ -23,6 +25,7 @@ export interface AgentOption {
   configFile: string;
   configLang: AgentConfigLang;
   codexLike: boolean;
+  family: ProtocolFamily;
   custom?: boolean;
 }
 
@@ -35,6 +38,7 @@ export const AGENT_OPTIONS: AgentOption[] = [
     configFile: "",
     configLang: "json",
     codexLike: false,
+    family: "claude",
   },
   {
     value: "codex",
@@ -42,15 +46,38 @@ export const AGENT_OPTIONS: AgentOption[] = [
     configFile: "",
     configLang: "toml",
     codexLike: true,
+    family: "codex",
+  },
+  {
+    value: "dsh",
+    label: "DeepSeek Harness",
+    configFile: "",
+    configLang: "yaml",
+    codexLike: false,
+    family: "dsh",
   },
 ];
 
 export function isBuiltInAgent(agent: AgentType): agent is BuiltInAgentType {
-  return agent === "claude" || agent === "claude_gpt55" || agent === "codex";
+  return agent === "claude" || agent === "claude_gpt55" || agent === "codex" || agent === "dsh";
 }
 
 export function normalizeAgentConfigLang(value: unknown): AgentConfigLang {
-  return value === "json" || value === "toml" || value === "shellscript" ? value : "shellscript";
+  return value === "json" || value === "toml" || value === "yaml" || value === "shellscript"
+    ? value
+    : "shellscript";
+}
+
+export function normalizeProtocolFamily(value: unknown): ProtocolFamily | undefined {
+  return value === "claude" || value === "codex" || value === "dsh" ? value : undefined;
+}
+
+export function familyFromCodexLike(codexLike: boolean): ProtocolFamily {
+  return codexLike ? "codex" : "claude";
+}
+
+export function profileFamily(profile: CustomAgentProfile): ProtocolFamily {
+  return normalizeProtocolFamily(profile.family) ?? familyFromCodexLike(profile.codex_like);
 }
 
 export function sanitizeAgentId(value: string): string {
@@ -71,12 +98,14 @@ function labelFromAgentId(agent: AgentType): string {
 }
 
 export function customAgentToOption(profile: CustomAgentProfile): AgentOption {
+  const family = profileFamily(profile);
   return {
     value: profile.id,
     label: profile.label || labelFromAgentId(profile.id),
     configFile: profile.path,
     configLang: normalizeAgentConfigLang(profile.config_lang),
-    codexLike: profile.codex_like,
+    codexLike: family === "codex",
+    family,
     custom: true,
   };
 }
@@ -120,6 +149,7 @@ export function agentOption(agent: AgentType, options: AgentOption[] = AGENT_OPT
       configFile: "",
       configLang: "shellscript",
       codexLike: agent !== "claude",
+      family: agent !== "claude" ? "codex" : "claude",
       custom: true,
     }
   );
@@ -129,6 +159,14 @@ export function agentDisplayLabel(agent: AgentType, options?: AgentOption[]): st
   return agentOption(agent, options).label;
 }
 
+export function agentFamily(agent: AgentType, options?: AgentOption[]): ProtocolFamily {
+  return agentOption(agent, options).family;
+}
+
 export function isCodexLikeAgent(agent: AgentType, options?: AgentOption[]): boolean {
-  return agentOption(agent, options).codexLike;
+  return agentFamily(agent, options) === "codex";
+}
+
+export function isDshAgent(agent: AgentType, options?: AgentOption[]): boolean {
+  return agentFamily(agent, options) === "dsh";
 }

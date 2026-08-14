@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { confirm } from "@tauri-apps/plugin-dialog";
-import { Eye, EyeOff, RefreshCw, RotateCcw, Save } from "lucide-react";
+import { Download, Eye, EyeOff, RefreshCw, RotateCcw, Save } from "lucide-react";
 import type {
   WslDistribution,
   WslDistributionProbe,
@@ -55,6 +55,8 @@ export function WslPanel() {
   const [revealSensitive, setRevealSensitive] = useState(false);
   const [dirtyRestart, setDirtyRestart] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [upgradingAgents, setUpgradingAgents] = useState(false);
+  const [upgradeMessage, setUpgradeMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const selectedSettings = useMemo(
@@ -189,6 +191,37 @@ export function WslPanel() {
     }
   };
 
+  const upgradeAgents = async () => {
+    if (!selected) return;
+    setUpgradingAgents(true);
+    setUpgradeMessage(null);
+    setError(null);
+    try {
+      const results = await invoke<
+        Array<{ agent: string; success: boolean; currentVersion: string; message: string }>
+      >("upgrade_wsl_agent_versions", {
+        distribution: selected,
+        agents: ["claude", "codex"],
+      });
+      const failed = results.filter((result) => !result.success);
+      if (failed.length) {
+        setError(failed.map((result) => `${result.agent}: ${result.message}`).join("\n"));
+      } else {
+        setUpgradeMessage(
+          results.map((result) => `${result.agent}: ${result.currentVersion || "OK"}`).join(" · "),
+        );
+      }
+      const nextProbe = await invoke<WslDistributionProbe>("probe_wsl_distribution", {
+        distribution: selected,
+      });
+      setProbe(nextProbe);
+    } catch (nextError) {
+      setError(String(nextError));
+    } finally {
+      setUpgradingAgents(false);
+    }
+  };
+
   return (
     <div
       style={{ padding: 20, overflowY: "auto", display: "flex", flexDirection: "column", gap: 18 }}
@@ -209,6 +242,16 @@ export function WslPanel() {
             <RefreshCw size={14} />
             {t("common.refresh")}
           </button>
+          {selected && (
+            <button
+              style={s.secondaryActionBtn}
+              onClick={() => void upgradeAgents()}
+              disabled={busy || upgradingAgents}
+            >
+              <Download size={14} className={upgradingAgents ? "spin" : undefined} />
+              {upgradingAgents ? t("wsl.upgradingAgents") : t("wsl.upgradeAgents")}
+            </button>
+          )}
           <button style={s.primaryActionBtn} onClick={() => void saveAll()} disabled={busy}>
             <Save size={14} />
             {t("common.save")}
@@ -435,6 +478,9 @@ export function WslPanel() {
         </>
       )}
       {error && <div style={{ color: "var(--danger)", fontSize: 12 }}>{error}</div>}
+      {upgradeMessage && (
+        <div style={{ color: "var(--success)", fontSize: 12 }}>{upgradeMessage}</div>
+      )}
     </div>
   );
 }

@@ -11,6 +11,21 @@
   --primary: var(--ds-accent);
   --primary-foreground: var(--ds-on-accent);
   --ring: var(--ds-focus);
+
+  /* z-index 层级量表 —— 必须与 src/styles/zLayers.ts 保持一致。
+   * 瞬态浮层(--z-popover 及以上)始终高于模态遮罩层(--z-overlay),
+   * 否则 Radix Portal 浮层会被同挂 body 的遮罩盖住。 */
+  --z-base: 1;
+  --z-sticky: 20;
+  --z-dropdown-inline: 200;
+  --z-overlay: 3000;
+  --z-overlay-nested: 3100;
+  --z-overlay-nested-deep: 3200;
+  --z-popover: 4200;
+  --z-popover-nested: 4300;
+  --z-context-menu-backdrop: 4399;
+  --z-context-menu: 4400;
+  --z-toast: 4600;
 }
 
 :where(button, input, select, textarea):focus-visible {
@@ -257,28 +272,361 @@
 .agent-runtime-selector__item {
   min-height: 30px;
   border-radius: 8px;
-  letter-spacing: 0.01em;
+  letter-spacing: 0;
 }
-.agent-runtime-selector__item::before {
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  background: currentColor;
+
+.agent-provider-tabs .animated-selection__item + .animated-selection__item::before {
+  position: absolute;
+  top: 50%;
+  left: -1px;
+  width: 1px;
+  height: 14px;
+  transform: translateY(-50%);
+  background: color-mix(in srgb, var(--border-strong) 72%, transparent);
   content: "";
-  opacity: 0.5;
-  transition:
-    opacity 160ms ease,
-    transform 180ms ease;
+  pointer-events: none;
 }
-.agent-runtime-selector__item[aria-pressed="true"]::before {
-  opacity: 0.9;
-  transform: scale(1.15);
+
+/* DeepSeek Harness provider setup follows the provider-card hierarchy used by dsh. */
+.dsh-provider-card {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+  padding: 16px;
+  border: 1px solid var(--border-medium);
+  border-radius: var(--radius-md);
+  background: var(--bg-subtle);
+  box-shadow: var(--shadow-xs);
+}
+
+.dsh-provider-card__header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.dsh-provider-card__logo {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  flex: 0 0 36px;
+  border: 1px solid var(--border-dim);
+  border-radius: var(--radius-md);
+  background: var(--bg-card);
+}
+
+.dsh-provider-card__logo img {
+  width: 23px;
+  height: 23px;
+}
+
+.dsh-provider-card__identity {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.dsh-provider-card__identity strong {
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: 13.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dsh-provider-card__identity code {
+  overflow: hidden;
+  color: var(--text-hint);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dsh-provider-card__hint,
+.dsh-provider-card__endpoint,
+.dsh-provider-card__agent-id {
+  margin: 0;
+  color: var(--text-hint);
+  font-size: 11px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.dsh-provider-card__endpoint,
+.dsh-provider-card__agent-id {
+  margin-top: 5px;
+  font-family: var(--font-mono);
+}
+
+.dsh-provider-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.dsh-provider-actions > button {
+  width: 100%;
+}
+
+.add-agent-field,
+.add-agent-model-list {
+  min-width: 0;
+}
+
+.add-agent-detect-button {
+  overflow: hidden;
+  contain: paint;
+}
+
+.add-agent-detect-button__label {
+  display: inline-grid;
+  min-width: 0;
+}
+
+.add-agent-detect-button__measure,
+.add-agent-detect-button__current {
+  grid-area: 1 / 1;
+  white-space: nowrap;
+}
+
+.add-agent-detect-button__measure {
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.add-agent-detect-button__current {
+  overflow: hidden;
+}
+
+.add-agent-field-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.add-agent-select {
+  width: 100%;
+  height: 30px;
+  padding: 0 28px 0 10px;
+  border: 1px solid var(--border-medium);
+  border-radius: var(--radius-sm);
+  outline: none;
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 12.5px;
+}
+
+.add-agent-select:focus {
+  border-color: var(--border-focus);
+  box-shadow: 0 0 0 3px var(--accent-subtle);
+}
+
+/* The official whale mark replaces Claude's animation for dsh task creation. */
+.dsh-whale-hero {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: min(128px, 32vw);
+  aspect-ratio: 1;
+  margin-bottom: 10px;
+}
+
+.dsh-whale-hero img {
+  display: block;
+  width: 78%;
+  height: 78%;
+  object-fit: contain;
+  transform-origin: center;
+  animation: aeroric-dsh-whale-swim 3.4s ease-in-out infinite;
+}
+
+@keyframes aeroric-dsh-whale-swim {
+  0%,
+  100% {
+    transform: translate3d(-4px, 2px, 0) rotate(-2deg);
+  }
+
+  50% {
+    transform: translate3d(5px, -4px, 0) rotate(2deg);
+  }
+}
+
+@media (max-width: 760px) {
+  .settings-modal-box {
+    width: calc(100vw - 16px) !important;
+    height: calc(100vh - 16px) !important;
+    max-height: calc(100vh - 16px) !important;
+    aspect-ratio: auto !important;
+    border-radius: 16px !important;
+  }
+
+  .settings-modal-nav {
+    width: 148px !important;
+    padding: 12px 8px 10px !important;
+  }
+
+  .settings-modal-content__header {
+    padding: 13px 14px 12px !important;
+  }
+
+  .all-agent-configs-panel {
+    padding: 16px !important;
+  }
+
+  .agent-configs-toolbar {
+    flex-wrap: wrap;
+  }
+
+  .agent-provider-tabs {
+    width: 100%;
+    overflow-x: auto;
+  }
+
+  .agent-provider-tabs .animated-selection__item {
+    flex: 1 0 max-content;
+  }
+
+  .agent-configs-toolbar__spacer {
+    display: none;
+  }
+
+  .agent-configs-search {
+    flex: 1 1 140px;
+    min-width: 120px;
+  }
+
+  .agent-configs-search input {
+    width: 100% !important;
+  }
+}
+
+@media (max-width: 620px) {
+  .add-agent-modal {
+    width: calc(100vw - 16px) !important;
+    max-height: calc(100vh - 16px) !important;
+    border-radius: 14px !important;
+  }
+
+  .add-agent-panel {
+    padding: 14px !important;
+  }
+
+  .add-agent-field-grid {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  .add-agent-model-row {
+    flex-wrap: wrap;
+  }
+
+  .add-agent-model-row > div:first-child {
+    flex-basis: 100% !important;
+  }
+
+  .add-agent-model-row > button {
+    flex: 1 1 140px !important;
+  }
+
+  .agent-configs-transfer__actions {
+    width: 100%;
+    margin-left: 0 !important;
+    flex-wrap: wrap;
+  }
+
+  .agent-configs-transfer__actions > button,
+  .agent-configs-transfer__actions > div {
+    flex: 1 1 140px;
+  }
+}
+
+@media (max-width: 520px) {
+  .settings-modal-layout {
+    min-height: 0;
+    flex-direction: column !important;
+  }
+
+  .settings-modal-nav {
+    width: 100% !important;
+    flex: 0 0 auto;
+    padding: 7px 8px !important;
+    border-right: 0 !important;
+    border-bottom: 1px solid var(--border-dim);
+  }
+
+  .settings-modal-nav__title,
+  .settings-modal-nav__section-label {
+    display: none !important;
+  }
+
+  .settings-modal-nav__track.animated-selection--vertical {
+    flex-direction: row;
+    align-items: center;
+    overflow: auto hidden !important;
+    padding: 0 !important;
+  }
+
+  .settings-modal-nav__track [data-animated-selection-item] {
+    width: auto !important;
+    flex: 0 0 auto;
+    padding-inline: 9px !important;
+    font-size: 11.5px !important;
+    white-space: nowrap;
+  }
+
+  .settings-modal-content {
+    min-height: 0;
+  }
+
+  .agent-provider-tabs {
+    overflow: hidden;
+  }
+
+  .agent-provider-tabs .animated-selection__item {
+    min-height: 40px !important;
+    flex: 1 1 0 !important;
+    padding: 5px 6px !important;
+    line-height: 1.15;
+    text-align: center;
+    white-space: normal;
+  }
+
+  .agent-runtime-selector__item {
+    min-height: 38px !important;
+    padding: 5px 6px !important;
+    line-height: 1.2;
+    white-space: normal;
+  }
+
+  .dsh-provider-card {
+    padding: 13px;
+  }
+
+  .dsh-provider-actions > button {
+    height: auto !important;
+    min-height: 40px;
+    padding-block: 7px !important;
+    white-space: normal !important;
+  }
+
+  .add-agent-model-list__header {
+    align-items: flex-start !important;
+    flex-direction: column;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
   .animated-selection__indicator,
   .animated-selection__item,
-  .terminal-session-tabs .terminal-session-tab__cursor {
+  .terminal-session-tabs .terminal-session-tab__cursor,
+  .dsh-whale-hero img {
     transition-duration: 0.01ms !important;
     animation: none !important;
   }
@@ -772,7 +1120,7 @@ body {
   border: 1px solid var(--border-medium);
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-popover);
-  z-index: 2000;
+  z-index: var(--z-popover);
   min-width: var(--radix-select-trigger-width);
   max-height: 280px;
   overflow: hidden;
@@ -907,7 +1255,7 @@ body {
   border: 1px solid var(--border-medium);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-popover);
-  z-index: 2000;
+  z-index: var(--z-popover);
   width: var(--radix-popover-trigger-width);
   /* trigger 较窄（如 NewTaskView 的 launch-mode 行）时兜底，避免分支名被截断 */
   min-width: 220px;
@@ -1067,6 +1415,79 @@ body {
   }
   50% {
     box-shadow: 0 0 0 4px color-mix(in srgb, var(--success) 0%, transparent);
+  }
+}
+
+/* SSH 卡片"复制密码"按钮的点击反馈：按下时快速回弹，复制成功后扩散一圈水波并
+   短暂变成成功色。三处复制入口（连接列表 / 工作区 / 项目对话框）共用。 */
+.ssh-copy-action {
+  position: relative;
+  transition:
+    transform 140ms ease,
+    color 160ms ease,
+    border-color 160ms ease;
+}
+
+.ssh-copy-action:not(:disabled):active {
+  transform: scale(0.9);
+}
+
+.ssh-copy-action[data-copied="true"] {
+  color: var(--success) !important;
+  border-color: var(--success) !important;
+  animation: ssh-copy-pop 320ms ease;
+}
+
+/* 水波用 ::after 画，不额外插 DOM 节点，也不影响按钮自身的图标布局。 */
+.ssh-copy-action[data-copied="true"]::after {
+  content: "";
+  position: absolute;
+  inset: -2px;
+  border-radius: inherit;
+  border: 1px solid var(--success);
+  animation: ssh-copy-ripple 520ms ease-out forwards;
+  pointer-events: none;
+}
+
+@keyframes ssh-copy-pop {
+  0% {
+    transform: scale(0.9);
+  }
+  55% {
+    transform: scale(1.14);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+@keyframes ssh-copy-ripple {
+  from {
+    opacity: 0.75;
+    transform: scale(0.85);
+  }
+  to {
+    opacity: 0;
+    transform: scale(1.75);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ssh-copy-action,
+  .ssh-copy-action[data-copied="true"] {
+    animation: none;
+    transition:
+      color 160ms ease,
+      border-color 160ms ease;
+  }
+
+  .ssh-copy-action:not(:disabled):active {
+    transform: none;
+  }
+
+  .ssh-copy-action[data-copied="true"]::after {
+    animation: none;
+    opacity: 0;
   }
 }
 
@@ -1380,6 +1801,66 @@ body {
 }
 
 /* ── Model options submenu ────────────────────────────────────── */
+.compose-agent-menu-title {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 7px 6px;
+  font-size: 11.5px;
+  font-weight: 760;
+  letter-spacing: 0;
+}
+
+.compose-agent-menu-title img {
+  width: 15px;
+  height: 15px;
+  object-fit: contain;
+}
+
+.compose-agent-menu-title--claude {
+  color: var(--usage-claude);
+  text-shadow: 0 0 12px color-mix(in srgb, var(--usage-claude) 28%, transparent);
+}
+
+.compose-agent-menu-title--codex {
+  color: var(--usage-codex);
+  text-shadow: 0 0 12px color-mix(in srgb, var(--usage-codex) 28%, transparent);
+}
+
+.compose-agent-menu-title--dsh {
+  color: var(--usage-dsh);
+  text-shadow: 0 0 12px color-mix(in srgb, var(--usage-dsh) 28%, transparent);
+}
+
+.compose-agent-menu-title--claude img {
+  filter: drop-shadow(0 0 5px color-mix(in srgb, var(--usage-claude) 35%, transparent));
+}
+
+.compose-agent-menu-title--codex img {
+  opacity: 0.78;
+  filter: drop-shadow(0 0 5px color-mix(in srgb, var(--usage-codex) 35%, transparent));
+}
+
+.compose-agent-menu-title--dsh img {
+  filter: drop-shadow(0 0 5px color-mix(in srgb, var(--usage-dsh) 35%, transparent));
+}
+
+.compose-agent-menu-separator {
+  align-self: stretch;
+  width: 1px;
+  min-height: 72px;
+  margin: 4px 0;
+  background: linear-gradient(
+    to bottom,
+    transparent,
+    color-mix(in srgb, var(--border-strong) 82%, transparent) 18%,
+    color-mix(in srgb, var(--text-hint) 45%, transparent) 50%,
+    color-mix(in srgb, var(--border-strong) 82%, transparent) 82%,
+    transparent
+  );
+}
+
 .model-options-scroll {
   scrollbar-width: none;
   -ms-overflow-style: none;
@@ -1492,7 +1973,7 @@ body {
   border: 1px solid var(--border-medium);
   border-radius: 7px;
   box-shadow: var(--shadow-md);
-  z-index: 2000;
+  z-index: var(--z-popover);
 }
 
 .file-viewer-tab-menu-item {
@@ -3884,19 +4365,30 @@ html:not(.dark) .xterm {
   caret-color: transparent !important;
 }
 
-/* Codex 等 agent 终端的当前光标行浅灰底高亮（类似编辑器的 current-line）。
+/* Agent 终端的当前光标行定位层（保持透明，不遮挡输入文字）。
  * 覆盖层由 attachCursorLineHighlight 挂到 .xterm-screen 内并跟随光标 Y。
- * DOM renderer 的文本行是静态定位，本覆盖层 z-index:0 会叠在其上，但 8% 透明度
- * 不影响可读性；低于 xterm 选区层（z-index:1），也不拦鼠标（pointer-events:none）。 */
+ * z-index:2 高于 xterm canvas，同时低于 z-index:5 的 IME helpers。 */
 .xterm-screen .aeroric-cursor-line {
   position: absolute;
   left: 0;
   top: 0;
   width: 100%;
-  z-index: 0;
+  z-index: 2;
   pointer-events: none;
-  background: color-mix(in srgb, var(--text-primary) 8%, transparent);
+  background: transparent;
   transition: transform 0.06s linear;
+}
+
+[data-terminal-theme="light"] .xterm-screen .aeroric-cursor-line {
+  background: transparent;
+}
+
+[data-terminal-theme="dark"] .xterm-screen .aeroric-cursor-line {
+  background: transparent;
+}
+
+[data-terminal-theme="eyecare"] .xterm-screen .aeroric-cursor-line {
+  background: transparent;
 }
 
 html:not(.dark) .xterm-helper-textarea {

@@ -169,6 +169,7 @@ export interface ProjectFeatureAvailability {
   searchDisabled: boolean;
   debugDisabled: boolean;
   previewDisabled: boolean;
+  skillsDisabled: boolean;
   settingsDisabled: boolean;
 }
 
@@ -204,6 +205,7 @@ export function projectFeatureAvailability({
     searchDisabled: lspBackedDisabled,
     debugDisabled: lspBackedDisabled,
     previewDisabled: lspBackedDisabled,
+    skillsDisabled: projectLocation.kind !== "local",
     settingsDisabled:
       projectLocation.kind === "ssh"
         ? !hasRemoteFileContext
@@ -224,6 +226,7 @@ export function visibleDockPanel(
     testsDisabled = false,
     debugDisabled = false,
     previewDisabled = false,
+    skillsDisabled = false,
   }: {
     filesDisabled: boolean;
     gitDisabled: boolean;
@@ -235,6 +238,7 @@ export function visibleDockPanel(
     testsDisabled?: boolean;
     debugDisabled?: boolean;
     previewDisabled?: boolean;
+    skillsDisabled?: boolean;
   },
 ): Exclude<RightPanel, "sftp" | "docker" | "ssh" | "database" | "notes"> {
   if (
@@ -256,6 +260,7 @@ export function visibleDockPanel(
   if (rightPanel === "tests" && testsDisabled) return null;
   if (rightPanel === "debug" && debugDisabled) return null;
   if (rightPanel === "preview" && previewDisabled) return null;
+  if (rightPanel === "skills" && skillsDisabled) return null;
   return rightPanel;
 }
 

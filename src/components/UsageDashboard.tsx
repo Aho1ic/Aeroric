@@ -25,7 +25,7 @@ import { AnimatedSelectionGroup } from "./ui/AnimatedSelection";
 import { Button } from "./ui/Button";
 
 const RANGE_OPTIONS: UsageStatisticsRange[] = [1, 7, 14, 30];
-const AGENT_OPTIONS: UsageStatisticsAgent[] = ["all", "codex", "claude"];
+const AGENT_OPTIONS: UsageStatisticsAgent[] = ["all", "codex", "claude", "dsh"];
 
 // Format numbers/currency/dates against the user's chosen UI language rather
 // than the OS locale, so an English UI never renders "US$0.12" / localized
@@ -476,6 +476,7 @@ function UsageChart({
 function SourceSummary({
   codex,
   claude,
+  dsh,
   tokenLabel,
   requestLabel,
   title,
@@ -483,12 +484,13 @@ function SourceSummary({
 }: {
   codex: UsageStatisticsTotals;
   claude: UsageStatisticsTotals;
+  dsh?: UsageStatisticsTotals;
   tokenLabel: string;
   requestLabel: string;
   title: string;
   locale: string;
 }) {
-  const max = Math.max(1, codex.totalTokens, claude.totalTokens);
+  const max = Math.max(1, codex.totalTokens, claude.totalTokens, dsh?.totalTokens ?? 0);
   return (
     <section className="usage-panel" style={s.usageSourceSummary}>
       <div style={s.usageSectionTitle}>{title}</div>
@@ -496,6 +498,8 @@ function SourceSummary({
         {[
           { name: "Codex", totals: codex, color: "var(--accent)" },
           { name: "Claude", totals: claude, color: "var(--success)" },
+          // dsh 无 rate-limit API,来源汇总只展示本地聚合的 token 数(降级展示)。
+          ...(dsh ? [{ name: "DeepSeek", totals: dsh, color: "var(--info, #4D6BFE)" }] : []),
         ].map((item) => (
           <div key={item.name} style={s.usageSourceRow}>
             <strong>{item.name}</strong>
@@ -528,11 +532,11 @@ const HOURLY_BUCKET_LIMIT = 24;
 export function UsageDashboard({ embedded = false }: { embedded?: boolean }) {
   const { t, language } = useI18n();
   const locale = localeForLanguage(language);
-  const [rangeDays, setRangeDays] = useState<UsageStatisticsRange>(7);
+  const [rangeDays, setRangeDays] = useState<UsageStatisticsRange>(1);
   const [agent, setAgent] = useState<UsageStatisticsAgent>("all");
   const rootRef = useRef<HTMLDivElement | null>(null);
   const [width, setWidth] = useState(900);
-  const { statistics, loading, refreshing, error, refetch } = useUsageStatistics(rangeDays, agent);
+  const { statistics, loading, error, refetch } = useUsageStatistics(rangeDays, agent);
 
   const chartSeries = useMemo(() => {
     const raw = statistics?.series ?? [];
@@ -660,16 +664,6 @@ export function UsageDashboard({ embedded = false }: { embedded?: boolean }) {
               label={(option) => t(`usageStats.agent.${option}`)}
               onChange={setAgent}
             />
-            <Button
-              size="icon-sm"
-              variant="outline"
-              aria-label={t("common.refresh")}
-              title={t("common.refresh")}
-              disabled={refreshing}
-              onClick={() => void refetch()}
-            >
-              <RefreshCw className={refreshing ? "spin" : undefined} size={13} />
-            </Button>
           </div>
         </div>
       </header>
@@ -772,6 +766,7 @@ export function UsageDashboard({ embedded = false }: { embedded?: boolean }) {
               <SourceSummary
                 codex={statistics.breakdown.codex}
                 claude={statistics.breakdown.claude}
+                dsh={statistics.breakdown.dsh}
                 tokenLabel={t("usageStats.tokensShort")}
                 requestLabel={t("usageStats.requestsShort")}
                 title={t("usageStats.sourceBreakdown")}

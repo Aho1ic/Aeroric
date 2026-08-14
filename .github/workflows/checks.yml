@@ -56,10 +56,12 @@ jobs:
             libsoup-3.0-dev \
             libjavascriptcoregtk-4.1-dev
 
+      # 版本来自 package.json 的 packageManager 字段（pnpm@10.33.0）。
+      # 这里不能再写 `version:`，否则 action 会因为「Multiple versions of pnpm
+      # specified」报错。lockfile 由 pnpm 10 生成，pnpm 9 会以
+      # ERR_PNPM_LOCKFILE_CONFIG_MISMATCH 拒绝 --frozen-lockfile。
       - name: Setup pnpm
         uses: pnpm/action-setup@v6
-        with:
-          version: 9
 
       - name: Setup Node.js
         uses: actions/setup-node@v6
@@ -153,11 +155,12 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile --ignore-scripts
 
+      # mobile 是 workspace 成员，依赖解析在根 pnpm-lock.yaml 的 `mobile:`
+      # importer 下，自己没有 lockfile。`pnpm --dir mobile audit` 因此只会报
+      # ERR_PNPM_AUDIT_NO_LOCKFILE；根审计已经覆盖 mobile 的依赖树。
       - name: Audit JavaScript dependencies
         if: runner.os == 'Linux'
-        run: |
-          pnpm audit --audit-level high
-          pnpm --dir mobile audit --audit-level high
+        run: pnpm audit --audit-level high
 
       - name: Run ESLint
         run: pnpm lint

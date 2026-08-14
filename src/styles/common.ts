@@ -1,5 +1,7 @@
 import type React from "react";
 
+import { zLayers } from "./zLayers";
+
 export const common = {
   errorBoundaryWrap: {
     flex: 1,
@@ -40,7 +42,7 @@ export const common = {
     border: "1px solid var(--border-medium)",
     background: "var(--bg-card)",
     boxShadow: "var(--shadow-md)",
-    zIndex: 9999,
+    zIndex: zLayers.popover,
     backdropFilter: "var(--glass-blur-compact)",
     WebkitBackdropFilter: "var(--glass-blur-compact)",
   },

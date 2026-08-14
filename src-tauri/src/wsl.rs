@@ -6,6 +6,7 @@ use std::process::{Command, Output, Stdio};
 use std::sync::Arc;
 use std::time::Duration;
 
+use parking_lot::Mutex;
 use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 use serde::{Deserialize, Serialize};
 use tauri::ipc::Channel;
@@ -699,27 +700,135 @@ fn resolve_login_shell(distribution: &str, probe_shell: String) -> Result<String
         .unwrap_or(probe_shell))
 }
 
-fn spawn_wsl_exit_monitor(app: AppHandle, task_id: String) {
+fn parse_wsl_agent_version(bytes: &[u8]) -> String {
+    decode_wsl_output(bytes)
+        .split_whitespace()
+        .map(|token| {
+            token.trim_matches(|ch: char| !ch.is_ascii_alphanumeric() && ch != '.' && ch != '-')
+        })
+        .find(|token| {
+            !token.is_empty()
+                && token.chars().any(|ch| ch.is_ascii_digit())
+                && token.chars().next().is_some_and(|ch| ch.is_ascii_digit())
+        })
+        .unwrap_or_default()
+        .to_string()
+}
+
+fn read_wsl_agent_version(distribution: &str, shell: &str, executable: &str) -> String {
+    let executable = shell_word(executable);
+    let command = format!("({executable} --version 2>/dev/null || {executable} -v 2>/dev/null)");
+    run_wsl_output(distribution, &login_shell_args(shell, &command), None)
+        .map(|output| parse_wsl_agent_version(&output.stdout))
+        .unwrap_or_default()
+}
+
+fn wsl_agent_upgrade_command(agent: &str, executable: &str) -> Result<(String, String), String> {
+    let (package, brew_name) = match agent {
+        "claude" => ("@anthropic-ai/claude-code@latest", "claude-code"),
+        "codex" => ("@openai/codex@latest", "codex"),
+        _ => return Err(format!("Unsupported WSL Agent: {agent}")),
+    };
+    let executable = shell_word(executable);
+    // 先复用 WSL 内已存在的 Homebrew 安装；否则使用 npm。Claude 的 standalone
+    // 安装支持 `update`，这样不会因为 Windows 主机找不到 Linux npm 而升级错环境。
+    let command = format!(
+        "if command -v brew >/dev/null 2>&1 && (brew list --formula --versions {brew_name} >/dev/null 2>&1 || brew list --cask --versions {brew_name} >/dev/null 2>&1); then if brew list --formula --versions {brew_name} >/dev/null 2>&1; then brew upgrade --formula {brew_name}; else brew upgrade --cask {brew_name}; fi; elif [ \"{agent}\" = \"claude\" ] && {executable} update; then :; elif command -v npm >/dev/null 2>&1; then npm install -g {package}; else echo 'Neither Homebrew nor npm is available in WSL' >&2; exit 127; fi"
+    );
+    Ok(("wsl".to_string(), command))
+}
+
+fn upgrade_wsl_agent_versions_blocking(
+    distribution: &str,
+    agents: Vec<String>,
+) -> Result<Vec<crate::app_settings::AgentUpgradeResult>, String> {
+    if !is_supported_platform() {
+        return Err("WSL is only available on Windows".to_string());
+    }
+    ensure_distribution_available(distribution)?;
+    let mut requested = Vec::new();
+    for agent in agents {
+        if !matches!(agent.as_str(), "claude" | "codex") {
+            return Err(format!("Unsupported WSL Agent: {agent}"));
+        }
+        if !requested.contains(&agent) {
+            requested.push(agent);
+        }
+    }
+    if requested.is_empty() {
+        return Err("Select at least one WSL Agent to upgrade".to_string());
+    }
+
+    requested
+        .into_iter()
+        .map(|agent| {
+            let (executable, _, probe) = resolve_agent_paths(distribution, &agent)?;
+            let shell = resolve_login_shell(distribution, probe.shell)?;
+            let previous_version = read_wsl_agent_version(distribution, &shell, &executable);
+            let (channel, command) = wsl_agent_upgrade_command(&agent, &executable)?;
+            let (success, message) =
+                match run_wsl_output(distribution, &login_shell_args(&shell, &command), None) {
+                    Ok(output) => {
+                        let output = decode_wsl_output(&output.stdout).trim().to_string();
+                        (
+                            true,
+                            if output.is_empty() {
+                                "upgraded".to_string()
+                            } else {
+                                output
+                            },
+                        )
+                    }
+                    Err(error) => (false, error),
+                };
+            let current_version = read_wsl_agent_version(distribution, &shell, &executable);
+            let verified = success && !current_version.is_empty();
+            let channels = vec![crate::app_settings::AgentUpgradeChannel {
+                channel: channel.clone(),
+                success: verified,
+                message: if verified {
+                    "upgraded and verified".to_string()
+                } else if success {
+                    "upgrade command succeeded but the WSL Agent version could not be verified"
+                        .to_string()
+                } else {
+                    message.clone()
+                },
+            }];
+            Ok(crate::app_settings::AgentUpgradeResult {
+                agent,
+                success: verified,
+                previous_version,
+                current_version,
+                message,
+                channels,
+                channel,
+                managed: false,
+            })
+        })
+        .collect()
+}
+
+fn spawn_wsl_exit_monitor(
+    app: AppHandle,
+    task_id: String,
+    child_handle: Arc<Mutex<Box<dyn portable_pty::Child + Send + Sync>>>,
+) {
     tokio::task::spawn_blocking(move || loop {
-        let exit_status = {
-            let manager = app.state::<crate::TaskManager>();
-            let child = manager.child_handles.lock().get(&task_id).cloned();
-            child.and_then(|child| child.lock().try_wait().ok().flatten())
-        };
+        let exit_status = child_handle.lock().try_wait().ok().flatten();
         if let Some(status) = exit_status {
+            let manager = app.state::<crate::TaskManager>();
+            if !manager.remove_pty_handles_if_current(&task_id, &child_handle) {
+                return;
+            }
             let (cancelled, manually_completed) = {
-                let manager = app.state::<crate::TaskManager>();
                 let result = (
                     manager.cancelled_tasks.lock().remove(&task_id),
                     manager.manually_completed_tasks.lock().remove(&task_id),
                 );
                 result
             };
-            {
-                let manager = app.state::<crate::TaskManager>();
-                manager.remove_pty_handles(&task_id);
-                manager.wsl_active_ids.lock().remove(&task_id);
-            }
+            manager.wsl_active_ids.lock().remove(&task_id);
             if cancelled || manually_completed {
                 return;
             }
@@ -771,7 +880,8 @@ fn spawn_wsl_task_pty(
         .master
         .take_writer()
         .map_err(|error| error.to_string())?;
-    crate::pty::register_pty_handles(task_manager, task_id, pair.master, writer, child)?;
+    let child_handle =
+        crate::pty::register_pty_handles(task_manager, task_id, pair.master, writer, child)?;
     task_manager
         .wsl_active_ids
         .lock()
@@ -823,7 +933,7 @@ fn spawn_wsl_task_pty(
             crate::pty::cancel_initial_input_signal(task_manager, task_id);
         }
     }
-    spawn_wsl_exit_monitor(app, task_id.to_string());
+    spawn_wsl_exit_monitor(app, task_id.to_string(), child_handle);
     Ok(())
 }
 
@@ -1035,6 +1145,16 @@ pub async fn get_wsl_agent_status(
     })
     .await
     .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+pub async fn upgrade_wsl_agent_versions(
+    distribution: String,
+    agents: Vec<String>,
+) -> Result<Vec<crate::app_settings::AgentUpgradeResult>, String> {
+    tokio::task::spawn_blocking(move || upgrade_wsl_agent_versions_blocking(&distribution, agents))
+        .await
+        .map_err(|error| error.to_string())?
 }
 
 #[tauri::command]

@@ -1,11 +1,13 @@
 import type React from "react";
 
+import { zLayers } from "./zLayers";
+
 export const dialogs = {
   modalOverlay: {
     position: "fixed" as const,
     inset: 0,
     background: "var(--overlay-bg)",
-    zIndex: 1000,
+    zIndex: zLayers.overlay,
     display: "flex",
     alignItems: "center",
     justifyContent: "center",
@@ -27,6 +29,9 @@ export const dialogs = {
   },
   settingsModalBox: {
     width: "min(max(920px, 86vw), calc(100vw - 40px), calc(133.333vh - 74.667px))",
+    background: "var(--settings-glass-bg)",
+    backdropFilter: "var(--settings-glass-blur)",
+    WebkitBackdropFilter: "var(--settings-glass-blur)",
   },
   settingsNav: {
     width: 180,
@@ -196,7 +201,7 @@ export const dialogs = {
     transition: "transform 0.15s",
   },
   settingsSelectContent: {
-    zIndex: 2000,
+    zIndex: zLayers.popover,
     background: "var(--bg-card)",
     border: "1px solid var(--border-medium)",
     borderRadius: "var(--radius-md)",

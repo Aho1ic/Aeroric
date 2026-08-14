@@ -22,9 +22,48 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({
 
 vi.mock("../hooks/useAgentOptions", () => ({
   useAgentOptions: () => [
-    { value: "claude", label: "Claude Code" },
-    { value: "codex", label: "Codex" },
-    { value: "custom", label: "Custom" },
+    {
+      value: "claude",
+      label: "Claude Code",
+      configFile: "/tmp/claude.json",
+      configLang: "json",
+      codexLike: false,
+      family: "claude",
+    },
+    {
+      value: "codex",
+      label: "Codex",
+      configFile: "/tmp/codex.toml",
+      configLang: "toml",
+      codexLike: true,
+      family: "codex",
+    },
+    {
+      value: "dsh",
+      label: "DSH Built-in",
+      configFile: "/tmp/dsh.yml",
+      configLang: "yaml",
+      codexLike: false,
+      family: "dsh",
+    },
+    {
+      value: "custom-claude",
+      label: "Custom Claude",
+      configFile: "/tmp/custom-claude.sh",
+      configLang: "shellscript",
+      codexLike: false,
+      family: "claude",
+      custom: true,
+    },
+    {
+      value: "custom-dsh",
+      label: "Custom DSH",
+      configFile: "/tmp/custom-dsh.yml",
+      configLang: "yaml",
+      codexLike: false,
+      family: "dsh",
+      custom: true,
+    },
   ],
   useAgentSettings: () => ({
     custom_agents: [],
@@ -111,5 +150,22 @@ describe("AllAgentConfigsPanel", () => {
     );
     expect(changed).toHaveBeenCalledTimes(1);
     window.removeEventListener(APP_SETTINGS_CHANGED_EVENT, changed);
+  });
+
+  it("groups built-in and custom DSH agents under DeepSeek Harness", async () => {
+    const user = userEvent.setup();
+
+    render(
+      <I18nProvider>
+        <AllAgentConfigsPanel themeVariant="light" />
+      </I18nProvider>,
+    );
+
+    await user.click(screen.getByRole("tab", { name: "DeepSeek Harness" }));
+
+    expect(screen.getByText("DSH Built-in")).toBeInTheDocument();
+    expect(screen.getByText("Custom DSH")).toBeInTheDocument();
+    expect(screen.queryByText("Claude Code")).not.toBeInTheDocument();
+    expect(screen.queryByText("Custom Claude")).not.toBeInTheDocument();
   });
 });

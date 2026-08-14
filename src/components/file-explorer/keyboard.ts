@@ -53,13 +53,16 @@ export function fileExplorerClickAction({
   return isSelected ? "toggle" : "selectAndToggle";
 }
 
+/** 文件树只会预览本地或 SSH 路径,不会落到 storage 端点上。 */
+export type FileExplorerPreviewEndpoint = Extract<SftpTauriEndpoint, { kind: "local" | "ssh" }>;
+
 export function fileExplorerPreviewEndpoint({
   selectedPath,
   remote,
 }: {
   selectedPath: string | null;
   remote?: FileExplorerRemoteContext;
-}): SftpTauriEndpoint | null {
+}): FileExplorerPreviewEndpoint | null {
   if (!selectedPath) return null;
   if (!remote) return { kind: "local", path: selectedPath };
   return { kind: "ssh", connection: remote.connection, path: selectedPath };

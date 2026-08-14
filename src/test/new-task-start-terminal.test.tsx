@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { invoke } from "@tauri-apps/api/core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -23,7 +23,12 @@ vi.mock("@tauri-apps/api/core", () => ({
         },
       ]);
     }
-    if (command === "get_project_git_branches") return Promise.resolve([]);
+    if (command === "git_list_branches") return Promise.resolve([]);
+    if (command === "read_project_config") {
+      return Promise.resolve({
+        agent: { default: "claude", default_permission_mode: "full_access" },
+      });
+    }
     if (command === "read_file_content") return Promise.reject(new Error("File not found"));
     if (command === "get_hook_readiness") {
       return Promise.resolve([{ agent: "claude", usable: true }]);
@@ -192,6 +197,42 @@ describe("NewTaskView start terminal", () => {
         injectPromptIntoTerminal: true,
       }),
     );
+  });
+
+  it("separates the three Agent configuration groups without boxed columns", async () => {
+    const user = userEvent.setup();
+
+    render(
+      <I18nProvider>
+        <NewTaskView project={project} onSubmit={vi.fn()} />
+      </I18nProvider>,
+    );
+
+    await user.click(screen.getByRole("combobox", { name: "Agent" }));
+
+    await screen.findByText("Claude configurations");
+    const claudeGroup = document.querySelector<HTMLElement>('[data-agent-family="claude"]');
+    const codexGroup = document.querySelector<HTMLElement>('[data-agent-family="codex"]');
+    const dshGroup = document.querySelector<HTMLElement>('[data-agent-family="dsh"]');
+    expect(claudeGroup).not.toBeNull();
+    expect(codexGroup).not.toBeNull();
+    expect(dshGroup).not.toBeNull();
+    for (const group of [claudeGroup!, codexGroup!, dshGroup!]) {
+      expect(group.style.borderWidth).toBe("0px");
+      expect(group.style.borderStyle).toBe("none");
+      expect(group.style.background).toBe("transparent");
+    }
+
+    expect(document.querySelectorAll("[data-agent-menu-separator]")).toHaveLength(2);
+    expect(within(claudeGroup!).getByText("Claude configurations").parentElement).toHaveClass(
+      "compose-agent-menu-title--claude",
+    );
+    expect(within(codexGroup!).getByText("Codex configurations").parentElement).toHaveClass(
+      "compose-agent-menu-title--codex",
+    );
+    expect(
+      within(dshGroup!).getByText("DeepSeek Harness configurations").parentElement,
+    ).toHaveClass("compose-agent-menu-title--dsh");
   });
 
   it("previews slash skills and inserts the selected skill like the CLI", async () => {

@@ -16,6 +16,9 @@ mod dap;
 mod database;
 mod diagnostics;
 mod docker;
+mod dsh_home;
+mod dsh_plugins;
+mod dsh_webui;
 mod event_watcher;
 mod formatter;
 mod fs;
@@ -37,10 +40,19 @@ mod remote_git;
 mod run_config;
 mod search;
 mod session;
+mod session_dsh;
 mod sftp;
 mod skills;
 mod ssh;
 mod storage;
+mod storage_backend;
+mod storage_backend_baidu;
+mod storage_backend_box;
+mod storage_backend_mount;
+mod storage_backend_opendal;
+mod storage_backend_smb;
+mod storage_conn;
+mod storage_oauth;
 mod subprocess;
 mod tests;
 mod usage;
@@ -50,6 +62,7 @@ mod wsl_fs;
 mod wsl_git;
 
 use session::{ClaudeSessionInfo, CodexSessionInfo};
+use session_dsh::DshSessionInfo;
 
 pub struct TaskManager {
     pub(crate) pty_masters:
@@ -62,6 +75,7 @@ pub struct TaskManager {
     pub(crate) manually_completed_tasks: Mutex<HashSet<String>>,
     pub(crate) codex_sessions: Mutex<HashMap<String, CodexSessionInfo>>,
     pub(crate) claude_sessions: Mutex<HashMap<String, ClaudeSessionInfo>>,
+    pub(crate) dsh_sessions: Mutex<HashMap<String, DshSessionInfo>>,
     pub(crate) claimed_session_paths: Mutex<HashSet<String>>,
     /// 启动态初始输入的门控信号:trust/hook 等交互完成后再投递 prompt。
     pub(crate) initial_input_signals: pty::StartupSignalRegistry,
@@ -83,6 +97,36 @@ impl TaskManager {
         writers.remove(id);
         children.remove(id);
         pty::cancel_initial_input_signal(self, id);
+    }
+
+    /// Remove a completed process generation only if it is still the current
+    /// child for this task ID. A manual configuration switch reuses the task ID
+    /// for a new process, so an old exit monitor must not clean up the new PTY.
+    pub(crate) fn remove_pty_handles_if_current(
+        &self,
+        id: &str,
+        expected: &Arc<Mutex<Box<dyn portable_pty::Child + Send + Sync>>>,
+    ) -> bool {
+        let mut masters = self.pty_masters.lock();
+        let mut pending_sizes = self.pending_pty_sizes.lock();
+        let mut writers = self.pty_writers.lock();
+        let mut children = self.child_handles.lock();
+        if !children
+            .get(id)
+            .is_some_and(|current| Arc::ptr_eq(current, expected))
+        {
+            return false;
+        }
+        masters.remove(id);
+        pending_sizes.remove(id);
+        writers.remove(id);
+        children.remove(id);
+        drop(children);
+        drop(writers);
+        drop(pending_sizes);
+        drop(masters);
+        pty::cancel_initial_input_signal(self, id);
+        true
     }
 }
 
@@ -169,6 +213,7 @@ pub fn run() {
             manually_completed_tasks: Mutex::new(HashSet::new()),
             codex_sessions: Mutex::new(HashMap::new()),
             claude_sessions: Mutex::new(HashMap::new()),
+            dsh_sessions: Mutex::new(HashMap::new()),
             claimed_session_paths: Mutex::new(HashSet::new()),
             initial_input_signals: Arc::new(Mutex::new(HashMap::new())),
             wsl_active_ids: Mutex::new(HashSet::new()),
@@ -181,6 +226,7 @@ pub fn run() {
             local_router_commands::LocalRouterManager::for_app()
                 .expect("Failed to initialize local router state"),
         )
+        .manage(dsh_webui::DshWebUiManager::new())
         .on_window_event(|window, event| {
             // macOS: 点关闭按钮(红灯)时隐藏窗口而非退出,与 Cmd+W 行为一致;
             // 点 Dock 图标可唤回(见下方 Reopen 处理)。
@@ -313,6 +359,17 @@ pub fn run() {
             sftp::sftp_rename_path,
             sftp::sftp_copy_paths,
             sftp::sftp_move_paths,
+            storage_conn::storage_list_connections,
+            storage_conn::storage_secret_keys,
+            storage_conn::storage_save_connection,
+            storage_conn::storage_delete_connection,
+            storage_conn::storage_touch_connection,
+            storage_oauth::storage_oauth_authorize,
+            storage_oauth::storage_oauth_credential_options,
+            sftp::storage_protocols,
+            sftp::storage_capabilities,
+            sftp::storage_test_connection,
+            sftp::storage_unmount_connection,
             git::generate_commit_message,
             agent_assist::generate_task_name,
             git::git_status,
@@ -395,6 +452,7 @@ pub fn run() {
             session::read_session_message_page,
             session::read_session_id,
             session::recover_task_session,
+            session::adopt_session_for_agent,
             session::export_session_markdown,
             config::init_project_config,
             config::read_project_config,
@@ -436,6 +494,7 @@ pub fn run() {
             wsl::read_wsl_config_file,
             wsl::write_wsl_config_file,
             wsl::get_wsl_agent_status,
+            wsl::upgrade_wsl_agent_versions,
             wsl::read_wsl_agent_config,
             wsl::write_wsl_agent_config,
             wsl::restart_wsl,
@@ -518,6 +577,17 @@ pub fn run() {
             app_settings::rename_custom_agent_profile,
             app_settings::save_send_shortcut,
             app_settings::save_shift_enter_newline,
+            dsh_plugins::list_dsh_plugins,
+            dsh_plugins::install_dsh_plugin,
+            dsh_plugins::uninstall_dsh_plugin,
+            dsh_plugins::toggle_dsh_plugin,
+            dsh_plugins::get_dsh_settings_snapshot,
+            dsh_plugins::open_dsh_config_file,
+            dsh_plugins::save_dsh_plugin_settings,
+            dsh_plugins::set_dsh_default_preset,
+            dsh_webui::start_dsh_webui,
+            dsh_webui::stop_dsh_webui,
+            dsh_webui::get_dsh_webui_status,
             app_settings::detect_agent_paths,
             app_settings::detect_agent_versions_for_settings,
             app_settings::detect_agent_version,
@@ -667,6 +737,8 @@ pub fn run() {
             if let tauri::RunEvent::Exit = _event {
                 let manager = _app_handle.state::<local_router_commands::LocalRouterManager>();
                 tauri::async_runtime::block_on(manager.shutdown());
+                let webui_manager = _app_handle.state::<dsh_webui::DshWebUiManager>();
+                tauri::async_runtime::block_on(webui_manager.shutdown_all());
             }
             // macOS: 当窗口被 Cmd+W 隐藏（hide）后，点击 Dock 图标会触发 Reopen，
             // 此时没有可见窗口，需要手动把主窗口重新显示并聚焦。

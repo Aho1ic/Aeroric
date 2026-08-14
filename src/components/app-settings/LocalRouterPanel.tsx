@@ -995,7 +995,7 @@ export function LocalRouterPanel() {
   const [saved, setSaved] = useState(false);
   const [showAccessToken, setShowAccessToken] = useState(false);
   const [accessTokenCopied, setAccessTokenCopied] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [, setError] = useState<string | null>(null);
 
   const refreshStatus = useCallback(async () => {
     try {
@@ -1452,24 +1452,7 @@ export function LocalRouterPanel() {
             onChange={(enabled) => void handleServiceToggle(enabled)}
           />
 
-          {error ? (
-            <div
-              role="alert"
-              style={{
-                display: "flex",
-                alignItems: "flex-start",
-                gap: 7,
-                marginTop: 9,
-                color: "var(--danger)",
-                fontSize: 11.5,
-                lineHeight: 1.45,
-              }}
-            >
-              <AlertCircle size={14} strokeWidth={2} style={{ marginTop: 1, flexShrink: 0 }} />
-              <span>{t("appSettings.localRouter.operationFailed", { message: error })}</span>
-            </div>
-          ) : null}
-          {!error && status?.last_error ? (
+          {status?.last_error ? (
             <div
               role="alert"
               style={{

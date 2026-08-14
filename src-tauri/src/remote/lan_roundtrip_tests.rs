@@ -33,6 +33,7 @@ fn empty_task_manager() -> crate::TaskManager {
         manually_completed_tasks: Mutex::new(HashSet::new()),
         codex_sessions: Mutex::new(HashMap::new()),
         claude_sessions: Mutex::new(HashMap::new()),
+        dsh_sessions: Mutex::new(HashMap::new()),
         claimed_session_paths: Mutex::new(HashSet::new()),
         initial_input_signals: Arc::new(Mutex::new(HashMap::new())),
         wsl_active_ids: Mutex::new(HashSet::new()),

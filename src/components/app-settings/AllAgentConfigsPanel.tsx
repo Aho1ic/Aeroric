@@ -23,10 +23,12 @@ import type { AgentOption } from "../../agents";
 import type { ThemeVariant } from "../../types";
 import claudeLogo from "../../assets/claude.svg";
 import chatgptLogo from "../../assets/chatgpt.svg";
+import deepseekLogo from "../../assets/deepseek.svg";
 import { AnimatedSelectionGroup } from "../ui/AnimatedSelection";
+import { zLayers } from "../../styles/zLayers";
 import { refreshLocalRouterRuntime } from "./shared";
 
-type ProviderTab = "anthropic" | "openai";
+type ProviderTab = AgentOption["family"];
 type ViewMode = "card" | "bar";
 
 const VIEW_MODE_KEY = "aeroric-agent-view-mode";
@@ -45,7 +47,7 @@ export function AllAgentConfigsPanel({ themeVariant }: { themeVariant: ThemeVari
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const [tab, setTab] = useState<ProviderTab>("anthropic");
+  const [tab, setTab] = useState<ProviderTab>("claude");
   const [viewMode, setViewMode] = useState<ViewMode>(loadViewMode);
   const [showAddAgentModal, setShowAddAgentModal] = useState(false);
   const [editingAgent, setEditingAgent] = useState<AgentOption | null>(null);
@@ -53,7 +55,7 @@ export function AllAgentConfigsPanel({ themeVariant }: { themeVariant: ThemeVari
   const [searchQuery, setSearchQuery] = useState("");
 
   const filteredAgents = useMemo(() => {
-    const byTab = agentOptions.filter((o) => (tab === "anthropic" ? !o.codexLike : o.codexLike));
+    const byTab = agentOptions.filter((option) => option.family === tab);
     if (!searchQuery.trim()) return byTab;
     const q = searchQuery.trim().toLowerCase();
     return byTab.filter((o) => o.label.toLowerCase().includes(q));
@@ -177,12 +179,10 @@ export function AllAgentConfigsPanel({ themeVariant }: { themeVariant: ThemeVari
     }
   }
 
-  function handleAgentSaved(agentId: string) {
+  function handleAgentSaved(_agentId: string, family: ProviderTab) {
     setShowAddAgentModal(false);
     window.dispatchEvent(new Event(APP_SETTINGS_CHANGED_EVENT));
-    const isCodexLike = agentOptions.find((o) => o.value === agentId)?.codexLike;
-    if (isCodexLike === true) setTab("openai");
-    else if (isCodexLike === false) setTab("anthropic");
+    setTab(family);
   }
 
   function handleAgentDeleted() {
@@ -192,6 +192,7 @@ export function AllAgentConfigsPanel({ themeVariant }: { themeVariant: ThemeVari
 
   return (
     <div
+      className="all-agent-configs-panel"
       style={{
         flex: 1,
         minHeight: 0,
@@ -202,6 +203,7 @@ export function AllAgentConfigsPanel({ themeVariant }: { themeVariant: ThemeVari
       {/* Bulk migration section
           标题与导入/导出同一行,下拉菜单向上展开,避免盖住下方 Agent 搜索框。 */}
       <section
+        className="agent-configs-transfer"
         style={{
           position: "relative",
           zIndex: 30,
@@ -240,6 +242,7 @@ export function AllAgentConfigsPanel({ themeVariant }: { themeVariant: ThemeVari
             </div>
           </div>
           <div
+            className="agent-configs-transfer__actions"
             style={{
               display: "flex",
               alignItems: "center",
@@ -268,7 +271,7 @@ export function AllAgentConfigsPanel({ themeVariant }: { themeVariant: ThemeVari
                   avoidCollisions
                   sticky="always"
                   style={{
-                    zIndex: 9999,
+                    zIndex: zLayers.popover,
                     minWidth: 180,
                     maxWidth: "min(280px, calc(100vw - 24px))",
                     maxHeight: "min(320px, var(--radix-popover-content-available-height))",
@@ -359,6 +362,7 @@ export function AllAgentConfigsPanel({ themeVariant }: { themeVariant: ThemeVari
 
       {/* Provider tabs + Add Agent + view toggle */}
       <div
+        className="agent-configs-toolbar"
         style={{
           marginTop: 24,
           display: "flex",
@@ -370,9 +374,11 @@ export function AllAgentConfigsPanel({ themeVariant }: { themeVariant: ThemeVari
           value={tab}
           onChange={setTab}
           ariaLabel={t("appSettings.provider")}
+          role="tablist"
+          className="agent-provider-tabs"
           options={[
             {
-              value: "anthropic",
+              value: "claude",
               label: (
                 <>
                   <img src={claudeLogo} alt="" style={{ width: 16, height: 16, borderRadius: 3 }} />
@@ -381,7 +387,7 @@ export function AllAgentConfigsPanel({ themeVariant }: { themeVariant: ThemeVari
               ),
             },
             {
-              value: "openai",
+              value: "codex",
               label: (
                 <>
                   <img
@@ -398,6 +404,15 @@ export function AllAgentConfigsPanel({ themeVariant }: { themeVariant: ThemeVari
                 </>
               ),
             },
+            {
+              value: "dsh",
+              label: (
+                <>
+                  <img src={deepseekLogo} alt="" style={{ width: 16, height: 16 }} />
+                  {t("appSettings.providerDeepSeekHarness")}
+                </>
+              ),
+            },
           ]}
           itemStyle={{ minHeight: 30, padding: "6px 12px", fontSize: 12.5 }}
         />
@@ -407,9 +422,12 @@ export function AllAgentConfigsPanel({ themeVariant }: { themeVariant: ThemeVari
           {t("appSettings.addAgentInline")}
         </Button>
 
-        <div style={{ flex: 1 }} />
+        <div className="agent-configs-toolbar__spacer" style={{ flex: 1 }} />
 
-        <div style={{ position: "relative", display: "flex", alignItems: "center" }}>
+        <div
+          className="agent-configs-search"
+          style={{ position: "relative", display: "flex", alignItems: "center" }}
+        >
           <Search
             size={13}
             style={{
@@ -443,6 +461,7 @@ export function AllAgentConfigsPanel({ themeVariant }: { themeVariant: ThemeVari
           value={viewMode}
           onChange={handleViewModeChange}
           ariaLabel={t("appSettings.viewMode")}
+          className="agent-configs-view-mode"
           options={[
             {
               value: "card",
@@ -500,7 +519,13 @@ export function AllAgentConfigsPanel({ themeVariant }: { themeVariant: ThemeVari
               option={option}
               viewMode={viewMode}
               themeVariant={themeVariant}
-              logo={option.codexLike ? chatgptLogo : claudeLogo}
+              logo={
+                option.family === "dsh"
+                  ? deepseekLogo
+                  : option.family === "codex"
+                    ? chatgptLogo
+                    : claudeLogo
+              }
               baseUrl={meta.baseUrl}
               apiKey={meta.apiKey}
               onClick={() => setEditingAgent(option)}
@@ -519,7 +544,13 @@ export function AllAgentConfigsPanel({ themeVariant }: { themeVariant: ThemeVari
         <AgentDetailModal
           option={editingAgent}
           themeVariant={themeVariant}
-          logo={editingAgent.codexLike ? chatgptLogo : claudeLogo}
+          logo={
+            editingAgent.family === "dsh"
+              ? deepseekLogo
+              : editingAgent.family === "codex"
+                ? chatgptLogo
+                : claudeLogo
+          }
           settings={settings}
           onClose={() => setEditingAgent(null)}
           onDeleted={handleAgentDeleted}

@@ -30,6 +30,7 @@ import {
   highlightCodeInnerHtml,
   NOTEBOOK_CODE_LANGUAGE_OPTIONS,
 } from "../../syntaxHighlight";
+import { zLayers } from "../../styles/zLayers";
 import { NotebookStoreProvider, useNotebookStore } from "./NotebookContext";
 import { createNotebookStore, type NotebookFormat, type NotebookNote } from "./notebookStore";
 
@@ -1955,7 +1956,7 @@ function NotebookPanelContent({ width = "100%" }: { width?: number | string }) {
                         position: "fixed",
                         top: tablePickerPosition.top,
                         left: tablePickerPosition.left,
-                        zIndex: 1000,
+                        zIndex: zLayers.popover,
                         width: TABLE_PICKER_WIDTH,
                         padding: 8,
                         border: "1px solid var(--border-dim)",
@@ -2157,7 +2158,7 @@ function NotebookPanelContent({ width = "100%" }: { width?: number | string }) {
             position: "fixed",
             left: contextMenu.x,
             top: contextMenu.y,
-            zIndex: 1000,
+            zIndex: zLayers.contextMenu,
             minWidth: 148,
             padding: "4px 0",
             border: "1px solid var(--border-dim)",

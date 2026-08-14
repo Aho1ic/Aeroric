@@ -97,6 +97,24 @@ describe("Notification release updater", () => {
     });
   });
 
+  it("portals the release dialog outside the sidebar positioning context", async () => {
+    const user = userEvent.setup();
+
+    render(
+      <I18nProvider>
+        <div style={{ backdropFilter: "blur(24px)" }}>
+          <NotificationBell />
+        </div>
+      </I18nProvider>,
+    );
+
+    await user.click(screen.getByTitle("Releases"));
+
+    const dialog = screen.getByRole("dialog", { name: "Releases" });
+    expect(dialog.parentElement).toBe(document.body);
+    expect(dialog).toHaveStyle({ position: "fixed", inset: "0" });
+  });
+
   it("shows restart update when the selected release is already downloaded", async () => {
     const user = userEvent.setup();
     vi.mocked(invoke).mockReset();
@@ -292,9 +310,9 @@ describe("Notification release updater", () => {
     });
     expect(screen.getByTestId("update-banner")).toHaveAttribute(
       "aria-label",
-      "Update available: v9.9.9",
+      "New version available: v9.9.9",
     );
-    expect(screen.queryByText("Update available: v9.9.9")).not.toBeInTheDocument();
+    expect(screen.queryByText("New version available: v9.9.9")).not.toBeInTheDocument();
     expect(screen.getByTestId("sidebar-body")).toBeInTheDocument();
   });
 });

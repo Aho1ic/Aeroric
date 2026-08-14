@@ -5,6 +5,7 @@ import {
   FolderOpen,
   ChevronDown,
   ChevronRight,
+  Cloud,
   GitBranch,
   Layers,
   Plus,
@@ -37,6 +38,8 @@ import type {
   SshConnection,
 } from "../types";
 import { isRemoteProject, resolveProjectLocation } from "../types";
+import type { StorageConnection } from "../types/storage";
+import { storageApi } from "../lib/storageApi";
 import { getAvatarGradient, shortenPath } from "../utils";
 import { ProjectAvatar } from "./ProjectAvatar";
 import { SidebarFooterActions } from "./SidebarFooterActions";
@@ -80,6 +83,11 @@ const NotebookPanel = lazy(() =>
 );
 const SshProjectPage = lazy(() =>
   import("./ssh/SshProjectDialog").then((module) => ({ default: module.SshProjectPage })),
+);
+const StorageConnectionPage = lazy(() =>
+  import("./storage/StorageConnectionPage").then((module) => ({
+    default: module.StorageConnectionPage,
+  })),
 );
 const WslProjectDialog = lazy(() =>
   import("./wsl/WslProjectDialog").then((module) => ({ default: module.WslProjectDialog })),
@@ -420,7 +428,15 @@ export function WelcomePage({
   const editingProjectInputRef = useRef<HTMLInputElement | null>(null);
   const suppressProjectClickRef = useRef<string | null>(null);
   const [view, setView] = useState<
-    "projects" | "timeline" | "usage" | "skills" | "docker" | "ssh" | "database" | "notes"
+    | "projects"
+    | "timeline"
+    | "usage"
+    | "skills"
+    | "docker"
+    | "ssh"
+    | "storage"
+    | "database"
+    | "notes"
   >("projects");
   const [openProjectMenu, setOpenProjectMenu] = useState(false);
   const [showProjectGroupDialog, setShowProjectGroupDialog] = useState(false);
@@ -430,6 +446,8 @@ export function WelcomePage({
   const [showWslProjectDialog, setShowWslProjectDialog] = useState(false);
   const [sftpOpen, setSftpOpen] = useState(false);
   const [sftpConnectionId, setSftpConnectionId] = useState<string | undefined>();
+  const [sftpStorageConnectionId, setSftpStorageConnectionId] = useState<string | undefined>();
+  const [storageConnections, setStorageConnections] = useState<StorageConnection[]>([]);
   const keepRecursiveBackgroundMounted = themeVariant === "light";
   const showRecursiveBackground = view === "projects" && !sftpOpen;
   const sshGroups = useMemo(
@@ -446,8 +464,26 @@ export function WelcomePage({
   const switchWelcomeView = useCallback((nextView: typeof view) => {
     setSftpOpen(false);
     setSftpConnectionId(undefined);
+    setSftpStorageConnectionId(undefined);
     setView(nextView);
   }, []);
+
+  // SFTP 面板需要存储连接列表才能在下拉框里列出它们。凭据不在返回值里。
+  useEffect(() => {
+    if (!sftpOpen && view !== "storage") return;
+    let cancelled = false;
+    void storageApi
+      .listConnections()
+      .then((next) => {
+        if (!cancelled) setStorageConnections(next);
+      })
+      .catch((cause) => {
+        console.warn("Failed to load storage connections", cause);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [sftpOpen, view]);
 
   const filtered = useMemo(() => {
     if (!query.trim()) return projects;
@@ -601,6 +637,13 @@ export function WelcomePage({
                 onClick={() => switchWelcomeView("ssh")}
               />
               <SidebarItem
+                icon={<Cloud size={15} />}
+                label={t("storage.title")}
+                selectionValue="storage"
+                active={view === "storage" && !sftpOpen}
+                onClick={() => switchWelcomeView("storage")}
+              />
+              <SidebarItem
                 icon={<Database size={15} />}
                 label={t("database.title")}
                 selectionValue="database"
@@ -643,13 +686,15 @@ export function WelcomePage({
         {sftpOpen ? (
           <LazyPane>
             <SftpPanel
-              key={sftpConnectionId ?? "default"}
+              key={sftpConnectionId ?? sftpStorageConnectionId ?? "default"}
               sshConnections={sshConnections}
+              storageConnections={storageConnections}
               localDefaultPath={sftpLocalDefaultPath}
               active={sftpOpen}
               width="100%"
               themeVariant={themeVariant}
               currentSshConnectionId={sftpConnectionId}
+              currentStorageConnectionId={sftpStorageConnectionId}
               onClose={() => setSftpOpen(false)}
             />
           </LazyPane>
@@ -683,6 +728,17 @@ export function WelcomePage({
         ) : view === "docker" ? (
           <LazyPane>
             <DockerServiceView />
+          </LazyPane>
+        ) : view === "storage" ? (
+          <LazyPane>
+            <StorageConnectionPage
+              onClose={() => switchWelcomeView("projects")}
+              onOpen={(connection) => {
+                setSftpConnectionId(undefined);
+                setSftpStorageConnectionId(connection.id);
+                setSftpOpen(true);
+              }}
+            />
           </LazyPane>
         ) : view === "database" ? (
           <LazyPane>

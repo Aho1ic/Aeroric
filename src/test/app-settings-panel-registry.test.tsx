@@ -32,6 +32,8 @@ function panelProps(): SettingsPanelProps {
     onUiFontFamilyChange: vi.fn(),
     monoFontFamily: "system",
     onMonoFontFamilyChange: vi.fn(),
+    dshWebSearchEnabled: true,
+    onDshWebSearchEnabledChange: vi.fn(),
   };
 }
 

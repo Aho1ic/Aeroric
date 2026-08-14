@@ -4,6 +4,7 @@ import { X, Check, ChevronDown, Search } from "lucide-react";
 import * as Popover from "@radix-ui/react-popover";
 import claudeLogo from "../../assets/claude.svg";
 import chatgptLogo from "../../assets/chatgpt.svg";
+import deepseekLogo from "../../assets/deepseek.svg";
 import type {
   Project,
   Skill,
@@ -15,7 +16,7 @@ import { useI18n } from "../../i18n";
 import s from "../../styles";
 import { SkillConflictDialog } from "./SkillConflictDialog";
 
-type SkillAgent = "claude" | "codex";
+type SkillAgent = "claude" | "codex" | "dsh";
 
 interface Props {
   skill: Skill;
@@ -28,6 +29,7 @@ interface Props {
 const AGENT_LOGO: Record<SkillAgent, string> = {
   claude: claudeLogo,
   codex: chatgptLogo,
+  dsh: deepseekLogo,
 };
 
 const DEFAULT_PROJECT_OPTION_LIMIT = 8;
@@ -205,7 +207,7 @@ export function SkillInstallDialog({
             <div style={s.skillInstallField}>
               <label style={s.skillInstallLabel}>{t("skill.install.agent")}</label>
               <div style={s.skillInstallAgentRow}>
-                {(["claude", "codex"] as const).map((a) => {
+                {(["claude", "codex", "dsh"] as const).map((a) => {
                   const active = agent === a;
                   return (
                     <button
@@ -215,7 +217,9 @@ export function SkillInstallDialog({
                       onClick={() => setAgent(a)}
                     >
                       <img src={AGENT_LOGO[a]} style={s.skillInstallAgentLogo} alt="" />
-                      <span>{a === "claude" ? "Claude" : "Codex"}</span>
+                      <span>
+                        {a === "claude" ? "Claude" : a === "codex" ? "Codex" : "DeepSeek Harness"}
+                      </span>
                     </button>
                   );
                 })}

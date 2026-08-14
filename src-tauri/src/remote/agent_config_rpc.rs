@@ -199,7 +199,7 @@ pub(crate) async fn agent_config_save<R: Runtime>(
     let enable_chat_completions_proxy = bool_param(&params, "enableChatCompletionsProxy")?;
     let proxy_enabled = bool_param(&params, "proxyEnabled")?;
 
-    if matches!(id.as_str(), "claude" | "codex") {
+    if matches!(id.as_str(), "claude" | "codex" | "dsh") {
         let update_id = id.clone();
         tauri::async_runtime::spawn_blocking(move || {
             crate::app_settings::update_builtin_agent_config_internal(
@@ -329,6 +329,7 @@ pub(crate) async fn agent_config_create<R: Runtime>(
         enable_1m_context: bool_param(&params, "enable1mContext")?.unwrap_or(false),
         enable_chat_completions_proxy: bool_param(&params, "enableChatCompletionsProxy")?
             .unwrap_or(false),
+        dsh_api_protocol: text_param(&params, "apiProtocol", 64)?.unwrap_or_default(),
         proxy_enabled: bool_param(&params, "proxyEnabled")?.unwrap_or(false),
     };
     let settings = crate::app_settings::setup_agent_profile(draft).await?;
@@ -386,6 +387,7 @@ mod tests {
             label: "Work".to_string(),
             path: "/tmp/work".to_string(),
             codex_like: true,
+            family: String::new(),
             config_lang: "shellscript".to_string(),
             base_url: "https://api.example.test".to_string(),
             api_key: "secret-value".to_string(),

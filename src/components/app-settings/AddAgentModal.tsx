@@ -1,13 +1,15 @@
 import { X } from "lucide-react";
 import { useI18n } from "../../i18n";
+import { zLayers } from "../../styles/zLayers";
 import { AddAgentPanel } from "./AddAgentPanel";
+import type { ProtocolFamily } from "../../types";
 
 export function AddAgentModal({
   onClose,
   onSaved,
 }: {
   onClose: () => void;
-  onSaved: (agentId: string) => void;
+  onSaved: (agentId: string, family: ProtocolFamily) => void;
 }) {
   const { t } = useI18n();
 
@@ -17,7 +19,8 @@ export function AddAgentModal({
       style={{
         position: "fixed",
         inset: 0,
-        zIndex: 3000,
+        // AppSettingsDialog(overlay)内部弹出,需高于其遮罩。
+        zIndex: zLayers.overlayNested,
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
@@ -31,6 +34,7 @@ export function AddAgentModal({
         role="dialog"
         aria-modal="true"
         aria-label={t("appSettings.addAgentInline")}
+        className="add-agent-modal"
         style={{
           width: "min(560px, calc(100vw - 48px))",
           maxHeight: "min(600px, calc(100vh - 80px))",
@@ -78,8 +82,8 @@ export function AddAgentModal({
         </div>
         <div style={{ flex: 1, minHeight: 0, overflow: "auto" }}>
           <AddAgentPanel
-            onSaved={(id) => {
-              onSaved(id);
+            onSaved={(id, family) => {
+              onSaved(id, family);
               onClose();
             }}
           />

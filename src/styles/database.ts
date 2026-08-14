@@ -1,5 +1,7 @@
 import type React from "react";
 
+import { zLayers } from "./zLayers";
+
 export const database = {
   databaseRoot: {
     flex: 1,
@@ -124,7 +126,7 @@ export const database = {
   databaseDialogOverlay: {
     position: "fixed",
     inset: 0,
-    zIndex: 3000,
+    zIndex: zLayers.overlay,
     display: "flex",
     alignItems: "center",
     justifyContent: "center",

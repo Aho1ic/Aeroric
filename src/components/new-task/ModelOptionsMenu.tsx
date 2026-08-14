@@ -9,15 +9,16 @@ import {
 import { ChevronDown, ChevronRight, Cpu, Gauge, SlidersHorizontal, Zap } from "lucide-react";
 import * as Popover from "@radix-ui/react-popover";
 import type { AgentType } from "../../types";
-import { isCodexLikeAgent } from "../../agents";
+import { agentFamily } from "../../agents";
 import { useAgentOptions } from "../../hooks/useAgentOptions";
 import { useI18n } from "../../i18n";
 import {
-  availableReasoningEfforts,
+  availableReasoningEffortsForFamily,
   type ReasoningEffort,
   type TaskSpeed,
 } from "../../modelOptions";
 import s from "../../styles";
+import { zLayers } from "../../styles/zLayers";
 
 type Panel = "model" | "reasoning" | "speed";
 
@@ -97,8 +98,11 @@ export function ModelOptionsMenu({
 }) {
   const { t } = useI18n();
   const agentOptions = useAgentOptions();
-  const codexLike = isCodexLikeAgent(agent, agentOptions);
-  const efforts = availableReasoningEfforts(codexLike, selectedModel);
+  const family = agentFamily(agent, agentOptions);
+  const efforts = availableReasoningEffortsForFamily(family, selectedModel);
+  // dsh 无 effort/speed 档位(计划 D6),整段隐藏;claude/codex 行为不变。
+  const showReasoning = efforts.length > 0;
+  const showSpeed = family !== "dsh";
   const [open, setOpen] = useState(false);
   const [panel, setPanel] = useState<Panel | null>(null);
   const pendingPanelRef = useRef<Panel | null>(null);
@@ -393,7 +397,7 @@ export function ModelOptionsMenu({
               ...submenuContentStyle(),
               borderLeft: "none",
               borderRight: "none",
-              zIndex: 4001,
+              zIndex: zLayers.popoverNested,
             }}
           >
             {active ? renderSubmenu(panelId) : null}
@@ -417,7 +421,13 @@ export function ModelOptionsMenu({
           data-model-options-menu-trigger
           style={{
             ...(compact ? s.toolbarBtnIconOnly : s.toolbarBtn),
-            maxWidth: compact ? undefined : "min(240px, 32vw)",
+            // Let the trigger size itself from the selected values. The old
+            // 280px flex basis left a large empty tail in the home toolbar.
+            flex: compact ? "0 0 auto" : "0 1 auto",
+            minWidth: compact ? undefined : 0,
+            width: compact ? undefined : "fit-content",
+            maxWidth: compact ? undefined : "min(360px, calc(100vw - 32px))",
+            overflow: "hidden",
             minHeight: 24,
             height: 24,
             padding: compact ? 0 : "2px 7px",
@@ -505,7 +515,7 @@ export function ModelOptionsMenu({
               "min(360px, var(--radix-popover-content-available-height, calc(100vh - 24px)))",
             overflow: "hidden",
             padding: 6,
-            zIndex: 4000,
+            zIndex: zLayers.popover,
           }}
         >
           <div
@@ -537,25 +547,27 @@ export function ModelOptionsMenu({
                 selectedModel || t("newTask.modelsUnavailable"),
                 modelLabel,
               )}
-              {renderPanelTrigger(
-                "reasoning",
-                <SlidersHorizontal size={14} color="var(--text-muted)" aria-hidden="true" />,
-                t("newTask.reasoningLabel"),
-                reasoningLabel,
-                reasoningLabel,
-              )}
-              {renderPanelTrigger(
-                "speed",
-                <Gauge size={14} color="var(--text-muted)" aria-hidden="true" />,
-                t("newTask.speedLabel"),
-                <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
-                  {t(`newTask.speed.${speed}`)}
-                  {speed === "fast" && (
-                    <Zap size={12} color="var(--speed-fast-fg)" aria-hidden="true" />
-                  )}
-                </span>,
-                t(`newTask.speed.${speed}`),
-              )}
+              {showReasoning &&
+                renderPanelTrigger(
+                  "reasoning",
+                  <SlidersHorizontal size={14} color="var(--text-muted)" aria-hidden="true" />,
+                  t("newTask.reasoningLabel"),
+                  reasoningLabel,
+                  reasoningLabel,
+                )}
+              {showSpeed &&
+                renderPanelTrigger(
+                  "speed",
+                  <Gauge size={14} color="var(--text-muted)" aria-hidden="true" />,
+                  t("newTask.speedLabel"),
+                  <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+                    {t(`newTask.speed.${speed}`)}
+                    {speed === "fast" && (
+                      <Zap size={12} color="var(--speed-fast-fg)" aria-hidden="true" />
+                    )}
+                  </span>,
+                  t(`newTask.speed.${speed}`),
+                )}
             </div>
           </div>
         </Popover.Content>

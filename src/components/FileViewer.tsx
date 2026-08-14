@@ -110,6 +110,7 @@ import {
   type SaveContentOptions,
   type RemoteFileContext,
 } from "./file-viewer/editorUtils";
+import { zLayers } from "../styles/zLayers";
 
 function FilePreviewPane({
   filePath,
@@ -1470,7 +1471,7 @@ function FilePreviewPane({
                   background: "var(--bg-card)",
                   boxShadow: "var(--shadow-lg)",
                   color: "var(--text-primary)",
-                  zIndex: 60,
+                  zIndex: zLayers.popover,
                   padding: 8,
                 }}
               >

@@ -1,7 +1,14 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { save as saveDialog } from "@tauri-apps/plugin-dialog";
-import type { Task, UsageWindow, TerminalFontSize, FontFamily, ThemeVariant } from "../types";
+import type {
+  Task,
+  UsageWindow,
+  TerminalFontSize,
+  FontFamily,
+  ProtocolFamily,
+  ThemeVariant,
+} from "../types";
 import { permissionModeLabel } from "../types";
 import { StatusIcon } from "./StatusIcon";
 import { TerminalView } from "./TerminalView";
@@ -11,9 +18,9 @@ import { shortenPath, getUsageColor } from "../utils";
 import { useUsageSnapshot } from "../hooks/useUsageSnapshot";
 import { usePlatformRuntimeInfo } from "../hooks/usePlatformRuntimeInfo";
 import { ENABLE_USAGE_INSIGHTS } from "../platform";
-import { agentDisplayLabel, isCodexLikeAgent, type AgentOption } from "../agents";
+import { agentDisplayLabel, type AgentOption } from "../agents";
 import {
-  getTaskSessionFields,
+  getTaskSessionFieldsByFamily,
   hasTaskContinuationContext,
   resolveTaskSessionOwner,
 } from "../taskSession";
@@ -130,7 +137,12 @@ export function RunningView({
   ) => number;
   onTerminalReady: (generation: number) => void;
   onSnapshot?: (snapshot: string) => void;
-  onSessionRecovered?: (sessionId: string, sessionPath: string, codexLike: boolean) => void;
+  onSessionRecovered?: (
+    sessionId: string,
+    sessionPath: string,
+    codexLike: boolean,
+    family?: ProtocolFamily,
+  ) => void;
   getRestoreState?: () => {
     initialData?: string;
     initialSnapshot?: string;
@@ -150,11 +162,9 @@ export function RunningView({
     task.status === "pending" || task.status === "running" || task.status === "input_required";
   const isDetached = task.status === "detached";
   const isInterrupted = task.status === "interrupted";
-  const isFailed = task.status === "failed";
-  const currentCodexLike = isCodexLikeAgent(task.agent, agentOptions);
   const sessionOwner = resolveTaskSessionOwner(task, agentOptions);
-  const sessionFields = getTaskSessionFields(task, sessionOwner.codexLike);
-  const persistedSessionPath = sessionFields.sessionPath ?? sessionFields.legacySessionPath;
+  const sessionFields = getTaskSessionFieldsByFamily(task, sessionOwner.family);
+  const rawPersistedSessionPath = sessionFields.sessionPath ?? sessionFields.legacySessionPath;
   const persistedSessionId = sessionFields.sessionId ?? sessionFields.legacySessionId;
   const [recoveredSession, setRecoveredSession] = useState<{
     sessionId: string;
@@ -162,9 +172,17 @@ export function RunningView({
   } | null>(null);
   const [sessionRecovery, setSessionRecovery] = useState<"idle" | "loading" | "failed">("idle");
   const [sessionRecoveryError, setSessionRecoveryError] = useState<string | null>(null);
+  // 已确认读不出来的持久化路径。历史版本会把一个猜错的 transcript 路径写进 tasks.json
+  // （自定义 Agent 的 CLAUDE_CONFIG_DIR 不在 ~/.claude），此后读会话只会一直报
+  // "Cannot resolve session path"。把它作废，让下面的恢复流程重新发现真实路径。
+  const [brokenSessionPaths, setBrokenSessionPaths] = useState<readonly string[]>([]);
   const onSessionRecoveredRef = useRef(onSessionRecovered);
   const sessionRecoveryAttemptRef = useRef<string | null>(null);
   onSessionRecoveredRef.current = onSessionRecovered;
+  const persistedSessionPath =
+    rawPersistedSessionPath && brokenSessionPaths.includes(rawPersistedSessionPath)
+      ? undefined
+      : rawPersistedSessionPath;
   const sessionPath = persistedSessionPath ?? recoveredSession?.sessionPath;
   const resumeSessionId = persistedSessionId ?? recoveredSession?.sessionId;
   const resumeAvailable = Boolean(
@@ -174,8 +192,10 @@ export function RunningView({
   const [terminalHistory, setTerminalHistory] = useState("");
   const [terminalHistoryVersion, setTerminalHistoryVersion] = useState(0);
   const shouldLoadTerminalHistory = !isActive && !isDetached && !isInterrupted;
-  const failedSwitchAvailable =
-    isFailed && (hasTaskContinuationContext(task) || Boolean(terminalHistory.trim()));
+  // 活跃/断连进程可以直接重启；已结束的任务只有还能续接上下文时切配置才有意义。
+  // interrupted 状态由下方中断横幅提供自己的切配置按钮，这里不再重复渲染。
+  const switchConfigAvailable =
+    isActive || isDetached || hasTaskContinuationContext(task) || Boolean(terminalHistory.trim());
   const currentAgentLabel = agentDisplayLabel(task.agent, agentOptions);
   const reasoningLabel = task.reasoningEffort
     ? t(`newTask.reasoning.${task.reasoningEffort}`)
@@ -210,10 +230,34 @@ export function RunningView({
     setRecoveredSession(null);
     setSessionRecovery("idle");
     setSessionRecoveryError(null);
+    setBrokenSessionPaths([]);
   }, [task.id]);
 
+  const handleSessionLoadFailed = useCallback(
+    (failedPath: string) => {
+      // 只作废持久化路径：刚恢复出来的路径读不出来说明会话文件本身有问题，
+      // 再作废一次只会和恢复流程来回打转。
+      if (failedPath !== rawPersistedSessionPath) return;
+      setBrokenSessionPaths((current) =>
+        current.includes(failedPath) ? current : [...current, failedPath],
+      );
+      // 允许恢复流程为这个任务重跑一次。
+      sessionRecoveryAttemptRef.current = null;
+    },
+    [rawPersistedSessionPath],
+  );
+
   useEffect(() => {
-    if (task.status !== "done" || persistedSessionPath || recoveredSession) return;
+    // 正常情况下只在任务结束后补发现会话；但已确认读不出来的持久化路径必须立刻重新发现，
+    // 否则运行中的任务会一直缺会话视图和顶栏指标。
+    const healingBrokenPath = brokenSessionPaths.length > 0;
+    if (
+      (task.status !== "done" && !healingBrokenPath) ||
+      persistedSessionPath ||
+      recoveredSession
+    ) {
+      return;
+    }
     const attemptKey = `${task.id}:${sessionOwner.codexLike ? "codex" : "claude"}`;
     if (sessionRecoveryAttemptRef.current === attemptKey) return;
     sessionRecoveryAttemptRef.current = attemptKey;
@@ -231,6 +275,8 @@ export function RunningView({
       prompt: task.prompt,
       createdAt: task.createdAt,
       isCodex: sessionOwner.codexLike,
+      family: sessionOwner.family,
+      agent: sessionOwner.agent,
     })
       .then((recovered) => {
         if (cancelled) return;
@@ -245,6 +291,7 @@ export function RunningView({
           recovered.sessionId,
           recovered.sessionPath,
           sessionOwner.codexLike,
+          sessionOwner.family,
         );
       })
       .catch((error) => {
@@ -257,11 +304,14 @@ export function RunningView({
       cancelled = true;
     };
   }, [
+    brokenSessionPaths.length,
     canRecoverSession,
     persistedSessionPath,
     projectPath,
     recoveredSession,
+    sessionOwner.agent,
     sessionOwner.codexLike,
+    sessionOwner.family,
     t,
     task.createdAt,
     task.id,
@@ -346,6 +396,7 @@ export function RunningView({
         sessionPath,
         projectPath,
         isCodex: sessionOwner.codexLike,
+        family: sessionOwner.family,
         outputPath,
         taskMeta: {
           name: task.name,
@@ -402,7 +453,15 @@ export function RunningView({
           if (cancelled) return;
           setMetrics(nextMetrics);
         })
-        .catch(console.error);
+        .catch((error) => {
+          if (cancelled) return;
+          // 读不到 transcript（历史版本给自定义 Agent 写过错的 ~/.claude 路径）时，
+          // 复用会话自愈通道重新发现真实路径，否则顶栏的时长 / TOKENS / 上下文
+          // 会一直空着。
+          setMetrics(null);
+          handleSessionLoadFailed(sessionPath);
+          console.warn("read_session_metrics failed", error);
+        });
     };
 
     load();
@@ -415,7 +474,7 @@ export function RunningView({
         timer = null;
       }
     };
-  }, [sessionPath, isActive, projectActive]);
+  }, [sessionPath, isActive, projectActive, handleSessionLoadFailed]);
 
   const terminalInitialData = shouldLoadTerminalHistory
     ? terminalHistory || restoreState.initialData || ""
@@ -482,6 +541,7 @@ export function RunningView({
         initialData={terminalInitialData}
         initialSnapshot={terminalInitialSnapshot}
         rawReplayData={restoreState.rawReplayData}
+        highlightCursorLine
       />
     </div>
   ) : undefined;
@@ -600,7 +660,7 @@ export function RunningView({
             </button>
           )}
         </div>
-        {onSwitchConfig && (isActive || failedSwitchAvailable) && (
+        {onSwitchConfig && switchConfigAvailable && !isInterrupted && (
           <button
             type="button"
             style={s.resumeBtn}
@@ -827,12 +887,18 @@ export function RunningView({
               value={formatDuration(metrics.duration_secs)}
             />
             <MetricPill label={t("running.tokens")} value={formatTokens(metrics.total_tokens)} />
-            {metrics.context_window > 0 && metrics.context_tokens > 0 && (
+            {metrics.context_tokens > 0 && (
               <MetricPill
                 label={t("running.context")}
-                value={`${formatTokens(metrics.context_tokens)} / ${formatTokens(metrics.context_window)} (${Math.round(
-                  (metrics.context_tokens / metrics.context_window) * 100,
-                )}%)`}
+                // 窗口大小未知时（第三方中转 / 自定义 model slug 推导不出窗口）只显示占用量，
+                // 不编造百分比。
+                value={
+                  metrics.context_window > 0
+                    ? `${formatTokens(metrics.context_tokens)} / ${formatTokens(metrics.context_window)} (${Math.round(
+                        (metrics.context_tokens / metrics.context_window) * 100,
+                      )}%)`
+                    : formatTokens(metrics.context_tokens)
+                }
               />
             )}
           </div>
@@ -906,7 +972,9 @@ export function RunningView({
               sessionPath={sessionPath}
               projectPath={projectPath}
               isCodex={sessionOwner.codexLike}
+              family={sessionOwner.family}
               fallback={terminalHistoryFallback}
+              onLoadFailed={() => handleSessionLoadFailed(sessionPath)}
             />
           ) : (
             <div style={s.interruptedNoSessionPane}>
@@ -952,7 +1020,7 @@ export function RunningView({
               initialData={terminalInitialData}
               initialSnapshot={terminalInitialSnapshot}
               rawReplayData={restoreState.rawReplayData}
-              highlightCursorLine={currentCodexLike}
+              highlightCursorLine
             />
           </div>
         </div>
@@ -962,7 +1030,9 @@ export function RunningView({
           sessionPath={sessionPath}
           projectPath={projectPath}
           isCodex={sessionOwner.codexLike}
+          family={sessionOwner.family}
           fallback={terminalHistoryFallback}
+          onLoadFailed={() => handleSessionLoadFailed(sessionPath)}
         />
       )}
 

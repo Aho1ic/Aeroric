@@ -3,7 +3,7 @@
   border: 1px solid var(--border-medium);
   border-radius: 8px;
   box-shadow: var(--shadow-md);
-  z-index: 2000;
+  z-index: var(--z-popover);
   width: var(--radix-popover-trigger-width);
   overflow: hidden;
 }

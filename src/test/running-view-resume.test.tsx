@@ -116,7 +116,12 @@ describe("RunningView resume affordance", () => {
     renderRunningView(completedTask, true, onSessionRecovered);
 
     await waitFor(() => {
-      expect(onSessionRecovered).toHaveBeenCalledWith("recovered-id", "/tmp/recovered.jsonl", true);
+      expect(onSessionRecovered).toHaveBeenCalledWith(
+        "recovered-id",
+        "/tmp/recovered.jsonl",
+        true,
+        "codex",
+      );
       expect(screen.getByTestId("session-view")).toBeInTheDocument();
     });
   });
@@ -138,6 +143,18 @@ describe("RunningView resume affordance", () => {
       status: "failed",
       failureReason: "Process exited with code 1",
     });
+
+    expect(screen.getByRole("button", { name: "Switch configuration" })).toBeInTheDocument();
+  });
+
+  it("offers configuration switching after a task has completed", () => {
+    renderRunningView(completedTask);
+
+    expect(screen.getByRole("button", { name: "Switch configuration" })).toBeInTheDocument();
+  });
+
+  it("offers configuration switching while the terminal is detached", () => {
+    renderRunningView({ ...completedTask, status: "detached" });
 
     expect(screen.getByRole("button", { name: "Switch configuration" })).toBeInTheDocument();
   });

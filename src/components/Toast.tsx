@@ -1,6 +1,8 @@
 import { createContext, useContext, useState, useCallback, useEffect, useRef } from "react";
 import type React from "react";
 
+import { zLayers } from "../styles/zLayers";
+
 interface ToastItem {
   id: string;
   message: string;
@@ -75,7 +77,7 @@ function ToastContainer({
         position: "fixed",
         bottom: 20,
         right: 20,
-        zIndex: 9999,
+        zIndex: zLayers.toast,
         display: "flex",
         flexDirection: "column",
         gap: 8,

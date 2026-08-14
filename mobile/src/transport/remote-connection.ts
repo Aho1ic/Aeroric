@@ -51,8 +51,8 @@ export interface WebSocketLike {
   close(code?: number, reason?: string): void;
   onopen: (() => void) | null;
   onmessage: ((event: { data: unknown }) => void) | null;
-  onclose: (() => void) | null;
-  onerror: (() => void) | null;
+  onclose: ((event?: { code?: number; reason?: string }) => void) | null;
+  onerror: ((event?: { message?: string }) => void) | null;
 }
 
 export type WebSocketFactory = (url: string) => WebSocketLike;
@@ -1073,6 +1073,25 @@ export function pairWithInvite(options: {
     let ws: WebSocketLike;
     let session: E2eeSession | null = null;
     let handshake: PendingHandshake | null = null;
+    let phase: "connecting" | "handshake" | "auth" = "connecting";
+    let socketError: string | null = null;
+    const disconnectedMessage = (event?: { code?: number; reason?: string }): string => {
+      const closeDetails = [
+        typeof event?.code === "number" ? `code=${event.code}` : "",
+        event?.reason?.trim() ?? "",
+        socketError ?? "",
+      ]
+        .filter(Boolean)
+        .join(", ");
+      const suffix = closeDetails ? ` (${closeDetails})` : "";
+      if (phase === "connecting") {
+        return `无法连接到电脑,请检查手机与电脑在同一网络、电脑防火墙和远程服务端口${suffix}`;
+      }
+      if (phase === "handshake") {
+        return `电脑在加密握手阶段断开连接,请确认二维码来自当前电脑${suffix}`;
+      }
+      return `电脑在验证配对码时断开连接,请重新生成二维码${suffix}`;
+    };
     const finish = (fn: () => void) => {
       if (settled) return;
       settled = true;
@@ -1098,7 +1117,10 @@ export function pairWithInvite(options: {
     }
 
     ws.onopen = () => {
-      if (handshake) ws.send(handshake.helloJson);
+      if (handshake) {
+        phase = "handshake";
+        ws.send(handshake.helloJson);
+      }
     };
     ws.onmessage = (event) => {
       // 握手响应(明文 text)
@@ -1112,6 +1134,7 @@ export function pairWithInvite(options: {
           finish(() => reject(err instanceof Error ? err : new Error(String(err))));
           return;
         }
+        phase = "auth";
         try {
           const payload = JSON.stringify({
             v: PROTOCOL_VERSION,
@@ -1146,11 +1169,12 @@ export function pairWithInvite(options: {
         finish(() => reject(new Error(frame.error ?? "配对被拒绝")));
       }
     };
-    ws.onclose = () => {
-      finish(() => reject(new Error("连接已断开,配对未完成")));
+    ws.onclose = (event) => {
+      finish(() => reject(new Error(disconnectedMessage(event))));
     };
-    ws.onerror = () => {
-      // onclose 会随后触发并统一收尾
+    ws.onerror = (event) => {
+      const message = event?.message?.trim();
+      if (message) socketError = message;
     };
   });
 }

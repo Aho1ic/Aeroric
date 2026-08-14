@@ -16,6 +16,7 @@ describe("ide tool registry", () => {
       "run",
       "preview",
       "search",
+      "skills",
     ]);
     expect(IDE_TOOL_REGISTRY.every((tool) => typeof tool.titleKey === "string")).toBe(true);
     expect(IDE_TOOL_REGISTRY.every((tool) => typeof tool.commandId === "string")).toBe(true);
@@ -45,6 +46,7 @@ describe("ide tool registry", () => {
       "run",
       "preview",
       "search",
+      "skills",
     ]);
     expect(Object.fromEntries(tools.map((tool) => [tool.id, tool.disabled]))).toMatchObject({
       "git-advanced": true,
@@ -54,6 +56,7 @@ describe("ide tool registry", () => {
       run: true,
       preview: false,
       search: true,
+      skills: false,
     });
   });
 
@@ -69,6 +72,7 @@ describe("ide tool registry", () => {
       "problems",
       "test-explorer",
       "run-configurations",
+      "project-skills",
     ]);
   });
 

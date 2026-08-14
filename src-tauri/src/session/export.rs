@@ -3,7 +3,7 @@ use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
 
 use super::{
-    is_codex_format, parse_claude_session, parse_codex_session, validate_session_path,
+    is_codex_format, parse_claude_session, parse_codex_session, validate_session_path_for,
     SessionContent, SessionMessage,
 };
 
@@ -28,11 +28,11 @@ pub struct ExportTaskMeta {
 pub(super) fn export_session_markdown_inner(
     session_path: &str,
     project_path: &str,
-    is_codex: bool,
+    family: crate::app_settings::AgentFamily,
     output_path: &str,
     meta: &ExportTaskMeta,
 ) -> Result<(), String> {
-    let canonical = validate_session_path(session_path, project_path, is_codex)?;
+    let canonical = validate_session_path_for(session_path, project_path, family)?;
     let canonical_out = validate_export_output_path(output_path)?;
     let metadata = std::fs::metadata(&canonical)
         .map_err(|error| format!("Cannot read session metadata: {}", error))?;
@@ -54,7 +54,9 @@ pub(super) fn export_session_markdown_inner(
         }
     }
     let line_refs: Vec<&str> = lines.iter().map(String::as_str).collect();
-    let messages = if is_codex_format(&line_refs) {
+    let messages = if family == crate::app_settings::AgentFamily::Dsh {
+        crate::session_dsh::parse_dsh_session_lines(&line_refs)?
+    } else if is_codex_format(&line_refs) {
         parse_codex_session(&line_refs)
     } else {
         parse_claude_session(&line_refs)

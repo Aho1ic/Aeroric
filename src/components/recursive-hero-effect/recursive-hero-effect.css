@@ -42,8 +42,9 @@
 }
 
 .recursive-hero-effect__canvas--welcome {
-  transform: translateX(-14%) translateY(-5%) scale(1.08);
-  transform-origin: 38% 48%;
+  /* 欢迎页画布是整页背景，不能再通过缩放/平移制造局部背景边界。 */
+  transform: none;
+  transform-origin: 50% 50%;
 }
 
 .recursive-hero-effect__content {

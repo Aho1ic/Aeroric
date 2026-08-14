@@ -5,7 +5,7 @@ import {
   resolveThemeVariant,
 } from "../appThemeState";
 
-describe("native application theme", () => {
+describe("native window chrome theme", () => {
   it("resolves system dark mode before syncing native chrome", () => {
     const variant = resolveThemeVariant("system", true);
 
@@ -14,8 +14,18 @@ describe("native application theme", () => {
     expect(nativeWindowBackgroundForVariant(variant)).toBe("#09090b");
   });
 
-  it("keeps eye-care native chrome in the light family with a matching background", () => {
+  it("keeps explicit dark mode chrome dark", () => {
+    expect(nativeThemeForVariant("dark")).toBe("dark");
+    expect(nativeWindowBackgroundForVariant("dark")).toBe("#09090b");
+  });
+
+  it("keeps eye-care chrome in the light family with a matching background", () => {
     expect(nativeThemeForVariant("eyecare")).toBe("light");
     expect(nativeWindowBackgroundForVariant("eyecare")).toBe("#f6eddc");
+  });
+
+  it("uses the light surface for light mode", () => {
+    expect(nativeThemeForVariant("light")).toBe("light");
+    expect(nativeWindowBackgroundForVariant("light")).toBe("#fbfbfc");
   });
 });

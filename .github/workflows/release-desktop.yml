@@ -110,10 +110,10 @@ jobs:
             libsoup-3.0-dev \
             libjavascriptcoregtk-4.1-dev
 
+      # 与 checks.yml 一致：版本由 package.json 的 packageManager 决定，
+      # 不再显式传 `version:`（两者同时存在会让 action 直接报错）。
       - name: Setup pnpm
         uses: pnpm/action-setup@v6
-        with:
-          version: 9
 
       - name: Setup Node.js
         uses: actions/setup-node@v6
@@ -169,10 +169,12 @@ jobs:
             echo "Release signing credentials are configured for ${{ runner.os }}."
           else
             echo "AERORIC_SIGN_RELEASE=false" >> "$GITHUB_ENV"
+            # 缺少凭据不再中断发布：下面的 unsigned 分支会照常出包，并把「未签名」
+            # 这件事写进 SIGNING_STATUS.txt 随 Release 一起发布，让用户能看到状态。
+            # 代价是 macOS 首次打开需绕过 Gatekeeper、Windows 会有 SmartScreen 提示。
             if [[ "${{ runner.os }}" != "Linux" ]]; then
               message="${{ runner.os }} signing credentials are incomplete: ${missing[*]}"
-              echo "::error::${message}. Tagged desktop releases must be signed."
-              exit 1
+              echo "::warning::${message}. Producing unsigned packages."
             fi
           fi
 

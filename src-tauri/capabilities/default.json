@@ -8,6 +8,7 @@
     "core:app:allow-set-app-theme",
     "core:window:allow-set-background-color",
     "core:window:allow-set-theme",
+    "core:window:allow-set-background-color",
     "core:window:allow-hide",
     "opener:allow-open-url",
     "opener:allow-default-urls",

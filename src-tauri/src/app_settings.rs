@@ -48,10 +48,12 @@ fn default_true() -> bool {
 
 static CACHED_CLAUDE_VERSION: OnceLock<Mutex<Option<Option<String>>>> = OnceLock::new();
 static CACHED_CODEX_VERSION: OnceLock<Mutex<Option<Option<String>>>> = OnceLock::new();
+static CACHED_DSH_VERSION: OnceLock<Mutex<Option<Option<String>>>> = OnceLock::new();
 static CACHED_SETTINGS: OnceLock<Mutex<Option<CachedSettings>>> = OnceLock::new();
 static SETTINGS_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+static AGENT_UPGRADE_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 const CLAUDE_BUILTIN_MODEL_ALIASES: &[&str] = &["fable", "opus", "sonnet"];
-const CLAUDE_AGENT_SCRIPT_MARKER: &str = "# AERORIC_CLAUDE_WRAPPER_VERSION=5";
+const CLAUDE_AGENT_SCRIPT_MARKER: &str = "# AERORIC_CLAUDE_WRAPPER_VERSION=6";
 const CLAUDE_AGENT_SCRIPT_MARKER_PREFIX: &str = "# AERORIC_CLAUDE_WRAPPER_VERSION=";
 const CODEX_AGENT_SCRIPT_MARKER: &str = "# AERORIC_CODEX_WRAPPER_VERSION=5";
 const CODEX_CHAT_PROXY_MARKER: &str = "# AERORIC_CODEX_CHAT_PROXY_VERSION=5";
@@ -76,6 +78,9 @@ pub struct CustomAgentProfile {
     pub path: String,
     #[serde(default = "default_custom_agent_codex_like")]
     pub codex_like: bool,
+    /// 协议族("claude"/"codex"/"dsh");为空时由 `codex_like` 推导,保持旧档案兼容。
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub family: String,
     #[serde(default = "default_custom_agent_config_lang")]
     pub config_lang: String,
     #[serde(default)]
@@ -94,11 +99,19 @@ pub struct CustomAgentProfile {
     pub password: String,
 }
 
+impl CustomAgentProfile {
+    pub fn agent_family(&self) -> AgentFamily {
+        AgentFamily::parse(self.family.trim())
+            .unwrap_or_else(|| AgentFamily::from_codex_like(self.codex_like))
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum AgentSetupKind {
     Codex,
     ClaudeCode,
+    Dsh,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
@@ -115,6 +128,8 @@ pub struct AgentSetupDraft {
     pub enable_1m_context: bool,
     #[serde(default)]
     pub enable_chat_completions_proxy: bool,
+    #[serde(default)]
+    pub dsh_api_protocol: String,
     #[serde(default)]
     pub proxy_enabled: bool,
 }
@@ -158,6 +173,9 @@ pub struct AgentConfigBundleAgent {
     pub label: String,
     pub kind: AgentConfigBundleKind,
     pub codex_like: bool,
+    /// 协议族("claude"/"codex"/"dsh");为空时由 `codex_like` 推导,兼容旧档案。
+    #[serde(default)]
+    pub family: String,
     pub config_lang: String,
     pub config_content: String,
     #[serde(default = "default_config_present")]
@@ -408,11 +426,15 @@ pub struct AppSettings {
     #[serde(default)]
     pub codex_path: String,
     #[serde(default)]
+    pub dsh_path: String,
+    #[serde(default)]
     pub claude_config_path: String,
     #[serde(default)]
     pub claude_gpt55_config_path: String,
     #[serde(default)]
     pub codex_config_path: String,
+    #[serde(default)]
+    pub dsh_config_path: String,
     #[serde(default)]
     pub agent_label_overrides: HashMap<String, String>,
     #[serde(default)]
@@ -427,6 +449,12 @@ pub struct AppSettings {
     pub agent_proxy_overrides: HashMap<String, LegacyAgentProxyConfig>,
     #[serde(default)]
     pub custom_agents: Vec<CustomAgentProfile>,
+    /// dsh web_search 工具启用状态(默认启用)。设为 false 时启动任务注入 patch 禁用。
+    #[serde(default = "default_true")]
+    pub dsh_web_search_enabled: bool,
+    /// dsh 遥测启用状态(默认禁用,对齐 dsh 官方默认 DISABLED)。
+    #[serde(default)]
+    pub dsh_telemetry_enabled: bool,
     #[serde(default = "default_send_shortcut")]
     pub send_shortcut: String,
     #[serde(default = "default_shift_enter_newline")]
@@ -439,9 +467,11 @@ impl Default for AppSettings {
             claude_path: String::new(),
             claude_gpt55_path: String::new(),
             codex_path: String::new(),
+            dsh_path: String::new(),
             claude_config_path: String::new(),
             claude_gpt55_config_path: String::new(),
             codex_config_path: String::new(),
+            dsh_config_path: String::new(),
             agent_label_overrides: HashMap::new(),
             builtin_agent_credentials: HashMap::new(),
             proxy_settings: ProxySettings::default(),
@@ -449,9 +479,53 @@ impl Default for AppSettings {
             agent_proxy_enabled: HashMap::new(),
             agent_proxy_overrides: HashMap::new(),
             custom_agents: Vec::new(),
+            dsh_web_search_enabled: true,
+            dsh_telemetry_enabled: false,
             send_shortcut: default_send_shortcut(),
             terminal_shift_enter_newline: default_shift_enter_newline(),
         }
+    }
+}
+
+/// 协议族:决定启动参数、会话格式与配置文件形态。
+/// `codex_like` 布尔保留为 `family == Codex` 的派生,兼容期内两者并存。
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[serde(rename_all = "lowercase")]
+pub enum AgentFamily {
+    #[default]
+    Claude,
+    Codex,
+    Dsh,
+}
+
+impl AgentFamily {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            AgentFamily::Claude => "claude",
+            AgentFamily::Codex => "codex",
+            AgentFamily::Dsh => "dsh",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<AgentFamily> {
+        match value {
+            "claude" => Some(AgentFamily::Claude),
+            "codex" => Some(AgentFamily::Codex),
+            "dsh" => Some(AgentFamily::Dsh),
+            _ => None,
+        }
+    }
+
+    pub fn from_codex_like(codex_like: bool) -> AgentFamily {
+        if codex_like {
+            AgentFamily::Codex
+        } else {
+            AgentFamily::Claude
+        }
+    }
+
+    pub fn is_codex_like(self) -> bool {
+        self == AgentFamily::Codex
     }
 }
 
@@ -461,31 +535,108 @@ pub struct AgentLaunchSpec {
     pub args: Vec<String>,
     pub extra_env: Vec<(String, String)>,
     pub codex_like: bool,
+    pub family: AgentFamily,
 }
 
-fn configured_agent_is_codex_like(settings: &AppSettings, agent: &str) -> bool {
+fn configured_agent_family(settings: &AppSettings, agent: &str) -> AgentFamily {
     match agent {
-        "claude" => false,
-        "codex" | "claude_gpt55" => true,
+        "claude" => AgentFamily::Claude,
+        "codex" | "claude_gpt55" => AgentFamily::Codex,
+        "dsh" => AgentFamily::Dsh,
         other => settings
             .custom_agents
             .iter()
             .find(|profile| profile.id == other)
-            .map(|profile| profile.codex_like)
-            .unwrap_or(true),
+            .map(|profile| profile.agent_family())
+            // 未知 agent 沿用历史行为:默认按 codex 族处理。
+            .unwrap_or(AgentFamily::Codex),
     }
+}
+
+fn configured_agent_is_codex_like(settings: &AppSettings, agent: &str) -> bool {
+    configured_agent_family(settings, agent).is_codex_like()
+}
+
+pub fn agent_family(agent: &str) -> AgentFamily {
+    configured_agent_family(&load_settings_internal(), agent)
+}
+
+pub(crate) fn agent_family_in(settings: &AppSettings, agent: &str) -> AgentFamily {
+    configured_agent_family(settings, agent)
 }
 
 pub fn is_codex_like_agent(agent: &str) -> bool {
     configured_agent_is_codex_like(&load_settings_internal(), agent)
 }
 
+pub fn is_dsh_agent(agent: &str) -> bool {
+    agent_family(agent) == AgentFamily::Dsh
+}
+
+/// dsh 族 agent 任务级模型覆盖使用的 provider 名。
+pub(crate) fn dsh_model_provider_for(agent: &str) -> String {
+    let settings = load_settings_internal();
+    let custom_base_url = settings
+        .custom_agents
+        .iter()
+        .find(|profile| profile.id == agent)
+        .map(|profile| !profile.base_url.trim().is_empty())
+        .unwrap_or(false);
+    if custom_base_url {
+        "aeroric".to_string()
+    } else {
+        "deepseek-official".to_string()
+    }
+}
+
+/// dsh 族 agent 配置的 API key(内建走 builtin_agent_credentials,自定义走档案)。
+pub(crate) fn dsh_api_key_for(agent: &str) -> Option<String> {
+    let settings = load_settings_internal();
+    let key = if agent == "dsh" {
+        settings
+            .builtin_agent_credentials
+            .get("dsh")
+            .map(|credentials| credentials.api_key.clone())
+    } else {
+        settings
+            .custom_agents
+            .iter()
+            .find(|profile| profile.id == agent)
+            .map(|profile| profile.api_key.clone())
+    };
+    key.map(|key| key.trim().to_string())
+        .filter(|key| !key.is_empty())
+}
+
+/// 解析 IPC 传入的可选 family 参数:优先 family 字符串,缺省由 is_codex 推导。
+pub fn resolve_family_param(family: Option<&str>, is_codex: bool) -> AgentFamily {
+    family
+        .and_then(AgentFamily::parse)
+        .unwrap_or_else(|| AgentFamily::from_codex_like(is_codex))
+}
+
 pub fn is_known_agent(agent: &str) -> bool {
-    matches!(agent, "claude" | "claude_gpt55" | "codex")
+    matches!(agent, "claude" | "claude_gpt55" | "codex" | "dsh")
         || load_settings_internal()
             .custom_agents
             .iter()
             .any(|profile| profile.id == agent)
+}
+
+/// 自定义 Agent 隔离 home 的目录名(`~/.aeroric/agent-homes/{name}`);内建 Agent 返回 None,
+/// 因为它们直接使用 `~/.claude` / `~/.codex`。
+///
+/// 会话文件定位需要它:自定义 claude-like Agent 的启动脚本把 `CLAUDE_CONFIG_DIR` 指向
+/// 隔离 home,transcript 因此落在 `<agent-home>/projects/<encoded-project>/` 而不是
+/// `~/.claude/projects/...`。
+pub(crate) fn custom_agent_home_dir_name(agent: &str) -> Option<String> {
+    // 内建 dsh 的托管 home 由 `dsh_home` 模块管理(`~/.aeroric/agent-homes/dsh`),
+    // 不走本函数的自定义 agent 路径。
+    if matches!(agent, "claude" | "claude_gpt55" | "codex" | "dsh") {
+        return None;
+    }
+    let normalized = sanitize_custom_agent_id(agent);
+    (!normalized.is_empty()).then_some(normalized)
 }
 
 fn default_claude_gpt55_path() -> String {
@@ -541,7 +692,7 @@ pub fn custom_agent_home(id: &str) -> Result<PathBuf, String> {
 
 fn normalize_config_lang(value: String) -> String {
     match value.as_str() {
-        "json" | "toml" | "shellscript" => value,
+        "json" | "toml" | "yaml" | "shellscript" => value,
         _ => default_custom_agent_config_lang(),
     }
 }
@@ -558,6 +709,10 @@ fn normalize_custom_agent_profile(profile: CustomAgentProfile) -> Option<CustomA
         label,
         path: normalize_agent_configured_path(&profile.id, &path),
         codex_like: profile.codex_like,
+        family: match AgentFamily::parse(profile.family.trim()) {
+            Some(family) => family.as_str().to_string(),
+            None => String::new(),
+        },
         config_lang: normalize_config_lang(profile.config_lang),
         base_url: normalize_base_url(&profile.base_url),
         api_key: profile.api_key.trim().to_string(),
@@ -914,8 +1069,18 @@ fn append_builtin_agent_api_env(
     let Some(credentials) = settings.builtin_agent_credentials.get(agent) else {
         return;
     };
+    // dsh:身份即 API key(无 OAuth)。key 走环境变量注入——dsh 的凭据层
+    // "inherited environment" 优先于 .credentials.yaml,每次启动读取最新值,
+    // 换 key 无需重启。自定义 base_url 走 settings.yaml 的 provider 配置
+    // (llm-pi-ai),不在这里注入。
+    if configured_agent_family(settings, agent) == AgentFamily::Dsh {
+        if !credentials.api_key.is_empty() {
+            extra_env.push(("DEEPSEEK_API_KEY".to_string(), credentials.api_key.clone()));
+        }
+        return;
+    }
     if !credentials.base_url.is_empty() {
-        if agent == "codex" {
+        if matches!(agent, "codex" | "claude_gpt55") {
             extra_env.push(("OPENAI_BASE_URL".to_string(), credentials.base_url.clone()));
         } else {
             extra_env.push((
@@ -925,7 +1090,7 @@ fn append_builtin_agent_api_env(
         }
     }
     if !credentials.api_key.is_empty() {
-        if agent == "codex" {
+        if matches!(agent, "codex" | "claude_gpt55") {
             for key in ["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "CODEX_API_KEY"] {
                 extra_env.push((key.to_string(), credentials.api_key.clone()));
             }
@@ -937,7 +1102,7 @@ fn append_builtin_agent_api_env(
             extra_env.push(("ANTHROPIC_API_KEY".to_string(), credentials.api_key.clone()));
         }
     }
-    if agent != "codex" {
+    if !matches!(agent, "codex" | "claude_gpt55") {
         if let Some(model) = credentials.models.first() {
             let model = if credentials.enable_1m_context && !model.ends_with("[1m]") {
                 format!("{model}[1m]")
@@ -959,9 +1124,21 @@ fn append_builtin_agent_api_env(
 fn append_local_router_env(
     settings: &AppSettings,
     agent: &str,
+    router_listening: bool,
     extra_env: &mut Vec<(String, String)>,
 ) {
     let router = &settings.local_router_settings;
+    if agent == "claude_gpt55"
+        && settings
+            .builtin_agent_credentials
+            .get(agent)
+            .is_none_or(|credentials| credentials.base_url.trim().is_empty())
+    {
+        // Without a configured GPT-5.5 upstream the launcher script is the
+        // source of truth. Pinning it to the built-in Codex target would make
+        // the selected configuration look active while using Codex instead.
+        return;
+    }
     let codex_like = match agent {
         "claude" => false,
         "codex" | "claude_gpt55" => true,
@@ -970,8 +1147,11 @@ fn append_local_router_env(
             .iter()
             .find(|profile| profile.id == other)
         {
-            Some(profile) => profile.codex_like,
+            // Profiles without an upstream URL rely on their own launcher
+            // configuration and cannot be pinned to a router target.
+            Some(profile) if !profile.base_url.trim().is_empty() => profile.codex_like,
             None => return,
+            Some(_) => return,
         },
     };
     let (enabled, base_url_key, route_prefix) = if codex_like {
@@ -979,7 +1159,11 @@ fn append_local_router_env(
     } else {
         (router.claude_enabled, "ANTHROPIC_BASE_URL", "claude")
     };
-    if !router.enabled || !enabled {
+    // `router_listening` 为假说明服务没真的在监听(开关刚打开还没起、端口被占、绑定失败、
+    // 正在停服)。把 Agent 指向一个没人接的端口只会得到
+    // `error sending request for url (http://127.0.0.1:18080/...)`，
+    // 不如直接让它按自己的配置直连上游。
+    if !router.enabled || !enabled || !router_listening {
         return;
     }
 
@@ -993,6 +1177,11 @@ fn append_local_router_env(
     } else {
         connect_host.to_string()
     };
+    let target_id = agent;
+    let route_prefix = route_prefix
+        .split_once('/')
+        .map(|(family, suffix)| format!("{family}/targets/{target_id}/{suffix}"))
+        .unwrap_or_else(|| format!("{route_prefix}/targets/{target_id}"));
     extra_env.push((
         base_url_key.to_string(),
         format!("http://{url_host}:{}/{route_prefix}", router.listen_port),
@@ -1054,6 +1243,7 @@ fn get_agent_configured_path(settings: &AppSettings, agent: &str) -> String {
             }
         }
         "codex" => settings.codex_path.clone(),
+        "dsh" => settings.dsh_path.clone(),
         _ => settings.claude_path.clone(),
     }
 }
@@ -1067,10 +1257,15 @@ fn clear_cached_versions() {
         .get_or_init(|| Mutex::new(None))
         .lock() = None;
     *CACHED_CODEX_VERSION.get_or_init(|| Mutex::new(None)).lock() = None;
+    *CACHED_DSH_VERSION.get_or_init(|| Mutex::new(None)).lock() = None;
 }
 
 fn settings_lock() -> &'static Mutex<()> {
     SETTINGS_LOCK.get_or_init(|| Mutex::new(()))
+}
+
+fn agent_upgrade_lock() -> &'static Mutex<()> {
+    AGENT_UPGRADE_LOCK.get_or_init(|| Mutex::new(()))
 }
 
 fn aeroric_dir() -> Result<PathBuf, String> {
@@ -1166,9 +1361,7 @@ fn resolve_agent_launch_spec_from_path(agent: &str, path: &str) -> AgentLaunchSp
     }
     AgentLaunchSpec {
         program,
-        args: Vec::new(),
-        extra_env: Vec::new(),
-        codex_like: false,
+        ..Default::default()
     }
 }
 
@@ -1353,8 +1546,7 @@ fn windows_script_launch(path: &Path) -> Option<AgentLaunchSpec> {
     crate::platform::agent_script_command(path).map(|command| AgentLaunchSpec {
         program: command.program,
         args: command.args,
-        extra_env: Vec::new(),
-        codex_like: false,
+        ..Default::default()
     })
 }
 
@@ -1373,18 +1565,14 @@ fn resolve_agent_launch_spec_from_path(agent: &str, path: &str) -> AgentLaunchSp
             ) {
                 AgentLaunchSpec {
                     program: exe.to_string_lossy().into_owned(),
-                    args: Vec::new(),
-                    extra_env: Vec::new(),
-                    codex_like: false,
+                    ..Default::default()
                 }
             } else if let Some(spec) = windows_script_launch(resolved_path) {
                 spec
             } else {
                 AgentLaunchSpec {
                     program: resolved,
-                    args: Vec::new(),
-                    extra_env: Vec::new(),
-                    codex_like: false,
+                    ..Default::default()
                 }
             }
         }
@@ -1398,26 +1586,21 @@ fn resolve_agent_launch_spec_from_path(agent: &str, path: &str) -> AgentLaunchSp
                 extra_env.push(("CODEX_MANAGED_BY_NPM".to_string(), "1".to_string()));
                 AgentLaunchSpec {
                     program: program.to_string_lossy().into_owned(),
-                    args: Vec::new(),
                     extra_env,
-                    codex_like: false,
+                    ..Default::default()
                 }
             } else if let Some(spec) = windows_script_launch(resolved_path) {
                 spec
             } else {
                 AgentLaunchSpec {
                     program: resolved,
-                    args: Vec::new(),
-                    extra_env: Vec::new(),
-                    codex_like: false,
+                    ..Default::default()
                 }
             }
         }
         _ => windows_script_launch(resolved_path).unwrap_or_else(|| AgentLaunchSpec {
             program: resolved,
-            args: Vec::new(),
-            extra_env: Vec::new(),
-            codex_like: false,
+            ..Default::default()
         }),
     }
 }
@@ -1450,16 +1633,41 @@ fn inferred_agent_codex_like(program: &str) -> Option<bool> {
     None
 }
 
-fn get_agent_launch_spec_from_settings(settings: &AppSettings, agent: &str) -> AgentLaunchSpec {
+fn inferred_agent_family(program: &str) -> Option<AgentFamily> {
+    let file_name = Path::new(program)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .map(str::to_ascii_lowercase);
+    if matches!(
+        file_name.as_deref(),
+        Some("dsh" | "dsh.exe" | "dsh.cmd" | "dsh.js" | "dsh.ps1")
+    ) {
+        return Some(AgentFamily::Dsh);
+    }
+    inferred_agent_codex_like(program).map(AgentFamily::from_codex_like)
+}
+
+fn build_agent_launch_spec(
+    settings: &AppSettings,
+    agent: &str,
+    router_listening: bool,
+) -> AgentLaunchSpec {
     let configured_path = get_agent_configured_path(settings, agent);
     let mut spec = resolve_agent_launch_spec_from_path(agent, &configured_path);
-    spec.codex_like = inferred_agent_codex_like(&configured_path)
-        .unwrap_or_else(|| configured_agent_is_codex_like(settings, agent));
+    spec.family = inferred_agent_family(&configured_path)
+        .unwrap_or_else(|| configured_agent_family(settings, agent));
+    spec.codex_like = spec.family.is_codex_like();
     append_agent_credential_env(settings, agent, &mut spec.extra_env);
     append_builtin_agent_api_env(settings, agent, &mut spec.extra_env);
     append_agent_proxy_env(settings, agent, &mut spec.extra_env);
-    append_local_router_env(settings, agent, &mut spec.extra_env);
+    append_local_router_env(settings, agent, router_listening, &mut spec.extra_env);
     spec
+}
+
+fn get_agent_launch_spec_from_settings(settings: &AppSettings, agent: &str) -> AgentLaunchSpec {
+    let router_listening =
+        crate::local_router::is_listening_on(settings.local_router_settings.listen_port);
+    build_agent_launch_spec(settings, agent, router_listening)
 }
 
 pub(crate) fn get_agent_launch_spec_from(settings: &AppSettings, agent: &str) -> AgentLaunchSpec {
@@ -1493,9 +1701,15 @@ fn normalize_settings(settings: AppSettings) -> AppSettings {
             normalize_agent_configured_path("claude_gpt55", &settings.claude_gpt55_path)
         },
         codex_path: normalize_agent_configured_path("codex", &settings.codex_path),
+        dsh_path: if settings.dsh_path.is_empty() {
+            String::new()
+        } else {
+            normalize_agent_configured_path("dsh", &settings.dsh_path)
+        },
         claude_config_path: normalize_config_path(settings.claude_config_path),
         claude_gpt55_config_path: normalize_config_path(settings.claude_gpt55_config_path),
         codex_config_path: normalize_config_path(settings.codex_config_path),
+        dsh_config_path: normalize_config_path(settings.dsh_config_path),
         agent_label_overrides: normalize_agent_label_overrides(settings.agent_label_overrides),
         builtin_agent_credentials: normalize_builtin_agent_credentials(
             settings.builtin_agent_credentials,
@@ -1507,6 +1721,8 @@ fn normalize_settings(settings: AppSettings) -> AppSettings {
         custom_agents: normalize_custom_agents(settings.custom_agents),
         send_shortcut: normalize_send_shortcut(settings.send_shortcut),
         terminal_shift_enter_newline: settings.terminal_shift_enter_newline,
+        dsh_web_search_enabled: settings.dsh_web_search_enabled,
+        dsh_telemetry_enabled: settings.dsh_telemetry_enabled,
     }
 }
 
@@ -1569,9 +1785,11 @@ fn load_settings_unlocked() -> AppSettings {
             claude_path: String::new(),
             claude_gpt55_path: String::new(),
             codex_path: String::new(),
+            dsh_path: String::new(),
             claude_config_path: String::new(),
             claude_gpt55_config_path: String::new(),
             codex_config_path: String::new(),
+            dsh_config_path: String::new(),
             agent_label_overrides: HashMap::new(),
             builtin_agent_credentials: HashMap::new(),
             proxy_settings: ProxySettings::default(),
@@ -1581,6 +1799,8 @@ fn load_settings_unlocked() -> AppSettings {
             custom_agents: Vec::new(),
             send_shortcut: default_send_shortcut(),
             terminal_shift_enter_newline: default_shift_enter_newline(),
+            dsh_web_search_enabled: true,
+            dsh_telemetry_enabled: false,
         });
         if let Ok(dir) = aeroric_dir() {
             let _ = fs::create_dir_all(&dir);
@@ -1663,7 +1883,7 @@ fn apply_builtin_agent_access_update(
     models: Option<Vec<String>>,
     enable_1m_context: Option<bool>,
 ) -> Result<(), String> {
-    if !matches!(agent, "claude" | "claude_gpt55" | "codex") {
+    if !matches!(agent, "claude" | "claude_gpt55" | "codex" | "dsh") {
         return Err(format!("Unknown built-in Agent: {agent}"));
     }
     let credentials = settings
@@ -1696,7 +1916,8 @@ pub(crate) fn update_builtin_agent_config_internal(
     enable_1m_context: Option<bool>,
     proxy_enabled: Option<bool>,
 ) -> Result<AppSettings, String> {
-    update_settings_locked(move |settings| {
+    let syncs_dsh_home = agent == "dsh";
+    let normalized = update_settings_locked(move |settings| {
         apply_builtin_agent_access_update(
             settings,
             &agent,
@@ -1710,7 +1931,17 @@ pub(crate) fn update_builtin_agent_config_internal(
             set_agent_proxy_enabled(settings, &agent, enabled);
         }
         Ok(())
-    })
+    })?;
+    if syncs_dsh_home {
+        let home = crate::dsh_home::ensure_dsh_home_for("dsh")?;
+        let api_key = normalized
+            .builtin_agent_credentials
+            .get("dsh")
+            .map(|credentials| credentials.api_key.trim())
+            .filter(|api_key| !api_key.is_empty());
+        crate::dsh_home::sync_dsh_credentials(&home, api_key)?;
+    }
+    Ok(normalized)
 }
 
 #[tauri::command]
@@ -1720,6 +1951,7 @@ pub async fn update_builtin_agent_access(
     api_key: Option<String>,
     clear_api_key: bool,
     models: Option<Vec<String>>,
+    proxy_enabled: Option<bool>,
 ) -> Result<AppSettings, String> {
     tokio::task::spawn_blocking(move || {
         update_builtin_agent_config_internal(
@@ -1729,7 +1961,7 @@ pub async fn update_builtin_agent_access(
             clear_api_key,
             models,
             None,
-            None,
+            proxy_enabled,
         )
     })
     .await
@@ -1913,6 +2145,14 @@ pub async fn update_agent_path_settings(
                         settings.codex_config_path = config_path;
                     }
                 }
+                "dsh" => {
+                    if let Some(executable_path) = executable_path {
+                        settings.dsh_path = executable_path;
+                    }
+                    if let Some(config_path) = config_path {
+                        settings.dsh_config_path = config_path;
+                    }
+                }
                 _ => {
                     if let Some(executable_path) = executable_path {
                         let normalized_id = sanitize_custom_agent_id(&agent);
@@ -1926,7 +2166,7 @@ pub async fn update_agent_path_settings(
                 }
             }
             if let Some(credentials) = builtin_credentials {
-                if matches!(agent.as_str(), "claude" | "claude_gpt55" | "codex") {
+                if matches!(agent.as_str(), "claude" | "claude_gpt55" | "codex" | "dsh") {
                     settings
                         .builtin_agent_credentials
                         .insert(agent.clone(), credentials);
@@ -1991,6 +2231,13 @@ pub fn save_app_settings(settings: AppSettings) -> Result<(), String> {
     Ok(())
 }
 
+pub(crate) fn list_builtin_dsh_models() -> Vec<String> {
+    vec![
+        "deepseek-v4-flash".to_string(),
+        "deepseek-v4-pro".to_string(),
+    ]
+}
+
 pub(crate) fn default_builtin_agent_config_path(agent: &str) -> Result<PathBuf, String> {
     let home =
         crate::platform::home_dir().ok_or_else(|| "Cannot find home directory".to_string())?;
@@ -1998,6 +2245,7 @@ pub(crate) fn default_builtin_agent_config_path(agent: &str) -> Result<PathBuf, 
         "claude" => Ok(home.join(".claude").join("settings.json")),
         "claude_gpt55" => Ok(home.join(".claude").join("start-gpt55.sh")),
         "codex" => Ok(home.join(".codex").join("config.toml")),
+        "dsh" => crate::dsh_home::dsh_settings_path(),
         _ => Err(format!("Unknown built-in agent: {agent}")),
     }
 }
@@ -2220,6 +2468,7 @@ fn upsert_custom_agent_profile_unlocked(
             models: profile.models.clone(),
             enable_1m_context: profile.enable_1m_context,
             enable_chat_completions_proxy: profile.enable_chat_completions_proxy,
+            dsh_api_protocol: String::new(),
             proxy_enabled: false,
         };
         validate_agent_setup_draft(&draft)?;
@@ -2327,14 +2576,45 @@ pub async fn setup_agent_profile(draft: AgentSetupDraft) -> Result<AppSettings, 
         let id = allocate_setup_agent_id(&draft.id, &draft.kind, &settings)?;
         let mut draft = draft;
         draft.id = id.clone();
-        let script = build_agent_script(&draft);
-        let script_path = write_agent_script(&id, &script, &draft.api_key)?;
+        let (profile_path, config_lang, family) = if matches!(draft.kind, AgentSetupKind::Dsh) {
+            // dsh-like 档案不生成 wrapper 脚本:直接运行 dsh 二进制,隔离 home 与
+            // API key 由启动层按档案注入(DSH_HOME / DEEPSEEK_API_KEY env)。
+            let program = {
+                let detected = crate::platform::detect_path("dsh");
+                if detected.is_empty() {
+                    "dsh".to_string()
+                } else {
+                    detected
+                }
+            };
+            let home = crate::dsh_home::ensure_dsh_home_for(&id)?;
+            crate::dsh_home::sync_dsh_credentials(&home, Some(draft.api_key.trim()))?;
+            let base_url = normalize_base_url(&draft.base_url);
+            if !base_url.is_empty() {
+                crate::dsh_home::write_custom_provider_settings(
+                    &home,
+                    &base_url,
+                    &normalize_setup_models(&draft),
+                    &draft.dsh_api_protocol,
+                )?;
+            }
+            (program, "yaml".to_string(), "dsh".to_string())
+        } else {
+            let script = build_agent_script(&draft);
+            let script_path = write_agent_script(&id, &script, &draft.api_key)?;
+            (
+                script_path.to_string_lossy().into_owned(),
+                "shellscript".to_string(),
+                String::new(),
+            )
+        };
         let profile = CustomAgentProfile {
             id: id.clone(),
             label: draft.label.trim().to_string(),
-            path: script_path.to_string_lossy().into_owned(),
+            path: profile_path,
             codex_like: matches!(draft.kind, AgentSetupKind::Codex),
-            config_lang: "shellscript".to_string(),
+            family,
+            config_lang,
             base_url: normalize_base_url(&draft.base_url),
             api_key: draft.api_key.trim().to_string(),
             models: normalize_setup_models(&draft),
@@ -2392,7 +2672,7 @@ async fn detect_agent_models_with_policy(
         return Err("API key is required".to_string());
     }
     let base_url = validate_model_base_url(&base_url, policy)?;
-    let endpoint = model_endpoint(&base_url);
+    let candidates = model_endpoint_candidates(&base_url);
 
     let resolved_addresses = if matches!(policy, ModelDetectionPolicy::PairedDevice) {
         Some(resolve_remote_model_addresses(&base_url).await?)
@@ -2400,17 +2680,49 @@ async fn detect_agent_models_with_policy(
         None
     };
     let mut client_builder = reqwest::Client::builder()
-        .timeout(Duration::from_secs(10))
+        // 候选端点串行探测,总预算在 models.rs 内按 deadline 控制,
+        // 这里不再设客户端级总超时,避免第一个慢候选耗尽后续机会。
         .redirect(reqwest::redirect::Policy::none());
     if let Some(addresses) = resolved_addresses.as_deref() {
         let host = base_url
             .host_str()
             .ok_or_else(|| "Base URL must include a host".to_string())?;
+        // 候选端点与 base URL 同源(仅替换 path),因此固定解析对全部候选生效。
         client_builder = client_builder.resolve_to_addrs(host, addresses);
     }
     let client = client_builder.build().map_err(|error| error.to_string())?;
-    let value = fetch_agent_model_json(&client, &endpoint, &kind, &api_key).await?;
-    let models = parse_model_ids(value);
+
+    let mut auth_failed = false;
+    let detected = fetch_agent_model_json_from_candidates(
+        &client,
+        &candidates,
+        &kind,
+        &api_key,
+        &mut auth_failed,
+    )
+    .await;
+
+    let models = match detected {
+        Ok((value, _endpoint)) => parse_model_ids(value),
+        Err(error) => {
+            // 只有在「所有候选都是端点不存在」时才退到公开目录:出现过鉴权失败就必须
+            // 把错误报出去,否则会把 API Key 无效伪装成一份不可用的模型列表。
+            if auth_failed {
+                return Err(error);
+            }
+            let public = fetch_public_model_catalog(
+                &client,
+                &public_model_catalog_candidates(&base_url),
+                &kind,
+            )
+            .await;
+            match public {
+                Some(models) if !models.is_empty() => models,
+                _ => return Err(error),
+            }
+        }
+    };
+
     let balance = fetch_agent_balance(&client, base_url.as_str(), &api_key).await;
     Ok(AgentModels {
         models,
@@ -2457,6 +2769,27 @@ pub async fn list_agent_models(agent: String) -> Result<AgentModels, String> {
         if agent == "claude" {
             return Ok(AgentModels {
                 models: list_builtin_claude_models(),
+                balance: None,
+                reasoning_effort,
+                reasoning_speed,
+            });
+        }
+
+        if agent == "dsh" {
+            // 内建 DeepSeek 官方目录(dsh-llm-deepseek);自定义 provider 的
+            // 模型在配置面板通过 /models 探测后存入 builtin_agent_credentials。
+            return Ok(AgentModels {
+                models: list_builtin_dsh_models(),
+                balance: None,
+                reasoning_effort,
+                reasoning_speed,
+            });
+        }
+
+        if is_dsh_agent(&agent) {
+            // dsh-like 自定义档案未探测/保存模型时回落内建 DeepSeek 目录。
+            return Ok(AgentModels {
+                models: list_builtin_dsh_models(),
                 balance: None,
                 reasoning_effort,
                 reasoning_speed,
@@ -2549,6 +2882,7 @@ pub async fn update_custom_agent_models(
             models: models.clone(),
             enable_1m_context: profile.enable_1m_context,
             enable_chat_completions_proxy: profile.enable_chat_completions_proxy,
+            dsh_api_protocol: String::new(),
             proxy_enabled: false,
         };
         validate_agent_setup_draft(&draft)?;
@@ -2612,6 +2946,7 @@ pub async fn update_custom_agent_chat_completions_proxy(
             models: profile.models.clone(),
             enable_1m_context: profile.enable_1m_context,
             enable_chat_completions_proxy: enabled,
+            dsh_api_protocol: String::new(),
             proxy_enabled: false,
         };
         validate_agent_setup_draft(&draft)?;
@@ -2673,6 +3008,7 @@ pub async fn update_custom_agent_context(
             models: profile.models.clone(),
             enable_1m_context,
             enable_chat_completions_proxy: profile.enable_chat_completions_proxy,
+            dsh_api_protocol: String::new(),
             proxy_enabled: false,
         };
         validate_agent_setup_draft(&draft)?;
@@ -2913,6 +3249,8 @@ pub struct AgentVersions {
     pub claude_version: String,
     pub claude_gpt55_version: String,
     pub codex_version: String,
+    #[serde(default)]
+    pub dsh_version: String,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
@@ -2941,6 +3279,9 @@ pub async fn upgrade_agent_versions(
     agents: Vec<String>,
 ) -> Result<Vec<AgentUpgradeResult>, String> {
     tokio::task::spawn_blocking(move || {
+        // 前端允许多个 Agent 同时显示升级中；包管理器本身仍需串行，避免
+        // 两个 Homebrew/npm 进程互相抢锁或覆盖同一份全局安装状态。
+        let _upgrade_guard = agent_upgrade_lock().lock();
         let settings = load_settings_internal();
         let mut requested = Vec::new();
         for agent in agents {
@@ -2967,8 +3308,15 @@ pub async fn upgrade_agent_versions(
             let binary_agent = upgrade_binary_agent(kind);
             let launch = get_agent_launch_spec_from_settings(&settings, binary_agent);
             let configured_program = get_agent_configured_path(&settings, binary_agent);
+            // launch spec 已解析出 PATH/Homebrew/npm shim 中真正使用的程序；升级
+            // 检测必须使用这个有效路径，而不是原始配置里的 wrapper 路径。
+            let effective_program = if launch.program.trim().is_empty() {
+                configured_program
+            } else {
+                launch.program.clone()
+            };
             let previous_version = detect_version(&launch).unwrap_or_default();
-            let channels = match build_agent_upgrade_commands(kind, &configured_program) {
+            let channels = match build_agent_upgrade_commands(kind, &effective_program) {
                 Ok(commands) => run_agent_upgrades(&commands),
                 Err(error) => vec![AgentUpgradeChannel {
                     channel: "detection".to_string(),
@@ -3046,6 +3394,32 @@ pub async fn get_system_fonts() -> Vec<String> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn built_in_dsh_accepts_official_credentials_and_models() {
+        let mut settings = AppSettings::default();
+        apply_builtin_agent_access_update(
+            &mut settings,
+            "dsh",
+            Some(String::new()),
+            Some("sk-deepseek".to_string()),
+            false,
+            Some(vec![
+                "deepseek-chat".to_string(),
+                "deepseek-reasoner".to_string(),
+            ]),
+            None,
+        )
+        .unwrap();
+
+        let credentials = settings.builtin_agent_credentials.get("dsh").unwrap();
+        assert_eq!(credentials.api_key, "sk-deepseek");
+        assert_eq!(
+            credentials.models,
+            vec!["deepseek-chat".to_string(), "deepseek-reasoner".to_string()]
+        );
+        assert!(settings.custom_agents.is_empty());
+    }
+
     fn last_env_value<'a>(launch: &'a AgentLaunchSpec, key: &str) -> Option<&'a str> {
         launch
             .extra_env
@@ -3053,6 +3427,12 @@ mod tests {
             .rev()
             .find(|(candidate, _)| candidate == key)
             .map(|(_, value)| value.as_str())
+    }
+
+    /// 按"路由确实在监听"构建启动参数。测试进程里没有真的起服务，
+    /// 所以显式给出这个前提，与线上从 [`crate::local_router::is_listening_on`] 读到的一致。
+    fn launch_spec_with_router_listening(settings: &AppSettings, agent: &str) -> AgentLaunchSpec {
+        build_agent_launch_spec(settings, agent, true)
     }
 
     #[test]
@@ -3154,21 +3534,79 @@ mod tests {
                 ..BuiltInAgentCredentials::default()
             },
         );
+        settings.builtin_agent_credentials.insert(
+            "claude_gpt55".to_string(),
+            BuiltInAgentCredentials {
+                base_url: "https://gpt55.example.test/v1".to_string(),
+                ..BuiltInAgentCredentials::default()
+            },
+        );
 
-        let claude = get_agent_launch_spec_from_settings(&settings, "claude");
+        let claude = launch_spec_with_router_listening(&settings, "claude");
         assert_eq!(
             last_env_value(&claude, "ANTHROPIC_BASE_URL"),
-            Some("http://[::1]:19090/claude")
+            Some("http://[::1]:19090/claude/targets/claude")
         );
-        let codex = get_agent_launch_spec_from_settings(&settings, "codex");
+        let codex = launch_spec_with_router_listening(&settings, "codex");
         assert_eq!(
             last_env_value(&codex, "OPENAI_BASE_URL"),
-            Some("http://[::1]:19090/codex/v1")
+            Some("http://[::1]:19090/codex/targets/codex/v1")
+        );
+        let claude_gpt55 = launch_spec_with_router_listening(&settings, "claude_gpt55");
+        assert_eq!(
+            last_env_value(&claude_gpt55, "OPENAI_BASE_URL"),
+            Some("http://[::1]:19090/codex/targets/claude_gpt55/v1")
         );
         assert_eq!(
             last_env_value(&codex, "NO_PROXY"),
             Some("127.0.0.1,localhost,::1")
         );
+    }
+
+    #[test]
+    fn local_router_does_not_replace_an_unconfigured_gpt55_launcher() {
+        let settings = AppSettings {
+            local_router_settings: LocalRouterSettings {
+                enabled: true,
+                ..LocalRouterSettings::default()
+            },
+            ..AppSettings::default()
+        };
+
+        let launch = launch_spec_with_router_listening(&settings, "claude_gpt55");
+        assert_eq!(last_env_value(&launch, "OPENAI_BASE_URL"), None);
+    }
+
+    /// 开关是开的但服务没在监听时不能改写 base URL，否则 Agent 会一直请求
+    /// `http://127.0.0.1:<port>/...` 并报 `error sending request for url`。
+    #[test]
+    fn a_router_that_is_not_listening_leaves_agent_base_urls_alone() {
+        let mut settings = AppSettings {
+            local_router_settings: LocalRouterSettings {
+                enabled: true,
+                listen_port: 19092,
+                ..LocalRouterSettings::default()
+            },
+            ..AppSettings::default()
+        };
+        settings.builtin_agent_credentials.insert(
+            "codex".to_string(),
+            BuiltInAgentCredentials {
+                base_url: "https://codex.example.test/v1".to_string(),
+                ..BuiltInAgentCredentials::default()
+            },
+        );
+        settings
+            .custom_agents
+            .push(test_custom_profile("custom", "custom", true));
+
+        let codex = build_agent_launch_spec(&settings, "codex", false);
+        assert_eq!(
+            last_env_value(&codex, "OPENAI_BASE_URL"),
+            Some("https://codex.example.test/v1")
+        );
+        let custom = build_agent_launch_spec(&settings, "custom", false);
+        assert_eq!(last_env_value(&custom, "OPENAI_BASE_URL"), None);
     }
 
     #[test]
@@ -3191,7 +3629,7 @@ mod tests {
             },
         );
 
-        let launch = get_agent_launch_spec_from_settings(&settings, "codex");
+        let launch = launch_spec_with_router_listening(&settings, "codex");
         assert_eq!(last_env_value(&launch, "OPENAI_API_KEY"), Some(token));
         assert_eq!(last_env_value(&launch, "CODEX_API_KEY"), Some(token));
     }
@@ -3211,12 +3649,19 @@ mod tests {
             .custom_agents
             .push(test_custom_profile("custom", "custom", true));
 
-        let claude = get_agent_launch_spec_from_settings(&settings, "claude");
+        let claude = launch_spec_with_router_listening(&settings, "claude");
         assert_eq!(last_env_value(&claude, "ANTHROPIC_BASE_URL"), None);
-        let custom = get_agent_launch_spec_from_settings(&settings, "custom");
+        let custom = launch_spec_with_router_listening(&settings, "custom");
         assert_eq!(
             last_env_value(&custom, "OPENAI_BASE_URL"),
-            Some("http://127.0.0.1:19091/codex/v1")
+            Some("http://127.0.0.1:19091/codex/targets/custom/v1")
+        );
+
+        settings.custom_agents[0].base_url.clear();
+        let custom_without_router_target = launch_spec_with_router_listening(&settings, "custom");
+        assert_eq!(
+            last_env_value(&custom_without_router_target, "OPENAI_BASE_URL"),
+            None
         );
     }
 
@@ -3226,6 +3671,7 @@ mod tests {
             label: label.to_string(),
             path: format!("/tmp/{id}.sh"),
             codex_like,
+            family: String::new(),
             config_lang: "shellscript".to_string(),
             base_url: "https://example.com/v1".to_string(),
             api_key: "sk-test".to_string(),
@@ -3299,6 +3745,7 @@ mod tests {
                 label: "Imported Claude".to_string(),
                 kind: AgentConfigBundleKind::BuiltIn,
                 codex_like: false,
+                family: String::new(),
                 config_lang: "json".to_string(),
                 config_content: "{}".to_string(),
                 config_present: true,
@@ -3342,6 +3789,9 @@ mod tests {
         ));
         assert!(is_aeroric_generated_agent_wrapper(
             "# AERORIC_CLAUDE_WRAPPER_VERSION=4\n& 'claude' @args"
+        ));
+        assert!(is_aeroric_generated_agent_wrapper(
+            "# AERORIC_CLAUDE_WRAPPER_VERSION=5\n& 'claude' @args"
         ));
         assert!(!is_aeroric_generated_agent_wrapper(
             "# My Claude wrapper\n& 'claude' @args"
@@ -3461,6 +3911,7 @@ mod tests {
                     label: "Custom Codex".to_string(),
                     path: "/tmp/custom-codex.sh".to_string(),
                     codex_like: true,
+                    family: String::new(),
                     config_lang: "shellscript".to_string(),
                     base_url: String::new(),
                     api_key: String::new(),
@@ -3475,6 +3926,7 @@ mod tests {
                     label: "Custom Claude".to_string(),
                     path: "/tmp/custom-claude.sh".to_string(),
                     codex_like: false,
+                    family: String::new(),
                     config_lang: "shellscript".to_string(),
                     base_url: String::new(),
                     api_key: String::new(),
@@ -3509,6 +3961,7 @@ mod tests {
                 label: "Joverna".to_string(),
                 path: "/Users/macbook/.claude/start-joverna.sh".to_string(),
                 codex_like: false,
+                family: String::new(),
                 config_lang: "shellscript".to_string(),
                 base_url: String::new(),
                 api_key: String::new(),
@@ -3554,6 +4007,7 @@ mod tests {
                 label: "Joverna".to_string(),
                 path: "/Users/macbook/.claude/start-joverna.sh".to_string(),
                 codex_like: false,
+                family: String::new(),
                 config_lang: "shellscript".to_string(),
                 base_url: String::new(),
                 api_key: String::new(),

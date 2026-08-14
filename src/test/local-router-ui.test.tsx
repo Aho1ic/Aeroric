@@ -328,6 +328,25 @@ describe("LocalRouterPanel", () => {
       }),
     );
   });
+
+  it("does not render frontend invoke failures in the router panel", async () => {
+    vi.mocked(invoke).mockImplementation((command) => {
+      if (command === "load_app_settings") return Promise.resolve(appSettings());
+      if (command === "get_local_router_status") {
+        return Promise.reject(
+          new TypeError("Cannot read properties of undefined (reading 'invoke')"),
+        );
+      }
+      if (command === "get_local_router_requests") return Promise.resolve([]);
+      return Promise.reject(new Error(`unexpected command: ${command}`));
+    });
+
+    renderWithI18n(<LocalRouterPanel />);
+
+    await screen.findByRole("switch", { name: "Local router service" });
+    expect(screen.queryByText(/Local router operation failed/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Cannot read properties of undefined/i)).not.toBeInTheDocument();
+  });
 });
 
 describe("HomeLocalRouterToggle", () => {

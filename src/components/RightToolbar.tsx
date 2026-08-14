@@ -17,6 +17,7 @@ import {
   FlaskConical,
   Play,
   Globe,
+  Book,
 } from "lucide-react";
 import { useI18n } from "../i18n";
 import type { RightPanel } from "../hooks/useProjectPanels";
@@ -30,6 +31,8 @@ import { DockerIcon } from "./DockerIcon";
 
 export function renderIdeToolIcon(icon: IdeToolIcon, size = 17): ReactNode {
   switch (icon) {
+    case "book":
+      return <Book size={size} />;
     case "bug":
       return <Bug size={size} />;
     case "circle-alert":
@@ -66,6 +69,7 @@ export function RightToolbar({
   searchDisabled = false,
   debugDisabled = false,
   previewDisabled = false,
+  skillsDisabled = false,
   settingsDisabled = false,
   dockerDisabled = false,
 }: {
@@ -85,6 +89,7 @@ export function RightToolbar({
   searchDisabled?: boolean;
   debugDisabled?: boolean;
   previewDisabled?: boolean;
+  skillsDisabled?: boolean;
   settingsDisabled?: boolean;
   dockerDisabled?: boolean;
 }) {
@@ -97,6 +102,7 @@ export function RightToolbar({
     searchDisabled,
     debugDisabled,
     previewDisabled,
+    skillsDisabled,
   };
   const ideTools = getRightRailIdeTools(ideToolAvailability);
   const toToolbarButton = (tool: (typeof ideTools)[number]) => ({

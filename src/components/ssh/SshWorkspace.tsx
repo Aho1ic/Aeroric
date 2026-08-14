@@ -6,6 +6,7 @@ import s from "../../styles";
 import { SshConnectionDialog } from "./SshConnectionDialog";
 import { SshConnectionContextMenu, type SshConnectionProtocol } from "./SshConnectionContextMenu";
 import { SshTerminalPanel } from "./SshTerminalPanel";
+import { useCopyFeedback } from "./useCopyFeedback";
 import type { AuxiliaryWorkspaceLayout } from "../project-page/viewMode";
 
 export type SshWorkspaceLayout = AuxiliaryWorkspaceLayout;
@@ -55,7 +56,7 @@ function SshCardPicker({
   onDelete: (connection: SshConnection) => void;
 }) {
   const { t } = useI18n();
-  const [copiedConnectionId, setCopiedConnectionId] = useState<string | null>(null);
+  const { copiedId: copiedConnectionId, markCopied } = useCopyFeedback();
   const [contextMenu, setContextMenu] = useState<{
     connection: SshConnection;
     x: number;
@@ -129,20 +130,11 @@ function SshCardPicker({
                   </button>
                   <button
                     type="button"
+                    className="ssh-copy-action"
                     style={{
                       ...s.sshProjectCardEdit,
                       opacity: canCopyPassword ? 1 : 0.35,
                       cursor: canCopyPassword ? "pointer" : "not-allowed",
-                      transform: copiedConnectionId === connection.id ? "scale(1.12)" : "scale(1)",
-                      color:
-                        copiedConnectionId === connection.id
-                          ? "var(--success)"
-                          : s.sshProjectCardEdit.color,
-                      border:
-                        copiedConnectionId === connection.id
-                          ? "1px solid var(--success)"
-                          : s.sshProjectCardEdit.border,
-                      transition: "transform 0.16s ease, color 0.16s ease, border-color 0.16s ease",
                     }}
                     data-copied={copiedConnectionId === connection.id ? "true" : undefined}
                     title={canCopyPassword ? t("ssh.copyPassword") : t("ssh.noPasswordHint")}
@@ -152,12 +144,7 @@ function SshCardPicker({
                       event.stopPropagation();
                       if (!canCopyPassword) return;
                       void copyConnectionPassword(connection).then(() => {
-                        setCopiedConnectionId(connection.id);
-                        window.setTimeout(() => {
-                          setCopiedConnectionId((current) =>
-                            current === connection.id ? null : current,
-                          );
-                        }, 900);
+                        markCopied(connection.id);
                       });
                     }}
                   >

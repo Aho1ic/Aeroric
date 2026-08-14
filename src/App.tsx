@@ -4,12 +4,14 @@ import { setTheme as setAppTheme } from "@tauri-apps/api/app";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import type { ReasoningEffort, TaskSpeed } from "./modelOptions";
 import type {
   Project,
   Task,
   TaskStatus,
   AgentType,
   PermissionMode,
+  ProtocolFamily,
   ThemeMode,
   ThemeVariant,
   TerminalFontSize,
@@ -18,6 +20,8 @@ import type {
   SshConnection,
   CondaEnvironment,
 } from "./types";
+import type { AgentOption } from "./agents";
+import type { LocalRouterAgent, LocalRouterStatus } from "./components/app-settings/types";
 import { isActiveTaskStatus, resolveProjectLocation, sshProjectPath } from "./types";
 import {
   DEFAULT_UI_FONT_BY_PLATFORM,
@@ -26,6 +30,7 @@ import {
 } from "./types";
 import type { FontFamily } from "./types";
 import { WelcomePage } from "./components/WelcomePage";
+import { ReleasePage } from "./components/ReleasePage";
 import { AppSettingsEventHost } from "./components/AppSettingsEventHost";
 import type { SshProjectInput } from "./components/ssh/sshProject";
 import type { WslProjectInput } from "./components/wsl/WslProjectDialog";
@@ -33,7 +38,6 @@ import { selectDefaultCondaEnvironment } from "./components/file-viewer/run";
 import {
   APP_SETTINGS_CHANGED_EVENT,
   SKILL_HUB_CHANGED_EVENT,
-  type LocalRouterStatus,
 } from "./components/app-settings/types";
 import { useToast } from "./components/Toast";
 import { isHideWindowShortcut } from "./shortcuts";
@@ -44,7 +48,12 @@ import {
   getTerminalFontSizeStorageKey,
 } from "./platform";
 import { composeFontStack } from "./utils/fonts";
-import { agentDisplayLabel, isCodexLikeAgent, type AgentOption } from "./agents";
+import {
+  agentDisplayLabel,
+  agentFamily,
+  familyFromCodexLike,
+  normalizeProtocolFamily,
+} from "./agents";
 import type { AgentConfigSwitchValues } from "./components/AgentConfigSwitchDialog";
 import { useAgentOptions } from "./hooks/useAgentOptions";
 import { useTerminalManager } from "./hooks/useTerminalManager";
@@ -69,6 +78,7 @@ import {
   projectRailWidthForProjects,
 } from "./components/project-page/viewMode";
 import s from "./styles";
+import { launchDshWebUi } from "./dshWebUi";
 import "./App.css";
 
 import {
@@ -76,6 +86,8 @@ import {
   deriveProjectName,
   isLiveTerminalTaskStatus,
   loadProjectRailWidth,
+  loadCollapsedProjectGroups,
+  saveCollapsedProjectGroups,
   normalizeInterruptedTasksOnStartup,
   normalizeRemotePath,
   normalizeSshProjectNames,
@@ -98,6 +110,7 @@ import {
 import {
   disableTextInputAutoFeatures,
   getInitialAttentionBadge,
+  getInitialDshWebSearchEnabled,
   getInitialFontFamily,
   getInitialTaskDisplayWindow,
   getInitialTerminalFontSize,
@@ -108,8 +121,9 @@ import {
   resolveThemeVariant,
 } from "./appThemeState";
 import {
+  canAdoptSessionForAgent,
   canNativeResumeWithAgent,
-  getTaskSessionFields,
+  getTaskSessionFieldsByFamily,
   resolveTaskSessionOwner,
 } from "./taskSession";
 import { sanitizeTerminalHistoryForHandoff, stripTerminalControlSequences } from "./sessionHandoff";
@@ -139,6 +153,8 @@ interface ResetTaskProcessResult {
   claudeSessionPath?: string;
   codexSessionId?: string;
   codexSessionPath?: string;
+  dshSessionId?: string;
+  dshSessionPath?: string;
 }
 
 interface ResolvedTaskSession {
@@ -146,43 +162,38 @@ interface ResolvedTaskSession {
   sessionPath?: string;
 }
 
-type LocalRouterAgent = "claude" | "codex";
+// The structured transcript is the reliable context source: it comes from the
+// session JSONL and keeps roles, tool calls and results intact. Sanitized
+// terminal history is only a fallback for what the transcript cannot show, so it
+// gets a much smaller budget — a multi-megabyte terminal dump would otherwise
+// bury the conversation and blow past the next agent's context window.
+const MAX_HANDOFF_TERMINAL_BYTES = 64 * 1024; // 64 KiB
+const MAX_HANDOFF_TRANSCRIPT_BYTES = 512 * 1024; // 512 KiB
 
-function localRouterAgentFor(agent: AgentType, agentOptions: AgentOption[]): LocalRouterAgent {
-  return isCodexLikeAgent(agent, agentOptions) ? "codex" : "claude";
-}
-
-function localRouterTargetIdFor(agent: AgentType): string {
-  // claude_gpt55 is a Codex-compatible launcher; its provider family is the
-  // shared Codex target set rather than a separate router target.
-  return agent === "claude_gpt55" ? "codex" : agent;
+function localRouterAgentFor(agent: AgentType, options: AgentOption[]): LocalRouterAgent | null {
+  const family = agentFamily(agent, options);
+  return family === "claude" || family === "codex" ? family : null;
 }
 
 function localRouterTargetForTaskSwitch(
   task: Task,
-  targetAgent: AgentType,
-  projectLocationKind: string,
+  agent: AgentType,
+  locationKind: "local" | "ssh" | "wsl",
   status: LocalRouterStatus,
-  agentOptions: AgentOption[],
-) {
-  if (projectLocationKind !== "local" || !status.desired_enabled || !status.running) {
-    return null;
-  }
+  options: AgentOption[],
+): { agent: LocalRouterAgent; targetId: string } | null {
+  if (locationKind !== "local" || !status.running) return null;
 
-  const sourceOwner = resolveTaskSessionOwner(task, agentOptions);
-  const sourceAgent = localRouterAgentFor(sourceOwner.agent, agentOptions);
-  const targetAgentFamily = localRouterAgentFor(targetAgent, agentOptions);
-  if (sourceAgent !== targetAgentFamily) return null;
+  const currentAgent = localRouterAgentFor(task.agent, options);
+  const targetAgent = localRouterAgentFor(agent, options);
+  if (!currentAgent || currentAgent !== targetAgent) return null;
 
-  const targetId = localRouterTargetIdFor(targetAgent);
-  const target = status.targets.find(
-    (item) => item.agent === targetAgentFamily && item.target_id === targetId,
-  );
-  return target ? { agent: targetAgentFamily, targetId } : null;
+  const target =
+    status.targets.find((item) => item.agent === targetAgent && item.active) ??
+    status.targets.find((item) => item.agent === targetAgent && item.healthy) ??
+    status.targets.find((item) => item.agent === targetAgent);
+  return target ? { agent: targetAgent, targetId: target.target_id } : null;
 }
-
-const MAX_HANDOFF_TERMINAL_BYTES = 8 * 1024 * 1024; // 8 MiB
-const MAX_HANDOFF_TRANSCRIPT_BYTES = 256 * 1024; // 256 KiB
 
 function formatSessionHandoff(
   task: Task,
@@ -247,60 +258,93 @@ function formatSessionHandoff(
 function mergeResetTaskSession(task: Task, snapshot: ResetTaskProcessResult): Task {
   const hasCodexSnapshot = Boolean(snapshot.codexSessionId || snapshot.codexSessionPath);
   const hasClaudeSnapshot = Boolean(snapshot.claudeSessionId || snapshot.claudeSessionPath);
+  const hasDshSnapshot = Boolean(snapshot.dshSessionId || snapshot.dshSessionPath);
   const next: Task = {
     ...task,
     codexSessionId: snapshot.codexSessionId ?? task.codexSessionId,
     codexSessionPath: snapshot.codexSessionPath ?? task.codexSessionPath,
     claudeSessionId: snapshot.claudeSessionId ?? task.claudeSessionId,
     claudeSessionPath: snapshot.claudeSessionPath ?? task.claudeSessionPath,
+    dshSessionId: snapshot.dshSessionId ?? task.dshSessionId,
+    dshSessionPath: snapshot.dshSessionPath ?? task.dshSessionPath,
   };
 
-  if (hasCodexSnapshot && !hasClaudeSnapshot) {
+  const present = [hasCodexSnapshot, hasClaudeSnapshot, hasDshSnapshot].filter(Boolean).length;
+  if (present !== 1) return next;
+  if (hasCodexSnapshot) {
     return {
       ...next,
       claudeSessionId: undefined,
       claudeSessionPath: undefined,
+      dshSessionId: undefined,
+      dshSessionPath: undefined,
       sessionAgent: task.agent,
       sessionCodexLike: true,
+      sessionFamily: "codex",
     };
   }
-  if (hasClaudeSnapshot && !hasCodexSnapshot) {
+  if (hasClaudeSnapshot) {
     return {
       ...next,
       codexSessionId: undefined,
       codexSessionPath: undefined,
+      dshSessionId: undefined,
+      dshSessionPath: undefined,
       sessionAgent: task.agent,
       sessionCodexLike: false,
+      sessionFamily: "claude",
     };
   }
-  return next;
+  return {
+    ...next,
+    codexSessionId: undefined,
+    codexSessionPath: undefined,
+    claudeSessionId: undefined,
+    claudeSessionPath: undefined,
+    sessionAgent: task.agent,
+    sessionCodexLike: false,
+    sessionFamily: "dsh",
+  };
 }
 
 function applyResolvedTaskSession(
   task: Task,
-  owner: { agent: AgentType; codexLike: boolean },
+  owner: { agent: AgentType; codexLike: boolean; family?: ProtocolFamily },
   session: ResolvedTaskSession,
 ): Task {
   if (!session.sessionId && !session.sessionPath) return task;
-  return owner.codexLike
-    ? {
-        ...task,
-        codexSessionId: session.sessionId ?? task.codexSessionId,
-        codexSessionPath: session.sessionPath ?? task.codexSessionPath,
-        claudeSessionId: undefined,
-        claudeSessionPath: undefined,
-        sessionAgent: owner.agent,
-        sessionCodexLike: true,
-      }
-    : {
-        ...task,
-        claudeSessionId: session.sessionId ?? task.claudeSessionId,
-        claudeSessionPath: session.sessionPath ?? task.claudeSessionPath,
-        codexSessionId: undefined,
-        codexSessionPath: undefined,
-        sessionAgent: owner.agent,
-        sessionCodexLike: false,
-      };
+  const family: ProtocolFamily = owner.family ?? familyFromCodexLike(owner.codexLike);
+  const base: Task = {
+    ...task,
+    claudeSessionId: undefined,
+    claudeSessionPath: undefined,
+    codexSessionId: undefined,
+    codexSessionPath: undefined,
+    dshSessionId: undefined,
+    dshSessionPath: undefined,
+    sessionAgent: owner.agent,
+    sessionCodexLike: family === "codex",
+    sessionFamily: family,
+  };
+  if (family === "codex") {
+    return {
+      ...base,
+      codexSessionId: session.sessionId ?? task.codexSessionId,
+      codexSessionPath: session.sessionPath ?? task.codexSessionPath,
+    };
+  }
+  if (family === "dsh") {
+    return {
+      ...base,
+      dshSessionId: session.sessionId ?? task.dshSessionId,
+      dshSessionPath: session.sessionPath ?? task.dshSessionPath,
+    };
+  }
+  return {
+    ...base,
+    claudeSessionId: session.sessionId ?? task.claudeSessionId,
+    claudeSessionPath: session.sessionPath ?? task.claudeSessionPath,
+  };
 }
 
 function App() {
@@ -337,9 +381,19 @@ function App() {
       FONT_PLATFORM === "macos" ? "aeroric:monoFontFamily" : undefined,
     ),
   );
+  const [dshWebSearchEnabled, setDshWebSearchEnabled] = useState<boolean>(
+    getInitialDshWebSearchEnabled,
+  );
   const [projects, setProjects] = useState<Project[]>([]);
   const [projectGroups, setProjectGroups] = useState<string[]>(loadProjectGroupNames);
-  const [collapsedProjectGroups, setCollapsedProjectGroups] = useState<Set<string>>(new Set());
+  const [collapsedProjectGroups, setCollapsedProjectGroups] = useState<Set<string>>(() => {
+    const saved = loadCollapsedProjectGroups();
+    // 如果是首次加载（localStorage 为空），默认全部折叠
+    if (saved.size === 0) {
+      return new Set(loadProjectGroupNames());
+    }
+    return saved;
+  });
   const [projectRailWidth, setProjectRailWidth] = useState(
     () => loadProjectRailWidth() ?? PROJECT_RAIL_EXPANDED_WIDTH,
   );
@@ -356,6 +410,7 @@ function App() {
     localStorage.getItem(SELECTED_CONDA_ENV_KEY),
   );
   const [hubMode, setHubMode] = useState(false);
+  const [showReleasePage, setShowReleasePage] = useState(false);
 
   const tm = useTerminalManager();
   const pendingTaskStartsRef = useRef<Record<string, () => void>>({});
@@ -377,6 +432,10 @@ function App() {
       localStorage.removeItem(SELECTED_CONDA_ENV_KEY);
     }
   }, [selectedCondaEnvPath]);
+
+  useEffect(() => {
+    saveCollapsedProjectGroups(collapsedProjectGroups);
+  }, [collapsedProjectGroups]);
 
   const formatSaveProjectsError = useCallback(
     (error: string) => t("toast.saveProjectsFailed", { error }),
@@ -538,6 +597,10 @@ function App() {
   }, [attentionBadge]);
 
   useEffect(() => {
+    localStorage.setItem("aeroric:dshWebSearchEnabled", dshWebSearchEnabled ? "1" : "0");
+  }, [dshWebSearchEnabled]);
+
+  useEffect(() => {
     localStorage.setItem(
       SFTP_LOCAL_PATH_STORAGE_KEY,
       normalizeSftpLocalDefaultPath(sftpLocalDefaultPath),
@@ -692,9 +755,10 @@ function App() {
       session_id: string;
       session_path: string;
       codex_like?: boolean;
+      family?: string;
     }>("task-session", (e) => {
-      const { task_id, session_id, session_path, codex_like } = e.payload;
-      updateTaskSession(task_id, session_id, session_path, codex_like);
+      const { task_id, session_id, session_path, codex_like, family } = e.payload;
+      updateTaskSession(task_id, session_id, session_path, codex_like, family);
     });
     const p3 = listen<{ task_id: string; cols: number; rows: number }>(
       "remote-terminal-resized",
@@ -1147,7 +1211,7 @@ function App() {
       reasoningEffort?: string | null;
       speed?: string;
       immediate: boolean;
-      launchMode: "local" | "worktree";
+      launchMode: "local" | "worktree" | "webui";
       baseBranch: string;
       injectPromptIntoTerminal?: boolean;
     },
@@ -1176,6 +1240,19 @@ function App() {
 
     if (launchMode === "worktree" && !baseBranch) {
       showToast(t("toast.worktreeBaseRequired"), "warning");
+      return null;
+    }
+
+    if (launchMode === "webui") {
+      if (!immediate) {
+        showToast(t("newTask.webuiMustStart"), "warning");
+        return null;
+      }
+      try {
+        await launchDshWebUi(agent);
+      } catch (error) {
+        showToast(t("toast.dshWebUiStartFailed", { error: String(error) }), "error");
+      }
       return null;
     }
 
@@ -1503,7 +1580,7 @@ function App() {
     project: Project,
   ): Promise<ResolvedTaskSession> {
     const owner = resolveTaskSessionOwner(task, agentOptions);
-    const fields = getTaskSessionFields(task, owner.codexLike);
+    const fields = getTaskSessionFieldsByFamily(task, owner.family);
     const projectLocation = resolveProjectLocation(project);
     const projectPath = task.worktreePath ?? project.path;
     let sessionId = fields.sessionId;
@@ -1516,6 +1593,7 @@ function App() {
             sessionPath,
             projectPath,
             isCodex: owner.codexLike,
+            family: owner.family,
           })) ?? undefined;
       } catch (error) {
         console.warn("read_session_id failed", error);
@@ -1548,6 +1626,8 @@ function App() {
           "recover_task_session",
           {
             projectPath,
+            family: owner.family,
+            agent: owner.agent,
             prompt: task.prompt,
             createdAt: task.createdAt,
             isCodex: owner.codexLike,
@@ -1572,6 +1652,18 @@ function App() {
     if (!project) return false;
 
     const owner = resolveTaskSessionOwner(task, agentOptions);
+    // dsh headless 无原生 resume:接续 = 同配置的 handoff 新会话(携带结构化
+    // 上下文),UI 层的 resume 入口即"新会话接续"。
+    if (owner.family === "dsh") {
+      await handleSwitchTaskConfig(taskId, {
+        agent: owner.agent,
+        selectedModel: task.selectedModel,
+        reasoningEffort: (task.reasoningEffort as ReasoningEffort | undefined) ?? null,
+        speed: (task.speed as TaskSpeed | undefined) ?? "standard",
+        permissionMode: task.permissionMode,
+      });
+      return true;
+    }
     const session = await resolveTaskSessionReference(task, project);
     if (!session.sessionId) {
       showToast(t("running.resumeUnavailable"), "warning");
@@ -1678,13 +1770,45 @@ function App() {
     sourceTask = applyResolvedTaskSession(sourceTask, sourceOwner, sourceSession);
     sourceOwner = resolveTaskSessionOwner(sourceTask, agentOptions);
 
-    const canNativeResume =
-      canNativeResumeWithAgent(sourceTask, values.agent, agentOptions) &&
-      Boolean(sourceSession.sessionId);
     const sourceProjectPath = sourceTask.worktreePath ?? project.path;
+    let resumeSessionId = canNativeResumeWithAgent(sourceTask, values.agent, agentOptions)
+      ? sourceSession.sessionId
+      : undefined;
+
+    // Two different configurations of the same CLI keep separate homes
+    // (CODEX_HOME / CLAUDE_CONFIG_DIR), and `codex resume` / `claude --resume`
+    // only read their own home. Copying the transcript into the target home lets
+    // the new configuration replay the real conversation tree instead of being
+    // handed a flattened text summary.
+    if (
+      !resumeSessionId &&
+      projectLocation.kind === "local" &&
+      sourceSession.sessionId &&
+      sourceSession.sessionPath &&
+      canAdoptSessionForAgent(sourceTask, values.agent, agentOptions)
+    ) {
+      try {
+        const adoptedPath = await invoke<string>("adopt_session_for_agent", {
+          sessionPath: sourceSession.sessionPath,
+          projectPath: sourceProjectPath,
+          isCodex: sourceOwner.codexLike,
+          targetAgent: values.agent,
+        });
+        resumeSessionId = sourceSession.sessionId;
+        sourceTask = applyResolvedTaskSession(
+          sourceTask,
+          { agent: values.agent, codexLike: sourceOwner.codexLike, family: sourceOwner.family },
+          { sessionId: sourceSession.sessionId, sessionPath: adoptedPath },
+        );
+      } catch (error) {
+        // Adoption is an optimization; fall back to the text handoff below.
+        console.warn("adopt_session_for_agent during agent switch failed", error);
+      }
+    }
+
     let handoffPrompt: string | undefined;
 
-    if (!canNativeResume) {
+    if (!resumeSessionId) {
       let messages: SessionHandoffMessage[] = [];
       if (sourceSession.sessionPath && projectLocation.kind === "local") {
         try {
@@ -1692,6 +1816,7 @@ function App() {
             sessionPath: sourceSession.sessionPath,
             projectPath: sourceProjectPath,
             isCodex: sourceOwner.codexLike,
+            family: sourceOwner.family,
           });
         } catch (error) {
           console.warn("read_session_messages during agent switch failed", error);
@@ -1733,8 +1858,8 @@ function App() {
     await flushProjectTasks(task.projectId);
 
     pendingTaskStartsRef.current[taskId] = () => {
-      if (canNativeResume && sourceSession.sessionId) {
-        invokeResumeTask(nextTask, project, sourceSession.sessionId);
+      if (resumeSessionId) {
+        invokeResumeTask(nextTask, project, resumeSessionId);
         return;
       }
 
@@ -1961,7 +2086,7 @@ function App() {
     const project = projects.find((p) => p.id === task.projectId);
     if (!project) return;
     const sessionOwner = resolveTaskSessionOwner(task, agentOptions);
-    const sessionFields = getTaskSessionFields(task, sessionOwner.codexLike);
+    const sessionFields = getTaskSessionFieldsByFamily(task, sessionOwner.family);
     const sessionPath = sessionFields.sessionPath ?? sessionFields.legacySessionPath ?? null;
     // 点击瞬间的快照，用于 await 完成后的并发校验（防止用户期间 rerun/resume/手改名）
     const expectedPriorName = task.name ?? "";
@@ -1987,7 +2112,7 @@ function App() {
         if (current.prompt !== expectedPrompt) return prev;
         if (current.status !== expectedStatus) return prev;
         const currentOwner = resolveTaskSessionOwner(current, agentOptions);
-        const currentFields = getTaskSessionFields(current, currentOwner.codexLike);
+        const currentFields = getTaskSessionFieldsByFamily(current, currentOwner.family);
         const currentSessionPath =
           currentFields.sessionPath ?? currentFields.legacySessionPath ?? null;
         if (currentSessionPath !== expectedSessionPath) return prev;
@@ -2167,54 +2292,44 @@ function App() {
     sessionId: string,
     sessionPath: string,
     codexLikeFromEvent?: boolean,
+    familyFromEvent?: string,
   ) {
     setTasks((prev) => {
       let changed = false;
       const next = prev.map((task) => {
         if (task.id !== taskId) return task;
-        const codexLike =
-          codexLikeFromEvent ?? isCodexLikeAgent(task.agent, agentOptionsRef.current);
-        if (!codexLike) {
-          if (
-            task.claudeSessionId === sessionId &&
-            task.claudeSessionPath === sessionPath &&
-            task.sessionAgent === task.agent &&
-            task.sessionCodexLike === false &&
-            !task.codexSessionId &&
-            !task.codexSessionPath
-          )
-            return task;
-          changed = true;
-          return {
-            ...task,
-            claudeSessionId: sessionId,
-            claudeSessionPath: sessionPath,
-            codexSessionId: undefined,
-            codexSessionPath: undefined,
-            sessionAgent: task.agent,
-            sessionCodexLike: false,
-          };
-        } else {
-          if (
-            task.codexSessionId === sessionId &&
-            task.codexSessionPath === sessionPath &&
-            task.sessionAgent === task.agent &&
-            task.sessionCodexLike === true &&
-            !task.claudeSessionId &&
-            !task.claudeSessionPath
-          )
-            return task;
-          changed = true;
-          return {
-            ...task,
-            codexSessionId: sessionId,
-            codexSessionPath: sessionPath,
-            claudeSessionId: undefined,
-            claudeSessionPath: undefined,
-            sessionAgent: task.agent,
-            sessionCodexLike: true,
-          };
-        }
+        const family: ProtocolFamily =
+          normalizeProtocolFamily(familyFromEvent) ??
+          (typeof codexLikeFromEvent === "boolean"
+            ? familyFromCodexLike(codexLikeFromEvent)
+            : agentFamily(task.agent, agentOptionsRef.current));
+        const fields = {
+          claudeSessionId: family === "claude" ? sessionId : undefined,
+          claudeSessionPath: family === "claude" ? sessionPath : undefined,
+          codexSessionId: family === "codex" ? sessionId : undefined,
+          codexSessionPath: family === "codex" ? sessionPath : undefined,
+          dshSessionId: family === "dsh" ? sessionId : undefined,
+          dshSessionPath: family === "dsh" ? sessionPath : undefined,
+        };
+        const unchanged =
+          task.claudeSessionId === fields.claudeSessionId &&
+          task.claudeSessionPath === fields.claudeSessionPath &&
+          task.codexSessionId === fields.codexSessionId &&
+          task.codexSessionPath === fields.codexSessionPath &&
+          task.dshSessionId === fields.dshSessionId &&
+          task.dshSessionPath === fields.dshSessionPath &&
+          task.sessionAgent === task.agent &&
+          task.sessionCodexLike === (family === "codex") &&
+          task.sessionFamily === family;
+        if (unchanged) return task;
+        changed = true;
+        return {
+          ...task,
+          ...fields,
+          sessionAgent: task.agent,
+          sessionCodexLike: family === "codex",
+          sessionFamily: family,
+        };
       });
 
       if (changed) {
@@ -2387,6 +2502,7 @@ function App() {
                 condaEnvironments={condaEnvironments}
                 selectedCondaEnvPath={selectedCondaEnvPath}
                 onSelectedCondaEnvPathChange={setSelectedCondaEnvPath}
+                onShowReleasePage={() => setShowReleasePage(true)}
               />
             );
           })}
@@ -2460,7 +2576,10 @@ function App() {
         onUiFontFamilyChange={setUiFontFamily}
         monoFontFamily={monoFontFamily}
         onMonoFontFamilyChange={setMonoFontFamily}
+        dshWebSearchEnabled={dshWebSearchEnabled}
+        onDshWebSearchEnabledChange={setDshWebSearchEnabled}
       />
+      {showReleasePage && <ReleasePage onClose={() => setShowReleasePage(false)} />}
     </div>
   );
 }

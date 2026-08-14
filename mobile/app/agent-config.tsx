@@ -1,4 +1,4 @@
-/** 移动端 Agent 配置:内置/自定义统一支持编辑、检测模型、代理与兼容桥接。 */
+/** 移动端 Agent 配置:内置/自定义统一支持编辑、获取可用模型、代理与兼容桥接。 */
 import { useCallback, useMemo, useState, type Dispatch, type SetStateAction } from "react";
 import {
   ActivityIndicator,

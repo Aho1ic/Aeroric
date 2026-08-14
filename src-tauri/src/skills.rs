@@ -11,9 +11,7 @@ use serde::{Deserialize, Serialize};
 use tar::Archive;
 use uuid::Uuid;
 
-use crate::storage::{
-    aeroric_dir, atomic_write, ensure_aeroric_dirs, load_projects, update_projects, Project,
-};
+use crate::storage::{aeroric_dir, atomic_write, ensure_aeroric_dirs, load_projects, Project};
 
 /// 未配置技能库时使用的默认目录名（位于 `~/.aeroric/` 下）。
 const DEFAULT_HUB_DIR_NAME: &str = "skills_hub";
@@ -428,6 +426,8 @@ fn now_ms() -> i64 {
 fn agent_skills_dir(project_path: &Path, agent: &str) -> PathBuf {
     let sub = match agent {
         "codex" => ".codex/skills",
+        // dsh-skill-filesystem 的项目级根之一(另一处是 .agents/skills)。
+        "dsh" => ".dsh/skills",
         _ => ".claude/skills",
     };
     project_path.join(sub)
@@ -819,12 +819,26 @@ fn is_valid_prompt_skill_name(name: &str) -> bool {
         && !name.contains('\0')
 }
 
+/// 规范化路径，去除 Windows UNC 前缀
+fn normalize_path(path: &Path) -> PathBuf {
+    #[cfg(windows)]
+    {
+        let s = path.to_string_lossy();
+        if s.starts_with(r"\\?\") {
+            return PathBuf::from(&s[4..]);
+        }
+    }
+    path.to_path_buf()
+}
+
 fn collect_prompt_skills(
     root: &Path,
     skills: &mut Vec<PromptSkill>,
     seen_names: &mut HashSet<String>,
 ) {
-    let Ok(entries) = fs::read_dir(root) else {
+    let normalized_root = normalize_path(root);
+    let Ok(entries) = fs::read_dir(&normalized_root) else {
+        eprintln!("Failed to read skills directory: {:?}", normalized_root);
         return;
     };
     for entry in entries.flatten() {
@@ -857,6 +871,19 @@ fn collect_prompt_skills(
 
 fn prompt_skill_roots(project_path: &Path, agent: &str) -> Vec<PathBuf> {
     let mut roots = Vec::new();
+    if agent == "dsh" {
+        // dsh-skill-filesystem 的默认根:项目 .dsh/skills 与 .agents/skills,
+        // 用户级为托管 DSH_HOME 下的 skills(不读用户自己的 ~/.dsh)。
+        roots.push(project_path.join(".dsh").join("skills"));
+        roots.push(project_path.join(".agents").join("skills"));
+        if let Ok(home) = crate::dsh_home::dsh_home() {
+            roots.push(home.join("skills"));
+        }
+        if let Some(home) = crate::platform::home_dir() {
+            roots.push(home.join(".agents").join("skills"));
+        }
+        return roots;
+    }
     let codex_like = agent == "codex";
     if codex_like {
         roots.push(project_path.join(".agents").join("skills"));
@@ -877,6 +904,37 @@ fn prompt_skill_roots(project_path: &Path, agent: &str) -> Vec<PathBuf> {
         if let Some(home) = crate::platform::home_dir() {
             roots.push(home.join(".claude").join("skills"));
         }
+    }
+    roots
+}
+
+/// 只扫描当前项目中的 skill 目录，不混入用户级/托管目录。
+/// `all` 用于项目侧边栏：项目里的 Claude、Codex、DSH skill 都应可见。
+fn project_prompt_skill_roots(project_path: &Path, agent: &str) -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+    match agent {
+        "claude" | "all" => roots.push(project_path.join(".claude").join("skills")),
+        _ => {}
+    }
+    match agent {
+        "codex" | "all" => {
+            roots.push(project_path.join(".agents").join("skills"));
+            roots.push(project_path.join(".codex").join("skills"));
+        }
+        _ => {}
+    }
+    match agent {
+        "dsh" | "all" => {
+            roots.push(project_path.join(".dsh").join("skills"));
+            if agent == "dsh" {
+                roots.push(project_path.join(".agents").join("skills"));
+            }
+        }
+        _ => {}
+    }
+    // 兼容不带 Agent 前缀的项目级 skills 目录。
+    if agent == "all" {
+        roots.push(project_path.join("skills"));
     }
     roots
 }
@@ -1064,51 +1122,32 @@ pub async fn set_skill_hub_path(path: String) -> Result<SetHubResult, String> {
         }
         let hub_path_str = canonical.to_string_lossy().into_owned();
 
-        let ((project, created_new_project), projects) = update_projects(|projects| {
-            let existing = projects
-                .iter()
-                .find(|p| {
-                    Path::new(&p.path).canonicalize().ok().as_deref() == Some(canonical.as_path())
-                })
-                .cloned();
-
-            Ok(match existing {
-                Some(project) => (project, false),
-                None => {
-                    let name = canonical
-                        .file_name()
-                        .and_then(|s| s.to_str())
-                        .unwrap_or("skills_hub")
-                        .to_string();
-                    let project = Project {
-                        id: now_ms().to_string(),
-                        name,
-                        path: hub_path_str.clone(),
-                        location: None,
-                        branch: None,
-                        last_opened_at: now_ms(),
-                        order_index: None,
-                        group: None,
-                        hidden_from_rail: false,
-                        pinned: false,
-                    };
-                    projects.push(project.clone());
-                    (project, true)
-                }
-            })
-        })?;
-
+        // 不再将 Skill Hub 目录添加到项目列表
         let config = SkillHubConfig {
-            hub_project_id: Some(project.id.clone()),
+            hub_project_id: None,
             hub_path: Some(hub_path_str),
             created_at: Some(now_ms()),
         };
         save_hub_config_internal(&config)?;
 
+        // 获取当前项目列表以返回，但不修改它
+        let projects = load_projects()?;
+
         Ok(SetHubResult {
             config,
-            project,
-            created_new_project,
+            project: Project {
+                id: String::new(),
+                name: String::new(),
+                path: String::new(),
+                location: None,
+                branch: None,
+                last_opened_at: 0,
+                order_index: None,
+                group: None,
+                hidden_from_rail: false,
+                pinned: false,
+            },
+            created_new_project: false,
             projects,
         })
     })
@@ -1143,9 +1182,10 @@ pub async fn list_skills() -> Result<Vec<Skill>, String> {
 pub async fn list_project_skills(
     project_path: String,
     agent: String,
+    project_only: Option<bool>,
 ) -> Result<Vec<PromptSkill>, String> {
     tokio::task::spawn_blocking(move || {
-        if !matches!(agent.as_str(), "claude" | "codex") {
+        if !matches!(agent.as_str(), "claude" | "codex" | "dsh" | "all") {
             return Err(format!("Unsupported agent skill type: {}", agent));
         }
         let project_path = PathBuf::from(project_path);
@@ -1155,7 +1195,17 @@ pub async fn list_project_skills(
                 project_path.display()
             ));
         }
-        Ok(scan_prompt_skills(&project_path, &agent))
+        if project_only.unwrap_or(false) {
+            let mut skills = Vec::new();
+            let mut seen_names = HashSet::new();
+            for root in project_prompt_skill_roots(&project_path, &agent) {
+                collect_prompt_skills(&root, &mut skills, &mut seen_names);
+            }
+            skills.sort_by_key(|skill| skill.name.to_lowercase());
+            Ok(skills)
+        } else {
+            Ok(scan_prompt_skills(&project_path, &agent))
+        }
     })
     .await
     .map_err(|error| error.to_string())?
@@ -1217,7 +1267,7 @@ pub async fn install_skill(
     strategy: String,
 ) -> Result<InstallResult, String> {
     tokio::task::spawn_blocking(move || {
-        if !matches!(agent.as_str(), "claude" | "codex") {
+        if !matches!(agent.as_str(), "claude" | "codex" | "dsh") {
             return Err(format!("Unsupported agent: {}", agent));
         }
         if !matches!(
@@ -1400,7 +1450,7 @@ pub async fn uninstall_skill(
 ) -> Result<(), String> {
     tokio::task::spawn_blocking(move || {
         validate_skill_name(&skill_name)?;
-        if !matches!(agent.as_str(), "claude" | "codex") {
+        if !matches!(agent.as_str(), "claude" | "codex" | "dsh") {
             return Err(format!("Unsupported agent: {}", agent));
         }
         let mut file = load_installations_internal();
@@ -1529,7 +1579,7 @@ pub async fn delete_skill(skill_name: String, skill_path: String) -> Result<Dele
 
         for project in load_projects()? {
             let project_path = Path::new(&project.path);
-            for agent in ["claude", "codex"] {
+            for agent in ["claude", "codex", "dsh"] {
                 let link = agent_skills_dir(project_path, agent).join(&skill_name);
                 if symlink_points_to(&link, &skill_canonical) {
                     candidate_links.insert(link);

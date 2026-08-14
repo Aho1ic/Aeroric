@@ -4,6 +4,7 @@ import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialo
 import { Check, Download, Eye, EyeOff, RefreshCw, Trash2, Upload, X, Zap } from "lucide-react";
 import { useI18n } from "../../i18n";
 import s from "../../styles";
+import { zLayers } from "../../styles/zLayers";
 import { AgentPathSection, type AgentPathSectionHandle } from "./AgentPathSection";
 import {
   APP_SETTINGS_CHANGED_EVENT,
@@ -89,6 +90,8 @@ export function AgentDetailModal({
   const agentKey = option.value as AgentKey;
   const deletable = option.custom === true;
   const isCodex = option.codexLike === true;
+  // DeepSeek API 为 OpenAI 兼容(/models + Bearer),模型探测复用 codex 通道。
+  const agentIsDsh = option.family === "dsh";
   const isBuiltIn = isBuiltInAgent(option.value);
 
   const { language, t } = useI18n();
@@ -335,7 +338,7 @@ export function AgentDetailModal({
         (isBuiltIn && baseUrl.trim() && apiKey.trim()) ||
         (!isBuiltIn && baseUrl.trim() && apiKey.trim())
           ? await invoke<AgentModels>("detect_agent_models", {
-              kind: isCodex ? "codex" : "claude_code",
+              kind: agentIsDsh ? "dsh" : isCodex ? "codex" : "claude_code",
               baseUrl: baseUrl.trim(),
               apiKey: apiKey.trim(),
             })
@@ -605,7 +608,8 @@ export function AgentDetailModal({
         style={{
           position: "fixed",
           inset: 0,
-          zIndex: 3000,
+          // AppSettingsDialog(overlay)内部弹出,需高于其遮罩。
+          zIndex: zLayers.overlayNested,
           display: "flex",
           alignItems: "center",
           justifyContent: "center",
@@ -1393,7 +1397,8 @@ export function AgentDetailModal({
           style={{
             position: "fixed",
             inset: 0,
-            zIndex: 3100,
+            // 本模态自身已在 overlayNested,删除确认再叠一层。
+            zIndex: zLayers.overlayNestedDeep,
             display: "flex",
             alignItems: "center",
             justifyContent: "center",

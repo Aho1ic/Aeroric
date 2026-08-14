@@ -1,4 +1,4 @@
-import { act, render, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const terminalState = vi.hoisted(() => ({
@@ -42,6 +42,7 @@ vi.mock("../components/terminalShared", () => ({
   safeFit: () => ({ cols: 80, rows: 24 }),
   createSmartWriter: (term: { write: (data: string, callback?: () => void) => void }) => ({
     write: (data: string, callback?: () => void) => term.write(data, callback),
+    writeImmediate: (data: string, callback?: () => void) => term.write(data, callback),
     pauseForUserInput: vi.fn(),
   }),
   attachMacWebKitTerminalGuard: () => vi.fn(),
@@ -91,15 +92,18 @@ describe("TerminalView theme replay", () => {
     const view = render(<TerminalView {...props} themeVariant="light" />);
 
     await waitFor(() => expect(props.onReady).toHaveBeenCalledWith(7));
+    expect(screen.getByTestId("agent-terminal")).toHaveAttribute("data-terminal-theme", "light");
     act(() => registeredWrite?.("\u001b[48;2;20;20;20mlive\u001b[0m"));
 
     view.rerender(<TerminalView {...props} themeVariant="dark" />);
+    expect(screen.getByTestId("agent-terminal")).toHaveAttribute("data-terminal-theme", "dark");
     await waitFor(() => expect(terminalState.runtimes).toHaveLength(2));
     expect(terminalState.runtimes[1].writes.join("")).toBe(
       "\u001b[40moriginal\u001b[0m\u001b[48;2;20;20;20mlive\u001b[0m",
     );
 
     view.rerender(<TerminalView {...props} themeVariant="light" />);
+    expect(screen.getByTestId("agent-terminal")).toHaveAttribute("data-terminal-theme", "light");
     await waitFor(() => expect(terminalState.runtimes).toHaveLength(3));
     expect(terminalState.runtimes[2].writes.join("")).toBe(
       "\u001b[40moriginal\u001b[0m\u001b[48;2;20;20;20mlive\u001b[0m",

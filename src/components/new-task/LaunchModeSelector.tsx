@@ -8,15 +8,18 @@ import {
   Check,
   Search,
   X,
+  Globe,
 } from "lucide-react";
 import * as Select from "@radix-ui/react-select";
 import * as Popover from "@radix-ui/react-popover";
 import { useI18n } from "../../i18n";
+import { agentFamily, type AgentOption } from "../../agents";
 import type { ComposeMenu } from "./AgentPermSelector";
+import type { AgentType } from "../../types";
 import { nextComposeMenuState } from "./AgentPermSelector";
 import s from "../../styles";
 
-export type LaunchMode = "local" | "worktree";
+export type LaunchMode = "local" | "worktree" | "webui";
 
 interface GitBranchInfo {
   name: string;
@@ -24,7 +27,7 @@ interface GitBranchInfo {
   remote: string | null;
 }
 
-const MODES: LaunchMode[] = ["local", "worktree"];
+const MODES: LaunchMode[] = ["local", "worktree", "webui"];
 
 function setMenuItemHover(el: HTMLElement, hover: boolean) {
   el.style.background = hover ? "var(--accent-subtle)" : "transparent";
@@ -34,6 +37,8 @@ function setMenuItemHover(el: HTMLElement, hover: boolean) {
 
 export function LaunchModeSelector({
   projectPath,
+  agent,
+  agentOptions,
   launchMode,
   baseBranch,
   compact = false,
@@ -43,6 +48,8 @@ export function LaunchModeSelector({
   onSetBaseBranch,
 }: {
   projectPath: string;
+  agent: AgentType;
+  agentOptions: AgentOption[];
   launchMode: LaunchMode;
   baseBranch: string;
   compact?: boolean;
@@ -97,16 +104,34 @@ export function LaunchModeSelector({
       .filter((b) => !q || b.name.toLowerCase().includes(q));
   }, [branches, search]);
 
+  const availableModes = useMemo(() => {
+    const family = agentFamily(agent, agentOptions);
+    if (family === "dsh") {
+      return MODES;
+    }
+    return MODES.filter((m) => m !== "webui");
+  }, [agent, agentOptions]);
+
+  useEffect(() => {
+    if (!availableModes.includes(launchMode)) {
+      onSetLaunchMode("local");
+    }
+  }, [availableModes, launchMode, onSetLaunchMode]);
+
   function modeIcon(mode: LaunchMode) {
-    return mode === "local" ? (
-      <Laptop size={13} strokeWidth={2} color="var(--accent)" />
-    ) : (
-      <GitPullRequestArrow size={13} strokeWidth={2} color="var(--usage-codex)" />
-    );
+    if (mode === "local") {
+      return <Laptop size={13} strokeWidth={2} color="var(--accent)" />;
+    }
+    if (mode === "worktree") {
+      return <GitPullRequestArrow size={13} strokeWidth={2} color="var(--usage-codex)" />;
+    }
+    return <Globe size={13} strokeWidth={2} color="var(--usage-dsh)" />;
   }
 
   function modeLabel(mode: LaunchMode) {
-    return mode === "local" ? t("newTask.launchMode.local") : t("newTask.launchMode.worktree");
+    if (mode === "local") return t("newTask.launchMode.local");
+    if (mode === "worktree") return t("newTask.launchMode.worktree");
+    return t("newTask.launchMode.webui");
   }
 
   return (
@@ -138,7 +163,7 @@ export function LaunchModeSelector({
         <Select.Portal>
           <Select.Content position="popper" sideOffset={6} style={s.toolbarMenuContent}>
             <Select.Viewport>
-              {MODES.map((mode) => (
+              {availableModes.map((mode) => (
                 <Select.Item
                   key={mode}
                   value={mode}
@@ -166,12 +191,34 @@ export function LaunchModeSelector({
       >
         <Popover.Trigger asChild>
           <button
-            style={controlButtonStyle}
+            data-launch-base-branch-trigger
+            style={{
+              ...controlButtonStyle,
+              ...(compact
+                ? null
+                : {
+                    flex: "0 1 132px",
+                    minWidth: 0,
+                    maxWidth: 132,
+                    overflow: "hidden",
+                  }),
+            }}
             aria-label={t("newTask.baseBranch")}
             title={baseBranch || t("newTask.selectBaseBranch")}
           >
             <GitBranch size={13} strokeWidth={2} color="var(--success)" />
-            {!compact && <span>{baseBranch || t("newTask.selectBaseBranch")}</span>}
+            {!compact && (
+              <span
+                style={{
+                  minWidth: 0,
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                {baseBranch || t("newTask.selectBaseBranch")}
+              </span>
+            )}
             {!compact && <ChevronDown size={12} strokeWidth={2.5} style={{ opacity: 0.58 }} />}
           </button>
         </Popover.Trigger>

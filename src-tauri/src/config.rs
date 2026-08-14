@@ -403,6 +403,8 @@ fn agent_config_path_from_settings(
         "claude_gpt55" => Ok(configured_path(&settings.claude_gpt55_config_path)),
         "codex" => Ok(configured_path(&settings.codex_config_path)
             .or_else(|| app_settings::default_builtin_agent_config_path("codex").ok())),
+        "dsh" => Ok(configured_path(&settings.dsh_config_path)
+            .or_else(|| app_settings::default_builtin_agent_config_path("dsh").ok())),
         _ => settings
             .custom_agents
             .iter()
@@ -449,25 +451,39 @@ pub fn write_agent_config_file(agent: String, content: String) -> Result<(), Str
     atomic_write(&path, &content)
 }
 
+/// 配置里没有显式写过推理强度时使用的默认值。
+///
+/// Aeroric 面向复杂工程任务，CLI 自带的默认(codex `medium` / claude 自适应)几乎每次
+/// 都要手动再往上调一档，所以统一兜底到 `xhigh`；配置里写了值的仍然照配置走。
+pub(crate) const DEFAULT_MODEL_REASONING_EFFORT: &str = "xhigh";
+
 /// Reads the agent's reasoning defaults without loading the settings file again.
+///
+/// 读不到配置或配置里没有 `model_reasoning_effort` 时回落到
+/// [`DEFAULT_MODEL_REASONING_EFFORT`]，这样"没自定义过推理强度"的 Agent 一律是 xhigh。
 pub(crate) fn read_agent_reasoning_settings_from_settings(
     agent: &str,
     settings: &AppSettings,
 ) -> (Option<String>, Option<String>) {
-    let path = match agent_config_path_from_settings(agent, settings) {
-        Ok(Some(path)) => path,
-        _ => return (None, None),
-    };
-    let Ok(content) = fs::read_to_string(&path) else {
+    // dsh 无 effort/speed 档位(settings.yaml 也没有对应键),不回落默认值。
+    if crate::app_settings::agent_family_in(settings, agent)
+        == crate::app_settings::AgentFamily::Dsh
+    {
         return (None, None);
+    }
+    let content = match agent_config_path_from_settings(agent, settings) {
+        Ok(Some(path)) => fs::read_to_string(&path).unwrap_or_default(),
+        _ => String::new(),
     };
     let effort = read_root_toml_string(&content, "model_reasoning_effort")
         .or_else(|| read_root_json_string(&content, "model_reasoning_effort"));
     let speed = read_root_toml_string(&content, "model_reasoning_speed")
         .or_else(|| read_root_json_string(&content, "model_reasoning_speed"));
-    let effort = effort.filter(|v| is_valid_effort(v));
+    let effort = effort
+        .filter(|v| is_valid_effort(v))
+        .unwrap_or_else(|| DEFAULT_MODEL_REASONING_EFFORT.to_string());
     let speed = speed.filter(|v| matches!(v.as_str(), "standard" | "fast"));
-    (effort, speed)
+    (Some(effort), speed)
 }
 
 fn read_root_toml_string(content: &str, key: &str) -> Option<String> {
@@ -669,5 +685,52 @@ commit_message_timeout_secs = 15
             agent_config_path_from_settings("codex", &settings).unwrap(),
             Some(PathBuf::from("/tmp/codex-config.toml"))
         );
+    }
+
+    /// 没有配置文件 / 配置里没写推理强度时一律默认 xhigh，写了值的照配置走。
+    #[test]
+    fn missing_reasoning_effort_falls_back_to_xhigh() {
+        let dir =
+            std::env::temp_dir().join(format!("aeroric-reasoning-default-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+
+        let missing = dir.join("missing.toml");
+        let _ = fs::remove_file(&missing);
+        let settings = AppSettings {
+            codex_config_path: missing.to_string_lossy().into_owned(),
+            ..AppSettings::default()
+        };
+        assert_eq!(
+            read_agent_reasoning_settings_from_settings("codex", &settings),
+            (Some("xhigh".to_string()), None)
+        );
+
+        let without_effort = dir.join("no-effort.toml");
+        fs::write(&without_effort, "model = \"gpt-5.6\"\n").unwrap();
+        let settings = AppSettings {
+            codex_config_path: without_effort.to_string_lossy().into_owned(),
+            ..AppSettings::default()
+        };
+        assert_eq!(
+            read_agent_reasoning_settings_from_settings("codex", &settings),
+            (Some("xhigh".to_string()), None)
+        );
+
+        let with_effort = dir.join("with-effort.toml");
+        fs::write(
+            &with_effort,
+            "model_reasoning_effort = \"low\"\nmodel_reasoning_speed = \"fast\"\n",
+        )
+        .unwrap();
+        let settings = AppSettings {
+            codex_config_path: with_effort.to_string_lossy().into_owned(),
+            ..AppSettings::default()
+        };
+        assert_eq!(
+            read_agent_reasoning_settings_from_settings("codex", &settings),
+            (Some("low".to_string()), Some("fast".to_string()))
+        );
+
+        let _ = fs::remove_dir_all(&dir);
     }
 }

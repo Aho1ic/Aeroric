@@ -49,6 +49,8 @@ export interface SettingsPanelProps {
   onUiFontFamilyChange: (family: FontFamily) => void;
   monoFontFamily: FontFamily;
   onMonoFontFamilyChange: (family: FontFamily) => void;
+  dshWebSearchEnabled: boolean;
+  onDshWebSearchEnabledChange: (enabled: boolean) => void;
 }
 
 export interface SettingsPanelEntry extends AppSettingsNavItem {
@@ -80,6 +82,8 @@ function GeneralSettingsPanel(props: SettingsPanelProps) {
       onAttentionBadgeChange={props.onAttentionBadgeChange}
       sftpLocalDefaultPath={props.sftpLocalDefaultPath}
       onSftpLocalDefaultPathChange={props.onSftpLocalDefaultPathChange}
+      dshWebSearchEnabled={props.dshWebSearchEnabled}
+      onDshWebSearchEnabledChange={props.onDshWebSearchEnabledChange}
     />
   );
 }
@@ -145,6 +149,9 @@ const hooksPanel = lazyPanel(() =>
 );
 const skillsPanel = lazyPanel(() =>
   import("./SkillsPanel").then(({ SkillsPanel }) => ({ default: SkillsPanel })),
+);
+const dshPluginsPanel = lazyPanel(() =>
+  import("./DshPluginsPanel").then(({ DshPluginsPanel }) => ({ default: DshPluginsPanel })),
 );
 const allAgentConfigsPanel = lazyPanel(() =>
   import("./AllAgentConfigsPanel").then(({ AllAgentConfigsPanel }) => ({
@@ -227,6 +234,13 @@ export const SETTINGS_PANEL_REGISTRY: readonly SettingsPanelEntry[] = [
     ...wslPanel,
   },
   {
+    key: ALL_AGENT_CONFIGS_NAV_KEY,
+    labelKey: "appSettings.allAgentConfigs",
+    section: "agents",
+    icon: Archive,
+    ...allAgentConfigsPanel,
+  },
+  {
     key: "usage",
     labelKey: "usageStats.nav",
     section: "agents",
@@ -255,11 +269,11 @@ export const SETTINGS_PANEL_REGISTRY: readonly SettingsPanelEntry[] = [
     ...skillsPanel,
   },
   {
-    key: ALL_AGENT_CONFIGS_NAV_KEY,
-    labelKey: "appSettings.allAgentConfigs",
+    key: "dsh-plugins",
+    labelKey: "appSettings.dshPlugins",
     section: "agents",
-    icon: Archive,
-    ...allAgentConfigsPanel,
+    icon: PackageOpen,
+    ...dshPluginsPanel,
   },
   {
     key: "about",

@@ -554,7 +554,7 @@ export const remoteAccess = {
     fontSize: 10.5,
     fontWeight: 650,
     lineHeight: 1.3,
-    overflowWrap: "anywhere",
+    whiteSpace: "nowrap",
   },
   remoteBadgeSuccess: {
     borderColor: "color-mix(in srgb, var(--success) 28%, var(--border-dim))",

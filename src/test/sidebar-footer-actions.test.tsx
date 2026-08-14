@@ -63,6 +63,8 @@ function renderSettingsFixture() {
           onUiFontFamilyChange={vi.fn()}
           monoFontFamily="monospace"
           onMonoFontFamilyChange={vi.fn()}
+          dshWebSearchEnabled={true}
+          onDshWebSearchEnabledChange={vi.fn()}
         />
       </>
     </I18nProvider>,

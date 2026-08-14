@@ -3,7 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { Download, Sparkles, TriangleAlert } from "lucide-react";
 import type { Project, AgentType, PermissionMode, PromptSkill } from "../types";
 import { isRemoteProject } from "../types";
-import { agentDisplayLabel, isCodexLikeAgent } from "../agents";
+import { agentDisplayLabel, agentFamily, isCodexLikeAgent, isDshAgent } from "../agents";
 import { useAgentOptions } from "../hooks/useAgentOptions";
 import {
   clearAgentModelCache,
@@ -48,9 +48,10 @@ import {
 } from "../shortcuts";
 import claudeGif from "../assets/gif/claude.gif";
 import codexGif from "../assets/gif/codex.gif";
+import deepseekLogo from "../assets/deepseek.svg";
 import s from "../styles";
 import {
-  availableReasoningEfforts,
+  availableReasoningEffortsForFamily,
   findModelIgnoreCase,
   normalizeModelList,
   REASONING_EFFORTS,
@@ -308,6 +309,7 @@ export function NewTaskView({
       if (
         targetAgent !== "claude" &&
         !isCodexLikeAgent(targetAgent, agentOptions) &&
+        !isDshAgent(targetAgent, agentOptions) &&
         !option?.custom
       ) {
         modelRequestIdRef.current += 1;
@@ -423,7 +425,7 @@ export function NewTaskView({
       return;
     }
     setHasMdFile(null);
-    const filename = isCodexLikeAgent(agent, agentOptions) ? "AGENTS.md" : "CLAUDE.md";
+    const filename = agentFamily(agent, agentOptions) === "claude" ? "CLAUDE.md" : "AGENTS.md";
     invoke<string>("read_file_content", {
       path: `${project.path}/${filename}`,
       projectPath: project.path,
@@ -454,16 +456,23 @@ export function NewTaskView({
   }, []);
 
   const codexLikeAgent = isCodexLikeAgent(agent, agentOptions);
+  const dshAgent = isDshAgent(agent, agentOptions);
+  // dsh 读取 AGENTS.md/CLAUDE.md 两者(去重),UI 默认展示 AGENTS.md 入口。
+  const contextFileName = agentFamily(agent, agentOptions) === "claude" ? "CLAUDE.md" : "AGENTS.md";
   const customAgent = agentOptions.some((option) => option.value === agent && option.custom);
-  const agentSupportsModelSelection = agent === "claude" || codexLikeAgent || customAgent;
+  const agentSupportsModelSelection =
+    agent === "claude" || codexLikeAgent || dshAgent || customAgent;
   const modelSelectable = agentSupportsModelSelection;
-  const availableEfforts = availableReasoningEfforts(codexLikeAgent, selectedModel);
+  const availableEfforts = availableReasoningEffortsForFamily(
+    agentFamily(agent, agentOptions),
+    selectedModel,
+  );
   useEffect(() => {
     if (reasoningEffort && !availableEfforts.includes(reasoningEffort)) {
       setReasoningEffort(null);
     }
   }, [availableEfforts, reasoningEffort]);
-  const promptSkillAgent = codexLikeAgent ? "codex" : "claude";
+  const promptSkillAgent = dshAgent ? "dsh" : codexLikeAgent ? "codex" : "claude";
   const skillCommandPrefix = promptSkillAgent === "codex" ? "$" : "/";
   const agentReadiness = hookReadiness?.find((r) => r.agent === agent) ?? null;
   const hookBanner = (() => {
@@ -675,7 +684,7 @@ export function NewTaskView({
   }
 
   function handleInitializeMd() {
-    const filename = codexLikeAgent ? "AGENTS.md" : "CLAUDE.md";
+    const filename = contextFileName;
     const prompt = t("newTask.initializePrompt", { file: filename });
     // 初始化 md 文件不涉及代码改动，强制走本地，避免无谓的 worktree 开销。
     // Claude 的 full_access 会触发 `--dangerously-skip-permissions` 交互确认，
@@ -706,7 +715,7 @@ export function NewTaskView({
       return;
     }
     submittedRef.current = true;
-    const finalPrompt = buildPromptWithTaskModes(text, { planMode, goalMode });
+    const finalPrompt = buildPromptWithTaskModes(text, { planMode, goalMode }, agent);
     onSubmit({
       prompt: finalPrompt,
       agent,
@@ -807,7 +816,13 @@ export function NewTaskView({
     <div style={s.newTaskOuter}>
       {/* Header */}
       <div style={s.newTaskHeader}>
-        <img src={codexLikeAgent ? codexGif : claudeGif} alt="" style={s.newTaskClaudeGif} />
+        {dshAgent ? (
+          <div className="dsh-whale-hero" data-testid="dsh-whale-animation" aria-hidden="true">
+            <img src={deepseekLogo} alt="" />
+          </div>
+        ) : (
+          <img src={codexLikeAgent ? codexGif : claudeGif} alt="" style={s.newTaskClaudeGif} />
+        )}
         <span style={s.newTaskTitle}>{t("newTask.title")}</span>
       </div>
 
@@ -823,8 +838,8 @@ export function NewTaskView({
               <span style={{ fontWeight: 650, color: "var(--text-primary)" }}>
                 {
                   t("newTask.instructionsMissing", {
-                    file: codexLikeAgent ? "AGENTS.md" : "CLAUDE.md",
-                  }).split(codexLikeAgent ? "AGENTS.md" : "CLAUDE.md")[0]
+                    file: contextFileName,
+                  }).split(contextFileName)[0]
                 }
                 <code
                   style={{
@@ -835,16 +850,16 @@ export function NewTaskView({
                     borderRadius: 3,
                   }}
                 >
-                  {codexLikeAgent ? "AGENTS.md" : "CLAUDE.md"}
+                  {contextFileName}
                 </code>{" "}
                 {
                   t("newTask.instructionsMissing", {
-                    file: codexLikeAgent ? "AGENTS.md" : "CLAUDE.md",
-                  }).split(codexLikeAgent ? "AGENTS.md" : "CLAUDE.md")[1]
+                    file: contextFileName,
+                  }).split(contextFileName)[1]
                 }
               </span>{" "}
               {t("newTask.addInstructions", {
-                file: codexLikeAgent ? "AGENTS.md" : "CLAUDE.md",
+                file: contextFileName,
                 agent: agentDisplayLabel(agent, agentOptions),
               })}
             </div>
@@ -1021,7 +1036,11 @@ export function NewTaskView({
             hasContent={hasComposerContent}
             hasAttachments={hasAttachments}
             saveAsTodoDisabledReason={
-              launchMode === "worktree" ? t("newTask.worktreeMustSend") : undefined
+              launchMode === "worktree"
+                ? t("newTask.worktreeMustSend")
+                : launchMode === "webui"
+                  ? t("newTask.webuiMustStart")
+                  : undefined
             }
             sendShortcutKeys={getSendShortcutKeys(sendShortcut, APP_PLATFORM)}
             compact={compactControls}
@@ -1030,6 +1049,8 @@ export function NewTaskView({
                 <div style={s.launchModeBar}>
                   <LaunchModeSelector
                     projectPath={project.path}
+                    agent={agent}
+                    agentOptions={agentOptions}
                     launchMode={launchMode}
                     baseBranch={baseBranch}
                     compact={compactControls}

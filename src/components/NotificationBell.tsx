@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import type { CSSProperties } from "react";
+import { createPortal } from "react-dom";
 import {
   Bell,
   X,
@@ -286,9 +287,11 @@ function NotificationEntry({
 export function NotificationBell({
   buttonStyle,
   iconSize = 14,
+  renderAsContent = false,
 }: {
   buttonStyle?: CSSProperties;
   iconSize?: number;
+  renderAsContent?: boolean;
 } = {}) {
   const { t } = useI18n();
   const [open, setOpen] = useState(false);
@@ -306,6 +309,130 @@ export function NotificationBell({
     if (e.target === e.currentTarget) {
       setOpen(false);
     }
+  }
+
+  const notificationContent = (
+    <div
+      style={{
+        width: renderAsContent ? "100%" : 420,
+        maxWidth: renderAsContent ? "100%" : "calc(100vw - 32px)",
+        maxHeight: renderAsContent ? "100%" : "72vh",
+        background: "var(--bg-card)",
+        border: renderAsContent ? "none" : "1px solid var(--border-medium)",
+        borderRadius: renderAsContent ? 0 : 14,
+        boxShadow: renderAsContent ? "none" : "var(--shadow-popover)",
+        display: "flex",
+        flexDirection: "column",
+        overflow: "hidden",
+      }}
+    >
+      {!renderAsContent && (
+        <div
+          style={{
+            padding: "14px 16px",
+            borderBottom: "1px solid var(--border-dim)",
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+          }}
+        >
+          <span
+            style={{
+              fontSize: 14,
+              fontWeight: 700,
+              color: "var(--text-primary)",
+              flex: 1,
+            }}
+          >
+            {t("notification.title")}
+            {unreadCount > 0 && (
+              <span
+                style={{
+                  marginLeft: 6,
+                  fontSize: 11,
+                  fontWeight: 500,
+                  color: "var(--text-muted)",
+                }}
+              >
+                ({unreadCount} {t("notification.unread")})
+              </span>
+            )}
+          </span>
+          {unreadCount > 0 && (
+            <button
+              title={t("notification.markAllAsRead")}
+              onClick={markAllRead}
+              style={{
+                background: "none",
+                border: "none",
+                cursor: "pointer",
+                padding: 3,
+                borderRadius: 4,
+                display: "flex",
+                alignItems: "center",
+                color: "var(--text-muted)",
+              }}
+            >
+              <CheckCheck size={14} strokeWidth={2} />
+            </button>
+          )}
+          <button title={t("common.close")} onClick={() => setOpen(false)} style={s.modalCloseBtn}>
+            <X size={16} strokeWidth={2} />
+          </button>
+        </div>
+      )}
+
+      <div
+        style={{
+          flex: 1,
+          overflowY: "auto",
+        }}
+      >
+        {loading && !result ? (
+          <div
+            style={{
+              padding: 24,
+              textAlign: "center",
+              fontSize: 12,
+              color: "var(--text-hint)",
+            }}
+          >
+            {t("common.loading")}
+          </div>
+        ) : error && !result ? (
+          <div
+            style={{
+              padding: 24,
+              textAlign: "center",
+              fontSize: 12,
+              color: "var(--danger)",
+              lineHeight: 1.5,
+            }}
+          >
+            {error}
+          </div>
+        ) : !result || result.notifications.length === 0 ? (
+          <div
+            style={{
+              padding: 24,
+              textAlign: "center",
+              fontSize: 12,
+              color: "var(--text-hint)",
+            }}
+          >
+            {t("notification.noNotifications")}
+          </div>
+        ) : (
+          result.notifications.map((item) => (
+            <NotificationEntry key={item.id} item={item} onMarkRead={markRead} />
+          ))
+        )}
+      </div>
+    </div>
+  );
+
+  if (renderAsContent) {
+    return notificationContent;
   }
 
   return (
@@ -345,129 +472,19 @@ export function NotificationBell({
         )}
       </button>
 
-      {open && (
-        <div style={s.modalOverlay} onClick={handleOverlayClick}>
+      {open &&
+        createPortal(
           <div
-            style={{
-              width: 420,
-              maxWidth: "calc(100vw - 32px)",
-              maxHeight: "72vh",
-              background: "var(--bg-card)",
-              border: "1px solid var(--border-medium)",
-              borderRadius: 14,
-              boxShadow: "var(--shadow-popover)",
-              display: "flex",
-              flexDirection: "column",
-              overflow: "hidden",
-            }}
+            role="dialog"
+            aria-modal="true"
+            aria-label={t("notification.title")}
+            style={s.modalOverlay}
+            onClick={handleOverlayClick}
           >
-            <div
-              style={{
-                padding: "14px 16px",
-                borderBottom: "1px solid var(--border-dim)",
-                display: "flex",
-                alignItems: "center",
-                gap: 8,
-              }}
-            >
-              <span
-                style={{
-                  fontSize: 14,
-                  fontWeight: 700,
-                  color: "var(--text-primary)",
-                  flex: 1,
-                }}
-              >
-                {t("notification.title")}
-                {unreadCount > 0 && (
-                  <span
-                    style={{
-                      marginLeft: 6,
-                      fontSize: 11,
-                      fontWeight: 500,
-                      color: "var(--text-muted)",
-                    }}
-                  >
-                    ({unreadCount} {t("notification.unread")})
-                  </span>
-                )}
-              </span>
-              {unreadCount > 0 && (
-                <button
-                  title={t("notification.markAllAsRead")}
-                  onClick={markAllRead}
-                  style={{
-                    background: "none",
-                    border: "none",
-                    cursor: "pointer",
-                    padding: 3,
-                    borderRadius: 4,
-                    display: "flex",
-                    alignItems: "center",
-                    color: "var(--text-muted)",
-                  }}
-                >
-                  <CheckCheck size={14} strokeWidth={2} />
-                </button>
-              )}
-              <button
-                title={t("common.close")}
-                onClick={() => setOpen(false)}
-                style={s.modalCloseBtn}
-              >
-                <X size={16} strokeWidth={2} />
-              </button>
-            </div>
-
-            <div
-              style={{
-                flex: 1,
-                overflowY: "auto",
-              }}
-            >
-              {loading && !result ? (
-                <div
-                  style={{
-                    padding: 24,
-                    textAlign: "center",
-                    fontSize: 12,
-                    color: "var(--text-hint)",
-                  }}
-                >
-                  {t("common.loading")}
-                </div>
-              ) : error && !result ? (
-                <div
-                  style={{
-                    padding: 24,
-                    textAlign: "center",
-                    fontSize: 12,
-                    color: "var(--danger)",
-                    lineHeight: 1.5,
-                  }}
-                >
-                  {error}
-                </div>
-              ) : !result || result.notifications.length === 0 ? (
-                <div
-                  style={{
-                    padding: 24,
-                    textAlign: "center",
-                    fontSize: 12,
-                    color: "var(--text-hint)",
-                  }}
-                >
-                  {t("notification.noNotifications")}
-                </div>
-              ) : (
-                result.notifications.map((item) => (
-                  <NotificationEntry key={item.id} item={item} onMarkRead={markRead} />
-                ))
-              )}
-            </div>
-          </div>
-        </div>
-      )}
+            {notificationContent}
+          </div>,
+          document.body,
+        )}
     </>
   );
 }

@@ -44,11 +44,17 @@ fi
     )
 }
 
+/// 新建 Agent 未显式选择推理强度时写入的默认值。
+///
+/// Aeroric 的使用场景以复杂工程任务为主，默认 `high` 经常需要用户手动再调高一档；
+/// 统一默认到 `xhigh`，需要更低强度的用户仍可在 Agent 配置里显式选择。
+pub(super) const DEFAULT_MODEL_REASONING_EFFORT: &str = "xhigh";
+
 pub(super) fn codex_config_for_draft(draft: &AgentSetupDraft) -> String {
     let provider = sanitize_custom_agent_id(&draft.id);
     format!(
         r#"model_provider = {provider}
-model_reasoning_effort = "high"
+model_reasoning_effort = "{DEFAULT_MODEL_REASONING_EFFORT}"
 model_context_window = 258400
 model_auto_compact_token_limit = 219640
 
@@ -74,11 +80,19 @@ pub(super) fn fallback_codex_model(model: &str, priority: usize) -> serde_json::
         "slug": model,
         "display_name": model,
         "description": "Custom model configured in Aeroric.",
-        "default_reasoning_level": "high",
-        "supported_reasoning_levels": [{
-            "effort": "high",
-            "description": "Greater reasoning depth for complex problems"
-        }],
+        // 目录必须声明 xhigh，否则默认写入的 model_reasoning_effort = "xhigh"
+        // 会被 Codex 当成不支持的取值。
+        "default_reasoning_level": DEFAULT_MODEL_REASONING_EFFORT,
+        "supported_reasoning_levels": [
+            {
+                "effort": "high",
+                "description": "Greater reasoning depth for complex problems"
+            },
+            {
+                "effort": "xhigh",
+                "description": "Maximum reasoning depth for the hardest problems"
+            }
+        ],
         "shell_type": "shell_command",
         "visibility": "list",
         "supported_in_api": true,
@@ -754,6 +768,8 @@ pub(super) fn build_agent_script(draft: &AgentSetupDraft) -> String {
     match draft.kind {
         AgentSetupKind::Codex => build_codex_agent_script(draft),
         AgentSetupKind::ClaudeCode => build_claude_code_agent_script(draft),
+        // dsh-like 档案不走 wrapper 脚本(setup_agent_profile 单独分支处理)。
+        AgentSetupKind::Dsh => String::new(),
     }
 }
 
@@ -765,7 +781,9 @@ pub(super) fn validate_agent_setup_draft(draft: &AgentSetupDraft) -> Result<Stri
     if draft.label.trim().is_empty() {
         return Err("Agent name is required".to_string());
     }
-    if normalize_base_url(&draft.base_url).is_empty() {
+    let is_dsh = matches!(draft.kind, AgentSetupKind::Dsh);
+    // dsh 官方 provider 无需 base_url;提供 base_url 即自定义 OpenAI 兼容网关。
+    if !is_dsh && normalize_base_url(&draft.base_url).is_empty() {
         return Err("Base URL is required".to_string());
     }
     if draft.api_key.trim().is_empty() {
@@ -775,7 +793,7 @@ pub(super) fn validate_agent_setup_draft(draft: &AgentSetupDraft) -> Result<Stri
         return Err("API key and base URL cannot contain NUL bytes".to_string());
     }
     let models = normalize_setup_models(draft);
-    if models.is_empty() {
+    if models.is_empty() && !(is_dsh && normalize_base_url(&draft.base_url).is_empty()) {
         return Err("At least one model is required".to_string());
     }
     if models.iter().any(|model| !validate_model_name(model)) {
@@ -788,6 +806,7 @@ pub(super) fn setup_agent_kind_suffix(kind: &AgentSetupKind) -> &'static str {
     match kind {
         AgentSetupKind::Codex => "codex",
         AgentSetupKind::ClaudeCode => "claude",
+        AgentSetupKind::Dsh => "dsh",
     }
 }
 
@@ -804,6 +823,7 @@ pub(super) fn allocate_setup_agent_id(
     let base = requested
         .strip_suffix("_codex")
         .or_else(|| requested.strip_suffix("_claude"))
+        .or_else(|| requested.strip_suffix("_dsh"))
         .unwrap_or(&requested);
     let base = if base.is_empty() { "agent" } else { base };
     let preferred = sanitize_custom_agent_id(&format!("{base}_{suffix}"));
@@ -1448,6 +1468,7 @@ pub(super) fn refresh_stale_codex_agent_scripts(settings: &mut AppSettings) {
             models: profile.models.clone(),
             enable_1m_context: profile.enable_1m_context,
             enable_chat_completions_proxy: profile.enable_chat_completions_proxy,
+            dsh_api_protocol: String::new(),
             proxy_enabled: false,
         };
         if validate_agent_setup_draft(&draft).is_err() {
@@ -1499,6 +1520,7 @@ pub(super) fn refresh_stale_claude_agent_scripts(settings: &mut AppSettings) {
             models: profile.models.clone(),
             enable_1m_context: profile.enable_1m_context,
             enable_chat_completions_proxy: profile.enable_chat_completions_proxy,
+            dsh_api_protocol: String::new(),
             proxy_enabled: false,
         };
         if validate_agent_setup_draft(&draft).is_err() {
@@ -1634,6 +1656,7 @@ api_key = "sk-codex"
             models: vec!["gpt-5.6".to_string(), "gpt-5.6-sol".to_string()],
             enable_1m_context: false,
             enable_chat_completions_proxy: false,
+            dsh_api_protocol: String::new(),
             proxy_enabled: false,
         };
 
@@ -1656,6 +1679,54 @@ api_key = "sk-codex"
         assert!(!script.contains("sk-test"));
     }
 
+    /// 没有显式设置过推理强度的 Agent 一律默认 xhigh；模型目录必须同时声明该等级，
+    /// 否则 Codex 会拒绝这个取值。
+    #[test]
+    fn new_agents_default_to_xhigh_reasoning_effort() {
+        let draft = AgentSetupDraft {
+            id: "defaults".to_string(),
+            label: "Defaults".to_string(),
+            kind: AgentSetupKind::Codex,
+            base_url: "https://example.com/v1/".to_string(),
+            api_key: "sk-test".to_string(),
+            model: "gpt-5.6-sol".to_string(),
+            models: vec!["gpt-5.6-sol".to_string()],
+            enable_1m_context: false,
+            enable_chat_completions_proxy: false,
+            dsh_api_protocol: String::new(),
+            proxy_enabled: false,
+        };
+
+        let config = codex_config_for_draft(&draft);
+        assert!(
+            config.contains(r#"model_reasoning_effort = "xhigh""#),
+            "unexpected config: {config}"
+        );
+
+        // 目录既可能来自 `codex debug models --bundled`，也可能来自内置兜底；
+        // 两条路径都必须声明 xhigh，否则 Codex 会拒绝上面写入的取值。
+        let script = build_agent_script(&draft);
+        assert!(
+            script.contains("\"effort\": \"xhigh\""),
+            "catalog missing xhigh"
+        );
+        let fallback = fallback_codex_model("custom-model", 0);
+        assert_eq!(
+            fallback
+                .get("default_reasoning_level")
+                .and_then(|v| v.as_str()),
+            Some("xhigh")
+        );
+        assert!(fallback
+            .get("supported_reasoning_levels")
+            .and_then(|levels| levels.as_array())
+            .is_some_and(|levels| levels
+                .iter()
+                .any(
+                    |level| level.get("effort").and_then(|effort| effort.as_str()) == Some("xhigh")
+                )));
+    }
+
     #[cfg(not(windows))]
     #[test]
     fn builds_codex_agent_script_with_chat_completions_bridge() {
@@ -1669,6 +1740,7 @@ api_key = "sk-codex"
             models: vec!["gpt-5.6".to_string(), "gpt-5.6-sol".to_string()],
             enable_1m_context: false,
             enable_chat_completions_proxy: true,
+            dsh_api_protocol: String::new(),
             proxy_enabled: false,
         };
 
@@ -1697,6 +1769,7 @@ api_key = "sk-codex"
             models: vec!["gpt-5.6".to_string()],
             enable_1m_context: false,
             enable_chat_completions_proxy: true,
+            dsh_api_protocol: String::new(),
             proxy_enabled: false,
         };
         let codex_script = build_codex_agent_powershell_script(&codex);
@@ -1720,11 +1793,12 @@ api_key = "sk-codex"
             models: vec!["claude-opus-4-8".to_string()],
             enable_1m_context: true,
             enable_chat_completions_proxy: false,
+            dsh_api_protocol: String::new(),
             proxy_enabled: false,
         };
         let claude_script = build_claude_code_agent_powershell_script(&claude);
         assert!(claude_script.contains("$env:CLAUDE_CONFIG_DIR"));
-        assert!(claude_script.contains("# AERORIC_CLAUDE_WRAPPER_VERSION=5"));
+        assert!(claude_script.contains(CLAUDE_AGENT_SCRIPT_MARKER));
         assert!(claude_script.contains("agent-credentials\\agentrouter"));
         assert!(!claude_script.contains("sk''test"));
         assert!(claude_script.contains("Get-Command 'claude' -CommandType Application"));
@@ -1803,6 +1877,7 @@ api_key = "sk-codex"
             models: vec!["claude-opus-4-8".to_string(), "claude-opus-4-6".to_string()],
             enable_1m_context: true,
             enable_chat_completions_proxy: false,
+            dsh_api_protocol: String::new(),
             proxy_enabled: false,
         };
 
@@ -1830,6 +1905,7 @@ api_key = "sk-codex"
             models: vec!["claude-opus-4-6".to_string()],
             enable_1m_context: false,
             enable_chat_completions_proxy: false,
+            dsh_api_protocol: String::new(),
             proxy_enabled: false,
         };
 
@@ -1852,6 +1928,7 @@ api_key = "sk-codex"
             models: vec!["gpt-5.6".to_string(), "gpt-5.6-sol".to_string()],
             enable_1m_context: false,
             enable_chat_completions_proxy: false,
+            dsh_api_protocol: String::new(),
             proxy_enabled: false,
         };
 
@@ -1881,6 +1958,7 @@ api_key = "sk-codex"
             label: "Custom".to_string(),
             path: codex_path.to_string_lossy().into_owned(),
             codex_like: true,
+            family: String::new(),
             config_lang: "shellscript".to_string(),
             base_url: String::new(),
             api_key: String::new(),
@@ -1920,6 +1998,7 @@ fi
             label: "Custom".to_string(),
             path: script_path.to_string_lossy().into_owned(),
             codex_like: false,
+            family: String::new(),
             config_lang: "shellscript".to_string(),
             base_url: String::new(),
             api_key: String::new(),
@@ -1954,6 +2033,7 @@ fi
             label: "Proxy".to_string(),
             path: script_path.to_string_lossy().into_owned(),
             codex_like: true,
+            family: String::new(),
             config_lang: "shellscript".to_string(),
             base_url: String::new(),
             api_key: String::new(),
@@ -1999,6 +2079,7 @@ printf 'model_catalog_json = "model-catalog.json"\n'
                 label: "liwan".to_string(),
                 path: script_path.to_string_lossy().into_owned(),
                 codex_like: true,
+                family: String::new(),
                 config_lang: "shellscript".to_string(),
                 base_url: "https://metapi.example/v1".to_string(),
                 api_key: "sk-test".to_string(),
@@ -2038,6 +2119,7 @@ printf 'model_catalog_json = "model-catalog.json"\n'
             models: vec!["gpt-5.6-sol".to_string()],
             enable_1m_context: false,
             enable_chat_completions_proxy: true,
+            dsh_api_protocol: String::new(),
             proxy_enabled: false,
         });
         fs::write(&script_path, &bridged).unwrap();
@@ -2047,6 +2129,7 @@ printf 'model_catalog_json = "model-catalog.json"\n'
                 label: "muyuan".to_string(),
                 path: script_path.to_string_lossy().into_owned(),
                 codex_like: true,
+                family: String::new(),
                 config_lang: "shellscript".to_string(),
                 base_url: "https://muyuan.example/v1".to_string(),
                 api_key: "sk-test".to_string(),
@@ -2086,6 +2169,7 @@ printf 'model_catalog_json = "model-catalog.json"\n'
                 label: "Custom".to_string(),
                 path: script_path.to_string_lossy().into_owned(),
                 codex_like: true,
+                family: String::new(),
                 config_lang: "shellscript".to_string(),
                 base_url: "https://example.com/v1".to_string(),
                 api_key: "sk-test".to_string(),
@@ -2113,7 +2197,7 @@ printf 'model_catalog_json = "model-catalog.json"\n'
         let script_path = dir.join("agentrouter.sh");
         fs::write(
             &script_path,
-            "#!/bin/bash\nset -euo pipefail\nAGENT_HOME=\"$HOME/.aeroric/agent-homes/agentrouter\"\nexport CLAUDE_CONFIG_DIR=\"$AGENT_HOME\"\nexport CLAUDE_CODE_SESSION_ENV_DIR=\"$AGENT_HOME/session-env\"\nexport ANTHROPIC_AUTH_TOKEN='sk-test'\nexport ANTHROPIC_API_KEY=\"$ANTHROPIC_AUTH_TOKEN\"\nexec claude \"$@\"\n",
+            "#!/bin/bash\n# AERORIC_CLAUDE_WRAPPER_VERSION=5\nset -euo pipefail\nAGENT_HOME=\"$HOME/.aeroric/agent-homes/agentrouter\"\nexport CLAUDE_CONFIG_DIR=\"$AGENT_HOME\"\nexport CLAUDE_CODE_SESSION_ENV_DIR=\"$AGENT_HOME/session-env\"\nexport ANTHROPIC_AUTH_TOKEN='sk-test'\nexport ANTHROPIC_API_KEY=\"$ANTHROPIC_AUTH_TOKEN\"\nexec claude \"$@\"\n",
         )
         .unwrap();
         let mut settings = AppSettings {
@@ -2122,6 +2206,7 @@ printf 'model_catalog_json = "model-catalog.json"\n'
                 label: "AgentRouter".to_string(),
                 path: script_path.to_string_lossy().into_owned(),
                 codex_like: false,
+                family: String::new(),
                 config_lang: "shellscript".to_string(),
                 base_url: "https://agentrouter.org".to_string(),
                 api_key: "sk-test".to_string(),
@@ -2138,8 +2223,51 @@ printf 'model_catalog_json = "model-catalog.json"\n'
 
         let script = fs::read_to_string(&script_path).unwrap();
         assert!(script.contains(CLAUDE_AGENT_SCRIPT_MARKER));
+        assert!(!script.contains("# AERORIC_CLAUDE_WRAPPER_VERSION=5"));
         assert!(script.contains("selected_model=\"${selected_model}[1m]\""));
         assert!(!script.contains("export ANTHROPIC_API_KEY"));
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn refreshes_legacy_powershell_claude_wrappers_after_resolution_fix() {
+        let dir = std::env::temp_dir().join(format!(
+            "aeroric-claude-powershell-refresh-{}",
+            uuid::Uuid::new_v4()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let script_path = dir.join("deepseek_claude.ps1");
+        fs::write(
+            &script_path,
+            "# AERORIC_CLAUDE_WRAPPER_VERSION=5\n& 'claude' @args\n",
+        )
+        .unwrap();
+        let mut settings = AppSettings {
+            custom_agents: vec![CustomAgentProfile {
+                id: "deepseek_claude".to_string(),
+                label: "DeepSeek Claude".to_string(),
+                path: script_path.to_string_lossy().into_owned(),
+                codex_like: false,
+                family: String::new(),
+                config_lang: "shellscript".to_string(),
+                base_url: "https://example.com".to_string(),
+                api_key: "sk-test".to_string(),
+                models: vec!["claude-sonnet".to_string()],
+                enable_1m_context: false,
+                enable_chat_completions_proxy: false,
+                username: String::new(),
+                password: String::new(),
+            }],
+            ..AppSettings::default()
+        };
+
+        refresh_stale_claude_agent_scripts(&mut settings);
+
+        let script = fs::read_to_string(&script_path).unwrap();
+        assert!(script.contains(CLAUDE_AGENT_SCRIPT_MARKER));
+        assert!(script.contains("$claudeExecutable"));
+        assert!(!script.contains("& 'claude' @args"));
         let _ = fs::remove_dir_all(dir);
     }
 
@@ -2157,6 +2285,7 @@ printf 'model_catalog_json = "model-catalog.json"\n'
                 label: "Custom".to_string(),
                 path: script_path.to_string_lossy().into_owned(),
                 codex_like: false,
+                family: String::new(),
                 config_lang: "shellscript".to_string(),
                 base_url: "https://example.com".to_string(),
                 api_key: "sk-test".to_string(),

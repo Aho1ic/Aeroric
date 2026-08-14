@@ -615,31 +615,26 @@ fn sudo_password_output_filter(
     })
 }
 
-fn spawn_remote_task_exit_monitor(app: AppHandle, task_id: String) {
+fn spawn_remote_task_exit_monitor(
+    app: AppHandle,
+    task_id: String,
+    child_handle: Arc<Mutex<Box<dyn portable_pty::Child + Send + Sync>>>,
+) {
     tokio::task::spawn_blocking(move || loop {
-        let exit_status = {
-            let tm = app.state::<crate::TaskManager>();
-            let child_arc = tm.child_handles.lock().get(&task_id).cloned();
-            if let Some(arc) = child_arc {
-                arc.lock().try_wait().ok().flatten()
-            } else {
-                return;
-            }
-        };
+        let exit_status = child_handle.lock().try_wait().ok().flatten();
 
         if let Some(status) = exit_status {
+            let tm = app.state::<crate::TaskManager>();
+            if !tm.remove_pty_handles_if_current(&task_id, &child_handle) {
+                return;
+            }
             let ok = status.success();
             let (was_cancelled, was_manually_completed) = {
-                let tm = app.state::<crate::TaskManager>();
                 let mut cancelled_tasks = tm.cancelled_tasks.lock();
                 let was_cancelled = cancelled_tasks.remove(&task_id);
                 let was_manually_completed = tm.manually_completed_tasks.lock().remove(&task_id);
                 (was_cancelled, was_manually_completed)
             };
-            {
-                let tm = app.state::<crate::TaskManager>();
-                tm.remove_pty_handles(&task_id);
-            }
             if was_cancelled || was_manually_completed {
                 return;
             }
@@ -684,7 +679,8 @@ fn spawn_remote_task_pty(
     drop(pair.slave);
     let reader = pair.master.try_clone_reader().map_err(|e| e.to_string())?;
     let writer: Box<dyn Write + Send> = pair.master.take_writer().map_err(|e| e.to_string())?;
-    crate::pty::register_pty_handles(task_manager, task_id, pair.master, writer, child)?;
+    let child_handle =
+        crate::pty::register_pty_handles(task_manager, task_id, pair.master, writer, child)?;
 
     let _ = app.emit(
         "task-status",
@@ -734,7 +730,7 @@ fn spawn_remote_task_pty(
             crate::pty::cancel_initial_input_signal(task_manager, task_id);
         }
     }
-    spawn_remote_task_exit_monitor(app, task_id.to_string());
+    spawn_remote_task_exit_monitor(app, task_id.to_string(), child_handle);
     Ok(())
 }
 
