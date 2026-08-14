@@ -646,13 +646,29 @@ export function AddAgentPanel({
               />
             </div>
             <Button
+              className="add-agent-detect-button"
               variant="outline"
               size="sm"
               onClick={onDetect}
               disabled={detecting || !canDetect}
+              aria-busy={detecting || undefined}
             >
               <RefreshCw size={12} className={detecting ? "spin" : undefined} />
-              {detecting ? t("appSettings.detectingModels") : t("appSettings.detectModels")}
+              <span className="add-agent-detect-button__label">
+                <span
+                  className="add-agent-detect-button__measure"
+                  aria-hidden="true"
+                  style={{ visibility: "hidden" }}
+                >
+                  {t("appSettings.detectModels")}
+                </span>
+                <span
+                  key={detecting ? "detecting" : "idle"}
+                  className="add-agent-detect-button__current"
+                >
+                  {detecting ? t("appSettings.detectingModels") : t("appSettings.detectModels")}
+                </span>
+              </span>
             </Button>
             <Button variant="outline" size="sm" onClick={onAddManual} disabled={!modelValue.trim()}>
               <Plus size={12} />

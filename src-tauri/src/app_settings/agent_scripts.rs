@@ -1798,7 +1798,7 @@ api_key = "sk-codex"
         };
         let claude_script = build_claude_code_agent_powershell_script(&claude);
         assert!(claude_script.contains("$env:CLAUDE_CONFIG_DIR"));
-        assert!(claude_script.contains("# AERORIC_CLAUDE_WRAPPER_VERSION=5"));
+        assert!(claude_script.contains(CLAUDE_AGENT_SCRIPT_MARKER));
         assert!(claude_script.contains("agent-credentials\\agentrouter"));
         assert!(!claude_script.contains("sk''test"));
         assert!(claude_script.contains("Get-Command 'claude' -CommandType Application"));
@@ -2197,7 +2197,7 @@ printf 'model_catalog_json = "model-catalog.json"\n'
         let script_path = dir.join("agentrouter.sh");
         fs::write(
             &script_path,
-            "#!/bin/bash\nset -euo pipefail\nAGENT_HOME=\"$HOME/.aeroric/agent-homes/agentrouter\"\nexport CLAUDE_CONFIG_DIR=\"$AGENT_HOME\"\nexport CLAUDE_CODE_SESSION_ENV_DIR=\"$AGENT_HOME/session-env\"\nexport ANTHROPIC_AUTH_TOKEN='sk-test'\nexport ANTHROPIC_API_KEY=\"$ANTHROPIC_AUTH_TOKEN\"\nexec claude \"$@\"\n",
+            "#!/bin/bash\n# AERORIC_CLAUDE_WRAPPER_VERSION=5\nset -euo pipefail\nAGENT_HOME=\"$HOME/.aeroric/agent-homes/agentrouter\"\nexport CLAUDE_CONFIG_DIR=\"$AGENT_HOME\"\nexport CLAUDE_CODE_SESSION_ENV_DIR=\"$AGENT_HOME/session-env\"\nexport ANTHROPIC_AUTH_TOKEN='sk-test'\nexport ANTHROPIC_API_KEY=\"$ANTHROPIC_AUTH_TOKEN\"\nexec claude \"$@\"\n",
         )
         .unwrap();
         let mut settings = AppSettings {
@@ -2223,8 +2223,51 @@ printf 'model_catalog_json = "model-catalog.json"\n'
 
         let script = fs::read_to_string(&script_path).unwrap();
         assert!(script.contains(CLAUDE_AGENT_SCRIPT_MARKER));
+        assert!(!script.contains("# AERORIC_CLAUDE_WRAPPER_VERSION=5"));
         assert!(script.contains("selected_model=\"${selected_model}[1m]\""));
         assert!(!script.contains("export ANTHROPIC_API_KEY"));
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn refreshes_legacy_powershell_claude_wrappers_after_resolution_fix() {
+        let dir = std::env::temp_dir().join(format!(
+            "aeroric-claude-powershell-refresh-{}",
+            uuid::Uuid::new_v4()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let script_path = dir.join("deepseek_claude.ps1");
+        fs::write(
+            &script_path,
+            "# AERORIC_CLAUDE_WRAPPER_VERSION=5\n& 'claude' @args\n",
+        )
+        .unwrap();
+        let mut settings = AppSettings {
+            custom_agents: vec![CustomAgentProfile {
+                id: "deepseek_claude".to_string(),
+                label: "DeepSeek Claude".to_string(),
+                path: script_path.to_string_lossy().into_owned(),
+                codex_like: false,
+                family: String::new(),
+                config_lang: "shellscript".to_string(),
+                base_url: "https://example.com".to_string(),
+                api_key: "sk-test".to_string(),
+                models: vec!["claude-sonnet".to_string()],
+                enable_1m_context: false,
+                enable_chat_completions_proxy: false,
+                username: String::new(),
+                password: String::new(),
+            }],
+            ..AppSettings::default()
+        };
+
+        refresh_stale_claude_agent_scripts(&mut settings);
+
+        let script = fs::read_to_string(&script_path).unwrap();
+        assert!(script.contains(CLAUDE_AGENT_SCRIPT_MARKER));
+        assert!(script.contains("$claudeExecutable"));
+        assert!(!script.contains("& 'claude' @args"));
         let _ = fs::remove_dir_all(dir);
     }
 

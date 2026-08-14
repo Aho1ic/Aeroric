@@ -29,8 +29,8 @@ class FakeWebSocket implements WebSocketLike {
   serverSession: E2eeSession | null = null;
   onopen: (() => void) | null = null;
   onmessage: ((event: { data: unknown }) => void) | null = null;
-  onclose: (() => void) | null = null;
-  onerror: (() => void) | null = null;
+  onclose: ((event?: { code?: number; reason?: string }) => void) | null = null;
+  onerror: ((event?: { message?: string }) => void) | null = null;
 
   private consumed = 0;
   private ctrlFrames: Array<{
@@ -751,5 +751,12 @@ describe("pairWithInvite", () => {
     const assertion = expect(promise).rejects.toThrow(/配对超时/);
     await vi.advanceTimersByTimeAsync(12_000);
     await assertion;
+  });
+
+  it("reports a pre-open disconnect as a network or firewall failure", async () => {
+    const keys = testGenerateServerKeys();
+    const { promise, socket } = pairHarness(keys);
+    socket().onclose?.({ code: 1006 });
+    await expect(promise).rejects.toThrow(/防火墙和远程服务端口.*code=1006/);
   });
 });

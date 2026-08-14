@@ -191,12 +191,34 @@ export function LaunchModeSelector({
       >
         <Popover.Trigger asChild>
           <button
-            style={controlButtonStyle}
+            data-launch-base-branch-trigger
+            style={{
+              ...controlButtonStyle,
+              ...(compact
+                ? null
+                : {
+                    flex: "0 1 132px",
+                    minWidth: 0,
+                    maxWidth: 132,
+                    overflow: "hidden",
+                  }),
+            }}
             aria-label={t("newTask.baseBranch")}
             title={baseBranch || t("newTask.selectBaseBranch")}
           >
             <GitBranch size={13} strokeWidth={2} color="var(--success)" />
-            {!compact && <span>{baseBranch || t("newTask.selectBaseBranch")}</span>}
+            {!compact && (
+              <span
+                style={{
+                  minWidth: 0,
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                {baseBranch || t("newTask.selectBaseBranch")}
+              </span>
+            )}
             {!compact && <ChevronDown size={12} strokeWidth={2.5} style={{ opacity: 0.58 }} />}
           </button>
         </Popover.Trigger>

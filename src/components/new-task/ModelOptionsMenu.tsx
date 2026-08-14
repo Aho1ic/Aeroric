@@ -421,7 +421,10 @@ export function ModelOptionsMenu({
           data-model-options-menu-trigger
           style={{
             ...(compact ? s.toolbarBtnIconOnly : s.toolbarBtn),
-            maxWidth: compact ? undefined : "min(240px, 32vw)",
+            flex: compact ? "0 0 auto" : "0 1 280px",
+            minWidth: compact ? undefined : 0,
+            maxWidth: compact ? undefined : 280,
+            overflow: "hidden",
             minHeight: 24,
             height: 24,
             padding: compact ? 0 : "2px 7px",

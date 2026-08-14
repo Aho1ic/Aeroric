@@ -84,6 +84,18 @@ export function themeFor(variant: ThemeVariant) {
   return LIGHT_THEME;
 }
 
+const TERMINAL_INPUT_BACKGROUND_RGB: Record<ThemeVariant, readonly [number, number, number]> = {
+  light: [241, 243, 245],
+  dark: [32, 33, 39],
+  eyecare: [238, 232, 213],
+};
+
+export function terminalInputBackgroundForTheme(variant: ThemeVariant): string {
+  if (variant === "dark") return "#202127";
+  if (variant === "eyecare") return "#eee8d5";
+  return "#f1f3f5";
+}
+
 // ── Watermark flow control ───────────────────────────────────────────────────
 
 const HIGH_WATER = 96 * 1024; // 96 KB：超过时停止写入
@@ -137,7 +149,24 @@ function isSgrBody(body: string): boolean {
   return true;
 }
 
-function remapLightSgrBody(body: string): string | null {
+function pushTerminalInputBackground(
+  next: string[],
+  variant: ThemeVariant,
+  explicitInputBackground: boolean,
+): void {
+  if (!explicitInputBackground) {
+    next.push("49");
+    return;
+  }
+  const [red, green, blue] = TERMINAL_INPUT_BACKGROUND_RGB[variant];
+  next.push("48", "2", String(red), String(green), String(blue));
+}
+
+function remapAnsiSgrBody(
+  body: string,
+  variant: ThemeVariant,
+  explicitInputBackground: boolean,
+): string | null {
   const parts = body ? body.split(";") : [];
   const next: string[] = [];
   let changed = false;
@@ -145,16 +174,16 @@ function remapLightSgrBody(body: string): string | null {
   for (let index = 0; index < parts.length; index += 1) {
     const code = parts[index];
     if (code === "40" || code === "100") {
-      next.push("49");
+      pushTerminalInputBackground(next, variant, explicitInputBackground);
       changed = true;
       continue;
     }
-    if (code === "41" || code === "101") {
+    if (variant !== "dark" && (code === "41" || code === "101")) {
       next.push("48", "2", "255", "235", "233");
       changed = true;
       continue;
     }
-    if (code === "42" || code === "102") {
+    if (variant !== "dark" && (code === "42" || code === "102")) {
       next.push("48", "2", "218", "251", "225");
       changed = true;
       continue;
@@ -199,12 +228,12 @@ function remapLightSgrBody(body: string): string | null {
       const max = Math.max(red, green, blue);
       const min = Math.min(red, green, blue);
       if (max - min <= 18) {
-        next.push("49");
+        pushTerminalInputBackground(next, variant, explicitInputBackground);
         index += 4;
         changed = true;
         continue;
       }
-      if (max <= 110) {
+      if (variant !== "dark" && max <= 110) {
         const color =
           red > green * 1.18 && red > blue * 1.18
             ? ["255", "235", "233"]
@@ -224,11 +253,14 @@ function remapLightSgrBody(body: string): string | null {
 
     if (code === "48" && parts[index + 1] === "5") {
       const color = Number(parts[index + 2]);
-      const replacement = [1, 9, 52, 88, 124].includes(color)
-        ? ["255", "235", "233"]
-        : [2, 10, 22, 28, 34].includes(color)
-          ? ["218", "251", "225"]
-          : null;
+      const replacement =
+        variant === "dark"
+          ? null
+          : [1, 9, 52, 88, 124].includes(color)
+            ? ["255", "235", "233"]
+            : [2, 10, 22, 28, 34].includes(color)
+              ? ["218", "251", "225"]
+              : null;
       if (replacement) {
         next.push("48", "2", ...replacement);
         index += 2;
@@ -236,7 +268,7 @@ function remapLightSgrBody(body: string): string | null {
         continue;
       }
       if ([0, 7, 8, 15, 16].includes(color) || color >= 231) {
-        next.push("49");
+        pushTerminalInputBackground(next, variant, explicitInputBackground);
         index += 2;
         changed = true;
         continue;
@@ -249,8 +281,8 @@ function remapLightSgrBody(body: string): string | null {
   return changed ? next.join(";") : null;
 }
 
-export function remapLightAnsiForeground(data: string, variant: ThemeVariant): string {
-  if (!data || variant === "dark" || !data.includes("\x1b[")) return data;
+function remapAnsi(data: string, variant: ThemeVariant, explicitInputBackground: boolean): string {
+  if (!data || !data.includes("\x1b[")) return data;
   let result = "";
   let last = 0;
 
@@ -263,7 +295,7 @@ export function remapLightAnsiForeground(data: string, variant: ThemeVariant): s
     const body = data.slice(index + 2, end);
     if (!isSgrBody(body)) continue;
 
-    const remapped = remapLightSgrBody(body);
+    const remapped = remapAnsiSgrBody(body, variant, explicitInputBackground);
     if (remapped === null) continue;
 
     result += data.slice(last, index);
@@ -273,6 +305,15 @@ export function remapLightAnsiForeground(data: string, variant: ThemeVariant): s
   }
 
   return last === 0 ? data : result + data.slice(last);
+}
+
+export function remapAnsiForTheme(data: string, variant: ThemeVariant): string {
+  return remapAnsi(data, variant, true);
+}
+
+export function remapLightAnsiForeground(data: string, variant: ThemeVariant): string {
+  if (variant === "dark") return data;
+  return remapAnsi(data, variant, false);
 }
 
 export interface SmartWriter {
@@ -292,6 +333,7 @@ export interface SmartWriter {
 
 interface SmartWriterOptions {
   resumeOnAnyOutput?: boolean;
+  themeAwareAnsiRemap?: boolean;
 }
 
 interface TerminalSelectionGuardOptions {
@@ -433,14 +475,17 @@ export function attachMacWebKitTerminalGuard({
   };
 }
 
-// Codex 之类的 agent TUI 会把光标停在自己的输入框行。给这一行铺一层浅灰半透明
-// 覆盖层，让用户一眼看到"输入框位置"。覆盖层挂在 .xterm-screen 内，跟随 xterm 的
-// 光标 Y 移动；透明度很低，即便叠在文本之上也不影响可读性（类似编辑器的当前行高亮）。
+// Agent TUI 会把光标停在自己的输入框行。给这一行铺一层主题自适应灰色覆盖层，
+// 让用户一眼看到"输入框位置"。覆盖层挂在 .xterm-screen 内并跟随 xterm 的光标 Y。
 export function attachCursorLineHighlight(term: Terminal, container: HTMLElement): () => void {
   let overlay: HTMLDivElement | null = null;
   let rafId: ReturnType<typeof globalThis.setTimeout> | number | null = null;
 
   const getScreen = () => container.querySelector<HTMLElement>(".xterm-screen");
+  const getThemeVariant = (): ThemeVariant => {
+    const theme = container.dataset.terminalTheme;
+    return theme === "dark" || theme === "eyecare" ? theme : "light";
+  };
 
   const ensureOverlay = (): HTMLDivElement | null => {
     if (overlay && overlay.isConnected) return overlay;
@@ -448,17 +493,23 @@ export function attachCursorLineHighlight(term: Terminal, container: HTMLElement
     if (!screen) return null;
     overlay = document.createElement("div");
     overlay.className = "aeroric-cursor-line";
-    // 作为 screen 的第一个子节点插入。CSS 里给了 z-index:0，定位后会绘制在
-    // 静态定位的 .xterm-rows 文本行之上，但透明度仅 8%，不影响文字可读性；
-    // 仍低于 z-index:1 的 selection 层，框选高亮照常盖过它。
+    // 作为 screen 的第一个子节点插入；CSS 的 z-index:2 会把它提升到渲染 canvas
+    // 之上，同时保持在 z-index:5 的 IME helpers 之下。
     screen.insertBefore(overlay, screen.firstChild);
     return overlay;
+  };
+
+  const syncTheme = (el: HTMLDivElement) => {
+    const theme = getThemeVariant();
+    el.dataset.terminalTheme = theme;
+    el.style.background = terminalInputBackgroundForTheme(theme);
   };
 
   const render = () => {
     const el = ensureOverlay();
     const screen = getScreen();
     if (!el || !screen) return;
+    syncTheme(el);
     const rows = Math.max(1, term.rows);
     const rowHeight = screen.clientHeight / rows;
     if (!(rowHeight > 0)) {
@@ -500,6 +551,16 @@ export function attachCursorLineHighlight(term: Terminal, container: HTMLElement
   const cursorDisposable = term.onCursorMove(render);
   const renderDisposable = term.onRender(scheduleRender);
   const resizeDisposable = term.onResize(render);
+  const themeObserver =
+    typeof MutationObserver === "undefined"
+      ? null
+      : new MutationObserver(() => {
+          if (overlay) syncTheme(overlay);
+        });
+  themeObserver?.observe(container, {
+    attributes: true,
+    attributeFilter: ["data-terminal-theme"],
+  });
   render();
 
   return () => {
@@ -507,6 +568,7 @@ export function attachCursorLineHighlight(term: Terminal, container: HTMLElement
     cursorDisposable.dispose();
     renderDisposable.dispose();
     resizeDisposable.dispose();
+    themeObserver?.disconnect();
     overlay?.remove();
     overlay = null;
   };
@@ -760,7 +822,8 @@ export function createSmartWriter(
     if (state.inputPausedUntil > nowMs() && (hasInteractiveControl || options.resumeOnAnyOutput)) {
       state.inputPausedUntil = 0;
     }
-    const output = remapLightAnsiForeground(colorizePlainTerminalOutput(data), getThemeVariant());
+    const remapOutput = options.themeAwareAnsiRemap ? remapAnsiForTheme : remapLightAnsiForeground;
+    const output = remapOutput(colorizePlainTerminalOutput(data), getThemeVariant());
     const chunks = splitTerminalWriteChunk(output);
     for (let index = 0; index < chunks.length; index += 1) {
       state.pendingChunks.push({
@@ -777,7 +840,8 @@ export function createSmartWriter(
       callback?.();
       return;
     }
-    const output = remapLightAnsiForeground(colorizePlainTerminalOutput(data), getThemeVariant());
+    const remapOutput = options.themeAwareAnsiRemap ? remapAnsiForTheme : remapLightAnsiForeground;
+    const output = remapOutput(colorizePlainTerminalOutput(data), getThemeVariant());
     // 仍按 ANSI 边界切块（xterm 对超大单块写入不友好），但不受帧预算限制，
     // 由 xterm 自己的写队列在同一批里消化完。
     const chunks = splitTerminalWriteChunk(output);

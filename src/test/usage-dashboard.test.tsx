@@ -1,5 +1,6 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { listen } from "@tauri-apps/api/event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { UsageDashboard } from "../components/UsageDashboard";
 import { I18nProvider } from "../i18n";
@@ -13,6 +14,8 @@ import type {
 const { invokeMock } = vi.hoisted(() => ({
   invokeMock: vi.fn(),
 }));
+
+let usageUpdated: (() => void) | null = null;
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: invokeMock,
@@ -63,6 +66,9 @@ describe("UsageDashboard", () => {
   beforeEach(() => {
     localStorage.setItem("aeroric:language", "en");
     invokeMock.mockReset();
+    usageUpdated = null;
+    vi.mocked(listen).mockReset();
+    vi.mocked(listen).mockImplementation(() => Promise.resolve(() => {}));
     invokeMock.mockImplementation(
       async (
         command: string,
@@ -88,16 +94,17 @@ describe("UsageDashboard", () => {
     expect(screen.getByText("1.5K")).toBeInTheDocument();
     expect(screen.getByText("41.7%")).toBeInTheDocument();
     expect(screen.getByText("$0.1234")).toBeInTheDocument();
-    expect(screen.getByText("Daily usage")).toBeInTheDocument();
+    expect(screen.getByText("Hourly usage")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Refresh" })).not.toBeInTheDocument();
 
     await waitFor(() => {
       expect(invokeMock).toHaveBeenCalledWith("read_usage_statistics", {
-        rangeDays: 7,
+        rangeDays: 1,
         agent: "all",
       });
     });
 
-    await user.click(screen.getByRole("button", { name: "14d" }));
+    await user.click(screen.getByRole("button", { name: "14D" }));
     await waitFor(() => {
       expect(invokeMock).toHaveBeenCalledWith("read_usage_statistics", {
         rangeDays: 14,
@@ -112,6 +119,36 @@ describe("UsageDashboard", () => {
         agent: "codex",
       });
     });
+  });
+
+  it("reloads statistics from the update event without manually rebuilding the index", async () => {
+    vi.mocked(listen).mockImplementation((_event, callback) => {
+      usageUpdated = () => callback({} as never);
+      return Promise.resolve(() => {});
+    });
+
+    render(
+      <I18nProvider>
+        <UsageDashboard />
+      </I18nProvider>,
+    );
+
+    await screen.findByRole("heading", { name: "Usage statistics" });
+    await waitFor(() => expect(usageUpdated).not.toBeNull());
+    const readsBefore = invokeMock.mock.calls.filter(
+      ([command]) => command === "read_usage_statistics",
+    ).length;
+
+    await act(async () => {
+      usageUpdated?.();
+    });
+
+    await waitFor(() => {
+      expect(
+        invokeMock.mock.calls.filter(([command]) => command === "read_usage_statistics").length,
+      ).toBeGreaterThan(readsBefore);
+    });
+    expect(invokeMock).not.toHaveBeenCalledWith("refresh_usage_statistics_index");
   });
 
   it("formats currency against the selected UI language, not the OS locale", async () => {
@@ -142,8 +179,8 @@ describe("UsageDashboard", () => {
     expect(dateRange).toHaveStyle({ whiteSpace: "nowrap" });
 
     const bars = Array.from(container.querySelectorAll<HTMLElement>(".usage-chart-bar"));
-    expect(bars).toHaveLength(7);
-    expect(bars.every((bar) => bar.style.maxWidth === "48px")).toBe(true);
+    expect(bars).toHaveLength(6);
+    expect(bars.every((bar) => bar.style.maxWidth === "26px")).toBe(true);
     expect(container.querySelector(".usage-chart-section-home")).toBeInTheDocument();
     expect(container.querySelector(".usage-chart-home")).toHaveStyle({ height: "354px" });
     expect(container.querySelectorAll(".usage-chart-axis-tick")).toHaveLength(6);
@@ -152,12 +189,6 @@ describe("UsageDashboard", () => {
       borderRadius: "var(--radius-lg)",
     });
 
-    await user.click(screen.getByRole("button", { name: "24H" }));
-    await waitFor(() => {
-      const todayBars = Array.from(container.querySelectorAll<HTMLElement>(".usage-chart-bar"));
-      expect(todayBars).toHaveLength(6);
-      expect(todayBars.every((bar) => bar.style.maxWidth === "26px")).toBe(true);
-    });
     expect(screen.getByText("每小时用量")).toBeInTheDocument();
     const hourColumns = container.querySelectorAll<HTMLElement>(".usage-chart-column");
     expect(hourColumns[0]?.getAttribute("aria-label")).toContain("2026");
@@ -166,6 +197,14 @@ describe("UsageDashboard", () => {
       (node) => node.textContent,
     );
     expect(axisLabels.every((label) => /^\d{2}:\d{2}$/.test(label ?? ""))).toBe(true);
+
+    await user.click(screen.getByRole("button", { name: "7D" }));
+    await waitFor(() => {
+      const dailyBars = Array.from(container.querySelectorAll<HTMLElement>(".usage-chart-bar"));
+      expect(dailyBars).toHaveLength(7);
+      expect(dailyBars.every((bar) => bar.style.maxWidth === "48px")).toBe(true);
+    });
+    expect(screen.getByText("每日用量")).toBeInTheDocument();
   });
 
   it("keeps the compact settings chart dimensions unchanged", async () => {
@@ -175,9 +214,9 @@ describe("UsageDashboard", () => {
       </I18nProvider>,
     );
 
-    await screen.findByText("Daily usage");
+    await screen.findByText("Hourly usage");
     const bars = Array.from(container.querySelectorAll<HTMLElement>(".usage-chart-bar"));
-    expect(bars.every((bar) => bar.style.maxWidth === "28px")).toBe(true);
+    expect(bars.every((bar) => bar.style.maxWidth === "20px")).toBe(true);
     expect(container.querySelector(".usage-chart-section-home")).not.toBeInTheDocument();
     expect(container.querySelectorAll(".usage-chart-axis-tick")).toHaveLength(5);
   });

@@ -133,7 +133,7 @@ export function TerminalView({
       term.open(container);
       applyTerminalTextareaInputAttributes(term);
 
-      const writer = createSmartWriter(term, () => theme);
+      const writer = createSmartWriter(term, () => theme, { themeAwareAnsiRemap: true });
       const disposeInputFix = attachMacWebKitShiftInputFix(term);
       const disposeWindowsImeFix = attachWindowsIMEPositionFix(term);
       const disposeMacWebKitGuard = attachMacWebKitTerminalGuard({ term, container, writer });
@@ -395,6 +395,7 @@ export function TerminalView({
     <div
       ref={containerRef}
       data-testid="agent-terminal"
+      data-terminal-theme={themeVariant}
       style={{
         width: "100%",
         height: "100%",

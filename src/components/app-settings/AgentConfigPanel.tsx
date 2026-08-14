@@ -681,44 +681,59 @@ export function AgentConfigPanel({
             <div
               style={{
                 display: "flex",
-                alignItems: "center",
+                alignItems: "flex-start",
                 justifyContent: "space-between",
+                flexWrap: "wrap",
                 gap: 8,
                 marginBottom: 8,
               }}
             >
-              <div>
-                <div style={{ fontSize: 13, fontWeight: 600, color: "var(--text-primary)" }}>
-                  {t("appSettings.agentModel")}
-                </div>
-                <div style={{ marginTop: 3, fontSize: 11, color: "var(--text-hint)" }}>
-                  {detectedModels.length > 0
-                    ? t("appSettings.selectedModelsCount", {
+              <div style={{ minWidth: 0, flex: "1 1 220px" }}>
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "baseline",
+                    gap: 8,
+                    minWidth: 0,
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  <div
+                    style={{
+                      flexShrink: 0,
+                      fontSize: 13,
+                      fontWeight: 600,
+                      color: "var(--text-primary)",
+                    }}
+                  >
+                    {t("appSettings.agentModel")}
+                  </div>
+                  {detectedModels.length > 0 && (
+                    <div
+                      style={{
+                        minWidth: 0,
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        color: "var(--text-hint)",
+                        fontSize: 11,
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      {t("appSettings.selectedModelsCount", {
                         selected: selectedModels.length,
                         count: detectedModels.length,
-                      })
-                    : t("appSettings.agentModelHint")}
+                      })}
+                    </div>
+                  )}
                 </div>
-              </div>
-              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={handleDetectModels}
-                  disabled={detectingModels || !canDetectModels}
-                >
-                  <RefreshCw size={12} className={detectingModels ? "spin" : undefined} />
-                  {detectingModels
-                    ? t("appSettings.detectingModels")
-                    : t("appSettings.detectModels")}
-                </Button>
                 {detectedBalance && (
                   <span
                     role="status"
                     style={{
                       display: "inline-flex",
                       alignItems: "center",
-                      minHeight: 30,
+                      minHeight: 24,
+                      marginTop: 4,
                       padding: "0 8px",
                       border:
                         "1px solid color-mix(in srgb, var(--success) 30%, var(--border-medium))",
@@ -735,6 +750,33 @@ export function AgentConfigPanel({
                     })}
                   </span>
                 )}
+                {detectedModels.length === 0 && (
+                  <div style={{ marginTop: 3, fontSize: 11, color: "var(--text-hint)" }}>
+                    {t("appSettings.agentModelHint")}
+                  </div>
+                )}
+              </div>
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "flex-end",
+                  flex: "0 1 auto",
+                  flexWrap: "wrap",
+                  gap: 6,
+                }}
+              >
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleDetectModels}
+                  disabled={detectingModels || !canDetectModels}
+                >
+                  <RefreshCw size={12} className={detectingModels ? "spin" : undefined} />
+                  {detectingModels
+                    ? t("appSettings.detectingModels")
+                    : t("appSettings.detectModels")}
+                </Button>
                 <Button
                   variant="outline"
                   size="sm"

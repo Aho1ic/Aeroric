@@ -532,11 +532,11 @@ const HOURLY_BUCKET_LIMIT = 24;
 export function UsageDashboard({ embedded = false }: { embedded?: boolean }) {
   const { t, language } = useI18n();
   const locale = localeForLanguage(language);
-  const [rangeDays, setRangeDays] = useState<UsageStatisticsRange>(7);
+  const [rangeDays, setRangeDays] = useState<UsageStatisticsRange>(1);
   const [agent, setAgent] = useState<UsageStatisticsAgent>("all");
   const rootRef = useRef<HTMLDivElement | null>(null);
   const [width, setWidth] = useState(900);
-  const { statistics, loading, refreshing, error, refetch } = useUsageStatistics(rangeDays, agent);
+  const { statistics, loading, error, refetch } = useUsageStatistics(rangeDays, agent);
 
   const chartSeries = useMemo(() => {
     const raw = statistics?.series ?? [];
@@ -664,16 +664,6 @@ export function UsageDashboard({ embedded = false }: { embedded?: boolean }) {
               label={(option) => t(`usageStats.agent.${option}`)}
               onChange={setAgent}
             />
-            <Button
-              size="icon-sm"
-              variant="outline"
-              aria-label={t("common.refresh")}
-              title={t("common.refresh")}
-              disabled={refreshing}
-              onClick={() => void refetch()}
-            >
-              <RefreshCw className={refreshing ? "spin" : undefined} size={13} />
-            </Button>
           </div>
         </div>
       </header>

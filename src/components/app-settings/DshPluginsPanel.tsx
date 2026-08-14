@@ -1,426 +1,808 @@
-import { useEffect, useState, type CSSProperties } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Plus, Trash2, X, Package, RefreshCw } from "lucide-react";
+import {
+  Bot,
+  Check,
+  ChevronDown,
+  Code2,
+  Feather,
+  Globe2,
+  Package,
+  RefreshCw,
+  Search,
+  Sparkles,
+  TerminalSquare,
+  Workflow,
+} from "lucide-react";
+import {
+  mergeDshPluginInventory,
+  OFFICIAL_DSH_WEB_PLUGINS,
+  type DshFiberPhase,
+  type DshPluginInventoryEntry,
+} from "../../dshOfficialDefaults";
 import { useI18n } from "../../i18n";
-import s from "../../styles";
 import { Button } from "../ui/Button";
+import { AnimatedSelectionGroup } from "../ui/AnimatedSelection";
+import "./DshPluginsPanel.css";
 
-const labelStyle: CSSProperties = {
-  fontSize: 12,
-  fontWeight: 600,
-  color: "var(--text-secondary)",
-  marginBottom: 5,
-  display: "block",
-};
+type PrimaryView = "plugins" | "presets";
+type PluginView = "configuration" | "inventory";
+type ConfigSection = "shell" | "agent-loop" | "web-search-deepseek";
 
-const inputStyle: CSSProperties = {
-  width: "100%",
-  padding: "7px 10px",
-  background: "var(--bg-input)",
-  border: "1px solid var(--border-medium)",
-  borderRadius: 7,
-  color: "var(--text-primary)",
-  fontSize: 12.5,
-  fontFamily: "var(--font-mono)",
-  outline: "none",
-  boxSizing: "border-box",
-};
+interface DshPluginWireEntry {
+  name?: string;
+  version?: string;
+  enabled?: boolean;
+  description?: string;
+  entryId?: string;
+  moduleName?: string;
+  fiberPhase?: DshFiberPhase;
+  builtIn?: boolean;
+}
 
-const hintStyle: CSSProperties = {
-  fontSize: 11,
-  color: "var(--text-hint)",
-  marginTop: 3,
-};
+interface DshSettingsSnapshot {
+  shell: {
+    timeoutMs: number;
+    maxOutputBytes: number;
+  };
+  agentLoop: {
+    maxParallelToolCalls: number;
+  };
+  webSearch: {
+    baseUrl: string;
+    maxUses: number;
+    apiKeyConfigured: boolean;
+  };
+  defaultPreset: string;
+  customPresets: DshAgentPreset[];
+}
 
-interface DshPlugin {
-  name: string;
-  version: string;
-  enabled: boolean;
+interface DshAgentPreset {
+  id: string;
+  name?: string;
   description?: string;
 }
 
-interface InstallDialogData {
-  package: string;
-  version: string;
+const DEFAULT_SETTINGS: DshSettingsSnapshot = {
+  shell: { timeoutMs: 60_000, maxOutputBytes: 64_000 },
+  agentLoop: { maxParallelToolCalls: 10 },
+  webSearch: { baseUrl: "", maxUses: 5, apiKeyConfigured: false },
+  defaultPreset: "standard",
+  customPresets: [],
+};
+
+const BUILT_IN_PRESETS = [
+  {
+    id: "standard",
+    icon: Bot,
+    nameKey: "PresetStandardName",
+    descriptionKey: "PresetStandardDescription",
+  },
+  { id: "code", icon: Code2, nameKey: "PresetCodeName", descriptionKey: "PresetCodeDescription" },
+  {
+    id: "minimal",
+    icon: Feather,
+    nameKey: "PresetMinimalName",
+    descriptionKey: "PresetMinimalDescription",
+  },
+  {
+    id: "cordis",
+    icon: Sparkles,
+    nameKey: "PresetCordisName",
+    descriptionKey: "PresetCordisDescription",
+  },
+] as const;
+
+const officialIds = new Set(OFFICIAL_DSH_WEB_PLUGINS.map((entry) => entry.entryId));
+
+function moduleShortName(moduleName: string): string {
+  const unscoped = moduleName.startsWith("@")
+    ? moduleName.slice(moduleName.indexOf("/") + 1)
+    : moduleName;
+  return unscoped
+    .replace(/^cordis:/, "")
+    .replace(/^cordis-plugin-/, "")
+    .replace(/^dsh-(?:host-|client-)?/, "");
+}
+
+function fallbackEntryId(moduleName: string): string {
+  return moduleShortName(moduleName).replace(/^plugin-/, "");
+}
+
+function normalizeInventory(entries: readonly DshPluginWireEntry[]): DshPluginInventoryEntry[] {
+  return entries.flatMap((entry) => {
+    const moduleName = entry.moduleName ?? entry.name;
+    if (!moduleName) return [];
+    const entryId = entry.entryId ?? fallbackEntryId(moduleName);
+    const enabled = entry.enabled ?? true;
+    return [
+      {
+        entryId,
+        moduleName,
+        enabled,
+        fiberPhase: entry.fiberPhase ?? (enabled ? "active" : null),
+        builtIn: entry.builtIn ?? officialIds.has(entryId),
+        version: entry.version,
+      },
+    ];
+  });
+}
+
+function positiveInteger(value: string, fallback: number): number {
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function SectionHeading({ title, intro }: { title: string; intro: string }) {
+  return (
+    <header className="dsh-section-heading">
+      <h2>{title}</h2>
+      <p>{intro}</p>
+    </header>
+  );
 }
 
 export function DshPluginsPanel() {
   const { t } = useI18n();
-  const [plugins, setPlugins] = useState<DshPlugin[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [showInstallDialog, setShowInstallDialog] = useState(false);
-  const [installData, setInstallData] = useState<InstallDialogData>({
-    package: "",
-    version: "latest",
-  });
-  const [installing, setInstalling] = useState(false);
-  const [installError, setInstallError] = useState<string | null>(null);
-  const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
+  const [primaryView, setPrimaryView] = useState<PrimaryView>("plugins");
+  const [settings, setSettings] = useState<DshSettingsSnapshot>(DEFAULT_SETTINGS);
 
   useEffect(() => {
-    loadPlugins();
+    let current = true;
+    void invoke<DshSettingsSnapshot>("get_dsh_settings_snapshot", { agent: "dsh" }).then(
+      (snapshot) => {
+        if (current) setSettings({ ...DEFAULT_SETTINGS, ...snapshot });
+      },
+      () => {
+        // The official roster remains useful before DSH is installed or in browser preview mode.
+      },
+    );
+    return () => {
+      current = false;
+    };
   }, []);
 
-  async function loadPlugins() {
-    setLoading(true);
-    setError(null);
-    try {
-      const loaded = await invoke<DshPlugin[]>("list_dsh_plugins", { agent: "dsh" });
-      setPlugins(loaded);
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setLoading(false);
-    }
-  }
+  return (
+    <div className="dsh-settings-panel">
+      <AnimatedSelectionGroup
+        value={primaryView}
+        onChange={setPrimaryView}
+        ariaLabel={t("appSettings.dshPrimaryViews")}
+        role="tablist"
+        equalWidth
+        className="dsh-primary-tabs"
+        options={[
+          {
+            value: "plugins",
+            label: (
+              <>
+                <Package size={14} />
+                {t("appSettings.dshPluginsTab")}
+              </>
+            ),
+          },
+          {
+            value: "presets",
+            label: (
+              <>
+                <Bot size={14} />
+                {t("appSettings.dshAgentPresetsTab")}
+              </>
+            ),
+          },
+        ]}
+      />
 
-  function openInstallDialog() {
-    setShowInstallDialog(true);
-    setInstallData({ package: "", version: "latest" });
-    setInstallError(null);
-  }
+      {primaryView === "plugins" ? (
+        <PluginsView settings={settings} onSettingsChange={setSettings} />
+      ) : (
+        <AgentPresetsView settings={settings} onSettingsChange={setSettings} />
+      )}
+    </div>
+  );
+}
 
-  function closeInstallDialog() {
-    setShowInstallDialog(false);
-    setInstallError(null);
-  }
+function PluginsView({
+  settings,
+  onSettingsChange,
+}: {
+  settings: DshSettingsSnapshot;
+  onSettingsChange: (settings: DshSettingsSnapshot) => void;
+}) {
+  const { t } = useI18n();
+  const [view, setView] = useState<PluginView>("configuration");
 
-  async function handleInstall() {
-    const packageName = installData.package.trim();
-    if (!packageName) {
-      setInstallError(t("appSettings.dshPluginPackageRequired"));
-      return;
-    }
-
-    setInstalling(true);
-    setInstallError(null);
-    try {
-      await invoke("install_dsh_plugin", {
-        agent: "dsh",
-        package: packageName,
-        version: installData.version === "latest" ? null : installData.version,
-      });
-      await loadPlugins();
-      closeInstallDialog();
-    } catch (e) {
-      setInstallError(String(e));
-    } finally {
-      setInstalling(false);
-    }
-  }
-
-  async function handleUninstall(packageName: string) {
-    try {
-      await invoke("uninstall_dsh_plugin", { agent: "dsh", package: packageName });
-      await loadPlugins();
-      setDeleteConfirm(null);
-    } catch (e) {
-      setError(String(e));
-    }
-  }
-
-  async function handleToggle(packageName: string, enabled: boolean) {
-    try {
-      await invoke("toggle_dsh_plugin", { agent: "dsh", package: packageName, enabled });
-      setPlugins((prev) => prev.map((p) => (p.name === packageName ? { ...p, enabled } : p)));
-    } catch (e) {
-      setError(String(e));
-    }
-  }
-
-  if (loading) {
-    return (
-      <div style={{ ...s.settingsBody, padding: 20 }}>
-        <div style={{ color: "var(--text-hint)", fontSize: 13 }}>{t("common.loading")}</div>
+  return (
+    <section className="dsh-page" aria-label={t("appSettings.dshPluginsTitle")}>
+      <SectionHeading
+        title={t("appSettings.dshPluginsTitle")}
+        intro={t("appSettings.dshPluginsIntro")}
+      />
+      <AnimatedSelectionGroup
+        value={view}
+        onChange={setView}
+        ariaLabel={t("appSettings.dshPluginViews")}
+        role="tablist"
+        variant="underline"
+        className="dsh-secondary-tabs"
+        options={[
+          { value: "configuration", label: t("appSettings.dshPluginConfiguration") },
+          { value: "inventory", label: t("appSettings.dshPluginList") },
+        ]}
+      />
+      <div className="dsh-tab-panel" role="tabpanel">
+        {view === "configuration" ? (
+          <PluginConfiguration settings={settings} onSettingsChange={onSettingsChange} />
+        ) : (
+          <PluginInventory />
+        )}
       </div>
-    );
+    </section>
+  );
+}
+
+interface PluginConfigCardProps {
+  section: ConfigSection;
+  icon: typeof TerminalSquare;
+  title: string;
+  description: string;
+  dirty: boolean;
+  saving: boolean;
+  failed: boolean;
+  onSave: () => void;
+  onDiscard: () => void;
+  children: ReactNode;
+}
+
+function PluginConfigCard({
+  icon: Icon,
+  title,
+  description,
+  dirty,
+  saving,
+  failed,
+  onSave,
+  onDiscard,
+  children,
+}: PluginConfigCardProps) {
+  const { t } = useI18n();
+  const [open, setOpen] = useState(false);
+  return (
+    <li className={`dsh-config-card${open ? " dsh-config-card--open" : ""}`}>
+      <button
+        type="button"
+        className="dsh-config-card__header"
+        aria-expanded={open}
+        aria-label={`${t(open ? "appSettings.dshCollapse" : "appSettings.dshExpand")}: ${title}`}
+        onClick={() => setOpen((value) => !value)}
+      >
+        <span className="dsh-config-card__icon">
+          <Icon size={17} />
+        </span>
+        <span className="dsh-config-card__copy">
+          <strong>{title}</strong>
+          <span>{description}</span>
+        </span>
+        {dirty ? <span className="dsh-unsaved">{t("appSettings.dshUnsaved")}</span> : null}
+        <ChevronDown className="dsh-chevron" size={15} aria-hidden />
+      </button>
+      {open ? (
+        <div className="dsh-config-card__body">
+          <div className="dsh-fields">{children}</div>
+          <footer className="dsh-config-card__footer">
+            {failed ? <span role="status">{t("appSettings.dshSaveFailed")}</span> : <span />}
+            <Button variant="ghost" size="sm" disabled={!dirty || saving} onClick={onDiscard}>
+              {t("appSettings.dshDiscard")}
+            </Button>
+            <Button size="sm" disabled={!dirty || saving} onClick={onSave}>
+              {t(saving ? "appSettings.dshSaving" : "common.save")}
+            </Button>
+          </footer>
+        </div>
+      ) : null}
+    </li>
+  );
+}
+
+function ConfigField({
+  id,
+  label,
+  hint,
+  value,
+  type = "text",
+  placeholder,
+  status,
+  onChange,
+}: {
+  id: string;
+  label: string;
+  hint: string;
+  value: string;
+  type?: "text" | "number" | "password";
+  placeholder?: string;
+  status?: string;
+  onChange: (value: string) => void;
+}) {
+  const descriptionIds = [status ? `${id}-status` : null, `${id}-hint`].filter(Boolean).join(" ");
+  return (
+    <div className="dsh-field">
+      <label className="dsh-field__label" htmlFor={id}>
+        {label}
+      </label>
+      <input
+        id={id}
+        type={type}
+        min={type === "number" ? 1 : undefined}
+        value={value}
+        placeholder={placeholder}
+        autoComplete={type === "password" ? "off" : undefined}
+        aria-describedby={descriptionIds}
+        onChange={(event) => onChange(event.currentTarget.value)}
+      />
+      {status ? (
+        <span id={`${id}-status`} className="dsh-field__status">
+          {status}
+        </span>
+      ) : null}
+      <span id={`${id}-hint`} className="dsh-field__hint">
+        {hint}
+      </span>
+    </div>
+  );
+}
+
+function PluginConfiguration({
+  settings,
+  onSettingsChange,
+}: {
+  settings: DshSettingsSnapshot;
+  onSettingsChange: (settings: DshSettingsSnapshot) => void;
+}) {
+  const { t } = useI18n();
+  const [draft, setDraft] = useState(settings);
+  const [saving, setSaving] = useState<ConfigSection | null>(null);
+  const [failed, setFailed] = useState<ConfigSection | null>(null);
+  const [apiKey, setApiKey] = useState("");
+
+  useEffect(() => setDraft(settings), [settings]);
+
+  const shellDirty =
+    draft.shell.timeoutMs !== settings.shell.timeoutMs ||
+    draft.shell.maxOutputBytes !== settings.shell.maxOutputBytes;
+  const loopDirty =
+    draft.agentLoop.maxParallelToolCalls !== settings.agentLoop.maxParallelToolCalls;
+  const searchDirty =
+    draft.webSearch.baseUrl !== settings.webSearch.baseUrl ||
+    draft.webSearch.maxUses !== settings.webSearch.maxUses ||
+    apiKey.trim().length > 0;
+
+  async function save(section: ConfigSection) {
+    setSaving(section);
+    setFailed(null);
+    const values =
+      section === "shell"
+        ? draft.shell
+        : section === "agent-loop"
+          ? draft.agentLoop
+          : { ...draft.webSearch, apiKey: apiKey.trim() || undefined };
+    try {
+      const snapshot = await invoke<DshSettingsSnapshot>("save_dsh_plugin_settings", {
+        agent: "dsh",
+        section,
+        values,
+      });
+      const next = { ...DEFAULT_SETTINGS, ...snapshot };
+      setDraft(next);
+      onSettingsChange(next);
+      setApiKey("");
+    } catch {
+      setFailed(section);
+    } finally {
+      setSaving(null);
+    }
   }
 
   return (
-    <>
-      <div style={{ ...s.settingsBody, padding: 20 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 16 }}>
-          <Button onClick={openInstallDialog} style={{ fontSize: 12.5 }}>
-            <Plus size={14} strokeWidth={2} />
-            {t("appSettings.dshInstallPlugin")}
-          </Button>
-          <Button onClick={loadPlugins} style={{ fontSize: 12.5 }} disabled={loading}>
-            <RefreshCw size={14} strokeWidth={2} />
-            {t("common.refresh")}
-          </Button>
+    <ul className="dsh-config-list">
+      <PluginConfigCard
+        section="shell"
+        icon={TerminalSquare}
+        title={t("appSettings.dshBashTitle")}
+        description={t("appSettings.dshBashDescription")}
+        dirty={shellDirty}
+        saving={saving === "shell"}
+        failed={failed === "shell"}
+        onSave={() => void save("shell")}
+        onDiscard={() => setDraft((current) => ({ ...current, shell: settings.shell }))}
+      >
+        <ConfigField
+          id="dsh-shell-timeout"
+          type="number"
+          label={t("appSettings.dshBashTimeoutMs")}
+          hint={t("appSettings.dshBashTimeoutMsHint")}
+          value={String(draft.shell.timeoutMs)}
+          onChange={(value) =>
+            setDraft((current) => ({
+              ...current,
+              shell: { ...current.shell, timeoutMs: positiveInteger(value, 0) },
+            }))
+          }
+        />
+        <ConfigField
+          id="dsh-shell-output"
+          type="number"
+          label={t("appSettings.dshBashMaxOutputBytes")}
+          hint={t("appSettings.dshBashMaxOutputBytesHint")}
+          value={String(draft.shell.maxOutputBytes)}
+          onChange={(value) =>
+            setDraft((current) => ({
+              ...current,
+              shell: { ...current.shell, maxOutputBytes: positiveInteger(value, 0) },
+            }))
+          }
+        />
+      </PluginConfigCard>
+
+      <PluginConfigCard
+        section="agent-loop"
+        icon={Workflow}
+        title={t("appSettings.dshAgentLoopTitle")}
+        description={t("appSettings.dshAgentLoopDescription")}
+        dirty={loopDirty}
+        saving={saving === "agent-loop"}
+        failed={failed === "agent-loop"}
+        onSave={() => void save("agent-loop")}
+        onDiscard={() => setDraft((current) => ({ ...current, agentLoop: settings.agentLoop }))}
+      >
+        <ConfigField
+          id="dsh-agent-loop-parallel"
+          type="number"
+          label={t("appSettings.dshAgentLoopMaxParallel")}
+          hint={t("appSettings.dshAgentLoopMaxParallelHint")}
+          value={String(draft.agentLoop.maxParallelToolCalls)}
+          onChange={(value) =>
+            setDraft((current) => ({
+              ...current,
+              agentLoop: { maxParallelToolCalls: positiveInteger(value, 0) },
+            }))
+          }
+        />
+      </PluginConfigCard>
+
+      <PluginConfigCard
+        section="web-search-deepseek"
+        icon={Globe2}
+        title={t("appSettings.dshWebSearchTitle")}
+        description={t("appSettings.dshWebSearchDescription")}
+        dirty={searchDirty}
+        saving={saving === "web-search-deepseek"}
+        failed={failed === "web-search-deepseek"}
+        onSave={() => void save("web-search-deepseek")}
+        onDiscard={() => {
+          setDraft((current) => ({ ...current, webSearch: settings.webSearch }));
+          setApiKey("");
+        }}
+      >
+        <ConfigField
+          id="dsh-web-search-key"
+          type="password"
+          label={t("appSettings.dshWebSearchApiKey")}
+          hint={t("appSettings.dshWebSearchApiKeyHint")}
+          status={t(
+            settings.webSearch.apiKeyConfigured
+              ? "appSettings.dshWebSearchApiKeySet"
+              : "appSettings.dshWebSearchApiKeyUnset",
+          )}
+          value={apiKey}
+          onChange={setApiKey}
+        />
+        <ConfigField
+          id="dsh-web-search-endpoint"
+          label={t("appSettings.dshWebSearchBaseUrl")}
+          hint={t("appSettings.dshWebSearchBaseUrlHint")}
+          placeholder="https://api.deepseek.com/anthropic/v1"
+          value={draft.webSearch.baseUrl}
+          onChange={(value) =>
+            setDraft((current) => ({
+              ...current,
+              webSearch: { ...current.webSearch, baseUrl: value },
+            }))
+          }
+        />
+        <ConfigField
+          id="dsh-web-search-max-uses"
+          type="number"
+          label={t("appSettings.dshWebSearchMaxUses")}
+          hint={t("appSettings.dshWebSearchMaxUsesHint")}
+          value={String(draft.webSearch.maxUses)}
+          onChange={(value) =>
+            setDraft((current) => ({
+              ...current,
+              webSearch: { ...current.webSearch, maxUses: positiveInteger(value, 0) },
+            }))
+          }
+        />
+      </PluginConfigCard>
+    </ul>
+  );
+}
+
+function phaseLabel(phase: DshFiberPhase, t: (key: string) => string): string {
+  const keys: Record<Exclude<DshFiberPhase, null>, string> = {
+    pending: "appSettings.dshCordisPending",
+    loading: "appSettings.dshCordisLoading",
+    active: "appSettings.dshCordisActive",
+    failed: "appSettings.dshCordisFailed",
+    unloading: "appSettings.dshCordisUnloading",
+  };
+  return t(phase === null ? "appSettings.dshCordisUnobserved" : keys[phase]);
+}
+
+function PluginInventory() {
+  const { t } = useI18n();
+  const [plugins, setPlugins] = useState(() => mergeDshPluginInventory([]));
+  const [query, setQuery] = useState("");
+  const [expanded, setExpanded] = useState<string | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+  const [usingFallback, setUsingFallback] = useState(false);
+
+  async function loadPlugins() {
+    setRefreshing(true);
+    try {
+      const loaded = await invoke<DshPluginWireEntry[]>("list_dsh_plugins", { agent: "dsh" });
+      setPlugins(mergeDshPluginInventory(normalizeInventory(loaded)));
+      setUsingFallback(loaded.length === 0);
+    } catch {
+      setPlugins(mergeDshPluginInventory([]));
+      setUsingFallback(true);
+    } finally {
+      setRefreshing(false);
+    }
+  }
+
+  useEffect(() => {
+    void loadPlugins();
+  }, []);
+
+  const normalizedQuery = query.trim().toLocaleLowerCase();
+  const filtered = useMemo(
+    () =>
+      plugins.filter(
+        (entry) =>
+          !normalizedQuery ||
+          [entry.entryId, entry.moduleName].some((value) =>
+            value.toLocaleLowerCase().includes(normalizedQuery),
+          ),
+      ),
+    [normalizedQuery, plugins],
+  );
+
+  return (
+    <div className="dsh-inventory" aria-busy={refreshing}>
+      <div className="dsh-inventory__toolbar">
+        <label className="dsh-plugin-search">
+          <Search size={15} aria-hidden />
+          <span className="dsh-visually-hidden">{t("appSettings.dshSearchPlugins")}</span>
+          <input
+            type="search"
+            value={query}
+            placeholder={t("appSettings.dshSearchPlugins")}
+            aria-label={t("appSettings.dshSearchPlugins")}
+            onChange={(event) => setQuery(event.currentTarget.value)}
+          />
+        </label>
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          icon={RefreshCw}
+          disabled={refreshing}
+          aria-label={t("common.refresh")}
+          title={t("common.refresh")}
+          className={refreshing ? "dsh-refresh--spinning" : undefined}
+          onClick={() => void loadPlugins()}
+        />
+      </div>
+      <div className="dsh-inventory__heading">
+        <div>
+          <h3>{t("appSettings.dshPluginList")}</h3>
+          {usingFallback ? <span>{t("appSettings.dshOfficialInventory")}</span> : null}
         </div>
-
-        {error && (
-          <div
-            style={{
-              padding: 10,
-              background: "var(--error-bg)",
-              border: "1px solid var(--error-border)",
-              borderRadius: 7,
-              color: "var(--error-text)",
-              fontSize: 12,
-              marginBottom: 16,
-            }}
-          >
-            {error}
-          </div>
-        )}
-
-        {plugins.length === 0 ? (
-          <div
-            style={{
-              padding: 40,
-              textAlign: "center",
-              color: "var(--text-hint)",
-              fontSize: 13,
-            }}
-          >
-            {t("appSettings.dshNoPlugins")}
-          </div>
-        ) : (
-          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-            {plugins.map((plugin) => (
-              <div
-                key={plugin.name}
-                style={{
-                  padding: 14,
-                  background: "var(--bg-card)",
-                  border: "1px solid var(--border-dim)",
-                  borderRadius: 9,
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 12,
-                }}
-              >
-                <Package size={18} color="var(--text-secondary)" />
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontSize: 13, fontWeight: 600, color: "var(--text-primary)" }}>
-                    {plugin.name}
-                  </div>
-                  <div style={{ fontSize: 11, color: "var(--text-hint)", marginTop: 2 }}>
-                    {t("appSettings.dshPluginVersion", { version: plugin.version })}
-                  </div>
-                </div>
-                <label
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 8,
-                    cursor: "pointer",
-                    userSelect: "none",
-                  }}
-                >
-                  <input
-                    type="checkbox"
-                    checked={plugin.enabled}
-                    onChange={(e) => handleToggle(plugin.name, e.target.checked)}
-                    style={{ display: "none" }}
-                  />
-                  <span style={{ fontSize: 11, color: "var(--text-secondary)" }}>
-                    {t(plugin.enabled ? "common.enabled" : "common.disabled")}
-                  </span>
-                  <span
-                    style={{
-                      ...s.settingToggleTrack,
-                      width: 36,
-                      height: 20,
-                      background: plugin.enabled
-                        ? "var(--primary-action-bg)"
-                        : "var(--border-medium)",
-                    }}
-                  >
-                    <span
-                      style={{
-                        ...s.settingToggleKnob,
-                        width: 16,
-                        height: 16,
-                        transform: plugin.enabled ? "translateX(16px)" : "translateX(0)",
-                      }}
-                    />
-                  </span>
-                </label>
+        <strong data-plugin-count={filtered.length}>{filtered.length}</strong>
+      </div>
+      {filtered.length === 0 ? (
+        <p className="dsh-empty-state">{t("appSettings.dshNoMatchingPlugins")}</p>
+      ) : (
+        <ul className="dsh-plugin-grid">
+          {filtered.map((entry) => {
+            const open = expanded === entry.entryId;
+            const configuration = t(
+              entry.enabled ? "appSettings.dshEnabledTag" : "appSettings.dshDisabledTag",
+            );
+            const cordis = phaseLabel(entry.fiberPhase, t);
+            return (
+              <li key={entry.entryId} className="dsh-plugin-card" data-open={open || undefined}>
                 <button
                   type="button"
-                  onClick={() => setDeleteConfirm(plugin.name)}
-                  style={{
-                    padding: "6px 10px",
-                    background: "transparent",
-                    border: "1px solid var(--border-medium)",
-                    borderRadius: 6,
-                    color: "var(--text-secondary)",
-                    cursor: "pointer",
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 5,
-                    fontSize: 11,
-                  }}
-                  title={t("common.delete")}
+                  className="dsh-plugin-card__main"
+                  aria-expanded={open}
+                  aria-label={`${moduleShortName(entry.moduleName)}, ${configuration}${entry.enabled ? `, ${cordis}` : ""}`}
+                  onClick={() => setExpanded(open ? null : entry.entryId)}
                 >
-                  <Trash2 size={13} strokeWidth={2} />
+                  <strong title={entry.moduleName}>{moduleShortName(entry.moduleName)}</strong>
+                  <span className="dsh-plugin-card__trailing">
+                    {entry.enabled ? (
+                      <span
+                        className="dsh-phase-dot"
+                        data-phase={entry.fiberPhase ?? "unobserved"}
+                        role="img"
+                        aria-label={cordis}
+                        title={cordis}
+                      />
+                    ) : null}
+                    <span className="dsh-config-tag" data-enabled={entry.enabled}>
+                      {configuration}
+                    </span>
+                    <ChevronDown className="dsh-chevron" size={13} aria-hidden />
+                  </span>
                 </button>
-              </div>
-            ))}
-          </div>
+                {open ? (
+                  <div className="dsh-plugin-card__details">
+                    <code>{entry.entryId}</code>
+                    <dl>
+                      <div>
+                        <dt>{t("appSettings.dshConfigurationStatus")}</dt>
+                        <dd>{configuration}</dd>
+                      </div>
+                      {entry.enabled ? (
+                        <div>
+                          <dt>{t("appSettings.dshCordisStatus")}</dt>
+                          <dd>{cordis}</dd>
+                        </div>
+                      ) : null}
+                    </dl>
+                  </div>
+                ) : null}
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+function AgentPresetsView({
+  settings,
+  onSettingsChange,
+}: {
+  settings: DshSettingsSnapshot;
+  onSettingsChange: (settings: DshSettingsSnapshot) => void;
+}) {
+  const { t } = useI18n();
+  const [savingPreset, setSavingPreset] = useState<string | null>(null);
+  const [failedPreset, setFailedPreset] = useState<string | null>(null);
+
+  async function makeDefault(id: string) {
+    if (id === settings.defaultPreset || savingPreset) return;
+    setSavingPreset(id);
+    setFailedPreset(null);
+    try {
+      const snapshot = await invoke<DshSettingsSnapshot>("set_dsh_default_preset", {
+        agent: "dsh",
+        preset: id,
+      });
+      onSettingsChange({ ...DEFAULT_SETTINGS, ...snapshot });
+    } catch {
+      setFailedPreset(id);
+    } finally {
+      setSavingPreset(null);
+    }
+  }
+
+  return (
+    <section className="dsh-page" aria-label={t("appSettings.dshAgentPresetsTitle")}>
+      <SectionHeading
+        title={t("appSettings.dshAgentPresetsTitle")}
+        intro={t("appSettings.dshAgentPresetsIntro")}
+      />
+      <PresetGroup title={t("appSettings.dshBuiltInGroup")}>
+        {BUILT_IN_PRESETS.map(({ id, icon: Icon, nameKey, descriptionKey }) => (
+          <PresetCard
+            key={id}
+            id={id}
+            icon={<Icon size={18} />}
+            name={t(`appSettings.dsh${nameKey}`)}
+            description={t(`appSettings.dsh${descriptionKey}`)}
+            builtIn
+            active={settings.defaultPreset === id}
+            saving={savingPreset === id}
+            failed={failedPreset === id}
+            onSelect={() => void makeDefault(id)}
+          />
+        ))}
+      </PresetGroup>
+      <PresetGroup title={t("appSettings.dshCustomGroup")}>
+        {settings.customPresets.length ? (
+          settings.customPresets.map((preset) => (
+            <PresetCard
+              key={preset.id}
+              id={preset.id}
+              icon={<Bot size={18} />}
+              name={preset.name ?? preset.id}
+              description={preset.description ?? t("appSettings.dshNoPresetDescription")}
+              active={settings.defaultPreset === preset.id}
+              saving={savingPreset === preset.id}
+              failed={failedPreset === preset.id}
+              onSelect={() => void makeDefault(preset.id)}
+            />
+          ))
+        ) : (
+          <p className="dsh-custom-empty">{t("appSettings.dshNoCustomPresets")}</p>
         )}
-      </div>
+      </PresetGroup>
+    </section>
+  );
+}
 
-      {showInstallDialog && (
-        <div
-          style={{
-            position: "fixed",
-            inset: 0,
-            // 使用主题表面的浅色遮罩，避免浅色模式打开弹窗后整页被压成灰色。
-            background: "color-mix(in srgb, var(--bg-shell) 88%, transparent)",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            zIndex: 1000,
-          }}
-          onClick={(e) => {
-            if (e.target === e.currentTarget) closeInstallDialog();
-          }}
-        >
-          <div
-            style={{
-              background: "var(--bg-card)",
-              border: "1px solid var(--border-medium)",
-              borderRadius: 12,
-              width: "min(90%, 480px)",
-              maxHeight: "80vh",
-              overflow: "auto",
-              boxShadow: "0 8px 32px rgba(0,0,0,0.3)",
-            }}
-          >
-            <div
-              style={{
-                padding: "16px 20px",
-                borderBottom: "1px solid var(--border-dim)",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "space-between",
-              }}
-            >
-              <h3 style={{ margin: 0, fontSize: 14, fontWeight: 600 }}>
-                {t("appSettings.dshInstallPlugin")}
-              </h3>
-              <button
-                onClick={closeInstallDialog}
-                style={{
-                  background: "none",
-                  border: "none",
-                  cursor: "pointer",
-                  padding: 4,
-                  color: "var(--text-secondary)",
-                }}
-              >
-                <X size={16} />
-              </button>
-            </div>
+function PresetGroup({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <section className="dsh-preset-group">
+      <h3>{title}</h3>
+      <div className="dsh-preset-grid">{children}</div>
+    </section>
+  );
+}
 
-            <div style={{ padding: 20 }}>
-              <div style={{ marginBottom: 16 }}>
-                <label style={labelStyle}>{t("appSettings.dshPluginPackage")}</label>
-                <input
-                  type="text"
-                  value={installData.package}
-                  onChange={(e) => setInstallData({ ...installData, package: e.target.value })}
-                  placeholder="@deepseek-ai/dsh-plugin-name"
-                  style={inputStyle}
-                  spellCheck={false}
-                />
-                <span style={hintStyle}>{t("appSettings.dshPluginPackageHint")}</span>
-              </div>
-
-              <div style={{ marginBottom: 16 }}>
-                <label style={labelStyle}>{t("appSettings.dshPluginVersion")}</label>
-                <input
-                  type="text"
-                  value={installData.version}
-                  onChange={(e) => setInstallData({ ...installData, version: e.target.value })}
-                  placeholder="latest"
-                  style={inputStyle}
-                  spellCheck={false}
-                />
-                <span style={hintStyle}>{t("appSettings.dshPluginVersionHint")}</span>
-              </div>
-
-              {installError && (
-                <div
-                  style={{
-                    padding: 10,
-                    background: "var(--error-bg)",
-                    border: "1px solid var(--error-border)",
-                    borderRadius: 7,
-                    color: "var(--error-text)",
-                    fontSize: 12,
-                    marginBottom: 16,
-                  }}
-                >
-                  {installError}
-                </div>
-              )}
-
-              <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
-                <Button onClick={closeInstallDialog} disabled={installing}>
-                  {t("common.cancel")}
-                </Button>
-                <Button onClick={handleInstall} disabled={installing}>
-                  {installing ? t("appSettings.dshInstalling") : t("common.install")}
-                </Button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {deleteConfirm && (
-        <div
-          style={{
-            position: "fixed",
-            inset: 0,
-            background: "color-mix(in srgb, var(--bg-shell) 88%, transparent)",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            zIndex: 1000,
-          }}
-          onClick={(e) => {
-            if (e.target === e.currentTarget) setDeleteConfirm(null);
-          }}
-        >
-          <div
-            style={{
-              background: "var(--bg-card)",
-              border: "1px solid var(--border-medium)",
-              borderRadius: 12,
-              width: "min(90%, 420px)",
-              padding: 20,
-              boxShadow: "0 8px 32px rgba(0,0,0,0.3)",
-            }}
-          >
-            <h3 style={{ margin: "0 0 12px 0", fontSize: 14, fontWeight: 600 }}>
-              {t("appSettings.dshUninstallPlugin")}
-            </h3>
-            <p style={{ margin: "0 0 20px 0", fontSize: 12.5, color: "var(--text-secondary)" }}>
-              {t("appSettings.dshUninstallConfirm", { name: deleteConfirm })}
-            </p>
-            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
-              <Button onClick={() => setDeleteConfirm(null)}>{t("common.cancel")}</Button>
-              <Button
-                onClick={() => handleUninstall(deleteConfirm)}
-                style={{
-                  background: "var(--error-bg)",
-                  borderColor: "var(--error-border)",
-                  color: "var(--error-text)",
-                }}
-              >
-                {t("common.delete")}
-              </Button>
-            </div>
-          </div>
-        </div>
-      )}
-    </>
+function PresetCard({
+  id,
+  icon,
+  name,
+  description,
+  builtIn = false,
+  active,
+  saving,
+  failed,
+  onSelect,
+}: {
+  id: string;
+  icon: ReactNode;
+  name: string;
+  description: string;
+  builtIn?: boolean;
+  active: boolean;
+  saving: boolean;
+  failed: boolean;
+  onSelect: () => void;
+}) {
+  const { t } = useI18n();
+  return (
+    <button
+      type="button"
+      className="dsh-preset-card"
+      data-active={active || undefined}
+      aria-pressed={active}
+      disabled={active || saving}
+      title={active ? t("appSettings.dshPresetInUse") : t("appSettings.dshSetDefaultPreset")}
+      onClick={onSelect}
+    >
+      <span className="dsh-preset-card__head">
+        <span className="dsh-preset-card__icon">{icon}</span>
+        <strong>{name}</strong>
+        <span className="dsh-preset-badge">
+          {t(builtIn ? "appSettings.dshBuiltIn" : "appSettings.dshCustom")}
+        </span>
+        {active ? (
+          <span className="dsh-preset-active">
+            <Check size={12} />
+            {t("appSettings.dshPresetInUse")}
+          </span>
+        ) : null}
+      </span>
+      <span className="dsh-preset-card__description">{description}</span>
+      <code>{id}</code>
+      {failed ? (
+        <span className="dsh-preset-error">{t("appSettings.dshPresetSaveFailed")}</span>
+      ) : null}
+    </button>
   );
 }

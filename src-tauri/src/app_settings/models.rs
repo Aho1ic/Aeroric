@@ -306,6 +306,28 @@ fn looks_like_client_rejection(body: &str) -> bool {
         || body.contains("invalid client")
 }
 
+fn looks_like_cloudflare_challenge(headers: &reqwest::header::HeaderMap, body: &str) -> bool {
+    let challenged = headers
+        .get("cf-mitigated")
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.eq_ignore_ascii_case("challenge"));
+    if challenged {
+        return true;
+    }
+
+    let body = body.to_ascii_lowercase();
+    body.contains("just a moment")
+        && (body.contains("cloudflare")
+            || body.contains("cf-chl")
+            || body.contains("challenge-platform"))
+}
+
+fn describe_cloudflare_challenge(status: reqwest::StatusCode) -> String {
+    format!(
+        "HTTP {status}: Cloudflare challenge blocked the API request. Exempt the model API path from browser challenges or allow non-browser API clients."
+    )
+}
+
 fn truncate_body(body: &str) -> String {
     let body = body.trim();
     if body.chars().count() <= ERROR_BODY_MAX_CHARS {
@@ -356,6 +378,7 @@ async fn probe_model_endpoint(
             };
 
             let status = response.status();
+            let response_headers = response.headers().clone();
             if status.is_success() {
                 let body = response.text().await.unwrap_or_default();
                 // 2xx 说明鉴权头与 UA 都已被接受,换组合重试没有意义:
@@ -372,6 +395,9 @@ async fn probe_model_endpoint(
             }
 
             let body = response.text().await.unwrap_or_default();
+            if looks_like_cloudflare_challenge(&response_headers, &body) {
+                return EndpointOutcome::Failed(describe_cloudflare_challenge(status));
+            }
             if matches!(
                 status,
                 reqwest::StatusCode::NOT_FOUND | reqwest::StatusCode::METHOD_NOT_ALLOWED
@@ -1005,6 +1031,30 @@ mod tests {
         assert!(error.contains("HTTP 401"), "unexpected error: {error}");
         assert!(error.contains("无效的令牌"), "unexpected error: {error}");
         drop(server);
+    }
+
+    #[tokio::test]
+    async fn reports_cloudflare_challenge_without_echoing_html_or_retrying() {
+        let challenge_html = r#"<!DOCTYPE html><html><head><title>Just a moment...</title></head><body><script src="/cdn-cgi/challenge-platform/scripts/jsd/main.js"></script></body></html>"#;
+        let (origin, server) = serve_responses(vec![(403, challenge_html)]);
+
+        let client = reqwest::Client::builder().no_proxy().build().unwrap();
+        let mut auth_failed = false;
+        let error = fetch_agent_model_json_from_candidates(
+            &client,
+            &[format!("{origin}/v1/models")],
+            &AgentSetupKind::Codex,
+            "sk-test",
+            &mut auth_failed,
+        )
+        .await
+        .unwrap_err();
+
+        assert!(auth_failed);
+        assert!(error.contains("Cloudflare challenge blocked the API request"));
+        assert!(error.contains("allow non-browser API clients"));
+        assert!(!error.contains("<!DOCTYPE"));
+        assert_eq!(server.join().unwrap().len(), 1);
     }
 
     #[test]

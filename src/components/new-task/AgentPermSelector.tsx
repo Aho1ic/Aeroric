@@ -116,8 +116,8 @@ export function composeAgentMenuContentStyle(): CSSProperties {
 export function composeAgentMenuViewportStyle(): CSSProperties {
   return {
     display: "grid",
-    gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
-    gap: 8,
+    gridTemplateColumns: "minmax(0, 1fr) 1px minmax(0, 1fr) 1px minmax(0, 1fr)",
+    gap: 10,
     maxHeight: "min(320px, var(--radix-select-content-available-height))",
     overflow: "hidden",
     padding: 8,
@@ -130,9 +130,9 @@ export function composeAgentMenuColumnStyle(): CSSProperties {
     flexDirection: "column",
     minWidth: 0,
     minHeight: 0,
-    border: "1px solid var(--border-dim)",
-    borderRadius: 7,
-    background: "color-mix(in srgb, var(--bg-input) 45%, transparent)",
+    border: 0,
+    borderRadius: 0,
+    background: "transparent",
     overflow: "hidden",
   };
 }
@@ -316,18 +316,13 @@ export function AgentPermSelector({
         data-agent-family={family}
         style={composeAgentMenuColumnStyle()}
       >
-        <div
-          style={{
-            flexShrink: 0,
-            padding: "7px 9px 6px",
-            color: "var(--text-secondary)",
-            borderBottom: "1px solid var(--border-dim)",
-            fontSize: 11,
-            fontWeight: 700,
-            letterSpacing: "0.02em",
-          }}
-        >
-          {label}
+        <div className={`compose-agent-menu-title compose-agent-menu-title--${family}`}>
+          <img
+            src={agentIcon(options[0]?.value ?? family, agentOptions)}
+            alt=""
+            aria-hidden="true"
+          />
+          <span>{label}</span>
         </div>
         <div style={composeAgentMenuColumnViewportStyle()}>
           {options.length > 0 ? (
@@ -430,7 +425,17 @@ export function AgentPermSelector({
             >
               <Select.Viewport style={composeAgentMenuViewportStyle()}>
                 {renderAgentColumn("claude", t("newTask.claudeAgents"), groupedAgents.claude)}
+                <div
+                  className="compose-agent-menu-separator"
+                  data-agent-menu-separator
+                  aria-hidden="true"
+                />
                 {renderAgentColumn("codex", t("newTask.codexAgents"), groupedAgents.codex)}
+                <div
+                  className="compose-agent-menu-separator"
+                  data-agent-menu-separator
+                  aria-hidden="true"
+                />
                 {renderAgentColumn("dsh", t("newTask.dshAgents"), groupedAgents.dsh)}
               </Select.Viewport>
             </Select.Content>

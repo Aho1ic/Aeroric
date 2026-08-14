@@ -18,7 +18,7 @@ import { shortenPath, getUsageColor } from "../utils";
 import { useUsageSnapshot } from "../hooks/useUsageSnapshot";
 import { usePlatformRuntimeInfo } from "../hooks/usePlatformRuntimeInfo";
 import { ENABLE_USAGE_INSIGHTS } from "../platform";
-import { agentDisplayLabel, isCodexLikeAgent, type AgentOption } from "../agents";
+import { agentDisplayLabel, type AgentOption } from "../agents";
 import {
   getTaskSessionFieldsByFamily,
   hasTaskContinuationContext,
@@ -162,7 +162,6 @@ export function RunningView({
     task.status === "pending" || task.status === "running" || task.status === "input_required";
   const isDetached = task.status === "detached";
   const isInterrupted = task.status === "interrupted";
-  const currentCodexLike = isCodexLikeAgent(task.agent, agentOptions);
   const sessionOwner = resolveTaskSessionOwner(task, agentOptions);
   const sessionFields = getTaskSessionFieldsByFamily(task, sessionOwner.family);
   const rawPersistedSessionPath = sessionFields.sessionPath ?? sessionFields.legacySessionPath;
@@ -542,6 +541,7 @@ export function RunningView({
         initialData={terminalInitialData}
         initialSnapshot={terminalInitialSnapshot}
         rawReplayData={restoreState.rawReplayData}
+        highlightCursorLine
       />
     </div>
   ) : undefined;
@@ -1020,7 +1020,7 @@ export function RunningView({
               initialData={terminalInitialData}
               initialSnapshot={terminalInitialSnapshot}
               rawReplayData={restoreState.rawReplayData}
-              highlightCursorLine={currentCodexLike}
+              highlightCursorLine
             />
           </div>
         </div>

@@ -152,13 +152,15 @@ describe("agent options", () => {
     expect(composeAgentMenuViewportStyle()).toEqual(
       expect.objectContaining({
         display: "grid",
-        gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
+        gridTemplateColumns: "minmax(0, 1fr) 1px minmax(0, 1fr) 1px minmax(0, 1fr)",
         overflow: "hidden",
       }),
     );
     expect(composeAgentMenuColumnStyle()).toEqual(
       expect.objectContaining({
         minHeight: 0,
+        border: 0,
+        background: "transparent",
         overflow: "hidden",
       }),
     );

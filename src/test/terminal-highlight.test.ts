@@ -4,7 +4,7 @@ import {
   attachCursorLineHighlight,
   colorizePlainTerminalOutput,
   createSmartWriter,
-  remapLightAnsiForeground,
+  remapAnsiForTheme,
   splitTerminalWriteChunk,
   TERMINAL_WRITE_CHUNK_SIZE,
 } from "../components/terminalShared";
@@ -27,16 +27,18 @@ describe("terminal output highlighting", () => {
   it("preserves distinct ANSI foreground colors", () => {
     const raw = "\x1b[31mred\x1b[0m \x1b[32mgreen\x1b[0m \x1b[34mblue\x1b[0m";
 
-    expect(remapLightAnsiForeground(raw, "light")).toBe(raw);
-    expect(remapLightAnsiForeground(raw, "dark")).toBe(raw);
+    expect(remapAnsiForTheme(raw, "light")).toBe(raw);
+    expect(remapAnsiForTheme(raw, "dark")).toBe(raw);
+    expect(remapAnsiForTheme(raw, "eyecare")).toBe(raw);
   });
 
   it("remaps explicit white ANSI foregrounds in light themes", () => {
     const raw = "\x1b[1;97mbold white\x1b[0m \x1b[38;2;255;255;255mtruecolor\x1b[0m";
 
-    expect(remapLightAnsiForeground(raw, "light")).toContain("\x1b[1;39m");
-    expect(remapLightAnsiForeground(raw, "light")).toContain("\x1b[39mtruecolor");
-    expect(remapLightAnsiForeground(raw, "dark")).toBe(raw);
+    expect(remapAnsiForTheme(raw, "light")).toContain("\x1b[1;39m");
+    expect(remapAnsiForTheme(raw, "light")).toContain("\x1b[39mtruecolor");
+    expect(remapAnsiForTheme(raw, "dark")).toContain("\x1b[1;39m");
+    expect(remapAnsiForTheme(raw, "eyecare")).toContain("\x1b[39mtruecolor");
   });
 
   it("uses the default background for agent input while preserving diff backgrounds", () => {
@@ -44,12 +46,16 @@ describe("terminal output highlighting", () => {
       "\x1b[40;38;2;190;190;190minput\x1b[0m " +
       "\x1b[48;2;60;20;20;38;2;180;180;180mremoved\x1b[0m " +
       "\x1b[48;5;22;97madded\x1b[0m";
-    const light = remapLightAnsiForeground(raw, "light");
+    const light = remapAnsiForTheme(raw, "light");
 
-    expect(light).toContain("\x1b[49;39minput");
+    expect(light).toContain("\x1b[48;2;241;243;245;39minput");
     expect(light).toContain("\x1b[48;2;255;235;233;39mremoved");
     expect(light).toContain("\x1b[48;2;218;251;225;39madded");
-    expect(remapLightAnsiForeground(raw, "dark")).toBe(raw);
+    const dark = remapAnsiForTheme(raw, "dark");
+    expect(dark).toContain("\x1b[48;2;32;33;39;39minput");
+    expect(dark).toContain("\x1b[48;2;60;20;20;39mremoved");
+    expect(dark).toContain("\x1b[48;5;22;39madded");
+    expect(remapAnsiForTheme(raw, "eyecare")).toContain("\x1b[48;2;238;232;213;39minput");
   });
 
   it("normalizes neutral backgrounds before terminal erase commands in light themes", () => {
@@ -57,10 +63,31 @@ describe("terminal output highlighting", () => {
     const darkNeutral = "\x1b[48;2;35;36;38mcomposer";
     const indexed = "\x1b[48;5;245mhistory";
 
-    expect(remapLightAnsiForeground(truecolor, "light")).toBe("\x1b[49m\x1b[K");
-    expect(remapLightAnsiForeground(darkNeutral, "eyecare")).toBe("\x1b[49mcomposer");
-    expect(remapLightAnsiForeground(indexed, "light")).toBe("\x1b[49mhistory");
-    expect(remapLightAnsiForeground(truecolor, "dark")).toBe(truecolor);
+    expect(remapAnsiForTheme(truecolor, "light")).toBe("\x1b[48;2;241;243;245m\x1b[K");
+    expect(remapAnsiForTheme(darkNeutral, "eyecare")).toBe("\x1b[48;2;238;232;213mcomposer");
+    expect(remapAnsiForTheme(indexed, "light")).toBe("\x1b[48;2;241;243;245mhistory");
+    expect(remapAnsiForTheme(truecolor, "dark")).toBe("\x1b[48;2;32;33;39m\x1b[K");
+  });
+
+  it("keeps full theme remapping opt-in for Agent terminal writers", () => {
+    const raw = "\x1b[48;2;35;36;38mcomposer";
+    const defaultWrite = vi.fn((_data: string, callback?: () => void) => callback?.());
+    const agentWrite = vi.fn((_data: string, callback?: () => void) => callback?.());
+    const defaultWriter = createSmartWriter(
+      { write: defaultWrite } as unknown as Terminal,
+      () => "dark",
+    );
+    const agentWriter = createSmartWriter(
+      { write: agentWrite } as unknown as Terminal,
+      () => "dark",
+      { themeAwareAnsiRemap: true },
+    );
+
+    defaultWriter.writeImmediate(raw);
+    agentWriter.writeImmediate(raw);
+
+    expect(defaultWrite).toHaveBeenCalledWith(raw, undefined);
+    expect(agentWrite).toHaveBeenCalledWith("\x1b[48;2;32;33;39mcomposer", undefined);
   });
 
   it("splits large writes without breaking surrogate pairs", () => {
@@ -185,6 +212,7 @@ describe("cursor line highlight overlay", () => {
 
   function createScreenContainer(clientHeight = 480) {
     const container = document.createElement("div");
+    container.dataset.terminalTheme = "light";
     const screen = document.createElement("div");
     screen.className = "xterm-screen";
     Object.defineProperty(screen, "clientHeight", { value: clientHeight, configurable: true });
@@ -203,10 +231,17 @@ describe("cursor line highlight overlay", () => {
     expect(overlay).not.toBeNull();
     expect(overlay!.style.height).toBe("20px");
     expect(overlay!.style.transform).toBe("translateY(0px)");
+    expect(overlay!.dataset.terminalTheme).toBe("light");
+    expect(overlay!.style.background).toBe("rgb(241, 243, 245)");
 
     state.cursorY = 5;
     fireCursorMove();
     expect(overlay!.style.transform).toBe("translateY(100px)");
+
+    container.dataset.terminalTheme = "dark";
+    fireCursorMove();
+    expect(overlay!.dataset.terminalTheme).toBe("dark");
+    expect(overlay!.style.background).toBe("rgb(32, 33, 39)");
 
     dispose();
     container.remove();

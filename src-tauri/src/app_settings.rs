@@ -53,7 +53,7 @@ static CACHED_SETTINGS: OnceLock<Mutex<Option<CachedSettings>>> = OnceLock::new(
 static SETTINGS_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 static AGENT_UPGRADE_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 const CLAUDE_BUILTIN_MODEL_ALIASES: &[&str] = &["fable", "opus", "sonnet"];
-const CLAUDE_AGENT_SCRIPT_MARKER: &str = "# AERORIC_CLAUDE_WRAPPER_VERSION=5";
+const CLAUDE_AGENT_SCRIPT_MARKER: &str = "# AERORIC_CLAUDE_WRAPPER_VERSION=6";
 const CLAUDE_AGENT_SCRIPT_MARKER_PREFIX: &str = "# AERORIC_CLAUDE_WRAPPER_VERSION=";
 const CODEX_AGENT_SCRIPT_MARKER: &str = "# AERORIC_CODEX_WRAPPER_VERSION=5";
 const CODEX_CHAT_PROXY_MARKER: &str = "# AERORIC_CODEX_CHAT_PROXY_VERSION=5";
@@ -3789,6 +3789,9 @@ mod tests {
         ));
         assert!(is_aeroric_generated_agent_wrapper(
             "# AERORIC_CLAUDE_WRAPPER_VERSION=4\n& 'claude' @args"
+        ));
+        assert!(is_aeroric_generated_agent_wrapper(
+            "# AERORIC_CLAUDE_WRAPPER_VERSION=5\n& 'claude' @args"
         ));
         assert!(!is_aeroric_generated_agent_wrapper(
             "# My Claude wrapper\n& 'claude' @args"

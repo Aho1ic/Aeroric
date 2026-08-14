@@ -546,6 +546,23 @@ describe("Agent config and debug panel UI", () => {
     await user.click(screen.getByRole("button", { name: /Fetch Available Models/i }));
     await screen.findByLabelText("gpt-5.6-terra");
     expect(screen.getByRole("status")).toHaveTextContent("Used / Total: $57.25 / $100.00");
+    const modelTitle = screen.getByText("Model");
+    const modelTitleRow = modelTitle.parentElement;
+    const modelCopy = modelTitleRow?.parentElement;
+    const selectedCount = screen.getByText("1 of 4 models selected");
+    const balance = screen.getByRole("status");
+    if (!modelTitleRow || !modelCopy) throw new Error("Model header layout was not rendered");
+    expect(modelTitleRow).toHaveStyle({ whiteSpace: "nowrap" });
+    expect(modelTitleRow).toContainElement(selectedCount);
+    expect(modelCopy).toContainElement(balance);
+    expect(balance.parentElement).toBe(modelCopy);
+    expect(modelCopy.parentElement).toHaveStyle({ flexWrap: "wrap" });
+    expect(
+      Boolean(modelTitleRow.compareDocumentPosition(balance) & Node.DOCUMENT_POSITION_FOLLOWING),
+    ).toBe(true);
+    expect(
+      screen.getByRole("button", { name: /Fetch Available Models/i }).parentElement,
+    ).toHaveStyle({ flexWrap: "wrap" });
     await user.click(screen.getByLabelText("gpt-5.6-terra"));
     await user.click(getEnabledSaveButton());
 
@@ -753,6 +770,41 @@ describe("Agent config and debug panel UI", () => {
         enable_chat_completions_proxy: false,
       },
     });
+  });
+
+  it("shows only the loading label while model detection is in progress", async () => {
+    const user = userEvent.setup();
+    let resolveDetection: ((value: { models: string[]; balance: null }) => void) | undefined;
+    const detection = new Promise<{ models: string[]; balance: null }>((resolve) => {
+      resolveDetection = resolve;
+    });
+    vi.mocked(invoke).mockImplementation((command) => {
+      if (command === "detect_agent_models") return detection;
+      return Promise.resolve(undefined);
+    });
+
+    render(
+      <I18nProvider>
+        <AddAgentPanel onSaved={vi.fn()} />
+      </I18nProvider>,
+    );
+
+    await user.type(screen.getByLabelText("Base URL"), "https://example.com/v1");
+    await user.type(screen.getByLabelText("API Key"), "sk-test");
+    await user.click(screen.getByRole("button", { name: "Fetch Available Models" }));
+
+    const loadingButton = await screen.findByRole("button", { name: "Fetching..." });
+    expect(loadingButton).toHaveAttribute("aria-busy", "true");
+    expect(
+      screen.queryByRole("button", { name: "Fetch Available Models" }),
+    ).not.toBeInTheDocument();
+    const measurementLabel = loadingButton.querySelector(".add-agent-detect-button__measure");
+    expect(measurementLabel).toHaveAttribute("aria-hidden", "true");
+    expect(measurementLabel).toHaveStyle({ visibility: "hidden" });
+    expect(loadingButton.querySelectorAll(".add-agent-detect-button__current")).toHaveLength(1);
+
+    resolveDetection?.({ models: ["gpt-5.6"], balance: null });
+    await screen.findByRole("button", { name: "Fetch Available Models" });
   });
 
   it("creates a Codex agent with the Chat Completions bridge enabled", async () => {

@@ -17,11 +17,16 @@ vi.mock("../components/TerminalView", () => ({
   TerminalView: ({
     initialData,
     initialSnapshot,
+    highlightCursorLine,
   }: {
     initialData?: string;
     initialSnapshot?: string;
+    highlightCursorLine?: boolean;
   }) => (
-    <div data-testid="terminal-history">
+    <div
+      data-testid="terminal-history"
+      data-highlight-cursor-line={highlightCursorLine ? "true" : "false"}
+    >
       {initialSnapshot}
       {initialData}
     </div>
@@ -94,6 +99,10 @@ describe("RunningView completed history fallback", () => {
         "terminal transcript from completed task",
       );
     });
+    expect(screen.getByTestId("terminal-history")).toHaveAttribute(
+      "data-highlight-cursor-line",
+      "true",
+    );
   });
 
   it("uses persisted terminal history when available after reload", async () => {
