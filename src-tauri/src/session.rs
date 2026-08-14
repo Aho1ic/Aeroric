@@ -710,10 +710,10 @@ fn process_claude_session_line(
 
 // ── Session messages (for conversation view) ──────────────────────────────────
 
-#[derive(serde::Serialize, Clone)]
+#[derive(serde::Serialize, Clone, Debug)]
 pub(crate) struct SessionMessage {
-    role: String,
-    content: Vec<SessionContent>,
+    pub(crate) role: String,
+    pub(crate) content: Vec<SessionContent>,
 }
 
 #[derive(serde::Serialize)]
@@ -724,7 +724,7 @@ pub struct SessionMessagePage {
     has_more: bool,
 }
 
-#[derive(serde::Serialize, Clone)]
+#[derive(serde::Serialize, Clone, Debug)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub(crate) enum SessionContent {
     Text {
@@ -878,9 +878,15 @@ pub async fn read_session_messages(
     session_path: String,
     project_path: String,
     is_codex: bool,
+    family: Option<String>,
 ) -> Result<Vec<SessionMessage>, String> {
+    let family = crate::app_settings::resolve_family_param(family.as_deref(), is_codex);
     tauri::async_runtime::spawn_blocking(move || {
-        let canonical = validate_session_path(&session_path, &project_path, is_codex)?;
+        let canonical = validate_session_path_for(&session_path, &project_path, family)?;
+        if family == crate::app_settings::AgentFamily::Dsh {
+            let (lines, _) = read_session_tail(&canonical)?;
+            return crate::session_dsh::parse_dsh_session_lines(&lines);
+        }
         let (lines, detected_codex) = read_session_tail(&canonical)?;
         Ok(parse_session_messages_with_format(
             &lines,
@@ -897,13 +903,19 @@ pub async fn read_session_message_page(
     session_path: String,
     project_path: String,
     is_codex: bool,
+    family: Option<String>,
     cursor: Option<u64>,
 ) -> Result<SessionMessagePage, String> {
+    let family = crate::app_settings::resolve_family_param(family.as_deref(), is_codex);
     tauri::async_runtime::spawn_blocking(move || {
-        let canonical = validate_session_path(&session_path, &project_path, is_codex)?;
+        let canonical = validate_session_path_for(&session_path, &project_path, family)?;
         let (lines, next_cursor, has_more) =
             read_session_page_lines(&canonical, cursor, SESSION_MESSAGE_PAGE_LINES)?;
-        let messages = parse_session_messages_with_format(&lines, is_codex, is_codex);
+        let messages = if family == crate::app_settings::AgentFamily::Dsh {
+            crate::session_dsh::parse_dsh_session_lines(&lines)?
+        } else {
+            parse_session_messages_with_format(&lines, is_codex, is_codex)
+        };
         Ok(SessionMessagePage {
             messages,
             next_cursor,
@@ -919,9 +931,14 @@ pub async fn read_session_id(
     session_path: String,
     project_path: String,
     is_codex: bool,
+    family: Option<String>,
 ) -> Result<Option<String>, String> {
+    let family = crate::app_settings::resolve_family_param(family.as_deref(), is_codex);
     tauri::async_runtime::spawn_blocking(move || {
-        let canonical = validate_session_path(&session_path, &project_path, is_codex)?;
+        let canonical = validate_session_path_for(&session_path, &project_path, family)?;
+        if family == crate::app_settings::AgentFamily::Dsh {
+            return Ok(crate::session_dsh::read_dsh_session_header(&canonical).map(|(id, _)| id));
+        }
         Ok(resolve_session_id_from_file(&canonical, is_codex))
     })
     .await
@@ -934,8 +951,24 @@ pub async fn recover_task_session(
     prompt: String,
     created_at: i64,
     is_codex: bool,
+    family: Option<String>,
+    agent: Option<String>,
 ) -> Result<Option<RecoveredSession>, String> {
+    let family = crate::app_settings::resolve_family_param(family.as_deref(), is_codex);
     tauri::async_runtime::spawn_blocking(move || {
+        if family == crate::app_settings::AgentFamily::Dsh {
+            // dsh 无法按 prompt 匹配(transcript 首条 user/message 含前缀拼接),
+            // 按创建时间(留 10s 裕量)取该项目最新会话。
+            return Ok(crate::session_dsh::newest_dsh_session_since(
+                agent.as_deref().unwrap_or("dsh"),
+                &project_path,
+                created_at - 10_000,
+            )
+            .map(|(session_id, path)| RecoveredSession {
+                session_id,
+                session_path: path.to_string_lossy().into_owned(),
+            }));
+        }
         Ok(recover_session(
             &project_path,
             &prompt,
@@ -1659,6 +1692,19 @@ pub(crate) fn validate_session_path(
     project_path: &str,
     is_codex: bool,
 ) -> Result<PathBuf, String> {
+    validate_session_path_for(
+        session_path,
+        project_path,
+        crate::app_settings::AgentFamily::from_codex_like(is_codex),
+    )
+}
+
+/// family 版校验:dsh 的允许根为托管 DSH_HOME 的 sessions 目录。
+pub(crate) fn validate_session_path_for(
+    session_path: &str,
+    project_path: &str,
+    family: crate::app_settings::AgentFamily,
+) -> Result<PathBuf, String> {
     let path = Path::new(session_path);
     if !path.is_absolute() {
         return Err("Session path must be absolute".into());
@@ -1670,16 +1716,19 @@ pub(crate) fn validate_session_path(
         return Err("Session path is not a regular file".into());
     }
 
-    let allowed_roots: Vec<PathBuf> = if is_codex {
-        codex_sessions_roots(project_path)
+    let allowed_roots: Vec<PathBuf> = match family {
+        crate::app_settings::AgentFamily::Codex => codex_sessions_roots(project_path)
             .into_iter()
             .filter_map(|p| p.canonicalize().ok())
-            .collect()
-    } else {
-        claude_sessions_dirs_for_project(project_path)
+            .collect(),
+        crate::app_settings::AgentFamily::Claude => claude_sessions_dirs_for_project(project_path)
             .into_iter()
             .filter_map(|p| p.canonicalize().ok())
-            .collect()
+            .collect(),
+        crate::app_settings::AgentFamily::Dsh => crate::session_dsh::dsh_session_allowed_roots()
+            .into_iter()
+            .filter_map(|p| p.canonicalize().ok())
+            .collect(),
     };
 
     if allowed_roots.is_empty() {
@@ -2607,14 +2656,16 @@ pub async fn export_session_markdown(
     session_path: String,
     project_path: String,
     is_codex: bool,
+    family: Option<String>,
     output_path: String,
     task_meta: ExportTaskMeta,
 ) -> Result<(), String> {
+    let family = crate::app_settings::resolve_family_param(family.as_deref(), is_codex);
     tokio::task::spawn_blocking(move || {
         export_session_markdown_inner(
             &session_path,
             &project_path,
-            is_codex,
+            family,
             &output_path,
             &task_meta,
         )

@@ -637,6 +637,7 @@ mod tests {
             label: "Chat Provider".to_string(),
             path: "/tmp/chat-provider".to_string(),
             codex_like: true,
+            family: String::new(),
             config_lang: "toml".to_string(),
             base_url: "https://chat.example/v1".to_string(),
             api_key: "sk-test".to_string(),

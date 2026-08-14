@@ -15,12 +15,13 @@ import {
 import * as Popover from "@radix-ui/react-popover";
 import * as Select from "@radix-ui/react-select";
 import type { AgentType, PermissionMode } from "../../types";
-import { agentDisplayLabel, isCodexLikeAgent, type AgentOption } from "../../agents";
+import { agentDisplayLabel, agentFamily, isCodexLikeAgent, type AgentOption } from "../../agents";
 import { useAgentOptions } from "../../hooks/useAgentOptions";
 import { useI18n } from "../../i18n";
 import s from "../../styles";
 import claudeLogo from "../../assets/claude.svg";
 import chatgptLogo from "../../assets/chatgpt.svg";
+import deepseekLogo from "../../assets/deepseek.svg";
 
 const PERMS: PermissionMode[] = ["ask", "auto_edit", "full_access"];
 export type ComposeMenu =
@@ -34,7 +35,14 @@ export type ComposeMenu =
   | null;
 
 function agentIcon(agent: AgentType, options = [] as ReturnType<typeof useAgentOptions>): string {
-  return isCodexLikeAgent(agent, options) ? chatgptLogo : claudeLogo;
+  switch (agentFamily(agent, options)) {
+    case "codex":
+      return chatgptLogo;
+    case "dsh":
+      return deepseekLogo;
+    default:
+      return claudeLogo;
+  }
 }
 
 function setMenuItemHover(el: HTMLElement, hover: boolean) {
@@ -98,8 +106,8 @@ export function composeModelMenuViewportStyle(): CSSProperties {
 export function composeAgentMenuContentStyle(): CSSProperties {
   return {
     ...s.toolbarMenuContent,
-    width: "min(520px, calc(100vw - 16px))",
-    minWidth: "min(420px, calc(100vw - 16px))",
+    width: "min(640px, calc(100vw - 16px))",
+    minWidth: "min(520px, calc(100vw - 16px))",
     maxHeight: "min(320px, var(--radix-select-content-available-height))",
     overflow: "hidden",
   };
@@ -108,7 +116,7 @@ export function composeAgentMenuContentStyle(): CSSProperties {
 export function composeAgentMenuViewportStyle(): CSSProperties {
   return {
     display: "grid",
-    gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+    gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
     gap: 8,
     maxHeight: "min(320px, var(--radix-select-content-available-height))",
     overflow: "hidden",
@@ -142,10 +150,12 @@ export function composeAgentMenuColumnViewportStyle(): CSSProperties {
 export function groupAgentOptions(options: AgentOption[]): {
   claude: AgentOption[];
   codex: AgentOption[];
+  dsh: AgentOption[];
 } {
   return {
-    claude: options.filter((option) => !option.codexLike),
-    codex: options.filter((option) => option.codexLike),
+    claude: options.filter((option) => option.family === "claude"),
+    codex: options.filter((option) => option.family === "codex"),
+    dsh: options.filter((option) => option.family === "dsh"),
   };
 }
 
@@ -295,7 +305,7 @@ export function AgentPermSelector({
   }
 
   function renderAgentColumn(
-    family: "claude" | "codex",
+    family: "claude" | "codex" | "dsh",
     label: string,
     options: typeof agentOptions,
   ) {
@@ -421,6 +431,7 @@ export function AgentPermSelector({
               <Select.Viewport style={composeAgentMenuViewportStyle()}>
                 {renderAgentColumn("claude", t("newTask.claudeAgents"), groupedAgents.claude)}
                 {renderAgentColumn("codex", t("newTask.codexAgents"), groupedAgents.codex)}
+                {renderAgentColumn("dsh", t("newTask.dshAgents"), groupedAgents.dsh)}
               </Select.Viewport>
             </Select.Content>
           </Select.Portal>

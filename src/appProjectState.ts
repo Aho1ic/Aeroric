@@ -9,10 +9,32 @@ import { normalizeProjectRailWidth } from "./components/project-page/viewMode";
 
 export const PROJECT_RAIL_WIDTH_STORAGE_KEY = "aeroric:projectRailWidth";
 export const SELECTED_CONDA_ENV_KEY = "aeroric:selectedCondaEnvPath";
+export const COLLAPSED_PROJECT_GROUPS_KEY = "aeroric:collapsedProjectGroups";
 
 export function loadProjectRailWidth(): number | null {
   const value = Number(localStorage.getItem(PROJECT_RAIL_WIDTH_STORAGE_KEY));
   return Number.isFinite(value) && value > 0 ? normalizeProjectRailWidth(value) : null;
+}
+
+export function loadCollapsedProjectGroups(): Set<string> {
+  try {
+    const stored = localStorage.getItem(COLLAPSED_PROJECT_GROUPS_KEY);
+    if (stored) {
+      const array = JSON.parse(stored);
+      return new Set(Array.isArray(array) ? array : []);
+    }
+  } catch (e) {
+    console.error("Failed to load collapsed project groups:", e);
+  }
+  return new Set();
+}
+
+export function saveCollapsedProjectGroups(collapsed: Set<string>): void {
+  try {
+    localStorage.setItem(COLLAPSED_PROJECT_GROUPS_KEY, JSON.stringify(Array.from(collapsed)));
+  } catch (e) {
+    console.error("Failed to save collapsed project groups:", e);
+  }
 }
 
 export function deriveProjectName(path: string): string {

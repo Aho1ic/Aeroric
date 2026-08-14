@@ -12,6 +12,7 @@ import {
 import {
   ChevronDown,
   ChevronRight,
+  Bell,
   Bot,
   Home,
   Moon,
@@ -527,6 +528,7 @@ export function ProjectRail({
   onToggleTheme,
   singleProjectMode = false,
   forceCollapsed = false,
+  onShowReleasePage,
 }: {
   projects: Project[];
   allTasks: Task[];
@@ -555,6 +557,7 @@ export function ProjectRail({
   onToggleTheme: () => void;
   singleProjectMode?: boolean;
   forceCollapsed?: boolean;
+  onShowReleasePage?: () => void;
 }) {
   const { t } = useI18n();
   const [addHov, setAddHov] = useState(false);
@@ -981,8 +984,9 @@ export function ProjectRail({
           )}
 
         {!singleProjectMode && (
-          <NotificationBell
-            buttonStyle={{
+          <button
+            style={{
+              ...s.sidebarIconBtn,
               width: 32,
               height: 32,
               justifyContent: "center",
@@ -990,8 +994,11 @@ export function ProjectRail({
               background: "var(--bg-card)",
               opacity: 1,
             }}
-            iconSize={14}
-          />
+            title={t("release.title")}
+            onClick={onShowReleasePage}
+          >
+            <Bell size={14} strokeWidth={1.6} color="var(--text-hint)" />
+          </button>
         )}
 
         {!singleProjectMode &&

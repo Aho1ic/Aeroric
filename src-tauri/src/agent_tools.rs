@@ -1607,12 +1607,40 @@ fn status_for(agent: BuiltInAgent) -> AgentToolStatus {
     }
 }
 
+/// dsh 的安装状态:npm 分发、无 tools_dir 托管概念,platform 无限制。
+fn dsh_status() -> AgentToolStatus {
+    let settings = crate::app_settings::load_settings_internal();
+    let launch = crate::app_settings::get_agent_launch_spec_from(&settings, "dsh");
+    let version = crate::app_settings::detect_launch_version(&launch).unwrap_or_default();
+    let configured = crate::app_settings::configured_agent_path(&settings, "dsh");
+    let channel = if version.is_empty() {
+        String::new()
+    } else {
+        crate::app_settings::upgrade_manager_for_path(&configured).to_string()
+    };
+    AgentToolStatus {
+        agent: "dsh".to_string(),
+        supported: true,
+        platform: std::env::consts::OS.to_string(),
+        architecture: std::env::consts::ARCH.to_string(),
+        libc: current_libc_label(),
+        installed: !version.is_empty(),
+        version,
+        path: configured,
+        channel,
+        managed: false,
+        error_code: None,
+        error: String::new(),
+    }
+}
+
 #[tauri::command]
 pub async fn get_agent_tool_status() -> Result<Vec<AgentToolStatus>, String> {
     tokio::task::spawn_blocking(|| {
         vec![
             status_for(BuiltInAgent::Claude),
             status_for(BuiltInAgent::Codex),
+            dsh_status(),
         ]
     })
     .await
@@ -1663,6 +1691,37 @@ async fn latest_codex_version(cancelled: &AtomicBool) -> InstallResult<String> {
     codex_version_from_tag(&release.tag_name)
 }
 
+/// npm registry 查询 dsh 最新版本(`@deepseek-ai/dsh`,dev preview 期版本形如
+/// 0.1.0-rc.6,保留完整预发布后缀用于"当前 vs 最新"比较)。
+async fn latest_dsh_version(cancelled: &AtomicBool) -> InstallResult<String> {
+    let client = http_client(&["registry.npmjs.org"])?;
+    let bytes = download_small_bytes(
+        &client,
+        "https://registry.npmjs.org/@deepseek-ai/dsh/latest",
+        MAX_METADATA_BYTES,
+        cancelled,
+    )
+    .await?;
+    let metadata: serde_json::Value = serde_json::from_slice(&bytes).map_err(|error| {
+        InstallError::new(
+            AgentInstallErrorCode::DownloadFailed,
+            format!("Invalid dsh registry metadata: {error}"),
+        )
+    })?;
+    let version = metadata
+        .get("version")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|version| !version.is_empty())
+        .ok_or_else(|| {
+            InstallError::new(
+                AgentInstallErrorCode::DownloadFailed,
+                "dsh registry metadata has no version",
+            )
+        })?;
+    Ok(version.to_string())
+}
+
 /// 单个内置 Agent 的最新可用版本。查询失败时只返回错误信息，不影响其它 Agent。
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 pub struct AgentLatestVersion {
@@ -1696,6 +1755,22 @@ pub async fn get_agent_latest_versions() -> Result<Vec<AgentLatestVersion>, Stri
             },
         });
     }
+    // dsh:npm 分发,无 tools_dir 原生安装机制;仅提供最新版本查询,
+    // 安装/升级走 upgrade_agent_tool 的 npm 通道。
+    results.push(match latest_dsh_version(&cancelled).await {
+        Ok(version) => AgentLatestVersion {
+            agent: "dsh".to_string(),
+            version,
+            error_code: None,
+            error: String::new(),
+        },
+        Err(error) => AgentLatestVersion {
+            agent: "dsh".to_string(),
+            version: String::new(),
+            error_code: Some(error.code),
+            error: error.message,
+        },
+    });
     Ok(results)
 }
 

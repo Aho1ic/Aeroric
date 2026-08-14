@@ -15,10 +15,12 @@
   --bg-selected: rgba(124, 58, 237, 0.12);
   --bg-subtle: rgba(244, 244, 247, 0.52);
   --bg-input: rgba(255, 255, 255, 0.68);
-  --terminal-bg: rgba(246, 248, 250, 0.9);
+  --terminal-bg: #ffffff;
   --bg: var(--bg-root);
   --glass-blur: blur(24px) saturate(1.28);
   --glass-blur-compact: blur(16px) saturate(1.2);
+  --settings-glass-blur: blur(64px) saturate(1.12);
+  --settings-glass-bg: #f8fafc;
   --glass-highlight: rgba(255, 255, 255, 0.5);
 
   --border-dim: rgba(39, 39, 42, 0.09);
@@ -194,6 +196,7 @@ html.eyecare {
   --bg-subtle: rgba(242, 231, 208, 0.54);
   --bg-input: rgba(255, 250, 240, 0.7);
   --terminal-bg: rgba(253, 246, 227, 0.9);
+  --settings-glass-bg: #f7eedb;
   --glass-highlight: rgba(255, 252, 242, 0.48);
 
   --border-dim: rgba(101, 84, 51, 0.12);
@@ -260,6 +263,7 @@ html.dark {
   --bg-subtle: rgba(22, 22, 27, 0.56);
   --bg-input: rgba(17, 17, 22, 0.68);
   --terminal-bg: rgba(5, 5, 6, 0.9);
+  --settings-glass-bg: #18181d;
   --glass-highlight: rgba(255, 255, 255, 0.09);
 
   --border-dim: rgba(244, 244, 245, 0.08);

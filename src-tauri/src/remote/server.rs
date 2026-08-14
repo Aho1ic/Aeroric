@@ -32,12 +32,12 @@ use super::protocol::{
 };
 use super::{audit, crypto, orca_crypto, orca_rpc, rpc, RemoteState};
 
-const AUTH_TIMEOUT: Duration = Duration::from_secs(10);
+const AUTH_TIMEOUT: Duration = Duration::from_secs(30);
 /// Bound sockets before the WebSocket upgrade/authentication completes. A
 /// network peer must not be able to turn slow HTTP headers into unbounded tasks
 /// and file-descriptor pressure.
 const MAX_CONNECTIONS: usize = 256;
-const HTTP_UPGRADE_TIMEOUT: Duration = Duration::from_secs(10);
+const HTTP_UPGRADE_TIMEOUT: Duration = Duration::from_secs(20);
 const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(30);
 const IDLE_DISCONNECT: Duration = Duration::from_secs(75);
 /// 单条消息上限;控制面为小 JSON、终端帧 ≤64KB+密文开销,1MB 足够且防滥用。

@@ -9,11 +9,11 @@ import {
 import { ChevronDown, ChevronRight, Cpu, Gauge, SlidersHorizontal, Zap } from "lucide-react";
 import * as Popover from "@radix-ui/react-popover";
 import type { AgentType } from "../../types";
-import { isCodexLikeAgent } from "../../agents";
+import { agentFamily } from "../../agents";
 import { useAgentOptions } from "../../hooks/useAgentOptions";
 import { useI18n } from "../../i18n";
 import {
-  availableReasoningEfforts,
+  availableReasoningEffortsForFamily,
   type ReasoningEffort,
   type TaskSpeed,
 } from "../../modelOptions";
@@ -98,8 +98,11 @@ export function ModelOptionsMenu({
 }) {
   const { t } = useI18n();
   const agentOptions = useAgentOptions();
-  const codexLike = isCodexLikeAgent(agent, agentOptions);
-  const efforts = availableReasoningEfforts(codexLike, selectedModel);
+  const family = agentFamily(agent, agentOptions);
+  const efforts = availableReasoningEffortsForFamily(family, selectedModel);
+  // dsh 无 effort/speed 档位(计划 D6),整段隐藏;claude/codex 行为不变。
+  const showReasoning = efforts.length > 0;
+  const showSpeed = family !== "dsh";
   const [open, setOpen] = useState(false);
   const [panel, setPanel] = useState<Panel | null>(null);
   const pendingPanelRef = useRef<Panel | null>(null);
@@ -538,25 +541,27 @@ export function ModelOptionsMenu({
                 selectedModel || t("newTask.modelsUnavailable"),
                 modelLabel,
               )}
-              {renderPanelTrigger(
-                "reasoning",
-                <SlidersHorizontal size={14} color="var(--text-muted)" aria-hidden="true" />,
-                t("newTask.reasoningLabel"),
-                reasoningLabel,
-                reasoningLabel,
-              )}
-              {renderPanelTrigger(
-                "speed",
-                <Gauge size={14} color="var(--text-muted)" aria-hidden="true" />,
-                t("newTask.speedLabel"),
-                <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
-                  {t(`newTask.speed.${speed}`)}
-                  {speed === "fast" && (
-                    <Zap size={12} color="var(--speed-fast-fg)" aria-hidden="true" />
-                  )}
-                </span>,
-                t(`newTask.speed.${speed}`),
-              )}
+              {showReasoning &&
+                renderPanelTrigger(
+                  "reasoning",
+                  <SlidersHorizontal size={14} color="var(--text-muted)" aria-hidden="true" />,
+                  t("newTask.reasoningLabel"),
+                  reasoningLabel,
+                  reasoningLabel,
+                )}
+              {showSpeed &&
+                renderPanelTrigger(
+                  "speed",
+                  <Gauge size={14} color="var(--text-muted)" aria-hidden="true" />,
+                  t("newTask.speedLabel"),
+                  <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+                    {t(`newTask.speed.${speed}`)}
+                    {speed === "fast" && (
+                      <Zap size={12} color="var(--speed-fast-fg)" aria-hidden="true" />
+                    )}
+                  </span>,
+                  t(`newTask.speed.${speed}`),
+                )}
             </div>
           </div>
         </Popover.Content>

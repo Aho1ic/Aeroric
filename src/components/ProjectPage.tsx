@@ -12,6 +12,7 @@ import type {
   TerminalFontSize,
   TaskDisplayWindow,
   FontFamily,
+  ProtocolFamily,
   SshConnection,
   CondaEnvironment,
   TextSearchMatch,
@@ -25,6 +26,7 @@ import type {
 } from "../types";
 import { resolveProjectLocation } from "../types";
 import { NewTaskView, type NewTaskDraft } from "./NewTaskView";
+import type { LaunchMode } from "./new-task/LaunchModeSelector";
 import { RunningView } from "./RunningView";
 import type { AgentConfigSwitchValues } from "./AgentConfigSwitchDialog";
 import { FileExplorer } from "./FileExplorer";
@@ -86,6 +88,7 @@ import { isRunnableScriptFile, selectRunnableCondaEnvironment } from "./file-vie
 import { dispatchFileViewerCommand } from "./file-viewer/editorCommandEvents";
 import { isSqliteDatabaseFileName } from "./file-explorer/fileEntryUtils";
 import { agentDisplayLabel } from "../agents";
+import { hasTaskSessionPath } from "../taskSession";
 import { useAgentOptions } from "../hooks/useAgentOptions";
 import { usePlatformRuntimeInfo } from "../hooks/usePlatformRuntimeInfo";
 import { useI18n } from "../i18n";
@@ -113,6 +116,7 @@ import {
   IdePanelShell,
   NotebookPanel,
   ProblemsPanel,
+  ProjectSkillsPanel,
   type ProjectPanel,
   projectPanelFeedbackLabel,
   preloadCommonProjectPanels,
@@ -272,6 +276,7 @@ export function ProjectPage({
   condaEnvironments,
   selectedCondaEnvPath,
   onSelectedCondaEnvPathChange,
+  onShowReleasePage,
 }: {
   project: Project;
   visible?: boolean;
@@ -297,7 +302,7 @@ export function ProjectPage({
     images: string[];
     texts: string[];
     immediate: boolean;
-    launchMode: "local" | "worktree";
+    launchMode: LaunchMode;
     baseBranch: string;
     selectedModel?: string;
     reasoningEffort?: string | null;
@@ -330,6 +335,7 @@ export function ProjectPage({
     sessionId: string,
     sessionPath: string,
     codexLike: boolean,
+    family?: ProtocolFamily,
   ) => void;
   onBack: () => void;
   onSwitchProject: (project: Project) => void;
@@ -366,6 +372,7 @@ export function ProjectPage({
   condaEnvironments: CondaEnvironment[];
   selectedCondaEnvPath: string | null;
   onSelectedCondaEnvPathChange: (path: string | null) => void;
+  onShowReleasePage?: () => void;
 }) {
   const { t } = useI18n();
   const { showToast } = useToast();
@@ -676,6 +683,7 @@ export function ProjectPage({
     searchDisabled,
     debugDisabled,
     previewDisabled,
+    skillsDisabled,
     settingsDisabled,
   } = projectFeatureAvailability({
     projectLocation,
@@ -720,6 +728,7 @@ export function ProjectPage({
     testsDisabled,
     debugDisabled,
     previewDisabled,
+    skillsDisabled,
   });
   useEffect(() => {
     if (rightPanel === "ssh") return;
@@ -1404,6 +1413,7 @@ export function ProjectPage({
       searchDisabled,
       debugDisabled,
       previewDisabled,
+      skillsDisabled,
     }),
     [
       debugDisabled,
@@ -1414,6 +1424,7 @@ export function ProjectPage({
       runDisabled,
       testsDisabled,
       searchDisabled,
+      skillsDisabled,
     ],
   );
 
@@ -1546,7 +1557,7 @@ export function ProjectPage({
     isNewTask,
     hasSelectedTask: Boolean(selectedTask),
     taskStatus: selectedTask?.status ?? "todo",
-    hasSessionPath: Boolean(selectedTask?.claudeSessionPath ?? selectedTask?.codexSessionPath),
+    hasSessionPath: selectedTask ? hasTaskSessionPath(selectedTask) : false,
   });
   const activeWorkspaceTask = taskWorkspaceVisible ? selectedTask : null;
   const agentConversationSelected = Boolean(
@@ -1775,6 +1786,7 @@ export function ProjectPage({
         onResumeTask={onResumeTask}
         singleProjectMode={hubMode}
         forceCollapsed={responsiveLayout.autoCollapseRail || isDatabaseMode}
+        onShowReleasePage={onShowReleasePage}
       />
       <div style={{ ...s.mainContent, flexDirection: "column" }}>
         {showWorkspaceTabs && (
@@ -2242,7 +2254,7 @@ export function ProjectPage({
                     taskId: task.id,
                     selectedTaskId,
                     taskStatus: task.status,
-                    hasSessionPath: Boolean(task.claudeSessionPath ?? task.codexSessionPath),
+                    hasSessionPath: hasTaskSessionPath(task),
                   });
                   return (
                     <RunningView
@@ -2273,8 +2285,14 @@ export function ProjectPage({
                       onSnapshot={(snapshot) => onSnapshot(task.id, snapshot)}
                       onSessionRecovered={
                         onTaskSessionRecovered
-                          ? (sessionId, sessionPath, codexLike) =>
-                              onTaskSessionRecovered(task.id, sessionId, sessionPath, codexLike)
+                          ? (sessionId, sessionPath, codexLike, family) =>
+                              onTaskSessionRecovered(
+                                task.id,
+                                sessionId,
+                                sessionPath,
+                                codexLike,
+                                family,
+                              )
                           : undefined
                       }
                       getRestoreState={() => getTaskRestoreState(task.id)}
@@ -2792,6 +2810,14 @@ export function ProjectPage({
                 />
               </ErrorBoundary>
             )}
+            {visibleRightPanel === "skills" && (
+              <ErrorBoundary
+                label="Skills"
+                onError={(error) => showActionFailure("skills", t("skills.installedSkills"), error)}
+              >
+                <ProjectSkillsPanel projectPath={fileRootPath} width={effectiveRightPanelWidth} />
+              </ErrorBoundary>
+            )}
             {visibleRightPanel === "problems" && (
               <>
                 {renderTopRightIdePanelShell(
@@ -2947,6 +2973,7 @@ export function ProjectPage({
         searchDisabled={searchDisabled}
         debugDisabled={debugDisabled}
         previewDisabled={previewDisabled}
+        skillsDisabled={skillsDisabled}
         settingsDisabled={settingsDisabled}
       />
 

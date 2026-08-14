@@ -176,6 +176,8 @@ const loadDatabaseView = () =>
   import("../database/DatabaseView").then((module) => ({ default: module.DatabaseView }));
 const loadNotebookPanel = () =>
   import("../notebook/NotebookPanel").then((module) => ({ default: module.NotebookPanel }));
+const loadProjectSkillsPanel = () =>
+  import("../skills/ProjectSkillsPanel").then((module) => ({ default: module.ProjectSkillsPanel }));
 
 export const FileViewer = lazy(loadFileViewer);
 export const FileSearchDialog = lazy(loadFileSearchDialog);
@@ -184,6 +186,7 @@ export const GitHistory = lazy(loadGitHistory);
 export const GitAdvancedPanel = lazy(loadGitAdvancedPanel);
 export const GitDiffViewer = lazy(loadGitDiffViewer);
 export const SearchPanel = lazy(loadSearchPanel);
+export const ProjectSkillsPanel = lazy(loadProjectSkillsPanel);
 export const ProblemsPanel = lazy(loadProblemsPanel);
 export const TestExplorerPanel = lazy(loadTestExplorerPanel);
 export const RunConfigurationsPanel = lazy(loadRunConfigurationsPanel);
@@ -228,6 +231,8 @@ export function projectPanelFeedbackLabel(panel: ProjectPanel, t: (key: string) 
       return t("docker.title");
     case "notes":
       return t("notes.title");
+    case "skills":
+      return t("skills.installedSkills");
   }
 }
 
@@ -278,6 +283,9 @@ export function preloadProjectPanel(panel: ProjectPanel): void {
       break;
     case "notes":
       void loadNotebookPanel();
+      break;
+    case "skills":
+      void loadProjectSkillsPanel();
       break;
   }
 }

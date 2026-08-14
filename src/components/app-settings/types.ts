@@ -27,9 +27,11 @@ export interface AppSettings {
   claude_path: string;
   claude_gpt55_path: string;
   codex_path: string;
+  dsh_path?: string;
   claude_config_path: string;
   claude_gpt55_config_path: string;
   codex_config_path: string;
+  dsh_config_path?: string;
   agent_label_overrides?: Record<string, string>;
   builtin_agent_credentials?: Record<string, BuiltInAgentCredentials>;
   proxy_settings?: ProxySettings;
@@ -260,6 +262,7 @@ export interface AgentVersions {
   claude_version: string;
   claude_gpt55_version: string;
   codex_version: string;
+  dsh_version?: string;
 }
 
 export interface AgentUpgradeChannel {
@@ -361,7 +364,7 @@ export interface AgentInstallResult {
   message: string;
 }
 
-export type AgentSetupKind = "codex" | "claude_code";
+export type AgentSetupKind = "codex" | "claude_code" | "dsh";
 
 export interface AgentSetupDraft {
   id: string;

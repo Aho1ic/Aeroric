@@ -104,6 +104,18 @@ pub struct Task {
     pub codex_session_id: Option<String>,
     #[serde(rename = "codexSessionPath", skip_serializing_if = "Option::is_none")]
     pub codex_session_path: Option<String>,
+    #[serde(
+        rename = "dshSessionId",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub dsh_session_id: Option<String>,
+    #[serde(
+        rename = "dshSessionPath",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub dsh_session_path: Option<String>,
     #[serde(rename = "sessionAgent", skip_serializing_if = "Option::is_none")]
     pub session_agent: Option<String>,
     #[serde(
@@ -112,6 +124,13 @@ pub struct Task {
         skip_serializing_if = "Option::is_none"
     )]
     pub session_codex_like: Option<bool>,
+    /// 会话协议族("claude"/"codex"/"dsh");读取优先于 sessionCodexLike。
+    #[serde(
+        rename = "sessionFamily",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub session_family: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub starred: Option<bool>,
     #[serde(rename = "failureReason", skip_serializing_if = "Option::is_none")]

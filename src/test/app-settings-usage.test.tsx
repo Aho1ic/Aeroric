@@ -41,6 +41,8 @@ describe("AppSettingsDialog usage statistics", () => {
           onUiFontFamilyChange={vi.fn()}
           monoFontFamily="system"
           onMonoFontFamilyChange={vi.fn()}
+          dshWebSearchEnabled={true}
+          onDshWebSearchEnabledChange={vi.fn()}
           onClose={vi.fn()}
         />
       </I18nProvider>,
@@ -85,6 +87,8 @@ describe("AppSettingsDialog usage statistics", () => {
           onUiFontFamilyChange={vi.fn()}
           monoFontFamily="system"
           onMonoFontFamilyChange={vi.fn()}
+          dshWebSearchEnabled={true}
+          onDshWebSearchEnabledChange={vi.fn()}
           onClose={vi.fn()}
         />
       </I18nProvider>,

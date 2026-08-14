@@ -292,9 +292,9 @@ describe("Notification release updater", () => {
     });
     expect(screen.getByTestId("update-banner")).toHaveAttribute(
       "aria-label",
-      "Update available: v9.9.9",
+      "New version available: v9.9.9",
     );
-    expect(screen.queryByText("Update available: v9.9.9")).not.toBeInTheDocument();
+    expect(screen.queryByText("New version available: v9.9.9")).not.toBeInTheDocument();
     expect(screen.getByTestId("sidebar-body")).toBeInTheDocument();
   });
 });

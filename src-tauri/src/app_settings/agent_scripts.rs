@@ -768,6 +768,8 @@ pub(super) fn build_agent_script(draft: &AgentSetupDraft) -> String {
     match draft.kind {
         AgentSetupKind::Codex => build_codex_agent_script(draft),
         AgentSetupKind::ClaudeCode => build_claude_code_agent_script(draft),
+        // dsh-like 档案不走 wrapper 脚本(setup_agent_profile 单独分支处理)。
+        AgentSetupKind::Dsh => String::new(),
     }
 }
 
@@ -779,7 +781,9 @@ pub(super) fn validate_agent_setup_draft(draft: &AgentSetupDraft) -> Result<Stri
     if draft.label.trim().is_empty() {
         return Err("Agent name is required".to_string());
     }
-    if normalize_base_url(&draft.base_url).is_empty() {
+    let is_dsh = matches!(draft.kind, AgentSetupKind::Dsh);
+    // dsh 官方 provider 无需 base_url;提供 base_url 即自定义 OpenAI 兼容网关。
+    if !is_dsh && normalize_base_url(&draft.base_url).is_empty() {
         return Err("Base URL is required".to_string());
     }
     if draft.api_key.trim().is_empty() {
@@ -789,7 +793,7 @@ pub(super) fn validate_agent_setup_draft(draft: &AgentSetupDraft) -> Result<Stri
         return Err("API key and base URL cannot contain NUL bytes".to_string());
     }
     let models = normalize_setup_models(draft);
-    if models.is_empty() {
+    if models.is_empty() && !(is_dsh && normalize_base_url(&draft.base_url).is_empty()) {
         return Err("At least one model is required".to_string());
     }
     if models.iter().any(|model| !validate_model_name(model)) {
@@ -802,6 +806,7 @@ pub(super) fn setup_agent_kind_suffix(kind: &AgentSetupKind) -> &'static str {
     match kind {
         AgentSetupKind::Codex => "codex",
         AgentSetupKind::ClaudeCode => "claude",
+        AgentSetupKind::Dsh => "dsh",
     }
 }
 
@@ -818,6 +823,7 @@ pub(super) fn allocate_setup_agent_id(
     let base = requested
         .strip_suffix("_codex")
         .or_else(|| requested.strip_suffix("_claude"))
+        .or_else(|| requested.strip_suffix("_dsh"))
         .unwrap_or(&requested);
     let base = if base.is_empty() { "agent" } else { base };
     let preferred = sanitize_custom_agent_id(&format!("{base}_{suffix}"));
@@ -1942,6 +1948,7 @@ api_key = "sk-codex"
             label: "Custom".to_string(),
             path: codex_path.to_string_lossy().into_owned(),
             codex_like: true,
+            family: String::new(),
             config_lang: "shellscript".to_string(),
             base_url: String::new(),
             api_key: String::new(),
@@ -1981,6 +1988,7 @@ fi
             label: "Custom".to_string(),
             path: script_path.to_string_lossy().into_owned(),
             codex_like: false,
+            family: String::new(),
             config_lang: "shellscript".to_string(),
             base_url: String::new(),
             api_key: String::new(),
@@ -2015,6 +2023,7 @@ fi
             label: "Proxy".to_string(),
             path: script_path.to_string_lossy().into_owned(),
             codex_like: true,
+            family: String::new(),
             config_lang: "shellscript".to_string(),
             base_url: String::new(),
             api_key: String::new(),
@@ -2060,6 +2069,7 @@ printf 'model_catalog_json = "model-catalog.json"\n'
                 label: "liwan".to_string(),
                 path: script_path.to_string_lossy().into_owned(),
                 codex_like: true,
+                family: String::new(),
                 config_lang: "shellscript".to_string(),
                 base_url: "https://metapi.example/v1".to_string(),
                 api_key: "sk-test".to_string(),
@@ -2108,6 +2118,7 @@ printf 'model_catalog_json = "model-catalog.json"\n'
                 label: "muyuan".to_string(),
                 path: script_path.to_string_lossy().into_owned(),
                 codex_like: true,
+                family: String::new(),
                 config_lang: "shellscript".to_string(),
                 base_url: "https://muyuan.example/v1".to_string(),
                 api_key: "sk-test".to_string(),
@@ -2147,6 +2158,7 @@ printf 'model_catalog_json = "model-catalog.json"\n'
                 label: "Custom".to_string(),
                 path: script_path.to_string_lossy().into_owned(),
                 codex_like: true,
+                family: String::new(),
                 config_lang: "shellscript".to_string(),
                 base_url: "https://example.com/v1".to_string(),
                 api_key: "sk-test".to_string(),
@@ -2183,6 +2195,7 @@ printf 'model_catalog_json = "model-catalog.json"\n'
                 label: "AgentRouter".to_string(),
                 path: script_path.to_string_lossy().into_owned(),
                 codex_like: false,
+                family: String::new(),
                 config_lang: "shellscript".to_string(),
                 base_url: "https://agentrouter.org".to_string(),
                 api_key: "sk-test".to_string(),
@@ -2218,6 +2231,7 @@ printf 'model_catalog_json = "model-catalog.json"\n'
                 label: "Custom".to_string(),
                 path: script_path.to_string_lossy().into_owned(),
                 codex_like: false,
+                family: String::new(),
                 config_lang: "shellscript".to_string(),
                 base_url: "https://example.com".to_string(),
                 api_key: "sk-test".to_string(),

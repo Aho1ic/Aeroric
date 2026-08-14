@@ -29,6 +29,9 @@ export const dialogs = {
   },
   settingsModalBox: {
     width: "min(max(920px, 86vw), calc(100vw - 40px), calc(133.333vh - 74.667px))",
+    background: "var(--settings-glass-bg)",
+    backdropFilter: "var(--settings-glass-blur)",
+    WebkitBackdropFilter: "var(--settings-glass-blur)",
   },
   settingsNav: {
     width: 180,

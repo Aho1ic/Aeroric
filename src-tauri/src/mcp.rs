@@ -520,6 +520,113 @@ pub fn codex_mcp_profile_for_launch(codex_home: &Path) -> Result<Option<String>,
     Ok(Some(CODEX_MCP_PROFILE.to_string()))
 }
 
+/// dsh 的 `serverName` 约束:`[A-Za-z0-9_-]{1,32}`。非法字符替换为 `-`,
+/// 截断到 32;冲突时追加序号,保证 patch 内唯一。
+fn dsh_server_name(raw: &str, used: &mut Vec<String>) -> String {
+    let mut name: String = raw
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-') {
+                ch
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    name.truncate(32);
+    if name.is_empty() {
+        name = "server".to_string();
+    }
+    let mut candidate = name.clone();
+    let mut counter = 2;
+    while used.contains(&candidate) {
+        let suffix = format!("-{counter}");
+        let mut base = name.clone();
+        base.truncate(32 - suffix.len());
+        candidate = format!("{base}{suffix}");
+        counter += 1;
+    }
+    used.push(candidate.clone());
+    candidate
+}
+
+/// YAML 双引号字符串(命令/参数/env 可能含任意字符)。
+fn yaml_string(value: &str) -> String {
+    let mut out = String::with_capacity(value.len() + 2);
+    out.push('"');
+    for ch in value.chars() {
+        match ch {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            _ => out.push(ch),
+        }
+    }
+    out.push('"');
+    out
+}
+
+/// 构造 dsh 的 MCP patch 覆盖层:每个 server 一个 `dsh-mcp-client` plugin row
+/// (insert 操作;row id 带 `aeroric-mcp-` 前缀,与受管/用户 patch 不冲突)。
+fn build_dsh_mcp_patch(servers: &[&McpServerConfig]) -> String {
+    let mut out = String::from(
+        "# 由 Aeroric 生成,请勿手工编辑。内容随 MCP 设置在任务启动时重写。\n- insert:\n",
+    );
+    let mut used = Vec::new();
+    for server in servers {
+        let server_name = dsh_server_name(&server.name, &mut used);
+        out.push_str(&format!("    - id: aeroric-mcp-{server_name}\n"));
+        out.push_str("      name: '@deepseek-ai/dsh-mcp-client'\n");
+        out.push_str("      config:\n");
+        out.push_str("        transport: stdio\n");
+        out.push_str(&format!(
+            "        serverName: {}\n",
+            yaml_string(&server_name)
+        ));
+        out.push_str(&format!(
+            "        command: {}\n",
+            yaml_string(&server.command)
+        ));
+        if server.args.is_empty() {
+            out.push_str("        args: []\n");
+        } else {
+            out.push_str("        args:\n");
+            for arg in &server.args {
+                out.push_str(&format!("          - {}\n", yaml_string(arg)));
+            }
+        }
+        if !server.env.is_empty() {
+            out.push_str("        env:\n");
+            for (key, value) in server.env.iter().collect::<BTreeMap<_, _>>() {
+                out.push_str(&format!(
+                    "          {}: {}\n",
+                    yaml_string(key),
+                    yaml_string(value)
+                ));
+            }
+        }
+    }
+    out
+}
+
+/// 为一次 dsh 启动准备 MCP patch 文件,返回 `None` 表示无需注入。
+/// env 可能含 API key,写入走 `atomic_write_private`(0o600);文件放在对应
+/// agent 的托管 home 内,任务启动时整体重写(server 增删改自然生效)。
+pub fn dsh_mcp_patch_for_launch(dsh_home: &Path) -> Result<Option<PathBuf>, String> {
+    let settings = load_mcp_settings()?;
+    let servers = active_servers(&settings);
+    if servers.is_empty() {
+        return Ok(None);
+    }
+    let raw = build_dsh_mcp_patch(&servers);
+    ensure_private_dir(dsh_home)?;
+    let path = dsh_home.join("aeroric.mcp.patch.yml");
+    atomic_write_private(&path, &raw).map_err(|err| format!("无法写入 dsh MCP patch: {err}"))?;
+    Ok(Some(path))
+}
+
 // ── Tauri commands ──────────────────────────────────────────────────────────
 
 #[tauri::command]
@@ -559,6 +666,36 @@ mod tests {
             env: HashMap::new(),
             enabled: true,
         }
+    }
+
+    #[test]
+    fn builds_dsh_mcp_patch_rows_with_sanitized_server_names() {
+        let mut weird = server("我的 server!", "npx");
+        weird.args = vec!["-y".to_string(), "mcp-thing".to_string()];
+        weird
+            .env
+            .insert("TOKEN".to_string(), "se\"cret".to_string());
+        let plain = server("files", "/usr/bin/files-mcp");
+        let patch = build_dsh_mcp_patch(&[&weird, &plain]);
+        assert!(patch.contains("- insert:"));
+        assert!(patch.contains("name: '@deepseek-ai/dsh-mcp-client'"));
+        assert!(patch.contains("transport: stdio"));
+        // 非法字符替换为 '-';两个 server 各占一行 row。
+        assert!(patch.contains("serverName: \"---server-\""));
+        assert!(patch.contains("serverName: \"files\""));
+        assert!(patch.contains("command: \"npx\""));
+        assert!(patch.contains("- \"mcp-thing\""));
+        assert!(patch.contains("\"TOKEN\": \"se\\\"cret\""));
+    }
+
+    #[test]
+    fn dsh_server_names_stay_unique_after_sanitization() {
+        let mut used = Vec::new();
+        assert_eq!(dsh_server_name("a b", &mut used), "a-b");
+        assert_eq!(dsh_server_name("a-b", &mut used), "a-b-2");
+        assert_eq!(dsh_server_name("", &mut used), "server");
+        let long = "x".repeat(64);
+        assert_eq!(dsh_server_name(&long, &mut used).len(), 32);
     }
 
     #[test]

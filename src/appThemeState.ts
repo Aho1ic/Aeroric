@@ -63,6 +63,11 @@ export function getInitialAttentionBadge(): boolean {
   return localStorage.getItem("aeroric:attentionBadge") !== "0";
 }
 
+export function getInitialDshWebSearchEnabled(): boolean {
+  // 默认开启:DSH 任务允许使用 web_search 工具
+  return localStorage.getItem("aeroric:dshWebSearchEnabled") !== "0";
+}
+
 export function getInitialFontFamily(
   key: string,
   fallback: FontFamily,

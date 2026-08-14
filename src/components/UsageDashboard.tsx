@@ -25,7 +25,7 @@ import { AnimatedSelectionGroup } from "./ui/AnimatedSelection";
 import { Button } from "./ui/Button";
 
 const RANGE_OPTIONS: UsageStatisticsRange[] = [1, 7, 14, 30];
-const AGENT_OPTIONS: UsageStatisticsAgent[] = ["all", "codex", "claude"];
+const AGENT_OPTIONS: UsageStatisticsAgent[] = ["all", "codex", "claude", "dsh"];
 
 // Format numbers/currency/dates against the user's chosen UI language rather
 // than the OS locale, so an English UI never renders "US$0.12" / localized
@@ -476,6 +476,7 @@ function UsageChart({
 function SourceSummary({
   codex,
   claude,
+  dsh,
   tokenLabel,
   requestLabel,
   title,
@@ -483,12 +484,13 @@ function SourceSummary({
 }: {
   codex: UsageStatisticsTotals;
   claude: UsageStatisticsTotals;
+  dsh?: UsageStatisticsTotals;
   tokenLabel: string;
   requestLabel: string;
   title: string;
   locale: string;
 }) {
-  const max = Math.max(1, codex.totalTokens, claude.totalTokens);
+  const max = Math.max(1, codex.totalTokens, claude.totalTokens, dsh?.totalTokens ?? 0);
   return (
     <section className="usage-panel" style={s.usageSourceSummary}>
       <div style={s.usageSectionTitle}>{title}</div>
@@ -496,6 +498,8 @@ function SourceSummary({
         {[
           { name: "Codex", totals: codex, color: "var(--accent)" },
           { name: "Claude", totals: claude, color: "var(--success)" },
+          // dsh 无 rate-limit API,来源汇总只展示本地聚合的 token 数(降级展示)。
+          ...(dsh ? [{ name: "DeepSeek", totals: dsh, color: "var(--info, #4D6BFE)" }] : []),
         ].map((item) => (
           <div key={item.name} style={s.usageSourceRow}>
             <strong>{item.name}</strong>
@@ -772,6 +776,7 @@ export function UsageDashboard({ embedded = false }: { embedded?: boolean }) {
               <SourceSummary
                 codex={statistics.breakdown.codex}
                 claude={statistics.breakdown.claude}
+                dsh={statistics.breakdown.dsh}
                 tokenLabel={t("usageStats.tokensShort")}
                 requestLabel={t("usageStats.requestsShort")}
                 title={t("usageStats.sourceBreakdown")}

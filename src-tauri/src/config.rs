@@ -403,6 +403,8 @@ fn agent_config_path_from_settings(
         "claude_gpt55" => Ok(configured_path(&settings.claude_gpt55_config_path)),
         "codex" => Ok(configured_path(&settings.codex_config_path)
             .or_else(|| app_settings::default_builtin_agent_config_path("codex").ok())),
+        "dsh" => Ok(configured_path(&settings.dsh_config_path)
+            .or_else(|| app_settings::default_builtin_agent_config_path("dsh").ok())),
         _ => settings
             .custom_agents
             .iter()
@@ -463,6 +465,12 @@ pub(crate) fn read_agent_reasoning_settings_from_settings(
     agent: &str,
     settings: &AppSettings,
 ) -> (Option<String>, Option<String>) {
+    // dsh 无 effort/speed 档位(settings.yaml 也没有对应键),不回落默认值。
+    if crate::app_settings::agent_family_in(settings, agent)
+        == crate::app_settings::AgentFamily::Dsh
+    {
+        return (None, None);
+    }
     let content = match agent_config_path_from_settings(agent, settings) {
         Ok(Some(path)) => fs::read_to_string(&path).unwrap_or_default(),
         _ => String::new(),

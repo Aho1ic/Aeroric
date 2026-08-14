@@ -1,7 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { save as saveDialog } from "@tauri-apps/plugin-dialog";
-import type { Task, UsageWindow, TerminalFontSize, FontFamily, ThemeVariant } from "../types";
+import type {
+  Task,
+  UsageWindow,
+  TerminalFontSize,
+  FontFamily,
+  ProtocolFamily,
+  ThemeVariant,
+} from "../types";
 import { permissionModeLabel } from "../types";
 import { StatusIcon } from "./StatusIcon";
 import { TerminalView } from "./TerminalView";
@@ -13,7 +20,7 @@ import { usePlatformRuntimeInfo } from "../hooks/usePlatformRuntimeInfo";
 import { ENABLE_USAGE_INSIGHTS } from "../platform";
 import { agentDisplayLabel, isCodexLikeAgent, type AgentOption } from "../agents";
 import {
-  getTaskSessionFields,
+  getTaskSessionFieldsByFamily,
   hasTaskContinuationContext,
   resolveTaskSessionOwner,
 } from "../taskSession";
@@ -130,7 +137,12 @@ export function RunningView({
   ) => number;
   onTerminalReady: (generation: number) => void;
   onSnapshot?: (snapshot: string) => void;
-  onSessionRecovered?: (sessionId: string, sessionPath: string, codexLike: boolean) => void;
+  onSessionRecovered?: (
+    sessionId: string,
+    sessionPath: string,
+    codexLike: boolean,
+    family?: ProtocolFamily,
+  ) => void;
   getRestoreState?: () => {
     initialData?: string;
     initialSnapshot?: string;
@@ -152,7 +164,7 @@ export function RunningView({
   const isInterrupted = task.status === "interrupted";
   const currentCodexLike = isCodexLikeAgent(task.agent, agentOptions);
   const sessionOwner = resolveTaskSessionOwner(task, agentOptions);
-  const sessionFields = getTaskSessionFields(task, sessionOwner.codexLike);
+  const sessionFields = getTaskSessionFieldsByFamily(task, sessionOwner.family);
   const rawPersistedSessionPath = sessionFields.sessionPath ?? sessionFields.legacySessionPath;
   const persistedSessionId = sessionFields.sessionId ?? sessionFields.legacySessionId;
   const [recoveredSession, setRecoveredSession] = useState<{
@@ -264,6 +276,8 @@ export function RunningView({
       prompt: task.prompt,
       createdAt: task.createdAt,
       isCodex: sessionOwner.codexLike,
+      family: sessionOwner.family,
+      agent: sessionOwner.agent,
     })
       .then((recovered) => {
         if (cancelled) return;
@@ -278,6 +292,7 @@ export function RunningView({
           recovered.sessionId,
           recovered.sessionPath,
           sessionOwner.codexLike,
+          sessionOwner.family,
         );
       })
       .catch((error) => {
@@ -295,7 +310,9 @@ export function RunningView({
     persistedSessionPath,
     projectPath,
     recoveredSession,
+    sessionOwner.agent,
     sessionOwner.codexLike,
+    sessionOwner.family,
     t,
     task.createdAt,
     task.id,
@@ -380,6 +397,7 @@ export function RunningView({
         sessionPath,
         projectPath,
         isCodex: sessionOwner.codexLike,
+        family: sessionOwner.family,
         outputPath,
         taskMeta: {
           name: task.name,
@@ -954,6 +972,7 @@ export function RunningView({
               sessionPath={sessionPath}
               projectPath={projectPath}
               isCodex={sessionOwner.codexLike}
+              family={sessionOwner.family}
               fallback={terminalHistoryFallback}
               onLoadFailed={() => handleSessionLoadFailed(sessionPath)}
             />
@@ -1011,6 +1030,7 @@ export function RunningView({
           sessionPath={sessionPath}
           projectPath={projectPath}
           isCodex={sessionOwner.codexLike}
+          family={sessionOwner.family}
           fallback={terminalHistoryFallback}
           onLoadFailed={() => handleSessionLoadFailed(sessionPath)}
         />

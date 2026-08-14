@@ -20,18 +20,20 @@ import {
 
 describe("agent options", () => {
   it("exposes only clean release launch profiles in dropdown order", () => {
-    expect(AGENT_OPTIONS.map((agent) => agent.value)).toEqual(["claude", "codex"]);
+    expect(AGENT_OPTIONS.map((agent) => agent.value)).toEqual(["claude", "codex", "dsh"]);
   });
 
   it("labels the release launch profiles clearly", () => {
     expect(agentDisplayLabel("claude")).toBe("Claude Code");
     expect(agentDisplayLabel("codex")).toBe("Codex");
+    expect(agentDisplayLabel("dsh")).toBe("DeepSeek Harness");
   });
 
   it("ships release profiles without local config file paths", () => {
     expect(AGENT_OPTIONS.map((agent) => [agent.value, agent.configFile])).toEqual([
       ["claude", ""],
       ["codex", ""],
+      ["dsh", ""],
     ]);
   });
 
@@ -94,6 +96,7 @@ describe("agent options", () => {
 
     expect(grouped.claude.map((option) => option.value)).toEqual(["claude", "local_claude"]);
     expect(grouped.codex.map((option) => option.value)).toEqual(["codex", "local_codex"]);
+    expect(grouped.dsh.map((option) => option.value)).toEqual(["dsh"]);
   });
 
   it("uses concise permission labels in the compose toolbar", () => {
@@ -141,7 +144,7 @@ describe("agent options", () => {
   it("constrains the agent menu to the viewport and scrolls long config lists", () => {
     expect(composeAgentMenuContentStyle()).toEqual(
       expect.objectContaining({
-        minWidth: "min(420px, calc(100vw - 16px))",
+        minWidth: "min(520px, calc(100vw - 16px))",
         maxHeight: "min(320px, var(--radix-select-content-available-height))",
         overflow: "hidden",
       }),
@@ -149,7 +152,7 @@ describe("agent options", () => {
     expect(composeAgentMenuViewportStyle()).toEqual(
       expect.objectContaining({
         display: "grid",
-        gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+        gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
         overflow: "hidden",
       }),
     );

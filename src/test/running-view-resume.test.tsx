@@ -116,7 +116,12 @@ describe("RunningView resume affordance", () => {
     renderRunningView(completedTask, true, onSessionRecovered);
 
     await waitFor(() => {
-      expect(onSessionRecovered).toHaveBeenCalledWith("recovered-id", "/tmp/recovered.jsonl", true);
+      expect(onSessionRecovered).toHaveBeenCalledWith(
+        "recovered-id",
+        "/tmp/recovered.jsonl",
+        true,
+        "codex",
+      );
       expect(screen.getByTestId("session-view")).toBeInTheDocument();
     });
   });

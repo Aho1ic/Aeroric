@@ -128,7 +128,7 @@ fn finalize_task_exit(
     app: &AppHandle,
     task_id: &str,
     project_path: &str,
-    is_codex: bool,
+    family: crate::app_settings::AgentFamily,
     exit_ok: bool,
     exit_code: Option<u32>,
     child_handle: &Arc<parking_lot::Mutex<Box<dyn portable_pty::Child + Send + Sync>>>,
@@ -152,15 +152,21 @@ fn finalize_task_exit(
         let codex_path = codex_info.map(|info| info.session_path);
         let claude_info = tm.claude_sessions.lock().remove(task_id);
         let claude_path = claude_info.as_ref().map(|info| info.session_path.clone());
-        had_agent_session = if is_codex {
-            codex_path.is_some()
-        } else {
-            // lazy attach 注入的占位条目不算"曾真正建立过会话"，
-            // 否则 Claude 异常退出会被误标为 done。
-            claude_info
-                .as_ref()
-                .map(|info| !info.is_placeholder)
-                .unwrap_or(false)
+        let dsh_info = tm.dsh_sessions.lock().remove(task_id);
+        let dsh_path = dsh_info.map(|info| info.session_path);
+        had_agent_session = match family {
+            crate::app_settings::AgentFamily::Codex => codex_path.is_some(),
+            // dsh headless 的状态完全由退出码驱动:会话文件存在不代表任务成功
+            // (非零退出 = failed,即使 transcript 已经写入)。
+            crate::app_settings::AgentFamily::Dsh => false,
+            crate::app_settings::AgentFamily::Claude => {
+                // lazy attach 注入的占位条目不算"曾真正建立过会话"，
+                // 否则 Claude 异常退出会被误标为 done。
+                claude_info
+                    .as_ref()
+                    .map(|info| !info.is_placeholder)
+                    .unwrap_or(false)
+            }
         };
         let mut claimed = tm.claimed_session_paths.lock();
         if let Some(path) = codex_path {
@@ -169,10 +175,14 @@ fn finalize_task_exit(
         if let Some(path) = claude_path {
             claimed.remove(&path);
         }
+        if let Some(path) = dsh_path {
+            claimed.remove(&path);
+        }
     }
 
     if is_cancelled || is_manually_completed {
         let _ = fs::remove_dir_all(task_attachments_dir(project_path, task_id));
+        crate::dsh_home::cleanup_task_model_patch(task_id);
         return;
     }
 
@@ -194,6 +204,7 @@ fn finalize_task_exit(
 
     let _ = fs::remove_dir_all(task_attachments_dir(project_path, task_id));
     crate::event_watcher::cleanup_task_events(app, task_id);
+    crate::dsh_home::cleanup_task_model_patch(task_id);
 }
 
 fn save_task_images(
@@ -594,7 +605,7 @@ fn spawn_exit_monitor(
     app: AppHandle,
     task_id: String,
     project_path: String,
-    is_codex: bool,
+    family: crate::app_settings::AgentFamily,
     child_handle: Arc<parking_lot::Mutex<Box<dyn portable_pty::Child + Send + Sync>>>,
 ) {
     tokio::task::spawn_blocking(move || loop {
@@ -607,13 +618,16 @@ fn spawn_exit_monitor(
             } else {
                 Some(status.exit_code())
             };
-            // 等待会话注册完成
-            wait_for_session(&app, &task_id, is_codex);
+            // 等待会话注册完成(dsh 由退出码定状态,注册竞态由 watcher 的
+            // 退出后兜底发现覆盖,无需在此阻塞)
+            if family != crate::app_settings::AgentFamily::Dsh {
+                wait_for_session(&app, &task_id, family.is_codex_like());
+            }
             finalize_task_exit(
                 &app,
                 &task_id,
                 &project_path,
-                is_codex,
+                family,
                 exit_ok,
                 exit_code,
                 &child_handle,
@@ -681,6 +695,46 @@ fn toml_table_key(value: &str) -> String {
     format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
 }
 
+/// 为 DeepSeek Harness(headless profile)构建 CommandBuilder。
+///
+/// 权限映射(计划 D5)通过 `DSH_PERMISSION_MODE` env 注入——base bundle 的
+/// permission presets row 原生读取该变量,headless app 无需权限 CLI flag:
+/// ask → read-only(写操作审批,headless 下 fail-closed 即拒绝)、
+/// auto_edit → workspace-write(工作区内自动写)、
+/// full_access → danger-full-access(approval never)。
+fn build_dsh_cmd(
+    launch: &crate::app_settings::AgentLaunchSpec,
+    permission_mode: &str,
+) -> CommandBuilder {
+    let mut c = CommandBuilder::new(&launch.program);
+    c.args(&launch.args);
+    c.arg("--profile");
+    c.arg("headless");
+    let dsh_permission = match permission_mode {
+        "ask" => Some("read-only"),
+        "auto_edit" => Some("workspace-write"),
+        "full_access" => Some("danger-full-access"),
+        _ => None,
+    };
+    if let Some(mode) = dsh_permission {
+        c.env("DSH_PERMISSION_MODE", mode);
+    }
+    // 受管 patch 已禁用遥测 row;env 再兜底一层,防 dsh 未来默认值变化。
+    c.env("DSH_TELEMETRY_DISABLED", "1");
+    c
+}
+
+/// dsh 启动参数:托管 DSH_HOME env + `--patch` 覆盖层(受管层在前、任务级模型
+/// 覆盖在后,dsh 的 patch 层按序应用、后者胜)。launcher flags 必须在位置参数
+/// (prompt)之前——dsh launcher 在第一个未知 token 处停止解析自身 flag。
+fn add_dsh_launch_args(cmd: &mut CommandBuilder, dsh_home: &Path, patch_files: &[PathBuf]) {
+    cmd.env("DSH_HOME", dsh_home.as_os_str());
+    for patch in patch_files {
+        cmd.arg("--patch");
+        cmd.arg(patch.to_string_lossy().as_ref());
+    }
+}
+
 fn codex_project_trust_override(project_path: &str) -> String {
     format!(
         "projects.{}.trust_level=\"trusted\"",
@@ -709,6 +763,36 @@ pub(crate) fn normalized_speed(speed: Option<&str>) -> Result<Option<String>, St
         "fast" => Ok(Some("fast".to_string())),
         _ => Err("Invalid speed".to_string()),
     }
+}
+
+/// family 版速度校验:fast mode 为 claude/codex 专属,dsh 拒绝 `fast`。
+pub(crate) fn normalized_speed_for(
+    speed: Option<&str>,
+    family: crate::app_settings::AgentFamily,
+) -> Result<Option<String>, String> {
+    let normalized = normalized_speed(speed)?;
+    if family == crate::app_settings::AgentFamily::Dsh && normalized.as_deref() == Some("fast") {
+        return Err("Invalid speed".to_string());
+    }
+    Ok(normalized)
+}
+
+/// family 版 effort 校验:dsh 无 effort 档位(thinking 档待后续接入),拒绝任何取值。
+pub(crate) fn normalized_reasoning_effort_for(
+    reasoning_effort: Option<&str>,
+    family: crate::app_settings::AgentFamily,
+    selected_model: Option<&str>,
+) -> Result<Option<String>, String> {
+    if family == crate::app_settings::AgentFamily::Dsh {
+        return match reasoning_effort
+            .map(str::trim)
+            .filter(|effort| !effort.is_empty())
+        {
+            None => Ok(None),
+            Some(_) => Err("Invalid reasoningEffort".to_string()),
+        };
+    }
+    normalized_reasoning_effort(reasoning_effort, family.is_codex_like(), selected_model)
 }
 
 pub(crate) fn normalized_reasoning_effort(
@@ -1349,13 +1433,21 @@ pub async fn run_task(
 
     let launch = crate::app_settings::get_agent_launch_spec(&agent);
     let is_codex = launch.codex_like;
+    let is_dsh = launch.family == crate::app_settings::AgentFamily::Dsh;
     let selected_model = normalized_selected_model(selected_model.as_deref());
-    let reasoning_effort = normalized_reasoning_effort(
+    let reasoning_effort = normalized_reasoning_effort_for(
         reasoning_effort.as_deref(),
-        is_codex,
+        launch.family,
         selected_model.as_deref(),
     )?;
-    let speed = normalized_speed(speed.as_deref())?;
+    let speed = normalized_speed_for(speed.as_deref(), launch.family)?;
+
+    // dsh headless 是一次性任务进程:没有交互 composer,空 prompt 无法进入交互模式。
+    if is_dsh && final_prompt.is_empty() {
+        return Err(
+            "DeepSeek Harness tasks require a prompt (headless mode is one-shot)".to_string(),
+        );
+    }
 
     // hook 链路是否可信:可信则注入 AERORIC_* 守卫变量让 hook 脚本上报事件,会话发现
     // 与状态全部由 event_watcher 驱动、跳过 /status 轮询 watcher;不可信(无 node /
@@ -1371,8 +1463,12 @@ pub async fn run_task(
             .unwrap_or(false)
     };
 
-    let force_prompt_injection = should_force_prompt_injection(is_codex, force_prompt_injection);
-    let native_cli_args_supported = uses_native_initial_prompt(&agent, is_codex)
+    let force_prompt_injection =
+        !is_dsh && should_force_prompt_injection(is_codex, force_prompt_injection);
+    // dsh(headless)只接受 argv 位置参数投递 prompt,永远走 native 路径;
+    // PTY 注入对无 composer 的一次性进程无意义。
+    let native_cli_args_supported = is_dsh
+        || uses_native_initial_prompt(&agent, is_codex)
         || launch_supports_native_initial_prompt(&agent, is_codex, &launch);
     // Built-in agents (claude/codex) always use native CLI args. Custom
     // wrappers that forward positional args also prefer this path. The
@@ -1382,12 +1478,12 @@ pub async fn run_task(
     // inject). When hooks are unavailable for a custom codex-like agent,
     // there are no startup gates to wait for, so native CLI args are both
     // safe and more reliable than timing-dependent PTY injection.
-    let use_native_initial_prompt =
-        (should_use_native_initial_prompt(&agent, is_codex, force_prompt_injection)
+    let use_native_initial_prompt = is_dsh
+        || ((should_use_native_initial_prompt(&agent, is_codex, force_prompt_injection)
             || (!force_prompt_injection
                 && launch_supports_native_initial_prompt(&agent, is_codex, &launch))
             || (force_prompt_injection && !use_hooks && native_cli_args_supported))
-            && native_cli_args_supported;
+            && native_cli_args_supported);
     let uses_ultracode = should_use_ultracode_terminal_command(
         is_codex,
         reasoning_effort.as_deref(),
@@ -1398,6 +1494,7 @@ pub async fn run_task(
     // 缓存未命中时 *_version_gte 会启子进程探测,故放进 spawn_blocking 避免阻塞 async runtime。
     let version_agent = agent.clone();
     let use_explicit_session = !is_codex
+        && !is_dsh
         && tokio::task::spawn_blocking(move || {
             crate::app_settings::agent_version_gte(&version_agent, "2.1.87")
         })
@@ -1410,14 +1507,14 @@ pub async fn run_task(
     } else {
         None
     };
-    let claude_settings_path = if is_codex {
+    let claude_settings_path = if is_codex || is_dsh {
         None
     } else {
         crate::hooks::claude_settings_path_for_launch(speed.as_deref() == Some("fast"), use_hooks)?
     };
 
     // MCP 配置路径/profile 名:Claude 用 --mcp-config,Codex 用 -p
-    let claude_mcp_config_path = if is_codex {
+    let claude_mcp_config_path = if is_codex || is_dsh {
         None
     } else {
         crate::mcp::claude_mcp_config_path_for_launch()?
@@ -1434,7 +1531,67 @@ pub async fn run_task(
         None
     };
 
-    let mut cmd = if is_codex {
+    // dsh:初始化托管 DSH_HOME 并准备 patch 覆盖层(受管层 + 任务级模型覆盖)。
+    let dsh_launch_ctx = if is_dsh {
+        let task_id = task_id.clone();
+        let model = selected_model.clone();
+        let agent_for_dsh = agent.clone();
+        // 预先加载 app_settings 用于后续 spawn_blocking
+        let app_settings = crate::app_settings::load_app_settings().await.ok();
+        Some(
+            tokio::task::spawn_blocking(move || -> Result<(PathBuf, Vec<PathBuf>), String> {
+                // 内建 dsh 与 dsh-like 自定义档案各用自己的隔离 home。
+                let home = crate::dsh_home::ensure_dsh_home_for(&agent_for_dsh)?;
+                // 设置面板保存的 key 同步进 .credentials.yaml(env 注入仍是主路径)。
+                let api_key = crate::app_settings::dsh_api_key_for(&agent_for_dsh);
+                crate::dsh_home::sync_dsh_credentials(&home, api_key.as_deref())?;
+                let mut patches = vec![crate::dsh_home::managed_patch_path_in(&home)];
+                let plugins_patch = crate::dsh_home::plugins_patch_path_in(&home);
+                if plugins_patch.is_file() {
+                    patches.push(plugins_patch);
+                }
+                // MCP patch 在受管层之后、模型覆盖之前(dsh patch 层按序应用)。
+                if let Some(mcp_patch) = crate::mcp::dsh_mcp_patch_for_launch(&home)? {
+                    patches.push(mcp_patch);
+                }
+                // 特性开关 patch:web_search 等(在 MCP 之后、模型覆盖之前)。
+                let mut features = Vec::new();
+                if let Some(settings) = &app_settings {
+                    if !settings.dsh_web_search_enabled {
+                        features.push(("tool-web", false));
+                    }
+                }
+                if !features.is_empty() {
+                    let feature_patch =
+                        crate::dsh_home::write_task_feature_patch_in(&home, &task_id, features)?;
+                    patches.push(feature_patch);
+                }
+                // 模型覆盖 patch 放最后(优先级最高)。
+                if let Some(model) = model {
+                    let provider = crate::app_settings::dsh_model_provider_for(&agent_for_dsh);
+                    patches.push(crate::dsh_home::write_task_model_patch_in(
+                        &home, &task_id, &provider, &model,
+                    )?);
+                }
+                Ok((home, patches))
+            })
+            .await
+            .map_err(|e| e.to_string())??,
+        )
+    } else {
+        None
+    };
+
+    let mut cmd = if let Some((dsh_home_path, dsh_patches)) = dsh_launch_ctx.as_ref() {
+        let mut c = build_dsh_cmd(&launch, &permission_mode);
+        add_dsh_launch_args(&mut c, dsh_home_path, dsh_patches);
+        // prompt 位置参数必须在所有 launcher flag 之后;`--` 防止以 `-` 开头的
+        // prompt 被 launcher 误解析。
+        for arg in initial_prompt_args(&final_prompt, true) {
+            c.arg(arg);
+        }
+        c
+    } else if is_codex {
         let mut c = build_codex_cmd(&launch, &permission_mode);
         add_codex_launch_args(
             &mut c,
@@ -1548,7 +1705,28 @@ pub async fn run_task(
             created_at,
         );
     }
-    let needs_status_session_watcher = (pre_session_id.is_none() || is_codex)
+    // dsh:headless 会话文件在进程启动时创建于托管 home 的项目目录下,
+    // watcher 按创建时间发现并认领,广播 task-session(family = "dsh")。
+    if is_dsh {
+        let since_ms = created_at.unwrap_or_else(|| {
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .ok()
+                .and_then(|duration| i64::try_from(duration.as_millis()).ok())
+                .unwrap_or_default()
+        }) - 10_000;
+        crate::session_dsh::spawn_dsh_session_watcher(
+            app.clone(),
+            task_id.clone(),
+            agent.clone(),
+            project_path.clone(),
+            since_ms,
+        );
+    }
+    // dsh 无 /status 命令且 headless 无 composer,状态由退出码驱动(会话发现在
+    // Phase 2 由 transcript watcher 接管),不启动轮询 watcher。
+    let needs_status_session_watcher = !is_dsh
+        && (pre_session_id.is_none() || is_codex)
         && should_start_status_session_watcher(use_hooks, is_codex, !starts_with_prompt);
     let session_tx = if needs_status_session_watcher {
         let (session_tx, session_rx) = std::sync::mpsc::channel::<String>();
@@ -1613,7 +1791,7 @@ pub async fn run_task(
             cancel_initial_input_signal(&task_manager, &task_id);
         }
     }
-    spawn_exit_monitor(app, task_id, project_path, is_codex, child_handle);
+    spawn_exit_monitor(app, task_id, project_path, launch.family, child_handle);
 
     Ok(())
 }
@@ -1654,6 +1832,7 @@ pub(crate) fn cancel_task_core<R: tauri::Runtime>(
     // 清理任务附件
     let _ = fs::remove_dir_all(task_attachments_dir(project_path, task_id));
     crate::event_watcher::cleanup_task_events(app, task_id);
+    crate::dsh_home::cleanup_task_model_patch(task_id);
 
     Ok(())
 }
@@ -1808,6 +1987,8 @@ pub struct ResetTaskProcessResult {
     claude_session_path: Option<String>,
     codex_session_id: Option<String>,
     codex_session_path: Option<String>,
+    dsh_session_id: Option<String>,
+    dsh_session_path: Option<String>,
 }
 
 fn wait_for_terminal_history_to_settle(task_id: &str) {
@@ -1859,13 +2040,18 @@ pub async fn reset_task_process(
     // keep reporting stale status events into the replacement run.
     let mut codex_info = task_manager.codex_sessions.lock().remove(&task_id);
     let mut claude_info = task_manager.claude_sessions.lock().remove(&task_id);
+    let mut dsh_info = task_manager.dsh_sessions.lock().remove(&task_id);
     let codex_path = codex_info.as_ref().map(|info| info.session_path.clone());
     let claude_path = claude_info.as_ref().map(|info| info.session_path.clone());
+    let dsh_path = dsh_info.as_ref().map(|info| info.session_path.clone());
     let mut claimed = task_manager.claimed_session_paths.lock();
     if let Some(path) = codex_path.as_ref() {
         claimed.remove(path);
     }
     if let Some(path) = claude_path.as_ref() {
+        claimed.remove(path);
+    }
+    if let Some(path) = dsh_path.as_ref() {
         claimed.remove(path);
     }
     drop(claimed);
@@ -1905,6 +2091,13 @@ pub async fn reset_task_process(
             .remove(&late_info.session_path);
         claude_info = Some(late_info);
     }
+    if let Some(late_info) = task_manager.dsh_sessions.lock().remove(&task_id) {
+        task_manager
+            .claimed_session_paths
+            .lock()
+            .remove(&late_info.session_path);
+        dsh_info = Some(late_info);
+    }
 
     let claude_info = claude_info.filter(|info| !info.is_placeholder);
     Ok(ResetTaskProcessResult {
@@ -1913,6 +2106,8 @@ pub async fn reset_task_process(
         claude_session_path: claude_info.map(|info| info.session_path),
         codex_session_id: codex_info.as_ref().map(|info| info.session_id.clone()),
         codex_session_path: codex_info.map(|info| info.session_path),
+        dsh_session_id: dsh_info.as_ref().map(|info| info.session_id.clone()),
+        dsh_session_path: dsh_info.map(|info| info.session_path),
     })
 }
 
@@ -1951,6 +2146,13 @@ pub async fn resume_task(
 
     let launch = crate::app_settings::get_agent_launch_spec(&agent);
     let is_codex = launch.codex_like;
+    // dsh headless 无原生 resume;接续走前端 handoff(新会话 + 上下文),Phase 7
+    // 评估 fork/自有 resume 插件后再放开。
+    if launch.family == crate::app_settings::AgentFamily::Dsh {
+        return Err(
+            "DeepSeek Harness sessions cannot be resumed natively; continue the task to start a new session with carried-over context".to_string(),
+        );
+    }
     let selected_model = normalized_selected_model(selected_model.as_deref());
     let reasoning_effort = normalized_reasoning_effort(
         reasoning_effort.as_deref(),
@@ -2117,7 +2319,7 @@ pub async fn resume_task(
             cancel_initial_input_signal(&task_manager, &task_id);
         }
     }
-    spawn_exit_monitor(app, task_id, project_path, is_codex, child_handle);
+    spawn_exit_monitor(app, task_id, project_path, launch.family, child_handle);
 
     Ok(())
 }
@@ -2306,6 +2508,108 @@ pub async fn kill_shell(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn cmd_argv(cmd: &CommandBuilder) -> Vec<String> {
+        cmd.get_argv()
+            .iter()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect()
+    }
+
+    #[test]
+    fn dsh_cmd_maps_permission_modes_to_env() {
+        let launch = crate::app_settings::AgentLaunchSpec {
+            program: "dsh".to_string(),
+            ..Default::default()
+        };
+        for (mode, expected) in [
+            ("ask", "read-only"),
+            ("auto_edit", "workspace-write"),
+            ("full_access", "danger-full-access"),
+        ] {
+            let cmd = build_dsh_cmd(&launch, mode);
+            assert_eq!(
+                cmd.get_env("DSH_PERMISSION_MODE")
+                    .map(|value| value.to_string_lossy().into_owned()),
+                Some(expected.to_string()),
+                "permission mode {mode}"
+            );
+            assert!(cmd.get_env("DSH_TELEMETRY_DISABLED").is_some());
+        }
+        let argv = cmd_argv(&build_dsh_cmd(&launch, "ask"));
+        assert_eq!(argv, vec!["dsh", "--profile", "headless"]);
+        // 权限不进 CLI 参数,只走 env。
+        assert!(!argv.iter().any(|arg| arg.contains("permission")));
+    }
+
+    #[test]
+    fn dsh_launch_args_keep_patches_before_positional_prompt() {
+        let launch = crate::app_settings::AgentLaunchSpec {
+            program: "dsh".to_string(),
+            ..Default::default()
+        };
+        let mut cmd = build_dsh_cmd(&launch, "auto_edit");
+        let home = PathBuf::from("/tmp/aeroric-dsh-home");
+        let patches = vec![
+            PathBuf::from("/tmp/aeroric-dsh-home/aeroric.patch.yml"),
+            PathBuf::from("/tmp/aeroric-dsh-home/tmp/task-1.patch.yml"),
+        ];
+        add_dsh_launch_args(&mut cmd, &home, &patches);
+        for arg in initial_prompt_args("do the thing", true) {
+            cmd.arg(arg);
+        }
+        let argv = cmd_argv(&cmd);
+        assert_eq!(
+            argv,
+            vec![
+                "dsh",
+                "--profile",
+                "headless",
+                "--patch",
+                "/tmp/aeroric-dsh-home/aeroric.patch.yml",
+                "--patch",
+                "/tmp/aeroric-dsh-home/tmp/task-1.patch.yml",
+                "--",
+                "do the thing",
+            ]
+        );
+        assert_eq!(
+            cmd.get_env("DSH_HOME")
+                .map(|value| value.to_string_lossy().into_owned()),
+            Some("/tmp/aeroric-dsh-home".to_string())
+        );
+    }
+
+    #[test]
+    fn dsh_rejects_foreign_effort_and_fast_speed() {
+        use crate::app_settings::AgentFamily;
+        assert_eq!(
+            normalized_reasoning_effort_for(None, AgentFamily::Dsh, None),
+            Ok(None)
+        );
+        assert_eq!(
+            normalized_reasoning_effort_for(Some("  "), AgentFamily::Dsh, None),
+            Ok(None)
+        );
+        assert!(normalized_reasoning_effort_for(Some("high"), AgentFamily::Dsh, None).is_err());
+        assert!(
+            normalized_reasoning_effort_for(Some("ultracode"), AgentFamily::Dsh, None).is_err()
+        );
+        assert_eq!(
+            normalized_speed_for(Some("standard"), AgentFamily::Dsh),
+            Ok(Some("standard".to_string()))
+        );
+        assert!(normalized_speed_for(Some("fast"), AgentFamily::Dsh).is_err());
+        // claude/codex 行为不变(重构护栏)。
+        assert_eq!(
+            normalized_reasoning_effort_for(Some("high"), AgentFamily::Claude, None),
+            Ok(Some("high".to_string()))
+        );
+        assert_eq!(
+            normalized_speed_for(Some("fast"), AgentFamily::Codex),
+            Ok(Some("fast".to_string()))
+        );
+    }
 
     #[test]
     fn task_image_decoder_enforces_type_count_and_byte_budgets() {

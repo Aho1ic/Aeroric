@@ -16,6 +16,9 @@ mod dap;
 mod database;
 mod diagnostics;
 mod docker;
+mod dsh_home;
+mod dsh_plugins;
+mod dsh_webui;
 mod event_watcher;
 mod formatter;
 mod fs;
@@ -37,6 +40,7 @@ mod remote_git;
 mod run_config;
 mod search;
 mod session;
+mod session_dsh;
 mod sftp;
 mod skills;
 mod ssh;
@@ -58,6 +62,7 @@ mod wsl_fs;
 mod wsl_git;
 
 use session::{ClaudeSessionInfo, CodexSessionInfo};
+use session_dsh::DshSessionInfo;
 
 pub struct TaskManager {
     pub(crate) pty_masters:
@@ -70,6 +75,7 @@ pub struct TaskManager {
     pub(crate) manually_completed_tasks: Mutex<HashSet<String>>,
     pub(crate) codex_sessions: Mutex<HashMap<String, CodexSessionInfo>>,
     pub(crate) claude_sessions: Mutex<HashMap<String, ClaudeSessionInfo>>,
+    pub(crate) dsh_sessions: Mutex<HashMap<String, DshSessionInfo>>,
     pub(crate) claimed_session_paths: Mutex<HashSet<String>>,
     /// 启动态初始输入的门控信号:trust/hook 等交互完成后再投递 prompt。
     pub(crate) initial_input_signals: pty::StartupSignalRegistry,
@@ -207,6 +213,7 @@ pub fn run() {
             manually_completed_tasks: Mutex::new(HashSet::new()),
             codex_sessions: Mutex::new(HashMap::new()),
             claude_sessions: Mutex::new(HashMap::new()),
+            dsh_sessions: Mutex::new(HashMap::new()),
             claimed_session_paths: Mutex::new(HashSet::new()),
             initial_input_signals: Arc::new(Mutex::new(HashMap::new())),
             wsl_active_ids: Mutex::new(HashSet::new()),
@@ -219,6 +226,7 @@ pub fn run() {
             local_router_commands::LocalRouterManager::for_app()
                 .expect("Failed to initialize local router state"),
         )
+        .manage(dsh_webui::DshWebUiManager::new())
         .on_window_event(|window, event| {
             // macOS: 点关闭按钮(红灯)时隐藏窗口而非退出,与 Cmd+W 行为一致;
             // 点 Dock 图标可唤回(见下方 Reopen 处理)。
@@ -568,6 +576,13 @@ pub fn run() {
             app_settings::rename_custom_agent_profile,
             app_settings::save_send_shortcut,
             app_settings::save_shift_enter_newline,
+            dsh_plugins::list_dsh_plugins,
+            dsh_plugins::install_dsh_plugin,
+            dsh_plugins::uninstall_dsh_plugin,
+            dsh_plugins::toggle_dsh_plugin,
+            dsh_webui::start_dsh_webui,
+            dsh_webui::stop_dsh_webui,
+            dsh_webui::get_dsh_webui_status,
             app_settings::detect_agent_paths,
             app_settings::detect_agent_versions_for_settings,
             app_settings::detect_agent_version,
@@ -717,6 +732,8 @@ pub fn run() {
             if let tauri::RunEvent::Exit = _event {
                 let manager = _app_handle.state::<local_router_commands::LocalRouterManager>();
                 tauri::async_runtime::block_on(manager.shutdown());
+                let webui_manager = _app_handle.state::<dsh_webui::DshWebUiManager>();
+                tauri::async_runtime::block_on(webui_manager.shutdown_all());
             }
             // macOS: 当窗口被 Cmd+W 隐藏（hide）后，点击 Dock 图标会触发 Reopen，
             // 此时没有可见窗口，需要手动把主窗口重新显示并聚焦。

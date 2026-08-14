@@ -33,6 +33,8 @@ export type AppSettingsEventHostProps = {
   onUiFontFamilyChange: (family: FontFamily) => void;
   monoFontFamily: FontFamily;
   onMonoFontFamilyChange: (family: FontFamily) => void;
+  dshWebSearchEnabled: boolean;
+  onDshWebSearchEnabledChange: (enabled: boolean) => void;
 };
 
 export function AppSettingsEventHost({
@@ -52,6 +54,8 @@ export function AppSettingsEventHost({
   onUiFontFamilyChange,
   monoFontFamily,
   onMonoFontFamilyChange,
+  dshWebSearchEnabled,
+  onDshWebSearchEnabledChange,
 }: AppSettingsEventHostProps) {
   const [showAppSettings, setShowAppSettings] = useState(false);
   const [initialSettingsNav, setInitialSettingsNav] = useState<NavKey>("general");
@@ -89,6 +93,8 @@ export function AppSettingsEventHost({
         onUiFontFamilyChange={onUiFontFamilyChange}
         monoFontFamily={monoFontFamily}
         onMonoFontFamilyChange={onMonoFontFamilyChange}
+        dshWebSearchEnabled={dshWebSearchEnabled}
+        onDshWebSearchEnabledChange={onDshWebSearchEnabledChange}
         onClose={() => setShowAppSettings(false)}
       />
     </Suspense>

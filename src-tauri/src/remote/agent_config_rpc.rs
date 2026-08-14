@@ -386,6 +386,7 @@ mod tests {
             label: "Work".to_string(),
             path: "/tmp/work".to_string(),
             codex_like: true,
+            family: String::new(),
             config_lang: "shellscript".to_string(),
             base_url: "https://api.example.test".to_string(),
             api_key: "secret-value".to_string(),

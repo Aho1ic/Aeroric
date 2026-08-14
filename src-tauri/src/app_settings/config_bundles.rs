@@ -91,6 +91,7 @@ pub(super) fn builtin_agent_details(agent: &str) -> Option<(&'static str, &'stat
         "claude" => Some(("Claude Code", "json", false)),
         "claude_gpt55" => Some(("Claude GPT-5.5", "shellscript", false)),
         "codex" => Some(("Codex", "toml", true)),
+        "dsh" => Some(("DeepSeek Harness", "yaml", false)),
         _ => None,
     }
 }
@@ -101,7 +102,10 @@ pub(super) fn validate_agent_config_bundle_agent(
     if agent.id.trim().is_empty() || agent.label.trim().is_empty() {
         return Err("Agent configuration is missing an ID or name".to_string());
     }
-    if !matches!(agent.config_lang.as_str(), "json" | "toml" | "shellscript") {
+    if !matches!(
+        agent.config_lang.as_str(),
+        "json" | "toml" | "yaml" | "shellscript"
+    ) {
         return Err("Unsupported agent configuration language".to_string());
     }
     match agent.kind {
@@ -180,6 +184,7 @@ pub(super) fn collect_agent_config_bundle_agent(
             "claude" => settings.claude_config_path.clone(),
             "claude_gpt55" => settings.claude_gpt55_config_path.clone(),
             "codex" => settings.codex_config_path.clone(),
+            "dsh" => settings.dsh_config_path.clone(),
             _ => String::new(),
         };
         let path = if configured_path.trim().is_empty() {
@@ -205,6 +210,7 @@ pub(super) fn collect_agent_config_bundle_agent(
                 .unwrap_or_else(|| default_label.to_string()),
             kind: AgentConfigBundleKind::BuiltIn,
             codex_like,
+            family: String::new(),
             config_lang: config_lang.to_string(),
             config_content,
             config_present,
@@ -233,6 +239,7 @@ pub(super) fn collect_agent_config_bundle_agent(
         label: profile.label.clone(),
         kind: AgentConfigBundleKind::Custom,
         codex_like: profile.codex_like,
+        family: profile.family.clone(),
         config_lang: profile.config_lang.clone(),
         config_content,
         config_present,
@@ -385,6 +392,7 @@ pub(super) fn import_agent_config_entry(
                 label: agent.label,
                 path: path.to_string_lossy().into_owned(),
                 codex_like: agent.codex_like,
+                family: agent.family,
                 config_lang,
                 base_url: agent.base_url,
                 api_key: agent.api_key,
@@ -746,6 +754,7 @@ pub(super) fn parse_cc_switch_providers(sql: &str) -> Result<Vec<AgentConfigBund
             label: name,
             kind: AgentConfigBundleKind::Custom,
             codex_like: is_codex,
+            family: String::new(),
             config_lang: "shellscript".to_string(),
             config_content: String::new(),
             config_present: true,
@@ -823,6 +832,7 @@ mod tests {
             label: id.to_string(),
             kind: AgentConfigBundleKind::BuiltIn,
             codex_like,
+            family: String::new(),
             config_lang: config_lang.to_string(),
             config_content: config_content.to_string(),
             config_present: true,
@@ -917,6 +927,7 @@ mod tests {
             label: "Portable Agent".to_string(),
             path: "/Users/source/.aeroric/agents/portable.sh".to_string(),
             codex_like: false,
+            family: String::new(),
             config_lang: "shellscript".to_string(),
             base_url: "https://example.com/v1".to_string(),
             api_key: "sk-test".to_string(),

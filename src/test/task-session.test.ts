@@ -4,8 +4,10 @@ import {
   canNativeResumeWithAgent,
   getTaskSessionFields,
   hasTaskContinuationContext,
+  hasTaskSessionPath,
   resolveTaskSessionOwner,
 } from "../taskSession";
+import { getTaskSessionFieldsByFamily } from "../taskSession";
 import type { Task } from "../types";
 
 const baseTask: Task = {
@@ -32,6 +34,7 @@ describe("task session ownership", () => {
     expect(resolveTaskSessionOwner(task)).toEqual({
       agent: "claude-team",
       codexLike: false,
+      family: "claude",
     });
     expect(getTaskSessionFields(task, false).sessionId).toBe("claude-session");
   });
@@ -71,6 +74,7 @@ describe("task session ownership", () => {
         configFile: "/tmp/team-a",
         configLang: "json" as const,
         codexLike: false,
+        family: "claude" as const,
         custom: true,
       },
       {
@@ -79,6 +83,7 @@ describe("task session ownership", () => {
         configFile: "/tmp/team-b",
         configLang: "json" as const,
         codexLike: false,
+        family: "claude" as const,
         custom: true,
       },
     ];
@@ -99,6 +104,7 @@ describe("task session ownership", () => {
         configFile: "/tmp/codex-a",
         configLang: "toml" as const,
         codexLike: true,
+        family: "codex" as const,
         custom: true,
       },
       {
@@ -107,6 +113,7 @@ describe("task session ownership", () => {
         configFile: "/tmp/codex-b",
         configLang: "toml" as const,
         codexLike: true,
+        family: "codex" as const,
         custom: true,
       },
       {
@@ -115,6 +122,7 @@ describe("task session ownership", () => {
         configFile: "/tmp/claude-a",
         configLang: "json" as const,
         codexLike: false,
+        family: "claude" as const,
         custom: true,
       },
     ];
@@ -145,5 +153,55 @@ describe("task session ownership", () => {
     };
 
     expect(canAdoptSessionForAgent(builtinCodexTask, "claude_gpt55")).toBe(false);
+  });
+});
+
+describe("dsh session family", () => {
+  const dshTask: Task = {
+    ...baseTask,
+    agent: "dsh",
+    dshSessionId: "dsh-session",
+    dshSessionPath: "/tmp/dsh/session.jsonl",
+    sessionAgent: "dsh",
+    sessionFamily: "dsh",
+  };
+
+  it("resolves dsh owners from sessionFamily", () => {
+    expect(resolveTaskSessionOwner(dshTask)).toEqual({
+      agent: "dsh",
+      family: "dsh",
+      codexLike: false,
+    });
+  });
+
+  it("selects dsh session fields by family", () => {
+    const fields = getTaskSessionFieldsByFamily(dshTask, "dsh");
+    expect(fields.sessionId).toBe("dsh-session");
+    expect(fields.sessionPath).toBe("/tmp/dsh/session.jsonl");
+  });
+
+  it("never offers native resume or adoption for dsh sessions", () => {
+    expect(canNativeResumeWithAgent(dshTask, "dsh")).toBe(false);
+    expect(canNativeResumeWithAgent(dshTask, "claude")).toBe(false);
+    expect(canAdoptSessionForAgent(dshTask, "dsh")).toBe(false);
+    expect(canAdoptSessionForAgent(dshTask, "codex")).toBe(false);
+  });
+
+  it("infers dsh family for legacy tasks with only dsh session fields", () => {
+    const legacy: Task = {
+      ...baseTask,
+      agent: "dsh",
+      dshSessionId: "dsh-session",
+    };
+    expect(resolveTaskSessionOwner(legacy).family).toBe("dsh");
+  });
+
+  it("counts dsh session fields as continuation context", () => {
+    expect(hasTaskContinuationContext({ ...baseTask, prompt: "", dshSessionId: "x" })).toBe(true);
+  });
+
+  it("keeps cancelled dsh tasks visible when a transcript path exists", () => {
+    expect(hasTaskSessionPath(dshTask)).toBe(true);
+    expect(hasTaskSessionPath({ ...dshTask, dshSessionPath: undefined })).toBe(false);
   });
 });

@@ -1,4 +1,5 @@
 import type { AgentType } from "../../types";
+import { agentFamily } from "../../agents";
 
 const GOAL_MODE_INSTRUCTIONS = [
   "/goal",
@@ -17,17 +18,32 @@ export interface TaskModeOptions {
   goalMode: boolean;
 }
 
-export function buildPromptWithTaskModes(prompt: string, options: TaskModeOptions): string {
+export function buildPromptWithTaskModes(
+  prompt: string,
+  options: TaskModeOptions,
+  agent?: AgentType,
+): string {
   if (!prompt.trim()) return prompt;
 
   const sections = [prompt];
   if (options.planMode) sections.push(PLAN_MODE_INSTRUCTIONS);
-  if (options.goalMode) sections.push(GOAL_MODE_INSTRUCTIONS);
+  if (options.goalMode) {
+    const family = agent ? agentFamily(agent) : null;
+    if (family === "dsh") {
+      sections.push("/goal");
+    } else {
+      sections.push(GOAL_MODE_INSTRUCTIONS);
+    }
+  }
   return sections.join("\n\n");
 }
 
-export function buildPromptWithGoalMode(prompt: string, goalMode: boolean): string {
-  return buildPromptWithTaskModes(prompt, { planMode: false, goalMode });
+export function buildPromptWithGoalMode(
+  prompt: string,
+  goalMode: boolean,
+  agent?: AgentType,
+): string {
+  return buildPromptWithTaskModes(prompt, { planMode: false, goalMode }, agent);
 }
 
 export function shouldShowInstructionsBanner(

@@ -60,6 +60,23 @@ fn validate_sql_file_path(path: &str) -> Result<PathBuf, String> {
     Ok(path)
 }
 
+/// 读取 SQL 文件，处理 UTF-8 BOM 和编码问题
+fn read_sql_file(path: &Path) -> Result<String, String> {
+    let bytes = fs::read(path).map_err(|e| format!("Failed to read file: {}", e))?;
+
+    // 去除 UTF-8 BOM (0xEF 0xBB 0xBF)
+    let bytes = if bytes.starts_with(&[0xEF, 0xBB, 0xBF]) {
+        &bytes[3..]
+    } else {
+        &bytes
+    };
+
+    String::from_utf8(bytes.to_vec()).map_err(|_| {
+        "SQL file is not valid UTF-8. Please ensure the file is saved as UTF-8 encoding."
+            .to_string()
+    })
+}
+
 fn unsupported_update_sql_export() -> String {
     "UPDATE SQL table export is not supported by the bundled DBX Core exporter yet".to_string()
 }
@@ -275,7 +292,7 @@ pub async fn dbx_execute_sql_file(
 ) -> Result<Vec<db::QueryResult>, String> {
     connections::ensure_connected(&state, &request.connection_id).await?;
     let path = validate_sql_file_path(&request.path)?;
-    let sql = fs::read_to_string(path).map_err(|e| e.to_string())?;
+    let sql = read_sql_file(&path)?;
     let execution_id = format!("sql-file:{}", uuid::Uuid::new_v4());
     let registered_query = state
         .app_state

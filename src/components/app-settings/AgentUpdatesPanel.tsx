@@ -6,6 +6,7 @@ import { useI18n } from "../../i18n";
 import { Button } from "../ui/Button";
 import claudeLogo from "../../assets/claude.svg";
 import chatgptLogo from "../../assets/chatgpt.svg";
+import deepseekLogo from "../../assets/deepseek.svg";
 import {
   APP_SETTINGS_CHANGED_EVENT,
   type AgentInstallErrorCode,
@@ -17,7 +18,7 @@ import {
   type AgentUpgradeResult,
 } from "./types";
 
-const AGENTS = ["claude", "codex"] as const;
+const AGENTS = ["claude", "codex", "dsh"] as const;
 type Agent = (typeof AGENTS)[number];
 
 const installErrorKey: Record<AgentInstallErrorCode, string> = {
@@ -95,22 +96,27 @@ export function AgentUpdatesPanel() {
   const [statuses, setStatuses] = useState<Record<Agent, AgentToolStatus | null>>({
     claude: null,
     codex: null,
+    dsh: null,
   });
   const [upgradeResults, setUpgradeResults] = useState<Record<Agent, AgentUpgradeResult | null>>({
     claude: null,
     codex: null,
+    dsh: null,
   });
   const [installResults, setInstallResults] = useState<Record<Agent, AgentInstallResult | null>>({
     claude: null,
     codex: null,
+    dsh: null,
   });
   const [progress, setProgress] = useState<Record<Agent, AgentInstallProgress | null>>({
     claude: null,
     codex: null,
+    dsh: null,
   });
   const [latestVersions, setLatestVersions] = useState<Record<Agent, string>>({
     claude: "",
     codex: "",
+    dsh: "",
   });
   const [refreshing, setRefreshing] = useState(false);
   const [busyAgents, setBusyAgents] = useState<Set<Agent>>(new Set());
@@ -123,9 +129,13 @@ export function AgentUpdatesPanel() {
     setError(null);
     try {
       const toolStatuses = await invoke<AgentToolStatus[]>("get_agent_tool_status");
-      const statusMap: Record<Agent, AgentToolStatus | null> = { claude: null, codex: null };
+      const statusMap: Record<Agent, AgentToolStatus | null> = {
+        claude: null,
+        codex: null,
+        dsh: null,
+      };
       for (const status of toolStatuses) {
-        if (status.agent === "claude" || status.agent === "codex") {
+        if (status.agent === "claude" || status.agent === "codex" || status.agent === "dsh") {
           statusMap[status.agent] = status;
         }
       }
@@ -139,15 +149,15 @@ export function AgentUpdatesPanel() {
     // 最新版本需要联网查询，失败时静默降级：只隐藏"最新版本"一行，不阻塞安装状态展示。
     try {
       const latest = await invoke<AgentLatestVersion[]>("get_agent_latest_versions");
-      const latestMap: Record<Agent, string> = { claude: "", codex: "" };
+      const latestMap: Record<Agent, string> = { claude: "", codex: "", dsh: "" };
       for (const entry of latest) {
-        if (entry.agent === "claude" || entry.agent === "codex") {
+        if (entry.agent === "claude" || entry.agent === "codex" || entry.agent === "dsh") {
           latestMap[entry.agent] = entry.version;
         }
       }
       setLatestVersions(latestMap);
     } catch {
-      setLatestVersions({ claude: "", codex: "" });
+      setLatestVersions({ claude: "", codex: "", dsh: "" });
     }
   }, []);
 
@@ -162,7 +172,7 @@ export function AgentUpdatesPanel() {
       if (disposed) return;
       const next = event.payload;
       if (
-        (next.agent === "claude" || next.agent === "codex") &&
+        (next.agent === "claude" || next.agent === "codex" || next.agent === "dsh") &&
         activeOperationsRef.current[next.agent] === next.operation_id
       ) {
         setProgress((current) => ({ ...current, [next.agent]: next }));
@@ -183,7 +193,8 @@ export function AgentUpdatesPanel() {
       return;
     }
 
-    const isInstall = !status.installed || status.managed;
+    // dsh 无 tools_dir 原生安装机制:安装与升级都走 npm 通道(upgrade_agent_versions)。
+    const isInstall = agent !== "dsh" && (!status.installed || status.managed);
     const nextOperationId = isInstall ? newOperationId() : null;
 
     setBusyAgents(new Set([agent]));
@@ -249,8 +260,8 @@ export function AgentUpdatesPanel() {
 
       return {
         agent,
-        name: agent === "claude" ? "Claude Code" : "Codex",
-        logo: agent === "claude" ? claudeLogo : chatgptLogo,
+        name: agent === "claude" ? "Claude Code" : agent === "codex" ? "Codex" : "DeepSeek Harness",
+        logo: agent === "claude" ? claudeLogo : agent === "codex" ? chatgptLogo : deepseekLogo,
         installed: Boolean(status?.installed),
         statusLoading: !status,
         unsupported: status?.error_code === "unsupported_platform",

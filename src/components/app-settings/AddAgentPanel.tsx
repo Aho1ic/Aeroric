@@ -64,7 +64,15 @@ const kindOptions: { kind: AgentSetupKind; labelKey: string; hintKey: string }[]
     labelKey: "appSettings.agentSetupClaude",
     hintKey: "appSettings.agentSetupClaudeHint",
   },
+  {
+    kind: "dsh",
+    labelKey: "appSettings.agentSetupDsh",
+    hintKey: "appSettings.agentSetupDshHint",
+  },
 ];
+
+/** dsh 官方 provider 的默认探测端点(留空 base URL 时使用)。 */
+const DSH_OFFICIAL_BASE_URL = "https://api.deepseek.com";
 
 function idFromBaseUrl(value: string): string {
   const trimmed = value.trim();
@@ -83,7 +91,8 @@ function deriveAgentId(label: string, baseUrl: string, kind: AgentSetupKind): st
   const urlId = idFromBaseUrl(baseUrl);
   const baseId = labelId || urlId;
   if (!baseId) return "";
-  return sanitizeAgentId(`${baseId}_${kind === "codex" ? "codex" : "claude"}`);
+  const suffix = kind === "codex" ? "codex" : kind === "dsh" ? "dsh" : "claude";
+  return sanitizeAgentId(`${baseId}_${suffix}`);
 }
 
 export function AddAgentPanel({ onSaved }: { onSaved: (agentId: string) => void }) {
@@ -136,13 +145,17 @@ export function AddAgentPanel({ onSaved }: { onSaved: (agentId: string) => void 
   const baseUrlInputId = "agent-setup-base-url";
   const apiKeyInputId = "agent-setup-api-key";
   const modelInputId = "agent-setup-model";
-  const canDetectModels = Boolean(baseUrl.trim() && apiKey.trim());
+  const isDshKind = kind === "dsh";
+  // dsh:base URL 可留空(官方 DeepSeek provider);填写即自定义 OpenAI 兼容网关。
+  const canDetectModels = Boolean((baseUrl.trim() || isDshKind) && apiKey.trim());
   const canSave = Boolean(
     label.trim() &&
     generatedAgentId &&
-    baseUrl.trim() &&
+    (baseUrl.trim() || isDshKind) &&
     apiKey.trim() &&
-    (models.length > 0 ? selectedModels.length > 0 : model.trim()),
+    (models.length > 0
+      ? selectedModels.length > 0
+      : model.trim() || (isDshKind && !baseUrl.trim())),
   );
   async function handleDetectModels() {
     if (!canDetectModels) return;
@@ -152,7 +165,7 @@ export function AddAgentPanel({ onSaved }: { onSaved: (agentId: string) => void 
     try {
       const detected = await invoke<AgentModels>("detect_agent_models", {
         kind,
-        baseUrl: baseUrl.trim(),
+        baseUrl: baseUrl.trim() || (isDshKind ? DSH_OFFICIAL_BASE_URL : ""),
         apiKey: apiKey.trim(),
       });
       setModels(normalizeModelList(detected.models));

@@ -110,7 +110,7 @@ describe("RunningView broken session path self-heal", () => {
     await waitFor(() => {
       expect(screen.getByTestId("session-view")).toHaveAttribute("data-session-path", HEALED_PATH);
     });
-    expect(onSessionRecovered).toHaveBeenCalledWith("session-heal", HEALED_PATH, false);
+    expect(onSessionRecovered).toHaveBeenCalledWith("session-heal", HEALED_PATH, false, "claude");
     expect(
       vi.mocked(invoke).mock.calls.filter(([command]) => command === "recover_task_session"),
     ).toHaveLength(1);

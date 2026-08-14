@@ -54,16 +54,22 @@ pub(crate) async fn session_messages(params: Value) -> Result<Value, String> {
     }
 
     let agent = task.agent.clone();
-    let is_codex = tauri::async_runtime::spawn_blocking(move || {
-        crate::app_settings::is_codex_like_agent(&agent)
-    })
-    .await
-    .map_err(|e| e.to_string())?;
+    let family =
+        tauri::async_runtime::spawn_blocking(move || crate::app_settings::agent_family(&agent))
+            .await
+            .map_err(|e| e.to_string())?;
+    // 实际会话族以持久化的 sessionFamily 为准(配置切换后 task.agent 可能误导)。
+    let family = task
+        .session_family
+        .as_deref()
+        .and_then(crate::app_settings::AgentFamily::parse)
+        .unwrap_or(family);
+    let is_codex = family.is_codex_like();
 
-    let session_path = if is_codex {
-        task.codex_session_path.clone()
-    } else {
-        task.claude_session_path.clone()
+    let session_path = match family {
+        crate::app_settings::AgentFamily::Codex => task.codex_session_path.clone(),
+        crate::app_settings::AgentFamily::Claude => task.claude_session_path.clone(),
+        crate::app_settings::AgentFamily::Dsh => task.dsh_session_path.clone(),
     };
     let Some(session_path) = session_path else {
         return Ok(json!({ "available": false, "reason": "no_session", "messages": [] }));
@@ -73,8 +79,13 @@ pub(crate) async fn session_messages(params: Value) -> Result<Value, String> {
         .worktree_path
         .clone()
         .unwrap_or_else(|| project.path.clone());
-    let messages =
-        crate::session::read_session_messages(session_path, project_path, is_codex).await?;
+    let messages = crate::session::read_session_messages(
+        session_path,
+        project_path,
+        is_codex,
+        Some(family.as_str().to_string()),
+    )
+    .await?;
     Ok(json!({ "available": true, "isCodex": is_codex, "messages": messages }))
 }
 

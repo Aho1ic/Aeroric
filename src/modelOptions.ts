@@ -11,6 +11,9 @@ export const REASONING_EFFORTS = [
 export type ReasoningEffort = (typeof REASONING_EFFORTS)[number];
 export type TaskSpeed = "standard" | "fast";
 
+/** dsh 内建默认模型目录(`@deepseek-ai/dsh-llm-deepseek` 的官方目录)。 */
+export const DSH_DEFAULT_MODELS = ["deepseek-v4-flash", "deepseek-v4-pro"] as const;
+
 export function normalizeModelList(models: string[]): string[] {
   const result: string[] = [];
   const seen = new Set<string>();
@@ -52,4 +55,13 @@ export function availableReasoningEfforts(
   }
   if (supportsCodexUltra(model)) return REASONING_EFFORTS;
   return REASONING_EFFORTS.filter((effort) => effort !== "ultra");
+}
+
+/** family 版:dsh 无 effort 档位(不复用 claude/codex 词表),返回空集以隐藏控件。 */
+export function availableReasoningEffortsForFamily(
+  family: import("./types").ProtocolFamily,
+  model: string | undefined,
+): readonly ReasoningEffort[] {
+  if (family === "dsh") return [];
+  return availableReasoningEfforts(family === "codex", model);
 }

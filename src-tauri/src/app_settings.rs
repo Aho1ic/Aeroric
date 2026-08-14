@@ -48,6 +48,7 @@ fn default_true() -> bool {
 
 static CACHED_CLAUDE_VERSION: OnceLock<Mutex<Option<Option<String>>>> = OnceLock::new();
 static CACHED_CODEX_VERSION: OnceLock<Mutex<Option<Option<String>>>> = OnceLock::new();
+static CACHED_DSH_VERSION: OnceLock<Mutex<Option<Option<String>>>> = OnceLock::new();
 static CACHED_SETTINGS: OnceLock<Mutex<Option<CachedSettings>>> = OnceLock::new();
 static SETTINGS_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 const CLAUDE_BUILTIN_MODEL_ALIASES: &[&str] = &["fable", "opus", "sonnet"];
@@ -76,6 +77,9 @@ pub struct CustomAgentProfile {
     pub path: String,
     #[serde(default = "default_custom_agent_codex_like")]
     pub codex_like: bool,
+    /// 协议族("claude"/"codex"/"dsh");为空时由 `codex_like` 推导,保持旧档案兼容。
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub family: String,
     #[serde(default = "default_custom_agent_config_lang")]
     pub config_lang: String,
     #[serde(default)]
@@ -94,11 +98,19 @@ pub struct CustomAgentProfile {
     pub password: String,
 }
 
+impl CustomAgentProfile {
+    pub fn agent_family(&self) -> AgentFamily {
+        AgentFamily::parse(self.family.trim())
+            .unwrap_or_else(|| AgentFamily::from_codex_like(self.codex_like))
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum AgentSetupKind {
     Codex,
     ClaudeCode,
+    Dsh,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
@@ -158,6 +170,9 @@ pub struct AgentConfigBundleAgent {
     pub label: String,
     pub kind: AgentConfigBundleKind,
     pub codex_like: bool,
+    /// 协议族("claude"/"codex"/"dsh");为空时由 `codex_like` 推导,兼容旧档案。
+    #[serde(default)]
+    pub family: String,
     pub config_lang: String,
     pub config_content: String,
     #[serde(default = "default_config_present")]
@@ -408,11 +423,15 @@ pub struct AppSettings {
     #[serde(default)]
     pub codex_path: String,
     #[serde(default)]
+    pub dsh_path: String,
+    #[serde(default)]
     pub claude_config_path: String,
     #[serde(default)]
     pub claude_gpt55_config_path: String,
     #[serde(default)]
     pub codex_config_path: String,
+    #[serde(default)]
+    pub dsh_config_path: String,
     #[serde(default)]
     pub agent_label_overrides: HashMap<String, String>,
     #[serde(default)]
@@ -427,6 +446,12 @@ pub struct AppSettings {
     pub agent_proxy_overrides: HashMap<String, LegacyAgentProxyConfig>,
     #[serde(default)]
     pub custom_agents: Vec<CustomAgentProfile>,
+    /// dsh web_search 工具启用状态(默认启用)。设为 false 时启动任务注入 patch 禁用。
+    #[serde(default = "default_true")]
+    pub dsh_web_search_enabled: bool,
+    /// dsh 遥测启用状态(默认禁用,对齐 dsh 官方默认 DISABLED)。
+    #[serde(default)]
+    pub dsh_telemetry_enabled: bool,
     #[serde(default = "default_send_shortcut")]
     pub send_shortcut: String,
     #[serde(default = "default_shift_enter_newline")]
@@ -439,9 +464,11 @@ impl Default for AppSettings {
             claude_path: String::new(),
             claude_gpt55_path: String::new(),
             codex_path: String::new(),
+            dsh_path: String::new(),
             claude_config_path: String::new(),
             claude_gpt55_config_path: String::new(),
             codex_config_path: String::new(),
+            dsh_config_path: String::new(),
             agent_label_overrides: HashMap::new(),
             builtin_agent_credentials: HashMap::new(),
             proxy_settings: ProxySettings::default(),
@@ -449,9 +476,53 @@ impl Default for AppSettings {
             agent_proxy_enabled: HashMap::new(),
             agent_proxy_overrides: HashMap::new(),
             custom_agents: Vec::new(),
+            dsh_web_search_enabled: true,
+            dsh_telemetry_enabled: false,
             send_shortcut: default_send_shortcut(),
             terminal_shift_enter_newline: default_shift_enter_newline(),
         }
+    }
+}
+
+/// 协议族:决定启动参数、会话格式与配置文件形态。
+/// `codex_like` 布尔保留为 `family == Codex` 的派生,兼容期内两者并存。
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[serde(rename_all = "lowercase")]
+pub enum AgentFamily {
+    #[default]
+    Claude,
+    Codex,
+    Dsh,
+}
+
+impl AgentFamily {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            AgentFamily::Claude => "claude",
+            AgentFamily::Codex => "codex",
+            AgentFamily::Dsh => "dsh",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<AgentFamily> {
+        match value {
+            "claude" => Some(AgentFamily::Claude),
+            "codex" => Some(AgentFamily::Codex),
+            "dsh" => Some(AgentFamily::Dsh),
+            _ => None,
+        }
+    }
+
+    pub fn from_codex_like(codex_like: bool) -> AgentFamily {
+        if codex_like {
+            AgentFamily::Codex
+        } else {
+            AgentFamily::Claude
+        }
+    }
+
+    pub fn is_codex_like(self) -> bool {
+        self == AgentFamily::Codex
     }
 }
 
@@ -461,27 +532,88 @@ pub struct AgentLaunchSpec {
     pub args: Vec<String>,
     pub extra_env: Vec<(String, String)>,
     pub codex_like: bool,
+    pub family: AgentFamily,
 }
 
-fn configured_agent_is_codex_like(settings: &AppSettings, agent: &str) -> bool {
+fn configured_agent_family(settings: &AppSettings, agent: &str) -> AgentFamily {
     match agent {
-        "claude" => false,
-        "codex" | "claude_gpt55" => true,
+        "claude" => AgentFamily::Claude,
+        "codex" | "claude_gpt55" => AgentFamily::Codex,
+        "dsh" => AgentFamily::Dsh,
         other => settings
             .custom_agents
             .iter()
             .find(|profile| profile.id == other)
-            .map(|profile| profile.codex_like)
-            .unwrap_or(true),
+            .map(|profile| profile.agent_family())
+            // 未知 agent 沿用历史行为:默认按 codex 族处理。
+            .unwrap_or(AgentFamily::Codex),
     }
+}
+
+fn configured_agent_is_codex_like(settings: &AppSettings, agent: &str) -> bool {
+    configured_agent_family(settings, agent).is_codex_like()
+}
+
+pub fn agent_family(agent: &str) -> AgentFamily {
+    configured_agent_family(&load_settings_internal(), agent)
+}
+
+pub(crate) fn agent_family_in(settings: &AppSettings, agent: &str) -> AgentFamily {
+    configured_agent_family(settings, agent)
 }
 
 pub fn is_codex_like_agent(agent: &str) -> bool {
     configured_agent_is_codex_like(&load_settings_internal(), agent)
 }
 
+pub fn is_dsh_agent(agent: &str) -> bool {
+    agent_family(agent) == AgentFamily::Dsh
+}
+
+/// dsh 族 agent 任务级模型覆盖使用的 provider 名。
+pub(crate) fn dsh_model_provider_for(agent: &str) -> String {
+    let settings = load_settings_internal();
+    let custom_base_url = settings
+        .custom_agents
+        .iter()
+        .find(|profile| profile.id == agent)
+        .map(|profile| !profile.base_url.trim().is_empty())
+        .unwrap_or(false);
+    if custom_base_url {
+        "aeroric".to_string()
+    } else {
+        "deepseek-official".to_string()
+    }
+}
+
+/// dsh 族 agent 配置的 API key(内建走 builtin_agent_credentials,自定义走档案)。
+pub(crate) fn dsh_api_key_for(agent: &str) -> Option<String> {
+    let settings = load_settings_internal();
+    let key = if agent == "dsh" {
+        settings
+            .builtin_agent_credentials
+            .get("dsh")
+            .map(|credentials| credentials.api_key.clone())
+    } else {
+        settings
+            .custom_agents
+            .iter()
+            .find(|profile| profile.id == agent)
+            .map(|profile| profile.api_key.clone())
+    };
+    key.map(|key| key.trim().to_string())
+        .filter(|key| !key.is_empty())
+}
+
+/// 解析 IPC 传入的可选 family 参数:优先 family 字符串,缺省由 is_codex 推导。
+pub fn resolve_family_param(family: Option<&str>, is_codex: bool) -> AgentFamily {
+    family
+        .and_then(AgentFamily::parse)
+        .unwrap_or_else(|| AgentFamily::from_codex_like(is_codex))
+}
+
 pub fn is_known_agent(agent: &str) -> bool {
-    matches!(agent, "claude" | "claude_gpt55" | "codex")
+    matches!(agent, "claude" | "claude_gpt55" | "codex" | "dsh")
         || load_settings_internal()
             .custom_agents
             .iter()
@@ -495,7 +627,9 @@ pub fn is_known_agent(agent: &str) -> bool {
 /// 隔离 home,transcript 因此落在 `<agent-home>/projects/<encoded-project>/` 而不是
 /// `~/.claude/projects/...`。
 pub(crate) fn custom_agent_home_dir_name(agent: &str) -> Option<String> {
-    if matches!(agent, "claude" | "claude_gpt55" | "codex") {
+    // 内建 dsh 的托管 home 由 `dsh_home` 模块管理(`~/.aeroric/agent-homes/dsh`),
+    // 不走本函数的自定义 agent 路径。
+    if matches!(agent, "claude" | "claude_gpt55" | "codex" | "dsh") {
         return None;
     }
     let normalized = sanitize_custom_agent_id(agent);
@@ -555,7 +689,7 @@ pub fn custom_agent_home(id: &str) -> Result<PathBuf, String> {
 
 fn normalize_config_lang(value: String) -> String {
     match value.as_str() {
-        "json" | "toml" | "shellscript" => value,
+        "json" | "toml" | "yaml" | "shellscript" => value,
         _ => default_custom_agent_config_lang(),
     }
 }
@@ -572,6 +706,10 @@ fn normalize_custom_agent_profile(profile: CustomAgentProfile) -> Option<CustomA
         label,
         path: normalize_agent_configured_path(&profile.id, &path),
         codex_like: profile.codex_like,
+        family: match AgentFamily::parse(profile.family.trim()) {
+            Some(family) => family.as_str().to_string(),
+            None => String::new(),
+        },
         config_lang: normalize_config_lang(profile.config_lang),
         base_url: normalize_base_url(&profile.base_url),
         api_key: profile.api_key.trim().to_string(),
@@ -928,6 +1066,16 @@ fn append_builtin_agent_api_env(
     let Some(credentials) = settings.builtin_agent_credentials.get(agent) else {
         return;
     };
+    // dsh:身份即 API key(无 OAuth)。key 走环境变量注入——dsh 的凭据层
+    // "inherited environment" 优先于 .credentials.yaml,每次启动读取最新值,
+    // 换 key 无需重启。自定义 base_url 走 settings.yaml 的 provider 配置
+    // (llm-pi-ai),不在这里注入。
+    if configured_agent_family(settings, agent) == AgentFamily::Dsh {
+        if !credentials.api_key.is_empty() {
+            extra_env.push(("DEEPSEEK_API_KEY".to_string(), credentials.api_key.clone()));
+        }
+        return;
+    }
     if !credentials.base_url.is_empty() {
         if matches!(agent, "codex" | "claude_gpt55") {
             extra_env.push(("OPENAI_BASE_URL".to_string(), credentials.base_url.clone()));
@@ -1092,6 +1240,7 @@ fn get_agent_configured_path(settings: &AppSettings, agent: &str) -> String {
             }
         }
         "codex" => settings.codex_path.clone(),
+        "dsh" => settings.dsh_path.clone(),
         _ => settings.claude_path.clone(),
     }
 }
@@ -1105,6 +1254,7 @@ fn clear_cached_versions() {
         .get_or_init(|| Mutex::new(None))
         .lock() = None;
     *CACHED_CODEX_VERSION.get_or_init(|| Mutex::new(None)).lock() = None;
+    *CACHED_DSH_VERSION.get_or_init(|| Mutex::new(None)).lock() = None;
 }
 
 fn settings_lock() -> &'static Mutex<()> {
@@ -1204,9 +1354,7 @@ fn resolve_agent_launch_spec_from_path(agent: &str, path: &str) -> AgentLaunchSp
     }
     AgentLaunchSpec {
         program,
-        args: Vec::new(),
-        extra_env: Vec::new(),
-        codex_like: false,
+        ..Default::default()
     }
 }
 
@@ -1391,8 +1539,7 @@ fn windows_script_launch(path: &Path) -> Option<AgentLaunchSpec> {
     crate::platform::agent_script_command(path).map(|command| AgentLaunchSpec {
         program: command.program,
         args: command.args,
-        extra_env: Vec::new(),
-        codex_like: false,
+        ..Default::default()
     })
 }
 
@@ -1411,18 +1558,14 @@ fn resolve_agent_launch_spec_from_path(agent: &str, path: &str) -> AgentLaunchSp
             ) {
                 AgentLaunchSpec {
                     program: exe.to_string_lossy().into_owned(),
-                    args: Vec::new(),
-                    extra_env: Vec::new(),
-                    codex_like: false,
+                    ..Default::default()
                 }
             } else if let Some(spec) = windows_script_launch(resolved_path) {
                 spec
             } else {
                 AgentLaunchSpec {
                     program: resolved,
-                    args: Vec::new(),
-                    extra_env: Vec::new(),
-                    codex_like: false,
+                    ..Default::default()
                 }
             }
         }
@@ -1436,26 +1579,21 @@ fn resolve_agent_launch_spec_from_path(agent: &str, path: &str) -> AgentLaunchSp
                 extra_env.push(("CODEX_MANAGED_BY_NPM".to_string(), "1".to_string()));
                 AgentLaunchSpec {
                     program: program.to_string_lossy().into_owned(),
-                    args: Vec::new(),
                     extra_env,
-                    codex_like: false,
+                    ..Default::default()
                 }
             } else if let Some(spec) = windows_script_launch(resolved_path) {
                 spec
             } else {
                 AgentLaunchSpec {
                     program: resolved,
-                    args: Vec::new(),
-                    extra_env: Vec::new(),
-                    codex_like: false,
+                    ..Default::default()
                 }
             }
         }
         _ => windows_script_launch(resolved_path).unwrap_or_else(|| AgentLaunchSpec {
             program: resolved,
-            args: Vec::new(),
-            extra_env: Vec::new(),
-            codex_like: false,
+            ..Default::default()
         }),
     }
 }
@@ -1488,6 +1626,20 @@ fn inferred_agent_codex_like(program: &str) -> Option<bool> {
     None
 }
 
+fn inferred_agent_family(program: &str) -> Option<AgentFamily> {
+    let file_name = Path::new(program)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .map(str::to_ascii_lowercase);
+    if matches!(
+        file_name.as_deref(),
+        Some("dsh" | "dsh.exe" | "dsh.cmd" | "dsh.js" | "dsh.ps1")
+    ) {
+        return Some(AgentFamily::Dsh);
+    }
+    inferred_agent_codex_like(program).map(AgentFamily::from_codex_like)
+}
+
 fn build_agent_launch_spec(
     settings: &AppSettings,
     agent: &str,
@@ -1495,8 +1647,9 @@ fn build_agent_launch_spec(
 ) -> AgentLaunchSpec {
     let configured_path = get_agent_configured_path(settings, agent);
     let mut spec = resolve_agent_launch_spec_from_path(agent, &configured_path);
-    spec.codex_like = inferred_agent_codex_like(&configured_path)
-        .unwrap_or_else(|| configured_agent_is_codex_like(settings, agent));
+    spec.family = inferred_agent_family(&configured_path)
+        .unwrap_or_else(|| configured_agent_family(settings, agent));
+    spec.codex_like = spec.family.is_codex_like();
     append_agent_credential_env(settings, agent, &mut spec.extra_env);
     append_builtin_agent_api_env(settings, agent, &mut spec.extra_env);
     append_agent_proxy_env(settings, agent, &mut spec.extra_env);
@@ -1541,9 +1694,15 @@ fn normalize_settings(settings: AppSettings) -> AppSettings {
             normalize_agent_configured_path("claude_gpt55", &settings.claude_gpt55_path)
         },
         codex_path: normalize_agent_configured_path("codex", &settings.codex_path),
+        dsh_path: if settings.dsh_path.is_empty() {
+            String::new()
+        } else {
+            normalize_agent_configured_path("dsh", &settings.dsh_path)
+        },
         claude_config_path: normalize_config_path(settings.claude_config_path),
         claude_gpt55_config_path: normalize_config_path(settings.claude_gpt55_config_path),
         codex_config_path: normalize_config_path(settings.codex_config_path),
+        dsh_config_path: normalize_config_path(settings.dsh_config_path),
         agent_label_overrides: normalize_agent_label_overrides(settings.agent_label_overrides),
         builtin_agent_credentials: normalize_builtin_agent_credentials(
             settings.builtin_agent_credentials,
@@ -1555,6 +1714,8 @@ fn normalize_settings(settings: AppSettings) -> AppSettings {
         custom_agents: normalize_custom_agents(settings.custom_agents),
         send_shortcut: normalize_send_shortcut(settings.send_shortcut),
         terminal_shift_enter_newline: settings.terminal_shift_enter_newline,
+        dsh_web_search_enabled: settings.dsh_web_search_enabled,
+        dsh_telemetry_enabled: settings.dsh_telemetry_enabled,
     }
 }
 
@@ -1617,9 +1778,11 @@ fn load_settings_unlocked() -> AppSettings {
             claude_path: String::new(),
             claude_gpt55_path: String::new(),
             codex_path: String::new(),
+            dsh_path: String::new(),
             claude_config_path: String::new(),
             claude_gpt55_config_path: String::new(),
             codex_config_path: String::new(),
+            dsh_config_path: String::new(),
             agent_label_overrides: HashMap::new(),
             builtin_agent_credentials: HashMap::new(),
             proxy_settings: ProxySettings::default(),
@@ -1629,6 +1792,8 @@ fn load_settings_unlocked() -> AppSettings {
             custom_agents: Vec::new(),
             send_shortcut: default_send_shortcut(),
             terminal_shift_enter_newline: default_shift_enter_newline(),
+            dsh_web_search_enabled: true,
+            dsh_telemetry_enabled: false,
         });
         if let Ok(dir) = aeroric_dir() {
             let _ = fs::create_dir_all(&dir);
@@ -1961,6 +2126,14 @@ pub async fn update_agent_path_settings(
                         settings.codex_config_path = config_path;
                     }
                 }
+                "dsh" => {
+                    if let Some(executable_path) = executable_path {
+                        settings.dsh_path = executable_path;
+                    }
+                    if let Some(config_path) = config_path {
+                        settings.dsh_config_path = config_path;
+                    }
+                }
                 _ => {
                     if let Some(executable_path) = executable_path {
                         let normalized_id = sanitize_custom_agent_id(&agent);
@@ -1974,7 +2147,7 @@ pub async fn update_agent_path_settings(
                 }
             }
             if let Some(credentials) = builtin_credentials {
-                if matches!(agent.as_str(), "claude" | "claude_gpt55" | "codex") {
+                if matches!(agent.as_str(), "claude" | "claude_gpt55" | "codex" | "dsh") {
                     settings
                         .builtin_agent_credentials
                         .insert(agent.clone(), credentials);
@@ -2039,6 +2212,13 @@ pub fn save_app_settings(settings: AppSettings) -> Result<(), String> {
     Ok(())
 }
 
+pub(crate) fn list_builtin_dsh_models() -> Vec<String> {
+    vec![
+        "deepseek-v4-flash".to_string(),
+        "deepseek-v4-pro".to_string(),
+    ]
+}
+
 pub(crate) fn default_builtin_agent_config_path(agent: &str) -> Result<PathBuf, String> {
     let home =
         crate::platform::home_dir().ok_or_else(|| "Cannot find home directory".to_string())?;
@@ -2046,6 +2226,7 @@ pub(crate) fn default_builtin_agent_config_path(agent: &str) -> Result<PathBuf, 
         "claude" => Ok(home.join(".claude").join("settings.json")),
         "claude_gpt55" => Ok(home.join(".claude").join("start-gpt55.sh")),
         "codex" => Ok(home.join(".codex").join("config.toml")),
+        "dsh" => crate::dsh_home::dsh_settings_path(),
         _ => Err(format!("Unknown built-in agent: {agent}")),
     }
 }
@@ -2375,14 +2556,44 @@ pub async fn setup_agent_profile(draft: AgentSetupDraft) -> Result<AppSettings, 
         let id = allocate_setup_agent_id(&draft.id, &draft.kind, &settings)?;
         let mut draft = draft;
         draft.id = id.clone();
-        let script = build_agent_script(&draft);
-        let script_path = write_agent_script(&id, &script, &draft.api_key)?;
+        let (profile_path, config_lang, family) = if matches!(draft.kind, AgentSetupKind::Dsh) {
+            // dsh-like 档案不生成 wrapper 脚本:直接运行 dsh 二进制,隔离 home 与
+            // API key 由启动层按档案注入(DSH_HOME / DEEPSEEK_API_KEY env)。
+            let program = {
+                let detected = crate::platform::detect_path("dsh");
+                if detected.is_empty() {
+                    "dsh".to_string()
+                } else {
+                    detected
+                }
+            };
+            let home = crate::dsh_home::ensure_dsh_home_for(&id)?;
+            crate::dsh_home::sync_dsh_credentials(&home, Some(draft.api_key.trim()))?;
+            let base_url = normalize_base_url(&draft.base_url);
+            if !base_url.is_empty() {
+                crate::dsh_home::write_custom_provider_settings(
+                    &home,
+                    &base_url,
+                    &normalize_setup_models(&draft),
+                )?;
+            }
+            (program, "yaml".to_string(), "dsh".to_string())
+        } else {
+            let script = build_agent_script(&draft);
+            let script_path = write_agent_script(&id, &script, &draft.api_key)?;
+            (
+                script_path.to_string_lossy().into_owned(),
+                "shellscript".to_string(),
+                String::new(),
+            )
+        };
         let profile = CustomAgentProfile {
             id: id.clone(),
             label: draft.label.trim().to_string(),
-            path: script_path.to_string_lossy().into_owned(),
+            path: profile_path,
             codex_like: matches!(draft.kind, AgentSetupKind::Codex),
-            config_lang: "shellscript".to_string(),
+            family,
+            config_lang,
             base_url: normalize_base_url(&draft.base_url),
             api_key: draft.api_key.trim().to_string(),
             models: normalize_setup_models(&draft),
@@ -2537,6 +2748,27 @@ pub async fn list_agent_models(agent: String) -> Result<AgentModels, String> {
         if agent == "claude" {
             return Ok(AgentModels {
                 models: list_builtin_claude_models(),
+                balance: None,
+                reasoning_effort,
+                reasoning_speed,
+            });
+        }
+
+        if agent == "dsh" {
+            // 内建 DeepSeek 官方目录(dsh-llm-deepseek);自定义 provider 的
+            // 模型在配置面板通过 /models 探测后存入 builtin_agent_credentials。
+            return Ok(AgentModels {
+                models: list_builtin_dsh_models(),
+                balance: None,
+                reasoning_effort,
+                reasoning_speed,
+            });
+        }
+
+        if is_dsh_agent(&agent) {
+            // dsh-like 自定义档案未探测/保存模型时回落内建 DeepSeek 目录。
+            return Ok(AgentModels {
+                models: list_builtin_dsh_models(),
                 balance: None,
                 reasoning_effort,
                 reasoning_speed,
@@ -2993,6 +3225,8 @@ pub struct AgentVersions {
     pub claude_version: String,
     pub claude_gpt55_version: String,
     pub codex_version: String,
+    #[serde(default)]
+    pub dsh_version: String,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
@@ -3377,6 +3611,7 @@ mod tests {
             label: label.to_string(),
             path: format!("/tmp/{id}.sh"),
             codex_like,
+            family: String::new(),
             config_lang: "shellscript".to_string(),
             base_url: "https://example.com/v1".to_string(),
             api_key: "sk-test".to_string(),
@@ -3450,6 +3685,7 @@ mod tests {
                 label: "Imported Claude".to_string(),
                 kind: AgentConfigBundleKind::BuiltIn,
                 codex_like: false,
+                family: String::new(),
                 config_lang: "json".to_string(),
                 config_content: "{}".to_string(),
                 config_present: true,
@@ -3612,6 +3848,7 @@ mod tests {
                     label: "Custom Codex".to_string(),
                     path: "/tmp/custom-codex.sh".to_string(),
                     codex_like: true,
+                    family: String::new(),
                     config_lang: "shellscript".to_string(),
                     base_url: String::new(),
                     api_key: String::new(),
@@ -3626,6 +3863,7 @@ mod tests {
                     label: "Custom Claude".to_string(),
                     path: "/tmp/custom-claude.sh".to_string(),
                     codex_like: false,
+                    family: String::new(),
                     config_lang: "shellscript".to_string(),
                     base_url: String::new(),
                     api_key: String::new(),
@@ -3660,6 +3898,7 @@ mod tests {
                 label: "Joverna".to_string(),
                 path: "/Users/macbook/.claude/start-joverna.sh".to_string(),
                 codex_like: false,
+                family: String::new(),
                 config_lang: "shellscript".to_string(),
                 base_url: String::new(),
                 api_key: String::new(),
@@ -3705,6 +3944,7 @@ mod tests {
                 label: "Joverna".to_string(),
                 path: "/Users/macbook/.claude/start-joverna.sh".to_string(),
                 codex_like: false,
+                family: String::new(),
                 config_lang: "shellscript".to_string(),
                 base_url: String::new(),
                 api_key: String::new(),

@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { X, Plus, Trash2, AlertTriangle } from "lucide-react";
 import claudeLogo from "../../assets/claude.svg";
 import chatgptLogo from "../../assets/chatgpt.svg";
+import deepseekLogo from "../../assets/deepseek.svg";
 import type { Project, Skill, SkillInstallation, AgentType } from "../../types";
 import { useI18n } from "../../i18n";
 import s from "../../styles";
@@ -16,21 +17,23 @@ interface Props {
   onChanged: () => void;
 }
 
-type SkillAgent = "claude" | "codex";
+type SkillAgent = "claude" | "codex" | "dsh";
 type SkillAgentInstallation = SkillInstallation & { agent: SkillAgent };
 
 function isSkillAgent(agent: AgentType): agent is SkillAgent {
-  return agent === "claude" || agent === "codex";
+  return agent === "claude" || agent === "codex" || agent === "dsh";
 }
 
 const AGENT_LABEL: Record<SkillAgent, string> = {
   claude: "Claude",
   codex: "Codex",
+  dsh: "DeepSeek Harness",
 };
 
 const AGENT_LOGO: Record<SkillAgent, string> = {
   claude: claudeLogo,
   codex: chatgptLogo,
+  dsh: deepseekLogo,
 };
 
 export function SkillManageDialog({ skill, allProjects, onClose, onChanged }: Props) {
@@ -78,6 +81,7 @@ export function SkillManageDialog({ skill, allProjects, onClose, onChanged }: Pr
   const agentCounts = {
     claude: installations.filter((ins) => ins.agent === "claude").length,
     codex: installations.filter((ins) => ins.agent === "codex").length,
+    dsh: installations.filter((ins) => ins.agent === "dsh").length,
   };
   const visibleInstallations = installations.filter(
     (ins): ins is SkillAgentInstallation => isSkillAgent(ins.agent) && ins.agent === activeAgent,
@@ -117,7 +121,7 @@ export function SkillManageDialog({ skill, allProjects, onClose, onChanged }: Pr
           ariaLabel={t("skill.install.agent")}
           role="tablist"
           style={s.skillDialogTabs}
-          options={(["claude", "codex"] as const).map((agentKey) => ({
+          options={(["claude", "codex", "dsh"] as const).map((agentKey) => ({
             value: agentKey,
             label: (
               <>

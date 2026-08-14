@@ -90,6 +90,8 @@ export function AgentDetailModal({
   const agentKey = option.value as AgentKey;
   const deletable = option.custom === true;
   const isCodex = option.codexLike === true;
+  // DeepSeek API 为 OpenAI 兼容(/models + Bearer),模型探测复用 codex 通道。
+  const agentIsDsh = option.family === "dsh";
   const isBuiltIn = isBuiltInAgent(option.value);
 
   const { language, t } = useI18n();
@@ -336,7 +338,7 @@ export function AgentDetailModal({
         (isBuiltIn && baseUrl.trim() && apiKey.trim()) ||
         (!isBuiltIn && baseUrl.trim() && apiKey.trim())
           ? await invoke<AgentModels>("detect_agent_models", {
-              kind: isCodex ? "codex" : "claude_code",
+              kind: isCodex || agentIsDsh ? "codex" : "claude_code",
               baseUrl: baseUrl.trim(),
               apiKey: apiKey.trim(),
             })

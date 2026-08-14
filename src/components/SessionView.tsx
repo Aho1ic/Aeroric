@@ -13,6 +13,7 @@ import {
 import { marked } from "marked";
 import DOMPurify from "dompurify";
 import { useI18n } from "../i18n";
+import type { ProtocolFamily } from "../types";
 
 export interface SessionContent {
   type: "text" | "tool_use" | "tool_result" | "thinking" | "attachment";
@@ -326,12 +327,15 @@ export function SessionView({
   sessionPath,
   projectPath,
   isCodex,
+  family,
   fallback,
   onLoadFailed,
 }: {
   sessionPath: string;
   projectPath: string;
   isCodex: boolean;
+  /** 三值协议族;缺省由 isCodex 推导(dsh 调用方必须显式传入)。 */
+  family?: ProtocolFamily;
   fallback?: ReactNode;
   // 会话文件读不出来时通知调用方（路径失效、越界、解析失败）。
   // RunningView 用它触发一次会话重新发现，修掉历史上被写坏的持久化路径。
@@ -373,6 +377,7 @@ export function SessionView({
               sessionPath,
               projectPath,
               isCodex,
+              family,
               cursor,
             },
           );
@@ -423,7 +428,7 @@ export function SessionView({
     return () => {
       cancelled = true;
     };
-  }, [sessionPath, projectPath, isCodex]);
+  }, [sessionPath, projectPath, isCodex, family]);
 
   if (!loading && fallback && (error || messages.length === 0)) {
     return (

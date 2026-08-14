@@ -33,6 +33,7 @@ const customOption: AgentOption = {
   configFile: customProfile.path,
   configLang: customProfile.config_lang,
   codexLike: customProfile.codex_like,
+  family: customProfile.codex_like ? "codex" : "claude",
   custom: true,
 };
 
@@ -42,6 +43,7 @@ const builtInOption: AgentOption = {
   configFile: "/Users/macbook/.codex/config.toml",
   configLang: "toml",
   codexLike: true,
+  family: "codex",
 };
 
 const baseSettings: AppSettings = {

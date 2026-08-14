@@ -118,7 +118,9 @@ fn load_source_states(connection: &Connection) -> Result<HashMap<String, SourceS
 
 fn parse_source(path: &Path) -> Option<Vec<UsageRequest>> {
     let content = fs::read_to_string(path).ok()?;
-    if analytics::is_codex_session(&content) {
+    if analytics::is_dsh_session(&content) {
+        Some(analytics::parse_dsh_usage_requests(&content))
+    } else if analytics::is_codex_session(&content) {
         Some(analytics::parse_codex_usage_requests(&content))
     } else {
         Some(analytics::parse_claude_usage_requests(
@@ -176,6 +178,7 @@ fn replace_source(
                     match request.agent {
                         UsageAgent::Codex => "codex",
                         UsageAgent::Claude => "claude",
+                        UsageAgent::Dsh => "dsh",
                     },
                     request.model,
                     as_sql_integer(request.input_tokens),
@@ -298,6 +301,7 @@ pub(crate) fn load_requests(
                 })?;
             let agent = match row.get::<_, String>(2)?.as_str() {
                 "codex" => UsageAgent::Codex,
+                "dsh" => UsageAgent::Dsh,
                 _ => UsageAgent::Claude,
             };
             Ok(UsageRequest {

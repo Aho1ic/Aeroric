@@ -68,6 +68,15 @@ pub(crate) fn is_codex_session(content: &str) -> bool {
     false
 }
 
+/// dsh transcript 以 header 行开头(`type: "session"` + 数值 version + id)。
+pub(crate) fn is_dsh_session(content: &str) -> bool {
+    content
+        .lines()
+        .next()
+        .map(crate::session_dsh::line_is_dsh_header)
+        .unwrap_or(false)
+}
+
 /// Claude transcript 不像 Codex 那样自带 `model_context_window`，只在每条 assistant
 /// 消息上记录 model。为了让终端顶栏能显示"上下文占用 / 窗口"，这里按 model 推导窗口。
 ///
@@ -289,6 +298,7 @@ pub async fn read_session_metrics(session_path: String) -> Result<SessionMetrics
 pub(crate) enum UsageAgent {
     Codex,
     Claude,
+    Dsh,
 }
 
 #[derive(Clone, Debug)]
@@ -332,6 +342,8 @@ pub(crate) struct UsageStatisticsDay {
 pub(crate) struct UsageStatisticsBreakdown {
     pub(crate) codex: UsageStatisticsTotals,
     pub(crate) claude: UsageStatisticsTotals,
+    #[serde(default)]
+    pub(crate) dsh: UsageStatisticsTotals,
 }
 
 #[derive(serde::Serialize, Clone, Debug)]
@@ -499,8 +511,79 @@ pub(crate) fn parse_codex_usage_requests(content: &str) -> Vec<UsageRequest> {
     requests
 }
 
+/// dsh 会话 token 聚合:每条带 `usage` 的 `assistant/message` 事件计一次请求。
+/// model 取最近一条 `request/context` 事件(路由变化时才记录);时间戳来自事件
+/// 的 `time`(Unix 毫秒)。
+pub(crate) fn parse_dsh_usage_requests(content: &str) -> Vec<UsageRequest> {
+    let mut requests = Vec::new();
+    let mut current_model = String::new();
+    for line in content.lines() {
+        let Ok(val) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        match val.get("type").and_then(Value::as_str) {
+            Some("request/context") => {
+                if let Some(model) = val
+                    .get("data")
+                    .and_then(|data| data.get("model"))
+                    .and_then(Value::as_str)
+                {
+                    current_model = model.to_owned();
+                }
+            }
+            Some("assistant/message") => {
+                let Some(data) = val.get("data") else {
+                    continue;
+                };
+                let Some(usage) = data.get("usage") else {
+                    continue;
+                };
+                let Some(time_ms) = val.get("time").and_then(Value::as_i64) else {
+                    continue;
+                };
+                let timestamp = time_ms as f64 / 1000.0;
+                let Some(date) = chrono::DateTime::from_timestamp_millis(time_ms)
+                    .map(|dt| dt.with_timezone(&chrono::Local).date_naive())
+                else {
+                    continue;
+                };
+                requests.push(UsageRequest {
+                    timestamp,
+                    date,
+                    agent: UsageAgent::Dsh,
+                    model: current_model.clone(),
+                    input_tokens: usage
+                        .get("inputTokens")
+                        .and_then(Value::as_u64)
+                        .unwrap_or(0),
+                    output_tokens: usage
+                        .get("outputTokens")
+                        .and_then(Value::as_u64)
+                        .unwrap_or(0),
+                    cache_creation_tokens: usage
+                        .get("cacheWriteTokens")
+                        .and_then(Value::as_u64)
+                        .unwrap_or(0),
+                    cache_read_tokens: usage
+                        .get("cacheReadTokens")
+                        .and_then(Value::as_u64)
+                        .unwrap_or(0),
+                });
+            }
+            _ => {}
+        }
+    }
+    requests
+}
+
 fn pricing_for_request(request: &UsageRequest) -> Option<ModelPricing> {
     let model = request.model.to_ascii_lowercase();
+
+    // dsh(DeepSeek)暂无稳定公开价目对齐,计为未定价请求,UI 显示 tokens 而非费用。
+    if request.agent == UsageAgent::Dsh {
+        let _ = &model;
+        return None;
+    }
 
     if request.agent == UsageAgent::Codex {
         let pricing = if model.starts_with("gpt-5.6-sol") {
@@ -767,7 +850,8 @@ fn read_usage_statistics_sync(range_days: u32, agent: String) -> Result<UsageSta
         "all" => None,
         "codex" => Some(UsageAgent::Codex),
         "claude" => Some(UsageAgent::Claude),
-        _ => return Err("agent must be all, codex, or claude".to_owned()),
+        "dsh" => Some(UsageAgent::Dsh),
+        _ => return Err("agent must be all, codex, claude, or dsh".to_owned()),
     };
 
     let now = chrono::Local::now();
@@ -807,6 +891,14 @@ fn read_usage_statistics_sync(range_days: u32, agent: String) -> Result<UsageSta
         false,
         min_timestamp,
     );
+    let (dsh, _) = aggregate_requests(
+        &requests,
+        from,
+        to,
+        Some(UsageAgent::Dsh),
+        false,
+        min_timestamp,
+    );
 
     Ok(UsageStatistics {
         range_days,
@@ -816,7 +908,7 @@ fn read_usage_statistics_sync(range_days: u32, agent: String) -> Result<UsageSta
         updated_at: crate::usage_index::latest_updated_at()?,
         totals,
         series,
-        breakdown: UsageStatisticsBreakdown { codex, claude },
+        breakdown: UsageStatisticsBreakdown { codex, claude, dsh },
     })
 }
 
@@ -833,6 +925,41 @@ pub async fn read_usage_statistics(
 #[cfg(test)]
 mod session_metrics_tests {
     use super::*;
+
+    #[test]
+    fn dsh_usage_requests_track_route_model_and_usage_fields() {
+        let content = concat!(
+            r#"{"type":"session","version":0,"id":"s1","createdAt":1755100000000,"delegationDepth":0}"#,
+            "\n",
+            r#"{"type":"request/context","seq":0,"time":1755100000100,"data":{"provider":"deepseek-official","model":"deepseek-v4-flash"}}"#,
+            "\n",
+            r#"{"type":"assistant/message","seq":1,"time":1755100001000,"data":{"turn":0,"step":0,"message":{"role":"assistant","content":[]},"usage":{"inputTokens":100,"outputTokens":20,"cacheReadTokens":50,"cacheWriteTokens":5,"reasoningTokens":7}}}"#,
+            "\n",
+            r#"{"type":"request/context","seq":2,"time":1755100002000,"data":{"provider":"deepseek-official","model":"deepseek-v4-pro"}}"#,
+            "\n",
+            r#"{"type":"assistant/message","seq":3,"time":1755100003000,"data":{"turn":0,"step":1,"message":{"role":"assistant","content":[]},"usage":{"inputTokens":10,"outputTokens":2}}}"#,
+            "\n",
+            r#"{"type":"assistant/message","seq":4,"time":1755100004000,"data":{"turn":0,"step":2,"message":{"role":"assistant","content":[]}}}"#,
+            "\n",
+        );
+        assert!(is_dsh_session(content));
+        assert!(!is_codex_session(content));
+        let requests = parse_dsh_usage_requests(content);
+        // 无 usage 的 assistant/message 不计请求。
+        assert_eq!(requests.len(), 2);
+        assert_eq!(requests[0].agent, UsageAgent::Dsh);
+        assert_eq!(requests[0].model, "deepseek-v4-flash");
+        assert_eq!(requests[0].input_tokens, 100);
+        assert_eq!(requests[0].output_tokens, 20);
+        assert_eq!(requests[0].cache_read_tokens, 50);
+        assert_eq!(requests[0].cache_creation_tokens, 5);
+        assert_eq!(requests[1].model, "deepseek-v4-pro");
+        // dsh 请求未定价:成本为 0、计入 unpriced。
+        let mut totals = UsageStatisticsTotals::default();
+        add_request(&mut totals, &requests[0]);
+        assert_eq!(totals.total_cost, 0.0);
+        assert_eq!(totals.unpriced_request_count, 1);
+    }
 
     /// Claude 顶栏必须能拿到时长 / TOKENS / 上下文三项。窗口大小 transcript 里没有，
     /// 由 model 推导。

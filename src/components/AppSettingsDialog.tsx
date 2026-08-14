@@ -128,6 +128,8 @@ export function AppSettingsDialog({
   onUiFontFamilyChange,
   monoFontFamily,
   onMonoFontFamilyChange,
+  dshWebSearchEnabled,
+  onDshWebSearchEnabledChange,
 }: {
   onClose: () => void;
   initialNav?: NavKey;
@@ -147,6 +149,8 @@ export function AppSettingsDialog({
   onUiFontFamilyChange: (family: FontFamily) => void;
   monoFontFamily: FontFamily;
   onMonoFontFamilyChange: (family: FontFamily) => void;
+  dshWebSearchEnabled: boolean;
+  onDshWebSearchEnabledChange: (enabled: boolean) => void;
 }) {
   const { t } = useI18n();
   const [activeNav, setActiveNav] = useState<NavKey>(initialNav);
@@ -288,6 +292,8 @@ export function AppSettingsDialog({
                 onUiFontFamilyChange,
                 monoFontFamily,
                 onMonoFontFamilyChange,
+                dshWebSearchEnabled,
+                onDshWebSearchEnabledChange,
               }}
             />
           </div>

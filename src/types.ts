@@ -216,8 +216,10 @@ export type {
   TableChildObjectType,
 } from "./types/database";
 
-export type BuiltInAgentType = "claude" | "claude_gpt55" | "codex";
+export type BuiltInAgentType = "claude" | "claude_gpt55" | "codex" | "dsh";
 export type AgentType = BuiltInAgentType | (string & {});
+/** 协议族:决定启动参数、会话格式与配置文件形态;codexLike 布尔为其派生。 */
+export type ProtocolFamily = "claude" | "codex" | "dsh";
 export type ThemeMode = "system" | "dark" | "light" | "eyecare";
 export type ThemeVariant = "dark" | "light" | "eyecare";
 export type PermissionMode = "ask" | "auto_edit" | "full_access";
@@ -302,10 +304,14 @@ export interface Task {
   codexSessionPath?: string;
   claudeSessionId?: string;
   claudeSessionPath?: string;
+  dshSessionId?: string;
+  dshSessionPath?: string;
   /** 实际创建当前会话的 Agent；切换配置失败后仍用于定位原会话 home。 */
   sessionAgent?: AgentType;
   /** 实际会话所属协议族；避免切换后的 task.agent 误导 resume/session 解析。 */
   sessionCodexLike?: boolean;
+  /** 三值协议族;读取优先于 sessionCodexLike(旧任务缺省时由其推导)。 */
+  sessionFamily?: ProtocolFamily;
   worktreePath?: string;
   worktreeBranch?: string;
   baseBranch?: string;
@@ -818,7 +824,7 @@ export interface UsageSnapshot {
   fetchedAt: number;
 }
 
-export type UsageStatisticsAgent = "all" | "codex" | "claude";
+export type UsageStatisticsAgent = "all" | "codex" | "claude" | "dsh";
 export type UsageStatisticsRange = 1 | 7 | 14 | 30;
 
 export interface UsageStatisticsTotals {
@@ -850,6 +856,7 @@ export interface UsageStatistics {
   breakdown: {
     codex: UsageStatisticsTotals;
     claude: UsageStatisticsTotals;
+    dsh?: UsageStatisticsTotals;
   };
 }
 

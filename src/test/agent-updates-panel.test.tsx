@@ -9,6 +9,7 @@ const { invokeMock, latestVersions, toolStatuses } = vi.hoisted(() => ({
   latestVersions: [
     { agent: "claude", version: "1.1.0", error_code: null as string | null, error: "" },
     { agent: "codex", version: "1.1.0", error_code: null as string | null, error: "" },
+    { agent: "dsh", version: "0.1.0-rc.6", error_code: null as string | null, error: "" },
   ],
   toolStatuses: [
     {
@@ -34,6 +35,20 @@ const { invokeMock, latestVersions, toolStatuses } = vi.hoisted(() => ({
       installed: true,
       version: "1.0.0",
       path: "/usr/local/bin/codex",
+      channel: "npm",
+      managed: false,
+      error_code: null as string | null,
+      error: "",
+    },
+    {
+      agent: "dsh",
+      supported: true,
+      platform: "macos",
+      architecture: "aarch64",
+      libc: "",
+      installed: true,
+      version: "0.1.0-rc.5",
+      path: "/usr/local/bin/dsh",
       channel: "npm",
       managed: false,
       error_code: null as string | null,
@@ -72,8 +87,14 @@ describe("AgentUpdatesPanel", () => {
     toolStatuses[1].version = "1.0.0";
     toolStatuses[1].error_code = null;
     toolStatuses[1].error = "";
+    toolStatuses[2].installed = true;
+    toolStatuses[2].managed = false;
+    toolStatuses[2].version = "0.1.0-rc.5";
+    toolStatuses[2].error_code = null;
+    toolStatuses[2].error = "";
     latestVersions[0].version = "1.1.0";
     latestVersions[1].version = "1.1.0";
+    latestVersions[2].version = "0.1.0-rc.6";
     invokeMock.mockImplementation(
       (
         command: string,
@@ -157,7 +178,7 @@ describe("AgentUpdatesPanel", () => {
 
     expect(await screen.findAllByText(/Current version: 1\.0\.0/)).toHaveLength(2);
     expect(screen.getAllByText(/Latest version: 1\.1\.0/)).toHaveLength(2);
-    expect(screen.getAllByText("Update available")).toHaveLength(2);
+    expect(screen.getAllByText("Update available")).toHaveLength(3);
     expect(screen.queryByText("Up to date")).not.toBeInTheDocument();
   });
 
@@ -166,7 +187,7 @@ describe("AgentUpdatesPanel", () => {
     renderPanel();
 
     expect(await screen.findByText("Up to date")).toBeInTheDocument();
-    expect(screen.getAllByText("Update available")).toHaveLength(1);
+    expect(screen.getAllByText("Update available")).toHaveLength(2);
   });
 
   it("hides the latest version row when the lookup fails", async () => {
@@ -188,7 +209,7 @@ describe("AgentUpdatesPanel", () => {
     renderPanel();
 
     const upgradeButtons = await screen.findAllByRole("button", { name: "Upgrade" });
-    expect(upgradeButtons).toHaveLength(2);
+    expect(upgradeButtons).toHaveLength(3);
     await user.click(upgradeButtons[1]);
 
     await waitFor(() =>
@@ -229,7 +250,9 @@ describe("AgentUpdatesPanel", () => {
     const installButton = await screen.findByRole("button", { name: "Install" });
     expect(installButton).toBeDisabled();
     expect(screen.getByText("One-click install is unavailable on this platform.")).toBeVisible();
-    expect(screen.getByRole("button", { name: "Upgrade" })).toBeEnabled();
+    for (const button of screen.getAllByRole("button", { name: "Upgrade" })) {
+      expect(button).toBeEnabled();
+    }
   });
 
   it("keeps the existing upgrade channel available on an unsupported install platform", async () => {
@@ -285,5 +308,23 @@ describe("AgentUpdatesPanel", () => {
     expect(
       await screen.findByText("This Agent already has an installation in progress."),
     ).toBeVisible();
+  });
+
+  it("upgrades dsh through the npm channel even when it is not installed", async () => {
+    toolStatuses[2].installed = false;
+    toolStatuses[2].version = "";
+    const user = userEvent.setup();
+    renderPanel();
+
+    // dsh 未安装时按钮文案为 Install,但动作走 npm 升级通道(无 tools_dir 安装机制)。
+    await user.click(await screen.findByRole("button", { name: "Install" }));
+
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith("upgrade_agent_versions", { agents: ["dsh"] }),
+    );
+    expect(invokeMock).not.toHaveBeenCalledWith(
+      "install_agent_tools",
+      expect.objectContaining({ request: expect.objectContaining({ agents: ["dsh"] }) }),
+    );
   });
 });

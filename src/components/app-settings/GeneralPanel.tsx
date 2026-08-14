@@ -17,6 +17,8 @@ export function GeneralPanel({
   onAttentionBadgeChange,
   sftpLocalDefaultPath,
   onSftpLocalDefaultPathChange,
+  dshWebSearchEnabled,
+  onDshWebSearchEnabledChange,
 }: {
   taskDisplayWindow: TaskDisplayWindow;
   onTaskDisplayWindowChange: (window: TaskDisplayWindow) => void;
@@ -24,6 +26,8 @@ export function GeneralPanel({
   onAttentionBadgeChange: (enabled: boolean) => void;
   sftpLocalDefaultPath: string;
   onSftpLocalDefaultPathChange: (path: string) => void;
+  dshWebSearchEnabled: boolean;
+  onDshWebSearchEnabledChange: (enabled: boolean) => void;
 }) {
   const { language, setLanguage, t } = useI18n();
 
@@ -205,6 +209,34 @@ export function GeneralPanel({
           </span>
         </button>
         <span style={hintStyle}>{t("appSettings.attentionBadgeHint")}</span>
+      </div>
+
+      <div style={{ ...fieldStyle, marginTop: 18 }}>
+        <label style={labelStyle}>{t("appSettings.dshWebSearchEnabled")}</label>
+        <button
+          type="button"
+          role="switch"
+          aria-checked={dshWebSearchEnabled}
+          aria-label={t("appSettings.dshWebSearchEnabled")}
+          onClick={() => onDshWebSearchEnabledChange(!dshWebSearchEnabled)}
+          style={s.settingToggle}
+        >
+          <span style={s.settingToggleLabel}>{t("appSettings.dshWebSearchToggle")}</span>
+          <span
+            style={{
+              ...s.settingToggleTrack,
+              background: dshWebSearchEnabled ? "var(--primary-action-bg)" : "var(--border-medium)",
+            }}
+          >
+            <span
+              style={{
+                ...s.settingToggleKnob,
+                transform: dshWebSearchEnabled ? "translateX(16px)" : "translateX(0)",
+              }}
+            />
+          </span>
+        </button>
+        <span style={hintStyle}>{t("appSettings.dshWebSearchHint")}</span>
       </div>
     </div>
   );

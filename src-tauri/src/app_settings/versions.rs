@@ -67,7 +67,23 @@ pub(super) fn extract_semver(text: &str) -> Option<String> {
                 .iter()
                 .all(|part| !part.is_empty() && part.chars().all(|c| c.is_ascii_digit()))
         {
-            return Some(candidate.to_string());
+            // 保留紧随其后的预发布后缀(dsh 处于 dev preview,版本形如
+            // 0.1.0-rc.6;丢掉后缀会让"当前 vs 最新"永远不相等)。
+            let core_end = start + candidate.len();
+            let mut result = candidate.to_string();
+            if let Some(rest) = text.get(core_end..) {
+                if rest.starts_with('-') {
+                    let suffix: String = rest
+                        .chars()
+                        .take_while(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '.'))
+                        .collect();
+                    let suffix = suffix.trim_end_matches(['.', '-']);
+                    if suffix.len() > 1 {
+                        result.push_str(suffix);
+                    }
+                }
+            }
+            return Some(result);
         }
         index = cursor.max(index + 1);
     }
@@ -84,6 +100,8 @@ pub(super) fn detect_versions_for_settings(settings: &AppSettings) -> AgentVersi
         ))
         .unwrap_or_default(),
         codex_version: detect_version(&get_agent_launch_spec_from_settings(settings, "codex"))
+            .unwrap_or_default(),
+        dsh_version: detect_version(&get_agent_launch_spec_from_settings(settings, "dsh"))
             .unwrap_or_default(),
     }
 }
@@ -121,6 +139,18 @@ pub(super) fn detect_codex_version_impl() -> Option<String> {
     detected
 }
 
+pub(super) fn detect_dsh_version_impl() -> Option<String> {
+    let cache = CACHED_DSH_VERSION.get_or_init(|| Mutex::new(None));
+    let mut guard = cache.lock();
+    if let Some(version) = guard.clone() {
+        return version;
+    }
+
+    let detected = detect_version(&get_agent_launch_spec("dsh"));
+    *guard = Some(detected.clone());
+    detected
+}
+
 /// 版本号统一走全局带缓存的探测；探测失败视为不满足。
 pub(super) fn claude_version_gte_impl(min_version: &str) -> bool {
     match detect_claude_version_impl() {
@@ -137,6 +167,7 @@ pub(super) fn agent_version_gte_impl(agent: &str, min_version: &str) -> bool {
     let detected = match agent {
         "claude" => detect_claude_version_impl(),
         "codex" => detect_codex_version_impl(),
+        "dsh" => detect_dsh_version_impl(),
         _ => detect_version(&get_agent_launch_spec(agent)),
     };
     match detected {
@@ -156,6 +187,7 @@ pub(super) fn codex_version_gte_impl(min_version: &str) -> bool {
 pub(super) enum AgentUpgradeKind {
     Claude,
     Codex,
+    Dsh,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -270,6 +302,7 @@ pub(super) fn build_agent_upgrade_commands_from_detection(
             let package = match kind {
                 AgentUpgradeKind::Claude => "@anthropic-ai/claude-code@latest",
                 AgentUpgradeKind::Codex => "@openai/codex@latest",
+                AgentUpgradeKind::Dsh => "@deepseek-ai/dsh@latest",
             };
             push_unique(AgentUpgradeCommand {
                 channel: "npm".to_string(),
@@ -281,7 +314,12 @@ pub(super) fn build_agent_upgrade_commands_from_detection(
     let brew_name = match kind {
         AgentUpgradeKind::Claude => "claude-code",
         AgentUpgradeKind::Codex => "codex",
+        // dsh 无 Homebrew 渠道;npm 是唯一官方分发。
+        AgentUpgradeKind::Dsh => "",
     };
+    if brew_name.is_empty() {
+        return commands;
+    }
     if brew_formula_installed || brew_flavor == Some("formula") {
         if let Some(program) = brew_program.clone() {
             push_unique(AgentUpgradeCommand {
@@ -332,22 +370,26 @@ pub(super) fn build_agent_upgrade_commands(
     let npm_package = match kind {
         AgentUpgradeKind::Claude => "@anthropic-ai/claude-code",
         AgentUpgradeKind::Codex => "@openai/codex",
+        AgentUpgradeKind::Dsh => "@deepseek-ai/dsh",
     };
     // Homebrew 名称:Claude Code 官方走 cask(claude-code),Codex 官方走
-    // formula(codex);两种渠道都探测,哪种装了就升级哪种。
+    // formula(codex);两种渠道都探测,哪种装了就升级哪种。dsh 仅 npm。
     let brew_name = match kind {
         AgentUpgradeKind::Claude => "claude-code",
         AgentUpgradeKind::Codex => "codex",
+        AgentUpgradeKind::Dsh => "",
     };
     let npm_installed = npm_program.as_deref().is_some_and(|program| {
         package_manager_has_install(program, &["list", "-g", "--depth=0", npm_package])
     });
-    let brew_formula_installed = brew_program.as_deref().is_some_and(|program| {
-        package_manager_has_install(program, &["list", "--versions", "--formula", brew_name])
-    });
-    let brew_cask_installed = brew_program.as_deref().is_some_and(|program| {
-        package_manager_has_install(program, &["list", "--versions", "--cask", brew_name])
-    });
+    let brew_formula_installed = !brew_name.is_empty()
+        && brew_program.as_deref().is_some_and(|program| {
+            package_manager_has_install(program, &["list", "--versions", "--formula", brew_name])
+        });
+    let brew_cask_installed = !brew_name.is_empty()
+        && brew_program.as_deref().is_some_and(|program| {
+            package_manager_has_install(program, &["list", "--versions", "--cask", brew_name])
+        });
     let commands = build_agent_upgrade_commands_from_detection(
         kind,
         launch_program,
@@ -366,6 +408,9 @@ pub(super) fn build_agent_upgrade_commands(
             }
             AgentUpgradeKind::Codex => {
                 "No supported Codex installation was detected (npm or Homebrew)".to_string()
+            }
+            AgentUpgradeKind::Dsh => {
+                "No supported DeepSeek Harness installation was detected (npm)".to_string()
             }
         })
     } else {
@@ -433,16 +478,15 @@ pub(super) fn upgrade_kind_for_agent(
     match agent {
         "claude" => Some(AgentUpgradeKind::Claude),
         "codex" | "claude_gpt55" => Some(AgentUpgradeKind::Codex),
+        "dsh" => Some(AgentUpgradeKind::Dsh),
         other => settings
             .custom_agents
             .iter()
             .find(|profile| profile.id == other)
-            .map(|profile| {
-                if profile.codex_like {
-                    AgentUpgradeKind::Codex
-                } else {
-                    AgentUpgradeKind::Claude
-                }
+            .map(|profile| match profile.agent_family() {
+                AgentFamily::Codex => AgentUpgradeKind::Codex,
+                AgentFamily::Dsh => AgentUpgradeKind::Dsh,
+                AgentFamily::Claude => AgentUpgradeKind::Claude,
             }),
     }
 }
@@ -451,6 +495,7 @@ pub(super) fn upgrade_binary_agent(kind: AgentUpgradeKind) -> &'static str {
     match kind {
         AgentUpgradeKind::Claude => "claude",
         AgentUpgradeKind::Codex => "codex",
+        AgentUpgradeKind::Dsh => "dsh",
     }
 }
 
@@ -464,6 +509,19 @@ mod tests {
             extract_semver("2.1.195 (Claude Code)"),
             Some("2.1.195".to_string())
         );
+    }
+
+    #[test]
+    fn keeps_dsh_prerelease_suffix_in_extracted_versions() {
+        assert_eq!(extract_semver("0.1.0-rc.6"), Some("0.1.0-rc.6".to_string()));
+        assert_eq!(
+            extract_semver("dsh 0.1.0-rc.6 (dev preview)"),
+            Some("0.1.0-rc.6".to_string())
+        );
+        // 尾随分隔符不并入后缀。
+        assert_eq!(extract_semver("1.2.3-"), Some("1.2.3".to_string()));
+        // rc 版本的三元组比较把后缀按 0 处理,不影响既有 gte 判定。
+        assert_eq!(parse_semver("0.1.0-rc.6"), (0, 1, 0));
     }
 
     #[test]

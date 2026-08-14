@@ -29,6 +29,7 @@ export type RightPanel =
   | "database"
   | "docker"
   | "notes"
+  | "skills"
   | null;
 
 type OpenDiff =
