@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import type { CSSProperties } from "react";
+import { createPortal } from "react-dom";
 import {
   Bell,
   X,
@@ -471,11 +472,19 @@ export function NotificationBell({
         )}
       </button>
 
-      {open && (
-        <div style={s.modalOverlay} onClick={handleOverlayClick}>
-          {notificationContent}
-        </div>
-      )}
+      {open &&
+        createPortal(
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-label={t("notification.title")}
+            style={s.modalOverlay}
+            onClick={handleOverlayClick}
+          >
+            {notificationContent}
+          </div>,
+          document.body,
+        )}
     </>
   );
 }

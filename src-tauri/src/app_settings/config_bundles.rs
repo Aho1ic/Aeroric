@@ -295,6 +295,7 @@ pub(super) fn custom_agent_setup_draft(agent: &AgentConfigBundleAgent) -> Option
         models: agent.models.clone(),
         enable_1m_context: agent.enable_1m_context,
         enable_chat_completions_proxy: agent.enable_chat_completions_proxy,
+        dsh_api_protocol: String::new(),
         proxy_enabled: false,
     })
 }

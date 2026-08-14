@@ -1468,6 +1468,7 @@ pub(super) fn refresh_stale_codex_agent_scripts(settings: &mut AppSettings) {
             models: profile.models.clone(),
             enable_1m_context: profile.enable_1m_context,
             enable_chat_completions_proxy: profile.enable_chat_completions_proxy,
+            dsh_api_protocol: String::new(),
             proxy_enabled: false,
         };
         if validate_agent_setup_draft(&draft).is_err() {
@@ -1519,6 +1520,7 @@ pub(super) fn refresh_stale_claude_agent_scripts(settings: &mut AppSettings) {
             models: profile.models.clone(),
             enable_1m_context: profile.enable_1m_context,
             enable_chat_completions_proxy: profile.enable_chat_completions_proxy,
+            dsh_api_protocol: String::new(),
             proxy_enabled: false,
         };
         if validate_agent_setup_draft(&draft).is_err() {
@@ -1654,6 +1656,7 @@ api_key = "sk-codex"
             models: vec!["gpt-5.6".to_string(), "gpt-5.6-sol".to_string()],
             enable_1m_context: false,
             enable_chat_completions_proxy: false,
+            dsh_api_protocol: String::new(),
             proxy_enabled: false,
         };
 
@@ -1690,6 +1693,7 @@ api_key = "sk-codex"
             models: vec!["gpt-5.6-sol".to_string()],
             enable_1m_context: false,
             enable_chat_completions_proxy: false,
+            dsh_api_protocol: String::new(),
             proxy_enabled: false,
         };
 
@@ -1736,6 +1740,7 @@ api_key = "sk-codex"
             models: vec!["gpt-5.6".to_string(), "gpt-5.6-sol".to_string()],
             enable_1m_context: false,
             enable_chat_completions_proxy: true,
+            dsh_api_protocol: String::new(),
             proxy_enabled: false,
         };
 
@@ -1764,6 +1769,7 @@ api_key = "sk-codex"
             models: vec!["gpt-5.6".to_string()],
             enable_1m_context: false,
             enable_chat_completions_proxy: true,
+            dsh_api_protocol: String::new(),
             proxy_enabled: false,
         };
         let codex_script = build_codex_agent_powershell_script(&codex);
@@ -1787,6 +1793,7 @@ api_key = "sk-codex"
             models: vec!["claude-opus-4-8".to_string()],
             enable_1m_context: true,
             enable_chat_completions_proxy: false,
+            dsh_api_protocol: String::new(),
             proxy_enabled: false,
         };
         let claude_script = build_claude_code_agent_powershell_script(&claude);
@@ -1870,6 +1877,7 @@ api_key = "sk-codex"
             models: vec!["claude-opus-4-8".to_string(), "claude-opus-4-6".to_string()],
             enable_1m_context: true,
             enable_chat_completions_proxy: false,
+            dsh_api_protocol: String::new(),
             proxy_enabled: false,
         };
 
@@ -1897,6 +1905,7 @@ api_key = "sk-codex"
             models: vec!["claude-opus-4-6".to_string()],
             enable_1m_context: false,
             enable_chat_completions_proxy: false,
+            dsh_api_protocol: String::new(),
             proxy_enabled: false,
         };
 
@@ -1919,6 +1928,7 @@ api_key = "sk-codex"
             models: vec!["gpt-5.6".to_string(), "gpt-5.6-sol".to_string()],
             enable_1m_context: false,
             enable_chat_completions_proxy: false,
+            dsh_api_protocol: String::new(),
             proxy_enabled: false,
         };
 
@@ -2109,6 +2119,7 @@ printf 'model_catalog_json = "model-catalog.json"\n'
             models: vec!["gpt-5.6-sol".to_string()],
             enable_1m_context: false,
             enable_chat_completions_proxy: true,
+            dsh_api_protocol: String::new(),
             proxy_enabled: false,
         });
         fs::write(&script_path, &bridged).unwrap();

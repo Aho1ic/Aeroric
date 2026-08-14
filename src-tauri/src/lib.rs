@@ -494,6 +494,7 @@ pub fn run() {
             wsl::read_wsl_config_file,
             wsl::write_wsl_config_file,
             wsl::get_wsl_agent_status,
+            wsl::upgrade_wsl_agent_versions,
             wsl::read_wsl_agent_config,
             wsl::write_wsl_agent_config,
             wsl::restart_wsl,

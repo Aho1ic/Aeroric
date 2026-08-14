@@ -120,8 +120,12 @@ export function AgentUpdatesPanel() {
   });
   const [refreshing, setRefreshing] = useState(false);
   const [busyAgents, setBusyAgents] = useState<Set<Agent>>(new Set());
-  const [operationId, setOperationId] = useState<string | null>(null);
-  const activeOperationsRef = useRef<Record<Agent, string>>({} as Record<Agent, string>);
+  const [operationIds, setOperationIds] = useState<Partial<Record<Agent, string>>>({});
+  const [operationKinds, setOperationKinds] = useState<
+    Partial<Record<Agent, "install" | "upgrade">>
+  >({});
+  const activeOperationsRef = useRef<Partial<Record<Agent, string>>>({});
+  const runningAgentsRef = useRef<Set<Agent>>(new Set());
   const [error, setError] = useState<string | null>(null);
 
   const refreshVersions = useCallback(async () => {
@@ -189,7 +193,12 @@ export function AgentUpdatesPanel() {
 
   async function runAgent(agent: Agent) {
     const status = statuses[agent];
-    if (!status || (!status.installed && status.error_code === "unsupported_platform")) {
+    if (
+      !status ||
+      busyAgents.has(agent) ||
+      runningAgentsRef.current.has(agent) ||
+      (!status.installed && status.error_code === "unsupported_platform")
+    ) {
       return;
     }
 
@@ -197,10 +206,17 @@ export function AgentUpdatesPanel() {
     const isInstall = agent !== "dsh" && (!status.installed || status.managed);
     const nextOperationId = isInstall ? newOperationId() : null;
 
-    setBusyAgents(new Set([agent]));
-    setOperationId(nextOperationId);
+    // 每个 Agent 保持独立的忙碌状态和安装操作 ID，允许 Claude/Codex 同时升级。
+    runningAgentsRef.current.add(agent);
+    setBusyAgents((current) => {
+      const next = new Set(current);
+      next.add(agent);
+      return next;
+    });
+    setOperationKinds((current) => ({ ...current, [agent]: isInstall ? "install" : "upgrade" }));
     if (nextOperationId) {
       activeOperationsRef.current[agent] = nextOperationId;
+      setOperationIds((current) => ({ ...current, [agent]: nextOperationId }));
     }
     setProgress((current) => ({ ...current, [agent]: null }));
     setInstallResults((current) => ({ ...current, [agent]: null }));
@@ -223,9 +239,22 @@ export function AgentUpdatesPanel() {
         const results = await invoke<AgentUpgradeResult[]>("upgrade_agent_versions", {
           agents: [agent],
         });
+        const result = results[0] ?? null;
+        const expectedVersion = latestVersions[agent];
+        const verifiedResult =
+          result?.success && expectedVersion && result.current_version !== expectedVersion
+            ? {
+                ...result,
+                success: false,
+                message: t("appSettings.upgradeVerificationFailed", {
+                  expected: expectedVersion,
+                  actual: result.current_version || t("appSettings.unknown"),
+                }),
+              }
+            : result;
         setUpgradeResults((current) => ({
           ...current,
-          [agent]: results[0] ?? null,
+          [agent]: verifiedResult,
         }));
       }
       await refreshVersions();
@@ -235,16 +264,35 @@ export function AgentUpdatesPanel() {
     } finally {
       if (nextOperationId && activeOperationsRef.current[agent] === nextOperationId) {
         delete activeOperationsRef.current[agent];
+        setOperationIds((current) => {
+          const next = { ...current };
+          delete next[agent];
+          return next;
+        });
       }
-      setBusyAgents(new Set());
-      setOperationId(null);
+      runningAgentsRef.current.delete(agent);
+      setBusyAgents((current) => {
+        const next = new Set(current);
+        next.delete(agent);
+        return next;
+      });
+      setOperationKinds((current) => {
+        const next = { ...current };
+        delete next[agent];
+        return next;
+      });
     }
   }
 
   async function cancelInstall() {
-    if (!operationId) return;
-    await invoke("cancel_agent_tool_install", { operationId }).catch((reason) =>
-      setError(String(reason)),
+    const ids = Object.values(operationIds);
+    if (!ids.length) return;
+    await Promise.all(
+      ids.map((operationId) =>
+        invoke("cancel_agent_tool_install", { operationId }).catch((reason) =>
+          setError(String(reason)),
+        ),
+      ),
     );
   }
 
@@ -276,14 +324,23 @@ export function AgentUpdatesPanel() {
             }
           : null,
         success,
-        isInstall: Boolean(installResult),
+        isInstall: operationKinds[agent] === "install" || Boolean(installResult),
         resultErrorCode,
         loginCommand: installResult?.success ? installResult.login_command : undefined,
         installPath: installResult?.success && installResult.path ? installResult.path : undefined,
         resultMessage: installResult?.message ?? upgradeResult?.message,
       };
     });
-  }, [statuses, progress, installResults, upgradeResults, latestVersions, busyAgents, t]);
+  }, [
+    statuses,
+    progress,
+    installResults,
+    upgradeResults,
+    latestVersions,
+    busyAgents,
+    operationKinds,
+    t,
+  ]);
 
   const busy = busyAgents.size > 0;
 
@@ -347,7 +404,7 @@ export function AgentUpdatesPanel() {
         ))}
       </div>
 
-      {operationId && (
+      {Object.keys(operationIds).length > 0 && (
         <div style={{ display: "flex", justifyContent: "center", marginTop: 14 }}>
           <Button variant="outline" size="sm" onClick={() => void cancelInstall()}>
             <Square size={11} />
@@ -485,7 +542,11 @@ function AgentCard({ data, onRun, t }: AgentCardProps) {
         </div>
         <Button variant="default" size="sm" onClick={onRun} disabled={busy || unsupported}>
           {busy ? <RefreshCw size={12} className="spin" /> : <Download size={12} />}
-          {busy ? t("appSettings.installWorking") : actionLabel}
+          {busy
+            ? isInstall
+              ? t("appSettings.installWorking")
+              : t("appSettings.upgrading")
+            : actionLabel}
         </Button>
       </div>
 

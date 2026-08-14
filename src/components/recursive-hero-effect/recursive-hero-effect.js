@@ -478,7 +478,10 @@ function updateCanvasLayout() {
   ctxMain.imageSmoothingQuality = "high";
 
   const isWide = width >= 992;
-  scaleCenterX = isWide ? width * 0.66 : width * 0.5;
+  // 首页画布覆盖了整个 welcomeBody（包含左侧栏），递归主体应以完整画布的
+  // 几何中心为基准。之前宽屏固定到 66% 会把主体推到右侧，且在大屏上
+  // 暴露出画布右边缘与页面背景之间的边界。
+  scaleCenterX = width * 0.5;
   scaleCenterY = isWide ? height * 0.5 : height * 0.62;
   scaleBase = isWide
     ? 0.58 * Math.min(0.6 * width, height)

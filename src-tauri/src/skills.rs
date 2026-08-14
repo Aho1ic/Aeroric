@@ -908,6 +908,37 @@ fn prompt_skill_roots(project_path: &Path, agent: &str) -> Vec<PathBuf> {
     roots
 }
 
+/// 只扫描当前项目中的 skill 目录，不混入用户级/托管目录。
+/// `all` 用于项目侧边栏：项目里的 Claude、Codex、DSH skill 都应可见。
+fn project_prompt_skill_roots(project_path: &Path, agent: &str) -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+    match agent {
+        "claude" | "all" => roots.push(project_path.join(".claude").join("skills")),
+        _ => {}
+    }
+    match agent {
+        "codex" | "all" => {
+            roots.push(project_path.join(".agents").join("skills"));
+            roots.push(project_path.join(".codex").join("skills"));
+        }
+        _ => {}
+    }
+    match agent {
+        "dsh" | "all" => {
+            roots.push(project_path.join(".dsh").join("skills"));
+            if agent == "dsh" {
+                roots.push(project_path.join(".agents").join("skills"));
+            }
+        }
+        _ => {}
+    }
+    // 兼容不带 Agent 前缀的项目级 skills 目录。
+    if agent == "all" {
+        roots.push(project_path.join("skills"));
+    }
+    roots
+}
+
 fn scan_prompt_skills(project_path: &Path, agent: &str) -> Vec<PromptSkill> {
     let mut skills = Vec::new();
     let mut seen_names = HashSet::new();
@@ -1151,9 +1182,10 @@ pub async fn list_skills() -> Result<Vec<Skill>, String> {
 pub async fn list_project_skills(
     project_path: String,
     agent: String,
+    project_only: Option<bool>,
 ) -> Result<Vec<PromptSkill>, String> {
     tokio::task::spawn_blocking(move || {
-        if !matches!(agent.as_str(), "claude" | "codex" | "dsh") {
+        if !matches!(agent.as_str(), "claude" | "codex" | "dsh" | "all") {
             return Err(format!("Unsupported agent skill type: {}", agent));
         }
         let project_path = PathBuf::from(project_path);
@@ -1163,7 +1195,17 @@ pub async fn list_project_skills(
                 project_path.display()
             ));
         }
-        Ok(scan_prompt_skills(&project_path, &agent))
+        if project_only.unwrap_or(false) {
+            let mut skills = Vec::new();
+            let mut seen_names = HashSet::new();
+            for root in project_prompt_skill_roots(&project_path, &agent) {
+                collect_prompt_skills(&root, &mut skills, &mut seen_names);
+            }
+            skills.sort_by_key(|skill| skill.name.to_lowercase());
+            Ok(skills)
+        } else {
+            Ok(scan_prompt_skills(&project_path, &agent))
+        }
     })
     .await
     .map_err(|error| error.to_string())?

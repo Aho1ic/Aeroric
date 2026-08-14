@@ -338,7 +338,7 @@ export function AgentDetailModal({
         (isBuiltIn && baseUrl.trim() && apiKey.trim()) ||
         (!isBuiltIn && baseUrl.trim() && apiKey.trim())
           ? await invoke<AgentModels>("detect_agent_models", {
-              kind: isCodex || agentIsDsh ? "codex" : "claude_code",
+              kind: agentIsDsh ? "dsh" : isCodex ? "codex" : "claude_code",
               baseUrl: baseUrl.trim(),
               apiKey: apiKey.trim(),
             })

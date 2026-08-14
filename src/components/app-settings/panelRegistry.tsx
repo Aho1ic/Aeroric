@@ -234,6 +234,13 @@ export const SETTINGS_PANEL_REGISTRY: readonly SettingsPanelEntry[] = [
     ...wslPanel,
   },
   {
+    key: ALL_AGENT_CONFIGS_NAV_KEY,
+    labelKey: "appSettings.allAgentConfigs",
+    section: "agents",
+    icon: Archive,
+    ...allAgentConfigsPanel,
+  },
+  {
     key: "usage",
     labelKey: "usageStats.nav",
     section: "agents",
@@ -267,13 +274,6 @@ export const SETTINGS_PANEL_REGISTRY: readonly SettingsPanelEntry[] = [
     section: "agents",
     icon: PackageOpen,
     ...dshPluginsPanel,
-  },
-  {
-    key: ALL_AGENT_CONFIGS_NAV_KEY,
-    labelKey: "appSettings.allAgentConfigs",
-    section: "agents",
-    icon: Archive,
-    ...allAgentConfigsPanel,
   },
   {
     key: "about",

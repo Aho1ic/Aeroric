@@ -18,6 +18,10 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({
   save: vi.fn(),
 }));
 
+vi.mock("@tauri-apps/plugin-clipboard-manager", () => ({
+  readText: vi.fn().mockResolvedValue(""),
+}));
+
 vi.mock("shiki/core", () => ({
   createBundledHighlighter: vi.fn(
     () => async () =>
@@ -297,6 +301,7 @@ function renderAddAgentPanel(
     used: 57.25,
     total: 100,
   },
+  onSaved = vi.fn(),
 ) {
   vi.mocked(invoke).mockImplementation((command) => {
     if (command === "detect_agent_models") {
@@ -308,13 +313,17 @@ function renderAddAgentPanel(
     if (command === "setup_agent_profile") {
       return Promise.resolve(appSettings);
     }
+    if (command === "update_builtin_agent_access") {
+      return Promise.resolve(appSettings);
+    }
     return Promise.resolve(undefined);
   });
   render(
     <I18nProvider>
-      <AddAgentPanel onSaved={vi.fn()} />
+      <AddAgentPanel onSaved={onSaved} />
     </I18nProvider>,
   );
+  return onSaved;
 }
 
 function renderProxyPanel() {
@@ -534,7 +543,7 @@ describe("Agent config and debug panel UI", () => {
 
     await findConfigEditor("#!/bin/sh\n");
     expect(screen.getByLabelText("gpt-5.6")).toBeChecked();
-    await user.click(screen.getByRole("button", { name: /Detect Models/i }));
+    await user.click(screen.getByRole("button", { name: /Fetch Available Models/i }));
     await screen.findByLabelText("gpt-5.6-terra");
     expect(screen.getByRole("status")).toHaveTextContent("Used / Total: $57.25 / $100.00");
     await user.click(screen.getByLabelText("gpt-5.6-terra"));
@@ -713,7 +722,7 @@ describe("Agent config and debug panel UI", () => {
     await user.type(screen.getByLabelText("Agent Name"), "GPT55");
     await user.type(screen.getByLabelText("Base URL"), "https://example.com/v1");
     await user.type(screen.getByLabelText("API Key"), "sk-test");
-    await user.click(screen.getByRole("button", { name: /Detect Models/i }));
+    await user.click(screen.getByRole("button", { name: /Fetch Available Models/i }));
 
     await screen.findByText("0 of 4 models selected");
     expect(screen.getByRole("status")).toHaveTextContent("Used / Total: $57.25 / $100.00");
@@ -778,7 +787,7 @@ describe("Agent config and debug panel UI", () => {
 
     await user.type(screen.getByLabelText("Base URL"), "https://example.com/v1");
     await user.type(screen.getByLabelText("API Key"), "sk-test");
-    await user.click(screen.getByRole("button", { name: /Detect Models/i }));
+    await user.click(screen.getByRole("button", { name: /Fetch Available Models/i }));
 
     expect(await screen.findByLabelText("gpt-5.6-sol")).toBeInTheDocument();
     expect(screen.getByText("0 of 4 models selected")).toBeInTheDocument();
@@ -870,6 +879,151 @@ describe("Agent config and debug panel UI", () => {
         models: ["claude-opus-4-6"],
         enable_1m_context: true,
         enable_chat_completions_proxy: false,
+      },
+    });
+  });
+
+  it("opens the DeepSeek official provider card and both provider creation paths", async () => {
+    const user = userEvent.setup();
+    renderAddAgentPanel();
+
+    await user.click(screen.getByRole("button", { name: "DeepSeek Harness" }));
+
+    const officialCard = screen.getByRole("region", { name: "DeepSeek" });
+    expect(within(officialCard).getByText("deepseek-official")).toBeInTheDocument();
+    expect(within(officialCard).getByLabelText("API Key")).toBeInTheDocument();
+    expect(
+      within(officialCard).getByRole("button", { name: "Fetch Available Models" }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Add provider" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Add a custom provider" })).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Add provider" }));
+    expect(screen.getByRole("region", { name: "DeepSeek" })).toBe(officialCard);
+    expect(screen.getByRole("region", { name: "Amazon Bedrock" })).toBeInTheDocument();
+
+    const providerSelect = screen.getByLabelText("Provider") as HTMLSelectElement;
+    expect(Array.from(providerSelect.options, (option) => option.value)).toEqual([
+      "amazon-bedrock",
+      "ant-ling",
+      "anthropic",
+      "azure-openai-responses",
+      "cerebras",
+      "cloudflare-ai-gateway",
+      "cloudflare-workers-ai",
+      "deepseek",
+      "fireworks",
+      "github-copilot",
+      "google",
+      "google-vertex",
+      "groq",
+      "huggingface",
+      "kimi-coding",
+      "minimax",
+      "minimax-cn",
+      "mistral",
+      "moonshotai",
+      "moonshotai-cn",
+      "nvidia",
+      "openai",
+      "opencode",
+      "opencode-go",
+      "openrouter",
+      "qwen-token-plan",
+      "qwen-token-plan-cn",
+      "together",
+      "vercel-ai-gateway",
+      "xai",
+      "xiaomi",
+      "xiaomi-token-plan-ams",
+      "xiaomi-token-plan-cn",
+      "xiaomi-token-plan-sgp",
+      "zai",
+      "zai-coding-cn",
+    ]);
+
+    await user.selectOptions(providerSelect, "minimax-cn");
+    expect(screen.getByRole("region", { name: "MiniMax CN" })).toBeInTheDocument();
+    expect(screen.getByLabelText("Base URL")).toHaveValue("https://api.minimaxi.com/anthropic");
+
+    await user.click(screen.getByRole("button", { name: "Add a custom provider" }));
+
+    expect(screen.getByRole("region", { name: "DeepSeek" })).toBe(officialCard);
+    expect(screen.getByLabelText("Display name")).toBeInTheDocument();
+    expect(screen.getByLabelText("Provider ID")).toBeInTheDocument();
+    expect(screen.getByLabelText("Base URL")).toBeInTheDocument();
+    const protocol = screen.getByLabelText("API protocol");
+    expect(protocol).toHaveValue("openai-completions");
+    expect(
+      within(protocol).getByRole("option", { name: "openai-completions" }),
+    ).toBeInTheDocument();
+    expect(within(protocol).getByRole("option", { name: "openai-responses" })).toBeInTheDocument();
+    expect(
+      within(protocol).getByRole("option", { name: "anthropic-messages" }),
+    ).toBeInTheDocument();
+  });
+
+  it("saves official DeepSeek credentials into the built-in DSH Agent", async () => {
+    const user = userEvent.setup();
+    const onSaved = vi.fn();
+    renderAddAgentPanel(null, onSaved);
+
+    await user.click(screen.getByRole("button", { name: "DeepSeek Harness" }));
+    await user.type(screen.getByLabelText("API Key"), "sk-test");
+    await user.click(screen.getByRole("button", { name: "Fetch Available Models" }));
+    await user.click(await screen.findByLabelText("gpt-5.6-sol"));
+    await user.click(screen.getByRole("button", { name: /^Save$/i }));
+
+    expect(invoke).toHaveBeenCalledWith("detect_agent_models", {
+      kind: "dsh",
+      baseUrl: "https://api.deepseek.com",
+      apiKey: "sk-test",
+    });
+    expect(invoke).toHaveBeenCalledWith("update_builtin_agent_access", {
+      agent: "dsh",
+      baseUrl: "",
+      apiKey: "sk-test",
+      clearApiKey: false,
+      models: ["gpt-5.6-sol"],
+      proxyEnabled: false,
+    });
+    expect(invoke).not.toHaveBeenCalledWith("setup_agent_profile", expect.anything());
+    await waitFor(() => expect(onSaved).toHaveBeenCalledWith("dsh", "dsh"));
+  });
+
+  it("creates a custom DSH provider with the selected API protocol", async () => {
+    const user = userEvent.setup();
+    renderAddAgentPanel();
+
+    await user.click(screen.getByRole("button", { name: "DeepSeek Harness" }));
+    await user.click(screen.getByRole("button", { name: "Add a custom provider" }));
+
+    const customCard = screen.getByRole("region", { name: "Custom provider" });
+    await user.type(within(customCard).getByLabelText("Display name"), "Acme");
+    await user.type(within(customCard).getByLabelText("Provider ID"), "acme-gateway");
+    await user.type(within(customCard).getByLabelText("Base URL"), "https://acme.example/v1");
+    await user.selectOptions(
+      within(customCard).getByLabelText("API protocol"),
+      "anthropic-messages",
+    );
+    await user.type(within(customCard).getByLabelText("API Key"), "sk-acme");
+    await user.type(within(customCard).getByLabelText("Model"), "claude-sonnet-4-6");
+    await user.click(within(customCard).getByRole("button", { name: "Add Model" }));
+    await user.click(screen.getByRole("button", { name: /^Add Agent$/i }));
+
+    expect(screen.getByRole("region", { name: "DeepSeek" })).toBeInTheDocument();
+    expect(invoke).toHaveBeenCalledWith("setup_agent_profile", {
+      draft: {
+        id: "acme-gateway_dsh",
+        label: "Acme",
+        kind: "dsh",
+        base_url: "https://acme.example/v1",
+        api_key: "sk-acme",
+        model: "claude-sonnet-4-6",
+        models: ["claude-sonnet-4-6"],
+        enable_1m_context: false,
+        enable_chat_completions_proxy: false,
+        dsh_api_protocol: "anthropic-messages",
       },
     });
   });

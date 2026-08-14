@@ -193,7 +193,7 @@ describe("Agent detail modal", () => {
     renderModal(customOption);
     const reasoningGroup = await screen.findByRole("group", { name: "推理强度" });
     await user.click(within(reasoningGroup).getByRole("button", { name: "High" }));
-    await user.click(screen.getByRole("button", { name: "检测模型" }));
+    await user.click(screen.getByRole("button", { name: "获取可用模型" }));
     await user.click(await screen.findByLabelText("gpt-5.6-terra"));
     await user.click(screen.getByRole("button", { name: /^保存$/ }));
 

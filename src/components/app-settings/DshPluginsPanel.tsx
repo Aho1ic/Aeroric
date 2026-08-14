@@ -185,7 +185,7 @@ export function DshPluginsPanel() {
                 key={plugin.name}
                 style={{
                   padding: 14,
-                  background: "var(--surface-2)",
+                  background: "var(--bg-card)",
                   border: "1px solid var(--border-dim)",
                   borderRadius: 9,
                   display: "flex",
@@ -270,7 +270,8 @@ export function DshPluginsPanel() {
           style={{
             position: "fixed",
             inset: 0,
-            background: "rgba(0, 0, 0, 0.5)",
+            // 使用主题表面的浅色遮罩，避免浅色模式打开弹窗后整页被压成灰色。
+            background: "color-mix(in srgb, var(--bg-shell) 88%, transparent)",
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
@@ -282,7 +283,7 @@ export function DshPluginsPanel() {
         >
           <div
             style={{
-              background: "var(--surface-1)",
+              background: "var(--bg-card)",
               border: "1px solid var(--border-medium)",
               borderRadius: 12,
               width: "min(90%, 480px)",
@@ -378,7 +379,7 @@ export function DshPluginsPanel() {
           style={{
             position: "fixed",
             inset: 0,
-            background: "rgba(0, 0, 0, 0.5)",
+            background: "color-mix(in srgb, var(--bg-shell) 88%, transparent)",
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
@@ -390,7 +391,7 @@ export function DshPluginsPanel() {
         >
           <div
             style={{
-              background: "var(--surface-1)",
+              background: "var(--bg-card)",
               border: "1px solid var(--border-medium)",
               borderRadius: 12,
               width: "min(90%, 420px)",

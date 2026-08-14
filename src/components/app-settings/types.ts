@@ -365,6 +365,7 @@ export interface AgentInstallResult {
 }
 
 export type AgentSetupKind = "codex" | "claude_code" | "dsh";
+export type DshApiProtocol = "openai-completions" | "openai-responses" | "anthropic-messages";
 
 export interface AgentSetupDraft {
   id: string;
@@ -376,6 +377,7 @@ export interface AgentSetupDraft {
   models: string[];
   enable_1m_context: boolean;
   enable_chat_completions_proxy: boolean;
+  dsh_api_protocol?: DshApiProtocol;
   proxy_enabled?: boolean;
 }
 

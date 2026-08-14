@@ -51,6 +51,7 @@ static CACHED_CODEX_VERSION: OnceLock<Mutex<Option<Option<String>>>> = OnceLock:
 static CACHED_DSH_VERSION: OnceLock<Mutex<Option<Option<String>>>> = OnceLock::new();
 static CACHED_SETTINGS: OnceLock<Mutex<Option<CachedSettings>>> = OnceLock::new();
 static SETTINGS_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+static AGENT_UPGRADE_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 const CLAUDE_BUILTIN_MODEL_ALIASES: &[&str] = &["fable", "opus", "sonnet"];
 const CLAUDE_AGENT_SCRIPT_MARKER: &str = "# AERORIC_CLAUDE_WRAPPER_VERSION=5";
 const CLAUDE_AGENT_SCRIPT_MARKER_PREFIX: &str = "# AERORIC_CLAUDE_WRAPPER_VERSION=";
@@ -127,6 +128,8 @@ pub struct AgentSetupDraft {
     pub enable_1m_context: bool,
     #[serde(default)]
     pub enable_chat_completions_proxy: bool,
+    #[serde(default)]
+    pub dsh_api_protocol: String,
     #[serde(default)]
     pub proxy_enabled: bool,
 }
@@ -1261,6 +1264,10 @@ fn settings_lock() -> &'static Mutex<()> {
     SETTINGS_LOCK.get_or_init(|| Mutex::new(()))
 }
 
+fn agent_upgrade_lock() -> &'static Mutex<()> {
+    AGENT_UPGRADE_LOCK.get_or_init(|| Mutex::new(()))
+}
+
 fn aeroric_dir() -> Result<PathBuf, String> {
     let home =
         crate::platform::home_dir().ok_or_else(|| "Cannot find home directory".to_string())?;
@@ -1876,7 +1883,7 @@ fn apply_builtin_agent_access_update(
     models: Option<Vec<String>>,
     enable_1m_context: Option<bool>,
 ) -> Result<(), String> {
-    if !matches!(agent, "claude" | "claude_gpt55" | "codex") {
+    if !matches!(agent, "claude" | "claude_gpt55" | "codex" | "dsh") {
         return Err(format!("Unknown built-in Agent: {agent}"));
     }
     let credentials = settings
@@ -1909,7 +1916,8 @@ pub(crate) fn update_builtin_agent_config_internal(
     enable_1m_context: Option<bool>,
     proxy_enabled: Option<bool>,
 ) -> Result<AppSettings, String> {
-    update_settings_locked(move |settings| {
+    let syncs_dsh_home = agent == "dsh";
+    let normalized = update_settings_locked(move |settings| {
         apply_builtin_agent_access_update(
             settings,
             &agent,
@@ -1923,7 +1931,17 @@ pub(crate) fn update_builtin_agent_config_internal(
             set_agent_proxy_enabled(settings, &agent, enabled);
         }
         Ok(())
-    })
+    })?;
+    if syncs_dsh_home {
+        let home = crate::dsh_home::ensure_dsh_home_for("dsh")?;
+        let api_key = normalized
+            .builtin_agent_credentials
+            .get("dsh")
+            .map(|credentials| credentials.api_key.trim())
+            .filter(|api_key| !api_key.is_empty());
+        crate::dsh_home::sync_dsh_credentials(&home, api_key)?;
+    }
+    Ok(normalized)
 }
 
 #[tauri::command]
@@ -1933,6 +1951,7 @@ pub async fn update_builtin_agent_access(
     api_key: Option<String>,
     clear_api_key: bool,
     models: Option<Vec<String>>,
+    proxy_enabled: Option<bool>,
 ) -> Result<AppSettings, String> {
     tokio::task::spawn_blocking(move || {
         update_builtin_agent_config_internal(
@@ -1942,7 +1961,7 @@ pub async fn update_builtin_agent_access(
             clear_api_key,
             models,
             None,
-            None,
+            proxy_enabled,
         )
     })
     .await
@@ -2449,6 +2468,7 @@ fn upsert_custom_agent_profile_unlocked(
             models: profile.models.clone(),
             enable_1m_context: profile.enable_1m_context,
             enable_chat_completions_proxy: profile.enable_chat_completions_proxy,
+            dsh_api_protocol: String::new(),
             proxy_enabled: false,
         };
         validate_agent_setup_draft(&draft)?;
@@ -2575,6 +2595,7 @@ pub async fn setup_agent_profile(draft: AgentSetupDraft) -> Result<AppSettings, 
                     &home,
                     &base_url,
                     &normalize_setup_models(&draft),
+                    &draft.dsh_api_protocol,
                 )?;
             }
             (program, "yaml".to_string(), "dsh".to_string())
@@ -2861,6 +2882,7 @@ pub async fn update_custom_agent_models(
             models: models.clone(),
             enable_1m_context: profile.enable_1m_context,
             enable_chat_completions_proxy: profile.enable_chat_completions_proxy,
+            dsh_api_protocol: String::new(),
             proxy_enabled: false,
         };
         validate_agent_setup_draft(&draft)?;
@@ -2924,6 +2946,7 @@ pub async fn update_custom_agent_chat_completions_proxy(
             models: profile.models.clone(),
             enable_1m_context: profile.enable_1m_context,
             enable_chat_completions_proxy: enabled,
+            dsh_api_protocol: String::new(),
             proxy_enabled: false,
         };
         validate_agent_setup_draft(&draft)?;
@@ -2985,6 +3008,7 @@ pub async fn update_custom_agent_context(
             models: profile.models.clone(),
             enable_1m_context,
             enable_chat_completions_proxy: profile.enable_chat_completions_proxy,
+            dsh_api_protocol: String::new(),
             proxy_enabled: false,
         };
         validate_agent_setup_draft(&draft)?;
@@ -3255,6 +3279,9 @@ pub async fn upgrade_agent_versions(
     agents: Vec<String>,
 ) -> Result<Vec<AgentUpgradeResult>, String> {
     tokio::task::spawn_blocking(move || {
+        // 前端允许多个 Agent 同时显示升级中；包管理器本身仍需串行，避免
+        // 两个 Homebrew/npm 进程互相抢锁或覆盖同一份全局安装状态。
+        let _upgrade_guard = agent_upgrade_lock().lock();
         let settings = load_settings_internal();
         let mut requested = Vec::new();
         for agent in agents {
@@ -3281,8 +3308,15 @@ pub async fn upgrade_agent_versions(
             let binary_agent = upgrade_binary_agent(kind);
             let launch = get_agent_launch_spec_from_settings(&settings, binary_agent);
             let configured_program = get_agent_configured_path(&settings, binary_agent);
+            // launch spec 已解析出 PATH/Homebrew/npm shim 中真正使用的程序；升级
+            // 检测必须使用这个有效路径，而不是原始配置里的 wrapper 路径。
+            let effective_program = if launch.program.trim().is_empty() {
+                configured_program
+            } else {
+                launch.program.clone()
+            };
             let previous_version = detect_version(&launch).unwrap_or_default();
-            let channels = match build_agent_upgrade_commands(kind, &configured_program) {
+            let channels = match build_agent_upgrade_commands(kind, &effective_program) {
                 Ok(commands) => run_agent_upgrades(&commands),
                 Err(error) => vec![AgentUpgradeChannel {
                     channel: "detection".to_string(),
@@ -3359,6 +3393,32 @@ pub async fn get_system_fonts() -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn built_in_dsh_accepts_official_credentials_and_models() {
+        let mut settings = AppSettings::default();
+        apply_builtin_agent_access_update(
+            &mut settings,
+            "dsh",
+            Some(String::new()),
+            Some("sk-deepseek".to_string()),
+            false,
+            Some(vec![
+                "deepseek-chat".to_string(),
+                "deepseek-reasoner".to_string(),
+            ]),
+            None,
+        )
+        .unwrap();
+
+        let credentials = settings.builtin_agent_credentials.get("dsh").unwrap();
+        assert_eq!(credentials.api_key, "sk-deepseek");
+        assert_eq!(
+            credentials.models,
+            vec!["deepseek-chat".to_string(), "deepseek-reasoner".to_string()]
+        );
+        assert!(settings.custom_agents.is_empty());
+    }
 
     fn last_env_value<'a>(launch: &'a AgentLaunchSpec, key: &str) -> Option<&'a str> {
         launch

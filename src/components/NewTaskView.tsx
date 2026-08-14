@@ -48,6 +48,7 @@ import {
 } from "../shortcuts";
 import claudeGif from "../assets/gif/claude.gif";
 import codexGif from "../assets/gif/codex.gif";
+import deepseekLogo from "../assets/deepseek.svg";
 import s from "../styles";
 import {
   availableReasoningEffortsForFamily,
@@ -815,7 +816,13 @@ export function NewTaskView({
     <div style={s.newTaskOuter}>
       {/* Header */}
       <div style={s.newTaskHeader}>
-        <img src={codexLikeAgent ? codexGif : claudeGif} alt="" style={s.newTaskClaudeGif} />
+        {dshAgent ? (
+          <div className="dsh-whale-hero" data-testid="dsh-whale-animation" aria-hidden="true">
+            <img src={deepseekLogo} alt="" />
+          </div>
+        ) : (
+          <img src={codexLikeAgent ? codexGif : claudeGif} alt="" style={s.newTaskClaudeGif} />
+        )}
         <span style={s.newTaskTitle}>{t("newTask.title")}</span>
       </div>
 

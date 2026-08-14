@@ -126,4 +126,42 @@ describe("Skills settings layout", () => {
     expect(screen.getByText(/list_skill_installations timed out/)).toBeInTheDocument();
     expect(screen.getByText("Test Skill")).toBeInTheDocument();
   });
+
+  it("shows only skills with a project installation in the Installed tab", async () => {
+    vi.mocked(invoke).mockImplementation((command) => {
+      if (command === "list_skills") {
+        return Promise.resolve([
+          { name: "installed-skill", displayName: "Installed Skill", path: "/skills/installed" },
+          { name: "unused-skill", displayName: "Unused Skill", path: "/skills/unused" },
+        ]);
+      }
+      if (command === "list_skill_installations") {
+        return Promise.resolve([
+          {
+            skillName: "installed-skill",
+            projectId: "project-1",
+            agent: "claude",
+            linkPath: "/project/.claude/skills/installed-skill",
+            targetPath: "/skills/installed",
+            installKind: "symlink",
+            health: "ok",
+          },
+        ]);
+      }
+      return Promise.resolve(undefined);
+    });
+
+    render(
+      <I18nProvider>
+        <SkillHubView
+          config={{ hubPath: "/skills", hubProjectId: "skill-hub" }}
+          allProjects={[]}
+          onOpenAppSettings={vi.fn()}
+        />
+      </I18nProvider>,
+    );
+
+    expect(await screen.findByText("Installed Skill")).toBeInTheDocument();
+    expect(screen.queryByText("Unused Skill")).not.toBeInTheDocument();
+  });
 });

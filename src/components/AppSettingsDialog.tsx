@@ -204,13 +204,19 @@ export function AppSettingsDialog({
           position: "relative",
         }}
       >
-        <div style={{ position: "relative", zIndex: 1, display: "flex", flex: 1, minWidth: 0 }}>
-          <div style={s.settingsNav}>
-            <div style={s.settingsNavTitle}>{t("appSettings.title")}</div>
+        <div
+          className="settings-modal-layout"
+          style={{ position: "relative", zIndex: 1, display: "flex", flex: 1, minWidth: 0 }}
+        >
+          <div className="settings-modal-nav" style={s.settingsNav}>
+            <div className="settings-modal-nav__title" style={s.settingsNavTitle}>
+              {t("appSettings.title")}
+            </div>
             <AnimatedSelectionTrack
               value={activeNav}
               ariaLabel={t("appSettings.title")}
               orientation="vertical"
+              className="settings-modal-nav__track"
               style={{
                 minHeight: 0,
                 overflowY: "auto",
@@ -224,6 +230,7 @@ export function AppSettingsDialog({
               {sectionGroups.map((group, groupIndex) => (
                 <Fragment key={group.section}>
                   <div
+                    className="settings-modal-nav__section-label"
                     style={{
                       ...s.settingsNavSectionLabel,
                       ...(groupIndex === 0 ? s.settingsNavSectionLabelFirst : null),
@@ -261,8 +268,8 @@ export function AppSettingsDialog({
             </AnimatedSelectionTrack>
           </div>
 
-          <div style={s.settingsContent}>
-            <div style={s.settingsContentHeader}>
+          <div className="settings-modal-content" style={s.settingsContent}>
+            <div className="settings-modal-content__header" style={s.settingsContentHeader}>
               <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                 <NavItemIcon item={activeItem} size={16} themeVariant={themeVariant} />
                 <span style={s.settingsContentTitle}>{activeLabel}</span>

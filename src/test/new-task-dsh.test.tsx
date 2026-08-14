@@ -48,6 +48,11 @@ function renderView(draft: NewTaskDraft) {
 }
 
 describe("NewTaskView with dsh selected", () => {
+  it("shows the animated official DeepSeek whale", () => {
+    renderView(dshDraft());
+    expect(screen.getByTestId("dsh-whale-animation")).toBeInTheDocument();
+  });
+
   it("shows the AGENTS.md context entry for dsh", async () => {
     renderView(dshDraft());
     await waitFor(() => {

@@ -218,6 +218,37 @@ describe("AgentUpdatesPanel", () => {
     expect(invokeMock).not.toHaveBeenCalledWith("upgrade_agent_versions", { agents: ["claude"] });
   });
 
+  it("keeps multiple Agent upgrade buttons in the upgrading state independently", async () => {
+    const user = userEvent.setup();
+    let resolveUpgrade!: (value: unknown[]) => void;
+    const pendingUpgrade = new Promise<unknown[]>((resolve) => {
+      resolveUpgrade = resolve;
+    });
+    invokeMock.mockImplementation((command: string, args?: { agents?: string[] }) => {
+      if (command === "get_agent_tool_status") return Promise.resolve(toolStatuses);
+      if (command === "get_agent_latest_versions") return Promise.resolve(latestVersions);
+      if (command === "upgrade_agent_versions") return pendingUpgrade;
+      return Promise.resolve(args?.agents?.map((agent) => ({ agent, success: true })) ?? null);
+    });
+
+    renderPanel();
+    const upgradeButtons = await screen.findAllByRole("button", { name: "Upgrade" });
+    await user.click(upgradeButtons[0]);
+    await user.click(upgradeButtons[1]);
+
+    await waitFor(() => {
+      expect(screen.getAllByRole("button", { name: "Upgrading..." })).toHaveLength(2);
+    });
+    expect(invokeMock).toHaveBeenCalledWith("upgrade_agent_versions", { agents: ["claude"] });
+    expect(invokeMock).toHaveBeenCalledWith("upgrade_agent_versions", { agents: ["codex"] });
+
+    resolveUpgrade([
+      { agent: "claude", success: true, current_version: "1.1.0" },
+      { agent: "codex", success: true, current_version: "1.1.0" },
+    ]);
+    await waitFor(() => expect(screen.getAllByRole("button", { name: "Upgrade" })).toHaveLength(3));
+  });
+
   it("installs a missing built-in Agent instead of running the upgrade command", async () => {
     toolStatuses[0].installed = false;
     toolStatuses[0].version = "";

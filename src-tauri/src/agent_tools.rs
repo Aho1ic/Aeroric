@@ -1577,10 +1577,17 @@ fn status_for(agent: BuiltInAgent) -> AgentToolStatus {
     let launch = crate::app_settings::get_agent_launch_spec_from(&settings, agent.id());
     let version = crate::app_settings::detect_launch_version(&launch).unwrap_or_default();
     let configured = crate::app_settings::configured_agent_path(&settings, agent.id());
+    // 启动规格包含最终真正执行的 PATH/Homebrew/npm shim 程序；升级渠道和状态
+    // 必须基于这个有效路径，否则 Homebrew 安装会被误判为 standalone。
+    let effective_program = if launch.program.trim().is_empty() {
+        configured.clone()
+    } else {
+        launch.program.clone()
+    };
     let managed_path = managed_tool_path(agent);
     let managed = managed_path
         .as_ref()
-        .is_some_and(|path| Path::new(&configured) == path);
+        .is_some_and(|path| Path::new(&effective_program) == path);
     let unsupported = platform_support(agent).err();
     let channel = if version.is_empty() {
         String::new()
@@ -1589,7 +1596,7 @@ fn status_for(agent: BuiltInAgent) -> AgentToolStatus {
     } else if launch.program.is_empty() {
         String::new()
     } else {
-        crate::app_settings::upgrade_manager_for_path(&configured).to_string()
+        crate::app_settings::upgrade_manager_for_path(&effective_program).to_string()
     };
     AgentToolStatus {
         agent: agent.id().to_string(),
@@ -1599,7 +1606,7 @@ fn status_for(agent: BuiltInAgent) -> AgentToolStatus {
         libc: current_libc_label(),
         installed: !version.is_empty(),
         version,
-        path: configured,
+        path: effective_program,
         channel,
         managed,
         error_code: unsupported.as_ref().map(|error| error.code.clone()),
@@ -1613,10 +1620,15 @@ fn dsh_status() -> AgentToolStatus {
     let launch = crate::app_settings::get_agent_launch_spec_from(&settings, "dsh");
     let version = crate::app_settings::detect_launch_version(&launch).unwrap_or_default();
     let configured = crate::app_settings::configured_agent_path(&settings, "dsh");
+    let effective_program = if launch.program.trim().is_empty() {
+        configured.clone()
+    } else {
+        launch.program.clone()
+    };
     let channel = if version.is_empty() {
         String::new()
     } else {
-        crate::app_settings::upgrade_manager_for_path(&configured).to_string()
+        crate::app_settings::upgrade_manager_for_path(&effective_program).to_string()
     };
     AgentToolStatus {
         agent: "dsh".to_string(),
@@ -1626,7 +1638,7 @@ fn dsh_status() -> AgentToolStatus {
         libc: current_libc_label(),
         installed: !version.is_empty(),
         version,
-        path: configured,
+        path: effective_program,
         channel,
         managed: false,
         error_code: None,
