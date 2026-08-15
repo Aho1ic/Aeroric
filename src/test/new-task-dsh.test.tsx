@@ -87,9 +87,10 @@ describe("NewTaskView with dsh selected", () => {
       overflow: "hidden",
     });
     expect(modelButton).toHaveStyle({
-      flex: "0 1 280px",
+      flex: "0 1 auto",
       minWidth: "0",
-      maxWidth: "280px",
+      width: "fit-content",
+      maxWidth: "min(360px, calc(100vw - 32px))",
       overflow: "hidden",
     });
     expect(screen.getByTestId("model-summary-name")).toHaveStyle({
