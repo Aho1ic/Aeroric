@@ -824,8 +824,8 @@ fn normalize_path(path: &Path) -> PathBuf {
     #[cfg(windows)]
     {
         let s = path.to_string_lossy();
-        if s.starts_with(r"\\?\") {
-            return PathBuf::from(&s[4..]);
+        if let Some(stripped) = s.strip_prefix(r"\\?\") {
+            return PathBuf::from(stripped);
         }
     }
     path.to_path_buf()
