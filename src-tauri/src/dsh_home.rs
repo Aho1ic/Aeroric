@@ -328,10 +328,17 @@ mod tests {
     use super::*;
 
     fn temp_home(name: &str) -> PathBuf {
-        let dir =
+        let root =
             std::env::temp_dir().join(format!("aeroric-dsh-home-{name}-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&dir);
-        dir
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        root.join("home")
+    }
+
+    fn cleanup_temp_home(home: &Path) {
+        if let Some(root) = home.parent() {
+            let _ = fs::remove_dir_all(root);
+        }
     }
 
     #[test]
@@ -362,7 +369,7 @@ mod tests {
         assert!(fs::read_to_string(home.join("cordis.patch.yml"))
             .unwrap()
             .contains("tool-web"));
-        let _ = fs::remove_dir_all(&home);
+        cleanup_temp_home(&home);
     }
 
     #[test]
@@ -377,7 +384,7 @@ mod tests {
             "{MANAGED_PATCH_MARKER_PREFIX}{MANAGED_PATCH_VERSION}"
         )));
         assert!(!content.contains("stale"));
-        let _ = fs::remove_dir_all(&home);
+        cleanup_temp_home(&home);
     }
 
     #[test]
@@ -413,7 +420,7 @@ mod tests {
         )
         .unwrap_err();
         assert!(error.contains("Unsupported DeepSeek Harness API protocol"));
-        let _ = fs::remove_dir_all(&home);
+        cleanup_temp_home(&home);
     }
 
     #[test]
@@ -446,6 +453,6 @@ mod tests {
                 .mode();
             assert_eq!(mode & 0o777, 0o600);
         }
-        let _ = fs::remove_dir_all(&home);
+        cleanup_temp_home(&home);
     }
 }
