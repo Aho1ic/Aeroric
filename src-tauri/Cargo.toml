@@ -69,10 +69,6 @@ url = "2"
 trash = "=5.2.6"
 font-kit = "=0.14.3"
 rusqlite = { version = "0.32", features = ["bundled", "backup"] }
-# russh 0.60.x still calls the pre-0.8.1 PBKDF2 helper name. Pin the
-# compatible PKCS#5 prerelease until the russh dependency graph moves to the
-# stable helper API.
-pkcs5 = "=0.8.0-rc.13"
 # 对象存储 / 网盘 / WebDAV 统一访问层。只启用实际用到的 service,
 # 其余 50+ service(hdfs、rocksdb 等)会引入原生工具链依赖,不启用。
 opendal = { version = "0.58.1", features = [
