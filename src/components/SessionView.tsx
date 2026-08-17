@@ -44,33 +44,44 @@ interface MessageFeedbackItem {
   updatedAt: number;
 }
 
-type FeedbackResult = { ok?: boolean; value?: unknown; error?: { code?: string; current?: MessageFeedbackItem | null } };
+type FeedbackResult = {
+  ok?: boolean;
+  value?: unknown;
+  error?: { code?: string; current?: MessageFeedbackItem | null };
+};
+
+function normalizeFeedbackResult(value: unknown): FeedbackResult {
+  if (!value || typeof value !== "object") return {};
+  const outer = value as FeedbackResult;
+  if (outer.ok === true && outer.value && typeof outer.value === "object") {
+    const nested = outer.value as FeedbackResult;
+    if (typeof nested.ok === "boolean") return nested;
+  }
+  return outer;
+}
 
 function unwrapFeedbackItem(value: unknown): MessageFeedbackItem | null {
-  if (!value || typeof value !== "object") return null;
-  const outer = value as FeedbackResult;
-  const item = outer.ok === true && outer.value && typeof outer.value === "object"
-    ? outer.value as FeedbackResult
-    : outer;
-  if (item.ok !== true || !item.value || typeof item.value !== "object") return null;
-  const candidate = item.value as Partial<MessageFeedbackItem>;
-  return typeof candidate.messageId === "string" && typeof candidate.version === "string"
-    && (candidate.rating === "positive" || candidate.rating === "negative")
-    ? candidate as MessageFeedbackItem
+  const result = normalizeFeedbackResult(value);
+  if (result.ok !== true || !result.value || typeof result.value !== "object") return null;
+  const candidate = result.value as Partial<MessageFeedbackItem>;
+  return typeof candidate.messageId === "string" &&
+    typeof candidate.version === "string" &&
+    (candidate.rating === "positive" || candidate.rating === "negative")
+    ? (candidate as MessageFeedbackItem)
     : null;
 }
 
 function unwrapFeedbackList(value: unknown): MessageFeedbackItem[] {
-  if (!value || typeof value !== "object") return [];
-  const outer = value as FeedbackResult;
-  const inner = outer.ok === true && outer.value && typeof outer.value === "object"
-    ? outer.value as FeedbackResult
-    : outer;
-  const items = inner.ok === true && inner.value && typeof inner.value === "object"
-    ? (inner.value as { items?: unknown }).items
-    : undefined;
+  const result = normalizeFeedbackResult(value);
+  const items =
+    result.ok === true && result.value && typeof result.value === "object"
+      ? (result.value as { items?: unknown }).items
+      : undefined;
   return Array.isArray(items)
-    ? items.filter((item): item is MessageFeedbackItem => unwrapFeedbackItem({ ok: true, value: item }) !== null)
+    ? items.filter(
+        (item): item is MessageFeedbackItem =>
+          unwrapFeedbackItem({ ok: true, value: item }) !== null,
+      )
     : [];
 }
 
@@ -100,20 +111,22 @@ function MessageFeedbackActions({
     setError(null);
     try {
       if (item?.rating === rating) {
-        const result = await invoke<FeedbackResult>("delete_dsh_message_feedback", {
+        const response = await invoke<FeedbackResult>("delete_dsh_message_feedback", {
           sessionId,
           messageId,
           ifVersion: item.version,
         });
+        const result = normalizeFeedbackResult(response);
         if (result.ok === false) throw new Error(result.error?.code ?? "feedback mutation failed");
         onChange(null);
       } else {
-        const result = await invoke<FeedbackResult>("put_dsh_message_feedback", {
+        const response = await invoke<FeedbackResult>("put_dsh_message_feedback", {
           sessionId,
           messageId,
           rating,
           ifVersion: item?.version ?? null,
         });
+        const result = normalizeFeedbackResult(response);
         if (result.ok === false) throw new Error(result.error?.code ?? "feedback mutation failed");
         const next = unwrapFeedbackItem(result);
         if (!next) throw new Error("Invalid message feedback response");
@@ -121,7 +134,11 @@ function MessageFeedbackActions({
       }
     } catch (caught) {
       const message = String(caught);
-      setError(message.includes("version-conflict") ? t("dsh.feedback.conflict") : t("dsh.feedback.failed"));
+      setError(
+        message.includes("version-conflict")
+          ? t("dsh.feedback.conflict")
+          : t("dsh.feedback.failed"),
+      );
       await onReload();
     } finally {
       setPending(false);
@@ -133,20 +150,25 @@ function MessageFeedbackActions({
     setPending(true);
     setError(null);
     try {
-      const result = await invoke<FeedbackResult>("put_dsh_message_feedback", {
+      const response = await invoke<FeedbackResult>("put_dsh_message_feedback", {
         sessionId,
         messageId,
         rating: item.rating,
         note: note.trim() || undefined,
         ifVersion: item.version,
       });
+      const result = normalizeFeedbackResult(response);
       if (result.ok === false) throw new Error(result.error?.code ?? "feedback mutation failed");
       const next = unwrapFeedbackItem(result);
       if (!next) throw new Error("Invalid message feedback response");
       onChange(next);
       setNoteOpen(false);
     } catch (caught) {
-      setError(String(caught).includes("version-conflict") ? t("dsh.feedback.conflict") : t("dsh.feedback.failed"));
+      setError(
+        String(caught).includes("version-conflict")
+          ? t("dsh.feedback.conflict")
+          : t("dsh.feedback.failed"),
+      );
       await onReload();
     } finally {
       setPending(false);
@@ -155,21 +177,54 @@ function MessageFeedbackActions({
 
   return (
     <div className="dsh-message-feedback" data-testid={`dsh-message-feedback-${messageId}`}>
-      <button type="button" aria-label={t("dsh.feedback.like")} aria-pressed={item?.rating === "positive"} disabled={pending} onClick={() => void mutate("positive")}>
+      <button
+        type="button"
+        aria-label={t("dsh.feedback.like")}
+        aria-pressed={item?.rating === "positive"}
+        disabled={pending}
+        onClick={() => void mutate("positive")}
+      >
         <ThumbsUp size={13} />
       </button>
-      <button type="button" aria-label={t("dsh.feedback.dislike")} aria-pressed={item?.rating === "negative"} disabled={pending} onClick={() => void mutate("negative")}>
+      <button
+        type="button"
+        aria-label={t("dsh.feedback.dislike")}
+        aria-pressed={item?.rating === "negative"}
+        disabled={pending}
+        onClick={() => void mutate("negative")}
+      >
         <ThumbsDown size={13} />
       </button>
-      {item && !noteOpen && <button type="button" className="dsh-message-feedback-note" onClick={() => setNoteOpen(true)}>{item.note ?? t("dsh.feedback.addNote")}</button>}
+      {item && !noteOpen && (
+        <button
+          type="button"
+          className="dsh-message-feedback-note"
+          onClick={() => setNoteOpen(true)}
+        >
+          {item.note ?? t("dsh.feedback.addNote")}
+        </button>
+      )}
       {item && noteOpen && (
         <span className="dsh-message-feedback-editor">
-          <textarea aria-label={t("dsh.feedback.note")} value={note} rows={2} onChange={(event) => setNote(event.target.value)} />
-          <button type="button" disabled={pending} onClick={() => void saveNote()}>{t("dsh.feedback.save")}</button>
-          <button type="button" onClick={() => setNoteOpen(false)}>{t("dsh.feedback.cancel")}</button>
+          <textarea
+            aria-label={t("dsh.feedback.note")}
+            value={note}
+            rows={2}
+            onChange={(event) => setNote(event.target.value)}
+          />
+          <button type="button" disabled={pending} onClick={() => void saveNote()}>
+            {t("dsh.feedback.save")}
+          </button>
+          <button type="button" onClick={() => setNoteOpen(false)}>
+            {t("dsh.feedback.cancel")}
+          </button>
         </span>
       )}
-      {error && <span className="dsh-message-feedback-error" role="status">{error}</span>}
+      {error && (
+        <span className="dsh-message-feedback-error" role="status">
+          {error}
+        </span>
+      )}
     </div>
   );
 }
@@ -472,15 +527,19 @@ function MessageBubble({
         {message.content.map((content, index) => (
           <MessageContent key={`${content.type}-${content.id ?? index}`} content={content} />
         ))}
-        {message.role === "assistant" && message.messageId && sessionId && onFeedbackReload && onFeedbackChange && (
-          <MessageFeedbackActions
-            sessionId={sessionId}
-            messageId={message.messageId}
-            item={feedback}
-            onReload={onFeedbackReload}
-            onChange={onFeedbackChange}
-          />
-        )}
+        {message.role === "assistant" &&
+          message.messageId &&
+          sessionId &&
+          onFeedbackReload &&
+          onFeedbackChange && (
+            <MessageFeedbackActions
+              sessionId={sessionId}
+              messageId={message.messageId}
+              item={feedback}
+              onReload={onFeedbackReload}
+              onChange={onFeedbackChange}
+            />
+          )}
       </div>
     </div>
   );

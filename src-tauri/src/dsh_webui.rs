@@ -187,6 +187,7 @@ pub struct DshProtocolCapabilities {
     pub protocol_version: u32,
     pub rpc_methods: Vec<&'static str>,
     pub remote_methods: Vec<&'static str>,
+    pub remote_events: Vec<&'static str>,
     pub mux_frames: Vec<&'static str>,
     pub host_frames: Vec<&'static str>,
 }
@@ -263,6 +264,32 @@ impl DshProtocolCapabilities {
                 "messageFeedback.list",
                 "messageFeedback.put",
                 "messageFeedback.delete",
+                "pluginInventory.list",
+                "dynamicCordisRunner.undefineFromPanel",
+                "dynamicCordisRunner.runHostHalf",
+                "dynamicCordisRunner.getClientCode",
+                "dynamicCordisRunner.resolveRequestRun",
+                "dynamicCordisRunner.settleUserRun",
+                "dynamicCordisRunner.stopFromPanel",
+                "dynamicCordisRunner.syncInspectManifest",
+                "dynamicCordisRunner.resolveInspectQuery",
+                "dynamicCordisRunner.inventory",
+                "dynamicCordisRunner.reportRenderFailure",
+                "dynamicCordisRunner.reportClientGuardFailure",
+                "dynamicCordisRunner.invoke",
+            ],
+            remote_events: vec![
+                "agent-preset/selected",
+                "commands/change",
+                "credentials/updated",
+                "cordis/request-run",
+                "cordis/request-run-resolved",
+                "cordis/dynamic-package",
+                "cordis/dynamic-retract",
+                "cordis/inspect-query",
+                "cordis/inspect-query-resolved",
+                "llm/adapters-updated",
+                "settings/document-updated",
             ],
             mux_frames: vec![
                 "session/event",
@@ -500,7 +527,7 @@ impl DshApiClient {
     /// Invoke a generated Typert remote.  The official Web client carries
     /// these through the same JSON RPC gateway (`payload.args`) even though
     /// they are not part of the static apiproxy domain map.
-    async fn remote_call(&self, method: &str, args: Value) -> Result<Value, String> {
+    pub(crate) async fn remote_call(&self, method: &str, args: Value) -> Result<Value, String> {
         self.call(method, json!({ "args": args })).await
     }
 
@@ -2559,6 +2586,36 @@ async fn get_dsh_api_for_session(
 #[tauri::command]
 pub fn get_dsh_protocol_capabilities() -> DshProtocolCapabilities {
     DshProtocolCapabilities::snapshot()
+}
+
+/// Escape hatch for the generated Typert Remote registry.  Named wrappers are
+/// used by the first-party UI, while this command keeps every Remote mounted by
+/// the audited Harness Web composition reachable without duplicating its
+/// generated request/response types in Rust.
+#[tauri::command]
+pub async fn invoke_dsh_remote(
+    state: State<'_, DshWebUiManager>,
+    service: String,
+    method: String,
+    args: Value,
+    session_id: Option<String>,
+) -> Result<Value, String> {
+    let capability = format!("{service}.{method}");
+    if !DshProtocolCapabilities::snapshot()
+        .remote_methods
+        .contains(&capability.as_str())
+    {
+        return Err(format!("Unsupported DSH Remote method: {capability}"));
+    }
+    let client = match session_id.as_deref() {
+        Some(session_id) if !session_id.trim().is_empty() => {
+            get_dsh_api_for_session(&state, session_id).await?
+        }
+        _ => get_dsh_api(&state).await?,
+    };
+    client
+        .remote_call(&format!("{service}/{method}"), args)
+        .await
 }
 
 #[tauri::command]

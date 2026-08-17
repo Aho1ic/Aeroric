@@ -643,6 +643,7 @@ mod tests {
             matches!(&messages[0].content[0], SessionContent::Text { text } if text == "hello dsh")
         );
         assert_eq!(messages[1].role, "assistant");
+        assert_eq!(messages[1].message_id.as_deref(), Some("m2"));
         assert!(
             matches!(&messages[1].content[0], SessionContent::Thinking { thinking } if thinking == "think")
         );

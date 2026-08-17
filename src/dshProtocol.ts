@@ -77,6 +77,32 @@ export const DSH_PROTOCOL_SNAPSHOT = {
     "messageFeedback.list",
     "messageFeedback.put",
     "messageFeedback.delete",
+    "pluginInventory.list",
+    "dynamicCordisRunner.undefineFromPanel",
+    "dynamicCordisRunner.runHostHalf",
+    "dynamicCordisRunner.getClientCode",
+    "dynamicCordisRunner.resolveRequestRun",
+    "dynamicCordisRunner.settleUserRun",
+    "dynamicCordisRunner.stopFromPanel",
+    "dynamicCordisRunner.syncInspectManifest",
+    "dynamicCordisRunner.resolveInspectQuery",
+    "dynamicCordisRunner.inventory",
+    "dynamicCordisRunner.reportRenderFailure",
+    "dynamicCordisRunner.reportClientGuardFailure",
+    "dynamicCordisRunner.invoke",
+  ],
+  remoteEvents: [
+    "agent-preset/selected",
+    "commands/change",
+    "credentials/updated",
+    "cordis/request-run",
+    "cordis/request-run-resolved",
+    "cordis/dynamic-package",
+    "cordis/dynamic-retract",
+    "cordis/inspect-query",
+    "cordis/inspect-query-resolved",
+    "llm/adapters-updated",
+    "settings/document-updated",
   ],
   muxFrames: [
     "session/event",
@@ -128,11 +154,15 @@ export type DshMuxFrameType = (typeof DSH_PROTOCOL_SNAPSHOT.muxFrames)[number];
 export type DshHostFrameType = (typeof DSH_PROTOCOL_SNAPSHOT.hostFrames)[number];
 
 export function isKnownDshMuxFrameType(value: unknown): value is DshMuxFrameType {
-  return typeof value === "string" &&
-    (DSH_PROTOCOL_SNAPSHOT.muxFrames as readonly string[]).includes(value);
+  return (
+    typeof value === "string" &&
+    (DSH_PROTOCOL_SNAPSHOT.muxFrames as readonly string[]).includes(value)
+  );
 }
 
 export function isKnownDshHostFrameType(value: unknown): value is DshHostFrameType {
-  return typeof value === "string" &&
-    (DSH_PROTOCOL_SNAPSHOT.hostFrames as readonly string[]).includes(value);
+  return (
+    typeof value === "string" &&
+    (DSH_PROTOCOL_SNAPSHOT.hostFrames as readonly string[]).includes(value)
+  );
 }

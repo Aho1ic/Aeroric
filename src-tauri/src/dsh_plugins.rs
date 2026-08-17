@@ -1,9 +1,11 @@
 use serde::{Deserialize, Serialize};
 use serde_yaml_ng::{Mapping, Value};
+use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 use std::process::Command as NativeCommand;
 use std::time::{SystemTime, UNIX_EPOCH};
+use tauri::State;
 use tokio::process::Command;
 
 const WEB_PROFILE: &str = "web";
@@ -220,12 +222,77 @@ async fn list_profile_dependencies(home: &Path) -> Result<Vec<DshPlugin>, String
     Ok(plugins)
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DshRuntimePlugin {
+    entry_id: String,
+    module_name: String,
+    enabled: bool,
+    fiber_phase: Option<String>,
+}
+
+async fn list_runtime_plugins(base_url: String) -> Result<Vec<DshRuntimePlugin>, String> {
+    let value = crate::dsh_webui::DshApiClient::new(base_url)?
+        .remote_call("pluginInventory/list", serde_json::json!({}))
+        .await?;
+    serde_json::from_value(
+        value
+            .get("entries")
+            .cloned()
+            .unwrap_or_else(|| serde_json::Value::Array(Vec::new())),
+    )
+    .map_err(|error| format!("DSH pluginInventory.list payload was invalid: {error}"))
+}
+
+fn merge_runtime_plugins(
+    configured: Vec<DshPlugin>,
+    runtime: Vec<DshRuntimePlugin>,
+) -> Vec<DshPlugin> {
+    let mut configured_by_id: HashMap<String, DshPlugin> = configured
+        .into_iter()
+        .map(|plugin| (plugin.entry_id.clone(), plugin))
+        .collect();
+    let mut merged = Vec::with_capacity(runtime.len() + configured_by_id.len());
+    for live in runtime {
+        let fallback = configured_by_id.remove(&live.entry_id);
+        merged.push(DshPlugin {
+            name: fallback
+                .as_ref()
+                .map(|plugin| plugin.name.clone())
+                .unwrap_or_else(|| live.module_name.clone()),
+            version: fallback
+                .as_ref()
+                .map(|plugin| plugin.version.clone())
+                .unwrap_or_else(|| "bundled".to_string()),
+            enabled: live.enabled,
+            description: fallback.and_then(|plugin| plugin.description),
+            entry_id: live.entry_id,
+            built_in: live.module_name.starts_with("@deepseek-ai/")
+                || live.module_name.starts_with("cordis:"),
+            module_name: live.module_name,
+            fiber_phase: live.fiber_phase,
+        });
+    }
+    merged.extend(configured_by_id.into_values());
+    merged
+}
+
 #[tauri::command]
-pub async fn list_dsh_plugins(agent: String) -> Result<Vec<DshPlugin>, String> {
+pub async fn list_dsh_plugins(
+    agent: String,
+    webui: State<'_, crate::dsh_webui::DshWebUiManager>,
+) -> Result<Vec<DshPlugin>, String> {
     let home = crate::dsh_home::ensure_dsh_home_for(&agent)?;
-    match list_from_config_dump(&agent, &home).await {
+    let configured = match list_from_config_dump(&agent, &home).await {
         Ok(plugins) if !plugins.is_empty() => Ok(plugins),
         _ => list_profile_dependencies(&home).await,
+    }?;
+    let Some(base_url) = webui.running_url_for(&agent) else {
+        return Ok(configured);
+    };
+    match list_runtime_plugins(base_url).await {
+        Ok(runtime) => Ok(merge_runtime_plugins(configured, runtime)),
+        Err(_) => Ok(configured),
     }
 }
 
@@ -810,6 +877,33 @@ mod tests {
         assert_eq!(plugins[1].fiber_phase, None);
         assert_eq!(plugins[2].enabled, !cfg!(windows));
         assert_eq!(plugins[3].entry_id, "ui-settings");
+    }
+
+    #[test]
+    fn runtime_inventory_overrides_configured_fiber_state() {
+        let configured = vec![DshPlugin {
+            name: "Configured label".to_string(),
+            version: "1.2.3".to_string(),
+            enabled: true,
+            description: Some("description".to_string()),
+            entry_id: "probe".to_string(),
+            module_name: "@deepseek-ai/dsh-probe".to_string(),
+            fiber_phase: Some("active".to_string()),
+            built_in: true,
+        }];
+        let merged = merge_runtime_plugins(
+            configured,
+            vec![DshRuntimePlugin {
+                entry_id: "probe".to_string(),
+                module_name: "@deepseek-ai/dsh-probe".to_string(),
+                enabled: true,
+                fiber_phase: Some("failed".to_string()),
+            }],
+        );
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0].name, "Configured label");
+        assert_eq!(merged[0].version, "1.2.3");
+        assert_eq!(merged[0].fiber_phase.as_deref(), Some("failed"));
     }
 
     #[test]

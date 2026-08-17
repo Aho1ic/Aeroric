@@ -589,6 +589,7 @@ pub fn run() {
             dsh_webui::stop_dsh_webui,
             dsh_webui::get_dsh_webui_status,
             dsh_webui::get_dsh_protocol_capabilities,
+            dsh_webui::invoke_dsh_remote,
             dsh_webui::run_dsh_task,
             dsh_webui::prompt_dsh_task,
             dsh_webui::cancel_dsh_task,

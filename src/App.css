@@ -4696,8 +4696,13 @@ html:not(.dark) .xterm-helper-textarea {
   cursor: pointer;
 }
 
-.dsh-insight-segments button:last-child { border-right: none; }
-.dsh-insight-segments button[data-active="true"] { background: var(--bg-hover); color: var(--text-primary); }
+.dsh-insight-segments button:last-child {
+  border-right: none;
+}
+.dsh-insight-segments button[data-active="true"] {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
 
 .dsh-insight-load {
   width: 100%;
@@ -4727,15 +4732,23 @@ html:not(.dark) .xterm-helper-textarea {
 .dsh-trajectory-entry {
   min-width: 0;
   overflow: hidden;
+  content-visibility: auto;
+  contain-intrinsic-size: auto 42px;
   border: 1px solid var(--border-dim);
   border-left: 3px solid var(--text-hint);
   border-radius: 4px;
   background: var(--bg-root);
 }
 
-.dsh-trajectory-entry[data-category="message"] { border-left-color: var(--primary-action-bg); }
-.dsh-trajectory-entry[data-category="tool"] { border-left-color: var(--warning); }
-.dsh-trajectory-entry[data-category="lifecycle"] { border-left-color: var(--success); }
+.dsh-trajectory-entry[data-category="message"] {
+  border-left-color: var(--primary-action-bg);
+}
+.dsh-trajectory-entry[data-category="tool"] {
+  border-left-color: var(--warning);
+}
+.dsh-trajectory-entry[data-category="lifecycle"] {
+  border-left-color: var(--success);
+}
 
 .dsh-trajectory-summary {
   width: 100%;
@@ -4754,11 +4767,23 @@ html:not(.dark) .xterm-helper-textarea {
   cursor: pointer;
 }
 
-.dsh-trajectory-summary:hover { background: var(--bg-hover); }
+.dsh-trajectory-summary:hover {
+  background: var(--bg-hover);
+}
 .dsh-trajectory-summary time,
-.dsh-trajectory-summary code { color: var(--text-hint); font-size: 10px; }
-.dsh-trajectory-summary strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.dsh-trajectory-summary > span { color: var(--text-hint); font-size: 10px; }
+.dsh-trajectory-summary code {
+  color: var(--text-hint);
+  font-size: 10px;
+}
+.dsh-trajectory-summary strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dsh-trajectory-summary > span {
+  color: var(--text-hint);
+  font-size: 10px;
+}
 
 .dsh-trajectory-detail {
   max-height: 54px;
@@ -4800,8 +4825,14 @@ html:not(.dark) .xterm-helper-textarea {
   background: var(--bg-root);
 }
 
-.dsh-insight-metric span { color: var(--text-muted); font-size: 11px; }
-.dsh-insight-metric strong { font: 600 18px/1.2 var(--font-mono); color: var(--text-primary); }
+.dsh-insight-metric span {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+.dsh-insight-metric strong {
+  font: 600 18px/1.2 var(--font-mono);
+  color: var(--text-primary);
+}
 
 .dsh-produced-files > button {
   min-width: 0;
@@ -4820,9 +4851,19 @@ html:not(.dark) .xterm-helper-textarea {
   cursor: pointer;
 }
 
-.dsh-produced-files > button:hover { background: var(--bg-hover); color: var(--text-primary); }
-.dsh-produced-files > button span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font-mono); }
-.dsh-produced-files > button small { color: var(--text-hint); }
+.dsh-produced-files > button:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+.dsh-produced-files > button span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+}
+.dsh-produced-files > button small {
+  color: var(--text-hint);
+}
 
 .dsh-workflow-list > section {
   overflow: hidden;
@@ -4842,21 +4883,37 @@ html:not(.dark) .xterm-helper-textarea {
 }
 
 .dsh-workflow-list header span,
-.dsh-workflow-member small { color: var(--text-hint); font-size: 10px; }
-.dsh-workflow-phase { padding: 7px 10px 9px; }
-.dsh-workflow-phase h4 { margin: 0 0 5px; color: var(--text-muted); font-size: 11px; font-weight: 600; }
+.dsh-workflow-member small {
+  color: var(--text-hint);
+  font-size: 10px;
+}
+.dsh-workflow-phase {
+  padding: 7px 10px 9px;
+}
+.dsh-workflow-phase h4 {
+  margin: 0 0 5px;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 600;
+}
 
 .dsh-workflow-member {
   min-width: 0;
   display: grid;
-  grid-template-columns: 14px minmax(100px, 1fr) minmax(100px, .8fr) auto;
+  grid-template-columns: 14px minmax(100px, 1fr) minmax(100px, 0.8fr) auto;
   align-items: center;
   gap: 7px;
   min-height: 28px;
   color: var(--text-secondary);
 }
 
-.dsh-workflow-member code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-hint); font-size: 9px; }
+.dsh-workflow-member code {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-hint);
+  font-size: 9px;
+}
 
 .dsh-schedule-list > div {
   min-width: 0;
@@ -4871,14 +4928,33 @@ html:not(.dark) .xterm-helper-textarea {
   background: var(--bg-root);
 }
 
-.dsh-schedule-list > div > div { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
-.dsh-schedule-list strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dsh-schedule-list > div > div {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.dsh-schedule-list strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .dsh-schedule-list span,
-.dsh-schedule-list small { color: var(--text-hint); font-size: 10px; }
-.dsh-schedule-list code { color: var(--text-muted); font-size: 10px; }
-.dsh-schedule-list > div[data-state="overdue"] { border-left: 3px solid var(--warning); }
+.dsh-schedule-list small {
+  color: var(--text-hint);
+  font-size: 10px;
+}
+.dsh-schedule-list code {
+  color: var(--text-muted);
+  font-size: 10px;
+}
+.dsh-schedule-list > div[data-state="overdue"] {
+  border-left: 3px solid var(--warning);
+}
 .dsh-schedule-list > div[data-state="dispatched"],
-.dsh-schedule-list > div[data-state="deleted"] { opacity: .65; }
+.dsh-schedule-list > div[data-state="deleted"] {
+  opacity: 0.65;
+}
 
 .dsh-feedback-panel {
   max-width: 720px;
@@ -4923,7 +4999,10 @@ html:not(.dark) .xterm-helper-textarea {
   cursor: pointer;
 }
 
-.dsh-feedback-panel > button:disabled { opacity: .5; cursor: default; }
+.dsh-feedback-panel > button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
 
 .dsh-message-feedback {
   min-height: 24px;
@@ -4955,7 +5034,10 @@ html:not(.dark) .xterm-helper-textarea {
   color: var(--primary-action-bg);
 }
 
-.dsh-message-feedback > button:disabled { opacity: .45; cursor: default; }
+.dsh-message-feedback > button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
 .dsh-message-feedback-note {
   max-width: 220px;
   overflow: hidden;
@@ -4998,22 +5080,58 @@ html:not(.dark) .xterm-helper-textarea {
   cursor: pointer;
 }
 
-.dsh-message-feedback-error { color: var(--danger); font-size: 10px; }
+.dsh-message-feedback-error {
+  color: var(--danger);
+  font-size: 10px;
+}
 
 @media (max-width: 720px) {
-  .dsh-insights-backdrop { padding: 8px; }
-  .dsh-insights-dialog { width: calc(100vw - 16px); height: calc(100vh - 16px); }
-  .dsh-insights-tabs button { padding: 0 9px; }
-  .dsh-insight-toolbar { align-items: stretch; flex-direction: column; }
-  .dsh-insight-search { max-width: none; flex-basis: auto; }
-  .dsh-insight-segments { overflow-x: auto; }
-  .dsh-insight-segments button { flex: 1 0 auto; }
-  .dsh-trajectory-summary { grid-template-columns: 14px 56px 48px minmax(80px, 1fr); }
-  .dsh-trajectory-summary > span { display: none; }
-  .dsh-trajectory-detail { padding-left: 72px; }
-  .dsh-insight-metrics { grid-template-columns: repeat(2, minmax(120px, 1fr)); }
-  .dsh-workflow-member { grid-template-columns: 14px minmax(80px, 1fr) auto; }
-  .dsh-workflow-member code { display: none; }
-  .dsh-schedule-list > div { grid-template-columns: 18px minmax(100px, 1fr) auto; }
-  .dsh-schedule-list code { display: none; }
+  .dsh-insights-backdrop {
+    padding: 8px;
+  }
+  .dsh-insights-dialog {
+    width: calc(100vw - 16px);
+    height: calc(100vh - 16px);
+  }
+  .dsh-insights-tabs button {
+    padding: 0 9px;
+  }
+  .dsh-insight-toolbar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .dsh-insight-search {
+    max-width: none;
+    flex-basis: auto;
+  }
+  .dsh-insight-segments {
+    overflow-x: auto;
+  }
+  .dsh-insight-segments button {
+    flex: 1 0 auto;
+  }
+  .dsh-trajectory-summary {
+    grid-template-columns: 14px 56px 48px minmax(80px, 1fr);
+  }
+  .dsh-trajectory-summary > span {
+    display: none;
+  }
+  .dsh-trajectory-detail {
+    padding-left: 72px;
+  }
+  .dsh-insight-metrics {
+    grid-template-columns: repeat(2, minmax(120px, 1fr));
+  }
+  .dsh-workflow-member {
+    grid-template-columns: 14px minmax(80px, 1fr) auto;
+  }
+  .dsh-workflow-member code {
+    display: none;
+  }
+  .dsh-schedule-list > div {
+    grid-template-columns: 18px minmax(100px, 1fr) auto;
+  }
+  .dsh-schedule-list code {
+    display: none;
+  }
 }
