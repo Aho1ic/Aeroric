@@ -4508,6 +4508,155 @@ html:not(.dark) .xterm-helper-textarea {
   font-family: var(--font-mono);
 }
 
+/* Session-log export capsule; shares the insights trigger's shape so the two
+   header actions read as one group. */
+.dsh-export-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 22px;
+  padding: 2px 7px;
+  border: 1px solid var(--border-dim);
+  border-radius: 4px;
+  background: var(--bg-input);
+  color: var(--text-secondary);
+  font: inherit;
+  cursor: pointer;
+}
+
+.dsh-export-trigger:hover:not(:disabled) {
+  border-color: var(--border-medium);
+  color: var(--text-primary);
+  background: var(--bg-hover);
+}
+
+.dsh-export-trigger:disabled {
+  cursor: progress;
+  color: var(--text-hint);
+}
+
+/* Historical image attachments: a wrapping gallery of bounded thumbnails plus
+   the original-image lightbox they open (ported from the Harness' Web half). */
+.dsh-image-gallery {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  max-width: 100%;
+  margin: 4px 0 2px;
+}
+
+.dsh-image-gallery[data-align="end"] {
+  justify-content: flex-end;
+}
+
+.dsh-image-gallery[data-align="start"] {
+  justify-content: flex-start;
+}
+
+.dsh-image-frame {
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid var(--border-dim);
+  border-radius: 8px;
+  background: var(--bg-hover);
+  cursor: zoom-in;
+}
+
+.dsh-image-frame[data-variant="tile"] {
+  width: 64px;
+  height: 64px;
+  min-width: 64px;
+  min-height: 64px;
+}
+
+.dsh-image-frame img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.dsh-image-loading,
+.dsh-image-error {
+  color: var(--text-hint);
+  font-size: 11px;
+  line-height: 16px;
+}
+
+.dsh-image-error {
+  max-width: 240px;
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, var(--danger) 35%, var(--border-dim));
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--danger) 8%, var(--bg-card));
+  font: inherit;
+  cursor: pointer;
+}
+
+/* A failed tile keeps the 64px grid cell instead of growing to its copy. */
+.dsh-image-error[data-variant="tile"] {
+  width: 64px;
+  height: 64px;
+  padding: 4px;
+  overflow: hidden;
+  border-radius: 8px;
+}
+
+.dsh-image-backdrop {
+  position: fixed;
+  inset: 0;
+  /* Opened from inside the insights dialog, so it sits one step above it. */
+  z-index: var(--z-overlay-nested);
+  display: grid;
+  place-items: center;
+  padding: 40px;
+}
+
+/* A separate layer, not a background on the backdrop: a backdrop-filter there
+   would blur the previewed image and the close control along with the page. */
+.dsh-image-mask {
+  position: absolute;
+  inset: 0;
+  background: color-mix(in srgb, #111827 56%, transparent);
+  backdrop-filter: blur(2px);
+}
+
+.dsh-image-original {
+  position: relative;
+  max-width: min(100%, 1600px);
+  max-height: calc(100vh - 80px);
+  object-fit: contain;
+  border-radius: 8px;
+  background: var(--bg-input);
+  box-shadow: 0 24px 70px color-mix(in srgb, #111827 38%, transparent);
+}
+
+.dsh-image-close {
+  position: fixed;
+  top: 20px;
+  right: 20px;
+  z-index: var(--z-base);
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border: 1px solid var(--border-medium);
+  border-radius: 999px;
+  background: var(--bg-card);
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.dsh-image-close:hover {
+  background: var(--bg-hover);
+}
+
 .dsh-insights-backdrop {
   position: fixed;
   inset: 0;
@@ -4643,6 +4792,147 @@ html:not(.dark) .xterm-helper-textarea {
   background: color-mix(in srgb, var(--danger) 8%, var(--bg-panel));
   color: var(--danger);
   font-size: 11px;
+}
+
+/* Trajectory timing overview: three lanes over one shared domain, dragged to
+   focus the ledger below it. */
+.dsh-timeline {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.dsh-timeline-controls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.dsh-timeline-controls button {
+  min-height: 24px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 7px;
+  border: 1px solid var(--border-dim);
+  border-radius: 4px;
+  background: var(--bg-input);
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.dsh-timeline-controls button[data-active="true"] {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border-dim));
+  background: color-mix(in srgb, var(--accent) 14%, var(--bg-input));
+  color: var(--text-primary);
+}
+
+.dsh-timeline-span {
+  color: var(--text-hint);
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+
+.dsh-timeline-plot {
+  display: flex;
+  align-items: stretch;
+  gap: 6px;
+}
+
+.dsh-timeline-labels {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  width: 48px;
+  flex: none;
+  color: var(--text-hint);
+  font-size: 9px;
+  line-height: 14px;
+  text-align: right;
+}
+
+.dsh-timeline-track {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 42px;
+  border: 1px solid var(--border-dim);
+  border-radius: 4px;
+  background: var(--bg-root);
+  cursor: crosshair;
+  overflow: hidden;
+  /* The wheel zooms and a drag selects, so the browser must not pan or scroll
+     the panel out from under the gesture. */
+  touch-action: none;
+  user-select: none;
+}
+
+.dsh-timeline-track:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+
+.dsh-timeline-lane {
+  height: calc(100% / 3);
+  border-bottom: 1px solid color-mix(in srgb, var(--border-dim) 60%, transparent);
+}
+.dsh-timeline-lane:last-of-type {
+  border-bottom: none;
+}
+
+.dsh-timeline-bar {
+  position: absolute;
+  height: calc(100% / 3 - 4px);
+  margin-top: 2px;
+  /* A point in time still has to be visible, so a zero-width span keeps a tick's
+     worth of width rather than vanishing. */
+  min-width: 2px;
+  border-radius: 2px;
+  background: var(--text-hint);
+}
+.dsh-timeline-bar[data-kind="user"] {
+  background: var(--text-muted);
+}
+.dsh-timeline-bar[data-kind="assistant"] {
+  background: var(--primary-action-bg);
+}
+.dsh-timeline-bar[data-kind="tool"] {
+  background: var(--warning);
+}
+.dsh-timeline-bar[data-kind="compacted"] {
+  background: var(--success);
+}
+.dsh-timeline-bar[data-error] {
+  background: var(--danger);
+}
+
+.dsh-timeline-boundary {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  border-left: 1px dashed color-mix(in srgb, var(--accent) 55%, transparent);
+}
+.dsh-timeline-boundary em {
+  position: absolute;
+  top: 0;
+  left: 2px;
+  color: var(--text-hint);
+  font-style: normal;
+  font-size: 9px;
+}
+
+.dsh-timeline-selection {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  border: 1px solid color-mix(in srgb, var(--accent) 60%, transparent);
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  pointer-events: none;
 }
 
 .dsh-insight-toolbar {
@@ -4795,6 +5085,34 @@ html:not(.dark) .xterm-helper-textarea {
   word-break: break-word;
 }
 
+/* A produced-file reference in the closing prose: code chip at rest, link
+   language on hover, the whole path on the title. */
+.dsh-file-mention {
+  display: inline;
+  margin: 0;
+  padding: 0 3px;
+  border: none;
+  border-radius: 3px;
+  background: var(--bg-subtle);
+  color: var(--accent);
+  font: inherit;
+  font-family: var(--font-mono);
+  text-align: left;
+  cursor: pointer;
+}
+
+.dsh-file-mention:hover,
+.dsh-file-mention:focus-visible {
+  text-decoration: underline;
+}
+
+/* In the transcript the reference sits inside a rendered code element, which
+   already draws the chip — so drop this one's, keeping only the link colour. */
+.session-prose code .dsh-file-mention {
+  padding: 0;
+  background: none;
+}
+
 .dsh-trajectory-entry pre,
 .dsh-feedback-panel pre {
   margin: 0;
@@ -4812,6 +5130,289 @@ html:not(.dark) .xterm-helper-textarea {
   display: grid;
   grid-template-columns: repeat(3, minmax(140px, 1fr));
   gap: 8px;
+}
+
+/* ── DSH tool render intents (ToolEventView cards) ─────────────────────────── */
+
+.dsh-tool-card-lead {
+  padding: 0 12px 6px 88px;
+  color: var(--text-muted);
+  font-size: 11px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.dsh-tool-card {
+  margin: 0 12px 8px 88px;
+  overflow: hidden;
+  border: 1px solid var(--border-dim);
+  border-radius: 6px;
+  background: var(--bg-root);
+}
+
+.dsh-tool-card-head {
+  min-height: 28px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 9px;
+  border-bottom: 1px solid var(--border-dim);
+  color: var(--text-muted);
+}
+.dsh-tool-card-head:only-child {
+  border-bottom: none;
+}
+.dsh-tool-card-head > svg {
+  flex: 0 0 auto;
+  color: var(--accent);
+}
+.dsh-tool-card-head > strong {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-primary);
+  font: 600 11px/1.4 var(--font-mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dsh-tool-card-kind,
+.dsh-tool-card-lang,
+.dsh-tool-card-count,
+.dsh-tool-card-cwd,
+.dsh-tool-card-exit {
+  flex: 0 0 auto;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: var(--bg-input);
+  color: var(--text-hint);
+  font: 10px/1.5 var(--font-mono);
+  white-space: nowrap;
+}
+.dsh-tool-card-cwd {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  direction: rtl;
+}
+.dsh-tool-card-exit[data-failed="true"] {
+  background: var(--diff-delete-bg);
+  color: var(--danger-fg);
+}
+
+.dsh-trajectory-entry .dsh-tool-card pre {
+  padding: 7px 9px;
+  border-top: none;
+  background: transparent;
+  max-height: 320px;
+}
+
+.dsh-tool-card-empty,
+.dsh-tool-card-more {
+  padding: 6px 9px;
+  color: var(--text-hint);
+  font-size: 10px;
+}
+
+.dsh-tool-card-locations {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  padding: 6px 9px;
+}
+.dsh-tool-card-locations code,
+.dsh-tool-card-locations a {
+  color: var(--text-secondary);
+  font: 10px/1.5 var(--font-mono);
+  word-break: break-all;
+}
+.dsh-tool-card-locations a {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--accent);
+  text-decoration: none;
+}
+.dsh-tool-card-locations a:hover {
+  text-decoration: underline;
+}
+
+.dsh-tool-diff + .dsh-tool-diff {
+  border-top: 1px solid var(--border-dim);
+}
+.dsh-tool-diff-path {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 9px;
+  background: var(--bg-input);
+}
+.dsh-tool-diff-path code {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-secondary);
+  font: 10px/1.5 var(--font-mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;
+}
+.dsh-tool-diff-path em {
+  flex: 0 0 auto;
+  color: var(--diff-add-fg);
+  font-size: 10px;
+  font-style: normal;
+}
+.dsh-tool-diff-stat {
+  flex: 0 0 auto;
+  display: flex;
+  gap: 5px;
+  font: 10px/1.5 var(--font-mono);
+}
+.dsh-tool-diff-stat ins {
+  color: var(--diff-add-fg);
+  text-decoration: none;
+}
+.dsh-tool-diff-stat del {
+  color: var(--diff-delete-fg);
+  text-decoration: none;
+}
+
+.dsh-trajectory-entry .dsh-tool-diff-body {
+  padding: 0;
+  white-space: pre;
+  overflow-x: auto;
+}
+.dsh-tool-diff-body > span {
+  display: block;
+  padding: 0 9px;
+}
+.dsh-tool-diff-body > span[data-sign="+"] {
+  background: var(--diff-add-bg);
+  color: var(--diff-add-fg);
+}
+.dsh-tool-diff-body > span[data-sign="-"] {
+  background: var(--diff-delete-bg);
+  color: var(--diff-delete-fg);
+}
+
+.dsh-tool-search-group + .dsh-tool-search-group {
+  border-top: 1px solid var(--border-dim);
+}
+.dsh-tool-search-group > button {
+  width: 100%;
+  min-height: 26px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 9px;
+  border: none;
+  background: var(--bg-input);
+  color: var(--text-secondary);
+  cursor: pointer;
+  text-align: left;
+}
+.dsh-tool-search-group > button:hover {
+  color: var(--text-primary);
+}
+.dsh-tool-search-group > button code {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  font: 10px/1.5 var(--font-mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;
+}
+.dsh-tool-search-group > button small {
+  flex: 0 0 auto;
+  color: var(--text-hint);
+  font: 10px/1.5 var(--font-mono);
+}
+
+.dsh-trajectory-entry .dsh-tool-search-lines,
+.dsh-trajectory-entry .dsh-tool-read-body {
+  padding: 5px 0;
+  white-space: pre;
+  overflow-x: auto;
+}
+.dsh-tool-search-lines > span,
+.dsh-tool-read-body > span {
+  display: block;
+  padding: 0 9px;
+}
+.dsh-tool-search-lines i,
+.dsh-tool-read-body i {
+  display: inline-block;
+  min-width: 42px;
+  margin-right: 9px;
+  color: var(--diff-meta-fg);
+  font-style: normal;
+  text-align: right;
+  user-select: none;
+}
+
+.dsh-tool-path-list {
+  display: flex;
+  flex-direction: column;
+  padding: 5px 0;
+}
+.dsh-tool-path-list code {
+  overflow: hidden;
+  padding: 1px 9px;
+  color: var(--text-secondary);
+  font: 10px/1.6 var(--font-mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;
+  text-align: left;
+}
+
+.dsh-tool-web-answer {
+  padding: 7px 9px;
+  border-bottom: 1px solid var(--border-dim);
+  color: var(--text-secondary);
+  font-size: 11px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.dsh-tool-web-sources {
+  margin: 0;
+  padding: 5px 9px;
+  list-style: none;
+}
+.dsh-tool-web-sources li + li {
+  margin-top: 7px;
+}
+.dsh-tool-web-sources a {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--accent);
+  font-size: 11px;
+  text-decoration: none;
+}
+.dsh-tool-web-sources a:hover {
+  text-decoration: underline;
+}
+.dsh-tool-web-sources p {
+  margin: 2px 0 0;
+  color: var(--text-muted);
+  font-size: 10px;
+  word-break: break-word;
+}
+.dsh-tool-web-sources footer {
+  display: flex;
+  gap: 8px;
+  margin-top: 2px;
+  color: var(--text-hint);
+  font: 10px/1.5 var(--font-mono);
+}
+.dsh-tool-web-sources footer code {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .dsh-insight-metric {
@@ -5083,6 +5684,84 @@ html:not(.dark) .xterm-helper-textarea {
 .dsh-message-feedback-error {
   color: var(--danger);
   font-size: 10px;
+}
+
+/* Caret-driven `/` and `@` trigger menu (combobox popup above the composer). */
+.dsh-trigger-menu {
+  position: absolute;
+  bottom: 100%;
+  left: 12px;
+  right: 12px;
+  margin-bottom: 6px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--border-dim);
+  border-radius: 8px;
+  background: var(--bg-card);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+}
+
+.dsh-trigger-viewport {
+  overflow-y: auto;
+  padding: 4px;
+}
+
+.dsh-trigger-group + .dsh-trigger-group {
+  margin-top: 4px;
+  padding-top: 4px;
+  border-top: 1px solid var(--border-dim);
+}
+
+.dsh-trigger-group-title {
+  padding: 2px 8px 3px;
+  color: var(--text-hint);
+  font: 10px var(--font-ui);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.dsh-trigger-loading {
+  padding: 4px 8px 6px;
+  color: var(--text-hint);
+  font: 11px var(--font-ui);
+}
+
+.dsh-trigger-item {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: baseline;
+  gap: 0 6px;
+  width: 100%;
+  padding: 4px 8px;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-primary);
+  text-align: left;
+  cursor: pointer;
+}
+
+.dsh-trigger-item[data-active="true"] {
+  background: var(--bg-hover);
+}
+
+.dsh-trigger-item-name {
+  font: 600 12.5px var(--font-ui);
+}
+
+.dsh-trigger-item-hint {
+  color: var(--text-hint);
+  font: 11px var(--font-mono);
+}
+
+.dsh-trigger-item-description {
+  grid-column: 1 / -1;
+  overflow: hidden;
+  color: var(--text-hint);
+  font: 11px/1.35 var(--font-ui);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 @media (max-width: 720px) {

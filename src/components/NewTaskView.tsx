@@ -159,7 +159,9 @@ export function NewTaskView({
   const [composeOpenMenu, setComposeOpenMenu] = useState<ComposeMenu>(null);
   const [availableModels, setAvailableModels] = useState<string[]>([]);
   const [selectedModel, setSelectedModel] = useState<string>(initialDraft?.selectedModel ?? "");
-  const [dshAgentPreset, setDshAgentPreset] = useState<string>(initialDraft?.dshAgentPreset ?? "standard");
+  const [dshAgentPreset, setDshAgentPreset] = useState<string>(
+    initialDraft?.dshAgentPreset ?? "standard",
+  );
   const [dshSlashOpen, setDshSlashOpen] = useState(false);
   const [modelsLoading, setModelsLoading] = useState(false);
   const [modelsError, setModelsError] = useState<string | null>(null);
@@ -348,10 +350,12 @@ export function NewTaskView({
           const rawEffort = result.reasoning_effort ?? null;
           const configEffort =
             rawEffort &&
-            (availableReasoningEffortsForFamily(
-              agentFamily(targetAgent, agentOptions),
-              models[0],
-            ) as readonly string[]).includes(rawEffort)
+            (
+              availableReasoningEffortsForFamily(
+                agentFamily(targetAgent, agentOptions),
+                models[0],
+              ) as readonly string[]
+            ).includes(rawEffort)
               ? (rawEffort as ReasoningEffort)
               : null;
           const configSpeed = result.reasoning_speed ?? null;

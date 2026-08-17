@@ -74,7 +74,9 @@ function CredentialRow({ ref_, view, t, onChanged }: CredentialRowProps) {
         </div>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-            <code style={{ fontSize: 12, fontFamily: "var(--font-mono)", color: "var(--text-primary)" }}>
+            <code
+              style={{ fontSize: 12, fontFamily: "var(--font-mono)", color: "var(--text-primary)" }}
+            >
               {ref_}
             </code>
             <span
@@ -89,7 +91,9 @@ function CredentialRow({ ref_, view, t, onChanged }: CredentialRowProps) {
                 color: isConfigured ? "var(--success, #22c55e)" : "var(--text-hint)",
               }}
             >
-              {isConfigured ? t("appSettings.dshCredentialConfigured") : t("appSettings.dshCredentialNotSet")}
+              {isConfigured
+                ? t("appSettings.dshCredentialConfigured")
+                : t("appSettings.dshCredentialNotSet")}
             </span>
             {isReadOnly && (
               <span
@@ -243,7 +247,14 @@ export function DshCredentialsPanel() {
   return (
     <div className="dsh-settings-panel">
       <div className="dsh-page">
-        <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12 }}>
+        <div
+          style={{
+            display: "flex",
+            alignItems: "flex-start",
+            justifyContent: "space-between",
+            gap: 12,
+          }}
+        >
           <header className="dsh-section-heading" style={{ flex: 1 }}>
             <h2>{t("appSettings.dshCredentialsTitle")}</h2>
             <p>{t("appSettings.dshCredentialsIntro")}</p>

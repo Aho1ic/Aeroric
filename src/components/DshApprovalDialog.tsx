@@ -97,7 +97,8 @@ export function DshApprovalDialog({
             gap: 12,
             padding: "18px 20px",
             borderBottom: "1px solid var(--border-dim)",
-            background: "color-mix(in srgb, var(--warning-subtle, rgba(251, 191, 36, 0.1)) 60%, transparent)",
+            background:
+              "color-mix(in srgb, var(--warning-subtle, rgba(251, 191, 36, 0.1)) 60%, transparent)",
           }}
         >
           <AlertTriangle size={20} color="var(--warning, #f59e0b)" aria-hidden />

@@ -2334,9 +2334,12 @@ export function ProjectPage({
                       agentOptions={agentOptions}
                       liveBars={
                         resolveTaskSessionOwner(task, agentOptions).family === "dsh" &&
-                        task.dshSessionId
-                          ? <DshLiveBars sessionId={task.dshSessionId} live={dshLive.sessions[task.dshSessionId]} />
-                          : undefined
+                        task.dshSessionId ? (
+                          <DshLiveBars
+                            sessionId={task.dshSessionId}
+                            live={dshLive.sessions[task.dshSessionId]}
+                          />
+                        ) : undefined
                       }
                     />
                   );

@@ -73,14 +73,23 @@ function ProviderCard({ provider, modelGroup, t }: ProviderCardProps) {
             flexShrink: 0,
           }}
         >
-          {provider.active ? t("appSettings.dshProviderActive") : t("appSettings.dshProviderInactive")}
+          {provider.active
+            ? t("appSettings.dshProviderActive")
+            : t("appSettings.dshProviderInactive")}
         </span>
         <ChevronDown size={14} className="dsh-chevron" />
       </button>
 
       {expanded && (
         <div className="dsh-config-card__body">
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              marginBottom: 10,
+            }}
+          >
             <span style={{ fontSize: 12, fontWeight: 600, color: "var(--text-primary)" }}>
               {t("appSettings.dshModelsTitle")}
             </span>
@@ -124,7 +133,13 @@ function ProviderCard({ provider, modelGroup, t }: ProviderCardProps) {
                       {m.name ?? m.id}
                     </div>
                     {m.name && (
-                      <div style={{ fontSize: 10.5, color: "var(--text-hint)", fontFamily: "var(--font-mono)" }}>
+                      <div
+                        style={{
+                          fontSize: 10.5,
+                          color: "var(--text-hint)",
+                          fontFamily: "var(--font-mono)",
+                        }}
+                      >
                         {m.id}
                       </div>
                     )}
@@ -185,7 +200,14 @@ export function DshLlmProvidersPanel() {
   return (
     <div className="dsh-settings-panel">
       <div className="dsh-page">
-        <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12 }}>
+        <div
+          style={{
+            display: "flex",
+            alignItems: "flex-start",
+            justifyContent: "space-between",
+            gap: 12,
+          }}
+        >
           <header className="dsh-section-heading" style={{ flex: 1 }}>
             <h2>{t("appSettings.dshProvidersTitle")}</h2>
             <p>{t("appSettings.dshProvidersIntro")}</p>

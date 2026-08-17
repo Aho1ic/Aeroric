@@ -5,6 +5,11 @@
  * here makes live updates and history replay deterministic and testable.
  */
 
+import type { DshImageAttachmentRef } from "./dshImageAttachments";
+import { collectDshImageAttachments } from "./dshImageAttachments";
+import type { DshToolEventView } from "./dshToolViews";
+import { parseDshToolEventView } from "./dshToolViews";
+
 export interface DshSessionEvent {
   type: string;
   seq?: number;
@@ -22,7 +27,22 @@ export interface DshTrajectoryEntry {
   title: string;
   detail?: string;
   event: DshSessionEvent;
+  /**
+   * Host-computed render intent for this delivery of a `tool/call` or
+   * `tool/result`, when the Harness produced one. Absent for every other event
+   * type and for a tool whose presenter declined, in which case the caller
+   * renders the raw event.
+   */
+  view?: DshToolEventView;
+  /**
+   * Durable image references this event's content carries, in block order.
+   * Absent for the vast majority of events, which are text only.
+   */
+  images?: readonly DshImageAttachmentRef[];
 }
+
+/** Render intents keyed by the event `seq` they accompanied. */
+export type DshToolViewsBySeq = Readonly<Record<number, DshToolEventView>>;
 
 export interface DshStats {
   turns: number;
@@ -79,13 +99,15 @@ export interface DshSessionFeatures {
   producedFiles: DshProducedFile[];
   workflows: DshWorkflowRun[];
   schedules: DshScheduleRecord[];
+  /** Measured operations for the timing overview, in event order. */
+  timeline: DshTimelineRecord[];
 }
 
 type Dict = Record<string, unknown>;
 
 function dict(value: unknown): Dict {
   return typeof value === "object" && value !== null && !Array.isArray(value)
-    ? value as Dict
+    ? (value as Dict)
     : {};
 }
 
@@ -106,10 +128,28 @@ function eventData(event: DshSessionEvent): Dict {
 function contentText(value: unknown): string {
   if (typeof value === "string") return value;
   if (!Array.isArray(value)) return "";
-  return value.map((part) => {
-    const item = dict(part);
-    return text(item.text) ?? text(item.content) ?? "";
-  }).join("");
+  return value
+    .map((part) => {
+      const item = dict(part);
+      return text(item.text) ?? text(item.content) ?? "";
+    })
+    .join("");
+}
+
+/**
+ * The content array of a message-shaped event.
+ *
+ * The Harness delivers content either inline on `data` or wrapped in
+ * `data.message`, depending on the event; the inline array wins so an event that
+ * carries both is not counted twice.
+ */
+function messageContent(data: Dict): unknown {
+  return Array.isArray(data.content) ? data.content : dict(data.message).content;
+}
+
+/** Durable image references one event's content carries, in block order. */
+function eventImages(event: DshSessionEvent): DshImageAttachmentRef[] {
+  return collectDshImageAttachments(messageContent(eventData(event)));
 }
 
 function eventTurn(event: DshSessionEvent): number | undefined {
@@ -140,15 +180,24 @@ function preview(event: DshSessionEvent): { title: string; detail?: string } {
   const data = eventData(event);
   switch (event.type) {
     case "user/message":
-      return { title: "User message", detail: contentText(data.content) || contentText(dict(data.message).content) };
+      return {
+        title: "User message",
+        detail: contentText(data.content) || contentText(dict(data.message).content),
+      };
     case "assistant/message":
-      return { title: "Assistant message", detail: contentText(data.content ?? dict(data.message).content) };
+      return {
+        title: "Assistant message",
+        detail: contentText(data.content ?? dict(data.message).content),
+      };
     case "assistant/chunk":
       return { title: "Assistant stream", detail: text(dict(data.chunk).text) ?? text(data.chunk) };
     case "tool/call":
       return { title: `Tool: ${text(data.name) ?? "tool"}`, detail: text(data.arguments) };
     case "tool/result":
-      return { title: "Tool result", detail: contentText(data.content ?? dict(data.message).content) };
+      return {
+        title: "Tool result",
+        detail: contentText(data.content ?? dict(data.message).content),
+      };
     case "workflow/run-start":
     case "tool-workflow/run-start":
       return { title: `Workflow: ${text(data.name) ?? "run"}` };
@@ -156,7 +205,10 @@ function preview(event: DshSessionEvent): { title: string; detail?: string } {
     case "tool-workflow/run-end":
       return { title: `Workflow ${text(data.stopReason) ?? "finished"}` };
     case "schedule/change":
-      return { title: `Schedule ${text(data.operation) ?? "change"}`, detail: text(dict(data.schedule).prompt) ?? text(data.id) };
+      return {
+        title: `Schedule ${text(data.operation) ?? "change"}`,
+        detail: text(dict(data.schedule).prompt) ?? text(data.id),
+      };
     case "feedback/record":
       return { title: "Feedback recorded", detail: text(data.text) };
     case "command/run":
@@ -175,8 +227,9 @@ function isErrorResult(event: DshSessionEvent): boolean {
   if (data.isError === true) return true;
   const message = dict(data.message);
   if (message.isError === true) return true;
-  return Array.isArray(message.content)
-    && message.content.some((part) => dict(part).isError === true);
+  return (
+    Array.isArray(message.content) && message.content.some((part) => dict(part).isError === true)
+  );
 }
 
 function callId(event: DshSessionEvent): string | undefined {
@@ -220,23 +273,32 @@ function resultLocations(event: DshSessionEvent): string[] {
   const meta = dict(data.meta);
   const locations = meta.locations ?? data.locations;
   const diffs = meta.diffs ?? data.diffs;
-  return [
-    ...candidatePaths(locations),
-    ...candidatePaths(diffs),
-  ];
+  return [...candidatePaths(locations), ...candidatePaths(diffs)];
 }
 
 function mutationCall(name: string): boolean {
   const normalized = name.toLowerCase();
-  if (/delete|remove|read|list|search|inspect|cat|grep|bash|shell|terminal|run_code/.test(normalized)) return false;
+  if (
+    /delete|remove|read|list|search|inspect|cat|grep|bash|shell|terminal|run_code/.test(normalized)
+  )
+    return false;
   return /write|edit|patch|insert|replace|create|move|copy|save|update/.test(normalized);
 }
 
 function updateStats(events: DshSessionEvent[]): DshStats {
   const stats: DshStats = {
-    turns: 0, steps: 0, llmMs: 0, toolMs: 0, ttftMs: 0, ttftSteps: 0,
-    decodeMs: 0, decodeTokens: 0, inputTokens: 0, outputTokens: 0,
-    cacheReadTokens: 0, cacheWriteTokens: 0,
+    turns: 0,
+    steps: 0,
+    llmMs: 0,
+    toolMs: 0,
+    ttftMs: 0,
+    ttftSteps: 0,
+    decodeMs: 0,
+    decodeTokens: 0,
+    inputTokens: 0,
+    outputTokens: 0,
+    cacheReadTokens: 0,
+    cacheWriteTokens: 0,
   };
   const turns = new Set<number>();
   const steps = new Map<string, { start: number; firstToken?: number }>();
@@ -250,7 +312,11 @@ function updateStats(events: DshSessionEvent[]): DshStats {
     if (event.type === "assistant/chunk" && stepKey) {
       const chunk = dict(data.chunk);
       const kind = text(chunk.type) ?? "";
-      const hasToken = kind === "text" || kind === "reasoning" || kind === "token" || typeof chunk.text === "string";
+      const hasToken =
+        kind === "text" ||
+        kind === "reasoning" ||
+        kind === "token" ||
+        typeof chunk.text === "string";
       const open = steps.get(stepKey);
       if (hasToken && open && open.firstToken === undefined) open.firstToken = eventTime(event);
     }
@@ -276,8 +342,14 @@ function updateStats(events: DshSessionEvent[]): DshStats {
       const chunkUsage = dict(dict(data.chunk).usage);
       stats.inputTokens = Math.max(stats.inputTokens, number(chunkUsage.inputTokens) ?? 0);
       stats.outputTokens = Math.max(stats.outputTokens, number(chunkUsage.outputTokens) ?? 0);
-      stats.cacheReadTokens = Math.max(stats.cacheReadTokens, number(chunkUsage.cacheReadTokens) ?? 0);
-      stats.cacheWriteTokens = Math.max(stats.cacheWriteTokens, number(chunkUsage.cacheWriteTokens) ?? 0);
+      stats.cacheReadTokens = Math.max(
+        stats.cacheReadTokens,
+        number(chunkUsage.cacheReadTokens) ?? 0,
+      );
+      stats.cacheWriteTokens = Math.max(
+        stats.cacheWriteTokens,
+        number(chunkUsage.cacheWriteTokens) ?? 0,
+      );
     }
     if (event.type === "tool/call") {
       const id = callId(event);
@@ -313,13 +385,26 @@ function updateWorkflows(events: DshSessionEvent[]): DshWorkflowRun[] {
     if (event.type === "tool-workflow/run-start") run.name = text(data.name) ?? run.name;
     if (event.type === "tool-workflow/run-end") {
       const reason = text(data.stopReason);
-      run.status = reason === "completed" ? "completed" : reason === "cancelled" ? "cancelled" : reason === "error" ? "failed" : "interrupted";
+      run.status =
+        reason === "completed"
+          ? "completed"
+          : reason === "cancelled"
+            ? "cancelled"
+            : reason === "error"
+              ? "failed"
+              : "interrupted";
     }
     if (event.type === "tool-workflow/agent-start") {
       const phase = text(data.phase);
       const key = phase ?? "(default)";
-      const group = run.phases[key] ??= { phase, members: [] };
-      group.members.push({ seq: number(data.seq) ?? eventSeq(event, 0), label: text(data.label) ?? "agent", childId: text(data.childId) ?? "", phase, status: "running" });
+      const group = (run.phases[key] ??= { phase, members: [] });
+      group.members.push({
+        seq: number(data.seq) ?? eventSeq(event, 0),
+        label: text(data.label) ?? "agent",
+        childId: text(data.childId) ?? "",
+        phase,
+        status: "running",
+      });
     }
     if (event.type === "tool-workflow/agent-end") {
       const memberSeq = number(data.seq);
@@ -327,7 +412,14 @@ function updateWorkflows(events: DshSessionEvent[]): DshWorkflowRun[] {
         const member = group.members.find((candidate) => candidate.seq === memberSeq);
         if (member) {
           const outcome = text(data.outcome);
-          member.status = outcome === "completed" ? "completed" : outcome === "cancelled" ? "cancelled" : outcome === "failed" ? "failed" : "interrupted";
+          member.status =
+            outcome === "completed"
+              ? "completed"
+              : outcome === "cancelled"
+                ? "cancelled"
+                : outcome === "failed"
+                  ? "failed"
+                  : "interrupted";
         }
       }
     }
@@ -366,7 +458,11 @@ function updateSchedules(events: DshSessionEvent[]): DshScheduleRecord[] {
         const anchor = Date.parse(current.scheduledAt);
         const accepted = Date.parse(text(data.acceptedAt) ?? "");
         if (Number.isFinite(anchor) && Number.isFinite(accepted)) {
-          const next = anchor + (Math.floor((accepted - anchor) / (current.everySeconds * 1000)) + 1) * current.everySeconds * 1000;
+          const next =
+            anchor +
+            (Math.floor((accepted - anchor) / (current.everySeconds * 1000)) + 1) *
+              current.everySeconds *
+              1000;
           current.scheduledAt = new Date(next).toISOString();
           current.state = next <= Date.now() ? "overdue" : "scheduled";
         }
@@ -386,7 +482,12 @@ function updateProduced(events: DshSessionEvent[]): DshProducedFile[] {
     if (event.type === "tool/call") {
       const id = callId(event);
       const data = eventData(event);
-      if (id) calls.set(id, { name: text(data.name) ?? "tool", args: parseJson(data.arguments), turn: eventTurn(event) });
+      if (id)
+        calls.set(id, {
+          name: text(data.name) ?? "tool",
+          args: parseJson(data.arguments),
+          turn: eventTurn(event),
+        });
       continue;
     }
     if (event.type !== "tool/result" || isErrorResult(event)) continue;
@@ -397,26 +498,156 @@ function updateProduced(events: DshSessionEvent[]): DshProducedFile[] {
     for (const path of [...new Set(paths)]) {
       if (seen.has(path)) continue;
       seen.add(path);
-      files.push({ path, seq: eventSeq(event, files.length), turn: eventTurn(event) ?? call?.turn });
+      files.push({
+        path,
+        seq: eventSeq(event, files.length),
+        turn: eventTurn(event) ?? call?.turn,
+      });
     }
     if (id) calls.delete(id);
   }
   return files;
 }
 
-export function projectDshSessionEvents(input: readonly DshSessionEvent[]): DshSessionFeatures {
+/** What a timeline record is, which fixes the lane it is drawn in. */
+export type DshTimelineKind = "user" | "assistant" | "tool" | "compacted" | "system";
+
+/**
+ * One measured operation of the session, as the timing overview sees it.
+ *
+ * A record is an operation rather than an event: a tool call and its result are
+ * one span whose width is the time between them, and an assistant reply is one
+ * span from its step start. The streaming chunks that make up a reply carry no
+ * duration of their own and are left out, as the Harness' own ledger leaves out
+ * its request-only rows.
+ */
+export interface DshTimelineRecord {
+  /** Ledger rows this record covers — what focusing it selects. */
+  seqs: readonly number[];
+  kind: DshTimelineKind;
+  label: string;
+  isError: boolean;
+  /** Wall-clock start in ms. */
+  startedAt: number;
+  /** Measured span in ms; zero for an operation observed at one instant. */
+  durationMs: number;
+  turn?: number;
+  /** Time to first token, when the whole step was observed. */
+  ttftMs?: number;
+  /** Decode time after the first token, when the whole step was observed. */
+  decodeMs?: number;
+}
+
+function timelineKind(type: string): DshTimelineKind | undefined {
+  if (type === "user/message") return "user";
+  if (type === "assistant/message") return "assistant";
+  if (type === "tool/call") return "tool";
+  if (type === "compaction/summary") return "compacted";
+  // Streaming chunks and step boundaries are how the other records are measured,
+  // never records themselves; a result belongs to the call it settles.
+  if (type === "assistant/chunk" || type === "step/start" || type === "step/end") return undefined;
+  if (type === "tool/result") return undefined;
+  return "system";
+}
+
+/**
+ * Fold the event stream into the operations the timing overview plots.
+ *
+ * Durations come from the same pairings the stats panel sums — `tool/call` to
+ * its `tool/result` by call id, `step/start` to the `assistant/message` that
+ * closes it — so the overview and the totals can never disagree. An operation
+ * still open when the page ends keeps a zero width rather than being stretched
+ * to now, which would make a live session's last span grow on every render.
+ */
+function updateTimeline(events: DshSessionEvent[], titles: ReadonlyMap<number, string>) {
+  const records: DshTimelineRecord[] = [];
+  const openTools = new Map<string, DshTimelineRecord>();
+  const openSteps = new Map<string, { start: number; firstToken?: number }>();
+  for (const [index, event] of events.entries()) {
+    const seq = eventSeq(event, index);
+    const turn = eventTurn(event);
+    const step = eventStep(event);
+    const stepKey = turn !== undefined && step !== undefined ? `${turn}:${step}` : undefined;
+    if (event.type === "step/start" && stepKey) {
+      openSteps.set(stepKey, { start: eventTime(event) });
+    }
+    if (event.type === "assistant/chunk" && stepKey) {
+      const chunk = dict(eventData(event).chunk);
+      const kind = text(chunk.type) ?? "";
+      const hasToken =
+        kind === "text" ||
+        kind === "reasoning" ||
+        kind === "token" ||
+        text(chunk.text) !== undefined;
+      const open = openSteps.get(stepKey);
+      if (hasToken && open && open.firstToken === undefined) open.firstToken = eventTime(event);
+    }
+    if (event.type === "tool/result") {
+      const id = callId(event);
+      const open = id === undefined ? undefined : openTools.get(id);
+      if (id !== undefined && open) {
+        open.durationMs = Math.max(0, eventTime(event) - open.startedAt);
+        open.seqs = [...open.seqs, seq];
+        if (isErrorResult(event)) open.isError = true;
+        openTools.delete(id);
+      }
+      continue;
+    }
+    const kind = timelineKind(event.type);
+    if (kind === undefined) continue;
+    const record: DshTimelineRecord = {
+      seqs: [seq],
+      kind,
+      label: titles.get(seq) ?? event.type,
+      isError: kind === "system" ? isErrorResult(event) : false,
+      startedAt: eventTime(event),
+      durationMs: 0,
+      ...(turn === undefined ? {} : { turn }),
+    };
+    if (kind === "assistant") {
+      const open = stepKey ? openSteps.get(stepKey) : undefined;
+      if (open) {
+        record.startedAt = open.start;
+        record.durationMs = Math.max(0, eventTime(event) - open.start);
+        if (open.firstToken !== undefined) {
+          record.ttftMs = Math.max(0, open.firstToken - open.start);
+          record.decodeMs = Math.max(0, eventTime(event) - open.firstToken);
+        }
+        if (stepKey) openSteps.delete(stepKey);
+      }
+    }
+    if (kind === "tool") {
+      const id = callId(event);
+      if (id) openTools.set(id, record);
+    }
+    records.push(record);
+  }
+  return records;
+}
+
+export function projectDshSessionEvents(
+  input: readonly DshSessionEvent[],
+  views: DshToolViewsBySeq = {},
+): DshSessionFeatures {
   const events = [...input]
     .filter((event) => typeof event?.type === "string")
     .sort((a, b) => eventSeq(a, 0) - eventSeq(b, 0));
-  const trajectory = events.map((event, index) => ({
-    seq: eventSeq(event, index),
-    time: eventTime(event),
-    type: event.type,
-    turn: eventTurn(event),
-    step: eventStep(event),
-    ...preview(event),
-    event,
-  }));
+  const trajectory = events.map((event, index) => {
+    const seq = eventSeq(event, index);
+    const view = views[seq];
+    const images = eventImages(event);
+    return {
+      seq,
+      time: eventTime(event),
+      type: event.type,
+      turn: eventTurn(event),
+      step: eventStep(event),
+      ...preview(event),
+      event,
+      ...(view ? { view } : {}),
+      ...(images.length > 0 ? { images } : {}),
+    };
+  });
   return {
     events,
     trajectory,
@@ -424,6 +655,7 @@ export function projectDshSessionEvents(input: readonly DshSessionEvent[]): DshS
     producedFiles: updateProduced(events),
     workflows: updateWorkflows(events),
     schedules: updateSchedules(events),
+    timeline: updateTimeline(events, new Map(trajectory.map((entry) => [entry.seq, entry.title]))),
   };
 }
 
@@ -438,6 +670,38 @@ export function mergeDshSessionEvents(
     if (seq === undefined) withoutSeq.push(event);
     else bySeq.set(seq, event);
   }
-  return [...bySeq.values(), ...withoutSeq]
-    .sort((a, b) => (number(a.seq) ?? 0) - (number(b.seq) ?? 0));
+  return [...bySeq.values(), ...withoutSeq].sort(
+    (a, b) => (number(a.seq) ?? 0) - (number(b.seq) ?? 0),
+  );
+}
+
+/**
+ * Split one `session.history` page into its events and their render intents.
+ *
+ * The Harness serves a page as `HistoryEntry[]` — `{ event, view? }` wrappers,
+ * not bare events — so a reader that looks for `type` on the page item finds
+ * nothing and silently drops the whole page. Bare events are still accepted so
+ * a page from a deployment without the wrapper (and Aeroric's own live merge
+ * path, which already holds unwrapped events) reads the same way.
+ */
+export function readDshHistoryPage(entries: readonly unknown[]): {
+  events: DshSessionEvent[];
+  views: Record<number, DshToolEventView>;
+} {
+  const events: DshSessionEvent[] = [];
+  const views: Record<number, DshToolEventView> = {};
+  for (const entry of entries) {
+    const record = dict(entry);
+    // A wrapper carries the event under `event`; a bare event carries its own
+    // `type`. Checking the wrapper first keeps an event that happens to have an
+    // `event` field from being misread, since a wrapper never has a `type`.
+    const inner = typeof record.type === "string" ? record : dict(record.event);
+    if (typeof inner.type !== "string") continue;
+    const event = inner as DshSessionEvent;
+    events.push(event);
+    const view = parseDshToolEventView(record.view);
+    const seq = number(event.seq);
+    if (view !== undefined && seq !== undefined) views[seq] = view;
+  }
+  return { events, views };
 }

@@ -34,27 +34,34 @@ export function DshSlashPalette({
   useEffect(() => {
     if (!sessionId) return;
     let disposed = false;
-    void invoke<Array<{ name?: string; input?: { hint?: string } }> | { commands?: Array<{ name?: string; input?: { hint?: string } }> }>(
-      "list_dsh_commands",
-      { sessionId },
-    ).then((value) => {
-      if (disposed) return;
-      const rows = Array.isArray(value) ? value : value.commands ?? [];
-      const commands = rows
-        .filter((row): row is { name: string; input?: { hint?: string } } => typeof row.name === "string")
-        .map((row) => {
-          const known = DSH_SLASH_COMMANDS.find((command) => command.name === row.name);
-          return known ?? {
-            name: row.name,
-            descriptionKey: "dsh.slash.title",
-            hasArg: Boolean(row.input?.hint),
-          };
-        });
-      if (commands.length > 0) setRemoteCommands(commands);
-    }).catch(() => {
-      // The static catalog remains available while an older DSH build lacks
-      // the generated commands Remote.
-    });
+    void invoke<
+      | Array<{ name?: string; input?: { hint?: string } }>
+      | { commands?: Array<{ name?: string; input?: { hint?: string } }> }
+    >("list_dsh_commands", { sessionId })
+      .then((value) => {
+        if (disposed) return;
+        const rows = Array.isArray(value) ? value : (value.commands ?? []);
+        const commands = rows
+          .filter(
+            (row): row is { name: string; input?: { hint?: string } } =>
+              typeof row.name === "string",
+          )
+          .map((row) => {
+            const known = DSH_SLASH_COMMANDS.find((command) => command.name === row.name);
+            return (
+              known ?? {
+                name: row.name,
+                descriptionKey: "dsh.slash.title",
+                hasArg: Boolean(row.input?.hint),
+              }
+            );
+          });
+        if (commands.length > 0) setRemoteCommands(commands);
+      })
+      .catch(() => {
+        // The static catalog remains available while an older DSH build lacks
+        // the generated commands Remote.
+      });
     return () => {
       disposed = true;
     };
@@ -187,7 +194,11 @@ export function DshSlashPalette({
   );
 }
 
-function DshSlashPicker({
+/**
+ * Secondary picker that resolves the argument of a popupSelect-style command
+ * (`/model`, `/skill`, `/permission`, `/subagent`) from the matching catalog.
+ */
+export function DshSlashPicker({
   command,
   onPick,
   onBack,

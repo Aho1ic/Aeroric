@@ -64,18 +64,20 @@ export function DshSessionsPanel() {
           { value: "workspaces", label: t("appSettings.dshWorkspacesTab") },
         ]}
       />
-      {tab === "sessions" ? (
-        <SessionsView lang={language} t={t} />
-      ) : (
-        <WorkspacesView t={t} />
-      )}
+      {tab === "sessions" ? <SessionsView lang={language} t={t} /> : <WorkspacesView t={t} />}
     </div>
   );
 }
 
 // ── Sessions view ─────────────────────────────────────────────────────────────
 
-function SessionsView({ lang, t }: { lang: string; t: (key: string, vars?: Record<string, string | number>) => string }) {
+function SessionsView({
+  lang,
+  t,
+}: {
+  lang: string;
+  t: (key: string, vars?: Record<string, string | number>) => string;
+}) {
   const [workspaceData, setWorkspaceData] = useState<DshWorkspaceList | null>(null);
   const [sessions, setSessions] = useState<DshSessionSummary[]>([]);
   const [loading, setLoading] = useState(false);
@@ -190,13 +192,22 @@ function SessionsView({ lang, t }: { lang: string; t: (key: string, vars?: Recor
         <p>{t("appSettings.dshSessionsIntro")}</p>
       </header>
 
-      {error && <p className="dsh-toolbar-error" role="alert">{error}</p>}
+      {error && (
+        <p className="dsh-toolbar-error" role="alert">
+          {error}
+        </p>
+      )}
 
       <div style={{ display: "flex", gap: 8, alignItems: "center", margin: "16px 0 12px" }}>
         <div style={{ flex: 1, position: "relative", display: "flex", alignItems: "center" }}>
           <Search
             size={14}
-            style={{ position: "absolute", left: 10, color: "var(--text-hint)", pointerEvents: "none" }}
+            style={{
+              position: "absolute",
+              left: 10,
+              color: "var(--text-hint)",
+              pointerEvents: "none",
+            }}
           />
           <input
             type="text"
@@ -217,7 +228,13 @@ function SessionsView({ lang, t }: { lang: string; t: (key: string, vars?: Recor
             }}
           />
         </div>
-        <Button variant="outline" size="sm" icon={RefreshCw} disabled={loading} onClick={() => void load()}>
+        <Button
+          variant="outline"
+          size="sm"
+          icon={RefreshCw}
+          disabled={loading}
+          onClick={() => void load()}
+        >
           {t("appSettings.dshRefresh")}
         </Button>
       </div>
@@ -287,19 +304,27 @@ function SessionsView({ lang, t }: { lang: string; t: (key: string, vars?: Recor
                         disabled={renameSaving}
                         onClick={() => void handleRename(session.sessionId)}
                       />
-                      <Button variant="ghost" size="xs" icon={X} onClick={() => setRenamingId(null)} />
+                      <Button
+                        variant="ghost"
+                        size="xs"
+                        icon={X}
+                        onClick={() => setRenamingId(null)}
+                      />
                     </div>
                   ) : (
                     <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                       <div style={{ flex: 1, minWidth: 0 }}>
-                        <div style={{ fontSize: 12.5, fontWeight: 600, color: "var(--text-primary)" }}>
+                        <div
+                          style={{ fontSize: 12.5, fontWeight: 600, color: "var(--text-primary)" }}
+                        >
                           {session.sessionId.slice(0, 8)}
                           {session.running && (
                             <span
                               style={{
                                 marginLeft: 8,
                                 padding: "1px 6px",
-                                background: "color-mix(in srgb, var(--success, #22c55e) 15%, transparent)",
+                                background:
+                                  "color-mix(in srgb, var(--success, #22c55e) 15%, transparent)",
                                 color: "var(--success, #22c55e)",
                                 borderRadius: "var(--radius-sm)",
                                 fontSize: 10,
@@ -313,7 +338,13 @@ function SessionsView({ lang, t }: { lang: string; t: (key: string, vars?: Recor
                         <div style={{ fontSize: 11, color: "var(--text-secondary)", marginTop: 2 }}>
                           {timeAgo(session.updatedAt, lang)}
                           {session.cwd && (
-                            <span style={{ marginLeft: 8, fontFamily: "var(--font-mono)", opacity: 0.7 }}>
+                            <span
+                              style={{
+                                marginLeft: 8,
+                                fontFamily: "var(--font-mono)",
+                                opacity: 0.7,
+                              }}
+                            >
                               {session.cwd}
                             </span>
                           )}
@@ -435,7 +466,11 @@ function WorkspacesView({ t }: { t: (key: string) => string }) {
         <p>{t("appSettings.dshWorkspacesIntro")}</p>
       </header>
 
-      {error && <p className="dsh-toolbar-error" role="alert">{error}</p>}
+      {error && (
+        <p className="dsh-toolbar-error" role="alert">
+          {error}
+        </p>
+      )}
 
       <div style={{ display: "flex", gap: 8, alignItems: "center", margin: "16px 0 14px" }}>
         <input
@@ -443,7 +478,9 @@ function WorkspacesView({ t }: { t: (key: string) => string }) {
           placeholder={t("appSettings.dshWorkspacePath")}
           value={creatingPath}
           onChange={(e) => setCreatingPath(e.target.value)}
-          onKeyDown={(e) => { if (e.key === "Enter") void handleCreate(); }}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") void handleCreate();
+          }}
           style={{
             flex: 1,
             height: 30,
@@ -457,15 +494,25 @@ function WorkspacesView({ t }: { t: (key: string) => string }) {
             outline: "none",
           }}
         />
-        <Button variant="default" size="sm" icon={Plus} disabled={creating || !creatingPath.trim()} onClick={() => void handleCreate()}>
+        <Button
+          variant="default"
+          size="sm"
+          icon={Plus}
+          disabled={creating || !creatingPath.trim()}
+          onClick={() => void handleCreate()}
+        >
           {t("appSettings.dshCreateWorkspace")}
         </Button>
       </div>
 
       {loading ? (
-        <div style={{ padding: 20, color: "var(--text-hint)", fontSize: 12 }}>{t("appSettings.dshLoading")}</div>
+        <div style={{ padding: 20, color: "var(--text-hint)", fontSize: 12 }}>
+          {t("appSettings.dshLoading")}
+        </div>
       ) : workspaces.length === 0 ? (
-        <div style={{ padding: 20, color: "var(--text-hint)", fontSize: 12 }}>{t("appSettings.dshNoWorkspaces")}</div>
+        <div style={{ padding: 20, color: "var(--text-hint)", fontSize: 12 }}>
+          {t("appSettings.dshNoWorkspaces")}
+        </div>
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
           {workspaces.map((ws) => (
@@ -510,7 +557,14 @@ function WorkspacesView({ t }: { t: (key: string) => string }) {
                     <div style={{ fontSize: 13, fontWeight: 600, color: "var(--text-primary)" }}>
                       {ws.title || ws.path}
                     </div>
-                    <div style={{ fontSize: 11, color: "var(--text-secondary)", fontFamily: "var(--font-mono)", marginTop: 2 }}>
+                    <div
+                      style={{
+                        fontSize: 11,
+                        color: "var(--text-secondary)",
+                        fontFamily: "var(--font-mono)",
+                        marginTop: 2,
+                      }}
+                    >
                       {ws.path}
                     </div>
                     <div style={{ fontSize: 11, color: "var(--text-hint)", marginTop: 2 }}>

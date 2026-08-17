@@ -704,10 +704,7 @@ function App() {
       );
       const dshSpeedCleanedProjectIds = new Set<string>();
       const normalizedTasks = loadedTasks.map((task) => {
-        if (
-          task.speed !== "fast" ||
-          agentFamily(task.agent, agentOptionsRef.current) !== "dsh"
-        ) {
+        if (task.speed !== "fast" || agentFamily(task.agent, agentOptionsRef.current) !== "dsh") {
           return task;
         }
         dshSpeedCleanedProjectIds.add(task.projectId);
@@ -861,33 +858,52 @@ function App() {
       });
     });
     const p8 = listen<{ sessionId?: string; approvalId?: string }>("dsh-approval-resolved", (e) => {
-      setDshApprovalRequests((prev) => prev.filter((item) =>
-        !(item.sessionId === e.payload.sessionId && item.approvalId === e.payload.approvalId),
-      ));
+      setDshApprovalRequests((prev) =>
+        prev.filter(
+          (item) =>
+            !(item.sessionId === e.payload.sessionId && item.approvalId === e.payload.approvalId),
+        ),
+      );
     });
-    const p9 = listen<{ sessionId?: string; questionRpcId?: string }>("dsh-question-resolved", (e) => {
-      setDshQuestionRequests((prev) => prev.filter((item) => item.rpcId !== e.payload.questionRpcId));
-    });
+    const p9 = listen<{ sessionId?: string; questionRpcId?: string }>(
+      "dsh-question-resolved",
+      (e) => {
+        setDshQuestionRequests((prev) =>
+          prev.filter((item) => item.rpcId !== e.payload.questionRpcId),
+        );
+      },
+    );
     // DSH events.host is the live invalidation channel for settings/session
     // surfaces. Re-emit one browser event with the original payload so panels
     // can refresh their own snapshot without coupling App to their state.
     const dispatchDshHostRefresh = (eventName: string, payload: unknown) => {
       window.dispatchEvent(new CustomEvent("dsh-host-refresh", { detail: { eventName, payload } }));
     };
-    const p10 = listen("dsh-host-session-added", (e) => dispatchDshHostRefresh("session-added", e.payload));
-    const p11 = listen("dsh-host-session-removed", (e) => dispatchDshHostRefresh("session-removed", e.payload));
-    const p12 = listen("dsh-host-session-status", (e) => dispatchDshHostRefresh("session-status", e.payload));
-    const p13 = listen("dsh-host-workspace-changed", (e) => dispatchDshHostRefresh("workspace-changed", e.payload));
-    const p14 = listen("dsh-host-workspace-removed", (e) => dispatchDshHostRefresh("workspace-removed", e.payload));
-    const p15 = listen("dsh-host-workspace-order-changed", (e) => dispatchDshHostRefresh("workspace-order-changed", e.payload));
-    const p16 = listen("dsh-host-archived-sessions-changed", (e) => dispatchDshHostRefresh("archived-sessions-changed", e.payload));
-    const p17 = listen<{ message?: string; error?: string }>(
-      "dsh-host-agent-error",
-      (e) => {
-        const msg = e.payload?.message ?? e.payload?.error ?? "DSH agent error";
-        showToastRef.current(msg, "error");
-      },
+    const p10 = listen("dsh-host-session-added", (e) =>
+      dispatchDshHostRefresh("session-added", e.payload),
     );
+    const p11 = listen("dsh-host-session-removed", (e) =>
+      dispatchDshHostRefresh("session-removed", e.payload),
+    );
+    const p12 = listen("dsh-host-session-status", (e) =>
+      dispatchDshHostRefresh("session-status", e.payload),
+    );
+    const p13 = listen("dsh-host-workspace-changed", (e) =>
+      dispatchDshHostRefresh("workspace-changed", e.payload),
+    );
+    const p14 = listen("dsh-host-workspace-removed", (e) =>
+      dispatchDshHostRefresh("workspace-removed", e.payload),
+    );
+    const p15 = listen("dsh-host-workspace-order-changed", (e) =>
+      dispatchDshHostRefresh("workspace-order-changed", e.payload),
+    );
+    const p16 = listen("dsh-host-archived-sessions-changed", (e) =>
+      dispatchDshHostRefresh("archived-sessions-changed", e.payload),
+    );
+    const p17 = listen<{ message?: string; error?: string }>("dsh-host-agent-error", (e) => {
+      const msg = e.payload?.message ?? e.payload?.error ?? "DSH agent error";
+      showToastRef.current(msg, "error");
+    });
     return () => {
       p1.then((fn) => fn());
       p2.then((fn) => fn());
@@ -1413,7 +1429,7 @@ function App() {
       speed,
       dshAgentPreset:
         agentFamily(agent, agentOptionsRef.current) === "dsh"
-          ? dshAgentPreset ?? "standard"
+          ? (dshAgentPreset ?? "standard")
           : undefined,
       permissionMode,
       status: immediate ? "pending" : "todo",

@@ -34,7 +34,7 @@ export function useDshLiveSessions() {
 
   const applyProjection = useCallback((frame: DshProjectionFrame) => {
     // Higher-seq-wins: drop stale frames for the same (session,key).
-    const wm = seqWatermarks.current[frame.sessionId] ??= {};
+    const wm = (seqWatermarks.current[frame.sessionId] ??= {});
     const lastSeq = wm[frame.key];
     if (typeof lastSeq === "number" && frame.seq < lastSeq) return;
     wm[frame.key] = frame.seq;
@@ -113,12 +113,8 @@ export function useDshLiveSessions() {
     unlistenPromises.push(
       listen<DshProjectionFrame>("dsh-session-projection", (e) => applyProjection(e.payload)),
     );
-    unlistenPromises.push(
-      listen<DshJobsFrame>("dsh-session-jobs", (e) => applyJobs(e.payload)),
-    );
-    unlistenPromises.push(
-      listen<DshQueueFrame>("dsh-session-queue", (e) => applyQueue(e.payload)),
-    );
+    unlistenPromises.push(listen<DshJobsFrame>("dsh-session-jobs", (e) => applyJobs(e.payload)));
+    unlistenPromises.push(listen<DshQueueFrame>("dsh-session-queue", (e) => applyQueue(e.payload)));
     unlistenPromises.push(
       listen<DshSubscribedFrame>("dsh-session-subscribed", (e) => applySubscribed(e.payload)),
     );

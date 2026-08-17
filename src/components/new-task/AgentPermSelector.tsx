@@ -342,7 +342,10 @@ export function AgentPermSelector({
           />
           <span>{label}</span>
         </div>
-        <div className="compose-agent-menu-column-viewport" style={composeAgentMenuColumnViewportStyle()}>
+        <div
+          className="compose-agent-menu-column-viewport"
+          style={composeAgentMenuColumnViewportStyle()}
+        >
           {options.length > 0 ? (
             options.map(({ value: item }) => renderAgentItem(item))
           ) : (
@@ -425,7 +428,9 @@ export function AgentPermSelector({
                     }}
                   >
                     {DSH_PRESETS.map(([value, label]) => (
-                      <option key={value} value={value}>{t(label)}</option>
+                      <option key={value} value={value}>
+                        {t(label)}
+                      </option>
                     ))}
                   </select>
                 </label>

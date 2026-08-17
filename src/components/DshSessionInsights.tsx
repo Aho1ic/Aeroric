@@ -24,8 +24,16 @@ import type {
   DshSessionStatsProjection,
   DshTokenUsageProjection,
 } from "../types";
-import type { DshSessionEvent, DshStats } from "../dshSessionFeatures";
+import type { DshSessionEvent, DshStats, DshTimelineRecord } from "../dshSessionFeatures";
+import { dshMentionVocabulary } from "../dshDeliverables";
+import { dshTimelineFocus, deriveDshTimeline } from "../dshTrajectoryTimeline";
+import type { DshTimelineMode, DshTimelineRange } from "../dshTrajectoryTimeline";
 import { useDshSessionFeatures } from "../hooks/useDshSessionFeatures";
+import { useDshImageLoader, type DshImageLoader } from "../hooks/useDshImageLoader";
+import { DshImageGallery } from "./DshImageGallery";
+import { DshMentionProse } from "./DshMentionProse";
+import { DshToolCard } from "./DshToolCard";
+import { DshTrajectoryTimeline } from "./DshTrajectoryTimeline";
 
 type InsightTab = "trajectory" | "stats" | "files" | "workflows" | "schedules" | "feedback";
 
@@ -45,18 +53,26 @@ function finite(value: unknown): value is number {
 function statsProjection(value: unknown): DshSessionStatsProjection | undefined {
   if (typeof value !== "object" || value === null) return undefined;
   const item = value as Partial<DshSessionStatsProjection>;
-  return finite(item.turns) && finite(item.steps) && finite(item.llmMs) && finite(item.toolMs)
-    && finite(item.ttftMs) && finite(item.ttftSteps) && finite(item.decodeMs) && finite(item.decodeTokens)
-    ? item as DshSessionStatsProjection
+  return finite(item.turns) &&
+    finite(item.steps) &&
+    finite(item.llmMs) &&
+    finite(item.toolMs) &&
+    finite(item.ttftMs) &&
+    finite(item.ttftSteps) &&
+    finite(item.decodeMs) &&
+    finite(item.decodeTokens)
+    ? (item as DshSessionStatsProjection)
     : undefined;
 }
 
 function tokenProjection(value: unknown): DshTokenUsageProjection | undefined {
   if (typeof value !== "object" || value === null) return undefined;
   const item = value as Partial<DshTokenUsageProjection>;
-  return finite(item.uncachedInputTokens) && finite(item.outputTokens)
-    && finite(item.cacheReadTokens) && finite(item.cacheWriteTokens)
-    ? item as DshTokenUsageProjection
+  return finite(item.uncachedInputTokens) &&
+    finite(item.outputTokens) &&
+    finite(item.cacheReadTokens) &&
+    finite(item.cacheWriteTokens)
+    ? (item as DshTokenUsageProjection)
     : undefined;
 }
 
@@ -75,7 +91,11 @@ function formatTokens(value: number): string {
 
 function displayTime(time: number): string {
   if (!time) return "--:--:--";
-  return new Date(time).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  return new Date(time).toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
 }
 
 function eventCategory(event: DshSessionEvent): "message" | "tool" | "lifecycle" | "system" {
@@ -102,7 +122,7 @@ function StatsPanel({ stats, tokens }: { stats: DshStats; tokens?: DshTokenUsage
   const output = tokens?.outputTokens ?? stats.outputTokens;
   const cacheRead = tokens?.cacheReadTokens ?? stats.cacheReadTokens;
   const cacheTotal = input;
-  const cachePercent = cacheTotal > 0 ? Math.round(cacheRead / cacheTotal * 100) : 0;
+  const cachePercent = cacheTotal > 0 ? Math.round((cacheRead / cacheTotal) * 100) : 0;
   const throughput = stats.decodeMs > 0 ? stats.decodeTokens / (stats.decodeMs / 1_000) : 0;
   return (
     <div className="dsh-insight-metrics">
@@ -110,8 +130,14 @@ function StatsPanel({ stats, tokens }: { stats: DshStats; tokens?: DshTokenUsage
       <ProjectionMetric label={t("dsh.insights.steps")} value={String(stats.steps)} />
       <ProjectionMetric label={t("dsh.insights.llmTime")} value={formatDuration(stats.llmMs)} />
       <ProjectionMetric label={t("dsh.insights.toolTime")} value={formatDuration(stats.toolMs)} />
-      <ProjectionMetric label={t("dsh.insights.ttft")} value={stats.ttftSteps ? formatDuration(stats.ttftMs / stats.ttftSteps) : "-"} />
-      <ProjectionMetric label={t("dsh.insights.throughput")} value={throughput ? `${throughput.toFixed(1)} tok/s` : "-"} />
+      <ProjectionMetric
+        label={t("dsh.insights.ttft")}
+        value={stats.ttftSteps ? formatDuration(stats.ttftMs / stats.ttftSteps) : "-"}
+      />
+      <ProjectionMetric
+        label={t("dsh.insights.throughput")}
+        value={throughput ? `${throughput.toFixed(1)} tok/s` : "-"}
+      />
       <ProjectionMetric label={t("dsh.insights.inputTokens")} value={formatTokens(input)} />
       <ProjectionMetric label={t("dsh.insights.outputTokens")} value={formatTokens(output)} />
       <ProjectionMetric label={t("dsh.insights.cacheHit")} value={`${cachePercent}%`} />
@@ -121,73 +147,179 @@ function StatsPanel({ stats, tokens }: { stats: DshStats; tokens?: DshTokenUsage
 
 function TrajectoryPanel({
   entries,
+  produced,
+  timeline,
   hasMore,
   loadingOlder,
   loadOlder,
+  loadImage,
 }: {
   entries: ReturnType<typeof useDshSessionFeatures>["features"]["trajectory"];
+  produced: ReturnType<typeof useDshSessionFeatures>["features"]["producedFiles"];
+  timeline: readonly DshTimelineRecord[];
   hasMore: boolean;
   loadingOlder: boolean;
   loadOlder: () => Promise<void>;
+  loadImage: DshImageLoader;
 }) {
   const { t } = useI18n();
   const [query, setQuery] = useState("");
   const [category, setCategory] = useState<"all" | ReturnType<typeof eventCategory>>("all");
   const [expanded, setExpanded] = useState<number | null>(null);
+  const [mode, setMode] = useState<DshTimelineMode>({ actualDuration: false, actualTime: false });
+  const [focus, setFocus] = useState<DshTimelineRange | null>(null);
+  // The overview's selection is an interval of the projection, so the rows it
+  // covers are resolved in the same projection the user dragged in.
+  const focused = useMemo(
+    () => (focus === null ? null : dshTimelineFocus(deriveDshTimeline(timeline, mode), focus)),
+    [focus, mode, timeline],
+  );
+  // A selection is an interval of one projection, so re-scaling the domain would
+  // leave it pointing somewhere arbitrary: switching projections drops it.
+  const changeMode = (next: DshTimelineMode) => {
+    setMode(next);
+    setFocus(null);
+  };
   const filtered = useMemo(() => {
     const needle = query.trim().toLowerCase();
     return entries.filter((entry) => {
+      if (focused !== null && !focused.has(entry.seq)) return false;
       if (category !== "all" && eventCategory(entry.event) !== category) return false;
-      return !needle || `${entry.type} ${entry.title} ${entry.detail ?? ""}`.toLowerCase().includes(needle);
+      return (
+        !needle ||
+        `${entry.type} ${entry.title} ${entry.detail ?? ""}`.toLowerCase().includes(needle)
+      );
     });
-  }, [category, entries, query]);
+  }, [category, entries, focused, query]);
+  // One vocabulary per assistant message, keyed by the seq it was delivered at,
+  // so a message can only reference files produced before it and each prose
+  // keeps a stable path list across renders.
+  const mentionPaths = useMemo(() => {
+    const paths = new Map<number, readonly string[]>();
+    for (const entry of entries) {
+      if (entry.type !== "assistant/message") continue;
+      paths.set(entry.seq, dshMentionVocabulary(produced, entry.seq));
+    }
+    return paths;
+  }, [entries, produced]);
   return (
     <div className="dsh-trajectory-panel">
+      <DshTrajectoryTimeline
+        records={timeline}
+        mode={mode}
+        onModeChange={changeMode}
+        focus={focus}
+        onFocusChange={setFocus}
+      />
       <div className="dsh-insight-toolbar">
         <label className="dsh-insight-search">
           <Search size={13} aria-hidden="true" />
-          <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={t("dsh.insights.search")} />
+          <input
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder={t("dsh.insights.search")}
+          />
         </label>
-        <div className="dsh-insight-segments" role="group" aria-label={t("dsh.insights.eventFilter")}>
+        <div
+          className="dsh-insight-segments"
+          role="group"
+          aria-label={t("dsh.insights.eventFilter")}
+        >
           {(["all", "message", "tool", "lifecycle", "system"] as const).map((value) => (
-            <button key={value} type="button" data-active={category === value} onClick={() => setCategory(value)}>
+            <button
+              key={value}
+              type="button"
+              data-active={category === value}
+              onClick={() => setCategory(value)}
+            >
               {t(`dsh.insights.filter.${value}`)}
             </button>
           ))}
         </div>
       </div>
       {hasMore && (
-        <button type="button" className="dsh-insight-load" disabled={loadingOlder} onClick={() => void loadOlder()}>
+        <button
+          type="button"
+          className="dsh-insight-load"
+          disabled={loadingOlder}
+          onClick={() => void loadOlder()}
+        >
           {loadingOlder && <Loader2 size={12} className="spin" />}
           {t("dsh.insights.loadEarlier")}
         </button>
       )}
       <div className="dsh-trajectory-list">
         {filtered.map((entry) => (
-          <div key={`${entry.seq}:${entry.type}`} className="dsh-trajectory-entry" data-category={eventCategory(entry.event)}>
-            <button type="button" className="dsh-trajectory-summary" onClick={() => setExpanded(expanded === entry.seq ? null : entry.seq)}>
+          <div
+            key={`${entry.seq}:${entry.type}`}
+            className="dsh-trajectory-entry"
+            data-category={eventCategory(entry.event)}
+          >
+            <button
+              type="button"
+              className="dsh-trajectory-summary"
+              onClick={() => setExpanded(expanded === entry.seq ? null : entry.seq)}
+            >
               {expanded === entry.seq ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
               <time>{displayTime(entry.time)}</time>
               <code>#{entry.seq}</code>
               <strong>{entry.title}</strong>
               {(entry.turn !== undefined || entry.step !== undefined) && (
-                <span>T{entry.turn ?? "-"} / S{entry.step ?? "-"}</span>
+                <span>
+                  T{entry.turn ?? "-"} / S{entry.step ?? "-"}
+                </span>
               )}
             </button>
-            {entry.detail && <div className="dsh-trajectory-detail">{entry.detail}</div>}
-            {expanded === entry.seq && <pre>{JSON.stringify(entry.event, null, 2)}</pre>}
+            {entry.images && (
+              <DshImageGallery
+                images={entry.images}
+                load={loadImage}
+                align={entry.type.startsWith("user/") ? "end" : "start"}
+              />
+            )}
+            {entry.view ? (
+              <DshToolCard intent={entry.view} />
+            ) : (
+              entry.detail &&
+              (mentionPaths.has(entry.seq) ? (
+                // The closing prose carries the produced-file vocabulary: a
+                // token naming one of this session's files opens it.
+                <DshMentionProse
+                  className="dsh-trajectory-detail"
+                  prose={entry.detail}
+                  paths={mentionPaths.get(entry.seq) ?? []}
+                />
+              ) : (
+                <div className="dsh-trajectory-detail">{entry.detail}</div>
+              ))
+            )}
+            {expanded === entry.seq && (
+              <>
+                {entry.view && entry.detail && (
+                  <div className="dsh-trajectory-detail">{entry.detail}</div>
+                )}
+                <pre>{JSON.stringify(entry.event, null, 2)}</pre>
+              </>
+            )}
           </div>
         ))}
-        {filtered.length === 0 && <div className="dsh-insight-empty">{t("dsh.insights.noEvents")}</div>}
+        {filtered.length === 0 && (
+          <div className="dsh-insight-empty">{t("dsh.insights.noEvents")}</div>
+        )}
       </div>
     </div>
   );
 }
 
-function FilesPanel({ files }: { files: ReturnType<typeof useDshSessionFeatures>["features"]["producedFiles"] }) {
+function FilesPanel({
+  files,
+}: {
+  files: ReturnType<typeof useDshSessionFeatures>["features"]["producedFiles"];
+}) {
   const { t } = useI18n();
   const [busy, setBusy] = useState<string | null>(null);
-  if (files.length === 0) return <div className="dsh-insight-empty">{t("dsh.insights.noFiles")}</div>;
+  if (files.length === 0)
+    return <div className="dsh-insight-empty">{t("dsh.insights.noFiles")}</div>;
   return (
     <div className="dsh-produced-files">
       {files.map((file) => (
@@ -210,20 +342,33 @@ function FilesPanel({ files }: { files: ReturnType<typeof useDshSessionFeatures>
   );
 }
 
-function WorkflowsPanel({ workflows }: { workflows: ReturnType<typeof useDshSessionFeatures>["features"]["workflows"] }) {
+function WorkflowsPanel({
+  workflows,
+}: {
+  workflows: ReturnType<typeof useDshSessionFeatures>["features"]["workflows"];
+}) {
   const { t } = useI18n();
-  if (workflows.length === 0) return <div className="dsh-insight-empty">{t("dsh.insights.noWorkflows")}</div>;
+  if (workflows.length === 0)
+    return <div className="dsh-insight-empty">{t("dsh.insights.noWorkflows")}</div>;
   return (
     <div className="dsh-workflow-list">
       {workflows.map((run) => (
         <section key={run.runId} data-status={run.status}>
-          <header><GitBranch size={14} /><strong>{run.name}</strong><span>{t(`dsh.insights.status.${run.status}`)}</span></header>
+          <header>
+            <GitBranch size={14} />
+            <strong>{run.name}</strong>
+            <span>{t(`dsh.insights.status.${run.status}`)}</span>
+          </header>
           {Object.entries(run.phases).map(([key, phase]) => (
             <div key={key} className="dsh-workflow-phase">
               <h4>{phase.phase || t("dsh.insights.defaultPhase")}</h4>
               {phase.members.map((member) => (
                 <div key={member.seq} className="dsh-workflow-member" data-status={member.status}>
-                  {member.status === "running" ? <Loader2 size={12} className="spin" /> : <CheckCircle2 size={12} />}
+                  {member.status === "running" ? (
+                    <Loader2 size={12} className="spin" />
+                  ) : (
+                    <CheckCircle2 size={12} />
+                  )}
                   <span>{member.label}</span>
                   <code>{member.childId}</code>
                   <small>{t(`dsh.insights.status.${member.status}`)}</small>
@@ -237,16 +382,27 @@ function WorkflowsPanel({ workflows }: { workflows: ReturnType<typeof useDshSess
   );
 }
 
-function SchedulesPanel({ schedules }: { schedules: ReturnType<typeof useDshSessionFeatures>["features"]["schedules"] }) {
+function SchedulesPanel({
+  schedules,
+}: {
+  schedules: ReturnType<typeof useDshSessionFeatures>["features"]["schedules"];
+}) {
   const { t } = useI18n();
-  if (schedules.length === 0) return <div className="dsh-insight-empty">{t("dsh.insights.noSchedules")}</div>;
+  if (schedules.length === 0)
+    return <div className="dsh-insight-empty">{t("dsh.insights.noSchedules")}</div>;
   return (
     <div className="dsh-schedule-list">
       {schedules.map((schedule) => (
         <div key={schedule.id} data-state={schedule.state}>
           <Clock3 size={14} />
-          <div><strong>{schedule.prompt}</strong><span>{new Date(schedule.scheduledAt).toLocaleString()}</span></div>
-          <code>{schedule.kind}{schedule.everySeconds ? ` · ${schedule.everySeconds}s` : ""}</code>
+          <div>
+            <strong>{schedule.prompt}</strong>
+            <span>{new Date(schedule.scheduledAt).toLocaleString()}</span>
+          </div>
+          <code>
+            {schedule.kind}
+            {schedule.everySeconds ? ` · ${schedule.everySeconds}s` : ""}
+          </code>
           <small>{t(`dsh.insights.schedule.${schedule.state}`)}</small>
         </div>
       ))}
@@ -279,8 +435,16 @@ function FeedbackPanel({ sessionId }: { sessionId: string }) {
   };
   return (
     <div className="dsh-feedback-panel">
-      <div className="dsh-feedback-rating-hint"><ThumbsUp size={14} /><ThumbsDown size={14} /><span>{t("dsh.insights.messageFeedbackHint")}</span></div>
-      <textarea value={value} onChange={(event) => setValue(event.target.value)} placeholder={t("dsh.insights.feedbackPlaceholder")} />
+      <div className="dsh-feedback-rating-hint">
+        <ThumbsUp size={14} />
+        <ThumbsDown size={14} />
+        <span>{t("dsh.insights.messageFeedbackHint")}</span>
+      </div>
+      <textarea
+        value={value}
+        onChange={(event) => setValue(event.target.value)}
+        placeholder={t("dsh.insights.feedbackPlaceholder")}
+      />
       <button type="button" disabled={!value.trim() || busy} onClick={() => void submit()}>
         {busy ? <Loader2 size={13} className="spin" /> : <Send size={13} />}
         {t("dsh.insights.sendFeedback")}
@@ -290,13 +454,26 @@ function FeedbackPanel({ sessionId }: { sessionId: string }) {
   );
 }
 
-export function DshSessionInsights({ sessionId, live }: { sessionId: string; live?: DshLiveSessionState }) {
+export function DshSessionInsights({
+  sessionId,
+  live,
+}: {
+  sessionId: string;
+  live?: DshLiveSessionState;
+}) {
   const { t } = useI18n();
   const [open, setOpen] = useState(false);
   const [tab, setTab] = useState<InsightTab>("trajectory");
   const history = useDshSessionFeatures(sessionId);
-  const sessionStats = statsProjection(live?.projections?.sessionStats ?? history.projections.sessionStats);
-  const tokenUsage = tokenProjection(live?.projections?.tokenUsage ?? history.projections.tokenUsage);
+  // Held by the session view, not by the trajectory tab: switching tabs must not
+  // revoke the image URLs and refetch every attachment on the way back.
+  const loadImage = useDshImageLoader(sessionId);
+  const sessionStats = statsProjection(
+    live?.projections?.sessionStats ?? history.projections.sessionStats,
+  );
+  const tokenUsage = tokenProjection(
+    live?.projections?.tokenUsage ?? history.projections.tokenUsage,
+  );
   const stats: DshStats = {
     ...history.features.stats,
     ...(sessionStats ?? {}),
@@ -307,28 +484,80 @@ export function DshSessionInsights({ sessionId, live }: { sessionId: string; liv
   };
   return (
     <>
-      <button type="button" className="dsh-insights-trigger" title={t("dsh.insights.open")} onClick={() => setOpen(true)}>
+      <button
+        type="button"
+        className="dsh-insights-trigger"
+        title={t("dsh.insights.open")}
+        onClick={() => setOpen(true)}
+      >
         <Activity size={13} />
         <span>{t("dsh.insights.open")}</span>
         {history.features.events.length > 0 && <small>{history.features.events.length}</small>}
       </button>
       {open && (
-        <div className="dsh-insights-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setOpen(false); }}>
-          <section className="dsh-insights-dialog" role="dialog" aria-modal="true" aria-label={t("dsh.insights.title")}>
+        <div
+          className="dsh-insights-backdrop"
+          role="presentation"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) setOpen(false);
+          }}
+        >
+          <section
+            className="dsh-insights-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-label={t("dsh.insights.title")}
+          >
             <header className="dsh-insights-header">
-              <div><Activity size={16} /><strong>{t("dsh.insights.title")}</strong><code>{sessionId}</code></div>
-              <button type="button" title={t("common.close")} aria-label={t("common.close")} onClick={() => setOpen(false)}><X size={16} /></button>
+              <div>
+                <Activity size={16} />
+                <strong>{t("dsh.insights.title")}</strong>
+                <code>{sessionId}</code>
+              </div>
+              <button
+                type="button"
+                title={t("common.close")}
+                aria-label={t("common.close")}
+                onClick={() => setOpen(false)}
+              >
+                <X size={16} />
+              </button>
             </header>
             <nav className="dsh-insights-tabs" aria-label={t("dsh.insights.views")}>
               {tabs.map((item) => {
                 const Icon = item.icon;
-                return <button key={item.id} type="button" data-active={tab === item.id} onClick={() => setTab(item.id)}><Icon size={14} /><span>{t(item.labelKey)}</span></button>;
+                return (
+                  <button
+                    key={item.id}
+                    type="button"
+                    data-active={tab === item.id}
+                    onClick={() => setTab(item.id)}
+                  >
+                    <Icon size={14} />
+                    <span>{t(item.labelKey)}</span>
+                  </button>
+                );
               })}
             </nav>
             <div className="dsh-insights-body">
-              {history.loading ? <div className="dsh-insight-empty"><Loader2 size={16} className="spin" />{t("session.loading")}</div> : (
+              {history.loading ? (
+                <div className="dsh-insight-empty">
+                  <Loader2 size={16} className="spin" />
+                  {t("session.loading")}
+                </div>
+              ) : (
                 <>
-                  {tab === "trajectory" && <TrajectoryPanel entries={history.features.trajectory} hasMore={history.hasMore} loadingOlder={history.loadingOlder} loadOlder={history.loadOlder} />}
+                  {tab === "trajectory" && (
+                    <TrajectoryPanel
+                      entries={history.features.trajectory}
+                      produced={history.features.producedFiles}
+                      timeline={history.features.timeline}
+                      hasMore={history.hasMore}
+                      loadingOlder={history.loadingOlder}
+                      loadOlder={history.loadOlder}
+                      loadImage={loadImage}
+                    />
+                  )}
                   {tab === "stats" && <StatsPanel stats={stats} tokens={tokenUsage} />}
                   {tab === "files" && <FilesPanel files={history.features.producedFiles} />}
                   {tab === "workflows" && <WorkflowsPanel workflows={history.features.workflows} />}

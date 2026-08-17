@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import {
   Brain,
@@ -15,7 +15,16 @@ import {
 import { marked } from "marked";
 import DOMPurify from "dompurify";
 import { useI18n } from "../i18n";
+import {
+  DSH_MENTION_ATTRIBUTE,
+  dshMentionVocabulary,
+  linkDshProducedMentions,
+} from "../dshDeliverables";
+import { useDshProducedFiles } from "../hooks/useDshProducedFiles";
 import type { ProtocolFamily } from "../types";
+
+/** Matches the opener a resolved produced-file reference was rendered as. */
+const DSH_MENTION_SELECTOR = `[${DSH_MENTION_ATTRIBUTE}]`;
 
 export interface SessionContent {
   type: "text" | "tool_use" | "tool_result" | "thinking" | "attachment";
@@ -425,15 +434,51 @@ function CopyButton({ text }: { text: string }) {
   );
 }
 
-function MessageContent({ content }: { content: SessionContent }) {
+/**
+ * One text block of a transcript message.
+ *
+ * With a produced-file vocabulary in hand, an inline-code token naming a file
+ * this session wrote becomes an opener; the click is delegated so the rendered
+ * HTML stays a single sanitized string. Without one — every non-DSH session, and
+ * a DSH session that produced nothing — the markup is byte-identical to before.
+ */
+function ProseText({ text, mentionPaths }: { text: string; mentionPaths: readonly string[] }) {
+  const { t } = useI18n();
+  const html = useMemo(
+    () =>
+      linkDshProducedMentions(renderSessionMarkdown(text), mentionPaths, (path) =>
+        t("dsh.deliverables.open", { path }),
+      ),
+    [mentionPaths, t, text],
+  );
+  return (
+    <div
+      className="session-prose"
+      dangerouslySetInnerHTML={{ __html: html }}
+      onClick={(event) => {
+        const target = event.target;
+        const opener = target instanceof Element ? target.closest(DSH_MENTION_SELECTOR) : null;
+        const path =
+          opener instanceof HTMLElement ? opener.getAttribute(DSH_MENTION_ATTRIBUTE) : null;
+        if (!path) return;
+        // Opening is best-effort: the Host answers or it does not, and the
+        // transcript stays readable either way.
+        void invoke("open_dsh_host_path", { path }).catch(() => {});
+      }}
+    />
+  );
+}
+
+function MessageContent({
+  content,
+  mentionPaths,
+}: {
+  content: SessionContent;
+  mentionPaths: readonly string[];
+}) {
   switch (content.type) {
     case "text":
-      return (
-        <div
-          className="session-prose"
-          dangerouslySetInnerHTML={{ __html: renderSessionMarkdown(content.text ?? "") }}
-        />
-      );
+      return <ProseText text={content.text ?? ""} mentionPaths={mentionPaths} />;
     case "thinking":
       return <ThinkingBlock thinking={content.thinking ?? ""} />;
     case "tool_use":
@@ -461,12 +506,15 @@ function MessageBubble({
   message,
   sessionId,
   feedback,
+  mentionPaths,
   onFeedbackReload,
   onFeedbackChange,
 }: {
   message: SessionMessage;
   sessionId?: string;
   feedback?: MessageFeedbackItem;
+  /** Produced paths a text block may reference; empty outside DSH. */
+  mentionPaths: readonly string[];
   onFeedbackReload?: () => Promise<void>;
   onFeedbackChange?: (item: MessageFeedbackItem | null) => void;
 }) {
@@ -525,7 +573,11 @@ function MessageBubble({
       >
         {copyText && <CopyButton text={copyText} />}
         {message.content.map((content, index) => (
-          <MessageContent key={`${content.type}-${content.id ?? index}`} content={content} />
+          <MessageContent
+            key={`${content.type}-${content.id ?? index}`}
+            content={content}
+            mentionPaths={mentionPaths}
+          />
         ))}
         {message.role === "assistant" &&
           message.messageId &&
@@ -575,6 +627,13 @@ export function SessionView({
   const pendingScrollRestoreRef = useRef<{ height: number; top: number } | null>(null);
   const onLoadFailedRef = useRef(onLoadFailed);
   onLoadFailedRef.current = onLoadFailed;
+
+  // A transcript carries no per-message seq, so the whole session's produced
+  // files form one vocabulary. That is wider than the live trajectory's
+  // seq-scoped cut, but only paths this session really wrote are ever in it, so
+  // a reference still cannot open a file the session never touched.
+  const producedFiles = useDshProducedFiles(family === "dsh" ? sessionId : undefined);
+  const mentionPaths = useMemo(() => dshMentionVocabulary(producedFiles), [producedFiles]);
 
   useLayoutEffect(() => {
     const restore = pendingScrollRestoreRef.current;
@@ -746,6 +805,7 @@ export function SessionView({
           message={message}
           sessionId={family === "dsh" ? sessionId : undefined}
           feedback={message.messageId ? feedbackItems[message.messageId] : undefined}
+          mentionPaths={mentionPaths}
           onFeedbackReload={reloadFeedback}
           onFeedbackChange={(item) => {
             if (!message.messageId) return;

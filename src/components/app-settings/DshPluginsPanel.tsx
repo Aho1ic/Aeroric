@@ -184,22 +184,28 @@ export function DshPluginsPanel() {
         // The official roster remains useful before DSH is installed or in browser preview mode.
       },
     );
-    void invoke<DshPresetWire[]>("list_dsh_agent_presets").then((presets) => {
-      if (!current) return;
-      setPresetRuntimeError(null);
-      if (!presets.length) return;
-      const defaultPreset = presets.find((preset) => preset.isDefault)?.id;
-      setSettings((previous) => ({
-        ...previous,
-        ...(defaultPreset ? { defaultPreset } : {}),
-        customPresets: presets
-          .filter((preset) => preset.trust === "user")
-          .map((preset) => ({ id: preset.id, name: preset.name, description: preset.description })),
-      }));
-    }).catch((error: unknown) => {
-      if (current) setPresetRuntimeError(errorMessage(error));
-      // The local YAML snapshot remains available before a Web profile can boot.
-    });
+    void invoke<DshPresetWire[]>("list_dsh_agent_presets")
+      .then((presets) => {
+        if (!current) return;
+        setPresetRuntimeError(null);
+        if (!presets.length) return;
+        const defaultPreset = presets.find((preset) => preset.isDefault)?.id;
+        setSettings((previous) => ({
+          ...previous,
+          ...(defaultPreset ? { defaultPreset } : {}),
+          customPresets: presets
+            .filter((preset) => preset.trust === "user")
+            .map((preset) => ({
+              id: preset.id,
+              name: preset.name,
+              description: preset.description,
+            })),
+        }));
+      })
+      .catch((error: unknown) => {
+        if (current) setPresetRuntimeError(errorMessage(error));
+        // The local YAML snapshot remains available before a Web profile can boot.
+      });
     return () => {
       current = false;
     };
@@ -774,7 +780,9 @@ function AgentPresetsView({
       await invoke("set_dsh_web_default_preset", { preset: id });
       // The Web API is authoritative. The local snapshot is only refreshed
       // for display and may lag while DSH hot-reloads its settings document.
-      const snapshot = await invoke<DshSettingsSnapshot>("get_dsh_settings_snapshot", { agent: "dsh" });
+      const snapshot = await invoke<DshSettingsSnapshot>("get_dsh_settings_snapshot", {
+        agent: "dsh",
+      });
       onSettingsChange({ ...DEFAULT_SETTINGS, ...snapshot, defaultPreset: id });
       return true;
     } catch (error: unknown) {
@@ -864,24 +872,24 @@ function AgentPresetsView({
         ))}
       </PresetGroup>
       <PresetGroup title={t("appSettings.dshCustomGroup")}>
-        {settings.customPresets.length ? (
-          settings.customPresets.map((preset) => (
-            <PresetCard
-              key={preset.id}
-              id={preset.id}
-              icon={<Bot size={18} />}
-              name={preset.name ?? preset.id}
-              description={preset.description ?? t("appSettings.dshNoPresetDescription")}
-              active={settings.defaultPreset === preset.id}
-              saving={savingPreset === preset.id}
-              failed={failedPreset === preset.id}
-              onSelect={() => void makeDefault(preset.id)}
-              onRead={() => void openPresetDocument(preset.id)}
-              onCopy={(target) => void copyPreset(preset.id, target)}
-              onRemove={() => void removePreset(preset.id)}
-            />
-          ))
-        ) : null}
+        {settings.customPresets.length
+          ? settings.customPresets.map((preset) => (
+              <PresetCard
+                key={preset.id}
+                id={preset.id}
+                icon={<Bot size={18} />}
+                name={preset.name ?? preset.id}
+                description={preset.description ?? t("appSettings.dshNoPresetDescription")}
+                active={settings.defaultPreset === preset.id}
+                saving={savingPreset === preset.id}
+                failed={failedPreset === preset.id}
+                onSelect={() => void makeDefault(preset.id)}
+                onRead={() => void openPresetDocument(preset.id)}
+                onCopy={(target) => void copyPreset(preset.id, target)}
+                onRemove={() => void removePreset(preset.id)}
+              />
+            ))
+          : null}
         <Button
           variant="outline"
           size="sm"

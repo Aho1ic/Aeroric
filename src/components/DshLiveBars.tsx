@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type { DshJobView, DshLiveSessionState, DshQueueItem, DshTodoItem } from "../types";
 import { useI18n } from "../i18n";
 import { DshSessionInsights } from "./DshSessionInsights";
+import { DshSessionLogExportButton } from "./DshSessionLogExport";
 import {
   Circle,
   Check,
@@ -56,7 +57,16 @@ export function DshLiveBars({
         color: "var(--text-secondary)",
       }}
     >
-      <div style={{ display: "flex", justifyContent: "flex-end", minHeight: 22 }}>
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "flex-end",
+          alignItems: "center",
+          gap: 6,
+          minHeight: 22,
+        }}
+      >
+        <DshSessionLogExportButton sessionId={sessionId} />
         <DshSessionInsights sessionId={sessionId} live={live} />
       </div>
       {hasGoal && live?.goal && <GoalRow goal={live.goal} />}

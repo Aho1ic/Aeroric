@@ -3,6 +3,7 @@ use parking_lot::{Mutex, RwLock};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tauri::ipc::Channel;
 use tauri::{AppHandle, Emitter, State};
@@ -929,6 +930,311 @@ fn json_text(value: &Value) -> Option<String> {
     None
 }
 
+/// Minimal ANSI styling for the tool render-intent output. The dsh stream lands
+/// in an xterm view configured with `convertEol: false`, so every line this
+/// module writes terminates with an explicit CRLF.
+const ANSI_RESET: &str = "\x1b[0m";
+const ANSI_DIM: &str = "\x1b[2m";
+const ANSI_BOLD: &str = "\x1b[1m";
+const ANSI_GREEN: &str = "\x1b[32m";
+const ANSI_RED: &str = "\x1b[31m";
+const ANSI_CYAN: &str = "\x1b[36m";
+
+/// Non-empty string field, matching how the harness treats a blank title.
+fn view_str<'a>(value: &'a Value, key: &str) -> Option<&'a str> {
+    value
+        .get(key)
+        .and_then(Value::as_str)
+        .filter(|text| !text.is_empty())
+}
+
+fn push_line(out: &mut String, style: &str, text: &str) {
+    out.push_str(style);
+    out.push_str(text);
+    if !style.is_empty() {
+        out.push_str(ANSI_RESET);
+    }
+    out.push_str("\r\n");
+}
+
+/// Write a multi-line block one terminal line at a time so an embedded `\n`
+/// cannot leave the cursor mid-column.
+fn push_block(out: &mut String, style: &str, prefix: &str, text: &str) {
+    for line in text.split('\n') {
+        push_line(
+            out,
+            style,
+            &format!("{prefix}{}", line.trim_end_matches('\r')),
+        );
+    }
+}
+
+/// Split a single-file change into signed rows. `old_text` of `None` is the
+/// harness's `oldText: null` — a create or an overwrite, with no before-image to
+/// compare against, so every line reads as an addition.
+fn diff_rows(old_text: Option<&str>, new_text: &str) -> Vec<(char, String)> {
+    let next: Vec<&str> = new_text.split('\n').collect();
+    let Some(old_text) = old_text else {
+        return next
+            .iter()
+            .map(|line| ('+', line.trim_end_matches('\r').to_string()))
+            .collect();
+    };
+    let prev: Vec<&str> = old_text.split('\n').collect();
+    // A common prefix/suffix trim keeps the printed hunk tight without pulling a
+    // full LCS diff into the backend; results already arrive as focused hunks.
+    let mut head = 0;
+    while head < prev.len() && head < next.len() && prev[head] == next[head] {
+        head += 1;
+    }
+    let mut tail = 0;
+    while tail < prev.len() - head
+        && tail < next.len() - head
+        && prev[prev.len() - 1 - tail] == next[next.len() - 1 - tail]
+    {
+        tail += 1;
+    }
+    let mut rows = Vec::new();
+    for line in &prev[head..prev.len() - tail] {
+        rows.push(('-', line.trim_end_matches('\r').to_string()));
+    }
+    for line in &next[head..next.len() - tail] {
+        rows.push(('+', line.trim_end_matches('\r').to_string()));
+    }
+    rows
+}
+
+fn push_diffs(out: &mut String, diffs: &[Value]) {
+    for diff in diffs {
+        let Some(path) = view_str(diff, "path") else {
+            continue;
+        };
+        let Some(new_text) = diff.get("newText").and_then(Value::as_str) else {
+            continue;
+        };
+        let old_text = diff.get("oldText").and_then(Value::as_str);
+        let label = if old_text.is_none() {
+            format!("  {path} (new file)")
+        } else {
+            format!("  {path}")
+        };
+        push_line(out, ANSI_CYAN, &label);
+        for (sign, line) in diff_rows(old_text, new_text) {
+            let style = if sign == '+' { ANSI_GREEN } else { ANSI_RED };
+            push_line(out, style, &format!("  {sign}{line}"));
+        }
+    }
+}
+
+fn push_numbered(out: &mut String, number: i64, text: &str) {
+    push_line(
+        out,
+        "",
+        &format!(
+            "{ANSI_DIM}{number:>6} │ {ANSI_RESET}{}",
+            text.trim_end_matches('\r')
+        ),
+    );
+}
+
+/// Render a pending-call view. A `diff` call carries the *proposed* change and
+/// the matching result repeats it once applied; in an append-only terminal only
+/// the paths are listed here so the change body is printed once, at result time.
+fn render_tool_call_view(view: &Value) -> Option<String> {
+    let title = view_str(view, "title")?;
+    let mut out = String::from("\r\n");
+    match view.get("card").and_then(Value::as_str)? {
+        "terminal" => {
+            push_line(&mut out, ANSI_BOLD, &format!("▸ {title}"));
+            if let Some(description) = view_str(view, "description") {
+                push_block(&mut out, ANSI_DIM, "  ", description);
+            }
+            if let Some(cwd) = view_str(view, "cwd") {
+                push_line(&mut out, ANSI_DIM, &format!("  cwd: {cwd}"));
+            }
+        }
+        "diff" => {
+            push_line(&mut out, ANSI_BOLD, &format!("▸ {title}"));
+            for diff in view.get("diffs").and_then(Value::as_array)?.iter() {
+                if let Some(path) = view_str(diff, "path") {
+                    push_line(&mut out, ANSI_CYAN, &format!("  {path}"));
+                }
+            }
+        }
+        "generic" => {
+            // rawInput is deliberately not printed: it is the unparsed tool
+            // input and can be large. The insights trajectory shows it in full.
+            let kind = view_str(view, "kind")
+                .map(|kind| format!(" {ANSI_DIM}({kind}){ANSI_RESET}"))
+                .unwrap_or_default();
+            push_line(
+                &mut out,
+                "",
+                &format!("{ANSI_BOLD}▸ {title}{ANSI_RESET}{kind}"),
+            );
+            for location in view
+                .get("locations")
+                .and_then(Value::as_array)
+                .map(Vec::as_slice)
+                .unwrap_or_default()
+            {
+                if let Some(path) = view_str(location, "path") {
+                    let line = location
+                        .get("line")
+                        .and_then(Value::as_i64)
+                        .map(|line| format!(":{line}"))
+                        .unwrap_or_default();
+                    push_line(&mut out, ANSI_DIM, &format!("  {path}{line}"));
+                }
+            }
+        }
+        _ => return None,
+    }
+    Some(out)
+}
+
+/// Render a completed-call view. Output is never truncated here — the harness
+/// already applies its own caps, and dropping lines would hide command output
+/// the raw fallback used to show in full.
+fn render_tool_result_view(view: &Value) -> Option<String> {
+    let card = view.get("card").and_then(Value::as_str)?;
+    let title = view_str(view, "title");
+    let mut out = String::from("\r\n");
+    if let Some(title) = title {
+        push_line(&mut out, ANSI_BOLD, title);
+    }
+    match card {
+        "terminal" => {
+            if let Some(output) = view.get("output").and_then(Value::as_str) {
+                if !output.is_empty() {
+                    push_block(&mut out, "", "", output.trim_end_matches('\n'));
+                }
+            }
+            // exitCode and signal are mutually exclusive; a signal is the
+            // stronger statement about how the run ended, so it wins.
+            if let Some(signal) = view_str(view, "signal") {
+                push_line(&mut out, ANSI_RED, &format!("  ✖ {signal}"));
+            } else if let Some(code) = view.get("exitCode").and_then(Value::as_i64) {
+                if code != 0 {
+                    push_line(&mut out, ANSI_RED, &format!("  ✖ exit {code}"));
+                }
+            }
+        }
+        "diff" => push_diffs(&mut out, view.get("diffs").and_then(Value::as_array)?),
+        "search" => match view.get("shape").and_then(Value::as_str)? {
+            "matches" => {
+                for file in view.get("files").and_then(Value::as_array)? {
+                    let Some(path) = view_str(file, "path") else {
+                        continue;
+                    };
+                    push_line(&mut out, ANSI_CYAN, &format!("  {path}"));
+                    for entry in file
+                        .get("matches")
+                        .and_then(Value::as_array)
+                        .map(Vec::as_slice)
+                        .unwrap_or_default()
+                    {
+                        if let (Some(number), Some(line)) = (
+                            entry.get("lineNumber").and_then(Value::as_i64),
+                            entry.get("line").and_then(Value::as_str),
+                        ) {
+                            push_numbered(&mut out, number, line);
+                        }
+                    }
+                }
+            }
+            "paths" => {
+                for path in view.get("paths").and_then(Value::as_array)? {
+                    if let Some(path) = path.as_str().filter(|path| !path.is_empty()) {
+                        push_line(&mut out, ANSI_CYAN, &format!("  {path}"));
+                    }
+                }
+            }
+            _ => return None,
+        },
+        "read" => {
+            let path = view_str(view, "path")?;
+            let lines = view.get("lines").and_then(Value::as_array)?;
+            let total = view.get("totalLines").and_then(Value::as_i64).unwrap_or(0);
+            let offset = view.get("offset").and_then(Value::as_i64).unwrap_or(1);
+            push_line(
+                &mut out,
+                ANSI_DIM,
+                &format!("  {path} — {} of {total} lines from {offset}", lines.len()),
+            );
+            for line in lines {
+                if let (Some(number), Some(text)) = (
+                    line.get("number").and_then(Value::as_i64),
+                    line.get("text").and_then(Value::as_str),
+                ) {
+                    push_numbered(&mut out, number, text);
+                }
+            }
+        }
+        "web" => match view.get("kind").and_then(Value::as_str)? {
+            "search" => {
+                if let Some(answer) = view_str(view, "answer") {
+                    push_block(&mut out, "", "  ", answer);
+                }
+                for (index, source) in view
+                    .get("sources")
+                    .and_then(Value::as_array)?
+                    .iter()
+                    .enumerate()
+                {
+                    let Some(url) = view_str(source, "url") else {
+                        continue;
+                    };
+                    let label = view_str(source, "title").unwrap_or(url);
+                    push_line(&mut out, "", &format!("  {}. {label}", index + 1));
+                    push_line(&mut out, ANSI_DIM, &format!("     {url}"));
+                }
+            }
+            "fetch" => {
+                let url = view_str(view, "url")?;
+                let status = view.get("statusCode").and_then(Value::as_i64)?;
+                let style = if (200..400).contains(&status) {
+                    ANSI_DIM
+                } else {
+                    ANSI_RED
+                };
+                push_line(&mut out, style, &format!("  {status} {url}"));
+            }
+            _ => return None,
+        },
+        // A generic result view adds only a replacement title, already written
+        // above; without one it says nothing the raw event does not carry.
+        "generic" => {
+            title?;
+        }
+        _ => return None,
+    }
+    if view.get("truncated") == Some(&Value::Bool(true)) {
+        push_line(&mut out, ANSI_DIM, "  … truncated by the harness");
+    }
+    Some(out)
+}
+
+/// Render the host-computed render intent riding a `tool/call` or `tool/result`
+/// delivery. dsh derives one `view` per delivery (never persisting it) and its
+/// own web UI draws it as a card; the terminal gets the same information as
+/// styled lines. `None` means the view was absent, addressed the other event
+/// kind, or used a shape this renderer does not know — the caller then falls
+/// back to the raw event, which is what dsh specifies for a UI without the
+/// matching capability.
+fn render_tool_event_view(payload: &Value, expected: &str) -> Option<String> {
+    let envelope = payload.get("view")?;
+    if envelope.get("for").and_then(Value::as_str)? != expected {
+        return None;
+    }
+    let view = envelope.get("view")?;
+    match expected {
+        "call" => render_tool_call_view(view),
+        "result" => render_tool_result_view(view),
+        _ => None,
+    }
+}
+
 fn emit_session_event_output(payload: &Value, on_output: &Channel<String>) {
     let Some(event) = payload.get("event") else {
         return;
@@ -943,14 +1249,15 @@ fn emit_session_event_output(payload: &Value, on_output: &Channel<String>) {
         // assistant/message is the assembled durable copy of chunks already
         // rendered live. Emitting it again duplicates every completed answer.
         "assistant/message" => None,
-        "tool/call" => {
+        "tool/call" => render_tool_event_view(payload, "call").or_else(|| {
             let name = data.get("name").and_then(Value::as_str).unwrap_or("tool");
             Some(format!("\r\n▸ {name}\r\n"))
-        }
-        "tool/result" => data
-            .get("message")
-            .and_then(json_text)
-            .or_else(|| json_text(data)),
+        }),
+        "tool/result" => render_tool_event_view(payload, "result").or_else(|| {
+            data.get("message")
+                .and_then(json_text)
+                .or_else(|| json_text(data))
+        }),
         "command/run" => {
             let name = data.get("name").and_then(Value::as_str).unwrap_or_default();
             let args = data.get("args").and_then(Value::as_str).unwrap_or_default();
@@ -3441,6 +3748,161 @@ pub fn stop_dsh_host_events(state: State<'_, DshWebUiManager>) {
     }
 }
 
+// ── session.export (会话日志 ZIP) ─────────────────────────────────────────────
+
+/// One session-log archive written to a local path.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DshSessionLogExport {
+    pub path: String,
+    pub bytes: u64,
+}
+
+/// Validate the caller-chosen archive destination the way the markdown export
+/// does: absolute, `.zip`, and inside an existing directory. The parent is
+/// canonicalized so a symlinked or `..`-relative directory resolves before any
+/// byte is written.
+fn validate_dsh_export_path(output_path: &str) -> Result<PathBuf, String> {
+    let path = Path::new(output_path);
+    if !path.is_absolute() {
+        return Err("Output path must be absolute".into());
+    }
+    let has_zip_ext = path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .map(|extension| extension.eq_ignore_ascii_case("zip"))
+        .unwrap_or(false);
+    if !has_zip_ext {
+        return Err("Output path must end with .zip".into());
+    }
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .ok_or_else(|| "Output path has no parent directory".to_string())?;
+    let canonical_parent = parent
+        .canonicalize()
+        .map_err(|error| format!("Cannot resolve output directory: {error}"))?;
+    if !canonical_parent.is_dir() {
+        return Err("Output directory does not exist".into());
+    }
+    let file_name = path
+        .file_name()
+        .ok_or_else(|| "Output path has no file name".to_string())?;
+    Ok(canonical_parent.join(file_name))
+}
+
+/// Describe a failed `session.export` response. The endpoint answers plain text
+/// (400 bad query, 404 unknown session, 500/501 export services unavailable),
+/// so the body is worth surfacing — but only a bounded prefix of it.
+async fn dsh_export_http_error(response: reqwest::Response) -> String {
+    let status = response.status();
+    let text = response.text().await.unwrap_or_default();
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        format!("Session log export returned HTTP {status}")
+    } else {
+        let snippet = &trimmed[..trimmed.len().min(200)];
+        format!("Session log export returned HTTP {status}: {snippet}")
+    }
+}
+
+/// Download one session's log archive to a local path.
+///
+/// The Harness Web half hands `GET /api/session.export` to the browser download
+/// manager, which owns the destination; the README is explicit that no Host path
+/// is returned. Aeroric has no browser, so the caller supplies `output_path`
+/// from a native save dialog and the streamed ZIP is written there.
+#[tauri::command]
+pub async fn export_dsh_session_log(
+    state: State<'_, DshWebUiManager>,
+    session_id: String,
+    output_path: String,
+    include_descendants: Option<bool>,
+) -> Result<DshSessionLogExport, String> {
+    let session_id = session_id.trim();
+    if session_id.is_empty() {
+        return Err("A session id is required to export a session log".to_string());
+    }
+    let target = validate_dsh_export_path(&output_path)?;
+    let api = get_dsh_api_for_session(&state, session_id).await?;
+    // No total timeout: a session tree with attachments legitimately streams for
+    // minutes. A read timeout still fails a stalled connection rather than
+    // leaving the export busy forever.
+    let client = reqwest::Client::builder()
+        .read_timeout(Duration::from_secs(60))
+        .build()
+        .map_err(|error| format!("Failed to create DSH export client: {error}"))?;
+    let url = format!("{}/api/session.export", api.base_url);
+    let query = [
+        ("sessionId", session_id.to_string()),
+        (
+            "includeDescendants",
+            include_descendants.unwrap_or(true).to_string(),
+        ),
+    ];
+    // HEAD first, as the Harness browser half does: the endpoint reports a bad
+    // query, an unknown session, or an unmounted export service before
+    // producing a single archive byte, so those failures never touch the disk.
+    let head = client
+        .head(&url)
+        .query(&query)
+        .send()
+        .await
+        .map_err(|error| format!("Session log export request failed: {error}"))?;
+    if !head.status().is_success() {
+        return Err(dsh_export_http_error(head).await);
+    }
+    let response = client
+        .get(&url)
+        .query(&query)
+        .send()
+        .await
+        .map_err(|error| format!("Session log export request failed: {error}"))?;
+    if !response.status().is_success() {
+        return Err(dsh_export_http_error(response).await);
+    }
+    // Stream into a sibling `.part` file and rename once complete. A mid-stream
+    // failure must not leave a truncated archive at the chosen path, which may
+    // be a file the user already agreed to replace.
+    let mut partial = target.clone().into_os_string();
+    partial.push(".part");
+    let partial = PathBuf::from(partial);
+    let mut file = std::fs::File::create(&partial)
+        .map_err(|error| format!("Cannot write {}: {error}", partial.display()))?;
+    let mut bytes: u64 = 0;
+    let mut stream = response.bytes_stream();
+    while let Some(chunk) = stream.next().await {
+        let chunk = match chunk {
+            Ok(chunk) => chunk,
+            Err(error) => {
+                drop(file);
+                let _ = std::fs::remove_file(&partial);
+                return Err(format!("Session log export stream failed: {error}"));
+            }
+        };
+        if let Err(error) = std::io::Write::write_all(&mut file, &chunk) {
+            drop(file);
+            let _ = std::fs::remove_file(&partial);
+            return Err(format!("Cannot write {}: {error}", partial.display()));
+        }
+        bytes += chunk.len() as u64;
+    }
+    if let Err(error) = std::io::Write::flush(&mut file) {
+        drop(file);
+        let _ = std::fs::remove_file(&partial);
+        return Err(format!("Cannot write {}: {error}", partial.display()));
+    }
+    drop(file);
+    std::fs::rename(&partial, &target).map_err(|error| {
+        let _ = std::fs::remove_file(&partial);
+        format!("Cannot save {}: {error}", target.display())
+    })?;
+    Ok(DshSessionLogExport {
+        path: target.to_string_lossy().to_string(),
+        bytes,
+    })
+}
+
 // ── host.pickDirectory ────────────────────────────────────────────────────────
 
 /// Present a native directory picker and return the chosen path.
@@ -3459,4 +3921,219 @@ pub async fn pick_dsh_host_directory(
     // async command because it is wrapped in its own thread by the plugin.
     let result = builder.blocking_pick_folder();
     Ok(json!({ "path": result.map(|fp| fp.to_string()) }))
+}
+
+// ── 测试 ──────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn call_payload(view: Value) -> Value {
+        json!({ "event": { "type": "tool/call" }, "view": { "for": "call", "view": view } })
+    }
+
+    fn result_payload(view: Value) -> Value {
+        json!({ "event": { "type": "tool/result" }, "view": { "for": "result", "view": view } })
+    }
+
+    #[test]
+    fn renders_terminal_result_output_and_failing_exit() {
+        let rendered = render_tool_event_view(
+            &result_payload(json!({ "title": "pnpm lint", "card": "terminal", "output": "2 problems\n", "exitCode": 1 })),
+            "result",
+        )
+        .expect("terminal result renders");
+        assert!(rendered.contains("pnpm lint"));
+        assert!(rendered.contains("2 problems\r\n"));
+        assert!(rendered.contains("✖ exit 1"));
+        // Every emitted line carries an explicit CR; the xterm view runs with
+        // convertEol disabled, so a bare LF would staircase the output.
+        assert!(!rendered.contains("problems\n\r"));
+    }
+
+    #[test]
+    fn reads_a_terminal_result_with_both_fields_as_the_signal() {
+        let rendered = render_tool_event_view(
+            &result_payload(json!({ "card": "terminal", "exitCode": 0, "signal": "SIGKILL" })),
+            "result",
+        )
+        .expect("terminal result renders");
+        assert!(rendered.contains("✖ SIGKILL"));
+        assert!(!rendered.contains("exit"));
+    }
+
+    #[test]
+    fn renders_an_edit_as_removed_then_added_rows() {
+        let rendered = render_tool_event_view(
+            &result_payload(json!({
+                "card": "diff",
+                "diffs": [{ "path": "src/a.ts", "oldText": "keep\nold\ntail", "newText": "keep\nnew\ntail" }],
+            })),
+            "result",
+        )
+        .expect("diff result renders");
+        assert!(rendered.contains("src/a.ts"));
+        assert!(rendered.contains("-old"));
+        assert!(rendered.contains("+new"));
+        // The unchanged prefix and suffix are trimmed rather than reprinted.
+        assert!(!rendered.contains("keep"));
+        assert!(!rendered.contains("tail"));
+    }
+
+    #[test]
+    fn renders_a_created_file_as_all_additions() {
+        let rendered = render_tool_event_view(
+            &result_payload(json!({
+                "card": "diff",
+                "diffs": [{ "path": "src/new.ts", "oldText": null, "newText": "one\ntwo" }],
+            })),
+            "result",
+        )
+        .expect("diff result renders");
+        assert!(rendered.contains("src/new.ts (new file)"));
+        assert!(rendered.contains("+one"));
+        assert!(rendered.contains("+two"));
+        assert!(!rendered.contains("-"));
+    }
+
+    #[test]
+    fn renders_search_and_read_with_file_line_numbers() {
+        let matches = render_tool_event_view(
+            &result_payload(json!({
+                "card": "search",
+                "shape": "matches",
+                "truncated": true,
+                "files": [{ "path": "src/a.ts", "matches": [{ "lineNumber": 12, "line": "const x = 1;" }] }],
+            })),
+            "result",
+        )
+        .expect("search result renders");
+        assert!(matches.contains("src/a.ts"));
+        assert!(matches.contains("12 │ "));
+        assert!(matches.contains("const x = 1;"));
+        assert!(matches.contains("truncated by the harness"));
+
+        let read = render_tool_event_view(
+            &result_payload(json!({
+                "card": "read",
+                "path": "src/a.ts",
+                "offset": 40,
+                "totalLines": 120,
+                "lines": [{ "number": 40, "text": "line forty" }],
+            })),
+            "result",
+        )
+        .expect("read result renders");
+        assert!(read.contains("src/a.ts — 1 of 120 lines from 40"));
+        // The gutter is dim and reset before the line text, so the number and the
+        // text are not contiguous in the rendered string.
+        assert!(read.contains("40 │ "));
+        assert!(read.contains("line forty"));
+    }
+
+    #[test]
+    fn renders_web_search_sources_and_fetch_status() {
+        let search = render_tool_event_view(
+            &result_payload(json!({
+                "card": "web",
+                "kind": "search",
+                "answer": "Yes.",
+                "sources": [{ "url": "https://example.com/a", "title": "Example A" }],
+            })),
+            "result",
+        )
+        .expect("web search renders");
+        assert!(search.contains("Yes."));
+        assert!(search.contains("1. Example A"));
+        assert!(search.contains("https://example.com/a"));
+
+        let fetch = render_tool_event_view(
+            &result_payload(json!({ "card": "web", "kind": "fetch", "url": "https://example.com", "statusCode": 503 })),
+            "result",
+        )
+        .expect("web fetch renders");
+        assert!(fetch.contains("503 https://example.com"));
+    }
+
+    #[test]
+    fn lists_only_paths_for_a_pending_diff_call() {
+        // The result repeats the change once applied, so an append-only terminal
+        // prints the body there instead of twice.
+        let rendered = render_tool_event_view(
+            &call_payload(json!({
+                "card": "diff",
+                "title": "Edit a.ts",
+                "diffs": [{ "path": "src/a.ts", "oldText": "old", "newText": "new" }],
+            })),
+            "call",
+        )
+        .expect("diff call renders");
+        assert!(rendered.contains("▸ Edit a.ts"));
+        assert!(rendered.contains("src/a.ts"));
+        assert!(!rendered.contains("+new"));
+    }
+
+    #[test]
+    fn declines_a_view_that_addresses_the_other_event_kind_or_an_unknown_card() {
+        assert!(
+            render_tool_event_view(&result_payload(json!({ "card": "terminal" })), "call")
+                .is_none()
+        );
+        assert!(render_tool_event_view(
+            &call_payload(json!({ "card": "sparkline", "title": "x" })),
+            "call"
+        )
+        .is_none());
+        assert!(
+            render_tool_event_view(&call_payload(json!({ "card": "terminal" })), "call").is_none()
+        );
+        // A generic result view with no replacement title says nothing the raw
+        // event does not already carry.
+        assert!(
+            render_tool_event_view(&result_payload(json!({ "card": "generic" })), "result")
+                .is_none()
+        );
+        assert!(
+            render_tool_event_view(&json!({ "event": { "type": "tool/call" } }), "call").is_none()
+        );
+    }
+
+    #[test]
+    fn rejects_an_export_destination_before_any_request_is_sent() {
+        assert_eq!(
+            validate_dsh_export_path("relative/log.zip"),
+            Err("Output path must be absolute".to_string())
+        );
+        let absolute = if cfg!(windows) {
+            "C:\\logs\\session.tar"
+        } else {
+            "/tmp/session.tar"
+        };
+        assert_eq!(
+            validate_dsh_export_path(absolute),
+            Err("Output path must end with .zip".to_string())
+        );
+        let missing = if cfg!(windows) {
+            "C:\\aeroric-missing-dir-9f2\\session.zip"
+        } else {
+            "/tmp/aeroric-missing-dir-9f2/session.zip"
+        };
+        assert!(validate_dsh_export_path(missing)
+            .expect_err("a missing directory is rejected")
+            .starts_with("Cannot resolve output directory"));
+    }
+
+    #[test]
+    fn resolves_an_export_destination_against_its_canonical_directory() {
+        let dir = std::env::temp_dir()
+            .canonicalize()
+            .expect("the temp directory resolves");
+        let requested = dir.join(".").join("dsh-session-x.zip");
+        let resolved = validate_dsh_export_path(&requested.to_string_lossy())
+            .expect("an existing directory resolves");
+        // The `.` segment is gone and the chosen filename is preserved, so the
+        // rename target cannot land outside the directory the dialog returned.
+        assert_eq!(resolved, dir.join("dsh-session-x.zip"));
+    }
 }

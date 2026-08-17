@@ -662,6 +662,8 @@ pub fn run() {
             dsh_webui::stop_dsh_host_events,
             // host.pickDirectory
             dsh_webui::pick_dsh_host_directory,
+            // session.export (会话日志 ZIP)
+            dsh_webui::export_dsh_session_log,
             app_settings::detect_agent_paths,
             app_settings::detect_agent_versions_for_settings,
             app_settings::detect_agent_version,

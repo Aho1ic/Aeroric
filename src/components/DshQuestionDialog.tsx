@@ -169,7 +169,8 @@ export function DshQuestionDialog({
             gap: 12,
             padding: "18px 20px",
             borderBottom: "1px solid var(--border-dim)",
-            background: "color-mix(in srgb, var(--accent-subtle, rgba(59, 130, 246, 0.1)) 60%, transparent)",
+            background:
+              "color-mix(in srgb, var(--accent-subtle, rgba(59, 130, 246, 0.1)) 60%, transparent)",
           }}
         >
           <HelpCircle size={20} color="var(--accent)" aria-hidden />
@@ -254,7 +255,9 @@ export function DshQuestionDialog({
                         <button
                           key={option.label}
                           type="button"
-                          onClick={() => toggleOption(question.id, option.label, question.multiSelect ?? false)}
+                          onClick={() =>
+                            toggleOption(question.id, option.label, question.multiSelect ?? false)
+                          }
                           style={{
                             display: "flex",
                             alignItems: "flex-start",
@@ -337,7 +340,8 @@ export function DshQuestionDialog({
                     }}
                     onFocus={(e) => {
                       e.currentTarget.style.borderColor = "var(--ring)";
-                      e.currentTarget.style.boxShadow = "0 0 0 3px color-mix(in srgb, var(--ring) 18%, transparent)";
+                      e.currentTarget.style.boxShadow =
+                        "0 0 0 3px color-mix(in srgb, var(--ring) 18%, transparent)";
                     }}
                     onBlur={(e) => {
                       e.currentTarget.style.borderColor = "var(--border-medium)";
@@ -378,13 +382,7 @@ export function DshQuestionDialog({
             background: "color-mix(in srgb, var(--bg-card) 94%, transparent)",
           }}
         >
-          <Button
-            variant="outline"
-            size="sm"
-            icon={X}
-            disabled={submitting}
-            onClick={handleCancel}
-          >
+          <Button variant="outline" size="sm" icon={X} disabled={submitting} onClick={handleCancel}>
             {t("dsh.questionCancel")}
           </Button>
           <Button

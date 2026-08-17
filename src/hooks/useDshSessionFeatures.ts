@@ -5,19 +5,17 @@ import type { DshSessionHistory } from "../types";
 import {
   mergeDshSessionEvents,
   projectDshSessionEvents,
+  readDshHistoryPage,
   type DshSessionEvent,
 } from "../dshSessionFeatures";
+import { parseDshToolEventView, type DshToolEventView } from "../dshToolViews";
 
 interface DshSessionEventFrame {
   type: "session/event";
   sessionId: string;
   event: DshSessionEvent;
-}
-
-function historyEvents(history: DshSessionHistory): DshSessionEvent[] {
-  return history.events.filter((event): event is DshSessionEvent => (
-    typeof event === "object" && event !== null && typeof (event as { type?: unknown }).type === "string"
-  ));
+  /** Host-computed render intent for a tool event; absent otherwise. */
+  view?: unknown;
 }
 
 function firstSeq(events: readonly DshSessionEvent[]): number | null {
@@ -32,6 +30,7 @@ function firstSeq(events: readonly DshSessionEvent[]): number | null {
 /** History-paged plus live event feed used by the advanced DSH session UI. */
 export function useDshSessionFeatures(sessionId: string) {
   const [events, setEvents] = useState<DshSessionEvent[]>([]);
+  const [views, setViews] = useState<Record<number, DshToolEventView>>({});
   const [projections, setProjections] = useState<Record<string, unknown>>({});
   const [loading, setLoading] = useState(true);
   const [loadingOlder, setLoadingOlder] = useState(false);
@@ -43,10 +42,21 @@ export function useDshSessionFeatures(sessionId: string) {
     setEvents((current) => mergeDshSessionEvents(current, incoming));
   }, []);
 
+  /**
+   * A view is a per-delivery derivation the Harness never persists, so the
+   * newest delivery for a seq wins and an absent view leaves the prior one in
+   * place rather than clearing it.
+   */
+  const mergeViews = useCallback((incoming: Readonly<Record<number, DshToolEventView>>) => {
+    if (Object.keys(incoming).length === 0) return;
+    setViews((current) => ({ ...current, ...incoming }));
+  }, []);
+
   useEffect(() => {
     let disposed = false;
     let unlisten: UnlistenFn | undefined;
     setEvents([]);
+    setViews({});
     setProjections({});
     setLoading(true);
     setLoadingOlder(false);
@@ -56,7 +66,12 @@ export function useDshSessionFeatures(sessionId: string) {
 
     void listen<DshSessionEventFrame>("dsh-session-event", (envelope) => {
       if (envelope.payload.sessionId !== sessionId) return;
-      merge([envelope.payload.event]);
+      const event = envelope.payload.event;
+      merge([event]);
+      const view = parseDshToolEventView(envelope.payload.view);
+      if (view !== undefined && typeof event.seq === "number") {
+        mergeViews({ [event.seq]: view });
+      }
     }).then((release) => {
       if (disposed) release();
       else unlisten = release;
@@ -65,24 +80,28 @@ export function useDshSessionFeatures(sessionId: string) {
     void invoke<DshSessionHistory>("get_dsh_session_history", {
       sessionId,
       maxMessages: 200,
-    }).then((history) => {
-      if (disposed) return;
-      const page = historyEvents(history);
-      merge(page);
-      cursorRef.current = firstSeq(page);
-      setHasMore(history.hasMore && cursorRef.current !== null);
-      setProjections(history.projections?.values ?? {});
-    }).catch((caught) => {
-      if (!disposed) setError(String(caught));
-    }).finally(() => {
-      if (!disposed) setLoading(false);
-    });
+    })
+      .then((history) => {
+        if (disposed) return;
+        const page = readDshHistoryPage(history.events);
+        merge(page.events);
+        mergeViews(page.views);
+        cursorRef.current = firstSeq(page.events);
+        setHasMore(history.hasMore && cursorRef.current !== null);
+        setProjections(history.projections?.values ?? {});
+      })
+      .catch((caught) => {
+        if (!disposed) setError(String(caught));
+      })
+      .finally(() => {
+        if (!disposed) setLoading(false);
+      });
 
     return () => {
       disposed = true;
       unlisten?.();
     };
-  }, [merge, sessionId]);
+  }, [merge, mergeViews, sessionId]);
 
   const loadOlder = useCallback(async () => {
     const beforeSeq = cursorRef.current;
@@ -95,19 +114,20 @@ export function useDshSessionFeatures(sessionId: string) {
         beforeSeq,
         maxMessages: 200,
       });
-      const page = historyEvents(history);
-      merge(page);
-      const next = firstSeq(page);
+      const page = readDshHistoryPage(history.events);
+      merge(page.events);
+      mergeViews(page.views);
+      const next = firstSeq(page.events);
       cursorRef.current = next === null ? beforeSeq : Math.min(beforeSeq, next);
-      setHasMore(history.hasMore && page.length > 0 && cursorRef.current > 0);
+      setHasMore(history.hasMore && page.events.length > 0 && cursorRef.current > 0);
       if (history.projections?.values) setProjections(history.projections.values);
     } catch (caught) {
       setError(String(caught));
     } finally {
       setLoadingOlder(false);
     }
-  }, [loadingOlder, merge, sessionId]);
+  }, [loadingOlder, merge, mergeViews, sessionId]);
 
-  const features = useMemo(() => projectDshSessionEvents(events), [events]);
+  const features = useMemo(() => projectDshSessionEvents(events, views), [events, views]);
   return { features, projections, loading, loadingOlder, hasMore, error, loadOlder };
 }
