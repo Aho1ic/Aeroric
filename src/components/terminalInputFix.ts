@@ -12,6 +12,28 @@ type TerminalWithWindowsImeInternals = Terminal & {
   _core?: WindowsImeTerminalCore;
 };
 
+const terminalTextareaInternalFocusResetDepth = new WeakMap<HTMLTextAreaElement, number>();
+
+export function beginTerminalTextareaInternalFocusReset(textarea: HTMLTextAreaElement): void {
+  terminalTextareaInternalFocusResetDepth.set(
+    textarea,
+    (terminalTextareaInternalFocusResetDepth.get(textarea) ?? 0) + 1,
+  );
+}
+
+export function endTerminalTextareaInternalFocusReset(textarea: HTMLTextAreaElement): void {
+  const depth = terminalTextareaInternalFocusResetDepth.get(textarea) ?? 0;
+  if (depth <= 1) {
+    terminalTextareaInternalFocusResetDepth.delete(textarea);
+    return;
+  }
+  terminalTextareaInternalFocusResetDepth.set(textarea, depth - 1);
+}
+
+function isTerminalTextareaInternalFocusReset(textarea: HTMLTextAreaElement): boolean {
+  return (terminalTextareaInternalFocusResetDepth.get(textarea) ?? 0) > 0;
+}
+
 // 诊断开关：置为 true 会在 webview 控制台输出 IME 事件流（需 release 包启用
 // tauri "devtools" feature 才能在 app 内打开开发者工具）。排查 IME 问题时开启，
 // 正式使用置为 false 以避免控制台噪声。详见 docs/terminal-ime-switch-fix.md。
@@ -691,11 +713,20 @@ export function attachLinuxIMEFix(
     textareaInputClientResetTimer = null;
   };
 
-  const restoreTextareaAfterCjkReset = () => {
-    if (textareaDisabledByCjkReset && !textareaDisabledBeforeCjkReset) {
-      textarea.disabled = false;
+  const finishTextareaInputClientReset = (refocus: boolean) => {
+    if (!textareaDisabledByCjkReset) return;
+    try {
+      if (!textareaDisabledBeforeCjkReset) {
+        textarea.disabled = false;
+      }
+      clearTextarea();
+      if (refocus && !textarea.disabled) {
+        textarea.focus({ preventScroll: true });
+      }
+    } finally {
+      textareaDisabledByCjkReset = false;
+      endTerminalTextareaInternalFocusReset(textarea);
     }
-    textareaDisabledByCjkReset = false;
   };
   const resetTextareaInputClientAfterCjkCommit = () => {
     clearTextareaInputClientReset();
@@ -706,15 +737,12 @@ export function attachLinuxIMEFix(
     if (!textareaDisabledByCjkReset) {
       textareaDisabledBeforeCjkReset = textarea.disabled;
       textareaDisabledByCjkReset = true;
+      beginTerminalTextareaInternalFocusReset(textarea);
     }
     textarea.disabled = true;
     textareaInputClientResetTimer = globalThis.setTimeout(() => {
       textareaInputClientResetTimer = null;
-      restoreTextareaAfterCjkReset();
-      clearTextarea();
-      if (!textarea.disabled) {
-        textarea.focus({ preventScroll: true });
-      }
+      finishTextareaInputClientReset(true);
     }, TEXTAREA_INPUT_CLIENT_RESET_MS);
   };
 
@@ -1500,7 +1528,17 @@ export function attachLinuxIMEFix(
     }
   };
 
-  const handleBlurCapture = () => {
+  const handleFocusCapture = (event: FocusEvent) => {
+    if (isTerminalTextareaInternalFocusReset(textarea)) {
+      event.stopImmediatePropagation();
+    }
+  };
+
+  const handleBlurCapture = (event: FocusEvent) => {
+    if (isTerminalTextareaInternalFocusReset(textarea)) {
+      event.stopImmediatePropagation();
+      return;
+    }
     imeDbg("textarea blur", { internalIsComposing: isComposing, compositionText });
     commitActiveRomanizedComposition();
   };
@@ -1623,6 +1661,7 @@ export function attachLinuxIMEFix(
   keydownTarget.addEventListener("keydown", handleKeyDownCapture, true);
   keydownTarget.addEventListener("keypress", handleKeyPressCapture, true);
   keydownTarget.addEventListener("keyup", handleKeyUpCapture, true);
+  textarea.addEventListener("focus", handleFocusCapture, true);
   textarea.addEventListener("blur", handleBlurCapture, true);
   window.addEventListener("blur", handleWindowBlur);
 
@@ -1636,6 +1675,7 @@ export function attachLinuxIMEFix(
       keydownTarget.removeEventListener("keydown", handleKeyDownCapture, true);
       keydownTarget.removeEventListener("keypress", handleKeyPressCapture, true);
       keydownTarget.removeEventListener("keyup", handleKeyUpCapture, true);
+      textarea.removeEventListener("focus", handleFocusCapture, true);
       textarea.removeEventListener("blur", handleBlurCapture, true);
       window.removeEventListener("blur", handleWindowBlur);
       clearPendingCompositionCommit();
@@ -1644,7 +1684,7 @@ export function attachLinuxIMEFix(
       textareaClearGeneration += 1;
       clearScheduledTextareaClears();
       clearTextareaInputClientReset();
-      restoreTextareaAfterCjkReset();
+      finishTextareaInputClientReset(false);
       compositionObserver?.disconnect();
       disposable.dispose();
     },

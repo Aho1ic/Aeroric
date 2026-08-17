@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { PromptSkill } from "../types";
 import { useI18n } from "../i18n";
@@ -202,11 +202,16 @@ export function DshSlashPicker({
   command,
   onPick,
   onBack,
+  onDismiss,
+  projectPath,
+  keyboardTargetRef,
 }: {
   command: DshSlashCommand;
   onPick: (arg: string) => void;
   onBack: () => void;
   onDismiss: () => void;
+  projectPath?: string;
+  keyboardTargetRef?: RefObject<HTMLElement | null>;
 }) {
   const { t } = useI18n();
   const [items, setItems] = useState<{ value: string; label: string }[] | null>(null);
@@ -215,7 +220,7 @@ export function DshSlashPicker({
   const [active, setActive] = useState(0);
 
   // Resolve picker candidates from the appropriate dsh RPC.
-  useState(() => {
+  useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
@@ -232,9 +237,10 @@ export function DshSlashPicker({
         } else if (command.popup === "skill") {
           // list_project_skills is the Aeroric-side skill catalog (works for
           // any agent); dsh-side skills surface via session.prompt /skill.
-          const skills = await invoke<PromptSkill[]>("list_project_skills").catch(
-            () => [] as PromptSkill[],
-          );
+          const skills = await invoke<PromptSkill[]>("list_project_skills", {
+            ...(projectPath ? { projectPath } : {}),
+            agent: "dsh",
+          }).catch(() => [] as PromptSkill[]);
           rows = (skills ?? []).map((s) => ({ value: s.name, label: s.name }));
         } else if (command.popup === "permission") {
           rows = [
@@ -261,7 +267,48 @@ export function DshSlashPicker({
     return () => {
       cancelled = true;
     };
-  });
+  }, [command.popup, projectPath]);
+
+  useEffect(() => {
+    const handleEditorKeyDown = (event: KeyboardEvent) => {
+      const activeElement = document.activeElement;
+      const keyboardTarget = keyboardTargetRef?.current;
+      if (
+        event.isComposing ||
+        !(activeElement instanceof HTMLElement) ||
+        (keyboardTarget
+          ? activeElement !== keyboardTarget
+          : !activeElement.classList.contains("prompt-editor"))
+      ) {
+        return;
+      }
+      if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        onDismiss();
+        return;
+      }
+      if (event.key === "ArrowDown" && items && items.length > 0) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        setActive((index) => Math.min(index + 1, items.length - 1));
+        return;
+      }
+      if (event.key === "ArrowUp" && items && items.length > 0) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        setActive((index) => Math.max(index - 1, 0));
+        return;
+      }
+      if ((event.key === "Enter" || event.key === "Tab") && items?.[active]) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        onPick(items[active].value);
+      }
+    };
+    document.addEventListener("keydown", handleEditorKeyDown, true);
+    return () => document.removeEventListener("keydown", handleEditorKeyDown, true);
+  }, [active, items, keyboardTargetRef, onDismiss, onPick]);
 
   return (
     <div
@@ -312,7 +359,10 @@ export function DshSlashPicker({
             role="option"
             aria-selected={idx === active}
             onMouseEnter={() => setActive(idx)}
-            onClick={() => onPick(row.value)}
+            onMouseDown={(event) => {
+              event.preventDefault();
+              onPick(row.value);
+            }}
             style={{
               width: "100%",
               textAlign: "left",
@@ -333,7 +383,10 @@ export function DshSlashPicker({
       )}
       <button
         type="button"
-        onClick={onBack}
+        onMouseDown={(event) => {
+          event.preventDefault();
+          onBack();
+        }}
         style={{
           width: "100%",
           textAlign: "left",

@@ -1621,9 +1621,6 @@ pub async fn run_dsh_task(
     client_time_zone: Option<String>,
     on_output: Channel<String>,
 ) -> Result<(), String> {
-    if prompt.trim().is_empty() && session_id.is_none() {
-        return Err("DeepSeek Harness tasks require a prompt".to_string());
-    }
     let web = ensure_dsh_webui(&agent, &state).await?;
     let base_url = web
         .url

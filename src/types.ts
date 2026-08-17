@@ -1001,23 +1001,6 @@ export interface MarketplaceInstallRecord {
   targetPath: string;
 }
 
-// ── DSH extended types ────────────────────────────────────────────────────────
-
-export interface DshSessionSummary {
-  sessionId: string;
-  updatedAt: number;
-  running: boolean;
-  blank: boolean;
-  parentSessionId?: string;
-  origin?: "subagent" | string;
-  cwd?: string;
-  agentPreset?: string;
-  projections?: {
-    asOfSeq: number;
-    values: Record<string, unknown>;
-  };
-}
-
 export interface DshSessionHistory {
   events: unknown[];
   hasMore: boolean;
@@ -1025,35 +1008,6 @@ export interface DshSessionHistory {
     asOfSeq: number;
     values: Record<string, unknown>;
   };
-}
-
-export interface DshWorkspace {
-  workspaceId: string;
-  path: string;
-  title: string;
-  sessionIds: string[];
-  createdAt: string;
-  updatedAt: string;
-}
-
-export interface DshWorkspaceList {
-  items: DshWorkspace[];
-  archivedSessionIds: string[];
-}
-
-export interface DshCredentialView {
-  configured: boolean;
-  source?: string;
-  writable: boolean;
-}
-
-export interface DshProviderInfo {
-  provider?: string;
-  settingsNs: string;
-  displayName?: string;
-  settingsPath?: string[];
-  active: boolean;
-  declared?: boolean;
 }
 
 export interface DshModelCatalogFailure {
@@ -1087,23 +1041,6 @@ export interface DshDiscoveredModel {
   name?: string;
   contextWindow?: number;
   maxTokens?: number;
-}
-
-export interface DshSubagentSummary {
-  sessionId: string;
-  parentSessionId: string;
-  running: boolean;
-  cwd?: string;
-  mode?: "one-shot" | "continuable" | string;
-  label?: string;
-}
-
-export interface DshGoal {
-  goalId: string;
-  title: string;
-  revision: number;
-  status: string;
-  createdAt?: string;
 }
 
 export interface DshHostInfo {
@@ -1148,14 +1085,6 @@ export interface DshPresetList {
   }>;
   authorable: boolean;
   hasDocument: boolean;
-}
-
-export interface DshSkillEntry {
-  id: string;
-  name?: string;
-  description?: string;
-  whenToUse?: string;
-  modelInvocable?: boolean;
 }
 
 // ── DeepSeek Harness live session projection / jobs / queue types ────────────

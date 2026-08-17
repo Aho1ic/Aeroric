@@ -695,7 +695,7 @@ fn toml_table_key(value: &str) -> String {
     format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
 }
 
-/// 为 DeepSeek Harness(headless profile)构建 CommandBuilder。
+/// 为 DeepSeek Harness 构建 CommandBuilder。
 ///
 /// 权限映射(计划 D5)通过 `DSH_PERMISSION_MODE` env 注入——base bundle 的
 /// permission presets row 原生读取该变量,headless app 无需权限 CLI flag:
@@ -705,11 +705,14 @@ fn toml_table_key(value: &str) -> String {
 fn build_dsh_cmd(
     launch: &crate::app_settings::AgentLaunchSpec,
     permission_mode: &str,
+    interactive: bool,
 ) -> CommandBuilder {
     let mut c = CommandBuilder::new(&launch.program);
     c.args(&launch.args);
-    c.arg("--profile");
-    c.arg("headless");
+    if !interactive {
+        c.arg("--profile");
+        c.arg("headless");
+    }
     let dsh_permission = match permission_mode {
         "ask" => Some("read-only"),
         "auto_edit" => Some("workspace-write"),
@@ -1447,13 +1450,6 @@ pub async fn run_task(
     )?;
     let speed = normalized_speed_for(speed.as_deref(), launch.family)?;
 
-    // dsh headless 是一次性任务进程:没有交互 composer,空 prompt 无法进入交互模式。
-    if is_dsh && final_prompt.is_empty() {
-        return Err(
-            "DeepSeek Harness tasks require a prompt (headless mode is one-shot)".to_string(),
-        );
-    }
-
     // hook 链路是否可信:可信则注入 AERORIC_* 守卫变量让 hook 脚本上报事件,会话发现
     // 与状态全部由 event_watcher 驱动、跳过 /status 轮询 watcher;不可信(无 node /
     // 未安装 / 版本过低)则不注入 env、并回退轮询路径——否则旧版但仍支持 hook 的 agent
@@ -1588,7 +1584,7 @@ pub async fn run_task(
     };
 
     let mut cmd = if let Some((dsh_home_path, dsh_patches)) = dsh_launch_ctx.as_ref() {
-        let mut c = build_dsh_cmd(&launch, &permission_mode);
+        let mut c = build_dsh_cmd(&launch, &permission_mode, final_prompt.is_empty());
         add_dsh_launch_args(&mut c, dsh_home_path, dsh_patches);
         // prompt 位置参数必须在所有 launcher flag 之后;`--` 防止以 `-` 开头的
         // prompt 被 launcher 误解析。
@@ -1710,8 +1706,8 @@ pub async fn run_task(
             created_at,
         );
     }
-    // dsh:headless 会话文件在进程启动时创建于托管 home 的项目目录下,
-    // watcher 按创建时间发现并认领,广播 task-session(family = "dsh")。
+    // dsh 会话文件在进程启动时创建于托管 home 的项目目录下；headless
+    // 一次性任务和空 Prompt 交互会话都由同一 watcher 认领。
     if is_dsh {
         let since_ms = created_at.unwrap_or_else(|| {
             SystemTime::now()
@@ -1728,8 +1724,8 @@ pub async fn run_task(
             since_ms,
         );
     }
-    // dsh 无 /status 命令且 headless 无 composer,状态由退出码驱动(会话发现在
-    // Phase 2 由 transcript watcher 接管),不启动轮询 watcher。
+    // dsh 无 /status 命令，状态由退出码驱动；会话发现由 transcript watcher
+    // 接管，不启动会向交互输入区写字符的轮询 watcher。
     let needs_status_session_watcher = !is_dsh
         && (pre_session_id.is_none() || is_codex)
         && should_start_status_session_watcher(use_hooks, is_codex, !starts_with_prompt);
@@ -2540,7 +2536,7 @@ mod tests {
             ("auto_edit", "workspace-write"),
             ("full_access", "danger-full-access"),
         ] {
-            let cmd = build_dsh_cmd(&launch, mode);
+            let cmd = build_dsh_cmd(&launch, mode, false);
             assert_eq!(
                 cmd.get_env("DSH_PERMISSION_MODE")
                     .map(|value| value.to_string_lossy().into_owned()),
@@ -2549,7 +2545,7 @@ mod tests {
             );
             assert!(cmd.get_env("DSH_TELEMETRY_DISABLED").is_some());
         }
-        let argv = cmd_argv(&build_dsh_cmd(&launch, "ask"));
+        let argv = cmd_argv(&build_dsh_cmd(&launch, "ask", false));
         assert_eq!(argv, vec!["dsh", "--profile", "headless"]);
         // 权限不进 CLI 参数,只走 env。
         assert!(!argv.iter().any(|arg| arg.contains("permission")));
@@ -2561,7 +2557,7 @@ mod tests {
             program: "dsh".to_string(),
             ..Default::default()
         };
-        let mut cmd = build_dsh_cmd(&launch, "auto_edit");
+        let mut cmd = build_dsh_cmd(&launch, "auto_edit", false);
         let home = PathBuf::from("/tmp/aeroric-dsh-home");
         let patches = vec![
             PathBuf::from("/tmp/aeroric-dsh-home/aeroric.patch.yml"),
@@ -2590,6 +2586,22 @@ mod tests {
             cmd.get_env("DSH_HOME")
                 .map(|value| value.to_string_lossy().into_owned()),
             Some("/tmp/aeroric-dsh-home".to_string())
+        );
+    }
+
+    #[test]
+    fn dsh_empty_prompt_launches_the_interactive_profile() {
+        let launch = crate::app_settings::AgentLaunchSpec {
+            program: "dsh".to_string(),
+            ..Default::default()
+        };
+        let cmd = build_dsh_cmd(&launch, "auto_edit", true);
+
+        assert_eq!(cmd_argv(&cmd), vec!["dsh"]);
+        assert_eq!(
+            cmd.get_env("DSH_PERMISSION_MODE")
+                .map(|value| value.to_string_lossy().into_owned()),
+            Some("workspace-write".to_string())
         );
     }
 

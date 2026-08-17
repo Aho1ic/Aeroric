@@ -9,7 +9,6 @@ import {
   Hand,
   ListChecks,
   Plus,
-  SlashSquare,
   Target,
   Zap,
 } from "lucide-react";
@@ -28,12 +27,12 @@ const PERMS: PermissionMode[] = ["ask", "auto_edit", "full_access"];
 export type ComposeMenu =
   | "more"
   | "agent"
+  | "preset"
   | "permission"
   | "launch"
   | "branch"
   | "model"
   | "send"
-  | "dsh-slash"
   | null;
 
 const DSH_PRESETS = [
@@ -84,7 +83,7 @@ export function composePermissionLabel(mode: PermissionMode) {
 }
 
 export function composeControlOrder(): string[] {
-  return ["more", "agent", "permission", "launch", "branch", "model", "send"];
+  return ["more", "agent", "preset", "permission", "launch", "branch", "model", "send"];
 }
 
 export function nextComposeMenuState(
@@ -242,7 +241,6 @@ export function AgentPermSelector({
   onToggleFastMode,
   dshAgentPreset = "standard",
   onSetDshAgentPreset,
-  onOpenDshSlash,
   onSubmit,
 }: {
   agent: AgentType;
@@ -267,8 +265,6 @@ export function AgentPermSelector({
   onToggleFastMode?: () => void;
   dshAgentPreset?: string;
   onSetDshAgentPreset?: (preset: string) => void;
-  /** Open the dsh slash-command palette (dsh-family agents only). */
-  onOpenDshSlash?: () => void;
   onSubmit: (immediate: boolean) => void;
 }) {
   const { t } = useI18n();
@@ -283,11 +279,17 @@ export function AgentPermSelector({
     }
   };
   const sendShortcutLabel = sendShortcutKeys.join("");
-  const sendLabel = hasContent ? t("newTask.send") : t("newTask.startTerminal");
+  const sendLabel = hasContent
+    ? t("newTask.send")
+    : agentFamily(agent, agentOptions) === "dsh"
+      ? t("newTask.startSession")
+      : t("newTask.startTerminal");
   const controlButtonStyle = compact ? s.toolbarBtnIconOnly : s.toolbarBtn;
   const saveAsTodoDisabled = hasAttachments || !!saveAsTodoDisabledReason;
   const saveAsTodoTitle = hasAttachments ? t("newTask.imagesMustSend") : saveAsTodoDisabledReason;
   const groupedAgents = groupAgentOptions(agentOptions);
+  const currentDshPreset =
+    DSH_PRESETS.find(([value]) => value === dshAgentPreset) ?? DSH_PRESETS[0];
 
   function renderAgentItem(item: AgentType) {
     return (
@@ -403,57 +405,6 @@ export function AgentPermSelector({
                   onToggle={onToggleFastMode}
                 />
               )}
-              {agentFamily(agent, agentOptions) === "dsh" && onSetDshAgentPreset && (
-                <label
-                  style={{
-                    ...s.toolbarMenuItem,
-                    width: "100%",
-                    cursor: "pointer",
-                    gap: 8,
-                  }}
-                >
-                  <BookmarkPlus size={15} strokeWidth={2} color="var(--text-muted)" />
-                  <span style={{ flex: 1 }}>{t("newTask.dshAgentPreset")}</span>
-                  <select
-                    aria-label={t("newTask.dshAgentPreset")}
-                    value={dshAgentPreset}
-                    onChange={(event) => onSetDshAgentPreset(event.currentTarget.value)}
-                    style={{
-                      maxWidth: 130,
-                      border: "1px solid var(--border-medium)",
-                      borderRadius: 6,
-                      background: "var(--bg-input)",
-                      color: "var(--text-primary)",
-                      padding: "3px 5px",
-                    }}
-                  >
-                    {DSH_PRESETS.map(([value, label]) => (
-                      <option key={value} value={value}>
-                        {t(label)}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-              )}
-              {agentFamily(agent, agentOptions) === "dsh" && onOpenDshSlash && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setOpenMenu(null);
-                    onOpenDshSlash();
-                  }}
-                  style={{
-                    ...s.toolbarMenuItem,
-                    width: "100%",
-                    background: "transparent",
-                    cursor: "pointer",
-                    gap: 8,
-                  }}
-                >
-                  <SlashSquare size={15} strokeWidth={2} color="var(--text-muted)" />
-                  <span style={{ flex: 1 }}>{t("dsh.slash.title")}</span>
-                </button>
-              )}
             </Popover.Content>
           </Popover.Portal>
         </Popover.Root>
@@ -513,6 +464,72 @@ export function AgentPermSelector({
             </Select.Content>
           </Select.Portal>
         </Select.Root>
+
+        {agentFamily(agent, agentOptions) === "dsh" && onSetDshAgentPreset && (
+          <Select.Root
+            value={dshAgentPreset}
+            open={openMenu === "preset"}
+            onOpenChange={(open) => setOpenMenu(nextComposeMenuState(openMenu, "preset", open))}
+            onValueChange={(value) => {
+              onSetDshAgentPreset(value);
+              setOpenMenu(null);
+            }}
+          >
+            <Select.Trigger
+              style={{
+                ...controlButtonStyle,
+                ...(compact
+                  ? null
+                  : {
+                      flex: "0 1 148px",
+                      maxWidth: 148,
+                    }),
+              }}
+              aria-label={t("newTask.dshAgentPreset")}
+              title={t(currentDshPreset[1])}
+              data-dsh-agent-preset-trigger
+            >
+              <BookmarkPlus size={14} strokeWidth={2} color="var(--usage-dsh)" />
+              {!compact && (
+                <span
+                  style={{
+                    minWidth: 0,
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  {t(currentDshPreset[1])}
+                </span>
+              )}
+              {!compact && (
+                <Select.Icon>
+                  <ChevronDown size={12} strokeWidth={2.5} style={{ opacity: 0.58 }} />
+                </Select.Icon>
+              )}
+            </Select.Trigger>
+            <Select.Portal>
+              <Select.Content position="popper" sideOffset={6} style={s.toolbarMenuContent}>
+                <Select.Viewport>
+                  {DSH_PRESETS.map(([value, label]) => (
+                    <Select.Item
+                      key={value}
+                      value={value}
+                      style={s.toolbarMenuItem}
+                      onFocus={(event) => setMenuItemHover(event.currentTarget, true)}
+                      onBlur={(event) => setMenuItemHover(event.currentTarget, false)}
+                      onMouseEnter={(event) => setMenuItemHover(event.currentTarget, true)}
+                      onMouseLeave={(event) => setMenuItemHover(event.currentTarget, false)}
+                    >
+                      <BookmarkPlus size={13} strokeWidth={2} color="var(--usage-dsh)" />
+                      <Select.ItemText>{t(label)}</Select.ItemText>
+                    </Select.Item>
+                  ))}
+                </Select.Viewport>
+              </Select.Content>
+            </Select.Portal>
+          </Select.Root>
+        )}
 
         <Select.Root
           value={permMode}

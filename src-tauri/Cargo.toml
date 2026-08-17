@@ -92,6 +92,11 @@ tauri-plugin-clipboard-manager = "2"
 # PostgreSQL crates; resolving these from crates.io would silently produce an
 # incompatible lockfile.
 [patch.crates-io]
+# DBX currently declares russh = "0.60". The published 0.60.x crates call
+# the pre-stable PKCS#5 constructor, which no longer exists in pkcs5 0.8.x.
+# Keep the 0.60-compatible package version while using upstream's stable
+# crypto migration, pinned for reproducible desktop builds.
+russh = { git = "https://github.com/warp-tech/russh.git", rev = "72b250aa2dacb3bb1b13a84499c09bd9fc836158" }
 portable-pty = { path = "vendor/portable-pty" }
 ssfmt = { path = "vendor/ssfmt" }
 notify-types = { path = "vendor/notify-types" }

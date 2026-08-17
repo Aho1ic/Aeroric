@@ -52,7 +52,7 @@ describe("terminal output highlighting", () => {
     expect(light).toContain("\x1b[48;2;255;235;233;39mremoved");
     expect(light).toContain("\x1b[48;2;218;251;225;39madded");
     const dark = remapAnsiForTheme(raw, "dark");
-    expect(dark).toContain("\x1b[48;2;32;33;39;39minput");
+    expect(dark).toContain("\x1b[48;2;17;21;26;39minput");
     expect(dark).toContain("\x1b[48;2;60;20;20;39mremoved");
     expect(dark).toContain("\x1b[48;5;22;39madded");
     expect(remapAnsiForTheme(raw, "eyecare")).toContain("\x1b[48;2;238;232;213;39minput");
@@ -66,7 +66,7 @@ describe("terminal output highlighting", () => {
     expect(remapAnsiForTheme(truecolor, "light")).toBe("\x1b[48;2;241;243;245m\x1b[K");
     expect(remapAnsiForTheme(darkNeutral, "eyecare")).toBe("\x1b[48;2;238;232;213mcomposer");
     expect(remapAnsiForTheme(indexed, "light")).toBe("\x1b[48;2;241;243;245mhistory");
-    expect(remapAnsiForTheme(truecolor, "dark")).toBe("\x1b[48;2;32;33;39m\x1b[K");
+    expect(remapAnsiForTheme(truecolor, "dark")).toBe("\x1b[48;2;17;21;26m\x1b[K");
   });
 
   it("keeps full theme remapping opt-in for Agent terminal writers", () => {
@@ -87,7 +87,7 @@ describe("terminal output highlighting", () => {
     agentWriter.writeImmediate(raw);
 
     expect(defaultWrite).toHaveBeenCalledWith(raw, undefined);
-    expect(agentWrite).toHaveBeenCalledWith("\x1b[48;2;32;33;39mcomposer", undefined);
+    expect(agentWrite).toHaveBeenCalledWith("\x1b[48;2;17;21;26mcomposer", undefined);
   });
 
   it("splits large writes without breaking surrogate pairs", () => {

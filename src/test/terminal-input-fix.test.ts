@@ -983,6 +983,183 @@ describe("terminal input fixes", () => {
     vi.useRealTimers();
   });
 
+  it("does not report the CJK textarea reset as a terminal focus change", async () => {
+    vi.useFakeTimers();
+    vi.resetModules();
+    vi.doMock("../platform", () => ({
+      APP_PLATFORM: "macos",
+      ENABLE_USAGE_INSIGHTS: true,
+      IS_MAC_WEBKIT: true,
+      IS_OTHER_WEBKIT: false,
+      detectAppPlatform: () => "macos",
+      isAppleWebKit: () => true,
+    }));
+    const { attachLinuxIMEFix } = await import("../components/terminalInputFix");
+    const textarea = document.createElement("textarea");
+    const focusReports: string[] = [];
+    textarea.addEventListener("blur", () => focusReports.push("focus-out"));
+    textarea.addEventListener("focus", () => focusReports.push("focus-in"));
+    vi.spyOn(textarea, "focus").mockImplementation(() => {
+      textarea.dispatchEvent(new FocusEvent("focus"));
+    });
+    const sent: string[] = [];
+    const term = {
+      textarea,
+      onData: () => ({ dispose: vi.fn() }),
+    };
+
+    const disposable = attachLinuxIMEFix(term as never, (data) => sent.push(data));
+    textarea.dispatchEvent(new CompositionEvent("compositionstart", { data: "" }));
+    textarea.dispatchEvent(new CompositionEvent("compositionupdate", { data: "kai'qi" }));
+    textarea.dispatchEvent(
+      new InputEvent("beforeinput", {
+        inputType: "insertText",
+        data: "开启",
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    textarea.dispatchEvent(new FocusEvent("blur"));
+    vi.advanceTimersByTime(40);
+
+    expect(sent).toEqual(["开启"]);
+    expect(focusReports).toEqual([]);
+
+    textarea.dispatchEvent(new FocusEvent("blur"));
+    textarea.dispatchEvent(new FocusEvent("focus"));
+    expect(focusReports).toEqual(["focus-out", "focus-in"]);
+
+    disposable.dispose();
+    vi.useRealTimers();
+  });
+
+  it.each([
+    { cursor: 0, expected: "开启!abcd" },
+    { cursor: 2, expected: "ab开启!cd" },
+    { cursor: 4, expected: "abcd开启!" },
+  ])(
+    "preserves a TUI cursor at offset $cursor across the CJK textarea reset",
+    async ({ cursor: initialCursor, expected }) => {
+      vi.useFakeTimers();
+      vi.resetModules();
+      vi.doMock("../platform", () => ({
+        APP_PLATFORM: "macos",
+        ENABLE_USAGE_INSIGHTS: true,
+        IS_MAC_WEBKIT: true,
+        IS_OTHER_WEBKIT: false,
+        detectAppPlatform: () => "macos",
+        isAppleWebKit: () => true,
+      }));
+      const { attachLinuxIMEFix } = await import("../components/terminalInputFix");
+      const textarea = document.createElement("textarea");
+      const dataListeners: Array<(data: string) => void> = [];
+      let line = "abcd";
+      let cursor = initialCursor;
+      const writeAtCursor = (data: string) => {
+        line = `${line.slice(0, cursor)}${data}${line.slice(cursor)}`;
+        cursor += data.length;
+      };
+      const term = {
+        textarea,
+        onData: (listener: (data: string) => void) => {
+          dataListeners.push(listener);
+          return { dispose: vi.fn() };
+        },
+      };
+
+      const disposable = attachLinuxIMEFix(term as never, writeAtCursor);
+      // Model the TUI behavior that caused the regression: a reported terminal
+      // focus cycle moves its input cursor to the end of the current line.
+      textarea.addEventListener("blur", () => {
+        cursor = line.length;
+      });
+      textarea.addEventListener("focus", () => {
+        cursor = line.length;
+      });
+      vi.spyOn(textarea, "focus").mockImplementation(() => {
+        textarea.dispatchEvent(new FocusEvent("focus"));
+      });
+
+      textarea.dispatchEvent(new CompositionEvent("compositionstart", { data: "" }));
+      textarea.dispatchEvent(new CompositionEvent("compositionupdate", { data: "kai'qi" }));
+      textarea.dispatchEvent(
+        new InputEvent("beforeinput", {
+          inputType: "insertText",
+          data: "开启",
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+      textarea.dispatchEvent(new FocusEvent("blur"));
+      vi.advanceTimersByTime(40);
+      dataListeners[0]?.("!");
+
+      expect(line).toBe(expected);
+
+      disposable.dispose();
+      vi.useRealTimers();
+    },
+  );
+
+  it("does not report the macOS selection guard focus cycle to a terminal TUI", async () => {
+    vi.resetModules();
+    vi.doMock("../platform", () => ({
+      APP_PLATFORM: "macos",
+      ENABLE_USAGE_INSIGHTS: true,
+      IS_MAC_WEBKIT: true,
+      IS_OTHER_WEBKIT: false,
+      detectAppPlatform: () => "macos",
+      isAppleWebKit: () => true,
+    }));
+    const { attachLinuxIMEFix } = await import("../components/terminalInputFix");
+    const { attachMacWebKitTerminalGuard } = await import("../components/terminalShared");
+    const container = document.createElement("div");
+    const terminalElement = document.createElement("div");
+    terminalElement.className = "xterm";
+    const textarea = document.createElement("textarea");
+    terminalElement.appendChild(textarea);
+    container.appendChild(terminalElement);
+    document.body.appendChild(container);
+
+    const focusReports: string[] = [];
+    textarea.addEventListener("blur", () => focusReports.push("focus-out"));
+    textarea.addEventListener("focus", () => focusReports.push("focus-in"));
+    vi.spyOn(textarea, "focus").mockImplementation(() => {
+      textarea.dispatchEvent(new FocusEvent("focus"));
+    });
+    const selectionPaused: boolean[] = [];
+    const term = {
+      textarea,
+      hasSelection: () => false,
+      clearSelection: vi.fn(),
+      onSelectionChange: () => ({ dispose: vi.fn() }),
+      onData: () => ({ dispose: vi.fn() }),
+    };
+
+    const inputDisposable = attachLinuxIMEFix(term as never, vi.fn());
+    const disposeGuard = attachMacWebKitTerminalGuard({
+      term: term as never,
+      container,
+      writer: { setSelectionPaused: (paused) => selectionPaused.push(paused) },
+    });
+
+    container.dispatchEvent(new MouseEvent("pointerdown", { button: 0, bubbles: true }));
+    textarea.dispatchEvent(new FocusEvent("blur"));
+    document.dispatchEvent(new MouseEvent("pointerup", { button: 0, bubbles: true }));
+
+    expect(textarea.disabled).toBe(false);
+    expect(selectionPaused).toEqual([true, false]);
+    expect(focusReports).toEqual([]);
+
+    textarea.dispatchEvent(new FocusEvent("blur"));
+    textarea.dispatchEvent(new FocusEvent("focus"));
+    expect(focusReports).toEqual(["focus-out", "focus-in"]);
+
+    disposeGuard();
+    inputDisposable.dispose();
+    container.remove();
+  });
+
   it("does not suppress a new Chinese preedit as stale post-composition replay", async () => {
     vi.useFakeTimers();
     vi.resetModules();

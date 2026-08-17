@@ -140,8 +140,7 @@ export function ModelSelectionList({
           border: "1px solid var(--border-dim)",
           borderRadius: 8,
           padding: 9,
-          background:
-            "linear-gradient(145deg, color-mix(in srgb, var(--bg-subtle) 96%, var(--accent) 4%), var(--bg-subtle))",
+          background: "var(--bg-subtle)",
         }}
       >
         {filteredModels.length > 0 ? (

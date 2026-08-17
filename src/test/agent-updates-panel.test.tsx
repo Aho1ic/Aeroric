@@ -2,6 +2,7 @@ import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AgentUpdatesPanel } from "../components/app-settings/AgentUpdatesPanel";
+import { AgentVersionsProvider } from "../hooks/useAgentVersions";
 import { I18nProvider } from "../i18n";
 
 const { invokeMock, latestVersions, toolStatuses } = vi.hoisted(() => ({
@@ -68,7 +69,9 @@ vi.mock("@tauri-apps/api/event", () => ({
 function renderPanel() {
   return render(
     <I18nProvider>
-      <AgentUpdatesPanel />
+      <AgentVersionsProvider>
+        <AgentUpdatesPanel />
+      </AgentVersionsProvider>
     </I18nProvider>,
   );
 }

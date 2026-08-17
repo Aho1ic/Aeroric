@@ -11,12 +11,12 @@ describe("native window chrome theme", () => {
 
     expect(variant).toBe("dark");
     expect(nativeThemeForVariant(variant)).toBe("dark");
-    expect(nativeWindowBackgroundForVariant(variant)).toBe("#09090b");
+    expect(nativeWindowBackgroundForVariant(variant)).toBe("#050607");
   });
 
   it("keeps explicit dark mode chrome dark", () => {
     expect(nativeThemeForVariant("dark")).toBe("dark");
-    expect(nativeWindowBackgroundForVariant("dark")).toBe("#09090b");
+    expect(nativeWindowBackgroundForVariant("dark")).toBe("#050607");
   });
 
   it("keeps eye-care chrome in the light family with a matching background", () => {

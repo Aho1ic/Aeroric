@@ -15,7 +15,7 @@ describe("shared frosted glass theme", () => {
     expect(common.usagePopoverContent.backdropFilter).toBe("var(--glass-blur-compact)");
   });
 
-  it("keeps settings surfaces opaque while applying heavy background blur", () => {
+  it("keeps settings surfaces translucent while applying heavy background blur", () => {
     expect(dialogs.settingsModalBox.background).toBe("var(--settings-glass-bg)");
     expect(dialogs.settingsModalBox.backdropFilter).toBe("var(--settings-glass-blur)");
     expect(dialogs.settingsModalBox.WebkitBackdropFilter).toBe("var(--settings-glass-blur)");
@@ -25,7 +25,16 @@ describe("shared frosted glass theme", () => {
       themeCss.matchAll(/--settings-glass-bg:\s*([^;]+);/g),
       (match) => match[1].trim(),
     );
-    expect(settingsBackgrounds).toEqual(["#f8fafc", "#f7eedb", "#18181d"]);
+    expect(settingsBackgrounds).toEqual(["#f8fafc", "#f7eedb", "rgba(12, 15, 19, 0.84)"]);
+  });
+
+  it("uses a flat One Dark canvas and blue focus color in dark mode", () => {
+    const darkTheme = themeCss.slice(themeCss.indexOf("html.dark {"));
+
+    expect(darkTheme).toContain("--app-canvas: #050607");
+    expect(darkTheme).toContain("--accent: #61afef");
+    expect(darkTheme).not.toContain("radial-gradient");
+    expect(darkTheme).not.toContain("#c084fc");
   });
 
   it("keeps the home surfaces above the recursive animation free of blur", () => {
@@ -41,6 +50,8 @@ describe("shared frosted glass theme", () => {
   it("keeps the light terminal white while preserving themed variants", () => {
     expect(LIGHT_THEME.background).toBe("#ffffff");
     expect(DARK_THEME.background).toContain("rgba(");
+    expect(DARK_THEME.cursor).toBe("#528bff");
+    expect(DARK_THEME.selectionBackground).toBe("#1f4662");
     expect(EYECARE_THEME.background).toContain("rgba(");
   });
 });

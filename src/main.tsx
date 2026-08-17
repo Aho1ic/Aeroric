@@ -3,6 +3,7 @@ import ReactDOM from "react-dom/client";
 import App from "./App";
 import { ToastProvider } from "./components/Toast";
 import { NotificationsProvider } from "./hooks/useNotifications";
+import { AgentVersionsProvider } from "./hooks/useAgentVersions";
 import { I18nProvider, staticT } from "./i18n";
 import { scheduleMarketplacePreload } from "./components/skill-hub/marketplaceData";
 
@@ -69,7 +70,9 @@ ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
       <I18nProvider>
         <ToastProvider>
           <NotificationsProvider>
-            <App />
+            <AgentVersionsProvider>
+              <App />
+            </AgentVersionsProvider>
           </NotificationsProvider>
         </ToastProvider>
       </I18nProvider>

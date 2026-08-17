@@ -313,8 +313,10 @@ export type AgentInstallStage =
   | "failed"
   | "cancelled";
 
+export type AgentToolId = "claude" | "codex" | "dsh";
+
 export interface AgentToolStatus {
-  agent: "claude" | "codex";
+  agent: AgentToolId;
   supported: boolean;
   platform: string;
   architecture: string;
@@ -330,7 +332,7 @@ export interface AgentToolStatus {
 
 /** 对应 Rust `AgentLatestVersion`：不安装即可查询到的最新可用版本。 */
 export interface AgentLatestVersion {
-  agent: "claude" | "codex";
+  agent: AgentToolId;
   version: string;
   error_code?: AgentInstallErrorCode | null;
   error: string;
@@ -338,7 +340,7 @@ export interface AgentLatestVersion {
 
 export interface AgentInstallProgress {
   operation_id: string;
-  agent: "claude" | "codex";
+  agent: AgentToolId;
   stage: AgentInstallStage;
   progress: number;
   error_code?: AgentInstallErrorCode | null;
@@ -347,7 +349,7 @@ export interface AgentInstallProgress {
 
 export interface AgentInstallResult {
   operation_id: string;
-  agent: "claude" | "codex";
+  agent: AgentToolId;
   success: boolean;
   supported: boolean;
   platform: string;

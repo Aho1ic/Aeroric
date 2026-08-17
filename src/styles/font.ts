@@ -84,7 +84,7 @@ export const font = {
     padding: "10px 0",
     borderRadius: 6,
     border: "1px solid rgba(255, 255, 255, 0.09)",
-    background: "linear-gradient(180deg, #171b24, #10141d)",
+    background: "#0d1117",
     color: "#d6deeb",
     boxShadow: "var(--shadow-sm)",
     overflowX: "auto" as const,

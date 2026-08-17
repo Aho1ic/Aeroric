@@ -3508,8 +3508,10 @@ mod tests {
         std::fs::create_dir_all(root.join("apps").join("cli")).unwrap();
         std::fs::write(root.join("package.json"), "{}\n").unwrap();
 
-        let mut settings = AppSettings::default();
-        settings.dsh_path = root.to_string_lossy().into_owned();
+        let settings = AppSettings {
+            dsh_path: root.to_string_lossy().into_owned(),
+            ..AppSettings::default()
+        };
         let _guard = settings_lock().lock();
         let normalized = normalize_settings(settings);
 

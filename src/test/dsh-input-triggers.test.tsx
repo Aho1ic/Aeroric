@@ -386,4 +386,20 @@ describe("DSH composer trigger menu", () => {
     await waitFor(() => expect(box).toHaveValue("/model deepseek-v3 "));
     expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
   });
+
+  it("resolves a popupSelect argument from the focused composer with the keyboard", async () => {
+    renderComposer();
+    const box = await typeInComposer("/mod");
+    const menu = await screen.findByRole("listbox", { name: "Trigger suggestions" });
+    await userEvent.click(within(menu).getByRole("option", { name: /model/ }));
+    await waitFor(() => expect(box).toHaveValue("/model "));
+    await screen.findByRole("option", { name: "DeepSeek V3" });
+
+    expect(box).toHaveFocus();
+    await userEvent.keyboard("{Enter}");
+
+    await waitFor(() => expect(box).toHaveValue("/model deepseek-v3 "));
+    expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
+    expect(box).toHaveFocus();
+  });
 });

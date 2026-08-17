@@ -169,6 +169,19 @@ fn is_remote_codex_like_agent(agent: &str) -> bool {
     matches!(agent, "codex" | "claude_gpt55")
 }
 
+fn is_remote_dsh_agent(agent: &str) -> bool {
+    agent == "dsh"
+}
+
+fn dsh_permission_mode(permission_mode: &str) -> Option<&'static str> {
+    match permission_mode {
+        "ask" => Some("read-only"),
+        "auto_edit" => Some("workspace-write"),
+        "full_access" => Some("danger-full-access"),
+        _ => None,
+    }
+}
+
 fn validate_remote_agent_id(agent: &str) -> Result<&str, String> {
     let trimmed = agent.trim();
     let edge_is_separator = trimmed
@@ -246,7 +259,7 @@ fn remote_agent_args(
             args.push("-c".to_string());
             args.push("service_tier=\"fast\"".to_string());
         }
-    } else {
+    } else if !is_remote_dsh_agent(agent) {
         if agent == "claude" {
             if let Some(model) = selected_model {
                 args.push("--model".to_string());
@@ -267,13 +280,23 @@ fn remote_agent_args(
 }
 
 fn build_remote_command(
+    agent: &str,
+    permission_mode: &str,
     program_word: String,
     args: &[String],
     selected_model: Option<&str>,
 ) -> String {
-    let model_env =
-        selected_model.map(|model| format!("AERORIC_AGENT_MODEL={}", shell_word_posix(model)));
-    model_env
+    let mut environment = Vec::new();
+    if let Some(model) = selected_model {
+        environment.push(format!("AERORIC_AGENT_MODEL={}", shell_word_posix(model)));
+    }
+    if is_remote_dsh_agent(agent) {
+        if let Some(mode) = dsh_permission_mode(permission_mode) {
+            environment.push(format!("DSH_PERMISSION_MODE={}", shell_word_posix(mode)));
+        }
+        environment.push("DSH_TELEMETRY_DISABLED=1".to_string());
+    }
+    environment
         .into_iter()
         .chain(std::iter::once(program_word))
         .chain(args.iter().map(|arg| shell_word_posix(arg)))
@@ -299,7 +322,11 @@ fn build_remote_task_command(
         speed,
     );
     if let Some(prompt) = prompt.map(str::trim).filter(|value| !value.is_empty()) {
-        if is_remote_codex_like_agent(agent) {
+        if is_remote_dsh_agent(agent) {
+            args.push("--profile".to_string());
+            args.push("headless".to_string());
+            args.push("--".to_string());
+        } else if is_remote_codex_like_agent(agent) {
             args.push("--".to_string());
         }
         args.push(prompt.to_string());
@@ -307,7 +334,7 @@ fn build_remote_task_command(
     Ok(format!(
         "cd -- {} && {}",
         shell_quote_posix(remote_project_path),
-        build_remote_command(program_word, &args, selected_model)
+        build_remote_command(agent, permission_mode, program_word, &args, selected_model)
     ))
 }
 
@@ -320,6 +347,9 @@ fn build_remote_resume_command(
     reasoning_effort: Option<&str>,
     speed: Option<&str>,
 ) -> Result<String, String> {
+    if is_remote_dsh_agent(agent) {
+        return Err("DeepSeek Harness remote sessions do not support native resume".to_string());
+    }
     let program_word = remote_agent_program_word(agent)?;
     let mut args = remote_agent_args(
         agent,
@@ -338,7 +368,7 @@ fn build_remote_resume_command(
     Ok(format!(
         "cd -- {} && {}",
         shell_quote_posix(remote_project_path),
-        build_remote_command(program_word, &args, selected_model)
+        build_remote_command(agent, permission_mode, program_word, &args, selected_model)
     ))
 }
 
@@ -892,15 +922,23 @@ pub async fn run_remote_task(
 ) -> Result<(), String> {
     crate::pty::validate_task_id(&task_id)?;
     let is_codex = is_remote_codex_like_agent(&agent);
+    let is_dsh = is_remote_dsh_agent(&agent);
+    let family = if is_dsh {
+        crate::app_settings::AgentFamily::Dsh
+    } else if is_codex {
+        crate::app_settings::AgentFamily::Codex
+    } else {
+        crate::app_settings::AgentFamily::Claude
+    };
     let selected_model = crate::pty::normalized_selected_model(selected_model.as_deref());
-    let reasoning_effort = crate::pty::normalized_reasoning_effort(
+    let reasoning_effort = crate::pty::normalized_reasoning_effort_for(
         reasoning_effort.as_deref(),
-        is_codex,
+        family,
         selected_model.as_deref(),
     )?;
-    let speed = crate::pty::normalized_speed(speed.as_deref())?;
+    let speed = crate::pty::normalized_speed_for(speed.as_deref(), family)?;
     let force_prompt_injection =
-        crate::pty::should_force_prompt_injection(is_codex, force_prompt_injection);
+        !is_dsh && crate::pty::should_force_prompt_injection(is_codex, force_prompt_injection);
     let uses_ultracode = !is_codex && reasoning_effort.as_deref() == Some("ultracode");
     let remote_command = build_remote_task_command(
         &agent,
@@ -1451,6 +1489,28 @@ mod tests {
     }
 
     #[test]
+    fn remote_dsh_uses_headless_only_when_a_prompt_is_present() {
+        assert_eq!(
+            build_remote_task_command(
+                "dsh",
+                "auto_edit",
+                "/srv/app",
+                Some("inspect status"),
+                None,
+                Some("high"),
+                None,
+            )
+            .unwrap(),
+            "cd -- '/srv/app' && DSH_PERMISSION_MODE=workspace-write DSH_TELEMETRY_DISABLED=1 'dsh' --profile headless -- 'inspect status'"
+        );
+        assert_eq!(
+            build_remote_task_command("dsh", "ask", "/srv/app", Some("   "), None, None, None,)
+                .unwrap(),
+            "cd -- '/srv/app' && DSH_PERMISSION_MODE=read-only DSH_TELEMETRY_DISABLED=1 'dsh'"
+        );
+    }
+
+    #[test]
     fn remote_resume_command_uses_agent_specific_session_flags() {
         assert_eq!(
             build_remote_resume_command(
@@ -1478,6 +1538,16 @@ mod tests {
             .unwrap(),
             "cd -- '/srv/app' && 'codex' --dangerously-bypass-approvals-and-sandbox resume codex-session"
         );
+        assert!(build_remote_resume_command(
+            "dsh",
+            "ask",
+            "/srv/app",
+            "dsh-session",
+            None,
+            None,
+            None,
+        )
+        .is_err());
     }
 
     #[test]

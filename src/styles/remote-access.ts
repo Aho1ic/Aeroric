@@ -46,8 +46,7 @@ export const remoteAccess = {
     padding: "17px 18px",
     border: "1px solid color-mix(in srgb, var(--accent) 18%, var(--border-medium))",
     borderRadius: "var(--radius-lg)",
-    background:
-      "linear-gradient(135deg, color-mix(in srgb, var(--accent-subtle) 52%, transparent), transparent 48%), color-mix(in srgb, var(--bg-card) 76%, transparent)",
+    background: "color-mix(in srgb, var(--bg-card) 82%, transparent)",
     backdropFilter: "blur(14px) saturate(1.12)",
     WebkitBackdropFilter: "blur(14px) saturate(1.12)",
     boxShadow:

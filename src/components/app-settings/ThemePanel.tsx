@@ -201,7 +201,7 @@ export function ThemePanel({ themeMode, systemPrefersDark, onThemeModeChange }: 
                 borderRadius: 8,
                 background:
                   mode === "dark"
-                    ? "linear-gradient(180deg, rgba(255,255,255,0.08), rgba(255,255,255,0.04))"
+                    ? "rgba(19,23,29,0.82)"
                     : "linear-gradient(180deg, rgba(23,27,36,0.1), rgba(23,27,36,0.04))",
                 border:
                   mode === "dark"
@@ -427,9 +427,9 @@ export function ThemePanel({ themeMode, systemPrefersDark, onThemeModeChange }: 
             mode: "dark",
             title: t("theme.dark"),
             description: t("theme.darkDescription"),
-            previewBackground: "#11151d",
-            previewBorder: "rgba(255,255,255,0.08)",
-            previewAccent: "#f1f4fb",
+            previewBackground: "#050607",
+            previewBorder: "rgba(171,178,191,0.18)",
+            previewAccent: "#61afef",
           })}
           {renderThemeOption({
             mode: "light",

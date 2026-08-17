@@ -522,6 +522,19 @@ fn shell_word(value: &str) -> String {
     crate::ssh::shell_word_posix(value)
 }
 
+fn is_dsh_agent(agent: &str) -> bool {
+    agent == "dsh"
+}
+
+fn dsh_permission_mode(permission_mode: &str) -> Option<&'static str> {
+    match permission_mode {
+        "ask" => Some("read-only"),
+        "auto_edit" => Some("workspace-write"),
+        "full_access" => Some("danger-full-access"),
+        _ => None,
+    }
+}
+
 fn agent_args(
     agent: &str,
     permission_mode: &str,
@@ -572,7 +585,7 @@ fn agent_args(
             args.push("-c".to_string());
             args.push("service_tier=\"fast\"".to_string());
         }
-    } else {
+    } else if !is_dsh_agent(agent) {
         if agent == "claude" {
             if let Some(model) = selected_model {
                 args.push("--model".to_string());
@@ -604,6 +617,9 @@ fn build_agent_command(
     speed: Option<&str>,
 ) -> Result<WslCommandSpec, String> {
     let project_path = validate_linux_absolute_path(linux_project_path)?;
+    if is_dsh_agent(agent) && session_id.is_some() {
+        return Err("DeepSeek Harness WSL sessions do not support native resume".to_string());
+    }
     let (executable, _, probe) = resolve_agent_paths(distribution, agent)?;
     let args = agent_invocation_args(
         agent,
@@ -619,7 +635,14 @@ fn build_agent_command(
         distribution,
         &login_shell_args(
             &shell,
-            &project_shell_command(&project_path, &executable, &args, selected_model),
+            &project_shell_command(
+                &project_path,
+                &executable,
+                &args,
+                selected_model,
+                agent,
+                permission_mode,
+            ),
         ),
     )
 }
@@ -650,7 +673,11 @@ fn agent_invocation_args(
         }
         args.push(session_id.to_string());
     } else if let Some(prompt) = prompt.map(str::trim).filter(|value| !value.is_empty()) {
-        if codex_like {
+        if is_dsh_agent(agent) {
+            args.push("--profile".to_string());
+            args.push("headless".to_string());
+            args.push("--".to_string());
+        } else if codex_like {
             args.push("--".to_string());
         }
         args.push(prompt.to_string());
@@ -664,15 +691,27 @@ fn project_shell_command(
     executable: &str,
     args: &[String],
     selected_model: Option<&str>,
+    agent: &str,
+    permission_mode: &str,
 ) -> String {
     let command = std::iter::once(shell_word(executable))
         .chain(args.iter().map(|arg| shell_word(arg)))
         .collect::<Vec<_>>()
         .join(" ");
-    let command = if let Some(model) = selected_model {
-        format!("env AERORIC_AGENT_MODEL={} {}", shell_word(model), command)
-    } else {
+    let mut environment = Vec::new();
+    if let Some(model) = selected_model {
+        environment.push(format!("AERORIC_AGENT_MODEL={}", shell_word(model)));
+    }
+    if is_dsh_agent(agent) {
+        if let Some(mode) = dsh_permission_mode(permission_mode) {
+            environment.push(format!("DSH_PERMISSION_MODE={}", shell_word(mode)));
+        }
+        environment.push("DSH_TELEMETRY_DISABLED=1".to_string());
+    }
+    let command = if environment.is_empty() {
         command
+    } else {
+        format!("env {} {}", environment.join(" "), command)
     };
     format!(
         "cd -- {} && exec {}",
@@ -1368,15 +1407,23 @@ pub async fn run_wsl_task(
     crate::pty::validate_task_id(&task_id)?;
     ensure_distribution_available(&distribution)?;
     let is_codex = matches!(agent.as_str(), "codex" | "claude_gpt55");
+    let is_dsh = is_dsh_agent(&agent);
+    let family = if is_dsh {
+        crate::app_settings::AgentFamily::Dsh
+    } else if is_codex {
+        crate::app_settings::AgentFamily::Codex
+    } else {
+        crate::app_settings::AgentFamily::Claude
+    };
     let selected_model = crate::pty::normalized_selected_model(selected_model.as_deref());
-    let reasoning_effort = crate::pty::normalized_reasoning_effort(
+    let reasoning_effort = crate::pty::normalized_reasoning_effort_for(
         reasoning_effort.as_deref(),
-        is_codex,
+        family,
         selected_model.as_deref(),
     )?;
-    let speed = crate::pty::normalized_speed(speed.as_deref())?;
+    let speed = crate::pty::normalized_speed_for(speed.as_deref(), family)?;
     let force_prompt_injection =
-        crate::pty::should_force_prompt_injection(is_codex, force_prompt_injection);
+        !is_dsh && crate::pty::should_force_prompt_injection(is_codex, force_prompt_injection);
     let uses_ultracode = !is_codex && reasoning_effort.as_deref() == Some("ultracode");
     let spec = build_agent_command(
         &distribution,
@@ -1673,6 +1720,21 @@ mod tests {
         assert!(
             agent_invocation_args("codex", "ask", Some("   "), None, None, None, None,).is_empty()
         );
+        assert_eq!(
+            agent_invocation_args(
+                "dsh",
+                "auto_edit",
+                Some("inspect status"),
+                None,
+                None,
+                Some("high"),
+                None,
+            ),
+            vec!["--profile", "headless", "--", "inspect status"]
+        );
+        assert!(
+            agent_invocation_args("dsh", "ask", Some("   "), None, None, None, None,).is_empty()
+        );
     }
 
     #[test]
@@ -1713,7 +1775,14 @@ mod tests {
             ]
         );
         assert_eq!(
-            project_shell_command("/home/me/app", "claude", &[], Some("claude-sonnet"),),
+            project_shell_command(
+                "/home/me/app",
+                "claude",
+                &[],
+                Some("claude-sonnet"),
+                "claude",
+                "ask",
+            ),
             "cd -- '/home/me/app' && exec env AERORIC_AGENT_MODEL=claude-sonnet claude"
         );
     }
@@ -1726,8 +1795,25 @@ mod tests {
                 "/home/me/bin/claude",
                 &["--resume".to_string(), "a b".to_string()],
                 None,
+                "claude",
+                "ask",
             ),
             "cd -- '/home/me/my app' && exec /home/me/bin/claude --resume 'a b'"
+        );
+        assert_eq!(
+            project_shell_command(
+                "/home/me/app",
+                "dsh",
+                &["--profile".to_string(), "headless".to_string()],
+                None,
+                "dsh",
+                "full_access",
+            ),
+            "cd -- '/home/me/app' && exec env DSH_PERMISSION_MODE=danger-full-access DSH_TELEMETRY_DISABLED=1 dsh --profile headless"
+        );
+        assert_eq!(
+            project_shell_command("/home/me/app", "dsh", &[], None, "dsh", "ask"),
+            "cd -- '/home/me/app' && exec env DSH_PERMISSION_MODE=read-only DSH_TELEMETRY_DISABLED=1 dsh"
         );
         assert_eq!(
             login_shell_args("/bin/zsh", "env -0"),
@@ -1737,7 +1823,7 @@ mod tests {
             "Ubuntu-24.04",
             &login_shell_args(
                 "/bin/zsh",
-                &project_shell_command("/home/me/app", "claude", &[], None),
+                &project_shell_command("/home/me/app", "claude", &[], None, "claude", "ask"),
             ),
         )
         .unwrap();

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { Check, Download, RefreshCw, Square, TriangleAlert } from "lucide-react";
@@ -13,10 +13,9 @@ import {
   type AgentInstallProgress,
   type AgentInstallResult,
   type AgentInstallStage,
-  type AgentLatestVersion,
-  type AgentToolStatus,
   type AgentUpgradeResult,
 } from "./types";
+import { useAgentVersions } from "../../hooks/useAgentVersions";
 
 const AGENTS = ["claude", "codex", "dsh"] as const;
 type Agent = (typeof AGENTS)[number];
@@ -93,11 +92,13 @@ type AgentData = {
 
 export function AgentUpdatesPanel() {
   const { t } = useI18n();
-  const [statuses, setStatuses] = useState<Record<Agent, AgentToolStatus | null>>({
-    claude: null,
-    codex: null,
-    dsh: null,
-  });
+  const {
+    statuses,
+    latestVersions,
+    refreshing,
+    error: versionError,
+    refreshVersions,
+  } = useAgentVersions();
   const [upgradeResults, setUpgradeResults] = useState<Record<Agent, AgentUpgradeResult | null>>({
     claude: null,
     codex: null,
@@ -113,12 +114,6 @@ export function AgentUpdatesPanel() {
     codex: null,
     dsh: null,
   });
-  const [latestVersions, setLatestVersions] = useState<Record<Agent, string>>({
-    claude: "",
-    codex: "",
-    dsh: "",
-  });
-  const [refreshing, setRefreshing] = useState(false);
   const [busyAgents, setBusyAgents] = useState<Set<Agent>>(new Set());
   const [operationIds, setOperationIds] = useState<Partial<Record<Agent, string>>>({});
   const [operationKinds, setOperationKinds] = useState<
@@ -126,48 +121,7 @@ export function AgentUpdatesPanel() {
   >({});
   const activeOperationsRef = useRef<Partial<Record<Agent, string>>>({});
   const runningAgentsRef = useRef<Set<Agent>>(new Set());
-  const [error, setError] = useState<string | null>(null);
-
-  const refreshVersions = useCallback(async () => {
-    setRefreshing(true);
-    setError(null);
-    try {
-      const toolStatuses = await invoke<AgentToolStatus[]>("get_agent_tool_status");
-      const statusMap: Record<Agent, AgentToolStatus | null> = {
-        claude: null,
-        codex: null,
-        dsh: null,
-      };
-      for (const status of toolStatuses) {
-        if (status.agent === "claude" || status.agent === "codex" || status.agent === "dsh") {
-          statusMap[status.agent] = status;
-        }
-      }
-      setStatuses(statusMap);
-    } catch (reason) {
-      setError(String(reason));
-    } finally {
-      setRefreshing(false);
-    }
-
-    // 最新版本需要联网查询，失败时静默降级：只隐藏"最新版本"一行，不阻塞安装状态展示。
-    try {
-      const latest = await invoke<AgentLatestVersion[]>("get_agent_latest_versions");
-      const latestMap: Record<Agent, string> = { claude: "", codex: "", dsh: "" };
-      for (const entry of latest) {
-        if (entry.agent === "claude" || entry.agent === "codex" || entry.agent === "dsh") {
-          latestMap[entry.agent] = entry.version;
-        }
-      }
-      setLatestVersions(latestMap);
-    } catch {
-      setLatestVersions({ claude: "", codex: "", dsh: "" });
-    }
-  }, []);
-
-  useEffect(() => {
-    void refreshVersions();
-  }, [refreshVersions]);
+  const [actionError, setActionError] = useState<string | null>(null);
 
   useEffect(() => {
     let disposed = false;
@@ -221,7 +175,7 @@ export function AgentUpdatesPanel() {
     setProgress((current) => ({ ...current, [agent]: null }));
     setInstallResults((current) => ({ ...current, [agent]: null }));
     setUpgradeResults((current) => ({ ...current, [agent]: null }));
-    setError(null);
+    setActionError(null);
 
     try {
       if (isInstall && nextOperationId) {
@@ -257,10 +211,10 @@ export function AgentUpdatesPanel() {
           [agent]: verifiedResult,
         }));
       }
-      await refreshVersions();
+      await refreshVersions({ forceLatest: true });
       window.dispatchEvent(new Event(APP_SETTINGS_CHANGED_EVENT));
     } catch (reason) {
-      setError(installInvokeErrorMessage(reason, t));
+      setActionError(installInvokeErrorMessage(reason, t));
     } finally {
       if (nextOperationId && activeOperationsRef.current[agent] === nextOperationId) {
         delete activeOperationsRef.current[agent];
@@ -290,7 +244,7 @@ export function AgentUpdatesPanel() {
     await Promise.all(
       ids.map((operationId) =>
         invoke("cancel_agent_tool_install", { operationId }).catch((reason) =>
-          setError(String(reason)),
+          setActionError(String(reason)),
         ),
       ),
     );
@@ -343,6 +297,7 @@ export function AgentUpdatesPanel() {
   ]);
 
   const busy = busyAgents.size > 0;
+  const error = actionError ?? versionError;
 
   return (
     <div style={{ flex: 1, minHeight: 0, overflow: "auto", padding: "18px 20px" }}>
@@ -381,7 +336,10 @@ export function AgentUpdatesPanel() {
             key="refresh"
             variant="outline"
             size="sm"
-            onClick={() => void refreshVersions()}
+            onClick={() => {
+              setActionError(null);
+              void refreshVersions({ forceLatest: true });
+            }}
             disabled={busy}
           >
             <RefreshCw size={12} />

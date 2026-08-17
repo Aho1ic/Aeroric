@@ -249,49 +249,46 @@ html.eyecare {
 
 /* Design tokens: dark theme */
 html.dark {
-  --app-canvas:
-    radial-gradient(circle at 12% -8%, rgba(126, 34, 206, 0.28), transparent 36%),
-    radial-gradient(circle at 96% 4%, rgba(2, 132, 199, 0.2), transparent 32%),
-    linear-gradient(145deg, #07080d 0%, #0b0d15 52%, #071018 100%);
-  --bg-root: rgba(9, 9, 11, 0.72);
-  --bg-shell: rgba(12, 12, 16, 0.54);
-  --bg-titlebar: rgba(9, 9, 11, 0.68);
-  --bg-sidebar: rgba(15, 15, 19, 0.6);
-  --bg-sidebar-elevated: rgba(20, 20, 25, 0.74);
-  --bg-panel: rgba(16, 16, 20, 0.64);
-  --bg-card: rgba(24, 24, 29, 0.72);
-  --bg-hover: rgba(36, 33, 45, 0.66);
-  --bg-selected: rgba(192, 132, 252, 0.2);
-  --bg-subtle: rgba(22, 22, 27, 0.56);
-  --bg-input: rgba(17, 17, 22, 0.68);
-  --terminal-bg: rgba(5, 5, 6, 0.9);
-  --settings-glass-bg: #18181d;
-  --glass-highlight: rgba(255, 255, 255, 0.09);
+  --app-canvas: #050607;
+  --bg-root: rgba(7, 8, 10, 0.76);
+  --bg-shell: rgba(9, 11, 14, 0.62);
+  --bg-titlebar: rgba(7, 8, 10, 0.72);
+  --bg-sidebar: rgba(10, 12, 15, 0.7);
+  --bg-sidebar-elevated: rgba(17, 20, 25, 0.78);
+  --bg-panel: rgba(12, 15, 19, 0.7);
+  --bg-card: rgba(19, 23, 29, 0.78);
+  --bg-hover: rgba(35, 40, 48, 0.72);
+  --bg-selected: rgba(82, 139, 255, 0.18);
+  --bg-subtle: rgba(17, 21, 26, 0.66);
+  --bg-input: rgba(12, 15, 19, 0.76);
+  --terminal-bg: rgba(6, 8, 10, 0.94);
+  --settings-glass-bg: rgba(12, 15, 19, 0.84);
+  --glass-highlight: rgba(255, 255, 255, 0.08);
 
-  --border-dim: rgba(244, 244, 245, 0.08);
-  --border-medium: rgba(244, 244, 245, 0.14);
-  --border-strong: rgba(192, 132, 252, 0.42);
-  --border-focus: #c084fc;
+  --border-dim: rgba(171, 178, 191, 0.1);
+  --border-medium: rgba(171, 178, 191, 0.18);
+  --border-strong: rgba(97, 175, 239, 0.46);
+  --border-focus: #61afef;
 
-  --text-primary: #f4f4f5;
-  --text-secondary: #d4d4d8;
-  --text-muted: #a1a1aa;
-  --text-hint: #71717a;
-  --control-active-bg: rgba(192, 132, 252, 0.18);
-  --control-active-fg: #f3e8ff;
-  --control-selected-bg: rgba(192, 132, 252, 0.24);
-  --control-selected-fg: #faf5ff;
-  --control-knob-bg: #fafafa;
-  --primary-action-bg: #c084fc;
-  --primary-action-fg: #18181b;
-  --primary-action-hover: #d8b4fe;
+  --text-primary: #d7dae0;
+  --text-secondary: #abb2bf;
+  --text-muted: #7f8797;
+  --text-hint: #5c6370;
+  --control-active-bg: rgba(82, 139, 255, 0.18);
+  --control-active-fg: #79c0ff;
+  --control-selected-bg: rgba(82, 139, 255, 0.26);
+  --control-selected-fg: #f7fbff;
+  --control-knob-bg: #d7dae0;
+  --primary-action-bg: #528bff;
+  --primary-action-fg: #f7fbff;
+  --primary-action-hover: #61afef;
 
-  --accent: #c084fc;
-  --accent-strong: #a855f7;
-  --accent-soft: rgba(192, 132, 252, 0.34);
-  --accent-hover: #d8b4fe;
-  --accent-subtle: rgba(192, 132, 252, 0.14);
-  --speed-fast-fg: #60a5fa;
+  --accent: #61afef;
+  --accent-strong: #528bff;
+  --accent-soft: rgba(82, 139, 255, 0.32);
+  --accent-hover: #79c0ff;
+  --accent-subtle: rgba(82, 139, 255, 0.14);
+  --speed-fast-fg: #79c0ff;
 
   --icon-folder: #d9a441;
   --icon-folder-open: #d9a441;
@@ -308,7 +305,7 @@ html.dark {
   --icon-file-rust: #fb7185;
   --icon-file-html: #fb923c;
   --icon-file-css: #818cf8;
-  --icon-file-md: #a78bfa;
+  --icon-file-md: #61afef;
   --icon-file-yaml: #f87171;
   --icon-file-toml: #d97757;
   --icon-file-python: #7dd3fc;
@@ -316,22 +313,22 @@ html.dark {
   --icon-file-shell: #86efac;
   --icon-file-svg: #fbbf24;
   --icon-file-image: #4ade80;
-  --icon-file-wasm: #a78bfa;
+  --icon-file-wasm: #61afef;
 
-  --success: #3dd68c;
-  --warning: #f5a623;
-  --danger: #ff5555;
-  --warning-code-bg: rgba(245, 166, 35, 0.16);
-  --usage-good: #4ade80;
-  --usage-warn: #fbbf24;
-  --usage-danger: #f87171;
-  --usage-claude: #fb923c;
-  --usage-codex: #c4b5fd;
-  --usage-dsh: #38bdf8;
-  --usage-chart-input: #86a8cf;
-  --usage-chart-output: #8fbea3;
-  --usage-chart-cache-creation: #d5b77d;
-  --usage-chart-cache-read: #bda4c9;
+  --success: #98c379;
+  --warning: #e5c07b;
+  --danger: #e06c75;
+  --warning-code-bg: rgba(229, 192, 123, 0.16);
+  --usage-good: #98c379;
+  --usage-warn: #e5c07b;
+  --usage-danger: #e06c75;
+  --usage-claude: #d19a66;
+  --usage-codex: #8fb8d8;
+  --usage-dsh: #56b6c2;
+  --usage-chart-input: #61afef;
+  --usage-chart-output: #98c379;
+  --usage-chart-cache-creation: #e5c07b;
+  --usage-chart-cache-read: #9da5b4;
 
   --danger-fg: #f85149;
   --diff-add-fg: #3fb950;

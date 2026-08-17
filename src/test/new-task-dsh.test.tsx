@@ -1,4 +1,5 @@
 import { render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { I18nProvider } from "../i18n";
 import { NewTaskView, type NewTaskDraft } from "../components/NewTaskView";
@@ -18,6 +19,18 @@ vi.mock("@tauri-apps/api/core", () => ({
       const agent = (args as { agent?: string } | undefined)?.agent;
       return Promise.resolve({
         models: agent === "dsh" ? ["deepseek-v4-flash", "deepseek-v4-pro"] : [],
+      });
+    }
+    if (command === "list_dsh_llm_models") {
+      return Promise.resolve({
+        groups: [
+          {
+            models: [
+              { id: "deepseek-v4-flash", name: "DeepSeek V4 Flash" },
+              { id: "deepseek-v4-pro", name: "DeepSeek V4 Pro" },
+            ],
+          },
+        ],
       });
     }
     if (command === "load_app_settings") return Promise.resolve({ custom_agents: [] });
@@ -42,10 +55,10 @@ function dshDraft(): NewTaskDraft {
   };
 }
 
-function renderView(draft: NewTaskDraft) {
+function renderView(draft: NewTaskDraft, onSubmit = vi.fn()) {
   return render(
     <I18nProvider>
-      <NewTaskView project={project} onSubmit={() => {}} initialDraft={draft} />
+      <NewTaskView project={project} onSubmit={onSubmit} initialDraft={draft} />
     </I18nProvider>,
   );
 }
@@ -54,6 +67,23 @@ describe("NewTaskView with dsh selected", () => {
   it("shows the animated official DeepSeek whale", () => {
     renderView(dshDraft());
     expect(screen.getByTestId("dsh-whale-animation")).toBeInTheDocument();
+  });
+
+  it("starts an empty DeepSeek Harness session without requiring an initial prompt", async () => {
+    const user = userEvent.setup();
+    const onSubmit = vi.fn();
+    renderView(dshDraft(), onSubmit);
+
+    await user.click(screen.getByRole("button", { name: /Start Session/ }));
+
+    expect(onSubmit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agent: "dsh",
+        prompt: "",
+        immediate: true,
+        launchMode: "local",
+      }),
+    );
   });
 
   it("shows the AGENTS.md context entry for dsh", async () => {
@@ -68,6 +98,89 @@ describe("NewTaskView with dsh selected", () => {
     renderView(dshDraft());
     await waitFor(() => {
       expect(screen.getByTitle(/deepseek-v4-flash/)).toBeTruthy();
+    });
+  });
+
+  it("shows Agent preset as a first-level selector and removes legacy plus-menu entries", async () => {
+    const user = userEvent.setup();
+    renderView(dshDraft());
+
+    const agent = screen.getByRole("combobox", { name: "Agent" });
+    const preset = screen.getByRole("combobox", { name: "Agent preset" });
+    const permission = screen.getByRole("combobox", { name: "Default Permission Mode" });
+
+    expect(preset).toHaveTextContent("Standard mode");
+    expect(agent.compareDocumentPosition(preset) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(
+      preset.compareDocumentPosition(permission) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+
+    await user.click(screen.getByRole("button", { name: "More compose actions" }));
+    expect(screen.queryByText("Slash commands")).not.toBeInTheDocument();
+    expect(screen.queryByText("Agent preset")).not.toBeInTheDocument();
+  });
+
+  it("opens and filters slash commands from the leading editor token", async () => {
+    const user = userEvent.setup();
+    renderView(dshDraft());
+    const editor = screen.getByRole("textbox");
+
+    await user.type(editor, "/com");
+
+    expect(await screen.findByRole("option", { name: /compact/i })).toBeVisible();
+    expect(screen.queryByRole("option", { name: /feedback/i })).not.toBeInTheDocument();
+    expect(editor).toHaveFocus();
+
+    await user.keyboard("{Tab}");
+    expect(editor).toHaveTextContent("/compact");
+    expect(editor).toHaveFocus();
+    expect(screen.queryByRole("listbox", { name: "Slash commands" })).not.toBeInTheDocument();
+  });
+
+  it("supports mouse command selection without moving focus out of the prompt", async () => {
+    const user = userEvent.setup();
+    renderView(dshDraft());
+    const editor = screen.getByRole("textbox");
+
+    await user.type(editor, "/exp");
+    await user.click(await screen.findByRole("option", { name: /export/i }));
+
+    expect(editor).toHaveTextContent("/export");
+    expect(editor).toHaveFocus();
+  });
+
+  it("opens popup command arguments after replacing the slash query", async () => {
+    const user = userEvent.setup();
+    renderView(dshDraft());
+    const editor = screen.getByRole("textbox");
+
+    await user.type(editor, "/mod");
+    await user.keyboard("{Enter}");
+
+    expect(editor).toHaveTextContent("/model");
+    expect(editor).toHaveFocus();
+    expect(await screen.findByText(/Switch model/)).toBeVisible();
+
+    await screen.findByRole("option", { name: "DeepSeek V4 Flash" });
+    await user.keyboard("{ArrowDown}{Enter}");
+    expect(editor).toHaveTextContent("/model deepseek-v4-pro");
+    expect(editor).toHaveFocus();
+  });
+
+  it("does not open DSH slash commands for paths or slashes in body text", async () => {
+    const user = userEvent.setup();
+    renderView(dshDraft());
+    const editor = screen.getByRole("textbox");
+
+    await user.type(editor, "edit src/com");
+    await waitFor(() => {
+      expect(screen.queryByRole("option", { name: /compact/i })).not.toBeInTheDocument();
+    });
+
+    await user.clear(editor);
+    await user.type(editor, "then /com");
+    await waitFor(() => {
+      expect(screen.queryByRole("option", { name: /compact/i })).not.toBeInTheDocument();
     });
   });
 
@@ -98,5 +211,29 @@ describe("NewTaskView with dsh selected", () => {
       textOverflow: "ellipsis",
       whiteSpace: "nowrap",
     });
+    expect(screen.getByRole("combobox", { name: "Agent preset" })).toHaveStyle({
+      flex: "0 1 148px",
+      maxWidth: "148px",
+      minWidth: "0",
+      overflow: "hidden",
+    });
+  });
+
+  it("renders the DSH preset as an icon-only control in compact mode", () => {
+    render(
+      <I18nProvider>
+        <NewTaskView
+          project={project}
+          onSubmit={vi.fn()}
+          initialDraft={dshDraft()}
+          compactControls
+        />
+      </I18nProvider>,
+    );
+
+    const preset = screen.getByRole("combobox", { name: "Agent preset" });
+    expect(preset).toHaveAttribute("title", "Standard mode");
+    expect(preset).not.toHaveTextContent("Standard mode");
+    expect(preset).toHaveStyle({ width: "28px", minWidth: "28px", flex: "0 0 auto" });
   });
 });

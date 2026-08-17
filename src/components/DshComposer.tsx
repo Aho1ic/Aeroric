@@ -153,6 +153,7 @@ export function DshComposer({ taskId, sessionId }: { taskId: string; sessionId?:
       {picker ? (
         <DshSlashPicker
           command={picker}
+          keyboardTargetRef={textRef}
           onPick={(arg) => {
             setPicker(null);
             // The command token already landed, so only the argument is spliced

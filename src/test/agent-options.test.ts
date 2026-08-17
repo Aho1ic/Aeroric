@@ -109,6 +109,7 @@ describe("agent options", () => {
     expect(composeControlOrder()).toEqual([
       "more",
       "agent",
+      "preset",
       "permission",
       "launch",
       "branch",

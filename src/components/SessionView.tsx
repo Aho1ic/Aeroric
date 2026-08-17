@@ -775,11 +775,10 @@ export function SessionView({
         margin: "14px 16px 16px",
         padding: "20px 26px 32px",
         borderRadius: 22,
-        border: "1px solid color-mix(in srgb, var(--border-medium) 72%, #ffffff 28%)",
-        background:
-          "linear-gradient(180deg, color-mix(in srgb, var(--bg-card) 72%, var(--bg-subtle)), color-mix(in srgb, var(--bg-panel) 78%, var(--bg-subtle)))",
+        border: "1px solid color-mix(in srgb, var(--border-medium) 88%, #ffffff 12%)",
+        background: "color-mix(in srgb, var(--bg-panel) 82%, transparent)",
         boxShadow:
-          "inset 0 1px 0 color-mix(in srgb, #ffffff 58%, transparent), 0 22px 54px color-mix(in srgb, #111827 13%, transparent), 0 2px 8px color-mix(in srgb, #111827 8%, transparent)",
+          "inset 0 1px 0 color-mix(in srgb, #ffffff 14%, transparent), 0 22px 54px color-mix(in srgb, #000000 34%, transparent), 0 2px 8px color-mix(in srgb, #000000 22%, transparent)",
         backdropFilter: "blur(22px) saturate(1.38)",
         WebkitBackdropFilter: "blur(22px) saturate(1.38)",
       }}

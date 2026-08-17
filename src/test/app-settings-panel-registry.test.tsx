@@ -170,4 +170,19 @@ describe("settings panel registry", () => {
     expect(getAvailableSettingsPanels("macos").some((entry) => entry.key === "wsl")).toBe(false);
     expect(getAvailableSettingsPanels("other").some((entry) => entry.key === "wsl")).toBe(false);
   });
+
+  it("does not register duplicate DSH session and configuration surfaces", () => {
+    const keys = new Set(SETTINGS_PANEL_REGISTRY.map((entry) => entry.key));
+    expect(keys.has("dsh-plugins")).toBe(true);
+    for (const removed of [
+      "dsh-sessions",
+      "dsh-credentials",
+      "dsh-providers",
+      "dsh-subagents",
+      "dsh-goals",
+      "dsh-skills",
+    ]) {
+      expect(keys.has(removed)).toBe(false);
+    }
+  });
 });

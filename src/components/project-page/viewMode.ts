@@ -37,7 +37,7 @@ export function effectiveAuxiliaryLayout({
   return hasAgentConversation ? layout : "full";
 }
 const COMPOSE_COMFORT_WIDTH = 760;
-const COMPOSE_ICON_ONLY_WIDTH = 680;
+const COMPOSE_ICON_ONLY_WIDTH = 760;
 
 function estimatedTextWidth(value: string): number {
   return Array.from(value).reduce((width, character) => {

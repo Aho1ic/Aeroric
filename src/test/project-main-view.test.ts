@@ -338,7 +338,7 @@ describe("project main view mode", () => {
   it("collapses the project rail before switching compose controls to icon-only", () => {
     expect(
       projectResponsiveLayout({ width: 1100, rightPanelWidth: 280, rightPanelVisible: true }),
-    ).toEqual({ autoCollapseRail: true, compactComposeControls: false });
+    ).toEqual({ autoCollapseRail: true, compactComposeControls: true });
     expect(
       projectResponsiveLayout({ width: 1100, rightPanelWidth: 360, rightPanelVisible: true }),
     ).toEqual({ autoCollapseRail: true, compactComposeControls: true });

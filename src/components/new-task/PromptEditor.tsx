@@ -1,5 +1,6 @@
 import { useRef, useCallback } from "react";
 import type { Project, PromptSkill } from "../../types";
+import type { DshSlashCommand } from "../../dshSlashCommands";
 import { CODE_EXTS } from "../../utils";
 import type { FileEntry, CrossProjectRef, MentionItem } from "./MentionPopover";
 import { APP_PLATFORM } from "../../platform";
@@ -76,11 +77,14 @@ function isPromptStartOffset(node: Text, offset: number): boolean {
 export type PromptSuggestionQuery =
   | { kind: "mention"; query: string }
   | { kind: "skill"; query: string }
+  | { kind: "dsh-command"; query: string }
   | null;
 
-function getPromptSuggestionQuery(): PromptSuggestionQuery {
+function getPromptSuggestionQuery(
+  slashSuggestionKind: "skill" | "dsh-command",
+): PromptSuggestionQuery {
   const skill = getSkillInfo();
-  if (skill) return { kind: "skill", query: skill.query };
+  if (skill) return { kind: slashSuggestionKind, query: skill.query };
   const mention = getMentionInfo();
   return mention ? { kind: "mention", query: mention.query } : null;
 }
@@ -312,6 +316,7 @@ export interface PromptEditorHandle {
   clear: () => void;
   focus: () => void;
   insertSkill: (skillName: string, commandPrefix: "/" | "$") => boolean;
+  insertText: (text: string) => boolean;
 }
 
 export interface PromptEditorContent {
@@ -332,6 +337,12 @@ export function usePromptEditor() {
     focus: () => editorRef.current?.focus(),
     insertSkill: (skillName, commandPrefix) =>
       editorRef.current ? insertSkillAtCaret(editorRef.current, skillName, commandPrefix) : false,
+    insertText: (text) => {
+      const editor = editorRef.current;
+      if (!editor) return false;
+      editor.focus();
+      return insertPlainTextAtSelection(text);
+    },
   };
 
   return { editorRef, isComposingRef, handle };
@@ -346,6 +357,10 @@ export function PromptEditor({
   skillIndex,
   skillMenuOpen,
   skillCommandPrefix,
+  dshCommandItems,
+  dshCommandIndex,
+  dshCommandMenuOpen,
+  slashSuggestionKind,
   placeholder,
   onSetIsEmpty,
   onUpdateSuggestions,
@@ -353,8 +368,10 @@ export function PromptEditor({
   onSelectFile,
   onSelectProject,
   onSelectSkill,
+  onSelectDshCommand,
   onSetMentionIndex,
   onSetSkillIndex,
+  onSetDshCommandIndex,
   sendShortcut,
   onSubmit,
   onContentChange,
@@ -368,6 +385,10 @@ export function PromptEditor({
   skillIndex: number;
   skillMenuOpen: boolean;
   skillCommandPrefix: "/" | "$";
+  dshCommandItems: readonly DshSlashCommand[];
+  dshCommandIndex: number;
+  dshCommandMenuOpen: boolean;
+  slashSuggestionKind: "skill" | "dsh-command";
   placeholder: string;
   onSetIsEmpty: (empty: boolean) => void;
   onUpdateSuggestions: (query: PromptSuggestionQuery) => void;
@@ -375,8 +396,10 @@ export function PromptEditor({
   onSelectFile: (file: FileEntry, crossProject?: CrossProjectRef) => void;
   onSelectProject: (project: Project) => void;
   onSelectSkill: (skill: PromptSkill) => void;
+  onSelectDshCommand: (command: DshSlashCommand) => void;
   onSetMentionIndex: (index: number) => void;
   onSetSkillIndex: (index: number) => void;
+  onSetDshCommandIndex: (index: number) => void;
   sendShortcut: SendShortcut;
   onSubmit: (immediate: boolean) => void;
   onContentChange?: (content: PromptEditorContent) => void;
@@ -472,8 +495,21 @@ export function PromptEditor({
     [captureContent, editorRef, onSelectSkill, onSetIsEmpty, skillCommandPrefix],
   );
 
+  const selectDshCommand = useCallback(
+    (command: DshSlashCommand) => {
+      const editor = editorRef.current;
+      if (!editor) return;
+      if (!insertSkillAtCaret(editor, command.name, "/")) return;
+
+      onSelectDshCommand(command);
+      onSetIsEmpty(false);
+      captureContent();
+    },
+    [captureContent, editorRef, onSelectDshCommand, onSetIsEmpty],
+  );
+
   function updateSuggestions() {
-    onUpdateSuggestions(getPromptSuggestionQuery());
+    onUpdateSuggestions(getPromptSuggestionQuery(slashSuggestionKind));
   }
 
   function handleInput() {
@@ -513,10 +549,29 @@ export function PromptEditor({
       }
     }
 
-    if (skillMenuOpen && e.key === "Escape") {
+    if ((skillMenuOpen || dshCommandMenuOpen) && e.key === "Escape") {
       e.preventDefault();
       onDismissSuggestions();
       return;
+    }
+
+    if (dshCommandItems.length > 0) {
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        onSetDshCommandIndex(Math.min(dshCommandIndex + 1, dshCommandItems.length - 1));
+        return;
+      }
+      if (e.key === "ArrowUp") {
+        e.preventDefault();
+        onSetDshCommandIndex(Math.max(dshCommandIndex - 1, 0));
+        return;
+      }
+      if (e.key === "Enter" || e.key === "Tab") {
+        e.preventDefault();
+        const command = dshCommandItems[dshCommandIndex];
+        if (command) selectDshCommand(command);
+        return;
+      }
     }
 
     if (skillItems.length > 0) {
@@ -640,7 +695,7 @@ export function PromptEditor({
   }
 
   return (
-    <div style={{ position: "relative" }}>
+    <div style={{ position: "relative", width: "100%", minWidth: 0 }}>
       <div
         ref={editorRef}
         className="prompt-editor"

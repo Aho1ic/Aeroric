@@ -38,7 +38,7 @@ export function nativeThemeForVariant(variant: ThemeVariant): "light" | "dark" {
 // macOS 的 titlebarAppearsTransparent 会透出窗口背景色，所以标题栏配色由这里决定。
 // 取值与 App.css 里 prefers-reduced-transparency 下的实色 token 保持一致。
 export function nativeWindowBackgroundForVariant(variant: ThemeVariant): string {
-  if (variant === "dark") return "#09090b";
+  if (variant === "dark") return "#050607";
   if (variant === "eyecare") return "#f6eddc";
   return "#fbfbfc";
 }

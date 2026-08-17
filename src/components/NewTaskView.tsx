@@ -30,6 +30,7 @@ import {
   type PromptSuggestionQuery,
 } from "./new-task/PromptEditor";
 import { SkillPopover } from "./new-task/SkillPopover";
+import { DshSlashCommandPopover } from "./new-task/DshSlashCommandPopover";
 import { sanitizePromptHtml } from "./new-task/promptHtml";
 import { ImageAttachments } from "./new-task/ImageAttachments";
 import { TextAttachments, type PastedText } from "./new-task/TextAttachments";
@@ -37,7 +38,8 @@ import { AgentPermSelector, type ComposeMenu } from "./new-task/AgentPermSelecto
 import { ModelOptionsMenu } from "./new-task/ModelOptionsMenu";
 import { LaunchModeSelector, type LaunchMode } from "./new-task/LaunchModeSelector";
 import { buildPromptWithTaskModes, shouldShowInstructionsBanner } from "./new-task/goalMode";
-import { DshSlashPalette } from "./DshSlashPalette";
+import { DshSlashPicker } from "./DshSlashPalette";
+import { DSH_SLASH_COMMANDS, type DshSlashCommand } from "../dshSlashCommands";
 import { Button } from "./ui/Button";
 import { useI18n } from "../i18n";
 import { APP_PLATFORM } from "../platform";
@@ -162,7 +164,9 @@ export function NewTaskView({
   const [dshAgentPreset, setDshAgentPreset] = useState<string>(
     initialDraft?.dshAgentPreset ?? "standard",
   );
-  const [dshSlashOpen, setDshSlashOpen] = useState(false);
+  const [dshCommandSearch, setDshCommandSearch] = useState<string | null>(null);
+  const [dshCommandIndex, setDshCommandIndex] = useState(0);
+  const [dshCommandPicker, setDshCommandPicker] = useState<DshSlashCommand | null>(null);
   const [modelsLoading, setModelsLoading] = useState(false);
   const [modelsError, setModelsError] = useState<string | null>(null);
   const modelRequestIdRef = useRef(0);
@@ -487,6 +491,11 @@ export function NewTaskView({
     if (dshAgent && speed !== "standard") setSpeed("standard");
   }, [dshAgent, speed]);
   useEffect(() => {
+    if (dshAgent) return;
+    setDshCommandSearch(null);
+    setDshCommandPicker(null);
+  }, [dshAgent]);
+  useEffect(() => {
     if (reasoningEffort && !availableEfforts.includes(reasoningEffort)) {
       setReasoningEffort(null);
     }
@@ -665,6 +674,13 @@ export function NewTaskView({
       )
       .slice(0, 12);
   }, [promptSkills, skillSearch]);
+  const dshCommandItems = useMemo(() => {
+    if (dshCommandSearch === null) return [];
+    const query = dshCommandSearch.trim().toLowerCase();
+    return DSH_SLASH_COMMANDS.filter(
+      (command) => !query || command.name.toLowerCase().startsWith(query),
+    );
+  }, [dshCommandSearch]);
 
   const activeCrossProject =
     mentionSearch !== null ? parseCrossProject(mentionSearch, otherProjects) : null;
@@ -673,33 +689,62 @@ export function NewTaskView({
 
   function updateSuggestionState(query: PromptSuggestionQuery) {
     if (query?.kind === "mention") {
+      setDshCommandPicker(null);
       setMentionSearch(query.query);
       setMentionIndex(0);
       setSkillSearch(null);
+      setDshCommandSearch(null);
       return;
     }
     if (query?.kind === "skill") {
+      setDshCommandPicker(null);
       setSkillSearch(query.query);
       setSkillIndex(0);
       setMentionSearch(null);
+      setDshCommandSearch(null);
+      return;
+    }
+    if (query?.kind === "dsh-command" && dshAgent) {
+      setDshCommandPicker(null);
+      setDshCommandSearch(query.query);
+      setDshCommandIndex(0);
+      setMentionSearch(null);
+      setSkillSearch(null);
       return;
     }
     setMentionSearch(null);
     setSkillSearch(null);
+    setDshCommandSearch(null);
+    setDshCommandPicker(null);
+  }
+
+  function syncEditorContent() {
+    const editor = editorRef.current;
+    if (!editor) return;
+    editorContentRef.current = {
+      html: editor.innerHTML,
+      text: editor.textContent || "",
+      hasChips: !!editor.querySelector("[data-file-path]"),
+    };
   }
 
   function handlePromptSkillSelect(skill: PromptSkill) {
     if (!editorHandle.insertSkill(skill.name, skillCommandPrefix)) return;
-    const editor = editorRef.current;
-    if (editor) {
-      editorContentRef.current = {
-        html: editor.innerHTML,
-        text: editor.textContent || "",
-        hasChips: !!editor.querySelector("[data-file-path]"),
-      };
-    }
+    syncEditorContent();
     setIsEmpty(false);
     setSkillSearch(null);
+  }
+
+  function handleDshCommandInserted(command: DshSlashCommand) {
+    setDshCommandSearch(null);
+    setDshCommandPicker(command.popup ? command : null);
+  }
+
+  function handleDshCommandMouseSelect(command: DshSlashCommand) {
+    if (!editorHandle.insertSkill(command.name, "/")) return;
+    syncEditorContent();
+    setIsEmpty(false);
+    handleDshCommandInserted(command);
   }
 
   function handleInitializeMd() {
@@ -759,6 +804,8 @@ export function NewTaskView({
     setIsEmpty(true);
     setMentionSearch(null);
     setSkillSearch(null);
+    setDshCommandSearch(null);
+    setDshCommandPicker(null);
     reservedImagesRef.current = [];
     setPastedImages([]);
     setPastedTexts([]);
@@ -943,15 +990,42 @@ export function NewTaskView({
       )}
 
       {/* Compose card */}
-      <div style={{ ...s.composeCard, position: "relative" }} onPaste={handleEditorPaste}>
-        {dshSlashOpen && dshAgent && (
-          <DshSlashPalette
-            editorInsert={(name) => editorHandle.insertSkill(name, "/")}
-            onDismiss={() => setDshSlashOpen(false)}
+      <div
+        style={{ ...s.composeCard, position: "relative", minWidth: 0 }}
+        data-composer-card
+        onPaste={handleEditorPaste}
+      >
+        {dshCommandPicker && dshAgent ? (
+          <DshSlashPicker
+            command={dshCommandPicker}
+            projectPath={project.path}
+            keyboardTargetRef={editorRef}
+            onPick={(argument) => {
+              if (!editorHandle.insertText(`${argument} `)) return;
+              syncEditorContent();
+              setIsEmpty(false);
+              setDshCommandPicker(null);
+            }}
+            onBack={() => {
+              setDshCommandPicker(null);
+              editorHandle.focus();
+            }}
+            onDismiss={() => {
+              setDshCommandPicker(null);
+              editorHandle.focus();
+            }}
           />
-        )}
+        ) : dshCommandSearch !== null && dshAgent ? (
+          <DshSlashCommandPopover
+            commands={dshCommandItems}
+            commandIndex={dshCommandIndex}
+            query={dshCommandSearch}
+            onSelectCommand={handleDshCommandMouseSelect}
+            onSetCommandIndex={setDshCommandIndex}
+          />
+        ) : null}
         {/* Mention dropdown */}
-        {skillSearch !== null ? (
+        {dshCommandSearch === null && !dshCommandPicker && skillSearch !== null ? (
           <SkillPopover
             skillSearch={skillSearch}
             skills={skillItems}
@@ -961,7 +1035,7 @@ export function NewTaskView({
             onSelectSkill={handlePromptSkillSelect}
             onSetSkillIndex={setSkillIndex}
           />
-        ) : mentionSearch !== null ? (
+        ) : dshCommandSearch === null && !dshCommandPicker && mentionSearch !== null ? (
           <MentionPopover
             mentionSearch={mentionSearch}
             mentionItems={mentionItems}
@@ -989,12 +1063,18 @@ export function NewTaskView({
           skillIndex={skillIndex}
           skillMenuOpen={skillSearch !== null}
           skillCommandPrefix={skillCommandPrefix}
+          dshCommandItems={dshCommandSearch !== null ? dshCommandItems : []}
+          dshCommandIndex={dshCommandIndex}
+          dshCommandMenuOpen={dshCommandSearch !== null || dshCommandPicker !== null}
+          slashSuggestionKind={dshAgent ? "dsh-command" : "skill"}
           placeholder={t("newTask.promptPlaceholder")}
           onSetIsEmpty={setIsEmpty}
           onUpdateSuggestions={updateSuggestionState}
           onDismissSuggestions={() => {
             setMentionSearch(null);
             setSkillSearch(null);
+            setDshCommandSearch(null);
+            setDshCommandPicker(null);
           }}
           onSelectFile={() => setMentionSearch(null)}
           onSelectProject={(proj) => {
@@ -1002,8 +1082,10 @@ export function NewTaskView({
             setMentionIndex(0);
           }}
           onSelectSkill={() => setSkillSearch(null)}
+          onSelectDshCommand={handleDshCommandInserted}
           onSetMentionIndex={setMentionIndex}
           onSetSkillIndex={setSkillIndex}
+          onSetDshCommandIndex={setDshCommandIndex}
           sendShortcut={sendShortcut}
           onSubmit={handleSubmit}
           onContentChange={(content) => {
@@ -1115,7 +1197,6 @@ export function NewTaskView({
             onToggleGoalMode={() => setGoalMode((v) => !v)}
             dshAgentPreset={dshAgentPreset}
             onSetDshAgentPreset={setDshAgentPreset}
-            onOpenDshSlash={() => setDshSlashOpen(true)}
             onSubmit={handleSubmit}
           />
         </div>

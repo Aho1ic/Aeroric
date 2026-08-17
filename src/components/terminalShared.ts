@@ -3,32 +3,36 @@ import { FitAddon } from "@xterm/addon-fit";
 import { Unicode11Addon } from "@xterm/addon-unicode11";
 import { WebglAddon } from "@xterm/addon-webgl";
 import { IS_MAC_WEBKIT } from "../platform";
-import { applyTerminalTextareaInputAttributes } from "./terminalInputFix";
+import {
+  applyTerminalTextareaInputAttributes,
+  beginTerminalTextareaInternalFocusReset,
+  endTerminalTextareaInternalFocusReset,
+} from "./terminalInputFix";
 import type { ThemeVariant } from "../types";
 
 // ── Theme ────────────────────────────────────────────────────────────────────
 
 export const DARK_THEME = {
-  background: "rgba(5, 5, 6, 0.9)",
-  foreground: "#d6dce8",
-  cursor: "#eadfff",
-  selectionBackground: "#30224b",
-  black: "#14161d",
-  red: "#ff7b72",
-  green: "#98d978",
-  yellow: "#f1c86b",
-  blue: "#8fb8ff",
-  magenta: "#c88cff",
-  cyan: "#68d8e8",
-  white: "#b8c0ce",
-  brightBlack: "#7b8494",
-  brightRed: "#ffa198",
-  brightGreen: "#b9f59a",
-  brightYellow: "#ffda84",
-  brightBlue: "#abcaff",
-  brightMagenta: "#dfb6ff",
-  brightCyan: "#92eff7",
-  brightWhite: "#eef1f7",
+  background: "rgba(6, 8, 10, 0.94)",
+  foreground: "#abb2bf",
+  cursor: "#528bff",
+  selectionBackground: "#1f4662",
+  black: "#1b1d23",
+  red: "#e06c75",
+  green: "#98c379",
+  yellow: "#e5c07b",
+  blue: "#61afef",
+  magenta: "#c678dd",
+  cyan: "#56b6c2",
+  white: "#abb2bf",
+  brightBlack: "#5c6370",
+  brightRed: "#e88388",
+  brightGreen: "#b0d48c",
+  brightYellow: "#f0cf8c",
+  brightBlue: "#79c0ff",
+  brightMagenta: "#d19aee",
+  brightCyan: "#6fc5d0",
+  brightWhite: "#d7dae0",
 };
 
 export const LIGHT_THEME = {
@@ -86,12 +90,12 @@ export function themeFor(variant: ThemeVariant) {
 
 const TERMINAL_INPUT_BACKGROUND_RGB: Record<ThemeVariant, readonly [number, number, number]> = {
   light: [241, 243, 245],
-  dark: [32, 33, 39],
+  dark: [17, 21, 26],
   eyecare: [238, 232, 213],
 };
 
 export function terminalInputBackgroundForTheme(variant: ThemeVariant): string {
-  if (variant === "dark") return "#202127";
+  if (variant === "dark") return "#11151a";
   if (variant === "eyecare") return "#eee8d5";
   return "#f1f3f5";
 }
@@ -375,6 +379,20 @@ export function attachMacWebKitTerminalGuard({
 
   let pointerSelecting = false;
   let terminalHasSelection = term.hasSelection();
+  let textareaDisabledBySelectionGuard = false;
+  let internalFocusResetActive = false;
+
+  const beginInternalFocusReset = () => {
+    if (!term.textarea || internalFocusResetActive) return;
+    internalFocusResetActive = true;
+    beginTerminalTextareaInternalFocusReset(term.textarea);
+  };
+
+  const endInternalFocusReset = () => {
+    if (!term.textarea || !internalFocusResetActive) return;
+    internalFocusResetActive = false;
+    endTerminalTextareaInternalFocusReset(term.textarea);
+  };
 
   // 拖选期间用 disabled 切断 IME host：
   // - blur: textarea 仍 focusable，后续 RAF / 内部回调可能把焦点夺回，IME 又能查
@@ -382,19 +400,26 @@ export function attachMacWebKitTerminalGuard({
   // 参考：xterm.js Discussion #5227（社区实战验证）。
   const disableTextarea = () => {
     if (term.textarea && !term.textarea.disabled) {
+      beginInternalFocusReset();
+      textareaDisabledBySelectionGuard = true;
       term.textarea.disabled = true;
     }
   };
 
   const enableTextarea = () => {
-    if (term.textarea && term.textarea.disabled) {
+    if (term.textarea && textareaDisabledBySelectionGuard) {
       term.textarea.disabled = false;
+      textareaDisabledBySelectionGuard = false;
     }
   };
 
   const refocusTextarea = () => {
-    if (term.textarea) {
-      term.textarea.focus({ preventScroll: true });
+    try {
+      if (term.textarea && !term.textarea.disabled) {
+        term.textarea.focus({ preventScroll: true });
+      }
+    } finally {
+      endInternalFocusReset();
     }
   };
 
@@ -471,6 +496,7 @@ export function attachMacWebKitTerminalGuard({
     document.removeEventListener("keydown", handleKeyDown, true);
     // 兜底：若卸载时仍处于选区拖动状态，恢复 textarea，避免下次输入丢失。
     enableTextarea();
+    endInternalFocusReset();
     writer?.setSelectionPaused(false);
   };
 }
