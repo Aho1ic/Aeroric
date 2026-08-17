@@ -8,7 +8,12 @@ export const REASONING_EFFORTS = [
   "ultra",
 ] as const;
 
-export type ReasoningEffort = (typeof REASONING_EFFORTS)[number];
+/** DeepSeek Harness adapter-owned effort ids. DSH does not use the Claude/Codex vocabulary. */
+export const DSH_REASONING_EFFORTS = ["off", "high", "max"] as const;
+
+export type ReasoningEffort =
+  | (typeof REASONING_EFFORTS)[number]
+  | (typeof DSH_REASONING_EFFORTS)[number];
 export type TaskSpeed = "standard" | "fast";
 
 /** dsh 内建默认模型目录(`@deepseek-ai/dsh-llm-deepseek` 的官方目录)。 */
@@ -57,11 +62,11 @@ export function availableReasoningEfforts(
   return REASONING_EFFORTS.filter((effort) => effort !== "ultra");
 }
 
-/** family 版:dsh 无 effort 档位(不复用 claude/codex 词表),返回空集以隐藏控件。 */
+/** Family-aware effort vocabulary. DSH values come from dsh-llm-deepseek. */
 export function availableReasoningEffortsForFamily(
   family: import("./types").ProtocolFamily,
   model: string | undefined,
 ): readonly ReasoningEffort[] {
-  if (family === "dsh") return [];
+  if (family === "dsh") return DSH_REASONING_EFFORTS;
   return availableReasoningEfforts(family === "codex", model);
 }

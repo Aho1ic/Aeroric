@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { save as saveDialog } from "@tauri-apps/plugin-dialog";
 import type {
@@ -13,6 +13,7 @@ import { permissionModeLabel } from "../types";
 import { StatusIcon } from "./StatusIcon";
 import { TerminalView } from "./TerminalView";
 import { SessionView } from "./SessionView";
+import { DshComposer } from "./DshComposer";
 import { useToast } from "./Toast";
 import { shortenPath, getUsageColor } from "../utils";
 import { useUsageSnapshot } from "../hooks/useUsageSnapshot";
@@ -115,6 +116,7 @@ export function RunningView({
   terminalFontSize,
   monoFontFamily,
   agentOptions,
+  liveBars,
 }: {
   task: Task;
   projectPath: string;
@@ -154,6 +156,7 @@ export function RunningView({
   terminalFontSize: TerminalFontSize;
   monoFontFamily: FontFamily;
   agentOptions?: AgentOption[];
+  liveBars?: ReactNode;
 }) {
   const { t } = useI18n();
   const { showToast } = useToast();
@@ -163,6 +166,7 @@ export function RunningView({
   const isDetached = task.status === "detached";
   const isInterrupted = task.status === "interrupted";
   const sessionOwner = resolveTaskSessionOwner(task, agentOptions);
+  const isDshSession = sessionOwner.family === "dsh";
   const sessionFields = getTaskSessionFieldsByFamily(task, sessionOwner.family);
   const rawPersistedSessionPath = sessionFields.sessionPath ?? sessionFields.legacySessionPath;
   const persistedSessionId = sessionFields.sessionId ?? sessionFields.legacySessionId;
@@ -542,6 +546,7 @@ export function RunningView({
         initialSnapshot={terminalInitialSnapshot}
         rawReplayData={restoreState.rawReplayData}
         highlightCursorLine
+        dshVariant={sessionOwner.family === "dsh"}
       />
     </div>
   ) : undefined;
@@ -905,6 +910,8 @@ export function RunningView({
         )}
       </div>
 
+      {liveBars ?? null}
+
       {/* Main content: terminal when active, session view when done/failed. */}
       {isDetached || isInterrupted ? (
         <div style={s.interruptedSessionWrap}>
@@ -1008,7 +1015,7 @@ export function RunningView({
           <div style={{ flex: 1, minHeight: 0 }}>
             <TerminalView
               key={terminalViewKey}
-              onInput={onInput}
+              onInput={isDshSession ? () => {} : onInput}
               onResize={onResize}
               onRegisterTerminal={onRegisterTerminal}
               onReady={onTerminalReady}
@@ -1021,6 +1028,7 @@ export function RunningView({
               initialSnapshot={terminalInitialSnapshot}
               rawReplayData={restoreState.rawReplayData}
               highlightCursorLine
+              dshVariant={sessionOwner.family === "dsh"}
             />
           </div>
         </div>
@@ -1030,9 +1038,17 @@ export function RunningView({
           sessionPath={sessionPath}
           projectPath={projectPath}
           isCodex={sessionOwner.codexLike}
+          sessionId={resumeSessionId}
           family={sessionOwner.family}
           fallback={terminalHistoryFallback}
           onLoadFailed={() => handleSessionLoadFailed(sessionPath)}
+        />
+      )}
+
+      {isDshSession && (
+        <DshComposer
+          taskId={task.id}
+          sessionId={persistedSessionId ?? recoveredSession?.sessionId}
         />
       )}
 

@@ -714,6 +714,8 @@ fn process_claude_session_line(
 pub(crate) struct SessionMessage {
     pub(crate) role: String,
     pub(crate) content: Vec<SessionContent>,
+    #[serde(rename = "messageId", skip_serializing_if = "Option::is_none")]
+    pub(crate) message_id: Option<String>,
 }
 
 #[derive(serde::Serialize)]
@@ -1245,6 +1247,7 @@ fn parse_claude_session_line(line: &str, messages: &mut Vec<SessionMessage>) {
             messages.push(SessionMessage {
                 role: "user".to_string(),
                 content: vec![content],
+                message_id: None,
             });
         }
         return;
@@ -1260,6 +1263,7 @@ fn parse_claude_session_line(line: &str, messages: &mut Vec<SessionMessage>) {
                 messages.push(SessionMessage {
                     role: "user".to_string(),
                     content: parts,
+                    message_id: None,
                 });
             }
         }
@@ -1273,6 +1277,7 @@ fn parse_claude_session_line(line: &str, messages: &mut Vec<SessionMessage>) {
                 messages.push(SessionMessage {
                     role: "assistant".to_string(),
                     content: parts,
+                    message_id: None,
                 });
             }
         }
@@ -1438,6 +1443,7 @@ fn append_assistant_content(messages: &mut Vec<SessionMessage>, part: SessionCon
         messages.push(SessionMessage {
             role: "assistant".to_string(),
             content: vec![part],
+            message_id: None,
         });
     }
 }
@@ -1477,6 +1483,7 @@ fn append_codex_user_message(messages: &mut Vec<SessionMessage>, mut content: Ve
     messages.push(SessionMessage {
         role: "user".to_string(),
         content,
+        message_id: None,
     });
 }
 
@@ -1567,6 +1574,7 @@ fn parse_codex_session_line(line: &str, messages: &mut Vec<SessionMessage>) {
                                 messages.push(SessionMessage {
                                     role: "assistant".to_string(),
                                     content: parts,
+                                    message_id: None,
                                 });
                             }
                         } else {
@@ -1660,6 +1668,7 @@ fn parse_codex_session_line(line: &str, messages: &mut Vec<SessionMessage>) {
                         messages.push(SessionMessage {
                             role: "user".to_string(),
                             content: vec![SessionContent::ToolResult { id, output }],
+                            message_id: None,
                         });
                     }
                 }
@@ -3425,6 +3434,7 @@ mod tests {
                         text: "first turn".into(),
                     },
                 ],
+                message_id: None,
             },
             SessionMessage {
                 role: "assistant".into(),
@@ -3433,12 +3443,14 @@ mod tests {
                     name: "Bash".into(),
                     input: "{\"cmd\":\"ls\"}".into(),
                 }],
+                message_id: None,
             },
             SessionMessage {
                 role: "assistant".into(),
                 content: vec![SessionContent::Text {
                     text: "second turn".into(),
                 }],
+                message_id: None,
             },
         ];
         let md = render_to_string(&sample_meta(), &messages);

@@ -209,6 +209,11 @@ pub fn write_custom_provider_settings(
 /// 行级 upsert:仅改写本键、保留用户手工添加的其他键;`api_key` 为 None 时移除。
 /// dsh 凭据分层里"继承环境"优先于该文件,headless 任务实际走 env 注入;文件同步
 /// 服务于 Phase 7 常驻 `dsh web` 进程与用户直接使用 CLI 的场景。权限收紧为 0600。
+///
+/// 降级路径:凭据保存的主路径现在是 webui 的 `credentials.set` RPC(原子写、跨进程
+/// 加锁、保留注释;见 `dsh_plugins::persist_dsh_api_key`)。当 `dsh web` 未运行或 RPC
+/// 失败时,才回落到本函数的文件级直写——文件是耐久来源,后续 webui 启动会热加载它,
+/// 所以降级写入与 RPC 写入最终落到同一文件、不并发(此处无锁,仅在 RPC 不可用时使用)。
 pub fn sync_dsh_credentials(home: &Path, api_key: Option<&str>) -> Result<(), String> {
     let path = home.join(".credentials.yaml");
     let existing = fs::read_to_string(&path).unwrap_or_default();

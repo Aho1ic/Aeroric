@@ -100,7 +100,8 @@ export function ModelOptionsMenu({
   const agentOptions = useAgentOptions();
   const family = agentFamily(agent, agentOptions);
   const efforts = availableReasoningEffortsForFamily(family, selectedModel);
-  // dsh 无 effort/speed 档位(计划 D6),整段隐藏;claude/codex 行为不变。
+  // DSH uses its adapter-owned Off/High/Max efforts and has no speed control;
+  // Claude/Codex keep their existing effort and speed menus.
   const showReasoning = efforts.length > 0;
   const showSpeed = family !== "dsh";
   const [open, setOpen] = useState(false);

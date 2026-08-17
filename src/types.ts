@@ -292,6 +292,7 @@ export interface Task {
   prompt: string;
   agent: AgentType;
   selectedModel?: string;
+  dshAgentPreset?: string;
   reasoningEffort?: string;
   speed?: string;
   permissionMode: PermissionMode;
@@ -306,6 +307,8 @@ export interface Task {
   claudeSessionPath?: string;
   dshSessionId?: string;
   dshSessionPath?: string;
+  dshWorkspaceId?: string;
+  dshPromptMode?: string;
   /** 实际创建当前会话的 Agent；切换配置失败后仍用于定位原会话 home。 */
   sessionAgent?: AgentType;
   /** 实际会话所属协议族；避免切换后的 task.agent 误导 resume/session 解析。 */
@@ -996,4 +999,287 @@ export interface MarketplaceInstallRecord {
   gitRef: string;
   installedAt: number;
   targetPath: string;
+}
+
+// ── DSH extended types ────────────────────────────────────────────────────────
+
+export interface DshSessionSummary {
+  sessionId: string;
+  updatedAt: number;
+  running: boolean;
+  blank: boolean;
+  parentSessionId?: string;
+  origin?: "subagent" | string;
+  cwd?: string;
+  agentPreset?: string;
+  projections?: {
+    asOfSeq: number;
+    values: Record<string, unknown>;
+  };
+}
+
+export interface DshSessionHistory {
+  events: unknown[];
+  hasMore: boolean;
+  projections?: {
+    asOfSeq: number;
+    values: Record<string, unknown>;
+  };
+}
+
+export interface DshWorkspace {
+  workspaceId: string;
+  path: string;
+  title: string;
+  sessionIds: string[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface DshWorkspaceList {
+  items: DshWorkspace[];
+  archivedSessionIds: string[];
+}
+
+export interface DshCredentialView {
+  configured: boolean;
+  source?: string;
+  writable: boolean;
+}
+
+export interface DshProviderInfo {
+  provider?: string;
+  settingsNs: string;
+  displayName?: string;
+  settingsPath?: string[];
+  active: boolean;
+  declared?: boolean;
+}
+
+export interface DshModelCatalogFailure {
+  id: string;
+  name: string;
+  message: string;
+}
+
+export interface DshModelInfo {
+  id: string;
+  name?: string;
+  reasoning?: {
+    efforts: Array<{ id: string; name: string; description?: string }>;
+    defaultEffort?: string;
+  };
+}
+
+export interface DshModelGroup {
+  id: string;
+  name: string;
+  models: DshModelInfo[];
+}
+
+export interface DshGlobalModels {
+  groups: DshModelGroup[];
+  failures: DshModelCatalogFailure[];
+}
+
+export interface DshDiscoveredModel {
+  id: string;
+  name?: string;
+  contextWindow?: number;
+  maxTokens?: number;
+}
+
+export interface DshSubagentSummary {
+  sessionId: string;
+  parentSessionId: string;
+  running: boolean;
+  cwd?: string;
+  mode?: "one-shot" | "continuable" | string;
+  label?: string;
+}
+
+export interface DshGoal {
+  goalId: string;
+  title: string;
+  revision: number;
+  status: string;
+  createdAt?: string;
+}
+
+export interface DshHostInfo {
+  version?: string;
+  cwd: string;
+  provider?: string;
+  model?: string;
+  attachedSessions?: number;
+  canOpenPath: boolean;
+}
+
+export interface DshDirectoryEntry {
+  name: string;
+  path: string;
+  hidden?: boolean;
+}
+
+export interface DshDirectoryListing {
+  path: string;
+  home: string;
+  crumbs: DshDirectoryEntry[];
+  entries: DshDirectoryEntry[];
+  truncated: boolean;
+}
+
+export interface DshPresetReadResult {
+  content: string;
+  preset: string;
+  trust?: "system" | "user" | string;
+  name?: string;
+  description?: string;
+}
+
+export interface DshPresetList {
+  presets: Array<{
+    id: string;
+    trust: "system" | "user" | string;
+    isDefault: boolean;
+    name?: string;
+    description?: string;
+    broken?: string;
+  }>;
+  authorable: boolean;
+  hasDocument: boolean;
+}
+
+export interface DshSkillEntry {
+  id: string;
+  name?: string;
+  description?: string;
+  whenToUse?: string;
+  modelInvocable?: boolean;
+}
+
+// ── DeepSeek Harness live session projection / jobs / queue types ────────────
+// Mirror the session/projection, session/jobs, session/queue push frames the
+// dsh web subprocess emits over events.mux. The backend forwards each frame
+// verbatim as a Tauri event (dispatch_mux_frame in dsh_webui.rs), so these
+// are the wire shapes the frontend consumes.
+
+/** `session/projection` push frame: one projection unit's finished value. */
+export interface DshProjectionFrame {
+  type: "session/projection";
+  sessionId: string;
+  /** Projection unit key: title | goal | plan | todo | permissions | subagents | tokenMeter | imageLimits … */
+  key: string;
+  /** The unit's schema-validated view output (shape varies per key). */
+  value: unknown;
+  /** Higher-seq-wins watermark at emission. */
+  seq: number;
+}
+
+/** TodoWrite projection view ( shapes the `todo` projection unit emits). */
+export interface DshTodoItem {
+  content: string;
+  status: "pending" | "in_progress" | "completed";
+  activeForm?: string;
+}
+
+export interface DshTodoProjection {
+  items: DshTodoItem[];
+}
+
+/** Goal projection view (the `goal` unit). */
+export interface DshGoalProjection {
+  goal: {
+    id: string;
+    /** Current Harness uses `objective`; older builds exposed `title`. */
+    objective?: string;
+    title?: string;
+    revision: number;
+    phase: "active" | "paused" | "blocked" | "complete";
+    blockedReason?: { code: string; message: string };
+    maxGoalRounds?: number;
+  } | null;
+  roundsStarted?: number;
+  createdAt?: number;
+  updatedAt?: number;
+}
+
+/** Plan-mode projection view (the `plan` unit). */
+export interface DshPlanProjection {
+  active: boolean;
+}
+
+/** `session/jobs` push frame: live background jobs for a session. */
+export interface DshJobView {
+  id: string;
+  kind: string;
+  status: "running" | "stopping" | "completed" | "killed" | "failed";
+  label?: string;
+}
+
+export interface DshJobsFrame {
+  type: "session/jobs";
+  sessionId: string;
+  jobs: DshJobView[];
+}
+
+/** `session/queue` push frame: pending-prompt queue snapshot. */
+export interface DshQueueItem {
+  /** Message id used by session.updateQueue. */
+  id?: string;
+  placement?: "queued" | "steering" | "context";
+  message?: {
+    id: string;
+    role: "system" | "user" | "assistant";
+    content: unknown[];
+    source?: { kind: string; [key: string]: unknown };
+  };
+  /** Legacy aliases accepted while talking to pre-rc.5 Web builds. */
+  itemId?: string;
+  text?: string;
+}
+
+export interface DshQueueFrame {
+  type: "session/queue";
+  sessionId: string;
+  items: DshQueueItem[];
+}
+
+/** `session/subscribed` frame: confirms the mux subscription with lastSeq. */
+export interface DshSubscribedFrame {
+  type: "session/subscribed";
+  sessionId: string;
+  lastSeq?: number;
+}
+
+export interface DshSessionStatsProjection {
+  turns: number;
+  steps: number;
+  llmMs: number;
+  toolMs: number;
+  ttftMs: number;
+  ttftSteps: number;
+  decodeMs: number;
+  decodeTokens: number;
+}
+
+export interface DshTokenUsageProjection {
+  uncachedInputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+}
+
+/** Aggregated per-session live state derived from projection/jobs/queue frames. */
+export interface DshLiveSessionState {
+  title?: string;
+  todo?: DshTodoItem[];
+  goal?: DshGoalProjection["goal"];
+  planMode?: boolean;
+  permissions?: unknown;
+  jobs?: DshJobView[];
+  queue?: DshQueueItem[];
+  lastSeq?: number;
+  /** Every projection unit is retained so optional Harness UI plugins can consume it. */
+  projections?: Record<string, unknown>;
 }

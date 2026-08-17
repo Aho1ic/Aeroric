@@ -5,6 +5,7 @@ import {
   Check,
   ChevronDown,
   Code2,
+  Copy,
   Feather,
   FileText,
   Globe2,
@@ -14,6 +15,7 @@ import {
   Search,
   Sparkles,
   TerminalSquare,
+  Trash2,
   Workflow,
 } from "lucide-react";
 import {
@@ -64,6 +66,25 @@ interface DshAgentPreset {
   id: string;
   name?: string;
   description?: string;
+}
+
+interface DshPresetWire {
+  id: string;
+  trust: "system" | "user";
+  isDefault: boolean;
+  name?: string;
+  description?: string;
+  broken?: string;
+}
+
+function errorMessage(error: unknown): string {
+  if (typeof error === "string" && error.trim()) return error;
+  if (error instanceof Error && error.message.trim()) return error.message;
+  if (typeof error === "object" && error !== null && "message" in error) {
+    const message = (error as { message?: unknown }).message;
+    if (typeof message === "string" && message.trim()) return message;
+  }
+  return String(error || "Unknown error");
 }
 
 const DEFAULT_SETTINGS: DshSettingsSnapshot = {
@@ -151,6 +172,7 @@ export function DshPluginsPanel() {
   const [settings, setSettings] = useState<DshSettingsSnapshot>(DEFAULT_SETTINGS);
   const [openingConfig, setOpeningConfig] = useState(false);
   const [configOpenError, setConfigOpenError] = useState(false);
+  const [presetRuntimeError, setPresetRuntimeError] = useState<string | null>(null);
 
   useEffect(() => {
     let current = true;
@@ -162,6 +184,22 @@ export function DshPluginsPanel() {
         // The official roster remains useful before DSH is installed or in browser preview mode.
       },
     );
+    void invoke<DshPresetWire[]>("list_dsh_agent_presets").then((presets) => {
+      if (!current) return;
+      setPresetRuntimeError(null);
+      if (!presets.length) return;
+      const defaultPreset = presets.find((preset) => preset.isDefault)?.id;
+      setSettings((previous) => ({
+        ...previous,
+        ...(defaultPreset ? { defaultPreset } : {}),
+        customPresets: presets
+          .filter((preset) => preset.trust === "user")
+          .map((preset) => ({ id: preset.id, name: preset.name, description: preset.description })),
+      }));
+    }).catch((error: unknown) => {
+      if (current) setPresetRuntimeError(errorMessage(error));
+      // The local YAML snapshot remains available before a Web profile can boot.
+    });
     return () => {
       current = false;
     };
@@ -231,7 +269,12 @@ export function DshPluginsPanel() {
       {primaryView === "plugins" ? (
         <PluginsView settings={settings} onSettingsChange={setSettings} />
       ) : (
-        <AgentPresetsView settings={settings} onSettingsChange={setSettings} />
+        <AgentPresetsView
+          settings={settings}
+          onSettingsChange={setSettings}
+          runtimeError={presetRuntimeError}
+          onRuntimeError={setPresetRuntimeError}
+        />
       )}
     </div>
   );
@@ -709,9 +752,13 @@ function PluginInventory() {
 function AgentPresetsView({
   settings,
   onSettingsChange,
+  runtimeError,
+  onRuntimeError,
 }: {
   settings: DshSettingsSnapshot;
   onSettingsChange: (settings: DshSettingsSnapshot) => void;
+  runtimeError: string | null;
+  onRuntimeError: (message: string | null) => void;
 }) {
   const { t } = useI18n();
   const [savingPreset, setSavingPreset] = useState<string | null>(null);
@@ -722,14 +769,16 @@ function AgentPresetsView({
     if (savingPreset) return false;
     setSavingPreset(id);
     setFailedPreset(null);
+    onRuntimeError(null);
     try {
-      const snapshot = await invoke<DshSettingsSnapshot>("set_dsh_default_preset", {
-        agent: "dsh",
-        preset: id,
-      });
-      onSettingsChange({ ...DEFAULT_SETTINGS, ...snapshot });
+      await invoke("set_dsh_web_default_preset", { preset: id });
+      // The Web API is authoritative. The local snapshot is only refreshed
+      // for display and may lag while DSH hot-reloads its settings document.
+      const snapshot = await invoke<DshSettingsSnapshot>("get_dsh_settings_snapshot", { agent: "dsh" });
+      onSettingsChange({ ...DEFAULT_SETTINGS, ...snapshot, defaultPreset: id });
       return true;
-    } catch {
+    } catch (error: unknown) {
+      onRuntimeError(errorMessage(error));
       setFailedPreset(id);
       return false;
     } finally {
@@ -738,8 +787,53 @@ function AgentPresetsView({
   }
 
   async function startCreatorDraft() {
-    if (!(await makeDefault("cordis"))) return;
     window.dispatchEvent(new CustomEvent(START_DSH_CREATOR_DRAFT_EVENT));
+  }
+
+  async function openPresetDocument(preset: string) {
+    onRuntimeError(null);
+    try {
+      await invoke("open_dsh_agent_preset_document", { preset });
+    } catch (error: unknown) {
+      onRuntimeError(errorMessage(error));
+    }
+  }
+
+  async function copyPreset(from: string, targetPreset: string) {
+    if (!targetPreset.trim()) return;
+    onRuntimeError(null);
+    setSavingPreset(from);
+    try {
+      await invoke("copy_dsh_agent_preset", {
+        from,
+        targetPreset,
+        name: targetPreset.trim(),
+      });
+      const snapshot = await invoke<DshSettingsSnapshot>("get_dsh_settings_snapshot", {
+        agent: "dsh",
+      });
+      onSettingsChange({ ...DEFAULT_SETTINGS, ...snapshot });
+    } catch (error: unknown) {
+      onRuntimeError(errorMessage(error));
+    } finally {
+      setSavingPreset(null);
+    }
+  }
+
+  async function removePreset(preset: string) {
+    onRuntimeError(null);
+    setSavingPreset(preset);
+    try {
+      await invoke("remove_dsh_agent_preset", { preset });
+      const snapshot = await invoke<DshSettingsSnapshot>("get_dsh_settings_snapshot", {
+        agent: "dsh",
+      });
+      onSettingsChange({ ...DEFAULT_SETTINGS, ...snapshot });
+    } catch (error: unknown) {
+      onRuntimeError(errorMessage(error));
+    } finally {
+      setSavingPreset(null);
+    }
   }
 
   return (
@@ -748,6 +842,11 @@ function AgentPresetsView({
         title={t("appSettings.dshAgentPresetsTitle")}
         intro={t("appSettings.dshAgentPresetsIntro")}
       />
+      {runtimeError ? (
+        <p className="dsh-preset-runtime-error" role="status">
+          {t("appSettings.dshPresetSaveFailedDetail", { message: runtimeError })}
+        </p>
+      ) : null}
       <PresetGroup title={t("appSettings.dshBuiltInGroup")}>
         {BUILT_IN_PRESETS.map(({ id, icon: Icon, nameKey, descriptionKey }) => (
           <PresetCard
@@ -777,11 +876,12 @@ function AgentPresetsView({
               saving={savingPreset === preset.id}
               failed={failedPreset === preset.id}
               onSelect={() => void makeDefault(preset.id)}
+              onRead={() => void openPresetDocument(preset.id)}
+              onCopy={(target) => void copyPreset(preset.id, target)}
+              onRemove={() => void removePreset(preset.id)}
             />
           ))
-        ) : (
-          <p className="dsh-custom-empty">{t("appSettings.dshNoCustomPresets")}</p>
-        )}
+        ) : null}
         <Button
           variant="outline"
           size="sm"
@@ -816,6 +916,9 @@ function PresetCard({
   saving,
   failed,
   onSelect,
+  onRead,
+  onCopy,
+  onRemove,
 }: {
   id: string;
   icon: ReactNode;
@@ -826,8 +929,12 @@ function PresetCard({
   saving: boolean;
   failed: boolean;
   onSelect: () => void;
+  onRead?: () => void;
+  onCopy?: (target: string) => void;
+  onRemove?: () => void;
 }) {
   const { t } = useI18n();
+  const [copied, setCopied] = useState(false);
   return (
     <button
       type="button"
@@ -856,6 +963,86 @@ function PresetCard({
       {failed ? (
         <span className="dsh-preset-error">{t("appSettings.dshPresetSaveFailed")}</span>
       ) : null}
+      {onRead && (
+        <span
+          className="dsh-preset-card__actions"
+          // One inline row of custom-preset actions: open the preset file,
+          // duplicate into a new preset (typed below the card), and delete.
+          style={{ display: "inline-flex", gap: 6, marginTop: 6 }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <button
+            type="button"
+            className="dsh-preset-card__action"
+            onClick={onRead}
+            title={t("appSettings.dshOpenPresetFile")}
+            style={presetActionBtn}
+          >
+            <FileText size={12} />
+          </button>
+          <button
+            type="button"
+            className="dsh-preset-card__action"
+            onClick={() => setCopied((v) => !v)}
+            title={t("appSettings.dshCopyPreset")}
+            style={presetActionBtn}
+          >
+            <Copy size={12} />
+          </button>
+          {copied && onCopy && (
+            <input
+              autoFocus
+              type="text"
+              placeholder={t("appSettings.dshCopyPresetTarget")}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  const v = (e.target as HTMLInputElement).value.trim();
+                  if (v) onCopy(v);
+                  setCopied(false);
+                } else if (e.key === "Escape") {
+                  setCopied(false);
+                }
+              }}
+              style={{
+                height: 22,
+                width: 110,
+                padding: "0 6px",
+                border: "1px solid var(--border-medium)",
+                borderRadius: 4,
+                background: "var(--bg-input)",
+                color: "var(--text-primary)",
+                fontSize: 11,
+                outline: "none",
+              }}
+            />
+          )}
+          {onRemove && (
+            <button
+              type="button"
+              className="dsh-preset-card__action"
+              onClick={onRemove}
+              title={t("appSettings.dshRemovePreset")}
+              style={{ ...presetActionBtn, color: "var(--danger)" }}
+            >
+              <Trash2 size={12} />
+            </button>
+          )}
+        </span>
+      )}
     </button>
   );
 }
+
+const presetActionBtn: React.CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center",
+  width: 24,
+  height: 24,
+  padding: 0,
+  background: "var(--bg-hover)",
+  border: "1px solid var(--border-dim)",
+  borderRadius: 4,
+  color: "var(--text-secondary)",
+  cursor: "pointer",
+};

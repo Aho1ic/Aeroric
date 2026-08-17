@@ -89,9 +89,11 @@ import { isRunnableScriptFile, selectRunnableCondaEnvironment } from "./file-vie
 import { dispatchFileViewerCommand } from "./file-viewer/editorCommandEvents";
 import { isSqliteDatabaseFileName } from "./file-explorer/fileEntryUtils";
 import { agentDisplayLabel } from "../agents";
-import { hasTaskSessionPath } from "../taskSession";
+import { hasTaskSessionPath, resolveTaskSessionOwner } from "../taskSession";
 import { useAgentOptions } from "../hooks/useAgentOptions";
 import { usePlatformRuntimeInfo } from "../hooks/usePlatformRuntimeInfo";
+import { useDshLiveSessions } from "../hooks/useDshLiveSessions";
+import { DshLiveBars } from "./DshLiveBars";
 import { useI18n } from "../i18n";
 import { AnimatedSelectionTrack } from "./ui/AnimatedSelection";
 import { formatTerminalTabLabel } from "./terminalTabLabel";
@@ -382,6 +384,10 @@ export function ProjectPage({
   const { showToast } = useToast();
   const agentOptions = useAgentOptions();
   const platformRuntime = usePlatformRuntimeInfo();
+  // dsh live session state (goal/todo/plan/jobs/queue) consumed from the
+  // projection/jobs/queue push frames the backend already forwards; keyed by
+  // dsh session id so every visible running dsh task renders its own bars.
+  const dshLive = useDshLiveSessions();
   const {
     rightPanel,
     editorGroups,
@@ -1037,6 +1043,7 @@ export function ProjectPage({
         pastedTexts: [],
         launchMode: "local",
         baseBranch: "",
+        dshAgentPreset: "cordis",
       };
       handleNewTask();
     };
@@ -2325,6 +2332,12 @@ export function ProjectPage({
                       terminalFontSize={terminalFontSize}
                       monoFontFamily={monoFontFamily}
                       agentOptions={agentOptions}
+                      liveBars={
+                        resolveTaskSessionOwner(task, agentOptions).family === "dsh" &&
+                        task.dshSessionId
+                          ? <DshLiveBars sessionId={task.dshSessionId} live={dshLive.sessions[task.dshSessionId]} />
+                          : undefined
+                      }
                     />
                   );
                 })}

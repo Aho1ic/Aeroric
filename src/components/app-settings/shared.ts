@@ -67,6 +67,7 @@ export function getAgentExecutablePlaceholder(agent: AgentKey): string {
   if (APP_PLATFORM === "windows") {
     if (agent === "claude") return "claude or C:\\Users\\<you>\\AppData\\Roaming\\npm\\claude.cmd";
     if (agent === "claude_gpt55") return "%USERPROFILE%\\.claude\\start-gpt55.sh";
+    if (agent === "dsh") return "dsh or C:\\Users\\<you>\\Documents\\deepseek-harness";
     if (agent !== "codex") return `%USERPROFILE%\\.aeroric\\agents\\${agent}.ps1`;
     return "codex or C:\\Users\\<you>\\AppData\\Roaming\\npm\\codex.cmd";
   }
@@ -74,12 +75,14 @@ export function getAgentExecutablePlaceholder(agent: AgentKey): string {
   if (APP_PLATFORM === "macos") {
     if (agent === "claude") return "claude or /opt/homebrew/bin/claude";
     if (agent === "claude_gpt55") return "/Users/<you>/.claude/start-gpt55.sh";
+    if (agent === "dsh") return "dsh or /Users/<you>/Documents/deepseek-harness";
     if (agent !== "codex") return "/Users/<you>/.claude/start-agent.sh";
     return "codex or /opt/homebrew/bin/codex";
   }
 
   if (agent === "claude") return "claude or /usr/local/bin/claude";
   if (agent === "claude_gpt55") return "~/.claude/start-gpt55.sh";
+  if (agent === "dsh") return "dsh or /path/to/deepseek-harness";
   if (agent !== "codex") return "~/.claude/start-agent.sh";
   return "codex or /usr/local/bin/codex";
 }

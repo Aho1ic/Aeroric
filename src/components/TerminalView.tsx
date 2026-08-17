@@ -44,6 +44,7 @@ interface TerminalViewProps {
   rawReplayData?: string;
   onSnapshot?: (snapshot: string) => void;
   highlightCursorLine?: boolean;
+  dshVariant?: boolean;
 }
 
 interface TerminalRuntime {
@@ -70,6 +71,7 @@ export function TerminalView({
   rawReplayData,
   onSnapshot,
   highlightCursorLine = false,
+  dshVariant = false,
 }: TerminalViewProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const runtimeRef = useRef<TerminalRuntime | null>(null);
@@ -396,6 +398,8 @@ export function TerminalView({
       ref={containerRef}
       data-testid="agent-terminal"
       data-terminal-theme={themeVariant}
+      data-terminal-variant={dshVariant ? "dsh" : "native"}
+      className={dshVariant ? "dsh-terminal-surface" : undefined}
       style={{
         width: "100%",
         height: "100%",

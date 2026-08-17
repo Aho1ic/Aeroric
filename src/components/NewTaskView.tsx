@@ -37,6 +37,7 @@ import { AgentPermSelector, type ComposeMenu } from "./new-task/AgentPermSelecto
 import { ModelOptionsMenu } from "./new-task/ModelOptionsMenu";
 import { LaunchModeSelector, type LaunchMode } from "./new-task/LaunchModeSelector";
 import { buildPromptWithTaskModes, shouldShowInstructionsBanner } from "./new-task/goalMode";
+import { DshSlashPalette } from "./DshSlashPalette";
 import { Button } from "./ui/Button";
 import { useI18n } from "../i18n";
 import { APP_PLATFORM } from "../platform";
@@ -54,7 +55,6 @@ import {
   availableReasoningEffortsForFamily,
   findModelIgnoreCase,
   normalizeModelList,
-  REASONING_EFFORTS,
   type ReasoningEffort,
   type TaskSpeed,
 } from "../modelOptions";
@@ -81,6 +81,7 @@ export interface NewTaskDraft {
   launchMode?: LaunchMode;
   baseBranch?: string;
   selectedModel?: string;
+  dshAgentPreset?: string;
 }
 
 type CrossProjectFileMap = Map<string, FileEntry[]>;
@@ -129,6 +130,7 @@ export function NewTaskView({
     selectedModel?: string;
     reasoningEffort?: ReasoningEffort | null;
     speed?: TaskSpeed;
+    dshAgentPreset?: string;
     injectPromptIntoTerminal?: boolean;
   }) => void;
   onStartTerminal?: () => void;
@@ -157,6 +159,8 @@ export function NewTaskView({
   const [composeOpenMenu, setComposeOpenMenu] = useState<ComposeMenu>(null);
   const [availableModels, setAvailableModels] = useState<string[]>([]);
   const [selectedModel, setSelectedModel] = useState<string>(initialDraft?.selectedModel ?? "");
+  const [dshAgentPreset, setDshAgentPreset] = useState<string>(initialDraft?.dshAgentPreset ?? "standard");
+  const [dshSlashOpen, setDshSlashOpen] = useState(false);
   const [modelsLoading, setModelsLoading] = useState(false);
   const [modelsError, setModelsError] = useState<string | null>(null);
   const modelRequestIdRef = useRef(0);
@@ -220,6 +224,7 @@ export function NewTaskView({
     launchMode,
     baseBranch,
     selectedModel,
+    dshAgentPreset,
   });
   useEffect(() => {
     draftDataRef.current = {
@@ -234,6 +239,7 @@ export function NewTaskView({
       launchMode,
       baseBranch,
       selectedModel,
+      dshAgentPreset,
     };
   }, [
     agent,
@@ -247,6 +253,7 @@ export function NewTaskView({
     launchMode,
     baseBranch,
     selectedModel,
+    dshAgentPreset,
   ]);
   useEffect(() => {
     return () => {
@@ -280,6 +287,7 @@ export function NewTaskView({
         launchMode: data.launchMode,
         baseBranch: data.baseBranch,
         selectedModel: data.selectedModel,
+        dshAgentPreset: data.dshAgentPreset,
       });
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -339,7 +347,11 @@ export function NewTaskView({
         if (!initialDraft) {
           const rawEffort = result.reasoning_effort ?? null;
           const configEffort =
-            rawEffort && (REASONING_EFFORTS as readonly string[]).includes(rawEffort)
+            rawEffort &&
+            (availableReasoningEffortsForFamily(
+              agentFamily(targetAgent, agentOptions),
+              models[0],
+            ) as readonly string[]).includes(rawEffort)
               ? (rawEffort as ReasoningEffort)
               : null;
           const configSpeed = result.reasoning_speed ?? null;
@@ -467,6 +479,9 @@ export function NewTaskView({
     agentFamily(agent, agentOptions),
     selectedModel,
   );
+  useEffect(() => {
+    if (dshAgent && speed !== "standard") setSpeed("standard");
+  }, [dshAgent, speed]);
   useEffect(() => {
     if (reasoningEffort && !availableEfforts.includes(reasoningEffort)) {
       setReasoningEffort(null);
@@ -702,7 +717,8 @@ export function NewTaskView({
       baseBranch: "",
       selectedModel: modelSelectable ? selectedModel || undefined : undefined,
       reasoningEffort,
-      speed,
+      speed: dshAgent ? "standard" : speed,
+      dshAgentPreset: dshAgentPreset,
       injectPromptIntoTerminal: agent === "claude",
     });
   }
@@ -727,7 +743,8 @@ export function NewTaskView({
       baseBranch,
       selectedModel: modelSelectable ? selectedModel || undefined : undefined,
       reasoningEffort,
-      speed,
+      speed: dshAgent ? "standard" : speed,
+      dshAgentPreset,
       // Codex can show trust / hook review selectors before its composer is
       // ready. Route its first prompt through the guarded PTY injection path,
       // which waits for those startup gates and submits on a later input turn.
@@ -923,6 +940,12 @@ export function NewTaskView({
 
       {/* Compose card */}
       <div style={{ ...s.composeCard, position: "relative" }} onPaste={handleEditorPaste}>
+        {dshSlashOpen && dshAgent && (
+          <DshSlashPalette
+            editorInsert={(name) => editorHandle.insertSkill(name, "/")}
+            onDismiss={() => setDshSlashOpen(false)}
+          />
+        )}
         {/* Mention dropdown */}
         {skillSearch !== null ? (
           <SkillPopover
@@ -1086,6 +1109,9 @@ export function NewTaskView({
             onOpenMenuChange={setComposeOpenMenu}
             onTogglePlanMode={() => setPlanMode((v) => !v)}
             onToggleGoalMode={() => setGoalMode((v) => !v)}
+            dshAgentPreset={dshAgentPreset}
+            onSetDshAgentPreset={setDshAgentPreset}
+            onOpenDshSlash={() => setDshSlashOpen(true)}
             onSubmit={handleSubmit}
           />
         </div>

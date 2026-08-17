@@ -4,7 +4,6 @@ import { setTheme as setAppTheme } from "@tauri-apps/api/app";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import type { ReasoningEffort, TaskSpeed } from "./modelOptions";
 import type {
   Project,
   Task,
@@ -79,6 +78,8 @@ import {
 } from "./components/project-page/viewMode";
 import s from "./styles";
 import { launchDshWebUi } from "./dshWebUi";
+import { DshApprovalDialog, type DshApprovalRequest } from "./components/DshApprovalDialog";
+import { DshQuestionDialog, type DshQuestionRequest } from "./components/DshQuestionDialog";
 import "./App.css";
 
 import {
@@ -412,6 +413,10 @@ function App() {
   const [hubMode, setHubMode] = useState(false);
   const [showReleasePage, setShowReleasePage] = useState(false);
 
+  // DSH approval / question dialogs
+  const [dshApprovalRequests, setDshApprovalRequests] = useState<DshApprovalRequest[]>([]);
+  const [dshQuestionRequests, setDshQuestionRequests] = useState<DshQuestionRequest[]>([]);
+
   const tm = useTerminalManager();
   const pendingTaskStartsRef = useRef<Record<string, () => void>>({});
   const agentOptionsRef = useRef(agentOptions);
@@ -642,6 +647,22 @@ function App() {
     );
   }, [monoFontFamily]);
 
+  // Keep the events.host SSE subscription alive while any DSH task is active.
+  // The backend command is idempotent: calling start again while running
+  // simply replaces the abort token, so it is safe to re-invoke.
+  useEffect(() => {
+    const hasDshActive = tasks.some(
+      (task) =>
+        isActiveTaskStatus(task.status) &&
+        agentFamily(task.agent, agentOptionsRef.current) === "dsh",
+    );
+    if (hasDshActive) {
+      invoke("start_dsh_host_events").catch(console.error);
+    } else {
+      invoke("stop_dsh_host_events").catch(console.error);
+    }
+  }, [tasks]);
+
   const handleToggleTheme = useCallback(() => {
     setThemeMode((currentMode) => {
       // Toggle only cycles between the two standard variants. Special themes
@@ -681,9 +702,21 @@ function App() {
         chunks.flat(),
         activeTaskIds,
       );
-      setTasks(loadedTasks);
-      changedProjectIds.forEach((projectId) => {
-        persistProjectTasksQuietly(projectId, loadedTasks);
+      const dshSpeedCleanedProjectIds = new Set<string>();
+      const normalizedTasks = loadedTasks.map((task) => {
+        if (
+          task.speed !== "fast" ||
+          agentFamily(task.agent, agentOptionsRef.current) !== "dsh"
+        ) {
+          return task;
+        }
+        dshSpeedCleanedProjectIds.add(task.projectId);
+        return { ...task, speed: "standard" };
+      });
+      setTasks(normalizedTasks);
+      const projectsToPersist = new Set([...changedProjectIds, ...dshSpeedCleanedProjectIds]);
+      projectsToPersist.forEach((projectId) => {
+        persistProjectTasksQuietly(projectId, normalizedTasks);
       });
     }
 
@@ -781,12 +814,98 @@ function App() {
       // Rust/Tauri 事件桥接到现有 DOM 事件总线，让所有设置消费者统一刷新。
       dispatchAppSettingsChanged(window);
     });
+    // DSH approval / question dialogs — the agent pauses until the client responds.
+    const p6 = listen<{
+      type: string;
+      rpcId: string;
+      sessionId: string;
+      approvalId: string;
+      toolName: string;
+      callId?: string;
+      reason?: string;
+    }>("dsh-approval-requested", (e) => {
+      setDshApprovalRequests((prev) => {
+        const request = {
+          rpcId: e.payload.rpcId,
+          sessionId: e.payload.sessionId,
+          approvalId: e.payload.approvalId,
+          toolName: e.payload.toolName,
+          callId: e.payload.callId,
+          reason: e.payload.reason,
+        } satisfies DshApprovalRequest;
+        const next = prev.filter((item) => item.rpcId !== request.rpcId);
+        return [...next, request];
+      });
+    });
+    const p7 = listen<{
+      type: string;
+      rpcId: string;
+      sessionId: string;
+      questions: Array<{
+        id: string;
+        question: string;
+        detail?: string;
+        header?: string;
+        options?: Array<{ label: string; description?: string }>;
+        multiSelect?: boolean;
+      }>;
+    }>("dsh-question-requested", (e) => {
+      setDshQuestionRequests((prev) => {
+        const request = {
+          rpcId: e.payload.rpcId,
+          sessionId: e.payload.sessionId,
+          questions: e.payload.questions,
+        } satisfies DshQuestionRequest;
+        const next = prev.filter((item) => item.rpcId !== request.rpcId);
+        return [...next, request];
+      });
+    });
+    const p8 = listen<{ sessionId?: string; approvalId?: string }>("dsh-approval-resolved", (e) => {
+      setDshApprovalRequests((prev) => prev.filter((item) =>
+        !(item.sessionId === e.payload.sessionId && item.approvalId === e.payload.approvalId),
+      ));
+    });
+    const p9 = listen<{ sessionId?: string; questionRpcId?: string }>("dsh-question-resolved", (e) => {
+      setDshQuestionRequests((prev) => prev.filter((item) => item.rpcId !== e.payload.questionRpcId));
+    });
+    // DSH events.host is the live invalidation channel for settings/session
+    // surfaces. Re-emit one browser event with the original payload so panels
+    // can refresh their own snapshot without coupling App to their state.
+    const dispatchDshHostRefresh = (eventName: string, payload: unknown) => {
+      window.dispatchEvent(new CustomEvent("dsh-host-refresh", { detail: { eventName, payload } }));
+    };
+    const p10 = listen("dsh-host-session-added", (e) => dispatchDshHostRefresh("session-added", e.payload));
+    const p11 = listen("dsh-host-session-removed", (e) => dispatchDshHostRefresh("session-removed", e.payload));
+    const p12 = listen("dsh-host-session-status", (e) => dispatchDshHostRefresh("session-status", e.payload));
+    const p13 = listen("dsh-host-workspace-changed", (e) => dispatchDshHostRefresh("workspace-changed", e.payload));
+    const p14 = listen("dsh-host-workspace-removed", (e) => dispatchDshHostRefresh("workspace-removed", e.payload));
+    const p15 = listen("dsh-host-workspace-order-changed", (e) => dispatchDshHostRefresh("workspace-order-changed", e.payload));
+    const p16 = listen("dsh-host-archived-sessions-changed", (e) => dispatchDshHostRefresh("archived-sessions-changed", e.payload));
+    const p17 = listen<{ message?: string; error?: string }>(
+      "dsh-host-agent-error",
+      (e) => {
+        const msg = e.payload?.message ?? e.payload?.error ?? "DSH agent error";
+        showToastRef.current(msg, "error");
+      },
+    );
     return () => {
       p1.then((fn) => fn());
       p2.then((fn) => fn());
       p3.then((fn) => fn());
       p4.then((fn) => fn());
       p5.then((fn) => fn());
+      p6.then((fn) => fn());
+      p7.then((fn) => fn());
+      p8.then((fn) => fn());
+      p9.then((fn) => fn());
+      p10.then((fn) => fn());
+      p11.then((fn) => fn());
+      p12.then((fn) => fn());
+      p13.then((fn) => fn());
+      p14.then((fn) => fn());
+      p15.then((fn) => fn());
+      p16.then((fn) => fn());
+      p17.then((fn) => fn());
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -1107,6 +1226,29 @@ function App() {
     injectPromptIntoTerminal = false,
     promptOverride?: string,
   ) {
+    if (agentFamily(task.agent, agentOptionsRef.current) === "dsh") {
+      invoke("run_dsh_task", {
+        taskId: task.id,
+        agent: task.agent,
+        projectPath,
+        prompt: promptOverride ?? task.prompt,
+        sessionId: task.dshSessionId,
+        workspaceId: task.dshWorkspaceId,
+        agentPreset: task.dshAgentPreset,
+        promptMode: task.dshPromptMode,
+        selectedModel: task.selectedModel,
+        reasoningEffort: task.reasoningEffort,
+        permissionMode: task.permissionMode,
+        images,
+        clientTimeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+        onOutput: tm.createOutputChannel(task.id),
+      }).catch((err: unknown) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        tm.writeErrorToTerminal(task.id, `\r\nError: ${msg}\r\n`);
+        updateTaskStatus(task.id, "failed", undefined, msg);
+      });
+      return;
+    }
     invoke(taskCommandName("local", "run"), {
       taskId: task.id,
       projectPath,
@@ -1200,6 +1342,7 @@ function App() {
       selectedModel,
       reasoningEffort,
       speed,
+      dshAgentPreset,
       injectPromptIntoTerminal,
     }: {
       prompt: string;
@@ -1210,6 +1353,7 @@ function App() {
       selectedModel?: string;
       reasoningEffort?: string | null;
       speed?: string;
+      dshAgentPreset?: string;
       immediate: boolean;
       launchMode: "local" | "worktree" | "webui";
       baseBranch: string;
@@ -1267,6 +1411,10 @@ function App() {
       selectedModel,
       reasoningEffort: reasoningEffort ?? undefined,
       speed,
+      dshAgentPreset:
+        agentFamily(agent, agentOptionsRef.current) === "dsh"
+          ? dshAgentPreset ?? "standard"
+          : undefined,
       permissionMode,
       status: immediate ? "pending" : "todo",
       createdAt: Date.now(),
@@ -1499,6 +1647,12 @@ function App() {
       });
       return;
     }
+    if (task && agentFamily(task.agent, agentOptionsRef.current) === "dsh") {
+      invoke("cancel_dsh_task", { taskId }).catch((e: unknown) => {
+        showToast(t("toast.cancelTaskFailed", { error: String(e) }));
+      });
+      return;
+    }
     const projectPath = task?.worktreePath ?? project?.path ?? "";
     invoke(taskCommandName("local", "cancel"), { taskId, projectPath }).catch((e: unknown) => {
       showToast(t("toast.cancelTaskFailed", { error: String(e) }));
@@ -1507,6 +1661,31 @@ function App() {
 
   function invokeResumeTask(task: Task, project: Project, sessionId: string) {
     const projectLocation = resolveProjectLocation(project);
+    if (resolveTaskSessionOwner(task, agentOptionsRef.current).family === "dsh") {
+      invoke("run_dsh_task", {
+        taskId: task.id,
+        agent: task.agent,
+        projectPath: task.worktreePath ?? project.path,
+        // Reconnect the persistent DSH session without replaying the original
+        // user message; subsequent input goes through the DSH composer.
+        prompt: "",
+        sessionId,
+        workspaceId: task.dshWorkspaceId,
+        agentPreset: task.dshAgentPreset,
+        promptMode: task.dshPromptMode,
+        selectedModel: task.selectedModel,
+        reasoningEffort: task.reasoningEffort,
+        permissionMode: task.permissionMode,
+        images: [],
+        clientTimeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+        onOutput: tm.createOutputChannel(task.id),
+      }).catch((err: unknown) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        tm.writeErrorToTerminal(task.id, `\r\nError: ${msg}\r\n`);
+        updateTaskStatus(task.id, "failed", undefined, msg);
+      });
+      return;
+    }
     if (projectLocation.kind === "ssh") {
       const connection = sshConnections.find((item) => item.id === projectLocation.connectionId);
       if (!connection) {
@@ -1652,18 +1831,6 @@ function App() {
     if (!project) return false;
 
     const owner = resolveTaskSessionOwner(task, agentOptions);
-    // dsh headless 无原生 resume:接续 = 同配置的 handoff 新会话(携带结构化
-    // 上下文),UI 层的 resume 入口即"新会话接续"。
-    if (owner.family === "dsh") {
-      await handleSwitchTaskConfig(taskId, {
-        agent: owner.agent,
-        selectedModel: task.selectedModel,
-        reasoningEffort: (task.reasoningEffort as ReasoningEffort | undefined) ?? null,
-        speed: (task.speed as TaskSpeed | undefined) ?? "standard",
-        permissionMode: task.permissionMode,
-      });
-      return true;
-    }
     const session = await resolveTaskSessionReference(task, project);
     if (!session.sessionId) {
       showToast(t("running.resumeUnavailable"), "warning");
@@ -2580,6 +2747,14 @@ function App() {
         onDshWebSearchEnabledChange={setDshWebSearchEnabled}
       />
       {showReleasePage && <ReleasePage onClose={() => setShowReleasePage(false)} />}
+      <DshApprovalDialog
+        request={dshApprovalRequests[0] ?? null}
+        onClose={() => setDshApprovalRequests((prev) => prev.slice(1))}
+      />
+      <DshQuestionDialog
+        request={dshQuestionRequests[0] ?? null}
+        onClose={() => setDshQuestionRequests((prev) => prev.slice(1))}
+      />
     </div>
   );
 }

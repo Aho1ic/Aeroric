@@ -1,7 +1,8 @@
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from "react";
 import type React from "react";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@tauri-apps/api/core";
-import { Check, RefreshCw, TriangleAlert } from "lucide-react";
+import { Check, FolderOpen, RefreshCw, TriangleAlert } from "lucide-react";
 import { useI18n } from "../../i18n";
 import {
   DEFAULT_SEND_SHORTCUT,
@@ -368,6 +369,14 @@ export const AgentPathSection = forwardRef<
     }
   }
 
+  async function handlePickDshSource() {
+    if (builtInAgent !== "dsh") return;
+    const selected = await openDialog({ directory: true, multiple: false });
+    if (typeof selected !== "string" || !selected) return;
+    clearVersions();
+    setSettings((prev) => ({ ...prev, dsh_path: selected }));
+  }
+
   const currentCustomAgent = findCustomAgent(settings, agentKey);
   const originalCustomAgent = findCustomAgent(originalSettings, agentKey);
   const currentPath = pathField ? settings[pathField] : (currentCustomAgent?.path ?? "");
@@ -456,30 +465,44 @@ export const AgentPathSection = forwardRef<
       {!hideInstallation && (
         <div style={fieldStyle}>
           <label style={labelStyle}>{pathLabel}</label>
-          <input
-            style={{
-              ...inputStyle,
-              opacity: loading ? 0.65 : 1,
-              cursor: loading ? "wait" : "text",
-            }}
-            value={currentPath}
-            onChange={(e) => {
-              clearVersions();
-              const nextPath = e.target.value;
-              setSettings((prev) => {
-                if (pathField) return { ...prev, [pathField]: nextPath };
-                return {
-                  ...prev,
-                  custom_agents: (prev.custom_agents ?? []).map((profile) =>
-                    profile.id === agentKey ? { ...profile, path: nextPath } : profile,
-                  ),
-                };
-              });
-            }}
-            placeholder={getAgentExecutablePlaceholder(agentKey)}
-            disabled={loading}
-            spellCheck={false}
-          />
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <input
+              style={{
+                ...inputStyle,
+                flex: 1,
+                opacity: loading ? 0.65 : 1,
+                cursor: loading ? "wait" : "text",
+              }}
+              value={currentPath}
+              onChange={(e) => {
+                clearVersions();
+                const nextPath = e.target.value;
+                setSettings((prev) => {
+                  if (pathField) return { ...prev, [pathField]: nextPath };
+                  return {
+                    ...prev,
+                    custom_agents: (prev.custom_agents ?? []).map((profile) =>
+                      profile.id === agentKey ? { ...profile, path: nextPath } : profile,
+                    ),
+                  };
+                });
+              }}
+              placeholder={getAgentExecutablePlaceholder(agentKey)}
+              disabled={loading}
+              spellCheck={false}
+            />
+            {builtInAgent === "dsh" && (
+              <Button
+                variant="outline"
+                size="icon-sm"
+                icon={FolderOpen}
+                aria-label={t("appSettings.chooseDshSource")}
+                title={t("appSettings.chooseDshSource")}
+                onClick={() => void handlePickDshSource()}
+                disabled={loading}
+              />
+            )}
+          </div>
           <span style={hintStyle}>{pathHint}</span>
         </div>
       )}

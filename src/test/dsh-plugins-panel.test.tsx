@@ -38,6 +38,9 @@ describe("DshPluginsPanel", () => {
       if (command === "set_dsh_default_preset") {
         return Promise.resolve({ ...snapshot, defaultPreset: "code" });
       }
+      if (command === "set_dsh_web_default_preset") {
+        return Promise.resolve();
+      }
       return Promise.reject(new Error(`unexpected command: ${command}`));
     });
   });
@@ -108,8 +111,7 @@ describe("DshPluginsPanel", () => {
 
     await user.click(screen.getByRole("button", { name: /Code mode/ }));
     await waitFor(() => {
-      expect(invoke).toHaveBeenCalledWith("set_dsh_default_preset", {
-        agent: "dsh",
+      expect(invoke).toHaveBeenCalledWith("set_dsh_web_default_preset", {
         preset: "code",
       });
     });

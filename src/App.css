@@ -1861,6 +1861,12 @@ body {
   );
 }
 
+.compose-agent-menu-column-viewport::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
+}
+
 .model-options-scroll {
   scrollbar-width: none;
   -ms-overflow-style: none;
@@ -1870,6 +1876,35 @@ body {
   display: none;
   width: 0;
   height: 0;
+}
+
+/* DeepSeek Harness TerminalBlock geometry/tokens applied to the DSH API task
+ * surface. The xterm canvas remains interactive, but the surrounding surface
+ * follows DSH's 12px card, code-block background and 22px code rhythm. */
+.dsh-terminal-surface {
+  border-radius: 12px;
+  background: var(--terminal-bg, var(--bg-panel)) !important;
+  font-family: var(--font-mono);
+  line-height: 22px;
+  padding: 9px 14px 9px 30px;
+  box-sizing: border-box;
+}
+
+.dsh-terminal-surface .xterm-viewport {
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--text-hint) 38%, transparent) transparent;
+}
+
+.dsh-terminal-surface .xterm-viewport::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.dsh-terminal-surface .xterm-viewport::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 6px;
+  background-clip: padding-box;
+  background-color: color-mix(in srgb, var(--text-hint) 38%, transparent);
 }
 
 .model-options-submenu[data-state="open"] {
@@ -2770,7 +2805,7 @@ html.dark .notebook-rich-text font[color="#000000"] {
 
 .agent-config-switch-groups {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 10px;
 }
 
@@ -2821,6 +2856,14 @@ html.dark .notebook-rich-text font[color="#000000"] {
   gap: 3px;
   padding: 5px;
   overflow-y: auto;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.agent-config-switch-options::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
 }
 
 .agent-config-switch-option {
@@ -4437,4 +4480,540 @@ html:not(.dark) .xterm-helper-textarea {
 
 .xterm .composition-view:not(.active) {
   display: none !important;
+}
+
+/* DeepSeek Harness advanced session views. */
+.dsh-insights-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 22px;
+  padding: 2px 7px;
+  border: 1px solid var(--border-dim);
+  border-radius: 4px;
+  background: var(--bg-input);
+  color: var(--text-secondary);
+  font: inherit;
+  cursor: pointer;
+}
+
+.dsh-insights-trigger:hover {
+  border-color: var(--border-medium);
+  color: var(--text-primary);
+  background: var(--bg-hover);
+}
+
+.dsh-insights-trigger small {
+  color: var(--text-hint);
+  font-family: var(--font-mono);
+}
+
+.dsh-insights-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: color-mix(in srgb, #111827 48%, transparent);
+}
+
+.dsh-insights-dialog {
+  width: min(1040px, calc(100vw - 48px));
+  height: min(760px, calc(100vh - 48px));
+  min-width: 0;
+  min-height: 360px;
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr);
+  overflow: hidden;
+  border: 1px solid var(--border-medium);
+  border-radius: 8px;
+  background: var(--bg-panel);
+  box-shadow: 0 24px 70px color-mix(in srgb, #111827 28%, transparent);
+  color: var(--text-primary);
+}
+
+.dsh-insights-header {
+  min-height: 48px;
+  padding: 8px 12px 8px 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border-bottom: 1px solid var(--border-dim);
+}
+
+.dsh-insights-header > div {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.dsh-insights-header code {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-hint);
+  font-size: 10px;
+}
+
+.dsh-insights-header > button {
+  width: 28px;
+  height: 28px;
+  display: inline-grid;
+  place-items: center;
+  flex: 0 0 auto;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.dsh-insights-header > button:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.dsh-insights-tabs {
+  display: flex;
+  min-width: 0;
+  overflow-x: auto;
+  padding: 0 10px;
+  border-bottom: 1px solid var(--border-dim);
+  background: var(--bg-root);
+}
+
+.dsh-insights-tabs button {
+  position: relative;
+  min-height: 38px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+  padding: 0 12px;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  cursor: pointer;
+}
+
+.dsh-insights-tabs button[data-active="true"] {
+  color: var(--text-primary);
+}
+
+.dsh-insights-tabs button[data-active="true"]::after {
+  content: "";
+  position: absolute;
+  left: 10px;
+  right: 10px;
+  bottom: 0;
+  height: 2px;
+  background: var(--primary-action-bg);
+}
+
+.dsh-insights-body {
+  position: relative;
+  min-height: 0;
+  overflow: auto;
+  padding: 14px 16px 20px;
+}
+
+.dsh-insight-empty {
+  min-height: 120px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  color: var(--text-hint);
+  font-size: 12px;
+}
+
+.dsh-insights-error {
+  position: sticky;
+  bottom: 0;
+  margin-top: 10px;
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, var(--danger) 35%, var(--border-dim));
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--danger) 8%, var(--bg-panel));
+  color: var(--danger);
+  font-size: 11px;
+}
+
+.dsh-insight-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.dsh-insight-search {
+  min-width: 180px;
+  max-width: 360px;
+  flex: 1 1 260px;
+  height: 30px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px;
+  border: 1px solid var(--border-dim);
+  border-radius: 4px;
+  background: var(--bg-input);
+  color: var(--text-hint);
+}
+
+.dsh-insight-search input {
+  width: 100%;
+  min-width: 0;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+}
+
+.dsh-insight-segments {
+  display: flex;
+  align-items: stretch;
+  border: 1px solid var(--border-dim);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.dsh-insight-segments button {
+  min-height: 28px;
+  padding: 0 8px;
+  border: none;
+  border-right: 1px solid var(--border-dim);
+  background: var(--bg-input);
+  color: var(--text-muted);
+  font: inherit;
+  cursor: pointer;
+}
+
+.dsh-insight-segments button:last-child { border-right: none; }
+.dsh-insight-segments button[data-active="true"] { background: var(--bg-hover); color: var(--text-primary); }
+
+.dsh-insight-load {
+  width: 100%;
+  min-height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  margin-bottom: 8px;
+  border: 1px dashed var(--border-medium);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  cursor: pointer;
+}
+
+.dsh-trajectory-list,
+.dsh-produced-files,
+.dsh-workflow-list,
+.dsh-schedule-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.dsh-trajectory-entry {
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--border-dim);
+  border-left: 3px solid var(--text-hint);
+  border-radius: 4px;
+  background: var(--bg-root);
+}
+
+.dsh-trajectory-entry[data-category="message"] { border-left-color: var(--primary-action-bg); }
+.dsh-trajectory-entry[data-category="tool"] { border-left-color: var(--warning); }
+.dsh-trajectory-entry[data-category="lifecycle"] { border-left-color: var(--success); }
+
+.dsh-trajectory-summary {
+  width: 100%;
+  min-width: 0;
+  min-height: 32px;
+  display: grid;
+  grid-template-columns: 14px 68px 58px minmax(120px, 1fr) auto;
+  align-items: center;
+  gap: 7px;
+  padding: 4px 8px;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  text-align: left;
+  font: inherit;
+  cursor: pointer;
+}
+
+.dsh-trajectory-summary:hover { background: var(--bg-hover); }
+.dsh-trajectory-summary time,
+.dsh-trajectory-summary code { color: var(--text-hint); font-size: 10px; }
+.dsh-trajectory-summary strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dsh-trajectory-summary > span { color: var(--text-hint); font-size: 10px; }
+
+.dsh-trajectory-detail {
+  max-height: 54px;
+  overflow: hidden;
+  padding: 0 12px 7px 88px;
+  color: var(--text-muted);
+  font-size: 11px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.dsh-trajectory-entry pre,
+.dsh-feedback-panel pre {
+  margin: 0;
+  padding: 10px 12px;
+  overflow: auto;
+  border-top: 1px solid var(--border-dim);
+  background: var(--bg-input);
+  color: var(--text-secondary);
+  font: 10px/1.55 var(--font-mono);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.dsh-insight-metrics {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(140px, 1fr));
+  gap: 8px;
+}
+
+.dsh-insight-metric {
+  min-height: 74px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  padding: 10px 12px;
+  border: 1px solid var(--border-dim);
+  border-radius: 6px;
+  background: var(--bg-root);
+}
+
+.dsh-insight-metric span { color: var(--text-muted); font-size: 11px; }
+.dsh-insight-metric strong { font: 600 18px/1.2 var(--font-mono); color: var(--text-primary); }
+
+.dsh-produced-files > button {
+  min-width: 0;
+  min-height: 36px;
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 9px;
+  border: 1px solid var(--border-dim);
+  border-radius: 4px;
+  background: var(--bg-root);
+  color: var(--text-secondary);
+  text-align: left;
+  font: inherit;
+  cursor: pointer;
+}
+
+.dsh-produced-files > button:hover { background: var(--bg-hover); color: var(--text-primary); }
+.dsh-produced-files > button span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font-mono); }
+.dsh-produced-files > button small { color: var(--text-hint); }
+
+.dsh-workflow-list > section {
+  overflow: hidden;
+  border: 1px solid var(--border-dim);
+  border-radius: 6px;
+  background: var(--bg-root);
+}
+
+.dsh-workflow-list header {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  min-height: 38px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border-dim);
+}
+
+.dsh-workflow-list header span,
+.dsh-workflow-member small { color: var(--text-hint); font-size: 10px; }
+.dsh-workflow-phase { padding: 7px 10px 9px; }
+.dsh-workflow-phase h4 { margin: 0 0 5px; color: var(--text-muted); font-size: 11px; font-weight: 600; }
+
+.dsh-workflow-member {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 14px minmax(100px, 1fr) minmax(100px, .8fr) auto;
+  align-items: center;
+  gap: 7px;
+  min-height: 28px;
+  color: var(--text-secondary);
+}
+
+.dsh-workflow-member code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-hint); font-size: 9px; }
+
+.dsh-schedule-list > div {
+  min-width: 0;
+  min-height: 46px;
+  display: grid;
+  grid-template-columns: 18px minmax(140px, 1fr) auto auto;
+  align-items: center;
+  gap: 9px;
+  padding: 7px 10px;
+  border: 1px solid var(--border-dim);
+  border-radius: 4px;
+  background: var(--bg-root);
+}
+
+.dsh-schedule-list > div > div { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.dsh-schedule-list strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dsh-schedule-list span,
+.dsh-schedule-list small { color: var(--text-hint); font-size: 10px; }
+.dsh-schedule-list code { color: var(--text-muted); font-size: 10px; }
+.dsh-schedule-list > div[data-state="overdue"] { border-left: 3px solid var(--warning); }
+.dsh-schedule-list > div[data-state="dispatched"],
+.dsh-schedule-list > div[data-state="deleted"] { opacity: .65; }
+
+.dsh-feedback-panel {
+  max-width: 720px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.dsh-feedback-rating-hint {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.dsh-feedback-panel textarea {
+  width: 100%;
+  min-height: 120px;
+  resize: vertical;
+  padding: 9px 10px;
+  border: 1px solid var(--border-medium);
+  border-radius: 4px;
+  outline: none;
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font: inherit;
+}
+
+.dsh-feedback-panel > button {
+  min-height: 30px;
+  align-self: flex-end;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px;
+  border: 1px solid var(--primary-action-bg);
+  border-radius: 4px;
+  background: var(--primary-action-bg);
+  color: var(--primary-action-text);
+  font: inherit;
+  cursor: pointer;
+}
+
+.dsh-feedback-panel > button:disabled { opacity: .5; cursor: default; }
+
+.dsh-message-feedback {
+  min-height: 24px;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 3px;
+  margin-top: 8px;
+  padding-top: 6px;
+  border-top: 1px solid var(--border-dim);
+}
+
+.dsh-message-feedback > button {
+  width: 24px;
+  height: 24px;
+  display: inline-grid;
+  place-items: center;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-hint);
+  cursor: pointer;
+}
+
+.dsh-message-feedback > button:hover,
+.dsh-message-feedback > button[aria-pressed="true"] {
+  background: var(--bg-hover);
+  color: var(--primary-action-bg);
+}
+
+.dsh-message-feedback > button:disabled { opacity: .45; cursor: default; }
+.dsh-message-feedback-note {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 2px 6px !important;
+  width: auto !important;
+  color: var(--text-muted) !important;
+  font-size: 10px;
+}
+
+.dsh-message-feedback-editor {
+  display: inline-flex;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: 4px;
+  flex: 1 1 220px;
+}
+
+.dsh-message-feedback-editor textarea {
+  min-width: 160px;
+  flex: 1 1 180px;
+  resize: vertical;
+  padding: 4px 6px;
+  border: 1px solid var(--border-medium);
+  border-radius: 3px;
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font: 11px/1.35 var(--font-ui);
+}
+
+.dsh-message-feedback-editor button {
+  min-height: 24px;
+  padding: 0 6px;
+  border: 1px solid var(--border-dim);
+  border-radius: 3px;
+  background: var(--bg-input);
+  color: var(--text-secondary);
+  font: 10px var(--font-ui);
+  cursor: pointer;
+}
+
+.dsh-message-feedback-error { color: var(--danger); font-size: 10px; }
+
+@media (max-width: 720px) {
+  .dsh-insights-backdrop { padding: 8px; }
+  .dsh-insights-dialog { width: calc(100vw - 16px); height: calc(100vh - 16px); }
+  .dsh-insights-tabs button { padding: 0 9px; }
+  .dsh-insight-toolbar { align-items: stretch; flex-direction: column; }
+  .dsh-insight-search { max-width: none; flex-basis: auto; }
+  .dsh-insight-segments { overflow-x: auto; }
+  .dsh-insight-segments button { flex: 1 0 auto; }
+  .dsh-trajectory-summary { grid-template-columns: 14px 56px 48px minmax(80px, 1fr); }
+  .dsh-trajectory-summary > span { display: none; }
+  .dsh-trajectory-detail { padding-left: 72px; }
+  .dsh-insight-metrics { grid-template-columns: repeat(2, minmax(120px, 1fr)); }
+  .dsh-workflow-member { grid-template-columns: 14px minmax(80px, 1fr) auto; }
+  .dsh-workflow-member code { display: none; }
+  .dsh-schedule-list > div { grid-template-columns: 18px minmax(100px, 1fr) auto; }
+  .dsh-schedule-list code { display: none; }
 }

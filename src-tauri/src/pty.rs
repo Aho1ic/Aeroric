@@ -777,19 +777,24 @@ pub(crate) fn normalized_speed_for(
     Ok(normalized)
 }
 
-/// family 版 effort 校验:dsh 无 effort 档位(thinking 档待后续接入),拒绝任何取值。
+/// family 版 effort 校验:dsh 使用 DeepSeek 官方 adapter 的 off/high/max。
 pub(crate) fn normalized_reasoning_effort_for(
     reasoning_effort: Option<&str>,
     family: crate::app_settings::AgentFamily,
     selected_model: Option<&str>,
 ) -> Result<Option<String>, String> {
     if family == crate::app_settings::AgentFamily::Dsh {
-        return match reasoning_effort
+        let effort = match reasoning_effort
             .map(str::trim)
             .filter(|effort| !effort.is_empty())
         {
-            None => Ok(None),
-            Some(_) => Err("Invalid reasoningEffort".to_string()),
+            None => return Ok(None),
+            Some(effort) => effort.to_ascii_lowercase(),
+        };
+        return if ["off", "high", "max"].contains(&effort.as_str()) {
+            Ok(Some(effort))
+        } else {
+            Err("Invalid reasoningEffort".to_string())
         };
     }
     normalized_reasoning_effort(reasoning_effort, family.is_codex_like(), selected_model)
@@ -1934,7 +1939,15 @@ fn preflight_agent_launch_spec(
 
     let mut child = command
         .spawn()
-        .map_err(|error| format!("Failed to launch `{}`: {error}", launch.program))?;
+        .map_err(|error| {
+            if launch.family == crate::app_settings::AgentFamily::Dsh
+                && error.kind() == std::io::ErrorKind::NotFound
+            {
+                "DeepSeek Harness is not installed or not found in PATH. Configure dsh_path with the dsh executable or the DeepSeek Harness source directory, then run `pnpm install` and `pnpm run build`.".to_string()
+            } else {
+                format!("Failed to launch `{}`: {error}", launch.program)
+            }
+        })?;
     let deadline = Instant::now() + timeout;
     loop {
         match child.try_wait() {
@@ -2581,7 +2594,7 @@ mod tests {
     }
 
     #[test]
-    fn dsh_rejects_foreign_effort_and_fast_speed() {
+    fn dsh_accepts_official_effort_and_rejects_fast_speed() {
         use crate::app_settings::AgentFamily;
         assert_eq!(
             normalized_reasoning_effort_for(None, AgentFamily::Dsh, None),
@@ -2591,7 +2604,18 @@ mod tests {
             normalized_reasoning_effort_for(Some("  "), AgentFamily::Dsh, None),
             Ok(None)
         );
-        assert!(normalized_reasoning_effort_for(Some("high"), AgentFamily::Dsh, None).is_err());
+        assert_eq!(
+            normalized_reasoning_effort_for(Some("high"), AgentFamily::Dsh, None),
+            Ok(Some("high".to_string()))
+        );
+        assert_eq!(
+            normalized_reasoning_effort_for(Some("off"), AgentFamily::Dsh, None),
+            Ok(Some("off".to_string()))
+        );
+        assert_eq!(
+            normalized_reasoning_effort_for(Some("max"), AgentFamily::Dsh, None),
+            Ok(Some("max".to_string()))
+        );
         assert!(
             normalized_reasoning_effort_for(Some("ultracode"), AgentFamily::Dsh, None).is_err()
         );

@@ -533,6 +533,10 @@ impl AgentFamily {
 pub struct AgentLaunchSpec {
     pub program: String,
     pub args: Vec<String>,
+    /// Set when the configured DSH path points at a DeepSeek Harness checkout.
+    /// The checkout is launched through its package manager instead of assuming
+    /// that a globally installed `dsh` exists.
+    pub working_dir: Option<PathBuf>,
     pub extra_env: Vec<(String, String)>,
     pub codex_like: bool,
     pub family: AgentFamily,
@@ -1346,6 +1350,13 @@ fn resolve_input_path(path: &str, binary: &str) -> String {
 
 fn normalize_agent_configured_path(agent: &str, path: &str) -> String {
     let resolved = resolve_input_path(path, agent);
+    // Preserve a DSH source checkout in settings. The launch spec converts it
+    // to `pnpm --dir <checkout> dsh` at execution time; storing only `pnpm`
+    // here would lose the checkout path and make subsequent launches fall
+    // back to the global command.
+    if dsh_source_root(&resolved).is_some() {
+        return resolved;
+    }
     #[cfg(windows)]
     if crate::platform::agent_script_command(Path::new(&resolved)).is_some() {
         return resolved;
@@ -1353,9 +1364,41 @@ fn normalize_agent_configured_path(agent: &str, path: &str) -> String {
     resolve_agent_launch_spec_from_path(agent, &resolved).program
 }
 
+fn dsh_source_root(path: &str) -> Option<PathBuf> {
+    let candidate = Path::new(path);
+    if !candidate.is_dir()
+        || !candidate.join("package.json").is_file()
+        || !candidate.join("apps").join("cli").is_dir()
+    {
+        return None;
+    }
+    Some(candidate.to_path_buf())
+}
+
 #[cfg(not(windows))]
 fn resolve_agent_launch_spec_from_path(agent: &str, path: &str) -> AgentLaunchSpec {
     let program = resolve_input_path(path, agent);
+    // This function is also called while `SETTINGS_LOCK` is held during
+    // settings normalization. Do not call `agent_family(agent)` here: that
+    // helper reloads settings and would recursively acquire the same lock.
+    let is_dsh_path = agent == "dsh"
+        || inferred_agent_family(&program) == Some(AgentFamily::Dsh)
+        || dsh_source_root(&program).is_some();
+    if is_dsh_path {
+        if let Some(root) = dsh_source_root(&program) {
+            return AgentLaunchSpec {
+                program: "pnpm".to_string(),
+                args: vec![
+                    "--dir".to_string(),
+                    root.to_string_lossy().into_owned(),
+                    "dsh".to_string(),
+                ],
+                working_dir: Some(root),
+                family: AgentFamily::Dsh,
+                ..Default::default()
+            };
+        }
+    }
     if Path::new(&program).is_absolute() {
         let _ = ensure_user_agent_script_executable(Path::new(&program));
     }
@@ -1554,6 +1597,27 @@ fn windows_script_launch(path: &Path) -> Option<AgentLaunchSpec> {
 fn resolve_agent_launch_spec_from_path(agent: &str, path: &str) -> AgentLaunchSpec {
     let resolved = resolve_input_path(path, agent);
     let resolved_path = Path::new(&resolved);
+
+    // Keep path resolution lock-free; this function is reached from settings
+    // normalization while `SETTINGS_LOCK` is already held.
+    let is_dsh_path = agent == "dsh"
+        || inferred_agent_family(&resolved) == Some(AgentFamily::Dsh)
+        || dsh_source_root(&resolved).is_some();
+    if is_dsh_path {
+        if let Some(root) = dsh_source_root(&resolved) {
+            return AgentLaunchSpec {
+                program: "pnpm.cmd".to_string(),
+                args: vec![
+                    "--dir".to_string(),
+                    root.to_string_lossy().into_owned(),
+                    "dsh".to_string(),
+                ],
+                working_dir: Some(root),
+                family: AgentFamily::Dsh,
+                ..Default::default()
+            };
+        }
+    }
 
     match agent {
         "claude" => {
@@ -3418,6 +3482,40 @@ mod tests {
             vec!["deepseek-chat".to_string(), "deepseek-reasoner".to_string()]
         );
         assert!(settings.custom_agents.is_empty());
+    }
+
+    #[test]
+    fn dsh_source_directory_resolves_to_package_manager_launch() {
+        let root =
+            std::env::temp_dir().join(format!("aeroric-dsh-source-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(root.join("apps").join("cli")).unwrap();
+        std::fs::write(root.join("package.json"), "{}\n").unwrap();
+
+        let launch = resolve_agent_launch_spec_from_path("dsh", &root.to_string_lossy());
+        assert_eq!(launch.working_dir, Some(root.clone()));
+        assert_eq!(launch.args.last().map(String::as_str), Some("dsh"));
+        assert_eq!(
+            launch.program,
+            if cfg!(windows) { "pnpm.cmd" } else { "pnpm" }
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn normalizing_dsh_path_does_not_reenter_settings_lock() {
+        let root =
+            std::env::temp_dir().join(format!("aeroric-dsh-normalize-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(root.join("apps").join("cli")).unwrap();
+        std::fs::write(root.join("package.json"), "{}\n").unwrap();
+
+        let mut settings = AppSettings::default();
+        settings.dsh_path = root.to_string_lossy().into_owned();
+        let _guard = settings_lock().lock();
+        let normalized = normalize_settings(settings);
+
+        assert_eq!(normalized.dsh_path, root.to_string_lossy());
+        drop(_guard);
+        let _ = std::fs::remove_dir_all(root);
     }
 
     fn last_env_value<'a>(launch: &'a AgentLaunchSpec, key: &str) -> Option<&'a str> {

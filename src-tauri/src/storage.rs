@@ -77,6 +77,12 @@ pub struct Task {
         skip_serializing_if = "Option::is_none"
     )]
     pub selected_model: Option<String>,
+    #[serde(
+        rename = "dshAgentPreset",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub dsh_agent_preset: Option<String>,
     // 前端统一展示 low/medium/high/xhigh/max/ultra；Claude 启动时将 ultra
     // 转成原生命令需要的 `ultracode`。
     #[serde(

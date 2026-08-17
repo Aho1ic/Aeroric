@@ -71,7 +71,6 @@ pub(crate) fn dsh_project_key(cwd: &str) -> String {
 
 /// dsh `encodeSegment` 的移植:会话 id → 安全目录名(`.`/`..` 特判,
 /// 安全字符保留,其余 `~XXXX`)。
-#[cfg(test)]
 pub(crate) fn dsh_encode_segment(raw: &str) -> String {
     if raw.is_empty() {
         return String::new();
@@ -97,6 +96,22 @@ pub(crate) fn dsh_encode_segment(raw: &str) -> String {
         }
     }
     out
+}
+
+/// Resolve the canonical JSONL path for a known session id.  The Web API
+/// returns the id only; Aeroric must derive the same path used by the official
+/// `session-persistence-jsonl` backend so history/export/resume all converge on
+/// one file instead of falling back to a PTY transcript.
+pub(crate) fn dsh_session_path_for(
+    agent: &str,
+    project_path: &str,
+    session_id: &str,
+) -> Option<PathBuf> {
+    Some(
+        dsh_project_sessions_dir_for(agent, project_path)?
+            .join(dsh_encode_segment(session_id))
+            .join("session.jsonl"),
+    )
 }
 
 /// 任意 dsh 族 agent(内建/自定义档案)的会话根目录。
@@ -245,6 +260,40 @@ fn tool_result_output(content: &[Value]) -> String {
         .join("\n")
 }
 
+fn push_text_message(role: &str, text: String, messages: &mut Vec<SessionMessage>) {
+    if text.trim().is_empty() {
+        return;
+    }
+    messages.push(SessionMessage {
+        role: role.to_string(),
+        content: vec![SessionContent::Text { text }],
+        message_id: None,
+    });
+}
+
+fn value_text(value: &Value) -> Option<String> {
+    if let Some(text) = value.as_str() {
+        return Some(text.to_string());
+    }
+    value
+        .get("text")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .or_else(|| {
+            value
+                .get("content")
+                .and_then(Value::as_array)
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter_map(value_text)
+                        .collect::<Vec<_>>()
+                        .join("")
+                })
+                .filter(|text| !text.is_empty())
+        })
+}
+
 fn push_dsh_event(value: &Value, messages: &mut Vec<SessionMessage>) {
     let Some(kind) = value.get("type").and_then(Value::as_str) else {
         return;
@@ -262,6 +311,7 @@ fn push_dsh_event(value: &Value, messages: &mut Vec<SessionMessage>) {
                 messages.push(SessionMessage {
                     role: "user".to_string(),
                     content: parts,
+                    message_id: None,
                 });
             }
         }
@@ -277,41 +327,92 @@ fn push_dsh_event(value: &Value, messages: &mut Vec<SessionMessage>) {
                 messages.push(SessionMessage {
                     role: "assistant".to_string(),
                     content: parts,
+                    message_id: data
+                        .get("message")
+                        .and_then(|message| message.get("id"))
+                        .and_then(Value::as_str)
+                        .map(str::to_string),
                 });
             }
         }
         // 与 Claude 解析器约定一致:tool result 作为 user 角色消息呈现。
         // tool/call 事件跳过——assistant/message 的 content 已含 tool-call block。
         "tool/result" => {
-            let Some(block) = data
+            let Some(blocks) = data
                 .get("message")
                 .and_then(|message| message.get("content"))
                 .and_then(Value::as_array)
-                .and_then(|content| content.first())
             else {
                 return;
             };
-            let id = block
-                .get("toolCallId")
-                .and_then(Value::as_str)
-                .unwrap_or("")
-                .to_string();
-            let inner = block
-                .get("content")
-                .and_then(Value::as_array)
-                .cloned()
-                .unwrap_or_default();
-            let mut output = tool_result_output(&inner);
-            if block.get("isError").and_then(Value::as_bool) == Some(true) && !output.is_empty() {
-                output = format!("[error] {output}");
+            for block in blocks {
+                if block.get("type").and_then(Value::as_str) != Some("tool-result") {
+                    continue;
+                }
+                let id = block
+                    .get("toolCallId")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string();
+                let inner = block
+                    .get("content")
+                    .and_then(Value::as_array)
+                    .cloned()
+                    .unwrap_or_default();
+                let mut output = tool_result_output(&inner);
+                if block.get("isError").and_then(Value::as_bool) == Some(true) && !output.is_empty()
+                {
+                    output = format!("[error] {output}");
+                }
+                messages.push(SessionMessage {
+                    role: "user".to_string(),
+                    content: vec![SessionContent::ToolResult { id, output }],
+                    message_id: None,
+                });
             }
-            messages.push(SessionMessage {
-                role: "user".to_string(),
-                content: vec![SessionContent::ToolResult { id, output }],
-            });
         }
-        // turn/step 边界、chunk、todo、request header 等事件不进入会话视图;
-        // subagent/compaction 的专属展示在 Phase 6 接入。
+        "command/run" => {
+            let name = data
+                .get("name")
+                .and_then(Value::as_str)
+                .unwrap_or("command");
+            let args = data.get("args").and_then(Value::as_str).unwrap_or("");
+            push_text_message("user", format!("/{name}{args}"), messages);
+        }
+        "command/done" => {
+            let text = value_text(data).unwrap_or_else(|| "Command completed".to_string());
+            push_text_message("assistant", text, messages);
+        }
+        "compaction/summary" => {
+            let text = value_text(data)
+                .map(|summary| format!("[compaction summary]\n{summary}"))
+                .unwrap_or_else(|| "[conversation compacted]".to_string());
+            push_text_message("assistant", text, messages);
+        }
+        "compaction/start" | "compaction/end" | "compaction/prune" => {
+            push_text_message("assistant", format!("[{kind}]"), messages);
+        }
+        "subagent/descriptor" => {
+            let label = data
+                .get("name")
+                .or_else(|| data.get("agent"))
+                .and_then(Value::as_str)
+                .unwrap_or("subagent");
+            push_text_message("assistant", format!("[subagent: {label}]"), messages);
+        }
+        "subagent/start" | "subagent/end" | "subagent/message" => {
+            let text = value_text(data).unwrap_or_else(|| format!("[{kind}]"));
+            push_text_message("assistant", text, messages);
+        }
+        "tool-workflow/run-start"
+        | "tool-workflow/run-end"
+        | "tool-workflow/agent-start"
+        | "tool-workflow/agent-end" => {
+            let text = value_text(data).unwrap_or_else(|| format!("[{kind}]"));
+            push_text_message("assistant", text, messages);
+        }
+        // turn/step boundaries, chunks, todo projections and request headers
+        // are either live-only UI state or already represented by messages.
         _ => {}
     }
 }
@@ -457,6 +558,16 @@ pub(crate) fn register_dsh_session(
     session_id: &str,
     session_path: &Path,
 ) {
+    register_dsh_session_with_preset(app, task_id, session_id, session_path, None);
+}
+
+pub(crate) fn register_dsh_session_with_preset(
+    app: &AppHandle,
+    task_id: &str,
+    session_id: &str,
+    session_path: &Path,
+    agent_preset: Option<&str>,
+) {
     let path_string = session_path.to_string_lossy().into_owned();
     {
         let tm = app.state::<TaskManager>();
@@ -480,6 +591,7 @@ pub(crate) fn register_dsh_session(
             "session_path": path_string,
             "codex_like": false,
             "family": "dsh",
+            "agent_preset": agent_preset,
         }),
     );
 }

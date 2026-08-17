@@ -8,9 +8,10 @@ import {
   X,
 } from "lucide-react";
 import type { AgentOption } from "../agents";
-import { agentDisplayLabel, isCodexLikeAgent } from "../agents";
+import { agentDisplayLabel, agentFamily, isCodexLikeAgent } from "../agents";
 import claudeLogo from "../assets/claude.svg";
 import chatgptLogo from "../assets/chatgpt.svg";
+import deepseekLogo from "../assets/deepseek.svg";
 import { useAgentOptions } from "../hooks/useAgentOptions";
 import { getCachedAgentModels, refreshAgentModels } from "../hooks/agentModelCache";
 import { useI18n } from "../i18n";
@@ -66,13 +67,27 @@ export function AgentConfigSwitchDialog({
   );
   const groupedOptions = useMemo(
     () => ({
-      claude: agentOptions.filter((option) => !option.codexLike),
-      codex: agentOptions.filter((option) => option.codexLike),
+      claude: agentOptions.filter(
+        (option) => option.family === "claude" || (!option.family && !option.codexLike),
+      ),
+      codex: agentOptions.filter(
+        (option) => option.family === "codex" || (!option.family && option.codexLike),
+      ),
+      dsh: agentOptions.filter((option) => option.family === "dsh"),
     }),
     [agentOptions],
   );
-  const codexLike = isCodexLikeAgent(agent, agentOptions);
-  const efforts = availableReasoningEfforts(codexLike, selectedModel);
+  const family = selectedOption?.family ?? agentFamily(agent, agentOptions);
+  const codexLike = selectedOption?.family
+    ? selectedOption.family === "codex"
+    : isCodexLikeAgent(agent, agentOptions);
+  const efforts = useMemo(
+    () =>
+      family === "dsh"
+        ? (["off", "high", "max"] as const)
+        : availableReasoningEfforts(codexLike, selectedModel),
+    [codexLike, family, selectedModel],
+  );
 
   useEffect(() => {
     if (!open) return;
@@ -115,13 +130,14 @@ export function AgentConfigSwitchDialog({
         );
         if (
           result.reasoning_effort &&
-          availableReasoningEfforts(codexLike, result.models[0]).includes(
-            result.reasoning_effort as ReasoningEffort,
-          )
+          (family === "dsh"
+            ? ["off", "high", "max"]
+            : availableReasoningEfforts(codexLike, result.models[0])
+          ).includes(result.reasoning_effort as ReasoningEffort)
         ) {
           setReasoningEffort((current) => current ?? (result.reasoning_effort as ReasoningEffort));
         }
-        if (result.reasoning_speed === "fast") {
+        if (family !== "dsh" && result.reasoning_speed === "fast") {
           setSpeed((current) => (current === "standard" ? "fast" : current));
         }
       })
@@ -134,7 +150,7 @@ export function AgentConfigSwitchDialog({
     return () => {
       cancelled = true;
     };
-  }, [agent, codexLike, open]);
+  }, [agent, codexLike, family, open]);
 
   useEffect(() => {
     if (reasoningEffort && !efforts.includes(reasoningEffort)) setReasoningEffort(null);
@@ -155,7 +171,7 @@ export function AgentConfigSwitchDialog({
         agent,
         selectedModel: selectedModel || undefined,
         reasoningEffort,
-        speed,
+        speed: family === "dsh" ? "standard" : speed,
         permissionMode,
       });
       if (applied === false) setSubmitting(false);
@@ -164,10 +180,24 @@ export function AgentConfigSwitchDialog({
     }
   }
 
-  const renderConfigGroup = (family: "claude" | "codex", label: string, options: AgentOption[]) => (
+  const renderConfigGroup = (
+    groupFamily: "claude" | "codex" | "dsh",
+    label: string,
+    options: AgentOption[],
+  ) => (
     <div className="agent-config-switch-group" role="group" aria-label={label}>
       <div className="agent-config-switch-group-title">
-        <img src={family === "codex" ? chatgptLogo : claudeLogo} alt="" aria-hidden="true" />
+        <img
+          src={
+            groupFamily === "codex"
+              ? chatgptLogo
+              : groupFamily === "dsh"
+                ? deepseekLogo
+                : claudeLogo
+          }
+          alt=""
+          aria-hidden="true"
+        />
         <span>{label}</span>
         <span className="agent-config-switch-group-count">{options.length}</span>
       </div>
@@ -177,6 +207,7 @@ export function AgentConfigSwitchDialog({
         ) : (
           options.map((option) => {
             const selected = option.value === agent;
+            const optionFamily = option.family ?? (option.codexLike ? "codex" : "claude");
             return (
               <button
                 key={option.value}
@@ -187,7 +218,17 @@ export function AgentConfigSwitchDialog({
                 disabled={submitting}
                 onClick={() => setAgent(option.value)}
               >
-                <img src={option.codexLike ? chatgptLogo : claudeLogo} alt="" aria-hidden="true" />
+                <img
+                  src={
+                    optionFamily === "codex"
+                      ? chatgptLogo
+                      : optionFamily === "dsh"
+                        ? deepseekLogo
+                        : claudeLogo
+                  }
+                  alt=""
+                  aria-hidden="true"
+                />
                 <span className="agent-config-switch-option-copy">
                   <span className="agent-config-switch-option-name">{option.label}</span>
                   <span className="agent-config-switch-option-path">
@@ -251,6 +292,7 @@ export function AgentConfigSwitchDialog({
             <div className="agent-config-switch-groups">
               {renderConfigGroup("claude", t("newTask.claudeAgents"), groupedOptions.claude)}
               {renderConfigGroup("codex", t("newTask.codexAgents"), groupedOptions.codex)}
+              {renderConfigGroup("dsh", "DeepSeek Harness", groupedOptions.dsh)}
             </div>
           </section>
 
@@ -291,9 +333,11 @@ export function AgentConfigSwitchDialog({
             <div className="agent-config-switch-field">
               <span className="agent-config-switch-label">{t("newTask.reasoningLabel")}</span>
               <AnimatedSelectionGroup
-                value={reasoningEffort ?? "default"}
+                value={reasoningEffort ?? (family === "dsh" ? "" : "default")}
                 options={[
-                  { value: "default", label: t("newTask.modelDefault") },
+                  ...(family === "dsh"
+                    ? []
+                    : [{ value: "default", label: t("newTask.modelDefault") }]),
                   ...efforts.map((effort) => ({
                     value: effort,
                     label: t(`newTask.reasoning.${effort}`),
@@ -309,21 +353,23 @@ export function AgentConfigSwitchDialog({
               />
             </div>
 
-            <div className="agent-config-switch-field">
-              <span className="agent-config-switch-label">{t("newTask.speedLabel")}</span>
-              <AnimatedSelectionGroup
-                value={speed}
-                options={[
-                  { value: "standard", label: t("newTask.speed.standard") },
-                  { value: "fast", label: t("newTask.speed.fast") },
-                ]}
-                onChange={setSpeed}
-                ariaLabel={t("newTask.speedLabel")}
-                equalWidth
-                className="agent-config-switch-segmented"
-                itemClassName="agent-config-switch-segmented-item"
-              />
-            </div>
+            {family !== "dsh" && (
+              <div className="agent-config-switch-field">
+                <span className="agent-config-switch-label">{t("newTask.speedLabel")}</span>
+                <AnimatedSelectionGroup
+                  value={speed}
+                  options={[
+                    { value: "standard", label: t("newTask.speed.standard") },
+                    { value: "fast", label: t("newTask.speed.fast") },
+                  ]}
+                  onChange={setSpeed}
+                  ariaLabel={t("newTask.speedLabel")}
+                  equalWidth
+                  className="agent-config-switch-segmented"
+                  itemClassName="agent-config-switch-segmented-item"
+                />
+              </div>
+            )}
 
             <div className="agent-config-switch-field">
               <span className="agent-config-switch-label">{t("running.switchPermission")}</span>

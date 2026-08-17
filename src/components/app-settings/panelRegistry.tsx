@@ -3,7 +3,9 @@ import {
   Archive,
   Blocks,
   ChartNoAxesCombined,
+  Database,
   Info,
+  KeyRound,
   Keyboard,
   Monitor,
   MonitorUp,
@@ -13,7 +15,9 @@ import {
   Route,
   Settings as SettingsIcon,
   Smartphone,
+  Target,
   Type,
+  Users,
   Zap,
 } from "lucide-react";
 import type {
@@ -153,6 +157,30 @@ const skillsPanel = lazyPanel(() =>
 const dshPluginsPanel = lazyPanel(() =>
   import("./DshPluginsPanel").then(({ DshPluginsPanel }) => ({ default: DshPluginsPanel })),
 );
+const dshSessionsPanel = lazyPanel(() =>
+  import("./DshSessionsPanel").then(({ DshSessionsPanel }) => ({ default: DshSessionsPanel })),
+);
+const dshCredentialsPanel = lazyPanel(() =>
+  import("./DshCredentialsPanel").then(({ DshCredentialsPanel }) => ({
+    default: DshCredentialsPanel,
+  })),
+);
+const dshLlmProvidersPanel = lazyPanel(() =>
+  import("./DshLlmProvidersPanel").then(({ DshLlmProvidersPanel }) => ({
+    default: DshLlmProvidersPanel,
+  })),
+);
+const dshSubagentsPanel = lazyPanel(() =>
+  import("./DshSubagentsPanel").then(({ DshSubagentsPanel }) => ({
+    default: DshSubagentsPanel,
+  })),
+);
+const dshGoalsPanel = lazyPanel(() =>
+  import("./DshGoalsPanel").then(({ DshGoalsPanel }) => ({ default: DshGoalsPanel })),
+);
+const dshSkillsPanel = lazyPanel(() =>
+  import("./DshSkillsPanel").then(({ DshSkillsPanel }) => ({ default: DshSkillsPanel })),
+);
 const allAgentConfigsPanel = lazyPanel(() =>
   import("./AllAgentConfigsPanel").then(({ AllAgentConfigsPanel }) => ({
     default: function AgentConfigsSettingsPanel(props: SettingsPanelProps) {
@@ -274,6 +302,48 @@ export const SETTINGS_PANEL_REGISTRY: readonly SettingsPanelEntry[] = [
     section: "agents",
     icon: PackageOpen,
     ...dshPluginsPanel,
+  },
+  {
+    key: "dsh-sessions",
+    labelKey: "appSettings.dshSessionsTab",
+    section: "agents",
+    icon: Database,
+    ...dshSessionsPanel,
+  },
+  {
+    key: "dsh-credentials",
+    labelKey: "appSettings.dshCredentialsTab",
+    section: "agents",
+    icon: KeyRound,
+    ...dshCredentialsPanel,
+  },
+  {
+    key: "dsh-providers",
+    labelKey: "appSettings.dshProvidersTitle",
+    section: "agents",
+    icon: Network,
+    ...dshLlmProvidersPanel,
+  },
+  {
+    key: "dsh-subagents",
+    labelKey: "appSettings.dshSubagentsTitle",
+    section: "agents",
+    icon: Users,
+    ...dshSubagentsPanel,
+  },
+  {
+    key: "dsh-goals",
+    labelKey: "appSettings.dshGoalsTitle",
+    section: "agents",
+    icon: Target,
+    ...dshGoalsPanel,
+  },
+  {
+    key: "dsh-skills",
+    labelKey: "appSettings.dshSkillsTitle",
+    section: "agents",
+    icon: Blocks,
+    ...dshSkillsPanel,
   },
   {
     key: "about",

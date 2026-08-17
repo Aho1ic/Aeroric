@@ -3,6 +3,7 @@ use serde_yaml_ng::{Mapping, Value};
 use std::fs;
 use std::path::Path;
 use std::process::Command as NativeCommand;
+use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::process::Command;
 
 const WEB_PROFILE: &str = "web";
@@ -150,7 +151,11 @@ fn command_for_agent(agent: &str, home: &Path) -> Command {
     command
         .args(launch.args)
         .envs(launch.extra_env)
+        .env("PATH", crate::app_settings::get_login_shell_path())
         .env("DSH_HOME", home);
+    if let Some(working_dir) = launch.working_dir {
+        command.current_dir(working_dir);
+    }
     command
 }
 
@@ -397,6 +402,30 @@ fn read_settings_document(home: &Path) -> Result<Value, String> {
     if content.trim().is_empty() {
         return Ok(Value::Mapping(Mapping::new()));
     }
+    // Older Aeroric builds accidentally wrote the generic model controls as
+    // TOML into DSH's YAML file. Keep the original recoverable and replace it
+    // with a valid empty YAML document; DSH model/effort selection is now
+    // session-scoped and must not be persisted as foreign root keys.
+    if content.lines().any(|line| {
+        let trimmed = line.trim_start();
+        trimmed.starts_with("model_reasoning_effort")
+            || trimmed.starts_with("model_reasoning_speed")
+    }) {
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|value| value.as_secs())
+            .unwrap_or_default();
+        let backup = path.with_extension(format!("yaml.legacy-{stamp}.bak"));
+        fs::copy(&path, &backup).map_err(|error| {
+            format!(
+                "Failed to back up legacy dsh settings.yaml to {}: {error}",
+                backup.display()
+            )
+        })?;
+        crate::storage::atomic_write_private(&path, "{}\n")
+            .map_err(|error| format!("Failed to repair dsh settings.yaml: {error}"))?;
+        return Ok(Value::Mapping(Mapping::new()));
+    }
     match serde_yaml_ng::from_str::<Value>(&content)
         .map_err(|error| format!("Failed to parse dsh settings.yaml: {error}"))?
     {
@@ -470,7 +499,61 @@ fn credential_configured(home: &Path, agent: &str) -> bool {
         .unwrap_or(false)
 }
 
-fn persist_dsh_api_key(home: &Path, agent: &str, api_key: &str) -> Result<(), String> {
+/// Persist a DEEPSEEK_API_KEY for the given DSH agent.
+///
+/// Primary path is the webui's `credentials.set` RPC, which atomically writes
+/// the key into `$DSH_HOME/.credentials.yaml` under a cross-process lock — the
+/// same file the legacy direct write targeted, so the two are never both run.
+/// The RPC is preferred because it preserves comments/formatting of untouched
+/// entries and refuses a write that the launching environment would shadow
+/// (`credential-rejected`), surfacing that conflict instead of silently
+/// storing an ineffective key.
+///
+/// Fallback: when no `dsh web` process is running for the agent (or the RPC
+/// call itself fails to connect), fall back to the file-level upsert
+/// [`crate::dsh_home::sync_dsh_credentials`]. This keeps the settings panel
+/// usable before the webui has been started and after it exits — the file is
+/// the durable source either way, and a later webui boot hot-reloads it.
+async fn persist_dsh_api_key(
+    home: &Path,
+    agent: &str,
+    api_key: &str,
+    webui: &crate::dsh_webui::DshWebUiManager,
+) -> Result<(), String> {
+    // The webui's `credentials.set` writes the same `.credentials.yaml` the
+    // app-settings layer also syncs. Mirror the env-suppression semantics of
+    // the standalone file path: when Aeroric itself injects DEEPSEEK_API_KEY
+    // via the launch environment, the RPC rejects the write — that is the
+    // authoritative signal, so surface it rather than double-writing the file.
+    if let Some(url) = webui.running_url_for(agent) {
+        match crate::dsh_webui::DshApiClient::new(url) {
+            Ok(client) => match client.set_credential("DEEPSEEK_API_KEY", api_key).await {
+                Ok(()) => return Ok(()),
+                Err(error) if error.contains("credential-rejected") => {
+                    return Err(
+                        "This agent's DEEPSEEK_API_KEY is supplied by the launching environment, \
+                         so it cannot be changed from the settings panel. Unset it in the shell \
+                         used to start dsh, then retry. (credential-rejected)"
+                            .to_string(),
+                    );
+                }
+                Err(error) => {
+                    // The webui is running but the RPC failed (transient HTTP
+                    // error, malformed payload, etc.). Fall through to the
+                    // file path so a flaky RPC never blocks saving the key.
+                    eprintln!(
+                        "dsh credentials.set RPC failed for {agent}; falling back to file write: {error}"
+                    );
+                }
+            },
+            Err(error) => {
+                eprintln!(
+                    "dsh credentials.set: could not build API client for {agent}; falling back to file write: {error}"
+                );
+            }
+        }
+    }
+
     let mut settings = crate::app_settings::load_settings_internal();
     if agent == "dsh" {
         settings
@@ -603,10 +686,11 @@ fn validate_positive(value: u64, field: &str) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn save_dsh_plugin_settings(
+pub async fn save_dsh_plugin_settings(
     agent: String,
     section: String,
     values: serde_json::Value,
+    webui: tauri::State<'_, crate::dsh_webui::DshWebUiManager>,
 ) -> Result<DshSettingsSnapshot, String> {
     let home = crate::dsh_home::ensure_dsh_home_for(&agent)?;
     let mut document = read_settings_document(&home)?;
@@ -650,7 +734,7 @@ pub fn save_dsh_plugin_settings(
             }
             target.insert(yaml_key("maxUses"), Value::Number(update.max_uses.into()));
             if let Some(api_key) = update.api_key.filter(|key| !key.trim().is_empty()) {
-                persist_dsh_api_key(&home, &agent, api_key.trim())?;
+                persist_dsh_api_key(&home, &agent, api_key.trim(), &webui).await?;
             }
         }
         _ => return Err(format!("Unknown DSH plugin settings section: {section}")),
@@ -769,6 +853,34 @@ mod tests {
         assert_eq!(snapshot.default_preset, "minimal");
         assert_eq!(snapshot.custom_presets[0].id, "my-agent");
         assert_eq!(snapshot.custom_presets[0].name.as_deref(), Some("My Agent"));
+        let _ = fs::remove_dir_all(home);
+    }
+
+    #[test]
+    fn migrates_legacy_toml_model_settings_with_a_recoverable_backup() {
+        let home = temp_home("legacy-settings");
+        let path = home.join("settings.yaml");
+        let legacy = "model_reasoning_effort = \"high\"\nmodel_reasoning_speed = \"fast\"\n";
+        fs::write(&path, legacy).unwrap();
+
+        let document = read_settings_document(&home).unwrap();
+        assert!(matches!(document, Value::Mapping(mapping) if mapping.is_empty()));
+        assert_eq!(fs::read_to_string(&path).unwrap(), "{}\n");
+        let backups = fs::read_dir(&home)
+            .unwrap()
+            .flatten()
+            .map(|entry| entry.path())
+            .filter(|candidate| {
+                candidate
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| {
+                        name.starts_with("settings.yaml.legacy-") && name.ends_with(".bak")
+                    })
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(backups.len(), 1);
+        assert_eq!(fs::read_to_string(&backups[0]).unwrap(), legacy);
         let _ = fs::remove_dir_all(home);
     }
 }

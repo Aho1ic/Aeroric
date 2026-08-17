@@ -940,7 +940,7 @@ describe("ProjectPage right toolbar", () => {
           };
         }) => void)
       | null = null;
-    vi.mocked(listen).mockImplementationOnce((event, handler) => {
+    vi.mocked(listen).mockImplementation((event, handler) => {
       if (event === "lsp://diagnostics") {
         diagnosticsHandler = handler as typeof diagnosticsHandler;
       }
@@ -991,7 +991,7 @@ describe("ProjectPage right toolbar", () => {
           };
         }) => void)
       | null = null;
-    vi.mocked(listen).mockImplementationOnce((event, handler) => {
+    vi.mocked(listen).mockImplementation((event, handler) => {
       if (event === "lsp://diagnostics") {
         diagnosticsHandler = handler as typeof diagnosticsHandler;
       }

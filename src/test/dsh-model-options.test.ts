@@ -15,9 +15,13 @@ describe("dsh model options", () => {
     );
   });
 
-  it("hides every effort tier for the dsh family", () => {
-    expect(availableReasoningEffortsForFamily("dsh", undefined)).toEqual([]);
-    expect(availableReasoningEffortsForFamily("dsh", "deepseek-v4-flash")).toEqual([]);
+  it("exposes the DeepSeek adapter effort tiers for the dsh family", () => {
+    expect(availableReasoningEffortsForFamily("dsh", undefined)).toEqual(["off", "high", "max"]);
+    expect(availableReasoningEffortsForFamily("dsh", "deepseek-v4-flash")).toEqual([
+      "off",
+      "high",
+      "max",
+    ]);
   });
 
   it("keeps claude and codex effort tiers unchanged", () => {

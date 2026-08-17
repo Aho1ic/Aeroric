@@ -8,6 +8,8 @@ import {
   Copy,
   FileText,
   Paperclip,
+  ThumbsDown,
+  ThumbsUp,
   Wrench,
 } from "lucide-react";
 import { marked } from "marked";
@@ -30,6 +32,146 @@ export interface SessionContent {
 export interface SessionMessage {
   role: "user" | "assistant";
   content: SessionContent[];
+  messageId?: string;
+}
+
+interface MessageFeedbackItem {
+  messageId: string;
+  rating: "positive" | "negative";
+  note?: string;
+  version: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+type FeedbackResult = { ok?: boolean; value?: unknown; error?: { code?: string; current?: MessageFeedbackItem | null } };
+
+function unwrapFeedbackItem(value: unknown): MessageFeedbackItem | null {
+  if (!value || typeof value !== "object") return null;
+  const outer = value as FeedbackResult;
+  const item = outer.ok === true && outer.value && typeof outer.value === "object"
+    ? outer.value as FeedbackResult
+    : outer;
+  if (item.ok !== true || !item.value || typeof item.value !== "object") return null;
+  const candidate = item.value as Partial<MessageFeedbackItem>;
+  return typeof candidate.messageId === "string" && typeof candidate.version === "string"
+    && (candidate.rating === "positive" || candidate.rating === "negative")
+    ? candidate as MessageFeedbackItem
+    : null;
+}
+
+function unwrapFeedbackList(value: unknown): MessageFeedbackItem[] {
+  if (!value || typeof value !== "object") return [];
+  const outer = value as FeedbackResult;
+  const inner = outer.ok === true && outer.value && typeof outer.value === "object"
+    ? outer.value as FeedbackResult
+    : outer;
+  const items = inner.ok === true && inner.value && typeof inner.value === "object"
+    ? (inner.value as { items?: unknown }).items
+    : undefined;
+  return Array.isArray(items)
+    ? items.filter((item): item is MessageFeedbackItem => unwrapFeedbackItem({ ok: true, value: item }) !== null)
+    : [];
+}
+
+function MessageFeedbackActions({
+  sessionId,
+  messageId,
+  item,
+  onReload,
+  onChange,
+}: {
+  sessionId: string;
+  messageId: string;
+  item?: MessageFeedbackItem;
+  onReload: () => Promise<void>;
+  onChange: (item: MessageFeedbackItem | null) => void;
+}) {
+  const { t } = useI18n();
+  const [pending, setPending] = useState(false);
+  const [noteOpen, setNoteOpen] = useState(false);
+  const [note, setNote] = useState(item?.note ?? "");
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => setNote(item?.note ?? ""), [item?.note]);
+
+  const mutate = async (rating: "positive" | "negative") => {
+    if (pending) return;
+    setPending(true);
+    setError(null);
+    try {
+      if (item?.rating === rating) {
+        const result = await invoke<FeedbackResult>("delete_dsh_message_feedback", {
+          sessionId,
+          messageId,
+          ifVersion: item.version,
+        });
+        if (result.ok === false) throw new Error(result.error?.code ?? "feedback mutation failed");
+        onChange(null);
+      } else {
+        const result = await invoke<FeedbackResult>("put_dsh_message_feedback", {
+          sessionId,
+          messageId,
+          rating,
+          ifVersion: item?.version ?? null,
+        });
+        if (result.ok === false) throw new Error(result.error?.code ?? "feedback mutation failed");
+        const next = unwrapFeedbackItem(result);
+        if (!next) throw new Error("Invalid message feedback response");
+        onChange(next);
+      }
+    } catch (caught) {
+      const message = String(caught);
+      setError(message.includes("version-conflict") ? t("dsh.feedback.conflict") : t("dsh.feedback.failed"));
+      await onReload();
+    } finally {
+      setPending(false);
+    }
+  };
+
+  const saveNote = async () => {
+    if (!item || pending) return;
+    setPending(true);
+    setError(null);
+    try {
+      const result = await invoke<FeedbackResult>("put_dsh_message_feedback", {
+        sessionId,
+        messageId,
+        rating: item.rating,
+        note: note.trim() || undefined,
+        ifVersion: item.version,
+      });
+      if (result.ok === false) throw new Error(result.error?.code ?? "feedback mutation failed");
+      const next = unwrapFeedbackItem(result);
+      if (!next) throw new Error("Invalid message feedback response");
+      onChange(next);
+      setNoteOpen(false);
+    } catch (caught) {
+      setError(String(caught).includes("version-conflict") ? t("dsh.feedback.conflict") : t("dsh.feedback.failed"));
+      await onReload();
+    } finally {
+      setPending(false);
+    }
+  };
+
+  return (
+    <div className="dsh-message-feedback" data-testid={`dsh-message-feedback-${messageId}`}>
+      <button type="button" aria-label={t("dsh.feedback.like")} aria-pressed={item?.rating === "positive"} disabled={pending} onClick={() => void mutate("positive")}>
+        <ThumbsUp size={13} />
+      </button>
+      <button type="button" aria-label={t("dsh.feedback.dislike")} aria-pressed={item?.rating === "negative"} disabled={pending} onClick={() => void mutate("negative")}>
+        <ThumbsDown size={13} />
+      </button>
+      {item && !noteOpen && <button type="button" className="dsh-message-feedback-note" onClick={() => setNoteOpen(true)}>{item.note ?? t("dsh.feedback.addNote")}</button>}
+      {item && noteOpen && (
+        <span className="dsh-message-feedback-editor">
+          <textarea aria-label={t("dsh.feedback.note")} value={note} rows={2} onChange={(event) => setNote(event.target.value)} />
+          <button type="button" disabled={pending} onClick={() => void saveNote()}>{t("dsh.feedback.save")}</button>
+          <button type="button" onClick={() => setNoteOpen(false)}>{t("dsh.feedback.cancel")}</button>
+        </span>
+      )}
+      {error && <span className="dsh-message-feedback-error" role="status">{error}</span>}
+    </div>
+  );
 }
 
 interface SessionMessagePage {
@@ -260,7 +402,19 @@ function MessageContent({ content }: { content: SessionContent }) {
   }
 }
 
-function MessageBubble({ message }: { message: SessionMessage }) {
+function MessageBubble({
+  message,
+  sessionId,
+  feedback,
+  onFeedbackReload,
+  onFeedbackChange,
+}: {
+  message: SessionMessage;
+  sessionId?: string;
+  feedback?: MessageFeedbackItem;
+  onFeedbackReload?: () => Promise<void>;
+  onFeedbackChange?: (item: MessageFeedbackItem | null) => void;
+}) {
   const isUser = message.role === "user";
   const copyText = message.content
     .map((content) =>
@@ -318,6 +472,15 @@ function MessageBubble({ message }: { message: SessionMessage }) {
         {message.content.map((content, index) => (
           <MessageContent key={`${content.type}-${content.id ?? index}`} content={content} />
         ))}
+        {message.role === "assistant" && message.messageId && sessionId && onFeedbackReload && onFeedbackChange && (
+          <MessageFeedbackActions
+            sessionId={sessionId}
+            messageId={message.messageId}
+            item={feedback}
+            onReload={onFeedbackReload}
+            onChange={onFeedbackChange}
+          />
+        )}
       </div>
     </div>
   );
@@ -327,6 +490,7 @@ export function SessionView({
   sessionPath,
   projectPath,
   isCodex,
+  sessionId,
   family,
   fallback,
   onLoadFailed,
@@ -334,6 +498,7 @@ export function SessionView({
   sessionPath: string;
   projectPath: string;
   isCodex: boolean;
+  sessionId?: string;
   /** 三值协议族;缺省由 isCodex 推导(dsh 调用方必须显式传入)。 */
   family?: ProtocolFamily;
   fallback?: ReactNode;
@@ -346,6 +511,7 @@ export function SessionView({
   const [loading, setLoading] = useState(true);
   const [loadingEarlier, setLoadingEarlier] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [feedbackItems, setFeedbackItems] = useState<Record<string, MessageFeedbackItem>>({});
   const scrollRef = useRef<HTMLDivElement>(null);
   const pendingScrollRestoreRef = useRef<{ height: number; top: number } | null>(null);
   const onLoadFailedRef = useRef(onLoadFailed);
@@ -365,6 +531,22 @@ export function SessionView({
     setLoading(true);
     setLoadingEarlier(false);
     setError(null);
+    setFeedbackItems({});
+
+    let feedbackCancelled = false;
+    const reloadFeedback = async () => {
+      if (family !== "dsh" || !sessionId) return;
+      try {
+        const value = await invoke<unknown>("list_dsh_message_feedback", { sessionId });
+        if (feedbackCancelled) return;
+        const next: Record<string, MessageFeedbackItem> = {};
+        for (const item of unwrapFeedbackList(value)) next[item.messageId] = item;
+        setFeedbackItems(next);
+      } catch {
+        // A DSH build without the optional sidecar keeps chat history usable.
+      }
+    };
+    void reloadFeedback();
 
     const load = async () => {
       let cursor: number | null = null;
@@ -427,8 +609,21 @@ export function SessionView({
     void load();
     return () => {
       cancelled = true;
+      feedbackCancelled = true;
     };
-  }, [sessionPath, projectPath, isCodex, family]);
+  }, [sessionPath, projectPath, isCodex, family, sessionId]);
+
+  const reloadFeedback = async () => {
+    if (family !== "dsh" || !sessionId) return;
+    try {
+      const value = await invoke<unknown>("list_dsh_message_feedback", { sessionId });
+      const next: Record<string, MessageFeedbackItem> = {};
+      for (const item of unwrapFeedbackList(value)) next[item.messageId] = item;
+      setFeedbackItems(next);
+    } catch {
+      // Keep the transcript visible if the sidecar is unavailable.
+    }
+  };
 
   if (!loading && fallback && (error || messages.length === 0)) {
     return (
@@ -487,7 +682,22 @@ export function SessionView({
         </div>
       )}
       {messages.map((message, index) => (
-        <MessageBubble key={index} message={message} />
+        <MessageBubble
+          key={index}
+          message={message}
+          sessionId={family === "dsh" ? sessionId : undefined}
+          feedback={message.messageId ? feedbackItems[message.messageId] : undefined}
+          onFeedbackReload={reloadFeedback}
+          onFeedbackChange={(item) => {
+            if (!message.messageId) return;
+            setFeedbackItems((current) => {
+              const next = { ...current };
+              if (item) next[message.messageId!] = item;
+              else delete next[message.messageId!];
+              return next;
+            });
+          }}
+        />
       ))}
     </div>
   );

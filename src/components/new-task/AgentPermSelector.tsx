@@ -9,6 +9,7 @@ import {
   Hand,
   ListChecks,
   Plus,
+  SlashSquare,
   Target,
   Zap,
 } from "lucide-react";
@@ -32,7 +33,15 @@ export type ComposeMenu =
   | "branch"
   | "model"
   | "send"
+  | "dsh-slash"
   | null;
+
+const DSH_PRESETS = [
+  ["standard", "appSettings.dshPresetStandardName"],
+  ["code", "appSettings.dshPresetCodeName"],
+  ["minimal", "appSettings.dshPresetMinimalName"],
+  ["cordis", "appSettings.dshPresetCordisName"],
+] as const;
 
 function agentIcon(agent: AgentType, options = [] as ReturnType<typeof useAgentOptions>): string {
   switch (agentFamily(agent, options)) {
@@ -142,6 +151,8 @@ export function composeAgentMenuColumnViewportStyle(): CSSProperties {
     minHeight: 0,
     maxHeight: "min(250px, calc(var(--radix-select-content-available-height) - 58px))",
     overflowY: "auto",
+    scrollbarWidth: "none",
+    msOverflowStyle: "none",
     overscrollBehavior: "contain",
     padding: 4,
   };
@@ -229,6 +240,9 @@ export function AgentPermSelector({
   onTogglePlanMode,
   onToggleGoalMode,
   onToggleFastMode,
+  dshAgentPreset = "standard",
+  onSetDshAgentPreset,
+  onOpenDshSlash,
   onSubmit,
 }: {
   agent: AgentType;
@@ -251,6 +265,10 @@ export function AgentPermSelector({
   onTogglePlanMode: () => void;
   onToggleGoalMode: () => void;
   onToggleFastMode?: () => void;
+  dshAgentPreset?: string;
+  onSetDshAgentPreset?: (preset: string) => void;
+  /** Open the dsh slash-command palette (dsh-family agents only). */
+  onOpenDshSlash?: () => void;
   onSubmit: (immediate: boolean) => void;
 }) {
   const { t } = useI18n();
@@ -324,7 +342,7 @@ export function AgentPermSelector({
           />
           <span>{label}</span>
         </div>
-        <div style={composeAgentMenuColumnViewportStyle()}>
+        <div className="compose-agent-menu-column-viewport" style={composeAgentMenuColumnViewportStyle()}>
           {options.length > 0 ? (
             options.map(({ value: item }) => renderAgentItem(item))
           ) : (
@@ -381,6 +399,55 @@ export function AgentPermSelector({
                   label={t("newTask.fastMode")}
                   onToggle={onToggleFastMode}
                 />
+              )}
+              {agentFamily(agent, agentOptions) === "dsh" && onSetDshAgentPreset && (
+                <label
+                  style={{
+                    ...s.toolbarMenuItem,
+                    width: "100%",
+                    cursor: "pointer",
+                    gap: 8,
+                  }}
+                >
+                  <BookmarkPlus size={15} strokeWidth={2} color="var(--text-muted)" />
+                  <span style={{ flex: 1 }}>{t("newTask.dshAgentPreset")}</span>
+                  <select
+                    aria-label={t("newTask.dshAgentPreset")}
+                    value={dshAgentPreset}
+                    onChange={(event) => onSetDshAgentPreset(event.currentTarget.value)}
+                    style={{
+                      maxWidth: 130,
+                      border: "1px solid var(--border-medium)",
+                      borderRadius: 6,
+                      background: "var(--bg-input)",
+                      color: "var(--text-primary)",
+                      padding: "3px 5px",
+                    }}
+                  >
+                    {DSH_PRESETS.map(([value, label]) => (
+                      <option key={value} value={value}>{t(label)}</option>
+                    ))}
+                  </select>
+                </label>
+              )}
+              {agentFamily(agent, agentOptions) === "dsh" && onOpenDshSlash && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setOpenMenu(null);
+                    onOpenDshSlash();
+                  }}
+                  style={{
+                    ...s.toolbarMenuItem,
+                    width: "100%",
+                    background: "transparent",
+                    cursor: "pointer",
+                    gap: 8,
+                  }}
+                >
+                  <SlashSquare size={15} strokeWidth={2} color="var(--text-muted)" />
+                  <span style={{ flex: 1 }}>{t("dsh.slash.title")}</span>
+                </button>
               )}
             </Popover.Content>
           </Popover.Portal>
