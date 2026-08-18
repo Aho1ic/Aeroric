@@ -4386,6 +4386,13 @@ html:not(.dark) .xterm {
   background: var(--terminal-bg) !important;
 }
 
+/* Session history is replayed into a fresh xterm when switching conversations.
+ * Keep the renderer laid out but unpainted until the replay is at its final
+ * viewport, so large Codex buffers do not appear to scroll down on entry. */
+[data-terminal-restoring="true"] > .xterm {
+  visibility: hidden;
+}
+
 .xterm-helper-textarea {
   caret-color: transparent !important;
 }

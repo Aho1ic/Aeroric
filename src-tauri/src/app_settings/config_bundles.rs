@@ -96,6 +96,19 @@ pub(super) fn builtin_agent_details(agent: &str) -> Option<(&'static str, &'stat
     }
 }
 
+fn bundle_agent_family(agent: &AgentConfigBundleAgent) -> AgentFamily {
+    if matches!(agent.kind, AgentConfigBundleKind::BuiltIn) {
+        return match agent.id.as_str() {
+            "claude" => AgentFamily::Claude,
+            "codex" | "claude_gpt55" => AgentFamily::Codex,
+            "dsh" => AgentFamily::Dsh,
+            _ => AgentFamily::from_codex_like(agent.codex_like),
+        };
+    }
+    AgentFamily::parse(agent.family.trim())
+        .unwrap_or_else(|| AgentFamily::from_codex_like(agent.codex_like))
+}
+
 pub(super) fn validate_agent_config_bundle_agent(
     agent: &AgentConfigBundleAgent,
 ) -> Result<(), String> {
@@ -122,6 +135,16 @@ pub(super) fn validate_agent_config_bundle_agent(
             if sanitize_custom_agent_id(&agent.id).is_empty() {
                 return Err("Invalid custom agent ID".to_string());
             }
+        }
+    }
+    if let Some(effort) = agent.reasoning_effort.as_deref() {
+        if bundle_agent_family(agent) != AgentFamily::Dsh
+            || !matches!(
+                effort.trim().to_ascii_lowercase().as_str(),
+                "off" | "high" | "max"
+            )
+        {
+            return Err("Invalid DeepSeek Harness reasoning effort".to_string());
         }
     }
     Ok(())
@@ -210,7 +233,9 @@ pub(super) fn collect_agent_config_bundle_agent(
                 .unwrap_or_else(|| default_label.to_string()),
             kind: AgentConfigBundleKind::BuiltIn,
             codex_like,
-            family: String::new(),
+            family: configured_agent_family(settings, agent)
+                .as_str()
+                .to_string(),
             config_lang: config_lang.to_string(),
             config_content,
             config_present,
@@ -219,6 +244,8 @@ pub(super) fn collect_agent_config_bundle_agent(
             models: credentials.models,
             enable_1m_context: credentials.enable_1m_context,
             enable_chat_completions_proxy: false,
+            reasoning_effort: (configured_agent_family(settings, agent) == AgentFamily::Dsh)
+                .then(|| dsh_reasoning_effort_in(settings, agent)),
         });
     }
 
@@ -227,7 +254,12 @@ pub(super) fn collect_agent_config_bundle_agent(
         .iter()
         .find(|profile| profile.id == agent)
         .ok_or_else(|| format!("Unknown agent: {agent}"))?;
-    let path = PathBuf::from(normalize_config_path(profile.path.clone()));
+    let family = profile.agent_family();
+    let path = if family == AgentFamily::Dsh {
+        crate::dsh_home::dsh_home_for(&profile.id)?.join("settings.yaml")
+    } else {
+        PathBuf::from(normalize_config_path(profile.path.clone()))
+    };
     let config_present = config_content.is_some() || path.is_file();
     let config_content = match config_content {
         Some(content) => content,
@@ -248,6 +280,8 @@ pub(super) fn collect_agent_config_bundle_agent(
         models: profile.models.clone(),
         enable_1m_context: profile.enable_1m_context,
         enable_chat_completions_proxy: profile.enable_chat_completions_proxy,
+        reasoning_effort: (family == AgentFamily::Dsh)
+            .then(|| dsh_reasoning_effort_in(settings, &profile.id)),
     })
 }
 
@@ -259,9 +293,11 @@ pub(super) fn collect_portable_agent_config_bundle_agent(
     if matches!(bundle_agent.kind, AgentConfigBundleKind::Custom) {
         bundle_agent.config_content.clear();
         bundle_agent.config_present = false;
-        if bundle_agent.base_url.trim().is_empty()
-            || bundle_agent.api_key.trim().is_empty()
-            || normalize_model_list(bundle_agent.models.clone()).is_empty()
+        let family = bundle_agent_family(&bundle_agent);
+        if bundle_agent.api_key.trim().is_empty()
+            || (family != AgentFamily::Dsh
+                && (bundle_agent.base_url.trim().is_empty()
+                    || normalize_model_list(bundle_agent.models.clone()).is_empty()))
         {
             return Err(format!(
                 "Custom Agent {} is missing Base URL, API Key, or model settings",
@@ -275,23 +311,20 @@ pub(super) fn collect_portable_agent_config_bundle_agent(
 }
 
 pub(super) fn custom_agent_setup_draft(agent: &AgentConfigBundleAgent) -> Option<AgentSetupDraft> {
-    if agent.base_url.trim().is_empty()
-        || agent.api_key.trim().is_empty()
-        || agent.models.is_empty()
+    let family = bundle_agent_family(agent);
+    if agent.api_key.trim().is_empty()
+        || (family != AgentFamily::Dsh
+            && (agent.base_url.trim().is_empty() || agent.models.is_empty()))
     {
         return None;
     }
     Some(AgentSetupDraft {
         id: agent.id.clone(),
         label: agent.label.clone(),
-        kind: if agent.codex_like {
-            AgentSetupKind::Codex
-        } else {
-            AgentSetupKind::ClaudeCode
-        },
+        kind: family.setup_kind(),
         base_url: agent.base_url.clone(),
         api_key: agent.api_key.clone(),
-        model: agent.models[0].clone(),
+        model: agent.models.first().cloned().unwrap_or_default(),
         models: agent.models.clone(),
         enable_1m_context: agent.enable_1m_context,
         enable_chat_completions_proxy: agent.enable_chat_completions_proxy,
@@ -305,6 +338,8 @@ pub(super) fn import_agent_config_entry(
     agent: AgentConfigBundleAgent,
 ) -> Result<AgentConfigImportResult, String> {
     validate_agent_config_bundle_agent(&agent)?;
+    let family = bundle_agent_family(&agent);
+    let reasoning_effort = agent.reasoning_effort.clone();
     let mut imported_agent_id = agent.id.clone();
     let config_path = match agent.kind {
         AgentConfigBundleKind::BuiltIn => {
@@ -312,6 +347,7 @@ pub(super) fn import_agent_config_entry(
                 "claude" => &mut settings.claude_config_path,
                 "claude_gpt55" => &mut settings.claude_gpt55_config_path,
                 "codex" => &mut settings.codex_config_path,
+                "dsh" => &mut settings.dsh_config_path,
                 _ => unreachable!(),
             };
             let path = if configured_path.trim().is_empty() {
@@ -359,35 +395,68 @@ pub(super) fn import_agent_config_entry(
                     .builtin_agent_credentials
                     .insert(agent.id.clone(), imported_credentials);
             }
+            if agent.id == "dsh" {
+                let home = crate::dsh_home::ensure_dsh_home_for("dsh")?;
+                let api_key = settings
+                    .builtin_agent_credentials
+                    .get("dsh")
+                    .map(|credentials| credentials.api_key.trim())
+                    .filter(|api_key| !api_key.is_empty());
+                crate::dsh_home::sync_dsh_credentials(&home, api_key)?;
+            }
             path
         }
         AgentConfigBundleKind::Custom => {
             let id = sanitize_custom_agent_id(&agent.id);
             imported_agent_id = id.clone();
-            let (path, config_lang) = if let Some(draft) = custom_agent_setup_draft(&agent) {
-                let id = validate_agent_setup_draft(&draft)?;
-                let script = build_agent_script(&draft);
-                (
-                    write_agent_script(&id, &script, &draft.api_key)?,
-                    "shellscript".to_string(),
-                )
-            } else {
-                let extension = match agent.config_lang.as_str() {
-                    "json" => "json",
-                    "toml" => "toml",
-                    _ => "sh",
-                };
-                let path = agent_scripts_dir()?.join(format!("{id}.{extension}"));
-                fs::create_dir_all(agent_scripts_dir()?).map_err(|error| error.to_string())?;
-                if agent.config_present {
-                    if agent.config_lang == "shellscript" {
-                        write_agent_script_at_path(&path, &agent.config_content)?;
+            let (path, config_lang, imported_config_path) =
+                if let Some(draft) = custom_agent_setup_draft(&agent) {
+                    let id = validate_agent_setup_draft(&draft)?;
+                    if matches!(draft.kind, AgentSetupKind::Dsh) {
+                        let home = crate::dsh_home::ensure_dsh_home_for(&id)?;
+                        crate::dsh_home::sync_dsh_credentials(&home, Some(draft.api_key.trim()))?;
+                        let settings_path = home.join("settings.yaml");
+                        if agent.config_present && !agent.config_content.trim().is_empty() {
+                            atomic_write_private(&settings_path, &agent.config_content)?;
+                        } else {
+                            crate::dsh_home::refresh_custom_provider_settings(
+                                &home,
+                                &normalize_base_url(&draft.base_url),
+                                &normalize_setup_models(&draft),
+                            )?;
+                        }
+                        let detected = crate::platform::detect_path("dsh");
+                        let program = if detected.is_empty() {
+                            PathBuf::from("dsh")
+                        } else {
+                            PathBuf::from(detected)
+                        };
+                        (program, "yaml".to_string(), Some(settings_path))
                     } else {
-                        atomic_write_private(&path, &agent.config_content)?;
+                        let script = build_agent_script(&draft);
+                        (
+                            write_agent_script(&id, &script, &draft.api_key)?,
+                            "shellscript".to_string(),
+                            None,
+                        )
                     }
-                }
-                (path, agent.config_lang.clone())
-            };
+                } else {
+                    let extension = match agent.config_lang.as_str() {
+                        "json" => "json",
+                        "toml" => "toml",
+                        _ => "sh",
+                    };
+                    let path = agent_scripts_dir()?.join(format!("{id}.{extension}"));
+                    fs::create_dir_all(agent_scripts_dir()?).map_err(|error| error.to_string())?;
+                    if agent.config_present {
+                        if agent.config_lang == "shellscript" {
+                            write_agent_script_at_path(&path, &agent.config_content)?;
+                        } else {
+                            atomic_write_private(&path, &agent.config_content)?;
+                        }
+                    }
+                    (path, agent.config_lang.clone(), None)
+                };
             let profile = normalize_custom_agent_profile(CustomAgentProfile {
                 id: id.clone(),
                 label: agent.label,
@@ -408,9 +477,14 @@ pub(super) fn import_agent_config_entry(
                 .custom_agents
                 .retain(|existing| existing.id != profile.id);
             settings.custom_agents.push(profile);
-            path
+            imported_config_path.unwrap_or(path)
         }
     };
+    if family == AgentFamily::Dsh {
+        if let Some(effort) = reasoning_effort {
+            apply_dsh_reasoning_effort_update(settings, &imported_agent_id, &effort)?;
+        }
+    }
     Ok(AgentConfigImportResult {
         agent_id: imported_agent_id,
         config_path: config_path.to_string_lossy().into_owned(),
@@ -499,6 +573,7 @@ fn import_agent_paths(
                 "claude" => &settings.claude_config_path,
                 "claude_gpt55" => &settings.claude_gpt55_config_path,
                 "codex" => &settings.codex_config_path,
+                "dsh" => &settings.dsh_config_path,
                 _ => unreachable!(),
             };
             let path = if configured_path.trim().is_empty() {
@@ -511,14 +586,27 @@ fn import_agent_paths(
                 if let Some(auth_path) = codex_auth_path(&path) {
                     paths.push(auth_path);
                 }
+            } else if agent.id == "dsh" {
+                let home = crate::dsh_home::dsh_home_for("dsh")?;
+                paths.push(home.join(".credentials.yaml"));
+                paths.push(home.join("cordis.patch.yml"));
+                paths.push(crate::dsh_home::managed_patch_path_in(&home));
             }
         }
         AgentConfigBundleKind::Custom => {
             let id = sanitize_custom_agent_id(&agent.id);
             if let Some(draft) = custom_agent_setup_draft(agent) {
                 validate_agent_setup_draft(&draft)?;
-                paths.push(default_agent_script_path(&id)?);
-                paths.push(agent_api_key_path(&id)?);
+                if matches!(draft.kind, AgentSetupKind::Dsh) {
+                    let home = crate::dsh_home::dsh_home_for(&id)?;
+                    paths.push(home.join("settings.yaml"));
+                    paths.push(home.join(".credentials.yaml"));
+                    paths.push(home.join("cordis.patch.yml"));
+                    paths.push(crate::dsh_home::managed_patch_path_in(&home));
+                } else {
+                    paths.push(default_agent_script_path(&id)?);
+                    paths.push(agent_api_key_path(&id)?);
+                }
             } else {
                 let extension = match agent.config_lang.as_str() {
                     "json" => "json",
@@ -764,6 +852,7 @@ pub(super) fn parse_cc_switch_providers(sql: &str) -> Result<Vec<AgentConfigBund
             models,
             enable_1m_context: false,
             enable_chat_completions_proxy: false,
+            reasoning_effort: None,
         });
     }
     Ok(agents)
@@ -842,6 +931,7 @@ mod tests {
             models: Vec::new(),
             enable_1m_context: false,
             enable_chat_completions_proxy: false,
+            reasoning_effort: None,
         }
     }
 
@@ -865,6 +955,7 @@ mod tests {
         let bundle = parse_agent_config_bundle(&raw).unwrap();
         assert_eq!(bundle.agent.id, "codex");
         assert_eq!(bundle.agent.config_lang, "toml");
+        assert_eq!(bundle.agent.reasoning_effort, None);
     }
 
     #[test]
@@ -991,6 +1082,56 @@ mod tests {
             .contains(&config_path.to_string_lossy().to_string()));
 
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn dsh_bundle_uses_explicit_family_and_round_trips_reasoning_effort() {
+        let root =
+            std::env::temp_dir().join(format!("aeroric-dsh-agent-export-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let config_path = root.join("settings.yaml");
+        std::fs::write(&config_path, "llm-deepseek: {}\n").unwrap();
+        let mut settings = AppSettings {
+            dsh_config_path: config_path.to_string_lossy().into_owned(),
+            ..AppSettings::default()
+        };
+        settings
+            .dsh_reasoning_efforts
+            .insert("dsh".to_string(), "max".to_string());
+
+        let bundle = collect_agent_config_bundle_agent(&settings, "dsh", None).unwrap();
+        assert_eq!(bundle.family, "dsh");
+        assert!(!bundle.codex_like);
+        assert_eq!(bundle.reasoning_effort.as_deref(), Some("max"));
+
+        let serialized = serde_json::to_string(&bundle).unwrap();
+        let reparsed: AgentConfigBundleAgent = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(reparsed.reasoning_effort.as_deref(), Some("max"));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn custom_dsh_bundle_builds_a_dsh_setup_draft() {
+        let bundle = AgentConfigBundleAgent {
+            id: "portable-dsh".to_string(),
+            label: "Portable DSH".to_string(),
+            kind: AgentConfigBundleKind::Custom,
+            codex_like: false,
+            family: "dsh".to_string(),
+            config_lang: "yaml".to_string(),
+            config_content: String::new(),
+            config_present: false,
+            base_url: "https://api.example.com/v1".to_string(),
+            api_key: "sk-test".to_string(),
+            models: vec!["deepseek-v4-pro".to_string()],
+            enable_1m_context: false,
+            enable_chat_completions_proxy: false,
+            reasoning_effort: Some("off".to_string()),
+        };
+
+        let draft = custom_agent_setup_draft(&bundle).unwrap();
+        assert_eq!(draft.kind, AgentSetupKind::Dsh);
+        assert!(validate_agent_config_bundle_agent(&bundle).is_ok());
     }
     #[test]
     fn rejects_duplicate_ids_in_all_agent_configuration_bundle() {

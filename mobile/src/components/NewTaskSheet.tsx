@@ -17,8 +17,9 @@ import {
   Text,
   View,
 } from "react-native";
-import { Gauge, Zap } from "lucide-react-native";
+import { BrainCircuit, Gauge, Zap } from "lucide-react-native";
 import { t } from "../i18n";
+import { agentFamilyOf, reasoningOptionsForFamily } from "../agent-family";
 import { useConnection } from "../state/connection-context";
 import {
   loadLastModels,
@@ -29,6 +30,7 @@ import {
 import {
   PERMISSION_MODE_VALUES,
   type AgentChoice,
+  type AgentFamily,
   type PermissionMode,
   type Project,
   type RemoteTaskActionResult,
@@ -55,6 +57,12 @@ const DEFAULT_AGENT_TASK_SELECTION: AgentTaskSelection = {
   speed: "standard",
   permissionMode: "ask",
 };
+
+function defaultSelectionForFamily(family: AgentFamily): AgentTaskSelection {
+  return family === "dsh"
+    ? { ...DEFAULT_AGENT_TASK_SELECTION, reasoningEffort: "high" }
+    : DEFAULT_AGENT_TASK_SELECTION;
+}
 
 function normalizeModels(rawModels: string[]): string[] {
   const normalized: string[] = [];
@@ -153,15 +161,27 @@ function NewTaskForm({ lockedProjectId, onClose, onCreated }: NewTaskFormProps) 
     };
   }, [lockedProjectId, request, status]);
 
-  const anthropicAgents = useMemo(() => agents.filter((choice) => !choice.codexLike), [agents]);
-  const openaiAgents = useMemo(() => agents.filter((choice) => choice.codexLike), [agents]);
+  const anthropicAgents = useMemo(
+    () => agents.filter((choice) => agentFamilyOf(choice) === "claude"),
+    [agents],
+  );
+  const openaiAgents = useMemo(
+    () => agents.filter((choice) => agentFamilyOf(choice) === "codex"),
+    [agents],
+  );
+  const dshAgents = useMemo(
+    () => agents.filter((choice) => agentFamilyOf(choice) === "dsh"),
+    [agents],
+  );
   const selectedAgent = useMemo(() => agents.find((item) => item.id === agent), [agent, agents]);
+  const selectedFamily = agentFamilyOf(selectedAgent);
 
   const selectAgent = useCallback(
     (next: AgentChoice) => {
       if (next.id === agent) return;
       agentSelectionsRef.current.set(agent, { reasoningEffort, speed, permissionMode });
-      const restored = agentSelectionsRef.current.get(next.id) ?? DEFAULT_AGENT_TASK_SELECTION;
+      const restored =
+        agentSelectionsRef.current.get(next.id) ?? defaultSelectionForFamily(agentFamilyOf(next));
       setAgent(next.id);
       setSelectedModel("");
       setReasoningEffort(restored.reasoningEffort);
@@ -220,24 +240,22 @@ function NewTaskForm({ lockedProjectId, onClose, onCreated }: NewTaskFormProps) 
     [agent],
   );
 
-  const codexLike = Boolean(selectedAgent?.codexLike);
-  const supportsUltra = !codexLike || selectedModel.trim().toLocaleLowerCase() === "gpt-5.6-sol";
   const reasoningOptions = useMemo(
-    () =>
-      codexLike
-        ? supportsUltra
-          ? ["minimal", "low", "medium", "high", "xhigh", "max", "ultra"]
-          : ["minimal", "low", "medium", "high", "xhigh", "max"]
-        : ["low", "medium", "high", "xhigh", "max", "ultra"],
-    [codexLike, supportsUltra],
+    () => reasoningOptionsForFamily(selectedFamily, selectedModel),
+    [selectedFamily, selectedModel],
   );
 
   useEffect(() => {
-    if (reasoningEffort && !reasoningOptions.includes(reasoningEffort)) {
-      setReasoningEffort(null);
-      agentSelectionsRef.current.set(agent, { reasoningEffort: null, speed, permissionMode });
+    if (!reasoningEffort || !reasoningOptions.includes(reasoningEffort)) {
+      const fallback = selectedFamily === "dsh" ? "high" : null;
+      setReasoningEffort(fallback);
+      agentSelectionsRef.current.set(agent, {
+        reasoningEffort: fallback,
+        speed,
+        permissionMode,
+      });
     }
-  }, [agent, permissionMode, reasoningEffort, reasoningOptions, speed]);
+  }, [agent, permissionMode, reasoningEffort, reasoningOptions, selectedFamily, speed]);
 
   const selectReasoningEffort = useCallback(
     (next: string) => {
@@ -275,7 +293,7 @@ function NewTaskForm({ lockedProjectId, onClose, onCreated }: NewTaskFormProps) 
       permissionMode,
       ...(model ? { selectedModel: model } : {}),
       ...(reasoningEffort ? { reasoningEffort } : {}),
-      speed,
+      ...(selectedFamily === "dsh" ? {} : { speed }),
     })
       .then((result) => {
         // 新版桌面端回传权威快照;旧版只回 taskId 时用最小本地快照兜底,
@@ -287,7 +305,7 @@ function NewTaskForm({ lockedProjectId, onClose, onCreated }: NewTaskFormProps) 
           agent,
           selectedModel: model || undefined,
           reasoningEffort: reasoningEffort ?? undefined,
-          speed,
+          ...(selectedFamily === "dsh" ? {} : { speed }),
           status: "pending",
           createdAt: Date.now(),
         };
@@ -308,6 +326,7 @@ function NewTaskForm({ lockedProjectId, onClose, onCreated }: NewTaskFormProps) 
     request,
     selectedModel,
     reasoningEffort,
+    selectedFamily,
     speed,
     submitting,
   ]);
@@ -435,6 +454,43 @@ function NewTaskForm({ lockedProjectId, onClose, onCreated }: NewTaskFormProps) 
             )}
           </ScrollView>
         </View>
+
+        <View style={styles.agentColumn}>
+          <View style={styles.agentColumnHeader}>
+            <BrainCircuit size={15} color={theme.accent} />
+            <Text style={styles.agentColumnTitle}>{t("newTask.deepseek")}</Text>
+          </View>
+          <ScrollView
+            style={styles.agentList}
+            contentContainerStyle={styles.agentRows}
+            nestedScrollEnabled
+            directionalLockEnabled
+            keyboardShouldPersistTaps="handled"
+          >
+            {dshAgents.length > 0 ? (
+              dshAgents.map((choice) => (
+                <AnimatedPressable
+                  key={choice.id}
+                  style={[styles.agentRow, agent === choice.id && styles.agentRowActive]}
+                  onPress={() => selectAgent(choice)}
+                  accessibilityRole="button"
+                  accessibilityLabel={choice.label}
+                  accessibilityState={{ selected: agent === choice.id }}
+                >
+                  <Text
+                    style={[styles.agentRowText, agent === choice.id && styles.agentRowTextActive]}
+                    numberOfLines={1}
+                    ellipsizeMode="tail"
+                  >
+                    {choice.label}
+                  </Text>
+                </AnimatedPressable>
+              ))
+            ) : (
+              <Text style={styles.agentEmpty}>—</Text>
+            )}
+          </ScrollView>
+        </View>
       </View>
 
       <Text style={styles.sectionLabel}>{t("newTask.model")}</Text>
@@ -464,22 +520,26 @@ function NewTaskForm({ lockedProjectId, onClose, onCreated }: NewTaskFormProps) 
         style={styles.optionSelection}
       />
 
-      <Text style={styles.sectionLabel}>{t("newTask.speed")}</Text>
-      <AnimatedSelection
-        value={speed}
-        options={(["standard", "fast"] as const).map((value) => ({
-          value,
-          label: t(`newTask.speed.${value}` as Parameters<typeof t>[0]),
-          icon:
-            value === "fast" ? (
-              <Zap size={14} color={speed === value ? theme.onAccent : theme.accent} />
-            ) : (
-              <Gauge size={14} color={speed === value ? theme.onAccent : theme.textSecondary} />
-            ),
-        }))}
-        onChange={selectSpeed}
-        style={styles.optionSelection}
-      />
+      {selectedFamily !== "dsh" ? (
+        <>
+          <Text style={styles.sectionLabel}>{t("newTask.speed")}</Text>
+          <AnimatedSelection
+            value={speed}
+            options={(["standard", "fast"] as const).map((value) => ({
+              value,
+              label: t(`newTask.speed.${value}` as Parameters<typeof t>[0]),
+              icon:
+                value === "fast" ? (
+                  <Zap size={14} color={speed === value ? theme.onAccent : theme.accent} />
+                ) : (
+                  <Gauge size={14} color={speed === value ? theme.onAccent : theme.textSecondary} />
+                ),
+            }))}
+            onChange={selectSpeed}
+            style={styles.optionSelection}
+          />
+        </>
+      ) : null}
 
       <Text style={styles.sectionLabel}>{t("newTask.permission")}</Text>
       <AnimatedSelection

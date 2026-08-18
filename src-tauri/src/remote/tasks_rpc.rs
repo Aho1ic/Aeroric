@@ -143,8 +143,9 @@ pub(crate) async fn agents_list() -> Result<Value, String> {
     tauri::async_runtime::spawn_blocking(|| {
         let settings = crate::app_settings::load_settings_internal();
         let mut agents = vec![
-            json!({ "id": "claude", "label": "Claude Code", "codexLike": false }),
-            json!({ "id": "codex", "label": "Codex", "codexLike": true }),
+            json!({ "id": "claude", "label": "Claude Code", "codexLike": false, "family": "claude" }),
+            json!({ "id": "codex", "label": "Codex", "codexLike": true, "family": "codex" }),
+            json!({ "id": "dsh", "label": "DeepSeek Harness", "codexLike": false, "family": "dsh" }),
         ];
         for profile in &settings.custom_agents {
             if profile.id.is_empty() {
@@ -159,6 +160,7 @@ pub(crate) async fn agents_list() -> Result<Value, String> {
                 "id": profile.id,
                 "label": label,
                 "codexLike": profile.codex_like,
+                "family": profile.agent_family().as_str(),
             }));
         }
         Ok(json!(agents))
@@ -348,7 +350,7 @@ pub(crate) async fn task_create<R: Runtime>(
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(str::to_string);
-    let speed = params
+    let mut speed = params
         .get("speed")
         .and_then(Value::as_str)
         .map(str::trim)
@@ -362,6 +364,12 @@ pub(crate) async fn task_create<R: Runtime>(
         return Err("Invalid agent".to_string());
     }
     require_known_agent(&agent).await?;
+    let family_agent = agent.clone();
+    let family = tauri::async_runtime::spawn_blocking(move || {
+        crate::app_settings::agent_family(&family_agent)
+    })
+    .await
+    .map_err(|error| error.to_string())?;
     if !PERMISSION_MODES.contains(&permission_mode.as_str()) {
         return Err(format!("Invalid permissionMode: {permission_mode}"));
     }
@@ -376,6 +384,16 @@ pub(crate) async fn task_create<R: Runtime>(
     }
     if speed.as_ref().is_some_and(|value| value.len() > 16) {
         return Err("Invalid speed".to_string());
+    }
+    if family == crate::app_settings::AgentFamily::Dsh {
+        if reasoning_effort.as_ref().is_some_and(|effort| {
+            !matches!(effort.to_ascii_lowercase().as_str(), "off" | "high" | "max")
+        }) {
+            return Err("Invalid reasoningEffort for DeepSeek Harness".to_string());
+        }
+        // Older mobile clients always sent `standard`; DSH has no speed setting,
+        // so strip either legacy value at the contract boundary.
+        speed = None;
     }
 
     forward_task_request(

@@ -34,6 +34,7 @@ fn profile_view(profile: &CustomAgentProfile, proxy_enabled: bool) -> Value {
         "id": profile.id,
         "label": label,
         "codexLike": profile.codex_like,
+        "family": profile.agent_family().as_str(),
         "editable": true,
         "baseUrl": profile.base_url,
         "apiKeyConfigured": !profile.api_key.trim().is_empty(),
@@ -48,7 +49,7 @@ fn profile_view(profile: &CustomAgentProfile, proxy_enabled: bool) -> Value {
 pub(crate) async fn agent_config_list() -> Result<Value, String> {
     tauri::async_runtime::spawn_blocking(|| {
         let settings = crate::app_settings::load_settings_internal();
-        let builtin = |id: &str, label: &str, codex_like: bool| {
+        let builtin = |id: &str, label: &str, family: crate::app_settings::AgentFamily| {
             let credentials = settings
                 .builtin_agent_credentials
                 .get(id)
@@ -57,7 +58,8 @@ pub(crate) async fn agent_config_list() -> Result<Value, String> {
             json!({
                 "id": id,
                 "label": label,
-                "codexLike": codex_like,
+                "codexLike": family.is_codex_like(),
+                "family": family.as_str(),
                 "editable": true,
                 "baseUrl": credentials.base_url,
                 "apiKeyConfigured": !credentials.api_key.trim().is_empty(),
@@ -67,8 +69,17 @@ pub(crate) async fn agent_config_list() -> Result<Value, String> {
             })
         };
         let mut agents = vec![
-            builtin("claude", "Claude Code", false),
-            builtin("codex", "Codex", true),
+            builtin(
+                "claude",
+                "Claude Code",
+                crate::app_settings::AgentFamily::Claude,
+            ),
+            builtin("codex", "Codex", crate::app_settings::AgentFamily::Codex),
+            builtin(
+                "dsh",
+                "DeepSeek Harness",
+                crate::app_settings::AgentFamily::Dsh,
+            ),
         ];
         for profile in &settings.custom_agents {
             if profile.id.is_empty() {
@@ -156,10 +167,10 @@ fn setup_id(label: &str, requested: Option<String>, kind: &AgentSetupKind) -> St
     let source = requested
         .filter(|value| !value.trim().is_empty())
         .unwrap_or_else(|| label.to_string());
-    let suffix = if matches!(kind, AgentSetupKind::Codex) {
-        "codex"
-    } else {
-        "claude"
+    let suffix = match kind {
+        AgentSetupKind::Codex => "codex",
+        AgentSetupKind::ClaudeCode => "claude",
+        AgentSetupKind::Dsh => "dsh",
     };
     let mut id = source
         .trim()
@@ -257,16 +268,16 @@ pub(crate) async fn agent_config_detect_models(params: Value) -> Result<Value, S
             tauri::async_runtime::spawn_blocking(crate::app_settings::load_settings_internal)
                 .await
                 .map_err(|error| error.to_string())?;
-        if matches!(id.as_str(), "claude" | "codex") {
+        if matches!(id.as_str(), "claude" | "codex" | "dsh") {
             let credentials = settings
                 .builtin_agent_credentials
                 .get(&id)
                 .cloned()
                 .unwrap_or_default();
-            kind.get_or_insert(if id == "codex" {
-                AgentSetupKind::Codex
-            } else {
-                AgentSetupKind::ClaudeCode
+            kind.get_or_insert(match id.as_str() {
+                "codex" => AgentSetupKind::Codex,
+                "dsh" => AgentSetupKind::Dsh,
+                _ => AgentSetupKind::ClaudeCode,
             });
             if base_url.is_empty() {
                 base_url = credentials.base_url;
@@ -280,11 +291,7 @@ pub(crate) async fn agent_config_detect_models(params: Value) -> Result<Value, S
                 .iter()
                 .find(|profile| profile.id == id)
                 .ok_or_else(|| format!("Agent not found: {id}"))?;
-            kind.get_or_insert(if profile.codex_like {
-                AgentSetupKind::Codex
-            } else {
-                AgentSetupKind::ClaudeCode
-            });
+            kind.get_or_insert(profile.agent_family().setup_kind());
             if base_url.is_empty() {
                 base_url = profile.base_url.clone();
             }
@@ -401,6 +408,29 @@ mod tests {
         assert_eq!(view["apiKeyConfigured"], true);
         assert!(view.get("apiKey").is_none());
         assert!(!view.to_string().contains("secret-value"));
+    }
+
+    #[test]
+    fn profile_view_exposes_dsh_as_an_explicit_family() {
+        let profile = CustomAgentProfile {
+            id: "deepseek-work".to_string(),
+            label: "DeepSeek Work".to_string(),
+            path: "dsh".to_string(),
+            codex_like: false,
+            family: "dsh".to_string(),
+            config_lang: "yaml".to_string(),
+            base_url: "https://api.example.test".to_string(),
+            api_key: String::new(),
+            models: vec!["deepseek-v4-pro".to_string()],
+            enable_1m_context: false,
+            enable_chat_completions_proxy: false,
+            username: String::new(),
+            password: String::new(),
+        };
+
+        let view = profile_view(&profile, false);
+        assert_eq!(view["family"], "dsh");
+        assert_eq!(view["codexLike"], false);
     }
 
     #[test]

@@ -69,6 +69,16 @@ describe("terminal output highlighting", () => {
     expect(remapAnsiForTheme(truecolor, "dark")).toBe("\x1b[48;2;17;21;26m\x1b[K");
   });
 
+  it("keeps extended color channels atomic instead of turning them into text attributes", () => {
+    const foreground = "\x1b[38;2;204;100;81mtext";
+    const background = "\x1b[48;2;2;40;0mline";
+    const underlineColor = "\x1b[58;2;40;100;21mdecorated";
+
+    expect(remapAnsiForTheme(foreground, "dark")).toBe(foreground);
+    expect(remapAnsiForTheme(background, "dark")).toBe(background);
+    expect(remapAnsiForTheme(underlineColor, "dark")).toBe(underlineColor);
+  });
+
   it("keeps full theme remapping opt-in for Agent terminal writers", () => {
     const raw = "\x1b[48;2;35;36;38mcomposer";
     const defaultWrite = vi.fn((_data: string, callback?: () => void) => callback?.());

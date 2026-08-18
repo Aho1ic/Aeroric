@@ -204,6 +204,32 @@ pub fn write_custom_provider_settings(
     fs::write(home.join("settings.yaml"), out).map_err(|error| error.to_string())
 }
 
+/// Refresh Aeroric's custom provider after access/model edits while preserving
+/// the DSH API protocol chosen when the profile was created.
+pub fn refresh_custom_provider_settings(
+    home: &Path,
+    base_url: &str,
+    models: &[String],
+) -> Result<(), String> {
+    if base_url.trim().is_empty() || models.is_empty() {
+        return Ok(());
+    }
+    let protocol = fs::read_to_string(home.join("settings.yaml"))
+        .ok()
+        .and_then(|content| {
+            content.lines().find_map(|line| {
+                let value = line.trim().strip_prefix("api:")?.trim();
+                matches!(
+                    value,
+                    "openai-completions" | "openai-responses" | "anthropic-messages"
+                )
+                .then(|| value.to_string())
+            })
+        })
+        .unwrap_or_else(|| "openai-completions".to_string());
+    write_custom_provider_settings(home, base_url, models, &protocol)
+}
+
 /// 将设置面板保存的 DEEPSEEK_API_KEY 同步进托管 home 的 `.credentials.yaml`。
 ///
 /// 行级 upsert:仅改写本键、保留用户手工添加的其他键;`api_key` 为 None 时移除。
@@ -425,6 +451,31 @@ mod tests {
         )
         .unwrap_err();
         assert!(error.contains("Unsupported DeepSeek Harness API protocol"));
+        cleanup_temp_home(&home);
+    }
+
+    #[test]
+    fn refreshes_custom_provider_without_changing_its_protocol() {
+        let home = temp_home("refresh-provider");
+        ensure_dsh_home_at(&home).unwrap();
+        write_custom_provider_settings(
+            &home,
+            "https://old.example/v1",
+            &["old-model".to_string()],
+            "anthropic-messages",
+        )
+        .unwrap();
+
+        refresh_custom_provider_settings(
+            &home,
+            "https://new.example/v1",
+            &["deepseek-v4-pro".to_string()],
+        )
+        .unwrap();
+        let settings = fs::read_to_string(home.join("settings.yaml")).unwrap();
+        assert!(settings.contains("api: anthropic-messages"));
+        assert!(settings.contains("https://new.example/v1"));
+        assert!(settings.contains("deepseek-v4-pro"));
         cleanup_temp_home(&home);
     }
 

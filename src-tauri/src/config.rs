@@ -409,7 +409,15 @@ fn agent_config_path_from_settings(
             .custom_agents
             .iter()
             .find(|profile| profile.id == agent)
-            .map(|profile| configured_path(&profile.path))
+            .map(|profile| {
+                if profile.agent_family() == app_settings::AgentFamily::Dsh {
+                    app_settings::custom_agent_home(&profile.id)
+                        .ok()
+                        .map(|home| home.join("settings.yaml"))
+                } else {
+                    configured_path(&profile.path)
+                }
+            })
             .ok_or_else(|| format!("Unknown agent: {}", agent)),
     }
 }
@@ -465,11 +473,16 @@ pub(crate) fn read_agent_reasoning_settings_from_settings(
     agent: &str,
     settings: &AppSettings,
 ) -> (Option<String>, Option<String>) {
-    // dsh 无 effort/speed 档位(settings.yaml 也没有对应键),不回落默认值。
+    // dsh 的默认 effort 存在 Aeroric 设置中；Harness settings.yaml 没有对应根键。
     if crate::app_settings::agent_family_in(settings, agent)
         == crate::app_settings::AgentFamily::Dsh
     {
-        return (None, None);
+        return (
+            Some(crate::app_settings::dsh_reasoning_effort_in(
+                settings, agent,
+            )),
+            None,
+        );
     }
     let content = match agent_config_path_from_settings(agent, settings) {
         Ok(Some(path)) => fs::read_to_string(&path).unwrap_or_default(),
@@ -732,5 +745,22 @@ commit_message_timeout_secs = 15
         );
 
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn dsh_reasoning_defaults_come_from_aeroric_settings_without_a_speed() {
+        let mut settings = AppSettings::default();
+        assert_eq!(
+            read_agent_reasoning_settings_from_settings("dsh", &settings),
+            (Some("high".to_string()), None)
+        );
+
+        settings
+            .dsh_reasoning_efforts
+            .insert("dsh".to_string(), "max".to_string());
+        assert_eq!(
+            read_agent_reasoning_settings_from_settings("dsh", &settings),
+            (Some("max".to_string()), None)
+        );
     }
 }

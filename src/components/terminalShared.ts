@@ -14,7 +14,7 @@ import type { ThemeVariant } from "../types";
 
 export const DARK_THEME = {
   background: "rgba(6, 8, 10, 0.94)",
-  foreground: "#abb2bf",
+  foreground: "#d6dce8",
   cursor: "#528bff",
   selectionBackground: "#1f4662",
   black: "#1b1d23",
@@ -24,15 +24,15 @@ export const DARK_THEME = {
   blue: "#61afef",
   magenta: "#c678dd",
   cyan: "#56b6c2",
-  white: "#abb2bf",
-  brightBlack: "#5c6370",
+  white: "#b8c0ce",
+  brightBlack: "#7b8494",
   brightRed: "#e88388",
   brightGreen: "#b0d48c",
   brightYellow: "#f0cf8c",
   brightBlue: "#79c0ff",
   brightMagenta: "#d19aee",
   brightCyan: "#6fc5d0",
-  brightWhite: "#d7dae0",
+  brightWhite: "#eef1f7",
 };
 
 export const LIGHT_THEME = {
@@ -213,6 +213,11 @@ function remapAnsiSgrBody(
         changed = true;
         continue;
       }
+      if (index + 4 < parts.length) {
+        next.push(...parts.slice(index, index + 5));
+        index += 4;
+        continue;
+      }
     }
 
     if (code === "38" && parts[index + 1] === "5") {
@@ -221,6 +226,11 @@ function remapAnsiSgrBody(
         next.push("39");
         index += 2;
         changed = true;
+        continue;
+      }
+      if (index + 2 < parts.length) {
+        next.push(...parts.slice(index, index + 3));
+        index += 2;
         continue;
       }
     }
@@ -245,12 +255,18 @@ function remapAnsiSgrBody(
               ? ["218", "251", "225"]
               : null;
         if (!color) {
-          next.push(code);
+          next.push(...parts.slice(index, index + 5));
+          index += 4;
           continue;
         }
         next.push("48", "2", ...color);
         index += 4;
         changed = true;
+        continue;
+      }
+      if (index + 4 < parts.length) {
+        next.push(...parts.slice(index, index + 5));
+        index += 4;
         continue;
       }
     }
@@ -277,6 +293,23 @@ function remapAnsiSgrBody(
         changed = true;
         continue;
       }
+      if (index + 2 < parts.length) {
+        next.push(...parts.slice(index, index + 3));
+        index += 2;
+        continue;
+      }
+    }
+
+    if (code === "58" && parts[index + 1] === "2" && index + 4 < parts.length) {
+      next.push(...parts.slice(index, index + 5));
+      index += 4;
+      continue;
+    }
+
+    if (code === "58" && parts[index + 1] === "5" && index + 2 < parts.length) {
+      next.push(...parts.slice(index, index + 3));
+      index += 2;
+      continue;
     }
 
     next.push(code);

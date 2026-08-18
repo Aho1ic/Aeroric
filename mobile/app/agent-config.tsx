@@ -11,8 +11,9 @@ import {
   View,
 } from "react-native";
 import { useFocusEffect } from "expo-router";
-import { Check, LayoutGrid, Plus, Rows3, Search } from "lucide-react-native";
+import { BrainCircuit, Check, LayoutGrid, Plus, Rows3, Search } from "lucide-react-native";
 import { t } from "../src/i18n";
+import { agentFamilyOf } from "../src/agent-family";
 import { useConnection } from "../src/state/connection-context";
 import { AnimatedPressable } from "../src/ui/AnimatedPressable";
 import { AnimatedSelection } from "../src/ui/AnimatedSelection";
@@ -21,9 +22,9 @@ import { fuzzyMatch } from "../src/ui/fuzzy-match";
 import type { AgentConfigEntry } from "../src/types";
 import { radii, spacing, theme, typography } from "../src/ui/theme";
 
-type Provider = "anthropic" | "openai";
+type Provider = "anthropic" | "openai" | "deepseek";
 type ViewMode = "bar" | "grid";
-type AgentKind = "codex" | "claude_code";
+type AgentKind = "codex" | "claude_code" | "dsh";
 
 interface Draft {
   name: string;
@@ -48,8 +49,9 @@ function normalizeModels(models: string[]): string[] {
   return result;
 }
 
-function providerOf(agent: Pick<AgentConfigEntry, "codexLike">): Provider {
-  return agent.codexLike ? "openai" : "anthropic";
+function providerOf(agent: Pick<AgentConfigEntry, "family" | "codexLike">): Provider {
+  const family = agentFamilyOf(agent);
+  return family === "dsh" ? "deepseek" : family === "codex" ? "openai" : "anthropic";
 }
 
 function toDraft(agent?: AgentConfigEntry, kind: AgentKind = "codex"): Draft {
@@ -58,7 +60,13 @@ function toDraft(agent?: AgentConfigEntry, kind: AgentKind = "codex"): Draft {
     baseUrl: agent?.baseUrl ?? "",
     apiKey: "",
     clearApiKey: false,
-    kind: agent ? (agent.codexLike ? "codex" : "claude_code") : kind,
+    kind: agent
+      ? agentFamilyOf(agent) === "dsh"
+        ? "dsh"
+        : agentFamilyOf(agent) === "codex"
+          ? "codex"
+          : "claude_code"
+      : kind,
     bridge: Boolean(agent?.enableChatCompletionsProxy),
     proxy: Boolean(agent?.proxyEnabled),
   };
@@ -181,6 +189,7 @@ function AgentEditor({
             options={[
               { value: "codex", label: t("agentConfig.codex") },
               { value: "claude_code", label: t("agentConfig.claude") },
+              { value: "dsh", label: t("agentConfig.dsh") },
             ]}
             onChange={(kind) => setDraft((previous) => ({ ...previous, kind }))}
           />
@@ -390,7 +399,8 @@ export default function AgentConfigScreen() {
   };
 
   const startCreate = () => {
-    const kind: AgentKind = provider === "openai" ? "codex" : "claude_code";
+    const kind: AgentKind =
+      provider === "openai" ? "codex" : provider === "deepseek" ? "dsh" : "claude_code";
     setDraft(toDraft(undefined, kind));
     setAvailableModels([]);
     setSelectedModels([]);
@@ -514,6 +524,16 @@ export default function AgentConfigScreen() {
                     />
                   ),
                 },
+                {
+                  value: "deepseek",
+                  label: t("agentConfig.deepseek"),
+                  icon: (
+                    <BrainCircuit
+                      size={16}
+                      color={provider === "deepseek" ? theme.onAccent : theme.accent}
+                    />
+                  ),
+                },
               ]}
               onChange={setProvider}
             />
@@ -585,7 +605,11 @@ export default function AgentConfigScreen() {
                   </Text>
                   <Text style={styles.cardMeta} numberOfLines={1}>
                     {item.baseUrl ||
-                      (item.codexLike ? t("agentConfig.openai") : t("agentConfig.anthropic"))}
+                      (agentFamilyOf(item) === "dsh"
+                        ? t("agentConfig.deepseek")
+                        : agentFamilyOf(item) === "codex"
+                          ? t("agentConfig.openai")
+                          : t("agentConfig.anthropic"))}
                   </Text>
                 </View>
                 <AnimatedPressable

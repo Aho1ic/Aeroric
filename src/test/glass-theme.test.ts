@@ -50,6 +50,10 @@ describe("shared frosted glass theme", () => {
   it("keeps the light terminal white while preserving themed variants", () => {
     expect(LIGHT_THEME.background).toBe("#ffffff");
     expect(DARK_THEME.background).toContain("rgba(");
+    expect(DARK_THEME.foreground).toBe("#d6dce8");
+    expect(DARK_THEME.white).toBe("#b8c0ce");
+    expect(DARK_THEME.brightBlack).toBe("#7b8494");
+    expect(DARK_THEME.brightWhite).toBe("#eef1f7");
     expect(DARK_THEME.cursor).toBe("#528bff");
     expect(DARK_THEME.selectionBackground).toBe("#1f4662");
     expect(EYECARE_THEME.background).toContain("rgba(");

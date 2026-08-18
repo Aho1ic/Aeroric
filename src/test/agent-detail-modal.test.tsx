@@ -46,6 +46,37 @@ const builtInOption: AgentOption = {
   family: "codex",
 };
 
+const dshOption: AgentOption = {
+  value: "dsh",
+  label: "DeepSeek Harness",
+  configFile: "/Users/macbook/.deepseek-harness/settings.yaml",
+  configLang: "yaml",
+  codexLike: false,
+  family: "dsh",
+};
+
+const customDshProfile: CustomAgentProfile = {
+  ...customProfile,
+  id: "deepseek-work",
+  label: "DeepSeek Work",
+  path: "/opt/homebrew/bin/dsh",
+  codex_like: false,
+  family: "dsh",
+  config_lang: "yaml",
+  models: ["deepseek-v4-pro"],
+  enable_1m_context: true,
+};
+
+const customDshOption: AgentOption = {
+  value: customDshProfile.id,
+  label: customDshProfile.label,
+  configFile: "/Users/macbook/.aeroric/agent-homes/deepseek-work/settings.yaml",
+  configLang: "yaml",
+  codexLike: false,
+  family: "dsh",
+  custom: true,
+};
+
 const baseSettings: AppSettings = {
   claude_path: "",
   claude_gpt55_path: "",
@@ -126,6 +157,107 @@ describe("Agent detail modal", () => {
     await waitFor(() => {
       expect(screen.getByDisplayValue("/opt/homebrew/bin/codex")).toBeInTheDocument();
     });
+  });
+
+  it("keeps only the DeepSeek Harness effort selector and saves its own levels", async () => {
+    const dshSettings: AppSettings = {
+      ...baseSettings,
+      dsh_config_path: dshOption.configFile,
+      dsh_reasoning_efforts: { dsh: "high" },
+    };
+    const user = userEvent.setup();
+
+    render(
+      <I18nProvider>
+        <AgentDetailModal
+          option={dshOption}
+          themeVariant="light"
+          logo="/test-logo.svg"
+          settings={dshSettings}
+          onClose={vi.fn()}
+        />
+      </I18nProvider>,
+    );
+
+    const reasoningGroup = await screen.findByRole("group", { name: "推理强度" });
+    expect(
+      within(reasoningGroup)
+        .getAllByRole("button")
+        .map((button) => button.textContent),
+    ).toEqual(["Off", "High", "Max"]);
+    expect(within(reasoningGroup).queryByRole("button", { name: "Model Default" })).toBeNull();
+    expect(within(reasoningGroup).queryByRole("button", { name: "Low" })).toBeNull();
+    expect(screen.queryByRole("group", { name: "推理速度" })).toBeNull();
+
+    await user.click(within(reasoningGroup).getByRole("button", { name: "Max" }));
+    await user.click(screen.getByRole("button", { name: /^保存$/ }));
+
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith("update_dsh_reasoning_effort", {
+        agent: "dsh",
+        effort: "max",
+      });
+    });
+    expect(
+      vi.mocked(invoke).mock.calls.some(([command]) => command === "write_agent_config_file"),
+    ).toBe(false);
+  });
+
+  it("does not expose Claude-only 1M context for a custom DSH profile", async () => {
+    render(
+      <I18nProvider>
+        <AgentDetailModal
+          option={customDshOption}
+          themeVariant="light"
+          logo="/test-logo.svg"
+          settings={{ ...baseSettings, custom_agents: [customDshProfile] }}
+          onClose={vi.fn()}
+        />
+      </I18nProvider>,
+    );
+
+    await screen.findByRole("group", { name: "推理强度" });
+    expect(screen.queryByRole("checkbox", { name: /1M/ })).not.toBeInTheDocument();
+  });
+
+  it("saves built-in model changes only through the built-in update command", async () => {
+    vi.mocked(invoke).mockImplementation((command, _args) => {
+      if (command === "get_agent_config_file_path")
+        return Promise.resolve(builtInOption.configFile);
+      if (command === "read_agent_config_file") return Promise.resolve('model = "gpt-old"\n');
+      if (command === "list_agent_models") {
+        return Promise.resolve({ models: ["gpt-5.6", "gpt-5.6-sol"] });
+      }
+      if (command === "load_app_settings") return Promise.resolve(baseSettings);
+      if (command === "update_builtin_agent_access") return Promise.resolve(baseSettings);
+      if (command === "detect_agent_versions_for_settings") {
+        return Promise.resolve({
+          claude_version: "",
+          claude_gpt55_version: "",
+          codex_version: "codex 1.0.0",
+        });
+      }
+      return Promise.resolve(undefined);
+    });
+
+    const user = userEvent.setup();
+    renderModal(builtInOption);
+    await user.click(await screen.findByRole("button", { name: "获取可用模型" }));
+    await screen.findByLabelText("gpt-5.6-sol");
+    await user.click(screen.getByRole("button", { name: /^保存$/ }));
+
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith("update_builtin_agent_access", {
+        agent: "codex",
+        baseUrl: null,
+        apiKey: null,
+        clearApiKey: false,
+        models: ["gpt-5.6", "gpt-5.6-sol"],
+      });
+    });
+    expect(
+      vi.mocked(invoke).mock.calls.some(([command]) => command === "update_custom_agent_models"),
+    ).toBe(false);
   });
 
   it("shows detected built-in config and credentials in the same detail view", async () => {

@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import type { ComponentProps } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { I18nProvider } from "../i18n";
@@ -19,6 +19,14 @@ vi.mock("../hooks/useAgentOptions", () => ({
       configFile: "",
       configLang: "toml",
       codexLike: true,
+    },
+    {
+      value: "dsh",
+      label: "DeepSeek Harness",
+      configFile: "",
+      configLang: "yaml",
+      codexLike: false,
+      family: "dsh",
     },
   ],
 }));
@@ -103,6 +111,31 @@ describe("ModelOptionsMenu", () => {
     expect(screen.getByRole("button", { name: "Speed" })).toBeInTheDocument();
     expect(screen.queryByRole("menuitemradio")).not.toBeInTheDocument();
     expect(screen.queryByRole("menu", { name: /^Model$/ })).not.toBeInTheDocument();
+  });
+
+  it("shows only Off, High, and Max for DSH and removes its speed menu", () => {
+    vi.useFakeTimers();
+    renderMenu({
+      agent: "dsh",
+      models: ["deepseek-v4-pro"],
+      selectedModel: "deepseek-v4-pro",
+      reasoningEffort: "high",
+      speed: "fast",
+    });
+
+    openMainMenu();
+    expect(screen.queryByRole("button", { name: "Speed" })).not.toBeInTheDocument();
+    expect(screen.queryByTestId("fast-indicator")).not.toBeInTheDocument();
+
+    hoverPanel("reasoning");
+    advanceTimers(150);
+    const reasoningMenu = screen.getByRole("menu", { name: /^Reasoning effort$/ });
+    expect(
+      within(reasoningMenu)
+        .getAllByRole("menuitemradio")
+        .map((item) => item.textContent),
+    ).toEqual(["Off", "High", "Max"]);
+    expect(within(reasoningMenu).queryByText("Model Default")).not.toBeInTheDocument();
   });
 
   it("does not open a submenu before the 150ms stationary delay", () => {

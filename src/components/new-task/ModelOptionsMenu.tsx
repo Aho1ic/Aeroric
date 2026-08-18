@@ -188,7 +188,7 @@ export function ModelOptionsMenu({
     ? t(`newTask.reasoning.${reasoningEffort}`)
     : t("newTask.modelDefault");
   const summaryTitle = `${modelLabel} · ${reasoningLabel}${
-    speed === "fast" ? ` · ${t("newTask.speed.fast")}` : ""
+    showSpeed && speed === "fast" ? ` · ${t("newTask.speed.fast")}` : ""
   }`;
   const title = error ? `${error}\n${summaryTitle}` : summaryTitle;
 
@@ -235,7 +235,8 @@ export function ModelOptionsMenu({
   }
 
   function renderReasoningOptions() {
-    const options: Array<ReasoningEffort | null> = [null, ...efforts];
+    const options: Array<ReasoningEffort | null> =
+      family === "dsh" ? [...efforts] : [null, ...efforts];
     return options.map((effort) => {
       const active = reasoningEffort === effort;
       return (
@@ -474,7 +475,7 @@ export function ModelOptionsMenu({
               >
                 {reasoningLabel}
               </span>
-              {speed === "fast" && (
+              {showSpeed && speed === "fast" && (
                 <span
                   data-fast-indicator
                   data-testid="fast-indicator"

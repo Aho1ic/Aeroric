@@ -571,7 +571,10 @@ export const en: Record<string, string> = {
   "appSettings.reasoningEffort": "Reasoning effort",
   "appSettings.reasoningEffortHint":
     "Writes model_reasoning_effort to the local Codex config file.",
+  "appSettings.dshReasoningEffortHint":
+    "Saves the default reasoning effort for new DeepSeek Harness tasks.",
   "appSettings.reasoningEffortDefault": "Model Default",
+  "appSettings.reasoningEffort.off": "Off",
   "appSettings.reasoningEffort.minimal": "Minimal",
   "appSettings.reasoningEffort.low": "Low",
   "appSettings.reasoningEffort.medium": "Medium",

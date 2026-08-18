@@ -190,6 +190,10 @@ pub struct AgentConfigBundleAgent {
     pub enable_1m_context: bool,
     #[serde(default)]
     pub enable_chat_completions_proxy: bool,
+    /// DSH keeps its reasoning default in Aeroric settings instead of settings.yaml.
+    /// Optional so version-1 bundles written before DSH support remain importable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<String>,
 }
 
 fn default_config_present() -> bool {
@@ -440,6 +444,8 @@ pub struct AppSettings {
     #[serde(default)]
     pub builtin_agent_credentials: HashMap<String, BuiltInAgentCredentials>,
     #[serde(default)]
+    pub dsh_reasoning_efforts: HashMap<String, String>,
+    #[serde(default)]
     pub proxy_settings: ProxySettings,
     #[serde(default)]
     pub local_router_settings: LocalRouterSettings,
@@ -474,6 +480,7 @@ impl Default for AppSettings {
             dsh_config_path: String::new(),
             agent_label_overrides: HashMap::new(),
             builtin_agent_credentials: HashMap::new(),
+            dsh_reasoning_efforts: HashMap::new(),
             proxy_settings: ProxySettings::default(),
             local_router_settings: LocalRouterSettings::default(),
             agent_proxy_enabled: HashMap::new(),
@@ -527,6 +534,14 @@ impl AgentFamily {
     pub fn is_codex_like(self) -> bool {
         self == AgentFamily::Codex
     }
+
+    pub(crate) fn setup_kind(self) -> AgentSetupKind {
+        match self {
+            AgentFamily::Claude => AgentSetupKind::ClaudeCode,
+            AgentFamily::Codex => AgentSetupKind::Codex,
+            AgentFamily::Dsh => AgentSetupKind::Dsh,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default)]
@@ -567,6 +582,14 @@ pub fn agent_family(agent: &str) -> AgentFamily {
 
 pub(crate) fn agent_family_in(settings: &AppSettings, agent: &str) -> AgentFamily {
     configured_agent_family(settings, agent)
+}
+
+pub(crate) fn dsh_reasoning_effort_in(settings: &AppSettings, agent: &str) -> String {
+    settings
+        .dsh_reasoning_efforts
+        .get(agent)
+        .cloned()
+        .unwrap_or_else(|| "high".to_string())
 }
 
 pub fn is_codex_like_agent(agent: &str) -> bool {
@@ -708,21 +731,23 @@ fn normalize_custom_agent_profile(profile: CustomAgentProfile) -> Option<CustomA
     if id.is_empty() || label.is_empty() || path.is_empty() {
         return None;
     }
+    let family = AgentFamily::parse(profile.family.trim())
+        .unwrap_or_else(|| AgentFamily::from_codex_like(profile.codex_like));
     Some(CustomAgentProfile {
         id,
         label,
         path: normalize_agent_configured_path(&profile.id, &path),
         codex_like: profile.codex_like,
-        family: match AgentFamily::parse(profile.family.trim()) {
-            Some(family) => family.as_str().to_string(),
-            None => String::new(),
-        },
+        family: AgentFamily::parse(profile.family.trim())
+            .map(|family| family.as_str().to_string())
+            .unwrap_or_default(),
         config_lang: normalize_config_lang(profile.config_lang),
         base_url: normalize_base_url(&profile.base_url),
         api_key: profile.api_key.trim().to_string(),
         models: normalize_model_list(profile.models),
-        enable_1m_context: profile.enable_1m_context,
-        enable_chat_completions_proxy: profile.codex_like && profile.enable_chat_completions_proxy,
+        enable_1m_context: family == AgentFamily::Claude && profile.enable_1m_context,
+        enable_chat_completions_proxy: family == AgentFamily::Codex
+            && profile.enable_chat_completions_proxy,
         username: String::new(),
         password: String::new(),
     })
@@ -842,6 +867,18 @@ fn normalize_builtin_agent_credentials(
                 || !normalized.api_key.is_empty()
                 || !normalized.models.is_empty())
             .then_some((agent, normalized))
+        })
+        .collect()
+}
+
+fn normalize_dsh_reasoning_efforts(efforts: HashMap<String, String>) -> HashMap<String, String> {
+    efforts
+        .into_iter()
+        .filter_map(|(agent, effort)| {
+            let agent = normalize_agent_label_key(&agent);
+            let effort = effort.trim().to_ascii_lowercase();
+            (!agent.is_empty() && matches!(effort.as_str(), "off" | "high" | "max"))
+                .then_some((agent, effort))
         })
         .collect()
 }
@@ -1778,6 +1815,7 @@ fn normalize_settings(settings: AppSettings) -> AppSettings {
         builtin_agent_credentials: normalize_builtin_agent_credentials(
             settings.builtin_agent_credentials,
         ),
+        dsh_reasoning_efforts: normalize_dsh_reasoning_efforts(settings.dsh_reasoning_efforts),
         proxy_settings,
         local_router_settings: normalize_local_router_settings(settings.local_router_settings),
         agent_proxy_enabled,
@@ -1856,6 +1894,7 @@ fn load_settings_unlocked() -> AppSettings {
             dsh_config_path: String::new(),
             agent_label_overrides: HashMap::new(),
             builtin_agent_credentials: HashMap::new(),
+            dsh_reasoning_efforts: HashMap::new(),
             proxy_settings: ProxySettings::default(),
             local_router_settings: LocalRouterSettings::default(),
             agent_proxy_enabled: HashMap::new(),
@@ -2027,6 +2066,40 @@ pub async fn update_builtin_agent_access(
             None,
             proxy_enabled,
         )
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+fn apply_dsh_reasoning_effort_update(
+    settings: &mut AppSettings,
+    agent: &str,
+    effort: &str,
+) -> Result<(), String> {
+    if agent_family_in(settings, agent) != AgentFamily::Dsh {
+        return Err(
+            "Reasoning effort is only supported here for DeepSeek Harness agents".to_string(),
+        );
+    }
+    let effort = effort.trim().to_ascii_lowercase();
+    if !matches!(effort.as_str(), "off" | "high" | "max") {
+        return Err("Invalid DeepSeek Harness reasoning effort".to_string());
+    }
+    settings
+        .dsh_reasoning_efforts
+        .insert(agent.to_string(), effort);
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn update_dsh_reasoning_effort(
+    agent: String,
+    effort: String,
+) -> Result<AppSettings, String> {
+    tokio::task::spawn_blocking(move || {
+        update_settings_locked(move |settings| {
+            apply_dsh_reasoning_effort_update(settings, &agent, &effort)
+        })
     })
     .await
     .map_err(|error| error.to_string())?
@@ -2351,6 +2424,7 @@ pub async fn export_all_agent_config_bundle(
             "claude".to_string(),
             "claude_gpt55".to_string(),
             "codex".to_string(),
+            "dsh".to_string(),
         ];
         agent_ids.extend(
             settings
@@ -2590,14 +2664,33 @@ pub(crate) fn update_custom_agent_config_internal(
         if let Some(models) = models {
             profile.models = normalize_model_list(models);
         }
-        if profile.models.is_empty() {
+        let family = profile.agent_family();
+        if profile.models.is_empty() && family != AgentFamily::Dsh {
             return Err("At least one model is required".to_string());
         }
         if let Some(enabled) = enable_1m_context {
+            if family != AgentFamily::Claude {
+                return Err("1M context is only available for Claude Code agents".to_string());
+            }
             profile.enable_1m_context = enabled;
         }
         if let Some(enabled) = enable_chat_completions_proxy {
+            if family != AgentFamily::Codex {
+                return Err(
+                    "Chat Completions bridge is only available for Codex agents".to_string()
+                );
+            }
             profile.enable_chat_completions_proxy = enabled;
+        }
+        if family == AgentFamily::Dsh {
+            let home = crate::dsh_home::ensure_dsh_home_for(&profile.id)?;
+            let api_key = (!profile.api_key.trim().is_empty()).then_some(profile.api_key.trim());
+            crate::dsh_home::sync_dsh_credentials(&home, api_key)?;
+            crate::dsh_home::refresh_custom_provider_settings(
+                &home,
+                &normalize_base_url(&profile.base_url),
+                &profile.models,
+            )?;
         }
         upsert_custom_agent_profile_unlocked(settings, profile)?;
         if let Some(enabled) = proxy_enabled {
@@ -2928,18 +3021,17 @@ pub async fn update_custom_agent_models(
         else {
             return Err("Custom agent not found".to_string());
         };
-        if profile.base_url.trim().is_empty() || profile.api_key.trim().is_empty() {
+        let family = profile.agent_family();
+        if profile.api_key.trim().is_empty()
+            || (family != AgentFamily::Dsh && profile.base_url.trim().is_empty())
+        {
             return Err("This agent does not have saved model detection settings".to_string());
         }
 
         let draft = AgentSetupDraft {
             id: profile.id.clone(),
             label: profile.label.clone(),
-            kind: if profile.codex_like {
-                AgentSetupKind::Codex
-            } else {
-                AgentSetupKind::ClaudeCode
-            },
+            kind: family.setup_kind(),
             base_url: profile.base_url.clone(),
             api_key: profile.api_key.clone(),
             model: models[0].clone(),
@@ -2950,11 +3042,21 @@ pub async fn update_custom_agent_models(
             proxy_enabled: false,
         };
         validate_agent_setup_draft(&draft)?;
-        let script = build_agent_script(&draft);
-        let script_path = normalize_config_path(profile.path.clone());
-        let path =
-            write_generated_agent_script(&profile.id, &script_path, &script, &profile.api_key)?;
-        profile.path = path.to_string_lossy().into_owned();
+        if family == AgentFamily::Dsh {
+            let home = crate::dsh_home::ensure_dsh_home_for(&profile.id)?;
+            crate::dsh_home::sync_dsh_credentials(&home, Some(profile.api_key.trim()))?;
+            crate::dsh_home::refresh_custom_provider_settings(
+                &home,
+                &normalize_base_url(&profile.base_url),
+                &models,
+            )?;
+        } else {
+            let script = build_agent_script(&draft);
+            let script_path = normalize_config_path(profile.path.clone());
+            let path =
+                write_generated_agent_script(&profile.id, &script_path, &script, &profile.api_key)?;
+            profile.path = path.to_string_lossy().into_owned();
+        }
         profile.models = models;
 
         let dir = aeroric_dir()?;
@@ -3052,7 +3154,7 @@ pub async fn update_custom_agent_context(
         else {
             return Err("Custom agent not found".to_string());
         };
-        if profile.codex_like {
+        if profile.agent_family() != AgentFamily::Claude {
             return Err("1M context is only available for Claude Code agents".to_string());
         }
         if profile.models.is_empty()
@@ -3121,6 +3223,7 @@ pub async fn delete_custom_agent_profile(id: String) -> Result<AppSettings, Stri
             .retain(|profile| profile.id != normalized_id);
         settings.agent_label_overrides.remove(&normalized_id);
         settings.builtin_agent_credentials.remove(&normalized_id);
+        settings.dsh_reasoning_efforts.remove(&normalized_id);
         settings.agent_proxy_enabled.remove(&normalized_id);
         settings.agent_proxy_overrides.remove(&normalized_id);
 
@@ -3482,6 +3585,17 @@ mod tests {
             vec!["deepseek-chat".to_string(), "deepseek-reasoner".to_string()]
         );
         assert!(settings.custom_agents.is_empty());
+    }
+
+    #[test]
+    fn dsh_reasoning_effort_uses_only_aeroric_supported_levels() {
+        let mut settings = AppSettings::default();
+        assert_eq!(dsh_reasoning_effort_in(&settings, "dsh"), "high");
+
+        apply_dsh_reasoning_effort_update(&mut settings, "dsh", " OFF ").unwrap();
+        assert_eq!(dsh_reasoning_effort_in(&settings, "dsh"), "off");
+        assert!(apply_dsh_reasoning_effort_update(&mut settings, "dsh", "low").is_err());
+        assert!(apply_dsh_reasoning_effort_update(&mut settings, "codex", "max").is_err());
     }
 
     #[test]
@@ -3854,6 +3968,7 @@ mod tests {
                 models: vec!["claude-opus".to_string()],
                 enable_1m_context: true,
                 enable_chat_completions_proxy: false,
+                reasoning_effort: None,
             },
         )
         .unwrap();

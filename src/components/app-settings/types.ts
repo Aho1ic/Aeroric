@@ -34,6 +34,7 @@ export interface AppSettings {
   dsh_config_path?: string;
   agent_label_overrides?: Record<string, string>;
   builtin_agent_credentials?: Record<string, BuiltInAgentCredentials>;
+  dsh_reasoning_efforts?: Record<string, string>;
   proxy_settings?: ProxySettings;
   local_router_settings?: LocalRouterSettings;
   agent_proxy_enabled?: Record<string, boolean>;

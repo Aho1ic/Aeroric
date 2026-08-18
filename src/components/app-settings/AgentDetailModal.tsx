@@ -33,7 +33,7 @@ import {
 } from "./reasoningSpeed";
 import { ModelSelectionList } from "./ModelSelectionList";
 import { AnimatedSelectionGroup } from "../ui/AnimatedSelection";
-import { normalizeModelList, sameModel } from "../../modelOptions";
+import { DSH_REASONING_EFFORTS, normalizeModelList, sameModel } from "../../modelOptions";
 import { refreshLocalRouterRuntime } from "./shared";
 
 type FileState =
@@ -42,6 +42,7 @@ type FileState =
   | { status: "loaded"; content: string };
 
 type DetailTab = "basic" | "config-file";
+type AgentReasoningEffort = ModelReasoningEffort | "off";
 
 const labelStyle: CSSProperties = {
   display: "block",
@@ -118,9 +119,9 @@ export function AgentDetailModal({
   const [enableChatCompletionsProxy, setEnableChatCompletionsProxy] = useState(false);
   const [originalEnableChatCompletionsProxy, setOriginalEnableChatCompletionsProxy] =
     useState(false);
-  const [reasoningEffort, setReasoningEffort] = useState<ModelReasoningEffort | null>(null);
+  const [reasoningEffort, setReasoningEffort] = useState<AgentReasoningEffort | null>(null);
   const [originalReasoningEffort, setOriginalReasoningEffort] =
-    useState<ModelReasoningEffort | null>(null);
+    useState<AgentReasoningEffort | null>(null);
   const [reasoningSpeed, setReasoningSpeed] = useState<ModelReasoningSpeed | null>(null);
   const [originalReasoningSpeed, setOriginalReasoningSpeed] = useState<ModelReasoningSpeed | null>(
     null,
@@ -141,6 +142,7 @@ export function AgentDetailModal({
 
   function handleFileContentChange(content: string) {
     setFileState({ status: "loaded", content });
+    if (agentIsDsh) return;
     setReasoningEffort(readModelReasoningEffort(content));
     setReasoningSpeed(readModelReasoningSpeed(content));
   }
@@ -164,20 +166,24 @@ export function AgentDetailModal({
         } else if (content === null) {
           setFileState({ status: "loaded", content: "" });
           setOriginal("");
-          setReasoningEffort(null);
-          setOriginalReasoningEffort(null);
-          setReasoningSpeed(null);
-          setOriginalReasoningSpeed(null);
+          if (!agentIsDsh) {
+            setReasoningEffort(null);
+            setOriginalReasoningEffort(null);
+            setReasoningSpeed(null);
+            setOriginalReasoningSpeed(null);
+          }
           return;
         }
         setFileState({ status: "loaded", content });
         setOriginal(content);
-        const effort = readModelReasoningEffort(content);
-        setReasoningEffort(effort);
-        setOriginalReasoningEffort(effort);
-        const speed = readModelReasoningSpeed(content);
-        setReasoningSpeed(speed);
-        setOriginalReasoningSpeed(speed);
+        if (!agentIsDsh) {
+          const effort = readModelReasoningEffort(content);
+          setReasoningEffort(effort);
+          setOriginalReasoningEffort(effort);
+          const speed = readModelReasoningSpeed(content);
+          setReasoningSpeed(speed);
+          setOriginalReasoningSpeed(speed);
+        }
       })
       .catch((e) => {
         if (!cancelled) setError(String(e));
@@ -185,7 +191,7 @@ export function AgentDetailModal({
     return () => {
       cancelled = true;
     };
-  }, [agentKey, option.configFile]);
+  }, [agentIsDsh, agentKey, option.configFile]);
 
   useEffect(() => {
     let cancelled = false;
@@ -193,6 +199,14 @@ export function AgentDetailModal({
     function applySettings(loadedSettings: AppSettings) {
       if (cancelled) return;
       setDetectedBalance(null);
+      if (agentIsDsh) {
+        const savedEffort = loadedSettings.dsh_reasoning_efforts?.[agentKey];
+        const effort = DSH_REASONING_EFFORTS.find((item) => item === savedEffort) ?? "high";
+        setReasoningEffort(effort);
+        setOriginalReasoningEffort(effort);
+        setReasoningSpeed(null);
+        setOriginalReasoningSpeed(null);
+      }
       if (deletable) {
         const profile =
           loadedSettings.custom_agents?.find((item) => item.id === String(agentKey)) ?? null;
@@ -243,7 +257,7 @@ export function AgentDetailModal({
     return () => {
       cancelled = true;
     };
-  }, [agentKey, deletable, settings]);
+  }, [agentIsDsh, agentKey, deletable, settings]);
 
   async function handleExportConfig() {
     if (exporting || importing) return;
@@ -298,12 +312,14 @@ export function AgentDetailModal({
         setResolvedFilePath(result.config_path);
         setFileState({ status: "loaded", content: nextContent });
         setOriginal(nextContent);
-        const effort = readModelReasoningEffort(nextContent);
-        setReasoningEffort(effort);
-        setOriginalReasoningEffort(effort);
-        const speed = readModelReasoningSpeed(nextContent);
-        setReasoningSpeed(speed);
-        setOriginalReasoningSpeed(speed);
+        if (!agentIsDsh) {
+          const effort = readModelReasoningEffort(nextContent);
+          setReasoningEffort(effort);
+          setOriginalReasoningEffort(effort);
+          const speed = readModelReasoningSpeed(nextContent);
+          setReasoningSpeed(speed);
+          setOriginalReasoningSpeed(speed);
+        }
         if (deletable) {
           const settings = await invoke<AppSettings>("load_app_settings");
           const profile =
@@ -404,16 +420,16 @@ export function AgentDetailModal({
     (isBuiltIn || selectedModels.length > 0) &&
     !sameModels(normalizeModels(selectedModels), originalSelectedModels);
   const canSaveReasoningEffort =
-    fileState.status === "loaded" && reasoningEffort !== originalReasoningEffort;
+    (agentIsDsh || fileState.status === "loaded") && reasoningEffort !== originalReasoningEffort;
   const canSaveReasoningSpeed =
-    fileState.status === "loaded" && reasoningSpeed !== originalReasoningSpeed;
+    !agentIsDsh && fileState.status === "loaded" && reasoningSpeed !== originalReasoningSpeed;
   const canSave1mContext =
-    Boolean(customProfile && !customProfile.codex_like) &&
+    Boolean(customProfile && option.family === "claude") &&
     enable1mContext !== originalEnable1mContext;
   const canSaveChatCompletionsProxy =
     Boolean(customProfile?.codex_like) &&
     enableChatCompletionsProxy !== originalEnableChatCompletionsProxy;
-  const canDetectModels = isBuiltIn || Boolean(baseUrl.trim() && apiKey.trim());
+  const canDetectModels = isBuiltIn || agentIsDsh || Boolean(baseUrl.trim() && apiKey.trim());
   const isCredsDirty = baseUrl !== originalBaseUrl || apiKey !== originalApiKey;
   const hasAnyChanges =
     isDirty ||
@@ -510,7 +526,7 @@ export function AgentDetailModal({
         setOriginalEnableChatCompletionsProxy(enableChatCompletionsProxy);
       }
 
-      if (canSaveModels) {
+      if (canSaveModels && deletable) {
         const models = normalizeModels(selectedModels);
         const nextSettings = await invoke<AppSettings>("update_custom_agent_models", {
           id: agentKey,
@@ -544,17 +560,33 @@ export function AgentDetailModal({
           latestContent = content;
           setFileState({ status: "loaded", content });
           setOriginal(content);
-          const effort = readModelReasoningEffort(content);
-          setReasoningEffort(effort);
-          setOriginalReasoningEffort(effort);
-          const speed = readModelReasoningSpeed(content);
-          setReasoningSpeed(speed);
-          setOriginalReasoningSpeed(speed);
+          if (!agentIsDsh) {
+            const effort = readModelReasoningEffort(content);
+            setReasoningEffort(effort);
+            setOriginalReasoningEffort(effort);
+            const speed = readModelReasoningSpeed(content);
+            setReasoningSpeed(speed);
+            setOriginalReasoningSpeed(speed);
+          }
         }
       }
 
-      if ((canSaveReasoningEffort || canSaveReasoningSpeed) && latestContent !== null) {
-        let updatedContent = setModelReasoningEffort(latestContent, reasoningEffort);
+      if (agentIsDsh && canSaveReasoningEffort) {
+        const effort = DSH_REASONING_EFFORTS.find((item) => item === reasoningEffort) ?? "high";
+        await invoke("update_dsh_reasoning_effort", { agent: agentKey, effort });
+        setReasoningEffort(effort);
+        setOriginalReasoningEffort(effort);
+      }
+
+      if (
+        !agentIsDsh &&
+        (canSaveReasoningEffort || canSaveReasoningSpeed) &&
+        latestContent !== null
+      ) {
+        let updatedContent = setModelReasoningEffort(
+          latestContent,
+          reasoningEffort as ModelReasoningEffort | null,
+        );
         updatedContent = setModelReasoningSpeed(updatedContent, reasoningSpeed);
         latestContent = updatedContent;
         setFileState({ status: "loaded", content: updatedContent });
@@ -568,21 +600,26 @@ export function AgentDetailModal({
 
       if (isDirty && fileState.status === "loaded") {
         let contentToSave = fileState.content;
-        if (canSaveReasoningEffort) {
-          contentToSave = setModelReasoningEffort(contentToSave, reasoningEffort);
+        if (!agentIsDsh && canSaveReasoningEffort) {
+          contentToSave = setModelReasoningEffort(
+            contentToSave,
+            reasoningEffort as ModelReasoningEffort | null,
+          );
         }
-        if (canSaveReasoningSpeed) {
+        if (!agentIsDsh && canSaveReasoningSpeed) {
           contentToSave = setModelReasoningSpeed(contentToSave, reasoningSpeed);
         }
         await invoke("write_agent_config_file", { agent: agentKey, content: contentToSave });
         setFileState({ status: "loaded", content: contentToSave });
         setOriginal(contentToSave);
-        const effort = readModelReasoningEffort(contentToSave);
-        setReasoningEffort(effort);
-        setOriginalReasoningEffort(effort);
-        const speed = readModelReasoningSpeed(contentToSave);
-        setReasoningSpeed(speed);
-        setOriginalReasoningSpeed(speed);
+        if (!agentIsDsh) {
+          const effort = readModelReasoningEffort(contentToSave);
+          setReasoningEffort(effort);
+          setOriginalReasoningEffort(effort);
+          const speed = readModelReasoningSpeed(contentToSave);
+          setReasoningSpeed(speed);
+          setOriginalReasoningSpeed(speed);
+        }
       }
 
       await refreshLocalRouterRuntime();
@@ -992,7 +1029,7 @@ export function AgentDetailModal({
                     )}
 
                     {/* 1M Context */}
-                    {deletable && customProfile && !customProfile.codex_like && (
+                    {deletable && customProfile && option.family === "claude" && (
                       <div
                         style={{
                           display: "flex",
@@ -1038,7 +1075,7 @@ export function AgentDetailModal({
                     )}
 
                     {/* Reasoning effort */}
-                    {fileState.status === "loaded" && (
+                    {(agentIsDsh || fileState.status === "loaded") && (
                       <div style={{ marginBottom: 18 }}>
                         <div
                           style={{
@@ -1060,47 +1097,50 @@ export function AgentDetailModal({
                               {t("appSettings.reasoningEffort")}
                             </div>
                             <div style={{ marginTop: 3, fontSize: 11, color: "var(--text-hint)" }}>
-                              {t("appSettings.reasoningEffortHint")}
+                              {t(
+                                agentIsDsh
+                                  ? "appSettings.dshReasoningEffortHint"
+                                  : "appSettings.reasoningEffortHint",
+                              )}
                             </div>
                           </div>
                         </div>
-                        <div
-                          role="group"
-                          aria-label={t("appSettings.reasoningEffort")}
-                          style={{
-                            display: "flex",
-                            alignItems: "center",
-                            gap: 6,
-                            flexWrap: "wrap",
-                          }}
-                        >
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            active={reasoningEffort === null}
-                            onClick={() => setReasoningEffort(null)}
-                          >
-                            {t("appSettings.reasoningEffortDefault")}
-                          </Button>
-                          {(isCodex ? CODEX_REASONING_EFFORTS : CLAUDE_REASONING_EFFORTS).map(
-                            (effort) => (
-                              <Button
-                                key={effort}
-                                variant="outline"
-                                size="sm"
-                                active={reasoningEffort === effort}
-                                onClick={() => setReasoningEffort(effort)}
-                              >
-                                {t(`appSettings.reasoningEffort.${effort}`)}
-                              </Button>
-                            ),
-                          )}
-                        </div>
+                        <AnimatedSelectionGroup
+                          value={reasoningEffort ?? (agentIsDsh ? "high" : "default")}
+                          options={[
+                            ...(agentIsDsh
+                              ? []
+                              : [
+                                  {
+                                    value: "default",
+                                    label: t("appSettings.reasoningEffortDefault"),
+                                  },
+                                ]),
+                            ...(agentIsDsh
+                              ? DSH_REASONING_EFFORTS
+                              : isCodex
+                                ? CODEX_REASONING_EFFORTS
+                                : CLAUDE_REASONING_EFFORTS
+                            ).map((effort) => ({
+                              value: effort,
+                              label: t(`appSettings.reasoningEffort.${effort}`),
+                            })),
+                          ]}
+                          onChange={(value) =>
+                            setReasoningEffort(
+                              value === "default" ? null : (value as AgentReasoningEffort),
+                            )
+                          }
+                          ariaLabel={t("appSettings.reasoningEffort")}
+                          equalWidth
+                          className="agent-config-switch-segmented reasoning"
+                          itemClassName="agent-config-switch-segmented-item"
+                        />
                       </div>
                     )}
 
                     {/* Reasoning speed */}
-                    {fileState.status === "loaded" && (
+                    {!agentIsDsh && fileState.status === "loaded" && (
                       <div style={{ marginBottom: 18 }}>
                         <div
                           style={{
@@ -1126,43 +1166,38 @@ export function AgentDetailModal({
                             </div>
                           </div>
                         </div>
-                        <div
-                          role="group"
-                          aria-label={t("appSettings.reasoningSpeed")}
-                          style={{
-                            display: "flex",
-                            alignItems: "center",
-                            gap: 6,
-                            flexWrap: "wrap",
-                          }}
-                        >
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            active={reasoningSpeed === null || reasoningSpeed === "standard"}
-                            onClick={() => setReasoningSpeed("standard")}
-                          >
-                            {t("appSettings.reasoningSpeed.standard")}
-                          </Button>
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            active={reasoningSpeed === "fast"}
-                            onClick={() => setReasoningSpeed("fast")}
-                          >
-                            {t("appSettings.reasoningSpeed.fast")}
-                            <span
-                              className="model-options-fast-indicator"
-                              style={{
-                                display: "inline-flex",
-                                marginLeft: 4,
-                                color: "var(--speed-fast-fg)",
-                              }}
-                            >
-                              <Zap size={13} strokeWidth={2.4} aria-hidden="true" />
-                            </span>
-                          </Button>
-                        </div>
+                        <AnimatedSelectionGroup
+                          value={reasoningSpeed ?? "standard"}
+                          options={[
+                            {
+                              value: "standard",
+                              label: t("appSettings.reasoningSpeed.standard"),
+                            },
+                            {
+                              value: "fast",
+                              label: (
+                                <>
+                                  {t("appSettings.reasoningSpeed.fast")}
+                                  <span
+                                    className="model-options-fast-indicator"
+                                    style={{
+                                      display: "inline-flex",
+                                      marginLeft: 4,
+                                      color: "var(--speed-fast-fg)",
+                                    }}
+                                  >
+                                    <Zap size={13} strokeWidth={2.4} aria-hidden="true" />
+                                  </span>
+                                </>
+                              ),
+                            },
+                          ]}
+                          onChange={setReasoningSpeed}
+                          ariaLabel={t("appSettings.reasoningSpeed")}
+                          equalWidth
+                          className="agent-config-switch-segmented"
+                          itemClassName="agent-config-switch-segmented-item"
+                        />
                       </div>
                     )}
                   </div>

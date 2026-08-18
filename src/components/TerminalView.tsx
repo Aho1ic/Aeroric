@@ -127,6 +127,14 @@ export function TerminalView({
     if (!container) return;
     let disposed = false;
     const pendingWriteCallbacks = pendingWriteCallbacksRef.current;
+    const setTerminalRestoring = (restoring: boolean) => {
+      if (restoring) {
+        container.setAttribute("data-terminal-restoring", "true");
+      } else {
+        container.removeAttribute("data-terminal-restoring");
+      }
+    };
+    setTerminalRestoring(Boolean(initialSnapshot || initialData));
 
     const createRuntime = (theme: ThemeVariant): TerminalRuntime => {
       const { term, fitAddon } = initTerminal(theme, 1000, terminalFontSize, monoFontFamily);
@@ -224,10 +232,30 @@ export function TerminalView({
       } else {
         runtime.term.scrollToLine(Math.min(viewportY, runtime.term.buffer.active.baseY));
       }
-      if (hadFocus) runtime.focus();
-      const callbacks = pendingWriteCallbacks.splice(0);
-      callbacks.forEach((callback) => callback?.());
-      onComplete?.();
+
+      const complete = () => {
+        if (disposed || runtimeRef.current !== runtime) return;
+        if (runtime.theme !== desiredThemeRef.current) {
+          runtime.dispose();
+          runtimeRef.current = null;
+          rebuildingRef.current = false;
+          rebuildRef.current?.(desiredThemeRef.current, onComplete);
+          return;
+        }
+        setTerminalRestoring(false);
+        if (hadFocus) runtime.focus();
+        const callbacks = pendingWriteCallbacks.splice(0);
+        callbacks.forEach((callback) => callback?.());
+        onComplete?.();
+      };
+
+      if (container.hasAttribute("data-terminal-restoring")) {
+        // xterm 的 write 回调表示解析已完成，但画布刷新仍可能排在下一帧。
+        // 先定位到底部，再等一帧显示最终画面，避免暴露历史回放的中间滚动过程。
+        window.requestAnimationFrame(complete);
+      } else {
+        complete();
+      }
     };
 
     rebuildRef.current = (theme, onComplete) => {
@@ -235,6 +263,7 @@ export function TerminalView({
       const previous = runtimeRef.current;
       const raw = rawChunksRef.current?.join("") ?? "";
       rebuildingRef.current = true;
+      setTerminalRestoring(Boolean(raw));
       const viewportY = previous?.term.buffer.active.viewportY ?? 0;
       const wasAtBottom = previous
         ? previous.term.buffer.active.viewportY >= previous.term.buffer.active.baseY
@@ -332,6 +361,7 @@ export function TerminalView({
       runtimeRef.current?.dispose();
       runtimeRef.current = null;
       rebuildingRef.current = true;
+      setTerminalRestoring(false);
       const callbacks = pendingWriteCallbacks.splice(0);
       callbacks.forEach((callback) => callback?.());
     };

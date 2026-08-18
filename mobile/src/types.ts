@@ -145,10 +145,14 @@ export interface SessionAppendedPush {
 }
 
 /** RPC agents.list 的条目(桌面内置 + 自定义 agent 的窄面视图)。 */
+export type AgentFamily = "claude" | "codex" | "dsh";
+
 export interface AgentChoice {
   id: string;
   label: string;
   codexLike: boolean;
+  /** Optional for compatibility with desktop versions predating explicit families. */
+  family?: AgentFamily;
 }
 
 /**
@@ -158,6 +162,8 @@ export interface AgentConfigEntry {
   id: string;
   label: string;
   codexLike: boolean;
+  /** Optional for compatibility with desktop versions predating explicit families. */
+  family?: AgentFamily;
   editable: boolean;
   baseUrl?: string;
   apiKeyConfigured?: boolean;

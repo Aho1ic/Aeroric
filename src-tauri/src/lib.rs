@@ -553,6 +553,7 @@ pub fn run() {
             app_settings::test_proxy_connection,
             app_settings::update_agent_path_settings,
             app_settings::update_builtin_agent_access,
+            app_settings::update_dsh_reasoning_effort,
             app_settings::update_custom_agent_access,
             local_router_commands::get_local_router_status,
             local_router_commands::set_local_router_enabled,
