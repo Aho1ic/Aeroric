@@ -51,6 +51,20 @@ export function sortProjectEntries<T extends { project: Project }>(entries: T[])
   return [...entries].sort((a, b) => compareProjectsForList(a.project, b.project));
 }
 
+export function patchProjectPinned<T extends { project: Project }>(
+  entries: T[],
+  projectId: string,
+  pinned: boolean,
+): T[] {
+  let changed = false;
+  const patched = entries.map((entry) => {
+    if (entry.project.id !== projectId || Boolean(entry.project.pinned) === pinned) return entry;
+    changed = true;
+    return { ...entry, project: { ...entry.project, pinned } };
+  });
+  return changed ? sortProjectEntries(patched) : entries;
+}
+
 /** 保持传入顺序分组:已分组的按分组名首次出现顺序排列,未分组的统一落到末尾一组。 */
 export function groupProjectEntries<T extends { project: Project }>(
   entries: T[],

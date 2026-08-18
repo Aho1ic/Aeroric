@@ -20,7 +20,6 @@ export const en: Record<string, string> = {
   "appSettings.localRouter.serviceToggleHint":
     "Routes newly launched Aeroric agent tasks through the local service.",
   "appSettings.localRouter.operationFailed": "Local router operation failed: {message}",
-  "appSettings.localRouter.lastError": "Latest error: {message}",
   "appSettings.localRouter.routingSection": "Agent routing",
   "appSettings.localRouter.claude": "Claude Code",
   "appSettings.localRouter.codex": "Codex",
@@ -96,7 +95,6 @@ export const en: Record<string, string> = {
   "appSettings.localRouter.targetAddQueue": "Add to failover queue",
   "appSettings.localRouter.targetRemoveQueue": "Remove from failover queue",
   "appSettings.localRouter.targetResetCircuit": "Reset circuit breaker for {target}",
-  "appSettings.localRouter.targetModels": "{count} models",
   "appSettings.localRouter.targetRequestedModel": "Requested model",
   "appSettings.localRouter.targetOneM": "1M context",
   "appSettings.localRouter.targetChatBridge": "Chat completions bridge",

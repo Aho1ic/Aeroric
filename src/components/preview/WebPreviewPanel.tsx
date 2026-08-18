@@ -2,7 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { Copy, ExternalLink, Globe, Monitor, RefreshCw } from "lucide-react";
 import type React from "react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useI18n } from "../../i18n";
 import {
   formatInvokeError,
@@ -75,6 +75,23 @@ export function WebPreviewPanel({
     runProcessTarget,
   );
   const [autoSelectedRunId, setAutoSelectedRunId] = useState<string | null>(null);
+  const refreshSequenceRef = useRef(0);
+  const refreshInFlightRef = useRef<{ contextKey: string; promise: Promise<void> } | null>(null);
+  const refreshContextKey = remote
+    ? `remote:${remote.projectPath}:${JSON.stringify(remote.connection)}`
+    : `local:${projectPath}`;
+  const activeRefreshContextRef = useRef(refreshContextKey);
+
+  useLayoutEffect(() => {
+    activeRefreshContextRef.current = refreshContextKey;
+    refreshSequenceRef.current += 1;
+    return () => {
+      if (activeRefreshContextRef.current === refreshContextKey) {
+        activeRefreshContextRef.current = "";
+        refreshSequenceRef.current += 1;
+      }
+    };
+  }, [refreshContextKey]);
 
   const sortedPorts = useMemo(() => sortListeningPorts(ports), [ports]);
   const runPreviewPort = useMemo(
@@ -122,26 +139,64 @@ export function WebPreviewPanel({
   }, [runProcessTarget]);
 
   const refresh = useCallback(
-    async (options?: { silent?: boolean }) => {
+    (options?: { silent?: boolean }): Promise<void> => {
+      const existing = refreshInFlightRef.current;
+      if (existing?.contextKey === refreshContextKey) {
+        if (options?.silent) return existing.promise;
+        setLoading(true);
+        setError(null);
+        return existing.promise.finally(() => {
+          if (activeRefreshContextRef.current === refreshContextKey) {
+            setLoading(false);
+          }
+        });
+      }
+
+      const sequence = ++refreshSequenceRef.current;
       if (!options?.silent) setLoading(true);
       setError(null);
-      try {
-        const command = remote ? "remote_list_listening_ports" : "list_listening_ports";
-        const args = remote
-          ? { connection: remote.connection, remoteProjectPath: remote.projectPath }
-          : { projectPath };
-        const portsPromise = invoke<ListeningPort[]>(command, args);
-        const result = remote
-          ? await invokeWithTimeout(portsPromise, command, remoteInvokeOptions())
-          : await portsPromise;
-        setPorts(result);
-      } catch (err) {
-        setError(formatInvokeError(err));
-      } finally {
-        if (!options?.silent) setLoading(false);
-      }
+      const work = (async () => {
+        try {
+          const command = remote ? "remote_list_listening_ports" : "list_listening_ports";
+          const args = remote
+            ? { connection: remote.connection, remoteProjectPath: remote.projectPath }
+            : { projectPath };
+          const portsPromise = invoke<ListeningPort[]>(command, args);
+          const result = remote
+            ? await invokeWithTimeout(portsPromise, command, remoteInvokeOptions())
+            : await portsPromise;
+          if (
+            refreshSequenceRef.current === sequence &&
+            activeRefreshContextRef.current === refreshContextKey
+          ) {
+            setPorts(result);
+          }
+        } catch (err) {
+          if (
+            refreshSequenceRef.current === sequence &&
+            activeRefreshContextRef.current === refreshContextKey
+          ) {
+            setError(formatInvokeError(err));
+          }
+        } finally {
+          if (
+            !options?.silent &&
+            refreshSequenceRef.current === sequence &&
+            activeRefreshContextRef.current === refreshContextKey
+          ) {
+            setLoading(false);
+          }
+        }
+      })();
+      const tracked = work.finally(() => {
+        if (refreshInFlightRef.current?.promise === tracked) {
+          refreshInFlightRef.current = null;
+        }
+      });
+      refreshInFlightRef.current = { contextKey: refreshContextKey, promise: tracked };
+      return tracked;
     },
-    [projectPath, remote],
+    [projectPath, refreshContextKey, remote],
   );
 
   useEffect(() => {
@@ -153,6 +208,7 @@ export function WebPreviewPanel({
     if (autoSelectedRunId === observedRunProcess.runId) return;
 
     let cancelled = false;
+    let timer: number | null = null;
     const poll = async () => {
       try {
         const next = await invoke<RunProcessSnapshot>("read_run_process", {
@@ -165,15 +221,17 @@ export function WebPreviewPanel({
       if (!cancelled) {
         await refresh({ silent: true });
       }
+      if (!cancelled) {
+        timer = window.setTimeout(() => {
+          void poll();
+        }, 1200);
+      }
     };
 
-    const timer = window.setInterval(() => {
-      void poll();
-    }, 1200);
     void poll();
     return () => {
       cancelled = true;
-      window.clearInterval(timer);
+      if (timer !== null) window.clearTimeout(timer);
     };
   }, [autoSelectedRunId, observedRunProcess?.runId, observedRunProcess?.status, refresh]);
 

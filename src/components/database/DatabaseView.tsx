@@ -2759,6 +2759,8 @@ function DatabaseViewContent({
         charset: canSetCreateDatabaseCharset(connection) ? createDatabaseCharset : null,
         collation: canSetCreateDatabaseCharset(connection) ? createDatabaseCollation : null,
       });
+      const approved = await confirmDbxProductionSql(connection, "", sql);
+      if (!approved) return;
       await databaseApi.dbxExecuteQuery({
         connectionId: connection.id,
         database: "",
@@ -2777,6 +2779,7 @@ function DatabaseViewContent({
     createDatabaseCollation,
     createDatabaseConnection,
     createDatabaseName,
+    confirmDbxProductionSql,
     loadDbxConnection,
   ]);
 
@@ -3734,6 +3737,12 @@ function DatabaseViewContent({
         databaseType: createSchemaConnection.dbType,
         name,
       });
+      const approved = await confirmDbxProductionSql(
+        createSchemaConnection,
+        createSchemaTarget.database,
+        sql,
+      );
+      if (!approved) return;
       await databaseApi.dbxExecuteQuery({
         connectionId: createSchemaConnection.id,
         database: createSchemaTarget.database,
@@ -3751,6 +3760,7 @@ function DatabaseViewContent({
     createSchemaConnection,
     createSchemaName,
     createSchemaTarget,
+    confirmDbxProductionSql,
     loadDbxDatabase,
   ]);
 

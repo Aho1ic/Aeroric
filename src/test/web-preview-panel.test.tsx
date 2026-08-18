@@ -64,6 +64,14 @@ function runProcess(overrides: Partial<RunProcessSnapshot>): RunProcessSnapshot 
   };
 }
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
+
 describe("WebPreviewPanel", () => {
   beforeEach(() => {
     vi.mocked(invoke).mockReset();
@@ -280,6 +288,99 @@ describe("WebPreviewPanel", () => {
     expect(
       screen.getByText(/remote_list_listening_ports.*timed out after 60s/i),
     ).toBeInTheDocument();
+  });
+
+  it("does not overlap remote port polling or a manual refresh", async () => {
+    vi.useFakeTimers();
+    const connection = sshConnection();
+    const process = runProcess({});
+    const firstPorts = deferred<ListeningPort[]>();
+    vi.mocked(invoke).mockImplementation((command) => {
+      if (command === "remote_list_listening_ports") {
+        const callCount = vi
+          .mocked(invoke)
+          .mock.calls.filter(([name]) => name === "remote_list_listening_ports").length;
+        return callCount === 1 ? firstPorts.promise : Promise.resolve([]);
+      }
+      if (command === "read_run_process") return Promise.resolve(process);
+      return Promise.reject(new Error(`unexpected command: ${command}`));
+    });
+
+    render(
+      <I18nProvider>
+        <WebPreviewPanel
+          projectPath="/srv/app"
+          width={360}
+          runProcessTarget={process}
+          remote={{ connection, projectPath: "/srv/app" }}
+        />
+      </I18nProvider>,
+    );
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5000);
+    });
+    expect(
+      vi.mocked(invoke).mock.calls.filter(([command]) => command === "remote_list_listening_ports"),
+    ).toHaveLength(1);
+
+    await act(async () => {
+      firstPorts.resolve([]);
+      await firstPorts.promise;
+      await Promise.resolve();
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1200);
+    });
+    expect(
+      vi.mocked(invoke).mock.calls.filter(([command]) => command === "remote_list_listening_ports"),
+    ).toHaveLength(2);
+  });
+
+  it("ignores a late port response from an obsolete project context", async () => {
+    const firstPorts = deferred<ListeningPort[]>();
+    vi.mocked(invoke).mockImplementation((command, args) => {
+      if (command !== "list_listening_ports") {
+        return Promise.reject(new Error(`unexpected command: ${command}`));
+      }
+      const path = (args as { projectPath: string }).projectPath;
+      if (path === "/tmp/first") return firstPorts.promise;
+      return Promise.resolve([
+        port({ port: 8080, url: "http://localhost:8080", processName: "current" }),
+      ]);
+    });
+
+    const view = render(
+      <I18nProvider>
+        <WebPreviewPanel projectPath="/tmp/first" width={360} />
+      </I18nProvider>,
+    );
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith("list_listening_ports", {
+        projectPath: "/tmp/first",
+      });
+    });
+
+    view.rerender(
+      <I18nProvider>
+        <WebPreviewPanel projectPath="/tmp/second" width={360} />
+      </I18nProvider>,
+    );
+    expect(await screen.findByText("http://localhost:8080")).toBeInTheDocument();
+
+    await act(async () => {
+      firstPorts.resolve([
+        port({ port: 3000, url: "http://localhost:3000", processName: "obsolete" }),
+      ]);
+      await firstPorts.promise;
+    });
+
+    expect(screen.queryByText("http://localhost:3000")).not.toBeInTheDocument();
+    expect(screen.getByTitle("Embedded preview")).toHaveAttribute("src", "http://localhost:8080");
   });
 
   it("shows a visible error when opening the remote preview tunnel fails", async () => {

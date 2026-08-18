@@ -6,7 +6,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { rememberTasks } from "../notifications/task-name-cache";
 import type { Project, Task, TaskStatus, TaskStatusPush } from "../types";
-import { sortProjectEntries, sortProjectsForList } from "../ui/group-projects";
+import { patchProjectPinned, sortProjectsForList } from "../ui/group-projects";
 import { upsertTaskInSections, type TaskSection } from "../ui/upsert-task";
 import { useConnection } from "./connection-context";
 
@@ -39,6 +39,7 @@ export function useHostTasks(): HostTasksState & HostTasksActions {
   const lastUnknownRefresh = useRef(0);
   const refreshInFlight = useRef<Promise<void> | null>(null);
   const refreshQueued = useRef(false);
+  const pinMutationSeq = useRef(new Map<string, number>());
   // 已知任务 id 镜像:push 处理需要同步判断,不能依赖异步的 setState updater
   const knownTaskIds = useRef<Set<string>>(new Set());
 
@@ -138,27 +139,32 @@ export function useHostTasks(): HostTasksState & HostTasksActions {
 
   const setPinned = useCallback(
     (projectId: string, pinned: boolean) => {
-      let snapshot: ProjectTasks[] = [];
-      setState((prev) => {
-        snapshot = prev.sections;
-        const patched = prev.sections.map((section) =>
-          section.project.id === projectId
-            ? { ...section, project: { ...section.project, pinned } }
-            : section,
-        );
-        return { ...prev, sections: sortProjectEntries(patched) };
-      });
-      const rollback = snapshot;
+      const project = state.sections.find((section) => section.project.id === projectId)?.project;
+      if (!project) return;
+      const previousPinned = Boolean(project.pinned);
+      const operation = (pinMutationSeq.current.get(projectId) ?? 0) + 1;
+      pinMutationSeq.current.set(projectId, operation);
+      setState((prev) => ({
+        ...prev,
+        sections: patchProjectPinned(prev.sections, projectId, pinned),
+      }));
       void (async () => {
         try {
           await request("projects.setPinned", { projectId, pinned });
         } catch {
-          // 写回失败(离线/桌面拒绝)→ 回滚到点击前的顺序,避免手机端与桌面不一致
-          setState((prev) => ({ ...prev, sections: rollback }));
+          if (pinMutationSeq.current.get(projectId) !== operation) return;
+          setState((prev) => ({
+            ...prev,
+            sections: patchProjectPinned(prev.sections, projectId, previousPinned),
+          }));
+        } finally {
+          if (pinMutationSeq.current.get(projectId) === operation) {
+            pinMutationSeq.current.delete(projectId);
+          }
         }
       })();
     },
-    [request],
+    [request, state.sections],
   );
 
   return { ...state, refresh, upsertTask, setPinned };

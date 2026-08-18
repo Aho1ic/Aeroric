@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Project, Task } from "../types";
+import { patchProjectPinned } from "../ui/group-projects";
 import { upsertTaskInSections, type TaskSection } from "../ui/upsert-task";
 
 const project: Project = {
@@ -35,5 +36,37 @@ describe("upsertTaskInSections", () => {
     const next = upsertTaskInSections(sections, task("one", 10, "running"));
 
     expect(next[0]?.tasks[0]).toMatchObject({ id: "one", name: "Keep me", status: "running" });
+  });
+});
+
+describe("patchProjectPinned", () => {
+  it("only restores the target pin while preserving newer tasks and other project changes", () => {
+    const otherProject: Project = {
+      id: "project-2",
+      name: "Other updated",
+      path: "/tmp/other",
+      pinned: true,
+      lastOpenedAt: 2,
+    };
+    const addedTask = task("added-during-request", 30);
+    const sections: TaskSection[] = [
+      {
+        project: { ...project, pinned: true },
+        tasks: [addedTask, task("older", 10)],
+      },
+      {
+        project: otherProject,
+        tasks: [],
+      },
+    ];
+
+    const next = patchProjectPinned(sections, project.id, false);
+    const restored = next.find((section) => section.project.id === project.id);
+    const untouched = next.find((section) => section.project.id === otherProject.id);
+
+    expect(restored?.project.pinned).toBe(false);
+    expect(restored?.tasks).toEqual([addedTask, expect.objectContaining({ id: "older" })]);
+    expect(untouched).toBe(sections[1]);
+    expect(next.map((section) => section.project.id)).toEqual(["project-2", "project-1"]);
   });
 });

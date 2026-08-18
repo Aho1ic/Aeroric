@@ -362,6 +362,62 @@ describe("DatabaseView workspace and data grid", () => {
     });
   });
 
+  it("does not create a database when production confirmation is rejected", async () => {
+    const user = userEvent.setup();
+    const productionConnection = {
+      ...mysqlDbxConnection,
+      dbx: {
+        ...mysqlDbxConnection.dbx,
+        is_production: true,
+        production_databases: [],
+      },
+    };
+    vi.mocked(confirm).mockResolvedValue(false);
+    vi.mocked(invoke).mockImplementation((command) => {
+      if (command === "db_load_connections") return Promise.resolve([]);
+      if (command === "dbx_list_connections") return Promise.resolve([productionConnection]);
+      if (command === "dbx_connect") return Promise.resolve(undefined);
+      if (command === "dbx_list_databases") return Promise.resolve([{ name: "main" }]);
+      if (command === "dbx_list_objects") return Promise.resolve([]);
+      if (command === "dbx_build_create_database_sql") {
+        return Promise.resolve("CREATE DATABASE `vision`;");
+      }
+      if (command === "dbx_assess_production_sql") {
+        return Promise.resolve({
+          requiresConfirmation: true,
+          isMutation: true,
+          productionDatabases: [],
+        });
+      }
+      return Promise.resolve(undefined);
+    });
+
+    render(
+      React.createElement(
+        I18nProvider,
+        null,
+        React.createElement(DatabaseView, { sshConnections: [connection()] }),
+      ),
+    );
+
+    fireEvent.contextMenu(await screen.findByRole("button", { name: /MySQL Source/i }));
+    await user.click(screen.getByRole("menuitem", { name: "Create database" }));
+    const dialog = await screen.findByRole("dialog", { name: "Create database" });
+    await user.type(screen.getByLabelText("Database name"), "vision");
+    await user.click(within(dialog).getByRole("button", { name: "Create database" }));
+
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith("dbx_assess_production_sql", {
+        request: {
+          connectionId: "dbx-mysql",
+          database: "",
+          sql: "CREATE DATABASE `vision`;",
+        },
+      });
+    });
+    expect(invoke).not.toHaveBeenCalledWith("dbx_execute_query", expect.anything());
+  });
+
   it("creates and attaches a DuckDB database file from the connection context menu", async () => {
     const user = userEvent.setup();
     vi.mocked(save).mockResolvedValue("/tmp/analytics");

@@ -799,13 +799,14 @@ describe("DatabaseView connection management", () => {
 
     await waitFor(() => {
       expect(confirm).toHaveBeenCalledWith(
-        expect.stringContaining("CREATE USER 'reporter'@'%' IDENTIFIED BY 'secret';"),
+        expect.stringContaining("CREATE USER 'reporter'@'%' IDENTIFIED BY '********';"),
         {
           title: "Preview SQL",
           kind: "warning",
         },
       );
     });
+    expect(String(vi.mocked(confirm).mock.calls[0]?.[0])).not.toContain("secret");
     expect(invoke).toHaveBeenCalledWith("dbx_execute_multi", {
       request: expect.objectContaining({
         connectionId: "dbx-mysql",
@@ -1324,9 +1325,16 @@ describe("DatabaseView connection management", () => {
 
     await waitFor(() => {
       expect(confirm).toHaveBeenCalledWith(
-        expect.stringContaining("CREATE ROLE \"batch_role\" NOLOGIN PASSWORD E'secret';"),
+        expect.stringContaining("CREATE ROLE \"batch_role\" NOLOGIN PASSWORD E'********';"),
         expect.anything(),
       );
+    });
+    expect(String(vi.mocked(confirm).mock.calls[0]?.[0])).not.toContain("secret");
+    expect(invoke).toHaveBeenCalledWith("dbx_execute_multi", {
+      request: expect.objectContaining({
+        connectionId: "dbx-source",
+        sql: "CREATE ROLE \"batch_role\" NOLOGIN PASSWORD E'secret';",
+      }),
     });
   });
 

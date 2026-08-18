@@ -65,6 +65,7 @@ import {
 } from "./settings";
 import { applyProjectOrder, normalizeProjectOrder, sortProjectsForRail } from "./projectOrder";
 import { taskCommandName } from "./projectTarget";
+import { createTaskId } from "./taskId";
 import {
   loadProjectGroupNames,
   mergeProjectGroupNames,
@@ -1376,7 +1377,7 @@ function App() {
       injectPromptIntoTerminal?: boolean;
     },
   ) {
-    const taskId = `${Date.now()}`;
+    const taskId = createTaskId();
     const projectLocation = resolveProjectLocation(project);
     const remoteConnection =
       projectLocation.kind === "ssh"

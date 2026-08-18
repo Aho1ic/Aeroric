@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { invoke } from "@tauri-apps/api/core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -261,6 +261,112 @@ describe("LocalRouterPanel", () => {
     const backup = screen.getByRole("article", { name: "Claude Backup" });
     expect(backup).toBeInTheDocument();
     expect(backup.getAttribute("style")).toContain("var(--success)");
+  });
+
+  it("renders model and capability badges beside a right-aligned action group", async () => {
+    const target: LocalRouterTargetStatus = {
+      ...claudeTargets[1],
+      target_name: "Claude Extended",
+      models: [
+        "claude-sonnet-4-20250514",
+        "provider/claude-opus-with-an-especially-long-model-name",
+      ],
+      enable_1m_context: true,
+      enable_chat_completions_proxy: true,
+    };
+    vi.mocked(invoke).mockImplementation((command) => {
+      if (command === "load_app_settings") return Promise.resolve(appSettings());
+      if (command === "get_local_router_status") {
+        return Promise.resolve({ ...runningStatus, targets: [claudeTargets[0], target] });
+      }
+      if (command === "get_local_router_requests") return Promise.resolve([]);
+      return Promise.reject(new Error(`unexpected command: ${command}`));
+    });
+
+    renderWithI18n(<LocalRouterPanel />);
+
+    const card = await screen.findByRole("article", { name: "Claude Extended" });
+    const cardQueries = within(card);
+    const modelName = cardQueries.getByText("claude-sonnet-4-20250514");
+    const longModelName = cardQueries.getByText(
+      "provider/claude-opus-with-an-especially-long-model-name",
+    );
+    const modelBadge = modelName.parentElement;
+    const badgeContainer = modelBadge?.parentElement;
+
+    expect(modelBadge).toHaveAttribute("title", "claude-sonnet-4-20250514");
+    expect(modelBadge).toHaveStyle({ boxSizing: "border-box" });
+    expect(longModelName.parentElement).toHaveAttribute(
+      "title",
+      "provider/claude-opus-with-an-especially-long-model-name",
+    );
+    expect(longModelName).toHaveStyle({
+      overflow: "hidden",
+      textOverflow: "ellipsis",
+      whiteSpace: "nowrap",
+    });
+    expect(cardQueries.queryByText("2 models")).not.toBeInTheDocument();
+    expect(cardQueries.getByText("1M context").parentElement).toBe(badgeContainer);
+    expect(cardQueries.getByText("Chat completions bridge").parentElement).toBe(badgeContainer);
+    expect(badgeContainer).toHaveStyle({
+      flex: "1 1 240px",
+      flexWrap: "wrap",
+    });
+
+    const actionGroup = cardQueries.getByRole("button", {
+      name: "Switch to this target",
+    }).parentElement;
+    expect(actionGroup).toHaveStyle({
+      flex: "0 0 auto",
+      justifyContent: "flex-end",
+      marginLeft: "auto",
+    });
+    expect(actionGroup?.parentElement).toHaveStyle({
+      alignItems: "flex-end",
+      flexWrap: "wrap",
+    });
+
+    const targetName = cardQueries.getByText("Claude Extended");
+    expect(targetName).toHaveStyle({
+      color: "color-mix(in srgb, var(--accent) 72%, var(--text-primary))",
+      fontSize: "14px",
+      fontWeight: "700",
+    });
+
+    const requestedModelCard = screen.getByRole("article", { name: "Claude Code" });
+    expect(within(requestedModelCard).getByText("Requested model")).toBeInTheDocument();
+  });
+
+  it("hides service error details while retaining failed status and target diagnostics", async () => {
+    const failedTarget: LocalRouterTargetStatus = {
+      ...claudeTargets[0],
+      circuit: {
+        ...claudeTargets[0].circuit,
+        state: "open",
+        consecutive_failures: 3,
+        last_error: "upstream request timed out",
+      },
+    };
+    const failedStatus: LocalRouterStatus = {
+      ...runningStatus,
+      running: false,
+      listen_url: null,
+      last_error: "router process exited unexpectedly",
+      targets: [failedTarget],
+    };
+    vi.mocked(invoke).mockImplementation((command) => {
+      if (command === "load_app_settings") return Promise.resolve(appSettings());
+      if (command === "get_local_router_status") return Promise.resolve(failedStatus);
+      if (command === "get_local_router_requests") return Promise.resolve([]);
+      return Promise.reject(new Error(`unexpected command: ${command}`));
+    });
+
+    renderWithI18n(<LocalRouterPanel />);
+
+    expect(await screen.findByText("Enabled, but failed to start")).toBeInTheDocument();
+    expect(screen.queryByText(/router process exited unexpectedly/i)).not.toBeInTheDocument();
+    expect(screen.getByText("3 consecutive failures")).toBeInTheDocument();
+    expect(screen.getByText("upstream request timed out")).toBeInTheDocument();
   });
 
   it("blocks saving when failover only references unavailable targets", async () => {

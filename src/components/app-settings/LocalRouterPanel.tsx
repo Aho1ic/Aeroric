@@ -462,15 +462,21 @@ function NumberField({
 function InlineBadge({
   children,
   color = "var(--text-secondary)",
+  title,
+  style,
 }: {
   children: ReactNode;
   color?: string;
+  title?: string;
+  style?: CSSProperties;
 }) {
   return (
     <span
+      title={title}
       style={{
         display: "inline-flex",
         alignItems: "center",
+        boxSizing: "border-box",
         minHeight: 20,
         padding: "1px 6px",
         border: "1px solid color-mix(in srgb, currentColor 28%, transparent)",
@@ -480,6 +486,7 @@ function InlineBadge({
         fontSize: 10.5,
         fontWeight: 700,
         lineHeight: 1.2,
+        ...style,
       }}
     >
       {children}
@@ -559,8 +566,9 @@ function TargetCard({
             <strong
               style={{
                 minWidth: 0,
-                color: "var(--text-primary)",
-                fontSize: 12.5,
+                color: "color-mix(in srgb, var(--accent) 72%, var(--text-primary))",
+                fontSize: 14,
+                fontWeight: 700,
                 overflowWrap: "anywhere",
               }}
             >
@@ -599,39 +607,6 @@ function TargetCard({
         <InlineBadge color={circuitColor}>{circuitLabel}</InlineBadge>
       </div>
 
-      <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
-        {target.models.length ? (
-          <InlineBadge>
-            {t("appSettings.localRouter.targetModels", { count: target.models.length })}
-          </InlineBadge>
-        ) : (
-          <InlineBadge>{t("appSettings.localRouter.targetRequestedModel")}</InlineBadge>
-        )}
-        {target.enable_1m_context ? (
-          <InlineBadge color="var(--accent)">{t("appSettings.localRouter.targetOneM")}</InlineBadge>
-        ) : null}
-        {target.enable_chat_completions_proxy ? (
-          <InlineBadge color="var(--accent)">
-            {t("appSettings.localRouter.targetChatBridge")}
-          </InlineBadge>
-        ) : null}
-      </div>
-
-      {target.models.length ? (
-        <div
-          title={target.models.join(", ")}
-          style={{
-            color: "var(--text-hint)",
-            fontFamily: "var(--font-mono)",
-            fontSize: 10.5,
-            lineHeight: 1.45,
-            overflowWrap: "anywhere",
-          }}
-        >
-          {target.models.join(", ")}
-        </div>
-      ) : null}
-
       {target.circuit.consecutive_failures > 0 || target.circuit.last_error ? (
         <div
           style={{
@@ -656,52 +631,114 @@ function TargetCard({
         </div>
       ) : null}
 
-      <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 6 }}>
-        <Button
-          variant={switchDisabled ? "secondary" : "outline"}
-          size="xs"
-          disabled={disabled || !agentEnabled || switchDisabled || Boolean(action)}
-          onClick={onSwitch}
+      <div
+        style={{
+          display: "flex",
+          flexWrap: "wrap",
+          alignItems: "flex-end",
+          gap: 8,
+        }}
+      >
+        <div
+          style={{
+            display: "flex",
+            flex: "1 1 240px",
+            minWidth: "min(220px, 100%)",
+            flexWrap: "wrap",
+            alignItems: "center",
+            gap: 5,
+          }}
         >
-          {switching
-            ? t("appSettings.localRouter.targetSwitching")
-            : settings.auto_failover_enabled
-              ? t("appSettings.localRouter.targetMakePrimary")
-              : t("appSettings.localRouter.targetSwitch")}
-        </Button>
-        <Button
-          variant={queuePosition ? "secondary" : "ghost"}
-          size="xs"
-          disabled={disabled || Boolean(action)}
-          onClick={onToggleQueue}
-        >
-          {queuePosition ? (
-            <Trash2 size={12} strokeWidth={2} />
+          {target.models.length ? (
+            target.models.map((model, index) => (
+              <InlineBadge
+                key={`${model}-${index}`}
+                title={model}
+                style={{ minWidth: 0, maxWidth: "min(100%, 260px)" }}
+              >
+                <span
+                  style={{
+                    minWidth: 0,
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  {model}
+                </span>
+              </InlineBadge>
+            ))
           ) : (
-            <Plus size={12} strokeWidth={2} />
+            <InlineBadge>{t("appSettings.localRouter.targetRequestedModel")}</InlineBadge>
           )}
-          {queuePosition
-            ? t("appSettings.localRouter.targetRemoveQueue")
-            : t("appSettings.localRouter.targetAddQueue")}
-        </Button>
-        <Button
-          variant="ghost"
-          size="icon-xs"
-          aria-label={t("appSettings.localRouter.targetResetCircuit", {
-            target: target.target_name,
-          })}
-          title={t("appSettings.localRouter.targetResetCircuit", {
-            target: target.target_name,
-          })}
-          disabled={disabled || Boolean(action)}
-          onClick={onResetCircuit}
+          {target.enable_1m_context ? (
+            <InlineBadge color="var(--accent)">
+              {t("appSettings.localRouter.targetOneM")}
+            </InlineBadge>
+          ) : null}
+          {target.enable_chat_completions_proxy ? (
+            <InlineBadge color="var(--accent)">
+              {t("appSettings.localRouter.targetChatBridge")}
+            </InlineBadge>
+          ) : null}
+        </div>
+
+        <div
+          style={{
+            display: "flex",
+            flex: "0 0 auto",
+            alignItems: "center",
+            justifyContent: "flex-end",
+            gap: 6,
+            marginLeft: "auto",
+          }}
         >
-          <RotateCcw
-            size={12}
-            strokeWidth={2}
-            style={{ animation: resetting ? "spin 0.8s linear infinite" : undefined }}
-          />
-        </Button>
+          <Button
+            variant={switchDisabled ? "secondary" : "outline"}
+            size="xs"
+            disabled={disabled || !agentEnabled || switchDisabled || Boolean(action)}
+            onClick={onSwitch}
+          >
+            {switching
+              ? t("appSettings.localRouter.targetSwitching")
+              : settings.auto_failover_enabled
+                ? t("appSettings.localRouter.targetMakePrimary")
+                : t("appSettings.localRouter.targetSwitch")}
+          </Button>
+          <Button
+            variant={queuePosition ? "secondary" : "ghost"}
+            size="xs"
+            disabled={disabled || Boolean(action)}
+            onClick={onToggleQueue}
+          >
+            {queuePosition ? (
+              <Trash2 size={12} strokeWidth={2} />
+            ) : (
+              <Plus size={12} strokeWidth={2} />
+            )}
+            {queuePosition
+              ? t("appSettings.localRouter.targetRemoveQueue")
+              : t("appSettings.localRouter.targetAddQueue")}
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon-xs"
+            aria-label={t("appSettings.localRouter.targetResetCircuit", {
+              target: target.target_name,
+            })}
+            title={t("appSettings.localRouter.targetResetCircuit", {
+              target: target.target_name,
+            })}
+            disabled={disabled || Boolean(action)}
+            onClick={onResetCircuit}
+          >
+            <RotateCcw
+              size={12}
+              strokeWidth={2}
+              style={{ animation: resetting ? "spin 0.8s linear infinite" : undefined }}
+            />
+          </Button>
+        </div>
       </div>
     </article>
   );
@@ -1451,24 +1488,6 @@ export function LocalRouterPanel() {
             disabled={busy || status?.starting}
             onChange={(enabled) => void handleServiceToggle(enabled)}
           />
-
-          {status?.last_error ? (
-            <div
-              role="alert"
-              style={{
-                display: "flex",
-                alignItems: "flex-start",
-                gap: 7,
-                marginTop: 9,
-                color: "var(--danger)",
-                fontSize: 11.5,
-                lineHeight: 1.45,
-              }}
-            >
-              <AlertCircle size={14} strokeWidth={2} style={{ marginTop: 1, flexShrink: 0 }} />
-              <span>{t("appSettings.localRouter.lastError", { message: status.last_error })}</span>
-            </div>
-          ) : null}
         </section>
 
         <section aria-label={t("appSettings.localRouter.routingSection")}>

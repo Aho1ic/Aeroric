@@ -204,8 +204,10 @@ The release workflow helps collect version context, review publish state, and ke
 Download the installer for your platform from the GitHub Releases page. Each desktop release is expected to publish macOS DMG, Windows NSIS/MSI, Linux DEB/RPM, and `SHA256SUMS.txt` checksum assets.
 
 Install Claude Code and/or Codex before using agent tasks in Aeroric. Published
-macOS installers are Developer ID signed and notarized; published Windows
-installers are Authenticode signed.
+releases include `SIGNING_STATUS.txt`, which records whether each macOS and
+Windows installer was signed. Repositories that enable the required-signing
+policy only publish signed and notarized macOS installers and Authenticode-signed
+Windows installers.
 
 ## Development
 
@@ -247,8 +249,8 @@ For a tagged release such as `v1.3.8`, keep `package.json`, `src-tauri/tauri.con
 - `SHA256SUMS.txt`
 
 The release workflow intentionally fails when signing credentials are absent and
-`REQUIRE_SIGNED_RELEASES=true` is set. By default, unsigned installers are built
-when credentials are missing.
+the GitHub Actions repository variable `REQUIRE_SIGNED_RELEASES=true` is set.
+By default, unsigned installers are built when credentials are missing.
 Configure these GitHub Actions secrets before tagging:
 
 - macOS: `APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`, `APPLE_ID`,

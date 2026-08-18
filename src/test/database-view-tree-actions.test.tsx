@@ -163,6 +163,64 @@ describe("DatabaseView tree actions", () => {
     });
   });
 
+  it("does not create a schema when production confirmation is rejected", async () => {
+    const user = userEvent.setup();
+    const productionConnection = {
+      ...dbxConnection,
+      dbx: {
+        db_type: "postgres",
+        is_production: true,
+        production_databases: [],
+      },
+    };
+    vi.mocked(confirm).mockResolvedValue(false);
+    vi.mocked(invoke).mockImplementation((command) => {
+      if (command === "db_load_connections") return Promise.resolve([]);
+      if (command === "dbx_list_connections") return Promise.resolve([productionConnection]);
+      if (command === "dbx_connect") return Promise.resolve(undefined);
+      if (command === "dbx_list_databases") return Promise.resolve([{ name: "main" }]);
+      if (command === "dbx_list_schemas") return Promise.resolve([]);
+      if (command === "dbx_list_objects") return Promise.resolve([]);
+      if (command === "dbx_build_create_schema_sql") {
+        return Promise.resolve('CREATE SCHEMA "analytics";');
+      }
+      if (command === "dbx_assess_production_sql") {
+        return Promise.resolve({
+          requiresConfirmation: true,
+          isMutation: true,
+          productionDatabases: [],
+        });
+      }
+      return Promise.resolve(undefined);
+    });
+
+    render(
+      React.createElement(
+        I18nProvider,
+        null,
+        React.createElement(DatabaseView, { sshConnections: [connection()] }),
+      ),
+    );
+
+    await user.click(await screen.findByRole("button", { name: /DBX Source/i }));
+    fireEvent.contextMenu(await screen.findByRole("button", { name: /^main$/i }));
+    await user.click(screen.getByRole("menuitem", { name: "Create schema" }));
+    const dialog = await screen.findByRole("dialog", { name: "Create schema" });
+    await user.type(screen.getByLabelText("Schema name"), "analytics");
+    await user.click(within(dialog).getByRole("button", { name: "Create schema" }));
+
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith("dbx_assess_production_sql", {
+        request: {
+          connectionId: "dbx-source",
+          database: "main",
+          sql: 'CREATE SCHEMA "analytics";',
+        },
+      });
+    });
+    expect(invoke).not.toHaveBeenCalledWith("dbx_execute_query", expect.anything());
+  });
+
   it("orders and gates DBX database and schema node context menus like dbx", async () => {
     const user = userEvent.setup();
     vi.mocked(invoke).mockImplementation((command) => {

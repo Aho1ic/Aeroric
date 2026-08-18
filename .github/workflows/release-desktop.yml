@@ -147,6 +147,7 @@ jobs:
           KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
           WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
           WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+          REQUIRE_SIGNED_RELEASES: ${{ vars.REQUIRE_SIGNED_RELEASES }}
         run: |
           set -euo pipefail
           missing=()
@@ -174,6 +175,11 @@ jobs:
             # 代价是 macOS 首次打开需绕过 Gatekeeper、Windows 会有 SmartScreen 提示。
             if [[ "${{ runner.os }}" != "Linux" ]]; then
               message="${{ runner.os }} signing credentials are incomplete: ${missing[*]}"
+              require_signed="$(printf '%s' "$REQUIRE_SIGNED_RELEASES" | tr '[:upper:]' '[:lower:]')"
+              if [[ "$require_signed" == "true" ]]; then
+                echo "::error::${message}. REQUIRE_SIGNED_RELEASES=true forbids unsigned packages."
+                exit 1
+              fi
               echo "::warning::${message}. Producing unsigned packages."
             fi
           fi

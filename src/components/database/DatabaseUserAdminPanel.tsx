@@ -51,6 +51,7 @@ const POSTGRES_TABLE_PRIVILEGES = [
   "REFERENCES",
   "TRIGGER",
 ] as const;
+const REDACTED_PASSWORD = "********";
 
 export function supportsDbxUserAdmin(dbType: DbxDatabaseType | undefined): boolean {
   return !!dbType && USER_ADMIN_TYPES.has(dbType);
@@ -528,12 +529,12 @@ export function DatabaseUserAdminPanel({ connection, database, schema }: Props) 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedLabel]);
 
-  async function executeConfirmed(sql: string, messageKey: string) {
+  async function executeConfirmed(sql: string, messageKey: string, previewSql = sql) {
     if (sql.includes("\0")) {
       setStatus(t("database.userAdminInvalidInput"));
       return;
     }
-    const accepted = await confirm(`${t(messageKey)}\n\n${sql}`, {
+    const accepted = await confirm(`${t(messageKey)}\n\n${previewSql}`, {
       title: t("database.previewSql"),
       kind: "warning",
     });
@@ -555,17 +556,16 @@ export function DatabaseUserAdminPanel({ connection, database, schema }: Props) 
 
   async function createUser() {
     if (!draftUser.trim() || !draftPassword) return;
+    const input = {
+      user: draftUser.trim(),
+      host: draftHost.trim() || "%",
+      password: draftPassword,
+      canLogin: draftCanLogin,
+    };
     await executeConfirmed(
-      createUserSql(
-        {
-          user: draftUser.trim(),
-          host: draftHost.trim() || "%",
-          password: draftPassword,
-          canLogin: draftCanLogin,
-        },
-        dialect,
-      ),
+      createUserSql(input, dialect),
       "database.confirmCreateUser",
+      createUserSql({ ...input, password: REDACTED_PASSWORD }, dialect),
     );
     setDraftPassword("");
   }
@@ -575,6 +575,7 @@ export function DatabaseUserAdminPanel({ connection, database, schema }: Props) 
     await executeConfirmed(
       alterPasswordSql(selectedUser, draftPassword, dialect),
       "database.confirmAlterUserPassword",
+      alterPasswordSql(selectedUser, REDACTED_PASSWORD, dialect),
     );
     setDraftPassword("");
   }
