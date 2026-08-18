@@ -14,7 +14,7 @@ import {
 import { t } from "../src/i18n";
 import { useHosts } from "../src/state/hosts-context";
 import { parsePairingOffer } from "../src/transport/pairing-offer";
-import { pairWithInvite } from "../src/transport/remote-connection";
+import { pairWithInvite, preferredPairingError } from "../src/transport/remote-connection";
 import type { PairedHost } from "../src/types";
 import { AnimatedPressable } from "../src/ui/AnimatedPressable";
 import { radii, theme } from "../src/ui/theme";
@@ -45,7 +45,7 @@ export default function PairScreen() {
       try {
         const offer = parsePairingOffer(input);
         // 依次尝试 offer 中的地址(LAN → 自定义公网 → relay)
-        let lastError: Error | null = null;
+        const endpointErrors: Error[] = [];
         let pairedResult: Awaited<ReturnType<typeof pairWithInvite>> | null = null;
         for (const endpoint of offer.endpoints) {
           try {
@@ -57,11 +57,13 @@ export default function PairScreen() {
             });
             break;
           } catch (err) {
-            lastError = err instanceof Error ? err : new Error(String(err));
+            endpointErrors.push(err instanceof Error ? err : new Error(String(err)));
           }
         }
         if (!pairedResult) {
-          throw lastError ?? new Error(t("pair.cannotReach"));
+          throw endpointErrors.length
+            ? preferredPairingError(endpointErrors)
+            : new Error(t("pair.cannotReach"));
         }
         const hostId = offer.hostId ?? offer.publicKey;
         const host: PairedHost = {

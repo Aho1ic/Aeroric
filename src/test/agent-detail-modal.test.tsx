@@ -93,12 +93,12 @@ const baseSettings: AppSettings = {
   terminal_shift_enter_newline: false,
 };
 
-function renderModal(option: AgentOption) {
+function renderModal(option: AgentOption, themeVariant: "light" | "dark" = "light") {
   render(
     <I18nProvider>
       <AgentDetailModal
         option={option}
-        themeVariant="light"
+        themeVariant={themeVariant}
         logo="/test-logo.svg"
         settings={baseSettings}
         onClose={vi.fn()}
@@ -130,6 +130,23 @@ describe("Agent detail modal", () => {
         });
       }
       return Promise.resolve(undefined);
+    });
+  });
+
+  it("uses a black glass surface in dark mode and gives Model Default enough width", async () => {
+    renderModal(builtInOption, "dark");
+
+    const dialog = screen.getByRole("dialog", { name: "Agent 设置" });
+    expect(dialog).toHaveClass("agent-detail-modal");
+    expect(dialog).toHaveStyle({
+      background: "rgba(0, 0, 0, 0.86)",
+      backdropFilter: "var(--settings-glass-blur)",
+    });
+
+    const reasoningGroup = await screen.findByRole("group", { name: "推理强度" });
+    expect(within(reasoningGroup).getByRole("button", { name: "Model Default" })).toHaveStyle({
+      flex: "1.7 1 0",
+      minWidth: "92px",
     });
   });
 

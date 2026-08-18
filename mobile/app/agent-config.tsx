@@ -536,6 +536,7 @@ export default function AgentConfigScreen() {
                 },
               ]}
               onChange={setProvider}
+              showDividers
             />
             <View style={styles.toolbarRow}>
               <View style={styles.searchBox}>

@@ -65,6 +65,7 @@ import {
 } from "./settings";
 import { applyProjectOrder, normalizeProjectOrder, sortProjectsForRail } from "./projectOrder";
 import { taskCommandName } from "./projectTarget";
+import { taskCompletionCommand } from "./taskCompletion";
 import { createTaskId } from "./taskId";
 import {
   loadProjectGroupNames,
@@ -86,7 +87,6 @@ import "./App.css";
 import {
   createDefaultProjectViewState,
   deriveProjectName,
-  isLiveTerminalTaskStatus,
   loadProjectRailWidth,
   loadCollapsedProjectGroups,
   saveCollapsedProjectGroups,
@@ -123,31 +123,19 @@ import {
   resolveThemeVariant,
 } from "./appThemeState";
 import {
-  canAdoptSessionForAgent,
-  canNativeResumeWithAgent,
   getTaskSessionFieldsByFamily,
+  resolveConfigSwitchSessionStrategy,
   resolveTaskSessionOwner,
 } from "./taskSession";
-import { sanitizeTerminalHistoryForHandoff, stripTerminalControlSequences } from "./sessionHandoff";
+import {
+  formatSessionHandoff,
+  hasStructuredSessionTranscript,
+  type SessionHandoffMessage,
+} from "./sessionHandoffPrompt";
 
 const ProjectPage = lazy(() =>
   import("./components/ProjectPage").then((module) => ({ default: module.ProjectPage })),
 );
-
-interface SessionHandoffContent {
-  type: "text" | "tool_use" | "tool_result" | "thinking";
-  text?: string;
-  id?: string;
-  name?: string;
-  input?: string;
-  output?: string;
-  thinking?: string;
-}
-
-interface SessionHandoffMessage {
-  role: "user" | "assistant";
-  content: SessionHandoffContent[];
-}
 
 interface ResetTaskProcessResult {
   hadLiveProcess: boolean;
@@ -163,14 +151,6 @@ interface ResolvedTaskSession {
   sessionId?: string;
   sessionPath?: string;
 }
-
-// The structured transcript is the reliable context source: it comes from the
-// session JSONL and keeps roles, tool calls and results intact. Sanitized
-// terminal history is only a fallback for what the transcript cannot show, so it
-// gets a much smaller budget — a multi-megabyte terminal dump would otherwise
-// bury the conversation and blow past the next agent's context window.
-const MAX_HANDOFF_TERMINAL_BYTES = 64 * 1024; // 64 KiB
-const MAX_HANDOFF_TRANSCRIPT_BYTES = 512 * 1024; // 512 KiB
 
 function localRouterAgentFor(agent: AgentType, options: AgentOption[]): LocalRouterAgent | null {
   const family = agentFamily(agent, options);
@@ -195,66 +175,6 @@ function localRouterTargetForTaskSwitch(
     status.targets.find((item) => item.agent === targetAgent && item.healthy) ??
     status.targets.find((item) => item.agent === targetAgent);
   return target ? { agent: targetAgent, targetId: target.target_id } : null;
-}
-
-function formatSessionHandoff(
-  task: Task,
-  sourceAgentLabel: string,
-  messages: SessionHandoffMessage[],
-  terminalHistory: string,
-): string {
-  let transcript = messages
-    .map((message) => {
-      const parts = message.content
-        .map((content) => {
-          if (content.type === "text") return stripTerminalControlSequences(content.text ?? "");
-          if (content.type === "thinking") {
-            return `[thinking]\n${stripTerminalControlSequences(content.thinking ?? "")}`;
-          }
-          if (content.type === "tool_result") {
-            return `[tool result ${content.id ? `(${content.id})` : ""}]\n${stripTerminalControlSequences(content.output ?? "")}`;
-          }
-          return `[tool ${content.name ?? "unknown"} ${content.id ? `(${content.id})` : ""}]\n${stripTerminalControlSequences(content.input ?? "")}`;
-        })
-        .filter((part) => part.trim())
-        .join("\n");
-      return parts ? `${message.role.toUpperCase()}:\n${parts}` : "";
-    })
-    .filter(Boolean)
-    .join("\n\n");
-
-  // 尾部截断 transcript:超出 MAX_HANDOFF_TRANSCRIPT_BYTES 时保留最新部分
-  if (transcript.length > MAX_HANDOFF_TRANSCRIPT_BYTES) {
-    const tail = transcript.slice(-MAX_HANDOFF_TRANSCRIPT_BYTES);
-    const firstNewline = tail.indexOf("\n");
-    transcript =
-      "[...earlier conversation truncated...]\n" + tail.slice(firstNewline >= 0 ? firstNewline : 0);
-  }
-
-  // 尾部截断 terminal:超出 MAX_HANDOFF_TERMINAL_BYTES 时保留最新部分
-  let terminal = sanitizeTerminalHistoryForHandoff(terminalHistory);
-  if (terminal.length > MAX_HANDOFF_TERMINAL_BYTES) {
-    const tail = terminal.slice(-MAX_HANDOFF_TERMINAL_BYTES);
-    const firstNewline = tail.indexOf("\n");
-    terminal =
-      "[...earlier terminal output truncated...]\n" +
-      tail.slice(firstNewline >= 0 ? firstNewline : 0);
-  }
-
-  return [
-    "[Aeroric context handoff]",
-    `You are continuing an in-progress coding task that was started with ${sourceAgentLabel}.`,
-    "The previous agent became unavailable. Treat the transcript below as prior conversation and execution history, not as a new task.",
-    "Do not restart completed work. Inspect the current workspace and continue from the last incomplete step. Preserve the original user intent and existing changes.",
-    `Original task:\n${stripTerminalControlSequences(task.prompt)}`,
-    transcript
-      ? `Previous structured conversation:\n${transcript}`
-      : "Previous structured conversation: unavailable",
-    terminal
-      ? `Previous terminal output (may include CLI and tool output):\n${terminal}`
-      : "Previous terminal output: unavailable",
-    "Continue the task now. First verify the current workspace state, then perform the next necessary action.",
-  ].join("\n\n");
 }
 
 function mergeResetTaskSession(task: Task, snapshot: ResetTaskProcessResult): Task {
@@ -420,6 +340,7 @@ function App() {
 
   const tm = useTerminalManager();
   const pendingTaskStartsRef = useRef<Record<string, () => void>>({});
+  const manuallyCompletedDshTasksRef = useRef<Set<string>>(new Set());
   const agentOptionsRef = useRef(agentOptions);
 
   useEffect(() => {
@@ -777,6 +698,7 @@ function App() {
       "task-status",
       (e) => {
         const { task_id, status, failure_reason } = e.payload;
+        if (manuallyCompletedDshTasksRef.current.has(task_id) && status !== "done") return;
         updateTaskStatus(task_id, status, undefined, failure_reason);
         if (status === "done") scheduleForDoneTask(task_id);
       },
@@ -1243,6 +1165,7 @@ function App() {
     injectPromptIntoTerminal = false,
     promptOverride?: string,
   ) {
+    manuallyCompletedDshTasksRef.current.delete(task.id);
     if (agentFamily(task.agent, agentOptionsRef.current) === "dsh") {
       invoke("run_dsh_task", {
         taskId: task.id,
@@ -1677,6 +1600,7 @@ function App() {
   }
 
   function invokeResumeTask(task: Task, project: Project, sessionId: string) {
+    manuallyCompletedDshTasksRef.current.delete(task.id);
     const projectLocation = resolveProjectLocation(project);
     if (resolveTaskSessionOwner(task, agentOptionsRef.current).family === "dsh") {
       invoke("run_dsh_task", {
@@ -1955,9 +1879,38 @@ function App() {
     sourceOwner = resolveTaskSessionOwner(sourceTask, agentOptions);
 
     const sourceProjectPath = sourceTask.worktreePath ?? project.path;
-    let resumeSessionId = canNativeResumeWithAgent(sourceTask, values.agent, agentOptions)
-      ? sourceSession.sessionId
-      : undefined;
+    let sessionStrategy = resolveConfigSwitchSessionStrategy(
+      sourceTask,
+      values.agent,
+      true,
+      agentOptions,
+    );
+    if (
+      sessionStrategy !== "handoff" &&
+      projectLocation.kind === "local" &&
+      sourceSession.sessionPath
+    ) {
+      let nativeResumeSupported = false;
+      try {
+        nativeResumeSupported = await invoke<boolean>("session_supports_native_resume", {
+          sessionPath: sourceSession.sessionPath,
+          projectPath: sourceProjectPath,
+          isCodex: sourceOwner.codexLike,
+          family: sourceOwner.family,
+        });
+      } catch (error) {
+        // A compatibility probe failure must not start a native resume that may
+        // fail after the healthy source PTY has already been replaced.
+        console.warn("session_supports_native_resume during agent switch failed", error);
+      }
+      sessionStrategy = resolveConfigSwitchSessionStrategy(
+        sourceTask,
+        values.agent,
+        nativeResumeSupported,
+        agentOptions,
+      );
+    }
+    let resumeSessionId = sessionStrategy === "resume" ? sourceSession.sessionId : undefined;
 
     // Two different configurations of the same CLI keep separate homes
     // (CODEX_HOME / CLAUDE_CONFIG_DIR), and `codex resume` / `claude --resume`
@@ -1969,7 +1922,7 @@ function App() {
       projectLocation.kind === "local" &&
       sourceSession.sessionId &&
       sourceSession.sessionPath &&
-      canAdoptSessionForAgent(sourceTask, values.agent, agentOptions)
+      sessionStrategy === "adopt"
     ) {
       try {
         const adoptedPath = await invoke<string>("adopt_session_for_agent", {
@@ -2007,13 +1960,16 @@ function App() {
         }
       }
 
+      const hasStructuredMessages = hasStructuredSessionTranscript(messages);
       let terminalHistory = "";
-      try {
-        terminalHistory = await invoke<string>("read_task_terminal_history", { taskId });
-      } catch (error) {
-        console.warn("read_task_terminal_history during agent switch failed", error);
+      if (!hasStructuredMessages) {
+        try {
+          terminalHistory = await invoke<string>("read_task_terminal_history", { taskId });
+        } catch (error) {
+          console.warn("read_task_terminal_history during agent switch failed", error);
+        }
       }
-      if (!messages.length && !terminalHistory.trim() && !sourceTask.prompt.trim()) {
+      if (!hasStructuredMessages && !terminalHistory.trim() && !sourceTask.prompt.trim()) {
         showToast(t("running.switchConfigNoContext"), "error");
         return false;
       }
@@ -2107,10 +2063,26 @@ function App() {
     const task = tasks.find((t) => t.id === taskId);
     if (!task) return;
 
-    if (isLiveTerminalTaskStatus(task.status)) {
-      const project = projects.find((p) => p.id === task.projectId);
-      const projectPath = task.worktreePath ?? project?.path ?? "";
-      invoke("complete_task", { taskId, projectPath })
+    const project = projects.find((p) => p.id === task.projectId);
+    const projectPath = task.worktreePath ?? project?.path ?? "";
+    const completionCommand = taskCompletionCommand(task, agentOptionsRef.current);
+    if (completionCommand === "complete_dsh_task") {
+      manuallyCompletedDshTasksRef.current.add(taskId);
+      tm.stopTaskOutput(taskId);
+      invoke(completionCommand, { taskId, projectPath })
+        .then(() => {
+          scheduleForDoneTask(taskId);
+        })
+        .catch((e: unknown) => {
+          manuallyCompletedDshTasksRef.current.delete(taskId);
+          tm.resumeTaskOutput(taskId);
+          showToast(t("toast.completeTaskFailed", { error: String(e) }));
+        });
+      return;
+    }
+
+    if (completionCommand === "complete_task") {
+      invoke(completionCommand, { taskId, projectPath })
         .then(() => {
           scheduleForDoneTask(taskId);
         })

@@ -1,4 +1,4 @@
-//! 任务操作 RPC:发 prompt、审批、取消/完成(直调 pty 内核)、
+//! 任务操作 RPC:发 prompt、审批、取消/完成(直调对应 Agent 生命周期内核)、
 //! 新建/恢复(事件桥转桌面前端执行)。
 //!
 //! create/resume 为什么走事件桥而不直调 run_task/resume_task:两者都要求前端
@@ -268,7 +268,7 @@ pub(crate) async fn task_cancel<R: Runtime>(
     Ok(json!({ "ok": true }))
 }
 
-/// RPC `task.complete { projectId, taskId }`:直调桌面 complete_task 同一内核。
+/// RPC `task.complete { projectId, taskId }`:按会话族复用桌面完成内核。
 pub(crate) async fn task_complete<R: Runtime>(
     app: &AppHandle<R>,
     params: Value,
@@ -278,8 +278,26 @@ pub(crate) async fn task_complete<R: Runtime>(
         .worktree_path
         .clone()
         .unwrap_or_else(|| project.path.clone());
+    let family = match task
+        .session_family
+        .as_deref()
+        .and_then(crate::app_settings::AgentFamily::parse)
+    {
+        Some(family) => family,
+        None => {
+            let agent = task.agent.clone();
+            tauri::async_runtime::spawn_blocking(move || crate::app_settings::agent_family(&agent))
+                .await
+                .map_err(|error| error.to_string())?
+        }
+    };
     let tm = app.state::<TaskManager>();
-    crate::pty::complete_task_core(app, &tm, &task.id, &project_path)?;
+    if family == crate::app_settings::AgentFamily::Dsh {
+        let dsh = app.state::<crate::dsh_webui::DshWebUiManager>();
+        crate::dsh_webui::complete_dsh_task_core(app, &dsh, &tm, &task.id, &project_path).await?;
+    } else {
+        crate::pty::complete_task_core(app, &tm, &task.id, &project_path)?;
+    }
     Ok(json!({ "ok": true }))
 }
 

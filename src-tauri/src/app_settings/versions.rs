@@ -557,6 +557,7 @@ fn matching_brew_install(launch_program: &str, package: &str) -> Option<(String,
 pub(super) fn build_agent_upgrade_commands_from_detection(
     kind: AgentUpgradeKind,
     launch_program: &str,
+    target_version: Option<&str>,
     npm_program: Option<String>,
     brew_program: Option<String>,
     brew_flavor: Option<&'static str>,
@@ -565,14 +566,27 @@ pub(super) fn build_agent_upgrade_commands_from_detection(
     if configured_manager == "npm" {
         if let Some(program) = npm_program {
             let package = match kind {
-                AgentUpgradeKind::Claude => "@anthropic-ai/claude-code@latest",
-                AgentUpgradeKind::Codex => "@openai/codex@latest",
-                AgentUpgradeKind::Dsh => "@deepseek-ai/dsh@latest",
+                AgentUpgradeKind::Claude => "@anthropic-ai/claude-code",
+                AgentUpgradeKind::Codex => "@openai/codex",
+                AgentUpgradeKind::Dsh => "@deepseek-ai/dsh",
             };
+            let target_version = target_version
+                .map(str::trim)
+                .filter(|version| !version.is_empty());
+            // The UI normally resolves the exact registry target before
+            // starting the upgrade. npm's user-level min-release-age can
+            // otherwise make either that target or `@latest` silently resolve
+            // to an older version while exiting 0.
+            let mut args = vec![
+                "install".to_string(),
+                "-g".to_string(),
+                "--min-release-age=0".to_string(),
+            ];
+            args.push(format!("{package}@{}", target_version.unwrap_or("latest")));
             return vec![AgentUpgradeCommand {
                 channel: "npm".to_string(),
                 program,
-                args: vec!["install".to_string(), "-g".to_string(), package.to_string()],
+                args,
             }];
         }
         return Vec::new();
@@ -610,6 +624,7 @@ pub(super) fn build_agent_upgrade_commands_from_detection(
 pub(super) fn build_agent_upgrade_commands(
     kind: AgentUpgradeKind,
     launch_program: &str,
+    target_version: Option<&str>,
 ) -> Result<Vec<AgentUpgradeCommand>, String> {
     let npm_package = match kind {
         AgentUpgradeKind::Claude => "@anthropic-ai/claude-code",
@@ -643,6 +658,7 @@ pub(super) fn build_agent_upgrade_commands(
     let commands = build_agent_upgrade_commands_from_detection(
         kind,
         launch_program,
+        target_version,
         npm_program,
         brew_program,
         brew_flavor,
@@ -908,6 +924,7 @@ mod tests {
             AgentUpgradeKind::Codex,
             "/opt/homebrew/Cellar/codex/0.46.0/bin/codex",
             None,
+            None,
             Some("/opt/homebrew/bin/brew".to_string()),
             Some("formula"),
         );
@@ -924,6 +941,7 @@ mod tests {
             AgentUpgradeKind::Codex,
             "/aeroric-test/usr/local/bin/codex",
             None,
+            None,
             Some("/opt/homebrew/bin/brew".to_string()),
             None,
         );
@@ -936,6 +954,7 @@ mod tests {
         let commands = build_agent_upgrade_commands_from_detection(
             AgentUpgradeKind::Claude,
             "/aeroric-test/opt/homebrew/bin/claude",
+            None,
             None,
             Some("/opt/homebrew/bin/brew".to_string()),
             Some("cask"),
@@ -951,6 +970,7 @@ mod tests {
         let commands = build_agent_upgrade_commands_from_detection(
             AgentUpgradeKind::Codex,
             "/opt/homebrew/lib/node_modules/@openai/codex/bin/codex.js",
+            Some("0.147.0"),
             Some("/usr/local/bin/npm".to_string()),
             Some("/opt/homebrew/bin/brew".to_string()),
             Some("formula"),
@@ -959,6 +979,37 @@ mod tests {
         assert_eq!(commands.len(), 1);
         assert_eq!(commands[0].channel, "npm");
         assert_eq!(commands[0].program, "/usr/local/bin/npm");
+        assert_eq!(
+            commands[0].args,
+            [
+                "install",
+                "-g",
+                "--min-release-age=0",
+                "@openai/codex@0.147.0"
+            ]
+        );
+    }
+
+    #[test]
+    fn npm_latest_upgrade_does_not_reinstall_an_older_release() {
+        let commands = build_agent_upgrade_commands_from_detection(
+            AgentUpgradeKind::Claude,
+            "/opt/homebrew/lib/node_modules/@anthropic-ai/claude-code/bin/claude.js",
+            None,
+            Some("/opt/homebrew/bin/npm".to_string()),
+            None,
+            None,
+        );
+
+        assert_eq!(
+            commands[0].args,
+            [
+                "install",
+                "-g",
+                "--min-release-age=0",
+                "@anthropic-ai/claude-code@latest"
+            ]
+        );
     }
 
     #[test]
@@ -966,6 +1017,7 @@ mod tests {
         let commands = build_agent_upgrade_commands_from_detection(
             AgentUpgradeKind::Claude,
             "/opt/homebrew/lib/node_modules/@anthropic-ai/claude-code/bin/claude.js",
+            Some("2.1.234"),
             Some("/usr/local/bin/npm".to_string()),
             Some("/opt/homebrew/bin/brew".to_string()),
             Some("cask"),
@@ -974,13 +1026,25 @@ mod tests {
         assert_eq!(commands.len(), 1);
         assert_eq!(commands[0].channel, "npm");
         assert_eq!(commands[0].program, "/usr/local/bin/npm");
+        assert_eq!(
+            commands[0].args,
+            [
+                "install",
+                "-g",
+                "--min-release-age=0",
+                "@anthropic-ai/claude-code@2.1.234"
+            ]
+        );
     }
 
     #[test]
     fn reports_the_active_path_for_an_unsupported_standalone_binary() {
-        let error =
-            build_agent_upgrade_commands(AgentUpgradeKind::Codex, "/opt/aeroric/custom/codex")
-                .expect_err("standalone Codex has no precise supported upgrade channel");
+        let error = build_agent_upgrade_commands(
+            AgentUpgradeKind::Codex,
+            "/opt/aeroric/custom/codex",
+            Some("0.147.0"),
+        )
+        .expect_err("standalone Codex has no precise supported upgrade channel");
 
         assert!(error.contains("/opt/aeroric/custom/codex"));
         assert!(error.contains("detected channel: standalone"));

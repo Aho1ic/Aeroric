@@ -33,6 +33,42 @@ function task(id: string, projectId: string, createdAt: number): Task {
 }
 
 describe("ProjectRail project dragging", () => {
+  it("hides every project and action icon while the rail is collapsed", () => {
+    localStorage.setItem("aeroric:language", "en");
+    render(
+      <I18nProvider>
+        <ProjectRail
+          projects={[project("p1", "Alpha", 0), project("p2", "Beta", 1)]}
+          allTasks={[]}
+          activeProjectId="p1"
+          selectedTaskId={null}
+          isNewTask={false}
+          onSwitch={vi.fn()}
+          onOpen={vi.fn()}
+          onBack={vi.fn()}
+          onNewTask={vi.fn()}
+          onSelectTask={vi.fn()}
+          onDeleteTask={vi.fn()}
+          onToggleTaskStar={vi.fn()}
+          onRunTodo={vi.fn()}
+          themeVariant="light"
+          onToggleTheme={vi.fn()}
+        />
+      </I18nProvider>,
+    );
+
+    fireEvent.click(screen.getAllByRole("button", { name: "Hide tasks" })[0]);
+
+    expect(screen.queryByRole("button", { name: "Alpha" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Beta" })).not.toBeInTheDocument();
+    expect(screen.getAllByRole("button")).toHaveLength(1);
+
+    fireEvent.click(screen.getByRole("button", { name: "Show tasks" }));
+
+    expect(screen.getByRole("button", { name: "Alpha" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Beta" })).toBeInTheDocument();
+  });
+
   it("collapses and expands project groups independently from project task lists", () => {
     localStorage.setItem("aeroric:language", "en");
     render(

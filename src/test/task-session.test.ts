@@ -5,6 +5,7 @@ import {
   getTaskSessionFields,
   hasTaskContinuationContext,
   hasTaskSessionPath,
+  resolveConfigSwitchSessionStrategy,
   resolveTaskSessionOwner,
 } from "../taskSession";
 import { getTaskSessionFieldsByFamily } from "../taskSession";
@@ -153,6 +154,52 @@ describe("task session ownership", () => {
     };
 
     expect(canAdoptSessionForAgent(builtinCodexTask, "claude_gpt55")).toBe(false);
+  });
+
+  it("forces paginated Codex sessions through handoff before resume or adoption", () => {
+    const options = [
+      {
+        value: "codex-a",
+        label: "Codex A",
+        configFile: "/tmp/codex-a",
+        configLang: "toml" as const,
+        codexLike: true,
+        family: "codex" as const,
+        custom: true,
+      },
+      {
+        value: "codex-b",
+        label: "Codex B",
+        configFile: "/tmp/codex-b",
+        configLang: "toml" as const,
+        codexLike: true,
+        family: "codex" as const,
+        custom: true,
+      },
+      {
+        value: "claude-a",
+        label: "Claude A",
+        configFile: "/tmp/claude-a",
+        configLang: "json" as const,
+        codexLike: false,
+        family: "claude" as const,
+        custom: true,
+      },
+    ];
+    const task: Task = {
+      ...baseTask,
+      agent: "codex-a",
+      codexSessionId: "codex-session",
+      codexSessionPath: "/tmp/rollout.jsonl",
+      sessionAgent: "codex-a",
+      sessionFamily: "codex",
+    };
+
+    expect(resolveConfigSwitchSessionStrategy(task, "codex-a", true, options)).toBe("resume");
+    expect(resolveConfigSwitchSessionStrategy(task, "codex-b", true, options)).toBe("adopt");
+    expect(resolveConfigSwitchSessionStrategy(task, "claude-a", true, options)).toBe("handoff");
+    expect(resolveConfigSwitchSessionStrategy(task, "codex-a", false, options)).toBe("handoff");
+    expect(resolveConfigSwitchSessionStrategy(task, "codex-b", false, options)).toBe("handoff");
   });
 });
 

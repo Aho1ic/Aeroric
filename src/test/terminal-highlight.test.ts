@@ -1,15 +1,36 @@
 import type { Terminal } from "@xterm/xterm";
 import { describe, expect, it, vi } from "vitest";
 import {
+  applyTerminalTheme,
   attachCursorLineHighlight,
   colorizePlainTerminalOutput,
   createSmartWriter,
+  DARK_THEME,
+  EYECARE_THEME,
+  LIGHT_THEME,
   remapAnsiForTheme,
   splitTerminalWriteChunk,
   TERMINAL_WRITE_CHUNK_SIZE,
 } from "../components/terminalShared";
 
 describe("terminal output highlighting", () => {
+  it("raises contrast only for the light terminal while keeping ANSI hues distinct", () => {
+    const term = { options: {} } as unknown as Terminal;
+
+    applyTerminalTheme(term, "light");
+    expect(term.options.minimumContrastRatio).toBe(4.5);
+    expect(term.options.theme).toBe(LIGHT_THEME);
+    expect(new Set([LIGHT_THEME.red, LIGHT_THEME.green, LIGHT_THEME.blue]).size).toBe(3);
+
+    applyTerminalTheme(term, "dark");
+    expect(term.options.minimumContrastRatio).toBe(1);
+    expect(term.options.theme).toBe(DARK_THEME);
+
+    applyTerminalTheme(term, "eyecare");
+    expect(term.options.minimumContrastRatio).toBe(1);
+    expect(term.options.theme).toBe(EYECARE_THEME);
+  });
+
   it("adds ANSI colors for plain keyword and numeric output", () => {
     const highlighted = colorizePlainTerminalOutput("error line 42 passed\n");
 

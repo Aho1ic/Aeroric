@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AllAgentConfigsPanel } from "../components/app-settings/AllAgentConfigsPanel";
@@ -167,5 +167,25 @@ describe("AllAgentConfigsPanel", () => {
     expect(screen.getByText("Custom DSH")).toBeInTheDocument();
     expect(screen.queryByText("Claude Code")).not.toBeInTheDocument();
     expect(screen.queryByText("Custom Claude")).not.toBeInTheDocument();
+  });
+
+  it("renders three animated provider tabs with two adjacent separators", async () => {
+    const user = userEvent.setup();
+    render(
+      <I18nProvider>
+        <AllAgentConfigsPanel themeVariant="light" />
+      </I18nProvider>,
+    );
+
+    const tablist = screen.getByRole("tablist", { name: "Provider" });
+    expect(tablist).toHaveClass("animated-selection", "agent-provider-tabs");
+    const tabs = within(tablist).getAllByRole("tab");
+    expect(tabs).toHaveLength(3);
+    expect(
+      tabs.slice(1).filter((tab) => tab.previousElementSibling === tabs[tabs.indexOf(tab) - 1]),
+    ).toHaveLength(2);
+
+    await user.click(tabs[1]);
+    expect(tabs[1]).toHaveAttribute("aria-selected", "true");
   });
 });

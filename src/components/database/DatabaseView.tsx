@@ -112,7 +112,8 @@ import {
 } from "./databaseGridState";
 import { DBX_GRID_PAGE_SIZE_OPTIONS, useDbxDataGrid } from "./useDbxDataGrid";
 import { DatabaseWorkspaceProvider, useDatabaseWorkspaceStore } from "./DatabaseWorkspaceContext";
-import type { WorkspaceTab } from "./databaseWorkspaceStore";
+import { createRequestSequence } from "./requestSequence";
+import { useDatabaseWorkspaceTabs } from "./useDatabaseWorkspaceTabs";
 
 export { dbxColumnInfoToEditableStructureColumn } from "./databaseViewModel";
 import {
@@ -129,7 +130,6 @@ import {
   type DbWorkspaceMode,
   productionSqlPreview,
   listAllDbxObjects,
-  type WorkspaceTabContextMenuAction,
   type DbxDatabaseContextMenuAction,
   type DbxSchemaContextMenuAction,
   type NoSqlContextMenuAction,
@@ -254,64 +254,18 @@ function DatabaseViewContent({
   } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [workspaceMode, setWorkspaceMode] = useState<DbWorkspaceMode>("table");
-  const workspaceTabs = useDatabaseWorkspaceStore((state) => state.workspace.tabs);
-  const setWorkspaceTabs = useDatabaseWorkspaceStore((state) => state.setWorkspaceTabs);
-  const activeTabId = useDatabaseWorkspaceStore((state) => state.workspace.activeTabId);
-  const setActiveTabId = useDatabaseWorkspaceStore((state) => state.setActiveTabId);
-  const shortWorkspaceTabIds = useDatabaseWorkspaceStore((state) => state.workspace.shortTabIds);
-  const setShortWorkspaceTabIds = useDatabaseWorkspaceStore((state) => state.setShortTabIds);
-
-  const closeWorkspaceTab = useCallback(
-    (tabId: string) => {
-      setWorkspaceTabs((prev) => {
-        const next = prev.filter((t) => t.id !== tabId);
-        if (activeTabId === tabId && next.length > 0) {
-          const last = next[next.length - 1];
-          setActiveTabId(last.id);
-          setWorkspaceMode(last.mode);
-        } else if (activeTabId === tabId) {
-          setActiveTabId("");
-        }
-        return next;
-      });
-      setShortWorkspaceTabIds((current) => {
-        const next = new Set(current);
-        next.delete(tabId);
-        return next;
-      });
-    },
-    [activeTabId, setActiveTabId, setShortWorkspaceTabIds, setWorkspaceTabs],
-  );
-
-  const activateWorkspaceTab = useCallback(
-    (tab: WorkspaceTab | undefined) => {
-      if (!tab) {
-        setActiveTabId("");
-        return;
-      }
-      setActiveTabId(tab.id);
-      setWorkspaceMode(tab.mode);
-    },
-    [setActiveTabId],
-  );
-
-  const closeWorkspaceTabs = useCallback(
-    (tabIds: Set<string>) => {
-      setWorkspaceTabs((prev) => {
-        const next = prev.filter((tab) => !tabIds.has(tab.id));
-        if (tabIds.has(activeTabId)) {
-          activateWorkspaceTab(next[next.length - 1]);
-        }
-        return next;
-      });
-      setShortWorkspaceTabIds((current) => {
-        const next = new Set(current);
-        tabIds.forEach((tabId) => next.delete(tabId));
-        return next;
-      });
-    },
-    [setWorkspaceTabs, setShortWorkspaceTabIds, activeTabId, activateWorkspaceTab],
-  );
+  const {
+    workspaceTabs,
+    setWorkspaceTabs,
+    activeTabId,
+    setActiveTabId,
+    shortWorkspaceTabIds,
+    contextMenu,
+    setContextMenu,
+    activateWorkspaceTab,
+    closeWorkspaceTab,
+    runWorkspaceTabContextMenuAction,
+  } = useDatabaseWorkspaceTabs(setWorkspaceMode);
 
   const connectionDialogOpen = useDatabaseWorkspaceStore((state) => state.dialogs.connectionOpen);
   const editingDbxConnectionId = useDatabaseWorkspaceStore(
@@ -401,54 +355,6 @@ function DatabaseViewContent({
   const [tableImportBatchSize, setTableImportBatchSize] = useState("500");
   const [tableImportLoading, setTableImportLoading] = useState(false);
   const [tableImportError, setTableImportError] = useState("");
-  const contextMenu = useDatabaseWorkspaceStore((state) => state.menus.contextMenu);
-  const setContextMenu = useDatabaseWorkspaceStore((state) => state.setContextMenu);
-  const runWorkspaceTabContextMenuAction = useCallback(
-    (action: WorkspaceTabContextMenuAction) => {
-      const menu = contextMenu?.kind === "workspace-tab" ? contextMenu : null;
-      setContextMenu(null);
-      if (!menu) return;
-      if (action === "toggleShortTitle") {
-        setShortWorkspaceTabIds((current) => {
-          const next = new Set(current);
-          if (next.has(menu.tabId)) next.delete(menu.tabId);
-          else next.add(menu.tabId);
-          return next;
-        });
-        return;
-      }
-      if (action === "pinTab") {
-        setWorkspaceTabs((prev) => {
-          const tab = prev.find((item) => item.id === menu.tabId);
-          if (!tab) return prev;
-          return [tab, ...prev.filter((item) => item.id !== menu.tabId)];
-        });
-        return;
-      }
-      if (action === "closeTab") {
-        closeWorkspaceTab(menu.tabId);
-        return;
-      }
-      if (action === "closeOtherTabs") {
-        closeWorkspaceTabs(
-          new Set(workspaceTabs.filter((tab) => tab.id !== menu.tabId).map((tab) => tab.id)),
-        );
-        return;
-      }
-      if (action === "closeAllTabs") {
-        closeWorkspaceTabs(new Set(workspaceTabs.map((tab) => tab.id)));
-      }
-    },
-    [
-      closeWorkspaceTab,
-      closeWorkspaceTabs,
-      contextMenu,
-      setContextMenu,
-      setShortWorkspaceTabIds,
-      setWorkspaceTabs,
-      workspaceTabs,
-    ],
-  );
   const [tableInfoActiveTab, setTableInfoActiveTab] = useState<TableInfoTab>("columns");
   const [tableInfoSearch, setTableInfoSearch] = useState("");
   const [tableInfoDdl, setTableInfoDdl] = useState("");
@@ -456,8 +362,8 @@ function DatabaseViewContent({
   const [tableInfoDdlError, setTableInfoDdlError] = useState("");
   const databaseSidebarResizeStartRef = useRef({ x: 0, width: DATABASE_SIDEBAR_DEFAULT_WIDTH });
   const openedInitialSqliteFilePathRef = useRef<string | null>(null);
-  const legacyLoadSequenceRef = useRef(0);
-  const dbxLoadSequenceRef = useRef(0);
+  const legacyLoadSequenceRef = useRef(createRequestSequence());
+  const dbxLoadSequenceRef = useRef(createRequestSequence());
   const [databaseSidebarWidth, setDatabaseSidebarWidth] = useState(DATABASE_SIDEBAR_DEFAULT_WIDTH);
   const [resizingDatabaseSidebar, setResizingDatabaseSidebar] = useState(false);
   const [pinnedTreeNodeIds, setPinnedTreeNodeIds] = useState<Set<string>>(loadPinnedTreeNodeIds);
@@ -845,13 +751,13 @@ function DatabaseViewContent({
 
   const inspect = useCallback(
     async (connection: DbConnectionConfig) => {
-      const requestSeq = ++legacyLoadSequenceRef.current;
+      const requestSeq = legacyLoadSequenceRef.current.next();
       setLoading(true);
       setError(null);
       setSqlResult(null);
       try {
         const nextSchema = await databaseApi.inspect(connection.endpoint, projectRoot);
-        if (legacyLoadSequenceRef.current !== requestSeq) return;
+        if (!legacyLoadSequenceRef.current.isCurrent(requestSeq)) return;
         setSchema(nextSchema);
         const firstTable =
           nextSchema.objects.find((object) => object.objectType === "table") ??
@@ -867,7 +773,7 @@ function DatabaseViewContent({
             PAGE_SIZE,
             projectRoot,
           );
-          if (legacyLoadSequenceRef.current !== requestSeq) return;
+          if (!legacyLoadSequenceRef.current.isCurrent(requestSeq)) return;
           setQueryResult(result);
           setSql(`SELECT * FROM ${quoteSqlName(firstTable.name)}`);
         } else {
@@ -882,10 +788,10 @@ function DatabaseViewContent({
           );
         }
       } catch (err) {
-        if (legacyLoadSequenceRef.current !== requestSeq) return;
+        if (!legacyLoadSequenceRef.current.isCurrent(requestSeq)) return;
         setError(String(err));
       } finally {
-        if (legacyLoadSequenceRef.current === requestSeq) setLoading(false);
+        if (legacyLoadSequenceRef.current.isCurrent(requestSeq)) setLoading(false);
       }
     },
     [connections, projectRoot, saveConnections],
@@ -1331,7 +1237,7 @@ function DatabaseViewContent({
 
   const loadDbxDatabase = useCallback(
     async (connection: AeroricDbConnectionConfig, database: string | null) => {
-      const requestSeq = ++dbxLoadSequenceRef.current;
+      const requestSeq = dbxLoadSequenceRef.current.next();
       setLoading(true);
       setError(null);
       try {
@@ -1342,7 +1248,7 @@ function DatabaseViewContent({
             .then((value) => (Array.isArray(value) ? value : []))
             .catch(() => [] as string[]),
         ]);
-        if (dbxLoadSequenceRef.current !== requestSeq) return;
+        if (!dbxLoadSequenceRef.current.isCurrent(requestSeq)) return;
         setActiveDbxDatabase(database);
         setActiveDbxSchema(null);
         setDbxSchemas(schemas.length > 0 ? schemas : deriveDbxSchemas(objects));
@@ -1352,10 +1258,10 @@ function DatabaseViewContent({
         setQueryResult(null);
         setSqlResult(null);
       } catch (err) {
-        if (dbxLoadSequenceRef.current !== requestSeq) return;
+        if (!dbxLoadSequenceRef.current.isCurrent(requestSeq)) return;
         setError(String(err));
       } finally {
-        if (dbxLoadSequenceRef.current === requestSeq) setLoading(false);
+        if (dbxLoadSequenceRef.current.isCurrent(requestSeq)) setLoading(false);
       }
     },
     [],
@@ -1363,12 +1269,12 @@ function DatabaseViewContent({
 
   const loadDbxSchema = useCallback(
     async (connection: AeroricDbConnectionConfig, database: string | null, schemaName: string) => {
-      const requestSeq = ++dbxLoadSequenceRef.current;
+      const requestSeq = dbxLoadSequenceRef.current.next();
       setLoading(true);
       setError(null);
       try {
         const objects = await listAllDbxObjects(connection.id, database, schemaName);
-        if (dbxLoadSequenceRef.current !== requestSeq) return;
+        if (!dbxLoadSequenceRef.current.isCurrent(requestSeq)) return;
         setActiveDbxDatabase(database);
         setActiveDbxSchema(schemaName);
         setDbxSchemas((current) =>
@@ -1383,10 +1289,10 @@ function DatabaseViewContent({
         setQueryResult(null);
         setSqlResult(null);
       } catch (err) {
-        if (dbxLoadSequenceRef.current !== requestSeq) return;
+        if (!dbxLoadSequenceRef.current.isCurrent(requestSeq)) return;
         setError(String(err));
       } finally {
-        if (dbxLoadSequenceRef.current === requestSeq) setLoading(false);
+        if (dbxLoadSequenceRef.current.isCurrent(requestSeq)) setLoading(false);
       }
     },
     [],
@@ -1509,8 +1415,8 @@ function DatabaseViewContent({
 
   const loadDbxConnection = useCallback(
     async (connection: AeroricDbConnectionConfig) => {
-      const requestSeq = ++dbxLoadSequenceRef.current;
-      legacyLoadSequenceRef.current += 1;
+      const requestSeq = dbxLoadSequenceRef.current.next();
+      legacyLoadSequenceRef.current.invalidate();
       setActiveConnectionId(null);
       setActiveDbxConnectionId(connection.id);
       setSchema(null);
@@ -1532,15 +1438,15 @@ function DatabaseViewContent({
         setActiveDbxSchema(null);
         setWorkspaceMode(connection.dbType === "redis" ? "redis" : "mongo");
         await databaseApi.dbxConnect(connection.id);
-        if (dbxLoadSequenceRef.current !== requestSeq) return;
+        if (!dbxLoadSequenceRef.current.isCurrent(requestSeq)) return;
         if (connection.dbType === "redis") {
           const databases = await loadRedisSidebarDatabases(connection);
-          if (dbxLoadSequenceRef.current !== requestSeq) return;
+          if (!dbxLoadSequenceRef.current.isCurrent(requestSeq)) return;
           const firstDb = databases[0]?.db;
           setActiveDbxDatabase(firstDb == null ? null : `db${firstDb}`);
         } else {
           const databases = await loadMongoSidebarDatabases(connection);
-          if (dbxLoadSequenceRef.current !== requestSeq) return;
+          if (!dbxLoadSequenceRef.current.isCurrent(requestSeq)) return;
           const database = databases[0] ?? null;
           setActiveDbxDatabase(database);
         }
@@ -1550,9 +1456,9 @@ function DatabaseViewContent({
       setLoading(true);
       try {
         await databaseApi.dbxConnect(connection.id);
-        if (dbxLoadSequenceRef.current !== requestSeq) return;
+        if (!dbxLoadSequenceRef.current.isCurrent(requestSeq)) return;
         const databases = await databaseApi.dbxListDatabases(connection.id);
-        if (dbxLoadSequenceRef.current !== requestSeq) return;
+        if (!dbxLoadSequenceRef.current.isCurrent(requestSeq)) return;
         const targetDatabase = configuredTargetDatabase(connection);
         const visibleDatabases = filterDbxDatabasesForConnection(databases, connection);
         if (targetDatabase && visibleDatabases.length === 0) {
@@ -1572,14 +1478,14 @@ function DatabaseViewContent({
             .then((value) => (Array.isArray(value) ? value : []))
             .catch(() => [] as string[]),
         ]);
-        if (dbxLoadSequenceRef.current !== requestSeq) return;
+        if (!dbxLoadSequenceRef.current.isCurrent(requestSeq)) return;
         setDbxSchemas(schemas.length > 0 ? schemas : deriveDbxSchemas(objects));
         setDbxObjects(objects);
       } catch (err) {
-        if (dbxLoadSequenceRef.current !== requestSeq) return;
+        if (!dbxLoadSequenceRef.current.isCurrent(requestSeq)) return;
         setError(String(err));
       } finally {
-        if (dbxLoadSequenceRef.current === requestSeq) setLoading(false);
+        if (dbxLoadSequenceRef.current.isCurrent(requestSeq)) setLoading(false);
       }
     },
     [
@@ -1690,7 +1596,7 @@ function DatabaseViewContent({
       columnFuzzyFiltersOverride?: DbxGridColumnFuzzyFilters,
     ) => {
       if (!connection) return;
-      const requestSeq = ++dbxLoadSequenceRef.current;
+      const requestSeq = dbxLoadSequenceRef.current.next();
       const normalizedWhereInput = whereInput?.trim() ?? "";
       const normalizedOrderBy = orderBy?.trim() ?? "";
       const sameDbxObject =
@@ -1718,7 +1624,7 @@ function DatabaseViewContent({
           whereInput: effectiveWhereInput || null,
           orderBy: normalizedOrderBy || null,
         });
-        if (dbxLoadSequenceRef.current !== requestSeq) return;
+        if (!dbxLoadSequenceRef.current.isCurrent(requestSeq)) return;
         let objectColumns: DbxColumnInfo[] = [];
         if (isDbxTableObject(object)) {
           try {
@@ -1728,7 +1634,7 @@ function DatabaseViewContent({
               database,
               object.schema ?? null,
             );
-            if (dbxLoadSequenceRef.current !== requestSeq) return;
+            if (!dbxLoadSequenceRef.current.isCurrent(requestSeq)) return;
             setDbxColumnsByTable((current) => ({
               ...current,
               [dbxObjectKey(object)]: objectColumns,
@@ -1737,7 +1643,7 @@ function DatabaseViewContent({
             objectColumns = [];
           }
         }
-        if (dbxLoadSequenceRef.current !== requestSeq) return;
+        if (!dbxLoadSequenceRef.current.isCurrent(requestSeq)) return;
         const primaryKeys = objectColumns
           .filter((column) => column.is_primary_key)
           .map((column) => column.name);
@@ -1796,10 +1702,10 @@ function DatabaseViewContent({
         });
         setSql(result.sql);
       } catch (err) {
-        if (dbxLoadSequenceRef.current !== requestSeq) return;
+        if (!dbxLoadSequenceRef.current.isCurrent(requestSeq)) return;
         setError(String(err));
       } finally {
-        if (dbxLoadSequenceRef.current === requestSeq) setLoading(false);
+        if (dbxLoadSequenceRef.current.isCurrent(requestSeq)) setLoading(false);
       }
     },
     [
@@ -1977,7 +1883,7 @@ function DatabaseViewContent({
 
   const handleSelectConnection = useCallback(
     (connection: DbConnectionConfig) => {
-      dbxLoadSequenceRef.current += 1;
+      dbxLoadSequenceRef.current.invalidate();
       setActiveDbxConnectionId(null);
       setDbxDatabases([]);
       setDbxObjects([]);
@@ -2063,7 +1969,7 @@ function DatabaseViewContent({
   const loadTable = useCallback(
     async (object: DbObject, nextPage: number) => {
       if (!activeEndpoint) return;
-      const requestSeq = ++legacyLoadSequenceRef.current;
+      const requestSeq = legacyLoadSequenceRef.current.next();
       setLoading(true);
       setError(null);
       setSqlResult(null);
@@ -2075,17 +1981,17 @@ function DatabaseViewContent({
           PAGE_SIZE,
           projectRoot,
         );
-        if (legacyLoadSequenceRef.current !== requestSeq) return;
+        if (!legacyLoadSequenceRef.current.isCurrent(requestSeq)) return;
         setActiveObject(object);
         setWorkspaceMode("table");
         setPage(nextPage);
         setQueryResult(result);
         setSql(`SELECT * FROM ${quoteSqlName(object.name)}`);
       } catch (err) {
-        if (legacyLoadSequenceRef.current !== requestSeq) return;
+        if (!legacyLoadSequenceRef.current.isCurrent(requestSeq)) return;
         setError(String(err));
       } finally {
-        if (legacyLoadSequenceRef.current === requestSeq) setLoading(false);
+        if (legacyLoadSequenceRef.current.isCurrent(requestSeq)) setLoading(false);
       }
     },
     [activeEndpoint, projectRoot],

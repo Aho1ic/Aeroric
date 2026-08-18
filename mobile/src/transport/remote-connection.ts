@@ -57,6 +57,43 @@ export interface WebSocketLike {
 
 export type WebSocketFactory = (url: string) => WebSocketLike;
 
+export type PairingFailureKind = "network" | "host_identity" | "invite" | "auth_response";
+
+export class PairingError extends Error {
+  constructor(
+    readonly kind: PairingFailureKind,
+    message: string,
+    options?: { cause?: unknown },
+  ) {
+    super(message, options);
+    this.name = "PairingError";
+  }
+}
+
+const pairingFailurePriority: Record<PairingFailureKind, number> = {
+  network: 1,
+  auth_response: 2,
+  host_identity: 3,
+  invite: 4,
+};
+
+/** Keep the most actionable failure after all advertised endpoints were tried. */
+export function preferredPairingError(errors: readonly unknown[]): Error {
+  const normalized = errors.map((error) =>
+    error instanceof Error ? error : new Error(String(error)),
+  );
+  return (
+    normalized.reduce<Error | null>((preferred, error) => {
+      if (!preferred) return error;
+      const currentPriority =
+        error instanceof PairingError ? pairingFailurePriority[error.kind] : 0;
+      const preferredPriority =
+        preferred instanceof PairingError ? pairingFailurePriority[preferred.kind] : 0;
+      return currentPriority >= preferredPriority ? error : preferred;
+    }, null) ?? new PairingError("network", "无法连接到电脑")
+  );
+}
+
 interface TimerApi {
   setTimeout(fn: () => void, ms: number): unknown;
   clearTimeout(handle: unknown): void;
@@ -141,6 +178,48 @@ function isFatalAuthError(message: string): boolean {
 
 function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
   return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
+}
+
+/** Normalize binary WebSocket payloads across browser and React Native bridges. */
+type BlobLike = { arrayBuffer: () => Promise<ArrayBuffer> };
+
+function isBlobLike(value: unknown): value is BlobLike {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    typeof (value as { arrayBuffer?: unknown }).arrayBuffer === "function"
+  );
+}
+
+function decodeBinaryData(data: unknown): Uint8Array | Promise<Uint8Array | null> | null {
+  if (data instanceof ArrayBuffer) return new Uint8Array(data);
+  if (ArrayBuffer.isView(data)) {
+    return new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
+  }
+  if (isBlobLike(data)) {
+    try {
+      return data
+        .arrayBuffer()
+        .then((buffer) => new Uint8Array(buffer))
+        .catch(() => null);
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+function pairingError(kind: PairingFailureKind, error: unknown): PairingError {
+  const message = error instanceof Error ? error.message : String(error);
+  return new PairingError(kind, message, { cause: error });
+}
+
+function handshakePairingError(error: unknown): PairingError {
+  const message = error instanceof Error ? error.message : String(error);
+  const kind = /主机身份|主机公钥|主机密钥|identity|public key/i.test(message)
+    ? "host_identity"
+    : "auth_response";
+  return new PairingError(kind, message, { cause: error });
 }
 
 const defaultWsFactory: WebSocketFactory = (url) => {
@@ -390,6 +469,7 @@ export class RemoteConnection {
       dialTimer: unknown | null;
       handshakeTimer: unknown | null;
       error: string | null;
+      messageChain: Promise<void>;
     };
     const candidates: Candidate[] = [];
     let active: Candidate | null = null;
@@ -495,6 +575,7 @@ export class RemoteConnection {
         dialTimer: null,
         handshakeTimer: null,
         error: null,
+        messageChain: Promise.resolve(),
       };
       candidates.push(candidate);
       candidate.dialTimer = this.setAttemptTimeout(() => {
@@ -518,13 +599,19 @@ export class RemoteConnection {
           this.clearAttemptTimeout(candidate.handshakeTimer);
           candidate.handshakeTimer = null;
         }
-        this.handleMessage(
-          event.data,
-          generation,
-          ws,
-          (error) => failCandidate(candidate, error),
-          () => markOnline(candidate),
-        );
+        // Blob.arrayBuffer() is asynchronous; serialize frames per socket so
+        // a later frame cannot overtake an earlier Blob during E2EE.
+        candidate.messageChain = candidate.messageChain
+          .then(() =>
+            this.handleMessage(
+              event.data,
+              generation,
+              ws,
+              (error) => failCandidate(candidate, error),
+              () => markOnline(candidate),
+            ),
+          )
+          .catch(() => undefined);
       };
       ws.onclose = () => {
         if (generation !== this.generation) return;
@@ -851,13 +938,13 @@ export class RemoteConnection {
     });
   }
 
-  private handleMessage(
+  private async handleMessage(
     data: unknown,
     generation: number,
     ws: WebSocketLike,
     onCandidateFailure: (error: string) => void,
     onAuthenticated: () => void,
-  ): void {
+  ): Promise<void> {
     // 明文 text 只存在于握手阶段(hello_ack / e2ee_ready)。
     if (typeof data === "string" && this.handshake && !this.session) {
       const handshake = this.handshake;
@@ -979,8 +1066,7 @@ export class RemoteConnection {
       return;
     }
 
-    const bytes =
-      data instanceof ArrayBuffer ? new Uint8Array(data) : data instanceof Uint8Array ? data : null;
+    const bytes = await decodeBinaryData(data);
     if (!bytes) return;
     let opened: { kind: number; plain: Uint8Array };
     try {
@@ -1104,7 +1190,7 @@ export function pairWithInvite(options: {
       fn();
     };
     const timer = timers.setTimeout(() => {
-      finish(() => reject(new Error("配对超时,请确认手机与电脑在同一网络")));
+      finish(() => reject(new PairingError("network", "配对超时,请确认手机与电脑在同一网络")));
     }, options.timeoutMs ?? 12_000);
 
     try {
@@ -1112,7 +1198,7 @@ export function pairWithInvite(options: {
       ws = wsFactory(options.endpoint);
     } catch (err) {
       timers.clearTimeout(timer);
-      reject(err instanceof Error ? err : new Error(String(err)));
+      reject(pairingError("network", err));
       return;
     }
 
@@ -1122,6 +1208,7 @@ export function pairWithInvite(options: {
         ws.send(handshake.helloJson);
       }
     };
+    let messageChain = Promise.resolve();
     ws.onmessage = (event) => {
       // 握手响应(明文 text)
       if (typeof event.data === "string") {
@@ -1131,7 +1218,7 @@ export function pairWithInvite(options: {
         try {
           session = pending.finish(event.data);
         } catch (err) {
-          finish(() => reject(err instanceof Error ? err : new Error(String(err))));
+          finish(() => reject(handshakePairingError(err)));
           return;
         }
         phase = "auth";
@@ -1144,33 +1231,60 @@ export function pairWithInvite(options: {
           });
           ws.send(session.encryptFrame(KIND_CTRL, textEncoder.encode(payload)));
         } catch (err) {
-          finish(() => reject(err instanceof Error ? err : new Error(String(err))));
+          finish(() => reject(pairingError("auth_response", err)));
         }
         return;
       }
-      // 加密响应
-      if (!(event.data instanceof ArrayBuffer) || !session) return;
-      let frame: { id?: number; ok?: boolean; result?: AuthSuccess; error?: string };
-      try {
-        const opened = session.decryptFrame(new Uint8Array(event.data));
-        if (opened.kind !== KIND_CTRL) return;
-        frame = JSON.parse(textDecoder.decode(opened.plain));
-      } catch {
-        finish(() => reject(new Error("连接被篡改或加密失败,配对未完成")));
-        return;
-      }
-      if (frame.id !== 1) return;
-      if (frame.ok && frame.result?.deviceId && frame.result.deviceToken) {
-        const result = frame.result;
-        finish(() =>
-          resolve(result as Required<Pick<AuthSuccess, "deviceId" | "deviceToken">> & AuthSuccess),
-        );
-      } else {
-        finish(() => reject(new Error(frame.error ?? "配对被拒绝")));
-      }
+      // Blob.arrayBuffer() is asynchronous; serialize frames to preserve the
+      // E2EE sequence number when an Android bridge emits mixed frame types.
+      messageChain = messageChain
+        .then(async () => {
+          if (!session) return;
+          const bytes = await decodeBinaryData(event.data);
+          if (!bytes) {
+            finish(() =>
+              reject(
+                new PairingError("auth_response", "无法解析电脑返回的加密认证响应,配对未完成"),
+              ),
+            );
+            return;
+          }
+          let frame: {
+            id?: number;
+            ok?: boolean;
+            result?: AuthSuccess;
+            error?: string | { code?: string; message?: string };
+          };
+          try {
+            const opened = session.decryptFrame(bytes);
+            if (opened.kind !== KIND_CTRL) return;
+            frame = JSON.parse(textDecoder.decode(opened.plain));
+          } catch {
+            finish(() =>
+              reject(new PairingError("auth_response", "连接被篡改或加密失败,配对未完成")),
+            );
+            return;
+          }
+          if (frame.id !== 1) return;
+          if (frame.ok && frame.result?.deviceId && frame.result.deviceToken) {
+            const result = frame.result;
+            finish(() =>
+              resolve(
+                result as Required<Pick<AuthSuccess, "deviceId" | "deviceToken">> & AuthSuccess,
+              ),
+            );
+          } else {
+            const error =
+              typeof frame.error === "string"
+                ? frame.error
+                : (frame.error?.message ?? frame.error?.code);
+            finish(() => reject(new PairingError("invite", error ?? "配对被拒绝")));
+          }
+        })
+        .catch(() => undefined);
     };
     ws.onclose = (event) => {
-      finish(() => reject(new Error(disconnectedMessage(event))));
+      finish(() => reject(new PairingError("network", disconnectedMessage(event))));
     };
     ws.onerror = (event) => {
       const message = event?.message?.trim();

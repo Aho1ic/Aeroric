@@ -108,6 +108,7 @@ export function useTerminalManager() {
   // pendingOutputs / RAF 仍在 hook 级共享，保留原批量写入节奏与每帧字节预算。
 
   const pendingOutputsRef = useRef<Map<string, string[]>>(new Map());
+  const stoppedTaskOutputsRef = useRef<Set<string>>(new Set());
   const rafIdRef = useRef<number>(0);
 
   const drainPendingOutputs = useCallback(() => {
@@ -147,6 +148,7 @@ export function useTerminalManager() {
 
   const ingestAgentChunk = useCallback(
     (taskId: string, data: string) => {
+      if (stoppedTaskOutputsRef.current.has(taskId)) return;
       const pendingOutputs = pendingOutputsRef.current;
       let arr = pendingOutputs.get(taskId);
       if (!arr) {
@@ -163,12 +165,22 @@ export function useTerminalManager() {
 
   const createOutputChannel = useCallback(
     (taskId: string): Channel<string> => {
+      stoppedTaskOutputsRef.current.delete(taskId);
       const channel = new Channel<string>();
       channel.onmessage = (data) => ingestAgentChunk(taskId, data);
       return channel;
     },
     [ingestAgentChunk],
   );
+
+  const stopTaskOutput = useCallback((taskId: string) => {
+    stoppedTaskOutputsRef.current.add(taskId);
+    pendingOutputsRef.current.delete(taskId);
+  }, []);
+
+  const resumeTaskOutput = useCallback((taskId: string) => {
+    stoppedTaskOutputsRef.current.delete(taskId);
+  }, []);
 
   useEffect(() => {
     return () => {
@@ -190,6 +202,8 @@ export function useTerminalManager() {
       delete terminalWriteRefs.current[taskId];
       delete terminalResizeRefs.current[taskId];
       delete terminalWriteStateRef.current[taskId];
+      stoppedTaskOutputsRef.current.delete(taskId);
+      pendingOutputsRef.current.delete(taskId);
     }
   }, []);
 
@@ -299,5 +313,7 @@ export function useTerminalManager() {
     handleSnapshot,
     getTaskRestoreState,
     createOutputChannel,
+    stopTaskOutput,
+    resumeTaskOutput,
   };
 }

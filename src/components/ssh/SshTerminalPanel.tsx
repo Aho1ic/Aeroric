@@ -8,29 +8,12 @@ import {
   useState,
 } from "react";
 import { Channel, invoke } from "@tauri-apps/api/core";
-import { Terminal as XTerm } from "@xterm/xterm";
-import { FitAddon } from "@xterm/addon-fit";
 import { Plug, Power, Server } from "lucide-react";
 import type { FontFamily, SshConnection, TerminalFontSize, ThemeVariant } from "../../types";
 import { useI18n } from "../../i18n";
 import s from "../../styles";
-import {
-  applyTerminalTextareaInputAttributes,
-  attachLinuxIMEFix,
-  attachMacWebKitShiftInputFix,
-  attachWindowsIMEPositionFix,
-} from "../terminalInputFix";
-import { attachSmartCopy } from "../terminalCopyHelper";
-import {
-  applyTerminalFontFamily,
-  applyTerminalFontSize,
-  attachMacWebKitTerminalGuard,
-  createSmartWriter,
-  initTerminal,
-  loadWebglAddon,
-  safeFit,
-  themeFor,
-} from "../terminalShared";
+import { themeFor } from "../terminalShared";
+import { createTerminalRuntime, type TerminalRuntime } from "../terminalRuntime";
 import { SshConnectionDialog } from "./SshConnectionDialog";
 import { SshConnectionList } from "./SshConnectionList";
 import type { SshConnectionProtocol } from "./SshConnectionContextMenu";
@@ -82,10 +65,12 @@ export const SshTerminalPanel = forwardRef<SshTerminalPanelHandle, Props>(functi
 ) {
   const { t } = useI18n();
   const terminalContainerRef = useRef<HTMLDivElement>(null);
-  const terminalRef = useRef<XTerm | null>(null);
-  const fitAddonRef = useRef<FitAddon | null>(null);
-  const lastSizeRef = useRef<{ cols: number; rows: number } | null>(null);
+  const runtimeRef = useRef<TerminalRuntime | null>(null);
   const activeRef = useRef(active);
+  const themeVariantRef = useRef(themeVariant);
+  const terminalFontSizeRef = useRef(terminalFontSize);
+  const monoFontFamilyRef = useRef(monoFontFamily);
+  const onReadyRef = useRef(onReady);
   const [selectedId, setSelectedId] = useState<string | null>(
     () => initialConnectionId ?? connections[0]?.id ?? null,
   );
@@ -95,6 +80,10 @@ export const SshTerminalPanel = forwardRef<SshTerminalPanelHandle, Props>(functi
   const [error, setError] = useState<string | null>(null);
   const autoConnectStartedRef = useRef<string | null>(null);
   activeRef.current = active;
+  themeVariantRef.current = themeVariant;
+  terminalFontSizeRef.current = terminalFontSize;
+  monoFontFamilyRef.current = monoFontFamily;
+  onReadyRef.current = onReady;
 
   useImperativeHandle(
     ref,
@@ -245,167 +234,84 @@ export const SshTerminalPanel = forwardRef<SshTerminalPanelHandle, Props>(functi
   useEffect(() => {
     if (!activeSession || !terminalContainerRef.current) return;
     const container = terminalContainerRef.current;
+    const session = activeSession;
     let cleaned = false;
     let initTimeoutId: number | null = null;
 
-    const { term, fitAddon } = initTerminal(themeVariant, 5000, terminalFontSize, monoFontFamily);
-    terminalRef.current = term;
-    fitAddonRef.current = fitAddon;
-    term.open(container);
-    applyTerminalTextareaInputAttributes(term);
-    const disposeInputFix = attachMacWebKitShiftInputFix(term);
-    const disposeWindowsImeFix = attachWindowsIMEPositionFix(term);
-    loadWebglAddon(term);
-    const writer = createSmartWriter(term, () => themeVariant, {
-      resumeOnAnyOutput: true,
-    });
-    const disposeMacWebKitGuard = attachMacWebKitTerminalGuard({ term, container, writer });
-    const disposeSmartCopy = attachSmartCopy(term, {
-      onPaste: (text) => {
-        writer.pauseForUserInput();
-        invoke("send_input", { taskId: activeSession.shellId, data: text }).catch(console.error);
+    const runtime = createTerminalRuntime({
+      container,
+      themeVariant: themeVariantRef.current,
+      terminalFontSize: terminalFontSizeRef.current,
+      monoFontFamily: monoFontFamilyRef.current,
+      isActive: () => activeRef.current,
+      onInput: (data) => {
+        invoke("send_input", { taskId: session.shellId, data }).catch(console.error);
+      },
+      onResize: ({ cols, rows }) => {
+        invoke("resize_pty", { taskId: session.shellId, cols, rows }).catch(console.error);
       },
     });
-    const input = attachLinuxIMEFix(term, (data) => {
-      writer.pauseForUserInput();
-      invoke("send_input", { taskId: activeSession.shellId, data }).catch(console.error);
-    });
+    runtimeRef.current = runtime;
     const outputChannel = new Channel<string>();
     outputChannel.onmessage = (data) => {
-      if (!cleaned) writer.write(data);
-    };
-
-    const fit = () => {
-      if (cleaned) return;
-      const size = safeFit(fitAddon, term, container);
-      if (!size) return;
-      const last = lastSizeRef.current;
-      if (last && last.cols === size.cols && last.rows === size.rows) return;
-      lastSizeRef.current = size;
-      invoke("resize_pty", {
-        taskId: activeSession.shellId,
-        cols: size.cols,
-        rows: size.rows,
-      }).catch(console.error);
+      if (!cleaned) runtime.writer.write(data);
     };
 
     initTimeoutId = window.setTimeout(() => {
       if (cleaned) return;
-      fit();
+      runtime.fit();
       invoke<void>("open_ssh_shell", {
-        shellId: activeSession.shellId,
-        connection: activeSession.connection,
-        cols: term.cols,
-        rows: term.rows,
+        shellId: session.shellId,
+        connection: session.connection,
+        cols: runtime.term.cols,
+        rows: runtime.term.rows,
         onOutput: outputChannel,
       })
         .then(() => {
-          onReady?.();
-          if (activeRef.current) term.focus();
+          onReadyRef.current?.();
+          if (activeRef.current) runtime.focus();
         })
         .catch((e: unknown) => {
           const message = String(e);
           setError(message);
-          term.writeln(`\r\nError: ${message}`);
+          runtime.term.writeln(`\r\nError: ${message}`);
         });
     }, 50);
-
-    const resizeObserver = new ResizeObserver(() => {
-      window.setTimeout(() => {
-        if (activeRef.current) fit();
-      }, 50);
-    });
-    resizeObserver.observe(container);
 
     return () => {
       cleaned = true;
       if (initTimeoutId !== null) window.clearTimeout(initTimeoutId);
-      resizeObserver.disconnect();
-      disposeSmartCopy();
-      input.dispose();
-      disposeMacWebKitGuard();
-      disposeInputFix();
-      disposeWindowsImeFix();
-      terminalRef.current = null;
-      fitAddonRef.current = null;
-      lastSizeRef.current = null;
-      term.dispose();
+      runtime.dispose();
+      runtimeRef.current = null;
     };
-  }, [activeSession, monoFontFamily, onReady, terminalFontSize, themeVariant]);
+  }, [activeSession]);
 
   useEffect(() => {
-    if (
-      !active ||
-      !terminalRef.current ||
-      !fitAddonRef.current ||
-      !terminalContainerRef.current ||
-      !activeSession
-    ) {
+    if (!active || !runtimeRef.current || !activeSession) {
       return;
     }
     window.requestAnimationFrame(() => {
-      if (!terminalRef.current || !fitAddonRef.current || !terminalContainerRef.current) return;
-      const size = safeFit(fitAddonRef.current, terminalRef.current, terminalContainerRef.current);
-      if (size) {
-        const last = lastSizeRef.current;
-        if (!last || last.cols !== size.cols || last.rows !== size.rows) {
-          lastSizeRef.current = size;
-          invoke("resize_pty", {
-            taskId: activeSession.shellId,
-            cols: size.cols,
-            rows: size.rows,
-          }).catch(console.error);
-        }
-      }
-      terminalRef.current.focus();
+      runtimeRef.current?.fit();
+      runtimeRef.current?.focus();
     });
   }, [active, activeSession]);
 
   useEffect(() => {
-    if (!terminalRef.current) return;
-    terminalRef.current.options.theme = themeFor(themeVariant);
+    runtimeRef.current?.updateTheme(themeVariant);
   }, [themeVariant]);
 
   useEffect(() => {
-    if (
-      !terminalRef.current ||
-      !fitAddonRef.current ||
-      !terminalContainerRef.current ||
-      !activeSession
-    ) {
+    if (!runtimeRef.current || !activeSession) {
       return;
     }
-    const size = applyTerminalFontSize(
-      terminalRef.current,
-      fitAddonRef.current,
-      terminalFontSize,
-      terminalContainerRef.current,
-    );
-    if (!size) return;
-    invoke("resize_pty", { taskId: activeSession.shellId, cols: size.cols, rows: size.rows }).catch(
-      () => {},
-    );
+    runtimeRef.current.updateFontSize(terminalFontSize);
   }, [activeSession, terminalFontSize]);
 
   useEffect(() => {
-    if (
-      !terminalRef.current ||
-      !fitAddonRef.current ||
-      !terminalContainerRef.current ||
-      !activeSession
-    ) {
+    if (!runtimeRef.current || !activeSession) {
       return;
     }
-    const size = applyTerminalFontFamily(
-      terminalRef.current,
-      fitAddonRef.current,
-      monoFontFamily,
-      terminalContainerRef.current,
-    );
-    if (!size) return;
-    invoke("resize_pty", { taskId: activeSession.shellId, cols: size.cols, rows: size.rows }).catch(
-      () => {},
-    );
+    runtimeRef.current.updateFontFamily(monoFontFamily);
   }, [activeSession, monoFontFamily]);
 
   return (

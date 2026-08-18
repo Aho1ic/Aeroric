@@ -88,6 +88,15 @@ export function themeFor(variant: ThemeVariant) {
   return LIGHT_THEME;
 }
 
+export function terminalMinimumContrastRatioForTheme(variant: ThemeVariant): number {
+  return variant === "light" ? 4.5 : 1;
+}
+
+export function applyTerminalTheme(term: Terminal, variant: ThemeVariant): void {
+  term.options.theme = themeFor(variant);
+  term.options.minimumContrastRatio = terminalMinimumContrastRatioForTheme(variant);
+}
+
 const TERMINAL_INPUT_BACKGROUND_RGB: Record<ThemeVariant, readonly [number, number, number]> = {
   light: [241, 243, 245],
   dark: [17, 21, 26],
@@ -947,10 +956,11 @@ export function initTerminal(
     scrollback,
     cursorBlink: true,
     cursorStyle: "bar",
-    cursorWidth: 2,
+    cursorWidth: 1,
     fontFamily,
     fontSize,
     theme: themeFor(variant),
+    minimumContrastRatio: terminalMinimumContrastRatioForTheme(variant),
     allowTransparency: true,
     allowProposedApi: true,
     // 当运行中的 TUI（Claude Code / Codex）开启鼠标上报时，xterm 默认把拖动当作

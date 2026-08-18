@@ -611,7 +611,8 @@ try {{
 #[cfg(any(windows, test))]
 pub(super) fn powershell_claude_resolution_block(configured_path: &str) -> String {
     format!(
-        r#"$nodeDirectories = @(
+        r#"{resolution_marker}
+$nodeDirectories = @(
   $env:NODE_HOME,
   $env:NVM_SYMLINK,
   [Environment]::ExpandEnvironmentVariables('%ProgramFiles%\nodejs'),
@@ -628,7 +629,7 @@ foreach ($nodeDirectory in $nodeDirectories) {{
 $claudeExecutable = $null
 $configuredClaude = {configured_path}
 if (-not [string]::IsNullOrWhiteSpace($configuredClaude)) {{
-  $configuredCommand = Get-Command $configuredClaude -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+  $configuredCommand = Get-Command $configuredClaude -CommandType Application,ExternalScript -ErrorAction SilentlyContinue | Select-Object -First 1
   if ($null -ne $configuredCommand) {{
     $claudeExecutable = if ($configuredCommand.Path) {{ $configuredCommand.Path }} else {{ $configuredCommand.Source }}
   }} elseif (Test-Path -LiteralPath $configuredClaude -PathType Leaf) {{
@@ -636,7 +637,7 @@ if (-not [string]::IsNullOrWhiteSpace($configuredClaude)) {{
   }}
 }}
 if ([string]::IsNullOrWhiteSpace($claudeExecutable)) {{
-  $claudeCommand = Get-Command 'claude' -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+  $claudeCommand = Get-Command 'claude' -CommandType Application,ExternalScript -ErrorAction SilentlyContinue | Select-Object -First 1
   if ($null -ne $claudeCommand) {{
     $claudeExecutable = if ($claudeCommand.Path) {{ $claudeCommand.Path }} else {{ $claudeCommand.Source }}
   }}
@@ -647,8 +648,12 @@ $claudeCandidates = @(
   [Environment]::ExpandEnvironmentVariables('%APPDATA%\npm\claude.cmd'),
   [Environment]::ExpandEnvironmentVariables('%APPDATA%\npm\claude.ps1'),
   [Environment]::ExpandEnvironmentVariables('%USERPROFILE%\.local\bin\claude.exe'),
+  [Environment]::ExpandEnvironmentVariables('%USERPROFILE%\.local\bin\claude.cmd'),
+  [Environment]::ExpandEnvironmentVariables('%USERPROFILE%\.local\bin\claude.ps1'),
   [Environment]::ExpandEnvironmentVariables('%USERPROFILE%\.npm-global\bin\claude.cmd'),
+  [Environment]::ExpandEnvironmentVariables('%USERPROFILE%\.npm-global\bin\claude.ps1'),
   [Environment]::ExpandEnvironmentVariables('%USERPROFILE%\scoop\shims\claude.cmd'),
+  [Environment]::ExpandEnvironmentVariables('%USERPROFILE%\scoop\shims\claude.ps1'),
   [Environment]::ExpandEnvironmentVariables('%LOCALAPPDATA%\Programs\claude-code\claude.exe'),
   [Environment]::ExpandEnvironmentVariables('%LOCALAPPDATA%\Programs\Claude\claude.exe')
 )
@@ -677,6 +682,7 @@ if ([string]::IsNullOrWhiteSpace($claudeExecutable)) {{
 }}
 "#,
         configured_path = powershell_quote(configured_path),
+        resolution_marker = CLAUDE_CLI_RESOLUTION_MARKER,
     )
 }
 
@@ -1499,7 +1505,7 @@ pub(super) fn refresh_stale_claude_agent_scripts(settings: &mut AppSettings) {
 
         let script_path = normalize_config_path(profile.path.clone());
         let script_content = fs::read_to_string(&script_path).unwrap_or_default();
-        let is_current = script_content.contains(CLAUDE_AGENT_SCRIPT_MARKER);
+        let is_current = claude_agent_script_is_current(&script_path, &script_content);
         let requires_native_script_migration =
             generated_agent_script_target_path(&profile.id, &script_path)
                 .map(|target| target.as_path() != Path::new(&script_path))
@@ -1533,6 +1539,17 @@ pub(super) fn refresh_stale_claude_agent_scripts(settings: &mut AppSettings) {
             profile.path = path.to_string_lossy().into_owned();
         }
     }
+}
+
+fn claude_agent_script_is_current(script_path: &str, content: &str) -> bool {
+    if !content.contains(CLAUDE_AGENT_SCRIPT_MARKER) {
+        return false;
+    }
+    let is_powershell = Path::new(script_path)
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("ps1"));
+    !is_powershell || content.contains(CLAUDE_CLI_RESOLUTION_MARKER)
 }
 
 #[cfg(test)]
@@ -1799,19 +1816,54 @@ api_key = "sk-codex"
         let claude_script = build_claude_code_agent_powershell_script(&claude);
         assert!(claude_script.contains("$env:CLAUDE_CONFIG_DIR"));
         assert!(claude_script.contains(CLAUDE_AGENT_SCRIPT_MARKER));
+        assert!(claude_script.contains(CLAUDE_CLI_RESOLUTION_MARKER));
         assert!(claude_script.contains("agent-credentials\\agentrouter"));
         assert!(!claude_script.contains("sk''test"));
-        assert!(claude_script.contains("Get-Command 'claude' -CommandType Application"));
+        assert!(
+            claude_script.contains("Get-Command 'claude' -CommandType Application,ExternalScript")
+        );
         assert!(claude_script.contains("%ProgramFiles%\\nodejs"));
         assert!(claude_script.contains("$env:PATH = \"$nodeDirectory;$env:PATH\""));
         assert!(
             claude_script.contains("%USERPROFILE%\\.aeroric\\tools\\claude\\current\\claude.exe")
         );
         assert!(claude_script.contains("%APPDATA%\\npm\\claude.cmd"));
+        assert!(claude_script.contains("%APPDATA%\\npm\\claude.ps1"));
         assert!(claude_script.contains("npmExecutable prefix -g"));
         assert!(claude_script.contains("AERORIC_CLAUDE_CLI_NOT_FOUND"));
         assert!(claude_script.contains("$selectedModel += '[1m]'"));
         assert!(claude_script.contains("--model $selectedModel @args"));
+        assert!(!claude_script.contains("& 'claude'"));
+    }
+
+    #[test]
+    fn powershell_claude_resolution_prefers_configured_paths_and_supports_shims() {
+        let block = powershell_claude_resolution_block(r"C:\Program Files\Claude\claude.exe");
+
+        assert!(block.contains("$configuredClaude = 'C:\\Program Files\\Claude\\claude.exe'"));
+        assert!(block.contains("Test-Path -LiteralPath $configuredClaude -PathType Leaf"));
+        assert!(block.contains("Resolve-Path -LiteralPath $configuredClaude"));
+        assert!(block.contains("Application,ExternalScript"));
+        assert!(block.contains("claude.exe"));
+        assert!(block.contains("claude.cmd"));
+        assert!(block.contains("claude.ps1"));
+        assert!(block.contains("AERORIC_CLAUDE_CLI_NOT_FOUND"));
+    }
+
+    #[test]
+    fn powershell_claude_wrapper_requires_the_resolution_capability_marker() {
+        let path = r"C:\Users\test\.aeroric\agents\deepseek_claude.ps1";
+        let incomplete = format!("{CLAUDE_AGENT_SCRIPT_MARKER}\n& 'claude' @args\n");
+        let current = format!(
+            "{CLAUDE_AGENT_SCRIPT_MARKER}\n{CLAUDE_CLI_RESOLUTION_MARKER}\n& $claudeExecutable @args\n"
+        );
+
+        assert!(!claude_agent_script_is_current(path, &incomplete));
+        assert!(claude_agent_script_is_current(path, &current));
+        assert!(claude_agent_script_is_current(
+            "/tmp/deepseek_claude.sh",
+            CLAUDE_AGENT_SCRIPT_MARKER
+        ));
     }
 
     #[test]

@@ -22,6 +22,7 @@ export function AnimatedSelection<T extends string>({
   horizontal = false,
   iconOnly = false,
   wrap = false,
+  showDividers = false,
   style,
 }: {
   value: T;
@@ -40,6 +41,8 @@ export function AnimatedSelection<T extends string>({
   horizontal?: boolean;
   iconOnly?: boolean;
   wrap?: boolean;
+  /** Draw a subtle divider between adjacent options in a dense provider switch. */
+  showDividers?: boolean;
   style?: StyleProp<ViewStyle>;
 }) {
   const translateX = useRef(new Animated.Value(0)).current;
@@ -119,7 +122,7 @@ export function AnimatedSelection<T extends string>({
           },
         ]}
       />
-      {options.map((option) => {
+      {options.map((option, index) => {
         const active = option.value === value;
         return (
           <AnimatedPressable
@@ -132,6 +135,7 @@ export function AnimatedSelection<T extends string>({
               horizontal && styles.itemHorizontal,
               wrap && styles.itemWrap,
               iconOnly && styles.itemIconOnly,
+              showDividers && index > 0 && styles.itemDivider,
             ]}
             onPress={() => onChange(option.value)}
             accessibilityRole="button"
@@ -223,6 +227,10 @@ const styles = StyleSheet.create({
   itemHorizontal: { flex: 0, minWidth: 88, maxWidth: 260, paddingHorizontal: 12 },
   itemWrap: { flex: 0, minWidth: 72, maxWidth: "100%", flexShrink: 1 },
   itemIconOnly: { width: 38, minWidth: 38, paddingHorizontal: 5 },
+  itemDivider: {
+    borderLeftWidth: StyleSheet.hairlineWidth,
+    borderLeftColor: theme.border,
+  },
   icon: { alignItems: "center", justifyContent: "center" },
   // flexShrink 而非 flex:1 —— flex:1 会把 Text 撑满整个 item,文字随之左对齐
   optionCopy: { flexShrink: 1, minWidth: 0, alignItems: "center", gap: 2 },

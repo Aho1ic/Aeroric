@@ -651,6 +651,8 @@ export function AgentDetailModal({
           alignItems: "center",
           justifyContent: "center",
           background: "rgba(0,0,0,0.36)",
+          backdropFilter: "blur(10px) saturate(1.08)",
+          WebkitBackdropFilter: "blur(10px) saturate(1.08)",
         }}
         onMouseDown={(e) => {
           if (e.target === e.currentTarget) onClose();
@@ -660,14 +662,20 @@ export function AgentDetailModal({
           role="dialog"
           aria-modal="true"
           aria-label={t("appSettings.agentDetailTitle")}
+          className="agent-detail-modal"
           style={{
-            width: "min(720px, calc(100vw - 48px))",
+            width: "min(800px, calc(100vw - 48px))",
             height: "min(580px, calc(100vh - 80px))",
             display: "flex",
             flexDirection: "column",
             border: "1px solid color-mix(in srgb, var(--border-medium) 72%, #ffffff 28%)",
             borderRadius: 28,
-            background: "var(--bg-card)",
+            background:
+              themeVariant === "dark"
+                ? "rgba(0, 0, 0, 0.86)"
+                : "color-mix(in srgb, var(--settings-glass-bg) 84%, transparent)",
+            backdropFilter: "var(--settings-glass-blur)",
+            WebkitBackdropFilter: "var(--settings-glass-blur)",
             boxShadow: "var(--shadow-popover)",
             overflow: "hidden",
           }}
@@ -1114,6 +1122,7 @@ export function AgentDetailModal({
                                   {
                                     value: "default",
                                     label: t("appSettings.reasoningEffortDefault"),
+                                    style: { flex: "1.7 1 0", minWidth: 92 },
                                   },
                                 ]),
                             ...(agentIsDsh

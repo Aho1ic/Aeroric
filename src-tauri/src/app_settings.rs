@@ -53,8 +53,9 @@ static CACHED_SETTINGS: OnceLock<Mutex<Option<CachedSettings>>> = OnceLock::new(
 static SETTINGS_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 static AGENT_UPGRADE_LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
 const CLAUDE_BUILTIN_MODEL_ALIASES: &[&str] = &["fable", "opus", "sonnet"];
-const CLAUDE_AGENT_SCRIPT_MARKER: &str = "# AERORIC_CLAUDE_WRAPPER_VERSION=6";
+const CLAUDE_AGENT_SCRIPT_MARKER: &str = "# AERORIC_CLAUDE_WRAPPER_VERSION=7";
 const CLAUDE_AGENT_SCRIPT_MARKER_PREFIX: &str = "# AERORIC_CLAUDE_WRAPPER_VERSION=";
+const CLAUDE_CLI_RESOLUTION_MARKER: &str = "# AERORIC_CLAUDE_CLI_RESOLUTION=1";
 const CODEX_AGENT_SCRIPT_MARKER: &str = "# AERORIC_CODEX_WRAPPER_VERSION=5";
 const CODEX_CHAT_PROXY_MARKER: &str = "# AERORIC_CODEX_CHAT_PROXY_VERSION=5";
 const LOCAL_CHAT_PROXY_BYPASS: &str = "127.0.0.1,localhost,::1";
@@ -3596,9 +3597,14 @@ pub async fn upgrade_agent_versions(
         };
         let launch_for_upgrade = launch.clone();
         let upgrade_program = active_program.clone();
+        let target_version = expected_by_kind.get(&kind).cloned();
         let upgrade_task = tokio::task::spawn_blocking(move || {
             let previous_version = detect_version(&launch_for_upgrade).unwrap_or_default();
-            let channels = match build_agent_upgrade_commands(kind, &upgrade_program) {
+            let channels = match build_agent_upgrade_commands(
+                kind,
+                &upgrade_program,
+                target_version.as_deref(),
+            ) {
                 Ok(commands) => run_agent_upgrades(&commands),
                 Err(error) => vec![AgentUpgradeChannel {
                     channel: "detection".to_string(),

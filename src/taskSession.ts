@@ -122,6 +122,25 @@ export function canAdoptSessionForAgent(
   return source.agent !== targetAgent && !canNativeResumeWithAgent(task, targetAgent, agentOptions);
 }
 
+export type ConfigSwitchSessionStrategy = "resume" | "adopt" | "handoff";
+
+/**
+ * Select the continuation mechanism before a manual configuration switch.
+ * Transcript compatibility is a runtime property read from the session file;
+ * an incompatible session must bypass both native resume and cross-home adoption.
+ */
+export function resolveConfigSwitchSessionStrategy(
+  task: Task,
+  targetAgent: AgentType,
+  nativeResumeSupported: boolean,
+  agentOptions?: AgentOption[],
+): ConfigSwitchSessionStrategy {
+  if (!nativeResumeSupported) return "handoff";
+  if (canNativeResumeWithAgent(task, targetAgent, agentOptions)) return "resume";
+  if (canAdoptSessionForAgent(task, targetAgent, agentOptions)) return "adopt";
+  return "handoff";
+}
+
 export function hasTaskContinuationContext(task: Task): boolean {
   return Boolean(
     task.prompt.trim() ||

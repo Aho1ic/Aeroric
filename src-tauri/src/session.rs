@@ -282,14 +282,13 @@ fn process_codex_session_line(
         return;
     };
 
-    let event_type = value.get("type").and_then(serde_json::Value::as_str);
+    let event_type = crate::protocol_decode::string_field(&value, "type");
     let payload = value.get("payload");
 
     match event_type {
         Some("response_item") => {
-            let payload_type = payload
-                .and_then(|item| item.get("type"))
-                .and_then(serde_json::Value::as_str);
+            let payload_type =
+                payload.and_then(|item| crate::protocol_decode::string_field(item, "type"));
 
             match payload_type {
                 Some("function_call") => {
@@ -673,7 +672,7 @@ fn process_claude_session_line(
         return;
     };
 
-    match value.get("type").and_then(serde_json::Value::as_str) {
+    match crate::protocol_decode::string_field(&value, "type") {
         Some("assistant") => {
             // stop_reason == "tool_use" 是 Claude 暂停等待用户批准或拒绝工具调用的明确信号
             let stop_reason = value
@@ -873,6 +872,62 @@ fn read_session_tail(path: &Path) -> Result<(Vec<String>, bool), String> {
     }
 
     Ok((Vec::from(tail), detected_codex))
+}
+
+/// Codex app-server 目前无法原生恢复 `history_mode = "paginated"` 的会话。
+/// 只扫描头部格式探测窗口：`session_meta` 是 Codex rollout 的首部记录，
+/// 而旧版文件可能没有 `history_mode`，这两种情况都保持历史的原生 resume 行为。
+fn session_file_supports_native_resume(path: &Path, is_codex: bool) -> Result<bool, String> {
+    if !is_codex {
+        return Ok(true);
+    }
+
+    let file = File::open(path).map_err(|error| error.to_string())?;
+    for line in BufReader::new(file)
+        .lines()
+        .take(SESSION_FORMAT_DETECTION_LINES)
+    {
+        let line = line.map_err(|error| error.to_string())?;
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(&line) else {
+            continue;
+        };
+        if value.get("type").and_then(serde_json::Value::as_str) != Some("session_meta") {
+            continue;
+        }
+        let history_mode = value
+            .get("payload")
+            .and_then(|payload| payload.get("history_mode"))
+            .and_then(serde_json::Value::as_str);
+        return Ok(!history_mode.is_some_and(|mode| mode.eq_ignore_ascii_case("paginated")));
+    }
+
+    Ok(true)
+}
+
+fn ensure_session_can_be_adopted(path: &Path, is_codex: bool) -> Result<(), String> {
+    if session_file_supports_native_resume(path, is_codex)? {
+        return Ok(());
+    }
+    Err("Codex paginated sessions cannot be adopted for native resume yet".to_string())
+}
+
+#[tauri::command]
+pub async fn session_supports_native_resume(
+    session_path: String,
+    project_path: String,
+    is_codex: bool,
+    family: Option<String>,
+) -> Result<bool, String> {
+    let family = crate::app_settings::resolve_family_param(family.as_deref(), is_codex);
+    tauri::async_runtime::spawn_blocking(move || {
+        let canonical = validate_session_path_for(&session_path, &project_path, family)?;
+        session_file_supports_native_resume(
+            &canonical,
+            family == crate::app_settings::AgentFamily::Codex,
+        )
+    })
+    .await
+    .map_err(|error| error.to_string())?
 }
 
 #[tauri::command]
@@ -2063,12 +2118,13 @@ fn adopted_session_target_path(
     Ok(target.join(file_name))
 }
 
-/// 把一个会话 transcript 复制进目标 Agent 的 home,让目标配置可以原生 resume。
+/// 把一个兼容的会话 transcript 复制进目标 Agent 的 home,让目标配置可以原生 resume。
 ///
 /// 两个 Agent 各有隔离 home 时,`claude --resume <id>` / `codex resume <id>` 只会在自己
 /// 的 home 里查找,跨配置切换因此必然落到「把上下文塞进 prompt」的降级路径——那条路径
 /// 依赖终端回放文本,既丢结构化工具调用又容易带入乱码。先接管文件,原生 resume 就能直接
-/// 复用完整对话树。
+/// 复用完整对话树。Codex paginated transcript 当前无法原生 resume,
+/// 所以在任何目标文件写入前直接拒绝，由前端降级到结构化 handoff。
 ///
 /// 目标已存在同名文件时直接复用(重复切换是幂等的),不覆盖已有 transcript。
 #[tauri::command]
@@ -2083,6 +2139,7 @@ pub async fn adopt_session_for_agent(
             return Err(format!("Unknown agent: {target_agent}"));
         }
         let canonical = validate_session_path(&session_path, &project_path, is_codex)?;
+        ensure_session_can_be_adopted(&canonical, is_codex)?;
         let target =
             adopted_session_target_path(&canonical, &target_agent, is_codex, &project_path)?;
         if let Ok(existing) = target.canonicalize() {
@@ -2799,6 +2856,60 @@ mod tests {
             !messages.is_empty(),
             "truncated codex tail must still parse"
         );
+    }
+
+    #[test]
+    fn native_resume_support_rejects_paginated_codex_sessions() {
+        let path = std::env::temp_dir().join(format!(
+            "aeroric-paginated-session-{}-{}.jsonl",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        fs::write(
+            &path,
+            serde_json::json!({
+                "type": "session_meta",
+                "payload": { "id": "session-1", "history_mode": "paginated" }
+            })
+            .to_string(),
+        )
+        .expect("write paginated session fixture");
+
+        assert_eq!(session_file_supports_native_resume(&path, true), Ok(false));
+        let error = ensure_session_can_be_adopted(&path, true)
+            .expect_err("paginated Codex sessions must not be adopted");
+        assert!(error.contains("paginated"), "unexpected error: {error}");
+        // Claude transcripts do not use Codex history modes.
+        assert_eq!(session_file_supports_native_resume(&path, false), Ok(true));
+
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn native_resume_support_keeps_legacy_and_unmarked_codex_sessions() {
+        for (name, payload) in [
+            (
+                "legacy",
+                serde_json::json!({ "id": "session-1", "history_mode": "legacy" }),
+            ),
+            ("unmarked", serde_json::json!({ "id": "session-2" })),
+        ] {
+            let path = std::env::temp_dir().join(format!(
+                "aeroric-{name}-session-{}-{}.jsonl",
+                std::process::id(),
+                uuid::Uuid::new_v4()
+            ));
+            fs::write(
+                &path,
+                serde_json::json!({ "type": "session_meta", "payload": payload }).to_string(),
+            )
+            .expect("write resumable session fixture");
+
+            assert_eq!(session_file_supports_native_resume(&path, true), Ok(true));
+            assert_eq!(ensure_session_can_be_adopted(&path, true), Ok(()));
+
+            let _ = fs::remove_file(path);
+        }
     }
 
     #[test]
@@ -3611,5 +3722,39 @@ mod tests {
         .await
         .expect_err("unknown agents must be rejected before any file access");
         assert!(error.contains("Unknown agent"), "unexpected error: {error}");
+    }
+
+    #[tokio::test]
+    async fn adopt_session_for_agent_rejects_paginated_codex_before_copying() {
+        let project = std::env::temp_dir().join(format!(
+            "aeroric-paginated-adoption-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        let sessions = project.join(".codex/sessions/2026/08/18");
+        fs::create_dir_all(&sessions).expect("create project session directory");
+        let source = sessions.join("rollout-2026-08-18T00-00-00-session-1.jsonl");
+        fs::write(
+            &source,
+            serde_json::json!({
+                "type": "session_meta",
+                "payload": { "id": "session-1", "history_mode": "paginated" }
+            })
+            .to_string(),
+        )
+        .expect("write paginated adoption fixture");
+
+        let error = adopt_session_for_agent(
+            source.to_string_lossy().into_owned(),
+            project.to_string_lossy().into_owned(),
+            true,
+            "codex".to_string(),
+        )
+        .await
+        .expect_err("paginated sessions must be rejected before adoption");
+
+        assert!(error.contains("paginated"), "unexpected error: {error}");
+        assert!(source.exists(), "the source transcript must stay untouched");
+        let _ = fs::remove_dir_all(project);
     }
 }

@@ -2,13 +2,13 @@ use futures_util::StreamExt;
 use parking_lot::{Mutex, RwLock};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tauri::ipc::Channel;
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Runtime, State};
 use tokio::io::{AsyncBufReadExt, AsyncRead, BufReader};
 use tokio::net::TcpStream;
 use tokio::process::{Child, Command};
@@ -17,12 +17,16 @@ use tokio::task::JoinHandle;
 use tokio::time::{sleep, Duration, Instant};
 use tokio_tungstenite::{connect_async, tungstenite::Message, MaybeTlsStream, WebSocketStream};
 use url::{Host, Url};
-use uuid::Uuid;
+
+mod api_client;
+mod protocol_inventory;
+
+pub(crate) use api_client::DshApiClient;
+use api_client::{bounded_utf8_prefix, DSH_HTTP_ERROR_SNIPPET_BYTES};
 
 const DSH_WEB_STARTUP_TIMEOUT: Duration = Duration::from_secs(30);
 const DSH_WEB_OUTPUT_LIMIT: usize = 16 * 1024;
 const DSH_EVENT_CHANNEL_CAPACITY: usize = 64;
-const DSH_HTTP_ERROR_SNIPPET_BYTES: usize = 200;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -56,13 +60,20 @@ struct DshStartAttempt {
     result: Result<DshWebUiState, String>,
 }
 
+#[derive(Clone)]
 pub struct DshWebUiManager {
     processes: Arc<RwLock<HashMap<String, WebUiProcess>>>,
     lifecycle_locks: Arc<Mutex<HashMap<String, Arc<AsyncMutex<()>>>>>,
+    task_lifecycle_locks: Arc<Mutex<HashMap<String, Arc<AsyncMutex<()>>>>>,
     start_attempts: Arc<Mutex<HashMap<String, DshStartAttempt>>>,
     shutting_down: Arc<AtomicBool>,
     active_sessions: Arc<Mutex<HashMap<String, ActiveDshSession>>>,
-    cancelled_tasks: Arc<Mutex<std::collections::HashSet<String>>>,
+    cancelled_tasks: Arc<Mutex<HashSet<String>>>,
+    /// Tasks completed from the task list must ignore any already queued or
+    /// late mux frames. This is distinct from cancellation: a completed task
+    /// is no longer allowed to become running again until it is explicitly
+    /// started/resumed.
+    completed_tasks: Arc<Mutex<HashSet<String>>>,
     /// One long-lived events.mux subscription per Aeroric task.  DSH sessions
     /// remain interactive after a turn ends, so the stream must outlive the
     /// command that admitted the first prompt.
@@ -106,10 +117,12 @@ impl DshWebUiManager {
         Self {
             processes: Arc::new(RwLock::new(HashMap::new())),
             lifecycle_locks: Arc::new(Mutex::new(HashMap::new())),
+            task_lifecycle_locks: Arc::new(Mutex::new(HashMap::new())),
             start_attempts: Arc::new(Mutex::new(HashMap::new())),
             shutting_down: Arc::new(AtomicBool::new(false)),
             active_sessions: Arc::new(Mutex::new(HashMap::new())),
-            cancelled_tasks: Arc::new(Mutex::new(std::collections::HashSet::new())),
+            cancelled_tasks: Arc::new(Mutex::new(HashSet::new())),
+            completed_tasks: Arc::new(Mutex::new(HashSet::new())),
             session_stream_aborts: Arc::new(Mutex::new(HashMap::new())),
             host_events_abort: Arc::new(Mutex::new(None)),
         }
@@ -119,6 +132,14 @@ impl DshWebUiManager {
         self.lifecycle_locks
             .lock()
             .entry(agent.to_string())
+            .or_insert_with(|| Arc::new(AsyncMutex::new(())))
+            .clone()
+    }
+
+    fn task_lifecycle_lock(&self, task_id: &str) -> Arc<AsyncMutex<()>> {
+        self.task_lifecycle_locks
+            .lock()
+            .entry(task_id.to_string())
             .or_insert_with(|| Arc::new(AsyncMutex::new(())))
             .clone()
     }
@@ -171,11 +192,66 @@ impl DshWebUiManager {
             let _ = abort.send(());
         }
         self.active_sessions.lock().clear();
+        self.completed_tasks.lock().clear();
         let processes = self.processes.write().drain().collect::<Vec<_>>();
         for (_, mut process) in processes {
             let _ = Self::stop_process(&mut process.child).await;
         }
         drop(lifecycle_guards);
+    }
+
+    fn clear_completed_task(&self, task_id: &str) {
+        self.completed_tasks.lock().remove(task_id);
+    }
+
+    /// Atomically make a DSH task terminal and detach its output stream. The
+    /// completion marker is installed before removing the active mapping so a
+    /// concurrently dispatched frame cannot publish a newer status.
+    fn begin_task_completion(&self, task_id: &str) -> (Option<ActiveDshSession>, bool) {
+        let first_completion = self.completed_tasks.lock().insert(task_id.to_string());
+        if !first_completion {
+            return (None, false);
+        }
+        self.cancelled_tasks.lock().remove(task_id);
+        let active = self.active_sessions.lock().remove(task_id);
+        if let Some(abort) = self.session_stream_aborts.lock().remove(task_id) {
+            let _ = abort.send(());
+        }
+        (active, true)
+    }
+
+    fn stream_is_current(&self, task_id: &str, session_id: &str) -> bool {
+        if self.completed_tasks.lock().contains(task_id) {
+            return false;
+        }
+        self.active_sessions
+            .lock()
+            .get(task_id)
+            .is_some_and(|active| active.session_id == session_id)
+    }
+
+    fn send_terminal_text_if_current(
+        &self,
+        task_id: &str,
+        session_id: &str,
+        on_output: &Channel<String>,
+        text: &str,
+    ) -> bool {
+        let completed_tasks = self.completed_tasks.lock();
+        if completed_tasks.contains(task_id) {
+            return false;
+        }
+        let active_sessions = self.active_sessions.lock();
+        if active_sessions
+            .get(task_id)
+            .is_none_or(|active| active.session_id != session_id)
+        {
+            return false;
+        }
+        send_terminal_text(on_output, text);
+        drop(active_sessions);
+        drop(completed_tasks);
+        true
     }
 
     async fn stop_process(child: &mut Child) -> Result<(), String> {
@@ -398,13 +474,19 @@ impl DshWebUiManager {
             .await;
             match reconnect {
                 Ok(Ok(())) => {
-                    recovery.reconnected_sessions += 1;
-                    let _ = session.on_output.send(
-                        "\r\nDeepSeek Harness restarted after upgrade; this session was reconnected.\r\n"
-                            .to_string(),
-                    );
+                    if self.send_terminal_text_if_current(
+                        &task_id,
+                        &session.session_id,
+                        &session.on_output,
+                        "\r\nDeepSeek Harness restarted after upgrade; this session was reconnected.\r\n",
+                    ) {
+                        recovery.reconnected_sessions += 1;
+                    }
                 }
                 Ok(Err(error)) => {
+                    if !self.stream_is_current(&task_id, &session.session_id) {
+                        continue;
+                    }
                     if let Some(abort) = self.session_stream_aborts.lock().remove(&task_id) {
                         let _ = abort.send(());
                     }
@@ -414,6 +496,9 @@ impl DshWebUiManager {
                     ));
                 }
                 Err(_) => {
+                    if !self.stream_is_current(&task_id, &session.session_id) {
+                        continue;
+                    }
                     if let Some(abort) = self.session_stream_aborts.lock().remove(&task_id) {
                         let _ = abort.send(());
                     }
@@ -429,12 +514,6 @@ impl DshWebUiManager {
         }
         recovery
     }
-}
-
-#[derive(Clone)]
-pub struct DshApiClient {
-    client: reqwest::Client,
-    base_url: String,
 }
 
 /// Protocol inventory pinned to the source tree that Aeroric was audited
@@ -457,126 +536,14 @@ pub struct DshProtocolCapabilities {
 impl DshProtocolCapabilities {
     pub fn snapshot() -> Self {
         Self {
-            source_commit: "99f6f02fecdb7dff40c3fbc9470f5907c29f74ca",
-            package_version: "0.1.0-rc.7",
-            protocol_version: 2,
-            rpc_methods: vec![
-                "session.list",
-                "session.search",
-                "session.create",
-                "session.history",
-                "session.models",
-                "session.selectModel",
-                "session.rename",
-                "session.fork",
-                "session.prompt",
-                "session.attachment",
-                "session.updateQueue",
-                "session.cancel",
-                "subagent.list",
-                "subagent.history",
-                "subagent.prompt",
-                "subagent.interrupt",
-                "host.describe",
-                "host.pickDirectory",
-                "host.listDirectory",
-                "host.createDirectory",
-                "host.openPath",
-                "workspace.list",
-                "workspace.create",
-                "workspace.rename",
-                "workspace.delete",
-                "workspace.insertBefore",
-                "workspace.insertSessionBefore",
-                "workspace.archiveSession",
-                "skill.list",
-                "agentPreset.list",
-                "agentPreset.select",
-                "agentPreset.read",
-                "agentPreset.copy",
-                "agentPreset.openDocument",
-                "agentPreset.remove",
-                "goal.create",
-                "goal.edit",
-                "goal.pause",
-                "goal.resume",
-                "goal.complete",
-                "goal.clear",
-                "settings.describe",
-                "settings.openDocument",
-                "settings.update",
-                "settings.replace",
-                "settings.mutate",
-                "credentials.describe",
-                "credentials.set",
-                "credentials.unset",
-                "llm.providers",
-                "llm.models",
-                "llm.discoverModels",
-            ],
-            remote_methods: vec![
-                "commands.list",
-                "commands.execute",
-                "goals.create",
-                "goals.edit",
-                "goals.pause",
-                "goals.resume",
-                "goals.complete",
-                "goals.clear",
-                "messageFeedback.list",
-                "messageFeedback.put",
-                "messageFeedback.delete",
-                "pluginInventory.list",
-                "dynamicCordisRunner.undefineFromPanel",
-                "dynamicCordisRunner.runHostHalf",
-                "dynamicCordisRunner.getClientCode",
-                "dynamicCordisRunner.resolveRequestRun",
-                "dynamicCordisRunner.settleUserRun",
-                "dynamicCordisRunner.stopFromPanel",
-                "dynamicCordisRunner.syncInspectManifest",
-                "dynamicCordisRunner.resolveInspectQuery",
-                "dynamicCordisRunner.inventory",
-                "dynamicCordisRunner.reportRenderFailure",
-                "dynamicCordisRunner.reportClientGuardFailure",
-                "dynamicCordisRunner.invoke",
-            ],
-            remote_events: vec![
-                "agent-preset/selected",
-                "commands/change",
-                "credentials/updated",
-                "cordis/request-run",
-                "cordis/request-run-resolved",
-                "cordis/dynamic-package",
-                "cordis/dynamic-retract",
-                "cordis/inspect-query",
-                "cordis/inspect-query-resolved",
-                "llm/adapters-updated",
-                "settings/document-updated",
-            ],
-            mux_frames: vec![
-                "session/event",
-                "session/subscribed",
-                "approval/requested",
-                "approval/resolved",
-                "question/requested",
-                "question/resolved",
-                "session/queue",
-                "session/jobs",
-                "session/projection",
-                "stream/error",
-            ],
-            host_frames: vec![
-                "host/session-added",
-                "host/session-removed",
-                "host/session-status",
-                "host/agent-error",
-                "host/workspace-changed",
-                "host/workspace-removed",
-                "host/workspace-order-changed",
-                "host/archived-sessions-changed",
-                "host/remote-event",
-                "stream/error",
-            ],
+            source_commit: protocol_inventory::SOURCE_COMMIT,
+            package_version: protocol_inventory::PACKAGE_VERSION,
+            protocol_version: protocol_inventory::PROTOCOL_VERSION,
+            rpc_methods: protocol_inventory::RPC_METHODS.to_vec(),
+            remote_methods: protocol_inventory::REMOTE_METHODS.to_vec(),
+            remote_events: protocol_inventory::REMOTE_EVENTS.to_vec(),
+            mux_frames: protocol_inventory::MUX_FRAMES.to_vec(),
+            host_frames: protocol_inventory::HOST_FRAMES.to_vec(),
         }
     }
 }
@@ -626,17 +593,6 @@ fn default_true() -> bool {
     true
 }
 
-fn bounded_utf8_prefix(value: &str, max_bytes: usize) -> &str {
-    if value.len() <= max_bytes {
-        return value;
-    }
-    let mut boundary = max_bytes;
-    while !value.is_char_boundary(boundary) {
-        boundary -= 1;
-    }
-    &value[..boundary]
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DshModelSelection {
     pub provider: String,
@@ -677,65 +633,6 @@ struct DshSettingsDescription {
 }
 
 impl DshApiClient {
-    pub fn new(base_url: String) -> Result<Self, String> {
-        let client = reqwest::Client::builder()
-            .no_proxy()
-            .build()
-            .map_err(|error| format!("Failed to create DSH API client: {error}"))?;
-        Ok(Self { client, base_url })
-    }
-
-    async fn call(&self, method: &str, payload: Value) -> Result<Value, String> {
-        let request = json!({
-            "type": "client-request",
-            "rpcId": Uuid::new_v4().to_string(),
-            "method": method,
-            "payload": payload,
-        });
-        let response = self
-            .client
-            .post(format!("{}/api/{method}", self.base_url))
-            .header("content-type", "application/json")
-            .json(&request)
-            .timeout(Duration::from_secs(30))
-            .send()
-            .await
-            .map_err(|error| format!("DSH API request {method} failed: {error}"))?;
-        let status = response.status();
-        // Check status BEFORE consuming the body as JSON. A non-success response
-        // (e.g. 404 for an endpoint absent in an older DSH build) may return
-        // HTML rather than JSON; attempting .json() on it produces a misleading
-        // "invalid JSON" error instead of a clear HTTP status message.
-        if !status.is_success() {
-            let text = response.text().await.unwrap_or_default();
-            let trimmed = text.trim();
-            return if trimmed.is_empty() {
-                Err(format!("DSH API {method} returned HTTP {status}"))
-            } else {
-                let snippet = bounded_utf8_prefix(trimmed, DSH_HTTP_ERROR_SNIPPET_BYTES);
-                Err(format!(
-                    "DSH API {method} returned HTTP {status}: {snippet}"
-                ))
-            };
-        }
-        let body: Value = response
-            .json()
-            .await
-            .map_err(|error| format!("DSH API response {method} was invalid JSON: {error}"))?;
-        let result = body
-            .get("result")
-            .ok_or_else(|| format!("DSH API {method} response has no result"))?;
-        if result.get("ok").and_then(Value::as_bool) != Some(true) {
-            let message = result
-                .get("error")
-                .and_then(|error| error.get("message"))
-                .and_then(Value::as_str)
-                .unwrap_or("unknown DSH API error");
-            return Err(format!("DSH API {method} rejected the request: {message}"));
-        }
-        Ok(result.get("value").cloned().unwrap_or(Value::Null))
-    }
-
     async fn create_session(
         &self,
         cwd: &str,
@@ -1478,6 +1375,32 @@ fn json_text(value: &Value) -> Option<String> {
     None
 }
 
+/// xterm is intentionally configured with `convertEol: false`, so the DSH
+/// bridge owns the line-ending contract. Normalize every newline form without
+/// touching ANSI escape bytes or Unicode text.
+fn normalize_terminal_text(text: &str) -> String {
+    let mut normalized = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(character) = chars.next() {
+        match character {
+            '\r' => {
+                normalized.push('\r');
+                if chars.peek() == Some(&'\n') {
+                    let _ = chars.next();
+                }
+                normalized.push('\n');
+            }
+            '\n' => normalized.push_str("\r\n"),
+            _ => normalized.push(character),
+        }
+    }
+    normalized
+}
+
+fn send_terminal_text(on_output: &Channel<String>, text: &str) {
+    let _ = on_output.send(normalize_terminal_text(text));
+}
+
 /// Minimal ANSI styling for the tool render-intent output. The dsh stream lands
 /// in an xterm view configured with `convertEol: false`, so every line this
 /// module writes terminates with an explicit CRLF.
@@ -1815,7 +1738,7 @@ fn emit_session_event_output(payload: &Value, on_output: &Channel<String>) {
         _ => None,
     };
     if let Some(output) = output.filter(|text| !text.is_empty()) {
-        let _ = on_output.send(output);
+        send_terminal_text(on_output, &output);
     }
 }
 
@@ -1835,11 +1758,23 @@ fn payload_with_rpc_id(envelope: &Value) -> Value {
 /// duplicate dialogs and projection updates for unrelated sessions.
 fn dispatch_mux_frame(
     app: &AppHandle,
+    state: &DshWebUiManager,
     envelope: &Value,
     task_id: &str,
     watched_session_id: &str,
     on_output: &Channel<String>,
 ) -> Result<(), String> {
+    let completed_tasks = state.completed_tasks.lock();
+    if completed_tasks.contains(task_id) {
+        return Ok(());
+    }
+    let active_sessions = state.active_sessions.lock();
+    if active_sessions
+        .get(task_id)
+        .is_none_or(|active| active.session_id != watched_session_id)
+    {
+        return Ok(());
+    }
     let payload = payload_with_rpc_id(envelope);
     let frame_type = payload
         .get("type")
@@ -1857,7 +1792,7 @@ fn dispatch_mux_frame(
         return Ok(());
     }
 
-    match frame_type {
+    let result = match frame_type {
         "session/event" => {
             let _ = app.emit("dsh-session-event", &payload);
             emit_session_event_output(&payload, on_output);
@@ -1954,7 +1889,10 @@ fn dispatch_mux_frame(
         }
 
         _ => Ok(()),
-    }
+    };
+    drop(active_sessions);
+    drop(completed_tasks);
+    result
 }
 
 fn take_sse_frame(buffer: &mut Vec<u8>) -> Option<Vec<u8>> {
@@ -2156,6 +2094,7 @@ async fn open_dsh_event_downlink(
 
 async fn consume_session_events(
     app: &AppHandle,
+    state: &DshWebUiManager,
     api: &DshApiClient,
     task_id: &str,
     session_id: &str,
@@ -2176,7 +2115,12 @@ async fn consume_session_events(
                     let _ = sender.send(Err(error.clone()));
                     return Err(error);
                 }
-                let _ = on_output.send(format!("\r\n{error}; reconnecting…\r\n"));
+                state.send_terminal_text_if_current(
+                    task_id,
+                    session_id,
+                    on_output,
+                    &format!("\r\n{error}; reconnecting…\r\n"),
+                );
                 tokio::select! {
                     _ = &mut abort => return Ok(()),
                     _ = sleep(Duration::from_secs(1)) => continue,
@@ -2195,16 +2139,26 @@ async fn consume_session_events(
             match next {
                 Some(Ok(envelope)) => {
                     if let Err(error) =
-                        dispatch_mux_frame(app, &envelope, task_id, session_id, on_output)
+                        dispatch_mux_frame(app, state, &envelope, task_id, session_id, on_output)
                     {
-                        let _ = on_output.send(format!("\r\n{error}\r\n"));
+                        state.send_terminal_text_if_current(
+                            task_id,
+                            session_id,
+                            on_output,
+                            &format!("\r\n{error}\r\n"),
+                        );
                     }
                 }
                 Some(Err(error)) => break error,
                 None => break format!("DSH {transport} event stream ended"),
             }
         };
-        let _ = on_output.send(format!("\r\n{disconnected}; reconnecting…\r\n"));
+        state.send_terminal_text_if_current(
+            task_id,
+            session_id,
+            on_output,
+            &format!("\r\n{disconnected}; reconnecting…\r\n"),
+        );
         tokio::select! {
             _ = &mut abort => return Ok(()),
             _ = sleep(Duration::from_secs(1)) => {}
@@ -2220,6 +2174,9 @@ async fn start_task_session_stream(
     session_id: &str,
     on_output: &Channel<String>,
 ) -> Result<(), String> {
+    if !state.stream_is_current(task_id, session_id) {
+        return Ok(());
+    }
     let duplicate_tasks = state
         .active_sessions
         .lock()
@@ -2237,12 +2194,16 @@ async fn start_task_session_stream(
     if let Some(sender) = state.session_stream_aborts.lock().remove(task_id) {
         let _ = sender.send(());
     }
+    if !state.stream_is_current(task_id, session_id) {
+        return Ok(());
+    }
     let (abort_tx, abort_rx) = oneshot::channel();
     state
         .session_stream_aborts
         .lock()
         .insert(task_id.to_string(), abort_tx);
     let stream_app = app.clone();
+    let stream_state = state.clone();
     let stream_api = api.clone();
     let stream_task_id = task_id.to_string();
     let stream_session_id = session_id.to_string();
@@ -2251,6 +2212,7 @@ async fn start_task_session_stream(
     tokio::spawn(async move {
         let _ = consume_session_events(
             &stream_app,
+            &stream_state,
             &stream_api,
             &stream_task_id,
             &stream_session_id,
@@ -2312,6 +2274,10 @@ pub async fn run_dsh_task(
     client_time_zone: Option<String>,
     on_output: Channel<String>,
 ) -> Result<(), String> {
+    let task_lifecycle_lock = state.task_lifecycle_lock(&task_id);
+    let _task_lifecycle_guard = task_lifecycle_lock.lock().await;
+    state.clear_completed_task(&task_id);
+    state.cancelled_tasks.lock().remove(&task_id);
     let web = ensure_dsh_webui(&agent, &state).await?;
     let base_url = web
         .url
@@ -2400,7 +2366,7 @@ pub async fn run_dsh_task(
             .and_then(|command| command.get("text"))
             .and_then(Value::as_str)
         {
-            let _ = on_output.send(format!("\r\n{text}\r\n"));
+            send_terminal_text(&on_output, &format!("\r\n{text}\r\n"));
             let _ = app.emit(
                 "task-status",
                 json!({ "task_id": task_id.clone(), "status": "done" }),
@@ -2437,6 +2403,8 @@ pub async fn prompt_dsh_task(
     if prompt.trim().is_empty() && images.as_ref().is_none_or(Vec::is_empty) {
         return Err("DeepSeek Harness prompts require text or an image".to_string());
     }
+    let task_lifecycle_lock = state.task_lifecycle_lock(&task_id);
+    let _task_lifecycle_guard = task_lifecycle_lock.lock().await;
     let active = state
         .active_sessions
         .lock()
@@ -2459,7 +2427,7 @@ pub async fn prompt_dsh_task(
         .and_then(|command| command.get("text"))
         .and_then(Value::as_str)
     {
-        let _ = active.on_output.send(format!("\r\n{text}\r\n"));
+        send_terminal_text(&active.on_output, &format!("\r\n{text}\r\n"));
     } else {
         let _ = app.emit(
             "task-status",
@@ -2474,12 +2442,79 @@ pub async fn cancel_dsh_task(
     state: State<'_, DshWebUiManager>,
     task_id: String,
 ) -> Result<(), String> {
+    let task_lifecycle_lock = state.task_lifecycle_lock(&task_id);
+    let _task_lifecycle_guard = task_lifecycle_lock.lock().await;
     let active = state.active_sessions.lock().get(&task_id).cloned();
     let Some(active) = active else { return Ok(()) };
     let api = DshApiClient::new(active.base_url)?;
     api.cancel(&active.session_id).await?;
-    state.cancelled_tasks.lock().insert(task_id.clone());
+    if !state.completed_tasks.lock().contains(&task_id) {
+        state.cancelled_tasks.lock().insert(task_id.clone());
+    }
     Ok(())
+}
+
+/// Complete one DSH task without touching the shared `dsh web` process. The
+/// active turn is cancelled best-effort, then its mux stream and task mappings
+/// are detached before the single terminal `done` event is emitted.
+pub(crate) async fn complete_dsh_task_core<R: Runtime>(
+    app: &AppHandle<R>,
+    state: &DshWebUiManager,
+    task_manager: &crate::TaskManager,
+    task_id: &str,
+    project_path: &str,
+) -> Result<(), String> {
+    crate::pty::validate_task_id(task_id)?;
+    let task_lifecycle_lock = state.task_lifecycle_lock(task_id);
+    let _task_lifecycle_guard = task_lifecycle_lock.lock().await;
+    let (active, first_completion) = state.begin_task_completion(task_id);
+    if !first_completion {
+        return Ok(());
+    }
+
+    if let Some(active) = active {
+        if let Ok(api) = DshApiClient::new(active.base_url) {
+            // The task is already detached locally, so an exited session or a
+            // transient Web/API failure must not make completion non-idempotent.
+            let _ = api.cancel(&active.session_id).await;
+        }
+    }
+
+    let dsh_path = task_manager
+        .dsh_sessions
+        .lock()
+        .remove(task_id)
+        .map(|info| info.session_path);
+    if let Some(path) = dsh_path {
+        task_manager.claimed_session_paths.lock().remove(&path);
+    }
+    task_manager.cancelled_tasks.lock().remove(task_id);
+    task_manager.manually_completed_tasks.lock().remove(task_id);
+
+    let _ = app.emit(
+        "task-status",
+        json!({ "task_id": task_id, "status": "done" }),
+    );
+    let _ = std::fs::remove_dir_all(
+        Path::new(project_path)
+            .join(".aeroric")
+            .join("attachments")
+            .join(task_id),
+    );
+    crate::event_watcher::cleanup_task_events(app, task_id);
+    crate::dsh_home::cleanup_task_model_patch(task_id);
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn complete_dsh_task(
+    app: AppHandle,
+    state: State<'_, DshWebUiManager>,
+    task_manager: State<'_, crate::TaskManager>,
+    task_id: String,
+    project_path: String,
+) -> Result<(), String> {
+    complete_dsh_task_core(&app, &state, &task_manager, &task_id, &project_path).await
 }
 
 #[tauri::command]
@@ -4861,6 +4896,108 @@ mod tests {
         assert!(output.len() <= DSH_WEB_OUTPUT_LIMIT);
         assert!(output.chars().filter(|character| *character == 'x').count() < prefix.len());
         assert!(output.ends_with("final diagnostic\n"));
+    }
+
+    #[test]
+    fn normalizes_every_terminal_newline_without_touching_unicode_or_ansi() {
+        assert_eq!(normalize_terminal_text("one\ntwo"), "one\r\ntwo");
+        assert_eq!(normalize_terminal_text("one\r\ntwo"), "one\r\ntwo");
+        assert_eq!(normalize_terminal_text("one\rtwo"), "one\r\ntwo");
+        assert_eq!(
+            normalize_terminal_text("\x1b[32m中文\x1b[0m\n第二行\r\n第三行\r末行"),
+            "\x1b[32m中文\x1b[0m\r\n第二行\r\n第三行\r\n末行"
+        );
+    }
+
+    #[test]
+    fn normalizes_multiline_assistant_chunks_before_sending_them() {
+        let received = Arc::new(Mutex::new(Vec::<String>::new()));
+        let captured = received.clone();
+        let channel = Channel::new(move |body| {
+            let tauri::ipc::InvokeResponseBody::Json(json) = body else {
+                panic!("terminal text must use a JSON channel payload");
+            };
+            captured
+                .lock()
+                .push(serde_json::from_str(&json).expect("channel payload is a string"));
+            Ok(())
+        });
+        emit_session_event_output(
+            &json!({
+                "event": {
+                    "type": "assistant/chunk",
+                    "data": { "chunk": "第一行\nsecond\r\n第三行\rlast" }
+                }
+            }),
+            &channel,
+        );
+
+        assert_eq!(
+            *received.lock(),
+            vec!["第一行\r\nsecond\r\n第三行\r\nlast".to_string()]
+        );
+    }
+
+    #[test]
+    fn completing_a_task_detaches_its_stream_once() {
+        let manager = DshWebUiManager::new();
+        let output = Channel::new(|_| Ok(()));
+        let (abort_tx, mut abort_rx) = oneshot::channel();
+        manager.cancelled_tasks.lock().insert("task-1".to_string());
+        manager.active_sessions.lock().insert(
+            "task-1".to_string(),
+            ActiveDshSession {
+                session_id: "session-1".to_string(),
+                base_url: "http://127.0.0.1:1234".to_string(),
+                on_output: output,
+            },
+        );
+        manager
+            .session_stream_aborts
+            .lock()
+            .insert("task-1".to_string(), abort_tx);
+
+        let (active, first) = manager.begin_task_completion("task-1");
+        assert!(first);
+        assert_eq!(
+            active.expect("active session is returned").session_id,
+            "session-1"
+        );
+        assert!(!manager.active_sessions.lock().contains_key("task-1"));
+        assert!(!manager.session_stream_aborts.lock().contains_key("task-1"));
+        assert!(!manager.cancelled_tasks.lock().contains("task-1"));
+        assert!(abort_rx.try_recv().is_ok());
+        assert!(!manager.stream_is_current("task-1", "session-1"));
+
+        let (active, first) = manager.begin_task_completion("task-1");
+        assert!(!first);
+        assert!(active.is_none());
+        assert!(manager.processes.read().is_empty());
+    }
+
+    #[tokio::test]
+    async fn completion_waits_for_an_in_flight_task_lifecycle_operation() {
+        let manager = Arc::new(DshWebUiManager::new());
+        let lifecycle_lock = manager.task_lifecycle_lock("task-1");
+        let in_flight = lifecycle_lock.lock().await;
+        let completing_manager = manager.clone();
+        let completion = tokio::spawn(async move {
+            let completion_lock = completing_manager.task_lifecycle_lock("task-1");
+            let _completion_guard = completion_lock.lock().await;
+            completing_manager.begin_task_completion("task-1")
+        });
+
+        tokio::task::yield_now().await;
+        assert!(!completion.is_finished());
+        drop(in_flight);
+
+        let (active, first) = tokio::time::timeout(Duration::from_secs(1), completion)
+            .await
+            .expect("completion proceeds after the in-flight operation releases the lock")
+            .expect("completion task exits");
+        assert!(first);
+        assert!(active.is_none());
+        assert!(!manager.stream_is_current("task-1", "session-1"));
     }
 
     #[tokio::test]

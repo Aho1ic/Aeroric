@@ -12,7 +12,6 @@ import {
 import {
   ChevronDown,
   ChevronRight,
-  Bell,
   Bot,
   Home,
   Moon,
@@ -43,7 +42,6 @@ import {
 import { groupProjectsForRail, UNGROUPED_PROJECT_GROUP } from "../projectGroups";
 import { hasTaskContinuationContext } from "../taskSession";
 import s from "../styles";
-import claudeWaveGif from "../assets/gif/claude-wave.gif";
 
 type ProjectStatus = "attention" | "running" | null;
 type ProjectPointerDragState = {
@@ -423,83 +421,6 @@ function AttentionIndicator({
   );
 }
 
-function RailItem({
-  project,
-  isActive,
-  status,
-  attentionCount,
-  showBadge,
-  waveNonce,
-  onSwitch,
-}: {
-  project: Project;
-  isActive: boolean;
-  status: ProjectStatus;
-  attentionCount: number;
-  showBadge: boolean;
-  waveNonce: number;
-  onSwitch: (p: Project) => void;
-}) {
-  const [hov, setHov] = useState(false);
-  const [waving, setWaving] = useState(false);
-
-  // waveNonce 每次递增(出现新的待确认任务)就触发一次性招手,3.6s 后卸载。
-  // 卸载+重新挂载可让 gif 从首帧重播,同时重启 CSS 探头/缩回动画。
-  useEffect(() => {
-    if (waveNonce <= 0) return;
-    setWaving(true);
-    const id = setTimeout(() => setWaving(false), 3600);
-    return () => clearTimeout(id);
-  }, [waveNonce]);
-
-  return (
-    <button
-      title={project.name}
-      onClick={() => onSwitch(project)}
-      onMouseEnter={() => setHov(true)}
-      onMouseLeave={() => setHov(false)}
-      className={isActive ? "rail-active" : undefined}
-      style={{
-        position: "relative",
-        width: 36,
-        height: 36,
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        background: "none",
-        border: "none",
-        borderRadius: 10,
-        cursor: isActive ? "default" : "pointer",
-        padding: 0,
-        outline: isActive
-          ? "2px solid var(--accent)"
-          : hov
-            ? "2px solid var(--border-medium)"
-            : "2px solid transparent",
-        outlineOffset: 1,
-        transition: isActive ? "none" : "outline-color 0.12s",
-      }}
-    >
-      {waving && (
-        <img
-          key={waveNonce}
-          src={claudeWaveGif}
-          alt=""
-          className="rail-mascot-wave"
-          style={s.railMascot}
-        />
-      )}
-      <ProjectAvatar name={project.name} size={28} style={s.railAvatarStacked} />
-      <AttentionIndicator
-        status={status}
-        count={attentionCount}
-        showBadge={showBadge}
-        borderColor="var(--bg-sidebar)"
-      />
-    </button>
-  );
-}
-
 export function ProjectRail({
   projects,
   allTasks,
@@ -528,7 +449,6 @@ export function ProjectRail({
   onToggleTheme,
   singleProjectMode = false,
   forceCollapsed = false,
-  onShowReleasePage,
 }: {
   projects: Project[];
   allTasks: Task[];
@@ -770,35 +690,6 @@ export function ProjectRail({
 
   const showProjectGroupHeaders = railProjectGroups.some((group) => !group.isUngrouped);
 
-  // 折叠窄条只显示常驻项目；当前激活项目即使被设为非常驻也始终保留，避免失去当前上下文。
-  const railProjects = useMemo(
-    () => projects.filter((p) => !p.hiddenFromRail || p.id === activeProjectId),
-    [projects, activeProjectId],
-  );
-
-  // 招手触发:记录每个项目上一次的待确认数量,数量增加(0→≥1 或 n→n+1)时给该项目
-  // 递增一个 nonce,RailItem 据此播一次招手动画。首帧只做初始化播种,不为已有任务招手。
-  const prevAttentionRef = useRef<Map<string, number>>(new Map());
-  const seededRef = useRef(false);
-  const [waveNonces, setWaveNonces] = useState<Map<string, number>>(new Map());
-
-  useEffect(() => {
-    const triggered: string[] = [];
-    for (const p of railProjects) {
-      const count = getAttentionCount(allTasks, p.id);
-      const prev = prevAttentionRef.current.get(p.id) ?? 0;
-      if (seededRef.current && count > prev) triggered.push(p.id);
-      prevAttentionRef.current.set(p.id, count);
-    }
-    seededRef.current = true;
-    if (triggered.length === 0) return;
-    setWaveNonces((prev) => {
-      const next = new Map(prev);
-      for (const id of triggered) next.set(id, (next.get(id) ?? 0) + 1);
-      return next;
-    });
-  }, [allTasks, railProjects]);
-
   const footerIconButton = (
     title: string,
     icon: ReactNode,
@@ -938,77 +829,6 @@ export function ProjectRail({
         >
           <PanelLeftOpen size={15} strokeWidth={2} />
         </button>
-
-        {railProjects.map((project) => {
-          return (
-            <RailItem
-              key={project.id}
-              project={project}
-              isActive={project.id === activeProjectId}
-              status={getProjectStatus(allTasks, project.id)}
-              attentionCount={getAttentionCount(allTasks, project.id)}
-              showBadge={attentionBadge}
-              waveNonce={waveNonces.get(project.id) ?? 0}
-              onSwitch={() => handleProjectClick(project)}
-            />
-          );
-        })}
-
-        <div style={{ flex: 1 }} />
-
-        {!singleProjectMode &&
-          footerIconButton(
-            t("project.backHome"),
-            <Home size={14} strokeWidth={2.2} />,
-            onBack,
-            homeHov,
-            setHomeHov,
-          )}
-
-        {!singleProjectMode &&
-          footerIconButton(
-            t("appSettings.agentSettings"),
-            <Bot size={14} strokeWidth={2.1} />,
-            openAgentSettings,
-            agentSettingsHov,
-            setAgentSettingsHov,
-          )}
-
-        {!singleProjectMode &&
-          footerIconButton(
-            t("welcome.openProject"),
-            <Plus size={14} strokeWidth={2.5} />,
-            onOpen,
-            addHov,
-            setAddHov,
-          )}
-
-        {!singleProjectMode && (
-          <button
-            style={{
-              ...s.sidebarIconBtn,
-              width: 32,
-              height: 32,
-              justifyContent: "center",
-              border: "1px solid var(--border-dim)",
-              background: "var(--bg-card)",
-              opacity: 1,
-            }}
-            title={t("release.title")}
-            onClick={onShowReleasePage}
-          >
-            <Bell size={14} strokeWidth={1.6} color="var(--text-hint)" />
-          </button>
-        )}
-
-        {!singleProjectMode &&
-          footerIconButton(
-            isDark ? t("theme.switchToLight") : t("theme.switchToDark"),
-            isDark ? <Sun size={14} strokeWidth={2} /> : <Moon size={14} strokeWidth={2} />,
-            onToggleTheme,
-            themeHov,
-            setThemeHov,
-          )}
       </div>
     );
   }

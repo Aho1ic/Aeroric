@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   pairWithInvite,
+  PairingError,
+  preferredPairingError,
   RemoteConnection,
   type ConnectionStatus,
   type WebSocketLike,
@@ -161,7 +163,7 @@ function createHarness(overrides?: {
 }
 
 async function flush(): Promise<void> {
-  for (let i = 0; i < 4; i++) {
+  for (let i = 0; i < 8; i++) {
     await Promise.resolve();
   }
 }
@@ -592,6 +594,7 @@ describe("RemoteConnection", () => {
     expect(winner.terminalFrames.map((f) => Array.from(f))).toEqual([[9, 9]]);
 
     winner.receiveTerminal(new Uint8Array([0x74, 1, 1, 0]));
+    await flush();
     expect(received.length).toBe(1);
     expect(Array.from(new Uint8Array(received[0]))).toEqual([0x74, 1, 1, 0]);
   });
@@ -602,6 +605,7 @@ describe("RemoteConnection", () => {
     const sealed = winner.serverSession!.encryptFrame(KIND_CTRL, utf8("{}"));
     sealed[sealed.length - 1] ^= 1;
     winner.onmessage?.({ data: toArrayBuffer(sealed) });
+    await flush();
     expect(h.conn.status).toBe("reconnecting");
   });
 
@@ -618,6 +622,7 @@ describe("RemoteConnection", () => {
       seq: 1,
       data: { task_id: "t1", status: "running" },
     });
+    await flush();
     expect(pushes).toHaveLength(1);
 
     // 断线 → 重连(重新竞速 + 握手 + 认证)
@@ -674,6 +679,7 @@ describe("RemoteConnection", () => {
       seq: 7,
       data: { task_id: "t", status: "done" },
     });
+    await flush();
     winner.dropped();
     await vi.advanceTimersByTimeAsync(1_000);
     const second = h.sockets[2];
@@ -728,13 +734,44 @@ describe("pairWithInvite", () => {
     await expect(promise).resolves.toMatchObject({ deviceId: "d1", deviceToken: "tok" });
   });
 
+  it.each(["uint8array", "blob"] as const)(
+    "accepts an encrypted auth response delivered as %s",
+    async (kind) => {
+      const keys = testGenerateServerKeys();
+      const { promise, socket } = pairHarness(keys);
+      socket().open();
+      socket().acceptHandshake(keys);
+      const request = socket().lastFrame();
+      const sealed = socket().serverSession!.encryptFrame(
+        KIND_CTRL,
+        utf8(
+          JSON.stringify({
+            v: 2,
+            id: request.id,
+            ok: true,
+            result: { deviceId: "d1", deviceToken: "tok" },
+          }),
+        ),
+      );
+      const data =
+        kind === "uint8array" ? sealed : { arrayBuffer: async () => toArrayBuffer(sealed) };
+
+      socket().onmessage?.({ data });
+
+      await expect(promise).resolves.toMatchObject({ deviceId: "d1", deviceToken: "tok" });
+    },
+  );
+
   it("rejects on auth failure with server message", async () => {
     const keys = testGenerateServerKeys();
     const { promise, socket } = pairHarness(keys);
     socket().open();
     socket().acceptHandshake(keys);
     socket().replyError("Invalid or expired invite");
-    await expect(promise).rejects.toThrow("Invalid or expired invite");
+    await expect(promise).rejects.toMatchObject({
+      kind: "invite",
+      message: "Invalid or expired invite",
+    });
   });
 
   it("rejects when the host identity does not match the QR code", async () => {
@@ -742,7 +779,23 @@ describe("pairWithInvite", () => {
     const { promise, socket } = pairHarness(keys);
     socket().open();
     socket().acceptHandshake(testGenerateServerKeys());
-    await expect(promise).rejects.toThrow(/主机身份验证失败/);
+    await expect(promise).rejects.toMatchObject({
+      kind: "host_identity",
+      message: expect.stringMatching(/主机身份验证失败/),
+    });
+  });
+
+  it("reports an unsupported encrypted auth payload separately from a network failure", async () => {
+    const keys = testGenerateServerKeys();
+    const { promise, socket } = pairHarness(keys);
+    socket().open();
+    socket().acceptHandshake(keys);
+    socket().onmessage?.({ data: { unsupportedBinary: true } });
+
+    await expect(promise).rejects.toMatchObject({
+      kind: "auth_response",
+      message: expect.stringMatching(/无法解析.*加密认证响应/),
+    });
   });
 
   it("rejects on timeout", async () => {
@@ -757,6 +810,19 @@ describe("pairWithInvite", () => {
     const keys = testGenerateServerKeys();
     const { promise, socket } = pairHarness(keys);
     socket().onclose?.({ code: 1006 });
-    await expect(promise).rejects.toThrow(/防火墙和远程服务端口.*code=1006/);
+    await expect(promise).rejects.toMatchObject({
+      kind: "network",
+      message: expect.stringMatching(/防火墙和远程服务端口.*code=1006/),
+    });
+  });
+
+  it("prefers an invite or identity diagnosis over a later endpoint disconnect", () => {
+    const selected = preferredPairingError([
+      new PairingError("host_identity", "wrong host"),
+      new PairingError("network", "connection closed"),
+      new PairingError("invite", "Invalid or expired invite"),
+    ]);
+
+    expect(selected).toMatchObject({ kind: "invite", message: "Invalid or expired invite" });
   });
 });

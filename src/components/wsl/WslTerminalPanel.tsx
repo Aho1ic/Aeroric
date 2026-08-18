@@ -1,25 +1,7 @@
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from "react";
 import { Channel, invoke } from "@tauri-apps/api/core";
-import { Terminal as XTerm } from "@xterm/xterm";
-import { FitAddon } from "@xterm/addon-fit";
 import type { FontFamily, TerminalFontSize, ThemeVariant } from "../../types";
-import {
-  applyTerminalTextareaInputAttributes,
-  attachLinuxIMEFix,
-  attachMacWebKitShiftInputFix,
-  attachWindowsIMEPositionFix,
-} from "../terminalInputFix";
-import { attachSmartCopy } from "../terminalCopyHelper";
-import {
-  applyTerminalFontFamily,
-  applyTerminalFontSize,
-  attachMacWebKitTerminalGuard,
-  createSmartWriter,
-  initTerminal,
-  loadWebglAddon,
-  safeFit,
-  themeFor,
-} from "../terminalShared";
+import { createTerminalRuntime, type TerminalRuntime } from "../terminalRuntime";
 import "@xterm/xterm/css/xterm.css";
 
 export interface WslTerminalPanelHandle {
@@ -57,13 +39,19 @@ export const WslTerminalPanel = forwardRef<
   ref,
 ) {
   const containerRef = useRef<HTMLDivElement>(null);
-  const terminalRef = useRef<XTerm | null>(null);
-  const fitAddonRef = useRef<FitAddon | null>(null);
+  const runtimeRef = useRef<TerminalRuntime | null>(null);
   const shellIdRef = useRef(createWslShellId(projectId, distribution));
-  const lastSizeRef = useRef<{ cols: number; rows: number } | null>(null);
   const activeRef = useRef(active);
+  const themeVariantRef = useRef(themeVariant);
+  const terminalFontSizeRef = useRef(terminalFontSize);
+  const monoFontFamilyRef = useRef(monoFontFamily);
+  const onReadyRef = useRef(onReady);
   const [error, setError] = useState<string | null>(null);
   activeRef.current = active;
+  themeVariantRef.current = themeVariant;
+  terminalFontSizeRef.current = terminalFontSize;
+  monoFontFamilyRef.current = monoFontFamily;
+  onReadyRef.current = onReady;
 
   useImperativeHandle(
     ref,
@@ -75,7 +63,7 @@ export const WslTerminalPanel = forwardRef<
     [],
   );
 
-  const focus = useCallback(() => terminalRef.current?.focus(), []);
+  const focus = useCallback(() => runtimeRef.current?.focus(), []);
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -83,122 +71,76 @@ export const WslTerminalPanel = forwardRef<
     const shellId = shellIdRef.current;
     let cleaned = false;
     let startTimer: number | null = null;
-    const { term, fitAddon } = initTerminal(themeVariant, 5000, terminalFontSize, monoFontFamily);
-    terminalRef.current = term;
-    fitAddonRef.current = fitAddon;
-    term.open(container);
-    applyTerminalTextareaInputAttributes(term);
-    const disposeInputFix = attachMacWebKitShiftInputFix(term);
-    const disposeWindowsImeFix = attachWindowsIMEPositionFix(term);
-    loadWebglAddon(term);
-    const writer = createSmartWriter(term, () => themeVariant, { resumeOnAnyOutput: true });
-    const disposeGuard = attachMacWebKitTerminalGuard({ term, container, writer });
-    const disposeCopy = attachSmartCopy(term, {
-      onPaste: (text) => {
-        writer.pauseForUserInput();
-        invoke("send_input", { taskId: shellId, data: text }).catch(console.error);
+    const runtime = createTerminalRuntime({
+      container,
+      themeVariant: themeVariantRef.current,
+      terminalFontSize: terminalFontSizeRef.current,
+      monoFontFamily: monoFontFamilyRef.current,
+      isActive: () => activeRef.current,
+      onInput: (data) => {
+        invoke("send_input", { taskId: shellId, data }).catch(console.error);
+      },
+      onResize: ({ cols, rows }) => {
+        invoke("resize_pty", { taskId: shellId, cols, rows }).catch(console.error);
       },
     });
-    const input = attachLinuxIMEFix(term, (data) => {
-      writer.pauseForUserInput();
-      invoke("send_input", { taskId: shellId, data }).catch(console.error);
-    });
+    runtimeRef.current = runtime;
     const output = new Channel<string>();
     output.onmessage = (data) => {
-      if (!cleaned) writer.write(data);
-    };
-    const fit = () => {
-      const size = safeFit(fitAddon, term, container);
-      if (!size) return;
-      if (lastSizeRef.current?.cols === size.cols && lastSizeRef.current.rows === size.rows) return;
-      lastSizeRef.current = size;
-      invoke("resize_pty", { taskId: shellId, cols: size.cols, rows: size.rows }).catch(
-        console.error,
-      );
+      if (!cleaned) runtime.writer.write(data);
     };
     startTimer = window.setTimeout(() => {
-      fit();
+      runtime.fit();
       invoke("open_wsl_shell", {
         shellId,
         distribution,
         linuxProjectPath,
-        cols: term.cols,
-        rows: term.rows,
+        cols: runtime.term.cols,
+        rows: runtime.term.rows,
         onOutput: output,
       })
         .then(() => {
           if (!cleaned) {
             setError(null);
-            onReady?.();
-            if (activeRef.current) focus();
+            onReadyRef.current?.();
+            if (activeRef.current) runtime.focus();
           }
         })
         .catch((nextError) => {
           if (!cleaned) {
             setError(String(nextError));
-            term.writeln(`\r\nError: ${String(nextError)}`);
+            runtime.term.writeln(`\r\nError: ${String(nextError)}`);
           }
         });
     }, 50);
-    const observer = new ResizeObserver(() => {
-      if (activeRef.current) window.setTimeout(fit, 50);
-    });
-    observer.observe(container);
     return () => {
       cleaned = true;
       if (startTimer !== null) window.clearTimeout(startTimer);
-      observer.disconnect();
-      disposeCopy();
-      input.dispose();
-      disposeGuard();
-      disposeInputFix();
-      disposeWindowsImeFix();
       invoke("kill_wsl_shell", { shellId }).catch(console.error);
-      terminalRef.current = null;
-      fitAddonRef.current = null;
-      term.dispose();
+      runtime.dispose();
+      runtimeRef.current = null;
     };
-  }, [
-    distribution,
-    focus,
-    linuxProjectPath,
-    monoFontFamily,
-    onReady,
-    terminalFontSize,
-    themeVariant,
-  ]);
+  }, [distribution, linuxProjectPath]);
 
   useEffect(() => {
-    if (!active || !terminalRef.current || !fitAddonRef.current || !containerRef.current) return;
+    if (!active || !runtimeRef.current) return;
     window.requestAnimationFrame(() => {
-      if (!terminalRef.current || !fitAddonRef.current || !containerRef.current) return;
-      safeFit(fitAddonRef.current, terminalRef.current, containerRef.current);
+      if (!runtimeRef.current) return;
+      runtimeRef.current.fit();
       focus();
     });
   }, [active, focus]);
 
   useEffect(() => {
-    if (terminalRef.current) terminalRef.current.options.theme = themeFor(themeVariant);
+    runtimeRef.current?.updateTheme(themeVariant);
   }, [themeVariant]);
 
   useEffect(() => {
-    if (!terminalRef.current || !fitAddonRef.current || !containerRef.current) return;
-    applyTerminalFontSize(
-      terminalRef.current,
-      fitAddonRef.current,
-      terminalFontSize,
-      containerRef.current,
-    );
+    runtimeRef.current?.updateFontSize(terminalFontSize);
   }, [terminalFontSize]);
 
   useEffect(() => {
-    if (!terminalRef.current || !fitAddonRef.current || !containerRef.current) return;
-    applyTerminalFontFamily(
-      terminalRef.current,
-      fitAddonRef.current,
-      monoFontFamily,
-      containerRef.current,
-    );
+    runtimeRef.current?.updateFontFamily(monoFontFamily);
   }, [monoFontFamily]);
 
   return (

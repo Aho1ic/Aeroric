@@ -18,6 +18,7 @@ mod diagnostics;
 mod docker;
 mod dsh_home;
 mod dsh_plugins;
+mod dsh_protocol;
 mod dsh_webui;
 mod event_watcher;
 mod formatter;
@@ -33,6 +34,7 @@ mod node_runtime;
 mod notification;
 mod platform;
 mod ports;
+mod protocol_decode;
 mod pty;
 mod remote;
 mod remote_fs;
@@ -451,6 +453,7 @@ pub fn run() {
             session::read_session_messages,
             session::read_session_message_page,
             session::read_session_id,
+            session::session_supports_native_resume,
             session::recover_task_session,
             session::adopt_session_for_agent,
             session::export_session_markdown,
@@ -594,6 +597,7 @@ pub fn run() {
             dsh_webui::run_dsh_task,
             dsh_webui::prompt_dsh_task,
             dsh_webui::cancel_dsh_task,
+            dsh_webui::complete_dsh_task,
             dsh_webui::list_dsh_commands,
             dsh_webui::execute_dsh_command,
             dsh_webui::list_dsh_message_feedback,

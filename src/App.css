@@ -3025,6 +3025,19 @@ html.dark .notebook-rich-text font[color="#000000"] {
   min-width: 58px;
 }
 
+.agent-detail-modal .agent-config-switch-segmented.reasoning .agent-config-switch-segmented-item {
+  min-width: 0;
+  padding-inline: 5px;
+  font-size: 10.5px;
+}
+
+html.dark .agent-detail-modal {
+  border-color: rgba(255, 255, 255, 0.12) !important;
+  box-shadow:
+    0 24px 72px rgba(0, 0, 0, 0.58),
+    inset 0 1px 0 rgba(255, 255, 255, 0.06) !important;
+}
+
 .agent-config-switch-footer {
   background: color-mix(in srgb, var(--bg-card) 88%, var(--bg-subtle));
 }
