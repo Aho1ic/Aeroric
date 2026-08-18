@@ -1,4 +1,5 @@
 import { Settings, Moon, Sun } from "lucide-react";
+import type { CSSProperties } from "react";
 import type {
   ThemeMode,
   ThemeVariant,
@@ -37,6 +38,13 @@ export function SidebarFooterActions({
 }) {
   const { t } = useI18n();
   const isDark = themeVariant === "dark";
+  // 深色下这排按钮用 text-hint + 0.5 透明度几乎看不见，改成主文本色并取消降透明度。
+  // 浅色 / 护眼保持原有观感，只跟随下面的尺寸放大。
+  const footerIconSize = 17;
+  const footerIconColor = isDark ? "var(--text-primary)" : "var(--text-hint)";
+  const footerBtnStyle: CSSProperties = isDark
+    ? { ...s.sidebarFooterIconBtn, opacity: 1 }
+    : s.sidebarFooterIconBtn;
 
   return (
     <div
@@ -44,9 +52,13 @@ export function SidebarFooterActions({
       style={{ position: "relative", display: "inline-flex", minWidth: 0 }}
     >
       <div data-testid="sidebar-footer-actions" style={s.sidebarFooterActions}>
-        <NotificationBell />
+        <NotificationBell
+          buttonStyle={footerBtnStyle}
+          iconSize={footerIconSize}
+          iconColor={footerIconColor}
+        />
         <button
-          style={s.sidebarIconBtn}
+          style={footerBtnStyle}
           title={t("appSettings.title")}
           onClick={() => {
             window.dispatchEvent(
@@ -54,20 +66,26 @@ export function SidebarFooterActions({
             );
           }}
         >
-          <Settings size={14} strokeWidth={1.6} color="var(--text-hint)" />
+          <Settings size={footerIconSize} strokeWidth={1.6} color={footerIconColor} />
         </button>
         <button
-          style={s.sidebarIconBtn}
+          style={footerBtnStyle}
           title={isDark ? t("theme.switchToLight") : t("theme.switchToDark")}
           onClick={onToggleTheme}
         >
           {isDark ? (
-            <Sun size={14} strokeWidth={1.8} color="var(--text-hint)" />
+            <Sun size={footerIconSize} strokeWidth={1.8} color={footerIconColor} />
           ) : (
-            <Moon size={14} strokeWidth={1.8} color="var(--text-hint)" />
+            <Moon size={footerIconSize} strokeWidth={1.8} color={footerIconColor} />
           )}
         </button>
-        {ENABLE_USAGE_INSIGHTS ? <UsagePopover /> : null}
+        {ENABLE_USAGE_INSIGHTS ? (
+          <UsagePopover
+            buttonStyle={footerBtnStyle}
+            iconSize={footerIconSize}
+            iconColor={footerIconColor}
+          />
+        ) : null}
       </div>
     </div>
   );

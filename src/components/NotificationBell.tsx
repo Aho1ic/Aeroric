@@ -287,10 +287,12 @@ function NotificationEntry({
 export function NotificationBell({
   buttonStyle,
   iconSize = 14,
+  iconColor,
   renderAsContent = false,
 }: {
   buttonStyle?: CSSProperties;
   iconSize?: number;
+  iconColor?: string;
   renderAsContent?: boolean;
 } = {}) {
   const { t } = useI18n();
@@ -299,11 +301,12 @@ export function NotificationBell({
 
   const unreadCount = result?.unreadCount ?? 0;
   const isActive = unreadCount > 0 || loading || Boolean(error);
+  // 错误 / 未读的状态色优先级高于调用方指定的基色。
   const bellColor = error
     ? "var(--danger)"
     : unreadCount > 0
       ? "var(--accent)"
-      : "var(--text-hint)";
+      : (iconColor ?? "var(--text-hint)");
 
   function handleOverlayClick(e: React.MouseEvent<HTMLDivElement>) {
     if (e.target === e.currentTarget) {

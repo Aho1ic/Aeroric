@@ -91,7 +91,7 @@ export const palettes = {
     accentHover: "#79c0ff",
     accentSoft: "rgba(82, 139, 255, 0.18)",
     onAccent: "#f7fbff",
-    success: "#98c379",
+    success: "#22c55e",
     warning: "#e5c07b",
     danger: "#e06c75",
     focus: "#61afef",

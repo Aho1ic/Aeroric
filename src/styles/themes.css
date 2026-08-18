@@ -315,18 +315,18 @@ html.dark {
   --icon-file-image: #4ade80;
   --icon-file-wasm: #61afef;
 
-  --success: #98c379;
+  --success: #22c55e;
   --warning: #e5c07b;
   --danger: #e06c75;
   --warning-code-bg: rgba(229, 192, 123, 0.16);
-  --usage-good: #98c379;
+  --usage-good: #22c55e;
   --usage-warn: #e5c07b;
   --usage-danger: #e06c75;
   --usage-claude: #d19a66;
   --usage-codex: #8fb8d8;
   --usage-dsh: #56b6c2;
   --usage-chart-input: #61afef;
-  --usage-chart-output: #98c379;
+  --usage-chart-output: #22c55e;
   --usage-chart-cache-creation: #e5c07b;
   --usage-chart-cache-read: #9da5b4;
 

@@ -126,6 +126,24 @@ export const layout = {
     overflow: "visible",
     opacity: 0.5,
   },
+  // 首页左下角四个按钮（版本发布 / 应用设置 / 主题切换 / 用量）专用。
+  // 刻意不改共享的 sidebarIconBtn：那条样式还被 ProjectRail 侧栏复用，改基础值会连带放大项目页按钮。
+  // overflow/position 必须保留，否则 NotificationBell 的未读红点会被裁掉。
+  sidebarFooterIconBtn: {
+    background: "none",
+    border: "none",
+    cursor: "pointer",
+    padding: 7,
+    borderRadius: 8,
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    minWidth: 30,
+    minHeight: 30,
+    position: "relative",
+    overflow: "visible",
+    opacity: 0.5,
+  },
   // 首页项目区直接叠在递归动画画布上。这里刻意不加 background 底色与 backdrop-filter：
   // 半透明蒙层 + 24px 模糊会把画布压成一层虚影，动画等于看不见。需要可读性的地方
   // （搜索框、项目行、分组标题）各自有实心/描边样式，不依赖整块面板的毛玻璃。

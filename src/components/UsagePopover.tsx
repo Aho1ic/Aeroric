@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import type { CSSProperties } from "react";
 import * as Popover from "@radix-ui/react-popover";
 import { Activity } from "lucide-react";
 import type { ClaudeUsageData, CodexUsageData, UsageSource, UsageWindow } from "../types";
@@ -80,7 +81,15 @@ function codexSubtitle(source: UsageSource<CodexUsageData>): string | null {
   return parts.length > 0 ? parts.join(" · ") : null;
 }
 
-export function UsagePopover() {
+export function UsagePopover({
+  buttonStyle,
+  iconSize = 14,
+  iconColor = "var(--text-hint)",
+}: {
+  buttonStyle?: CSSProperties;
+  iconSize?: number;
+  iconColor?: string;
+} = {}) {
   const { t } = useI18n();
   const [open, setOpen] = useState(false);
   const { snapshot, loading, error } = useUsageSnapshot(open);
@@ -116,8 +125,8 @@ export function UsagePopover() {
   return (
     <Popover.Root open={open} onOpenChange={setOpen}>
       <Popover.Trigger asChild>
-        <button style={s.sidebarIconBtn} title={t("usage.title")}>
-          <Activity size={14} strokeWidth={1.8} color="var(--text-hint)" />
+        <button style={{ ...s.sidebarIconBtn, ...buttonStyle }} title={t("usage.title")}>
+          <Activity size={iconSize} strokeWidth={1.8} color={iconColor} />
         </button>
       </Popover.Trigger>
       <Popover.Portal>
