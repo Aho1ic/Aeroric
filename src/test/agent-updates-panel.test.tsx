@@ -216,12 +216,18 @@ describe("AgentUpdatesPanel", () => {
     await user.click(upgradeButtons[1]);
 
     await waitFor(() =>
-      expect(invokeMock).toHaveBeenCalledWith("upgrade_agent_versions", { agents: ["codex"] }),
+      expect(invokeMock).toHaveBeenCalledWith("upgrade_agent_versions", {
+        agents: ["codex"],
+        expectedVersions: { codex: "1.1.0" },
+      }),
     );
-    expect(invokeMock).not.toHaveBeenCalledWith("upgrade_agent_versions", { agents: ["claude"] });
+    expect(invokeMock).not.toHaveBeenCalledWith(
+      "upgrade_agent_versions",
+      expect.objectContaining({ agents: ["claude"] }),
+    );
   });
 
-  it("trusts a successful backend upgrade result even when the latest-version cache is stale", async () => {
+  it("shows the backend verification failure when the active version misses the target", async () => {
     invokeMock.mockImplementation((command: string, args?: { agents?: string[] }) => {
       if (command === "get_agent_tool_status") return Promise.resolve(toolStatuses);
       if (command === "get_agent_latest_versions") return Promise.resolve(latestVersions);
@@ -229,10 +235,11 @@ describe("AgentUpdatesPanel", () => {
         return Promise.resolve(
           (args?.agents ?? []).map((agent) => ({
             agent,
-            success: true,
+            success: false,
             previous_version: "1.0.0",
             current_version: "1.0.0",
-            message: "npm: upgraded and verified at the configured path",
+            message:
+              "verification failed: active path /usr/local/bin/codex; before 1.0.0; after 1.0.0; expected 1.1.0",
           })),
         );
       }
@@ -244,7 +251,8 @@ describe("AgentUpdatesPanel", () => {
     const upgradeButtons = await screen.findAllByRole("button", { name: "Upgrade" });
     await user.click(upgradeButtons[1]);
 
-    expect(await screen.findByText("Upgrade complete")).toBeVisible();
+    expect(await screen.findByText("Upgrade failed")).toBeVisible();
+    expect(await screen.findByText(/active path \/usr\/local\/bin\/codex/)).toBeVisible();
   });
 
   it("keeps multiple Agent upgrade buttons in the upgrading state independently", async () => {
@@ -268,8 +276,14 @@ describe("AgentUpdatesPanel", () => {
     await waitFor(() => {
       expect(screen.getAllByRole("button", { name: "Upgrading..." })).toHaveLength(2);
     });
-    expect(invokeMock).toHaveBeenCalledWith("upgrade_agent_versions", { agents: ["claude"] });
-    expect(invokeMock).toHaveBeenCalledWith("upgrade_agent_versions", { agents: ["codex"] });
+    expect(invokeMock).toHaveBeenCalledWith("upgrade_agent_versions", {
+      agents: ["claude"],
+      expectedVersions: { claude: "1.1.0" },
+    });
+    expect(invokeMock).toHaveBeenCalledWith("upgrade_agent_versions", {
+      agents: ["codex"],
+      expectedVersions: { codex: "1.1.0" },
+    });
 
     resolveUpgrade([
       { agent: "claude", success: true, current_version: "1.1.0" },
@@ -294,7 +308,10 @@ describe("AgentUpdatesPanel", () => {
         },
       }),
     );
-    expect(invokeMock).not.toHaveBeenCalledWith("upgrade_agent_versions", { agents: ["claude"] });
+    expect(invokeMock).not.toHaveBeenCalledWith(
+      "upgrade_agent_versions",
+      expect.objectContaining({ agents: ["claude"] }),
+    );
     expect(await screen.findByText("/managed/claude")).toBeInTheDocument();
     expect(screen.getByText("Login command:")).toBeInTheDocument();
   });
@@ -327,7 +344,10 @@ describe("AgentUpdatesPanel", () => {
     await user.click(upgradeButtons[1]);
 
     await waitFor(() =>
-      expect(invokeMock).toHaveBeenCalledWith("upgrade_agent_versions", { agents: ["codex"] }),
+      expect(invokeMock).toHaveBeenCalledWith("upgrade_agent_versions", {
+        agents: ["codex"],
+        expectedVersions: { codex: "1.1.0" },
+      }),
     );
   });
 
@@ -380,7 +400,10 @@ describe("AgentUpdatesPanel", () => {
     await user.click(await screen.findByRole("button", { name: "Install" }));
 
     await waitFor(() =>
-      expect(invokeMock).toHaveBeenCalledWith("upgrade_agent_versions", { agents: ["dsh"] }),
+      expect(invokeMock).toHaveBeenCalledWith("upgrade_agent_versions", {
+        agents: ["dsh"],
+        expectedVersions: { dsh: "0.1.0-rc.6" },
+      }),
     );
     expect(invokeMock).not.toHaveBeenCalledWith(
       "install_agent_tools",

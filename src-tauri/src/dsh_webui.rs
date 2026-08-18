@@ -10,14 +10,19 @@ use std::sync::Arc;
 use tauri::ipc::Channel;
 use tauri::{AppHandle, Emitter, State};
 use tokio::io::{AsyncBufReadExt, AsyncRead, BufReader};
+use tokio::net::TcpStream;
 use tokio::process::{Child, Command};
-use tokio::sync::{oneshot, Mutex as AsyncMutex, OwnedMutexGuard};
+use tokio::sync::{mpsc, oneshot, Mutex as AsyncMutex, OwnedMutexGuard};
+use tokio::task::JoinHandle;
 use tokio::time::{sleep, Duration, Instant};
+use tokio_tungstenite::{connect_async, tungstenite::Message, MaybeTlsStream, WebSocketStream};
 use url::{Host, Url};
 use uuid::Uuid;
 
 const DSH_WEB_STARTUP_TIMEOUT: Duration = Duration::from_secs(30);
 const DSH_WEB_OUTPUT_LIMIT: usize = 16 * 1024;
+const DSH_EVENT_CHANNEL_CAPACITY: usize = 64;
+const DSH_HTTP_ERROR_SNIPPET_BYTES: usize = 200;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -452,9 +457,9 @@ pub struct DshProtocolCapabilities {
 impl DshProtocolCapabilities {
     pub fn snapshot() -> Self {
         Self {
-            source_commit: "47f943859bef60e4160492346772ded9b24f765a",
-            package_version: "0.1.0-rc.5",
-            protocol_version: 1,
+            source_commit: "99f6f02fecdb7dff40c3fbc9470f5907c29f74ca",
+            package_version: "0.1.0-rc.7",
+            protocol_version: 2,
             rpc_methods: vec![
                 "session.list",
                 "session.search",
@@ -621,6 +626,17 @@ fn default_true() -> bool {
     true
 }
 
+fn bounded_utf8_prefix(value: &str, max_bytes: usize) -> &str {
+    if value.len() <= max_bytes {
+        return value;
+    }
+    let mut boundary = max_bytes;
+    while !value.is_char_boundary(boundary) {
+        boundary -= 1;
+    }
+    &value[..boundary]
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DshModelSelection {
     pub provider: String,
@@ -696,7 +712,7 @@ impl DshApiClient {
             return if trimmed.is_empty() {
                 Err(format!("DSH API {method} returned HTTP {status}"))
             } else {
-                let snippet = &trimmed[..trimmed.len().min(200)];
+                let snippet = bounded_utf8_prefix(trimmed, DSH_HTTP_ERROR_SNIPPET_BYTES);
                 Err(format!(
                     "DSH API {method} returned HTTP {status}: {snippet}"
                 ))
@@ -1967,9 +1983,175 @@ fn parse_sse_envelope(frame: &[u8]) -> Result<Option<Value>, String> {
     if data.is_empty() {
         return Ok(None);
     }
-    serde_json::from_str(&data)
-        .map(Some)
-        .map_err(|error| format!("DSH event frame was invalid JSON: {error}"))
+    parse_dsh_event_envelope(&data).map(Some)
+}
+
+fn parse_dsh_event_envelope(text: &str) -> Result<Value, String> {
+    let envelope: Value = serde_json::from_str(text)
+        .map_err(|error| format!("DSH event frame was invalid JSON: {error}"))?;
+    let valid = envelope.get("type").and_then(Value::as_str) == Some("server-request")
+        && envelope
+            .get("rpcId")
+            .and_then(Value::as_str)
+            .is_some_and(|rpc_id| !rpc_id.is_empty())
+        && envelope
+            .get("method")
+            .and_then(Value::as_str)
+            .is_some_and(|method| !method.is_empty())
+        && envelope.get("payload").is_some();
+    if !valid {
+        return Err("DSH event frame was not a valid server-request envelope".to_string());
+    }
+    Ok(envelope)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DshEventTransport {
+    WebSocket,
+    LegacySse,
+}
+
+impl DshEventTransport {
+    fn label(self) -> &'static str {
+        match self {
+            Self::WebSocket => "WebSocket",
+            Self::LegacySse => "legacy SSE",
+        }
+    }
+}
+
+/// A generation-scoped DSH event downlink. Dropping it aborts the transport
+/// worker immediately, which closes either the WebSocket or legacy SSE body.
+struct DshEventDownlink {
+    transport: DshEventTransport,
+    receiver: mpsc::Receiver<Result<Value, String>>,
+    worker: JoinHandle<()>,
+}
+
+impl DshEventDownlink {
+    async fn next(&mut self) -> Option<Result<Value, String>> {
+        self.receiver.recv().await
+    }
+}
+
+impl Drop for DshEventDownlink {
+    fn drop(&mut self) {
+        self.worker.abort();
+    }
+}
+
+fn dsh_event_websocket_url(base_url: &str, path: &str) -> Result<Url, String> {
+    let mut url = Url::parse(base_url)
+        .map_err(|error| format!("Invalid DSH event base URL {base_url:?}: {error}"))?;
+    let scheme = match url.scheme() {
+        "http" => "ws",
+        "https" => "wss",
+        other => return Err(format!("Unsupported DSH event URL scheme {other:?}")),
+    };
+    url.set_scheme(scheme)
+        .map_err(|_| format!("Could not convert DSH event URL to {scheme}"))?;
+    url.set_path(path);
+    url.set_query(None);
+    url.set_fragment(None);
+    Ok(url)
+}
+
+fn websocket_downlink(mut socket: WebSocketStream<MaybeTlsStream<TcpStream>>) -> DshEventDownlink {
+    let (sender, receiver) = mpsc::channel(DSH_EVENT_CHANNEL_CAPACITY);
+    let worker = tokio::spawn(async move {
+        while let Some(message) = socket.next().await {
+            let envelope = match message {
+                Ok(Message::Text(text)) => parse_dsh_event_envelope(text.as_ref()),
+                Ok(Message::Binary(_)) => {
+                    Err("DSH event downlink returned an unexpected binary frame".to_string())
+                }
+                Ok(Message::Close(_)) => break,
+                Ok(Message::Ping(_) | Message::Pong(_) | Message::Frame(_)) => continue,
+                Err(error) => Err(format!("DSH WebSocket event stream failed: {error}")),
+            };
+            let failed = envelope.is_err();
+            if sender.send(envelope).await.is_err() || failed {
+                break;
+            }
+        }
+    });
+    DshEventDownlink {
+        transport: DshEventTransport::WebSocket,
+        receiver,
+        worker,
+    }
+}
+
+fn legacy_sse_downlink(response: reqwest::Response) -> DshEventDownlink {
+    let (sender, receiver) = mpsc::channel(DSH_EVENT_CHANNEL_CAPACITY);
+    let worker = tokio::spawn(async move {
+        let mut stream = response.bytes_stream();
+        let mut buffer = Vec::new();
+        while let Some(chunk) = stream.next().await {
+            let chunk = match chunk {
+                Ok(chunk) => chunk,
+                Err(error) => {
+                    let _ = sender
+                        .send(Err(format!("DSH SSE event stream failed: {error}")))
+                        .await;
+                    return;
+                }
+            };
+            buffer.extend_from_slice(&chunk);
+            while let Some(frame) = take_sse_frame(&mut buffer) {
+                match parse_sse_envelope(&frame) {
+                    Ok(Some(envelope)) => {
+                        if sender.send(Ok(envelope)).await.is_err() {
+                            return;
+                        }
+                    }
+                    Ok(None) => {}
+                    Err(error) => {
+                        let _ = sender.send(Err(error)).await;
+                        return;
+                    }
+                }
+            }
+        }
+    });
+    DshEventDownlink {
+        transport: DshEventTransport::LegacySse,
+        receiver,
+        worker,
+    }
+}
+
+/// DSH rc.7 exposes network event streams as downlink-only WebSockets. Older
+/// audited releases exposed the same envelopes as SSE, so a failed WebSocket
+/// handshake falls back to the legacy GET without changing higher layers.
+async fn open_dsh_event_downlink(
+    api: &DshApiClient,
+    path: &str,
+) -> Result<DshEventDownlink, String> {
+    let websocket_url = dsh_event_websocket_url(&api.base_url, path)?;
+    match connect_async(websocket_url.as_str()).await {
+        Ok((socket, _)) => Ok(websocket_downlink(socket)),
+        Err(websocket_error) => {
+            let response = api
+                .client
+                .get(format!("{}{path}", api.base_url))
+                .header("accept", "text/event-stream")
+                .send()
+                .await
+                .map_err(|sse_error| {
+                    format!(
+                        "DSH WebSocket handshake failed: {websocket_error}; legacy SSE connection failed: {sse_error}"
+                    )
+                })?;
+            if !response.status().is_success() {
+                return Err(format!(
+                    "DSH WebSocket handshake failed: {websocket_error}; legacy SSE returned HTTP {}",
+                    response.status()
+                ));
+            }
+            Ok(legacy_sse_downlink(response))
+        }
+    }
 }
 
 async fn consume_session_events(
@@ -1983,29 +2165,12 @@ async fn consume_session_events(
 ) -> Result<(), String> {
     let mut opened = Some(events_open);
     loop {
-        let request = api
-            .client
-            .get(format!("{}/api/events.mux", api.base_url))
-            .header("accept", "text/event-stream")
-            .send();
-        let response = tokio::select! {
+        let downlink = tokio::select! {
             _ = &mut abort => return Ok(()),
-            response = request => response.map_err(|error| format!("Failed to subscribe to DSH events: {error}")),
+            downlink = open_dsh_event_downlink(api, "/api/events.mux") => downlink,
         };
-        let response = match response {
-            Ok(response) if response.status().is_success() => response,
-            Ok(response) => {
-                let error = format!("DSH event stream returned HTTP {}", response.status());
-                if let Some(sender) = opened.take() {
-                    let _ = sender.send(Err(error.clone()));
-                    return Err(error);
-                }
-                let _ = on_output.send(format!("\r\n{error}; reconnecting…\r\n"));
-                tokio::select! {
-                    _ = &mut abort => return Ok(()),
-                    _ = sleep(Duration::from_secs(1)) => continue,
-                }
-            }
+        let mut downlink = match downlink {
+            Ok(downlink) => downlink,
             Err(error) => {
                 if let Some(sender) = opened.take() {
                     let _ = sender.send(Err(error.clone()));
@@ -2021,28 +2186,22 @@ async fn consume_session_events(
         if let Some(sender) = opened.take() {
             let _ = sender.send(Ok(()));
         }
-        let mut stream = response.bytes_stream();
-        let mut buffer = Vec::new();
+        let transport = downlink.transport.label();
         let disconnected = loop {
             let next = tokio::select! {
                 _ = &mut abort => return Ok(()),
-                next = stream.next() => next,
+                next = downlink.next() => next,
             };
             match next {
-                Some(Ok(chunk)) => {
-                    buffer.extend_from_slice(&chunk);
-                    while let Some(frame) = take_sse_frame(&mut buffer) {
-                        if let Some(envelope) = parse_sse_envelope(&frame)? {
-                            if let Err(error) =
-                                dispatch_mux_frame(app, &envelope, task_id, session_id, on_output)
-                            {
-                                let _ = on_output.send(format!("\r\n{error}\r\n"));
-                            }
-                        }
+                Some(Ok(envelope)) => {
+                    if let Err(error) =
+                        dispatch_mux_frame(app, &envelope, task_id, session_id, on_output)
+                    {
+                        let _ = on_output.send(format!("\r\n{error}\r\n"));
                     }
                 }
-                Some(Err(error)) => break format!("DSH event stream failed: {error}"),
-                None => break "DSH event stream ended".to_string(),
+                Some(Err(error)) => break error,
+                None => break format!("DSH {transport} event stream ended"),
             }
         };
         let _ = on_output.send(format!("\r\n{disconnected}; reconnecting…\r\n"));
@@ -4132,9 +4291,9 @@ pub async fn update_dsh_settings(
         .await
 }
 
-// ── events.host SSE subscription ─────────────────────────────────────────────
+// ── events.host downlink subscription ────────────────────────────────────────
 
-/// Dispatch a single parsed frame from the `events.host` SSE stream.
+/// Dispatch a single parsed frame from the `events.host` downlink.
 /// Each frame type maps to a `dsh-host-*` Tauri event so the frontend
 /// can react to session/workspace lifecycle changes without polling.
 fn dispatch_host_frame(app: &AppHandle, payload: &Value) {
@@ -4160,93 +4319,73 @@ fn dispatch_host_frame(app: &AppHandle, payload: &Value) {
     let _ = app.emit(event_name, payload);
 }
 
-fn take_host_sse_frame(buffer: &mut String) -> Option<String> {
-    let lf = buffer.find("\n\n");
-    let crlf = buffer.find("\r\n\r\n");
-    let (index, delimiter_len) = match (lf, crlf) {
-        (Some(a), Some(b)) if a <= b => (a, 2),
-        (Some(_), Some(b)) => (b, 4),
-        (Some(a), None) => (a, 2),
-        (None, Some(b)) => (b, 4),
-        (None, None) => return None,
-    };
-    let frame = buffer[..index].to_string();
-    buffer.drain(..index + delimiter_len);
-    Some(frame)
-}
-
 /// Background task: subscribe to `events.host` and re-emit each frame as a
-/// Tauri event. Runs until the stream ends or the provided abort signal fires.
+/// Tauri event. Runs until the provided abort signal fires and reconnects after
+/// transport loss. The shared opener negotiates rc.7 WebSocket or legacy SSE.
 async fn consume_host_events(
     app: AppHandle,
     api: DshApiClient,
     mut abort: tokio::sync::oneshot::Receiver<()>,
 ) {
     loop {
-        let response = tokio::select! {
+        let downlink = tokio::select! {
             biased;
             _ = &mut abort => return,
-            result = api.client
-                .get(format!("{}/api/events.host", api.base_url))
-                .header("accept", "text/event-stream")
-                .send() => result,
+            result = open_dsh_event_downlink(&api, "/api/events.host") => result,
         };
 
-        let response = match response {
-            Ok(r) if r.status().is_success() => r,
-            Ok(r) => {
+        let mut downlink = match downlink {
+            Ok(downlink) => downlink,
+            Err(error) => {
                 let _ = app.emit(
                     "dsh-host-stream-error",
-                    json!({ "type": "stream/error", "error": format!("events.host returned HTTP {}", r.status()) }),
+                    json!({ "type": "stream/error", "error": format!("events.host connection failed: {error}") }),
                 );
-                // Back off before retry.
-                sleep(Duration::from_secs(5)).await;
-                continue;
-            }
-            Err(e) => {
-                let _ = app.emit(
-                    "dsh-host-stream-error",
-                    json!({ "type": "stream/error", "error": format!("events.host connection failed: {e}") }),
-                );
-                sleep(Duration::from_secs(5)).await;
+                tokio::select! {
+                    biased;
+                    _ = &mut abort => return,
+                    _ = sleep(Duration::from_secs(5)) => {}
+                }
                 continue;
             }
         };
-
-        let mut stream = response.bytes_stream();
-        let mut buffer = String::new();
+        let transport = downlink.transport.label();
 
         loop {
-            let chunk = tokio::select! {
+            let envelope = tokio::select! {
                 biased;
                 _ = &mut abort => return,
-                chunk = stream.next() => chunk,
+                envelope = downlink.next() => envelope,
             };
 
-            let chunk = match chunk {
-                Some(Ok(c)) => c,
-                Some(Err(_)) | None => break, // reconnect
-            };
-
-            buffer.push_str(&String::from_utf8_lossy(&chunk));
-            while let Some(frame) = take_host_sse_frame(&mut buffer) {
-                let data: String = frame
-                    .lines()
-                    .filter_map(|line| line.strip_prefix("data:").map(str::trim_start))
-                    .collect::<Vec<_>>()
-                    .join("\n");
-                if data.is_empty() {
-                    continue;
-                }
-                if let Ok(envelope) = serde_json::from_str::<Value>(&data) {
+            match envelope {
+                Some(Ok(envelope)) => {
                     let payload = envelope.get("payload").unwrap_or(&Value::Null);
                     dispatch_host_frame(&app, payload);
+                }
+                Some(Err(error)) => {
+                    let _ = app.emit(
+                        "dsh-host-stream-error",
+                        json!({ "type": "stream/error", "error": error }),
+                    );
+                    break;
+                }
+                None => {
+                    let _ = app.emit(
+                        "dsh-host-stream-error",
+                        json!({ "type": "stream/error", "error": format!("events.host {transport} stream ended") }),
+                    );
+                    break;
                 }
             }
         }
 
         // Stream ended without the abort signal — wait briefly then reconnect.
-        sleep(Duration::from_secs(2)).await;
+        tokio::select! {
+            biased;
+            _ = &mut abort => return,
+            _ = sleep(Duration::from_secs(2)) => {}
+        }
     }
 }
 
@@ -4258,7 +4397,7 @@ fn start_host_events_subscription(app: AppHandle, state: &DshWebUiManager, api: 
     tokio::spawn(consume_host_events(app, api, abort_rx));
 }
 
-/// Start subscribing to the `events.host` stream in the background.
+/// Start subscribing to the `events.host` downlink in the background.
 /// The subscription auto-reconnects on disconnect and stops when
 /// `stop_dsh_host_events` is called or the DSH process is shut down.
 #[tauri::command]
@@ -4334,7 +4473,7 @@ async fn dsh_export_http_error(response: reqwest::Response) -> String {
     if trimmed.is_empty() {
         format!("Session log export returned HTTP {status}")
     } else {
-        let snippet = &trimmed[..trimmed.len().min(200)];
+        let snippet = bounded_utf8_prefix(trimmed, DSH_HTTP_ERROR_SNIPPET_BYTES);
         format!("Session log export returned HTTP {status}: {snippet}")
     }
 }
@@ -4462,6 +4601,25 @@ pub async fn pick_dsh_host_directory(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use futures_util::SinkExt;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+
+    async fn read_http_request(stream: &mut TcpStream) -> String {
+        let mut request = Vec::new();
+        let mut chunk = [0_u8; 1024];
+        loop {
+            let read = stream.read(&mut chunk).await.expect("request is readable");
+            if read == 0 {
+                break;
+            }
+            request.extend_from_slice(&chunk[..read]);
+            if request.windows(4).any(|bytes| bytes == b"\r\n\r\n") {
+                break;
+            }
+        }
+        String::from_utf8(request).expect("request headers are UTF-8")
+    }
 
     fn call_payload(view: Value) -> Value {
         json!({ "event": { "type": "tool/call" }, "view": { "for": "call", "view": view } })
@@ -4493,6 +4651,204 @@ mod tests {
         assert!(parse_dsh_web_startup_url("dsh web: http://127.0.0.1:0")
             .expect_err("port zero is not an allocated listener")
             .contains("allocated port"));
+    }
+
+    #[test]
+    fn bounds_http_error_snippets_at_utf8_boundaries() {
+        let multibyte = format!("{}tail", "中".repeat(67));
+        let snippet = bounded_utf8_prefix(&multibyte, DSH_HTTP_ERROR_SNIPPET_BYTES);
+        assert_eq!(snippet, "中".repeat(66));
+        assert_eq!(snippet.len(), 198);
+
+        let ascii = "x".repeat(DSH_HTTP_ERROR_SNIPPET_BYTES + 1);
+        assert_eq!(
+            bounded_utf8_prefix(&ascii, DSH_HTTP_ERROR_SNIPPET_BYTES),
+            "x".repeat(DSH_HTTP_ERROR_SNIPPET_BYTES)
+        );
+        assert_eq!(
+            bounded_utf8_prefix("short", DSH_HTTP_ERROR_SNIPPET_BYTES),
+            "short"
+        );
+    }
+
+    #[test]
+    fn converts_dsh_event_urls_to_websocket_endpoints() {
+        assert_eq!(
+            dsh_event_websocket_url("http://127.0.0.1:43127", "/api/events.mux")
+                .expect("HTTP endpoint converts")
+                .as_str(),
+            "ws://127.0.0.1:43127/api/events.mux"
+        );
+        assert_eq!(
+            dsh_event_websocket_url("https://example.test/base?old=1", "/api/events.host")
+                .expect("HTTPS endpoint converts")
+                .as_str(),
+            "wss://example.test/api/events.host"
+        );
+    }
+
+    #[test]
+    fn accepts_only_valid_server_request_event_envelopes() {
+        let parsed = parse_dsh_event_envelope(
+            r#"{"type":"server-request","rpcId":"rpc-1","method":"session/subscribed","payload":{"type":"session/subscribed"}}"#,
+        )
+        .expect("valid server-request parses");
+        assert_eq!(parsed["method"], "session/subscribed");
+
+        assert!(parse_dsh_event_envelope("not json")
+            .expect_err("invalid JSON is rejected")
+            .contains("invalid JSON"));
+        assert!(parse_dsh_event_envelope(
+            r#"{"type":"client-request","rpcId":"rpc-1","method":"session/subscribed","payload":{}}"#,
+        )
+        .expect_err("wrong envelope direction is rejected")
+        .contains("server-request"));
+    }
+
+    #[tokio::test]
+    async fn opens_rc7_mux_and_host_websocket_downlinks_and_reconnects() {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("test listener binds");
+        let address = listener.local_addr().expect("listener has an address");
+        let seen_paths = Arc::new(Mutex::new(Vec::new()));
+        let server_paths = seen_paths.clone();
+        let server = tokio::spawn(async move {
+            for sequence in 0..3 {
+                let (stream, _) = listener.accept().await.expect("WebSocket connects");
+                let request_paths = server_paths.clone();
+                let mut socket = tokio_tungstenite::accept_hdr_async(
+                    stream,
+                    move |request: &tokio_tungstenite::tungstenite::handshake::server::Request,
+                          response: tokio_tungstenite::tungstenite::handshake::server::Response| {
+                        request_paths.lock().push(request.uri().path().to_string());
+                        Ok(response)
+                    },
+                )
+                .await
+                .expect("WebSocket handshake succeeds");
+                socket
+                    .send(Message::Text(
+                        json!({
+                            "type": "server-request",
+                            "rpcId": format!("rpc-{sequence}"),
+                            "method": if sequence == 1 { "host/config-changed" } else { "session/subscribed" },
+                            "payload": { "sequence": sequence },
+                        })
+                        .to_string()
+                        ,
+                    ))
+                    .await
+                    .expect("event frame is sent");
+                socket.close(None).await.expect("WebSocket closes cleanly");
+            }
+        });
+        let api = DshApiClient::new(format!("http://{address}")).expect("API client builds");
+
+        for (sequence, path) in [
+            (0, "/api/events.mux"),
+            (1, "/api/events.host"),
+            // A fresh connection after the first mux closes exercises reconnect setup.
+            (2, "/api/events.mux"),
+        ] {
+            let mut downlink = open_dsh_event_downlink(&api, path)
+                .await
+                .expect("rc7 WebSocket downlink opens");
+            assert_eq!(downlink.transport, DshEventTransport::WebSocket);
+            let envelope = tokio::time::timeout(Duration::from_secs(1), downlink.next())
+                .await
+                .expect("event arrives before timeout")
+                .expect("downlink remains open")
+                .expect("event frame is valid");
+            assert_eq!(envelope["type"], "server-request");
+            assert_eq!(envelope["payload"]["sequence"], sequence);
+        }
+
+        server.await.expect("test server exits");
+        assert_eq!(
+            *seen_paths.lock(),
+            vec!["/api/events.mux", "/api/events.host", "/api/events.mux"]
+        );
+    }
+
+    #[tokio::test]
+    async fn falls_back_to_legacy_sse_after_a_websocket_upgrade_rejection() {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("test listener binds");
+        let address = listener.local_addr().expect("listener has an address");
+        let server = tokio::spawn(async move {
+            let (mut websocket, _) = listener.accept().await.expect("WebSocket attempt connects");
+            let websocket_request = read_http_request(&mut websocket).await;
+            assert!(websocket_request.starts_with("GET /api/events.mux HTTP/1.1"));
+            websocket
+                .write_all(
+                    b"HTTP/1.1 426 Upgrade Required\r\nUpgrade: websocket\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                )
+                .await
+                .expect("426 response is written");
+            drop(websocket);
+
+            let (mut sse, _) = listener.accept().await.expect("SSE fallback connects");
+            let sse_request = read_http_request(&mut sse).await;
+            assert!(sse_request.starts_with("GET /api/events.mux HTTP/1.1"));
+            assert!(sse_request
+                .to_ascii_lowercase()
+                .contains("accept: text/event-stream"));
+            let body = concat!(
+                "data: {\"type\":\"server-request\",\"rpcId\":\"legacy\",",
+                "\"method\":\"session/subscribed\",\"payload\":{}}\n\n"
+            );
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(), body
+            );
+            sse.write_all(response.as_bytes())
+                .await
+                .expect("SSE response is written");
+        });
+        let api = DshApiClient::new(format!("http://{address}")).expect("API client builds");
+
+        let mut downlink = open_dsh_event_downlink(&api, "/api/events.mux")
+            .await
+            .expect("legacy SSE fallback opens");
+        assert_eq!(downlink.transport, DshEventTransport::LegacySse);
+        let envelope = tokio::time::timeout(Duration::from_secs(1), downlink.next())
+            .await
+            .expect("legacy event arrives before timeout")
+            .expect("legacy stream returns an event")
+            .expect("legacy frame is valid");
+        assert_eq!(envelope["rpcId"], "legacy");
+        server.await.expect("test server exits");
+    }
+
+    #[tokio::test]
+    async fn dropping_a_downlink_cancels_its_websocket_worker() {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("test listener binds");
+        let address = listener.local_addr().expect("listener has an address");
+        let (accepted_tx, accepted_rx) = oneshot::channel();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.expect("WebSocket connects");
+            let mut socket = tokio_tungstenite::accept_async(stream)
+                .await
+                .expect("WebSocket handshake succeeds");
+            let _ = accepted_tx.send(());
+            tokio::time::timeout(Duration::from_secs(1), socket.next())
+                .await
+                .expect("dropping the client closes the socket")
+        });
+        let api = DshApiClient::new(format!("http://{address}")).expect("API client builds");
+        let downlink = open_dsh_event_downlink(&api, "/api/events.mux")
+            .await
+            .expect("WebSocket downlink opens");
+        accepted_rx.await.expect("server accepted the WebSocket");
+
+        drop(downlink);
+
+        let closed = server.await.expect("test server exits");
+        assert!(closed.is_none() || closed.is_some_and(|result| result.is_err()));
     }
 
     #[test]

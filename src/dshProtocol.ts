@@ -8,9 +8,9 @@
  */
 
 export const DSH_PROTOCOL_SNAPSHOT = {
-  sourceCommit: "47f943859bef60e4160492346772ded9b24f765a",
-  packageVersion: "0.1.0-rc.5",
-  protocolVersion: 1,
+  sourceCommit: "99f6f02fecdb7dff40c3fbc9470f5907c29f74ca",
+  packageVersion: "0.1.0-rc.7",
+  protocolVersion: 2,
   rpcMethods: [
     "session.list",
     "session.search",

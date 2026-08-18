@@ -115,6 +115,66 @@ pub(super) fn parse_semver(v: &str) -> (u32, u32, u32) {
     )
 }
 
+pub(super) fn version_reaches_target(current: &str, expected: &str) -> bool {
+    fn parse(value: &str) -> Option<((u64, u64, u64), Vec<&str>)> {
+        let without_build = value
+            .trim()
+            .split_once('+')
+            .map_or(value.trim(), |(head, _)| head);
+        let (core, prerelease) = without_build
+            .split_once('-')
+            .map_or((without_build, Vec::new()), |(core, prerelease)| {
+                (core, prerelease.split('.').collect())
+            });
+        let mut parts = core.split('.');
+        let parsed = (
+            parts.next()?.parse().ok()?,
+            parts.next()?.parse().ok()?,
+            parts.next()?.parse().ok()?,
+        );
+        if parts.next().is_some()
+            || prerelease.iter().any(|part| {
+                part.is_empty() || !part.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+            })
+        {
+            return None;
+        }
+        Some((parsed, prerelease))
+    }
+
+    fn compare_prerelease(left: &[&str], right: &[&str]) -> std::cmp::Ordering {
+        use std::cmp::Ordering;
+
+        match (left.is_empty(), right.is_empty()) {
+            (true, true) => return Ordering::Equal,
+            (true, false) => return Ordering::Greater,
+            (false, true) => return Ordering::Less,
+            (false, false) => {}
+        }
+        for (left, right) in left.iter().zip(right) {
+            let ordering = match (left.parse::<u64>(), right.parse::<u64>()) {
+                (Ok(left), Ok(right)) => left.cmp(&right),
+                (Ok(_), Err(_)) => Ordering::Less,
+                (Err(_), Ok(_)) => Ordering::Greater,
+                (Err(_), Err(_)) => left.cmp(right),
+            };
+            if ordering != Ordering::Equal {
+                return ordering;
+            }
+        }
+        left.len().cmp(&right.len())
+    }
+
+    match (parse(current), parse(expected)) {
+        (Some(current), Some(expected)) => current
+            .0
+            .cmp(&expected.0)
+            .then_with(|| compare_prerelease(&current.1, &expected.1))
+            .is_ge(),
+        _ => current.trim() == expected.trim(),
+    }
+}
+
 pub(super) fn detect_claude_version_impl() -> Option<String> {
     let cache = CACHED_CLAUDE_VERSION.get_or_init(|| Mutex::new(None));
     let mut guard = cache.lock();
@@ -705,6 +765,15 @@ mod tests {
         assert_eq!(extract_semver("1.2.3-"), Some("1.2.3".to_string()));
         // rc 版本的三元组比较把后缀按 0 处理,不影响既有 gte 判定。
         assert_eq!(parse_semver("0.1.0-rc.6"), (0, 1, 0));
+    }
+
+    #[test]
+    fn verifies_release_and_prerelease_upgrade_targets_semantically() {
+        assert!(version_reaches_target("2.1.234", "2.1.234"));
+        assert!(version_reaches_target("2.1.235", "2.1.234"));
+        assert!(version_reaches_target("0.1.0-rc.7", "0.1.0-rc.6"));
+        assert!(!version_reaches_target("0.1.0-rc.6", "0.1.0-rc.7"));
+        assert!(!version_reaches_target("unknown", "2.1.234"));
     }
 
     #[test]

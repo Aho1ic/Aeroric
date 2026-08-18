@@ -25,6 +25,7 @@ type AgentLatestVersions = Record<AgentToolId, string>;
 
 interface RefreshAgentVersionsOptions {
   forceLatest?: boolean;
+  forceStatus?: boolean;
 }
 
 interface AgentVersionsContextValue {
@@ -83,8 +84,14 @@ export function AgentVersionsProvider({ children }: { children: React.ReactNode 
     };
   }, []);
 
-  const refreshStatuses = useCallback(() => {
-    if (statusRequestRef.current) return statusRequestRef.current;
+  const refreshStatuses = useCallback(async (force = false) => {
+    const pendingRequest = statusRequestRef.current;
+    if (pendingRequest) {
+      if (!force) return pendingRequest;
+      await pendingRequest;
+      // Another forced caller may already have started the post-upgrade probe.
+      if (statusRequestRef.current) return statusRequestRef.current;
+    }
     if (mountedRef.current) {
       setStatusLoading(true);
       setError(null);
@@ -133,7 +140,10 @@ export function AgentVersionsProvider({ children }: { children: React.ReactNode 
 
   const refreshVersions = useCallback(
     async (options?: RefreshAgentVersionsOptions) => {
-      await Promise.all([refreshStatuses(), refreshLatestVersions(options?.forceLatest === true)]);
+      await Promise.all([
+        refreshStatuses(options?.forceStatus === true),
+        refreshLatestVersions(options?.forceLatest === true),
+      ]);
     },
     [refreshLatestVersions, refreshStatuses],
   );
@@ -151,7 +161,7 @@ export function AgentVersionsProvider({ children }: { children: React.ReactNode 
       if (document.visibilityState === "visible") void refreshVersions();
     };
     const handleSettingsChanged = () => {
-      void refreshStatuses();
+      void refreshStatuses(true);
     };
 
     window.addEventListener("focus", refreshVisibleVersions);

@@ -367,6 +367,17 @@ describe("DatabaseView connection management", () => {
     await user.click(screen.getByRole("button", { name: /Next/i }));
     await user.click(screen.getByRole("button", { name: /SSH tunnel \/ proxy/i }));
     await user.click(screen.getByRole("button", { name: "Add SSH hop" }));
+    const layerRow = screen
+      .getByRole("button", { name: "Copy transport layer" })
+      .closest("[data-transport-layer-row]");
+    expect(layerRow).not.toBeNull();
+    expect(layerRow?.querySelector("button button")).toBeNull();
+    expect(layerRow?.querySelector("button input")).toBeNull();
+    expect(screen.getByRole("button", { name: "Select transport layer SSH 1" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    expect(screen.getByRole("checkbox", { name: "Enable transport layer SSH 1" })).toBeChecked();
     await user.type(screen.getByLabelText("SSH host"), "ssh.example.com");
     await user.type(screen.getByLabelText("SSH user"), "deployer");
     await user.type(screen.getByLabelText("SSH password"), "ssh_secret");

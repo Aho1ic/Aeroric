@@ -3454,11 +3454,53 @@ fn agent_upgrade_detection_program(configured_program: &str, launch: &AgentLaunc
     }
 }
 
+fn append_upgrade_verification(
+    channels: &mut Vec<AgentUpgradeChannel>,
+    active_program: &str,
+    previous_version: &str,
+    current_version: &str,
+    expected_version: Option<&str>,
+) {
+    if channels.iter().any(|channel| !channel.success) {
+        return;
+    }
+    let expected_version = expected_version
+        .map(str::trim)
+        .filter(|version| !version.is_empty());
+    let failed = current_version.trim().is_empty()
+        || expected_version
+            .is_some_and(|expected| !version_reaches_target(current_version, expected));
+    if !failed {
+        return;
+    }
+
+    channels.push(AgentUpgradeChannel {
+        channel: "verification".to_string(),
+        success: false,
+        message: format!(
+            "The active executable at {:?} did not reach the expected version {} (before: {}, after: {}).",
+            active_program,
+            expected_version.unwrap_or("unknown"),
+            if previous_version.trim().is_empty() {
+                "unknown"
+            } else {
+                previous_version
+            },
+            if current_version.trim().is_empty() {
+                "unknown"
+            } else {
+                current_version
+            },
+        ),
+    });
+}
+
 #[tauri::command]
 pub async fn upgrade_agent_versions(
     app: tauri::AppHandle,
     webui: tauri::State<'_, crate::dsh_webui::DshWebUiManager>,
     agents: Vec<String>,
+    expected_versions: Option<HashMap<String, String>>,
 ) -> Result<Vec<AgentUpgradeResult>, String> {
     // 前端允许多个 Agent 同时显示升级中；包管理器本身仍需串行，避免
     // 两个 Homebrew/npm 进程互相抢锁或覆盖同一份全局安装状态。
@@ -3478,6 +3520,31 @@ pub async fn upgrade_agent_versions(
         return Err("Select at least one agent to upgrade".to_string());
     }
 
+    let expected_versions = expected_versions.unwrap_or_default();
+    let mut expected_by_kind = HashMap::<AgentUpgradeKind, String>::new();
+    for agent in &requested {
+        let kind = upgrade_kind_for_agent(&settings, agent)
+            .ok_or_else(|| format!("Unknown agent: {agent}"))?;
+        let binary_agent = upgrade_binary_agent(kind);
+        let expected = expected_versions
+            .get(agent)
+            .or_else(|| expected_versions.get(binary_agent))
+            .map(|version| version.trim())
+            .filter(|version| !version.is_empty());
+        let Some(expected) = expected else {
+            continue;
+        };
+        if let Some(existing) = expected_by_kind.get(&kind) {
+            if existing != expected {
+                return Err(format!(
+                    "Conflicting expected versions for {binary_agent}: {existing} and {expected}"
+                ));
+            }
+        } else {
+            expected_by_kind.insert(kind, expected.to_string());
+        }
+    }
+
     type UpgradeOutcome = (
         String,
         String,
@@ -3494,7 +3561,7 @@ pub async fn upgrade_agent_versions(
         let binary_agent = upgrade_binary_agent(kind);
         let launch = get_agent_launch_spec_from_settings(&settings, binary_agent);
         let configured_program = get_agent_configured_path(&settings, binary_agent);
-        let effective_program = agent_upgrade_detection_program(&configured_program, &launch);
+        let active_program = agent_upgrade_detection_program(&configured_program, &launch);
         let suspended = if kind == AgentUpgradeKind::Dsh {
             match webui.suspend_for_upgrade(binary_agent).await {
                 Ok(suspended) => Some(suspended),
@@ -3528,9 +3595,10 @@ pub async fn upgrade_agent_versions(
             None
         };
         let launch_for_upgrade = launch.clone();
+        let upgrade_program = active_program.clone();
         let upgrade_task = tokio::task::spawn_blocking(move || {
             let previous_version = detect_version(&launch_for_upgrade).unwrap_or_default();
-            let channels = match build_agent_upgrade_commands(kind, &effective_program) {
+            let channels = match build_agent_upgrade_commands(kind, &upgrade_program) {
                 Ok(commands) => run_agent_upgrades(&commands),
                 Err(error) => vec![AgentUpgradeChannel {
                     channel: "detection".to_string(),
@@ -3555,16 +3623,13 @@ pub async fn upgrade_agent_versions(
                 }],
             ),
         };
-        if channels.iter().all(|channel| channel.success) && current_version.is_empty() {
-            channels.push(AgentUpgradeChannel {
-                channel: "verification".to_string(),
-                success: false,
-                message: format!(
-                    "The upgraded executable could not be verified at {}",
-                    launch.program
-                ),
-            });
-        }
+        append_upgrade_verification(
+            &mut channels,
+            &active_program,
+            &previous_version,
+            &current_version,
+            expected_by_kind.get(&kind).map(String::as_str),
+        );
         let runtime_recovery = if let Some(suspended) = suspended {
             let was_running = suspended.was_running();
             let recovery = webui.resume_after_upgrade(&app, suspended).await;
@@ -3672,6 +3737,55 @@ mod tests {
             r"C:\Users\test\AppData\Roaming\npm\codex.cmd"
         );
         assert_eq!(agent_upgrade_detection_program("", &launch), "cmd.exe");
+    }
+
+    #[test]
+    fn upgrade_verification_requires_the_active_executable_to_reach_the_target() {
+        let successful_update = AgentUpgradeChannel {
+            channel: "npm".to_string(),
+            success: true,
+            message: "updated".to_string(),
+        };
+        let mut verified = vec![successful_update.clone()];
+        append_upgrade_verification(
+            &mut verified,
+            "/Users/test/.local/bin/codex",
+            "1.0.0",
+            "1.1.0",
+            Some("1.1.0"),
+        );
+        assert_eq!(verified.len(), 1);
+
+        let mut unchanged = vec![successful_update.clone()];
+        append_upgrade_verification(
+            &mut unchanged,
+            "/Users/test/.local/bin/codex",
+            "1.0.0",
+            "1.0.0",
+            Some("1.1.0"),
+        );
+        let failure = unchanged.last().expect("verification failure is appended");
+        assert_eq!(failure.channel, "verification");
+        assert!(!failure.success);
+        assert!(failure.message.contains("/Users/test/.local/bin/codex"));
+        assert!(failure.message.contains("before: 1.0.0"));
+        assert!(failure.message.contains("after: 1.0.0"));
+        assert!(failure.message.contains("expected version 1.1.0"));
+
+        let mut undetectable = vec![successful_update];
+        append_upgrade_verification(
+            &mut undetectable,
+            "/Users/test/.local/bin/claude",
+            "1.0.0",
+            "",
+            Some("1.1.0"),
+        );
+        assert_eq!(undetectable.last().unwrap().channel, "verification");
+        assert!(undetectable
+            .last()
+            .unwrap()
+            .message
+            .contains("after: unknown"));
     }
 
     #[test]

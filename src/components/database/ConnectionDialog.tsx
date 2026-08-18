@@ -1225,96 +1225,119 @@ export function ConnectionDialog({
                   </div>
                   {draftTransportLayers.length > 0 && (
                     <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                      {draftTransportLayers.map((layer, index) => (
-                        <button
-                          key={layer.id}
-                          type="button"
-                          style={{
-                            ...s.databaseListButton,
-                            ...(selectedTransportLayer?.id === layer.id
-                              ? s.databaseListButtonActive
-                              : {}),
-                          }}
-                          onClick={() => setSelectedTransportLayerId(layer.id)}
-                        >
-                          <input
-                            type="checkbox"
-                            checked={layer.enabled}
-                            onClick={(event) => event.stopPropagation()}
-                            onChange={(event) =>
-                              updateTransportLayer(layer.id, { enabled: event.target.checked })
-                            }
-                          />
-                          <span style={{ color: "var(--text-hint)", width: 18 }}>{index + 1}</span>
-                          <span
+                      {draftTransportLayers.map((layer, index) => {
+                        const layerLabel =
+                          layer.name ||
+                          layer.host ||
+                          (layer.type === "ssh"
+                            ? t("database.addSshHop")
+                            : t("database.addProxyLayer"));
+                        const selected = selectedTransportLayer?.id === layer.id;
+                        return (
+                          <div
+                            key={layer.id}
+                            data-transport-layer-row
                             style={{
-                              flex: 1,
-                              minWidth: 0,
-                              overflow: "hidden",
-                              textOverflow: "ellipsis",
-                              whiteSpace: "nowrap",
+                              ...s.databaseListButton,
+                              ...(selected ? s.databaseListButtonActive : {}),
+                              cursor: "default",
                             }}
                           >
-                            {layer.name ||
-                              layer.host ||
-                              (layer.type === "ssh"
-                                ? t("database.addSshHop")
-                                : t("database.addProxyLayer"))}
-                          </span>
-                          <span
-                            style={{
-                              color: "var(--text-hint)",
-                              fontSize: 10,
-                              textTransform: "uppercase",
-                            }}
-                          >
-                            {layer.type}
-                          </span>
-                          <DbxButton
-                            variant="ghost"
-                            size="icon-xs"
-                            icon={Copy}
-                            aria-label={t("database.copyTransportLayer")}
-                            onClick={(event) => {
-                              event.stopPropagation();
-                              copyTransportLayer(layer.id);
-                            }}
-                          />
-                          {index > 0 && (
+                            <input
+                              type="checkbox"
+                              checked={layer.enabled}
+                              aria-label={t("database.transportLayerEnabled", { name: layerLabel })}
+                              onChange={(event) =>
+                                updateTransportLayer(layer.id, { enabled: event.target.checked })
+                              }
+                            />
+                            <DbxButton
+                              variant="ghost"
+                              size="sm"
+                              aria-label={t("database.selectTransportLayer", { name: layerLabel })}
+                              aria-pressed={selected}
+                              style={{
+                                flex: 1,
+                                minWidth: 0,
+                                height: 24,
+                                padding: "0 2px",
+                                justifyContent: "flex-start",
+                                color: "inherit",
+                              }}
+                              onClick={() => setSelectedTransportLayerId(layer.id)}
+                            >
+                              <span style={{ color: "var(--text-hint)", width: 18 }}>
+                                {index + 1}
+                              </span>
+                              <span
+                                style={{
+                                  flex: 1,
+                                  minWidth: 0,
+                                  overflow: "hidden",
+                                  textOverflow: "ellipsis",
+                                  whiteSpace: "nowrap",
+                                  textAlign: "left",
+                                }}
+                              >
+                                {layerLabel}
+                              </span>
+                              <span
+                                style={{
+                                  color: "var(--text-hint)",
+                                  fontSize: 10,
+                                  textTransform: "uppercase",
+                                }}
+                              >
+                                {layer.type}
+                              </span>
+                            </DbxButton>
                             <DbxButton
                               variant="ghost"
                               size="icon-xs"
-                              icon={ArrowUp}
-                              aria-label={t("database.moveTransportLayerUp")}
+                              icon={Copy}
+                              aria-label={t("database.copyTransportLayer")}
                               onClick={(event) => {
                                 event.stopPropagation();
-                                moveTransportLayer(layer.id, -1);
+                                copyTransportLayer(layer.id);
                               }}
                             />
-                          )}
-                          {index < draftTransportLayers.length - 1 && (
+                            {index > 0 && (
+                              <DbxButton
+                                variant="ghost"
+                                size="icon-xs"
+                                icon={ArrowUp}
+                                aria-label={t("database.moveTransportLayerUp")}
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  moveTransportLayer(layer.id, -1);
+                                }}
+                              />
+                            )}
+                            {index < draftTransportLayers.length - 1 && (
+                              <DbxButton
+                                variant="ghost"
+                                size="icon-xs"
+                                icon={ArrowDown}
+                                aria-label={t("database.moveTransportLayerDown")}
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  moveTransportLayer(layer.id, 1);
+                                }}
+                              />
+                            )}
                             <DbxButton
                               variant="ghost"
                               size="icon-xs"
-                              icon={ArrowDown}
-                              aria-label={t("database.moveTransportLayerDown")}
+                              icon={Trash2}
+                              aria-label={t("database.removeTransportLayer", { name: layerLabel })}
                               onClick={(event) => {
                                 event.stopPropagation();
-                                moveTransportLayer(layer.id, 1);
+                                removeTransportLayer(layer.id);
                               }}
                             />
-                          )}
-                          <DbxButton
-                            variant="ghost"
-                            size="icon-xs"
-                            icon={Trash2}
-                            onClick={(event) => {
-                              event.stopPropagation();
-                              removeTransportLayer(layer.id);
-                            }}
-                          />
-                        </button>
-                      ))}
+                          </div>
+                        );
+                      })}
                     </div>
                   )}
                   {selectedTransportLayer ? (

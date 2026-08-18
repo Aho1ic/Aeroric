@@ -190,15 +190,19 @@ export function AgentUpdatesPanel() {
           [agent]: results[0] ?? null,
         }));
       } else {
-        const results = await invoke<AgentUpgradeResult[]>("upgrade_agent_versions", {
-          agents: [agent],
-        });
+        const expectedVersion = latestVersions[agent];
+        const results = await invoke<AgentUpgradeResult[]>(
+          "upgrade_agent_versions",
+          expectedVersion
+            ? { agents: [agent], expectedVersions: { [agent]: expectedVersion } }
+            : { agents: [agent] },
+        );
         setUpgradeResults((current) => ({
           ...current,
           [agent]: results[0] ?? null,
         }));
       }
-      await refreshVersions({ forceLatest: true });
+      await refreshVersions({ forceLatest: true, forceStatus: true });
       window.dispatchEvent(new Event(APP_SETTINGS_CHANGED_EVENT));
     } catch (reason) {
       setActionError(installInvokeErrorMessage(reason, t));
@@ -325,7 +329,7 @@ export function AgentUpdatesPanel() {
             size="sm"
             onClick={() => {
               setActionError(null);
-              void refreshVersions({ forceLatest: true });
+              void refreshVersions({ forceLatest: true, forceStatus: true });
             }}
             disabled={busy}
           >

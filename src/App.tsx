@@ -648,7 +648,7 @@ function App() {
     );
   }, [monoFontFamily]);
 
-  // Keep the events.host SSE subscription alive while any DSH task is active.
+  // Keep the events.host downlink subscription alive while any DSH task is active.
   // The backend command is idempotent: calling start again while running
   // simply replaces the abort token, so it is safe to re-invoke.
   useEffect(() => {

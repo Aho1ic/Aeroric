@@ -365,8 +365,8 @@ pub async fn open_in_system_file_manager(path: String, project_path: String) -> 
 #[tauri::command]
 pub async fn read_dir_entries(path: String, project_path: String) -> Result<Vec<FsEntry>, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        validate_path_within(&path, &project_path, true)?;
-        let entries = std::fs::read_dir(&path).map_err(|e| e.to_string())?;
+        let directory = validate_path_within(&path, &project_path, false)?;
+        let entries = std::fs::read_dir(&directory).map_err(|e| e.to_string())?;
         let mut result: Vec<FsEntry> = entries
             .flatten()
             .filter(|entry| {
@@ -954,6 +954,31 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&root);
         let _ = std::fs::remove_dir_all(&outside);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn directory_listing_rejects_symlink_escape() {
+        let root = unique_test_dir("directory-symlink-policy");
+        let outside = unique_test_dir("directory-symlink-outside");
+        std::fs::create_dir_all(&root).expect("create root");
+        std::fs::create_dir_all(&outside).expect("create outside directory");
+        std::fs::write(outside.join("secret.txt"), "secret").expect("create outside file");
+        let link = root.join("linked-directory");
+        std::os::unix::fs::symlink(&outside, &link).expect("create directory symlink");
+
+        let result = read_dir_entries(
+            link.to_string_lossy().into_owned(),
+            root.to_string_lossy().into_owned(),
+        )
+        .await;
+
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&outside);
+        assert!(matches!(
+            result,
+            Err(error) if error == "Path is outside the allowed directory"
+        ));
     }
 }
 

@@ -236,10 +236,6 @@ pub struct RouterAgentRuntime {
 }
 
 impl RouterAgentRuntime {
-    pub fn candidates(&self) -> Vec<UpstreamTarget> {
-        self.candidates_for(None)
-    }
-
     pub fn candidates_for(&self, preferred_target: Option<&str>) -> Vec<UpstreamTarget> {
         if let Some(id) = preferred_target {
             // A target-qualified URL represents an Agent configuration, not a
@@ -1136,7 +1132,7 @@ mod tests {
                 ..RouterAgentPolicy::default()
             },
         };
-        assert_eq!(runtime.candidates()[0].id(), "second");
+        assert_eq!(runtime.candidates_for(None)[0].id(), "second");
         assert_eq!(runtime.candidates_for(Some("first"))[0].id(), "first");
         assert!(runtime.candidates_for(Some("missing")).is_empty());
 
@@ -1144,7 +1140,7 @@ mod tests {
         runtime.policy.failover_queue = vec!["second".to_string(), "first".to_string()];
         assert_eq!(
             runtime
-                .candidates()
+                .candidates_for(None)
                 .into_iter()
                 .map(|target| target.id().to_string())
                 .collect::<Vec<_>>(),
