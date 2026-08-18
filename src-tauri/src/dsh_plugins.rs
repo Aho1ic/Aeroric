@@ -840,13 +840,22 @@ pub fn set_dsh_default_preset(
     preset: String,
 ) -> Result<DshSettingsSnapshot, String> {
     let home = crate::dsh_home::ensure_dsh_home_for(&agent)?;
-    if !valid_preset_id(&preset) || !preset_exists(&home, &preset) {
+    set_dsh_default_preset_at(&home, &agent, &preset)
+}
+
+fn set_dsh_default_preset_at(
+    home: &Path,
+    agent: &str,
+    preset: &str,
+) -> Result<DshSettingsSnapshot, String> {
+    if !valid_preset_id(preset) || !preset_exists(home, preset) {
         return Err(format!("Unknown DSH Agent preset: {preset}"));
     }
-    let mut document = read_settings_document(&home)?;
-    section_mut(&mut document, "agent-presets")?.insert(yaml_key("default"), Value::String(preset));
-    write_settings_document(&home, &document)?;
-    settings_snapshot_at(&home, &agent)
+    let mut document = read_settings_document(home)?;
+    section_mut(&mut document, "agent-presets")?
+        .insert(yaml_key("default"), Value::String(preset.to_string()));
+    write_settings_document(home, &document)?;
+    settings_snapshot_at(home, agent)
 }
 
 #[cfg(test)]
@@ -947,6 +956,26 @@ mod tests {
         assert_eq!(snapshot.default_preset, "minimal");
         assert_eq!(snapshot.custom_presets[0].id, "my-agent");
         assert_eq!(snapshot.custom_presets[0].name.as_deref(), Some("My Agent"));
+        let _ = fs::remove_dir_all(home);
+    }
+
+    #[test]
+    fn default_preset_update_is_local_and_preserves_unrelated_yaml() {
+        let home = temp_home("default-preset");
+        fs::write(
+            home.join("settings.yaml"),
+            "foreign:\n  keep: yes\nagent-presets:\n  default: standard\n  customFlag: retained\n",
+        )
+        .unwrap();
+
+        let snapshot = set_dsh_default_preset_at(&home, "missing-test-agent", "code")
+            .expect("a built-in preset can be selected without DSH Web");
+        let document = fs::read_to_string(home.join("settings.yaml")).unwrap();
+
+        assert_eq!(snapshot.default_preset, "code");
+        assert!(document.contains("default: code"));
+        assert!(document.contains("customFlag: retained"));
+        assert!(document.contains("keep: yes"));
         let _ = fs::remove_dir_all(home);
     }
 

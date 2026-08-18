@@ -51,7 +51,7 @@ static CACHED_CODEX_VERSION: OnceLock<Mutex<Option<Option<String>>>> = OnceLock:
 static CACHED_DSH_VERSION: OnceLock<Mutex<Option<Option<String>>>> = OnceLock::new();
 static CACHED_SETTINGS: OnceLock<Mutex<Option<CachedSettings>>> = OnceLock::new();
 static SETTINGS_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-static AGENT_UPGRADE_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+static AGENT_UPGRADE_LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
 const CLAUDE_BUILTIN_MODEL_ALIASES: &[&str] = &["fable", "opus", "sonnet"];
 const CLAUDE_AGENT_SCRIPT_MARKER: &str = "# AERORIC_CLAUDE_WRAPPER_VERSION=6";
 const CLAUDE_AGENT_SCRIPT_MARKER_PREFIX: &str = "# AERORIC_CLAUDE_WRAPPER_VERSION=";
@@ -1305,8 +1305,8 @@ fn settings_lock() -> &'static Mutex<()> {
     SETTINGS_LOCK.get_or_init(|| Mutex::new(()))
 }
 
-fn agent_upgrade_lock() -> &'static Mutex<()> {
-    AGENT_UPGRADE_LOCK.get_or_init(|| Mutex::new(()))
+fn agent_upgrade_lock() -> &'static tokio::sync::Mutex<()> {
+    AGENT_UPGRADE_LOCK.get_or_init(|| tokio::sync::Mutex::new(()))
 }
 
 fn aeroric_dir() -> Result<PathBuf, String> {
@@ -3439,50 +3439,97 @@ pub struct AgentUpgradeResult {
     pub channel: String,
     #[serde(default)]
     pub managed: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime_recovery: Option<crate::dsh_webui::DshRuntimeRecovery>,
+}
+
+fn agent_upgrade_detection_program(configured_program: &str, launch: &AgentLaunchSpec) -> String {
+    // Upgrade-channel detection must follow the configured executable, not a
+    // wrapper program from the launch spec (for example cmd.exe for a Windows
+    // npm shim, or pnpm for a DSH source checkout).
+    if configured_program.trim().is_empty() {
+        launch.program.clone()
+    } else {
+        configured_program.to_string()
+    }
 }
 
 #[tauri::command]
 pub async fn upgrade_agent_versions(
+    app: tauri::AppHandle,
+    webui: tauri::State<'_, crate::dsh_webui::DshWebUiManager>,
     agents: Vec<String>,
 ) -> Result<Vec<AgentUpgradeResult>, String> {
-    tokio::task::spawn_blocking(move || {
-        // 前端允许多个 Agent 同时显示升级中；包管理器本身仍需串行，避免
-        // 两个 Homebrew/npm 进程互相抢锁或覆盖同一份全局安装状态。
-        let _upgrade_guard = agent_upgrade_lock().lock();
-        let settings = load_settings_internal();
-        let mut requested = Vec::new();
-        for agent in agents {
-            if requested.contains(&agent) {
-                continue;
-            }
-            if upgrade_kind_for_agent(&settings, &agent).is_none() {
-                return Err(format!("Unknown agent: {}", agent));
-            }
-            requested.push(agent);
+    // 前端允许多个 Agent 同时显示升级中；包管理器本身仍需串行，避免
+    // 两个 Homebrew/npm 进程互相抢锁或覆盖同一份全局安装状态。
+    let _upgrade_guard = agent_upgrade_lock().lock().await;
+    let settings = load_settings_internal();
+    let mut requested = Vec::new();
+    for agent in agents {
+        if requested.contains(&agent) {
+            continue;
         }
-        if requested.is_empty() {
-            return Err("Select at least one agent to upgrade".to_string());
+        if upgrade_kind_for_agent(&settings, &agent).is_none() {
+            return Err(format!("Unknown agent: {}", agent));
         }
+        requested.push(agent);
+    }
+    if requested.is_empty() {
+        return Err("Select at least one agent to upgrade".to_string());
+    }
 
-        let mut outcomes: HashMap<AgentUpgradeKind, (String, String, Vec<AgentUpgradeChannel>)> =
-            HashMap::new();
-        for agent in &requested {
-            let kind = upgrade_kind_for_agent(&settings, agent)
-                .ok_or_else(|| format!("Unknown agent: {}", agent))?;
-            if outcomes.contains_key(&kind) {
-                continue;
+    type UpgradeOutcome = (
+        String,
+        String,
+        Vec<AgentUpgradeChannel>,
+        Option<crate::dsh_webui::DshRuntimeRecovery>,
+    );
+    let mut outcomes: HashMap<AgentUpgradeKind, UpgradeOutcome> = HashMap::new();
+    for agent in &requested {
+        let kind = upgrade_kind_for_agent(&settings, agent)
+            .ok_or_else(|| format!("Unknown agent: {}", agent))?;
+        if outcomes.contains_key(&kind) {
+            continue;
+        }
+        let binary_agent = upgrade_binary_agent(kind);
+        let launch = get_agent_launch_spec_from_settings(&settings, binary_agent);
+        let configured_program = get_agent_configured_path(&settings, binary_agent);
+        let effective_program = agent_upgrade_detection_program(&configured_program, &launch);
+        let suspended = if kind == AgentUpgradeKind::Dsh {
+            match webui.suspend_for_upgrade(binary_agent).await {
+                Ok(suspended) => Some(suspended),
+                Err(error) => {
+                    let launch = launch.clone();
+                    let version = tokio::task::spawn_blocking(move || {
+                        detect_version(&launch).unwrap_or_default()
+                    })
+                    .await
+                    .map_err(|join_error| join_error.to_string())?;
+                    outcomes.insert(
+                        kind,
+                        (
+                            version.clone(),
+                            version,
+                            vec![AgentUpgradeChannel {
+                                channel: "runtime-recovery".to_string(),
+                                success: false,
+                                message: error.clone(),
+                            }],
+                            Some(crate::dsh_webui::DshRuntimeRecovery {
+                                errors: vec![error],
+                                ..crate::dsh_webui::DshRuntimeRecovery::default()
+                            }),
+                        ),
+                    );
+                    continue;
+                }
             }
-            let binary_agent = upgrade_binary_agent(kind);
-            let launch = get_agent_launch_spec_from_settings(&settings, binary_agent);
-            let configured_program = get_agent_configured_path(&settings, binary_agent);
-            // launch spec 已解析出 PATH/Homebrew/npm shim 中真正使用的程序；升级
-            // 检测必须使用这个有效路径，而不是原始配置里的 wrapper 路径。
-            let effective_program = if launch.program.trim().is_empty() {
-                configured_program
-            } else {
-                launch.program.clone()
-            };
-            let previous_version = detect_version(&launch).unwrap_or_default();
+        } else {
+            None
+        };
+        let launch_for_upgrade = launch.clone();
+        let upgrade_task = tokio::task::spawn_blocking(move || {
+            let previous_version = detect_version(&launch_for_upgrade).unwrap_or_default();
             let channels = match build_agent_upgrade_commands(kind, &effective_program) {
                 Ok(commands) => run_agent_upgrades(&commands),
                 Err(error) => vec![AgentUpgradeChannel {
@@ -3492,47 +3539,95 @@ pub async fn upgrade_agent_versions(
                 }],
             };
             clear_cached_versions();
-            let current_version = detect_version(&launch).unwrap_or_default();
-            outcomes.insert(kind, (previous_version, current_version, channels));
+            let current_version = detect_version(&launch_for_upgrade).unwrap_or_default();
+            (previous_version, current_version, channels)
+        })
+        .await;
+        let (previous_version, current_version, mut channels) = match upgrade_task {
+            Ok(outcome) => outcome,
+            Err(error) => (
+                String::new(),
+                String::new(),
+                vec![AgentUpgradeChannel {
+                    channel: "internal".to_string(),
+                    success: false,
+                    message: format!("The Agent upgrade worker failed: {error}"),
+                }],
+            ),
+        };
+        if channels.iter().all(|channel| channel.success) && current_version.is_empty() {
+            channels.push(AgentUpgradeChannel {
+                channel: "verification".to_string(),
+                success: false,
+                message: format!(
+                    "The upgraded executable could not be verified at {}",
+                    launch.program
+                ),
+            });
         }
-
-        clear_cached_versions();
-        Ok(requested
-            .into_iter()
-            .filter_map(|agent| {
-                let kind = upgrade_kind_for_agent(&settings, &agent)?;
-                let (previous_version, current_version, channels) = outcomes.get(&kind)?;
-                let success = channels.iter().all(|ch| ch.success);
-                let message = channels
-                    .iter()
-                    .map(|ch| {
-                        if ch.success {
-                            format!("{}: upgraded", ch.channel)
-                        } else {
-                            format!("{}: {}", ch.channel, ch.message)
-                        }
-                    })
-                    .collect::<Vec<_>>()
-                    .join("\n");
-                Some(AgentUpgradeResult {
-                    agent,
+        let runtime_recovery = if let Some(suspended) = suspended {
+            let was_running = suspended.was_running();
+            let recovery = webui.resume_after_upgrade(&app, suspended).await;
+            if was_running {
+                let success = recovery.errors.is_empty() && recovery.restarted;
+                channels.push(AgentUpgradeChannel {
+                    channel: "runtime-recovery".to_string(),
                     success,
-                    previous_version: previous_version.clone(),
-                    current_version: current_version.clone(),
-                    message,
-                    channels: channels.clone(),
-                    channel: channels
-                        .iter()
-                        .map(|channel| channel.channel.as_str())
-                        .collect::<Vec<_>>()
-                        .join(","),
-                    managed: false,
-                })
+                    message: if success {
+                        format!(
+                            "restarted; reconnected {} session(s); cancelled {} running turn(s)",
+                            recovery.reconnected_sessions, recovery.cancelled_turns
+                        )
+                    } else {
+                        recovery.errors.join("\n")
+                    },
+                });
+            }
+            Some(recovery)
+        } else {
+            None
+        };
+        outcomes.insert(
+            kind,
+            (
+                previous_version,
+                current_version,
+                channels,
+                runtime_recovery,
+            ),
+        );
+    }
+
+    clear_cached_versions();
+    Ok(requested
+        .into_iter()
+        .filter_map(|agent| {
+            let kind = upgrade_kind_for_agent(&settings, &agent)?;
+            let (previous_version, current_version, channels, runtime_recovery) =
+                outcomes.get(&kind)?;
+            let success = channels.iter().all(|ch| ch.success);
+            let message = channels
+                .iter()
+                .map(|ch| format!("{}: {}", ch.channel, ch.message))
+                .collect::<Vec<_>>()
+                .join("\n");
+            Some(AgentUpgradeResult {
+                agent,
+                success,
+                previous_version: previous_version.clone(),
+                current_version: current_version.clone(),
+                message,
+                channels: channels.clone(),
+                channel: channels
+                    .iter()
+                    .map(|channel| channel.channel.as_str())
+                    .collect::<Vec<_>>()
+                    .join(","),
+                managed: false,
+                runtime_recovery: runtime_recovery.clone(),
             })
-            .collect())
-    })
-    .await
-    .map_err(|error| error.to_string())?
+        })
+        .collect())
 }
 
 static SYSTEM_FONTS: OnceLock<Vec<String>> = OnceLock::new();
@@ -3560,6 +3655,24 @@ pub async fn get_system_fonts() -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn upgrade_detection_uses_the_configured_path_instead_of_a_launch_wrapper() {
+        let launch = AgentLaunchSpec {
+            program: "cmd.exe".to_string(),
+            args: vec!["/C".to_string(), "codex.cmd".to_string()],
+            ..AgentLaunchSpec::default()
+        };
+
+        assert_eq!(
+            agent_upgrade_detection_program(
+                r"C:\Users\test\AppData\Roaming\npm\codex.cmd",
+                &launch,
+            ),
+            r"C:\Users\test\AppData\Roaming\npm\codex.cmd"
+        );
+        assert_eq!(agent_upgrade_detection_program("", &launch), "cmd.exe");
+    }
 
     #[test]
     fn built_in_dsh_accepts_official_credentials_and_models() {

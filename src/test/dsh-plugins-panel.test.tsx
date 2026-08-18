@@ -38,9 +38,6 @@ describe("DshPluginsPanel", () => {
       if (command === "set_dsh_default_preset") {
         return Promise.resolve({ ...snapshot, defaultPreset: "code" });
       }
-      if (command === "set_dsh_web_default_preset") {
-        return Promise.resolve();
-      }
       return Promise.reject(new Error(`unexpected command: ${command}`));
     });
   });
@@ -111,9 +108,22 @@ describe("DshPluginsPanel", () => {
 
     await user.click(screen.getByRole("button", { name: /Code mode/ }));
     await waitFor(() => {
-      expect(invoke).toHaveBeenCalledWith("set_dsh_web_default_preset", {
+      expect(invoke).toHaveBeenCalledWith("set_dsh_default_preset", {
+        agent: "dsh",
         preset: "code",
       });
     });
+  });
+
+  it("does not start DSH Web just to render the local preset picker", async () => {
+    const user = userEvent.setup();
+    renderPanel();
+
+    await user.click(screen.getByRole("tab", { name: "Agent presets" }));
+
+    expect(await screen.findByText("Standard mode")).toBeInTheDocument();
+    const commands = vi.mocked(invoke).mock.calls.map(([command]) => command);
+    expect(commands).not.toContain("list_dsh_agent_presets");
+    expect(commands).not.toContain("start_dsh_webui");
   });
 });

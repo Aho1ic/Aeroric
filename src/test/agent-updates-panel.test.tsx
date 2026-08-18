@@ -221,6 +221,32 @@ describe("AgentUpdatesPanel", () => {
     expect(invokeMock).not.toHaveBeenCalledWith("upgrade_agent_versions", { agents: ["claude"] });
   });
 
+  it("trusts a successful backend upgrade result even when the latest-version cache is stale", async () => {
+    invokeMock.mockImplementation((command: string, args?: { agents?: string[] }) => {
+      if (command === "get_agent_tool_status") return Promise.resolve(toolStatuses);
+      if (command === "get_agent_latest_versions") return Promise.resolve(latestVersions);
+      if (command === "upgrade_agent_versions") {
+        return Promise.resolve(
+          (args?.agents ?? []).map((agent) => ({
+            agent,
+            success: true,
+            previous_version: "1.0.0",
+            current_version: "1.0.0",
+            message: "npm: upgraded and verified at the configured path",
+          })),
+        );
+      }
+      return Promise.resolve(null);
+    });
+    const user = userEvent.setup();
+    renderPanel();
+
+    const upgradeButtons = await screen.findAllByRole("button", { name: "Upgrade" });
+    await user.click(upgradeButtons[1]);
+
+    expect(await screen.findByText("Upgrade complete")).toBeVisible();
+  });
+
   it("keeps multiple Agent upgrade buttons in the upgrading state independently", async () => {
     const user = userEvent.setup();
     let resolveUpgrade!: (value: unknown[]) => void;

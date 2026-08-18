@@ -281,6 +281,12 @@ export interface AgentUpgradeResult {
   channels?: AgentUpgradeChannel[];
   channel?: string;
   managed?: boolean;
+  runtime_recovery?: {
+    restarted: boolean;
+    reconnected_sessions: number;
+    cancelled_turns: number;
+    errors: string[];
+  };
 }
 
 export type AgentInstallErrorCode =

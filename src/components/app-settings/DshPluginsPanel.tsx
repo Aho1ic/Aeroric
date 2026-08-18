@@ -68,15 +68,6 @@ interface DshAgentPreset {
   description?: string;
 }
 
-interface DshPresetWire {
-  id: string;
-  trust: "system" | "user";
-  isDefault: boolean;
-  name?: string;
-  description?: string;
-  broken?: string;
-}
-
 function errorMessage(error: unknown): string {
   if (typeof error === "string" && error.trim()) return error;
   if (error instanceof Error && error.message.trim()) return error.message;
@@ -184,28 +175,6 @@ export function DshPluginsPanel() {
         // The official roster remains useful before DSH is installed or in browser preview mode.
       },
     );
-    void invoke<DshPresetWire[]>("list_dsh_agent_presets")
-      .then((presets) => {
-        if (!current) return;
-        setPresetRuntimeError(null);
-        if (!presets.length) return;
-        const defaultPreset = presets.find((preset) => preset.isDefault)?.id;
-        setSettings((previous) => ({
-          ...previous,
-          ...(defaultPreset ? { defaultPreset } : {}),
-          customPresets: presets
-            .filter((preset) => preset.trust === "user")
-            .map((preset) => ({
-              id: preset.id,
-              name: preset.name,
-              description: preset.description,
-            })),
-        }));
-      })
-      .catch((error: unknown) => {
-        if (current) setPresetRuntimeError(errorMessage(error));
-        // The local YAML snapshot remains available before a Web profile can boot.
-      });
     return () => {
       current = false;
     };
@@ -777,13 +746,11 @@ function AgentPresetsView({
     setFailedPreset(null);
     onRuntimeError(null);
     try {
-      await invoke("set_dsh_web_default_preset", { preset: id });
-      // The Web API is authoritative. The local snapshot is only refreshed
-      // for display and may lag while DSH hot-reloads its settings document.
-      const snapshot = await invoke<DshSettingsSnapshot>("get_dsh_settings_snapshot", {
+      const snapshot = await invoke<DshSettingsSnapshot>("set_dsh_default_preset", {
         agent: "dsh",
+        preset: id,
       });
-      onSettingsChange({ ...DEFAULT_SETTINGS, ...snapshot, defaultPreset: id });
+      onSettingsChange({ ...DEFAULT_SETTINGS, ...snapshot });
       return true;
     } catch (error: unknown) {
       onRuntimeError(errorMessage(error));

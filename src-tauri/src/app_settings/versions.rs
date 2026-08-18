@@ -203,13 +203,83 @@ pub(super) fn canonical_program_path(program: &str) -> String {
         .into_owned()
 }
 
-pub(super) fn detected_upgrade_manager(program: &str) -> &'static str {
-    let normalized = canonical_program_path(program)
+fn normalized_program_path(program: &str) -> String {
+    canonical_program_path(program)
         .replace('\\', "/")
+        .to_ascii_lowercase()
+}
+
+fn program_path_evidence(program: &str) -> Vec<PathBuf> {
+    let mut evidence = Vec::new();
+    let mut push = |path: PathBuf| {
+        if !evidence.contains(&path) {
+            evidence.push(path);
+        }
+    };
+    let path = PathBuf::from(program);
+    push(path.clone());
+    if let Ok(target) = fs::read_link(&path) {
+        push(if target.is_absolute() {
+            target
+        } else {
+            path.parent().unwrap_or_else(|| Path::new("")).join(target)
+        });
+    }
+    push(PathBuf::from(canonical_program_path(program)));
+    evidence
+}
+
+fn normalized_program_path_evidence(program: &str) -> Vec<String> {
+    program_path_evidence(program)
+        .into_iter()
+        .map(|path| {
+            path.to_string_lossy()
+                .replace('\\', "/")
+                .to_ascii_lowercase()
+        })
+        .collect()
+}
+
+fn npm_shim_content(program: &str) -> Option<String> {
+    let extension = Path::new(program)
+        .extension()
+        .and_then(|value| value.to_str())?
         .to_ascii_lowercase();
-    if normalized.contains("/node_modules/") {
+    matches!(extension.as_str(), "cmd" | "bat" | "ps1")
+        .then(|| fs::read_to_string(program).ok())
+        .flatten()
+}
+
+fn detected_upgrade_manager_from_evidence(
+    normalized_program: &str,
+    shim_content: Option<&str>,
+) -> &'static str {
+    if normalized_program.contains("/node_modules/")
+        || shim_content.is_some_and(|content| {
+            let normalized = content.replace('\\', "/").to_ascii_lowercase();
+            normalized.contains("node_modules") && normalized.contains("node")
+        })
+    {
         "npm"
-    } else if normalized.contains("/cellar/") || normalized.contains("/caskroom/") {
+    } else if normalized_program.contains("/cellar/") || normalized_program.contains("/caskroom/") {
+        "homebrew"
+    } else {
+        "standalone"
+    }
+}
+
+pub(super) fn detected_upgrade_manager(program: &str) -> &'static str {
+    let evidence = normalized_program_path_evidence(program);
+    let shim = npm_shim_content(program);
+    if evidence
+        .iter()
+        .any(|path| detected_upgrade_manager_from_evidence(path, shim.as_deref()) == "npm")
+    {
+        "npm"
+    } else if evidence
+        .iter()
+        .any(|path| detected_upgrade_manager_from_evidence(path, None) == "homebrew")
+    {
         "homebrew"
     } else {
         "standalone"
@@ -224,14 +294,12 @@ pub(super) fn upgrade_manager_for_path_impl(program: &str) -> &'static str {
 /// 如 `brew install --cask claude-code`)两种安装方式,升级命令不同,
 /// 通过已配置二进制的真实路径区分。
 pub(super) fn detected_homebrew_flavor(program: &str) -> Option<&'static str> {
-    let normalized = canonical_program_path(program)
-        .replace('\\', "/")
-        .to_ascii_lowercase();
-    if normalized.contains("/node_modules/") {
+    let evidence = normalized_program_path_evidence(program);
+    if evidence.iter().any(|path| path.contains("/node_modules/")) {
         None
-    } else if normalized.contains("/caskroom/") {
+    } else if evidence.iter().any(|path| path.contains("/caskroom/")) {
         Some("cask")
-    } else if normalized.contains("/cellar/") {
+    } else if evidence.iter().any(|path| path.contains("/cellar/")) {
         Some("formula")
     } else {
         None
@@ -259,57 +327,195 @@ pub(super) fn package_manager_has_install(program: &str, args: &[&str]) -> bool 
     command.status().is_ok_and(|status| status.success())
 }
 
-#[allow(clippy::too_many_arguments)]
+fn package_manager_stdout(program: &str, args: &[&str]) -> Option<String> {
+    let mut command = Command::new(program);
+    crate::subprocess::configure_background_command(&mut command);
+    command
+        .args(args)
+        .envs(get_login_shell_env().iter().cloned())
+        .stdin(Stdio::null())
+        .stderr(Stdio::null());
+    let output = command.output().ok()?;
+    output
+        .status
+        .success()
+        .then(|| String::from_utf8_lossy(&output.stdout).trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn push_existing_candidate(candidates: &mut Vec<String>, path: PathBuf) {
+    if !path.is_file() {
+        return;
+    }
+    let value = path.to_string_lossy().into_owned();
+    if !candidates.iter().any(|candidate| candidate == &value) {
+        candidates.push(value);
+    }
+}
+
+fn npm_candidates_for_program(program: &str) -> Vec<String> {
+    let mut candidates = Vec::new();
+    if let Some(parent) = Path::new(program).parent() {
+        for name in ["npm", "npm.cmd", "npm.exe"] {
+            push_existing_candidate(&mut candidates, parent.join(name));
+        }
+    }
+    let canonical = PathBuf::from(canonical_program_path(program));
+    if let Some(node_modules) = canonical.ancestors().find(|ancestor| {
+        ancestor
+            .file_name()
+            .is_some_and(|name| name == "node_modules")
+    }) {
+        let root = node_modules.parent().unwrap_or(node_modules);
+        let prefixes = [
+            root.to_path_buf(),
+            root.parent().unwrap_or(root).to_path_buf(),
+        ];
+        for prefix in prefixes {
+            for candidate in [
+                prefix.join("npm"),
+                prefix.join("npm.cmd"),
+                prefix.join("bin").join("npm"),
+                prefix.join("bin").join("npm.cmd"),
+            ] {
+                push_existing_candidate(&mut candidates, candidate);
+            }
+        }
+    }
+    if let Some(program) = optional_program("npm") {
+        if !candidates.iter().any(|candidate| candidate == &program) {
+            candidates.push(program);
+        }
+    }
+    candidates
+}
+
+fn npm_candidate_matches_install(program: &str, launch_program: &str, package: &str) -> bool {
+    if !package_manager_has_install(program, &["list", "-g", "--depth=0", package]) {
+        return false;
+    }
+    let Some(prefix) = package_manager_stdout(program, &["prefix", "-g"]) else {
+        return false;
+    };
+    let Some(root) = package_manager_stdout(program, &["root", "-g"]) else {
+        return false;
+    };
+    npm_install_paths_match(launch_program, &prefix, &root, package)
+}
+
+fn npm_install_paths_match(launch_program: &str, prefix: &str, root: &str, package: &str) -> bool {
+    let launch = normalized_program_path(launch_program);
+    let package_root = canonical_program_path(&PathBuf::from(root).join(package).to_string_lossy())
+        .replace('\\', "/")
+        .to_ascii_lowercase();
+    if launch == package_root || launch.starts_with(&format!("{package_root}/")) {
+        return true;
+    }
+    let launch_parent = Path::new(launch_program)
+        .parent()
+        .map(|path| canonical_program_path(&path.to_string_lossy()))
+        .unwrap_or_default()
+        .replace('\\', "/")
+        .to_ascii_lowercase();
+    let prefix = canonical_program_path(prefix)
+        .replace('\\', "/")
+        .to_ascii_lowercase();
+    launch_parent == prefix || launch_parent == format!("{prefix}/bin")
+}
+
+fn matching_npm_program(launch_program: &str, package: &str) -> Option<String> {
+    npm_candidates_for_program(launch_program)
+        .into_iter()
+        .find(|program| npm_candidate_matches_install(program, launch_program, package))
+}
+
+fn matching_brew_program(launch_program: &str) -> Option<String> {
+    let evidence = program_path_evidence(launch_program);
+    let prefix = evidence.iter().find_map(|path| {
+        let path = path.to_string_lossy().replace('\\', "/");
+        let normalized = path.to_ascii_lowercase();
+        ["/cellar/", "/caskroom/"]
+            .into_iter()
+            .find_map(|marker| normalized.find(marker))
+            .map(|marker_index| path[..marker_index].to_string())
+    })?;
+    let prefix_path = fs::canonicalize(&prefix).unwrap_or_else(|_| PathBuf::from(prefix));
+    let candidate = prefix_path.join("bin").join("brew");
+    if candidate.is_file() {
+        return Some(candidate.to_string_lossy().into_owned());
+    }
+    let fallback = optional_program("brew")?;
+    let fallback_prefix = package_manager_stdout(&fallback, &["--prefix"])?;
+    let fallback_prefix =
+        fs::canonicalize(&fallback_prefix).unwrap_or_else(|_| PathBuf::from(fallback_prefix));
+    (fallback_prefix == prefix_path).then_some(fallback)
+}
+
+fn brew_candidates_for_program(program: &str) -> Vec<String> {
+    let mut candidates = Vec::new();
+    if let Some(parent) = Path::new(program).parent() {
+        push_existing_candidate(&mut candidates, parent.join("brew"));
+    }
+    if let Some(program) = optional_program("brew") {
+        if !candidates.contains(&program) {
+            candidates.push(program);
+        }
+    }
+    candidates
+}
+
+fn brew_program_for_launch_prefix(launch_program: &str) -> Option<String> {
+    let launch_parent = Path::new(launch_program).parent()?;
+    let launch_parent =
+        fs::canonicalize(launch_parent).unwrap_or_else(|_| launch_parent.to_path_buf());
+    brew_candidates_for_program(launch_program)
+        .into_iter()
+        .find(|program| {
+            package_manager_stdout(program, &["--prefix"])
+                .map(|prefix| fs::canonicalize(&prefix).unwrap_or_else(|_| PathBuf::from(prefix)))
+                .is_some_and(|prefix| launch_parent == prefix.join("bin"))
+        })
+}
+
+fn matching_brew_install(launch_program: &str, package: &str) -> Option<(String, &'static str)> {
+    if let Some(flavor) = detected_homebrew_flavor(launch_program) {
+        return matching_brew_program(launch_program)
+            .or_else(|| brew_program_for_launch_prefix(launch_program))
+            .map(|program| (program, flavor));
+    }
+    let program = brew_program_for_launch_prefix(launch_program)?;
+    let formula =
+        package_manager_has_install(&program, &["list", "--versions", "--formula", package]);
+    let cask = package_manager_has_install(&program, &["list", "--versions", "--cask", package]);
+    match (formula, cask) {
+        (true, false) => Some((program, "formula")),
+        (false, true) => Some((program, "cask")),
+        _ => None,
+    }
+}
+
 pub(super) fn build_agent_upgrade_commands_from_detection(
     kind: AgentUpgradeKind,
     launch_program: &str,
-    native_program: Option<String>,
     npm_program: Option<String>,
-    npm_installed: bool,
     brew_program: Option<String>,
-    brew_formula_installed: bool,
-    brew_cask_installed: bool,
+    brew_flavor: Option<&'static str>,
 ) -> Vec<AgentUpgradeCommand> {
     let configured_manager = detected_upgrade_manager(launch_program);
-    let brew_flavor = detected_homebrew_flavor(launch_program);
-    let mut commands = Vec::new();
-    let mut push_unique = |command: AgentUpgradeCommand| {
-        if !commands.iter().any(|existing: &AgentUpgradeCommand| {
-            existing.program == command.program && existing.args == command.args
-        }) {
-            commands.push(command);
-        }
-    };
-
-    if kind == AgentUpgradeKind::Claude && configured_manager == "standalone" {
-        push_unique(AgentUpgradeCommand {
-            channel: "native".to_string(),
-            program: launch_program.to_string(),
-            args: vec!["update".to_string()],
-        });
-    }
-    if kind == AgentUpgradeKind::Claude {
-        if let Some(program) = native_program {
-            push_unique(AgentUpgradeCommand {
-                channel: "native".to_string(),
-                program,
-                args: vec!["update".to_string()],
-            });
-        }
-    }
-    if npm_installed || configured_manager == "npm" {
+    if configured_manager == "npm" {
         if let Some(program) = npm_program {
             let package = match kind {
                 AgentUpgradeKind::Claude => "@anthropic-ai/claude-code@latest",
                 AgentUpgradeKind::Codex => "@openai/codex@latest",
                 AgentUpgradeKind::Dsh => "@deepseek-ai/dsh@latest",
             };
-            push_unique(AgentUpgradeCommand {
+            return vec![AgentUpgradeCommand {
                 channel: "npm".to_string(),
                 program,
                 args: vec!["install".to_string(), "-g".to_string(), package.to_string()],
-            });
+            }];
         }
+        return Vec::new();
     }
     let brew_name = match kind {
         AgentUpgradeKind::Claude => "claude-code",
@@ -318,101 +524,78 @@ pub(super) fn build_agent_upgrade_commands_from_detection(
         AgentUpgradeKind::Dsh => "",
     };
     if brew_name.is_empty() {
-        return commands;
+        return Vec::new();
     }
-    if brew_formula_installed || brew_flavor == Some("formula") {
-        if let Some(program) = brew_program.clone() {
-            push_unique(AgentUpgradeCommand {
-                channel: "homebrew".to_string(),
-                program,
-                args: vec![
-                    "upgrade".to_string(),
-                    "--formula".to_string(),
-                    brew_name.to_string(),
-                ],
-            });
-        }
+    if let (Some(program), Some(flavor)) = (brew_program, brew_flavor) {
+        return vec![AgentUpgradeCommand {
+            channel: "homebrew".to_string(),
+            program,
+            args: vec![
+                "upgrade".to_string(),
+                format!("--{flavor}"),
+                brew_name.to_string(),
+            ],
+        }];
     }
-    if brew_cask_installed || brew_flavor == Some("cask") {
-        if let Some(program) = brew_program {
-            push_unique(AgentUpgradeCommand {
-                channel: "homebrew".to_string(),
-                program,
-                args: vec![
-                    "upgrade".to_string(),
-                    "--cask".to_string(),
-                    brew_name.to_string(),
-                ],
-            });
-        }
+    if kind == AgentUpgradeKind::Claude && configured_manager == "standalone" {
+        return vec![AgentUpgradeCommand {
+            channel: "native".to_string(),
+            program: launch_program.to_string(),
+            args: vec!["update".to_string()],
+        }];
     }
-    commands
+    Vec::new()
 }
 
 pub(super) fn build_agent_upgrade_commands(
     kind: AgentUpgradeKind,
     launch_program: &str,
 ) -> Result<Vec<AgentUpgradeCommand>, String> {
-    let native_program = if kind == AgentUpgradeKind::Claude {
-        crate::platform::home_dir().and_then(|home| {
-            let path = if cfg!(windows) {
-                home.join(".local").join("bin").join("claude.exe")
-            } else {
-                home.join(".local").join("bin").join("claude")
-            };
-            path.is_file().then(|| path.to_string_lossy().into_owned())
-        })
-    } else {
-        None
-    };
-    let npm_program = optional_program("npm");
-    let brew_program = optional_program("brew");
     let npm_package = match kind {
         AgentUpgradeKind::Claude => "@anthropic-ai/claude-code",
         AgentUpgradeKind::Codex => "@openai/codex",
         AgentUpgradeKind::Dsh => "@deepseek-ai/dsh",
     };
-    // Homebrew 名称:Claude Code 官方走 cask(claude-code),Codex 官方走
-    // formula(codex);两种渠道都探测,哪种装了就升级哪种。dsh 仅 npm。
+    let manager = detected_upgrade_manager(launch_program);
+    let npm_program = (manager == "npm")
+        .then(|| matching_npm_program(launch_program, npm_package))
+        .flatten();
     let brew_name = match kind {
         AgentUpgradeKind::Claude => "claude-code",
         AgentUpgradeKind::Codex => "codex",
         AgentUpgradeKind::Dsh => "",
     };
-    let npm_installed = npm_program.as_deref().is_some_and(|program| {
-        package_manager_has_install(program, &["list", "-g", "--depth=0", npm_package])
-    });
-    let brew_formula_installed = !brew_name.is_empty()
-        && brew_program.as_deref().is_some_and(|program| {
-            package_manager_has_install(program, &["list", "--versions", "--formula", brew_name])
-        });
-    let brew_cask_installed = !brew_name.is_empty()
-        && brew_program.as_deref().is_some_and(|program| {
-            package_manager_has_install(program, &["list", "--versions", "--cask", brew_name])
-        });
+    let brew_install = (!brew_name.is_empty() && manager != "npm")
+        .then(|| matching_brew_install(launch_program, brew_name))
+        .flatten();
+    if kind == AgentUpgradeKind::Claude
+        && manager == "standalone"
+        && brew_install.is_none()
+        && brew_program_for_launch_prefix(launch_program).is_some()
+    {
+        return Err(format!(
+            "Cannot determine which Homebrew installation owns the active Claude Code executable at {launch_program:?}; refusing to run the native updater or modify another copy."
+        ));
+    }
+    let (brew_program, brew_flavor) = brew_install
+        .map(|(program, flavor)| (Some(program), Some(flavor)))
+        .unwrap_or((None, None));
     let commands = build_agent_upgrade_commands_from_detection(
         kind,
         launch_program,
-        native_program,
         npm_program,
-        npm_installed,
         brew_program,
-        brew_formula_installed,
-        brew_cask_installed,
+        brew_flavor,
     );
     if commands.is_empty() {
-        Err(match kind {
-            AgentUpgradeKind::Claude => {
-                "No supported Claude Code installation was detected (native, npm, or Homebrew)"
-                    .to_string()
-            }
-            AgentUpgradeKind::Codex => {
-                "No supported Codex installation was detected (npm or Homebrew)".to_string()
-            }
-            AgentUpgradeKind::Dsh => {
-                "No supported DeepSeek Harness installation was detected (npm)".to_string()
-            }
-        })
+        let label = match kind {
+            AgentUpgradeKind::Claude => "Claude Code",
+            AgentUpgradeKind::Codex => "Codex",
+            AgentUpgradeKind::Dsh => "DeepSeek Harness",
+        };
+        Err(format!(
+            "Cannot upgrade the active {label} installation at {launch_program:?} (detected channel: {manager}). Aeroric will not modify another installed copy. Repair this installation or configure the executable that should be used."
+        ))
     } else {
         Ok(commands)
     }
@@ -541,6 +724,19 @@ mod tests {
     }
 
     #[test]
+    fn detects_windows_npm_shim_from_its_node_modules_target() {
+        assert_eq!(
+            detected_upgrade_manager_from_evidence(
+                "c:/users/test/appdata/roaming/npm/codex.cmd",
+                Some(
+                    "@SETLOCAL\r\n@node \"%~dp0\\node_modules\\@openai\\codex\\bin\\codex.js\" %*"
+                ),
+            ),
+            "npm"
+        );
+    }
+
+    #[test]
     fn detects_homebrew_cask_and_standalone_agent_installs() {
         assert_eq!(
             detected_upgrade_manager("/opt/homebrew/Caskroom/codex/1.0.0/codex"),
@@ -550,6 +746,71 @@ mod tests {
             detected_upgrade_manager("/Users/test/.local/bin/claude"),
             "standalone"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn detects_an_npm_install_through_its_executable_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let root =
+            std::env::temp_dir().join(format!("aeroric-npm-symlink-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let bin = root.join("bin");
+        let target = root
+            .join("lib/node_modules/@openai/codex/bin")
+            .join("codex.js");
+        fs::create_dir_all(&bin).unwrap();
+        fs::create_dir_all(target.parent().unwrap()).unwrap();
+        fs::write(&target, "#!/usr/bin/env node\n").unwrap();
+        let launch = bin.join("codex");
+        symlink(&target, &launch).unwrap();
+
+        assert_eq!(detected_upgrade_manager(&launch.to_string_lossy()), "npm");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn detects_a_homebrew_cask_through_its_executable_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let root =
+            std::env::temp_dir().join(format!("aeroric-brew-symlink-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let bin = root.join("bin");
+        let target = root.join("Caskroom/claude-code/2.0.0/claude");
+        fs::create_dir_all(&bin).unwrap();
+        fs::create_dir_all(target.parent().unwrap()).unwrap();
+        fs::write(&target, "binary").unwrap();
+        let launch = bin.join("claude");
+        symlink(Path::new("../Caskroom/claude-code/2.0.0/claude"), &launch).unwrap();
+
+        assert_eq!(
+            detected_upgrade_manager(&launch.to_string_lossy()),
+            "homebrew"
+        );
+        assert_eq!(
+            detected_homebrew_flavor(&launch.to_string_lossy()),
+            Some("cask")
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn npm_prefix_matching_rejects_a_different_global_install() {
+        assert!(npm_install_paths_match(
+            "/prefix-a/lib/node_modules/@openai/codex/bin/codex.js",
+            "/prefix-a",
+            "/prefix-a/lib/node_modules",
+            "@openai/codex",
+        ));
+        assert!(!npm_install_paths_match(
+            "/prefix-a/lib/node_modules/@openai/codex/bin/codex.js",
+            "/prefix-b",
+            "/prefix-b/lib/node_modules",
+            "@openai/codex",
+        ));
     }
 
     #[test]
@@ -578,11 +839,8 @@ mod tests {
             AgentUpgradeKind::Codex,
             "/opt/homebrew/Cellar/codex/0.46.0/bin/codex",
             None,
-            None,
-            false,
             Some("/opt/homebrew/bin/brew".to_string()),
-            false,
-            false,
+            Some("formula"),
         );
 
         assert_eq!(commands.len(), 1);
@@ -592,64 +850,71 @@ mod tests {
     }
 
     #[test]
-    fn builds_both_homebrew_channels_when_formula_and_cask_are_installed() {
+    fn ignores_other_homebrew_channels_when_the_configured_program_is_standalone() {
         let commands = build_agent_upgrade_commands_from_detection(
             AgentUpgradeKind::Codex,
             "/aeroric-test/usr/local/bin/codex",
             None,
-            None,
-            false,
             Some("/opt/homebrew/bin/brew".to_string()),
-            true,
-            true,
+            None,
         );
 
-        assert_eq!(commands.len(), 2);
-        assert!(commands
-            .iter()
-            .any(|command| command.args.contains(&"--formula".to_string())));
-        assert!(commands
-            .iter()
-            .any(|command| command.args.contains(&"--cask".to_string())));
+        assert!(commands.is_empty());
     }
 
     #[test]
-    fn builds_upgrade_commands_for_npm_and_homebrew_installations_together() {
-        let commands = build_agent_upgrade_commands_from_detection(
-            AgentUpgradeKind::Codex,
-            "/aeroric-test/opt/homebrew/bin/codex",
-            None,
-            Some("/usr/local/bin/npm".to_string()),
-            true,
-            Some("/opt/homebrew/bin/brew".to_string()),
-            true,
-            false,
-        );
-
-        assert_eq!(commands.len(), 2);
-        assert!(commands.iter().any(|command| command.channel == "npm"));
-        assert!(commands.iter().any(|command| {
-            command.channel == "homebrew" && command.args.contains(&"--formula".to_string())
-        }));
-    }
-
-    #[test]
-    fn builds_native_npm_and_homebrew_claude_upgrade_commands_together() {
+    fn prefers_an_exact_homebrew_match_before_claude_native_update() {
         let commands = build_agent_upgrade_commands_from_detection(
             AgentUpgradeKind::Claude,
-            "/opt/homebrew/bin/claude",
-            Some("/Users/test/.local/bin/claude".to_string()),
-            Some("/usr/local/bin/npm".to_string()),
-            true,
+            "/aeroric-test/opt/homebrew/bin/claude",
+            None,
             Some("/opt/homebrew/bin/brew".to_string()),
-            false,
-            true,
+            Some("cask"),
         );
 
-        assert!(commands.iter().any(|command| command.channel == "native"));
-        assert!(commands.iter().any(|command| command.channel == "npm"));
-        assert!(commands.iter().any(|command| {
-            command.channel == "homebrew" && command.args.contains(&"--cask".to_string())
-        }));
+        assert_eq!(commands.len(), 1);
+        assert_eq!(commands[0].channel, "homebrew");
+        assert_eq!(commands[0].args, ["upgrade", "--cask", "claude-code"]);
+    }
+
+    #[test]
+    fn builds_only_the_configured_npm_upgrade() {
+        let commands = build_agent_upgrade_commands_from_detection(
+            AgentUpgradeKind::Codex,
+            "/opt/homebrew/lib/node_modules/@openai/codex/bin/codex.js",
+            Some("/usr/local/bin/npm".to_string()),
+            Some("/opt/homebrew/bin/brew".to_string()),
+            Some("formula"),
+        );
+
+        assert_eq!(commands.len(), 1);
+        assert_eq!(commands[0].channel, "npm");
+        assert_eq!(commands[0].program, "/usr/local/bin/npm");
+    }
+
+    #[test]
+    fn never_treats_an_npm_claude_symlink_target_as_native() {
+        let commands = build_agent_upgrade_commands_from_detection(
+            AgentUpgradeKind::Claude,
+            "/opt/homebrew/lib/node_modules/@anthropic-ai/claude-code/bin/claude.js",
+            Some("/usr/local/bin/npm".to_string()),
+            Some("/opt/homebrew/bin/brew".to_string()),
+            Some("cask"),
+        );
+
+        assert_eq!(commands.len(), 1);
+        assert_eq!(commands[0].channel, "npm");
+        assert_eq!(commands[0].program, "/usr/local/bin/npm");
+    }
+
+    #[test]
+    fn reports_the_active_path_for_an_unsupported_standalone_binary() {
+        let error =
+            build_agent_upgrade_commands(AgentUpgradeKind::Codex, "/opt/aeroric/custom/codex")
+                .expect_err("standalone Codex has no precise supported upgrade channel");
+
+        assert!(error.contains("/opt/aeroric/custom/codex"));
+        assert!(error.contains("detected channel: standalone"));
+        assert!(error.contains("will not modify another installed copy"));
     }
 }

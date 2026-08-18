@@ -843,6 +843,7 @@ fn upgrade_wsl_agent_versions_blocking(
                 channels,
                 channel,
                 managed: false,
+                runtime_recovery: None,
             })
         })
         .collect()

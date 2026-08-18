@@ -3,14 +3,21 @@ use parking_lot::{Mutex, RwLock};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::HashMap;
+use std::net::IpAddr;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tauri::ipc::Channel;
 use tauri::{AppHandle, Emitter, State};
+use tokio::io::{AsyncBufReadExt, AsyncRead, BufReader};
 use tokio::process::{Child, Command};
-use tokio::sync::oneshot;
-use tokio::time::{sleep, Duration};
+use tokio::sync::{oneshot, Mutex as AsyncMutex, OwnedMutexGuard};
+use tokio::time::{sleep, Duration, Instant};
+use url::{Host, Url};
 use uuid::Uuid;
+
+const DSH_WEB_STARTUP_TIMEOUT: Duration = Duration::from_secs(30);
+const DSH_WEB_OUTPUT_LIMIT: usize = 16 * 1024;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -35,11 +42,20 @@ pub struct DshWebUiState {
 struct WebUiProcess {
     child: Child,
     state: DshWebUiState,
+    output: Arc<Mutex<DshWebStartupOutput>>,
+}
+
+#[derive(Clone)]
+struct DshStartAttempt {
+    generation: u64,
+    result: Result<DshWebUiState, String>,
 }
 
 pub struct DshWebUiManager {
     processes: Arc<RwLock<HashMap<String, WebUiProcess>>>,
-    port_allocator: Arc<Mutex<PortAllocator>>,
+    lifecycle_locks: Arc<Mutex<HashMap<String, Arc<AsyncMutex<()>>>>>,
+    start_attempts: Arc<Mutex<HashMap<String, DshStartAttempt>>>,
+    shutting_down: Arc<AtomicBool>,
     active_sessions: Arc<Mutex<HashMap<String, ActiveDshSession>>>,
     cancelled_tasks: Arc<Mutex<std::collections::HashSet<String>>>,
     /// One long-lived events.mux subscription per Aeroric task.  DSH sessions
@@ -57,44 +73,36 @@ struct ActiveDshSession {
     on_output: Channel<String>,
 }
 
-struct PortAllocator {
-    next_port: u16,
-    used_ports: Vec<u16>,
+pub(crate) struct SuspendedDshRuntime {
+    _lifecycle_guard: OwnedMutexGuard<()>,
+    agent: String,
+    was_running: bool,
+    host_events_running: bool,
+    sessions: Vec<(String, ActiveDshSession)>,
+    cancelled_turns: usize,
 }
 
-impl PortAllocator {
-    fn new() -> Self {
-        Self {
-            next_port: 15800,
-            used_ports: Vec::new(),
-        }
+impl SuspendedDshRuntime {
+    pub(crate) fn was_running(&self) -> bool {
+        self.was_running
     }
+}
 
-    fn allocate(&mut self) -> Result<u16, String> {
-        for _ in 0..100 {
-            let port = self.next_port;
-            self.next_port += 1;
-            if self.next_port > 15900 {
-                self.next_port = 15800;
-            }
-            if !self.used_ports.contains(&port) {
-                self.used_ports.push(port);
-                return Ok(port);
-            }
-        }
-        Err("No available ports in range 15800-15900".to_string())
-    }
-
-    fn release(&mut self, port: u16) {
-        self.used_ports.retain(|&p| p != port);
-    }
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct DshRuntimeRecovery {
+    pub restarted: bool,
+    pub reconnected_sessions: usize,
+    pub cancelled_turns: usize,
+    pub errors: Vec<String>,
 }
 
 impl DshWebUiManager {
     pub fn new() -> Self {
         Self {
             processes: Arc::new(RwLock::new(HashMap::new())),
-            port_allocator: Arc::new(Mutex::new(PortAllocator::new())),
+            lifecycle_locks: Arc::new(Mutex::new(HashMap::new())),
+            start_attempts: Arc::new(Mutex::new(HashMap::new())),
+            shutting_down: Arc::new(AtomicBool::new(false)),
             active_sessions: Arc::new(Mutex::new(HashMap::new())),
             cancelled_tasks: Arc::new(Mutex::new(std::collections::HashSet::new())),
             session_stream_aborts: Arc::new(Mutex::new(HashMap::new())),
@@ -102,26 +110,67 @@ impl DshWebUiManager {
         }
     }
 
+    fn lifecycle_lock(&self, agent: &str) -> Arc<AsyncMutex<()>> {
+        self.lifecycle_locks
+            .lock()
+            .entry(agent.to_string())
+            .or_insert_with(|| Arc::new(AsyncMutex::new(())))
+            .clone()
+    }
+
+    fn start_generation(&self, agent: &str) -> u64 {
+        self.start_attempts
+            .lock()
+            .get(agent)
+            .map(|attempt| attempt.generation)
+            .unwrap_or(0)
+    }
+
+    fn newer_start_result(
+        &self,
+        agent: &str,
+        observed_generation: u64,
+    ) -> Option<Result<DshWebUiState, String>> {
+        self.start_attempts
+            .lock()
+            .get(agent)
+            .filter(|attempt| attempt.generation > observed_generation)
+            .map(|attempt| attempt.result.clone())
+    }
+
+    fn record_start_result(&self, agent: &str, result: Result<DshWebUiState, String>) {
+        let mut attempts = self.start_attempts.lock();
+        let generation = attempts
+            .get(agent)
+            .map(|attempt| attempt.generation.wrapping_add(1))
+            .unwrap_or(1);
+        attempts.insert(agent.to_string(), DshStartAttempt { generation, result });
+    }
+
     pub async fn shutdown_all(&self) {
+        self.shutting_down.store(true, Ordering::Release);
+        let lifecycle_locks = self
+            .lifecycle_locks
+            .lock()
+            .values()
+            .cloned()
+            .collect::<Vec<_>>();
+        let mut lifecycle_guards = Vec::with_capacity(lifecycle_locks.len());
+        for lifecycle_lock in lifecycle_locks {
+            lifecycle_guards.push(lifecycle_lock.lock_owned().await);
+        }
+        if let Some(abort) = self.host_events_abort.lock().take() {
+            let _ = abort.send(());
+        }
         for (_, abort) in self.session_stream_aborts.lock().drain() {
             let _ = abort.send(());
         }
         self.active_sessions.lock().clear();
-        let keys: Vec<String> = {
-            let processes = self.processes.read();
-            processes.keys().cloned().collect()
-        };
-
-        for agent in keys {
-            let process_opt = {
-                let mut processes = self.processes.write();
-                processes.remove(&agent)
-            };
-
-            if let Some(mut process) = process_opt {
-                let _ = Self::stop_process(&mut process.child).await;
-            }
+        let processes = self.processes.write().drain().collect::<Vec<_>>();
+        for (_, mut process) in processes {
+            let _ = Self::stop_process(&mut process.child).await;
         }
+        drop(lifecycle_guards);
     }
 
     async fn stop_process(child: &mut Child) -> Result<(), String> {
@@ -167,6 +216,213 @@ impl DshWebUiManager {
         } else {
             None
         }
+    }
+
+    pub(crate) async fn suspend_for_upgrade(
+        &self,
+        agent: &str,
+    ) -> Result<SuspendedDshRuntime, String> {
+        let lifecycle_lock = self.lifecycle_lock(agent);
+        let lifecycle_guard = lifecycle_lock.lock_owned().await;
+        if self.shutting_down.load(Ordering::Acquire) {
+            return Err("DSH Web is shutting down".to_string());
+        }
+        let registered_runtime = {
+            let mut processes = self.processes.write();
+            let Some(process) = processes.get_mut(agent) else {
+                return Ok(SuspendedDshRuntime {
+                    _lifecycle_guard: lifecycle_guard,
+                    agent: agent.to_string(),
+                    was_running: false,
+                    host_events_running: false,
+                    sessions: Vec::new(),
+                    cancelled_turns: 0,
+                });
+            };
+            let Some(base_url) = process.state.url.clone() else {
+                return Err("The registered DSH Web process has no base URL".to_string());
+            };
+            let live = if process.state.status == WebUiStatus::Running {
+                match process.child.try_wait() {
+                    Ok(None) => true,
+                    Ok(Some(status)) => {
+                        process.state.status = WebUiStatus::Error;
+                        process.state.error = Some(exited_dsh_web_error(status, &process.output));
+                        false
+                    }
+                    Err(error) => {
+                        return Err(format!("Could not inspect DSH Web before upgrade: {error}"));
+                    }
+                }
+            } else {
+                false
+            };
+            (base_url, live)
+        };
+        let (base_url, process_live) = registered_runtime;
+        if base_url.is_empty() {
+            return Err("The registered DSH Web process has an empty base URL".to_string());
+        }
+        let sessions = self
+            .active_sessions
+            .lock()
+            .iter()
+            .filter(|(_, session)| session.base_url == base_url)
+            .map(|(task_id, session)| (task_id.clone(), session.clone()))
+            .collect::<Vec<_>>();
+        let running_ids = if process_live {
+            let api = DshApiClient::new(base_url.clone())?;
+            let running_ids = api
+                .list_sessions()
+                .await?
+                .into_iter()
+                .filter(|session| session.running)
+                .map(|session| session.session_id)
+                .collect::<Vec<_>>();
+            for session_id in &running_ids {
+                api.cancel(session_id).await.map_err(|error| {
+                    format!(
+                        "Could not cancel running DSH session {session_id} before upgrade: {error}"
+                    )
+                })?;
+            }
+            if !running_ids.is_empty() {
+                let cancel_deadline = Instant::now() + Duration::from_secs(10);
+                loop {
+                    let still_running = api.list_sessions().await?.into_iter().any(|session| {
+                        running_ids.contains(&session.session_id) && session.running
+                    });
+                    if !still_running {
+                        break;
+                    }
+                    if Instant::now() >= cancel_deadline {
+                        return Err(
+                            "DSH did not finish cancelling active turns within 10 seconds; the upgrade was not started"
+                                .to_string(),
+                        );
+                    }
+                    sleep(Duration::from_millis(200)).await;
+                }
+            }
+            running_ids
+        } else {
+            Vec::new()
+        };
+
+        for (task_id, _) in &sessions {
+            if let Some(abort) = self.session_stream_aborts.lock().remove(task_id) {
+                let _ = abort.send(());
+            }
+        }
+        let host_events_running = if agent == "dsh" {
+            self.host_events_abort
+                .lock()
+                .take()
+                .map(|abort| {
+                    let _ = abort.send(());
+                    true
+                })
+                .unwrap_or(false)
+        } else {
+            false
+        };
+        let mut process = self.processes.write().remove(agent);
+        if let Some(process) = process.as_mut() {
+            DshWebUiManager::stop_process(&mut process.child).await?;
+        }
+        Ok(SuspendedDshRuntime {
+            _lifecycle_guard: lifecycle_guard,
+            agent: agent.to_string(),
+            was_running: true,
+            host_events_running,
+            sessions,
+            cancelled_turns: running_ids.len(),
+        })
+    }
+
+    pub(crate) async fn resume_after_upgrade(
+        &self,
+        app: &AppHandle,
+        suspended: SuspendedDshRuntime,
+    ) -> DshRuntimeRecovery {
+        let mut recovery = DshRuntimeRecovery {
+            cancelled_turns: suspended.cancelled_turns,
+            ..DshRuntimeRecovery::default()
+        };
+        if !suspended.was_running {
+            return recovery;
+        }
+        let web = match ensure_dsh_webui_locked(&suspended.agent, self).await {
+            Ok(web) => web,
+            Err(error) => {
+                recovery
+                    .errors
+                    .push(format!("DSH Web restart failed after upgrade: {error}"));
+                return recovery;
+            }
+        };
+        recovery.restarted = true;
+        let Some(base_url) = web.url else {
+            recovery
+                .errors
+                .push("DSH Web restart returned no URL".to_string());
+            return recovery;
+        };
+        let api = match DshApiClient::new(base_url.clone()) {
+            Ok(api) => api,
+            Err(error) => {
+                recovery.errors.push(error);
+                return recovery;
+            }
+        };
+        for (task_id, session) in suspended.sessions {
+            if let Some(active) = self.active_sessions.lock().get_mut(&task_id) {
+                active.base_url = base_url.clone();
+            }
+            let reconnect = tokio::time::timeout(
+                Duration::from_secs(10),
+                start_task_session_stream(
+                    app,
+                    self,
+                    &task_id,
+                    &api,
+                    &session.session_id,
+                    &session.on_output,
+                ),
+            )
+            .await;
+            match reconnect {
+                Ok(Ok(())) => {
+                    recovery.reconnected_sessions += 1;
+                    let _ = session.on_output.send(
+                        "\r\nDeepSeek Harness restarted after upgrade; this session was reconnected.\r\n"
+                            .to_string(),
+                    );
+                }
+                Ok(Err(error)) => {
+                    if let Some(abort) = self.session_stream_aborts.lock().remove(&task_id) {
+                        let _ = abort.send(());
+                    }
+                    recovery.errors.push(format!(
+                        "Could not reconnect DSH task {task_id} (session {}): {error}",
+                        session.session_id
+                    ));
+                }
+                Err(_) => {
+                    if let Some(abort) = self.session_stream_aborts.lock().remove(&task_id) {
+                        let _ = abort.send(());
+                    }
+                    recovery.errors.push(format!(
+                        "Timed out reconnecting DSH task {task_id} (session {}) after 10 seconds",
+                        session.session_id
+                    ));
+                }
+            }
+        }
+        if suspended.host_events_running {
+            start_host_events_subscription(app.clone(), self, api);
+        }
+        recovery
     }
 }
 
@@ -407,6 +663,7 @@ struct DshSettingsDescription {
 impl DshApiClient {
     pub fn new(base_url: String) -> Result<Self, String> {
         let client = reqwest::Client::builder()
+            .no_proxy()
             .build()
             .map_err(|error| format!("Failed to create DSH API client: {error}"))?;
         Ok(Self { client, base_url })
@@ -687,28 +944,252 @@ impl DshApiClient {
     }
 }
 
-async fn ensure_dsh_webui(agent: &str, state: &DshWebUiManager) -> Result<DshWebUiState, String> {
+#[derive(Default)]
+struct DshWebStartupOutput {
+    stdout: String,
+    stderr: String,
+}
+
+fn append_bounded_output(target: &mut String, line: &str) {
+    target.push_str(line);
+    target.push('\n');
+    if target.len() <= DSH_WEB_OUTPUT_LIMIT {
+        return;
+    }
+    let remove_at_least = target.len() - DSH_WEB_OUTPUT_LIMIT;
+    let split = target
+        .char_indices()
+        .find_map(|(index, _)| (index >= remove_at_least).then_some(index))
+        .unwrap_or(target.len());
+    target.drain(..split);
+}
+
+fn startup_output_detail(output: &Arc<Mutex<DshWebStartupOutput>>) -> String {
+    let output = output.lock();
+    let mut sections = Vec::new();
+    if !output.stderr.trim().is_empty() {
+        sections.push(format!("stderr:\n{}", output.stderr.trim()));
+    }
+    if !output.stdout.trim().is_empty() {
+        sections.push(format!("stdout:\n{}", output.stdout.trim()));
+    }
+    sections.join("\n")
+}
+
+fn attach_startup_output(error: String, output: &Arc<Mutex<DshWebStartupOutput>>) -> String {
+    let detail = startup_output_detail(output);
+    if detail.is_empty() || error.contains(&detail) {
+        error
+    } else {
+        format!("{error}\n{detail}")
+    }
+}
+
+async fn finish_dsh_web_output_drains(
+    stdout: tokio::task::JoinHandle<()>,
+    stderr: tokio::task::JoinHandle<()>,
+) {
+    let _ = tokio::time::timeout(Duration::from_secs(1), async {
+        let _ = tokio::join!(stdout, stderr);
+    })
+    .await;
+}
+
+fn parse_dsh_web_startup_url(line: &str) -> Result<Option<(String, u16)>, String> {
+    let Some(value) = line.trim().strip_prefix("dsh web:").map(str::trim) else {
+        return Ok(None);
+    };
+    let parsed = Url::parse(value)
+        .map_err(|error| format!("DSH Web reported an invalid startup URL {value:?}: {error}"))?;
+    if parsed.scheme() != "http" {
+        return Err(format!("DSH Web reported a non-HTTP startup URL: {value}"));
+    }
+    let host = parsed
+        .host()
+        .ok_or_else(|| format!("DSH Web startup URL has no host: {value}"))?;
+    let loopback = match &host {
+        Host::Domain(domain) => domain.eq_ignore_ascii_case("localhost"),
+        Host::Ipv4(address) => IpAddr::V4(*address).is_loopback(),
+        Host::Ipv6(address) => IpAddr::V6(*address).is_loopback(),
+    };
+    if !loopback {
+        return Err(format!(
+            "DSH Web reported a non-loopback startup URL: {value}"
+        ));
+    }
+    if !parsed.username().is_empty()
+        || parsed.password().is_some()
+        || parsed.path() != "/"
+        || parsed.query().is_some()
+        || parsed.fragment().is_some()
+    {
+        return Err(format!(
+            "DSH Web reported an unsupported startup URL shape: {value}"
+        ));
+    }
+    let port = parsed
+        .port()
+        .ok_or_else(|| format!("DSH Web startup URL has no port: {value}"))?;
+    if port == 0 {
+        return Err("DSH Web reported port 0 instead of its allocated port".to_string());
+    }
+    let base_url = match host {
+        Host::Domain(domain) => format!("http://{domain}:{port}"),
+        Host::Ipv4(address) => format!("http://{address}:{port}"),
+        Host::Ipv6(address) => format!("http://[{address}]:{port}"),
+    };
+    Ok(Some((base_url, port)))
+}
+
+async fn drain_dsh_web_output<R>(
+    reader: R,
+    is_stderr: bool,
+    startup_url: Option<Arc<Mutex<Option<oneshot::Sender<Result<(String, u16), String>>>>>>,
+    output: Arc<Mutex<DshWebStartupOutput>>,
+) where
+    R: AsyncRead + Unpin,
+{
+    let mut lines = BufReader::new(reader).lines();
+    loop {
+        let line = match lines.next_line().await {
+            Ok(Some(line)) => line,
+            Ok(None) => break,
+            Err(error) => {
+                let message = format!("Failed to read DSH Web process output: {error}");
+                {
+                    let mut output = output.lock();
+                    append_bounded_output(
+                        if is_stderr {
+                            &mut output.stderr
+                        } else {
+                            &mut output.stdout
+                        },
+                        &message,
+                    );
+                }
+                if let Some(startup_url) = &startup_url {
+                    if let Some(sender) = startup_url.lock().take() {
+                        let _ = sender.send(Err(message));
+                    }
+                }
+                break;
+            }
+        };
+        {
+            let mut output = output.lock();
+            append_bounded_output(
+                if is_stderr {
+                    &mut output.stderr
+                } else {
+                    &mut output.stdout
+                },
+                &line,
+            );
+        }
+        if let Some(startup_url) = &startup_url {
+            match parse_dsh_web_startup_url(&line) {
+                Ok(Some(url)) => {
+                    if let Some(sender) = startup_url.lock().take() {
+                        let _ = sender.send(Ok(url));
+                    }
+                }
+                Err(error) => {
+                    if let Some(sender) = startup_url.lock().take() {
+                        let _ = sender.send(Err(error));
+                    }
+                }
+                Ok(None) => {}
+            }
+        }
+    }
+}
+
+fn exited_dsh_web_error(
+    status: std::process::ExitStatus,
+    output: &Arc<Mutex<DshWebStartupOutput>>,
+) -> String {
+    let detail = startup_output_detail(output);
+    if detail.is_empty() {
+        format!("DSH Web exited before becoming ready ({status})")
+    } else {
+        format!("DSH Web exited before becoming ready ({status})\n{detail}")
+    }
+}
+
+async fn wait_for_dsh_web_url(
+    child: &mut Child,
+    startup_url: oneshot::Receiver<Result<(String, u16), String>>,
+    deadline: Instant,
+    output: &Arc<Mutex<DshWebStartupOutput>>,
+) -> Result<(String, u16), String> {
+    tokio::pin!(startup_url);
+    loop {
+        tokio::select! {
+            result = &mut startup_url => {
+                return result
+                    .map_err(|_| {
+                        let detail = startup_output_detail(output);
+                        if detail.is_empty() {
+                            "DSH Web did not report its startup URL".to_string()
+                        } else {
+                            format!("DSH Web did not report its startup URL\n{detail}")
+                        }
+                    })?;
+            }
+            _ = sleep(Duration::from_millis(100)) => {
+                if let Some(status) = child.try_wait().map_err(|error| error.to_string())? {
+                    return Err(exited_dsh_web_error(status, output));
+                }
+                if Instant::now() >= deadline {
+                    let detail = startup_output_detail(output);
+                    return Err(if detail.is_empty() {
+                        "DSH Web did not report its startup URL within 30 seconds".to_string()
+                    } else {
+                        format!("DSH Web did not report its startup URL within 30 seconds\n{detail}")
+                    });
+                }
+            }
+        }
+    }
+}
+
+async fn ensure_dsh_webui_locked(
+    agent: &str,
+    state: &DshWebUiManager,
+) -> Result<DshWebUiState, String> {
+    if state.shutting_down.load(Ordering::Acquire) {
+        return Err("DSH Web is shutting down".to_string());
+    }
     let mut stale_process = {
         let mut processes = state.processes.write();
-        if let Some(process) = processes.get(agent) {
+        if let Some(process) = processes.get_mut(agent) {
             if process.state.status == WebUiStatus::Running {
-                return Ok(process.state.clone());
+                match process.child.try_wait() {
+                    Ok(None) => return Ok(process.state.clone()),
+                    Ok(Some(status)) => {
+                        process.state.status = WebUiStatus::Error;
+                        process.state.error = Some(exited_dsh_web_error(status, &process.output));
+                    }
+                    Err(error) => {
+                        process.state.status = WebUiStatus::Error;
+                        process.state.error = Some(format!(
+                            "Could not inspect the existing DSH Web process: {error}"
+                        ));
+                    }
+                }
             }
         }
         processes.remove(agent)
     };
     if let Some(mut process) = stale_process.take() {
-        state.port_allocator.lock().release(process.state.port);
         let _ = DshWebUiManager::stop_process(&mut process.child).await;
     }
 
-    let port = state.port_allocator.lock().allocate()?;
     let home = crate::dsh_home::ensure_dsh_home_for(agent)?;
     let launch = crate::app_settings::get_agent_launch_spec(agent);
     if let Some(root) = &launch.working_dir {
         let built_cli = root.join("apps").join("cli").join("lib").join("bin.js");
         if !root.join("node_modules").is_dir() || !built_cli.is_file() {
-            state.port_allocator.lock().release(port);
             return Err(format!(
                 "DeepSeek Harness source is not ready at {}. Run `pnpm install` and `pnpm run build` in that directory, then retry.",
                 root.display()
@@ -719,7 +1200,6 @@ async fn ensure_dsh_webui(agent: &str, state: &DshWebUiManager) -> Result<DshWeb
         // the same login-shell PATH used for child processes before spawning,
         // so a missing global dsh is reported before an opaque ENOENT.
         if crate::platform::detect_path(&launch.program).is_empty() {
-            state.port_allocator.lock().release(port);
             return Err(format!(
                 "DeepSeek Harness executable `{}` was not found in PATH. Configure the DSH executable or select its source directory, then run `pnpm install` and `pnpm run build` there.",
                 launch.program
@@ -739,18 +1219,17 @@ async fn ensure_dsh_webui(agent: &str, state: &DshWebUiManager) -> Result<DshWeb
     // persisted through DSH_HOME and its RPC, so no patch is needed here.
     cmd.arg("web")
         .arg("--port")
-        .arg(port.to_string())
+        .arg("0")
         .envs(launch.extra_env)
         .env("PATH", crate::app_settings::get_login_shell_path())
         .env("DSH_HOME", &home)
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
         .kill_on_drop(true);
 
-    let child = match cmd.spawn() {
+    let mut child = match cmd.spawn() {
         Ok(child) => child,
         Err(error) => {
-            state.port_allocator.lock().release(port);
             if error.kind() == std::io::ErrorKind::NotFound {
                 return Err(
                     "DeepSeek Harness is not installed or not found in PATH. Configure dsh_path with the dsh executable or its source directory, then run `pnpm install` and `pnpm run build`.".to_string(),
@@ -761,9 +1240,40 @@ async fn ensure_dsh_webui(agent: &str, state: &DshWebUiManager) -> Result<DshWeb
     };
 
     let pid = child.id();
-    // DSH binds its local Web server on IPv4 loopback. On macOS, `localhost`
-    // may resolve to ::1 first even when no IPv6 listener is available.
-    let url = format!("http://127.0.0.1:{}", port);
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| "Failed to capture DSH Web stdout".to_string())?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| "Failed to capture DSH Web stderr".to_string())?;
+    let output = Arc::new(Mutex::new(DshWebStartupOutput::default()));
+    let (startup_url_tx, startup_url_rx) = oneshot::channel();
+    let startup_url_tx = Arc::new(Mutex::new(Some(startup_url_tx)));
+    let stdout_drain = tokio::spawn(drain_dsh_web_output(
+        stdout,
+        false,
+        Some(startup_url_tx.clone()),
+        output.clone(),
+    ));
+    let stderr_drain = tokio::spawn(drain_dsh_web_output(
+        stderr,
+        true,
+        Some(startup_url_tx),
+        output.clone(),
+    ));
+
+    let deadline = Instant::now() + DSH_WEB_STARTUP_TIMEOUT;
+    let (url, port) =
+        match wait_for_dsh_web_url(&mut child, startup_url_rx, deadline, &output).await {
+            Ok(value) => value,
+            Err(error) => {
+                let _ = DshWebUiManager::stop_process(&mut child).await;
+                finish_dsh_web_output_drains(stdout_drain, stderr_drain).await;
+                return Err(attach_startup_output(error, &output));
+            }
+        };
 
     let mut initial_state = DshWebUiState {
         agent: agent.to_string(),
@@ -774,45 +1284,44 @@ async fn ensure_dsh_webui(agent: &str, state: &DshWebUiManager) -> Result<DshWeb
         error: None,
     };
 
-    {
-        let mut processes = state.processes.write();
-        processes.insert(
-            agent.to_string(),
-            WebUiProcess {
-                child,
-                state: initial_state.clone(),
-            },
-        );
-    }
-
-    let health_check_result = check_health(&url, 10).await;
+    let health_check_result = check_health(&url, &mut child, deadline, &output).await;
 
     match health_check_result {
         Ok(_) => {
+            initial_state.status = WebUiStatus::Running;
             let mut processes = state.processes.write();
-            if let Some(process) = processes.get_mut(agent) {
-                process.state.status = WebUiStatus::Running;
-                initial_state.status = WebUiStatus::Running;
-            }
+            processes.insert(
+                agent.to_string(),
+                WebUiProcess {
+                    child,
+                    state: initial_state.clone(),
+                    output,
+                },
+            );
         }
         Err(e) => {
             initial_state.status = WebUiStatus::Error;
             let error = format!("DSH Web failed to become ready at {url}: {e}");
             initial_state.error = Some(error.clone());
-            let mut process_opt = {
-                let mut processes = state.processes.write();
-                processes.remove(agent)
-            };
-
-            if let Some(mut process) = process_opt.take() {
-                let _ = DshWebUiManager::stop_process(&mut process.child).await;
-            }
-            state.port_allocator.lock().release(port);
-            return Err(error);
+            let _ = DshWebUiManager::stop_process(&mut child).await;
+            finish_dsh_web_output_drains(stdout_drain, stderr_drain).await;
+            return Err(attach_startup_output(error, &output));
         }
     }
 
     Ok(initial_state)
+}
+
+async fn ensure_dsh_webui(agent: &str, state: &DshWebUiManager) -> Result<DshWebUiState, String> {
+    let observed_generation = state.start_generation(agent);
+    let lifecycle_lock = state.lifecycle_lock(agent);
+    let _lifecycle_guard = lifecycle_lock.lock().await;
+    if let Some(result) = state.newer_start_result(agent, observed_generation) {
+        return result;
+    }
+    let result = ensure_dsh_webui_locked(agent, state).await;
+    state.record_start_result(agent, result.clone());
+    result
 }
 
 #[tauri::command]
@@ -828,6 +1337,8 @@ pub async fn stop_dsh_webui(
     agent: String,
     state: State<'_, DshWebUiManager>,
 ) -> Result<(), String> {
+    let lifecycle_lock = state.lifecycle_lock(&agent);
+    let _lifecycle_guard = lifecycle_lock.lock().await;
     let process_opt = {
         let mut processes = state.processes.write();
         processes.remove(&agent)
@@ -849,7 +1360,6 @@ pub async fn stop_dsh_webui(
             }
             state.active_sessions.lock().remove(&task_id);
         }
-        state.port_allocator.lock().release(process.state.port);
         DshWebUiManager::stop_process(&mut process.child).await?;
     }
 
@@ -861,9 +1371,23 @@ pub async fn get_dsh_webui_status(
     agent: String,
     state: State<'_, DshWebUiManager>,
 ) -> Result<DshWebUiState, String> {
-    let processes = state.processes.read();
+    let mut processes = state.processes.write();
 
-    if let Some(process) = processes.get(&agent) {
+    if let Some(process) = processes.get_mut(&agent) {
+        if process.state.status == WebUiStatus::Running {
+            match process.child.try_wait() {
+                Ok(Some(status)) => {
+                    process.state.status = WebUiStatus::Error;
+                    process.state.error = Some(exited_dsh_web_error(status, &process.output));
+                }
+                Err(error) => {
+                    process.state.status = WebUiStatus::Error;
+                    process.state.error =
+                        Some(format!("Could not inspect the DSH Web process: {error}"));
+                }
+                Ok(None) => {}
+            }
+        }
         Ok(process.state.clone())
     } else {
         Ok(DshWebUiState {
@@ -877,34 +1401,42 @@ pub async fn get_dsh_webui_status(
     }
 }
 
-async fn check_health(url: &str, max_attempts: u32) -> Result<(), String> {
+async fn check_health(
+    url: &str,
+    child: &mut Child,
+    deadline: Instant,
+    output: &Arc<Mutex<DshWebStartupOutput>>,
+) -> Result<(), String> {
     let client = reqwest::Client::builder()
+        .no_proxy()
         .timeout(Duration::from_secs(2))
         .build()
         .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
-
-    for attempt in 1..=max_attempts {
-        sleep(Duration::from_millis(500)).await;
-
-        match client.get(url).send().await {
-            Ok(response) if response.status().is_success() => {
+    loop {
+        if let Some(status) = child.try_wait().map_err(|error| error.to_string())? {
+            return Err(exited_dsh_web_error(status, output));
+        }
+        let last_error = match tokio::time::timeout_at(deadline, client.get(url).send()).await {
+            Ok(Ok(response)) if response.status().is_success() => {
                 return Ok(());
             }
-            Ok(_) => {}
-            Err(_) if attempt < max_attempts => continue,
-            Err(e) => {
-                return Err(format!(
-                    "Health check failed after {} attempts: {}",
-                    max_attempts, e
-                ));
-            }
+            Ok(Ok(response)) => format!("HTTP {}", response.status()),
+            Ok(Err(error)) => error.to_string(),
+            Err(_) => "startup deadline elapsed during the health request".to_string(),
+        };
+        if Instant::now() >= deadline {
+            let detail = startup_output_detail(output);
+            let suffix = if detail.is_empty() {
+                String::new()
+            } else {
+                format!("\n{detail}")
+            };
+            return Err(format!(
+                "Health check timed out after 30 seconds: {last_error}{suffix}"
+            ));
         }
+        sleep(Duration::from_millis(250)).await;
     }
-
-    Err(format!(
-        "Health check timed out after {} attempts",
-        max_attempts
-    ))
 }
 
 fn json_text(value: &Value) -> Option<String> {
@@ -3718,6 +4250,14 @@ async fn consume_host_events(
     }
 }
 
+fn start_host_events_subscription(app: AppHandle, state: &DshWebUiManager, api: DshApiClient) {
+    let (abort_tx, abort_rx) = tokio::sync::oneshot::channel::<()>();
+    if let Some(previous) = state.host_events_abort.lock().replace(abort_tx) {
+        let _ = previous.send(());
+    }
+    tokio::spawn(consume_host_events(app, api, abort_rx));
+}
+
 /// Start subscribing to the `events.host` stream in the background.
 /// The subscription auto-reconnects on disconnect and stops when
 /// `stop_dsh_host_events` is called or the DSH process is shut down.
@@ -3727,13 +4267,9 @@ pub async fn start_dsh_host_events(
     state: State<'_, DshWebUiManager>,
 ) -> Result<(), String> {
     let api = get_dsh_api(&state).await?;
-    let (abort_tx, abort_rx) = tokio::sync::oneshot::channel::<()>();
     // Replace the previous subscription atomically; otherwise a task-status
     // refresh can leave multiple events.host consumers running forever.
-    if let Some(previous) = state.host_events_abort.lock().replace(abort_tx) {
-        let _ = previous.send(());
-    }
-    tokio::spawn(consume_host_events(app, api, abort_rx));
+    start_host_events_subscription(app, &state, api);
     Ok(())
 }
 
@@ -3826,6 +4362,7 @@ pub async fn export_dsh_session_log(
     // minutes. A read timeout still fails a stalled connection rather than
     // leaving the export busy forever.
     let client = reqwest::Client::builder()
+        .no_proxy()
         .read_timeout(Duration::from_secs(60))
         .build()
         .map_err(|error| format!("Failed to create DSH export client: {error}"))?;
@@ -3932,6 +4469,69 @@ mod tests {
 
     fn result_payload(view: Value) -> Value {
         json!({ "event": { "type": "tool/result" }, "view": { "for": "result", "view": view } })
+    }
+
+    #[test]
+    fn parses_only_allocated_loopback_dsh_web_urls() {
+        assert_eq!(
+            parse_dsh_web_startup_url("dsh web: http://127.0.0.1:43127"),
+            Ok(Some(("http://127.0.0.1:43127".to_string(), 43127)))
+        );
+        assert_eq!(
+            parse_dsh_web_startup_url("dsh web: http://[::1]:51844/"),
+            Ok(Some(("http://[::1]:51844".to_string(), 51844)))
+        );
+        assert_eq!(parse_dsh_web_startup_url("warming up"), Ok(None));
+        assert!(parse_dsh_web_startup_url("dsh web: http://0.0.0.0:15800")
+            .expect_err("a non-loopback listener is rejected")
+            .contains("non-loopback"));
+        assert!(
+            parse_dsh_web_startup_url("dsh web: https://127.0.0.1:15800")
+                .expect_err("the startup protocol must stay HTTP")
+                .contains("non-HTTP")
+        );
+        assert!(parse_dsh_web_startup_url("dsh web: http://127.0.0.1:0")
+            .expect_err("port zero is not an allocated listener")
+            .contains("allocated port"));
+    }
+
+    #[test]
+    fn retains_only_the_tail_of_dsh_web_process_output() {
+        let mut output = String::new();
+        let prefix = "x".repeat(DSH_WEB_OUTPUT_LIMIT);
+        append_bounded_output(&mut output, &prefix);
+        append_bounded_output(&mut output, "final diagnostic");
+
+        assert!(output.len() <= DSH_WEB_OUTPUT_LIMIT);
+        assert!(output.chars().filter(|character| *character == 'x').count() < prefix.len());
+        assert!(output.ends_with("final diagnostic\n"));
+    }
+
+    #[tokio::test]
+    async fn serializes_and_shares_dsh_web_start_results_per_agent() {
+        let manager = Arc::new(DshWebUiManager::new());
+        let first_lock = manager.lifecycle_lock("dsh");
+        let first = first_lock.clone().lock_owned().await;
+        let observed_generation = manager.start_generation("dsh");
+        let contender_manager = manager.clone();
+        let contender = tokio::spawn(async move {
+            let _guard = first_lock.lock().await;
+            contender_manager.newer_start_result("dsh", observed_generation)
+        });
+
+        tokio::task::yield_now().await;
+        assert!(!contender.is_finished());
+        manager.record_start_result("dsh", Err("shared startup failure".to_string()));
+        drop(first);
+        let shared = tokio::time::timeout(Duration::from_secs(1), contender)
+            .await
+            .expect("the next lifecycle operation proceeds after the owner releases the lock")
+            .expect("the contender task completes")
+            .expect("the waiter observes the completed attempt");
+        assert_eq!(
+            shared.expect_err("the first attempt failed"),
+            "shared startup failure"
+        );
     }
 
     #[test]

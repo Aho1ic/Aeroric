@@ -193,22 +193,9 @@ export function AgentUpdatesPanel() {
         const results = await invoke<AgentUpgradeResult[]>("upgrade_agent_versions", {
           agents: [agent],
         });
-        const result = results[0] ?? null;
-        const expectedVersion = latestVersions[agent];
-        const verifiedResult =
-          result?.success && expectedVersion && result.current_version !== expectedVersion
-            ? {
-                ...result,
-                success: false,
-                message: t("appSettings.upgradeVerificationFailed", {
-                  expected: expectedVersion,
-                  actual: result.current_version || t("appSettings.unknown"),
-                }),
-              }
-            : result;
         setUpgradeResults((current) => ({
           ...current,
-          [agent]: verifiedResult,
+          [agent]: results[0] ?? null,
         }));
       }
       await refreshVersions({ forceLatest: true });
@@ -601,6 +588,20 @@ function AgentCard({ data, onRun, t }: AgentCardProps) {
           {!success && resultErrorCode && (
             <div style={{ fontSize: 10.5, color: "var(--text-hint)", marginTop: 4 }}>
               {t(installErrorKey[resultErrorCode])}
+            </div>
+          )}
+          {!success && resultMessage && (
+            <div
+              style={{
+                marginTop: 5,
+                color: "var(--text-secondary)",
+                fontSize: 10.5,
+                lineHeight: 1.5,
+                overflowWrap: "anywhere",
+                whiteSpace: "pre-wrap",
+              }}
+            >
+              {resultMessage}
             </div>
           )}
         </div>
