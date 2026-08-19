@@ -101,10 +101,12 @@ function ProjectCard({
   section,
   onNewTask,
   onTogglePinned,
+  canTogglePinned,
 }: {
   section: ProjectTasks;
   onNewTask: (projectId: string) => void;
   onTogglePinned: (projectId: string, pinned: boolean) => void;
+  canTogglePinned: boolean;
 }) {
   const { project, tasks } = section;
   const needsInput = tasks.some((task) => task.status === "input_required");
@@ -139,29 +141,35 @@ function ProjectCard({
           {activeCount > 0 ? `  ·  ${activeCount} ${t("status.running")}` : ""}
         </Text>
       </View>
-      <AnimatedPressable
-        hitSlop={6}
-        style={({ pressed }) => [
-          styles.addButton,
-          pinned && styles.pinButtonActive,
-          pressed && styles.pressed,
-        ]}
-        accessibilityRole="button"
-        accessibilityState={{ selected: pinned }}
-        accessibilityLabel={t(pinned ? "home.unpinProject" : "home.pinProject", {
-          name: project.name,
-        })}
-        onPress={(e) => {
-          e.stopPropagation();
-          onTogglePinned(project.id, !pinned);
-        }}
-      >
-        <Pin
-          size={13}
-          color={pinned ? theme.onAccent : theme.textSecondary}
-          strokeWidth={pinned ? 2.6 : 2}
-        />
-      </AnimatedPressable>
+      {canTogglePinned ? (
+        <AnimatedPressable
+          hitSlop={6}
+          style={({ pressed }) => [
+            styles.addButton,
+            pinned && styles.pinButtonActive,
+            pressed && styles.pressed,
+          ]}
+          accessibilityRole="button"
+          accessibilityState={{ selected: pinned }}
+          accessibilityLabel={t(pinned ? "home.unpinProject" : "home.pinProject", {
+            name: project.name,
+          })}
+          onPress={(e) => {
+            e.stopPropagation();
+            onTogglePinned(project.id, !pinned);
+          }}
+        >
+          <Pin
+            size={13}
+            color={pinned ? theme.onAccent : theme.textSecondary}
+            strokeWidth={pinned ? 2.6 : 2}
+          />
+        </AnimatedPressable>
+      ) : pinned ? (
+        <View style={[styles.addButton, styles.pinButtonActive]}>
+          <Pin size={13} color={theme.onAccent} strokeWidth={2.6} />
+        </View>
+      ) : null}
       <AnimatedPressable
         hitSlop={6}
         style={({ pressed }) => [styles.addButton, pressed && styles.pressed]}
@@ -226,7 +234,8 @@ function PairPrompt() {
 
 export default function HomeScreen() {
   const { ready, hosts, activeHost } = useHosts();
-  const { sections, loading, error, refresh, upsertTask, setPinned } = useHostTasks();
+  const { sections, loading, error, refresh, upsertTask, canPinProjects, setPinned } =
+    useHostTasks();
   const { stats, refresh: refreshStats } = useHostStats();
   const [newTaskProjectId, setNewTaskProjectId] = useState<string | null>(null);
   // 默认全部折叠；仅记录用户主动展开的分组，新出现的分组也自然保持折叠。
@@ -305,7 +314,12 @@ export default function HomeScreen() {
         keyExtractor={(item) => item.project.id}
         stickySectionHeadersEnabled={false}
         renderItem={({ item }) => (
-          <ProjectCard section={item} onNewTask={setNewTaskProjectId} onTogglePinned={setPinned} />
+          <ProjectCard
+            section={item}
+            onNewTask={setNewTaskProjectId}
+            onTogglePinned={setPinned}
+            canTogglePinned={canPinProjects}
+          />
         )}
         renderSectionHeader={({ section }) =>
           showGroupHeaders ? (

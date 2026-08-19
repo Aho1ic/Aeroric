@@ -17,10 +17,6 @@ export default function RootLayout() {
       <ConnectionProvider>
         <NotificationsBridge />
         <View style={styles.root}>
-          <View pointerEvents="none" style={StyleSheet.absoluteFill}>
-            <View style={styles.blueOrb} />
-            <View style={styles.purpleOrb} />
-          </View>
           <StatusBar style="light" />
           <Stack
             screenOptions={{
@@ -49,22 +45,4 @@ export default function RootLayout() {
 
 const styles = StyleSheet.create({
   root: { flex: 1, overflow: "hidden", backgroundColor: theme.canvas },
-  blueOrb: {
-    position: "absolute",
-    width: 340,
-    height: 340,
-    borderRadius: 170,
-    top: -170,
-    right: -120,
-    backgroundColor: theme.orbBlue,
-  },
-  purpleOrb: {
-    position: "absolute",
-    width: 300,
-    height: 300,
-    borderRadius: 150,
-    bottom: -150,
-    left: -130,
-    backgroundColor: theme.orbPurple,
-  },
 });

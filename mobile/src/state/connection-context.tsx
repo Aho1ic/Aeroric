@@ -12,12 +12,18 @@ import {
 import { AppState } from "react-native";
 import { t } from "../i18n";
 import { RemoteConnection, type ConnectionStatus } from "../transport/remote-connection";
+import type { RpcCapability, RpcVersion } from "../transport/rpc-codec";
 import { subscribeForegroundConnectionRecovery } from "./foreground-recovery";
 import { useHosts } from "./hosts-context";
 
 interface ConnectionContextValue {
   status: ConnectionStatus;
   authError: string | null;
+  /** 当前主机实际协商的 RPC 版本与能力，离线时回到空能力。 */
+  rpcVersion: RpcVersion;
+  capabilities: readonly RpcCapability[];
+  capabilitiesReady: boolean;
+  hasCapability: (capability: RpcCapability | string) => boolean;
   request: <T = unknown>(method: string, params?: Record<string, unknown>) => Promise<T>;
   onPush: (listener: (push: string, data: unknown, seq?: number) => void) => () => void;
   /** 终端流:发送二进制帧(离线返回 false) */
@@ -33,6 +39,9 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
   const connRef = useRef<RemoteConnection | null>(null);
   const [status, setStatus] = useState<ConnectionStatus>("idle");
   const [authError, setAuthError] = useState<string | null>(null);
+  const [rpcVersion, setRpcVersion] = useState<RpcVersion>(2);
+  const [capabilities, setCapabilities] = useState<readonly RpcCapability[]>([]);
+  const [capabilitiesReady, setCapabilitiesReady] = useState(false);
   // push 监听表挂在 provider 层,连接重建时自动重挂,消费方无感
   const pushListeners = useRef(new Set<(push: string, data: unknown, seq?: number) => void>());
   const binaryListeners = useRef(new Set<(data: ArrayBuffer) => void>());
@@ -63,6 +72,9 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
       connRef.current = null;
       setStatus("idle");
       setAuthError(null);
+      setRpcVersion(2);
+      setCapabilities([]);
+      setCapabilitiesReady(false);
       return;
     }
     // M1 时代的旧记录没有 pin 公钥,无法建立 E2EE 通道:引导重新配对
@@ -71,6 +83,9 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
       connRef.current = null;
       setStatus("unauthorized");
       setAuthError(t("home.rePair"));
+      setRpcVersion(2);
+      setCapabilities([]);
+      setCapabilitiesReady(false);
       return;
     }
     const conn = new RemoteConnection({
@@ -83,6 +98,16 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
     const offStatus = conn.onStatusChange((next) => {
       setStatus(next);
       setAuthError(conn.authError);
+      if (next !== "online" && next !== "authenticating") {
+        setRpcVersion(2);
+        setCapabilities([]);
+        setCapabilitiesReady(false);
+      }
+    });
+    const offAuth = conn.onAuthSuccess((auth) => {
+      setRpcVersion(conn.negotiatedRpcVersion);
+      setCapabilities(conn.negotiatedCapabilities);
+      setCapabilitiesReady(Array.isArray(auth.capabilities));
     });
     const offPush = conn.onPush((push, data, seq) => {
       pushListeners.current.forEach((listener) => listener(push, data, seq));
@@ -92,6 +117,11 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
     });
     // 认证成功后桌面回传实时身份:补 hostId、合并跨网段产生的重复记录、刷新 LAN 地址
     const offIdentity = conn.onHostIdentity((identity, connectedEndpoint) => {
+      setRpcVersion(conn.negotiatedRpcVersion);
+      if (Array.isArray(identity.capabilities)) {
+        setCapabilities(identity.capabilities as RpcCapability[]);
+        setCapabilitiesReady(true);
+      }
       void reconcileRef.current(host.id, identity, connectedEndpoint).catch(() => {
         // 合并失败(SecureStore 写入异常)不影响当前连接,下次认证成功还会再试
       });
@@ -100,10 +130,14 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
     setStatus(conn.status);
     return () => {
       offStatus();
+      offAuth();
       offPush();
       offBinary();
       offIdentity();
       conn.stop();
+      setRpcVersion(2);
+      setCapabilities([]);
+      setCapabilitiesReady(false);
       if (connRef.current === conn) connRef.current = null;
     };
   }, [hostKey]);
@@ -118,6 +152,10 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
     () => ({
       status,
       authError,
+      rpcVersion,
+      capabilities,
+      capabilitiesReady,
+      hasCapability: (capability) => capabilities.includes(capability as RpcCapability),
       request: (method, params) => {
         const conn = connRef.current;
         if (!conn) return Promise.reject(new Error("no active host"));
@@ -133,7 +171,7 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
         return () => binaryListeners.current.delete(listener);
       },
     }),
-    [authError, status],
+    [authError, capabilities, capabilitiesReady, rpcVersion, status],
   );
 
   return <ConnectionContext.Provider value={value}>{children}</ConnectionContext.Provider>;

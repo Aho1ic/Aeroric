@@ -31,7 +31,11 @@ import {
   authenticationParams,
   decodeAeroricEnvelope,
   encodeAeroricRequest,
+  normalizeHostSnapshot,
+  normalizeRpcCapabilities,
   negotiatedRpcVersion,
+  type RpcCapability,
+  type RpcErrorShape,
   type RpcVersion,
 } from "./rpc-codec";
 
@@ -139,6 +143,22 @@ export interface AuthSuccess {
   deviceToken?: string;
   host?: { name: string; version: string; platform: string };
   rpcVersion?: RpcVersion;
+  rpcVersions?: RpcVersion[];
+  capabilities?: RpcCapability[];
+}
+
+export class RemoteRpcError extends Error {
+  readonly code: string;
+  readonly retryable: boolean;
+  readonly details?: Record<string, unknown>;
+
+  constructor(message: string, shape?: RpcErrorShape) {
+    super(message);
+    this.name = "RemoteRpcError";
+    this.code = shape?.code ?? "remote_error";
+    this.retryable = shape?.retryable ?? false;
+    this.details = shape?.details;
+  }
 }
 
 /** RPC events.since 的响应(重连 watermark 补发)。 */
@@ -257,6 +277,7 @@ export class RemoteConnection {
   private handshake: PendingHandshake | OrcaE2EEPendingHandshake | null = null;
   private orcaAuthenticated = false;
   private rpcVersion: RpcVersion = RPC_V2;
+  private capabilities: RpcCapability[] = [];
   private statusValue: ConnectionStatus = "idle";
   private nextId = 1;
   private pending = new Map<string, PendingRequest>();
@@ -320,6 +341,14 @@ export class RemoteConnection {
 
   get authError(): string | null {
     return this.lastAuthError;
+  }
+
+  get negotiatedRpcVersion(): RpcVersion {
+    return this.rpcVersion;
+  }
+
+  get negotiatedCapabilities(): readonly RpcCapability[] {
+    return this.capabilities;
   }
 
   onStatusChange(listener: (status: ConnectionStatus) => void): () => void {
@@ -667,6 +696,7 @@ export class RemoteConnection {
       )) as AuthSuccess;
       if (generation !== this.generation || this.ws !== ws) return;
       this.rpcVersion = negotiatedRpcVersion(result.rpcVersion);
+      this.capabilities = normalizeRpcCapabilities(result.capabilities);
       onAuthenticated();
       this.lastAuthError = null;
       this.reconnectAttempts = 0;
@@ -733,8 +763,27 @@ export class RemoteConnection {
     this.sendRequest<HostIdentity>(ws, "hello")
       .then((identity) => {
         if (generation !== this.generation || this.statusValue !== "online") return;
-        if (!identity || typeof identity !== "object") return;
-        this.identityListeners.forEach((listener) => listener(identity, connectedEndpoint));
+        const snapshot = normalizeHostSnapshot(identity);
+        if (!snapshot) return;
+        const capabilitiesAdvertised = Array.isArray(
+          (identity as { capabilities?: unknown }).capabilities,
+        );
+        this.identityListeners.forEach((listener) =>
+          listener(
+            {
+              ...identity,
+              hostName:
+                typeof identity.hostName === "string" && identity.hostName.trim()
+                  ? identity.hostName
+                  : snapshot.name,
+              version: snapshot.version,
+              platform: snapshot.platform,
+              rpcVersions: snapshot.rpcVersions,
+              capabilities: capabilitiesAdvertised ? snapshot.capabilities : undefined,
+            },
+            connectedEndpoint,
+          ),
+        );
       })
       .catch(() => {
         // 旧桌面版本没有身份字段 / 请求超时:保持已保存地址不变
@@ -785,6 +834,7 @@ export class RemoteConnection {
     this.handshake = null;
     this.orcaAuthenticated = false;
     this.rpcVersion = RPC_V2;
+    this.capabilities = [];
     this.ws = null;
     this.activeEndpoint = null;
     this.dialStartedAt = null;
@@ -1061,7 +1111,22 @@ export class RemoteConnection {
       if (frame.ok) {
         pending.resolve(frame.result);
       } else {
-        pending.reject(new Error(frame.error?.message ?? frame.error?.code ?? "request failed"));
+        const shape =
+          frame.error && typeof frame.error === "object"
+            ? {
+                code: typeof frame.error.code === "string" ? frame.error.code : "remote_error",
+                message:
+                  typeof frame.error.message === "string"
+                    ? frame.error.message
+                    : typeof frame.error.code === "string"
+                      ? frame.error.code
+                      : "request failed",
+                retryable: false,
+              }
+            : undefined;
+        pending.reject(
+          new RemoteRpcError(frame.error?.message ?? frame.error?.code ?? "request failed", shape),
+        );
       }
       return;
     }
@@ -1114,7 +1179,7 @@ export class RemoteConnection {
     if (envelope.ok) {
       pending.resolve(envelope.result);
     } else {
-      pending.reject(new Error(envelope.error));
+      pending.reject(new RemoteRpcError(envelope.error, envelope.errorShape));
     }
   }
 

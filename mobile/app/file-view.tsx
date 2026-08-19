@@ -31,21 +31,28 @@ export default function FileViewScreen() {
   const projectId = typeof params.projectId === "string" ? params.projectId : "";
   const path = typeof params.path === "string" ? params.path : "";
   const title = typeof params.name === "string" && params.name ? params.name : t("files.title");
-  const { request, status } = useConnection();
+  const { request, status, capabilitiesReady, hasCapability } = useConnection();
   const [result, setResult] = useState<ReadFileResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
   const [saving, setSaving] = useState(false);
   const keyboardInset = useKeyboardInset();
+  const readSupported = !capabilitiesReady || hasCapability("files.read");
+  const writeSupported = !capabilitiesReady || hasCapability("files.write");
 
   const refresh = useCallback(() => {
     if (status !== "online" || !projectId || !path) return;
+    if (!readSupported) {
+      setResult(null);
+      setError(t("files.unsupported"));
+      return;
+    }
     setError(null);
     request<ReadFileResult>("project.readFile", { projectId, path })
       .then(setResult)
       .catch((err) => setError(err instanceof Error ? err.message : String(err)));
-  }, [path, projectId, request, status]);
+  }, [path, projectId, readSupported, request, status]);
 
   useEffect(() => {
     if (result === null) refresh();
@@ -53,12 +60,16 @@ export default function FileViewScreen() {
 
   const content = result?.content ?? "";
   const truncated = !!result?.truncated;
-  const canEdit = !!result && result.available !== false && !truncated;
+  const canEdit = !!result && result.available !== false && !truncated && writeSupported;
 
   const startEdit = useCallback(() => {
+    if (!writeSupported) {
+      Alert.alert(t("files.readOnlyUnsupported"));
+      return;
+    }
     setDraft(content);
     setEditing(true);
-  }, [content]);
+  }, [content, writeSupported]);
 
   const cancelEdit = useCallback(() => {
     setEditing(false);
@@ -67,6 +78,10 @@ export default function FileViewScreen() {
 
   const save = useCallback(() => {
     if (saving) return;
+    if (!writeSupported) {
+      Alert.alert(t("files.saveFailed"), t("files.readOnlyUnsupported"));
+      return;
+    }
     setSaving(true);
     const next = draft;
     request<WriteFileResult>("project.writeFile", { projectId, path, content: next })
@@ -81,7 +96,7 @@ export default function FileViewScreen() {
         Alert.alert(t("files.saveFailed"), err instanceof Error ? err.message : String(err)),
       )
       .finally(() => setSaving(false));
-  }, [draft, path, projectId, request, saving]);
+  }, [draft, path, projectId, request, saving, writeSupported]);
 
   return (
     <View style={[styles.screen, { paddingBottom: keyboardInset }]}>
@@ -133,6 +148,9 @@ export default function FileViewScreen() {
               {t("files.truncated", { kb: Math.round(content.length / 1024) })} ·{" "}
               {t("files.readOnlyTruncated")}
             </Text>
+          ) : null}
+          {!truncated && !writeSupported ? (
+            <Text style={styles.truncatedBanner}>{t("files.readOnlyUnsupported")}</Text>
           ) : null}
           {editing ? (
             <TextInput

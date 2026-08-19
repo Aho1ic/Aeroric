@@ -9,6 +9,47 @@ use tauri::{AppHandle, Emitter, Manager, Runtime};
 use super::{agent_config_rpc, event_log, files_rpc, session_push, tasks_rpc};
 use crate::storage;
 
+/// Capabilities are the remotely safe contract surface. Desktop-only UI
+/// panels must not be inferred from this list unless they have a matching RPC.
+pub(crate) const RPC_CAPABILITIES: &[&str] = &[
+    "typed-envelope",
+    "structured-error",
+    "events-replay",
+    "projects.grouping",
+    "projects.pinning",
+    "tasks.lifecycle",
+    "tasks.models",
+    "tasks.approvals",
+    "session.structured",
+    "session.dsh",
+    "terminal.stream",
+    "files.read",
+    "files.write",
+    "git.read",
+    "agent-config.status",
+    "agent-config.write",
+    "stats.summary",
+];
+
+pub(crate) fn rpc_capabilities_value() -> Value {
+    json!(RPC_CAPABILITIES)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn capability_contract_is_additive_and_contains_core_mobile_flows() {
+        let capabilities = rpc_capabilities_value();
+        let values = capabilities.as_array().expect("capability array");
+        assert!(values.iter().any(|value| value == "tasks.lifecycle"));
+        assert!(values.iter().any(|value| value == "tasks.models"));
+        assert!(values.iter().any(|value| value == "session.structured"));
+        assert!(values.iter().any(|value| value == "files.read"));
+    }
+}
+
 pub(crate) fn str_param(params: &Value, key: &str) -> Result<String, String> {
     params
         .get(key)
@@ -65,6 +106,8 @@ async fn hello<R: Runtime>(app: &AppHandle<R>) -> Result<Value, String> {
         "name": "aeroric",
         "version": info.version.to_string(),
         "platform": std::env::consts::OS,
+        "rpcVersions": [3, 2],
+        "capabilities": rpc_capabilities_value(),
     });
     if let (Some(target), Some(identity)) = (
         value.as_object_mut(),

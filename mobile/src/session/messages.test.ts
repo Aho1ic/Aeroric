@@ -13,9 +13,11 @@ const assistant = (text: string): SessionMessage => ({
 
 describe("mergeAppended", () => {
   it("appends messages in order", () => {
-    const merged = mergeAppended([user("hi")], [assistant("hello"), user("again")], false);
+    const reply = { ...assistant("hello"), messageId: "message-2" };
+    const merged = mergeAppended([user("hi")], [reply, user("again")], false);
     expect(merged).toHaveLength(3);
     expect(merged[1].role).toBe("assistant");
+    expect(merged[1].messageId).toBe("message-2");
     expect(merged[2].role).toBe("user");
   });
 
@@ -50,7 +52,9 @@ describe("mergeAppended", () => {
       { role: "assistant", content: [] },
       { role: "assistant" },
     ] as unknown as SessionMessage[];
-    expect(mergeAppended([], bad, true)).toHaveLength(0);
+    const merged = mergeAppended([], bad, true);
+    expect(merged).toHaveLength(1);
+    expect(merged[0].role).toBe("system");
   });
 
   it("returns existing array unchanged for empty batch", () => {
@@ -60,13 +64,20 @@ describe("mergeAppended", () => {
 });
 
 describe("messageText", () => {
-  it("joins text parts and ignores tool_use/thinking", () => {
+  it("joins text parts and ignores structured non-text content", () => {
     const msg: SessionMessage = {
       role: "assistant",
       content: [
         { type: "thinking", thinking: "hmm" },
         { type: "text", text: "one" },
         { type: "tool_use", id: "t", name: "Bash", input: "{}" },
+        { type: "tool_result", id: "t", output: "done" },
+        {
+          type: "attachment",
+          name: "image.png",
+          mediaType: "image/png",
+          source: "data:image/png;base64,AA==",
+        },
         { type: "text", text: "two" },
       ],
     };

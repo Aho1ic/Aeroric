@@ -243,6 +243,16 @@ mod tests {
             serde_json::from_str::<Value>(&push).expect("push"),
             fixture["push"]
         );
+        assert_eq!(fixture["projectProjection"]["location"]["kind"], "local");
+        assert_eq!(fixture["taskProjection"]["dshAgentPreset"], "code");
+        assert_eq!(
+            fixture["sessionMessage"]["content"][3]["type"],
+            "tool_result"
+        );
+        assert_eq!(
+            fixture["hello"]["capabilities"],
+            crate::remote::rpc::rpc_capabilities_value()
+        );
     }
 
     #[test]

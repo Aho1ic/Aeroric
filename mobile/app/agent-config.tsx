@@ -347,7 +347,7 @@ function AgentEditor({
 }
 
 export default function AgentConfigScreen() {
-  const { request, status } = useConnection();
+  const { request, status, capabilitiesReady, hasCapability } = useConnection();
   const [agents, setAgents] = useState<AgentConfigEntry[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -362,8 +362,20 @@ export default function AgentConfigScreen() {
   const [detecting, setDetecting] = useState(false);
   const [saving, setSaving] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
+  const readSupported = !capabilitiesReady || hasCapability("agent-config.status");
+  const writeSupported = !capabilitiesReady || hasCapability("agent-config.write");
 
   const refresh = useCallback(() => {
+    if (status !== "online") {
+      setLoading(false);
+      return;
+    }
+    if (!readSupported) {
+      setAgents([]);
+      setError(t("agentConfig.unsupported"));
+      setLoading(false);
+      return;
+    }
     setLoading(true);
     request<{ agents: AgentConfigEntry[] }>("agentConfig.list")
       .then((result) => {
@@ -372,7 +384,7 @@ export default function AgentConfigScreen() {
       })
       .catch((err) => setError(err instanceof Error ? err.message : String(err)))
       .finally(() => setLoading(false));
-  }, [request]);
+  }, [readSupported, request, status]);
 
   useFocusEffect(
     useCallback(() => {
@@ -391,6 +403,7 @@ export default function AgentConfigScreen() {
   );
 
   const startEdit = (agent: AgentConfigEntry) => {
+    if (!writeSupported) return;
     setEditingId(agent.id);
     setDraft(toDraft(agent));
     setAvailableModels(normalizeModels(agent.models ?? []));
@@ -399,6 +412,7 @@ export default function AgentConfigScreen() {
   };
 
   const startCreate = () => {
+    if (!writeSupported) return;
     const kind: AgentKind =
       provider === "openai" ? "codex" : provider === "deepseek" ? "dsh" : "claude_code";
     setDraft(toDraft(undefined, kind));
@@ -416,6 +430,10 @@ export default function AgentConfigScreen() {
 
   const save = (agent?: AgentConfigEntry) => {
     if (saving) return;
+    if (!writeSupported) {
+      Alert.alert(t("agentConfig.writeUnsupported"));
+      return;
+    }
     const models = normalizeModels(selectedModels);
     if (
       (!agent && (!draft.name.trim() || !draft.baseUrl.trim() || !draft.apiKey.trim())) ||
@@ -581,11 +599,16 @@ export default function AgentConfigScreen() {
                 compact
                 iconOnly
               />
-              <AnimatedPressable style={styles.addButton} onPress={startCreate}>
-                <Plus size={16} color={theme.onAccent} />
-                <Text style={styles.addButtonText}>{t("agentConfig.add")}</Text>
-              </AnimatedPressable>
+              {writeSupported ? (
+                <AnimatedPressable style={styles.addButton} onPress={startCreate}>
+                  <Plus size={16} color={theme.onAccent} />
+                  <Text style={styles.addButtonText}>{t("agentConfig.add")}</Text>
+                </AnimatedPressable>
+              ) : null}
             </View>
+            {readSupported && !writeSupported ? (
+              <Text style={styles.emptyText}>{t("agentConfig.writeUnsupported")}</Text>
+            ) : null}
             {createOpen ? renderEditor() : null}
           </View>
         }
@@ -613,15 +636,17 @@ export default function AgentConfigScreen() {
                           : t("agentConfig.anthropic"))}
                   </Text>
                 </View>
-                <AnimatedPressable
-                  hitSlop={10}
-                  style={styles.actionButton}
-                  onPress={() => (editing ? closeEditor() : startEdit(item))}
-                >
-                  <Text style={styles.actionText}>
-                    {editing ? t("agentConfig.collapse") : t("agentConfig.edit")}
-                  </Text>
-                </AnimatedPressable>
+                {writeSupported ? (
+                  <AnimatedPressable
+                    hitSlop={10}
+                    style={styles.actionButton}
+                    onPress={() => (editing ? closeEditor() : startEdit(item))}
+                  >
+                    <Text style={styles.actionText}>
+                      {editing ? t("agentConfig.collapse") : t("agentConfig.edit")}
+                    </Text>
+                  </AnimatedPressable>
+                ) : null}
               </View>
               {editing ? renderEditor(item) : null}
             </View>

@@ -22,6 +22,7 @@ use super::RemoteState;
 use crate::{storage, TaskManager};
 
 const MAX_PROMPT_BYTES: usize = 100 * 1024;
+const MAX_DSH_PRESET_LEN: usize = 64;
 const PERMISSION_MODES: &[&str] = &["ask", "auto_edit", "full_access"];
 const TASK_REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
 
@@ -368,6 +369,12 @@ pub(crate) async fn task_create<R: Runtime>(
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(str::to_string);
+    let dsh_agent_preset = params
+        .get("dshAgentPreset")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
     let mut speed = params
         .get("speed")
         .and_then(Value::as_str)
@@ -403,6 +410,12 @@ pub(crate) async fn task_create<R: Runtime>(
     if speed.as_ref().is_some_and(|value| value.len() > 16) {
         return Err("Invalid speed".to_string());
     }
+    if dsh_agent_preset
+        .as_ref()
+        .is_some_and(|value| value.len() > MAX_DSH_PRESET_LEN)
+    {
+        return Err("Invalid dshAgentPreset".to_string());
+    }
     if family == crate::app_settings::AgentFamily::Dsh {
         if reasoning_effort.as_ref().is_some_and(|effort| {
             !matches!(effort.to_ascii_lowercase().as_str(), "off" | "high" | "max")
@@ -425,6 +438,7 @@ pub(crate) async fn task_create<R: Runtime>(
             "selectedModel": selected_model,
             "reasoningEffort": reasoning_effort,
             "speed": speed,
+            "dshAgentPreset": dsh_agent_preset,
         }),
     )
     .await

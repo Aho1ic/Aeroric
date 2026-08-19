@@ -4,16 +4,18 @@
  */
 
 import { Stack, router, useLocalSearchParams } from "expo-router";
-import { FolderTree, GitBranch, Plus } from "lucide-react-native";
+import { FolderTree, GitBranch, Plus, Search } from "lucide-react-native";
 import { useCallback, useMemo, useState } from "react";
-import { FlatList, RefreshControl, StyleSheet, Text, View } from "react-native";
+import { FlatList, RefreshControl, StyleSheet, Text, TextInput, View } from "react-native";
 import { ChangesPane } from "../../src/changes/ChangesPane";
 import { NewTaskSheet } from "../../src/components/NewTaskSheet";
 import { TaskRow } from "../../src/components/TaskRow";
 import { t } from "../../src/i18n";
 import { useHostTasks } from "../../src/state/use-host-tasks";
 import type { Task } from "../../src/types";
+import { AnimatedSelection } from "../../src/ui/AnimatedSelection";
 import { HeaderActions, HeaderIconButton } from "../../src/ui/HeaderIconButton";
+import { filterTasks, type TaskListFilter } from "../../src/ui/filter-tasks";
 import { EmptyState } from "../../src/ui/primitives";
 import { taskStatusRank } from "../../src/ui/task-status";
 import { spacing, theme, typography } from "../../src/ui/theme";
@@ -25,18 +27,24 @@ export default function ProjectScreen() {
   const { sections, loading, error, refresh, upsertTask } = useHostTasks();
   const [showChanges, setShowChanges] = useState(false);
   const [newTaskOpen, setNewTaskOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const [filter, setFilter] = useState<TaskListFilter>("all");
 
   const section = useMemo(
     () => sections.find((s) => s.project.id === projectId),
     [projectId, sections],
   );
 
-  const tasks = useMemo(
+  const sortedTasks = useMemo(
     () =>
       [...(section?.tasks ?? [])].sort(
         (a, b) => taskStatusRank(a.status) - taskStatusRank(b.status) || b.createdAt - a.createdAt,
       ),
     [section],
+  );
+  const tasks = useMemo(
+    () => filterTasks(sortedTasks, query, filter),
+    [filter, query, sortedTasks],
   );
 
   const title = section?.project.name || fallbackName || t("home.projects");
@@ -86,20 +94,59 @@ export default function ProjectScreen() {
       {showChanges ? (
         <ChangesPane projectId={projectId} active />
       ) : (
-        <FlatList
-          data={tasks}
-          keyExtractor={(item) => item.id}
-          renderItem={({ item }) => <TaskRow task={item} />}
-          ListEmptyComponent={<EmptyState title={t("project.empty")} />}
-          contentContainerStyle={tasks.length === 0 ? styles.listEmpty : styles.list}
-          refreshControl={
-            <RefreshControl
-              refreshing={loading}
-              onRefresh={refresh}
-              tintColor={theme.textSecondary}
-            />
-          }
-        />
+        <View style={styles.taskPane}>
+          {sortedTasks.length > 0 ? (
+            <View style={styles.taskTools}>
+              <View style={styles.searchBox}>
+                <Search size={16} color={theme.textHint} />
+                <TextInput
+                  value={query}
+                  onChangeText={setQuery}
+                  style={styles.searchInput}
+                  placeholder={t("project.searchTasks")}
+                  placeholderTextColor={theme.textHint}
+                  autoCorrect={false}
+                  autoCapitalize="none"
+                  returnKeyType="search"
+                  clearButtonMode="while-editing"
+                />
+              </View>
+              <AnimatedSelection
+                value={filter}
+                options={(
+                  [
+                    ["all", "project.filter.all"],
+                    ["active", "project.filter.active"],
+                    ["completed", "project.filter.completed"],
+                    ["starred", "project.filter.starred"],
+                  ] as const
+                ).map(([value, key]) => ({ value, label: t(key) }))}
+                onChange={setFilter}
+                dense
+                style={styles.filterSelection}
+              />
+            </View>
+          ) : null}
+          <FlatList
+            data={tasks}
+            keyExtractor={(item) => item.id}
+            renderItem={({ item }) => <TaskRow task={item} />}
+            ListEmptyComponent={
+              <EmptyState
+                title={sortedTasks.length === 0 ? t("project.empty") : t("project.noMatchingTasks")}
+              />
+            }
+            contentContainerStyle={tasks.length === 0 ? styles.listEmpty : styles.list}
+            keyboardShouldPersistTaps="handled"
+            refreshControl={
+              <RefreshControl
+                refreshing={loading}
+                onRefresh={refresh}
+                tintColor={theme.textSecondary}
+              />
+            }
+          />
+        </View>
       )}
 
       <NewTaskSheet
@@ -114,6 +161,28 @@ export default function ProjectScreen() {
 
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: theme.bg },
+  taskPane: { flex: 1 },
+  taskTools: {
+    paddingHorizontal: spacing.md,
+    paddingTop: spacing.sm,
+    paddingBottom: spacing.xs,
+    gap: spacing.sm,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: theme.border,
+  },
+  searchBox: {
+    height: 38,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+    paddingHorizontal: spacing.md,
+    borderRadius: 6,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: theme.border,
+    backgroundColor: theme.bgCard,
+  },
+  searchInput: { flex: 1, color: theme.text, fontSize: 13.5, paddingVertical: 0 },
+  filterSelection: { width: "100%" },
   list: { paddingTop: spacing.sm, paddingBottom: 32 },
   listEmpty: { flexGrow: 1, justifyContent: "center" },
   errorText: {

@@ -6,7 +6,8 @@
  * 避免「全量已含 + 增量又推」的重叠(见 remote/session_push.rs 注释)。
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ChevronDown, ChevronRight, Paperclip, Wrench } from "lucide-react-native";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { ActivityIndicator, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { t } from "../i18n";
 import { useConnection } from "../state/connection-context";
@@ -24,12 +25,14 @@ import { mergeAppended } from "./messages";
 
 function ToolUseCard({ name, input }: { name: string; input: string }) {
   const [expanded, setExpanded] = useState(false);
+  const Chevron = expanded ? ChevronDown : ChevronRight;
   return (
     <View style={styles.toolCard}>
       <AnimatedPressable style={styles.toolHeader} onPress={() => setExpanded((prev) => !prev)}>
-        <Text style={styles.toolChevron}>{expanded ? "▾" : "▸"}</Text>
+        <Chevron size={13} color={theme.textHint} />
+        <Wrench size={13} color={theme.textSecondary} />
         <Text style={styles.toolName} numberOfLines={1}>
-          🔧 {name}
+          {name}
         </Text>
       </AnimatedPressable>
       {expanded ? (
@@ -41,12 +44,34 @@ function ToolUseCard({ name, input }: { name: string; input: string }) {
   );
 }
 
+function ToolResultCard({ output }: { output: string }) {
+  const [expanded, setExpanded] = useState(false);
+  const Chevron = expanded ? ChevronDown : ChevronRight;
+  return (
+    <View style={styles.toolCard}>
+      <AnimatedPressable style={styles.toolHeader} onPress={() => setExpanded((prev) => !prev)}>
+        <Chevron size={13} color={theme.textHint} />
+        <Text style={styles.toolName} numberOfLines={1}>
+          {t("session.toolResult")}
+        </Text>
+      </AnimatedPressable>
+      {expanded ? (
+        <Text style={styles.toolInput} selectable>
+          {output}
+        </Text>
+      ) : null}
+    </View>
+  );
+}
+
 function ThinkingBlock({ thinking }: { thinking: string }) {
   const [expanded, setExpanded] = useState(false);
+  const Chevron = expanded ? ChevronDown : ChevronRight;
   return (
     <View>
       <AnimatedPressable style={styles.thinkingToggle} onPress={() => setExpanded((prev) => !prev)}>
-        <Text style={styles.thinkingLabel}>{expanded ? "▾" : "▸"} 思考过程</Text>
+        <Chevron size={13} color={theme.textHint} />
+        <Text style={styles.thinkingLabel}>{t("session.thinking")}</Text>
       </AnimatedPressable>
       {expanded ? (
         <Text style={styles.thinkingText} selectable>
@@ -57,38 +82,91 @@ function ThinkingBlock({ thinking }: { thinking: string }) {
   );
 }
 
+function SystemBlock({ content }: { content: string }) {
+  return content.trim() ? <Text style={styles.systemText}>{content}</Text> : null;
+}
+
+function AttachmentBlock({ name, mediaType }: { name?: string; mediaType?: string }) {
+  return (
+    <View style={styles.attachmentBlock}>
+      <Paperclip size={15} color={theme.textSecondary} />
+      <View style={styles.attachmentText}>
+        <Text style={styles.attachmentTitle} numberOfLines={1}>
+          {name?.trim() || t("session.attachment")}
+        </Text>
+        {mediaType ? <Text style={styles.attachmentMeta}>{mediaType}</Text> : null}
+      </View>
+    </View>
+  );
+}
+
+function safeJson(value: unknown): string {
+  try {
+    return JSON.stringify(value) ?? String(value);
+  } catch {
+    return String(value);
+  }
+}
+
+function renderContentPart(
+  part: SessionContent,
+  index: number,
+  role: SessionMessage["role"],
+): ReactNode {
+  const key = "id" in part && part.id ? `${part.type}-${part.id}` : `${part.type}-${index}`;
+  switch (part.type) {
+    case "thinking":
+      return part.thinking.trim() ? <ThinkingBlock key={key} thinking={part.thinking} /> : null;
+    case "tool_use":
+      return <ToolUseCard key={key} name={part.name} input={part.input} />;
+    case "tool_result":
+      return <ToolResultCard key={key} output={part.output} />;
+    case "attachment":
+      return <AttachmentBlock key={key} name={part.name} mediaType={part.mediaType} />;
+    case "opaque":
+      return <SystemBlock key={key} content={`${part.name}: ${safeJson(part.value)}`} />;
+    case "text":
+      if (!part.text.trim()) return null;
+      if (role === "user") {
+        return (
+          <View key={key} style={styles.userBubble}>
+            <Text style={styles.userText} selectable>
+              {part.text}
+            </Text>
+          </View>
+        );
+      }
+      if (role === "system") return <SystemBlock key={key} content={part.text} />;
+      return <MarkdownText key={key} text={part.text} />;
+    default: {
+      const unknown = part as unknown as Record<string, unknown>;
+      const kind = typeof unknown.type === "string" ? unknown.type : "unknown";
+      return (
+        <SystemBlock
+          key={`unknown-${index}`}
+          content={t("session.unknownContent", { type: kind })}
+        />
+      );
+    }
+  }
+}
+
 function MessageBlock({ message }: { message: SessionMessage }) {
+  if (message.content.length === 0) return null;
+  const content = message.content.map((part, index) =>
+    renderContentPart(part, index, message.role),
+  );
   if (message.role === "user") {
-    const text = message.content
-      .filter((c): c is Extract<SessionContent, { type: "text" }> => c.type === "text")
-      .map((c) => c.text)
-      .join("\n");
-    if (!text.trim()) return null;
     return (
       <View style={styles.userRow}>
-        <View style={styles.userBubble}>
-          <Text style={styles.userText} selectable>
-            {text}
-          </Text>
-        </View>
+        <View style={styles.userMessage}>{content}</View>
       </View>
     );
   }
-  if (message.content.length === 0) return null;
-  return (
-    <View style={styles.assistantBlock}>
-      {message.content.map((part, i) => {
-        switch (part.type) {
-          case "thinking":
-            return part.thinking.trim() ? <ThinkingBlock key={i} thinking={part.thinking} /> : null;
-          case "tool_use":
-            return <ToolUseCard key={i} name={part.name} input={part.input} />;
-          default:
-            return part.text.trim() ? <MarkdownText key={i} text={part.text} /> : null;
-        }
-      })}
-    </View>
-  );
+  if (message.role === "system") {
+    return <View style={styles.systemBlock}>{content}</View>;
+  }
+  return <View style={styles.assistantBlock}>{content}</View>;
 }
 
 export function SessionPane({
@@ -102,7 +180,7 @@ export function SessionPane({
   active: boolean;
   canSend: boolean;
 }) {
-  const { status, request, onPush } = useConnection();
+  const { status, request, onPush, capabilitiesReady, hasCapability } = useConnection();
   const [messages, setMessages] = useState<SessionMessage[]>([]);
   const [unavailableReason, setUnavailableReason] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -111,6 +189,7 @@ export function SessionPane({
   const [sending, setSending] = useState(false);
   const [responding, setResponding] = useState<"approve" | "deny" | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+  const approvalsSupported = !capabilitiesReady || hasCapability("tasks.approvals");
 
   const loadSeq = useRef(0);
   const loadingRef = useRef(false);
@@ -121,6 +200,12 @@ export function SessionPane({
 
   const load = useCallback(() => {
     if (status !== "online") return;
+    if (capabilitiesReady && !hasCapability("session.structured")) {
+      setUnavailableReason("unsupported");
+      setMessages([]);
+      setLoading(false);
+      return;
+    }
     const seq = ++loadSeq.current;
     loadingRef.current = true;
     setLoading(true);
@@ -145,7 +230,7 @@ export function SessionPane({
         setLoading(false);
         setError(err instanceof Error ? err.message : String(err));
       });
-  }, [projectId, request, status, task.id]);
+  }, [capabilitiesReady, hasCapability, projectId, request, status, task.id]);
 
   // 首次进入 + 重连后重新同步
   useEffect(() => {
@@ -181,6 +266,10 @@ export function SessionPane({
   const respond = useCallback(
     (action: "approve" | "deny") => {
       if (responding || !task.approval) return;
+      if (!approvalsSupported) {
+        setActionError(t("session.approvalUnsupported"));
+        return;
+      }
       setResponding(action);
       setActionError(null);
       request("task.respond", {
@@ -191,7 +280,7 @@ export function SessionPane({
         .catch((err) => setActionError(err instanceof Error ? err.message : String(err)))
         .finally(() => setResponding(null));
     },
-    [request, responding, task.approval, task.id],
+    [approvalsSupported, request, responding, task.approval, task.id],
   );
 
   const showApproval = active && task.status === "input_required";
@@ -215,11 +304,11 @@ export function SessionPane({
           </Text>
           {task.approval && (task.approval.toolName || approvalTool) ? (
             <Text style={styles.approvalDetail} numberOfLines={2}>
-              工具:{task.approval.toolName ?? approvalTool?.name}
+              {t("session.tool")}:{task.approval.toolName ?? approvalTool?.name}
               {approvalTool?.input ? `\n${approvalTool.input}` : ""}
             </Text>
           ) : null}
-          {task.approval ? (
+          {task.approval && approvalsSupported ? (
             <View style={styles.approvalButtons}>
               <AnimatedPressable
                 style={[styles.approvalButton, styles.approveButton]}
@@ -242,7 +331,11 @@ export function SessionPane({
             </View>
           ) : null}
           <Text style={styles.approvalHint}>
-            {task.approval ? t("session.approvalStale") : t("session.replyHint")}
+            {task.approval
+              ? approvalsSupported
+                ? t("session.approvalStale")
+                : t("session.approvalUnsupported")
+              : t("session.replyHint")}
           </Text>
         </View>
       ) : null}
@@ -267,17 +360,21 @@ export function SessionPane({
             <ActivityIndicator color={theme.textSecondary} />
           </View>
         ) : null}
-        {error ? <Text style={styles.errorText}>加载会话失败:{error}</Text> : null}
+        {error ? <Text style={styles.errorText}>{t("session.loadFailed", { error })}</Text> : null}
         {!loading && !error && unavailableReason ? (
           <Text style={styles.hintText}>
-            {unavailableReason === "ssh" ? t("session.sshUnavailable") : t("session.notStarted")}
+            {unavailableReason === "ssh"
+              ? t("session.sshUnavailable")
+              : unavailableReason === "unsupported"
+                ? t("session.unsupported")
+                : t("session.notStarted")}
           </Text>
         ) : null}
         {!loading && !error && !unavailableReason && messages.length === 0 ? (
-          <Text style={styles.hintText}>还没有会话消息。</Text>
+          <Text style={styles.hintText}>{t("session.empty")}</Text>
         ) : null}
-        {messages.map((message, i) => (
-          <MessageBlock key={i} message={message} />
+        {messages.map((message, index) => (
+          <MessageBlock key={message.messageId ?? message.id ?? index} message={message} />
         ))}
       </ScrollView>
 
@@ -311,8 +408,8 @@ const styles = StyleSheet.create({
   errorText: { color: theme.danger, fontSize: 12.5, paddingVertical: 8 },
   hintText: { color: theme.textSecondary, fontSize: 13, lineHeight: 20, paddingVertical: 8 },
   userRow: { flexDirection: "row", justifyContent: "flex-end" },
+  userMessage: { width: "82%", alignItems: "stretch", gap: 8 },
   userBubble: {
-    maxWidth: "82%",
     backgroundColor: "rgba(68,147,248,0.14)",
     borderColor: "rgba(68,147,248,0.28)",
     borderWidth: 1,
@@ -321,6 +418,30 @@ const styles = StyleSheet.create({
     paddingVertical: 9,
   },
   userText: { color: theme.text, fontSize: 13.5, lineHeight: 20 },
+  systemText: {
+    color: theme.textHint,
+    fontSize: 12,
+    lineHeight: 18,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderLeftWidth: 2,
+    borderLeftColor: theme.border,
+  },
+  systemBlock: { gap: 6 },
+  attachmentBlock: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: theme.border,
+    borderRadius: radii.button,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    backgroundColor: theme.bgCard,
+  },
+  attachmentText: { flex: 1, minWidth: 0 },
+  attachmentTitle: { color: theme.text, fontSize: 12.5, fontWeight: "600" },
+  attachmentMeta: { color: theme.textHint, fontSize: 11.5, marginTop: 2 },
   assistantBlock: { gap: 8 },
   toolCard: {
     borderWidth: StyleSheet.hairlineWidth,
@@ -336,7 +457,6 @@ const styles = StyleSheet.create({
     paddingVertical: 7,
     backgroundColor: theme.bgCard,
   },
-  toolChevron: { color: theme.textHint, fontSize: 11 },
   toolName: { color: theme.textSecondary, fontSize: 12.5, fontWeight: "600", flex: 1 },
   toolInput: {
     color: theme.textSecondary,
@@ -345,7 +465,7 @@ const styles = StyleSheet.create({
     padding: 10,
     backgroundColor: theme.bg,
   },
-  thinkingToggle: { paddingVertical: 2 },
+  thinkingToggle: { paddingVertical: 2, flexDirection: "row", alignItems: "center", gap: 4 },
   thinkingLabel: { color: theme.textHint, fontSize: 12, fontStyle: "italic" },
   thinkingText: {
     color: theme.textHint,

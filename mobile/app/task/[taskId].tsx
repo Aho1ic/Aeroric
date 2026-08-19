@@ -1,6 +1,6 @@
 /**
- * 任务详情页:主视图(会话/终端合一)/ 文件 / 变更 三个图标 tab + 生命周期操作(取消/完成/恢复)。
- * 主视图按任务状态自动取舍:running 显示终端,结束后显示会话——两者不会同时出现,故合成一个按钮。
+ * 任务详情页:会话 / 终端 / 文件 / 变更四个图标 tab + 生命周期操作(取消/完成/恢复)。
+ * 首次进入按任务状态选择会话或终端,之后尊重用户手动切换;审批与终端回退始终可达。
  */
 
 import { Stack, useLocalSearchParams } from "expo-router";
@@ -21,24 +21,27 @@ import { HeaderIconButton } from "../../src/ui/HeaderIconButton";
 import { taskStatusMeta } from "../../src/ui/task-status";
 import { radii, theme } from "../../src/ui/theme";
 
-type TabKey = "main" | "files" | "changes";
+type TabKey = "session" | "terminal" | "files" | "changes";
 
 export default function TaskDetailScreen() {
   const params = useLocalSearchParams<{ taskId: string; projectId?: string; name?: string }>();
   const taskId = typeof params.taskId === "string" ? params.taskId : "";
   const projectId = typeof params.projectId === "string" ? params.projectId : "";
   const fallbackName = typeof params.name === "string" ? params.name : "";
-  const { request } = useConnection();
+  const { request, capabilitiesReady, hasCapability } = useConnection();
   const { task, error, refresh, patchTask } = useTaskDetail(projectId, taskId);
-  const [tab, setTab] = useState<TabKey>("main");
+  const [selectedTab, setSelectedTab] = useState<TabKey | null>(null);
   const [acting, setActing] = useState(false);
+  const lifecycleSupported = !capabilitiesReady || hasCapability("tasks.lifecycle");
+  const terminalSupported = !capabilitiesReady || hasCapability("terminal.stream");
 
   const statusMeta = task ? taskStatusMeta(task.status) : null;
   const active = task ? taskAcceptsInput(task.status) : false;
-  // 会话与终端合并:运行中看终端,结束后看会话。
-  const mainPane: "session" | "terminal" = active ? "terminal" : "session";
-  const showSession = tab === "main" && mainPane === "session";
-  const showTerminal = tab === "main" && mainPane === "terminal";
+  const defaultTab: TabKey =
+    active && task?.status !== "input_required" && terminalSupported ? "terminal" : "session";
+  const tab = selectedTab ?? defaultTab;
+  const showSession = tab === "session";
+  const showTerminal = tab === "terminal";
 
   const title =
     task?.name?.trim() || task?.prompt.trim().split("\n")[0] || fallbackName || t("common.task");
@@ -46,11 +49,23 @@ export default function TaskDetailScreen() {
   const runLifecycle = useCallback(
     (method: "task.cancel" | "task.complete" | "task.resume") => {
       if (acting) return;
+      if (!lifecycleSupported) {
+        Alert.alert(t("task.lifecycleUnsupported"));
+        return;
+      }
       const previousTask = task;
-      const optimisticResume = method === "task.resume" && previousTask !== null;
       setActing(true);
-      if (optimisticResume) {
-        patchTask({ status: "pending", approval: undefined, attentionRequestedAt: undefined });
+      if (previousTask) {
+        patchTask({
+          status:
+            method === "task.resume"
+              ? "pending"
+              : method === "task.complete"
+                ? "done"
+                : "cancelled",
+          approval: undefined,
+          attentionRequestedAt: undefined,
+        });
       }
       const operation =
         method === "task.resume"
@@ -71,7 +86,7 @@ export default function TaskDetailScreen() {
           void refresh();
         })
         .catch((err) => {
-          if (optimisticResume && previousTask) {
+          if (previousTask) {
             patchTask({
               status: previousTask.status,
               approval: previousTask.approval,
@@ -82,11 +97,15 @@ export default function TaskDetailScreen() {
         })
         .finally(() => setActing(false));
     },
-    [acting, patchTask, projectId, refresh, request, task, taskId],
+    [acting, lifecycleSupported, patchTask, projectId, refresh, request, task, taskId],
   );
 
   const showActions = useCallback(() => {
     if (!task) return;
+    if (!lifecycleSupported) {
+      Alert.alert(t("task.lifecycleUnsupported"));
+      return;
+    }
     const buttons = [];
     if (active) {
       buttons.push({
@@ -110,9 +129,7 @@ export default function TaskDetailScreen() {
       statusMeta ? t("task.currentStatus", { label: statusMeta.label }) : undefined,
       buttons,
     );
-  }, [active, runLifecycle, statusMeta, task, title]);
-
-  const mainLabel = mainPane === "terminal" ? t("task.tab.terminal") : t("task.tab.session");
+  }, [active, lifecycleSupported, runLifecycle, statusMeta, task, title]);
 
   return (
     <View style={styles.screen}>
@@ -150,20 +167,24 @@ export default function TaskDetailScreen() {
           value={tab}
           options={[
             {
-              value: "main" as const,
-              label: mainLabel,
-              icon:
-                mainPane === "terminal" ? (
-                  <SquareTerminal
-                    size={17}
-                    color={tab === "main" ? theme.onAccent : theme.textSecondary}
-                  />
-                ) : (
-                  <MessageSquare
-                    size={17}
-                    color={tab === "main" ? theme.onAccent : theme.textSecondary}
-                  />
-                ),
+              value: "session" as const,
+              label: t("task.tab.session"),
+              icon: (
+                <MessageSquare
+                  size={17}
+                  color={tab === "session" ? theme.onAccent : theme.textSecondary}
+                />
+              ),
+            },
+            {
+              value: "terminal" as const,
+              label: t("task.tab.terminal"),
+              icon: (
+                <SquareTerminal
+                  size={17}
+                  color={tab === "terminal" ? theme.onAccent : theme.textSecondary}
+                />
+              ),
             },
             {
               value: "files" as const,
@@ -186,7 +207,7 @@ export default function TaskDetailScreen() {
               ),
             },
           ]}
-          onChange={setTab}
+          onChange={setSelectedTab}
           compact
           iconOnly
           style={styles.tabSwitch}

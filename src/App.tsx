@@ -884,6 +884,7 @@ function App() {
       selectedModel?: string;
       reasoningEffort?: string | null;
       speed?: string;
+      dshAgentPreset?: string;
     }>("remote-task-request", async (e) => {
       const {
         requestId,
@@ -896,6 +897,7 @@ function App() {
         selectedModel,
         reasoningEffort,
         speed,
+        dshAgentPreset,
       } = e.payload;
       if (!requestId) return;
       const complete = async (
@@ -1009,6 +1011,7 @@ function App() {
         selectedModel,
         reasoningEffort,
         speed,
+        dshAgentPreset,
         images: [],
         texts: [],
         immediate: true,

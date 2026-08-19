@@ -20,6 +20,7 @@ interface HostTasksState {
 
 export interface HostTasksActions {
   refresh: () => Promise<void>;
+  canPinProjects: boolean;
   /** 将桌面确认的任务快照立即合并到当前列表,随后可再做一致性刷新。 */
   upsertTask: (task: Task) => void;
   /** 置顶/取消置顶:先乐观改本地并重排,失败回滚。桌面端读同一份 projects.json。 */
@@ -29,7 +30,7 @@ export interface HostTasksActions {
 export { upsertTaskInSections } from "../ui/upsert-task";
 
 export function useHostTasks(): HostTasksState & HostTasksActions {
-  const { status, request, onPush } = useConnection();
+  const { status, request, onPush, capabilitiesReady, hasCapability } = useConnection();
   const [state, setState] = useState<HostTasksState>({
     sections: [],
     loading: false,
@@ -42,6 +43,7 @@ export function useHostTasks(): HostTasksState & HostTasksActions {
   const pinMutationSeq = useRef(new Map<string, number>());
   // 已知任务 id 镜像:push 处理需要同步判断,不能依赖异步的 setState updater
   const knownTaskIds = useRef<Set<string>>(new Set());
+  const canPinProjects = !capabilitiesReady || hasCapability("projects.pinning");
 
   const refresh = useCallback((): Promise<void> => {
     if (status !== "online") return Promise.resolve();
@@ -139,6 +141,7 @@ export function useHostTasks(): HostTasksState & HostTasksActions {
 
   const setPinned = useCallback(
     (projectId: string, pinned: boolean) => {
+      if (!canPinProjects) return;
       const project = state.sections.find((section) => section.project.id === projectId)?.project;
       if (!project) return;
       const previousPinned = Boolean(project.pinned);
@@ -164,8 +167,8 @@ export function useHostTasks(): HostTasksState & HostTasksActions {
         }
       })();
     },
-    [request, state.sections],
+    [canPinProjects, request, state.sections],
   );
 
-  return { ...state, refresh, upsertTask, setPinned };
+  return { ...state, refresh, upsertTask, canPinProjects, setPinned };
 }

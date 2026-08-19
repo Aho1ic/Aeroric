@@ -18,13 +18,13 @@ export interface StatsSummary {
 const REFRESH_THROTTLE_MS = 5_000;
 
 export function useHostStats(): { stats: StatsSummary | null; refresh: () => void } {
-  const { status, request, onPush } = useConnection();
+  const { status, request, onPush, capabilitiesReady, hasCapability } = useConnection();
   const [stats, setStats] = useState<StatsSummary | null>(null);
   const fetchSeq = useRef(0);
   const lastRefresh = useRef(0);
 
   const refresh = useCallback(() => {
-    if (status !== "online") return;
+    if (status !== "online" || (capabilitiesReady && !hasCapability("stats.summary"))) return;
     const seq = ++fetchSeq.current;
     lastRefresh.current = Date.now();
     void (async () => {
@@ -36,7 +36,7 @@ export function useHostStats(): { stats: StatsSummary | null; refresh: () => voi
         // 统计卡是附属信息,拉取失败保持上次数值/占位符,不打扰主流程
       }
     })();
-  }, [request, status]);
+  }, [capabilitiesReady, hasCapability, request, status]);
 
   useEffect(() => {
     if (status === "online") refresh();

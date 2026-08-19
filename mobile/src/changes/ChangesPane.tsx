@@ -55,16 +55,24 @@ export function ChangesPane({
   taskId?: string;
   active: boolean;
 }) {
-  const { request, status } = useConnection();
+  const { request, status, capabilitiesReady, hasCapability } = useConnection();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [unavailable, setUnavailable] = useState<"ssh" | "wsl" | null>(null);
   const [changes, setChanges] = useState<GitFileChange[] | null>(null);
   const [expanded, setExpanded] = useState<string | null>(null);
   const [diffs, setDiffs] = useState<Record<string, DiffState>>({});
+  const [unsupported, setUnsupported] = useState(false);
 
   const refresh = useCallback(() => {
     if (status !== "online" || !projectId) return;
+    if (capabilitiesReady && !hasCapability("git.read")) {
+      setUnsupported(true);
+      setChanges(null);
+      setLoading(false);
+      return;
+    }
+    setUnsupported(false);
     setLoading(true);
     setError(null);
     request<GitChangesResult>("git.changes", { projectId, ...(taskId ? { taskId } : {}) })
@@ -79,7 +87,7 @@ export function ChangesPane({
       })
       .catch((err) => setError(err instanceof Error ? err.message : String(err)))
       .finally(() => setLoading(false));
-  }, [projectId, request, status, taskId]);
+  }, [capabilitiesReady, hasCapability, projectId, request, status, taskId]);
 
   // 首次激活 & 重新上线时拉取
   useEffect(() => {
@@ -140,6 +148,13 @@ export function ChangesPane({
         <Text style={styles.hint}>
           {unavailable === "wsl" ? t("changes.unavailable.wsl") : t("changes.unavailable.ssh")}
         </Text>
+      </View>
+    );
+  }
+  if (unsupported) {
+    return (
+      <View style={styles.center}>
+        <Text style={styles.hint}>{t("changes.unsupported")}</Text>
       </View>
     );
   }

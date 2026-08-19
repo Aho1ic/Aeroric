@@ -17,7 +17,11 @@ export function mergeAppended(
   if (incoming.length === 0) return existing;
   const next = [...existing];
   for (const message of incoming) {
-    if (!message || (message.role !== "user" && message.role !== "assistant")) continue;
+    if (
+      !message ||
+      (message.role !== "user" && message.role !== "assistant" && message.role !== "system")
+    )
+      continue;
     const content = Array.isArray(message.content) ? message.content : [];
     if (content.length === 0) continue;
     const last = next[next.length - 1];
@@ -29,7 +33,13 @@ export function mergeAppended(
     ) {
       next[next.length - 1] = { ...last, content: [...last.content, ...content] };
     } else {
-      next.push({ role: message.role, content });
+      next.push({
+        role: message.role,
+        content,
+        messageId: message.messageId,
+        id: message.id,
+        timestamp: message.timestamp,
+      });
     }
   }
   return next;

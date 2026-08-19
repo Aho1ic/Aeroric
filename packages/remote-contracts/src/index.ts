@@ -20,7 +20,7 @@ export type RpcV3Response =
       type: "response";
       id: RpcId;
       ok: false;
-      error: { code: string; message: string; retryable: boolean };
+      error: RpcErrorShape;
     };
 
 export interface RpcV3Push {
@@ -38,7 +38,117 @@ export interface RpcAuthCapabilities {
   capabilities?: string[];
 }
 
-export const DEFAULT_RPC_CAPABILITIES = ["typed-envelope", "structured-error"] as const;
+/**
+ * Capabilities describe remotely safe operations, not desktop UI panels. Keep
+ * this list additive so an older phone can hide a newer operation cleanly.
+ */
+export const DEFAULT_RPC_CAPABILITIES = [
+  "typed-envelope",
+  "structured-error",
+  "events-replay",
+  "projects.grouping",
+  "projects.pinning",
+  "tasks.lifecycle",
+  "tasks.models",
+  "tasks.approvals",
+  "session.structured",
+  "session.dsh",
+  "terminal.stream",
+  "files.read",
+  "files.write",
+  "git.read",
+  "agent-config.status",
+  "agent-config.write",
+  "stats.summary",
+] as const;
+
+export type RpcCapability = (typeof DEFAULT_RPC_CAPABILITIES)[number] | (string & {});
+
+export interface RpcHostSnapshot {
+  name: string;
+  version: string;
+  platform: string;
+  rpcVersions: RpcVersion[];
+  capabilities: RpcCapability[];
+}
+
+export interface RpcErrorShape {
+  code: string;
+  message: string;
+  retryable: boolean;
+  details?: Record<string, unknown>;
+}
+
+export type RpcProjectLocation =
+  | { kind: "local"; path?: string }
+  | { kind: "ssh"; connectionId?: string; remotePath?: string }
+  | { kind: "wsl"; distribution?: string; linuxPath?: string };
+
+export interface RpcProjectProjection {
+  id: string;
+  name: string;
+  path: string;
+  location?: RpcProjectLocation;
+  branch?: string;
+  group?: string;
+  lastOpenedAt: number;
+  orderIndex?: number;
+  hiddenFromRail?: boolean;
+  pinned?: boolean;
+}
+
+export interface RpcTaskProjection {
+  id: string;
+  projectId: string;
+  name?: string;
+  prompt: string;
+  agent: string;
+  family?: "claude" | "codex" | "dsh";
+  selectedModel?: string;
+  dshAgentPreset?: string;
+  reasoningEffort?: string;
+  speed?: string;
+  permissionMode?: "ask" | "auto_edit" | "full_access";
+  status: string;
+  createdAt: number;
+  attentionRequestedAt?: number;
+  starred?: boolean;
+  failureReason?: string;
+  sessionFamily?: "claude" | "codex" | "dsh";
+  worktreePath?: string;
+  worktreeBranch?: string;
+  baseBranch?: string;
+  worktreeDiscarded?: boolean;
+  additions?: number;
+  deletions?: number;
+  approval?: Record<string, unknown>;
+  codexSessionId?: string;
+  codexSessionPath?: string;
+  claudeSessionId?: string;
+  claudeSessionPath?: string;
+  dshSessionId?: string;
+  dshSessionPath?: string;
+  dshWorkspaceId?: string;
+  dshPromptMode?: string;
+  sessionAgent?: string;
+  sessionCodexLike?: boolean;
+}
+
+export type RpcSessionContent =
+  | { type: "text"; text: string }
+  | { type: "thinking"; thinking: string }
+  | { type: "tool_use"; id: string; name: string; input: string }
+  | { type: "tool_result"; id: string; output: string }
+  | { type: "attachment"; name: string; mediaType: string; source: string }
+  | { type: "opaque"; name: string; value: unknown };
+
+export interface RpcSessionMessage {
+  role: "user" | "assistant" | "system";
+  content: RpcSessionContent[];
+  messageId?: string;
+  id?: string;
+  timestamp?: number;
+}
 
 export function selectRpcVersion(supported?: readonly number[]): RpcVersion {
   return supported?.includes(RPC_V3) ? RPC_V3 : RPC_V2;

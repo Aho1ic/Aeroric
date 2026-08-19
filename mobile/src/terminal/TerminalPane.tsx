@@ -46,7 +46,7 @@ interface SnapshotMeta {
 }
 
 export function TerminalPane({ taskId, active }: { taskId: string; active: boolean }) {
-  const { status, sendBinary, onBinary } = useConnection();
+  const { status, sendBinary, onBinary, capabilitiesReady, hasCapability } = useConnection();
   const webviewRef = useRef<WebView>(null);
   const streamIdRef = useRef(0);
   const [webReady, setWebReady] = useState(false);
@@ -56,6 +56,7 @@ export function TerminalPane({ taskId, active }: { taskId: string; active: boole
   const [hasSelection, setHasSelection] = useState(false);
   const [copied, setCopied] = useState(false);
   const [viewMode, setViewMode] = useState<"phone" | "desktop">("phone");
+  const terminalSupported = !capabilitiesReady || hasCapability("terminal.stream");
   const { width: windowWidth, height: windowHeight } = useWindowDimensions();
   /**
    * 输入法高度:WebView 内的隐藏 input 不参与 RN 布局,KeyboardAvoidingView
@@ -201,7 +202,7 @@ export function TerminalPane({ taskId, active }: { taskId: string; active: boole
 
   // ── 订阅生命周期:tab 激活 + WebView 就绪 + 连接在线(含重连)→ (重新)订阅 ──
   useEffect(() => {
-    if (!active || !webReady || status !== "online" || !taskId) return;
+    if (!terminalSupported || !active || !webReady || status !== "online" || !taskId) return;
     const streamId = nextStreamId++;
     streamIdRef.current = streamId;
     setStreamError(null);
@@ -224,7 +225,7 @@ export function TerminalPane({ taskId, active }: { taskId: string; active: boole
       );
       if (streamIdRef.current === streamId) streamIdRef.current = 0;
     };
-  }, [active, sendBinary, status, taskId, webReady]);
+  }, [active, sendBinary, status, taskId, terminalSupported, webReady]);
 
   // ── 入站终端帧 ──
   useEffect(() => {
@@ -439,6 +440,14 @@ export function TerminalPane({ taskId, active }: { taskId: string; active: boole
     };
   }, [stopRepeat]);
 
+  if (!terminalSupported) {
+    return (
+      <View style={styles.center}>
+        <Text style={styles.unsupportedText}>{t("term.unsupported")}</Text>
+      </View>
+    );
+  }
+
   return (
     /**
      * 不用 KeyboardAvoidingView:真正需要避让的输入框在 WebView 内部(隐藏
@@ -568,6 +577,19 @@ export function TerminalPane({ taskId, active }: { taskId: string; active: boole
 
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: theme.bg },
+  center: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    padding: spacing.lg,
+    backgroundColor: theme.bg,
+  },
+  unsupportedText: {
+    color: theme.textSecondary,
+    fontSize: typography.bodySize,
+    lineHeight: 20,
+    textAlign: "center",
+  },
   notice: {
     color: theme.warning,
     fontSize: typography.metaSize,

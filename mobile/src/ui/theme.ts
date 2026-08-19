@@ -15,8 +15,6 @@ export const theme = {
   bgElevated: dark.surfaceGlassMuted,
   border: dark.border,
   glassHighlight: "rgba(255, 255, 255, 0.08)",
-  orbBlue: "rgba(37, 99, 235, 0.24)",
-  orbPurple: "rgba(139, 92, 246, 0.2)",
   text: dark.text,
   textSecondary: dark.textSecondary,
   textHint: dark.textMuted,

@@ -52,6 +52,11 @@ export interface Project {
   hiddenFromRail?: boolean;
   /** 置顶:在各自分组内排最前,分组折叠时仍露出。桌面与手机共享同一份状态。 */
   pinned?: boolean;
+  /** Desktop target kind, when the host exposes it. */
+  location?:
+    | { kind: "local"; path?: string }
+    | { kind: "ssh"; connectionId?: string; remotePath?: string }
+    | { kind: "wsl"; distribution?: string; linuxPath?: string };
 }
 
 export interface Task {
@@ -63,13 +68,31 @@ export interface Task {
   selectedModel?: string;
   reasoningEffort?: string;
   speed?: string;
+  dshAgentPreset?: string;
+  permissionMode?: PermissionMode;
+  sessionFamily?: AgentFamily;
   status: TaskStatus;
   createdAt: number;
   attentionRequestedAt?: number;
   starred?: boolean;
   failureReason?: string;
   worktreeBranch?: string;
+  worktreePath?: string;
+  baseBranch?: string;
+  worktreeDiscarded?: boolean;
+  additions?: number;
+  deletions?: number;
   approval?: ApprovalRequest;
+  codexSessionId?: string;
+  codexSessionPath?: string;
+  claudeSessionId?: string;
+  claudeSessionPath?: string;
+  dshSessionId?: string;
+  dshSessionPath?: string;
+  dshWorkspaceId?: string;
+  dshPromptMode?: string;
+  sessionAgent?: string;
+  sessionCodexLike?: boolean;
 }
 
 /** task.create/task.resume 的远程确认结果。task 为桌面端权威快照,可为空以兼容旧桌面。 */
@@ -83,6 +106,8 @@ export interface HostInfo {
   name: string;
   version: string;
   platform: string;
+  rpcVersions?: number[];
+  capabilities?: string[];
 }
 
 /**
@@ -97,6 +122,10 @@ export interface HostIdentity {
   endpoints?: string[];
   /** endpoints 中属于内网直连的子集;只有这些会替换本地旧 LAN 地址 */
   lanEndpoints?: string[];
+  version?: string;
+  platform?: string;
+  rpcVersions?: number[];
+  capabilities?: string[];
 }
 
 /** 服务端推送帧(events_bridge 白名单事件) */
@@ -123,11 +152,17 @@ export interface ApprovalRequest {
 export type SessionContent =
   | { type: "text"; text: string }
   | { type: "tool_use"; id: string; name: string; input: string }
-  | { type: "thinking"; thinking: string };
+  | { type: "tool_result"; id: string; output: string }
+  | { type: "thinking"; thinking: string }
+  | { type: "attachment"; name: string; mediaType: string; source: string }
+  | { type: "opaque"; name: string; value: unknown };
 
 export interface SessionMessage {
-  role: "user" | "assistant";
+  role: "user" | "assistant" | "system";
   content: SessionContent[];
+  messageId?: string;
+  id?: string;
+  timestamp?: number;
 }
 
 /** RPC session.messages 的响应。available=false 时手机端引导切终端 tab。 */

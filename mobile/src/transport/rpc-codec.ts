@@ -4,14 +4,18 @@ import {
   RPC_V3,
   SUPPORTED_RPC_VERSIONS,
   encodeRpcV3Request,
+  type RpcCapability,
+  type RpcErrorShape,
+  type RpcHostSnapshot,
   type RpcVersion,
 } from "@aeroric/remote-contracts";
 
 export { RPC_V2, RPC_V3, SUPPORTED_RPC_VERSIONS, type RpcVersion };
+export type { RpcCapability, RpcErrorShape, RpcHostSnapshot } from "@aeroric/remote-contracts";
 
 export type DecodedRpcEnvelope =
   | { kind: "response"; id: string; ok: true; result: unknown }
-  | { kind: "response"; id: string; ok: false; error: string }
+  | { kind: "response"; id: string; ok: false; error: string; errorShape?: RpcErrorShape }
   | { kind: "push"; event: string; seq?: number; data: unknown };
 
 export function authenticationParams(params: Record<string, unknown>): Record<string, unknown> {
@@ -24,6 +28,29 @@ export function authenticationParams(params: Record<string, unknown>): Record<st
 
 export function negotiatedRpcVersion(value: unknown): RpcVersion {
   return value === RPC_V3 ? RPC_V3 : RPC_V2;
+}
+
+export function normalizeRpcCapabilities(value: unknown): RpcCapability[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((item): item is RpcCapability => typeof item === "string" && item.length > 0);
+}
+
+export function normalizeHostSnapshot(value: unknown): RpcHostSnapshot | null {
+  if (!value || typeof value !== "object") return null;
+  const candidate = value as Record<string, unknown>;
+  const name = typeof candidate.name === "string" ? candidate.name : "aeroric";
+  const version = typeof candidate.version === "string" ? candidate.version : "";
+  const platform = typeof candidate.platform === "string" ? candidate.platform : "";
+  const rpcVersions = Array.isArray(candidate.rpcVersions)
+    ? candidate.rpcVersions.filter((item): item is RpcVersion => item === RPC_V2 || item === RPC_V3)
+    : [];
+  return {
+    name,
+    version,
+    platform,
+    rpcVersions,
+    capabilities: normalizeRpcCapabilities(candidate.capabilities),
+  };
 }
 
 export function encodeAeroricRequest(
@@ -58,14 +85,29 @@ export function decodeAeroricEnvelope(value: unknown): DecodedRpcEnvelope | null
   ) {
     if (frame.ok) return { kind: "response", id: frame.id, ok: true, result: frame.result };
     const error = frame.error as { message?: unknown; code?: unknown } | undefined;
+    const errorShape =
+      error && typeof error === "object"
+        ? {
+            code: typeof error.code === "string" ? error.code : "remote_error",
+            message:
+              typeof error.message === "string"
+                ? error.message
+                : typeof error.code === "string"
+                  ? error.code
+                  : "request failed",
+            retryable: Boolean((error as { retryable?: unknown }).retryable),
+            ...((error as { details?: unknown }).details &&
+            typeof (error as { details?: unknown }).details === "object"
+              ? { details: (error as { details: Record<string, unknown> }).details }
+              : {}),
+          }
+        : undefined;
     return {
       kind: "response",
       id: frame.id,
       ok: false,
-      error:
-        (typeof error?.message === "string" && error.message) ||
-        (typeof error?.code === "string" && error.code) ||
-        "request failed",
+      error: errorShape?.message || "request failed",
+      ...(errorShape ? { errorShape } : {}),
     };
   }
   if (frame.v === RPC_V2 && typeof frame.push === "string") {

@@ -183,6 +183,10 @@ fn lan_pairing_rpc_push_and_revoke_roundtrip() {
             .await;
         let reply = phone.next_json().await;
         assert_eq!(reply["ok"], json!(true), "pairing reply: {reply}");
+        assert_eq!(reply["result"]["rpcVersions"], json!([3, 2]));
+        assert!(reply["result"]["capabilities"]
+            .as_array()
+            .is_some_and(|items| items.iter().any(|item| item == "tasks.lifecycle")));
         let device_token = reply["result"]["deviceToken"]
             .as_str()
             .expect("deviceToken issued")
@@ -668,7 +672,7 @@ fn m3_task_rpcs_input_respond_and_event_bridge() {
         );
 
         phone
-            .send_json(json!({"v":2,"id":7,"method":"task.create","params":{"projectId":"p1","prompt":"do it","agent":"claude","permissionMode":"ask"}}))
+            .send_json(json!({"v":2,"id":7,"method":"task.create","params":{"projectId":"p1","prompt":"do it","agent":"claude","permissionMode":"ask","dshAgentPreset":"code"}}))
             .await;
         let reply = phone.next_json().await;
         assert_eq!(reply["ok"], json!(true));
@@ -680,6 +684,7 @@ fn m3_task_rpcs_input_respond_and_event_bridge() {
         assert_eq!(request["projectId"], json!("p1"));
         assert_eq!(request["prompt"], json!("do it"));
         assert_eq!(request["permissionMode"], json!("ask"));
+        assert_eq!(request["dshAgentPreset"], json!("code"));
 
         // ── task.resume:桌面拒绝会回传真实失败,不能提前返回 accepted ──
         phone

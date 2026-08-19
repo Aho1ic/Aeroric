@@ -64,6 +64,12 @@ const zh = {
 
   // 项目页
   "project.empty": "该项目还没有任务。",
+  "project.searchTasks": "搜索任务",
+  "project.noMatchingTasks": "没有匹配的任务。",
+  "project.filter.all": "全部",
+  "project.filter.active": "进行中",
+  "project.filter.completed": "已结束",
+  "project.filter.starred": "星标",
   "project.browseFiles": "浏览文件",
   "project.viewChanges": "查看变更",
 
@@ -100,6 +106,7 @@ const zh = {
 
   // 新建任务
   "newTask.offline": "未连接到电脑,连接恢复后才能创建任务。",
+  "newTask.unsupported": "当前桌面版本未提供移动端任务创建能力。",
   "newTask.project": "项目",
   "newTask.noProjects": "桌面端还没有项目。",
   "newTask.permission": "权限模式",
@@ -121,6 +128,7 @@ const zh = {
   "newTask.openai": "OpenAI",
   "newTask.deepseek": "DeepSeek",
   "newTask.reasoning": "推理强度",
+  "newTask.reasoning.default": "模型默认",
   "newTask.reasoning.minimal": "Minimal",
   "newTask.reasoning.low": "Low",
   "newTask.reasoning.medium": "Medium",
@@ -131,6 +139,11 @@ const zh = {
   "newTask.speed": "速度",
   "newTask.speed.standard": "普通",
   "newTask.speed.fast": "快速",
+  "newTask.dshAgentPreset": "Agent 预设",
+  "newTask.dshPreset.standard": "标准",
+  "newTask.dshPreset.code": "代码",
+  "newTask.dshPreset.minimal": "精简",
+  "newTask.dshPreset.cordis": "Cordis",
   "newTask.cancel": "取消",
   "perm.ask": "请求确认",
   "perm.ask.hint": "工具调用逐一确认,最稳妥",
@@ -153,6 +166,7 @@ const zh = {
   "task.resumeRequested": "已请求桌面端恢复任务,稍候状态会更新。",
   "task.currentStatus": "当前状态:{label}",
   "task.loadFailed": "加载失败:{error}",
+  "task.lifecycleUnsupported": "当前桌面版本不支持从手机端更改任务状态。",
 
   // 会话 tab
   "session.approvalTitle": "Agent 请求授权",
@@ -161,10 +175,19 @@ const zh = {
   "session.approve": "允许",
   "session.deny": "拒绝",
   "session.approvalStale": "授权请求变化后旧按钮会自动失效。",
+  "session.approvalUnsupported": "当前桌面版本不支持从手机端处理授权,请使用电脑端。",
   "session.replyHint": "请在下方发送回复,或切到「终端」标签继续操作。",
   "session.sshUnavailable": "SSH 远程任务暂不支持会话视图,请使用「终端」标签。",
+  "session.unsupported": "当前桌面版本未提供结构化会话能力,请使用「终端」标签。",
   "session.notStarted":
     "会话尚未建立。任务启动后消息会显示在这里;也可切到「终端」标签查看原始输出。",
+  "session.loadFailed": "加载会话失败:{error}",
+  "session.empty": "还没有会话消息。",
+  "session.thinking": "思考过程",
+  "session.toolResult": "工具结果",
+  "session.tool": "工具",
+  "session.attachment": "附件",
+  "session.unknownContent": "暂不支持的会话内容:{type}",
   "session.sendPlaceholder": "发送 prompt 给 agent…",
   "session.cannotSend": "任务未在运行,无法发送",
   "session.send": "发送",
@@ -172,6 +195,7 @@ const zh = {
   // 终端 tab
   "term.paste": "粘贴",
   "term.disconnected": "连接已断开,恢复后将自动重新同步终端…",
+  "term.unsupported": "当前桌面版本未提供移动端终端流。",
   "term.liveInput": "实时输入",
   "term.tapToShowKeyboard": "点击唤起键盘",
   "term.hideKeyboard": "收起输入法",
@@ -186,6 +210,7 @@ const zh = {
   "changes.empty": "工作区没有未提交的变更。",
   "changes.unavailable.ssh": "SSH 项目的变更请在桌面端查看。",
   "changes.unavailable.wsl": "WSL 项目的变更请在桌面端查看。",
+  "changes.unsupported": "当前桌面版本未提供 Git 变更能力。",
   "changes.staged": "已暂存",
   "changes.diffEmpty": "该文件没有可显示的 diff(可能是二进制文件)。",
   "changes.browseFiles": "浏览项目文件",
@@ -201,6 +226,8 @@ const zh = {
   "files.saveFailed": "保存失败",
   "files.saved": "已保存",
   "files.readOnlyTruncated": "文件被截断,无法编辑",
+  "files.readOnlyUnsupported": "当前桌面版本仅支持读取文件,请在电脑端编辑。",
+  "files.unsupported": "当前桌面版本未提供文件访问能力。",
 
   // Agent 配置
   "agentConfig.title": "Agent 配置",
@@ -221,6 +248,8 @@ const zh = {
   "agentConfig.collapse": "收起",
   "agentConfig.empty": "电脑端还没有自定义 agent。",
   "agentConfig.offline": "未连接到电脑,连接恢复后才能读取配置。",
+  "agentConfig.unsupported": "当前桌面版本未提供移动端 Agent 配置。",
+  "agentConfig.writeUnsupported": "当前桌面版本仅支持查看 Agent 配置,请在电脑端修改。",
   "agentConfig.keyHint": "凭据只在加密通道内传输,请勿在不受信任的手机上保存。",
   "agentConfig.anthropic": "Anthropic",
   "agentConfig.openai": "OpenAI",
@@ -306,6 +335,12 @@ const en: Record<MessageKey, string> = {
   "home.collapseGroup": "Collapse group {name}",
 
   "project.empty": "No tasks in this project yet.",
+  "project.searchTasks": "Search tasks",
+  "project.noMatchingTasks": "No matching tasks.",
+  "project.filter.all": "All",
+  "project.filter.active": "Active",
+  "project.filter.completed": "Completed",
+  "project.filter.starred": "Starred",
   "project.browseFiles": "Browse files",
   "project.viewChanges": "View changes",
 
@@ -342,6 +377,7 @@ const en: Record<MessageKey, string> = {
   "hosts.keepOneEndpoint": "Keep at least one ws:// or wss:// address",
 
   "newTask.offline": "Not connected — you can create tasks once the connection is back.",
+  "newTask.unsupported": "This desktop version does not provide mobile task creation.",
   "newTask.project": "Project",
   "newTask.noProjects": "No projects on the desktop yet.",
   "newTask.permission": "Permission mode",
@@ -364,6 +400,7 @@ const en: Record<MessageKey, string> = {
   "newTask.openai": "OpenAI",
   "newTask.deepseek": "DeepSeek",
   "newTask.reasoning": "Reasoning effort",
+  "newTask.reasoning.default": "Model default",
   "newTask.reasoning.minimal": "Minimal",
   "newTask.reasoning.low": "Low",
   "newTask.reasoning.medium": "Medium",
@@ -374,6 +411,11 @@ const en: Record<MessageKey, string> = {
   "newTask.speed": "Speed",
   "newTask.speed.standard": "Standard",
   "newTask.speed.fast": "Fast",
+  "newTask.dshAgentPreset": "Agent preset",
+  "newTask.dshPreset.standard": "Standard",
+  "newTask.dshPreset.code": "Code",
+  "newTask.dshPreset.minimal": "Minimal",
+  "newTask.dshPreset.cordis": "Cordis",
   "newTask.cancel": "Cancel",
   "perm.ask": "Ask every time",
   "perm.ask.hint": "Confirm each tool call — safest",
@@ -395,6 +437,8 @@ const en: Record<MessageKey, string> = {
   "task.resumeRequested": "Requested the desktop to resume the task — status will update shortly.",
   "task.currentStatus": "Status: {label}",
   "task.loadFailed": "Load failed: {error}",
+  "task.lifecycleUnsupported":
+    "This desktop version does not support changing task status from mobile.",
 
   "session.approvalTitle": "Agent requests approval",
   "session.waitingInput": "Agent is waiting for input",
@@ -402,16 +446,28 @@ const en: Record<MessageKey, string> = {
   "session.approve": "Approve",
   "session.deny": "Deny",
   "session.approvalStale": "These buttons expire automatically when the approval request changes.",
+  "session.approvalUnsupported":
+    "This desktop version cannot handle approvals from mobile. Use the desktop app instead.",
   "session.replyHint": "Reply below, or switch to the Terminal tab to continue.",
   "session.sshUnavailable": "Session view is unavailable for SSH tasks — use the Terminal tab.",
+  "session.unsupported":
+    "This desktop version does not provide structured sessions — use the Terminal tab.",
   "session.notStarted":
     "No session yet. Messages appear here once the task runs; the Terminal tab shows raw output.",
+  "session.loadFailed": "Could not load the session: {error}",
+  "session.empty": "No session messages yet.",
+  "session.thinking": "Thinking",
+  "session.toolResult": "Tool result",
+  "session.tool": "Tool",
+  "session.attachment": "Attachment",
+  "session.unknownContent": "Unsupported session content: {type}",
   "session.sendPlaceholder": "Send a prompt to the agent…",
   "session.cannotSend": "Task is not running — cannot send",
   "session.send": "Send",
 
   "term.paste": "Paste",
   "term.disconnected": "Connection lost — the terminal will resync automatically…",
+  "term.unsupported": "This desktop version does not provide terminal streaming to mobile.",
   "term.liveInput": "Live input",
   "term.tapToShowKeyboard": "Tap to show keyboard",
   "term.hideKeyboard": "Hide keyboard",
@@ -425,6 +481,7 @@ const en: Record<MessageKey, string> = {
   "changes.empty": "No uncommitted changes in the working tree.",
   "changes.unavailable.ssh": "View changes for SSH projects on the desktop.",
   "changes.unavailable.wsl": "View changes for WSL projects on the desktop.",
+  "changes.unsupported": "This desktop version does not provide Git changes.",
   "changes.staged": "Staged",
   "changes.diffEmpty": "No diff to show for this file (it may be binary).",
   "changes.browseFiles": "Browse project files",
@@ -439,6 +496,9 @@ const en: Record<MessageKey, string> = {
   "files.saveFailed": "Save failed",
   "files.saved": "Saved",
   "files.readOnlyTruncated": "File is truncated — editing is disabled",
+  "files.readOnlyUnsupported":
+    "This desktop version only supports reading files. Edit this file on the desktop.",
+  "files.unsupported": "This desktop version does not provide file access.",
 
   "agentConfig.title": "Agent config",
   "agentConfig.baseUrl": "Base URL",
@@ -459,6 +519,9 @@ const en: Record<MessageKey, string> = {
   "agentConfig.collapse": "Collapse",
   "agentConfig.empty": "No custom agents on the desktop yet.",
   "agentConfig.offline": "Not connected — config loads once the connection is back.",
+  "agentConfig.unsupported": "This desktop version does not provide mobile Agent configuration.",
+  "agentConfig.writeUnsupported":
+    "This desktop version only supports viewing Agent configuration. Edit it on the desktop.",
   "agentConfig.keyHint":
     "Credentials travel only inside the encrypted channel — avoid saving them on an untrusted phone.",
   "agentConfig.anthropic": "Anthropic",

@@ -207,10 +207,14 @@ describe("RemoteConnection", () => {
     const authFrame = winner.clientFrames()[0];
     expect(authFrame.v).toBe(2);
     expect(authFrame.method).toBe("auth");
-    expect(authFrame.params).toEqual({
+    expect(authFrame.params).toMatchObject({
       deviceToken: "tok",
       supportedRpcVersions: [3, 2],
-      capabilities: ["typed-envelope", "structured-error"],
+      capabilities: expect.arrayContaining([
+        "typed-envelope",
+        "structured-error",
+        "tasks.lifecycle",
+      ]),
     });
     expect(authResults).toEqual([{ deviceId: "d1" }]);
     expect(h.statuses).toEqual(["connecting", "authenticating", "online"]);
@@ -253,6 +257,62 @@ describe("RemoteConnection", () => {
       result: ["project-1"],
     });
     await expect(resultPromise).resolves.toEqual(["project-1"]);
+  });
+
+  it("preserves live identity fields while normalizing the host snapshot", async () => {
+    const h = createHarness();
+    const identities: unknown[] = [];
+    h.conn.onHostIdentity((identity) => identities.push(identity));
+    h.conn.start();
+    const winner = h.sockets[0];
+    winner.open();
+    await flush();
+    winner.acceptHandshake(h.serverKeys);
+    await flush();
+    winner.receiveCtrl({
+      v: 2,
+      id: winner.lastFrame().id,
+      ok: true,
+      result: {
+        deviceId: "d1",
+        rpcVersion: 3,
+        capabilities: ["tasks.lifecycle", 7],
+      },
+    });
+    await flush();
+
+    const hello = winner.frameFor("hello");
+    winner.receiveCtrl({
+      v: 3,
+      type: "response",
+      id: hello.id,
+      ok: true,
+      result: {
+        name: "aeroric",
+        hostId: "host-1",
+        hostName: "Studio Mac",
+        version: "1.4.4",
+        platform: "darwin",
+        rpcVersions: [3, 2, 99],
+        capabilities: ["tasks.lifecycle", "files.read", null],
+        endpoints: ["ws://192.168.1.20:38473"],
+        lanEndpoints: ["ws://192.168.1.20:38473"],
+      },
+    });
+    await flush();
+
+    expect(h.conn.negotiatedRpcVersion).toBe(3);
+    expect(h.conn.negotiatedCapabilities).toEqual(["tasks.lifecycle"]);
+    expect(identities).toEqual([
+      expect.objectContaining({
+        hostId: "host-1",
+        hostName: "Studio Mac",
+        rpcVersions: [3, 2],
+        capabilities: ["tasks.lifecycle", "files.read"],
+        endpoints: ["ws://192.168.1.20:38473"],
+        lanEndpoints: ["ws://192.168.1.20:38473"],
+      }),
+    ]);
   });
 
   it("aborts as unauthorized when the host key does not match the pinned key", async () => {

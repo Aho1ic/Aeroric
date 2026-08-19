@@ -29,16 +29,24 @@ export function FilesPane({
   active: boolean;
   initialPath?: string;
 }) {
-  const { request, status } = useConnection();
+  const { request, status, capabilitiesReady, hasCapability } = useConnection();
   const [path, setPath] = useState(initialPath);
   const [entries, setEntries] = useState<FsEntryView[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [unavailable, setUnavailable] = useState<"ssh" | "wsl" | null>(null);
   const [loading, setLoading] = useState(false);
+  const [unsupported, setUnsupported] = useState(false);
 
   const load = useCallback(
     (target: string) => {
       if (status !== "online" || !projectId) return;
+      if (capabilitiesReady && !hasCapability("files.read")) {
+        setUnsupported(true);
+        setEntries(null);
+        setLoading(false);
+        return;
+      }
+      setUnsupported(false);
       setLoading(true);
       setError(null);
       request<ProjectFilesResult>(
@@ -56,7 +64,7 @@ export function FilesPane({
         .catch((err) => setError(err instanceof Error ? err.message : String(err)))
         .finally(() => setLoading(false));
     },
-    [projectId, request, status],
+    [capabilitiesReady, hasCapability, projectId, request, status],
   );
 
   useEffect(() => {
@@ -76,6 +84,13 @@ export function FilesPane({
         <Text style={styles.hint}>
           {unavailable === "wsl" ? t("changes.unavailable.wsl") : t("changes.unavailable.ssh")}
         </Text>
+      </View>
+    );
+  }
+  if (unsupported) {
+    return (
+      <View style={styles.center}>
+        <Text style={styles.hint}>{t("files.unsupported")}</Text>
       </View>
     );
   }

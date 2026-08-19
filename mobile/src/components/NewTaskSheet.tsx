@@ -17,7 +17,7 @@ import {
   Text,
   View,
 } from "react-native";
-import { BrainCircuit, Gauge, Zap } from "lucide-react-native";
+import { BrainCircuit, BookmarkPlus, Gauge, Zap } from "lucide-react-native";
 import { t } from "../i18n";
 import { agentFamilyOf, reasoningOptionsForFamily } from "../agent-family";
 import { useConnection } from "../state/connection-context";
@@ -50,12 +50,14 @@ interface AgentTaskSelection {
   reasoningEffort: string | null;
   speed: "standard" | "fast";
   permissionMode: PermissionMode;
+  dshAgentPreset: string;
 }
 
 const DEFAULT_AGENT_TASK_SELECTION: AgentTaskSelection = {
   reasoningEffort: null,
   speed: "standard",
   permissionMode: "ask",
+  dshAgentPreset: "standard",
 };
 
 function defaultSelectionForFamily(family: AgentFamily): AgentTaskSelection {
@@ -94,7 +96,7 @@ interface NewTaskFormProps {
 }
 
 function NewTaskForm({ lockedProjectId, onClose, onCreated }: NewTaskFormProps) {
-  const { status, request } = useConnection();
+  const { status, request, capabilitiesReady, hasCapability } = useConnection();
   const [projects, setProjects] = useState<Project[]>([]);
   const [agents, setAgents] = useState<AgentChoice[]>([]);
   const [projectId, setProjectId] = useState<string>(lockedProjectId ?? "");
@@ -108,6 +110,7 @@ function NewTaskForm({ lockedProjectId, onClose, onCreated }: NewTaskFormProps) 
   const [reasoningEffort, setReasoningEffort] = useState<string | null>(null);
   const [speed, setSpeed] = useState<"standard" | "fast">("standard");
   const [permissionMode, setPermissionMode] = useState<PermissionMode>("ask");
+  const [dshAgentPreset, setDshAgentPreset] = useState("standard");
   const [lastModels, setLastModels] = useState<LastModelsByAgent>({});
   const [lastModelsLoaded, setLastModelsLoaded] = useState(false);
   const [prompt, setPrompt] = useState("");
@@ -119,6 +122,9 @@ function NewTaskForm({ lockedProjectId, onClose, onCreated }: NewTaskFormProps) 
 
   const models = modelState.agent === agent ? modelState.models : null;
   const modelsLoading = modelState.agent === agent && modelState.loading;
+  const modelsSupported = !capabilitiesReady || hasCapability("tasks.models");
+  const taskCreationSupported =
+    modelsSupported && (!capabilitiesReady || hasCapability("tasks.lifecycle"));
 
   useEffect(() => {
     let cancelled = false;
@@ -179,7 +185,12 @@ function NewTaskForm({ lockedProjectId, onClose, onCreated }: NewTaskFormProps) 
   const selectAgent = useCallback(
     (next: AgentChoice) => {
       if (next.id === agent) return;
-      agentSelectionsRef.current.set(agent, { reasoningEffort, speed, permissionMode });
+      agentSelectionsRef.current.set(agent, {
+        reasoningEffort,
+        speed,
+        permissionMode,
+        dshAgentPreset,
+      });
       const restored =
         agentSelectionsRef.current.get(next.id) ?? defaultSelectionForFamily(agentFamilyOf(next));
       setAgent(next.id);
@@ -187,14 +198,19 @@ function NewTaskForm({ lockedProjectId, onClose, onCreated }: NewTaskFormProps) 
       setReasoningEffort(restored.reasoningEffort);
       setSpeed(restored.speed);
       setPermissionMode(restored.permissionMode);
+      setDshAgentPreset(restored.dshAgentPreset);
     },
-    [agent, permissionMode, reasoningEffort, speed],
+    [agent, dshAgentPreset, permissionMode, reasoningEffort, speed],
   );
 
   // 配置切换时优先命中本次表单的缓存；首次才向桌面端请求，避免来回切换有空白和卡顿。
   useEffect(() => {
     if (status !== "online" || !agent) {
       setModelState({ agent, models: null, loading: false });
+      return;
+    }
+    if (!modelsSupported) {
+      setModelState({ agent, models: [], loading: false });
       return;
     }
     let cancelled = false;
@@ -221,7 +237,7 @@ function NewTaskForm({ lockedProjectId, onClose, onCreated }: NewTaskFormProps) 
     return () => {
       cancelled = true;
     };
-  }, [agent, request, status]);
+  }, [agent, modelsSupported, request, status]);
 
   useEffect(() => {
     if (!models || !lastModelsLoaded) return;
@@ -253,38 +269,80 @@ function NewTaskForm({ lockedProjectId, onClose, onCreated }: NewTaskFormProps) 
         reasoningEffort: fallback,
         speed,
         permissionMode,
+        dshAgentPreset,
       });
     }
-  }, [agent, permissionMode, reasoningEffort, reasoningOptions, selectedFamily, speed]);
+  }, [
+    agent,
+    dshAgentPreset,
+    permissionMode,
+    reasoningEffort,
+    reasoningOptions,
+    selectedFamily,
+    speed,
+  ]);
 
   const selectReasoningEffort = useCallback(
     (next: string) => {
-      setReasoningEffort(next);
-      agentSelectionsRef.current.set(agent, { reasoningEffort: next, speed, permissionMode });
+      const value = next === "__none__" ? null : next;
+      setReasoningEffort(value);
+      agentSelectionsRef.current.set(agent, {
+        reasoningEffort: value,
+        speed,
+        permissionMode,
+        dshAgentPreset,
+      });
     },
-    [agent, permissionMode, speed],
+    [agent, dshAgentPreset, permissionMode, speed],
   );
 
   const selectSpeed = useCallback(
     (next: "standard" | "fast") => {
       setSpeed(next);
-      agentSelectionsRef.current.set(agent, { reasoningEffort, speed: next, permissionMode });
+      agentSelectionsRef.current.set(agent, {
+        reasoningEffort,
+        speed: next,
+        permissionMode,
+        dshAgentPreset,
+      });
     },
-    [agent, permissionMode, reasoningEffort],
+    [agent, dshAgentPreset, permissionMode, reasoningEffort],
   );
 
   const selectPermissionMode = useCallback(
     (next: PermissionMode) => {
       setPermissionMode(next);
-      agentSelectionsRef.current.set(agent, { reasoningEffort, speed, permissionMode: next });
+      agentSelectionsRef.current.set(agent, {
+        reasoningEffort,
+        speed,
+        permissionMode: next,
+        dshAgentPreset,
+      });
     },
-    [agent, reasoningEffort, speed],
+    [agent, dshAgentPreset, reasoningEffort, speed],
+  );
+
+  const selectDshAgentPreset = useCallback(
+    (next: string) => {
+      setDshAgentPreset(next);
+      agentSelectionsRef.current.set(agent, {
+        reasoningEffort,
+        speed,
+        permissionMode,
+        dshAgentPreset: next,
+      });
+    },
+    [agent, permissionMode, reasoningEffort, speed],
   );
 
   const submit = useCallback(() => {
     const text = prompt.trim();
     const model = selectedModel.trim();
     if (!projectId || !text || submitting) return;
+    if (!taskCreationSupported) {
+      Alert.alert(t("newTask.unsupported"));
+      return;
+    }
     setSubmitting(true);
     request<RemoteTaskActionResult>("task.create", {
       projectId,
@@ -294,6 +352,7 @@ function NewTaskForm({ lockedProjectId, onClose, onCreated }: NewTaskFormProps) 
       ...(model ? { selectedModel: model } : {}),
       ...(reasoningEffort ? { reasoningEffort } : {}),
       ...(selectedFamily === "dsh" ? {} : { speed }),
+      ...(selectedFamily === "dsh" ? { dshAgentPreset } : {}),
     })
       .then((result) => {
         // 新版桌面端回传权威快照;旧版只回 taskId 时用最小本地快照兜底,
@@ -327,12 +386,15 @@ function NewTaskForm({ lockedProjectId, onClose, onCreated }: NewTaskFormProps) 
     selectedModel,
     reasoningEffort,
     selectedFamily,
+    dshAgentPreset,
     speed,
     submitting,
+    taskCreationSupported,
   ]);
 
   const canSubmit =
     status === "online" &&
+    taskCreationSupported &&
     !!projectId &&
     !!prompt.trim() &&
     !submitting &&
@@ -346,6 +408,9 @@ function NewTaskForm({ lockedProjectId, onClose, onCreated }: NewTaskFormProps) 
   return (
     <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
       {status !== "online" ? <Text style={styles.notice}>{t("newTask.offline")}</Text> : null}
+      {status === "online" && !taskCreationSupported ? (
+        <Text style={styles.noticeError}>{t("newTask.unsupported")}</Text>
+      ) : null}
       {loadError ? <Text style={styles.noticeError}>{loadError}</Text> : null}
 
       {lockedProjectId ? (
@@ -511,14 +576,53 @@ function NewTaskForm({ lockedProjectId, onClose, onCreated }: NewTaskFormProps) 
       <Text style={styles.sectionLabel}>{t("newTask.reasoning")}</Text>
       <AnimatedSelection
         value={reasoningEffort ?? "__none__"}
-        options={reasoningOptions.map((effort) => ({
-          value: effort,
-          label: t(`newTask.reasoning.${effort}` as Parameters<typeof t>[0]),
-        }))}
+        options={[
+          ...(selectedFamily === "dsh"
+            ? []
+            : [{ value: "__none__", label: t("newTask.reasoning.default") }]),
+          ...reasoningOptions.map((effort) => ({
+            value: effort,
+            label: t(`newTask.reasoning.${effort}` as Parameters<typeof t>[0]),
+          })),
+        ]}
         onChange={selectReasoningEffort}
         dense
         style={styles.optionSelection}
       />
+
+      {selectedFamily === "dsh" ? (
+        <>
+          <Text style={styles.sectionLabel}>{t("newTask.dshAgentPreset")}</Text>
+          <AnimatedSelection
+            value={dshAgentPreset}
+            options={[
+              {
+                value: "standard",
+                label: t("newTask.dshPreset.standard"),
+                icon: <BookmarkPlus size={14} color={theme.accent} />,
+              },
+              {
+                value: "code",
+                label: t("newTask.dshPreset.code"),
+                icon: <BookmarkPlus size={14} color={theme.accent} />,
+              },
+              {
+                value: "minimal",
+                label: t("newTask.dshPreset.minimal"),
+                icon: <BookmarkPlus size={14} color={theme.accent} />,
+              },
+              {
+                value: "cordis",
+                label: t("newTask.dshPreset.cordis"),
+                icon: <BookmarkPlus size={14} color={theme.accent} />,
+              },
+            ]}
+            onChange={selectDshAgentPreset}
+            horizontal
+            style={styles.optionSelection}
+          />
+        </>
+      ) : null}
 
       {selectedFamily !== "dsh" ? (
         <>

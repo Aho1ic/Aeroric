@@ -1139,6 +1139,8 @@ fn authenticate_first_message<R: Runtime>(
                     "deviceToken": device_token,
                     "host": host,
                     "rpcVersion": rpc_version.as_u32(),
+                    "rpcVersions": [3, 2],
+                    "capabilities": super::rpc::rpc_capabilities_value(),
                 }),
             );
             Ok(AuthenticatedFirstMessage {
@@ -1162,6 +1164,8 @@ fn authenticate_first_message<R: Runtime>(
                     "deviceId": device_id,
                     "host": host,
                     "rpcVersion": rpc_version.as_u32(),
+                    "rpcVersions": [3, 2],
+                    "capabilities": super::rpc::rpc_capabilities_value(),
                 }),
             );
             Ok(AuthenticatedFirstMessage {

@@ -24,6 +24,84 @@
       "retryable": false
     }
   },
+  "hello": {
+    "name": "aeroric",
+    "version": "1.4.4",
+    "platform": "darwin",
+    "rpcVersions": [3, 2],
+    "capabilities": [
+      "typed-envelope",
+      "structured-error",
+      "events-replay",
+      "projects.grouping",
+      "projects.pinning",
+      "tasks.lifecycle",
+      "tasks.models",
+      "tasks.approvals",
+      "session.structured",
+      "session.dsh",
+      "terminal.stream",
+      "files.read",
+      "files.write",
+      "git.read",
+      "agent-config.status",
+      "agent-config.write",
+      "stats.summary"
+    ]
+  },
+  "projectProjection": {
+    "id": "project-1",
+    "name": "Aeroric",
+    "path": "/workspace/Aeroric",
+    "location": { "kind": "local", "path": "/workspace/Aeroric" },
+    "group": "Core",
+    "lastOpenedAt": 1787126400000,
+    "orderIndex": 2,
+    "pinned": true
+  },
+  "taskProjection": {
+    "id": "task-1",
+    "projectId": "project-1",
+    "name": "Update mobile parity",
+    "prompt": "Align mobile with desktop",
+    "agent": "dsh",
+    "selectedModel": "deepseek-chat",
+    "dshAgentPreset": "code",
+    "reasoningEffort": "high",
+    "permissionMode": "ask",
+    "status": "input_required",
+    "createdAt": 1787126400000,
+    "attentionRequestedAt": 1787126460000,
+    "starred": true,
+    "sessionFamily": "dsh",
+    "worktreeBranch": "mobile-parity",
+    "additions": 42,
+    "deletions": 7,
+    "approval": {
+      "requestId": "approval-1",
+      "kind": "tool",
+      "toolName": "Bash"
+    },
+    "dshSessionId": "dsh-session-1"
+  },
+  "sessionMessage": {
+    "role": "assistant",
+    "messageId": "message-1",
+    "timestamp": 1787126460000,
+    "content": [
+      { "type": "text", "text": "Inspecting the project." },
+      { "type": "thinking", "thinking": "Check the remote contract first." },
+      { "type": "tool_use", "id": "tool-1", "name": "Read", "input": "src/App.tsx" },
+      { "type": "tool_result", "id": "tool-1", "output": "export default App" },
+      {
+        "type": "attachment",
+        "name": "report.txt",
+        "mediaType": "text/plain",
+        "source": "session"
+      },
+      { "type": "opaque", "name": "dsh_event", "value": { "phase": "review" } }
+    ]
+  },
   "push": {
     "v": 3,
     "type": "push",
