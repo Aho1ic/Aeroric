@@ -92,7 +92,7 @@ import { TableStructurePanel } from "./TableStructurePanel";
 import { DatabaseUserAdminPanel, supportsDbxUserAdmin } from "./DatabaseUserAdminPanel";
 import { GuidancePanel, renderSqlTokens } from "./DatabaseViewPrimitives";
 import { dbxConfigRecord, dbxString } from "./databaseConnectionDraft";
-import { confirmDbxProductionOperation, hasProductionProtection } from "./databaseProductionSafety";
+import { confirmDbxProductionOperation } from "./databaseProductionSafety";
 import { DataGridView } from "./DataGridView";
 import {
   combineDbxGridWhereCondition,
@@ -128,7 +128,6 @@ import {
   type RedisSidebarScanState,
   type MongoSidebarDocumentQuery,
   type DbWorkspaceMode,
-  productionSqlPreview,
   listAllDbxObjects,
   type DbxDatabaseContextMenuAction,
   type DbxSchemaContextMenuAction,
@@ -1144,53 +1143,12 @@ function DatabaseViewContent({
     [loadDbxColumnsForTables, setActiveConnectionId, setActiveDbxConnectionId],
   );
 
-  const confirmDbxProductionSql = useCallback(
-    async (
-      connection: AeroricDbConnectionConfig,
-      database: string | null,
-      sqlText: string,
-    ): Promise<boolean> => {
-      if (!hasProductionProtection(connection)) return true;
-      const assessment = await databaseApi.dbxAssessProductionSql({
-        connectionId: connection.id,
-        database,
-        sql: sqlText,
-      });
-      if (!assessment.requiresConfirmation) return true;
-      const productionScope =
-        assessment.productionDatabases.length > 0
-          ? assessment.productionDatabases.join(", ")
-          : t("database.productionEntireConnection");
-      return confirm(
-        t("database.productionSqlWarning", {
-          connection: connection.name,
-          databases: productionScope,
-          sql: productionSqlPreview(sqlText),
-        }),
-        {
-          title: t("database.productionWarningTitle"),
-          kind: "warning",
-          okLabel: t("database.execute"),
-          cancelLabel: t("common.cancel"),
-        },
-      );
-    },
-    [t],
-  );
-
   const executeSqlFileFromPanel = useCallback(async () => {
     if (!sqlFilePath.trim()) return;
     setLoading(true);
     setError(null);
     try {
       if (activeDbxConnection && dbxHasSqlObjectBrowser) {
-        const fileSql = await databaseApi.readSqlFile(sqlFilePath.trim());
-        const approved = await confirmDbxProductionSql(
-          activeDbxConnection,
-          activeDbxDatabase,
-          fileSql,
-        );
-        if (!approved) return;
         const timeoutSecs = Number.parseInt(sqlFileTimeoutSecs, 10);
         const results = await databaseApi.dbxExecuteSqlFile({
           connectionId: activeDbxConnection.id,
@@ -1228,7 +1186,6 @@ function DatabaseViewContent({
     activeDbxDatabase,
     activeDbxSchema,
     activeEndpoint,
-    confirmDbxProductionSql,
     dbxHasSqlObjectBrowser,
     projectRoot,
     sqlFilePath,
@@ -2665,8 +2622,6 @@ function DatabaseViewContent({
         charset: canSetCreateDatabaseCharset(connection) ? createDatabaseCharset : null,
         collation: canSetCreateDatabaseCharset(connection) ? createDatabaseCollation : null,
       });
-      const approved = await confirmDbxProductionSql(connection, "", sql);
-      if (!approved) return;
       await databaseApi.dbxExecuteQuery({
         connectionId: connection.id,
         database: "",
@@ -2685,7 +2640,6 @@ function DatabaseViewContent({
     createDatabaseCollation,
     createDatabaseConnection,
     createDatabaseName,
-    confirmDbxProductionSql,
     loadDbxConnection,
   ]);
 
@@ -3643,12 +3597,6 @@ function DatabaseViewContent({
         databaseType: createSchemaConnection.dbType,
         name,
       });
-      const approved = await confirmDbxProductionSql(
-        createSchemaConnection,
-        createSchemaTarget.database,
-        sql,
-      );
-      if (!approved) return;
       await databaseApi.dbxExecuteQuery({
         connectionId: createSchemaConnection.id,
         database: createSchemaTarget.database,
@@ -3666,7 +3614,6 @@ function DatabaseViewContent({
     createSchemaConnection,
     createSchemaName,
     createSchemaTarget,
-    confirmDbxProductionSql,
     loadDbxDatabase,
   ]);
 
@@ -4537,8 +4484,6 @@ function DatabaseViewContent({
     try {
       setWorkspaceMode("query");
       if (activeDbxConnection && dbxHasSqlObjectBrowser) {
-        const approved = await confirmDbxProductionSql(activeDbxConnection, activeDbxDatabase, sql);
-        if (!approved) return;
         const result = await databaseApi.dbxExecuteQuery({
           connectionId: activeDbxConnection.id,
           database: activeDbxDatabase,
@@ -4593,7 +4538,6 @@ function DatabaseViewContent({
     activeDbxSchema,
     activeEndpoint,
     addQueryHistoryEntry,
-    confirmDbxProductionSql,
     dbxHasSqlObjectBrowser,
     projectRoot,
     sql,

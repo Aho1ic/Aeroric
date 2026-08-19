@@ -210,11 +210,15 @@ xattr -rd com.apple.quarantine /Applications/Aeroric.app
 
 ## 开发
 
-本地构建需要 Node.js 24、pnpm 9、Rust stable、当前系统对应的 Tauri 平台依赖，以及满足 `src-tauri/Cargo.toml` 路径依赖的同级 DBX 仓库：
+本地构建需要 Node.js 24、pnpm 10、Rust stable、当前系统对应的 Tauri 平台依赖，以及满足 `src-tauri/Cargo.toml` 路径依赖的同级 DBX 仓库：
 
 ```bash
-git clone https://github.com/Aho1ic/dbx.git ../dbx
+git clone https://github.com/t8y2/dbx.git ../dbx
+git -C ../dbx checkout 8559aec8bce4efeb4f52080da8ab1839733ef45b
+./scripts/prepare-dbx.sh
 ```
+
+准备脚本会应用 Aeroric 已审查的 DBX 依赖与安全补丁，且可重复执行。CI 和桌面发布流程也使用同一固定提交与准备步骤。
 
 ```bash
 pnpm dev            # 启动 Vite 开发服务器，端口 1420

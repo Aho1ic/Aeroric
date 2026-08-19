@@ -109,7 +109,7 @@ describe("DatabaseView workspace and data grid", () => {
     expect(screen.getByText("teams-current")).toBeInTheDocument();
   });
 
-  it("does not execute production SQL when the confirmation is rejected", async () => {
+  it("delegates production SQL confirmation to the backend execution boundary", async () => {
     const user = userEvent.setup();
     const productionConnection = {
       ...dbxConnection,
@@ -119,7 +119,6 @@ describe("DatabaseView workspace and data grid", () => {
         production_databases: [],
       },
     };
-    vi.mocked(confirm).mockResolvedValue(false);
     vi.mocked(invoke).mockImplementation((command) => {
       if (command === "db_load_connections") return Promise.resolve([]);
       if (command === "dbx_list_connections") return Promise.resolve([productionConnection]);
@@ -127,13 +126,6 @@ describe("DatabaseView workspace and data grid", () => {
       if (command === "dbx_list_databases") return Promise.resolve([{ name: "main" }]);
       if (command === "dbx_list_schemas") return Promise.resolve([]);
       if (command === "dbx_list_objects") return Promise.resolve([]);
-      if (command === "dbx_assess_production_sql") {
-        return Promise.resolve({
-          requiresConfirmation: true,
-          isMutation: true,
-          productionDatabases: [],
-        });
-      }
       return Promise.resolve(undefined);
     });
 
@@ -154,24 +146,17 @@ describe("DatabaseView workspace and data grid", () => {
     await user.click(screen.getByRole("button", { name: "Run" }));
 
     await waitFor(() => {
-      expect(invoke).toHaveBeenCalledWith("dbx_assess_production_sql", {
+      expect(invoke).toHaveBeenCalledWith("dbx_execute_query", {
         request: {
           connectionId: "dbx-source",
           database: "main",
+          pageSize: 100,
+          schema: null,
           sql: "delete from users where id = 1",
         },
       });
     });
-    expect(confirm).toHaveBeenCalledWith(
-      expect.stringContaining('This SQL can modify production data on "DBX Source"'),
-      {
-        title: "Confirm production SQL",
-        kind: "warning",
-        okLabel: "Execute",
-        cancelLabel: "Cancel",
-      },
-    );
-    expect(invoke).not.toHaveBeenCalledWith("dbx_execute_query", expect.anything());
+    expect(invoke).not.toHaveBeenCalledWith("dbx_assess_production_sql", expect.anything());
   });
 
   it("records executed SQL and restores it from query history", async () => {
@@ -362,7 +347,7 @@ describe("DatabaseView workspace and data grid", () => {
     });
   });
 
-  it("does not create a database when production confirmation is rejected", async () => {
+  it("delegates production database creation confirmation to the backend", async () => {
     const user = userEvent.setup();
     const productionConnection = {
       ...mysqlDbxConnection,
@@ -372,7 +357,6 @@ describe("DatabaseView workspace and data grid", () => {
         production_databases: [],
       },
     };
-    vi.mocked(confirm).mockResolvedValue(false);
     vi.mocked(invoke).mockImplementation((command) => {
       if (command === "db_load_connections") return Promise.resolve([]);
       if (command === "dbx_list_connections") return Promise.resolve([productionConnection]);
@@ -381,13 +365,6 @@ describe("DatabaseView workspace and data grid", () => {
       if (command === "dbx_list_objects") return Promise.resolve([]);
       if (command === "dbx_build_create_database_sql") {
         return Promise.resolve("CREATE DATABASE `vision`;");
-      }
-      if (command === "dbx_assess_production_sql") {
-        return Promise.resolve({
-          requiresConfirmation: true,
-          isMutation: true,
-          productionDatabases: [],
-        });
       }
       return Promise.resolve(undefined);
     });
@@ -407,7 +384,7 @@ describe("DatabaseView workspace and data grid", () => {
     await user.click(within(dialog).getByRole("button", { name: "Create database" }));
 
     await waitFor(() => {
-      expect(invoke).toHaveBeenCalledWith("dbx_assess_production_sql", {
+      expect(invoke).toHaveBeenCalledWith("dbx_execute_query", {
         request: {
           connectionId: "dbx-mysql",
           database: "",
@@ -415,7 +392,7 @@ describe("DatabaseView workspace and data grid", () => {
         },
       });
     });
-    expect(invoke).not.toHaveBeenCalledWith("dbx_execute_query", expect.anything());
+    expect(invoke).not.toHaveBeenCalledWith("dbx_assess_production_sql", expect.anything());
   });
 
   it("creates and attaches a DuckDB database file from the connection context menu", async () => {

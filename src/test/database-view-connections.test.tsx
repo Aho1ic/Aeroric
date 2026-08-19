@@ -229,6 +229,8 @@ describe("DatabaseView connection management", () => {
     await user.click(screen.getByRole("button", { name: /New connection/i }));
     await user.click(screen.getByRole("button", { name: /PostgreSQL/i }));
     await user.click(screen.getByRole("button", { name: /Next/i }));
+    expect(screen.getByLabelText("Connection string")).toHaveAttribute("type", "password");
+    expect(screen.getByLabelText("URL parameters")).toHaveAttribute("type", "password");
     await user.type(
       screen.getByLabelText("Connection string"),
       "postgresql://alice:secret@db.example.com:6543/app_db?sslmode=require&connectTimeout=15",

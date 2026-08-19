@@ -1,6 +1,6 @@
 import type React from "react";
 import type { CSSProperties } from "react";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import {
   BookmarkPlus,
   ChevronDown,
@@ -22,6 +22,7 @@ import s from "../../styles";
 import claudeLogo from "../../assets/claude.svg";
 import chatgptLogo from "../../assets/chatgpt.svg";
 import deepseekLogo from "../../assets/deepseek.svg";
+import type { DshAgentPreset } from "../../dshSettings";
 
 const PERMS: PermissionMode[] = ["ask", "auto_edit", "full_access"];
 export type ComposeMenu =
@@ -240,6 +241,7 @@ export function AgentPermSelector({
   onToggleGoalMode,
   onToggleFastMode,
   dshAgentPreset = "standard",
+  dshCustomPresets = [],
   onSetDshAgentPreset,
   onSubmit,
 }: {
@@ -264,6 +266,7 @@ export function AgentPermSelector({
   onToggleGoalMode: () => void;
   onToggleFastMode?: () => void;
   dshAgentPreset?: string;
+  dshCustomPresets?: DshAgentPreset[];
   onSetDshAgentPreset?: (preset: string) => void;
   onSubmit: (immediate: boolean) => void;
 }) {
@@ -288,8 +291,17 @@ export function AgentPermSelector({
   const saveAsTodoDisabled = hasAttachments || !!saveAsTodoDisabledReason;
   const saveAsTodoTitle = hasAttachments ? t("newTask.imagesMustSend") : saveAsTodoDisabledReason;
   const groupedAgents = groupAgentOptions(agentOptions);
+  const dshPresets = useMemo(() => {
+    const builtInIds = new Set<string>(DSH_PRESETS.map(([value]) => value));
+    return [
+      ...DSH_PRESETS.map(([value, label]) => ({ value, label: t(label) })),
+      ...dshCustomPresets
+        .filter((preset) => preset.id.trim() && !builtInIds.has(preset.id))
+        .map((preset) => ({ value: preset.id, label: preset.name?.trim() || preset.id })),
+    ];
+  }, [dshCustomPresets, t]);
   const currentDshPreset =
-    DSH_PRESETS.find(([value]) => value === dshAgentPreset) ?? DSH_PRESETS[0];
+    dshPresets.find((preset) => preset.value === dshAgentPreset) ?? dshPresets[0];
 
   function renderAgentItem(item: AgentType) {
     return (
@@ -486,7 +498,7 @@ export function AgentPermSelector({
                     }),
               }}
               aria-label={t("newTask.dshAgentPreset")}
-              title={t(currentDshPreset[1])}
+              title={currentDshPreset.label}
               data-dsh-agent-preset-trigger
             >
               <BookmarkPlus size={14} strokeWidth={2} color="var(--usage-dsh)" />
@@ -499,7 +511,7 @@ export function AgentPermSelector({
                     whiteSpace: "nowrap",
                   }}
                 >
-                  {t(currentDshPreset[1])}
+                  {currentDshPreset.label}
                 </span>
               )}
               {!compact && (
@@ -511,7 +523,7 @@ export function AgentPermSelector({
             <Select.Portal>
               <Select.Content position="popper" sideOffset={6} style={s.toolbarMenuContent}>
                 <Select.Viewport>
-                  {DSH_PRESETS.map(([value, label]) => (
+                  {dshPresets.map(({ value, label }) => (
                     <Select.Item
                       key={value}
                       value={value}
@@ -522,7 +534,7 @@ export function AgentPermSelector({
                       onMouseLeave={(event) => setMenuItemHover(event.currentTarget, false)}
                     >
                       <BookmarkPlus size={13} strokeWidth={2} color="var(--usage-dsh)" />
-                      <Select.ItemText>{t(label)}</Select.ItemText>
+                      <Select.ItemText>{label}</Select.ItemText>
                     </Select.Item>
                   ))}
                 </Select.Viewport>

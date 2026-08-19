@@ -198,6 +198,43 @@ describe("terminal output highlighting", () => {
     expect(write).toHaveBeenCalledWith("a", expect.any(Function));
     vi.useRealTimers();
   });
+
+  it("defers queued rendering during composition and resumes on commit", () => {
+    vi.useFakeTimers();
+    const write = vi.fn((_data: string, callback?: () => void) => callback?.());
+    const writer = createSmartWriter({ write } as unknown as Terminal, undefined, {
+      resumeOnAnyOutput: true,
+    });
+
+    writer.setCompositionPaused(true);
+    writer.write("background output");
+    expect(write).not.toHaveBeenCalled();
+
+    writer.setCompositionPaused(false);
+    vi.runAllTimers();
+    expect(write).toHaveBeenCalledWith("background output", expect.any(Function));
+    vi.useRealTimers();
+  });
+
+  it("yields queued rendering while the browser has pending input", () => {
+    vi.useFakeTimers();
+    let inputPending = true;
+    Object.defineProperty(navigator, "scheduling", {
+      configurable: true,
+      value: { isInputPending: () => inputPending },
+    });
+    const write = vi.fn((_data: string, callback?: () => void) => callback?.());
+    const writer = createSmartWriter({ write } as unknown as Terminal);
+
+    writer.write("background output");
+    expect(write).not.toHaveBeenCalled();
+
+    inputPending = false;
+    vi.runAllTimers();
+    expect(write).toHaveBeenCalledWith("background output", expect.any(Function));
+    Reflect.deleteProperty(navigator, "scheduling");
+    vi.useRealTimers();
+  });
 });
 
 describe("cursor line highlight overlay", () => {

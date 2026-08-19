@@ -879,7 +879,7 @@ describe("terminal input fixes", () => {
     vi.useRealTimers();
   });
 
-  it("clears delayed WebKit textarea pinyin tail after committed Chinese input", async () => {
+  it("clears a WebKit textarea pinyin tail detected on the next frame", async () => {
     vi.useFakeTimers();
     vi.resetModules();
     vi.doMock("../platform", () => ({
@@ -924,10 +924,8 @@ describe("terminal input fixes", () => {
       }),
     );
 
-    globalThis.setTimeout(() => {
-      textarea.value = "shi'de";
-      textarea.setSelectionRange(0, textarea.value.length);
-    }, 40);
+    textarea.value = "shi'de";
+    textarea.setSelectionRange(0, textarea.value.length);
     vi.advanceTimersByTime(100);
 
     expect(sent).toEqual(["是的"]);
@@ -937,7 +935,7 @@ describe("terminal input fixes", () => {
     vi.useRealTimers();
   });
 
-  it("temporarily resets the WebKit textarea input client after committed Chinese input", async () => {
+  it("does not reset the WebKit textarea input client after a clean Chinese commit", async () => {
     vi.useFakeTimers();
     vi.resetModules();
     vi.doMock("../platform", () => ({
@@ -974,10 +972,45 @@ describe("terminal input fixes", () => {
     );
 
     expect(sent).toEqual(["是的"]);
-    expect(textarea.disabled).toBe(true);
+    expect(textarea.disabled).toBe(false);
 
     vi.advanceTimersByTime(40);
 
+    expect(textarea.disabled).toBe(false);
+    expect(focus).not.toHaveBeenCalled();
+    vi.useRealTimers();
+  });
+
+  it("resets the WebKit textarea input client only when pinyin remains after commit", async () => {
+    vi.useFakeTimers();
+    vi.resetModules();
+    vi.doMock("../platform", () => ({
+      APP_PLATFORM: "macos",
+      ENABLE_USAGE_INSIGHTS: true,
+      IS_MAC_WEBKIT: true,
+      IS_OTHER_WEBKIT: false,
+      detectAppPlatform: () => "macos",
+      isAppleWebKit: () => true,
+    }));
+    const { attachLinuxIMEFix } = await import("../components/terminalInputFix");
+    const textarea = document.createElement("textarea");
+    const focus = vi.spyOn(textarea, "focus").mockImplementation(() => {});
+    const term = { textarea, onData: () => ({ dispose: vi.fn() }) };
+    attachLinuxIMEFix(term as never, vi.fn());
+    textarea.dispatchEvent(new CompositionEvent("compositionstart", { data: "" }));
+    textarea.dispatchEvent(new CompositionEvent("compositionupdate", { data: "shi'de" }));
+    textarea.dispatchEvent(
+      new InputEvent("beforeinput", {
+        inputType: "insertText",
+        data: "是的",
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    textarea.value = "shi'de";
+    vi.advanceTimersByTime(17);
+    expect(textarea.disabled).toBe(true);
+    vi.advanceTimersByTime(24);
     expect(textarea.disabled).toBe(false);
     expect(focus).toHaveBeenCalledWith({ preventScroll: true });
     vi.useRealTimers();
@@ -1019,7 +1052,6 @@ describe("terminal input fixes", () => {
         cancelable: true,
       }),
     );
-    textarea.dispatchEvent(new FocusEvent("blur"));
     vi.advanceTimersByTime(40);
 
     expect(sent).toEqual(["开启"]);
@@ -1090,7 +1122,6 @@ describe("terminal input fixes", () => {
           cancelable: true,
         }),
       );
-      textarea.dispatchEvent(new FocusEvent("blur"));
       vi.advanceTimersByTime(40);
       dataListeners[0]?.("!");
 

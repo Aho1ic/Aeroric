@@ -1,10 +1,26 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { I18nProvider } from "../i18n";
 import { NewTaskView, type NewTaskDraft } from "../components/NewTaskView";
 import type { Project } from "../types";
 import s from "../styles";
+
+const dshSettings = vi.hoisted(() => ({
+  response: Promise.resolve({
+    shell: { timeoutMs: 60_000, maxOutputBytes: 64_000 },
+    agentLoop: { maxParallelToolCalls: 10 },
+    webSearch: { baseUrl: "", maxUses: 5, apiKeyConfigured: false },
+    defaultPreset: "standard",
+    customPresets: [],
+  }) as Promise<unknown>,
+}));
+
+const projectConfig = vi.hoisted(() => ({
+  response: Promise.resolve({
+    agent: { default: "claude", default_permission_mode: "full_access" },
+  }) as Promise<unknown>,
+}));
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn().mockImplementation((command: string, args?: unknown) => {
@@ -34,6 +50,8 @@ vi.mock("@tauri-apps/api/core", () => ({
       });
     }
     if (command === "load_app_settings") return Promise.resolve({ custom_agents: [] });
+    if (command === "get_dsh_settings_snapshot") return dshSettings.response;
+    if (command === "read_project_config") return projectConfig.response;
     return Promise.resolve({});
   }),
 }));
@@ -55,7 +73,7 @@ function dshDraft(): NewTaskDraft {
   };
 }
 
-function renderView(draft: NewTaskDraft, onSubmit = vi.fn()) {
+function renderView(draft: NewTaskDraft | null, onSubmit = vi.fn()) {
   return render(
     <I18nProvider>
       <NewTaskView project={project} onSubmit={onSubmit} initialDraft={draft} />
@@ -64,6 +82,30 @@ function renderView(draft: NewTaskDraft, onSubmit = vi.fn()) {
 }
 
 describe("NewTaskView with dsh selected", () => {
+  const setDshSettings = (
+    defaultPreset: string,
+    customPresets: Array<{ id: string; name: string }> = [],
+  ) => {
+    dshSettings.response = Promise.resolve({
+      shell: { timeoutMs: 60_000, maxOutputBytes: 64_000 },
+      agentLoop: { maxParallelToolCalls: 10 },
+      webSearch: { baseUrl: "", maxUses: 5, apiKeyConfigured: false },
+      defaultPreset,
+      customPresets,
+    });
+  };
+
+  beforeEach(() => {
+    setDshSettings("standard");
+    projectConfig.response = Promise.resolve({
+      agent: { default: "claude", default_permission_mode: "full_access" },
+    });
+    Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
+      configurable: true,
+      value: vi.fn(),
+    });
+  });
+
   it("shows the animated official DeepSeek whale", () => {
     renderView(dshDraft());
     expect(screen.getByTestId("dsh-whale-animation")).toBeInTheDocument();
@@ -102,9 +144,9 @@ describe("NewTaskView with dsh selected", () => {
   });
 
   it("shows Agent preset as a first-level selector and removes legacy plus-menu entries", async () => {
+    setDshSettings("standard");
     const user = userEvent.setup();
     renderView(dshDraft());
-
     const agent = screen.getByRole("combobox", { name: "Agent" });
     const preset = screen.getByRole("combobox", { name: "Agent preset" });
     const permission = screen.getByRole("combobox", { name: "Default Permission Mode" });
@@ -118,6 +160,123 @@ describe("NewTaskView with dsh selected", () => {
     await user.click(screen.getByRole("button", { name: "More compose actions" }));
     expect(screen.queryByText("Slash commands")).not.toBeInTheDocument();
     expect(screen.queryByText("Agent preset")).not.toBeInTheDocument();
+  });
+
+  it("inherits the saved DSH default preset when a legacy draft has no explicit preset", async () => {
+    setDshSettings("minimal");
+    renderView(dshDraft());
+
+    await waitFor(() => {
+      expect(screen.getByRole("combobox", { name: "Agent preset" })).toHaveTextContent(
+        "Minimal mode",
+      );
+    });
+  });
+
+  it("keeps an explicit draft preset ahead of the saved DSH default", async () => {
+    setDshSettings("minimal");
+    renderView({ ...dshDraft(), dshAgentPreset: "code" });
+
+    await waitFor(() => {
+      expect(screen.getByRole("combobox", { name: "Agent preset" })).toHaveTextContent("Code mode");
+    });
+  });
+
+  it("renders and selects a custom DSH default preset", async () => {
+    setDshSettings("review", [{ id: "review", name: "Review specialist" }]);
+    renderView(dshDraft());
+
+    await waitFor(() => {
+      expect(screen.getByRole("combobox", { name: "Agent preset" })).toHaveTextContent(
+        "Review specialist",
+      );
+    });
+  });
+
+  it("falls back to Standard when the saved preset no longer exists", async () => {
+    setDshSettings("deleted-preset");
+    renderView(dshDraft());
+
+    await waitFor(() => {
+      expect(screen.getByRole("combobox", { name: "Agent preset" })).toHaveTextContent(
+        "Standard mode",
+      );
+    });
+  });
+
+  it("does not let a late settings response overwrite a manual preset choice", async () => {
+    let resolveSettings: (value: unknown) => void = () => {};
+    dshSettings.response = new Promise((resolve) => {
+      resolveSettings = resolve;
+    });
+    const user = userEvent.setup();
+    renderView(dshDraft());
+    const presetTrigger = screen.getByRole("combobox", { name: "Agent preset" });
+    Object.assign(presetTrigger, {
+      hasPointerCapture: () => false,
+      setPointerCapture: () => {},
+      releasePointerCapture: () => {},
+    });
+    await user.click(presetTrigger);
+    await user.click(await screen.findByText("Code mode"));
+
+    resolveSettings({
+      shell: { timeoutMs: 60_000, maxOutputBytes: 64_000 },
+      agentLoop: { maxParallelToolCalls: 10 },
+      webSearch: { baseUrl: "", maxUses: 5, apiKeyConfigured: false },
+      defaultPreset: "minimal",
+      customPresets: [],
+    });
+
+    await waitFor(() => {
+      expect(screen.getByRole("combobox", { name: "Agent preset" })).toHaveTextContent("Code mode");
+    });
+  });
+
+  it("keeps a manual preset when project config and DSH settings resolve out of order", async () => {
+    let resolveProjectConfig: (value: unknown) => void = () => {};
+    let resolveSettings: (value: unknown) => void = () => {};
+    projectConfig.response = new Promise((resolve) => {
+      resolveProjectConfig = resolve;
+    });
+    dshSettings.response = new Promise((resolve) => {
+      resolveSettings = resolve;
+    });
+    const user = userEvent.setup();
+    renderView(null);
+
+    const agentTrigger = screen.getByRole("combobox", { name: "Agent" });
+    Object.assign(agentTrigger, {
+      hasPointerCapture: () => false,
+      setPointerCapture: () => {},
+      releasePointerCapture: () => {},
+    });
+    await user.click(agentTrigger);
+    await user.click(await screen.findByText("DeepSeek Harness"));
+
+    const presetTrigger = await screen.findByRole("combobox", { name: "Agent preset" });
+    Object.assign(presetTrigger, {
+      hasPointerCapture: () => false,
+      setPointerCapture: () => {},
+      releasePointerCapture: () => {},
+    });
+    await user.click(presetTrigger);
+    await user.click(await screen.findByText("Code mode"));
+
+    resolveProjectConfig({
+      agent: { default: "dsh", default_permission_mode: "full_access" },
+    });
+    resolveSettings({
+      shell: { timeoutMs: 60_000, maxOutputBytes: 64_000 },
+      agentLoop: { maxParallelToolCalls: 10 },
+      webSearch: { baseUrl: "", maxUses: 5, apiKeyConfigured: false },
+      defaultPreset: "minimal",
+      customPresets: [],
+    });
+
+    await waitFor(() => {
+      expect(screen.getByRole("combobox", { name: "Agent preset" })).toHaveTextContent("Code mode");
+    });
   });
 
   it("opens and filters slash commands from the leading editor token", async () => {

@@ -374,6 +374,7 @@ export interface SmartWriter {
   writeImmediate: (data: string, callback?: () => void) => void;
   drainPending: () => void;
   setSelectionPaused: (paused: boolean) => void;
+  setCompositionPaused: (paused: boolean) => void;
   pauseForUserInput: (durationMs?: number) => void;
 }
 
@@ -827,6 +828,7 @@ export function createSmartWriter(
     watermark: 0,
     paused: false,
     selectionPaused: false,
+    compositionPaused: false,
     inputPausedUntil: 0,
     drainScheduled: false,
   };
@@ -858,7 +860,16 @@ export function createSmartWriter(
   }
 
   function drainPending() {
-    if (state.selectionPaused) return;
+    if (state.selectionPaused || state.compositionPaused) return;
+    const scheduling = (
+      globalThis.navigator as Navigator & {
+        scheduling?: { isInputPending?: () => boolean };
+      }
+    )?.scheduling;
+    if (scheduling?.isInputPending?.()) {
+      scheduleDrain();
+      return;
+    }
     const inputPauseRemaining = state.inputPausedUntil - nowMs();
     if (inputPauseRemaining > 0) {
       scheduleDrain(inputPauseRemaining);
@@ -866,7 +877,12 @@ export function createSmartWriter(
     }
 
     let bytesThisFrame = 0;
-    while (state.pendingChunks.length > 0 && !state.paused && !state.selectionPaused) {
+    while (
+      state.pendingChunks.length > 0 &&
+      !state.paused &&
+      !state.selectionPaused &&
+      !state.compositionPaused
+    ) {
       const next = state.pendingChunks.shift()!;
       if (state.watermark >= HIGH_WATER) {
         state.pendingChunks.unshift(next);
@@ -879,7 +895,12 @@ export function createSmartWriter(
         break;
       }
     }
-    if (state.pendingChunks.length > 0 && !state.paused && !state.selectionPaused) {
+    if (
+      state.pendingChunks.length > 0 &&
+      !state.paused &&
+      !state.selectionPaused &&
+      !state.compositionPaused
+    ) {
       scheduleDrain();
     }
   }
@@ -924,6 +945,11 @@ export function createSmartWriter(
     if (!paused) scheduleDrain();
   }
 
+  function setCompositionPaused(paused: boolean) {
+    state.compositionPaused = paused;
+    if (!paused) scheduleDrain();
+  }
+
   function pauseForUserInput(durationMs = TERMINAL_USER_INPUT_PAUSE_MS) {
     state.inputPausedUntil = Math.max(state.inputPausedUntil, nowMs() + durationMs);
     refreshTerminalCursorLine(term);
@@ -931,7 +957,14 @@ export function createSmartWriter(
     if (state.pendingChunks.length > 0) scheduleDrain(durationMs);
   }
 
-  return { write, writeImmediate, drainPending, setSelectionPaused, pauseForUserInput };
+  return {
+    write,
+    writeImmediate,
+    drainPending,
+    setSelectionPaused,
+    setCompositionPaused,
+    pauseForUserInput,
+  };
 }
 
 // ── xterm initialization ─────────────────────────────────────────────────────
@@ -1041,6 +1074,42 @@ export function safeFit(
   }
 }
 
+const terminalRevealFrames = new WeakMap<HTMLElement, number>();
+
+/**
+ * Reflow xterm without exposing its intermediate viewport. Width changes can make
+ * xterm rewrap thousands of buffer lines; keeping the renderer hidden until the
+ * next paint makes the first visible frame the final, bottom-anchored frame.
+ */
+export function fitTerminalAtBottom(
+  fitAddon: FitAddon,
+  term: Terminal,
+  container: HTMLElement,
+): { cols: number; rows: number } | null {
+  container.setAttribute("data-terminal-resizing", "true");
+  const size = safeFit(fitAddon, term, container);
+  if (!size) {
+    container.removeAttribute("data-terminal-resizing");
+    return null;
+  }
+  term.scrollToBottom();
+  try {
+    term.refresh(0, Math.max(0, term.rows - 1));
+  } catch {
+    // A renderer can disappear during teardown; revealing the container is enough.
+  }
+
+  const pendingFrame = terminalRevealFrames.get(container);
+  if (pendingFrame !== undefined) window.cancelAnimationFrame(pendingFrame);
+  const frame = window.requestAnimationFrame(() => {
+    if (terminalRevealFrames.get(container) !== frame) return;
+    terminalRevealFrames.delete(container);
+    container.removeAttribute("data-terminal-resizing");
+  });
+  terminalRevealFrames.set(container, frame);
+  return size;
+}
+
 /**
  * 更新终端字体大小并重新 fit，返回新的 { cols, rows } 或 null。
  */
@@ -1052,7 +1121,9 @@ export function applyTerminalFontSize(
 ): { cols: number; rows: number } | null {
   if (term.options.fontSize === fontSize) return null;
   term.options.fontSize = fontSize;
-  return safeFit(fitAddon, term, container);
+  return container
+    ? fitTerminalAtBottom(fitAddon, term, container)
+    : safeFit(fitAddon, term, container);
 }
 
 export function applyTerminalFontFamily(
@@ -1063,5 +1134,7 @@ export function applyTerminalFontFamily(
 ): { cols: number; rows: number } | null {
   if (term.options.fontFamily === fontFamily) return null;
   term.options.fontFamily = fontFamily;
-  return safeFit(fitAddon, term, container);
+  return container
+    ? fitTerminalAtBottom(fitAddon, term, container)
+    : safeFit(fitAddon, term, container);
 }

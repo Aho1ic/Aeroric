@@ -211,7 +211,7 @@ Windows installers.
 
 ## Development
 
-Local builds need Node.js 24, pnpm 9, Rust stable, the Tauri platform dependencies for your OS, and a sibling DBX checkout that satisfies `src-tauri/Cargo.toml`:
+Local builds need Node.js 24, pnpm 10, Rust stable, the Tauri platform dependencies for your OS, and a sibling DBX checkout that satisfies `src-tauri/Cargo.toml`:
 
 ```bash
 git clone https://github.com/t8y2/dbx.git ../dbx

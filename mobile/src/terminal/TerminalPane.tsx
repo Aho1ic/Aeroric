@@ -66,10 +66,9 @@ export function TerminalPane({ taskId, active }: { taskId: string; active: boole
   const copiedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   /** 入站帧回调注册后不再重建,靠 ref 读取最新视图模式。 */
   const viewModeRef = useRef<"phone" | "desktop">("phone");
-  const autoFitDoneRef = useRef(false);
   const desktopSizeRef = useRef<{ cols: number; rows: number } | null>(null);
   const wrapHeightRef = useRef(0);
-  const refitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const refitFrameRef = useRef<number | null>(null);
   const pendingWritesRef = useRef("");
   const writeFrameRef = useRef<number | null>(null);
   const lastFlushAtRef = useRef(0);
@@ -92,13 +91,15 @@ export function TerminalPane({ taskId, active }: { taskId: string; active: boole
   const completeSnapshotLayout = useCallback(() => {
     snapshotLayoutPendingRef.current = false;
     snapshotLayoutBarrierRef.current = null;
-    if (viewModeRef.current !== "phone" || autoFitDoneRef.current) return;
-    autoFitDoneRef.current = true;
-    injectTerm({ type: "fit" });
+    const desktop = desktopSizeRef.current;
+    if (viewModeRef.current === "desktop" && desktop) {
+      injectTerm({ type: "snapshotEnd", mode: "desktop", ...desktop });
+    } else {
+      injectTerm({ type: "snapshotEnd", mode: "phone" });
+    }
   }, [injectTerm]);
 
-  const requestSnapshotPhoneFit = useCallback(() => {
-    if (viewModeRef.current !== "phone" || autoFitDoneRef.current) return;
+  const requestSnapshotFinalLayout = useCallback(() => {
     const barrier = trackedWriteSequenceRef.current;
     snapshotLayoutBarrierRef.current = barrier;
     if (acknowledgedWriteSequenceRef.current >= barrier) {
@@ -171,16 +172,16 @@ export function TerminalPane({ taskId, active }: { taskId: string; active: boole
 
   const scheduleRelayout = useCallback(() => {
     if (!active || !webReady) return;
-    if (refitTimerRef.current) clearTimeout(refitTimerRef.current);
-    refitTimerRef.current = setTimeout(() => {
-      refitTimerRef.current = null;
+    if (refitFrameRef.current !== null) return;
+    refitFrameRef.current = requestAnimationFrame(() => {
+      refitFrameRef.current = null;
       const desktop = desktopSizeRef.current;
       if (viewModeRef.current === "desktop" && desktop) {
         injectTerm({ type: "viewMode", mode: "desktop", ...desktop });
       } else {
         injectTerm({ type: "fit" });
       }
-    }, 120);
+    });
   }, [active, injectTerm, webReady]);
 
   const sendInput = useCallback(
@@ -203,7 +204,6 @@ export function TerminalPane({ taskId, active }: { taskId: string; active: boole
     if (!active || !webReady || status !== "online" || !taskId) return;
     const streamId = nextStreamId++;
     streamIdRef.current = streamId;
-    autoFitDoneRef.current = false;
     setStreamError(null);
     sendBinary(
       encodeTerminalFrame({
@@ -234,11 +234,13 @@ export function TerminalPane({ taskId, active }: { taskId: string; active: boole
       switch (frame.opcode) {
         case TerminalOpcode.SnapshotStart: {
           const meta = parseJsonPayload<SnapshotMeta>(frame.payload);
+          if (writeFrameRef.current !== null) cancelAnimationFrame(writeFrameRef.current);
+          writeFrameRef.current = null;
           pendingWritesRef.current = "";
           snapshotInProgressRef.current = true;
           snapshotLayoutPendingRef.current = false;
           snapshotLayoutBarrierRef.current = null;
-          injectTerm({ type: "reset" });
+          injectTerm({ type: "snapshotStart" });
           if (meta?.cols && meta?.rows) {
             // 记下桌面端尺寸,切「电脑视图」时用它还原
             desktopSizeRef.current = { cols: meta.cols, rows: meta.rows };
@@ -253,10 +255,10 @@ export function TerminalPane({ taskId, active }: { taskId: string; active: boole
           break;
         case TerminalOpcode.SnapshotEnd:
           snapshotInProgressRef.current = false;
-          if (!flushTermWrites(true, true)) injectTerm({ type: "scrollToBottom" });
-          // 等快照写入 xterm 队列完成后再适配手机尺寸,否则全屏 TUI 的光标定位
+          flushTermWrites(true, true);
+          // 等快照写入 xterm 队列完成后再适配最终视图尺寸,否则全屏 TUI 的光标定位
           // 会按旧列数与新列数交错解析,在两侧形成竖排残影。
-          requestSnapshotPhoneFit();
+          requestSnapshotFinalLayout();
           break;
         case TerminalOpcode.Resized: {
           const size = parseJsonPayload<{ cols: number; rows: number }>(frame.payload);
@@ -270,7 +272,7 @@ export function TerminalPane({ taskId, active }: { taskId: string; active: boole
           break;
       }
     });
-  }, [flushTermWrites, injectTerm, onBinary, queueTermWrite, requestSnapshotPhoneFit]);
+  }, [flushTermWrites, injectTerm, onBinary, queueTermWrite, requestSnapshotFinalLayout]);
 
   const handleWebMessage = useCallback(
     (event: WebViewMessageEvent) => {
@@ -345,11 +347,11 @@ export function TerminalPane({ taskId, active }: { taskId: string; active: boole
     (delta: number) => {
       setFontSize((prev) => {
         const next = Math.min(22, Math.max(9, prev + delta));
-        injectTerm({ type: "fontSize", size: next });
-        if (viewModeRef.current === "desktop" && desktopSizeRef.current) {
-          injectTerm({ type: "viewMode", mode: "desktop", ...desktopSizeRef.current });
+        const desktop = desktopSizeRef.current;
+        if (viewModeRef.current === "desktop" && desktop) {
+          injectTerm({ type: "fontSize", size: next, mode: "desktop", ...desktop });
         } else {
-          injectTerm({ type: "fit" });
+          injectTerm({ type: "fontSize", size: next, mode: "phone" });
         }
         return next;
       });
@@ -417,14 +419,15 @@ export function TerminalPane({ taskId, active }: { taskId: string; active: boole
   }, [scheduleRelayout, viewMode, windowHeight, windowWidth]);
 
   useEffect(() => {
-    if (active || refitTimerRef.current === null) return;
-    clearTimeout(refitTimerRef.current);
-    refitTimerRef.current = null;
+    if (active || refitFrameRef.current === null) return;
+    cancelAnimationFrame(refitFrameRef.current);
+    refitFrameRef.current = null;
   }, [active]);
 
   useEffect(() => {
     return () => {
-      if (refitTimerRef.current) clearTimeout(refitTimerRef.current);
+      if (refitFrameRef.current !== null) cancelAnimationFrame(refitFrameRef.current);
+      refitFrameRef.current = null;
       if (copiedTimerRef.current) clearTimeout(copiedTimerRef.current);
       if (writeFrameRef.current !== null) cancelAnimationFrame(writeFrameRef.current);
       writeFrameRef.current = null;

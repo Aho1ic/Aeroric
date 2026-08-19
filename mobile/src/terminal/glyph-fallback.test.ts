@@ -3,6 +3,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { EMOJI_FALLBACK_REPLACEMENTS, replaceEmojiFallbackGlyphs } from "./glyph-fallback";
+import { TERMINAL_HTML } from "./terminal-html.generated";
 
 describe("replaceEmojiFallbackGlyphs", () => {
   it("替换 agent TUI 常用的录制圆点", () => {
@@ -55,5 +56,14 @@ describe("WebView 胶水内联表", () => {
     for (const [codePoint, replacement] of EMOJI_FALLBACK_REPLACEMENTS) {
       expect(table).toContain(`0x${codePoint.toString(16)}: "${replacement}"`);
     }
+  });
+
+  it("尺寸变化和快照恢复只显示最终的底部画面", () => {
+    expect(TERMINAL_HTML).toContain("function beginAtomicLayout()");
+    expect(TERMINAL_HTML).toContain('term.element.style.visibility = "hidden"');
+    expect(TERMINAL_HTML).toContain("term.scrollToBottom()");
+    expect(TERMINAL_HTML).toContain('case "snapshotStart"');
+    expect(TERMINAL_HTML).toContain('case "snapshotEnd"');
+    expect(TERMINAL_HTML).toContain('term.element.style.visibility = "visible"');
   });
 });

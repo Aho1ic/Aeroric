@@ -462,6 +462,33 @@ const glue = `
   // ── 电脑视图:保留桌面端 cols/rows,但按比例缩放到手机 WebView ──
   var rootEl = document.getElementById("root");
   var desktopMode = false;
+  var snapshotRestoring = false;
+  var layoutRevealFrame = null;
+
+  function beginAtomicLayout() {
+    stopInertia();
+    cancelQueuedScroll();
+    velocity = 0;
+    resetSubPx();
+    if (layoutRevealFrame !== null) {
+      cancelAnimationFrame(layoutRevealFrame);
+      layoutRevealFrame = null;
+    }
+    term.element.style.visibility = "hidden";
+  }
+
+  function finishAtomicLayout() {
+    resetSubPx();
+    term.scrollToBottom();
+    try {
+      term.refresh(0, Math.max(0, term.rows - 1));
+    } catch (_) {}
+    if (snapshotRestoring) return;
+    layoutRevealFrame = requestAnimationFrame(function () {
+      layoutRevealFrame = null;
+      term.element.style.visibility = "visible";
+    });
+  }
 
   function rendererCellSize() {
     try {
@@ -481,6 +508,7 @@ const glue = `
   }
 
   function applyDesktopScale(cols, rows, notify) {
+    beginAtomicLayout();
     desktopMode = true;
     term.resize(cols, rows);
     var cell = rendererCellSize();
@@ -495,16 +523,19 @@ const glue = `
     screenEl.style.transform = "scale(" + scale + ")";
     // 缩放后通常完整可见;scale=1 时保留原始尺寸的滚动兜底。
     rootEl.style.overflow = scale < 0.999 ? "hidden" : "auto";
+    finishAtomicLayout();
     if (notify) post({ type: "resize-result", cols: cols, rows: rows });
   }
 
   function fitPhone() {
+    beginAtomicLayout();
     clearDesktopScale();
     var dims = fit.proposeDimensions();
     if (dims && dims.cols > 1 && dims.rows > 1) {
       term.resize(dims.cols, dims.rows);
       post({ type: "fit-result", cols: dims.cols, rows: dims.rows });
     }
+    finishAtomicLayout();
   }
 
   window.__aeroricTerm = {
@@ -525,18 +556,38 @@ const glue = `
             });
             break;
           }
-          case "reset":
+          case "snapshotStart":
+            snapshotRestoring = true;
+            beginAtomicLayout();
             resetSubPx();
             term.reset();
+            break;
+          case "snapshotEnd":
+            if (msg.mode === "desktop" && msg.cols > 1 && msg.rows > 1) {
+              applyDesktopScale(msg.cols, msg.rows, true);
+            } else {
+              fitPhone();
+            }
+            snapshotRestoring = false;
+            finishAtomicLayout();
             break;
           case "resize":
             if (msg.cols > 1 && msg.rows > 1) {
               if (desktopMode) applyDesktopScale(msg.cols, msg.rows, false);
-              else term.resize(msg.cols, msg.rows);
+              else {
+                beginAtomicLayout();
+                term.resize(msg.cols, msg.rows);
+                finishAtomicLayout();
+              }
             }
             break;
           case "fontSize":
             term.options.fontSize = msg.size;
+            if (msg.mode === "desktop" && msg.cols > 1 && msg.rows > 1) {
+              applyDesktopScale(msg.cols, msg.rows, true);
+            } else {
+              fitPhone();
+            }
             break;
           case "fit": {
             fitPhone();

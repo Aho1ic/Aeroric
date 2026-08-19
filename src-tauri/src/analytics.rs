@@ -514,63 +514,59 @@ pub(crate) fn parse_codex_usage_requests(content: &str) -> Vec<UsageRequest> {
 /// dsh 会话 token 聚合:每条带 `usage` 的 `assistant/message` 事件计一次请求。
 /// model 取最近一条 `request/context` 事件(路由变化时才记录);时间戳来自事件
 /// 的 `time`(Unix 毫秒)。
+pub(crate) fn parse_dsh_usage_line(line: &str, current_model: &mut String) -> Option<UsageRequest> {
+    let val = serde_json::from_str::<Value>(line).ok()?;
+    match val.get("type").and_then(Value::as_str) {
+        Some("request/context") => {
+            if let Some(model) = val
+                .get("data")
+                .and_then(|data| data.get("model"))
+                .and_then(Value::as_str)
+            {
+                *current_model = model.to_owned();
+            }
+            None
+        }
+        Some("assistant/message") => {
+            let data = val.get("data")?;
+            let usage = data.get("usage")?;
+            let time_ms = val.get("time").and_then(Value::as_i64)?;
+            let timestamp = time_ms as f64 / 1000.0;
+            let date = chrono::DateTime::from_timestamp_millis(time_ms)
+                .map(|dt| dt.with_timezone(&chrono::Local).date_naive())?;
+            Some(UsageRequest {
+                timestamp,
+                date,
+                agent: UsageAgent::Dsh,
+                model: current_model.clone(),
+                input_tokens: usage
+                    .get("inputTokens")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0),
+                output_tokens: usage
+                    .get("outputTokens")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0),
+                cache_creation_tokens: usage
+                    .get("cacheWriteTokens")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0),
+                cache_read_tokens: usage
+                    .get("cacheReadTokens")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0),
+            })
+        }
+        _ => None,
+    }
+}
+
 pub(crate) fn parse_dsh_usage_requests(content: &str) -> Vec<UsageRequest> {
     let mut requests = Vec::new();
     let mut current_model = String::new();
     for line in content.lines() {
-        let Ok(val) = serde_json::from_str::<Value>(line) else {
-            continue;
-        };
-        match val.get("type").and_then(Value::as_str) {
-            Some("request/context") => {
-                if let Some(model) = val
-                    .get("data")
-                    .and_then(|data| data.get("model"))
-                    .and_then(Value::as_str)
-                {
-                    current_model = model.to_owned();
-                }
-            }
-            Some("assistant/message") => {
-                let Some(data) = val.get("data") else {
-                    continue;
-                };
-                let Some(usage) = data.get("usage") else {
-                    continue;
-                };
-                let Some(time_ms) = val.get("time").and_then(Value::as_i64) else {
-                    continue;
-                };
-                let timestamp = time_ms as f64 / 1000.0;
-                let Some(date) = chrono::DateTime::from_timestamp_millis(time_ms)
-                    .map(|dt| dt.with_timezone(&chrono::Local).date_naive())
-                else {
-                    continue;
-                };
-                requests.push(UsageRequest {
-                    timestamp,
-                    date,
-                    agent: UsageAgent::Dsh,
-                    model: current_model.clone(),
-                    input_tokens: usage
-                        .get("inputTokens")
-                        .and_then(Value::as_u64)
-                        .unwrap_or(0),
-                    output_tokens: usage
-                        .get("outputTokens")
-                        .and_then(Value::as_u64)
-                        .unwrap_or(0),
-                    cache_creation_tokens: usage
-                        .get("cacheWriteTokens")
-                        .and_then(Value::as_u64)
-                        .unwrap_or(0),
-                    cache_read_tokens: usage
-                        .get("cacheReadTokens")
-                        .and_then(Value::as_u64)
-                        .unwrap_or(0),
-                });
-            }
-            _ => {}
+        if let Some(request) = parse_dsh_usage_line(line, &mut current_model) {
+            requests.push(request);
         }
     }
     requests
@@ -801,12 +797,20 @@ pub(crate) fn collect_jsonl_files(root: &Path, files: &mut HashSet<PathBuf>) {
         };
         if file_type.is_dir() {
             collect_jsonl_files(&path, files);
-        } else if file_type.is_file()
-            && path.extension().and_then(|ext| ext.to_str()) == Some("jsonl")
-        {
+        } else if file_type.is_file() && is_usage_log(&path) {
             files.insert(path.canonicalize().unwrap_or(path));
         }
     }
+}
+
+fn is_usage_log(path: &Path) -> bool {
+    path.extension().and_then(|ext| ext.to_str()) == Some("jsonl") || is_zstd_usage_log(path)
+}
+
+pub(crate) fn is_zstd_usage_log(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.ends_with(".jsonl.zstd"))
 }
 
 pub(crate) fn usage_roots() -> Vec<PathBuf> {
@@ -816,9 +820,13 @@ pub(crate) fn usage_roots() -> Vec<PathBuf> {
     else {
         return Vec::new();
     };
+    usage_roots_for_home(&home)
+}
+
+fn usage_roots_for_home(home: &Path) -> Vec<PathBuf> {
     let mut roots = HashSet::new();
 
-    if let Ok(entries) = std::fs::read_dir(&home) {
+    if let Ok(entries) = std::fs::read_dir(home) {
         for entry in entries.flatten() {
             let name = entry.file_name();
             let name = name.to_string_lossy();
@@ -827,6 +835,9 @@ pub(crate) fn usage_roots() -> Vec<PathBuf> {
             }
             if name == ".claude" || name.starts_with(".claude-") {
                 roots.insert(entry.path().join("projects"));
+            }
+            if name == ".dsh" {
+                roots.insert(entry.path().join("sessions"));
             }
         }
     }
@@ -959,6 +970,48 @@ mod session_metrics_tests {
         add_request(&mut totals, &requests[0]);
         assert_eq!(totals.total_cost, 0.0);
         assert_eq!(totals.unpriced_request_count, 1);
+    }
+
+    #[test]
+    fn usage_log_discovery_includes_jsonl_and_jsonl_zstd_only() {
+        let root =
+            std::env::temp_dir().join(format!("aeroric-usage-discovery-{}", uuid::Uuid::new_v4()));
+        let nested = root.join("nested");
+        std::fs::create_dir_all(&nested).unwrap();
+        std::fs::write(root.join("plain.jsonl"), b"{}\n").unwrap();
+        std::fs::write(nested.join("session.jsonl.zstd"), b"compressed").unwrap();
+        std::fs::write(root.join("ignored.zstd"), b"compressed").unwrap();
+        std::fs::write(root.join("ignored.json"), b"{}").unwrap();
+
+        let mut files = HashSet::new();
+        collect_jsonl_files(&root, &mut files);
+        assert_eq!(files.len(), 2);
+        assert!(files.iter().any(|path| path.ends_with("plain.jsonl")));
+        assert!(files
+            .iter()
+            .any(|path| path.ends_with("session.jsonl.zstd")));
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn usage_roots_include_official_and_managed_dsh_sessions() {
+        let home =
+            std::env::temp_dir().join(format!("aeroric-usage-roots-{}", uuid::Uuid::new_v4()));
+        let official = home.join(".dsh").join("sessions");
+        let managed = home
+            .join(".aeroric")
+            .join("agent-homes")
+            .join("dsh")
+            .join("sessions");
+        std::fs::create_dir_all(&official).unwrap();
+        std::fs::create_dir_all(&managed).unwrap();
+
+        let roots = usage_roots_for_home(&home);
+        assert!(roots.contains(&official));
+        assert!(roots.contains(&managed));
+
+        let _ = std::fs::remove_dir_all(home);
     }
 
     /// Claude 顶栏必须能拿到时长 / TOKENS / 上下文三项。窗口大小 transcript 里没有，

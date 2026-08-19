@@ -70,20 +70,25 @@ export function PasswordInput({
   show,
   onToggle,
   style,
+  containerStyle,
+  placeholder,
 }: {
   value: string;
   onChange: (event: ChangeEvent<HTMLInputElement>) => void;
   show: boolean;
   onToggle: () => void;
   style?: CSSProperties;
+  containerStyle?: CSSProperties;
+  placeholder?: string;
 }) {
   return (
-    <div style={{ position: "relative", display: "flex", alignItems: "center" }}>
+    <div style={{ position: "relative", display: "flex", alignItems: "center", ...containerStyle }}>
       <input
         style={{ ...style, paddingRight: 36 }}
         type={show ? "text" : "password"}
         value={value}
         onChange={onChange}
+        placeholder={placeholder}
       />
       <button
         type="button"

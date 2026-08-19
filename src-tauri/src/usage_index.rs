@@ -2,6 +2,7 @@ use notify::{RecursiveMode, Watcher};
 use rusqlite::{params, Connection, OptionalExtension};
 use std::collections::{HashMap, HashSet};
 use std::fs;
+use std::io::{self, BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::thread;
@@ -13,6 +14,8 @@ use crate::analytics::{self, UsageAgent, UsageRequest};
 const INDEX_EVENT: &str = "usage-statistics-updated";
 const EVENT_DEBOUNCE: Duration = Duration::from_millis(500);
 const FALLBACK_SCAN_INTERVAL: Duration = Duration::from_secs(5);
+const MAX_DECOMPRESSED_USAGE_LOG_BYTES: usize = 512 * 1024 * 1024;
+const MAX_USAGE_LOG_LINE_BYTES: usize = 16 * 1024 * 1024;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct SourceState {
@@ -116,7 +119,87 @@ fn load_source_states(connection: &Connection) -> Result<HashMap<String, SourceS
     Ok(states)
 }
 
+fn read_limited_line<R: BufRead>(reader: &mut R, buffer: &mut Vec<u8>) -> io::Result<usize> {
+    buffer.clear();
+    let mut limited = reader.take((MAX_USAGE_LOG_LINE_BYTES + 1) as u64);
+    let read = limited.read_until(b'\n', buffer)?;
+    if read > MAX_USAGE_LOG_LINE_BYTES {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "usage log line exceeds safety limit",
+        ));
+    }
+    Ok(read)
+}
+
+fn parse_dsh_usage_reader<R: BufRead>(
+    mut reader: R,
+    max_bytes: usize,
+) -> io::Result<Option<Vec<UsageRequest>>> {
+    let mut line = Vec::new();
+    let first_bytes = read_limited_line(&mut reader, &mut line)?;
+    if first_bytes == 0 {
+        return Ok(None);
+    }
+    if first_bytes > max_bytes {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "usage log exceeds decompression safety limit",
+        ));
+    }
+    let first_line = std::str::from_utf8(&line)
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+    if !analytics::is_dsh_session(first_line) {
+        return Ok(None);
+    }
+
+    let mut requests = Vec::new();
+    let mut current_model = String::new();
+    let mut total_bytes = first_bytes;
+    if let Some(request) = analytics::parse_dsh_usage_line(first_line, &mut current_model) {
+        requests.push(request);
+    }
+    loop {
+        let read = read_limited_line(&mut reader, &mut line)?;
+        if read == 0 {
+            break;
+        }
+        total_bytes = total_bytes
+            .checked_add(read)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "usage log size overflow"))?;
+        if total_bytes > max_bytes {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "usage log exceeds decompression safety limit",
+            ));
+        }
+        let line = std::str::from_utf8(&line)
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+        if let Some(request) = analytics::parse_dsh_usage_line(line, &mut current_model) {
+            requests.push(request);
+        }
+    }
+    Ok(Some(requests))
+}
+
 fn parse_source(path: &Path) -> Option<Vec<UsageRequest>> {
+    if analytics::is_zstd_usage_log(path) {
+        let file = fs::File::open(path).ok()?;
+        let decoder = zstd::stream::read::Decoder::new(file).ok()?;
+        return parse_dsh_usage_reader(BufReader::new(decoder), MAX_DECOMPRESSED_USAGE_LOG_BYTES)
+            .ok()
+            .flatten();
+    }
+
+    let file = fs::File::open(path).ok()?;
+    match parse_dsh_usage_reader(BufReader::new(file), MAX_DECOMPRESSED_USAGE_LOG_BYTES) {
+        Ok(Some(requests)) => return Some(requests),
+        Ok(None) => {}
+        Err(_) => return None,
+    }
+    if fs::metadata(path).ok()?.len() > MAX_DECOMPRESSED_USAGE_LOG_BYTES as u64 {
+        return None;
+    }
     let content = fs::read_to_string(path).ok()?;
     if analytics::is_dsh_session(&content) {
         Some(analytics::parse_dsh_usage_requests(&content))
@@ -404,6 +487,107 @@ mod tests {
         fs::write(&path, "{}\n{}\n").unwrap();
         let after = source_state(&path).unwrap();
         assert!(after.size > before.size);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn parses_zstd_compressed_dsh_sessions() {
+        let path = std::env::temp_dir().join(format!(
+            "aeroric-usage-{}.session.jsonl.zstd",
+            Uuid::new_v4()
+        ));
+        let content = concat!(
+            r#"{"type":"session","version":0,"id":"s1","createdAt":1755100000000}"#,
+            "\n",
+            r#"{"type":"request/context","seq":0,"time":1755100000100,"data":{"provider":"deepseek-official","model":"deepseek-v4"}}"#,
+            "\n",
+            r#"{"type":"assistant/message","seq":1,"time":1755100001000,"data":{"usage":{"inputTokens":100,"outputTokens":20,"cacheReadTokens":50,"cacheWriteTokens":5,"reasoningTokens":7}}}"#,
+            "\n",
+        );
+        let compressed = zstd::stream::encode_all(content.as_bytes(), 1).unwrap();
+        fs::write(&path, compressed).unwrap();
+
+        let requests = parse_source(&path).unwrap();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].agent, UsageAgent::Dsh);
+        assert_eq!(requests[0].input_tokens, 100);
+        assert_eq!(requests[0].output_tokens, 20);
+        assert_eq!(requests[0].cache_read_tokens, 50);
+        assert_eq!(requests[0].cache_creation_tokens, 5);
+
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn streamed_dsh_parser_rejects_excessive_decompressed_data() {
+        let content = concat!(
+            r#"{"type":"session","version":0,"id":"s1","createdAt":1755100000000}"#,
+            "\n",
+            r#"{"type":"request/context","seq":0,"time":1755100000100,"data":{"provider":"deepseek-official","model":"deepseek-v4"}}"#,
+            "\n",
+            r#"{"type":"assistant/message","seq":1,"time":1755100001000,"data":{"usage":{"inputTokens":100,"outputTokens":20}}}"#,
+            "\n",
+        );
+        let result = parse_dsh_usage_reader(
+            BufReader::new(std::io::Cursor::new(content.as_bytes())),
+            content.len() - 1,
+        );
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn rejects_corrupt_zstd_without_producing_empty_usage() {
+        let path = std::env::temp_dir().join(format!(
+            "aeroric-usage-{}.session.jsonl.zstd",
+            Uuid::new_v4()
+        ));
+        fs::write(&path, b"not-zstd").unwrap();
+        assert!(parse_source(&path).is_none());
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn corrupt_rewrite_does_not_replace_previously_indexed_requests() {
+        let mut connection = Connection::open_in_memory().unwrap();
+        initialize_database(&connection).unwrap();
+        let path = std::env::temp_dir().join(format!(
+            "aeroric-usage-{}.session.jsonl.zstd",
+            Uuid::new_v4()
+        ));
+        let source_path = path.to_string_lossy().into_owned();
+        let request = UsageRequest {
+            timestamp: 1.0,
+            date: chrono::NaiveDate::from_ymd_opt(2026, 8, 19).unwrap(),
+            agent: UsageAgent::Dsh,
+            model: "deepseek-v4".to_owned(),
+            input_tokens: 10,
+            output_tokens: 5,
+            cache_creation_tokens: 0,
+            cache_read_tokens: 2,
+        };
+        replace_source(
+            &mut connection,
+            &source_path,
+            SourceState {
+                modified_ns: 1,
+                size: 100,
+            },
+            &[request],
+        )
+        .unwrap();
+
+        fs::write(&path, b"partial-zstd-frame").unwrap();
+        assert!(parse_source(&path).is_none());
+        let count: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM usage_requests WHERE source_path = ?1",
+                params![source_path],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1);
+
         let _ = fs::remove_file(path);
     }
 

@@ -163,7 +163,7 @@ describe("DatabaseView tree actions", () => {
     });
   });
 
-  it("does not create a schema when production confirmation is rejected", async () => {
+  it("delegates production schema confirmation to the backend execution boundary", async () => {
     const user = userEvent.setup();
     const productionConnection = {
       ...dbxConnection,
@@ -173,7 +173,6 @@ describe("DatabaseView tree actions", () => {
         production_databases: [],
       },
     };
-    vi.mocked(confirm).mockResolvedValue(false);
     vi.mocked(invoke).mockImplementation((command) => {
       if (command === "db_load_connections") return Promise.resolve([]);
       if (command === "dbx_list_connections") return Promise.resolve([productionConnection]);
@@ -183,13 +182,6 @@ describe("DatabaseView tree actions", () => {
       if (command === "dbx_list_objects") return Promise.resolve([]);
       if (command === "dbx_build_create_schema_sql") {
         return Promise.resolve('CREATE SCHEMA "analytics";');
-      }
-      if (command === "dbx_assess_production_sql") {
-        return Promise.resolve({
-          requiresConfirmation: true,
-          isMutation: true,
-          productionDatabases: [],
-        });
       }
       return Promise.resolve(undefined);
     });
@@ -210,7 +202,7 @@ describe("DatabaseView tree actions", () => {
     await user.click(within(dialog).getByRole("button", { name: "Create schema" }));
 
     await waitFor(() => {
-      expect(invoke).toHaveBeenCalledWith("dbx_assess_production_sql", {
+      expect(invoke).toHaveBeenCalledWith("dbx_execute_query", {
         request: {
           connectionId: "dbx-source",
           database: "main",
@@ -218,7 +210,7 @@ describe("DatabaseView tree actions", () => {
         },
       });
     });
-    expect(invoke).not.toHaveBeenCalledWith("dbx_execute_query", expect.anything());
+    expect(invoke).not.toHaveBeenCalledWith("dbx_assess_production_sql", expect.anything());
   });
 
   it("orders and gates DBX database and schema node context menus like dbx", async () => {
@@ -711,7 +703,7 @@ describe("DatabaseView tree actions", () => {
     });
   });
 
-  it("does not execute a production SQL file when the confirmation is rejected", async () => {
+  it("delegates production SQL-file confirmation to the backend execution boundary", async () => {
     const user = userEvent.setup();
     const productionConnection = {
       ...dbxConnection,
@@ -722,7 +714,6 @@ describe("DatabaseView tree actions", () => {
       },
     };
     vi.mocked(open).mockResolvedValue("/tmp/production.sql");
-    vi.mocked(confirm).mockResolvedValue(false);
     vi.mocked(invoke).mockImplementation((command) => {
       if (command === "db_load_connections") return Promise.resolve([]);
       if (command === "dbx_list_connections") return Promise.resolve([productionConnection]);
@@ -732,13 +723,6 @@ describe("DatabaseView tree actions", () => {
       if (command === "dbx_list_objects") return Promise.resolve([]);
       if (command === "db_read_sql_file") {
         return Promise.resolve("DELETE FROM users WHERE id = 1;");
-      }
-      if (command === "dbx_assess_production_sql") {
-        return Promise.resolve({
-          requiresConfirmation: true,
-          isMutation: true,
-          productionDatabases: [],
-        });
       }
       return Promise.resolve(undefined);
     });
@@ -759,15 +743,15 @@ describe("DatabaseView tree actions", () => {
     );
 
     await waitFor(() => {
-      expect(invoke).toHaveBeenCalledWith("dbx_assess_production_sql", {
-        request: {
+      expect(invoke).toHaveBeenCalledWith("dbx_execute_sql_file", {
+        request: expect.objectContaining({
           connectionId: "dbx-source",
           database: "main",
-          sql: "DELETE FROM users WHERE id = 1;",
-        },
+          path: "/tmp/production.sql",
+        }),
       });
     });
-    expect(invoke).not.toHaveBeenCalledWith("dbx_execute_sql_file", expect.anything());
+    expect(invoke).not.toHaveBeenCalledWith("dbx_assess_production_sql", expect.anything());
   });
 
   it("groups DBX schema objects by type and keeps matching groups visible during search", async () => {

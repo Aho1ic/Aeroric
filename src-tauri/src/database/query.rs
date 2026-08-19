@@ -2,7 +2,8 @@ use dbx_core::db;
 use dbx_core::query::QueryExecutionOptions;
 use dbx_core::sql_risk::SqlRisk;
 use serde::{Deserialize, Serialize};
-use tauri::State;
+use tauri::{AppHandle, State};
+use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 
 use super::connections;
 use super::dbx_state::DbxState;
@@ -218,6 +219,65 @@ async fn production_connection_config(
     connections::parse_core_config(&connection)
 }
 
+fn safe_dialog_label(value: &str) -> String {
+    value
+        .chars()
+        .filter(|character| !character.is_control())
+        .take(160)
+        .collect()
+}
+
+pub(crate) async fn enforce_production_sql_confirmation(
+    app: &AppHandle,
+    state: &DbxState,
+    connection_id: &str,
+    database: Option<String>,
+    sql: &str,
+) -> Result<(), String> {
+    let config = production_connection_config(state, connection_id).await?;
+    let assessment = assess_production_sql(&config, database, sql)?;
+    if !assessment.requires_confirmation {
+        return Ok(());
+    }
+
+    let connection = safe_dialog_label(&config.name);
+    let databases = if assessment.production_databases.is_empty() {
+        "entire connection / 整个连接".to_string()
+    } else {
+        assessment
+            .production_databases
+            .iter()
+            .map(|database| safe_dialog_label(database))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let message = format!(
+        "This statement can modify a protected production database.\n\
+         Connection: {connection}\n\
+         Database: {databases}\n\n\
+         此语句可能修改受保护的生产数据库。确认继续执行吗？"
+    );
+    let app = app.clone();
+    let approved = tokio::task::spawn_blocking(move || {
+        app.dialog()
+            .message(message)
+            .title("Production database warning / 生产数据库警告")
+            .kind(MessageDialogKind::Warning)
+            .buttons(MessageDialogButtons::OkCancelCustom(
+                "Execute / 执行".to_string(),
+                "Cancel / 取消".to_string(),
+            ))
+            .blocking_show()
+    })
+    .await
+    .map_err(|error| format!("Production confirmation dialog failed: {error}"))?;
+    if approved {
+        Ok(())
+    } else {
+        Err("Production database operation cancelled.".to_string())
+    }
+}
+
 #[tauri::command]
 pub async fn dbx_assess_production_sql(
     state: State<'_, DbxState>,
@@ -238,9 +298,18 @@ pub async fn dbx_assess_production_target(
 
 #[tauri::command]
 pub async fn dbx_execute_query(
+    app: AppHandle,
     state: State<'_, DbxState>,
     request: ExecuteQueryRequest,
 ) -> Result<db::QueryResult, String> {
+    enforce_production_sql_confirmation(
+        &app,
+        &state,
+        &request.connection_id,
+        request.database.clone(),
+        &request.sql,
+    )
+    .await?;
     connections::ensure_connected(&state, &request.connection_id).await?;
     let execution_id = non_empty(request.execution_id.clone());
     let registered_query = execution_id
@@ -262,9 +331,18 @@ pub async fn dbx_execute_query(
 
 #[tauri::command]
 pub async fn dbx_execute_multi(
+    app: AppHandle,
     state: State<'_, DbxState>,
     request: ExecuteMultiRequest,
 ) -> Result<Vec<db::QueryResult>, String> {
+    enforce_production_sql_confirmation(
+        &app,
+        &state,
+        &request.connection_id,
+        request.database.clone(),
+        &request.sql,
+    )
+    .await?;
     connections::ensure_connected(&state, &request.connection_id).await?;
     let execution_id = non_empty(request.execution_id.clone());
     let registered_query = execution_id

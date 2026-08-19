@@ -14,7 +14,7 @@ import type { TerminalFontSize, FontFamily, ThemeVariant } from "../types";
 import {
   themeFor,
   initTerminal,
-  safeFit,
+  fitTerminalAtBottom,
   createSmartWriter,
   attachMacWebKitTerminalGuard,
   attachCursorLineHighlight,
@@ -143,7 +143,10 @@ export function TerminalView({
       term.open(container);
       applyTerminalTextareaInputAttributes(term);
 
-      const writer = createSmartWriter(term, () => theme, { themeAwareAnsiRemap: true });
+      const writer = createSmartWriter(term, () => theme, {
+        themeAwareAnsiRemap: true,
+        resumeOnAnyOutput: true,
+      });
       const disposeInputFix = attachMacWebKitShiftInputFix(term);
       const disposeWindowsImeFix = attachWindowsIMEPositionFix(term);
       const disposeMacWebKitGuard = attachMacWebKitTerminalGuard({ term, container, writer });
@@ -159,7 +162,9 @@ export function TerminalView({
         onNewline: () => sendInput(TERMINAL_NEWLINE_SEQUENCE),
         onPaste: (text) => sendInput(text),
       });
-      const linuxIme = attachLinuxIMEFix(term, sendInput);
+      const linuxIme = attachLinuxIMEFix(term, sendInput, {
+        onCompositionStateChange: writer.setCompositionPaused,
+      });
 
       const focus = () => {
         if (!isActiveRef.current) return;
@@ -197,7 +202,7 @@ export function TerminalView({
     };
 
     const fitRuntime = (runtime: TerminalRuntime) => {
-      const size = safeFit(runtime.fitAddon, runtime.term, container);
+      const size = fitTerminalAtBottom(runtime.fitAddon, runtime.term, container);
       if (size) notifyResize(size.cols, size.rows);
     };
 
@@ -335,13 +340,16 @@ export function TerminalView({
     };
     document.addEventListener("visibilitychange", handleVisibilityChange);
 
-    let resizeTimer: ReturnType<typeof setTimeout> | null = null;
+    let resizeFrame: number | null = null;
     const resizeObserver = new ResizeObserver(() => {
-      if (resizeTimer) window.clearTimeout(resizeTimer);
-      resizeTimer = window.setTimeout(() => {
+      if (!isActiveRef.current) return;
+      container.setAttribute("data-terminal-resizing", "true");
+      if (resizeFrame !== null) return;
+      resizeFrame = window.requestAnimationFrame(() => {
+        resizeFrame = null;
         const current = runtimeRef.current;
         if (current) fitRuntime(current);
-      }, 50);
+      });
     });
     resizeObserver.observe(container);
 
@@ -355,7 +363,8 @@ export function TerminalView({
       }
       onRegisterRef.current(null);
       rebuildRef.current = null;
-      if (resizeTimer) window.clearTimeout(resizeTimer);
+      if (resizeFrame !== null) window.cancelAnimationFrame(resizeFrame);
+      container.removeAttribute("data-terminal-resizing");
       resizeObserver.disconnect();
       document.removeEventListener("visibilitychange", handleVisibilityChange);
       runtimeRef.current?.dispose();
@@ -391,7 +400,7 @@ export function TerminalView({
       const current = runtimeRef.current;
       const container = containerRef.current;
       if (!current || !container) return;
-      const size = safeFit(current.fitAddon, current.term, container);
+      const size = fitTerminalAtBottom(current.fitAddon, current.term, container);
       if (size) notifyResize(size.cols, size.rows);
       current.focus();
     });

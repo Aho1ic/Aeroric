@@ -69,7 +69,6 @@ const ROMANIZED_COMPOSITION_KEY_FALLBACK_MS = 180;
 // 用 0ms（下一个宏任务）提交即可。同步到达的中文 beforeinput 仍能在定时器触发前
 // cancel 掉这次提交（见测试 "sends committed Chinese from WebKit beforeinput ..."）。
 const ROMANIZED_COMPOSITION_PROMPT_COMMIT_DELAY_MS = 0;
-const POST_COMPOSITION_TEXTAREA_CLEAR_DELAYS_MS = [0, 16, 40, 80, 160, 320, 640];
 const TEXTAREA_INPUT_CLIENT_RESET_MS = 24;
 const IME_PROCESS_KEY_GUARD_MS = 180;
 // WebKit can expose the first IME letter as a normal key before compositionstart.
@@ -532,6 +531,7 @@ export function attachWindowsIMEPositionFix(term: Terminal): () => void {
 export function attachLinuxIMEFix(
   term: Terminal,
   onDataCallback: (data: string) => void,
+  options: { onCompositionStateChange?: (composing: boolean) => void } = {},
 ): { dispose: () => void } {
   if (!(IS_OTHER_WEBKIT || IS_MAC_WEBKIT) || !term.textarea) {
     const disposable = term.onData(onDataCallback);
@@ -545,7 +545,7 @@ export function attachLinuxIMEFix(
   let ignoredPostCompositionCandidates = new Set<string>();
   let ignorePostCompositionUntil = 0;
   let textareaClearGeneration = 0;
-  let textareaClearTimers: Array<ReturnType<typeof globalThis.setTimeout>> = [];
+  let textareaClearFrame: number | null = null;
   let textareaInputClientResetTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
   let textareaDisabledByCjkReset = false;
   let textareaDisabledBeforeCjkReset = false;
@@ -573,6 +573,12 @@ export function attachLinuxIMEFix(
     fromCandidateKey: boolean;
     timer: ReturnType<typeof globalThis.setTimeout>;
   } | null = null;
+
+  const updateCompositionState = (next: boolean) => {
+    if (isComposing === next) return;
+    isComposing = next;
+    options.onCompositionStateChange?.(next);
+  };
 
   const clearTextarea = () => {
     textarea.value = "";
@@ -701,10 +707,9 @@ export function attachLinuxIMEFix(
   };
 
   const clearScheduledTextareaClears = () => {
-    for (const timer of textareaClearTimers) {
-      globalThis.clearTimeout(timer);
-    }
-    textareaClearTimers = [];
+    if (textareaClearFrame === null) return;
+    window.cancelAnimationFrame(textareaClearFrame);
+    textareaClearFrame = null;
   };
 
   const clearTextareaInputClientReset = () => {
@@ -746,18 +751,27 @@ export function attachLinuxIMEFix(
     }, TEXTAREA_INPUT_CLIENT_RESET_MS);
   };
 
-  const clearTextareaAfterWebKitReplay = () => {
+  const clearTextareaAfterWebKitReplay = (verifyCjkInputClient = false) => {
     clearScheduledTextareaClears();
     hideXtermCompositionView();
-    clearTextareaNowAndNextFrame();
+    clearTextarea();
     textareaClearGeneration += 1;
     const generation = textareaClearGeneration;
-    textareaClearTimers = POST_COMPOSITION_TEXTAREA_CLEAR_DELAYS_MS.map((delay) =>
-      globalThis.setTimeout(() => {
-        if (generation !== textareaClearGeneration) return;
-        clearTextarea();
-      }, delay),
-    );
+    textareaClearFrame = window.requestAnimationFrame(() => {
+      textareaClearFrame = null;
+      if (generation !== textareaClearGeneration) return;
+      const staleComposition = Boolean(
+        textarea.value ||
+        compositionView?.textContent ||
+        compositionView?.classList.contains("active"),
+      );
+      if (verifyCjkInputClient && staleComposition && !isComposing) {
+        resetTextareaInputClientAfterCjkCommit();
+        return;
+      }
+      hideXtermCompositionView();
+      clearTextarea();
+    });
   };
 
   const sendText = (text: string | null | undefined) => {
@@ -818,10 +832,7 @@ export function attachLinuxIMEFix(
     ignoredReplayProgress = "";
     ignoredPostCompositionCandidates = buildPostCompositionIgnoredCandidates(text, preeditText);
     ignorePostCompositionUntil = performance.now() + POST_COMPOSITION_REPLAY_IGNORE_MS;
-    clearTextareaAfterWebKitReplay();
-    if (containsCommittedCjkText(normalized)) {
-      resetTextareaInputClientAfterCjkCommit();
-    }
+    clearTextareaAfterWebKitReplay(containsCommittedCjkText(normalized));
     sendText(normalized);
   };
 
@@ -863,7 +874,7 @@ export function attachLinuxIMEFix(
       return null;
     }
     const normalized = normalizeCommittedCompositionText(text);
-    isComposing = false;
+    updateCompositionState(false);
     compositionText = "";
     candidateCommitText = "";
     preservedRomanizedCompositionText = "";
@@ -878,7 +889,7 @@ export function attachLinuxIMEFix(
   const recoverRecentlyClearedRomanizedComposition = (): boolean => {
     const text = getRecentlyClearedRomanizedText();
     if (!shouldDeferRomanizedCompositionCommit(text, text)) return false;
-    isComposing = true;
+    updateCompositionState(true);
     compositionText = text;
     candidateCommitText = text;
     preservedRomanizedCompositionText = text;
@@ -942,7 +953,7 @@ export function attachLinuxIMEFix(
     suppressNextTextInsertAfterRepeatedKey = null;
     deferNextRomanizedCompositionCommit = false;
     compositionDeletionInProgress = false;
-    isComposing = true;
+    updateCompositionState(true);
     compositionText = "";
     candidateCommitText = "";
     clearRecentlyClearedRomanizedText();
@@ -1005,14 +1016,14 @@ export function attachLinuxIMEFix(
         shouldIgnoreReplayByCharacters(text, ignoredPostCompositionCandidates))
     ) {
       imeDbg("compositionend ignored as replay", { text });
-      isComposing = false;
+      updateCompositionState(false);
       compositionText = "";
       preservedRomanizedCompositionText = "";
       hideXtermCompositionView();
       clearTextareaNowAndNextFrame();
       return;
     }
-    isComposing = false;
+    updateCompositionState(false);
     compositionText = "";
     void event;
     if (!text) {
@@ -1163,10 +1174,9 @@ export function attachLinuxIMEFix(
         ignoredReplayProgress = "";
         ignoredPostCompositionCandidates = nextCandidates;
         ignorePostCompositionUntil = performance.now() + POST_COMPOSITION_REPLAY_IGNORE_MS;
-        isComposing = false;
+        updateCompositionState(false);
         compositionText = "";
-        clearTextareaAfterWebKitReplay();
-        resetTextareaInputClientAfterCjkCommit();
+        clearTextareaAfterWebKitReplay(true);
         event.preventDefault();
         event.stopImmediatePropagation();
         sendText(normalizedTerminalInput);
@@ -1218,7 +1228,7 @@ export function attachLinuxIMEFix(
 
     if (isComposing && event.inputType === "insertText" && containsCommittedCjkText(event.data)) {
       const preeditText = getActiveCompositionText();
-      isComposing = false;
+      updateCompositionState(false);
       compositionText = "";
       clearPendingCompositionCommit();
       ignoredReplayProgress = "";
@@ -1227,8 +1237,7 @@ export function attachLinuxIMEFix(
         preeditText,
       );
       ignorePostCompositionUntil = performance.now() + POST_COMPOSITION_REPLAY_IGNORE_MS;
-      clearTextareaAfterWebKitReplay();
-      resetTextareaInputClientAfterCjkCommit();
+      clearTextareaAfterWebKitReplay(true);
       event.preventDefault();
       event.stopImmediatePropagation();
       sendText(event.data);
@@ -1241,7 +1250,7 @@ export function attachLinuxIMEFix(
       shouldDeferRomanizedCompositionCommit(event.data, compositionText)
     ) {
       const preeditText = compositionText;
-      isComposing = false;
+      updateCompositionState(false);
       compositionText = "";
       clearPendingCompositionCommit();
       commitOrDeferRomanizedComposition(event.data ?? "", preeditText);
@@ -1392,7 +1401,7 @@ export function attachLinuxIMEFix(
       )
     ) {
       const recoveredText = pendingRomanizedProcessText.trim();
-      isComposing = true;
+      updateCompositionState(true);
       compositionText = recoveredText;
       preservedRomanizedCompositionText = recoveredText;
       candidateCommitText = recoveredText;
@@ -1685,6 +1694,7 @@ export function attachLinuxIMEFix(
       clearScheduledTextareaClears();
       clearTextareaInputClientReset();
       finishTextareaInputClientReset(false);
+      updateCompositionState(false);
       compositionObserver?.disconnect();
       disposable.dispose();
     },

@@ -24,6 +24,7 @@ const mocks = vi.hoisted(() => {
     applyTerminalFontSize: vi.fn(() => ({ cols: 100, rows: 30 })),
     applyTerminalFontFamily: vi.fn(() => ({ cols: 110, rows: 32 })),
     safeFit: vi.fn(() => ({ cols: 90, rows: 28 })),
+    fitTerminalAtBottom: vi.fn(() => ({ cols: 90, rows: 28 })),
     createSmartWriter: vi.fn(() => writer),
     attachMacWebKitTerminalGuard: vi.fn(() => vi.fn()),
     loadWebglAddon: vi.fn(),
@@ -36,6 +37,7 @@ vi.mock("../components/terminalShared", () => ({
   applyTerminalTheme: mocks.applyTerminalTheme,
   attachMacWebKitTerminalGuard: mocks.attachMacWebKitTerminalGuard,
   createSmartWriter: mocks.createSmartWriter,
+  fitTerminalAtBottom: mocks.fitTerminalAtBottom,
   initTerminal: mocks.initTerminal,
   loadWebglAddon: mocks.loadWebglAddon,
   safeFit: mocks.safeFit,
@@ -70,13 +72,16 @@ class ResizeObserverMock {
 }
 
 describe("createTerminalRuntime", () => {
+  let animationFrames: FrameRequestCallback[];
+
   beforeEach(() => {
     vi.clearAllMocks();
     ResizeObserverMock.instances = [];
     vi.stubGlobal("ResizeObserver", ResizeObserverMock);
+    animationFrames = [];
     vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
-      callback(0);
-      return 1;
+      animationFrames.push(callback);
+      return animationFrames.length;
     });
   });
 
@@ -102,6 +107,12 @@ describe("createTerminalRuntime", () => {
     expect(mocks.term.open).toHaveBeenCalledWith(container);
     expect(ResizeObserverMock.instances[0]?.observe).toHaveBeenCalledWith(container);
 
+    ResizeObserverMock.instances[0]?.callback([], ResizeObserverMock.instances[0] as never);
+    ResizeObserverMock.instances[0]?.callback([], ResizeObserverMock.instances[0] as never);
+    expect(animationFrames).toHaveLength(1);
+    animationFrames.shift()?.(0);
+    expect(mocks.fitTerminalAtBottom).toHaveBeenCalledOnce();
+
     runtime.fit();
     expect(onResize).toHaveBeenCalledWith({ cols: 90, rows: 28 });
     runtime.fit();
@@ -117,6 +128,7 @@ describe("createTerminalRuntime", () => {
 
     const visibilityEvent = new Event("visibilitychange");
     document.dispatchEvent(visibilityEvent);
+    animationFrames.shift()?.(0);
     expect(mocks.term.focus).toHaveBeenCalled();
 
     runtime.dispose();

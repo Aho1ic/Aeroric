@@ -9,6 +9,7 @@ use dbx_core::models::connection::{
 use serde::Deserialize;
 use serde_json::{json, Value};
 use tauri::State;
+use url::{form_urlencoded, Url};
 
 use super::dbx_state::DbxState;
 use super::types::{AeroricDbConnectionConfig, DbxDatabaseType, ProjectScope};
@@ -204,12 +205,72 @@ fn legacy_to_aeroric(connection: LegacyConnection) -> AeroricDbConnectionConfig 
     }
 }
 
+fn is_sensitive_url_parameter(key: &str) -> bool {
+    let key = key.trim().to_ascii_lowercase();
+    is_sensitive_key(&key)
+        || matches!(
+            key.as_str(),
+            "passwd"
+                | "pwd"
+                | "token"
+                | "access_token"
+                | "refresh_token"
+                | "api_key"
+                | "apikey"
+                | "client_secret"
+                | "private_key"
+                | "secret"
+        )
+}
+
+fn redact_url_params(value: &str) -> String {
+    let mut serializer = form_urlencoded::Serializer::new(String::new());
+    for (key, value) in form_urlencoded::parse(value.as_bytes()) {
+        serializer.append_pair(
+            key.as_ref(),
+            if is_sensitive_url_parameter(key.as_ref()) {
+                ""
+            } else {
+                value.as_ref()
+            },
+        );
+    }
+    serializer.finish()
+}
+
+fn redact_connection_string(value: &str) -> String {
+    let Ok(mut url) = Url::parse(value) else {
+        // Unknown connection-string formats cannot be safely inspected. Returning
+        // an empty value keeps the renderer outside the credential boundary; the
+        // save path restores the existing value when the user leaves it untouched.
+        return String::new();
+    };
+    if url.cannot_be_a_base() {
+        return String::new();
+    }
+    let _ = url.set_password(None);
+    url.set_fragment(None);
+    if let Some(query) = url.query() {
+        let redacted = redact_url_params(query);
+        url.set_query((!redacted.is_empty()).then_some(&redacted));
+    }
+    url.to_string()
+}
+
 fn redact_sensitive_json(value: &mut Value) {
     match value {
         Value::Object(map) => {
             for (key, value) in map.iter_mut() {
-                let key = key.to_ascii_lowercase();
-                if key.contains("password") || key.contains("passphrase") || key == "client_key" {
+                let normalized_key = key.to_ascii_lowercase();
+                if normalized_key == "connection_string" {
+                    if let Some(connection_string) = value.as_str() {
+                        *value = Value::String(redact_connection_string(connection_string));
+                    }
+                } else if normalized_key == "url_params" {
+                    if let Some(params) = value.as_str() {
+                        *value = Value::String(redact_url_params(params));
+                    }
+                } else if is_sensitive_key(&normalized_key) {
                     *value = Value::String(String::new());
                 } else {
                     redact_sensitive_json(value);
@@ -440,10 +501,88 @@ fn is_sensitive_key(key: &str) -> bool {
     key.contains("password") || key.contains("passphrase") || key == "client_key"
 }
 
+fn merge_url_params_secrets(incoming: &str, existing: &str) -> String {
+    let existing_secrets: std::collections::HashMap<String, String> =
+        form_urlencoded::parse(existing.as_bytes())
+            .filter(|(key, value)| is_sensitive_url_parameter(key) && !value.is_empty())
+            .map(|(key, value)| (key.to_ascii_lowercase(), value.into_owned()))
+            .collect();
+    let mut serializer = form_urlencoded::Serializer::new(String::new());
+    for (key, value) in form_urlencoded::parse(incoming.as_bytes()) {
+        let restored = if is_sensitive_url_parameter(&key) && value.is_empty() {
+            existing_secrets
+                .get(&key.to_ascii_lowercase())
+                .map(String::as_str)
+        } else {
+            None
+        };
+        serializer.append_pair(key.as_ref(), restored.unwrap_or(value.as_ref()));
+    }
+    serializer.finish()
+}
+
+fn merge_connection_string_secrets(incoming: &str, existing: &str) -> String {
+    if incoming.trim().is_empty() {
+        return existing.to_string();
+    }
+    let (Ok(mut incoming_url), Ok(existing_url)) = (Url::parse(incoming), Url::parse(existing))
+    else {
+        return incoming.to_string();
+    };
+    let same_credential_scope = incoming_url.scheme() == existing_url.scheme()
+        && incoming_url.host_str() == existing_url.host_str()
+        && incoming_url.port_or_known_default() == existing_url.port_or_known_default()
+        && incoming_url.username() == existing_url.username();
+    if !same_credential_scope {
+        return incoming.to_string();
+    }
+    if incoming_url.password().is_none() {
+        if let Some(password) = existing_url.password() {
+            let _ = incoming_url.set_password(Some(password));
+        }
+    }
+    if let Some(incoming_query) = incoming_url.query() {
+        let merged = merge_url_params_secrets(incoming_query, existing_url.query().unwrap_or(""));
+        incoming_url.set_query((!merged.is_empty()).then_some(&merged));
+    }
+    incoming_url.to_string()
+}
+
+fn stable_json_id(value: &Value) -> Option<&str> {
+    value
+        .as_object()?
+        .get("id")?
+        .as_str()
+        .filter(|id| !id.trim().is_empty())
+}
+
 fn merge_sensitive_json(incoming: &mut Value, existing: &Value) {
     match (incoming, existing) {
         (Value::Object(incoming_map), Value::Object(existing_map)) => {
             for (key, existing_value) in existing_map {
+                if key.eq_ignore_ascii_case("connection_string") {
+                    let incoming_text = incoming_map.get(key).and_then(Value::as_str).unwrap_or("");
+                    if let Some(existing_text) = existing_value.as_str() {
+                        incoming_map.insert(
+                            key.clone(),
+                            Value::String(merge_connection_string_secrets(
+                                incoming_text,
+                                existing_text,
+                            )),
+                        );
+                    }
+                    continue;
+                }
+                if key.eq_ignore_ascii_case("url_params") {
+                    let incoming_text = incoming_map.get(key).and_then(Value::as_str).unwrap_or("");
+                    if let Some(existing_text) = existing_value.as_str() {
+                        incoming_map.insert(
+                            key.clone(),
+                            Value::String(merge_url_params_secrets(incoming_text, existing_text)),
+                        );
+                    }
+                    continue;
+                }
                 if is_sensitive_key(key) {
                     let incoming_empty = incoming_map
                         .get(key)
@@ -466,8 +605,16 @@ fn merge_sensitive_json(incoming: &mut Value, existing: &Value) {
             }
         }
         (Value::Array(incoming_items), Value::Array(existing_items)) => {
-            for (incoming_item, existing_item) in incoming_items.iter_mut().zip(existing_items) {
-                merge_sensitive_json(incoming_item, existing_item);
+            for incoming_item in incoming_items {
+                let Some(id) = stable_json_id(incoming_item) else {
+                    continue;
+                };
+                if let Some(existing_item) = existing_items
+                    .iter()
+                    .find(|existing_item| stable_json_id(existing_item) == Some(id))
+                {
+                    merge_sensitive_json(incoming_item, existing_item);
+                }
             }
         }
         _ => {}
@@ -788,5 +935,107 @@ mod tests {
             preserved.dbx["transport_layers"][0]["key_passphrase"],
             "key-secret"
         );
+    }
+
+    #[test]
+    fn sanitized_connection_hides_and_restores_uri_credentials() {
+        let existing = mysql_connection_with_dbx(json!({
+            "id": "mongo-1",
+            "name": "mongo",
+            "db_type": "mongodb",
+            "connection_string": "mongodb+srv://user:uri-secret@cluster.example/app?retryWrites=true&access_token=query-secret",
+            "url_params": "sslmode=require&%70assword=param-secret"
+        }));
+
+        let api_connection = sanitized(&existing);
+        let safe_uri = api_connection.dbx["connection_string"].as_str().unwrap();
+        let safe_params = api_connection.dbx["url_params"].as_str().unwrap();
+        assert!(!safe_uri.contains("uri-secret"));
+        assert!(!safe_uri.contains("query-secret"));
+        assert!(!safe_params.contains("param-secret"));
+        assert!(safe_uri.contains("retryWrites=true"));
+        assert!(safe_params.contains("sslmode=require"));
+
+        let preserved = preserve_existing_secrets_from_existing(api_connection, &existing);
+        let restored_uri = preserved.dbx["connection_string"].as_str().unwrap();
+        let restored_params = preserved.dbx["url_params"].as_str().unwrap();
+        assert!(restored_uri.contains("uri-secret"));
+        assert!(restored_uri.contains("query-secret"));
+        assert!(restored_params.contains("param-secret"));
+    }
+
+    #[test]
+    fn opaque_connection_strings_are_not_returned_to_the_renderer() {
+        let connection = mysql_connection_with_dbx(json!({
+            "id": "jdbc-1",
+            "name": "jdbc",
+            "db_type": "postgres",
+            "connection_string": "jdbc:postgresql://user:secret@localhost/app"
+        }));
+
+        assert_eq!(sanitized(&connection).dbx["connection_string"], "");
+    }
+
+    #[test]
+    fn uri_credentials_are_not_reused_for_a_different_endpoint() {
+        let merged = merge_connection_string_secrets(
+            "mongodb://user@new.example/app?access_token=",
+            "mongodb://user:old-password@old.example/app?access_token=old-token",
+        );
+
+        assert!(!merged.contains("old-password"));
+        assert!(!merged.contains("old-token"));
+    }
+
+    #[test]
+    fn clearing_url_parameters_does_not_restore_the_previous_value() {
+        assert_eq!(
+            merge_url_params_secrets("", "sslmode=require&password=old-secret"),
+            ""
+        );
+    }
+
+    #[test]
+    fn transport_secrets_follow_stable_ids_when_layers_are_reordered() {
+        let existing = mysql_connection_with_dbx(json!({
+            "id": "mysql-1",
+            "transport_layers": [
+                { "id": "transport-a", "type": "ssh", "password": "secret-a" },
+                { "id": "transport-b", "type": "ssh", "password": "secret-b" }
+            ]
+        }));
+        let incoming = mysql_connection_with_dbx(json!({
+            "id": "mysql-1",
+            "transport_layers": [
+                { "id": "transport-b", "type": "ssh", "password": "" },
+                { "id": "transport-a", "type": "ssh", "password": "" },
+                { "id": "transport-new", "type": "ssh", "password": "" }
+            ]
+        }));
+
+        let preserved = preserve_existing_secrets_from_existing(incoming, &existing);
+        assert_eq!(preserved.dbx["transport_layers"][0]["password"], "secret-b");
+        assert_eq!(preserved.dbx["transport_layers"][1]["password"], "secret-a");
+        assert_eq!(preserved.dbx["transport_layers"][2]["password"], "");
+    }
+
+    #[test]
+    fn deleting_a_transport_layer_does_not_copy_its_secret_to_the_next_layer() {
+        let existing = mysql_connection_with_dbx(json!({
+            "id": "mysql-1",
+            "transport_layers": [
+                { "id": "transport-a", "type": "ssh", "password": "secret-a" },
+                { "id": "transport-b", "type": "ssh", "password": "secret-b" }
+            ]
+        }));
+        let incoming = mysql_connection_with_dbx(json!({
+            "id": "mysql-1",
+            "transport_layers": [
+                { "id": "transport-b", "type": "ssh", "password": "" }
+            ]
+        }));
+
+        let preserved = preserve_existing_secrets_from_existing(incoming, &existing);
+        assert_eq!(preserved.dbx["transport_layers"][0]["password"], "secret-b");
     }
 }

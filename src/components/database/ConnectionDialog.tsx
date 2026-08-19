@@ -126,6 +126,8 @@ export function ConnectionDialog({
   const [draftDatabase, setDraftDatabase] = useState("");
   const [draftPassword, setDraftPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
+  const [showConnectionString, setShowConnectionString] = useState(false);
+  const [showUrlParams, setShowUrlParams] = useState(false);
   const [showSentinelPassword, setShowSentinelPassword] = useState(false);
   const [showTransportPassword, setShowTransportPassword] = useState(false);
   const [showTransportPassphrase, setShowTransportPassphrase] = useState(false);
@@ -223,6 +225,8 @@ export function ConnectionDialog({
       setDraftDatabase("");
       setDraftPassword("");
       setShowPassword(false);
+      setShowConnectionString(false);
+      setShowUrlParams(false);
       setShowSentinelPassword(false);
       setShowTransportPassword(false);
       setShowTransportPassphrase(false);
@@ -280,6 +284,8 @@ export function ConnectionDialog({
     setDraftUser(dbxString(config, "username"));
     setDraftDatabase(dbxString(config, "database"));
     setDraftPassword(dbxString(config, "password"));
+    setShowConnectionString(false);
+    setShowUrlParams(false);
     setDraftFilePath(profile.localFile ? dbxString(config, "host") : "");
     setDraftReadOnly(dbxBoolean(config, "read_only", connection.readOnly));
     setDraftInitScript(dbxString(config, "init_script"));
@@ -882,7 +888,7 @@ export function ConnectionDialog({
                           <label style={s.databaseDialogField}>
                             <span style={s.databaseDialogLabel}>{t("database.password")}</span>
                             <PasswordInput
-                              style={s.databaseDialogInput}
+                              style={{ ...s.databaseDialogInput, width: "100%" }}
                               value={draftPassword}
                               onChange={(event) => setDraftPassword(event.target.value)}
                               show={showPassword}
@@ -938,8 +944,9 @@ export function ConnectionDialog({
                               : t("database.connectionString")}
                           </span>
                           <div style={s.databaseInputButtonRow}>
-                            <input
+                            <PasswordInput
                               style={s.databaseDialogInput}
+                              containerStyle={{ flex: 1, minWidth: 0 }}
                               value={draftConnectionString}
                               onChange={(event) => setDraftConnectionString(event.target.value)}
                               placeholder={
@@ -947,6 +954,8 @@ export function ConnectionDialog({
                                   ? "mongodb+srv://user:pass@cluster.mongodb.net/mydb"
                                   : "jdbc:postgresql://localhost:5432/postgres"
                               }
+                              show={showConnectionString}
+                              onToggle={() => setShowConnectionString((value) => !value)}
                             />
                             <DbxButton variant="outline" size="sm" onClick={applyConnectionUrl}>
                               {t("database.parseConnectionUrl")}
@@ -956,11 +965,14 @@ export function ConnectionDialog({
                       )}
                       <label style={s.databaseDialogField}>
                         <span style={s.databaseDialogLabel}>{t("database.urlParams")}</span>
-                        <input
-                          style={s.databaseDialogInput}
+                        <PasswordInput
+                          style={{ ...s.databaseDialogInput, width: "100%" }}
+                          containerStyle={{ width: "100%" }}
                           value={draftUrlParams}
                           onChange={(event) => setDraftUrlParams(event.target.value)}
                           placeholder={t("database.placeholder.connectionParams")}
+                          show={showUrlParams}
+                          onToggle={() => setShowUrlParams((value) => !value)}
                         />
                       </label>
                       {selectedProfile.key === "redis" && (

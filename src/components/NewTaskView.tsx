@@ -68,6 +68,11 @@ import {
   type TaskImageAttachment as PastedImage,
   type TaskImageRejection,
 } from "../taskAttachments";
+import {
+  normalizeDshDefaultPreset,
+  type DshAgentPreset,
+  type DshSettingsSnapshot,
+} from "../dshSettings";
 
 export interface NewTaskDraft {
   promptHtml: string;
@@ -164,12 +169,18 @@ export function NewTaskView({
   const [dshAgentPreset, setDshAgentPreset] = useState<string>(
     initialDraft?.dshAgentPreset ?? "standard",
   );
+  const [dshCustomPresets, setDshCustomPresets] = useState<DshAgentPreset[]>([]);
   const [dshCommandSearch, setDshCommandSearch] = useState<string | null>(null);
   const [dshCommandIndex, setDshCommandIndex] = useState(0);
   const [dshCommandPicker, setDshCommandPicker] = useState<DshSlashCommand | null>(null);
   const [modelsLoading, setModelsLoading] = useState(false);
   const [modelsError, setModelsError] = useState<string | null>(null);
   const modelRequestIdRef = useRef(0);
+  const dshSettingsRequestIdRef = useRef(0);
+  const projectConfigRequestIdRef = useRef(0);
+  const selectionProjectIdRef = useRef(project.id);
+  const agentManuallySelectedRef = useRef(initialDraft?.agent != null);
+  const dshPresetManuallySelectedRef = useRef(initialDraft?.dshAgentPreset != null);
 
   const [allFiles, setAllFiles] = useState<FileEntry[]>([]);
   const [filesLoading, setFilesLoading] = useState(false);
@@ -407,25 +418,82 @@ export function NewTaskView({
     loadAgentModels(agent);
   }, [agent, loadAgentModels]);
 
+  const loadDshSettings = useCallback(
+    (targetAgent: AgentType) => {
+      const requestId = dshSettingsRequestIdRef.current + 1;
+      dshSettingsRequestIdRef.current = requestId;
+      if (!isDshAgent(targetAgent, agentOptions)) {
+        setDshCustomPresets([]);
+        return;
+      }
+      invoke<DshSettingsSnapshot>("get_dsh_settings_snapshot", { agent: targetAgent })
+        .then((snapshot) => {
+          if (dshSettingsRequestIdRef.current !== requestId) return;
+          setDshCustomPresets(Array.isArray(snapshot.customPresets) ? snapshot.customPresets : []);
+          if (!dshPresetManuallySelectedRef.current) {
+            setDshAgentPreset(normalizeDshDefaultPreset(snapshot));
+          }
+        })
+        .catch(() => {
+          if (dshSettingsRequestIdRef.current !== requestId) return;
+          setDshCustomPresets([]);
+          if (!dshPresetManuallySelectedRef.current) setDshAgentPreset("standard");
+        });
+    },
+    [agentOptions],
+  );
+
+  useEffect(() => {
+    loadDshSettings(agent);
+  }, [agent, loadDshSettings]);
+
   useEffect(() => {
     const handleSettingsChanged = () => {
       clearAgentModelCache();
       loadAgentModels(agent);
+      loadDshSettings(agent);
     };
     window.addEventListener(APP_SETTINGS_CHANGED_EVENT, handleSettingsChanged);
     return () => window.removeEventListener(APP_SETTINGS_CHANGED_EVENT, handleSettingsChanged);
-  }, [agent, loadAgentModels]);
+  }, [agent, loadAgentModels, loadDshSettings]);
+
+  const handleSetAgent = useCallback((nextAgent: AgentType) => {
+    agentManuallySelectedRef.current = true;
+    setAgent((currentAgent) => {
+      if (currentAgent !== nextAgent) {
+        dshPresetManuallySelectedRef.current = false;
+      }
+      return nextAgent;
+    });
+  }, []);
+
+  const handleSetDshAgentPreset = useCallback((preset: string) => {
+    dshPresetManuallySelectedRef.current = true;
+    setDshAgentPreset(preset);
+  }, []);
 
   // Load default agent and permission mode from project config when project changes
   useEffect(() => {
+    if (selectionProjectIdRef.current !== project.id) {
+      selectionProjectIdRef.current = project.id;
+      agentManuallySelectedRef.current = initialDraft?.agent != null;
+      dshPresetManuallySelectedRef.current = initialDraft?.dshAgentPreset != null;
+    }
+    const requestId = projectConfigRequestIdRef.current + 1;
+    projectConfigRequestIdRef.current = requestId;
     if (initialDraft || remoteProject) return;
     invoke<{ agent: { default: string; default_permission_mode?: string } }>(
       "read_project_config",
       { projectPath: project.path },
     )
       .then((cfg) => {
+        if (projectConfigRequestIdRef.current !== requestId) return;
         const defaultAgent = cfg.agent.default;
-        if (agentOptions.some((option) => option.value === defaultAgent)) {
+        if (
+          !agentManuallySelectedRef.current &&
+          agentOptions.some((option) => option.value === defaultAgent)
+        ) {
+          dshPresetManuallySelectedRef.current = false;
           setAgent(defaultAgent as AgentType);
         }
         const defaultPerm = cfg.agent.default_permission_mode;
@@ -433,7 +501,9 @@ export function NewTaskView({
           setPermMode(defaultPerm);
         }
       })
-      .catch(console.error);
+      .catch((error) => {
+        if (projectConfigRequestIdRef.current === requestId) console.error(error);
+      });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [agentOptions, project.id, remoteProject]);
 
@@ -1189,14 +1259,15 @@ export function NewTaskView({
                 />
               ) : null
             }
-            onSetAgent={setAgent}
+            onSetAgent={handleSetAgent}
             onSetPermMode={setPermMode}
             openMenu={composeOpenMenu}
             onOpenMenuChange={setComposeOpenMenu}
             onTogglePlanMode={() => setPlanMode((v) => !v)}
             onToggleGoalMode={() => setGoalMode((v) => !v)}
             dshAgentPreset={dshAgentPreset}
-            onSetDshAgentPreset={setDshAgentPreset}
+            dshCustomPresets={dshCustomPresets}
+            onSetDshAgentPreset={handleSetDshAgentPreset}
             onSubmit={handleSubmit}
           />
         </div>

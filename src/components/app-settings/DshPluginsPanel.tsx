@@ -25,6 +25,7 @@ import {
   type DshPluginInventoryEntry,
 } from "../../dshOfficialDefaults";
 import { useI18n } from "../../i18n";
+import type { DshSettingsSnapshot } from "../../dshSettings";
 import { Button } from "../ui/Button";
 import { AnimatedSelectionGroup } from "../ui/AnimatedSelection";
 import { START_DSH_CREATOR_DRAFT_EVENT } from "./types";
@@ -43,29 +44,6 @@ interface DshPluginWireEntry {
   moduleName?: string;
   fiberPhase?: DshFiberPhase;
   builtIn?: boolean;
-}
-
-interface DshSettingsSnapshot {
-  shell: {
-    timeoutMs: number;
-    maxOutputBytes: number;
-  };
-  agentLoop: {
-    maxParallelToolCalls: number;
-  };
-  webSearch: {
-    baseUrl: string;
-    maxUses: number;
-    apiKeyConfigured: boolean;
-  };
-  defaultPreset: string;
-  customPresets: DshAgentPreset[];
-}
-
-interface DshAgentPreset {
-  id: string;
-  name?: string;
-  description?: string;
 }
 
 function errorMessage(error: unknown): string {

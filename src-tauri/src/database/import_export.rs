@@ -9,11 +9,12 @@ use dbx_core::table_export::TableExportRequest;
 use dbx_core::table_export::{ExportStatus, TableExportProgress};
 use dbx_core::table_import::{TableImportPreview, TableImportRequest, TableImportSummary};
 use serde::Deserialize;
-use tauri::State;
+use tauri::{AppHandle, State};
 use zip::ZipArchive;
 
 use super::connections;
 use super::dbx_state::DbxState;
+use super::query;
 
 const MAX_EXCEL_ZIP_ENTRIES: usize = 2_048;
 const MAX_EXCEL_ENTRY_BYTES: u64 = 128 * 1024 * 1024;
@@ -287,12 +288,21 @@ pub async fn dbx_import_table_file(
 
 #[tauri::command]
 pub async fn dbx_execute_sql_file(
+    app: AppHandle,
     state: State<'_, DbxState>,
     request: ExecuteSqlFileRequest,
 ) -> Result<Vec<db::QueryResult>, String> {
-    connections::ensure_connected(&state, &request.connection_id).await?;
     let path = validate_sql_file_path(&request.path)?;
     let sql = read_sql_file(&path)?;
+    query::enforce_production_sql_confirmation(
+        &app,
+        &state,
+        &request.connection_id,
+        request.database.clone(),
+        &sql,
+    )
+    .await?;
+    connections::ensure_connected(&state, &request.connection_id).await?;
     let execution_id = format!("sql-file:{}", uuid::Uuid::new_v4());
     let registered_query = state
         .app_state

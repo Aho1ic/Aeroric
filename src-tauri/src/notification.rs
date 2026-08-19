@@ -6,10 +6,12 @@ use std::sync::OnceLock;
 use std::time::Duration;
 
 use chrono::Utc;
+use futures_util::StreamExt;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tauri::AppHandle;
+use tokio::io::AsyncWriteExt;
 
 use crate::storage::atomic_write;
 
@@ -17,6 +19,8 @@ use crate::storage::atomic_write;
 
 const RELEASES_URL: &str = "https://api.github.com/repos/Aho1ic/Aeroric/releases";
 const MAX_RESPONSE_BYTES: usize = 1024 * 1024; // 1MB limit
+const MAX_UPDATE_ASSET_BYTES: u64 = 1024 * 1024 * 1024; // 1 GiB
+const MAX_CHECKSUM_ASSET_BYTES: u64 = 1024 * 1024; // 1 MiB
 const FETCH_INTERVAL_SECS: i64 = 3600; // 1 hour
 const REQUEST_TIMEOUT_SECS: u64 = 15;
 const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -790,32 +794,93 @@ async fn fetch_release_by_tag(tag_name: &str) -> Result<GitHubRelease, String> {
     serde_json::from_slice(&bytes).map_err(|e| format!("Invalid JSON: {e}"))
 }
 
-async fn download_asset(asset: &GitHubReleaseAsset, target: &Path) -> Result<(), String> {
+fn validate_release_asset_filename(name: &str) -> Result<(), String> {
+    let path = Path::new(name);
+    if name.is_empty()
+        || path.is_absolute()
+        || path.components().count() != 1
+        || path.file_name() != Some(std::ffi::OsStr::new(name))
+    {
+        return Err("Invalid release asset filename".to_string());
+    }
+    Ok(())
+}
+
+fn checked_download_total(current: u64, chunk_bytes: usize, max_bytes: u64) -> Result<u64, String> {
+    let total = current
+        .checked_add(chunk_bytes as u64)
+        .ok_or_else(|| "Download size overflow".to_string())?;
+    if total > max_bytes {
+        return Err(format!("Download exceeds the {} byte limit", max_bytes));
+    }
+    Ok(total)
+}
+
+async fn download_asset(
+    asset: &GitHubReleaseAsset,
+    target: &Path,
+    max_bytes: u64,
+) -> Result<(), String> {
     let url = asset.browser_download_url.trim();
     if !url.starts_with("https://github.com/Aho1ic/Aeroric/releases/download/") {
         return Err("Unexpected asset download URL".to_string());
     }
+    validate_release_asset_filename(&asset.name)?;
 
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(180))
         .redirect(reqwest::redirect::Policy::limited(5))
         .build()
         .map_err(|e| format!("HTTP client error: {e}"))?;
-    let bytes = client
+    let response = client
         .get(url)
         .header("User-Agent", "Aeroric")
         .send()
         .await
         .map_err(|e| format!("Download failed: {e}"))?
         .error_for_status()
-        .map_err(|e| format!("Download failed: {e}"))?
-        .bytes()
-        .await
-        .map_err(|e| format!("Read download failed: {e}"))?;
+        .map_err(|e| format!("Download failed: {e}"))?;
+    if response
+        .content_length()
+        .is_some_and(|length| length > max_bytes)
+    {
+        return Err(format!("Download exceeds the {} byte limit", max_bytes));
+    }
 
-    tokio::fs::write(target, bytes)
-        .await
-        .map_err(|e| format!("Write download failed: {e}"))
+    let target_name = target
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| "Invalid download target filename".to_string())?;
+    let temporary = target.with_file_name(format!(".{target_name}.{}.part", uuid::Uuid::new_v4()));
+    let result = async {
+        let mut file = tokio::fs::File::create(&temporary)
+            .await
+            .map_err(|e| format!("Create download file failed: {e}"))?;
+        let mut stream = response.bytes_stream();
+        let mut total_bytes = 0_u64;
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk.map_err(|e| format!("Read download failed: {e}"))?;
+            total_bytes = checked_download_total(total_bytes, chunk.len(), max_bytes)?;
+            file.write_all(&chunk)
+                .await
+                .map_err(|e| format!("Write download failed: {e}"))?;
+        }
+        file.flush()
+            .await
+            .map_err(|e| format!("Flush download failed: {e}"))?;
+        file.sync_all()
+            .await
+            .map_err(|e| format!("Sync download failed: {e}"))?;
+        drop(file);
+        tokio::fs::rename(&temporary, target)
+            .await
+            .map_err(|e| format!("Finalize download failed: {e}"))
+    }
+    .await;
+    if result.is_err() {
+        let _ = tokio::fs::remove_file(&temporary).await;
+    }
+    result
 }
 
 #[cfg(target_os = "macos")]
@@ -1247,11 +1312,18 @@ pub async fn prepare_release_update(
     tokio::fs::create_dir_all(&update_dir)
         .await
         .map_err(|e| format!("Create update directory failed: {e}"))?;
+    validate_release_asset_filename(&asset.name)?;
+    validate_release_asset_filename(&checksum_asset.name)?;
     let installer_path_buf = update_dir.join(&asset.name);
     let checksum_path_buf = update_dir.join(&checksum_asset.name);
 
-    download_asset(&asset, &installer_path_buf).await?;
-    download_asset(&checksum_asset, &checksum_path_buf).await?;
+    download_asset(&asset, &installer_path_buf, MAX_UPDATE_ASSET_BYTES).await?;
+    download_asset(
+        &checksum_asset,
+        &checksum_path_buf,
+        MAX_CHECKSUM_ASSET_BYTES,
+    )
+    .await?;
     let checksum_text = tokio::fs::read_to_string(&checksum_path_buf)
         .await
         .map_err(|e| format!("Read checksum failed: {e}"))?;
@@ -1546,6 +1618,21 @@ mod tests {
         let err = find_checksum_for_asset(&dmg, std::slice::from_ref(&dmg)).unwrap_err();
 
         assert!(err.contains("checksum"));
+    }
+
+    #[test]
+    fn update_download_size_guard_rejects_oversized_streams() {
+        assert_eq!(checked_download_total(6, 4, 10).unwrap(), 10);
+        assert!(checked_download_total(10, 1, 10).is_err());
+        assert!(checked_download_total(u64::MAX, 1, u64::MAX).is_err());
+    }
+
+    #[test]
+    fn release_asset_names_cannot_escape_the_update_directory() {
+        assert!(validate_release_asset_filename("Aeroric_9.9.9_aarch64.dmg").is_ok());
+        assert!(validate_release_asset_filename("../Aeroric_9.9.9_aarch64.dmg").is_err());
+        assert!(validate_release_asset_filename("nested/Aeroric_9.9.9_aarch64.dmg").is_err());
+        assert!(validate_release_asset_filename("").is_err());
     }
 
     #[test]
