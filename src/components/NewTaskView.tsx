@@ -179,6 +179,8 @@ export function NewTaskView({
   const dshSettingsRequestIdRef = useRef(0);
   const projectConfigRequestIdRef = useRef(0);
   const selectionProjectIdRef = useRef(project.id);
+  const previousAgentRef = useRef(agent);
+  const agentChangedRef = useRef(false);
   const agentManuallySelectedRef = useRef(initialDraft?.agent != null);
   const dshPresetManuallySelectedRef = useRef(initialDraft?.dshAgentPreset != null);
 
@@ -358,21 +360,21 @@ export function NewTaskView({
           if (canonical) return canonical;
           return models[0] ?? "";
         });
-        // Apply agent-config defaults only when the user has no cached draft
-        // (so a saved agent config's reasoning effort / speed become the
-        // initial values on the home page without overriding prior choices).
-        if (!initialDraft) {
+        // Apply agent-config defaults on first load, or after an actual agent
+        // switch. A draft keeps its initial selection, while switching agents
+        // must not carry the previous agent's effort into the new one.
+        if (!initialDraft || agentChangedRef.current) {
           const rawEffort = result.reasoning_effort ?? null;
+          const family = agentFamily(targetAgent, agentOptions);
           const configEffort =
             rawEffort &&
-            (
-              availableReasoningEffortsForFamily(
-                agentFamily(targetAgent, agentOptions),
-                models[0],
-              ) as readonly string[]
-            ).includes(rawEffort)
+            (availableReasoningEffortsForFamily(family, models[0]) as readonly string[]).includes(
+              rawEffort,
+            )
               ? (rawEffort as ReasoningEffort)
-              : null;
+              : family === "dsh"
+                ? null
+                : ("xhigh" as ReasoningEffort);
           const configSpeed = result.reasoning_speed ?? null;
           setReasoningEffort((current) => (current === null ? configEffort : current));
           setSpeed((current) =>
@@ -413,6 +415,16 @@ export function NewTaskView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [agentOptions],
   );
+
+  // A different agent has a different saved default. Clear the previous
+  // selection before its model snapshot applies, including project-config
+  // driven agent changes that happen after the first render.
+  useEffect(() => {
+    if (previousAgentRef.current === agent) return;
+    previousAgentRef.current = agent;
+    agentChangedRef.current = true;
+    setReasoningEffort(null);
+  }, [agent]);
 
   useEffect(() => {
     loadAgentModels(agent);

@@ -6,7 +6,7 @@
 
 import { router } from "expo-router";
 import { ChevronLeft, FileText, Folder } from "lucide-react-native";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { FlatList, StyleSheet, Text, View } from "react-native";
 import { t } from "../i18n";
 import { useConnection } from "../state/connection-context";
@@ -36,10 +36,16 @@ export function FilesPane({
   const [unavailable, setUnavailable] = useState<"ssh" | "wsl" | null>(null);
   const [loading, setLoading] = useState(false);
   const [unsupported, setUnsupported] = useState(false);
+  const loadSeqRef = useRef(0);
+  const scopeKey = `${projectId}\u0000${path}`;
+  const scopeRef = useRef(scopeKey);
+  scopeRef.current = scopeKey;
 
   const load = useCallback(
     (target: string) => {
       if (status !== "online" || !projectId) return;
+      const requestSeq = ++loadSeqRef.current;
+      const requestScope = `${projectId}\u0000${target}`;
       if (capabilitiesReady && !hasCapability("files.read")) {
         setUnsupported(true);
         setEntries(null);
@@ -54,24 +60,50 @@ export function FilesPane({
         target ? { projectId, path: target } : { projectId },
       )
         .then((result) => {
+          if (requestSeq !== loadSeqRef.current || requestScope !== scopeRef.current) return;
           if (!result.available) {
             setUnavailable(result.reason ?? "ssh");
+            setEntries(null);
             return;
           }
           setUnavailable(null);
           setEntries(result.entries ?? []);
         })
-        .catch((err) => setError(err instanceof Error ? err.message : String(err)))
-        .finally(() => setLoading(false));
+        .catch((err) => {
+          if (requestSeq !== loadSeqRef.current || requestScope !== scopeRef.current) return;
+          setError(err instanceof Error ? err.message : String(err));
+        })
+        .finally(() => {
+          if (requestSeq === loadSeqRef.current && requestScope === scopeRef.current) {
+            setLoading(false);
+          }
+        });
     },
     [capabilitiesReady, hasCapability, projectId, request, status],
   );
+
+  useEffect(() => {
+    loadSeqRef.current += 1;
+    setPath(initialPath);
+    setEntries(null);
+    setError(null);
+    setUnavailable(null);
+    setUnsupported(false);
+  }, [initialPath, projectId]);
+
+  useEffect(() => {
+    if (status === "online") return;
+    loadSeqRef.current += 1;
+    setLoading(false);
+  }, [status]);
 
   useEffect(() => {
     if (active && entries === null) load(path);
   }, [active, entries, load, path]);
 
   const navigate = useCallback((target: string) => {
+    // Invalidate the previous directory request before React schedules the new load.
+    loadSeqRef.current += 1;
     setPath(target);
     setEntries(null);
   }, []);

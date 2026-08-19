@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("expo-secure-store", () => ({
   getItemAsync: vi.fn(),
@@ -6,7 +6,21 @@ vi.mock("expo-secure-store", () => ({
 }));
 
 import type { HostIdentity, PairedHost } from "../types";
-import { addOrReplaceHost, isSameHost, mergeHostIdentity, type HostStoreState } from "./host-store";
+import * as SecureStore from "expo-secure-store";
+import {
+  addOrReplaceHost,
+  isPairedHost,
+  isSameHost,
+  loadHostStore,
+  mergeHostIdentity,
+  type HostStoreState,
+} from "./host-store";
+
+const getItemAsync = vi.mocked(SecureStore.getItemAsync);
+
+beforeEach(() => {
+  vi.clearAllMocks();
+});
 
 function host(overrides: Partial<PairedHost>): PairedHost {
   return {
@@ -21,6 +35,21 @@ function host(overrides: Partial<PairedHost>): PairedHost {
 }
 
 describe("host identity", () => {
+  it("rejects malformed persisted host records", async () => {
+    getItemAsync.mockResolvedValue(
+      JSON.stringify({
+        hosts: [{ id: "broken", endpoints: ["ws://127.0.0.1:6790"] }, host({ id: "valid" })],
+        activeHostId: "broken",
+      }),
+    );
+
+    await expect(loadHostStore()).resolves.toEqual({
+      hosts: [host({ id: "valid" })],
+      activeHostId: "valid",
+    });
+    expect(isPairedHost({ id: "broken" })).toBe(false);
+  });
+
   it("keeps same-name hosts with different identities", () => {
     const first = host({ id: "a", hostId: "host-a", name: "Mac" });
     const second = host({

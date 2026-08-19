@@ -362,8 +362,19 @@ export function TerminalView({
     document.addEventListener("visibilitychange", handleVisibilityChange);
 
     let resizeFrame: number | null = null;
-    const resizeObserver = new ResizeObserver(() => {
+    let lastObservedContainerSize: { width: number; height: number } | null = null;
+    const resizeObserver = new ResizeObserver((entries) => {
       if (!isActiveRef.current) return;
+      const rect = entries[0]?.contentRect;
+      if (rect && Number.isFinite(rect.width) && Number.isFinite(rect.height)) {
+        if (
+          lastObservedContainerSize?.width === rect.width &&
+          lastObservedContainerSize?.height === rect.height
+        ) {
+          return;
+        }
+        lastObservedContainerSize = { width: rect.width, height: rect.height };
+      }
       container.setAttribute("data-terminal-resizing", "true");
       if (resizeFrame !== null) return;
       resizeFrame = window.requestAnimationFrame(() => {

@@ -4,6 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { I18nProvider } from "../i18n";
 import { NewTaskView } from "../components/NewTaskView";
+import { clearAgentModelCache } from "../hooks/agentModelCache";
 import type { Project } from "../types";
 
 vi.mock("@tauri-apps/api/core", () => ({
@@ -44,6 +45,7 @@ vi.mock("@tauri-apps/api/core", () => ({
               : agent === "codex"
                 ? ["gpt-5.6", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]
                 : [],
+        reasoning_effort: agent === "local_claude" ? "high" : undefined,
       });
     }
     if (command === "load_app_settings") {
@@ -84,6 +86,7 @@ const defaultInvokeImplementation =
 
 describe("NewTaskView start terminal", () => {
   beforeEach(() => {
+    clearAgentModelCache();
     vi.mocked(invoke).mockClear();
     if (!Element.prototype.hasPointerCapture) {
       Element.prototype.hasPointerCapture = () => false;
@@ -119,6 +122,27 @@ describe("NewTaskView start terminal", () => {
         immediate: true,
       }),
     );
+  });
+
+  it("uses the selected agent's reasoning config instead of the previous agent default", async () => {
+    const user = userEvent.setup();
+
+    render(
+      <I18nProvider>
+        <NewTaskView project={project} onSubmit={vi.fn()} />
+      </I18nProvider>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId("model-summary-reasoning")).toHaveTextContent("XHigh");
+    });
+
+    await user.click(screen.getByRole("combobox", { name: "Agent" }));
+    await user.click(await screen.findByText("Local Claude"));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("model-summary-reasoning")).toHaveTextContent("High");
+    });
   });
 
   it("starts reasoning with the current editor text", async () => {

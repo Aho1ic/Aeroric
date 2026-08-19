@@ -47,7 +47,15 @@ import {
   type ShellTerminalPanelHandle,
   type ShellSession,
 } from "./ShellTerminalPanel";
-import { Columns2, FileText, Maximize2, Plus, Terminal as TerminalIcon, X } from "lucide-react";
+import {
+  Columns2,
+  FileText,
+  Maximize2,
+  PanelLeftOpen,
+  Plus,
+  Terminal as TerminalIcon,
+  X,
+} from "lucide-react";
 import { SshTerminalPanel, type SshTerminalPanelHandle } from "./ssh/SshTerminalPanel";
 import { WslTerminalPanel, type WslTerminalPanelHandle } from "./wsl/WslTerminalPanel";
 import type { SftpEndpoint } from "./sftp/sftpTypes";
@@ -478,6 +486,7 @@ export function ProjectPage({
     autoCollapseRail: false,
     compactComposeControls: false,
   });
+  const [projectRailCollapsed, setProjectRailCollapsed] = useState(false);
   const [projectBodyWidth, setProjectBodyWidth] = useState(0);
   const [mountedTaskIds, setMountedTaskIds] = useState<Set<string>>(() => new Set());
   const [filePreviewTarget, setFilePreviewTarget] = useState<{
@@ -1805,6 +1814,8 @@ export function ProjectPage({
         onCollapsedProjectGroupsChange={onCollapsedProjectGroupsChange}
         projectRailWidth={projectRailWidth}
         onProjectRailWidthChange={onProjectRailWidthChange}
+        collapsed={projectRailCollapsed}
+        onCollapsedChange={setProjectRailCollapsed}
         onOpen={onOpen}
         onBack={hubMode ? (onExitSkillHub ?? onBack) : onBack}
         onNewTask={handleNewTask}
@@ -1818,7 +1829,42 @@ export function ProjectPage({
         forceCollapsed={responsiveLayout.autoCollapseRail || isDatabaseMode}
         onShowReleasePage={onShowReleasePage}
       />
-      <div style={{ ...s.mainContent, flexDirection: "column" }}>
+      <div
+        style={{
+          ...s.mainContent,
+          flexDirection: "column",
+          position: "relative",
+        }}
+      >
+        {projectRailCollapsed && !responsiveLayout.autoCollapseRail && !isDatabaseMode && (
+          <button
+            type="button"
+            data-testid="project-show-tasks"
+            title={t("task.showTasks")}
+            aria-label={t("task.showTasks")}
+            onClick={() => setProjectRailCollapsed(false)}
+            style={{
+              position: "absolute",
+              top: 7,
+              left: 8,
+              zIndex: 30,
+              width: 30,
+              height: 30,
+              display: "inline-flex",
+              alignItems: "center",
+              justifyContent: "center",
+              padding: 0,
+              border: "1px solid var(--border-dim)",
+              borderRadius: 7,
+              background: "color-mix(in srgb, var(--bg-sidebar) 94%, transparent)",
+              color: "var(--text-muted)",
+              cursor: "pointer",
+              boxShadow: "var(--shadow-sm)",
+            }}
+          >
+            <PanelLeftOpen size={15} strokeWidth={2} />
+          </button>
+        )}
         {showWorkspaceTabs && (
           <AnimatedSelectionTrack
             value={activeWorkspaceTabValue}
@@ -1834,7 +1880,7 @@ export function ProjectPage({
               display: "flex",
               alignItems: "center",
               gap: 5,
-              padding: "4px 8px",
+              padding: projectRailCollapsed ? "4px 8px 4px 44px" : "4px 8px",
               borderBottom: "1px solid var(--border-dim)",
               background: "color-mix(in srgb, var(--bg-root) 72%, var(--bg-sidebar))",
               overflowX: "auto",

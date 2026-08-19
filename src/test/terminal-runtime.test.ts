@@ -113,6 +113,18 @@ describe("createTerminalRuntime", () => {
     animationFrames.shift()?.(0);
     expect(mocks.fitTerminalAtBottom).toHaveBeenCalledOnce();
 
+    const sameSize = { contentRect: { width: 640, height: 480 } } as ResizeObserverEntry;
+    const changedSize = { contentRect: { width: 700, height: 480 } } as ResizeObserverEntry;
+    ResizeObserverMock.instances[0]?.callback([sameSize], ResizeObserverMock.instances[0] as never);
+    ResizeObserverMock.instances[0]?.callback([sameSize], ResizeObserverMock.instances[0] as never);
+    ResizeObserverMock.instances[0]?.callback(
+      [changedSize],
+      ResizeObserverMock.instances[0] as never,
+    );
+    expect(animationFrames).toHaveLength(1);
+    animationFrames.shift()?.(0);
+    expect(mocks.fitTerminalAtBottom).toHaveBeenCalledTimes(2);
+
     runtime.fit();
     expect(onResize).toHaveBeenCalledWith({ cols: 90, rows: 28 });
     runtime.fit();

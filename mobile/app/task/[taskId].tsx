@@ -13,6 +13,7 @@ import { t } from "../../src/i18n";
 import { SessionPane } from "../../src/session/SessionPane";
 import { useConnection } from "../../src/state/connection-context";
 import { useTaskDetail } from "../../src/state/use-task-detail";
+import { availableTaskTabKeys, type TaskTabKey } from "../../src/task/task-tabs";
 import { TerminalPane } from "../../src/terminal/TerminalPane";
 import type { RemoteTaskActionResult } from "../../src/types";
 import { taskAcceptsInput } from "../../src/types";
@@ -21,8 +22,6 @@ import { HeaderIconButton } from "../../src/ui/HeaderIconButton";
 import { taskStatusMeta } from "../../src/ui/task-status";
 import { radii, theme } from "../../src/ui/theme";
 
-type TabKey = "session" | "terminal" | "files" | "changes";
-
 export default function TaskDetailScreen() {
   const params = useLocalSearchParams<{ taskId: string; projectId?: string; name?: string }>();
   const taskId = typeof params.taskId === "string" ? params.taskId : "";
@@ -30,16 +29,18 @@ export default function TaskDetailScreen() {
   const fallbackName = typeof params.name === "string" ? params.name : "";
   const { request, capabilitiesReady, hasCapability } = useConnection();
   const { task, error, refresh, patchTask } = useTaskDetail(projectId, taskId);
-  const [selectedTab, setSelectedTab] = useState<TabKey | null>(null);
+  const [selectedTab, setSelectedTab] = useState<TaskTabKey | null>(null);
   const [acting, setActing] = useState(false);
   const lifecycleSupported = !capabilitiesReady || hasCapability("tasks.lifecycle");
   const terminalSupported = !capabilitiesReady || hasCapability("terminal.stream");
+  const availableTabs = availableTaskTabKeys(capabilitiesReady, hasCapability);
 
   const statusMeta = task ? taskStatusMeta(task.status) : null;
   const active = task ? taskAcceptsInput(task.status) : false;
-  const defaultTab: TabKey =
+  const defaultTab: TaskTabKey =
     active && task?.status !== "input_required" && terminalSupported ? "terminal" : "session";
-  const tab = selectedTab ?? defaultTab;
+  const requestedTab = selectedTab ?? defaultTab;
+  const tab = availableTabs.includes(requestedTab) ? requestedTab : defaultTab;
   const showSession = tab === "session";
   const showTerminal = tab === "terminal";
 
@@ -206,7 +207,7 @@ export default function TaskDetailScreen() {
                 />
               ),
             },
-          ]}
+          ].filter((option) => availableTabs.includes(option.value))}
           onChange={setSelectedTab}
           compact
           iconOnly

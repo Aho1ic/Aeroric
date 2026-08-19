@@ -5,7 +5,7 @@
  */
 
 import { router } from "expo-router";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { FlatList, Platform, ScrollView, StyleSheet, Text, View } from "react-native";
 import { t } from "../i18n";
 import { useConnection } from "../state/connection-context";
@@ -63,9 +63,16 @@ export function ChangesPane({
   const [expanded, setExpanded] = useState<string | null>(null);
   const [diffs, setDiffs] = useState<Record<string, DiffState>>({});
   const [unsupported, setUnsupported] = useState(false);
+  const scopeKey = `${projectId}\u0000${taskId ?? ""}`;
+  const scopeRef = useRef(scopeKey);
+  const changesSeqRef = useRef(0);
+  const diffSeqRef = useRef<Record<string, number>>({});
+  scopeRef.current = scopeKey;
 
   const refresh = useCallback(() => {
     if (status !== "online" || !projectId) return;
+    const requestSeq = ++changesSeqRef.current;
+    const requestScope = scopeKey;
     if (capabilitiesReady && !hasCapability("git.read")) {
       setUnsupported(true);
       setChanges(null);
@@ -77,6 +84,7 @@ export function ChangesPane({
     setError(null);
     request<GitChangesResult>("git.changes", { projectId, ...(taskId ? { taskId } : {}) })
       .then((result) => {
+        if (requestSeq !== changesSeqRef.current || requestScope !== scopeRef.current) return;
         if (!result.available) {
           setUnavailable(result.reason ?? "ssh");
           setChanges(null);
@@ -85,9 +93,38 @@ export function ChangesPane({
         setUnavailable(null);
         setChanges(result.changes ?? []);
       })
-      .catch((err) => setError(err instanceof Error ? err.message : String(err)))
-      .finally(() => setLoading(false));
-  }, [capabilitiesReady, hasCapability, projectId, request, status, taskId]);
+      .catch((err) => {
+        if (requestSeq !== changesSeqRef.current || requestScope !== scopeRef.current) return;
+        setError(err instanceof Error ? err.message : String(err));
+      })
+      .finally(() => {
+        if (requestSeq === changesSeqRef.current && requestScope === scopeRef.current) {
+          setLoading(false);
+        }
+      });
+  }, [capabilitiesReady, hasCapability, projectId, request, scopeKey, status, taskId]);
+
+  useEffect(() => {
+    changesSeqRef.current += 1;
+    diffSeqRef.current = {};
+    setLoading(false);
+    setChanges(null);
+    setExpanded(null);
+    setDiffs({});
+    setError(null);
+    setUnavailable(null);
+    setUnsupported(false);
+  }, [scopeKey]);
+
+  useEffect(() => {
+    if (status === "online") return;
+    changesSeqRef.current += 1;
+    diffSeqRef.current = {};
+    setLoading(false);
+    setChanges(null);
+    setExpanded(null);
+    setDiffs({});
+  }, [status]);
 
   // 首次激活 & 重新上线时拉取
   useEffect(() => {
@@ -103,6 +140,9 @@ export function ChangesPane({
       }
       setExpanded(key);
       if (diffs[key]?.lines || diffs[key]?.loading) return;
+      const requestSeq = (diffSeqRef.current[key] ?? 0) + 1;
+      const requestScope = scopeKey;
+      diffSeqRef.current[key] = requestSeq;
       setDiffs((prev) => ({
         ...prev,
         [key]: { loading: true, error: null, lines: null, truncated: false },
@@ -114,6 +154,9 @@ export function ChangesPane({
         staged: change.staged,
       })
         .then((result) => {
+          if (diffSeqRef.current[key] !== requestSeq || requestScope !== scopeRef.current) {
+            return;
+          }
           const text = result.available ? (result.diff ?? "") : "";
           const allLines = text.length > 0 ? text.split("\n") : [];
           const truncated = allLines.length > MAX_DIFF_LINES;
@@ -127,7 +170,10 @@ export function ChangesPane({
             },
           }));
         })
-        .catch((err) =>
+        .catch((err) => {
+          if (diffSeqRef.current[key] !== requestSeq || requestScope !== scopeRef.current) {
+            return;
+          }
           setDiffs((prev) => ({
             ...prev,
             [key]: {
@@ -136,10 +182,10 @@ export function ChangesPane({
               lines: null,
               truncated: false,
             },
-          })),
-        );
+          }));
+        });
     },
-    [diffs, expanded, projectId, request, taskId],
+    [diffs, expanded, projectId, request, scopeKey, taskId],
   );
 
   if (unavailable) {

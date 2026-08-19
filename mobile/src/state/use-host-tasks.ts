@@ -61,7 +61,10 @@ export function useHostTasks(): HostTasksState & HostTasksActions {
     const work = (async () => {
       try {
         const projects = await request<Project[]>("projects.list");
-        const visible = sortProjectsForList(projects.filter((p) => !p.hiddenFromRail));
+        // `hiddenFromRail` is the desktop "not pinned" marker, not a project
+        // visibility flag. Mobile has its own pinned/grouped presentation and
+        // must keep every project returned by the host.
+        const visible = sortProjectsForList(projects);
         const sections = await Promise.all(
           visible.map(async (project) => {
             const tasks = await request<Task[]>("tasks.list", { projectId: project.id });

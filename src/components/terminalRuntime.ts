@@ -59,6 +59,7 @@ export function createTerminalRuntime(options: TerminalRuntimeOptions): Terminal
   let resizeFrame: number | null = null;
   let visibilityFrame: number | null = null;
   let lastSize: TerminalRuntimeSize | null = null;
+  let lastObservedContainerSize: { width: number; height: number } | null = null;
 
   const terminalResult: InitTerminalResult = initTerminal(
     currentThemeVariant,
@@ -107,8 +108,18 @@ export function createTerminalRuntime(options: TerminalRuntimeOptions): Terminal
     return recordSize(fitTerminalAtBottom(fitAddon, term, container));
   };
 
-  const scheduleFit = () => {
+  const scheduleFit = (entries?: ResizeObserverEntry[]) => {
     if (disposed || !isActive()) return;
+    const rect = entries?.[0]?.contentRect;
+    if (rect && Number.isFinite(rect.width) && Number.isFinite(rect.height)) {
+      if (
+        lastObservedContainerSize?.width === rect.width &&
+        lastObservedContainerSize?.height === rect.height
+      ) {
+        return;
+      }
+      lastObservedContainerSize = { width: rect.width, height: rect.height };
+    }
     container.setAttribute("data-terminal-resizing", "true");
     if (resizeFrame !== null) return;
     resizeFrame = window.requestAnimationFrame(() => {

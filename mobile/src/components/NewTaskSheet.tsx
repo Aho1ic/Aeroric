@@ -145,12 +145,10 @@ function NewTaskForm({ lockedProjectId, onClose, onCreated }: NewTaskFormProps) 
     Promise.all([request<Project[]>("projects.list"), request<AgentChoice[]>("agents.list")])
       .then(([projectList, agentList]) => {
         if (cancelled) return;
-        const visible = projectList
-          .filter((p) => !p.hiddenFromRail)
-          .sort(
-            (a, b) =>
-              (a.orderIndex ?? 1e15) - (b.orderIndex ?? 1e15) || b.lastOpenedAt - a.lastOpenedAt,
-          );
+        const visible = projectList.sort(
+          (a, b) =>
+            (a.orderIndex ?? 1e15) - (b.orderIndex ?? 1e15) || b.lastOpenedAt - a.lastOpenedAt,
+        );
         setProjects(visible);
         setAgents(agentList);
         setLoadError(null);

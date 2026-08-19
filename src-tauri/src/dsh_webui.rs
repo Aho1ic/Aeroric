@@ -608,6 +608,29 @@ pub struct DshModelSelection {
     pub reasoning_effort: Option<String>,
 }
 
+/// Keep model selection compatible with providers that do not implement DSH's
+/// optional reasoning-effort parameter. The session model catalog is the
+/// authority here: an omitted or empty capability list means the provider
+/// accepts the model but not an explicit effort override.
+fn supported_dsh_reasoning_effort(
+    models: &DshSessionModels,
+    model: &str,
+    requested: Option<String>,
+) -> Option<String> {
+    let requested = requested?;
+    let model_info = models
+        .groups
+        .iter()
+        .flat_map(|group| group.models.iter())
+        .find(|item| item.id == model)?;
+    let reasoning = model_info.reasoning.as_ref()?;
+    reasoning
+        .efforts
+        .iter()
+        .any(|effort| effort.id == requested)
+        .then_some(requested)
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DshPresetInfo {
@@ -2541,14 +2564,16 @@ pub async fn run_dsh_task(
         start_task_session_stream(&app, &state, &task_id, &api, &session_id, &on_output).await?;
         let models = api.models(&session_id).await?;
         if selected_model.is_some() || reasoning_effort.is_some() {
-            let current = models.current;
-            let model = selected_model.unwrap_or(current.model);
+            let current = &models.current;
+            let model = selected_model.unwrap_or_else(|| current.model.clone());
             let provider = models
                 .groups
                 .iter()
                 .find(|group| group.models.iter().any(|item| item.id == model))
                 .map(|group| group.id.clone())
-                .unwrap_or(current.provider);
+                .unwrap_or_else(|| current.provider.clone());
+            let reasoning_effort =
+                supported_dsh_reasoning_effort(&models, &model, reasoning_effort);
             api.select_model(
                 &session_id,
                 &DshModelSelection {
@@ -4937,6 +4962,66 @@ mod tests {
         assert_eq!(
             bounded_utf8_prefix("short", DSH_HTTP_ERROR_SNIPPET_BYTES),
             "short"
+        );
+    }
+
+    #[test]
+    fn only_sends_reasoning_effort_when_the_selected_model_declares_it() {
+        let models = DshSessionModels {
+            current: DshModelSelection {
+                provider: "aeroric".to_string(),
+                model: "mimo-v2.5-pro".to_string(),
+                reasoning_effort: Some("off".to_string()),
+            },
+            routable: true,
+            groups: vec![
+                DshModelGroup {
+                    id: "aeroric".to_string(),
+                    name: "Aeroric".to_string(),
+                    models: vec![DshModelInfo {
+                        id: "mimo-v2.5-pro".to_string(),
+                        name: None,
+                        reasoning: None,
+                    }],
+                },
+                DshModelGroup {
+                    id: "deepseek".to_string(),
+                    name: "DeepSeek".to_string(),
+                    models: vec![DshModelInfo {
+                        id: "deepseek-v4-pro".to_string(),
+                        name: None,
+                        reasoning: Some(DshModelReasoning {
+                            efforts: vec![
+                                DshReasoningEffort {
+                                    id: "off".to_string(),
+                                    name: "Off".to_string(),
+                                    description: None,
+                                },
+                                DshReasoningEffort {
+                                    id: "high".to_string(),
+                                    name: "High".to_string(),
+                                    description: None,
+                                },
+                            ],
+                            default_effort: Some("high".to_string()),
+                        }),
+                    }],
+                },
+            ],
+            failures: Vec::new(),
+        };
+
+        assert_eq!(
+            supported_dsh_reasoning_effort(&models, "mimo-v2.5-pro", Some("off".to_string())),
+            None
+        );
+        assert_eq!(
+            supported_dsh_reasoning_effort(&models, "deepseek-v4-pro", Some("off".to_string())),
+            Some("off".to_string())
+        );
+        assert_eq!(
+            supported_dsh_reasoning_effort(&models, "deepseek-v4-pro", Some("max".to_string())),
+            None
         );
     }
 

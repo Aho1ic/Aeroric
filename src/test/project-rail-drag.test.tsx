@@ -33,6 +33,44 @@ function task(id: string, projectId: string, createdAt: number): Task {
 }
 
 describe("ProjectRail project dragging", () => {
+  it("lets the page own the collapsed state so the rail can release its width", () => {
+    localStorage.setItem("aeroric:language", "en");
+    function Harness() {
+      const [collapsed, setCollapsed] = useState(false);
+      return (
+        <I18nProvider>
+          <div data-testid="workspace">
+            <ProjectRail
+              collapsed={collapsed}
+              onCollapsedChange={setCollapsed}
+              projects={[project("p1", "Alpha", 0)]}
+              allTasks={[]}
+              activeProjectId="p1"
+              selectedTaskId={null}
+              isNewTask={false}
+              onSwitch={vi.fn()}
+              onOpen={vi.fn()}
+              onBack={vi.fn()}
+              onNewTask={vi.fn()}
+              onSelectTask={vi.fn()}
+              onDeleteTask={vi.fn()}
+              onToggleTaskStar={vi.fn()}
+              onRunTodo={vi.fn()}
+              themeVariant="light"
+              onToggleTheme={vi.fn()}
+            />
+          </div>
+        </I18nProvider>
+      );
+    }
+
+    render(<Harness />);
+    fireEvent.click(screen.getAllByRole("button", { name: "Hide tasks" })[0]);
+
+    expect(screen.getByTestId("workspace").firstElementChild).toBeNull();
+    expect(screen.queryByRole("button", { name: "Show tasks" })).not.toBeInTheDocument();
+  });
+
   it("hides every project and action icon while the rail is collapsed", () => {
     localStorage.setItem("aeroric:language", "en");
     render(

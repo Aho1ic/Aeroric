@@ -16,12 +16,42 @@ export interface HostStoreState {
 
 const EMPTY: HostStoreState = { hosts: [], activeHostId: null };
 
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+export function isPairedHost(value: unknown): value is PairedHost {
+  if (!value || typeof value !== "object") return false;
+  const host = value as Partial<PairedHost>;
+  if (
+    !isNonEmptyString(host.id) ||
+    typeof host.name !== "string" ||
+    !Array.isArray(host.endpoints) ||
+    host.endpoints.length === 0 ||
+    !host.endpoints.every(
+      (endpoint) => isNonEmptyString(endpoint) && /^wss?:\/\//.test(endpoint),
+    ) ||
+    !isNonEmptyString(host.deviceId) ||
+    !isNonEmptyString(host.deviceToken) ||
+    typeof host.pairedAt !== "number" ||
+    !Number.isFinite(host.pairedAt)
+  ) {
+    return false;
+  }
+  if (host.hostId !== undefined && !isNonEmptyString(host.hostId)) return false;
+  if (host.publicKey !== undefined && !isNonEmptyString(host.publicKey)) return false;
+  if (host.protocol !== undefined && host.protocol !== "aeroric" && host.protocol !== "orca") {
+    return false;
+  }
+  return true;
+}
+
 export async function loadHostStore(): Promise<HostStoreState> {
   try {
     const raw = await SecureStore.getItemAsync(STORE_KEY);
     if (!raw) return EMPTY;
     const parsed = JSON.parse(raw) as Partial<HostStoreState>;
-    const hosts = Array.isArray(parsed.hosts) ? parsed.hosts : [];
+    const hosts = Array.isArray(parsed.hosts) ? parsed.hosts.filter(isPairedHost) : [];
     const activeHostId =
       typeof parsed.activeHostId === "string" && hosts.some((h) => h.id === parsed.activeHostId)
         ? parsed.activeHostId

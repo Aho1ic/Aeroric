@@ -445,6 +445,8 @@ export function ProjectRail({
   onCollapsedProjectGroupsChange,
   projectRailWidth = PROJECT_RAIL_EXPANDED_WIDTH,
   onProjectRailWidthChange,
+  collapsed: controlledCollapsed,
+  onCollapsedChange,
   themeVariant,
   onToggleTheme,
   singleProjectMode = false,
@@ -473,6 +475,8 @@ export function ProjectRail({
   onCollapsedProjectGroupsChange?: (groups: Set<string>) => void;
   projectRailWidth?: number;
   onProjectRailWidthChange?: (width: number) => void;
+  collapsed?: boolean;
+  onCollapsedChange?: (collapsed: boolean) => void;
   themeVariant: ThemeVariant;
   onToggleTheme: () => void;
   singleProjectMode?: boolean;
@@ -501,7 +505,18 @@ export function ProjectRail({
   const { scrollRef: projectListScrollRef, handleScroll: handleProjectListScroll } =
     useSharedRailScroll();
   const isDark = themeVariant === "dark";
-  const effectiveCollapsed = forceCollapsed || collapsed;
+  const setRailCollapsed = useCallback(
+    (nextCollapsed: boolean) => {
+      if (onCollapsedChange) {
+        onCollapsedChange(nextCollapsed);
+      } else {
+        setCollapsed(nextCollapsed);
+      }
+    },
+    [onCollapsedChange],
+  );
+  const manuallyCollapsed = controlledCollapsed ?? collapsed;
+  const effectiveCollapsed = forceCollapsed || manuallyCollapsed;
   const [expandedProjectIds, setExpandedProjectIds] = useState<Set<string>>(() =>
     getDefaultExpandedProjectIds(projects, activeProjectId),
   );
@@ -790,6 +805,9 @@ export function ProjectRail({
   };
 
   if (effectiveCollapsed) {
+    // The page-level rail is controlled so the toggle can live in the terminal
+    // header. Keep the rail itself out of the flex row while collapsed.
+    if (controlledCollapsed === true) return null;
     return (
       <div
         style={{
@@ -813,7 +831,7 @@ export function ProjectRail({
           type="button"
           title={t("task.showTasks")}
           aria-label={t("task.showTasks")}
-          onClick={() => setCollapsed(false)}
+          onClick={() => setRailCollapsed(false)}
           style={{
             width: 32,
             height: 32,
@@ -874,7 +892,7 @@ export function ProjectRail({
           type="button"
           title={t("task.hideTasks")}
           aria-label={t("task.hideTasks")}
-          onClick={() => setCollapsed(true)}
+          onClick={() => setRailCollapsed(true)}
           style={{
             width: 28,
             height: 28,
